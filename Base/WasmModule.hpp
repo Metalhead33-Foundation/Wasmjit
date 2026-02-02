@@ -4,6 +4,7 @@
 #include "WasmType.hpp"
 #include <vector>
 #include <span>
+#include <map>
 namespace WASM {
 
 enum class ExternalKind : uint8_t {
@@ -34,6 +35,53 @@ struct ImportTag : public Import {
 	uint8_t attribute; // currently always 0x00
 	uint32_t typeIdx;
 };
+struct Global {
+	GlobalType type;
+	std::vector<uint8_t> initOpcode; // Store the raw bytes for now
+};
+struct Export {
+	std::string name;
+	ExternalKind kind;
+	uint32_t index;
+};
+struct ElementSegment {
+	uint32_t mode;      // The raw bitmask/type
+	uint32_t tableIdx;  // Only for active segments
+
+	// The offset where this segment is placed in the table
+	// (Only for active segments)
+	std::vector<uint8_t> offsetExpr;
+
+	// What kind of elements are we storing?
+	// In V1 this was always 'funcref', but now it can be any RefType.
+	ValueType elemType;
+
+	// The data: either a list of indices or a list of constant expressions
+	std::vector<uint32_t> initIndices;
+	std::vector<std::vector<uint8_t>> initExprs;
+
+	bool isActive() const { return (mode & 0x01) == 0; }
+	bool isDeclarative() const { return mode == 3; }
+	bool isPassive() const { return mode == 1 || mode == 5; }
+};
+struct DataSegment {
+	uint32_t mode;
+	uint32_t memoryIdx;
+	std::vector<uint8_t> offsetExpr; // Only for active
+	std::vector<uint8_t> data;       // The raw bytes to copy
+};
+struct LocalEntry {
+	uint32_t count;
+	ValueType type;
+};
+struct FunctionBody {
+	std::vector<LocalEntry> locals;
+	std::vector<uint8_t> code;
+};
+struct Tag {
+	uint8_t attribute; // Currently always 0x00 (reserved for future use)
+	uint32_t typeIdx;  // Index into the Type Section (must be a FuncType)
+};
 
 class Module
 {
@@ -47,6 +95,20 @@ private:
 	std::vector<ImportGlobal> importGlobals;
 	std::vector<ImportTag> importTags;
 	std::vector<uint32_t> internalFunctionTypeIndices;
+	std::vector<TableType> tables;
+	std::vector<Limits> memories;
+	std::vector<Global> globals;
+	std::vector<Export> exports;
+	std::vector<ElementSegment> elementSegments;
+	std::vector<DataSegment> dataSegments;
+	std::vector<FunctionBody> functionBodies;
+	std::vector<Tag> tags;
+	std::map<uint32_t,std::string> funcNames;
+	std::string debugName;
+	uint32_t startFunctionIndex;
+	uint32_t dataSegmentCount;
+	bool hasStartFunction;
+	bool hasDataCount;
 	void processSecetions(Elv::Io::Device& file);
 	// Section processors
 	void processTypeSection(Elv::Io::Device& file, const Section& section);
@@ -62,8 +124,12 @@ private:
 	void processDataSection(Elv::Io::Device& file, const Section& section);
 	void processDataCountSection(Elv::Io::Device& file, const Section& section);
 	void processTagSection(Elv::Io::Device& file, const Section& section);
+	void processCustomSection(Elv::Io::Device& file, const Section& section);
+	void processNameSection(Elv::Io::Device& file, const Section& section);
 	// Type processors
 	void processSubtypes(WasmStream& stream, uint32_t typeNum, uint32_t numSubTypes);
+	std::vector<uint8_t> parseInitExpr(WasmStream& stream);
+	void handleComplexElementSegment(WasmStream& stream, ElementSegment& seg);
 public:
 	Module();
 	void fromFile(Elv::Io::Device& file);
