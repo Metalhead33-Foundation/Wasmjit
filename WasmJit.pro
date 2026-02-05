@@ -7,6 +7,7 @@ LIBS += -ljit
 SOURCES += \
         Base/WasmModule.cpp \
         Base/WasmSection.cpp \
+        Base/WasmType.cpp \
         Io/EuphFile.cpp \
         Io/EuphPlatformDependentFileBase.cpp \
         LibJit/LibJitContext.cpp \

@@ -60,9 +60,9 @@ struct ElementSegment {
 	std::vector<uint32_t> initIndices;
 	std::vector<std::vector<uint8_t>> initExprs;
 
-	bool isActive() const { return (mode & 0x01) == 0; }
-	bool isDeclarative() const { return mode == 3; }
-	bool isPassive() const { return mode == 1 || mode == 5; }
+	inline bool isActive() const { return (mode & 0x01) == 0; }
+	inline bool isDeclarative() const { return mode == 3; }
+	inline bool isPassive() const { return mode == 1 || mode == 5; }
 };
 struct DataSegment {
 	uint32_t mode;
@@ -82,10 +82,20 @@ struct Tag {
 	uint8_t attribute; // Currently always 0x00 (reserved for future use)
 	uint32_t typeIdx;  // Index into the Type Section (must be a FuncType)
 };
+struct PreparedFunctionStack {
+	// A single, flat vector where index 0 is param 0,
+	// and index N is the first local.
+	std::vector<ValueType> allLocals; // Includes both parameters and actual locals
+	std::vector<ValueType> allReturns;
+	uint16_t parameterCount;
+	uint16_t localCount;
 
-class Module
+	void prepare(const Subtype& type, const FunctionBody& body);
+};
+
+struct Module
 {
-private:
+public:
 	uint32_t version;
 	std::vector<Section> sections;
 	std::vector<Subtype> types;
@@ -109,6 +119,7 @@ private:
 	uint32_t dataSegmentCount;
 	bool hasStartFunction;
 	bool hasDataCount;
+private:
 	void processSecetions(Elv::Io::Device& file);
 	// Section processors
 	void processTypeSection(Elv::Io::Device& file, const Section& section);
