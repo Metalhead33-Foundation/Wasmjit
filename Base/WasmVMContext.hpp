@@ -1,0 +1,7 @@
+#ifndef WASMVMCONTEXT_HPP
+#define WASMVMCONTEXT_HPP
+
+namespace WASM {}
+
+
+#endif // WASMVMCONTEXT_HPP

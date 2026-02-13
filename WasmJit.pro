@@ -20,6 +20,7 @@ HEADERS += \
     Base/WasmRuntime.hpp \
     Base/WasmSection.hpp \
     Base/WasmType.hpp \
+    Base/WasmVMContext.hpp \
     Io/ElvAllocatorBasic.hpp \
     Io/ElvContainerBasic.hpp \
     Io/ElvContinuousIterator.hpp \

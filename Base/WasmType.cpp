@@ -15,15 +15,23 @@ void ValueType::decode(WasmStream& stream) {
 }
 
 void StorageType::decode(WasmStream& stream) {
-	uint8_t prefix;
-	stream >> prefix;
-	stream.device.seek(-1, Elv::Io::SeekOrigin::SET);
-	if (prefix == 0x78 || prefix == 0x77) { // i8, i16
-		stream >> val.opcode;
+	uint8_t byte;
+	stream >> byte;
+
+	if (byte == 0x78) { // i8
 		isPacked = true;
+		val.opcode = 0x78;
+	} else if (byte == 0x77) { // i16
+		isPacked = true;
+		val.opcode = 0x77;
 	} else {
-		val.decode(stream);
 		isPacked = false;
+		// This was actually the opcode for a ValueType.
+		// We need to 'put it back' or handle the decode manually.
+		val.opcode = byte;
+		if (byte == 0x6B || byte == 0x6C) {
+			stream >> Elv::Io::Leb(val.heapType);
+		}
 	}
 }
 
