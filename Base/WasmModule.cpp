@@ -80,7 +80,7 @@ void Module::processImportSection(Elv::Io::Device& file, const Section& section)
 			this->importTables.push_back({{moduleName, fieldName}, table});
 		}
 		else if (kind == (uint8_t)ExternalKind::Memory) {
-			Limits memLimits;
+			MemoryType memLimits;
 			memLimits.decode(wasmStream);
 			this->importMemories.push_back({{moduleName, fieldName}, memLimits});
 		}
@@ -139,7 +139,7 @@ void Module::processMemorySection(Elv::Io::Device& file, const Section& section)
 	wasmStream >> Elv::Io::Leb(numMemories);
 
 	for(uint32_t i = 0; i < numMemories; ++i) {
-		Limits memLimits;
+		MemoryType memLimits;
 		memLimits.decode(wasmStream);
 
 		this->memories.push_back(memLimits);

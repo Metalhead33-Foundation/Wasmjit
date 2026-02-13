@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 #include <variant>
+#include <optional>
 #include "../Io/ElvDataStream.hpp"
 #include "../Io/ElvLEB128.hpp"
 
@@ -120,8 +121,18 @@ struct Subtype {
 struct Limits {
 	uint32_t flags;
 	uint64_t initial;
-	uint64_t maximum; // Only valid if flags & 0x01
+	std::optional<uint64_t> maximum; // Only valid if flags & 0x01
 
+	void decode(WasmStream& stream);
+};
+enum class MemoryIndexType : uint8_t {
+	I32,
+	I64
+};
+
+struct MemoryType {
+	MemoryIndexType indexType;
+	Limits limits;
 	void decode(WasmStream& stream);
 };
 

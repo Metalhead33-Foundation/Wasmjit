@@ -26,7 +26,7 @@ struct ImportTable : public Import {
 	TableType table;
 };
 struct ImportMemory : public Import {
-	Limits memLimits;
+	MemoryType memory;
 };
 struct ImportGlobal : public Import {
 	GlobalType global;
@@ -106,7 +106,7 @@ public:
 	std::vector<ImportTag> importTags;
 	std::vector<uint32_t> internalFunctionTypeIndices;
 	std::vector<TableType> tables;
-	std::vector<Limits> memories;
+	std::vector<MemoryType> memories;
 	std::vector<Global> globals;
 	std::vector<Export> exports;
 	std::vector<ElementSegment> elementSegments;

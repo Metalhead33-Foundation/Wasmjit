@@ -39,8 +39,22 @@ void Limits::decode(WasmStream& stream) {
 	stream >> Elv::Io::Leb(flags);
 	stream >> Elv::Io::Leb(initial);
 	if (flags & 0x01) {
-		stream >> Elv::Io::Leb(maximum);
+		uint64_t tmpMaximum;
+		stream >> Elv::Io::Leb(tmpMaximum);
+		maximum = tmpMaximum;
+	} else {
+		maximum.reset();
 	}
+}
+
+void MemoryType::decode(WasmStream& stream)
+{
+	limits.decode(stream);
+	if (limits.flags & 0x04)
+		indexType = MemoryIndexType::I64;
+	else
+		indexType = MemoryIndexType::I32;
+
 }
 
 }
