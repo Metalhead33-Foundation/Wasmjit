@@ -373,20 +373,27 @@ void Module::processNameSection(Elv::Io::Device& file, const Section& section)
 		wasmStream >> subId;
 		wasmStream >> Elv::Io::Leb(subSize);
 
-		if (subId == 1) { // Module Name
+		size_t nextSubSection = file.tell() + subSize;
+
+		if (subId == 0) { // <--- FIXED: Sub-ID 0 is Module Name
 			this->debugName = readLEB128String(wasmStream);
-		} else if (subId == 2) { // Function Names
+		}
+		else if (subId == 1) { // <--- FIXED: Sub-ID 1 is Function Names
 			uint32_t count;
 			wasmStream >> Elv::Io::Leb(count);
-			for(uint32_t i=0; i<count; ++i) {
+			for(uint32_t i = 0; i < count; ++i) {
 				uint32_t idx;
 				wasmStream >> Elv::Io::Leb(idx);
 				this->funcNames[idx] = readLEB128String(wasmStream);
 			}
-		} else {
-			// Skip other sub-sections (locals, types, etc.)
-			file.seek(subSize, Elv::Io::SeekOrigin::CUR);
 		}
+		else {
+			// Skip others safely
+			file.seek(nextSubSection, Elv::Io::SeekOrigin::SET);
+		}
+
+		// Always ensure we are aligned for the next subsection
+		file.seek(nextSubSection, Elv::Io::SeekOrigin::SET);
 	}
 }
 
