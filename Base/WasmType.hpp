@@ -59,6 +59,8 @@ enum class AbstractHeapType : int32_t {
 };
 
 enum class ValueTypeCode : int8_t {
+	I8  = -0x08, // 0x78
+	I16 = -0x09,  // 0x77
 	I32  = -0x01, // 0x7F
 	I64  = -0x02, // 0x7E
 	F32  = -0x03, // 0x7D
@@ -66,11 +68,6 @@ enum class ValueTypeCode : int8_t {
 	V128 = -0x05, // 0x7B
 	Ref      = -0x1B, // 0x65 (Non-nullable reference)
 	RefNull  = -0x1C  // 0x64 (Nullable reference)
-};
-
-enum class PackedTypeCode : int8_t {
-	I8  = -0x08, // 0x78
-	I16 = -0x09  // 0x77
 };
 
 struct ValueType {

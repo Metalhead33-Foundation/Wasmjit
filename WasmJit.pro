@@ -12,6 +12,7 @@ SOURCES += \
         Io/EuphPlatformDependentFileBase.cpp \
         LibJit/LibJitContext.cpp \
         LibJit/LibJitRuntime.cpp \
+        LibJit/LibJitTypeTranslation.cpp \
         main.cpp
 
 HEADERS += \
@@ -33,4 +34,5 @@ HEADERS += \
     Io/EuphFile.hpp \
     Io/EuphPlatformDependentFileBase.hpp \
     LibJit/LibJitContext.hpp \
-    LibJit/LibJitRuntime.hpp
+    LibJit/LibJitRuntime.hpp \
+    LibJit/LibJitTypeTranslation.hpp

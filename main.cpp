@@ -6,7 +6,9 @@
 using namespace std;
 typedef Euph::Io::File RegularFile;
 typedef Elv::Io::DataStream<Elv::Util::Endian::Little> WasmStream;
-static const char* WASMPATH = "/home/legacy/helloworld3.wasm";
+#define _WASMPATH "/home/legacy/helloworld3.wasm"
+#define _WASMPATH "/tmp/app.wasm"
+static const char* WASMPATH = _WASMPATH;
 
 int main()
 {
