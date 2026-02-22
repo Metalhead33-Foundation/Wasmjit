@@ -59,6 +59,8 @@ enum class AbstractHeapType : int32_t {
 };
 
 enum class ValueTypeCode : int8_t {
+	Void            = -0x40, // Void
+	Func            = -0x20,
 	// Number Types
 	I32             = -0x01, // 0x7F
 	I64             = -0x02, // 0x7E

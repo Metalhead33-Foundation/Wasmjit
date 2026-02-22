@@ -11,14 +11,16 @@ jit_type_t LibJitTypeTranslator::createi31Type() {
 }
 
 static const std::vector<WASM::ValueType> DefaultValueTypes = {
-	{ WASM::ValueTypeCode::I32, -1} ,
-	{ WASM::ValueTypeCode::I64, -1} ,
-	{ WASM::ValueTypeCode::F32, -1} ,
-	{ WASM::ValueTypeCode::F64, -1} ,
-	{ WASM::ValueTypeCode::V128, -1} ,
-	{ WASM::ValueTypeCode::I8, -1} ,
-	{ WASM::ValueTypeCode::I16, -1} ,
-	{ WASM::ValueTypeCode::FuncRef, -1} ,
+	{ WASM::ValueTypeCode::Void, -1},
+	{ WASM::ValueTypeCode::Func, -1},
+	{ WASM::ValueTypeCode::I32, -1},
+	{ WASM::ValueTypeCode::I64, -1},
+	{ WASM::ValueTypeCode::F32, -1},
+	{ WASM::ValueTypeCode::F64, -1},
+	{ WASM::ValueTypeCode::V128, -1},
+	{ WASM::ValueTypeCode::I8, -1},
+	{ WASM::ValueTypeCode::I16, -1},
+	{ WASM::ValueTypeCode::FuncRef, -1},
 	{ WASM::ValueTypeCode::ExternRef, -1} ,
 	{ WASM::ValueTypeCode::AnyRef, -1} ,
 	{ WASM::ValueTypeCode::EqRef, -1} ,
@@ -69,6 +71,8 @@ LibJitTypeTranslator::TypeMapIterator LibJitTypeTranslator::insertTranslatedType
 
 jit_type_t LibJitTypeTranslator::translatePrimitiveType(WASM::ValueTypeCode primitive) {
 	switch (primitive) {
+		case WASM::ValueTypeCode::Void: return jit_type_void;
+		case WASM::ValueTypeCode::Func: return jit_type_void_ptr;
 		case WASM::ValueTypeCode::I8: return jit_type_sbyte;
 		case WASM::ValueTypeCode::I16: return jit_type_short;
 		case WASM::ValueTypeCode::I32: return jit_type_int;
