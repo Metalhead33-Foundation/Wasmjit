@@ -1,10 +1,12 @@
 #ifndef LIBJITRUNTIME_HPP
 #define LIBJITRUNTIME_HPP
 
-class LibJitRuntime
+namespace LibJIT {
+class Runtime
 {
 public:
-	LibJitRuntime();
+	Runtime();
 };
+}
 
 #endif // LIBJITRUNTIME_HPP

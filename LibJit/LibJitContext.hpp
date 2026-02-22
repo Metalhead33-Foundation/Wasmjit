@@ -2,10 +2,18 @@
 #define LIBJITCONTEXT_HPP
 #include "LibJitTypeTranslation.hpp"
 
-class LibJitContext
+namespace LibJIT {
+class Context
 {
+private:
+	jit_context_t context;
+	LibJitTypeTranslator typeTranslator;
 public:
-	LibJitContext();
+	Context();
+	~Context();
+	LibJitTypeTranslator& getTranslator();
+	const LibJitTypeTranslator& getTranslator() const;
 };
+}
 
 #endif // LIBJITCONTEXT_HPP

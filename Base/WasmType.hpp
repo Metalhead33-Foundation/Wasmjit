@@ -58,16 +58,39 @@ enum class AbstractHeapType : int32_t {
 	// these are the standard GC proposal values.
 };
 
-enum class ValueTypeCode : int8_t {
-	I8  = -0x08, // 0x78
-	I16 = -0x09,  // 0x77
-	I32  = -0x01, // 0x7F
-	I64  = -0x02, // 0x7E
-	F32  = -0x03, // 0x7D
-	F64  = -0x04, // 0x7C
-	V128 = -0x05, // 0x7B
-	Ref      = -0x1B, // 0x65 (Non-nullable reference)
-	RefNull  = -0x1C  // 0x64 (Nullable reference)
+enum class ValueTypeCode : uint8_t {
+	// Number Types
+	I32         = 0x7F, // 127
+	I64         = 0x7E, // 126
+	F32         = 0x7D, // 125
+	F64         = 0x7C, // 124
+	V128        = 0x7B, // 123
+
+	// Packed Types (GC/Arrays)
+	I8          = 0x78,
+	I16         = 0x77,
+
+	// Abstract Reference Types
+	FuncRef     = 0x70,
+	ExternRef   = 0x6F,
+	AnyRef      = 0x6E,
+	EqRef       = 0x6D,
+	I31Ref      = 0x6C,
+	StructRef   = 0x6B,
+	ArrayRef    = 0x6A,
+	NullFuncRef   = 0x73,
+	NullExternRef = 0x72,
+	NullRef       = 0x71,
+
+	// Stringref Proposal
+	StringRef      = 0x67,
+	StringViewWtf8 = 0x66,
+	StringViewWtf16= 0x65,
+	StringViewIter = 0x64,
+
+	// Generic Reference Opcode (Followed by HeapType)
+	RefNull     = 0x63, // Nullable typed reference
+	Ref         = 0x64  // Non-nullable typed reference (Note: conflicts with StringViewIter in some drafts)
 };
 
 struct ValueType {

@@ -20,7 +20,7 @@ public:
 	jit_type_t translateStruct(const WASM::StructType& wasm_struct);
 	jit_type_t translateStruct(const std::span<const WASM::StorageType>& types);
 	jit_type_t translateArray(const WASM::ArrayType& wasm_array);
-	void translateTypes(const std::span<const WASM::Subtype>& types);
+	void translateTypes(const std::span<const WASM::Subtype>& types, std::vector<jit_type_t>& output);
 };
 
 }

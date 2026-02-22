@@ -1,3 +1,5 @@
 #include "LibJitRuntime.hpp"
 
-LibJitRuntime::LibJitRuntime() {}
+namespace LibJIT {
+Runtime::Runtime() {}
+}

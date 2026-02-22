@@ -28,13 +28,13 @@ jit_type_t LibJitTypeTranslator::translatePrimitiveType(WASM::ValueTypeCode prim
 		case WASM::ValueTypeCode::Ref:
 		case WASM::ValueTypeCode::RefNull:
 			return jit_type_void_ptr;
-		default: return jit_type_void;
+		default: return jit_type_void_ptr;
 	}
 }
 
 jit_type_t LibJitTypeTranslator::translateType(const WASM::ValueType& valueType)
 {
-	auto opcode = std::bit_cast<WASM::ValueTypeCode>(valueType.opcode);
+	auto opcode = static_cast<WASM::ValueTypeCode>(valueType.opcode);
 	if(opcode == WASM::ValueTypeCode::Ref || opcode == WASM::ValueTypeCode::RefNull)
 	{
 		if(valueType.heapType > 0) {
@@ -109,7 +109,7 @@ jit_type_t LibJitTypeTranslator::translateArray(const WASM::ArrayType& wasm_arra
 	return jit_type_create_struct(fields, 3, 1);
 }
 
-void LibJitTypeTranslator::translateTypes(const std::span<const WASM::Subtype>& types)
+void LibJitTypeTranslator::translateTypes(const std::span<const WASM::Subtype>& types, std::vector<jit_type_t>& output)
 {
 	translatedTypes.resize(types.size(), nullptr);
 
@@ -138,6 +138,8 @@ void LibJitTypeTranslator::translateTypes(const std::span<const WASM::Subtype>& 
 					std::get<WASM::FuncType>(types[i].composite));
 		}
 	}
+	output = std::move(translatedTypes);
+	translatedTypes = std::vector<jit_type_t>();
 }
 
 }
