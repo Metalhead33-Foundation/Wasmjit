@@ -2,9 +2,11 @@
 namespace WASM {
 
 void ValueType::decode(WasmStream& stream) {
-	stream >> opcode;
+	int8_t tmp_opcode;
+	stream >> Elv::Io::Leb(tmp_opcode);
+	opcode = static_cast<ValueTypeCode>(tmp_opcode);
 	// 0x6B (ref) or 0x6C (ref null)
-	if (opcode == 0x6B || opcode == 0x6C) {
+	if (opcode == ValueTypeCode::Ref || opcode == ValueTypeCode::RefNull) {
 		int32_t ht;
 		stream >> Elv::Io::Leb(ht);
 		this->heapType = ht; // If ht >= 0, it's a TypeIndex
@@ -15,23 +17,23 @@ void ValueType::decode(WasmStream& stream) {
 }
 
 void StorageType::decode(WasmStream& stream) {
-	uint8_t byte;
-	stream >> byte;
+	int8_t byte;
+	stream >> Elv::Io::Leb(byte);
 
-	if (byte == 0x78) { // i8
+	if (byte == static_cast<int8_t>(ValueTypeCode::I8)) { // i8
 		isPacked = true;
-		val.opcode = 0x78;
-	} else if (byte == 0x77) { // i16
+		val.opcode = ValueTypeCode::I8;
+	} else if (byte == static_cast<int8_t>(ValueTypeCode::I16) ) { // i16
 		isPacked = true;
-		val.opcode = 0x77;
+		val.opcode = ValueTypeCode::I16;
 	} else {
 		isPacked = false;
 		// This was actually the opcode for a ValueType.
 		// We need to 'put it back' or handle the decode manually.
-		val.opcode = byte;
-		if (byte == 0x6B || byte == 0x6C) {
+		val.opcode = static_cast<ValueTypeCode>(byte);
+		if (val.opcode == ValueTypeCode::Ref || val.opcode == ValueTypeCode::RefNull) {
 			stream >> Elv::Io::Leb(val.heapType);
-		}
+		} else val.heapType = -1;
 	}
 }
 

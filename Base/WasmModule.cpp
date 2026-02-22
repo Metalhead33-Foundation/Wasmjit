@@ -222,7 +222,7 @@ void Module::processElementSection(Elv::Io::Device& file, const Section& section
 		if (mode == 0) {
 			// Legacy V1 path
 			seg.tableIdx = 0;
-			seg.elemType.opcode = 0x70; // Implicit funcref (0x70)
+			seg.elemType.opcode = ValueTypeCode::FuncRef; // Implicit funcref (0x70)
 			seg.offsetExpr = parseInitExpr(wasmStream);
 
 			uint32_t count;
@@ -550,7 +550,7 @@ void Module::handleComplexElementSegment(WasmStream& stream, ElementSegment& seg
 	if (seg.mode & 0x02 || seg.mode & 0x01) {
 		if (!(seg.mode & 0x01) && !(seg.mode & 0x02)) {
 			// This path is actually unreachable via the bitmask but good for safety
-			seg.elemType.opcode = 0x70;
+			seg.elemType.opcode = ValueTypeCode::FuncRef;
 		} else {
 			// If bit 1 is set, read the type.
 			// Note: 0x00 is encoded as a byte, but ref_types use the ValueType logic.
@@ -558,14 +558,14 @@ void Module::handleComplexElementSegment(WasmStream& stream, ElementSegment& seg
 			stream >> typeCheck;
 			if (typeCheck == 0x00) {
 				//stream.get(); // consume 0x00
-				seg.elemType.opcode = 0x70; // 0x00 is shorthand for funcref
+				seg.elemType.opcode = ValueTypeCode::FuncRef; // 0x00 is shorthand for funcref
 			} else {
 				stream.device.seek(-1, Elv::Io::SeekOrigin::CUR);
 				seg.elemType.decode(stream); // Handles 0x6B/0x6C etc.
 			}
 		}
 	} else {
-		seg.elemType.opcode = 0x70; // Default kind
+		seg.elemType.opcode = ValueTypeCode::FuncRef; // Default kind
 	}
 
 	// 3. Read the Data

@@ -2,18 +2,30 @@
 #define LIBJITTYPETRANSLATION_HPP
 #include "../Base/WasmType.hpp"
 #include <jit/jit.h>
+#include <vector>
+#include <unordered_map>
 
 namespace LibJIT {
 
 class LibJitTypeTranslator
 {
+public:
+	typedef std::unordered_map<uint64_t,jit_type_t> TypeMap;
+	typedef TypeMap::iterator TypeMapIterator;
+	typedef TypeMap::const_iterator TypeMapConstIterator;
 private:
 	jit_type_t v128;
 	jit_type_t i31Type;
 	std::vector<jit_type_t> translatedTypes;
+	TypeMap typemap;
 	static jit_type_t createi31Type();
 public:
 	LibJitTypeTranslator();
+	// Interacting with the type map
+	TypeMapIterator findTranslatedType(const WASM::ValueType& valueType);
+	TypeMapConstIterator findTranslatedType(const WASM::ValueType& valueType) const;
+	TypeMapIterator insertTranslatedType(const WASM::ValueType& valueType, jit_type_t translatedType);
+	// Type translations
 	jit_type_t translatePrimitiveType(WASM::ValueTypeCode primitive);
 	jit_type_t translateType(const WASM::ValueType& valueType);
 	jit_type_t translateFunctionSignature(const WASM::FuncType& wasm_func);

@@ -10,10 +10,61 @@ jit_type_t LibJitTypeTranslator::createi31Type() {
 	return jit_type_create_tagged(jit_type_void_ptr, TYPE_TAG_WASM, (void*)"wasm.i31", nullptr, 1);
 }
 
+static const std::vector<WASM::ValueType> DefaultValueTypes = {
+	{ WASM::ValueTypeCode::I32, -1} ,
+	{ WASM::ValueTypeCode::I64, -1} ,
+	{ WASM::ValueTypeCode::F32, -1} ,
+	{ WASM::ValueTypeCode::F64, -1} ,
+	{ WASM::ValueTypeCode::V128, -1} ,
+	{ WASM::ValueTypeCode::I8, -1} ,
+	{ WASM::ValueTypeCode::I16, -1} ,
+	{ WASM::ValueTypeCode::FuncRef, -1} ,
+	{ WASM::ValueTypeCode::ExternRef, -1} ,
+	{ WASM::ValueTypeCode::AnyRef, -1} ,
+	{ WASM::ValueTypeCode::EqRef, -1} ,
+	{ WASM::ValueTypeCode::I31Ref, -1} ,
+	{ WASM::ValueTypeCode::StructRef, -1} ,
+	{ WASM::ValueTypeCode::ArrayRef, -1} ,
+	{ WASM::ValueTypeCode::NullFuncRef, -1} ,
+	{ WASM::ValueTypeCode::NullExternRef, -1} ,
+	{ WASM::ValueTypeCode::NullRef, -1}
+};
+
 LibJitTypeTranslator::LibJitTypeTranslator()
 	: v128(jit_type_create_struct(v128_definition, 4, 0)),
 	i31Type(createi31Type()) {
-	// Note: placeholder removed from initializer list!
+	for(const auto& it : DefaultValueTypes) {
+		translateType(it);
+	}
+}
+
+union TypeMapEntry {
+	uint64_t u64;
+	WASM::ValueType vt;
+};
+
+LibJitTypeTranslator::TypeMapConstIterator LibJitTypeTranslator::findTranslatedType(const WASM::ValueType& valueType) const
+{
+	TypeMapEntry unt;
+	unt.u64 = 0;
+	unt.vt = valueType;
+	return typemap.find(unt.u64);
+}
+
+LibJitTypeTranslator::TypeMapIterator LibJitTypeTranslator::findTranslatedType(const WASM::ValueType& valueType)
+{
+	TypeMapEntry unt;
+	unt.u64 = 0;
+	unt.vt = valueType;
+	return typemap.find(unt.u64);
+}
+
+LibJitTypeTranslator::TypeMapIterator LibJitTypeTranslator::insertTranslatedType(const WASM::ValueType& valueType, jit_type_t translatedType)
+{
+	TypeMapEntry unt;
+	unt.u64 = 0;
+	unt.vt = valueType;
+	return typemap.insert_or_assign(unt.u64,translatedType).first;
 }
 
 jit_type_t LibJitTypeTranslator::translatePrimitiveType(WASM::ValueTypeCode primitive) {
@@ -25,29 +76,47 @@ jit_type_t LibJitTypeTranslator::translatePrimitiveType(WASM::ValueTypeCode prim
 		case WASM::ValueTypeCode::F32: return jit_type_float32;
 		case WASM::ValueTypeCode::F64: return jit_type_float64;
 		case WASM::ValueTypeCode::V128: return v128;
-		case WASM::ValueTypeCode::Ref:
-		case WASM::ValueTypeCode::RefNull:
-			return jit_type_void_ptr;
-		default: return jit_type_void_ptr;
+		case WASM::ValueTypeCode::FuncRef: return jit_type_void_ptr;
+		case WASM::ValueTypeCode::ExternRef: return jit_type_void_ptr;
+		case WASM::ValueTypeCode::AnyRef: return jit_type_void_ptr;
+		case WASM::ValueTypeCode::EqRef: return jit_type_void_ptr;
+		case WASM::ValueTypeCode::I31Ref: return i31Type;
+		case WASM::ValueTypeCode::StructRef: return jit_type_void_ptr;
+		case WASM::ValueTypeCode::ArrayRef: return jit_type_void_ptr;
+		case WASM::ValueTypeCode::NullFuncRef: return jit_type_void_ptr;
+		case WASM::ValueTypeCode::NullExternRef: return jit_type_void_ptr;
+		case WASM::ValueTypeCode::NullRef: return jit_type_void_ptr;
+		case WASM::ValueTypeCode::StringRef: return jit_type_void_ptr;
+		case WASM::ValueTypeCode::StringViewWtf8: return jit_type_void_ptr;
+		case WASM::ValueTypeCode::StringViewWtf16: return jit_type_void_ptr;
+		case WASM::ValueTypeCode::StringViewIter: return jit_type_void_ptr;
+		case WASM::ValueTypeCode::RefNull: return jit_type_void_ptr;
+		case WASM::ValueTypeCode::Ref: return jit_type_void_ptr;
+		default: return jit_type_void;
+			break;
 	}
 }
 
 jit_type_t LibJitTypeTranslator::translateType(const WASM::ValueType& valueType)
 {
-	auto opcode = static_cast<WASM::ValueTypeCode>(valueType.opcode);
-	if(opcode == WASM::ValueTypeCode::Ref || opcode == WASM::ValueTypeCode::RefNull)
+	auto found = findTranslatedType(valueType);
+	if(found != std::end(typemap)) return found->second;
+	jit_type_t toReturn = nullptr;
+	if(valueType.opcode == WASM::ValueTypeCode::Ref || valueType.opcode == WASM::ValueTypeCode::RefNull)
 	{
 		if(valueType.heapType > 0) {
-			if(translatedTypes[valueType.heapType] != nullptr) return jit_type_create_pointer(translatedTypes[valueType.heapType],1);
-			else return jit_type_void_ptr;
+			if(translatedTypes[valueType.heapType] != nullptr) toReturn = jit_type_create_pointer(translatedTypes[valueType.heapType],1);
+			else toReturn = jit_type_void_ptr;
 		} else {
 			if(valueType.heapType == static_cast<int32_t>(WASM::AbstractHeapType::I31)) {
-				return i31Type;
-			} else return jit_type_void_ptr;
+				toReturn = i31Type;
+			} else toReturn = jit_type_void_ptr;
 		}
 	} else {
-		return translatePrimitiveType(opcode);
+		toReturn = translatePrimitiveType(valueType.opcode);
 	}
+	insertTranslatedType(valueType, toReturn);
+	return toReturn;
 }
 
 jit_type_t LibJitTypeTranslator::translateFunctionSignature(const WASM::FuncType& wasm_func) {
