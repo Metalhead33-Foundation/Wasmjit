@@ -5,41 +5,10 @@
 #include <variant>
 #include <optional>
 #include "../Io/ElvDataStream.hpp"
-#include "../Io/ElvLEB128.hpp"
 
 namespace WASM {
 
 typedef Elv::Io::DataStream<Elv::Util::Endian::Little> WasmStream;
-/*enum class Type : uint8_t {
-	I32 = 0x7F,
-	I64 = 0x7E,
-	F32 = 0x7D,
-	F64 = 0x7C,
-	V128 = 0x7B,      // SIMD
-	FuncRef = 0x70,
-	ExternRef = 0x6F,
-	AnyRef = 0x6E,    // anyref - can reference any object
-	NullExternRef = 0x6C,   // null externref
-	StructRef = 0x6B, // ref (struct) - nullable (abstract type reference)
-	ArrayRef = 0x6A,  // ref (array) - nullable (abstract type reference)
-	// GC storage types (for struct/array fields)
-	I8 = 0x08,        // 8-bit integer storage type
-	I16 = 0x09,       // 16-bit integer storage type
-	// GC reference type variants (non-standard extensions)
-	NullRef = 0x64,          // null ref (general)
-	NullFuncRef = 0x65,      // null funcref
-	EqRef = 0x67,            // eqref - can reference eq objects
-	I31Ref = 0x68,           // i31ref - tagged 31-bit integers
-	StructRefNN = 0x5B,      // ref (struct) - non-nullable
-	ArrayRefNN = 0x5A,       // ref (array) - non-nullable
-	Void = 0x40              // For block types with no return
-};
-
-enum class CompositeKind : uint8_t {
-	Func   = 0x60,
-	Array  = 0x5E,
-	Struct = 0x5F
-};*/
 
 // Distinguishes between normal types (i32) and packed types (i8, i16)
 // Values as defined by the Wasm Binary Encoding (signed LEB128 equivalents)

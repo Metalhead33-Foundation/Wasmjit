@@ -2,7 +2,6 @@
 #define WASMSECTION_HPP
 #include <cstdint>
 #include "../Io/ElvDataStream.hpp"
-#include "../Io/ElvLEB128.hpp"
 
 namespace WASM {
 

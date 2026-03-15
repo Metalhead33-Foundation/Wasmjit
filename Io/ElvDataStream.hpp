@@ -4,8 +4,180 @@
 #include "ElvContainerBasic.hpp"
 #include "ElvEndianness.hpp"
 #include <optional>
+#include <stdexcept>
+
 namespace Elv {
 namespace Io {
+
+// ----------------------------------------------------------------------------
+// Core Algorithms
+// ----------------------------------------------------------------------------
+
+/**
+ * @brief Reads an Unsigned Little Endian Base 128 (ULEB128) encoded value from the device.
+ *
+ * @tparam UInt The unsigned integer type to read into.
+ * @param dev The device to read from.
+ * @return The decoded unsigned integer value.
+ * @throws std::runtime_error If an unexpected EOF is encountered.
+ * @throws std::overflow_error If the decoded value exceeds the capacity of the target UInt type.
+ */
+template <typename UInt>
+UInt readULEB128(Device& dev) {
+	static_assert(std::is_unsigned_v<UInt>);
+	UInt result = 0;
+	unsigned shift = 0;
+	std::uint8_t byte = 0;
+
+	while (true) {
+		if (dev.read(&byte, 1, 1) != 1)
+			throw std::runtime_error("Unexpected EOF reading ULEB128");
+
+		// Safety Guard: Don't shift if we exceed the type's width
+		if (shift < sizeof(UInt) * 8) {
+			result |= UInt(byte & 0x7F) << shift;
+		} else if (byte & 0x7F) {
+			// We have exceeded the type width, but the byte still has data.
+			// This implies the number is too big for UInt.
+			throw std::overflow_error("ULEB128 overflow");
+		}
+
+		if ((byte & 0x80) == 0) break;
+
+		shift += 7;
+	}
+	return result;
+}
+
+/**
+ * @brief Reads a Signed Little Endian Base 128 (SLEB128) encoded value from the device.
+ *
+ * @tparam SInt The signed integer type to read into.
+ * @param dev The device to read from.
+ * @return The decoded signed integer value.
+ * @throws std::runtime_error If an unexpected EOF is encountered.
+ * @throws std::overflow_error If the decoded value exceeds the capacity of the target SInt type.
+ */
+template <typename SInt>
+SInt readSLEB128(Device& dev) {
+	static_assert(std::is_signed_v<SInt>);
+	SInt result = 0;
+	unsigned shift = 0;
+	std::uint8_t byte = 0;
+	const unsigned size = sizeof(SInt) * 8;
+
+	while (true) {
+		if (dev.read(&byte, 1, 1) != 1)
+			throw std::runtime_error("Unexpected EOF reading SLEB128");
+
+		if (shift < size) {
+			result |= SInt(byte & 0x7F) << shift;
+			shift += 7;
+		} else if (byte & 0x7F) {
+			// Only throw if data bits are lost; standard allows padding 0s (or 1s for negative)
+			// But strictly speaking, if we shift out, we check overflow strictly here:
+			throw std::overflow_error("SLEB128 overflow");
+		}
+
+		if ((byte & 0x80) == 0) break;
+	}
+
+	// Sign extension
+	if (shift < size && (byte & 0x40)) {
+		// -1 is all 1s. Shifting left creates a mask of 1s in the high bits.
+		result |= SInt(-1) << shift;
+	}
+
+	return result;
+}
+
+/**
+ * @brief Writes an unsigned integer value to the device using ULEB128 encoding.
+ *
+ * @tparam UInt The unsigned integer type to write.
+ * @param dev The device to write to.
+ * @param value The unsigned integer value to encode and write.
+ */
+template <typename UInt>
+void writeULEB128(Device& dev, UInt value) {
+	static_assert(std::is_unsigned_v<UInt>);
+	do {
+		std::uint8_t byte = value & 0x7F;
+		value >>= 7;
+		if (value != 0) byte |= 0x80;
+		dev.write(&byte, 1, 1);
+	} while (value != 0);
+}
+
+/**
+ * @brief Writes a signed integer value to the device using SLEB128 encoding.
+ *
+ * @tparam SInt The signed integer type to write.
+ * @param dev The device to write to.
+ * @param value The signed integer value to encode and write.
+ */
+template <typename SInt>
+void writeSLEB128(Device& dev, SInt value) {
+	static_assert(std::is_signed_v<SInt>);
+	bool more = true;
+	while (more) {
+		std::uint8_t byte = value & 0x7F;
+		// Arithmetic shift is guaranteed for signed types in C++20.
+		// Before that, it is implementation defined (but usually arithmetic).
+		value >>= 7;
+
+		bool signBit = byte & 0x40; // The sign bit of the *byte*, not the original value
+
+		if ((value == 0 && !signBit) || (value == -1 && signBit)) {
+			more = false;
+		} else {
+			byte |= 0x80;
+		}
+		dev.write(&byte, 1, 1);
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Wrappers (Hold References!)
+// ----------------------------------------------------------------------------
+
+/**
+ * @brief A wrapper struct used to indicate that an unsigned integer should be processed as ULEB128.
+ *
+ * @tparam T The unsigned integer type.
+ */
+template <typename T>
+struct ULEB128 {
+	T& ref; ///< Reference to the underlying unsigned integer value.
+	explicit ULEB128(T& v) : ref(v) {}
+};
+
+/**
+ * @brief A wrapper struct used to indicate that a signed integer should be processed as SLEB128.
+ *
+ * @tparam T The signed integer type.
+ */
+template <typename T>
+struct SLEB128 {
+	T& ref; ///< Reference to the underlying signed integer value.
+	explicit SLEB128(T& v) : ref(v) {}
+};
+
+// ----------------------------------------------------------------------------
+// Helper Functions (For syntax: stream >> Leb(var))
+// ----------------------------------------------------------------------------
+
+/**
+ * @brief Helper function to automatically wrap a variable for LEB128 processing based on its signedness.
+ *
+ * @tparam T The integer type to wrap.
+ * @param val Reference to the value to be wrapped.
+ * @return A ULEB128 wrapper if T is unsigned, or an SLEB128 wrapper if T is signed.
+ */
+template <typename T> auto Leb(T& val) {
+	if constexpr (std::is_signed_v<T>) return SLEB128<T>(val);
+	else return ULEB128<T>(val);
+}
 
 /**
  * @brief Template struct for handling data streaming with specified endianness.
@@ -1060,6 +1232,85 @@ struct DataStream {
 		} else readElementsInto<T>(data.begin(), data.end());
 		return *this;
 	}
+
+
+	// ----------------------------------------------------------------------------
+	// Stream Operators
+	// ----------------------------------------------------------------------------
+
+	/**
+	 * @brief Operator to read an unsigned LEB128 encoded value from the stream.
+	 *
+	 * @tparam T The unsigned integer type.
+	 * @param wrapper ULEB128 wrapper containing a reference to the target variable.
+	 * @return Reference to the current DataStream instance.
+	 */
+	template <typename T> DataStream& operator>>(ULEB128<T> wrapper) {
+		wrapper.ref = readULEB128<T>(device);
+		return *this;
+	}
+
+	/**
+	 * @brief Operator to write an unsigned LEB128 encoded value to the stream.
+	 *
+	 * @tparam T The unsigned integer type.
+	 * @param wrapper ULEB128 wrapper containing a reference to the source variable.
+	 * @return Reference to the current DataStream instance.
+	 */
+	template <typename T> DataStream& operator<<(ULEB128<T> wrapper) {
+		writeULEB128<T>(device, wrapper.ref);
+		return *this;
+	}
+
+	/**
+	 * @brief Operator to read a signed LEB128 encoded value from the stream.
+	 *
+	 * @tparam T The signed integer type.
+	 * @param wrapper SLEB128 wrapper containing a reference to the target variable.
+	 * @return Reference to the current DataStream instance.
+	 */
+	template <typename T> DataStream& operator>>(SLEB128<T> wrapper) {
+		wrapper.ref = readSLEB128<T>(device);
+		return *this;
+	}
+
+	/**
+	 * @brief Operator to write a signed LEB128 encoded value to the stream.
+	 *
+	 * @tparam T The signed integer type.
+	 * @param wrapper SLEB128 wrapper containing a reference to the source variable.
+	 * @return Reference to the current DataStream instance.
+	 */
+	template <typename T> DataStream& operator<<(SLEB128<T> wrapper) {
+		writeSLEB128<T>(device, wrapper.ref);
+		return *this;
+	}
+
+	/**
+	 * @brief Convenience function to read a value of type T from the stream and return it.
+	 *
+	 * @tparam T The type of value to read.
+	 * @return The read value of type T.
+	 */
+	template <typename T> inline T read() {
+		 T data;
+		 *this >> data;
+		 return data;
+	};
+
+	/**
+	 * @brief Convenience function to read a LEB128 encoded value of type T from the stream and return it.
+	 *
+	 * Automatically handles signed/unsigned LEB128 decoding based on the type T.
+	 *
+	 * @tparam T The integer type to read.
+	 * @return The decoded value of type T.
+	 */
+	template <typename T> inline T readLEB128() {
+		 T data;
+		 *this >> Leb(data);
+		 return data;
+	};
 };
 
 }
