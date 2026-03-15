@@ -21,6 +21,7 @@ private:
 	static jit_type_t createi31Type();
 public:
 	LibJitTypeTranslator();
+	void reset();
 	// Interacting with the type map
 	TypeMapIterator findTranslatedType(const WASM::ValueType& valueType);
 	TypeMapConstIterator findTranslatedType(const WASM::ValueType& valueType) const;
@@ -32,7 +33,12 @@ public:
 	jit_type_t translateStruct(const WASM::StructType& wasm_struct);
 	jit_type_t translateStruct(const std::span<const WASM::StorageType>& types);
 	jit_type_t translateArray(const WASM::ArrayType& wasm_array);
-	void translateTypes(const std::span<const WASM::Subtype>& types, std::vector<jit_type_t>& output);
+	void translateTypes(const std::span<const WASM::Subtype>& types);
+
+	const std::vector<jit_type_t>& getTranslatedTypes() const;
+	std::vector<jit_type_t>& getTranslatedTypes();
+	const TypeMap& getTypemap() const;
+	TypeMap& getTypemap();
 };
 
 }

@@ -18,6 +18,7 @@ SOURCES += \
         LibJit/LibJitContext.cpp \
         LibJit/LibJitRuntime.cpp \
         LibJit/LibJitTypeTranslation.cpp \
+        LibJit/LibjitModuleCompiler.cpp \
         main.cpp
 
 HEADERS += \
@@ -46,4 +47,5 @@ HEADERS += \
     Io/EuphPmrMemoryDevice.hpp \
     LibJit/LibJitContext.hpp \
     LibJit/LibJitRuntime.hpp \
-    LibJit/LibJitTypeTranslation.hpp
+    LibJit/LibJitTypeTranslation.hpp \
+    LibJit/LibjitModuleCompiler.hpp

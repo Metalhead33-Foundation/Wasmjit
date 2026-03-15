@@ -1,0 +1,106 @@
+#include "LibjitModuleCompiler.hpp"
+#include <cassert>
+namespace LibJIT {
+
+void ModuleCompiler::compileFunction(jit_function_t fn, const WASM::FuncType& funcType, const WASM::FunctionBody& body, WASM::ModuleInstance& instance, const WASM::Module& module, uint32_t importedFuncCount)
+{
+	// This is where the real magic happens
+}
+
+ModuleCompiler::ModuleCompiler(jit_context_t context)
+	: context(context)
+{
+}
+
+void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::Module& module, WASM::ModuleInstanceInternals& internals)
+{
+	// ── Step 0: Translate all types ─────────────────────────────────
+	// We must do this before declaring any function, because each
+	// function's signature is expressed as a type index, and we need
+	// the jit_type_t for that index to create the jit_function_t.
+	typeTranslator.translateTypes(module.types);
+	internals.translatedTypes.resize(typeTranslator.getTranslatedTypes().size());
+	for(size_t i = 0; i < typeTranslator.getTranslatedTypes().size();++i)
+	{
+		internals.translatedTypes[i] = typeTranslator.getTranslatedTypes()[i];
+	}
+	typeTranslator.reset();
+}
+
+void ModuleCompiler::declareFunctions(WASM::ModuleInstance& instance, const WASM::Module& module, WASM::ModuleInstanceInternals& internals)
+{
+	// ── Step 1: Declare function handles ────────────────────────────
+	// Now that translatedTypes is populated, we can look up any
+	// function's signature by its type index.
+	internals.internalCallables.resize(module.internalFunctionTypeIndices.size());
+	for (uint32_t i = 0; i < module.internalFunctionTypeIndices.size(); ++i)
+	{
+		const uint32_t typeIdx = module.internalFunctionTypeIndices[i];
+
+		// Cast back from the void* we stored above.
+		jit_type_t sig = static_cast<jit_type_t>(
+			internals.translatedTypes[typeIdx]);
+
+		jit_function_t fn = jit_function_create(context, sig);
+		//functionHandles.push_back(fn);
+
+		// Store as void* in the backend-agnostic instance field.
+		internals.compiledFunctions[i] = static_cast<void*>(fn);
+
+		// Also populate the WasmCallable wrapper so element segments
+		// and ref.func can reference this function uniformly.
+		internals.internalCallables[i] = WASM::Callable {
+			.fnPtr     = nullptr, // filled in after compilation
+			.context  = instance.context(),
+			.typeIndex = typeIdx
+		};
+	}
+}
+
+void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM::Module& module, WASM::ModuleInstanceInternals& internals)
+{
+	// The import count tells us where the "internal function" index space
+	// begins. Function index N refers to an internal function at
+	// compiledFunctions[N - importedFuncCount].
+	const uint32_t importedFuncCount =
+		static_cast<uint32_t>(module.importFunctions.size());
+
+	jit_context_build_start(context);
+
+	for (uint32_t i = 0; i < module.functionBodies.size(); ++i)
+	{
+		// Retrieve the jit_function_t handle we created in declareFunctions.
+		// It's stored as void* in the instance, so we cast it back here.
+		jit_function_t fn = static_cast<jit_function_t>(
+			internals.compiledFunctions[i]);
+
+		// The type index for this function tells us its signature.
+		const uint32_t typeIdx = module.internalFunctionTypeIndices[i];
+
+		// The Subtype at that index must be a FuncType — the validator
+		// should have ensured this, but an assert here catches mistakes early.
+		assert(module.types[typeIdx].isFunction());
+		const WASM::FuncType& funcType =
+			std::get<WASM::FuncType>(module.types[typeIdx].composite);
+
+		// Compile the body. This is where the real work happens.
+		compileFunction(fn, funcType, module.functionBodies[i],
+						instance, module, importedFuncCount);
+
+		// Now that the body is fully emitted, back-fill the fnPtr in the
+		// WasmCallable wrapper so that table lookups and ref.func work.
+		// jit_function_compile finalizes the function and returns the
+		// executable code pointer.
+		jit_function_compile(fn);
+		internals.internalCallables[i].fnPtr =
+			jit_function_to_closure(fn);
+	}
+
+	jit_context_build_end(context);
+}
+
+void ModuleCompiler::callStartFunction(WASM::ModuleInstance& instance, uint32_t funcIdx, WASM::ModuleInstanceInternals& internals)
+{
+}
+
+}

@@ -21,6 +21,7 @@ struct ModuleInstanceInternals {
 	// Stored as void* to keep this header backend-agnostic.
 	// Parallel to module->internalFunctionTypeIndices.
 	std::vector<void*> compiledFunctions;
+	std::vector<void*> translatedTypes;
 };
 
 // ── The C++ owner of the VMContext and all its allocations. ──
@@ -72,6 +73,7 @@ protected:
 	// Subclasses implement these two. declareFunctions creates a handle
 	// for each function (so call targets exist before any body is compiled).
 	// compileFunctions then fills each handle with actual JIT instructions.
+	virtual void translateTypes(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals) = 0;
 	virtual void declareFunctions(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals) = 0;
 	virtual void compileFunctions(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals) = 0;
 

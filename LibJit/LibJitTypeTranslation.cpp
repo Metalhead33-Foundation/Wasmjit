@@ -6,6 +6,25 @@ static jit_type_t v128_definition[] = { jit_type_int, jit_type_int, jit_type_int
 
 static const int TYPE_TAG_WASM = 1;
 
+const std::vector<jit_type_t>& LibJitTypeTranslator::getTranslatedTypes() const
+{
+	return translatedTypes;
+}
+std::vector<jit_type_t>& LibJitTypeTranslator::getTranslatedTypes()
+{
+	return translatedTypes;
+}
+
+LibJitTypeTranslator::TypeMap& LibJitTypeTranslator::getTypemap()
+{
+	return typemap;
+}
+
+const LibJitTypeTranslator::TypeMap& LibJitTypeTranslator::getTypemap() const
+{
+	return typemap;
+}
+
 jit_type_t LibJitTypeTranslator::createi31Type() {
 	return jit_type_create_tagged(jit_type_void_ptr, TYPE_TAG_WASM, (void*)"wasm.i31", nullptr, 1);
 }
@@ -35,6 +54,15 @@ static const std::vector<WASM::ValueType> DefaultValueTypes = {
 LibJitTypeTranslator::LibJitTypeTranslator()
 	: v128(jit_type_create_struct(v128_definition, 4, 0)),
 	i31Type(createi31Type()) {
+	for(const auto& it : DefaultValueTypes) {
+		translateType(it);
+	}
+}
+
+void LibJitTypeTranslator::reset()
+{
+	translatedTypes.clear();
+	typemap.clear();
 	for(const auto& it : DefaultValueTypes) {
 		translateType(it);
 	}
@@ -186,7 +214,7 @@ jit_type_t LibJitTypeTranslator::translateArray(const WASM::ArrayType& wasm_arra
 	return jit_type_create_struct(fields, 3, 1);
 }
 
-void LibJitTypeTranslator::translateTypes(const std::span<const WASM::Subtype>& types, std::vector<jit_type_t>& output)
+void LibJitTypeTranslator::translateTypes(const std::span<const WASM::Subtype>& types)
 {
 	translatedTypes.resize(types.size(), nullptr);
 
@@ -215,8 +243,6 @@ void LibJitTypeTranslator::translateTypes(const std::span<const WASM::Subtype>& 
 					std::get<WASM::FuncType>(types[i].composite));
 		}
 	}
-	output = std::move(translatedTypes);
-	translatedTypes = std::vector<jit_type_t>();
 }
 
 }
