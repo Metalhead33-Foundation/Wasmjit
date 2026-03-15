@@ -5,38 +5,45 @@
 #include "WasmImport.hpp"
 namespace WASM {
 
-// ── The C++ owner of the VMContext and all its allocations. ──
-// This is what your instantiator creates and your embedder holds onto.
-// JIT-compiled functions never see this class directly — only VMContext*.
-class ModuleInstance {
-protected:
-	VMContext ctx; // The POD struct; kept first so &instance == &ctx (convenient cast).
+// Forward declaration
+class ModuleInstantiator;
 
+struct ModuleInstanceInternals {
 	// These own the storage that ctx's pointers point into.
 	// After any reallocation, the corresponding ctx field MUST be updated.
 	std::vector<uint8_t>       linearMemory;
 	std::vector<Value>     globalsStorage;
 	std::vector<Callable*> tableStorage;
+	std::vector<Callable> internalCallables;
 	std::vector<Callable>  importStorage; // Owns the WasmCallable objects for imports
-
-	// Back-reference to the parsed module — needed for type-checking
-	// call_indirect, memory.init, table.init, and debug info.
-	// Not owned here; the Module outlives all its Instances.
-	const Module* module;
 
 	// Backend-specific compiled function handles (e.g., jit_function_t for LibJIT).
 	// Stored as void* to keep this header backend-agnostic.
 	// Parallel to module->internalFunctionTypeIndices.
 	std::vector<void*> compiledFunctions;
+};
+
+// ── The C++ owner of the VMContext and all its allocations. ──
+// This is what your instantiator creates and your embedder holds onto.
+// JIT-compiled functions never see this class directly — only VMContext*.
+class ModuleInstance {
 private:
+	VMContext ctx; // The POD struct; kept first so &instance == &ctx (convenient cast).
+	// Back-reference to the parsed module — needed for type-checking
+	// call_indirect, memory.init, table.init, and debug info.
+	// Not owned here; the Module outlives all its Instances.
+	const Module* module;
+	// Nuff said.
+	ModuleInstanceInternals internals;
 	void resolveImports(ImportResolver& importResolver);
 	void initializeMemory();
 	void initializeGlobals();
 	void initializeTable();
 	Value evalConstantExpr(const std::span<const std::byte>& expr);
 public:
+	friend class ModuleInstantiator;
 	ModuleInstance(const Module& module, ImportResolver& importResolver);
-	~ModuleInstance();
+	~ModuleInstance() = default;
 
 	VMContext* context() { return &ctx; }
 	const VMContext* context() const { return &ctx; }
@@ -46,6 +53,35 @@ public:
 
 	// Called when table.grow executes.
 	bool growTable(uint32_t deltaEntries);
+};
+// Abstract base. Subclasses provide the backend-specific compilation step.
+// The base class handles everything that doesn't require knowing the backend.
+class ModuleInstantiator {
+public:
+	virtual ~ModuleInstantiator() = default;
+
+	// The main entry point. Creates an Instance (which runs the constructor
+	// above, handling imports/memory/globals), then calls compilefunctions()
+	// to fill in the compiled function handles, then runs the start function
+	// if one is present.
+	std::unique_ptr<ModuleInstance> instantiate(
+			const Module& module, ImportResolver& resolver);
+
+protected:
+	Value evalConstantExpr(const std::span<const std::byte>& expr, ModuleInstance& instance);
+	// Subclasses implement these two. declareFunctions creates a handle
+	// for each function (so call targets exist before any body is compiled).
+	// compileFunctions then fills each handle with actual JIT instructions.
+	virtual void declareFunctions(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals) = 0;
+	virtual void compileFunctions(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals) = 0;
+
+	// Calling the start function is also backend-specific because you need
+	// to know how to invoke a compiled function pointer with no arguments.
+	virtual void callStartFunction(ModuleInstance& instance, uint32_t funcIdx, ModuleInstanceInternals& internals) = 0;
+
+private:
+	// These are concrete and shared across all backends.
+	void applyActiveSegments(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals);
 };
 
 }

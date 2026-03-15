@@ -2,8 +2,146 @@
 #include "WasmException.hpp"
 #include "../Io/EuphConstBufferDevice.hpp"
 #include "../Io/ElvDataStream.hpp"
+#include <cstring>
 namespace WASM {
 
+std::unique_ptr<ModuleInstance> ModuleInstantiator::instantiate(const Module& module, ImportResolver& resolver)
+{
+	// The constructor does all the backend-agnostic setup.
+	auto instance = std::make_unique<ModuleInstance>(module, resolver);
+
+	// Two-pass compilation: first declare all functions (so mutual
+	// recursion works), then compile all bodies.
+	declareFunctions(*instance, module, instance->internals);
+	compileFunctions(*instance, module, instance->internals);
+
+	// Active element and data segments are applied after compilation
+	// because element segments can reference functions by index, and
+	// we need the compiled handles to be present first.
+	applyActiveSegments(*instance, module, instance->internals);
+
+	// Finally, call the start function if the module has one.
+	if (module.hasStartFunction)
+		callStartFunction(*instance, module.startFunctionIndex, instance->internals);
+
+	return instance;
+}
+
+Value ModuleInstantiator::evalConstantExpr(const std::span<const std::byte>& expr, ModuleInstance& instance)
+{
+	return instance.evalConstantExpr(expr);
+}
+
+void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals)
+{
+	// ── Data Segments ───────────────────────────────────────────────────────
+	// Each active data segment copies raw bytes into linear memory.
+	// Passive segments (mode != 0) are skipped here — they wait for
+	// memory.init instructions at runtime to activate them.
+	for (const auto& seg : module.dataSegments)
+	{
+		// Mode 0 = active with implicit memory index 0.
+		// Mode 2 = active with explicit memory index (multi-memory proposal).
+		// Mode 1 = passive. We skip passive segments entirely here.
+		if (seg.mode == 1) continue;
+
+		// Evaluate the constant offset expression to get the destination
+		// address within linear memory. This is almost always just an
+		// i32.const followed by end, but we use the general evaluator
+		// for correctness.
+		const Value offsetVal = evalConstantExpr(
+			Euph::Io::ConstBufferDevice::span_cast<uint8_t>(seg.offsetExpr), instance);
+		const uint64_t offset = static_cast<uint64_t>(offsetVal.i32);
+
+		// Wasm spec: trap if the segment would write past the end of memory.
+		// This is a hard instantiation failure, not a soft error.
+		if (offset + seg.data.size() > instance.ctx.memorySize)
+			throw SegmentOutOfBoundsException(offset, seg.data.size(),instance.ctx.memorySize);
+
+		// The actual copy. memoryBase is already a uint8_t*, so this is
+		// just a pointer-offset write — no JIT involvement needed.
+		std::memcpy(
+			instance.ctx.memoryBase + offset,
+			seg.data.data(),
+			seg.data.size());
+	}
+
+	// ── Element Segments ────────────────────────────────────────────────────
+	// Each active element segment writes function references into a table.
+	// The structure mirrors data segments but operates on WasmCallable*
+	// entries rather than raw bytes.
+	const uint32_t importedFuncCount =
+		static_cast<uint32_t>(module.importFunctions.size());
+
+	for (const auto& seg : module.elementSegments)
+	{
+		// isActive() returns false for passive (mode 1) and declarative
+		// (mode 3) segments. We only process active ones here.
+		if (!seg.isActive()) continue;
+
+		// Same constant-expression evaluation for the table offset.
+		const Value offsetVal = evalConstantExpr(
+			Euph::Io::ConstBufferDevice::span_cast<uint8_t>(seg.offsetExpr), instance);
+		const uint64_t tableOffset = static_cast<uint64_t>(offsetVal.i32);
+
+		// Determine how many entries this segment contributes.
+		// A segment uses either initIndices (MVP index form) or
+		// initExprs (reference-types constant-expression form), never both.
+		const size_t entryCount = seg.initIndices.empty()
+			? seg.initExprs.size()
+			: seg.initIndices.size();
+
+		if (tableOffset + entryCount > instance.ctx.tableSize)
+			throw std::runtime_error("Element segment out of bounds");
+
+		for (size_t i = 0; i < entryCount; ++i)
+		{
+			Callable* callable = nullptr;
+
+			if (!seg.initIndices.empty())
+			{
+				// Simple MVP form: each entry is a raw function index.
+				const uint32_t funcIdx = seg.initIndices[i];
+
+				if (funcIdx < importedFuncCount)
+				{
+					// This index refers to an imported function.
+					// The WasmCallable was placed into importStorage
+					// by resolveImports(), so we can take its address.
+					callable = &instance.internals.importStorage[funcIdx];
+				}
+				else
+				{
+					// This index refers to an internally compiled function.
+					// compiledFunctions[adjusted] is a void* to the compiled
+					// code; we need a WasmCallable wrapper for table storage.
+					// We create these wrappers during declareFunctions() and
+					// store them in internalCallables[], which is parallel to
+					// compiledFunctions[]. See note below.
+					const uint32_t internalIdx = funcIdx - importedFuncCount;
+					callable = &instance.internals.internalCallables[internalIdx];
+				}
+			}
+			else
+			{
+				// Reference-types form: each entry is a constant expression
+				// that evaluates to a funcref or externref. Evaluate it and
+				// retrieve the resulting callable.
+				const Value refVal = evalConstantExpr(
+					Euph::Io::ConstBufferDevice::span_cast<uint8_t>(seg.initExprs[i]), instance);
+				// refVal.ref points to a WasmCallable if non-null.
+				callable = static_cast<Callable*>(refVal.ref);
+			}
+
+			// Write the callable pointer into the table at the right slot.
+			instance.internals.tableStorage[tableOffset + i] = callable;
+		}
+
+		// Keep ctx.table in sync — tableStorage.data() doesn't change here
+		// since we're not resizing, but being explicit makes the invariant clear.
+		instance.ctx.table = instance.internals.tableStorage.data();
+	}
+}
 ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver)
 	: module(&module)
 {
@@ -31,13 +169,13 @@ ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver)
 	// We don't compile yet — that's the ModuleInstantiator's job.
 	// But we size the vector now so the instantiator can index into it
 	// directly without worrying about bounds.
-	compiledFunctions.resize(module.internalFunctionTypeIndices.size(), nullptr);
+	internals.compiledFunctions.resize(module.internalFunctionTypeIndices.size(), nullptr);
 }
 
 void ModuleInstance::resolveImports(ImportResolver& resolver)
 {
 	// Pre-allocate so we can index by import order without reallocation.
-	importStorage.reserve(module->importFunctions.size());
+	internals.importStorage.reserve(module->importFunctions.size());
 
 	for (const auto& imp : module->importFunctions) {
 		auto callable = resolver.resolveFunction(
@@ -49,13 +187,13 @@ void ModuleInstance::resolveImports(ImportResolver& resolver)
 		if (!callable.has_value())
 			throw UnresolvedImportException(imp.moduleName, imp.fieldName);
 
-		importStorage.push_back(std::move(callable.value()));
+		internals.importStorage.push_back(std::move(callable.value()));
 	}
 
 	// Point the VMContext at the resolved array. The pointer stays valid
 	// because importStorage never reallocates after this point.
-	ctx.importedFunctions      = importStorage.data();
-	ctx.importedFunctionCount  = static_cast<uint32_t>(importStorage.size());
+	ctx.importedFunctions      = internals.importStorage.data();
+	ctx.importedFunctionCount  = static_cast<uint32_t>(internals.importStorage.size());
 
 	// Repeat analogously for imported globals, memories, tables, tags...
 	// (elided here for brevity, but follows the same resolve-then-assign pattern)
@@ -74,9 +212,9 @@ void ModuleInstance::initializeMemory()
 		: UINT64_MAX;
 
 	// Wasm spec requires memory to be zero-initialized.
-	linearMemory.resize(initialBytes, 0);
+	internals.linearMemory.resize(initialBytes, 0);
 
-	ctx.memoryBase = linearMemory.data();
+	ctx.memoryBase = internals.linearMemory.data();
 	ctx.memorySize = initialBytes;
 	ctx.memoryMax  = maxBytes;
 }
@@ -86,7 +224,7 @@ void ModuleInstance::initializeGlobals()
 	// Total globals = imported globals (already resolved) + locally defined ones.
 	const size_t importedCount = module->importGlobals.size();
 	const size_t definedCount  = module->globals.size();
-	globalsStorage.resize(importedCount + definedCount);
+	internals.globalsStorage.resize(importedCount + definedCount);
 
 	// Imported globals were already placed into globalsStorage by resolveImports().
 	// Now handle the locally-defined ones.
@@ -95,10 +233,10 @@ void ModuleInstance::initializeGlobals()
 		// Initializer expressions for globals are restricted to a small set
 		// of constant instructions (i32.const, f64.const, global.get of an
 		// imported global, ref.null, ref.func). We evaluate them directly.
-		globalsStorage[importedCount + i] = evalConstantExpr(Euph::Io::ConstBufferDevice::span_cast<uint8_t>(g.initOpcode));
+		internals.globalsStorage[importedCount + i] = evalConstantExpr(Euph::Io::ConstBufferDevice::span_cast<uint8_t>(g.initOpcode));
 	}
 
-	ctx.globals = globalsStorage.data();
+	ctx.globals = internals.globalsStorage.data();
 }
 
 void ModuleInstance::initializeTable()
@@ -127,12 +265,12 @@ void ModuleInstance::initializeTable()
 	// All slots start as null — meaning "uninitialized, traps on call_indirect".
 	// std::vector zero-initializes pointer types when given a count and no value,
 	// but nullptr is explicit and self-documenting here.
-	tableStorage.resize(static_cast<size_t>(initialSize), nullptr);
+	internals.tableStorage.resize(static_cast<size_t>(initialSize), nullptr);
 
 	// Point the VMContext at the underlying array. As with linearMemory,
 	// tableStorage must not be resized after this point except through
 	// growTable(), which re-syncs the ctx pointers afterward.
-	ctx.table     = tableStorage.data();
+	ctx.table     = internals.tableStorage.data();
 	ctx.tableSize = initialSize;
 	ctx.tableMax  = maxSize;
 }
@@ -185,10 +323,10 @@ Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 
 		// Defensive check: if this fires, the module is malformed.
 		// A validator would have caught this before instantiation.
-		if (globalIdx >= globalsStorage.size())
+		if (globalIdx >= internals.globalsStorage.size())
 			throw std::runtime_error("global.get in constant expr: index out of range");
 
-		result = globalsStorage[globalIdx];
+		result = internals.globalsStorage[globalIdx];
 		break;
 	}
 
@@ -231,21 +369,21 @@ bool ModuleInstance::growMemory(uint32_t deltaPages) {
 	// Wasm page size is exactly 64KiB = 65536 bytes = 0x10000.
 	// Check against memoryMax before committing.
 	const size_t delta = static_cast<size_t>(deltaPages) * 0x10000;
-	const size_t newSize = linearMemory.size() + delta;
+	const size_t newSize = internals.linearMemory.size() + delta;
 	if (ctx.memoryMax != UINT64_MAX && newSize > ctx.memoryMax)
 		return false; // Caller should turn this into a Wasm trap
-	linearMemory.resize(newSize, 0); // Wasm requires new pages to be zero-initialized
-	ctx.memoryBase = linearMemory.data();
+	internals.linearMemory.resize(newSize, 0); // Wasm requires new pages to be zero-initialized
+	ctx.memoryBase = internals.linearMemory.data();
 	ctx.memorySize = static_cast<uint64_t>(newSize);
 	return true;
 }
 
 bool ModuleInstance::growTable(uint32_t deltaEntries) {
-	const size_t newSize = tableStorage.size() + deltaEntries;
+	const size_t newSize = internals.tableStorage.size() + deltaEntries;
 	if (ctx.tableMax != UINT64_MAX && newSize > ctx.tableMax)
 		return false;
-	tableStorage.resize(newSize, nullptr); // Null = uninitialized slot, traps on call_indirect
-	ctx.table = tableStorage.data();
+	internals.tableStorage.resize(newSize, nullptr); // Null = uninitialized slot, traps on call_indirect
+	ctx.table = internals.tableStorage.data();
 	ctx.tableSize = static_cast<uint64_t>(newSize);
 	return true;
 }

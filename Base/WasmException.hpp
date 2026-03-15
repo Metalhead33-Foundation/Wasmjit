@@ -13,6 +13,15 @@ public:
 	UnresolvedImportException(std::string_view module, std::string_view import);
 	const char* what() const noexcept override;
 };
+class SegmentOutOfBoundsException : std::exception {
+private:
+	std::string str;
+	static std::string getErrStr(size_t offset, size_t size, size_t memorySize);
+	// exception interface
+public:
+	SegmentOutOfBoundsException(size_t offset, size_t size, size_t memorySize);
+	const char* what() const noexcept override;
+};
 template <typename T> class InvalidOpcodeException : std::exception {
 private:
 	std::string str;
