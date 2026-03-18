@@ -27,6 +27,7 @@ HEADERS += \
     Base/WasmImport.hpp \
     Base/WasmModule.hpp \
     Base/WasmModuleInstance.hpp \
+    Base/WasmOpcode.hpp \
     Base/WasmRuntime.hpp \
     Base/WasmSection.hpp \
     Base/WasmType.hpp \

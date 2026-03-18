@@ -2,9 +2,65 @@
 #include <cassert>
 namespace LibJIT {
 
-void ModuleCompiler::compileFunction(jit_function_t fn, const WASM::FuncType& funcType, const WASM::FunctionBody& body, WASM::ModuleInstance& instance, const WASM::Module& module, uint32_t importedFuncCount)
+void ModuleCompiler::compileFunction(jit_function_t fn, const WASM::FuncType& funcType, const WASM::FunctionBody& body,
+									 WASM::ModuleInstance& instance, const WASM::Module& module, uint32_t importedFuncCount)
 {
-	// This is where the real magic happens
+	// ── Local variable setup ─────────────────────────────────────────────
+	// PreparedFunctionStack gives us a flat list of all locals (params +
+	// declared locals) with their ValueTypes, in index order.
+	//WASM::PreparedFunctionStack stack;
+	//stack.prepare(module.types[/* typeIdx */], body);
+
+	// Allocate a jit_value_t for each local slot.
+	//std::vector<jit_value_t> locals;
+	//locals.reserve(stack.allLocals.size());
+
+	//for (uint32_t i = 0; i < stack.parameterCount; ++i) {
+	//	// Parameters are passed in by the caller — retrieve them directly.
+	//	locals.push_back(jit_value_get_param(fn, i + 1));
+	//	// Note the +1: parameter 0 is the implicit ModuleInstance* context.
+	//}
+	//for (uint32_t i = 0; i < stack.localCount; ++i) {
+	//	// Declared locals are zero-initialized per the Wasm spec.
+	//	jit_type_t localType = static_cast<jit_type_t>(
+	//		instance.translatedTypes[/* type index for this local */]);
+	//	jit_value_t localVal = jit_value_create(fn, localType);
+	//	// Emit a store of zero to satisfy the zero-initialization requirement.
+	//	jit_value_t zero = jit_value_create_nint_constant(fn, localType, 0);
+	//	jit_insn_store(fn, localVal, zero);
+	//	locals.push_back(localVal);
+	//}
+
+	// ── Value stack and control flow stack ──────────────────────────────
+	//std::vector<jit_value_t> valueStack;
+	//std::vector<ControlBlock> controlStack;
+
+	// The function body itself is implicitly a 'block' at the outermost
+	// level. Its branch target is the function exit point.
+	//jit_label_t functionEnd = jit_label_undefined;
+	//controlStack.push_back(ControlBlock {
+	//	.kind        = ControlBlock::Block,
+	//	.label       = functionEnd,
+	//	.stackDepth  = 0,
+	//	.resultTypes = funcType.results
+	//});
+
+	// ── The opcode dispatch loop ─────────────────────────────────────────
+	//WASM::WasmStream stream(body.code.data(), body.code.size());
+	//while (!stream.device.eof()) {
+	//	const uint8_t opcode = stream.readU8();
+	//	dispatchOpcode(opcode, stream, fn, locals, valueStack,
+	//				   controlStack, instance, module, importedFuncCount);
+	//}
+
+	// Bind the function-end label here so that any 'return' or 'br' to
+	// the outermost block jumps to this point.
+	//jit_insn_label(fn, &functionEnd);
+}
+
+void ModuleCompiler::dispatchOpcode(uint8_t opcode, WASM::WasmStream& stream, jit_function_t fn, std::vector<jit_value_t>& locals, std::vector<jit_value_t>& valueStack, std::vector<ControlBlock>& controlStack, WASM::ModuleInstance& instance, const WASM::Module& module, uint32_t importedFuncCount)
+{
+
 }
 
 ModuleCompiler::ModuleCompiler(jit_context_t context)
