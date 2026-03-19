@@ -668,5 +668,117 @@ template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataS
 	return left;
 }
 
+// ---------------------------------------------------------------------------
+// 0xFE sub-opcodes  – Atomic / threads instructions
+// Source: WebAssembly threads proposal
+// Unlike the 0xFB/0xFD prefixes (which use a LEB128 u32 sub-opcode), the
+// 0xFE prefix is followed by a plain single byte sub-opcode.
+//
+// Each instruction also carries a memarg immediate whose natural alignment
+// is fixed by the instruction (shown in comments as memarg8/16/32/64).
+// The alignment field in the encoded memarg MUST equal the natural alignment
+// or the module is invalid; it is included in the binary only for uniformity.
+// ---------------------------------------------------------------------------
+enum class AtomicOpcode : uint8_t {
+	// --- Wait / notify ---
+	MemoryAtomicNotify      = 0x00,  // memory.atomic.notify   memarg32
+	MemoryAtomicWait32      = 0x01,  // memory.atomic.wait32   memarg32
+	MemoryAtomicWait64      = 0x02,  // memory.atomic.wait64   memarg64
+
+	// --- Fence (immediate is always 0x00) ---
+	AtomicFence             = 0x03,  // atomic.fence
+
+	// --- Atomic loads ---
+	I32AtomicLoad           = 0x10,  // i32.atomic.load        memarg32
+	I64AtomicLoad           = 0x11,  // i64.atomic.load        memarg64
+	I32AtomicLoad8U         = 0x12,  // i32.atomic.load8_u     memarg8
+	I32AtomicLoad16U        = 0x13,  // i32.atomic.load16_u    memarg16
+	I64AtomicLoad8U         = 0x14,  // i64.atomic.load8_u     memarg8
+	I64AtomicLoad16U        = 0x15,  // i64.atomic.load16_u    memarg16
+	I64AtomicLoad32U        = 0x16,  // i64.atomic.load32_u    memarg32
+
+	// --- Atomic stores ---
+	I32AtomicStore          = 0x17,  // i32.atomic.store       memarg32
+	I64AtomicStore          = 0x18,  // i64.atomic.store       memarg64
+	I32AtomicStore8         = 0x19,  // i32.atomic.store8      memarg8
+	I32AtomicStore16        = 0x1A,  // i32.atomic.store16     memarg16
+	I64AtomicStore8         = 0x1B,  // i64.atomic.store8      memarg8
+	I64AtomicStore16        = 0x1C,  // i64.atomic.store16     memarg16
+	I64AtomicStore32        = 0x1D,  // i64.atomic.store32     memarg32
+
+	// --- RMW add ---
+	I32AtomicRmwAdd         = 0x1E,  // i32.atomic.rmw.add     memarg32
+	I64AtomicRmwAdd         = 0x1F,  // i64.atomic.rmw.add     memarg64
+	I32AtomicRmw8AddU       = 0x20,  // i32.atomic.rmw8.add_u  memarg8
+	I32AtomicRmw16AddU      = 0x21,  // i32.atomic.rmw16.add_u memarg16
+	I64AtomicRmw8AddU       = 0x22,  // i64.atomic.rmw8.add_u  memarg8
+	I64AtomicRmw16AddU      = 0x23,  // i64.atomic.rmw16.add_u memarg16
+	I64AtomicRmw32AddU      = 0x24,  // i64.atomic.rmw32.add_u memarg32
+
+	// --- RMW sub ---
+	I32AtomicRmwSub         = 0x25,  // i32.atomic.rmw.sub     memarg32
+	I64AtomicRmwSub         = 0x26,  // i64.atomic.rmw.sub     memarg64
+	I32AtomicRmw8SubU       = 0x27,  // i32.atomic.rmw8.sub_u  memarg8
+	I32AtomicRmw16SubU      = 0x28,  // i32.atomic.rmw16.sub_u memarg16
+	I64AtomicRmw8SubU       = 0x29,  // i64.atomic.rmw8.sub_u  memarg8
+	I64AtomicRmw16SubU      = 0x2A,  // i64.atomic.rmw16.sub_u memarg16
+	I64AtomicRmw32SubU      = 0x2B,  // i64.atomic.rmw32.sub_u memarg32
+
+	// --- RMW and ---
+	I32AtomicRmwAnd         = 0x2C,  // i32.atomic.rmw.and     memarg32
+	I64AtomicRmwAnd         = 0x2D,  // i64.atomic.rmw.and     memarg64
+	I32AtomicRmw8AndU       = 0x2E,  // i32.atomic.rmw8.and_u  memarg8
+	I32AtomicRmw16AndU      = 0x2F,  // i32.atomic.rmw16.and_u memarg16
+	I64AtomicRmw8AndU       = 0x30,  // i64.atomic.rmw8.and_u  memarg8
+	I64AtomicRmw16AndU      = 0x31,  // i64.atomic.rmw16.and_u memarg16
+	I64AtomicRmw32AndU      = 0x32,  // i64.atomic.rmw32.and_u memarg32
+
+	// --- RMW or ---
+	I32AtomicRmwOr          = 0x33,  // i32.atomic.rmw.or      memarg32
+	I64AtomicRmwOr          = 0x34,  // i64.atomic.rmw.or      memarg64
+	I32AtomicRmw8OrU        = 0x35,  // i32.atomic.rmw8.or_u   memarg8
+	I32AtomicRmw16OrU       = 0x36,  // i32.atomic.rmw16.or_u  memarg16
+	I64AtomicRmw8OrU        = 0x37,  // i64.atomic.rmw8.or_u   memarg8
+	I64AtomicRmw16OrU       = 0x38,  // i64.atomic.rmw16.or_u  memarg16
+	I64AtomicRmw32OrU       = 0x39,  // i64.atomic.rmw32.or_u  memarg32
+
+	// --- RMW xor ---
+	I32AtomicRmwXor         = 0x3A,  // i32.atomic.rmw.xor     memarg32
+	I64AtomicRmwXor         = 0x3B,  // i64.atomic.rmw.xor     memarg64
+	I32AtomicRmw8XorU       = 0x3C,  // i32.atomic.rmw8.xor_u  memarg8
+	I32AtomicRmw16XorU      = 0x3D,  // i32.atomic.rmw16.xor_u memarg16
+	I64AtomicRmw8XorU       = 0x3E,  // i64.atomic.rmw8.xor_u  memarg8
+	I64AtomicRmw16XorU      = 0x3F,  // i64.atomic.rmw16.xor_u memarg16
+	I64AtomicRmw32XorU      = 0x40,  // i64.atomic.rmw32.xor_u memarg32
+
+	// --- RMW xchg (exchange) ---
+	I32AtomicRmwXchg        = 0x41,  // i32.atomic.rmw.xchg     memarg32
+	I64AtomicRmwXchg        = 0x42,  // i64.atomic.rmw.xchg     memarg64
+	I32AtomicRmw8XchgU      = 0x43,  // i32.atomic.rmw8.xchg_u  memarg8
+	I32AtomicRmw16XchgU     = 0x44,  // i32.atomic.rmw16.xchg_u memarg16
+	I64AtomicRmw8XchgU      = 0x45,  // i64.atomic.rmw8.xchg_u  memarg8
+	I64AtomicRmw16XchgU     = 0x46,  // i64.atomic.rmw16.xchg_u memarg16
+	I64AtomicRmw32XchgU     = 0x47,  // i64.atomic.rmw32.xchg_u memarg32
+
+	// --- RMW cmpxchg (compare-exchange) ---
+	I32AtomicRmwCmpxchg     = 0x48,  // i32.atomic.rmw.cmpxchg     memarg32
+	I64AtomicRmwCmpxchg     = 0x49,  // i64.atomic.rmw.cmpxchg     memarg64
+	I32AtomicRmw8CmpxchgU   = 0x4A,  // i32.atomic.rmw8.cmpxchg_u  memarg8
+	I32AtomicRmw16CmpxchgU  = 0x4B,  // i32.atomic.rmw16.cmpxchg_u memarg16
+	I64AtomicRmw8CmpxchgU   = 0x4C,  // i64.atomic.rmw8.cmpxchg_u  memarg8
+	I64AtomicRmw16CmpxchgU  = 0x4D,  // i64.atomic.rmw16.cmpxchg_u memarg16
+	I64AtomicRmw32CmpxchgU  = 0x4E,  // i64.atomic.rmw32.cmpxchg_u memarg32
+};
+template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, AtomicOpcode& right) {
+	uint8_t tmp;
+	left >> tmp;
+	right = static_cast<AtomicOpcode>(tmp);
+	return left;
+}
+template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator<<(Elv::Io::DataStream<E>& left, AtomicOpcode right) {
+	left << static_cast<uint8_t>(right);
+	return left;
+}
+
 }
 #endif // WASMOPCODE_HPP

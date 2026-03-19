@@ -8,6 +8,7 @@ SOURCES += \
         Base/WasmException.cpp \
         Base/WasmModule.cpp \
         Base/WasmModuleInstance.cpp \
+        Base/WasmOpcodeDispatcher.cpp \
         Base/WasmSection.cpp \
         Base/WasmType.cpp \
         Io/EuphConstBufferDevice.cpp \
@@ -28,6 +29,7 @@ HEADERS += \
     Base/WasmModule.hpp \
     Base/WasmModuleInstance.hpp \
     Base/WasmOpcode.hpp \
+    Base/WasmOpcodeDispatcher.hpp \
     Base/WasmRuntime.hpp \
     Base/WasmSection.hpp \
     Base/WasmType.hpp \
