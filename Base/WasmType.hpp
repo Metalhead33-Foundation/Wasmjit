@@ -9,6 +9,15 @@
 namespace WASM {
 
 typedef Elv::Io::DataStream<Elv::Util::Endian::Little> WasmStream;
+typedef uint32_t TagIdx;
+typedef uint32_t LabelIdx;
+typedef uint32_t TypeIdx;
+typedef uint32_t LocalIdx;
+typedef uint32_t GlobalIdx;
+typedef uint32_t TableIdx;
+typedef uint32_t FuncIdx;
+typedef uint64_t MemArg;
+typedef uint32_t MemIdx;
 
 // Distinguishes between normal types (i32) and packed types (i8, i16)
 // Values as defined by the Wasm Binary Encoding (signed LEB128 equivalents)
@@ -26,6 +35,12 @@ enum class AbstractHeapType : int32_t {
 	// Note: Some experimental versions used different offsets;
 	// these are the standard GC proposal values.
 };
+template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, AbstractHeapType& right) {
+	return left.readLEB128_enum(right);
+}
+template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator<<(Elv::Io::DataStream<E>& left, AbstractHeapType right) {
+	return left.writeLEB128_enum(right);
+}
 
 enum class ValueTypeCode : int8_t {
 	Void            = -0x40, // Void
@@ -63,6 +78,12 @@ enum class ValueTypeCode : int8_t {
 	RefNull         = -0x1D, // 0x63
 	Ref             = -0x1C  // 0x64
 };
+template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, ValueTypeCode& right) {
+	return left.readLEB128_enum(right);
+}
+template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator<<(Elv::Io::DataStream<E>& left, ValueTypeCode right) {
+	return left.writeLEB128_enum(right);
+}
 
 struct ValueType {
 	ValueTypeCode opcode;
@@ -70,6 +91,10 @@ struct ValueType {
 
 	void decode(WasmStream& stream);
 };
+template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, ValueType& right) {
+	right.decode(left);
+	return left;
+}
 
 struct StorageType {
 	bool isPacked; // i8 or i16
@@ -77,6 +102,10 @@ struct StorageType {
 
 	void decode(WasmStream& stream);
 };
+template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, StorageType& right) {
+	right.decode(left);
+	return left;
+}
 
 struct FieldType {
 	StorageType storageType;
@@ -116,6 +145,10 @@ struct Limits {
 
 	void decode(WasmStream& stream);
 };
+template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, Limits& right) {
+	right.decode(left);
+	return left;
+}
 enum class MemoryIndexType : uint8_t {
 	I32,
 	I64
@@ -144,6 +177,12 @@ enum class ExternalKind : uint8_t {
 	Global   = 0x03,
 	Tag      = 0x04  // Exception Handling proposal
 };
+template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, ExternalKind& right) {
+	return left.read_enum(right);
+}
+template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator<<(Elv::Io::DataStream<E>& left, ExternalKind right) {
+	return left.write_enum(right);
+}
 
 struct Import {
 	std::string moduleName;
@@ -222,6 +261,112 @@ struct PreparedFunctionStack {
 
 	void prepare(const Subtype& type, const FunctionBody& body);
 };
+
+// =============================================================================
+// BlockType
+// Encoded as a signed LEB128 s33:
+//   negative values → ValueTypeCode (valtype or void/0x40)
+//   non-negative values → type index into the type section
+// =============================================================================
+struct BlockType {
+	bool isTypeIndex;
+	union {
+		int32_t       typeIndex;  // if isTypeIndex == true
+		ValueTypeCode valType;  // if isTypeIndex == false (incl. Void = 0x40)
+	};
+
+	inline bool isVoid()      const { return !isTypeIndex && valType == ValueTypeCode::Void; }
+	inline bool isValueType() const { return !isTypeIndex; }
+};
+
+template <Elv::Util::Endian E>
+Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& stream, BlockType& bt)
+{
+	// The spec encodes blocktype as a signed 33-bit LEB128 (s33).
+	// In practice all defined values fit in int32_t:
+	//   >= 0           → type index
+	//   < 0            → ValueTypeCode (e.g. -0x01 = i32, -0x40 = void)
+	int32_t raw;
+	stream >> Elv::Io::Leb(raw);
+	if (raw >= 0) {
+		bt.isTypeIndex = true;
+		bt.typeIndex   = raw;
+	} else {
+		bt.isTypeIndex = false;
+		bt.valType     = static_cast<ValueTypeCode>(raw);
+	}
+	return stream;
+}
+
+// =============================================================================
+// HeapType
+// Encoded as a signed LEB128:
+//   negative → AbstractHeapType
+//   non-negative → type index
+// =============================================================================
+struct HeapType {
+	bool isTypeIndex;
+	union {
+		uint32_t          typeIndex;
+		AbstractHeapType  abstract;
+	};
+};
+
+template <Elv::Util::Endian E>
+Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& stream, HeapType& ht)
+{
+	int32_t raw;
+	stream >> Elv::Io::Leb(raw);
+	if (raw >= 0) {
+		ht.isTypeIndex = true;
+		ht.typeIndex   = static_cast<uint32_t>(raw);
+	} else {
+		ht.isTypeIndex = false;
+		ht.abstract    = static_cast<AbstractHeapType>(raw);
+	}
+	return stream;
+}
+
+// =============================================================================
+// CatchClause  (used by try_table)
+// Encoding (single byte tag followed by operands):
+//   0x00  catch x l      – tag index + label index
+//   0x01  catch_ref x l  – tag index + label index
+//   0x02  catch_all l    – label index only
+//   0x03  catch_all_ref l– label index only
+// =============================================================================
+enum class CatchKind : uint8_t {
+	Catch        = 0x00,
+	CatchRef     = 0x01,
+	CatchAll     = 0x02,
+	CatchAllRef  = 0x03,
+};
+
+struct CatchClause {
+	CatchKind kind;
+	uint32_t  tagIdx;   // valid for Catch / CatchRef
+	uint32_t  labelIdx;
+};
+
+template <Elv::Util::Endian E>
+Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& stream, CatchClause& cc)
+{
+	uint8_t raw;
+	stream >> raw;
+	cc.kind     = static_cast<CatchKind>(raw);
+	cc.tagIdx   = 0;
+	switch (cc.kind) {
+		case CatchKind::Catch:
+		case CatchKind::CatchRef:
+			stream >> Elv::Io::Leb(cc.tagIdx);
+			[[fallthrough]];
+		case CatchKind::CatchAll:
+		case CatchKind::CatchAllRef:
+			stream >> Elv::Io::Leb(cc.labelIdx);
+			break;
+	}
+	return stream;
+}
 
 }
 

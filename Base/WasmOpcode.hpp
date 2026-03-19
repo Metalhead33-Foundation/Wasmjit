@@ -260,14 +260,10 @@ enum class Opcode : uint8_t {
 	PrefixAtomic        = 0xFE,  // Atomic / threads instructions (reserved)
 };
 template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, Opcode& right) {
-	uint8_t tmp;
-	left >> tmp;
-	right = static_cast<Opcode>(tmp);
-	return left;
+	return left.read_enum(right);
 }
 template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator<<(Elv::Io::DataStream<E>& left, Opcode right) {
-	left << static_cast<uint8_t>(right);
-	return left;
+	return left.write_enum(right);
 }
 
 // ---------------------------------------------------------------------------
@@ -317,18 +313,11 @@ enum class GCOpcode : uint32_t {
 	I31GetU             = 30,  // i31.get_u
 };
 template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator<<(Elv::Io::DataStream<E>& left, GCOpcode right) {
-	// Cast to the underlying type and store in a local
-	auto value = static_cast<std::underlying_type_t<GCOpcode>>(right);
-	// Pass the local variable's reference to Leb
-	left << Elv::Io::Leb(value);
-	return left;
+	return left.writeLEB128_enum(right);
 }
 
 template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, GCOpcode& right) {
-	std::underlying_type_t<GCOpcode> tmp;
-	left >> Elv::Io::Leb(tmp);
-	right = static_cast<GCOpcode>(tmp);
-	return left;
+	return left.readLEB128_enum(right);
 }
 
 // ---------------------------------------------------------------------------
@@ -361,18 +350,11 @@ enum class MiscOpcode : uint32_t {
 	TableFill           = 17,  // table.fill tableidx
 };
 template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator<<(Elv::Io::DataStream<E>& left, MiscOpcode right) {
-	// Cast to the underlying type and store in a local
-	auto value = static_cast<std::underlying_type_t<MiscOpcode>>(right);
-	// Pass the local variable's reference to Leb
-	left << Elv::Io::Leb(value);
-	return left;
+	return left.writeLEB128_enum(right);
 }
 
 template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, MiscOpcode& right) {
-	std::underlying_type_t<MiscOpcode> tmp;
-	left >> Elv::Io::Leb(tmp);
-	right = static_cast<MiscOpcode>(tmp);
-	return left;
+	return left.readLEB128_enum(right);
 }
 
 // ---------------------------------------------------------------------------
@@ -654,18 +636,11 @@ enum class SIMDOpcode : uint32_t {
 	F64x2PromoteLowF32x4        = 95,
 };
 template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator<<(Elv::Io::DataStream<E>& left, SIMDOpcode right) {
-	// Cast to the underlying type and store in a local
-	auto value = static_cast<std::underlying_type_t<SIMDOpcode>>(right);
-	// Pass the local variable's reference to Leb
-	left << Elv::Io::Leb(value);
-	return left;
+	return left.writeLEB128_enum(right);
 }
 
 template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, SIMDOpcode& right) {
-	std::underlying_type_t<SIMDOpcode> tmp;
-	left >> Elv::Io::Leb(tmp);
-	right = static_cast<SIMDOpcode>(tmp);
-	return left;
+	return left.readLEB128_enum(right);
 }
 
 // ---------------------------------------------------------------------------
@@ -770,14 +745,10 @@ enum class AtomicOpcode : uint8_t {
 	I64AtomicRmw32CmpxchgU  = 0x4E,  // i64.atomic.rmw32.cmpxchg_u memarg32
 };
 template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, AtomicOpcode& right) {
-	uint8_t tmp;
-	left >> tmp;
-	right = static_cast<AtomicOpcode>(tmp);
-	return left;
+	return left.read_enum(right);
 }
 template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator<<(Elv::Io::DataStream<E>& left, AtomicOpcode right) {
-	left << static_cast<uint8_t>(right);
-	return left;
+	return left.write_enum(right);
 }
 
 }

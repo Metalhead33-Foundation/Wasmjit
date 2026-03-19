@@ -1297,6 +1297,40 @@ struct DataStream {
 		 *this >> data;
 		 return data;
 	};
+	/**
+	 * @brief Convenience function to read a value of enum type T from the stream and return it.
+	 *
+	 * @tparam T The enum type of value to read.
+	 * @return The read value of type T.
+	 */
+	template <typename T> inline T read_enum() {
+		 std::underlying_type_t<T> data;
+		 *this >> data;
+		 return static_cast<T>(data);
+	};
+	/**
+	 * @brief Convenience function to read a value of enum type T from the stream.
+	 *
+	 * @tparam T The enum type of value to read.
+	 * @param output The enum to be written to.
+	 * @return Reference to the current DataStream instance.
+	 */
+	template <typename T> inline DataStream& read_enum(T& output) {
+		 std::underlying_type_t<T> data;
+		 *this >> data;
+		 output = static_cast<T>(data);
+		 return *this;
+	};
+	/**
+	 * @brief Convenience function to write a value of enum type T into the stream.
+	 *
+	 * @tparam T The enum type of value to written.
+	 * @param output The enum to be written from.
+	 * @return Reference to the current DataStream instance.
+	 */
+	template <typename T> inline DataStream& write_enum(T output) {
+		 return *this << static_cast<std::underlying_type_t<T>>(output);
+	};
 
 	/**
 	 * @brief Convenience function to read a LEB128 encoded value of type T from the stream and return it.
@@ -1310,6 +1344,47 @@ struct DataStream {
 		 T data;
 		 *this >> Leb(data);
 		 return data;
+	};
+	/**
+	 * @brief Convenience function to read a LEB128 encoded value of type T from the stream and return it.
+	 *
+	 * Automatically handles signed/unsigned LEB128 decoding based on the type T.
+	 *
+	 * @tparam T The enum type to read.
+	 * @return The decoded value of type T.
+	 */
+	template <typename T> inline T readLEB128_enum() {
+		 std::underlying_type_t<T> data;
+		 *this >> Leb(data);
+		 return static_cast<T>(data);
+	};
+	/**
+	 * @brief Convenience function to read a value of a LEB128 enum type T from the stream.
+	 *
+	 * Automatically handles signed/unsigned LEB128 decoding based on the type T.
+	 *
+	 * @tparam T The enum type of value to read.
+	 * @param output The enum to be written to.
+	 * @return Reference to the current DataStream instance.
+	 */
+	template <typename T> inline DataStream& readLEB128_enum(T& output) {
+		 std::underlying_type_t<T> data;
+		 *this >> Leb(data);
+		 output = static_cast<T>(data);
+		 return *this;
+	};
+	/**
+	 * @brief Convenience function to write a value of a LEB128 enum type T into the stream.
+	 *
+	 * Automatically handles signed/unsigned LEB128 decoding based on the type T.
+	 *
+	 * @tparam T The enum type of value to written.
+	 * @param output The enum to be written from.
+	 * @return Reference to the current DataStream instance.
+	 */
+	template <typename T> inline DataStream& writeLEB128_enum(T output) {
+		 std::underlying_type_t<T> data = static_cast<std::underlying_type_t<T>>(data);
+		 return *this << Leb(data);
 	};
 };
 
