@@ -20,6 +20,7 @@ SOURCES += \
         LibJit/LibJitRuntime.cpp \
         LibJit/LibJitTypeTranslation.cpp \
         LibJit/LibjitModuleCompiler.cpp \
+        Stub/StubOpcodeDispatcher.cpp \
         main.cpp
 
 HEADERS += \
@@ -51,4 +52,5 @@ HEADERS += \
     LibJit/LibJitContext.hpp \
     LibJit/LibJitRuntime.hpp \
     LibJit/LibJitTypeTranslation.hpp \
-    LibJit/LibjitModuleCompiler.hpp
+    LibJit/LibjitModuleCompiler.hpp \
+    Stub/StubOpcodeDispatcher.hpp
