@@ -129,7 +129,7 @@ int main()
 	std::cout << std::endl;*/
 	std::vector<jit_type_t> types;
 	LibJIT::Context context;
-	context.getTranslator().translateTypes(mod.types,types);
+	//context.getTranslator().translateTypes(mod.types,types);
 	for(size_t i = 0; i < types.size(); ++i) {
 		jit_type_t type = types[i];
 		std::cout << '[' << i << "] Type: ";

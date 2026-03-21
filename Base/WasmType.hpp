@@ -16,7 +16,6 @@ typedef uint32_t LocalIdx;
 typedef uint32_t GlobalIdx;
 typedef uint32_t TableIdx;
 typedef uint32_t FuncIdx;
-typedef uint64_t MemArg;
 typedef uint32_t MemIdx;
 
 // Distinguishes between normal types (i32) and packed types (i8, i16)
@@ -366,6 +365,42 @@ Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& stream, CatchClause& 
 			break;
 	}
 	return stream;
+}
+struct MemArg {
+	uint32_t memidx; // Defaults to 0 for Wasm 1.0/2.0
+	uint32_t align;
+	uint64_t offset;
+};
+
+template <Elv::Util::Endian E>
+Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, MemArg& right) {
+	uint32_t raw_align;
+	left >> Elv::Io::Leb(raw_align);
+
+	// Check the 7th bit (0x40)
+	if (raw_align & 0x40) {
+		// Wasm 3.0+ path: 7th bit is set
+		right.align = raw_align & 0x3F; // Strip the flag bit to get actual alignment
+		left >> Elv::Io::Leb(right.memidx);
+	} else {
+		// Wasm 1.0/2.0 path: 7th bit is NOT set
+		right.align = raw_align;
+		right.memidx = 0; // Implicitly memory 0
+	}
+
+	return left >> Elv::Io::Leb(right.offset);
+}
+
+template <Elv::Util::Endian E>
+Elv::Io::DataStream<E>& operator<<(Elv::Io::DataStream<E>& left, MemArg right) {
+	if (right.memidx == 0) {
+		// Standard 1.0 encoding
+		return left << Elv::Io::Leb(right.align) << Elv::Io::Leb(right.offset);
+	} else {
+		// Multi-memory encoding (flip the 0x40 bit)
+		uint32_t flagged_align = right.align | 0x40;
+		return left << Elv::Io::Leb(flagged_align) << Elv::Io::Leb(right.memidx) << Elv::Io::Leb(right.offset);
+	}
 }
 
 }

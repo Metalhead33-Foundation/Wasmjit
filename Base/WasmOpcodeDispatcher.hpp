@@ -25,8 +25,8 @@ protected:
 	virtual void dispatchCallIndirect(TypeIdx arg1, TableIdx arg2) = 0;
 	virtual void dispatchReturnCall(FuncIdx arg) = 0;
 	virtual void dispatchReturnCallIndirect(TypeIdx arg1, TableIdx arg2) = 0;
-	virtual void dispatchCallRef(FuncIdx arg) = 0;
-	virtual void dispatchReturnCallRef(FuncIdx arg) = 0;
+	virtual void dispatchCallRef(TypeIdx arg) = 0;
+	virtual void dispatchReturnCallRef(TypeIdx arg) = 0;
 	virtual void dispatchTryTable(const BlockType& arg1, std::vector<CatchClause>&& arg2) = 0;
 	virtual void dispatchDrop() = 0;
 	virtual void dispatchSelect() = 0;

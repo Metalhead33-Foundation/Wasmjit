@@ -316,66 +316,66 @@ void WASM::OpcodeDispatcher::dispatchPrefixSIMD(WasmStream& stream, SIMDOpcode o
 		// ----------------------------------------------------------------
 		// Memory loads – memarg only
 		// ----------------------------------------------------------------
-		case SIMDOpcode::V128Load:       { MemArg m = stream.readLEB128<MemArg>(); dispatchV128Load(m);       break; }
-		case SIMDOpcode::V128Load8x8S:   { MemArg m = stream.readLEB128<MemArg>(); dispatchV128Load8x8S(m);   break; }
-		case SIMDOpcode::V128Load8x8U:   { MemArg m = stream.readLEB128<MemArg>(); dispatchV128Load8x8U(m);   break; }
-		case SIMDOpcode::V128Load16x4S:  { MemArg m = stream.readLEB128<MemArg>(); dispatchV128Load16x4S(m);  break; }
-		case SIMDOpcode::V128Load16x4U:  { MemArg m = stream.readLEB128<MemArg>(); dispatchV128Load16x4U(m);  break; }
-		case SIMDOpcode::V128Load32x2S:  { MemArg m = stream.readLEB128<MemArg>(); dispatchV128Load32x2S(m);  break; }
-		case SIMDOpcode::V128Load32x2U:  { MemArg m = stream.readLEB128<MemArg>(); dispatchV128Load32x2U(m);  break; }
-		case SIMDOpcode::V128Load8Splat: { MemArg m = stream.readLEB128<MemArg>(); dispatchV128Load8Splat(m); break; }
-		case SIMDOpcode::V128Load16Splat:{ MemArg m = stream.readLEB128<MemArg>(); dispatchV128Load16Splat(m);break; }
-		case SIMDOpcode::V128Load32Splat:{ MemArg m = stream.readLEB128<MemArg>(); dispatchV128Load32Splat(m);break; }
-		case SIMDOpcode::V128Load64Splat:{ MemArg m = stream.readLEB128<MemArg>(); dispatchV128Load64Splat(m);break; }
-		case SIMDOpcode::V128Load32Zero: { MemArg m = stream.readLEB128<MemArg>(); dispatchV128Load32Zero(m); break; }
-		case SIMDOpcode::V128Load64Zero: { MemArg m = stream.readLEB128<MemArg>(); dispatchV128Load64Zero(m); break; }
-		case SIMDOpcode::V128Store:      { MemArg m = stream.readLEB128<MemArg>(); dispatchV128Store(m);      break; }
+		case SIMDOpcode::V128Load:       { MemArg m = stream.read<MemArg>(); dispatchV128Load(m);       break; }
+		case SIMDOpcode::V128Load8x8S:   { MemArg m = stream.read<MemArg>(); dispatchV128Load8x8S(m);   break; }
+		case SIMDOpcode::V128Load8x8U:   { MemArg m = stream.read<MemArg>(); dispatchV128Load8x8U(m);   break; }
+		case SIMDOpcode::V128Load16x4S:  { MemArg m = stream.read<MemArg>(); dispatchV128Load16x4S(m);  break; }
+		case SIMDOpcode::V128Load16x4U:  { MemArg m = stream.read<MemArg>(); dispatchV128Load16x4U(m);  break; }
+		case SIMDOpcode::V128Load32x2S:  { MemArg m = stream.read<MemArg>(); dispatchV128Load32x2S(m);  break; }
+		case SIMDOpcode::V128Load32x2U:  { MemArg m = stream.read<MemArg>(); dispatchV128Load32x2U(m);  break; }
+		case SIMDOpcode::V128Load8Splat: { MemArg m = stream.read<MemArg>(); dispatchV128Load8Splat(m); break; }
+		case SIMDOpcode::V128Load16Splat:{ MemArg m = stream.read<MemArg>(); dispatchV128Load16Splat(m);break; }
+		case SIMDOpcode::V128Load32Splat:{ MemArg m = stream.read<MemArg>(); dispatchV128Load32Splat(m);break; }
+		case SIMDOpcode::V128Load64Splat:{ MemArg m = stream.read<MemArg>(); dispatchV128Load64Splat(m);break; }
+		case SIMDOpcode::V128Load32Zero: { MemArg m = stream.read<MemArg>(); dispatchV128Load32Zero(m); break; }
+		case SIMDOpcode::V128Load64Zero: { MemArg m = stream.read<MemArg>(); dispatchV128Load64Zero(m); break; }
+		case SIMDOpcode::V128Store:      { MemArg m = stream.read<MemArg>(); dispatchV128Store(m);      break; }
 
 		// Memory lane loads/stores – memarg + laneidx (raw byte)
 		case SIMDOpcode::V128Load8Lane: {
-			MemArg  m = stream.readLEB128<MemArg>();
+			MemArg  m = stream.read<MemArg>();
 			uint8_t l = stream.read<uint8_t>();
 			dispatchV128Load8Lane(m, l);
 			break;
 		}
 		case SIMDOpcode::V128Load16Lane: {
-			MemArg  m = stream.readLEB128<MemArg>();
+			MemArg  m = stream.read<MemArg>();
 			uint8_t l = stream.read<uint8_t>();
 			dispatchV128Load16Lane(m, l);
 			break;
 		}
 		case SIMDOpcode::V128Load32Lane: {
-			MemArg  m = stream.readLEB128<MemArg>();
+			MemArg  m = stream.read<MemArg>();
 			uint8_t l = stream.read<uint8_t>();
 			dispatchV128Load32Lane(m, l);
 			break;
 		}
 		case SIMDOpcode::V128Load64Lane: {
-			MemArg  m = stream.readLEB128<MemArg>();
+			MemArg  m = stream.read<MemArg>();
 			uint8_t l = stream.read<uint8_t>();
 			dispatchV128Load64Lane(m, l);
 			break;
 		}
 		case SIMDOpcode::V128Store8Lane: {
-			MemArg  m = stream.readLEB128<MemArg>();
+			MemArg  m = stream.read<MemArg>();
 			uint8_t l = stream.read<uint8_t>();
 			dispatchV128Store8Lane(m, l);
 			break;
 		}
 		case SIMDOpcode::V128Store16Lane: {
-			MemArg  m = stream.readLEB128<MemArg>();
+			MemArg  m = stream.read<MemArg>();
 			uint8_t l = stream.read<uint8_t>();
 			dispatchV128Store16Lane(m, l);
 			break;
 		}
 		case SIMDOpcode::V128Store32Lane: {
-			MemArg  m = stream.readLEB128<MemArg>();
+			MemArg  m = stream.read<MemArg>();
 			uint8_t l = stream.read<uint8_t>();
 			dispatchV128Store32Lane(m, l);
 			break;
 		}
 		case SIMDOpcode::V128Store64Lane: {
-			MemArg  m = stream.readLEB128<MemArg>();
+			MemArg  m = stream.read<MemArg>();
 			uint8_t l = stream.read<uint8_t>();
 			dispatchV128Store64Lane(m, l);
 			break;
@@ -642,7 +642,7 @@ void OpcodeDispatcher::dispatchPrefixAtomic(WasmStream& stream, AtomicOpcode opc
 	}
 
 	// All other atomic instructions carry a memarg.
-	MemArg m = stream.readLEB128<MemArg>();
+	MemArg m = stream.read<MemArg>();
 
 	switch (opcode) {
 		case AtomicOpcode::MemoryAtomicNotify:      { dispatchMemoryAtomicNotify(m);      break; }
@@ -732,10 +732,10 @@ void OpcodeDispatcher::dispatchOpcode(WasmStream& stream, Opcode opcode)
 		// ----------------------------------------------------------------
 		// Control – blocktype immediate
 		// ----------------------------------------------------------------
-		case Opcode::Block:    { auto bt = stream.read<BlockType>(); dispatchBlock(bt);    break; }
-		case Opcode::Loop:     { auto bt = stream.read<BlockType>(); dispatchLoop(bt);     break; }
-		case Opcode::If:       { auto bt = stream.read<BlockType>(); dispatchIf(bt);       break; }
-		case Opcode::TryTable: { auto bt = stream.read<BlockType>();
+		case Opcode::Block:    { BlockType bt; stream >> bt; dispatchBlock(bt);    break; }
+		case Opcode::Loop:     { BlockType bt; stream >> bt; dispatchLoop(bt);     break; }
+		case Opcode::If:       { BlockType bt; stream >> bt; dispatchIf(bt);       break; }
+		case Opcode::TryTable: { BlockType bt; stream >> bt;
 								 auto catches = readList<CatchClause>(stream);
 								 dispatchTryTable(bt, std::move(catches)); break; }
 
@@ -790,33 +790,33 @@ void OpcodeDispatcher::dispatchOpcode(WasmStream& stream, Opcode opcode)
 		// ----------------------------------------------------------------
 		// Memory – loads (memarg)
 		// ----------------------------------------------------------------
-		case Opcode::I32Load:    { auto m = stream.readLEB128<MemArg>(); dispatchI32Load(m);    break; }
-		case Opcode::I64Load:    { auto m = stream.readLEB128<MemArg>(); dispatchI64Load(m);    break; }
-		case Opcode::F32Load:    { auto m = stream.readLEB128<MemArg>(); dispatchF32Load(m);    break; }
-		case Opcode::F64Load:    { auto m = stream.readLEB128<MemArg>(); dispatchF64Load(m);    break; }
-		case Opcode::I32Load8S:  { auto m = stream.readLEB128<MemArg>(); dispatchI32Load8S(m);  break; }
-		case Opcode::I32Load8U:  { auto m = stream.readLEB128<MemArg>(); dispatchI32Load8U(m);  break; }
-		case Opcode::I32Load16S: { auto m = stream.readLEB128<MemArg>(); dispatchI32Load16S(m); break; }
-		case Opcode::I32Load16U: { auto m = stream.readLEB128<MemArg>(); dispatchI32Load16U(m); break; }
-		case Opcode::I64Load8S:  { auto m = stream.readLEB128<MemArg>(); dispatchI64Load8S(m);  break; }
-		case Opcode::I64Load8U:  { auto m = stream.readLEB128<MemArg>(); dispatchI64Load8U(m);  break; }
-		case Opcode::I64Load16S: { auto m = stream.readLEB128<MemArg>(); dispatchI64Load16S(m); break; }
-		case Opcode::I64Load16U: { auto m = stream.readLEB128<MemArg>(); dispatchI64Load16U(m); break; }
-		case Opcode::I64Load32S: { auto m = stream.readLEB128<MemArg>(); dispatchI64Load32S(m); break; }
-		case Opcode::I64Load32U: { auto m = stream.readLEB128<MemArg>(); dispatchI64Load32U(m); break; }
+		case Opcode::I32Load:    { auto m = stream.read<MemArg>(); dispatchI32Load(m);    break; }
+		case Opcode::I64Load:    { auto m = stream.read<MemArg>(); dispatchI64Load(m);    break; }
+		case Opcode::F32Load:    { auto m = stream.read<MemArg>(); dispatchF32Load(m);    break; }
+		case Opcode::F64Load:    { auto m = stream.read<MemArg>(); dispatchF64Load(m);    break; }
+		case Opcode::I32Load8S:  { auto m = stream.read<MemArg>(); dispatchI32Load8S(m);  break; }
+		case Opcode::I32Load8U:  { auto m = stream.read<MemArg>(); dispatchI32Load8U(m);  break; }
+		case Opcode::I32Load16S: { auto m = stream.read<MemArg>(); dispatchI32Load16S(m); break; }
+		case Opcode::I32Load16U: { auto m = stream.read<MemArg>(); dispatchI32Load16U(m); break; }
+		case Opcode::I64Load8S:  { auto m = stream.read<MemArg>(); dispatchI64Load8S(m);  break; }
+		case Opcode::I64Load8U:  { auto m = stream.read<MemArg>(); dispatchI64Load8U(m);  break; }
+		case Opcode::I64Load16S: { auto m = stream.read<MemArg>(); dispatchI64Load16S(m); break; }
+		case Opcode::I64Load16U: { auto m = stream.read<MemArg>(); dispatchI64Load16U(m); break; }
+		case Opcode::I64Load32S: { auto m = stream.read<MemArg>(); dispatchI64Load32S(m); break; }
+		case Opcode::I64Load32U: { auto m = stream.read<MemArg>(); dispatchI64Load32U(m); break; }
 
 		// ----------------------------------------------------------------
 		// Memory – stores (memarg)
 		// ----------------------------------------------------------------
-		case Opcode::I32Store:   { auto m = stream.readLEB128<MemArg>(); dispatchI32Store(m);   break; }
-		case Opcode::I64Store:   { auto m = stream.readLEB128<MemArg>(); dispatchI64Store(m);   break; }
-		case Opcode::F32Store:   { auto m = stream.readLEB128<MemArg>(); dispatchF32Store(m);   break; }
-		case Opcode::F64Store:   { auto m = stream.readLEB128<MemArg>(); dispatchF64Store(m);   break; }
-		case Opcode::I32Store8:  { auto m = stream.readLEB128<MemArg>(); dispatchI32Store8(m);  break; }
-		case Opcode::I32Store16: { auto m = stream.readLEB128<MemArg>(); dispatchI32Store16(m); break; }
-		case Opcode::I64Store8:  { auto m = stream.readLEB128<MemArg>(); dispatchI64Store8(m);  break; }
-		case Opcode::I64Store16: { auto m = stream.readLEB128<MemArg>(); dispatchI64Store16(m); break; }
-		case Opcode::I64Store32: { auto m = stream.readLEB128<MemArg>(); dispatchI64Store32(m); break; }
+		case Opcode::I32Store:   { auto m = stream.read<MemArg>(); dispatchI32Store(m);   break; }
+		case Opcode::I64Store:   { auto m = stream.read<MemArg>(); dispatchI64Store(m);   break; }
+		case Opcode::F32Store:   { auto m = stream.read<MemArg>(); dispatchF32Store(m);   break; }
+		case Opcode::F64Store:   { auto m = stream.read<MemArg>(); dispatchF64Store(m);   break; }
+		case Opcode::I32Store8:  { auto m = stream.read<MemArg>(); dispatchI32Store8(m);  break; }
+		case Opcode::I32Store16: { auto m = stream.read<MemArg>(); dispatchI32Store16(m); break; }
+		case Opcode::I64Store8:  { auto m = stream.read<MemArg>(); dispatchI64Store8(m);  break; }
+		case Opcode::I64Store16: { auto m = stream.read<MemArg>(); dispatchI64Store16(m); break; }
+		case Opcode::I64Store32: { auto m = stream.read<MemArg>(); dispatchI64Store32(m); break; }
 
 		// ----------------------------------------------------------------
 		// Memory – size / grow (memidx)
@@ -975,7 +975,7 @@ void OpcodeDispatcher::dispatchOpcode(WasmStream& stream, Opcode opcode)
 		// ----------------------------------------------------------------
 		// Reference instructions
 		// ----------------------------------------------------------------
-		case Opcode::RefNull:      { auto ht = stream.read<HeapType>(); dispatchRefNull(ht);  break; }
+		case Opcode::RefNull:      { HeapType ht; stream >> ht; dispatchRefNull(ht); dispatchRefNull(ht);  break; }
 		case Opcode::RefIsNull:    { dispatchRefIsNull();   break; }
 		case Opcode::RefFunc:      { auto x = stream.readLEB128<FuncIdx>(); dispatchRefFunc(x); break; }
 		case Opcode::RefEq:        { dispatchRefEq();       break; }
