@@ -44,20 +44,32 @@ private:
 	WASM::ModuleInstance& instance;
 	WASM::ModuleInstanceInternals& internals;
 	const WASM::Module& module;
+	const WASM::FuncType& currentFunc;
 	uint32_t importedFuncCount;
 	std::vector<jit_value_t>& locals;
 	std::vector<jit_value_t>& valueStack;
 	std::vector<ControlBlock>& controlStack;
+
+	void pushValue(jit_value_t v);
+	jit_value_t popValue();
+	jit_value_t zeroConstantForType(jit_type_t t);
+	void emitTrapUnreachable();
+	std::vector<WASM::StorageType> storageTypesForBlockType(const WASM::BlockType& bt) const;
 
 public:
 	OpcodeDispatcher(jit_context_t context, jit_function_t function,
 					 LibJitTypeTranslator& typeTranslator,
 					 WASM::ModuleInstance& instance,
 					 WASM::ModuleInstanceInternals& internals,
-					 const WASM::Module& module, uint32_t importedFuncCount,
+					 const WASM::Module& module, const WASM::FuncType& currentFunc,
+					 uint32_t importedFuncCount,
 					 std::vector<jit_value_t>& locals,
 					 std::vector<jit_value_t>& valueStack,
 					 std::vector<ControlBlock>& controlStack);
+
+	// Call after readCode() to emit return from the implicit function body (Wasm validation
+	// guarantees the value stack matches currentFunc.results).
+	void emitImplicitFunctionReturn();
 
 	// OpcodeDispatcher interface
 protected:
