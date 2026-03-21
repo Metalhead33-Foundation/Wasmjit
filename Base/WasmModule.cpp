@@ -1,5 +1,6 @@
 #include "WasmModule.hpp"
 #include <iostream>
+#include <stdexcept>
 
 namespace WASM {
 typedef Elv::Io::DataStream<Elv::Util::Endian::Little> WasmStream;
@@ -9,7 +10,7 @@ void Module::processSecetions(Elv::Io::Device& file)
 	for(const auto& it : sections)
 	{
 		switch (it.type) {
-			case SectionType::Custom: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processCustomSection(file, it);
+			case SectionType::Custom: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processCustomSection(file, it); break;
 			case SectionType::Type: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processTypeSection(file, it); break;
 			case SectionType::Import: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processImportSection(file, it); break;
 			case SectionType::Function: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processFunctionSection(file, it); break;

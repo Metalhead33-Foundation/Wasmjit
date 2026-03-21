@@ -1,13 +1,17 @@
 #include <iostream>
 #include "Io/ElvDataStream.hpp"
 #include "Io/EuphFile.hpp"
+#include "Io/EuphConstBufferDevice.hpp"
 #include "Base/WasmModule.hpp"
 #include "LibJit/LibJitContext.hpp"
+#include "Base/WasmType.hpp"
+#include "Stub/StubOpcodeDispatcher.hpp"
 
 using namespace std;
 typedef Euph::Io::File RegularFile;
 typedef Elv::Io::DataStream<Elv::Util::Endian::Little> WasmStream;
 #define _WASMPATH "/home/legacy/helloworld3.wasm"
+#define _WASMPATH "/home/legacy/programok/programkodok/cartridge/cartridge2.wasm"
 #define _WASMPATH "/home/legacy/programok/programkodok/go/app.wasm"
 static const char* WASMPATH = _WASMPATH;
 
@@ -129,12 +133,21 @@ int main()
 	std::cout << std::endl;*/
 	std::vector<jit_type_t> types;
 	LibJIT::Context context;
-	//context.getTranslator().translateTypes(mod.types,types);
+	context.getTranslator().translateTypes(mod.types);
+	types = context.getTranslator().getTranslatedTypes();
 	for(size_t i = 0; i < types.size(); ++i) {
 		jit_type_t type = types[i];
 		std::cout << '[' << i << "] Type: ";
 		printType(type);
 		std::cout << std::endl;
+	}
+	for(size_t i = 0; i < mod.functionBodies.size(); ++i) {
+		const auto& body = mod.functionBodies[i];
+		Euph::Io::ConstBufferDevice buff(Euph::Io::ConstBufferDevice::span_cast<uint8_t>(body.code));
+		std::cout << "\n\n-------------\nFUNCTION # " << i << std::endl;
+		WASM::WasmStream stream(buff);
+		Stub::OpcodeDispatcher dispatcher(&std::cout);
+		dispatcher.readCode(stream);
 	}
 
 	return 0;

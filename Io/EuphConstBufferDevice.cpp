@@ -11,7 +11,8 @@ ConstBufferDevice::ConstBufferDevice(const std::span<const std::byte>& buff)
 size_t ConstBufferDevice::read(void* buffer, size_t size, size_t count)
 {
 	const size_t toCpy = std::min(size*count,buff.size() - ptr);
-	memcpy(buffer,buff.data(),toCpy);
+	memcpy(buffer,&buff[ptr],toCpy);
+	ptr += toCpy;
 	return toCpy / size;
 }
 

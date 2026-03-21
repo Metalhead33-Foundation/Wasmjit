@@ -1,5 +1,68 @@
 #include "StubOpcodeDispatcher.hpp"
 
+std::basic_ostream<char>& operator<<(std::basic_ostream<char>& left, const WASM::ValueTypeCode& right) {
+	switch(right) {
+		case WASM::ValueTypeCode::Void: left << "Void"; break;
+		case WASM::ValueTypeCode::Func: left << "Func"; break;
+		case WASM::ValueTypeCode::I32: left << "I32"; break;
+		case WASM::ValueTypeCode::I64: left << "I64"; break;
+		case WASM::ValueTypeCode::F32: left << "F32"; break;
+		case WASM::ValueTypeCode::F64: left << "F64"; break;
+		case WASM::ValueTypeCode::V128: left << "V128"; break;
+		case WASM::ValueTypeCode::I8: left << "I8"; break;
+		case WASM::ValueTypeCode::I16: left << "I16"; break;
+		case WASM::ValueTypeCode::FuncRef: left << "FuncRef"; break;
+		case WASM::ValueTypeCode::ExternRef: left << "ExternRef"; break;
+		case WASM::ValueTypeCode::AnyRef: left << "AnyRef"; break;
+		case WASM::ValueTypeCode::EqRef: left << "EqRef"; break;
+		case WASM::ValueTypeCode::I31Ref: left << "I31Ref"; break;
+		case WASM::ValueTypeCode::StructRef: left << "StructRef"; break;
+		case WASM::ValueTypeCode::ArrayRef: left << "ArrayRef"; break;
+		case WASM::ValueTypeCode::NullFuncRef: left << "NullFuncRef"; break;
+		case WASM::ValueTypeCode::NullExternRef: left << "NullExternRef"; break;
+		case WASM::ValueTypeCode::NullRef: left << "NullRef"; break;
+		case WASM::ValueTypeCode::StringRef: left << "StringRef"; break;
+		case WASM::ValueTypeCode::StringViewWtf8: left << "StringViewWtf8"; break;
+		case WASM::ValueTypeCode::StringViewWtf16: left << "StringViewWtf16"; break;
+		case WASM::ValueTypeCode::StringViewIter: left << "StringViewIter"; break;
+		case WASM::ValueTypeCode::RefNull: left << "RefNull"; break;
+		case WASM::ValueTypeCode::Ref: left << "Ref"; break;
+		default: left << "Invalid"; break;
+	}
+	return left;
+}
+std::basic_ostream<char>& operator<<(std::basic_ostream<char>& left, const WASM::AbstractHeapType& right) {
+	switch (right) {
+		case WASM::AbstractHeapType::Func: left << "Func"; break;
+		case WASM::AbstractHeapType::Extern: left << "Extern"; break;
+		case WASM::AbstractHeapType::Any: left << "Any"; break;
+		case WASM::AbstractHeapType::Eq: left << "Eq"; break;
+		case WASM::AbstractHeapType::I31: left << "I31"; break;
+		case WASM::AbstractHeapType::Struct: left << "Struct"; break;
+		case WASM::AbstractHeapType::Array: left << "Array"; break;
+		case WASM::AbstractHeapType::NoExtern: left << "NoExtern"; break;
+		case WASM::AbstractHeapType::NoFunc: left << "NoFunc"; break;
+		case WASM::AbstractHeapType::None: left << "None"; break;
+		default: left << "Invalid"; break;
+	}
+	return left;
+}
+
+std::basic_ostream<char>& operator<<(std::basic_ostream<char>& left, const WASM::BlockType& right) {
+	return left << "valType: " << right.valType << ", typeIndex: " << right.typeIndex;
+}
+std::basic_ostream<char>& operator<<(std::basic_ostream<char>& left, const WASM::MemArg& right) {
+	return left << "alignment: " << right.align << ", memidx: " << right.memidx << ", offset: " << right.offset;
+}
+std::basic_ostream<char>& operator<<(std::basic_ostream<char>& left, const WASM::HeapType& right) {
+	if(right.isTypeIndex) {
+		return left << "typeIndex: " << right.typeIndex;
+	} else {
+		return left << "abstractHeapType: " << right.abstract;
+	}
+}
+// WASM::HeapType
+
 namespace Stub {
 OpcodeDispatcher::OpcodeDispatcher(std::basic_ostream<char>* stream)
 	: stream(stream)
@@ -9,2187 +72,2187 @@ OpcodeDispatcher::OpcodeDispatcher(std::basic_ostream<char>* stream)
 
 void OpcodeDispatcher::dispatchUnreachable()
 {
-	*stream << '(' << "dispatchUnreachable" << ')' << std::endl;
+	*stream << '(' << "Unreachable" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchNop()
 {
-	*stream << '(' << "dispatchNop" << ')' << std::endl;
+	*stream << '(' << "Nop" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchBlock(const WASM::BlockType& arg)
 {
-	*stream << '(' << "dispatchBlock" << ')' << std::endl;
+	*stream << '(' << "Block" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchLoop(const WASM::BlockType& arg)
 {
-	*stream << '(' << "dispatchLoop" << ')' << std::endl;
+	*stream << '(' << "Loop" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchIf(const WASM::BlockType& arg)
 {
-	*stream << '(' << "dispatchIf" << ')' << std::endl;
+	*stream << '(' << "If" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchElse()
 {
-	*stream << '(' << "dispatchElse" << ')' << std::endl;
+	*stream << '(' << "Else" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchThrow(WASM::TagIdx arg)
 {
-	*stream << '(' << "dispatchThrow" << ')' << std::endl;
+	*stream << '(' << "Throw" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchThrowRef()
 {
-	*stream << '(' << "dispatchThrowRef" << ')' << std::endl;
+	*stream << '(' << "ThrowRef" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchEnd()
 {
-	*stream << '(' << "dispatchEnd" << ')' << std::endl;
+	*stream << '(' << "End" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchBr(WASM::LabelIdx arg)
 {
-	*stream << '(' << "dispatchBr" << ')' << std::endl;
+	*stream << '(' << "Br" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchBrIf(WASM::LabelIdx arg)
 {
-	*stream << '(' << "dispatchBrIf" << ')' << std::endl;
+	*stream << '(' << "BrIf" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchBrTable(std::vector<WASM::LabelIdx>&& arg1, WASM::LabelIdx arg2)
 {
-	*stream << '(' << "dispatchBrTable" << ')' << std::endl;
+	*stream << '(' << "BrTable" << " [vector] " << arg2 << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchReturn()
 {
-	*stream << '(' << "dispatchReturn" << ')' << std::endl;
+	*stream << '(' << "Return" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchCall(WASM::FuncIdx arg)
 {
-	*stream << '(' << "dispatchCall" << ')' << std::endl;
+	*stream << '(' << "Call" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2)
 {
-	*stream << '(' << "dispatchCallIndirect" << ')' << std::endl;
+	*stream << '(' << "CallIndirect" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchReturnCall(WASM::FuncIdx arg)
 {
-	*stream << '(' << "dispatchReturnCall" << ')' << std::endl;
+	*stream << '(' << "ReturnCall" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2)
 {
-	*stream << '(' << "dispatchReturnCallIndirect" << ')' << std::endl;
+	*stream << '(' << "ReturnCallIndirect" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchCallRef(WASM::TypeIdx arg)
 {
-	*stream << '(' << "dispatchCallRef" << ')' << std::endl;
+	*stream << '(' << "CallRef" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx arg)
 {
-	*stream << '(' << "dispatchReturnCallRef" << ')' << std::endl;
+	*stream << '(' << "ReturnCallRef" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchTryTable(const WASM::BlockType& arg1, std::vector<WASM::CatchClause>&& arg2)
 {
-	*stream << '(' << "dispatchTryTable" << ')' << std::endl;
+	*stream << '(' << "TryTable" << ' ' << '(' << arg1 << " [vector]" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchDrop()
 {
-	*stream << '(' << "dispatchDrop" << ')' << std::endl;
+	*stream << '(' << "Drop" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchSelect()
 {
-	*stream << '(' << "dispatchSelect" << ')' << std::endl;
+	*stream << '(' << "Select" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchSelectT(std::vector<WASM::ValueType>&& arg)
 {
-	*stream << '(' << "dispatchSelectT" << ')' << std::endl;
+	*stream << '(' << "SelectT" << " [vector]" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchLocalGet(WASM::LocalIdx arg)
 {
-	*stream << '(' << "dispatchLocalGet" << ')' << std::endl;
+	*stream << '(' << "LocalGet" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchLocalSet(WASM::LocalIdx arg)
 {
-	*stream << '(' << "dispatchLocalSet" << ')' << std::endl;
+	*stream << '(' << "LocalSet" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchLocalTee(WASM::LocalIdx arg)
 {
-	*stream << '(' << "dispatchLocalTee" << ')' << std::endl;
+	*stream << '(' << "LocalTee" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchGlobalGet(WASM::GlobalIdx arg)
 {
-	*stream << '(' << "dispatchGlobalGet" << ')' << std::endl;
+	*stream << '(' << "GlobalGet" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchGlobalSet(WASM::GlobalIdx arg)
 {
-	*stream << '(' << "dispatchGlobalSet" << ')' << std::endl;
+	*stream << '(' << "GlobalSet" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchTableGet(WASM::TableIdx arg)
 {
-	*stream << '(' << "dispatchTableGet" << ')' << std::endl;
+	*stream << '(' << "TableGet" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchTableSet(WASM::TableIdx arg)
 {
-	*stream << '(' << "dispatchTableSet" << ')' << std::endl;
+	*stream << '(' << "TableSet" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Load(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchI32Load" << ')' << std::endl;
+	*stream << '(' << "I32Load" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Load(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchI64Load" << ')' << std::endl;
+	*stream << '(' << "I64Load" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Load(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchF32Load" << ')' << std::endl;
+	*stream << '(' << "F32Load" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Load(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchF64Load" << ')' << std::endl;
+	*stream << '(' << "F64Load" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Load8S(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchI32Load8S" << ')' << std::endl;
+	*stream << '(' << "I32Load8S" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Load8U(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchI32Load8U" << ')' << std::endl;
+	*stream << '(' << "I32Load8U" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Load16S(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchI32Load16S" << ')' << std::endl;
+	*stream << '(' << "I32Load16S" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Load16U(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchI32Load16U" << ')' << std::endl;
+	*stream << '(' << "I32Load16U" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Load8S(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchI64Load8S" << ')' << std::endl;
+	*stream << '(' << "I64Load8S" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Load8U(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchI64Load8U" << ')' << std::endl;
+	*stream << '(' << "I64Load8U" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Load16S(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchI64Load16S" << ')' << std::endl;
+	*stream << '(' << "I64Load16S" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Load16U(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchI64Load16U" << ')' << std::endl;
+	*stream << '(' << "I64Load16U" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Load32S(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchI64Load32S" << ')' << std::endl;
+	*stream << '(' << "I64Load32S" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Load32U(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchI64Load32U" << ')' << std::endl;
+	*stream << '(' << "I64Load32U" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Store(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchI32Store" << ')' << std::endl;
+	*stream << '(' << "I32Store" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Store(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchI64Store" << ')' << std::endl;
+	*stream << '(' << "I64Store" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Store(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchF32Store" << ')' << std::endl;
+	*stream << '(' << "F32Store" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Store(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchF64Store" << ')' << std::endl;
+	*stream << '(' << "F64Store" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Store8(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchI32Store8" << ')' << std::endl;
+	*stream << '(' << "I32Store8" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Store16(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchI32Store16" << ')' << std::endl;
+	*stream << '(' << "I32Store16" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Store8(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchI64Store8" << ')' << std::endl;
+	*stream << '(' << "I64Store8" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Store16(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchI64Store16" << ')' << std::endl;
+	*stream << '(' << "I64Store16" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Store32(WASM::MemArg addr)
 {
-	*stream << '(' << "dispatchI64Store32" << ')' << std::endl;
+	*stream << '(' << "I64Store32" << ' ' << '(' << addr << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchMemorySize(WASM::MemIdx arg)
 {
-	*stream << '(' << "dispatchMemorySize" << ')' << std::endl;
+	*stream << '(' << "MemorySize" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchMemoryGrow(WASM::MemIdx arg)
 {
-	*stream << '(' << "dispatchMemoryGrow" << ')' << std::endl;
+	*stream << '(' << "MemoryGrow" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Const(int32_t arg)
 {
-	*stream << '(' << "dispatchI32Const" << ')' << std::endl;
+	*stream << '(' << "I32Const" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Const(int64_t arg)
 {
-	*stream << '(' << "dispatchI64Const" << ')' << std::endl;
+	*stream << '(' << "I64Const" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Const(float arg)
 {
-	*stream << '(' << "dispatchF32Const" << ')' << std::endl;
+	*stream << '(' << "F32Const" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Const(double arg)
 {
-	*stream << '(' << "dispatchF64Const" << ')' << std::endl;
+	*stream << '(' << "F64Const" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Eqz()
 {
-	*stream << '(' << "dispatchI32Eqz" << ')' << std::endl;
+	*stream << '(' << "I32Eqz" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Eq()
 {
-	*stream << '(' << "dispatchI32Eq" << ')' << std::endl;
+	*stream << '(' << "I32Eq" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Ne()
 {
-	*stream << '(' << "dispatchI32Ne" << ')' << std::endl;
+	*stream << '(' << "I32Ne" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32LtS()
 {
-	*stream << '(' << "dispatchI32LtS" << ')' << std::endl;
+	*stream << '(' << "I32LtS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32LtU()
 {
-	*stream << '(' << "dispatchI32LtU" << ')' << std::endl;
+	*stream << '(' << "I32LtU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32GtS()
 {
-	*stream << '(' << "dispatchI32GtS" << ')' << std::endl;
+	*stream << '(' << "I32GtS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32GtU()
 {
-	*stream << '(' << "dispatchI32GtU" << ')' << std::endl;
+	*stream << '(' << "I32GtU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32LeS()
 {
-	*stream << '(' << "dispatchI32LeS" << ')' << std::endl;
+	*stream << '(' << "I32LeS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32LeU()
 {
-	*stream << '(' << "dispatchI32LeU" << ')' << std::endl;
+	*stream << '(' << "I32LeU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32GeS()
 {
-	*stream << '(' << "dispatchI32GeS" << ')' << std::endl;
+	*stream << '(' << "I32GeS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32GeU()
 {
-	*stream << '(' << "dispatchI32GeU" << ')' << std::endl;
+	*stream << '(' << "I32GeU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Eqz()
 {
-	*stream << '(' << "dispatchI64Eqz" << ')' << std::endl;
+	*stream << '(' << "I64Eqz" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Eq()
 {
-	*stream << '(' << "dispatchI64Eq" << ')' << std::endl;
+	*stream << '(' << "I64Eq" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Ne()
 {
-	*stream << '(' << "dispatchI64Ne" << ')' << std::endl;
+	*stream << '(' << "I64Ne" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64LtS()
 {
-	*stream << '(' << "dispatchI64LtS" << ')' << std::endl;
+	*stream << '(' << "I64LtS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64LtU()
 {
-	*stream << '(' << "dispatchI64LtU" << ')' << std::endl;
+	*stream << '(' << "I64LtU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64GtS()
 {
-	*stream << '(' << "dispatchI64GtS" << ')' << std::endl;
+	*stream << '(' << "I64GtS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64GtU()
 {
-	*stream << '(' << "dispatchI64GtU" << ')' << std::endl;
+	*stream << '(' << "I64GtU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64LeS()
 {
-	*stream << '(' << "dispatchI64LeS" << ')' << std::endl;
+	*stream << '(' << "I64LeS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64LeU()
 {
-	*stream << '(' << "dispatchI64LeU" << ')' << std::endl;
+	*stream << '(' << "I64LeU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64GeS()
 {
-	*stream << '(' << "dispatchI64GeS" << ')' << std::endl;
+	*stream << '(' << "I64GeS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64GeU()
 {
-	*stream << '(' << "dispatchI64GeU" << ')' << std::endl;
+	*stream << '(' << "I64GeU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Eq()
 {
-	*stream << '(' << "dispatchF32Eq" << ')' << std::endl;
+	*stream << '(' << "F32Eq" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Ne()
 {
-	*stream << '(' << "dispatchF32Ne" << ')' << std::endl;
+	*stream << '(' << "F32Ne" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Lt()
 {
-	*stream << '(' << "dispatchF32Lt" << ')' << std::endl;
+	*stream << '(' << "F32Lt" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Gt()
 {
-	*stream << '(' << "dispatchF32Gt" << ')' << std::endl;
+	*stream << '(' << "F32Gt" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Le()
 {
-	*stream << '(' << "dispatchF32Le" << ')' << std::endl;
+	*stream << '(' << "F32Le" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Ge()
 {
-	*stream << '(' << "dispatchF32Ge" << ')' << std::endl;
+	*stream << '(' << "F32Ge" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Eq()
 {
-	*stream << '(' << "dispatchF64Eq" << ')' << std::endl;
+	*stream << '(' << "F64Eq" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Ne()
 {
-	*stream << '(' << "dispatchF64Ne" << ')' << std::endl;
+	*stream << '(' << "F64Ne" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Lt()
 {
-	*stream << '(' << "dispatchF64Lt" << ')' << std::endl;
+	*stream << '(' << "F64Lt" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Gt()
 {
-	*stream << '(' << "dispatchF64Gt" << ')' << std::endl;
+	*stream << '(' << "F64Gt" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Le()
 {
-	*stream << '(' << "dispatchF64Le" << ')' << std::endl;
+	*stream << '(' << "F64Le" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Ge()
 {
-	*stream << '(' << "dispatchF64Ge" << ')' << std::endl;
+	*stream << '(' << "F64Ge" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Clz()
 {
-	*stream << '(' << "dispatchI32Clz" << ')' << std::endl;
+	*stream << '(' << "I32Clz" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Ctz()
 {
-	*stream << '(' << "dispatchI32Ctz" << ')' << std::endl;
+	*stream << '(' << "I32Ctz" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Popcnt()
 {
-	*stream << '(' << "dispatchI32Popcnt" << ')' << std::endl;
+	*stream << '(' << "I32Popcnt" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Add()
 {
-	*stream << '(' << "dispatchI32Add" << ')' << std::endl;
+	*stream << '(' << "I32Add" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Sub()
 {
-	*stream << '(' << "dispatchI32Sub" << ')' << std::endl;
+	*stream << '(' << "I32Sub" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Mul()
 {
-	*stream << '(' << "dispatchI32Mul" << ')' << std::endl;
+	*stream << '(' << "I32Mul" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32DivS()
 {
-	*stream << '(' << "dispatchI32DivS" << ')' << std::endl;
+	*stream << '(' << "I32DivS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32DivU()
 {
-	*stream << '(' << "dispatchI32DivU" << ')' << std::endl;
+	*stream << '(' << "I32DivU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32RemS()
 {
-	*stream << '(' << "dispatchI32RemS" << ')' << std::endl;
+	*stream << '(' << "I32RemS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32RemU()
 {
-	*stream << '(' << "dispatchI32RemU" << ')' << std::endl;
+	*stream << '(' << "I32RemU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32And()
 {
-	*stream << '(' << "dispatchI32And" << ')' << std::endl;
+	*stream << '(' << "I32And" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Or()
 {
-	*stream << '(' << "dispatchI32Or" << ')' << std::endl;
+	*stream << '(' << "I32Or" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Xor()
 {
-	*stream << '(' << "dispatchI32Xor" << ')' << std::endl;
+	*stream << '(' << "I32Xor" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Shl()
 {
-	*stream << '(' << "dispatchI32Shl" << ')' << std::endl;
+	*stream << '(' << "I32Shl" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32ShrS()
 {
-	*stream << '(' << "dispatchI32ShrS" << ')' << std::endl;
+	*stream << '(' << "I32ShrS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32ShrU()
 {
-	*stream << '(' << "dispatchI32ShrU" << ')' << std::endl;
+	*stream << '(' << "I32ShrU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Rotl()
 {
-	*stream << '(' << "dispatchI32Rotl" << ')' << std::endl;
+	*stream << '(' << "I32Rotl" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Rotr()
 {
-	*stream << '(' << "dispatchI32Rotr" << ')' << std::endl;
+	*stream << '(' << "I32Rotr" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Clz()
 {
-	*stream << '(' << "dispatchI64Clz" << ')' << std::endl;
+	*stream << '(' << "I64Clz" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Ctz()
 {
-	*stream << '(' << "dispatchI64Ctz" << ')' << std::endl;
+	*stream << '(' << "I64Ctz" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Popcnt()
 {
-	*stream << '(' << "dispatchI64Popcnt" << ')' << std::endl;
+	*stream << '(' << "I64Popcnt" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Add()
 {
-	*stream << '(' << "dispatchI64Add" << ')' << std::endl;
+	*stream << '(' << "I64Add" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Sub()
 {
-	*stream << '(' << "dispatchI64Sub" << ')' << std::endl;
+	*stream << '(' << "I64Sub" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Mul()
 {
-	*stream << '(' << "dispatchI64Mul" << ')' << std::endl;
+	*stream << '(' << "I64Mul" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64DivS()
 {
-	*stream << '(' << "dispatchI64DivS" << ')' << std::endl;
+	*stream << '(' << "I64DivS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64DivU()
 {
-	*stream << '(' << "dispatchI64DivU" << ')' << std::endl;
+	*stream << '(' << "I64DivU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64RemS()
 {
-	*stream << '(' << "dispatchI64RemS" << ')' << std::endl;
+	*stream << '(' << "I64RemS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64RemU()
 {
-	*stream << '(' << "dispatchI64RemU" << ')' << std::endl;
+	*stream << '(' << "I64RemU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64And()
 {
-	*stream << '(' << "dispatchI64And" << ')' << std::endl;
+	*stream << '(' << "I64And" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Or()
 {
-	*stream << '(' << "dispatchI64Or" << ')' << std::endl;
+	*stream << '(' << "I64Or" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Xor()
 {
-	*stream << '(' << "dispatchI64Xor" << ')' << std::endl;
+	*stream << '(' << "I64Xor" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Shl()
 {
-	*stream << '(' << "dispatchI64Shl" << ')' << std::endl;
+	*stream << '(' << "I64Shl" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64ShrS()
 {
-	*stream << '(' << "dispatchI64ShrS" << ')' << std::endl;
+	*stream << '(' << "I64ShrS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64ShrU()
 {
-	*stream << '(' << "dispatchI64ShrU" << ')' << std::endl;
+	*stream << '(' << "I64ShrU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Rotl()
 {
-	*stream << '(' << "dispatchI64Rotl" << ')' << std::endl;
+	*stream << '(' << "I64Rotl" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Rotr()
 {
-	*stream << '(' << "dispatchI64Rotr" << ')' << std::endl;
+	*stream << '(' << "I64Rotr" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Abs()
 {
-	*stream << '(' << "dispatchF32Abs" << ')' << std::endl;
+	*stream << '(' << "F32Abs" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Neg()
 {
-	*stream << '(' << "dispatchF32Neg" << ')' << std::endl;
+	*stream << '(' << "F32Neg" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Ceil()
 {
-	*stream << '(' << "dispatchF32Ceil" << ')' << std::endl;
+	*stream << '(' << "F32Ceil" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Floor()
 {
-	*stream << '(' << "dispatchF32Floor" << ')' << std::endl;
+	*stream << '(' << "F32Floor" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Trunc()
 {
-	*stream << '(' << "dispatchF32Trunc" << ')' << std::endl;
+	*stream << '(' << "F32Trunc" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Nearest()
 {
-	*stream << '(' << "dispatchF32Nearest" << ')' << std::endl;
+	*stream << '(' << "F32Nearest" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Sqrt()
 {
-	*stream << '(' << "dispatchF32Sqrt" << ')' << std::endl;
+	*stream << '(' << "F32Sqrt" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Add()
 {
-	*stream << '(' << "dispatchF32Add" << ')' << std::endl;
+	*stream << '(' << "F32Add" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Sub()
 {
-	*stream << '(' << "dispatchF32Sub" << ')' << std::endl;
+	*stream << '(' << "F32Sub" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Mul()
 {
-	*stream << '(' << "dispatchF32Mul" << ')' << std::endl;
+	*stream << '(' << "F32Mul" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Div()
 {
-	*stream << '(' << "dispatchF32Div" << ')' << std::endl;
+	*stream << '(' << "F32Div" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Min()
 {
-	*stream << '(' << "dispatchF32Min" << ')' << std::endl;
+	*stream << '(' << "F32Min" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Max()
 {
-	*stream << '(' << "dispatchF32Max" << ')' << std::endl;
+	*stream << '(' << "F32Max" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32Copysign()
 {
-	*stream << '(' << "dispatchF32Copysign" << ')' << std::endl;
+	*stream << '(' << "F32Copysign" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Abs()
 {
-	*stream << '(' << "dispatchF64Abs" << ')' << std::endl;
+	*stream << '(' << "F64Abs" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Neg()
 {
-	*stream << '(' << "dispatchF64Neg" << ')' << std::endl;
+	*stream << '(' << "F64Neg" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Ceil()
 {
-	*stream << '(' << "dispatchF64Ceil" << ')' << std::endl;
+	*stream << '(' << "F64Ceil" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Floor()
 {
-	*stream << '(' << "dispatchF64Floor" << ')' << std::endl;
+	*stream << '(' << "F64Floor" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Trunc()
 {
-	*stream << '(' << "dispatchF64Trunc" << ')' << std::endl;
+	*stream << '(' << "F64Trunc" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Nearest()
 {
-	*stream << '(' << "dispatchF64Nearest" << ')' << std::endl;
+	*stream << '(' << "F64Nearest" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Sqrt()
 {
-	*stream << '(' << "dispatchF64Sqrt" << ')' << std::endl;
+	*stream << '(' << "F64Sqrt" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Add()
 {
-	*stream << '(' << "dispatchF64Add" << ')' << std::endl;
+	*stream << '(' << "F64Add" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Sub()
 {
-	*stream << '(' << "dispatchF64Sub" << ')' << std::endl;
+	*stream << '(' << "F64Sub" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Mul()
 {
-	*stream << '(' << "dispatchF64Mul" << ')' << std::endl;
+	*stream << '(' << "F64Mul" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Div()
 {
-	*stream << '(' << "dispatchF64Div" << ')' << std::endl;
+	*stream << '(' << "F64Div" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Min()
 {
-	*stream << '(' << "dispatchF64Min" << ')' << std::endl;
+	*stream << '(' << "F64Min" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Max()
 {
-	*stream << '(' << "dispatchF64Max" << ')' << std::endl;
+	*stream << '(' << "F64Max" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64Copysign()
 {
-	*stream << '(' << "dispatchF64Copysign" << ')' << std::endl;
+	*stream << '(' << "F64Copysign" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32WrapI64()
 {
-	*stream << '(' << "dispatchI32WrapI64" << ')' << std::endl;
+	*stream << '(' << "I32WrapI64" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32TruncF32S()
 {
-	*stream << '(' << "dispatchI32TruncF32S" << ')' << std::endl;
+	*stream << '(' << "I32TruncF32S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32TruncF32U()
 {
-	*stream << '(' << "dispatchI32TruncF32U" << ')' << std::endl;
+	*stream << '(' << "I32TruncF32U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32TruncF64S()
 {
-	*stream << '(' << "dispatchI32TruncF64S" << ')' << std::endl;
+	*stream << '(' << "I32TruncF64S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32TruncF64U()
 {
-	*stream << '(' << "dispatchI32TruncF64U" << ')' << std::endl;
+	*stream << '(' << "I32TruncF64U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64ExtendI32S()
 {
-	*stream << '(' << "dispatchI64ExtendI32S" << ')' << std::endl;
+	*stream << '(' << "I64ExtendI32S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64ExtendI32U()
 {
-	*stream << '(' << "dispatchI64ExtendI32U" << ')' << std::endl;
+	*stream << '(' << "I64ExtendI32U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64TruncF32S()
 {
-	*stream << '(' << "dispatchI64TruncF32S" << ')' << std::endl;
+	*stream << '(' << "I64TruncF32S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64TruncF32U()
 {
-	*stream << '(' << "dispatchI64TruncF32U" << ')' << std::endl;
+	*stream << '(' << "I64TruncF32U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64TruncF64S()
 {
-	*stream << '(' << "dispatchI64TruncF64S" << ')' << std::endl;
+	*stream << '(' << "I64TruncF64S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64TruncF64U()
 {
-	*stream << '(' << "dispatchI64TruncF64U" << ')' << std::endl;
+	*stream << '(' << "I64TruncF64U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32ConvertI32S()
 {
-	*stream << '(' << "dispatchF32ConvertI32S" << ')' << std::endl;
+	*stream << '(' << "F32ConvertI32S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32ConvertI32U()
 {
-	*stream << '(' << "dispatchF32ConvertI32U" << ')' << std::endl;
+	*stream << '(' << "F32ConvertI32U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32ConvertI64S()
 {
-	*stream << '(' << "dispatchF32ConvertI64S" << ')' << std::endl;
+	*stream << '(' << "F32ConvertI64S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32ConvertI64U()
 {
-	*stream << '(' << "dispatchF32ConvertI64U" << ')' << std::endl;
+	*stream << '(' << "F32ConvertI64U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32DemoteF64()
 {
-	*stream << '(' << "dispatchF32DemoteF64" << ')' << std::endl;
+	*stream << '(' << "F32DemoteF64" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64ConvertI32S()
 {
-	*stream << '(' << "dispatchF64ConvertI32S" << ')' << std::endl;
+	*stream << '(' << "F64ConvertI32S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64ConvertI32U()
 {
-	*stream << '(' << "dispatchF64ConvertI32U" << ')' << std::endl;
+	*stream << '(' << "F64ConvertI32U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64ConvertI64S()
 {
-	*stream << '(' << "dispatchF64ConvertI64S" << ')' << std::endl;
+	*stream << '(' << "F64ConvertI64S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64ConvertI64U()
 {
-	*stream << '(' << "dispatchF64ConvertI64U" << ')' << std::endl;
+	*stream << '(' << "F64ConvertI64U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64PromoteF32()
 {
-	*stream << '(' << "dispatchF64PromoteF32" << ')' << std::endl;
+	*stream << '(' << "F64PromoteF32" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32ReinterpretF32()
 {
-	*stream << '(' << "dispatchI32ReinterpretF32" << ')' << std::endl;
+	*stream << '(' << "I32ReinterpretF32" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64ReinterpretF64()
 {
-	*stream << '(' << "dispatchI64ReinterpretF64" << ')' << std::endl;
+	*stream << '(' << "I64ReinterpretF64" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32ReinterpretI32()
 {
-	*stream << '(' << "dispatchF32ReinterpretI32" << ')' << std::endl;
+	*stream << '(' << "F32ReinterpretI32" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64ReinterpretI64()
 {
-	*stream << '(' << "dispatchF64ReinterpretI64" << ')' << std::endl;
+	*stream << '(' << "F64ReinterpretI64" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Extend8S()
 {
-	*stream << '(' << "dispatchI32Extend8S" << ')' << std::endl;
+	*stream << '(' << "I32Extend8S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Extend16S()
 {
-	*stream << '(' << "dispatchI32Extend16S" << ')' << std::endl;
+	*stream << '(' << "I32Extend16S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Extend8S()
 {
-	*stream << '(' << "dispatchI64Extend8S" << ')' << std::endl;
+	*stream << '(' << "I64Extend8S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Extend16S()
 {
-	*stream << '(' << "dispatchI64Extend16S" << ')' << std::endl;
+	*stream << '(' << "I64Extend16S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Extend32S()
 {
-	*stream << '(' << "dispatchI64Extend32S" << ')' << std::endl;
+	*stream << '(' << "I64Extend32S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchRefNull(const WASM::HeapType& arg)
 {
-	*stream << '(' << "dispatchRefNull" << ')' << std::endl;
+	*stream << '(' << "RefNull" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchRefIsNull()
 {
-	*stream << '(' << "dispatchRefIsNull" << ')' << std::endl;
+	*stream << '(' << "RefIsNull" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchRefFunc(WASM::FuncIdx arg)
 {
-	*stream << '(' << "dispatchRefFunc" << ')' << std::endl;
+	*stream << '(' << "RefFunc" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchRefEq()
 {
-	*stream << '(' << "dispatchRefEq" << ')' << std::endl;
+	*stream << '(' << "RefEq" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchRefAsNonNull()
 {
-	*stream << '(' << "dispatchRefAsNonNull" << ')' << std::endl;
+	*stream << '(' << "RefAsNonNull" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchBrOnNull(WASM::LabelIdx arg)
 {
-	*stream << '(' << "dispatchBrOnNull" << ')' << std::endl;
+	*stream << '(' << "BrOnNull" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchBrOnNonNull(WASM::LabelIdx arg)
 {
-	*stream << '(' << "dispatchBrOnNonNull" << ')' << std::endl;
+	*stream << '(' << "BrOnNonNull" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchStructNew(WASM::TypeIdx arg)
 {
-	*stream << '(' << "dispatchStructNew" << ')' << std::endl;
+	*stream << '(' << "StructNew" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchStructNewDefault(WASM::TypeIdx arg)
 {
-	*stream << '(' << "dispatchStructNewDefault" << ')' << std::endl;
+	*stream << '(' << "StructNewDefault" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2)
 {
-	*stream << '(' << "dispatchStructGet" << ')' << std::endl;
+	*stream << '(' << "StructGet" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchStructGetS(WASM::TypeIdx arg1, uint32_t arg2)
 {
-	*stream << '(' << "dispatchStructGetS" << ')' << std::endl;
+	*stream << '(' << "StructGetS" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchStructGetU(WASM::TypeIdx arg1, uint32_t arg2)
 {
-	*stream << '(' << "dispatchStructGetU" << ')' << std::endl;
+	*stream << '(' << "StructGetU" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2)
 {
-	*stream << '(' << "dispatchStructSet" << ')' << std::endl;
+	*stream << '(' << "StructSet" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchArrayNew(WASM::TypeIdx arg)
 {
-	*stream << '(' << "dispatchArrayNew" << ')' << std::endl;
+	*stream << '(' << "ArrayNew" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchArrayNewDefault(WASM::TypeIdx arg)
 {
-	*stream << '(' << "dispatchArrayNewDefault" << ')' << std::endl;
+	*stream << '(' << "ArrayNewDefault" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchArrayNewFixed(WASM::TypeIdx arg1, uint32_t arg2)
 {
-	*stream << '(' << "dispatchArrayNewFixed" << ')' << std::endl;
+	*stream << '(' << "ArrayNewFixed" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchArrayNewData(WASM::TypeIdx arg1, uint32_t arg2)
 {
-	*stream << '(' << "dispatchArrayNewData" << ')' << std::endl;
+	*stream << '(' << "ArrayNewData" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2)
 {
-	*stream << '(' << "dispatchArrayNewElem" << ')' << std::endl;
+	*stream << '(' << "ArrayNewElem" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchArrayGet(WASM::TypeIdx arg)
 {
-	*stream << '(' << "dispatchArrayGet" << ')' << std::endl;
+	*stream << '(' << "ArrayGet" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchArrayGetS(WASM::TypeIdx arg)
 {
-	*stream << '(' << "dispatchArrayGetS" << ')' << std::endl;
+	*stream << '(' << "ArrayGetS" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchArrayGetU(WASM::TypeIdx arg)
 {
-	*stream << '(' << "dispatchArrayGetU" << ')' << std::endl;
+	*stream << '(' << "ArrayGetU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchArraySet(WASM::TypeIdx arg)
 {
-	*stream << '(' << "dispatchArraySet" << ')' << std::endl;
+	*stream << '(' << "ArraySet" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchArrayLen()
 {
-	*stream << '(' << "dispatchArrayLen" << ')' << std::endl;
+	*stream << '(' << "ArrayLen" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchArrayFill(WASM::TypeIdx arg)
 {
-	*stream << '(' << "dispatchArrayFill" << ')' << std::endl;
+	*stream << '(' << "ArrayFill" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2)
 {
-	*stream << '(' << "dispatchArrayCopy" << ')' << std::endl;
+	*stream << '(' << "ArrayCopy" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2)
 {
-	*stream << '(' << "dispatchArrayInitData" << ')' << std::endl;
+	*stream << '(' << "ArrayInitData" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchArrayInitElem(WASM::TypeIdx arg1, uint32_t arg2)
 {
-	*stream << '(' << "dispatchArrayInitElem" << ')' << std::endl;
+	*stream << '(' << "ArrayInitElem" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchRefTest(const WASM::HeapType& arg)
 {
-	*stream << '(' << "dispatchRefTest" << ')' << std::endl;
+	*stream << '(' << "RefTest" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchRefTestNull(const WASM::HeapType& arg)
 {
-	*stream << '(' << "dispatchRefTestNull" << ')' << std::endl;
+	*stream << '(' << "RefTestNull" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchRefCast(const WASM::HeapType& arg)
 {
-	*stream << '(' << "dispatchRefCast" << ')' << std::endl;
+	*stream << '(' << "RefCast" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchRefCastNull(const WASM::HeapType& arg)
 {
-	*stream << '(' << "dispatchRefCastNull" << ')' << std::endl;
+	*stream << '(' << "RefCastNull" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchBrOnCast(uint8_t castop, WASM::LabelIdx l, WASM::HeapType ht1, WASM::HeapType ht2)
 {
-	*stream << '(' << "dispatchBrOnCast" << ')' << std::endl;
+	*stream << '(' << "BrOnCast" << ' ' << '(' << static_cast<int>(castop) << ' ' << l << ' ' << ht1 << ' ' << ht2 << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchBrOnCastFail(uint8_t castop, WASM::LabelIdx l, WASM::HeapType ht1, WASM::HeapType ht2)
 {
-	*stream << '(' << "dispatchBrOnCastFail" << ')' << std::endl;
+	*stream << '(' << "BrOnCastFail" << ' ' << '(' << static_cast<int>(castop) << ' ' << l << ' ' << ht1 << ' ' << ht2 << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchAnyConvertExtern()
 {
-	*stream << '(' << "dispatchAnyConvertExtern" << ')' << std::endl;
+	*stream << '(' << "AnyConvertExtern" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchExternConvertAny()
 {
-	*stream << '(' << "dispatchExternConvertAny" << ')' << std::endl;
+	*stream << '(' << "ExternConvertAny" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchRefI31()
 {
-	*stream << '(' << "dispatchRefI31" << ')' << std::endl;
+	*stream << '(' << "RefI31" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI31GetS()
 {
-	*stream << '(' << "dispatchI31GetS" << ')' << std::endl;
+	*stream << '(' << "I31GetS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI31GetU()
 {
-	*stream << '(' << "dispatchI31GetU" << ')' << std::endl;
+	*stream << '(' << "I31GetU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32TruncSatF32S()
 {
-	*stream << '(' << "dispatchI32TruncSatF32S" << ')' << std::endl;
+	*stream << '(' << "I32TruncSatF32S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32TruncSatF32U()
 {
-	*stream << '(' << "dispatchI32TruncSatF32U" << ')' << std::endl;
+	*stream << '(' << "I32TruncSatF32U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32TruncSatF64S()
 {
-	*stream << '(' << "dispatchI32TruncSatF64S" << ')' << std::endl;
+	*stream << '(' << "I32TruncSatF64S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32TruncSatF64U()
 {
-	*stream << '(' << "dispatchI32TruncSatF64U" << ')' << std::endl;
+	*stream << '(' << "I32TruncSatF64U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64TruncSatF32S()
 {
-	*stream << '(' << "dispatchI64TruncSatF32S" << ')' << std::endl;
+	*stream << '(' << "I64TruncSatF32S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64TruncSatF32U()
 {
-	*stream << '(' << "dispatchI64TruncSatF32U" << ')' << std::endl;
+	*stream << '(' << "I64TruncSatF32U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64TruncSatF64S()
 {
-	*stream << '(' << "dispatchI64TruncSatF64S" << ')' << std::endl;
+	*stream << '(' << "I64TruncSatF64S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64TruncSatF64U()
 {
-	*stream << '(' << "dispatchI64TruncSatF64U" << ')' << std::endl;
+	*stream << '(' << "I64TruncSatF64U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchMemoryInit(uint32_t arg1, WASM::MemIdx arg2)
 {
-	*stream << '(' << "dispatchMemoryInit" << ')' << std::endl;
+	*stream << '(' << "MemoryInit" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchDataDrop(uint32_t arg)
 {
-	*stream << '(' << "dispatchDataDrop" << ')' << std::endl;
+	*stream << '(' << "DataDrop" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchMemoryCopy(WASM::MemIdx arg1, WASM::MemIdx arg2)
 {
-	*stream << '(' << "dispatchMemoryCopy" << ')' << std::endl;
+	*stream << '(' << "MemoryCopy" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchMemoryFill(WASM::MemIdx arg)
 {
-	*stream << '(' << "dispatchMemoryFill" << ')' << std::endl;
+	*stream << '(' << "MemoryFill" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2)
 {
-	*stream << '(' << "dispatchTableInit" << ')' << std::endl;
+	*stream << '(' << "TableInit" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchElemDrop(uint32_t arg)
 {
-	*stream << '(' << "dispatchElemDrop" << ')' << std::endl;
+	*stream << '(' << "ElemDrop" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchTableCopy(WASM::TableIdx arg1, WASM::TableIdx arg2)
 {
-	*stream << '(' << "dispatchTableCopy" << ')' << std::endl;
+	*stream << '(' << "TableCopy" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchTableGrow(WASM::TableIdx arg)
 {
-	*stream << '(' << "dispatchTableGrow" << ')' << std::endl;
+	*stream << '(' << "TableGrow" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchTableSize(WASM::TableIdx arg)
 {
-	*stream << '(' << "dispatchTableSize" << ')' << std::endl;
+	*stream << '(' << "TableSize" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchTableFill(WASM::TableIdx arg)
 {
-	*stream << '(' << "dispatchTableFill" << ')' << std::endl;
+	*stream << '(' << "TableFill" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Load(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchV128Load" << ')' << std::endl;
+	*stream << '(' << "V128Load" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Load8x8S(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchV128Load8x8S" << ')' << std::endl;
+	*stream << '(' << "V128Load8x8S" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Load8x8U(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchV128Load8x8U" << ')' << std::endl;
+	*stream << '(' << "V128Load8x8U" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Load16x4S(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchV128Load16x4S" << ')' << std::endl;
+	*stream << '(' << "V128Load16x4S" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Load16x4U(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchV128Load16x4U" << ')' << std::endl;
+	*stream << '(' << "V128Load16x4U" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Load32x2S(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchV128Load32x2S" << ')' << std::endl;
+	*stream << '(' << "V128Load32x2S" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Load32x2U(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchV128Load32x2U" << ')' << std::endl;
+	*stream << '(' << "V128Load32x2U" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Load8Splat(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchV128Load8Splat" << ')' << std::endl;
+	*stream << '(' << "V128Load8Splat" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Load16Splat(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchV128Load16Splat" << ')' << std::endl;
+	*stream << '(' << "V128Load16Splat" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Load32Splat(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchV128Load32Splat" << ')' << std::endl;
+	*stream << '(' << "V128Load32Splat" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Load64Splat(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchV128Load64Splat" << ')' << std::endl;
+	*stream << '(' << "V128Load64Splat" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Load32Zero(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchV128Load32Zero" << ')' << std::endl;
+	*stream << '(' << "V128Load32Zero" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Load64Zero(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchV128Load64Zero" << ')' << std::endl;
+	*stream << '(' << "V128Load64Zero" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Store(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchV128Store" << ')' << std::endl;
+	*stream << '(' << "V128Store" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Load8Lane(WASM::MemArg arg1, uint8_t arg2)
 {
-	*stream << '(' << "dispatchV128Load8Lane" << ')' << std::endl;
+	*stream << '(' << "V128Load8Lane" << ' ' << '(' << arg1 << ' ' << static_cast<int>(arg2) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Load16Lane(WASM::MemArg arg1, uint8_t arg2)
 {
-	*stream << '(' << "dispatchV128Load16Lane" << ')' << std::endl;
+	*stream << '(' << "V128Load16Lane" << ' ' << '(' << arg1 << ' ' << static_cast<int>(arg2) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Load32Lane(WASM::MemArg arg1, uint8_t arg2)
 {
-	*stream << '(' << "dispatchV128Load32Lane" << ')' << std::endl;
+	*stream << '(' << "V128Load32Lane" << ' ' << '(' << arg1 << ' ' << static_cast<int>(arg2) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Load64Lane(WASM::MemArg arg1, uint8_t arg2)
 {
-	*stream << '(' << "dispatchV128Load64Lane" << ')' << std::endl;
+	*stream << '(' << "V128Load64Lane" << ' ' << '(' << arg1 << ' ' << static_cast<int>(arg2) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Store8Lane(WASM::MemArg arg1, uint8_t arg2)
 {
-	*stream << '(' << "dispatchV128Store8Lane" << ')' << std::endl;
+	*stream << '(' << "V128Store8Lane" << ' ' << '(' << arg1 << ' ' << static_cast<int>(arg2) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Store16Lane(WASM::MemArg arg1, uint8_t arg2)
 {
-	*stream << '(' << "dispatchV128Store16Lane" << ')' << std::endl;
+	*stream << '(' << "V128Store16Lane" << ' ' << '(' << arg1 << ' ' << static_cast<int>(arg2) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Store32Lane(WASM::MemArg arg1, uint8_t arg2)
 {
-	*stream << '(' << "dispatchV128Store32Lane" << ')' << std::endl;
+	*stream << '(' << "V128Store32Lane" << ' ' << '(' << arg1 << ' ' << static_cast<int>(arg2) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Store64Lane(WASM::MemArg arg1, uint8_t arg2)
 {
-	*stream << '(' << "dispatchV128Store64Lane" << ')' << std::endl;
+	*stream << '(' << "V128Store64Lane" << ' ' << '(' << arg1 << ' ' << static_cast<int>(arg2) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Const(std::span<uint8_t> arg)
 {
-	*stream << '(' << "dispatchV128Const" << ')' << std::endl;
+	*stream << '(' << "V128Const" << " [span]" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16Shuffle(std::span<uint8_t> arg)
 {
-	*stream << '(' << "dispatchI8x16Shuffle" << ')' << std::endl;
+	*stream << '(' << "I8x16Shuffle" << " [span]" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16Swizzle()
 {
-	*stream << '(' << "dispatchI8x16Swizzle" << ')' << std::endl;
+	*stream << '(' << "I8x16Swizzle" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16Splat()
 {
-	*stream << '(' << "dispatchI8x16Splat" << ')' << std::endl;
+	*stream << '(' << "I8x16Splat" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8Splat()
 {
-	*stream << '(' << "dispatchI16x8Splat" << ')' << std::endl;
+	*stream << '(' << "I16x8Splat" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4Splat()
 {
-	*stream << '(' << "dispatchI32x4Splat" << ')' << std::endl;
+	*stream << '(' << "I32x4Splat" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2Splat()
 {
-	*stream << '(' << "dispatchI64x2Splat" << ')' << std::endl;
+	*stream << '(' << "I64x2Splat" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4Splat()
 {
-	*stream << '(' << "dispatchF32x4Splat" << ')' << std::endl;
+	*stream << '(' << "F32x4Splat" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2Splat()
 {
-	*stream << '(' << "dispatchF64x2Splat" << ')' << std::endl;
+	*stream << '(' << "F64x2Splat" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16ExtractLaneS(uint8_t arg)
 {
-	*stream << '(' << "dispatchI8x16ExtractLaneS" << ')' << std::endl;
+	*stream << '(' << "I8x16ExtractLaneS" << ' ' << '(' << static_cast<int>(arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16ExtractLaneU(uint8_t arg)
 {
-	*stream << '(' << "dispatchI8x16ExtractLaneU" << ')' << std::endl;
+	*stream << '(' << "I8x16ExtractLaneU" << ' ' << '(' << static_cast<int>(arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16ReplaceLane(uint8_t arg)
 {
-	*stream << '(' << "dispatchI8x16ReplaceLane" << ')' << std::endl;
+	*stream << '(' << "I8x16ReplaceLane" << ' ' << '(' << static_cast<int>(arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8ExtractLaneS(uint8_t arg)
 {
-	*stream << '(' << "dispatchI16x8ExtractLaneS" << ')' << std::endl;
+	*stream << '(' << "I16x8ExtractLaneS" << ' ' << '(' << static_cast<int>(arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8ExtractLaneU(uint8_t arg)
 {
-	*stream << '(' << "dispatchI16x8ExtractLaneU" << ')' << std::endl;
+	*stream << '(' << "I16x8ExtractLaneU" << ' ' << '(' << static_cast<int>(arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8ReplaceLane(uint8_t arg)
 {
-	*stream << '(' << "dispatchI16x8ReplaceLane" << ')' << std::endl;
+	*stream << '(' << "I16x8ReplaceLane" << ' ' << '(' << static_cast<int>(arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4ExtractLane(uint8_t arg)
 {
-	*stream << '(' << "dispatchI32x4ExtractLane" << ')' << std::endl;
+	*stream << '(' << "I32x4ExtractLane" << ' ' << '(' << static_cast<int>(arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4ReplaceLane(uint8_t arg)
 {
-	*stream << '(' << "dispatchI32x4ReplaceLane" << ')' << std::endl;
+	*stream << '(' << "I32x4ReplaceLane" << ' ' << '(' << static_cast<int>(arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2ExtractLane(uint8_t arg)
 {
-	*stream << '(' << "dispatchI64x2ExtractLane" << ')' << std::endl;
+	*stream << '(' << "I64x2ExtractLane" << ' ' << '(' << static_cast<int>(arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2ReplaceLane(uint8_t arg)
 {
-	*stream << '(' << "dispatchI64x2ReplaceLane" << ')' << std::endl;
+	*stream << '(' << "I64x2ReplaceLane" << ' ' << '(' << static_cast<int>(arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4ExtractLane(uint8_t arg)
 {
-	*stream << '(' << "dispatchF32x4ExtractLane" << ')' << std::endl;
+	*stream << '(' << "F32x4ExtractLane" << ' ' << '(' << static_cast<int>(arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4ReplaceLane(uint8_t arg)
 {
-	*stream << '(' << "dispatchF32x4ReplaceLane" << ')' << std::endl;
+	*stream << '(' << "F32x4ReplaceLane" << ' ' << '(' << static_cast<int>(arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2ExtractLane(uint8_t arg)
 {
-	*stream << '(' << "dispatchF64x2ExtractLane" << ')' << std::endl;
+	*stream << '(' << "F64x2ExtractLane" << ' ' << '(' << static_cast<int>(arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2ReplaceLane(uint8_t arg)
 {
-	*stream << '(' << "dispatchF64x2ReplaceLane" << ')' << std::endl;
+	*stream << '(' << "F64x2ReplaceLane" << ' ' << '(' << static_cast<int>(arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16Eq()
 {
-	*stream << '(' << "dispatchI8x16Eq" << ')' << std::endl;
+	*stream << '(' << "I8x16Eq" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16Ne()
 {
-	*stream << '(' << "dispatchI8x16Ne" << ')' << std::endl;
+	*stream << '(' << "I8x16Ne" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16LtS()
 {
-	*stream << '(' << "dispatchI8x16LtS" << ')' << std::endl;
+	*stream << '(' << "I8x16LtS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16LtU()
 {
-	*stream << '(' << "dispatchI8x16LtU" << ')' << std::endl;
+	*stream << '(' << "I8x16LtU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16GtS()
 {
-	*stream << '(' << "dispatchI8x16GtS" << ')' << std::endl;
+	*stream << '(' << "I8x16GtS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16GtU()
 {
-	*stream << '(' << "dispatchI8x16GtU" << ')' << std::endl;
+	*stream << '(' << "I8x16GtU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16LeS()
 {
-	*stream << '(' << "dispatchI8x16LeS" << ')' << std::endl;
+	*stream << '(' << "I8x16LeS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16LeU()
 {
-	*stream << '(' << "dispatchI8x16LeU" << ')' << std::endl;
+	*stream << '(' << "I8x16LeU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16GeS()
 {
-	*stream << '(' << "dispatchI8x16GeS" << ')' << std::endl;
+	*stream << '(' << "I8x16GeS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16GeU()
 {
-	*stream << '(' << "dispatchI8x16GeU" << ')' << std::endl;
+	*stream << '(' << "I8x16GeU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8Eq()
 {
-	*stream << '(' << "dispatchI16x8Eq" << ')' << std::endl;
+	*stream << '(' << "I16x8Eq" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8Ne()
 {
-	*stream << '(' << "dispatchI16x8Ne" << ')' << std::endl;
+	*stream << '(' << "I16x8Ne" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8LtS()
 {
-	*stream << '(' << "dispatchI16x8LtS" << ')' << std::endl;
+	*stream << '(' << "I16x8LtS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8LtU()
 {
-	*stream << '(' << "dispatchI16x8LtU" << ')' << std::endl;
+	*stream << '(' << "I16x8LtU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8GtS()
 {
-	*stream << '(' << "dispatchI16x8GtS" << ')' << std::endl;
+	*stream << '(' << "I16x8GtS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8GtU()
 {
-	*stream << '(' << "dispatchI16x8GtU" << ')' << std::endl;
+	*stream << '(' << "I16x8GtU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8LeS()
 {
-	*stream << '(' << "dispatchI16x8LeS" << ')' << std::endl;
+	*stream << '(' << "I16x8LeS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8LeU()
 {
-	*stream << '(' << "dispatchI16x8LeU" << ')' << std::endl;
+	*stream << '(' << "I16x8LeU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8GeS()
 {
-	*stream << '(' << "dispatchI16x8GeS" << ')' << std::endl;
+	*stream << '(' << "I16x8GeS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8GeU()
 {
-	*stream << '(' << "dispatchI16x8GeU" << ')' << std::endl;
+	*stream << '(' << "I16x8GeU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4Eq()
 {
-	*stream << '(' << "dispatchI32x4Eq" << ')' << std::endl;
+	*stream << '(' << "I32x4Eq" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4Ne()
 {
-	*stream << '(' << "dispatchI32x4Ne" << ')' << std::endl;
+	*stream << '(' << "I32x4Ne" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4LtS()
 {
-	*stream << '(' << "dispatchI32x4LtS" << ')' << std::endl;
+	*stream << '(' << "I32x4LtS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4LtU()
 {
-	*stream << '(' << "dispatchI32x4LtU" << ')' << std::endl;
+	*stream << '(' << "I32x4LtU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4GtS()
 {
-	*stream << '(' << "dispatchI32x4GtS" << ')' << std::endl;
+	*stream << '(' << "I32x4GtS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4GtU()
 {
-	*stream << '(' << "dispatchI32x4GtU" << ')' << std::endl;
+	*stream << '(' << "I32x4GtU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4LeS()
 {
-	*stream << '(' << "dispatchI32x4LeS" << ')' << std::endl;
+	*stream << '(' << "I32x4LeS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4LeU()
 {
-	*stream << '(' << "dispatchI32x4LeU" << ')' << std::endl;
+	*stream << '(' << "I32x4LeU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4GeS()
 {
-	*stream << '(' << "dispatchI32x4GeS" << ')' << std::endl;
+	*stream << '(' << "I32x4GeS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4GeU()
 {
-	*stream << '(' << "dispatchI32x4GeU" << ')' << std::endl;
+	*stream << '(' << "I32x4GeU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4Eq()
 {
-	*stream << '(' << "dispatchF32x4Eq" << ')' << std::endl;
+	*stream << '(' << "F32x4Eq" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4Ne()
 {
-	*stream << '(' << "dispatchF32x4Ne" << ')' << std::endl;
+	*stream << '(' << "F32x4Ne" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4Lt()
 {
-	*stream << '(' << "dispatchF32x4Lt" << ')' << std::endl;
+	*stream << '(' << "F32x4Lt" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4Gt()
 {
-	*stream << '(' << "dispatchF32x4Gt" << ')' << std::endl;
+	*stream << '(' << "F32x4Gt" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4Le()
 {
-	*stream << '(' << "dispatchF32x4Le" << ')' << std::endl;
+	*stream << '(' << "F32x4Le" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4Ge()
 {
-	*stream << '(' << "dispatchF32x4Ge" << ')' << std::endl;
+	*stream << '(' << "F32x4Ge" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2Eq()
 {
-	*stream << '(' << "dispatchF64x2Eq" << ')' << std::endl;
+	*stream << '(' << "F64x2Eq" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2Ne()
 {
-	*stream << '(' << "dispatchF64x2Ne" << ')' << std::endl;
+	*stream << '(' << "F64x2Ne" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2Lt()
 {
-	*stream << '(' << "dispatchF64x2Lt" << ')' << std::endl;
+	*stream << '(' << "F64x2Lt" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2Gt()
 {
-	*stream << '(' << "dispatchF64x2Gt" << ')' << std::endl;
+	*stream << '(' << "F64x2Gt" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2Le()
 {
-	*stream << '(' << "dispatchF64x2Le" << ')' << std::endl;
+	*stream << '(' << "F64x2Le" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2Ge()
 {
-	*stream << '(' << "dispatchF64x2Ge" << ')' << std::endl;
+	*stream << '(' << "F64x2Ge" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Not()
 {
-	*stream << '(' << "dispatchV128Not" << ')' << std::endl;
+	*stream << '(' << "V128Not" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128And()
 {
-	*stream << '(' << "dispatchV128And" << ')' << std::endl;
+	*stream << '(' << "V128And" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128AndNot()
 {
-	*stream << '(' << "dispatchV128AndNot" << ')' << std::endl;
+	*stream << '(' << "V128AndNot" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Or()
 {
-	*stream << '(' << "dispatchV128Or" << ')' << std::endl;
+	*stream << '(' << "V128Or" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Xor()
 {
-	*stream << '(' << "dispatchV128Xor" << ')' << std::endl;
+	*stream << '(' << "V128Xor" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Bitselect()
 {
-	*stream << '(' << "dispatchV128Bitselect" << ')' << std::endl;
+	*stream << '(' << "V128Bitselect" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128AnyTrue()
 {
-	*stream << '(' << "dispatchV128AnyTrue" << ')' << std::endl;
+	*stream << '(' << "V128AnyTrue" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16Abs()
 {
-	*stream << '(' << "dispatchI8x16Abs" << ')' << std::endl;
+	*stream << '(' << "I8x16Abs" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16Neg()
 {
-	*stream << '(' << "dispatchI8x16Neg" << ')' << std::endl;
+	*stream << '(' << "I8x16Neg" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16Popcnt()
 {
-	*stream << '(' << "dispatchI8x16Popcnt" << ')' << std::endl;
+	*stream << '(' << "I8x16Popcnt" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16AllTrue()
 {
-	*stream << '(' << "dispatchI8x16AllTrue" << ')' << std::endl;
+	*stream << '(' << "I8x16AllTrue" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16Bitmask()
 {
-	*stream << '(' << "dispatchI8x16Bitmask" << ')' << std::endl;
+	*stream << '(' << "I8x16Bitmask" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16NarrowI16x8S()
 {
-	*stream << '(' << "dispatchI8x16NarrowI16x8S" << ')' << std::endl;
+	*stream << '(' << "I8x16NarrowI16x8S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16NarrowI16x8U()
 {
-	*stream << '(' << "dispatchI8x16NarrowI16x8U" << ')' << std::endl;
+	*stream << '(' << "I8x16NarrowI16x8U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16Shl()
 {
-	*stream << '(' << "dispatchI8x16Shl" << ')' << std::endl;
+	*stream << '(' << "I8x16Shl" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16ShrS()
 {
-	*stream << '(' << "dispatchI8x16ShrS" << ')' << std::endl;
+	*stream << '(' << "I8x16ShrS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16ShrU()
 {
-	*stream << '(' << "dispatchI8x16ShrU" << ')' << std::endl;
+	*stream << '(' << "I8x16ShrU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16Add()
 {
-	*stream << '(' << "dispatchI8x16Add" << ')' << std::endl;
+	*stream << '(' << "I8x16Add" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16AddSatS()
 {
-	*stream << '(' << "dispatchI8x16AddSatS" << ')' << std::endl;
+	*stream << '(' << "I8x16AddSatS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16AddSatU()
 {
-	*stream << '(' << "dispatchI8x16AddSatU" << ')' << std::endl;
+	*stream << '(' << "I8x16AddSatU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16Sub()
 {
-	*stream << '(' << "dispatchI8x16Sub" << ')' << std::endl;
+	*stream << '(' << "I8x16Sub" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16SubSatS()
 {
-	*stream << '(' << "dispatchI8x16SubSatS" << ')' << std::endl;
+	*stream << '(' << "I8x16SubSatS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16SubSatU()
 {
-	*stream << '(' << "dispatchI8x16SubSatU" << ')' << std::endl;
+	*stream << '(' << "I8x16SubSatU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16MinS()
 {
-	*stream << '(' << "dispatchI8x16MinS" << ')' << std::endl;
+	*stream << '(' << "I8x16MinS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16MinU()
 {
-	*stream << '(' << "dispatchI8x16MinU" << ')' << std::endl;
+	*stream << '(' << "I8x16MinU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16MaxS()
 {
-	*stream << '(' << "dispatchI8x16MaxS" << ')' << std::endl;
+	*stream << '(' << "I8x16MaxS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16MaxU()
 {
-	*stream << '(' << "dispatchI8x16MaxU" << ')' << std::endl;
+	*stream << '(' << "I8x16MaxU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI8x16AvgrU()
 {
-	*stream << '(' << "dispatchI8x16AvgrU" << ')' << std::endl;
+	*stream << '(' << "I8x16AvgrU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8ExtAddPairwiseI8x16S()
 {
-	*stream << '(' << "dispatchI16x8ExtAddPairwiseI8x16S" << ')' << std::endl;
+	*stream << '(' << "I16x8ExtAddPairwiseI8x16S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8ExtAddPairwiseI8x16U()
 {
-	*stream << '(' << "dispatchI16x8ExtAddPairwiseI8x16U" << ')' << std::endl;
+	*stream << '(' << "I16x8ExtAddPairwiseI8x16U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8Abs()
 {
-	*stream << '(' << "dispatchI16x8Abs" << ')' << std::endl;
+	*stream << '(' << "I16x8Abs" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8Neg()
 {
-	*stream << '(' << "dispatchI16x8Neg" << ')' << std::endl;
+	*stream << '(' << "I16x8Neg" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8Q15MulRSatS()
 {
-	*stream << '(' << "dispatchI16x8Q15MulRSatS" << ')' << std::endl;
+	*stream << '(' << "I16x8Q15MulRSatS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8AllTrue()
 {
-	*stream << '(' << "dispatchI16x8AllTrue" << ')' << std::endl;
+	*stream << '(' << "I16x8AllTrue" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8Bitmask()
 {
-	*stream << '(' << "dispatchI16x8Bitmask" << ')' << std::endl;
+	*stream << '(' << "I16x8Bitmask" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8NarrowI32x4S()
 {
-	*stream << '(' << "dispatchI16x8NarrowI32x4S" << ')' << std::endl;
+	*stream << '(' << "I16x8NarrowI32x4S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8NarrowI32x4U()
 {
-	*stream << '(' << "dispatchI16x8NarrowI32x4U" << ')' << std::endl;
+	*stream << '(' << "I16x8NarrowI32x4U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8ExtendLowI8x16S()
 {
-	*stream << '(' << "dispatchI16x8ExtendLowI8x16S" << ')' << std::endl;
+	*stream << '(' << "I16x8ExtendLowI8x16S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8ExtendHighI8x16S()
 {
-	*stream << '(' << "dispatchI16x8ExtendHighI8x16S" << ')' << std::endl;
+	*stream << '(' << "I16x8ExtendHighI8x16S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8ExtendLowI8x16U()
 {
-	*stream << '(' << "dispatchI16x8ExtendLowI8x16U" << ')' << std::endl;
+	*stream << '(' << "I16x8ExtendLowI8x16U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8ExtendHighI8x16U()
 {
-	*stream << '(' << "dispatchI16x8ExtendHighI8x16U" << ')' << std::endl;
+	*stream << '(' << "I16x8ExtendHighI8x16U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8Shl()
 {
-	*stream << '(' << "dispatchI16x8Shl" << ')' << std::endl;
+	*stream << '(' << "I16x8Shl" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8ShrS()
 {
-	*stream << '(' << "dispatchI16x8ShrS" << ')' << std::endl;
+	*stream << '(' << "I16x8ShrS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8ShrU()
 {
-	*stream << '(' << "dispatchI16x8ShrU" << ')' << std::endl;
+	*stream << '(' << "I16x8ShrU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8Add()
 {
-	*stream << '(' << "dispatchI16x8Add" << ')' << std::endl;
+	*stream << '(' << "I16x8Add" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8AddSatS()
 {
-	*stream << '(' << "dispatchI16x8AddSatS" << ')' << std::endl;
+	*stream << '(' << "I16x8AddSatS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8AddSatU()
 {
-	*stream << '(' << "dispatchI16x8AddSatU" << ')' << std::endl;
+	*stream << '(' << "I16x8AddSatU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8Sub()
 {
-	*stream << '(' << "dispatchI16x8Sub" << ')' << std::endl;
+	*stream << '(' << "I16x8Sub" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8SubSatS()
 {
-	*stream << '(' << "dispatchI16x8SubSatS" << ')' << std::endl;
+	*stream << '(' << "I16x8SubSatS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8SubSatU()
 {
-	*stream << '(' << "dispatchI16x8SubSatU" << ')' << std::endl;
+	*stream << '(' << "I16x8SubSatU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8Mul()
 {
-	*stream << '(' << "dispatchI16x8Mul" << ')' << std::endl;
+	*stream << '(' << "I16x8Mul" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8MinS()
 {
-	*stream << '(' << "dispatchI16x8MinS" << ')' << std::endl;
+	*stream << '(' << "I16x8MinS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8MinU()
 {
-	*stream << '(' << "dispatchI16x8MinU" << ')' << std::endl;
+	*stream << '(' << "I16x8MinU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8MaxS()
 {
-	*stream << '(' << "dispatchI16x8MaxS" << ')' << std::endl;
+	*stream << '(' << "I16x8MaxS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8MaxU()
 {
-	*stream << '(' << "dispatchI16x8MaxU" << ')' << std::endl;
+	*stream << '(' << "I16x8MaxU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8AvgrU()
 {
-	*stream << '(' << "dispatchI16x8AvgrU" << ')' << std::endl;
+	*stream << '(' << "I16x8AvgrU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8ExtMulLowI8x16S()
 {
-	*stream << '(' << "dispatchI16x8ExtMulLowI8x16S" << ')' << std::endl;
+	*stream << '(' << "I16x8ExtMulLowI8x16S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8ExtMulHighI8x16S()
 {
-	*stream << '(' << "dispatchI16x8ExtMulHighI8x16S" << ')' << std::endl;
+	*stream << '(' << "I16x8ExtMulHighI8x16S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8ExtMulLowI8x16U()
 {
-	*stream << '(' << "dispatchI16x8ExtMulLowI8x16U" << ')' << std::endl;
+	*stream << '(' << "I16x8ExtMulLowI8x16U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI16x8ExtMulHighI8x16U()
 {
-	*stream << '(' << "dispatchI16x8ExtMulHighI8x16U" << ')' << std::endl;
+	*stream << '(' << "I16x8ExtMulHighI8x16U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4ExtAddPairwiseI16x8S()
 {
-	*stream << '(' << "dispatchI32x4ExtAddPairwiseI16x8S" << ')' << std::endl;
+	*stream << '(' << "I32x4ExtAddPairwiseI16x8S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4ExtAddPairwiseI16x8U()
 {
-	*stream << '(' << "dispatchI32x4ExtAddPairwiseI16x8U" << ')' << std::endl;
+	*stream << '(' << "I32x4ExtAddPairwiseI16x8U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4Abs()
 {
-	*stream << '(' << "dispatchI32x4Abs" << ')' << std::endl;
+	*stream << '(' << "I32x4Abs" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4Neg()
 {
-	*stream << '(' << "dispatchI32x4Neg" << ')' << std::endl;
+	*stream << '(' << "I32x4Neg" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4AllTrue()
 {
-	*stream << '(' << "dispatchI32x4AllTrue" << ')' << std::endl;
+	*stream << '(' << "I32x4AllTrue" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4Bitmask()
 {
-	*stream << '(' << "dispatchI32x4Bitmask" << ')' << std::endl;
+	*stream << '(' << "I32x4Bitmask" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4ExtendLowI16x8S()
 {
-	*stream << '(' << "dispatchI32x4ExtendLowI16x8S" << ')' << std::endl;
+	*stream << '(' << "I32x4ExtendLowI16x8S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4ExtendHighI16x8S()
 {
-	*stream << '(' << "dispatchI32x4ExtendHighI16x8S" << ')' << std::endl;
+	*stream << '(' << "I32x4ExtendHighI16x8S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4ExtendLowI16x8U()
 {
-	*stream << '(' << "dispatchI32x4ExtendLowI16x8U" << ')' << std::endl;
+	*stream << '(' << "I32x4ExtendLowI16x8U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4ExtendHighI16x8U()
 {
-	*stream << '(' << "dispatchI32x4ExtendHighI16x8U" << ')' << std::endl;
+	*stream << '(' << "I32x4ExtendHighI16x8U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4Shl()
 {
-	*stream << '(' << "dispatchI32x4Shl" << ')' << std::endl;
+	*stream << '(' << "I32x4Shl" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4ShrS()
 {
-	*stream << '(' << "dispatchI32x4ShrS" << ')' << std::endl;
+	*stream << '(' << "I32x4ShrS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4ShrU()
 {
-	*stream << '(' << "dispatchI32x4ShrU" << ')' << std::endl;
+	*stream << '(' << "I32x4ShrU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4Add()
 {
-	*stream << '(' << "dispatchI32x4Add" << ')' << std::endl;
+	*stream << '(' << "I32x4Add" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4Sub()
 {
-	*stream << '(' << "dispatchI32x4Sub" << ')' << std::endl;
+	*stream << '(' << "I32x4Sub" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4Mul()
 {
-	*stream << '(' << "dispatchI32x4Mul" << ')' << std::endl;
+	*stream << '(' << "I32x4Mul" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4MinS()
 {
-	*stream << '(' << "dispatchI32x4MinS" << ')' << std::endl;
+	*stream << '(' << "I32x4MinS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4MinU()
 {
-	*stream << '(' << "dispatchI32x4MinU" << ')' << std::endl;
+	*stream << '(' << "I32x4MinU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4MaxS()
 {
-	*stream << '(' << "dispatchI32x4MaxS" << ')' << std::endl;
+	*stream << '(' << "I32x4MaxS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4MaxU()
 {
-	*stream << '(' << "dispatchI32x4MaxU" << ')' << std::endl;
+	*stream << '(' << "I32x4MaxU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4DotI16x8S()
 {
-	*stream << '(' << "dispatchI32x4DotI16x8S" << ')' << std::endl;
+	*stream << '(' << "I32x4DotI16x8S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4ExtMulLowI16x8S()
 {
-	*stream << '(' << "dispatchI32x4ExtMulLowI16x8S" << ')' << std::endl;
+	*stream << '(' << "I32x4ExtMulLowI16x8S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4ExtMulHighI16x8S()
 {
-	*stream << '(' << "dispatchI32x4ExtMulHighI16x8S" << ')' << std::endl;
+	*stream << '(' << "I32x4ExtMulHighI16x8S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4ExtMulLowI16x8U()
 {
-	*stream << '(' << "dispatchI32x4ExtMulLowI16x8U" << ')' << std::endl;
+	*stream << '(' << "I32x4ExtMulLowI16x8U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4ExtMulHighI16x8U()
 {
-	*stream << '(' << "dispatchI32x4ExtMulHighI16x8U" << ')' << std::endl;
+	*stream << '(' << "I32x4ExtMulHighI16x8U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2Abs()
 {
-	*stream << '(' << "dispatchI64x2Abs" << ')' << std::endl;
+	*stream << '(' << "I64x2Abs" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2Neg()
 {
-	*stream << '(' << "dispatchI64x2Neg" << ')' << std::endl;
+	*stream << '(' << "I64x2Neg" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2AllTrue()
 {
-	*stream << '(' << "dispatchI64x2AllTrue" << ')' << std::endl;
+	*stream << '(' << "I64x2AllTrue" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2Bitmask()
 {
-	*stream << '(' << "dispatchI64x2Bitmask" << ')' << std::endl;
+	*stream << '(' << "I64x2Bitmask" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2ExtendLowI32x4S()
 {
-	*stream << '(' << "dispatchI64x2ExtendLowI32x4S" << ')' << std::endl;
+	*stream << '(' << "I64x2ExtendLowI32x4S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2ExtendHighI32x4S()
 {
-	*stream << '(' << "dispatchI64x2ExtendHighI32x4S" << ')' << std::endl;
+	*stream << '(' << "I64x2ExtendHighI32x4S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2ExtendLowI32x4U()
 {
-	*stream << '(' << "dispatchI64x2ExtendLowI32x4U" << ')' << std::endl;
+	*stream << '(' << "I64x2ExtendLowI32x4U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2ExtendHighI32x4U()
 {
-	*stream << '(' << "dispatchI64x2ExtendHighI32x4U" << ')' << std::endl;
+	*stream << '(' << "I64x2ExtendHighI32x4U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2Shl()
 {
-	*stream << '(' << "dispatchI64x2Shl" << ')' << std::endl;
+	*stream << '(' << "I64x2Shl" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2ShrS()
 {
-	*stream << '(' << "dispatchI64x2ShrS" << ')' << std::endl;
+	*stream << '(' << "I64x2ShrS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2ShrU()
 {
-	*stream << '(' << "dispatchI64x2ShrU" << ')' << std::endl;
+	*stream << '(' << "I64x2ShrU" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2Add()
 {
-	*stream << '(' << "dispatchI64x2Add" << ')' << std::endl;
+	*stream << '(' << "I64x2Add" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2Sub()
 {
-	*stream << '(' << "dispatchI64x2Sub" << ')' << std::endl;
+	*stream << '(' << "I64x2Sub" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2Mul()
 {
-	*stream << '(' << "dispatchI64x2Mul" << ')' << std::endl;
+	*stream << '(' << "I64x2Mul" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2Eq()
 {
-	*stream << '(' << "dispatchI64x2Eq" << ')' << std::endl;
+	*stream << '(' << "I64x2Eq" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2Ne()
 {
-	*stream << '(' << "dispatchI64x2Ne" << ')' << std::endl;
+	*stream << '(' << "I64x2Ne" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2LtS()
 {
-	*stream << '(' << "dispatchI64x2LtS" << ')' << std::endl;
+	*stream << '(' << "I64x2LtS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2GtS()
 {
-	*stream << '(' << "dispatchI64x2GtS" << ')' << std::endl;
+	*stream << '(' << "I64x2GtS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2LeS()
 {
-	*stream << '(' << "dispatchI64x2LeS" << ')' << std::endl;
+	*stream << '(' << "I64x2LeS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2GeS()
 {
-	*stream << '(' << "dispatchI64x2GeS" << ')' << std::endl;
+	*stream << '(' << "I64x2GeS" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2ExtMulLowI32x4S()
 {
-	*stream << '(' << "dispatchI64x2ExtMulLowI32x4S" << ')' << std::endl;
+	*stream << '(' << "I64x2ExtMulLowI32x4S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2ExtMulHighI32x4S()
 {
-	*stream << '(' << "dispatchI64x2ExtMulHighI32x4S" << ')' << std::endl;
+	*stream << '(' << "I64x2ExtMulHighI32x4S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2ExtMulLowI32x4U()
 {
-	*stream << '(' << "dispatchI64x2ExtMulLowI32x4U" << ')' << std::endl;
+	*stream << '(' << "I64x2ExtMulLowI32x4U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64x2ExtMulHighI32x4U()
 {
-	*stream << '(' << "dispatchI64x2ExtMulHighI32x4U" << ')' << std::endl;
+	*stream << '(' << "I64x2ExtMulHighI32x4U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4Ceil()
 {
-	*stream << '(' << "dispatchF32x4Ceil" << ')' << std::endl;
+	*stream << '(' << "F32x4Ceil" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4Floor()
 {
-	*stream << '(' << "dispatchF32x4Floor" << ')' << std::endl;
+	*stream << '(' << "F32x4Floor" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4Trunc()
 {
-	*stream << '(' << "dispatchF32x4Trunc" << ')' << std::endl;
+	*stream << '(' << "F32x4Trunc" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4Nearest()
 {
-	*stream << '(' << "dispatchF32x4Nearest" << ')' << std::endl;
+	*stream << '(' << "F32x4Nearest" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4Abs()
 {
-	*stream << '(' << "dispatchF32x4Abs" << ')' << std::endl;
+	*stream << '(' << "F32x4Abs" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4Neg()
 {
-	*stream << '(' << "dispatchF32x4Neg" << ')' << std::endl;
+	*stream << '(' << "F32x4Neg" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4Sqrt()
 {
-	*stream << '(' << "dispatchF32x4Sqrt" << ')' << std::endl;
+	*stream << '(' << "F32x4Sqrt" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4Add()
 {
-	*stream << '(' << "dispatchF32x4Add" << ')' << std::endl;
+	*stream << '(' << "F32x4Add" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4Sub()
 {
-	*stream << '(' << "dispatchF32x4Sub" << ')' << std::endl;
+	*stream << '(' << "F32x4Sub" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4Mul()
 {
-	*stream << '(' << "dispatchF32x4Mul" << ')' << std::endl;
+	*stream << '(' << "F32x4Mul" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4Div()
 {
-	*stream << '(' << "dispatchF32x4Div" << ')' << std::endl;
+	*stream << '(' << "F32x4Div" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4Min()
 {
-	*stream << '(' << "dispatchF32x4Min" << ')' << std::endl;
+	*stream << '(' << "F32x4Min" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4Max()
 {
-	*stream << '(' << "dispatchF32x4Max" << ')' << std::endl;
+	*stream << '(' << "F32x4Max" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4PMin()
 {
-	*stream << '(' << "dispatchF32x4PMin" << ')' << std::endl;
+	*stream << '(' << "F32x4PMin" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4PMax()
 {
-	*stream << '(' << "dispatchF32x4PMax" << ')' << std::endl;
+	*stream << '(' << "F32x4PMax" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2Ceil()
 {
-	*stream << '(' << "dispatchF64x2Ceil" << ')' << std::endl;
+	*stream << '(' << "F64x2Ceil" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2Floor()
 {
-	*stream << '(' << "dispatchF64x2Floor" << ')' << std::endl;
+	*stream << '(' << "F64x2Floor" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2Trunc()
 {
-	*stream << '(' << "dispatchF64x2Trunc" << ')' << std::endl;
+	*stream << '(' << "F64x2Trunc" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2Nearest()
 {
-	*stream << '(' << "dispatchF64x2Nearest" << ')' << std::endl;
+	*stream << '(' << "F64x2Nearest" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2Abs()
 {
-	*stream << '(' << "dispatchF64x2Abs" << ')' << std::endl;
+	*stream << '(' << "F64x2Abs" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2Neg()
 {
-	*stream << '(' << "dispatchF64x2Neg" << ')' << std::endl;
+	*stream << '(' << "F64x2Neg" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2Sqrt()
 {
-	*stream << '(' << "dispatchF64x2Sqrt" << ')' << std::endl;
+	*stream << '(' << "F64x2Sqrt" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2Add()
 {
-	*stream << '(' << "dispatchF64x2Add" << ')' << std::endl;
+	*stream << '(' << "F64x2Add" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2Sub()
 {
-	*stream << '(' << "dispatchF64x2Sub" << ')' << std::endl;
+	*stream << '(' << "F64x2Sub" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2Mul()
 {
-	*stream << '(' << "dispatchF64x2Mul" << ')' << std::endl;
+	*stream << '(' << "F64x2Mul" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2Div()
 {
-	*stream << '(' << "dispatchF64x2Div" << ')' << std::endl;
+	*stream << '(' << "F64x2Div" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2Min()
 {
-	*stream << '(' << "dispatchF64x2Min" << ')' << std::endl;
+	*stream << '(' << "F64x2Min" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2Max()
 {
-	*stream << '(' << "dispatchF64x2Max" << ')' << std::endl;
+	*stream << '(' << "F64x2Max" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2PMin()
 {
-	*stream << '(' << "dispatchF64x2PMin" << ')' << std::endl;
+	*stream << '(' << "F64x2PMin" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2PMax()
 {
-	*stream << '(' << "dispatchF64x2PMax" << ')' << std::endl;
+	*stream << '(' << "F64x2PMax" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4TruncSatF32x4S()
 {
-	*stream << '(' << "dispatchI32x4TruncSatF32x4S" << ')' << std::endl;
+	*stream << '(' << "I32x4TruncSatF32x4S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4TruncSatF32x4U()
 {
-	*stream << '(' << "dispatchI32x4TruncSatF32x4U" << ')' << std::endl;
+	*stream << '(' << "I32x4TruncSatF32x4U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4ConvertI32x4S()
 {
-	*stream << '(' << "dispatchF32x4ConvertI32x4S" << ')' << std::endl;
+	*stream << '(' << "F32x4ConvertI32x4S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4ConvertI32x4U()
 {
-	*stream << '(' << "dispatchF32x4ConvertI32x4U" << ')' << std::endl;
+	*stream << '(' << "F32x4ConvertI32x4U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4TruncSatF64x2SZero()
 {
-	*stream << '(' << "dispatchI32x4TruncSatF64x2SZero" << ')' << std::endl;
+	*stream << '(' << "I32x4TruncSatF64x2SZero" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32x4TruncSatF64x2UZero()
 {
-	*stream << '(' << "dispatchI32x4TruncSatF64x2UZero" << ')' << std::endl;
+	*stream << '(' << "I32x4TruncSatF64x2UZero" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2ConvertLowI32x4S()
 {
-	*stream << '(' << "dispatchF64x2ConvertLowI32x4S" << ')' << std::endl;
+	*stream << '(' << "F64x2ConvertLowI32x4S" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2ConvertLowI32x4U()
 {
-	*stream << '(' << "dispatchF64x2ConvertLowI32x4U" << ')' << std::endl;
+	*stream << '(' << "F64x2ConvertLowI32x4U" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF32x4DemoteF64x2Zero()
 {
-	*stream << '(' << "dispatchF32x4DemoteF64x2Zero" << ')' << std::endl;
+	*stream << '(' << "F32x4DemoteF64x2Zero" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchF64x2PromoteLowF32x4()
 {
-	*stream << '(' << "dispatchF64x2PromoteLowF32x4" << ')' << std::endl;
+	*stream << '(' << "F64x2PromoteLowF32x4" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchMemoryAtomicNotify(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchMemoryAtomicNotify" << ')' << std::endl;
+	*stream << '(' << "MemoryAtomicNotify" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchMemoryAtomicWait32(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchMemoryAtomicWait32" << ')' << std::endl;
+	*stream << '(' << "MemoryAtomicWait32" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchMemoryAtomicWait64(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchMemoryAtomicWait64" << ')' << std::endl;
+	*stream << '(' << "MemoryAtomicWait64" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchAtomicFence()
 {
-	*stream << '(' << "dispatchAtomicFence" << ')' << std::endl;
+	*stream << '(' << "AtomicFence" << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicLoad(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicLoad" << ')' << std::endl;
+	*stream << '(' << "I32AtomicLoad" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicLoad(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicLoad" << ')' << std::endl;
+	*stream << '(' << "I64AtomicLoad" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicLoad8U(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicLoad8U" << ')' << std::endl;
+	*stream << '(' << "I32AtomicLoad8U" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicLoad16U(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicLoad16U" << ')' << std::endl;
+	*stream << '(' << "I32AtomicLoad16U" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicLoad8U(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicLoad8U" << ')' << std::endl;
+	*stream << '(' << "I64AtomicLoad8U" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicLoad16U(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicLoad16U" << ')' << std::endl;
+	*stream << '(' << "I64AtomicLoad16U" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicLoad32U(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicLoad32U" << ')' << std::endl;
+	*stream << '(' << "I64AtomicLoad32U" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicStore(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicStore" << ')' << std::endl;
+	*stream << '(' << "I32AtomicStore" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicStore(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicStore" << ')' << std::endl;
+	*stream << '(' << "I64AtomicStore" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicStore8(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicStore8" << ')' << std::endl;
+	*stream << '(' << "I32AtomicStore8" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicStore16(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicStore16" << ')' << std::endl;
+	*stream << '(' << "I32AtomicStore16" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicStore8(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicStore8" << ')' << std::endl;
+	*stream << '(' << "I64AtomicStore8" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicStore16(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicStore16" << ')' << std::endl;
+	*stream << '(' << "I64AtomicStore16" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicStore32(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicStore32" << ')' << std::endl;
+	*stream << '(' << "I64AtomicStore32" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmwAdd(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmwAdd" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmwAdd" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmwAdd(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmwAdd" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmwAdd" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmw8AddU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmw8AddU" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmw8AddU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmw16AddU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmw16AddU" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmw16AddU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw8AddU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw8AddU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw8AddU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw16AddU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw16AddU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw16AddU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw32AddU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw32AddU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw32AddU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmwSub(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmwSub" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmwSub" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmwSub(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmwSub" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmwSub" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmw8SubU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmw8SubU" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmw8SubU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmw16SubU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmw16SubU" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmw16SubU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw8SubU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw8SubU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw8SubU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw16SubU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw16SubU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw16SubU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw32SubU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw32SubU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw32SubU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmwAnd(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmwAnd" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmwAnd" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmwAnd(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmwAnd" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmwAnd" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmw8AndU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmw8AndU" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmw8AndU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmw16AndU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmw16AndU" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmw16AndU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw8AndU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw8AndU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw8AndU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw16AndU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw16AndU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw16AndU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw32AndU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw32AndU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw32AndU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmwOr(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmwOr" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmwOr" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmwOr(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmwOr" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmwOr" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmw8OrU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmw8OrU" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmw8OrU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmw16OrU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmw16OrU" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmw16OrU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw8OrU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw8OrU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw8OrU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw16OrU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw16OrU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw16OrU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw32OrU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw32OrU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw32OrU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmwXor(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmwXor" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmwXor" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmwXor(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmwXor" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmwXor" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmw8XorU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmw8XorU" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmw8XorU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmw16XorU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmw16XorU" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmw16XorU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw8XorU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw8XorU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw8XorU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw16XorU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw16XorU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw16XorU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw32XorU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw32XorU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw32XorU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmwXchg(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmwXchg" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmwXchg" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmwXchg(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmwXchg" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmwXchg" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmw8XchgU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmw8XchgU" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmw8XchgU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmw16XchgU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmw16XchgU" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmw16XchgU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw8XchgU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw8XchgU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw8XchgU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw16XchgU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw16XchgU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw16XchgU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw32XchgU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw32XchgU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw32XchgU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmwCmpxchg(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmwCmpxchg" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmwCmpxchg" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmwCmpxchg(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmwCmpxchg" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmwCmpxchg" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmw8CmpxchgU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmw8CmpxchgU" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmw8CmpxchgU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32AtomicRmw16CmpxchgU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI32AtomicRmw16CmpxchgU" << ')' << std::endl;
+	*stream << '(' << "I32AtomicRmw16CmpxchgU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw8CmpxchgU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw8CmpxchgU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw8CmpxchgU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw16CmpxchgU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw16CmpxchgU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw16CmpxchgU" << ' ' << '(' << arg << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64AtomicRmw32CmpxchgU(WASM::MemArg arg)
 {
-	*stream << '(' << "dispatchI64AtomicRmw32CmpxchgU" << ')' << std::endl;
+	*stream << '(' << "I64AtomicRmw32CmpxchgU" << ' ' << '(' << arg << ')' << std::endl;
 }
 
 }
