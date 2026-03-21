@@ -1,5 +1,6 @@
 #include "WasmOpcodeDispatcher.hpp"
 #include <vector>
+#include <stdexcept>
 
 namespace WASM {
 
@@ -213,7 +214,8 @@ void WASM::OpcodeDispatcher::dispatchPrefixGC(WasmStream& stream, GCOpcode opcod
 		case GCOpcode::I31GetS:          { dispatchI31GetS();          break; }
 		case GCOpcode::I31GetU:          { dispatchI31GetU();          break; }
 
-		default: break;
+		default:
+			throw std::runtime_error("Invalid or unsupported 0xFB GC sub-opcode");
 	}
 }
 
@@ -297,7 +299,8 @@ void WASM::OpcodeDispatcher::dispatchPrefixMisc(WasmStream& stream, MiscOpcode o
 			break;
 		}
 
-		default: break;
+		default:
+			throw std::runtime_error("Invalid or unsupported 0xFC misc sub-opcode");
 	}
 }
 
@@ -621,7 +624,8 @@ void WASM::OpcodeDispatcher::dispatchPrefixSIMD(WasmStream& stream, SIMDOpcode o
 		case SIMDOpcode::F32x4DemoteF64x2Zero:      { dispatchF32x4DemoteF64x2Zero();      break; }
 		case SIMDOpcode::F64x2PromoteLowF32x4:      { dispatchF64x2PromoteLowF32x4();      break; }
 
-		default: break;
+		default:
+			throw std::runtime_error("Invalid or unsupported 0xFD SIMD sub-opcode");
 	}
 }
 
@@ -636,7 +640,10 @@ void OpcodeDispatcher::dispatchPrefixAtomic(WasmStream& stream, AtomicOpcode opc
 
 	// atomic.fence is the only instruction without a memarg.
 	if (opcode == AtomicOpcode::AtomicFence) {
-		stream.read<uint8_t>(); // consume mandatory 0x00 reserved byte
+		const uint8_t reserved = stream.read<uint8_t>();
+		if (reserved != 0x00) {
+			throw std::runtime_error("Invalid atomic.fence immediate: reserved byte must be 0x00");
+		}
 		dispatchAtomicFence();
 		return;
 	}
@@ -712,7 +719,8 @@ void OpcodeDispatcher::dispatchPrefixAtomic(WasmStream& stream, AtomicOpcode opc
 		case AtomicOpcode::I64AtomicRmw16CmpxchgU:  { dispatchI64AtomicRmw16CmpxchgU(m);  break; }
 		case AtomicOpcode::I64AtomicRmw32CmpxchgU:  { dispatchI64AtomicRmw32CmpxchgU(m);  break; }
 
-		default: break;
+		default:
+			throw std::runtime_error("Invalid or unsupported 0xFE atomic sub-opcode");
 	}
 }
 
@@ -975,7 +983,7 @@ void OpcodeDispatcher::dispatchOpcode(WasmStream& stream, Opcode opcode)
 		// ----------------------------------------------------------------
 		// Reference instructions
 		// ----------------------------------------------------------------
-		case Opcode::RefNull:      { HeapType ht; stream >> ht; dispatchRefNull(ht); dispatchRefNull(ht);  break; }
+		case Opcode::RefNull:      { HeapType ht; stream >> ht; dispatchRefNull(ht); break; }
 		case Opcode::RefIsNull:    { dispatchRefIsNull();   break; }
 		case Opcode::RefFunc:      { auto x = stream.readLEB128<FuncIdx>(); dispatchRefFunc(x); break; }
 		case Opcode::RefEq:        { dispatchRefEq();       break; }
@@ -1006,7 +1014,8 @@ void OpcodeDispatcher::dispatchOpcode(WasmStream& stream, Opcode opcode)
 			break;
 		}
 
-		default: break;
+		default:
+			throw std::runtime_error("Invalid or unsupported primary opcode");
 	}
 }
 
