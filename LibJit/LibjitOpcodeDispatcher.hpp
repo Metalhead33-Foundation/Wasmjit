@@ -53,8 +53,14 @@ private:
 	void pushValue(jit_value_t v);
 	jit_value_t popValue();
 	jit_value_t zeroConstantForType(jit_type_t t);
+	jit_value_t packReturnValues(jit_type_t returnType, size_t resultCount);
+	void pushCallResults(const WASM::FuncType& calleeSig, jit_type_t calleeJitSig, jit_value_t ret);
 	void emitTrapUnreachable();
 	std::vector<WASM::StorageType> storageTypesForBlockType(const WASM::BlockType& bt) const;
+
+	jit_value_t vmContextValue();
+	jit_value_t effectiveMemoryAddress(const WASM::MemArg& ma);
+	WASM::GlobalType globalTypeForIndex(WASM::GlobalIdx idx) const;
 
 public:
 	OpcodeDispatcher(jit_context_t context, jit_function_t function,

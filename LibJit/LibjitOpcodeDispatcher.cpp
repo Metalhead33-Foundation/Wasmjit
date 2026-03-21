@@ -1,6 +1,8 @@
 #include "LibjitOpcodeDispatcher.hpp"
+#include "../Base/WasmVMContext.hpp"
 #include <cassert>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 
@@ -52,6 +54,17 @@ static float wasm_copysign_f32(float x, float y)
 static double wasm_copysign_f64(double x, double y)
 {
 	return std::copysign(x, y);
+}
+
+static int32_t wasm_memory_grow_impl(WASM::VMContext* vm, int32_t deltaPages)
+{
+	if (deltaPages < 0)
+		return -1;
+	WASM::ModuleInstance* m = reinterpret_cast<WASM::ModuleInstance*>(vm);
+	const uint32_t oldPages = static_cast<uint32_t>(vm->memorySize / 65536u);
+	if (!m->growMemory(static_cast<uint32_t>(deltaPages)))
+		return -1;
+	return static_cast<int32_t>(oldPages);
 }
 }
 
@@ -141,6 +154,43 @@ jit_value_t OpcodeDispatcher::zeroConstantForType(jit_type_t t)
 	return jit_value_create_nint_constant(function, jit_type_void_ptr, 0);
 }
 
+jit_value_t OpcodeDispatcher::packReturnValues(jit_type_t returnType, size_t resultCount)
+{
+	assert(jit_type_is_struct(returnType));
+	assert(jit_type_num_fields(returnType) == resultCount);
+
+	jit_value_t packed = jit_value_create(function, returnType);
+	for (size_t i = resultCount; i-- > 0; ) {
+		jit_nuint fieldOffset = jit_type_get_offset(returnType, static_cast<unsigned int>(i));
+		jit_insn_store_relative(function, packed, static_cast<jit_nint>(fieldOffset), popValue());
+	}
+	return jit_insn_load(function, packed);
+}
+
+void OpcodeDispatcher::pushCallResults(const WASM::FuncType& calleeSig, jit_type_t calleeJitSig, jit_value_t ret)
+{
+	if (calleeSig.results.empty()) {
+		(void)ret;
+		return;
+	}
+	if (calleeSig.results.size() == 1) {
+		pushValue(ret);
+		return;
+	}
+
+	jit_type_t returnType = jit_type_get_return(calleeJitSig);
+	assert(jit_type_is_struct(returnType));
+	assert(jit_type_num_fields(returnType) == calleeSig.results.size());
+
+	jit_value_t packed = jit_value_create(function, returnType);
+	jit_insn_store(function, packed, ret);
+	for (size_t i = 0; i < calleeSig.results.size(); ++i) {
+		jit_type_t fieldType = jit_type_get_field(returnType, static_cast<unsigned int>(i));
+		jit_nuint fieldOffset = jit_type_get_offset(returnType, static_cast<unsigned int>(i));
+		pushValue(jit_insn_load_relative(function, packed, static_cast<jit_nint>(fieldOffset), fieldType));
+	}
+}
+
 void OpcodeDispatcher::emitTrapUnreachable()
 {
 	emitAbort(function);
@@ -175,8 +225,36 @@ void OpcodeDispatcher::emitImplicitFunctionReturn()
 		jit_insn_return(function, popValue());
 		return;
 	}
-	(void)jit_function_get_signature(function);
-	notImplemented("emitImplicitFunctionReturn (multi-value return)");
+	jit_type_t signature = jit_function_get_signature(function);
+	jit_type_t returnType = jit_type_get_return(signature);
+	jit_insn_return(function, packReturnValues(returnType, n));
+}
+
+jit_value_t OpcodeDispatcher::vmContextValue()
+{
+	return jit_value_get_param(function, 0);
+}
+
+jit_value_t OpcodeDispatcher::effectiveMemoryAddress(const WASM::MemArg& ma)
+{
+	if (ma.memidx != 0)
+		notImplemented("effectiveMemoryAddress (memory index != 0)");
+	jit_value_t vm = vmContextValue();
+	jit_value_t base = jit_insn_load_relative(function, vm, offsetof(WASM::VMContext, memoryBase), jit_type_void_ptr);
+	jit_value_t wasmOff = popValue();
+	jit_value_t ext = jit_insn_convert(function, wasmOff, jit_type_ulong, 0);
+	jit_value_t off = jit_value_create_long_constant(function, jit_type_ulong, static_cast<jit_long>(ma.offset));
+	jit_value_t byteOff = jit_insn_add(function, ext, off);
+	return jit_insn_add(function, base, byteOff);
+}
+
+WASM::GlobalType OpcodeDispatcher::globalTypeForIndex(WASM::GlobalIdx idx) const
+{
+	const size_t nImp = module.importGlobals.size();
+	if (idx < nImp)
+		return module.importGlobals[idx].global;
+	assert(idx - nImp < module.globals.size());
+	return module.globals[idx - nImp].type;
 }
 
 OpcodeDispatcher::OpcodeDispatcher(jit_context_t context, jit_function_t function,
@@ -284,20 +362,101 @@ void OpcodeDispatcher::dispatchReturn()
 		jit_insn_return(function, popValue());
 		return;
 	}
-	notImplemented("dispatchReturn (multi-value)");
+	jit_type_t signature = jit_function_get_signature(function);
+	jit_type_t returnType = jit_type_get_return(signature);
+	jit_insn_return(function, packReturnValues(returnType, n));
 }
 
-void OpcodeDispatcher::dispatchCall(WASM::FuncIdx arg)
+void OpcodeDispatcher::dispatchCall(WASM::FuncIdx funcIdx)
 {
-	(void)arg;
-	notImplemented("dispatchCall");
+	WASM::TypeIdx typeIdx = 0;
+	if (funcIdx < importedFuncCount) {
+		typeIdx = module.importFunctions[funcIdx].typeIdx;
+	} else {
+		const uint32_t internalIdx = funcIdx - importedFuncCount;
+		assert(internalIdx < module.internalFunctionTypeIndices.size());
+		typeIdx = module.internalFunctionTypeIndices[internalIdx];
+	}
+	assert(module.types[typeIdx].isFunction());
+	const WASM::FuncType& calleeSig = std::get<WASM::FuncType>(module.types[typeIdx].composite);
+	jit_type_t calleeJitSig = jitTypeForTypeIdx(typeIdx);
+
+	std::vector<jit_value_t> stackArgs(calleeSig.params.size());
+	for (size_t i = calleeSig.params.size(); i--; )
+		stackArgs[i] = popValue();
+
+	const unsigned numArgs = 1 + static_cast<unsigned>(calleeSig.params.size());
+	std::vector<jit_value_t> args(numArgs);
+
+	if (funcIdx < importedFuncCount) {
+		jit_value_t impBase = jit_insn_load_relative(
+			function, vmContextValue(), offsetof(WASM::VMContext, importedFunctions), jit_type_void_ptr);
+		jit_value_t off = jit_value_create_nint_constant(
+			function, jit_type_nint, static_cast<jit_nint>(funcIdx * sizeof(WASM::Callable)));
+		jit_value_t callablePtr = jit_insn_add(function, impBase, off);
+		jit_insn_check_null(function, callablePtr);
+		jit_value_t fnPtr = jit_insn_load_relative(
+			function, callablePtr, offsetof(WASM::Callable, fnPtr), jit_type_void_ptr);
+		jit_value_t calleeCtx = jit_insn_load_relative(
+			function, callablePtr, offsetof(WASM::Callable, context), jit_type_void_ptr);
+		args[0] = calleeCtx;
+		for (size_t i = 0; i < calleeSig.params.size(); ++i)
+			args[1 + i] = stackArgs[i];
+		jit_value_t ret = jit_insn_call_indirect(function, fnPtr, calleeJitSig, args.data(), numArgs, 0);
+		pushCallResults(calleeSig, calleeJitSig, ret);
+		return;
+	}
+
+	const uint32_t internalIdx = funcIdx - importedFuncCount;
+	jit_function_t callee = static_cast<jit_function_t>(internals.compiledFunctions[internalIdx]);
+	args[0] = vmContextValue();
+	for (size_t i = 0; i < calleeSig.params.size(); ++i)
+		args[1 + i] = stackArgs[i];
+	jit_value_t ret = jit_insn_call(function, nullptr, callee, calleeJitSig, args.data(), numArgs, 0);
+	pushCallResults(calleeSig, calleeJitSig, ret);
 }
 
-void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2)
+void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx typeIdx, WASM::TableIdx tableIdx)
 {
-	(void)arg1;
-	(void)arg2;
-	notImplemented("dispatchCallIndirect");
+	if (tableIdx != 0)
+		notImplemented("dispatchCallIndirect (table index != 0)");
+	assert(module.types[typeIdx].isFunction());
+	const WASM::FuncType& ft = std::get<WASM::FuncType>(module.types[typeIdx].composite);
+	jit_type_t calleeJitSig = jitTypeForTypeIdx(typeIdx);
+
+	jit_value_t tableElemIdx = popValue();
+	std::vector<jit_value_t> stackArgs(ft.params.size());
+	for (size_t i = ft.params.size(); i--; )
+		stackArgs[i] = popValue();
+
+	jit_value_t tablePtr = jit_insn_load_relative(
+		function, vmContextValue(), offsetof(WASM::VMContext, table), jit_type_void_ptr);
+	jit_value_t callablePtr = jit_insn_load_elem(function, tablePtr, tableElemIdx, jit_type_void_ptr);
+	jit_insn_check_null(function, callablePtr);
+
+	jit_value_t gotType = jit_insn_load_relative(
+		function, callablePtr, offsetof(WASM::Callable, typeIndex), jit_type_uint);
+	jit_value_t wantType = jit_value_create_nint_constant(
+		function, jit_type_uint, static_cast<jit_nint>(typeIdx));
+	jit_value_t typeOk = jit_insn_eq(function, gotType, wantType);
+	jit_label_t lbCont = jit_label_undefined;
+	jit_insn_branch_if(function, typeOk, &lbCont);
+	emitAbort(function);
+	jit_insn_label(function, &lbCont);
+
+	jit_value_t fnPtr = jit_insn_load_relative(
+		function, callablePtr, offsetof(WASM::Callable, fnPtr), jit_type_void_ptr);
+	jit_value_t calleeCtx = jit_insn_load_relative(
+		function, callablePtr, offsetof(WASM::Callable, context), jit_type_void_ptr);
+
+	std::vector<jit_value_t> args(1 + ft.params.size());
+	args[0] = calleeCtx;
+	for (size_t i = 0; i < ft.params.size(); ++i)
+		args[1 + i] = stackArgs[i];
+
+	jit_value_t ret = jit_insn_call_indirect(function, fnPtr, calleeJitSig, args.data(),
+											 static_cast<unsigned>(args.size()), 0);
+	pushCallResults(ft, calleeJitSig, ret);
 }
 
 void OpcodeDispatcher::dispatchReturnCall(WASM::FuncIdx arg)
@@ -378,11 +537,33 @@ void OpcodeDispatcher::dispatchLocalTee(WASM::LocalIdx arg)
 	jit_insn_store(function, locals[arg], v);
 	pushValue(jit_insn_load(function, locals[arg]));
 }
-void OpcodeDispatcher::dispatchGlobalGet(WASM::GlobalIdx arg) {
-	notImplemented(__func__);
+void OpcodeDispatcher::dispatchGlobalGet(WASM::GlobalIdx arg)
+{
+	WASM::GlobalType gt = globalTypeForIndex(arg);
+	if (gt.contentType.opcode == WASM::ValueTypeCode::V128)
+		notImplemented("dispatchGlobalGet (v128)");
+	jit_type_t jt = jitTypeForValueType(gt.contentType);
+	jit_value_t vm = vmContextValue();
+	jit_value_t gPtr = jit_insn_load_relative(function, vm, offsetof(WASM::VMContext, globals), jit_type_void_ptr);
+	jit_value_t off = jit_value_create_nint_constant(
+		function, jit_type_nint, static_cast<jit_nint>(arg * sizeof(WASM::Value)));
+	jit_value_t slot = jit_insn_add(function, gPtr, off);
+	pushValue(jit_insn_load_relative(function, slot, 0, jt));
 }
-void OpcodeDispatcher::dispatchGlobalSet(WASM::GlobalIdx arg) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchGlobalSet(WASM::GlobalIdx arg)
+{
+	WASM::GlobalType gt = globalTypeForIndex(arg);
+	if (gt.contentType.opcode == WASM::ValueTypeCode::V128)
+		notImplemented("dispatchGlobalSet (v128)");
+	jit_type_t jt = jitTypeForValueType(gt.contentType);
+	jit_value_t v = popValue();
+	jit_value_t vm = vmContextValue();
+	jit_value_t gPtr = jit_insn_load_relative(function, vm, offsetof(WASM::VMContext, globals), jit_type_void_ptr);
+	jit_value_t off = jit_value_create_nint_constant(
+		function, jit_type_nint, static_cast<jit_nint>(arg * sizeof(WASM::Value)));
+	jit_value_t slot = jit_insn_add(function, gPtr, off);
+	jit_insn_store_relative(function, slot, 0, v);
 }
 void OpcodeDispatcher::dispatchTableGet(WASM::TableIdx arg) {
 	notImplemented(__func__);
@@ -390,85 +571,187 @@ void OpcodeDispatcher::dispatchTableGet(WASM::TableIdx arg) {
 void OpcodeDispatcher::dispatchTableSet(WASM::TableIdx arg) {
 	notImplemented(__func__);
 }
-void OpcodeDispatcher::dispatchI32Load(WASM::MemArg addr) {
-	notImplemented(__func__);
+void OpcodeDispatcher::dispatchI32Load(WASM::MemArg addr)
+{
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	pushValue(jit_insn_load_relative(function, ptr, 0, jit_type_int));
 }
-void OpcodeDispatcher::dispatchI64Load(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchI64Load(WASM::MemArg addr)
+{
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	pushValue(jit_insn_load_relative(function, ptr, 0, jit_type_long));
 }
-void OpcodeDispatcher::dispatchF32Load(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchF32Load(WASM::MemArg addr)
+{
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	pushValue(jit_insn_load_relative(function, ptr, 0, jit_type_float32));
 }
-void OpcodeDispatcher::dispatchF64Load(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchF64Load(WASM::MemArg addr)
+{
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	pushValue(jit_insn_load_relative(function, ptr, 0, jit_type_float64));
 }
-void OpcodeDispatcher::dispatchI32Load8S(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchI32Load8S(WASM::MemArg addr)
+{
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	jit_value_t v = jit_insn_load_relative(function, ptr, 0, jit_type_sbyte);
+	pushValue(jit_insn_convert(function, v, jit_type_int, 0));
 }
-void OpcodeDispatcher::dispatchI32Load8U(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchI32Load8U(WASM::MemArg addr)
+{
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	jit_value_t v = jit_insn_load_relative(function, ptr, 0, jit_type_ubyte);
+	pushValue(jit_insn_convert(function, v, jit_type_int, 0));
 }
-void OpcodeDispatcher::dispatchI32Load16S(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchI32Load16S(WASM::MemArg addr)
+{
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	jit_value_t v = jit_insn_load_relative(function, ptr, 0, jit_type_short);
+	pushValue(jit_insn_convert(function, v, jit_type_int, 0));
 }
-void OpcodeDispatcher::dispatchI32Load16U(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchI32Load16U(WASM::MemArg addr)
+{
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	jit_value_t v = jit_insn_load_relative(function, ptr, 0, jit_type_ushort);
+	pushValue(jit_insn_convert(function, v, jit_type_int, 0));
 }
-void OpcodeDispatcher::dispatchI64Load8S(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchI64Load8S(WASM::MemArg addr)
+{
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	jit_value_t v = jit_insn_load_relative(function, ptr, 0, jit_type_sbyte);
+	pushValue(jit_insn_convert(function, v, jit_type_long, 0));
 }
-void OpcodeDispatcher::dispatchI64Load8U(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchI64Load8U(WASM::MemArg addr)
+{
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	jit_value_t v = jit_insn_load_relative(function, ptr, 0, jit_type_ubyte);
+	pushValue(jit_insn_convert(function, v, jit_type_long, 0));
 }
-void OpcodeDispatcher::dispatchI64Load16S(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchI64Load16S(WASM::MemArg addr)
+{
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	jit_value_t v = jit_insn_load_relative(function, ptr, 0, jit_type_short);
+	pushValue(jit_insn_convert(function, v, jit_type_long, 0));
 }
-void OpcodeDispatcher::dispatchI64Load16U(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchI64Load16U(WASM::MemArg addr)
+{
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	jit_value_t v = jit_insn_load_relative(function, ptr, 0, jit_type_ushort);
+	pushValue(jit_insn_convert(function, v, jit_type_long, 0));
 }
-void OpcodeDispatcher::dispatchI64Load32S(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchI64Load32S(WASM::MemArg addr)
+{
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	jit_value_t v = jit_insn_load_relative(function, ptr, 0, jit_type_int);
+	pushValue(jit_insn_convert(function, v, jit_type_long, 0));
 }
-void OpcodeDispatcher::dispatchI64Load32U(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchI64Load32U(WASM::MemArg addr)
+{
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	jit_value_t v = jit_insn_load_relative(function, ptr, 0, jit_type_uint);
+	pushValue(jit_insn_convert(function, v, jit_type_long, 0));
 }
-void OpcodeDispatcher::dispatchI32Store(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchI32Store(WASM::MemArg addr)
+{
+	jit_value_t val = popValue();
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	jit_insn_store_relative(function, ptr, 0, val);
 }
-void OpcodeDispatcher::dispatchI64Store(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchI64Store(WASM::MemArg addr)
+{
+	jit_value_t val = popValue();
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	jit_insn_store_relative(function, ptr, 0, val);
 }
-void OpcodeDispatcher::dispatchF32Store(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchF32Store(WASM::MemArg addr)
+{
+	jit_value_t val = popValue();
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	jit_insn_store_relative(function, ptr, 0, val);
 }
-void OpcodeDispatcher::dispatchF64Store(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchF64Store(WASM::MemArg addr)
+{
+	jit_value_t val = popValue();
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	jit_insn_store_relative(function, ptr, 0, val);
 }
-void OpcodeDispatcher::dispatchI32Store8(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchI32Store8(WASM::MemArg addr)
+{
+	jit_value_t val = popValue();
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	jit_value_t narrow = jit_insn_convert(function, val, jit_type_ubyte, 0);
+	jit_insn_store_relative(function, ptr, 0, narrow);
 }
-void OpcodeDispatcher::dispatchI32Store16(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchI32Store16(WASM::MemArg addr)
+{
+	jit_value_t val = popValue();
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	jit_value_t narrow = jit_insn_convert(function, val, jit_type_ushort, 0);
+	jit_insn_store_relative(function, ptr, 0, narrow);
 }
-void OpcodeDispatcher::dispatchI64Store8(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchI64Store8(WASM::MemArg addr)
+{
+	jit_value_t val = popValue();
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	jit_value_t narrow = jit_insn_convert(function, val, jit_type_ubyte, 0);
+	jit_insn_store_relative(function, ptr, 0, narrow);
 }
-void OpcodeDispatcher::dispatchI64Store16(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchI64Store16(WASM::MemArg addr)
+{
+	jit_value_t val = popValue();
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	jit_value_t narrow = jit_insn_convert(function, val, jit_type_ushort, 0);
+	jit_insn_store_relative(function, ptr, 0, narrow);
 }
-void OpcodeDispatcher::dispatchI64Store32(WASM::MemArg addr) {
-	notImplemented(__func__);
+
+void OpcodeDispatcher::dispatchI64Store32(WASM::MemArg addr)
+{
+	jit_value_t val = popValue();
+	jit_value_t ptr = effectiveMemoryAddress(addr);
+	jit_value_t narrow = jit_insn_convert(function, val, jit_type_uint, 0);
+	jit_insn_store_relative(function, ptr, 0, narrow);
 }
+
 void OpcodeDispatcher::dispatchMemorySize(WASM::MemIdx arg)
 {
 	(void)arg;
-	notImplemented("dispatchMemorySize");
+	jit_value_t vm = vmContextValue();
+	jit_value_t ms = jit_insn_load_relative(function, vm, offsetof(WASM::VMContext, memorySize), jit_type_ulong);
+	jit_value_t page = jit_value_create_long_constant(function, jit_type_ulong, 65536);
+	jit_value_t pages = jit_insn_div(function, ms, page);
+	pushValue(jit_insn_convert(function, pages, jit_type_int, 0));
 }
 
 void OpcodeDispatcher::dispatchMemoryGrow(WASM::MemIdx arg)
 {
 	(void)arg;
-	notImplemented("dispatchMemoryGrow");
+	jit_value_t delta = popValue();
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_int};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 2, 1);
+	jit_value_t args[] = {vmContextValue(), delta};
+	pushValue(jit_insn_call_native(function, "wasm_memory_grow_impl",
+								   reinterpret_cast<void*>(wasm_memory_grow_impl), sig, args, 2, 0));
 }
 
 void OpcodeDispatcher::dispatchI32Const(int32_t arg)
