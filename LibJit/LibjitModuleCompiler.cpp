@@ -1,9 +1,11 @@
 #include "LibjitModuleCompiler.hpp"
+#include "LibjitOpcodeDispatcher.hpp"
 #include <cassert>
 namespace LibJIT {
 
 void ModuleCompiler::compileFunction(jit_function_t fn, const WASM::FuncType& funcType, const WASM::FunctionBody& body,
-									 WASM::ModuleInstance& instance, const WASM::Module& module, uint32_t importedFuncCount)
+									 WASM::ModuleInstance& instance, WASM::ModuleInstanceInternals& internals,
+									 const WASM::Module& module, uint32_t importedFuncCount)
 {
 	// ── Local variable setup ─────────────────────────────────────────────
 	// PreparedFunctionStack gives us a flat list of all locals (params +
@@ -47,20 +49,13 @@ void ModuleCompiler::compileFunction(jit_function_t fn, const WASM::FuncType& fu
 
 	// ── The opcode dispatch loop ─────────────────────────────────────────
 	//WASM::WasmStream stream(body.code.data(), body.code.size());
-	//while (!stream.device.eof()) {
-	//	const uint8_t opcode = stream.readU8();
-	//	dispatchOpcode(opcode, stream, fn, locals, valueStack,
-	//				   controlStack, instance, module, importedFuncCount);
-	//}
+	//OpcodeDispatcher dispatcher(context, fn, typeTranslator, instance, internals,
+	//	module, importedFuncCount, locals, valueStack, controlStack);
+	//dispatcher.readCode(stream);
 
 	// Bind the function-end label here so that any 'return' or 'br' to
 	// the outermost block jumps to this point.
 	//jit_insn_label(fn, &functionEnd);
-}
-
-void ModuleCompiler::dispatchOpcode(uint8_t opcode, WASM::WasmStream& stream, jit_function_t fn, std::vector<jit_value_t>& locals, std::vector<jit_value_t>& valueStack, std::vector<ControlBlock>& controlStack, WASM::ModuleInstance& instance, const WASM::Module& module, uint32_t importedFuncCount)
-{
-
 }
 
 ModuleCompiler::ModuleCompiler(jit_context_t context)
@@ -141,7 +136,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 
 		// Compile the body. This is where the real work happens.
 		compileFunction(fn, funcType, module.functionBodies[i],
-						instance, module, importedFuncCount);
+						instance, internals, module, importedFuncCount);
 
 		// Now that the body is fully emitted, back-fill the fnPtr in the
 		// WasmCallable wrapper so that table lookups and ref.func work.
