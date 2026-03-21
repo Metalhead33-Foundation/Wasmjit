@@ -61,6 +61,10 @@ public:
 
 	// OpcodeDispatcher interface
 protected:
+	// `internals.translatedTypes` is parallel to `module.types` (filled in translateTypes).
+	jit_type_t jitTypeForTypeIdx(WASM::TypeIdx idx) const;
+	jit_type_t jitTypeForValueType(const WASM::ValueType& vt);
+
 	void dispatchUnreachable() override;
 	void dispatchNop() override;
 	void dispatchBlock(const WASM::BlockType& arg) override;

@@ -1,4 +1,5 @@
 #include "LibjitOpcodeDispatcher.hpp"
+#include <cassert>
 
 namespace LibJIT {
 
@@ -14,6 +15,17 @@ OpcodeDispatcher::OpcodeDispatcher(jit_context_t context, jit_function_t functio
 	  internals(internals), module(module), importedFuncCount(importedFuncCount), locals(locals),
 	  valueStack(valueStack), controlStack(controlStack)
 {
+}
+
+jit_type_t OpcodeDispatcher::jitTypeForTypeIdx(WASM::TypeIdx idx) const
+{
+	assert(idx < internals.translatedTypes.size());
+	return static_cast<jit_type_t>(internals.translatedTypes[idx]);
+}
+
+jit_type_t OpcodeDispatcher::jitTypeForValueType(const WASM::ValueType& vt)
+{
+	return typeTranslator.translateType(vt);
 }
 
 void OpcodeDispatcher::dispatchUnreachable() {
