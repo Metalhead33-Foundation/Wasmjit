@@ -17,6 +17,7 @@ SOURCES += \
         Io/EuphPlatformDependentFileBase.cpp \
         Io/EuphPmrMemoryDevice.cpp \
         LibJit/LibJitContext.cpp \
+        LibJit/LibJitImportResolver.cpp \
         LibJit/LibJitRuntime.cpp \
         LibJit/LibJitTypeTranslation.cpp \
         LibJit/LibjitModuleCompiler.cpp \
@@ -44,6 +45,7 @@ HEADERS += \
     Io/ElvEndianness.hpp \
     Io/ElvIoDevice.hpp \
     Io/ElvMathUtil.hpp \
+    Io/ElvStringhashMap.hpp \
     Io/ElvUtilGlobals.hpp \
     Io/EuphConstBufferDevice.hpp \
     Io/EuphFile.hpp \
@@ -51,6 +53,7 @@ HEADERS += \
     Io/EuphPlatformDependentFileBase.hpp \
     Io/EuphPmrMemoryDevice.hpp \
     LibJit/LibJitContext.hpp \
+    LibJit/LibJitImportResolver.hpp \
     LibJit/LibJitRuntime.hpp \
     LibJit/LibJitTypeTranslation.hpp \
     LibJit/LibjitModuleCompiler.hpp \
