@@ -11,8 +11,8 @@ using namespace std;
 typedef Euph::Io::File RegularFile;
 typedef Elv::Io::DataStream<Elv::Util::Endian::Little> WasmStream;
 #define _WASMPATH "/home/legacy/helloworld3.wasm"
-#define _WASMPATH "/home/legacy/programok/programkodok/cartridge/cartridge2.wasm"
-#define _WASMPATH "/home/legacy/programok/programkodok/go/app.wasm"
+//#define _WASMPATH "/home/legacy/programok/programkodok/cartridge/cartridge2.wasm"
+//#define _WASMPATH "/home/legacy/programok/programkodok/go/app.wasm"
 static const char* WASMPATH = _WASMPATH;
 
 void printType(jit_type_t type)

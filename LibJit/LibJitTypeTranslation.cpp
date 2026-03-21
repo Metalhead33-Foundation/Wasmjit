@@ -156,7 +156,7 @@ jit_type_t LibJitTypeTranslator::translateFunctionSignature(const WASM::FuncType
 	std::vector<jit_type_t> return_types;
 
 	params.reserve(wasm_func.params.size() + 1);
-	return_types.resize(wasm_func.results.size());
+	return_types.reserve(wasm_func.results.size());
 
 	// Implicit Instance* or Context* pointer, for memories and what-not.
 	params.push_back(jit_type_void_ptr);
