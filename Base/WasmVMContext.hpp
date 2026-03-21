@@ -1,7 +1,10 @@
 #ifndef WASMVMCONTEXT_HPP
 #define WASMVMCONTEXT_HPP
 #include "WasmValue.hpp"
+#include <cstddef>
 namespace WASM {
+
+struct Module;
 
 // ── The raw POD context passed as arg0 to every JIT-compiled function. ──
 // Must remain standard-layout. The JIT accesses fields via offsetof().
@@ -11,6 +14,8 @@ struct VMContext {
 	uint8_t*       memoryBase;    // Base of linear memory (offset 0 for cheap addressing)
 	uint64_t       memorySize;    // Current size in bytes
 	uint64_t       memoryMax;     // Max size in bytes
+
+	const Module*    module;        // Runtime type graph and metadata for GC/reference checks
 
 	// Globals: flat WasmValue array, indexed by global index.
 	// At compile time we know each global's index, so global.get N
@@ -37,6 +42,9 @@ struct VMContext {
 	// uint8_t**      memories;   // multi-memory
 	// Callable*** tables;    // multi-table
 };
+
+static_assert(offsetof(VMContext, memoryBase) == 0,
+			  "VMContext::memoryBase must remain the first field for JIT ABI compatibility");
 
 }
 

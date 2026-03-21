@@ -615,6 +615,30 @@ const std::span<const Section> Module::getSections() const
 	return sections;
 }
 
+bool Module::isSubtype(TypeIdx actual, TypeIdx expected) const
+{
+	if (actual == expected)
+		return true;
+	if (actual >= types.size() || expected >= types.size())
+		return false;
+
+	const Subtype& subtype = types[actual];
+	for (uint32_t super : subtype.supertypeIndices) {
+		if (super == expected)
+			return true;
+		if (super < types.size() && isSubtype(super, expected))
+			return true;
+	}
+	return false;
+}
+
+bool Module::heapTypeMatchesTypeIndex(TypeIdx actual, const HeapType& expected) const
+{
+	if (!expected.isTypeIndex)
+		return false;
+	return isSubtype(actual, expected.typeIndex);
+}
+
 std::string Module::readLEB128String(WasmStream& stream)
 {
 	uint32_t length;

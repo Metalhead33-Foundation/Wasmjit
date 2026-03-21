@@ -2,13 +2,30 @@
 #include "LibjitOpcodeDispatcher.hpp"
 #include "Io/EuphConstBufferDevice.hpp"
 #include <cassert>
+#include <cstdlib>
 #include <span>
 namespace LibJIT {
 
 namespace {
 
-jit_value_t zeroForLocal(jit_function_t fn, jit_type_t t)
+jit_value_t zeroValueForType(jit_function_t fn, jit_type_t t);
+
+jit_value_t zeroStructValue(jit_function_t fn, jit_type_t t)
 {
+	jit_value_t aggregate = jit_value_create(fn, t);
+	const unsigned int fieldCount = jit_type_num_fields(t);
+	for (unsigned int i = 0; i < fieldCount; ++i) {
+		jit_type_t fieldType = jit_type_get_field(t, i);
+		jit_nint offset = static_cast<jit_nint>(jit_type_get_offset(t, i));
+		jit_insn_store_relative(fn, aggregate, offset, zeroValueForType(fn, fieldType));
+	}
+	return jit_insn_load(fn, aggregate);
+}
+
+jit_value_t zeroValueForType(jit_function_t fn, jit_type_t t)
+{
+	if (jit_type_is_struct(t))
+		return zeroStructValue(fn, t);
 	if (t == jit_type_int || t == jit_type_uint)
 		return jit_value_create_nint_constant(fn, t, 0);
 	if (t == jit_type_long || t == jit_type_ulong)
@@ -18,8 +35,10 @@ jit_value_t zeroForLocal(jit_function_t fn, jit_type_t t)
 	if (t == jit_type_float64)
 		return jit_value_create_float64_constant(fn, t, 0.0);
 	if (jit_type_is_pointer(t) || t == jit_type_void_ptr)
-		return jit_value_create_nint_constant(fn, jit_type_void_ptr, 0);
-	return jit_value_create_nint_constant(fn, jit_type_void_ptr, 0);
+		return jit_value_create_nint_constant(fn, t, 0);
+	if (jit_type_is_tagged(t))
+		return jit_value_create_nint_constant(fn, t, 0);
+	return jit_value_create_nint_constant(fn, t, 0);
 }
 
 } // namespace
@@ -42,7 +61,7 @@ void ModuleCompiler::compileFunction(jit_function_t fn, uint32_t funcTypeIdx, co
 		const WASM::ValueType& vt = stack.allLocals[stack.parameterCount + i];
 		jit_type_t jt = typeTranslator.translateType(vt);
 		jit_value_t slot = jit_value_create(fn, jt);
-		jit_insn_store(fn, slot, zeroForLocal(fn, jt));
+		jit_insn_store(fn, slot, zeroValueForType(fn, jt));
 		locals.push_back(slot);
 	}
 
@@ -78,7 +97,6 @@ void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::
 	{
 		internals.translatedTypes[i] = typeTranslator.getTranslatedTypes()[i];
 	}
-	typeTranslator.reset();
 }
 
 void ModuleCompiler::declareFunctions(WASM::ModuleInstance& instance, const WASM::Module& module, WASM::ModuleInstanceInternals& internals)
@@ -155,6 +173,23 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 
 void ModuleCompiler::callStartFunction(WASM::ModuleInstance& instance, uint32_t funcIdx, WASM::ModuleInstanceInternals& internals)
 {
+	WASM::Callable* callable = nullptr;
+	const uint32_t importedFuncCount = static_cast<uint32_t>(instance.context()->importedFunctionCount);
+	if (funcIdx < importedFuncCount) {
+		callable = &internals.importStorage[funcIdx];
+	} else {
+		const uint32_t internalIdx = funcIdx - importedFuncCount;
+		if (internalIdx >= internals.internalCallables.size())
+			std::abort();
+		callable = &internals.internalCallables[internalIdx];
+	}
+
+	if (callable == nullptr || callable->fnPtr == nullptr)
+		std::abort();
+
+	using StartFn = void (*)(WASM::VMContext*);
+	StartFn fn = reinterpret_cast<StartFn>(callable->fnPtr);
+	fn(callable->context);
 }
 
 }

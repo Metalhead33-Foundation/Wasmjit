@@ -3,6 +3,7 @@
 #include "WasmModule.hpp"
 #include "WasmVMContext.hpp"
 #include "WasmImport.hpp"
+#include <unordered_map>
 namespace WASM {
 
 // Forward declaration
@@ -16,6 +17,9 @@ struct ModuleInstanceInternals {
 	std::vector<Callable*> tableStorage;
 	std::vector<Callable> internalCallables;
 	std::vector<Callable>  importStorage; // Owns the WasmCallable objects for imports
+	std::vector<bool> dataSegmentDropped;
+	std::vector<bool> elementSegmentDropped;
+	std::unordered_map<const void*, uint32_t> gcObjectTypes;
 
 	// Backend-specific compiled function handles (e.g., jit_function_t for LibJIT).
 	// Stored as void* to keep this header backend-agnostic.
@@ -54,6 +58,16 @@ public:
 
 	// Called when table.grow executes.
 	bool growTable(uint32_t deltaEntries);
+	void memoryInit(uint32_t dataIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len);
+	void dataDrop(uint32_t dataIdx);
+	void tableInit(uint32_t elemIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len);
+	void elemDrop(uint32_t elemIdx);
+	void bufferInitFromData(uint32_t dataIdx, void* dst, uint32_t srcOffset, uint32_t lenBytes);
+	void bufferInitFromElems(uint32_t elemIdx, void* dst, uint32_t srcOffset, uint32_t lenElems);
+	void* allocateStructObject(uint32_t size, uint32_t typeIndex);
+	void* allocateArrayObject(uint32_t headerSize, uint32_t elementSize, uint32_t length, uint32_t typeIndex);
+	bool tryGetGcTypeIndex(const void* ref, uint32_t& typeIndex) const;
+	bool refMatchesHeapType(const void* ref, const HeapType& heapType, bool nullable) const;
 };
 // Abstract base. Subclasses provide the backend-specific compilation step.
 // The base class handles everything that doesn't require knowing the backend.

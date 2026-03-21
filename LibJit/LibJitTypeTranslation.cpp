@@ -151,6 +151,14 @@ jit_type_t LibJitTypeTranslator::translateType(const WASM::ValueType& valueType)
 	return toReturn;
 }
 
+jit_type_t LibJitTypeTranslator::translateVMContextPointerType() const
+{
+	// The actual implicit ABI parameter is `WASM::VMContext*`.
+	// We intentionally lower it as `void*` because the JIT only needs an opaque
+	// carrier pointer; field access is emitted later with explicit offsets.
+	return jit_type_void_ptr;
+}
+
 jit_type_t LibJitTypeTranslator::translateFunctionSignature(const WASM::FuncType& wasm_func) {
 	std::vector<jit_type_t> params;
 	std::vector<jit_type_t> return_types;
@@ -158,8 +166,8 @@ jit_type_t LibJitTypeTranslator::translateFunctionSignature(const WASM::FuncType
 	params.reserve(wasm_func.params.size() + 1);
 	return_types.reserve(wasm_func.results.size());
 
-	// Implicit Instance* or Context* pointer, for memories and what-not.
-	params.push_back(jit_type_void_ptr);
+	// Implicit leading `WASM::VMContext*`, lowered as an opaque pointer in LibJIT.
+	params.push_back(translateVMContextPointerType());
 	for(const auto& it : wasm_func.params) {
 		params.push_back(translateType(it.val));
 	}

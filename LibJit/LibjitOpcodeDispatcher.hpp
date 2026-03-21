@@ -29,6 +29,10 @@ struct ControlBlock {
 	// The types this block is expected to produce on exit.
 	// A 'br' to this block must leave these types on the stack.
 	std::vector<WASM::StorageType> resultTypes;
+	std::vector<WASM::StorageType> paramTypes;
+	std::vector<jit_value_t> resultSlots;
+	std::vector<jit_value_t> paramSlots;
+	bool hasElse = false;
 };
 
 // Drives WASM::OpcodeDispatcher::readCode for LibJIT: decodes the bytecode
@@ -53,13 +57,41 @@ private:
 	void pushValue(jit_value_t v);
 	jit_value_t popValue();
 	jit_value_t zeroConstantForType(jit_type_t t);
+	jit_value_t castRefValue(jit_value_t value, jit_type_t targetType);
+	jit_value_t refAsVoidPtr(jit_value_t value);
+	jit_value_t typedNullRef(jit_type_t refType);
+	jit_value_t emitRefTypeTest(jit_value_t ref, const WASM::HeapType& heapType, bool nullable);
+	jit_type_t tableElementJitType(WASM::TableIdx arg) const;
+	jit_type_t jitRefTypeForHeapType(const WASM::HeapType& ht, bool nullable);
+	jit_type_t structRefType(WASM::TypeIdx arg, bool nullable) const;
+	jit_type_t arrayRefType(WASM::TypeIdx arg, bool nullable) const;
+	const WASM::StructType& structTypeForIndex(WASM::TypeIdx arg) const;
+	const WASM::ArrayType& arrayTypeForIndex(WASM::TypeIdx arg) const;
+	jit_type_t arrayElementJitType(WASM::TypeIdx arg) const;
+	jit_nint structFieldOffset(WASM::TypeIdx arg, uint32_t fieldIndex) const;
+	jit_nint arrayLengthOffset(WASM::TypeIdx arg) const;
+	jit_nint arrayDataOffset(WASM::TypeIdx arg) const;
 	jit_value_t packReturnValues(jit_type_t returnType, size_t resultCount);
 	void pushCallResults(const WASM::FuncType& calleeSig, jit_type_t calleeJitSig, jit_value_t ret);
+	std::vector<WASM::StorageType> parameterTypesForBlockType(const WASM::BlockType& bt) const;
+	std::vector<jit_value_t> createSlotsForTypes(const std::vector<WASM::StorageType>& types);
+	void storeStackTopToSlots(const std::vector<jit_value_t>& slots);
+	void restoreValuesFromSlots(const std::vector<jit_value_t>& slots);
+	void resizeValueStack(size_t newSize);
+	ControlBlock& branchTarget(WASM::LabelIdx arg);
+	const std::vector<WASM::StorageType>& branchTypesForTarget(const ControlBlock& target) const;
+	const std::vector<jit_value_t>& branchSlotsForTarget(const ControlBlock& target) const;
+	void emitBranchToTarget(ControlBlock& target);
+	WASM::TypeIdx functionTypeIndexForFunc(WASM::FuncIdx funcIdx) const;
+	const WASM::FuncType& functionSignatureForType(WASM::TypeIdx typeIdx) const;
+	jit_value_t callablePointerForFuncIndex(WASM::FuncIdx funcIdx);
+	void dispatchCallThroughCallable(jit_value_t callablePtr, WASM::TypeIdx typeIdx);
 	void emitTrapUnreachable();
 	std::vector<WASM::StorageType> storageTypesForBlockType(const WASM::BlockType& bt) const;
 
 	jit_value_t vmContextValue();
-	jit_value_t effectiveMemoryAddress(const WASM::MemArg& ma);
+	jit_value_t checkedTableIndex(jit_value_t index, const char* opname);
+	jit_value_t effectiveMemoryAddress(const WASM::MemArg& ma, jit_nint accessSize);
 	WASM::GlobalType globalTypeForIndex(WASM::GlobalIdx idx) const;
 
 public:

@@ -3,6 +3,7 @@
 #include "../Io/EuphConstBufferDevice.hpp"
 #include "../Io/ElvDataStream.hpp"
 #include <cstring>
+#include <cstdlib>
 namespace WASM {
 
 std::unique_ptr<ModuleInstance> ModuleInstantiator::instantiate(const Module& module, ImportResolver& resolver)
@@ -130,8 +131,21 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 				// retrieve the resulting callable.
 				const Value refVal = evalConstantExpr(
 					Euph::Io::ConstBufferDevice::span_cast<uint8_t>(seg.initExprs[i]), instance);
-				// refVal.ref points to a WasmCallable if non-null.
-				callable = static_cast<Callable*>(refVal.ref);
+				if (refVal.ref == nullptr) {
+					callable = nullptr;
+				} else {
+					const uintptr_t raw = reinterpret_cast<uintptr_t>(refVal.ref);
+					const uint32_t totalFuncs = static_cast<uint32_t>(
+						module.importFunctions.size() + module.internalFunctionTypeIndices.size());
+					if (refVal.kind == ValueTypeCode::FuncRef && raw < totalFuncs) {
+						if (raw < importedFuncCount)
+							callable = &instance.internals.importStorage[raw];
+						else
+							callable = &instance.internals.internalCallables[raw - importedFuncCount];
+					} else {
+						callable = static_cast<Callable*>(refVal.ref);
+					}
+				}
 			}
 
 			// Write the callable pointer into the table at the right slot.
@@ -146,6 +160,9 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver)
 	: module(&module)
 {
+	ctx = {};
+	ctx.module = &module;
+
 	// ── Step 1: Resolve and store all imports ───────────────────────
 	// Imports must come first because they occupy the low indices in
 	// each index space. We need importedFunctions populated before we
@@ -171,6 +188,8 @@ ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver)
 	// But we size the vector now so the instantiator can index into it
 	// directly without worrying about bounds.
 	internals.compiledFunctions.resize(module.internalFunctionTypeIndices.size(), nullptr);
+	internals.dataSegmentDropped.resize(module.dataSegments.size(), false);
+	internals.elementSegmentDropped.resize(module.elementSegments.size(), false);
 }
 
 void ModuleInstance::resolveImports(ImportResolver& resolver)
@@ -387,6 +406,277 @@ bool ModuleInstance::growTable(uint32_t deltaEntries) {
 	ctx.table = internals.tableStorage.data();
 	ctx.tableSize = static_cast<uint64_t>(newSize);
 	return true;
+}
+
+void ModuleInstance::memoryInit(uint32_t dataIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len)
+{
+	if (dataIdx >= module->dataSegments.size())
+		std::abort();
+	if (internals.dataSegmentDropped[dataIdx])
+		std::abort();
+
+	const DataSegment& seg = module->dataSegments[dataIdx];
+	if (srcOffset > seg.data.size() || len > seg.data.size() - srcOffset)
+		std::abort();
+	if (static_cast<uint64_t>(dstOffset) + len > ctx.memorySize)
+		std::abort();
+
+	std::memcpy(ctx.memoryBase + dstOffset, seg.data.data() + srcOffset, len);
+}
+
+void ModuleInstance::dataDrop(uint32_t dataIdx)
+{
+	if (dataIdx >= internals.dataSegmentDropped.size())
+		std::abort();
+	internals.dataSegmentDropped[dataIdx] = true;
+}
+
+void ModuleInstance::tableInit(uint32_t elemIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len)
+{
+	if (elemIdx >= module->elementSegments.size())
+		std::abort();
+	if (internals.elementSegmentDropped[elemIdx])
+		std::abort();
+
+	const ElementSegment& seg = module->elementSegments[elemIdx];
+	const size_t entryCount = seg.initIndices.empty() ? seg.initExprs.size() : seg.initIndices.size();
+	if (srcOffset > entryCount || len > entryCount - srcOffset)
+		std::abort();
+	if (static_cast<uint64_t>(dstOffset) + len > ctx.tableSize)
+		std::abort();
+
+	const uint32_t importedFuncCount =
+		static_cast<uint32_t>(module->importFunctions.size());
+	const uint32_t totalFuncs = static_cast<uint32_t>(
+		module->importFunctions.size() + module->internalFunctionTypeIndices.size());
+
+	for (uint32_t i = 0; i < len; ++i) {
+		Callable* callable = nullptr;
+		const size_t entryIndex = srcOffset + i;
+		if (!seg.initIndices.empty()) {
+			const uint32_t funcIdx = seg.initIndices[entryIndex];
+			if (funcIdx < importedFuncCount)
+				callable = &internals.importStorage[funcIdx];
+			else
+				callable = &internals.internalCallables[funcIdx - importedFuncCount];
+		} else {
+			const Value refVal = evalConstantExpr(
+				Euph::Io::ConstBufferDevice::span_cast<uint8_t>(seg.initExprs[entryIndex]));
+			if (refVal.ref == nullptr) {
+				callable = nullptr;
+			} else {
+				const uintptr_t raw = reinterpret_cast<uintptr_t>(refVal.ref);
+				if (refVal.kind == ValueTypeCode::FuncRef && raw < totalFuncs) {
+					if (raw < importedFuncCount)
+						callable = &internals.importStorage[raw];
+					else
+						callable = &internals.internalCallables[raw - importedFuncCount];
+				} else {
+					callable = static_cast<Callable*>(refVal.ref);
+				}
+			}
+		}
+		internals.tableStorage[dstOffset + i] = callable;
+	}
+
+	ctx.table = internals.tableStorage.data();
+}
+
+void ModuleInstance::elemDrop(uint32_t elemIdx)
+{
+	if (elemIdx >= internals.elementSegmentDropped.size())
+		std::abort();
+	internals.elementSegmentDropped[elemIdx] = true;
+}
+
+void ModuleInstance::bufferInitFromData(uint32_t dataIdx, void* dst, uint32_t srcOffset, uint32_t lenBytes)
+{
+	if (dataIdx >= module->dataSegments.size())
+		std::abort();
+	if (internals.dataSegmentDropped[dataIdx])
+		std::abort();
+
+	const DataSegment& seg = module->dataSegments[dataIdx];
+	if (srcOffset > seg.data.size() || lenBytes > seg.data.size() - srcOffset)
+		std::abort();
+	std::memcpy(dst, seg.data.data() + srcOffset, lenBytes);
+}
+
+void ModuleInstance::bufferInitFromElems(uint32_t elemIdx, void* dst, uint32_t srcOffset, uint32_t lenElems)
+{
+	if (elemIdx >= module->elementSegments.size())
+		std::abort();
+	if (internals.elementSegmentDropped[elemIdx])
+		std::abort();
+
+	const ElementSegment& seg = module->elementSegments[elemIdx];
+	const size_t entryCount = seg.initIndices.empty() ? seg.initExprs.size() : seg.initIndices.size();
+	if (srcOffset > entryCount || lenElems > entryCount - srcOffset)
+		std::abort();
+
+	Callable** out = static_cast<Callable**>(dst);
+	const uint32_t importedFuncCount =
+		static_cast<uint32_t>(module->importFunctions.size());
+	const uint32_t totalFuncs = static_cast<uint32_t>(
+		module->importFunctions.size() + module->internalFunctionTypeIndices.size());
+
+	for (uint32_t i = 0; i < lenElems; ++i) {
+		Callable* callable = nullptr;
+		const size_t entryIndex = srcOffset + i;
+		if (!seg.initIndices.empty()) {
+			const uint32_t funcIdx = seg.initIndices[entryIndex];
+			if (funcIdx < importedFuncCount)
+				callable = &internals.importStorage[funcIdx];
+			else
+				callable = &internals.internalCallables[funcIdx - importedFuncCount];
+		} else {
+			const Value refVal = evalConstantExpr(
+				Euph::Io::ConstBufferDevice::span_cast<uint8_t>(seg.initExprs[entryIndex]));
+			if (refVal.ref == nullptr) {
+				callable = nullptr;
+			} else {
+				const uintptr_t raw = reinterpret_cast<uintptr_t>(refVal.ref);
+				if (refVal.kind == ValueTypeCode::FuncRef && raw < totalFuncs) {
+					if (raw < importedFuncCount)
+						callable = &internals.importStorage[raw];
+					else
+						callable = &internals.internalCallables[raw - importedFuncCount];
+				} else {
+					callable = static_cast<Callable*>(refVal.ref);
+				}
+			}
+		}
+		out[i] = callable;
+	}
+}
+
+void* ModuleInstance::allocateStructObject(uint32_t size, uint32_t typeIndex)
+{
+	uint8_t* object = static_cast<uint8_t*>(std::calloc(1, size));
+	if (!object)
+		std::abort();
+	*reinterpret_cast<uint32_t*>(object) = typeIndex;
+	internals.gcObjectTypes[object] = typeIndex;
+	return object;
+}
+
+void* ModuleInstance::allocateArrayObject(uint32_t headerSize, uint32_t elementSize, uint32_t length, uint32_t typeIndex)
+{
+	uint8_t* header = static_cast<uint8_t*>(std::calloc(1, headerSize));
+	if (!header)
+		std::abort();
+
+	uint8_t* data = nullptr;
+	if (length != 0) {
+		data = static_cast<uint8_t*>(std::calloc(length, elementSize));
+		if (!data)
+			std::abort();
+	}
+
+	*reinterpret_cast<uint32_t*>(header) = typeIndex;
+	*reinterpret_cast<uint32_t*>(header + sizeof(uint32_t)) = length;
+	*reinterpret_cast<void**>(header + sizeof(uint32_t) * 2) = data;
+	internals.gcObjectTypes[header] = typeIndex;
+	return header;
+}
+
+bool ModuleInstance::tryGetGcTypeIndex(const void* ref, uint32_t& typeIndex) const
+{
+	auto it = internals.gcObjectTypes.find(ref);
+	if (it == internals.gcObjectTypes.end())
+		return false;
+	typeIndex = it->second;
+	return true;
+}
+
+bool ModuleInstance::refMatchesHeapType(const void* ref, const HeapType& heapType, bool nullable) const
+{
+	if (ref == nullptr)
+		return nullable;
+
+	const uintptr_t raw = reinterpret_cast<uintptr_t>(ref);
+	if ((raw & 1u) != 0) {
+		if (heapType.isTypeIndex)
+			return false;
+		switch (heapType.abstract) {
+		case AbstractHeapType::Any:
+		case AbstractHeapType::Eq:
+		case AbstractHeapType::I31:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	for (const Callable& callable : internals.importStorage) {
+		if (&callable != ref)
+			continue;
+		if (heapType.isTypeIndex)
+			return module->isSubtype(callable.typeIndex, heapType.typeIndex);
+		switch (heapType.abstract) {
+		case AbstractHeapType::Any:
+		case AbstractHeapType::Func:
+			return true;
+		case AbstractHeapType::NoFunc:
+		case AbstractHeapType::None:
+			return false;
+		default:
+			return false;
+		}
+	}
+
+	for (const Callable& callable : internals.internalCallables) {
+		if (&callable != ref)
+			continue;
+		if (heapType.isTypeIndex)
+			return module->isSubtype(callable.typeIndex, heapType.typeIndex);
+		switch (heapType.abstract) {
+		case AbstractHeapType::Any:
+		case AbstractHeapType::Func:
+			return true;
+		case AbstractHeapType::NoFunc:
+		case AbstractHeapType::None:
+			return false;
+		default:
+			return false;
+		}
+	}
+
+	uint32_t gcTypeIndex = 0;
+	if (tryGetGcTypeIndex(ref, gcTypeIndex)) {
+		if (heapType.isTypeIndex)
+			return module->isSubtype(gcTypeIndex, heapType.typeIndex);
+
+		const Subtype& subtype = module->types[gcTypeIndex];
+		switch (heapType.abstract) {
+		case AbstractHeapType::Any:
+		case AbstractHeapType::Eq:
+			return true;
+		case AbstractHeapType::Struct:
+			return subtype.isStruct();
+		case AbstractHeapType::Array:
+			return subtype.isArray();
+		case AbstractHeapType::None:
+		case AbstractHeapType::NoExtern:
+		case AbstractHeapType::NoFunc:
+		case AbstractHeapType::Func:
+		case AbstractHeapType::Extern:
+		case AbstractHeapType::I31:
+			return false;
+		}
+	}
+
+	if (heapType.isTypeIndex)
+		return false;
+
+	switch (heapType.abstract) {
+	case AbstractHeapType::Any:
+	case AbstractHeapType::Extern:
+	case AbstractHeapType::NoFunc:
+		return true;
+	default:
+		return false;
+	}
 }
 
 }
