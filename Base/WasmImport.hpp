@@ -25,6 +25,36 @@ struct ImportedTable {
 //
 // Returning std::nullopt signals that the import could not be satisfied,
 // which causes instantiation to fail with a descriptive error.
+class ImportRegistrar {
+public:
+	virtual ~ImportRegistrar() = default;
+
+	virtual void registerFunction(
+		std::string_view moduleName,
+		std::string_view fieldName,
+		const Callable& callable) = 0;
+
+	virtual void registerGlobal(
+		std::string_view moduleName,
+		std::string_view fieldName,
+		const Value& value) = 0;
+
+	virtual void registerMemory(
+		std::string_view moduleName,
+		std::string_view fieldName,
+		const ImportedMemory& memory) = 0;
+
+	virtual void registerTable(
+		std::string_view moduleName,
+		std::string_view fieldName,
+		const ImportedTable& table) = 0;
+
+	virtual void registerTag(
+		std::string_view moduleName,
+		std::string_view fieldName,
+		uint32_t tagValue) = 0;
+};
+
 class ImportResolver {
 public:
 	virtual ~ImportResolver() = default;

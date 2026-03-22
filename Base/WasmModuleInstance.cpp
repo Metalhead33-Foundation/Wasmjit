@@ -192,6 +192,54 @@ ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver)
 	internals.elementSegmentDropped.resize(module.elementSegments.size(), false);
 }
 
+void ModuleInstance::registerExports(ImportRegistrar& registrar, std::string_view moduleName) const
+{
+	const uint32_t importedFuncCount = static_cast<uint32_t>(module->importFunctions.size());
+
+	for (const Export& ex : module->exports) {
+		switch (ex.kind) {
+		case ExternalKind::Function: {
+			Callable callable{};
+			if (ex.index < importedFuncCount) {
+				if (ex.index >= internals.importStorage.size())
+					std::abort();
+				callable = internals.importStorage[ex.index];
+			} else {
+				const uint32_t internalIdx = ex.index - importedFuncCount;
+				if (internalIdx >= internals.internalCallables.size())
+					std::abort();
+				callable = internals.internalCallables[internalIdx];
+			}
+			registrar.registerFunction(moduleName, ex.name, callable);
+			break;
+		}
+		case ExternalKind::Global: {
+			if (ctx.globals == nullptr)
+				std::abort();
+			registrar.registerGlobal(moduleName, ex.name, ctx.globals[ex.index]);
+			break;
+		}
+		case ExternalKind::Memory: {
+			if (ex.index != 0)
+				std::abort();
+			registrar.registerMemory(moduleName, ex.name,
+								 ImportedMemory{ctx.memoryBase, ctx.memorySize, ctx.memoryMax});
+			break;
+		}
+		case ExternalKind::Table: {
+			if (ex.index != 0)
+				std::abort();
+			registrar.registerTable(moduleName, ex.name,
+								ImportedTable{ctx.table, ctx.tableSize, ctx.tableMax});
+			break;
+		}
+		case ExternalKind::Tag:
+			registrar.registerTag(moduleName, ex.name, ex.index);
+			break;
+		}
+	}
+}
+
 void ModuleInstance::resolveImports(ImportResolver& resolver)
 {
 	// Pre-allocate so we can index by import order without reallocation.

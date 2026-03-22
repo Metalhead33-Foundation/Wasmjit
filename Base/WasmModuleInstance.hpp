@@ -52,6 +52,7 @@ public:
 
 	VMContext* context() { return &ctx; }
 	const VMContext* context() const { return &ctx; }
+	void registerExports(ImportRegistrar& registrar, std::string_view moduleName) const;
 
 	// Called when memory.grow executes — reallocates and updates ctx.memoryBase.
 	bool growMemory(uint32_t deltaPages);

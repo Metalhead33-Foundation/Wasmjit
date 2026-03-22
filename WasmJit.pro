@@ -9,6 +9,7 @@ SOURCES += \
         Base/WasmModule.cpp \
         Base/WasmModuleInstance.cpp \
         Base/WasmOpcodeDispatcher.cpp \
+        Base/WasmRegistryImportResolver.cpp \
         Base/WasmSection.cpp \
         Base/WasmType.cpp \
         Io/EuphConstBufferDevice.cpp \
@@ -17,7 +18,6 @@ SOURCES += \
         Io/EuphPlatformDependentFileBase.cpp \
         Io/EuphPmrMemoryDevice.cpp \
         LibJit/LibJitContext.cpp \
-        LibJit/LibJitImportResolver.cpp \
         LibJit/LibJitRuntime.cpp \
         LibJit/LibJitTypeTranslation.cpp \
         LibJit/LibjitModuleCompiler.cpp \
@@ -33,6 +33,7 @@ HEADERS += \
     Base/WasmModuleInstance.hpp \
     Base/WasmOpcode.hpp \
     Base/WasmOpcodeDispatcher.hpp \
+    Base/WasmRegistryImportResolver.hpp \
     Base/WasmRuntime.hpp \
     Base/WasmSection.hpp \
     Base/WasmType.hpp \
