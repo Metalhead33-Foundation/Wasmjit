@@ -28,9 +28,9 @@ The long-term goal is to turn this into a reusable shared library with pluggable
 
 Right now the repository builds a console application through qmake:
 
-- [`WasmJit.pro`](/home/metalhead33/QtProjects/messing/WasmJit/WasmJit.pro) sets `TEMPLATE = app`
+- [`WasmJit.pro`](/WasmJit.pro) sets `TEMPLATE = app`
 - the build links against `libjit` via `-ljit`
-- [`main.cpp`](/home/metalhead33/QtProjects/messing/WasmJit/main.cpp) uses a hard-coded `.wasm` path and prints parsed/type-dispatched information for experimentation
+- [`main.cpp`](/main.cpp) uses a hard-coded `.wasm` path and prints parsed/type-dispatched information for experimentation
 
 That means the executable should be treated as a development sandbox, not as the final public shape of the project.
 
