@@ -1,6 +1,6 @@
 #ifndef STUBOPCODEDISPATCHER_HPP
 #define STUBOPCODEDISPATCHER_HPP
-#include "../Base/WasmOpcodeDispatcher.hpp"
+#include "../WasmBase/WasmOpcodeDispatcher.hpp"
 #include <ostream>
 
 namespace Stub {

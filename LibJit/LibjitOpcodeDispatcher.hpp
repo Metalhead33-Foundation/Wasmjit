@@ -1,8 +1,8 @@
 #ifndef LIBJITOPCODEDISPATCHER_HPP
 #define LIBJITOPCODEDISPATCHER_HPP
 
-#include "../Base/WasmModuleInstance.hpp"
-#include "../Base/WasmOpcodeDispatcher.hpp"
+#include "../WasmBase/WasmModuleInstance.hpp"
+#include "../WasmBase/WasmOpcodeDispatcher.hpp"
 #include "LibJitTypeTranslation.hpp"
 #include <jit/jit.h>
 #include <vector>

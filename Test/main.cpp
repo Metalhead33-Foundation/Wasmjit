@@ -2,10 +2,10 @@
 #include "Io/ElvDataStream.hpp"
 #include "Io/EuphFile.hpp"
 #include "Io/EuphConstBufferDevice.hpp"
-#include "Base/WasmModule.hpp"
+#include "WasmBase/WasmModule.hpp"
 #include "LibJit/LibJitContext.hpp"
-#include "Base/WasmType.hpp"
-#include "Stub/StubOpcodeDispatcher.hpp"
+#include "WasmBase/WasmType.hpp"
+#include "WasmStub/StubOpcodeDispatcher.hpp"
 
 using namespace std;
 typedef Euph::Io::File RegularFile;

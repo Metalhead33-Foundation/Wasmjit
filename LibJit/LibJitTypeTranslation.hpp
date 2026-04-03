@@ -1,7 +1,7 @@
 #ifndef LIBJITTYPETRANSLATION_HPP
 #define LIBJITTYPETRANSLATION_HPP
-#include "../Base/WasmType.hpp"
-#include "../Base/WasmVMContext.hpp"
+#include "../WasmBase/WasmType.hpp"
+#include "../WasmBase/WasmVMContext.hpp"
 #include <jit/jit.h>
 #include <vector>
 #include <unordered_map>

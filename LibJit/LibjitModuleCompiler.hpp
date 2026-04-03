@@ -1,6 +1,6 @@
 #ifndef LIBJITMODULECOMPILER_HPP
 #define LIBJITMODULECOMPILER_HPP
-#include "../Base/WasmModuleInstance.hpp"
+#include "../WasmBase/WasmModuleInstance.hpp"
 #include "LibJitTypeTranslation.hpp"
 
 namespace LibJIT {
