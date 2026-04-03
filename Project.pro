@@ -1,11 +1,16 @@
 TEMPLATE = subdirs
 
-# Order matters
-SUBDIRS = Io WasmBase WasmStub LibJit Asmjit Sljit Test
+# Define the subprojects with aliases
+Elvavena.subdir = extern/MhLib/Elvavena
+Euphemy.subdir  = extern/MhLib/Euphemy
 
-WasmBase.depends = Io
+# Now add those aliases (plus your other folders) to SUBDIRS
+SUBDIRS = Elvavena Euphemy WasmBase WasmStub LibJit Asmjit Sljit Test
+
+# Dependencies now work because 'Elvavena' is a recognized target
+WasmBase.depends = Elvavena Euphemy
 WasmStub.depends = WasmBase
-LibJit.depends = WasmBase
-Asmjit.depends = WasmBase
-Sljit.depends = WasmBase
-Test.depends = Io WasmBase WasmStub LibJit
+LibJit.depends   = WasmBase
+Asmjit.depends   = WasmBase
+Sljit.depends    = WasmBase
+Test.depends     = Elvavena Euphemy WasmBase WasmStub LibJit

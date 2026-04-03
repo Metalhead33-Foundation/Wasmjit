@@ -1,0 +1,3 @@
+[submodule "extern/MhLib"]
+	path = extern/MhLib
+	url = https://github.com/Metalhead33-Foundation/GuiTest.git
