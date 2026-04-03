@@ -1,5 +1,5 @@
 #include "LibjitOpcodeDispatcher.hpp"
-#include "../Base/WasmVMContext.hpp"
+#include "../WasmBase/WasmVMContext.hpp"
 #include <cassert>
 #include <cmath>
 #include <cstddef>

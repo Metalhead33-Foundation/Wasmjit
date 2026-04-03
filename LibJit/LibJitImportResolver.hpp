@@ -1,6 +1,6 @@
 #ifndef LIBJITIMPORTRESOLVER_HPP
 #define LIBJITIMPORTRESOLVER_HPP
-#include "../Base/WasmRegistryImportResolver.hpp"
+#include "../WasmBase/WasmRegistryImportResolver.hpp"
 
 namespace LibJIT {
 
