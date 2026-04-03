@@ -4,6 +4,7 @@ CONFIG += shared c++2a
 CONFIG -= qt
 LIBS += -ljit
 INCLUDEPATH += $$PWD/..
+include(../WasmBase/WasmBase.pri)
 
 # Avoid build errors with no files:
 SOURCES += \

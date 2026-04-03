@@ -4,7 +4,7 @@
 #include <vector>
 #include <variant>
 #include <optional>
-#include "../Io/ElvDataStream.hpp"
+#include <Elvavena/Io/ElvDataStream.hpp>
 
 namespace WASM {
 

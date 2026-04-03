@@ -1,11 +1,12 @@
 #include <iostream>
-#include "Io/ElvDataStream.hpp"
-#include "Io/EuphFile.hpp"
-#include "Io/EuphConstBufferDevice.hpp"
+#include <Elvavena/Io/ElvDataStream.hpp>
+#include <Euphemy/Io/EuphFile.hpp>
+#include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include "WasmBase/WasmModule.hpp"
 #include "LibJit/LibJitContext.hpp"
 #include "WasmBase/WasmType.hpp"
 #include "WasmStub/StubOpcodeDispatcher.hpp"
+#include <Euphemy/Config/GlobalConfig.hpp>
 
 using namespace std;
 typedef Euph::Io::File RegularFile;
@@ -14,6 +15,7 @@ typedef Elv::Io::DataStream<Elv::Util::Endian::Little> WasmStream;
 //#define _WASMPATH "/home/legacy/programok/programkodok/cartridge/cartridge2.wasm"
 //#define _WASMPATH "/home/legacy/programok/programkodok/go/app.wasm"
 static const char* WASMPATH = _WASMPATH;
+Euph::Conf::Configuration GLOBAL_CONFIGURATION;
 
 void printType(jit_type_t type)
 {

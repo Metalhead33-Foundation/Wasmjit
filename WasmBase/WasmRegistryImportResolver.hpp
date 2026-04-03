@@ -2,7 +2,7 @@
 #define WASMREGISTRYIMPORTRESOLVER_HPP
 
 #include "WasmImport.hpp"
-#include "../Io/ElvStringhashMap.hpp"
+#include <Elvavena/Util/ElvStringhashMap.hpp>
 
 namespace WASM {
 

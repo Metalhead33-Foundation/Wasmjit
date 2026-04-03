@@ -1,7 +1,7 @@
 #ifndef WASMOPCODE_HPP
 #define WASMOPCODE_HPP
 #include <cstdint>
-#include "../Io/ElvDataStream.hpp"
+#include <Elvavena/Io/ElvDataStream.hpp>
 namespace WASM {
 
 // ---------------------------------------------------------------------------

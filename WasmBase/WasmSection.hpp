@@ -1,7 +1,7 @@
 #ifndef WASMSECTION_HPP
 #define WASMSECTION_HPP
 #include <cstdint>
-#include "../Io/ElvDataStream.hpp"
+#include <Elvavena/Io/ElvDataStream.hpp>
 
 namespace WASM {
 

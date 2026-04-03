@@ -1,7 +1,7 @@
 #include "WasmModuleInstance.hpp"
 #include "WasmException.hpp"
-#include "../Io/EuphConstBufferDevice.hpp"
-#include "../Io/ElvDataStream.hpp"
+#include <Euphemy/Io/EuphConstBufferDevice.hpp>
+#include <Elvavena/Io/ElvDataStream.hpp>
 #include <cstring>
 #include <cstdlib>
 namespace WASM {

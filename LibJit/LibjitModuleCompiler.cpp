@@ -1,6 +1,6 @@
 #include "LibjitModuleCompiler.hpp"
 #include "LibjitOpcodeDispatcher.hpp"
-#include "Io/EuphConstBufferDevice.hpp"
+#include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <cassert>
 #include <cstdlib>
 #include <span>

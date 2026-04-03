@@ -5,11 +5,11 @@ CONFIG -= qt
 TARGET = WasmJit
 
 # Link to our local libraries
-LIBS += -L$$OUT_PWD/../Io -lIo
 LIBS += -L$$OUT_PWD/../WasmBase -lWasmBase
 LIBS += -L$$OUT_PWD/../WasmStub -lWasmStub
 LIBS += -L$$OUT_PWD/../LibJit -lLibJit
 LIBS += -ljit
+include(../WasmBase/WasmBase.pri)
 
 INCLUDEPATH += $$PWD/..
 
