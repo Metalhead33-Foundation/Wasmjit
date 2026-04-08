@@ -4,26 +4,26 @@
 
 namespace WASM {
 
-template <typename T> static void readList(WasmStream& stream, std::vector<T>& vect) {
+template <typename T> static void readList(FastMemReader& stream, std::vector<T>& vect) {
 	size_t siz = stream.readLEB128<size_t>();
 	vect.resize(siz);
 	for(size_t i = 0; i < siz; ++i) {
 		stream >> vect[i];
 	}
 }
-template <typename T> static std::vector<T> readList(WasmStream& stream) {
+template <typename T> static std::vector<T> readList(FastMemReader& stream) {
 	std::vector<T> vect;
 	readList(stream, vect);
 	return vect;
 }
-template <typename T> static void readListLEB128(WasmStream& stream, std::vector<T>& vect) {
+template <typename T> static void readListLEB128(FastMemReader& stream, std::vector<T>& vect) {
 	size_t siz = stream.readLEB128<size_t>();
 	vect.resize(siz);
 	for(size_t i = 0; i < siz; ++i) {
 		stream >> Elv::Io::Leb(vect[i]);
 	}
 }
-template <typename T> static std::vector<T> readListLEB128(WasmStream& stream) {
+template <typename T> static std::vector<T> readListLEB128(FastMemReader& stream) {
 	std::vector<T> vect;
 	readListLEB128(stream, vect);
 	return vect;
@@ -32,7 +32,7 @@ template <typename T> static std::vector<T> readListLEB128(WasmStream& stream) {
 // =============================================================================
 // dispatchPrefixGC  –  0xFB sub-opcodes
 // =============================================================================
-void WASM::OpcodeDispatcher::dispatchPrefixGC(WasmStream& stream, GCOpcode opcode)
+void WASM::OpcodeDispatcher::dispatchPrefixGC(FastMemReader& stream, GCOpcode opcode)
 {
 	switch (opcode) {
 		// ----------------------------------------------------------------
@@ -222,7 +222,7 @@ void WASM::OpcodeDispatcher::dispatchPrefixGC(WasmStream& stream, GCOpcode opcod
 // =============================================================================
 // dispatchPrefixMisc  –  0xFC sub-opcodes
 // =============================================================================
-void WASM::OpcodeDispatcher::dispatchPrefixMisc(WasmStream& stream, MiscOpcode opcode)
+void WASM::OpcodeDispatcher::dispatchPrefixMisc(FastMemReader& stream, MiscOpcode opcode)
 {
 	switch (opcode) {
 		// ----------------------------------------------------------------
@@ -313,7 +313,7 @@ void WASM::OpcodeDispatcher::dispatchPrefixMisc(WasmStream& stream, MiscOpcode o
 //   v128.const    – 16 raw bytes
 //   i8x16.shuffle – 16 raw bytes (lane indices)
 // =============================================================================
-void WASM::OpcodeDispatcher::dispatchPrefixSIMD(WasmStream& stream, SIMDOpcode opcode)
+void WASM::OpcodeDispatcher::dispatchPrefixSIMD(FastMemReader& stream, SIMDOpcode opcode)
 {
 	switch (opcode) {
 		// ----------------------------------------------------------------
@@ -635,7 +635,7 @@ void WASM::OpcodeDispatcher::dispatchPrefixSIMD(WasmStream& stream, SIMDOpcode o
 // Every instruction carries a memarg immediate, except atomic.fence which
 // has a mandatory reserved byte (always 0x00) that must be consumed.
 // =============================================================================
-void OpcodeDispatcher::dispatchPrefixAtomic(WasmStream& stream, AtomicOpcode opcode)
+void OpcodeDispatcher::dispatchPrefixAtomic(FastMemReader& stream, AtomicOpcode opcode)
 {
 
 	// atomic.fence is the only instruction without a memarg.
@@ -724,7 +724,7 @@ void OpcodeDispatcher::dispatchPrefixAtomic(WasmStream& stream, AtomicOpcode opc
 	}
 }
 
-void OpcodeDispatcher::dispatchOpcode(WasmStream& stream, Opcode opcode)
+void OpcodeDispatcher::dispatchOpcode(FastMemReader& stream, Opcode opcode)
 {
 	switch (opcode) {
 		// ----------------------------------------------------------------
@@ -1019,7 +1019,7 @@ void OpcodeDispatcher::dispatchOpcode(WasmStream& stream, Opcode opcode)
 	}
 }
 
-void OpcodeDispatcher::readCode(WasmStream& stream)
+void OpcodeDispatcher::readCode(FastMemReader& stream)
 {
 	bool shouldStop = false;
 	do {

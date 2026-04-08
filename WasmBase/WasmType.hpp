@@ -8,7 +8,8 @@
 
 namespace WASM {
 
-typedef Elv::Io::DataStream<Elv::Util::Endian::Little> WasmStream;
+template <Elv::Io::DeviceLike I> using WasmStream = Elv::Io::DataStream<Elv::Util::Endian::Little,I>;
+using DWasmStream = WasmStream<Elv::Io::Device>;
 typedef uint32_t TagIdx;
 typedef uint32_t LabelIdx;
 typedef uint32_t TypeIdx;
@@ -34,10 +35,10 @@ enum class AbstractHeapType : int32_t {
 	// Note: Some experimental versions used different offsets;
 	// these are the standard GC proposal values.
 };
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, AbstractHeapType& right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, AbstractHeapType& right) {
 	return left.readLEB128_enum(right);
 }
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator<<(Elv::Io::DataStream<E>& left, AbstractHeapType right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, AbstractHeapType right) {
 	return left.writeLEB128_enum(right);
 }
 
@@ -77,10 +78,10 @@ enum class ValueTypeCode : int8_t {
 	RefNull         = -0x1D, // 0x63
 	Ref             = -0x1C  // 0x64
 };
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, ValueTypeCode& right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, ValueTypeCode& right) {
 	return left.readLEB128_enum(right);
 }
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator<<(Elv::Io::DataStream<E>& left, ValueTypeCode right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, ValueTypeCode right) {
 	return left.writeLEB128_enum(right);
 }
 
@@ -88,9 +89,22 @@ struct ValueType {
 	ValueTypeCode opcode;
 	int32_t heapType; // Only used if opcode is 0x6B (ref) or 0x6C (ref null)
 
-	void decode(WasmStream& stream);
+	template <Elv::Util::Endian E, Elv::Io::DeviceLike I> void decode(Elv::Io::DataStream<E,I>& stream) {
+		int8_t tmp_opcode;
+		stream >> Elv::Io::Leb(tmp_opcode);
+		opcode = static_cast<ValueTypeCode>(tmp_opcode);
+		// 0x6B (ref) or 0x6C (ref null)
+		if (opcode == ValueTypeCode::Ref || opcode == ValueTypeCode::RefNull) {
+			int32_t ht;
+			stream >> Elv::Io::Leb(ht);
+			this->heapType = ht; // If ht >= 0, it's a TypeIndex
+		} else {
+			// Standard scalar types: 0x7F (i32), 0x7B (v128), etc.
+			this->heapType = -1;
+		}
+	}
 };
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, ValueType& right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, ValueType& right) {
 	right.decode(left);
 	return left;
 }
@@ -99,9 +113,28 @@ struct StorageType {
 	bool isPacked; // i8 or i16
 	ValueType val;
 
-	void decode(WasmStream& stream);
+	template <Elv::Util::Endian E, Elv::Io::DeviceLike I> void decode(Elv::Io::DataStream<E,I>& stream) {
+		int8_t byte;
+		stream >> Elv::Io::Leb(byte);
+
+		if (byte == static_cast<int8_t>(ValueTypeCode::I8)) { // i8
+			isPacked = true;
+			val.opcode = ValueTypeCode::I8;
+		} else if (byte == static_cast<int8_t>(ValueTypeCode::I16) ) { // i16
+			isPacked = true;
+			val.opcode = ValueTypeCode::I16;
+		} else {
+			isPacked = false;
+			// This was actually the opcode for a ValueType.
+			// We need to 'put it back' or handle the decode manually.
+			val.opcode = static_cast<ValueTypeCode>(byte);
+			if (val.opcode == ValueTypeCode::Ref || val.opcode == ValueTypeCode::RefNull) {
+				stream >> Elv::Io::Leb(val.heapType);
+			} else val.heapType = -1;
+		}
+	}
 };
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, StorageType& right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, StorageType& right) {
 	right.decode(left);
 	return left;
 }
@@ -142,9 +175,19 @@ struct Limits {
 	uint64_t initial;
 	std::optional<uint64_t> maximum; // Only valid if flags & 0x01
 
-	void decode(WasmStream& stream);
+	template <Elv::Util::Endian E, Elv::Io::DeviceLike I> void decode(Elv::Io::DataStream<E,I>& stream) {
+		stream >> Elv::Io::Leb(flags);
+		stream >> Elv::Io::Leb(initial);
+		if (flags & 0x01) {
+			uint64_t tmpMaximum;
+			stream >> Elv::Io::Leb(tmpMaximum);
+			maximum = tmpMaximum;
+		} else {
+			maximum.reset();
+		}
+	}
 };
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, Limits& right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, Limits& right) {
 	right.decode(left);
 	return left;
 }
@@ -156,7 +199,14 @@ enum class MemoryIndexType : uint8_t {
 struct MemoryType {
 	MemoryIndexType indexType;
 	Limits limits;
-	void decode(WasmStream& stream);
+	template <Elv::Util::Endian E, Elv::Io::DeviceLike I> void decode(Elv::Io::DataStream<E,I>& stream)
+	{
+		limits.decode(stream);
+		if (limits.flags & 0x04)
+			indexType = MemoryIndexType::I64;
+		else
+			indexType = MemoryIndexType::I32;
+	}
 };
 
 struct TableType {
@@ -176,10 +226,10 @@ enum class ExternalKind : uint8_t {
 	Global   = 0x03,
 	Tag      = 0x04  // Exception Handling proposal
 };
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, ExternalKind& right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, ExternalKind& right) {
 	return left.read_enum(right);
 }
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator<<(Elv::Io::DataStream<E>& left, ExternalKind right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, ExternalKind right) {
 	return left.write_enum(right);
 }
 
@@ -278,8 +328,8 @@ struct BlockType {
 	inline bool isValueType() const { return !isTypeIndex; }
 };
 
-template <Elv::Util::Endian E>
-Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& stream, BlockType& bt)
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I>
+Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& stream, BlockType& bt)
 {
 	// The spec encodes blocktype as a signed 33-bit LEB128 (s33).
 	// In practice all defined values fit in int32_t:
@@ -311,8 +361,8 @@ struct HeapType {
 	};
 };
 
-template <Elv::Util::Endian E>
-Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& stream, HeapType& ht)
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I>
+Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& stream, HeapType& ht)
 {
 	int32_t raw;
 	stream >> Elv::Io::Leb(raw);
@@ -347,8 +397,8 @@ struct CatchClause {
 	uint32_t  labelIdx;
 };
 
-template <Elv::Util::Endian E>
-Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& stream, CatchClause& cc)
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I>
+Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& stream, CatchClause& cc)
 {
 	uint8_t raw;
 	stream >> raw;
@@ -372,8 +422,8 @@ struct MemArg {
 	uint64_t offset;
 };
 
-template <Elv::Util::Endian E>
-Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, MemArg& right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I>
+Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, MemArg& right) {
 	uint32_t raw_align;
 	left >> Elv::Io::Leb(raw_align);
 
@@ -391,8 +441,8 @@ Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, MemArg& right) 
 	return left >> Elv::Io::Leb(right.offset);
 }
 
-template <Elv::Util::Endian E>
-Elv::Io::DataStream<E>& operator<<(Elv::Io::DataStream<E>& left, MemArg right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I>
+Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, MemArg right) {
 	if (right.memidx == 0) {
 		// Standard 1.0 encoding
 		return left << Elv::Io::Leb(right.align) << Elv::Io::Leb(right.offset);

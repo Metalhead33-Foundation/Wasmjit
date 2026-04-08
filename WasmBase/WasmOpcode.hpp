@@ -259,10 +259,10 @@ enum class Opcode : uint8_t {
 	PrefixSIMD          = 0xFD,  // 128-bit SIMD / vector instructions
 	PrefixAtomic        = 0xFE,  // Atomic / threads instructions (reserved)
 };
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, Opcode& right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, Opcode& right) {
 	return left.read_enum(right);
 }
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator<<(Elv::Io::DataStream<E>& left, Opcode right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, Opcode right) {
 	return left.write_enum(right);
 }
 
@@ -312,11 +312,11 @@ enum class GCOpcode : uint32_t {
 	I31GetS             = 29,  // i31.get_s
 	I31GetU             = 30,  // i31.get_u
 };
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator<<(Elv::Io::DataStream<E>& left, GCOpcode right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, GCOpcode right) {
 	return left.writeLEB128_enum(right);
 }
 
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, GCOpcode& right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, GCOpcode& right) {
 	return left.readLEB128_enum(right);
 }
 
@@ -349,11 +349,11 @@ enum class MiscOpcode : uint32_t {
 	TableSize           = 16,  // table.size tableidx
 	TableFill           = 17,  // table.fill tableidx
 };
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator<<(Elv::Io::DataStream<E>& left, MiscOpcode right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, MiscOpcode right) {
 	return left.writeLEB128_enum(right);
 }
 
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, MiscOpcode& right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, MiscOpcode& right) {
 	return left.readLEB128_enum(right);
 }
 
@@ -635,11 +635,11 @@ enum class SIMDOpcode : uint32_t {
 	F32x4DemoteF64x2Zero        = 94,
 	F64x2PromoteLowF32x4        = 95,
 };
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator<<(Elv::Io::DataStream<E>& left, SIMDOpcode right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, SIMDOpcode right) {
 	return left.writeLEB128_enum(right);
 }
 
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, SIMDOpcode& right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, SIMDOpcode& right) {
 	return left.readLEB128_enum(right);
 }
 
@@ -744,10 +744,10 @@ enum class AtomicOpcode : uint8_t {
 	I64AtomicRmw16CmpxchgU  = 0x4D,  // i64.atomic.rmw16.cmpxchg_u memarg16
 	I64AtomicRmw32CmpxchgU  = 0x4E,  // i64.atomic.rmw32.cmpxchg_u memarg32
 };
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, AtomicOpcode& right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, AtomicOpcode& right) {
 	return left.read_enum(right);
 }
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator<<(Elv::Io::DataStream<E>& left, AtomicOpcode right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, AtomicOpcode right) {
 	return left.write_enum(right);
 }
 

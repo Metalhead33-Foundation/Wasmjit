@@ -72,7 +72,7 @@ void ModuleCompiler::compileFunction(jit_function_t fn, uint32_t funcTypeIdx, co
 		reinterpret_cast<const std::byte*>(body.code.data()),
 		body.code.size());
 	Euph::Io::ConstBufferDevice device(codeSpan);
-	WASM::WasmStream stream(device);
+	WASM::WasmStream<Euph::Io::ConstBufferDevice> stream(device);
 
 	OpcodeDispatcher dispatcher(context, fn, typeTranslator, instance, internals, module, funcType,
 							  importedFuncCount, locals, valueStack, controlStack);

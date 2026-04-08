@@ -10,7 +10,7 @@
 
 using namespace std;
 typedef Euph::Io::File RegularFile;
-typedef Elv::Io::DataStream<Elv::Util::Endian::Little> WasmStream;
+typedef Elv::Io::DataStream<Elv::Util::Endian::Little> DWasmStream;
 #define _WASMPATH "/home/legacy/helloworld3.wasm"
 //#define _WASMPATH "/home/legacy/programok/programkodok/cartridge/cartridge2.wasm"
 //#define _WASMPATH "/home/legacy/programok/programkodok/go/app.wasm"
@@ -147,7 +147,7 @@ int main()
 		const auto& body = mod.functionBodies[i];
 		Euph::Io::ConstBufferDevice buff(Euph::Io::ConstBufferDevice::span_cast<uint8_t>(body.code));
 		std::cout << "\n\n-------------\nFUNCTION # " << i << std::endl;
-		WASM::WasmStream stream(buff);
+		WASM::WasmStream<Euph::Io::ConstBufferDevice> stream(buff);
 		Stub::OpcodeDispatcher dispatcher(&std::cout);
 		dispatcher.readCode(stream);
 	}

@@ -53,16 +53,16 @@ private:
 	void processCustomSection(Elv::Io::Device& file, const Section& section);
 	void processNameSection(Elv::Io::Device& file, const Section& section);
 	// Type processors
-	void processSubtypes(WasmStream& stream, uint32_t typeNum, uint32_t numSubTypes);
-	std::vector<uint8_t> parseInitExpr(WasmStream& stream);
-	void handleComplexElementSegment(WasmStream& stream, ElementSegment& seg);
+	void processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t numSubTypes);
+	std::vector<uint8_t> parseInitExpr(DWasmStream& stream);
+	void handleComplexElementSegment(DWasmStream& stream, ElementSegment& seg);
 public:
 	Module();
 	void fromFile(Elv::Io::Device& file);
 	const std::span<const Section> getSections() const;
 	bool isSubtype(TypeIdx actual, TypeIdx expected) const;
 	bool heapTypeMatchesTypeIndex(TypeIdx actual, const HeapType& expected) const;
-	static std::string readLEB128String(WasmStream& stream);
+	static std::string readLEB128String(DWasmStream& stream);
 };
 
 }

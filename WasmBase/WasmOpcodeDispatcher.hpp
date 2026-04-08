@@ -1,9 +1,11 @@
 #ifndef WASMOPCODEDISPATCHER_HPP
 #define WASMOPCODEDISPATCHER_HPP
+#include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include "WasmType.hpp"
 #include "WasmOpcode.hpp"
 namespace WASM {
 
+typedef WasmStream<Euph::Io::ConstBufferDevice> FastMemReader;
 class OpcodeDispatcher
 {
 protected:
@@ -555,15 +557,15 @@ protected:
 	virtual void dispatchI64AtomicRmw16CmpxchgU(MemArg arg) = 0;
 	virtual void dispatchI64AtomicRmw32CmpxchgU(MemArg arg) = 0;
 	// Prefix dispatches
-	void dispatchPrefixGC(WasmStream& stream, GCOpcode opcode);
-	void dispatchPrefixMisc(WasmStream& stream, MiscOpcode opcode);
-	void dispatchPrefixSIMD(WasmStream& stream, SIMDOpcode opcode);
-	void dispatchPrefixAtomic(WasmStream& stream, AtomicOpcode opcode);
+	void dispatchPrefixGC(FastMemReader& stream, GCOpcode opcode);
+	void dispatchPrefixMisc(FastMemReader& stream, MiscOpcode opcode);
+	void dispatchPrefixSIMD(FastMemReader& stream, SIMDOpcode opcode);
+	void dispatchPrefixAtomic(FastMemReader& stream, AtomicOpcode opcode);
 	// Helper for dispatching code
-	void dispatchOpcode(WasmStream& stream, Opcode opcode);
+	void dispatchOpcode(FastMemReader& stream, Opcode opcode);
 public:
 	~OpcodeDispatcher() = default;
-	void readCode(WasmStream& stream);
+	void readCode(FastMemReader& stream);
 };
 
 }

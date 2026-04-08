@@ -5,7 +5,7 @@
 
 namespace WASM {
 
-typedef Elv::Io::DataStream<Elv::Util::Endian::Little> WasmStream;
+typedef Elv::Io::DataStream<Elv::Util::Endian::Little> DWasmStream;
 enum class SectionType : uint8_t {
 	Custom = 0, //! Custom metadata, debug information
 	Type = 1, //! Function signatures
@@ -24,13 +24,13 @@ enum class SectionType : uint8_t {
 	Invalid = 255
 };
 const char* getSectionTypeName(SectionType sectType);
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, SectionType& right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, SectionType& right) {
 	uint8_t tmp;
 	left >> tmp;
 	right = static_cast<SectionType>(tmp);
 	return left;
 }
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator<<(Elv::Io::DataStream<E>& left, SectionType right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, SectionType right) {
 	left << static_cast<uint8_t>(right);
 	return left;
 }
@@ -41,7 +41,7 @@ struct Section {
 	uint32_t offset;
 };
 // Read only.
-template <Elv::Util::Endian E> Elv::Io::DataStream<E>& operator>>(Elv::Io::DataStream<E>& left, Section& right) {
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, Section& right) {
 	left >> right.type >> Elv::Io::Leb(right.size);
 	right.offset = left.device.tell();
 	return left;

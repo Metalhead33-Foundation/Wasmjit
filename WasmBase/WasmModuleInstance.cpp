@@ -346,7 +346,7 @@ void ModuleInstance::initializeTable()
 Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 {
 	Euph::Io::ConstBufferDevice buffDev(expr);
-	WasmStream stream(buffDev);
+	DWasmStream stream(buffDev);
 	Value result{};
 
 	// Read the leading opcode byte.

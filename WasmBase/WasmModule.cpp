@@ -3,7 +3,7 @@
 #include <stdexcept>
 
 namespace WASM {
-typedef Elv::Io::DataStream<Elv::Util::Endian::Little> WasmStream;
+typedef Elv::Io::DataStream<Elv::Util::Endian::Little> DWasmStream;
 
 void Module::processSecetions(Elv::Io::Device& file)
 {
@@ -32,7 +32,7 @@ void Module::processSecetions(Elv::Io::Device& file)
 
 void Module::processTypeSection(Elv::Io::Device& file, const Section& section)
 {
-	WasmStream wasmStream(file);
+	DWasmStream wasmStream(file);
 	uint32_t numGroups;
 	wasmStream >> Elv::Io::Leb(numGroups);
 	for(uint32_t i = 0; i < numGroups; ++i)
@@ -54,7 +54,7 @@ void Module::processTypeSection(Elv::Io::Device& file, const Section& section)
 
 void Module::processImportSection(Elv::Io::Device& file, const Section& section)
 {
-	WasmStream wasmStream(file);
+	DWasmStream wasmStream(file);
 	uint32_t numImports;
 	wasmStream >> Elv::Io::Leb(numImports);
 
@@ -105,7 +105,7 @@ void Module::processImportSection(Elv::Io::Device& file, const Section& section)
 
 void Module::processFunctionSection(Elv::Io::Device& file, const Section& section)
 {
-	WasmStream wasmStream(file);
+	DWasmStream wasmStream(file);
 	uint32_t numFuncs;
 	wasmStream >> Elv::Io::Leb(numFuncs);
 
@@ -119,7 +119,7 @@ void Module::processFunctionSection(Elv::Io::Device& file, const Section& sectio
 
 void Module::processTableSection(Elv::Io::Device& file, const Section& section)
 {
-	WasmStream wasmStream(file);
+	DWasmStream wasmStream(file);
 	uint32_t numTables;
 	wasmStream >> Elv::Io::Leb(numTables);
 
@@ -135,7 +135,7 @@ void Module::processTableSection(Elv::Io::Device& file, const Section& section)
 
 void Module::processMemorySection(Elv::Io::Device& file, const Section& section)
 {
-	WasmStream wasmStream(file);
+	DWasmStream wasmStream(file);
 	uint32_t numMemories;
 	wasmStream >> Elv::Io::Leb(numMemories);
 
@@ -149,7 +149,7 @@ void Module::processMemorySection(Elv::Io::Device& file, const Section& section)
 
 void Module::processGlobalSection(Elv::Io::Device& file, const Section& section)
 {
-	WasmStream wasmStream(file);
+	DWasmStream wasmStream(file);
 	uint32_t numGlobals;
 	wasmStream >> Elv::Io::Leb(numGlobals);
 
@@ -176,7 +176,7 @@ void Module::processGlobalSection(Elv::Io::Device& file, const Section& section)
 
 void Module::processExportSection(Elv::Io::Device& file, const Section& section)
 {
-	WasmStream wasmStream(file);
+	DWasmStream wasmStream(file);
 	uint32_t numExports;
 	wasmStream >> Elv::Io::Leb(numExports);
 
@@ -200,7 +200,7 @@ void Module::processExportSection(Elv::Io::Device& file, const Section& section)
 
 void Module::processStartSection(Elv::Io::Device& file, const Section& section)
 {
-	WasmStream wasmStream(file);
+	DWasmStream wasmStream(file);
 	uint32_t startFuncIdx;
 	wasmStream >> Elv::Io::Leb(startFuncIdx);
 
@@ -209,7 +209,7 @@ void Module::processStartSection(Elv::Io::Device& file, const Section& section)
 }
 
 void Module::processElementSection(Elv::Io::Device& file, const Section& section) {
-	WasmStream wasmStream(file);
+	DWasmStream wasmStream(file);
 	uint32_t numSegments;
 	wasmStream >> Elv::Io::Leb(numSegments);
 
@@ -245,7 +245,7 @@ void Module::processElementSection(Elv::Io::Device& file, const Section& section
 
 void Module::processCodeSection(Elv::Io::Device& file, const Section& section)
 {
-	WasmStream wasmStream(file);
+	DWasmStream wasmStream(file);
 	uint32_t numBodies;
 	wasmStream >> Elv::Io::Leb(numBodies);
 
@@ -281,7 +281,7 @@ void Module::processCodeSection(Elv::Io::Device& file, const Section& section)
 
 void Module::processDataSection(Elv::Io::Device& file, const Section& section)
 {
-	WasmStream wasmStream(file);
+	DWasmStream wasmStream(file);
 	uint32_t numSegments;
 	wasmStream >> Elv::Io::Leb(numSegments);
 
@@ -319,7 +319,7 @@ void Module::processDataSection(Elv::Io::Device& file, const Section& section)
 
 void Module::processDataCountSection(Elv::Io::Device& file, const Section& section)
 {
-	WasmStream wasmStream(file);
+	DWasmStream wasmStream(file);
 	uint32_t count;
 	wasmStream >> Elv::Io::Leb(count);
 
@@ -329,7 +329,7 @@ void Module::processDataCountSection(Elv::Io::Device& file, const Section& secti
 
 void Module::processTagSection(Elv::Io::Device& file, const Section& section)
 {
-	WasmStream wasmStream(file);
+	DWasmStream wasmStream(file);
 	uint32_t numTags;
 	wasmStream >> Elv::Io::Leb(numTags);
 
@@ -348,7 +348,7 @@ void Module::processTagSection(Elv::Io::Device& file, const Section& section)
 
 void Module::processCustomSection(Elv::Io::Device& file, const Section& section)
 {
-	WasmStream wasmStream(file);
+	DWasmStream wasmStream(file);
 
 	// 1. Custom sections start with a string name
 	std::string customName = readLEB128String(wasmStream);
@@ -365,7 +365,7 @@ void Module::processCustomSection(Elv::Io::Device& file, const Section& section)
 
 void Module::processNameSection(Elv::Io::Device& file, const Section& section)
 {
-	WasmStream wasmStream(file);
+	DWasmStream wasmStream(file);
 	// Note: We are already past the "name" string.
 
 	while (file.tell() < section.offset + section.size) {
@@ -398,7 +398,7 @@ void Module::processNameSection(Elv::Io::Device& file, const Section& section)
 	}
 }
 
-void Module::processSubtypes(WasmStream& stream, uint32_t typeNum, uint32_t numSubTypes)
+void Module::processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t numSubTypes)
 {
 	for(uint32_t i = 0; i < numSubTypes; ++i)
 	{
@@ -455,7 +455,7 @@ void Module::processSubtypes(WasmStream& stream, uint32_t typeNum, uint32_t numS
 	}
 }
 
-std::vector<uint8_t> Module::parseInitExpr(WasmStream& stream) {
+std::vector<uint8_t> Module::parseInitExpr(DWasmStream& stream) {
 	std::vector<uint8_t> expr;
 	auto& device = stream.device; // Assuming access to the underlying Io::Device
 	bool done = false;
@@ -529,7 +529,7 @@ std::vector<uint8_t> Module::parseInitExpr(WasmStream& stream) {
 	return expr;
 }
 
-void Module::handleComplexElementSegment(WasmStream& stream, ElementSegment& seg) {
+void Module::handleComplexElementSegment(DWasmStream& stream, ElementSegment& seg) {
 	// Bit 0: 0 = active, 1 = passive/declarative
 	// Bit 1: 1 = table index present OR elem_type present
 	// Bit 2: 1 = expressions instead of indices
@@ -590,7 +590,7 @@ void Module::fromFile(Elv::Io::Device& file)
 {
 	// Its own scope. Should go out of scope before processSecetions
 	{
-	WasmStream wasmStream(file);
+	DWasmStream wasmStream(file);
 	uint32_t magicNumber;
 	wasmStream >> magicNumber >> version;
 	if(magicNumber != 0x6D736100) throw std::runtime_error("Invalid WASM module!\nMismatch in the magic number!");
@@ -639,7 +639,7 @@ bool Module::heapTypeMatchesTypeIndex(TypeIdx actual, const HeapType& expected) 
 	return isSubtype(actual, expected.typeIndex);
 }
 
-std::string Module::readLEB128String(WasmStream& stream)
+std::string Module::readLEB128String(DWasmStream& stream)
 {
 	uint32_t length;
 	stream >> Elv::Io::Leb(length);
