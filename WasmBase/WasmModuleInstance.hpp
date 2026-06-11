@@ -3,6 +3,7 @@
 #include "WasmModule.hpp"
 #include "WasmVMContext.hpp"
 #include "WasmImport.hpp"
+#include <optional>
 #include <unordered_map>
 namespace WASM {
 
@@ -52,6 +53,7 @@ public:
 
 	VMContext* context() { return &ctx; }
 	const VMContext* context() const { return &ctx; }
+	std::optional<Callable> exportedFunction(std::string_view name) const;
 	void registerExports(ImportRegistrar& registrar, std::string_view moduleName) const;
 
 	// Called when memory.grow executes — reallocates and updates ctx.memoryBase.

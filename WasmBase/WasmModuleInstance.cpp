@@ -192,6 +192,29 @@ ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver)
 	internals.elementSegmentDropped.resize(module.elementSegments.size(), false);
 }
 
+std::optional<Callable> ModuleInstance::exportedFunction(std::string_view name) const
+{
+	const uint32_t importedFuncCount = static_cast<uint32_t>(module->importFunctions.size());
+
+	for (const Export& ex : module->exports) {
+		if (ex.kind != ExternalKind::Function || ex.name != name)
+			continue;
+
+		if (ex.index < importedFuncCount) {
+			if (ex.index >= internals.importStorage.size())
+				std::abort();
+			return internals.importStorage[ex.index];
+		}
+
+		const uint32_t internalIdx = ex.index - importedFuncCount;
+		if (internalIdx >= internals.internalCallables.size())
+			std::abort();
+		return internals.internalCallables[internalIdx];
+	}
+
+	return std::nullopt;
+}
+
 void ModuleInstance::registerExports(ImportRegistrar& registrar, std::string_view moduleName) const
 {
 	const uint32_t importedFuncCount = static_cast<uint32_t>(module->importFunctions.size());
