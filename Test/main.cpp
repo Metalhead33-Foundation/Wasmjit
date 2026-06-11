@@ -60,6 +60,53 @@ WASM::Module makeAddModule()
 	return module;
 }
 
+struct DebugHost {
+	int callCount = 0;
+};
+
+void nativeDebugMessage(WASM::VMContext* context)
+{
+	DebugHost* host = reinterpret_cast<DebugHost*>(context);
+	++host->callCount;
+	std::cout << "This is a C function called from WASM\n";
+}
+
+WASM::Module makeNativeDebugImportModule()
+{
+	WASM::Module module;
+	module.version = 1;
+	module.hasStartFunction = false;
+	module.hasDataCount = false;
+	module.dataSegmentCount = 0;
+
+	WASM::FuncType debugType;
+
+	WASM::Subtype subtype;
+	subtype.isFinal = true;
+	subtype.composite = std::move(debugType);
+	module.types.push_back(std::move(subtype));
+
+	module.importFunctions.push_back(WASM::ImportFunction {
+		{ "env", "debug_message" },
+		0
+	});
+	module.internalFunctionTypeIndices.push_back(0);
+
+	WASM::FunctionBody body;
+	body.code = {
+		0x10, 0x00 // call 0
+	};
+	module.functionBodies.push_back(std::move(body));
+
+	module.exports.push_back(WASM::Export {
+		.name = "run",
+		.kind = WASM::ExternalKind::Function,
+		.index = 1
+	});
+
+	return module;
+}
+
 int expectEqual(const char* label, int32_t got, int32_t expected)
 {
 	if (got == expected) {
@@ -112,9 +159,28 @@ int main()
 			42);
 	}
 
+	WASM::Module debugModule = makeNativeDebugImportModule();
+	WASM::RegistryImportResolver debugImports;
+	DebugHost debugHost;
+	debugImports.registerFunction("env", "debug_message", WASM::Callable {
+		.fnPtr = reinterpret_cast<void*>(nativeDebugMessage),
+		.context = reinterpret_cast<WASM::VMContext*>(&debugHost),
+		.typeIndex = 0
+	});
+
+	std::unique_ptr<WASM::ModuleInstance> debugInstance = compiler.instantiate(debugModule, debugImports);
+	std::optional<WASM::Callable> run = debugInstance->exportedFunction("run");
+	if (!run.has_value()) {
+		std::cerr << "exportedFunction(\"run\") returned no function\n";
+		++failures;
+	} else {
+		WASM::callCallable<void>(*run);
+		failures += expectEqual("native import call count", debugHost.callCount, 1);
+	}
+
 	if (failures != 0)
 		return 1;
 
-	std::cout << "exported function calls passed\n";
+	std::cout << "exported and imported function calls passed\n";
 	return 0;
 }
