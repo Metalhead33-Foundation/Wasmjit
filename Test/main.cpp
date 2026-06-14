@@ -1,3 +1,6 @@
+#define CATCH_CONFIG_MAIN
+#include <catch2/catch_all.hpp>
+
 #include <Euphemy/Config/GlobalConfig.hpp>
 #include <Euphemy/Io/EuphFile.hpp>
 #include <cstdint>
@@ -15,8 +18,6 @@
 #include "WasmBase/WasmValue.hpp"
 
 Euph::Conf::Configuration GLOBAL_CONFIGURATION;
-
-namespace {
 
 #ifndef WASM_TEST_DIR
 #define WASM_TEST_DIR ""
@@ -52,76 +53,54 @@ void nativeDebugMessage(WASM::VMContext* context)
 	std::cout << "This is a C function called from WASM\n";
 }
 
-int expectEqual(const char* label, int32_t got, int32_t expected)
-{
-	if (got == expected) {
-		std::cout << "Yay! " << label << ": expected " << expected << ", got " << got << '\n';
-		return 0;
-	}
-
-	std::cerr << "Epic fail! " << label << ": expected " << expected << ", got " << got << '\n';
-	return 1;
-}
-
-} // namespace
-
-int main()
+TEST_CASE("add_core exports add")
 {
 	WASM::Module module = loadTestModule("add_core");
 	WASM::RegistryImportResolver imports;
 	LibJIT::Context jitContext;
 	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
 
-	std::unique_ptr<WASM::ModuleInstance> instance = compiler.instantiate(module, imports);
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
 
-	std::optional<WASM::Callable> directAdd = instance->exportedFunction("add");
-	if (!directAdd.has_value()) {
-		std::cerr << "exportedFunction(\"add\") returned no function\n";
-		return 1;
-	}
+	auto directAdd = instance->exportedFunction("add");
+	REQUIRE(directAdd.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*directAdd, int32_t(20), int32_t(22)) == 42);
+}
 
-	int failures = 0;
-	failures += expectEqual(
-		"direct exported call",
-		WASM::callCallable<int32_t>(*directAdd, int32_t(20), int32_t(22)),
-		42);
+TEST_CASE("add_core registered exports expose math.add")
+{
+	WASM::Module module = loadTestModule("add_core");
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
 
-	if (instance->exportedFunction("missing").has_value()) {
-		std::cerr << "exportedFunction(\"missing\") unexpectedly found a function\n";
-		++failures;
-	}
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
 
 	WASM::RegistryImportResolver exports;
 	instance->registerExports(exports, "math");
-	std::optional<WASM::Callable> registeredAdd = exports.resolveFunction("math", "add", 0);
-	if (!registeredAdd.has_value()) {
-		std::cerr << "registerExports did not expose math.add\n";
-		++failures;
-	} else {
-		failures += expectEqual(
-			"registered exported call",
-			WASM::callCallable<int32_t>(*registeredAdd, int32_t(7), int32_t(35)),
-			42);
-	}
 
+	auto registeredAdd = exports.resolveFunction("math", "add", 0);
+	REQUIRE(registeredAdd.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*registeredAdd, int32_t(7), int32_t(35)) == 42);
+}
+
+TEST_CASE("native_debug calls host import")
+{
 	WASM::Module debugModule = loadTestModule("native_debug");
 	WASM::RegistryImportResolver debugImports;
 	DebugHost debugHost;
 	registerHostFunction(debugImports, "env", "debug_message", nativeDebugMessage, reinterpret_cast<WASM::VMContext*>(&debugHost));
 
-	std::unique_ptr<WASM::ModuleInstance> debugInstance = compiler.instantiate(debugModule, debugImports);
-	std::optional<WASM::Callable> run = debugInstance->exportedFunction("run");
-	if (!run.has_value()) {
-		std::cerr << "exportedFunction(\"run\") returned no function\n";
-		++failures;
-	} else {
-		WASM::callCallable<void>(*run);
-		failures += expectEqual("native import call count", debugHost.callCount, 1);
-	}
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto debugInstance = compiler.instantiate(debugModule, debugImports);
+	REQUIRE(debugInstance.get() != nullptr);
 
-	if (failures != 0)
-		return 1;
+	auto run = debugInstance->exportedFunction("run");
+	REQUIRE(run.has_value());
 
-	std::cout << "exported and imported function calls passed\n";
-	return 0;
+	WASM::callCallable<void>(*run);
+	REQUIRE(debugHost.callCount == 1);
 }

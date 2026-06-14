@@ -19,6 +19,7 @@ LIBS += -L$$OUT_PWD/../WasmBase -lWasmBase
 LIBS += -L$$OUT_PWD/../WasmStub -lWasmStub
 LIBS += -L$$OUT_PWD/../LibJit -lLibJit
 LIBS += -ljit
+LIBS += -lCatch2 -lCatch2Main
 include(../WasmBase/WasmBase.pri)
 
 INCLUDEPATH += $$PWD/..
