@@ -1,8 +1,10 @@
 #include <Euphemy/Config/GlobalConfig.hpp>
+#include <Euphemy/Io/EuphFile.hpp>
 #include <cstdint>
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 
 #include "LibJit/LibJitContext.hpp"
@@ -16,47 +18,16 @@ Euph::Conf::Configuration GLOBAL_CONFIGURATION;
 
 namespace {
 
-WASM::StorageType i32Storage()
-{
-	WASM::StorageType type{};
-	type.isPacked = false;
-	type.val.opcode = WASM::ValueTypeCode::I32;
-	type.val.heapType = -1;
-	return type;
-}
+#ifndef WASM_TEST_DIR
+#define WASM_TEST_DIR ""
+#endif
 
-WASM::Module makeAddModule()
+WASM::Module loadTestModule(const char* moduleName)
 {
 	WASM::Module module;
-	module.version = 1;
-	module.hasStartFunction = false;
-	module.hasDataCount = false;
-	module.dataSegmentCount = 0;
-
-	WASM::FuncType addType;
-	addType.params = { i32Storage(), i32Storage() };
-	addType.results = { i32Storage() };
-
-	WASM::Subtype subtype;
-	subtype.isFinal = true;
-	subtype.composite = std::move(addType);
-	module.types.push_back(std::move(subtype));
-	module.internalFunctionTypeIndices.push_back(0);
-
-	WASM::FunctionBody body;
-	body.code = {
-		0x20, 0x00, // local.get 0
-		0x20, 0x01, // local.get 1
-		0x6a        // i32.add
-	};
-	module.functionBodies.push_back(std::move(body));
-
-	module.exports.push_back(WASM::Export {
-		.name = "add",
-		.kind = WASM::ExternalKind::Function,
-		.index = 0
-	});
-
+	const std::string path = std::string(WASM_TEST_DIR) + moduleName + ".wasm";
+	Euph::Io::File file(path.c_str(), Elv::Io::Mode::READ);
+	module.fromFile(file);
 	return module;
 }
 
@@ -69,42 +40,6 @@ void nativeDebugMessage(WASM::VMContext* context)
 	DebugHost* host = reinterpret_cast<DebugHost*>(context);
 	++host->callCount;
 	std::cout << "This is a C function called from WASM\n";
-}
-
-WASM::Module makeNativeDebugImportModule()
-{
-	WASM::Module module;
-	module.version = 1;
-	module.hasStartFunction = false;
-	module.hasDataCount = false;
-	module.dataSegmentCount = 0;
-
-	WASM::FuncType debugType;
-
-	WASM::Subtype subtype;
-	subtype.isFinal = true;
-	subtype.composite = std::move(debugType);
-	module.types.push_back(std::move(subtype));
-
-	module.importFunctions.push_back(WASM::ImportFunction {
-		{ "env", "debug_message" },
-		0
-	});
-	module.internalFunctionTypeIndices.push_back(0);
-
-	WASM::FunctionBody body;
-	body.code = {
-		0x10, 0x00 // call 0
-	};
-	module.functionBodies.push_back(std::move(body));
-
-	module.exports.push_back(WASM::Export {
-		.name = "run",
-		.kind = WASM::ExternalKind::Function,
-		.index = 1
-	});
-
-	return module;
 }
 
 int expectEqual(const char* label, int32_t got, int32_t expected)
@@ -122,7 +57,7 @@ int expectEqual(const char* label, int32_t got, int32_t expected)
 
 int main()
 {
-	WASM::Module module = makeAddModule();
+	WASM::Module module = loadTestModule("add_core");
 	WASM::RegistryImportResolver imports;
 	LibJIT::Context jitContext;
 	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
@@ -159,7 +94,7 @@ int main()
 			42);
 	}
 
-	WASM::Module debugModule = makeNativeDebugImportModule();
+	WASM::Module debugModule = loadTestModule("native_debug");
 	WASM::RegistryImportResolver debugImports;
 	DebugHost debugHost;
 	debugImports.registerFunction("env", "debug_message", WASM::Callable {

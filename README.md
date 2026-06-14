@@ -56,6 +56,31 @@ make
 
 Depending on your platform, you may need to install the development package for GNU LibJIT first so `-ljit` resolves correctly at link time.
 
+## AssemblyScript WASM unit test workflow
+
+The `Test` subproject uses AssemblyScript to compile separate `.ts` unit-test modules into individual `.wasm` files at build time.
+
+1. Install AssemblyScript once in the `Test` folder:
+
+```bash
+cd Test
+npm install
+```
+
+2. Build the qmake workspace from the root:
+
+```bash
+cd ..
+qmake Project.pro
+make
+```
+
+3. The `Test` target compiles every `Test/wasm/*.ts` module into `build/<config>/wasm_test_modules/*.wasm`.
+
+4. The runtime loads those compiled modules on demand via `Euph::Io::File` using the `WASM_TEST_DIR` macro.
+
+This avoids creating a separate `node_modules` tree for each AssemblyScript module.
+
 ## Near-Term Expectations
 
 The codebase is a work in progress. Expect rough edges in a few areas:

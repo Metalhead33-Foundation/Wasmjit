@@ -932,6 +932,9 @@ void OpcodeDispatcher::dispatchThrowRef()
 
 void OpcodeDispatcher::dispatchEnd()
 {
+	if (controlStack.empty())
+		return;
+
 	assert(!controlStack.empty());
 	ControlBlock block = std::move(controlStack.back());
 	controlStack.pop_back();
