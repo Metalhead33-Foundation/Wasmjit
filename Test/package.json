@@ -2,7 +2,7 @@
   "name": "wasmjit-tests",
   "private": true,
   "scripts": {
-    "build:wasm": "npx asc wasm/add_core.ts -o wasm_test_modules/add_core.wasm --optimize --runtime stub --noAssert && npx asc wasm/native_debug.ts -o wasm_test_modules/native_debug.wasm --optimize --runtime stub --noAssert",
+    "build:wasm": "npx asc wasm/add_core.ts -o wasm_test_modules/add_core.wasm --optimize --runtime stub --noAssert --initialMemory 1 && npx asc wasm/native_debug.ts -o wasm_test_modules/native_debug.wasm --optimize --runtime stub --noAssert --initialMemory 1",
     "build": "npm run build:wasm"
   },
   "devDependencies": {

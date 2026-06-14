@@ -31,7 +31,7 @@ AS_SOURCES = $$files($$PWD/wasm/*.ts)
 as_compiler.name = AssemblyScript ${QMAKE_FILE_IN}
 as_compiler.input = AS_SOURCES
 as_compiler.output = $$WASM_BUILD_OUTPUT_DIR/${QMAKE_FILE_BASE}.wasm
-as_compiler.commands = $$QMAKE_MKDIR $$WASM_BUILD_OUTPUT_DIR && cd $$PWD && npx asc $$PWD/wasm/${QMAKE_FILE_BASE}.ts -o $$WASM_BUILD_OUTPUT_DIR/${QMAKE_FILE_BASE}.wasm --optimize --runtime stub --noAssert
+as_compiler.commands = $$QMAKE_MKDIR $$WASM_BUILD_OUTPUT_DIR && cd $$PWD && npx asc $$PWD/wasm/${QMAKE_FILE_BASE}.ts -o $$WASM_BUILD_OUTPUT_DIR/${QMAKE_FILE_BASE}.wasm --optimize --runtime stub --noAssert --initialMemory 1
 as_compiler.dependency_type = TYPE_C
 as_compiler.CONFIG += no_link target_predeps
 

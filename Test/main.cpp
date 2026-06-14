@@ -32,6 +32,20 @@ WASM::Module loadTestModule(const char* moduleName)
 	return module;
 }
 
+struct LoadedModule {
+	std::unique_ptr<WASM::Module> module;
+	std::unique_ptr<WASM::ModuleInstance> instance;
+};
+
+LoadedModule loadAndInstantiateTestModule(const char* moduleName, WASM::RegistryImportResolver& imports, LibJIT::Context& jitContext)
+{
+	LoadedModule loaded;
+	loaded.module = std::make_unique<WASM::Module>(loadTestModule(moduleName));
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	loaded.instance = compiler.instantiate(*loaded.module, imports);
+	return loaded;
+}
+
 template<typename HostFunc>
 void registerHostFunction(WASM::RegistryImportResolver& resolver, const char* module, const char* name, HostFunc fn, WASM::VMContext* context = nullptr)
 {
@@ -103,4 +117,40 @@ TEST_CASE("native_debug calls host import")
 
 	WASM::callCallable<void>(*run);
 	REQUIRE(debugHost.callCount == 1);
+}
+
+TEST_CASE("loop_test calculates sum and factorial")
+{
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("loop_test", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+
+	auto sumUpto = loaded.instance->exportedFunction("sumUpto");
+	REQUIRE(sumUpto.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*sumUpto, int32_t(10)) == 55);
+
+	auto factorial = loaded.instance->exportedFunction("factorial");
+	REQUIRE(factorial.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*factorial, int32_t(6)) == 720);
+}
+
+TEST_CASE("memory_buffer stores and loads data correctly")
+{
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("memory_buffer", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+
+	auto writeAndSum = loaded.instance->exportedFunction("writeAndSum");
+	REQUIRE(writeAndSum.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*writeAndSum, int32_t(0), int32_t(7)) == 14);
+
+	auto readValue = loaded.instance->exportedFunction("readValue");
+	REQUIRE(readValue.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*readValue, int32_t(0)) == 7);
+
+	auto fillSum = loaded.instance->exportedFunction("fillAndSum");
+	REQUIRE(fillSum.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*fillSum, int32_t(1), int32_t(4)) == 10);
 }

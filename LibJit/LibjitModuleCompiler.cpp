@@ -2,6 +2,7 @@
 #include "LibjitOpcodeDispatcher.hpp"
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <cassert>
+#include <cstdio>
 #include <cstdlib>
 #include <span>
 namespace LibJIT {
@@ -163,9 +164,24 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		// WasmCallable wrapper so that table lookups and ref.func work.
 		// jit_function_compile finalizes the function and returns the
 		// executable code pointer.
-		jit_function_compile(fn);
-		internals.internalCallables[i].fnPtr =
-			jit_function_to_closure(fn);
+		int compileResult = jit_function_compile(fn);
+		if (compileResult != JIT_RESULT_OK) {
+			std::fprintf(stderr, "jit_function_compile failed %d for func %u\n", compileResult, i);
+			std::fprintf(stderr, "-- Dumping function before abort --\n");
+			jit_dump_function(stderr, fn, nullptr);
+			std::abort();
+		}
+		std::fprintf(stderr, "-- Compiled function %u --\n", i);
+		jit_dump_function(stderr, fn, nullptr);
+		void* entryPoint = nullptr;
+		int entryResult = jit_function_compile_entry(fn, &entryPoint);
+		void* closure = jit_function_to_closure(fn);
+		std::fprintf(stderr, "func %u entry=%p closure=%p\n", i, entryPoint, closure);
+		if (entryResult != JIT_RESULT_OK || entryPoint == nullptr) {
+			std::fprintf(stderr, "jit_function_compile_entry failed %d for func %u\n", entryResult, i);
+			std::abort();
+		}
+		internals.internalCallables[i].fnPtr = entryPoint;
 	}
 
 	jit_context_build_end(context);
