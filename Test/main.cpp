@@ -1,68 +1,13 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch_all.hpp>
 
-#include <Euphemy/Config/GlobalConfig.hpp>
-#include <Euphemy/Io/EuphFile.hpp>
-#include <cstdint>
-#include <iostream>
-#include <memory>
-#include <optional>
-#include <string>
-#include <utility>
-
-#include "LibJit/LibJitContext.hpp"
-#include "LibJit/LibjitModuleCompiler.hpp"
-#include "WasmBase/WasmModule.hpp"
-#include "WasmBase/WasmModuleInstance.hpp"
-#include "WasmBase/WasmRegistryImportResolver.hpp"
-#include "WasmBase/WasmValue.hpp"
+#include "helper.hpp"
 
 Euph::Conf::Configuration GLOBAL_CONFIGURATION;
 
-#ifndef WASM_TEST_DIR
-#define WASM_TEST_DIR ""
-#endif
-
-WASM::Module loadTestModule(const char* moduleName)
+void nativeDebugMessage(const WASM::VMContext* context)
 {
-	WASM::Module module;
-	const std::string path = std::string(WASM_TEST_DIR) + moduleName + ".wasm";
-	Euph::Io::File file(path.c_str(), Elv::Io::Mode::READ);
-	module.fromFile(file);
-	return module;
-}
-
-struct LoadedModule {
-	std::unique_ptr<WASM::Module> module;
-	std::unique_ptr<WASM::ModuleInstance> instance;
-};
-
-LoadedModule loadAndInstantiateTestModule(const char* moduleName, WASM::RegistryImportResolver& imports, LibJIT::Context& jitContext)
-{
-	LoadedModule loaded;
-	loaded.module = std::make_unique<WASM::Module>(loadTestModule(moduleName));
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
-	loaded.instance = compiler.instantiate(*loaded.module, imports);
-	return loaded;
-}
-
-template<typename HostFunc>
-void registerHostFunction(WASM::RegistryImportResolver& resolver, const char* module, const char* name, HostFunc fn, WASM::VMContext* context = nullptr)
-{
-	resolver.registerFunction(module, name, WASM::Callable {
-		reinterpret_cast<void*>(fn),
-		reinterpret_cast<WASM::VMContext*>(context),
-		0
-	});
-}
-
-struct DebugHost {
-	int callCount = 0;
-};
-
-void nativeDebugMessage(WASM::VMContext* context)
-{
-	DebugHost* host = reinterpret_cast<DebugHost*>(context);
+	DebugHost* host = reinterpret_cast<DebugHost*>(context->hostData);
 	++host->callCount;
 	std::cout << "This is a C function called from WASM\n";
 }
@@ -105,12 +50,20 @@ TEST_CASE("native_debug calls host import")
 	WASM::Module debugModule = loadTestModule("native_debug");
 	WASM::RegistryImportResolver debugImports;
 	DebugHost debugHost;
-	registerHostFunction(debugImports, "env", "debug_message", nativeDebugMessage, reinterpret_cast<WASM::VMContext*>(&debugHost));
+	// Option C: JIT passes the CALLER's VMContext (the instance's ctx) as
+	// arg0 to native imports. We register with nullptr context here; the
+	// native function receives the instance's VMContext at call time.
+	// We set hostData on the instance after instantiation.
+	registerHostFunction(debugImports, "env", "debug_message", nativeDebugMessage, nullptr);
 
 	LibJIT::Context jitContext;
 	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
 	auto debugInstance = compiler.instantiate(debugModule, debugImports);
 	REQUIRE(debugInstance.get() != nullptr);
+
+	// Attach host state to the instance — nativeDebugMessage will find it
+	// via context->hostData (where context is the instance's VMContext).
+	debugInstance->context()->hostData = &debugHost;
 
 	auto run = debugInstance->exportedFunction("run");
 	REQUIRE(run.has_value());

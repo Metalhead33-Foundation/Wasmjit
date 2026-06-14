@@ -37,8 +37,10 @@ as_compiler.CONFIG += no_link target_predeps
 
 QMAKE_EXTRA_COMPILERS += as_compiler
 
-SOURCES += main.cpp
-HEADERS += 
+SOURCES += main.cpp \
+    helper.cpp
+HEADERS +=  \
+    helper.hpp
 
 DISTFILES += \
     package-lock.json \

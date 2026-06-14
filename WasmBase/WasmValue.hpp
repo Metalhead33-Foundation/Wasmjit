@@ -29,10 +29,23 @@ struct alignas(16) Value {
 struct VMContext;
 
 // The universal function reference.
+//
+// ABI note (see docs/ABI.md):
+//   - For direct `call` (including imported functions), the JIT passes the
+//     CALLER's VMContext* as arg0, ignoring Callable::context.  Native host
+//     functions therefore see the calling instance's memory, globals, table,
+//     and hostData in one pointer.  Register native imports with context=nullptr
+//     and set hostData on the instance after instantiation.
+//   - For `call_indirect` and `call_ref`, the JIT passes Callable::context as
+//     arg0 so that cross-module / cross-instance calls receive the callee's own
+//     VMContext.
+//   - When cross-module direct `call` imports are added, trampolines will use
+//     Callable::context to swap contexts before entering the callee body.
 struct Callable {
-	void* fnPtr;      // Signature: ret f(VMContext* ctx, params...)
-	VMContext* context;    // The instance context this function belongs to
-	uint32_t   typeIndex;  // For call_indirect runtime type checking
+	void* fnPtr;          // Signature: ret f(VMContext* ctx, params...)
+	VMContext* context;   // Callee's context for call_indirect/call_ref/trampolines;
+	                      //   ignored by direct `call` (JIT passes caller's ctx).
+	uint32_t   typeIndex; // For call_indirect runtime type checking
 };
 
 template<typename Ret, typename... Args>

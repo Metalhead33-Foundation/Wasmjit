@@ -1033,9 +1033,13 @@ void OpcodeDispatcher::dispatchCall(WASM::FuncIdx funcIdx)
 		jit_insn_check_null(function, callablePtr);
 		jit_value_t fnPtr = jit_insn_load_relative(
 			function, callablePtr, offsetof(WASM::Callable, fnPtr), jit_type_void_ptr);
-		jit_value_t calleeCtx = jit_insn_load_relative(
-			function, callablePtr, offsetof(WASM::Callable, context), jit_type_void_ptr);
-		args[0] = calleeCtx;
+		// Option C: pass the CALLER's VMContext (vmContextValue) so native
+		// imports can access the calling module's memory, globals, table, and
+		// hostData. Cross-module Wasm→Wasm calls will need trampolines that
+		// swap the context back to the callee's own VMContext before entering
+		// the callee body; those trampolines can be generated at instantiation
+		// time by using Callable::context as the callee's own context.
+		args[0] = vmContextValue();
 		for (size_t i = 0; i < calleeSig.params.size(); ++i)
 			args[1 + i] = stackArgs[i];
 		jit_value_t ret = jit_insn_call_indirect(function, fnPtr, calleeJitSig, args.data(), numArgs, 0);
