@@ -20,10 +20,10 @@ LoadedModule loadAndInstantiateTestModule(const char* moduleName, WASM::Registry
 
 TextFixture::TextFixture(const char* moduleName, WASM::RegistryImportResolver& imports, LibJIT::Context& jitContext)
 	: module(std::make_unique<WASM::Module>(loadTestModule(moduleName))), resolver(std::make_unique<WASM::RegistryImportResolver>()),
-	vm_context(std::make_unique<WASM::VMContext>()), debug_host(std::make_unique<DebugHost>())
+	/*vm_context(std::make_unique<WASM::VMContext>()),*/ debug_host(std::make_unique<DebugHost>())
 {
 	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
 	instance = compiler.instantiate(*module, imports);
-	vm_context->hostData = debug_host.get();
+	//vm_context->hostData = debug_host.get();
 	instance->context()->hostData = debug_host.get();
 }

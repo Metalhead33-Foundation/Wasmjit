@@ -48,7 +48,7 @@ public:
 	std::unique_ptr<WASM::Module> module;
 	std::unique_ptr<WASM::ModuleInstance> instance;
 	std::unique_ptr<WASM::RegistryImportResolver> resolver;
-	std::unique_ptr<WASM::VMContext> vm_context;
+	//std::unique_ptr<WASM::VMContext> vm_context;
 	std::unique_ptr<DebugHost> debug_host;
 private:
 	TextFixture(const TextFixture& cpy) = delete;
