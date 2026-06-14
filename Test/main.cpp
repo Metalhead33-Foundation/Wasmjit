@@ -31,6 +31,16 @@ WASM::Module loadTestModule(const char* moduleName)
 	return module;
 }
 
+template<typename HostFunc>
+void registerHostFunction(WASM::RegistryImportResolver& resolver, const char* module, const char* name, HostFunc fn, WASM::VMContext* context = nullptr)
+{
+	resolver.registerFunction(module, name, WASM::Callable {
+		reinterpret_cast<void*>(fn),
+		reinterpret_cast<WASM::VMContext*>(context),
+		0
+	});
+}
+
 struct DebugHost {
 	int callCount = 0;
 };
@@ -97,11 +107,7 @@ int main()
 	WASM::Module debugModule = loadTestModule("native_debug");
 	WASM::RegistryImportResolver debugImports;
 	DebugHost debugHost;
-	debugImports.registerFunction("env", "debug_message", WASM::Callable {
-		.fnPtr = reinterpret_cast<void*>(nativeDebugMessage),
-		.context = reinterpret_cast<WASM::VMContext*>(&debugHost),
-		.typeIndex = 0
-	});
+	registerHostFunction(debugImports, "env", "debug_message", nativeDebugMessage, reinterpret_cast<WASM::VMContext*>(&debugHost));
 
 	std::unique_ptr<WASM::ModuleInstance> debugInstance = compiler.instantiate(debugModule, debugImports);
 	std::optional<WASM::Callable> run = debugInstance->exportedFunction("run");
