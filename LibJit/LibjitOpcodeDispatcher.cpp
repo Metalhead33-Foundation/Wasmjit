@@ -1025,6 +1025,7 @@ void OpcodeDispatcher::dispatchCall(WASM::FuncIdx funcIdx)
 	std::vector<jit_value_t> args(numArgs);
 
 	if (funcIdx < importedFuncCount) {
+		const WASM::VMContext* calleeCtx = internals.importStorage[funcIdx].context;
 		jit_value_t impBase = jit_insn_load_relative(
 			function, vmContextValue(), offsetof(WASM::VMContext, importedFunctions), jit_type_void_ptr);
 		jit_value_t off = jit_value_create_nint_constant(
@@ -1033,13 +1034,20 @@ void OpcodeDispatcher::dispatchCall(WASM::FuncIdx funcIdx)
 		jit_insn_check_null(function, callablePtr);
 		jit_value_t fnPtr = jit_insn_load_relative(
 			function, callablePtr, offsetof(WASM::Callable, fnPtr), jit_type_void_ptr);
-		// Option C: pass the CALLER's VMContext (vmContextValue) so native
-		// imports can access the calling module's memory, globals, table, and
-		// hostData. Cross-module Wasm→Wasm calls will need trampolines that
-		// swap the context back to the callee's own VMContext before entering
-		// the callee body; those trampolines can be generated at instantiation
-		// time by using Callable::context as the callee's own context.
-		args[0] = vmContextValue();
+		// If the import has a non-null context (imported from another Wasm
+		// module instance), burn that address into the machine code — no
+		// trampoline needed.  If null (native/host import), pass the caller's
+		// VMContext so the native function can access the calling module's
+		// memory, globals, table, and hostData.
+		// NOTE: burning calleeCtx into JIT constants is brittle — the callee
+		// instance must not move.  We rely on unique_ptr ownership of module
+		// instances to guarantee this.
+		if (calleeCtx != nullptr) {
+			args[0] = jit_value_create_nint_constant(function, jit_type_void_ptr,
+				reinterpret_cast<jit_nint>(calleeCtx));
+		} else {
+			args[0] = vmContextValue();
+		}
 		for (size_t i = 0; i < calleeSig.params.size(); ++i)
 			args[1 + i] = stackArgs[i];
 		jit_value_t ret = jit_insn_call_indirect(function, fnPtr, calleeJitSig, args.data(), numArgs, 0);

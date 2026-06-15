@@ -2,104 +2,130 @@
 
 ## Overview
 
-Every JIT-compiled Wasm function takes a `VMContext*` as its first argument (arg0). Which `VMContext*` gets passed depends on the call kind, and the choice has significant implications for native/host imports.
+Every JIT-compiled Wasm function takes a `VMContext*` as its first argument
+(arg0).  Which `VMContext*` gets passed depends on the call kind and on the
+value of `Callable::context`.
 
-## The Decision: Option C
+## Design Philosophy
 
-After analyzing several approaches, we chose **Option C**: the JIT always passes the **caller's** `VMContext*` for direct `call` instructions (both internal and imported), and uses `Callable::context` only for indirect calls (`call_indirect` and `call_ref`).
+WasmJit is designed as a spiritual successor to Quake 3's QVM — not as a
+browser-embedded WASM engine.  Some level of flexibility and deviation from
+the official WASM spec is accepted when it simplifies the implementation.
 
-### Why?
+In particular, **addresses of other module instances' VMContext structs are
+burned into the JIT-compiled machine code at compile time**.  This is brittle
+by normal standards, but it is safe as long as those instances are held in
+`std::unique_ptr<ModuleInstance>` and never move.  If an instance is destroyed
+before its callers, callers will hold dangling pointers — the caller must
+ensure correct lifetimes.
 
-Native/host functions (trampolines) imported into a Wasm module need access to the calling module's resources — linear memory (`memoryBase`), globals (`globals`), the function table (`table`), and host-specific state (`hostData`). If an embedder registers a native function like WASI's `fd_write`, that function must read from the calling module's memory. Passing the caller's `VMContext*` gives it all of that in one pointer.
+**No trampolines are generated for cross-module direct calls.**  The callee's
+`VMContext*` is simply baked in as an immediate constant.
 
-### VMContext passed per call type
+## VMContext Selection Rules
 
-| Call instruction     | arg0 = ?                               | Rationale                                               |
-|----------------------|----------------------------------------|---------------------------------------------------------|
-| `call` (internal)    | Caller's `VMContext*`                  | Internal functions already share the same instance      |
-| `call` (imported)    | **Caller's** `VMContext*` (Option C)   | Native imports see the caller's memory/globals/table    |
-| `call_indirect`       | `Callable::context` (callee's context) | Cross-module — callee needs its own memory/globals      |
-| `call_ref`            | `Callable::context` (callee's context) | Same as call_indirect — callee owns the referenced func |
+| Call instruction     | How arg0 is determined                                       |
+|----------------------|--------------------------------------------------------------|
+| `call` (internal)    | Caller's `VMContext*` (same instance)                        |
+| `call` (imported, `context == nullptr`)  | Caller's `VMContext*` — native host import sees caller's memory |
+| `call` (imported, `context != nullptr`)  | `Callable::context` burned as constant — cross-module Wasm import |
+| `call_indirect`       | `Callable::context` loaded at runtime — callee's context     |
+| `call_ref`            | `Callable::context` loaded at runtime — callee's context     |
 
-### What this means for embedders
+## Embedder Guide
 
-**Registering a native host function:**
+### Native (host) function imports
+
+Register with `context = nullptr`.  The JIT will pass the caller's `VMContext*`
+at compile time, giving the native function access to the calling module's
+linear memory, globals, table, and `hostData`:
 
 ```cpp
-// Callable::context can be nullptr at registration time — the JIT ignores it
-// for direct import calls. The native function receives the instance's
-// VMContext* at call time.
-resolver.registerFunction("env", "my_host_func", WASM::Callable{
-    .fnPtr     = reinterpret_cast<void*>(my_host_func),
-    .context   = nullptr,   // ignored for direct calls — JIT passes caller's ctx
+// Registration (before instantiation):
+resolver.registerFunction("env", "my_func", WASM::Callable{
+    .fnPtr     = reinterpret_cast<void*>(my_native_func),
+    .context   = nullptr,   // signals: use caller's VMContext
     .typeIndex = typeIdx
 });
 
-// After instantiation, attach host state to the instance:
+// After instantiation, attach host state:
 auto instance = compiler.instantiate(module, resolver);
-instance->context()->hostData = &myHostState;
+instance->context()->hostData = &myAppState;
 ```
 
 **Native function signature:**
 
 ```cpp
-void my_host_func(WASM::VMContext* vm, int32_t arg1, double arg2) {
-    // vm->memoryBase  — access Wasm linear memory
-    // vm->globals     — access Wasm globals
-    // vm->table       — access Wasm function table
-    // vm->hostData    — access embedder-specific state
-    uint8_t* heap = vm->memoryBase;
-    // ...
+void my_native_func(WASM::VMContext* vm, int32_t arg1, double arg2) {
+    // vm is the CALLER's VMContext — access everything the module sees:
+    //   vm->memoryBase  — linear memory
+    //   vm->memorySize  — current memory size
+    //   vm->globals     — global variables
+    //   vm->table       — function table
+    //   vm->hostData    — embedder state (set after instantiation)
 }
 ```
 
-### Future: Cross-module Wasm→Wasm calls
+### Cross-module Wasm function imports
 
-When module A imports a function from module B via `call`, the imported Callable's `context` field should point to module B's `VMContext`, but the JIT currently passes module A's context. For cross-module **direct** `call` imports, a trampoline is needed:
+Register with `context` pointing to the **callee module instance's** `VMContext`.
+The JIT will burn this address into the machine code at compile time:
 
+```cpp
+// Module A imports a function defined by module B:
+auto instanceB = compiler.instantiate(moduleB, importsB);
+auto exportedFunc = instanceB->exportedFunction("some_func");
+
+// In module A's import resolver:
+resolver.registerFunction("B", "some_func", WASM::Callable{
+    .fnPtr     = exportedFunc->fnPtr,
+    .context   = instanceB->context(),  // non-null → burned into Module A's JIT code
+    .typeIndex = exportedFunc->typeIndex
+});
 ```
-Module A: call $imported_from_B
-         → JIT passes A's VMContext* as arg0
-         → trampoline: receives A's ctx, then invokes B's function with B's ctx
-```
 
-This trampoline can be generated at instantiation time using the `Callable::context` field. This case is not yet implemented because the current codebase only supports native imports and single-module usage. The `Callable::context` field remains available for this purpose.
+**Caveat:** Module B's `ModuleInstance` must outlive all callers.  The address
+of `instanceB->context()` is baked into module A's compiled functions as an
+immediate constant.  If instance B is destroyed first, module A will pass a
+dangling pointer on its next cross-module call.
 
-## Data Structure Details
+## Data Structure Reference
 
 ### `VMContext` (`WasmBase/WasmVMContext.hpp`)
 
-A plain-old-data struct passed as arg0 to every JIT-compiled function. Fields:
+Plain-old-data struct passed as arg0 to every JIT function.
 
-| Field              | Type          | Purpose                                                   |
-|--------------------|---------------|-----------------------------------------------------------|
-| `memoryBase`       | `uint8_t*`    | Linear memory base (offset 0 for cheap addressing)        |
-| `memorySize`       | `uint64_t`    | Current memory size in bytes                              |
-| `memoryMax`        | `uint64_t`    | Max memory size in bytes                                  |
-| `module`           | `const Module*` | Type graph metadata for GC/reference checks             |
-| `globals`          | `Value*`      | Flat array of global values, indexed by global index      |
-| `table`            | `Callable**`  | Function table for `call_indirect`                        |
-| `tableSize`        | `uint64_t`    | Current table size                                        |
-| `tableMax`         | `uint64_t`    | Max table size                                            |
-| `importedFunctions` | `Callable*`  | Imported function handles in import section order         |
-| `importedFunctionCount` | `uint32_t` | Number of imported functions                            |
-| `hostData`         | `void*`       | Opaque pointer for embedder state (WASI, callbacks, etc.) |
+| Field                  | Type            | Purpose                                                |
+|------------------------|-----------------|--------------------------------------------------------|
+| `memoryBase`           | `uint8_t*`      | Linear memory base (offset 0 for cheap addressing)     |
+| `memorySize`           | `uint64_t`      | Current memory size in bytes                           |
+| `memoryMax`            | `uint64_t`      | Max memory size in bytes                               |
+| `module`               | `const Module*` | Type graph metadata for GC/reference checks            |
+| `globals`              | `Value*`        | Flat array of global values                            |
+| `table`                | `Callable**`    | Function table for `call_indirect`                     |
+| `tableSize`            | `uint64_t`      | Current table size                                     |
+| `tableMax`             | `uint64_t`      | Max table size                                         |
+| `importedFunctions`    | `Callable*`     | Imported function handles (import section order)       |
+| `importedFunctionCount`| `uint32_t`      | Number of imported functions                           |
+| `hostData`             | `void*`         | Opaque pointer for embedder state                      |
 
 ### `Callable` (`WasmBase/WasmValue.hpp`)
 
-The universal function reference stored in tables and import storage:
+Universal function reference stored in tables and import storage.
 
 | Field      | Type          | Purpose                                                   |
 |------------|---------------|-----------------------------------------------------------|
-| `fnPtr`    | `void*`       | Raw function pointer (signature: `ret fn(VMContext*, params...)`) |
-| `context`  | `VMContext*`  | Used by `call_indirect`/`call_ref` to pass the callee's context; **not** used by direct `call` (see Option C above) |
-| `typeIndex` | `uint32_t`   | For `call_indirect` runtime type checking                  |
+| `fnPtr`    | `void*`       | Function pointer (signature: `ret fn(VMContext*, ...)`)   |
+| `context`  | `VMContext*`  | `nullptr` → JIT passes caller's ctx; non-null → baked constant |
+| `typeIndex`| `uint32_t`   | For `call_indirect` runtime type checking                 |
 
 ## Relevant Source Files
 
-- `WasmBase/WasmVMContext.hpp` — VMContext struct definition
-- `WasmBase/WasmValue.hpp` — Callable struct (lines 32-36) and `callCallable` helper
-- `LibJit/LibjitOpcodeDispatcher.cpp` — `dispatchCall` (line ~1014), `dispatchCallIndirect` (line ~1055), `dispatchCallThroughCallable` (line ~612)
-- `WasmBase/WasmModuleInstance.cpp` — `resolveImports` stores `Callable`s into `importStorage`
-- `Test/main.cpp` — `native_debug` test demonstrates the pattern
-- `Test/helper.hpp` — `registerHostFunction` template
+| File | What |
+|------|------|
+| `WasmBase/WasmVMContext.hpp` | VMContext struct |
+| `WasmBase/WasmValue.hpp` | Callable struct and `callCallable` helper |
+| `LibJit/LibjitOpcodeDispatcher.cpp` | `dispatchCall` (line ~1027), `dispatchCallIndirect` (~1061), `dispatchCallThroughCallable` (~612) |
+| `LibJit/LibjitModuleCompiler.cpp` | `declareFunctions` sets internal `Callable::context` |
+| `WasmBase/WasmModuleInstance.cpp` | `resolveImports` stores resolved `Callable`s |
+| `Test/main.cpp` | `native_debug` test demonstrates native import pattern |
