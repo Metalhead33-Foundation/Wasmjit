@@ -13,7 +13,7 @@ public:
 private:
 	MemoryMap memories;
 	std::atomic<int> memMaxId;
-	static std::shared_ptr<StoreOwnedMemory> _createLinearMemory__(uint64_t initialPages, uint64_t maxPages, bool isShared);
+	static std::unique_ptr<StoreOwnedMemory> _createLinearMemory__(uint64_t initialPages, uint64_t maxPages, bool isShared);
 public:
 	Store();
 	MemoryIterator createLinearMemory(uint64_t initialPages, uint64_t maxPages, bool isShared);
