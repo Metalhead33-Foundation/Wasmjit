@@ -1,6 +1,7 @@
 #ifndef WASMVMCONTEXT_HPP
 #define WASMVMCONTEXT_HPP
 #include "WasmValue.hpp"
+#include "WasmMemory.hpp"
 #include <cstddef>
 namespace WASM {
 
@@ -45,6 +46,8 @@ struct VMContext {
 
 static_assert(offsetof(VMContext, memoryBase) == 0,
 			  "VMContext::memoryBase must remain the first field for JIT ABI compatibility");
+static_assert(std::is_standard_layout_v<VMContext>,
+			  "VMContext must remain standard-layout for offsetof() access from the JIT");
 
 }
 
