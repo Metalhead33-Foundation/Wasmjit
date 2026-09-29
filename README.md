@@ -81,6 +81,84 @@ make
 
 This avoids creating a separate `node_modules` tree for each AssemblyScript module.
 
+## Official WebAssembly spec test suite workflow
+
+The upstream [`WebAssembly/testsuite`](https://github.com/WebAssembly/testsuite) is checked out as a
+submodule under `extern/WasmTestsuite`. It is consumed through
+[`wasm-tools json-from-wast`](https://github.com/bytecodealliance/wasm-tools) — the same toolchain used
+elsewhere in this project (no `wabt`).
+
+### Build-time conversion
+
+`Test/Test.pro` declares a `wast2json` extra compiler that converts *every*
+`extern/WasmTestsuite/*.wast` script into `build/<config>/wasm_testsuite/<name>.json`, together with the
+`<name>.<N>.wasm` modules the script references. All generated data stays inside the build directory.
+
+Requirements:
+
+- `wasm-tools` must be on `PATH` at build time. Override the tool with:
+
+  ```bash
+  qmake Test.pro WASM_TOOLS=/path/to/wasm-tools
+  ```
+
+- Upstream `type-subtyping.wast` is excluded because `wasm-tools` currently refuses to parse it; one
+  unparsable upstream file must not break the build.
+
+### Running the suite
+
+The fixture is data-driven: `Test/SpecSuite.cpp` executes the generated JSON manifests, and
+`Test/WastScript.cpp` models the script commands and dispatches them through a single generic
+entry point.
+
+```bash
+cd build/<config>/Test
+
+# Default run (the curated list in SpecSuite.cpp; empty for now).
+./WasmJit "[spec]"
+
+# Pick specific scripts without recompiling.
+WASM_SPEC_SCRIPTS=i32,local_get ./WasmJit "[spec]"
+
+# Every converted script.
+WASM_SPEC_SCRIPTS=all ./WasmJit "[spec]"
+```
+
+`WASM_SPEC_SCRIPTS=all` walks all 256 converted scripts and takes a few minutes, because each
+script is forked and compiled in its own process.
+
+### What the harness guarantees today
+
+Correct results are **not** required yet — the point is that the suite runs and is available. To keep
+that true while the runtime is still incomplete:
+
+- Each script runs in a **forked child process**, which pipes a compact report back. The child
+  inherits no Catch2 signal handlers and always exits with `_exit()`. A child that aborts, traps, or
+  segfaults is reported as `terminated by signal N` and the harness continues with the next script.
+- Command outcomes are reported as `INFO`/`WARN`, not asserted, so the suite does not fail the build.
+- `WASM_SPEC_STRICT=1` turns crashes and unexpected command failures into real test failures, for
+  when the runtime is ready for that.
+- `WASMJIT_JIT_DUMP=1` re-enables the per-function LibJIT disassembly that is otherwise suppressed
+  (it is far too noisy for a spec run).
+
+Commands that the runtime cannot support yet are counted as *skipped* rather than failed, and the
+reasons are summarised in the test output:
+
+| Command family | Status | Why |
+| --- | --- | --- |
+| `module` (binary) | executed | loaded and instantiated |
+| `register` | executed | exports re-registered under the given name |
+| `assert_return` / `action` (`invoke`) | executed | i32/i64/f32/f64 only |
+| `assert_trap`, `assert_exhaustion` | skipped | traps currently terminate the process via `std::abort()` |
+| `assert_malformed`, `assert_invalid`, `assert_unlinkable`, `assert_uninstantiable` | skipped | no validating/decoding front-end yet |
+| `module_definition`, `module_instance` | skipped | module-linking proposal |
+| `assert_exception` | skipped | exception-handling proposal |
+| text-format modules (`.wat`) | skipped | only binary modules can be loaded |
+| `v128` and reference values | skipped | not marshalled yet |
+
+To widen coverage, add the relevant script names to `kDefaultScripts` in `Test/SpecSuite.cpp` and
+teach `WastScript.cpp` the additional command/value kinds.
+
 ## Near-Term Expectations
 
 The codebase is a work in progress. Expect rough edges in a few areas:

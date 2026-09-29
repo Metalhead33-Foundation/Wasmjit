@@ -164,6 +164,11 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		// WasmCallable wrapper so that table lookups and ref.func work.
 		// jit_function_compile finalizes the function and returns the
 		// executable code pointer.
+		// Per-function disassembly is extremely noisy when running the spec
+		// suite, so it is opt-in: set WASMJIT_JIT_DUMP=1 when debugging
+		// generated code.
+		const bool dumpFunctions = std::getenv("WASMJIT_JIT_DUMP") != nullptr;
+
 		int compileResult = jit_function_compile(fn);
 		if (compileResult != JIT_RESULT_OK) {
 			std::fprintf(stderr, "jit_function_compile failed %d for func %u\n", compileResult, i);
@@ -171,12 +176,16 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 			jit_dump_function(stderr, fn, nullptr);
 			std::abort();
 		}
-		std::fprintf(stderr, "-- Compiled function %u --\n", i);
-		jit_dump_function(stderr, fn, nullptr);
+		if (dumpFunctions) {
+			std::fprintf(stderr, "-- Compiled function %u --\n", i);
+			jit_dump_function(stderr, fn, nullptr);
+		}
 		void* entryPoint = nullptr;
 		int entryResult = jit_function_compile_entry(fn, &entryPoint);
 		void* closure = jit_function_to_closure(fn);
-		std::fprintf(stderr, "func %u entry=%p closure=%p\n", i, entryPoint, closure);
+		if (dumpFunctions)
+			std::fprintf(stderr, "func %u entry=%p closure=%p\n", i, entryPoint, closure);
+		(void)closure;
 		if (entryResult != JIT_RESULT_OK || entryPoint == nullptr) {
 			std::fprintf(stderr, "jit_function_compile_entry failed %d for func %u\n", entryResult, i);
 			std::abort();
