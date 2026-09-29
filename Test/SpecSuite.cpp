@@ -123,9 +123,15 @@ std::chrono::milliseconds scriptTimeout()
 	return std::chrono::seconds(seconds);
 }
 
-bool strictMode()
+// Whether a script's outcome is reported as a real Catch2 failure.
+//
+// By default it is: the curated list in wast_supported.txt keeps the default run
+// green, so a failing script is genuinely a regression. WASM_SPEC_TOLERANT=1
+// downgrades the whole run to a survey that always passes, which is handy when
+// sweeping the parts of the suite the runtime cannot handle yet.
+bool tolerantMode()
 {
-	return std::getenv("WASM_SPEC_STRICT") != nullptr;
+	return std::getenv("WASM_SPEC_TOLERANT") != nullptr;
 }
 
 // Which scripts are visible, i.e. part of the default run.
@@ -373,15 +379,27 @@ void runOneScript(const std::string& name)
 
 	const IsolatedRun outcome = runIsolated(script, directory, scriptTimeout());
 
-	// Correct results are not required yet: the run is reported, not asserted,
-	// unless WASM_SPEC_STRICT=1 was requested.
+	// The detailed report always goes to stderr; the Catch2 result below is what
+	// makes a bad outcome show up in the run summary.
 	reportOutcome(name, outcome);
 
-	if (strictMode()) {
-		CHECK_FALSE(outcome.timedOut);
-		CHECK_FALSE(outcome.signalled);
-		CHECK(outcome.reported);
-		CHECK(outcome.report.failed == 0);
+	if (tolerantMode())
+		return;
+
+	if (outcome.timedOut) {
+		const auto seconds =
+				std::chrono::duration_cast<std::chrono::seconds>(outcome.budget).count();
+		FAIL("did not finish within " + std::to_string(seconds) + "s; killed");
+	} else if (outcome.signalled) {
+		FAIL("terminated by signal " + std::to_string(outcome.signalNumber)
+			 + " (see the child's message above)");
+	} else if (!outcome.reported) {
+		FAIL("produced no report (exit code " + std::to_string(outcome.exitCode) + ")");
+	} else if (outcome.report.failed != 0) {
+		std::string message = std::to_string(outcome.report.failed) + " command(s) failed";
+		if (!outcome.report.failures.empty())
+			message += "; first: " + outcome.report.failures.front();
+		FAIL(message);
 	}
 }
 

@@ -159,7 +159,7 @@ selection is explicit — which is why `./WasmJit '[spec]'` runs everything.
 | Command | What runs |
 | --- | --- |
 | `./WasmJit` | the manual tests + the curated spec scripts |
-| `./WasmJit '[spec]'` | all 256 spec scripts (~1.5 min) |
+| `./WasmJit '[spec]'` | all 256 spec scripts (~1.5 min; most of them fail today) |
 | `./WasmJit 'spec: address'` | just that script |
 | `./WasmJit '*float*'` | scripts whose name matches |
 | `./WasmJit --list-tests` | the default view (50 test cases) |
@@ -245,6 +245,9 @@ WasmJit: .../LibjitOpcodeDispatcher.cpp:745: ...: Assertion `valueStack.size() =
 [spec] local_get: terminated by signal 6 after 0 passing commands
 ```
 
+Every one of those outcomes *also* becomes a failing Catch2 test case, so the run summary and the exit
+code reflect it — the failing test is named `spec: <script>`.
+
 > The `[spec] ...` report is written straight to stderr rather than through Catch2's reporter, so
 > structured reporters (`-r JSON`, `-r JUnit`, `-r TAP`, `-r XML`) only contain the harness's own
 > assertions. Read the console output for spec results.
@@ -258,9 +261,12 @@ Correct results are deliberately **not required yet**; the run is meant to be in
 - Each child is bounded by a wall-clock **timeout**: a script that loops forever inside JIT-ed code can
   no longer wedge the whole run. The default is 30 s, `WASM_SPEC_TIMEOUT=<seconds>` overrides it, and
   `0` disables the limit.
-- Outcomes are printed, not asserted, so by default the tests pass no matter what the runtime does.
-- `WASM_SPEC_STRICT=1` upgrades timed-out / crashed / unfinished scripts and unexpected
-  `assert_return` failures into real test failures.
+- A script that crashed, timed out, produced no report, or had any `assert_return` mismatch is
+  reported as a **failing test case** — one `FAIL` per script, quoting the first mismatch. That is what
+  keeps `./WasmJit` honest: the default run is green only because the curated list is clean, and
+  anything else shows up as a real failure plus the exit code `42`.
+- `WASM_SPEC_TOLERANT=1` downgrades the run to a pure survey that always passes; use it when sweeping
+  the parts of the suite the runtime cannot handle yet.
 - `WASMJIT_JIT_DUMP=1` re-enables the per-function LibJIT disassembly, which is otherwise suppressed
   because it is far too noisy for a spec run.
 
@@ -280,8 +286,20 @@ Correct results are deliberately **not required yet**; the run is meant to be in
 
 ### Current status (for orientation)
 
-45 of the 256 scripts run cleanly today. The rest crash inside the dispatcher (unsupported opcode or
-missing control-flow handling), need validator/trap support that does not exist yet, or time out.
+45 of the 256 scripts run cleanly today — exactly the curated list. A full sweep is therefore loud and
+truthful:
+
+```
+$ WASM_SPEC_SCRIPTS=all ./WasmJit          # exit code 42
+test cases: 261 |  59 passed | 202 failed
+assertions: 735 | 533 passed | 202 failed
+```
+
+Those 202 failures are: 161 crashes inside the dispatcher (unsupported opcode or missing control-flow
+handling), 34 scripts with wrong results, 6 children that exit without a report, and 1 script that
+loops forever and is killed by the timeout. The 59 passes are the 5 manual tests, the 45 clean
+scripts, and 9 scripts whose commands are all skipped — those check nothing, so they are not in the
+curated list.
 
 The harness already surfaces some **real** mismatches, for example:
 
@@ -314,12 +332,12 @@ The harness already surfaces some **real** mismatches, for example:
 | `-r <reporter>` | `console`, `compact`, `JSON`, `JUnit`, `TAP`, `XML`, … |
 | `--shard-count N --shard-index M` | run one of N slices of the selected test cases |
 
-Exit codes: `0` success, `1` test failure, `2` no tests matched.
+Exit codes come from Catch2: `0` success, **`42` test failure**, `2` no tests ran, `3` unmatched test
+spec, `4` all tests skipped, `5` invalid test spec, `1` unspecified error. Note `42`, not `1`.
 
-Because every script is its own test case, `--shard-*` can now split the spec suite across processes
-(for example `--shard-count 4` gives 64 scripts per slice), and `-d yes` reports per-script timings.
-`-a` / `-x N` abort on failure, but note that crashes and timeouts inside spec scripts are not
-Catch2 failures unless `WASM_SPEC_STRICT=1` is set.
+Because every script is its own test case, `--shard-*` can split the spec suite across processes
+(for example `--shard-count 4` gives 64 scripts per slice), `-d yes` reports per-script timings, and
+`-a` / `-x N` stop the run at the first failures — handy when sweeping the whole suite.
 
 Handy invocations:
 
