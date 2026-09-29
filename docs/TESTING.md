@@ -297,23 +297,7 @@ These are quirks of the development box, not requirements of the project.
    env MAKE=/usr/bin/make /usr/bin/make -j16
    ```
 
-2. **`libmozjs-115.so.0` is missing.** The system ships mozjs 128 / 140 / 153, but the prebuilt
-   `libEuphemy.so` depends on 115, so the test binary fails to start with
-   `cannot open shared object file`. Two options:
-
-   - install mozjs 115, or
-   - shim it (libraries kept inside `build/`, per the project rule):
-
-     ```bash
-     mkdir -p build/scratch/libs
-     ln -sf /usr/lib64/libmozjs-153.so.0 build/scratch/libs/libmozjs-115.so.0   # runtime
-     ln -sf /usr/lib64/libmozjs-153.so   build/scratch/libs/libmozjs-115.so     # linking
-     export LD_LIBRARY_PATH="$PWD/build/scratch/libs"
-     ```
-
-     Relinking Euphemy also needs `LIBRARY_PATH=build/scratch/libs` so that `-lmozjs-115` resolves.
-
-3. **Stale build artifacts produce bogus crashes.** A build directory created by an older toolchain
+2. **Stale build artifacts produce bogus crashes.** A build directory created by an older toolchain
    (for instance linked against Catch2 3.12 instead of 3.15) makes the manual tests abort with
    `*** stack smashing detected ***` during instantiation, which looks like a runtime bug but is not.
    Delete the build directory and rebuild from scratch before investigating:
@@ -322,5 +306,6 @@ These are quirks of the development box, not requirements of the project.
    rm -rf build/Desktop-Debug
    mkdir -p build/Desktop-Debug && cd build/Desktop-Debug
    /usr/bin/qmake6 ../../Project.pro -spec linux-g++ CONFIG+=debug CONFIG+=qml_debug
-   /usr/bin/make -j16
+   # note 1 applies to make
+   env MAKE=/usr/bin/make /usr/bin/make -j16
    ```
