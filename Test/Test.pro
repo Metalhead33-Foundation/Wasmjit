@@ -7,6 +7,7 @@ TARGET = WasmJit
 WASM_BUILD_OUTPUT_DIR = $$OUT_PWD/wasm_test_modules
 WASM_TESTSUITE_BUILD_DIR = $$OUT_PWD/wasm_testsuite
 DEFINES += WASM_TESTSUITE_DIR=\\\"$$WASM_TESTSUITE_BUILD_DIR/\\\"
+DEFINES += WASM_TESTSUITE_SOURCE_DIR=\\\"$$PWD/\\\"
 
 DEFINES += WASM_TEST_DIR=\\\"$$WASM_BUILD_OUTPUT_DIR/\\\"
 # This tells the loader where to find the .so files at runtime

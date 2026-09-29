@@ -2,12 +2,12 @@
 
 `Test/` builds a single Catch2 executable, `WasmJit`, that contains two families of tests:
 
-| Family | Sources | Tag | Test data |
+| Family | Sources | Selection | Test data |
 | --- | --- | --- | --- |
-| Manual unit tests | `Test/main.cpp` | *(none)* | `Test/wasm/*.ts`, compiled to `.wasm` at build time |
-| WebAssembly spec testsuite | `Test/SpecSuite.cpp`, `Test/WastScript.cpp` | `[spec]` | `extern/WasmTestsuite/*.wast`, converted at build time |
+| Manual unit tests | `Test/main.cpp` | by name (no tag) | `Test/wasm/*.ts`, compiled to `.wasm` at build time |
+| WebAssembly spec testsuite | `Test/SpecSuite.cpp`, `Test/WastScript.cpp` | `[spec]`, one test case per script | `extern/WasmTestsuite/*.wast`, converted at build time |
 
-Both live in the same binary, so a bare `./WasmJit` runs everything.
+Both live in the same binary, so a bare `./WasmJit` runs everything the runtime can currently handle.
 
 ## Prerequisites
 
@@ -81,9 +81,12 @@ All modules share the single `Test/node_modules` tree, so `npm install` is only 
 
 ### Running them
 
+Every manual test lives in `main.cpp`, and `-#` gives each test case its file tag, so `[#main]`
+selects exactly this family:
+
 ```bash
 ./WasmJit '~[spec]'                 # every manual test
-./WasmJit '~[#SpecSuite]'           # same set, selected by file tag
+./WasmJit -# '[#main]'              # same set, selected by file tag
 ./WasmJit 'add_core*'               # one module's cases — note the wildcard
 ./WasmJit 'add_core exports add'    # a single case, exact name
 ```
@@ -128,51 +131,90 @@ wasm-tools json-from-wast <script>.wast -o <build>/wasm_testsuite/<name>.json \
     --wasm-dir <build>/wasm_testsuite
 ```
 
-- `wasm-tools` must be on `PATH` at build time. A different binary can be selected when qmake is run;
-  the assignment is forwarded to the `Test` subproject:
+`wasm-tools` must be on `PATH` at build time. To use a different binary, pass it to qmake — the
+assignment is forwarded to the `Test` subproject:
 
-  ```bash
-  qmake Project.pro WASM_TOOLS=/path/to/wasm-tools
-  ```
+```bash
+qmake Project.pro WASM_TOOLS=/path/to/wasm-tools
+```
 
-  Because the `Test` Makefile is only regenerated when it is missing, remove
-  `build/<config>/Test/Makefile` first when changing an existing configuration.
+Because the `Test` Makefile is only regenerated when it is missing, remove
+`build/<config>/Test/Makefile` first when changing an existing configuration.
 
-- `type-subtyping.wast` is excluded, because `wasm-tools` currently refuses to parse it. A single
-  unparsable upstream file must not break the build.
+`type-subtyping.wast` is excluded, because `wasm-tools` currently refuses to parse it; a single
+unparsable upstream file must not break the build.
 
-The result on this revision is **256** JSON manifests and roughly 5 800 `.wasm` modules.
+The result on this revision is **256** scripts and roughly 5 800 `.wasm` modules.
 
-### Selecting which scripts to run
+### Every script is its own test case
 
-The fixture is data-driven: `Test/SpecSuite.cpp` walks the generated manifests and
-`Test/WastScript.cpp` models the script commands and dispatches them.
+`Test/SpecSuite.cpp` registers one Catch2 test case per converted script, named **`spec: <script>`**
+and tagged `[spec]`. So `--list-tests '[spec]'` prints all 256 scripts individually, and any single
+script can be selected by name.
 
-| Mechanism | Meaning |
+Scripts outside the curated list (see below) additionally carry the hidden marker `[.]`. Catch2 only
+hides such tests from the **default** run: they are still listed, and they run as soon as the
+selection is explicit — which is why `./WasmJit '[spec]'` runs everything.
+
+| Command | What runs |
 | --- | --- |
-| `kDefaultScripts` in `Test/SpecSuite.cpp` | the curated default list (currently empty) |
-| `WASM_SPEC_SCRIPTS=name1,name2` | run exactly these scripts |
-| `WASM_SPEC_SCRIPTS=all` | run every converted script |
+| `./WasmJit` | the manual tests + the curated spec scripts |
+| `./WasmJit '[spec]'` | all 256 spec scripts (~1.5 min) |
+| `./WasmJit 'spec: address'` | just that script |
+| `./WasmJit '*float*'` | scripts whose name matches |
+| `./WasmJit --list-tests` | the default view (50 test cases) |
+| `./WasmJit --list-tests '[spec]'` | every script, one line each (256) |
+| `./WasmJit -# --list-tags` | all tags, including `[#main]` and `[#SpecSuite]` |
 
-`WASM_SPEC_SCRIPTS` is read at run time, so trying a script does not require a rebuild.
-
-```bash
-./WasmJit '[spec]'                                     # the default list
-WASM_SPEC_SCRIPTS=local_set,memory_size ./WasmJit '[spec]'
-WASM_SPEC_SCRIPTS=all ./WasmJit '[spec]'               # a few minutes
-```
-
-`WASM_SPEC_SCRIPTS=all` forks and compiles every script in its own process, which is why it takes a
-few minutes.
-
-### Running one script out of a large selection
-
-Catch2 section filters select the per-script `DYNAMIC_SECTION` by name:
+`WASM_SPEC_SCRIPTS` is still honoured, but it now selects the **curated set** — i.e. which scripts are
+visible and therefore part of the default run:
 
 ```bash
-WASM_SPEC_SCRIPTS=all ./WasmJit '[spec]' -c const        # classic section filter
-WASM_SPEC_SCRIPTS=all ./WasmJit '[spec]' -p c:const      # path filter (Catch2 >= 3.13 behaviour)
+WASM_SPEC_SCRIPTS=address,store ./WasmJit    # default run = manual tests + those two scripts
+WASM_SPEC_SCRIPTS=all ./WasmJit              # default run = manual tests + all 256 scripts
 ```
+
+### The curated list lives in `Test/wast_supported.txt`
+
+Only a subset of the suite can currently run to completion, and that subset is a plain text file in
+the source tree (`Test/wast_supported.txt`) — one script per line, `#` comments allowed:
+
+```
+address
+address64
+local_set
+...
+```
+
+Scripts listed there are the visible ones; everything else is hidden. The file is read when the test
+binary starts, so **editing it does not require a rebuild**.
+
+It currently holds 45 of the 256 scripts, and the default run is green:
+
+```
+$ ./WasmJit
+All tests passed (111 assertions in 50 test cases)
+```
+
+#### Refreshing the list
+
+Whenever the JIT gains or loses support, regenerate the list from a full sweep:
+
+```bash
+cd build/Desktop-Debug/Test
+
+# 1. Run everything with a short per-script budget and capture the output.
+WASM_SPEC_TIMEOUT=10 ./WasmJit '[spec]' 2>&1 | tee /tmp/all.log
+
+# 2. Keep the scripts that completed without failures, i.e. lines shaped like
+#      [spec] <name>: passed=<n> failed=0 skipped=<m>      with n > 0
+#    Discard anything reported as "terminated by signal", "did not finish",
+#    "produced no report", or with failed>0 or passed=0.
+# 3. Paste the surviving names into Test/wast_supported.txt.
+```
+
+Scripts that report `passed=0 failed=0` are all-skipped — they only needed the validator or trap
+support — so they are left out: they would cost runtime without checking anything.
 
 ### Reading the output
 
@@ -190,34 +232,35 @@ failure details:
 [spec] const: line 999: assert_return failed for 'f': expected f64 9223372036854775808 but got f64
 ```
 
-A script that kills its worker process is reported instead, and the run continues with the next one:
+A worker that does not finish inside the time budget is killed and reported, and the run moves on:
 
 ```
+[spec] relaxed_madd_nmadd: did not finish within 10s, killed after 0 passing commands
+```
+
+Crashes are reported the same way, with the child's own message just above:
+
+```
+WasmJit: .../LibjitOpcodeDispatcher.cpp:745: ...: Assertion `valueStack.size() == n' failed.
 [spec] local_get: terminated by signal 6 after 0 passing commands
-```
-
-The crash reason itself is printed by the child, for example:
-
-```
-LibJit/LibjitOpcodeDispatcher.cpp:745: void LibJIT::OpcodeDispatcher::emitImplicitFunctionReturn():
-    Assertion `valueStack.size() == n' failed.
 ```
 
 > The `[spec] ...` report is written straight to stderr rather than through Catch2's reporter, so
 > structured reporters (`-r JSON`, `-r JUnit`, `-r TAP`, `-r XML`) only contain the harness's own
-> `REQUIRE_NOTHROW` assertions. Read the console output for spec results.
+> assertions. Read the console output for spec results.
 
 ### How the harness behaves
 
-Correct results are deliberately **not required yet** — the suite has to run and be available while
-the runtime is still being built out.
+Correct results are deliberately **not required yet**; the run is meant to be informative.
 
-- Every script runs in a **forked child** that pipes a compact report back. The child restores
-  default signal handlers and always leaves via `_exit()`. Aborts, traps and segfaults are reported
-  as `terminated by signal N`, and the harness carries on with the next script.
-- Outcomes are printed, not asserted, so the suite never fails the build.
-- `WASM_SPEC_STRICT=1` upgrades crashed / unfinished scripts and unexpected `assert_return` failures
-  into real test failures.
+- Every script runs in a **forked child** that pipes a compact report back. The child restores default
+  signal handlers and always leaves via `_exit()`.
+- Each child is bounded by a wall-clock **timeout**: a script that loops forever inside JIT-ed code can
+  no longer wedge the whole run. The default is 30 s, `WASM_SPEC_TIMEOUT=<seconds>` overrides it, and
+  `0` disables the limit.
+- Outcomes are printed, not asserted, so by default the tests pass no matter what the runtime does.
+- `WASM_SPEC_STRICT=1` upgrades timed-out / crashed / unfinished scripts and unexpected
+  `assert_return` failures into real test failures.
 - `WASMJIT_JIT_DUMP=1` re-enables the per-function LibJIT disassembly, which is otherwise suppressed
   because it is far too noisy for a spec run.
 
@@ -237,14 +280,15 @@ the runtime is still being built out.
 
 ### Current status (for orientation)
 
-Scripts that currently run to completion include `local_set` (20 passed), `memory_size` (40),
-`address` (210), `store` (10) and `const` (700 passed, 2 failed). Most others abort inside the
-dispatcher — expected while the JIT is mid-development.
+45 of the 256 scripts run cleanly today. The rest crash inside the dispatcher (unsupported opcode or
+missing control-flow handling), need validator/trap support that does not exist yet, or time out.
 
-### Promoting a script into the default run
+The harness already surfaces some **real** mismatches, for example:
 
-1. Try it first: `WASM_SPEC_SCRIPTS=<name> ./WasmJit '[spec]'`.
-2. If it behaves acceptably, add `"<name>"` to `kDefaultScripts` in `Test/SpecSuite.cpp`.
+- `const` — the sign of `-0.0` is lost for `f32`/`f64` (lines 671 and 999)
+- `conversions` — `i64.extend_i32_u`, `f32.convert_i64_u`, `f64.convert_i64_u` produce wrong values
+- `f32`/`f64` — `min` mishandles negative zero and NaN propagation
+- `endianness` — 64-bit `store32`, `store` and `f64.store` results are wrong
 
 ---
 
@@ -258,29 +302,33 @@ dispatcher — expected while the JIT is mid-development.
 | --- | --- |
 | `--list-tests`, `--list-tags`, `--list-reporters` | discover what exists (they honour filters) |
 | `'<pattern>'` | name spec; use `*` for partial matches |
-| `'[spec]'`, `'~[spec]'` | select / exclude by tag (`'[!spec]'` does **not** work) |
-| `-#` | add a per-file tag, then use `'[#main]'` or `'~[#SpecSuite]'` |
-| `-c <name>` / `-p c:<name>` | run a single spec script by its section name |
+| `'[spec]'`, `'~[spec]'` | select / exclude the spec suite (`'[!spec]'` does **not** work) |
+| `'spec: <script>'` | select a single spec script |
+| `-#`, then `'[#main]'` / `'[#SpecSuite]'` | per-file tags for the manual / spec families |
 | `-s` | also show successful assertions |
-| `-d yes` | show per-section durations |
+| `-d yes` | show per-test durations |
 | `-v quiet` | drop the `Filters:` / `Randomness seeded to:` banner |
 | `--colour-mode none` | no ANSI escape codes (useful for logs) |
 | `--order decl` | deterministic order (the default is `rand`) |
 | `--allow-running-no-tests` | exit 0 instead of 2 when nothing matched |
-| `-r console\|compact\|JSON\|JUnit\|TAP\|XML` | choose a reporter |
+| `-r <reporter>` | `console`, `compact`, `JSON`, `JUnit`, `TAP`, `XML`, … |
+| `--shard-count N --shard-index M` | run one of N slices of the selected test cases |
 
-Exit codes: `0` success, `1` test failure, `2` no tests matched. `-a` / `-x N` abort on failure and
-`--shard-*` split test *cases*, so neither helps the spec suite — its crashes are already isolated in
-child processes and it is a single test case.
+Exit codes: `0` success, `1` test failure, `2` no tests matched.
+
+Because every script is its own test case, `--shard-*` can now split the spec suite across processes
+(for example `--shard-count 4` gives 64 scripts per slice), and `-d yes` reports per-script timings.
+`-a` / `-x N` abort on failure, but note that crashes and timeouts inside spec scripts are not
+Catch2 failures unless `WASM_SPEC_STRICT=1` is set.
 
 Handy invocations:
 
 ```bash
-./WasmJit                                        # everything
-./WasmJit '~[spec]'                              # manual tests only
-./WasmJit '[spec]'                               # spec suite (default list)
-./WasmJit --list-tests '[spec]'                  # what would run
-./WasmJit '~[spec]' -d yes --colour-mode none | tee tests.log
+./WasmJit                                          # manual tests + curated spec scripts
+./WasmJit '[spec]'                                 # the whole spec suite
+./WasmJit 'spec: names'                            # one script
+./WasmJit '[spec]' -d yes --colour-mode none | tee spec.log
+WASM_SPEC_SCRIPTS=all ./WasmJit --list-tests       # what a full default run would cover
 ```
 
 ---

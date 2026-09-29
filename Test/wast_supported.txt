@@ -1,0 +1,62 @@
+# Scripts from extern/WasmTestsuite that currently run to completion, and are
+# therefore part of the default test run.
+#
+# Every converted script is registered as its own Catch2 test case ("spec: <name>").
+# Scripts listed here are the visible ones; everything else is tagged hidden
+# ([.]) so it is still listed by --list-tests and can be run on demand, but stays
+# out of the default run.
+#
+# Format: one script basename per line (no directory, no .wast extension).
+# Blank lines and '#' comments are ignored. Updating this file does NOT require
+# a rebuild.
+#
+# How to refresh it (see docs/TESTING.md for the full recipe):
+#   1. WASM_SPEC_TIMEOUT=10 WASM_SPEC_SCRIPTS=all ./WasmJit '[spec]' 2>&1 | tee all.log
+#   2. keep every script whose line reads  passed=<n> failed=0  with n > 0
+#      and which was neither killed by a signal nor timed out.
+
+address
+address64
+align
+align64
+array_new_data
+binary0
+binary_leb128_64
+bulk64
+call_indirect64
+custom
+exports0
+f32_bitwise
+f32_cmp
+f64_bitwise
+f64_cmp
+float_memory
+float_memory64
+float_misc
+forward
+id
+inline-module
+int_exprs
+local_set
+memory
+memory64
+memory64-imports
+memory_grow64
+memory_redundancy
+memory_redundancy64
+memory_size
+memory_size0
+memory_trap64
+names
+ref
+ref_eq
+ref_null
+skip-stack-guard-page
+stack
+store
+table64
+table_fill
+tag
+traps
+type
+type-canon

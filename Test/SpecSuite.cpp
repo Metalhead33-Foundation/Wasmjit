@@ -1,6 +1,9 @@
 #include <catch2/catch_all.hpp>
 
 #include <algorithm>
+#include <cctype>
+#include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -12,34 +15,31 @@
 #include <string>
 #include <vector>
 
+#include <poll.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #include "WastScript.hpp"
 
-// Populated by Test.pro; points at the directory the official WebAssembly test
-// suite is converted into at build time.
+// Populated by Test.pro.
+//   WASM_TESTSUITE_DIR          the converted suite in the build directory
+//   WASM_TESTSUITE_SOURCE_DIR   Test/ in the source tree (holds the curated list)
 #ifndef WASM_TESTSUITE_DIR
 #define WASM_TESTSUITE_DIR ""
+#endif
+#ifndef WASM_TESTSUITE_SOURCE_DIR
+#define WASM_TESTSUITE_SOURCE_DIR ""
 #endif
 
 namespace {
 
-// Scripts the current JIT is expected to be able to run.
-//
-// The official suite covers the whole WebAssembly feature surface, including
-// proposals this runtime does not implement yet. Correct results are
-// explicitly *not* required yet: the harness only needs to run the scripts and
-// report what happened. The build converts every `.wast` file, so any script
-// can be selected without recompiling:
-//
-//   WASM_SPEC_SCRIPTS=i32,local_get ./WasmJit "[spec]"
-//   WASM_SPEC_SCRIPTS=all              ./WasmJit "[spec]"
-//
-// Set WASM_SPEC_STRICT=1 to turn crashes and unexpected failures into test
-// failures; by default the run is purely informational.
-const std::vector<std::string> kDefaultScripts = {
-};
+// The suite is huge and the JIT is incomplete, so the "interesting" scripts are
+// curated in a plain text file in the source tree (one script per line, '#'
+// comments allowed). Scripts listed there are run by default; every other
+// converted script is registered but hidden, so it is listed and selectable
+// without being part of the default run. See docs/TESTING.md for how to refresh
+// the list.
+const char* const kSupportedScriptsFile = "wast_supported.txt";
 
 std::string readFile(const std::filesystem::path& path)
 {
@@ -50,6 +50,34 @@ std::string readFile(const std::filesystem::path& path)
 	std::stringstream buffer;
 	buffer << stream.rdbuf();
 	return buffer.str();
+}
+
+// Reads a newline separated list of names, tolerating comments and blank lines.
+// A missing file simply yields an empty list.
+std::vector<std::string> readNameList(const std::filesystem::path& path)
+{
+	std::vector<std::string> names;
+
+	std::ifstream stream(path);
+	if (!stream)
+		return names;
+
+	std::string line;
+	while (std::getline(stream, line)) {
+		const std::size_t comment = line.find('#');
+		if (comment != std::string::npos)
+			line.erase(comment);
+
+		const auto isSpace = [](char c) { return std::isspace(static_cast<unsigned char>(c)) != 0; };
+		while (!line.empty() && isSpace(line.front()))
+			line.erase(line.begin());
+		while (!line.empty() && isSpace(line.back()))
+			line.pop_back();
+
+		if (!line.empty())
+			names.push_back(line);
+	}
+	return names;
 }
 
 std::vector<std::string> scriptsFromEnvironment()
@@ -80,20 +108,19 @@ std::vector<std::string> allConvertedScripts()
 	return names;
 }
 
-std::vector<std::string> selectedScripts()
+// Time budget for a single script. A script that spins forever would otherwise
+// wedge the whole run, because the parent waits for its worker process.
+// WASM_SPEC_TIMEOUT is in seconds; 0 disables the limit.
+std::chrono::milliseconds scriptTimeout()
 {
-	std::vector<std::string> names = scriptsFromEnvironment();
-	if (names.empty())
-		return kDefaultScripts;
+	const char* raw = std::getenv("WASM_SPEC_TIMEOUT");
+	if (raw == nullptr || *raw == '\0')
+		return std::chrono::seconds(30);
 
-	if (names.size() == 1 && names.front() == "all") {
-		try {
-			return allConvertedScripts();
-		} catch (const std::exception& error) {
-			FAIL("WASM_SPEC_SCRIPTS=all: cannot list '" << WASM_TESTSUITE_DIR << "': " << error.what());
-		}
-	}
-	return names;
+	const long seconds = std::strtol(raw, nullptr, 10);
+	if (seconds <= 0)
+		return std::chrono::milliseconds(0);
+	return std::chrono::seconds(seconds);
 }
 
 bool strictMode()
@@ -101,12 +128,25 @@ bool strictMode()
 	return std::getenv("WASM_SPEC_STRICT") != nullptr;
 }
 
+// Which scripts are visible, i.e. part of the default run.
+//   WASM_SPEC_SCRIPTS unset   -> the curated list from wast_supported.txt
+//   WASM_SPEC_SCRIPTS=a,b,c   -> exactly those
+//   WASM_SPEC_SCRIPTS=all     -> every converted script
+std::vector<std::string> visibleScripts()
+{
+	std::vector<std::string> names = scriptsFromEnvironment();
+	if (!names.empty())
+		return names;
+
+	return readNameList(std::filesystem::path(WASM_TESTSUITE_SOURCE_DIR) / kSupportedScriptsFile);
+}
+
 // ── Out-of-process script execution ─────────────────────────────────────────
 //
-// The runtime currently terminates the process on an unimplemented opcode and
-// on every wasm trap, so one unsupported script would otherwise take the whole
-// test binary down. Each script therefore runs in a forked child, which pipes a
-// compact report back; the parent survives whatever the child does.
+// The runtime terminates the process on an unimplemented opcode and on every
+// wasm trap, so each script runs in a forked child that pipes a compact report
+// back. The child is bounded by a wall-clock timeout: a script that loops
+// forever inside JIT-ed code must not wedge the whole run.
 
 void writeLine(int fd, const std::string& line)
 {
@@ -125,7 +165,7 @@ std::string numberLine(char prefix, std::size_t value)
 	return std::string(1, prefix) + " " + std::to_string(value);
 }
 
-// Serialises a report on the child side. The detail lists are capped so that a
+// Serialises a report on the child side. The failure list is capped so that a
 // pathological script cannot outrun the parent's pipe reader.
 void writeReport(int fd, const Spec::ScriptReport& report)
 {
@@ -153,13 +193,17 @@ struct IsolatedRun {
 	std::map<std::string, std::size_t> skipCounts;
 	bool reported = false;    // false when the child died before finishing
 	bool signalled = false;
+	bool timedOut = false;
 	int signalNumber = 0;
 	int exitCode = 0;
+	std::chrono::milliseconds budget{0};
 };
 
-IsolatedRun runIsolated(const Spec::Script& script, const std::string& wasmDir)
+IsolatedRun runIsolated(const Spec::Script& script, const std::string& wasmDir,
+						std::chrono::milliseconds timeout)
 {
 	IsolatedRun outcome;
+	outcome.budget = timeout;
 
 	int fds[2] = {-1, -1};
 	if (::pipe(fds) != 0)
@@ -197,15 +241,47 @@ IsolatedRun runIsolated(const Spec::Script& script, const std::string& wasmDir)
 
 	::close(fds[1]);
 
+	const bool bounded = timeout.count() > 0;
+	const auto deadline = std::chrono::steady_clock::now() + timeout;
+
 	std::string stream;
 	char buffer[4096];
-	while (true) {
+	for (;;) {
+		int waitMs = -1;
+		if (bounded) {
+			const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+					deadline - std::chrono::steady_clock::now());
+			if (remaining.count() <= 0) {
+				outcome.timedOut = true;
+				break;
+			}
+			waitMs = static_cast<int>(remaining.count());
+		}
+
+		struct pollfd descriptor {};
+		descriptor.fd = fds[0];
+		descriptor.events = POLLIN;
+		const int ready = ::poll(&descriptor, 1, waitMs);
+		if (ready < 0) {
+			if (errno == EINTR)
+				continue;
+			break;
+		}
+		if (ready == 0) {
+			outcome.timedOut = true;
+			break;
+		}
+
 		const ssize_t count = ::read(fds[0], buffer, sizeof(buffer));
 		if (count <= 0)
 			break;
 		stream.append(buffer, static_cast<std::size_t>(count));
 	}
+
 	::close(fds[0]);
+
+	if (outcome.timedOut)
+		::kill(child, SIGKILL);
 
 	int status = 0;
 	while (::waitpid(child, &status, 0) < 0)
@@ -248,7 +324,13 @@ IsolatedRun runIsolated(const Spec::Script& script, const std::string& wasmDir)
 // INFO on failure, and this run is informational by design.
 void reportOutcome(const std::string& name, const IsolatedRun& outcome)
 {
-	if (outcome.signalled) {
+	if (outcome.timedOut) {
+		const auto seconds =
+				std::chrono::duration_cast<std::chrono::seconds>(outcome.budget).count();
+		std::fprintf(stderr,
+					 "[spec] %s: did not finish within %llds, killed after %zu passing commands\n",
+					 name.c_str(), static_cast<long long>(seconds), outcome.report.passed);
+	} else if (outcome.signalled) {
 		std::fprintf(stderr, "[spec] %s: terminated by signal %d after %zu passing commands\n",
 					 name.c_str(), outcome.signalNumber, outcome.report.passed);
 	} else if (!outcome.reported) {
@@ -270,43 +352,95 @@ void reportOutcome(const std::string& name, const IsolatedRun& outcome)
 	std::fflush(stderr);
 }
 
-} // namespace
-
-TEST_CASE("official WebAssembly spec testsuite", "[spec]")
+void runOneScript(const std::string& name)
 {
-	const std::vector<std::string> scripts = selectedScripts();
-
-	if (scripts.empty()) {
-		WARN("No spec scripts selected. Set WASM_SPEC_SCRIPTS=<name>[,<name>...] or "
-			 "WASM_SPEC_SCRIPTS=all. Make sure the wast conversion in Test.pro ran: "
-			 "look for a wasm_testsuite/ directory next to the test binary.");
+	if (name.empty()) {
+		WARN("The spec suite has not been converted. Build the `Test` target first and look "
+			 "for a wasm_testsuite/ directory next to the test binary; the conversion needs "
+			 "`wasm-tools` on PATH.");
 		return;
 	}
 
-	const std::string testDirectory = WASM_TESTSUITE_DIR;
-	const bool strict = strictMode();
+	const std::string directory = WASM_TESTSUITE_DIR;
 
-	for (const std::string& name : scripts) {
-		DYNAMIC_SECTION(name) {
-			// Reading and parsing happen in the parent: a missing or malformed
-			// script is a build problem, not a runtime limitation.
-			std::string json;
-			REQUIRE_NOTHROW(json = readFile(testDirectory + name + ".json"));
+	// Reading and parsing happen in the parent: a missing or malformed script is
+	// a build problem, not a runtime limitation.
+	std::string json;
+	REQUIRE_NOTHROW(json = readFile(directory + name + ".json"));
 
-			Spec::Script script;
-			REQUIRE_NOTHROW(script = Spec::Script::parse(json));
+	Spec::Script script;
+	REQUIRE_NOTHROW(script = Spec::Script::parse(json));
 
-			const IsolatedRun outcome = runIsolated(script, testDirectory);
+	const IsolatedRun outcome = runIsolated(script, directory, scriptTimeout());
 
-			// Correct results are not required yet: the run is reported, not
-			// asserted, unless WASM_SPEC_STRICT=1 was requested.
-			reportOutcome(name, outcome);
+	// Correct results are not required yet: the run is reported, not asserted,
+	// unless WASM_SPEC_STRICT=1 was requested.
+	reportOutcome(name, outcome);
 
-			if (strict) {
-				CHECK_FALSE(outcome.signalled);
-				CHECK(outcome.reported);
-				CHECK(outcome.report.failed == 0);
-			}
-		}
+	if (strictMode()) {
+		CHECK_FALSE(outcome.timedOut);
+		CHECK_FALSE(outcome.signalled);
+		CHECK(outcome.reported);
+		CHECK(outcome.report.failed == 0);
 	}
 }
+
+// ── Test-case registration ──────────────────────────────────────────────────
+//
+// One Catch2 test case per converted script, so `--list-tests` shows the whole
+// suite and any single script can be chosen by name. Scripts outside the
+// curated list carry the hidden marker [.]: they are still listed and can be
+// run explicitly, but they stay out of the default run.
+
+class ScriptInvoker final : public Catch::ITestInvoker
+{
+public:
+	explicit ScriptInvoker(std::string scriptName) : name(std::move(scriptName)) {}
+
+	void invoke() const override { runOneScript(name); }
+
+private:
+	std::string name;
+};
+
+void registerScriptTestCase(const std::string& scriptName, const std::string& testName, bool visible)
+{
+	// Only the strings are passed by reference; Catch2 copies the name and the
+	// tags into its own storage, so temporaries are safe here.
+	const std::string tags = visible ? "[spec]" : "[spec][.]";
+
+	Catch::AutoReg registrar(Catch::Detail::make_unique<ScriptInvoker>(scriptName),
+							 Catch::SourceLineInfo(__FILE__, __LINE__),
+							 Catch::StringRef(),
+							 Catch::NameAndTags(testName, tags));
+	(void)registrar;
+}
+
+void registerScriptTestCases()
+{
+	std::vector<std::string> scripts;
+	try {
+		scripts = allConvertedScripts();
+	} catch (const std::exception&) {
+		// Nothing was converted. Register one visible test case so that the
+		// problem is discoverable instead of silently having no spec tests.
+		registerScriptTestCase(std::string(), "spec suite was not converted", true);
+		return;
+	}
+
+	std::vector<std::string> visible = visibleScripts();
+	if (visible.size() == 1 && visible.front() == "all")
+		visible = scripts;
+
+	for (const std::string& script : scripts) {
+		const bool isVisible = std::find(visible.begin(), visible.end(), script) != visible.end();
+		registerScriptTestCase(script, "spec: " + script, isVisible);
+	}
+}
+
+// Registration must happen before Catch2's session starts, hence static init.
+const struct ScriptRegistrationTrigger {
+	ScriptRegistrationTrigger() { registerScriptTestCases(); }
+} scriptRegistrationTrigger;
+
+} // namespace
