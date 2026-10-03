@@ -101,6 +101,8 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 			? seg.initExprs.size()
 			: seg.initIndices.size();
 
+		if (instance.internals.tableStorage == nullptr)
+			throw std::runtime_error("active element segment references an unknown table");
 		if (tableOffset + entryCount > instance.ctx.tableSize)
 			throw std::runtime_error("Element segment out of bounds");
 
@@ -156,13 +158,13 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 				}
 			}
 
-			// Write the callable pointer into the table at the right slot.
-			instance.internals.tableStorage[tableOffset + i] = callable;
+			// Write the callable pointer into the store-owned table slot.
+			instance.internals.tableStorage->getTable()->base[tableOffset + i] = callable;
 		}
 
-		// Keep ctx.table in sync — tableStorage.data() doesn't change here
-		// since we're not resizing, but being explicit makes the invariant clear.
-		instance.ctx.table = instance.internals.tableStorage.data();
+		// The slot array is store-owned and doesn't move here (no growth), but
+		// keep ctx.table in sync explicitly to make the invariant clear.
+		instance.ctx.table = instance.internals.tableStorage->getTable()->base;
 	}
 }
 ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver)
@@ -379,7 +381,7 @@ void ModuleInstance::initializeTable()
 
 	// We're only handling a single table for now. If you add multi-table
 	// support later, this becomes a loop over module->tables with a
-	// corresponding std::vector<std::vector<WasmCallable*>> in Instance.
+	// corresponding std::vector<StoreOwnedTable*> in the internals.
 	const TableType& tableType = module->tables[0];
 
 	const uint64_t initialSize = tableType.limits.initial;
@@ -387,17 +389,17 @@ void ModuleInstance::initializeTable()
 		? tableType.limits.maximum.value()
 		: UINT64_MAX;
 
-	// All slots start as null — meaning "uninitialized, traps on call_indirect".
-	// std::vector zero-initializes pointer types when given a count and no value,
-	// but nullptr is explicit and self-documenting here.
-	internals.tableStorage.resize(static_cast<size_t>(initialSize), nullptr);
+	// Tables are owned by the (global) Store; the instance only borrows one.
+	// Slots start null — meaning "uninitialized, traps on call_indirect".
+	const Store::TableId id = Store::global().createTable(initialSize, maxSize);
+	internals.tableStorage = Store::global().storeOwnedTable(id);
+	if (internals.tableStorage == nullptr)
+		throw std::runtime_error("failed to allocate table");
 
-	// Point the VMContext at the underlying array. tableStorage must not be
-	// resized after this point except through growTable(), which re-syncs the
-	// ctx pointers afterward.
-	ctx.table     = internals.tableStorage.data();
-	ctx.tableSize = initialSize;
-	ctx.tableMax  = maxSize;
+	const TableInstance* table = internals.tableStorage->getTable();
+	ctx.table     = table->base;
+	ctx.tableSize = table->size;
+	ctx.tableMax  = table->max;
 }
 
 Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
@@ -505,12 +507,18 @@ int32_t ModuleInstance::growMemory(uint32_t memIdx, uint32_t deltaPages) {
 }
 
 bool ModuleInstance::growTable(uint32_t deltaEntries) {
-	const size_t newSize = internals.tableStorage.size() + deltaEntries;
-	if (ctx.tableMax != UINT64_MAX && newSize > ctx.tableMax)
+	if (internals.tableStorage == nullptr)
 		return false;
-	internals.tableStorage.resize(newSize, nullptr); // Null = uninitialized slot, traps on call_indirect
-	ctx.table = internals.tableStorage.data();
-	ctx.tableSize = static_cast<uint64_t>(newSize);
+
+	// The Store owns the table (and therefore its growth policy/limits).
+	if (!internals.tableStorage->grow(deltaEntries))
+		return false;
+
+	// Re-sync the VMContext: growing may have moved the slot array.
+	const TableInstance* table = internals.tableStorage->getTable();
+	ctx.table     = table->base;
+	ctx.tableSize = table->size;
+	ctx.tableMax  = table->max;
 	return true;
 }
 
@@ -585,10 +593,10 @@ void ModuleInstance::tableInit(uint32_t elemIdx, uint32_t dstOffset, uint32_t sr
 				}
 			}
 		}
-		internals.tableStorage[dstOffset + i] = callable;
+		internals.tableStorage->getTable()->base[dstOffset + i] = callable;
 	}
 
-	ctx.table = internals.tableStorage.data();
+	ctx.table = internals.tableStorage->getTable()->base;
 }
 
 void ModuleInstance::elemDrop(uint32_t elemIdx)

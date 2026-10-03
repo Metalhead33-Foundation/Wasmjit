@@ -128,6 +128,28 @@ ordinary memories use a growable buffer (`PrivateLinearMemory`). Multi-memory
 is fully wired: memory instructions carry a `MemIdx`, and the JIT indexes
 `VMContext::memories` at compile time.
 
+### Other store-owned entities
+
+The same pattern extends to every runtime entity. The Store now also owns:
+
+- **The runtime type registry** (`TypeRegistry`, `WasmTypeRegistry.hpp`). Each
+  parsed module registers its type block; the registry owns the block's storage
+  and `Module::types` is a non-owning `std::span<const Subtype>` over it. Type
+  indices remain module-local, so `module.types[i]` is unchanged. Blocks are
+  heap-allocated and never relocated, so the views stay valid for the process
+  lifetime.
+- **Tables** (`StoreOwnedTable` / `TableInstance`, `WasmTable.hpp`). The store
+  owns the slot array (`Callable**`); `ModuleInstance` borrows a
+  `StoreOwnedTable*`, and `VMContext::table/tableSize/tableMax` are kept in sync
+  with its `TableInstance` (re-synced on `table.grow`).
+
+The remaining entity kinds are **pre-declared** in `Store` (`StoreOwnedGlobal`,
+`StoreOwnedTag`, `StoreOwnedFunction`, `StoreOwnedElementSegment`,
+`StoreOwnedDataSegment`, and the `GlobalId` / `TagId` / `FunctionId` /
+`SegmentId` aliases) so the ownership boundary is explicit and the migration is
+mechanical once each gains runtime behaviour. GC-dependent state (`GcHeap`) is
+deferred: `ModuleInstance::gcObjectTypes` still acts as a placeholder allocator.
+
 ### `Callable` (`WasmBase/WasmValue.hpp`)
 
 Universal function reference stored in tables and import storage.

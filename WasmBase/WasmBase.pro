@@ -14,7 +14,9 @@ SOURCES += \
         WasmRegistryImportResolver.cpp \
         WasmSection.cpp \
         WasmStore.cpp \
-        WasmType.cpp
+        WasmTable.cpp \
+        WasmType.cpp \
+        WasmTypeRegistry.cpp
 
 HEADERS += \
     WasmContext.hpp \
@@ -29,6 +31,8 @@ HEADERS += \
     WasmRuntime.hpp \
     WasmSection.hpp \
     WasmStore.hpp \
+    WasmTable.hpp \
     WasmType.hpp \
+    WasmTypeRegistry.hpp \
     WasmVMContext.hpp \
     WasmValue.hpp

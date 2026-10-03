@@ -8,7 +8,7 @@ Store& Store::global()
 	return instance;
 }
 
-Store::Store() : nextMemoryId(0)
+Store::Store() : nextMemoryId(0), nextTableId(0)
 {
 }
 
@@ -44,6 +44,28 @@ bool Store::growMemory(LinearMemory* memory, uint64_t deltaPages)
 		return false;
 	auto* owned = static_cast<StoreOwnedMemory*>(memory->hostData);
 	return owned->growMemory(deltaPages);
+}
+
+Store::TableId Store::createTable(uint64_t initialSize, uint64_t maxSize)
+{
+	const TableId id = nextTableId.fetch_add(1);
+
+	// unique_ptr keeps the StoreOwnedTable at a stable address, so the
+	// TableInstance* handed out below stays valid across later insertions.
+	tables.emplace(id, std::make_unique<StoreOwnedTable>(initialSize, maxSize));
+	return id;
+}
+
+StoreOwnedTable* Store::storeOwnedTable(TableId id)
+{
+	auto it = tables.find(id);
+	return it == tables.end() ? nullptr : it->second.get();
+}
+
+TableInstance* Store::table(TableId id)
+{
+	StoreOwnedTable* owned = storeOwnedTable(id);
+	return owned == nullptr ? nullptr : owned->getTable();
 }
 
 } // namespace WASM

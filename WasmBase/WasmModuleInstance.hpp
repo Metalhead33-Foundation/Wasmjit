@@ -7,8 +7,9 @@
 #include <unordered_map>
 namespace WASM {
 
-// Forward declaration
+// Forward declarations
 class ModuleInstantiator;
+class StoreOwnedTable;
 
 struct ModuleInstanceInternals {
 	// These own the storage that ctx's pointers point into.
@@ -20,7 +21,9 @@ struct ModuleInstanceInternals {
 	// It never needs resizing after instantiation, so the pointers stay valid.
 	std::vector<LinearMemory*> memoryRefs;
 	std::vector<Value>     globalsStorage;
-	std::vector<Callable*> tableStorage;
+	// Tables are owned by the Store as well; this is a borrowed pointer to the
+	// store-owned table backing ctx.table/tableSize/tableMax. Not owned here.
+	StoreOwnedTable*       tableStorage = nullptr;
 	std::vector<Callable> internalCallables;
 	std::vector<Callable>  importStorage; // Owns the WasmCallable objects for imports
 	std::vector<bool> dataSegmentDropped;

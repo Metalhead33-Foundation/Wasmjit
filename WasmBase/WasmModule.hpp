@@ -13,7 +13,9 @@ struct Module
 public:
 	uint32_t version;
 	std::vector<Section> sections;
-	std::vector<Subtype> types;
+	// Non-owning view into the Store's TypeRegistry (see WasmTypeRegistry.hpp).
+	// Indices stay module-local, so this is exactly the module's slice.
+	std::span<const Subtype> types;
 	std::vector<ImportFunction> importFunctions;
 	std::vector<ImportTable> importTables;
 	std::vector<ImportMemory> importMemories;
@@ -53,7 +55,7 @@ private:
 	void processCustomSection(Elv::Io::Device& file, const Section& section);
 	void processNameSection(Elv::Io::Device& file, const Section& section);
 	// Type processors
-	void processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t numSubTypes);
+	void processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t numSubTypes, std::vector<Subtype>& out);
 	std::vector<uint8_t> parseInitExpr(DWasmStream& stream);
 	void handleComplexElementSegment(DWasmStream& stream, ElementSegment& seg);
 public:

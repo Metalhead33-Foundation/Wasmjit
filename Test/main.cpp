@@ -2,6 +2,7 @@
 #include <catch2/catch_all.hpp>
 
 #include "helper.hpp"
+#include "WasmBase/WasmStore.hpp"
 
 Euph::Conf::Configuration GLOBAL_CONFIGURATION;
 
@@ -164,4 +165,38 @@ TEST_CASE("imported memory is shared between two module instances")
 	// ...and symmetrically, B writes and A reads it.
 	WASM::callCallable<void>(*bStore, int32_t(4), int32_t(7));
 	REQUIRE(WASM::callCallable<int32_t>(*aLoad, int32_t(4)) == 7);
+}
+
+TEST_CASE("store owns the runtime type registry")
+{
+	WASM::Module module = loadTestModule("add_core");
+	REQUIRE(!module.types.empty());
+
+	// Module::types is a non-owning view into the Store-owned registry.
+	REQUIRE(WASM::Store::global().types().typeCount() >= module.types.size());
+
+	// The view must survive another module registering its own type block.
+	const bool firstIsFunction = module.types[0].isFunction();
+	WASM::Module other = loadTestModule("loop_test");
+	REQUIRE(!other.types.empty());
+	REQUIRE(module.types[0].isFunction() == firstIsFunction);
+}
+
+TEST_CASE("store owns tables and table.grow works")
+{
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("table_grow", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+
+	auto size = loaded.instance->exportedFunction("size");
+	auto grow = loaded.instance->exportedFunction("grow");
+	REQUIRE(size.has_value());
+	REQUIRE(grow.has_value());
+
+	REQUIRE(WASM::callCallable<int32_t>(*size) == 2);
+	REQUIRE(WASM::callCallable<int32_t>(*grow, int32_t(2)) == 2); // returns old size
+	REQUIRE(WASM::callCallable<int32_t>(*size) == 4);
+	REQUIRE(WASM::callCallable<int32_t>(*grow, int32_t(5)) == -1); // 4 + 5 > max 5
+	REQUIRE(WASM::callCallable<int32_t>(*size) == 4);
 }

@@ -1,6 +1,8 @@
 #include "WasmModule.hpp"
+#include "WasmStore.hpp"
 #include <iostream>
 #include <stdexcept>
+#include <utility>
 
 namespace WASM {
 typedef Elv::Io::DataStream<Elv::Util::Endian::Little> DWasmStream;
@@ -35,6 +37,10 @@ void Module::processTypeSection(Elv::Io::Device& file, const Section& section)
 	DWasmStream wasmStream(file);
 	uint32_t numGroups;
 	wasmStream >> Elv::Io::Leb(numGroups);
+
+	// Parse into a scratch buffer; the Store's TypeRegistry takes ownership of
+	// the finished block and we keep a non-owning span view of it.
+	std::vector<Subtype> parsedTypes;
 	for(uint32_t i = 0; i < numGroups; ++i)
 	{
 		uint8_t typePrefix;
@@ -48,8 +54,10 @@ void Module::processTypeSection(Elv::Io::Device& file, const Section& section)
 			numSubtypes = 1;
 			file.seek(-1, Elv::Io::SeekOrigin::CUR);
 		}
-		processSubtypes(wasmStream, i, numSubtypes);
+		processSubtypes(wasmStream, i, numSubtypes, parsedTypes);
 	}
+
+	types = Store::global().types().registerModule(std::move(parsedTypes));
 }
 
 void Module::processImportSection(Elv::Io::Device& file, const Section& section)
@@ -398,8 +406,9 @@ void Module::processNameSection(Elv::Io::Device& file, const Section& section)
 	}
 }
 
-void Module::processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t numSubTypes)
+void Module::processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t numSubTypes, std::vector<Subtype>& out)
 {
+	(void)typeNum;
 	for(uint32_t i = 0; i < numSubTypes; ++i)
 	{
 		Subtype st;
@@ -451,7 +460,7 @@ void Module::processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t num
 			a.elementType.isMutable = (mut == 0x01);
 			st.composite = a;
 		}
-		types.push_back(st);
+		out.push_back(st);
 	}
 }
 
