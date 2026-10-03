@@ -1,9 +1,11 @@
 #include "WasmModuleInstance.hpp"
 #include "WasmException.hpp"
+#include "WasmStore.hpp"
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <Elvavena/Io/ElvDataStream.hpp>
 #include <cstring>
 #include <cstdlib>
+#include <stdexcept>
 namespace WASM {
 
 std::unique_ptr<ModuleInstance> ModuleInstantiator::instantiate(const Module& module, ImportResolver& resolver)
@@ -55,15 +57,21 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 			Euph::Io::ConstBufferDevice::span_cast<uint8_t>(seg.offsetExpr), instance);
 		const uint64_t offset = static_cast<uint64_t>(offsetVal.i32);
 
+		// Active segments name their target memory explicitly (mode 0 implies
+		// memory 0; mode 2 carries a memory index — multi-memory proposal).
+		if (seg.memoryIdx >= internals.memoryRefs.size())
+			throw std::runtime_error("active data segment references an unknown memory");
+		LinearMemory* memory = internals.memoryRefs[seg.memoryIdx];
+
 		// Wasm spec: trap if the segment would write past the end of memory.
 		// This is a hard instantiation failure, not a soft error.
-		if (offset + seg.data.size() > instance.ctx.memorySize)
-			throw SegmentOutOfBoundsException(offset, seg.data.size(),instance.ctx.memorySize);
+		if (offset + seg.data.size() > memory->memorySize)
+			throw SegmentOutOfBoundsException(offset, seg.data.size(), memory->memorySize);
 
 		// The actual copy. memoryBase is already a uint8_t*, so this is
 		// just a pointer-offset write — no JIT involvement needed.
 		std::memcpy(
-			instance.ctx.memoryBase + offset,
+			memory->memoryBase + offset,
 			seg.data.data(),
 			seg.data.size());
 	}
@@ -169,11 +177,11 @@ ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver)
 	// can evaluate any initializer expressions (which might call imports).
 	resolveImports(resolver);
 
-	// ── Step 2: Allocate linear memory ─────────────────────────────
-	// Use the memory type from the module to set the initial size and max.
-	// If memory was imported, resolveImports() already set ctx.memoryBase;
-	// we skip allocation in that case.
-	initializeMemory();
+	// ── Step 2: Set up the memory index space ──────────────────────
+	// Imported memories were resolved by resolveImports(); locally-defined
+	// ones are allocated in the Store here. Either way the instance only
+	// borrows the resulting LinearMemory*.
+	initializeMemories();
 
 	// ── Step 3: Initialize globals ──────────────────────────────────
 	// Global initializer expressions are constant-only in MVP Wasm,
@@ -243,10 +251,11 @@ void ModuleInstance::registerExports(ImportRegistrar& registrar, std::string_vie
 			break;
 		}
 		case ExternalKind::Memory: {
-			if (ex.index != 0)
+			// Publish the borrowed view so that other modules can import the
+			// very same linear memory (the "shared memory" case).
+			if (ex.index >= internals.memoryRefs.size())
 				std::abort();
-			registrar.registerMemory(moduleName, ex.name,
-								 ImportedMemory{ctx.memoryBase, ctx.memorySize, ctx.memoryMax});
+			registrar.registerMemory(moduleName, ex.name, internals.memoryRefs[ex.index]);
 			break;
 		}
 		case ExternalKind::Table: {
@@ -286,28 +295,53 @@ void ModuleInstance::resolveImports(ImportResolver& resolver)
 	ctx.importedFunctions      = internals.importStorage.data();
 	ctx.importedFunctionCount  = static_cast<uint32_t>(internals.importStorage.size());
 
-	// Repeat analogously for imported globals, memories, tables, tags...
-	// (elided here for brevity, but follows the same resolve-then-assign pattern)
+	// ── Memory imports ──────────────────────────────────────────────
+	// Resolve imported memories first: they occupy the low indices of the
+	// memory index space. The result is a borrowed LinearMemory* owned by
+	// the Store — resolving the same import from two modules yields the
+	// same pointer, which is how two modules share one linear memory.
+	internals.memoryRefs.reserve(module->importMemories.size() + module->memories.size());
+	for (const auto& imp : module->importMemories) {
+		std::optional<LinearMemory*> memory =
+			resolver.resolveMemory(imp.moduleName, imp.fieldName, imp.memory);
+		if (!memory.has_value())
+			throw UnresolvedImportException(imp.moduleName, imp.fieldName);
+		internals.memoryRefs.push_back(memory.value());
+	}
+
+	// Imported globals, tables and tags follow the same resolve-then-assign
+	// pattern; they are handled elsewhere (globals/tables) or not yet wired.
 }
 
-void ModuleInstance::initializeMemory()
+void ModuleInstance::initializeMemories()
 {
-	// A module may define zero or one memory (in MVP Wasm).
-	if (module->memories.empty()) return;
+	// A module may define zero or more memories (MVP allows one; the
+	// multi-memory proposal allows several). Imported memories were already
+	// appended to memoryRefs by resolveImports(), in import order; the
+	// locally-defined ones follow here.
+	Store& store = Store::global();
 
-	const MemoryType& memType = module->memories[0];
-	const uint64_t initialBytes =
-		static_cast<uint64_t>(memType.limits.initial) * 0x10000; // pages → bytes
-	const uint64_t maxBytes = memType.limits.maximum.has_value()
-		? static_cast<uint64_t>(memType.limits.maximum.value()) * 0x10000
-		: UINT64_MAX;
+	for (const MemoryType& memType : module->memories) {
+		const bool isShared = (memType.limits.flags & 0x02) != 0; // threads proposal
+		const uint64_t initialPages = memType.limits.initial;
+		const uint64_t maxPages = memType.limits.maximum.has_value()
+			? memType.limits.maximum.value()
+			: UINT64_MAX;
 
-	// Wasm spec requires memory to be zero-initialized.
-	internals.linearMemory.resize(initialBytes, 0);
+		const Store::MemoryId id = store.createLinearMemory(initialPages, maxPages, isShared);
+		LinearMemory* memory = store.memory(id);
+		if (memory == nullptr)
+			throw std::runtime_error("failed to allocate linear memory");
+		// Wasm requires new memories to be zero-initialized; both store-backed
+		// memory kinds guarantee this at allocation.
+		internals.memoryRefs.push_back(memory);
+	}
 
-	ctx.memoryBase = internals.linearMemory.data();
-	ctx.memorySize = initialBytes;
-	ctx.memoryMax  = maxBytes;
+	// The VMContext points straight at the borrowed index space. Because the
+	// Store keeps each memory at a stable address and memoryRefs is final at
+	// this point, ctx.memories stays valid for the lifetime of the instance.
+	ctx.memories    = internals.memoryRefs.data();
+	ctx.memoryCount = static_cast<uint32_t>(internals.memoryRefs.size());
 }
 
 void ModuleInstance::initializeGlobals()
@@ -358,9 +392,9 @@ void ModuleInstance::initializeTable()
 	// but nullptr is explicit and self-documenting here.
 	internals.tableStorage.resize(static_cast<size_t>(initialSize), nullptr);
 
-	// Point the VMContext at the underlying array. As with linearMemory,
-	// tableStorage must not be resized after this point except through
-	// growTable(), which re-syncs the ctx pointers afterward.
+	// Point the VMContext at the underlying array. tableStorage must not be
+	// resized after this point except through growTable(), which re-syncs the
+	// ctx pointers afterward.
 	ctx.table     = internals.tableStorage.data();
 	ctx.tableSize = initialSize;
 	ctx.tableMax  = maxSize;
@@ -456,17 +490,18 @@ Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 	return result;
 }
 
-bool ModuleInstance::growMemory(uint32_t deltaPages) {
-	// Wasm page size is exactly 64KiB = 65536 bytes = 0x10000.
-	// Check against memoryMax before committing.
-	const size_t delta = static_cast<size_t>(deltaPages) * 0x10000;
-	const size_t newSize = internals.linearMemory.size() + delta;
-	if (ctx.memoryMax != UINT64_MAX && newSize > ctx.memoryMax)
-		return false; // Caller should turn this into a Wasm trap
-	internals.linearMemory.resize(newSize, 0); // Wasm requires new pages to be zero-initialized
-	ctx.memoryBase = internals.linearMemory.data();
-	ctx.memorySize = static_cast<uint64_t>(newSize);
-	return true;
+int32_t ModuleInstance::growMemory(uint32_t memIdx, uint32_t deltaPages) {
+	if (memIdx >= internals.memoryRefs.size())
+		return -1;
+
+	LinearMemory* memory = internals.memoryRefs[memIdx];
+	const uint32_t oldPages = static_cast<uint32_t>(memory->memorySize / 0x10000);
+
+	// The Store owns the memory (and therefore its growth policy/limits).
+	if (!Store::growMemory(memory, deltaPages))
+		return -1; // Caller turns this into a Wasm trap
+
+	return static_cast<int32_t>(oldPages);
 }
 
 bool ModuleInstance::growTable(uint32_t deltaEntries) {
@@ -479,20 +514,23 @@ bool ModuleInstance::growTable(uint32_t deltaEntries) {
 	return true;
 }
 
-void ModuleInstance::memoryInit(uint32_t dataIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len)
+void ModuleInstance::memoryInit(uint32_t memIdx, uint32_t dataIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len)
 {
+	if (memIdx >= internals.memoryRefs.size())
+		std::abort();
 	if (dataIdx >= module->dataSegments.size())
 		std::abort();
 	if (internals.dataSegmentDropped[dataIdx])
 		std::abort();
 
+	LinearMemory* memory = internals.memoryRefs[memIdx];
 	const DataSegment& seg = module->dataSegments[dataIdx];
 	if (srcOffset > seg.data.size() || len > seg.data.size() - srcOffset)
 		std::abort();
-	if (static_cast<uint64_t>(dstOffset) + len > ctx.memorySize)
+	if (static_cast<uint64_t>(dstOffset) + len > memory->memorySize)
 		std::abort();
 
-	std::memcpy(ctx.memoryBase + dstOffset, seg.data.data() + srcOffset, len);
+	std::memcpy(memory->memoryBase + dstOffset, seg.data.data() + srcOffset, len);
 }
 
 void ModuleInstance::dataDrop(uint32_t dataIdx)

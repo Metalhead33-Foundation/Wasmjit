@@ -4,14 +4,13 @@
 #include <optional>
 #include "WasmValue.hpp"
 namespace WASM {
-// Small helper structs returned by resolveMemory / resolveTable,
-// since those need to return more than one value.
-struct ImportedMemory {
-	uint8_t*  base;
-	uint64_t  currentSize; // in bytes
-	uint64_t  maxSize;     // UINT64_MAX = unbounded
-};
+// Linear memories are owned by the (single, global) Store. A resolved memory
+// import is therefore just a borrowed pointer into that store — there is
+// deliberately no separate "ImportedMemory" handle any more.
+struct LinearMemory;
 
+// Small helper struct returned by resolveTable, since it needs to return
+// more than one value.
 struct ImportedTable {
 	Callable** base;
 	uint64_t       currentSize;
@@ -42,7 +41,7 @@ public:
 	virtual void registerMemory(
 		std::string_view moduleName,
 		std::string_view fieldName,
-		const ImportedMemory& memory) = 0;
+		LinearMemory* memory) = 0;
 
 	virtual void registerTable(
 		std::string_view moduleName,
@@ -74,12 +73,11 @@ public:
 		std::string_view fieldName,
 		const GlobalType& type) = 0;
 
-	// Resolve a memory import. Returns a raw pointer to an already-managed
-	// memory region, plus its current size and max. The instance does NOT
-	// take ownership — the resolver owns the backing storage.
-	// (Shared/imported memories are relatively rare; this covers WASI's
-	// pattern of pre-allocating a memory region for a module.)
-	virtual std::optional<ImportedMemory> resolveMemory(
+	// Resolve a memory import. Returns a borrowed pointer to a linear memory
+	// owned by the Store; the instance does NOT take ownership. Two modules
+	// that resolve the same (moduleName, fieldName) receive the same pointer,
+	// which is exactly what "sharing a linear memory" means at this layer.
+	virtual std::optional<LinearMemory*> resolveMemory(
 		std::string_view moduleName,
 		std::string_view fieldName,
 		const MemoryType& type) = 0;

@@ -10,11 +10,15 @@ struct Module;
 // ── The raw POD context passed as arg0 to every JIT-compiled function. ──
 // Must remain standard-layout. The JIT accesses fields via offsetof().
 // NEVER add std::vector, virtual functions, or non-trivial members here.
+// TODO: Refactor to support multiple memories and shared memories, using the struct LinearMemory
 struct VMContext {
 	// Hot fields first — memory access is the most frequent operation.
-	uint8_t*       memoryBase;    // Base of linear memory (offset 0 for cheap addressing)
-	uint64_t       memorySize;    // Current size in bytes
-	uint64_t       memoryMax;     // Max size in bytes
+	// Pointer to the instance's memory index space: an array of `memoryCount`
+	// LinearMemory pointers owned by the Store. Imported memories occupy the
+	// low indices, followed by the module's own memories, exactly as in the
+	// Wasm memory index space.
+	LinearMemory* const* memories;
+	uint32_t             memoryCount;
 
 	const Module*    module;        // Runtime type graph and metadata for GC/reference checks
 
@@ -40,12 +44,11 @@ struct VMContext {
 	void*          hostData;
 
 	// --- Future proposals go here as arrays: ---
-	// uint8_t**      memories;   // multi-memory
 	// Callable*** tables;    // multi-table
 };
 
-static_assert(offsetof(VMContext, memoryBase) == 0,
-			  "VMContext::memoryBase must remain the first field for JIT ABI compatibility");
+static_assert(offsetof(VMContext, memories) == 0,
+			  "VMContext::memories must remain the first field for JIT ABI compatibility");
 static_assert(std::is_standard_layout_v<VMContext>,
 			  "VMContext must remain standard-layout for offsetof() access from the JIT");
 

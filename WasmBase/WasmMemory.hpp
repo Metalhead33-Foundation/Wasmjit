@@ -33,6 +33,7 @@ public:
 	explicit StoreOwnedMemory(uint64_t initialPages, uint64_t maxPages, bool isShared);
 	virtual ~StoreOwnedMemory() = default;
 	const LinearMemory* getMemory() const;
+	LinearMemory* getMemory();
 	// Returns false on trap-worthy failure (exceeds max). Engine translates to a Wasm trap.
 	virtual bool growMemory(uint64_t deltaPages) = 0;
 };

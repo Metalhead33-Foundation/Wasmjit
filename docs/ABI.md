@@ -58,8 +58,8 @@ instance->context()->hostData = &myAppState;
 ```cpp
 void my_native_func(WASM::VMContext* vm, int32_t arg1, double arg2) {
     // vm is the CALLER's VMContext — access everything the module sees:
-    //   vm->memoryBase  — linear memory
-    //   vm->memorySize  — current memory size
+    //   vm->memories    — array of LinearMemory* (imports first, then locals)
+    //   vm->memoryCount — number of entries in vm->memories
     //   vm->globals     — global variables
     //   vm->table       — function table
     //   vm->hostData    — embedder state (set after instantiation)
@@ -95,12 +95,11 @@ dangling pointer on its next cross-module call.
 
 Plain-old-data struct passed as arg0 to every JIT function.
 
-| Field                  | Type            | Purpose                                                |
-|------------------------|-----------------|--------------------------------------------------------|
-| `memoryBase`           | `uint8_t*`      | Linear memory base (offset 0 for cheap addressing)     |
-| `memorySize`           | `uint64_t`      | Current memory size in bytes                           |
-| `memoryMax`            | `uint64_t`      | Max memory size in bytes                               |
-| `module`               | `const Module*` | Type graph metadata for GC/reference checks            |
+| Field                  | Type                   | Purpose                                            |
+|------------------------|------------------------|----------------------------------------------------|
+| `memories`             | `LinearMemory* const*` | Memory index space (imports first, then locals)    |
+| `memoryCount`          | `uint32_t`             | Number of entries in `memories`                    |
+| `module`               | `const Module*`        | Type graph metadata for GC/reference checks        |
 | `globals`              | `Value*`        | Flat array of global values                            |
 | `table`                | `Callable**`    | Function table for `call_indirect`                     |
 | `tableSize`            | `uint64_t`      | Current table size                                     |
@@ -108,6 +107,26 @@ Plain-old-data struct passed as arg0 to every JIT function.
 | `importedFunctions`    | `Callable*`     | Imported function handles (import section order)       |
 | `importedFunctionCount`| `uint32_t`      | Number of imported functions                           |
 | `hostData`             | `void*`         | Opaque pointer for embedder state                      |
+
+### Linear memory ownership (`Store`)
+
+Linear memories are **not** owned by `ModuleInstance`. They are allocated by
+the single global `Store` (`WASM::Store::global()`) and referenced through the
+borrowed `LinearMemory*` entries in `VMContext::memories`. Because the Store
+keeps every memory at a stable address, those pointers stay valid even as more
+memories are created by later instantiations.
+
+Two modules that import the same `(module, field)` memory name resolve to the
+**same** `LinearMemory*`; that is what "shared memory" means here (atomics are
+not involved). The import/export name mapping lives in
+`RegistryImportResolver`, which stores borrowed pointers and never owns storage.
+The Store owns the storage and provides `growMemory` (recovering the owning
+`StoreOwnedMemory` from the back-pointer in `LinearMemory::hostData`).
+
+Unbounded shared memories reserve address space up front (`SharedLinearMemory`);
+ordinary memories use a growable buffer (`PrivateLinearMemory`). Multi-memory
+is fully wired: memory instructions carry a `MemIdx`, and the JIT indexes
+`VMContext::memories` at compile time.
 
 ### `Callable` (`WasmBase/WasmValue.hpp`)
 

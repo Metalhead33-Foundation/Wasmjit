@@ -13,7 +13,12 @@ class ModuleInstantiator;
 struct ModuleInstanceInternals {
 	// These own the storage that ctx's pointers point into.
 	// After any reallocation, the corresponding ctx field MUST be updated.
-	std::vector<uint8_t>       linearMemory;
+	//
+	// Linear memories are the exception: they are owned by the (global) Store
+	// and only *borrowed* here. `memoryRefs` is the memory index space that
+	// ctx.memories points at (imports first, then the module's own memories).
+	// It never needs resizing after instantiation, so the pointers stay valid.
+	std::vector<LinearMemory*> memoryRefs;
 	std::vector<Value>     globalsStorage;
 	std::vector<Callable*> tableStorage;
 	std::vector<Callable> internalCallables;
@@ -42,7 +47,7 @@ private:
 	// Nuff said.
 	ModuleInstanceInternals internals;
 	void resolveImports(ImportResolver& importResolver);
-	void initializeMemory();
+	void initializeMemories();
 	void initializeGlobals();
 	void initializeTable();
 	Value evalConstantExpr(const std::span<const std::byte>& expr);
@@ -56,12 +61,13 @@ public:
 	std::optional<Callable> exportedFunction(std::string_view name) const;
 	void registerExports(ImportRegistrar& registrar, std::string_view moduleName) const;
 
-	// Called when memory.grow executes — reallocates and updates ctx.memoryBase.
-	bool growMemory(uint32_t deltaPages);
+	// Called when memory.grow executes. Delegates to the owning Store and
+	// returns the previous page count, or -1 on a trap-worthy failure.
+	int32_t growMemory(uint32_t memIdx, uint32_t deltaPages);
 
 	// Called when table.grow executes.
 	bool growTable(uint32_t deltaEntries);
-	void memoryInit(uint32_t dataIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len);
+	void memoryInit(uint32_t memIdx, uint32_t dataIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len);
 	void dataDrop(uint32_t dataIdx);
 	void tableInit(uint32_t elemIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len);
 	void elemDrop(uint32_t elemIdx);

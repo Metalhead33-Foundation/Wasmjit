@@ -2,6 +2,7 @@
 #define WASMREGISTRYIMPORTRESOLVER_HPP
 
 #include "WasmImport.hpp"
+#include "WasmMemory.hpp"
 #include <Elvavena/Util/ElvStringhashMap.hpp>
 
 namespace WASM {
@@ -16,19 +17,21 @@ public:
 	struct ModuleRegistry {
 		Elv::Util::UnorderedStrMap<Callable> functions;
 		Elv::Util::UnorderedStrMap<Value> globals;
-		Elv::Util::UnorderedStrMap<ImportedMemory> memories;
+		// Borrowed views into memories owned by the (global) Store. Registering
+		// the same pointer under two names is how memory sharing happens.
+		Elv::Util::UnorderedStrMap<LinearMemory*> memories;
 		Elv::Util::UnorderedStrMap<ImportedTable> tables;
 		Elv::Util::UnorderedStrMap<uint32_t> tags;
 
 		void registerFunction(std::string_view fieldName, const Callable& callable);
 		void registerGlobal(std::string_view fieldName, const Value& value);
-		void registerMemory(std::string_view fieldName, const ImportedMemory& memory);
+		void registerMemory(std::string_view fieldName, LinearMemory* memory);
 		void registerTable(std::string_view fieldName, const ImportedTable& table);
 		void registerTag(std::string_view fieldName, uint32_t tagValue);
 
 		std::optional<Callable> resolveFunction(std::string_view fieldName, uint32_t typeIdx);
 		std::optional<Value> resolveGlobal(std::string_view fieldName, const GlobalType& type);
-		std::optional<ImportedMemory> resolveMemory(std::string_view fieldName, const MemoryType& type);
+		std::optional<LinearMemory*> resolveMemory(std::string_view fieldName, const MemoryType& type);
 		std::optional<ImportedTable> resolveTable(std::string_view fieldName, const TableType& type);
 		std::optional<uint32_t> resolveTag(std::string_view fieldName, uint32_t typeIdx);
 	};
@@ -38,7 +41,7 @@ public:
 	void registerGlobal(std::string_view moduleName, std::string_view fieldName,
 						const Value& value) override;
 	void registerMemory(std::string_view moduleName, std::string_view fieldName,
-						const ImportedMemory& memory) override;
+						LinearMemory* memory) override;
 	void registerTable(std::string_view moduleName, std::string_view fieldName,
 					   const ImportedTable& table) override;
 	void registerTag(std::string_view moduleName, std::string_view fieldName,
@@ -54,7 +57,7 @@ public:
 		std::string_view fieldName,
 		const GlobalType& type) override;
 
-	std::optional<ImportedMemory> resolveMemory(
+	std::optional<LinearMemory*> resolveMemory(
 		std::string_view moduleName,
 		std::string_view fieldName,
 		const MemoryType& type) override;

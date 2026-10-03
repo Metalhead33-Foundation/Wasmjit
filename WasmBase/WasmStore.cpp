@@ -1,26 +1,49 @@
 #include "WasmStore.hpp"
 
 namespace WASM {
-std::unique_ptr<StoreOwnedMemory> Store::_createLinearMemory__(uint64_t initialPages, uint64_t maxPages, bool isShared)
+
+Store& Store::global()
 {
-	if(isShared) {
-		return std::make_unique<SharedLinearMemory>(initialPages, maxPages);
-	} else {
-		return std::make_unique<PrivateLinearMemory>(initialPages, maxPages);
-	}
+	static Store instance;
+	return instance;
 }
 
-Store::Store() : memMaxId(0) {
-
-}
-
-Store::MemoryIterator Store::createLinearMemory(uint64_t initialPages, uint64_t maxPages, bool isShared)
+Store::Store() : nextMemoryId(0)
 {
-	auto id = memMaxId.fetch_add(1);
-	auto memory = _createLinearMemory__(initialPages, maxPages, isShared); // Returns std::unique_ptr
-
-	// Pass key and value directly so std::map constructs the pair in-place
-	return memories.emplace(id, std::move(memory)).first;
 }
 
+Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPages, bool isShared)
+{
+	const MemoryId id = nextMemoryId.fetch_add(1);
+
+	std::unique_ptr<StoreOwnedMemory> memory = isShared
+		? std::unique_ptr<StoreOwnedMemory>(std::make_unique<SharedLinearMemory>(initialPages, maxPages))
+		: std::unique_ptr<StoreOwnedMemory>(std::make_unique<PrivateLinearMemory>(initialPages, maxPages));
+
+	// The unique_ptr keeps the StoreOwnedMemory at a stable address, so the
+	// LinearMemory* handed out below stays valid across later insertions.
+	memories.emplace(id, std::move(memory));
+	return id;
 }
+
+LinearMemory* Store::memory(MemoryId id)
+{
+	auto it = memories.find(id);
+	return it == memories.end() ? nullptr : it->second->getMemory();
+}
+
+const LinearMemory* Store::memory(MemoryId id) const
+{
+	auto it = memories.find(id);
+	return it == memories.end() ? nullptr : it->second->getMemory();
+}
+
+bool Store::growMemory(LinearMemory* memory, uint64_t deltaPages)
+{
+	if (memory == nullptr || memory->hostData == nullptr)
+		return false;
+	auto* owned = static_cast<StoreOwnedMemory*>(memory->hostData);
+	return owned->growMemory(deltaPages);
+}
+
+} // namespace WASM

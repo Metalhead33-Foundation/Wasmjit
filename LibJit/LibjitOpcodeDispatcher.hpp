@@ -91,6 +91,8 @@ private:
 
 	jit_value_t vmContextValue();
 	jit_value_t checkedTableIndex(jit_value_t index, const char* opname);
+	// Emits code yielding the LinearMemory* for a (constant) memory index.
+	jit_value_t memoryPointerForIndex(WASM::MemIdx memidx);
 	jit_value_t effectiveMemoryAddress(const WASM::MemArg& ma, jit_nint accessSize);
 	WASM::GlobalType globalTypeForIndex(WASM::GlobalIdx idx) const;
 

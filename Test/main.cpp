@@ -107,3 +107,61 @@ TEST_CASE("memory_buffer stores and loads data correctly")
 	REQUIRE(fillSum.has_value());
 	REQUIRE(WASM::callCallable<int32_t>(*fillSum, int32_t(1), int32_t(4)) == 10);
 }
+
+TEST_CASE("multi-memory: two linear memories are independent")
+{
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("multi_memory", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+
+	auto write0 = loaded.instance->exportedFunction("write0");
+	auto read0  = loaded.instance->exportedFunction("read0");
+	auto write1 = loaded.instance->exportedFunction("write1");
+	auto read1  = loaded.instance->exportedFunction("read1");
+	REQUIRE(write0.has_value());
+	REQUIRE(read0.has_value());
+	REQUIRE(write1.has_value());
+	REQUIRE(read1.has_value());
+
+	// The same address in each memory must hold its own value.
+	WASM::callCallable<void>(*write0, int32_t(0), int32_t(11));
+	WASM::callCallable<void>(*write1, int32_t(0), int32_t(22));
+	REQUIRE(WASM::callCallable<int32_t>(*read0, int32_t(0)) == 11);
+	REQUIRE(WASM::callCallable<int32_t>(*read1, int32_t(0)) == 22);
+}
+
+TEST_CASE("imported memory is shared between two module instances")
+{
+	WASM::Module moduleA = loadTestModule("shared_memory_a");
+	WASM::Module moduleB = loadTestModule("shared_memory_b");
+	WASM::RegistryImportResolver registry;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+
+	auto instanceA = compiler.instantiate(moduleA, registry);
+	REQUIRE(instanceA.get() != nullptr);
+
+	// Publish A's exports (including its memory) as module "a".
+	instanceA->registerExports(registry, "a");
+
+	auto instanceB = compiler.instantiate(moduleB, registry);
+	REQUIRE(instanceB.get() != nullptr);
+
+	auto aStore = instanceA->exportedFunction("store");
+	auto aLoad  = instanceA->exportedFunction("load");
+	auto bStore = instanceB->exportedFunction("store");
+	auto bLoad  = instanceB->exportedFunction("load");
+	REQUIRE(aStore.has_value());
+	REQUIRE(aLoad.has_value());
+	REQUIRE(bStore.has_value());
+	REQUIRE(bLoad.has_value());
+
+	// A writes; B reads the same linear memory...
+	WASM::callCallable<void>(*aStore, int32_t(0), int32_t(99));
+	REQUIRE(WASM::callCallable<int32_t>(*bLoad, int32_t(0)) == 99);
+
+	// ...and symmetrically, B writes and A reads it.
+	WASM::callCallable<void>(*bStore, int32_t(4), int32_t(7));
+	REQUIRE(WASM::callCallable<int32_t>(*aLoad, int32_t(4)) == 7);
+}

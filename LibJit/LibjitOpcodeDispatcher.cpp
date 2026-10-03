@@ -94,38 +94,41 @@ static double wasm_f64_reinterpret_i64(int64_t x)
 	return bits.f64;
 }
 
-static int32_t wasm_memory_grow_impl(WASM::VMContext* vm, int32_t deltaPages)
+static int32_t wasm_memory_grow_impl(WASM::VMContext* vm, uint32_t memIdx, int32_t deltaPages)
 {
 	if (deltaPages < 0)
 		return -1;
 	WASM::ModuleInstance* m = reinterpret_cast<WASM::ModuleInstance*>(vm);
-	const uint32_t oldPages = static_cast<uint32_t>(vm->memorySize / 65536u);
-	if (!m->growMemory(static_cast<uint32_t>(deltaPages)))
-		return -1;
-	return static_cast<int32_t>(oldPages);
+	return m->growMemory(memIdx, static_cast<uint32_t>(deltaPages));
 }
 
-static void wasm_memory_copy_impl(WASM::VMContext* vm, int32_t dst, int32_t src, int32_t len)
+// memory.copy may move bytes between two different memories (multi-memory),
+// so both indices are carried through to the host helper.
+static void wasm_memory_copy_impl(WASM::VMContext* vm, uint32_t dstMemIdx, uint32_t srcMemIdx,
+								  int32_t dst, int32_t src, int32_t len)
 {
 	if (dst < 0 || src < 0 || len < 0)
 		std::abort();
+	const WASM::LinearMemory* dstMem = vm->memories[dstMemIdx];
+	const WASM::LinearMemory* srcMem = vm->memories[srcMemIdx];
 	const uint64_t udst = static_cast<uint64_t>(dst);
 	const uint64_t usrc = static_cast<uint64_t>(src);
 	const uint64_t ulen = static_cast<uint64_t>(len);
-	if (udst + ulen > vm->memorySize || usrc + ulen > vm->memorySize)
+	if (udst + ulen > dstMem->memorySize || usrc + ulen > srcMem->memorySize)
 		std::abort();
-	std::memmove(vm->memoryBase + udst, vm->memoryBase + usrc, static_cast<size_t>(ulen));
+	std::memmove(dstMem->memoryBase + udst, srcMem->memoryBase + usrc, static_cast<size_t>(ulen));
 }
 
-static void wasm_memory_fill_impl(WASM::VMContext* vm, int32_t dst, int32_t value, int32_t len)
+static void wasm_memory_fill_impl(WASM::VMContext* vm, uint32_t memIdx, int32_t dst, int32_t value, int32_t len)
 {
 	if (dst < 0 || len < 0)
 		std::abort();
+	const WASM::LinearMemory* memory = vm->memories[memIdx];
 	const uint64_t udst = static_cast<uint64_t>(dst);
 	const uint64_t ulen = static_cast<uint64_t>(len);
-	if (udst + ulen > vm->memorySize)
+	if (udst + ulen > memory->memorySize)
 		std::abort();
-	std::memset(vm->memoryBase + udst, value & 0xFF, static_cast<size_t>(ulen));
+	std::memset(memory->memoryBase + udst, value & 0xFF, static_cast<size_t>(ulen));
 }
 
 static int32_t wasm_table_grow_impl(WASM::VMContext* vm, void* initRef, int32_t deltaEntries)
@@ -273,9 +276,9 @@ static int32_t wasm_i31_get_u_impl(void* ref)
 	return static_cast<int32_t>(raw >> 1);
 }
 
-static void wasm_memory_init_impl(WASM::VMContext* vm, uint32_t dataIdx, uint32_t dst, uint32_t src, uint32_t len)
+static void wasm_memory_init_impl(WASM::VMContext* vm, uint32_t memIdx, uint32_t dataIdx, uint32_t dst, uint32_t src, uint32_t len)
 {
-	reinterpret_cast<WASM::ModuleInstance*>(vm)->memoryInit(dataIdx, dst, src, len);
+	reinterpret_cast<WASM::ModuleInstance*>(vm)->memoryInit(memIdx, dataIdx, dst, src, len);
 }
 
 static void wasm_data_drop_impl(WASM::VMContext* vm, uint32_t dataIdx)
@@ -775,13 +778,26 @@ jit_value_t OpcodeDispatcher::checkedTableIndex(jit_value_t index, const char* o
 	return widened;
 }
 
+jit_value_t OpcodeDispatcher::memoryPointerForIndex(WASM::MemIdx memidx)
+{
+	// ctx.memories is an array of LinearMemory* owned by the Store. The memory
+	// index is a compile-time constant, so it can be folded into the load's
+	// byte offset (imports occupy the low indices, then the module's own).
+	jit_value_t vm = vmContextValue();
+	jit_value_t memories = jit_insn_load_relative(
+		function, vm, offsetof(WASM::VMContext, memories), jit_type_void_ptr);
+	return jit_insn_load_relative(
+		function, memories,
+		static_cast<jit_nint>(memidx) * static_cast<jit_nint>(sizeof(WASM::LinearMemory*)),
+		jit_type_void_ptr);
+}
+
 jit_value_t OpcodeDispatcher::effectiveMemoryAddress(const WASM::MemArg& ma, jit_nint accessSize)
 {
-	if (ma.memidx != 0)
-		notImplemented("effectiveMemoryAddress (memory index != 0)");
-	jit_value_t vm = vmContextValue();
-	jit_value_t base = jit_insn_load_relative(function, vm, offsetof(WASM::VMContext, memoryBase), jit_type_void_ptr);
-	jit_value_t memorySize = jit_insn_load_relative(function, vm, offsetof(WASM::VMContext, memorySize), jit_type_ulong);
+	// Multi-memory: every access names its memory (defaulting to 0).
+	jit_value_t lm = memoryPointerForIndex(ma.memidx);
+	jit_value_t base = jit_insn_load_relative(function, lm, offsetof(WASM::LinearMemory, memoryBase), jit_type_void_ptr);
+	jit_value_t memorySize = jit_insn_load_relative(function, lm, offsetof(WASM::LinearMemory, memorySize), jit_type_ulong);
 	jit_value_t wasmOff = popValue();
 	jit_value_t ext = jit_insn_convert(function, wasmOff, jit_type_ulong, 0);
 	jit_value_t off = jit_value_create_long_constant(function, jit_type_ulong, static_cast<jit_long>(ma.offset));
@@ -1397,9 +1413,8 @@ void OpcodeDispatcher::dispatchI64Store32(WASM::MemArg addr)
 
 void OpcodeDispatcher::dispatchMemorySize(WASM::MemIdx arg)
 {
-	(void)arg;
-	jit_value_t vm = vmContextValue();
-	jit_value_t ms = jit_insn_load_relative(function, vm, offsetof(WASM::VMContext, memorySize), jit_type_ulong);
+	jit_value_t lm = memoryPointerForIndex(arg);
+	jit_value_t ms = jit_insn_load_relative(function, lm, offsetof(WASM::LinearMemory, memorySize), jit_type_ulong);
 	jit_value_t page = jit_value_create_long_constant(function, jit_type_ulong, 65536);
 	jit_value_t pages = jit_insn_div(function, ms, page);
 	pushValue(jit_insn_convert(function, pages, jit_type_int, 0));
@@ -1407,13 +1422,14 @@ void OpcodeDispatcher::dispatchMemorySize(WASM::MemIdx arg)
 
 void OpcodeDispatcher::dispatchMemoryGrow(WASM::MemIdx arg)
 {
-	(void)arg;
 	jit_value_t delta = popValue();
-	jit_type_t params[] = {jit_type_void_ptr, jit_type_int};
-	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 2, 1);
-	jit_value_t args[] = {vmContextValue(), delta};
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_int};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 3, 1);
+	jit_value_t args[] = {vmContextValue(),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg)),
+		delta};
 	pushValue(jit_insn_call_native(function, "wasm_memory_grow_impl",
-								   reinterpret_cast<void*>(wasm_memory_grow_impl), sig, args, 2, 0));
+								   reinterpret_cast<void*>(wasm_memory_grow_impl), sig, args, 3, 0));
 }
 
 void OpcodeDispatcher::dispatchI32Const(int32_t arg)
@@ -2793,20 +2809,20 @@ void OpcodeDispatcher::dispatchI64TruncSatF64U() {
 	pushValue(jit_insn_convert(function, u, jit_type_long, 0));
 }
 void OpcodeDispatcher::dispatchMemoryInit(uint32_t arg1, WASM::MemIdx arg2) {
-	if (arg2 != 0)
-		notImplemented("dispatchMemoryInit (memory index != 0)");
+	// memory.init dataidx memidx
 	jit_value_t len = popValue();
 	jit_value_t src = popValue();
 	jit_value_t dst = popValue();
-	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint, jit_type_uint, jit_type_uint};
-	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 5, 1);
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint, jit_type_uint, jit_type_uint, jit_type_uint};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 6, 1);
 	jit_value_t args[] = {vmContextValue(),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg2)),
 		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg1)),
 		jit_insn_convert(function, dst, jit_type_uint, 0),
 		jit_insn_convert(function, src, jit_type_uint, 0),
 		jit_insn_convert(function, len, jit_type_uint, 0)};
 	jit_insn_call_native(function, "wasm_memory_init_impl",
-						 reinterpret_cast<void*>(wasm_memory_init_impl), sig, args, 5, 0);
+						 reinterpret_cast<void*>(wasm_memory_init_impl), sig, args, 6, 0);
 }
 void OpcodeDispatcher::dispatchDataDrop(uint32_t arg) {
 	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint};
@@ -2817,28 +2833,30 @@ void OpcodeDispatcher::dispatchDataDrop(uint32_t arg) {
 						 reinterpret_cast<void*>(wasm_data_drop_impl), sig, args, 2, 0);
 }
 void OpcodeDispatcher::dispatchMemoryCopy(WASM::MemIdx arg1, WASM::MemIdx arg2) {
-	if (arg1 != 0 || arg2 != 0)
-		notImplemented("dispatchMemoryCopy (memory index != 0)");
+	// memory.copy dst_memidx src_memidx (arg1 = dst, arg2 = src).
 	jit_value_t len = popValue();
 	jit_value_t src = popValue();
 	jit_value_t dst = popValue();
-	jit_type_t params[] = {jit_type_void_ptr, jit_type_int, jit_type_int, jit_type_int};
-	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 4, 1);
-	jit_value_t args[] = {vmContextValue(), dst, src, len};
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint, jit_type_int, jit_type_int, jit_type_int};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 6, 1);
+	jit_value_t args[] = {vmContextValue(),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg1)),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg2)),
+		dst, src, len};
 	jit_insn_call_native(function, "wasm_memory_copy_impl",
-						 reinterpret_cast<void*>(wasm_memory_copy_impl), sig, args, 4, 0);
+						 reinterpret_cast<void*>(wasm_memory_copy_impl), sig, args, 6, 0);
 }
 void OpcodeDispatcher::dispatchMemoryFill(WASM::MemIdx arg) {
-	if (arg != 0)
-		notImplemented("dispatchMemoryFill (memory index != 0)");
 	jit_value_t len = popValue();
 	jit_value_t value = popValue();
 	jit_value_t dst = popValue();
-	jit_type_t params[] = {jit_type_void_ptr, jit_type_int, jit_type_int, jit_type_int};
-	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 4, 1);
-	jit_value_t args[] = {vmContextValue(), dst, value, len};
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_int, jit_type_int, jit_type_int};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 5, 1);
+	jit_value_t args[] = {vmContextValue(),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg)),
+		dst, value, len};
 	jit_insn_call_native(function, "wasm_memory_fill_impl",
-						 reinterpret_cast<void*>(wasm_memory_fill_impl), sig, args, 4, 0);
+						 reinterpret_cast<void*>(wasm_memory_fill_impl), sig, args, 5, 0);
 }
 void OpcodeDispatcher::dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2) {
 	if (arg2 != 0)

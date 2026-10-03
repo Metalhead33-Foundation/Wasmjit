@@ -69,6 +69,22 @@ wast2json.CONFIG += no_link target_predeps
 
 QMAKE_EXTRA_COMPILERS += wast2json
 
+# ---------------------------------------------------------------------------
+# Multi-memory / imported-memory test modules are authored in WAT. They are
+# parsed with the same `wasm-tools` used above and produced in the shadow build
+# directory, never in the source tree.
+# ---------------------------------------------------------------------------
+WAT_SOURCES = $$files($$PWD/wasm_wat/*.wat)
+
+wat2wasm.name = wasm-tools parse ${QMAKE_FILE_IN}
+wat2wasm.input = WAT_SOURCES
+wat2wasm.output = $$WASM_BUILD_OUTPUT_DIR/${QMAKE_FILE_BASE}.wasm
+wat2wasm.commands = $$QMAKE_MKDIR $$WASM_BUILD_OUTPUT_DIR && $$WASM_TOOLS parse ${QMAKE_FILE_IN} -o ${QMAKE_FILE_OUT}
+wat2wasm.dependency_type = TYPE_C
+wat2wasm.CONFIG += no_link target_predeps
+
+QMAKE_EXTRA_COMPILERS += wat2wasm
+
 SOURCES += main.cpp \
     helper.cpp \
     WastScript.cpp \

@@ -29,10 +29,12 @@ StoreOwnedMemory::StoreOwnedMemory(uint64_t initialPages, uint64_t maxPages, boo
 
 	if (maxPages == UINT64_MAX) {
 		memory.memoryMax = UINT64_MAX;
+	} else if (maxPages > (UINT64_MAX / WASM_PAGE_SIZE)) {
+		// A memory64 declaration can request up to 2^48 pages (2^64 bytes),
+		// which is not representable as a byte count. Treat it as unbounded;
+		// an actual grow past the address space still fails at allocation.
+		memory.memoryMax = UINT64_MAX;
 	} else {
-		if (maxPages > (UINT64_MAX / WASM_PAGE_SIZE)) {
-			throw std::invalid_argument("maxPages exceeds addressable representation limit");
-		}
 		memory.memoryMax = maxPages * WASM_PAGE_SIZE;
 	}
 
@@ -48,6 +50,11 @@ StoreOwnedMemory::StoreOwnedMemory(uint64_t initialPages, uint64_t maxPages, boo
 }
 
 const LinearMemory* StoreOwnedMemory::getMemory() const
+{
+	return &memory;
+}
+
+LinearMemory* StoreOwnedMemory::getMemory()
 {
 	return &memory;
 }
@@ -145,8 +152,14 @@ bool SharedLinearMemory::platformCommitMemory(size_t newBytes)
 SharedLinearMemory::SharedLinearMemory(uint64_t initialPages, uint64_t maxPages)
 	: StoreOwnedMemory(initialPages, maxPages, true), reservedRegion(nullptr), reservedBytes(0)
 {
-	// 1. Calculate and reconcile true maximum reserved capacity
-	uint64_t requestedMaxBytes = (maxPages == UINT64_MAX) ? MAX_SHARED_BYTES : (maxPages * WASM_PAGE_SIZE);
+	// 1. Calculate and reconcile true maximum reserved capacity. An unbounded
+	// (or unrepresentable, memory64-style) maximum is capped at MAX_SHARED_BYTES.
+	uint64_t requestedMaxBytes;
+	if (maxPages == UINT64_MAX || maxPages > (UINT64_MAX / WASM_PAGE_SIZE)) {
+		requestedMaxBytes = MAX_SHARED_BYTES;
+	} else {
+		requestedMaxBytes = maxPages * WASM_PAGE_SIZE;
+	}
 	uint64_t capBytes = std::min(requestedMaxBytes, MAX_SHARED_BYTES);
 
 	if (capBytes > std::numeric_limits<size_t>::max()) {
