@@ -137,8 +137,16 @@ jit_type_t LibJitTypeTranslator::translateType(const WASM::ValueType& valueType)
 	if(valueType.opcode == WASM::ValueTypeCode::Ref || valueType.opcode == WASM::ValueTypeCode::RefNull)
 	{
 		if(valueType.heapType > 0) {
-			if(translatedTypes[valueType.heapType] != nullptr) toReturn = jit_type_create_pointer(translatedTypes[valueType.heapType],1);
-			else toReturn = jit_type_void_ptr;
+			// heapType is a module-local type index. Guard the lookup: a stale
+			// or absent translatedTypes vector must not be indexed out of
+			// bounds (e.g. when translateFunctionSignature is called on a
+			// translator that never had translateTypes() run, such as the
+			// one held by LibJIT::Context).
+			const size_t heapIndex = static_cast<size_t>(valueType.heapType);
+			if(heapIndex < translatedTypes.size() && translatedTypes[heapIndex] != nullptr)
+				toReturn = jit_type_create_pointer(translatedTypes[heapIndex],1);
+			else
+				toReturn = jit_type_void_ptr;
 		} else {
 			if(valueType.heapType == static_cast<int32_t>(WASM::AbstractHeapType::I31)) {
 				toReturn = i31Type;
@@ -224,6 +232,14 @@ jit_type_t LibJitTypeTranslator::translateArray(const WASM::ArrayType& wasm_arra
 
 void LibJitTypeTranslator::translateTypes(const std::span<const WASM::Subtype>& types)
 {
+	// Type indices are module-local (the Store's TypeRegistry keeps one block
+	// per module), so the same cache key -- e.g. ValueType{Ref, 3} -- can mean
+	// a completely different type in another module. The translator's caches
+	// must therefore be rebuilt from scratch for every module; otherwise a
+	// reused translator would hand out translations computed for a previously
+	// compiled module. reset() clears both caches and re-seeds the primitives.
+	reset();
+
 	translatedTypes.resize(types.size(), nullptr);
 
 	// PASS 1 — define layouts

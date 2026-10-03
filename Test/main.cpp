@@ -1,6 +1,8 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch_all.hpp>
 
+#include <vector>
+
 #include "helper.hpp"
 #include "WasmBase/WasmStore.hpp"
 
@@ -199,4 +201,53 @@ TEST_CASE("store owns tables and table.grow works")
 	REQUIRE(WASM::callCallable<int32_t>(*size) == 4);
 	REQUIRE(WASM::callCallable<int32_t>(*grow, int32_t(5)) == -1); // 4 + 5 > max 5
 	REQUIRE(WASM::callCallable<int32_t>(*size) == 4);
+}
+
+TEST_CASE("LibJitTypeTranslator does not leak type caches across modules")
+{
+	const auto makeStructType = [](WASM::ValueTypeCode fieldOpcode) {
+		WASM::StorageType storage;
+		storage.isPacked = false;
+		storage.val.opcode = fieldOpcode;
+		storage.val.heapType = -1;
+
+		WASM::FieldType field;
+		field.storageType = storage;
+		field.isMutable = false;
+
+		WASM::StructType structure;
+		structure.fields.push_back(field);
+
+		WASM::Subtype subtype;
+		subtype.isFinal = true;
+		subtype.composite = structure;
+		return subtype;
+	};
+	const auto makeFuncType = []() {
+		WASM::Subtype subtype;
+		subtype.isFinal = true;
+		subtype.composite = WASM::FuncType{};
+		return subtype;
+	};
+
+	// Index 1 is a *different* struct in each module, yet the key used by the
+	// translator's cache -- ValueType{Ref, heapType = 1} -- is identical for
+	// both, because type indices are module-local.
+	std::vector<WASM::Subtype> moduleA = { makeFuncType(), makeStructType(WASM::ValueTypeCode::I32) };
+	std::vector<WASM::Subtype> moduleB = { makeFuncType(), makeStructType(WASM::ValueTypeCode::F64) };
+
+	LibJIT::LibJitTypeTranslator translator;
+
+	translator.translateTypes(moduleA);
+	WASM::ValueType refToIndex1;
+	refToIndex1.opcode = WASM::ValueTypeCode::Ref;
+	refToIndex1.heapType = 1;
+	const jit_type_t refInA = translator.translateType(refToIndex1);
+	REQUIRE(refInA != nullptr);
+
+	translator.translateTypes(moduleB);
+	const jit_type_t refInB = translator.translateType(refToIndex1);
+
+	// Without a per-module cache reset this returns module A's cached type.
+	REQUIRE(refInB != refInA);
 }
