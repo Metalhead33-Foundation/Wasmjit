@@ -268,10 +268,108 @@ defensive measure.
 - A full **validation** algorithm. Canonicalization assumes well-formed input;
   a policy is needed for ill-formed modules (tolerate or reject).
 - Type **reflection / introspection** APIs.
-- Replacing the `Subtype` layout representation. The canonical form is a second,
-  index-oriented representation; dedup is expected to offset its cost.
+- Replacing the `Subtype` layout representation (footprint and options in §9).
+  The canonical form is a second, index-oriented representation; dedup is
+  expected to offset its cost.
 
-## 9. References
+## 9. Type storage footprint (`Subtype`) and future optimization
+
+The registry stores each module's types as a contiguous `std::vector<Subtype>`
+block (`TypeRegistry::registerModule`), so the per-type cost is dominated by
+`sizeof(Subtype)`.
+
+### 9.1 Measured size
+
+Measured on the current toolchain (x86-64, libstdc++) with `sizeof`:
+
+| type | bytes |
+|------|------:|
+| `Subtype` | **88** |
+| `std::vector<uint32_t> supertypeIndices` | 24 |
+| `CompositeDefinition` (`std::variant`) | 56 |
+| `FuncType` | 48 (two `std::vector`s) |
+| `StructType` | 24 |
+| `ArrayType` | 16 |
+| `FieldType` | 16 |
+| `StorageType` | 12 |
+| `ValueType` | 8 |
+
+The 88 bytes of `Subtype` break down as:
+
+    bool isFinal                            1  (+ 7 padding)
+    std::vector<uint32_t> supertypeIndices 24
+    CompositeDefinition (variant)          56
+                                          ---
+                                           88
+
+The variant is `max(FuncType 48, StructType 24, ArrayType 16)` plus a 1-byte
+discriminant padded to 8, i.e. 56. Consequently **every** type — including a
+struct or an array — reserves the 48-byte `FuncType` payload (two
+`std::vector`s), and every type pays 24 bytes for `supertypeIndices` even when it
+has none.
+
+### 9.2 Expected footprint for a module
+
+The block contributes `88 x N` bytes for `N` types, plus heap for the nested
+vectors (`params`, `results`, `fields`, `supertypeIndices`) whenever they are
+non-empty. Those vectors are filled with `push_back` (capacity grows in steps)
+and each non-empty allocation carries allocator overhead, so budget up to ~2x
+the raw element bytes plus ~16 B per non-empty vector:
+
+| types | registry block | heap (rough) | total |
+|------:|---------------:|-------------:|------:|
+| 10 | ~0.9 KB | ~1–2 KB | ~2 KB |
+| 100 | ~8.8 KB | ~10–20 KB | ~20 KB |
+| 1,000 | ~88 KB | ~100–200 KB | ~0.2 MB |
+| 10,000 | ~0.9 MB | ~1–2 MB | ~2 MB |
+
+Because the registry never unregisters, this is cumulative over the process
+lifetime: the total is `88 x (types across all modules ever parsed)`, not just
+the live modules. A transient 1,000-type module leaves ~0.2 MB behind.
+
+### 9.3 Relationship to the rest of this document
+
+- **Partly related (to interning).** The canonicalization in §6 changes how many
+  types are stored: structurally identical `rec` groups are stored once, so
+  repeated function signatures — the bulk of types in real modules — stop
+  multiplying the `88 x N` term. Interning therefore *improves* the footprint,
+  and its cost must be weighed against the extra canonical representation. Once
+  a global canonical table exists, per-module `Subtype` blocks become largely
+  redundant: they could shrink to a `LocalTypeIdx -> TypeId` map, reading shape
+  data from the shared, compact canonical table.
+- **Mostly separate (layout vs. identity).** The 88-byte figure is a property of
+  the current in-memory layout (`std::variant` + owning `std::vector`s), not of
+  type identity or `match`. Shrinking it is an independent optimization, in the
+  same category as the GC heap (§8) rather than a prerequisite for interning;
+  neither requires the other.
+
+### 9.4 Possible future optimizations (not planned here)
+
+- **Drop the `std::variant`.** Replace `CompositeDefinition` with a manually
+  tagged union, or a structure-of-arrays registry (parallel `kind` / `isFinal` /
+  payload-index arrays), so struct and array entries do not reserve `FuncType`'s
+  48 bytes.
+- **Share component storage.** Have `FuncType` / `StructType` reference slices of
+  a registry-owned arena instead of owning `std::vector`s. Canonicalization
+  already centralizes types globally, making shared, immutable parameter/result
+  arrays natural and eliminating per-type allocations.
+- **Shrink `supertypeIndices`.** At most one supertype is allowed in practice; a
+  single `TypeId` plus a "none" marker replaces the 24-byte vector (keep a
+  variable-length form only if multiple supertypes are ever needed).
+- **Inline `isFinal`** into the kind tag, removing the padding.
+- **Measure the dedup ratio first.** Before investing in layout work, measure how
+  many types interning collapses; it may already remove most of the pressure.
+
+A compact representation on the order of 8–16 bytes per type for the common
+function-signature case (plus shared component storage) looks achievable — a
+roughly 5–10x cut in the fixed term — but that is a separate project.
+
+Reproduce the figures with:
+
+    #include "WasmType.hpp"
+    printf("%zu\n", sizeof(WASM::Subtype));   // 88 on x86-64 / libstdc++
+
+## 10. References
 
 - WebAssembly 3.0 specification (living draft):
   - Validation — Matching:
