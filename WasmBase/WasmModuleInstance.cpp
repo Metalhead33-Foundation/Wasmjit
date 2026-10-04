@@ -259,14 +259,14 @@ void ModuleInstance::registerExports(ImportRegistrar& registrar, std::string_vie
 			break;
 		}
 		case ExternalKind::Table: {
-			// Table imports are not modelled yet, so an exported table index
-			// may refer to an imported table we have no view for. Publish an
-			// empty view in that case rather than aborting.
-			const TableInstance* table = ex.index < internals.tableRefs.size()
+			// The table index space includes imported tables, so a valid export
+			// index has a view; be defensive anyway. Registering the borrowed
+			// view is how another module imports (and shares) this exact table.
+			TableInstance* table = ex.index < internals.tableRefs.size()
 				? internals.tableRefs[ex.index]
 				: nullptr;
 			registrar.registerTable(moduleName, ex.name,
-								(table != nullptr ? ImportedTable{table->base, table->size, table->max} : ImportedTable{nullptr, 0, 0}));
+								ImportedTable{table});
 			break;
 		}
 		case ExternalKind::Tag:
@@ -315,8 +315,24 @@ void ModuleInstance::resolveImports(ImportResolver& resolver)
 		internals.memoryRefs.push_back(memory.value());
 	}
 
-	// Imported globals, tables and tags follow the same resolve-then-assign
-	// pattern; they are handled elsewhere (globals/tables) or not yet wired.
+	// ── Table imports ───────────────────────────────────────────────
+	// Imported tables occupy the low indices of the table index space;
+	// the module's own tables are appended by initializeTable(). Resolving
+	// the same (module, field) from two modules yields the same borrowed
+	// TableInstance*, i.e. library semantics require one Store-owned table.
+	internals.tableRefs.reserve(module->importTables.size() + module->tables.size());
+	for (const auto& imp : module->importTables) {
+		std::optional<ImportedTable> table =
+			resolver.resolveTable(imp.moduleName, imp.fieldName, imp.table);
+		if (!table.has_value())
+			throw UnresolvedImportException(imp.moduleName, imp.fieldName);
+		if (table->table == nullptr)
+			throw UnresolvedImportException(imp.moduleName, imp.fieldName);
+		internals.tableRefs.push_back(table->table);
+	}
+
+	// Imported globals and tags follow the same resolve-then-assign pattern;
+	// they are handled elsewhere (globals) or not yet wired (tags).
 }
 
 void ModuleInstance::initializeMemories()
@@ -376,17 +392,10 @@ void ModuleInstance::initializeTable()
 	// the reference types proposal allows multiple. We handle all of them
 	// to be forward-compatible, even though in practice there's usually one.
 	//
-	// Note: imported tables would have been handled in resolveImports(),
-	// similar to how imported memories are handled. For now we assert that
-	// tables are locally defined only, consistent with our earlier decision
-	// to defer imported memory/table support.
-
-	if (module->tables.empty()) return;
-
-	// Each declared table becomes a store-owned table. `tableRefs` mirrors the
-	// Wasm table index space (there are currently no table imports) and is what
-	// ctx.tables points at; it never resizes after this point.
-	internals.tableRefs.reserve(module->tables.size());
+	// Imported tables occupy the low indices of the table index space; they
+	// were already appended to tableRefs by resolveImports(). The module's own
+	// tables follow here, so ctx.tables ends up pointing at the full space.
+	internals.tableRefs.reserve(module->importTables.size() + module->tables.size());
 	for (const TableType& tableType : module->tables) {
 		const uint64_t initialSize = tableType.limits.initial;
 		const uint64_t maxSize = tableType.limits.maximum.has_value()

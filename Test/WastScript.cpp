@@ -18,6 +18,7 @@
 #include "WasmBase/WasmModule.hpp"
 #include "WasmBase/WasmModuleInstance.hpp"
 #include "WasmBase/WasmRegistryImportResolver.hpp"
+#include "WasmBase/WasmStore.hpp"
 #include "WasmBase/WasmType.hpp"
 
 namespace Spec {
@@ -260,6 +261,22 @@ void ScriptRunner::installSpectest()
 	register_("print_f64", reinterpret_cast<void*>(&spectestPrintF64));
 	register_("print_i32_f32", reinterpret_cast<void*>(&spectestPrintI32F32));
 	register_("print_f64_f64", reinterpret_cast<void*>(&spectestPrintF64F64));
+
+	// The spec's `spectest` host module also exports a table and a memory, and
+	// test scripts import them. Provide the same shapes the reference interpreter
+	// uses (table 10..20 funcref, memory 1..2 pages). Both are owned by the
+	// global Store and created once for the whole process.
+	WASM::Store& store = WASM::Store::global();
+
+	static WASM::TableInstance* spectestTable = nullptr;
+	if (spectestTable == nullptr)
+		spectestTable = store.table(store.createTable(10, 20));
+	registry.registerTable("spectest", "table", WASM::ImportedTable{spectestTable});
+
+	static WASM::LinearMemory* spectestMemory = nullptr;
+	if (spectestMemory == nullptr)
+		spectestMemory = store.memory(store.createLinearMemory(1, 2, false));
+	registry.registerMemory("spectest", "memory", spectestMemory);
 }
 
 void ScriptRunner::pass()

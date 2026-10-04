@@ -239,6 +239,16 @@ IsolatedRun runIsolated(const Spec::Script& script, const std::string& wasmDir,
 			writeReport(fds[1], Spec::runScript(script, wasmDir, jitContext));
 			::close(fds[1]);
 			::_exit(0);
+		} catch (const std::exception& error) {
+			// An exception escaping the script runner would otherwise show up as
+			// a bare "produced no report (exit code 1)". Turn it into a report so
+			// the parent can display the engine's message.
+			Spec::ScriptReport report;
+			report.failed = 1;
+			report.failures.push_back(std::string("uncaught exception: ") + error.what());
+			writeReport(fds[1], report);
+			::close(fds[1]);
+			::_exit(0);
 		} catch (...) {
 			::close(fds[1]);
 			::_exit(1);

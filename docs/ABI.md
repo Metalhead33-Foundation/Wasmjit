@@ -148,9 +148,13 @@ The same pattern extends to every runtime entity. The Store now also owns:
   instructions (`table.get/set/size/grow/fill/copy/init`, `call_indirect`) are
   now multi-table.
 
-  *Gap:* table **imports** are not modelled yet. A module that only imports a
-  table therefore has an empty index space; it exports an empty table view, and
-  `table.grow` reports `-1` / `table.size` reports `0` for it.
+  **Table imports are supported.** `resolveImports()` resolves each
+  `ImportTable` through `ImportResolver::resolveTable` and prepends the returned
+  `ImportedTable` (a borrowed `TableInstance*`) to `tableRefs`, before the
+  module's own tables — exactly the Wasm table index space. Because that
+  `TableInstance*` is the *same* store-owned view the exporting module holds,
+  two modules importing the same `(module, field)` share one table: growth and
+  writes by either are visible to the other.
 
 The remaining entity kinds are **pre-declared** in `Store` (`StoreOwnedGlobal`,
 `StoreOwnedTag`, `StoreOwnedFunction`, `StoreOwnedElementSegment`,

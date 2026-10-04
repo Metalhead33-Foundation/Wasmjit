@@ -207,6 +207,104 @@ TEST_CASE("store owns tables and table.grow works")
 	REQUIRE(WASM::callCallable<int32_t>(*size) == 4);
 }
 
+TEST_CASE("multi-table: independent tables, bulk ops and call_indirect")
+{
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("multi_table", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	auto size0  = instance.exportedFunction("size0");
+	auto size1  = instance.exportedFunction("size1");
+	auto grow1  = instance.exportedFunction("grow1");
+	auto call0  = instance.exportedFunction("call0");
+	auto call1  = instance.exportedFunction("call1");
+	auto init1  = instance.exportedFunction("init1");
+	auto copy10 = instance.exportedFunction("copy10");
+	auto fill1  = instance.exportedFunction("fill1");
+	REQUIRE(size0.has_value());
+	REQUIRE(size1.has_value());
+	REQUIRE(grow1.has_value());
+	REQUIRE(call0.has_value());
+	REQUIRE(call1.has_value());
+	REQUIRE(init1.has_value());
+	REQUIRE(copy10.has_value());
+	REQUIRE(fill1.has_value());
+
+	// The two tables start at their declared sizes, independently.
+	REQUIRE(WASM::callCallable<int32_t>(*size0) == 4);
+	REQUIRE(WASM::callCallable<int32_t>(*size1) == 2);
+
+	// call_indirect routes through the requested table index.
+	REQUIRE(WASM::callCallable<int32_t>(*call0, int32_t(0)) == 42);
+	REQUIRE(WASM::callCallable<int32_t>(*call0, int32_t(1)) == 7);
+	REQUIRE(WASM::callCallable<int32_t>(*call1, int32_t(0)) == 7);
+
+	// Growing table 1 must not affect table 0.
+	REQUIRE(WASM::callCallable<int32_t>(*grow1, int32_t(4)) == 2); // returns old size
+	REQUIRE(WASM::callCallable<int32_t>(*size1) == 6);
+	REQUIRE(WASM::callCallable<int32_t>(*size0) == 4);
+
+	// table.init copies from a passive element segment into table 1.
+	WASM::callCallable<void>(*init1, int32_t(0), int32_t(0), int32_t(2));
+	REQUIRE(WASM::callCallable<int32_t>(*call1, int32_t(0)) == 9);
+	REQUIRE(WASM::callCallable<int32_t>(*call1, int32_t(1)) == 42);
+
+	// table.copy moves entries from table 0 into table 1.
+	WASM::callCallable<void>(*copy10, int32_t(2), int32_t(1), int32_t(2));
+	REQUIRE(WASM::callCallable<int32_t>(*call1, int32_t(2)) == 7);
+
+	// table.fill writes the same reference into a range of table 1.
+	WASM::callCallable<void>(*fill1, int32_t(3), int32_t(1));
+	REQUIRE(WASM::callCallable<int32_t>(*call1, int32_t(3)) == 9);
+}
+
+TEST_CASE("imported table is shared between two module instances")
+{
+	WASM::Module moduleA = loadTestModule("shared_table_a");
+	WASM::Module moduleB = loadTestModule("shared_table_b");
+	WASM::RegistryImportResolver registry;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+
+	auto instanceA = compiler.instantiate(moduleA, registry);
+	REQUIRE(instanceA.get() != nullptr);
+
+	// Publish A's exports (including its table) as module "a".
+	instanceA->registerExports(registry, "a");
+
+	auto instanceB = compiler.instantiate(moduleB, registry);
+	REQUIRE(instanceB.get() != nullptr);
+
+	auto aSize   = instanceA->exportedFunction("size");
+	auto aGrow   = instanceA->exportedFunction("grow");
+	auto aSet    = instanceA->exportedFunction("set");
+	auto bSize   = instanceB->exportedFunction("size");
+	auto bGrow   = instanceB->exportedFunction("grow");
+	auto bIsNull = instanceB->exportedFunction("is_null");
+	REQUIRE(aSize.has_value());
+	REQUIRE(aGrow.has_value());
+	REQUIRE(aSet.has_value());
+	REQUIRE(bSize.has_value());
+	REQUIRE(bGrow.has_value());
+	REQUIRE(bIsNull.has_value());
+
+	// Both instances observe the same Store-owned table.
+	REQUIRE(WASM::callCallable<int32_t>(*aSize) == 2);
+	REQUIRE(WASM::callCallable<int32_t>(*bSize) == 2);
+
+	// B grows the imported table; A must see the new size (shared storage).
+	REQUIRE(WASM::callCallable<int32_t>(*bGrow, int32_t(3)) == 2); // returns old size
+	REQUIRE(WASM::callCallable<int32_t>(*bSize) == 5);
+	REQUIRE(WASM::callCallable<int32_t>(*aSize) == 5);
+
+	// A writes a table slot; B reads the same slot through its import.
+	REQUIRE(WASM::callCallable<int32_t>(*bIsNull, int32_t(0)) == 1);
+	WASM::callCallable<void>(*aSet, int32_t(0));
+	REQUIRE(WASM::callCallable<int32_t>(*bIsNull, int32_t(0)) == 0);
+}
+
 TEST_CASE("LibJitTypeTranslator does not leak type caches across modules")
 {
 	const auto makeStructType = [](WASM::ValueTypeCode fieldOpcode) {

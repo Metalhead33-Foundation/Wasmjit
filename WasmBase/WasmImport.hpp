@@ -8,13 +8,15 @@ namespace WASM {
 // import is therefore just a borrowed pointer into that store — there is
 // deliberately no separate "ImportedMemory" handle any more.
 struct LinearMemory;
+// Tables are store-owned too (TableInstance/StoreOwnedTable in WasmTable.hpp).
+// A resolved table import is a borrowed TableInstance*: the same JIT-visible
+// view the exporting module keeps in its own table index space.
+struct TableInstance;
 
-// Small helper struct returned by resolveTable, since it needs to return
-// more than one value.
+// The result of resolving a table import. Wrapping the borrowed view keeps the
+// resolver signature stable if table imports ever need to carry extra state.
 struct ImportedTable {
-	Callable** base;
-	uint64_t       currentSize;
-	uint64_t       maxSize;
+	TableInstance* table = nullptr;
 };
 
 // The import resolver is the embedder's hook into the instantiation process.

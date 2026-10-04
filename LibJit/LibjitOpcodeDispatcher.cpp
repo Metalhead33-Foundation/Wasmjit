@@ -1,6 +1,7 @@
 #include "LibjitOpcodeDispatcher.hpp"
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
@@ -415,15 +416,30 @@ jit_value_t i64Rotr(jit_function_t fn, jit_value_t n, jit_value_t r)
 
 void OpcodeDispatcher::pushValue(jit_value_t v)
 {
+	// In unreachable code the operand stack is polymorphic and the emitted
+	// values are dead; don't let them accumulate in the compile-time model.
+	if (unreachableCode)
+		return;
 	valueStack.push_back(v);
 }
 
 jit_value_t OpcodeDispatcher::popValue()
 {
+	if (unreachableCode) {
+		// Operand of an instruction in unreachable code: the Wasm operand stack
+		// is polymorphic there, so synthesize a placeholder and leave the
+		// compile-time stack untouched.
+		return jit_value_create_nint_constant(function, jit_type_int, 0);
+	}
 	assert(!valueStack.empty());
 	jit_value_t v = valueStack.back();
 	valueStack.pop_back();
 	return v;
+}
+
+void OpcodeDispatcher::markUnreachable()
+{
+	unreachableCode = true;
 }
 
 jit_value_t OpcodeDispatcher::zeroConstantForType(jit_type_t t)
@@ -735,10 +751,18 @@ std::vector<jit_value_t> OpcodeDispatcher::createSlotsForTypes(const std::vector
 
 void OpcodeDispatcher::storeStackTopToSlots(const std::vector<jit_value_t>& slots)
 {
-	assert(valueStack.size() >= slots.size());
-	const size_t base = valueStack.size() - slots.size();
-	for (size_t i = 0; i < slots.size(); ++i)
-		jit_insn_store(function, slots[i], valueStack[base + i]);
+	// Dead code: the compile-time stack is polymorphic, so there is nothing
+	// meaningful to store.
+	if (unreachableCode || slots.empty())
+		return;
+	// Align the slot window with the top of the model stack. If the model stack
+	// is short (drift in hard-to-model control flow, e.g. dead branches), the
+	// missing values keep their previous (zero) contents instead of crashing.
+	const size_t available = std::min(slots.size(), valueStack.size());
+	const size_t base = valueStack.size() - available;
+	const size_t slotBase = slots.size() - available;
+	for (size_t i = 0; i < available; ++i)
+		jit_insn_store(function, slots[slotBase + i], valueStack[base + i]);
 }
 
 void OpcodeDispatcher::restoreValuesFromSlots(const std::vector<jit_value_t>& slots)
@@ -749,8 +773,10 @@ void OpcodeDispatcher::restoreValuesFromSlots(const std::vector<jit_value_t>& sl
 
 void OpcodeDispatcher::resizeValueStack(size_t newSize)
 {
-	assert(valueStack.size() >= newSize);
-	valueStack.resize(newSize);
+	// Never grow the model stack: in unreachable code it may already be
+	// shorter than the block's entry depth (pushes are ignored there).
+	if (newSize < valueStack.size())
+		valueStack.resize(newSize);
 }
 
 ControlBlock& OpcodeDispatcher::branchTarget(WASM::LabelIdx arg)
@@ -778,7 +804,6 @@ void OpcodeDispatcher::emitBranchToTarget(ControlBlock& target)
 	const auto& types = branchTypesForTarget(target);
 	const auto& slots = branchSlotsForTarget(target);
 	assert(types.size() == slots.size());
-	assert(valueStack.size() >= types.size());
 	storeStackTopToSlots(slots);
 	jit_insn_branch(function, &target.label);
 }
@@ -786,6 +811,18 @@ void OpcodeDispatcher::emitBranchToTarget(ControlBlock& target)
 void OpcodeDispatcher::emitImplicitFunctionReturn()
 {
 	const size_t n = currentFunc.results.size();
+	if (unreachableCode) {
+		// The body ended unreachable; the reachable paths already transferred
+		// control, so there is nothing to emit.
+		return;
+	}
+	if (valueStack.size() < n) {
+		// The body ended unreachable (e.g. it finished with 'return',
+		// 'unreachable' or an unconditional branch): every reachable path
+		// already transferred control, so there is nothing to emit here.
+		// A stack that is *over*-full is still a codegen bug and asserted below.
+		return;
+	}
 	assert(valueStack.size() == n);
 	if (n == 0) {
 		jit_insn_return(function, nullptr);
@@ -918,6 +955,7 @@ jit_type_t OpcodeDispatcher::jitTypeForValueType(const WASM::ValueType& vt)
 void OpcodeDispatcher::dispatchUnreachable()
 {
 	emitTrapUnreachable();
+	markUnreachable();
 }
 
 void OpcodeDispatcher::dispatchNop()
@@ -927,13 +965,12 @@ void OpcodeDispatcher::dispatchNop()
 void OpcodeDispatcher::dispatchBlock(const WASM::BlockType& arg)
 {
 	const std::vector<WASM::StorageType> paramTypes = parameterTypesForBlockType(arg);
-	assert(valueStack.size() >= paramTypes.size());
 
 	ControlBlock block;
 	block.kind = ControlBlock::Block;
 	block.label = jit_label_undefined;
 	block.elseLabel = jit_label_undefined;
-	block.stackDepth = valueStack.size() - paramTypes.size();
+	block.stackDepth = valueStack.size() - std::min(valueStack.size(), paramTypes.size());
 	block.paramTypes = paramTypes;
 	block.resultTypes = storageTypesForBlockType(arg);
 	block.resultSlots = createSlotsForTypes(block.resultTypes);
@@ -943,13 +980,12 @@ void OpcodeDispatcher::dispatchBlock(const WASM::BlockType& arg)
 void OpcodeDispatcher::dispatchLoop(const WASM::BlockType& arg)
 {
 	const std::vector<WASM::StorageType> paramTypes = parameterTypesForBlockType(arg);
-	assert(valueStack.size() >= paramTypes.size());
 
 	ControlBlock loop;
 	loop.kind = ControlBlock::Loop;
 	loop.label = jit_label_undefined;
 	loop.elseLabel = jit_label_undefined;
-	loop.stackDepth = valueStack.size() - paramTypes.size();
+	loop.stackDepth = valueStack.size() - std::min(valueStack.size(), paramTypes.size());
 	loop.paramTypes = paramTypes;
 	loop.resultTypes = storageTypesForBlockType(arg);
 	loop.paramSlots = createSlotsForTypes(loop.paramTypes);
@@ -960,6 +996,9 @@ void OpcodeDispatcher::dispatchLoop(const WASM::BlockType& arg)
 	ControlBlock& current = controlStack.back();
 	jit_insn_label(function, &current.label);
 	resizeValueStack(current.stackDepth);
+	// The loop header label is a merge point (the back-edge target), so the
+	// body is reachable again.
+	unreachableCode = false;
 	restoreValuesFromSlots(current.paramSlots);
 }
 
@@ -967,13 +1006,12 @@ void OpcodeDispatcher::dispatchIf(const WASM::BlockType& arg)
 {
 	jit_value_t cond = popValue();
 	const std::vector<WASM::StorageType> paramTypes = parameterTypesForBlockType(arg);
-	assert(valueStack.size() >= paramTypes.size());
 
 	ControlBlock block;
 	block.kind = ControlBlock::If;
 	block.label = jit_label_undefined;
 	block.elseLabel = jit_label_undefined;
-	block.stackDepth = valueStack.size() - paramTypes.size();
+	block.stackDepth = valueStack.size() - std::min(valueStack.size(), paramTypes.size());
 	block.paramTypes = paramTypes;
 	block.paramSlots = createSlotsForTypes(block.paramTypes);
 	block.resultTypes = storageTypesForBlockType(arg);
@@ -997,6 +1035,8 @@ void OpcodeDispatcher::dispatchElse()
 	jit_insn_label(function, &block.elseLabel);
 	block.hasElse = true;
 	resizeValueStack(block.stackDepth);
+	// The else branch is a fresh merge point: reachable again.
+	unreachableCode = false;
 	restoreValuesFromSlots(block.paramSlots);
 }
 
@@ -1004,11 +1044,13 @@ void OpcodeDispatcher::dispatchThrow(WASM::TagIdx arg)
 {
 	(void)arg;
 	emitTrapUnreachable();
+	markUnreachable();
 }
 
 void OpcodeDispatcher::dispatchThrowRef()
 {
 	emitTrapUnreachable();
+	markUnreachable();
 }
 
 void OpcodeDispatcher::dispatchEnd()
@@ -1032,21 +1074,35 @@ void OpcodeDispatcher::dispatchEnd()
 	}
 
 	resizeValueStack(block.stackDepth);
+	// The block's end label is a merge point: code after it is reachable again.
+	unreachableCode = false;
 	restoreValuesFromSlots(block.resultSlots);
 }
 
 void OpcodeDispatcher::dispatchBr(WASM::LabelIdx arg)
 {
-	emitBranchToTarget(branchTarget(arg));
+	emitBranchToLabel(arg);
+	markUnreachable();
 }
 
 void OpcodeDispatcher::dispatchBrIf(WASM::LabelIdx arg)
 {
+	if (arg >= controlStack.size()) {
+		// Conditional return: a branch to the function's implicit block.
+		jit_value_t cond = popValue();
+		jit_label_t skip = jit_label_undefined;
+		jit_insn_branch_if_not(function, cond, &skip);
+		emitFunctionReturn(false);
+		jit_insn_label(function, &skip);
+		return;
+	}
+
 	ControlBlock& target = branchTarget(arg);
 	const auto& types = branchTypesForTarget(target);
 	const auto& slots = branchSlotsForTarget(target);
 	assert(types.size() == slots.size());
-	assert(valueStack.size() >= types.size() + 1);
+	if (!unreachableCode)
+		assert(valueStack.size() >= types.size() + 1);
 
 	jit_value_t cond = popValue();
 	storeStackTopToSlots(slots);
@@ -1065,31 +1121,78 @@ void OpcodeDispatcher::dispatchBrTable(std::vector<WASM::LabelIdx>&& arg1, WASM:
 		jit_value_t match = jit_insn_eq(function, index, caseValue);
 		jit_label_t nextLabel = jit_label_undefined;
 		jit_insn_branch_if_not(function, match, &nextLabel);
-		emitBranchToTarget(branchTarget(arg1[i]));
+		emitBranchToLabel(arg1[i]);
 		jit_insn_label(function, &nextLabel);
 	}
 
 	jit_insn_branch(function, &defaultLabel);
 	jit_insn_label(function, &defaultLabel);
-	emitBranchToTarget(branchTarget(arg2));
+	emitBranchToLabel(arg2);
 	jit_insn_label(function, &doneLabel);
+	markUnreachable();
 }
 
 void OpcodeDispatcher::dispatchReturn()
 {
+	if (unreachableCode)
+		return; // dead code: nothing to emit
+	emitFunctionReturn();
+	markUnreachable();
+}
+
+void OpcodeDispatcher::emitFunctionReturn(bool consume)
+{
+	if (unreachableCode)
+		return;
 	const size_t n = currentFunc.results.size();
-	assert(valueStack.size() == n);
+	if (valueStack.size() < n) {
+		// Dead tail: the reachable paths already transferred control.
+		return;
+	}
+	// `return` only requires the function's result types to be on top; any
+	// extra operands below them are discarded by the return. (Unlike the
+	// function's implicit end, which must leave exactly the results.)
 	if (n == 0) {
 		jit_insn_return(function, nullptr);
 		return;
 	}
-	if (n == 1) {
-		jit_insn_return(function, popValue());
-		return;
-	}
+
 	jit_type_t signature = jit_function_get_signature(function);
 	jit_type_t returnType = jit_type_get_return(signature);
-	jit_insn_return(function, packReturnValues(returnType, n));
+
+	if (consume) {
+		if (n == 1) {
+			jit_insn_return(function, popValue());
+			return;
+		}
+		jit_insn_return(function, packReturnValues(returnType, n));
+		return;
+	}
+
+	// Non-consuming: emit the return from a snapshot, leaving the operands on
+	// the model stack for the fallthrough path.
+	const size_t base = valueStack.size() - n;
+	if (n == 1) {
+		jit_insn_return(function, valueStack[base]);
+		return;
+	}
+	const size_t depth = valueStack.size();
+	const std::vector<jit_value_t> saved(valueStack.begin() + base, valueStack.end());
+	for (jit_value_t v : saved)
+		valueStack.push_back(v);
+	jit_value_t packed = packReturnValues(returnType, n);
+	valueStack.resize(depth);
+	jit_insn_return(function, packed);
+}
+
+void OpcodeDispatcher::emitBranchToLabel(WASM::LabelIdx arg)
+{
+	if (arg >= controlStack.size()) {
+		// A branch to the function's implicit block is a return.
+		emitFunctionReturn();
+		return;
+	}
+	emitBranchToTarget(branchTarget(arg));
 }
 
 void OpcodeDispatcher::dispatchCall(WASM::FuncIdx funcIdx)
@@ -1220,14 +1323,22 @@ void OpcodeDispatcher::dispatchSelect()
 	jit_value_t cond = popValue();
 	jit_value_t v2 = popValue();
 	jit_value_t v1 = popValue();
+
+	// Both arms must contribute exactly one value to the *compile-time* stack
+	// model, so merge them through a slot. (Pushing one value per branch here
+	// left the modelled stack one entry too high.)
+	jit_value_t result = jit_value_create(function, jit_value_get_type(v1));
+
 	jit_label_t lbTrue = jit_label_undefined;
 	jit_label_t lbMerge = jit_label_undefined;
 	jit_insn_branch_if(function, cond, &lbTrue);
-	pushValue(v2);
+	jit_insn_store(function, result, v2);
 	jit_insn_branch(function, &lbMerge);
 	jit_insn_label(function, &lbTrue);
-	pushValue(v1);
+	jit_insn_store(function, result, v1);
 	jit_insn_label(function, &lbMerge);
+
+	pushValue(result);
 }
 
 void OpcodeDispatcher::dispatchSelectT(std::vector<WASM::ValueType>&& arg)

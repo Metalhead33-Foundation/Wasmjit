@@ -56,6 +56,19 @@ private:
 
 	void pushValue(jit_value_t v);
 	jit_value_t popValue();
+	// Emits the function's epilogue (a `return`). Does nothing in unreachable
+	// code or when the model stack is short (dead tail). With `consume` false
+	// the return operands are left on the model stack (for a conditional
+	// branch to the function's implicit block, whose fallthrough needs them).
+	void emitFunctionReturn(bool consume = true);
+	// Emits the jump for a branch target; a target past the control stack is
+	// the function's implicit block (i.e. a return).
+	void emitBranchToLabel(WASM::LabelIdx arg);
+	// Marks the rest of the current block unreachable (after an unconditional
+	// transfer). In unreachable code the Wasm operand stack is polymorphic, so
+	// popValue() yields placeholders instead of underflowing.
+	void markUnreachable();
+	bool unreachableCode = false;
 	jit_value_t zeroConstantForType(jit_type_t t);
 	jit_value_t castRefValue(jit_value_t value, jit_type_t targetType);
 	jit_value_t refAsVoidPtr(jit_value_t value);

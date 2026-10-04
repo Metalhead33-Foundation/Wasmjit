@@ -284,7 +284,19 @@ Correct results are deliberately **not required yet**; the run is meant to be in
 | text-format modules (`.wat`) | skipped | only binary modules can be loaded |
 | `v128` and reference values | skipped | not marshalled yet |
 
+The `spectest` host module is provided in full for the entities the runtime
+models: the `print*` stubs, a shared table (`10..20 funcref`) and a shared
+memory (`1..2 pages`). Both are created once via the global `Store` and
+re-registered into each script's `RegistryImportResolver`, so scripts that
+import `(import "spectest" "table" ...)` / `"memory"` instantiate correctly.
+
 ### Current status (for orientation)
+
+> The snapshot below predates the multi-table / control-flow work. The curated
+> list still runs cleanly, and many previously crashing scripts now pass
+> (e.g. `select`, `call_indirect`, `block`, `loop`, `br`, `br_table`, `return`,
+> `func`, `call`, `memory_copy`, `memory_fill`, and the `table*` scripts).
+> Re-measure with the command shown.
 
 45 of the 256 scripts run cleanly today — exactly the curated list. A full sweep is therefore loud and
 truthful:
