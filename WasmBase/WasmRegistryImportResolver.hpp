@@ -29,7 +29,7 @@ public:
 		void registerTable(std::string_view fieldName, const ImportedTable& table);
 		void registerTag(std::string_view fieldName, uint32_t tagValue);
 
-		std::optional<Callable> resolveFunction(std::string_view fieldName, uint32_t typeIdx);
+		std::optional<Callable> resolveFunction(std::string_view fieldName, TypeId expectedType);
 		std::optional<Value> resolveGlobal(std::string_view fieldName, const GlobalType& type);
 		std::optional<LinearMemory*> resolveMemory(std::string_view fieldName, const MemoryType& type);
 		std::optional<ImportedTable> resolveTable(std::string_view fieldName, const TableType& type);
@@ -50,7 +50,7 @@ public:
 	std::optional<Callable> resolveFunction(
 		std::string_view moduleName,
 		std::string_view fieldName,
-		uint32_t typeIdx) override;
+		TypeId expectedType) override;
 
 	std::optional<Value> resolveGlobal(
 		std::string_view moduleName,

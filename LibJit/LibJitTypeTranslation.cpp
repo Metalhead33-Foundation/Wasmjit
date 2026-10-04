@@ -63,6 +63,8 @@ void LibJitTypeTranslator::reset()
 {
 	translatedTypes.clear();
 	typemap.clear();
+	canonicalCache.clear();
+	localTypeIds.clear();
 	for(const auto& it : DefaultValueTypes) {
 		translateType(it);
 	}
@@ -136,17 +138,30 @@ jit_type_t LibJitTypeTranslator::translateType(const WASM::ValueType& valueType)
 	jit_type_t toReturn = nullptr;
 	if(valueType.opcode == WASM::ValueTypeCode::Ref || valueType.opcode == WASM::ValueTypeCode::RefNull)
 	{
-		if(valueType.heapType > 0) {
+		if(valueType.heapType >= 0) {
 			// heapType is a module-local type index. Guard the lookup: a stale
 			// or absent translatedTypes vector must not be indexed out of
 			// bounds (e.g. when translateFunctionSignature is called on a
 			// translator that never had translateTypes() run, such as the
 			// one held by LibJIT::Context).
+			//
+			// Prefer the canonical cache (keyed by process-wide TypeId) so the
+			// lowering is reused across modules (M7); fall back to the
+			// per-module translatedTypes when the target is not there yet.
 			const size_t heapIndex = static_cast<size_t>(valueType.heapType);
-			if(heapIndex < translatedTypes.size() && translatedTypes[heapIndex] != nullptr)
+			if(heapIndex < localTypeIds.size()) {
+				auto it = canonicalCache.find(localTypeIds[heapIndex]);
+				if(it != canonicalCache.end())
+					toReturn = jit_type_create_pointer(it->second, 1);
+				else if(heapIndex < translatedTypes.size() && translatedTypes[heapIndex] != nullptr)
+					toReturn = jit_type_create_pointer(translatedTypes[heapIndex],1);
+				else
+					toReturn = jit_type_void_ptr;
+			} else if(heapIndex < translatedTypes.size() && translatedTypes[heapIndex] != nullptr) {
 				toReturn = jit_type_create_pointer(translatedTypes[heapIndex],1);
-			else
+			} else {
 				toReturn = jit_type_void_ptr;
+			}
 		} else {
 			if(valueType.heapType == static_cast<int32_t>(WASM::AbstractHeapType::I31)) {
 				toReturn = i31Type;
@@ -230,42 +245,60 @@ jit_type_t LibJitTypeTranslator::translateArray(const WASM::ArrayType& wasm_arra
 	return jit_type_create_struct(fields, 3, 1);
 }
 
-void LibJitTypeTranslator::translateTypes(const std::span<const WASM::Subtype>& types)
+void LibJitTypeTranslator::translateTypes(const std::span<const WASM::Subtype>& types,
+										  const std::span<const WASM::TypeId>& typeIds)
 {
-	// Type indices are module-local (the Store's TypeRegistry keeps one block
-	// per module), so the same cache key -- e.g. ValueType{Ref, 3} -- can mean
-	// a completely different type in another module. The translator's caches
-	// must therefore be rebuilt from scratch for every module; otherwise a
-	// reused translator would hand out translations computed for a previously
-	// compiled module. reset() clears both caches and re-seeds the primitives.
-	reset();
+	// Per-module caches are rebuilt, but the canonical (TypeId-keyed) cache is
+	// deliberately kept: type indices are module-local, yet a canonical TypeId
+	// means the same thing everywhere, so identical types shared between modules
+	// reuse one lowered jit_type_t (M7). The `ValueType`-keyed typemap holds
+	// module-local keys and is therefore reset.
+	translatedTypes.clear();
+	typemap.clear();
+	for (const auto& it : DefaultValueTypes)
+		translateType(it);
 
+	localTypeIds.assign(typeIds.begin(), typeIds.end());
 	translatedTypes.resize(types.size(), nullptr);
 
-	// PASS 1 — define layouts
+	const auto cachedOrLower = [this](size_t i, jit_type_t lowered) -> jit_type_t {
+		if (i >= localTypeIds.size())
+			return lowered;
+		return canonicalCache.emplace(localTypeIds[i], lowered).first->second;
+	};
+	const auto lookup = [this](size_t i) -> jit_type_t {
+		if (i >= localTypeIds.size())
+			return nullptr;
+		auto it = canonicalCache.find(localTypeIds[i]);
+		return it == canonicalCache.end() ? nullptr : it->second;
+	};
+
+	// PASS 1 — composite layouts (struct/array).
 	for (size_t i = 0; i < types.size(); ++i)
 	{
-		if (types[i].isStruct())
-		{
-			translatedTypes[i] =
-				translateStruct(std::get<WASM::StructType>(types[i].composite));
+		if (!types[i].isStruct() && !types[i].isArray())
+			continue;
+		if (jit_type_t cached = lookup(i); cached != nullptr) {
+			translatedTypes[i] = cached;
+			continue;
 		}
-		else if (types[i].isArray())
-		{
-			translatedTypes[i] =
-				translateArray(std::get<WASM::ArrayType>(types[i].composite));
-		}
+		jit_type_t lowered = types[i].isStruct()
+			? translateStruct(std::get<WASM::StructType>(types[i].composite))
+			: translateArray(std::get<WASM::ArrayType>(types[i].composite));
+		translatedTypes[i] = cachedOrLower(i, lowered);
 	}
 
-	// PASS 2 — function signatures
+	// PASS 2 — function signatures.
 	for (size_t i = 0; i < types.size(); ++i)
 	{
-		if (types[i].isFunction())
-		{
-			translatedTypes[i] =
-				translateFunctionSignature(
-					std::get<WASM::FuncType>(types[i].composite));
+		if (!types[i].isFunction())
+			continue;
+		if (jit_type_t cached = lookup(i); cached != nullptr) {
+			translatedTypes[i] = cached;
+			continue;
 		}
+		jit_type_t lowered = translateFunctionSignature(std::get<WASM::FuncType>(types[i].composite));
+		translatedTypes[i] = cachedOrLower(i, lowered);
 	}
 }
 

@@ -92,7 +92,7 @@ void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::
 	// We must do this before declaring any function, because each
 	// function's signature is expressed as a type index, and we need
 	// the jit_type_t for that index to create the jit_function_t.
-	typeTranslator.translateTypes(module.types);
+	typeTranslator.translateTypes(module.types, module.typeIds);
 	internals.translatedTypes.resize(typeTranslator.getTranslatedTypes().size());
 	for(size_t i = 0; i < typeTranslator.getTranslatedTypes().size();++i)
 	{
@@ -125,7 +125,8 @@ void ModuleCompiler::declareFunctions(WASM::ModuleInstance& instance, const WASM
 		internals.internalCallables[i] = WASM::Callable {
 			.fnPtr     = nullptr, // filled in after compilation
 			.context  = instance.context(),
-			.typeIndex = typeIdx
+			.localTypeIdx = typeIdx,
+			.typeId       = module.typeId(WASM::LocalTypeIdx{typeIdx})
 		};
 	}
 }

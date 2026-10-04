@@ -158,7 +158,8 @@ Universal function reference stored in tables and import storage.
 |------------|---------------|-----------------------------------------------------------|
 | `fnPtr`    | `void*`       | Function pointer (signature: `ret fn(VMContext*, ...)`)   |
 | `context`  | `VMContext*`  | `nullptr` → JIT passes caller's ctx; non-null → baked constant |
-| `typeIndex`| `uint32_t`   | For `call_indirect` runtime type checking                 |
+| `localTypeIdx` | `uint32_t` | Module-local type index in the defining module        |
+| `typeId`       | `TypeId`   | Canonical process-wide type identity; `kNone` for native imports. Used for cross-module type matching (`call_indirect`, `call_ref`, function imports). |
 
 ## Relevant Source Files
 

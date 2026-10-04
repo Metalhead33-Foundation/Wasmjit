@@ -93,6 +93,9 @@ private:
 	jit_value_t checkedTableIndex(jit_value_t index, const char* opname);
 	// Emits code yielding the LinearMemory* for a (constant) memory index.
 	jit_value_t memoryPointerForIndex(WASM::MemIdx memidx);
+	// Emits a runtime check that `callablePtr`'s canonical type id matches the
+	// module-local type index `typeIdx` (id fast path, registry fallback).
+	void emitCallableTypeCheck(jit_value_t callablePtr, WASM::TypeIdx typeIdx);
 	jit_value_t effectiveMemoryAddress(const WASM::MemArg& ma, jit_nint accessSize);
 	WASM::GlobalType globalTypeForIndex(WASM::GlobalIdx idx) const;
 

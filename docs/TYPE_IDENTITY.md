@@ -205,8 +205,8 @@ being built:
     CanonStorage  = Packed(i8|i16) | Value(CanonValueType)
     CanonField    = { CanonStorage, isMutable }
     CanonicalType = { kind: Func|Struct|Array, isFinal,
-                      supertype: optional CanonHeapType (Global after interning),
-                      depth,              // length of the supertype chain
+                      supertypes: [CanonHeapType],   // Global after interning
+                      depth,              // 1 + max(supertype depths); 0 if none
                       ... kind-specific payload ... }
 
 Notes:
@@ -216,10 +216,14 @@ Notes:
   depth or relative offset is needed.
 - `CanonValueType` carries numeric/vector kinds and nullability. A reference type
   is a heap type plus nullability; nullability is not part of the heap type.
-- **At most one supertype.** Validation allows at most one declared supertype,
-  so a canonical type stores one optional `supertype` and a derived `depth`.
-  The parser rejects declarations with more than one supertype.
-- A canonical type's identity includes `isFinal` and its supertype.
+- **Supertypes are a list.** The abstract syntax is `sub final? x* ct`, and the
+  GC proposal's formal rules apply the subtype check `(C ⊢ st <: expand(C(x)))*`
+  to every declared supertype, so a canonical type stores a **list** of
+  supertypes (in practice 0 or 1) plus a derived `depth` (`1 + max(supertype
+  depths)`, or 0 when there are none). Each supertype must be *strictly earlier*
+  than the subtype; that ordering is enforced at parse time, not by rejecting
+  additional supertypes.
+- A canonical type's identity includes `isFinal` and its supertypes.
 - After interning, every `Rec(i)` is rewritten to `Global(TypeId)`, so the stored
   graph is purely id-based. Canonical types never contain a `LocalTypeIdx`.
 
@@ -236,8 +240,8 @@ type section group by group, in order:
    before reusing it; a hash match alone is never identity. On a verified hit,
    reuse the group's ids.
 4. On a miss, allocate fresh contiguous ids, rewrite `Rec` to `Global`, compute
-   each member's `depth` from its supertype (which is always an earlier member or
-   an earlier group), and store the canonical group.
+   each member's `depth` from its supertypes (each always an earlier member or an
+   earlier group), and store the canonical group.
 5. Record `localToGlobal[groupStart + j]`.
 
 Because earlier groups are canonicalized first, out-of-group references are
@@ -256,15 +260,15 @@ Abstract heap types are not `TypeId`s, so the entry point works on heap types:
       if expected is Abstract:             classify actual against the hierarchy
       if actual is Abstract:               false   // abstract never matches a concrete type
                                                    // (except bottom types, handled in classify)
-      else:                                walk actual's supertype chain for expected
+      else:                                walk actual's supertype closure for expected
 
     matches(actual: TypeId, expected: TypeId)   // concrete-only wrapper
       == matchesHeap(Global(actual), Global(expected))
 
-Because supertype chains are acyclic by construction (a supertype is always an
-earlier definition), the walk needs no memoization or cycle handling. It is
-bounded by `depth`; if profiling ever shows it matters, a per-type display array
-makes it O(1).
+Because a supertype is always a strictly earlier definition, the supertype graph
+is acyclic; the walk needs only a visited set (or a lazily built ancestor
+bitset) and is bounded by `depth`. If profiling ever shows it matters, a per-type
+set/array makes it O(1).
 
 Abstract classification reuses the existing hierarchy logic in
 `ModuleInstance::refMatchesHeapType`: `any`, `eq`, `i31`, `struct`, `array`,
@@ -325,16 +329,16 @@ only as a defensive measure.
 
 Canonicalization assumes well-formed input, and the policy for anything else is
 **reject**. A forward reference to a later group, an out-of-range index, a
-declaration with more than one supertype, or an invalid `sub` annotation causes
-the module to fail registration, and it is never instantiated. No tolerance mode
-is planned.
+supertype that is not strictly earlier than the subtype, or an invalid `sub`
+annotation causes the module to fail registration, and it is never instantiated.
+No tolerance mode is planned.
 
 ## 7. Decisions record
 
 | Question | Decision |
 |----------|----------|
 | Recursive reference encoding | Absolute member index (`rec.i`), not relative offset or depth. |
-| Number of supertypes | At most one; stored as `supertype` + `depth`; extras rejected at parse. |
+| Number of supertypes | A list (the spec allows `x*`); each strictly earlier than the subtype; `depth` derived. |
 | Unit of interning | The `rec` group; a hash hit is confirmed by full structural equality. |
 | Abstract vs. concrete in `match` | `matchesHeap` over `CanonHeapType`; `matches(TypeId, TypeId)` is a wrapper. |
 | Value types in canonical form | `CanonValueType` with numeric/vector kinds and nullability. |
@@ -359,8 +363,9 @@ Each milestone leaves the engine working.
 **M1 — Preserve `rec` groups.**
 - In `Module::processSubtypes`, record `groups: vector<{first, count}>` alongside
   the flat `types` span. A bare type is a group of one.
-- Reject forward references to later groups and declarations with more than one
-  supertype.
+- Reject forward references to later groups and supertypes that are not strictly
+  earlier than the subtype. Do **not** reject multiple supertypes: the spec
+  allows a list.
 - *Done when:* group boundaries round-trip for `type-canon.wast`-style modules
   and all existing tests pass.
 
@@ -436,7 +441,7 @@ dedicated suite:
 | Forced hash collision | Distinct groups stay distinct. |
 | Earlier-group reference | Resolves through the earlier group's `TypeId`. |
 | Forward-group reference | Rejected, never resolved through an uninitialized id. |
-| More than one declared supertype | Rejected at parse. |
+| Multiple declared supertypes | Accepted; each must be strictly earlier. |
 | Invalid `sub` annotation | Rejected by validation. |
 | `matches(Derived, Base)` / `matches(Base, Derived)` | True / false. |
 | Cross-module `Derived` vs independently canonicalized `Base` | Matches. |
@@ -456,10 +461,15 @@ dedicated suite:
 - `Module::types` is that span; all type indices remain module-local.
 - `Module::isSubtype` walks declared `supertypeIndices` (module-local) and does
   not implement structural composite subtyping or cross-module matching.
-- `ModuleInstance::refMatchesHeapType` and GC object headers use module-local
-  indices; an object's runtime type tag is a local index, not a global id.
-- `Callable::typeIndex` is a module-local index, which makes its meaning
-  ambiguous once global ids exist (see M6).
+- ~~`ModuleInstance::refMatchesHeapType` and GC object headers use module-local
+  indices.~~ **Done (M6):** GC object headers and `gcObjectTypes` store a
+  canonical `TypeId`; `refMatchesHeapType` resolves the expected heap type
+  against its module and matches via `TypeRegistry::matchesHeap` (concrete and
+  abstract), so casts work across modules.
+- ~~`Callable::typeIndex` is a module-local index.~~ **Done (M6):** `Callable`
+  now carries a module-local `localTypeIdx` *and* a canonical `typeId`
+  (`kNone` for native imports); `call_indirect`/`call_ref`/function imports
+  match on `typeId`.
 - The parser **flattens `rec` groups** into one `Subtype` vector
   (`Module::processSubtypes`), so group boundaries are currently lost — the
   information canonicalization needs first.
@@ -558,8 +568,9 @@ just the live modules. A transient 1,000-type module leaves ~0.2 MB behind.
   a registry-owned arena instead of owning `std::vector`s. Canonicalization
   already centralizes types globally, making shared, immutable parameter/result
   arrays natural and eliminating per-type allocations.
-- **Shrink `supertypeIndices`.** Since §6.2 fixes at most one supertype, a single
-  `TypeId` plus a "none" marker replaces the 24-byte vector.
+- **Shrink `supertypeIndices`.** In practice a type has 0 or 1 supertypes, so a
+  small inline form (one `TypeId` plus a "none" marker, spilling to a vector only
+  when needed) replaces the 24-byte vector.
 - **Inline `isFinal`** into the kind tag, removing the padding.
 - **Measure the dedup ratio first.** Before investing in layout work, measure how
   many types interning collapses (M8); it may already remove most of the

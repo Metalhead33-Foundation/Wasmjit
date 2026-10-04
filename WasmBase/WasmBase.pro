@@ -21,6 +21,7 @@ SOURCES += \
 HEADERS += \
     WasmContext.hpp \
     WasmException.hpp \
+    WasmCanonicalType.hpp \
     WasmImport.hpp \
     WasmMemory.hpp \
     WasmModule.hpp \
@@ -33,6 +34,7 @@ HEADERS += \
     WasmStore.hpp \
     WasmTable.hpp \
     WasmType.hpp \
+    WasmTypeIdentity.hpp \
     WasmTypeRegistry.hpp \
     WasmVMContext.hpp \
     WasmValue.hpp

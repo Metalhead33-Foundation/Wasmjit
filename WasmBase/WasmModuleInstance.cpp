@@ -280,8 +280,10 @@ void ModuleInstance::resolveImports(ImportResolver& resolver)
 	internals.importStorage.reserve(module->importFunctions.size());
 
 	for (const auto& imp : module->importFunctions) {
-		auto callable = resolver.resolveFunction(
-			imp.moduleName, imp.fieldName, imp.typeIdx);
+		// Cross-module type matching: give the resolver the canonical identity of
+		// the importing module's declared function type.
+		const TypeId expectedType = module->typeId(LocalTypeIdx{imp.typeIdx});
+		auto callable = resolver.resolveFunction(imp.moduleName, imp.fieldName, expectedType);
 
 		// A missing import is a hard instantiation-time error in Wasm,
 		// not a runtime trap. We fail loudly here rather than storing
@@ -667,18 +669,25 @@ void ModuleInstance::bufferInitFromElems(uint32_t elemIdx, void* dst, uint32_t s
 	}
 }
 
-void* ModuleInstance::allocateStructObject(uint32_t size, uint32_t typeIndex)
+void* ModuleInstance::allocateStructObject(uint32_t size, uint32_t localTypeIdx)
 {
+	// Resolve the module-local index against this instance's module and stamp the
+	// canonical TypeId into the header and the lookup map, so a later cast can
+	// match it even from another module (M6).
+	const TypeId typeId = module->typeId(LocalTypeIdx{localTypeIdx});
+
 	uint8_t* object = static_cast<uint8_t*>(std::calloc(1, size));
 	if (!object)
 		std::abort();
-	*reinterpret_cast<uint32_t*>(object) = typeIndex;
-	internals.gcObjectTypes[object] = typeIndex;
+	*reinterpret_cast<uint32_t*>(object) = typeId.value;
+	internals.gcObjectTypes[object] = typeId;
 	return object;
 }
 
-void* ModuleInstance::allocateArrayObject(uint32_t headerSize, uint32_t elementSize, uint32_t length, uint32_t typeIndex)
+void* ModuleInstance::allocateArrayObject(uint32_t headerSize, uint32_t elementSize, uint32_t length, uint32_t localTypeIdx)
 {
+	const TypeId typeId = module->typeId(LocalTypeIdx{localTypeIdx});
+
 	uint8_t* header = static_cast<uint8_t*>(std::calloc(1, headerSize));
 	if (!header)
 		std::abort();
@@ -690,27 +699,41 @@ void* ModuleInstance::allocateArrayObject(uint32_t headerSize, uint32_t elementS
 			std::abort();
 	}
 
-	*reinterpret_cast<uint32_t*>(header) = typeIndex;
+	*reinterpret_cast<uint32_t*>(header) = typeId.value;
 	*reinterpret_cast<uint32_t*>(header + sizeof(uint32_t)) = length;
 	*reinterpret_cast<void**>(header + sizeof(uint32_t) * 2) = data;
-	internals.gcObjectTypes[header] = typeIndex;
+	internals.gcObjectTypes[header] = typeId;
 	return header;
 }
 
-bool ModuleInstance::tryGetGcTypeIndex(const void* ref, uint32_t& typeIndex) const
+bool ModuleInstance::tryGetGcTypeId(const void* ref, TypeId& typeId) const
 {
 	auto it = internals.gcObjectTypes.find(ref);
 	if (it == internals.gcObjectTypes.end())
 		return false;
-	typeIndex = it->second;
+	typeId = it->second;
 	return true;
 }
 
 bool ModuleInstance::refMatchesHeapType(const void* ref, const HeapType& heapType, bool nullable) const
 {
-	if (ref == nullptr)
-		return nullable;
+	const TypeRegistry& registry = Store::global().types();
 
+	// Canonical form of the expected heap type. A module-local index is resolved
+	// against the module that contains the cast instruction.
+	CanonHeapType expected;
+	if (heapType.isTypeIndex) {
+		expected.kind = CanonHeapType::Kind::Global;
+		expected.id = module->typeId(LocalTypeIdx{heapType.typeIndex});
+	} else {
+		expected.kind = CanonHeapType::Kind::Abstract;
+		expected.abstract = heapType.abstract;
+	}
+
+	if (ref == nullptr)
+		return nullable; // null matches only nullable target types
+
+	// Unboxed i31 immediate (low bit set).
 	const uintptr_t raw = reinterpret_cast<uintptr_t>(ref);
 	if ((raw & 1u) != 0) {
 		if (heapType.isTypeIndex)
@@ -725,67 +748,44 @@ bool ModuleInstance::refMatchesHeapType(const void* ref, const HeapType& heapTyp
 		}
 	}
 
-	for (const Callable& callable : internals.importStorage) {
-		if (&callable != ref)
-			continue;
-		if (heapType.isTypeIndex)
-			return module->isSubtype(callable.typeIndex, heapType.typeIndex);
-		switch (heapType.abstract) {
-		case AbstractHeapType::Any:
-		case AbstractHeapType::Func:
-			return true;
-		case AbstractHeapType::NoFunc:
-		case AbstractHeapType::None:
-			return false;
-		default:
-			return false;
+	// Function references carry their canonical type id.
+	const auto matchCallable = [&registry, &expected, &heapType](const Callable& callable) -> bool {
+		if (callable.typeId.isNone()) {
+			// Native import without a canonical type: only abstract classification.
+			if (heapType.isTypeIndex)
+				return false;
+			switch (heapType.abstract) {
+			case AbstractHeapType::Any:
+			case AbstractHeapType::Func:
+				return true;
+			default:
+				return false;
+			}
 		}
+		CanonHeapType actual;
+		actual.kind = CanonHeapType::Kind::Global;
+		actual.id = callable.typeId;
+		return registry.matchesHeap(actual, expected);
+	};
+	for (const Callable& callable : internals.importStorage)
+		if (&callable == ref)
+			return matchCallable(callable);
+	for (const Callable& callable : internals.internalCallables)
+		if (&callable == ref)
+			return matchCallable(callable);
+
+	// GC objects carry their canonical type id.
+	TypeId gcTypeId;
+	if (tryGetGcTypeId(ref, gcTypeId)) {
+		CanonHeapType actual;
+		actual.kind = CanonHeapType::Kind::Global;
+		actual.id = gcTypeId;
+		return registry.matchesHeap(actual, expected);
 	}
 
-	for (const Callable& callable : internals.internalCallables) {
-		if (&callable != ref)
-			continue;
-		if (heapType.isTypeIndex)
-			return module->isSubtype(callable.typeIndex, heapType.typeIndex);
-		switch (heapType.abstract) {
-		case AbstractHeapType::Any:
-		case AbstractHeapType::Func:
-			return true;
-		case AbstractHeapType::NoFunc:
-		case AbstractHeapType::None:
-			return false;
-		default:
-			return false;
-		}
-	}
-
-	uint32_t gcTypeIndex = 0;
-	if (tryGetGcTypeIndex(ref, gcTypeIndex)) {
-		if (heapType.isTypeIndex)
-			return module->isSubtype(gcTypeIndex, heapType.typeIndex);
-
-		const Subtype& subtype = module->types[gcTypeIndex];
-		switch (heapType.abstract) {
-		case AbstractHeapType::Any:
-		case AbstractHeapType::Eq:
-			return true;
-		case AbstractHeapType::Struct:
-			return subtype.isStruct();
-		case AbstractHeapType::Array:
-			return subtype.isArray();
-		case AbstractHeapType::None:
-		case AbstractHeapType::NoExtern:
-		case AbstractHeapType::NoFunc:
-		case AbstractHeapType::Func:
-		case AbstractHeapType::Extern:
-		case AbstractHeapType::I31:
-			return false;
-		}
-	}
-
+	// Unknown reference: only the top abstract types match.
 	if (heapType.isTypeIndex)
 		return false;
-
 	switch (heapType.abstract) {
 	case AbstractHeapType::Any:
 	case AbstractHeapType::Extern:

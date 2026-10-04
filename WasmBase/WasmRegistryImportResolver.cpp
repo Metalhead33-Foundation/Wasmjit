@@ -1,4 +1,5 @@
 #include "WasmRegistryImportResolver.hpp"
+#include "WasmStore.hpp"
 #include <limits>
 
 namespace WASM {
@@ -107,12 +108,12 @@ void RegistryImportResolver::registerTag(std::string_view moduleName, std::strin
 std::optional<Callable> RegistryImportResolver::resolveFunction(
 	std::string_view moduleName,
 	std::string_view fieldName,
-	uint32_t typeIdx)
+	TypeId expectedType)
 {
 	auto module = registeredModules.find(moduleName);
 	if (module == std::end(registeredModules))
 		return std::nullopt;
-	return module->second.resolveFunction(fieldName, typeIdx);
+	return module->second.resolveFunction(fieldName, expectedType);
 }
 
 std::optional<Value> RegistryImportResolver::resolveGlobal(
@@ -184,13 +185,20 @@ void RegistryImportResolver::ModuleRegistry::registerTag(std::string_view fieldN
 	tags.insert_or_assign(std::string(fieldName), tagValue);
 }
 
-std::optional<Callable> RegistryImportResolver::ModuleRegistry::resolveFunction(std::string_view fieldName, uint32_t typeIdx)
+std::optional<Callable> RegistryImportResolver::ModuleRegistry::resolveFunction(std::string_view fieldName, TypeId expectedType)
 {
-	(void)typeIdx;
 	auto it = functions.find(fieldName);
 	if (it == functions.end())
 		return std::nullopt;
-	return it->second;
+
+	// The provided function's canonical type must match the import's declared
+	// type. Native imports registered without a canonical id (`TypeId::kNone`)
+	// are accepted, since their type is not known to the registry.
+	const Callable& callable = it->second;
+	if (callable.typeId != TypeId{TypeId::kNone} &&
+		!Store::global().types().matches(callable.typeId, expectedType))
+		return std::nullopt;
+	return callable;
 }
 
 std::optional<Value> RegistryImportResolver::ModuleRegistry::resolveGlobal(std::string_view fieldName, const GlobalType& type)

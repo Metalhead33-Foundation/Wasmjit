@@ -300,10 +300,10 @@ WASM::ModuleInstance* ScriptRunner::instanceFor(const std::string& name, int lin
 const WASM::FuncType* ScriptRunner::funcTypeFor(const WASM::ModuleInstance& instance, const WASM::Callable& callable)
 {
 	const WASM::Module* module = instance.context()->module;
-	if (module == nullptr || callable.typeIndex >= module->types.size())
+	if (module == nullptr || callable.localTypeIdx >= module->types.size())
 		return nullptr;
 
-	const WASM::Subtype& subtype = module->types[callable.typeIndex];
+	const WASM::Subtype& subtype = module->types[callable.localTypeIdx];
 	if (!subtype.isFunction())
 		return nullptr;
 

@@ -58,13 +58,15 @@ class ImportResolver {
 public:
 	virtual ~ImportResolver() = default;
 
-	// Resolve a function import. The typeIdx is the index into the importing
-	// module's type section — the resolver should verify compatibility if
-	// it cares about type safety (a validating resolver would check this).
+	// Resolve a function import. `expectedType` is the canonical (process-wide)
+	// identity of the importing module's declared function type; the resolver
+	// must return a callable whose type matches it (TypeRegistry::matches). A
+	// resolver that cannot know a provided callable's type (e.g. a native import
+	// registered with `TypeId::kNone`) may skip the check.
 	virtual std::optional<Callable> resolveFunction(
 		std::string_view moduleName,
 		std::string_view fieldName,
-		uint32_t         typeIdx) = 0;
+		TypeId           expectedType) = 0;
 
 	// Resolve a global import. Returns the initial value; the instantiator
 	// writes it into the instance's globals array.

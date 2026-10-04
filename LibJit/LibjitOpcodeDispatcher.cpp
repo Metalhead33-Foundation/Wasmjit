@@ -1,4 +1,5 @@
 #include "LibjitOpcodeDispatcher.hpp"
+#include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
 #include <cassert>
 #include <cmath>
@@ -612,6 +613,42 @@ jit_value_t OpcodeDispatcher::callablePointerForFuncIndex(WASM::FuncIdx funcIdx)
 		function, jit_type_void_ptr, reinterpret_cast<jit_nint>(callable));
 }
 
+// Runtime fallback for callable type checks. Exact canonical-id equality is
+// handled inline by the caller; this consults the registry for subtyping.
+// Native imports with no canonical type (kNone) are accepted.
+static int32_t wasm_callable_type_matches(uint32_t actual, uint32_t expected)
+{
+	if (actual == WASM::TypeId::kNone || actual == expected)
+		return 1;
+	return WASM::Store::global().types().matches(WASM::TypeId{actual}, WASM::TypeId{expected}) ? 1 : 0;
+}
+
+void OpcodeDispatcher::emitCallableTypeCheck(jit_value_t callablePtr, WASM::TypeIdx typeIdx)
+{
+	const WASM::TypeId want = module.typeId(WASM::LocalTypeIdx{typeIdx});
+	jit_value_t gotType = jit_insn_load_relative(
+		function, callablePtr, offsetof(WASM::Callable, typeId), jit_type_uint);
+	jit_value_t wantType = jit_value_create_nint_constant(
+		function, jit_type_uint, static_cast<jit_nint>(want.value));
+
+	// Fast path: canonical-id equality.
+	jit_label_t lbCont = jit_label_undefined;
+	jit_value_t typeOk = jit_insn_eq(function, gotType, wantType);
+	jit_insn_branch_if(function, typeOk, &lbCont);
+
+	// Slow path: registry subtyping lookup.
+	jit_type_t params[] = {jit_type_uint, jit_type_uint};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 2, 1);
+	jit_value_t args[] = {gotType, wantType};
+	jit_value_t res = jit_insn_call_native(function, "wasm_callable_type_matches",
+		reinterpret_cast<void*>(wasm_callable_type_matches), sig, args, 2, 0);
+	jit_value_t zero = jit_value_create_nint_constant(function, jit_type_int, 0);
+	jit_value_t ok = jit_insn_ne(function, res, zero);
+	jit_insn_branch_if(function, ok, &lbCont);
+	emitAbort(function);
+	jit_insn_label(function, &lbCont);
+}
+
 void OpcodeDispatcher::dispatchCallThroughCallable(jit_value_t callablePtr, WASM::TypeIdx typeIdx)
 {
 	const WASM::FuncType& calleeSig = functionSignatureForType(typeIdx);
@@ -619,15 +656,7 @@ void OpcodeDispatcher::dispatchCallThroughCallable(jit_value_t callablePtr, WASM
 
 	jit_insn_check_null(function, callablePtr);
 
-	jit_value_t gotType = jit_insn_load_relative(
-		function, callablePtr, offsetof(WASM::Callable, typeIndex), jit_type_uint);
-	jit_value_t wantType = jit_value_create_nint_constant(
-		function, jit_type_uint, static_cast<jit_nint>(typeIdx));
-	jit_value_t typeOk = jit_insn_eq(function, gotType, wantType);
-	jit_label_t lbCont = jit_label_undefined;
-	jit_insn_branch_if(function, typeOk, &lbCont);
-	emitAbort(function);
-	jit_insn_label(function, &lbCont);
+	emitCallableTypeCheck(callablePtr, typeIdx);
 
 	std::vector<jit_value_t> stackArgs(calleeSig.params.size());
 	for (size_t i = calleeSig.params.size(); i--; )
@@ -1099,15 +1128,7 @@ void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx typeIdx, WASM::TableId
 	jit_value_t callablePtr = jit_insn_load_elem(function, tablePtr, checkedIndex, jit_type_void_ptr);
 	jit_insn_check_null(function, callablePtr);
 
-	jit_value_t gotType = jit_insn_load_relative(
-		function, callablePtr, offsetof(WASM::Callable, typeIndex), jit_type_uint);
-	jit_value_t wantType = jit_value_create_nint_constant(
-		function, jit_type_uint, static_cast<jit_nint>(typeIdx));
-	jit_value_t typeOk = jit_insn_eq(function, gotType, wantType);
-	jit_label_t lbCont = jit_label_undefined;
-	jit_insn_branch_if(function, typeOk, &lbCont);
-	emitAbort(function);
-	jit_insn_label(function, &lbCont);
+	emitCallableTypeCheck(callablePtr, typeIdx);
 
 	jit_value_t fnPtr = jit_insn_load_relative(
 		function, callablePtr, offsetof(WASM::Callable, fnPtr), jit_type_void_ptr);

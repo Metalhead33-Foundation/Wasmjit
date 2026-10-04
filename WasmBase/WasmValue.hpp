@@ -4,6 +4,7 @@
 #include <type_traits>
 #include <utility>
 #include "WasmType.hpp"
+#include "WasmTypeIdentity.hpp"
 namespace WASM {
 
 // 16-byte aligned to accommodate V128 (SIMD).
@@ -45,7 +46,12 @@ struct Callable {
 	void* fnPtr;          // Signature: ret f(VMContext* ctx, params...)
 	VMContext* context;   // nullptr → JIT passes caller's VMContext (native import)
 	                      // non-null → JIT burns this address into code (Wasm import)
-	uint32_t   typeIndex; // For call_indirect runtime type checking
+	uint32_t   localTypeIdx; // Module-local type index in the *defining* module.
+	// Canonical (process-wide) identity of this function's type. Set when the
+	// callable is produced by a module; `kNone` for native imports registered by
+	// an embedder without a canonical type. Used for cross-module type matching
+	// (`call_indirect`, `call_ref`, function imports).
+	TypeId     typeId = TypeId{TypeId::kNone};
 };
 
 template<typename Ret, typename... Args>

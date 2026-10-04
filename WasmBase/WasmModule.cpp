@@ -7,6 +7,45 @@
 namespace WASM {
 typedef Elv::Io::DataStream<Elv::Util::Endian::Little> DWasmStream;
 
+namespace {
+
+// A member of a `rec` group may reference types in earlier groups or any member
+// of its own group. A *supertype* must additionally be strictly earlier than
+// the subtype. Anything else is out of scope and is rejected
+// (docs/TYPE_IDENTITY.md §6.8). We do not yet validate `sub` annotations
+// structurally (that is M4).
+void validateTypeGroupMember(const Subtype& subtype, uint32_t selfIndex, uint32_t groupEnd)
+{
+	for (uint32_t super : subtype.supertypeIndices) {
+		if (super >= selfIndex)
+			throw std::runtime_error("type section: supertype must refer to an earlier type");
+	}
+
+	const auto checkStorage = [groupEnd](const StorageType& storage) {
+		if (storage.isPacked)
+			return;
+		if (storage.val.heapType < 0)
+			return; // abstract heap type, not a type index
+		if (static_cast<uint32_t>(storage.val.heapType) >= groupEnd)
+			throw std::runtime_error("type section: reference to a later rec group is out of scope");
+	};
+
+	if (subtype.isFunction()) {
+		const FuncType& ft = std::get<FuncType>(subtype.composite);
+		for (const StorageType& p : ft.params)
+			checkStorage(p);
+		for (const StorageType& r : ft.results)
+			checkStorage(r);
+	} else if (subtype.isStruct()) {
+		for (const FieldType& f : std::get<StructType>(subtype.composite).fields)
+			checkStorage(f.storageType);
+	} else if (subtype.isArray()) {
+		checkStorage(std::get<ArrayType>(subtype.composite).elementType.storageType);
+	}
+}
+
+} // namespace
+
 void Module::processSecetions(Elv::Io::Device& file)
 {
 	for(const auto& it : sections)
@@ -41,6 +80,7 @@ void Module::processTypeSection(Elv::Io::Device& file, const Section& section)
 	// Parse into a scratch buffer; the Store's TypeRegistry takes ownership of
 	// the finished block and we keep a non-owning span view of it.
 	std::vector<Subtype> parsedTypes;
+	std::vector<TypeGroup> parsedGroups;
 	for(uint32_t i = 0; i < numGroups; ++i)
 	{
 		uint8_t typePrefix;
@@ -54,10 +94,16 @@ void Module::processTypeSection(Elv::Io::Device& file, const Section& section)
 			numSubtypes = 1;
 			file.seek(-1, Elv::Io::SeekOrigin::CUR);
 		}
-		processSubtypes(wasmStream, i, numSubtypes, parsedTypes);
+		const uint32_t groupFirst = static_cast<uint32_t>(parsedTypes.size());
+		processSubtypes(wasmStream, i, numSubtypes, parsedTypes, groupFirst);
+		parsedGroups.push_back(TypeGroup{LocalTypeIdx{groupFirst}, numSubtypes});
 	}
 
 	types = Store::global().types().registerModule(std::move(parsedTypes));
+	typeGroups = std::move(parsedGroups);
+	// Canonicalize and intern the groups; typeIds[i] is the process-wide identity
+	// of types[i] (docs/TYPE_IDENTITY.md §6.3).
+	typeIds = Store::global().types().internModule(types, typeGroups);
 }
 
 void Module::processImportSection(Elv::Io::Device& file, const Section& section)
@@ -406,9 +452,10 @@ void Module::processNameSection(Elv::Io::Device& file, const Section& section)
 	}
 }
 
-void Module::processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t numSubTypes, std::vector<Subtype>& out)
+void Module::processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t numSubTypes, std::vector<Subtype>& out, uint32_t groupFirst)
 {
 	(void)typeNum;
+	const uint32_t groupEnd = groupFirst + numSubTypes;
 	for(uint32_t i = 0; i < numSubTypes; ++i)
 	{
 		Subtype st;
@@ -460,6 +507,7 @@ void Module::processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t num
 			a.elementType.isMutable = (mut == 0x01);
 			st.composite = a;
 		}
+		validateTypeGroupMember(st, groupFirst + i, groupEnd);
 		out.push_back(st);
 	}
 }
@@ -622,6 +670,13 @@ void Module::fromFile(Elv::Io::Device& file)
 const std::span<const Section> Module::getSections() const
 {
 	return sections;
+}
+
+TypeId Module::typeId(LocalTypeIdx idx) const
+{
+	if (idx.value >= typeIds.size())
+		throw std::out_of_range("Module::typeId: local type index out of range");
+	return typeIds[idx.value];
 }
 
 bool Module::isSubtype(TypeIdx actual, TypeIdx expected) const
