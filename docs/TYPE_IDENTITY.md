@@ -1,6 +1,6 @@
 # Type Identity, Equivalence, and Matching
 
-Status: design note / implementation reference.
+Status: design note / implementation reference (revision 2).
 Audience: anyone touching `WasmType`, `WasmTypeRegistry`, `ModuleInstance`,
 `RegistryImportResolver`, or `LibJitTypeTranslator`.
 
@@ -16,6 +16,9 @@ This note separates three questions that are easy to conflate:
 
 The spec answers (1) declaratively; (2) follows from the spec being
 representation-agnostic; (3) is our design choice.
+
+Revision 2 turns the design (§6) into an ordered implementation plan (§8) and
+test plan (§9), and records decisions that were previously open (§7).
 
 ## 1. Scope
 
@@ -118,6 +121,8 @@ The final spec distills these into the `Deftype_sub/refl` and
   of the provided extern value. **This is the cross-module case.**
 - **Casts**: `ref.test`, `ref.cast`, `br_on_cast(_fail)` classify heap types via
   the subtyping relation.
+- **Indirect calls**: `call_indirect` checks that the callee's function type
+  matches the expected type; it is a match check, not a plain equality check.
 
 ### 3.4 Consequence for cross-module values
 
@@ -148,85 +153,156 @@ implementation technique — used by production engines — is to **canonicalize
 and intern `rec` groups**:
 
 - **Global identity.** Compute a canonical, recursion-free key for each `rec`
-  group (in-group references as de Bruijn indices, out-of-group references as
+  group (in-group references as member indices, out-of-group references as
   already-interned global ids), hash-cons it, and assign a stable global
   identity. Two structurally equal groups — from any module — then share one
   identity.
 - **O(1) equivalence.** Equivalence collapses to an integer comparison.
-- **Cross-module `match`.** Subtyping becomes a walk over a canonical supertype
-  DAG, so import checking and casts work naturally across modules.
+- **Cross-module `match`.** Subtyping becomes a walk up a canonical supertype
+  chain, so import checking and casts work naturally across modules.
 - **Memory dedup.** Repeated function signatures (the bulk of types in real
   modules) collapse to one canonical entry.
 - **Stable ids for the JIT.** `LibJitTypeTranslator` can key its caches by the
   global id instead of module-local indices, enabling cross-module reuse of
-  lowered `jit_type_t`s (see §6.5).
+  lowered `jit_type_t`s (see §6.7).
 
 None of this is mandated; it is an implementation strategy that *realizes* the
 spec's relations efficiently and safely.
 
-## 6. Proposed design for this engine
+## 6. Design for this engine
 
-### 6.1 Global identity
+### 6.1 Identifiers
 
-- `TypeId`: dense `uint32_t`, assigned by `TypeRegistry`.
-- `RecGroupId`: identity of an interned group (a contiguous run of `TypeId`s).
-- `LocalTypeIdx`: the existing module-local `uint32_t` used by `Subtype`,
-  `ValueType::heapType`, and `Callable::typeIndex` today.
+| Name | Meaning |
+|------|---------|
+| `LocalTypeIdx` | The existing module-local `uint32_t` used by `Subtype`, `ValueType::heapType`, and `Callable::typeIndex` today. Means only "type *n* in *this* module". |
+| `TypeId` | Dense `uint32_t`, assigned by `TypeRegistry`. Identifies one canonical defined type, process-wide. |
+| `RecGroupId` | Identity of an interned group: a contiguous run of `TypeId`s. |
+
+`LocalTypeIdx`, `TypeId` and `RecGroupId` are **distinct struct types, not
+aliases of `uint32_t`**, so the compiler rejects accidental mixing. A module-local
+index must never be used to identify a type across modules.
 
 `Module` keeps its `types` span (layout, consumed by the JIT) and gains a
 parallel `typeIds` vector mapping `LocalTypeIdx -> TypeId`.
 
+**Single boundary.** There is exactly one place where local indices become
+global identities: `TypeRegistry` interning, surfaced to the rest of the engine
+as `TypeId Module::typeId(LocalTypeIdx) const`. Registry, runtime, linking, GC
+and JIT code reason in `TypeId`s and do not convert back and forth.
+
 ### 6.2 Canonical form
 
-A canonical type is a recursion-free description whose references are either
-abstract heap types or global ids:
+A canonical type is a recursion-free description. Its references are abstract
+heap types, global ids, or (during construction only) positions within the group
+being built:
 
-    CanonTypeRef  = Abstract(AbstractHeapType)
+    CanonHeapType = Abstract(AbstractHeapType)
                   | Global(TypeId)
-                  | Rec(depth)            // during construction only
-    CanonStorage  = { isPacked, CanonTypeRef }
+                  | Rec(memberIndex)       // construction only
+    CanonValueType = Num/Vec(opcode)
+                   | Ref(nullable, CanonHeapType)
+    CanonStorage  = Packed(i8|i16) | Value(CanonValueType)
     CanonField    = { CanonStorage, isMutable }
     CanonicalType = { kind: Func|Struct|Array, isFinal,
-                      supertypes: [CanonTypeRef],
+                      supertype: optional CanonHeapType (Global after interning),
+                      depth,              // length of the supertype chain
                       ... kind-specific payload ... }
 
-`Rec(depth)` is a de Bruijn index into the enclosing group, used while hashing a
-group. After interning, `Rec` references are resolved to `Global(TypeId)`, so the
-stored graph is purely id-based.
+Notes:
 
-### 6.3 Streaming canonicalization
+- `Rec(memberIndex)` is the **absolute index of the member within its `rec`
+  group** — exactly the spec's `rec.i`. Groups do not nest, so no de Bruijn
+  depth or relative offset is needed.
+- `CanonValueType` carries numeric/vector kinds and nullability. A reference type
+  is a heap type plus nullability; nullability is not part of the heap type.
+- **At most one supertype.** Validation allows at most one declared supertype,
+  so a canonical type stores one optional `supertype` and a derived `depth`.
+  The parser rejects declarations with more than one supertype.
+- A canonical type's identity includes `isFinal` and its supertype.
+- After interning, every `Rec(i)` is rewritten to `Global(TypeId)`, so the stored
+  graph is purely id-based. Canonical types never contain a `LocalTypeIdx`.
 
-Process the type section group by group, in order:
+### 6.3 Streaming canonicalization and interning
+
+The **group** is the unit of interning, never an individual type. Process the
+type section group by group, in order:
 
 1. Translate each member's component references: in-group index -> `Rec{member
-   index}`; earlier index -> `Global{localToGlobal[index]}`; later index ->
-   invalid (reject or tolerate per policy).
-2. Hash the whole group (structural, de Bruijn-stable) and look it up.
-3. On a hit, reuse the group's ids; on a miss, allocate fresh ids and store the
-   canonical group.
-4. Record `localToGlobal[groupStart + j]`.
+   index}`; earlier-group index -> `Global{localToGlobal[index]}`; later-group
+   index -> invalid (reject).
+2. Hash the whole group (order-preserving over members) and look it up.
+3. On a hash hit, **verify full structural equality** against the stored group
+   before reusing it; a hash match alone is never identity. On a verified hit,
+   reuse the group's ids.
+4. On a miss, allocate fresh contiguous ids, rewrite `Rec` to `Global`, compute
+   each member's `depth` from its supertype (which is always an earlier member or
+   an earlier group), and store the canonical group.
+5. Record `localToGlobal[groupStart + j]`.
 
 Because earlier groups are canonicalized first, out-of-group references are
-already global ids. Group identity is therefore well-founded and the whole type
-section needs a single pass.
+already global ids. Group identity is well-founded and the whole type section
+needs a single pass.
+
+A bare type definition is a `rec` group of size one, and must intern to the same
+identity as an explicit single-member `rec`.
 
 ### 6.4 `match` across modules
 
-With canonical ids:
+Abstract heap types are not `TypeId`s, so the entry point works on heap types:
 
-    matches(actual, expected):
-      if actual == expected:            true
-      if expected is abstract:          classify actual against the hierarchy
-      else:                             search actual's supertype DAG (memoized,
-                                        cycle-safe) for expected
+    matchesHeap(actual: CanonHeapType, expected: CanonHeapType):
+      if actual == expected:               true
+      if expected is Abstract:             classify actual against the hierarchy
+      if actual is Abstract:               false   // abstract never matches a concrete type
+                                                   // (except bottom types, handled in classify)
+      else:                                walk actual's supertype chain for expected
 
-Cross-module behaviour then falls out of global ids. The structural composite
-comparator (func contravariance, struct width, mutable-field invariance, array
-variance) is needed mainly for *validation* and for checking declared `sub`
-annotations; import and cast matching is primarily id equality plus supertype
-reachability plus abstract classification.
+    matches(actual: TypeId, expected: TypeId)   // concrete-only wrapper
+      == matchesHeap(Global(actual), Global(expected))
 
-### 6.5 JIT type caching on stable identities
+Because supertype chains are acyclic by construction (a supertype is always an
+earlier definition), the walk needs no memoization or cycle handling. It is
+bounded by `depth`; if profiling ever shows it matters, a per-type display array
+makes it O(1).
+
+Abstract classification reuses the existing hierarchy logic in
+`ModuleInstance::refMatchesHeapType`: `any`, `eq`, `i31`, `struct`, `array`,
+`func`, `extern`, plus the bottom types, and the `ref` / `ref null` split.
+
+Reference-type matching combines `matchesHeap` with nullability (a non-nullable
+reference matches a nullable one with a matching heap type, not the reverse).
+Mutable global types, and other invariant positions, require equality of the
+canonical value type rather than a match.
+
+### 6.5 Validation of declared subtypes (safety gate)
+
+The structural composite comparator (func contravariance, struct width, mutable
+field invariance, array covariance) is required for **validation**: checking that
+each `sub` annotation is well-formed against its declared supertype.
+
+This is a safety requirement, not an optimization. Once casts and imports rely on
+id equality plus the supertype chain, an unvalidated `sub` annotation lets a
+module *claim* a subtype relation it does not satisfy, which can lead to type
+confusion in compiled code. **Cross-module matching and runtime cast migration
+must not be enabled until declared-subtype validation is in place.**
+
+### 6.6 Threading and lifetime
+
+- **Single-threaded instantiation.** Instantiation and all initialization work,
+  including type interning, are strictly single-threaded by design. The registry
+  therefore needs no locking. Debug builds assert that interning runs on the
+  designated instantiation thread, so a violation shows up in tests.
+- **Stable storage.** Canonical entries live in stable storage (a deque or arena)
+  so references remain valid as the registry grows, unless it is guaranteed that
+  no wasm code runs during interning, in which case a `vector` is acceptable and
+  should say so in a comment.
+- **Process lifetime.** The registry never unregisters. `TypeId`s are never
+  reused and entries are never freed, which keeps `TypeId`s stored in GC object
+  headers valid forever. Memory is cumulative; see §11 for the effect of
+  interning on it, and the counters in §8 (M8) for measuring it.
+
+### 6.7 JIT type caching on stable identities
 
 `LibJitTypeTranslator` currently keys on `ValueType{opcode, heapType}` where
 `heapType` is a **module-local** index, and indexes `translatedTypes` by that
@@ -237,14 +313,142 @@ With a global `TypeId`, the cache can be keyed by identity:
 
 - concrete reference types -> `TypeId`;
 - abstract heap types -> `(opcode, AbstractHeapType)`;
-- `translatedTypes` -> a map `TypeId -> jit_type_t` (plus a per-module
-  `LocalTypeIdx -> TypeId` lookup).
+- `translatedTypes` -> a map `TypeId -> jit_type_t` (plus the per-module
+  `LocalTypeIdx -> TypeId` lookup from `Module::typeIds`).
 
 `jit_type_t` is a per-`jit_context` structural entity, so identical canonical
-types may share one. The per-module reset can then be dropped, or kept only as a
-defensive measure.
+types may share one within a context. If more than one `jit_context` can exist,
+the cache must be per context. The per-module reset can then be dropped, or kept
+only as a defensive measure.
 
-## 7. Current state and gaps in this codebase
+### 6.8 Ill-formed input policy
+
+Canonicalization assumes well-formed input, and the policy for anything else is
+**reject**. A forward reference to a later group, an out-of-range index, a
+declaration with more than one supertype, or an invalid `sub` annotation causes
+the module to fail registration, and it is never instantiated. No tolerance mode
+is planned.
+
+## 7. Decisions record
+
+| Question | Decision |
+|----------|----------|
+| Recursive reference encoding | Absolute member index (`rec.i`), not relative offset or depth. |
+| Number of supertypes | At most one; stored as `supertype` + `depth`; extras rejected at parse. |
+| Unit of interning | The `rec` group; a hash hit is confirmed by full structural equality. |
+| Abstract vs. concrete in `match` | `matchesHeap` over `CanonHeapType`; `matches(TypeId, TypeId)` is a wrapper. |
+| Value types in canonical form | `CanonValueType` with numeric/vector kinds and nullability. |
+| Local vs. global index types | Distinct struct types, not aliases. |
+| Ill-formed modules | Reject. |
+| Threading | Instantiation and initialization are single-threaded; no registry locking. |
+| Registry lifetime | Process lifetime; ids never reused. |
+| Subtype validation | Required before cross-module matching is enabled (§6.5). |
+
+## 8. Implementation plan
+
+Order: M0 -> M1 -> M2 -> M3, then M4 -> M5 -> M6, with M7 in parallel after M3.
+Each milestone leaves the engine working.
+
+**M0 — Invariants and strong types.**
+- Introduce `LocalTypeIdx`, `TypeId`, `RecGroupId` as distinct types and
+  `Module::typeId(LocalTypeIdx)`.
+- Add counters for types parsed versus types interned (used in M8).
+- *Done when:* the engine builds with the strong types in place and no behaviour
+  change.
+
+**M1 — Preserve `rec` groups.**
+- In `Module::processSubtypes`, record `groups: vector<{first, count}>` alongside
+  the flat `types` span. A bare type is a group of one.
+- Reject forward references to later groups and declarations with more than one
+  supertype.
+- *Done when:* group boundaries round-trip for `type-canon.wast`-style modules
+  and all existing tests pass.
+
+**M2 — Scaffold `typeIds`.**
+- Populate `Module::typeIds` with unique per-module ids, with no interning yet.
+- Use the compiler errors from M0's strong types to enumerate every place that
+  assumes a local index is an identity: `ModuleInstance::refMatchesHeapType`, GC
+  object headers, `Module::isSubtype`, `LibJitTypeTranslator`,
+  `Callable::typeIndex`.
+- *Done when:* behaviour is unchanged. These ids must not be used across modules
+  yet; doing so would wrongly reject valid links.
+
+**M3 — Canonical form and interning.**
+- Implement §6.2 and §6.3 in `WasmTypeRegistry`: canonical structures,
+  group canonicalization, hash-cons with verified equality, stable storage.
+- Switch `Module::typeIds` to the interned ids.
+- *Done when:* the same group in two modules gets the same ids, structurally
+  different groups get different ids, and a forced-collision hasher still keeps
+  distinct groups apart.
+
+**M4 — Declared-subtype validation (gate).**
+- Implement the structural comparator (§6.5) and run it on every `sub`
+  annotation at parse time.
+- *Done when:* well-formed `sub` declarations are accepted and invalid ones are
+  rejected. **M5 and M6 depend on this.**
+
+**M5 — Matching at link time.**
+- Implement `matchesHeap` and `matches` (§6.4).
+- Route `RegistryImportResolver` import checks (function, global, table, tag)
+  and `call_indirect` through them, with an id-equality fast path.
+- *Done when:* `linking.wast` and `imports*.wast` pass, including cross-module
+  cases.
+
+**M6 — Runtime type tags and casts.**
+- Change GC object headers, `ModuleInstance::refMatchesHeapType` and the cast
+  instructions (`ref.test`, `ref.cast`, `br_on_cast(_fail)`) to `TypeId` together,
+  since a cast needs the header.
+- Rename `Callable::typeIndex` so its meaning is explicit: `localTypeIdx` if it
+  stays module-local, `typeId` if it becomes runtime identity.
+- *Done when:* `ref_cast`, `ref_test` and `br_on_cast*` pass, including with
+  references crossing module boundaries.
+
+**M7 — JIT cache on `TypeId`** (parallel with M4–M6, after M3).
+- Implement §6.7.
+- *Done when:* two modules sharing a signature reuse one `jit_type_t`, in either
+  load order, and the per-module reset is no longer needed for correctness.
+
+**M8 — Measure, decide on layout, update docs.**
+- Report the dedup ratio (types parsed versus interned) and registry memory on
+  representative workloads.
+- Decide whether the `Subtype` shrink in §11 is worth doing.
+- Update §7 of this note's predecessor ("Current state and gaps", now §10) to
+  match the new reality.
+
+## 9. Test plan
+
+Beyond the existing spec tests (`type-canon.wast`, `ref_cast.wast`,
+`ref_test.wast`, `br_on_cast*.wast`, `linking.wast`, `imports*.wast`), add a
+dedicated suite:
+
+| Test | What it pins |
+|------|--------------|
+| `rec` group round-trip | Parser emits correct group boundaries. |
+| Identical group in two modules | Same `TypeId`s. |
+| Different signature (`(i32)->i32` vs `(i64)->i32`) | Different `TypeId`s. |
+| Singleton `rec` vs plain type definition | Same identity. |
+| Self-recursive type in two modules | Same `TypeId`. |
+| Mutual recursion in two modules | Same canonical group. |
+| `A→B, B→A` vs `A→A, B→B` | Must not collide. |
+| Same shape, different finality or supertype | Different `TypeId`s. |
+| Member order inside a group | Order matters. |
+| Re-registering a module | Idempotent. |
+| Forced hash collision | Distinct groups stay distinct. |
+| Earlier-group reference | Resolves through the earlier group's `TypeId`. |
+| Forward-group reference | Rejected, never resolved through an uninitialized id. |
+| More than one declared supertype | Rejected at parse. |
+| Invalid `sub` annotation | Rejected by validation. |
+| `matches(Derived, Base)` / `matches(Base, Derived)` | True / false. |
+| Cross-module `Derived` vs independently canonicalized `Base` | Matches. |
+| Function variance, struct width, mutable-field invariance, array covariance | Comparator rules. |
+| Abstract hierarchy | `i31 <: eq <: any`, `struct <: eq`, bottom types. |
+| Nullability | Non-nullable matches nullable, not the reverse. |
+| Mutable global import with different canonical type | Rejected (invariant). |
+| `call_indirect` across modules | Matching callee accepted, non-matching traps. |
+| Runtime tag migration | GC header carries `TypeId`; casts work cross-module. |
+| JIT identity | Same `TypeId` yields the same cached `jit_type_t`, regardless of load order. |
+
+## 10. Current state and gaps in this codebase
 
 - `TypeRegistry` (`WasmBase/WasmTypeRegistry.hpp`) owns type blocks but has **no
   identity or interning**: `registerModule` hands out a
@@ -254,6 +458,8 @@ defensive measure.
   not implement structural composite subtyping or cross-module matching.
 - `ModuleInstance::refMatchesHeapType` and GC object headers use module-local
   indices; an object's runtime type tag is a local index, not a global id.
+- `Callable::typeIndex` is a module-local index, which makes its meaning
+  ambiguous once global ids exist (see M6).
 - The parser **flattens `rec` groups** into one `Subtype` vector
   (`Module::processSubtypes`), so group boundaries are currently lost — the
   information canonicalization needs first.
@@ -261,24 +467,23 @@ defensive measure.
   required for correctness (`LibJit/LibJitTypeTranslation.cpp`). There is no
   stable type identity to cache against today.
 
-## 8. Non-goals / deferred
+## 11. Non-goals / deferred
 
 - The GC **heap** itself (allocation, collection) — a separate concern.
 - Host/extern type identity (the JS API side) — not modelled here.
-- A full **validation** algorithm. Canonicalization assumes well-formed input;
-  a policy is needed for ill-formed modules (tolerate or reject).
 - Type **reflection / introspection** APIs.
-- Replacing the `Subtype` layout representation (footprint and options in §9).
-  The canonical form is a second, index-oriented representation; dedup is
-  expected to offset its cost.
+- `VMContext` and multi-memory layout — a separate workstream.
+- Replacing the `Subtype` layout (footprint and options below). The canonical
+  form is a second, index-oriented representation; dedup is expected to offset
+  its cost.
 
-## 9. Type storage footprint (`Subtype`) and future optimization
+## 12. Type storage footprint (`Subtype`) and future optimization
 
 The registry stores each module's types as a contiguous `std::vector<Subtype>`
 block (`TypeRegistry::registerModule`), so the per-type cost is dominated by
 `sizeof(Subtype)`.
 
-### 9.1 Measured size
+### 12.1 Measured size
 
 Measured on the current toolchain (x86-64, libstdc++) with `sizeof`:
 
@@ -308,7 +513,7 @@ struct or an array — reserves the 48-byte `FuncType` payload (two
 `std::vector`s), and every type pays 24 bytes for `supertypeIndices` even when it
 has none.
 
-### 9.2 Expected footprint for a module
+### 12.2 Expected footprint for a module
 
 The block contributes `88 x N` bytes for `N` types, plus heap for the nested
 vectors (`params`, `results`, `fields`, `supertypeIndices`) whenever they are
@@ -323,11 +528,11 @@ the raw element bytes plus ~16 B per non-empty vector:
 | 1,000 | ~88 KB | ~100–200 KB | ~0.2 MB |
 | 10,000 | ~0.9 MB | ~1–2 MB | ~2 MB |
 
-Because the registry never unregisters, this is cumulative over the process
-lifetime: the total is `88 x (types across all modules ever parsed)`, not just
-the live modules. A transient 1,000-type module leaves ~0.2 MB behind.
+Because the registry never unregisters (§6.6), this is cumulative over the
+process lifetime: the total is `88 x (types across all modules ever parsed)`, not
+just the live modules. A transient 1,000-type module leaves ~0.2 MB behind.
 
-### 9.3 Relationship to the rest of this document
+### 12.3 Relationship to the rest of this document
 
 - **Partly related (to interning).** The canonicalization in §6 changes how many
   types are stored: structurally identical `rec` groups are stored once, so
@@ -340,10 +545,10 @@ the live modules. A transient 1,000-type module leaves ~0.2 MB behind.
 - **Mostly separate (layout vs. identity).** The 88-byte figure is a property of
   the current in-memory layout (`std::variant` + owning `std::vector`s), not of
   type identity or `match`. Shrinking it is an independent optimization, in the
-  same category as the GC heap (§8) rather than a prerequisite for interning;
+  same category as the GC heap (§11) rather than a prerequisite for interning;
   neither requires the other.
 
-### 9.4 Possible future optimizations (not planned here)
+### 12.4 Possible future optimizations (not planned here)
 
 - **Drop the `std::variant`.** Replace `CompositeDefinition` with a manually
   tagged union, or a structure-of-arrays registry (parallel `kind` / `isFinal` /
@@ -353,12 +558,12 @@ the live modules. A transient 1,000-type module leaves ~0.2 MB behind.
   a registry-owned arena instead of owning `std::vector`s. Canonicalization
   already centralizes types globally, making shared, immutable parameter/result
   arrays natural and eliminating per-type allocations.
-- **Shrink `supertypeIndices`.** At most one supertype is allowed in practice; a
-  single `TypeId` plus a "none" marker replaces the 24-byte vector (keep a
-  variable-length form only if multiple supertypes are ever needed).
+- **Shrink `supertypeIndices`.** Since §6.2 fixes at most one supertype, a single
+  `TypeId` plus a "none" marker replaces the 24-byte vector.
 - **Inline `isFinal`** into the kind tag, removing the padding.
 - **Measure the dedup ratio first.** Before investing in layout work, measure how
-  many types interning collapses; it may already remove most of the pressure.
+  many types interning collapses (M8); it may already remove most of the
+  pressure.
 
 A compact representation on the order of 8–16 bytes per type for the common
 function-signature case (plus shared component storage) looks achievable — a
@@ -369,7 +574,7 @@ Reproduce the figures with:
     #include "WasmType.hpp"
     printf("%zu\n", sizeof(WASM::Subtype));   // 88 on x86-64 / libstdc++
 
-## 10. References
+## 13. References
 
 - WebAssembly 3.0 specification (living draft):
   - Validation — Matching:
@@ -389,6 +594,3 @@ Reproduce the figures with:
   - `type-canon.wast` — recursive `rec` groups (within a module).
   - `ref_cast.wast`, `ref_test.wast`, `br_on_cast*.wast` — cast/`match` behaviour.
   - `linking.wast`, `imports*.wast` — import type matching across modules.
-
-
-
