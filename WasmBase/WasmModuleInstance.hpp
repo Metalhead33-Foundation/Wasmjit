@@ -21,9 +21,11 @@ struct ModuleInstanceInternals {
 	// It never needs resizing after instantiation, so the pointers stay valid.
 	std::vector<LinearMemory*> memoryRefs;
 	std::vector<Value>     globalsStorage;
-	// Tables are owned by the Store as well; this is a borrowed pointer to the
-	// store-owned table backing ctx.table/tableSize/tableMax. Not owned here.
-	StoreOwnedTable*       tableStorage = nullptr;
+	// Tables are owned by the Store as well; `tableRefs` is the table index
+	// space that ctx.tables points at (imports first, then own tables). It is
+	// borrowed, not owned, and never resized after instantiation. Each
+	// TableInstance view is updated in place when the Store grows it.
+	std::vector<TableInstance*> tableRefs;
 	std::vector<Callable> internalCallables;
 	std::vector<Callable>  importStorage; // Owns the WasmCallable objects for imports
 	std::vector<bool> dataSegmentDropped;
@@ -71,10 +73,10 @@ public:
 	int32_t growMemory(uint32_t memIdx, uint32_t deltaPages);
 
 	// Called when table.grow executes.
-	bool growTable(uint32_t deltaEntries);
+	bool growTable(uint32_t tableIdx, uint32_t deltaEntries);
 	void memoryInit(uint32_t memIdx, uint32_t dataIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len);
 	void dataDrop(uint32_t dataIdx);
-	void tableInit(uint32_t elemIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len);
+	void tableInit(uint32_t elemIdx, uint32_t tableIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len);
 	void elemDrop(uint32_t elemIdx);
 	void bufferInitFromData(uint32_t dataIdx, void* dst, uint32_t srcOffset, uint32_t lenBytes);
 	void bufferInitFromElems(uint32_t elemIdx, void* dst, uint32_t srcOffset, uint32_t lenElems);

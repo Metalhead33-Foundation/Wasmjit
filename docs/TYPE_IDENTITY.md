@@ -470,19 +470,28 @@ dedicated suite:
   now carries a module-local `localTypeIdx` *and* a canonical `typeId`
   (`kNone` for native imports); `call_indirect`/`call_ref`/function imports
   match on `typeId`.
-- The parser **flattens `rec` groups** into one `Subtype` vector
+- ~~The parser **flattens `rec` groups** into one `Subtype` vector
   (`Module::processSubtypes`), so group boundaries are currently lost — the
-  information canonicalization needs first.
-- `LibJitTypeTranslator`'s cache is module-local; a per-module `reset()` is
-  required for correctness (`LibJit/LibJitTypeTranslation.cpp`). There is no
-  stable type identity to cache against today.
+  information canonicalization needs first.~~ **Done (M1–M4):** the parser
+  preserves `rec` groups in `TypeGroup`s, `TypeRegistry::internModule`
+  canonicalizes each group to a closed form and hash-conses it to a stable
+  `TypeId`, and `TypeRegistry::matches` / `matchesHeap` do cross-module matching.
+- ~~`LibJitTypeTranslator`'s cache is module-local; a per-module `reset()` is
+  required for correctness. There is no stable type identity to cache
+  against today.~~ **Done (M7):** the translator holds a persistent
+  `unordered_map<TypeId, jit_type_t>` keyed on the canonical `TypeId`, so
+  translated types are shared across modules and translation order no longer
+  matters.
 
 ## 11. Non-goals / deferred
 
 - The GC **heap** itself (allocation, collection) — a separate concern.
 - Host/extern type identity (the JS API side) — not modelled here.
 - Type **reflection / introspection** APIs.
-- `VMContext` and multi-memory layout — a separate workstream.
+- `VMContext` no longer needs layout work for the features shipped here:
+  multi-memory and multi-table are wired through the `memories`/`tables`
+  index-space arrays (`VMContext`). GC constant expressions are evaluated by a
+  small stack machine in `ModuleInstance::evalConstantExpr`.
 - Replacing the `Subtype` layout (footprint and options below). The canonical
   form is a second, index-oriented representation; dedup is expected to offset
   its cost.

@@ -68,6 +68,11 @@ public:
 	StoreOwnedTable* storeOwnedTable(TableId id);
 	TableInstance*   table(TableId id);
 
+	// Grow a store-owned table by deltaEntries. Returns false on a trap-worthy
+	// failure (would exceed max). The StoreOwnedTable back-pointer carried in
+	// TableInstance::hostData lets this work for any table created here.
+	static bool growTable(TableInstance* table, uint64_t deltaEntries);
+
 	// ── Reserved: store-owned runtime entities (pre-declared) ───────────
 	// Every Wasm runtime entity is intended to be Store-owned, following the
 	// memory/table pattern: a POD "instance view" + a Store-owned backing

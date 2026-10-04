@@ -132,41 +132,53 @@ static void wasm_memory_fill_impl(WASM::VMContext* vm, uint32_t memIdx, int32_t 
 	std::memset(memory->memoryBase + udst, value & 0xFF, static_cast<size_t>(ulen));
 }
 
-static int32_t wasm_table_grow_impl(WASM::VMContext* vm, void* initRef, int32_t deltaEntries)
+static int32_t wasm_table_grow_impl(WASM::VMContext* vm, uint32_t tableIdx, void* initRef, int32_t deltaEntries)
 {
 	if (deltaEntries < 0)
 		return -1;
 	WASM::ModuleInstance* m = reinterpret_cast<WASM::ModuleInstance*>(vm);
-	const uint64_t oldSize = vm->tableSize;
-	if (!m->growTable(static_cast<uint32_t>(deltaEntries)))
+	if (vm->tables == nullptr || tableIdx >= vm->tableCount)
 		return -1;
-	for (uint64_t i = oldSize; i < vm->tableSize; ++i)
-		vm->table[i] = static_cast<WASM::Callable*>(initRef);
+	WASM::TableInstance* table = vm->tables[tableIdx];
+	const uint64_t oldSize = table->size;
+	if (!m->growTable(tableIdx, static_cast<uint32_t>(deltaEntries)))
+		return -1;
+	for (uint64_t i = oldSize; i < table->size; ++i)
+		table->base[i] = static_cast<WASM::Callable*>(initRef);
 	return static_cast<int32_t>(oldSize);
 }
 
-static void wasm_table_fill_impl(WASM::VMContext* vm, int32_t start, void* ref, int32_t len)
+static void wasm_table_fill_impl(WASM::VMContext* vm, uint32_t tableIdx, int32_t start, void* ref, int32_t len)
 {
 	if (start < 0 || len < 0)
 		std::abort();
+	if (vm->tables == nullptr || tableIdx >= vm->tableCount)
+		std::abort();
+	WASM::TableInstance* table = vm->tables[tableIdx];
 	const uint64_t ustart = static_cast<uint64_t>(start);
 	const uint64_t ulen = static_cast<uint64_t>(len);
-	if (ustart + ulen > vm->tableSize)
+	if (ustart + ulen > table->size)
 		std::abort();
 	for (uint64_t i = 0; i < ulen; ++i)
-		vm->table[ustart + i] = static_cast<WASM::Callable*>(ref);
+		table->base[ustart + i] = static_cast<WASM::Callable*>(ref);
 }
 
-static void wasm_table_copy_impl(WASM::VMContext* vm, int32_t dst, int32_t src, int32_t len)
+static void wasm_table_copy_impl(WASM::VMContext* vm, uint32_t dstTableIdx, uint32_t srcTableIdx,
+								 int32_t dst, int32_t src, int32_t len)
 {
 	if (dst < 0 || src < 0 || len < 0)
 		std::abort();
+	if (vm->tables == nullptr || dstTableIdx >= vm->tableCount || srcTableIdx >= vm->tableCount)
+		std::abort();
+	WASM::TableInstance* dstTable = vm->tables[dstTableIdx];
+	WASM::TableInstance* srcTable = vm->tables[srcTableIdx];
 	const uint64_t udst = static_cast<uint64_t>(dst);
 	const uint64_t usrc = static_cast<uint64_t>(src);
 	const uint64_t ulen = static_cast<uint64_t>(len);
-	if (udst + ulen > vm->tableSize || usrc + ulen > vm->tableSize)
+	if (udst + ulen > dstTable->size || usrc + ulen > srcTable->size)
 		std::abort();
-	std::memmove(vm->table + udst, vm->table + usrc, static_cast<size_t>(ulen) * sizeof(WASM::Callable*));
+	std::memmove(dstTable->base + udst, srcTable->base + usrc,
+				 static_cast<size_t>(ulen) * sizeof(WASM::Callable*));
 }
 
 static int32_t wasm_i32_trunc_sat_f32_s(float x)
@@ -287,9 +299,9 @@ static void wasm_data_drop_impl(WASM::VMContext* vm, uint32_t dataIdx)
 	reinterpret_cast<WASM::ModuleInstance*>(vm)->dataDrop(dataIdx);
 }
 
-static void wasm_table_init_impl(WASM::VMContext* vm, uint32_t elemIdx, uint32_t dst, uint32_t src, uint32_t len)
+static void wasm_table_init_impl(WASM::VMContext* vm, uint32_t elemIdx, uint32_t tableIdx, uint32_t dst, uint32_t src, uint32_t len)
 {
-	reinterpret_cast<WASM::ModuleInstance*>(vm)->tableInit(elemIdx, dst, src, len);
+	reinterpret_cast<WASM::ModuleInstance*>(vm)->tableInit(elemIdx, tableIdx, dst, src, len);
 }
 
 static void wasm_elem_drop_impl(WASM::VMContext* vm, uint32_t elemIdx)
@@ -793,12 +805,12 @@ jit_value_t OpcodeDispatcher::vmContextValue()
 	return jit_value_get_param(function, 0);
 }
 
-jit_value_t OpcodeDispatcher::checkedTableIndex(jit_value_t index, const char* opname)
+jit_value_t OpcodeDispatcher::checkedTableIndex(jit_value_t table, jit_value_t index, const char* opname)
 {
 	(void)opname;
 	jit_value_t widened = jit_insn_convert(function, index, jit_type_ulong, 0);
 	jit_value_t tableSize = jit_insn_load_relative(
-		function, vmContextValue(), offsetof(WASM::VMContext, tableSize), jit_type_ulong);
+		function, table, offsetof(WASM::TableInstance, size), jit_type_ulong);
 	jit_value_t inBounds = jit_insn_lt(function, widened, tableSize);
 	jit_label_t cont = jit_label_undefined;
 	jit_insn_branch_if(function, inBounds, &cont);
@@ -818,6 +830,30 @@ jit_value_t OpcodeDispatcher::memoryPointerForIndex(WASM::MemIdx memidx)
 	return jit_insn_load_relative(
 		function, memories,
 		static_cast<jit_nint>(memidx) * static_cast<jit_nint>(sizeof(WASM::LinearMemory*)),
+		jit_type_void_ptr);
+}
+
+jit_value_t OpcodeDispatcher::tablePointerForIndex(WASM::TableIdx tableidx)
+{
+	// ctx.tables is an array of TableInstance* owned by the Store. As with
+	// memories, the (constant) table index folds into the load's byte offset.
+	jit_value_t vm = vmContextValue();
+	jit_value_t tables = jit_insn_load_relative(
+		function, vm, offsetof(WASM::VMContext, tables), jit_type_void_ptr);
+
+	// A module whose only table is an (as-yet unmodelled) imported table has a
+	// null table index space. Trap instead of dereferencing null.
+	jit_value_t tablesWord = jit_insn_convert(function, tables, jit_type_ulong, 0);
+	jit_value_t present = jit_insn_ne(function, tablesWord,
+		jit_value_create_long_constant(function, jit_type_ulong, 0));
+	jit_label_t ok = jit_label_undefined;
+	jit_insn_branch_if(function, present, &ok);
+	emitTrapUnreachable();
+	jit_insn_label(function, &ok);
+
+	return jit_insn_load_relative(
+		function, tables,
+		static_cast<jit_nint>(tableidx) * static_cast<jit_nint>(sizeof(WASM::TableInstance*)),
 		jit_type_void_ptr);
 }
 
@@ -1111,8 +1147,6 @@ void OpcodeDispatcher::dispatchCall(WASM::FuncIdx funcIdx)
 
 void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx typeIdx, WASM::TableIdx tableIdx)
 {
-	if (tableIdx != 0)
-		notImplemented("dispatchCallIndirect (table index != 0)");
 	assert(module.types[typeIdx].isFunction());
 	const WASM::FuncType& ft = std::get<WASM::FuncType>(module.types[typeIdx].composite);
 	jit_type_t calleeJitSig = jitTypeForTypeIdx(typeIdx);
@@ -1122,9 +1156,10 @@ void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx typeIdx, WASM::TableId
 	for (size_t i = ft.params.size(); i--; )
 		stackArgs[i] = popValue();
 
+	jit_value_t table = tablePointerForIndex(tableIdx);
 	jit_value_t tablePtr = jit_insn_load_relative(
-		function, vmContextValue(), offsetof(WASM::VMContext, table), jit_type_void_ptr);
-	jit_value_t checkedIndex = checkedTableIndex(tableElemIdx, "dispatchCallIndirect");
+		function, table, offsetof(WASM::TableInstance, base), jit_type_void_ptr);
+	jit_value_t checkedIndex = checkedTableIndex(table, tableElemIdx, "dispatchCallIndirect");
 	jit_value_t callablePtr = jit_insn_load_elem(function, tablePtr, checkedIndex, jit_type_void_ptr);
 	jit_insn_check_null(function, callablePtr);
 
@@ -1250,24 +1285,22 @@ void OpcodeDispatcher::dispatchGlobalSet(WASM::GlobalIdx arg)
 	jit_insn_store_relative(function, slot, 0, v);
 }
 void OpcodeDispatcher::dispatchTableGet(WASM::TableIdx arg) {
-	if (arg != 0)
-		notImplemented("dispatchTableGet (table index != 0)");
 	jit_value_t index = popValue();
+	jit_value_t table = tablePointerForIndex(arg);
 	jit_value_t tablePtr = jit_insn_load_relative(
-		function, vmContextValue(), offsetof(WASM::VMContext, table), jit_type_void_ptr);
+		function, table, offsetof(WASM::TableInstance, base), jit_type_void_ptr);
 	jit_type_t elementType = tableElementJitType(arg);
-	jit_value_t checkedIndex = checkedTableIndex(index, "dispatchTableGet");
+	jit_value_t checkedIndex = checkedTableIndex(table, index, "dispatchTableGet");
 	jit_value_t loaded = jit_insn_load_elem(function, tablePtr, checkedIndex, jit_type_void_ptr);
 	pushValue(castRefValue(loaded, elementType));
 }
 void OpcodeDispatcher::dispatchTableSet(WASM::TableIdx arg) {
-	if (arg != 0)
-		notImplemented("dispatchTableSet (table index != 0)");
 	jit_value_t value = popValue();
 	jit_value_t index = popValue();
+	jit_value_t table = tablePointerForIndex(arg);
 	jit_value_t tablePtr = jit_insn_load_relative(
-		function, vmContextValue(), offsetof(WASM::VMContext, table), jit_type_void_ptr);
-	jit_value_t checkedIndex = checkedTableIndex(index, "dispatchTableSet");
+		function, table, offsetof(WASM::TableInstance, base), jit_type_void_ptr);
+	jit_value_t checkedIndex = checkedTableIndex(table, index, "dispatchTableSet");
 	jit_insn_store_elem(function, tablePtr, checkedIndex, refAsVoidPtr(value));
 }
 void OpcodeDispatcher::dispatchI32Load(WASM::MemArg addr)
@@ -2880,20 +2913,19 @@ void OpcodeDispatcher::dispatchMemoryFill(WASM::MemIdx arg) {
 						 reinterpret_cast<void*>(wasm_memory_fill_impl), sig, args, 5, 0);
 }
 void OpcodeDispatcher::dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2) {
-	if (arg2 != 0)
-		notImplemented("dispatchTableInit (table index != 0)");
 	jit_value_t len = popValue();
 	jit_value_t src = popValue();
 	jit_value_t dst = popValue();
-	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint, jit_type_uint, jit_type_uint};
-	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 5, 1);
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint, jit_type_uint, jit_type_uint, jit_type_uint};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 6, 1);
 	jit_value_t args[] = {vmContextValue(),
 		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg1)),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg2)),
 		jit_insn_convert(function, dst, jit_type_uint, 0),
 		jit_insn_convert(function, src, jit_type_uint, 0),
 		jit_insn_convert(function, len, jit_type_uint, 0)};
 	jit_insn_call_native(function, "wasm_table_init_impl",
-						 reinterpret_cast<void*>(wasm_table_init_impl), sig, args, 5, 0);
+						 reinterpret_cast<void*>(wasm_table_init_impl), sig, args, 6, 0);
 }
 void OpcodeDispatcher::dispatchElemDrop(uint32_t arg) {
 	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint};
@@ -2904,46 +2936,65 @@ void OpcodeDispatcher::dispatchElemDrop(uint32_t arg) {
 						 reinterpret_cast<void*>(wasm_elem_drop_impl), sig, args, 2, 0);
 }
 void OpcodeDispatcher::dispatchTableCopy(WASM::TableIdx arg1, WASM::TableIdx arg2) {
-	if (arg1 != 0 || arg2 != 0)
-		notImplemented("dispatchTableCopy (table index != 0)");
 	jit_value_t len = popValue();
 	jit_value_t src = popValue();
 	jit_value_t dst = popValue();
-	jit_type_t params[] = {jit_type_void_ptr, jit_type_int, jit_type_int, jit_type_int};
-	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 4, 1);
-	jit_value_t args[] = {vmContextValue(), dst, src, len};
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint, jit_type_int, jit_type_int, jit_type_int};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 6, 1);
+	jit_value_t args[] = {vmContextValue(),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg1)),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg2)),
+		dst, src, len};
 	jit_insn_call_native(function, "wasm_table_copy_impl",
-						 reinterpret_cast<void*>(wasm_table_copy_impl), sig, args, 4, 0);
+						 reinterpret_cast<void*>(wasm_table_copy_impl), sig, args, 6, 0);
 }
 void OpcodeDispatcher::dispatchTableGrow(WASM::TableIdx arg) {
-	if (arg != 0)
-		notImplemented("dispatchTableGrow (table index != 0)");
 	jit_value_t delta = popValue();
 	jit_value_t initRef = popValue();
-	jit_type_t params[] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_int};
-	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 3, 1);
-	jit_value_t args[] = {vmContextValue(), initRef, delta};
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_void_ptr, jit_type_int};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 4, 1);
+	jit_value_t args[] = {vmContextValue(),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg)),
+		initRef, delta};
 	pushValue(jit_insn_call_native(function, "wasm_table_grow_impl",
-								   reinterpret_cast<void*>(wasm_table_grow_impl), sig, args, 3, 0));
+								   reinterpret_cast<void*>(wasm_table_grow_impl), sig, args, 4, 0));
 }
 void OpcodeDispatcher::dispatchTableSize(WASM::TableIdx arg) {
-	if (arg != 0)
-		notImplemented("dispatchTableSize (table index != 0)");
-	jit_value_t size = jit_insn_load_relative(
-		function, vmContextValue(), offsetof(WASM::VMContext, tableSize), jit_type_ulong);
+	// An absent table (e.g. an unmodelled imported table) reports size 0.
+	jit_value_t vm = vmContextValue();
+	jit_value_t tables = jit_insn_load_relative(
+		function, vm, offsetof(WASM::VMContext, tables), jit_type_void_ptr);
+	jit_value_t size = jit_value_create(function, jit_type_ulong);
+	jit_insn_store(function, size,
+		jit_value_create_long_constant(function, jit_type_ulong, 0));
+
+	jit_value_t tablesWord = jit_insn_convert(function, tables, jit_type_ulong, 0);
+	jit_value_t present = jit_insn_ne(function, tablesWord,
+		jit_value_create_long_constant(function, jit_type_ulong, 0));
+	jit_label_t done = jit_label_undefined;
+	jit_insn_branch_if_not(function, present, &done);
+
+	jit_value_t table = jit_insn_load_relative(
+		function, tables,
+		static_cast<jit_nint>(arg) * static_cast<jit_nint>(sizeof(WASM::TableInstance*)),
+		jit_type_void_ptr);
+	jit_insn_store(function, size, jit_insn_load_relative(
+		function, table, offsetof(WASM::TableInstance, size), jit_type_ulong));
+
+	jit_insn_label(function, &done);
 	pushValue(jit_insn_convert(function, size, jit_type_int, 0));
 }
 void OpcodeDispatcher::dispatchTableFill(WASM::TableIdx arg) {
-	if (arg != 0)
-		notImplemented("dispatchTableFill (table index != 0)");
 	jit_value_t len = popValue();
 	jit_value_t ref = popValue();
 	jit_value_t start = popValue();
-	jit_type_t params[] = {jit_type_void_ptr, jit_type_int, jit_type_void_ptr, jit_type_int};
-	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 4, 1);
-	jit_value_t args[] = {vmContextValue(), start, ref, len};
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_int, jit_type_void_ptr, jit_type_int};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 5, 1);
+	jit_value_t args[] = {vmContextValue(),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg)),
+		start, ref, len};
 	jit_insn_call_native(function, "wasm_table_fill_impl",
-						 reinterpret_cast<void*>(wasm_table_fill_impl), sig, args, 4, 0);
+						 reinterpret_cast<void*>(wasm_table_fill_impl), sig, args, 5, 0);
 }
 void OpcodeDispatcher::dispatchV128Load(WASM::MemArg arg) {
 	notImplemented(__func__);

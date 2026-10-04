@@ -90,9 +90,11 @@ private:
 	std::vector<WASM::StorageType> storageTypesForBlockType(const WASM::BlockType& bt) const;
 
 	jit_value_t vmContextValue();
-	jit_value_t checkedTableIndex(jit_value_t index, const char* opname);
+	jit_value_t checkedTableIndex(jit_value_t table, jit_value_t index, const char* opname);
 	// Emits code yielding the LinearMemory* for a (constant) memory index.
 	jit_value_t memoryPointerForIndex(WASM::MemIdx memidx);
+	// Emits code yielding the TableInstance* for a (constant) table index.
+	jit_value_t tablePointerForIndex(WASM::TableIdx tableidx);
 	// Emits a runtime check that `callablePtr`'s canonical type id matches the
 	// module-local type index `typeIdx` (id fast path, registry fallback).
 	void emitCallableTypeCheck(jit_value_t callablePtr, WASM::TypeIdx typeIdx);

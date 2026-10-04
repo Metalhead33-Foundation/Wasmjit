@@ -14,6 +14,7 @@ StoreOwnedTable::StoreOwnedTable(uint64_t initialSize, uint64_t maxSize)
 	table.base = slots.data();
 	table.size = initialSize;
 	table.max  = maxSize;
+	table.hostData = this;
 }
 
 bool StoreOwnedTable::grow(uint64_t deltaEntries)

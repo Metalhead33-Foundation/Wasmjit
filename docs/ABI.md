@@ -101,9 +101,8 @@ Plain-old-data struct passed as arg0 to every JIT function.
 | `memoryCount`          | `uint32_t`             | Number of entries in `memories`                    |
 | `module`               | `const Module*`        | Type graph metadata for GC/reference checks        |
 | `globals`              | `Value*`        | Flat array of global values                            |
-| `table`                | `Callable**`    | Function table for `call_indirect`                     |
-| `tableSize`            | `uint64_t`      | Current table size                                     |
-| `tableMax`             | `uint64_t`      | Max table size                                         |
+| `tables`               | `TableInstance**` | Table index space (imports first, then locals)       |
+| `tableCount`           | `uint32_t`      | Number of entries in `tables`                          |
 | `importedFunctions`    | `Callable*`     | Imported function handles (import section order)       |
 | `importedFunctionCount`| `uint32_t`      | Number of imported functions                           |
 | `hostData`             | `void*`         | Opaque pointer for embedder state                      |
@@ -139,9 +138,19 @@ The same pattern extends to every runtime entity. The Store now also owns:
   heap-allocated and never relocated, so the views stay valid for the process
   lifetime.
 - **Tables** (`StoreOwnedTable` / `TableInstance`, `WasmTable.hpp`). The store
-  owns the slot array (`Callable**`); `ModuleInstance` borrows a
-  `StoreOwnedTable*`, and `VMContext::table/tableSize/tableMax` are kept in sync
-  with its `TableInstance` (re-synced on `table.grow`).
+  owns each slot array (`Callable**`); `ModuleInstance` borrows one
+  `TableInstance*` per declared table into `internals.tableRefs`, which is
+  exactly what `VMContext::tables` points at. The table index is a compile-time
+  constant, so the JIT folds it into the load offset and reads `base`/`size`
+  straight from the `TableInstance`. Growth goes through `Store::growTable`
+  (recovering the owning `StoreOwnedTable` from `TableInstance::hostData`) and
+  updates the view in place, so `ctx.tables` never needs re-syncing. All table
+  instructions (`table.get/set/size/grow/fill/copy/init`, `call_indirect`) are
+  now multi-table.
+
+  *Gap:* table **imports** are not modelled yet. A module that only imports a
+  table therefore has an empty index space; it exports an empty table view, and
+  `table.grow` reports `-1` / `table.size` reports `0` for it.
 
 The remaining entity kinds are **pre-declared** in `Store` (`StoreOwnedGlobal`,
 `StoreOwnedTag`, `StoreOwnedFunction`, `StoreOwnedElementSegment`,

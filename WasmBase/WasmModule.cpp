@@ -559,11 +559,41 @@ std::vector<uint8_t> Module::parseInitExpr(DWasmStream& stream) {
 				break;
 			}
 
-			case 0xFB: // GC Prefix (for future-proofing struct.new_default etc)
+			case 0xFB: // GC prefix (const-eligible constructors/conversions)
 			{
 				uint32_t subOp;
 				stream >> Elv::Io::Leb(subOp);
-				// Most GC inits are just the prefix + subOp LEB
+				switch (subOp) {
+				case 0:  // struct.new typeidx
+				case 1:  // struct.new_default typeidx
+				case 6:  // array.new typeidx
+				case 7:  // array.new_default typeidx
+				{
+					uint32_t typeIdx;
+					stream >> Elv::Io::Leb(typeIdx);
+					break;
+				}
+				case 8:  // array.new_fixed typeidx n
+				{
+					uint32_t typeIdx, n;
+					stream >> Elv::Io::Leb(typeIdx);
+					stream >> Elv::Io::Leb(n);
+					break;
+				}
+				case 9:  // array.new_data typeidx dataidx
+				case 10: // array.new_elem typeidx elemidx
+				{
+					uint32_t typeIdx, idx;
+					stream >> Elv::Io::Leb(typeIdx);
+					stream >> Elv::Io::Leb(idx);
+					break;
+				}
+				case 26: // any.convert_extern
+				case 27: // extern.convert_any
+				case 28: // ref.i31
+				default: // no immediate
+					break;
+				}
 				break;
 			}
 

@@ -68,4 +68,12 @@ TableInstance* Store::table(TableId id)
 	return owned == nullptr ? nullptr : owned->getTable();
 }
 
+bool Store::growTable(TableInstance* table, uint64_t deltaEntries)
+{
+	if (table == nullptr || table->hostData == nullptr)
+		return false;
+	auto* owned = static_cast<StoreOwnedTable*>(table->hostData);
+	return owned->grow(deltaEntries);
+}
+
 } // namespace WASM

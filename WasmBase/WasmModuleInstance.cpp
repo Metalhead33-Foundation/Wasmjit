@@ -1,5 +1,6 @@
 #include "WasmModuleInstance.hpp"
 #include "WasmException.hpp"
+#include "WasmOpcode.hpp"
 #include "WasmStore.hpp"
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <Elvavena/Io/ElvDataStream.hpp>
@@ -101,9 +102,10 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 			? seg.initExprs.size()
 			: seg.initIndices.size();
 
-		if (instance.internals.tableStorage == nullptr)
+		if (static_cast<size_t>(seg.tableIdx) >= instance.internals.tableRefs.size())
 			throw std::runtime_error("active element segment references an unknown table");
-		if (tableOffset + entryCount > instance.ctx.tableSize)
+		TableInstance* table = instance.internals.tableRefs[seg.tableIdx];
+		if (tableOffset + entryCount > table->size)
 			throw std::runtime_error("Element segment out of bounds");
 
 		for (size_t i = 0; i < entryCount; ++i)
@@ -159,12 +161,8 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 			}
 
 			// Write the callable pointer into the store-owned table slot.
-			instance.internals.tableStorage->getTable()->base[tableOffset + i] = callable;
+			table->base[tableOffset + i] = callable;
 		}
-
-		// The slot array is store-owned and doesn't move here (no growth), but
-		// keep ctx.table in sync explicitly to make the invariant clear.
-		instance.ctx.table = instance.internals.tableStorage->getTable()->base;
 	}
 }
 ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver)
@@ -261,10 +259,14 @@ void ModuleInstance::registerExports(ImportRegistrar& registrar, std::string_vie
 			break;
 		}
 		case ExternalKind::Table: {
-			if (ex.index != 0)
-				std::abort();
+			// Table imports are not modelled yet, so an exported table index
+			// may refer to an imported table we have no view for. Publish an
+			// empty view in that case rather than aborting.
+			const TableInstance* table = ex.index < internals.tableRefs.size()
+				? internals.tableRefs[ex.index]
+				: nullptr;
 			registrar.registerTable(moduleName, ex.name,
-								ImportedTable{ctx.table, ctx.tableSize, ctx.tableMax});
+								(table != nullptr ? ImportedTable{table->base, table->size, table->max} : ImportedTable{nullptr, 0, 0}));
 			break;
 		}
 		case ExternalKind::Tag:
@@ -381,117 +383,248 @@ void ModuleInstance::initializeTable()
 
 	if (module->tables.empty()) return;
 
-	// We're only handling a single table for now. If you add multi-table
-	// support later, this becomes a loop over module->tables with a
-	// corresponding std::vector<StoreOwnedTable*> in the internals.
-	const TableType& tableType = module->tables[0];
+	// Each declared table becomes a store-owned table. `tableRefs` mirrors the
+	// Wasm table index space (there are currently no table imports) and is what
+	// ctx.tables points at; it never resizes after this point.
+	internals.tableRefs.reserve(module->tables.size());
+	for (const TableType& tableType : module->tables) {
+		const uint64_t initialSize = tableType.limits.initial;
+		const uint64_t maxSize = tableType.limits.maximum.has_value()
+			? tableType.limits.maximum.value()
+			: UINT64_MAX;
 
-	const uint64_t initialSize = tableType.limits.initial;
-	const uint64_t maxSize = tableType.limits.maximum.has_value()
-		? tableType.limits.maximum.value()
-		: UINT64_MAX;
+		// Slots start null — "uninitialized, traps on call_indirect".
+		const Store::TableId id = Store::global().createTable(initialSize, maxSize);
+		TableInstance* view = Store::global().table(id);
+		if (view == nullptr)
+			throw std::runtime_error("failed to allocate table");
+		internals.tableRefs.push_back(view);
+	}
 
-	// Tables are owned by the (global) Store; the instance only borrows one.
-	// Slots start null — meaning "uninitialized, traps on call_indirect".
-	const Store::TableId id = Store::global().createTable(initialSize, maxSize);
-	internals.tableStorage = Store::global().storeOwnedTable(id);
-	if (internals.tableStorage == nullptr)
-		throw std::runtime_error("failed to allocate table");
-
-	const TableInstance* table = internals.tableStorage->getTable();
-	ctx.table     = table->base;
-	ctx.tableSize = table->size;
-	ctx.tableMax  = table->max;
+	ctx.tables     = internals.tableRefs.empty() ? nullptr : internals.tableRefs.data();
+	ctx.tableCount = static_cast<uint32_t>(internals.tableRefs.size());
 }
+
+namespace {
+
+// Runtime layout of GC aggregates must match LibJitTypeTranslator:
+//   struct: uint32 header, then naturally-aligned fields;
+//   array:  uint32 header, uint32 length, pointer to the element buffer.
+// Keep in sync with translateStruct / translateArray.
+constexpr size_t kGcHeaderBytes = 4;
+constexpr size_t kArrayDataOffset = 8;
+
+size_t storageBytes(const StorageType& st)
+{
+	if (st.isPacked)
+		return st.val.opcode == ValueTypeCode::I8 ? 1 : 2;
+	switch (st.val.opcode) {
+	case ValueTypeCode::I32:
+	case ValueTypeCode::F32: return 4;
+	case ValueTypeCode::I64:
+	case ValueTypeCode::F64: return 8;
+	case ValueTypeCode::V128: return 16;
+	default: return sizeof(void*); // references
+	}
+}
+
+size_t storageAlign(const StorageType& st)
+{
+	const size_t bytes = storageBytes(st);
+	return bytes == 16 ? 4 : bytes; // v128 lowers to a 4-aligned struct of ints
+}
+
+size_t alignUp(size_t value, size_t alignment) { return (value + alignment - 1) / alignment * alignment; }
+
+std::vector<size_t> structFieldOffsets(const StructType& st)
+{
+	std::vector<size_t> offsets;
+	offsets.reserve(st.fields.size());
+	size_t offset = kGcHeaderBytes;
+	for (const FieldType& f : st.fields) {
+		offset = alignUp(offset, storageAlign(f.storageType));
+		offsets.push_back(offset);
+		offset += storageBytes(f.storageType);
+	}
+	return offsets;
+}
+
+size_t structSize(const StructType& st)
+{
+	size_t end = kGcHeaderBytes;
+	size_t maxAlign = kGcHeaderBytes;
+	for (const FieldType& f : st.fields) {
+		const size_t a = storageAlign(f.storageType);
+		end = alignUp(end, a) + storageBytes(f.storageType);
+		if (a > maxAlign) maxAlign = a;
+	}
+	return alignUp(end, maxAlign);
+}
+
+size_t arraySize() { return alignUp(kArrayDataOffset + sizeof(void*), sizeof(void*)); }
+
+void storeValue(void* base, size_t offset, const StorageType& st, const Value& v)
+{
+	uint8_t* p = static_cast<uint8_t*>(base) + offset;
+	if (st.isPacked) {
+		if (st.val.opcode == ValueTypeCode::I8) *reinterpret_cast<int8_t*>(p) = static_cast<int8_t>(v.i32);
+		else *reinterpret_cast<int16_t*>(p) = static_cast<int16_t>(v.i32);
+		return;
+	}
+	switch (st.val.opcode) {
+	case ValueTypeCode::I32: *reinterpret_cast<int32_t*>(p) = v.i32; break;
+	case ValueTypeCode::I64: *reinterpret_cast<int64_t*>(p) = v.i64; break;
+	case ValueTypeCode::F32: *reinterpret_cast<float*>(p) = v.f32; break;
+	case ValueTypeCode::F64: *reinterpret_cast<double*>(p) = v.f64; break;
+	case ValueTypeCode::V128: std::memcpy(p, v.v128, 16); break;
+	default: *reinterpret_cast<void**>(p) = v.ref; break;
+	}
+}
+
+} // namespace
 
 Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 {
 	Euph::Io::ConstBufferDevice buffDev(expr);
 	DWasmStream stream(buffDev);
-	Value result{};
+	// Constant expressions are evaluated as a small stack machine, because GC
+	// constructors (ref.i31, struct.new*, array.new*) consume operands that are
+	// themselves constant instructions.
+	std::vector<Value> stack;
+	const auto popValue = [&stack]() -> Value {
+		if (stack.empty())
+			throw std::runtime_error("constant expression stack underflow");
+		const Value v = stack.back();
+		stack.pop_back();
+		return v;
+	};
 
-	// Read the leading opcode byte.
-	const uint8_t opcode = stream.read<uint8_t>();
+	for (;;) {
+		const uint8_t opcode = stream.read<uint8_t>();
+		if (opcode == 0x0B) // end
+			break;
 
-	switch (opcode)
-	{
-	// ── Numeric literals ────────────────────────────────────────────
-	// Each of these just reads a literal value of the appropriate type.
-	// The LEB128 encoding for integers means we use readSLEB/readULEB;
-	// floats are stored as raw IEEE-754 bytes (little-endian).
-	case 0x41: // i32.const
-		result.i32  = stream.readLEB128<int32_t>();
-		result.kind = ValueTypeCode::I32;
-		break;
+		switch (opcode) {
+		case 0x41: { Value v{}; v.i32 = stream.readLEB128<int32_t>(); v.kind = ValueTypeCode::I32; stack.push_back(v); break; }
+		case 0x42: { Value v{}; v.i64 = stream.readLEB128<int64_t>(); v.kind = ValueTypeCode::I64; stack.push_back(v); break; }
+		case 0x43: { Value v{}; v.f32 = stream.read<float>();     v.kind = ValueTypeCode::F32; stack.push_back(v); break; }
+		case 0x44: { Value v{}; v.f64 = stream.read<double>();    v.kind = ValueTypeCode::F64; stack.push_back(v); break; }
 
-	case 0x42: // i64.const
-		result.i64  = stream.readLEB128<int64_t>();
-		result.kind = ValueTypeCode::I64;
-		break;
+		case 0x23: { // global.get
+			const uint32_t globalIdx = stream.readLEB128<uint32_t>();
+			if (globalIdx >= internals.globalsStorage.size())
+				throw std::runtime_error("global.get in constant expr: index out of range");
+			stack.push_back(internals.globalsStorage[globalIdx]);
+			break;
+		}
 
-	case 0x43: // f32.const  (4 raw bytes, not LEB128)
-		result.f32  = stream.read<float>();
-		result.kind = ValueTypeCode::F32;
-		break;
+		case 0xD0: { // ref.null <heaptype>
+			(void)stream.readLEB128<int32_t>();
+			Value v{}; v.ref = nullptr; v.kind = ValueTypeCode::FuncRef;
+			stack.push_back(v);
+			break;
+		}
 
-	case 0x44: // f64.const  (8 raw bytes, not LEB128)
-		result.f64  = stream.read<double>();
-		result.kind = ValueTypeCode::F64;
-		break;
+		case 0xD2: { // ref.func <funcidx>: unresolved sentinel, fixed in applyActiveSegments
+			const uint32_t funcIdx = stream.readLEB128<uint32_t>();
+			Value v{}; v.ref = reinterpret_cast<void*>(static_cast<uintptr_t>(funcIdx)); v.kind = ValueTypeCode::FuncRef;
+			stack.push_back(v);
+			break;
+		}
 
-	// ── global.get ──────────────────────────────────────────────────
-	// The spec only allows global.get of an *imported* global in a
-	// constant expression — locally-defined globals may not be
-	// referenced here (at least in MVP; the extended-const proposal
-	// relaxes this for immutable globals). The imported global must
-	// itself be immutable. We've already resolved imported globals
-	// into globalsStorage during resolveImports(), so we can just
-	// index directly.
-	case 0x23: {
-		const uint32_t globalIdx = stream.readLEB128<uint32_t>();
+		case 0xFB: { // GC prefix
+			const uint32_t sub = stream.readLEB128<uint32_t>();
+			switch (static_cast<GCOpcode>(sub)) {
+			case GCOpcode::RefI31: {
+				const uint32_t raw = static_cast<uint32_t>(popValue().i32);
+				Value v{}; v.ref = reinterpret_cast<void*>(static_cast<uintptr_t>((raw << 1u) | 1u)); v.kind = ValueTypeCode::I31Ref;
+				stack.push_back(v);
+				break;
+			}
+			case GCOpcode::AnyConvertExtern:
+			case GCOpcode::ExternConvertAny:
+				stack.push_back(popValue()); // representation-preserving
+				break;
 
-		// Defensive check: if this fires, the module is malformed.
-		// A validator would have caught this before instantiation.
-		if (globalIdx >= internals.globalsStorage.size())
-			throw std::runtime_error("global.get in constant expr: index out of range");
+			case GCOpcode::StructNewDefault: {
+				const uint32_t typeIdx = stream.readLEB128<uint32_t>();
+				const StructType& st = std::get<StructType>(module->types[typeIdx].composite);
+				Value v{}; v.ref = allocateStructObject(static_cast<uint32_t>(structSize(st)), typeIdx); v.kind = ValueTypeCode::StructRef;
+				stack.push_back(v);
+				break;
+			}
+			case GCOpcode::StructNew: {
+				const uint32_t typeIdx = stream.readLEB128<uint32_t>();
+				const StructType& st = std::get<StructType>(module->types[typeIdx].composite);
+				const std::vector<size_t> offsets = structFieldOffsets(st);
+				std::vector<Value> fields(st.fields.size());
+				for (size_t i = st.fields.size(); i-- > 0; )
+					fields[i] = popValue();
+				void* object = allocateStructObject(static_cast<uint32_t>(structSize(st)), typeIdx);
+				for (size_t i = 0; i < st.fields.size(); ++i)
+					storeValue(object, offsets[i], st.fields[i].storageType, fields[i]);
+				Value v{}; v.ref = object; v.kind = ValueTypeCode::StructRef;
+				stack.push_back(v);
+				break;
+			}
 
-		result = internals.globalsStorage[globalIdx];
-		break;
+			case GCOpcode::ArrayNewDefault: {
+				const uint32_t typeIdx = stream.readLEB128<uint32_t>();
+				const ArrayType& at = std::get<ArrayType>(module->types[typeIdx].composite);
+				const uint32_t length = static_cast<uint32_t>(popValue().i32);
+				Value v{}; v.ref = allocateArrayObject(static_cast<uint32_t>(arraySize()),
+					static_cast<uint32_t>(storageBytes(at.elementType.storageType)), length, typeIdx);
+				v.kind = ValueTypeCode::ArrayRef;
+				stack.push_back(v);
+				break;
+			}
+			case GCOpcode::ArrayNew: {
+				const uint32_t typeIdx = stream.readLEB128<uint32_t>();
+				const ArrayType& at = std::get<ArrayType>(module->types[typeIdx].composite);
+				const uint32_t length = static_cast<uint32_t>(popValue().i32);
+				const Value init = popValue();
+				void* object = allocateArrayObject(static_cast<uint32_t>(arraySize()),
+					static_cast<uint32_t>(storageBytes(at.elementType.storageType)), length, typeIdx);
+				uint8_t* data = *reinterpret_cast<uint8_t**>(static_cast<uint8_t*>(object) + kArrayDataOffset);
+				const size_t elementSize = storageBytes(at.elementType.storageType);
+				for (uint32_t i = 0; i < length; ++i)
+					storeValue(data + static_cast<size_t>(i) * elementSize, 0, at.elementType.storageType, init);
+				Value v{}; v.ref = object; v.kind = ValueTypeCode::ArrayRef;
+				stack.push_back(v);
+				break;
+			}
+			case GCOpcode::ArrayNewFixed: {
+				const uint32_t typeIdx = stream.readLEB128<uint32_t>();
+				const uint32_t count = stream.readLEB128<uint32_t>();
+				const ArrayType& at = std::get<ArrayType>(module->types[typeIdx].composite);
+				std::vector<Value> values(count);
+				for (size_t i = count; i-- > 0; )
+					values[i] = popValue();
+				void* object = allocateArrayObject(static_cast<uint32_t>(arraySize()),
+					static_cast<uint32_t>(storageBytes(at.elementType.storageType)), count, typeIdx);
+				uint8_t* data = *reinterpret_cast<uint8_t**>(static_cast<uint8_t*>(object) + kArrayDataOffset);
+				const size_t elementSize = storageBytes(at.elementType.storageType);
+				for (uint32_t i = 0; i < count; ++i)
+					storeValue(data + static_cast<size_t>(i) * elementSize, 0, at.elementType.storageType, values[i]);
+				Value v{}; v.ref = object; v.kind = ValueTypeCode::ArrayRef;
+				stack.push_back(v);
+				break;
+			}
+
+			default:
+				throw InvalidOpcodeException(0xFB0000u | sub);
+			}
+			break;
+		}
+
+		default:
+			throw InvalidOpcodeException(opcode);
+		}
 	}
 
-	// ── Reference types ─────────────────────────────────────────────
-	case 0xD0: // ref.null — takes a heap type byte, produces a null reference
-		stream.readLEB128<uint32_t>(); // consume the heap type operand, discard it
-		result.ref  = nullptr;
-		result.kind = ValueTypeCode::FuncRef; // null is valid for any ref type
-		break;
-
-	case 0xD2: { // ref.func — produces a non-null reference to a function
-		const uint32_t funcIdx = stream.readLEB128<uint32_t>();
-		// At this point compiledFunctions may still be null (we're in the
-		// constructor, before the ModuleInstantiator has compiled anything).
-		// We store the index as the ref value for now and resolve it to a
-		// real WasmCallable* after compilation during applyActiveSegments().
-		// To signal "unresolved func ref", we encode the index in the ref field.
-		// applyActiveSegments() will recognise this pattern and fix it up.
-		result.ref  = reinterpret_cast<void*>(static_cast<uintptr_t>(funcIdx));
-		result.kind = ValueTypeCode::FuncRef;
-		break;
-	}
-
-	default:
-		throw InvalidOpcodeException(opcode);
-	}
-
-	// Every constant expression ends with 'end' (0x0B). Consuming it here
-	// is good practice even though we don't strictly need it — it catches
-	// malformed expressions early and keeps the stream position correct
-	// if the caller wants to read more after this expression.
-	const uint8_t end = stream.read<uint8_t>();
-	if (end != 0x0B)
-		throw std::runtime_error("Constant expression missing 'end' terminator");
-
-	return result;
+	if (stack.empty())
+		throw std::runtime_error("empty constant expression");
+	return stack.back();
 }
 
 int32_t ModuleInstance::growMemory(uint32_t memIdx, uint32_t deltaPages) {
@@ -508,20 +641,14 @@ int32_t ModuleInstance::growMemory(uint32_t memIdx, uint32_t deltaPages) {
 	return static_cast<int32_t>(oldPages);
 }
 
-bool ModuleInstance::growTable(uint32_t deltaEntries) {
-	if (internals.tableStorage == nullptr)
+bool ModuleInstance::growTable(uint32_t tableIdx, uint32_t deltaEntries) {
+	if (tableIdx >= internals.tableRefs.size())
 		return false;
 
 	// The Store owns the table (and therefore its growth policy/limits).
-	if (!internals.tableStorage->grow(deltaEntries))
-		return false;
-
-	// Re-sync the VMContext: growing may have moved the slot array.
-	const TableInstance* table = internals.tableStorage->getTable();
-	ctx.table     = table->base;
-	ctx.tableSize = table->size;
-	ctx.tableMax  = table->max;
-	return true;
+	// Growth may move the slot array; the TableInstance view is updated in
+	// place, so ctx.tables (which points at the view) needs no re-sync.
+	return Store::growTable(internals.tableRefs[tableIdx], deltaEntries);
 }
 
 void ModuleInstance::memoryInit(uint32_t memIdx, uint32_t dataIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len)
@@ -550,18 +677,21 @@ void ModuleInstance::dataDrop(uint32_t dataIdx)
 	internals.dataSegmentDropped[dataIdx] = true;
 }
 
-void ModuleInstance::tableInit(uint32_t elemIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len)
+void ModuleInstance::tableInit(uint32_t elemIdx, uint32_t tableIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len)
 {
 	if (elemIdx >= module->elementSegments.size())
 		std::abort();
 	if (internals.elementSegmentDropped[elemIdx])
+		std::abort();
+	if (tableIdx >= internals.tableRefs.size())
 		std::abort();
 
 	const ElementSegment& seg = module->elementSegments[elemIdx];
 	const size_t entryCount = seg.initIndices.empty() ? seg.initExprs.size() : seg.initIndices.size();
 	if (srcOffset > entryCount || len > entryCount - srcOffset)
 		std::abort();
-	if (static_cast<uint64_t>(dstOffset) + len > ctx.tableSize)
+	TableInstance* table = internals.tableRefs[tableIdx];
+	if (static_cast<uint64_t>(dstOffset) + len > table->size)
 		std::abort();
 
 	const uint32_t importedFuncCount =
@@ -595,10 +725,8 @@ void ModuleInstance::tableInit(uint32_t elemIdx, uint32_t dstOffset, uint32_t sr
 				}
 			}
 		}
-		internals.tableStorage->getTable()->base[dstOffset + i] = callable;
+		table->base[dstOffset + i] = callable;
 	}
-
-	ctx.table = internals.tableStorage->getTable()->base;
 }
 
 void ModuleInstance::elemDrop(uint32_t elemIdx)
