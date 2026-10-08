@@ -329,6 +329,20 @@ void Module::processCodeSection(Elv::Io::Device& file, const Section& section)
 		body.code.resize(bytecodeSize);
 		file.read(body.code.data(), 1, bytecodeSize);
 
+		// 3. Rebase branch hints onto `body.code`. The section stores offsets
+		// relative to the start of the locals declaration; `currentlyRead` is
+		// exactly the size of that declaration.
+		const uint32_t funcIndex = static_cast<uint32_t>(importFunctions.size()) + i;
+		auto hintsIt = branchHintsByFuncIndex.find(funcIndex);
+		if (hintsIt != branchHintsByFuncIndex.end()) {
+			for (const BranchHint& raw : hintsIt->second) {
+				if (raw.offset < currentlyRead)
+					continue; // offset doesn't point into the opcode stream
+				body.branchHints.push_back(
+					BranchHint{static_cast<uint32_t>(raw.offset - currentlyRead), raw.hint});
+			}
+		}
+
 		this->functionBodies.push_back(body);
 	}
 }
@@ -409,6 +423,8 @@ void Module::processCustomSection(Elv::Io::Device& file, const Section& section)
 
 	if (customName == "name") {
 		processNameSection(file, section);
+	} else if (customName == "metadata.code.branch_hint") {
+		processBranchHintSection(file, section);
 	} else {
 		// Skip unknown custom sections
 		// The 'section' object you passed in should have the total size,
@@ -449,6 +465,52 @@ void Module::processNameSection(Elv::Io::Device& file, const Section& section)
 
 		// Always ensure we are aligned for the next subsection
 		file.seek(nextSubSection, Elv::Io::SeekOrigin::SET);
+	}
+}
+
+void Module::processBranchHintSection(Elv::Io::Device& file, const Section& section)
+{
+	DWasmStream wasmStream(file);
+	(void)section;
+
+	// `metadata.code.branch_hint` payload (after the name string):
+	//   vec(function-hint)
+	//     funcidx:u32
+	//     vec(hint)
+	//       offset:u32         (relative to the start of the locals declaration)
+	//       length:u32         (always 1 for branch hints)
+	//       payload:byte[length]  (0 = likely false, 1 = likely true)
+	//
+	// We keep the offsets raw here; processCodeSection knows the size of each
+	// locals declaration and rebases them onto FunctionBody::code.
+	uint32_t functionCount;
+	wasmStream >> Elv::Io::Leb(functionCount);
+
+	for (uint32_t i = 0; i < functionCount; ++i) {
+		uint32_t funcIndex;
+		wasmStream >> Elv::Io::Leb(funcIndex);
+
+		uint32_t hintCount;
+		wasmStream >> Elv::Io::Leb(hintCount);
+
+		std::vector<BranchHint>& hints = branchHintsByFuncIndex[funcIndex];
+		hints.reserve(hints.size() + hintCount);
+		for (uint32_t j = 0; j < hintCount; ++j) {
+			uint32_t offset;
+			uint32_t length;
+			wasmStream >> Elv::Io::Leb(offset);
+			wasmStream >> Elv::Io::Leb(length);
+
+			BranchHint hint{offset, 0};
+			if (length >= 1) {
+				file.read(&hint.hint, 1, 1);
+				// Defensive: branch hints are single-byte, but skip any extra
+				// payload so a mis-sized annotation cannot desync the reader.
+				if (length > 1)
+					file.seek(static_cast<long>(length - 1), Elv::Io::SeekOrigin::CUR);
+			}
+			hints.push_back(hint);
+		}
 	}
 }
 

@@ -292,9 +292,20 @@ struct LocalEntry {
 	uint32_t count;
 	ValueType type;
 };
+// One entry of a `metadata.code.branch_hint` custom section (proposal
+// branch-hinting). A hint is a *pure optimisation* hint and never affects
+// semantics: 0 = the associated condition is likely false, 1 = likely true.
+// `offset` is pre-rebased by Module::processCodeSection onto the byte stream
+// stored in FunctionBody::code (i.e. excluding the locals declaration).
+struct BranchHint {
+	uint32_t offset;
+	uint8_t hint;
+};
 struct FunctionBody {
 	std::vector<LocalEntry> locals;
 	std::vector<uint8_t> code;
+	// Branch hints whose target instruction lies in `code`, ordered by offset.
+	std::vector<BranchHint> branchHints;
 };
 struct Tag {
 	uint8_t attribute; // Currently always 0x00 (reserved for future use)

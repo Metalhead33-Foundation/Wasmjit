@@ -1025,6 +1025,9 @@ void OpcodeDispatcher::readCode(FastMemReader& stream)
 	do {
 		shouldStop = stream.device.eof();
 		if(shouldStop) return;
+		// Record where this opcode starts before consuming it. Branch-hint
+		// offsets are expressed in exactly this coordinate space.
+		instructionOffset = static_cast<size_t>(stream.device.tell());
 		auto opcode = stream.read<Opcode>();
 		dispatchOpcode(stream, opcode);
 	} while(!shouldStop);

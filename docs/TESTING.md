@@ -67,6 +67,12 @@ baked in at compile time through the `WASM_TEST_DIR` macro) and calls into it.
 | `native_debug calls host import` | `native_debug` | a wasm module calling back into a host C function |
 | `loop_test calculates sum and factorial` | `loop_test` | loops, branches, recursion |
 | `memory_buffer stores and loads data correctly` | `memory_buffer` | linear memory load / store / fill |
+| `sign-extension operators sign-extend the low bits` | `sign_extension` | all five sign-extension ops at their 7/8/15/16/31/32-bit boundaries |
+| `non-trapping float-to-int conversions saturate instead of trapping` | `trunc_sat` | all eight `trunc_sat` ops: NaN → 0, ±overflow clamping, exact in-range values |
+| `branch hints are parsed and do not change results` | `branch_hint_loop` | `metadata.code.branch_hint` is parsed/rebased; acting on a hint is semantics-preserving |
+
+The modules are produced either from AssemblyScript (`Test/wasm/*.ts`) or from hand-written WAT
+(`Test/wasm_wat/*.wat`); both land in `wasm_test_modules/`.
 
 ### How the test modules are produced
 

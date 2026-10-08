@@ -1,6 +1,7 @@
 # Small Phase 5 Proposals: Sign-extension, Non-trapping Float→Int, Branch Hinting
 
-Status: design note / implementation reference (revision 1).
+Status: design note / implementation reference (revision 2 — §2/§3/§4 status
+updated after SP-1/SP-2).
 Audience: anyone touching `LibjitOpcodeDispatcher`, `WasmOpcode`,
 `WasmModule` (custom sections), or the test harness.
 
@@ -38,9 +39,11 @@ arithmetic); no trap; no change to other instructions.
 `LibjitOpcodeDispatcher.cpp` ~2405–2438), e.g. `jit_insn_convert` to
 `jit_type_sbyte`/`short` then back to the full width.
 
-**Gaps.** None known. There is **no dedicated spec script** for this proposal
-in the testsuite snapshot (the ops are covered indirectly by `i32`/`i64`),
-so it also has no focused regression test.
+**Gaps.** None. There is still **no dedicated spec script** for this proposal
+in the testsuite snapshot (the ops are covered indirectly by `i32`/`i64`), but a
+focused manual regression test now exists: `Test/wasm_wat/sign_extension.wat`
+plus the `sign-extension operators sign-extend the low bits` case in
+`Test/main.cpp`, which asserts every op at its 7/8/15/16/31/32-bit boundaries.
 
 ## 3. Non-trapping Float→Int Conversions
 
@@ -64,9 +67,15 @@ Each clamps on `NaN`/range and returns the clamped value.
   (520 passed / 7 failed). The 7 `conversions` failures are the known
   *conversion* bugs (`i64.extend_i32_u`, `f32/f64.convert_i64_u`;
   `docs/TESTING.md`), **not** `trunc_sat`.
-- `dispatchI32TruncSatF32U` converts the unsigned result down to
+- ~~`dispatchI32TruncSatF32U` converts the unsigned result down to
   `jit_type_int` explicitly, while the `_s` form returns `jit_type_int`
-  directly; verify the widths are consistent for the `i64` forms too.
+  directly; verify the widths are consistent for the `i64` forms too.~~
+  **Checked.** The `_u` handlers use `jit_type_uint`/`jit_type_ulong` for the
+  native call and convert to `jit_type_int`/`jit_type_long` only to re-tag the
+  same-width bit pattern; the widths are consistent. A focused manual
+  regression test now exists: `Test/wasm_wat/trunc_sat.wat` plus the
+  `non-trapping float-to-int conversions saturate instead of trapping` case in
+  `Test/main.cpp` (NaN, ±inf, ±overflow, exact in-range).
 
 ## 4. Branch Hinting
 
@@ -82,12 +91,21 @@ effect on results, traps, or validation. A custom section is not part of the
 module's semantics.
 
 **Implemented.** Custom sections are walked by `Module::processSecetions` and
-dispatched to `processCustomSection`, which handles the `name` section and
-otherwise ignores the payload. Branch hints are therefore **ignored**, which
-is fully conformant.
+dispatched to `processCustomSection`, which handles the `name` section and now
+also `metadata.code.branch_hint`. The parser (`Module::processBranchHintSection`)
+reads the `(funcidx, {offset, length, payload})` entries and
+`Module::processCodeSection` rebases each offset onto `FunctionBody::code`. The
+LibJIT dispatcher records the current instruction offset (`instructionOffset`,
+set by `OpcodeDispatcher::readCode`) and consults the hints in `dispatchBrIf`:
+a *forward* conditional whose hint says "likely true" is emitted in the
+inverted form so the likely path is the fall-through. Hint-less modules compile
+byte-for-byte as before.
 
-**Gaps.** None for conformance. The only "gap" is optional: block layout is
-not driven by hints, so slightly worse codegen on producer-annotated modules.
+**Gaps.** No block *reordering*: LibJIT exposes no branch-prediction or
+block-layout API and the emitter is single-pass, so the then/else bodies of an
+`if` cannot be swapped even when a hint asks for it. `if` hints are therefore
+parsed but do not change layout, and "measurable improvement" is not asserted
+in CI (see §6 SP-2).
 
 ## 5. Cross-cutting "fast and loose"
 
@@ -95,8 +113,8 @@ not driven by hints, so slightly worse codegen on producer-annotated modules.
 |---|---|---|---|
 | SPD1 | **Lower sign-extension with native width conversions** (already done). | §3/§2: lowering is free. | Minimal code. |
 | SPD2 | **Lower `trunc_sat` with clamp helpers** (already done). | §3: no traps required; semantics are a pure function. | Simple and correct. |
-| SPD3 | **Ignore branch hints completely.** | §4: hints are not semantics; ignoring is explicitly allowed. | No parser, no metadata plumbing. |
-| SPD4 | **Add hints only if a producer ever shows a measurable win** (JIT block ordering / fall-through). | §4; optional. | No speculative work. |
+| SPD3 | **Ignore branch hints *semantically*.** | §4: hints are not semantics; acting on them or not is explicitly allowed. | Conformance without changing results. |
+| SPD4 | **Use a hint only where it is a strict win** (branch polarity for a forward `br_if`; never block reordering). | §4; optional. | Bounded, semantics-preserving work. |
 | SPD5 | **No validation of hint sections.** | §4: custom sections are outside core validation. | Nothing to validate. |
 
 Guardrail: do not conflate `trunc_f*` (trapping) with `trunc_sat_f*`
@@ -106,8 +124,8 @@ Guardrail: do not conflate `trunc_f*` (trapping) with `trunc_sat_f*`
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **SP-1 — Manual test** | Add one WAT module exercising all five sign-extension ops and one exercising all eight `trunc_sat` ops, plus a manual test. | no focused coverage | The test asserts the boundary values (NaN, ±overflow, exact). |
-| **SP-2 — (optional) Branch hints** | Parse `metadata.code.branch_hint` and feed block layout. | optional codegen | A hinted loop shows a measurable improvement. |
+| **SP-1 — Manual test** | ✅ `Test/wasm_wat/sign_extension.wat` + `Test/wasm_wat/trunc_sat.wat`, exercised by two cases in `Test/main.cpp`. | no focused coverage | Done: both cases assert the boundary values (NaN, ±overflow, exact). |
+| **SP-2 — (optional) Branch hints** | ◑ `metadata.code.branch_hint` is parsed/rebased and consulted in `dispatchBrIf` (forward-branch polarity). No block reordering. | optional codegen | Parser covered by `branch hints are parsed and do not change results`; a *measurable* win is out of scope (see §4 gaps). |
 
 ## 7. Indicative test survey
 
@@ -117,9 +135,9 @@ Guardrail: do not conflate `trunc_f*` (trapping) with `trunc_sat_f*`
 |---|---|---|
 | `conversions` | 520 passed / 7 failed | the 7 are the known conversion bugs, not `trunc_sat` |
 | `i32` / `i64` | no report (exit 1) | scripts exercise the ops but fail to load for unrelated reasons |
-| sign-extension script | none in the testsuite snapshot | no dedicated coverage |
-| `trunc_sat` script | none in the testsuite snapshot | no dedicated coverage |
-| branch-hint script | none in the testsuite snapshot | hinting is untested (and untestable as semantics) |
+| sign-extension script | none in the testsuite snapshot | no dedicated spec coverage; manual coverage added (SP-1) |
+| `trunc_sat` script | none in the testsuite snapshot | no dedicated spec coverage; manual coverage added (SP-1) |
+| branch-hint script | none in the testsuite snapshot | hints are untestable as semantics; the manual `branch_hint_loop` case checks parsing + non-interference (SP-2) |
 
 ## 8. References
 

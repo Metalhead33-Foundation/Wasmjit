@@ -1,9 +1,12 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch_all.hpp>
 
+#include <cmath>
+#include <limits>
 #include <vector>
 
 #include "helper.hpp"
+#include "WasmBase/WasmOpcode.hpp"
 #include "WasmBase/WasmStore.hpp"
 
 Euph::Conf::Configuration GLOBAL_CONFIGURATION;
@@ -113,6 +116,201 @@ TEST_CASE("memory_buffer stores and loads data correctly")
 	auto fillSum = loaded.instance->exportedFunction("fillAndSum");
 	REQUIRE(fillSum.has_value());
 	REQUIRE(WASM::callCallable<int32_t>(*fillSum, int32_t(1), int32_t(4)) == 10);
+}
+
+TEST_CASE("sign-extension operators sign-extend the low bits")
+{
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("sign_extension", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+
+	auto i32Extend8  = loaded.instance->exportedFunction("i32_extend8_s");
+	auto i32Extend16 = loaded.instance->exportedFunction("i32_extend16_s");
+	auto i64Extend8  = loaded.instance->exportedFunction("i64_extend8_s");
+	auto i64Extend16 = loaded.instance->exportedFunction("i64_extend16_s");
+	auto i64Extend32 = loaded.instance->exportedFunction("i64_extend32_s");
+	REQUIRE(i32Extend8.has_value());
+	REQUIRE(i32Extend16.has_value());
+	REQUIRE(i64Extend8.has_value());
+	REQUIRE(i64Extend16.has_value());
+	REQUIRE(i64Extend32.has_value());
+
+	// i32.extend8_s: keep the low 8 bits, interpret them as signed, widen back.
+	REQUIRE(WASM::callCallable<int32_t>(*i32Extend8, int32_t(0x7F)) == 127);
+	REQUIRE(WASM::callCallable<int32_t>(*i32Extend8, int32_t(0x80)) == -128);
+	REQUIRE(WASM::callCallable<int32_t>(*i32Extend8, int32_t(0xFF)) == -1);
+	REQUIRE(WASM::callCallable<int32_t>(*i32Extend8, int32_t(0x100)) == 0);
+	REQUIRE(WASM::callCallable<int32_t>(*i32Extend8, int32_t(0x7FFFFFFF)) == -1);
+
+	// i32.extend16_s.
+	REQUIRE(WASM::callCallable<int32_t>(*i32Extend16, int32_t(0x7FFF)) == 32767);
+	REQUIRE(WASM::callCallable<int32_t>(*i32Extend16, int32_t(0x8000)) == -32768);
+	REQUIRE(WASM::callCallable<int32_t>(*i32Extend16, int32_t(0xFFFF)) == -1);
+	REQUIRE(WASM::callCallable<int32_t>(*i32Extend16, int32_t(0x10000)) == 0);
+	REQUIRE(WASM::callCallable<int32_t>(*i32Extend16, std::numeric_limits<int32_t>::min()) == 0);
+
+	// i64.extend8_s: high bits are ignored, only the low byte is sign-extended.
+	REQUIRE(WASM::callCallable<int64_t>(*i64Extend8, int64_t(0x7F)) == 127);
+	REQUIRE(WASM::callCallable<int64_t>(*i64Extend8, int64_t(0x80)) == -128);
+	REQUIRE(WASM::callCallable<int64_t>(*i64Extend8, int64_t(0xFF)) == -1);
+	REQUIRE(WASM::callCallable<int64_t>(*i64Extend8, int64_t(0x100)) == 0);
+	REQUIRE(WASM::callCallable<int64_t>(*i64Extend8, static_cast<int64_t>(UINT64_C(0xFFFFFFFFFFFFFF80))) == -128);
+
+	// i64.extend16_s.
+	REQUIRE(WASM::callCallable<int64_t>(*i64Extend16, int64_t(0x7FFF)) == 32767);
+	REQUIRE(WASM::callCallable<int64_t>(*i64Extend16, int64_t(0x8000)) == -32768);
+	REQUIRE(WASM::callCallable<int64_t>(*i64Extend16, int64_t(0xFFFF)) == -1);
+	REQUIRE(WASM::callCallable<int64_t>(*i64Extend16, int64_t(0x10000)) == 0);
+	REQUIRE(WASM::callCallable<int64_t>(*i64Extend16, static_cast<int64_t>(UINT64_C(0xFFFFFFFFFFFF8000))) == -32768);
+
+	// i64.extend32_s.
+	REQUIRE(WASM::callCallable<int64_t>(*i64Extend32, int64_t(0x7FFFFFFF)) == 2147483647);
+	REQUIRE(WASM::callCallable<int64_t>(*i64Extend32, int64_t(0x80000000)) == -2147483648);
+	REQUIRE(WASM::callCallable<int64_t>(*i64Extend32, int64_t(0xFFFFFFFF)) == -1);
+	REQUIRE(WASM::callCallable<int64_t>(*i64Extend32, int64_t(0x100000000)) == 0);
+	REQUIRE(WASM::callCallable<int64_t>(*i64Extend32, static_cast<int64_t>(UINT64_C(0x7FFFFFFF80000000))) == -2147483648);
+}
+
+TEST_CASE("non-trapping float-to-int conversions saturate instead of trapping")
+{
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("trunc_sat", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+
+	auto i32F32S = loaded.instance->exportedFunction("i32_trunc_sat_f32_s");
+	auto i32F32U = loaded.instance->exportedFunction("i32_trunc_sat_f32_u");
+	auto i32F64S = loaded.instance->exportedFunction("i32_trunc_sat_f64_s");
+	auto i32F64U = loaded.instance->exportedFunction("i32_trunc_sat_f64_u");
+	auto i64F32S = loaded.instance->exportedFunction("i64_trunc_sat_f32_s");
+	auto i64F32U = loaded.instance->exportedFunction("i64_trunc_sat_f32_u");
+	auto i64F64S = loaded.instance->exportedFunction("i64_trunc_sat_f64_s");
+	auto i64F64U = loaded.instance->exportedFunction("i64_trunc_sat_f64_u");
+	REQUIRE(i32F32S.has_value());
+	REQUIRE(i32F32U.has_value());
+	REQUIRE(i32F64S.has_value());
+	REQUIRE(i32F64U.has_value());
+	REQUIRE(i64F32S.has_value());
+	REQUIRE(i64F32U.has_value());
+	REQUIRE(i64F64S.has_value());
+	REQUIRE(i64F64U.has_value());
+
+	constexpr int32_t  i32Min = std::numeric_limits<int32_t>::min();
+	constexpr int32_t  i32Max = std::numeric_limits<int32_t>::max();
+	constexpr uint32_t u32Max = std::numeric_limits<uint32_t>::max();
+	constexpr int64_t  i64Min = std::numeric_limits<int64_t>::min();
+	constexpr int64_t  i64Max = std::numeric_limits<int64_t>::max();
+	constexpr uint64_t u64Max = std::numeric_limits<uint64_t>::max();
+
+	const float  f32NaN = std::numeric_limits<float>::quiet_NaN();
+	const float  f32Inf = std::numeric_limits<float>::infinity();
+	const double f64NaN = std::numeric_limits<double>::quiet_NaN();
+	const double f64Inf = std::numeric_limits<double>::infinity();
+
+	// callCallable returns the raw i32/i64 bit pattern, so unsigned results are
+	// compared after reinterpreting the bits as unsigned.
+	const auto asU32 = [](int32_t v) { return static_cast<uint32_t>(v); };
+	const auto asU64 = [](int64_t v) { return static_cast<uint64_t>(v); };
+
+	// i32.trunc_sat_f32_s: NaN -> 0, out of range clamps, in-range truncates.
+	REQUIRE(WASM::callCallable<int32_t>(*i32F32S, f32NaN) == 0);
+	REQUIRE(WASM::callCallable<int32_t>(*i32F32S, f32Inf) == i32Max);
+	REQUIRE(WASM::callCallable<int32_t>(*i32F32S, -f32Inf) == i32Min);
+	REQUIRE(WASM::callCallable<int32_t>(*i32F32S, 3.9f) == 3);
+	REQUIRE(WASM::callCallable<int32_t>(*i32F32S, -3.9f) == -3);
+	REQUIRE(WASM::callCallable<int32_t>(*i32F32S, 2147483648.0f) == i32Max);
+	REQUIRE(WASM::callCallable<int32_t>(*i32F32S, -2147483648.0f) == i32Min);
+	REQUIRE(WASM::callCallable<int32_t>(*i32F32S, 2147483520.0f) == 2147483520);
+
+	// i32.trunc_sat_f32_u.
+	REQUIRE(asU32(WASM::callCallable<int32_t>(*i32F32U, f32NaN)) == 0u);
+	REQUIRE(asU32(WASM::callCallable<int32_t>(*i32F32U, f32Inf)) == u32Max);
+	REQUIRE(asU32(WASM::callCallable<int32_t>(*i32F32U, -1.0f)) == 0u);
+	REQUIRE(asU32(WASM::callCallable<int32_t>(*i32F32U, 3.9f)) == 3u);
+	REQUIRE(asU32(WASM::callCallable<int32_t>(*i32F32U, 4294967296.0f)) == u32Max);
+	REQUIRE(asU32(WASM::callCallable<int32_t>(*i32F32U, 4294967040.0f)) == 4294967040u);
+
+	// i32.trunc_sat_f64_s.
+	REQUIRE(WASM::callCallable<int32_t>(*i32F64S, f64NaN) == 0);
+	REQUIRE(WASM::callCallable<int32_t>(*i32F64S, f64Inf) == i32Max);
+	REQUIRE(WASM::callCallable<int32_t>(*i32F64S, -f64Inf) == i32Min);
+	REQUIRE(WASM::callCallable<int32_t>(*i32F64S, 2147483647.9) == i32Max);
+	REQUIRE(WASM::callCallable<int32_t>(*i32F64S, 2147483646.9) == 2147483646);
+	REQUIRE(WASM::callCallable<int32_t>(*i32F64S, -2147483648.9) == i32Min);
+	REQUIRE(WASM::callCallable<int32_t>(*i32F64S, 3.9) == 3);
+
+	// i32.trunc_sat_f64_u.
+	REQUIRE(asU32(WASM::callCallable<int32_t>(*i32F64U, f64NaN)) == 0u);
+	REQUIRE(asU32(WASM::callCallable<int32_t>(*i32F64U, f64Inf)) == u32Max);
+	REQUIRE(asU32(WASM::callCallable<int32_t>(*i32F64U, -1.0)) == 0u);
+	REQUIRE(asU32(WASM::callCallable<int32_t>(*i32F64U, 4294967295.9)) == u32Max);
+	REQUIRE(asU32(WASM::callCallable<int32_t>(*i32F64U, 4294967294.9)) == 4294967294u);
+
+	// i64.trunc_sat_f32_s.
+	REQUIRE(WASM::callCallable<int64_t>(*i64F32S, f32NaN) == 0);
+	REQUIRE(WASM::callCallable<int64_t>(*i64F32S, f32Inf) == i64Max);
+	REQUIRE(WASM::callCallable<int64_t>(*i64F32S, -f32Inf) == i64Min);
+	REQUIRE(WASM::callCallable<int64_t>(*i64F32S, 12345.9f) == 12345);
+	REQUIRE(WASM::callCallable<int64_t>(*i64F32S, 1e30f) == i64Max);
+	REQUIRE(WASM::callCallable<int64_t>(*i64F32S, -1e30f) == i64Min);
+	REQUIRE(WASM::callCallable<int64_t>(*i64F32S, 9223371487098961920.0f) == INT64_C(9223371487098961920));
+
+	// i64.trunc_sat_f32_u.
+	REQUIRE(asU64(WASM::callCallable<int64_t>(*i64F32U, f32NaN)) == 0u);
+	REQUIRE(asU64(WASM::callCallable<int64_t>(*i64F32U, f32Inf)) == u64Max);
+	REQUIRE(asU64(WASM::callCallable<int64_t>(*i64F32U, -1.0f)) == 0u);
+	REQUIRE(asU64(WASM::callCallable<int64_t>(*i64F32U, 3.9f)) == 3u);
+	REQUIRE(asU64(WASM::callCallable<int64_t>(*i64F32U, 1e30f)) == u64Max);
+	REQUIRE(asU64(WASM::callCallable<int64_t>(*i64F32U, 18446742974197923840.0f)) == UINT64_C(18446742974197923840));
+
+	// i64.trunc_sat_f64_s.
+	REQUIRE(WASM::callCallable<int64_t>(*i64F64S, f64NaN) == 0);
+	REQUIRE(WASM::callCallable<int64_t>(*i64F64S, f64Inf) == i64Max);
+	REQUIRE(WASM::callCallable<int64_t>(*i64F64S, -f64Inf) == i64Min);
+	REQUIRE(WASM::callCallable<int64_t>(*i64F64S, 3.9) == 3);
+	REQUIRE(WASM::callCallable<int64_t>(*i64F64S, -3.9) == -3);
+	REQUIRE(WASM::callCallable<int64_t>(*i64F64S, 9223372036854775808.0) == i64Max);
+	REQUIRE(WASM::callCallable<int64_t>(*i64F64S, -9223372036854775808.0) == i64Min);
+	REQUIRE(WASM::callCallable<int64_t>(*i64F64S, 9223372036854774784.0) == INT64_C(9223372036854774784));
+
+	// i64.trunc_sat_f64_u.
+	REQUIRE(asU64(WASM::callCallable<int64_t>(*i64F64U, f64NaN)) == 0u);
+	REQUIRE(asU64(WASM::callCallable<int64_t>(*i64F64U, f64Inf)) == u64Max);
+	REQUIRE(asU64(WASM::callCallable<int64_t>(*i64F64U, -f64Inf)) == 0u);
+	REQUIRE(asU64(WASM::callCallable<int64_t>(*i64F64U, -1.0)) == 0u);
+	REQUIRE(asU64(WASM::callCallable<int64_t>(*i64F64U, 3.9)) == 3u);
+	REQUIRE(asU64(WASM::callCallable<int64_t>(*i64F64U, 18446744073709551616.0)) == u64Max);
+	REQUIRE(asU64(WASM::callCallable<int64_t>(*i64F64U, 18446744073709549568.0)) == UINT64_C(18446744073709549568));
+}
+
+TEST_CASE("branch hints are parsed and do not change results")
+{
+	WASM::Module module = loadTestModule("branch_hint_loop");
+
+	// The `metadata.code.branch_hint` section must be parsed and its offsets
+	// rebased onto FunctionBody::code. `code` excludes the locals declaration,
+	// so the raw offset (12) is shifted down by the 3 encoded locals bytes.
+	REQUIRE(module.functionBodies.size() == 1);
+	const WASM::FunctionBody& body = module.functionBodies[0];
+	REQUIRE(body.branchHints.size() == 1);
+	REQUIRE(body.branchHints[0].hint == 1);   // condition is likely true
+	REQUIRE(body.branchHints[0].offset == 9);
+	REQUIRE(body.branchHints[0].offset < body.code.size());
+	REQUIRE(body.code[body.branchHints[0].offset] == static_cast<uint8_t>(WASM::Opcode::BrIf));
+
+	// A hint is a pure optimisation: acting on it must not change any result.
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto sumUpto = instance->exportedFunction("sum_upto");
+	REQUIRE(sumUpto.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*sumUpto, int32_t(0)) == 0);
+	REQUIRE(WASM::callCallable<int32_t>(*sumUpto, int32_t(1)) == 1);
+	REQUIRE(WASM::callCallable<int32_t>(*sumUpto, int32_t(10)) == 55);
 }
 
 TEST_CASE("multi-memory: two linear memories are independent")

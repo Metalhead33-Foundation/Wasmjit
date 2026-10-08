@@ -932,13 +932,27 @@ OpcodeDispatcher::OpcodeDispatcher(jit_context_t context, jit_function_t functio
 								   WASM::ModuleInstanceInternals& internals,
 								   const WASM::Module& module, const WASM::FuncType& currentFunc,
 								   uint32_t importedFuncCount,
+								   std::vector<WASM::BranchHint> branchHints,
 								   std::vector<jit_value_t>& locals,
 								   std::vector<jit_value_t>& valueStack,
 								   std::vector<ControlBlock>& controlStack)
 	: context(context), function(function), typeTranslator(typeTranslator), instance(instance),
 	  internals(internals), module(module), currentFunc(currentFunc), importedFuncCount(importedFuncCount),
-	  locals(locals), valueStack(valueStack), controlStack(controlStack)
+	  locals(locals), valueStack(valueStack), controlStack(controlStack), branchHints(std::move(branchHints))
 {
+}
+
+const WASM::BranchHint* OpcodeDispatcher::currentBranchHint() const
+{
+	// Hints are ordered by offset and tiny (at most one entry per annotated
+	// conditional branch), so a linear scan is fine and allocation-free.
+	for (const WASM::BranchHint& hint : branchHints) {
+		if (hint.offset == instructionOffset)
+			return &hint;
+		if (hint.offset > instructionOffset)
+			break;
+	}
+	return nullptr;
 }
 
 jit_type_t OpcodeDispatcher::jitTypeForTypeIdx(WASM::TypeIdx idx) const
@@ -1106,7 +1120,30 @@ void OpcodeDispatcher::dispatchBrIf(WASM::LabelIdx arg)
 
 	jit_value_t cond = popValue();
 	storeStackTopToSlots(slots);
-	jit_insn_branch_if(function, cond, &target.label);
+
+	// Branch hinting (proposal branch-hinting) may steer the *layout* of the
+	// conditional branch. It is a pure optimisation hint and never changes the
+	// result; the transformation below is semantics-preserving by construction.
+	//
+	// LibJIT offers no branch-prediction API, so the only lever available to a
+	// single-pass emitter is the polarity of the conditional jump, which decides
+	// which direction is the fall-through. For a *forward* target the
+	// conditional jump is predicted not-taken, so "condition likely false" is
+	// already the best layout. When the hint says a forward branch is likely
+	// *true*, invert it: jump away on the unlikely `!cond` and fall through to
+	// an unconditional branch, so the likely path never executes a taken
+	// conditional jump. (A backward target -- a loop back-edge -- is predicted
+	// taken, so it already matches a "likely true" hint and is left alone.)
+	const WASM::BranchHint* hint = currentBranchHint();
+	const bool backward = (target.kind == ControlBlock::Loop);
+	if (hint != nullptr && hint->hint == 1 && !backward) {
+		jit_label_t skip = jit_label_undefined;
+		jit_insn_branch_if_not(function, cond, &skip);
+		jit_insn_branch(function, &target.label);
+		jit_insn_label(function, &skip);
+	} else {
+		jit_insn_branch_if(function, cond, &target.label);
+	}
 }
 
 void OpcodeDispatcher::dispatchBrTable(std::vector<WASM::LabelIdx>&& arg1, WASM::LabelIdx arg2)

@@ -69,6 +69,16 @@ private:
 	// popValue() yields placeholders instead of underflowing.
 	void markUnreachable();
 	bool unreachableCode = false;
+
+	// Branch hints for the function being compiled, ordered by byte offset
+	// (already rebased onto the opcode stream). Empty when the module carries
+	// no `metadata.code.branch_hint` section, in which case codegen is
+	// byte-identical to the hint-less path.
+	std::vector<WASM::BranchHint> branchHints;
+	// Returns the hint attached to the instruction currently being dispatched,
+	// or nullptr if there is none. Purely an optimisation input; never changes
+	// results.
+	const WASM::BranchHint* currentBranchHint() const;
 	jit_value_t zeroConstantForType(jit_type_t t);
 	jit_value_t castRefValue(jit_value_t value, jit_type_t targetType);
 	jit_value_t refAsVoidPtr(jit_value_t value);
@@ -121,6 +131,7 @@ public:
 					 WASM::ModuleInstanceInternals& internals,
 					 const WASM::Module& module, const WASM::FuncType& currentFunc,
 					 uint32_t importedFuncCount,
+					 std::vector<WASM::BranchHint> branchHints,
 					 std::vector<jit_value_t>& locals,
 					 std::vector<jit_value_t>& valueStack,
 					 std::vector<ControlBlock>& controlStack);

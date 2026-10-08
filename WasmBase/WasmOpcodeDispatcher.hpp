@@ -9,6 +9,12 @@ typedef WasmStream<Euph::Io::ConstBufferDevice> FastMemReader;
 class OpcodeDispatcher
 {
 protected:
+	// Byte offset of the instruction currently being dispatched, relative to
+	// the start of the function body's opcode stream (i.e. excluding the
+	// locals declaration). Set by readCode() before each dispatchOpcode().
+	// Backends that consult side metadata (e.g. branch hints) use this.
+	size_t instructionOffset = 0;
+
 	// Concrete opcode dispatches:
 	virtual void dispatchUnreachable() = 0;
 	virtual void dispatchNop() = 0;

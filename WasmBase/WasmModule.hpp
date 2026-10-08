@@ -36,6 +36,11 @@ public:
 	std::vector<DataSegment> dataSegments;
 	std::vector<FunctionBody> functionBodies;
 	std::vector<Tag> tags;
+	// Raw `metadata.code.branch_hint` entries, keyed by the *global* function
+	// index (imports first). Offsets are still relative to the start of each
+	// function's locals declaration; processCodeSection rebases them onto the
+	// matching FunctionBody::branchHints.
+	std::map<uint32_t, std::vector<BranchHint>> branchHintsByFuncIndex;
 	std::map<uint32_t,std::string> funcNames;
 	std::string debugName;
 	uint32_t startFunctionIndex;
@@ -60,6 +65,7 @@ private:
 	void processTagSection(Elv::Io::Device& file, const Section& section);
 	void processCustomSection(Elv::Io::Device& file, const Section& section);
 	void processNameSection(Elv::Io::Device& file, const Section& section);
+	void processBranchHintSection(Elv::Io::Device& file, const Section& section);
 	// Type processors
 	void processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t numSubTypes, std::vector<Subtype>& out, uint32_t groupFirst);
 	std::vector<uint8_t> parseInitExpr(DWasmStream& stream);
