@@ -215,14 +215,12 @@ void Module::processGlobalSection(Elv::Io::Device& file, const Section& section)
 		wasmStream >> mut;
 		g.type.isMutable = (mut == 0x01);
 
-		// 2. Parse Init Expression
-		// These always end with the 0x0B (end) opcode.
-		// For a simple parser, we can read until we hit 0x0B.
-		uint8_t opcode;
-		do {
-			wasmStream >> opcode;
-			g.initOpcode.push_back(opcode);
-		} while (opcode != 0x0B);
+		// 2. Parse Init Expression.
+		// Use the proper constant-expression reader: a naive "read until 0x0B"
+		// scan corrupts the expression whenever an immediate byte happens to be
+		// 0x0B (e.g. `ref.func $f` where $f is function index 11), because that
+		// byte is part of the operand, not the terminating `end`.
+		g.initOpcode = parseInitExpr(wasmStream);
 
 		this->globals.push_back(g);
 	}

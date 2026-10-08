@@ -70,6 +70,7 @@ baked in at compile time through the `WASM_TEST_DIR` macro) and calls into it.
 | `sign-extension operators sign-extend the low bits` | `sign_extension` | all five sign-extension ops at their 7/8/15/16/31/32-bit boundaries |
 | `non-trapping float-to-int conversions saturate instead of trapping` | `trunc_sat` | all eight `trunc_sat` ops: NaN → 0, ±overflow clamping, exact in-range values |
 | `branch hints are parsed and do not change results` | `branch_hint_loop` | `metadata.code.branch_hint` is parsed/rebased; acting on a hint is semantics-preserving |
+| `tail calls compute correct results` | `tail_call` | `return_call` / `return_call_indirect` / `return_call_ref`, including `ref.func` via a global (shallow; no stack-space guarantee yet) |
 
 The modules are produced either from AssemblyScript (`Test/wasm/*.ts`) or from hand-written WAT
 (`Test/wasm_wat/*.wat`); both land in `wasm_test_modules/`.
@@ -253,6 +254,12 @@ WasmJit: .../LibjitOpcodeDispatcher.cpp:745: ...: Assertion `valueStack.size() =
 
 Every one of those outcomes *also* becomes a failing Catch2 test case, so the run summary and the exit
 code reflect it — the failing test is named `spec: <script>`.
+
+> **`passed=0` does not mean "no progress".** The child writes its report only at the very end, so a
+> crash *anywhere* in a script — even after hundreds of passing commands — is reported as
+> `... after 0 passing commands`. To find out how far a script actually gets, give the child a larger
+> stack (`bash -c 'ulimit -s 1048576; ./WasmJit "spec: <name>"'`) or run it under `gdb`. Several
+> tail-call scripts pass fully this way (see [`TAILCALLS.md`](TAILCALLS.md)).
 
 > The `[spec] ...` report is written straight to stderr rather than through Catch2's reporter, so
 > structured reporters (`-r JSON`, `-r JUnit`, `-r TAP`, `-r XML`) only contain the harness's own

@@ -1,6 +1,7 @@
 # Tail Calls — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 1).
+Status: design note / implementation reference (revision 2 — Phase A/B
+(TC-1, TC-4) implemented; corrected diagnosis in §4/§5/§8).
 Audience: anyone touching `LibjitOpcodeDispatcher`, `WasmOpcodeDispatcher`,
 `WasmOpcode`, or the test harness.
 
@@ -56,23 +57,34 @@ Tail Call is a **Phase 5** proposal, integrated into WebAssembly **3.0**.
   - `dispatchReturnCallIndirect(a1,a2)` → `dispatchCallIndirect(...); dispatchReturn();`
   - `dispatchReturnCallRef(arg)` → `dispatchCallRef(arg); dispatchReturn();`
 - Because it is a genuine call followed by a return, the **result value is
-  correct** (where it does not crash), but the **native stack frame is not
-  reclaimed**, so the tail-call space guarantee is not met.
-
-**In practice the three instructions do not even run today**: `return_call` and
-`return_call_indirect` terminate with **SIGSEGV**, and `return_call_ref` with
-signal 6, before a single command passes (see §8). This is a JIT-codegen bug,
-not merely a missing optimisation.
+  correct**, but the **native stack frame is not reclaimed**, so the tail-call
+  space guarantee is not met.
+- **Shallow results are correct today.** With a large host stack the spec
+  scripts `return_call` (35 passed / 0 failed / 16 skipped) and
+  `return_call_indirect` (44 / 0 / 39) pass. The earlier "signal 11, 0 passing
+  commands" reading was an artifact: the spec child writes its report only at
+  the end, so **any** crash reports `passed=0` (see `docs/TESTING.md`).
+- **`return_call_ref` instantiation is fixed (Phase A).** Two bugs aborted it
+  during global initialization:
+  1. `Module::processGlobalSection` parsed a global's init expression by
+     scanning bytes until `0x0B`, so `(ref.func $f)` with function index 11
+     (which is the byte `0x0B`) was truncated and `evalConstantExpr` read past
+     the span. It now uses the proper `parseInitExpr()` reader.
+  2. `evalConstantExpr` returns `ref.func` as a raw-index sentinel, and globals
+     were never resolved. `ModuleInstance::resolveGlobalRefFuncs()` now runs
+     after compilation (mirroring element-segment resolution) and rewrites the
+     sentinels to `Callable*`.
+  `Test/wasm_wat/tail_call.wat` (`const_via_ref`) covers this exact shape.
 
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| TC1 | **`return_call` / `return_call_indirect` segfault** during compilation/instantiation (0 passing commands). | `spec: return_call`, `spec: return_call_indirect` → signal 11 | High |
-| TC2 | **`return_call_ref` aborts** (signal 6). | `spec: return_call_ref` | High |
-| TC3 | **No tail-call optimisation even once codegen is fixed.** `call`+`return` grows the host stack, so deep tail recursion can exhaust it where the spec says it must not. | `dispatchReturnCall` implementation | High (conformance) |
-| TC4 | **`assert_exhaustion` is skipped** by the harness, so the space guarantee is not directly testable today. | `docs/TESTING.md` | Medium |
-| TC5 | **No manual test.** `Test/wasm_wat` has no tail-recursive module. | `Test/main.cpp` | Medium |
+| TC1 | ~~Shallow `return_call` / `return_call_indirect` segfault~~ **Not a codegen bug.** Shallow results are correct; the SIGSEGV is stack exhaustion on deep recursion (TC3). | `spec: return_call` 35/0/16 and `spec: return_call_indirect` 44/0/39 on a 1 GB stack | Resolved (diagnosis) |
+| TC2 | **`return_call_ref` aborted at instantiation** (signal 6). | Fixed in Phase A (see §4); `tail_call.wat` `const_via_ref` | Resolved |
+| TC3 | **No tail-call optimisation.** `call`+`return` grows the host stack, so deep tail recursion can exhaust it where the spec says it must not. | `count(1_000_000)`, `even`/`odd` in the three scripts | High (conformance) |
+| TC4 | **`assert_exhaustion` is skipped** by the harness, so the space guarantee is not directly testable today. | `Test/WastScript.cpp` | Medium |
+| TC5 | **Manual test** now exists (shallow). A deep variant is gated on TC2/TC3. | `Test/wasm_wat/tail_call.wat` + `Test/main.cpp` | Resolved (shallow) |
 
 ## 6. Where we can and should play fast and loose
 
@@ -87,14 +99,22 @@ Guardrails: the trampoline must preserve the `VMContext*` selection rules from
 [`ABI.md`](ABI.md) (caller's context for native imports, callee's for
 cross-module Wasm), and must not change trap ordering.
 
+Empirical note on LibJIT `JIT_CALL_TAIL` (this install): direct
+**self**-recursive tail calls work — a 10⁷ countdown completed on a 512 KB
+stack — and indirect tail calls to a **constant native** target work. But
+**mutual** direct tail calls and **indirect** tail calls through a runtime
+target misbehave (ABI corruption / hang). Native frame reuse is therefore not a
+viable mechanism for `return_call_indirect` / `return_call_ref`; the
+trampoline (TCD2) remains the plan for TC3.
+
 ## 7. Plan
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **TC-1 — Fix the crash** | Reproduce the SIGSEGV for `return_call`/`return_call_indirect` and the abort for `return_call_ref`; make `call`+`return` emit valid code. | TC1, TC2 | All three scripts run; shallow tail calls return the right values. |
-| **TC-2 — Trampoline** | Add a return-trampoline so tail calls do not grow the host stack. | TC3 | A self-tail-recursive countdown of 10⁷ completes without stack overflow. |
-| **TC-3 — Harness** | Un-skip (or approximate) `assert_exhaustion` for tail-call scripts. | TC4 | The space guarantee is exercised. |
-| **TC-4 — Manual test** | Add a tail-recursive WAT module and a manual test. | TC5 | The test drives a deep tail-recursive loop. |
+| **TC-1 — Fix the crash** | ✅ Corrected the diagnosis (TC1 was stack exhaustion, not codegen) and fixed the `return_call_ref` instantiation abort: proper init-expr parsing (§4.1) + `ref.func` global resolution (§4.2). | TC1, TC2 | Done: shallow results are correct; `return_call_ref` instantiates and the global path is covered. |
+| **TC-2 — Trampoline** | Not started. Native `JIT_CALL_TAIL` is unreliable for indirect/mutual calls (§6 note). | TC3 | A self-tail-recursive countdown of 10⁷ completes on a small stack. |
+| **TC-3 — Harness** | Not started. | TC4 | The space guarantee is exercised. |
+| **TC-4 — Manual test** | ✅ `Test/wasm_wat/tail_call.wat` + `tail calls compute correct results` (direct / indirect / ref, shallow). | TC5 | Done (shallow); a deep variant stays gated on TC-2. |
 
 ## 8. Indicative test survey
 
@@ -102,9 +122,9 @@ cross-module Wasm), and must not change trap ordering.
 
 | Script | Result | Reading |
 |---|---|---|
-| `return_call` | signal 11, 0 passing commands | TC1 |
-| `return_call_indirect` | signal 11, 0 passing commands | TC1 |
-| `return_call_ref` | signal 6, 0 passing commands | TC2 |
+| `return_call` | default stack: signal 11; 1 GB stack: passed=35 failed=0 skipped=16 | shallow-correct; deep recursion exhausts the stack (TC3) |
+| `return_call_indirect` | default stack: signal 11; 1 GB stack: passed=44 failed=0 skipped=39 | same as above |
+| `return_call_ref` | instantiation fixed (Phase A); deep `count`/`even`/`odd` still exhaust the stack | TC3 remains |
 
 None of the three is in `Test/wast_supported.txt`.
 

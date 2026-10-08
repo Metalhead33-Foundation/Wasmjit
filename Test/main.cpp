@@ -313,6 +313,42 @@ TEST_CASE("branch hints are parsed and do not change results")
 	REQUIRE(WASM::callCallable<int32_t>(*sumUpto, int32_t(10)) == 55);
 }
 
+TEST_CASE("tail calls compute correct results")
+{
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("tail_call", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+
+	auto facAcc     = loaded.instance->exportedFunction("fac_acc");
+	auto facAccI32  = loaded.instance->exportedFunction("fac_acc_i32");
+	auto incIndirect = loaded.instance->exportedFunction("inc_indirect");
+	auto incRef     = loaded.instance->exportedFunction("inc_ref");
+	auto constViaRef = loaded.instance->exportedFunction("const_via_ref");
+	REQUIRE(facAcc.has_value());
+	REQUIRE(facAccI32.has_value());
+	REQUIRE(incIndirect.has_value());
+	REQUIRE(incRef.has_value());
+	REQUIRE(constViaRef.has_value());
+
+	// Direct `return_call`: factorial via an accumulator. Values match
+	// return_call.wast; depths stay shallow (no stack-space guarantee yet).
+	REQUIRE(WASM::callCallable<int64_t>(*facAcc, int64_t(0), int64_t(1)) == 1);
+	REQUIRE(WASM::callCallable<int64_t>(*facAcc, int64_t(1), int64_t(1)) == 1);
+	REQUIRE(WASM::callCallable<int64_t>(*facAcc, int64_t(5), int64_t(1)) == 120);
+	REQUIRE(WASM::callCallable<int64_t>(*facAcc, int64_t(25), int64_t(1)) == INT64_C(7034535277573963776));
+	REQUIRE(WASM::callCallable<int64_t>(*facAccI32, int32_t(5), int32_t(1)) == 120);
+
+	// `return_call_indirect` and `return_call_ref` through a funcref.
+	REQUIRE(WASM::callCallable<int32_t>(*incIndirect, int32_t(41)) == 42);
+	REQUIRE(WASM::callCallable<int32_t>(*incRef, int32_t(41)) == 42);
+
+	// `return_call_ref` through a funcref held in a global (the shape used by
+	// return_call_ref.wast): the global's `ref.func` must be resolved to a real
+	// Callable pointer after compilation.
+	REQUIRE(WASM::callCallable<int32_t>(*constViaRef) == 42);
+}
+
 TEST_CASE("multi-memory: two linear memories are independent")
 {
 	WASM::RegistryImportResolver imports;

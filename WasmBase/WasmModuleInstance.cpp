@@ -20,6 +20,10 @@ std::unique_ptr<ModuleInstance> ModuleInstantiator::instantiate(const Module& mo
 	declareFunctions(*instance, module, instance->internals);
 	compileFunctions(*instance, module, instance->internals);
 
+	// `ref.func` globals could only be stored as sentinels during construction;
+	// resolve them now that the callable tables exist.
+	instance->resolveGlobalRefFuncs();
+
 	// Active element and data segments are applied after compilation
 	// because element segments can reference functions by index, and
 	// we need the compiled handles to be present first.
@@ -384,6 +388,30 @@ void ModuleInstance::initializeGlobals()
 	}
 
 	ctx.globals = internals.globalsStorage.data();
+}
+
+void ModuleInstance::resolveGlobalRefFuncs()
+{
+	// evalConstantExpr() returns `ref.func` as a sentinel: the raw function
+	// index encoded as a pointer. That is unavoidable because global
+	// initializers run in the constructor, before any function handle exists.
+	// Now that the callable tables are populated, rewrite those sentinels.
+	const uint32_t importedFuncCount =
+		static_cast<uint32_t>(module->importFunctions.size());
+	const uint32_t totalFuncs = importedFuncCount +
+		static_cast<uint32_t>(module->internalFunctionTypeIndices.size());
+
+	for (Value& v : internals.globalsStorage) {
+		if (v.kind != ValueTypeCode::FuncRef || v.ref == nullptr)
+			continue;
+		const uintptr_t raw = reinterpret_cast<uintptr_t>(v.ref);
+		if (raw >= totalFuncs)
+			continue; // already a real Callable* (e.g. via an imported global)
+		if (raw < importedFuncCount)
+			v.ref = &internals.importStorage[raw];
+		else
+			v.ref = &internals.internalCallables[raw - importedFuncCount];
+	}
 }
 
 void ModuleInstance::initializeTable()

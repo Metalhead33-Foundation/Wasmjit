@@ -57,6 +57,11 @@ private:
 	void initializeMemories();
 	void initializeGlobals();
 	void initializeTable();
+	// Rewrites `ref.func` sentinels left in globalsStorage by evalConstantExpr
+	// into real Callable pointers. Must run after declareFunctions() /
+	// compileFunctions(), because those callable tables do not exist yet when
+	// initializeGlobals() runs (i.e. in the constructor).
+	void resolveGlobalRefFuncs();
 	Value evalConstantExpr(const std::span<const std::byte>& expr);
 public:
 	friend class ModuleInstantiator;
