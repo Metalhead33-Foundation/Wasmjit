@@ -1276,12 +1276,22 @@ void OpcodeDispatcher::dispatchCall(WASM::FuncIdx funcIdx)
 		return;
 	}
 
+	// Route through the callee's Callable `fnPtr`, which is its trampoline
+	// driver (see docs/TAILCALLS.md TC-2). This keeps a tail-call chain that
+	// passes through this non-tail call enclosed in a driver, so the chain
+	// cannot grow the host stack.
 	const uint32_t internalIdx = funcIdx - importedFuncCount;
-	jit_function_t callee = static_cast<jit_function_t>(internals.compiledFunctions[internalIdx]);
-	args[0] = vmContextValue();
+	WASM::Callable* callable = &internals.internalCallables[internalIdx];
+	jit_value_t callableAddr = jit_value_create_nint_constant(
+		function, jit_type_void_ptr, reinterpret_cast<jit_nint>(callable));
+	jit_value_t calleeCtx = jit_insn_load_relative(
+		function, callableAddr, offsetof(WASM::Callable, context), jit_type_void_ptr);
+	jit_value_t fnPtr = jit_insn_load_relative(
+		function, callableAddr, offsetof(WASM::Callable, fnPtr), jit_type_void_ptr);
+	args[0] = calleeCtx;
 	for (size_t i = 0; i < calleeSig.params.size(); ++i)
 		args[1 + i] = stackArgs[i];
-	jit_value_t ret = jit_insn_call(function, nullptr, callee, calleeJitSig, args.data(), numArgs, 0);
+	jit_value_t ret = jit_insn_call_indirect(function, fnPtr, calleeJitSig, args.data(), numArgs, 0);
 	pushCallResults(calleeSig, calleeJitSig, ret);
 }
 
@@ -1320,14 +1330,151 @@ void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx typeIdx, WASM::TableId
 	pushCallResults(ft, calleeJitSig, ret);
 }
 
+bool OpcodeDispatcher::emitDirectTailCall(WASM::FuncIdx funcIdx)
+{
+	// Native tail calls are only reliable in this LibJIT for a direct call to
+	// the function itself. Mutual direct calls and indirect tail calls through
+	// a runtime target miscompile (ABI corruption / hang), so they keep the
+	// call+return lowering. See docs/TAILCALLS.md §6.
+	if (funcIdx < importedFuncCount)
+		return false; // imports go through the fnPtr/Callable path
+	const uint32_t internalIdx = funcIdx - importedFuncCount;
+	if (internalIdx >= internals.compiledFunctions.size())
+		return false;
+	jit_function_t callee = static_cast<jit_function_t>(internals.compiledFunctions[internalIdx]);
+	if (callee != function)
+		return false; // only self-recursion is validated
+
+	const WASM::TypeIdx typeIdx = functionTypeIndexForFunc(funcIdx);
+	const WASM::FuncType& calleeSig = functionSignatureForType(typeIdx);
+	jit_type_t calleeJitSig = jitTypeForTypeIdx(typeIdx);
+
+	// Pop the call operands (last argument on top), exactly like dispatchCall.
+	std::vector<jit_value_t> stackArgs(calleeSig.params.size());
+	for (size_t i = calleeSig.params.size(); i--; )
+		stackArgs[i] = popValue();
+
+	const unsigned numArgs = 1 + static_cast<unsigned>(calleeSig.params.size());
+	std::vector<jit_value_t> args(numArgs);
+	args[0] = vmContextValue();
+	for (size_t i = 0; i < calleeSig.params.size(); ++i)
+		args[1 + i] = stackArgs[i];
+
+	// The callee's result becomes this function's result; control leaves the
+	// frame entirely, so no `return` is emitted and the rest is unreachable.
+	jit_insn_call(function, "wasm.tail", callee, calleeJitSig, args.data(), numArgs, JIT_CALL_TAIL);
+	markUnreachable();
+	return true;
+}
+
+bool OpcodeDispatcher::signatureIsUniform(const WASM::FuncType& calleeSig) const
+{
+	const auto sameStorage = [](const std::vector<WASM::StorageType>& a,
+								const std::vector<WASM::StorageType>& b) {
+		if (a.size() != b.size())
+			return false;
+		for (size_t i = 0; i < a.size(); ++i) {
+			if (a[i].isPacked != b[i].isPacked ||
+				a[i].val.opcode != b[i].val.opcode ||
+				a[i].val.heapType != b[i].val.heapType)
+				return false;
+		}
+		return true;
+	};
+	return sameStorage(calleeSig.params, currentFunc.params) &&
+		   sameStorage(calleeSig.results, currentFunc.results);
+}
+
+void OpcodeDispatcher::emitDummyReturn()
+{
+	jit_type_t rt = jit_type_get_return(jit_function_get_signature(function));
+	if (rt == jit_type_void)
+		jit_insn_return(function, nullptr);
+	else
+		jit_insn_return(function, zeroConstantForType(rt));
+}
+
+void OpcodeDispatcher::emitTailCallViaPending(jit_value_t targetCallablePtr,
+											  const std::vector<jit_value_t>& args)
+{
+	jit_value_t state = jit_value_create_nint_constant(
+		function, jit_type_void_ptr, reinterpret_cast<jit_nint>(&WASM::g_tailCallState));
+
+	jit_insn_store_relative(function, state,
+		static_cast<jit_nint>(offsetof(WASM::TailCallState, target)), targetCallablePtr);
+	for (size_t i = 0; i < args.size(); ++i) {
+		jit_insn_store_relative(function, state,
+			static_cast<jit_nint>(offsetof(WASM::TailCallState, args) + i * sizeof(uint64_t)),
+			args[i]);
+	}
+	jit_insn_store_relative(function, state,
+		static_cast<jit_nint>(offsetof(WASM::TailCallState, pending)),
+		jit_value_create_nint_constant(function, jit_type_int, 1));
+
+	// The driver ignores this value; it exists only to satisfy the ABI.
+	emitDummyReturn();
+	markUnreachable();
+}
+
 void OpcodeDispatcher::dispatchReturnCall(WASM::FuncIdx arg)
 {
+	if (emitDirectTailCall(arg))
+		return; // direct self-recursion: native JIT_CALL_TAIL (C2)
+
+	// Trampoline: a direct call to another function with an identical
+	// signature. Uniformity lets the running driver re-dispatch with its own
+	// parameter types (covers e.g. mutual even/odd recursion).
+	const WASM::TypeIdx typeIdx = functionTypeIndexForFunc(arg);
+	const WASM::FuncType& calleeSig = functionSignatureForType(typeIdx);
+	if (signatureIsUniform(calleeSig) && calleeSig.params.size() <= WASM::kTailCallArgSlots) {
+		jit_value_t target = nullptr;
+		if (arg < importedFuncCount) {
+			// Imported wasm functions carry the exporter's raw entry point; a
+			// native import has none and must use call+return.
+			if (internals.importStorage[arg].rawFnPtr != nullptr)
+				target = jit_value_create_nint_constant(function, jit_type_void_ptr,
+					reinterpret_cast<jit_nint>(&internals.importStorage[arg]));
+		} else {
+			const uint32_t internalIdx = arg - importedFuncCount;
+			if (internalIdx < internals.internalCallables.size())
+				target = jit_value_create_nint_constant(function, jit_type_void_ptr,
+					reinterpret_cast<jit_nint>(&internals.internalCallables[internalIdx]));
+		}
+		if (target != nullptr) {
+			std::vector<jit_value_t> stackArgs(calleeSig.params.size());
+			for (size_t i = calleeSig.params.size(); i--; )
+				stackArgs[i] = popValue();
+			emitTailCallViaPending(target, stackArgs);
+			return;
+		}
+	}
+
 	dispatchCall(arg);
 	dispatchReturn();
 }
 
 void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2)
 {
+	// Trampoline when the callee's declared type matches this function's own
+	// signature (see docs/TAILCALLS.md TC-2).
+	if (signatureIsUniform(std::get<WASM::FuncType>(module.types[arg1].composite)) &&
+		std::get<WASM::FuncType>(module.types[arg1].composite).params.size() <= WASM::kTailCallArgSlots) {
+		const WASM::FuncType& ft = std::get<WASM::FuncType>(module.types[arg1].composite);
+		jit_value_t tableElemIdx = popValue();
+		std::vector<jit_value_t> stackArgs(ft.params.size());
+		for (size_t i = ft.params.size(); i--; )
+			stackArgs[i] = popValue();
+
+		jit_value_t table = tablePointerForIndex(arg2);
+		jit_value_t tablePtr = jit_insn_load_relative(
+			function, table, offsetof(WASM::TableInstance, base), jit_type_void_ptr);
+		jit_value_t checkedIndex = checkedTableIndex(table, tableElemIdx, "dispatchReturnCallIndirect");
+		jit_value_t callablePtr = jit_insn_load_elem(function, tablePtr, checkedIndex, jit_type_void_ptr);
+		jit_insn_check_null(function, callablePtr);
+		emitCallableTypeCheck(callablePtr, arg1);
+		emitTailCallViaPending(callablePtr, stackArgs);
+		return;
+	}
 	dispatchCallIndirect(arg1, arg2);
 	dispatchReturn();
 }
@@ -1340,6 +1487,21 @@ void OpcodeDispatcher::dispatchCallRef(WASM::TypeIdx arg)
 
 void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx arg)
 {
+	// Trampoline when the referenced type matches this function's own signature
+	// (see docs/TAILCALLS.md TC-2). This is what makes `return_call_ref`-based
+	// self-recursion (e.g. return_call_ref.wast's `count`) constant-stack.
+	if (signatureIsUniform(std::get<WASM::FuncType>(module.types[arg].composite)) &&
+		std::get<WASM::FuncType>(module.types[arg].composite).params.size() <= WASM::kTailCallArgSlots) {
+		const WASM::FuncType& ft = std::get<WASM::FuncType>(module.types[arg].composite);
+		jit_value_t callablePtr = popValue();
+		std::vector<jit_value_t> stackArgs(ft.params.size());
+		for (size_t i = ft.params.size(); i--; )
+			stackArgs[i] = popValue();
+		jit_insn_check_null(function, callablePtr);
+		emitCallableTypeCheck(callablePtr, arg);
+		emitTailCallViaPending(callablePtr, stackArgs);
+		return;
+	}
 	dispatchCallRef(arg);
 	dispatchReturn();
 }

@@ -51,6 +51,9 @@ names
 ref
 ref_eq
 ref_null
+return_call
+return_call_indirect
+return_call_ref
 skip-stack-guard-page
 stack
 store

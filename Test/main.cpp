@@ -322,11 +322,13 @@ TEST_CASE("tail calls compute correct results")
 
 	auto facAcc     = loaded.instance->exportedFunction("fac_acc");
 	auto facAccI32  = loaded.instance->exportedFunction("fac_acc_i32");
+	auto count      = loaded.instance->exportedFunction("count");
 	auto incIndirect = loaded.instance->exportedFunction("inc_indirect");
 	auto incRef     = loaded.instance->exportedFunction("inc_ref");
 	auto constViaRef = loaded.instance->exportedFunction("const_via_ref");
 	REQUIRE(facAcc.has_value());
 	REQUIRE(facAccI32.has_value());
+	REQUIRE(count.has_value());
 	REQUIRE(incIndirect.has_value());
 	REQUIRE(incRef.has_value());
 	REQUIRE(constViaRef.has_value());
@@ -338,6 +340,11 @@ TEST_CASE("tail calls compute correct results")
 	REQUIRE(WASM::callCallable<int64_t>(*facAcc, int64_t(5), int64_t(1)) == 120);
 	REQUIRE(WASM::callCallable<int64_t>(*facAcc, int64_t(25), int64_t(1)) == INT64_C(7034535277573963776));
 	REQUIRE(WASM::callCallable<int64_t>(*facAccI32, int32_t(5), int32_t(1)) == 120);
+
+	// Space guarantee for direct self-recursion: `return_call $count` is lowered
+	// to a native tail call, so 10^7 frames run in constant stack. Without that
+	// lowering this call would exhaust the host stack and crash.
+	REQUIRE(WASM::callCallable<int32_t>(*count, int32_t(10000000)) == 0);
 
 	// `return_call_indirect` and `return_call_ref` through a funcref.
 	REQUIRE(WASM::callCallable<int32_t>(*incIndirect, int32_t(41)) == 42);

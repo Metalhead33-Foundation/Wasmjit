@@ -1,7 +1,8 @@
 # Tail Calls — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 2 — Phase A/B
-(TC-1, TC-4) implemented; corrected diagnosis in §4/§5/§8).
+Status: design note / implementation reference (revision 4 — TC-1..TC-4
+implemented: Phase A/B, the C2 self-tail-call fast path, and the full
+trampoline for mutual/indirect recursion).
 Audience: anyone touching `LibjitOpcodeDispatcher`, `WasmOpcodeDispatcher`,
 `WasmOpcode`, or the test harness.
 
@@ -75,6 +76,24 @@ Tail Call is a **Phase 5** proposal, integrated into WebAssembly **3.0**.
      after compilation (mirroring element-segment resolution) and rewrites the
      sentinels to `Callable*`.
   `Test/wasm_wat/tail_call.wat` (`const_via_ref`) covers this exact shape.
+- **Direct self-recursive `return_call` is a native tail call (C2).**
+  `OpcodeDispatcher::emitDirectTailCall` emits
+  `jit_insn_call(..., JIT_CALL_TAIL)` when the callee *is* the current function,
+  so `return_call $self` runs in constant stack (`tail_call.wat`'s
+  `count(10_000_000)`).
+- **Mutual and indirect tail recursion go through a trampoline (TC-2).**
+  Every internal function is compiled with a *driver* wrapper of the same
+  signature (`LibjitModuleCompiler.cpp`); wasm-to-wasm calls reach the callee
+  through the driver (`Callable::fnPtr`; the raw entry point is in
+  `rawFnPtr`). A tail call whose callee has a *structurally identical signature*
+  writes `{target, args, pending}` into the global `WASM::g_tailCallState` and
+  returns; the driver observes `pending`, re-dispatches to the target's raw
+  entry point and loops, so the host stack stays constant. Signatures that
+  differ keep the `call` + `return` lowering. This is what makes mutual
+  `even`/`odd` and `return_call_indirect`/`_ref` recursion constant-stack.
+- **`assert_exhaustion` is now executed, not skipped** (`Test/WastScript.cpp`):
+  the action runs in a nested child and an abnormal termination counts as the
+  expected exhaustion trap. `assert_trap` remains skipped.
 
 ## 5. Gaps
 
@@ -82,9 +101,9 @@ Tail Call is a **Phase 5** proposal, integrated into WebAssembly **3.0**.
 |---|---|---|---|
 | TC1 | ~~Shallow `return_call` / `return_call_indirect` segfault~~ **Not a codegen bug.** Shallow results are correct; the SIGSEGV is stack exhaustion on deep recursion (TC3). | `spec: return_call` 35/0/16 and `spec: return_call_indirect` 44/0/39 on a 1 GB stack | Resolved (diagnosis) |
 | TC2 | **`return_call_ref` aborted at instantiation** (signal 6). | Fixed in Phase A (see §4); `tail_call.wat` `const_via_ref` | Resolved |
-| TC3 | **No tail-call optimisation.** `call`+`return` grows the host stack, so deep tail recursion can exhaust it where the spec says it must not. | `count(1_000_000)`, `even`/`odd` in the three scripts | High (conformance) |
-| TC4 | **`assert_exhaustion` is skipped** by the harness, so the space guarantee is not directly testable today. | `Test/WastScript.cpp` | Medium |
-| TC5 | **Manual test** now exists (shallow). A deep variant is gated on TC2/TC3. | `Test/wasm_wat/tail_call.wat` + `Test/main.cpp` | Resolved (shallow) |
+| TC3 | **Tail-call space guarantee met for identical-signature chains** (C2 native self-calls + the trampoline for mutual/indirect). A tail call whose callee signature differs from the caller's still uses `call` + `return`. | `spec: return_call` 35/0/16, `return_call_indirect` 44/0/39, `return_call_ref` 36/0/17 on the default stack | Resolved (uniform signatures) |
+| TC4 | **`assert_exhaustion` approximated** — run in a nested child, abnormal exit = exhaustion. `assert_trap` is still skipped. | `Test/WastScript.cpp`; `spec: skip-stack-guard-page` 11/0 | Resolved (approximation) |
+| TC5 | **Manual test** now exists, including a deep self-recursive case. | `Test/wasm_wat/tail_call.wat` + `Test/main.cpp` | Resolved |
 
 ## 6. Where we can and should play fast and loose
 
@@ -101,32 +120,35 @@ cross-module Wasm), and must not change trap ordering.
 
 Empirical note on LibJIT `JIT_CALL_TAIL` (this install): direct
 **self**-recursive tail calls work — a 10⁷ countdown completed on a 512 KB
-stack — and indirect tail calls to a **constant native** target work. But
-**mutual** direct tail calls and **indirect** tail calls through a runtime
-target misbehave (ABI corruption / hang). Native frame reuse is therefore not a
-viable mechanism for `return_call_indirect` / `return_call_ref`; the
-trampoline (TCD2) remains the plan for TC3.
+stack — and are what C2 (`emitDirectTailCall`) uses. Indirect tail calls to a
+**constant native** target work. But **mutual** direct tail calls and
+**indirect** tail calls through a runtime target misbehave (ABI corruption /
+hang). Native frame reuse is therefore used only for direct self-recursion
+(C2); the trampoline (TCD2) — now implemented — covers mutual and indirect
+recursion. The trampoline is signature-restricted (§4): only a callee whose
+parameter *and* result types match the caller's can be re-dispatched by the
+caller's driver.
 
 ## 7. Plan
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **TC-1 — Fix the crash** | ✅ Corrected the diagnosis (TC1 was stack exhaustion, not codegen) and fixed the `return_call_ref` instantiation abort: proper init-expr parsing (§4.1) + `ref.func` global resolution (§4.2). | TC1, TC2 | Done: shallow results are correct; `return_call_ref` instantiates and the global path is covered. |
-| **TC-2 — Trampoline** | Not started. Native `JIT_CALL_TAIL` is unreliable for indirect/mutual calls (§6 note). | TC3 | A self-tail-recursive countdown of 10⁷ completes on a small stack. |
-| **TC-3 — Harness** | Not started. | TC4 | The space guarantee is exercised. |
-| **TC-4 — Manual test** | ✅ `Test/wasm_wat/tail_call.wat` + `tail calls compute correct results` (direct / indirect / ref, shallow). | TC5 | Done (shallow); a deep variant stays gated on TC-2. |
+| **TC-2 — Space guarantee** | ✅ C2 (native `JIT_CALL_TAIL` for direct self-recursion) + the trampoline (`emitTailCallViaPending` / `g_tailCallState` / per-function drivers) for mutual and indirect recursion with identical signatures. | TC3 | `count`/`even`/`odd` at 10⁶ pass on the default stack; `tail_call.wat` `count(10⁷)` passes. |
+| **TC-3 — Harness** | ✅ `assert_exhaustion` runs in a nested child; abnormal exit = exhaustion. | TC4 | `spec: skip-stack-guard-page` 11/0; the space guarantee is exercised. |
+| **TC-4 — Manual test** | ✅ `Test/wasm_wat/tail_call.wat` + `tail calls compute correct results` (direct / indirect / ref, plus a deep self-recursive `count`). | TC5 | Done. |
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-04):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-08, default stack):
 
 | Script | Result | Reading |
 |---|---|---|
-| `return_call` | default stack: signal 11; 1 GB stack: passed=35 failed=0 skipped=16 | shallow-correct; deep recursion exhausts the stack (TC3) |
-| `return_call_indirect` | default stack: signal 11; 1 GB stack: passed=44 failed=0 skipped=39 | same as above |
-| `return_call_ref` | instantiation fixed (Phase A); deep `count`/`even`/`odd` still exhaust the stack | TC3 remains |
+| `return_call` | passed=35 failed=0 skipped=16 | self (`count`) via C2, mutual (`even`/`odd`) via the trampoline |
+| `return_call_indirect` | passed=44 failed=0 skipped=39 | constant-stack via the trampoline |
+| `return_call_ref` | passed=36 failed=0 skipped=17 | constant-stack via the trampoline (Phase A + TC-2) |
 
-None of the three is in `Test/wast_supported.txt`.
+All three are now in `Test/wast_supported.txt` and part of the default run.
 
 ## 9. References
 

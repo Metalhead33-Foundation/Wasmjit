@@ -1,6 +1,8 @@
 #include "WastScript.hpp"
 
 #include <array>
+#include <cerrno>
+#include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -9,6 +11,9 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include <Euphemy/Io/EuphFile.hpp>
 #include <jit/jit.h>
@@ -217,6 +222,7 @@ private:
 	void onRegister(const ScriptCommand& command);
 	void onAssertReturn(const ScriptCommand& command);
 	void onAction(const ScriptCommand& command);
+	void onAssertExhaustion(const ScriptCommand& command);
 
 	bool invoke(WASM::ModuleInstance& instance, const ScriptAction& action, const WASM::FuncType& funcType,
 				const WASM::Callable& callable, std::array<unsigned char, 16>& returns);
@@ -356,7 +362,11 @@ void ScriptRunner::runCommand(const ScriptCommand& command)
 	// The remaining command families need runtime features that do not exist
 	// yet. They are reported as skipped so the suite stays actionable while the
 	// JIT grows instead of drowning real regressions in expected failures.
-	if (command.type == "assert_trap" || command.type == "assert_exhaustion") {
+	if (command.type == "assert_exhaustion") {
+		onAssertExhaustion(command);
+		return;
+	}
+	if (command.type == "assert_trap") {
 		skip("trap handling: traps currently terminate the process via std::abort()");
 		return;
 	}
@@ -556,6 +566,79 @@ void ScriptRunner::onAction(const ScriptCommand& command)
 	}
 
 	pass();
+}
+
+void ScriptRunner::onAssertExhaustion(const ScriptCommand& command)
+{
+	// Approximated: the engine reports stack exhaustion by terminating
+	// abnormally (a real stack overflow, or a trap via std::abort()), so run
+	// the action in a *nested* child and treat an abnormal end as the expected
+	// exhaustion. A normal return is a failure — the call was supposed to
+	// exhaust the stack. `assert_trap` (whose recovery the runtime does not
+	// model yet) stays skipped.
+	const ScriptAction& action = command.action;
+
+	if (action.type != "invoke") {
+		skip("assert_exhaustion with a non-invoke action ('" + action.type + "')");
+		return;
+	}
+
+	WASM::ModuleInstance* instance = instanceFor(action.module, command.line);
+	if (instance == nullptr)
+		return;
+
+	const auto callable = instance->exportedFunction(action.field);
+	if (!callable.has_value()) {
+		fail(command.line, "no exported function named '" + action.field + "'");
+		return;
+	}
+
+	const WASM::FuncType* funcType = funcTypeFor(*instance, *callable);
+	if (funcType == nullptr) {
+		skip("export '" + action.field + "' does not have a plain function type");
+		return;
+	}
+	if (funcType->params.size() != action.args.size()) {
+		fail(command.line, "arity mismatch for '" + action.field + "'");
+		return;
+	}
+	if (funcType->results.size() > 1) {
+		skip("multiple return values are not marshalled yet");
+		return;
+	}
+	for (const ScriptValue& arg : action.args) {
+		if (!isScalarValue(arg)) {
+			skip("argument type '" + arg.type + "' is not supported");
+			return;
+		}
+	}
+
+	const pid_t child = ::fork();
+	if (child < 0) {
+		skip("could not fork to observe stack exhaustion");
+		return;
+	}
+	if (child == 0) {
+		std::signal(SIGABRT, SIG_DFL);
+		std::signal(SIGSEGV, SIG_DFL);
+		std::signal(SIGBUS, SIG_DFL);
+		std::signal(SIGFPE, SIG_DFL);
+		std::array<unsigned char, 16> returns {};
+		invoke(*instance, action, *funcType, *callable, returns);
+		_exit(0); // returned normally: no exhaustion
+	}
+
+	int status = 0;
+	while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {
+	}
+	const bool abnormal = WIFSIGNALED(status) ||
+		(WIFEXITED(status) && WEXITSTATUS(status) != 0);
+	if (abnormal) {
+		pass();
+		return;
+	}
+	fail(command.line, "assert_exhaustion: '" + action.field +
+		"' returned instead of exhausting the stack");
 }
 
 bool ScriptRunner::invoke(WASM::ModuleInstance& instance, const ScriptAction& action,

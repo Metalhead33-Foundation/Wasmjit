@@ -1,6 +1,7 @@
 # Threads and Atomics — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 1).
+Status: design note / implementation reference (revision 2 — §4.5/T11 record
+the tail-call trampoline's process-global state).
 Audience: anyone touching `WasmMemory`, `WasmStore`, `WasmOpcode`,
 `WasmOpcodeDispatcher`, `LibjitOpcodeDispatcher`, or the test harness.
 
@@ -191,6 +192,29 @@ engine must do", not "what 3.0 requires".
   `Test/wast_supported.txt`. There is currently **no spec coverage** for this
   feature area, so there is also no regression signal to protect.
 
+### 4.5 Cross-cutting: the tail-call trampoline's known limits
+
+The tail-call lowering (`docs/TAILCALLS.md`, TC-2) added process-global state and
+a per-function call wrapper. Both interact with a future multi-agent build, so
+they are recorded here:
+
+- **The trampoline state is a process-global.** `WASM::g_tailCallState`
+  (`WasmBase/WasmValue.hpp`) holds the pending tail call
+  `{target, args, pending}` and is deliberately **single-threaded**: one wasm
+  call chain at a time. Two agents sharing a cluster — or even two host threads
+  entering the JIT — would race on it and corrupt each other's tail-call chains.
+  A threads-enabled build must make it **per-agent** (`thread_local`, or a field
+  in `VMContext` reached through the calling instance) before two agents can run.
+- **It only engages for identical signatures.** A `return_call` whose callee's
+  parameter/result types differ from the caller's falls back to `call` + `return`
+  and does grow the host stack. (Direct self-recursion is lowered to a native
+  `JIT_CALL_TAIL` and is unaffected.)
+- **Every internal wasm→wasm call now goes through a per-function driver.** Each
+  non-tail call costs an indirect call plus one extra native frame, so deeply
+  *non-tail*-recursive code reaches stack limits sooner than it did before. Not
+  threads-specific, but it changes the stack budget a multi-agent scheduler would
+  have to account for.
+
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
@@ -205,6 +229,7 @@ engine must do", not "what 3.0 requires".
 | T8 | **No data-segment init barrier semantics.** `applyActiveSegments` copies segment bytes directly; there is no fence/barrier before other agents are allowed to observe the memory. | `applyActiveSegments` | Low (single-agent) |
 | T9 | **No agent API / thread pool.** There is no way to run two instances concurrently, which is also what makes the current single-threaded stance safe. | no such API in `ModuleInstance`/`Store` | Informational |
 | T10 | **Zero test coverage.** No spec scripts exist in the submodule, and no manual threads test exercises atomics. | §4.4 | High (for future work) |
+| T11 | **The tail-call trampoline's pending state is process-global**, so two agents would corrupt each other's tail-call chains. Must become per-agent before any multi-agent build. | `WASM::g_tailCallState` (`WasmBase/WasmValue.hpp`); §4.5 | Medium (blocks multi-agent) |
 
 ## 6. Where we can and should play fast and loose
 

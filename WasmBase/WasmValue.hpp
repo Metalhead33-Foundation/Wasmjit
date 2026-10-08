@@ -52,7 +52,31 @@ struct Callable {
 	// an embedder without a canonical type. Used for cross-module type matching
 	// (`call_indirect`, `call_ref`, function imports).
 	TypeId     typeId = TypeId{TypeId::kNone};
+	// For JIT-compiled wasm functions: the raw compiled entry point. `fnPtr`
+	// points at the trampoline *driver* that wraps it; the driver loads this to
+	// make the real call. Null for native imports (which have no driver).
+	// See docs/TAILCALLS.md (TC-2).
+	void*      rawFnPtr = nullptr;
 };
+
+// Number of 8-byte argument slots the tail-call trampoline can carry.
+inline constexpr uint32_t kTailCallArgSlots = 16;
+
+// Tail-call trampoline state (see docs/TAILCALLS.md §6/§7).
+//
+// A wasm function that performs a tail call it cannot lower to a native
+// `JIT_CALL_TAIL` (i.e. anything but direct self-recursion) writes the callee
+// and its arguments here and *returns*. The per-function driver that wraps the
+// running function observes `pending`, re-dispatches to `target` with `args`,
+// and loops — so the host stack does not grow along the tail-call chain.
+//
+// Single-threaded by design: the engine executes one wasm call chain at a time.
+struct TailCallState {
+	int32_t   pending = 0;
+	Callable* target  = nullptr;
+	uint64_t  args[kTailCallArgSlots] = {};
+};
+extern TailCallState g_tailCallState;
 
 template<typename Ret, typename... Args>
 Ret callCallable(const Callable& callable, Args&&... args)

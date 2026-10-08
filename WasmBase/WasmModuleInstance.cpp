@@ -9,6 +9,23 @@
 #include <stdexcept>
 namespace WASM {
 
+TailCallState g_tailCallState;
+
+namespace {
+// `ref.func $f` is stored in a constant-expression Value as a *biased* function
+// index (index + 1), so that function index 0 is distinguishable from the null
+// pointer that `ref.null` produces. Both element segments and global
+// initializers decode it the same way.
+inline uintptr_t encodeRefFuncIndex(uint32_t funcIdx)
+{
+	return static_cast<uintptr_t>(funcIdx) + 1u;
+}
+inline uint32_t decodeRefFuncIndex(uintptr_t raw)
+{
+	return static_cast<uint32_t>(raw - 1u);
+}
+} // namespace
+
 std::unique_ptr<ModuleInstance> ModuleInstantiator::instantiate(const Module& module, ImportResolver& resolver)
 {
 	// The constructor does all the backend-agnostic setup.
@@ -150,14 +167,14 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 				if (refVal.ref == nullptr) {
 					callable = nullptr;
 				} else {
-					const uintptr_t raw = reinterpret_cast<uintptr_t>(refVal.ref);
+					const uint32_t funcIdx = decodeRefFuncIndex(reinterpret_cast<uintptr_t>(refVal.ref));
 					const uint32_t totalFuncs = static_cast<uint32_t>(
 						module.importFunctions.size() + module.internalFunctionTypeIndices.size());
-					if (refVal.kind == ValueTypeCode::FuncRef && raw < totalFuncs) {
-						if (raw < importedFuncCount)
-							callable = &instance.internals.importStorage[raw];
+					if (refVal.kind == ValueTypeCode::FuncRef && funcIdx < totalFuncs) {
+						if (funcIdx < importedFuncCount)
+							callable = &instance.internals.importStorage[funcIdx];
 						else
-							callable = &instance.internals.internalCallables[raw - importedFuncCount];
+							callable = &instance.internals.internalCallables[funcIdx - importedFuncCount];
 					} else {
 						callable = static_cast<Callable*>(refVal.ref);
 					}
@@ -404,13 +421,13 @@ void ModuleInstance::resolveGlobalRefFuncs()
 	for (Value& v : internals.globalsStorage) {
 		if (v.kind != ValueTypeCode::FuncRef || v.ref == nullptr)
 			continue;
-		const uintptr_t raw = reinterpret_cast<uintptr_t>(v.ref);
-		if (raw >= totalFuncs)
+		const uint32_t funcIdx = decodeRefFuncIndex(reinterpret_cast<uintptr_t>(v.ref));
+		if (funcIdx >= totalFuncs)
 			continue; // already a real Callable* (e.g. via an imported global)
-		if (raw < importedFuncCount)
-			v.ref = &internals.importStorage[raw];
+		if (funcIdx < importedFuncCount)
+			v.ref = &internals.importStorage[funcIdx];
 		else
-			v.ref = &internals.internalCallables[raw - importedFuncCount];
+			v.ref = &internals.internalCallables[funcIdx - importedFuncCount];
 	}
 }
 
@@ -562,9 +579,9 @@ Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 			break;
 		}
 
-		case 0xD2: { // ref.func <funcidx>: unresolved sentinel, fixed in applyActiveSegments
+		case 0xD2: { // ref.func <funcidx>: biased-index sentinel, resolved later
 			const uint32_t funcIdx = stream.readLEB128<uint32_t>();
-			Value v{}; v.ref = reinterpret_cast<void*>(static_cast<uintptr_t>(funcIdx)); v.kind = ValueTypeCode::FuncRef;
+			Value v{}; v.ref = reinterpret_cast<void*>(encodeRefFuncIndex(funcIdx)); v.kind = ValueTypeCode::FuncRef;
 			stack.push_back(v);
 			break;
 		}
@@ -751,12 +768,12 @@ void ModuleInstance::tableInit(uint32_t elemIdx, uint32_t tableIdx, uint32_t dst
 			if (refVal.ref == nullptr) {
 				callable = nullptr;
 			} else {
-				const uintptr_t raw = reinterpret_cast<uintptr_t>(refVal.ref);
-				if (refVal.kind == ValueTypeCode::FuncRef && raw < totalFuncs) {
-					if (raw < importedFuncCount)
-						callable = &internals.importStorage[raw];
+				const uint32_t funcIdx = decodeRefFuncIndex(reinterpret_cast<uintptr_t>(refVal.ref));
+				if (refVal.kind == ValueTypeCode::FuncRef && funcIdx < totalFuncs) {
+					if (funcIdx < importedFuncCount)
+						callable = &internals.importStorage[funcIdx];
 					else
-						callable = &internals.internalCallables[raw - importedFuncCount];
+						callable = &internals.internalCallables[funcIdx - importedFuncCount];
 				} else {
 					callable = static_cast<Callable*>(refVal.ref);
 				}
@@ -819,12 +836,12 @@ void ModuleInstance::bufferInitFromElems(uint32_t elemIdx, void* dst, uint32_t s
 			if (refVal.ref == nullptr) {
 				callable = nullptr;
 			} else {
-				const uintptr_t raw = reinterpret_cast<uintptr_t>(refVal.ref);
-				if (refVal.kind == ValueTypeCode::FuncRef && raw < totalFuncs) {
-					if (raw < importedFuncCount)
-						callable = &internals.importStorage[raw];
+				const uint32_t funcIdx = decodeRefFuncIndex(reinterpret_cast<uintptr_t>(refVal.ref));
+				if (refVal.kind == ValueTypeCode::FuncRef && funcIdx < totalFuncs) {
+					if (funcIdx < importedFuncCount)
+						callable = &internals.importStorage[funcIdx];
 					else
-						callable = &internals.internalCallables[raw - importedFuncCount];
+						callable = &internals.internalCallables[funcIdx - importedFuncCount];
 				} else {
 					callable = static_cast<Callable*>(refVal.ref);
 				}

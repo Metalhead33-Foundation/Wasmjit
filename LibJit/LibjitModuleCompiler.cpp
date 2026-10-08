@@ -2,9 +2,11 @@
 #include "LibjitOpcodeDispatcher.hpp"
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <cassert>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <span>
+#include <vector>
 namespace LibJIT {
 
 namespace {
@@ -191,7 +193,86 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 			std::fprintf(stderr, "jit_function_compile_entry failed %d for func %u\n", entryResult, i);
 			std::abort();
 		}
-		internals.internalCallables[i].fnPtr = entryPoint;
+		internals.internalCallables[i].rawFnPtr = entryPoint;
+	}
+
+	// ── Trampoline drivers ──────────────────────────────────────────
+	// Each internal function gets a driver with the same signature. The driver
+	// loops: it calls the current target's *raw* entry point and, when that
+	// returned with a pending tail call in g_tailCallState, reloads the target
+	// and arguments and iterates. Callables expose the driver as `fnPtr`; the
+	// raw entry lives in `rawFnPtr`. This is what keeps a tail-call chain from
+	// growing the host stack. See docs/TAILCALLS.md (TC-2).
+	for (uint32_t i = 0; i < module.internalFunctionTypeIndices.size(); ++i)
+	{
+		const uint32_t typeIdx = module.internalFunctionTypeIndices[i];
+		jit_type_t sig = static_cast<jit_type_t>(internals.translatedTypes[typeIdx]);
+		jit_function_t driver = jit_function_create(context, sig);
+		jit_type_t retType = jit_type_get_return(sig);
+		const unsigned int paramCount = jit_type_num_params(sig) - 1;
+
+		WASM::Callable* selfCallable = &internals.internalCallables[i];
+		jit_value_t target = jit_value_create(driver, jit_type_void_ptr);
+		jit_insn_store(driver, target, jit_value_create_nint_constant(
+			driver, jit_type_void_ptr, reinterpret_cast<jit_nint>(selfCallable)));
+
+		std::vector<jit_value_t> slots(paramCount);
+		for (unsigned int p = 0; p < paramCount; ++p) {
+			jit_type_t pt = jit_type_get_param(sig, p + 1);
+			slots[p] = jit_value_create(driver, pt);
+			jit_insn_store(driver, slots[p], jit_value_get_param(driver, p + 1));
+		}
+
+		jit_label_t loopLabel = jit_label_undefined;
+		jit_label_t doneLabel = jit_label_undefined;
+		jit_insn_label(driver, &loopLabel);
+
+		jit_value_t fnPtr = jit_insn_load_relative(driver, target,
+			offsetof(WASM::Callable, rawFnPtr), jit_type_void_ptr);
+		jit_value_t calleeCtx = jit_insn_load_relative(driver, target,
+			offsetof(WASM::Callable, context), jit_type_void_ptr);
+		std::vector<jit_value_t> callArgs(1 + static_cast<size_t>(paramCount));
+		callArgs[0] = calleeCtx;
+		for (unsigned int p = 0; p < paramCount; ++p)
+			callArgs[1 + p] = jit_insn_load(driver, slots[p]);
+		jit_value_t callRet = jit_insn_call_indirect(driver, fnPtr, sig, callArgs.data(),
+			static_cast<unsigned>(callArgs.size()), 0);
+
+		jit_value_t state = jit_value_create_nint_constant(driver, jit_type_void_ptr,
+			reinterpret_cast<jit_nint>(&WASM::g_tailCallState));
+		jit_value_t pending = jit_insn_load_relative(driver, state,
+			offsetof(WASM::TailCallState, pending), jit_type_int);
+		jit_insn_branch_if_not(driver, pending, &doneLabel);
+
+		jit_insn_store(driver, target, jit_insn_load_relative(driver, state,
+			offsetof(WASM::TailCallState, target), jit_type_void_ptr));
+		for (unsigned int p = 0; p < paramCount; ++p) {
+			jit_type_t pt = jit_type_get_param(sig, p + 1);
+			jit_insn_store(driver, slots[p], jit_insn_load_relative(driver, state,
+				static_cast<jit_nint>(offsetof(WASM::TailCallState, args) + p * sizeof(uint64_t)), pt));
+		}
+		jit_insn_store_relative(driver, state, offsetof(WASM::TailCallState, pending),
+			jit_value_create_nint_constant(driver, jit_type_int, 0));
+		jit_insn_branch(driver, &loopLabel);
+
+		jit_insn_label(driver, &doneLabel);
+		if (retType == jit_type_void)
+			jit_insn_return(driver, nullptr);
+		else
+			jit_insn_return(driver, callRet);
+
+		int driverResult = jit_function_compile(driver);
+		if (driverResult != JIT_RESULT_OK) {
+			std::fprintf(stderr, "trampoline driver compile failed %d for func %u\n", driverResult, i);
+			std::abort();
+		}
+		void* driverEntry = nullptr;
+		int driverEntryResult = jit_function_compile_entry(driver, &driverEntry);
+		if (driverEntryResult != JIT_RESULT_OK || driverEntry == nullptr) {
+			std::fprintf(stderr, "trampoline driver entry failed %d for func %u\n", driverEntryResult, i);
+			std::abort();
+		}
+		internals.internalCallables[i].fnPtr = driverEntry;
 	}
 
 	jit_context_build_end(context);

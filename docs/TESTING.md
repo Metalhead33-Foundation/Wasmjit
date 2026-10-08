@@ -70,7 +70,7 @@ baked in at compile time through the `WASM_TEST_DIR` macro) and calls into it.
 | `sign-extension operators sign-extend the low bits` | `sign_extension` | all five sign-extension ops at their 7/8/15/16/31/32-bit boundaries |
 | `non-trapping float-to-int conversions saturate instead of trapping` | `trunc_sat` | all eight `trunc_sat` ops: NaN → 0, ±overflow clamping, exact in-range values |
 | `branch hints are parsed and do not change results` | `branch_hint_loop` | `metadata.code.branch_hint` is parsed/rebased; acting on a hint is semantics-preserving |
-| `tail calls compute correct results` | `tail_call` | `return_call` / `return_call_indirect` / `return_call_ref`, including `ref.func` via a global (shallow; no stack-space guarantee yet) |
+| `tail calls compute correct results` | `tail_call` | `return_call` / `return_call_indirect` / `return_call_ref`, `ref.func` via a global, and a 10⁷-deep self-recursive `count` (constant-stack native tail call) |
 
 The modules are produced either from AssemblyScript (`Test/wasm/*.ts`) or from hand-written WAT
 (`Test/wasm_wat/*.wat`); both land in `wasm_test_modules/`.
@@ -290,7 +290,8 @@ Correct results are deliberately **not required yet**; the run is meant to be in
 | `module` (binary) | executed | loaded and instantiated |
 | `register` | executed | exports re-registered under the given name |
 | `assert_return`, `action` (`invoke`) | executed | i32/i64/f32/f64 arguments and results |
-| `assert_trap`, `assert_exhaustion` | skipped | traps terminate the process via `std::abort()` |
+| `assert_trap` | skipped | traps terminate the process via `std::abort()` |
+| `assert_exhaustion` | approximated | run in a nested child; an abnormal termination counts as the expected exhaustion trap |
 | `assert_malformed`, `assert_invalid`, `assert_unlinkable`, `assert_uninstantiable` | skipped | no validating / decoding front-end yet |
 | `module_definition`, `module_instance` | skipped | module-linking proposal |
 | `assert_exception` | skipped | exception-handling proposal |

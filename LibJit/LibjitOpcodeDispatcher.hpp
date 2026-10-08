@@ -61,6 +61,21 @@ private:
 	// the return operands are left on the model stack (for a conditional
 	// branch to the function's implicit block, whose fallthrough needs them).
 	void emitFunctionReturn(bool consume = true);
+	// Emits a native tail call (LibJIT `JIT_CALL_TAIL`) when the target is this
+	// very function — the only case this LibJIT build lowers reliably (see
+	// docs/TAILCALLS.md §6). Returns false when the caller must fall back to
+	// `call` + `return`.
+	bool emitDirectTailCall(WASM::FuncIdx funcIdx);
+	// True when `calleeSig` has exactly this function's parameter and result
+	// types. Only then can the trampoline driver (built for this function's
+	// signature) re-dispatch to the callee. See docs/TAILCALLS.md TC-2.
+	bool signatureIsUniform(const WASM::FuncType& calleeSig) const;
+	// Publishes {target, args, pending} to the global trampoline state and
+	// returns a dummy value; the driver re-dispatches. Callers must have
+	// verified signatureIsUniform() and popped `args` already.
+	void emitTailCallViaPending(jit_value_t targetCallablePtr, const std::vector<jit_value_t>& args);
+	// Emits `return` of a zero value of this function's result type.
+	void emitDummyReturn();
 	// Emits the jump for a branch target; a target past the control stack is
 	// the function's implicit block (i.e. a return).
 	void emitBranchToLabel(WASM::LabelIdx arg);
