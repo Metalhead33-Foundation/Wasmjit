@@ -56,6 +56,38 @@ make
 
 Depending on your platform, you may need to install the development package for GNU LibJIT first so `-ljit` resolves correctly at link time.
 
+## Testing
+
+The `Test` subproject builds a single Catch2 executable that contains two families of tests:
+
+- the hand-written unit tests (`Test/main.cpp`), whose modules are compiled from `Test/wasm/*.ts` with
+  AssemblyScript at build time;
+- the official WebAssembly spec testsuite, converted from `extern/WasmTestsuite` with `wasm-tools`
+  at build time.
+
+**See [docs/TESTING.md](docs/TESTING.md) for the full guide** — prerequisites, building, how to run
+and filter each family, how to read the output, and how to add new tests.
+
+Quick start:
+
+```bash
+cd build/<config>
+./Test/WasmJit                 # everything
+./Test/WasmJit '~[spec]'       # hand-written unit tests only
+./Test/WasmJit '[spec]'        # spec suite (scripts chosen via WASM_SPEC_SCRIPTS)
+```
+
+### WebAssembly spec testsuite
+
+`extern/WasmTestsuite` is the upstream
+[`WebAssembly/testsuite`](https://github.com/WebAssembly/testsuite) submodule. `Test/Test.pro` converts
+every `*.wast` into a JSON manifest plus `.wasm` modules at build time using
+`wasm-tools json-from-wast` (never `wabt`), so `wasm-tools` must be on `PATH` when building.
+`type-subtyping.wast` is excluded because `wasm-tools` cannot currently parse it.
+
+Script selection, expected output and current limitations are covered in
+[docs/TESTING.md](docs/TESTING.md).
+
 ## Near-Term Expectations
 
 The codebase is a work in progress. Expect rough edges in a few areas:

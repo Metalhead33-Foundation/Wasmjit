@@ -1,151 +1,18 @@
-#ifndef LIBJITOPCODEDISPATCHER_HPP
-#define LIBJITOPCODEDISPATCHER_HPP
-
-#include "../WasmBase/WasmModuleInstance.hpp"
+#ifndef STUBOPCODEDISPATCHER_HPP
+#define STUBOPCODEDISPATCHER_HPP
 #include "../WasmBase/WasmOpcodeDispatcher.hpp"
-#include "LibJitTypeTranslation.hpp"
-#include <jit/jit.h>
-#include <vector>
+#include <ostream>
 
-namespace LibJIT {
-
-struct ControlBlock {
-	enum Kind { Block, Loop, If };
-	Kind kind;
-
-	// For Block/If: a forward label at the end (bound when we see 'end').
-	// For Loop: a backward label at the start (bound when we see 'loop').
-	// A 'br N' instruction branches to controlStack[top - N].label.
-	jit_label_t label;
-
-	// For 'if': we also need a label for the 'else' branch, so that
-	// the condition check can jump forward to it if false.
-	jit_label_t elseLabel;
-
-	// The value stack depth when this block was entered. Used to
-	// validate and restore the stack at 'else' and 'end' boundaries.
-	size_t stackDepth;
-
-	// The types this block is expected to produce on exit.
-	// A 'br' to this block must leave these types on the stack.
-	std::vector<WASM::StorageType> resultTypes;
-	std::vector<WASM::StorageType> paramTypes;
-	std::vector<jit_value_t> resultSlots;
-	std::vector<jit_value_t> paramSlots;
-	bool hasElse = false;
-};
-
-// Drives WASM::OpcodeDispatcher::readCode for LibJIT: decodes the bytecode
-// stream and emits jit_insn_* into the current jit_function_t. Holds the
-// transient compilation state (locals, stacks, module context) that
-// ModuleCompiler used to pass through a monolithic dispatchOpcode.
+namespace Stub {
 class OpcodeDispatcher : public WASM::OpcodeDispatcher
 {
 private:
-	jit_context_t context;
-	jit_function_t function;
-	LibJitTypeTranslator& typeTranslator;
-	WASM::ModuleInstance& instance;
-	WASM::ModuleInstanceInternals& internals;
-	const WASM::Module& module;
-	const WASM::FuncType& currentFunc;
-	uint32_t importedFuncCount;
-	std::vector<jit_value_t>& locals;
-	std::vector<jit_value_t>& valueStack;
-	std::vector<ControlBlock>& controlStack;
-
-	void pushValue(jit_value_t v);
-	jit_value_t popValue();
-	// Emits the function's epilogue (a `return`). Does nothing in unreachable
-	// code or when the model stack is short (dead tail). With `consume` false
-	// the return operands are left on the model stack (for a conditional
-	// branch to the function's implicit block, whose fallthrough needs them).
-	void emitFunctionReturn(bool consume = true);
-	// Emits the jump for a branch target; a target past the control stack is
-	// the function's implicit block (i.e. a return).
-	void emitBranchToLabel(WASM::LabelIdx arg);
-	// Marks the rest of the current block unreachable (after an unconditional
-	// transfer). In unreachable code the Wasm operand stack is polymorphic, so
-	// popValue() yields placeholders instead of underflowing.
-	void markUnreachable();
-	bool unreachableCode = false;
-
-	// Branch hints for the function being compiled, ordered by byte offset
-	// (already rebased onto the opcode stream). Empty when the module carries
-	// no `metadata.code.branch_hint` section, in which case codegen is
-	// byte-identical to the hint-less path.
-	std::vector<WASM::BranchHint> branchHints;
-	// Returns the hint attached to the instruction currently being dispatched,
-	// or nullptr if there is none. Purely an optimisation input; never changes
-	// results.
-	const WASM::BranchHint* currentBranchHint() const;
-	jit_value_t zeroConstantForType(jit_type_t t);
-	jit_value_t castRefValue(jit_value_t value, jit_type_t targetType);
-	jit_value_t refAsVoidPtr(jit_value_t value);
-	jit_value_t typedNullRef(jit_type_t refType);
-	jit_value_t emitRefTypeTest(jit_value_t ref, const WASM::HeapType& heapType, bool nullable);
-	jit_type_t tableElementJitType(WASM::TableIdx arg) const;
-	jit_type_t jitRefTypeForHeapType(const WASM::HeapType& ht, bool nullable);
-	jit_type_t structRefType(WASM::TypeIdx arg, bool nullable) const;
-	jit_type_t arrayRefType(WASM::TypeIdx arg, bool nullable) const;
-	const WASM::StructType& structTypeForIndex(WASM::TypeIdx arg) const;
-	const WASM::ArrayType& arrayTypeForIndex(WASM::TypeIdx arg) const;
-	jit_type_t arrayElementJitType(WASM::TypeIdx arg) const;
-	jit_nint structFieldOffset(WASM::TypeIdx arg, uint32_t fieldIndex) const;
-	jit_nint arrayLengthOffset(WASM::TypeIdx arg) const;
-	jit_nint arrayDataOffset(WASM::TypeIdx arg) const;
-	jit_value_t packReturnValues(jit_type_t returnType, size_t resultCount);
-	void pushCallResults(const WASM::FuncType& calleeSig, jit_type_t calleeJitSig, jit_value_t ret);
-	std::vector<WASM::StorageType> parameterTypesForBlockType(const WASM::BlockType& bt) const;
-	std::vector<jit_value_t> createSlotsForTypes(const std::vector<WASM::StorageType>& types);
-	void storeStackTopToSlots(const std::vector<jit_value_t>& slots);
-	void restoreValuesFromSlots(const std::vector<jit_value_t>& slots);
-	void resizeValueStack(size_t newSize);
-	ControlBlock& branchTarget(WASM::LabelIdx arg);
-	const std::vector<WASM::StorageType>& branchTypesForTarget(const ControlBlock& target) const;
-	const std::vector<jit_value_t>& branchSlotsForTarget(const ControlBlock& target) const;
-	void emitBranchToTarget(ControlBlock& target);
-	WASM::TypeIdx functionTypeIndexForFunc(WASM::FuncIdx funcIdx) const;
-	const WASM::FuncType& functionSignatureForType(WASM::TypeIdx typeIdx) const;
-	jit_value_t callablePointerForFuncIndex(WASM::FuncIdx funcIdx);
-	void dispatchCallThroughCallable(jit_value_t callablePtr, WASM::TypeIdx typeIdx);
-	void emitTrapUnreachable();
-	std::vector<WASM::StorageType> storageTypesForBlockType(const WASM::BlockType& bt) const;
-
-	jit_value_t vmContextValue();
-	jit_value_t checkedTableIndex(jit_value_t table, jit_value_t index, const char* opname);
-	// Emits code yielding the LinearMemory* for a (constant) memory index.
-	jit_value_t memoryPointerForIndex(WASM::MemIdx memidx);
-	// Emits code yielding the TableInstance* for a (constant) table index.
-	jit_value_t tablePointerForIndex(WASM::TableIdx tableidx);
-	// Emits a runtime check that `callablePtr`'s canonical type id matches the
-	// module-local type index `typeIdx` (id fast path, registry fallback).
-	void emitCallableTypeCheck(jit_value_t callablePtr, WASM::TypeIdx typeIdx);
-	jit_value_t effectiveMemoryAddress(const WASM::MemArg& ma, jit_nint accessSize);
-	WASM::GlobalType globalTypeForIndex(WASM::GlobalIdx idx) const;
-
+	std::basic_ostream<char>* stream;
 public:
-	OpcodeDispatcher(jit_context_t context, jit_function_t function,
-					 LibJitTypeTranslator& typeTranslator,
-					 WASM::ModuleInstance& instance,
-					 WASM::ModuleInstanceInternals& internals,
-					 const WASM::Module& module, const WASM::FuncType& currentFunc,
-					 uint32_t importedFuncCount,
-					 std::vector<WASM::BranchHint> branchHints,
-					 std::vector<jit_value_t>& locals,
-					 std::vector<jit_value_t>& valueStack,
-					 std::vector<ControlBlock>& controlStack);
-
-	// Call after readCode() to emit return from the implicit function body (Wasm validation
-	// guarantees the value stack matches currentFunc.results).
-	void emitImplicitFunctionReturn();
+	OpcodeDispatcher(std::basic_ostream<char>* stream);
 
 	// OpcodeDispatcher interface
 protected:
-	// `internals.translatedTypes` is parallel to `module.types` (filled in translateTypes).
-	jit_type_t jitTypeForTypeIdx(WASM::TypeIdx idx) const;
-	jit_type_t jitTypeForValueType(const WASM::ValueType& vt);
-
 	void dispatchUnreachable() override;
 	void dispatchNop() override;
 	void dispatchBlock(const WASM::BlockType& arg) override;
@@ -693,7 +560,5 @@ protected:
 	void dispatchI64AtomicRmw16CmpxchgU(WASM::MemArg arg) override;
 	void dispatchI64AtomicRmw32CmpxchgU(WASM::MemArg arg) override;
 };
-
 }
-
-#endif // LIBJITOPCODEDISPATCHER_HPP
+#endif // STUBOPCODEDISPATCHER_HPP

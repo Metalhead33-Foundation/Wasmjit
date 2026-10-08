@@ -1,6 +1,6 @@
 #ifndef LIBJITMODULECOMPILER_HPP
 #define LIBJITMODULECOMPILER_HPP
-#include "../Base/WasmModuleInstance.hpp"
+#include "../WasmBase/WasmModuleInstance.hpp"
 #include "LibJitTypeTranslation.hpp"
 
 namespace LibJIT {
@@ -10,9 +10,10 @@ class ModuleCompiler : public WASM::ModuleInstantiator
 private:
 	jit_context_t context;
 	LibJitTypeTranslator typeTranslator;
-	void compileFunction(jit_function_t fn, const WASM::FuncType& funcType, const WASM::FunctionBody& body,
-						 WASM::ModuleInstance& instance, WASM::ModuleInstanceInternals& internals,
-						 const WASM::Module& module, uint32_t importedFuncCount);
+	void compileFunction(jit_function_t fn, uint32_t funcTypeIdx, const WASM::FuncType& funcType,
+						 const WASM::FunctionBody& body, WASM::ModuleInstance& instance,
+						 WASM::ModuleInstanceInternals& internals, const WASM::Module& module,
+						 uint32_t importedFuncCount);
 public:
 	ModuleCompiler(jit_context_t context);
 
