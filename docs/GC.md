@@ -38,6 +38,11 @@ Terminology follows the spec: a **heap type** classifies a reference; a
 mutually recursive block of defined types. "`match`" is the spec's subtyping
 relation, written `C ⊢ t ≤ t'`.
 
+One distinction matters throughout this note and is easy to get wrong: a
+**composite type** (`struct` / `array`) describes a *heap object* and is **not**
+a value type. Only a **reference** to such an object (`(ref null? $t)`) is a
+value. See §2.6.
+
 ## 2. What Wasm 3.0 demands (the GC surface we must honour to be conformant)
 
 WebAssembly 3.0 (change history dated 2026-10-03) folds in the garbage
@@ -118,6 +123,71 @@ above. It does **not** name an algorithm for any of it — see §3.
 `extern.convert_any`, so GC aggregates can appear in global and element
 initialisers. Typed tables may carry an initialiser expression, which is what
 makes a non-nullable reference table expressible.
+
+### 2.6 References, structs and arrays: aggregates are heap objects, not values
+
+This is the part of the GC extension most often misunderstood, so it is worth
+stating plainly: **a `struct` or `array` type is not a value type.** It
+describes the layout of a heap object. The only thing a Wasm program can put on
+the operand stack, pass as a parameter, return, or keep in a local/global is a
+**reference** to such an object. There is no by-value C-style struct anywhere
+in Wasm 3.0 — not as a parameter, not as a result, not as a local.
+
+**References are opaque handles.**
+
+- A reference type is `(ref null? ht)`: a nullable or non-nullable handle to a
+  value classified by the heap type `ht`. Reference types **are** value types,
+  so they live on the stack just like an `i32`.
+- A reference has **no arithmetic, no address-of, no dereference, and no
+  pointer comparison**. The complete operation set is `ref.null`,
+  `ref.is_null`, `ref.as_non_null`, `br_on_null` / `br_on_non_null`,
+  `ref.func`, `ref.eq` (only on the `eq` hierarchy), `ref.test` / `ref.cast` /
+  `br_on_cast*`, the extern bridge (`any.convert_extern` /
+  `extern.convert_any`), `call_ref`, and the aggregate accessors below.
+- A reference is the **identity** of the object: two references that compare
+  `ref.eq`-equal are the same object, and a mutation through one is visible
+  through the other. Aliasing is the norm, not an exception.
+- The spec says nothing about what a reference *is* — a raw pointer, an index
+  into a handle table, or a tagged word are all conformant (§3.2). That
+  freedom is exactly what this engine uses.
+
+**Structs.**
+
+- `struct.new $t` / `struct.new_default $t` **allocate a fresh object** on the
+  heap with the shape of `$t`, and push a non-null `(ref $t)`. `struct.new`
+  consumes the field values (in declaration order); `new_default` zero
+  initialises.
+- Fields are reachable **only through the object**: `struct.get[_s|_u]` takes
+  the `(ref null $t)` operand and returns the field; `struct.set` takes the
+  reference and the new value. A **null** reference traps.
+- `$t` itself (the `struct ft*` definition, with a `sub`/`final` annotation) is
+  never a value; it is the object's layout and the thing an instruction's
+  `typeidx` is validated against. Mutability (`mut? ft`) is a per-field
+  property, not a property of the object.
+
+**Arrays.**
+
+- `array.new $t`, `array.new_default $t`, `array.new_fixed $t n`,
+  `array.new_data $t d` and `array.new_elem $t e` **allocate a fresh array**
+  whose **length is fixed at creation**, and push a non-null `(ref $t)`.
+- The element type comes from the array's definition (`array ft`) and may be a
+  packed storage type (`i8`/`i16`).
+- All access is through the reference: `array.len`, `array.get[_s|_u]`,
+  `array.set`, `array.fill`, `array.copy`, `array.init_data`,
+  `array.init_elem`. An out-of-bounds index traps, as does a **null**
+  reference. There is no `array.grow` and no addressable storage — the elements
+  are not part of linear memory and cannot be reached with `i32.load`.
+
+**`i31` is the one unboxed internal value.** `i31ref` is an unboxed scalar (no
+heap object required), which is why `ref.eq` compares it by value. Everything
+else in the internal hierarchy is a reference to a heap object.
+
+**Why this matters for an implementation.** The aggregate definition is a
+*type-system and layout* artefact; the runtime value is a reference. Lowering
+a `struct` to a by-value aggregate on the operand stack (or passing one as a C
+struct) conflates the two, and then aliasing, object identity, and
+`struct.set` visibility all break. §4.4 shows how this engine keeps them
+separate.
 
 ## 3. What Wasm 3.0 explicitly does *not* demand
 
@@ -259,14 +329,51 @@ for the full design.)
 
 ### 4.4 JIT lowering (`LibJit/LibJitTypeTranslation.{hpp,cpp}`)
 
-- `struct` lowers to `[u32 header][field...]` using LibJIT's struct layout;
-  packed `i8`/`i16` fields lower to `jit_type_sbyte` / `jit_type_short`.
-- `array` lowers to `[u32 header][u32 length][element* data]`.
-- Reference types lower to `void*`, except `i31`, which uses a *tagged*
-  LibJIT type (`jit_type_create_tagged(void_ptr, TYPE_TAG_WASM, "wasm.i31")`).
-- A reference with a **concrete heap type** lowers to a pointer to that
-  aggregate's lowered type (`jit_type_create_pointer(...)`), regardless of
-  nullability.
+There are **two distinct lowerings** here, matching the two-level model of
+§2.6: the *layout of the heap object*, and the *reference to it*.
+
+**Aggregate layout (the pointee).**
+
+- `struct` lowers to `[u32 TypeId header][field...]` using LibJIT's struct
+  layout; packed `i8`/`i16` fields lower to `jit_type_sbyte` / `jit_type_short`.
+- `array` lowers to `[u32 TypeId header][u32 length][element* data]`.
+- `translateStruct` / `translateArray` return this **bare struct type**. It is
+  a *layout descriptor*, never a runtime value: it is consumed by
+  `jit_type_get_size(...)` (the allocation size handed to
+  `allocateStructObject` / `array.new*`) and by `jit_type_get_offset(...)` in
+  `structFieldOffset` / `arrayLengthOffset` / `arrayDataOffset`.
+- `translateTypes` PASS 1 caches that bare struct in `canonicalCache` (keyed by
+  `TypeId`), and `jitTypeForTypeIdx(idx)` hands out the bare struct.
+
+**References (the value).**
+
+- Abstract reference types lower to `void*`, except `i31`, which uses a
+  *tagged* LibJIT type (`jit_type_create_tagged(void_ptr, TYPE_TAG_WASM, "wasm.i31")`).
+- A reference with a **concrete heap type** lowers to a **pointer to** that
+  aggregate's layout: `translateType()` wraps the cached bare struct with
+  `jit_type_create_pointer(..., 1)`, regardless of nullability.
+  `jitRefTypeForHeapType` / `structRefType` / `arrayRefType` all route through
+  that same path, so this is the single place where aggregate → reference
+  happens.
+- Consequently the operand stack holds **pointers**, not aggregates:
+  `struct.new` pushes the `void*` returned by `wasm_struct_new_default_impl`,
+  and `struct.get` / `struct.set` do `refAsVoidPtr(ref)` followed by
+  `jit_insn_load_relative(..., fieldOffset, ...)`.
+
+**Do not double-wrap.** `translateStruct` must keep returning the bare struct.
+Returning `jit_type_create_pointer(struct, 1)` from it would make `translateType`
+produce `pointer(pointer(struct))`, and would make `jit_type_get_size` report
+the size of a pointer and `jit_type_get_offset` meaningless — the classic
+symptom of confusing an aggregate type with a reference to it.
+
+Two implementation footnotes:
+
+- The third argument of `jit_type_create_struct` is LibJIT's **`incref`**, not
+  `is_union` (`/usr/local/include/jit/jit-type.h`), so `... , 1)` is fine.
+- The `std::span<const WASM::StorageType>` overload of `translateStruct` is
+  currently **uncalled** (dead code). If it is ever wired up, it follows the
+  same rule: return the bare struct, and let the reference site wrap it.
+
 
 ### 4.5 Opcode emission (`LibJit/LibjitOpcodeDispatcher.{hpp,cpp}`)
 
@@ -353,6 +460,103 @@ table model), reference-typed **global imports** (imported globals are not
 resolved at all — G6), and validation of `ref.eq` operand types or of table
 element types on import.
 
+### 4.8 Array layout: out-of-line (current) vs inline (ideal)
+
+Wasm mandates **nothing** about how an array is laid out in memory (§3.2:
+layout is free). Both layouts below are conformant and observationally
+equivalent; the difference is cost, locality and simplicity. It is still worth
+recording, because the current shape is the "C struct containing a pointer"
+instinct rather than the layout a real GC engine uses.
+
+**Current: out-of-line.** `translateArray` lowers an array to a three-field
+struct `[u32 TypeId][u32 length][element* data]`, and
+`ModuleInstance::allocateArrayObject` performs **two** allocations:
+
+```
+      array object (calloc #1, 16 B)         element buffer (calloc #2, len*stride)
+    +---------------------------+          +-----------------------------+
+ref | +0 : u32 TypeId           |          | elem[0] | elem[1] | ...    |
+ -> | +4 : u32 length            | data --> |                             |
+    | +8 : element* data         |          +-----------------------------+
+    +---------------------------+
+```
+
+Constants: `kArrayDataOffset = 8`,
+`arraySize() = align_up(8 + sizeof(void*), sizeof(void*)) = 16`. Every element
+access is a **double indirection**: `array.get $t` does
+`load_relative(ref, +8, element*)` and then `load_elem(dataPtr, index)`
+(`dispatchArrayGet`/`GetS`/`GetU`/`Set`/`Fill`/`Copy`/`Init*` all repeat this),
+and `array.new*` loads the same field before its fill loop.
+
+**Ideal: inline.** One allocation holds the header and the elements:
+
+```
+   single allocation (calloc #1, dataOffset + len*stride)
+  +----------------------------------------------------------+
+  | +0 : u32 TypeId | +4 : u32 length | pad | elem[0] | ...  |
+  +----------------------------------------------------------+
+                                          ^ element base = ref + dataOffset
+```
+
+Element access becomes a **single** indirection:
+`load_elem(ref + dataOffset, index)` (or `load_elem_address` for the packed
+`get_u`/`get_s` path). `dataOffset` is a per-array-type constant,
+`align_up(8, alignof(element))`, not a stored field.
+
+| Dimension | Out-of-line (current) | Inline (ideal) |
+|---|---|---|
+| Allocations per array | 2 | 1 |
+| Fixed overhead per array | 16 B header + 8 B `data` field + two allocator headers | 8 B header (`dataOffset` incl. padding) + one allocator header |
+| Element access | 2 dependent loads (ref → data → elem) | 1 load (ref + offset → elem) |
+| Cache lines touched by one `array.get` | usually 2 (header, buffer) | 1 (unless the array spans a line) |
+| Empty array (`len = 0`) | `data == nullptr`; the field must never be dereferenced | just the header; no null case |
+| Locality / streaming | buffer can be anywhere | header and elements adjacent |
+| Free / arena teardown | two blocks to reclaim | one block |
+| Moving GC later | two objects per array, two forwarding pointers | one object, one forwarding pointer |
+| `array.copy` self-overlap | `memmove` on the shared buffer | `memmove` within one object |
+| LibJIT representation | fixed 3-field struct | header-only struct + computed address arithmetic |
+
+Arrays are uniquely easy to inline because **their length is fixed at
+creation** — there is no `array.grow`, so the object size is known at
+`array.new*` and never changes. Structs are already inline (fixed size, no
+pointer field); only arrays are out-of-line today, so this is an inconsistency
+in the current implementation rather than a deliberate policy.
+
+**Doing it under LibJIT.** LibJIT has no flexible-array-member type, so the
+lowered type becomes a *header-only* struct and the element base is raw
+address arithmetic:
+
+- `translateArray` returns `[u32 TypeId][u32 length]` (8 bytes) instead of
+  `[u32][u32][ptr]`.
+- Each array type gets two compile-time constants from its element storage
+  type: `elemSize` (already computed by `storageBytes`) and
+  `dataOffset = align_up(kArrayDataOffset, storageAlign(elem))`.
+- `arrayDataOffset(arg)` in the dispatcher returns `dataOffset` (instead of
+  `jit_type_get_offset(type, 2)`), and `array.get`/`get_s`/`get_u`/`set`/`fill`
+  replace `load_relative(ref, dataOffset, ptr)` + `load_elem(dataPtr, i)` with
+  `load_elem(ref + dataOffset, i)`.
+- `allocateArrayObject` becomes one `calloc(1, dataOffset + length*elemSize)`,
+  with `TypeId` at `+0` and `length` at `+4`.
+- `arraySize()` / `kArrayDataOffset` are replaced by the per-type
+  `dataOffset`/`elemSize`, computed in one place and shared with the JIT
+  (the same "keep in sync" contract as §5.3/H1).
+- `array.copy` / `init_data` / `init_elem` keep using
+  `wasm_buffer_copy_impl` / `wasm_buffer_init_*_impl`, but the `void*` they
+  receive is now `ref + dataOffset` rather than a loaded `data` field. A
+  self-copy still needs `memmove` semantics, which the helper provides.
+
+**Guardrails / caveats.**
+
+- Element **alignment** is the one thing that changes shape: `dataOffset` must
+  respect the element's alignment (`i64`/`f64` → 8, `v128` → 4 as lowered
+  today), so it is a per-type constant, not the fixed `8`.
+- The runtime and JIT offset/stride constants must not drift (H1). Add a test
+  that asserts the JIT's computed offsets equal the runtime helpers'.
+- `array.copy` between arrays of **different element sizes** currently emits a
+  trap; that is a validation concern and should stay rejected either way.
+- This is an optimisation, not a conformance fix: do it only when arrays are
+  on a hot path (measure first, §6.2/D12 spirit).
+
 ## 5. Gaps between the implementation and §2
 
 Severity is about *observable correctness for a conforming module*, not about
@@ -395,6 +599,7 @@ effort.
 | H5 | **`stringref`/`stringview_*` enum + `void*` lowering exist but are not in 3.0** and have no parser/dispatch; the reserved encodings are stale (see §10.3). Keep explicitly unsupported. |
 | H6 | **`ref.eq` is raw pointer equality with no type check**; unboxed `i31` compares by value only because the representation is canonical. `ref.eq` on non-`eq` operands is not rejected. |
 | H7 | **`Value::kind` is set ad hoc** when a GC constant is produced (`I31Ref`, `StructRef`, `ArrayRef`), but the JIT ignores it; two paths must agree that the union payload is represented the same way. |
+| H8 | **Arrays cost two allocations and two indirections** (out-of-line `[header][length][data*]`). Correct, but worse than the inline form for locality and allocation count; see §4.8. |
 
 ### 5.4 Harness limitations that can look like implementation gaps
 
@@ -468,6 +673,7 @@ contract, documented, not enforced by the engine.
 | D10 | **Do not implement** finalizers, weak refs, type parameters, unions, strings, thread-shared heaps. | §3.4: all Post-MVP / out of 3.0. | Scope control. |
 | D11 | **Elide null checks** only when the static type is non-nullable *and* we trust validation. | Sound if the module is valid; unsafe with D6. | Fewer branches on `struct.get`/`array.get`. |
 | D12 | **Keep type interning**, but stop paying for it where it does not matter (e.g. function types never used in casts/imports) once the dedup ratio is measured. | §3.3: canonicalisation is optional. | Less work at link time without losing cross-module `match`. |
+| D13 | **Make arrays inline** (header + length + elements in one allocation), replacing the current `[header][length][data*]` form. | §3.2: heap-object layout is ours to choose, and Wasm arrays never grow, so the size is known at creation. | Half the allocations, one indirection per element access, better locality; see §4.8. |
 
 ### 6.3 What we must *not* play loose with (observable semantics)
 
@@ -480,6 +686,7 @@ contract, documented, not enforced by the engine.
 | Process-wide `TypeId`s for cross-module `match` | Otherwise linking/casts across modules regress (`TYPE_IDENTITY.md`). |
 | Deterministic trap behaviour | Abort is acceptable, silent garbage is not. |
 | `extern`/`any` inverse property *if* a host passes externrefs | D5 is only safe under a no-mixing contract; it must be explicit, or box in a debug build. |
+| **Aggregates are references, not by-value values** | A `struct`/`array` type is a heap-object *layout*; only `(ref ...)` is a value. Treating the aggregate type as a stack value (or passing it as a C struct) breaks object identity, aliasing and `struct.set` visibility (§2.6, §4.4). |
 
 ## 7. Plan
 
@@ -496,6 +703,7 @@ Ordered so that the *conformance* gaps close before the *optimisation* work.
 | **GC-6 — Trap sink** | Route every trap through one `trap()` primitive; make it a longjmp/exception hook so `assert_trap` can eventually run. | C6, D7 | A failed cast / null deref is recoverable in-process; no `std::abort` on the normal path. |
 | **GC-7 — Fast casts (optional)** | Depth/range-tag encoding (D3), inline caches for repeated `ref.test`/`ref.cast` at a site, measured against the registry-call baseline. | H3 | Casts on a hot loop are a few instructions; benchmark recorded. |
 | **GC-8 — Extern interop (optional)** | Only if an embedder needs host externrefs: box `extern.convert_any` values, keep identity under the no-mixing contract (D5). | G3 | `ref_test` extern cases pass; the contract is documented in `ABI.md`. |
+| **GC-9 — Inline arrays (optional)** | Move arrays from the out-of-line `[header][length][data*]` form to the inline form (§4.8): header-only LibJIT type, per-type `dataOffset`/`elemSize`, single allocation, one indirection per access. Folds naturally into the region allocator (GC-2). | D13, H8 | A layout test asserts JIT offsets == runtime offsets; benchmarks show the allocation/indirection win. |
 
 Guardrails for every milestone:
 
