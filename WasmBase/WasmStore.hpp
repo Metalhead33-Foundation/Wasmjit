@@ -73,6 +73,19 @@ public:
 	// TableInstance::hostData lets this work for any table created here.
 	static bool growTable(TableInstance* table, uint64_t deltaEntries);
 
+	// ── Allocation guardrails ───────────────────────────────────────────
+	// Linear-memory and table bytes are charged against a process-wide budget,
+	// so an absurd `memory.grow`/`table.grow` (e.g. an *unbounded* memory grown
+	// by 0xffffffff pages, which is ~256 TiB) fails like any other failed grow
+	// instead of trying to allocate and take the host down. Default: 2 GiB.
+	// Override with WASMJIT_MAX_TOTAL_BYTES (bytes; "0"/"unlimited" disables the
+	// cap, at your own risk).
+	static uint64_t allocationBudgetBytes();
+	uint64_t allocatedBytes() const { return allocatedBytes_.load(std::memory_order_relaxed); }
+	// Charge `bytes` against the budget. Returns false if that would exceed it.
+	bool reserveBytes(uint64_t bytes);
+	void releaseBytes(uint64_t bytes);
+
 	// ── Reserved: store-owned runtime entities (pre-declared) ───────────
 	// Every Wasm runtime entity is intended to be Store-owned, following the
 	// memory/table pattern: a POD "instance view" + a Store-owned backing
@@ -105,6 +118,9 @@ private:
 
 	TableMap             tables;
 	std::atomic<int32_t> nextTableId;
+
+	// Charged/credited by reserveBytes/releaseBytes (see the header).
+	std::atomic<uint64_t> allocatedBytes_{0};
 };
 }
 #endif // WASMSTORE_HPP

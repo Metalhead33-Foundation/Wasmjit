@@ -1,6 +1,7 @@
 # WIT and the Component Model — Spec Status, Design Space, and a QVM-Style Scope
 
-Status: design note / forward-looking proposal (revision 1).
+Status: design note / forward-looking proposal (revision 2 — CM-0, honest
+rejection, is implemented; everything else is still unbuilt).
 Audience: whoever touches `WasmModule` (binary decoding), `WasmStore`,
 `WasmTypeRegistry`, `WasmImport`, the `LibJit*` backend, or the test harness —
 i.e. whoever would decide where a component parser lives.
@@ -234,43 +235,53 @@ handles, named imports/exports, and WIT as the authoring format. Everything in
 
 ## 4. What is in the tree today
 
-### 4.1 Short answer: nothing — and the current behaviour is worse than "unsupported"
+### 4.1 Short answer: no component support — but the rejection is now honest (CM-0)
 
-`Module::fromFile` (`WasmBase/WasmModule.cpp`, around line 736) reads the
-preamble as two little-endian `u32`s and checks only the magic:
+`Module::fromFile` (`WasmBase/WasmModule.cpp`) reads the 8-byte preamble as
+magic (4) + version (2) + **layer** (2) and rejects a non-zero layer:
 
 ```cpp
-DWasmStream wasmStream(file);
 uint32_t magicNumber;
-wasmStream >> magicNumber >> version;
+uint16_t versionLow;
+uint16_t layer;
+wasmStream >> magicNumber >> versionLow >> layer;
+version = versionLow;
 if(magicNumber != 0x6D736100) throw std::runtime_error("Invalid WASM module!...");
+if(layer != 0) throw std::runtime_error("Unsupported WebAssembly artifact!\n"
+    "This file is a Component Model component (preamble layer 1), not a core module.\n"
+    "WasmJit has no component support yet; see docs/proposals/COMPONENT_MODEL.md.");
 ```
 
-A component's preamble is `00 61 73 6D 0D 00 01 00`. The magic matches, and the
-four bytes `0D 00 01 00` are swallowed as `version = 0x0001000D`. **Nothing ever
-looks at the `layer` field**, and `Module::version` is not validated. The section
-scan that follows then records every component section under a *core* section id,
-and `processSecetions` dispatches each one to the wrong processor:
+So a component (`00 61 73 6D 0D 00 01 00`) fails fast, while a core module
+(`… 01 00 00 00`, layer 0) is unaffected. Regression coverage:
+`Test/wasm_wat/component_reject.wat` (a bare `(component)`, which `wasm-tools`
+encodes as exactly that preamble) plus the manual test
+`a Component Model component is rejected instead of misparsed`.
 
-| component section | core id it lands on | what `processSecetions` does with it |
+**Before CM-0 the behaviour was worse than "unsupported".** The magic matched,
+`0D 00 01 00` was swallowed as `version = 0x0001000D`, nothing looked at the
+layer, and the section scan recorded every component section under a *core* id,
+dispatching it to the wrong processor:
+
+| component section | core id it landed on | what `processSecetions` did with it |
 |---|---|---|
-| 1 `core:module` | 1 `Type` | parses an embedded module as a core type section |
-| 2 `core:instance` | 2 `Import` | parses an instance expression as imports |
-| 3 `core:type` | 3 `Function` | parses core types as a function-declaration section |
-| 4 nested `component` | 4 `Table` | parses a nested component as a table section |
-| 5 `instance` | 5 `Memory` | parses a component instance as memories |
-| 6 `alias` | 6 `Global` | parses aliases as globals |
-| 7 `type` | 7 `Export` | parses component types as exports |
-| 8 `canon` | 8 `Start` | parses canonical definitions as a start section |
-| 9 `start` | 9 `Element` | parses a start expression as element segments |
-| 10 `import` | 10 `Code` | parses imports as function bodies |
-| 11 `export` | 11 `Data` | parses exports as data segments |
-| 12 `value` | 12 `DataCount` | parses values as a data-count section |
+| 1 `core:module` | 1 `Type` | parsed an embedded module as a core type section |
+| 2 `core:instance` | 2 `Import` | parsed an instance expression as imports |
+| 3 `core:type` | 3 `Function` | parsed core types as a function-declaration section |
+| 4 nested `component` | 4 `Table` | parsed a nested component as a table section |
+| 5 `instance` | 5 `Memory` | parsed a component instance as memories |
+| 6 `alias` | 6 `Global` | parsed aliases as globals |
+| 7 `type` | 7 `Export` | parsed component types as exports |
+| 8 `canon` | 8 `Start` | parsed canonical definitions as a start section |
+| 9 `start` | 9 `Element` | parsed a start expression as element segments |
+| 10 `import` | 10 `Code` | parsed imports as function bodies |
+| 11 `export` | 11 `Data` | parsed exports as data segments |
+| 12 `value` | 12 `DataCount` | parsed values as a data-count section |
 
-The result is either an exception from somewhere unrelated (`"type section: ..."`,
-`"data section: ..."`) or, worse, a nonsense module that decodes cleanly enough to
-keep going. **There is no code anywhere in the tree that mentions components**:
-no `Component`, no `layer`, no `canon`, no `realloc`, no component value types.
+The result was either an unrelated exception (`"type section: ..."`) or a
+nonsense module that decoded far enough to keep going. There is still **no
+component support** anywhere in the tree — no `Component`, no `canon`, no
+`realloc`, no component value types — only the honest failure above.
 
 ### 4.2 Seams that already fit
 
@@ -286,8 +297,8 @@ no `Component`, no `layer`, no `canon`, no `realloc`, no component value types.
 
 ### 4.3 What is *not* there
 
-- No `layer` discrimination (§4.1).
-- No component decoder: no `core:instance`/`core:type` handling, no
+- No component decoder (the preamble check now exists, §4.1): no
+  `core:instance`/`core:type` handling, no
   component-level instance/alias/canon/start/import/export/value sections, no
   separate index spaces, no `sortidx` resolution.
 - No component value model anywhere: `WasmType.hpp` has only core numeric,
@@ -309,7 +320,7 @@ no `Component`, no `layer`, no `canon`, no `realloc`, no component value types.
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| CM1 | **No `layer` discrimination.** A component is accepted as a core module and its sections are dispatched to the wrong processors (§4.1). | `WasmModule.cpp` `fromFile` | High — silent misparse, not a clean refusal |
+| ~~CM1~~ | ~~No `layer` discrimination.~~ **Done (CM-0):** `Module::fromFile` reads magic/version/layer separately and throws a component-specific error when the layer is non-zero, so a component is refused instead of misparsed. | `WasmModule.cpp` `fromFile` | Closed |
 | CM2 | **No component decoder.** Missing `core:instance`/`core:type` and component-level instance/alias/canon/start/import/export/value sections; missing the separate core/component index spaces and `sortidx` resolution. | — | High |
 | CM3 | **No component type/value model.** `bool`…`string`, `list`/`record`/`variant`/`tuple`/`flags`/`enum`/`option`/`result`, `own`/`borrow`, `componenttype`/`instancetype`/`resourcetype` have nowhere to live; `TypeRegistry`/`CanonicalType` are core-only. | `WasmType.hpp`, `WasmCanonicalType.hpp` | High |
 | CM4 | **No Canonical ABI.** No lift/lower, flattening, memory representation, `canonopt`, `realloc`/`post-return`, or handle table. This is the actual JIT work. | — | High |
@@ -348,7 +359,7 @@ caller reuses the callee's buffer.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **CM-0 — Reject honestly** | Read and record the `layer` field in `Module::fromFile`; throw a specific error for `layer == 0x01`. | CM1 | A component file fails fast with a component-specific message instead of an unrelated section error; a manual test asserts it. |
+| **CM-0 — Reject honestly** | ✅ `Module::fromFile` reads and records the `layer` field (magic/version/layer as 4+2+2 bytes) and throws a component-specific error for a non-zero layer. | CM1 | Done: a component fails with "This file is a Component Model component …", asserted by `Test/wasm_wat/component_reject.wat` + `a Component Model component is rejected instead of misparsed`. |
 | **CM-1 — `Component` skeleton** | A `Component` type + decoder mirroring `Module`: preamble (`version` *and* `layer`), repeated sections, per-kind index spaces, `sortidx` resolution. No semantics, nothing executes. | CM1, CM2 | A component can be walked section by section and dumped; each section's definitions land in the right index space. |
 | **CM-2 — Component types in the store** | Component value/definition types (`bool`…`string`, `list`/`record`/`variant`/`tuple`/`flags`/`enum`/`option`/`result`, `own`/`borrow`) plus structural equality, interned through the `Store`'s registry. | CM3, CMD9 | Two structurally equal component types from different components intern to the same id; `matches` agrees with the spec's equality rules. |
 | **CM-3 — WIT ingestion (tooling)** | Consume `wasm-tools component wit --json` (and/or a binary WIT package) **in the test harness**, not the runtime; a hand-written `Wit/` parser stays a later option. | CM6 (partly) | A test can assert a component's expected world/import/export shape against a `.wit` file. |
@@ -360,9 +371,9 @@ caller reuses the callee's buffer.
 
 ## 8. Indicative test survey
 
-Nothing in this section has been run — unlike the other notes in this folder,
-there is no component code to run. What follows is where component coverage
-would have to come from and how the current harness would react.
+Also unlike the other notes, only CM-0 has anything to run; the rest of this
+section says where component coverage would have to come from and how the
+current harness would react.
 
 | Test / script | Current result | Reading |
 |---|---|---|
@@ -370,7 +381,7 @@ would have to come from and how the current harness would react.
 | a component script fed to the harness | skipped | `ScriptRunner::onModule` requires `module_type == "binary"`, so a text component is skipped as "text-format module". |
 | `module_definition` / `module_instance` commands | skipped as "module-linking proposal" | the linking model that the Component Model supersedes/built on; the harness has no support either way. |
 | `WebAssembly/component-model/test/*.wast` | not in the tree | the real reference tests; their README runs them with `wasmtime wast` (and `nyi.txt` filters tests that land ahead of implementations). Adding this as a submodule is CM-7. |
-| manual test, CM-0 | none yet | first candidate: a hand-written `Test/wasm_wat/component_reject.wat` (or a checked-in `.wasm`) that asserts the load fails with the component-specific message. |
+| manual test, CM-0 | **pass** | `Test/wasm_wat/component_reject.wat` (a bare `(component)`) is loaded and the loader's component-specific message is asserted; `a Component Model component is rejected instead of misparsed`. |
 | manual test, CM-4/CM-5 | none yet | a hand-authored component built with `wasm-tools component new` from a core module that was given a WIT-derived component-type section. |
 
 `wasm-tools` is already required to build `Test` and already supports both

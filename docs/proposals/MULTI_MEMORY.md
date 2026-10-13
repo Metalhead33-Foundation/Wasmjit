@@ -1,6 +1,7 @@
 # Multiple Memories — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 1).
+Status: design note / implementation reference (revision 2 — MM-1…MM-3
+implemented: `memidx` bounds checks, curation, and a cross-memory copy test).
 Audience: anyone touching `WasmType` (`MemArg`), `WasmVMContext`,
 `WasmMemory`, `WasmStore`, `LibjitOpcodeDispatcher`, or the test harness.
 
@@ -67,17 +68,26 @@ Multiple Memories is a **Phase 5** proposal, integrated into WebAssembly
   `MemArg`, `memory.size`/`grow` (LEB `MemIdx`), `memory.copy`/`fill`/`init`,
   and data segments via `DataSegment::memoryIdx`.
 - Multi-memory import sharing works through the Store, like tables.
-- Evidence: `spec: memory-multi` → **6 passed / 0 failed / 0 skipped**, and the
-  manual test `multi-memory: two linear memories are independent` passes.
+- **The `memidx` is bounds-checked.** `memoryPointerForIndex` and
+  `tablePointerForIndex` reject an index past the module's memory/table index
+  space at *compile* time (i.e. during instantiation), and the native
+  `memory.*`/`table.*` helpers re-check the index before dereferencing
+  `ctx.memories`/`ctx.tables` (MM-1).
+- **Curated and regression-tested.** `memory-multi` is in
+  `Test/wast_supported.txt` (MM-2), and `Test/wasm_wat/multi_memory.wat` gained
+  `copy0to1`/`copy1to0`, exercised by the manual test
+  `multi-memory: memory.copy moves bytes between two memories` (MM-3).
+- Evidence: `spec: memory-multi` → **6 passed / 0 failed / 0 skipped**; the two
+  manual multi-memory tests pass.
 
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| MM1 | **No bounds check on the memory index.** A `memidx` past `memoryCount` is used to index `ctx.memories` without validation (the load sites assume the fold is valid), so a technically-invalid module can read a wild pointer rather than trap. | `LibjitOpcodeDispatcher.cpp` memory paths | Medium |
-| MM2 | **`memory-multi` is not curated.** The passing script is not in `Test/wast_supported.txt`, so it only runs in an explicit sweep. | `Test/wast_supported.txt` | Low |
-| MM3 | **Import matching for memories is checked, but data-segment `memoryIdx` is not.** An active segment with an out-of-range memory throws a `runtime_error` at instantiation (acceptable) rather than a Wasm link error. | `applyActiveSegments` | Low |
-| MM4 | **Harness cannot marshal memories across modules.** The `spectest` host exposes one shared memory; multi-memory scripts that import/export more are only covered insofar as they use `memory` instructions. | `Test/WastScript.cpp` | Low |
+| ~~MM1~~ | ~~No bounds check on the memory index.~~ **Done (MM-1):** an out-of-range `memidx` is rejected at compile time by `memoryPointerForIndex` (and `tablePointerForIndex` for tables), and the `memory.*`/`table.*` helpers re-check before indexing. A malformed module can no longer read a wild pointer. | `LibjitOpcodeDispatcher.cpp` | Closed |
+| ~~MM2~~ | ~~`memory-multi` is not curated.~~ **Done (MM-2):** it is in `Test/wast_supported.txt` and runs by default. | `Test/wast_supported.txt` | Closed |
+| MM3 | **Import matching for memories is checked, but data-segment `memoryIdx` is not.** An active segment with an out-of-range memory throws a `runtime_error` at instantiation (a hard failure, which is the observable outcome the spec requires) rather than a Wasm *link* error. | `applyActiveSegments` | Low (deliberate: no validating front-end) |
+| MM4 | **Harness cannot marshal memories across modules.** The `spectest` host exposes one shared memory (plus `memory64`); multi-memory scripts that import/export more are only covered insofar as they use `memory` instructions. | `Test/WastScript.cpp` | Low |
 
 ## 6. Where we can and should play fast and loose
 
@@ -86,7 +96,8 @@ Multiple Memories is a **Phase 5** proposal, integrated into WebAssembly
 | MMD1 | **Fold a constant `memidx` into the load/store offset** (already done: the index is a compile-time constant, so `ctx.memories[K]` is loaded once). | §3: the index need not exist at runtime. | No per-access index work. |
 | MMD2 | **Keep one flat `memories` array and a `memoryCount`.** | §3: representation free. | Minimal change from single-memory code. |
 | MMD3 | **Add a single-memory fast path** (skip the array indirection when `memoryCount == 1`) if it ever shows up in a profile. | §3: representation free. | Fewer loads on the hottest path. |
-| MMD4 | **Do not validate `memidx`** beyond a cheap bounds check → `trap()`. | Consistent with the no-validation stance; the check is trivial and prevents a wild read (MM1). | Safe with valid input, not silently unsafe with invalid input. |
+| MMD4 | **Do not validate `memidx` structurally beyond a cheap bounds rejection** (now done: an out-of-range constant index fails compilation, and the helpers trap). | Consistent with the no-validation stance; the check is trivial and prevents a wild read (MM1). | Safe with valid input, not silently unsafe with invalid input. |
+| MMD5 | **Charge every memory against the Store's allocation budget**, so `memory.grow` on an unbounded memory with an absurd operand fails as `-1` instead of allocating ~256 TiB. | §2 only requires a trap for an out-of-bounds *access*; a failed grow is the spec's implementation-limit case. | A hostile or accidental oversized grow cannot take the host down (`docs/TESTING.md` "Allocation guardrails"). |
 
 Guardrail: `memory.copy` must handle **cross-memory** copies (source and
 destination `MemIdx` differ) with correct overlap behaviour within each memory.
@@ -95,19 +106,21 @@ destination `MemIdx` differ) with correct overlap behaviour within each memory.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **MM-1 — memidx bounds check** | Add a bounds check (or a compile-time assertion) for every `memidx` use. | MM1 | An out-of-range `memidx` traps instead of reading a wild pointer. |
-| **MM-2 — Curate** | Add `memory-multi` to `Test/wast_supported.txt` (it is already green). | MM2 | The default run covers multi-memory. |
-| **MM-3 — Manual cross-memory test** | Extend `Test/wasm_wat/multi_memory.wat` (or add one) with a `memory.copy` between two memories. | MM3 | The test asserts the copied bytes in the destination memory. |
+| **MM-1 — memidx bounds check** | ✅ `memoryPointerForIndex`/`tablePointerForIndex` reject an index past the module's index space at compile time; the native `memory.*`/`table.*` helpers re-check. | MM1 | Done: an out-of-range `memidx` fails instantiation instead of reading a wild pointer. |
+| **MM-2 — Curate** | ✅ Added `memory-multi` to `Test/wast_supported.txt`. | MM2 | Done: the default run covers multi-memory. |
+| **MM-3 — Manual cross-memory test** | ✅ `Test/wasm_wat/multi_memory.wat` gained `copy0to1`/`copy1to0`, exercised by `multi-memory: memory.copy moves bytes between two memories`. | guardrail | Done: the test asserts the copied bytes *and* that the source memory is untouched. |
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-04):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-13; `assert_trap` now executed):
 
 | Test / script | Result | Reading |
 |---|---|---|
-| `spec: memory-multi` | 6 passed / 0 failed / 0 skipped | multi-memory works |
+| `spec: memory-multi` | 6 passed / 0 failed / 0 skipped | multi-memory works (and is curated) |
 | manual `multi-memory: two linear memories are independent` | pass | independent address spaces |
+| manual `multi-memory: memory.copy moves bytes between two memories` | pass | cross-memory copy, both directions |
 | `memory` (single memory) | curated, passing | baseline |
+| `spec: memory_copy` / `spec: table_copy` | 4386/0/64, 1728/0/0 | bulk ops honour `memidx`; `memory.copy` may name two memories |
 
 ## 9. References
 

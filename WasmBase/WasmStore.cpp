@@ -1,6 +1,59 @@
 #include "WasmStore.hpp"
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
+#include <stdexcept>
 
 namespace WASM {
+
+namespace {
+
+// Reads WASMJIT_MAX_TOTAL_BYTES once. Bytes; "0"/"unlimited" means no cap.
+uint64_t parseAllocationBudget()
+{
+	const char* raw = std::getenv("WASMJIT_MAX_TOTAL_BYTES");
+	if (raw == nullptr || *raw == '\0')
+		return uint64_t{2} << 30; // 2 GiB
+	if (std::strcmp(raw, "unlimited") == 0 || std::strcmp(raw, "0") == 0)
+		return UINT64_MAX;
+	char* end = nullptr;
+	const unsigned long long parsed = std::strtoull(raw, &end, 0);
+	if (end == raw || parsed == 0)
+		return uint64_t{2} << 30;
+	return static_cast<uint64_t>(parsed);
+}
+
+} // namespace
+
+uint64_t Store::allocationBudgetBytes()
+{
+	static const uint64_t budget = parseAllocationBudget();
+	return budget;
+}
+
+bool Store::reserveBytes(uint64_t bytes)
+{
+	if (bytes == 0)
+		return true;
+
+	const uint64_t budget = allocationBudgetBytes();
+	if (budget == UINT64_MAX)
+		return true;
+
+	uint64_t current = allocatedBytes_.load(std::memory_order_relaxed);
+	for (;;) {
+		if (current > budget || bytes > budget - current)
+			return false;
+		if (allocatedBytes_.compare_exchange_weak(current, current + bytes,
+												  std::memory_order_relaxed))
+			return true;
+	}
+}
+
+void Store::releaseBytes(uint64_t bytes)
+{
+	allocatedBytes_.fetch_sub(bytes, std::memory_order_relaxed);
+}
 
 Store& Store::global()
 {
@@ -14,15 +67,29 @@ Store::Store() : nextMemoryId(0), nextTableId(0)
 
 Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPages, bool isShared)
 {
+	// Charge the initial commit against the process-wide budget (guardrail: an
+	// absurd initial size must fail loudly, not allocate).
+	if (initialPages > (UINT64_MAX / 0x10000ull))
+		throw std::runtime_error("linear memory initial size is not representable");
+	const uint64_t initialBytes = initialPages * 0x10000ull;
+	if (!reserveBytes(initialBytes))
+		throw std::runtime_error(
+			"linear memory exceeds the allocation budget (see WASMJIT_MAX_TOTAL_BYTES)");
+
 	const MemoryId id = nextMemoryId.fetch_add(1);
 
-	std::unique_ptr<StoreOwnedMemory> memory = isShared
-		? std::unique_ptr<StoreOwnedMemory>(std::make_unique<SharedLinearMemory>(initialPages, maxPages))
-		: std::unique_ptr<StoreOwnedMemory>(std::make_unique<PrivateLinearMemory>(initialPages, maxPages));
+	try {
+		std::unique_ptr<StoreOwnedMemory> memory = isShared
+			? std::unique_ptr<StoreOwnedMemory>(std::make_unique<SharedLinearMemory>(initialPages, maxPages))
+			: std::unique_ptr<StoreOwnedMemory>(std::make_unique<PrivateLinearMemory>(initialPages, maxPages));
 
-	// The unique_ptr keeps the StoreOwnedMemory at a stable address, so the
-	// LinearMemory* handed out below stays valid across later insertions.
-	memories.emplace(id, std::move(memory));
+		// The unique_ptr keeps the StoreOwnedMemory at a stable address, so the
+		// LinearMemory* handed out below stays valid across later insertions.
+		memories.emplace(id, std::move(memory));
+	} catch (...) {
+		releaseBytes(initialBytes);
+		throw;
+	}
 	return id;
 }
 
@@ -42,17 +109,46 @@ bool Store::growMemory(LinearMemory* memory, uint64_t deltaPages)
 {
 	if (memory == nullptr || memory->hostData == nullptr)
 		return false;
+	if (deltaPages == 0)
+		return true; // conformance: a zero growth always succeeds
+	if (deltaPages > (UINT64_MAX / 0x10000ull))
+		return false;
+	const uint64_t deltaBytes = deltaPages * 0x10000ull;
+
+	// Reserve *before* the allocation attempt, so a grow that would exceed the
+	// budget fails as a failed grow (-1) rather than ballooning the host.
+	Store& store = global();
+	if (!store.reserveBytes(deltaBytes))
+		return false;
+
 	auto* owned = static_cast<StoreOwnedMemory*>(memory->hostData);
-	return owned->growMemory(deltaPages);
+	if (!owned->growMemory(deltaPages)) {
+		store.releaseBytes(deltaBytes);
+		return false;
+	}
+	return true;
 }
 
 Store::TableId Store::createTable(uint64_t initialSize, uint64_t maxSize)
 {
+	// Tables are charged at one Callable* per entry, same guardrail as memories.
+	const uint64_t initialBytes = initialSize * sizeof(Callable*);
+	if (initialSize != 0 && initialBytes / sizeof(Callable*) != initialSize)
+		throw std::runtime_error("table initial size is not representable");
+	if (!reserveBytes(initialBytes))
+		throw std::runtime_error(
+			"table exceeds the allocation budget (see WASMJIT_MAX_TOTAL_BYTES)");
+
 	const TableId id = nextTableId.fetch_add(1);
 
-	// unique_ptr keeps the StoreOwnedTable at a stable address, so the
-	// TableInstance* handed out below stays valid across later insertions.
-	tables.emplace(id, std::make_unique<StoreOwnedTable>(initialSize, maxSize));
+	try {
+		// unique_ptr keeps the StoreOwnedTable at a stable address, so the
+		// TableInstance* handed out below stays valid across later insertions.
+		tables.emplace(id, std::make_unique<StoreOwnedTable>(initialSize, maxSize));
+	} catch (...) {
+		releaseBytes(initialBytes);
+		throw;
+	}
 	return id;
 }
 
@@ -72,8 +168,22 @@ bool Store::growTable(TableInstance* table, uint64_t deltaEntries)
 {
 	if (table == nullptr || table->hostData == nullptr)
 		return false;
+	if (deltaEntries == 0)
+		return true;
+	if (deltaEntries > (UINT64_MAX / sizeof(Callable*)))
+		return false;
+	const uint64_t deltaBytes = deltaEntries * sizeof(Callable*);
+
+	Store& store = global();
+	if (!store.reserveBytes(deltaBytes))
+		return false;
+
 	auto* owned = static_cast<StoreOwnedTable*>(table->hostData);
-	return owned->grow(deltaEntries);
+	if (!owned->grow(deltaEntries)) {
+		store.releaseBytes(deltaBytes);
+		return false;
+	}
+	return true;
 }
 
 } // namespace WASM

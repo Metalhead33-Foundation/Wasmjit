@@ -1,5 +1,6 @@
 #include "LibjitOpcodeDispatcher.hpp"
 #include "../WasmBase/WasmStore.hpp"
+#include "../WasmBase/WasmTrap.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
 #include <algorithm>
 #include <cassert>
@@ -9,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <stdexcept>
 
 namespace LibJIT {
 
@@ -20,10 +22,19 @@ namespace {
 	std::abort();
 }
 
+// A Wasm trap (docs/proposals/BULK_MEMORY.md BM-2): jump to the embedder's
+// armed TrapScope when there is one, otherwise print and abort. A `longjmp`
+// rather than a C++ exception, because the JIT-generated frames carry no
+// unwind tables. `JIT_CALL_NORETURN` tells the emitter control does not
+// continue here.
 void emitAbort(jit_function_t fn)
 {
-	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, nullptr, 0, 1);
-	jit_insn_call_native(fn, "abort", reinterpret_cast<void*>(std::abort), sig, nullptr, 0, JIT_CALL_NORETURN);
+	static const char kTrapMessage[] = "wasm trap";
+	jit_type_t params[1] = {jit_type_void_ptr};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 1, 1);
+	jit_value_t message = jit_value_create_nint_constant(
+		fn, jit_type_void_ptr, reinterpret_cast<jit_nint>(const_cast<char*>(kTrapMessage)));
+	jit_insn_call_native(fn, "wasm_trap", reinterpret_cast<void*>(&WASM::trap), sig, &message, 1, JIT_CALL_NORETURN);
 }
 
 extern "C" {
@@ -96,12 +107,14 @@ static double wasm_f64_reinterpret_i64(int64_t x)
 	return bits.f64;
 }
 
-static int32_t wasm_memory_grow_impl(WASM::VMContext* vm, uint32_t memIdx, int32_t deltaPages)
+// 64-bit throughout (docs/proposals/MEMORY64.md M64-1): a memory64 grows by an
+// i64 page delta and reports an i64 page count. The sentinel for "growth
+// failed" is all-ones, which reads as -1 in either index width.
+static uint64_t wasm_memory_grow_impl(WASM::VMContext* vm, uint32_t memIdx, uint64_t deltaPages)
 {
-	if (deltaPages < 0)
-		return -1;
 	WASM::ModuleInstance* m = reinterpret_cast<WASM::ModuleInstance*>(vm);
-	return m->growMemory(memIdx, static_cast<uint32_t>(deltaPages));
+	const int64_t previous = m->growMemory(memIdx, deltaPages);
+	return previous < 0 ? ~uint64_t{0} : static_cast<uint64_t>(previous);
 }
 
 // memory.copy may move bytes between two different memories (multi-memory),
@@ -110,56 +123,58 @@ static void wasm_memory_copy_impl(WASM::VMContext* vm, uint32_t dstMemIdx, uint3
 								  int32_t dst, int32_t src, int32_t len)
 {
 	if (dst < 0 || src < 0 || len < 0)
-		std::abort();
+		WASM::trap("out of bounds memory access");
+	if (dstMemIdx >= vm->memoryCount || srcMemIdx >= vm->memoryCount)
+		WASM::trap("memory index out of range");
 	const WASM::LinearMemory* dstMem = vm->memories[dstMemIdx];
 	const WASM::LinearMemory* srcMem = vm->memories[srcMemIdx];
 	const uint64_t udst = static_cast<uint64_t>(dst);
 	const uint64_t usrc = static_cast<uint64_t>(src);
 	const uint64_t ulen = static_cast<uint64_t>(len);
 	if (udst + ulen > dstMem->memorySize || usrc + ulen > srcMem->memorySize)
-		std::abort();
+		WASM::trap("out of bounds memory access");
 	std::memmove(dstMem->memoryBase + udst, srcMem->memoryBase + usrc, static_cast<size_t>(ulen));
 }
 
 static void wasm_memory_fill_impl(WASM::VMContext* vm, uint32_t memIdx, int32_t dst, int32_t value, int32_t len)
 {
 	if (dst < 0 || len < 0)
-		std::abort();
+		WASM::trap("out of bounds memory access");
+	if (memIdx >= vm->memoryCount)
+		WASM::trap("memory index out of range");
 	const WASM::LinearMemory* memory = vm->memories[memIdx];
 	const uint64_t udst = static_cast<uint64_t>(dst);
 	const uint64_t ulen = static_cast<uint64_t>(len);
 	if (udst + ulen > memory->memorySize)
-		std::abort();
+		WASM::trap("out of bounds memory access");
 	std::memset(memory->memoryBase + udst, value & 0xFF, static_cast<size_t>(ulen));
 }
 
-static int32_t wasm_table_grow_impl(WASM::VMContext* vm, uint32_t tableIdx, void* initRef, int32_t deltaEntries)
+static uint64_t wasm_table_grow_impl(WASM::VMContext* vm, uint32_t tableIdx, void* initRef, uint64_t deltaEntries)
 {
-	if (deltaEntries < 0)
-		return -1;
 	WASM::ModuleInstance* m = reinterpret_cast<WASM::ModuleInstance*>(vm);
 	if (vm->tables == nullptr || tableIdx >= vm->tableCount)
-		return -1;
+		return ~uint64_t{0};
 	WASM::TableInstance* table = vm->tables[tableIdx];
 	const uint64_t oldSize = table->size;
-	if (!m->growTable(tableIdx, static_cast<uint32_t>(deltaEntries)))
-		return -1;
+	if (!m->growTable(tableIdx, deltaEntries))
+		return ~uint64_t{0};
 	for (uint64_t i = oldSize; i < table->size; ++i)
 		table->base[i] = static_cast<WASM::Callable*>(initRef);
-	return static_cast<int32_t>(oldSize);
+	return oldSize;
 }
 
 static void wasm_table_fill_impl(WASM::VMContext* vm, uint32_t tableIdx, int32_t start, void* ref, int32_t len)
 {
 	if (start < 0 || len < 0)
-		std::abort();
+		WASM::trap("out of bounds table access");
 	if (vm->tables == nullptr || tableIdx >= vm->tableCount)
-		std::abort();
+		WASM::trap("table index out of range");
 	WASM::TableInstance* table = vm->tables[tableIdx];
 	const uint64_t ustart = static_cast<uint64_t>(start);
 	const uint64_t ulen = static_cast<uint64_t>(len);
 	if (ustart + ulen > table->size)
-		std::abort();
+		WASM::trap("out of bounds table access");
 	for (uint64_t i = 0; i < ulen; ++i)
 		table->base[ustart + i] = static_cast<WASM::Callable*>(ref);
 }
@@ -168,16 +183,16 @@ static void wasm_table_copy_impl(WASM::VMContext* vm, uint32_t dstTableIdx, uint
 								 int32_t dst, int32_t src, int32_t len)
 {
 	if (dst < 0 || src < 0 || len < 0)
-		std::abort();
+		WASM::trap("out of bounds table access");
 	if (vm->tables == nullptr || dstTableIdx >= vm->tableCount || srcTableIdx >= vm->tableCount)
-		std::abort();
+		WASM::trap("table index out of range");
 	WASM::TableInstance* dstTable = vm->tables[dstTableIdx];
 	WASM::TableInstance* srcTable = vm->tables[srcTableIdx];
 	const uint64_t udst = static_cast<uint64_t>(dst);
 	const uint64_t usrc = static_cast<uint64_t>(src);
 	const uint64_t ulen = static_cast<uint64_t>(len);
 	if (udst + ulen > dstTable->size || usrc + ulen > srcTable->size)
-		std::abort();
+		WASM::trap("out of bounds table access");
 	std::memmove(dstTable->base + udst, srcTable->base + usrc,
 				 static_cast<size_t>(ulen) * sizeof(WASM::Callable*));
 }
@@ -259,6 +274,99 @@ static uint64_t wasm_i64_trunc_sat_f64_u(double x)
 		return 0;
 	if (x >= static_cast<double>(std::numeric_limits<uint64_t>::max()))
 		return std::numeric_limits<uint64_t>::max();
+	return static_cast<uint64_t>(x);
+}
+
+// ── Trapping arithmetic ─────────────────────────────────────────────────────
+// The integer divide/remainder and the *trapping* float→int conversions must
+// trap on failure (docs/proposals/SMALL_PROPOSALS.md §3 keeps them distinct
+// from trunc_sat_*). LibJIT's own div/convert do not check, so the check lives
+// here and raises a real Wasm trap via WASM::trap (WasmTrap.hpp).
+static int32_t wasm_i32_div_s(int32_t a, int32_t b)
+{
+	if (b == 0) WASM::trap("integer divide by zero");
+	if (a == std::numeric_limits<int32_t>::min() && b == -1) WASM::trap("integer overflow");
+	return a / b;
+}
+static uint32_t wasm_i32_div_u(uint32_t a, uint32_t b)
+{
+	if (b == 0) WASM::trap("integer divide by zero");
+	return a / b;
+}
+static int32_t wasm_i32_rem_s(int32_t a, int32_t b)
+{
+	if (b == 0) WASM::trap("integer divide by zero");
+	return (b == -1) ? 0 : (a % b); // INT_MIN % -1 is UB in C++
+}
+static uint32_t wasm_i32_rem_u(uint32_t a, uint32_t b)
+{
+	if (b == 0) WASM::trap("integer divide by zero");
+	return a % b;
+}
+static int64_t wasm_i64_div_s(int64_t a, int64_t b)
+{
+	if (b == 0) WASM::trap("integer divide by zero");
+	if (a == std::numeric_limits<int64_t>::min() && b == -1) WASM::trap("integer overflow");
+	return a / b;
+}
+static uint64_t wasm_i64_div_u(uint64_t a, uint64_t b)
+{
+	if (b == 0) WASM::trap("integer divide by zero");
+	return a / b;
+}
+static int64_t wasm_i64_rem_s(int64_t a, int64_t b)
+{
+	if (b == 0) WASM::trap("integer divide by zero");
+	return (b == -1) ? 0 : (a % b);
+}
+static uint64_t wasm_i64_rem_u(uint64_t a, uint64_t b)
+{
+	if (b == 0) WASM::trap("integer divide by zero");
+	return a % b;
+}
+
+[[noreturn]] static void trapInvalidConversion()
+{
+	WASM::trap("invalid conversion to integer");
+}
+static int32_t wasm_i32_trunc_f32_s(float x)
+{
+	if (!(x >= -2147483648.0f && x < 2147483648.0f)) trapInvalidConversion();
+	return static_cast<int32_t>(x);
+}
+static uint32_t wasm_i32_trunc_f32_u(float x)
+{
+	if (!(x > -1.0f && x < 4294967296.0f)) trapInvalidConversion();
+	return static_cast<uint32_t>(x);
+}
+static int32_t wasm_i32_trunc_f64_s(double x)
+{
+	if (!(x >= -2147483648.0 && x < 2147483648.0)) trapInvalidConversion();
+	return static_cast<int32_t>(x);
+}
+static uint32_t wasm_i32_trunc_f64_u(double x)
+{
+	if (!(x > -1.0 && x < 4294967296.0)) trapInvalidConversion();
+	return static_cast<uint32_t>(x);
+}
+static int64_t wasm_i64_trunc_f32_s(float x)
+{
+	if (!(x >= -9223372036854775808.0f && x < 9223372036854775808.0f)) trapInvalidConversion();
+	return static_cast<int64_t>(x);
+}
+static uint64_t wasm_i64_trunc_f32_u(float x)
+{
+	if (!(x > -1.0f && x < 18446744073709551616.0f)) trapInvalidConversion();
+	return static_cast<uint64_t>(x);
+}
+static int64_t wasm_i64_trunc_f64_s(double x)
+{
+	if (!(x >= -9223372036854775808.0 && x < 9223372036854775808.0)) trapInvalidConversion();
+	return static_cast<int64_t>(x);
+}
+static uint64_t wasm_i64_trunc_f64_u(double x)
+{
+	if (!(x > -1.0 && x < 18446744073709551616.0)) trapInvalidConversion();
 	return static_cast<uint64_t>(x);
 }
 
@@ -682,7 +790,7 @@ void OpcodeDispatcher::dispatchCallThroughCallable(jit_value_t callablePtr, WASM
 	const WASM::FuncType& calleeSig = functionSignatureForType(typeIdx);
 	jit_type_t calleeJitSig = jitTypeForTypeIdx(typeIdx);
 
-	jit_insn_check_null(function, callablePtr);
+	emitTrapIfNull(callablePtr);
 
 	emitCallableTypeCheck(callablePtr, typeIdx);
 
@@ -706,6 +814,17 @@ void OpcodeDispatcher::dispatchCallThroughCallable(jit_value_t callablePtr, WASM
 void OpcodeDispatcher::emitTrapUnreachable()
 {
 	emitAbort(function);
+}
+
+void OpcodeDispatcher::emitTrapIfNull(jit_value_t pointer)
+{
+	jit_value_t word = jit_insn_convert(function, pointer, jit_type_ulong, 0);
+	jit_value_t nonNull = jit_insn_ne(function, word,
+		jit_value_create_long_constant(function, jit_type_ulong, 0));
+	jit_label_t ok = jit_label_undefined;
+	jit_insn_branch_if(function, nonNull, &ok);
+	emitTrapUnreachable();
+	jit_insn_label(function, &ok);
 }
 
 std::vector<WASM::StorageType> OpcodeDispatcher::storageTypesForBlockType(const WASM::BlockType& bt) const
@@ -858,6 +977,13 @@ jit_value_t OpcodeDispatcher::checkedTableIndex(jit_value_t table, jit_value_t i
 
 jit_value_t OpcodeDispatcher::memoryPointerForIndex(WASM::MemIdx memidx)
 {
+	// The index is a compile-time constant, so an out-of-range one is a
+	// malformed module: reject it here — at compile time, i.e. during
+	// instantiation — instead of folding a wild pointer load into an access
+	// (docs/proposals/MULTI_MEMORY.md MM-1).
+	if (memidx >= internals.memoryRefs.size())
+		throw std::runtime_error("memory index out of range for this module");
+
 	// ctx.memories is an array of LinearMemory* owned by the Store. The memory
 	// index is a compile-time constant, so it can be folded into the load's
 	// byte offset (imports occupy the low indices, then the module's own).
@@ -872,6 +998,10 @@ jit_value_t OpcodeDispatcher::memoryPointerForIndex(WASM::MemIdx memidx)
 
 jit_value_t OpcodeDispatcher::tablePointerForIndex(WASM::TableIdx tableidx)
 {
+	// Same compile-time rejection as for memories (MULTI_MEMORY.md MM-1).
+	if (tableidx >= internals.tableRefs.size())
+		throw std::runtime_error("table index out of range for this module");
+
 	// ctx.tables is an array of TableInstance* owned by the Store. As with
 	// memories, the (constant) table index folds into the load's byte offset.
 	jit_value_t vm = vmContextValue();
@@ -894,6 +1024,32 @@ jit_value_t OpcodeDispatcher::tablePointerForIndex(WASM::TableIdx tableidx)
 		jit_type_void_ptr);
 }
 
+WASM::MemoryIndexType OpcodeDispatcher::memoryIndexTypeForIndex(WASM::MemIdx memidx) const
+{
+	// Imported memories occupy the low indices of the memory index space,
+	// exactly like ctx.memories (see initializeMemories / resolveImports).
+	const size_t imported = module.importMemories.size();
+	if (memidx < imported)
+		return module.importMemories[memidx].memory.indexType;
+	const size_t local = memidx - imported;
+	if (local < module.memories.size())
+		return module.memories[local].indexType;
+	return WASM::MemoryIndexType::I32; // out of range: rejected by memoryPointerForIndex
+}
+
+bool OpcodeDispatcher::tableIs64Bit(WASM::TableIdx tableidx) const
+{
+	// A 64-bit table declares flag bit 2 on its limits, exactly like a
+	// memory64 (docs/proposals/MEMORY64.md M4).
+	const size_t imported = module.importTables.size();
+	if (tableidx < imported)
+		return (module.importTables[tableidx].table.limits.flags & 0x04) != 0;
+	const size_t local = tableidx - imported;
+	if (local < module.tables.size())
+		return (module.tables[local].limits.flags & 0x04) != 0;
+	return false; // out of range: rejected by tablePointerForIndex
+}
+
 jit_value_t OpcodeDispatcher::effectiveMemoryAddress(const WASM::MemArg& ma, jit_nint accessSize)
 {
 	// Multi-memory: every access names its memory (defaulting to 0).
@@ -901,15 +1057,33 @@ jit_value_t OpcodeDispatcher::effectiveMemoryAddress(const WASM::MemArg& ma, jit
 	jit_value_t base = jit_insn_load_relative(function, lm, offsetof(WASM::LinearMemory, memoryBase), jit_type_void_ptr);
 	jit_value_t memorySize = jit_insn_load_relative(function, lm, offsetof(WASM::LinearMemory, memorySize), jit_type_ulong);
 	jit_value_t wasmOff = popValue();
-	jit_value_t ext = jit_insn_convert(function, wasmOff, jit_type_ulong, 0);
+
+	// The address operand is the memory's *unsigned* index. Widen it through
+	// the unsigned type of the same width: converting a negative i32 straight
+	// to unsigned 64 sign-extends, and `addr + offset + width` then wraps the
+	// bounds check, letting a wild access through (address.wast's
+	// `8u_good3(i32.const -1)` and memory_trap64's `-1` cases).
+	jit_value_t indexValue = wasmOff;
+	if (memoryIndexTypeForIndex(ma.memidx) != WASM::MemoryIndexType::I64)
+		indexValue = jit_insn_convert(function, jit_insn_convert(function, wasmOff, jit_type_uint, 0), jit_type_ulong, 0);
+	else
+		indexValue = jit_insn_convert(function, wasmOff, jit_type_ulong, 0);
+
 	jit_value_t off = jit_value_create_long_constant(function, jit_type_ulong, static_cast<jit_long>(ma.offset));
-	jit_value_t byteOff = jit_insn_add(function, ext, off);
+	jit_value_t byteOff = jit_insn_add(function, indexValue, off);
 	jit_value_t endOff = byteOff;
 	if (accessSize > 0) {
 		jit_value_t width = jit_value_create_long_constant(function, jit_type_ulong, static_cast<jit_long>(accessSize));
 		endOff = jit_insn_add(function, byteOff, width);
 	}
-	jit_value_t inBounds = jit_insn_le(function, endOff, memorySize);
+
+	// Three conditions, all unsigned 64-bit comparisons: the offset addition
+	// must not have wrapped, the width addition must not have wrapped, and the
+	// last byte must be inside the memory.
+	jit_value_t addrNoWrap = jit_insn_ge(function, byteOff, indexValue);
+	jit_value_t widthNoWrap = jit_insn_ge(function, endOff, byteOff);
+	jit_value_t inSize = jit_insn_le(function, endOff, memorySize);
+	jit_value_t inBounds = jit_insn_and(function, jit_insn_and(function, addrNoWrap, widthNoWrap), inSize);
 	jit_label_t cont = jit_label_undefined;
 	jit_insn_branch_if(function, inBounds, &cont);
 	emitTrapUnreachable();
@@ -1252,7 +1426,7 @@ void OpcodeDispatcher::dispatchCall(WASM::FuncIdx funcIdx)
 		jit_value_t off = jit_value_create_nint_constant(
 			function, jit_type_nint, static_cast<jit_nint>(funcIdx * sizeof(WASM::Callable)));
 		jit_value_t callablePtr = jit_insn_add(function, impBase, off);
-		jit_insn_check_null(function, callablePtr);
+		emitTrapIfNull(callablePtr);
 		jit_value_t fnPtr = jit_insn_load_relative(
 			function, callablePtr, offsetof(WASM::Callable, fnPtr), jit_type_void_ptr);
 		// If the import has a non-null context (imported from another Wasm
@@ -1311,7 +1485,7 @@ void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx typeIdx, WASM::TableId
 		function, table, offsetof(WASM::TableInstance, base), jit_type_void_ptr);
 	jit_value_t checkedIndex = checkedTableIndex(table, tableElemIdx, "dispatchCallIndirect");
 	jit_value_t callablePtr = jit_insn_load_elem(function, tablePtr, checkedIndex, jit_type_void_ptr);
-	jit_insn_check_null(function, callablePtr);
+	emitTrapIfNull(callablePtr);
 
 	emitCallableTypeCheck(callablePtr, typeIdx);
 
@@ -1470,7 +1644,7 @@ void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::Tabl
 			function, table, offsetof(WASM::TableInstance, base), jit_type_void_ptr);
 		jit_value_t checkedIndex = checkedTableIndex(table, tableElemIdx, "dispatchReturnCallIndirect");
 		jit_value_t callablePtr = jit_insn_load_elem(function, tablePtr, checkedIndex, jit_type_void_ptr);
-		jit_insn_check_null(function, callablePtr);
+		emitTrapIfNull(callablePtr);
 		emitCallableTypeCheck(callablePtr, arg1);
 		emitTailCallViaPending(callablePtr, stackArgs);
 		return;
@@ -1497,7 +1671,7 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx arg)
 		std::vector<jit_value_t> stackArgs(ft.params.size());
 		for (size_t i = ft.params.size(); i--; )
 			stackArgs[i] = popValue();
-		jit_insn_check_null(function, callablePtr);
+		emitTrapIfNull(callablePtr);
 		emitCallableTypeCheck(callablePtr, arg);
 		emitTailCallViaPending(callablePtr, stackArgs);
 		return;
@@ -1781,19 +1955,34 @@ void OpcodeDispatcher::dispatchMemorySize(WASM::MemIdx arg)
 	jit_value_t ms = jit_insn_load_relative(function, lm, offsetof(WASM::LinearMemory, memorySize), jit_type_ulong);
 	jit_value_t page = jit_value_create_long_constant(function, jit_type_ulong, 65536);
 	jit_value_t pages = jit_insn_div(function, ms, page);
-	pushValue(jit_insn_convert(function, pages, jit_type_int, 0));
+	// The result has the memory's index type: i64 for memory64 (M64-1).
+	if (memoryIndexTypeForIndex(arg) == WASM::MemoryIndexType::I64)
+		pushValue(jit_insn_convert(function, pages, jit_type_long, 0));
+	else
+		pushValue(jit_insn_convert(function, pages, jit_type_int, 0));
 }
 
 void OpcodeDispatcher::dispatchMemoryGrow(WASM::MemIdx arg)
 {
+	const bool is64 = memoryIndexTypeForIndex(arg) == WASM::MemoryIndexType::I64;
 	jit_value_t delta = popValue();
-	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_int};
-	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 3, 1);
+	// The delta operand has the memory's index type; interpret it as unsigned
+	// so a negative i32 becomes a huge (failing) request rather than wrapping.
+	delta = jit_insn_convert(function, delta, is64 ? jit_type_ulong : jit_type_uint, 0);
+	if (!is64)
+		delta = jit_insn_convert(function, delta, jit_type_ulong, 0);
+
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_ulong};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_ulong, params, 3, 1);
 	jit_value_t args[] = {vmContextValue(),
 		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg)),
 		delta};
-	pushValue(jit_insn_call_native(function, "wasm_memory_grow_impl",
-								   reinterpret_cast<void*>(wasm_memory_grow_impl), sig, args, 3, 0));
+	jit_value_t result = jit_insn_call_native(function, "wasm_memory_grow_impl",
+											   reinterpret_cast<void*>(wasm_memory_grow_impl), sig, args, 3, 0);
+	if (is64)
+		pushValue(jit_insn_convert(function, result, jit_type_long, 0));
+	else
+		pushValue(jit_insn_convert(function, result, jit_type_int, 0));
 }
 
 void OpcodeDispatcher::dispatchI32Const(int32_t arg)
@@ -2091,28 +2280,34 @@ void OpcodeDispatcher::dispatchI32DivS()
 {
 	jit_value_t b = popValue();
 	jit_value_t a = popValue();
-	pushValue(jit_insn_div(function, a, b));
+	pushValue(callNativeBinary(function, reinterpret_cast<void*>(wasm_i32_div_s),
+		jit_type_int, jit_type_int, jit_type_int, a, b));
 }
 
 void OpcodeDispatcher::dispatchI32DivU()
 {
 	jit_value_t b = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t a = jit_insn_convert(function, popValue(), jit_type_uint, 0);
-	pushValue(jit_insn_convert(function, jit_insn_div(function, a, b), jit_type_int, 0));
+	jit_value_t r = callNativeBinary(function, reinterpret_cast<void*>(wasm_i32_div_u),
+		jit_type_uint, jit_type_uint, jit_type_uint, a, b);
+	pushValue(jit_insn_convert(function, r, jit_type_int, 0));
 }
 
 void OpcodeDispatcher::dispatchI32RemS()
 {
 	jit_value_t b = popValue();
 	jit_value_t a = popValue();
-	pushValue(jit_insn_rem(function, a, b));
+	pushValue(callNativeBinary(function, reinterpret_cast<void*>(wasm_i32_rem_s),
+		jit_type_int, jit_type_int, jit_type_int, a, b));
 }
 
 void OpcodeDispatcher::dispatchI32RemU()
 {
 	jit_value_t b = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t a = jit_insn_convert(function, popValue(), jit_type_uint, 0);
-	pushValue(jit_insn_convert(function, jit_insn_rem(function, a, b), jit_type_int, 0));
+	jit_value_t r = callNativeBinary(function, reinterpret_cast<void*>(wasm_i32_rem_u),
+		jit_type_uint, jit_type_uint, jit_type_uint, a, b);
+	pushValue(jit_insn_convert(function, r, jit_type_int, 0));
 }
 
 void OpcodeDispatcher::dispatchI32And()
@@ -2213,28 +2408,34 @@ void OpcodeDispatcher::dispatchI64DivS()
 {
 	jit_value_t b = popValue();
 	jit_value_t a = popValue();
-	pushValue(jit_insn_div(function, a, b));
+	pushValue(callNativeBinary(function, reinterpret_cast<void*>(wasm_i64_div_s),
+		jit_type_long, jit_type_long, jit_type_long, a, b));
 }
 
 void OpcodeDispatcher::dispatchI64DivU()
 {
 	jit_value_t b = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
 	jit_value_t a = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
-	pushValue(jit_insn_convert(function, jit_insn_div(function, a, b), jit_type_long, 0));
+	jit_value_t r = callNativeBinary(function, reinterpret_cast<void*>(wasm_i64_div_u),
+		jit_type_ulong, jit_type_ulong, jit_type_ulong, a, b);
+	pushValue(jit_insn_convert(function, r, jit_type_long, 0));
 }
 
 void OpcodeDispatcher::dispatchI64RemS()
 {
 	jit_value_t b = popValue();
 	jit_value_t a = popValue();
-	pushValue(jit_insn_rem(function, a, b));
+	pushValue(callNativeBinary(function, reinterpret_cast<void*>(wasm_i64_rem_s),
+		jit_type_long, jit_type_long, jit_type_long, a, b));
 }
 
 void OpcodeDispatcher::dispatchI64RemU()
 {
 	jit_value_t b = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
 	jit_value_t a = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
-	pushValue(jit_insn_convert(function, jit_insn_rem(function, a, b), jit_type_long, 0));
+	jit_value_t r = callNativeBinary(function, reinterpret_cast<void*>(wasm_i64_rem_u),
+		jit_type_ulong, jit_type_ulong, jit_type_ulong, a, b);
+	pushValue(jit_insn_convert(function, r, jit_type_long, 0));
 }
 
 void OpcodeDispatcher::dispatchI64And()
@@ -2475,22 +2676,28 @@ void OpcodeDispatcher::dispatchI32WrapI64()
 
 void OpcodeDispatcher::dispatchI32TruncF32S()
 {
-	pushValue(jit_insn_convert(function, popValue(), jit_type_int, 0));
+	pushValue(callNativeUnary(function, reinterpret_cast<void*>(wasm_i32_trunc_f32_s),
+		jit_type_int, jit_type_float32, popValue()));
 }
 
 void OpcodeDispatcher::dispatchI32TruncF32U()
 {
-	pushValue(jit_insn_convert(function, popValue(), jit_type_uint, 0));
+	jit_value_t r = callNativeUnary(function, reinterpret_cast<void*>(wasm_i32_trunc_f32_u),
+		jit_type_uint, jit_type_float32, popValue());
+	pushValue(jit_insn_convert(function, r, jit_type_int, 0));
 }
 
 void OpcodeDispatcher::dispatchI32TruncF64S()
 {
-	pushValue(jit_insn_convert(function, popValue(), jit_type_int, 0));
+	pushValue(callNativeUnary(function, reinterpret_cast<void*>(wasm_i32_trunc_f64_s),
+		jit_type_int, jit_type_float64, popValue()));
 }
 
 void OpcodeDispatcher::dispatchI32TruncF64U()
 {
-	pushValue(jit_insn_convert(function, popValue(), jit_type_uint, 0));
+	jit_value_t r = callNativeUnary(function, reinterpret_cast<void*>(wasm_i32_trunc_f64_u),
+		jit_type_uint, jit_type_float64, popValue());
+	pushValue(jit_insn_convert(function, r, jit_type_int, 0));
 }
 
 void OpcodeDispatcher::dispatchI64ExtendI32S()
@@ -2505,22 +2712,28 @@ void OpcodeDispatcher::dispatchI64ExtendI32U()
 
 void OpcodeDispatcher::dispatchI64TruncF32S()
 {
-	pushValue(jit_insn_convert(function, popValue(), jit_type_long, 0));
+	pushValue(callNativeUnary(function, reinterpret_cast<void*>(wasm_i64_trunc_f32_s),
+		jit_type_long, jit_type_float32, popValue()));
 }
 
 void OpcodeDispatcher::dispatchI64TruncF32U()
 {
-	pushValue(jit_insn_convert(function, popValue(), jit_type_ulong, 0));
+	jit_value_t r = callNativeUnary(function, reinterpret_cast<void*>(wasm_i64_trunc_f32_u),
+		jit_type_ulong, jit_type_float32, popValue());
+	pushValue(jit_insn_convert(function, r, jit_type_long, 0));
 }
 
 void OpcodeDispatcher::dispatchI64TruncF64S()
 {
-	pushValue(jit_insn_convert(function, popValue(), jit_type_long, 0));
+	pushValue(callNativeUnary(function, reinterpret_cast<void*>(wasm_i64_trunc_f64_s),
+		jit_type_long, jit_type_float64, popValue()));
 }
 
 void OpcodeDispatcher::dispatchI64TruncF64U()
 {
-	pushValue(jit_insn_convert(function, popValue(), jit_type_ulong, 0));
+	jit_value_t r = callNativeUnary(function, reinterpret_cast<void*>(wasm_i64_trunc_f64_u),
+		jit_type_ulong, jit_type_float64, popValue());
+	pushValue(jit_insn_convert(function, r, jit_type_long, 0));
 }
 
 void OpcodeDispatcher::dispatchF32ConvertI32S()
@@ -2656,7 +2869,7 @@ void OpcodeDispatcher::dispatchRefEq() {
 }
 void OpcodeDispatcher::dispatchRefAsNonNull() {
 	jit_value_t ref = popValue();
-	jit_insn_check_null(function, refAsVoidPtr(ref));
+	emitTrapIfNull(refAsVoidPtr(ref));
 	pushValue(ref);
 }
 void OpcodeDispatcher::dispatchBrOnNull(WASM::LabelIdx arg) {
@@ -2721,7 +2934,7 @@ void OpcodeDispatcher::dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2) {
 	const WASM::StructType& st = structTypeForIndex(arg1);
 	assert(arg2 < st.fields.size());
 	jit_value_t ref = popValue();
-	jit_insn_check_null(function, refAsVoidPtr(ref));
+	emitTrapIfNull(refAsVoidPtr(ref));
 	jit_type_t fieldType = jitTypeForValueType(st.fields[arg2].storageType.val);
 	pushValue(jit_insn_load_relative(function, refAsVoidPtr(ref), structFieldOffset(arg1, arg2), fieldType));
 }
@@ -2729,7 +2942,7 @@ void OpcodeDispatcher::dispatchStructGetS(WASM::TypeIdx arg1, uint32_t arg2) {
 	const WASM::StructType& st = structTypeForIndex(arg1);
 	assert(arg2 < st.fields.size());
 	jit_value_t ref = popValue();
-	jit_insn_check_null(function, refAsVoidPtr(ref));
+	emitTrapIfNull(refAsVoidPtr(ref));
 	jit_type_t loadType = st.fields[arg2].storageType.val.opcode == WASM::ValueTypeCode::I8 ? jit_type_sbyte : jit_type_short;
 	jit_value_t raw = jit_insn_load_relative(function, refAsVoidPtr(ref), structFieldOffset(arg1, arg2), loadType);
 	pushValue(jit_insn_convert(function, raw, jit_type_int, 0));
@@ -2738,7 +2951,7 @@ void OpcodeDispatcher::dispatchStructGetU(WASM::TypeIdx arg1, uint32_t arg2) {
 	const WASM::StructType& st = structTypeForIndex(arg1);
 	assert(arg2 < st.fields.size());
 	jit_value_t ref = popValue();
-	jit_insn_check_null(function, refAsVoidPtr(ref));
+	emitTrapIfNull(refAsVoidPtr(ref));
 	jit_type_t loadType = st.fields[arg2].storageType.val.opcode == WASM::ValueTypeCode::I8 ? jit_type_ubyte : jit_type_ushort;
 	jit_value_t raw = jit_insn_load_relative(function, refAsVoidPtr(ref), structFieldOffset(arg1, arg2), loadType);
 	pushValue(jit_insn_convert(function, raw, jit_type_int, 0));
@@ -2748,7 +2961,7 @@ void OpcodeDispatcher::dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2) {
 	assert(arg2 < st.fields.size());
 	jit_value_t value = popValue();
 	jit_value_t ref = popValue();
-	jit_insn_check_null(function, refAsVoidPtr(ref));
+	emitTrapIfNull(refAsVoidPtr(ref));
 	jit_type_t fieldType = jitTypeForValueType(st.fields[arg2].storageType.val);
 	jit_insn_store_relative(function, refAsVoidPtr(ref), structFieldOffset(arg1, arg2),
 							castRefValue(value, fieldType));
@@ -2880,7 +3093,7 @@ void OpcodeDispatcher::dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2) {
 void OpcodeDispatcher::dispatchArrayGet(WASM::TypeIdx arg) {
 	jit_value_t index = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t ref = popValue();
-	jit_insn_check_null(function, refAsVoidPtr(ref));
+	emitTrapIfNull(refAsVoidPtr(ref));
 	jit_value_t len = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayLengthOffset(arg), jit_type_uint);
 	jit_value_t ok = jit_insn_lt(function, index, len);
 	jit_label_t cont = jit_label_undefined;
@@ -2895,7 +3108,7 @@ void OpcodeDispatcher::dispatchArrayGet(WASM::TypeIdx arg) {
 void OpcodeDispatcher::dispatchArrayGetS(WASM::TypeIdx arg) {
 	jit_value_t index = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t ref = popValue();
-	jit_insn_check_null(function, refAsVoidPtr(ref));
+	emitTrapIfNull(refAsVoidPtr(ref));
 	jit_value_t len = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayLengthOffset(arg), jit_type_uint);
 	jit_value_t ok = jit_insn_lt(function, index, len);
 	jit_label_t cont = jit_label_undefined;
@@ -2911,7 +3124,7 @@ void OpcodeDispatcher::dispatchArrayGetS(WASM::TypeIdx arg) {
 void OpcodeDispatcher::dispatchArrayGetU(WASM::TypeIdx arg) {
 	jit_value_t index = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t ref = popValue();
-	jit_insn_check_null(function, refAsVoidPtr(ref));
+	emitTrapIfNull(refAsVoidPtr(ref));
 	jit_value_t len = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayLengthOffset(arg), jit_type_uint);
 	jit_value_t ok = jit_insn_lt(function, index, len);
 	jit_label_t cont = jit_label_undefined;
@@ -2930,7 +3143,7 @@ void OpcodeDispatcher::dispatchArraySet(WASM::TypeIdx arg) {
 	jit_value_t value = popValue();
 	jit_value_t index = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t ref = popValue();
-	jit_insn_check_null(function, refAsVoidPtr(ref));
+	emitTrapIfNull(refAsVoidPtr(ref));
 	jit_value_t len = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayLengthOffset(arg), jit_type_uint);
 	jit_value_t ok = jit_insn_lt(function, index, len);
 	jit_label_t cont = jit_label_undefined;
@@ -2944,7 +3157,7 @@ void OpcodeDispatcher::dispatchArraySet(WASM::TypeIdx arg) {
 }
 void OpcodeDispatcher::dispatchArrayLen() {
 	jit_value_t ref = popValue();
-	jit_insn_check_null(function, refAsVoidPtr(ref));
+	emitTrapIfNull(refAsVoidPtr(ref));
 	jit_value_t len = jit_insn_load_relative(function, refAsVoidPtr(ref), static_cast<jit_nint>(sizeof(uint32_t)), jit_type_uint);
 	pushValue(jit_insn_convert(function, len, jit_type_int, 0));
 }
@@ -2953,7 +3166,7 @@ void OpcodeDispatcher::dispatchArrayFill(WASM::TypeIdx arg) {
 	jit_value_t value = popValue();
 	jit_value_t start = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t ref = popValue();
-	jit_insn_check_null(function, refAsVoidPtr(ref));
+	emitTrapIfNull(refAsVoidPtr(ref));
 	jit_value_t arrLen = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayLengthOffset(arg), jit_type_uint);
 	jit_value_t end = jit_insn_add(function, start, len);
 	jit_value_t ok = jit_insn_le(function, end, arrLen);
@@ -2983,8 +3196,8 @@ void OpcodeDispatcher::dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2)
 	jit_value_t srcRef = popValue();
 	jit_value_t dstIndex = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t dstRef = popValue();
-	jit_insn_check_null(function, refAsVoidPtr(srcRef));
-	jit_insn_check_null(function, refAsVoidPtr(dstRef));
+	emitTrapIfNull(refAsVoidPtr(srcRef));
+	emitTrapIfNull(refAsVoidPtr(dstRef));
 	jit_value_t srcLen = jit_insn_load_relative(function, refAsVoidPtr(srcRef), arrayLengthOffset(arg2), jit_type_uint);
 	jit_value_t dstLen = jit_insn_load_relative(function, refAsVoidPtr(dstRef), arrayLengthOffset(arg1), jit_type_uint);
 	jit_value_t srcOk = jit_insn_le(function, jit_insn_add(function, srcIndex, len), srcLen);
@@ -3016,7 +3229,7 @@ void OpcodeDispatcher::dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2) 
 	jit_value_t src = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t dst = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t ref = popValue();
-	jit_insn_check_null(function, refAsVoidPtr(ref));
+	emitTrapIfNull(refAsVoidPtr(ref));
 	jit_value_t arrLen = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayLengthOffset(arg1), jit_type_uint);
 	jit_value_t ok = jit_insn_le(function, jit_insn_add(function, dst, len), arrLen);
 	jit_label_t cont = jit_label_undefined;
@@ -3043,7 +3256,7 @@ void OpcodeDispatcher::dispatchArrayInitElem(WASM::TypeIdx arg1, uint32_t arg2) 
 	jit_value_t src = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t dst = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t ref = popValue();
-	jit_insn_check_null(function, refAsVoidPtr(ref));
+	emitTrapIfNull(refAsVoidPtr(ref));
 	jit_value_t arrLen = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayLengthOffset(arg1), jit_type_uint);
 	jit_value_t ok = jit_insn_le(function, jit_insn_add(function, dst, len), arrLen);
 	jit_label_t cont = jit_label_undefined;
@@ -3259,15 +3472,25 @@ void OpcodeDispatcher::dispatchTableCopy(WASM::TableIdx arg1, WASM::TableIdx arg
 						 reinterpret_cast<void*>(wasm_table_copy_impl), sig, args, 6, 0);
 }
 void OpcodeDispatcher::dispatchTableGrow(WASM::TableIdx arg) {
+	const bool is64 = tableIs64Bit(arg);
 	jit_value_t delta = popValue();
 	jit_value_t initRef = popValue();
-	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_void_ptr, jit_type_int};
-	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 4, 1);
+	// A 64-bit table grows by an i64 delta and reports an i64 old size
+	// (docs/proposals/MEMORY64.md M4).
+	delta = jit_insn_convert(function, delta, is64 ? jit_type_ulong : jit_type_uint, 0);
+	if (!is64)
+		delta = jit_insn_convert(function, delta, jit_type_ulong, 0);
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_void_ptr, jit_type_ulong};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_ulong, params, 4, 1);
 	jit_value_t args[] = {vmContextValue(),
 		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg)),
 		initRef, delta};
-	pushValue(jit_insn_call_native(function, "wasm_table_grow_impl",
-								   reinterpret_cast<void*>(wasm_table_grow_impl), sig, args, 4, 0));
+	jit_value_t result = jit_insn_call_native(function, "wasm_table_grow_impl",
+											   reinterpret_cast<void*>(wasm_table_grow_impl), sig, args, 4, 0);
+	if (is64)
+		pushValue(jit_insn_convert(function, result, jit_type_long, 0));
+	else
+		pushValue(jit_insn_convert(function, result, jit_type_int, 0));
 }
 void OpcodeDispatcher::dispatchTableSize(WASM::TableIdx arg) {
 	// An absent table (e.g. an unmodelled imported table) reports size 0.
@@ -3292,7 +3515,11 @@ void OpcodeDispatcher::dispatchTableSize(WASM::TableIdx arg) {
 		function, table, offsetof(WASM::TableInstance, size), jit_type_ulong));
 
 	jit_insn_label(function, &done);
-	pushValue(jit_insn_convert(function, size, jit_type_int, 0));
+	// A 64-bit table reports an i64 size (docs/proposals/MEMORY64.md M4).
+	if (tableIs64Bit(arg))
+		pushValue(jit_insn_convert(function, size, jit_type_long, 0));
+	else
+		pushValue(jit_insn_convert(function, size, jit_type_int, 0));
 }
 void OpcodeDispatcher::dispatchTableFill(WASM::TableIdx arg) {
 	jit_value_t len = popValue();

@@ -740,3 +740,133 @@ TEST_CASE("JIT type cache is keyed by canonical TypeId")
 	REQUIRE(sigA == sigB);
 	REQUIRE(translator.canonicalCacheSize() == cacheAfterA);
 }
+
+TEST_CASE("a Component Model component is rejected instead of misparsed")
+{
+	// `(component)` encodes as magic + version 0x0D 0x00 + layer 0x01 0x00.
+	// The loader must refuse it (docs/proposals/COMPONENT_MODEL.md CM-0)
+	// rather than decoding component sections as core ones.
+	WASM::Module component;
+	const std::string path = std::string(WASM_TEST_DIR) + "component_reject.wasm";
+	Euph::Io::File file(path.c_str(), Elv::Io::Mode::READ);
+
+	try {
+		component.fromFile(file);
+		FAIL("a Component Model component must not load as a core module");
+	} catch (const std::exception& error) {
+		REQUIRE(std::string(error.what()).find("Component Model") != std::string::npos);
+	}
+}
+
+TEST_CASE("multi-memory: memory.copy moves bytes between two memories")
+{
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("multi_memory", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+
+	auto write0   = loaded.instance->exportedFunction("write0");
+	auto read0    = loaded.instance->exportedFunction("read0");
+	auto write1   = loaded.instance->exportedFunction("write1");
+	auto read1    = loaded.instance->exportedFunction("read1");
+	auto copy1to0 = loaded.instance->exportedFunction("copy1to0");
+	auto copy0to1 = loaded.instance->exportedFunction("copy0to1");
+	REQUIRE(write0.has_value());
+	REQUIRE(read0.has_value());
+	REQUIRE(write1.has_value());
+	REQUIRE(read1.has_value());
+	REQUIRE(copy1to0.has_value());
+	REQUIRE(copy0to1.has_value());
+
+	// Distinct values at distinct addresses in each memory.
+	WASM::callCallable<void>(*write0, int32_t(100), int32_t(0xAAAA));
+	WASM::callCallable<void>(*write1, int32_t(200), int32_t(0xBBBB));
+
+	// mem1[100..] <- mem0[100..]: only the four source bytes move, and memory 0
+	// is left alone (docs/proposals/MULTI_MEMORY.md MM-3).
+	WASM::callCallable<void>(*copy0to1, int32_t(100), int32_t(100), int32_t(4));
+	REQUIRE(WASM::callCallable<int32_t>(*read1, int32_t(100)) == 0xAAAA);
+	REQUIRE(WASM::callCallable<int32_t>(*read1, int32_t(200)) == 0xBBBB);
+	REQUIRE(WASM::callCallable<int32_t>(*read0, int32_t(100)) == 0xAAAA);
+
+	// ... and the other direction, from a non-zero source offset.
+	WASM::callCallable<void>(*write0, int32_t(300), int32_t(0xCCCC));
+	WASM::callCallable<void>(*copy1to0, int32_t(300), int32_t(200), int32_t(4));
+	REQUIRE(WASM::callCallable<int32_t>(*read0, int32_t(300)) == 0xBBBB);
+	REQUIRE(WASM::callCallable<int32_t>(*read1, int32_t(200)) == 0xBBBB);
+}
+
+TEST_CASE("memory64: 64-bit memory and table size/grow are 64-bit")
+{
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("memory64_index", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+
+	auto store     = loaded.instance->exportedFunction("store");
+	auto load      = loaded.instance->exportedFunction("load");
+	auto size      = loaded.instance->exportedFunction("size");
+	auto grow      = loaded.instance->exportedFunction("grow");
+	auto tableSize = loaded.instance->exportedFunction("table_size");
+	auto tableGrow = loaded.instance->exportedFunction("table_grow");
+	REQUIRE(store.has_value());
+	REQUIRE(load.has_value());
+	REQUIRE(size.has_value());
+	REQUIRE(grow.has_value());
+	REQUIRE(tableSize.has_value());
+	REQUIRE(tableGrow.has_value());
+
+	// A 64-bit address operand round-trips through the load/store paths.
+	WASM::callCallable<void>(*store, int64_t(8), int32_t(0x1234));
+	REQUIRE(WASM::callCallable<int32_t>(*load, int64_t(8)) == 0x1234);
+
+	REQUIRE(WASM::callCallable<int64_t>(*size) == 1);
+	REQUIRE(WASM::callCallable<int64_t>(*grow, int64_t(1)) == 1); // old page count
+	REQUIRE(WASM::callCallable<int64_t>(*size) == 2);
+
+	// A delta beyond the declared maximum *and* beyond 2^32 pages must be
+	// rejected as -1 (all-ones), not truncated into a plausible small value
+	// (docs/proposals/MEMORY64.md M64-1).
+	REQUIRE(WASM::callCallable<int64_t>(*grow, int64_t{0x1'0000'0000LL}) == -1);
+	REQUIRE(WASM::callCallable<int64_t>(*size) == 2);
+
+	REQUIRE(WASM::callCallable<int64_t>(*tableSize) == 1);
+	REQUIRE(WASM::callCallable<int64_t>(*tableGrow, int64_t{0x1'0000'0000LL}) == -1); // M4
+}
+
+TEST_CASE("grow guardrail rejects absurd deltas without allocating")
+{
+	// An *unbounded* memory/table grown by 0xffffffff (32-bit) entries is
+	// ~256 TiB / ~34 GB. It must fail as -1 quickly: a regression here is the
+	// host-killing OOM the Store's allocation budget exists to prevent.
+	// See docs/TESTING.md ("Allocation guardrails") and WasmStore.hpp.
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("grow_guard", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+
+	auto growMemory = loaded.instance->exportedFunction("grow_memory");
+	auto growTable  = loaded.instance->exportedFunction("grow_table");
+	REQUIRE(growMemory.has_value());
+	REQUIRE(growTable.has_value());
+
+	const uint64_t before = WASM::Store::global().allocatedBytes();
+
+	// 0xffffffff pages / entries, interpreted as an unsigned index.
+	REQUIRE(WASM::callCallable<int32_t>(*growMemory, int32_t(-1)) == -1);
+	REQUIRE(WASM::callCallable<int32_t>(*growTable,  int32_t(-1)) == -1);
+
+	// A refused grow charged nothing and left nothing behind.
+	REQUIRE(WASM::Store::global().allocatedBytes() == before);
+
+	// A sane grow still succeeds, and is charged exactly one page.
+	REQUIRE(WASM::callCallable<int32_t>(*growMemory, int32_t(1)) == 1);
+	REQUIRE(WASM::Store::global().allocatedBytes() == before + 65536);
+
+	// table.size reflects the table's current extent, before and after a grow.
+	auto tableSize = loaded.instance->exportedFunction("table_size");
+	REQUIRE(tableSize.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*tableSize) == 1);
+	REQUIRE(WASM::callCallable<int32_t>(*growTable, int32_t(2)) == 1);
+	REQUIRE(WASM::callCallable<int32_t>(*tableSize) == 3);
+}

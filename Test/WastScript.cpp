@@ -3,6 +3,7 @@
 #include <array>
 #include <cerrno>
 #include <csignal>
+#include <csetjmp>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -24,6 +25,7 @@
 #include "WasmBase/WasmModuleInstance.hpp"
 #include "WasmBase/WasmRegistryImportResolver.hpp"
 #include "WasmBase/WasmStore.hpp"
+#include "WasmBase/WasmTrap.hpp"
 #include "WasmBase/WasmType.hpp"
 
 namespace Spec {
@@ -157,6 +159,48 @@ bool isScalarValue(const ScriptValue& value)
 	return typeCodeFromName(value.type, code);
 }
 
+// Formats a returned scalar for failure messages. Without this a mismatch only
+// reports the *type* of the unexpected value, which makes diagnosing a spec
+// failure needlessly hard.
+std::string formatResultValue(WASM::ValueTypeCode code, const unsigned char* data)
+{
+	std::ostringstream out;
+	switch (code) {
+	case WASM::ValueTypeCode::I32: {
+		int32_t v = 0;
+		std::memcpy(&v, data, sizeof(v));
+		out << v;
+		break;
+	}
+	case WASM::ValueTypeCode::I64: {
+		int64_t v = 0;
+		std::memcpy(&v, data, sizeof(v));
+		out << v;
+		break;
+	}
+	case WASM::ValueTypeCode::F32: {
+		uint32_t bits = 0;
+		float v = 0.0f;
+		std::memcpy(&bits, data, sizeof(bits));
+		std::memcpy(&v, data, sizeof(v));
+		out << v << " (0x" << std::hex << bits << ")";
+		break;
+	}
+	case WASM::ValueTypeCode::F64: {
+		uint64_t bits = 0;
+		double v = 0.0;
+		std::memcpy(&bits, data, sizeof(bits));
+		std::memcpy(&v, data, sizeof(v));
+		out << v << " (0x" << std::hex << bits << ")";
+		break;
+	}
+	default:
+		out << "?";
+		break;
+	}
+	return out.str();
+}
+
 // ── The `spectest` host module ──────────────────────────────────────────────
 
 // The spec scripts import a handful of helpers from a host module called
@@ -208,6 +252,9 @@ private:
 
 	ScriptReport report;
 
+	// Set by invoke() when the call trapped (a non-local exit out of the JIT).
+	const char* lastTrapMessage = nullptr;
+
 	void installSpectest();
 
 	void pass();
@@ -221,11 +268,12 @@ private:
 	void onModule(const ScriptCommand& command);
 	void onRegister(const ScriptCommand& command);
 	void onAssertReturn(const ScriptCommand& command);
+	void onAssertTrap(const ScriptCommand& command);
 	void onAction(const ScriptCommand& command);
 	void onAssertExhaustion(const ScriptCommand& command);
 
 	bool invoke(WASM::ModuleInstance& instance, const ScriptAction& action, const WASM::FuncType& funcType,
-				const WASM::Callable& callable, std::array<unsigned char, 16>& returns);
+				const WASM::Callable& callable, std::array<unsigned char, 16>& returns, bool& trapped);
 	bool compareResult(const ScriptValue& expected, WASM::ValueTypeCode actual, const unsigned char* data);
 };
 
@@ -283,6 +331,29 @@ void ScriptRunner::installSpectest()
 	if (spectestMemory == nullptr)
 		spectestMemory = store.memory(store.createLinearMemory(1, 2, false));
 	registry.registerMemory("spectest", "memory", spectestMemory);
+
+	// The 64-bit-index variants. Import matching does not compare the index
+	// type yet (docs/proposals/GC.md R1), so the name is what makes a
+	// `spectest.table64` import resolve; `table64.wast` needs it to
+	// instantiate at all.
+	static WASM::TableInstance* spectestTable64 = nullptr;
+	if (spectestTable64 == nullptr)
+		spectestTable64 = store.table(store.createTable(10, 20));
+	registry.registerTable("spectest", "table64", WASM::ImportedTable{spectestTable64});
+
+	static WASM::LinearMemory* spectestMemory64 = nullptr;
+	if (spectestMemory64 == nullptr)
+		spectestMemory64 = store.memory(store.createLinearMemory(1, 2, false));
+	registry.registerMemory("spectest", "memory64", spectestMemory64);
+
+	// The scalar globals the reference interpreter's `spectest` exports. The
+	// engine now resolves imported globals (docs/proposals/MUTABLE_GLOBALS.md
+	// MG-1), so scripts that read them (extended-const offsets, imported
+	// funcref globals) need the real values.
+	registry.registerGlobal("spectest", "global_i32", WASM::Value{.i32 = 666, .kind = WASM::ValueTypeCode::I32});
+	registry.registerGlobal("spectest", "global_i64", WASM::Value{.i64 = 666, .kind = WASM::ValueTypeCode::I64});
+	registry.registerGlobal("spectest", "global_f32", WASM::Value{.f32 = 666.6f, .kind = WASM::ValueTypeCode::F32});
+	registry.registerGlobal("spectest", "global_f64", WASM::Value{.f64 = 666.6, .kind = WASM::ValueTypeCode::F64});
 }
 
 void ScriptRunner::pass()
@@ -342,6 +413,15 @@ ScriptReport ScriptRunner::run(const Script& script)
 
 void ScriptRunner::runCommand(const ScriptCommand& command)
 {
+	// WJ_TRACE=1 prints every command before it runs. Because each script runs
+	// in a forked child whose report is only written at the end, this is the
+	// way to find *which* command killed a child ("produced no report").
+	if (std::getenv("WJ_TRACE") != nullptr) {
+		std::fprintf(stderr, "[wj] line %d: %s %s\n", command.line, command.type.c_str(),
+					 command.action.field.c_str());
+		std::fflush(stderr);
+	}
+
 	if (command.type == "module") {
 		onModule(command);
 		return;
@@ -367,7 +447,7 @@ void ScriptRunner::runCommand(const ScriptCommand& command)
 		return;
 	}
 	if (command.type == "assert_trap") {
-		skip("trap handling: traps currently terminate the process via std::abort()");
+		onAssertTrap(command);
 		return;
 	}
 	if (command.type == "assert_malformed" || command.type == "assert_invalid"
@@ -499,8 +579,14 @@ void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 	}
 
 	std::array<unsigned char, 16> returns {};
-	if (!invoke(*instance, action, *funcType, *callable, returns)) {
+	bool trapped = false;
+	if (!invoke(*instance, action, *funcType, *callable, returns, trapped)) {
 		skip("could not marshal the arguments of '" + action.field + "'");
+		return;
+	}
+	if (trapped) {
+		fail(command.line, "unexpected trap from '" + action.field + "': "
+				+ std::string(lastTrapMessage != nullptr ? lastTrapMessage : "trap"));
 		return;
 	}
 
@@ -518,8 +604,65 @@ void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 	std::stringstream message;
 	message << "assert_return failed for '" << action.field << "': expected "
 			<< command.expected[0].type << " " << command.expected[0].value
-			<< " but got " << typeName(resultCode);
+			<< " but got " << typeName(resultCode) << " "
+			<< formatResultValue(resultCode, returns.data());
 	fail(command.line, message.str());
+}
+
+void ScriptRunner::onAssertTrap(const ScriptCommand& command)
+{
+	// Runs the action in-process: the engine's traps are recoverable now
+	// (docs/proposals/BULK_MEMORY.md BM-2), so a trap means the scope armed by
+	// invoke() jumped back; no trap means the module did not trap.
+	const ScriptAction& action = command.action;
+
+	if (action.type != "invoke") {
+		skip("assert_trap with a non-invoke action ('" + action.type + "')");
+		return;
+	}
+
+	WASM::ModuleInstance* instance = instanceFor(action.module, command.line);
+	if (instance == nullptr)
+		return;
+
+	const auto callable = instance->exportedFunction(action.field);
+	if (!callable.has_value()) {
+		fail(command.line, "no exported function named '" + action.field + "'");
+		return;
+	}
+
+	const WASM::FuncType* funcType = funcTypeFor(*instance, *callable);
+	if (funcType == nullptr) {
+		skip("export '" + action.field + "' does not have a plain function type");
+		return;
+	}
+	if (funcType->params.size() != action.args.size()) {
+		fail(command.line, "arity mismatch for '" + action.field + "'");
+		return;
+	}
+	if (funcType->results.size() > 1) {
+		skip("multiple return values are not marshalled yet");
+		return;
+	}
+	for (const ScriptValue& arg : action.args) {
+		if (!isScalarValue(arg)) {
+			skip("argument type '" + arg.type + "' is not supported");
+			return;
+		}
+	}
+
+	std::array<unsigned char, 16> returns {};
+	bool trapped = false;
+	if (!invoke(*instance, action, *funcType, *callable, returns, trapped)) {
+		skip("could not marshal the arguments of '" + action.field + "'");
+		return;
+	}
+
+	if (trapped) {
+		pass();
+		return;
+	}
+	fail(command.line, "expected a trap from '" + action.field + "' but it returned normally");
 }
 
 void ScriptRunner::onAction(const ScriptCommand& command)
@@ -560,8 +703,14 @@ void ScriptRunner::onAction(const ScriptCommand& command)
 	}
 
 	std::array<unsigned char, 16> returns {};
-	if (!invoke(*instance, action, *funcType, *callable, returns)) {
+	bool trapped = false;
+	if (!invoke(*instance, action, *funcType, *callable, returns, trapped)) {
 		skip("could not marshal the arguments of '" + action.field + "'");
+		return;
+	}
+	if (trapped) {
+		fail(command.line, "unexpected trap from '" + action.field + "': "
+				+ std::string(lastTrapMessage != nullptr ? lastTrapMessage : "trap"));
 		return;
 	}
 
@@ -624,7 +773,8 @@ void ScriptRunner::onAssertExhaustion(const ScriptCommand& command)
 		std::signal(SIGBUS, SIG_DFL);
 		std::signal(SIGFPE, SIG_DFL);
 		std::array<unsigned char, 16> returns {};
-		invoke(*instance, action, *funcType, *callable, returns);
+		bool trapped = false;
+		invoke(*instance, action, *funcType, *callable, returns, trapped);
 		_exit(0); // returned normally: no exhaustion
 	}
 
@@ -643,7 +793,7 @@ void ScriptRunner::onAssertExhaustion(const ScriptCommand& command)
 
 bool ScriptRunner::invoke(WASM::ModuleInstance& instance, const ScriptAction& action,
 						  const WASM::FuncType& funcType, const WASM::Callable& callable,
-						  std::array<unsigned char, 16>& returns)
+						  std::array<unsigned char, 16>& returns, bool& trapped)
 {
 	std::vector<ArgSlot> slots(funcType.params.size());
 	std::vector<void*> arguments(funcType.params.size() + 1);
@@ -693,6 +843,17 @@ bool ScriptRunner::invoke(WASM::ModuleInstance& instance, const ScriptAction& ac
 	// rebuilt per invocation (libjit keeps its own copy), which is fine for a
 	// test harness but would be worth caching in a hot path.
 	const jit_type_t signature = jitContext.getTranslator().translateFunctionSignature(funcType);
+
+	// Arm a trap scope: a Wasm trap longjmps back to here instead of aborting
+	// the process (docs/proposals/BULK_MEMORY.md BM-2), so the harness can
+	// report it — and assert_trap can expect it.
+	WASM::TrapScope trapScope;
+	if (setjmp(trapScope.buffer) != 0) {
+		trapped = true;
+		lastTrapMessage = trapScope.message();
+		return true;
+	}
+
 	jit_apply(signature, callable.fnPtr, arguments.data(),
 			  static_cast<unsigned int>(funcType.params.size() + 1), returns.data());
 	return true;

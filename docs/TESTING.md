@@ -119,6 +119,11 @@ All tests passed (21 assertions in 5 test cases)
 3. If the module imports host functions, register them through `registerHostFunction(...)` and read
    embedder state from `context->hostData`.
 
+WAT modules (`Test/wasm_wat/*.wat`, compiled with `wasm-tools parse`) work the same
+way. **A newly added `.wat`/`.ts` file needs qmake to be re-run** — the source
+lists are built with `$$files()` at qmake time, so `make` alone will not notice
+the new file (regenerate the `Test` Makefile, or re-run qmake on `Project.pro`).
+
 ---
 
 ## Part 2 — the official WebAssembly spec testsuite
@@ -290,7 +295,7 @@ Correct results are deliberately **not required yet**; the run is meant to be in
 | `module` (binary) | executed | loaded and instantiated |
 | `register` | executed | exports re-registered under the given name |
 | `assert_return`, `action` (`invoke`) | executed | i32/i64/f32/f64 arguments and results |
-| `assert_trap` | skipped | traps terminate the process via `std::abort()` |
+| `assert_trap` | executed | traps are recoverable (`WASM::trap` longjmps to a `TrapScope`; see `WasmBase/WasmTrap.hpp`) |
 | `assert_exhaustion` | approximated | run in a nested child; an abnormal termination counts as the expected exhaustion trap |
 | `assert_malformed`, `assert_invalid`, `assert_unlinkable`, `assert_uninstantiable` | skipped | no validating / decoding front-end yet |
 | `module_definition`, `module_instance` | skipped | module-linking proposal |
@@ -299,40 +304,109 @@ Correct results are deliberately **not required yet**; the run is meant to be in
 | `v128` and reference values | skipped | not marshalled yet |
 
 The `spectest` host module is provided in full for the entities the runtime
-models: the `print*` stubs, a shared table (`10..20 funcref`) and a shared
-memory (`1..2 pages`). Both are created once via the global `Store` and
-re-registered into each script's `RegistryImportResolver`, so scripts that
+models: the `print*` stubs, a shared table (`10..20 funcref`), a shared memory
+(`1..2 pages`), the 64-bit-index `table64`/`memory64` and the scalar globals
+(`global_i32`/`i64`/`f32`/`f64`). They are created once via the global `Store`
+and re-registered into each script's `RegistryImportResolver`, so scripts that
 import `(import "spectest" "table" ...)` / `"memory"` instantiate correctly.
+
+### Traps
+
+A Wasm trap is a non-local exit from the current invocation. The JIT-generated
+frames carry no unwind tables, so a trap is a `longjmp` to a `TrapScope` the
+harness arms around each invocation (`WasmBase/WasmTrap.hpp`), not a C++
+exception. `invoke()` arms one scope, so:
+
+- `assert_trap` runs the action and expects the scope to be jumped to;
+- an unexpected trap in `assert_return`/`action` is reported as a failure with
+  the trap's message (e.g. `out of bounds memory access`), instead of killing
+  the child process.
+
+Consequences worth knowing:
+
+- a missing trap is now a **real** failure (e.g. `traps.wast` requires integer
+  divide-by-zero and the trapping `trunc_f*` forms to trap);
+- `std::abort()` on the *runtime* path is gone for the memory/table/bulk paths;
+  `notImplemented` (SIMD, atomics, unimplemented opcodes) still aborts, because
+  that is a compile-time limitation rather than a Wasm trap.
+
+### Allocation guardrails
+
+A spec script can ask for an absurd amount of memory: `(memory.grow (i32.const
+0xffffffff))` on a memory with no declared maximum is ~256 TiB, and the same
+on a table is ~34 GB. `std::vector::resize` zero-fills, so such a request can
+take the whole host down (it did, once). Linear-memory and table bytes are
+therefore charged against a **process-wide budget** in `WasmStore`:
+
+- every committed byte (`createLinearMemory`, `createTable`) and every grow is
+  reserved against the budget *before* anything is allocated;
+- a grow that would exceed it fails exactly like any other failed grow (`-1`),
+  which the spec permits as an implementation limit — no host allocation is
+  attempted;
+- an *initial* size that exceeds it fails instantiation with a clear message.
+
+Default budget: **2 GiB**, overridable with `WASMJIT_MAX_TOTAL_BYTES` (bytes;
+`0`/`unlimited` disables the cap, at your own risk). The entire default run fits
+in **64 MiB**, so the default is very generous:
+
+```bash
+WASMJIT_MAX_TOTAL_BYTES=67108864 ./WasmJit     # whole suite, still green
+```
+
+Regression coverage: `Test/wasm_wat/grow_guard.wat` plus the `grow guardrail
+rejects absurd deltas without allocating` case, which grows an unbounded
+memory/table by `0xffffffff` and asserts `-1` **and** that nothing was charged.
 
 ### Current status (for orientation)
 
-> The snapshot below predates the multi-table / control-flow work. The curated
-> list still runs cleanly, and many previously crashing scripts now pass
-> (e.g. `select`, `call_indirect`, `block`, `loop`, `br`, `br_table`, `return`,
-> `func`, `call`, `memory_copy`, `memory_fill`, and the `table*` scripts).
-> Re-measure with the command shown.
-
-45 of the 256 scripts run cleanly today — exactly the curated list. A full sweep is therefore loud and
-truthful:
+The default run is the curated list (49 scripts) plus the 28 manual tests, and
+it is green:
 
 ```
-$ WASM_SPEC_SCRIPTS=all ./WasmJit          # exit code 42
-test cases: 261 |  59 passed | 202 failed
-assertions: 735 | 533 passed | 202 failed
+$ ./WasmJit
+test cases:  77 | 77 passed | 0 failed
+assertions: 390 | 390 passed | 0 failed
 ```
 
-Those 202 failures are: 161 crashes inside the dispatcher (unsupported opcode or missing control-flow
-handling), 34 scripts with wrong results, 6 children that exit without a report, and 1 script that
-loops forever and is killed by the timeout. The 59 passes are the 5 manual tests, the 45 clean
-scripts, and 9 scripts whose commands are all skipped — those check nothing, so they are not in the
-curated list.
+A full sweep is deliberately loud, because most of the suite is still beyond the
+runtime. `WASM_SPEC_TOLERANT=1` downgrades it to a survey (it always "passes", so
+read the **per-script** lines):
 
-The harness already surfaces some **real** mismatches, for example:
+```bash
+WASM_SPEC_TOLERANT=1 WASM_SPEC_TIMEOUT=8 WASM_SPEC_SCRIPTS=all ./WasmJit -r compact > sweep.log
+```
 
-- `const` — the sign of `-0.0` is lost for `f32`/`f64` (lines 671 and 999)
+Per-script outcomes from the last sweep (2026-10-13, 256 scripts):
+
+| Outcome | Scripts | Reading |
+|---|---:|---|
+| clean (`passed > 0`, `failed = 0`) | 143 | the runtime handled every command the harness can marshal |
+| wrong results (`failed > 0`) | 40 | real mismatches — see below |
+| terminated by signal | 63 | almost all are `notImplemented` (SIMD, atomics) aborting during compilation |
+| produced no report | 0 | the shared trap sink removed these; before it there were 8 |
+| timed out | 1 | a script that loops; the per-script budget killed it |
+| nothing executed (all commands skipped) | 9 | not real coverage |
+
+Traps are **executed** now, so a *missing* trap is a failure rather than a silent
+skip — that is why some scripts that used to look clean now report real failures
+(`traps.wast`, `address.wast`, `memory_trap64.wast` were fixed on the way; see
+`docs/proposals/`). What the harness still cannot do is marshalling and
+validation: reference/`v128` arguments and results,
+`assert_invalid`/`assert_malformed`/`assert_unlinkable`/`assert_uninstantiable`
+(no validating front-end), `module_definition`/`module_instance` (module
+linking) and `assert_exception` are skipped.
+
+The harness surfaces these **real** mismatches, for example:
+
+- `const` — the sign of `-0.0` is lost for `f32`/`f64`
 - `conversions` — `i64.extend_i32_u`, `f32.convert_i64_u`, `f64.convert_i64_u` produce wrong values
 - `f32`/`f64` — `min` mishandles negative zero and NaN propagation
 - `endianness` — 64-bit `store32`, `store` and `f64.store` results are wrong
+- `ref_test` / `br_on_cast` — cross-module GC casts (`docs/proposals/GC.md` G1/G2/G7)
+
+`WJ_TRACE=1` prints every command before it runs; because each script executes in
+a forked child that only writes its report at the end, that is how you find the
+command that killed a "no report" child.
 
 ---
 

@@ -1,6 +1,8 @@
 # Bulk Memory Operations — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 1).
+Status: design note / implementation reference (revision 2 — BM-1…BM-3
+implemented: recoverable traps, dropped/empty semantics, and the `data`/`elem`
+fixes that came with them).
 Audience: anyone touching `WasmModule`, `WasmModuleInstance`,
 `WasmOpcodeDispatcher`, `LibjitOpcodeDispatcher`, or the test harness.
 
@@ -83,19 +85,46 @@ Bulk Memory Operations is a **Phase 5** proposal, integrated into WebAssembly
     (`dataSegmentDropped`, `elementSegmentDropped`);
   - `memory.copy` and `memory.fill`, `table.copy` and `table.fill` are JIT
     calls into native helpers, and are multi-memory / multi-table aware.
-- **Test evidence**: `memory_copy` 4368/0, `memory_fill` 30/0,
-  `table_copy` 522/0 (see §8).
+- **Traps, not aborts (BM-2).** Every bounds failure in `memoryInit`,
+  `tableInit`, `bufferInitFromData`, `bufferInitFromElems` and the native
+  helpers raises a real Wasm trap via `WASM::trap` — a `longjmp` to the
+  embedder's `TrapScope` (`WasmBase/WasmTrap.hpp`). The JIT's own bounds checks
+  (`effectiveMemoryAddress`, `checkedTableIndex`), the memory/table grow paths
+  and an uninitialised table slot (`call_indirect`) go through the same sink.
+  The harness consequently *executes* `assert_trap` instead of skipping it.
+- **Dropped/empty semantics (BM-1/BM-3).** A dropped — including implicitly
+  dropped — segment behaves as *empty*: a zero-length
+  `memory.init`/`table.init`/`bufferInitFrom*` on it is a no-op, anything longer
+  traps. Active and declarative segments are marked dropped after
+  instantiation; a dropped segment is never re-evaluated.
+- **Element-segment references are evaluated once (BM-5, GC.md G4).** An
+  expression-form segment is evaluated at instantiation into
+  `ModuleInstanceInternals::elementSegmentRefs`; `table.init` and
+  `array.new_elem` copy *those* references. Re-evaluating the expression per
+  use broke `ref.eq` between two `table.init`s of the same segment
+  (`table_init.wast`).
+- **Extended-constant segment offsets.** `evalConstantExpr` implements the six
+  Wasm 3.0 integer add/sub/mul forms, so `(data (i32.add …))` and
+  `(elem (i32.mul …))` offsets evaluate (`data.wast`).
+- **Imported globals are resolved** at instantiation, so a segment offset that
+  reads `spectest.global_i32` (or an imported `funcref` global) is correct.
+- `memory.copy` and `memory.fill`, `table.copy` and `table.fill` are JIT
+  calls into native helpers, and are multi-memory / multi-table aware; each
+  helper re-checks its `memidx`/`tableidx` before indexing.
+- **Test evidence**: `memory_copy` 4386/0, `memory_fill` 36/0,
+  `table_copy` 1728/0, `memory_init` 183/0, `data` 34/0, `elem` 108/0,
+  `table_init` 725/0, `bulk64` 70/0 (see §8).
 
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| BM1 | **`memory.init` aborts** before any command passes. `memory_init.wast` → signal 6. Most likely the dropped-segment or bounds path in `ModuleInstance::memoryInit` (`std::abort()`), which is fatal even for a legitimate trap. | `spec: memory_init` | High |
-| BM2 | **Out-of-bounds traps are process-fatal.** `memoryInit`, `bufferInitFromData`, `tableInit`, `bufferInitFromElems` call `std::abort()` instead of a recoverable trap, so the `assert_trap` half of every bulk script is untestable and an embedder cannot recover. | `WasmModuleInstance.cpp` | High |
-| BM3 | **Dropped-segment zero-length access aborts.** The spec makes a dropped segment behave as empty; a zero-length `memory.init`/`table.init` (or `array.new_*`) must be a no-op, but the code aborts unconditionally when the flag is set. | `memoryInit`, `tableInit`, `bufferInitFromElems` | Medium |
-| BM4 | **`data.wast`: 30 passed / 4 failed.** Some data-segment edge case is wrong (offsets, drop, or the data-count path). | `spec: data` | Medium |
-| BM5 | **`elem.wast` produces no report** (uncaught exception on load/instantiate). | `spec: elem` | High |
-| BM6 | **No `data count` section handling.** `hasDataCount` is parsed but nothing validates it; `memory.init` is accepted without it. | `WasmModule` | Low |
+| ~~BM1~~ | ~~`memory.init` aborts before any command passes.~~ **Done (BM-2/BM-3):** the abort was the dropped-segment branch plus `std::abort()` on out-of-range; dropped segments are now empty, and real failures trap. `spec: memory_init` → **183 passed / 0 failed**. | `spec: memory_init` | Closed |
+| ~~BM2~~ | ~~Out-of-bounds traps are process-fatal.~~ **Done (BM-2):** `memoryInit`, `bufferInitFromData`, `tableInit`, `bufferInitFromElems` and the copy/fill helpers route through `WASM::trap`, so the harness runs `assert_trap` and an embedder can recover in-process. | `WasmTrap.hpp`, `WasmModuleInstance.cpp`, `LibjitOpcodeDispatcher.cpp` | Closed |
+| ~~BM3~~ | ~~Dropped-segment zero-length access aborts.~~ **Done (BM-1/BM-3):** a dropped segment is empty — zero-length is a no-op, longer traps. | `memoryInit`, `tableInit`, `bufferInitFrom*` | Closed |
+| ~~BM4~~ | ~~`data.wast`: 30 passed / 4 failed.~~ **Done:** the four failures were extended-constant offsets (`i32.add/sub/mul`); `evalConstantExpr` now implements them (EXTENDED_CONST.md EC-1) and `spec: data` → **34 passed / 0 failed**. | `spec: data` | Closed |
+| ~~BM5~~ | ~~`elem.wast` produces no report.~~ **Done:** it was a null `call_indirect` slot once `table.init` reached a table slot left null by an unresolved imported global, plus the per-use re-evaluation of expression-form segments. Imported globals are resolved and segment references are cached; `spec: elem` → **108 passed / 0 failed**. | `spec: elem` | Closed |
+| BM6 | **No `data count` section handling.** `hasDataCount` is parsed but nothing validates it; a module that uses `memory.init` without a data-count section is accepted. | `WasmModule` | Low (needs a validating front-end) |
 
 ## 6. Where we can and should play fast and loose
 
@@ -106,7 +135,8 @@ Bulk Memory Operations is a **Phase 5** proposal, integrated into WebAssembly
 | BMD3 | **Keep passive segments pointing into the module's bytes; never copy them at instantiation.** | §3: storage is free; the `Module` outlives its instances. | Zero-copy, less start-up work. |
 | BMD4 | **Copy active segments eagerly at instantiation (already done).** | §2/§3: active segments must be in place before the start function runs. | Simple, and matches the data-init rules. |
 | BMD5 | **Do not validate `data count`; require valid input.** | Consistent with the "no validating front-end" stance (`docs/GC.md` §6, D6). | No extra pass. |
-| BMD6 | **Route every bounds failure through the single `trap()` sink** (once it exists), rather than `abort` per call site. | §2 requires a trap; §3 leaves the mechanism to the embedder. | Recoverable traps, testable `assert_trap`, closes BM2. |
+| BMD6 | **Route every bounds failure through the single `WASM::trap` sink** (implemented). | §2 requires a trap; §3 leaves the mechanism to the embedder. | Recoverable, testable traps — closes BM2. |
+| BMD7 | **Charge every memory/table byte against the Store's allocation budget**, so a bulk path that grows a memory cannot balloon the host either. | §3: the host limit is the engine's to choose; a failed grow is a spec-sanctioned outcome. | One guard for every allocation (`docs/TESTING.md` "Allocation guardrails"). |
 
 Guardrails: `memory.copy` must remain `memmove`-correct for overlapping ranges;
 `table.copy` must handle overlapping table ranges and shared tables from the
@@ -116,27 +146,32 @@ Store; `memory.init` must respect the multi-memory `memidx`.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **BM-1 — Dropped/empty semantics** | Make zero-length `*.init` on a dropped/empty segment a no-op; only a non-zero length traps. | BM3 | `array_new_elem` and a hand-written drop-then-zero-init module pass. |
-| **BM-2 — Trap sink** | Replace the `std::abort()` bounds checks in the bulk helpers with the shared `trap()` primitive. | BM2 | `assert_trap` cases can run; no `abort` on the normal path. |
-| **BM-3 — Triage `memory_init` / `data` / `elem`** | Reproduce the `memory_init` abort, the 4 `data` mismatches, and the `elem` no-report. | BM1, BM4, BM5 | All three scripts pass their non-trap assertions. |
-| **BM-4 — `data count`** | Validate `memory.init`/`data.drop` against `hasDataCount`. | BM6 | A module using `memory.init` without a data-count section is rejected. |
+| **BM-1 — Dropped/empty semantics** | ✅ Zero-length `*.init`/`bufferInitFrom*` on a dropped or empty segment is a no-op; a longer one traps. Active/declarative segments are dropped at instantiation. | BM3 | Done: `memory_init` and `table_init` pass their dropped-segment cases. |
+| **BM-2 — Trap sink** | ✅ `WASM::trap` (longjmp to a `TrapScope`) replaces the per-call-site `std::abort()`s; the harness runs `assert_trap`. | BM2, BM1 | Done: no `abort` on the memory/table/bulk runtime path; `assert_trap` is executed. |
+| **BM-3 — Triage `memory_init` / `data` / `elem`** | ✅ Fixed the dropped-segment abort, the four extended-const `data` offsets, and `elem`'s null slot / segment re-evaluation. | BM1, BM4, BM5 | Done: `memory_init` 183/0, `data` 34/0, `elem` 108/0. |
+| **BM-4 — `data count`** | ◑ Still open: validate `memory.init`/`data.drop` against `hasDataCount`. | BM6 | Needs a validating front-end; Low. |
 
-Guardrail: run `./WasmJit '~[spec]'` (the curated set contains `bulk64`).
+Guardrail: run `./WasmJit '~[spec]'` and the bulk scripts (`~[spec]` plus
+`bulk64`, which is curated) after each change.
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-04):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-13; `assert_trap` now executed):
 
 | Script | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| `memory_copy` | 4368 | 0 | 82 | works |
-| `memory_fill` | 30 | 0 | 70 | works |
-| `table_copy` | 522 | 0 | 1206 | works (`table_copy` is curated) |
-| `memory_init` | — | abort | — | BM1 (signal 6) |
-| `data` | 30 | 4 | 34 | BM4 |
-| `elem` | — | no report | — | BM5 |
+| `memory_copy` | 4386 | 0 | 64 | works |
+| `memory_fill` | 36 | 0 | 64 | works |
+| `table_copy` | 1728 | 0 | 0 | works (`table_copy` is curated) |
+| `memory_init` | 183 | 0 | 67 | was signal 6 (BM1); dropped/empty semantics fixed |
+| `table_init` | 725 | 0 | 67 | expression-form segment references are now evaluated once (GC.md G4) |
+| `data` | 34 | 0 | 34 | the four failures were extended-const offsets (BM4) |
+| `elem` | 108 | 0 | 46 | was "no report" (BM5) |
+| `bulk64` | 70 | 0 | 0 | curated |
 
-`bulk64` is in `Test/wast_supported.txt` and is part of the default run.
+`bulk64` and `table_copy` are in `Test/wast_supported.txt`; `memory-multi` joined
+them (see [`MULTI_MEMORY.md`](MULTI_MEMORY.md) MM-2), so `table_copy`'s
+`assert_trap` cases now run rather than being skipped.
 
 ## 9. References
 

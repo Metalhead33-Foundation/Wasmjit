@@ -125,12 +125,19 @@ private:
 	jit_value_t callablePointerForFuncIndex(WASM::FuncIdx funcIdx);
 	void dispatchCallThroughCallable(jit_value_t callablePtr, WASM::TypeIdx typeIdx);
 	void emitTrapUnreachable();
+	void emitTrapIfNull(jit_value_t pointer);
 	std::vector<WASM::StorageType> storageTypesForBlockType(const WASM::BlockType& bt) const;
 
 	jit_value_t vmContextValue();
 	jit_value_t checkedTableIndex(jit_value_t table, jit_value_t index, const char* opname);
 	// Emits code yielding the LinearMemory* for a (constant) memory index.
 	jit_value_t memoryPointerForIndex(WASM::MemIdx memidx);
+	// The declared index type (i32/i64) of memory `memidx`, for the address
+	// widening in effectiveMemoryAddress.
+	WASM::MemoryIndexType memoryIndexTypeForIndex(WASM::MemIdx memidx) const;
+	// True when table `tableidx` declares a 64-bit index (flag bit 2).
+	bool tableIs64Bit(WASM::TableIdx tableidx) const;
+
 	// Emits code yielding the TableInstance* for a (constant) table index.
 	jit_value_t tablePointerForIndex(WASM::TableIdx tableidx);
 	// Emits a runtime check that `callablePtr`'s canonical type id matches the

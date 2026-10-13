@@ -1,6 +1,7 @@
 # Function References (Typed Function References) — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 1).
+Status: design note / implementation reference (revision 2 — FR-1/FR-2 fixed by
+the shared trap sink; FR-3/FR-4/FR-6 and the manual test remain).
 Audience: anyone touching `WasmValue` (`Callable`), `WasmTypeSystem`,
 `WasmModuleInstance`, `LibjitOpcodeDispatcher`, or the test harness.
 
@@ -79,11 +80,11 @@ WebAssembly **3.0** (it is the prerequisite the GC proposal builds on).
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| FR1 | **`call_ref` segfaults** during compilation/instantiation (0 passing commands). | `spec: call_ref` → signal 11 | High |
-| FR2 | **`ref_func.wast` produces no report** (uncaught exception on load/instantiate). | `spec: ref_func` | High |
+| ~~FR1~~ | ~~`call_ref` segfaults.~~ **Done (trap sink):** the null/invalid callable check in `dispatchCallThroughCallable` now traps (`emitTrapIfNull`) instead of dereferencing. `spec: call_ref` → **31 passed / 0 failed / 4 skipped**. | `spec: call_ref` | Closed |
+| ~~FR2~~ | ~~`ref_func.wast` produces no report.~~ **Done (trap sink):** the fatal path was a reference reaching a LibJIT null check; it is now a recoverable trap. `spec: ref_func` → **14 passed / 0 failed / 3 skipped**. | `spec: ref_func` | Closed |
 | FR3 | **Cross-module function references are mis-classified.** `ref.test`/`ref.cast` scan only the current instance's `importStorage`/`internalCallables`, and the "unknown reference" fallback does not include `func` — so a `funcref` from another instance fails `ref.test funcref`. | `refMatchesHeapType`; [`GC.md`](GC.md) G2 | High |
 | FR4 | **`ref.func` outside a segment is an unresolved sentinel** in `const` expressions (globals), so a `ref.func` global is a bogus pointer. | [`GC.md`](GC.md) G8 / [`EXTENDED_CONST.md`](EXTENDED_CONST.md) | Medium |
-| FR5 | **`return_call_ref` aborts** (tail-call codegen). | [`TAILCALLS.md`](TAILCALLS.md) TC2 | High |
+| ~~FR5~~ | ~~`return_call_ref` aborts~~ (tail-call codegen). **Done (TAILCALLS TC-1/TC-2 + trap sink):** `spec: return_call_ref` → **40 passed / 0 failed / 13 skipped**. | [`TAILCALLS.md`](TAILCALLS.md) | Closed |
 | FR6 | **Reference values cannot be stored generically.** Tables hold `Callable*` and globals hold `Value`; typed `(ref $t)` values live only on the operand stack. | `WasmTable.hpp`, `WasmModuleInstance.cpp` | Medium |
 | FR7 | **No validation that `ref.func`'s function is declared** in an element segment, nor that `call_ref`'s operand type matches at validation time. | no validating front-end | Low |
 | FR8 | **No manual test** for `call_ref`/typed references. | `Test/main.cpp` | Medium |
@@ -107,8 +108,8 @@ be the canonical, process-wide identity (not the module-local `typeidx`);
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **FR-1 — Fix `call_ref`** | Reproduce the SIGSEGV and correct the callable call path. | FR1 | `call_ref.wast` runs and shallow calls return correct values. |
-| **FR-2 — Fix `ref_func`** | Reproduce the no-report failure. | FR2 | `ref_func.wast` runs. |
+| **FR-1 — Fix `call_ref`** | ✅ The crash was a null/invalid callable pointer being dereferenced; the check now goes through `emitTrapIfNull` (the shared trap sink). | FR1 | Done: `call_ref.wast` runs (31/0/4). |
+| **FR-2 — Fix `ref_func`** | ✅ Same root cause; the reference reaches the trap sink. | FR2 | Done: `ref_func.wast` runs (14/0/3). |
 | **FR-3 — Discoverable callable type** | Give every `Callable` a header/registry entry so `refMatchesHeapType` needs no per-instance scan. | FR3 | A `funcref` produced by module B passes `ref.test funcref` in module A. |
 | **FR-4 — `ref.func` in `const`** | Resolve the `ref.func` sentinel for global initialisers. | FR4 | A `(global funcref (ref.func $f))` holds a real reference. |
 
@@ -118,11 +119,11 @@ be the canonical, process-wide identity (not the module-local `typeidx`);
 
 | Script | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| `call_indirect` | 113 | 0 | 59 | indirect calls work |
-| `func_ptrs` | 23 | 0 | 13 | `ref.func` in segments works |
-| `call_ref` | — | SIGSEGV | — | FR1 |
-| `ref_func` | — | no report | — | FR2 |
-| `return_call_ref` | — | signal 6 | — | FR5 |
+| `call_indirect` | 133 | 0 | 39 | indirect calls work (was 113/0/59) |
+| `func_ptrs` | 29 | 0 | 7 | `ref.func` in segments works |
+| `call_ref` | 31 | 0 | 4 | FR1 fixed by the trap sink |
+| `ref_func` | 14 | 0 | 3 | FR2 fixed |
+| `return_call_ref` | 40 | 0 | 13 | FR5 fixed (tail-call trampoline) |
 
 ## 9. References
 

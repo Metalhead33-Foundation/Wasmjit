@@ -1,7 +1,7 @@
 # Small Phase 5 Proposals: Sign-extension, Non-trapping Float→Int, Branch Hinting
 
-Status: design note / implementation reference (revision 2 — §2/§3/§4 status
-updated after SP-1/SP-2).
+Status: design note / implementation reference (revision 3 — the trapping
+`div`/`rem`/`trunc_f*` forms now actually trap; see the note in §5).
 Audience: anyone touching `LibjitOpcodeDispatcher`, `WasmOpcode`,
 `WasmModule` (custom sections), or the test harness.
 
@@ -119,6 +119,15 @@ in CI (see §6 SP-2).
 
 Guardrail: do not conflate `trunc_f*` (trapping) with `trunc_sat_f*`
 (never traps); keep the `NaN → 0` and clamp rules exactly.
+
+**Revision 3 note.** The *trapping* forms are genuinely trapping now. The six
+integer `div`/`rem` forms and the eight `trunc_f*` forms used to be lowered with
+a bare LibJIT `jit_insn_div` / `jit_insn_convert`, which does **not** check
+anything (a divide by zero silently produced a value). `traps.wast` failed
+18/18 the moment `assert_trap` started to execute. They now call native helpers
+that check divide-by-zero, `INT_MIN / -1`, `NaN` and out-of-range and raise
+`WASM::trap`; `traps.wast` and `address.wast` are green
+(`spec: traps` → 36/0). See `docs/TESTING.md` "Traps".
 
 ## 6. Plan
 

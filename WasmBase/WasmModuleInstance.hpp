@@ -30,6 +30,11 @@ struct ModuleInstanceInternals {
 	std::vector<Callable>  importStorage; // Owns the WasmCallable objects for imports
 	std::vector<bool> dataSegmentDropped;
 	std::vector<bool> elementSegmentDropped;
+	// Element segments in expression form hold *references*, evaluated once at
+	// instantiation (the spec never re-evaluates a segment per use). Keyed by
+	// segment index; index-form segments leave their entry empty.
+	// docs/proposals/GC.md G4, docs/proposals/BULK_MEMORY.md §4.
+	std::vector<std::vector<Value>> elementSegmentRefs;
 	// Runtime type tags of live GC objects, keyed by pointer. Stores the
 	// canonical (process-wide) TypeId so casts work across modules (M6).
 	std::unordered_map<const void*, TypeId> gcObjectTypes;
@@ -75,10 +80,10 @@ public:
 
 	// Called when memory.grow executes. Delegates to the owning Store and
 	// returns the previous page count, or -1 on a trap-worthy failure.
-	int32_t growMemory(uint32_t memIdx, uint32_t deltaPages);
+	int64_t growMemory(uint32_t memIdx, uint64_t deltaPages);
 
 	// Called when table.grow executes.
-	bool growTable(uint32_t tableIdx, uint32_t deltaEntries);
+	bool growTable(uint32_t tableIdx, uint64_t deltaEntries);
 	void memoryInit(uint32_t memIdx, uint32_t dataIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len);
 	void dataDrop(uint32_t dataIdx);
 	void tableInit(uint32_t elemIdx, uint32_t tableIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len);
@@ -89,6 +94,10 @@ public:
 	void* allocateArrayObject(uint32_t headerSize, uint32_t elementSize, uint32_t length, uint32_t localTypeIdx);
 	bool tryGetGcTypeId(const void* ref, TypeId& typeId) const;
 	bool refMatchesHeapType(const void* ref, const HeapType& heapType, bool nullable) const;
+	// Resolve an element-segment reference (as produced by evalConstantExpr and
+	// cached in elementSegmentRefs) to the Callable* a table slot stores. A
+	// GC/heap reference is stored as-is: the slot is an opaque pointer.
+	Callable* callableFromSegmentRef(const Value& ref);
 };
 // Abstract base. Subclasses provide the backend-specific compilation step.
 // The base class handles everything that doesn't require knowing the backend.

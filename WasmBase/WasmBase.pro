@@ -15,6 +15,7 @@ SOURCES += \
         WasmSection.cpp \
         WasmStore.cpp \
         WasmTable.cpp \
+        WasmTrap.cpp \
         WasmType.cpp \
         WasmTypeRegistry.cpp
 
@@ -33,6 +34,7 @@ HEADERS += \
     WasmSection.hpp \
     WasmStore.hpp \
     WasmTable.hpp \
+    WasmTrap.hpp \
     WasmType.hpp \
     WasmTypeIdentity.hpp \
     WasmTypeRegistry.hpp \

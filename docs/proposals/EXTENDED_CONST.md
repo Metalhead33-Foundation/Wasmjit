@@ -1,6 +1,7 @@
 # Extended Constant Expressions — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 1).
+Status: design note / implementation reference (revision 2 — EC-1/EC-2
+implemented: the six integer arithmetic forms and imported-global resolution).
 Audience: anyone touching `WasmModuleInstance::evalConstantExpr`, `WasmType`,
 `WasmModule`, or the test harness.
 
@@ -61,8 +62,8 @@ bytes of a `const` expression (`WasmModuleInstance.cpp`). It currently handles:
 | `0xD0` | `ref.null` | ✅ |
 | `0xD2` | `ref.func` | ✅ sentinel, resolved by segment application |
 | `0xFB …` | GC constructors (`ref.i31`, `struct.new*`, `array.new*`, `any/extern.convert_*`) | ✅ (`GC.md`) |
-| `0x6A` / `0x6B` / `0x6C` | `i32.add` / `i32.sub` / `i32.mul` | ❌ **missing** |
-| `0x7C` / `0x7D` / `0x7E` | `i64.add` / `i64.sub` / `i64.mul` | ❌ **missing** |
+| `0x6A` / `0x6B` / `0x6C` | `i32.add` / `i32.sub` / `i32.mul` | ✅ wrapped `uint32_t` arithmetic |
+| `0x7C` / `0x7D` / `0x7E` | `i64.add` / `i64.sub` / `i64.mul` | ✅ wrapped `uint64_t` arithmetic |
 | `0xFD …` | `v128.const` | ❌ (`SIMD.md` S3) |
 
 Everything else throws `InvalidOpcodeException(opcode)`. The evaluator is used
@@ -73,8 +74,8 @@ by `initializeGlobals`, `applyActiveSegments`, `bufferInitFromData/Elems`, and
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| EC1 | **The six arithmetic extensions are missing.** `i32/i64.add/sub/mul` in a `const` expression throw `InvalidOpcodeException`, so a valid 3.0 module fails to load. | `evalConstantExpr` switch | High |
-| EC2 | **`global.get` of an imported global yields zero.** Imported globals are never resolved (`docs/GC.md` G6 / [`MUTABLE_GLOBALS.md`](MUTABLE_GLOBALS.md)), so any `const` expression reading one gets the zero-initialised slot. | `initializeGlobals` | High |
+| ~~EC1~~ | ~~The six arithmetic extensions are missing.~~ **Done (EC-1):** all six (`i32`/`i64` `.add`/`.sub`/`.mul`) are in `evalConstantExpr`, evaluated with wrap-around. | `evalConstantExpr` switch | Closed |
+| ~~EC2~~ | ~~`global.get` of an imported global yields zero.~~ **Done (EC-2 / MUTABLE_GLOBALS MG-1):** imported globals are resolved at instantiation before any local initialiser runs, and `spectest`'s globals are registered. | `WasmModuleInstance.cpp` | Closed |
 | EC3 | **`v128.const` is not a constant instruction here.** | `evalConstantExpr`; [`SIMD.md`](SIMD.md) S3 | Medium |
 | EC4 | **No validation.** A structurally valid but type-invalid `const` expression (e.g. `i32.add` on `f32` bits) is evaluated as raw bits rather than rejected. | no validating front-end | Low |
 | EC5 | **`Value::kind` tracking is shallow.** The evaluator sets `kind` per instruction but does not type-check operands; fine for valid modules, undefined for invalid ones. | `evalConstantExpr` | Low |
@@ -96,8 +97,8 @@ Guardrail: adding an opcode to the evaluator must keep the stack discipline
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **EC-1 — Arithmetic** | Add `0x6A/0x6B/0x6C/0x7C/0x7D/0x7E` to `evalConstantExpr`, with wrapped arithmetic and `Value::kind` handling. | EC1 | A `(global i32 (i32.add (i32.const 1) (i32.const 2)))` resolves to 3. |
-| **EC-2 — Imported globals** | Call the existing `ImportResolver::resolveGlobal` from instantiation (see [`MUTABLE_GLOBALS.md`](MUTABLE_GLOBALS.md)). | EC2 | A `const` expression reading an imported global sees the exported value. |
+| **EC-1 — Arithmetic** | ✅ Added `0x6A/0x6B/0x6C/0x7C/0x7D/0x7E` to `evalConstantExpr` with wrapped arithmetic and `Value::kind` handling. | EC1 | Done: `(global i32 (i32.add (i32.const 1) (i32.const 2)))` resolves to 3, and `data.wast`'s extended-const offsets pass. |
+| **EC-2 — Imported globals** | ✅ `ImportResolver::resolveGlobal` is called from instantiation (see [`MUTABLE_GLOBALS.md`](MUTABLE_GLOBALS.md) MG-2). | EC2 | Done: a `const` expression reading an imported global sees the exported value. |
 | **EC-3 — `v128.const`** | Add the `0xFD` arm (16 bytes) once SIMD lands (SIMD-4). | EC3 | A `v128` global initialised by `v128.const` works. |
 
 ## 8. Indicative test survey
@@ -109,7 +110,8 @@ Guardrail: adding an opcode to the evaluator must keep the stack discipline
 | `int_exprs` | curated | basic constant expressions work |
 | `const` | failing (`-0.0` sign issue, `docs/TESTING.md`) | unrelated to this proposal |
 | `extended-const.wast` | not present in this snapshot | no dedicated coverage |
-| `global` | 10 passed / 63 failed | EC2: imported/global handling broadly broken |
+| `global` | 70 passed / 0 failed / 54 skipped | EC-2/MG-1 closed: imported globals resolve (was 10/63) |
+| `data` | 34 passed / 0 failed / 34 skipped | the four extended-const segment offsets now evaluate (was 30/4) |
 
 ## 9. References
 

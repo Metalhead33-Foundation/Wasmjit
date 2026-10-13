@@ -738,9 +738,18 @@ void Module::fromFile(Elv::Io::Device& file)
 	// Its own scope. Should go out of scope before processSecetions
 	{
 	DWasmStream wasmStream(file);
+	// The 8-byte preamble is magic (4 bytes) + version (2) + layer (2).
+	// A core module has an implicit layer of 0; a Component Model component
+	// sets layer = 1. Reading the halves separately lets us reject a
+	// component outright instead of decoding it as a nonsensical core module
+	// (docs/proposals/COMPONENT_MODEL.md §2.2, CM-0).
 	uint32_t magicNumber;
-	wasmStream >> magicNumber >> version;
+	uint16_t versionLow;
+	uint16_t layer;
+	wasmStream >> magicNumber >> versionLow >> layer;
+	version = versionLow;
 	if(magicNumber != 0x6D736100) throw std::runtime_error("Invalid WASM module!\nMismatch in the magic number!");
+	if(layer != 0) throw std::runtime_error("Unsupported WebAssembly artifact!\nThis file is a Component Model component (preamble layer 1), not a core module.\nWasmJit has no component support yet; see docs/proposals/COMPONENT_MODEL.md.");
 	bool canReadMoreSections = true;
 	do {
 		Section section;

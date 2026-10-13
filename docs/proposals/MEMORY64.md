@@ -1,6 +1,8 @@
 # Memory64 — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 1).
+Status: design note / implementation reference (revision 2 — M64-1…M64-3
+implemented: 64-bit `size`/`grow` plumbing, the unsigned address widening, and a
+manual 64-bit test).
 Audience: anyone touching `WasmType` (`Limits`, `MemoryType`, `TableType`),
 `WasmMemory`, `WasmModuleInstance`, `LibjitOpcodeDispatcher`, or the test
 harness.
@@ -61,35 +63,52 @@ Memory64 is a **Phase 5** proposal, integrated into WebAssembly **3.0**.
 - `StoreOwnedMemory`/`SharedLinearMemory` do their arithmetic in `uint64_t`
   and guard against overflow; an unrepresentable maximum is treated as
   unbounded, and a shared memory is capped at 4 GiB.
-- The JIT computes addresses in **64-bit**: the memory paths convert the
-  effective address to `jit_type_ulong` and compare against the 64-bit
-  `memorySize` before the access, so a 32-bit memory zero-extends and a 64-bit
-  memory is used as-is.
+- The JIT computes addresses in **64-bit** and interprets the operand as the
+  memory's **unsigned** index: an i32 address is widened through `uint32_t` to
+  `uint64_t` (zero-extend), an i64 address is used as-is. The bound check is
+  overflow-safe — it requires `byteOff >= index` and `endOff >= byteOff`
+  (neither addition wrapped) *and* `endOff <= memorySize`. Sign-extending the
+  i32 straight to 64 bits instead let `address + offset + width` wrap and slip
+  past the check (`address.wast`'s `8u_good3(i32.const -1)`), and the same
+  wrap affected `memory_trap64`.
+- **`memory.size` / `memory.grow` and `table.size` / `table.grow` are 64-bit.**
+  The grow helpers take an unsigned 64-bit delta and return an all-ones
+  sentinel on failure (readable as `-1` in either width); the result is pushed
+  as an i64 for a 64-bit memory/table and an i32 otherwise
+  (`memoryIndexTypeForIndex`, `tableIs64Bit`). `ModuleInstance::growMemory` /
+  `growTable` and the `Store` helpers are `uint64_t` throughout (M64-1, M4).
+- **Index-space caps are enforced**: a 32-bit memory is clamped to 65536 pages
+  (4 GiB) and a 32-bit table to 2³²−1 entries at instantiation; everything is
+  additionally charged against the Store's allocation budget
+  (`docs/TESTING.md` "Allocation guardrails").
 - `memory.size`/`memory.grow`/`memory.copy`/`memory.fill`/`memory.init` and the
   `table*` equivalents carry their 64-bit operands through the same helpers.
-- **Evidence:** a large part of the 64-bit suite is in
-  `Test/wast_supported.txt` and green — `address64`, `align64`,
-  `binary_leb128_64`, `bulk64`, `call_indirect64`, `float_memory64`,
-  `memory64`, `memory64-imports`, `memory_grow64`, `memory_redundancy64`,
-  `memory_trap64`, `table64`.
+- The harness's `spectest` host also exports `table64` / `memory64`, so
+  `table64.wast`'s `(import "spectest" "table64" ...)` resolves.
+- **Evidence:** the 64-bit scripts are in `Test/wast_supported.txt` and green
+  (`address64` 242/0, `align64` 74/0, `binary_leb128_64` 1/0, `bulk64` 70/0,
+  `call_indirect64` 2/0, `float_memory64` 90/0, `memory64` 54/0,
+  `memory64-imports` 48/0, `memory_grow64` 49/0, `memory_redundancy64` 8/0,
+  `memory_trap64` 172/0, `table64` 11/0), plus the manual test
+  `memory64: 64-bit memory and table size/grow are 64-bit`.
 
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| M1 | **Size/grow plumbing is 32-bit.** `dispatchMemorySize` converts the page count to `jit_type_int`; `wasm_memory_grow_impl` and the table helpers (`wasm_table_grow_impl`, `wasm_table_fill_impl`, `wasm_table_copy_impl`) take/return `int32_t`. For a 64-bit memory/table these truncate beyond 2³² pages (or an `i64` delta beyond 2³¹). The curated 64-bit scripts pass only because they stay small. | `LibjitOpcodeDispatcher.cpp` memory/table paths | Medium (latent) |
-| M2 | **No index-type validation.** Nothing checks that a load/store address operand matches the memory's declared `MemoryIndexType`, nor that `table.*` operands match a 64-bit table's type. | no validating front-end | Medium |
-| M3 | **Unrepresentable maxima become "unbounded".** A `memory64` declaration whose max does not fit a byte count is treated as `UINT64_MAX`; growth then only fails at host allocation. | `StoreOwnedMemory` constructor | Low |
-| M4 | **`table64` width is suspicious.** `dispatchTableSize`/`dispatchTableGrow` push `jit_type_int` results, yet a 64-bit table's `table.size`/`grow` must be `i64`. `table64.wast` is curated and green, so the tests likely stay in range — worth a targeted `>2³²` check. | `dispatchTableSize`, `dispatchTableGrow` | Medium (latent) |
-| M5 | **No manual 64-bit test.** Nothing in `Test/wasm_wat` declares a 64-bit memory or table. | `Test/main.cpp` | Low |
+| ~~M1~~ | ~~Size/grow plumbing is 32-bit.~~ **Done (M64-1):** `memory.size`/`grow`, `table.size`/`grow`, `ModuleInstance::growMemory`/`growTable` and `wasm_{memory,table}_grow_impl` are all 64-bit now; a 64-bit memory/table pushes an i64. | `LibjitOpcodeDispatcher.cpp`, `WasmModuleInstance.cpp` | Closed |
+| ~~M4~~ | ~~`table64` width is suspicious.~~ **Done (M64-1):** `tableIs64Bit` (limits flag bit 2) selects an i64 result/delta; `table.size`/`grow` on a 64-bit table are exercised by `table64.wast` and the manual test. | `dispatchTableSize`, `dispatchTableGrow` | Closed |
+| M2 | **No index-type validation.** Nothing rejects an operand whose type disagrees with the memory's/table's declared index type at *validation* time; the address is now widened according to the *memory's* declared type, so the instruction behaves as its memory dictates rather than being rejected. This is the usual no-validating-front-end stance. | no validating front-end | Low (deliberate) |
+| M3 | **Unrepresentable maxima become "unbounded".** A `memory64` declaration whose max does not fit a byte count is treated as `UINT64_MAX`; growth then only fails at host allocation — which is now the Store's allocation budget, so it fails as `-1` instead of trying. | `StoreOwnedMemory` constructor, `WasmStore` | Closed in effect (Low) |
+| ~~M5~~ | ~~No manual 64-bit test.~~ **Done (M64-3):** `Test/wasm_wat/memory64_index.wat` + `memory64: 64-bit memory and table size/grow are 64-bit`, which also asserts that a delta beyond 2³² pages is rejected as `-1` rather than truncated. | `Test/main.cpp` | Closed |
 
 ## 6. Where we can and should play fast and loose
 
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
 | M64D1 | **Keep all internal bookkeeping in `uint64_t`** (`LinearMemory::memorySize`, `Limits::initial/maximum`) and compute addresses in `jit_type_ulong`. | §3: the representation is free; this avoids wraparound in effective addresses. | Correct 64-bit addressing without special cases. |
-| M64D2 | **Cap a memory at the host address space and let `grow` fail beyond it.** | §3: addressing 2⁶⁴ bytes is explicitly not required; the spec's implementation-limitation rules cover it. | A single, portable failure mode. |
-| M64D3 | **Treat an unrepresentable maximum as "unbounded" and let allocation fail.** | §3; already the behaviour. | No oversized integer math at declaration time. |
+| M64D2 | **Cap a memory/table at the host allocation budget and let `grow` fail beyond it.** | §3: addressing 2⁶⁴ bytes is explicitly not required; the spec's implementation-limitation rules cover it. | A single, portable failure mode that also protects the host (`docs/TESTING.md` "Allocation guardrails"). |
+| M64D3 | **Treat an unrepresentable maximum as "unbounded" and let the budget fail the grow.** | §3; the budget is the concrete host limit. | No oversized integer math at declaration time, no giant allocation attempt. |
 | M64D4 | **Keep the 32-bit result plumbing for now, documented.** The truncation is unobservable for any memory a host can actually back. | §3; only reachable with a >2³²-page memory. | Avoids a JIT ABI change until needed. |
 | M64D5 | **Do not implement the BigInt JS API.** | §3: web-embedding only. | Scope control. |
 
@@ -101,22 +120,33 @@ memory (zero-extend the `i32`), so that `memoryBase + offset` cannot wrap
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **M64-1 — Widen size/grow** | Make the memory/table `size`/`grow` helpers 64-bit and push `i64` for 64-bit memories/tables. | M1, M4 | A hand-written 64-bit memory reports a page count > 2³² if the host allows it. |
-| **M64-2 — Index-type check** | Reject an address operand whose type disagrees with the memory/table index type (cheap, decodes once). | M2 | An `i64` address into an `i32` memory is rejected. |
-| **M64-3 — Manual test** | Add a `memory64`/`table64` module to `Test/wasm_wat` + a manual test. | M5 | The test exercises a 64-bit memory and table end to end. |
+| **M64-1 — Widen size/grow** | ✅ Memory/table `size`/`grow` helpers are 64-bit and push `i64` for 64-bit memories/tables; index-space caps are enforced at instantiation; every byte is charged against the Store budget. | M1, M4 | Done: a 64-bit memory/table reports and accepts 64-bit values, and an over-2³²-page delta is rejected as `-1` instead of truncated. |
+| **M64-2 — Index-type check** | ◑ Not implemented as validation; instead the address is *widened according to the memory's declared index type* (`memoryIndexTypeForIndex`), and a mismatch is left to a validating front-end that does not exist. | M2 | Partially: the behaviour is well-defined; only the rejection is missing. |
+| **M64-3 — Manual test** | ✅ `Test/wasm_wat/memory64_index.wat` + `memory64: 64-bit memory and table size/grow are 64-bit`. | M5 | Done: store/load through an i64 address, `memory.size`/`grow`, `table.size`/`grow`, and the huge-delta rejection are all asserted. |
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-04). The following 64-bit scripts
-are all in `Test/wast_supported.txt` and part of the default green run:
+`build/Desktop-Debug/Test/WasmJit` (2026-10-13; `assert_trap` now executed). The
+following 64-bit scripts are all in `Test/wast_supported.txt` and part of the
+default green run:
 
-`address64`, `align64`, `binary_leb128_64`, `bulk64`, `call_indirect64`,
-`float_memory64`, `memory64`, `memory64-imports`, `memory_grow64`,
-`memory_redundancy64`, `memory_trap64`, `table64`.
+| Script | passed / failed / skipped | Reading |
+|---|---:|---|
+| `address64` | 242 / 0 / 0 | 64-bit address arithmetic, including the unsigned-widening cases |
+| `align64` | 74 / 0 / 83 | alignment |
+| `binary_leb128_64` | 1 / 0 / 1 | 64-bit LEB encoding |
+| `bulk64` | 70 / 0 / 0 | bulk ops on 64-bit memories/tables |
+| `call_indirect64` | 2 / 0 / 0 | 64-bit table index |
+| `float_memory64` | 90 / 0 / 0 | f32/f64 access through i64 addresses |
+| `memory64` | 54 / 0 / 15 | core 64-bit memory semantics |
+| `memory64-imports` | 48 / 0 / 30 | importing a 64-bit memory |
+| `memory_grow64` | 49 / 0 / 0 | `memory.size`/`grow` return and accept i64 |
+| `memory_redundancy64` | 8 / 0 / 0 | redundant loads/stores |
+| `memory_trap64` | 172 / 0 / 0 | out-of-bounds i64 accesses **do** trap (M64-1/M1) |
+| `table64` | 11 / 0 / 3 | 64-bit table size/grow, including `spectest.table64` |
 
-Their passing is limited by the 32-bit plumbing in M1/M4: none of them can
-allocate or index more than a 32-bit-sized object, so the truncation never
-becomes observable. A `>2³²`-page test (M64-1) is the missing evidence.
+`memory_grow64` and `memory_trap64` only became meaningful once `assert_trap`
+ran: before that, every trap case was skipped. See `docs/TESTING.md`.
 
 ## 9. References
 

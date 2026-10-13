@@ -54,25 +54,26 @@ per-milestone done markers, is the authoritative per-item status.
 |---|---|---|---|---|
 | [`MULTI_VALUE.md`](docs/proposals/MULTI_VALUE.md) | Multi-value | 2.0 | `██████████████████░░` 90% | Engine complete (block parameters, packed multi-result returns); the gap is verification — the harness skips functions with multiple results |
 | [`TAILCALLS.md`](docs/proposals/TAILCALLS.md) | Tail calls | 3.0 | `██████████████████░░` 90% | TC-1…TC-4 done: direct, indirect and `ref` tails run in constant stack; the trampoline is signature-restricted |
-| [`SMALL_PROPOSALS.md`](docs/proposals/SMALL_PROPOSALS.md) | Sign-extension, non-trapping `trunc_sat`, branch hinting | 2.0 / 3.0 | `█████████████████░░░` 85% | First two implemented + manually tested; branch hints are parsed and deliberately non-semantic |
-| [`MEMORY64.md`](docs/proposals/MEMORY64.md) | Memory64 | 3.0 | `█████████████████░░░` 85% | Twelve curated 64-bit scripts green; latent 32-bit `size`/`grow` plumbing (M1/M4) and no index-type check |
-| [`MULTI_MEMORY.md`](docs/proposals/MULTI_MEMORY.md) | Multiple memories | 3.0 | `█████████████████░░░` 85% | `memidx` threaded through loads/stores/bulk ops; `memory-multi` 6/0; no `memidx` bounds check (MM1) |
-| [`GC.md`](docs/proposals/GC.md) | Garbage collection | 3.0 | `████████████░░░░░░░░` 60% | Types, canonicalisation, struct/array/i31 ops and casts work; cross-module tags/refs, `br_on_cast`, segment re-evaluation and several crashes remain (§5/§8) |
-| [`BULK_MEMORY.md`](docs/proposals/BULK_MEMORY.md) | Bulk memory operations | 2.0 | `████████████░░░░░░░░` 60% | `copy`/`fill`/`table_copy` green (4368 / 30 / 522 assertions passed); `memory.init` aborts and out-of-bounds traps are process-fatal |
-| [`FUNCTION_REFERENCES.md`](docs/proposals/FUNCTION_REFERENCES.md) | Typed function references | 3.0 | `█████████████░░░░░░░` 55% | `Callable`, `call_ref` decoding and type checks in place; `call_ref` segfaults and cross-module `ref.test funcref` is wrong |
+| [`SMALL_PROPOSALS.md`](docs/proposals/SMALL_PROPOSALS.md) | Sign-extension, non-trapping `trunc_sat`, branch hinting | 2.0 / 3.0 | `██████████████████░░` 90% | First two implemented + manually tested; the *trapping* `trunc_f*` and integer `div`/`rem` now genuinely trap (they used to silently produce a value); branch hints are parsed and deliberately non-semantic |
+| [`MEMORY64.md`](docs/proposals/MEMORY64.md) | Memory64 | 3.0 | `███████████████████░` 95% | M64-1/M64-3 done: 64-bit `size`/`grow`, the unsigned-address overflow-safe bound check, `spectest.table64`, and a manual 64-bit test; all 12 curated 64-bit scripts green; M2 (reject a mismatched index type) is the usual no-validator stance |
+| [`MULTI_MEMORY.md`](docs/proposals/MULTI_MEMORY.md) | Multiple memories | 3.0 | `███████████████████░` 95% | MM-1…MM-3 done: `memidx` is bounds-checked (compile time + in the helpers), `memory-multi` is curated, and a cross-memory `memory.copy` is tested both ways |
+| [`GC.md`](docs/proposals/GC.md) | Garbage collection | 3.0 | `████████████████░░░░` 80% | The trap sink and instantiation-time segment materialisation closed G4/G6/R2/R7 and the C2–C5 crashes (`call_ref`, `ref_func`, `type-equivalence`, `array_init_*`); remaining: cross-module tags/funcref (`ref_test` 38/32), table init expressions (G5), `br_on_cast` (G7) |
+| [`BULK_MEMORY.md`](docs/proposals/BULK_MEMORY.md) | Bulk memory operations | 2.0 | `███████████████████░` 95% | BM-1…BM-5 done: recoverable traps, dropped/empty segment semantics, extended-const offsets, one-time segment evaluation; `memory_init` 183/0, `elem` 108/0, `table_init` 725/0; only `data count` validation (BM6) remains |
+| [`FUNCTION_REFERENCES.md`](docs/proposals/FUNCTION_REFERENCES.md) | Typed function references | 3.0 | `███████████████░░░░░` 75% | FR-1/FR-2/FR-5 fixed by the shared trap sink (`call_ref` 31/0, `ref_func` 14/0, `return_call_ref` 40/0); cross-module `ref.test funcref` (FR-3) and generic reference storage (FR-6) remain |
 | [`THREADS.md`](docs/proposals/THREADS.md) | Threads and atomics | separate | `██████░░░░░░░░░░░░░░` 30% | Shared-memory reserve/commit and all 67 atomic opcodes decoded; every handler is a stub and there is no agent model — and no spec coverage |
-| [`MUTABLE_GLOBALS.md`](docs/proposals/MUTABLE_GLOBALS.md) | Import/export of mutable globals | 2.0 | `█████░░░░░░░░░░░░░░░` 25% | Parsing and export registration in place; imported globals are never resolved and exports are snapshots (`global` 10/63) |
-| [`EXTENDED_CONST.md`](docs/proposals/EXTENDED_CONST.md) | Extended constant expressions | 3.0 | `█████░░░░░░░░░░░░░░░` 25% | `const`/`global.get`/`ref.*` evaluate; the six `i32/i64.add/sub/mul` extensions are missing (EC1) |
+| [`MUTABLE_GLOBALS.md`](docs/proposals/MUTABLE_GLOBALS.md) | Import/export of mutable globals | 2.0 | `█████████░░░░░░░░░░░` 45% | MG-1 done: imported globals are resolved before local initialisers run (`global` 70/0, was 10/63); a mutable import is still a *copy*, so the shared-write semantics (MG-2/MG-3) remain |
+| [`EXTENDED_CONST.md`](docs/proposals/EXTENDED_CONST.md) | Extended constant expressions | 3.0 | `█████████████████░░░` 85% | EC-1/EC-2 done: the six `i32`/`i64` `.add`/`.sub`/`.mul` forms evaluate with wrap-around and imported globals resolve (`data` 34/0); `v128.const` and validation remain |
 | [`EXCEPTIONS.md`](docs/proposals/EXCEPTIONS.md) | Exception handling (`exnref`) | 3.0 | `█████░░░░░░░░░░░░░░░` 25% | Tags and `throw`/`try_table` decode; the runtime is a stub (`throw` traps, `try_table` ignores catches, no `exnref`) |
 | [`SIMD.md`](docs/proposals/SIMD.md) | SIMD (fixed-width + relaxed) | 2.0 / 3.0 | `███░░░░░░░░░░░░░░░░░` 15% | Types/values and 236 opcodes are enumerated and decoded; every JIT handler aborts; relaxed SIMD is not enumerated |
-| [`COMPONENT_MODEL.md`](docs/proposals/COMPONENT_MODEL.md) | WIT and the Component Model (forward-looking) | layered | `░░░░░░░░░░░░░░░░░░░░` 0% | Nothing implemented; a component currently misparses as a core module (§4.1) |
+| [`COMPONENT_MODEL.md`](docs/proposals/COMPONENT_MODEL.md) | WIT and the Component Model (forward-looking) | layered | `░░░░░░░░░░░░░░░░░░░░` 0% | No component support, but **CM-0 is done**: the `layer` field is read and a component is rejected with a component-specific error instead of being misparsed (all of CM-1…CM-7 are open) |
 
 Reading the estimates:
 
 - **90–100%** — the engine does the work; only the harness or optional extras are missing.
-- **55–85%** — core implemented, but one or more conformance gaps or latent truncations remain.
-- **25–30%** — parse/type layer done, runtime is scaffolding (stubs, aborts, missing instruction arms).
-- **0–15%** — data exists but nothing executes (or, for the Component Model, not even detection).
+- **70–85%** — core implemented; a specific conformance gap or two remains.
+- **40–65%** — works for the common case, but a structurally important part is missing.
+- **15–35%** — parse/type layer done, runtime is scaffolding (stubs, aborts, missing instruction arms).
+- **0%** — nothing implemented (or, for the Component Model, rejection only).
 
 To refresh a number, re-run the row's script from `build/Desktop-Debug/Test`:
 

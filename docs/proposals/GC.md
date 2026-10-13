@@ -1,6 +1,8 @@
 # Garbage Collection (Wasm 3.0) — Implementation Notes, Spec Conformance, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 1).
+Status: design note / implementation reference (revision 2 — the shared trap
+sink and the instantiation-time segment materialisation landed; several §5 gaps
+are closed and §8 is much improved).
 Audience: anyone touching `WasmType`, `WasmTypeRegistry`, `WasmModuleInstance`,
 `LibJitTypeTranslator`, `LibjitOpcodeDispatcher`, or the test suite.
 
@@ -557,6 +559,22 @@ address arithmetic:
 - This is an optimisation, not a conformance fix: do it only when arrays are
   on a hot path (measure first, §6.2/D12 spirit).
 
+### 4.9 Traps and segment materialisation (shared with `BULK_MEMORY.md`)
+
+Two pieces of shared machinery landed with the memory/bulk work, and they are
+what made most of §8 move:
+
+- **A trap sink.** `WasmBase/WasmTrap.hpp` implements `WASM::trap` as a
+  `longjmp` to an embedder-armed `TrapScope`. The JIT's `emitAbort` (used by
+  `ref.cast`, `unreachable`, bounds checks) and every `jit_insn_check_null`
+  (now `emitTrapIfNull`) route through it, as do the native helpers. The harness
+  executes `assert_trap`; a *missing* trap is now a real failure
+  (`docs/TESTING.md`).
+- **Segment materialisation.** Expression-form element segments are evaluated
+  once at instantiation into `ModuleInstanceInternals::elementSegmentRefs`, and
+  `table.init` / `array.new_elem` copy *those* references (G4). Imported globals
+  are resolved before any local initialiser runs (G6; MUTABLE_GLOBALS.md MG-1).
+
 ## 5. Gaps between the implementation and §2
 
 Severity is about *observable correctness for a conforming module*, not about
@@ -569,9 +587,9 @@ effort.
 | G1 | **Per-instance type tags.** `gcObjectTypes` lives on the allocating `ModuleInstance`; a cast/test executed by another instance cannot see it. The `TypeId` *is* written into the object header but never read back for matching. | `refMatchesHeapType` → `tryGetGcTypeId`; cross-module `ref.test`/`ref.cast` on aggregates. | High |
 | G2 | **Cross-module function references.** Function refs are matched by scanning the *current* instance's `importStorage`/`internalCallables`. A `funcref` produced by module B is not found, and the "unknown reference" fallback matches only `any`/`extern`/`nofunc` — **not** `func`. `ref.test funcref` on it is wrong. | `refMatchesHeapType`; `call_ref`/`ref_func` spec scripts. | High |
 | G3 | **`any.convert_extern` / `extern.convert_any` are identity.** The two hierarchies are merged: an `externref` that is really an `i31`/struct survives `any.convert_extern`, and an internal reference survives `extern.convert_any` and then still passes `ref.test i31`/`struct`/`array`. | `dispatchAnyConvertExtern` / `dispatchExternConvertAny`; `ref_test` extern cases. | High |
-| G4 | **Element-segment initialisers are re-evaluated per use.** The spec evaluates a segment once; `array.new_elem` must copy the *same* stored references, so two arrays built from one segment are `ref.eq`. We rebuild fresh objects each time. | `bufferInitFromElems` calls `evalConstantExpr` per entry; `array_new_elem.wast:121` expects `1`, gets `0`. | High |
-| G5 | **Table initialiser expressions are dropped.** `TableType` (`WasmType.hpp`) stores only `elementType` + `limits`; `initializeTable` zero-fills. `(table $t 3 3 (ref i31) (ref.i31 (global.get $g)))` silently becomes three `null`s. Also blocks non-nullable reference tables. | `i31.wast:136-138` fail. | Medium |
-| G6 | **Imported globals are never resolved.** `ImportResolver::resolveGlobal` is declared but not called anywhere; `initializeGlobals` leaves import slots zero. Surfaces in GC `const` expressions that read an imported global. | `grep resolveGlobal` finds no caller; `i31.wast:148` fails. | High (pre-existing, not GC-specific) |
+| ~~G4~~ | ~~Element-segment initialisers are re-evaluated per use.~~ **Done (GC-3):** expression-form segments are evaluated once at instantiation into `elementSegmentRefs`; `table.init` and `array.new_elem` copy those references, so two arrays built from one segment are `ref.eq`. | `array_new_elem` 14/0, `table_init` 725/0 | Closed |
+| G5 | **Table initialiser expressions are dropped.** `TableType` (`WasmType.hpp`) stores only `elementType` + `limits`; `initializeTable` zero-fills. `(table $t 3 3 (ref i31) (ref.i31 (global.get $g)))` silently becomes three `null`s. Also blocks non-nullable reference tables. | `i31.wast` fails on the `init` cases. | Medium |
+| ~~G6~~ | ~~Imported globals are never resolved.~~ **Done (GC-3 / MUTABLE_GLOBALS MG-1):** `resolveImports` resolves every imported global before any local initialiser runs. | `global` 70/0; `i31` 63/5 (the remaining failures are G5) | Closed |
 | G7 | **`br_on_cast` flags ignored + control-flow modelling.** `castop` (source/target nullability) is discarded, so `br_on_cast` with nullable variants is wrong; the branch-target slot model then asserts. | `dispatchBrOnCast` `(void)castop;`; `br_on_cast.wast` hits `!slots.empty()`, `br_on_cast_fail.wast` hits `!valueStack.empty()`. | High |
 | G8 | **`ref.func` as a constant expression is a sentinel** (`Value.ref = funcIdx`), only resolved when a segment is applied. A `ref.func` global initialiser stays a bogus pointer. | `evalConstantExpr` case `0xD2`; `initializeGlobals`. | Medium |
 | G9 | **No validation pass.** `assert_invalid` / `assert_malformed` are skipped by the harness; GC type rules (cast target vs source, defaultability of `struct.new_default`, nullability constraints, `ref.eq` operand types) are unchecked and may crash rather than reject. | `docs/TESTING.md` execution table. | Medium |
@@ -580,12 +598,12 @@ effort.
 
 | # | Gap | Evidence |
 |---|---|---|
-| C1 | `array.init_data` and `array.init_elem` abort (signal 6). | `spec: array_init_data`, `spec: array_init_elem` |
-| C2 | `ref_cast.wast` and `ref_func.wast` "produced no report (exit code 1)" — an uncaught C++ exception during load/instantiate/run. | SpecSuite child report |
-| C3 | `call_ref.wast` segfaults. | `spec: call_ref` SIGSEGV |
-| C4 | `return_call_ref.wast` trips a `std::span` bounds assertion. | trace in child |
-| C5 | `type-equivalence.wast` aborts (signal 6). | `spec: type-equivalence` |
-| C6 | **Traps are process-fatal.** `ref.cast` failure → `emitAbort` (`std::abort`); null deref → `jit_insn_check_null` (SIGSEGV); allocation failure → `std::abort`. The harness skips `assert_trap`, so the whole trap family is untested and unusable in-process. | `emitAbort`, `jit_insn_check_null`, `allocateStructObject`/`allocateArrayObject` |
+| ~~C1~~ | **`array.init_data` / `array.init_elem` no longer abort** — they were the dropped-segment / bounds `std::abort()`s, which now trap. `array_init_elem` → **33/0/3**; `array_init_data` → **41/3/2**, so a real data-offset bug remains. | `spec: array_init_data`, `spec: array_init_elem` |
+| ~~C2~~ | **Done:** `ref_cast` **33/11/1**, `ref_func` **14/0/3** — the fatal path was an invalid reference reaching `jit_insn_check_null`, which is now the trap sink. | SpecSuite child report |
+| ~~C3~~ | **Done:** `call_ref` **31/0/4** (was SIGSEGV) — the null-callable check now traps instead of dereferencing. | `spec: call_ref` |
+| ~~C4~~ | **Done:** `return_call_ref` **40/0/13** (tail-call trampoline + trap sink). | `spec: return_call_ref` |
+| ~~C5~~ | **Done:** `type-equivalence` **30/1/1** (was an abort); one real mismatch remains. | `spec: type-equivalence` |
+| C6 | **Traps are process-fatal — largely fixed.** `emitAbort` and every `jit_insn_check_null` now go through `WASM::trap` (longjmp to the embedder's `TrapScope`), and the harness executes `assert_trap`. What *still* aborts is allocation failure (`allocateStructObject`/`allocateArrayObject`) and `notImplemented` (SIMD, atomics) — a compile-time limitation, not a Wasm trap. | `WasmTrap.hpp`, `emitAbort`, `emitTrapIfNull` |
 | C7 | `array.new` with a negative `i32` length becomes a huge `uint32_t`; `calloc` failure aborts rather than trapping. | `dispatchArrayNew` / `allocateArrayObject` |
 
 ### 5.3 Hygiene / latent risks (not yet wrong, easy to get wrong)
@@ -624,12 +642,12 @@ cause viewed through the reference-types feature.
 | # | Gap | Evidence |
 |---|---|---|
 | R1 | **Table imports are not type-checked.** `RegistryImportResolver::ModuleRegistry::resolveTable` discards the `TableType` (`(void)type;`), so element type and limits are never matched. Memory imports *are* checked (`memorySatisfiesImport`). Reference types requires the match. | `WasmRegistryImportResolver.cpp:226` |
-| R2 | **`elem.wast` / `table_init.wast` fail outright.** `table_init` aborts (signal 6) before the first command passes; `elem` exits with no report. Both scripts lean on passive `funcref` expression-form segments, so the segment evaluator is the prime suspect. | `spec: elem`, `spec: table_init` |
+| ~~R2~~ | **Fixed.** `elem` → **108/0/46**, `table_init` → **725/0/67** (both previously aborted). The prime suspect was right: the segment evaluator, plus a null `call_indirect` slot left by an unresolved imported global. | `spec: elem`, `spec: table_init` |
 | R3 | **Dropped-segment semantics.** `bufferInitFromElems` / `tableInit` abort whenever the segment was dropped, even for a zero-length access; the spec treats a dropped segment as empty (only a non-zero length traps). | `bufferInitFromElems`, `tableInit`, `elemDrop` |
 | R4 | **`externref` has no host model.** An `externref` is just a `void*`; there is no way to create or inspect a host extern object, and `ref.eq` on externrefs is unvalidated pointer equality. | `Value::ref`, `refMatchesHeapType` |
 | R5 | **Reference arguments/results are never marshalled**, so most table/reference tests execute with skipped actions (§5.4, §8.1) — a "failure" there frequently is not a runtime bug. | `isScalarValue` in `Test/WastScript.cpp` |
 | R6 | **`ref.func` outside an element segment is an unresolved sentinel** (the reference-types face of G8), so a `ref.func` global stays a bogus pointer. | `evalConstantExpr` case `0xD2` |
-| R7 | **Table-op traps abort** (`std::abort()` in `tableInit`/`tableCopy`/`tableFill` and the bounds checks), so `assert_trap` cannot run and in-process traps are fatal (same root as C6). | `dispatchTable*` |
+| ~~R7~~ | **Fixed.** Table-op bounds checks and the null-slot check route through `WASM::trap`, so `assert_trap` runs and in-process traps are recoverable. | `dispatchTable*`, `emitTrapIfNull` |
 | R8 | **Table initialiser expressions are unsupported** (shared with G5), and an element segment's declared value type is never validated against the table's element type. | `TableType`, `applyActiveSegments` |
 
 ## 6. Where we can and should play fast and loose
@@ -697,10 +715,10 @@ Ordered so that the *conformance* gaps close before the *optimisation* work.
 |---|---|---|---|
 | **GC-1 — Header-based tags** | `refMatchesHeapType` reads the `u32` at `ref[0]` for aggregates instead of `gcObjectTypes`; give function references a discoverable canonical `typeId` that needs no per-instance scan; remove the map. | G1, G2, H2, H3 | Cross-module `ref.test`/`ref.cast` on structs/arrays and `ref.test funcref` on an imported funcref are correct; `ref_test`/`ref_cast` stop failing for the right reasons. |
 | **GC-2 — Region allocator** | Per-instance bump allocator; free regions on instance destruction; keep a debug "poison on free" mode. | D1, C7 (partly) | No per-object `malloc`; allocation is a pointer bump; instance teardown reclaims everything. |
-| **GC-3 — Instantiation-time materialisation** | Evaluate element/data segments once (D8); store and evaluate table init exprs (D9); resolve imported globals (G6). | G4, G5, G6 | `array_new_elem` identity holds; typed/non-nullable tables initialise; GC `const` exprs reading imported globals work. |
+| **GC-3 — Instantiation-time materialisation** | ◑ Partly done: element/data segments are evaluated once (D8) and imported globals are resolved (G6). Table initialiser expressions (D9/G5) are still dropped. | G4, G6 (G5 open) | `array_new_elem` identity holds; GC `const` exprs reading imported globals work. Typed/non-nullable tables still do not initialise. |
 | **GC-4 — `br_on_cast` correctness** | Honour the `castop` nullability flags; fix the branch-target slot model so `br_on_cast(_fail)` never trips `!slots.empty()` / `!valueStack.empty()`. | G7 | Both scripts run to completion; nullable variants yield spec results. |
-| **GC-5 — Crash triage** | `array.init_data`/`init_elem`, `ref_cast`, `ref_func`, `call_ref`, `return_call_ref`, `type-equivalence`. | C1–C5 | No child aborts/segfaults; each script passes or fails with a real mismatch message. |
-| **GC-6 — Trap sink** | Route every trap through one `trap()` primitive; make it a longjmp/exception hook so `assert_trap` can eventually run. | C6, D7 | A failed cast / null deref is recoverable in-process; no `std::abort` on the normal path. |
+| **GC-5 — Crash triage** | ◑ Mostly done: `ref_cast`, `ref_func`, `call_ref`, `return_call_ref` and `type-equivalence` all run now (the trap sink), and `array.init_elem` is clean; only `array.init_data` still has 3 mismatches. | C1–C5 | No child aborts/segfaults; each script passes or fails with a real mismatch message. |
+| **GC-6 — Trap sink** | ✅ `WASM::trap` (longjmp to a `TrapScope`, `WasmBase/WasmTrap.hpp`) is the single sink; `emitAbort` and every `jit_insn_check_null` use it, and the harness executes `assert_trap`. Allocation failure and `notImplemented` still abort. | C6, D7 | Done: a failed cast / null deref is recoverable in-process; no `std::abort` on the memory/table/GC-reference path. |
 | **GC-7 — Fast casts (optional)** | Depth/range-tag encoding (D3), inline caches for repeated `ref.test`/`ref.cast` at a site, measured against the registry-call baseline. | H3 | Casts on a hot loop are a few instructions; benchmark recorded. |
 | **GC-8 — Extern interop (optional)** | Only if an embedder needs host externrefs: box `extern.convert_any` values, keep identity under the no-mixing contract (D5). | G3 | `ref_test` extern cases pass; the contract is documented in `ABI.md`. |
 | **GC-9 — Inline arrays (optional)** | Move arrays from the out-of-line `[header][length][data*]` form to the inline form (§4.8): header-only LibJIT type, per-type `dataOffset`/`elemSize`, single allocation, one indirection per access. Folds naturally into the region allocator (GC-2). | D13, H8 | A layout test asserts JIT offsets == runtime offsets; benchmarks show the allocation/indirection win. |
@@ -718,37 +736,35 @@ Guardrails for every milestone:
 
 ## 8. Indicative test survey
 
-Survey taken with the existing `build/Desktop-Debug/Test/WasmJit` binary
-(2026-10-04; the working tree may be a few minutes newer than that binary).
-`WASM_SPEC_TIMEOUT=10`, one script at a time. **Read together with §5.4**:
-"skipped" is not "checked", and reference-argument cases are skipped, not
-executed.
+Survey taken with `build/Desktop-Debug/Test/WasmJit` (2026-10-13; `assert_trap`
+now executed, so the "skipped" column no longer hides the trap cases).
+`WASM_SPEC_TIMEOUT=10`, one script at a time.
 
 | Script | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| `struct` | 12 | 0 | 18 | happy path works; most ref-valued assertions skipped |
-| `array` | 23 | 0 | 31 | ditto |
-| `array_copy` | 24 | 0 | 11 | works |
-| `array_fill` | 23 | 0 | 7 | works |
-| `array_new_data` | 9 | 0 | 19 | works |
-| `array_new_elem` | 5 | 1 | 18 | G4 (segment re-evaluation) |
-| `array_init_data` | — | crash | — | C1 (signal 6) |
-| `array_init_elem` | — | crash | — | C1 (signal 6) |
-| `i31` | 62 | 4 | 7 | G5 (table init), G6 (imported global) |
+| `struct` | 14 | 0 | 16 | happy path works; most ref-valued assertions skipped |
+| `array` | 40 | 0 | 14 | improved once traps are recoverable |
+| `array_copy` | 31 | 0 | 4 | works |
+| `array_fill` | 27 | 0 | 3 | works |
+| `array_new_data` | 23 | 0 | 5 | works |
+| `array_new_elem` | 14 | 0 | 10 | G4 fixed (segment materialisation) |
+| `array_init_data` | 41 | 3 | 2 | C1 no longer aborts; a data-offset bug remains |
+| `array_init_elem` | 33 | 0 | 3 | works |
+| `i31` | 63 | 5 | 5 | G5 (table init expressions) |
 | `ref_eq` | 83 | 0 | 6 | works |
-| `ref_is_null` | 14 | 2 | 6 | table/segment init (G5/G4) |
+| `ref_is_null` | 15 | 1 | 6 | table init (G5) |
 | `ref_null` | 2 | 0 | 32 | mostly skipped |
-| `ref_as_non_null` | 4 | 0 | 3 | works |
-| `ref_test` | 38 | 32 | 1 | mostly §5.4 (skipped `init` leaves tables null), plus G1/G2/G3 |
-| `ref_cast` | — | no report | — | C2 |
-| `ref_func` | — | no report | — | C2 |
-| `call_ref` | — | SIGSEGV | — | C3 |
-| `return_call_ref` | — | abort | — | C4 |
-| `br_on_cast` | — | abort | — | G7 |
-| `br_on_cast_fail` | — | abort | — | G7 |
+| `ref_as_non_null` | 6 | 0 | 1 | works |
+| `ref_test` | 38 | 32 | 1 | G1/G2/G3 (cross-module tags, funcref, extern identity) |
+| `ref_cast` | 33 | 11 | 1 | C2 fixed; remaining failures are G1/G2 |
+| `ref_func` | 14 | 0 | 3 | C2 fixed |
+| `call_ref` | 31 | 0 | 4 | C3 fixed |
+| `return_call_ref` | 40 | 0 | 13 | C4 fixed |
+| `br_on_cast` | — | signal 6 | — | G7 (branch-target slot model) |
+| `br_on_cast_fail` | — | signal 6 | — | G7 |
 | `extern` | 1 | 0 | 17 | mostly skipped |
 | `type-canon` | 2 | 0 | 0 | type identity works |
-| `type-equivalence` | — | abort | — | C5 |
+| `type-equivalence` | 30 | 1 | 1 | C5 fixed; one real mismatch remains |
 
 Reproduce a single row with, from `build/Desktop-Debug/Test`:
 

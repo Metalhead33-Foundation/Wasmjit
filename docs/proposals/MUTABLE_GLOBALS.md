@@ -1,6 +1,7 @@
 # Import/Export of Mutable Globals — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 1).
+Status: design note / implementation reference (revision 2 — MG-1 implemented:
+imported globals are resolved; the aliasing half of MG-2/MG-3 is still open).
 Audience: anyone touching `WasmModuleInstance` (globals), `WasmImport`,
 `WasmRegistryImportResolver`, `WasmModule`, or the test harness.
 
@@ -58,10 +59,12 @@ without a linear memory (see [`THREADS.md`](THREADS.md) §2.6).
 - `ImportResolver::resolveGlobal(module, field, const GlobalType&)` is declared,
   and `RegistryImportResolver` implements it (including a per-module map of
   exported globals).
-- **Import resolution is not wired up.** `resolveGlobal` is *declared and
-  defined but never called anywhere* in the instantiator; `initializeGlobals`
-  only evaluates locally-defined globals and leaves every imported slot at its
-  zero-initialised value.
+- **Import resolution is wired up (MG-1).** `resolveImports` calls
+  `ImportResolver::resolveGlobal` for every imported global and writes the
+  result into `globalsStorage` **before** `initializeGlobals` evaluates any
+  local initialiser, so a `global.get` of an imported global sees the exported
+  value. `initializeGlobals` then resizes the same vector (preserving the
+  imported prefix) and fills the locals.
 - **Exports are registered by value.** `registerExports` calls
   `registrar.registerGlobal(moduleName, ex.name, ctx.globals[ex.index])`, which
   copies the `Value`. The resolver's storage is therefore a snapshot, not a
@@ -73,11 +76,11 @@ without a linear memory (see [`THREADS.md`](THREADS.md) §2.6).
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| MG1 | **Imported globals are never resolved.** `resolveGlobal` has no caller; `initializeGlobals` leaves the import slots zero. | `global.wast` 10 passed / **63 failed**; `docs/GC.md` G6 | High |
-| MG2 | **The interface cannot alias.** `resolveGlobal` returns `std::optional<Value>` **by value**, and the resolver stores `Value` by value, so even wired up it would copy. Sharing semantics require a `Value*`/global-reference. | `WasmImport.hpp`, `WasmRegistryImportResolver.hpp` | High |
-| MG3 | **Export is a snapshot.** `registerExports` copies `ctx.globals[i]`, so a later `global.set` by the exporter is invisible to importers. | `WasmModuleInstance.cpp` | High |
-| MG4 | **No import type/mutability check.** `resolveGlobal` ignores `GlobalType`. | `WasmRegistryImportResolver.cpp` | Medium |
-| MG5 | **No test coverage of the shared case.** There is no manual test where module B imports A's mutable global and both observe a write. | `Test/main.cpp` | Medium |
+| ~~MG1~~ | ~~Imported globals are never resolved.~~ **Done (MG-1):** `resolveImports` calls `ImportResolver::resolveGlobal` for each imported global and installs the result into `globalsStorage` *before* any local initialiser runs. `spectest`'s `global_i32`…`global_f64` are registered so scripts can import them. `global.wast` went from 10/63 to **70 passed / 0 failed**. | `WasmModuleInstance.cpp` (`resolveImports`, `initializeGlobals`) | Closed |
+| MG2 | **The interface cannot alias.** `resolveGlobal` returns `std::optional<Value>` **by value**, and the resolver stores `Value` by value, so the resolved import is a *copy*. A read-only global is observationally identical, but a **mutable** import is not shared. | `WasmImport.hpp`, `WasmRegistryImportResolver.hpp` | Medium (only matters for mutable imports) |
+| MG3 | **Export is a snapshot.** `registerExports` copies `ctx.globals[i]`, so a later `global.set` by the exporter is invisible to importers (and vice versa). | `WasmModuleInstance.cpp` | Medium (same root as MG2) |
+| MG4 | **No import type/mutability check.** `resolveGlobal` ignores `GlobalType`. | `WasmRegistryImportResolver.cpp` | Low (no validating front-end) |
+| MG5 | **No test coverage of the shared *mutable* case.** There is no manual test where module B imports A's mutable global and both observe a write — which is exactly what MG2/MG3 would have to fix first. | `Test/main.cpp` | Medium |
 
 ## 6. Where we can and should play fast and loose
 
@@ -98,7 +101,7 @@ rule in [`ABI.md`](ABI.md).
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **MG-1 — Pointer globals** | Represent the global index space as `Value*` (or a small `Global*` with an `isMutable` flag); keep local globals in the instance's storage. | MG2 | `ctx.globals` addresses can point into another instance. |
-| **MG-2 — Wire resolution** | Call `resolveGlobal` for each imported global during instantiation and install the returned pointer. | MG1, MG4 | A module importing a global sees the exported value; the type is checked. |
+| **MG-2 — Wire resolution** | ✅ `resolveImports` resolves every imported global during instantiation and installs it before local initialisers run. (The *aliasing* upgrade — a `Value*` index space — is still open, so a mutable import is a copy; see MG2/MG3.) | MG1 (MG4 open) | Done for reads: a module importing a global sees the exported value. |
 | **MG-3 — Export aliasing** | Export a global by publishing a pointer to the instance's slot, not a `Value` copy. | MG3 | A write through the importer is visible to the exporter. |
 | **MG-4 — Test** | Add `shared_global_a/b.wat` + a manual test that writes through B and reads through A. | MG5 | The test asserts the shared value. |
 
@@ -108,7 +111,7 @@ rule in [`ABI.md`](ABI.md).
 
 | Script | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| `global` | 10 | 63 | 51 | MG1: imported globals and mutations mostly broken |
+| `global` | 70 | 0 | 54 | MG1 closed: imported globals resolve (was 10/63). The 54 skips are reference-typed and *shared mutable* cases |
 | `exports0` | (curated) | | | plain exports work |
 
 `global.wast` is not in `Test/wast_supported.txt`; `exports0` is.

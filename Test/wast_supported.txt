@@ -39,6 +39,7 @@ inline-module
 int_exprs
 local_set
 memory
+memory-multi
 memory64
 memory64-imports
 memory_grow64

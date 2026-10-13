@@ -2,8 +2,10 @@
 #include "WasmException.hpp"
 #include "WasmOpcode.hpp"
 #include "WasmStore.hpp"
+#include "WasmTrap.hpp"
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <Elvavena/Io/ElvDataStream.hpp>
+#include <algorithm>
 #include <cstring>
 #include <cstdlib>
 #include <stdexcept>
@@ -58,14 +60,34 @@ Value ModuleInstantiator::evalConstantExpr(const std::span<const std::byte>& exp
 	return instance.evalConstantExpr(expr);
 }
 
+Callable* ModuleInstance::callableFromSegmentRef(const Value& ref)
+{
+	if (ref.ref == nullptr)
+		return nullptr;
+
+	const uint32_t importedFuncCount = static_cast<uint32_t>(module->importFunctions.size());
+	const uint32_t totalFuncs = static_cast<uint32_t>(
+		module->importFunctions.size() + module->internalFunctionTypeIndices.size());
+	const uint32_t funcIdx = decodeRefFuncIndex(reinterpret_cast<uintptr_t>(ref.ref));
+	if (ref.kind == ValueTypeCode::FuncRef && funcIdx < totalFuncs) {
+		if (funcIdx < importedFuncCount)
+			return &internals.importStorage[funcIdx];
+		return &internals.internalCallables[funcIdx - importedFuncCount];
+	}
+	// A GC reference (or a host externref) is stored opaquely.
+	return static_cast<Callable*>(ref.ref);
+}
+
 void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals)
 {
 	// ── Data Segments ───────────────────────────────────────────────────────
-	// Each active data segment copies raw bytes into linear memory.
-	// Passive segments (mode != 0) are skipped here — they wait for
-	// memory.init instructions at runtime to activate them.
-	for (const auto& seg : module.dataSegments)
+	// Each active data segment copies raw bytes into linear memory. Active and
+	// declarative segments are *dropped* once instantiation is done: the spec
+	// makes them behave as empty for a later memory.init/data.drop, which is
+	// what elem.wast's "implicitly dropped elements" cases check.
+	for (size_t dataIdx = 0; dataIdx < module.dataSegments.size(); ++dataIdx)
 	{
+		const DataSegment& seg = module.dataSegments[dataIdx];
 		// Mode 0 = active with implicit memory index 0.
 		// Mode 2 = active with explicit memory index (multi-memory proposal).
 		// Mode 1 = passive. We skip passive segments entirely here.
@@ -96,20 +118,46 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 			memory->memoryBase + offset,
 			seg.data.data(),
 			seg.data.size());
+
+		// An applied active segment is dropped (see the loop comment above).
+		internals.dataSegmentDropped[dataIdx] = true;
+	}
+
+	// ── Element segment references ─────────────────────────────────────────
+	// An expression-form segment holds *references*: evaluate each entry once
+	// here, so a later table.init / array.new_elem copies those same
+	// references instead of re-evaluating the expression (docs/proposals/
+	// GC.md G4; BULK_MEMORY.md §4). Index-form segments need no cache.
+	for (size_t elemIdx = 0; elemIdx < module.elementSegments.size(); ++elemIdx) {
+		const ElementSegment& seg = module.elementSegments[elemIdx];
+		std::vector<Value>& refs = instance.internals.elementSegmentRefs[elemIdx];
+		refs.clear();
+		if (!seg.initIndices.empty() || seg.isDeclarative())
+			continue;
+		refs.reserve(seg.initExprs.size());
+		for (const std::vector<uint8_t>& expr : seg.initExprs)
+			refs.push_back(evalConstantExpr(
+				Euph::Io::ConstBufferDevice::span_cast<uint8_t>(expr), instance));
 	}
 
 	// ── Element Segments ────────────────────────────────────────────────────
 	// Each active element segment writes function references into a table.
 	// The structure mirrors data segments but operates on WasmCallable*
-	// entries rather than raw bytes.
+	// entries rather than raw bytes. Declarative segments are never placed
+	// anywhere and active ones are dropped afterwards, so both become empty.
 	const uint32_t importedFuncCount =
 		static_cast<uint32_t>(module.importFunctions.size());
 
-	for (const auto& seg : module.elementSegments)
+	for (size_t elemIdx = 0; elemIdx < module.elementSegments.size(); ++elemIdx)
 	{
+		const ElementSegment& seg = module.elementSegments[elemIdx];
 		// isActive() returns false for passive (mode 1) and declarative
 		// (mode 3) segments. We only process active ones here.
-		if (!seg.isActive()) continue;
+		if (!seg.isActive()) {
+			if (seg.isDeclarative())
+				internals.elementSegmentDropped[elemIdx] = true;
+			continue;
+		}
 
 		// Same constant-expression evaluation for the table offset.
 		const Value offsetVal = evalConstantExpr(
@@ -159,31 +207,18 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 			}
 			else
 			{
-				// Reference-types form: each entry is a constant expression
-				// that evaluates to a funcref or externref. Evaluate it and
-				// retrieve the resulting callable.
-				const Value refVal = evalConstantExpr(
-					Euph::Io::ConstBufferDevice::span_cast<uint8_t>(seg.initExprs[i]), instance);
-				if (refVal.ref == nullptr) {
-					callable = nullptr;
-				} else {
-					const uint32_t funcIdx = decodeRefFuncIndex(reinterpret_cast<uintptr_t>(refVal.ref));
-					const uint32_t totalFuncs = static_cast<uint32_t>(
-						module.importFunctions.size() + module.internalFunctionTypeIndices.size());
-					if (refVal.kind == ValueTypeCode::FuncRef && funcIdx < totalFuncs) {
-						if (funcIdx < importedFuncCount)
-							callable = &instance.internals.importStorage[funcIdx];
-						else
-							callable = &instance.internals.internalCallables[funcIdx - importedFuncCount];
-					} else {
-						callable = static_cast<Callable*>(refVal.ref);
-					}
-				}
+				// Expression form: use the reference computed once at
+				// instantiation (never re-evaluate the expression here).
+				callable = instance.callableFromSegmentRef(
+					instance.internals.elementSegmentRefs[elemIdx][i]);
 			}
 
 			// Write the callable pointer into the store-owned table slot.
 			table->base[tableOffset + i] = callable;
 		}
+
+		// An applied active segment is dropped (see the loop comment above).
+		instance.internals.elementSegmentDropped[elemIdx] = true;
 	}
 }
 ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver)
@@ -219,6 +254,7 @@ ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver)
 	internals.compiledFunctions.resize(module.internalFunctionTypeIndices.size(), nullptr);
 	internals.dataSegmentDropped.resize(module.dataSegments.size(), false);
 	internals.elementSegmentDropped.resize(module.elementSegments.size(), false);
+	internals.elementSegmentRefs.resize(module.elementSegments.size());
 }
 
 std::optional<Callable> ModuleInstance::exportedFunction(std::string_view name) const
@@ -352,8 +388,23 @@ void ModuleInstance::resolveImports(ImportResolver& resolver)
 		internals.tableRefs.push_back(table->table);
 	}
 
-	// Imported globals and tags follow the same resolve-then-assign pattern;
-	// they are handled elsewhere (globals) or not yet wired (tags).
+	// ── Global imports ──────────────────────────────────────────────
+	// Imported globals occupy the low indices of the global index space and
+	// must be in place *before* any local initialiser evaluates a `global.get`
+	// (docs/proposals/MUTABLE_GLOBALS.md MG-1, docs/proposals/GC.md G6).
+	// initializeGlobals() later resizes this vector, which preserves these
+	// entries, and `ctx.globals` then points at the combined array.
+	internals.globalsStorage.resize(module->importGlobals.size());
+	for (size_t i = 0; i < module->importGlobals.size(); ++i) {
+		const ImportGlobal& imp = module->importGlobals[i];
+		std::optional<Value> value =
+			resolver.resolveGlobal(imp.moduleName, imp.fieldName, imp.global);
+		if (!value.has_value())
+			throw UnresolvedImportException(imp.moduleName, imp.fieldName);
+		internals.globalsStorage[i] = value.value();
+	}
+
+	// Tags follow the same resolve-then-assign pattern but are not wired yet.
 }
 
 void ModuleInstance::initializeMemories()
@@ -367,9 +418,13 @@ void ModuleInstance::initializeMemories()
 	for (const MemoryType& memType : module->memories) {
 		const bool isShared = (memType.limits.flags & 0x02) != 0; // threads proposal
 		const uint64_t initialPages = memType.limits.initial;
-		const uint64_t maxPages = memType.limits.maximum.has_value()
+		uint64_t maxPages = memType.limits.maximum.has_value()
 			? memType.limits.maximum.value()
 			: UINT64_MAX;
+		// A 32-bit memory's index space caps it at 65536 pages (4 GiB); a 64-bit
+		// memory is bounded only by the host allocation budget (WasmStore).
+		if (memType.indexType == MemoryIndexType::I32)
+			maxPages = std::min<uint64_t>(maxPages, 65536);
 
 		const Store::MemoryId id = store.createLinearMemory(initialPages, maxPages, isShared);
 		LinearMemory* memory = store.memory(id);
@@ -443,9 +498,13 @@ void ModuleInstance::initializeTable()
 	internals.tableRefs.reserve(module->importTables.size() + module->tables.size());
 	for (const TableType& tableType : module->tables) {
 		const uint64_t initialSize = tableType.limits.initial;
-		const uint64_t maxSize = tableType.limits.maximum.has_value()
+		uint64_t maxSize = tableType.limits.maximum.has_value()
 			? tableType.limits.maximum.value()
 			: UINT64_MAX;
+		// A 32-bit table's index space is 2^32-1 entries; a 64-bit table
+		// (limits flag bit 2) is bounded only by the host allocation budget.
+		if ((tableType.limits.flags & 0x04) == 0)
+			maxSize = std::min<uint64_t>(maxSize, 0xFFFF'FFFFull);
 
 		// Slots start null — "uninitialized, traps on call_indirect".
 		const Store::TableId id = Store::global().createTable(initialSize, maxSize);
@@ -564,6 +623,38 @@ Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 		case 0x43: { Value v{}; v.f32 = stream.read<float>();     v.kind = ValueTypeCode::F32; stack.push_back(v); break; }
 		case 0x44: { Value v{}; v.f64 = stream.read<double>();    v.kind = ValueTypeCode::F64; stack.push_back(v); break; }
 
+		// Extended constant expressions (docs/proposals/EXTENDED_CONST.md
+		// EC-1): integer add/sub/mul are the only arithmetic a Wasm 3.0
+		// constant expression may contain. Compute with wrap-around and keep
+		// the operand kind as the result kind.
+		case 0x6A: case 0x6B: case 0x6C: { // i32.add / i32.sub / i32.mul
+			const Value rhs = popValue();
+			const Value lhs = popValue();
+			const uint32_t x = static_cast<uint32_t>(lhs.i32);
+			const uint32_t y = static_cast<uint32_t>(rhs.i32);
+			uint32_t result = 0;
+			if (opcode == 0x6A)      result = x + y;
+			else if (opcode == 0x6B) result = x - y;
+			else                     result = x * y;
+			Value v{}; v.i32 = static_cast<int32_t>(result); v.kind = ValueTypeCode::I32;
+			stack.push_back(v);
+			break;
+		}
+		case 0x7C: case 0x7D: case 0x7E: { // i64.add / i64.sub / i64.mul
+			const Value rhs = popValue();
+			const Value lhs = popValue();
+			const uint64_t x = static_cast<uint64_t>(lhs.i64);
+			const uint64_t y = static_cast<uint64_t>(rhs.i64);
+			uint64_t result = 0;
+			if (opcode == 0x7C)      result = x + y;
+			else if (opcode == 0x7D) result = x - y;
+			else                     result = x * y;
+			Value v{}; v.i64 = static_cast<int64_t>(result); v.kind = ValueTypeCode::I64;
+			stack.push_back(v);
+			break;
+		}
+
+
 		case 0x23: { // global.get
 			const uint32_t globalIdx = stream.readLEB128<uint32_t>();
 			if (globalIdx >= internals.globalsStorage.size())
@@ -681,21 +772,24 @@ Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 	return stack.back();
 }
 
-int32_t ModuleInstance::growMemory(uint32_t memIdx, uint32_t deltaPages) {
+int64_t ModuleInstance::growMemory(uint32_t memIdx, uint64_t deltaPages) {
 	if (memIdx >= internals.memoryRefs.size())
 		return -1;
 
 	LinearMemory* memory = internals.memoryRefs[memIdx];
-	const uint32_t oldPages = static_cast<uint32_t>(memory->memorySize / 0x10000);
+	// 64-bit throughout: a memory64 can grow past 2^32 pages, and the caller
+	// reports the old page count in the memory's own index type
+	// (docs/proposals/MEMORY64.md M64-1).
+	const uint64_t oldPages = memory->memorySize / 0x10000;
 
 	// The Store owns the memory (and therefore its growth policy/limits).
 	if (!Store::growMemory(memory, deltaPages))
 		return -1; // Caller turns this into a Wasm trap
 
-	return static_cast<int32_t>(oldPages);
+	return static_cast<int64_t>(oldPages);
 }
 
-bool ModuleInstance::growTable(uint32_t tableIdx, uint32_t deltaEntries) {
+bool ModuleInstance::growTable(uint32_t tableIdx, uint64_t deltaEntries) {
 	if (tableIdx >= internals.tableRefs.size())
 		return false;
 
@@ -708,50 +802,55 @@ bool ModuleInstance::growTable(uint32_t tableIdx, uint32_t deltaEntries) {
 void ModuleInstance::memoryInit(uint32_t memIdx, uint32_t dataIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len)
 {
 	if (memIdx >= internals.memoryRefs.size())
-		std::abort();
+		trap("memory index out of range");
 	if (dataIdx >= module->dataSegments.size())
-		std::abort();
-	if (internals.dataSegmentDropped[dataIdx])
-		std::abort();
+		trap("data segment index out of range");
 
 	LinearMemory* memory = internals.memoryRefs[memIdx];
 	const DataSegment& seg = module->dataSegments[dataIdx];
-	if (srcOffset > seg.data.size() || len > seg.data.size() - srcOffset)
-		std::abort();
-	if (static_cast<uint64_t>(dstOffset) + len > memory->memorySize)
-		std::abort();
 
+	// A dropped segment behaves as if it were empty: a zero-length copy is a
+	// no-op, anything longer traps. See docs/proposals/BULK_MEMORY.md BM-1/BM-3.
+	const uint64_t segmentSize = internals.dataSegmentDropped[dataIdx] ? 0 : seg.data.size();
+	if (static_cast<uint64_t>(srcOffset) + len > segmentSize)
+		trap("out of bounds memory.init source");
+	if (static_cast<uint64_t>(dstOffset) + len > memory->memorySize)
+		trap("out of bounds memory access");
+
+	if (len == 0)
+		return;
 	std::memcpy(memory->memoryBase + dstOffset, seg.data.data() + srcOffset, len);
 }
 
 void ModuleInstance::dataDrop(uint32_t dataIdx)
 {
 	if (dataIdx >= internals.dataSegmentDropped.size())
-		std::abort();
+		trap("data segment index out of range");
 	internals.dataSegmentDropped[dataIdx] = true;
 }
 
 void ModuleInstance::tableInit(uint32_t elemIdx, uint32_t tableIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len)
 {
 	if (elemIdx >= module->elementSegments.size())
-		std::abort();
-	if (internals.elementSegmentDropped[elemIdx])
-		std::abort();
+		trap("element segment index out of range");
 	if (tableIdx >= internals.tableRefs.size())
-		std::abort();
+		trap("table index out of range");
 
 	const ElementSegment& seg = module->elementSegments[elemIdx];
-	const size_t entryCount = seg.initIndices.empty() ? seg.initExprs.size() : seg.initIndices.size();
-	if (srcOffset > entryCount || len > entryCount - srcOffset)
-		std::abort();
+	// Dropped -> empty segment, exactly like memoryInit above.
+	const size_t entryCount = internals.elementSegmentDropped[elemIdx]
+		? 0
+		: (seg.initIndices.empty() ? seg.initExprs.size() : seg.initIndices.size());
+	if (static_cast<uint64_t>(srcOffset) + len > entryCount)
+		trap("out of bounds table.init source");
 	TableInstance* table = internals.tableRefs[tableIdx];
 	if (static_cast<uint64_t>(dstOffset) + len > table->size)
-		std::abort();
+		trap("out of bounds table access");
+	if (len == 0)
+		return;
 
 	const uint32_t importedFuncCount =
 		static_cast<uint32_t>(module->importFunctions.size());
-	const uint32_t totalFuncs = static_cast<uint32_t>(
-		module->importFunctions.size() + module->internalFunctionTypeIndices.size());
 
 	for (uint32_t i = 0; i < len; ++i) {
 		Callable* callable = nullptr;
@@ -763,21 +862,9 @@ void ModuleInstance::tableInit(uint32_t elemIdx, uint32_t tableIdx, uint32_t dst
 			else
 				callable = &internals.internalCallables[funcIdx - importedFuncCount];
 		} else {
-			const Value refVal = evalConstantExpr(
-				Euph::Io::ConstBufferDevice::span_cast<uint8_t>(seg.initExprs[entryIndex]));
-			if (refVal.ref == nullptr) {
-				callable = nullptr;
-			} else {
-				const uint32_t funcIdx = decodeRefFuncIndex(reinterpret_cast<uintptr_t>(refVal.ref));
-				if (refVal.kind == ValueTypeCode::FuncRef && funcIdx < totalFuncs) {
-					if (funcIdx < importedFuncCount)
-						callable = &internals.importStorage[funcIdx];
-					else
-						callable = &internals.internalCallables[funcIdx - importedFuncCount];
-				} else {
-					callable = static_cast<Callable*>(refVal.ref);
-				}
-			}
+			// Expression form: use the reference evaluated once at
+			// instantiation (never re-evaluate the expression here).
+			callable = callableFromSegmentRef(internals.elementSegmentRefs[elemIdx][entryIndex]);
 		}
 		table->base[dstOffset + i] = callable;
 	}
@@ -786,40 +873,43 @@ void ModuleInstance::tableInit(uint32_t elemIdx, uint32_t tableIdx, uint32_t dst
 void ModuleInstance::elemDrop(uint32_t elemIdx)
 {
 	if (elemIdx >= internals.elementSegmentDropped.size())
-		std::abort();
+		trap("element segment index out of range");
 	internals.elementSegmentDropped[elemIdx] = true;
 }
 
 void ModuleInstance::bufferInitFromData(uint32_t dataIdx, void* dst, uint32_t srcOffset, uint32_t lenBytes)
 {
 	if (dataIdx >= module->dataSegments.size())
-		std::abort();
-	if (internals.dataSegmentDropped[dataIdx])
-		std::abort();
+		trap("data segment index out of range");
 
 	const DataSegment& seg = module->dataSegments[dataIdx];
-	if (srcOffset > seg.data.size() || lenBytes > seg.data.size() - srcOffset)
-		std::abort();
+	// Dropped segment == empty segment (BULK_MEMORY.md BM-1/BM-3).
+	const uint64_t segmentSize = internals.dataSegmentDropped[dataIdx] ? 0 : seg.data.size();
+	if (static_cast<uint64_t>(srcOffset) + lenBytes > segmentSize)
+		trap("out of bounds data segment access");
+	if (lenBytes == 0)
+		return;
 	std::memcpy(dst, seg.data.data() + srcOffset, lenBytes);
 }
 
 void ModuleInstance::bufferInitFromElems(uint32_t elemIdx, void* dst, uint32_t srcOffset, uint32_t lenElems)
 {
 	if (elemIdx >= module->elementSegments.size())
-		std::abort();
-	if (internals.elementSegmentDropped[elemIdx])
-		std::abort();
+		trap("element segment index out of range");
 
 	const ElementSegment& seg = module->elementSegments[elemIdx];
-	const size_t entryCount = seg.initIndices.empty() ? seg.initExprs.size() : seg.initIndices.size();
-	if (srcOffset > entryCount || lenElems > entryCount - srcOffset)
-		std::abort();
+	// Dropped segment == empty segment (BULK_MEMORY.md BM-1/BM-3).
+	const size_t entryCount = internals.elementSegmentDropped[elemIdx]
+		? 0
+		: (seg.initIndices.empty() ? seg.initExprs.size() : seg.initIndices.size());
+	if (static_cast<uint64_t>(srcOffset) + lenElems > entryCount)
+		trap("out of bounds element segment access");
+	if (lenElems == 0)
+		return;
 
 	Callable** out = static_cast<Callable**>(dst);
 	const uint32_t importedFuncCount =
 		static_cast<uint32_t>(module->importFunctions.size());
-	const uint32_t totalFuncs = static_cast<uint32_t>(
-		module->importFunctions.size() + module->internalFunctionTypeIndices.size());
 
 	for (uint32_t i = 0; i < lenElems; ++i) {
 		Callable* callable = nullptr;
@@ -831,21 +921,9 @@ void ModuleInstance::bufferInitFromElems(uint32_t elemIdx, void* dst, uint32_t s
 			else
 				callable = &internals.internalCallables[funcIdx - importedFuncCount];
 		} else {
-			const Value refVal = evalConstantExpr(
-				Euph::Io::ConstBufferDevice::span_cast<uint8_t>(seg.initExprs[entryIndex]));
-			if (refVal.ref == nullptr) {
-				callable = nullptr;
-			} else {
-				const uint32_t funcIdx = decodeRefFuncIndex(reinterpret_cast<uintptr_t>(refVal.ref));
-				if (refVal.kind == ValueTypeCode::FuncRef && funcIdx < totalFuncs) {
-					if (funcIdx < importedFuncCount)
-						callable = &internals.importStorage[funcIdx];
-					else
-						callable = &internals.internalCallables[funcIdx - importedFuncCount];
-				} else {
-					callable = static_cast<Callable*>(refVal.ref);
-				}
-			}
+			// Expression form: use the reference evaluated once at
+			// instantiation (never re-evaluate the expression here).
+			callable = callableFromSegmentRef(internals.elementSegmentRefs[elemIdx][entryIndex]);
 		}
 		out[i] = callable;
 	}
