@@ -16,23 +16,103 @@ The long-term goal is to turn this into a reusable shared library with pluggable
 - Convert from QMake to CMake in the long run
 - Modularize the project (one library for the base stuff, one library for each backend, one library/executable for unit tests, etc.)
 
+## Documentation
+
+`docs/` holds the long-form design notes and process guides; `docs/proposals/`
+holds one note per WebAssembly proposal. Every proposal note follows the same
+shape: what the spec demands → what it does *not* demand → what is implemented →
+gaps → where we deliberately deviate → plan → test survey → references. The
+tables below are the index.
+
+**Completeness is an estimate** of how much of the proposal's required surface
+behaves correctly today. It is read off each note's §4 (implemented), §5 (gaps)
+and §8 (test survey) and is deliberately *not* a spec-conformance score — the
+curated spec suite is the source of truth. Each note's §7 plan table, with its
+per-milestone done markers, is the authoritative per-item status.
+
+**Meter:** 20 cells, one per 5%.
+
+| Meter | Meaning |
+|---|---|
+| `████████████████████` | 100% — shipped and verified by the curated spec suite |
+| `████████████████░░░░` | 75–95% — implemented; only harness/optional items or latent gaps remain |
+| `████████████░░░░░░░░` | 40–70% — partially working; real conformance gaps remain |
+| `████░░░░░░░░░░░░░░░░` | 10–35% — parsing/types/enumeration only; the runtime is a stub |
+| `░░░░░░░░░░░░░░░░░░░░` | 0% — nothing implemented (or detection only) |
+
+### Core design and process notes (`docs/`)
+
+| Document | What it covers | Kind | Completeness |
+|---|---|---|---|
+| [`ABI.md`](docs/ABI.md) | The `VMContext*`-as-arg0 calling convention, the `Callable` layout, store-owned entities, and the embedder guide | Reference (describes shipped behaviour) | `████████████████████` current |
+| [`TYPE_IDENTITY.md`](docs/TYPE_IDENTITY.md) | Module-local type indices → process-wide `TypeId`: canonicalisation, interning, `rec` groups, the `match` relation | Design note + implementation reference | `███████████████████░` 95% — M0–M7 shipped; M8 (footprint measurement) pending |
+| [`TESTING.md`](docs/TESTING.md) | Building/running the Catch2 suite, the `wasm-tools` spec-suite conversion, the curated `wast_supported.txt` workflow, reading the output | Guide (process) | `████████████████████` current |
+
+### Proposal notes (`docs/proposals/`)
+
+| Document | Feature / proposal | Wasm | Completeness | Where it stands |
+|---|---|---|---|---|
+| [`MULTI_VALUE.md`](docs/proposals/MULTI_VALUE.md) | Multi-value | 2.0 | `██████████████████░░` 90% | Engine complete (block parameters, packed multi-result returns); the gap is verification — the harness skips functions with multiple results |
+| [`TAILCALLS.md`](docs/proposals/TAILCALLS.md) | Tail calls | 3.0 | `██████████████████░░` 90% | TC-1…TC-4 done: direct, indirect and `ref` tails run in constant stack; the trampoline is signature-restricted |
+| [`SMALL_PROPOSALS.md`](docs/proposals/SMALL_PROPOSALS.md) | Sign-extension, non-trapping `trunc_sat`, branch hinting | 2.0 / 3.0 | `█████████████████░░░` 85% | First two implemented + manually tested; branch hints are parsed and deliberately non-semantic |
+| [`MEMORY64.md`](docs/proposals/MEMORY64.md) | Memory64 | 3.0 | `█████████████████░░░` 85% | Twelve curated 64-bit scripts green; latent 32-bit `size`/`grow` plumbing (M1/M4) and no index-type check |
+| [`MULTI_MEMORY.md`](docs/proposals/MULTI_MEMORY.md) | Multiple memories | 3.0 | `█████████████████░░░` 85% | `memidx` threaded through loads/stores/bulk ops; `memory-multi` 6/0; no `memidx` bounds check (MM1) |
+| [`GC.md`](docs/proposals/GC.md) | Garbage collection | 3.0 | `████████████░░░░░░░░` 60% | Types, canonicalisation, struct/array/i31 ops and casts work; cross-module tags/refs, `br_on_cast`, segment re-evaluation and several crashes remain (§5/§8) |
+| [`BULK_MEMORY.md`](docs/proposals/BULK_MEMORY.md) | Bulk memory operations | 2.0 | `████████████░░░░░░░░` 60% | `copy`/`fill`/`table_copy` green (4368 / 30 / 522 assertions passed); `memory.init` aborts and out-of-bounds traps are process-fatal |
+| [`FUNCTION_REFERENCES.md`](docs/proposals/FUNCTION_REFERENCES.md) | Typed function references | 3.0 | `█████████████░░░░░░░` 55% | `Callable`, `call_ref` decoding and type checks in place; `call_ref` segfaults and cross-module `ref.test funcref` is wrong |
+| [`THREADS.md`](docs/proposals/THREADS.md) | Threads and atomics | separate | `██████░░░░░░░░░░░░░░` 30% | Shared-memory reserve/commit and all 67 atomic opcodes decoded; every handler is a stub and there is no agent model — and no spec coverage |
+| [`MUTABLE_GLOBALS.md`](docs/proposals/MUTABLE_GLOBALS.md) | Import/export of mutable globals | 2.0 | `█████░░░░░░░░░░░░░░░` 25% | Parsing and export registration in place; imported globals are never resolved and exports are snapshots (`global` 10/63) |
+| [`EXTENDED_CONST.md`](docs/proposals/EXTENDED_CONST.md) | Extended constant expressions | 3.0 | `█████░░░░░░░░░░░░░░░` 25% | `const`/`global.get`/`ref.*` evaluate; the six `i32/i64.add/sub/mul` extensions are missing (EC1) |
+| [`EXCEPTIONS.md`](docs/proposals/EXCEPTIONS.md) | Exception handling (`exnref`) | 3.0 | `█████░░░░░░░░░░░░░░░` 25% | Tags and `throw`/`try_table` decode; the runtime is a stub (`throw` traps, `try_table` ignores catches, no `exnref`) |
+| [`SIMD.md`](docs/proposals/SIMD.md) | SIMD (fixed-width + relaxed) | 2.0 / 3.0 | `███░░░░░░░░░░░░░░░░░` 15% | Types/values and 236 opcodes are enumerated and decoded; every JIT handler aborts; relaxed SIMD is not enumerated |
+| [`COMPONENT_MODEL.md`](docs/proposals/COMPONENT_MODEL.md) | WIT and the Component Model (forward-looking) | layered | `░░░░░░░░░░░░░░░░░░░░` 0% | Nothing implemented; a component currently misparses as a core module (§4.1) |
+
+Reading the estimates:
+
+- **90–100%** — the engine does the work; only the harness or optional extras are missing.
+- **55–85%** — core implemented, but one or more conformance gaps or latent truncations remain.
+- **25–30%** — parse/type layer done, runtime is scaffolding (stubs, aborts, missing instruction arms).
+- **0–15%** — data exists but nothing executes (or, for the Component Model, not even detection).
+
+To refresh a number, re-run the row's script from `build/Desktop-Debug/Test`:
+
+```bash
+WASM_SPEC_TIMEOUT=10 ./WasmJit 'spec: <script>' -r compact   # one script
+./WasmJit '~[spec]'                                          # curated set + manual tests
+WASM_SPEC_SCRIPTS=all ./WasmJit                              # full sweep (loud on purpose)
+```
+
+`Test/wast_supported.txt` is what "curated" means; see
+[`docs/TESTING.md`](docs/TESTING.md) for the refresh recipe.
+
 ## Current Repository Layout
 
-- `Base/`: core WASM parsing and runtime-facing data structures.
-- `Io/`: custom I/O and buffer/device utilities used by the loader/parser.
-- `LibJit/`: GNU LibJIT-specific context, type translation, and module compilation work.
-- `Stub/`: a non-JIT opcode dispatcher used for inspection/debug-style work.
-- `main.cpp`: temporary test code used while the library/runtime is under active development.
+The top-level qmake project is [`Project.pro`](Project.pro); it builds one
+library per backend plus the test executable.
+
+| Path | What it is |
+|---|---|
+| `WasmBase/` | The core library (`libWasmBase`): binary decoding, the module/instance model, `Store`/`TypeRegistry`/`Value`, the opcode decoder |
+| `WasmStub/` | `libWasmStub`: a non-JIT opcode dispatcher that pretty-prints instead of executing (inspection/debug) |
+| `LibJit/` | `libLibJit`: the GNU LibJIT backend (context, type translation, module compiler, dispatch) — the primary target |
+| `Asmjit/` | Scaffold for a future AsmJit backend |
+| `Sljit/` | Scaffold for a future SlJIT backend |
+| `Test/` | The Catch2 executable (`WasmJit`) and the spec-suite harness; see [`docs/TESTING.md`](docs/TESTING.md) |
+| `docs/` | Design notes and process guides; per-proposal notes live in `docs/proposals/` (see [Documentation](#documentation)) |
+| `extern/` | Submodules: `MhLib` (`Elvavena` I/O + `Euphemy`) and the upstream `WasmTestsuite` |
+| `build/` | Shadow build output — **all build artefacts go here, never in the source tree** |
 
 ## Current Status
 
-Right now the repository builds a console application through qmake:
+The repository builds a set of shared libraries plus a console test executable
+through qmake:
 
-- [`WasmJit.pro`](/WasmJit.pro) sets `TEMPLATE = app`
-- the build links against `libjit` via `-ljit`
-- [`main.cpp`](/main.cpp) uses a hard-coded `.wasm` path and prints parsed/type-dispatched information for experimentation
-
-That means the executable should be treated as a development sandbox, not as the final public shape of the project.
+- [`Project.pro`](Project.pro) is the top-level `subdirs` project
+  (`WasmBase` + `WasmStub` + `LibJit` + `Test`, with the `Asmjit`/`Sljit`
+  scaffolds);
+- the test target links against `libjit`, Catch2 and the project libraries;
+- the executable under `build/<config>/Test/WasmJit` is a development sandbox and
+  test harness, not the final embeddable API.
 
 ## Backends
 
@@ -45,16 +125,22 @@ Planned backend strategy:
 
 ## Build Notes
 
-The project currently uses qmake instead of CMake and expects GNU LibJIT to be available on the system.
-
-Typical workflow:
+The project uses qmake (CMake is a long-term goal) and expects GNU LibJIT,
+Catch2 3.x and `nlohmann_json` to be available. Build out-of-source only:
 
 ```bash
-qmake WasmJit.pro
-make
+mkdir -p build/Desktop-Debug && cd build/Desktop-Debug
+/usr/bin/qmake6 ../../Project.pro -spec linux-g++ CONFIG+=debug CONFIG+=qml_debug
+env MAKE=/usr/bin/make /usr/bin/make -j"$(nproc)"
 ```
 
-Depending on your platform, you may need to install the development package for GNU LibJIT first so `-ljit` resolves correctly at link time.
+> On this development machine `make` must be invoked with an explicit absolute
+> path, otherwise recursive `make` spawns new editor windows. See
+> [`docs/TESTING.md`](docs/TESTING.md#environment-notes-for-this-machine).
+
+Install the GNU LibJIT development package if `-ljit` does not resolve at link
+time. Building the `Test` target additionally needs `wasm-tools` on `PATH` (for
+the spec-suite conversion) and Node.js (for the AssemblyScript test modules).
 
 ## Testing
 
@@ -93,7 +179,7 @@ Script selection, expected output and current limitations are covered in
 The codebase is a work in progress. Expect rough edges in a few areas:
 
 - API shape is not finalized yet
-- library packaging/shared-library output is not in place yet
+- the shared libraries build, but packaging/installation is not in place yet
 - backend abstraction is still evolving
 - the test harness in `main.cpp` does not represent the intended final embedding interface
 
