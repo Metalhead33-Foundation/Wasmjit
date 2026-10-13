@@ -316,8 +316,11 @@ struct PreparedFunctionStack {
 	// and index N is the first local.
 	std::vector<ValueType> allLocals; // Includes both parameters and actual locals
 	std::vector<ValueType> allReturns;
-	uint16_t parameterCount;
-	uint16_t localCount;
+	// Widened from uint16_t: a function may declare more than 65535 locals or
+	// parameters (the cap lives in WasmSafety.hpp; a silent truncation here
+	// would desynchronise the JIT local slots).
+	uint32_t parameterCount;
+	uint32_t localCount;
 
 	void prepare(const Subtype& type, const FunctionBody& body);
 };

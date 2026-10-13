@@ -46,6 +46,30 @@ jit_value_t zeroValueForType(jit_function_t fn, jit_type_t t)
 
 } // namespace
 
+// LibJIT's build region is a lock: jit_context_build_start() must be paired with
+// jit_context_build_end(), and an exception unwinding between them skips the
+// unlock, wedging the context so that every later jit_context_build_start()
+// blocks forever. That is a *hang*, not an error, and it is exactly what
+// happened when an unimplemented opcode first started throwing instead of
+// aborting (docs/SAFETY.md). RAII makes it impossible.
+class JitBuildScope
+{
+public:
+	explicit JitBuildScope(jit_context_t context) : context(context)
+	{
+		jit_context_build_start(context);
+	}
+	~JitBuildScope()
+	{
+		jit_context_build_end(context);
+	}
+	JitBuildScope(const JitBuildScope&) = delete;
+	JitBuildScope& operator=(const JitBuildScope&) = delete;
+
+private:
+	jit_context_t context;
+};
+
 void ModuleCompiler::compileFunction(jit_function_t fn, uint32_t funcTypeIdx, const WASM::FuncType& funcType,
 									 const WASM::FunctionBody& body, WASM::ModuleInstance& instance,
 									 WASM::ModuleInstanceInternals& internals, const WASM::Module& module,
@@ -141,7 +165,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 	const uint32_t importedFuncCount =
 		static_cast<uint32_t>(module.importFunctions.size());
 
-	jit_context_build_start(context);
+	JitBuildScope buildScope(context);
 
 	for (uint32_t i = 0; i < module.functionBodies.size(); ++i)
 	{
@@ -274,8 +298,6 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		}
 		internals.internalCallables[i].fnPtr = driverEntry;
 	}
-
-	jit_context_build_end(context);
 }
 
 void ModuleCompiler::callStartFunction(WASM::ModuleInstance& instance, uint32_t funcIdx, WASM::ModuleInstanceInternals& internals)
@@ -283,16 +305,18 @@ void ModuleCompiler::callStartFunction(WASM::ModuleInstance& instance, uint32_t 
 	WASM::Callable* callable = nullptr;
 	const uint32_t importedFuncCount = static_cast<uint32_t>(instance.context()->importedFunctionCount);
 	if (funcIdx < importedFuncCount) {
+		if (funcIdx >= internals.importStorage.size())
+			throw std::runtime_error("start function index is outside the function index space");
 		callable = &internals.importStorage[funcIdx];
 	} else {
 		const uint32_t internalIdx = funcIdx - importedFuncCount;
 		if (internalIdx >= internals.internalCallables.size())
-			std::abort();
+			throw std::runtime_error("start function index is outside the function index space");
 		callable = &internals.internalCallables[internalIdx];
 	}
 
-	if (callable == nullptr || callable->fnPtr == nullptr)
-		std::abort();
+	if (callable->fnPtr == nullptr)
+		throw std::runtime_error("start function has no compiled body");
 
 	using StartFn = void (*)(WASM::VMContext*);
 	StartFn fn = reinterpret_cast<StartFn>(callable->fnPtr);

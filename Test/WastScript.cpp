@@ -479,6 +479,11 @@ void ScriptRunner::onModule(const ScriptCommand& command)
 		path.push_back('/');
 	path += command.filename;
 
+	if (std::getenv("WJ_TRACE") != nullptr) {
+		std::fprintf(stderr, "[wj]   parsing %s\n", command.filename.c_str());
+		std::fflush(stderr);
+	}
+
 	auto module = std::make_unique<WASM::Module>();
 	try {
 		Euph::Io::File file(path.c_str(), Elv::Io::Mode::READ);
@@ -489,6 +494,11 @@ void ScriptRunner::onModule(const ScriptCommand& command)
 	}
 
 	modules.push_back(std::move(module));
+
+	if (std::getenv("WJ_TRACE") != nullptr) {
+		std::fprintf(stderr, "[wj]   instantiating %s\n", command.filename.c_str());
+		std::fflush(stderr);
+	}
 
 	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
 	std::unique_ptr<WASM::ModuleInstance> instance;

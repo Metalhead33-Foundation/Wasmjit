@@ -1,4 +1,5 @@
 #include "WasmOpcodeDispatcher.hpp"
+#include "WasmSafety.hpp"
 #include <vector>
 #include <stdexcept>
 
@@ -6,6 +7,10 @@ namespace WASM {
 
 template <typename T> static void readList(FastMemReader& stream, std::vector<T>& vect) {
 	size_t siz = stream.readLEB128<size_t>();
+	// Each element costs at least one byte on the wire, so a count past the end
+	// of the function body is malformed; without this a 5-byte LEB could resize
+	// the vector to billions of entries (docs/SAFETY.md).
+	requireCountAvailable(stream.device, siz, "an opcode list length");
 	vect.resize(siz);
 	for(size_t i = 0; i < siz; ++i) {
 		stream >> vect[i];
@@ -18,6 +23,8 @@ template <typename T> static std::vector<T> readList(FastMemReader& stream) {
 }
 template <typename T> static void readListLEB128(FastMemReader& stream, std::vector<T>& vect) {
 	size_t siz = stream.readLEB128<size_t>();
+	// Same bound as readList above (docs/SAFETY.md).
+	requireCountAvailable(stream.device, siz, "an opcode list length");
 	vect.resize(siz);
 	for(size_t i = 0; i < siz; ++i) {
 		stream >> Elv::Io::Leb(vect[i]);

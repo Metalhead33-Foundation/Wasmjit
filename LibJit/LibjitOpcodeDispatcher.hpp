@@ -143,6 +143,12 @@ private:
 	// Emits a runtime check that `callablePtr`'s canonical type id matches the
 	// module-local type index `typeIdx` (id fast path, registry fallback).
 	void emitCallableTypeCheck(jit_value_t callablePtr, WASM::TypeIdx typeIdx);
+	// Some opcodes are enumerated and decoded but not lowered yet (SIMD, the
+	// atomics). Their handlers call notImplemented(), which throws; the LibJIT
+	// build region in ModuleCompiler::compileFunctions is RAII-guarded, so the
+	// exception surfaces as a clean instantiation failure (docs/SAFETY.md).
+	[[noreturn]] void notImplemented(const char* name);
+
 	jit_value_t effectiveMemoryAddress(const WASM::MemArg& ma, jit_nint accessSize);
 	WASM::GlobalType globalTypeForIndex(WASM::GlobalIdx idx) const;
 

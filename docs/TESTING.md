@@ -357,6 +357,11 @@ Regression coverage: `Test/wasm_wat/grow_guard.wat` plus the `grow guardrail
 rejects absurd deltas without allocating` case, which grows an unbounded
 memory/table by `0xffffffff` and asserts `-1` **and** that nothing was charged.
 
+The full policy behind all of this — every input-derived bound, the trap/`abort`
+rules, the lock that must be RAII, and the pitfalls that led to each rule — is
+[`docs/SAFETY.md`](SAFETY.md). Read it before adding a feature that allocates
+from module input.
+
 ### Current status (for orientation)
 
 The default run is the curated list (49 scripts) plus the 28 manual tests, and
@@ -381,10 +386,10 @@ Per-script outcomes from the last sweep (2026-10-13, 256 scripts):
 | Outcome | Scripts | Reading |
 |---|---:|---|
 | clean (`passed > 0`, `failed = 0`) | 143 | the runtime handled every command the harness can marshal |
-| wrong results (`failed > 0`) | 40 | real mismatches — see below |
-| terminated by signal | 63 | almost all are `notImplemented` (SIMD, atomics) aborting during compilation |
+| wrong results (`failed > 0`) | 94 | real mismatches — see below. Most are SIMD/atomic scripts, which now *report* failures instead of dying |
+| terminated by signal | 10 | genuine crashes still to be triaged (was 63 before unimplemented opcodes became clean failures) |
 | produced no report | 0 | the shared trap sink removed these; before it there were 8 |
-| timed out | 1 | a script that loops; the per-script budget killed it |
+| timed out | 0 | — |
 | nothing executed (all commands skipped) | 9 | not real coverage |
 
 Traps are **executed** now, so a *missing* trap is a failure rather than a silent

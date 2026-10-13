@@ -1,4 +1,5 @@
 #include "LibjitOpcodeDispatcher.hpp"
+#include "../WasmBase/WasmSafety.hpp"
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmTrap.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
@@ -11,16 +12,11 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <string>
 
 namespace LibJIT {
 
 namespace {
-
-[[noreturn]] void notImplemented(const char* name)
-{
-	std::fprintf(stderr, "LibJIT: unimplemented opcode handler %s\n", name);
-	std::abort();
-}
 
 // A Wasm trap (docs/proposals/BULK_MEMORY.md BM-2): jump to the embedder's
 // armed TrapScope when there is one, otherwise print and abort. A `longjmp`
@@ -816,6 +812,16 @@ void OpcodeDispatcher::emitTrapUnreachable()
 	emitAbort(function);
 }
 
+void OpcodeDispatcher::notImplemented(const char* name)
+{
+	// The backend does not lower this opcode yet (SIMD, the atomics, …). It is
+	// a compile-time limitation rather than a Wasm trap, so it is reported as a
+	// clean instantiation failure. The LibJIT context's build region is guard by
+	// RAII in compileFunctions(), so unwinding from here cannot wedge it
+	// (docs/SAFETY.md).
+	throw std::runtime_error(std::string("LibJIT backend: opcode is not lowered yet: ") + name);
+}
+
 void OpcodeDispatcher::emitTrapIfNull(jit_value_t pointer)
 {
 	jit_value_t word = jit_insn_convert(function, pointer, jit_type_ulong, 0);
@@ -1152,6 +1158,11 @@ void OpcodeDispatcher::dispatchNop()
 
 void OpcodeDispatcher::dispatchBlock(const WASM::BlockType& arg)
 {
+	// A pathological body must not drive the operand/control bookkeeping (or
+	// LibJIT) into the realm of gigabytes; see docs/SAFETY.md.
+	if (controlStack.size() >= WASM::kMaxControlNesting)
+		throw std::runtime_error("control nesting is too deep");
+
 	const std::vector<WASM::StorageType> paramTypes = parameterTypesForBlockType(arg);
 
 	ControlBlock block;
@@ -1167,6 +1178,9 @@ void OpcodeDispatcher::dispatchBlock(const WASM::BlockType& arg)
 
 void OpcodeDispatcher::dispatchLoop(const WASM::BlockType& arg)
 {
+	if (controlStack.size() >= WASM::kMaxControlNesting)
+		throw std::runtime_error("control nesting is too deep");
+
 	const std::vector<WASM::StorageType> paramTypes = parameterTypesForBlockType(arg);
 
 	ControlBlock loop;
@@ -1192,6 +1206,9 @@ void OpcodeDispatcher::dispatchLoop(const WASM::BlockType& arg)
 
 void OpcodeDispatcher::dispatchIf(const WASM::BlockType& arg)
 {
+	if (controlStack.size() >= WASM::kMaxControlNesting)
+		throw std::runtime_error("control nesting is too deep");
+
 	jit_value_t cond = popValue();
 	const std::vector<WASM::StorageType> paramTypes = parameterTypesForBlockType(arg);
 

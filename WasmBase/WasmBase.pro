@@ -31,6 +31,7 @@ HEADERS += \
     WasmOpcodeDispatcher.hpp \
     WasmRegistryImportResolver.hpp \
     WasmRuntime.hpp \
+    WasmSafety.hpp \
     WasmSection.hpp \
     WasmStore.hpp \
     WasmTable.hpp \

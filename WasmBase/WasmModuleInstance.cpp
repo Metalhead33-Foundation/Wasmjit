@@ -267,13 +267,13 @@ std::optional<Callable> ModuleInstance::exportedFunction(std::string_view name) 
 
 		if (ex.index < importedFuncCount) {
 			if (ex.index >= internals.importStorage.size())
-				std::abort();
+				throw std::runtime_error("module exports a function index outside its index space");
 			return internals.importStorage[ex.index];
 		}
 
 		const uint32_t internalIdx = ex.index - importedFuncCount;
 		if (internalIdx >= internals.internalCallables.size())
-			std::abort();
+			throw std::runtime_error("module exports a function index outside its index space");
 		return internals.internalCallables[internalIdx];
 	}
 
@@ -290,12 +290,12 @@ void ModuleInstance::registerExports(ImportRegistrar& registrar, std::string_vie
 			Callable callable{};
 			if (ex.index < importedFuncCount) {
 				if (ex.index >= internals.importStorage.size())
-					std::abort();
+					throw std::runtime_error("module exports a function index outside its index space");
 				callable = internals.importStorage[ex.index];
 			} else {
 				const uint32_t internalIdx = ex.index - importedFuncCount;
 				if (internalIdx >= internals.internalCallables.size())
-					std::abort();
+					throw std::runtime_error("module exports a function index outside its index space");
 				callable = internals.internalCallables[internalIdx];
 			}
 			registrar.registerFunction(moduleName, ex.name, callable);
@@ -303,7 +303,7 @@ void ModuleInstance::registerExports(ImportRegistrar& registrar, std::string_vie
 		}
 		case ExternalKind::Global: {
 			if (ctx.globals == nullptr)
-				std::abort();
+				throw std::runtime_error("module exports a global before its globals were initialised");
 			registrar.registerGlobal(moduleName, ex.name, ctx.globals[ex.index]);
 			break;
 		}
@@ -311,7 +311,7 @@ void ModuleInstance::registerExports(ImportRegistrar& registrar, std::string_vie
 			// Publish the borrowed view so that other modules can import the
 			// very same linear memory (the "shared memory" case).
 			if (ex.index >= internals.memoryRefs.size())
-				std::abort();
+				throw std::runtime_error("module exports a memory index outside its index space");
 			registrar.registerMemory(moduleName, ex.name, internals.memoryRefs[ex.index]);
 			break;
 		}
@@ -936,9 +936,15 @@ void* ModuleInstance::allocateStructObject(uint32_t size, uint32_t localTypeIdx)
 	// match it even from another module (M6).
 	const TypeId typeId = module->typeId(LocalTypeIdx{localTypeIdx});
 
+	// A GC object is host memory the module asks for; charge it against the
+	// Store's allocation budget so a failure is a Wasm trap, never an abort
+	// (docs/SAFETY.md). GC objects are never freed, so the charge is one-way.
+	if (!Store::global().reserveBytes(size))
+		trap("out of memory");
+
 	uint8_t* object = static_cast<uint8_t*>(std::calloc(1, size));
 	if (!object)
-		std::abort();
+		trap("out of memory");
 	*reinterpret_cast<uint32_t*>(object) = typeId.value;
 	internals.gcObjectTypes[object] = typeId;
 	return object;
@@ -948,15 +954,23 @@ void* ModuleInstance::allocateArrayObject(uint32_t headerSize, uint32_t elementS
 {
 	const TypeId typeId = module->typeId(LocalTypeIdx{localTypeIdx});
 
+	// Charge the whole object (header + elements) *before* allocating: an
+	// `array.new` with an absurd runtime length must trap, not try to
+	// `calloc` tens of gigabytes (docs/SAFETY.md, docs/proposals/GC.md C7).
+	const uint64_t totalBytes = static_cast<uint64_t>(headerSize) +
+		static_cast<uint64_t>(elementSize) * static_cast<uint64_t>(length);
+	if (!Store::global().reserveBytes(totalBytes))
+		trap("out of memory");
+
 	uint8_t* header = static_cast<uint8_t*>(std::calloc(1, headerSize));
 	if (!header)
-		std::abort();
+		trap("out of memory");
 
 	uint8_t* data = nullptr;
 	if (length != 0) {
 		data = static_cast<uint8_t*>(std::calloc(length, elementSize));
 		if (!data)
-			std::abort();
+			trap("out of memory");
 	}
 
 	*reinterpret_cast<uint32_t*>(header) = typeId.value;

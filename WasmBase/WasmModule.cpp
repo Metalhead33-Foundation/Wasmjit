@@ -1,4 +1,5 @@
 #include "WasmModule.hpp"
+#include "WasmSafety.hpp"
 #include "WasmStore.hpp"
 #include <iostream>
 #include <stdexcept>
@@ -313,18 +314,29 @@ void Module::processCodeSection(Elv::Io::Device& file, const Section& section)
 		// 1. Locals are part of the bodySize count
 		uint32_t localGroupCount;
 		wasmStream >> Elv::Io::Leb(localGroupCount);
+		uint64_t declaredLocals = 0;
 		for(uint32_t j = 0; j < localGroupCount; ++j) {
 			LocalEntry entry;
 			wasmStream >> Elv::Io::Leb(entry.count);
+			// A single 5-byte LEB can claim hundreds of millions of locals and
+			// PreparedFunctionStack::prepare materialises one jit value per
+			// local, so cap the total (docs/SAFETY.md).
+			declaredLocals += entry.count;
+			if (declaredLocals > kMaxFunctionLocals)
+				throw std::runtime_error("malformed module: a function body declares too many locals");
 			entry.type.decode(wasmStream); // Reuses your ValType logic
 			body.locals.push_back(entry);
 		}
 
 		// 2. The rest is the bytecode
-		size_t currentlyRead = file.tell() - startOfBody;
-		size_t bytecodeSize = bodySize - currentlyRead;
+		const size_t currentlyRead = file.tell() - startOfBody;
+		if (currentlyRead > bodySize)
+			throw std::runtime_error("malformed module: function body is smaller than its locals declaration");
+		const size_t bytecodeSize = bodySize - currentlyRead;
 
-		body.code.resize(bytecodeSize);
+		// The bytecode has to actually be in the input: a bodySize far larger
+		// than the file must not turn into a huge allocation (docs/SAFETY.md).
+		body.code.resize(requireAvailable(file, bytecodeSize, "a function body"));
 		file.read(body.code.data(), 1, bytecodeSize);
 
 		// 3. Rebase branch hints onto `body.code`. The section stores offsets
@@ -376,7 +388,9 @@ void Module::processDataSection(Elv::Io::Device& file, const Section& section)
 		// Both active and passive segments then provide the raw byte vector
 		uint32_t dataSize;
 		wasmStream >> Elv::Io::Leb(dataSize);
-		seg.data.resize(dataSize);
+		// A segment longer than the remaining input is malformed; don't let it
+		// become a huge allocation (docs/SAFETY.md).
+		seg.data.resize(requireAvailable(file, dataSize, "a data segment"));
 		file.read(seg.data.data(), 1, dataSize); // Directly read into vector
 
 		this->dataSegments.push_back(seg);
@@ -492,6 +506,9 @@ void Module::processBranchHintSection(Elv::Io::Device& file, const Section& sect
 		wasmStream >> Elv::Io::Leb(hintCount);
 
 		std::vector<BranchHint>& hints = branchHintsByFuncIndex[funcIndex];
+		// Each hint costs at least two bytes on the wire, so the input size
+		// bounds a sane reserve (docs/SAFETY.md).
+		requireCountAvailable(file, hintCount, "a branch-hint count");
 		hints.reserve(hints.size() + hintCount);
 		for (uint32_t j = 0; j < hintCount; ++j) {
 			uint32_t offset;
@@ -806,6 +823,10 @@ std::string Module::readLEB128String(DWasmStream& stream)
 {
 	uint32_t length;
 	stream >> Elv::Io::Leb(length);
+	// A name longer than the remaining input is malformed by definition;
+	// without this check a 5-byte LEB could request a 4 GiB std::string
+	// (docs/SAFETY.md).
+	requireAvailable(stream.device, length, "a name");
 	std::string str(length, '\0');
 	stream.device.read(str.data(),1,length);
 	return str;
