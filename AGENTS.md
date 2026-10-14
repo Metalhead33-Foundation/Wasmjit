@@ -7,3 +7,16 @@
    ```bash
    env MAKE=/usr/bin/make /usr/bin/make -j16
    ```
+
+## Documentation to follow
+
+- **[`docs/SAFETY.md`](docs/SAFETY.md) — read before touching `WasmBase/` or a backend (currently `LibJit/`).**
+  It is the policy for not letting a module take the host down: telling artifacts apart before decoding,
+  input-derived allocation bounds, the allocation budget, traps vs `std::abort()`, and RAII for locks.
+  Any change on the loader / instantiator / JIT path must respect it.
+
+- **[`docs/PROPOSALS.md`](docs/PROPOSALS.md) — read before adding or editing a note under `docs/proposals/`.**
+  It defines the shape of a proposal note (front matter, the nine `§` slots, the `§1` document map, the
+  gap / deviation / plan / test-survey table schemas, and the ID + status-marker conventions) and, at the
+  meta level, what it does *not* demand and where the shape may deliberately be relaxed. Keep the note you
+  write consistent with it, and keep `PROPOSALS.md`'s §4/§8 survey current when a note is added.
