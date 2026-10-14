@@ -104,7 +104,7 @@ in the tree are:
 | `EXCEPTIONS.md` | `EX<n>` | `EXD<n>` | `EX-<n>` |
 | `EXTENDED_CONST.md` | `EC<n>` | `ECD<n>` | `EC-<n>` |
 | `FUNCTION_REFERENCES.md` | `FR<n>` | `FRD<n>` | `FR-<n>` |
-| `GC.md` | `G<n>` (plus `R`/`H`/`C` sub-families) | `D<n>` | `GC-<n>` (and `SR-<n>`) |
+| `GC.md` | `G<n>` (plus `R`/`H`/`C`/`L` sub-families; `RC<n>` study rows in §6.4) | `D<n>` | `GC-<n>` / `RC-<n>` (and `SR-<n>`) |
 | `MEMORY64.md` | `M<n>` | `M64D<n>` | `M64-<n>` |
 | `MULTI_MEMORY.md` | `MM<n>` | `MMD<n>` | `MM-<n>` |
 | `MULTI_VALUE.md` | `MV<n>` | `MVD<n>` | `MV-<n>` |

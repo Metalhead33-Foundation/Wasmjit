@@ -1,8 +1,10 @@
 # Garbage Collection (Wasm 3.0) — Implementation Notes, Spec Conformance, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 2 — the shared trap
-sink and the instantiation-time segment materialisation landed; several §5 gaps
-are closed and §8 is much improved).
+Status: design note / implementation reference (revision 3 — the collector
+strategy is now **reference counting**, not a stop-the-world mark-sweep
+collector; §6.1 records the decision and §6.4 is the challenge/mitigation study.
+The revision-2 trap sink and instantiation-time segment materialisation are
+unchanged).
 Audience: anyone touching `WasmType`, `WasmTypeRegistry`, `WasmModuleInstance`,
 `LibJitTypeTranslator`, `LibjitOpcodeDispatcher`, or the test suite.
 
@@ -15,7 +17,9 @@ This note is deliberately split the same way as
 4. the **gaps** between (3) and (1);
 5. where we can and should play **fast and loose** on purpose, because this
    project is a spiritual successor to Quake 3's QVM rather than a
-   browser-embedded engine (see [`ABI.md`](ABI.md) "Design Philosophy").
+   browser-embedded engine (see [`ABI.md`](ABI.md) "Design Philosophy") —
+   including the collector-strategy decision (§6.1) and the reference-counting
+   challenge/mitigation study (§6.4).
 
 It contains **no new code**. Shipped code and this document are the two
 artefacts; the plan in §7 says which gaps are worth closing and which are not.
@@ -28,7 +32,7 @@ artefacts; the plan in §7 says which gaps are worth closing and which are not.
 | §3 | What does Wasm 3.0 *not* require? |
 | §4 | What is in the tree today? |
 | §5 | Where do we fall short of §2? |
-| §6 | Where do we *choose* to deviate, and why? |
+| §6 | Where do we *choose* to deviate, and why? (the reference-counting collector, §6.1/§6.4) |
 | §7 | Milestones to close the important gaps |
 | §8 | Indicative test survey |
 | §9 | References |
@@ -207,6 +211,12 @@ go*. The following are **not** required, which is precisely the room we use in
 - **No particular algorithm.** Mark/sweep, copying, reference counting,
   region/arena, or garbage-never are all conformant. The spec never mentions
   stack maps, write barriers, generations, or compaction.
+- **No requirement that cycles be reclaimed.** An engine that reference-counts
+  and leaks cycles, or that never collects at all, is conformant; only the
+  implementation-limitation escape hatch applies. That is what makes a
+  cycle-leaking RC design *spec-legal*. It is not automatically *acceptable* for
+  a long-running host, which is why §6.4 treats cycles as a day-one problem
+  rather than an edge case.
 - **No GC timing guarantees**, no latency bound, no incremental/parallel
   requirement, and no interaction rule with threads for the MVP.
 
@@ -514,7 +524,7 @@ Element access becomes a **single** indirection:
 | Empty array (`len = 0`) | `data == nullptr`; the field must never be dereferenced | just the header; no null case |
 | Locality / streaming | buffer can be anywhere | header and elements adjacent |
 | Free / arena teardown | two blocks to reclaim | one block |
-| Moving GC later | two objects per array, two forwarding pointers | one object, one forwarding pointer |
+| Moving GC later | **not planned** — reference counting is non-moving (§6.1) | (same: no forwarding pointers to design for either way) |
 | `array.copy` self-overlap | `memmove` on the shared buffer | `memmove` within one object |
 | LibJIT representation | fixed 3-field struct | header-only struct + computed address arithmetic |
 
@@ -650,6 +660,19 @@ cause viewed through the reference-types feature.
 | ~~R7~~ | **Fixed.** Table-op bounds checks and the null-slot check route through `WASM::trap`, so `assert_trap` runs and in-process traps are recoverable. | `dispatchTable*`, `emitTrapIfNull` |
 | R8 | **Table initialiser expressions are unsupported** (shared with G5), and an element segment's declared value type is never validated against the table's element type. | `TableType`, `applyActiveSegments` |
 
+### 5.6 Collector / lifetime gaps (today: nothing is reclaimed)
+
+§3.1 lets an engine never reclaim, so these are resource gaps, not conformance
+gaps. They are listed anyway because revision 3 commits to reclaiming (by
+reference counting), which turns "objects are never freed" from a choice into a
+defect.
+
+| # | Gap | Evidence | Severity |
+|---|---|---|---|
+| L1 | **Nothing is ever freed.** `allocateStructObject` / `allocateArrayObject` `calloc` and never `free`; `gcObjectTypes` grows without bound alongside the leak (H2). | `WasmModuleInstance.cpp` | Medium |
+| L2 | **No ownership or refcount exists.** A `void*` reference carries no count and no lifetime; there is nowhere to hook reclamation. | every `Value::ref` store | Medium |
+| L3 | **Reference slots are written as raw pointers.** `struct.set` / `array.set` / `table.set` / globals store `void*` with no retain/release barrier, and the JIT emits the store directly. | JIT ref stores | Medium |
+
 ## 6. Where we can and should play fast and loose
 
 The project's stated philosophy ([`ABI.md`](ABI.md)) is a QVM successor, not a
@@ -657,29 +680,55 @@ browser engine: **flexibility and deliberate deviation are accepted when they
 simplify the implementation**. GC is the area where the spec (§3) grants the
 most freedom, so it is where we should spend that freedom.
 
-### 6.1 The organising idea: hunks, not a collector
+### 6.1 The organising idea: reference counting, not hunks and not mark-sweep
 
 QVM never free-ran a collector; it reserved a **hunk** (`Hunk_Alloc`) and threw
-it away when its owner (usually a map/module) went away. Wasm allows exactly
-this: nothing in §3 requires reclamation.
+it away when its owner (usually a map/module) went away. Wasm allows almost the
+same freedom: §3.1 does not require reclamation, and it does not require cycles
+to be collected either.
 
-**Recommendation:** replace `calloc`-per-object with a per-`ModuleInstance`
-**bump/region allocator**, and free whole regions on instance destruction.
-- No write barriers, no stack maps, no root scanning, no finalizers.
-- O(1) allocation (pointer bump), which is what the Overview's "reliably
-  cheap, ideally constant time" asks for.
-- The existing `Store` (which outlives instances) already frames the lifetime
-  rule; a region slots next to `StoreOwnedMemory`/`StoreOwnedTable`.
+**Decision (revision 3): the engine reclaims with reference counting.** Hunks
+and arena allocation are *not* discarded — they remain the **backing allocator**
+(a per-`ModuleInstance` bump region) — but they stop being the *reclamation
+policy*. A stop-the-world, trace-based mark-sweep collector is **unlikely to be
+implemented** here, for one decisive reason:
 
-Guardrail: this requires the same discipline `ABI.md` already demands — a
-reference must not outlive the instance that allocated it. That is an embedder
-contract, documented, not enforced by the engine.
+- **We have no stack maps and no cheap way to build them.** A tracing collector
+  must find every root, and our JIT keeps Wasm values in *machine* registers,
+  LibJIT temporaries and the C stack, with no liveness metadata (`ABI.md`: a
+  `VMContext*` is arg 0, the operand stack is the machine stack). RC needs no
+  root set: a reference *is* a root, and ownership is explicit at every store.
+- RC is **incremental and pause-free**, which suits an engine embedded in a game
+  loop; a stop-the-world collector introduces an unbounded pause at an arbitrary
+  instruction.
+- RC is **deterministic**: an object frees exactly when its last reference drops,
+  which makes leaks and use-after-free reproducible under the test harness.
+- RC composes with the Store/instance lifetime rule already in `ABI.md`: a
+  reference must not outlive the instance that allocated it, and the region
+  teardown stays as a coarse backstop.
+
+**What it costs, and the one non-negotiable:** a naive RC **leaks cycles** — and
+our aggregates (`struct.new`, `array.new*`, and `array.set` to a same-typed
+element) make cycles trivial to build. A cycle leaking per call in a long-lived
+host is a bug, not an implementation-limitation footnote. Therefore:
+
+- **cycle handling is a day-one milestone, not a later optimisation.** `RC-2`
+  (a root-free Bacon–Rajan synchronous cycle collector, §6.4/RC1) lands *with*
+  `RC-1`; the collector is not "shipped" until cycles are reclaimed.
+- every reference mutation goes through **one helper** (`wasm_ref_store`, §6.2/
+  D15), so the release/retain barrier — and the cycle-collector hook — has a
+  single place to live.
+- `RC-3` makes the refcount operations **trap-safe** (no wrap, no double free,
+  no unbounded recursion), because a counting bug must surface as a Wasm trap or
+  a clean leak, never as silent corruption.
+
+§6.4 is the full catalogue of RC traps and their mitigations.
 
 ### 6.2 Deviations worth making (and why they are safe)
 
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
-| D1 | **Region allocation, no collector** (§6.1). | §3.1: collection is never required. | O(1) alloc, no barriers, no root set, huge simplification. |
+| D1 | **Reference counting with a region-backed allocator** (§6.1): a refcount in the object header, bumps within a per-instance region, region teardown as the leak backstop. | §3.1: any reclamation algorithm (and none) is conformant; §3.1 also does not require cycles to be collected. | Deterministic, pause-free reclamation with **no stack maps and no root scanning** — the two things this JIT cannot cheaply provide. |
 | D2 | **Type identity only in a 4-byte header; delete `gcObjectTypes`.** Read `*(uint32_t*)ref`; compare via the canonical table. | The `TypeId` is already stamped at offset 0; §3.2 lets us choose the representation. | Fixes cross-module casts (G1), removes a hash-map lookup per cast, removes a permanently-growing map (H2). |
 | D3 | **Cache subtype `depth` in the tag / canonical table** so `ref.test`/`ref.cast` against an abstract type becomes an integer range/bitset check, not a `TypeRegistry` call. | `CanonicalType` already stores `depth`; cast semantics are ours to implement (§3.2). | Inline-able casts on the hot path. |
 | D4 | **Keep `i31` unboxed**, low-bit tagged; require heap allocations to be ≥8-byte aligned so the tag is unambiguous. | §3.2 explicitly allows unboxed scalars; already implemented. | No allocation for i31, trivial `ref.eq`. |
@@ -692,6 +741,12 @@ contract, documented, not enforced by the engine.
 | D11 | **Elide null checks** only when the static type is non-nullable *and* we trust validation. | Sound if the module is valid; unsafe with D6. | Fewer branches on `struct.get`/`array.get`. |
 | D12 | **Keep type interning**, but stop paying for it where it does not matter (e.g. function types never used in casts/imports) once the dedup ratio is measured. | §3.3: canonicalisation is optional. | Less work at link time without losing cross-module `match`. |
 | D13 | **Make arrays inline** (header + length + elements in one allocation), replacing the current `[header][length][data*]` form. | §3.2: heap-object layout is ours to choose, and Wasm arrays never grow, so the size is known at creation. | Half the allocations, one indirection per element access, better locality; see §4.8. |
+| D14 | **Refcount in the object header**, `[u32 TypeId][i32 refcount]` at offsets 0/4; `i31` stays unboxed and uncounted; `externref` / `funcref` are not ours to count. | §3.2: heap-object layout is free, and unboxed scalars are allowed. | The count lives with the object: no side table, no per-object metadata lookup. |
+| D15 | **Every reference mutation goes through one native helper** — `wasm_ref_store(void** slot, void* newRef)` (release old, retain new), `wasm_ref_clone(void* ref)`, `wasm_ref_drop(void* ref)` — alongside the existing `wasm_ref_matches_heap_type_impl` and `wasm_buffer_copy_impl` (which must *also* retain when it copies ref-typed elements). The JIT never emits a raw `void*` store into a ref slot. | §3.2: representation is free; §3.5: failures may be surfaced however the embedder likes. | One barrier point, one place to hook the cycle collector; a missed barrier becomes a visible omission instead of a hidden leak. |
+| D16 | **Atomic refcount in the header** (`std::atomic<int32_t>`), even before threads exist; non-atomic operations only in a single-threaded build. | §3.4 keeps thread-shared managed heaps out of 3.0, but §3.1/§3.2 leave the representation to us; paying now avoids a second reference ABI later (`THREADS.md`). | Threads-ready counts for one header word and one atomic RMW on the slow path, with no ABI break when `THREADS.md` lands. |
+| D17 | **Deferred reference counting (optional, measure first):** do not count references that never escape a frame (operand-stack temporaries, frame-local Wasm locals); recover them with a conservative scan or a shadow root stack at safepoints. | §3.1: the algorithm is free. Deferring is only sound if *something* can still find those references — a stack scan — so it is an optimisation, never a licence to skip barriers on escaping stores. | Removes most clone/drop traffic from scalar-heavy loops; see §6.4/RC10. |
+| D18 | **Root-free cycle collection** (Bacon–Rajan synchronous trial deletion) rather than a tracing pass. | §3.1: cycles need not be collected, so any method is extra credit; trial deletion needs no root set, unlike a full trace. | Reclaims the one class of garbage RC misses, **without stack maps**. |
+| D19 | **Trap-safe refcount arithmetic**: saturating `clone` on overflow (leak, never wrap), trap on `drop` below zero, poison-on-free in debug, and a bounded/iterative drop worklist. | §3.5: failure surfacing is an embedding choice. | A refcount bug becomes a recoverable trap or a deterministic leak — never silent corruption or a C-stack overflow. |
 
 ### 6.3 What we must *not* play loose with (observable semantics)
 
@@ -705,23 +760,71 @@ contract, documented, not enforced by the engine.
 | Deterministic trap behaviour | Abort is acceptable, silent garbage is not. |
 | `extern`/`any` inverse property *if* a host passes externrefs | D5 is only safe under a no-mixing contract; it must be explicit, or box in a debug build. |
 | **Aggregates are references, not by-value values** | A `struct`/`array` type is a heap-object *layout*; only `(ref ...)` is a value. Treating the aggregate type as a stack value (or passing it as a C struct) breaks object identity, aliasing and `struct.set` visibility (§2.6, §4.4). |
+| **Every ref store is a `wasm_ref_store`** | A raw `void*` store skips releasing the old value and retaining the new: a leak or a use-after-free, with no other barrier to catch it (§6.4/RC4). |
+| **Refcount header matches the JIT** | `[u32 TypeId][i32 rc]` offsets are read by both the runtime helpers and generated code; drift is silent corruption (extends H1). |
+| **`clone` / `drop` balance survives traps** | The trap sink (`longjmp`) must not skip a release; helper and emitted code must not hold a borrowed ref across a trap point (§6.4/RC9). |
+| **Cycles are reclaimed, not merely documented** | A cycle that leaks per call is a bug in a long-lived host; `RC-2` must actually collect it (D18). |
+
+### 6.4 Reference counting: the traps and the mitigations
+
+Reference counting trades a tracing collector's root-set problem for a set of
+*ownership disciplines*: the collector no longer finds garbage for you, so every
+place a reference is created, overwritten or destroyed is a place to get it
+wrong. This is the catalogue — each classic RC failure mode, why it is
+specifically dangerous in *this* engine, the mitigation, and the milestone that
+owns it. (`RC1`…`RC13` here are study rows, not §5 gaps.)
+
+| # | Challenge | Why it bites *here* | Mitigation | Milestone |
+|---|---|---|---|---|
+| RC1 | **Cycles leak.** A struct/array referring to itself, directly or through a chain, never reaches count 0. | Trivial to build from Wasm: `array.set` a field to an array that (transitively) points back. A per-call cycle is an unbounded leak in a long-running host. | **Root-free cycle collection from day one**: Bacon–Rajan synchronous trial deletion over the region's objects (D18); no stack maps needed. | `RC-2` |
+| RC2 | **Refcount races.** Concurrent clone/drop on one object corrupts the count. | Even before `THREADS.md`, the harness can host nested calls; once shared memory and agents land, races are real. | Atomic count in the header with acquire/release ordering (D16), plus a race stress test. | `RC-4` |
+| RC3 | **References not held by a slot are unowned** (operand-stack temporaries, registers, Wasm locals). | Values live on the machine stack with no metadata; a tracing collector would need stack maps, and RC must still decide who owns a transient. | Default: every pushed ref is *owned* and balanced by an explicit drop. Optional **deferred RC** skips frame-local refs and recovers them with a conservative/shadow-stack scan (D17). | `RC-1`, `RC-5` |
+| RC4 | **Missing / duplicated write barrier.** A store that overwrites a ref slot without releasing the old value, or retaining the new one, leaks or frees live memory. | The JIT currently emits raw `void*` stores for `struct.set` / `array.set` / `table.set` / globals — there is no barrier to forget *yet* because there is none at all (L3). | One choke point: **every** ref store is `wasm_ref_store` (D15); no raw store in generated code. | `RC-1` |
+| RC5 | **Ownership across the ABI.** A `void*` returned from a call, pushed to a host, or stored in a `Callable` — who retains it? | `ABI.md`'s value model is by-value `void*`; a caller and callee that disagree on ownership leak or double-free. | Document the borrow/own contract at every boundary; clone on hand-off if the callee keeps it; `wasm_ref_clone` / `wasm_ref_drop` at the embedder edge. | `RC-1` (+ `ABI.md`) |
+| RC6 | **Long-lived slots** (globals, table slots, materialised element/data segments) and **teardown ordering**. | These outlive a single call; dropping them after their region is gone is a use-after-free, and forgetting them is a leak. | Slots are roots with a +1 count; segments retain on materialisation and release on overwrite/teardown; region teardown is the last-ditch release. | `RC-1`, `GC-3` |
+| RC7 | **Count overflow / underflow / double drop.** | A 32-bit count can wrap under pathological sharing; a stray extra drop frees a live object. | Saturating `clone` (leak, never wrap), trap on `drop` below zero, poison-on-free in debug (D19). | `RC-3` |
+| RC8 | **Recursive drop of a deep graph** frees depth-first and can overflow the C stack. | Generated frames already sit on the C stack; a long array→array chain recurses once per element. | Iterative drop worklist (a deferred-free list drained in bounded batches) (D19). | `RC-3` |
+| RC9 | **Traps mid-mutation.** A `longjmp` trap can skip a release that a C++ destructor would have run. | `WASM::trap` is `longjmp` (GC-6); helper and emitted code must not hold a borrowed ref across a trap point, or the release is lost. | Keep helper bodies RAII-free/POD and drop before any trapping operation; assert in debug that no borrowed ref is live across a trap. | `RC-1`, `RC-3` |
+| RC10 | **RC traffic on the hot path** (an atomic RMW per reference op). | Every `struct.set` / `array.get` of a reference becomes counted, unlike today's free raw load/store. | Non-atomic ops in a single-threaded build; **deferred RC** removes frame-local traffic; batch clone/drop pairs; measure before optimising (D12 spirit). | `RC-5` |
+| RC11 | **Header layout / false sharing.** The count next to the `TypeId` is written on every clone/drop and shares the line with the `TypeId` read on every cast. | Layout is fixed by D14; under threads this is a contention point. | Accept it first; if measured, separate the hot fields or pad — the same "measure first" rule. | `RC-4` |
+| RC12 | **Foreign references.** `externref` is host-owned; `funcref` is a `Callable*` owned by the Store; `i31` is an immediate. | Counting them would free memory we do not own, or count a non-object. | Never count `i31`, `externref` or `funcref`; their lifetime stays the embedder's / the Store's (D14). | `RC-1` |
+| RC13 | **Cycles through the host.** A loop that closes through embedder state is invisible to the object graph. | RC (and trial deletion) only sees Wasm-heap edges; a host that retains a ref back into a cycle it also holds keeps it alive. | Document the embedder contract: the host owns that edge and must break it; the engine cannot collect what it cannot see. | `RC-1` (+ `ABI.md`) |
+
+**On a "backup tracing pass".** A full tracing pass needs a root set, which is
+exactly what we cannot cheaply build (§6.1). Two trace-shaped fallbacks stay
+honest: (a) at **region teardown** the whole region is dead by definition, so a
+walk there reclaims anything the counts missed — but only when the instance
+dies; (b) if `RC-2`'s trial deletion proves insufficient, a **conservative**
+stack scan (Boehm-style) could feed a tracing pass, at the cost of false
+retention and the usual conservatism hazards. Neither replaces `RC-2`; they are
+belt-and-braces (`RC-6`).
 
 ## 7. Plan
 
 Ordered so that the *conformance* gaps close before the *optimisation* work.
-`GC-n` is independent of `TYPE_IDENTITY.md`'s `M-n`.
+`GC-n` is independent of `TYPE_IDENTITY.md`'s `M-n`. `RC-n` is the
+reference-counting programme of §6.1/§6.4 that turns the region allocator into a
+real collector. **`RC-2` (cycles) lands together with `RC-1`, not after it** —
+the collector is not considered shipped until cycles are reclaimed. The
+**Closes** column may name a §5 gap (`L#`) or a §6.4 study row (`RC#`).
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **GC-1 — Header-based tags** | `refMatchesHeapType` reads the `u32` at `ref[0]` for aggregates instead of `gcObjectTypes`; give function references a discoverable canonical `typeId` that needs no per-instance scan; remove the map. | G1, G2, H2, H3 | Cross-module `ref.test`/`ref.cast` on structs/arrays and `ref.test funcref` on an imported funcref are correct; `ref_test`/`ref_cast` stop failing for the right reasons. |
-| **GC-2 — Region allocator** | Per-instance bump allocator; free regions on instance destruction; keep a debug "poison on free" mode. | D1, C7 (partly) | No per-object `malloc`; allocation is a pointer bump; instance teardown reclaims everything. |
+| **GC-2 — Region allocator** | Per-instance bump allocator that backs the RC programme (`RC-1`); free regions on instance destruction; keep a debug "poison on free" mode. | D1, L1, C7 (partly) | No per-object `malloc`; allocation is a pointer bump; instance teardown reclaims everything *even if* counting misses. |
 | **GC-3 — Instantiation-time materialisation** | ◑ Partly done: element/data segments are evaluated once (D8) and imported globals are resolved (G6). Table initialiser expressions (D9/G5) are still dropped. | G4, G6 (G5 open) | `array_new_elem` identity holds; GC `const` exprs reading imported globals work. Typed/non-nullable tables still do not initialise. |
 | **GC-4 — `br_on_cast` correctness** | Honour the `castop` nullability flags; fix the branch-target slot model so `br_on_cast(_fail)` never trips `!slots.empty()` / `!valueStack.empty()`. | G7 | Both scripts run to completion; nullable variants yield spec results. |
 | **GC-5 — Crash triage** | ◑ Mostly done: `ref_cast`, `ref_func`, `call_ref`, `return_call_ref` and `type-equivalence` all run now (the trap sink), and `array.init_elem` is clean; only `array.init_data` still has 3 mismatches. | C1–C5 | No child aborts/segfaults; each script passes or fails with a real mismatch message. |
 | **GC-6 — Trap sink** | ✅ `WASM::trap` (longjmp to a `TrapScope`, `WasmBase/WasmTrap.hpp`) is the single sink; `emitAbort` and every `jit_insn_check_null` use it, and the harness executes `assert_trap`. Allocation failure and `notImplemented` still abort. | C6, D7 | Done: a failed cast / null deref is recoverable in-process; no `std::abort` on the memory/table/GC-reference path. |
 | **GC-7 — Fast casts (optional)** | Depth/range-tag encoding (D3), inline caches for repeated `ref.test`/`ref.cast` at a site, measured against the registry-call baseline. | H3 | Casts on a hot loop are a few instructions; benchmark recorded. |
 | **GC-8 — Extern interop (optional)** | Only if an embedder needs host externrefs: box `extern.convert_any` values, keep identity under the no-mixing contract (D5). | G3 | `ref_test` extern cases pass; the contract is documented in `ABI.md`. |
-| **GC-9 — Inline arrays (optional)** | Move arrays from the out-of-line `[header][length][data*]` form to the inline form (§4.8): header-only LibJIT type, per-type `dataOffset`/`elemSize`, single allocation, one indirection per access. Folds naturally into the region allocator (GC-2). | D13, H8 | A layout test asserts JIT offsets == runtime offsets; benchmarks show the allocation/indirection win. |
+| **GC-9 — Inline arrays (optional)** | Move arrays from the out-of-line `[header][length][data*]` form to the inline form (§4.8): header-only LibJIT type, per-type `dataOffset`/`elemSize`, single allocation, one indirection per access. Folds naturally into the RC allocator (GC-2/RC-1). | D13, H8 | A layout test asserts JIT offsets == runtime offsets; benchmarks show the allocation/indirection win. |
+| **RC-1 — Reference-counted heap objects (core)** | Add the refcount header and the native helpers (`wasm_ref_store`, `wasm_ref_clone`, `wasm_ref_drop`), and route *every* ref-typed store and teardown through them; region-backed allocation underneath (`GC-2`). | L2, L3, RC4, RC5, RC6, RC12, RC13, D14, D15 | Every reference store in the JIT is a helper call (no raw `void*` store into a ref slot); an object's memory returns when its last reference drops. |
+| **RC-2 — Cycle collection (day one, with RC-1)** | Bacon–Rajan synchronous trial deletion over the region's objects: a candidate buffer, no stack maps, no root set. | RC1, D18 | A self-referential `struct`/`array` graph is reclaimed once its external references drop (a live-object / allocation counter returns to its pre-graph value). |
+| **RC-3 — Trap-safe refcount ops** | Saturating `clone`, trapping `drop` below zero, debug poison-on-free, and an iterative drop worklist (no recursion on a deep chain). | RC7, RC8, RC9, D19 | Overflow / underflow / double-drop tests trap or leak deterministically (never corrupt), and dropping a 10⁶-deep chain uses O(1) C stack. |
+| **RC-4 — Atomic refcounts / threads-ready** | Make the header count `std::atomic<int32_t>` with acquire/release ordering; stress a clone/drop race. | RC2, RC11, D16 | The count is atomic in every multi-thread-capable build and a two-thread clone/drop stress test is clean; unblocks `THREADS.md`. |
+| **RC-5 — Deferred RC (optional, measure first)** | Stop counting frame-local, non-escaping references; recover them with a conservative or shadow-stack root scan at safepoints. | RC3, RC10, D17 | Only if refcount traffic measurably dominates a local-heavy loop; a before/after benchmark is recorded. |
+| **RC-6 — Backup tracing pass (optional, last resort)** | A region-teardown trace (all objects dead by definition) and, if ever needed, a conservative-scan-fed trace. | RC1 (belt-and-braces), D18 | Region teardown reclaims everything the counts missed; a full trace stays documented as unnecessary while `RC-2` holds. |
 
 Guardrails for every milestone:
 
@@ -733,6 +836,13 @@ Guardrails for every milestone:
   compares offsets.
 - Keep `ref.eq`/null/packed-extension semantics covered by at least one test
   each (§6.3).
+- **Do not land `RC-1` without `RC-2`.** A collector that cannot reclaim cycles
+  is not shippable; they are one deliverable split across two rows.
+- **No raw reference stores.** Every ref-typed store in generated code goes
+  through `wasm_ref_store` (D15); review for a bare `jit_insn_store` into a ref
+  slot.
+- Keep the refcount-header offsets (`TypeId@0`, `rc@4`) identical in the runtime
+  helpers and the JIT, and add them to the H1 offset test.
 
 ## 8. Indicative test survey
 
@@ -807,6 +917,10 @@ from actions the harness silently skips: `table_get.wast:23` is
 `assert_return` observes the untouched table. These are §5.4 artifacts, not
 runtime bugs.
 
+Reference counting has **no coverage yet**: nothing asserts that memory returns,
+and no test builds a cycle. `RC-1` adds a store/drop balance test and `RC-2` a
+cycle-reclamation test; until then a leak is visible only through process RSS.
+
 ## 9. References
 
 Specification (WebAssembly 3.0, living draft):
@@ -834,6 +948,19 @@ GC proposal design documents:
   https://github.com/WebAssembly/gc/blob/main/proposals/gc/MVP.md
 - `proposals/gc/Post-MVP.md` — finalizers, weak refs, type parameters, unions,
   strings (all deliberately out of scope here).
+
+Reference counting / cycle collection (background for §6.1/§6.4):
+
+- Bacon & Rajan, *Concurrent Cycle Collection in Reference Counted Systems*
+  (ECOOP 2001) — the trial-deletion algorithm behind `RC-2`; the synchronous
+  single-threaded variant is what `RC-2` needs.
+- Deutsch & Bobrow, *An Efficient, Incremental, Automatic Garbage Collector*
+  (CACM 1976) — the original deferred reference counting; Blackburn & McKinley,
+  *Ulterior Reference Counting* (OOPSLA 2003) — the modern hybrid that defers
+  stack references and traces the heap, the model for `RC-5`.
+- Boehm & Weiser, *Garbage Collection in an Uncooperative Environment*
+  (SPE 1988) — conservative stack scanning, relevant only to `RC-6`'s
+  last-resort trace.
 
 Related proposals covered in §10 (neither is part of 3.0):
 
@@ -1006,8 +1133,9 @@ Notes:
 - **No GC dependency is required.** Both proposals treat strings and views as
   opaque reference values. Here that is exactly the existing `void*`
   representation, so a string can be a **hunk**: one allocation with a small
-  header (encoding tag + length + optional breadcrumbs) in the same region
-  allocator proposed in §6.1. Strings then live and die with their instance,
+  header (encoding tag + length + optional breadcrumbs) in the same
+  reference-counted region allocator proposed in §6.1/§6.4. Strings then live
+  and die with their instance,
   like every other GC object in this engine.
 - **`externref` strings belong to the host**, not us. In a QVM-style embedder
   those are pointers into embedder-owned state (`VMContext::hostData`), which
