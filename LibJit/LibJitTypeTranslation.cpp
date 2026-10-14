@@ -1,4 +1,5 @@
 #include "LibJitTypeTranslation.hpp"
+#include "../WasmBase/WasmGcHeader.hpp"
 
 namespace LibJIT {
 
@@ -214,8 +215,11 @@ jit_type_t LibJitTypeTranslator::translateFunctionSignature(const WASM::FuncType
 jit_type_t LibJitTypeTranslator::translateStruct(const WASM::StructType& wasm_struct) {
 	std::vector<jit_type_t> fields;
 
-	// 1. HIDDEN GC/RTTI HEADER (e.g., uint32 Type Index)
-	fields.push_back(jit_type_uint);
+	// 1. HIDDEN GC HEADER: TypeId + refcount (docs/proposals/GC.md D14; layout
+	//    in WasmGcHeader.hpp). Must match the runtime structFieldOffsets and the
+	//    field-index base used by structFieldOffset (docs/proposals/GC.md §6.3).
+	for (unsigned i = 0; i < WASM::GcHeader::kHeaderFields; ++i)
+		fields.push_back(jit_type_uint);
 
 	// 2. The actual WASM fields
 	for(const auto& it : wasm_struct.fields) {
@@ -238,11 +242,14 @@ jit_type_t LibJitTypeTranslator::translateArray(const WASM::ArrayType& wasm_arra
 	// Resolve the element type so LibJIT knows how to do pointer math
 	jit_type_t elementType = translateType(wasm_array.elementType.storageType.val);
 
-	// Stack-allocate the fixed layout: [Header, Length, Data Pointer]
-	jit_type_t fields[3] = {jit_type_uint, jit_type_uint, jit_type_uint};
-	fields[2] = jit_type_create_pointer(elementType, 1);
+	// Fixed layout: [TypeId, refcount, Length, Data Pointer]. The field
+	// indices must match WasmGcHeader.hpp and the dispatcher's
+	// arrayLengthOffset / arrayDataOffset (docs/proposals/GC.md §6.3 / H1).
+	jit_type_t fields[WASM::GcHeader::kArrayDataField + 1] =
+			{jit_type_uint, jit_type_uint, jit_type_uint, jit_type_uint};
+	fields[WASM::GcHeader::kArrayDataField] = jit_type_create_pointer(elementType, 1);
 
-	return jit_type_create_struct(fields, 3, 1);
+	return jit_type_create_struct(fields, WASM::GcHeader::kArrayDataField + 1, 1);
 }
 
 void LibJitTypeTranslator::translateTypes(const std::span<const WASM::Subtype>& types,

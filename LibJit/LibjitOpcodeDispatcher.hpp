@@ -97,6 +97,10 @@ private:
 	jit_value_t zeroConstantForType(jit_type_t t);
 	jit_value_t castRefValue(jit_value_t value, jit_type_t targetType);
 	jit_value_t refAsVoidPtr(jit_value_t value);
+	// Emits the reference-counting write barrier (`wasm_ref_store`): retain
+	// `newRef`, store it at `slotAddr`, release the value it overwrote. Used
+	// for every reference-typed slot store (docs/proposals/GC.md D15/RC-1).
+	void emitRefStore(jit_value_t slotAddr, jit_value_t newRef);
 	jit_value_t typedNullRef(jit_type_t refType);
 	jit_value_t emitRefTypeTest(jit_value_t ref, const WASM::HeapType& heapType, bool nullable);
 	jit_type_t tableElementJitType(WASM::TableIdx arg) const;

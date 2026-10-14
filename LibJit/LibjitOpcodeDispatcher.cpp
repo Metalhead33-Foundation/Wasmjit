@@ -441,6 +441,26 @@ static void wasm_buffer_copy_impl(void* dst, uint32_t dstIndex, void* src, uint3
 				 static_cast<uint8_t*>(src) + static_cast<size_t>(srcIndex) * elemSize,
 				 static_cast<size_t>(lenElems) * elemSize);
 }
+
+// ── Reference-counting helpers (docs/proposals/GC.md D15/RC-1) ──────────────
+// `refClone`/`refDrop` are the retain/release pair; `refStore` is the write
+// barrier every reference-typed slot goes through. They classify the reference
+// in the runtime (a GC object vs an i31 immediate / externref / funcref), so
+// the JIT does not need to know the counts.
+[[maybe_unused]] static void* wasm_ref_clone_impl(WASM::VMContext* vm, void* ref)
+{
+	return reinterpret_cast<WASM::ModuleInstance*>(vm)->refClone(ref);
+}
+
+[[maybe_unused]] static void wasm_ref_drop_impl(WASM::VMContext* vm, void* ref)
+{
+	reinterpret_cast<WASM::ModuleInstance*>(vm)->refDrop(ref);
+}
+
+static void wasm_ref_store_impl(WASM::VMContext* vm, void* slot, void* newRef)
+{
+	reinterpret_cast<WASM::ModuleInstance*>(vm)->refStore(reinterpret_cast<void**>(slot), newRef);
+}
 }
 
 jit_value_t callNativeUnary(jit_function_t fn, void* fptr, jit_type_t ret, jit_type_t argT, jit_value_t a)
@@ -607,6 +627,15 @@ jit_value_t OpcodeDispatcher::emitRefTypeTest(jit_value_t ref, const WASM::HeapT
 								sig, args, 5, 0);
 }
 
+void OpcodeDispatcher::emitRefStore(jit_value_t slotAddr, jit_value_t newRef)
+{
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 3, 1);
+	jit_value_t args[] = {vmContextValue(), refAsVoidPtr(slotAddr), refAsVoidPtr(newRef)};
+	jit_insn_call_native(function, "wasm_ref_store_impl",
+			reinterpret_cast<void*>(wasm_ref_store_impl), sig, args, 3, 0);
+}
+
 jit_type_t OpcodeDispatcher::tableElementJitType(WASM::TableIdx arg) const
 {
 	if (arg < module.importTables.size())
@@ -662,19 +691,19 @@ jit_type_t OpcodeDispatcher::arrayElementJitType(WASM::TypeIdx arg) const
 jit_nint OpcodeDispatcher::structFieldOffset(WASM::TypeIdx arg, uint32_t fieldIndex) const
 {
 	jit_type_t structType = jitTypeForTypeIdx(arg);
-	return static_cast<jit_nint>(jit_type_get_offset(structType, fieldIndex + 1));
+	return static_cast<jit_nint>(jit_type_get_offset(structType, fieldIndex + WASM::GcHeader::kHeaderFields));
 }
 
 jit_nint OpcodeDispatcher::arrayLengthOffset(WASM::TypeIdx arg) const
 {
 	jit_type_t arrayType = jitTypeForTypeIdx(arg);
-	return static_cast<jit_nint>(jit_type_get_offset(arrayType, 1));
+	return static_cast<jit_nint>(jit_type_get_offset(arrayType, WASM::GcHeader::kArrayLengthField));
 }
 
 jit_nint OpcodeDispatcher::arrayDataOffset(WASM::TypeIdx arg) const
 {
 	jit_type_t arrayType = jitTypeForTypeIdx(arg);
-	return static_cast<jit_nint>(jit_type_get_offset(arrayType, 2));
+	return static_cast<jit_nint>(jit_type_get_offset(arrayType, WASM::GcHeader::kArrayDataField));
 }
 
 jit_value_t OpcodeDispatcher::packReturnValues(jit_type_t returnType, size_t resultCount)
@@ -1776,13 +1805,18 @@ void OpcodeDispatcher::dispatchGlobalSet(WASM::GlobalIdx arg)
 	WASM::GlobalType gt = globalTypeForIndex(arg);
 	if (gt.contentType.opcode == WASM::ValueTypeCode::V128)
 		notImplemented("dispatchGlobalSet (v128)");
-	jit_type_t jt = jitTypeForValueType(gt.contentType);
 	jit_value_t v = popValue();
 	jit_value_t vm = vmContextValue();
 	jit_value_t gPtr = jit_insn_load_relative(function, vm, offsetof(WASM::VMContext, globals), jit_type_void_ptr);
 	jit_value_t off = jit_value_create_nint_constant(
 		function, jit_type_nint, static_cast<jit_nint>(arg * sizeof(WASM::Value)));
 	jit_value_t slot = jit_insn_add(function, gPtr, off);
+	if (WASM::isReferenceType(gt.contentType.opcode)) {
+		// The `ref` member is at offset 0 of the Value union, so `slot` is
+		// already the slot address; go through the barrier (GC.md D15).
+		emitRefStore(slot, v);
+		return;
+	}
 	jit_insn_store_relative(function, slot, 0, v);
 }
 void OpcodeDispatcher::dispatchTableGet(WASM::TableIdx arg) {
@@ -1802,7 +1836,10 @@ void OpcodeDispatcher::dispatchTableSet(WASM::TableIdx arg) {
 	jit_value_t tablePtr = jit_insn_load_relative(
 		function, table, offsetof(WASM::TableInstance, base), jit_type_void_ptr);
 	jit_value_t checkedIndex = checkedTableIndex(table, index, "dispatchTableSet");
-	jit_insn_store_elem(function, tablePtr, checkedIndex, refAsVoidPtr(value));
+	// Table slots are reference-typed; go through the write barrier
+	// (docs/proposals/GC.md D15).
+	jit_value_t slot = jit_insn_load_elem_address(function, tablePtr, checkedIndex, jit_type_void_ptr);
+	emitRefStore(slot, value);
 }
 void OpcodeDispatcher::dispatchI32Load(WASM::MemArg addr)
 {
@@ -2979,8 +3016,17 @@ void OpcodeDispatcher::dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2) {
 	jit_value_t value = popValue();
 	jit_value_t ref = popValue();
 	emitTrapIfNull(refAsVoidPtr(ref));
+	const jit_nint offset = structFieldOffset(arg1, arg2);
+	if (WASM::isReferenceType(st.fields[arg2].storageType.val.opcode)) {
+		// Reference-typed field: go through the write barrier so the overwritten
+		// value is released and the new one retained (docs/proposals/GC.md D15).
+		jit_value_t slot = jit_insn_add(function, refAsVoidPtr(ref),
+				jit_value_create_nint_constant(function, jit_type_nint, offset));
+		emitRefStore(slot, value);
+		return;
+	}
 	jit_type_t fieldType = jitTypeForValueType(st.fields[arg2].storageType.val);
-	jit_insn_store_relative(function, refAsVoidPtr(ref), structFieldOffset(arg1, arg2),
+	jit_insn_store_relative(function, refAsVoidPtr(ref), offset,
 							castRefValue(value, fieldType));
 }
 void OpcodeDispatcher::dispatchArrayNew(WASM::TypeIdx arg) {
@@ -3008,7 +3054,12 @@ void OpcodeDispatcher::dispatchArrayNew(WASM::TypeIdx arg) {
 	jit_value_t idx = jit_insn_load(function, idxSlot);
 	jit_value_t cond = jit_insn_lt(function, idx, jit_insn_convert(function, length, jit_type_uint, 0));
 	jit_insn_branch_if_not(function, cond, &endLabel);
-	jit_insn_store_elem(function, dataPtr, idx, castRefValue(init, elemType));
+	if (WASM::isReferenceType(arrayTypeForIndex(arg).elementType.storageType.val.opcode)) {
+		jit_value_t slot = jit_insn_load_elem_address(function, dataPtr, idx, elemType);
+		emitRefStore(slot, init);
+	} else {
+		jit_insn_store_elem(function, dataPtr, idx, castRefValue(init, elemType));
+	}
 	jit_insn_store(function, idxSlot, jit_insn_add(function, idx, jit_value_create_nint_constant(function, jit_type_uint, 1)));
 	jit_insn_branch(function, &loopLabel);
 	jit_insn_label(function, &endLabel);
@@ -3050,7 +3101,12 @@ void OpcodeDispatcher::dispatchArrayNewFixed(WASM::TypeIdx arg1, uint32_t arg2) 
 		values[i] = popValue();
 	for (uint32_t i = 0; i < arg2; ++i) {
 		jit_value_t idx = jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(i));
-		jit_insn_store_elem(function, dataPtr, idx, castRefValue(values[i], elemType));
+		if (WASM::isReferenceType(arrayTypeForIndex(arg1).elementType.storageType.val.opcode)) {
+			jit_value_t slot = jit_insn_load_elem_address(function, dataPtr, idx, elemType);
+			emitRefStore(slot, values[i]);
+		} else {
+			jit_insn_store_elem(function, dataPtr, idx, castRefValue(values[i], elemType));
+		}
 	}
 	pushValue(castRefValue(arrayRef, arrayRefType(arg1, false)));
 }
@@ -3170,12 +3226,18 @@ void OpcodeDispatcher::dispatchArraySet(WASM::TypeIdx arg) {
 	jit_type_t elemType = arrayElementJitType(arg);
 	jit_type_t dataPtrType = jit_type_create_pointer(elemType, 1);
 	jit_value_t dataPtr = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayDataOffset(arg), dataPtrType);
+	if (WASM::isReferenceType(arrayTypeForIndex(arg).elementType.storageType.val.opcode)) {
+		jit_value_t slot = jit_insn_load_elem_address(function, dataPtr, index, elemType);
+		emitRefStore(slot, value);
+		return;
+	}
 	jit_insn_store_elem(function, dataPtr, index, castRefValue(value, elemType));
 }
 void OpcodeDispatcher::dispatchArrayLen() {
 	jit_value_t ref = popValue();
 	emitTrapIfNull(refAsVoidPtr(ref));
-	jit_value_t len = jit_insn_load_relative(function, refAsVoidPtr(ref), static_cast<jit_nint>(sizeof(uint32_t)), jit_type_uint);
+	jit_value_t len = jit_insn_load_relative(function, refAsVoidPtr(ref),
+			static_cast<jit_nint>(WASM::GcHeader::kArrayLengthOffset), jit_type_uint);
 	pushValue(jit_insn_convert(function, len, jit_type_int, 0));
 }
 void OpcodeDispatcher::dispatchArrayFill(WASM::TypeIdx arg) {
@@ -3202,7 +3264,12 @@ void OpcodeDispatcher::dispatchArrayFill(WASM::TypeIdx arg) {
 	jit_value_t idx = jit_insn_load(function, idxSlot);
 	jit_value_t loopCond = jit_insn_lt(function, idx, end);
 	jit_insn_branch_if_not(function, loopCond, &endLabel);
-	jit_insn_store_elem(function, dataPtr, idx, castRefValue(value, elemType));
+	if (WASM::isReferenceType(arrayTypeForIndex(arg).elementType.storageType.val.opcode)) {
+		jit_value_t slot = jit_insn_load_elem_address(function, dataPtr, idx, elemType);
+		emitRefStore(slot, value);
+	} else {
+		jit_insn_store_elem(function, dataPtr, idx, castRefValue(value, elemType));
+	}
 	jit_insn_store(function, idxSlot, jit_insn_add(function, idx, jit_value_create_nint_constant(function, jit_type_uint, 1)));
 	jit_insn_branch(function, &loopLabel);
 	jit_insn_label(function, &endLabel);

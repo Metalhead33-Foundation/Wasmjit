@@ -1,10 +1,10 @@
 # Garbage Collection (Wasm 3.0) — Implementation Notes, Spec Conformance, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 3 — the collector
-strategy is now **reference counting**, not a stop-the-world mark-sweep
-collector; §6.1 records the decision and §6.4 is the challenge/mitigation study.
-The revision-2 trap sink and instantiation-time segment materialisation are
-unchanged).
+Status: design note / implementation reference (revision 4 — RC-1 core landed:
+the GC header carries a refcount and every reference-typed store goes through
+the `wasm_ref_store` barrier; reclamation is deliberately still deferred, see
+§7. Revision 3 chose reference counting over stop-the-world mark-sweep,
+§6.1/§6.4.)
 Audience: anyone touching `WasmType`, `WasmTypeRegistry`, `WasmModuleInstance`,
 `LibJitTypeTranslator`, `LibjitOpcodeDispatcher`, or the test suite.
 
@@ -315,11 +315,21 @@ for the full design.)
 - `ModuleInstanceInternals::gcObjectTypes` —
   `std::unordered_map<const void*, TypeId>` — is the only runtime type store.
 - `allocateStructObject(size, localTypeIdx)`:
-  `calloc`, writes the canonical `TypeId` into the 4-byte header
-  (`offsetof 0`), and registers the pointer in `gcObjectTypes`.
+  `calloc`, writes the canonical `TypeId` and a reference count of 1 into the
+  8-byte header (`[u32 TypeId][u32 refcount]`, `WasmGcHeader.hpp`), and
+  registers the pointer in `gcObjectTypes`.
 - `allocateArrayObject(headerSize, elementSize, length, localTypeIdx)`:
-  a `calloc`'d header `[u32 TypeId][u32 length][void* data]` plus a separate
-  `calloc`'d element buffer.
+  a `calloc`'d header `[u32 TypeId][u32 refcount][u32 length][void* data]` plus a
+  separate `calloc`'d element buffer.
+- **Reference counting (RC-1, partial).** `ModuleInstance::refClone/refDrop/`
+  `refStore` maintain the header count through `std::atomic_ref` (saturating
+  clone, trapping underflow — RC-3 semantics), and count allocations and
+  0-transitions in `gcAllocatedObjects`/`gcReclaimedObjects` for tests. The JIT
+  routes every reference-typed `struct.set`, `array.set`, `array.fill`,
+  `global.set` and `table.set` through `wasm_ref_store` (the single write
+  barrier). Reclamation is **deferred**: `reclaimGcObject` records the transition
+  but does not free, because Wasm locals and operand-stack temporaries hold
+  uncounted borrows (§7 RC-1b/RC-5).
 - `tryGetGcTypeId(ref)` consults the map; `refMatchesHeapType(ref, ht, nullable)`
   implements a *runtime* `match`:
   - `null` matches only nullable targets;
@@ -819,7 +829,8 @@ the collector is not considered shipped until cycles are reclaimed. The
 | **GC-7 — Fast casts (optional)** | Depth/range-tag encoding (D3), inline caches for repeated `ref.test`/`ref.cast` at a site, measured against the registry-call baseline. | H3 | Casts on a hot loop are a few instructions; benchmark recorded. |
 | **GC-8 — Extern interop (optional)** | Only if an embedder needs host externrefs: box `extern.convert_any` values, keep identity under the no-mixing contract (D5). | G3 | `ref_test` extern cases pass; the contract is documented in `ABI.md`. |
 | **GC-9 — Inline arrays (optional)** | Move arrays from the out-of-line `[header][length][data*]` form to the inline form (§4.8): header-only LibJIT type, per-type `dataOffset`/`elemSize`, single allocation, one indirection per access. Folds naturally into the RC allocator (GC-2/RC-1). | D13, H8 | A layout test asserts JIT offsets == runtime offsets; benchmarks show the allocation/indirection win. |
-| **RC-1 — Reference-counted heap objects (core)** | Add the refcount header and the native helpers (`wasm_ref_store`, `wasm_ref_clone`, `wasm_ref_drop`), and route *every* ref-typed store and teardown through them; region-backed allocation underneath (`GC-2`). | L2, L3, RC4, RC5, RC6, RC12, RC13, D14, D15 | Every reference store in the JIT is a helper call (no raw `void*` store into a ref slot); an object's memory returns when its last reference drops. |
+| **RC-1 — Reference-counted heap objects (core)** | ◑ Landed: `[u32 TypeId][u32 refcount]` header, count 1 at allocation, the `wasm_ref_store`/`_clone`/`_drop` helpers (`WasmGcHeader.hpp`, `ModuleInstance::ref*`), and the JIT routes `struct.set`/`array.set`/`array.fill`/`global.set`/`table.set` reference stores through the barrier. **Open:** a ref-aware `wasm_buffer_copy_impl` for `array.copy`/`init_elem`, the read-side clone for borrowed-slot copies, and reclamation (`reclaimGcObject` records the 0 transition but does not free). | L2, L3, RC4 (partly), RC9 (partly), D14, D15 | Done for the store barriers: every ref-typed `struct.set`/`array.set`/`array.fill`/`global.set`/`table.set` in the JIT is a `wasm_ref_store` call; a fresh object reports count 1 and clone/drop/store move it (`GC reference counting` test). |
+| **RC-1b — Reclaim safely** | Turn `reclaimGcObject` into "free the object (and its element buffer) and credit the Store budget", only once every live reference is counted — i.e. after the local/operand-stack ownership work of `RC-5`. | RC4, RC10, L1, D19 | A dead object's memory is returned and the budget credited; the suite runs with a live-object leak check that stays flat. |
 | **RC-2 — Cycle collection (day one, with RC-1)** | Bacon–Rajan synchronous trial deletion over the region's objects: a candidate buffer, no stack maps, no root set. | RC1, D18 | A self-referential `struct`/`array` graph is reclaimed once its external references drop (a live-object / allocation counter returns to its pre-graph value). |
 | **RC-3 — Trap-safe refcount ops** | Saturating `clone`, trapping `drop` below zero, debug poison-on-free, and an iterative drop worklist (no recursion on a deep chain). | RC7, RC8, RC9, D19 | Overflow / underflow / double-drop tests trap or leak deterministically (never corrupt), and dropping a 10⁶-deep chain uses O(1) C stack. |
 | **RC-4 — Atomic refcounts / threads-ready** | Make the header count `std::atomic<int32_t>` with acquire/release ordering; stress a clone/drop race. | RC2, RC11, D16 | The count is atomic in every multi-thread-capable build and a two-thread clone/drop stress test is clean; unblocks `THREADS.md`. |
@@ -917,9 +928,12 @@ from actions the harness silently skips: `table_get.wast:23` is
 `assert_return` observes the untouched table. These are §5.4 artifacts, not
 runtime bugs.
 
-Reference counting has **no coverage yet**: nothing asserts that memory returns,
-and no test builds a cycle. `RC-1` adds a store/drop balance test and `RC-2` a
-cycle-reclamation test; until then a leak is visible only through process RSS.
+Reference counting now has **one manual test** — `GC reference counting: clone,
+drop and store barriers` (`Test/wasm_wat/gc_refcount.wat`) covers the header
+count, `refClone`/`refDrop`/`refStore` and the underflow trap, and runs the JIT
+`struct.set` barrier end to end. Still absent: an end-to-end *reclamation* check
+(memory returning) and a cycle test, both of which need `RC-2`/`RC-1b`; until
+then a leak is visible only through process RSS.
 
 ## 9. References
 

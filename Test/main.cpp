@@ -2,12 +2,14 @@
 #include <catch2/catch_all.hpp>
 
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <vector>
 
 #include "helper.hpp"
 #include "WasmBase/WasmOpcode.hpp"
 #include "WasmBase/WasmStore.hpp"
+#include "WasmBase/WasmTrap.hpp"
 
 Euph::Conf::Configuration GLOBAL_CONFIGURATION;
 
@@ -870,3 +872,80 @@ TEST_CASE("grow guardrail rejects absurd deltas without allocating")
 	REQUIRE(WASM::callCallable<int32_t>(*growTable, int32_t(2)) == 1);
 	REQUIRE(WASM::callCallable<int32_t>(*tableSize) == 3);
 }
+
+TEST_CASE("GC reference counting: clone, drop and store barriers")
+{
+	// RC-1 (docs/proposals/GC.md §6/§7): a fresh GC object starts at count 1;
+	// refClone/refDrop move it; refStore is the single write barrier that
+	// retains the new value and releases the one it overwrote; dropping below
+	// zero traps instead of wrapping or freeing. Reclamation itself is deferred
+	// for this milestone, so `gcReclaimedObjects` counts the transitions.
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+
+	// Locate the module's struct type so we can allocate an object of it.
+	uint32_t structIdx = UINT32_MAX;
+	for (uint32_t i = 0; i < loaded.module->types.size(); ++i) {
+		if (loaded.module->types[i].isStruct()) { structIdx = i; break; }
+	}
+	REQUIRE(structIdx != UINT32_MAX);
+
+	WASM::ModuleInstance& instance = *loaded.instance;
+	void* object = instance.allocateStructObject(16, structIdx);
+	REQUIRE(object != nullptr);
+	REQUIRE(instance.gcRefCount(object) == 1);
+
+	// clone retains; drop releases.
+	REQUIRE(instance.refClone(object) == object);
+	REQUIRE(instance.gcRefCount(object) == 2);
+	instance.refDrop(object);
+	REQUIRE(instance.gcRefCount(object) == 1);
+
+	// refStore: retain the new value, then release the slot's old value.
+	void* slot = nullptr;
+	instance.refStore(&slot, object);              // retain object -> 2
+	REQUIRE(slot == object);
+	REQUIRE(instance.gcRefCount(object) == 2);
+
+	void* replacement = instance.allocateStructObject(16, structIdx);
+	instance.refStore(&slot, replacement);         // retain replacement, release object
+	REQUIRE(slot == replacement);
+	REQUIRE(instance.gcRefCount(object) == 1);
+	REQUIRE(instance.gcRefCount(replacement) == 2);
+
+	// Non-GC references (null, i31 immediates) are never counted.
+	void* i31 = reinterpret_cast<void*>(static_cast<uintptr_t>(7) | 1u);
+	REQUIRE(instance.refClone(i31) == i31);
+	instance.refDrop(i31);                         // no-op, must not trap
+	REQUIRE(instance.gcRefCount(i31) == 0);
+	instance.refDrop(nullptr);                     // null is a no-op too
+
+	// Dropping the last reference reaches zero and records the reclamation.
+	instance.refDrop(replacement);                 // 2 -> 1
+	const uint64_t reclaimed = instance.gcReclaimedObjects();
+	instance.refDrop(replacement);                 // 1 -> 0
+	REQUIRE(instance.gcRefCount(replacement) == 0);
+	REQUIRE(instance.gcReclaimedObjects() == reclaimed + 1);
+
+	// A further drop underflows: it must trap, not wrap (docs/proposals/GC.md
+	// D19/RC-7).
+	{
+		WASM::TrapScope scope;
+		bool trapped = false;
+		if (setjmp(scope.buffer) == 0) {
+			instance.refDrop(replacement);
+		} else {
+			trapped = true;
+		}
+		REQUIRE(trapped);
+	}
+
+	// The JIT's `struct.set` on a reference-typed field went through the barrier
+	// and the module still runs.
+	auto make = instance.exportedFunction("make");
+	REQUIRE(make.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*make) == 2);
+}
+

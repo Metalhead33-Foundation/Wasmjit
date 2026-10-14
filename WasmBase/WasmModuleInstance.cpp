@@ -6,8 +6,10 @@
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <Elvavena/Io/ElvDataStream.hpp>
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <cstdlib>
+#include <limits>
 #include <stdexcept>
 namespace WASM {
 
@@ -521,11 +523,13 @@ void ModuleInstance::initializeTable()
 namespace {
 
 // Runtime layout of GC aggregates must match LibJitTypeTranslator:
-//   struct: uint32 header, then naturally-aligned fields;
-//   array:  uint32 header, uint32 length, pointer to the element buffer.
-// Keep in sync with translateStruct / translateArray.
-constexpr size_t kGcHeaderBytes = 4;
-constexpr size_t kArrayDataOffset = 8;
+//   struct: [u32 TypeId][u32 refcount], then naturally-aligned fields;
+//   array:  [u32 TypeId][u32 refcount][u32 length][void* data].
+// The shared constants live in WasmGcHeader.hpp; keep them in sync with
+// translateStruct / translateArray (docs/proposals/GC.md §6.3 / H1).
+constexpr size_t kGcHeaderBytes = GcHeader::kHeaderBytes;
+constexpr size_t kArrayLengthOffset = GcHeader::kArrayLengthOffset;
+constexpr size_t kArrayDataOffset = GcHeader::kArrayDataOffset;
 
 size_t storageBytes(const StorageType& st)
 {
@@ -945,8 +949,12 @@ void* ModuleInstance::allocateStructObject(uint32_t size, uint32_t localTypeIdx)
 	uint8_t* object = static_cast<uint8_t*>(std::calloc(1, size));
 	if (!object)
 		trap("out of memory");
-	*reinterpret_cast<uint32_t*>(object) = typeId.value;
+	*reinterpret_cast<uint32_t*>(object + GcHeader::kTypeIdOffset) = typeId.value;
+	// A fresh object is owned by its creator: the count starts at 1
+	// (docs/proposals/GC.md D14).
+	*reinterpret_cast<uint32_t*>(object + GcHeader::kRefcountOffset) = 1;
 	internals.gcObjectTypes[object] = typeId;
+	++internals.gcAllocatedObjects;
 	return object;
 }
 
@@ -973,10 +981,12 @@ void* ModuleInstance::allocateArrayObject(uint32_t headerSize, uint32_t elementS
 			trap("out of memory");
 	}
 
-	*reinterpret_cast<uint32_t*>(header) = typeId.value;
-	*reinterpret_cast<uint32_t*>(header + sizeof(uint32_t)) = length;
-	*reinterpret_cast<void**>(header + sizeof(uint32_t) * 2) = data;
+	*reinterpret_cast<uint32_t*>(header + GcHeader::kTypeIdOffset) = typeId.value;
+	*reinterpret_cast<uint32_t*>(header + GcHeader::kRefcountOffset) = 1;
+	*reinterpret_cast<uint32_t*>(header + GcHeader::kArrayLengthOffset) = length;
+	*reinterpret_cast<void**>(header + GcHeader::kArrayDataOffset) = data;
 	internals.gcObjectTypes[header] = typeId;
+	++internals.gcAllocatedObjects;
 	return header;
 }
 
@@ -1068,6 +1078,92 @@ bool ModuleInstance::refMatchesHeapType(const void* ref, const HeapType& heapTyp
 	default:
 		return false;
 	}
+}
+
+// ── Reference counting (docs/proposals/GC.md §6, RC-1/RC-3/RC-7) ────────────
+//
+// The count lives in the object header (GcHeader::kRefcountOffset) and is
+// touched through std::atomic_ref so the Threads work can share an object later
+// (D16) without changing the layout. `i31` immediates (low bit set),
+// `externref`s and `funcref`s have no header, so they are never counted;
+// `gcRefcountSlot` is what tells a GC object apart from every other reference.
+
+uint32_t* ModuleInstance::gcRefcountSlot(const void* ref)
+{
+	if (ref == nullptr)
+		return nullptr;
+	// Unboxed i31 immediate (low bit set) — not a heap pointer.
+	if ((reinterpret_cast<uintptr_t>(ref) & 1u) != 0)
+		return nullptr;
+	// Only a pointer this instance allocated *and registered* is a GC object.
+	if (internals.gcObjectTypes.find(ref) == internals.gcObjectTypes.end())
+		return nullptr;
+	return reinterpret_cast<uint32_t*>(
+			static_cast<uint8_t*>(const_cast<void*>(ref)) + GcHeader::kRefcountOffset);
+}
+
+uint32_t ModuleInstance::gcRefCount(const void* ref) const
+{
+	if (ref == nullptr || (reinterpret_cast<uintptr_t>(ref) & 1u) != 0
+			|| internals.gcObjectTypes.find(ref) == internals.gcObjectTypes.end())
+		return 0;
+	auto* slot = const_cast<uint32_t*>(reinterpret_cast<const uint32_t*>(
+			static_cast<const uint8_t*>(ref) + GcHeader::kRefcountOffset));
+	return std::atomic_ref<uint32_t>(*slot).load(std::memory_order_relaxed);
+}
+
+void* ModuleInstance::refClone(void* ref)
+{
+	uint32_t* slot = gcRefcountSlot(ref);
+	if (slot == nullptr)
+		return ref;
+	std::atomic_ref<uint32_t> count(*slot);
+	uint32_t old = count.load(std::memory_order_relaxed);
+	for (;;) {
+		if (old == std::numeric_limits<uint32_t>::max())
+			break; // saturate: a leak is preferable to a wrapped count (D19)
+		if (count.compare_exchange_weak(old, old + 1, std::memory_order_relaxed))
+			break;
+	}
+	return ref;
+}
+
+void ModuleInstance::refDrop(void* ref)
+{
+	uint32_t* slot = gcRefcountSlot(ref);
+	if (slot == nullptr)
+		return;
+	std::atomic_ref<uint32_t> count(*slot);
+	uint32_t old = count.load(std::memory_order_relaxed);
+	for (;;) {
+		if (old == 0)
+			trap("GC reference count underflow"); // D19: trap, never wrap
+		if (count.compare_exchange_weak(old, old - 1, std::memory_order_relaxed)) {
+			if (old == 1)
+				reclaimGcObject(ref);
+			break;
+		}
+	}
+}
+
+void ModuleInstance::refStore(void** slot, void* newRef)
+{
+	void* old = *slot;
+	refClone(newRef);   // retain the new value first (self-assignment safe)
+	*slot = newRef;
+	refDrop(old);       // then release the value we overwrote
+}
+
+void ModuleInstance::reclaimGcObject(void* ref)
+{
+	// The count reached zero. Reclamation is *deferred* for this milestone:
+	// Wasm locals and operand-stack temporaries can still hold uncounted
+	// borrows, so freeing here would be a use-after-free. Record the transition
+	// instead; the instance's region teardown (GC-2) reclaims memory wholesale.
+	// Turning this into "free + credit the Store budget" is the ownership work
+	// that follows (docs/proposals/GC.md §7, RC-1b/RC-5).
+	(void)ref;
+	++internals.gcReclaimedObjects;
 }
 
 }

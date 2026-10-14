@@ -1,6 +1,7 @@
 #ifndef WASMMODULEINSTANCE_HPP
 #define WASMMODULEINSTANCE_HPP
 #include "WasmModule.hpp"
+#include "WasmGcHeader.hpp"
 #include "WasmVMContext.hpp"
 #include "WasmImport.hpp"
 #include <optional>
@@ -38,6 +39,10 @@ struct ModuleInstanceInternals {
 	// Runtime type tags of live GC objects, keyed by pointer. Stores the
 	// canonical (process-wide) TypeId so casts work across modules (M6).
 	std::unordered_map<const void*, TypeId> gcObjectTypes;
+	// Reference-counting bookkeeping (docs/proposals/GC.md RC-1). Counts are
+	// for tests/diagnostics; reclamation is deferred, see ModuleInstance.
+	uint64_t gcAllocatedObjects = 0;
+	uint64_t gcReclaimedObjects = 0;
 
 	// Backend-specific compiled function handles (e.g., jit_function_t for LibJIT).
 	// Stored as void* to keep this header backend-agnostic.
@@ -68,6 +73,11 @@ private:
 	// initializeGlobals() runs (i.e. in the constructor).
 	void resolveGlobalRefFuncs();
 	Value evalConstantExpr(const std::span<const std::byte>& expr);
+	// Reference-counting internals (docs/proposals/GC.md §6, RC-1/RC-3).
+	// `gcRefcountSlot` returns the object's count word, or nullptr when `ref`
+	// is not a GC object (null, an i31 immediate, an externref or a funcref).
+	uint32_t* gcRefcountSlot(const void* ref);
+	void reclaimGcObject(void* ref);
 public:
 	friend class ModuleInstantiator;
 	ModuleInstance(const Module& module, ImportResolver& importResolver);
@@ -94,6 +104,23 @@ public:
 	void* allocateArrayObject(uint32_t headerSize, uint32_t elementSize, uint32_t length, uint32_t localTypeIdx);
 	bool tryGetGcTypeId(const void* ref, TypeId& typeId) const;
 	bool refMatchesHeapType(const void* ref, const HeapType& heapType, bool nullable) const;
+
+	// ── Reference counting (docs/proposals/GC.md §6, RC-1/RC-3) ─────────
+	// `refClone` retains a GC reference and returns it (saturating on
+	// overflow: leak, never wrap). `refDrop` releases it and traps on
+	// underflow. `refStore` is the single write barrier for a reference-typed
+	// slot: it retains `newRef` first (so self-assignment is safe), stores it,
+	// then releases the value it overwrote. Non-GC references (i31 immediates,
+	// externrefs, funcrefs) pass through clone/store and are no-ops for drop.
+	void* refClone(void* ref);
+	void  refDrop(void* ref);
+	void  refStore(void** slot, void* newRef);
+
+	// Diagnostics for the reference-counting test. `gcRefCount` returns 0 for
+	// a reference that is not counted (or unknown).
+	uint32_t gcRefCount(const void* ref) const;
+	uint64_t gcAllocatedObjects() const { return internals.gcAllocatedObjects; }
+	uint64_t gcReclaimedObjects() const { return internals.gcReclaimedObjects; }
 	// Resolve an element-segment reference (as produced by evalConstantExpr and
 	// cached in elementSegmentRefs) to the Callable* a table slot stores. A
 	// GC/heap reference is stored as-is: the slot is an opaque pointer.

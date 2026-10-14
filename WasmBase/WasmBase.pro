@@ -22,6 +22,7 @@ SOURCES += \
 HEADERS += \
     WasmContext.hpp \
     WasmException.hpp \
+    WasmGcHeader.hpp \
     WasmCanonicalType.hpp \
     WasmImport.hpp \
     WasmMemory.hpp \
