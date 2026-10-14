@@ -7,6 +7,7 @@ include(WasmBase.pri)
 # Avoid build errors with no files:
 SOURCES += \
         WasmException.cpp \
+        WasmGcHeap.cpp \
         WasmMemory.cpp \
         WasmModule.cpp \
         WasmModuleInstance.cpp \
@@ -23,6 +24,7 @@ HEADERS += \
     WasmContext.hpp \
     WasmException.hpp \
     WasmGcHeader.hpp \
+    WasmGcHeap.hpp \
     WasmCanonicalType.hpp \
     WasmImport.hpp \
     WasmMemory.hpp \

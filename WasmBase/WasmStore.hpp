@@ -3,6 +3,7 @@
 #include "WasmMemory.hpp"
 #include "WasmTable.hpp"
 #include "WasmTypeRegistry.hpp"
+#include "WasmGcHeap.hpp"
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -45,6 +46,12 @@ public:
 	// Owns every module's type block; modules hold non-owning span views.
 	TypeRegistry&       types()       { return typeRegistry; }
 	const TypeRegistry& types() const { return typeRegistry; }
+
+	// ── GC heap ─────────────────────────────────────────────────────────
+	// Owns the mmap-backed regions every GC object lives in (docs/proposals/
+	// GC.md §6.1/GC-2). Instances hold a RegionSet handle and allocate from it.
+	GcHeap&       gc()       { return gcHeap; }
+	const GcHeap& gc() const { return gcHeap; }
 
 	// ── Linear memory ───────────────────────────────────────────────────
 	// Allocate a fresh linear memory owned by the store. Returns its store id;
@@ -98,7 +105,7 @@ public:
 	struct StoreOwnedFunction;        // callables / functions (TODO)
 	struct StoreOwnedElementSegment;  // element segments      (TODO)
 	struct StoreOwnedDataSegment;     // data segments         (TODO)
-	struct GcHeap;                    // GC heap objects       (deferred)
+	// GC heap objects live in the Store-owned GcHeap (see gc()).
 
 	using GlobalId   = int32_t;
 	using TagId      = int32_t;
@@ -121,6 +128,9 @@ private:
 
 	// Charged/credited by reserveBytes/releaseBytes (see the header).
 	std::atomic<uint64_t> allocatedBytes_{0};
+
+	// The GC object heap: mmap-backed regions, no per-object libc allocation.
+	GcHeap gcHeap;
 };
 }
 #endif // WASMSTORE_HPP

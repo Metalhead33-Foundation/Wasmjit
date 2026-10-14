@@ -2,6 +2,7 @@
 #define WASMMODULEINSTANCE_HPP
 #include "WasmModule.hpp"
 #include "WasmGcHeader.hpp"
+#include "WasmGcHeap.hpp"
 #include "WasmVMContext.hpp"
 #include "WasmImport.hpp"
 #include <optional>
@@ -36,9 +37,9 @@ struct ModuleInstanceInternals {
 	// segment index; index-form segments leave their entry empty.
 	// docs/proposals/GC.md G4, docs/proposals/BULK_MEMORY.md §4.
 	std::vector<std::vector<Value>> elementSegmentRefs;
-	// Runtime type tags of live GC objects, keyed by pointer. Stores the
-	// canonical (process-wide) TypeId so casts work across modules (M6).
-	std::unordered_map<const void*, TypeId> gcObjectTypes;
+	// The GC heap region set this instance allocates from. Owned by
+	// Store::gc() and released in ~ModuleInstance (bulk reclamation, GC-2).
+	GcHeap::RegionSet* gcSet = nullptr;
 	// Reference-counting bookkeeping (docs/proposals/GC.md RC-1). Counts are
 	// for tests/diagnostics; reclamation is deferred, see ModuleInstance.
 	uint64_t gcAllocatedObjects = 0;
@@ -81,7 +82,8 @@ private:
 public:
 	friend class ModuleInstantiator;
 	ModuleInstance(const Module& module, ImportResolver& importResolver);
-	~ModuleInstance() = default;
+	// Releases the instance's GC region set (bulk reclamation, GC-2).
+	~ModuleInstance();
 
 	VMContext* context() { return &ctx; }
 	const VMContext* context() const { return &ctx; }

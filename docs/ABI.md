@@ -160,8 +160,9 @@ The remaining entity kinds are **pre-declared** in `Store` (`StoreOwnedGlobal`,
 `StoreOwnedTag`, `StoreOwnedFunction`, `StoreOwnedElementSegment`,
 `StoreOwnedDataSegment`, and the `GlobalId` / `TagId` / `FunctionId` /
 `SegmentId` aliases) so the ownership boundary is explicit and the migration is
-mechanical once each gains runtime behaviour. GC-dependent state (`GcHeap`) is
-deferred: `ModuleInstance::gcObjectTypes` still acts as a placeholder allocator.
+mechanical once each gains runtime behaviour. The GC heap is no longer
+deferred: `Store::gc()` owns a `GcHeap` (mmap-backed regions), and each instance
+allocates from it through a `RegionSet` handle that teardown releases in bulk.
 
 ### `Callable` (`WasmBase/WasmValue.hpp`)
 

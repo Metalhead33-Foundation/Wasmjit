@@ -462,8 +462,9 @@ dedicated suite:
 - `Module::isSubtype` walks declared `supertypeIndices` (module-local) and does
   not implement structural composite subtyping or cross-module matching.
 - ~~`ModuleInstance::refMatchesHeapType` and GC object headers use module-local
-  indices.~~ **Done (M6):** GC object headers and `gcObjectTypes` store a
-  canonical `TypeId`; `refMatchesHeapType` resolves the expected heap type
+  indices.~~ **Done (M6):** GC object headers store a canonical `TypeId`
+  (`GcHeap::owns` locates the object by region, then the header is read);
+  `refMatchesHeapType` resolves the expected heap type
   against its module and matches via `TypeRegistry::matchesHeap` (concrete and
   abstract), so casts work across modules.
 - ~~`Callable::typeIndex` is a module-local index.~~ **Done (M6):** `Callable`

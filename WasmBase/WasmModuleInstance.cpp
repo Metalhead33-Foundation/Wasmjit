@@ -229,6 +229,12 @@ ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver)
 	ctx = {};
 	ctx.module = &module;
 
+	// ── Step 0: The GC heap region set this instance allocates from ─
+	// Created first, because constant expressions evaluated below
+	// (initializeGlobals) can allocate GC objects. Teardown releases the whole
+	// set in bulk, whether or not the reference counts balanced (GC-2).
+	internals.gcSet = Store::global().gc().createSet();
+
 	// ── Step 1: Resolve and store all imports ───────────────────────
 	// Imports must come first because they occupy the low indices in
 	// each index space. We need importedFunctions populated before we
@@ -257,6 +263,15 @@ ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver)
 	internals.dataSegmentDropped.resize(module.dataSegments.size(), false);
 	internals.elementSegmentDropped.resize(module.elementSegments.size(), false);
 	internals.elementSegmentRefs.resize(module.elementSegments.size());
+}
+
+ModuleInstance::~ModuleInstance()
+{
+	// Bulk reclamation: every region this instance used is unmapped and the
+	// budget credited, independent of the reference counts (the RC leak
+	// backstop, docs/proposals/GC.md §6.1/GC-2).
+	Store::global().gc().releaseSet(internals.gcSet);
+	internals.gcSet = nullptr;
 }
 
 std::optional<Callable> ModuleInstance::exportedFunction(std::string_view name) const
@@ -936,24 +951,21 @@ void ModuleInstance::bufferInitFromElems(uint32_t elemIdx, void* dst, uint32_t s
 void* ModuleInstance::allocateStructObject(uint32_t size, uint32_t localTypeIdx)
 {
 	// Resolve the module-local index against this instance's module and stamp the
-	// canonical TypeId into the header and the lookup map, so a later cast can
-	// match it even from another module (M6).
+	// canonical TypeId into the header, so a later cast can match it even from
+	// another module (M6).
 	const TypeId typeId = module->typeId(LocalTypeIdx{localTypeIdx});
 
-	// A GC object is host memory the module asks for; charge it against the
-	// Store's allocation budget so a failure is a Wasm trap, never an abort
-	// (docs/SAFETY.md). GC objects are never freed, so the charge is one-way.
-	if (!Store::global().reserveBytes(size))
-		trap("out of memory");
-
-	uint8_t* object = static_cast<uint8_t*>(std::calloc(1, size));
-	if (!object)
+	// Allocate from the Store's GC heap: mmap-backed regions, so no libc
+	// allocator call happens per object while generated code runs. The region is
+	// charged to the budget when it is backed; a refusal is a Wasm trap, never an
+	// abort (docs/SAFETY.md §2.3, docs/proposals/GC.md GC-2).
+	uint8_t* object = static_cast<uint8_t*>(Store::global().gc().allocate(*internals.gcSet, size));
+	if (object == nullptr)
 		trap("out of memory");
 	*reinterpret_cast<uint32_t*>(object + GcHeader::kTypeIdOffset) = typeId.value;
 	// A fresh object is owned by its creator: the count starts at 1
 	// (docs/proposals/GC.md D14).
 	*reinterpret_cast<uint32_t*>(object + GcHeader::kRefcountOffset) = 1;
-	internals.gcObjectTypes[object] = typeId;
 	++internals.gcAllocatedObjects;
 	return object;
 }
@@ -962,22 +974,22 @@ void* ModuleInstance::allocateArrayObject(uint32_t headerSize, uint32_t elementS
 {
 	const TypeId typeId = module->typeId(LocalTypeIdx{localTypeIdx});
 
-	// Charge the whole object (header + elements) *before* allocating: an
-	// `array.new` with an absurd runtime length must trap, not try to
-	// `calloc` tens of gigabytes (docs/SAFETY.md, docs/proposals/GC.md C7).
-	const uint64_t totalBytes = static_cast<uint64_t>(headerSize) +
-		static_cast<uint64_t>(elementSize) * static_cast<uint64_t>(length);
-	if (!Store::global().reserveBytes(totalBytes))
-		trap("out of memory");
-
-	uint8_t* header = static_cast<uint8_t*>(std::calloc(1, headerSize));
-	if (!header)
+	// Two blocks from the GC heap: the header and the element buffer. Each is
+	// charged when its region is backed, so an `array.new` with an absurd
+	// runtime length still fails as a trap without allocating tens of gigabytes
+	// (docs/SAFETY.md §2.3, docs/proposals/GC.md C7/GC-2).
+	GcHeap& heap = Store::global().gc();
+	uint8_t* header = static_cast<uint8_t*>(heap.allocate(*internals.gcSet, headerSize));
+	if (header == nullptr)
 		trap("out of memory");
 
 	uint8_t* data = nullptr;
 	if (length != 0) {
-		data = static_cast<uint8_t*>(std::calloc(length, elementSize));
-		if (!data)
+		const uint64_t dataBytes = static_cast<uint64_t>(elementSize) * static_cast<uint64_t>(length);
+		if (dataBytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
+			trap("out of memory");
+		data = static_cast<uint8_t*>(heap.allocate(*internals.gcSet, static_cast<size_t>(dataBytes)));
+		if (data == nullptr)
 			trap("out of memory");
 	}
 
@@ -985,17 +997,19 @@ void* ModuleInstance::allocateArrayObject(uint32_t headerSize, uint32_t elementS
 	*reinterpret_cast<uint32_t*>(header + GcHeader::kRefcountOffset) = 1;
 	*reinterpret_cast<uint32_t*>(header + GcHeader::kArrayLengthOffset) = length;
 	*reinterpret_cast<void**>(header + GcHeader::kArrayDataOffset) = data;
-	internals.gcObjectTypes[header] = typeId;
 	++internals.gcAllocatedObjects;
 	return header;
 }
 
 bool ModuleInstance::tryGetGcTypeId(const void* ref, TypeId& typeId) const
 {
-	auto it = internals.gcObjectTypes.find(ref);
-	if (it == internals.gcObjectTypes.end())
+	// A GC pointer is identified by its region, and its type read straight from
+	// the header (docs/proposals/GC.md D2/GC-1). No per-object side map, and the
+	// identity is canonical, so this works across modules too.
+	if (!Store::global().gc().owns(ref))
 		return false;
-	typeId = it->second;
+	const auto* bytes = static_cast<const uint8_t*>(ref);
+	typeId = TypeId{*reinterpret_cast<const uint32_t*>(bytes + GcHeader::kTypeIdOffset)};
 	return true;
 }
 
@@ -1095,8 +1109,9 @@ uint32_t* ModuleInstance::gcRefcountSlot(const void* ref)
 	// Unboxed i31 immediate (low bit set) — not a heap pointer.
 	if ((reinterpret_cast<uintptr_t>(ref) & 1u) != 0)
 		return nullptr;
-	// Only a pointer this instance allocated *and registered* is a GC object.
-	if (internals.gcObjectTypes.find(ref) == internals.gcObjectTypes.end())
+	// Only a pointer inside a GC heap region is a counted GC object; funcrefs,
+	// externrefs and arbitrary host pointers are not (docs/proposals/GC.md RC12).
+	if (!Store::global().gc().owns(ref))
 		return nullptr;
 	return reinterpret_cast<uint32_t*>(
 			static_cast<uint8_t*>(const_cast<void*>(ref)) + GcHeader::kRefcountOffset);
@@ -1105,7 +1120,7 @@ uint32_t* ModuleInstance::gcRefcountSlot(const void* ref)
 uint32_t ModuleInstance::gcRefCount(const void* ref) const
 {
 	if (ref == nullptr || (reinterpret_cast<uintptr_t>(ref) & 1u) != 0
-			|| internals.gcObjectTypes.find(ref) == internals.gcObjectTypes.end())
+			|| !Store::global().gc().owns(ref))
 		return 0;
 	auto* slot = const_cast<uint32_t*>(reinterpret_cast<const uint32_t*>(
 			static_cast<const uint8_t*>(ref) + GcHeader::kRefcountOffset));

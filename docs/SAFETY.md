@@ -62,6 +62,12 @@ it charges every byte against a **process-wide budget** *before* allocating:
   `table.grow` (the spec explicitly allows an implementation limit) and a
   **recoverable trap** for a GC allocation;
 - an oversized *initial* size fails instantiation with a clear message.
+- The **GC heap** is an mmap-backed region allocator owned by the Store
+  (`WasmBase/WasmGcHeap.{hpp,cpp}`): regions are charged to the budget when they
+  are backed and credited on instance teardown. It exists so that **running
+  generated code never calls `malloc`/`calloc`/`free`** — allocation is a
+  per-region free-list pop or a bump, and anonymous `mmap` provides the
+  zero-filled memory `calloc` used to. See `proposals/GC.md` §6.1/GC-2.
 
 Default budget **2 GiB**; override with `WASMJIT_MAX_TOTAL_BYTES` (bytes;
 `0`/`unlimited` disables it, at your own risk). The whole test suite fits in
@@ -179,7 +185,9 @@ from the input. Fix: §2.2. `PreparedFunctionStack::prepare` also truncated its
 1. Does it read a **size or count** from the module? Bound it (§2.2) — by the
    remaining input, or by a named cap in `WasmSafety.hpp`.
 2. Does it **allocate host memory** (memory, table, GC object, arena)? Charge it
-   against the `Store` budget and fail as `-1` / trap (§2.3).
+   against the `Store` budget and fail as `-1` / trap (§2.3). On the
+   generated-code path, allocate from the mmap-backed `GcHeap`, not
+   `malloc`/`calloc`.
 3. Does it **fail at runtime**? Use `WASM::trap`, not `abort`, and keep the helper
    POD-only (§2.4, §2.6).
 4. Does it **fail at load / instantiate / compile time**? Throw an exception with

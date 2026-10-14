@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "helper.hpp"
+#include "WasmBase/WasmGcHeap.hpp"
 #include "WasmBase/WasmOpcode.hpp"
 #include "WasmBase/WasmStore.hpp"
 #include "WasmBase/WasmTrap.hpp"
@@ -947,5 +948,61 @@ TEST_CASE("GC reference counting: clone, drop and store barriers")
 	auto make = instance.exportedFunction("make");
 	REQUIRE(make.has_value());
 	REQUIRE(WASM::callCallable<int32_t>(*make) == 2);
+}
+
+
+TEST_CASE("GC heap: region allocation, alignment and recycling")
+{
+	// The GC objects no longer come from calloc: they are carved out of
+	// mmap-backed Store-owned regions, so running JIT-compiled code never
+	// reaches the libc allocator (docs/proposals/GC.md §6.1/GC-2,
+	// docs/SAFETY.md §2.3).
+	WASM::GcHeap& heap = WASM::Store::global().gc();
+	WASM::GcHeap::RegionSet* set = heap.createSet();
+	REQUIRE(set != nullptr);
+
+	// Small blocks come from one region, are 16-aligned and zero-filled.
+	void* a = heap.allocate(*set, 16);
+	void* b = heap.allocate(*set, 16);
+	REQUIRE(a != nullptr);
+	REQUIRE(b != nullptr);
+	REQUIRE(a != b);
+	REQUIRE((reinterpret_cast<uintptr_t>(a) % WASM::GcHeap::kGranularity) == 0);
+	REQUIRE((reinterpret_cast<uintptr_t>(b) % WASM::GcHeap::kGranularity) == 0);
+	REQUIRE(heap.owns(a));
+	REQUIRE(heap.owns(b));
+
+	const uint8_t* bytes = static_cast<const uint8_t*>(a);
+	for (size_t i = 0; i < 16; ++i)
+		REQUIRE(bytes[i] == 0);
+
+	// Only pointers inside a GC region are GC pointers: null, an i31 immediate
+	// and a stack address are not (the replacement for the old object map).
+	REQUIRE_FALSE(heap.owns(nullptr));
+	REQUIRE_FALSE(heap.owns(reinterpret_cast<void*>(static_cast<uintptr_t>(7) | 1u)));
+	int stackLocal = 0;
+	REQUIRE_FALSE(heap.owns(&stackLocal));
+
+	// Recycling returns the block to its region's free list; the next
+	// same-class allocation reuses it (RC-1b's mechanism, tested directly).
+	heap.recycle(b);
+	REQUIRE(heap.allocate(*set, 16) == b);
+
+	// Region backing is batched: many objects, at most one more region.
+	const size_t regionsBefore = heap.regionCount();
+	for (int i = 0; i < 1000; ++i)
+		REQUIRE(heap.allocate(*set, 32) != nullptr);
+	REQUIRE(heap.regionCount() - regionsBefore <= 1);
+
+	// A large block gets a dedicated region that is released when recycled.
+	const size_t regionsBeforeLarge = heap.regionCount();
+	void* large = heap.allocate(*set, 100000);
+	REQUIRE(large != nullptr);
+	REQUIRE(heap.regionCount() == regionsBeforeLarge + 1);
+	heap.recycle(large);
+	REQUIRE(heap.regionCount() == regionsBeforeLarge);
+
+	// Instance teardown releases every region in the set in bulk.
+	heap.releaseSet(set);
 }
 

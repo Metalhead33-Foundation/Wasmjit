@@ -1,10 +1,10 @@
 # Garbage Collection (Wasm 3.0) — Implementation Notes, Spec Conformance, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 4 — RC-1 core landed:
-the GC header carries a refcount and every reference-typed store goes through
-the `wasm_ref_store` barrier; reclamation is deliberately still deferred, see
-§7. Revision 3 chose reference counting over stop-the-world mark-sweep,
-§6.1/§6.4.)
+Status: design note / implementation reference (revision 5 — the GC heap now
+lives in a Store-owned mmap-backed region allocator (`GcHeap`), so no libc
+allocator call happens while generated code runs; revision 4 added the refcount
+header and write barriers, and revision 3 chose reference counting over
+stop-the-world mark-sweep, §6.1/§6.4.)
 Audience: anyone touching `WasmType`, `WasmTypeRegistry`, `WasmModuleInstance`,
 `LibJitTypeTranslator`, `LibjitOpcodeDispatcher`, or the test suite.
 
@@ -312,15 +312,21 @@ for the full design.)
 
 ### 4.3 Heap objects and runtime type tags (`WasmBase/WasmModuleInstance.{hpp,cpp}`)
 
-- `ModuleInstanceInternals::gcObjectTypes` —
-  `std::unordered_map<const void*, TypeId>` — is the only runtime type store.
-- `allocateStructObject(size, localTypeIdx)`:
-  `calloc`, writes the canonical `TypeId` and a reference count of 1 into the
-  8-byte header (`[u32 TypeId][u32 refcount]`, `WasmGcHeader.hpp`), and
-  registers the pointer in `gcObjectTypes`.
-- `allocateArrayObject(headerSize, elementSize, length, localTypeIdx)`:
-  a `calloc`'d header `[u32 TypeId][u32 refcount][u32 length][void* data]` plus a
-  separate `calloc`'d element buffer.
+- GC objects live in the **Store-owned `GcHeap`** (`WasmBase/WasmGcHeap.{hpp,cpp}`):
+  mmap-backed regions segregated by 16-byte size class, each with a free list;
+  an instance's regions are released in bulk by `~ModuleInstance`. Because the
+  backing is `mmap` and not the libc allocator, **no `malloc`/`calloc`/`free`
+  happens while generated code runs** (§6.1/GC-2, `docs/SAFETY.md` §2.3).
+- `allocateStructObject(size, localTypeIdx)`: allocates from the heap, writes the
+  canonical `TypeId` and a reference count of 1 into the 8-byte header
+  (`[u32 TypeId][u32 refcount]`, `WasmGcHeader.hpp`).
+- `allocateArrayObject(headerSize, elementSize, length, localTypeIdx)`: two heap
+  blocks — a header `[u32 TypeId][u32 refcount][u32 length][void* data]` and a
+  separate element buffer.
+- **Type tags come from the header, not a side map.** `GcHeap::owns(ref)` decides
+  "is this a GC pointer" from the region ranges, and `tryGetGcTypeId` then reads
+  the `TypeId` at the header — the old per-object `gcObjectTypes` map is gone
+  (D2/GC-1), so matching works across instances and allocates nothing per object.
 - **Reference counting (RC-1, partial).** `ModuleInstance::refClone/refDrop/`
   `refStore` maintain the header count through `std::atomic_ref` (saturating
   clone, trapping underflow — RC-3 semantics), and count allocations and
@@ -330,13 +336,13 @@ for the full design.)
   barrier). Reclamation is **deferred**: `reclaimGcObject` records the transition
   but does not free, because Wasm locals and operand-stack temporaries hold
   uncounted borrows (§7 RC-1b/RC-5).
-- `tryGetGcTypeId(ref)` consults the map; `refMatchesHeapType(ref, ht, nullable)`
-  implements a *runtime* `match`:
+- `refMatchesHeapType(ref, ht, nullable)` implements a *runtime* `match`:
   - `null` matches only nullable targets;
   - tagged `i31` immediates (low bit set) match `any`/`eq`/`i31`;
   - function references are recognised by pointer-scanning
     `importStorage` / `internalCallables` and matched via `Callable::typeId`;
-  - GC objects are matched via `gcObjectTypes` + `TypeRegistry::matchesHeap`;
+  - GC objects are matched via `GcHeap::owns` + the header `TypeId` +
+    `TypeRegistry::matchesHeap`;
   - unknown references match only `any`/`extern`/`nofunc`.
 - Runtime layout helpers (`storageBytes`, `storageAlign`, `structFieldOffsets`,
   `structSize`, `arraySize`, `storeValue`) mirror the JIT lowering and are
@@ -604,7 +610,7 @@ effort.
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| G1 | **Per-instance type tags.** `gcObjectTypes` lives on the allocating `ModuleInstance`; a cast/test executed by another instance cannot see it. The `TypeId` *is* written into the object header but never read back for matching. | `refMatchesHeapType` → `tryGetGcTypeId`; cross-module `ref.test`/`ref.cast` on aggregates. | High |
+| ~~G1~~ | ~~Per-instance type tags.~~ **Done (GC-2a):** `GcHeap::owns(ref)` identifies a GC pointer from its region (a process-wide structure) and `tryGetGcTypeId` reads the `TypeId` back from the object header, so a cast/test from any instance sees it. Cross-module *verification* is still blocked by the harness (R5: reference args are not marshalled). | `GcHeap::owns`, `tryGetGcTypeId`; `ref_test` 38/32 | Closed |
 | G2 | **Cross-module function references.** Function refs are matched by scanning the *current* instance's `importStorage`/`internalCallables`. A `funcref` produced by module B is not found, and the "unknown reference" fallback matches only `any`/`extern`/`nofunc` — **not** `func`. `ref.test funcref` on it is wrong. | `refMatchesHeapType`; `call_ref`/`ref_func` spec scripts. | High |
 | G3 | **`any.convert_extern` / `extern.convert_any` are identity.** The two hierarchies are merged: an `externref` that is really an `i31`/struct survives `any.convert_extern`, and an internal reference survives `extern.convert_any` and then still passes `ref.test i31`/`struct`/`array`. | `dispatchAnyConvertExtern` / `dispatchExternConvertAny`; `ref_test` extern cases. | High |
 | ~~G4~~ | ~~Element-segment initialisers are re-evaluated per use.~~ **Done (GC-3):** expression-form segments are evaluated once at instantiation into `elementSegmentRefs`; `table.init` and `array.new_elem` copy those references, so two arrays built from one segment are `ref.eq`. | `array_new_elem` 14/0, `table_init` 725/0 | Closed |
@@ -624,14 +630,14 @@ effort.
 | ~~C4~~ | **Done:** `return_call_ref` **40/0/13** (tail-call trampoline + trap sink). | `spec: return_call_ref` |
 | ~~C5~~ | **Done:** `type-equivalence` **30/1/1** (was an abort); one real mismatch remains. | `spec: type-equivalence` |
 | C6 | **Traps are process-fatal — largely fixed.** `emitAbort` and every `jit_insn_check_null` now go through `WASM::trap` (longjmp to the embedder's `TrapScope`), and the harness executes `assert_trap`. What *still* aborts is allocation failure (`allocateStructObject`/`allocateArrayObject`) and `notImplemented` (SIMD, atomics) — a compile-time limitation, not a Wasm trap. | `WasmTrap.hpp`, `emitAbort`, `emitTrapIfNull` |
-| C7 | `array.new` with a negative `i32` length becomes a huge `uint32_t`; `calloc` failure aborts rather than trapping. | `dispatchArrayNew` / `allocateArrayObject` |
+| C7 | `array.new` with a negative `i32` length becomes a huge `uint32_t`; the GC heap refuses a region past the Store budget and the caller traps (previously a `calloc` failure aborted). | `dispatchArrayNew` / `allocateArrayObject` / `GcHeap::allocate` |
 
 ### 5.3 Hygiene / latent risks (not yet wrong, easy to get wrong)
 
 | # | Risk |
 |---|---|
 | H1 | **Dual layout logic.** `structFieldOffsets`/`structSize`/`arraySize` in `WasmModuleInstance.cpp` must stay byte-for-byte in sync with `translateStruct`/`translateArray` in `LibJitTypeTranslation.cpp`. Packed `i8`/`i16` fields and `v128` (lowered as four `i32` with 4-byte alignment) are the risky spots. Nothing enforces the invariant. |
-| H2 | **`gcObjectTypes` is never pruned**, so it grows without bound alongside the leak. |
+| ~~H2~~ | ~~`gcObjectTypes` is never pruned.~~ **Done (GC-2a):** the map is gone; the type tag is read from the object header and `GcHeap::owns` uses region ranges. |
 | H3 | **`refMatchesHeapType` is O(#functions)** for function references (two linear scans) and is called for every cast/test. |
 | H4 | **`i31` uses a tagged LibJIT type** while `i31.get_s/u` take `void_ptr`; correctness depends on `castRefValue`/`jit_insn_convert` being a bit-preserving reinterpretation. Worth a focused test. |
 | H5 | **`stringref`/`stringview_*` enum + `void*` lowering exist but are not in 3.0** and have no parser/dispatch; the reserved encodings are stale (see §10.3). Keep explicitly unsupported. |
@@ -679,7 +685,7 @@ defect.
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| L1 | **Nothing is ever freed.** `allocateStructObject` / `allocateArrayObject` `calloc` and never `free`; `gcObjectTypes` grows without bound alongside the leak (H2). | `WasmModuleInstance.cpp` | Medium |
+| L1 | **Nothing is recycled yet.** Objects are allocated from the GC heap, but `reclaimGcObject` only records the 0 transition; the region holds them until instance teardown (GC-2a landed; RC-1b pending). | `WasmModuleInstance.cpp`, `WasmGcHeap.cpp` | Medium |
 | L2 | **No ownership or refcount exists.** A `void*` reference carries no count and no lifetime; there is nowhere to hook reclamation. | every `Value::ref` store | Medium |
 | L3 | **Reference slots are written as raw pointers.** `struct.set` / `array.set` / `table.set` / globals store `void*` with no retain/release barrier, and the JIT emits the store directly. | JIT ref stores | Medium |
 
@@ -738,8 +744,8 @@ host is a bug, not an implementation-limitation footnote. Therefore:
 
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
-| D1 | **Reference counting with a region-backed allocator** (§6.1): a refcount in the object header, bumps within a per-instance region, region teardown as the leak backstop. | §3.1: any reclamation algorithm (and none) is conformant; §3.1 also does not require cycles to be collected. | Deterministic, pause-free reclamation with **no stack maps and no root scanning** — the two things this JIT cannot cheaply provide. |
-| D2 | **Type identity only in a 4-byte header; delete `gcObjectTypes`.** Read `*(uint32_t*)ref`; compare via the canonical table. | The `TypeId` is already stamped at offset 0; §3.2 lets us choose the representation. | Fixes cross-module casts (G1), removes a hash-map lookup per cast, removes a permanently-growing map (H2). |
+| D1 | **Reference counting with a region-backed allocator** (§6.1): a refcount in the object header, mmap-backed per-instance regions segregated by size class with per-region free lists, region teardown as the leak backstop. ◑ The backing allocator landed (`GC-2a`); recycle/RC-1b is next. | §3.1: any reclamation algorithm (and none) is conformant; §3.1 also does not require cycles to be collected. | Deterministic, pause-free reclamation with **no stack maps and no root scanning** — the two things this JIT cannot cheaply provide — and no libc allocator call in generated code. |
+| D2 | ✅ **Type identity only in the header; `gcObjectTypes` deleted.** The tag is read from `ref[0]`, and `GcHeap::owns(ref)` (region ranges) is the GC-pointer test. | The `TypeId` is stamped at offset 0; §3.2 lets us choose the representation. | Done (GC-2a): fixes cross-instance casts (G1), removes a hash-map lookup per cast, removes a permanently-growing map (H2) and a per-object libc allocation. |
 | D3 | **Cache subtype `depth` in the tag / canonical table** so `ref.test`/`ref.cast` against an abstract type becomes an integer range/bitset check, not a `TypeRegistry` call. | `CanonicalType` already stores `depth`; cast semantics are ours to implement (§3.2). | Inline-able casts on the hot path. |
 | D4 | **Keep `i31` unboxed**, low-bit tagged; require heap allocations to be ≥8-byte aligned so the tag is unambiguous. | §3.2 explicitly allows unboxed scalars; already implemented. | No allocation for i31, trivial `ref.eq`. |
 | D5 | **`any.convert_extern` / `extern.convert_any` as identity**, documented as "no host/reference mixing". | §3.2/§3.5: extern representations are free; the inverse property is trivially satisfied by identity. | Removes a wrapper from the hot path (already the behaviour — make it intentional). |
@@ -820,8 +826,8 @@ the collector is not considered shipped until cycles are reclaimed. The
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **GC-1 — Header-based tags** | `refMatchesHeapType` reads the `u32` at `ref[0]` for aggregates instead of `gcObjectTypes`; give function references a discoverable canonical `typeId` that needs no per-instance scan; remove the map. | G1, G2, H2, H3 | Cross-module `ref.test`/`ref.cast` on structs/arrays and `ref.test funcref` on an imported funcref are correct; `ref_test`/`ref_cast` stop failing for the right reasons. |
-| **GC-2 — Region allocator** | Per-instance bump allocator that backs the RC programme (`RC-1`); free regions on instance destruction; keep a debug "poison on free" mode. | D1, L1, C7 (partly) | No per-object `malloc`; allocation is a pointer bump; instance teardown reclaims everything *even if* counting misses. |
+| **GC-1 — Header-based tags** | ◑ Partly done (`GC-2a`): aggregates read the `u32` at `ref[0]` and `gcObjectTypes` is deleted (`GcHeap::owns` is the GC-pointer test). **Open:** give function references a discoverable canonical `typeId` that needs no per-instance pointer scan. | G1, G2, H2, H3 | Done for aggregates: cross-instance `ref.test`/`ref.cast` on structs/arrays read the header; `ref.test funcref` across modules still needs G2. |
+| **GC-2 — Region allocator** | ◑ Landed (`GC-2a`): the Store-owned `GcHeap` — mmap-backed regions segregated by size class, per-region free lists, budget-charged, released by `~ModuleInstance`; `allocateStructObject`/`allocateArrayObject` no longer call `calloc` and type tags come from the header (`GcHeap::owns`). **Open:** wire `reclaimGcObject` → `GcHeap::recycle` (that is `RC-1b`), recycle the array element buffer, and the debug "poison on free" mode. | D1, D2, L1, C7 (partly) | Done for backing: no per-object libc allocation; allocation is a free-list pop or a bump; instance teardown reclaims everything even if counting misses. |
 | **GC-3 — Instantiation-time materialisation** | ◑ Partly done: element/data segments are evaluated once (D8) and imported globals are resolved (G6). Table initialiser expressions (D9/G5) are still dropped. | G4, G6 (G5 open) | `array_new_elem` identity holds; GC `const` exprs reading imported globals work. Typed/non-nullable tables still do not initialise. |
 | **GC-4 — `br_on_cast` correctness** | Honour the `castop` nullability flags; fix the branch-target slot model so `br_on_cast(_fail)` never trips `!slots.empty()` / `!valueStack.empty()`. | G7 | Both scripts run to completion; nullable variants yield spec results. |
 | **GC-5 — Crash triage** | ◑ Mostly done: `ref_cast`, `ref_func`, `call_ref`, `return_call_ref` and `type-equivalence` all run now (the trap sink), and `array.init_elem` is clean; only `array.init_data` still has 3 mismatches. | C1–C5 | No child aborts/segfaults; each script passes or fails with a real mismatch message. |
@@ -928,12 +934,15 @@ from actions the harness silently skips: `table_get.wast:23` is
 `assert_return` observes the untouched table. These are §5.4 artifacts, not
 runtime bugs.
 
-Reference counting now has **one manual test** — `GC reference counting: clone,
+Reference counting now has **two manual tests**. `GC reference counting: clone,
 drop and store barriers` (`Test/wasm_wat/gc_refcount.wat`) covers the header
 count, `refClone`/`refDrop`/`refStore` and the underflow trap, and runs the JIT
-`struct.set` barrier end to end. Still absent: an end-to-end *reclamation* check
-(memory returning) and a cycle test, both of which need `RC-2`/`RC-1b`; until
-then a leak is visible only through process RSS.
+`struct.set` barrier end to end. `GC heap: region allocation, alignment and
+recycling` covers 16-byte alignment, mmap zero-fill, region batching (1000
+objects → at most one extra region), free-list reuse, dedicated large regions,
+`owns()` classification and bulk `releaseSet`. Still absent: an end-to-end
+*reclamation* check (memory returning) and a cycle test, both of which need
+`RC-2`/`RC-1b`; until then a leak is visible only through process RSS.
 
 ## 9. References
 
