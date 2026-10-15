@@ -3,6 +3,7 @@
 
 #include "../WasmBase/WasmModuleInstance.hpp"
 #include "../WasmBase/WasmOpcodeDispatcher.hpp"
+#include "../WasmBase/WasmTrap.hpp"
 #include "LibJitTypeTranslation.hpp"
 #include <jit/jit.h>
 #include <vector>
@@ -55,6 +56,12 @@ private:
 	std::vector<ControlBlock>& controlStack;
 
 	void pushValue(jit_value_t v);
+	// Push a reference whose ownership the stack takes over (no clone).
+	void pushOwnedValue(jit_value_t v);
+	// Release the operand stack's ownership of a popped reference.
+	void emitDropValue(jit_value_t v);
+	// Release every reference-typed non-parameter local (function exit).
+	void emitDropRefLocals();
 	jit_value_t popValue();
 	// Emits the function's epilogue (a `return`). Does nothing in unreachable
 	// code or when the model stack is short (dead tail). With `consume` false
@@ -136,8 +143,15 @@ private:
 	const WASM::FuncType& functionSignatureForType(WASM::TypeIdx typeIdx) const;
 	jit_value_t callablePointerForFuncIndex(WASM::FuncIdx funcIdx);
 	void dispatchCallThroughCallable(jit_value_t callablePtr, WASM::TypeIdx typeIdx);
-	void emitTrapUnreachable();
-	void emitTrapIfNull(jit_value_t pointer);
+	// Emit a trap of `kind` (docs/SAFETY.md §2.4). `detail` overrides the log
+	// message when the kind's spec name is too coarse for the situation.
+	void emitTrap(WASM::TrapKind kind);
+	void emitTrap(WASM::TrapKind kind, const char* detail);
+	// Emit a trap of `kind` when `pointer` is null (a null reference reached an
+	// instruction that dereferences it). The kind names *what* was dereferenced:
+	// NullReference, NullFunctionReference, NullStructureReference,
+	// NullArrayReference.
+	void emitTrapIfNull(WASM::TrapKind kind, jit_value_t pointer, const char* detail = nullptr);
 	std::vector<WASM::StorageType> storageTypesForBlockType(const WASM::BlockType& bt) const;
 
 	jit_value_t vmContextValue();

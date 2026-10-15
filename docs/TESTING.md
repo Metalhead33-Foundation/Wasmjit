@@ -295,7 +295,7 @@ Correct results are deliberately **not required yet**; the run is meant to be in
 | `module` (binary) | executed | loaded and instantiated |
 | `register` | executed | exports re-registered under the given name |
 | `assert_return`, `action` (`invoke`) | executed | i32/i64/f32/f64 arguments and results |
-| `assert_trap` | executed | traps are recoverable (`WASM::trap` longjmps to a `TrapScope`; see `WasmBase/WasmTrap.hpp`) |
+| `assert_trap` | executed | traps are recoverable (`WASM::trap` longjmps to a `TrapScope`; see `WasmBase/WasmTrap.hpp`), and the expected text is compared against the trap's **kind** (`trapKindName`), so a trap for the wrong reason fails |
 | `assert_exhaustion` | approximated | run in a nested child; an abnormal termination counts as the expected exhaustion trap |
 | `assert_malformed`, `assert_invalid`, `assert_unlinkable`, `assert_uninstantiable` | skipped | no validating / decoding front-end yet |
 | `module_definition`, `module_instance` | skipped | module-linking proposal |
@@ -317,12 +317,25 @@ frames carry no unwind tables, so a trap is a `longjmp` to a `TrapScope` the
 harness arms around each invocation (`WasmBase/WasmTrap.hpp`), not a C++
 exception. `invoke()` arms one scope, so:
 
-- `assert_trap` runs the action and expects the scope to be jumped to;
+- `assert_trap` runs the action, expects the scope to be jumped to, **and**
+  compares the script's expected text with the trap's kind (`WASM::trapKindName`)
+  — "it trapped, but not for the reason the script requires" is a failure
+  (docs/SAFETY.md §2.4);
 - an unexpected trap in `assert_return`/`action` is reported as a failure with
   the trap's message (e.g. `out of bounds memory access`), instead of killing
   the child process.
 
 Consequences worth knowing:
+
+- Comparing the kind makes the *reason* a checked property, so it immediately
+  exposed four previously-silent wrong-reason passes: `array.wast` (hidden, not in
+  `wast_supported.txt`) went from `40/0` to `36/4`. All four are
+  `array.new_data` / `array.new_elem` with a huge `offset + len`: the engine
+  allocates the destination array **before** validating the source segment range,
+  so it traps `OutOfMemory` where the spec requires `out of bounds memory access`
+  (lines 209/217) or `out of bounds table access` (lines 283/290). Before this
+  change any trap satisfied `assert_trap`, so they could not be seen. The fix is
+  to validate the range first; it is deliberately *not* part of this change.
 
 - a missing trap is now a **real** failure (e.g. `traps.wast` requires integer
   divide-by-zero and the trapping `trunc_f*` forms to trap);

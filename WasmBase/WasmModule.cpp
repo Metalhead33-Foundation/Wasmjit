@@ -1,6 +1,7 @@
 #include "WasmModule.hpp"
 #include "WasmSafety.hpp"
 #include "WasmStore.hpp"
+#include <cstdio>
 #include <iostream>
 #include <stdexcept>
 #include <utility>
@@ -750,6 +751,62 @@ void Module::handleComplexElementSegment(DWasmStream& stream, ElementSegment& se
 Module::Module() : version(0), startFunctionIndex(0), hasStartFunction(false) {
 }
 
+namespace {
+
+// Reject a value type the engine cannot model. This is deliberate: an unmodelled
+// type lowers to `jit_type_void`, whose loads produce a null `jit_value_t`
+// (docs/NULL_JIT_VALUE_DIAGNOSIS.md), so such a module is refused at load
+// instead of being compiled into a silently broken function.
+[[noreturn]] void rejectUnsupportedValueType(const char* where, size_t index, WASM::ValueTypeCode code)
+{
+	const unsigned byte = static_cast<unsigned>(static_cast<uint8_t>(code));
+	char buffer[256];
+	std::snprintf(buffer, sizeof(buffer),
+			"malformed module: unsupported value type 0x%02X (%d) in %s #%zu — this "
+			"engine does not model it (docs/NULL_JIT_VALUE_DIAGNOSIS.md)",
+			byte, static_cast<int>(code), where, index);
+	throw std::runtime_error(buffer);
+}
+
+} // namespace
+
+void Module::validateValueTypes() const
+{
+	const auto check = [](const char* where, size_t index, WASM::ValueTypeCode code) {
+		if (!WASM::isModeledValueTypeCode(code))
+			rejectUnsupportedValueType(where, index, code);
+	};
+
+	for (size_t i = 0; i < types.size(); ++i) {
+		const Subtype& st = types[i];
+		if (st.isFunction()) {
+			const FuncType& ft = std::get<FuncType>(st.composite);
+			for (const StorageType& p : ft.params)
+				check("function type parameter", i, p.val.opcode);
+			for (const StorageType& r : ft.results)
+				check("function type result", i, r.val.opcode);
+		} else if (st.isStruct()) {
+			for (const FieldType& f : std::get<StructType>(st.composite).fields)
+				check("struct field", i, f.storageType.val.opcode);
+		} else if (st.isArray()) {
+			check("array element", i, std::get<ArrayType>(st.composite).elementType.storageType.val.opcode);
+		}
+	}
+	for (size_t i = 0; i < importTables.size(); ++i)
+		check("imported table", i, importTables[i].table.elementType.opcode);
+	for (size_t i = 0; i < importGlobals.size(); ++i)
+		check("imported global", i, importGlobals[i].global.contentType.opcode);
+	for (size_t i = 0; i < tables.size(); ++i)
+		check("table", i, tables[i].elementType.opcode);
+	for (size_t i = 0; i < globals.size(); ++i)
+		check("global", i, globals[i].type.contentType.opcode);
+	for (size_t i = 0; i < elementSegments.size(); ++i)
+		check("element segment", i, elementSegments[i].elemType.opcode);
+	for (size_t i = 0; i < functionBodies.size(); ++i)
+		for (const LocalEntry& l : functionBodies[i].locals)
+			check("local", i, l.type.opcode);
+}
+
 void Module::fromFile(Elv::Io::Device& file)
 {
 	// Its own scope. Should go out of scope before processSecetions
@@ -781,6 +838,10 @@ void Module::fromFile(Elv::Io::Device& file)
 	} while(canReadMoreSections);
 	}
 	processSecetions(file);
+
+	// Reject a module that declares a value type this engine cannot lower, rather
+	// than compiling a null operand into a function (docs/NULL_JIT_VALUE_DIAGNOSIS.md).
+	validateValueTypes();
 }
 
 const std::span<const Section> Module::getSections() const

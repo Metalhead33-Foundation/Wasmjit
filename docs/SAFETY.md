@@ -85,9 +85,17 @@ so the kernel handed out pages until the machine froze. See §4, case study 1.
 
 - **Traps** are a `longjmp` to an embedder-armed `TrapScope`
   (`WasmBase/WasmTrap.hpp`): the JIT-generated frames have no unwind tables, so a
-  C++ exception cannot cross them. The JIT's `emitAbort` / `emitTrapIfNull`, the
+  C++ exception cannot cross them. The JIT's `emitTrap` / `emitTrapIfNull`, the
   native helpers and the bulk/segment paths all raise traps this way. The test
   harness arms a scope per invocation and *executes* `assert_trap`.
+- Every trap carries a **kind** (`WASM::TrapKind`) as well as a message. The kind
+  is the spec's taxonomy and `trapKindName` returns the spec's own wording, so the
+  harness compares an `assert_trap` expectation against `trapKindName(kind)`:
+  trapping for the *wrong* reason is a failure, not a silent pass. The message is
+  free text for the log and may be finer-grained than the kind (e.g.
+  "out of bounds memory.init source" for `OutOfBoundsMemoryAccess`).
+  `TrapKind::Internal` means "this is not a spec trap" — a defensive index check,
+  an unimplemented lowering — and must not be reachable in a conformant run.
 - **Loader / instantiator / JIT problems** are `std::runtime_error` /
   `std::invalid_argument`, caught by the embedder. That includes an opcode the
   backend does not lower yet (`notImplemented`), a malformed export index, an

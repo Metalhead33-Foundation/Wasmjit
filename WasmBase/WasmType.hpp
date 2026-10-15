@@ -85,6 +85,48 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 	return left.writeLEB128_enum(right);
 }
 
+// ── Value types this engine models ──────────────────────────────────────────
+// True only for the codes this engine can lower and run. Anything else (the
+// exception-handling `exnref` / `nullexnref` opcodes 0x69 / 0x74 are the ones the
+// spec suite exercises) has no representation: `translatePrimitiveType` would
+// fall back to `jit_type_void`, and a load of that type yields a null
+// `jit_value_t`. Rather than compile such a module into an operand that is
+// silently broken, `Module::fromFile` rejects it — see
+// docs/NULL_JIT_VALUE_DIAGNOSIS.md.
+inline bool isModeledValueTypeCode(ValueTypeCode code)
+{
+	switch (code) {
+	case ValueTypeCode::Void:
+	case ValueTypeCode::Func:
+	case ValueTypeCode::I32:
+	case ValueTypeCode::I64:
+	case ValueTypeCode::F32:
+	case ValueTypeCode::F64:
+	case ValueTypeCode::V128:
+	case ValueTypeCode::I8:
+	case ValueTypeCode::I16:
+	case ValueTypeCode::FuncRef:
+	case ValueTypeCode::ExternRef:
+	case ValueTypeCode::AnyRef:
+	case ValueTypeCode::EqRef:
+	case ValueTypeCode::I31Ref:
+	case ValueTypeCode::StructRef:
+	case ValueTypeCode::ArrayRef:
+	case ValueTypeCode::NullFuncRef:
+	case ValueTypeCode::NullExternRef:
+	case ValueTypeCode::NullRef:
+	case ValueTypeCode::StringRef:
+	case ValueTypeCode::StringViewWtf8:
+	case ValueTypeCode::StringViewWtf16:
+	case ValueTypeCode::StringViewIter:
+	case ValueTypeCode::RefNull:
+	case ValueTypeCode::Ref:
+		return true;
+	default:
+		return false;
+	}
+}
+
 struct ValueType {
 	ValueTypeCode opcode;
 	int32_t heapType; // Only used if opcode is 0x6B (ref) or 0x6C (ref null)

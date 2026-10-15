@@ -254,6 +254,9 @@ private:
 
 	// Set by invoke() when the call trapped (a non-local exit out of the JIT).
 	const char* lastTrapMessage = nullptr;
+	// The kind of that trap, which is what assert_trap is checked against
+	// (docs/SAFETY.md §2.4): the free-text message is only a hint.
+	WASM::TrapKind lastTrapKind = WASM::TrapKind::Internal;
 
 	void installSpectest();
 
@@ -669,7 +672,17 @@ void ScriptRunner::onAssertTrap(const ScriptCommand& command)
 	}
 
 	if (trapped) {
-		pass();
+		// Check *why* it trapped, not just that it did (docs/SAFETY.md §2.4):
+		// the expectation is compared against the trap's kind, so a trap raised
+		// for the wrong reason can no longer satisfy assert_trap. The engine's
+		// free-text message is reported on a mismatch to help diagnose it.
+		const std::string got = WASM::trapKindName(lastTrapKind);
+		if (command.text.empty() || command.text == got) {
+			pass();
+			return;
+		}
+		fail(command.line, "expected trap '" + command.text + "' but trapped with '" + got +
+			"' (engine message: '" + (lastTrapMessage != nullptr ? lastTrapMessage : "?") + "')");
 		return;
 	}
 	fail(command.line, "expected a trap from '" + action.field + "' but it returned normally");
@@ -861,6 +874,7 @@ bool ScriptRunner::invoke(WASM::ModuleInstance& instance, const ScriptAction& ac
 	if (setjmp(trapScope.buffer) != 0) {
 		trapped = true;
 		lastTrapMessage = trapScope.message();
+		lastTrapKind = trapScope.kind();
 		return true;
 	}
 

@@ -1,11 +1,15 @@
 # Garbage Collection (Wasm 3.0) — Implementation Notes, Spec Conformance, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 7 — RC-5/RC-1b: objects
-are *unowned* at birth, reference-typed slots (heap slots, locals, globals,
-segment copies) retain, and `gcCollect()` recycles queued zero-count objects at a
-safepoint. Revision 6 made arrays inline; revision 5 moved the GC heap into a
-Store-owned mmap arena; revisions 3–4 chose reference counting and added the
-refcount header and write barriers.)
+Status: design note / implementation reference (revision 8 — **operand-stack
+ownership is on**: `kStackOwnsRefs` makes the operand stack own a count for every
+pushed reference, so references held only transiently are reclaimed too. It was
+blocked by a module that pushed a null `jit_value_t`; such a module is now rejected
+at load ([`NULL_JIT_VALUE_DIAGNOSIS.md`](../NULL_JIT_VALUE_DIAGNOSIS.md)).
+Revision 7 made objects *unowned* at birth, reference-typed slots (heap slots,
+locals, globals, segment copies) retain, and `gcCollect()` recycles queued
+zero-count objects at a safepoint. Revision 6 made arrays inline; revision 5 moved
+the GC heap into a Store-owned mmap arena; revisions 3–4 chose reference counting
+and added the refcount header and write barriers.)
 Audience: anyone touching `WasmType`, `WasmTypeRegistry`, `WasmModuleInstance`,
 `LibJitTypeTranslator`, `LibjitOpcodeDispatcher`, or the test suite.
 
@@ -841,7 +845,7 @@ the collector is not considered shipped until cycles are reclaimed. The
 | **GC-8 — Extern interop (optional)** | Only if an embedder needs host externrefs: box `extern.convert_any` values, keep identity under the no-mixing contract (D5). | G3 | `ref_test` extern cases pass; the contract is documented in `ABI.md`. |
 | **GC-9 — Inline arrays** | ✅ Done: header-only JIT type, per-type `dataOffset` (`gcArrayDataOffset`), one allocation, and `arrayElementBase` for every element access. | D13, H8 | Done: `array.new_default` is one heap block (the `GC reference counting` test asserts `totalAllocations() + 1`), and all array scripts are unchanged from the §8 baseline. |
 | **RC-1 — Reference-counted heap objects (core)** | ✅ Store barriers + slot ownership: `[u32 TypeId][u32 refcount]` header, **count 0 at birth**, `wasm_ref_store`/`_clone`/`_drop` (`WasmGcHeader.hpp`, `ModuleInstance::ref*`), and every ref-typed slot store retains — `struct.set`/`struct.new`, `array.set`/`fill`/`new*`/`copy`, `global.set`, `table.set`, `local.set`/`tee`, global initialisers, segment copies. | L2, L3, RC4, RC12, D14, D15 | Done: a created object is unowned until a slot retains it, and the JIT `struct.set`/`array.set`/`local` paths move the count. |
-| **RC-1b — Reclaim at a safepoint** | ✅ `reclaimGcObject` queues a zero-count object; `gcCollect()` recycles queued objects that are still at zero (resurrection-checked). Call it where no Wasm frame is live and the embedder holds no un-counted references. | RC4, RC9, L1, D19 | Done: the `GC reference counting` test drops an object to zero, collects, and reuses the recycled block. **Leak-side, not UAF:** parameters and control-flow slots are borrows, ref locals are not released at frame exit, and the operand stack does not own references — objects held only transiently leak until `GC-2` teardown. |
+| **RC-1b — Reclaim at a safepoint** | ✅ `reclaimGcObject` queues a zero-count object; `gcCollect()` recycles queued objects that are still at zero (resurrection-checked). Call it where no Wasm frame is live and the embedder holds no un-counted references. | RC4, RC9, L1, D19 | Done: the `GC reference counting` test drops an object to zero, collects, and reuses the recycled block. **Leak-side, not UAF:** parameters and control-flow slots are borrows, so a reference that is only ever held in one of those is never released and leaks until `GC-2` teardown. The operand stack **does** own its references (`kStackOwnsRefs`: push clones, pop/drop releases) and ref locals **are** released at frame exit, so those paths are exact. (Both used to be blocked by a module that pushed a null `jit_value_t`; such a module is now rejected at load — see [`NULL_JIT_VALUE_DIAGNOSIS.md`](../NULL_JIT_VALUE_DIAGNOSIS.md).) |
 | **RC-2 — Cycle collection (day one, with RC-1)** | Bacon–Rajan synchronous trial deletion over the region's objects: a candidate buffer, no stack maps, no root set. | RC1, D18 | A self-referential `struct`/`array` graph is reclaimed once its external references drop (a live-object / allocation counter returns to its pre-graph value). |
 | **RC-3 — Trap-safe refcount ops** | Saturating `clone`, trapping `drop` below zero, debug poison-on-free, and an iterative drop worklist (no recursion on a deep chain). | RC7, RC8, RC9, D19 | Overflow / underflow / double-drop tests trap or leak deterministically (never corrupt), and dropping a 10⁶-deep chain uses O(1) C stack. |
 | **RC-4 — Atomic refcounts / threads-ready** | Make the header count `std::atomic<int32_t>` with acquire/release ordering; stress a clone/drop race. | RC2, RC11, D16 | The count is atomic in every multi-thread-capable build and a two-thread clone/drop stress test is clean; unblocks `THREADS.md`. |

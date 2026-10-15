@@ -51,7 +51,9 @@ memory_trap64
 names
 ref
 ref_eq
-ref_null
+# ref_null is excluded: one of its modules declares `exnref`/`nullexnref`, which
+# this engine does not model, so the module is now rejected at load
+# (docs/NULL_JIT_VALUE_DIAGNOSIS.md).
 return_call
 return_call_indirect
 return_call_ref

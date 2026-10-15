@@ -18,19 +18,28 @@ namespace LibJIT {
 
 namespace {
 
-// A Wasm trap (docs/proposals/BULK_MEMORY.md BM-2): jump to the embedder's
-// armed TrapScope when there is one, otherwise print and abort. A `longjmp`
-// rather than a C++ exception, because the JIT-generated frames carry no
-// unwind tables. `JIT_CALL_NORETURN` tells the emitter control does not
-// continue here.
-void emitAbort(jit_function_t fn)
+// A Wasm trap (docs/proposals/BULK_MEMORY.md BM-2, docs/SAFETY.md §2.4): jump
+// to the embedder's armed TrapScope when there is one, otherwise print and
+// abort. A `longjmp` rather than a C++ exception, because the JIT-generated
+// frames carry no unwind tables. `JIT_CALL_NORETURN` tells the emitter control
+// does not continue here.
+//
+// The *kind* travels as an int and the message as a constant string, because a
+// scoped enum cannot be passed through a jit_type signature; wasm_trap_raise
+// re-assembles them. The kind is what makes the trap checkable
+// (docs/SAFETY.md §2.4), the message is only for the log.
+void emitAbort(jit_function_t fn, WASM::TrapKind kind, const char* detail)
 {
-	static const char kTrapMessage[] = "wasm trap";
-	jit_type_t params[1] = {jit_type_void_ptr};
-	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 1, 1);
-	jit_value_t message = jit_value_create_nint_constant(
-		fn, jit_type_void_ptr, reinterpret_cast<jit_nint>(const_cast<char*>(kTrapMessage)));
-	jit_insn_call_native(fn, "wasm_trap", reinterpret_cast<void*>(&WASM::trap), sig, &message, 1, JIT_CALL_NORETURN);
+	jit_type_t params[2] = {jit_type_int, jit_type_void_ptr};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 2, 1);
+	jit_value_t args[2] = {
+		jit_value_create_nint_constant(fn, jit_type_int,
+			static_cast<jit_nint>(static_cast<int>(kind))),
+		jit_value_create_nint_constant(fn, jit_type_void_ptr,
+			reinterpret_cast<jit_nint>(const_cast<char*>(detail)))
+	};
+	jit_insn_call_native(fn, "wasm_trap_raise", reinterpret_cast<void*>(&WASM::wasm_trap_raise),
+		sig, args, 2, JIT_CALL_NORETURN);
 }
 
 extern "C" {
@@ -119,30 +128,30 @@ static void wasm_memory_copy_impl(WASM::VMContext* vm, uint32_t dstMemIdx, uint3
 								  int32_t dst, int32_t src, int32_t len)
 {
 	if (dst < 0 || src < 0 || len < 0)
-		WASM::trap("out of bounds memory access");
+		trap(WASM::TrapKind::OutOfBoundsMemoryAccess);
 	if (dstMemIdx >= vm->memoryCount || srcMemIdx >= vm->memoryCount)
-		WASM::trap("memory index out of range");
+		trap(WASM::TrapKind::Internal, "memory index out of range");
 	const WASM::LinearMemory* dstMem = vm->memories[dstMemIdx];
 	const WASM::LinearMemory* srcMem = vm->memories[srcMemIdx];
 	const uint64_t udst = static_cast<uint64_t>(dst);
 	const uint64_t usrc = static_cast<uint64_t>(src);
 	const uint64_t ulen = static_cast<uint64_t>(len);
 	if (udst + ulen > dstMem->memorySize || usrc + ulen > srcMem->memorySize)
-		WASM::trap("out of bounds memory access");
+		trap(WASM::TrapKind::OutOfBoundsMemoryAccess);
 	std::memmove(dstMem->memoryBase + udst, srcMem->memoryBase + usrc, static_cast<size_t>(ulen));
 }
 
 static void wasm_memory_fill_impl(WASM::VMContext* vm, uint32_t memIdx, int32_t dst, int32_t value, int32_t len)
 {
 	if (dst < 0 || len < 0)
-		WASM::trap("out of bounds memory access");
+		trap(WASM::TrapKind::OutOfBoundsMemoryAccess);
 	if (memIdx >= vm->memoryCount)
-		WASM::trap("memory index out of range");
+		trap(WASM::TrapKind::Internal, "memory index out of range");
 	const WASM::LinearMemory* memory = vm->memories[memIdx];
 	const uint64_t udst = static_cast<uint64_t>(dst);
 	const uint64_t ulen = static_cast<uint64_t>(len);
 	if (udst + ulen > memory->memorySize)
-		WASM::trap("out of bounds memory access");
+		trap(WASM::TrapKind::OutOfBoundsMemoryAccess);
 	std::memset(memory->memoryBase + udst, value & 0xFF, static_cast<size_t>(ulen));
 }
 
@@ -163,14 +172,14 @@ static uint64_t wasm_table_grow_impl(WASM::VMContext* vm, uint32_t tableIdx, voi
 static void wasm_table_fill_impl(WASM::VMContext* vm, uint32_t tableIdx, int32_t start, void* ref, int32_t len)
 {
 	if (start < 0 || len < 0)
-		WASM::trap("out of bounds table access");
+		trap(WASM::TrapKind::OutOfBoundsTableAccess);
 	if (vm->tables == nullptr || tableIdx >= vm->tableCount)
-		WASM::trap("table index out of range");
+		trap(WASM::TrapKind::Internal, "table index out of range");
 	WASM::TableInstance* table = vm->tables[tableIdx];
 	const uint64_t ustart = static_cast<uint64_t>(start);
 	const uint64_t ulen = static_cast<uint64_t>(len);
 	if (ustart + ulen > table->size)
-		WASM::trap("out of bounds table access");
+		trap(WASM::TrapKind::OutOfBoundsTableAccess);
 	for (uint64_t i = 0; i < ulen; ++i)
 		table->base[ustart + i] = static_cast<WASM::Callable*>(ref);
 }
@@ -179,16 +188,16 @@ static void wasm_table_copy_impl(WASM::VMContext* vm, uint32_t dstTableIdx, uint
 								 int32_t dst, int32_t src, int32_t len)
 {
 	if (dst < 0 || src < 0 || len < 0)
-		WASM::trap("out of bounds table access");
+		trap(WASM::TrapKind::OutOfBoundsTableAccess);
 	if (vm->tables == nullptr || dstTableIdx >= vm->tableCount || srcTableIdx >= vm->tableCount)
-		WASM::trap("table index out of range");
+		trap(WASM::TrapKind::Internal, "table index out of range");
 	WASM::TableInstance* dstTable = vm->tables[dstTableIdx];
 	WASM::TableInstance* srcTable = vm->tables[srcTableIdx];
 	const uint64_t udst = static_cast<uint64_t>(dst);
 	const uint64_t usrc = static_cast<uint64_t>(src);
 	const uint64_t ulen = static_cast<uint64_t>(len);
 	if (udst + ulen > dstTable->size || usrc + ulen > srcTable->size)
-		WASM::trap("out of bounds table access");
+		trap(WASM::TrapKind::OutOfBoundsTableAccess);
 	std::memmove(dstTable->base + udst, srcTable->base + usrc,
 				 static_cast<size_t>(ulen) * sizeof(WASM::Callable*));
 }
@@ -280,50 +289,50 @@ static uint64_t wasm_i64_trunc_sat_f64_u(double x)
 // here and raises a real Wasm trap via WASM::trap (WasmTrap.hpp).
 static int32_t wasm_i32_div_s(int32_t a, int32_t b)
 {
-	if (b == 0) WASM::trap("integer divide by zero");
-	if (a == std::numeric_limits<int32_t>::min() && b == -1) WASM::trap("integer overflow");
+	if (b == 0) trap(WASM::TrapKind::IntegerDivideByZero);
+	if (a == std::numeric_limits<int32_t>::min() && b == -1) trap(WASM::TrapKind::IntegerOverflow);
 	return a / b;
 }
 static uint32_t wasm_i32_div_u(uint32_t a, uint32_t b)
 {
-	if (b == 0) WASM::trap("integer divide by zero");
+	if (b == 0) trap(WASM::TrapKind::IntegerDivideByZero);
 	return a / b;
 }
 static int32_t wasm_i32_rem_s(int32_t a, int32_t b)
 {
-	if (b == 0) WASM::trap("integer divide by zero");
+	if (b == 0) trap(WASM::TrapKind::IntegerDivideByZero);
 	return (b == -1) ? 0 : (a % b); // INT_MIN % -1 is UB in C++
 }
 static uint32_t wasm_i32_rem_u(uint32_t a, uint32_t b)
 {
-	if (b == 0) WASM::trap("integer divide by zero");
+	if (b == 0) trap(WASM::TrapKind::IntegerDivideByZero);
 	return a % b;
 }
 static int64_t wasm_i64_div_s(int64_t a, int64_t b)
 {
-	if (b == 0) WASM::trap("integer divide by zero");
-	if (a == std::numeric_limits<int64_t>::min() && b == -1) WASM::trap("integer overflow");
+	if (b == 0) trap(WASM::TrapKind::IntegerDivideByZero);
+	if (a == std::numeric_limits<int64_t>::min() && b == -1) trap(WASM::TrapKind::IntegerOverflow);
 	return a / b;
 }
 static uint64_t wasm_i64_div_u(uint64_t a, uint64_t b)
 {
-	if (b == 0) WASM::trap("integer divide by zero");
+	if (b == 0) trap(WASM::TrapKind::IntegerDivideByZero);
 	return a / b;
 }
 static int64_t wasm_i64_rem_s(int64_t a, int64_t b)
 {
-	if (b == 0) WASM::trap("integer divide by zero");
+	if (b == 0) trap(WASM::TrapKind::IntegerDivideByZero);
 	return (b == -1) ? 0 : (a % b);
 }
 static uint64_t wasm_i64_rem_u(uint64_t a, uint64_t b)
 {
-	if (b == 0) WASM::trap("integer divide by zero");
+	if (b == 0) trap(WASM::TrapKind::IntegerDivideByZero);
 	return a % b;
 }
 
 [[noreturn]] static void trapInvalidConversion()
 {
-	WASM::trap("invalid conversion to integer");
+	trap(WASM::TrapKind::InvalidConversionToInteger);
 }
 static int32_t wasm_i32_trunc_f32_s(float x)
 {
@@ -482,6 +491,29 @@ jit_value_t callNativeUnary(jit_function_t fn, void* fptr, jit_type_t ret, jit_t
 	return jit_insn_call_native(fn, "wasm.unary", fptr, sig, args, 1, 0);
 }
 
+// ── Operand-stack ownership (docs/proposals/GC.md RC-5) ─────────────────────
+// When true, every reference pushed on the operand stack is cloned (the stack
+// owns a count) and every popped reference is released. This makes counts exact,
+// so reclamation reaches objects held only transiently.
+//
+// ENABLED. It used to crash on a module that pushed a null `jit_value_t` (an
+// unmodelled value type such as `exnref` lowered to `jit_type_void`); such a
+// module is now rejected at load — Module::validateValueTypes and the
+// jitTypeForValueType guard — so no null value can reach the stack. See
+// docs/NULL_JIT_VALUE_DIAGNOSIS.md.
+constexpr bool kStackOwnsRefs = true;
+
+// True when a JIT value is a reference (a pointer-typed value). A null JIT type
+// means an unsupported value type — e.g. `exnref`, which this engine does not
+// represent — and is treated as a non-reference.
+static bool isRefJitValue(jit_value_t v)
+{
+	jit_type_t t = jit_value_get_type(v);
+	// Exclude tagged types (`i31`): LibJIT reports them as pointers, but they are
+	// not GC objects, and a void_ptr round-trip through a tagged type breaks.
+	return t != nullptr && jit_type_is_pointer(t) && !jit_type_is_tagged(t);
+}
+
 jit_value_t callNativeBinary(jit_function_t fn, void* fptr, jit_type_t ret, jit_type_t argT1, jit_type_t argT2,
 							 jit_value_t a, jit_value_t b)
 {
@@ -556,7 +588,43 @@ void OpcodeDispatcher::pushValue(jit_value_t v)
 	// values are dead; don't let them accumulate in the compile-time model.
 	if (unreachableCode)
 		return;
+	// A reference on the operand stack *owns* one count (docs/proposals/GC.md
+	// RC-5): clone it, so the stack holds its own reference and every pop can
+	// release it. Producers that already hold an owned value (a call result, or
+	// a pass-through such as `ref.cast`) use pushOwnedValue instead.
+	if (kStackOwnsRefs && isRefJitValue(v))
+		v = castRefValue(emitRefClone(v), jit_value_get_type(v));
 	valueStack.push_back(v);
+}
+
+void OpcodeDispatcher::pushOwnedValue(jit_value_t v)
+{
+	// Push a reference whose ownership the stack takes over: no clone. Used by
+	// owned producers (call results) and by pass-through instructions where the
+	// popped value's ownership simply moves.
+	if (unreachableCode)
+		return;
+	valueStack.push_back(v);
+}
+
+void OpcodeDispatcher::emitDropValue(jit_value_t v)
+{
+	// Release the operand stack's ownership of a popped reference.
+	if (kStackOwnsRefs && isRefJitValue(v))
+		emitRefDrop(v);
+}
+
+void OpcodeDispatcher::emitDropRefLocals()
+{
+	// At function exit, every reference-typed *local* (params are borrows, so
+	// they are skipped) releases the count it owns (docs/proposals/GC.md RC-5).
+	if (!kStackOwnsRefs)
+		return;
+	for (size_t i = currentFunc.params.size(); i < locals.size(); ++i) {
+		jit_value_t lv = jit_insn_load(function, locals[i]);
+		if (isRefJitValue(lv))
+			emitRefDrop(lv);
+	}
 }
 
 jit_value_t OpcodeDispatcher::popValue()
@@ -770,7 +838,9 @@ void OpcodeDispatcher::pushCallResults(const WASM::FuncType& calleeSig, jit_type
 		return;
 	}
 	if (calleeSig.results.size() == 1) {
-		pushValue(ret);
+		// A call result is already owned by the caller (the callee transferred
+		// it), so it is pushed without an extra clone.
+		pushOwnedValue(ret);
 		return;
 	}
 
@@ -783,7 +853,7 @@ void OpcodeDispatcher::pushCallResults(const WASM::FuncType& calleeSig, jit_type
 	for (size_t i = 0; i < calleeSig.results.size(); ++i) {
 		jit_type_t fieldType = jit_type_get_field(returnType, static_cast<unsigned int>(i));
 		jit_nuint fieldOffset = jit_type_get_offset(returnType, static_cast<unsigned int>(i));
-		pushValue(jit_insn_load_relative(function, packed, static_cast<jit_nint>(fieldOffset), fieldType));
+		pushOwnedValue(jit_insn_load_relative(function, packed, static_cast<jit_nint>(fieldOffset), fieldType));
 	}
 }
 
@@ -850,7 +920,7 @@ void OpcodeDispatcher::emitCallableTypeCheck(jit_value_t callablePtr, WASM::Type
 	jit_value_t zero = jit_value_create_nint_constant(function, jit_type_int, 0);
 	jit_value_t ok = jit_insn_ne(function, res, zero);
 	jit_insn_branch_if(function, ok, &lbCont);
-	emitAbort(function);
+	emitTrap(WASM::TrapKind::IndirectCallTypeMismatch);
 	jit_insn_label(function, &lbCont);
 }
 
@@ -859,7 +929,7 @@ void OpcodeDispatcher::dispatchCallThroughCallable(jit_value_t callablePtr, WASM
 	const WASM::FuncType& calleeSig = functionSignatureForType(typeIdx);
 	jit_type_t calleeJitSig = jitTypeForTypeIdx(typeIdx);
 
-	emitTrapIfNull(callablePtr);
+	emitTrapIfNull(WASM::TrapKind::NullFunctionReference, callablePtr);
 
 	emitCallableTypeCheck(callablePtr, typeIdx);
 
@@ -880,9 +950,14 @@ void OpcodeDispatcher::dispatchCallThroughCallable(jit_value_t callablePtr, WASM
 	pushCallResults(calleeSig, calleeJitSig, ret);
 }
 
-void OpcodeDispatcher::emitTrapUnreachable()
+void OpcodeDispatcher::emitTrap(WASM::TrapKind kind)
 {
-	emitAbort(function);
+	emitAbort(function, kind, WASM::trapKindName(kind));
+}
+
+void OpcodeDispatcher::emitTrap(WASM::TrapKind kind, const char* detail)
+{
+	emitAbort(function, kind, (detail != nullptr) ? detail : WASM::trapKindName(kind));
 }
 
 void OpcodeDispatcher::notImplemented(const char* name)
@@ -895,14 +970,14 @@ void OpcodeDispatcher::notImplemented(const char* name)
 	throw std::runtime_error(std::string("LibJIT backend: opcode is not lowered yet: ") + name);
 }
 
-void OpcodeDispatcher::emitTrapIfNull(jit_value_t pointer)
+void OpcodeDispatcher::emitTrapIfNull(WASM::TrapKind kind, jit_value_t pointer, const char* detail)
 {
 	jit_value_t word = jit_insn_convert(function, pointer, jit_type_ulong, 0);
 	jit_value_t nonNull = jit_insn_ne(function, word,
 		jit_value_create_long_constant(function, jit_type_ulong, 0));
 	jit_label_t ok = jit_label_undefined;
 	jit_insn_branch_if(function, nonNull, &ok);
-	emitTrapUnreachable();
+	emitTrap(kind, detail);
 	jit_insn_label(function, &ok);
 }
 
@@ -1023,16 +1098,23 @@ void OpcodeDispatcher::emitImplicitFunctionReturn()
 	}
 	assert(valueStack.size() == n);
 	if (n == 0) {
+		emitDropRefLocals();
 		jit_insn_return(function, nullptr);
 		return;
 	}
 	if (n == 1) {
-		jit_insn_return(function, popValue());
+		jit_value_t rv = popValue();
+		emitDropRefLocals();
+		jit_insn_return(function, rv);
 		return;
 	}
 	jit_type_t signature = jit_function_get_signature(function);
 	jit_type_t returnType = jit_type_get_return(signature);
-	jit_insn_return(function, packReturnValues(returnType, n));
+	jit_value_t packed = packReturnValues(returnType, n);
+	// The result(s) are on the way out (owned by the caller); release the
+	// frame's own references before returning (docs/proposals/GC.md RC-5).
+	emitDropRefLocals();
+	jit_insn_return(function, packed);
 }
 
 jit_value_t OpcodeDispatcher::vmContextValue()
@@ -1049,7 +1131,7 @@ jit_value_t OpcodeDispatcher::checkedTableIndex(jit_value_t table, jit_value_t i
 	jit_value_t inBounds = jit_insn_lt(function, widened, tableSize);
 	jit_label_t cont = jit_label_undefined;
 	jit_insn_branch_if(function, inBounds, &cont);
-	emitTrapUnreachable();
+	emitTrap(WASM::TrapKind::UndefinedElement);
 	jit_insn_label(function, &cont);
 	return widened;
 }
@@ -1094,7 +1176,7 @@ jit_value_t OpcodeDispatcher::tablePointerForIndex(WASM::TableIdx tableidx)
 		jit_value_create_long_constant(function, jit_type_ulong, 0));
 	jit_label_t ok = jit_label_undefined;
 	jit_insn_branch_if(function, present, &ok);
-	emitTrapUnreachable();
+	emitTrap(WASM::TrapKind::Internal, "table index space is null (unmodelled imported table)");
 	jit_insn_label(function, &ok);
 
 	return jit_insn_load_relative(
@@ -1165,7 +1247,7 @@ jit_value_t OpcodeDispatcher::effectiveMemoryAddress(const WASM::MemArg& ma, jit
 	jit_value_t inBounds = jit_insn_and(function, jit_insn_and(function, addrNoWrap, widthNoWrap), inSize);
 	jit_label_t cont = jit_label_undefined;
 	jit_insn_branch_if(function, inBounds, &cont);
-	emitTrapUnreachable();
+	emitTrap(WASM::TrapKind::OutOfBoundsMemoryAccess);
 	jit_insn_label(function, &cont);
 	return jit_insn_add(function, base, byteOff);
 }
@@ -1216,12 +1298,17 @@ jit_type_t OpcodeDispatcher::jitTypeForTypeIdx(WASM::TypeIdx idx) const
 
 jit_type_t OpcodeDispatcher::jitTypeForValueType(const WASM::ValueType& vt)
 {
+	// A body-inline value type the engine does not model (e.g. a block type of
+	// `exnref`) cannot be lowered. Fail the instantiation instead of emitting a
+	// null jit_value_t later (docs/NULL_JIT_VALUE_DIAGNOSIS.md).
+	if (!WASM::isModeledValueTypeCode(vt.opcode))
+		notImplemented("value type is not modelled (docs/NULL_JIT_VALUE_DIAGNOSIS.md)");
 	return typeTranslator.translateType(vt);
 }
 
 void OpcodeDispatcher::dispatchUnreachable()
 {
-	emitTrapUnreachable();
+	emitTrap(WASM::TrapKind::Unreachable);
 	markUnreachable();
 }
 
@@ -1321,13 +1408,13 @@ void OpcodeDispatcher::dispatchElse()
 void OpcodeDispatcher::dispatchThrow(WASM::TagIdx arg)
 {
 	(void)arg;
-	emitTrapUnreachable();
+	emitTrap(WASM::TrapKind::Internal, "throw: exception handling is not implemented");
 	markUnreachable();
 }
 
 void OpcodeDispatcher::dispatchThrowRef()
 {
-	emitTrapUnreachable();
+	emitTrap(WASM::TrapKind::Internal, "throw_ref: exception handling is not implemented");
 	markUnreachable();
 }
 
@@ -1454,6 +1541,7 @@ void OpcodeDispatcher::emitFunctionReturn(bool consume)
 	// extra operands below them are discarded by the return. (Unlike the
 	// function's implicit end, which must leave exactly the results.)
 	if (n == 0) {
+		emitDropRefLocals();
 		jit_insn_return(function, nullptr);
 		return;
 	}
@@ -1463,10 +1551,14 @@ void OpcodeDispatcher::emitFunctionReturn(bool consume)
 
 	if (consume) {
 		if (n == 1) {
-			jit_insn_return(function, popValue());
+			jit_value_t rv = popValue();
+			emitDropRefLocals();
+			jit_insn_return(function, rv);
 			return;
 		}
-		jit_insn_return(function, packReturnValues(returnType, n));
+		jit_value_t packed = packReturnValues(returnType, n);
+		emitDropRefLocals();
+		jit_insn_return(function, packed);
 		return;
 	}
 
@@ -1474,7 +1566,9 @@ void OpcodeDispatcher::emitFunctionReturn(bool consume)
 	// the model stack for the fallthrough path.
 	const size_t base = valueStack.size() - n;
 	if (n == 1) {
-		jit_insn_return(function, valueStack[base]);
+		jit_value_t rv = valueStack[base];
+		emitDropRefLocals();
+		jit_insn_return(function, rv);
 		return;
 	}
 	const size_t depth = valueStack.size();
@@ -1483,6 +1577,7 @@ void OpcodeDispatcher::emitFunctionReturn(bool consume)
 		valueStack.push_back(v);
 	jit_value_t packed = packReturnValues(returnType, n);
 	valueStack.resize(depth);
+	emitDropRefLocals();
 	jit_insn_return(function, packed);
 }
 
@@ -1516,7 +1611,7 @@ void OpcodeDispatcher::dispatchCall(WASM::FuncIdx funcIdx)
 		jit_value_t off = jit_value_create_nint_constant(
 			function, jit_type_nint, static_cast<jit_nint>(funcIdx * sizeof(WASM::Callable)));
 		jit_value_t callablePtr = jit_insn_add(function, impBase, off);
-		emitTrapIfNull(callablePtr);
+	emitTrapIfNull(WASM::TrapKind::Internal, callablePtr, "unresolved imported function");
 		jit_value_t fnPtr = jit_insn_load_relative(
 			function, callablePtr, offsetof(WASM::Callable, fnPtr), jit_type_void_ptr);
 		// If the import has a non-null context (imported from another Wasm
@@ -1575,7 +1670,7 @@ void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx typeIdx, WASM::TableId
 		function, table, offsetof(WASM::TableInstance, base), jit_type_void_ptr);
 	jit_value_t checkedIndex = checkedTableIndex(table, tableElemIdx, "dispatchCallIndirect");
 	jit_value_t callablePtr = jit_insn_load_elem(function, tablePtr, checkedIndex, jit_type_void_ptr);
-	emitTrapIfNull(callablePtr);
+	emitTrapIfNull(WASM::TrapKind::UninitializedElement, callablePtr);
 
 	emitCallableTypeCheck(callablePtr, typeIdx);
 
@@ -1734,7 +1829,7 @@ void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::Tabl
 			function, table, offsetof(WASM::TableInstance, base), jit_type_void_ptr);
 		jit_value_t checkedIndex = checkedTableIndex(table, tableElemIdx, "dispatchReturnCallIndirect");
 		jit_value_t callablePtr = jit_insn_load_elem(function, tablePtr, checkedIndex, jit_type_void_ptr);
-		emitTrapIfNull(callablePtr);
+	emitTrapIfNull(WASM::TrapKind::UninitializedElement, callablePtr);
 		emitCallableTypeCheck(callablePtr, arg1);
 		emitTailCallViaPending(callablePtr, stackArgs);
 		return;
@@ -1761,7 +1856,7 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx arg)
 		std::vector<jit_value_t> stackArgs(ft.params.size());
 		for (size_t i = ft.params.size(); i--; )
 			stackArgs[i] = popValue();
-		emitTrapIfNull(callablePtr);
+	emitTrapIfNull(WASM::TrapKind::NullFunctionReference, callablePtr);
 		emitCallableTypeCheck(callablePtr, arg);
 		emitTailCallViaPending(callablePtr, stackArgs);
 		return;
@@ -1778,7 +1873,8 @@ void OpcodeDispatcher::dispatchTryTable(const WASM::BlockType& arg1, std::vector
 
 void OpcodeDispatcher::dispatchDrop()
 {
-	(void)popValue();
+	// Discarding a reference releases the operand stack's ownership of it.
+	emitDropValue(popValue());
 }
 
 void OpcodeDispatcher::dispatchSelect()
@@ -1820,37 +1916,38 @@ void OpcodeDispatcher::dispatchLocalSet(WASM::LocalIdx arg)
 {
 	assert(arg < locals.size());
 	jit_value_t v = popValue();
+	const bool refLocal = isRefJitValue(locals[arg]);
 	// Parameters hold a *borrow* (the caller's value is not owned by us); only
 	// non-parameter locals own a reference (docs/proposals/GC.md RC-5).
-	const bool ownedLocal = arg >= currentFunc.params.size()
-			&& jit_type_is_pointer(jit_value_get_type(locals[arg]));
-	if (ownedLocal) {
+	if (refLocal && arg >= currentFunc.params.size()) {
 		// Retain the new value, release the old, then store (so a
 		// self-assignment is safe).
 		jit_value_t old = jit_insn_load(function, locals[arg]);
 		jit_value_t kept = emitRefClone(v);
 		jit_insn_store(function, locals[arg], castRefValue(kept, jit_value_get_type(locals[arg])));
 		emitRefDrop(old);
-		return;
+	} else {
+		jit_insn_store(function, locals[arg], v);
 	}
-	jit_insn_store(function, locals[arg], v);
+	if (refLocal)
+		emitDropValue(v); // release the operand stack's ownership
 }
 
 void OpcodeDispatcher::dispatchLocalTee(WASM::LocalIdx arg)
 {
 	assert(arg < locals.size());
 	jit_value_t v = popValue();
-	const bool ownedLocal = arg >= currentFunc.params.size()
-			&& jit_type_is_pointer(jit_value_get_type(locals[arg]));
-	if (ownedLocal) {
+	const bool refLocal = isRefJitValue(locals[arg]);
+	if (refLocal && arg >= currentFunc.params.size()) {
 		jit_value_t old = jit_insn_load(function, locals[arg]);
 		jit_value_t kept = emitRefClone(v);
 		jit_insn_store(function, locals[arg], castRefValue(kept, jit_value_get_type(locals[arg])));
 		emitRefDrop(old);
-		pushValue(jit_insn_load(function, locals[arg]));
-		return;
+	} else {
+		jit_insn_store(function, locals[arg], v);
 	}
-	jit_insn_store(function, locals[arg], v);
+	if (refLocal)
+		emitDropValue(v);
 	pushValue(jit_insn_load(function, locals[arg]));
 }
 void OpcodeDispatcher::dispatchGlobalGet(WASM::GlobalIdx arg)
@@ -1880,8 +1977,10 @@ void OpcodeDispatcher::dispatchGlobalSet(WASM::GlobalIdx arg)
 	jit_value_t slot = jit_insn_add(function, gPtr, off);
 	if (WASM::isReferenceType(gt.contentType.opcode)) {
 		// The `ref` member is at offset 0 of the Value union, so `slot` is
-		// already the slot address; go through the barrier (GC.md D15).
+		// already the slot address; go through the barrier (GC.md D15), then
+		// release the operand stack's ownership.
 		emitRefStore(slot, v);
+		emitDropValue(v);
 		return;
 	}
 	jit_insn_store_relative(function, slot, 0, v);
@@ -1907,6 +2006,7 @@ void OpcodeDispatcher::dispatchTableSet(WASM::TableIdx arg) {
 	// (docs/proposals/GC.md D15).
 	jit_value_t slot = jit_insn_load_elem_address(function, tablePtr, checkedIndex, jit_type_void_ptr);
 	emitRefStore(slot, value);
+	emitDropValue(value);
 }
 void OpcodeDispatcher::dispatchI32Load(WASM::MemArg addr)
 {
@@ -2990,7 +3090,7 @@ void OpcodeDispatcher::dispatchRefEq() {
 }
 void OpcodeDispatcher::dispatchRefAsNonNull() {
 	jit_value_t ref = popValue();
-	emitTrapIfNull(refAsVoidPtr(ref));
+	emitTrapIfNull(WASM::TrapKind::NullReference, refAsVoidPtr(ref));
 	pushValue(ref);
 }
 void OpcodeDispatcher::dispatchBrOnNull(WASM::LabelIdx arg) {
@@ -3063,7 +3163,7 @@ void OpcodeDispatcher::dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2) {
 	const WASM::StructType& st = structTypeForIndex(arg1);
 	assert(arg2 < st.fields.size());
 	jit_value_t ref = popValue();
-	emitTrapIfNull(refAsVoidPtr(ref));
+	emitTrapIfNull(WASM::TrapKind::NullStructureReference, refAsVoidPtr(ref));
 	jit_type_t fieldType = jitTypeForValueType(st.fields[arg2].storageType.val);
 	pushValue(jit_insn_load_relative(function, refAsVoidPtr(ref), structFieldOffset(arg1, arg2), fieldType));
 }
@@ -3071,7 +3171,7 @@ void OpcodeDispatcher::dispatchStructGetS(WASM::TypeIdx arg1, uint32_t arg2) {
 	const WASM::StructType& st = structTypeForIndex(arg1);
 	assert(arg2 < st.fields.size());
 	jit_value_t ref = popValue();
-	emitTrapIfNull(refAsVoidPtr(ref));
+	emitTrapIfNull(WASM::TrapKind::NullStructureReference, refAsVoidPtr(ref));
 	jit_type_t loadType = st.fields[arg2].storageType.val.opcode == WASM::ValueTypeCode::I8 ? jit_type_sbyte : jit_type_short;
 	jit_value_t raw = jit_insn_load_relative(function, refAsVoidPtr(ref), structFieldOffset(arg1, arg2), loadType);
 	pushValue(jit_insn_convert(function, raw, jit_type_int, 0));
@@ -3080,7 +3180,7 @@ void OpcodeDispatcher::dispatchStructGetU(WASM::TypeIdx arg1, uint32_t arg2) {
 	const WASM::StructType& st = structTypeForIndex(arg1);
 	assert(arg2 < st.fields.size());
 	jit_value_t ref = popValue();
-	emitTrapIfNull(refAsVoidPtr(ref));
+	emitTrapIfNull(WASM::TrapKind::NullStructureReference, refAsVoidPtr(ref));
 	jit_type_t loadType = st.fields[arg2].storageType.val.opcode == WASM::ValueTypeCode::I8 ? jit_type_ubyte : jit_type_ushort;
 	jit_value_t raw = jit_insn_load_relative(function, refAsVoidPtr(ref), structFieldOffset(arg1, arg2), loadType);
 	pushValue(jit_insn_convert(function, raw, jit_type_int, 0));
@@ -3090,19 +3190,22 @@ void OpcodeDispatcher::dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2) {
 	assert(arg2 < st.fields.size());
 	jit_value_t value = popValue();
 	jit_value_t ref = popValue();
-	emitTrapIfNull(refAsVoidPtr(ref));
+	emitTrapIfNull(WASM::TrapKind::NullStructureReference, refAsVoidPtr(ref));
 	const jit_nint offset = structFieldOffset(arg1, arg2);
 	if (WASM::isReferenceType(st.fields[arg2].storageType.val.opcode)) {
-		// Reference-typed field: go through the write barrier so the overwritten
-		// value is released and the new one retained (docs/proposals/GC.md D15).
+		// Reference-typed field: go through the write barrier (retain new,
+		// release old), then release the stack's ownership of the new value.
 		jit_value_t slot = jit_insn_add(function, refAsVoidPtr(ref),
 				jit_value_create_nint_constant(function, jit_type_nint, offset));
 		emitRefStore(slot, value);
+		emitDropValue(value);
+		emitDropValue(ref);
 		return;
 	}
 	jit_type_t fieldType = jitTypeForValueType(st.fields[arg2].storageType.val);
 	jit_insn_store_relative(function, refAsVoidPtr(ref), offset,
 							castRefValue(value, fieldType));
+	emitDropValue(ref);
 }
 void OpcodeDispatcher::dispatchArrayNew(WASM::TypeIdx arg) {
 	jit_value_t length = popValue();
@@ -3237,12 +3340,12 @@ void OpcodeDispatcher::dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2) {
 void OpcodeDispatcher::dispatchArrayGet(WASM::TypeIdx arg) {
 	jit_value_t index = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t ref = popValue();
-	emitTrapIfNull(refAsVoidPtr(ref));
+	emitTrapIfNull(WASM::TrapKind::NullArrayReference, refAsVoidPtr(ref));
 	jit_value_t len = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayLengthOffset(arg), jit_type_uint);
 	jit_value_t ok = jit_insn_lt(function, index, len);
 	jit_label_t cont = jit_label_undefined;
 	jit_insn_branch_if(function, ok, &cont);
-	emitTrapUnreachable();
+	emitTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
 	jit_insn_label(function, &cont);
 	jit_type_t elemType = arrayElementJitType(arg);
 	jit_value_t dataPtr = arrayElementBase(ref, arg);
@@ -3251,12 +3354,12 @@ void OpcodeDispatcher::dispatchArrayGet(WASM::TypeIdx arg) {
 void OpcodeDispatcher::dispatchArrayGetS(WASM::TypeIdx arg) {
 	jit_value_t index = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t ref = popValue();
-	emitTrapIfNull(refAsVoidPtr(ref));
+	emitTrapIfNull(WASM::TrapKind::NullArrayReference, refAsVoidPtr(ref));
 	jit_value_t len = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayLengthOffset(arg), jit_type_uint);
 	jit_value_t ok = jit_insn_lt(function, index, len);
 	jit_label_t cont = jit_label_undefined;
 	jit_insn_branch_if(function, ok, &cont);
-	emitTrapUnreachable();
+	emitTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
 	jit_insn_label(function, &cont);
 	jit_type_t elemType = arrayElementJitType(arg);
 	jit_value_t dataPtr = arrayElementBase(ref, arg);
@@ -3266,12 +3369,12 @@ void OpcodeDispatcher::dispatchArrayGetS(WASM::TypeIdx arg) {
 void OpcodeDispatcher::dispatchArrayGetU(WASM::TypeIdx arg) {
 	jit_value_t index = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t ref = popValue();
-	emitTrapIfNull(refAsVoidPtr(ref));
+	emitTrapIfNull(WASM::TrapKind::NullArrayReference, refAsVoidPtr(ref));
 	jit_value_t len = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayLengthOffset(arg), jit_type_uint);
 	jit_value_t ok = jit_insn_lt(function, index, len);
 	jit_label_t cont = jit_label_undefined;
 	jit_insn_branch_if(function, ok, &cont);
-	emitTrapUnreachable();
+	emitTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
 	jit_insn_label(function, &cont);
 	jit_type_t elemType = arrayElementJitType(arg);
 	jit_value_t dataPtr = arrayElementBase(ref, arg);
@@ -3284,25 +3387,28 @@ void OpcodeDispatcher::dispatchArraySet(WASM::TypeIdx arg) {
 	jit_value_t value = popValue();
 	jit_value_t index = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t ref = popValue();
-	emitTrapIfNull(refAsVoidPtr(ref));
+	emitTrapIfNull(WASM::TrapKind::NullArrayReference, refAsVoidPtr(ref));
 	jit_value_t len = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayLengthOffset(arg), jit_type_uint);
 	jit_value_t ok = jit_insn_lt(function, index, len);
 	jit_label_t cont = jit_label_undefined;
 	jit_insn_branch_if(function, ok, &cont);
-	emitTrapUnreachable();
+	emitTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
 	jit_insn_label(function, &cont);
 	jit_type_t elemType = arrayElementJitType(arg);
 	jit_value_t dataPtr = arrayElementBase(ref, arg);
 	if (WASM::isReferenceType(arrayTypeForIndex(arg).elementType.storageType.val.opcode)) {
 		jit_value_t slot = jit_insn_load_elem_address(function, dataPtr, index, elemType);
 		emitRefStore(slot, value);
+		emitDropValue(value);
+		emitDropValue(ref);
 		return;
 	}
 	jit_insn_store_elem(function, dataPtr, index, castRefValue(value, elemType));
+	emitDropValue(ref);
 }
 void OpcodeDispatcher::dispatchArrayLen() {
 	jit_value_t ref = popValue();
-	emitTrapIfNull(refAsVoidPtr(ref));
+	emitTrapIfNull(WASM::TrapKind::NullArrayReference, refAsVoidPtr(ref));
 	jit_value_t len = jit_insn_load_relative(function, refAsVoidPtr(ref),
 			static_cast<jit_nint>(WASM::GcHeader::kArrayLengthOffset), jit_type_uint);
 	pushValue(jit_insn_convert(function, len, jit_type_int, 0));
@@ -3312,13 +3418,13 @@ void OpcodeDispatcher::dispatchArrayFill(WASM::TypeIdx arg) {
 	jit_value_t value = popValue();
 	jit_value_t start = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t ref = popValue();
-	emitTrapIfNull(refAsVoidPtr(ref));
+	emitTrapIfNull(WASM::TrapKind::NullArrayReference, refAsVoidPtr(ref));
 	jit_value_t arrLen = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayLengthOffset(arg), jit_type_uint);
 	jit_value_t end = jit_insn_add(function, start, len);
 	jit_value_t ok = jit_insn_le(function, end, arrLen);
 	jit_label_t cont = jit_label_undefined;
 	jit_insn_branch_if(function, ok, &cont);
-	emitTrapUnreachable();
+	emitTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
 	jit_insn_label(function, &cont);
 	jit_type_t elemType = arrayElementJitType(arg);
 	jit_value_t dataPtr = arrayElementBase(ref, arg);
@@ -3339,6 +3445,8 @@ void OpcodeDispatcher::dispatchArrayFill(WASM::TypeIdx arg) {
 	jit_insn_store(function, idxSlot, jit_insn_add(function, idx, jit_value_create_nint_constant(function, jit_type_uint, 1)));
 	jit_insn_branch(function, &loopLabel);
 	jit_insn_label(function, &endLabel);
+	emitDropValue(value);
+	emitDropValue(ref);
 }
 void OpcodeDispatcher::dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2) {
 	jit_value_t len = jit_insn_convert(function, popValue(), jit_type_uint, 0);
@@ -3346,8 +3454,8 @@ void OpcodeDispatcher::dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2)
 	jit_value_t srcRef = popValue();
 	jit_value_t dstIndex = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t dstRef = popValue();
-	emitTrapIfNull(refAsVoidPtr(srcRef));
-	emitTrapIfNull(refAsVoidPtr(dstRef));
+	emitTrapIfNull(WASM::TrapKind::NullArrayReference, refAsVoidPtr(srcRef));
+	emitTrapIfNull(WASM::TrapKind::NullArrayReference, refAsVoidPtr(dstRef));
 	jit_value_t srcLen = jit_insn_load_relative(function, refAsVoidPtr(srcRef), arrayLengthOffset(arg2), jit_type_uint);
 	jit_value_t dstLen = jit_insn_load_relative(function, refAsVoidPtr(dstRef), arrayLengthOffset(arg1), jit_type_uint);
 	jit_value_t srcOk = jit_insn_le(function, jit_insn_add(function, srcIndex, len), srcLen);
@@ -3355,12 +3463,12 @@ void OpcodeDispatcher::dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2)
 	jit_value_t ok = jit_insn_and(function, srcOk, dstOk);
 	jit_label_t cont = jit_label_undefined;
 	jit_insn_branch_if(function, ok, &cont);
-	emitTrapUnreachable();
+	emitTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
 	jit_insn_label(function, &cont);
 	jit_type_t dstElemType = arrayElementJitType(arg1);
 	jit_type_t srcElemType = arrayElementJitType(arg2);
 	if (jit_type_get_size(dstElemType) != jit_type_get_size(srcElemType))
-		emitTrapUnreachable();
+		emitTrap(WASM::TrapKind::Internal, "array.copy element size mismatch");
 	jit_value_t dstPtr = arrayElementBase(dstRef, arg1);
 	jit_value_t srcPtr = arrayElementBase(srcRef, arg2);
 	jit_type_t params[] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_uint, jit_type_void_ptr, jit_type_uint, jit_type_uint, jit_type_uint, jit_type_int};
@@ -3379,12 +3487,12 @@ void OpcodeDispatcher::dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2) 
 	jit_value_t src = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t dst = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t ref = popValue();
-	emitTrapIfNull(refAsVoidPtr(ref));
+	emitTrapIfNull(WASM::TrapKind::NullArrayReference, refAsVoidPtr(ref));
 	jit_value_t arrLen = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayLengthOffset(arg1), jit_type_uint);
 	jit_value_t ok = jit_insn_le(function, jit_insn_add(function, dst, len), arrLen);
 	jit_label_t cont = jit_label_undefined;
 	jit_insn_branch_if(function, ok, &cont);
-	emitTrapUnreachable();
+	emitTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
 	jit_insn_label(function, &cont);
 	jit_type_t elemType = arrayElementJitType(arg1);
 	jit_value_t basePtr = arrayElementBase(ref, arg1);
@@ -3405,12 +3513,12 @@ void OpcodeDispatcher::dispatchArrayInitElem(WASM::TypeIdx arg1, uint32_t arg2) 
 	jit_value_t src = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t dst = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t ref = popValue();
-	emitTrapIfNull(refAsVoidPtr(ref));
+	emitTrapIfNull(WASM::TrapKind::NullArrayReference, refAsVoidPtr(ref));
 	jit_value_t arrLen = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayLengthOffset(arg1), jit_type_uint);
 	jit_value_t ok = jit_insn_le(function, jit_insn_add(function, dst, len), arrLen);
 	jit_label_t cont = jit_label_undefined;
 	jit_insn_branch_if(function, ok, &cont);
-	emitTrapUnreachable();
+	emitTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
 	jit_insn_label(function, &cont);
 	jit_type_t elemType = arrayElementJitType(arg1);
 	jit_value_t basePtr = arrayElementBase(ref, arg1);
@@ -3435,7 +3543,7 @@ void OpcodeDispatcher::dispatchRefCast(const WASM::HeapType& arg) {
 	jit_value_t ok = emitRefTypeTest(ref, arg, false);
 	jit_label_t matched = jit_label_undefined;
 	jit_insn_branch_if(function, ok, &matched);
-	emitAbort(function);
+	emitTrap(WASM::TrapKind::CastFailure);
 	jit_insn_label(function, &matched);
 	jit_value_t casted = castRefValue(ref, jitRefTypeForHeapType(arg, false));
 	pushValue(casted);
@@ -3445,7 +3553,7 @@ void OpcodeDispatcher::dispatchRefCastNull(const WASM::HeapType& arg) {
 	jit_value_t ok = emitRefTypeTest(ref, arg, true);
 	jit_label_t matched = jit_label_undefined;
 	jit_insn_branch_if(function, ok, &matched);
-	emitAbort(function);
+	emitTrap(WASM::TrapKind::CastFailure);
 	jit_insn_label(function, &matched);
 	pushValue(castRefValue(ref, jitRefTypeForHeapType(arg, true)));
 }

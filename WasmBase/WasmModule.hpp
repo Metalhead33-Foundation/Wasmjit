@@ -77,6 +77,11 @@ public:
 	// Map a module-local type index to its process-wide identity. Throws if the
 	// index is out of range.
 	TypeId typeId(LocalTypeIdx idx) const;
+	// Reject a module that declares a value type this engine cannot model
+	// (`isModeledValueTypeCode`). Called at the end of fromFile(); throws a
+	// std::runtime_error naming the offending declaration. See
+	// docs/NULL_JIT_VALUE_DIAGNOSIS.md.
+	void validateValueTypes() const;
 	bool isSubtype(TypeIdx actual, TypeIdx expected) const;
 	bool heapTypeMatchesTypeIndex(TypeIdx actual, const HeapType& expected) const;
 	static std::string readLEB128String(DWasmStream& stream);
