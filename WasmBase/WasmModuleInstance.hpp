@@ -13,6 +13,15 @@ namespace WASM {
 class ModuleInstantiator;
 class StoreOwnedTable;
 
+// An object whose count reached zero and is queued for safepoint reclamation,
+// with the type tag the queue stamps over. The tag is kept for two reasons: the
+// walker needs the layout to release the object's own references, and a
+// resurrection must put the tag back (docs/proposals/GC.md RC-1b/RC-3).
+struct PendingGcObject {
+	void*  ref;
+	TypeId typeId;
+};
+
 struct ModuleInstanceInternals {
 	// These own the storage that ctx's pointers point into.
 	// After any reallocation, the corresponding ctx field MUST be updated.
@@ -46,7 +55,10 @@ struct ModuleInstanceInternals {
 	uint64_t gcReclaimedObjects = 0;
 	// Objects whose reference count reached zero (RC-1b). They are only
 	// recycled by gcCollect(), at a safepoint where no Wasm frame is live.
-	std::vector<void*> gcPending;
+	std::vector<PendingGcObject> gcPending;
+	// Trial-deletion candidates (RC-2): objects that survived a release. Cleared
+	// by every collectCycles().
+	std::vector<void*> gcCycleRoots;
 
 	// Backend-specific compiled function handles (e.g., jit_function_t for LibJIT).
 	// Stored as void* to keep this header backend-agnostic.
@@ -82,8 +94,41 @@ private:
 	// is not a GC object (null, an i31 immediate, an externref or a funcref).
 	uint32_t* gcRefcountSlot(const void* ref);
 	void reclaimGcObject(void* ref);
+
+	// ── Safepoint walker (docs/proposals/GC.md RC-3) ────────────────────────
+	// A dying object's reference-typed slots must be released too, or the whole
+	// child graph leaks — plain reference counting, not cycle collection. This
+	// is the runtime's typed layout walk: `TypeId` -> the reference-typed field
+	// /element offsets. The JIT-side mirror is `structFieldOffsets`; both derive
+	// offsets from the shared gcAlignUp/gcStorageAlign/gcStorageBytes helpers
+	// (docs/proposals/GC.md §6.3 / H1).
+	const Subtype* subtypeForTypeId(TypeId typeId) const;
+	// Release every reference `ref` holds, appending children that reach zero to
+	// `work` (the caller's iterative worklist — no recursion, so a 10⁶-deep
+	// chain costs O(1) C stack). `slots` is caller-owned scratch, reused across
+	// objects so the walk allocates nothing per dead object.
+	void releaseOutgoingRefs(void* ref, TypeId typeId,
+			std::vector<PendingGcObject>& work, std::vector<uint8_t*>& slots);
+
+	// ── Cycle collection (docs/proposals/GC.md RC-2) ────────────────────────
+	// Bacon–Rajan synchronous trial deletion. A release that leaves an object
+	// alive may be the last external link into a cycle, so that object becomes a
+	// candidate; the trial then decides whether the candidate set is
+	// self-sustaining (garbage) or reachable from outside (kept). No root set
+	// and no stack scan — it runs at the same safepoint as the reclaimer (D18).
+	// The buffer is bounded like the classic's purple set: a candidate that does
+	// not fit is merely not trialled now, which can delay a collection but never
+	// free something live.
+	static constexpr size_t kMaxCycleCandidates = 4096;
+	void possibleCycleRoot(void* ref);
+	void collectCycles();
 public:
 	friend class ModuleInstantiator;
+
+	// The address of every reference-typed slot `ref` holds — the single layout
+	// traversal, shared by the reclaimer and the trial-deletion DFS so the two
+	// cannot drift (docs/proposals/GC.md §6.3 / H1).
+	void childSlotsOf(void* ref, TypeId typeId, std::vector<uint8_t*>& slots);
 	ModuleInstance(const Module& module, ImportResolver& importResolver);
 	// Releases the instance's GC region set (bulk reclamation, GC-2).
 	~ModuleInstance();

@@ -1145,6 +1145,8 @@ void ModuleInstance::refDrop(void* ref)
 		if (count.compare_exchange_weak(old, old - 1, std::memory_order_relaxed)) {
 			if (old == 1)
 				reclaimGcObject(ref);
+			else
+				possibleCycleRoot(ref); // survived: maybe a cycle's last link out (RC-2)
 			break;
 		}
 	}
@@ -1162,34 +1164,275 @@ void ModuleInstance::reclaimGcObject(void* ref)
 {
 	// The count reached zero (RC-1b). Do NOT free here: Wasm locals,
 	// operand-stack temporaries and control-flow slots are *uncounted borrows*,
-	// and a frame is usually still live. Queue the object; gcCollect() recycles
-	// it at a safepoint where no frame is live.
-	auto* typeIdSlot = reinterpret_cast<uint32_t*>(
-			static_cast<uint8_t*>(ref) + GcHeader::kTypeIdOffset);
+	// and a frame is usually still live. Queue the object; gcCollect() releases
+	// its own references and recycles it at a safepoint where no frame is live.
+	uint8_t* bytes = static_cast<uint8_t*>(ref);
+	auto* typeIdSlot = reinterpret_cast<uint32_t*>(bytes + GcHeader::kTypeIdOffset);
 	if (*typeIdSlot == GcHeader::kReclaimedTypeId)
 		return;                       // already queued
+	// The tag is stamped over so a duplicate queue entry is ignored, but the
+	// queue keeps it: the walker needs the layout, and a resurrection needs the
+	// tag back (RC-1b/RC-3).
+	const TypeId typeId{*typeIdSlot};
 	*typeIdSlot = GcHeader::kReclaimedTypeId;
-	internals.gcPending.push_back(ref);
+	internals.gcPending.push_back(PendingGcObject{ref, typeId});
 	++internals.gcReclaimedObjects;
+}
+
+const Subtype* ModuleInstance::subtypeForTypeId(TypeId typeId) const
+{
+	// The type section is small and this runs once per dying object, so a linear
+	// scan over the canonical ids is enough — and comparing *canonical* ids means
+	// an object created from an identical type in another module is walked too.
+	for (uint32_t i = 0; i < module->types.size(); ++i) {
+		const Subtype& subtype = module->types[i];
+		if (!subtype.isStruct() && !subtype.isArray())
+			continue;
+		if (module->typeId(LocalTypeIdx{i}).value == typeId.value)
+			return &subtype;
+	}
+	return nullptr;
+}
+
+void ModuleInstance::childSlotsOf(void* ref, TypeId typeId, std::vector<uint8_t*>& slots)
+{
+	const Subtype* subtype = subtypeForTypeId(typeId);
+	if (subtype == nullptr)
+		return; // not this instance's type: nothing to walk (leaks, never corrupts)
+
+	uint8_t* bytes = static_cast<uint8_t*>(ref);
+	if (subtype->isStruct()) {
+		// The same offset arithmetic as structFieldOffsets (H1).
+		const StructType& st = std::get<StructType>(subtype->composite);
+		size_t offset = GcHeader::kHeaderBytes;
+		for (const FieldType& field : st.fields) {
+			offset = gcAlignUp(offset, gcStorageAlign(field.storageType));
+			if (isReferenceType(field.storageType.val.opcode))
+				slots.push_back(bytes + offset);
+			offset += gcStorageBytes(field.storageType);
+		}
+		return;
+	}
+
+	const FieldType& element = std::get<ArrayType>(subtype->composite).elementType;
+	if (!isReferenceType(element.storageType.val.opcode))
+		return;
+	const uint32_t length = *reinterpret_cast<const uint32_t*>(bytes + GcHeader::kArrayLengthOffset);
+	const size_t dataOffset = gcArrayDataOffset(element.storageType);
+	const size_t stride = gcStorageBytes(element.storageType);
+	for (uint32_t i = 0; i < length; ++i)
+		slots.push_back(bytes + dataOffset + i * stride);
+}
+
+void ModuleInstance::releaseOutgoingRefs(void* ref, TypeId typeId,
+		std::vector<PendingGcObject>& work, std::vector<uint8_t*>& slots)
+{
+	slots.clear();
+	childSlotsOf(ref, typeId, slots);
+	for (uint8_t* slot : slots) {
+		void* child = *reinterpret_cast<void* const*>(slot);
+		uint32_t* count = gcRefcountSlot(child);
+		if (count == nullptr)
+			continue; // null, an i31 immediate, a funcref or an externref: uncounted
+		// Read the child's tag before the queue can stamp it.
+		const TypeId childTypeId{*reinterpret_cast<const uint32_t*>(
+				static_cast<const uint8_t*>(child) + GcHeader::kTypeIdOffset)};
+		std::atomic_ref<uint32_t> refcount(*count);
+		uint32_t old = refcount.load(std::memory_order_relaxed);
+		for (;;) {
+			if (old == 0)
+				trap(TrapKind::Internal, "GC reference count underflow"); // D19
+			if (refcount.compare_exchange_weak(old, old - 1, std::memory_order_relaxed))
+				break;
+		}
+		if (old == 1) {
+			// The child died with its parent: hand it to the worklist rather than
+			// to reclaimGcObject(), because its tag must stay readable until the
+			// walk reaches it, and the worklist visits each object exactly once.
+			work.push_back(PendingGcObject{child, childTypeId});
+		} else {
+			// The child survived its parent, so it may now be the last external
+			// link into a cycle: a trial-deletion candidate (RC-2).
+			possibleCycleRoot(child);
+		}
+	}
+}
+
+namespace {
+
+// Trial-deletion colours. The classic keeps them in the object header; a map
+// local to one trial avoids adding a header word, so the layout the JIT mirrors
+// stays untouched (H1) — the trial runs at a safepoint over the candidate set.
+enum : uint8_t { kBlack = 0, kGrey = 1, kWhite = 2 };
+
+uint32_t refcountOf(const void* ref)
+{
+	auto* count = const_cast<uint32_t*>(reinterpret_cast<const uint32_t*>(
+			static_cast<const uint8_t*>(ref) + WASM::GcHeader::kRefcountOffset));
+	return std::atomic_ref<uint32_t>(*count).load(std::memory_order_relaxed);
+}
+
+void adjustRefcount(void* ref, int delta)
+{
+	auto* count = reinterpret_cast<uint32_t*>(
+			static_cast<uint8_t*>(ref) + WASM::GcHeader::kRefcountOffset);
+	std::atomic_ref<uint32_t> refcount(*count);
+	refcount.store(refcount.load(std::memory_order_relaxed) + static_cast<uint32_t>(delta),
+			std::memory_order_relaxed);
+}
+
+// Counted GC objects only: null, i31 immediates, funcrefs and externrefs carry
+// no header (mirrors ModuleInstance::gcRefcountSlot).
+bool isCountedRef(const void* ref)
+{
+	return (reinterpret_cast<uintptr_t>(ref) & 1u) == 0 &&
+			WASM::Store::global().gc().owns(ref);
+}
+
+WASM::TypeId typeIdOf(const void* ref)
+{
+	return WASM::TypeId{*reinterpret_cast<const uint32_t*>(
+			static_cast<const uint8_t*>(ref) + WASM::GcHeader::kTypeIdOffset)};
+}
+
+struct CycleTrial {
+	WASM::ModuleInstance* instance = nullptr;
+	std::unordered_map<const void*, uint8_t> colours;
+	std::vector<void*> stack;
+	std::vector<uint8_t*> slots;
+};
+
+// One iterative DFS (explicit stack — a deep graph must not recurse). `mark` is
+// written to every object reached; `edge` runs once per child edge and decides
+// whether that child is traversed. A source is expanded exactly once, which is
+// what makes the per-edge count adjustments correct (Bacon–Rajan).
+template <typename EdgeFn>
+void trialDfs(CycleTrial& trial, void* root, uint8_t mark, EdgeFn&& edge)
+{
+	trial.stack.push_back(root);
+	while (!trial.stack.empty()) {
+		void* object = trial.stack.back();
+		trial.stack.pop_back();
+		uint8_t& colour = trial.colours[object];
+		if (colour == mark)
+			continue;
+		colour = mark;
+		trial.slots.clear();
+		trial.instance->childSlotsOf(object, typeIdOf(object), trial.slots);
+		for (uint8_t* slot : trial.slots) {
+			void* child = *reinterpret_cast<void* const*>(slot);
+			if (isCountedRef(child) && edge(child))
+				trial.stack.push_back(child);
+		}
+	}
+}
+
+} // namespace
+
+void ModuleInstance::possibleCycleRoot(void* ref)
+{
+	if (gcRefcountSlot(ref) == nullptr)
+		return;                              // not a counted GC object
+	const uint32_t tag = *reinterpret_cast<const uint32_t*>(
+			static_cast<const uint8_t*>(ref) + GcHeader::kTypeIdOffset);
+	if (tag == GcHeader::kReclaimedTypeId)
+		return;                              // already queued: the queue owns it
+	if (internals.gcCycleRoots.size() >= kMaxCycleCandidates)
+		return;                              // bounded buffer: may delay, never corrupt
+	internals.gcCycleRoots.push_back(ref);
+}
+
+void ModuleInstance::collectCycles()
+{
+	std::vector<void*> roots;
+	roots.swap(internals.gcCycleRoots);
+	if (roots.empty())
+		return;
+
+	CycleTrial trial;
+	trial.instance = this;
+
+	// 1. Grey every candidate, subtracting the references internal to the
+	//    candidate set: a count that survives belongs to an *external* referrer.
+	for (void* root : roots)
+		if (refcountOf(root) != 0)
+			trialDfs(trial, root, kGrey, [](void* child) {
+				adjustRefcount(child, -1);
+				return true;
+			});
+
+	// 2. Each grey root is either still referenced from outside — resurrect it
+	//    and restore the counts — or reachable only from within the set.
+	for (void* root : roots) {
+		if (trial.colours[root] != kGrey)
+			continue;
+		if (refcountOf(root) > 0)
+			trialDfs(trial, root, kBlack, [](void* child) {
+				adjustRefcount(child, +1);
+				return true;
+			});
+		else
+			trialDfs(trial, root, kWhite, [&trial](void* child) {
+				return trial.colours[child] == kGrey;
+			});
+	}
+
+	// 3. Recycle what stayed white: every reference to it came from inside the
+	//    collected set, whose counts were subtracted in step 1.
+	for (void* root : roots) {
+		if (trial.colours[root] != kWhite)
+			continue;
+		trial.stack.push_back(root);
+		while (!trial.stack.empty()) {
+			void* object = trial.stack.back();
+			trial.stack.pop_back();
+			uint8_t& colour = trial.colours[object];
+			if (colour != kWhite)
+				continue;
+			colour = kBlack;               // a second path must not free it twice
+			trial.slots.clear();
+			childSlotsOf(object, typeIdOf(object), trial.slots);
+			for (uint8_t* slot : trial.slots) {
+				void* child = *reinterpret_cast<void* const*>(slot);
+				if (isCountedRef(child) && trial.colours[child] == kWhite)
+					trial.stack.push_back(child);
+			}
+			Store::global().gc().recycle(object);
+			++internals.gcReclaimedObjects;
+		}
+	}
 }
 
 void ModuleInstance::gcCollect()
 {
-	if (internals.gcPending.empty())
-		return;
-	std::vector<void*> pending;
-	pending.swap(internals.gcPending);
-	for (void* ref : pending) {
-		if (ref == nullptr)
-			continue;
-		// Resurrection guard: the object may have been retained again since it
-		// was queued (count 0 -> 1). Only recycle what is still at zero.
-		auto* count = reinterpret_cast<uint32_t*>(
-				static_cast<uint8_t*>(ref) + GcHeader::kRefcountOffset);
-		if (std::atomic_ref<uint32_t>(*count).load(std::memory_order_relaxed) != 0)
-			continue;
-		Store::global().gc().recycle(ref);
+	std::vector<uint8_t*> slots; // walk scratch, reused across objects
+	if (!internals.gcPending.empty()) {
+		// Iterative, never recursive (RC-3): `work` grows as children reach zero,
+		// so one safepoint walks the entire dying graph in a loop — a 10⁶-deep
+		// chain costs O(1) C stack. Indexed: release appends to `work`.
+		std::vector<PendingGcObject> work;
+		work.swap(internals.gcPending);
+		for (size_t i = 0; i < work.size(); ++i) {
+			void* ref = work[i].ref;
+			if (ref == nullptr)
+				continue;
+			uint8_t* bytes = static_cast<uint8_t*>(ref);
+			auto* count = reinterpret_cast<uint32_t*>(bytes + GcHeader::kRefcountOffset);
+			if (std::atomic_ref<uint32_t>(*count).load(std::memory_order_relaxed) != 0) {
+				// Resurrection: the object was retained again since it was queued
+				// (count 0 -> 1), so it is alive. Put its type tag back — the queue
+				// stamped over it — or later casts would stop recognising it.
+				*reinterpret_cast<uint32_t*>(bytes + GcHeader::kTypeIdOffset) = work[i].typeId.value;
+				continue;
+			}
+			releaseOutgoingRefs(ref, work[i].typeId, work, slots);
+			Store::global().gc().recycle(ref);
+		}
 	}
+	// Cycle collection (RC-2) runs at the same safepoint. It must still run when
+	// nothing was queued: releasing a cycle's last *external* reference leaves
+	// every count in the cycle above zero, so the sack above sees nothing.
+	collectCycles();
 }
 
 }

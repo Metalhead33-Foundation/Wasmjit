@@ -1090,17 +1090,12 @@ TEST_CASE("GC reclamation: the live-object count returns to its baseline")
 	REQUIRE(heap.totalRecycles() >= objects.size());
 }
 
-TEST_CASE("GC reclamation: a dying object's reference fields are not released yet")
+TEST_CASE("GC reclamation: a dying object releases its reference fields")
 {
-	// The remaining half of RC-3. When an object reaches zero its *outgoing*
-	// references must be released before the block is recycled, or the whole
-	// child graph leaks — plain reference counting, not cycle collection.
-	// Releasing them needs a typed walker (`TypeId` -> reference-typed field
-	// offsets), which the runtime does not have yet.
-	//
-	// This test *pins today's behaviour* so the leak is visible and the walker's
-	// arrival is a deliberate change: when RC-3 lands, the child count must read
-	// 1 (the test's own reference) instead of 2.
+	// RC-3: when an object reaches zero, the safepoint walk releases the
+	// references *it* held, so the child graph dies with it instead of leaking.
+	// Two parents share one child, which also checks that this is still
+	// reference counting — the child must survive the first parent.
 	WASM::RegistryImportResolver imports;
 	LibJIT::Context jitContext;
 	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, jitContext);
@@ -1112,27 +1107,74 @@ TEST_CASE("GC reclamation: a dying object's reference fields are not released ye
 	REQUIRE(structIdx != UINT32_MAX);
 	const size_t liveBefore = heap.liveObjectCount();
 
-	void* parent = instance.allocateStructObject(kPairBytes, structIdx);
+	auto refField = [](void* object) {
+		return reinterpret_cast<void**>(
+				static_cast<uint8_t*>(object) + kPairRefFieldOffset);
+	};
+
+	void* first = instance.allocateStructObject(kPairBytes, structIdx);
+	void* second = instance.allocateStructObject(kPairBytes, structIdx);
 	void* child = instance.allocateStructObject(kPairBytes, structIdx);
-	REQUIRE(instance.refClone(parent) == parent);  // the test owns the parent
-	REQUIRE(instance.refClone(child) == child);    // ...and the child
-	void** field = reinterpret_cast<void**>(
-			static_cast<uint8_t*>(parent) + kPairRefFieldOffset);
-	instance.refStore(field, child);               // the parent owns one too
+	REQUIRE(instance.refClone(first) == first);    // the test owns the parents
+	REQUIRE(instance.refClone(second) == second);
+	REQUIRE(instance.refClone(child) == child);    // ...and one reference on the child
+	instance.refStore(refField(first), child);     // child: 1 -> 2
+	instance.refStore(refField(second), child);    // child: 2 -> 3
+	REQUIRE(instance.gcRefCount(child) == 3);
+
+	// The first parent dies: the walk releases the count it held, the child
+	// stays alive because the second parent still points at it.
+	instance.refDrop(first);
+	instance.gcCollect();
 	REQUIRE(instance.gcRefCount(child) == 2);
+	REQUIRE(heap.liveObjectCount() == liveBefore + 2); // the child and the second parent
 
-	instance.refDrop(parent);                      // parent: 1 -> 0, queued
-	instance.gcCollect();                          // ...and recycled
-	REQUIRE(heap.liveObjectCount() == liveBefore + 1);
+	// The second parent dies: only the test's own reference is left.
+	instance.refDrop(second);
+	instance.gcCollect();
+	REQUIRE(instance.gcRefCount(child) == 1);
 
-	// The gap: nothing walked the parent's reference-typed field, so the child
-	// still carries a count for a slot that no longer exists.
-	REQUIRE(instance.gcRefCount(child) == 2);
-
-	// Release it explicitly so the test leaves the heap as it found it.
-	instance.refDrop(child);
 	instance.refDrop(child);
 	instance.gcCollect();
+	REQUIRE(heap.liveObjectCount() == liveBefore);
+}
+
+TEST_CASE("GC reclamation: a deep chain is released iteratively")
+{
+	// RC-3's O(1)-stack requirement. Releasing a chain must not recurse: this
+	// depth would overflow the C stack of a recursive walk (a 10⁶ chain is just
+	// more of the same, and the doc's number), so passing it means one safepoint
+	// walked a worklist instead of the call stack.
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	WASM::GcHeap& heap = WASM::Store::global().gc();
+
+	const uint32_t structIdx = firstStructType(*loaded.module);
+	REQUIRE(structIdx != UINT32_MAX);
+	const size_t liveBefore = heap.liveObjectCount();
+
+	const int kDepth = 100000;
+	std::vector<void*> chain(static_cast<size_t>(kDepth));
+	for (int i = 0; i < kDepth; ++i)
+		chain[static_cast<size_t>(i)] = instance.allocateStructObject(kPairBytes, structIdx);
+	REQUIRE(chain.front() != nullptr);
+	REQUIRE(chain.back() != nullptr);
+
+	// each link owns the next one
+	for (int i = 0; i + 1 < kDepth; ++i) {
+		void** field = reinterpret_cast<void**>(
+				static_cast<uint8_t*>(chain[static_cast<size_t>(i)]) + kPairRefFieldOffset);
+		instance.refStore(field, chain[static_cast<size_t>(i + 1)]);
+	}
+	REQUIRE(instance.gcRefCount(chain.back()) == 1);
+
+	REQUIRE(instance.refClone(chain.front()) == chain.front()); // the test owns the head
+	instance.refDrop(chain.front());                            // head: 1 -> 0, queued
+	instance.gcCollect();                                       // one safepoint, whole chain
+	REQUIRE(instance.gcPendingCount() == 0);
 	REQUIRE(heap.liveObjectCount() == liveBefore);
 }
 
@@ -1174,6 +1216,81 @@ TEST_CASE("GC heap: poison-on-free marks recycled blocks and reuse clears them")
 	REQUIRE(reused == object);
 	for (size_t i = WASM::GcHeader::kHeaderBytes; i < kPairBytes; ++i)
 		REQUIRE(bytes[i] == 0);
+}
+
+TEST_CASE("GC reclamation: a two-object reference cycle is collected")
+{
+	// RC-2. A <-> B with no external references: every count is the cycle's own,
+	// so plain reference counting can never reach zero. Releasing the creator's
+	// reference makes A a candidate and the trial deletion reads the pair as
+	// unreachable — no root set and no stack scan (D18).
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	WASM::GcHeap& heap = WASM::Store::global().gc();
+
+	const uint32_t structIdx = firstStructType(*loaded.module);
+	REQUIRE(structIdx != UINT32_MAX);
+	const size_t liveBefore = heap.liveObjectCount();
+
+	auto refField = [](void* object) {
+		return reinterpret_cast<void**>(
+				static_cast<uint8_t*>(object) + kPairRefFieldOffset);
+	};
+
+	void* a = instance.allocateStructObject(kPairBytes, structIdx);
+	void* b = instance.allocateStructObject(kPairBytes, structIdx);
+	instance.refStore(refField(a), b);        // b: 0 -> 1
+	instance.refStore(refField(b), a);        // a: 0 -> 1
+	REQUIRE(instance.gcRefCount(a) == 1);
+	REQUIRE(instance.gcRefCount(b) == 1);
+
+	REQUIRE(instance.refClone(a) == a);       // the creator's own reference: 1 -> 2
+	instance.refDrop(a);                      // 2 -> 1: A is a candidate now
+	REQUIRE(instance.gcPendingCount() == 0);  // ...but nothing has a zero count
+	instance.gcCollect();
+	REQUIRE(heap.liveObjectCount() == liveBefore);
+}
+
+TEST_CASE("GC reclamation: a cycle still referenced from outside survives the trial")
+{
+	// The safety property of trial deletion (RC-2): while anything outside the
+	// candidate set still points into the cycle, the objects must be kept *and*
+	// their counts restored — the trial subtracts the internal references while
+	// greying, so forgetting to add them back would silently corrupt the counts.
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	WASM::GcHeap& heap = WASM::Store::global().gc();
+
+	const uint32_t structIdx = firstStructType(*loaded.module);
+	REQUIRE(structIdx != UINT32_MAX);
+	const size_t liveBefore = heap.liveObjectCount();
+
+	auto refField = [](void* object) {
+		return reinterpret_cast<void**>(
+				static_cast<uint8_t*>(object) + kPairRefFieldOffset);
+	};
+
+	void* a = instance.allocateStructObject(kPairBytes, structIdx);
+	instance.refStore(refField(a), a);        // a: 0 -> 1 — a self edge
+	REQUIRE(instance.gcRefCount(a) == 1);
+	REQUIRE(instance.refClone(a) == a);       // an embedder slot: 1 -> 2
+	REQUIRE(instance.refClone(a) == a);       // and a second one: 2 -> 3
+	instance.refDrop(a);                      // 3 -> 2: candidate, but reachable
+	instance.gcCollect();
+	REQUIRE(instance.gcRefCount(a) == 2);     // kept, counts restored exactly
+	REQUIRE(heap.liveObjectCount() == liveBefore + 1);
+
+	// Release the last external reference: only the self edge is left, and the
+	// trial collects the cycle.
+	instance.refDrop(a);                      // 2 -> 1: a candidate again
+	instance.gcCollect();
+	REQUIRE(heap.liveObjectCount() == liveBefore);
 }
 
 TEST_CASE("GC refcount: clone saturates instead of wrapping the count")
