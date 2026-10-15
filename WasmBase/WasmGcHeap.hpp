@@ -86,6 +86,21 @@ public:
 	size_t regionCount() const { return regions.size(); }
 	size_t regionBytes() const { return reservedBytes; }
 	size_t totalAllocations() const { return allocationCount; }
+	size_t totalRecycles() const { return recycleCount; }
+	// Blocks allocated and not yet recycled: the leak metric. Reference counting
+	// does not reclaim a graph whose counts are wrong, and nothing else in the
+	// engine can see that — a count stuck above zero shows up here and nowhere
+	// else. RC-2/RC-3 are "done" when this returns to its pre-test value
+	// (docs/proposals/GC.md §7, rc_plan).
+	size_t liveObjectCount() const { return allocationCount - recycleCount; }
+
+	// ── Debug: poison on free (docs/proposals/GC.md GC-2/RC-3) ──────────────
+	// Overwrite a block with kPoisonByte before it goes back on the free list,
+	// so a use-after-recycle reads obvious garbage instead of whatever the dead
+	// object left behind. Off by default (it costs a memset per recycle).
+	void setPoisonOnFree(bool on) { poisonOnFreeFlag = on; }
+	bool poisonOnFree() const { return poisonOnFreeFlag; }
+	static constexpr uint8_t kPoisonByte = 0xDD;
 
 private:
 	Region* createRegion(RegionSet& set, size_t blockSize, size_t capacity, uint32_t classIndex);
@@ -96,6 +111,8 @@ private:
 	std::vector<Region*> regions;
 	size_t reservedBytes  = 0;
 	size_t allocationCount = 0;
+	size_t recycleCount    = 0;
+	bool   poisonOnFreeFlag = false;
 };
 
 } // namespace WASM

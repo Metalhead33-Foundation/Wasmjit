@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "helper.hpp"
+#include "WasmBase/WasmGcHeader.hpp"
 #include "WasmBase/WasmGcHeap.hpp"
 #include "WasmBase/WasmOpcode.hpp"
 #include "WasmBase/WasmStore.hpp"
@@ -1029,4 +1030,172 @@ TEST_CASE("GC heap: region allocation, alignment and recycling")
 	// Instance teardown releases every region in the set in bulk.
 	heap.releaseSet(set);
 }
+
+// ── Reclamation validation (docs/proposals/GC.md RC-2/RC-3) ──────────────────
+// Reclamation is invisible to the spec suite: a leak changes no result, and a
+// count that is wrong by one is silent. These tests pin the invariants the
+// collector is allowed to rely on, through the counters added for RC-2/RC-3.
+namespace {
+
+// `$pair` in gc_refcount.wat is `(struct (field i32) (field (ref null any)))`:
+// header 8 bytes, i32 at 8, reference field at 16 — the same layout the JIT and
+// structFieldOffsets use (H1).
+constexpr size_t kPairBytes = 24;
+constexpr size_t kPairRefFieldOffset = 16;
+
+uint32_t firstStructType(const WASM::Module& module)
+{
+	for (uint32_t i = 0; i < module.types.size(); ++i)
+		if (module.types[i].isStruct())
+			return i;
+	return UINT32_MAX;
+}
+
+} // namespace
+
+TEST_CASE("GC reclamation: the live-object count returns to its baseline")
+{
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	WASM::GcHeap& heap = WASM::Store::global().gc();
+
+	const uint32_t structIdx = firstStructType(*loaded.module);
+	REQUIRE(structIdx != UINT32_MAX);
+
+	const size_t liveBefore = heap.liveObjectCount();
+	const size_t blocksBefore = heap.totalAllocations();
+
+	std::vector<void*> objects;
+	for (int i = 0; i < 8; ++i) {
+		void* object = instance.allocateStructObject(kPairBytes, structIdx);
+		REQUIRE(object != nullptr);
+		REQUIRE(instance.refClone(object) == object); // 0 -> 1: a slot owns it
+		objects.push_back(object);
+	}
+	REQUIRE(heap.liveObjectCount() == liveBefore + objects.size());
+
+	// Dropping to zero only *queues* the object (RC-1b): it stays live until the
+	// safepoint, because an uncounted borrow may still point at it.
+	for (void* object : objects)
+		instance.refDrop(object);
+	REQUIRE(heap.liveObjectCount() == liveBefore + objects.size());
+
+	instance.gcCollect();
+	REQUIRE(instance.gcPendingCount() == 0);
+	REQUIRE(heap.liveObjectCount() == liveBefore);
+	REQUIRE(heap.totalAllocations() == blocksBefore + objects.size());
+	REQUIRE(heap.totalRecycles() >= objects.size());
+}
+
+TEST_CASE("GC reclamation: a dying object's reference fields are not released yet")
+{
+	// The remaining half of RC-3. When an object reaches zero its *outgoing*
+	// references must be released before the block is recycled, or the whole
+	// child graph leaks — plain reference counting, not cycle collection.
+	// Releasing them needs a typed walker (`TypeId` -> reference-typed field
+	// offsets), which the runtime does not have yet.
+	//
+	// This test *pins today's behaviour* so the leak is visible and the walker's
+	// arrival is a deliberate change: when RC-3 lands, the child count must read
+	// 1 (the test's own reference) instead of 2.
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	WASM::GcHeap& heap = WASM::Store::global().gc();
+
+	const uint32_t structIdx = firstStructType(*loaded.module);
+	REQUIRE(structIdx != UINT32_MAX);
+	const size_t liveBefore = heap.liveObjectCount();
+
+	void* parent = instance.allocateStructObject(kPairBytes, structIdx);
+	void* child = instance.allocateStructObject(kPairBytes, structIdx);
+	REQUIRE(instance.refClone(parent) == parent);  // the test owns the parent
+	REQUIRE(instance.refClone(child) == child);    // ...and the child
+	void** field = reinterpret_cast<void**>(
+			static_cast<uint8_t*>(parent) + kPairRefFieldOffset);
+	instance.refStore(field, child);               // the parent owns one too
+	REQUIRE(instance.gcRefCount(child) == 2);
+
+	instance.refDrop(parent);                      // parent: 1 -> 0, queued
+	instance.gcCollect();                          // ...and recycled
+	REQUIRE(heap.liveObjectCount() == liveBefore + 1);
+
+	// The gap: nothing walked the parent's reference-typed field, so the child
+	// still carries a count for a slot that no longer exists.
+	REQUIRE(instance.gcRefCount(child) == 2);
+
+	// Release it explicitly so the test leaves the heap as it found it.
+	instance.refDrop(child);
+	instance.refDrop(child);
+	instance.gcCollect();
+	REQUIRE(heap.liveObjectCount() == liveBefore);
+}
+
+TEST_CASE("GC heap: poison-on-free marks recycled blocks and reuse clears them")
+{
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	WASM::GcHeap& heap = WASM::Store::global().gc();
+
+	const uint32_t structIdx = firstStructType(*loaded.module);
+	REQUIRE(structIdx != UINT32_MAX);
+
+	// Never leave the process-global heap poisoned for another test case.
+	struct PoisonGuard {
+		WASM::GcHeap& heap;
+		~PoisonGuard() { heap.setPoisonOnFree(false); }
+	} guard{heap};
+	heap.setPoisonOnFree(true);
+	REQUIRE(heap.poisonOnFree());
+
+	void* object = instance.allocateStructObject(kPairBytes, structIdx);
+	REQUIRE(instance.refClone(object) == object);
+	instance.refDrop(object);                      // 1 -> 0, queued
+	instance.gcCollect();                          // recycled => poisoned
+
+	uint8_t* bytes = static_cast<uint8_t*>(object);
+	// The first word becomes the free-list link; the rest of the block is poison.
+	REQUIRE(bytes[sizeof(void*)] == WASM::GcHeap::kPoisonByte);
+	REQUIRE(bytes[kPairBytes - 1] == WASM::GcHeap::kPoisonByte);
+
+	// The same size class hands the block straight back, and the allocator must
+	// clear it: `struct.new_default` writes no fields at all and relies on a
+	// zero-filled block, which mmap only guarantees for the *first* use. The
+	// header itself is the allocator's (TypeId + count), so check the payload.
+	void* reused = instance.allocateStructObject(kPairBytes, structIdx);
+	REQUIRE(reused == object);
+	for (size_t i = WASM::GcHeader::kHeaderBytes; i < kPairBytes; ++i)
+		REQUIRE(bytes[i] == 0);
+}
+
+TEST_CASE("GC refcount: clone saturates instead of wrapping the count")
+{
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	const uint32_t structIdx = firstStructType(*loaded.module);
+	REQUIRE(structIdx != UINT32_MAX);
+
+	void* object = instance.allocateStructObject(kPairBytes, structIdx);
+	auto* count = reinterpret_cast<uint32_t*>(
+			static_cast<uint8_t*>(object) + WASM::GcHeader::kRefcountOffset);
+	*count = 0xFFFFFFFFu;
+
+	// D19/RC-7: a saturated count leaks the object, which is recoverable; a
+	// wrapped count would let a later drop look like the last reference.
+	REQUIRE(instance.refClone(object) == object);
+	REQUIRE(*count == 0xFFFFFFFFu);
+}
+
 

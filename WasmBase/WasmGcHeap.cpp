@@ -1,6 +1,7 @@
 #include "WasmGcHeap.hpp"
 #include "WasmStore.hpp"
 #include <algorithm>
+#include <cstring>
 #include <new>
 
 #if defined(_WIN32) || defined(_WIN64)
@@ -182,6 +183,12 @@ void* GcHeap::allocate(RegionSet& set, size_t size)
 		if (r->freeList != nullptr) {
 			void* block = r->freeList;
 			r->freeList = *reinterpret_cast<void**>(block);
+			// A *recycled* block is no longer the zero-filled memory mmap gave
+			// the region, and callers rely on a fresh object reading as zero
+			// (`struct.new_default` writes no fields at all). Re-establish the
+			// `calloc` contract here; this also clears any poison-on-free marks
+			// (RC-3) before the block is handed out again.
+			std::memset(block, 0, r->blockSize);
 			++r->live;
 			++allocationCount;
 			return block;
@@ -212,6 +219,7 @@ void GcHeap::recycle(void* block)
 	Region* r = regionFor(block);
 	if (r == nullptr)
 		return;
+	++recycleCount; // symmetric with allocationCount; see liveObjectCount()
 	// A dedicated region *is* the object: release it whole and credit the budget.
 	if (r->blockSize == 0) {
 		if (r->live > 0)
@@ -219,6 +227,10 @@ void GcHeap::recycle(void* block)
 		releaseRegion(r);
 		return;
 	}
+	// Debug (GC-2/RC-3): make a use-after-recycle read obvious garbage instead
+	// of the dead object's leftovers. allocate() zeroes the block on reuse.
+	if (poisonOnFreeFlag)
+		std::memset(block, kPoisonByte, r->blockSize);
 	*reinterpret_cast<void**>(block) = r->freeList;
 	r->freeList = block;
 	if (r->live > 0)
