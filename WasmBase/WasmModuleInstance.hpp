@@ -103,7 +103,7 @@ public:
 	void bufferInitFromData(uint32_t dataIdx, void* dst, uint32_t srcOffset, uint32_t lenBytes);
 	void bufferInitFromElems(uint32_t elemIdx, void* dst, uint32_t srcOffset, uint32_t lenElems);
 	void* allocateStructObject(uint32_t size, uint32_t localTypeIdx);
-	void* allocateArrayObject(uint32_t headerSize, uint32_t elementSize, uint32_t length, uint32_t localTypeIdx);
+	void* allocateArrayObject(uint32_t dataOffset, uint32_t elementSize, uint32_t length, uint32_t localTypeIdx);
 	bool tryGetGcTypeId(const void* ref, TypeId& typeId) const;
 	bool refMatchesHeapType(const void* ref, const HeapType& heapType, bool nullable) const;
 

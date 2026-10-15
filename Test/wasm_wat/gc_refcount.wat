@@ -8,9 +8,15 @@
 ;; overwritten one) rather than a raw pointer store.
 (module
   (type $pair (struct (field i32) (field (ref null any))))
+  (type $arr (array (mut i32)))
 
   (func (export "make") (result i32)
     (local $a (ref null $pair))
     (local.set $a (struct.new_default $pair))
     (struct.set $pair 1 (local.get $a) (local.get $a))
-    (i32.const 2)))
+    (i32.const 2))
+
+  ;; Array elements are inline (D13/GC-9), so this must be exactly one heap
+  ;; block, and array.len must read the inline header.
+  (func (export "make_array") (param $n i32) (result i32)
+    (array.len (array.new_default $arr (local.get $n)))))

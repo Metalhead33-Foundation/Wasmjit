@@ -1,10 +1,10 @@
 # Garbage Collection (Wasm 3.0) — Implementation Notes, Spec Conformance, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 5 — the GC heap now
-lives in a Store-owned mmap-backed region allocator (`GcHeap`), so no libc
-allocator call happens while generated code runs; revision 4 added the refcount
-header and write barriers, and revision 3 chose reference counting over
-stop-the-world mark-sweep, §6.1/§6.4.)
+Status: design note / implementation reference (revision 6 — arrays are now
+inline (D13/GC-9): one allocation, one indirection per element access. Revision 5
+moved the GC heap into a Store-owned mmap-backed region allocator, so no libc
+allocator call happens while generated code runs; revisions 3–4 chose reference
+counting and added the refcount header and write barriers (§6.1/§6.4).)
 Audience: anyone touching `WasmType`, `WasmTypeRegistry`, `WasmModuleInstance`,
 `LibJitTypeTranslator`, `LibjitOpcodeDispatcher`, or the test suite.
 
@@ -320,9 +320,9 @@ for the full design.)
 - `allocateStructObject(size, localTypeIdx)`: allocates from the heap, writes the
   canonical `TypeId` and a reference count of 1 into the 8-byte header
   (`[u32 TypeId][u32 refcount]`, `WasmGcHeader.hpp`).
-- `allocateArrayObject(headerSize, elementSize, length, localTypeIdx)`: two heap
-  blocks — a header `[u32 TypeId][u32 refcount][u32 length][void* data]` and a
-  separate element buffer.
+- `allocateArrayObject(dataOffset, elementSize, length, localTypeIdx)`: **one**
+  heap block — `[u32 TypeId][u32 refcount][u32 length]` followed by the inline
+  elements at `dataOffset` (§4.8, D13/GC-9).
 - **Type tags come from the header, not a side map.** `GcHeap::owns(ref)` decides
   "is this a GC pointer" from the region ranges, and `tryGetGcTypeId` then reads
   the `TypeId` at the header — the old per-object `gcObjectTypes` map is gone
@@ -488,90 +488,90 @@ table model), reference-typed **global imports** (imported globals are not
 resolved at all — G6), and validation of `ref.eq` operand types or of table
 element types on import.
 
-### 4.8 Array layout: out-of-line (current) vs inline (ideal)
+### 4.8 Array layout: inline (implemented, D13/GC-9)
 
 Wasm mandates **nothing** about how an array is laid out in memory (§3.2:
-layout is free). Both layouts below are conformant and observationally
-equivalent; the difference is cost, locality and simplicity. It is still worth
-recording, because the current shape is the "C struct containing a pointer"
-instinct rather than the layout a real GC engine uses.
+layout is free). The engine used to lay an array out as a "C struct containing a
+pointer" — a header plus a separate element buffer — which cost two allocations
+and a double indirection per element access. It is now **inline**: header and
+elements in one block (docs/proposals/GC.md D13/GC-9).
 
-**Current: out-of-line.** `translateArray` lowers an array to a three-field
-struct `[u32 TypeId][u32 length][element* data]`, and
-`ModuleInstance::allocateArrayObject` performs **two** allocations:
+**Before (until GC-9).** `translateArray` lowered an array to a four-field
+struct `[u32 TypeId][u32 refcount][u32 length][element* data]`, and
+`ModuleInstance::allocateArrayObject` performed **two** allocations:
 
 ```
-      array object (calloc #1, 16 B)         element buffer (calloc #2, len*stride)
+      array object (calloc #1)               element buffer (calloc #2, len*stride)
     +---------------------------+          +-----------------------------+
 ref | +0 : u32 TypeId           |          | elem[0] | elem[1] | ...    |
- -> | +4 : u32 length            | data --> |                             |
-    | +8 : element* data         |          +-----------------------------+
+ -> | +4 : u32 refcount         | data --> |                             |
+    | +8 : u32 length           |          +-----------------------------+
+    | +16: element* data        |
     +---------------------------+
 ```
 
-Constants: `kArrayDataOffset = 8`,
-`arraySize() = align_up(8 + sizeof(void*), sizeof(void*)) = 16`. Every element
-access is a **double indirection**: `array.get $t` does
-`load_relative(ref, +8, element*)` and then `load_elem(dataPtr, index)`
-(`dispatchArrayGet`/`GetS`/`GetU`/`Set`/`Fill`/`Copy`/`Init*` all repeat this),
-and `array.new*` loads the same field before its fill loop.
+Every element access was a **double indirection**: `array.get $t` did
+`load_relative(ref, +16, element*)` and then `load_elem(dataPtr, index)`
+(`dispatchArrayGet`/`GetS`/`GetU`/`Set`/`Fill`/`Copy`/`Init*` all repeated this),
+and `array.new*` loaded the same field before its fill loop.
 
-**Ideal: inline.** One allocation holds the header and the elements:
+**Now: inline.** One allocation holds the header and the elements:
 
 ```
-   single allocation (calloc #1, dataOffset + len*stride)
-  +----------------------------------------------------------+
-  | +0 : u32 TypeId | +4 : u32 length | pad | elem[0] | ...  |
-  +----------------------------------------------------------+
+   single allocation (dataOffset + len*stride)
+  +-------------------------------------------------------------+
+  | +0 : u32 TypeId | +4 : u32 refcount | +8 : u32 length | pad |
+  +-------------------------------------------------------------+
+  | elem[0] | elem[1] | ...                                      |
+  +-------------------------------------------------------------+
                                           ^ element base = ref + dataOffset
 ```
 
-Element access becomes a **single** indirection:
+Element access is a **single** indirection:
 `load_elem(ref + dataOffset, index)` (or `load_elem_address` for the packed
 `get_u`/`get_s` path). `dataOffset` is a per-array-type constant,
-`align_up(8, alignof(element))`, not a stored field.
+`align_up(12, alignof(element))`, computed by `WASM::gcArrayDataOffset` and
+shared by the JIT and the runtime (H1) — not a stored field.
 
-| Dimension | Out-of-line (current) | Inline (ideal) |
+| Dimension | Out-of-line (before) | Inline (now) |
 |---|---|---|
-| Allocations per array | 2 | 1 |
-| Fixed overhead per array | 16 B header + 8 B `data` field + two allocator headers | 8 B header (`dataOffset` incl. padding) + one allocator header |
-| Element access | 2 dependent loads (ref → data → elem) | 1 load (ref + offset → elem) |
+| Allocations per array | 2 | **1** |
+| Fixed overhead per array | 8 B header + 8 B `data` field (+ padding) + two allocator headers | 12 B header (padded to `dataOffset`) + one allocator header |
+| Element access | 2 dependent loads (ref → data → elem) | **1 load (ref + offset → elem)** |
 | Cache lines touched by one `array.get` | usually 2 (header, buffer) | 1 (unless the array spans a line) |
 | Empty array (`len = 0`) | `data == nullptr`; the field must never be dereferenced | just the header; no null case |
 | Locality / streaming | buffer can be anywhere | header and elements adjacent |
-| Free / arena teardown | two blocks to reclaim | one block |
-| Moving GC later | **not planned** — reference counting is non-moving (§6.1) | (same: no forwarding pointers to design for either way) |
+| Free / arena teardown | two blocks to reclaim | **one block** |
+| Moving GC later | **not planned** — reference counting is non-moving (§6.1) | (same: no forwarding pointers) |
 | `array.copy` self-overlap | `memmove` on the shared buffer | `memmove` within one object |
-| LibJIT representation | fixed 3-field struct | header-only struct + computed address arithmetic |
+| LibJIT representation | fixed 4-field struct | header-only 3-field struct + computed address arithmetic |
 
 Arrays are uniquely easy to inline because **their length is fixed at
-creation** — there is no `array.grow`, so the object size is known at
-`array.new*` and never changes. Structs are already inline (fixed size, no
-pointer field); only arrays are out-of-line today, so this is an inconsistency
-in the current implementation rather than a deliberate policy.
+creation** — there is no `array.grow`. Structs were already inline; arrays were
+the last out-of-line case, and the two-block shape also forced `RC-1b` to
+recycle two blocks per array — now one.
 
-**Doing it under LibJIT.** LibJIT has no flexible-array-member type, so the
-lowered type becomes a *header-only* struct and the element base is raw
-address arithmetic:
+**How it is implemented.** LibJIT has no flexible-array-member type, so the
+lowered type is the *header-only* struct and the element base is address
+arithmetic:
 
-- `translateArray` returns `[u32 TypeId][u32 length]` (8 bytes) instead of
-  `[u32][u32][ptr]`.
-- Each array type gets two compile-time constants from its element storage
-  type: `elemSize` (already computed by `storageBytes`) and
-  `dataOffset = align_up(kArrayDataOffset, storageAlign(elem))`.
-- `arrayDataOffset(arg)` in the dispatcher returns `dataOffset` (instead of
-  `jit_type_get_offset(type, 2)`), and `array.get`/`get_s`/`get_u`/`set`/`fill`
-  replace `load_relative(ref, dataOffset, ptr)` + `load_elem(dataPtr, i)` with
-  `load_elem(ref + dataOffset, i)`.
-- `allocateArrayObject` becomes one `calloc(1, dataOffset + length*elemSize)`,
-  with `TypeId` at `+0` and `length` at `+4`.
-- `arraySize()` / `kArrayDataOffset` are replaced by the per-type
-  `dataOffset`/`elemSize`, computed in one place and shared with the JIT
-  (the same "keep in sync" contract as §5.3/H1).
-- `array.copy` / `init_data` / `init_elem` keep using
+- `translateArray` returns `{u32 TypeId, u32 refcount, u32 length}` (12 bytes)
+  instead of a struct with a trailing pointer.
+- `WASM::gcArrayDataOffset(storageType)` gives the per-type
+  `dataOffset = align_up(12, storageAlign(elem))`, shared by the runtime and the
+  JIT (H1).
+- `OpcodeDispatcher::arrayDataOffset(arg)` returns that constant, and
+  `arrayElementBase(ref, arg)` produces `ref + dataOffset` as an `element*`;
+  `array.get`/`get_s`/`get_u`/`set`/`fill`/`copy`/`init_data`/`init_elem` and the
+  `array.new*` fill loops all go through it.
+- `allocateArrayObject(dataOffset, elemSize, length, typeIdx)` allocates one
+  block of `dataOffset + length*elemSize` bytes, writes `TypeId`@0,
+  `refcount`@4 and `length`@8, and leaves the elements zero-filled (the heap is
+  mmap-backed).
+- `array.copy` / `init_data` / `init_elem` still call
   `wasm_buffer_copy_impl` / `wasm_buffer_init_*_impl`, but the `void*` they
-  receive is now `ref + dataOffset` rather than a loaded `data` field. A
-  self-copy still needs `memmove` semantics, which the helper provides.
+  receive is now `ref + dataOffset` rather than a loaded `data` field; a
+  self-copy keeps `memmove` semantics.
 
 **Guardrails / caveats.**
 
@@ -643,7 +643,7 @@ effort.
 | H5 | **`stringref`/`stringview_*` enum + `void*` lowering exist but are not in 3.0** and have no parser/dispatch; the reserved encodings are stale (see §10.3). Keep explicitly unsupported. |
 | H6 | **`ref.eq` is raw pointer equality with no type check**; unboxed `i31` compares by value only because the representation is canonical. `ref.eq` on non-`eq` operands is not rejected. |
 | H7 | **`Value::kind` is set ad hoc** when a GC constant is produced (`I31Ref`, `StructRef`, `ArrayRef`), but the JIT ignores it; two paths must agree that the union payload is represented the same way. |
-| H8 | **Arrays cost two allocations and two indirections** (out-of-line `[header][length][data*]`). Correct, but worse than the inline form for locality and allocation count; see §4.8. |
+| ~~H8~~ | ~~Arrays cost two allocations and two indirections.~~ **Done (GC-9 / D13):** arrays are inline — one allocation, one indirection per access. |
 
 ### 5.4 Harness limitations that can look like implementation gaps
 
@@ -756,7 +756,7 @@ host is a bug, not an implementation-limitation footnote. Therefore:
 | D10 | **Do not implement** finalizers, weak refs, type parameters, unions, strings, thread-shared heaps. | §3.4: all Post-MVP / out of 3.0. | Scope control. |
 | D11 | **Elide null checks** only when the static type is non-nullable *and* we trust validation. | Sound if the module is valid; unsafe with D6. | Fewer branches on `struct.get`/`array.get`. |
 | D12 | **Keep type interning**, but stop paying for it where it does not matter (e.g. function types never used in casts/imports) once the dedup ratio is measured. | §3.3: canonicalisation is optional. | Less work at link time without losing cross-module `match`. |
-| D13 | **Make arrays inline** (header + length + elements in one allocation), replacing the current `[header][length][data*]` form. | §3.2: heap-object layout is ours to choose, and Wasm arrays never grow, so the size is known at creation. | Half the allocations, one indirection per element access, better locality; see §4.8. |
+| D13 | ✅ **Arrays are inline** (header + elements in one allocation), replacing the `[header][length][data*]` form (done, GC-9). | §3.2: heap-object layout is ours to choose, and Wasm arrays never grow, so the size is known at creation. | Half the allocations (now one), one indirection per element access, better locality; see §4.8. |
 | D14 | **Refcount in the object header**, `[u32 TypeId][i32 refcount]` at offsets 0/4; `i31` stays unboxed and uncounted; `externref` / `funcref` are not ours to count. | §3.2: heap-object layout is free, and unboxed scalars are allowed. | The count lives with the object: no side table, no per-object metadata lookup. |
 | D15 | **Every reference mutation goes through one native helper** — `wasm_ref_store(void** slot, void* newRef)` (release old, retain new), `wasm_ref_clone(void* ref)`, `wasm_ref_drop(void* ref)` — alongside the existing `wasm_ref_matches_heap_type_impl` and `wasm_buffer_copy_impl` (which must *also* retain when it copies ref-typed elements). The JIT never emits a raw `void*` store into a ref slot. | §3.2: representation is free; §3.5: failures may be surfaced however the embedder likes. | One barrier point, one place to hook the cycle collector; a missed barrier becomes a visible omission instead of a hidden leak. |
 | D16 | **Atomic refcount in the header** (`std::atomic<int32_t>`), even before threads exist; non-atomic operations only in a single-threaded build. | §3.4 keeps thread-shared managed heaps out of 3.0, but §3.1/§3.2 leave the representation to us; paying now avoids a second reference ABI later (`THREADS.md`). | Threads-ready counts for one header word and one atomic RMW on the slow path, with no ABI break when `THREADS.md` lands. |
@@ -827,16 +827,16 @@ the collector is not considered shipped until cycles are reclaimed. The
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **GC-1 — Header-based tags** | ◑ Partly done (`GC-2a`): aggregates read the `u32` at `ref[0]` and `gcObjectTypes` is deleted (`GcHeap::owns` is the GC-pointer test). **Open:** give function references a discoverable canonical `typeId` that needs no per-instance pointer scan. | G1, G2, H2, H3 | Done for aggregates: cross-instance `ref.test`/`ref.cast` on structs/arrays read the header; `ref.test funcref` across modules still needs G2. |
-| **GC-2 — Region allocator** | ◑ Landed (`GC-2a`): the Store-owned `GcHeap` — mmap-backed regions segregated by size class, per-region free lists, budget-charged, released by `~ModuleInstance`; `allocateStructObject`/`allocateArrayObject` no longer call `calloc` and type tags come from the header (`GcHeap::owns`). **Open:** wire `reclaimGcObject` → `GcHeap::recycle` (that is `RC-1b`), recycle the array element buffer, and the debug "poison on free" mode. | D1, D2, L1, C7 (partly) | Done for backing: no per-object libc allocation; allocation is a free-list pop or a bump; instance teardown reclaims everything even if counting misses. |
+| **GC-2 — Region allocator** | ◑ Landed (`GC-2a`): the Store-owned `GcHeap` — mmap-backed regions segregated by size class, per-region free lists, budget-charged, released by `~ModuleInstance`; `allocateStructObject`/`allocateArrayObject` no longer call `calloc` and type tags come from the header (`GcHeap::owns`). **Open:** wire `reclaimGcObject` → `GcHeap::recycle` (that is `RC-1b`), and the debug "poison on free" mode. | D1, D2, L1, C7 (partly) | Done for backing: no per-object libc allocation; allocation is a free-list pop or a bump; instance teardown reclaims everything even if counting misses. |
 | **GC-3 — Instantiation-time materialisation** | ◑ Partly done: element/data segments are evaluated once (D8) and imported globals are resolved (G6). Table initialiser expressions (D9/G5) are still dropped. | G4, G6 (G5 open) | `array_new_elem` identity holds; GC `const` exprs reading imported globals work. Typed/non-nullable tables still do not initialise. |
 | **GC-4 — `br_on_cast` correctness** | Honour the `castop` nullability flags; fix the branch-target slot model so `br_on_cast(_fail)` never trips `!slots.empty()` / `!valueStack.empty()`. | G7 | Both scripts run to completion; nullable variants yield spec results. |
 | **GC-5 — Crash triage** | ◑ Mostly done: `ref_cast`, `ref_func`, `call_ref`, `return_call_ref` and `type-equivalence` all run now (the trap sink), and `array.init_elem` is clean; only `array.init_data` still has 3 mismatches. | C1–C5 | No child aborts/segfaults; each script passes or fails with a real mismatch message. |
 | **GC-6 — Trap sink** | ✅ `WASM::trap` (longjmp to a `TrapScope`, `WasmBase/WasmTrap.hpp`) is the single sink; `emitAbort` and every `jit_insn_check_null` use it, and the harness executes `assert_trap`. Allocation failure and `notImplemented` still abort. | C6, D7 | Done: a failed cast / null deref is recoverable in-process; no `std::abort` on the memory/table/GC-reference path. |
 | **GC-7 — Fast casts (optional)** | Depth/range-tag encoding (D3), inline caches for repeated `ref.test`/`ref.cast` at a site, measured against the registry-call baseline. | H3 | Casts on a hot loop are a few instructions; benchmark recorded. |
 | **GC-8 — Extern interop (optional)** | Only if an embedder needs host externrefs: box `extern.convert_any` values, keep identity under the no-mixing contract (D5). | G3 | `ref_test` extern cases pass; the contract is documented in `ABI.md`. |
-| **GC-9 — Inline arrays (optional)** | Move arrays from the out-of-line `[header][length][data*]` form to the inline form (§4.8): header-only LibJIT type, per-type `dataOffset`/`elemSize`, single allocation, one indirection per access. Folds naturally into the RC allocator (GC-2/RC-1). | D13, H8 | A layout test asserts JIT offsets == runtime offsets; benchmarks show the allocation/indirection win. |
+| **GC-9 — Inline arrays** | ✅ Done: header-only JIT type, per-type `dataOffset` (`gcArrayDataOffset`), one allocation, and `arrayElementBase` for every element access. | D13, H8 | Done: `array.new_default` is one heap block (the `GC reference counting` test asserts `totalAllocations() + 1`), and all array scripts are unchanged from the §8 baseline. |
 | **RC-1 — Reference-counted heap objects (core)** | ◑ Landed: `[u32 TypeId][u32 refcount]` header, count 1 at allocation, the `wasm_ref_store`/`_clone`/`_drop` helpers (`WasmGcHeader.hpp`, `ModuleInstance::ref*`), and the JIT routes `struct.set`/`array.set`/`array.fill`/`global.set`/`table.set` reference stores through the barrier. **Open:** a ref-aware `wasm_buffer_copy_impl` for `array.copy`/`init_elem`, the read-side clone for borrowed-slot copies, and reclamation (`reclaimGcObject` records the 0 transition but does not free). | L2, L3, RC4 (partly), RC9 (partly), D14, D15 | Done for the store barriers: every ref-typed `struct.set`/`array.set`/`array.fill`/`global.set`/`table.set` in the JIT is a `wasm_ref_store` call; a fresh object reports count 1 and clone/drop/store move it (`GC reference counting` test). |
-| **RC-1b — Reclaim safely** | Turn `reclaimGcObject` into "free the object (and its element buffer) and credit the Store budget", only once every live reference is counted — i.e. after the local/operand-stack ownership work of `RC-5`. | RC4, RC10, L1, D19 | A dead object's memory is returned and the budget credited; the suite runs with a live-object leak check that stays flat. |
+| **RC-1b — Reclaim safely** | Turn `reclaimGcObject` into "free the block and credit the Store budget" (each array is a single block since GC-9), only once every live reference is counted — i.e. after the local/operand-stack ownership work of `RC-5`. | RC4, RC10, L1, D19 | A dead object's memory is returned and the budget credited; the suite runs with a live-object leak check that stays flat. |
 | **RC-2 — Cycle collection (day one, with RC-1)** | Bacon–Rajan synchronous trial deletion over the region's objects: a candidate buffer, no stack maps, no root set. | RC1, D18 | A self-referential `struct`/`array` graph is reclaimed once its external references drop (a live-object / allocation counter returns to its pre-graph value). |
 | **RC-3 — Trap-safe refcount ops** | Saturating `clone`, trapping `drop` below zero, debug poison-on-free, and an iterative drop worklist (no recursion on a deep chain). | RC7, RC8, RC9, D19 | Overflow / underflow / double-drop tests trap or leak deterministically (never corrupt), and dropping a 10⁶-deep chain uses O(1) C stack. |
 | **RC-4 — Atomic refcounts / threads-ready** | Make the header count `std::atomic<int32_t>` with acquire/release ordering; stress a clone/drop race. | RC2, RC11, D16 | The count is atomic in every multi-thread-capable build and a two-thread clone/drop stress test is clean; unblocks `THREADS.md`. |
@@ -936,8 +936,9 @@ runtime bugs.
 
 Reference counting now has **two manual tests**. `GC reference counting: clone,
 drop and store barriers` (`Test/wasm_wat/gc_refcount.wat`) covers the header
-count, `refClone`/`refDrop`/`refStore` and the underflow trap, and runs the JIT
-`struct.set` barrier end to end. `GC heap: region allocation, alignment and
+count, `refClone`/`refDrop`/`refStore` and the underflow trap, runs the JIT
+`struct.set` barrier end to end, and asserts `array.new_default` is a **single**
+heap block (inline arrays, GC-9). `GC heap: region allocation, alignment and
 recycling` covers 16-byte alignment, mmap zero-fill, region batching (1000
 objects → at most one extra region), free-list reuse, dedicated large regions,
 `owns()` classification and bulk `releaseSet`. Still absent: an end-to-end

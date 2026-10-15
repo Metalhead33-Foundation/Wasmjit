@@ -371,9 +371,9 @@ static void* wasm_struct_new_default_impl(WASM::VMContext* vm, uint32_t size, ui
 	return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateStructObject(size, typeIndex);
 }
 
-static void* wasm_array_new_default_impl(WASM::VMContext* vm, uint32_t headerSize, uint32_t elementSize, uint32_t length, uint32_t typeIndex)
+static void* wasm_array_new_default_impl(WASM::VMContext* vm, uint32_t dataOffset, uint32_t elementSize, uint32_t length, uint32_t typeIndex)
 {
-	return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateArrayObject(headerSize, elementSize, length, typeIndex);
+	return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateArrayObject(dataOffset, elementSize, length, typeIndex);
 }
 
 static void* wasm_i31_new_impl(int32_t value)
@@ -696,14 +696,26 @@ jit_nint OpcodeDispatcher::structFieldOffset(WASM::TypeIdx arg, uint32_t fieldIn
 
 jit_nint OpcodeDispatcher::arrayLengthOffset(WASM::TypeIdx arg) const
 {
-	jit_type_t arrayType = jitTypeForTypeIdx(arg);
-	return static_cast<jit_nint>(jit_type_get_offset(arrayType, WASM::GcHeader::kArrayLengthField));
+	// [TypeId][refcount][length] — fixed for every array.
+	(void)arg;
+	return static_cast<jit_nint>(WASM::GcHeader::kArrayLengthOffset);
 }
 
 jit_nint OpcodeDispatcher::arrayDataOffset(WASM::TypeIdx arg) const
 {
-	jit_type_t arrayType = jitTypeForTypeIdx(arg);
-	return static_cast<jit_nint>(jit_type_get_offset(arrayType, WASM::GcHeader::kArrayDataField));
+	// Elements are inline; the offset depends only on the element's alignment,
+	// and must match the runtime's allocateArrayObject / gcArrayDataOffset (H1).
+	return static_cast<jit_nint>(
+			WASM::gcArrayDataOffset(arrayTypeForIndex(arg).elementType.storageType));
+}
+
+jit_value_t OpcodeDispatcher::arrayElementBase(jit_value_t arrayRef, WASM::TypeIdx arg)
+{
+	jit_type_t elemType = arrayElementJitType(arg);
+	jit_type_t dataPtrType = jit_type_create_pointer(elemType, 1);
+	jit_value_t addr = jit_insn_add(function, refAsVoidPtr(arrayRef),
+			jit_value_create_nint_constant(function, jit_type_nint, arrayDataOffset(arg)));
+	return castRefValue(addr, dataPtrType);
 }
 
 jit_value_t OpcodeDispatcher::packReturnValues(jit_type_t returnType, size_t resultCount)
@@ -3037,15 +3049,14 @@ void OpcodeDispatcher::dispatchArrayNew(WASM::TypeIdx arg) {
 	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, params, 5, 1);
 	jit_value_t args[] = {
 		vmContextValue(),
-		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(jit_type_get_size(jitTypeForTypeIdx(arg)))),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arrayDataOffset(arg))),
 		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(jit_type_get_size(elemType))),
 		length,
 		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg))
 	};
 	jit_value_t arrayRef = jit_insn_call_native(function, "wasm_array_new_default_impl",
 		reinterpret_cast<void*>(wasm_array_new_default_impl), sig, args, 5, 0);
-	jit_type_t dataPtrType = jit_type_create_pointer(elemType, 1);
-	jit_value_t dataPtr = jit_insn_load_relative(function, arrayRef, arrayDataOffset(arg), dataPtrType);
+	jit_value_t dataPtr = arrayElementBase(arrayRef, arg);
 	jit_value_t idxSlot = jit_value_create(function, jit_type_uint);
 	jit_insn_store(function, idxSlot, jit_value_create_nint_constant(function, jit_type_uint, 0));
 	jit_label_t loopLabel = jit_label_undefined;
@@ -3072,7 +3083,7 @@ void OpcodeDispatcher::dispatchArrayNewDefault(WASM::TypeIdx arg) {
 	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, params, 5, 1);
 	jit_value_t args[] = {
 		vmContextValue(),
-		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(jit_type_get_size(jitTypeForTypeIdx(arg)))),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arrayDataOffset(arg))),
 		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(jit_type_get_size(elemType))),
 		length,
 		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg))
@@ -3087,15 +3098,14 @@ void OpcodeDispatcher::dispatchArrayNewFixed(WASM::TypeIdx arg1, uint32_t arg2) 
 	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, params, 5, 1);
 	jit_value_t args[] = {
 		vmContextValue(),
-		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(jit_type_get_size(jitTypeForTypeIdx(arg1)))),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arrayDataOffset(arg1))),
 		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(jit_type_get_size(elemType))),
 		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg2)),
 		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg1))
 	};
 	jit_value_t arrayRef = jit_insn_call_native(function, "wasm_array_new_default_impl",
 		reinterpret_cast<void*>(wasm_array_new_default_impl), sig, args, 5, 0);
-	jit_type_t dataPtrType = jit_type_create_pointer(elemType, 1);
-	jit_value_t dataPtr = jit_insn_load_relative(function, arrayRef, arrayDataOffset(arg1), dataPtrType);
+	jit_value_t dataPtr = arrayElementBase(arrayRef, arg1);
 	std::vector<jit_value_t> values(arg2);
 	for (size_t i = arg2; i-- > 0; )
 		values[i] = popValue();
@@ -3118,15 +3128,14 @@ void OpcodeDispatcher::dispatchArrayNewData(WASM::TypeIdx arg1, uint32_t arg2) {
 	jit_type_t sigAlloc = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, allocParams, 5, 1);
 	jit_value_t allocArgs[] = {
 		vmContextValue(),
-		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(jit_type_get_size(jitTypeForTypeIdx(arg1)))),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arrayDataOffset(arg1))),
 		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(jit_type_get_size(elemType))),
 		length,
 		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg1))
 	};
 	jit_value_t arrayRef = jit_insn_call_native(function, "wasm_array_new_default_impl",
 		reinterpret_cast<void*>(wasm_array_new_default_impl), sigAlloc, allocArgs, 5, 0);
-	jit_type_t dataPtrType = jit_type_create_pointer(arrayElementJitType(arg1), 1);
-	jit_value_t dataPtr = jit_insn_load_relative(function, refAsVoidPtr(arrayRef), arrayDataOffset(arg1), dataPtrType);
+	jit_value_t dataPtr = arrayElementBase(arrayRef, arg1);
 	jit_type_t initParams[] = {jit_type_void_ptr, jit_type_uint, jit_type_void_ptr, jit_type_uint, jit_type_uint};
 	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, initParams, 5, 1);
 	jit_value_t byteLen = jit_insn_mul(function, jit_insn_convert(function, length, jit_type_uint, 0),
@@ -3145,15 +3154,14 @@ void OpcodeDispatcher::dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2) {
 	jit_type_t sigAlloc = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, allocParams, 5, 1);
 	jit_value_t allocArgs[] = {
 		vmContextValue(),
-		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(jit_type_get_size(jitTypeForTypeIdx(arg1)))),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arrayDataOffset(arg1))),
 		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(jit_type_get_size(elemType))),
 		length,
 		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg1))
 	};
 	jit_value_t arrayRef = jit_insn_call_native(function, "wasm_array_new_default_impl",
 		reinterpret_cast<void*>(wasm_array_new_default_impl), sigAlloc, allocArgs, 5, 0);
-	jit_type_t dataPtrType = jit_type_create_pointer(arrayElementJitType(arg1), 1);
-	jit_value_t dataPtr = jit_insn_load_relative(function, refAsVoidPtr(arrayRef), arrayDataOffset(arg1), dataPtrType);
+	jit_value_t dataPtr = arrayElementBase(arrayRef, arg1);
 	jit_type_t initParams[] = {jit_type_void_ptr, jit_type_uint, jit_type_void_ptr, jit_type_uint, jit_type_uint};
 	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, initParams, 5, 1);
 	jit_value_t args[] = {vmContextValue(), jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg2)),
@@ -3174,8 +3182,7 @@ void OpcodeDispatcher::dispatchArrayGet(WASM::TypeIdx arg) {
 	emitTrapUnreachable();
 	jit_insn_label(function, &cont);
 	jit_type_t elemType = arrayElementJitType(arg);
-	jit_type_t dataPtrType = jit_type_create_pointer(elemType, 1);
-	jit_value_t dataPtr = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayDataOffset(arg), dataPtrType);
+	jit_value_t dataPtr = arrayElementBase(ref, arg);
 	pushValue(jit_insn_load_elem(function, dataPtr, index, elemType));
 }
 void OpcodeDispatcher::dispatchArrayGetS(WASM::TypeIdx arg) {
@@ -3189,8 +3196,7 @@ void OpcodeDispatcher::dispatchArrayGetS(WASM::TypeIdx arg) {
 	emitTrapUnreachable();
 	jit_insn_label(function, &cont);
 	jit_type_t elemType = arrayElementJitType(arg);
-	jit_type_t dataPtrType = jit_type_create_pointer(elemType, 1);
-	jit_value_t dataPtr = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayDataOffset(arg), dataPtrType);
+	jit_value_t dataPtr = arrayElementBase(ref, arg);
 	jit_value_t raw = jit_insn_load_elem(function, dataPtr, index, elemType);
 	pushValue(jit_insn_convert(function, raw, jit_type_int, 0));
 }
@@ -3205,8 +3211,7 @@ void OpcodeDispatcher::dispatchArrayGetU(WASM::TypeIdx arg) {
 	emitTrapUnreachable();
 	jit_insn_label(function, &cont);
 	jit_type_t elemType = arrayElementJitType(arg);
-	jit_type_t dataPtrType = jit_type_create_pointer(elemType, 1);
-	jit_value_t dataPtr = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayDataOffset(arg), dataPtrType);
+	jit_value_t dataPtr = arrayElementBase(ref, arg);
 	jit_value_t addr = jit_insn_load_elem_address(function, dataPtr, index, elemType);
 	jit_type_t loadType = arrayTypeForIndex(arg).elementType.storageType.val.opcode == WASM::ValueTypeCode::I8 ? jit_type_ubyte : jit_type_ushort;
 	jit_value_t raw = jit_insn_load_relative(function, addr, 0, loadType);
@@ -3224,8 +3229,7 @@ void OpcodeDispatcher::dispatchArraySet(WASM::TypeIdx arg) {
 	emitTrapUnreachable();
 	jit_insn_label(function, &cont);
 	jit_type_t elemType = arrayElementJitType(arg);
-	jit_type_t dataPtrType = jit_type_create_pointer(elemType, 1);
-	jit_value_t dataPtr = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayDataOffset(arg), dataPtrType);
+	jit_value_t dataPtr = arrayElementBase(ref, arg);
 	if (WASM::isReferenceType(arrayTypeForIndex(arg).elementType.storageType.val.opcode)) {
 		jit_value_t slot = jit_insn_load_elem_address(function, dataPtr, index, elemType);
 		emitRefStore(slot, value);
@@ -3254,8 +3258,7 @@ void OpcodeDispatcher::dispatchArrayFill(WASM::TypeIdx arg) {
 	emitTrapUnreachable();
 	jit_insn_label(function, &cont);
 	jit_type_t elemType = arrayElementJitType(arg);
-	jit_type_t dataPtrType = jit_type_create_pointer(elemType, 1);
-	jit_value_t dataPtr = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayDataOffset(arg), dataPtrType);
+	jit_value_t dataPtr = arrayElementBase(ref, arg);
 	jit_value_t idxSlot = jit_value_create(function, jit_type_uint);
 	jit_insn_store(function, idxSlot, start);
 	jit_label_t loopLabel = jit_label_undefined;
@@ -3295,10 +3298,8 @@ void OpcodeDispatcher::dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2)
 	jit_type_t srcElemType = arrayElementJitType(arg2);
 	if (jit_type_get_size(dstElemType) != jit_type_get_size(srcElemType))
 		emitTrapUnreachable();
-	jit_type_t dstPtrType = jit_type_create_pointer(dstElemType, 1);
-	jit_type_t srcPtrType = jit_type_create_pointer(srcElemType, 1);
-	jit_value_t dstPtr = jit_insn_load_relative(function, refAsVoidPtr(dstRef), arrayDataOffset(arg1), dstPtrType);
-	jit_value_t srcPtr = jit_insn_load_relative(function, refAsVoidPtr(srcRef), arrayDataOffset(arg2), srcPtrType);
+	jit_value_t dstPtr = arrayElementBase(dstRef, arg1);
+	jit_value_t srcPtr = arrayElementBase(srcRef, arg2);
 	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_void_ptr, jit_type_uint, jit_type_uint, jit_type_uint};
 	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 6, 1);
 	jit_value_t args[] = {
@@ -3321,8 +3322,7 @@ void OpcodeDispatcher::dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2) 
 	emitTrapUnreachable();
 	jit_insn_label(function, &cont);
 	jit_type_t elemType = arrayElementJitType(arg1);
-	jit_type_t dataPtrType = jit_type_create_pointer(elemType, 1);
-	jit_value_t basePtr = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayDataOffset(arg1), dataPtrType);
+	jit_value_t basePtr = arrayElementBase(ref, arg1);
 	jit_value_t dstPtr = jit_insn_load_elem_address(function, basePtr, dst, elemType);
 	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_void_ptr, jit_type_uint, jit_type_uint};
 	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 5, 1);
@@ -3348,8 +3348,7 @@ void OpcodeDispatcher::dispatchArrayInitElem(WASM::TypeIdx arg1, uint32_t arg2) 
 	emitTrapUnreachable();
 	jit_insn_label(function, &cont);
 	jit_type_t elemType = arrayElementJitType(arg1);
-	jit_type_t dataPtrType = jit_type_create_pointer(elemType, 1);
-	jit_value_t basePtr = jit_insn_load_relative(function, refAsVoidPtr(ref), arrayDataOffset(arg1), dataPtrType);
+	jit_value_t basePtr = arrayElementBase(ref, arg1);
 	jit_value_t dstPtr = jit_insn_load_elem_address(function, basePtr, dst, elemType);
 	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_void_ptr, jit_type_uint, jit_type_uint};
 	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 5, 1);

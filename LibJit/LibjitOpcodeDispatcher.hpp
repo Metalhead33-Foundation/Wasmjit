@@ -113,6 +113,10 @@ private:
 	jit_nint structFieldOffset(WASM::TypeIdx arg, uint32_t fieldIndex) const;
 	jit_nint arrayLengthOffset(WASM::TypeIdx arg) const;
 	jit_nint arrayDataOffset(WASM::TypeIdx arg) const;
+	// `ref + dataOffset`, typed as a pointer to the array's element type.
+	// Arrays store their elements inline (docs/proposals/GC.md D13/GC-9), so
+	// there is no `data` field to load.
+	jit_value_t arrayElementBase(jit_value_t arrayRef, WASM::TypeIdx arg);
 	jit_value_t packReturnValues(jit_type_t returnType, size_t resultCount);
 	void pushCallResults(const WASM::FuncType& calleeSig, jit_type_t calleeJitSig, jit_value_t ret);
 	std::vector<WASM::StorageType> parameterTypesForBlockType(const WASM::BlockType& bt) const;

@@ -948,6 +948,15 @@ TEST_CASE("GC reference counting: clone, drop and store barriers")
 	auto make = instance.exportedFunction("make");
 	REQUIRE(make.has_value());
 	REQUIRE(WASM::callCallable<int32_t>(*make) == 2);
+
+	// Inline arrays (D13/GC-9): `array.new_default` is one heap block, not the
+	// old header-plus-buffer pair, and `array.len` reads the inline header.
+	auto makeArray = instance.exportedFunction("make_array");
+	REQUIRE(makeArray.has_value());
+	WASM::GcHeap& heap = WASM::Store::global().gc();
+	const size_t blocksBefore = heap.totalAllocations();
+	REQUIRE(WASM::callCallable<int32_t>(*makeArray, int32_t(8)) == 8);
+	REQUIRE(heap.totalAllocations() == blocksBefore + 1);
 }
 
 

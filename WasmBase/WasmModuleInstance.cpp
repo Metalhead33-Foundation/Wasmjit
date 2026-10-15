@@ -539,34 +539,16 @@ namespace {
 
 // Runtime layout of GC aggregates must match LibJitTypeTranslator:
 //   struct: [u32 TypeId][u32 refcount], then naturally-aligned fields;
-//   array:  [u32 TypeId][u32 refcount][u32 length][void* data].
+//   array:  [u32 TypeId][u32 refcount][u32 length], then inline elements.
 // The shared constants live in WasmGcHeader.hpp; keep them in sync with
 // translateStruct / translateArray (docs/proposals/GC.md §6.3 / H1).
 constexpr size_t kGcHeaderBytes = GcHeader::kHeaderBytes;
 constexpr size_t kArrayLengthOffset = GcHeader::kArrayLengthOffset;
-constexpr size_t kArrayDataOffset = GcHeader::kArrayDataOffset;
 
-size_t storageBytes(const StorageType& st)
-{
-	if (st.isPacked)
-		return st.val.opcode == ValueTypeCode::I8 ? 1 : 2;
-	switch (st.val.opcode) {
-	case ValueTypeCode::I32:
-	case ValueTypeCode::F32: return 4;
-	case ValueTypeCode::I64:
-	case ValueTypeCode::F64: return 8;
-	case ValueTypeCode::V128: return 16;
-	default: return sizeof(void*); // references
-	}
-}
-
-size_t storageAlign(const StorageType& st)
-{
-	const size_t bytes = storageBytes(st);
-	return bytes == 16 ? 4 : bytes; // v128 lowers to a 4-aligned struct of ints
-}
-
-size_t alignUp(size_t value, size_t alignment) { return (value + alignment - 1) / alignment * alignment; }
+// Delegate to the shared helpers so the runtime and the JIT cannot drift (H1).
+size_t storageBytes(const StorageType& st) { return gcStorageBytes(st); }
+size_t storageAlign(const StorageType& st) { return gcStorageAlign(st); }
+size_t alignUp(size_t value, size_t alignment) { return gcAlignUp(value, alignment); }
 
 std::vector<size_t> structFieldOffsets(const StructType& st)
 {
@@ -592,8 +574,6 @@ size_t structSize(const StructType& st)
 	}
 	return alignUp(end, maxAlign);
 }
-
-size_t arraySize() { return alignUp(kArrayDataOffset + sizeof(void*), sizeof(void*)); }
 
 void storeValue(void* base, size_t offset, const StorageType& st, const Value& v)
 {
@@ -736,7 +716,8 @@ Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 				const uint32_t typeIdx = stream.readLEB128<uint32_t>();
 				const ArrayType& at = std::get<ArrayType>(module->types[typeIdx].composite);
 				const uint32_t length = static_cast<uint32_t>(popValue().i32);
-				Value v{}; v.ref = allocateArrayObject(static_cast<uint32_t>(arraySize()),
+				Value v{}; v.ref = allocateArrayObject(
+					static_cast<uint32_t>(gcArrayDataOffset(at.elementType.storageType)),
 					static_cast<uint32_t>(storageBytes(at.elementType.storageType)), length, typeIdx);
 				v.kind = ValueTypeCode::ArrayRef;
 				stack.push_back(v);
@@ -747,9 +728,10 @@ Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 				const ArrayType& at = std::get<ArrayType>(module->types[typeIdx].composite);
 				const uint32_t length = static_cast<uint32_t>(popValue().i32);
 				const Value init = popValue();
-				void* object = allocateArrayObject(static_cast<uint32_t>(arraySize()),
+				const uint32_t dataOffset = static_cast<uint32_t>(gcArrayDataOffset(at.elementType.storageType));
+				void* object = allocateArrayObject(dataOffset,
 					static_cast<uint32_t>(storageBytes(at.elementType.storageType)), length, typeIdx);
-				uint8_t* data = *reinterpret_cast<uint8_t**>(static_cast<uint8_t*>(object) + kArrayDataOffset);
+				uint8_t* data = static_cast<uint8_t*>(object) + dataOffset;
 				const size_t elementSize = storageBytes(at.elementType.storageType);
 				for (uint32_t i = 0; i < length; ++i)
 					storeValue(data + static_cast<size_t>(i) * elementSize, 0, at.elementType.storageType, init);
@@ -764,9 +746,10 @@ Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 				std::vector<Value> values(count);
 				for (size_t i = count; i-- > 0; )
 					values[i] = popValue();
-				void* object = allocateArrayObject(static_cast<uint32_t>(arraySize()),
+				const uint32_t dataOffset = static_cast<uint32_t>(gcArrayDataOffset(at.elementType.storageType));
+				void* object = allocateArrayObject(dataOffset,
 					static_cast<uint32_t>(storageBytes(at.elementType.storageType)), count, typeIdx);
-				uint8_t* data = *reinterpret_cast<uint8_t**>(static_cast<uint8_t*>(object) + kArrayDataOffset);
+				uint8_t* data = static_cast<uint8_t*>(object) + dataOffset;
 				const size_t elementSize = storageBytes(at.elementType.storageType);
 				for (uint32_t i = 0; i < count; ++i)
 					storeValue(data + static_cast<size_t>(i) * elementSize, 0, at.elementType.storageType, values[i]);
@@ -970,35 +953,29 @@ void* ModuleInstance::allocateStructObject(uint32_t size, uint32_t localTypeIdx)
 	return object;
 }
 
-void* ModuleInstance::allocateArrayObject(uint32_t headerSize, uint32_t elementSize, uint32_t length, uint32_t localTypeIdx)
+void* ModuleInstance::allocateArrayObject(uint32_t dataOffset, uint32_t elementSize, uint32_t length, uint32_t localTypeIdx)
 {
 	const TypeId typeId = module->typeId(LocalTypeIdx{localTypeIdx});
 
-	// Two blocks from the GC heap: the header and the element buffer. Each is
-	// charged when its region is backed, so an `array.new` with an absurd
-	// runtime length still fails as a trap without allocating tens of gigabytes
-	// (docs/SAFETY.md §2.3, docs/proposals/GC.md C7/GC-2).
-	GcHeap& heap = Store::global().gc();
-	uint8_t* header = static_cast<uint8_t*>(heap.allocate(*internals.gcSet, headerSize));
-	if (header == nullptr)
+	// One block: header + inline elements (D13/GC-9). The whole size is charged
+	// when its region is backed, so an `array.new` with an absurd runtime length
+	// still fails as a trap without allocating tens of gigabytes
+	// (docs/SAFETY.md §2.3, docs/proposals/GC.md C7/GC-2). mmap zero-fills it.
+	const uint64_t totalBytes = static_cast<uint64_t>(dataOffset) +
+			static_cast<uint64_t>(elementSize) * static_cast<uint64_t>(length);
+	if (totalBytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
 		trap("out of memory");
 
-	uint8_t* data = nullptr;
-	if (length != 0) {
-		const uint64_t dataBytes = static_cast<uint64_t>(elementSize) * static_cast<uint64_t>(length);
-		if (dataBytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
-			trap("out of memory");
-		data = static_cast<uint8_t*>(heap.allocate(*internals.gcSet, static_cast<size_t>(dataBytes)));
-		if (data == nullptr)
-			trap("out of memory");
-	}
+	uint8_t* object = static_cast<uint8_t*>(
+			Store::global().gc().allocate(*internals.gcSet, static_cast<size_t>(totalBytes)));
+	if (object == nullptr)
+		trap("out of memory");
 
-	*reinterpret_cast<uint32_t*>(header + GcHeader::kTypeIdOffset) = typeId.value;
-	*reinterpret_cast<uint32_t*>(header + GcHeader::kRefcountOffset) = 1;
-	*reinterpret_cast<uint32_t*>(header + GcHeader::kArrayLengthOffset) = length;
-	*reinterpret_cast<void**>(header + GcHeader::kArrayDataOffset) = data;
+	*reinterpret_cast<uint32_t*>(object + GcHeader::kTypeIdOffset) = typeId.value;
+	*reinterpret_cast<uint32_t*>(object + GcHeader::kRefcountOffset) = 1;
+	*reinterpret_cast<uint32_t*>(object + GcHeader::kArrayLengthOffset) = length;
 	++internals.gcAllocatedObjects;
-	return header;
+	return object;
 }
 
 bool ModuleInstance::tryGetGcTypeId(const void* ref, TypeId& typeId) const

@@ -1,6 +1,7 @@
 #ifndef WASMGCHEADER_HPP
 #define WASMGCHEADER_HPP
 #include "WasmType.hpp"
+#include <cstddef>
 #include <cstdint>
 
 namespace WASM {
@@ -11,7 +12,11 @@ namespace WASM {
 // that carries its canonical `TypeId` and its reference count:
 //
 //     struct:  [u32 TypeId][u32 refcount] <fields...>
-//     array:   [u32 TypeId][u32 refcount][u32 length][void* data]
+//     array:   [u32 TypeId][u32 refcount][u32 length] <elements...>
+//
+// Array elements are **inline**: they start at a per-element-type `dataOffset`
+// (see `gcArrayDataOffset`), so an array is one allocation rather than two
+// (docs/proposals/GC.md D13/GC-9), and each element access is one indirection.
 //
 // The refcount is the engine's reclamation currency (docs/proposals/GC.md
 // D14/RC-1). It is stored as a plain `u32` word and accessed through
@@ -32,13 +37,47 @@ constexpr uint32_t kHeaderBytes    = 8;
 // field-index terms (`jit_type_get_offset(structType, field + kHeaderFields)`).
 constexpr uint32_t kHeaderFields = 2;
 
-// Array-only fields: [TypeId][refcount][length][data*].
+// Array header: [TypeId][refcount][length], then inline elements at dataOffset.
 constexpr uint32_t kArrayLengthOffset = 8;
-constexpr uint32_t kArrayDataOffset   = 16;
 constexpr uint32_t kArrayLengthField  = 2;
-constexpr uint32_t kArrayDataField    = 3;
+constexpr uint32_t kArrayHeaderBytes  = 12;
 
 } // namespace GcHeader
+
+// ── Storage layout helpers, shared so the runtime and the JIT agree (H1) ────
+
+inline size_t gcAlignUp(size_t value, size_t alignment)
+{
+	return (value + alignment - 1) / alignment * alignment;
+}
+
+inline size_t gcStorageBytes(const StorageType& st)
+{
+	if (st.isPacked)
+		return st.val.opcode == ValueTypeCode::I8 ? 1 : 2;
+	switch (st.val.opcode) {
+	case ValueTypeCode::I32:
+	case ValueTypeCode::F32: return 4;
+	case ValueTypeCode::I64:
+	case ValueTypeCode::F64: return 8;
+	case ValueTypeCode::V128: return 16;
+	default: return sizeof(void*); // references
+	}
+}
+
+inline size_t gcStorageAlign(const StorageType& st)
+{
+	const size_t bytes = gcStorageBytes(st);
+	return bytes == 16 ? 4 : bytes; // v128 lowers to a 4-aligned struct of ints
+}
+
+// The byte offset of an array's first element within the array object. It must
+// be identical in the runtime's allocateArrayObject/evalConstantExpr and in the
+// JIT's array addressing (docs/proposals/GC.md §6.3 / H1).
+inline size_t gcArrayDataOffset(const StorageType& element)
+{
+	return gcAlignUp(GcHeader::kArrayHeaderBytes, gcStorageAlign(element));
+}
 
 // True for every value type that *may* point at a GC heap object (or be null).
 // Note that "is a reference" is wider than "is reference-counted": `i31` is a

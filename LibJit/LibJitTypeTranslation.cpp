@@ -239,17 +239,15 @@ jit_type_t LibJitTypeTranslator::translateStruct(const std::span<const WASM::Sto
 }
 
 jit_type_t LibJitTypeTranslator::translateArray(const WASM::ArrayType& wasm_array) {
-	// Resolve the element type so LibJIT knows how to do pointer math
-	jit_type_t elementType = translateType(wasm_array.elementType.storageType.val);
+	// Header-only layout: [TypeId, refcount, length]. Elements are inline at a
+	// per-element-type dataOffset (`WASM::gcArrayDataOffset`), so there is no
+	// `data` pointer field (docs/proposals/GC.md D13/GC-9). The field indices
+	// must match WasmGcHeader.hpp and the dispatcher's arrayLengthOffset (H1).
+	(void)wasm_array;
+	jit_type_t fields[WASM::GcHeader::kArrayLengthField + 1] =
+			{jit_type_uint, jit_type_uint, jit_type_uint};
 
-	// Fixed layout: [TypeId, refcount, Length, Data Pointer]. The field
-	// indices must match WasmGcHeader.hpp and the dispatcher's
-	// arrayLengthOffset / arrayDataOffset (docs/proposals/GC.md §6.3 / H1).
-	jit_type_t fields[WASM::GcHeader::kArrayDataField + 1] =
-			{jit_type_uint, jit_type_uint, jit_type_uint, jit_type_uint};
-	fields[WASM::GcHeader::kArrayDataField] = jit_type_create_pointer(elementType, 1);
-
-	return jit_type_create_struct(fields, WASM::GcHeader::kArrayDataField + 1, 1);
+	return jit_type_create_struct(fields, WASM::GcHeader::kArrayLengthField + 1, 1);
 }
 
 void LibJitTypeTranslator::translateTypes(const std::span<const WASM::Subtype>& types,
