@@ -163,6 +163,11 @@ The remaining entity kinds are **pre-declared** in `Store` (`StoreOwnedGlobal`,
 mechanical once each gains runtime behaviour. The GC heap is no longer
 deferred: `Store::gc()` owns a `GcHeap` (mmap-backed regions), and each instance
 allocates from it through a `RegionSet` handle that teardown releases in bulk.
+GC objects follow the ownership model of `proposals/GC.md` RC-5/RC-1b: a fresh
+object is unowned, an owning slot retains it, and the embedder triggers
+reclamation with `ModuleInstance::gcCollect()` at a safepoint. A reference handed
+out to the embedder is a **borrow** — do not hold it across a `gcCollect()`
+unless you have retained it.
 
 ### `Callable` (`WasmBase/WasmValue.hpp`)
 

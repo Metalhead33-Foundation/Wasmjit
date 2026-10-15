@@ -101,6 +101,10 @@ private:
 	// `newRef`, store it at `slotAddr`, release the value it overwrote. Used
 	// for every reference-typed slot store (docs/proposals/GC.md D15/RC-1).
 	void emitRefStore(jit_value_t slotAddr, jit_value_t newRef);
+	// `wasm_ref_clone` / `wasm_ref_drop` (retain / release), for slot stores
+	// that address a LibJIT local rather than memory (RC-5).
+	jit_value_t emitRefClone(jit_value_t ref);
+	void emitRefDrop(jit_value_t ref);
 	jit_value_t typedNullRef(jit_type_t refType);
 	jit_value_t emitRefTypeTest(jit_value_t ref, const WASM::HeapType& heapType, bool nullable);
 	jit_type_t tableElementJitType(WASM::TableIdx arg) const;

@@ -435,11 +435,23 @@ static int32_t wasm_ref_matches_heap_type_impl(WASM::VMContext* vm, void* ref, i
 	return reinterpret_cast<WASM::ModuleInstance*>(vm)->refMatchesHeapType(ref, ht, nullable != 0) ? 1 : 0;
 }
 
-static void wasm_buffer_copy_impl(void* dst, uint32_t dstIndex, void* src, uint32_t srcIndex, uint32_t lenElems, uint32_t elemSize)
+// Copies `lenElems` elements between two inline buffers. When the element type
+// is a reference, every destination element must also be *retained*: the copy
+// creates a new owning slot for the object (docs/proposals/GC.md RC-5), so a
+// later overwrite releases a counted value instead of underflowing.
+static void wasm_buffer_copy_impl(WASM::VMContext* vm, void* dst, uint32_t dstIndex, void* src, uint32_t srcIndex, uint32_t lenElems, uint32_t elemSize, int32_t isRefElement)
 {
-	std::memmove(static_cast<uint8_t*>(dst) + static_cast<size_t>(dstIndex) * elemSize,
-				 static_cast<uint8_t*>(src) + static_cast<size_t>(srcIndex) * elemSize,
-				 static_cast<size_t>(lenElems) * elemSize);
+	uint8_t* d = static_cast<uint8_t*>(dst) + static_cast<size_t>(dstIndex) * elemSize;
+	const uint8_t* s = static_cast<const uint8_t*>(src) + static_cast<size_t>(srcIndex) * elemSize;
+	std::memmove(d, s, static_cast<size_t>(lenElems) * elemSize);
+	if (isRefElement == 0)
+		return;
+	auto* instance = reinterpret_cast<WASM::ModuleInstance*>(vm);
+	for (uint32_t i = 0; i < lenElems; ++i) {
+		void* ref = nullptr;
+		std::memcpy(&ref, d + static_cast<size_t>(i) * elemSize, sizeof(void*));
+		instance->refClone(ref);
+	}
 }
 
 // ── Reference-counting helpers (docs/proposals/GC.md D15/RC-1) ──────────────
@@ -634,6 +646,26 @@ void OpcodeDispatcher::emitRefStore(jit_value_t slotAddr, jit_value_t newRef)
 	jit_value_t args[] = {vmContextValue(), refAsVoidPtr(slotAddr), refAsVoidPtr(newRef)};
 	jit_insn_call_native(function, "wasm_ref_store_impl",
 			reinterpret_cast<void*>(wasm_ref_store_impl), sig, args, 3, 0);
+}
+
+jit_value_t OpcodeDispatcher::emitRefClone(jit_value_t ref)
+{
+	// `wasm_ref_clone(ref)` -> the same reference, count +1.
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_void_ptr};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, params, 2, 1);
+	jit_value_t args[] = {vmContextValue(), refAsVoidPtr(ref)};
+	return jit_insn_call_native(function, "wasm_ref_clone_impl",
+			reinterpret_cast<void*>(wasm_ref_clone_impl), sig, args, 2, 0);
+}
+
+void OpcodeDispatcher::emitRefDrop(jit_value_t ref)
+{
+	// `wasm_ref_drop(ref)` -> count -1 (traps on underflow).
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_void_ptr};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 2, 1);
+	jit_value_t args[] = {vmContextValue(), refAsVoidPtr(ref)};
+	jit_insn_call_native(function, "wasm_ref_drop_impl",
+			reinterpret_cast<void*>(wasm_ref_drop_impl), sig, args, 2, 0);
 }
 
 jit_type_t OpcodeDispatcher::tableElementJitType(WASM::TableIdx arg) const
@@ -1788,6 +1820,19 @@ void OpcodeDispatcher::dispatchLocalSet(WASM::LocalIdx arg)
 {
 	assert(arg < locals.size());
 	jit_value_t v = popValue();
+	// Parameters hold a *borrow* (the caller's value is not owned by us); only
+	// non-parameter locals own a reference (docs/proposals/GC.md RC-5).
+	const bool ownedLocal = arg >= currentFunc.params.size()
+			&& jit_type_is_pointer(jit_value_get_type(locals[arg]));
+	if (ownedLocal) {
+		// Retain the new value, release the old, then store (so a
+		// self-assignment is safe).
+		jit_value_t old = jit_insn_load(function, locals[arg]);
+		jit_value_t kept = emitRefClone(v);
+		jit_insn_store(function, locals[arg], castRefValue(kept, jit_value_get_type(locals[arg])));
+		emitRefDrop(old);
+		return;
+	}
 	jit_insn_store(function, locals[arg], v);
 }
 
@@ -1795,6 +1840,16 @@ void OpcodeDispatcher::dispatchLocalTee(WASM::LocalIdx arg)
 {
 	assert(arg < locals.size());
 	jit_value_t v = popValue();
+	const bool ownedLocal = arg >= currentFunc.params.size()
+			&& jit_type_is_pointer(jit_value_get_type(locals[arg]));
+	if (ownedLocal) {
+		jit_value_t old = jit_insn_load(function, locals[arg]);
+		jit_value_t kept = emitRefClone(v);
+		jit_insn_store(function, locals[arg], castRefValue(kept, jit_value_get_type(locals[arg])));
+		emitRefDrop(old);
+		pushValue(jit_insn_load(function, locals[arg]));
+		return;
+	}
 	jit_insn_store(function, locals[arg], v);
 	pushValue(jit_insn_load(function, locals[arg]));
 }
@@ -2978,6 +3033,14 @@ void OpcodeDispatcher::dispatchStructNew(WASM::TypeIdx arg) {
 		values[i] = popValue();
 	for (size_t i = 0; i < st.fields.size(); ++i) {
 		jit_type_t fieldType = jitTypeForValueType(st.fields[i].storageType.val);
+		if (WASM::isReferenceType(st.fields[i].storageType.val.opcode)) {
+			// The new object's reference field owns a count (RC-5).
+			jit_value_t slot = jit_insn_add(function, object,
+					jit_value_create_nint_constant(function, jit_type_nint,
+							structFieldOffset(arg, static_cast<uint32_t>(i))));
+			emitRefStore(slot, values[i]);
+			continue;
+		}
 		jit_insn_store_relative(function, object, structFieldOffset(arg, static_cast<uint32_t>(i)),
 								castRefValue(values[i], fieldType));
 	}
@@ -3300,14 +3363,16 @@ void OpcodeDispatcher::dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2)
 		emitTrapUnreachable();
 	jit_value_t dstPtr = arrayElementBase(dstRef, arg1);
 	jit_value_t srcPtr = arrayElementBase(srcRef, arg2);
-	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_void_ptr, jit_type_uint, jit_type_uint, jit_type_uint};
-	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 6, 1);
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_uint, jit_type_void_ptr, jit_type_uint, jit_type_uint, jit_type_uint, jit_type_int};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 8, 1);
 	jit_value_t args[] = {
-		refAsVoidPtr(dstPtr), dstIndex, refAsVoidPtr(srcPtr), srcIndex, len,
-		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(jit_type_get_size(dstElemType)))
+		vmContextValue(), refAsVoidPtr(dstPtr), dstIndex, refAsVoidPtr(srcPtr), srcIndex, len,
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(jit_type_get_size(dstElemType))),
+		jit_value_create_nint_constant(function, jit_type_int,
+				WASM::isReferenceType(arrayTypeForIndex(arg1).elementType.storageType.val.opcode) ? 1 : 0)
 	};
 	jit_insn_call_native(function, "wasm_buffer_copy_impl",
-						 reinterpret_cast<void*>(wasm_buffer_copy_impl), sig, args, 6, 0);
+						 reinterpret_cast<void*>(wasm_buffer_copy_impl), sig, args, 8, 0);
 }
 void OpcodeDispatcher::dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2) {
 	jit_value_t len = jit_insn_convert(function, popValue(), jit_type_uint, 0);

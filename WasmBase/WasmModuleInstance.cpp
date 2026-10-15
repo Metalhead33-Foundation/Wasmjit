@@ -473,7 +473,13 @@ void ModuleInstance::initializeGlobals()
 		// Initializer expressions for globals are restricted to a small set
 		// of constant instructions (i32.const, f64.const, global.get of an
 		// imported global, ref.null, ref.func). We evaluate them directly.
-		internals.globalsStorage[importedCount + i] = evalConstantExpr(Euph::Io::ConstBufferDevice::span_cast<uint8_t>(g.initOpcode));
+		Value v = evalConstantExpr(Euph::Io::ConstBufferDevice::span_cast<uint8_t>(g.initOpcode));
+		// A reference-typed global *owns* its reference (RC-5): retain the
+		// initializer's value (a no-op for `ref.null`/`ref.func`/i31) so a later
+		// `global.set` releases a counted value rather than underflowing.
+		if (isReferenceType(g.type.contentType.opcode))
+			refClone(v.ref);
+		internals.globalsStorage[importedCount + i] = v;
 	}
 
 	ctx.globals = internals.globalsStorage.data();
@@ -928,6 +934,10 @@ void ModuleInstance::bufferInitFromElems(uint32_t elemIdx, void* dst, uint32_t s
 			callable = callableFromSegmentRef(internals.elementSegmentRefs[elemIdx][entryIndex]);
 		}
 		out[i] = callable;
+		// The destination slot now holds this reference: retain it (RC-5), so a
+		// later overwrite releases a counted value instead of underflowing.
+		// `refClone` is a no-op for non-GC references (funcrefs, null).
+		refClone(static_cast<void*>(callable));
 	}
 }
 
@@ -946,9 +956,10 @@ void* ModuleInstance::allocateStructObject(uint32_t size, uint32_t localTypeIdx)
 	if (object == nullptr)
 		trap("out of memory");
 	*reinterpret_cast<uint32_t*>(object + GcHeader::kTypeIdOffset) = typeId.value;
-	// A fresh object is owned by its creator: the count starts at 1
-	// (docs/proposals/GC.md D14).
-	*reinterpret_cast<uint32_t*>(object + GcHeader::kRefcountOffset) = 1;
+	// A fresh object is *unowned*: count 0 until a reference-typed slot retains
+	// it (docs/proposals/GC.md RC-5/RC-1b). A value on the operand stack is a
+	// borrow, so the creator does not own a reference.
+	*reinterpret_cast<uint32_t*>(object + GcHeader::kRefcountOffset) = 0;
 	++internals.gcAllocatedObjects;
 	return object;
 }
@@ -972,7 +983,8 @@ void* ModuleInstance::allocateArrayObject(uint32_t dataOffset, uint32_t elementS
 		trap("out of memory");
 
 	*reinterpret_cast<uint32_t*>(object + GcHeader::kTypeIdOffset) = typeId.value;
-	*reinterpret_cast<uint32_t*>(object + GcHeader::kRefcountOffset) = 1;
+	// Unowned at birth, like a struct (RC-5): the first owning slot retains it.
+	*reinterpret_cast<uint32_t*>(object + GcHeader::kRefcountOffset) = 0;
 	*reinterpret_cast<uint32_t*>(object + GcHeader::kArrayLengthOffset) = length;
 	++internals.gcAllocatedObjects;
 	return object;
@@ -1148,14 +1160,36 @@ void ModuleInstance::refStore(void** slot, void* newRef)
 
 void ModuleInstance::reclaimGcObject(void* ref)
 {
-	// The count reached zero. Reclamation is *deferred* for this milestone:
-	// Wasm locals and operand-stack temporaries can still hold uncounted
-	// borrows, so freeing here would be a use-after-free. Record the transition
-	// instead; the instance's region teardown (GC-2) reclaims memory wholesale.
-	// Turning this into "free + credit the Store budget" is the ownership work
-	// that follows (docs/proposals/GC.md §7, RC-1b/RC-5).
-	(void)ref;
+	// The count reached zero (RC-1b). Do NOT free here: Wasm locals,
+	// operand-stack temporaries and control-flow slots are *uncounted borrows*,
+	// and a frame is usually still live. Queue the object; gcCollect() recycles
+	// it at a safepoint where no frame is live.
+	auto* typeIdSlot = reinterpret_cast<uint32_t*>(
+			static_cast<uint8_t*>(ref) + GcHeader::kTypeIdOffset);
+	if (*typeIdSlot == GcHeader::kReclaimedTypeId)
+		return;                       // already queued
+	*typeIdSlot = GcHeader::kReclaimedTypeId;
+	internals.gcPending.push_back(ref);
 	++internals.gcReclaimedObjects;
+}
+
+void ModuleInstance::gcCollect()
+{
+	if (internals.gcPending.empty())
+		return;
+	std::vector<void*> pending;
+	pending.swap(internals.gcPending);
+	for (void* ref : pending) {
+		if (ref == nullptr)
+			continue;
+		// Resurrection guard: the object may have been retained again since it
+		// was queued (count 0 -> 1). Only recycle what is still at zero.
+		auto* count = reinterpret_cast<uint32_t*>(
+				static_cast<uint8_t*>(ref) + GcHeader::kRefcountOffset);
+		if (std::atomic_ref<uint32_t>(*count).load(std::memory_order_relaxed) != 0)
+			continue;
+		Store::global().gc().recycle(ref);
+	}
 }
 
 }

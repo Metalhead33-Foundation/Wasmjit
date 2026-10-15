@@ -44,6 +44,9 @@ struct ModuleInstanceInternals {
 	// for tests/diagnostics; reclamation is deferred, see ModuleInstance.
 	uint64_t gcAllocatedObjects = 0;
 	uint64_t gcReclaimedObjects = 0;
+	// Objects whose reference count reached zero (RC-1b). They are only
+	// recycled by gcCollect(), at a safepoint where no Wasm frame is live.
+	std::vector<void*> gcPending;
 
 	// Backend-specific compiled function handles (e.g., jit_function_t for LibJIT).
 	// Stored as void* to keep this header backend-agnostic.
@@ -123,6 +126,17 @@ public:
 	uint32_t gcRefCount(const void* ref) const;
 	uint64_t gcAllocatedObjects() const { return internals.gcAllocatedObjects; }
 	uint64_t gcReclaimedObjects() const { return internals.gcReclaimedObjects; }
+
+	// ── Safepoint reclamation (docs/proposals/GC.md RC-1b) ──────────────
+	// Objects whose count reached zero are only *queued*; `gcCollect()` does
+	// the actual recycling. Call it only at a safepoint where no Wasm frame is
+	// live and the embedder holds no un-counted references — then any queued
+	// object still at count zero is unreachable by construction. Re-checking
+	// the count at collect time makes resurrection (a queued object that was
+	// retained again) safe.
+	void gcCollect();
+	// Number of objects queued for the next gcCollect().
+	size_t gcPendingCount() const { return internals.gcPending.size(); }
 	// Resolve an element-segment reference (as produced by evalConstantExpr and
 	// cached in elementSegmentRefs) to the Callable* a table slot stores. A
 	// GC/heap reference is stored as-is: the slot is an opaque pointer.

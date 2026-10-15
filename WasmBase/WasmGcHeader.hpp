@@ -42,6 +42,11 @@ constexpr uint32_t kArrayLengthOffset = 8;
 constexpr uint32_t kArrayLengthField  = 2;
 constexpr uint32_t kArrayHeaderBytes  = 12;
 
+// Stamped into an object's TypeId slot when its count reaches zero and it is
+// queued for safepoint reclamation, so a duplicate queue entry is ignored
+// (docs/proposals/GC.md RC-1b). Same value as `TypeId::kNone`.
+constexpr uint32_t kReclaimedTypeId = 0xFFFFFFFFu;
+
 } // namespace GcHeader
 
 // ── Storage layout helpers, shared so the runtime and the JIT agree (H1) ────

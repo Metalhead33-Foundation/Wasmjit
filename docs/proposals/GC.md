@@ -1,10 +1,11 @@
 # Garbage Collection (Wasm 3.0) — Implementation Notes, Spec Conformance, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 6 — arrays are now
-inline (D13/GC-9): one allocation, one indirection per element access. Revision 5
-moved the GC heap into a Store-owned mmap-backed region allocator, so no libc
-allocator call happens while generated code runs; revisions 3–4 chose reference
-counting and added the refcount header and write barriers (§6.1/§6.4).)
+Status: design note / implementation reference (revision 7 — RC-5/RC-1b: objects
+are *unowned* at birth, reference-typed slots (heap slots, locals, globals,
+segment copies) retain, and `gcCollect()` recycles queued zero-count objects at a
+safepoint. Revision 6 made arrays inline; revision 5 moved the GC heap into a
+Store-owned mmap arena; revisions 3–4 chose reference counting and added the
+refcount header and write barriers.)
 Audience: anyone touching `WasmType`, `WasmTypeRegistry`, `WasmModuleInstance`,
 `LibJitTypeTranslator`, `LibjitOpcodeDispatcher`, or the test suite.
 
@@ -327,15 +328,19 @@ for the full design.)
   "is this a GC pointer" from the region ranges, and `tryGetGcTypeId` then reads
   the `TypeId` at the header — the old per-object `gcObjectTypes` map is gone
   (D2/GC-1), so matching works across instances and allocates nothing per object.
-- **Reference counting (RC-1, partial).** `ModuleInstance::refClone/refDrop/`
-  `refStore` maintain the header count through `std::atomic_ref` (saturating
-  clone, trapping underflow — RC-3 semantics), and count allocations and
-  0-transitions in `gcAllocatedObjects`/`gcReclaimedObjects` for tests. The JIT
-  routes every reference-typed `struct.set`, `array.set`, `array.fill`,
-  `global.set` and `table.set` through `wasm_ref_store` (the single write
-  barrier). Reclamation is **deferred**: `reclaimGcObject` records the transition
-  but does not free, because Wasm locals and operand-stack temporaries hold
-  uncounted borrows (§7 RC-1b/RC-5).
+- **Reference counting & ownership (RC-5/RC-1b).** `ModuleInstance::refClone/`
+  `refDrop`/`refStore` maintain the header count through `std::atomic_ref`
+  (saturating clone, trapping underflow). A fresh object is **unowned** (count
+  0); the first *owning slot* retains it — heap slots (`struct.set`/`struct.new`,
+  `array.set`/`fill`/`new*`, `global.set`, `table.set`), reference-typed
+  **locals** (`local.set`/`tee`, via `wasm_ref_clone`/`drop`), global
+  initialisers, and the segment/bulk-copy paths (`bufferInitFromElems`,
+  `wasm_buffer_copy_impl`). Parameters and control-flow slots are **borrows**
+  (uncounted). Reclamation is deferred to an explicit **safepoint**:
+  `reclaimGcObject` queues a zero-count object and `gcCollect()` recycles queued
+  objects still at zero — safe because no Wasm frame (and so no uncounted
+  stack/local reference) is live then, and the count is re-checked so a
+  resurrected object is not freed.
 - `refMatchesHeapType(ref, ht, nullable)` implements a *runtime* `match`:
   - `null` matches only nullable targets;
   - tagged `i31` immediates (low bit set) match `any`/`eq`/`i31`;
@@ -835,8 +840,8 @@ the collector is not considered shipped until cycles are reclaimed. The
 | **GC-7 — Fast casts (optional)** | Depth/range-tag encoding (D3), inline caches for repeated `ref.test`/`ref.cast` at a site, measured against the registry-call baseline. | H3 | Casts on a hot loop are a few instructions; benchmark recorded. |
 | **GC-8 — Extern interop (optional)** | Only if an embedder needs host externrefs: box `extern.convert_any` values, keep identity under the no-mixing contract (D5). | G3 | `ref_test` extern cases pass; the contract is documented in `ABI.md`. |
 | **GC-9 — Inline arrays** | ✅ Done: header-only JIT type, per-type `dataOffset` (`gcArrayDataOffset`), one allocation, and `arrayElementBase` for every element access. | D13, H8 | Done: `array.new_default` is one heap block (the `GC reference counting` test asserts `totalAllocations() + 1`), and all array scripts are unchanged from the §8 baseline. |
-| **RC-1 — Reference-counted heap objects (core)** | ◑ Landed: `[u32 TypeId][u32 refcount]` header, count 1 at allocation, the `wasm_ref_store`/`_clone`/`_drop` helpers (`WasmGcHeader.hpp`, `ModuleInstance::ref*`), and the JIT routes `struct.set`/`array.set`/`array.fill`/`global.set`/`table.set` reference stores through the barrier. **Open:** a ref-aware `wasm_buffer_copy_impl` for `array.copy`/`init_elem`, the read-side clone for borrowed-slot copies, and reclamation (`reclaimGcObject` records the 0 transition but does not free). | L2, L3, RC4 (partly), RC9 (partly), D14, D15 | Done for the store barriers: every ref-typed `struct.set`/`array.set`/`array.fill`/`global.set`/`table.set` in the JIT is a `wasm_ref_store` call; a fresh object reports count 1 and clone/drop/store move it (`GC reference counting` test). |
-| **RC-1b — Reclaim safely** | Turn `reclaimGcObject` into "free the block and credit the Store budget" (each array is a single block since GC-9), only once every live reference is counted — i.e. after the local/operand-stack ownership work of `RC-5`. | RC4, RC10, L1, D19 | A dead object's memory is returned and the budget credited; the suite runs with a live-object leak check that stays flat. |
+| **RC-1 — Reference-counted heap objects (core)** | ✅ Store barriers + slot ownership: `[u32 TypeId][u32 refcount]` header, **count 0 at birth**, `wasm_ref_store`/`_clone`/`_drop` (`WasmGcHeader.hpp`, `ModuleInstance::ref*`), and every ref-typed slot store retains — `struct.set`/`struct.new`, `array.set`/`fill`/`new*`/`copy`, `global.set`, `table.set`, `local.set`/`tee`, global initialisers, segment copies. | L2, L3, RC4, RC12, D14, D15 | Done: a created object is unowned until a slot retains it, and the JIT `struct.set`/`array.set`/`local` paths move the count. |
+| **RC-1b — Reclaim at a safepoint** | ✅ `reclaimGcObject` queues a zero-count object; `gcCollect()` recycles queued objects that are still at zero (resurrection-checked). Call it where no Wasm frame is live and the embedder holds no un-counted references. | RC4, RC9, L1, D19 | Done: the `GC reference counting` test drops an object to zero, collects, and reuses the recycled block. **Leak-side, not UAF:** parameters and control-flow slots are borrows, ref locals are not released at frame exit, and the operand stack does not own references — objects held only transiently leak until `GC-2` teardown. |
 | **RC-2 — Cycle collection (day one, with RC-1)** | Bacon–Rajan synchronous trial deletion over the region's objects: a candidate buffer, no stack maps, no root set. | RC1, D18 | A self-referential `struct`/`array` graph is reclaimed once its external references drop (a live-object / allocation counter returns to its pre-graph value). |
 | **RC-3 — Trap-safe refcount ops** | Saturating `clone`, trapping `drop` below zero, debug poison-on-free, and an iterative drop worklist (no recursion on a deep chain). | RC7, RC8, RC9, D19 | Overflow / underflow / double-drop tests trap or leak deterministically (never corrupt), and dropping a 10⁶-deep chain uses O(1) C stack. |
 | **RC-4 — Atomic refcounts / threads-ready** | Make the header count `std::atomic<int32_t>` with acquire/release ordering; stress a clone/drop race. | RC2, RC11, D16 | The count is atomic in every multi-thread-capable build and a two-thread clone/drop stress test is clean; unblocks `THREADS.md`. |
@@ -936,9 +941,10 @@ runtime bugs.
 
 Reference counting now has **two manual tests**. `GC reference counting: clone,
 drop and store barriers` (`Test/wasm_wat/gc_refcount.wat`) covers the header
-count, `refClone`/`refDrop`/`refStore` and the underflow trap, runs the JIT
-`struct.set` barrier end to end, and asserts `array.new_default` is a **single**
-heap block (inline arrays, GC-9). `GC heap: region allocation, alignment and
+count, `refClone`/`refDrop`/`refStore`, the underflow trap, the safepoint
+`gcCollect` + block reuse (RC-1b), runs the JIT `struct.set` barrier end to end,
+and asserts `array.new_default` is a **single** heap block (inline arrays, GC-9).
+`GC heap: region allocation, alignment and
 recycling` covers 16-byte alignment, mmap zero-fill, region batching (1000
 objects → at most one extra region), free-list reuse, dedicated large regions,
 `owns()` classification and bulk `releaseSet`. Still absent: an end-to-end

@@ -896,25 +896,27 @@ TEST_CASE("GC reference counting: clone, drop and store barriers")
 	WASM::ModuleInstance& instance = *loaded.instance;
 	void* object = instance.allocateStructObject(16, structIdx);
 	REQUIRE(object != nullptr);
-	REQUIRE(instance.gcRefCount(object) == 1);
+	// RC-5: a fresh object is unowned; the first owning slot retains it.
+	REQUIRE(instance.gcRefCount(object) == 0);
 
-	// clone retains; drop releases.
+	// clone retains; drop releases and, at zero, queues it for collection.
 	REQUIRE(instance.refClone(object) == object);
-	REQUIRE(instance.gcRefCount(object) == 2);
-	instance.refDrop(object);
 	REQUIRE(instance.gcRefCount(object) == 1);
+	instance.refDrop(object);
+	REQUIRE(instance.gcRefCount(object) == 0);
+	REQUIRE(instance.gcPendingCount() == 1);
 
 	// refStore: retain the new value, then release the slot's old value.
 	void* slot = nullptr;
-	instance.refStore(&slot, object);              // retain object -> 2
+	instance.refStore(&slot, object);              // resurrect/retain object -> 1
 	REQUIRE(slot == object);
-	REQUIRE(instance.gcRefCount(object) == 2);
+	REQUIRE(instance.gcRefCount(object) == 1);
 
 	void* replacement = instance.allocateStructObject(16, structIdx);
 	instance.refStore(&slot, replacement);         // retain replacement, release object
 	REQUIRE(slot == replacement);
-	REQUIRE(instance.gcRefCount(object) == 1);
-	REQUIRE(instance.gcRefCount(replacement) == 2);
+	REQUIRE(instance.gcRefCount(object) == 0);
+	REQUIRE(instance.gcRefCount(replacement) == 1);
 
 	// Non-GC references (null, i31 immediates) are never counted.
 	void* i31 = reinterpret_cast<void*>(static_cast<uintptr_t>(7) | 1u);
@@ -923,12 +925,10 @@ TEST_CASE("GC reference counting: clone, drop and store barriers")
 	REQUIRE(instance.gcRefCount(i31) == 0);
 	instance.refDrop(nullptr);                     // null is a no-op too
 
-	// Dropping the last reference reaches zero and records the reclamation.
-	instance.refDrop(replacement);                 // 2 -> 1
-	const uint64_t reclaimed = instance.gcReclaimedObjects();
-	instance.refDrop(replacement);                 // 1 -> 0
+	// Dropping the last reference reaches zero and queues it (RC-1b).
+	instance.refDrop(replacement);                 // 1 -> 0, queued
 	REQUIRE(instance.gcRefCount(replacement) == 0);
-	REQUIRE(instance.gcReclaimedObjects() == reclaimed + 1);
+	REQUIRE(instance.gcPendingCount() >= 1);
 
 	// A further drop underflows: it must trap, not wrap (docs/proposals/GC.md
 	// D19/RC-7).
@@ -942,6 +942,21 @@ TEST_CASE("GC reference counting: clone, drop and store barriers")
 		}
 		REQUIRE(trapped);
 	}
+
+	// Safepoint collection: everything queued at count zero is recycled
+	// (docs/proposals/GC.md RC-1b). Only at a safepoint, so no Wasm frame and no
+	// uncounted embedder reference can still point at a recycled block.
+	instance.gcCollect();
+	REQUIRE(instance.gcPendingCount() == 0);
+
+	// ...and the recycled block is actually reused: a new same-size allocation
+	// pops it off the free list.
+	void* recycled = instance.allocateStructObject(16, structIdx);
+	REQUIRE(instance.refClone(recycled) == recycled);   // 0 -> 1
+	instance.refDrop(recycled);                          // 1 -> 0, queued
+	instance.gcCollect();
+	void* reused = instance.allocateStructObject(16, structIdx);
+	REQUIRE(reused == recycled);
 
 	// The JIT's `struct.set` on a reference-typed field went through the barrier
 	// and the module still runs.
