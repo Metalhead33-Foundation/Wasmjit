@@ -1,6 +1,8 @@
 # SIMD (Fixed-width and Relaxed) — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 1).
+Status: design note / implementation reference (revision 2 — §6 and §9 link the
+backend-support survey [`../SIMD_BACKENDS.md`](../SIMD_BACKENDS.md); the planned
+surface is unchanged).
 Audience: anyone touching `WasmType`, `WasmValue`, `WasmOpcode`,
 `WasmOpcodeDispatcher`, `LibJitTypeTranslation`, `LibjitOpcodeDispatcher`, or
 the test harness.
@@ -207,6 +209,14 @@ SIMD is the feature where the spec's freedom (§3) is least used today: the
 engine is scalar and single-threaded, and this project is a QVM successor, not
 a graphics kernel.
 
+The lowering these deviations assume — one native helper per op, hardware fast
+paths added *inside* the helpers — is surveyed against the three planned
+backends (GNU LibJIT has no SIMD surface at all; SLJIT and AsmJit have vector
+instructions but no value model, and neither is wired up) in
+[`../SIMD_BACKENDS.md`](../SIMD_BACKENDS.md). That note reaches the same
+conclusion SD1/SD2/SD7 assume and adds a per-layer "laxness budget" for how far
+conformance may be relaxed.
+
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
 | SD1 | **Scalar/helper lowering first.** Represent `v128` as four `u32` and implement every op as a native helper (or an inline loop over lanes), exactly like the GC native helpers. | §3: no hardware SIMD is required; results are what matter. | A portable, testable baseline in far less code than intrinsics. |
@@ -299,11 +309,14 @@ Proposal documents:
 
 In-repo:
 
+- [`../SIMD_BACKENDS.md`](../SIMD_BACKENDS.md) — the backend-support survey: does
+  LibJIT / SLJIT / AsmJit have SIMD, what are the workarounds, which is the path
+  of least resistance (native helpers), and how loosely may we conform.
 - [`docs/GC.md`](GC.md) — the companion design note (and §4.4/SIMD-0 interplay
   for `v128` inside aggregates).
 - [`docs/THREADS.md`](THREADS.md) — the companion note for the other
   "post-2.0 / non-3.0" feature area.
-- [`docs/TESTING.md`](TESTING.md) — why `v128` values are currently skipped by
+- [`docs/TESTING.md`](../TESTING.md) — why `v128` values are currently skipped by
   the spec harness.
 - Source anchors: `WasmBase/WasmType.hpp` (`ValueTypeCode::V128`),
   `WasmBase/WasmValue.hpp` (`Value::v128`), `WasmBase/WasmOpcode.hpp`
