@@ -44,6 +44,10 @@ std::unique_ptr<ModuleInstance> ModuleInstantiator::instantiate(const Module& mo
 	// `ref.func` globals could only be stored as sentinels during construction;
 	// resolve them now that the callable tables exist.
 	instance->resolveGlobalRefFuncs();
+	// Same for table initialiser expressions: a `(ref.func …)` default could only
+	// be stored as null during construction (GC.md G5), and it must be in place
+	// before the element segments are applied.
+	instance->resolveTableRefFuncs();
 
 	// Active element and data segments are applied after compilation
 	// because element segments can reference functions by index, and
@@ -485,6 +489,42 @@ void ModuleInstance::initializeGlobals()
 	ctx.globals = internals.globalsStorage.data();
 }
 
+void ModuleInstance::resolveTableRefFuncs()
+{
+	// initializeTable() runs in the constructor, where a `ref.func` initialiser
+	// is still a sentinel (or a pointer that cannot be resolved yet), so it left
+	// those slots null. Now the callables exist: fill every slot of every table
+	// that carried such an initialiser. Everything else was already stored.
+	const uint32_t importedFuncCount =
+		static_cast<uint32_t>(module->importFunctions.size());
+	const uint32_t totalFuncs = importedFuncCount +
+		static_cast<uint32_t>(module->internalFunctionTypeIndices.size());
+	const size_t importedTableCount = module->importTables.size();
+
+	for (size_t tableIndex = 0; tableIndex < module->tables.size(); ++tableIndex) {
+		const TableType& tableType = module->tables[tableIndex];
+		if (tableType.initExpr.empty())
+			continue;
+		const Value v = evalConstantExpr(
+				Euph::Io::ConstBufferDevice::span_cast<uint8_t>(tableType.initExpr));
+		if (v.kind != ValueTypeCode::FuncRef || v.ref == nullptr)
+			continue; // a non-funcref default was final at construction time
+
+		const uint32_t funcIdx = decodeRefFuncIndex(reinterpret_cast<uintptr_t>(v.ref));
+		Callable* target = nullptr;
+		if (funcIdx >= totalFuncs)
+			target = static_cast<Callable*>(v.ref); // already real (imported global)
+		else if (funcIdx < importedFuncCount)
+			target = &internals.importStorage[funcIdx];
+		else
+			target = &internals.internalCallables[funcIdx - importedFuncCount];
+
+		TableInstance* view = internals.tableRefs[importedTableCount + tableIndex];
+		for (uint64_t slotIndex = 0; slotIndex < view->size; ++slotIndex)
+			view->base[slotIndex] = target;
+	}
+}
+
 void ModuleInstance::resolveGlobalRefFuncs()
 {
 	// evalConstantExpr() returns `ref.func` as a sentinel: the raw function
@@ -529,11 +569,30 @@ void ModuleInstance::initializeTable()
 		if ((tableType.limits.flags & 0x04) == 0)
 			maxSize = std::min<uint64_t>(maxSize, 0xFFFF'FFFFull);
 
-		// Slots start null — "uninitialized, traps on call_indirect".
+		// Slots start null — "uninitialized, traps on call_indirect" — unless the
+		// entry carried an initialiser expression, in which case every slot starts
+		// as that value (docs/proposals/GC.md G5). A non-defaultable element type
+		// has no null to fall back on, so this is its only correct start state.
 		const Store::TableId id = Store::global().createTable(initialSize, maxSize);
 		TableInstance* view = Store::global().table(id);
 		if (view == nullptr)
 			throw std::runtime_error("failed to allocate table");
+		if (!tableType.initExpr.empty()) {
+			Value v = evalConstantExpr(Euph::Io::ConstBufferDevice::span_cast<uint8_t>(tableType.initExpr));
+			// A `ref.func` initialiser is still a *sentinel* here: the instance's
+			// callables do not exist yet, so resolving it now would index an empty
+			// vector. Leave those slots null and let resolveTableRefFuncs() fill
+			// them after compilation; every other value (i31, struct, array, an
+			// imported global's funcref) is final already.
+			const bool isSentinel = (v.kind == ValueTypeCode::FuncRef);
+			Callable* slotValue = isSentinel ? nullptr : callableFromSegmentRef(v);
+			// Each slot owns a reference, exactly like a reference-typed global
+			// (RC-5); the initialiser expression itself is unowned at birth.
+			for (uint64_t slotIndex = 0; slotIndex < initialSize; ++slotIndex) {
+				refClone(v.ref);
+				view->base[slotIndex] = slotValue;
+			}
+		}
 		internals.tableRefs.push_back(view);
 	}
 
@@ -898,6 +957,34 @@ void ModuleInstance::bufferInitFromData(uint32_t dataIdx, void* dst, uint32_t sr
 	if (lenBytes == 0)
 		return;
 	std::memcpy(dst, seg.data.data() + srcOffset, lenBytes);
+}
+
+void ModuleInstance::checkDataSegmentRange(uint32_t dataIdx, uint32_t srcByteOffset, uint32_t lenElems, uint32_t elemSize)
+{
+	if (dataIdx >= module->dataSegments.size())
+		trap(TrapKind::Internal, "data segment index out of range");
+
+	const DataSegment& seg = module->dataSegments[dataIdx];
+	// Dropped segment == empty segment (BULK_MEMORY.md BM-1/BM-3).
+	const uint64_t segmentSize = internals.dataSegmentDropped[dataIdx] ? 0 : seg.data.size();
+	// 64-bit, because `lenElems * elemSize` must not wrap: `(i32.const 0x8000_0000)`
+	// elements of 2 bytes would otherwise look like a zero-byte range.
+	const uint64_t byteLen = static_cast<uint64_t>(lenElems) * elemSize;
+	if (static_cast<uint64_t>(srcByteOffset) + byteLen > segmentSize)
+		trap(TrapKind::OutOfBoundsMemoryAccess, "out of bounds data segment access");
+}
+
+void ModuleInstance::checkElementSegmentRange(uint32_t elemIdx, uint32_t srcIndex, uint32_t lenElems)
+{
+	if (elemIdx >= module->elementSegments.size())
+		trap(TrapKind::Internal, "element segment index out of range");
+
+	const ElementSegment& seg = module->elementSegments[elemIdx];
+	const size_t entryCount = internals.elementSegmentDropped[elemIdx]
+		? 0
+		: (seg.initIndices.empty() ? seg.initExprs.size() : seg.initIndices.size());
+	if (static_cast<uint64_t>(srcIndex) + lenElems > entryCount)
+		trap(TrapKind::OutOfBoundsTableAccess, "out of bounds element segment access");
 }
 
 void ModuleInstance::bufferInitFromElems(uint32_t elemIdx, void* dst, uint32_t srcOffset, uint32_t lenElems)

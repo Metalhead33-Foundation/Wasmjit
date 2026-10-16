@@ -88,6 +88,11 @@ private:
 	// compileFunctions(), because those callable tables do not exist yet when
 	// initializeGlobals() runs (i.e. in the constructor).
 	void resolveGlobalRefFuncs();
+	// The same rewrite for table initialiser expressions: `initializeTable()` runs
+	// in the constructor, so a `(ref.func …)` initialiser is stored as null there
+	// and every slot of that table is filled in here, once the callables exist
+	// (docs/proposals/GC.md G5). Must run before element segments are applied.
+	void resolveTableRefFuncs();
 	Value evalConstantExpr(const std::span<const std::byte>& expr);
 	// Reference-counting internals (docs/proposals/GC.md §6, RC-1/RC-3).
 	// `gcRefcountSlot` returns the object's count word, or nullptr when `ref`
@@ -150,6 +155,12 @@ public:
 	void elemDrop(uint32_t elemIdx);
 	void bufferInitFromData(uint32_t dataIdx, void* dst, uint32_t srcOffset, uint32_t lenBytes);
 	void bufferInitFromElems(uint32_t elemIdx, void* dst, uint32_t srcOffset, uint32_t lenElems);
+	// Range validation without copying. `array.new_data` / `array.new_elem` must
+	// report the spec's out-of-bounds trap *before* they allocate: with an absurd
+	// length the allocation fails first and reports "out of memory" instead
+	// (docs/proposals/GC.md GC-5 / §5.1). 64-bit arithmetic, no overflow.
+	void checkDataSegmentRange(uint32_t dataIdx, uint32_t srcByteOffset, uint32_t lenElems, uint32_t elemSize);
+	void checkElementSegmentRange(uint32_t elemIdx, uint32_t srcIndex, uint32_t lenElems);
 	void* allocateStructObject(uint32_t size, uint32_t localTypeIdx);
 	void* allocateArrayObject(uint32_t dataOffset, uint32_t elementSize, uint32_t length, uint32_t localTypeIdx);
 	bool tryGetGcTypeId(const void* ref, TypeId& typeId) const;

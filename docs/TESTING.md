@@ -327,15 +327,18 @@ exception. `invoke()` arms one scope, so:
 
 Consequences worth knowing:
 
-- Comparing the kind makes the *reason* a checked property, so it immediately
+- Comparing the kind makes the *reason* a checked property, and it immediately
   exposed four previously-silent wrong-reason passes: `array.wast` (hidden, not in
-  `wast_supported.txt`) went from `40/0` to `36/4`. All four are
+  `wast_supported.txt`) went from `40/0` to `36/4`. All four were
   `array.new_data` / `array.new_elem` with a huge `offset + len`: the engine
-  allocates the destination array **before** validating the source segment range,
-  so it traps `OutOfMemory` where the spec requires `out of bounds memory access`
-  (lines 209/217) or `out of bounds table access` (lines 283/290). Before this
-  change any trap satisfied `assert_trap`, so they could not be seen. The fix is
-  to validate the range first; it is deliberately *not* part of this change.
+  allocated the destination array **before** validating the source segment range,
+  so it trapped `OutOfMemory` where the spec requires `out of bounds memory access`
+  (lines 209/217) or `out of bounds table access` (lines 283/290). Before that
+  change any trap satisfied `assert_trap`, so the wrong reason could not be seen.
+  Fixed by validating the range first (`checkDataSegmentRange` /
+  `checkElementSegmentRange`), in 64-bit arithmetic so a 2³¹-element range of
+  2-byte elements cannot wrap into looking empty: `array.wast` is back to `40/0`,
+  now trapping for the *right* reason.
 
 - a missing trap is now a **real** failure (e.g. `traps.wast` requires integer
   divide-by-zero and the trapping `trunc_f*` forms to trap);

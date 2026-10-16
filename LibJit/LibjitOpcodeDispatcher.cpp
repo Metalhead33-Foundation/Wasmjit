@@ -3286,10 +3286,46 @@ void OpcodeDispatcher::dispatchArrayNewFixed(WASM::TypeIdx arg1, uint32_t arg2) 
 	}
 	pushValue(castRefValue(arrayRef, arrayRefType(arg1, false)));
 }
+namespace {
+
+// Validate an array.new_data / array.new_elem source range *before* the array is
+// allocated (docs/proposals/GC.md GC-5). Without this, an absurd length fails the
+// allocation and reports "out of memory" where the spec requires the
+// out-of-bounds trap.
+void wasm_check_data_segment_range_impl(WASM::VMContext* vm, uint32_t dataIdx,
+		uint32_t srcByteOffset, uint32_t lenElems, uint32_t elemSize)
+{
+	reinterpret_cast<WASM::ModuleInstance*>(vm)->checkDataSegmentRange(
+			dataIdx, srcByteOffset, lenElems, elemSize);
+}
+
+void wasm_check_element_segment_range_impl(WASM::VMContext* vm, uint32_t elemIdx,
+		uint32_t srcIndex, uint32_t lenElems)
+{
+	reinterpret_cast<WASM::ModuleInstance*>(vm)->checkElementSegmentRange(elemIdx, srcIndex, lenElems);
+}
+
+} // namespace
+
 void OpcodeDispatcher::dispatchArrayNewData(WASM::TypeIdx arg1, uint32_t arg2) {
 	jit_value_t length = popValue();
 	jit_value_t src = popValue();
 	jit_type_t elemType = arrayElementJitType(arg1);
+	{
+		// The spec checks the source range first: a huge length must report the
+		// out-of-bounds access it is, not an allocation failure.
+		jit_type_t checkParams[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint, jit_type_uint, jit_type_uint};
+		jit_type_t checkSig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, checkParams, 5, 1);
+		jit_value_t checkArgs[] = {
+			vmContextValue(),
+			jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg2)),
+			jit_insn_convert(function, src, jit_type_uint, 0),
+			jit_insn_convert(function, length, jit_type_uint, 0),
+			jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(jit_type_get_size(elemType)))
+		};
+		jit_insn_call_native(function, "wasm_check_data_segment_range_impl",
+			reinterpret_cast<void*>(&wasm_check_data_segment_range_impl), checkSig, checkArgs, 5, 0);
+	}
 	jit_type_t allocParams[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint, jit_type_uint, jit_type_uint};
 	jit_type_t sigAlloc = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, allocParams, 5, 1);
 	jit_value_t allocArgs[] = {
@@ -3316,6 +3352,19 @@ void OpcodeDispatcher::dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2) {
 	jit_value_t length = popValue();
 	jit_value_t src = popValue();
 	jit_type_t elemType = arrayElementJitType(arg1);
+	{
+		// Same ordering rule as array.new_data: out-of-bounds first (GC-5).
+		jit_type_t checkParams[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint, jit_type_uint};
+		jit_type_t checkSig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, checkParams, 4, 1);
+		jit_value_t checkArgs[] = {
+			vmContextValue(),
+			jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg2)),
+			jit_insn_convert(function, src, jit_type_uint, 0),
+			jit_insn_convert(function, length, jit_type_uint, 0)
+		};
+		jit_insn_call_native(function, "wasm_check_element_segment_range_impl",
+			reinterpret_cast<void*>(&wasm_check_element_segment_range_impl), checkSig, checkArgs, 4, 0);
+	}
 	jit_type_t allocParams[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint, jit_type_uint, jit_type_uint};
 	jit_type_t sigAlloc = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, allocParams, 5, 1);
 	jit_value_t allocArgs[] = {
@@ -3501,10 +3550,11 @@ void OpcodeDispatcher::dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2) 
 	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 5, 1);
 	jit_value_t byteLen = jit_insn_mul(function, len,
 		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(jit_type_get_size(elemType))));
-	jit_value_t byteSrc = jit_insn_mul(function, src,
-		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(jit_type_get_size(elemType))));
+	// `src` is a *byte* offset into the data segment; only `len` counts elements
+	// (spec: array.init_data). Scaling `src` too made every element wider than a
+	// byte read past the end of the segment.
 	jit_value_t args[] = {vmContextValue(), jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg2)),
-						  refAsVoidPtr(dstPtr), byteSrc, byteLen};
+						  refAsVoidPtr(dstPtr), src, byteLen};
 	jit_insn_call_native(function, "wasm_buffer_init_from_data_impl",
 						 reinterpret_cast<void*>(wasm_buffer_init_from_data_impl), sig, args, 5, 0);
 }
@@ -3598,12 +3648,19 @@ void OpcodeDispatcher::dispatchRefI31() {
 						   jitTypeForValueType(WASM::ValueType{WASM::ValueTypeCode::I31Ref, -1})));
 }
 void OpcodeDispatcher::dispatchI31GetS() {
+	jit_value_t ref = popValue();
+	// i31.get_* dereferences the reference, so a null one traps
+	// (GC.md: "null i31 reference"). The tagged pointer is only *tested* for
+	// null here; the helper still receives the original value.
+	emitTrapIfNull(WASM::TrapKind::NullI31Reference, refAsVoidPtr(ref));
 	pushValue(callNativeUnary(function, reinterpret_cast<void*>(wasm_i31_get_s_impl),
-							  jit_type_int, jit_type_void_ptr, refAsVoidPtr(popValue())));
+							  jit_type_int, jit_type_void_ptr, refAsVoidPtr(ref)));
 }
 void OpcodeDispatcher::dispatchI31GetU() {
+	jit_value_t ref = popValue();
+	emitTrapIfNull(WASM::TrapKind::NullI31Reference, refAsVoidPtr(ref));
 	pushValue(callNativeUnary(function, reinterpret_cast<void*>(wasm_i31_get_u_impl),
-							  jit_type_int, jit_type_void_ptr, refAsVoidPtr(popValue())));
+							  jit_type_int, jit_type_void_ptr, refAsVoidPtr(ref)));
 }
 void OpcodeDispatcher::dispatchI32TruncSatF32S() {
 	pushValue(callNativeUnary(function, reinterpret_cast<void*>(wasm_i32_trunc_sat_f32_s),

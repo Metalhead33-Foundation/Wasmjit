@@ -181,9 +181,29 @@ void Module::processTableSection(Elv::Io::Device& file, const Section& section)
 
 	for(uint32_t i = 0; i < numTables; ++i) {
 		TableType table;
-		// Reuse your existing logic:
-		table.elementType.decode(wasmStream); // Reads RefType + HeapType
+		// A table entry is `tabletype`, or `0x40 0x00 tabletype expr` when the
+		// table carries an initialiser expression — which a non-defaultable
+		// element type requires, because there is no implicit `ref.null`
+		// (docs/proposals/GC.md G5). 0x40 is `void`, never an element type, so one
+		// byte of lookahead tells the two forms apart.
+		int8_t firstByte;
+		wasmStream >> Elv::Io::Leb(firstByte);
+		// The marker is the byte 0x40. A *signed* LEB read sign-extends it to
+		// -0x40 — the same bit pattern as `void` — so compare against the enum,
+		// not against +0x40.
+		const bool hasInitExpr = (firstByte == static_cast<int8_t>(ValueTypeCode::Void));
+		if (hasInitExpr) {
+			uint32_t reserved;
+			wasmStream >> Elv::Io::Leb(reserved);
+			if (reserved != 0x00)
+				throw std::runtime_error("malformed module: a table initialiser must be introduced by 0x40 0x00");
+			table.elementType.decode(wasmStream); // Reads RefType + HeapType
+		} else {
+			table.elementType.decodeAfterFirstByte(wasmStream, firstByte);
+		}
 		table.limits.decode(wasmStream);      // Reads flags + initial + max
+		if (hasInitExpr)
+			table.initExpr = parseInitExpr(wasmStream);
 
 		this->tables.push_back(table);
 	}

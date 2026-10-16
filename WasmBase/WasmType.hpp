@@ -134,7 +134,15 @@ struct ValueType {
 	template <Elv::Util::Endian E, Elv::Io::DeviceLike I> void decode(Elv::Io::DataStream<E,I>& stream) {
 		int8_t tmp_opcode;
 		stream >> Elv::Io::Leb(tmp_opcode);
-		opcode = static_cast<ValueTypeCode>(tmp_opcode);
+		decodeAfterFirstByte(stream, tmp_opcode);
+	}
+
+	// Decode a type whose first byte has already been read. The table section
+	// needs one byte of lookahead: `0x40 0x00` introduces a table *with* an
+	// initialiser, and 0x40 is `void` — never a valid element type — so the first
+	// byte alone tells the two apart (docs/proposals/GC.md G5).
+	template <Elv::Util::Endian E, Elv::Io::DeviceLike I> void decodeAfterFirstByte(Elv::Io::DataStream<E,I>& stream, int8_t firstByte) {
+		opcode = static_cast<ValueTypeCode>(firstByte);
 		// 0x6B (ref) or 0x6C (ref null)
 		if (opcode == ValueTypeCode::Ref || opcode == ValueTypeCode::RefNull) {
 			int32_t ht;
@@ -254,6 +262,11 @@ struct MemoryType {
 struct TableType {
 	ValueType elementType; // Must be a RefType (0x6B or 0x6C)
 	Limits limits;
+	// The table's initialiser expression, when the entry carried one (the
+	// `0x40 0x00` form of the table section). A non-defaultable element type has
+	// no implicit `ref.null`, so every slot starts as this value instead
+	// (docs/proposals/GC.md G5). Empty => every slot starts null.
+	std::vector<uint8_t> initExpr;
 };
 
 struct GlobalType {
