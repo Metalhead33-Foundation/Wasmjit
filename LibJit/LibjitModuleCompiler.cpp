@@ -1,5 +1,6 @@
 #include "LibjitModuleCompiler.hpp"
 #include "LibjitOpcodeDispatcher.hpp"
+#include "../WasmBase/WasmStore.hpp"
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <cassert>
 #include <cstddef>
@@ -132,6 +133,13 @@ void ModuleCompiler::declareFunctions(WASM::ModuleInstance& instance, const WASM
 	// Now that translatedTypes is populated, we can look up any
 	// function's signature by its type index.
 	internals.internalCallables.resize(module.internalFunctionTypeIndices.size());
+	// Sized once, here, and never resized again — so the range is stable for the
+	// instance's lifetime and the Store can identify these callables from any
+	// module (docs/proposals/GC.md G2/GC-1: a funcref's identity must not depend
+	// on the casting instance being able to name it).
+	if (!internals.internalCallables.empty())
+		WASM::Store::global().registerCallableRange(
+				internals.internalCallables.data(), internals.internalCallables.size());
 	for (uint32_t i = 0; i < module.internalFunctionTypeIndices.size(); ++i)
 	{
 		const uint32_t typeIdx = module.internalFunctionTypeIndices[i];

@@ -185,5 +185,29 @@ bool Store::growTable(TableInstance* table, uint64_t deltaEntries)
 	}
 	return true;
 }
+// ── Function references (docs/proposals/GC.md G2 / §5.3 H3) ─────────────────
+
+void Store::registerCallableRange(const Callable* begin, size_t count)
+{
+	if (begin == nullptr || count == 0)
+		return;
+	callableRanges.push_back(CallableRange{begin, begin + count});
+}
+
+const Callable* Store::callableAt(const void* ref) const
+{
+	// Ranges are few — one per instance that has callables — so a linear scan
+	// beats maintaining a hash map. Integer comparison, like `GcHeap::owns`, to
+	// avoid comparing unrelated pointers.
+	const uintptr_t value = reinterpret_cast<uintptr_t>(ref);
+	for (const CallableRange& range : callableRanges) {
+		if (value >= reinterpret_cast<uintptr_t>(range.begin) &&
+			value < reinterpret_cast<uintptr_t>(range.end))
+			return reinterpret_cast<const Callable*>(ref);
+	}
+	return nullptr;
+}
+
+
 
 } // namespace WASM

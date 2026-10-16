@@ -115,7 +115,25 @@ public:
 	// TODO: createGlobal/createTag/createFunction/... + accessors once the
 	// corresponding entity kinds are implemented.
 
+	// ── Function references (docs/proposals/GC.md G2 / §5.3 H3) ─────────
+	// A `funcref` is a `Callable*` owned by *some* module instance, so
+	// identifying one — and reading its canonical `TypeId` — must not assume the
+	// pointer belongs to the instance performing the cast. Each instance
+	// registers the range of its callable arrays once they are sized and stable;
+	// the lookup is then O(#live instances) instead of O(#functions), and works
+	// across modules (which the old per-instance scan did not).
+	void registerCallableRange(const Callable* begin, size_t count);
+	// The Callable `ref` points at, or nullptr when `ref` is not a function
+	// reference at all (a GC object, an i31 immediate, a host externref).
+	const Callable* callableAt(const void* ref) const;
+
 private:
+	// Registered callable ranges: stable for each instance's lifetime.
+	struct CallableRange {
+		const Callable* begin;
+		const Callable* end;
+	};
+	std::vector<CallableRange> callableRanges;
 	Store();
 
 	MemoryMap            memories;

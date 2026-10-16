@@ -634,19 +634,19 @@ effort.
 | ~~G5~~ | ~~Table initialiser expressions are dropped.~~ **Done:** `TableType` carries the initialiser (`initExpr`), the decoder reads the spec's `0x40 0x00` form — note the marker byte, read as a *signed* LEB, is `-0x40` (`void`), which is exactly how it is detected — `initializeTable()` fills every slot with the value (each slot owning a reference, RC-5), and `resolveTableRefFuncs()` fills a `(ref.func …)` default *after* compilation, the same deferral `resolveGlobalRefFuncs()` uses because the callables do not exist during construction. Non-nullable reference tables now initialise. | `i31` `68/0` (was `63/5`); `table` `18/0` (it previously aborted on an unsized callable vector) | Closed |
 | ~~G6~~ | ~~Imported globals are never resolved.~~ **Done (GC-3 / MUTABLE_GLOBALS MG-1):** `resolveImports` resolves every imported global before any local initialiser runs. | `global` 70/0; `i31` 65/3 (the remaining failures are G5) | Closed |
 | G7 | **`br_on_cast` flags ignored + control-flow modelling.** `castop` (source/target nullability) is discarded, so `br_on_cast` with nullable variants is wrong; the branch-target slot model then asserts. | `dispatchBrOnCast` `(void)castop;`; `br_on_cast.wast` hits `!slots.empty()`, `br_on_cast_fail.wast` hits `!valueStack.empty()`. | High |
-| G8 | **`ref.func` as a constant expression is a sentinel** (`Value.ref = funcIdx`), only resolved when a segment is applied. A `ref.func` global initialiser stays a bogus pointer. | `evalConstantExpr` case `0xD2`; `initializeGlobals`. | Medium |
+| ~~G8~~ | ~~**`ref.func` as a constant expression is a sentinel** (`Value.ref = funcIdx`), only resolved when a segment is applied.~~ **Done:** the sentinel is resolved after compilation — `resolveGlobalRefFuncs()` rewrites globals, `callableFromSegmentRef()` resolves segment copies, and `resolveTableRefFuncs()` (G5) fills a table default. | `table.wast` exercises an exported `(ref $f)` global across modules (`table` 18/0) | Closed |
 | G9 | **No validation pass.** `assert_invalid` / `assert_malformed` are skipped by the harness; GC type rules (cast target vs source, defaultability of `struct.new_default`, nullability constraints, `ref.eq` operand types) are unchecked and may crash rather than reject. | `docs/TESTING.md` execution table. | Medium |
 
 ### 5.2 Robustness / crash gaps
 
 | # | Gap | Evidence |
 |---|---|---|
-| ~~C1~~ | **`array.init_data` / `array.init_elem` no longer abort** — they were the dropped-segment / bounds `std::abort()`s, which now trap. `array_init_elem` → **33/0/3**; `array_init_data` → **41/3/2**, so a real data-offset bug remains. | `spec: array_init_data`, `spec: array_init_elem` |
+| ~~C1~~ | **Done:** `array_init_elem` → **33/0/3** and `array_init_data` → **44/0/2** — the dropped-segment/bounds aborts now trap, and the data-offset bug behind the last 3 mismatches is fixed (`src` is a *byte* offset, not an element index). | `spec: array_init_data`, `spec: array_init_elem` |
 | ~~C2~~ | **Done:** `ref_cast` **33/11/1**, `ref_func` **14/0/3** — the fatal path was an invalid reference reaching `jit_insn_check_null`, which is now the trap sink. | SpecSuite child report |
 | ~~C3~~ | **Done:** `call_ref` **31/0/4** (was SIGSEGV) — the null-callable check now traps instead of dereferencing. | `spec: call_ref` |
 | ~~C4~~ | **Done:** `return_call_ref` **40/0/13** (tail-call trampoline + trap sink). | `spec: return_call_ref` |
 | ~~C5~~ | **Done:** `type-equivalence` **30/1/1** (was an abort); one real mismatch remains. | `spec: type-equivalence` |
-| C6 | **Traps are process-fatal — largely fixed.** `emitAbort` and every `jit_insn_check_null` now go through `WASM::trap` (longjmp to the embedder's `TrapScope`), and the harness executes `assert_trap`. What *still* aborts is allocation failure (`allocateStructObject`/`allocateArrayObject`) and `notImplemented` (SIMD, atomics) — a compile-time limitation, not a Wasm trap. | `WasmTrap.hpp`, `emitAbort`, `emitTrapIfNull` |
+| ~~C6~~ | **Done:** `emitTrap`/`emitTrapIfNull` and every native helper go through `WASM::trap` (longjmp to the embedder's `TrapScope`) carrying a typed reason, the harness executes `assert_trap` *and* checks the kind, and a budget refusal is a typed `OutOfMemory` trap rather than an abort. What still aborts, deliberately: `WASM::trap` with no armed scope, and a host failure the budget could not pre-empt (`docs/SAFETY.md` §2.4). | `WasmTrap.hpp`, `emitTrap`, `allocateStructObject` |
 | C7 | `array.new` with a negative `i32` length becomes a huge `uint32_t`; the GC heap refuses a region past the Store budget and the caller traps (previously a `calloc` failure aborted). | `dispatchArrayNew` / `allocateArrayObject` / `GcHeap::allocate` |
 
 ### 5.3 Hygiene / latent risks (not yet wrong, easy to get wrong)
@@ -668,14 +668,20 @@ effort.
   `assert_return` on `externref`/`anyref` is not actually checked, and a
   skipped `(invoke "init" (ref.extern 0))` leaves the `ref_test` tables empty —
   which is why a large part of `ref_test.wast` "fails" even though the
-  relevant opcodes work.
-- `compareResult`'s failure message prints only the *actual type*, never the
-  actual value (`"... but got " << typeName(resultCode)`), so a real
-  wrong-value failure reads like `expected i32 42 but got i32`.
-- `assert_trap`, `assert_invalid`, `assert_malformed`, `assert_unlinkable`,
-  `module_definition`/`module_instance` and text-format modules are all
-  skipped, which removes exactly the cases that would exercise GC traps and
-  GC validation.
+  relevant opcodes work. **Measured (revision 10):** all 32 remaining `ref_test`
+  failures are in the functions driven by that one skipped `init`
+  (`ref_test_null_data` ×5, `ref_test_struct`/`i31`/`eq`/`array`/`any` ×4 each,
+  `ref_test_null_func`), and the recorded skip reason is literally
+  `argument type 'externref' is not supported`. So `R5` is the gate on
+  *measuring* `G2`/`G3`, not just a harness nicety.
+- `compareResult` reports the actual *value* as well as the type, so a
+  wrong-value failure reads `expected i32 42 but got i32 0`.
+- `assert_trap` **is** executed, in-process, and its expected text is compared
+  against the trap's *kind* (`WASM::trapKindName`): trapping for the wrong
+  reason is a failure (`docs/SAFETY.md` §2.4). `assert_invalid`,
+  `assert_malformed`, `assert_unlinkable`, `module_definition`/
+  `module_instance` and text-format modules are still skipped, which removes
+  exactly the cases that would exercise GC validation (G9).
 
 ### 5.5 Reference-types-specific gaps
 
@@ -686,25 +692,28 @@ cause viewed through the reference-types feature.
 |---|---|---|
 | R1 | **Table imports are not type-checked.** `RegistryImportResolver::ModuleRegistry::resolveTable` discards the `TableType` (`(void)type;`), so element type and limits are never matched. Memory imports *are* checked (`memorySatisfiesImport`). Reference types requires the match. | `WasmRegistryImportResolver.cpp:226` |
 | ~~R2~~ | **Fixed.** `elem` → **108/0/46**, `table_init` → **725/0/67** (both previously aborted). The prime suspect was right: the segment evaluator, plus a null `call_indirect` slot left by an unresolved imported global. | `spec: elem`, `spec: table_init` |
-| R3 | **Dropped-segment semantics.** `bufferInitFromElems` / `tableInit` abort whenever the segment was dropped, even for a zero-length access; the spec treats a dropped segment as empty (only a non-zero length traps). | `bufferInitFromElems`, `tableInit`, `elemDrop` |
+| ~~R3~~ | **Fixed.** A dropped segment is treated as *empty*: `bufferInitFromData`/`bufferInitFromElems` return for a zero-length access and trap only for a non-zero one, and the `array.new_data`/`array.new_elem` range check reads the same dropped flag. | `bufferInitFromElems`, `checkDataSegmentRange`/`checkElementSegmentRange` |
 | R4 | **`externref` has no host model.** An `externref` is just a `void*`; there is no way to create or inspect a host extern object, and `ref.eq` on externrefs is unvalidated pointer equality. | `Value::ref`, `refMatchesHeapType` |
 | R5 | **Reference arguments/results are never marshalled**, so most table/reference tests execute with skipped actions (§5.4, §8.1) — a "failure" there frequently is not a runtime bug. | `isScalarValue` in `Test/WastScript.cpp` |
-| R6 | **`ref.func` outside an element segment is an unresolved sentinel** (the reference-types face of G8), so a `ref.func` global stays a bogus pointer. | `evalConstantExpr` case `0xD2` |
+| ~~R6~~ | **Fixed (the same defect as G8).** `ref.func` is now resolved after compilation for globals, segment copies and table defaults alike. | `resolveGlobalRefFuncs`, `callableFromSegmentRef`, `resolveTableRefFuncs` |
 | ~~R7~~ | **Fixed.** Table-op bounds checks and the null-slot check route through `WASM::trap`, so `assert_trap` runs and in-process traps are recoverable. | `dispatchTable*`, `emitTrapIfNull` |
-| R8 | **Table initialiser expressions are unsupported** (shared with G5), and an element segment's declared value type is never validated against the table's element type. | `TableType`, `applyActiveSegments` |
+| R8 | **An element segment's declared value type is never validated against the table's element type.** The *table-initialiser* half of this row is **fixed** (G5): `TableType::initExpr` is decoded from the spec's `0x40 0x00` form and applied to every slot. | `TableType`, `initializeTable`, `resolveTableRefFuncs` |
 
-### 5.6 Collector / lifetime gaps (today: nothing is reclaimed)
+### 5.6 Collector / lifetime gaps (closed by RC-1…RC-3)
 
-§3.1 lets an engine never reclaim, so these are resource gaps, not conformance
-gaps. They are listed anyway because revision 3 commits to reclaiming (by
-reference counting), which turns "objects are never freed" from a choice into a
-defect.
+§3.1 lets an engine never reclaim, so an absent collector is a *choice*, not a
+defect. Revision 3 nevertheless committed to reclaiming by reference counting, so
+these three rows are what had to close for "objects are never freed" to stop
+being a defect — and they have. What remains on the lifetime side is the
+borrow-side leak documented with `RC-1b` in §7 (parameters and control-flow slots
+hold *uncounted* borrows, so a reference only ever held there leaks until
+teardown).
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| L1 | **Nothing is recycled yet.** Objects are allocated from the GC heap, but `reclaimGcObject` only records the 0 transition; the region holds them until instance teardown (GC-2a landed; RC-1b pending). | `WasmModuleInstance.cpp`, `WasmGcHeap.cpp` | Medium |
-| L2 | **No ownership or refcount exists.** A `void*` reference carries no count and no lifetime; there is nowhere to hook reclamation. | every `Value::ref` store | Medium |
-| L3 | **Reference slots are written as raw pointers.** `struct.set` / `array.set` / `table.set` / globals store `void*` with no retain/release barrier, and the JIT emits the store directly. | JIT ref stores | Medium |
+| ~~L1~~ | ~~**Nothing is recycled yet.** Objects are allocated from the GC heap, but `reclaimGcObject` only records the 0 transition; the region holds them until instance teardown.~~ **Done:** `reclaimGcObject` queues a zero-count object and `gcCollect()` recycles it at a safepoint, releasing the object's own references iteratively (RC-1b/RC-3); a graph kept alive only by its own cycles is reclaimed by trial deletion (RC-2). Asserted by the seven `GC reclamation:` tests against `GcHeap::liveObjectCount()`. | `WasmModuleInstance.cpp` (`gcCollect`, `collectCycles`), `WasmGcHeap.cpp` | Closed |
+| ~~L2~~ | ~~**No ownership or refcount exists.** A `void*` reference carries no count and no lifetime; there is nowhere to hook reclamation.~~ **Done (RC-1):** every GC object carries `[u32 TypeId][u32 refcount]` (`WasmGcHeader.hpp`, D14) and is *unowned at birth*; `refClone`/`refDrop`/`refStore` move the count. Non-objects (`i31`, `externref`, `funcref`) are deliberately uncounted (RC12). | `WasmGcHeader.hpp`, `ModuleInstance::ref*` | Closed |
+| ~~L3~~ | ~~**Reference slots are written as raw pointers.** `struct.set` / `array.set` / `table.set` / globals store `void*` with no retain/release barrier, and the JIT emits the store directly.~~ **Done (RC-1 / D15):** every reference-typed store goes through `wasm_ref_store` (retain the new value, release the overwritten one) — `struct.set`, `array.set`/`fill`/`copy`, `local.set`/`tee`, `global.set`, `table.set` and the segment copies. §7's guardrail forbids a bare store into a reference slot. | `emitRefStore`, `dispatch*Set` | Closed |
 
 ## 6. Where we can and should play fast and loose
 
@@ -823,6 +832,15 @@ owns it. (`RC1`…`RC13` here are study rows, not §5 gaps.)
 | RC12 | **Foreign references.** `externref` is host-owned; `funcref` is a `Callable*` owned by the Store; `i31` is an immediate. | Counting them would free memory we do not own, or count a non-object. | Never count `i31`, `externref` or `funcref`; their lifetime stays the embedder's / the Store's (D14). | `RC-1` |
 | RC13 | **Cycles through the host.** A loop that closes through embedder state is invisible to the object graph. | RC (and trial deletion) only sees Wasm-heap edges; a host that retains a ref back into a cycle it also holds keeps it alive. | Document the embedder contract: the host owns that edge and must break it; the engine cannot collect what it cannot see. | `RC-1` (+ `ABI.md`) |
 
+**Status of these rows.** They are owned by milestones, so their status follows:
+`RC1`, `RC4`, `RC6`, `RC7`, `RC8`, `RC9`, `RC12`, `RC13` are satisfied
+(`RC-1`/`RC-1b`/`RC-2`/`RC-3` landed, with `ABI.md` recording the embedder
+borrow/own contract); `RC2` and `RC11` wait on `RC-4` (atomic counts), and
+`RC10` waits on `RC-5` (deferred RC, optional and "measure first"). `RC3`'s
+default — every pushed reference is *owned* and balanced by an explicit drop —
+is implemented (`kStackOwnsRefs`), so only its optional variant is outstanding.
+See §7.1 for the numeric-order roll-up.
+
 **On a "backup tracing pass".** A full tracing pass needs a root set, which is
 exactly what we cannot cheaply build (§6.1). Two trace-shaped fallbacks stay
 honest: (a) at **region teardown** the whole region is dead by definition, so a
@@ -879,7 +897,64 @@ Guardrails for every milestone:
 - Keep the refcount-header offsets (`TypeId@0`, `rc@4`) identical in the runtime
   helpers and the JIT, and add them to the H1 offset test.
 
+### 7.1 Consolidated status — one row per number
+
+Work proceeds **in numeric order**: a higher number is not started until *every*
+aspect of the current one is closed **and** its evidence recorded here. "Aspect"
+means each sub-item that number carries across §5 and §6.4 — e.g. `G8` stayed open
+until `ref.func` resolved for globals, for segment copies *and* for table
+defaults, not just the first one to be fixed.
+
+| Number | Status | Evidence (current) | Notes |
+|---|---|---|---|
+| `G1` | ✅ Closed | `GcHeap::owns` + header `TypeId` (`ref_func` 14/0) | — |
+| **`G2`** | **◑ Implemented, evidence blocked** | `ref_test` 38/32 (unchanged by the fix — see note) | Cross-module `funcref` identity. **Landed:** the Store now owns a registry of callable ranges (`registerCallableRange`/`callableAt`), so a `funcref` is identified — and its canonical `TypeId` read — from *any* module, in O(#instances) instead of the old per-instance O(#functions) scan (**this also closes `H3`**); and the "unknown reference" fallback now lists `Func`, so an unrecognised function reference still classifies as `func` — the documented bug. **But the evidence cannot move yet:** every failing `ref_test` case is driven by `(invoke "init" (ref.extern 0))`, and the harness **skips reference arguments** (`R5`), so the tables stay empty and the composed `ref.test` results are wrong for that reason, not for `G2`'s. **Next:** either evidence `G2` with a C++ unit test (two instances, one's funcref cast by the other) or close `R5` first — `R5` is the gate on measuring `G2`. |
+| `G3` | ✗ Open | `ref_test` extern cases | `any.convert_extern`/`extern.convert_any` are identity. Owned by `GC-8` (optional). |
+| `G4` | ✅ Closed | `array_new_elem` 14/0, `table_init` 725/0 | — |
+| `G5` | ✅ Closed | `i31` 68/0, `table` 18/0 | Table initialisers: decode (`0x40 0x00`), apply every slot, defer `ref.func`. |
+| `G6` | ✅ Closed | `global` 70/0 | — |
+| `G7` | ✗ Open | `br_on_cast*.wast` | `castop` nullability flags are discarded and the branch-target slot model then asserts. Owned by `GC-4`. |
+| `G8` | ✅ Closed | `table` 18/0 (exported `(ref $f)` global across modules) | Sentinel resolved after compilation in all three places. |
+| `G9` | ✗ Open | harness still skips `assert_invalid` | No validating front end beyond the unmodelled-value-type rejection (`D`). |
+| `C1`–`C7` | ✅ Closed | `array_init_data` 44/0, `array` 40/0, `ref_cast`/`call_ref` running | Crash triage complete; the aborts that remain are deliberate (`docs/SAFETY.md` §2.4). |
+| `H1` | ◑ Risk | `structFieldOffsets` vs `translateStruct` | Dual layout logic. The reclaimer and the cycle trial now share one traversal (`childSlotsOf`), but the JIT mirror is still separate. |
+| `H2`, `H8` | ✅ Closed | — | — |
+| `H3` | ✗ Open | `refMatchesHeapType` | O(#functions) per cast/test; closes with `G2`. |
+| `H4`–`H7` | ◑ Latent risks | — | Not wrong today; `H7` (`Value::kind` set but ignored by the JIT) overlaps `G2`. |
+| `R1` | ✗ Open | `WasmRegistryImportResolver.cpp` (`(void)type;`) | Table imports are not type-checked. |
+| `R2`, `R3`, `R6`, `R7` | ✅ Closed | `elem` 108/0, `table_init` 725/0, `table` 18/0 | — |
+| `R4`, `R5` | ✗ Open | `isScalarValue` | `externref` has no host model; reference arguments/results are not marshalled. |
+| `R8` | ◑ Partly | `TableType`, `applyActiveSegments` | Table-initialiser half fixed (`G5`); element-type validation half waits on `G9`. |
+| `L1`, `L2`, `L3` | ✅ Closed | the seven `GC reclamation:` tests | Reclamation, refcounts and the store barrier all landed. |
+| `GC-1` | ◑ Open half | `ref_func` 14/0 | Needs a discoverable canonical `typeId` for function references — **the same work as `G2`/`H3`**. |
+| `GC-2` | ✅ Closed | `GC heap` test, poison-on-free | Recycler wired; debug poison on free landed. |
+| `GC-3` | ✅ Closed | `i31` 68/0 | — |
+| `GC-4` | ✗ Open | `br_on_cast*.wast` | **The same work as `G7`.** |
+| `GC-5` | ✅ Closed | `array` 40/0, `array_init_data` 44/0 | — |
+| `GC-6` | ✅ Closed | `WasmTrap.hpp` | — |
+| `GC-7`, `GC-8` | ✗ Open (optional) | — | Fast casts (`H3`); extern interop (`G3`/`R4`). |
+| `GC-9` | ✅ Closed | `array` 40/0 | — |
+| `RC-1`, `RC-1b` | ✅ Closed | `GC reference counting` test | — |
+| `RC-2` | ✅ Closed | `GC reclamation: … cycle …` tests | Trial deletion, no root set (D18). |
+| `RC-3` | ✅ Closed | deep-chain + poison tests | Iterative worklist, saturating clone, trapping drop. |
+| `RC-4` | ✗ Open | — | Atomic counts; the multi-thread prerequisite of `THREADS.md` (`RC2`/`RC11`). |
+| `RC-5`, `RC-6` | ✗ Open (optional) | — | Deferred RC (measure first); backup tracing. |
+
+**The next number is `G2`** — and it is deliberately grouped: `G2`, `H3` and
+`GC-1`'s open half are *one* piece of work (a canonical, discoverable identity for
+function references), so they close together. Nothing higher may start first:
+`G3` waits on a host `externref` model, `G7`/`GC-4` touch the same
+branch-and-slot machinery, and `G9` needs a validating front end.
+
+
+
 ## 8. Indicative test survey
+
+> **Staleness note (revision 10):** this survey is the 2026-10-13 snapshot that
+> *motivated* the plan, and several numbers have moved since — `i31` 63/5 → **68/0**,
+> `array` 36/4 → **40/0**, `array_init_data` 41/3 → **44/0**, `array_init_elem` and
+> `table` clean, `table_init`/`table_copy`/`elem` no longer aborting. **For current
+> per-number status read §7.1**, not the rows below; treat this section as history.
 
 Survey taken with `build/Desktop-Debug/Test/WasmJit` (2026-10-13; `assert_trap`
 now executed, so the "skipped" column no longer hides the trap cases).

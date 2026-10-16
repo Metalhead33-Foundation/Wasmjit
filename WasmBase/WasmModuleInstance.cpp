@@ -376,6 +376,12 @@ void ModuleInstance::resolveImports(ImportResolver& resolver)
 
 	// Point the VMContext at the resolved array. The pointer stays valid
 	// because importStorage never reallocates after this point.
+	//
+	// That stability is what lets the Store serve cross-module `funcref`
+	// discovery from this range (docs/proposals/GC.md G2).
+	if (!internals.importStorage.empty())
+		Store::global().registerCallableRange(
+				internals.importStorage.data(), internals.importStorage.size());
 	ctx.importedFunctions      = internals.importStorage.data();
 	ctx.importedFunctionCount  = static_cast<uint32_t>(internals.importStorage.size());
 
@@ -1141,12 +1147,13 @@ bool ModuleInstance::refMatchesHeapType(const void* ref, const HeapType& heapTyp
 		actual.id = callable.typeId;
 		return registry.matchesHeap(actual, expected);
 	};
-	for (const Callable& callable : internals.importStorage)
-		if (&callable == ref)
-			return matchCallable(callable);
-	for (const Callable& callable : internals.internalCallables)
-		if (&callable == ref)
-			return matchCallable(callable);
+	// Function references carry their canonical type id, and the *Store* knows
+	// which pointers are callables — including ones owned by another module
+	// (docs/proposals/GC.md G2). The old per-instance scan could not see those,
+	// which is what made `ref.test funcref` on a foreign reference wrong (and
+	// O(#functions) on every cast, §5.3 H3).
+	if (const Callable* callable = Store::global().callableAt(ref))
+		return matchCallable(*callable);
 
 	// GC objects carry their canonical type id.
 	TypeId gcTypeId;
@@ -1157,12 +1164,16 @@ bool ModuleInstance::refMatchesHeapType(const void* ref, const HeapType& heapTyp
 		return registry.matchesHeap(actual, expected);
 	}
 
-	// Unknown reference: only the top abstract types match.
+	// Unknown reference: only the top abstract types match. `func` belongs in
+	// this list: a funcref whose defining module is gone (or whose callable was
+	// never registered) is still a function reference, and classification must
+	// not depend on the casting instance being able to name it (GC.md G2).
 	if (heapType.isTypeIndex)
 		return false;
 	switch (heapType.abstract) {
 	case AbstractHeapType::Any:
 	case AbstractHeapType::Extern:
+	case AbstractHeapType::Func:
 	case AbstractHeapType::NoFunc:
 		return true;
 	default:
