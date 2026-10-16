@@ -107,6 +107,42 @@ void store64Lane(uint8_t* dst, const uint8_t* a, uint32_t lane);
 void shuffleBytes(const uint8_t* a, const uint8_t* b, uint64_t selLo, uint64_t selHi, uint8_t* out);
 void swizzleBytes(const uint8_t* a, const uint8_t* b, uint8_t* out);
 
+// ── the op list's declarations ─────────────────────────────────────────────
+// Declared from the shared op list (`wasm_simd_ops.inc`), which is expanded
+// once per layer: this reference, the vector bodies, the entry points and the
+// test table all read the same list, so they cannot drift apart. Shapes that
+// share a C signature share a definition here; the rest are spelled out.
+#define WASM_SIMD_OP_BIN(name, entry, T, expr, hwy) \
+	void name(const uint8_t* a, const uint8_t* b, uint8_t* out);
+#define WASM_SIMD_OP_UNARY(name, entry, T, expr, hwy) \
+	void name(const uint8_t* a, uint8_t* out);
+#define WASM_SIMD_OP_SHIFT(name, entry, T, expr, hwy) \
+	void name(const uint8_t* a, int32_t count, uint8_t* out);
+#define WASM_SIMD_OP_REDUCE_OR(name, entry, T, expr, hwy) \
+	int32_t name(const uint8_t* a);
+#define WASM_SIMD_OP_REDUCE_AND(name, entry, T, expr, hwy) \
+	int32_t name(const uint8_t* a);
+// Two vectors in, one out — whatever the operands' and result's lane widths are.
+#define WASM_SIMD_OP_CMP(name, entry, T, expr, hwy) WASM_SIMD_OP_BIN(name, entry, T, expr, hwy)
+#define WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_BIN(name, entry, TOut, expr, hwy)
+#define WASM_SIMD_OP_PAIRWISE2(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_BIN(name, entry, TOut, expr, hwy)
+#define WASM_SIMD_OP_NARROW(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_BIN(name, entry, TOut, expr, hwy)
+// One vector in, one out, likewise.
+#define WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_UNARY(name, entry, TOut, expr, hwy)
+#define WASM_SIMD_OP_PAIRWISE(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_UNARY(name, entry, TOut, expr, hwy)
+#include "wasm_simd_ops.inc"
+#undef WASM_SIMD_OP_BIN
+#undef WASM_SIMD_OP_UNARY
+#undef WASM_SIMD_OP_SHIFT
+#undef WASM_SIMD_OP_REDUCE_OR
+#undef WASM_SIMD_OP_REDUCE_AND
+#undef WASM_SIMD_OP_CMP
+#undef WASM_SIMD_OP_WIDEN2
+#undef WASM_SIMD_OP_PAIRWISE2
+#undef WASM_SIMD_OP_NARROW
+#undef WASM_SIMD_OP_WIDEN1
+#undef WASM_SIMD_OP_PAIRWISE
+
 } // namespace simd_scalar
 } // namespace WASM
 
@@ -171,6 +207,37 @@ void wasm_v128_store32_lane(void* dst, const void* a, uint32_t lane);
 void wasm_v128_store64_lane(void* dst, const void* a, uint32_t lane);
 void wasm_i8x16_shuffle(const void* a, const void* b, uint64_t selLo, uint64_t selHi, void* out);
 void wasm_i8x16_swizzle(const void* a, const void* b, void* out);
+
+// The op list's entry points. Three C signatures: two vectors in and one out,
+// one vector in and one out, a scalar shift count or an i32 result.
+#define WASM_SIMD_OP_BIN(name, entry, T, expr, hwy) \
+	void wasm_##entry(const void* a, const void* b, void* out);
+#define WASM_SIMD_OP_UNARY(name, entry, T, expr, hwy) \
+	void wasm_##entry(const void* a, void* out);
+#define WASM_SIMD_OP_SHIFT(name, entry, T, expr, hwy) \
+	void wasm_##entry(const void* a, int32_t count, void* out);
+#define WASM_SIMD_OP_REDUCE_OR(name, entry, T, expr, hwy) \
+	int32_t wasm_##entry(const void* a);
+#define WASM_SIMD_OP_REDUCE_AND(name, entry, T, expr, hwy) \
+	int32_t wasm_##entry(const void* a);
+#define WASM_SIMD_OP_CMP(name, entry, T, expr, hwy) WASM_SIMD_OP_BIN(name, entry, T, expr, hwy)
+#define WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_BIN(name, entry, TOut, expr, hwy)
+#define WASM_SIMD_OP_PAIRWISE2(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_BIN(name, entry, TOut, expr, hwy)
+#define WASM_SIMD_OP_NARROW(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_BIN(name, entry, TOut, expr, hwy)
+#define WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_UNARY(name, entry, TOut, expr, hwy)
+#define WASM_SIMD_OP_PAIRWISE(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_UNARY(name, entry, TOut, expr, hwy)
+#include "wasm_simd_ops.inc"
+#undef WASM_SIMD_OP_BIN
+#undef WASM_SIMD_OP_UNARY
+#undef WASM_SIMD_OP_SHIFT
+#undef WASM_SIMD_OP_REDUCE_OR
+#undef WASM_SIMD_OP_REDUCE_AND
+#undef WASM_SIMD_OP_CMP
+#undef WASM_SIMD_OP_WIDEN2
+#undef WASM_SIMD_OP_PAIRWISE2
+#undef WASM_SIMD_OP_NARROW
+#undef WASM_SIMD_OP_WIDEN1
+#undef WASM_SIMD_OP_PAIRWISE
 }
 
 #endif // WASMSIMDSCALAR_HPP

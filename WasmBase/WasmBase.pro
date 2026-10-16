@@ -55,4 +55,5 @@ HEADERS += \
     WasmVMContext.hpp \
     WasmValue.hpp \
     wasm_simd_scalar.hpp \
-    wasm_simd_vector.hpp
+    wasm_simd_vector.hpp \
+    wasm_simd_ops.inc

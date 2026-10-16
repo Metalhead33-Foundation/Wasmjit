@@ -304,7 +304,8 @@ Two conventions worth fixing now, because they decide how many helpers exist:
 |---|---|---|
 | `WasmBase/wasm_simd_vector.{hpp,cpp}` | The vectorised bodies, compiled once per CPU target, plus every `extern "C"` entry point and the `HWY_EXPORT` dispatch tables. The only place where the SIMD library is visible. | SIMD-L2 |
 | `WasmBase/wasm_simd_scalar.{hpp,cpp}` | The **scalar reference** implementation of every helper — no library, always compiled, never called by a backend. The oracle of §9. Also declares the entry-point contract (the `extern "C"` block), because that contract is core-owned. | SIMD-L1 |
-| `LibJit/LibjitOpcodeDispatcher.{hpp,cpp}` | Turns the `notImplemented(__func__)` stubs into helper calls: `callSimdHelper`/`callSimdOutHelper` (§6.4), the four `emitSimd*` memory shapes, and the per-op handlers. | SIMD-L1…L4 |
+| `WasmBase/wasm_simd_ops.inc` | The op list: one line per op, expanded **once per layer** (reference, vector bodies, entry points, and the test table). No include guard, by design. | SIMD-L3 |
+| `LibJit/LibjitOpcodeDispatcher.{hpp,cpp}` | Turns the `notImplemented(__func__)` stubs into helper calls: `callSimdHelper`/`callSimdOutHelper` (§6.4), the `emitSimd*` shapes, and the per-op handlers. | SIMD-L1…L4 |
 | `LibJit/LibJitTypeTranslation.cpp` | The 16-byte alignment line (§6.1) | SIMD-L1 |
 | `WasmBase/WasmModuleInstance.cpp` | `evalConstantExpr` `v128.const` arm; `gcStorageAlign` | SIMD-L5 / L1 |
 | `Test/wasm_wat/simd_*.wat` | Hand-written lane-semantics modules | SIMD-L1+ |
@@ -325,6 +326,35 @@ Two things about this layout are worth stating explicitly, because they were
    implementation would be duplicated code with nothing to gain. The consequence
    for §9 is that only the former group can be differentially tested; the
    forwarding group is pinned by golden vectors, and the test comments say so.
+3. **The per-lane op set is one list, expanded four ways.** At 133 ops in
+   SIMD-L3 alone, four hand-written layers (reference, per-target bodies, entry
+   points and the test table) would be hundreds of near-identical functions that
+   can silently drift as the list grows. `wasm_simd_ops.inc` is that list: each
+   layer defines the shape macros it implements, includes it, and `#undef`s them
+   again. The win is not only brevity — `Test/main.cpp` builds its differential
+   table from the *same* file, so an op cannot exist in the engine without
+   appearing in the differential test. The §9 coverage gate is structural now,
+   rather than a promise somebody has to remember to keep.
+
+   Three mechanics of that file cost real time to discover, and are worth knowing
+   before editing it:
+
+   - **A layer defines only the shapes it implements.** The file is included
+     whole, so every inclusion would otherwise have to name all eleven shapes —
+     and forgetting one leaves those lines unexpanded, which surfaces as an
+     "expected constructor" error in an unrelated file. It therefore defaults any
+     shape the caller did not define to nothing, and undoes exactly those
+     defaults on the way out so the next inclusion starts clean.
+   - **An expression may not name a macro parameter.** The preprocessor
+     blue-paints them, so `T` or `TOut` written inside a field reaches the
+     compiler as a bare identifier. Fields also have to be comma-free at the top
+     level, or the comma splits the argument list.
+   - **Fields name the library op `hn::`-prefixed — except the binary shapes and
+     the reductions.** The binary shapes call their field with the two loaded
+     vectors and let ADL find it, which is what makes *our* helpers reachable
+     while the library's ops resolve exactly as they do inside the library. The
+     reductions take a complete expression, because `v128.any_true` ends in a
+     comparison and `hn::(x != 0)` is not valid syntax.
 
 ### 6.6 Verified mechanics (measured, not assumed)
 
@@ -360,7 +390,7 @@ library choice. Each row is something a plausible implementation gets wrong
 | **Y2** | `i32x4.trunc_sat_f32x4_{s,u}`, `_f64x2_{s,u}_zero` | `cvttps2dq` yields `0x80000000` for NaN and for out-of-range — indistinguishable from a legitimate `-2^31`. | NaN → `0`; `≥ 2^31` → `INT32_MAX`; `≤ -2^31 - 1` → `INT32_MIN`; unsigned forms clamp to `[0, UINT32_MAX]`. Fix up the raw conversion. |
 | **Y3** | `i8x16.swizzle` | `pshufb`/`BitShuffle` zeroes a lane only when the index's **bit 7** is set; wasm zeroes every index `≥ 16`, so indices 16…127 would silently alias lanes 0…15. | One **unsigned** range mask: `idx <= 15` takes the looked-up byte, everything else takes zero. That single select also covers 128…255, so pshufb's bit-7 rule never has to be reproduced *or* relied on (§11 R7) — which matters because the SSE2 and SSSE3 paths differ there. **The single most likely silent bug in the whole feature.** |
 | **Y4** | `i8x16.shuffle` | Indices 0–15 select operand 0, 16–31 operand 1; a shuffle primitive that takes "one selector vector" invites an off-by-16 or a reversed concatenation. | Build the two-operand concatenation explicitly; verify against the oracle. |
-| **Y5** | `q15mulr_sat_s` | `pmulhrsw`/`MulFixedPoint15` rounds `(a*b + 0x4000) >> 15` but yields `0x8000` for the `-32768 × -32768` corner, where wasm requires saturation to `0x7fff`. | Fix up the one saturated lane (compare the inputs against the negative-only corner). |
+| **Y5** | `q15mulr_sat_s` | `pmulhrsw`/`MulFixedPoint15` rounds `(a*b + 0x4000) >> 15` but yields `0x8000` for the `-32768 × -32768` corner, where wasm requires saturation to `0x7fff`. **Confirmed** — and it is an inconsistency *inside* the library: its SSE2 path demotes with `ReorderDemote2To` and saturates, while the SSSE3+ path is the bare instruction and wraps, so the same op disagrees with itself across targets. | Implemented at SIMD-L3 as a one-lane select on the only input pair that can overflow. Note that a differential test **cannot** see this: both layers would wrap identically, which is why the golden vector (`q15_sat_lane0` in `simd_arith_i.wat`) is what pins it. |
 | **Y6** | `narrow` / `widen` / `extmul` / `pmin`/`pmax` lane order | Packing instructions interleave two inputs (`packs` produces low half from the first operand, high half from the second); getting this backwards permutes lanes while still looking "reasonable". | Assert lane placement in T1 per op, not just the numeric result. |
 | **Y7** | `round` / `nearest` | Nearest must be `roundTiesToEven`; `_MM_FROUND_TO_NEAREST_INT` is available only from SSE4.1 and a naive `(int)(x + 0.5)` is wrong for ties and negatives. | Use a proper ties-to-even round; check the `0.5`, `1.5`, `2.5`, negative-tie cases. |
 | **Y8** | `i64x2` shifts and comparisons | 64-bit lane shifts/comparisons are not in baseline SSE2 (comparisons need SSE4.2, shifts need per-lane emulation). | Verify the target provides real 64-bit ops or emulate; check the shift-count `≥ 64` case. |
@@ -445,13 +475,13 @@ JIT path with exact expected vectors:
 
 | Module | Covers |
 |---|---|
-| `simd_load_store.wat` | `v128.load`/`store` incl. unaligned offsets, `load*_splat`, `load32/64_zero`, lane load/store |
-| `simd_const_lane.wat` | `v128.const` byte order (Y11), splat, extract/replace lane (signed and unsigned) |
-| `simd_arith_i.wat` | integer add/sub/mul, shifts (incl. shift count `≥` lane width), `min/max`, `avgr_u`, saturating forms, `bitmask`, `all_true`/`any_true` (Y9) |
+| ✅ `simd_load_store.wat` | `v128.load`/`store` incl. unaligned offsets, `load*_splat`, `load32/64_zero`, lane load/store |
+| ✅ `simd_const_lane.wat` | `v128.const` byte order (Y11), splat, extract/replace lane (signed and unsigned) |
+| ✅ `simd_arith_i.wat` | **Built at SIMD-L3 (67 exports).** Comparisons in both signednesses, `add`/`sub`/`mul`, `neg`/`abs`, shifts incl. counts `≥` the lane width, `min/max`, `avgr_u`, the saturating forms, `popcnt`, `q15mulr_sat_s` (Y5), the reductions `all_true`/`any_true`/`bitmask` in every width (Y9), and the width-changing family — `extend`/`extmul` `_low` vs `_high`, `extadd_pairwise`, `dot`, `narrow`'s half order and clamping |
 | `simd_arith_f.wat` | float arithmetic, `min`/`max`/`pmin`/`pmax` (Y1), `sqrt`, `abs`/`neg`, `ceil`/`floor`/`trunc`/`nearest` (Y7) |
-| `simd_shuffle.wat` | `i8x16.shuffle` two-operand mapping (Y4), `i8x16.swizzle` out-of-range (Y3) |
-| `simd_convert.wat` | `trunc_sat` corners (Y2), `convert`, `promote`/`demote`, widen/narrow (Y6), `extmul`, `extadd_pairwise`, `dot`, `q15mulr_sat_s` (Y5) |
-| `simd_abi.wat` | `(param v128) (result v128)` round-trip; `v128` locals; `v128` global get/set |
+| ✅ `simd_shuffle.wat` | `i8x16.shuffle` two-operand mapping (Y4), `i8x16.swizzle` out-of-range (Y3) |
+| `simd_convert.wat` | `trunc_sat` corners (Y2), `convert`, `promote`/`demote` — the float↔int half; the integer widening/narrowing half landed in `simd_arith_i.wat` at SIMD-L3 |
+| ✅ `simd_abi.wat` | `(param v128) (result v128)` round-trip; `v128` locals; `v128` global get/set |
 
 These are the modules the milestone "done when" clauses refer to.
 
@@ -490,17 +520,24 @@ WASM_SPEC_SCRIPTS=all ./WasmJit '[spec]'  # T3 sweep, for re-curation
 | T1 | `simd helpers: bitwise ops agree with the scalar reference` | pass | first genuine differential (vectorised vs reference) |
 | T1 | `simd helpers: memory loads and stores` | pass | differential + golden for the widening/zero/lane forms |
 | T1 | `simd helpers: shuffle and swizzle` | pass | hazards Y3/Y4 pinned by boundary vectors |
+| T1 | `simd helpers: per-lane arithmetic and comparisons (differential)` | pass | driven by the op list (§6.5), so an op cannot be uncovered |
+| T1 | `simd helpers: signedness corners are pinned` | pass | golden: `min`/`max`/compare signedness, `abs`/`neg` of the most negative value |
+| T1 | `simd helpers: the saturating, rounding and count corners` | pass | golden: saturation in both signednesses, `avgr_u` rounding, `popcnt`, Y5's two `q15mulr_sat_s` corners — **cross-checked against an independent engine** (§11 R8) |
+| T1 | `simd helpers: shift masking, narrowing layout and the widening family` | pass | golden: counts taken mod the lane width, `narrow`'s half order, `bitmask` bit order, the wrapping `dot` sum |
 | T2 | `simd: a v128 parameter and result round-trip through the JIT` | pass | **closes S4/S5/S9** |
 | T2 | `simd: v128.const, splat and lane ops run through the JIT` | pass | SIMD-L1 |
 | T2 | `simd: bitwise ops run through the JIT` | pass | SIMD-L2 |
 | T2 | `simd: memory loads and stores run through the JIT` | pass | SIMD-L2, incl. an unaligned memarg and the bounds-check path |
 | T2 | `simd: shuffle and swizzle run through the JIT` | pass | SIMD-L2 |
-| T3 | the 59 `simd_*.wast` scripts | signal 6, 0 passing commands | still S1 (the ~185 handlers that remain stubs) and S7 |
+| T2 | `simd: integer arithmetic and comparisons run through the JIT` | pass | **SIMD-L3**, driven by `simd_arith_i.wat` (67 exports: comparisons, `min`/`max`, shifts, saturating, `avgr_u`, `popcnt`, `q15mulr_sat_s`, the reductions and the whole width-changing family) |
+| T3 | the 59 `simd_*.wast` scripts | signal 6, 0 passing commands | still S1 (the 52 float handlers that remain stubs) and S7 |
 | T4 | — | — | SIMD-L8 |
 
-Measured after SIMD-L2: `./WasmJit 'simd*'` reports **11 cases, 479 assertions,
-all passing**; the whole default suite is **97 cases / 2016 assertions**
-(91 / 1755 after SIMD-L1, 86 / 1537 before it) — added coverage, no regressions.
+Measured after SIMD-L3: `./WasmJit 'simd*'` reports **16 cases, 2659 assertions, all
+passing**; the whole default suite is **102 cases / 4196 assertions** (99 / 2567
+after L3's first half, 97 / 2016 after L2, 91 / 1755 after L1, 86 / 1537 before
+it) — added coverage, no regressions. Of the 236 fixed-width handlers, **184
+execute**; all 52 that still abort are float ops, which is SIMD-L4's whole scope.
 
 The `.wat` modules are checked with `wasm-tools validate --features all` before
 they are run, so a T2 failure is a runtime bug rather than a malformed input.
@@ -519,8 +556,8 @@ two lists line up: L1–L7 are the *how* for SIMD-0…SIMD-6.
 | **SIMD-L0 — This note** | Write this decision record and the consistency edits to `SIMD_BACKENDS.md`, `proposals/SIMD.md`, `README.md`, `TESTING.md`. No code. | — (the gate) | The five documents agree on the direction, the ABI, the library and the test plan. |
 | **SIMD-L1 — Scalar reference + ABI** | ✅ **Done.** `wasm_simd_scalar.{hpp,cpp}` (the reference for every L1 helper, plus the `extern "C"` entry points); `jit_type_set_size_and_alignment(v128, 16, 16)`; `gcStorageAlign` → 16; the two 16-byte zero-value paths corrected; `callSimdHelper`/`callSimdOutHelper` + signature cache; 21 ops wired (const, 6 splats, 8 extracts, 6 replaces); `simd_abi.wat` + `simd_const_lane.wat`; 5 T1/T2 cases. | S4, S5, S9 | ✅ `(param v128)(result v128)` round-trips through the JIT (measured); `v128.const` → `splat` → extract/replace matches the golden vectors; suite 91/1755, zero regressions. |
 | **SIMD-L2 — Highway layer + memory/bitwise/lane** | ✅ **Done** except the peepholes (see below). The multi-target TU + the qmake lines (§5.5) landed as `wasm_simd_vector.*` (§6.5); `*.splat` moved to a real vector broadcast; all 22 `v128.load*`/`store*` ops, the 6 bitwise ops, `shuffle` and `swizzle` are implemented and tested. **Deferred: the D5 peepholes** (`load`+op, `const`+op fusion). | S1 (part) | ✅ `simd_load_store.wat` and `simd_shuffle.wat` green; T1 green for the whole L2 op set; `libWasmBase` links `libhwy.so.1` and the entry points dispatch at run time. |
-| **SIMD-L3 — Integer and comparison ops** | add/sub/mul, neg/abs, `min/max`, shifts, `avgr_u`, saturating add/sub, `q15mulr_sat_s` (Y5), comparisons, `all_true`/`any_true`/`bitmask` (Y9), `extmul`, `extadd_pairwise`, `dot`. | S1 | `simd_arith_i.wat` green; the i32-returning assertions of the `simd_i32x4_*`/`simd_i16x8_*` scripts pass where T3 is reachable. |
-| **SIMD-L4 — Float and conversion ops** | arithmetic, `min/max`/`pmin/pmax` (Y1), `sqrt`/`abs`/`neg`, rounding (Y7), conversions (`trunc_sat` Y2, `convert`, `promote`/`demote`, widen/narrow Y6, `i64x2` shifts Y8). | S1 | `simd_arith_f.wat`, `simd_convert.wat` green; T1 green for the whole fixed-width set (the §9 coverage gate holds). |
+| ✅ **SIMD-L3 — Integer and comparison ops** | **Done — all 133 ops.** The X-macro op list (§6.5); all 36 comparisons; the 23 `add`/`sub`/`mul`/`min`/`max` forms; the 8 `neg`/`abs` forms; the 12 shifts; saturating `add`/`sub` (8); `avgr_u` (2); `popcnt` (1); the reductions `all_true`/`bitmask`/`any_true` (9); and the width-changing family `narrow`/`extend`/`extmul`/`extadd_pairwise`/`dot`/`q15mulr_sat_s` (34). Each is differentially tested against the reference by construction, and the corners a differential cannot see are pinned by golden vectors (three of which corrected *the expectation*, never the code — §11 R8). | S1 | ✅ `simd_arith_i.wat` green (67 exports); T1 green for the whole op list; **184 of 236** handlers execute, and every remaining stub is a float op. |
+| **SIMD-L4 — Float and conversion ops** | float arithmetic, `min`/`max`/`pmin`/`pmax` (Y1), `sqrt`/`abs`/`neg`, rounding (Y7), and the float↔int conversions (`trunc_sat` Y2, `convert`, `promote`/`demote`). The integer half of what this row used to list — widen/narrow (Y6), `extmul`, `extadd_pairwise`, `dot`, `i64x2` shifts (Y8) — landed with SIMD-L3. | S1 | `simd_arith_f.wat`, `simd_convert.wat` green; T1 green for the whole fixed-width set (the §9 coverage gate holds). |
 | **SIMD-L5 — Globals and constant expressions** | `v128.const` in `evalConstantExpr`; `v128` global get/set; `v128` in the globals layout. | S3 | A module with a `v128` global initialised by `v128.const` runs and round-trips. |
 | **SIMD-L6 — Relaxed SIMD** | Enumerate the 20 relaxed sub-opcodes; decode them; implement the SD5 scalar results. | S2 | A module using each relaxed family produces a member of the allowed set; T1 checks membership, not equality. |
 | **SIMD-L7 — Harness marshalling** | Marshal `v128` arguments/results in `WastScript.cpp` (16-byte values, lane formatting); then curate `simd_*.wast` into `wast_supported.txt`. | S7, S8 | `./WasmJit 'spec: simd_*'` reports real pass/fail counts, and every curated script is listed in the T3 survey. |
@@ -551,6 +588,7 @@ curated spec set.
 | R5 | **`jit_insn_store_relative` silently does not write a `jit_value_create`d aggregate.** Found and fixed during SIMD-L1: `v128.const` and both v128 zero-value paths used it and produced uninitialised slots (§6.6). | Fixed (SIMD-L1); the rule "write a struct-typed value through its address" is now in the header comment and enforced by the §6.6 table. |
 | R6 | **Hand-computed golden vectors are error-prone.** During SIMD-L2 the differential layer passed on the first run both times, while two *test expectations* I derived by hand were wrong (`load8x8_s` lane 7, and `load16_lane`'s partial-lane overwrite). | Recorded as the lesson it is: the differential proves the implementation agrees with the reference, and says nothing about a hand-derived expected value. Golden vectors must come from the spec, and a wrong expectation gets fixed in the test — never in the code. |
 | R7 | **Hazard Y3 is simpler than §7 first described.** The original rule was "saturate the index, *or* handle pshufb's bit-7 rule". As built, one range select covers both: indices 128…255 are `≥ 16` too, so the same mask that fixes 16…127 zeroes them — the target's bit-7 behaviour never has to be reproduced *or* depended on, which also removes an SSE2-vs-SSSE3 difference. | Implemented (SIMD-L2); §7's Y3 row updated. The select uses the **unsigned** minimum, which the note calls out because the signed one would classify 128…255 as in-range. |
+| R8 | **The hand-computed expectations were wrong twice more — and the library disagrees with itself.** Writing SIMD-L3's goldens, two expectations were wrong (the `q15mulr_sat_s` `min×max` corner, and a chained example where I took `sub_sat_s(100, 100)` to be 127); the implementation was right both times. That is the third and fourth occurrence of R6, and the second was caught *only* because of the change below. Separately, the differential's blind spot is now concrete rather than theoretical: hazard Y5 is invisible to it, because both layers wrap the same way, and the random inputs never produced the one pair that would have exposed it. | Adopted: **a golden is cross-checked against an independent engine before it is written down**, not after a failure. `node` (V8) is installed and implements the shipped spec; it settled `q15mulr_sat_s` after a `wat2wasm`, and it checked all 67 expectations of `simd_arith_i.wat` in one run. `wasm-interp`, `spectest-interp` and `wasmer` are installed as alternatives. The gap that leaves is named rather than papered over: an engine check covers a module's *scalar* semantics, so it validates what a golden asserts but not the JIT path that produced it — that is what T2 is for. |
 | Q1 | Does LibJIT's 16-byte aggregate ABI (S9) work *and* beat the pointer ABI? | **Correctness answered (SIMD-L1): the ABI works** — `(param v128)(result v128)` round-trips through the JIT and the C++ mirror `{uint32_t×4}` matches it (§6.6). Whether by-value *beats* by-pointer is still the M2 benchmark at L8. |
 | Q2 | How is a `v128` value printed on a test failure? | Lane-wise hex with lane indices, defined at L1 (T1 diagnostics and T3 output both use it). |
 | Q3 | Do `v128` globals live as 16 inline bytes in the VM context? | Confirm at L5 against `WasmModuleInstance`'s globals layout and `storageAlign`. |

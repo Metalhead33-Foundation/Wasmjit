@@ -660,7 +660,7 @@ jit_value_t OpcodeDispatcher::zeroConstantForType(jit_type_t t)
 		if (jit_type_get_size(t) == 16) {
 			jit_type_t params[1] = {jit_type_void_ptr};
 			jit_value_t args[1] = {jit_insn_address_of(function, aggregate)};
-			callSimdHelper(reinterpret_cast<void*>(&wasm_v128_zero), jit_type_void, params, args);
+			callSimdHelper(reinterpret_cast<void*>(wasm_v128_zero), jit_type_void, params, args);
 			return aggregate;
 		}
 		const unsigned int fieldCount = jit_type_num_fields(t);
@@ -811,6 +811,88 @@ void OpcodeDispatcher::emitSimdStoreLane(const WASM::MemArg& ma, jit_nint width,
 	jit_value_t args[3] = {dst, jit_insn_address_of(function, a),
 			jit_value_create_nint_constant(function, jit_type_uint, lane)};
 	callSimdHelper(helper, jit_type_void, types, args);
+}
+
+// The per-lane shapes. Both take vector operands by address and write the result
+// into a fresh slot, so the arithmetic and the mask-producing comparisons share
+// one path — the difference is only which helper is called.
+
+void OpcodeDispatcher::emitSimdBinaryHelper(void* helper)
+{
+	if (unreachableCode) {
+		popValue();
+		popValue();
+		return;
+	}
+	jit_value_t b = popValue();   // wasm's `[v128 v128] -> [v128]`: second on top
+	jit_value_t a = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_void_ptr};
+	jit_value_t args[2] = {jit_insn_address_of(function, a), jit_insn_address_of(function, b)};
+	callSimdOutHelper(helper, out, types, args);
+	pushValue(out);
+}
+
+void OpcodeDispatcher::emitSimdUnaryHelper(void* helper)
+{
+	if (unreachableCode) {
+		popValue();
+		return;
+	}
+	jit_value_t a = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[1] = {jit_type_void_ptr};
+	jit_value_t args[1] = {jit_insn_address_of(function, a)};
+	callSimdOutHelper(helper, out, types, args);
+	pushValue(out);
+}
+
+void OpcodeDispatcher::emitSimdTernaryHelper(void* helper)
+{
+	if (unreachableCode) {
+		popValue();
+		popValue();
+		popValue();
+		return;
+	}
+	jit_value_t c = popValue();   // the selector is on top
+	jit_value_t b = popValue();
+	jit_value_t a = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[3] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr};
+	jit_value_t args[3] = {jit_insn_address_of(function, a),
+			jit_insn_address_of(function, b), jit_insn_address_of(function, c)};
+	callSimdOutHelper(helper, out, types, args);
+	pushValue(out);
+}
+
+void OpcodeDispatcher::emitSimdShiftHelper(void* helper)
+{
+	if (unreachableCode) {
+		popValue();
+		popValue();
+		return;
+	}
+	jit_value_t count = popValue();   // `[v128 i32] -> [v128]`: the count is on top
+	jit_value_t a = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_int};
+	jit_value_t args[2] = {jit_insn_address_of(function, a), count};
+	callSimdOutHelper(helper, out, types, args);
+	pushValue(out);
+}
+
+void OpcodeDispatcher::emitSimdReduceI32Helper(void* helper)
+{
+	if (unreachableCode) {
+		popValue();
+		return;
+	}
+	jit_value_t a = popValue();
+	const jit_type_t types[1] = {jit_type_void_ptr};
+	jit_value_t args[1] = {jit_insn_address_of(function, a)};
+	// No out slot: the helper's result *is* the wasm i32 the op produces.
+	pushValue(callSimdHelper(helper, jit_type_int, types, args));
 }
 
 jit_value_t OpcodeDispatcher::castRefValue(jit_value_t value, jit_type_t targetType)
@@ -3474,7 +3556,7 @@ void OpcodeDispatcher::dispatchArrayNewData(WASM::TypeIdx arg1, uint32_t arg2) {
 			jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(jit_type_get_size(elemType)))
 		};
 		jit_insn_call_native(function, "wasm_check_data_segment_range_impl",
-			reinterpret_cast<void*>(&wasm_check_data_segment_range_impl), checkSig, checkArgs, 5, 0);
+			reinterpret_cast<void*>(wasm_check_data_segment_range_impl), checkSig, checkArgs, 5, 0);
 	}
 	jit_type_t allocParams[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint, jit_type_uint, jit_type_uint};
 	jit_type_t sigAlloc = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, allocParams, 5, 1);
@@ -3513,7 +3595,7 @@ void OpcodeDispatcher::dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2) {
 			jit_insn_convert(function, length, jit_type_uint, 0)
 		};
 		jit_insn_call_native(function, "wasm_check_element_segment_range_impl",
-			reinterpret_cast<void*>(&wasm_check_element_segment_range_impl), checkSig, checkArgs, 4, 0);
+			reinterpret_cast<void*>(wasm_check_element_segment_range_impl), checkSig, checkArgs, 4, 0);
 	}
 	jit_type_t allocParams[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint, jit_type_uint, jit_type_uint};
 	jit_type_t sigAlloc = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, allocParams, 5, 1);
@@ -4019,70 +4101,70 @@ void OpcodeDispatcher::dispatchTableFill(WASM::TableIdx arg) {
 // width is the number of bytes the instruction actually *reads* — that is what
 // the bounds check must cover, and the memarg's alignment plays no part in it.
 void OpcodeDispatcher::dispatchV128Load(WASM::MemArg arg) {
-	emitSimdLoad(arg, 16, reinterpret_cast<void*>(&wasm_v128_load));
+	emitSimdLoad(arg, 16, reinterpret_cast<void*>(wasm_v128_load));
 }
 void OpcodeDispatcher::dispatchV128Load8x8S(WASM::MemArg arg) {
-	emitSimdLoad(arg, 8, reinterpret_cast<void*>(&wasm_v128_load8x8_s));
+	emitSimdLoad(arg, 8, reinterpret_cast<void*>(wasm_v128_load8x8_s));
 }
 void OpcodeDispatcher::dispatchV128Load8x8U(WASM::MemArg arg) {
-	emitSimdLoad(arg, 8, reinterpret_cast<void*>(&wasm_v128_load8x8_u));
+	emitSimdLoad(arg, 8, reinterpret_cast<void*>(wasm_v128_load8x8_u));
 }
 void OpcodeDispatcher::dispatchV128Load16x4S(WASM::MemArg arg) {
-	emitSimdLoad(arg, 8, reinterpret_cast<void*>(&wasm_v128_load16x4_s));
+	emitSimdLoad(arg, 8, reinterpret_cast<void*>(wasm_v128_load16x4_s));
 }
 void OpcodeDispatcher::dispatchV128Load16x4U(WASM::MemArg arg) {
-	emitSimdLoad(arg, 8, reinterpret_cast<void*>(&wasm_v128_load16x4_u));
+	emitSimdLoad(arg, 8, reinterpret_cast<void*>(wasm_v128_load16x4_u));
 }
 void OpcodeDispatcher::dispatchV128Load32x2S(WASM::MemArg arg) {
-	emitSimdLoad(arg, 8, reinterpret_cast<void*>(&wasm_v128_load32x2_s));
+	emitSimdLoad(arg, 8, reinterpret_cast<void*>(wasm_v128_load32x2_s));
 }
 void OpcodeDispatcher::dispatchV128Load32x2U(WASM::MemArg arg) {
-	emitSimdLoad(arg, 8, reinterpret_cast<void*>(&wasm_v128_load32x2_u));
+	emitSimdLoad(arg, 8, reinterpret_cast<void*>(wasm_v128_load32x2_u));
 }
 void OpcodeDispatcher::dispatchV128Load8Splat(WASM::MemArg arg) {
-	emitSimdLoad(arg, 1, reinterpret_cast<void*>(&wasm_v128_load8_splat));
+	emitSimdLoad(arg, 1, reinterpret_cast<void*>(wasm_v128_load8_splat));
 }
 void OpcodeDispatcher::dispatchV128Load16Splat(WASM::MemArg arg) {
-	emitSimdLoad(arg, 2, reinterpret_cast<void*>(&wasm_v128_load16_splat));
+	emitSimdLoad(arg, 2, reinterpret_cast<void*>(wasm_v128_load16_splat));
 }
 void OpcodeDispatcher::dispatchV128Load32Splat(WASM::MemArg arg) {
-	emitSimdLoad(arg, 4, reinterpret_cast<void*>(&wasm_v128_load32_splat));
+	emitSimdLoad(arg, 4, reinterpret_cast<void*>(wasm_v128_load32_splat));
 }
 void OpcodeDispatcher::dispatchV128Load64Splat(WASM::MemArg arg) {
-	emitSimdLoad(arg, 8, reinterpret_cast<void*>(&wasm_v128_load64_splat));
+	emitSimdLoad(arg, 8, reinterpret_cast<void*>(wasm_v128_load64_splat));
 }
 void OpcodeDispatcher::dispatchV128Load32Zero(WASM::MemArg arg) {
-	emitSimdLoad(arg, 4, reinterpret_cast<void*>(&wasm_v128_load32_zero));
+	emitSimdLoad(arg, 4, reinterpret_cast<void*>(wasm_v128_load32_zero));
 }
 void OpcodeDispatcher::dispatchV128Load64Zero(WASM::MemArg arg) {
-	emitSimdLoad(arg, 8, reinterpret_cast<void*>(&wasm_v128_load64_zero));
+	emitSimdLoad(arg, 8, reinterpret_cast<void*>(wasm_v128_load64_zero));
 }
 void OpcodeDispatcher::dispatchV128Store(WASM::MemArg arg) {
-	emitSimdStore(arg, 16, reinterpret_cast<void*>(&wasm_v128_store));
+	emitSimdStore(arg, 16, reinterpret_cast<void*>(wasm_v128_store));
 }
 void OpcodeDispatcher::dispatchV128Load8Lane(WASM::MemArg arg1, uint8_t arg2) {
-	emitSimdLoadLane(arg1, 1, arg2, reinterpret_cast<void*>(&wasm_v128_load8_lane));
+	emitSimdLoadLane(arg1, 1, arg2, reinterpret_cast<void*>(wasm_v128_load8_lane));
 }
 void OpcodeDispatcher::dispatchV128Load16Lane(WASM::MemArg arg1, uint8_t arg2) {
-	emitSimdLoadLane(arg1, 2, arg2, reinterpret_cast<void*>(&wasm_v128_load16_lane));
+	emitSimdLoadLane(arg1, 2, arg2, reinterpret_cast<void*>(wasm_v128_load16_lane));
 }
 void OpcodeDispatcher::dispatchV128Load32Lane(WASM::MemArg arg1, uint8_t arg2) {
-	emitSimdLoadLane(arg1, 4, arg2, reinterpret_cast<void*>(&wasm_v128_load32_lane));
+	emitSimdLoadLane(arg1, 4, arg2, reinterpret_cast<void*>(wasm_v128_load32_lane));
 }
 void OpcodeDispatcher::dispatchV128Load64Lane(WASM::MemArg arg1, uint8_t arg2) {
-	emitSimdLoadLane(arg1, 8, arg2, reinterpret_cast<void*>(&wasm_v128_load64_lane));
+	emitSimdLoadLane(arg1, 8, arg2, reinterpret_cast<void*>(wasm_v128_load64_lane));
 }
 void OpcodeDispatcher::dispatchV128Store8Lane(WASM::MemArg arg1, uint8_t arg2) {
-	emitSimdStoreLane(arg1, 1, arg2, reinterpret_cast<void*>(&wasm_v128_store8_lane));
+	emitSimdStoreLane(arg1, 1, arg2, reinterpret_cast<void*>(wasm_v128_store8_lane));
 }
 void OpcodeDispatcher::dispatchV128Store16Lane(WASM::MemArg arg1, uint8_t arg2) {
-	emitSimdStoreLane(arg1, 2, arg2, reinterpret_cast<void*>(&wasm_v128_store16_lane));
+	emitSimdStoreLane(arg1, 2, arg2, reinterpret_cast<void*>(wasm_v128_store16_lane));
 }
 void OpcodeDispatcher::dispatchV128Store32Lane(WASM::MemArg arg1, uint8_t arg2) {
-	emitSimdStoreLane(arg1, 4, arg2, reinterpret_cast<void*>(&wasm_v128_store32_lane));
+	emitSimdStoreLane(arg1, 4, arg2, reinterpret_cast<void*>(wasm_v128_store32_lane));
 }
 void OpcodeDispatcher::dispatchV128Store64Lane(WASM::MemArg arg1, uint8_t arg2) {
-	emitSimdStoreLane(arg1, 8, arg2, reinterpret_cast<void*>(&wasm_v128_store64_lane));
+	emitSimdStoreLane(arg1, 8, arg2, reinterpret_cast<void*>(wasm_v128_store64_lane));
 }
 void OpcodeDispatcher::dispatchV128Const(std::span<uint8_t> arg) {
 	// The 16 immediate bytes are in memory order: bytes 0-7 are the low half,
@@ -4103,7 +4185,7 @@ void OpcodeDispatcher::dispatchV128Const(std::span<uint8_t> arg) {
 	jit_value_t args[2] = {
 		jit_value_create_long_constant(function, jit_type_ulong, static_cast<jit_long>(lo)),
 		jit_value_create_long_constant(function, jit_type_ulong, static_cast<jit_long>(hi))};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_v128_const), out, types, args);
+	callSimdOutHelper(reinterpret_cast<void*>(wasm_v128_const), out, types, args);
 	pushValue(out);
 }
 // `i8x16.shuffle` and `i8x16.swizzle` are both one-vector table lookups. The
@@ -4131,7 +4213,7 @@ void OpcodeDispatcher::dispatchI8x16Shuffle(std::span<uint8_t> arg) {
 	jit_value_t args[4] = {jit_insn_address_of(function, a), jit_insn_address_of(function, b),
 			jit_value_create_long_constant(function, jit_type_ulong, static_cast<jit_long>(selLo)),
 			jit_value_create_long_constant(function, jit_type_ulong, static_cast<jit_long>(selHi))};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_i8x16_shuffle), out, types, args);
+	callSimdOutHelper(reinterpret_cast<void*>(wasm_i8x16_shuffle), out, types, args);
 	pushValue(out);
 }
 void OpcodeDispatcher::dispatchI8x16Swizzle() {
@@ -4145,7 +4227,7 @@ void OpcodeDispatcher::dispatchI8x16Swizzle() {
 	jit_value_t out = newV128Slot();
 	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_void_ptr};
 	jit_value_t args[2] = {jit_insn_address_of(function, a), jit_insn_address_of(function, s)};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_i8x16_swizzle), out, types, args);
+	callSimdOutHelper(reinterpret_cast<void*>(wasm_i8x16_swizzle), out, types, args);
 	pushValue(out);
 }
 // `*.splat`: pop the scalar, write 16 bytes of it into a fresh slot. The scalar
@@ -4157,7 +4239,7 @@ void OpcodeDispatcher::dispatchI8x16Splat() {
 	jit_value_t out = newV128Slot();
 	const jit_type_t types[1] = {jit_type_int};
 	jit_value_t args[1] = {x};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_i8x16_splat), out, types, args);
+	callSimdOutHelper(reinterpret_cast<void*>(wasm_i8x16_splat), out, types, args);
 	pushValue(out);
 }
 void OpcodeDispatcher::dispatchI16x8Splat() {
@@ -4166,7 +4248,7 @@ void OpcodeDispatcher::dispatchI16x8Splat() {
 	jit_value_t out = newV128Slot();
 	const jit_type_t types[1] = {jit_type_int};
 	jit_value_t args[1] = {x};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_i16x8_splat), out, types, args);
+	callSimdOutHelper(reinterpret_cast<void*>(wasm_i16x8_splat), out, types, args);
 	pushValue(out);
 }
 void OpcodeDispatcher::dispatchI32x4Splat() {
@@ -4175,7 +4257,7 @@ void OpcodeDispatcher::dispatchI32x4Splat() {
 	jit_value_t out = newV128Slot();
 	const jit_type_t types[1] = {jit_type_int};
 	jit_value_t args[1] = {x};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_i32x4_splat), out, types, args);
+	callSimdOutHelper(reinterpret_cast<void*>(wasm_i32x4_splat), out, types, args);
 	pushValue(out);
 }
 void OpcodeDispatcher::dispatchI64x2Splat() {
@@ -4184,7 +4266,7 @@ void OpcodeDispatcher::dispatchI64x2Splat() {
 	jit_value_t out = newV128Slot();
 	const jit_type_t types[1] = {jit_type_long};
 	jit_value_t args[1] = {x};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_i64x2_splat), out, types, args);
+	callSimdOutHelper(reinterpret_cast<void*>(wasm_i64x2_splat), out, types, args);
 	pushValue(out);
 }
 void OpcodeDispatcher::dispatchF32x4Splat() {
@@ -4193,7 +4275,7 @@ void OpcodeDispatcher::dispatchF32x4Splat() {
 	jit_value_t out = newV128Slot();
 	const jit_type_t types[1] = {jit_type_float32};
 	jit_value_t args[1] = {x};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_f32x4_splat), out, types, args);
+	callSimdOutHelper(reinterpret_cast<void*>(wasm_f32x4_splat), out, types, args);
 	pushValue(out);
 }
 void OpcodeDispatcher::dispatchF64x2Splat() {
@@ -4202,7 +4284,7 @@ void OpcodeDispatcher::dispatchF64x2Splat() {
 	jit_value_t out = newV128Slot();
 	const jit_type_t types[1] = {jit_type_float64};
 	jit_value_t args[1] = {x};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_f64x2_splat), out, types, args);
+	callSimdOutHelper(reinterpret_cast<void*>(wasm_f64x2_splat), out, types, args);
 	pushValue(out);
 }
 // `*.extract_lane`: pop the vector, pass its address + the lane immediate, push
@@ -4213,7 +4295,7 @@ void OpcodeDispatcher::dispatchI8x16ExtractLaneS(uint8_t arg) {
 	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_uint};
 	jit_value_t args[2] = {jit_insn_address_of(function, a),
 			jit_value_create_nint_constant(function, jit_type_uint, arg)};
-	pushValue(callSimdHelper(reinterpret_cast<void*>(&wasm_i8x16_extract_lane_s), jit_type_int, types, args));
+	pushValue(callSimdHelper(reinterpret_cast<void*>(wasm_i8x16_extract_lane_s), jit_type_int, types, args));
 }
 void OpcodeDispatcher::dispatchI8x16ExtractLaneU(uint8_t arg) {
 	if (unreachableCode) { popValue(); return; }
@@ -4221,7 +4303,7 @@ void OpcodeDispatcher::dispatchI8x16ExtractLaneU(uint8_t arg) {
 	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_uint};
 	jit_value_t args[2] = {jit_insn_address_of(function, a),
 			jit_value_create_nint_constant(function, jit_type_uint, arg)};
-	pushValue(callSimdHelper(reinterpret_cast<void*>(&wasm_i8x16_extract_lane_u), jit_type_int, types, args));
+	pushValue(callSimdHelper(reinterpret_cast<void*>(wasm_i8x16_extract_lane_u), jit_type_int, types, args));
 }
 // `*.replace_lane`: the stack is [vector, scalar], so the scalar pops first.
 void OpcodeDispatcher::dispatchI8x16ReplaceLane(uint8_t arg) {
@@ -4232,7 +4314,7 @@ void OpcodeDispatcher::dispatchI8x16ReplaceLane(uint8_t arg) {
 	const jit_type_t types[3] = {jit_type_void_ptr, jit_type_uint, jit_type_int};
 	jit_value_t args[3] = {jit_insn_address_of(function, a),
 			jit_value_create_nint_constant(function, jit_type_uint, arg), x};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_i8x16_replace_lane), out, types, args);
+	callSimdOutHelper(reinterpret_cast<void*>(wasm_i8x16_replace_lane), out, types, args);
 	pushValue(out);
 }
 void OpcodeDispatcher::dispatchI16x8ExtractLaneS(uint8_t arg) {
@@ -4241,7 +4323,7 @@ void OpcodeDispatcher::dispatchI16x8ExtractLaneS(uint8_t arg) {
 	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_uint};
 	jit_value_t args[2] = {jit_insn_address_of(function, a),
 			jit_value_create_nint_constant(function, jit_type_uint, arg)};
-	pushValue(callSimdHelper(reinterpret_cast<void*>(&wasm_i16x8_extract_lane_s), jit_type_int, types, args));
+	pushValue(callSimdHelper(reinterpret_cast<void*>(wasm_i16x8_extract_lane_s), jit_type_int, types, args));
 }
 void OpcodeDispatcher::dispatchI16x8ExtractLaneU(uint8_t arg) {
 	if (unreachableCode) { popValue(); return; }
@@ -4249,7 +4331,7 @@ void OpcodeDispatcher::dispatchI16x8ExtractLaneU(uint8_t arg) {
 	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_uint};
 	jit_value_t args[2] = {jit_insn_address_of(function, a),
 			jit_value_create_nint_constant(function, jit_type_uint, arg)};
-	pushValue(callSimdHelper(reinterpret_cast<void*>(&wasm_i16x8_extract_lane_u), jit_type_int, types, args));
+	pushValue(callSimdHelper(reinterpret_cast<void*>(wasm_i16x8_extract_lane_u), jit_type_int, types, args));
 }
 void OpcodeDispatcher::dispatchI16x8ReplaceLane(uint8_t arg) {
 	if (unreachableCode) { popValue(); popValue(); return; }
@@ -4259,7 +4341,7 @@ void OpcodeDispatcher::dispatchI16x8ReplaceLane(uint8_t arg) {
 	const jit_type_t types[3] = {jit_type_void_ptr, jit_type_uint, jit_type_int};
 	jit_value_t args[3] = {jit_insn_address_of(function, a),
 			jit_value_create_nint_constant(function, jit_type_uint, arg), x};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_i16x8_replace_lane), out, types, args);
+	callSimdOutHelper(reinterpret_cast<void*>(wasm_i16x8_replace_lane), out, types, args);
 	pushValue(out);
 }
 void OpcodeDispatcher::dispatchI32x4ExtractLane(uint8_t arg) {
@@ -4268,7 +4350,7 @@ void OpcodeDispatcher::dispatchI32x4ExtractLane(uint8_t arg) {
 	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_uint};
 	jit_value_t args[2] = {jit_insn_address_of(function, a),
 			jit_value_create_nint_constant(function, jit_type_uint, arg)};
-	pushValue(callSimdHelper(reinterpret_cast<void*>(&wasm_i32x4_extract_lane), jit_type_int, types, args));
+	pushValue(callSimdHelper(reinterpret_cast<void*>(wasm_i32x4_extract_lane), jit_type_int, types, args));
 }
 void OpcodeDispatcher::dispatchI32x4ReplaceLane(uint8_t arg) {
 	if (unreachableCode) { popValue(); popValue(); return; }
@@ -4278,7 +4360,7 @@ void OpcodeDispatcher::dispatchI32x4ReplaceLane(uint8_t arg) {
 	const jit_type_t types[3] = {jit_type_void_ptr, jit_type_uint, jit_type_int};
 	jit_value_t args[3] = {jit_insn_address_of(function, a),
 			jit_value_create_nint_constant(function, jit_type_uint, arg), x};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_i32x4_replace_lane), out, types, args);
+	callSimdOutHelper(reinterpret_cast<void*>(wasm_i32x4_replace_lane), out, types, args);
 	pushValue(out);
 }
 void OpcodeDispatcher::dispatchI64x2ExtractLane(uint8_t arg) {
@@ -4287,7 +4369,7 @@ void OpcodeDispatcher::dispatchI64x2ExtractLane(uint8_t arg) {
 	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_uint};
 	jit_value_t args[2] = {jit_insn_address_of(function, a),
 			jit_value_create_nint_constant(function, jit_type_uint, arg)};
-	pushValue(callSimdHelper(reinterpret_cast<void*>(&wasm_i64x2_extract_lane), jit_type_long, types, args));
+	pushValue(callSimdHelper(reinterpret_cast<void*>(wasm_i64x2_extract_lane), jit_type_long, types, args));
 }
 void OpcodeDispatcher::dispatchI64x2ReplaceLane(uint8_t arg) {
 	if (unreachableCode) { popValue(); popValue(); return; }
@@ -4297,7 +4379,7 @@ void OpcodeDispatcher::dispatchI64x2ReplaceLane(uint8_t arg) {
 	const jit_type_t types[3] = {jit_type_void_ptr, jit_type_uint, jit_type_long};
 	jit_value_t args[3] = {jit_insn_address_of(function, a),
 			jit_value_create_nint_constant(function, jit_type_uint, arg), x};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_i64x2_replace_lane), out, types, args);
+	callSimdOutHelper(reinterpret_cast<void*>(wasm_i64x2_replace_lane), out, types, args);
 	pushValue(out);
 }
 void OpcodeDispatcher::dispatchF32x4ExtractLane(uint8_t arg) {
@@ -4306,7 +4388,7 @@ void OpcodeDispatcher::dispatchF32x4ExtractLane(uint8_t arg) {
 	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_uint};
 	jit_value_t args[2] = {jit_insn_address_of(function, a),
 			jit_value_create_nint_constant(function, jit_type_uint, arg)};
-	pushValue(callSimdHelper(reinterpret_cast<void*>(&wasm_f32x4_extract_lane), jit_type_float32, types, args));
+	pushValue(callSimdHelper(reinterpret_cast<void*>(wasm_f32x4_extract_lane), jit_type_float32, types, args));
 }
 void OpcodeDispatcher::dispatchF32x4ReplaceLane(uint8_t arg) {
 	if (unreachableCode) { popValue(); popValue(); return; }
@@ -4316,7 +4398,7 @@ void OpcodeDispatcher::dispatchF32x4ReplaceLane(uint8_t arg) {
 	const jit_type_t types[3] = {jit_type_void_ptr, jit_type_uint, jit_type_float32};
 	jit_value_t args[3] = {jit_insn_address_of(function, a),
 			jit_value_create_nint_constant(function, jit_type_uint, arg), x};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_f32x4_replace_lane), out, types, args);
+	callSimdOutHelper(reinterpret_cast<void*>(wasm_f32x4_replace_lane), out, types, args);
 	pushValue(out);
 }
 void OpcodeDispatcher::dispatchF64x2ExtractLane(uint8_t arg) {
@@ -4325,7 +4407,7 @@ void OpcodeDispatcher::dispatchF64x2ExtractLane(uint8_t arg) {
 	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_uint};
 	jit_value_t args[2] = {jit_insn_address_of(function, a),
 			jit_value_create_nint_constant(function, jit_type_uint, arg)};
-	pushValue(callSimdHelper(reinterpret_cast<void*>(&wasm_f64x2_extract_lane), jit_type_float64, types, args));
+	pushValue(callSimdHelper(reinterpret_cast<void*>(wasm_f64x2_extract_lane), jit_type_float64, types, args));
 }
 void OpcodeDispatcher::dispatchF64x2ReplaceLane(uint8_t arg) {
 	if (unreachableCode) { popValue(); popValue(); return; }
@@ -4335,99 +4417,39 @@ void OpcodeDispatcher::dispatchF64x2ReplaceLane(uint8_t arg) {
 	const jit_type_t types[3] = {jit_type_void_ptr, jit_type_uint, jit_type_float64};
 	jit_value_t args[3] = {jit_insn_address_of(function, a),
 			jit_value_create_nint_constant(function, jit_type_uint, arg), x};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_f64x2_replace_lane), out, types, args);
+	callSimdOutHelper(reinterpret_cast<void*>(wasm_f64x2_replace_lane), out, types, args);
 	pushValue(out);
 }
-void OpcodeDispatcher::dispatchI8x16Eq() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16Ne() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16LtS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16LtU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16GtS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16GtU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16LeS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16LeU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16GeS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16GeU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8Eq() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8Ne() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8LtS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8LtU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8GtS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8GtU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8LeS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8LeU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8GeS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8GeU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4Eq() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4Ne() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4LtS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4LtU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4GtS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4GtU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4LeS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4LeU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4GeS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4GeU() {
-	notImplemented(__func__);
-}
+void OpcodeDispatcher::dispatchI8x16Eq() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_eq)); }
+void OpcodeDispatcher::dispatchI8x16Ne() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_ne)); }
+void OpcodeDispatcher::dispatchI8x16LtS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_lt_s)); }
+void OpcodeDispatcher::dispatchI8x16LtU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_lt_u)); }
+void OpcodeDispatcher::dispatchI8x16GtS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_gt_s)); }
+void OpcodeDispatcher::dispatchI8x16GtU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_gt_u)); }
+void OpcodeDispatcher::dispatchI8x16LeS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_le_s)); }
+void OpcodeDispatcher::dispatchI8x16LeU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_le_u)); }
+void OpcodeDispatcher::dispatchI8x16GeS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_ge_s)); }
+void OpcodeDispatcher::dispatchI8x16GeU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_ge_u)); }
+void OpcodeDispatcher::dispatchI16x8Eq() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_eq)); }
+void OpcodeDispatcher::dispatchI16x8Ne() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_ne)); }
+void OpcodeDispatcher::dispatchI16x8LtS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_lt_s)); }
+void OpcodeDispatcher::dispatchI16x8LtU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_lt_u)); }
+void OpcodeDispatcher::dispatchI16x8GtS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_gt_s)); }
+void OpcodeDispatcher::dispatchI16x8GtU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_gt_u)); }
+void OpcodeDispatcher::dispatchI16x8LeS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_le_s)); }
+void OpcodeDispatcher::dispatchI16x8LeU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_le_u)); }
+void OpcodeDispatcher::dispatchI16x8GeS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_ge_s)); }
+void OpcodeDispatcher::dispatchI16x8GeU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_ge_u)); }
+void OpcodeDispatcher::dispatchI32x4Eq() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_eq)); }
+void OpcodeDispatcher::dispatchI32x4Ne() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_ne)); }
+void OpcodeDispatcher::dispatchI32x4LtS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_lt_s)); }
+void OpcodeDispatcher::dispatchI32x4LtU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_lt_u)); }
+void OpcodeDispatcher::dispatchI32x4GtS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_gt_s)); }
+void OpcodeDispatcher::dispatchI32x4GtU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_gt_u)); }
+void OpcodeDispatcher::dispatchI32x4LeS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_le_s)); }
+void OpcodeDispatcher::dispatchI32x4LeU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_le_u)); }
+void OpcodeDispatcher::dispatchI32x4GeS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_ge_s)); }
+void OpcodeDispatcher::dispatchI32x4GeU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_ge_u)); }
 void OpcodeDispatcher::dispatchF32x4Eq() {
 	notImplemented(__func__);
 }
@@ -4467,376 +4489,115 @@ void OpcodeDispatcher::dispatchF64x2Ge() {
 // Bitwise ops are whole-vector, so they are the shape `callSimdOutHelper` exists
 // for: pop the operands, pass their addresses, write into a fresh slot. The
 // helpers are pure and never trap (docs/SIMD_LIBJIT.md §6.3).
-void OpcodeDispatcher::dispatchV128Not() {
-	if (unreachableCode) { popValue(); return; }
-	jit_value_t a = popValue();
-	jit_value_t out = newV128Slot();
-	const jit_type_t types[1] = {jit_type_void_ptr};
-	jit_value_t args[1] = {jit_insn_address_of(function, a)};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_v128_not), out, types, args);
-	pushValue(out);
-}
-void OpcodeDispatcher::dispatchV128And() {
-	if (unreachableCode) { popValue(); popValue(); return; }
-	jit_value_t b = popValue();
-	jit_value_t a = popValue();
-	jit_value_t out = newV128Slot();
-	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_void_ptr};
-	jit_value_t args[2] = {jit_insn_address_of(function, a), jit_insn_address_of(function, b)};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_v128_and), out, types, args);
-	pushValue(out);
-}
-void OpcodeDispatcher::dispatchV128AndNot() {
-	if (unreachableCode) { popValue(); popValue(); return; }
-	jit_value_t b = popValue();
-	jit_value_t a = popValue();
-	jit_value_t out = newV128Slot();
-	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_void_ptr};
-	jit_value_t args[2] = {jit_insn_address_of(function, a), jit_insn_address_of(function, b)};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_v128_andnot), out, types, args);
-	pushValue(out);
-}
-void OpcodeDispatcher::dispatchV128Or() {
-	if (unreachableCode) { popValue(); popValue(); return; }
-	jit_value_t b = popValue();
-	jit_value_t a = popValue();
-	jit_value_t out = newV128Slot();
-	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_void_ptr};
-	jit_value_t args[2] = {jit_insn_address_of(function, a), jit_insn_address_of(function, b)};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_v128_or), out, types, args);
-	pushValue(out);
-}
-void OpcodeDispatcher::dispatchV128Xor() {
-	if (unreachableCode) { popValue(); popValue(); return; }
-	jit_value_t b = popValue();
-	jit_value_t a = popValue();
-	jit_value_t out = newV128Slot();
-	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_void_ptr};
-	jit_value_t args[2] = {jit_insn_address_of(function, a), jit_insn_address_of(function, b)};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_v128_xor), out, types, args);
-	pushValue(out);
-}
-void OpcodeDispatcher::dispatchV128Bitselect() {
-	if (unreachableCode) { popValue(); popValue(); popValue(); return; }
-	jit_value_t c = popValue();   // the selector is on top
-	jit_value_t b = popValue();
-	jit_value_t a = popValue();
-	jit_value_t out = newV128Slot();
-	const jit_type_t types[3] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr};
-	jit_value_t args[3] = {jit_insn_address_of(function, a),
-			jit_insn_address_of(function, b), jit_insn_address_of(function, c)};
-	callSimdOutHelper(reinterpret_cast<void*>(&wasm_v128_bitselect), out, types, args);
-	pushValue(out);
-}
-void OpcodeDispatcher::dispatchV128AnyTrue() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16Abs() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16Neg() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16Popcnt() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16AllTrue() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16Bitmask() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16NarrowI16x8S() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16NarrowI16x8U() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16Shl() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16ShrS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16ShrU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16Add() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16AddSatS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16AddSatU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16Sub() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16SubSatS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16SubSatU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16MinS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16MinU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16MaxS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16MaxU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI8x16AvgrU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8ExtAddPairwiseI8x16S() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8ExtAddPairwiseI8x16U() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8Abs() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8Neg() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8Q15MulRSatS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8AllTrue() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8Bitmask() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8NarrowI32x4S() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8NarrowI32x4U() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8ExtendLowI8x16S() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8ExtendHighI8x16S() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8ExtendLowI8x16U() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8ExtendHighI8x16U() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8Shl() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8ShrS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8ShrU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8Add() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8AddSatS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8AddSatU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8Sub() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8SubSatS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8SubSatU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8Mul() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8MinS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8MinU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8MaxS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8MaxU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8AvgrU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8ExtMulLowI8x16S() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8ExtMulHighI8x16S() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8ExtMulLowI8x16U() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI16x8ExtMulHighI8x16U() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4ExtAddPairwiseI16x8S() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4ExtAddPairwiseI16x8U() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4Abs() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4Neg() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4AllTrue() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4Bitmask() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4ExtendLowI16x8S() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4ExtendHighI16x8S() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4ExtendLowI16x8U() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4ExtendHighI16x8U() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4Shl() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4ShrS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4ShrU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4Add() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4Sub() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4Mul() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4MinS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4MinU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4MaxS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4MaxU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4DotI16x8S() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4ExtMulLowI16x8S() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4ExtMulHighI16x8S() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4ExtMulLowI16x8U() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4ExtMulHighI16x8U() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2Abs() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2Neg() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2AllTrue() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2Bitmask() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2ExtendLowI32x4S() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2ExtendHighI32x4S() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2ExtendLowI32x4U() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2ExtendHighI32x4U() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2Shl() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2ShrS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2ShrU() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2Add() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2Sub() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2Mul() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2Eq() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2Ne() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2LtS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2GtS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2LeS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2GeS() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2ExtMulLowI32x4S() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2ExtMulHighI32x4S() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2ExtMulLowI32x4U() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64x2ExtMulHighI32x4U() {
-	notImplemented(__func__);
-}
+void OpcodeDispatcher::dispatchV128Not() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_v128_not)); }
+void OpcodeDispatcher::dispatchV128And() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_v128_and)); }
+void OpcodeDispatcher::dispatchV128AndNot() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_v128_andnot)); }
+void OpcodeDispatcher::dispatchV128Or() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_v128_or)); }
+void OpcodeDispatcher::dispatchV128Xor() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_v128_xor)); }
+void OpcodeDispatcher::dispatchV128Bitselect() { emitSimdTernaryHelper(reinterpret_cast<void*>(wasm_v128_bitselect)); }
+void OpcodeDispatcher::dispatchV128AnyTrue() { emitSimdReduceI32Helper(reinterpret_cast<void*>(wasm_v128_any_true)); }
+void OpcodeDispatcher::dispatchI8x16Abs() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i8x16_abs)); }
+void OpcodeDispatcher::dispatchI8x16Neg() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i8x16_neg)); }
+void OpcodeDispatcher::dispatchI8x16Popcnt() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i8x16_popcnt)); }
+void OpcodeDispatcher::dispatchI8x16AllTrue() { emitSimdReduceI32Helper(reinterpret_cast<void*>(wasm_i8x16_all_true)); }
+void OpcodeDispatcher::dispatchI8x16Bitmask() { emitSimdReduceI32Helper(reinterpret_cast<void*>(wasm_i8x16_bitmask)); }
+void OpcodeDispatcher::dispatchI8x16NarrowI16x8S() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_narrow_i16x8_s)); }
+void OpcodeDispatcher::dispatchI8x16NarrowI16x8U() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_narrow_i16x8_u)); }
+void OpcodeDispatcher::dispatchI8x16Shl() { emitSimdShiftHelper(reinterpret_cast<void*>(wasm_i8x16_shl)); }
+void OpcodeDispatcher::dispatchI8x16ShrS() { emitSimdShiftHelper(reinterpret_cast<void*>(wasm_i8x16_shr_s)); }
+void OpcodeDispatcher::dispatchI8x16ShrU() { emitSimdShiftHelper(reinterpret_cast<void*>(wasm_i8x16_shr_u)); }
+void OpcodeDispatcher::dispatchI8x16Add() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_add)); }
+void OpcodeDispatcher::dispatchI8x16AddSatS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_add_sat_s)); }
+void OpcodeDispatcher::dispatchI8x16AddSatU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_add_sat_u)); }
+void OpcodeDispatcher::dispatchI8x16Sub() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_sub)); }
+void OpcodeDispatcher::dispatchI8x16SubSatS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_sub_sat_s)); }
+void OpcodeDispatcher::dispatchI8x16SubSatU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_sub_sat_u)); }
+void OpcodeDispatcher::dispatchI8x16MinS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_min_s)); }
+void OpcodeDispatcher::dispatchI8x16MinU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_min_u)); }
+void OpcodeDispatcher::dispatchI8x16MaxS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_max_s)); }
+void OpcodeDispatcher::dispatchI8x16MaxU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_max_u)); }
+void OpcodeDispatcher::dispatchI8x16AvgrU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_avgr_u)); }
+void OpcodeDispatcher::dispatchI16x8ExtAddPairwiseI8x16S() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i16x8_extadd_pairwise_i8x16_s)); }
+void OpcodeDispatcher::dispatchI16x8ExtAddPairwiseI8x16U() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i16x8_extadd_pairwise_i8x16_u)); }
+void OpcodeDispatcher::dispatchI16x8Abs() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i16x8_abs)); }
+void OpcodeDispatcher::dispatchI16x8Neg() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i16x8_neg)); }
+void OpcodeDispatcher::dispatchI16x8Q15MulRSatS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_q15mulr_sat_s)); }
+void OpcodeDispatcher::dispatchI16x8AllTrue() { emitSimdReduceI32Helper(reinterpret_cast<void*>(wasm_i16x8_all_true)); }
+void OpcodeDispatcher::dispatchI16x8Bitmask() { emitSimdReduceI32Helper(reinterpret_cast<void*>(wasm_i16x8_bitmask)); }
+void OpcodeDispatcher::dispatchI16x8NarrowI32x4S() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_narrow_i32x4_s)); }
+void OpcodeDispatcher::dispatchI16x8NarrowI32x4U() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_narrow_i32x4_u)); }
+void OpcodeDispatcher::dispatchI16x8ExtendLowI8x16S() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i16x8_extend_low_i8x16_s)); }
+void OpcodeDispatcher::dispatchI16x8ExtendHighI8x16S() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i16x8_extend_high_i8x16_s)); }
+void OpcodeDispatcher::dispatchI16x8ExtendLowI8x16U() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i16x8_extend_low_i8x16_u)); }
+void OpcodeDispatcher::dispatchI16x8ExtendHighI8x16U() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i16x8_extend_high_i8x16_u)); }
+void OpcodeDispatcher::dispatchI16x8Shl() { emitSimdShiftHelper(reinterpret_cast<void*>(wasm_i16x8_shl)); }
+void OpcodeDispatcher::dispatchI16x8ShrS() { emitSimdShiftHelper(reinterpret_cast<void*>(wasm_i16x8_shr_s)); }
+void OpcodeDispatcher::dispatchI16x8ShrU() { emitSimdShiftHelper(reinterpret_cast<void*>(wasm_i16x8_shr_u)); }
+void OpcodeDispatcher::dispatchI16x8Add() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_add)); }
+void OpcodeDispatcher::dispatchI16x8AddSatS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_add_sat_s)); }
+void OpcodeDispatcher::dispatchI16x8AddSatU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_add_sat_u)); }
+void OpcodeDispatcher::dispatchI16x8Sub() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_sub)); }
+void OpcodeDispatcher::dispatchI16x8SubSatS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_sub_sat_s)); }
+void OpcodeDispatcher::dispatchI16x8SubSatU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_sub_sat_u)); }
+void OpcodeDispatcher::dispatchI16x8Mul() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_mul)); }
+void OpcodeDispatcher::dispatchI16x8MinS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_min_s)); }
+void OpcodeDispatcher::dispatchI16x8MinU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_min_u)); }
+void OpcodeDispatcher::dispatchI16x8MaxS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_max_s)); }
+void OpcodeDispatcher::dispatchI16x8MaxU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_max_u)); }
+void OpcodeDispatcher::dispatchI16x8AvgrU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_avgr_u)); }
+void OpcodeDispatcher::dispatchI16x8ExtMulLowI8x16S() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_extmul_low_i8x16_s)); }
+void OpcodeDispatcher::dispatchI16x8ExtMulHighI8x16S() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_extmul_high_i8x16_s)); }
+void OpcodeDispatcher::dispatchI16x8ExtMulLowI8x16U() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_extmul_low_i8x16_u)); }
+void OpcodeDispatcher::dispatchI16x8ExtMulHighI8x16U() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_extmul_high_i8x16_u)); }
+void OpcodeDispatcher::dispatchI32x4ExtAddPairwiseI16x8S() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i32x4_extadd_pairwise_i16x8_s)); }
+void OpcodeDispatcher::dispatchI32x4ExtAddPairwiseI16x8U() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i32x4_extadd_pairwise_i16x8_u)); }
+void OpcodeDispatcher::dispatchI32x4Abs() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i32x4_abs)); }
+void OpcodeDispatcher::dispatchI32x4Neg() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i32x4_neg)); }
+void OpcodeDispatcher::dispatchI32x4AllTrue() { emitSimdReduceI32Helper(reinterpret_cast<void*>(wasm_i32x4_all_true)); }
+void OpcodeDispatcher::dispatchI32x4Bitmask() { emitSimdReduceI32Helper(reinterpret_cast<void*>(wasm_i32x4_bitmask)); }
+void OpcodeDispatcher::dispatchI32x4ExtendLowI16x8S() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i32x4_extend_low_i16x8_s)); }
+void OpcodeDispatcher::dispatchI32x4ExtendHighI16x8S() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i32x4_extend_high_i16x8_s)); }
+void OpcodeDispatcher::dispatchI32x4ExtendLowI16x8U() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i32x4_extend_low_i16x8_u)); }
+void OpcodeDispatcher::dispatchI32x4ExtendHighI16x8U() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i32x4_extend_high_i16x8_u)); }
+void OpcodeDispatcher::dispatchI32x4Shl() { emitSimdShiftHelper(reinterpret_cast<void*>(wasm_i32x4_shl)); }
+void OpcodeDispatcher::dispatchI32x4ShrS() { emitSimdShiftHelper(reinterpret_cast<void*>(wasm_i32x4_shr_s)); }
+void OpcodeDispatcher::dispatchI32x4ShrU() { emitSimdShiftHelper(reinterpret_cast<void*>(wasm_i32x4_shr_u)); }
+void OpcodeDispatcher::dispatchI32x4Add() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_add)); }
+void OpcodeDispatcher::dispatchI32x4Sub() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_sub)); }
+void OpcodeDispatcher::dispatchI32x4Mul() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_mul)); }
+void OpcodeDispatcher::dispatchI32x4MinS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_min_s)); }
+void OpcodeDispatcher::dispatchI32x4MinU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_min_u)); }
+void OpcodeDispatcher::dispatchI32x4MaxS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_max_s)); }
+void OpcodeDispatcher::dispatchI32x4MaxU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_max_u)); }
+void OpcodeDispatcher::dispatchI32x4DotI16x8S() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_dot_i16x8_s)); }
+void OpcodeDispatcher::dispatchI32x4ExtMulLowI16x8S() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_extmul_low_i16x8_s)); }
+void OpcodeDispatcher::dispatchI32x4ExtMulHighI16x8S() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_extmul_high_i16x8_s)); }
+void OpcodeDispatcher::dispatchI32x4ExtMulLowI16x8U() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_extmul_low_i16x8_u)); }
+void OpcodeDispatcher::dispatchI32x4ExtMulHighI16x8U() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_extmul_high_i16x8_u)); }
+void OpcodeDispatcher::dispatchI64x2Abs() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i64x2_abs)); }
+void OpcodeDispatcher::dispatchI64x2Neg() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i64x2_neg)); }
+void OpcodeDispatcher::dispatchI64x2AllTrue() { emitSimdReduceI32Helper(reinterpret_cast<void*>(wasm_i64x2_all_true)); }
+void OpcodeDispatcher::dispatchI64x2Bitmask() { emitSimdReduceI32Helper(reinterpret_cast<void*>(wasm_i64x2_bitmask)); }
+void OpcodeDispatcher::dispatchI64x2ExtendLowI32x4S() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i64x2_extend_low_i32x4_s)); }
+void OpcodeDispatcher::dispatchI64x2ExtendHighI32x4S() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i64x2_extend_high_i32x4_s)); }
+void OpcodeDispatcher::dispatchI64x2ExtendLowI32x4U() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i64x2_extend_low_i32x4_u)); }
+void OpcodeDispatcher::dispatchI64x2ExtendHighI32x4U() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i64x2_extend_high_i32x4_u)); }
+void OpcodeDispatcher::dispatchI64x2Shl() { emitSimdShiftHelper(reinterpret_cast<void*>(wasm_i64x2_shl)); }
+void OpcodeDispatcher::dispatchI64x2ShrS() { emitSimdShiftHelper(reinterpret_cast<void*>(wasm_i64x2_shr_s)); }
+void OpcodeDispatcher::dispatchI64x2ShrU() { emitSimdShiftHelper(reinterpret_cast<void*>(wasm_i64x2_shr_u)); }
+void OpcodeDispatcher::dispatchI64x2Add() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i64x2_add)); }
+void OpcodeDispatcher::dispatchI64x2Sub() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i64x2_sub)); }
+void OpcodeDispatcher::dispatchI64x2Mul() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i64x2_mul)); }
+void OpcodeDispatcher::dispatchI64x2Eq() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i64x2_eq)); }
+void OpcodeDispatcher::dispatchI64x2Ne() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i64x2_ne)); }
+void OpcodeDispatcher::dispatchI64x2LtS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i64x2_lt_s)); }
+void OpcodeDispatcher::dispatchI64x2GtS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i64x2_gt_s)); }
+void OpcodeDispatcher::dispatchI64x2LeS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i64x2_le_s)); }
+void OpcodeDispatcher::dispatchI64x2GeS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i64x2_ge_s)); }
+void OpcodeDispatcher::dispatchI64x2ExtMulLowI32x4S() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i64x2_extmul_low_i32x4_s)); }
+void OpcodeDispatcher::dispatchI64x2ExtMulHighI32x4S() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i64x2_extmul_high_i32x4_s)); }
+void OpcodeDispatcher::dispatchI64x2ExtMulLowI32x4U() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i64x2_extmul_low_i32x4_u)); }
+void OpcodeDispatcher::dispatchI64x2ExtMulHighI32x4U() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i64x2_extmul_high_i32x4_u)); }
 void OpcodeDispatcher::dispatchF32x4Ceil() {
 	notImplemented(__func__);
 }

@@ -136,6 +136,16 @@ private:
 	void emitSimdLoadLane(const WASM::MemArg& ma, jit_nint width, uint8_t lane, void* helper);
 	void emitSimdStore(const WASM::MemArg& ma, jit_nint width, void* helper);
 	void emitSimdStoreLane(const WASM::MemArg& ma, jit_nint width, uint8_t lane, void* helper);
+	// The per-lane shapes: two vectors in and one out (used for the arithmetic
+	// *and* for the mask-producing comparisons — the difference is entirely in
+	// the helper), one vector in and one out, and the three-operand bitselect.
+	void emitSimdBinaryHelper(void* helper);
+	void emitSimdUnaryHelper(void* helper);
+	void emitSimdTernaryHelper(void* helper);
+	// A shift takes the vector plus a scalar count; a reduction yields a wasm i32
+	// rather than a vector, so it has no out slot at all.
+	void emitSimdShiftHelper(void* helper);
+	void emitSimdReduceI32Helper(void* helper);
 	// Signature cache: the SIMD ops share a handful of shapes, so memoise them
 	// instead of creating (and leaking) one signature per instruction (§6.4).
 	std::vector<std::pair<std::vector<jit_type_t>, jit_type_t>> simdSignatureCache;

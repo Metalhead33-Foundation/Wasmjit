@@ -237,6 +237,132 @@ inline void swizzleBytes(const uint8_t* a, const uint8_t* b, uint8_t* out)
 	hn::StoreU(hn::IfThenElse(valid, looked, hn::Zero(d)), d, out);
 }
 
+// `v128.any_true` is a boolean, but the library's mask reduction *counts* the
+// set lanes. The op list splices its library expression after `hn::`, so a
+// parenthesised `(count != 0)` cannot be written there directly — hence a helper
+// whose name the list can use.
+template <class D, class V>
+HWY_INLINE int32_t anyTrueLanes(D d, const V v)
+{
+	return hn::CountTrue(d, hn::Ne(v, hn::Zero(d))) != 0;
+}
+
+// `q15mulr_sat_s` is `sat_s((x * y + 0x4000) >> 15)`, and the library's
+// `MulFixedPoint15` is meant to be exactly that — but the targets that use
+// `pmulhrsw` *wrap* the one product that can overflow, while the library's own
+// SSE2 path saturates it: the two paths disagree with each other, and the
+// wrapping one disagrees with wasm. `-32768 * -32768` is the only pair that can
+// overflow (it wants 32768, one past the maximum — hazard Y5), so selecting the
+// saturated value for that one input pair restores the spec. The differential
+// test cannot see this, because both layers would wrap identically; the golden
+// vector is what pins it.
+//
+// This lives in our own namespace and the op list names it *unqualified*: the
+// binary shapes call their field with the two loaded vectors and rely on ADL,
+// which finds the library's ops (its arguments are library types) and this
+// helper alike. Prefixing the field with `hn::` would make our names
+// unreachable.
+template <class V>
+HWY_INLINE V satQ15(V a, V b)
+{
+	const hn::DFromV<V> d;
+	const V min16 = hn::Set(d, static_cast<int16_t>(-32768));
+	const auto both = hn::And(hn::Eq(a, min16), hn::Eq(b, min16));
+	return hn::IfThenElse(both, hn::Set(d, static_cast<int16_t>(32767)),
+						  hn::MulFixedPoint15(a, b));
+}
+
+// ── per-lane arithmetic and comparisons (the shared op list) ───────────────
+// The tag's lane type carries the *signedness the operation means*, which is
+// what lets one expression serve both `min_s` and `min_u`, or `lt_s` and
+// `lt_u`: the library's ops are type-driven, so the tag is the whole story.
+// A comparison stores `VecFromMask` of its result, because wasm wants an
+// all-ones/all-zeros mask per lane rather than a packed bitmask.
+// The field is called *unqualified*: ADL finds the library's ops because the
+// arguments are library vectors, and it also finds helpers of ours (see `satQ15`
+// above), which a `hn::` prefix would put out of reach. The two loads, by
+// contrast, are named explicitly — they are not the field's business.
+#define WASM_SIMD_OP_BIN(name, entry, T, expr, hwy) \
+	inline void name(const uint8_t* a, const uint8_t* b, uint8_t* out) { \
+		const hn::CappedTag<T, 16 / sizeof(T)> d; \
+		hn::StoreU(hwy(hn::LoadU(d, reinterpret_cast<const T*>(a)), \
+					   hn::LoadU(d, reinterpret_cast<const T*>(b))), \
+				   d, reinterpret_cast<T*>(out)); \
+	}
+#define WASM_SIMD_OP_CMP(name, entry, T, expr, hwy) \
+	inline void name(const uint8_t* a, const uint8_t* b, uint8_t* out) { \
+		const hn::CappedTag<T, 16 / sizeof(T)> d; \
+		hn::StoreU(hn::VecFromMask(d, hwy(hn::LoadU(d, reinterpret_cast<const T*>(a)), \
+										  hn::LoadU(d, reinterpret_cast<const T*>(b)))), \
+				   d, reinterpret_cast<T*>(out)); \
+	}
+#define WASM_SIMD_OP_UNARY(name, entry, T, expr, hwy) \
+	inline void name(const uint8_t* a, uint8_t* out) { \
+		const hn::CappedTag<T, 16 / sizeof(T)> d; \
+		const auto v = hn::LoadU(d, reinterpret_cast<const T*>(a)); \
+		hn::StoreU(hn::hwy, d, reinterpret_cast<T*>(out)); \
+	}
+// ── the op list's other shapes ─────────────────────────────────────────────
+// Same list, different shapes: a shift takes a scalar count, a reduction yields
+// an i32, and the width-changing forms carry two lane types — `din` describes
+// the operands, `dout` the result. The library op is an expression over
+// `v`/`va`/`vb` and those descriptors, which is how one line in the op list can
+// feed a multi-target TU.
+#define WASM_SIMD_OP_SHIFT(name, entry, T, expr, hwy) \
+	inline void name(const uint8_t* a, int32_t count, uint8_t* out) { \
+		const hn::CappedTag<T, 16 / sizeof(T)> d; \
+		const auto sh = static_cast<int>(static_cast<uint32_t>(count) & (8 * sizeof(T) - 1)); \
+		hn::StoreU(hn::hwy(hn::LoadU(d, reinterpret_cast<const T*>(a)), sh), \
+				   d, reinterpret_cast<T*>(out)); \
+	}
+
+// The reductions take their library expression *complete* rather than
+// `hn::`-prefixed, which is how every other shape takes it: `v128.any_true` is a
+// boolean, so its expression ends in a comparison, and `hn::(count != 0)` cannot
+// be written. The library's reductions all take a *mask*, hence the `Ne`/`Lt`
+// inside each expression — wasm asks "which lanes are non-zero" or "which lanes
+// are negative", and a mask is how the library answers.
+#define WASM_SIMD_OP_REDUCE_OR(name, entry, T, expr, hwy) \
+	inline int32_t name(const uint8_t* a) { \
+		const hn::CappedTag<T, 16 / sizeof(T)> d; \
+		const auto v = hn::LoadU(d, reinterpret_cast<const T*>(a)); \
+		return static_cast<int32_t>(hwy); \
+	}
+#define WASM_SIMD_OP_REDUCE_AND(name, entry, T, expr, hwy) WASM_SIMD_OP_REDUCE_OR(name, entry, T, expr, hwy)
+
+#define WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy) \
+	inline void name(const uint8_t* a, uint8_t* out) { \
+		const hn::CappedTag<TIn, 16 / sizeof(TIn)> din; \
+		const hn::CappedTag<TOut, 16 / sizeof(TOut)> dout; \
+		const auto v = hn::LoadU(din, reinterpret_cast<const TIn*>(a)); \
+		hn::StoreU(hn::hwy, dout, reinterpret_cast<TOut*>(out)); \
+	}
+#define WASM_SIMD_OP_PAIRWISE(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
+
+#define WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy) \
+	inline void name(const uint8_t* a, const uint8_t* b, uint8_t* out) { \
+		const hn::CappedTag<TIn, 16 / sizeof(TIn)> din; \
+		const hn::CappedTag<TOut, 16 / sizeof(TOut)> dout; \
+		const auto va = hn::LoadU(din, reinterpret_cast<const TIn*>(a)); \
+		const auto vb = hn::LoadU(din, reinterpret_cast<const TIn*>(b)); \
+		hn::StoreU(hn::hwy, dout, reinterpret_cast<TOut*>(out)); \
+	}
+#define WASM_SIMD_OP_PAIRWISE2(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy)
+#define WASM_SIMD_OP_NARROW(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy)
+
+#include "wasm_simd_ops.inc"
+#undef WASM_SIMD_OP_BIN
+#undef WASM_SIMD_OP_CMP
+#undef WASM_SIMD_OP_UNARY
+#undef WASM_SIMD_OP_SHIFT
+#undef WASM_SIMD_OP_REDUCE_OR
+#undef WASM_SIMD_OP_REDUCE_AND
+#undef WASM_SIMD_OP_WIDEN1
+#undef WASM_SIMD_OP_PAIRWISE
+#undef WASM_SIMD_OP_WIDEN2
+#undef WASM_SIMD_OP_PAIRWISE2
+#undef WASM_SIMD_OP_NARROW
+
 }  // namespace HWY_NAMESPACE
 }  // namespace WASM
 HWY_AFTER_NAMESPACE();

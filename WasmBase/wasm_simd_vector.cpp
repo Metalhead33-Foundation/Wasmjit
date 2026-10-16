@@ -166,6 +166,64 @@ extern "C" void wasm_i8x16_swizzle(const void* a, const void* b, void* out)
 									   static_cast<const uint8_t*>(b), static_cast<uint8_t*>(out));
 }
 
+// ── per-lane arithmetic and comparisons (the shared op list) ───────────────
+// Each op gets its own dispatch table, so the entry point is one indirect call.
+// The comparison and binary shapes have the same C signature; only the unary
+// shape differs.
+#define WASM_SIMD_OP_BIN(name, entry, T, expr, hwy) \
+	HWY_EXPORT(name); \
+	extern "C" void wasm_##entry(const void* a, const void* b, void* out) { \
+		HWY_DYNAMIC_DISPATCH(name)(static_cast<const uint8_t*>(a), \
+								   static_cast<const uint8_t*>(b), static_cast<uint8_t*>(out)); \
+	}
+#define WASM_SIMD_OP_CMP(name, entry, T, expr, hwy) WASM_SIMD_OP_BIN(name, entry, T, expr, hwy)
+#define WASM_SIMD_OP_UNARY(name, entry, T, expr, hwy) \
+	HWY_EXPORT(name); \
+	extern "C" void wasm_##entry(const void* a, void* out) { \
+		HWY_DYNAMIC_DISPATCH(name)(static_cast<const uint8_t*>(a), static_cast<uint8_t*>(out)); \
+	}
+// The op list's other shapes: three more C signatures. The shift takes its count
+// as a second argument, the reductions *return* their i32 instead of writing to
+// an out-parameter, and the width-changing forms are the plain unary and binary
+// shapes again — the only difference is which descriptor the library call uses.
+#define WASM_SIMD_OP_SHIFT(name, entry, T, expr, hwy) \
+	HWY_EXPORT(name); \
+	extern "C" void wasm_##entry(const void* a, int32_t count, void* out) { \
+		HWY_DYNAMIC_DISPATCH(name)(static_cast<const uint8_t*>(a), count, static_cast<uint8_t*>(out)); \
+	}
+#define WASM_SIMD_OP_REDUCE_OR(name, entry, T, expr, hwy) \
+	HWY_EXPORT(name); \
+	extern "C" int32_t wasm_##entry(const void* a) { \
+		return HWY_DYNAMIC_DISPATCH(name)(static_cast<const uint8_t*>(a)); \
+	}
+#define WASM_SIMD_OP_REDUCE_AND(name, entry, T, expr, hwy) WASM_SIMD_OP_REDUCE_OR(name, entry, T, expr, hwy)
+#define WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy) \
+	HWY_EXPORT(name); \
+	extern "C" void wasm_##entry(const void* a, void* out) { \
+		HWY_DYNAMIC_DISPATCH(name)(static_cast<const uint8_t*>(a), static_cast<uint8_t*>(out)); \
+	}
+#define WASM_SIMD_OP_PAIRWISE(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
+#define WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy) \
+	HWY_EXPORT(name); \
+	extern "C" void wasm_##entry(const void* a, const void* b, void* out) { \
+		HWY_DYNAMIC_DISPATCH(name)(static_cast<const uint8_t*>(a), \
+								   static_cast<const uint8_t*>(b), static_cast<uint8_t*>(out)); \
+	}
+#define WASM_SIMD_OP_PAIRWISE2(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy)
+#define WASM_SIMD_OP_NARROW(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy)
+#include "wasm_simd_ops.inc"
+#undef WASM_SIMD_OP_BIN
+#undef WASM_SIMD_OP_CMP
+#undef WASM_SIMD_OP_UNARY
+#undef WASM_SIMD_OP_SHIFT
+#undef WASM_SIMD_OP_REDUCE_OR
+#undef WASM_SIMD_OP_REDUCE_AND
+#undef WASM_SIMD_OP_WIDEN1
+#undef WASM_SIMD_OP_PAIRWISE
+#undef WASM_SIMD_OP_WIDEN2
+#undef WASM_SIMD_OP_PAIRWISE2
+#undef WASM_SIMD_OP_NARROW
+
 // ── Entry points whose optimal lowering *is* a byte move ───────────────────
 // Here a vector path would move the same bytes in the same order — one lane, or
 // a widening copy — so these delegate to the reference instead of duplicating

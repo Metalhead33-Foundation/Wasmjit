@@ -1891,6 +1891,350 @@ TEST_CASE("simd: shuffle and swizzle run through the JIT")
 	REQUIRE(WASM::callCallable<int32_t>(i32Export("swizzle_u8_6")) == 3);   // a[2]
 }
 
+TEST_CASE("simd helpers: per-lane arithmetic and comparisons (differential)")
+{
+	// Driven by the same op list the implementation is generated from
+	// (`WasmBase/wasm_simd_ops.inc`), so an op cannot be added to the engine
+	// without appearing here — the §9 coverage gate, enforced by construction.
+	//
+	// The inputs deliberately include values with the high bit set, because that
+	// is where a signedness mix-up shows: `min_u(0x80, 0x01)` and
+	// `min_s(0x80, 0x01)` disagree, and so do the order comparisons, while for
+	// small positive values both interpretations agree and the bug would hide.
+	using BinaryEntry = void (*)(const void*, const void*, void*);
+	using BinaryRef = void (*)(const uint8_t*, const uint8_t*, uint8_t*);
+	using UnaryEntry = void (*)(const void*, void*);
+	using UnaryRef = void (*)(const uint8_t*, uint8_t*);
+	using ShiftEntry = void (*)(const void*, int32_t, void*);
+	using ShiftRef = void (*)(const uint8_t*, int32_t, uint8_t*);
+	using ReduceEntry = int32_t (*)(const void*);
+	using ReduceRef = int32_t (*)(const uint8_t*);
+
+	struct BinaryOp { const char* name; BinaryEntry entry; BinaryRef ref; };
+	struct UnaryOp { const char* name; UnaryEntry entry; UnaryRef ref; };
+	struct ShiftOp { const char* name; ShiftEntry entry; ShiftRef ref; };
+	struct ReduceOp { const char* name; ReduceEntry entry; ReduceRef ref; };
+
+	// Four tables, one per C signature. The list's shapes are aliased onto the
+	// signature they share, so every op in the list lands in exactly one table:
+	// a new op is covered the moment it is listed, and an op cannot be listed
+	// without being covered.
+#define WASM_SIMD_OP_BIN(name, entry, T, expr, hwy) {#entry, &wasm_##entry, &WASM::simd_scalar::name},
+#define WASM_SIMD_OP_CMP(name, entry, T, expr, hwy) WASM_SIMD_OP_BIN(name, entry, T, expr, hwy)
+#define WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_BIN(name, entry, TOut, expr, hwy)
+#define WASM_SIMD_OP_PAIRWISE2(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_BIN(name, entry, TOut, expr, hwy)
+#define WASM_SIMD_OP_NARROW(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_BIN(name, entry, TOut, expr, hwy)
+	static const BinaryOp kBinaryOps[] = {
+#include "../WasmBase/wasm_simd_ops.inc"
+	};
+#undef WASM_SIMD_OP_BIN
+#undef WASM_SIMD_OP_CMP
+#undef WASM_SIMD_OP_WIDEN2
+#undef WASM_SIMD_OP_PAIRWISE2
+#undef WASM_SIMD_OP_NARROW
+
+#define WASM_SIMD_OP_UNARY(name, entry, T, expr, hwy) {#entry, &wasm_##entry, &WASM::simd_scalar::name},
+#define WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_UNARY(name, entry, TOut, expr, hwy)
+#define WASM_SIMD_OP_PAIRWISE(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_UNARY(name, entry, TOut, expr, hwy)
+	static const UnaryOp kUnaryOps[] = {
+#include "../WasmBase/wasm_simd_ops.inc"
+	};
+#undef WASM_SIMD_OP_UNARY
+#undef WASM_SIMD_OP_WIDEN1
+#undef WASM_SIMD_OP_PAIRWISE
+
+#define WASM_SIMD_OP_SHIFT(name, entry, T, expr, hwy) {#entry, &wasm_##entry, &WASM::simd_scalar::name},
+	static const ShiftOp kShiftOps[] = {
+#include "../WasmBase/wasm_simd_ops.inc"
+	};
+#undef WASM_SIMD_OP_SHIFT
+
+#define WASM_SIMD_OP_REDUCE_OR(name, entry, T, expr, hwy) {#entry, &wasm_##entry, &WASM::simd_scalar::name},
+#define WASM_SIMD_OP_REDUCE_AND(name, entry, T, expr, hwy) WASM_SIMD_OP_REDUCE_OR(name, entry, T, expr, hwy)
+	static const ReduceOp kReduceOps[] = {
+#include "../WasmBase/wasm_simd_ops.inc"
+	};
+#undef WASM_SIMD_OP_REDUCE_OR
+#undef WASM_SIMD_OP_REDUCE_AND
+
+	REQUIRE(sizeof(kBinaryOps) / sizeof(kBinaryOps[0]) > 0);
+	REQUIRE(sizeof(kUnaryOps) / sizeof(kUnaryOps[0]) > 0);
+	REQUIRE(sizeof(kShiftOps) / sizeof(kShiftOps[0]) > 0);
+	REQUIRE(sizeof(kReduceOps) / sizeof(kReduceOps[0]) > 0);
+
+	std::array<uint8_t, 16> a{};
+	std::array<uint8_t, 16> b{};
+	std::array<uint8_t, 16> ref{};
+	std::array<uint8_t, 16> got{};
+	static const uint8_t kInteresting[8] = {0x00, 0x01, 0x7F, 0x80, 0xFF, 0x81, 0x40, 0xC0};
+	// Shift counts beyond the lane width are the point here: wasm masks them, so a
+	// lane sees `count mod lane-bits`, and 8/16/32/64 are the first wrong answers.
+	static const int32_t kCounts[10] = {0, 1, 7, 8, 15, 16, 31, 33, 63, 255};
+
+	for (uint32_t seed = 0; seed < 8; ++seed) {
+		for (size_t i = 0; i < a.size(); ++i) {
+			a[i] = kInteresting[i % 8];
+			b[i] = kInteresting[(i + 3 + seed) % 8];
+		}
+		for (const BinaryOp& op : kBinaryOps) {
+			INFO("binary op: " << op.name);
+			op.ref(a.data(), b.data(), ref.data());
+			op.entry(a.data(), b.data(), got.data());
+			REQUIRE(ref == got);
+		}
+		for (const UnaryOp& op : kUnaryOps) {
+			INFO("unary op: " << op.name);
+			op.ref(a.data(), ref.data());
+			op.entry(a.data(), got.data());
+			REQUIRE(ref == got);
+		}
+		// The reductions return their i32 rather than filling a vector, and the
+		// shifts take their count as a second argument.
+		for (const ReduceOp& op : kReduceOps) {
+			INFO("reduce op: " << op.name << " (seed " << seed << ')');
+			REQUIRE(op.ref(a.data()) == op.entry(a.data()));
+			REQUIRE(op.ref(b.data()) == op.entry(b.data()));
+		}
+		for (const ShiftOp& op : kShiftOps) {
+			for (int32_t count : kCounts) {
+				INFO("shift op: " << op.name << " count " << count);
+				op.ref(a.data(), count, ref.data());
+				op.entry(a.data(), count, got.data());
+				REQUIRE(ref == got);
+			}
+		}
+	}
+}
+
+TEST_CASE("simd helpers: signedness corners are pinned")
+{
+	// Golden vectors for what a differential *cannot* catch: if both layers
+	// agreed on the wrong signedness (or on the wrong corner behaviour), the
+	// test above would pass. These pin the values against the spec instead
+	// (docs/SIMD_LIBJIT.md §9, and R6 in §11).
+	//
+	// -128 as a signed i8 is 0x80; as an unsigned byte it is 128.
+	std::array<uint8_t, 16> hi{};
+	std::array<uint8_t, 16> lo{};
+	std::array<uint8_t, 16> out{};
+	hi.fill(0x80);
+	lo.fill(0x01);
+
+	// min/max: unsigned says 0x80 is large, signed says it is small.
+	wasm_i8x16_min_u(hi.data(), lo.data(), out.data());
+	REQUIRE(out[0] == 0x01);
+	wasm_i8x16_min_s(hi.data(), lo.data(), out.data());
+	REQUIRE(out[0] == 0x80);
+	wasm_i8x16_max_u(hi.data(), lo.data(), out.data());
+	REQUIRE(out[0] == 0x80);
+	wasm_i8x16_max_s(hi.data(), lo.data(), out.data());
+	REQUIRE(out[0] == 0x01);
+
+	// Order comparisons: the same distinction, as a mask.
+	wasm_i8x16_lt_u(hi.data(), lo.data(), out.data());
+	REQUIRE(out[0] == 0x00);          // 128 < 1 is false
+	wasm_i8x16_lt_s(hi.data(), lo.data(), out.data());
+	REQUIRE(out[0] == 0xFF);          // -128 < 1 is true
+	wasm_i8x16_gt_u(hi.data(), lo.data(), out.data());
+	REQUIRE(out[0] == 0xFF);
+	wasm_i8x16_gt_s(hi.data(), lo.data(), out.data());
+	REQUIRE(out[0] == 0x00);
+
+	// abs and neg have no positive counterpart for the most negative value, and
+	// the spec defines both as returning that value unchanged.
+	wasm_i8x16_abs(hi.data(), out.data());
+	REQUIRE(out[0] == 0x80);
+	wasm_i8x16_neg(hi.data(), out.data());
+	REQUIRE(out[0] == 0x80);
+	wasm_i8x16_neg(lo.data(), out.data());
+	REQUIRE(out[0] == 0xFF);          // -1
+
+	// i64x2 has no unsigned order comparison; its `lt_s` must be signed.
+	std::array<uint8_t, 16> neg64{};
+	std::array<uint8_t, 16> one64{};
+	for (unsigned i = 0; i < 8; ++i)
+		neg64[i] = 0xFF;               // -1 as i64 lane 0
+	one64[0] = 0x01;
+	wasm_i64x2_lt_s(neg64.data(), one64.data(), out.data());
+	REQUIRE(out[0] == 0xFF);
+	REQUIRE(out[7] == 0xFF);           // the whole lane is masked
+}
+
+TEST_CASE("simd helpers: the saturating, rounding and count corners")
+{
+	// A differential test proves the two layers agree; it cannot prove they agree
+	// on the *spec*. These pin the values the spec names, at the inputs where a
+	// plausible-but-wrong implementation differs — the same reasoning as the
+	// signedness goldens above (R6 in docs/SIMD_LIBJIT.md §11).
+	std::array<uint8_t, 16> a{};
+	std::array<uint8_t, 16> b{};
+	std::array<uint8_t, 16> out{};
+
+	// Saturating add/sub, both signednesses. Every one of these differs from the
+	// wrapping answer, which is what makes them worth writing down.
+	a.fill(0x64);                 // 100
+	b.fill(0x64);
+	wasm_i8x16_add_sat_s(a.data(), b.data(), out.data());
+	REQUIRE(out[0] == 0x7F);      // 200 saturates to 127
+	wasm_i8x16_add_sat_u(a.data(), b.data(), out.data());
+	REQUIRE(out[0] == 0xC8);      // ...but 200 fits an unsigned byte
+
+	a.fill(0x9C);                 // -100 as i8
+	wasm_i8x16_add_sat_s(a.data(), a.data(), out.data());
+	REQUIRE(out[0] == 0x80);      // -200 saturates to -128
+	wasm_i8x16_add_sat_u(a.data(), a.data(), out.data());
+	REQUIRE(out[0] == 0xFF);      // 156 + 156 saturates to 255
+
+	a.fill(0x80);                 // -128 as i8
+	b.fill(0x01);
+	wasm_i8x16_sub_sat_s(a.data(), b.data(), out.data());
+	REQUIRE(out[0] == 0x80);      // -128 - 1 stays -128
+	wasm_i8x16_sub_sat_u(b.data(), a.data(), out.data());
+	REQUIRE(out[0] == 0x00);      // 1 - 128 saturates to 0
+
+	// `avgr_u` rounds up, and must not overflow on the way: 255 + 255 + 1.
+	a.fill(0xFF);
+	wasm_i8x16_avgr_u(a.data(), a.data(), out.data());
+	REQUIRE(out[0] == 0xFF);
+	a.fill(0x01);
+	b.fill(0x02);
+	wasm_i8x16_avgr_u(a.data(), b.data(), out.data());
+	REQUIRE(out[0] == 0x02);      // (1 + 2 + 1) / 2 = 2, the rounding-up half
+
+	// `popcnt` counts within the byte, not within the lane's bytes.
+	std::array<uint8_t, 16> bits{};
+	bits[0] = 0xFF; bits[1] = 0x00; bits[2] = 0x0F; bits[3] = 0x80;
+	wasm_i8x16_popcnt(bits.data(), out.data());
+	REQUIRE(out[0] == 8);
+	REQUIRE(out[1] == 0);
+	REQUIRE(out[2] == 4);
+	REQUIRE(out[3] == 1);
+
+	// `q15mulr_sat_s`, the hazard Y5 corner. `(-32768 * -32768 + 0x4000) >> 15` is
+	// 32768 — one past the maximum, the only product that needs the clamp — and
+	// the second case lands exactly on a half, which the *arithmetic* shift rounds
+	// down. Both values here were cross-checked against an independent engine
+	// rather than hand-computed (R6 in docs/SIMD_LIBJIT.md §11: the first drafts
+	// of the expectations were wrong, and the implementation was not).
+	std::array<uint8_t, 16> min16{};
+	std::array<uint8_t, 16> max16{};
+	std::array<uint8_t, 16> quarter16{};
+	for (unsigned i = 0; i < 16; i += 2) {
+		min16[i] = 0x00; min16[i + 1] = 0x80;      // -32768
+		max16[i] = 0xFF; max16[i + 1] = 0x7F;      // 32767
+		quarter16[i] = 0x00; quarter16[i + 1] = 0x40;  // 16384
+	}
+	wasm_i16x8_q15mulr_sat_s(min16.data(), min16.data(), out.data());
+	REQUIRE(out[0] == 0xFF);
+	REQUIRE(out[1] == 0x7F);      // saturated to 32767, not wrapped to -32768
+	wasm_i16x8_q15mulr_sat_s(min16.data(), max16.data(), out.data());
+	REQUIRE(out[0] == 0x01);
+	REQUIRE(out[1] == 0x80);      // -32767: the shift rounds the half down
+	wasm_i16x8_q15mulr_sat_s(quarter16.data(), quarter16.data(), out.data());
+	REQUIRE(out[0] == 0x00);
+	REQUIRE(out[1] == 0x20);      // 16384 * 16384 >> 15 = 8192
+}
+
+TEST_CASE("simd helpers: shift masking, narrowing layout and the widening family")
+{
+	std::array<uint8_t, 16> a{};
+	std::array<uint8_t, 16> b{};
+	std::array<uint8_t, 16> out{};
+
+	// wasm takes a shift count modulo the lane width, so a lane asked for 8 shifts
+	// by 0 in an i8 vector, 32 by 0 in an i32 one. Both layers masking identically
+	// would agree while being wrong, so the rule itself is pinned here.
+	for (unsigned i = 0; i < 16; ++i)
+		a[i] = static_cast<uint8_t>(i + 1);
+	wasm_i8x16_shl(a.data(), 8, out.data());
+	REQUIRE(out == a);                 // 8 mod 8 == 0
+	wasm_i8x16_shl(a.data(), 9, out.data());
+	REQUIRE(out[0] == 0x02);           // 9 mod 8 == 1
+	wasm_i32x4_shl(a.data(), 32, out.data());
+	REQUIRE(out == a);
+	wasm_i64x2_shr_u(a.data(), 64, out.data());
+	REQUIRE(out == a);
+
+	// `_s` keeps the sign, `_u` brings zeros in: one input, two answers.
+	std::array<uint8_t, 16> neg{};
+	neg.fill(0x80);                    // every i8 lane is -128
+	wasm_i8x16_shr_s(neg.data(), 1, out.data());
+	REQUIRE(out[0] == 0xC0);           // -64
+	wasm_i8x16_shr_u(neg.data(), 1, out.data());
+	REQUIRE(out[0] == 0x40);           // 128 >> 1
+
+	// `narrow` packs `a`'s lanes *below* `b`'s, and clamps each. The order is
+	// symmetric enough that a differential test cannot see it, so both halves are
+	// made distinguishable and every clamp direction is checked.
+	std::array<uint8_t, 16> wideA{};
+	std::array<uint8_t, 16> wideB{};
+	for (unsigned i = 0; i < 16; i += 2) {
+		wideA[i] = 0x2C; wideA[i + 1] = 0x01;   // 300 as i16
+		wideB[i] = 0xD4; wideB[i + 1] = 0xFE;   // -300 as i16
+	}
+	wasm_i8x16_narrow_i16x8_s(wideA.data(), wideB.data(), out.data());
+	REQUIRE(out[0] == 0x7F);           // 300 clamps to 127
+	REQUIRE(out[7] == 0x7F);
+	REQUIRE(out[8] == 0x80);           // -300 clamps to -128, in the upper half
+	REQUIRE(out[15] == 0x80);
+	wasm_i8x16_narrow_i16x8_u(wideA.data(), wideB.data(), out.data());
+	REQUIRE(out[0] == 0xFF);           // 300 clamps to 255
+	REQUIRE(out[8] == 0x00);           // -300 clamps to 0
+
+	// `bitmask` is each lane's *sign* bit, lane 0 landing in bit 0 — not the
+	// low-order bits, and not reversed.
+	std::array<uint8_t, 16> signs{};
+	signs[0] = 0x80;
+	signs[15] = 0x80;
+	REQUIRE(wasm_i8x16_bitmask(signs.data()) == 0x8001);
+	signs.fill(0x00);
+	signs[7] = 0x80;
+	REQUIRE(wasm_i8x16_bitmask(signs.data()) == 0x0080);
+	std::array<uint8_t, 16> lane1{};
+	lane1[15] = 0x80;                  // the sign bit of i64x2 lane 1
+	REQUIRE(wasm_i64x2_bitmask(lane1.data()) == 0x2);
+
+	// The reductions are 0/1 — not a lane count — at both extremes.
+	std::array<uint8_t, 16> z{};
+	std::array<uint8_t, 16> ones1{};
+	ones1.fill(0x01);
+	REQUIRE(wasm_i8x16_all_true(ones1.data()) == 1);
+	REQUIRE(wasm_i8x16_all_true(z.data()) == 0);
+	REQUIRE(wasm_v128_any_true(z.data()) == 0);
+	REQUIRE(wasm_v128_any_true(ones1.data()) == 1);
+	z[15] = 0x01;                      // a single non-zero byte, in the last lane
+	REQUIRE(wasm_v128_any_true(z.data()) == 1);
+	REQUIRE(wasm_i8x16_all_true(z.data()) == 0);
+
+	// The widening family: products that only fit because the result is wider,
+	// and the one dot-product sum that wasm specifies as *wrapping*.
+	std::array<uint8_t, 16> m128{};
+	m128.fill(0x80);                   // every i8 lane is -128
+	wasm_i16x8_extmul_low_i8x16_s(m128.data(), m128.data(), out.data());
+	REQUIRE(out[0] == 0x00);
+	REQUIRE(out[1] == 0x40);           // (-128) * (-128) = 16384
+
+	std::array<uint8_t, 16> allF{};
+	allF.fill(0xFF);                   // every u32 lane is 0xFFFFFFFF
+	wasm_i64x2_extmul_low_i32x4_u(allF.data(), allF.data(), out.data());
+	REQUIRE(out[0] == 0x01);           // 0xFFFFFFFE00000001, little-endian
+	REQUIRE(out[4] == 0xFE);
+	REQUIRE(out[7] == 0xFF);
+
+	wasm_i16x8_extadd_pairwise_i8x16_s(m128.data(), out.data());
+	REQUIRE(out[0] == 0x00);
+	REQUIRE(out[1] == 0xFF);           // -128 + -128 = -256
+
+	std::array<uint8_t, 16> min16{};
+	for (unsigned i = 0; i < 16; i += 2) {
+		min16[i] = 0x00;
+		min16[i + 1] = 0x80;           // every i16 lane is -32768
+	}
+	wasm_i32x4_dot_i16x8_s(min16.data(), min16.data(), out.data());
+	REQUIRE(out[0] == 0x00);
+	REQUIRE(out[3] == 0x80);           // 2 * 2^30 wraps to 0x80000000
+}
+
 TEST_CASE("simd: memory loads and stores run through the JIT")
 {
 	// T2: the memory ops through decoding, the real bounds-checked address path
@@ -1980,6 +2324,109 @@ TEST_CASE("simd: bitwise ops run through the JIT")
 
 	// A two-op chain, so an intermediate really crosses a slot boundary.
 	REQUIRE(WASM::callCallable<int32_t>(i32Export("chain_lane0")) == static_cast<int32_t>(0xFFF0FFF0u));
+}
+
+TEST_CASE("simd: integer arithmetic and comparisons run through the JIT")
+{
+	// T2 (docs/SIMD_LIBJIT.md §9): the L3 op set reached through decoding, the
+	// operand stack, the slot bank, the scalar shift-count path and the
+	// runtime-dispatched helpers. The reductions are the cheapest coverage to
+	// grow, because they *produce* the i32 the harness can observe: no `v128`
+	// marshalling is needed (gap S7).
+	//
+	// Every expectation below was checked against an independent engine before it
+	// was written down — this project has now had its hand-computed expectations
+	// corrected three times, while the implementation was right each time (R6).
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("simd_arith_i", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	const auto i32Export = [&instance](const char* name) {
+		auto fn = instance.exportedFunction(name);
+		REQUIRE(fn.has_value());
+		return *fn;
+	};
+
+	// Comparisons: `-128` against `1` is where the signed and unsigned answers part.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("lt_s_lane0")) == 0xFF);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("lt_u_lane0")) == 0x00);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("gt_s_lane0")) == 0x00);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("gt_u_lane0")) == 0xFF);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("le_s_lane0")) == 0xFF);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("ge_u_lane0")) == 0xFF);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("eq_i32_lane0")) == -1);   // all ones
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("ne_i32_lane0")) == -1);
+	REQUIRE(WASM::callCallable<int64_t>(i32Export("i64_lt_s_lane0")) == -1);
+
+	// min/max, the same distinction.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("min_s_lane0")) == 0x80);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("min_u_lane0")) == 0x01);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("max_s_lane0")) == 0x01);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("max_u_lane0")) == 0x80);
+
+	// Wrapping arithmetic, and the two values with no positive counterpart.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("add_wrap_lane0")) == -128);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("sub_wrap_lane0")) == -1);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("neg_min_lane0")) == 0x80);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("abs_min_lane0")) == 0x80);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("mul_i32_lane0")) == -21);
+	REQUIRE(WASM::callCallable<int64_t>(i32Export("add_i64_lane0")) == -1);
+
+	// Shifts whose counts must be taken modulo the lane width: 33 for i32, 8 for
+	// i8, 64 for i64. Each would be an out-of-range shift if the count reached the
+	// helper unmasked — and the machine instruction would silently alias it.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("shl_masked_lane0")) == 14);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("shl_i8_masked_lane0")) == 1);
+	REQUIRE(WASM::callCallable<int64_t>(i32Export("shr_u_i64_masked_lane0")) == 1);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("shr_s_neg_lane0")) == -64);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("shr_u_neg_lane0")) == 0x40);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("shl_i16_lane7")) == 0x8000);
+
+	// Saturating arithmetic and the rounding average.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("add_sat_s_lane0")) == 127);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("add_sat_u_lane0")) == 0xFF);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("sub_sat_s_lane0")) == -128);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("sub_sat_u_lane0")) == 0);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("avgr_u_lane0")) == 2);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("avgr_u_sat_lane0")) == 0xFF);
+
+	// popcnt, and `q15mulr_sat_s`: the saturated and the rounding corner — the two
+	// values hazard Y5 is about.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("popcnt_full_lane0")) == 8);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("popcnt_nibble_lane0")) == 4);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("q15_sat_lane0")) == 32767);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("q15_round_lane0")) == -32767);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("q15_quarter_lane0")) == 8192);
+
+	// The reductions: 0/1, and the bitmask's sign bit per lane.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("all_true_ones")) == 1);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("all_true_zero")) == 0);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("all_true_i16")) == 1);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("all_true_i64")) == 1);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("any_true_zero")) == 0);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("any_true_last_byte")) == 1);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("bitmask_lane0")) == 0x0001);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("bitmask_lane15")) == 0x8000);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("bitmask_i64_lane1")) == 0x2);
+
+	// The width-changing family. `1..16` makes a vector's halves tell each other
+	// apart, so a swapped `_low`/`_high` or a swapped `narrow` operand shows up.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("extend_low_lane0")) == 1);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("extend_high_lane0")) == 9);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("extmul_low_lane0")) == 1);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("extmul_high_lane0")) == 81);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("extmul_u_lane0")) == 16384);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("extadd_pairwise_lane0")) == 3);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("dot_wrap_lane0")) == INT32_MIN);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("narrow_s_lane0")) == 0x7F);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("narrow_s_lane8")) == 0x80);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("narrow_u_lane0")) == 0xFF);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("narrow_u_lane8")) == 0x00);
+
+	// A two-op chain, so an intermediate really crosses a slot boundary.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("chain_lane0")) == 127);
 }
 
 TEST_CASE("simd: v128.const, splat and lane ops run through the JIT")

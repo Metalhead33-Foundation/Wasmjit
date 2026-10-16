@@ -448,10 +448,17 @@ guide. Four layers, four jobs:
 
 ### T1 — the differential oracle
 
-Every `v128` helper (`WasmBase/wasm_simd_hwy.*`) has a twin scalar
+Every `v128` helper in `WasmBase/wasm_simd_vector.*` has a twin scalar
 implementation (`WasmBase/wasm_simd_scalar.*`) that shares no code with it. The
 Catch2 cases feed both the same inputs and compare **all 16 bytes**, plus a
 lane-by-lane comparison where lane position matters (narrow/widen/extmul).
+
+Two things make that coverage hold rather than merely claim to: the differential
+table is generated from the op list (`WasmBase/wasm_simd_ops.inc`, §6.5 of
+`SIMD_LIBJIT.md`), so an op cannot exist in the engine without being fed to it;
+and the cases a differential cannot judge — where both layers could agree on a
+wrong answer — are covered by golden vectors with values that the implementation
+does not get to define.
 
 Input classes the cases must cover: seeded random vectors; all-`0x00`,
 all-`0xFF`, alternating patterns; per-lane `0`/`1`/`INT_MIN`/`INT_MAX`; float
@@ -491,19 +498,27 @@ Current modules:
 | `simd_bitwise.wat` | `v128.not/and/andnot/or/xor/bitselect`, with distinct lanes and golden values that pin which operand is complemented and which selects | `simd: bitwise ops run through the JIT` |
 | `simd_load_store.wat` | the 22 memory ops against a real linear memory: unaligned `v128.load`, widening loads, broadcasts, zero-extending loads, lane load/store (incl. the "only one lane is written" check) | `simd: memory loads and stores run through the JIT` |
 | `simd_shuffle.wat` | `i8x16.shuffle`'s two-operand mapping (Y4) and `i8x16.swizzle`'s `>= 16 → 0` rule (Y3), pinned at indices 16/127/128/255 | `simd: shuffle and swizzle run through the JIT` |
+| `simd_arith_i.wat` | the integer surface (SIMD-L3): comparisons in both signednesses, `min`/`max`, `add`/`sub`/`mul`, `neg`/`abs`, shifts with counts `≥` the lane width, saturating add/sub, `avgr_u`, `popcnt`, `q15mulr_sat_s`, the reductions `all_true`/`any_true`/`bitmask`, and the width-changing family (`extend`/`extmul` `_low` vs `_high`, `extadd_pairwise`, `dot`, `narrow`). 67 exports, every expected value cross-checked against an independent engine | `simd: integer arithmetic and comparisons run through the JIT` |
 
-Measured after SIMD-L2:
+Measured after SIMD-L3:
 
 ```bash
-./WasmJit 'simd*'      # 11 cases, 479 assertions, all passing
-./WasmJit              # 97 cases, 2016 assertions, all passing (91 / 1755 after SIMD-L1)
+./WasmJit 'simd*'      # 16 cases, 2659 assertions, all passing
+./WasmJit              # 102 cases, 4196 assertions, all passing (99 / 2567 after L3's first half)
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed
-one fails confusingly at load time:
+one fails confusingly at load time, and a wrong *expectation* is worse:
 
 ```bash
 wasm-tools validate --features all build/Desktop-Debug/Test/wasm_test_modules/<name>.wasm
+
+# and, to check what a module actually computes before its expectations are
+# written into C++ (docs/SIMD_LIBJIT.md §11 R8):
+wat2wasm --enable-all Test/wasm_wat/<name>.wat -o /tmp/<name>.wasm
+node -e "WebAssembly.instantiate(require('fs').readFileSync('/tmp/<name>.wasm'))\
+.then(({instance}) => { for (const k in instance.exports) \
+  if (typeof instance.exports[k] === 'function') console.log(k, instance.exports[k]()); })"
 ```
 
 ### T3 — the spec scripts
