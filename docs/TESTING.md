@@ -482,18 +482,28 @@ To add one:
 3. **Re-run qmake** — the WAT source list is built with `$$files()` at qmake
    time, so `make` alone will not notice the new file.
 
-Current modules (SIMD-L1):
+Current modules:
 
 | Module | Covers | Case |
 |---|---|---|
 | `simd_abi.wat` | `(param v128)(result v128)` round-trip, `v128` locals incl. reading one before `local.set`, a `v128` through a block, lane projections | `simd: a v128 parameter and result round-trip through the JIT` |
 | `simd_const_lane.wat` | `v128.const` byte order, `*.splat`, signed/unsigned `extract_lane`, `replace_lane` | `simd: v128.const, splat and lane ops run through the JIT` |
+| `simd_bitwise.wat` | `v128.not/and/andnot/or/xor/bitselect`, with distinct lanes and golden values that pin which operand is complemented and which selects | `simd: bitwise ops run through the JIT` |
+| `simd_load_store.wat` | the 22 memory ops against a real linear memory: unaligned `v128.load`, widening loads, broadcasts, zero-extending loads, lane load/store (incl. the "only one lane is written" check) | `simd: memory loads and stores run through the JIT` |
+| `simd_shuffle.wat` | `i8x16.shuffle`'s two-operand mapping (Y4) and `i8x16.swizzle`'s `>= 16 → 0` rule (Y3), pinned at indices 16/127/128/255 | `simd: shuffle and swizzle run through the JIT` |
 
-Measured on the SIMD-L1 build:
+Measured after SIMD-L2:
 
 ```bash
-./WasmJit 'simd*'      # 5 cases, 218 assertions, all passing
-./WasmJit              # 91 cases, 1755 assertions, all passing (86 / 1537 before SIMD-L1)
+./WasmJit 'simd*'      # 11 cases, 479 assertions, all passing
+./WasmJit              # 97 cases, 2016 assertions, all passing (91 / 1755 after SIMD-L1)
+```
+
+A new `.wat` module is also worth checking by hand before it is run — a malformed
+one fails confusingly at load time:
+
+```bash
+wasm-tools validate --features all build/Desktop-Debug/Test/wasm_test_modules/<name>.wasm
 ```
 
 ### T3 — the spec scripts

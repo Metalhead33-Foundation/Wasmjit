@@ -1586,6 +1586,402 @@ TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 	REQUIRE(WASM::callCallable<int32_t>(*zeroLane3) == 0);
 }
 
+TEST_CASE("simd helpers: bitwise ops agree with the scalar reference")
+{
+	// The first case where the two layers are genuinely different code: the
+	// entry points are compiled once per CPU target and dispatched at run time
+	// (`wasm_simd_vector.cpp`), the reference is a byte loop
+	// (`wasm_simd_scalar.cpp`). docs/SIMD_LIBJIT.md §9, T1.
+	std::array<uint8_t, 16> a{};
+	std::array<uint8_t, 16> b{};
+	std::array<uint8_t, 16> c{};
+	std::array<uint8_t, 16> ref{};
+	std::array<uint8_t, 16> got{};
+
+	for (uint32_t seed = 1; seed <= 16; ++seed) {
+		for (size_t i = 0; i < a.size(); ++i) {
+			a[i] = static_cast<uint8_t>((seed * 37u + i * 11u) & 0xFFu);
+			b[i] = static_cast<uint8_t>((seed * 53u + i * 7u) & 0xFFu);
+			c[i] = static_cast<uint8_t>((seed * 97u + i * 3u) & 0xFFu);
+		}
+
+		WASM::simd_scalar::notBits(a.data(), ref.data());
+		wasm_v128_not(a.data(), got.data());
+		REQUIRE(ref == got);
+
+		WASM::simd_scalar::andBits(a.data(), b.data(), ref.data());
+		wasm_v128_and(a.data(), b.data(), got.data());
+		REQUIRE(ref == got);
+
+		WASM::simd_scalar::andNotBits(a.data(), b.data(), ref.data());
+		wasm_v128_andnot(a.data(), b.data(), got.data());
+		REQUIRE(ref == got);
+
+		WASM::simd_scalar::orBits(a.data(), b.data(), ref.data());
+		wasm_v128_or(a.data(), b.data(), got.data());
+		REQUIRE(ref == got);
+
+		WASM::simd_scalar::xorBits(a.data(), b.data(), ref.data());
+		wasm_v128_xor(a.data(), b.data(), got.data());
+		REQUIRE(ref == got);
+
+		WASM::simd_scalar::bitselectBits(a.data(), b.data(), c.data(), ref.data());
+		wasm_v128_bitselect(a.data(), b.data(), c.data(), got.data());
+		REQUIRE(ref == got);
+	}
+
+	// Golden vectors, because two of these are silently swappable: `andnot`
+	// complements its *second* operand, and `bitselect` takes `c` as the
+	// selector. A randomized differential test would not catch a consistent
+	// operand swap in both implementations; these do.
+	std::array<uint8_t, 16> ones{};
+	std::array<uint8_t, 16> zeros{};
+	ones.fill(0xFF);
+	zeros.fill(0x00);
+	const std::array<uint8_t, 16> pattern = {0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F,
+											 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F};
+
+	wasm_v128_not(ones.data(), got.data());
+	REQUIRE(got == zeros);
+
+	wasm_v128_andnot(ones.data(), ones.data(), got.data());   // all ones & ~all ones
+	REQUIRE(got == zeros);
+	wasm_v128_andnot(ones.data(), zeros.data(), got.data());  // all ones & ~0
+	REQUIRE(got == ones);
+	wasm_v128_andnot(zeros.data(), ones.data(), got.data());  // 0 & ~all ones
+	REQUIRE(got == zeros);
+
+	wasm_v128_bitselect(ones.data(), zeros.data(), zeros.data(), got.data());  // c=0 -> b
+	REQUIRE(got == zeros);
+	wasm_v128_bitselect(ones.data(), zeros.data(), ones.data(), got.data());   // c=1 -> a
+	REQUIRE(got == ones);
+	wasm_v128_bitselect(zeros.data(), ones.data(), zeros.data(), got.data());  // c=0 -> b
+	REQUIRE(got == ones);
+
+	wasm_v128_and(ones.data(), pattern.data(), got.data());
+	REQUIRE(got == pattern);
+	wasm_v128_xor(pattern.data(), pattern.data(), got.data());
+	REQUIRE(got == zeros);
+	wasm_v128_or(zeros.data(), pattern.data(), got.data());
+	REQUIRE(got == pattern);
+}
+
+TEST_CASE("simd helpers: memory loads and stores")
+{
+	// The whole-vector moves and broadcasts are independently implemented, so
+	// this is a genuine differential; the byte-move ops delegate to the
+	// reference by design, so for those the golden vectors below carry the
+	// weight (docs/SIMD_LIBJIT.md §9).
+	std::array<uint8_t, 32> src{};
+	for (size_t i = 0; i < src.size(); ++i)
+		src[i] = static_cast<uint8_t>(0x80u + i * 7u);   // high bit set: sign matters
+	std::array<uint8_t, 16> base{};
+	for (size_t i = 0; i < base.size(); ++i)
+		base[i] = static_cast<uint8_t>(0xA0u + i);
+	std::array<uint8_t, 16> ref{};
+	std::array<uint8_t, 16> got{};
+
+	// v128.load / v128.store are plain 16-byte moves (golden).
+	wasm_v128_load(src.data(), got.data());
+	REQUIRE(std::equal(got.begin(), got.end(), src.begin()));
+	wasm_v128_store(got.data(), base.data());
+	REQUIRE(got == base);
+
+	// The widening loads: 8 bytes in, 16 out, sign or zero extended.
+	WASM::simd_scalar::load8x8S(src.data(), ref.data());
+	wasm_v128_load8x8_s(src.data(), got.data());
+	REQUIRE(ref == got);
+	WASM::simd_scalar::load8x8U(src.data(), ref.data());
+	wasm_v128_load8x8_u(src.data(), got.data());
+	REQUIRE(ref == got);
+	WASM::simd_scalar::load16x4S(src.data(), ref.data());
+	wasm_v128_load16x4_s(src.data(), got.data());
+	REQUIRE(ref == got);
+	WASM::simd_scalar::load16x4U(src.data(), ref.data());
+	wasm_v128_load16x4_u(src.data(), got.data());
+	REQUIRE(ref == got);
+	WASM::simd_scalar::load32x2S(src.data(), ref.data());
+	wasm_v128_load32x2_s(src.data(), got.data());
+	REQUIRE(ref == got);
+	WASM::simd_scalar::load32x2U(src.data(), ref.data());
+	wasm_v128_load32x2_u(src.data(), got.data());
+	REQUIRE(ref == got);
+
+	// Broadcasts and the zero-extending loads.
+	WASM::simd_scalar::load8Splat(src.data(), ref.data());
+	wasm_v128_load8_splat(src.data(), got.data());
+	REQUIRE(ref == got);
+	WASM::simd_scalar::load16Splat(src.data(), ref.data());
+	wasm_v128_load16_splat(src.data(), got.data());
+	REQUIRE(ref == got);
+	WASM::simd_scalar::load32Splat(src.data(), ref.data());
+	wasm_v128_load32_splat(src.data(), got.data());
+	REQUIRE(ref == got);
+	WASM::simd_scalar::load64Splat(src.data(), ref.data());
+	wasm_v128_load64_splat(src.data(), got.data());
+	REQUIRE(ref == got);
+	WASM::simd_scalar::load32Zero(src.data(), ref.data());
+	wasm_v128_load32_zero(src.data(), got.data());
+	REQUIRE(ref == got);
+	WASM::simd_scalar::load64Zero(src.data(), ref.data());
+	wasm_v128_load64_zero(src.data(), got.data());
+	REQUIRE(ref == got);
+
+	// Lane loads: the named lane comes from memory, every other lane from the
+	// vector operand.
+	WASM::simd_scalar::load8Lane(src.data() + 3, base.data(), 5, ref.data());
+	wasm_v128_load8_lane(src.data() + 3, base.data(), 5, got.data());
+	REQUIRE(ref == got);
+	WASM::simd_scalar::load16Lane(src.data() + 6, base.data(), 3, ref.data());
+	wasm_v128_load16_lane(src.data() + 6, base.data(), 3, got.data());
+	REQUIRE(ref == got);
+	WASM::simd_scalar::load32Lane(src.data() + 8, base.data(), 2, ref.data());
+	wasm_v128_load32_lane(src.data() + 8, base.data(), 2, got.data());
+	REQUIRE(ref == got);
+	WASM::simd_scalar::load64Lane(src.data() + 16, base.data(), 1, ref.data());
+	wasm_v128_load64_lane(src.data() + 16, base.data(), 1, got.data());
+	REQUIRE(ref == got);
+
+	// Lane stores: exactly one lane leaves the vector, and nothing beyond it is
+	// touched — a helper that wrote all 16 bytes would corrupt the memory a
+	// real program is using.
+	std::array<uint8_t, 16> dstRef{};
+	std::array<uint8_t, 16> dstGot{};
+	dstRef.fill(0xCC);
+	dstGot.fill(0xCC);
+	WASM::simd_scalar::store8Lane(dstRef.data(), base.data(), 7);
+	wasm_v128_store8_lane(dstGot.data(), base.data(), 7);
+	REQUIRE(dstRef == dstGot);
+	REQUIRE(dstGot[0] == base[7]);
+	REQUIRE(dstGot[1] == 0xCC);
+
+	dstRef.fill(0xCC);
+	dstGot.fill(0xCC);
+	WASM::simd_scalar::store16Lane(dstRef.data(), base.data(), 3);
+	wasm_v128_store16_lane(dstGot.data(), base.data(), 3);
+	REQUIRE(dstRef == dstGot);
+	REQUIRE(dstGot[2] == 0xCC);
+
+	dstRef.fill(0xCC);
+	dstGot.fill(0xCC);
+	WASM::simd_scalar::store32Lane(dstRef.data(), base.data(), 2);
+	wasm_v128_store32_lane(dstGot.data(), base.data(), 2);
+	REQUIRE(dstRef == dstGot);
+	REQUIRE(dstGot[4] == 0xCC);
+
+	dstRef.fill(0xCC);
+	dstGot.fill(0xCC);
+	WASM::simd_scalar::store64Lane(dstRef.data(), base.data(), 1);
+	wasm_v128_store64_lane(dstGot.data(), base.data(), 1);
+	REQUIRE(dstRef == dstGot);
+	REQUIRE(dstGot[8] == 0xCC);
+
+	// Golden vectors pin the parts a differential cannot: which bytes are
+	// widened, and where the zero-extending forms stop.
+	const uint8_t bytes[8] = {0x80, 0xFF, 0x01, 0x7F, 0x00, 0xAA, 0x55, 0xFE};
+	wasm_v128_load8x8_s(bytes, got.data());
+	REQUIRE(static_cast<int16_t>(WASM::simd_scalar::laneU16(got.data(), 0)) == -128);
+	REQUIRE(static_cast<int16_t>(WASM::simd_scalar::laneU16(got.data(), 1)) == -1);
+	REQUIRE(static_cast<int16_t>(WASM::simd_scalar::laneU16(got.data(), 7)) == -2);
+	wasm_v128_load8x8_u(bytes, got.data());
+	REQUIRE(WASM::simd_scalar::laneU16(got.data(), 0) == 128);
+	REQUIRE(WASM::simd_scalar::laneU16(got.data(), 1) == 255);
+
+	wasm_v128_load32_zero(bytes, got.data());
+	for (unsigned i = 4; i < 16; ++i)
+		REQUIRE(got[i] == 0);
+	REQUIRE(WASM::simd_scalar::laneU32(got.data(), 0) == WASM::simd_scalar::laneU32(bytes, 0));
+}
+
+TEST_CASE("simd helpers: shuffle and swizzle")
+{
+	// These two carry the hazards the design note calls out (Y3/Y4), and they are
+	// the ops where a vector path pays most, so the differential matters here.
+	std::array<uint8_t, 16> a{};
+	std::array<uint8_t, 16> b{};
+	for (size_t i = 0; i < 16; ++i) {
+		a[i] = static_cast<uint8_t>(i + 1);          // 1..16
+		b[i] = static_cast<uint8_t>(0x80u + i);      // 129..144
+	}
+	std::array<uint8_t, 16> ref{};
+	std::array<uint8_t, 16> got{};
+	std::array<uint8_t, 16> sel{};
+	uint64_t selLo = 0;
+	uint64_t selHi = 0;
+	const auto packSelector = [&selLo, &selHi](const std::array<uint8_t, 16>& s) {
+		selLo = 0;
+		selHi = 0;
+		for (unsigned i = 0; i < 8; ++i) {
+			selLo |= static_cast<uint64_t>(s[i]) << (8u * i);
+			selHi |= static_cast<uint64_t>(s[8 + i]) << (8u * i);
+		}
+	};
+
+	// Interleaved selector: even lanes read `a`, odd lanes read `b` — hazard Y4.
+	sel = {0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23};
+	packSelector(sel);
+	WASM::simd_scalar::shuffleBytes(a.data(), b.data(), selLo, selHi, ref.data());
+	wasm_i8x16_shuffle(a.data(), b.data(), selLo, selHi, got.data());
+	REQUIRE(ref == got);
+	REQUIRE(got[0] == a[0]);
+	REQUIRE(got[1] == b[0]);
+	REQUIRE(got[15] == b[7]);
+
+	// Fully reversed, so the mapping is pinned in both directions.
+	sel = {31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16};
+	packSelector(sel);
+	WASM::simd_scalar::shuffleBytes(a.data(), b.data(), selLo, selHi, ref.data());
+	wasm_i8x16_shuffle(a.data(), b.data(), selLo, selHi, got.data());
+	REQUIRE(ref == got);
+	REQUIRE(got[0] == b[15]);
+	REQUIRE(got[15] == b[0]);
+
+	// Swizzle: randomized differential...
+	std::array<uint8_t, 16> idx{};
+	for (uint32_t seed = 0; seed < 8; ++seed) {
+		for (size_t i = 0; i < idx.size(); ++i)
+			idx[i] = static_cast<uint8_t>((seed * 31u + i * 17u) & 0xFFu);
+		WASM::simd_scalar::swizzleBytes(a.data(), idx.data(), ref.data());
+		wasm_i8x16_swizzle(a.data(), idx.data(), got.data());
+		REQUIRE(ref == got);
+	}
+
+	// ... and the exact boundary rule (hazard Y3): every index >= 16 zeroes,
+	// where pshufb would alias it onto `index & 15`.
+	idx = {0, 1, 16, 127, 128, 255, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+	WASM::simd_scalar::swizzleBytes(a.data(), idx.data(), ref.data());
+	wasm_i8x16_swizzle(a.data(), idx.data(), got.data());
+	REQUIRE(ref == got);
+	REQUIRE(got[0] == a[0]);
+	REQUIRE(got[1] == a[1]);
+	REQUIRE(got[2] == 0);      // index 16
+	REQUIRE(got[3] == 0);      // index 127 — the silent-failure case
+	REQUIRE(got[4] == 0);      // index 128
+	REQUIRE(got[5] == 0);      // index 255
+	REQUIRE(got[6] == a[2]);   // in range again: the zeroing is per lane
+}
+
+TEST_CASE("simd: shuffle and swizzle run through the JIT")
+{
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("simd_shuffle", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	const auto i32Export = [&instance](const char* name) {
+		auto fn = instance.exportedFunction(name);
+		REQUIRE(fn.has_value());
+		return *fn;
+	};
+
+	// `a` is bytes 1..16, `b` is 129..144: a lane's value says where it came from.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("shuffle_u8_0")) == 1);     // a[0]
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("shuffle_u8_1")) == 129);   // b[0]
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("shuffle_u8_15")) == 136);  // b[7]
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("shuffle_rev_u8_0")) == 144);   // b[15]
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("shuffle_rev_u8_15")) == 129);  // b[0]
+
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("swizzle_u8_0")) == 1);   // a[0]
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("swizzle_u8_1")) == 2);   // a[1]
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("swizzle_u8_2")) == 0);   // index 16
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("swizzle_u8_3")) == 0);   // index 127
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("swizzle_u8_4")) == 0);   // index 128
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("swizzle_u8_5")) == 0);   // index 255
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("swizzle_u8_6")) == 3);   // a[2]
+}
+
+TEST_CASE("simd: memory loads and stores run through the JIT")
+{
+	// T2: the memory ops through decoding, the real bounds-checked address path
+	// (the same one the scalar loads use, trap included) and the helpers. Every
+	// export projects one lane, because the harness cannot marshal a `v128`.
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("simd_load_store", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	const auto i32Export = [&instance](const char* name) {
+		auto fn = instance.exportedFunction(name);
+		REQUIRE(fn.has_value());
+		return *fn;
+	};
+
+	// The data segment at 0 is the 16 bytes 01 02 .. 10.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("load_lane0")) == 0x04030201);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("load_lane3")) == 0x100F0E0D);
+	// Unaligned (memarg align=1, offset=1): bytes 02 03 04 05.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("load_unaligned_lane0")) == 0x05040302);
+
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("store_roundtrip")) == 0x11223344);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("store_roundtrip2")) == 0x55667788);
+
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("load8x8_s_lane0")) == 1);
+	// load8x8_s reads 8 bytes (indices 0..7), so lane 7 is byte 0x08 — the
+	// 16th byte (0x10) is *not* in this load.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("load8x8_s_lane7")) == 8);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("load8x8_u_lane7")) == 8);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("load16x4_s_lane1")) == 0x0403);
+
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("load8_splat_lane3")) == 0x02);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("load32_splat_lane2")) == 0x04030201);
+	REQUIRE(WASM::callCallable<int64_t>(i32Export("load64_splat_lane1")) == 0x0807060504030201ll);
+
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("load32_zero_lane0")) == 0x04030201);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("load32_zero_lane1")) == 0);
+	REQUIRE(WASM::callCallable<int64_t>(i32Export("load64_zero_lane1")) == 0);
+
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("load32_lane1")) == 0x08070605);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("load16_lane0")) == static_cast<int32_t>(0xFFFF0201u));
+	// ... and that value is the interesting one: `load16_lane 0` replaces the
+	// *i16* lane, i.e. only the low two bytes of i32 lane 0, so the base
+	// vector's high bytes (0xFFFF) have to survive alongside the loaded 0x0201.
+
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("store32_lane2")) == static_cast<int32_t>(0xAABBCCDDu));
+	// Only one byte reached memory: the neighbouring byte is still zero.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("store8_lane0_neighbour")) == 0);
+}
+
+TEST_CASE("simd: bitwise ops run through the JIT")
+{
+	// T2 (docs/SIMD_LIBJIT.md §9): the same semantics as the T1 vectors, but
+	// reached through decoding, the operand stack, the slot bank and the
+	// runtime-dispatched helpers. `a` has four distinct lanes, so the values
+	// below also prove the lanes were not permuted.
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("simd_bitwise", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	const auto i32Export = [&instance](const char* name) {
+		auto fn = instance.exportedFunction(name);
+		REQUIRE(fn.has_value());
+		return *fn;
+	};
+
+	// ~0x0F0F0F0F and ~0x33333333 exceed INT32_MAX, so compare the bit pattern.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("not_lane0")) == static_cast<int32_t>(0xF0F0F0F0u));
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("not_lane3")) == static_cast<int32_t>(0xCCCCCCCCu));
+
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("and_lane0")) == 0x000F000F);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("and_lane3")) == 0x00330033);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("or_lane0")) == 0x0FFF0FFF);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("xor_lane0")) == 0x0FF00FF0);
+
+	// a AND NOT b, not the other way round.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("andnot_lane0")) == 0x0F000F00);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("andnot_lane3")) == 0x33003300);
+
+	// c selects: (a & c) | (b & ~c).
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("bitselect_lane0")) == 0x0F0F00FF);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("bitselect_lane3")) == 0x333300FF);
+
+	// A two-op chain, so an intermediate really crosses a slot boundary.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("chain_lane0")) == static_cast<int32_t>(0xFFF0FFF0u));
+}
+
 TEST_CASE("simd: v128.const, splat and lane ops run through the JIT")
 {
 	// T2 (docs/SIMD_LIBJIT.md §9): the same lane semantics as the T1 vectors,

@@ -67,6 +67,46 @@ void replaceI64x2(const uint8_t* a, uint32_t lane, int64_t  x, uint8_t* out);
 void replaceF32x4(const uint8_t* a, uint32_t lane, float    x, uint8_t* out);
 void replaceF64x2(const uint8_t* a, uint32_t lane, double   x, uint8_t* out);
 
+// ── bitwise ────────────────────────────────────────────────────────────────
+void notBits(const uint8_t* a, uint8_t* out);
+void andBits(const uint8_t* a, const uint8_t* b, uint8_t* out);
+void andNotBits(const uint8_t* a, const uint8_t* b, uint8_t* out);
+void orBits(const uint8_t* a, const uint8_t* b, uint8_t* out);
+void xorBits(const uint8_t* a, const uint8_t* b, uint8_t* out);
+void bitselectBits(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out);
+
+// ── memory ─────────────────────────────────────────────────────────────────
+// The caller (the backend) has already computed and bounds-checked the effective
+// address, so these move bytes and nothing else: no context, no trap.
+void load8x8S(const uint8_t* src, uint8_t* out);
+void load8x8U(const uint8_t* src, uint8_t* out);
+void load16x4S(const uint8_t* src, uint8_t* out);
+void load16x4U(const uint8_t* src, uint8_t* out);
+void load32x2S(const uint8_t* src, uint8_t* out);
+void load32x2U(const uint8_t* src, uint8_t* out);
+void load8Splat(const uint8_t* src, uint8_t* out);
+void load16Splat(const uint8_t* src, uint8_t* out);
+void load32Splat(const uint8_t* src, uint8_t* out);
+void load64Splat(const uint8_t* src, uint8_t* out);
+void load32Zero(const uint8_t* src, uint8_t* out);
+void load64Zero(const uint8_t* src, uint8_t* out);
+void load8Lane(const uint8_t* src, const uint8_t* a, uint32_t lane, uint8_t* out);
+void load16Lane(const uint8_t* src, const uint8_t* a, uint32_t lane, uint8_t* out);
+void load32Lane(const uint8_t* src, const uint8_t* a, uint32_t lane, uint8_t* out);
+void load64Lane(const uint8_t* src, const uint8_t* a, uint32_t lane, uint8_t* out);
+void store8Lane(uint8_t* dst, const uint8_t* a, uint32_t lane);
+void store16Lane(uint8_t* dst, const uint8_t* a, uint32_t lane);
+void store32Lane(uint8_t* dst, const uint8_t* a, uint32_t lane);
+void store64Lane(uint8_t* dst, const uint8_t* a, uint32_t lane);
+
+// ── shuffle / swizzle ──────────────────────────────────────────────────────
+// `shuffle`: 16 selector bytes arriving as two u64s (8 bytes each, memory
+// order). Index i selects `a[i]` for i < 16 and `b[i - 16]` above that.
+// `swizzle`: the selectors are the *second operand*, and an index of 16 or more
+// yields zero — the difference from pshufb's "bit 7 clears" rule is hazard Y3.
+void shuffleBytes(const uint8_t* a, const uint8_t* b, uint64_t selLo, uint64_t selHi, uint8_t* out);
+void swizzleBytes(const uint8_t* a, const uint8_t* b, uint8_t* out);
+
 } // namespace simd_scalar
 } // namespace WASM
 
@@ -101,6 +141,36 @@ void wasm_i32x4_replace_lane(const void* a, uint32_t lane, int32_t x, void* out)
 void wasm_i64x2_replace_lane(const void* a, uint32_t lane, int64_t x, void* out);
 void wasm_f32x4_replace_lane(const void* a, uint32_t lane, float x, void* out);
 void wasm_f64x2_replace_lane(const void* a, uint32_t lane, double x, void* out);
+void wasm_v128_not(const void* a, void* out);
+void wasm_v128_and(const void* a, const void* b, void* out);
+void wasm_v128_andnot(const void* a, const void* b, void* out);
+void wasm_v128_or(const void* a, const void* b, void* out);
+void wasm_v128_xor(const void* a, const void* b, void* out);
+void wasm_v128_bitselect(const void* a, const void* b, const void* c, void* out);
+void wasm_v128_load(const void* src, void* out);
+void wasm_v128_store(void* dst, const void* value);
+void wasm_v128_load8x8_s(const void* src, void* out);
+void wasm_v128_load8x8_u(const void* src, void* out);
+void wasm_v128_load16x4_s(const void* src, void* out);
+void wasm_v128_load16x4_u(const void* src, void* out);
+void wasm_v128_load32x2_s(const void* src, void* out);
+void wasm_v128_load32x2_u(const void* src, void* out);
+void wasm_v128_load8_splat(const void* src, void* out);
+void wasm_v128_load16_splat(const void* src, void* out);
+void wasm_v128_load32_splat(const void* src, void* out);
+void wasm_v128_load64_splat(const void* src, void* out);
+void wasm_v128_load32_zero(const void* src, void* out);
+void wasm_v128_load64_zero(const void* src, void* out);
+void wasm_v128_load8_lane(const void* src, const void* a, uint32_t lane, void* out);
+void wasm_v128_load16_lane(const void* src, const void* a, uint32_t lane, void* out);
+void wasm_v128_load32_lane(const void* src, const void* a, uint32_t lane, void* out);
+void wasm_v128_load64_lane(const void* src, const void* a, uint32_t lane, void* out);
+void wasm_v128_store8_lane(void* dst, const void* a, uint32_t lane);
+void wasm_v128_store16_lane(void* dst, const void* a, uint32_t lane);
+void wasm_v128_store32_lane(void* dst, const void* a, uint32_t lane);
+void wasm_v128_store64_lane(void* dst, const void* a, uint32_t lane);
+void wasm_i8x16_shuffle(const void* a, const void* b, uint64_t selLo, uint64_t selHi, void* out);
+void wasm_i8x16_swizzle(const void* a, const void* b, void* out);
 }
 
 #endif // WASMSIMDSCALAR_HPP

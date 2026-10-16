@@ -212,120 +212,195 @@ void replaceF64x2(const uint8_t* a, uint32_t lane, double x, uint8_t* out)
 	storeU64(out, lane, f64Bits(x));
 }
 
+// ── bitwise ────────────────────────────────────────────────────────────────
+// Byte-at-a-time, like everything else here: this is the oracle the vectorised
+// entry points in `wasm_simd_vector.cpp` are checked against.
+
+void notBits(const uint8_t* a, uint8_t* out)
+{
+	for (uint32_t i = 0; i < 16; ++i)
+		out[i] = static_cast<uint8_t>(~a[i]);
+}
+
+void andBits(const uint8_t* a, const uint8_t* b, uint8_t* out)
+{
+	for (uint32_t i = 0; i < 16; ++i)
+		out[i] = static_cast<uint8_t>(a[i] & b[i]);
+}
+
+// wasm's `v128.andnot(a, b)` is `a & ~b` — not `~a & b`.
+void andNotBits(const uint8_t* a, const uint8_t* b, uint8_t* out)
+{
+	for (uint32_t i = 0; i < 16; ++i)
+		out[i] = static_cast<uint8_t>(a[i] & static_cast<uint8_t>(~b[i]));
+}
+
+void orBits(const uint8_t* a, const uint8_t* b, uint8_t* out)
+{
+	for (uint32_t i = 0; i < 16; ++i)
+		out[i] = static_cast<uint8_t>(a[i] | b[i]);
+}
+
+void xorBits(const uint8_t* a, const uint8_t* b, uint8_t* out)
+{
+	for (uint32_t i = 0; i < 16; ++i)
+		out[i] = static_cast<uint8_t>(a[i] ^ b[i]);
+}
+
+// wasm's `v128.bitselect(a, b, c)` is `(a & c) | (b & ~c)`: `c` selects.
+void bitselectBits(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out)
+{
+	for (uint32_t i = 0; i < 16; ++i)
+		out[i] = static_cast<uint8_t>((a[i] & c[i]) | (b[i] & static_cast<uint8_t>(~c[i])));
+}
+
+// ── memory ─────────────────────────────────────────────────────────────────
+
+// load8x8_s / _u: 8 bytes read as eight i8, widened to eight i16.
+void load8x8S(const uint8_t* src, uint8_t* out)
+{
+	for (uint32_t i = 0; i < 8; ++i)
+		storeU16(out, i, static_cast<uint16_t>(static_cast<int16_t>(static_cast<int8_t>(src[i]))));
+}
+
+void load8x8U(const uint8_t* src, uint8_t* out)
+{
+	for (uint32_t i = 0; i < 8; ++i)
+		storeU16(out, i, static_cast<uint16_t>(src[i]));
+}
+
+// load16x4_s / _u: 8 bytes read as four i16, widened to four i32.
+void load16x4S(const uint8_t* src, uint8_t* out)
+{
+	for (uint32_t i = 0; i < 4; ++i)
+		storeU32(out, i, static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(laneU16(src, i)))));
+}
+
+void load16x4U(const uint8_t* src, uint8_t* out)
+{
+	for (uint32_t i = 0; i < 4; ++i)
+		storeU32(out, i, static_cast<uint32_t>(laneU16(src, i)));
+}
+
+// load32x2_s / _u: 8 bytes read as two i32, widened to two i64.
+void load32x2S(const uint8_t* src, uint8_t* out)
+{
+	for (uint32_t i = 0; i < 2; ++i)
+		storeU64(out, i, static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(laneU32(src, i)))));
+}
+
+void load32x2U(const uint8_t* src, uint8_t* out)
+{
+	for (uint32_t i = 0; i < 2; ++i)
+		storeU64(out, i, static_cast<uint64_t>(laneU32(src, i)));
+}
+
+// Splats: broadcast the scalar at src to every lane.
+void load8Splat(const uint8_t* src, uint8_t* out)
+{
+	for (uint32_t i = 0; i < 16; ++i)
+		storeU8(out, i, src[0]);
+}
+
+void load16Splat(const uint8_t* src, uint8_t* out)
+{
+	for (uint32_t i = 0; i < 8; ++i)
+		storeU16(out, i, laneU16(src, 0));
+}
+
+void load32Splat(const uint8_t* src, uint8_t* out)
+{
+	for (uint32_t i = 0; i < 4; ++i)
+		storeU32(out, i, laneU32(src, 0));
+}
+
+void load64Splat(const uint8_t* src, uint8_t* out)
+{
+	for (uint32_t i = 0; i < 2; ++i)
+		storeU64(out, i, laneU64(src, 0));
+}
+
+// Zero-extending loads: the scalar in lane 0, every other lane zero.
+void load32Zero(const uint8_t* src, uint8_t* out)
+{
+	std::memset(out, 0, 16);
+	storeU32(out, 0, laneU32(src, 0));
+}
+
+void load64Zero(const uint8_t* src, uint8_t* out)
+{
+	std::memset(out, 0, 16);
+	storeU64(out, 0, laneU64(src, 0));
+}
+
+// Lane loads: copy the vector operand and splice in the scalar at src.
+void load8Lane(const uint8_t* src, const uint8_t* a, uint32_t lane, uint8_t* out)
+{
+	std::memcpy(out, a, 16);
+	storeU8(out, lane, src[0]);
+}
+
+void load16Lane(const uint8_t* src, const uint8_t* a, uint32_t lane, uint8_t* out)
+{
+	std::memcpy(out, a, 16);
+	storeU16(out, lane, laneU16(src, 0));
+}
+
+void load32Lane(const uint8_t* src, const uint8_t* a, uint32_t lane, uint8_t* out)
+{
+	std::memcpy(out, a, 16);
+	storeU32(out, lane, laneU32(src, 0));
+}
+
+void load64Lane(const uint8_t* src, const uint8_t* a, uint32_t lane, uint8_t* out)
+{
+	std::memcpy(out, a, 16);
+	storeU64(out, lane, laneU64(src, 0));
+}
+
+// Lane stores: write exactly one lane of the vector operand to dst.
+void store8Lane(uint8_t* dst, const uint8_t* a, uint32_t lane)
+{
+	dst[0] = laneU8(a, lane);
+}
+
+void store16Lane(uint8_t* dst, const uint8_t* a, uint32_t lane)
+{
+	storeU16(dst, 0, laneU16(a, lane));
+}
+
+void store32Lane(uint8_t* dst, const uint8_t* a, uint32_t lane)
+{
+	storeU32(dst, 0, laneU32(a, lane));
+}
+
+void store64Lane(uint8_t* dst, const uint8_t* a, uint32_t lane)
+{
+	storeU64(dst, 0, laneU64(a, lane));
+}
+
+// ── shuffle / swizzle ──────────────────────────────────────────────────────
+
+void shuffleBytes(const uint8_t* a, const uint8_t* b, uint64_t selLo, uint64_t selHi, uint8_t* out)
+{
+	uint8_t sel[16];
+	storeU64(sel, 0, selLo);
+	storeU64(sel, 1, selHi);
+	for (uint32_t i = 0; i < 16; ++i)
+		out[i] = sel[i] < 16 ? a[sel[i]] : b[sel[i] - 16];
+}
+
+void swizzleBytes(const uint8_t* a, const uint8_t* b, uint8_t* out)
+{
+	for (uint32_t i = 0; i < 16; ++i)
+		out[i] = b[i] < 16 ? a[b[i]] : 0;
+}
+
 } // namespace simd_scalar
 } // namespace WASM
 
-// ── The C ABI a SIMD-lowering backend calls ────────────────────────────────
-// Each entry point is a thin forward to the reference above. Kept as a separate
-// layer so a vectorised implementation can replace the body without touching a
-// single backend call site.
+// NOTE: the `extern "C"` entry points that this reference is checked against are
+// defined in `wasm_simd_vector.cpp` and declared in `wasm_simd_scalar.hpp` (see
+// the note there on which layer owns which entry point). This file is the
+// reference only: nothing in it is called by a backend directly.
 
-extern "C" void wasm_v128_const(uint64_t lo, uint64_t hi, void* out)
-{
-	WASM::simd_scalar::constFromBits(lo, hi, static_cast<uint8_t*>(out));
-}
-
-extern "C" void wasm_v128_zero(void* out)
-{
-	WASM::simd_scalar::zero(static_cast<uint8_t*>(out));
-}
-
-extern "C" void wasm_i8x16_splat(int32_t x, void* out)
-{
-	WASM::simd_scalar::splatI8x16(x, static_cast<uint8_t*>(out));
-}
-
-extern "C" void wasm_i16x8_splat(int32_t x, void* out)
-{
-	WASM::simd_scalar::splatI16x8(x, static_cast<uint8_t*>(out));
-}
-
-extern "C" void wasm_i32x4_splat(int32_t x, void* out)
-{
-	WASM::simd_scalar::splatI32x4(x, static_cast<uint8_t*>(out));
-}
-
-extern "C" void wasm_i64x2_splat(int64_t x, void* out)
-{
-	WASM::simd_scalar::splatI64x2(x, static_cast<uint8_t*>(out));
-}
-
-extern "C" void wasm_f32x4_splat(float x, void* out)
-{
-	WASM::simd_scalar::splatF32x4(x, static_cast<uint8_t*>(out));
-}
-
-extern "C" void wasm_f64x2_splat(double x, void* out)
-{
-	WASM::simd_scalar::splatF64x2(x, static_cast<uint8_t*>(out));
-}
-
-extern "C" int32_t wasm_i8x16_extract_lane_s(const void* a, uint32_t lane)
-{
-	return WASM::simd_scalar::extractI8x16S(static_cast<const uint8_t*>(a), lane);
-}
-
-extern "C" int32_t wasm_i8x16_extract_lane_u(const void* a, uint32_t lane)
-{
-	return WASM::simd_scalar::extractI8x16U(static_cast<const uint8_t*>(a), lane);
-}
-
-extern "C" int32_t wasm_i16x8_extract_lane_s(const void* a, uint32_t lane)
-{
-	return WASM::simd_scalar::extractI16x8S(static_cast<const uint8_t*>(a), lane);
-}
-
-extern "C" int32_t wasm_i16x8_extract_lane_u(const void* a, uint32_t lane)
-{
-	return WASM::simd_scalar::extractI16x8U(static_cast<const uint8_t*>(a), lane);
-}
-
-extern "C" int32_t wasm_i32x4_extract_lane(const void* a, uint32_t lane)
-{
-	return WASM::simd_scalar::extractI32x4(static_cast<const uint8_t*>(a), lane);
-}
-
-extern "C" int64_t wasm_i64x2_extract_lane(const void* a, uint32_t lane)
-{
-	return WASM::simd_scalar::extractI64x2(static_cast<const uint8_t*>(a), lane);
-}
-
-extern "C" float wasm_f32x4_extract_lane(const void* a, uint32_t lane)
-{
-	return WASM::simd_scalar::extractF32x4(static_cast<const uint8_t*>(a), lane);
-}
-
-extern "C" double wasm_f64x2_extract_lane(const void* a, uint32_t lane)
-{
-	return WASM::simd_scalar::extractF64x2(static_cast<const uint8_t*>(a), lane);
-}
-
-extern "C" void wasm_i8x16_replace_lane(const void* a, uint32_t lane, int32_t x, void* out)
-{
-	WASM::simd_scalar::replaceI8x16(static_cast<const uint8_t*>(a), lane, x, static_cast<uint8_t*>(out));
-}
-
-extern "C" void wasm_i16x8_replace_lane(const void* a, uint32_t lane, int32_t x, void* out)
-{
-	WASM::simd_scalar::replaceI16x8(static_cast<const uint8_t*>(a), lane, x, static_cast<uint8_t*>(out));
-}
-
-extern "C" void wasm_i32x4_replace_lane(const void* a, uint32_t lane, int32_t x, void* out)
-{
-	WASM::simd_scalar::replaceI32x4(static_cast<const uint8_t*>(a), lane, x, static_cast<uint8_t*>(out));
-}
-
-extern "C" void wasm_i64x2_replace_lane(const void* a, uint32_t lane, int64_t x, void* out)
-{
-	WASM::simd_scalar::replaceI64x2(static_cast<const uint8_t*>(a), lane, x, static_cast<uint8_t*>(out));
-}
-
-extern "C" void wasm_f32x4_replace_lane(const void* a, uint32_t lane, float x, void* out)
-{
-	WASM::simd_scalar::replaceF32x4(static_cast<const uint8_t*>(a), lane, x, static_cast<uint8_t*>(out));
-}
-
-extern "C" void wasm_f64x2_replace_lane(const void* a, uint32_t lane, double x, void* out)
-{
-	WASM::simd_scalar::replaceF64x2(static_cast<const uint8_t*>(a), lane, x, static_cast<uint8_t*>(out));
-}

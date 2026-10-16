@@ -749,6 +749,70 @@ jit_value_t OpcodeDispatcher::callSimdOutHelper(void* fptr, jit_value_t out,
 	return callSimdHelper(fptr, jit_type_void, params, args);
 }
 
+// The four `v128.load*` / `v128.store*` shapes (docs/SIMD_LIBJIT.md §6.3).
+
+void OpcodeDispatcher::emitSimdLoad(const WASM::MemArg& ma, jit_nint width, void* helper)
+{
+	// In unreachable code the operand stack is polymorphic, so the address would
+	// be a placeholder and the bounds check would be emitted for nothing.
+	if (unreachableCode) {
+		popValue();
+		return;
+	}
+	jit_value_t src = effectiveMemoryAddress(ma, width);
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[1] = {jit_type_void_ptr};
+	jit_value_t args[1] = {src};
+	callSimdOutHelper(helper, out, types, args);
+	pushValue(out);
+}
+
+void OpcodeDispatcher::emitSimdLoadLane(const WASM::MemArg& ma, jit_nint width, uint8_t lane, void* helper)
+{
+	if (unreachableCode) {
+		popValue();
+		popValue();
+		return;
+	}
+	jit_value_t a = popValue();   // wasm's `[i32 v128] -> [v128]`: vector on top
+	jit_value_t src = effectiveMemoryAddress(ma, width);
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[3] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_uint};
+	jit_value_t args[3] = {src, jit_insn_address_of(function, a),
+			jit_value_create_nint_constant(function, jit_type_uint, lane)};
+	callSimdOutHelper(helper, out, types, args);
+	pushValue(out);
+}
+
+void OpcodeDispatcher::emitSimdStore(const WASM::MemArg& ma, jit_nint width, void* helper)
+{
+	if (unreachableCode) {
+		popValue();
+		popValue();
+		return;
+	}
+	jit_value_t value = popValue();   // wasm's `[i32 v128] -> []`: value on top
+	jit_value_t dst = effectiveMemoryAddress(ma, width);
+	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_void_ptr};
+	jit_value_t args[2] = {dst, jit_insn_address_of(function, value)};
+	callSimdHelper(helper, jit_type_void, types, args);
+}
+
+void OpcodeDispatcher::emitSimdStoreLane(const WASM::MemArg& ma, jit_nint width, uint8_t lane, void* helper)
+{
+	if (unreachableCode) {
+		popValue();
+		popValue();
+		return;
+	}
+	jit_value_t a = popValue();
+	jit_value_t dst = effectiveMemoryAddress(ma, width);
+	const jit_type_t types[3] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_uint};
+	jit_value_t args[3] = {dst, jit_insn_address_of(function, a),
+			jit_value_create_nint_constant(function, jit_type_uint, lane)};
+	callSimdHelper(helper, jit_type_void, types, args);
+}
+
 jit_value_t OpcodeDispatcher::castRefValue(jit_value_t value, jit_type_t targetType)
 {
 	jit_type_t sourceType = jit_value_get_type(value);
@@ -3950,71 +4014,75 @@ void OpcodeDispatcher::dispatchTableFill(WASM::TableIdx arg) {
 	jit_insn_call_native(function, "wasm_table_fill_impl",
 						 reinterpret_cast<void*>(wasm_table_fill_impl), sig, args, 5, 0);
 }
+// ── memory (docs/SIMD_LIBJIT.md §6.3) ───────────────────────────────────────
+// Each handler is one line: the shape lives in the emit helper above, and the
+// width is the number of bytes the instruction actually *reads* — that is what
+// the bounds check must cover, and the memarg's alignment plays no part in it.
 void OpcodeDispatcher::dispatchV128Load(WASM::MemArg arg) {
-	notImplemented(__func__);
+	emitSimdLoad(arg, 16, reinterpret_cast<void*>(&wasm_v128_load));
 }
 void OpcodeDispatcher::dispatchV128Load8x8S(WASM::MemArg arg) {
-	notImplemented(__func__);
+	emitSimdLoad(arg, 8, reinterpret_cast<void*>(&wasm_v128_load8x8_s));
 }
 void OpcodeDispatcher::dispatchV128Load8x8U(WASM::MemArg arg) {
-	notImplemented(__func__);
+	emitSimdLoad(arg, 8, reinterpret_cast<void*>(&wasm_v128_load8x8_u));
 }
 void OpcodeDispatcher::dispatchV128Load16x4S(WASM::MemArg arg) {
-	notImplemented(__func__);
+	emitSimdLoad(arg, 8, reinterpret_cast<void*>(&wasm_v128_load16x4_s));
 }
 void OpcodeDispatcher::dispatchV128Load16x4U(WASM::MemArg arg) {
-	notImplemented(__func__);
+	emitSimdLoad(arg, 8, reinterpret_cast<void*>(&wasm_v128_load16x4_u));
 }
 void OpcodeDispatcher::dispatchV128Load32x2S(WASM::MemArg arg) {
-	notImplemented(__func__);
+	emitSimdLoad(arg, 8, reinterpret_cast<void*>(&wasm_v128_load32x2_s));
 }
 void OpcodeDispatcher::dispatchV128Load32x2U(WASM::MemArg arg) {
-	notImplemented(__func__);
+	emitSimdLoad(arg, 8, reinterpret_cast<void*>(&wasm_v128_load32x2_u));
 }
 void OpcodeDispatcher::dispatchV128Load8Splat(WASM::MemArg arg) {
-	notImplemented(__func__);
+	emitSimdLoad(arg, 1, reinterpret_cast<void*>(&wasm_v128_load8_splat));
 }
 void OpcodeDispatcher::dispatchV128Load16Splat(WASM::MemArg arg) {
-	notImplemented(__func__);
+	emitSimdLoad(arg, 2, reinterpret_cast<void*>(&wasm_v128_load16_splat));
 }
 void OpcodeDispatcher::dispatchV128Load32Splat(WASM::MemArg arg) {
-	notImplemented(__func__);
+	emitSimdLoad(arg, 4, reinterpret_cast<void*>(&wasm_v128_load32_splat));
 }
 void OpcodeDispatcher::dispatchV128Load64Splat(WASM::MemArg arg) {
-	notImplemented(__func__);
+	emitSimdLoad(arg, 8, reinterpret_cast<void*>(&wasm_v128_load64_splat));
 }
 void OpcodeDispatcher::dispatchV128Load32Zero(WASM::MemArg arg) {
-	notImplemented(__func__);
+	emitSimdLoad(arg, 4, reinterpret_cast<void*>(&wasm_v128_load32_zero));
 }
 void OpcodeDispatcher::dispatchV128Load64Zero(WASM::MemArg arg) {
-	notImplemented(__func__);
+	emitSimdLoad(arg, 8, reinterpret_cast<void*>(&wasm_v128_load64_zero));
 }
 void OpcodeDispatcher::dispatchV128Store(WASM::MemArg arg) {
-	notImplemented(__func__);
+	emitSimdStore(arg, 16, reinterpret_cast<void*>(&wasm_v128_store));
 }
 void OpcodeDispatcher::dispatchV128Load8Lane(WASM::MemArg arg1, uint8_t arg2) {
-	notImplemented(__func__);
+	emitSimdLoadLane(arg1, 1, arg2, reinterpret_cast<void*>(&wasm_v128_load8_lane));
 }
 void OpcodeDispatcher::dispatchV128Load16Lane(WASM::MemArg arg1, uint8_t arg2) {
-	notImplemented(__func__);
+	emitSimdLoadLane(arg1, 2, arg2, reinterpret_cast<void*>(&wasm_v128_load16_lane));
 }
 void OpcodeDispatcher::dispatchV128Load32Lane(WASM::MemArg arg1, uint8_t arg2) {
-	notImplemented(__func__);
+	emitSimdLoadLane(arg1, 4, arg2, reinterpret_cast<void*>(&wasm_v128_load32_lane));
 }
 void OpcodeDispatcher::dispatchV128Load64Lane(WASM::MemArg arg1, uint8_t arg2) {
-	notImplemented(__func__);
+	emitSimdLoadLane(arg1, 8, arg2, reinterpret_cast<void*>(&wasm_v128_load64_lane));
 }
 void OpcodeDispatcher::dispatchV128Store8Lane(WASM::MemArg arg1, uint8_t arg2) {
-	notImplemented(__func__);
+	emitSimdStoreLane(arg1, 1, arg2, reinterpret_cast<void*>(&wasm_v128_store8_lane));
 }
 void OpcodeDispatcher::dispatchV128Store16Lane(WASM::MemArg arg1, uint8_t arg2) {
-	notImplemented(__func__);
+	emitSimdStoreLane(arg1, 2, arg2, reinterpret_cast<void*>(&wasm_v128_store16_lane));
 }
 void OpcodeDispatcher::dispatchV128Store32Lane(WASM::MemArg arg1, uint8_t arg2) {
-	notImplemented(__func__);
+	emitSimdStoreLane(arg1, 4, arg2, reinterpret_cast<void*>(&wasm_v128_store32_lane));
 }
 void OpcodeDispatcher::dispatchV128Store64Lane(WASM::MemArg arg1, uint8_t arg2) {
-	notImplemented(__func__);
+	emitSimdStoreLane(arg1, 8, arg2, reinterpret_cast<void*>(&wasm_v128_store64_lane));
 }
 void OpcodeDispatcher::dispatchV128Const(std::span<uint8_t> arg) {
 	// The 16 immediate bytes are in memory order: bytes 0-7 are the low half,
@@ -4038,11 +4106,47 @@ void OpcodeDispatcher::dispatchV128Const(std::span<uint8_t> arg) {
 	callSimdOutHelper(reinterpret_cast<void*>(&wasm_v128_const), out, types, args);
 	pushValue(out);
 }
+// `i8x16.shuffle` and `i8x16.swizzle` are both one-vector table lookups. The
+// shuffle selectors are *immediates* (16 bytes), so they travel as two u64s like
+// every other 16-byte immediate (docs/SIMD_LIBJIT.md §6.3) rather than being
+// materialised in memory just to pass an address.
 void OpcodeDispatcher::dispatchI8x16Shuffle(std::span<uint8_t> arg) {
-	notImplemented(__func__);
+	if (unreachableCode) {
+		popValue();
+		popValue();
+		return;
+	}
+	if (arg.size() < 16)
+		return;
+	uint64_t selLo = 0;
+	uint64_t selHi = 0;
+	for (unsigned i = 0; i < 8; ++i) {
+		selLo |= static_cast<uint64_t>(arg[i]) << (8u * i);
+		selHi |= static_cast<uint64_t>(arg[8 + i]) << (8u * i);
+	}
+	jit_value_t b = popValue();   // wasm's `[v128 v128] -> [v128]`: second on top
+	jit_value_t a = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[4] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_ulong, jit_type_ulong};
+	jit_value_t args[4] = {jit_insn_address_of(function, a), jit_insn_address_of(function, b),
+			jit_value_create_long_constant(function, jit_type_ulong, static_cast<jit_long>(selLo)),
+			jit_value_create_long_constant(function, jit_type_ulong, static_cast<jit_long>(selHi))};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_i8x16_shuffle), out, types, args);
+	pushValue(out);
 }
 void OpcodeDispatcher::dispatchI8x16Swizzle() {
-	notImplemented(__func__);
+	if (unreachableCode) {
+		popValue();
+		popValue();
+		return;
+	}
+	jit_value_t s = popValue();   // the index vector is the second operand
+	jit_value_t a = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_void_ptr};
+	jit_value_t args[2] = {jit_insn_address_of(function, a), jit_insn_address_of(function, s)};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_i8x16_swizzle), out, types, args);
+	pushValue(out);
 }
 // `*.splat`: pop the scalar, write 16 bytes of it into a fresh slot. The scalar
 // arrives with its wasm shape's LibJIT type (i32/i64/f32/f64), which is what the
@@ -4360,23 +4464,69 @@ void OpcodeDispatcher::dispatchF64x2Le() {
 void OpcodeDispatcher::dispatchF64x2Ge() {
 	notImplemented(__func__);
 }
+// Bitwise ops are whole-vector, so they are the shape `callSimdOutHelper` exists
+// for: pop the operands, pass their addresses, write into a fresh slot. The
+// helpers are pure and never trap (docs/SIMD_LIBJIT.md §6.3).
 void OpcodeDispatcher::dispatchV128Not() {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); return; }
+	jit_value_t a = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[1] = {jit_type_void_ptr};
+	jit_value_t args[1] = {jit_insn_address_of(function, a)};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_v128_not), out, types, args);
+	pushValue(out);
 }
 void OpcodeDispatcher::dispatchV128And() {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); popValue(); return; }
+	jit_value_t b = popValue();
+	jit_value_t a = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_void_ptr};
+	jit_value_t args[2] = {jit_insn_address_of(function, a), jit_insn_address_of(function, b)};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_v128_and), out, types, args);
+	pushValue(out);
 }
 void OpcodeDispatcher::dispatchV128AndNot() {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); popValue(); return; }
+	jit_value_t b = popValue();
+	jit_value_t a = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_void_ptr};
+	jit_value_t args[2] = {jit_insn_address_of(function, a), jit_insn_address_of(function, b)};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_v128_andnot), out, types, args);
+	pushValue(out);
 }
 void OpcodeDispatcher::dispatchV128Or() {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); popValue(); return; }
+	jit_value_t b = popValue();
+	jit_value_t a = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_void_ptr};
+	jit_value_t args[2] = {jit_insn_address_of(function, a), jit_insn_address_of(function, b)};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_v128_or), out, types, args);
+	pushValue(out);
 }
 void OpcodeDispatcher::dispatchV128Xor() {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); popValue(); return; }
+	jit_value_t b = popValue();
+	jit_value_t a = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_void_ptr};
+	jit_value_t args[2] = {jit_insn_address_of(function, a), jit_insn_address_of(function, b)};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_v128_xor), out, types, args);
+	pushValue(out);
 }
 void OpcodeDispatcher::dispatchV128Bitselect() {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); popValue(); popValue(); return; }
+	jit_value_t c = popValue();   // the selector is on top
+	jit_value_t b = popValue();
+	jit_value_t a = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[3] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr};
+	jit_value_t args[3] = {jit_insn_address_of(function, a),
+			jit_insn_address_of(function, b), jit_insn_address_of(function, c)};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_v128_bitselect), out, types, args);
+	pushValue(out);
 }
 void OpcodeDispatcher::dispatchV128AnyTrue() {
 	notImplemented(__func__);

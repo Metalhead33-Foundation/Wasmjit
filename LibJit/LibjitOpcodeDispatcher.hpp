@@ -127,6 +127,15 @@ private:
 	// The common shape: leading operands, then the result slot's address.
 	jit_value_t callSimdOutHelper(void* fptr, jit_value_t out,
 			std::span<const jit_type_t> leadingTypes, std::span<const jit_value_t> leadingArgs);
+	// The `v128.load*` / `v128.store*` shapes. The effective address is computed
+	// and bounds-checked by `effectiveMemoryAddress` — the same path the scalar
+	// loads take, trap included — so the helpers themselves never trap and need
+	// no context (docs/SIMD_LIBJIT.md §6.3). Operand order is wasm's: for a lane
+	// or store form the vector is on top, the address below it.
+	void emitSimdLoad(const WASM::MemArg& ma, jit_nint width, void* helper);
+	void emitSimdLoadLane(const WASM::MemArg& ma, jit_nint width, uint8_t lane, void* helper);
+	void emitSimdStore(const WASM::MemArg& ma, jit_nint width, void* helper);
+	void emitSimdStoreLane(const WASM::MemArg& ma, jit_nint width, uint8_t lane, void* helper);
 	// Signature cache: the SIMD ops share a handful of shapes, so memoise them
 	// instead of creating (and leaking) one signature per instruction (§6.4).
 	std::vector<std::pair<std::vector<jit_type_t>, jit_type_t>> simdSignatureCache;

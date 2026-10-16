@@ -180,9 +180,12 @@ Highway's canonical skeleton — the pattern its own `highway.h` documents at th
 `HWY_EXPORT` definition, and the one the installed headers use:
 
 ```text
-WasmBase/wasm_simd_hwy.hpp   # per-target bodies; toggled guard (see below)
-WasmBase/wasm_simd_hwy.cpp   # the only file that knows about Highway's dispatch
+WasmBase/wasm_simd_vector.hpp   # per-target bodies; toggled guard (see below)
+WasmBase/wasm_simd_vector.cpp   # the only file that knows about Highway's dispatch
 ```
+
+(An earlier draft called these `wasm_simd_hwy.*`; §6.5 records why the core
+named them after the layer instead of the library.)
 
 The per-target header must be **re-includable**, so it follows Highway's own
 `ops/*-inl.h` guard convention — a guard that flips with `HWY_TARGET_TOGGLE`
@@ -299,12 +302,29 @@ Two conventions worth fixing now, because they decide how many helpers exist:
 
 | Path | Role | Milestone |
 |---|---|---|
-| `WasmBase/wasm_simd_hwy.cpp` / `.hpp` | The target-dependent helper bodies + the `extern "C"` wrappers (Highway's multi-target TU). One place where the library is visible. | SIMD-L2 |
-| `WasmBase/wasm_simd_scalar.cpp` / `.hpp` | The **scalar reference** implementation of *every* helper — no library, always compiled. The oracle of §9. | SIMD-L1 |
-| `LibJit/LibjitOpcodeDispatcher.cpp` | Turn the 236 `notImplemented(__func__)` stubs into helper calls; add `callSimd*`; the D1 inline cases | SIMD-L2…L4 |
+| `WasmBase/wasm_simd_vector.{hpp,cpp}` | The vectorised bodies, compiled once per CPU target, plus every `extern "C"` entry point and the `HWY_EXPORT` dispatch tables. The only place where the SIMD library is visible. | SIMD-L2 |
+| `WasmBase/wasm_simd_scalar.{hpp,cpp}` | The **scalar reference** implementation of every helper — no library, always compiled, never called by a backend. The oracle of §9. Also declares the entry-point contract (the `extern "C"` block), because that contract is core-owned. | SIMD-L1 |
+| `LibJit/LibjitOpcodeDispatcher.{hpp,cpp}` | Turns the `notImplemented(__func__)` stubs into helper calls: `callSimdHelper`/`callSimdOutHelper` (§6.4), the four `emitSimd*` memory shapes, and the per-op handlers. | SIMD-L1…L4 |
 | `LibJit/LibJitTypeTranslation.cpp` | The 16-byte alignment line (§6.1) | SIMD-L1 |
-| `WasmBase/WasmModuleInstance.cpp` | `evalConstantExpr` `v128.const` arm; `storageAlign` alignment | SIMD-L5 |
+| `WasmBase/WasmModuleInstance.cpp` | `evalConstantExpr` `v128.const` arm; `gcStorageAlign` | SIMD-L5 / L1 |
 | `Test/wasm_wat/simd_*.wat` | Hand-written lane-semantics modules | SIMD-L1+ |
+
+Two things about this layout are worth stating explicitly, because they were
+*decided during* SIMD-L2 rather than before it:
+
+1. **The vector TU is named after the layer, not after the library.** An earlier
+   draft of this note called it `wasm_simd_hwy.*`. That would have baked an
+   implementation choice into a core filename — and this note's own §5.3 keeps
+   the library swappable (SIMDe is the documented escape hatch), so the name
+   would have been a lie the day it was used. The rename is deliberate.
+2. **Which layer owns an entry point is decided by whether a vector path pays.**
+   `wasm_simd_vector.cpp` implements the entry points that have one — the
+   bitwise ops, whole-vector load/store, the broadcasts, shuffle and swizzle —
+   and for the rest *forwards to the reference*: for a single-lane move or a
+   widening copy, the byte move **is** the optimal lowering, so a second
+   implementation would be duplicated code with nothing to gain. The consequence
+   for §9 is that only the former group can be differentially tested; the
+   forwarding group is pinned by golden vectors, and the test comments say so.
 
 ### 6.6 Verified mechanics (measured, not assumed)
 
@@ -338,7 +358,7 @@ library choice. Each row is something a plausible implementation gets wrong
 |---|---|---|---|
 | **Y1** | `f32x4`/`f64x2` `min`/`max` (and `pmin`/`pmax`) | `minps`/`Min` returns the **second** operand when either is NaN, and for `±0` returns the second operand. wasm requires a **canonical NaN** when either input is NaN, and *min* must pick `-0` / *max* must pick `+0`. | Compare in two steps: an unordered mask → canonical NaN; otherwise an ordered compare with an explicit `±0` tie-break. |
 | **Y2** | `i32x4.trunc_sat_f32x4_{s,u}`, `_f64x2_{s,u}_zero` | `cvttps2dq` yields `0x80000000` for NaN and for out-of-range — indistinguishable from a legitimate `-2^31`. | NaN → `0`; `≥ 2^31` → `INT32_MAX`; `≤ -2^31 - 1` → `INT32_MIN`; unsigned forms clamp to `[0, UINT32_MAX]`. Fix up the raw conversion. |
-| **Y3** | `i8x16.swizzle` | `pshufb`/`BitShuffle` zeroes a lane only when the index's **bit 7** is set; wasm zeroes every index `≥ 16`, so indices 16…127 would silently alias lanes 0…15. | Saturate the index (`min(idx, 15)` unsigned) *or* compare-and-blend before the shuffle. **The single most likely silent bug in the whole feature.** |
+| **Y3** | `i8x16.swizzle` | `pshufb`/`BitShuffle` zeroes a lane only when the index's **bit 7** is set; wasm zeroes every index `≥ 16`, so indices 16…127 would silently alias lanes 0…15. | One **unsigned** range mask: `idx <= 15` takes the looked-up byte, everything else takes zero. That single select also covers 128…255, so pshufb's bit-7 rule never has to be reproduced *or* relied on (§11 R7) — which matters because the SSE2 and SSSE3 paths differ there. **The single most likely silent bug in the whole feature.** |
 | **Y4** | `i8x16.shuffle` | Indices 0–15 select operand 0, 16–31 operand 1; a shuffle primitive that takes "one selector vector" invites an off-by-16 or a reversed concatenation. | Build the two-operand concatenation explicitly; verify against the oracle. |
 | **Y5** | `q15mulr_sat_s` | `pmulhrsw`/`MulFixedPoint15` rounds `(a*b + 0x4000) >> 15` but yields `0x8000` for the `-32768 × -32768` corner, where wasm requires saturation to `0x7fff`. | Fix up the one saturated lane (compare the inputs against the negative-only corner). |
 | **Y6** | `narrow` / `widen` / `extmul` / `pmin`/`pmax` lane order | Packing instructions interleave two inputs (`packs` produces low half from the first operand, high half from the second); getting this backwards permutes lanes while still looking "reasonable". | Assert lane placement in T1 per op, not just the numeric result. |
@@ -465,17 +485,25 @@ WASM_SPEC_SCRIPTS=all ./WasmJit '[spec]'  # T3 sweep, for re-curation
 | Layer | Script / case | Result | Reading |
 |---|---|---|---|
 | T1 | `simd helpers: v128.const and *.splat follow the wasm byte layout` | pass | SIMD-L1 |
-| T1 | `simd helpers: extract_lane and replace_lane` | pass | SIMD-L1 |
-| T1 | `simd helpers: the entry points and the scalar reference agree` | pass | pins the seam SIMD-L2 makes interesting |
+| T1 | `simd helpers: extract_lane and replace_lane` | pass | SIMD-L1 (golden vectors: one implementation, §6.5) |
+| T1 | `simd helpers: the entry points and the scalar reference agree` | pass | pins the seam |
+| T1 | `simd helpers: bitwise ops agree with the scalar reference` | pass | first genuine differential (vectorised vs reference) |
+| T1 | `simd helpers: memory loads and stores` | pass | differential + golden for the widening/zero/lane forms |
+| T1 | `simd helpers: shuffle and swizzle` | pass | hazards Y3/Y4 pinned by boundary vectors |
 | T2 | `simd: a v128 parameter and result round-trip through the JIT` | pass | **closes S4/S5/S9** |
 | T2 | `simd: v128.const, splat and lane ops run through the JIT` | pass | SIMD-L1 |
-| T3 | the 59 `simd_*.wast` scripts | signal 6, 0 passing commands | still S1 (the ~215 handlers that remain stubs) and S7 |
+| T2 | `simd: bitwise ops run through the JIT` | pass | SIMD-L2 |
+| T2 | `simd: memory loads and stores run through the JIT` | pass | SIMD-L2, incl. an unaligned memarg and the bounds-check path |
+| T2 | `simd: shuffle and swizzle run through the JIT` | pass | SIMD-L2 |
+| T3 | the 59 `simd_*.wast` scripts | signal 6, 0 passing commands | still S1 (the ~185 handlers that remain stubs) and S7 |
 | T4 | — | — | SIMD-L8 |
 
-Measured on the SIMD-L1 build: `./WasmJit 'simd*'` reports **5 cases, 218
-assertions, all passing**; the whole default suite is **91 cases / 1755
-assertions** (86 / 1537 before SIMD-L1), so the change added coverage without
-regressing the curated set.
+Measured after SIMD-L2: `./WasmJit 'simd*'` reports **11 cases, 479 assertions,
+all passing**; the whole default suite is **97 cases / 2016 assertions**
+(91 / 1755 after SIMD-L1, 86 / 1537 before it) — added coverage, no regressions.
+
+The `.wat` modules are checked with `wasm-tools validate --features all` before
+they are run, so a T2 failure is a runtime bug rather than a malformed input.
 
 Reproduce one T3 row with
 `WASM_SPEC_TIMEOUT=10 ./WasmJit 'spec: simd_load' -r compact`.
@@ -490,13 +518,23 @@ two lists line up: L1–L7 are the *how* for SIMD-0…SIMD-6.
 |---|---|---|---|
 | **SIMD-L0 — This note** | Write this decision record and the consistency edits to `SIMD_BACKENDS.md`, `proposals/SIMD.md`, `README.md`, `TESTING.md`. No code. | — (the gate) | The five documents agree on the direction, the ABI, the library and the test plan. |
 | **SIMD-L1 — Scalar reference + ABI** | ✅ **Done.** `wasm_simd_scalar.{hpp,cpp}` (the reference for every L1 helper, plus the `extern "C"` entry points); `jit_type_set_size_and_alignment(v128, 16, 16)`; `gcStorageAlign` → 16; the two 16-byte zero-value paths corrected; `callSimdHelper`/`callSimdOutHelper` + signature cache; 21 ops wired (const, 6 splats, 8 extracts, 6 replaces); `simd_abi.wat` + `simd_const_lane.wat`; 5 T1/T2 cases. | S4, S5, S9 | ✅ `(param v128)(result v128)` round-trips through the JIT (measured); `v128.const` → `splat` → extract/replace matches the golden vectors; suite 91/1755, zero regressions. |
-| **SIMD-L2 — Highway layer + memory/bitwise/lane** | The multi-target TU and the qmake lines (§5.5); helpers for `v128.load`/`store` (+ splat/zero/lane variants), bitwise `and/andnot/or/xor/not/bitselect`, `*.splat`, `extract_lane`, `replace_lane`, `shuffle`, `swizzle`; the D5 peepholes for `load`+op and `const`+op. | S1 (part) | `simd_load_store.wat`, `simd_shuffle.wat` green; T1 green for the whole L2 op set; the JIT links against `libhwy` under qmake. |
+| **SIMD-L2 — Highway layer + memory/bitwise/lane** | ✅ **Done** except the peepholes (see below). The multi-target TU + the qmake lines (§5.5) landed as `wasm_simd_vector.*` (§6.5); `*.splat` moved to a real vector broadcast; all 22 `v128.load*`/`store*` ops, the 6 bitwise ops, `shuffle` and `swizzle` are implemented and tested. **Deferred: the D5 peepholes** (`load`+op, `const`+op fusion). | S1 (part) | ✅ `simd_load_store.wat` and `simd_shuffle.wat` green; T1 green for the whole L2 op set; `libWasmBase` links `libhwy.so.1` and the entry points dispatch at run time. |
 | **SIMD-L3 — Integer and comparison ops** | add/sub/mul, neg/abs, `min/max`, shifts, `avgr_u`, saturating add/sub, `q15mulr_sat_s` (Y5), comparisons, `all_true`/`any_true`/`bitmask` (Y9), `extmul`, `extadd_pairwise`, `dot`. | S1 | `simd_arith_i.wat` green; the i32-returning assertions of the `simd_i32x4_*`/`simd_i16x8_*` scripts pass where T3 is reachable. |
 | **SIMD-L4 — Float and conversion ops** | arithmetic, `min/max`/`pmin/pmax` (Y1), `sqrt`/`abs`/`neg`, rounding (Y7), conversions (`trunc_sat` Y2, `convert`, `promote`/`demote`, widen/narrow Y6, `i64x2` shifts Y8). | S1 | `simd_arith_f.wat`, `simd_convert.wat` green; T1 green for the whole fixed-width set (the §9 coverage gate holds). |
 | **SIMD-L5 — Globals and constant expressions** | `v128.const` in `evalConstantExpr`; `v128` global get/set; `v128` in the globals layout. | S3 | A module with a `v128` global initialised by `v128.const` runs and round-trips. |
 | **SIMD-L6 — Relaxed SIMD** | Enumerate the 20 relaxed sub-opcodes; decode them; implement the SD5 scalar results. | S2 | A module using each relaxed family produces a member of the allowed set; T1 checks membership, not equality. |
 | **SIMD-L7 — Harness marshalling** | Marshal `v128` arguments/results in `WastScript.cpp` (16-byte values, lane formatting); then curate `simd_*.wast` into `wast_supported.txt`. | S7, S8 | `./WasmJit 'spec: simd_*'` reports real pass/fail counts, and every curated script is listed in the T3 survey. |
 | **SIMD-L8 — Benchmark and the D4 decision** | M1–M5 per §8.2; apply the §8.3 gate; record the numbers in this note's §8 and in `TESTING.md`. | — | The note states the measured `ns/v128-op` and whether D4 is built, deferred or rejected. |
+
+**Why the D5 peepholes were deferred rather than built in L2.** Fusing
+`v128.load`+op or `v128.const`+op saves one slot round-trip, but it needs
+*lookahead*: the dispatcher is a single pass over the bytecode that emits each
+instruction as it decodes it, so fusion means buffering a decoded instruction
+and reconstructing its operands — real complexity in the hottest and most
+error-prone part of the backend. §8 already gates a peephole on the benchmark
+showing the boundary cost dominating, and that benchmark is SIMD-L8. Building it
+before the measurement would be speculative complexity, and the same measurement
+may well say D4 (fusing a whole run of ops into one call) is the better answer.
 
 Guardrails: the scalar reference stays compiled and green at every step; run
 `./WasmJit '~[spec]'` after each milestone; never let a real fix regress the
@@ -507,10 +545,12 @@ curated spec set.
 | # | Risk / question | Status |
 |---|---|---|
 | R1 | **Frame growth** on SIMD-dense functions (16 bytes per static `v128` value). | Accepted for L1–L7; mitigate with a height-keyed shared bank or slot reuse only if a real module hits it (§6.2). |
-| R2 | **Highway compile time** from per-target re-inclusion (SSE2…AVX3 + EMU128 + SCALAR). | Accepted; `HWY_COMPILE_ONLY_*` is the knob. Measure at L2. |
+| R2 | **Highway compile time** from per-target re-inclusion (SSE2…AVX3 + EMU128 + SCALAR). | Observed at SIMD-L2: the vector TU is compiled once per enabled target and a full build stays well under a minute on this machine. `HWY_COMPILE_ONLY_*` remains the knob if that changes. |
 | R3 | **`f32x4.min/max` NaN semantics** (Y1) are the likeliest silent conformance failure. | Mitigated by T1's unordered-mask cases and T2's `simd_arith_f.wat`; keep both non-negotiable. |
 | R4 | **`swizzle` sanity** (Y3) — indices 16…127 must zero, not alias. | Explicit T1 case with indices `16`, `127`, `128`, `255`. |
 | R5 | **`jit_insn_store_relative` silently does not write a `jit_value_create`d aggregate.** Found and fixed during SIMD-L1: `v128.const` and both v128 zero-value paths used it and produced uninitialised slots (§6.6). | Fixed (SIMD-L1); the rule "write a struct-typed value through its address" is now in the header comment and enforced by the §6.6 table. |
+| R6 | **Hand-computed golden vectors are error-prone.** During SIMD-L2 the differential layer passed on the first run both times, while two *test expectations* I derived by hand were wrong (`load8x8_s` lane 7, and `load16_lane`'s partial-lane overwrite). | Recorded as the lesson it is: the differential proves the implementation agrees with the reference, and says nothing about a hand-derived expected value. Golden vectors must come from the spec, and a wrong expectation gets fixed in the test — never in the code. |
+| R7 | **Hazard Y3 is simpler than §7 first described.** The original rule was "saturate the index, *or* handle pshufb's bit-7 rule". As built, one range select covers both: indices 128…255 are `≥ 16` too, so the same mask that fixes 16…127 zeroes them — the target's bit-7 behaviour never has to be reproduced *or* depended on, which also removes an SSE2-vs-SSSE3 difference. | Implemented (SIMD-L2); §7's Y3 row updated. The select uses the **unsigned** minimum, which the note calls out because the signed one would classify 128…255 as in-range. |
 | Q1 | Does LibJIT's 16-byte aggregate ABI (S9) work *and* beat the pointer ABI? | **Correctness answered (SIMD-L1): the ABI works** — `(param v128)(result v128)` round-trips through the JIT and the C++ mirror `{uint32_t×4}` matches it (§6.6). Whether by-value *beats* by-pointer is still the M2 benchmark at L8. |
 | Q2 | How is a `v128` value printed on a test failure? | Lane-wise hex with lane indices, defined at L1 (T1 diagnostics and T3 output both use it). |
 | Q3 | Do `v128` globals live as 16 inline bytes in the VM context? | Confirm at L5 against `WasmModuleInstance`'s globals layout and `storageAlign`. |
