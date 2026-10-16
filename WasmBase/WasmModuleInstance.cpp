@@ -119,7 +119,7 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 			throw SegmentOutOfBoundsException(offset, seg.data.size(), memory->memorySize);
 
 		// The actual copy. memoryBase is already a uint8_t*, so this is
-		// just a pointer-offset write — no JIT involvement needed.
+		// just a pointer-offset write — no generated code involved.
 		std::memcpy(
 			memory->memoryBase + offset,
 			seg.data.data(),
@@ -608,15 +608,15 @@ void ModuleInstance::initializeTable()
 
 namespace {
 
-// Runtime layout of GC aggregates must match LibJitTypeTranslator:
+// Runtime layout of GC aggregates must match each backend's lowering:
 //   struct: [u32 TypeId][u32 refcount], then naturally-aligned fields;
 //   array:  [u32 TypeId][u32 refcount][u32 length], then inline elements.
-// The shared constants live in WasmGcHeader.hpp; keep them in sync with
-// translateStruct / translateArray (docs/proposals/GC.md §6.3 / H1).
+// The shared constants live in WasmGcHeader.hpp; a backend's struct/array
+// translation must derive from them (docs/proposals/GC.md §6.3 / H1).
 constexpr size_t kGcHeaderBytes = GcHeader::kHeaderBytes;
 constexpr size_t kArrayLengthOffset = GcHeader::kArrayLengthOffset;
 
-// Delegate to the shared helpers so the runtime and the JIT cannot drift (H1).
+// Delegate to the shared helpers so the runtime and the backend cannot drift (H1).
 size_t storageBytes(const StorageType& st) { return gcStorageBytes(st); }
 size_t storageAlign(const StorageType& st) { return gcStorageAlign(st); }
 size_t alignUp(size_t value, size_t alignment) { return gcAlignUp(value, alignment); }
@@ -1359,7 +1359,7 @@ void ModuleInstance::releaseOutgoingRefs(void* ref, TypeId typeId,
 namespace {
 
 // Trial-deletion colours. The classic keeps them in the object header; a map
-// local to one trial avoids adding a header word, so the layout the JIT mirrors
+// local to one trial avoids adding a header word, so the layout the backend mirrors
 // stays untouched (H1) — the trial runs at a safepoint over the candidate set.
 enum : uint8_t { kBlack = 0, kGrey = 1, kWhite = 2 };
 

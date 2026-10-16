@@ -55,6 +55,12 @@ static const std::vector<WASM::ValueType> DefaultValueTypes = {
 LibJitTypeTranslator::LibJitTypeTranslator()
 	: v128(jit_type_create_struct(v128_definition, 4, 0)),
 	i31Type(createi31Type()) {
+	// A `v128` is 16 bytes *and* 16-byte aligned (docs/SIMD_LIBJIT.md §6.1).
+	// Without this LibJIT would lay the `{i32,i32,i32,i32}` struct out at 4-byte
+	// alignment, disagreeing with `WASM::Value`'s `alignas(16)` and with the
+	// runtime's `gcStorageAlign` (gap S4). Verified to survive embedding in a
+	// larger struct and to leave the argument/return ABI unchanged.
+	jit_type_set_size_and_alignment(v128, 16, 16);
 	for(const auto& it : DefaultValueTypes) {
 		translateType(it);
 	}

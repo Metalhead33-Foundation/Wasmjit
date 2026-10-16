@@ -68,7 +68,7 @@ gaps → where we deliberately deviate → plan → test survey → references.
   "Design Philosophy" QVM stance) that makes it safe; every §5 gap cites
   `Evidence` (a file, a script, a failing count).
 - **Cross-links.** Notes link each other by filename (e.g.
-  `[MUTABLE_GLOBALS.md](MUTABLE_GLOBALS.md)` *inside* the folder); `§N`
+  `[MUTABLE_GLOBALS.md](proposals/MUTABLE_GLOBALS.md)` *inside* the folder); `§N`
   references are note-relative. §1's map must match the headings that follow.
 
 ## 3. What this document does not demand

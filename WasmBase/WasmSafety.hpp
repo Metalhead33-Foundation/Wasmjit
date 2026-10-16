@@ -20,13 +20,13 @@ namespace WASM {
 // requireAvailable() is exact and cannot reject a valid module.
 
 // Declared locals in one function body. `PreparedFunctionStack::prepare`
-// materialises one jit value per local, so a single 5-byte LEB could otherwise
+// materialises one value slot per local, so a single 5-byte LEB could otherwise
 // ask for hundreds of millions of them. V8 caps this at 50 000; this is
 // deliberately more generous.
 inline constexpr uint32_t kMaxFunctionLocals = 100000;
 
 // Nested blocks/loops/ifs in one function body. The dispatcher walks the body
-// iteratively, but LibJIT and the operand/control stacks still grow with the
+// iteratively, but the backend and the operand/control stacks still grow with the
 // nesting, so pathological input gets a clear error instead.
 inline constexpr std::size_t kMaxControlNesting = 10000;
 

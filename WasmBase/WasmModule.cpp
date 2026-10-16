@@ -340,7 +340,7 @@ void Module::processCodeSection(Elv::Io::Device& file, const Section& section)
 			LocalEntry entry;
 			wasmStream >> Elv::Io::Leb(entry.count);
 			// A single 5-byte LEB can claim hundreds of millions of locals and
-			// PreparedFunctionStack::prepare materialises one jit value per
+			// PreparedFunctionStack::prepare materialises one value slot per
 			// local, so cap the total (docs/SAFETY.md).
 			declaredLocals += entry.count;
 			if (declaredLocals > kMaxFunctionLocals)
@@ -773,10 +773,10 @@ Module::Module() : version(0), startFunctionIndex(0), hasStartFunction(false) {
 
 namespace {
 
-// Reject a value type the engine cannot model. This is deliberate: an unmodelled
-// type lowers to `jit_type_void`, whose loads produce a null `jit_value_t`
-// (docs/NULL_JIT_VALUE_DIAGNOSIS.md), so such a module is refused at load
-// instead of being compiled into a silently broken function.
+// Reject a value type the engine cannot model. This is deliberate: a type with
+// no representation degenerates to a void/absent value whose loads yield a null
+// backend handle (docs/NULL_JIT_VALUE_DIAGNOSIS.md), so such a module is refused
+// at load instead of being compiled into a silently broken function.
 [[noreturn]] void rejectUnsupportedValueType(const char* where, size_t index, WASM::ValueTypeCode code)
 {
 	const unsigned byte = static_cast<unsigned>(static_cast<uint8_t>(code));

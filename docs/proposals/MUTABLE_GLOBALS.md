@@ -94,7 +94,7 @@ without a linear memory (see [`THREADS.md`](THREADS.md) §2.6).
 
 Guardrail: an imported global must not dangle — the exporting `ModuleInstance`
 must outlive the importer, exactly like the cross-module `Callable::context`
-rule in [`ABI.md`](ABI.md).
+rule in [`ABI.md`](../ABI.md).
 
 ## 7. Plan
 
@@ -125,7 +125,7 @@ rule in [`ABI.md`](ABI.md).
 - Spec — Modules (import matching):
   https://webassembly.github.io/spec/core/valid/modules.html
 - In-repo: [`docs/GC.md`](GC.md) G6, [`docs/EXTENDED_CONST.md`](EXTENDED_CONST.md) EC2,
-  [`docs/THREADS.md`](THREADS.md) §2.6, [`docs/ABI.md`](ABI.md);
+  [`docs/THREADS.md`](THREADS.md) §2.6, [`docs/ABI.md`](../ABI.md);
   sources `WasmBase/WasmType.hpp` (`GlobalType`, `Global`),
   `WasmBase/WasmModuleInstance.{hpp,cpp}` (`globalsStorage`,
   `initializeGlobals`, `registerExports`), `WasmBase/WasmImport.hpp`,

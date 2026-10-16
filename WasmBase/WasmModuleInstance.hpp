@@ -60,7 +60,7 @@ struct ModuleInstanceInternals {
 	// by every collectCycles().
 	std::vector<void*> gcCycleRoots;
 
-	// Backend-specific compiled function handles (e.g., jit_function_t for LibJIT).
+	// Backend-specific compiled function handles (a backend function handle).
 	// Stored as void* to keep this header backend-agnostic.
 	// Parallel to module->internalFunctionTypeIndices.
 	std::vector<void*> compiledFunctions;
@@ -69,7 +69,7 @@ struct ModuleInstanceInternals {
 
 // ── The C++ owner of the VMContext and all its allocations. ──
 // This is what your instantiator creates and your embedder holds onto.
-// JIT-compiled functions never see this class directly — only VMContext*.
+// compiled functions never see this class directly — only VMContext*.
 class ModuleInstance {
 private:
 	VMContext ctx; // The POD struct; kept first so &instance == &ctx (convenient cast).
@@ -104,7 +104,7 @@ private:
 	// A dying object's reference-typed slots must be released too, or the whole
 	// child graph leaks — plain reference counting, not cycle collection. This
 	// is the runtime's typed layout walk: `TypeId` -> the reference-typed field
-	// /element offsets. The JIT-side mirror is `structFieldOffsets`; both derive
+	// /element offsets. The backend-side mirror is `structFieldOffsets`; both derive
 	// offsets from the shared gcAlignUp/gcStorageAlign/gcStorageBytes helpers
 	// (docs/proposals/GC.md §6.3 / H1).
 	const Subtype* subtypeForTypeId(TypeId typeId) const;
@@ -215,7 +215,7 @@ protected:
 	Value evalConstantExpr(const std::span<const std::byte>& expr, ModuleInstance& instance);
 	// Subclasses implement these two. declareFunctions creates a handle
 	// for each function (so call targets exist before any body is compiled).
-	// compileFunctions then fills each handle with actual JIT instructions.
+	// compileFunctions then fills each handle with generated instructions.
 	virtual void translateTypes(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals) = 0;
 	virtual void declareFunctions(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals) = 0;
 	virtual void compileFunctions(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals) = 0;

@@ -88,11 +88,10 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 // ── Value types this engine models ──────────────────────────────────────────
 // True only for the codes this engine can lower and run. Anything else (the
 // exception-handling `exnref` / `nullexnref` opcodes 0x69 / 0x74 are the ones the
-// spec suite exercises) has no representation: `translatePrimitiveType` would
-// fall back to `jit_type_void`, and a load of that type yields a null
-// `jit_value_t`. Rather than compile such a module into an operand that is
-// silently broken, `Module::fromFile` rejects it — see
-// docs/NULL_JIT_VALUE_DIAGNOSIS.md.
+// spec suite exercises) has no representation: the type lowers to a void/absent
+// value, and loading one yields a null backend handle. Rather than compile such
+// a module into an operand that is silently broken, `Module::fromFile` rejects
+// it — see docs/NULL_JIT_VALUE_DIAGNOSIS.md.
 inline bool isModeledValueTypeCode(ValueTypeCode code)
 {
 	switch (code) {
@@ -373,7 +372,7 @@ struct PreparedFunctionStack {
 	std::vector<ValueType> allReturns;
 	// Widened from uint16_t: a function may declare more than 65535 locals or
 	// parameters (the cap lives in WasmSafety.hpp; a silent truncation here
-	// would desynchronise the JIT local slots).
+	// would desynchronise the backend local slots).
 	uint32_t parameterCount;
 	uint32_t localCount;
 

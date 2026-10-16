@@ -264,7 +264,7 @@ code reflect it — the failing test is named `spec: <script>`.
 > crash *anywhere* in a script — even after hundreds of passing commands — is reported as
 > `... after 0 passing commands`. To find out how far a script actually gets, give the child a larger
 > stack (`bash -c 'ulimit -s 1048576; ./WasmJit "spec: <name>"'`) or run it under `gdb`. Several
-> tail-call scripts pass fully this way (see [`TAILCALLS.md`](TAILCALLS.md)).
+> tail-call scripts pass fully this way (see [`TAILCALLS.md`](proposals/TAILCALLS.md)).
 
 > The `[spec] ...` report is written straight to stderr rather than through Catch2's reporter, so
 > structured reporters (`-r JSON`, `-r JUnit`, `-r TAP`, `-r XML`) only contain the harness's own
@@ -428,6 +428,101 @@ The harness surfaces these **real** mismatches, for example:
 `WJ_TRACE=1` prints every command before it runs; because each script executes in
 a forked child that only writes its report at the end, that is how you find the
 command that killed a "no report" child.
+
+---
+
+## Part 3 — the SIMD tests
+
+SIMD needs its own layers because the spec-suite harness cannot marshal `v128`
+arguments or results yet (the skip is described in
+[Part 2](#what-is-executed-and-what-is-skipped)). The design behind these layers
+is [`docs/SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §9; this section is the practical
+guide. Four layers, four jobs:
+
+| Layer | Artefact | Job |
+|---|---|---|
+| T1 | `TEST_CASE`s in `Test/main.cpp` | Differential oracle: each SIMD helper vs an independent scalar implementation |
+| T2 | `Test/wasm_wat/simd_*.wat` | End-to-end lane semantics through the JIT, with exact expected vectors |
+| T3 | `simd_*.wast` + `Test/wast_supported.txt` | Upstream spec conformance (blocked on harness marshalling) |
+| T4 | a tagged benchmark case | `ns/v128-op` measurement; diagnostic, not a gate |
+
+### T1 — the differential oracle
+
+Every `v128` helper (`WasmBase/wasm_simd_hwy.*`) has a twin scalar
+implementation (`WasmBase/wasm_simd_scalar.*`) that shares no code with it. The
+Catch2 cases feed both the same inputs and compare **all 16 bytes**, plus a
+lane-by-lane comparison where lane position matters (narrow/widen/extmul).
+
+Input classes the cases must cover: seeded random vectors; all-`0x00`,
+all-`0xFF`, alternating patterns; per-lane `0`/`1`/`INT_MIN`/`INT_MAX`; float
+`±0.0`, `±inf`, `qNaN`, `sNaN`, denormals and the `2^31` boundary. For float
+families the comparison is "any NaN in → canonical NaN out", never `==`.
+
+```bash
+./WasmJit 'simd helpers*'      # T1 alone, by case-name prefix
+```
+
+Run `./WasmJit 'simd helpers*' -s` to see the per-assertion vector dumps when a
+case fails (each `v128` is printed lane-wise in hex).
+
+### T2 — the `simd_*.wat` modules
+
+Plain WAT under `Test/wasm_wat/`, parsed by `wasm-tools parse` at build time
+exactly like the existing WAT modules (see `Test/Test.pro`). They load through
+`loadTestModule("simd_<name>")` like any other manual test.
+
+To add one:
+
+1. Write `Test/wasm_wat/simd_<topic>.wat` exporting functions with scalar
+   signatures — `v128` cannot cross the harness boundary yet, so an end-to-end
+   module returns its lanes as `i32`/`i64`/`f32`/`f64` (for example
+   `i32x4.extract_lane` results, or a `bitmask`).
+2. Add a `TEST_CASE` in `Test/main.cpp` that loads it and asserts the exact
+   values.
+3. **Re-run qmake** — the WAT source list is built with `$$files()` at qmake
+   time, so `make` alone will not notice the new file.
+
+Current modules (SIMD-L1):
+
+| Module | Covers | Case |
+|---|---|---|
+| `simd_abi.wat` | `(param v128)(result v128)` round-trip, `v128` locals incl. reading one before `local.set`, a `v128` through a block, lane projections | `simd: a v128 parameter and result round-trip through the JIT` |
+| `simd_const_lane.wat` | `v128.const` byte order, `*.splat`, signed/unsigned `extract_lane`, `replace_lane` | `simd: v128.const, splat and lane ops run through the JIT` |
+
+Measured on the SIMD-L1 build:
+
+```bash
+./WasmJit 'simd*'      # 5 cases, 218 assertions, all passing
+./WasmJit              # 91 cases, 1755 assertions, all passing (86 / 1537 before SIMD-L1)
+```
+
+### T3 — the spec scripts
+
+All 59 `simd_*.wast` scripts currently abort during module compilation, and even
+a working engine would report them as mostly *skipped*, because
+`Test/WastScript.cpp` skips `v128` arguments/results. Lifting that skip is
+milestone `SIMD-L7` in [`docs/SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §10. Until it
+lands, do not add SIMD scripts to `wast_supported.txt`: a script that reports
+`passed=N skipped=M` with `M > 0` is not evidence of conformance. Reproduce a
+row with:
+
+```bash
+WASM_SPEC_TIMEOUT=10 ./WasmJit 'spec: simd_load' -r compact
+```
+
+### T4 — the benchmark
+
+A `SIMD-L8` diagnostic. It is tagged `[simdbench]` so it stays out of the
+default run, and it prints `ns/v128-op` for the variants listed in
+`docs/SIMD_LIBJIT.md` §8.2:
+
+```bash
+./WasmJit '[simdbench]'
+```
+
+It is not a CI gate and must not be turned into one — the numbers decide
+whether the batched helper path (design `D4`) is ever built, and they are
+recorded back into `docs/SIMD_LIBJIT.md` §8.
 
 ---
 

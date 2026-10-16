@@ -7,7 +7,7 @@
 #include <vector>
 namespace WASM {
 
-// JIT-visible view of a table. Standard-layout; `base` is first so generated
+// backend-visible view of a table. Standard-layout; `base` is first so generated
 // code can address slots cheaply (mirrors LinearMemory).
 struct TableInstance {
 	Callable** base;   // slot array; null entries trap on call_indirect
@@ -16,9 +16,9 @@ struct TableInstance {
 	void*      hostData; // back-pointer to the owning StoreOwnedTable
 };
 static_assert(offsetof(TableInstance, base) == 0,
-			  "TableInstance::base must remain the first field for JIT ABI compatibility");
+			  "TableInstance::base must remain the first field for backend ABI compatibility");
 static_assert(std::is_standard_layout_v<TableInstance>,
-			  "TableInstance must remain standard-layout for offsetof() access from the JIT");
+			  "TableInstance must remain standard-layout for offsetof() access from generated code");
 
 // A table owned by the (global) Store. The backing slot array lives here; the
 // TableInstance view is what module instances borrow (and what future shared /

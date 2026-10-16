@@ -8,8 +8,8 @@ namespace WASM {
 
 struct Module;
 
-// ── The raw POD context passed as arg0 to every JIT-compiled function. ──
-// Must remain standard-layout. The JIT accesses fields via offsetof().
+// ── The raw POD context passed as arg0 to every compiled function. ──
+// Must remain standard-layout. The backend accesses fields via offsetof().
 // NEVER add std::vector, virtual functions, or non-trivial members here.
 struct VMContext {
 	// Hot fields first — memory access is the most frequent operation.
@@ -45,9 +45,9 @@ struct VMContext {
 };
 
 static_assert(offsetof(VMContext, memories) == 0,
-			  "VMContext::memories must remain the first field for JIT ABI compatibility");
+			  "VMContext::memories must remain the first field for backend ABI compatibility");
 static_assert(std::is_standard_layout_v<VMContext>,
-			  "VMContext must remain standard-layout for offsetof() access from the JIT");
+			  "VMContext must remain standard-layout for offsetof() access from generated code");
 
 }
 

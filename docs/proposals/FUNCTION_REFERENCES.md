@@ -96,7 +96,7 @@ WebAssembly **3.0** (it is the prerequisite the GC proposal builds on).
 | FRD1 | **Keep `Callable` as the universal funcref** (code pointer + context + canonical type id). | §3: representation free. | One type for tables, `ref.func`, `call_ref`, `call_indirect`, imports. |
 | FRD2 | **Type-check with canonical-id equality first, registry subtyping second** (already done). | §3: mechanism free; §2 only requires `match`. | Constant-time fast path, correct variance on the slow path. |
 | FRD3 | **Represent nullability as the null pointer**; skip a separate tagged form. | §3; observable behaviour is all that matters. | `ref.is_null` is a pointer compare. |
-| FRD4 | **Bake the callee `VMContext*` into direct calls**, load it for indirect/ref calls (see [`ABI.md`](ABI.md)). | §3; `Callable` carries the context. | Fast cross-module calls with no trampoline. |
+| FRD4 | **Bake the callee `VMContext*` into direct calls**, load it for indirect/ref calls (see [`ABI.md`](../ABI.md)). | §3; `Callable` carries the context. | Fast cross-module calls with no trampoline. |
 | FRD5 | **Fix classification by giving every callable a discoverable `typeId`** (a header on the arena object, or a Store-global registry) instead of per-instance scans. | §3; closes FR3 and GC G2 together. | Correct cross-module `ref.test funcref`, O(1). |
 | FRD6 | **Do not implement closures/environments.** | §2: a function reference is a typed function, no capture. | Scope control. |
 
@@ -135,8 +135,8 @@ be the canonical, process-wide identity (not the module-local `typeidx`);
   https://webassembly.github.io/spec/core/syntax/types.html
   https://webassembly.github.io/spec/core/syntax/instructions.html
 - In-repo: [`docs/GC.md`](GC.md) §4.5/§4.7, G2/G8; [`docs/TAILCALLS.md`](TAILCALLS.md);
-  [`docs/TYPE_IDENTITY.md`](TYPE_IDENTITY.md) (canonical `TypeId` and `match`);
-  [`docs/ABI.md`](ABI.md) (call/context rules); sources
+  [`docs/TYPE_IDENTITY.md`](../TYPE_IDENTITY.md) (canonical `TypeId` and `match`);
+  [`docs/ABI.md`](../ABI.md) (call/context rules); sources
   `WasmBase/WasmValue.hpp` (`Callable`), `WasmBase/WasmModuleInstance.{hpp,cpp}`
   (`internalCallables`, `importStorage`, `refMatchesHeapType`),
   `WasmBase/WasmTypeRegistry.{hpp,cpp}` (`matchesHeap`),

@@ -115,7 +115,7 @@ Tail Call is a **Phase 5** proposal, integrated into WebAssembly **3.0**.
 | TCD4 | **Do not implement sibling-call stack compaction / `jmp` in the JIT.** | Not required, and fragile with LibJIT. | Avoids platform-specific assembly. |
 
 Guardrails: the trampoline must preserve the `VMContext*` selection rules from
-[`ABI.md`](ABI.md) (caller's context for native imports, callee's for
+[`ABI.md`](../ABI.md) (caller's context for native imports, callee's for
 cross-module Wasm), and must not change trap ordering.
 
 Empirical note on LibJIT `JIT_CALL_TAIL` (this install): direct
@@ -160,7 +160,7 @@ All three are now in `Test/wast_supported.txt` and part of the default run.
   https://webassembly.github.io/spec/core/exec/instructions.html
 - In-repo: [`docs/FUNCTION_REFERENCES.md`](FUNCTION_REFERENCES.md)
   (`return_call_ref`), [`docs/MULTI_VALUE.md`](MULTI_VALUE.md) (result lists),
-  [`docs/ABI.md`](ABI.md); sources `WasmBase/WasmOpcode.hpp`
+  [`docs/ABI.md`](../ABI.md); sources `WasmBase/WasmOpcode.hpp`
   (`ReturnCall`, `ReturnCallIndirect`, `ReturnCallRef`),
   `WasmBase/WasmOpcodeDispatcher.cpp`,
   `LibJit/LibjitOpcodeDispatcher.cpp` (`dispatchReturnCall`,

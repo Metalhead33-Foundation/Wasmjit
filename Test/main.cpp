@@ -1,8 +1,11 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch_all.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <vector>
 
@@ -12,8 +15,16 @@
 #include "WasmBase/WasmOpcode.hpp"
 #include "WasmBase/WasmStore.hpp"
 #include "WasmBase/WasmTrap.hpp"
+#include "WasmBase/wasm_simd_scalar.hpp"
 
 Euph::Conf::Configuration GLOBAL_CONFIGURATION;
+
+// The C++ mirror of the JIT's lowered `v128`: 16 bytes, four `i32` lanes. The
+// JIT's type is forced to 16-byte alignment (LibJitTypeTranslation), which
+// leaves the System V *register classification* of a four-lane aggregate
+// unchanged — verified against this LibJIT build before the design was written
+// down (docs/SIMD_LIBJIT.md §9) — so this plain struct matches it on the wire.
+struct V128 { uint32_t a, b, c, d; };
 
 void nativeDebugMessage(const WASM::VMContext* context)
 {
@@ -1357,6 +1368,268 @@ TEST_CASE("GC layout: the JIT's struct field offsets match the shared layout hel
 		REQUIRE(jitOffset == expectedOffset);
 		expectedOffset += WASM::gcStorageBytes(structure.fields[i].storageType);
 	}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SIMD (docs/SIMD_LIBJIT.md §9, milestone SIMD-L1)
+//
+// T1 — the differential/golden layer. These call the helpers directly, so a
+// failure here is a *helper* bug, never a JIT bug. The expected bytes are
+// written out literally: they are the independent oracle, which is what makes
+// this layer useful even while only one implementation (the scalar reference)
+// exists — at SIMD-L2 the Highway bodies can be checked against the same
+// vectors, and the entry points against the reference.
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("simd helpers: v128.const and *.splat follow the wasm byte layout")
+{
+	// Hazard Y11: a `v128` is 16 bytes, bit 0 is the LSB of byte 0, and lane n
+	// of an N-bit shape sits at byte n*N/8, little-endian.
+	std::array<uint8_t, 16> out{};
+
+	// v128.const takes the two halves of the 16 immediate bytes.
+	wasm_v128_const(0x0807060504030201ull, 0x100F0E0D0C0B0A09ull, out.data());
+	const uint8_t expectedConst[16] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+									   0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10};
+	REQUIRE(std::equal(out.begin(), out.end(), expectedConst));
+
+	// A zeroed slot is all zeroes — this is what a `v128` local starts as.
+	wasm_v128_zero(out.data());
+	for (uint8_t b : out)
+		REQUIRE(b == 0);
+
+	wasm_i8x16_splat(0xAB, out.data());
+	for (uint8_t b : out)
+		REQUIRE(b == 0xAB);
+
+	wasm_i16x8_splat(0x1234, out.data());
+	REQUIRE(out[0] == 0x34);
+	REQUIRE(out[1] == 0x12);
+	REQUIRE(out[14] == 0x34);
+	REQUIRE(out[15] == 0x12);
+
+	wasm_i32x4_splat(0x0A0B0C0D, out.data());
+	REQUIRE(out[0] == 0x0D);
+	REQUIRE(out[3] == 0x0A);
+	REQUIRE(out[12] == 0x0D);
+	REQUIRE(out[15] == 0x0A);
+
+	wasm_i64x2_splat(static_cast<int64_t>(0x1122334455667788ull), out.data());
+	REQUIRE(out[0] == 0x88);
+	REQUIRE(out[7] == 0x11);
+	REQUIRE(out[8] == 0x88);
+	REQUIRE(out[15] == 0x11);
+
+	// Float splats replicate the IEEE bit pattern: 1.0f is 0x3F800000.
+	wasm_f32x4_splat(1.0f, out.data());
+	REQUIRE(out[0] == 0x00);
+	REQUIRE(out[1] == 0x00);
+	REQUIRE(out[2] == 0x80);
+	REQUIRE(out[3] == 0x3F);
+	REQUIRE(out[12] == 0x00);
+	REQUIRE(out[15] == 0x3F);
+
+	// -2.0 is 0xC000000000000000.
+	wasm_f64x2_splat(-2.0, out.data());
+	REQUIRE(out[0] == 0x00);
+	REQUIRE(out[6] == 0x00);
+	REQUIRE(out[7] == 0xC0);
+	REQUIRE(out[8] == 0x00);
+	REQUIRE(out[15] == 0xC0);
+}
+
+TEST_CASE("simd helpers: extract_lane and replace_lane")
+{
+	std::array<uint8_t, 16> v{};
+	wasm_v128_const(0x0807060504030201ull, 0x100F0E0D0C0B0A09ull, v.data());
+
+	// Unsigned extraction of every shape.
+	REQUIRE(wasm_i8x16_extract_lane_u(v.data(), 0) == 0x01);
+	REQUIRE(wasm_i8x16_extract_lane_u(v.data(), 15) == 0x10);
+	REQUIRE(wasm_i16x8_extract_lane_u(v.data(), 0) == 0x0201);
+	REQUIRE(wasm_i16x8_extract_lane_u(v.data(), 7) == 0x100F);
+	REQUIRE(wasm_i32x4_extract_lane(v.data(), 0) == 0x04030201);
+	REQUIRE(wasm_i32x4_extract_lane(v.data(), 3) == 0x100F0E0D);
+	REQUIRE(wasm_i64x2_extract_lane(v.data(), 0) == 0x0807060504030201ll);
+	REQUIRE(wasm_i64x2_extract_lane(v.data(), 1) == 0x100F0E0D0C0B0A09ll);
+
+	// Signed extraction sign-extends; lane 15 of the pattern is 0x10 (positive),
+	// so check a lane that really has its top bit set.
+	std::array<uint8_t, 16> neg{};
+	std::memset(neg.data(), 0xFF, neg.size());
+	REQUIRE(wasm_i8x16_extract_lane_s(neg.data(), 0) == -1);
+	REQUIRE(wasm_i8x16_extract_lane_u(neg.data(), 0) == 0xFF);
+	REQUIRE(wasm_i16x8_extract_lane_s(neg.data(), 3) == -1);
+	REQUIRE(wasm_i16x8_extract_lane_u(neg.data(), 3) == 0xFFFF);
+	REQUIRE(wasm_i32x4_extract_lane(neg.data(), 0) == -1);
+
+	// Float lanes round-trip the bit pattern.
+	std::array<uint8_t, 16> f{};
+	wasm_f32x4_splat(1.5f, f.data());
+	REQUIRE(wasm_f32x4_extract_lane(f.data(), 2) == 1.5f);
+	wasm_f64x2_splat(-0.0, f.data());
+	REQUIRE(std::signbit(wasm_f64x2_extract_lane(f.data(), 1)));
+
+	// replace_lane changes exactly the named lane and copies the rest.
+	std::array<uint8_t, 16> out{};
+	wasm_i32x4_replace_lane(v.data(), 1, 0x0BADF00D, out.data());
+	REQUIRE(out[4] == 0x0D);
+	REQUIRE(out[5] == 0xF0);
+	REQUIRE(out[6] == 0xAD);
+	REQUIRE(out[7] == 0x0B);
+	REQUIRE(out[0] == 0x01);   // lane 0 untouched
+	REQUIRE(out[8] == 0x09);   // lane 2 untouched
+	REQUIRE(out[12] == 0x0D);  // lane 3 untouched
+
+	wasm_i8x16_replace_lane(v.data(), 15, 0xAB, out.data());
+	REQUIRE(out[15] == 0xAB);
+	REQUIRE(out[14] == 0x0F);
+	REQUIRE(out[0] == 0x01);
+
+	wasm_i64x2_replace_lane(v.data(), 0, 0, out.data());
+	REQUIRE(out[7] == 0x00);
+	REQUIRE(out[8] == 0x09);   // lane 1 untouched
+
+	wasm_f32x4_replace_lane(v.data(), 0, 1.0f, out.data());
+	REQUIRE(out[3] == 0x3F);
+	REQUIRE(out[4] == 0x05);   // lane 1 untouched
+}
+
+TEST_CASE("simd helpers: the entry points and the scalar reference agree")
+{
+	// At SIMD-L1 the entry points *are* the reference, so this case pins the
+	// seam rather than proving much: it is the shape SIMD-L2 makes interesting,
+	// when the Highway bodies must agree with the reference over the same
+	// inputs (docs/SIMD_LIBJIT.md §9, T1).
+	for (uint32_t seed = 1; seed <= 8; ++seed) {
+		std::array<uint8_t, 16> a{};
+		for (size_t i = 0; i < a.size(); ++i)
+			a[i] = static_cast<uint8_t>((seed * 37u + i * 11u) & 0xFFu);
+		const uint32_t lane = seed % 4u;
+		const int32_t value = static_cast<int32_t>(seed * 0x01010101u);
+
+		std::array<uint8_t, 16> ref{};
+		std::array<uint8_t, 16> got{};
+		WASM::simd_scalar::replaceI32x4(a.data(), lane, value, ref.data());
+		wasm_i32x4_replace_lane(a.data(), lane, value, got.data());
+		REQUIRE(ref == got);
+
+		// Same bytes, read back through both layers, lane by lane.
+		for (uint32_t l = 0; l < 4; ++l) {
+			REQUIRE(WASM::simd_scalar::extractI32x4(got.data(), l)
+					== wasm_i32x4_extract_lane(got.data(), l));
+			REQUIRE(WASM::simd_scalar::extractI8x16U(got.data(), l)
+					== wasm_i8x16_extract_lane_u(got.data(), l));
+		}
+	}
+}
+
+TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
+{
+	// SIMD-0's done-when and SIMD-L1's exit criterion (docs/SIMD_LIBJIT.md §10):
+	// this closes S4 (alignment) / S5 / S9 (calling convention) for the
+	// register-passing case. `V128` is the C++ mirror of the lowered struct.
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("simd_abi", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	auto identity = instance.exportedFunction("identity");
+	auto viaLocal = instance.exportedFunction("via_local");
+	auto throughBlock = instance.exportedFunction("through_block");
+	auto lane0 = instance.exportedFunction("lane0");
+	auto lane3 = instance.exportedFunction("lane3");
+	auto u8Lane0 = instance.exportedFunction("u8_lane0");
+	auto u8Lane15 = instance.exportedFunction("u8_lane15");
+	auto i64Lane1 = instance.exportedFunction("i64_lane1");
+	auto zeroLane0 = instance.exportedFunction("local_zero_lane0");
+	auto zeroLane3 = instance.exportedFunction("local_zero_lane3");
+	REQUIRE(identity.has_value());
+	REQUIRE(viaLocal.has_value());
+	REQUIRE(throughBlock.has_value());
+	REQUIRE(lane0.has_value());
+	REQUIRE(lane3.has_value());
+	REQUIRE(u8Lane0.has_value());
+	REQUIRE(u8Lane15.has_value());
+	REQUIRE(i64Lane1.has_value());
+	REQUIRE(zeroLane0.has_value());
+	REQUIRE(zeroLane3.has_value());
+
+	const V128 in{0x04030201u, 0x08070605u, 0x0C0B0A09u, 0x100F0E0Du};
+
+	// `(param v128) (result v128)` — all four lanes must survive the boundary.
+	const V128 id = WASM::callCallable<V128>(*identity, in);
+	REQUIRE(id.a == in.a);
+	REQUIRE(id.b == in.b);
+	REQUIRE(id.c == in.c);
+	REQUIRE(id.d == in.d);
+
+	// The same through a `v128` local, and through a block boundary.
+	const V128 local = WASM::callCallable<V128>(*viaLocal, in);
+	REQUIRE(local.a == in.a);
+	REQUIRE(local.d == in.d);
+	const V128 blocked = WASM::callCallable<V128>(*throughBlock, in);
+	REQUIRE(blocked.a == in.a);
+	REQUIRE(blocked.d == in.d);
+
+	// Lane projections see the same bytes.
+	REQUIRE(WASM::callCallable<int32_t>(*lane0, in) == 0x04030201);
+	REQUIRE(WASM::callCallable<int32_t>(*lane3, in) == 0x100F0E0D);
+	REQUIRE(WASM::callCallable<int32_t>(*u8Lane0, in) == 0x01);
+	REQUIRE(WASM::callCallable<int32_t>(*u8Lane15, in) == 0x10);
+	REQUIRE(WASM::callCallable<int64_t>(*i64Lane1, in) == 0x100F0E0D0C0B0A09ll);
+
+	// A `v128` local read before its first `local.set` must be zero, not garbage
+	// (this is zeroValueForType's 16-byte path).
+	REQUIRE(WASM::callCallable<int32_t>(*zeroLane0) == 0);
+	REQUIRE(WASM::callCallable<int32_t>(*zeroLane3) == 0);
+}
+
+TEST_CASE("simd: v128.const, splat and lane ops run through the JIT")
+{
+	// T2 (docs/SIMD_LIBJIT.md §9): the same lane semantics as the T1 vectors,
+	// but reached through decoding, the operand stack, the slot bank and the
+	// helpers. The byte pattern is the one hazard Y11 is about.
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("simd_const_lane", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	const auto i32Export = [&instance](const char* name) {
+		auto fn = instance.exportedFunction(name);
+		REQUIRE(fn.has_value());
+		return *fn;
+	};
+
+	// v128.const: memory order is 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("const_i32_lane0")) == 0x04030201);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("const_i32_lane3")) == 0x100F0E0D);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("const_u8_lane0")) == 0x01);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("const_u8_lane15")) == 0x10);
+	REQUIRE(WASM::callCallable<int64_t>(i32Export("const_i64_lane0")) == 0x0807060504030201ll);
+
+	// splat fills every lane.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("splat_i8_lane0")) == 0x5A);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("splat_i8_lane15")) == 0x5A);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("splat_i16_lane7")) == 0x1234);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("splat_i32_lane2")) == -7);
+	REQUIRE(WASM::callCallable<int64_t>(i32Export("splat_i64_lane1")) == -2);
+
+	// Signed vs unsigned extraction of a lane with its top bit set.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("splat_i8_signed")) == -1);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("splat_i8_unsigned")) == 0xFF);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("splat_i16_signed")) == -32768);
+
+	// replace_lane changes one lane and leaves the others.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("replace_i32_lane1")) == 0x0BADF00D);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("replace_i32_untouched")) == 0);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("replace_i8_lane15")) == 0xAB);
+
+	// const -> replace -> extract, so the value really flows through the slot.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("const_replace_extract"))
+			== static_cast<int32_t>(0xFEEDFACEu));
 }
 
 

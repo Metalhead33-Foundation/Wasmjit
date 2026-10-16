@@ -96,7 +96,7 @@ instructions were **removed**.
 | EXD1 | **Implement unwinding with `setjmp`/`longjmp`** to a per-invocation handler chain, rather than a table-driven personality routine. | §3: the mechanism is free. This is the QVM/`Sys_Error` pattern. | Minimal machinery; a `throw` is a jump to the nearest `try_table` frame. |
 | EXD2 | **Keep a single `VMContext`-reachable handler stack** pushed/popped by `try_table` entry/exit. | §3; the handler set is naturally stack-shaped. | O(1) throw, no metadata tables. |
 | EXD3 | **Represent an `exnref` as a hunk pointer** to `{ tagId, payload }` in the GC region ([`GC.md`](GC.md) §6.1). | §3: representation free; `exnref` is opaque. | Reuses the arena and GC object model; `throw_ref` is a re-jump. |
-| EXD4 | **Intern tags to a process-wide `TagId`**, exactly like `TypeId` ([`TYPE_IDENTITY.md`](TYPE_IDENTITY.md)), and match by id. | §2 requires exact tag identity; a canonical id is one implementation. | Cheap, cross-module-correct matching. |
+| EXD4 | **Intern tags to a process-wide `TagId`**, exactly like `TypeId` ([`TYPE_IDENTITY.md`](../TYPE_IDENTITY.md)), and match by id. | §2 requires exact tag identity; a canonical id is one implementation. | Cheap, cross-module-correct matching. |
 | EXD5 | **Interpret the `catchop` flags directly** (`catch_ref`/`catch_all_ref`) so the label arity is known at compile time. | §2. | No runtime decision about whether to push the `exnref`. |
 | EXD6 | **Do not implement `WebAssembly.Tag`/`Exception`.** | §3: web-only. | Scope control. |
 
@@ -144,7 +144,7 @@ instructions were **removed**.
   https://webassembly.github.io/spec/core/syntax/types.html
 - In-repo: [`docs/GC.md`](GC.md) (hunks, `TypeId`), [`docs/MUTABLE_GLOBALS.md`](MUTABLE_GLOBALS.md)
   (the `resolveTag`/`resolveGlobal` pattern), [`docs/FUNCTION_REFERENCES.md`](FUNCTION_REFERENCES.md)
-  (reference types), [`docs/ABI.md`](ABI.md);
+  (reference types), [`docs/ABI.md`](../ABI.md);
   sources `WasmBase/WasmType.hpp` (`Tag`, `ImportTag`, `CatchClause`),
   `WasmBase/WasmModule.cpp` (`processTagSection`),
   `WasmBase/WasmOpcode.hpp` (`Throw`, `ThrowRef`, `TryTable`),

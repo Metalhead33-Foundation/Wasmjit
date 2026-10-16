@@ -6,6 +6,8 @@
 #include "../WasmBase/WasmTrap.hpp"
 #include "LibJitTypeTranslation.hpp"
 #include <jit/jit.h>
+#include <span>
+#include <utility>
 #include <vector>
 
 namespace LibJIT {
@@ -102,6 +104,33 @@ private:
 	// results.
 	const WASM::BranchHint* currentBranchHint() const;
 	jit_value_t zeroConstantForType(jit_type_t t);
+
+	// ── SIMD lowering (docs/SIMD_LIBJIT.md §6) ───────────────────────────────
+	//
+	// A `v128` operand is a struct-typed LibJIT value whose 16 bytes live in a
+	// frame slot; helpers never see the value, only its *address* (§6.3), and
+	// they write their result into a fresh slot. The mechanics were verified
+	// against this LibJIT build before the design was written down:
+	//   - `jit_insn_address_of` works on a struct parameter, on a struct local,
+	//     and on `jit_insn_load` of either;
+	//   - `jit_insn_store(local, value)` works for a struct local (so `local.set`
+	//     of a `v128` is fine);
+	//   - `jit_insn_store_relative` does **not** write a `jit_value_create`d
+	//     aggregate, so `v128.const` must go through a helper, not inline stores.
+	jit_type_t v128Type();
+	// A fresh 16-byte slot for a `v128` result.
+	jit_value_t newV128Slot();
+	// Calls a helper through a memoised signature (§6.4) and returns its result
+	// (`void` for the out-slot shapes — the caller then pushes the slot).
+	jit_value_t callSimdHelper(void* fptr, jit_type_t ret,
+			std::span<const jit_type_t> params, std::span<const jit_value_t> args);
+	// The common shape: leading operands, then the result slot's address.
+	jit_value_t callSimdOutHelper(void* fptr, jit_value_t out,
+			std::span<const jit_type_t> leadingTypes, std::span<const jit_value_t> leadingArgs);
+	// Signature cache: the SIMD ops share a handful of shapes, so memoise them
+	// instead of creating (and leaking) one signature per instruction (§6.4).
+	std::vector<std::pair<std::vector<jit_type_t>, jit_type_t>> simdSignatureCache;
+	jit_type_t simdCachedType = nullptr;
 	jit_value_t castRefValue(jit_value_t value, jit_type_t targetType);
 	jit_value_t refAsVoidPtr(jit_value_t value);
 	// Emits the reference-counting write barrier (`wasm_ref_store`): retain

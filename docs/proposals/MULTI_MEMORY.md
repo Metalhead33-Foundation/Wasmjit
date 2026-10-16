@@ -131,7 +131,7 @@ destination `MemIdx` differ) with correct overlap behaviour within each memory.
 - Spec — Instructions (`memarg` with memory index):
   https://webassembly.github.io/spec/core/syntax/instructions.html
 - In-repo: [`docs/MEMORY64.md`](MEMORY64.md), [`docs/BULK_MEMORY.md`](BULK_MEMORY.md),
-  [`docs/THREADS.md`](THREADS.md), [`docs/ABI.md`](ABI.md);
+  [`docs/THREADS.md`](THREADS.md), [`docs/ABI.md`](../ABI.md);
   sources `WasmBase/WasmType.hpp` (`MemArg`, `MemoryType`),
   `WasmBase/WasmVMContext.hpp` (`memories`, `memoryCount`),
   `WasmBase/WasmMemory.{hpp,cpp}`, `WasmBase/WasmStore.{hpp,cpp}`,

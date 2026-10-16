@@ -1,6 +1,7 @@
 #include "LibjitModuleCompiler.hpp"
 #include "LibjitOpcodeDispatcher.hpp"
 #include "../WasmBase/WasmStore.hpp"
+#include "../WasmBase/wasm_simd_scalar.hpp"
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <cassert>
 #include <cstddef>
@@ -16,7 +17,21 @@ jit_value_t zeroValueForType(jit_function_t fn, jit_type_t t);
 
 jit_value_t zeroStructValue(jit_function_t fn, jit_type_t t)
 {
+	// A struct-typed value is written through its *address*: in this LibJIT build
+	// `jit_insn_store_relative` does not write a `jit_value_create`d aggregate
+	// (verified; docs/SIMD_LIBJIT.md §6), so the field-by-field loop below would
+	// hand back an uninitialised slot. `v128` is the only struct type that
+	// reaches here — a 16-byte slot zeroed by the SIMD helper — and it matters:
+	// a `v128` local read before its first `local.set` must be zero, not garbage.
 	jit_value_t aggregate = jit_value_create(fn, t);
+	if (jit_type_get_size(t) == 16) {
+		jit_type_t params[1] = {jit_type_void_ptr};
+		jit_value_t args[1] = {jit_insn_address_of(fn, aggregate)};
+		jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 1, 1);
+		jit_insn_call_native(fn, "wasm_v128_zero",
+				reinterpret_cast<void*>(&wasm_v128_zero), sig, args, 1, 0);
+		return aggregate;
+	}
 	const unsigned int fieldCount = jit_type_num_fields(t);
 	for (unsigned int i = 0; i < fieldCount; ++i) {
 		jit_type_t fieldType = jit_type_get_field(t, i);

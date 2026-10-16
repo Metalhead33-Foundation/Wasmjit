@@ -9,7 +9,7 @@ namespace WASM {
 // ── The GC heap: a Store-owned hunk/region allocator ────────────────────────
 //
 // Every GC heap object (a `struct` or an `array`) is carved out of
-// mmap-backed regions, so that executing JIT-compiled code never reaches the
+// mmap-backed regions, so that executing compiled code never reaches the
 // libc allocator (docs/proposals/GC.md §6.1/GC-2, docs/SAFETY.md §2.3). The
 // memory is anonymous-mapped and therefore zero-initialised for free, which is
 // the `calloc` semantics the old allocator relied on.

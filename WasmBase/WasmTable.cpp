@@ -30,7 +30,7 @@ bool StoreOwnedTable::grow(uint64_t deltaEntries)
 	if (newSize > std::numeric_limits<size_t>::max())
 		return false;
 
-	// Resizing may move the slot array; re-point the JIT-visible view.
+	// Resizing may move the slot array; re-point the backend-visible view.
 	slots.resize(static_cast<size_t>(newSize), nullptr);
 	table.base = slots.data();
 	table.size = newSize;

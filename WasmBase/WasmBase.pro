@@ -18,7 +18,8 @@ SOURCES += \
         WasmTable.cpp \
         WasmTrap.cpp \
         WasmType.cpp \
-        WasmTypeRegistry.cpp
+        WasmTypeRegistry.cpp \
+        wasm_simd_scalar.cpp
 
 HEADERS += \
     WasmContext.hpp \
@@ -43,4 +44,5 @@ HEADERS += \
     WasmTypeIdentity.hpp \
     WasmTypeRegistry.hpp \
     WasmVMContext.hpp \
-    WasmValue.hpp
+    WasmValue.hpp \
+    wasm_simd_scalar.hpp

@@ -8,7 +8,7 @@
 #include <memory>
 namespace WASM {
 
-// Must remain standard-layout. JIT accesses fields via offsetof().
+// Must remain standard-layout. backend accesses fields via offsetof().
 // NEVER add std::vector, virtual functions, or non-trivial members here.
 struct LinearMemory {
 	// Hot fields first — memory access is the most frequent operation.
@@ -18,12 +18,12 @@ struct LinearMemory {
 	bool      isShared;     // true → threads-proposal shared memory (atomics-eligible, grow is synchronized)
 	void*     hostData;     // Opaque pointer for any external user data;
 	// Ownership/backing storage lives OUTSIDE this struct (see below) —
-	// LinearMemory itself is just the JIT-visible view.
+	// LinearMemory itself is just the backend-visible view.
 };
 static_assert(offsetof(LinearMemory, memoryBase) == 0,
-			  "LinearMemory::memoryBase must remain first field for JIT ABI compatibility");
+			  "LinearMemory::memoryBase must remain first field for backend ABI compatibility");
 static_assert(std::is_standard_layout_v<LinearMemory>,
-			  "LinearMemory must remain standard-layout for offsetof() access from the JIT");
+			  "LinearMemory must remain standard-layout for offsetof() access from generated code");
 
 class StoreOwnedMemory
 {

@@ -159,7 +159,7 @@ ran: before that, every trap case was skipped. See `docs/TESTING.md`.
   https://webassembly.github.io/spec/core/syntax/instructions.html
 - In-repo: [`docs/MULTI_MEMORY.md`](MULTI_MEMORY.md),
   [`docs/BULK_MEMORY.md`](BULK_MEMORY.md), [`docs/THREADS.md`](THREADS.md)
-  (shared-memory cap), [`docs/ABI.md`](ABI.md);
+  (shared-memory cap), [`docs/ABI.md`](../ABI.md);
   sources `WasmBase/WasmType.hpp` (`Limits`, `MemoryType`),
   `WasmBase/WasmMemory.{hpp,cpp}`, `WasmBase/WasmModuleInstance.cpp`,
   `LibJit/LibjitOpcodeDispatcher.cpp` (`effectiveMemoryAddress`,

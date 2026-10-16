@@ -22,7 +22,7 @@ Audience: anyone touching `WasmType`, `WasmTypeRegistry`, `WasmModuleInstance`,
 `LibJitTypeTranslator`, `LibjitOpcodeDispatcher`, or the test suite.
 
 This note is deliberately split the same way as
-[`TYPE_IDENTITY.md`](TYPE_IDENTITY.md):
+[`TYPE_IDENTITY.md`](../TYPE_IDENTITY.md):
 
 1. what the WebAssembly 3.0 specification **demands** of a GC-capable engine;
 2. what it explicitly does **not** demand (and where an engine is free);
@@ -30,7 +30,7 @@ This note is deliberately split the same way as
 4. the **gaps** between (3) and (1);
 5. where we can and should play **fast and loose** on purpose, because this
    project is a spiritual successor to Quake 3's QVM rather than a
-   browser-embedded engine (see [`ABI.md`](ABI.md) "Design Philosophy") —
+   browser-embedded engine (see [`ABI.md`](../ABI.md) "Design Philosophy") —
    including the collector-strategy decision (§6.1) and the reference-counting
    challenge/mitigation study (§6.4).
 
@@ -257,7 +257,7 @@ go*. The following are **not** required, which is precisely the room we use in
   interning, or any specific `TypeId` scheme. A module could keep types
   module-local forever and compare structurally at every use. (Our interning
   and process-wide `TypeId`s are a design choice, discussed in
-  [`TYPE_IDENTITY.md`](TYPE_IDENTITY.md).)
+  [`TYPE_IDENTITY.md`](../TYPE_IDENTITY.md).)
 
 ### 3.4 Explicitly *out* of the 3.0 GC MVP
 
@@ -303,7 +303,7 @@ These appear in Post-MVP documents, not in the standard:
 ### 4.2 Type identity, canonicalisation, matching
 
 (`WasmBase/WasmCanonicalType.hpp`, `WasmBase/WasmTypeIdentity.hpp`,
-`WasmBase/WasmTypeRegistry.{hpp,cpp}` — see [`TYPE_IDENTITY.md`](TYPE_IDENTITY.md)
+`WasmBase/WasmTypeRegistry.{hpp,cpp}` — see [`TYPE_IDENTITY.md`](../TYPE_IDENTITY.md)
 for the full design.)
 
 - `TypeRegistry::registerModule` takes ownership of a module's `Subtype` block
@@ -717,7 +717,7 @@ teardown).
 
 ## 6. Where we can and should play fast and loose
 
-The project's stated philosophy ([`ABI.md`](ABI.md)) is a QVM successor, not a
+The project's stated philosophy ([`ABI.md`](../ABI.md)) is a QVM successor, not a
 browser engine: **flexibility and deliberate deviation are accepted when they
 simplify the implementation**. GC is the area where the spec (§3) grants the
 most freedom, so it is where we should spend that freedom.
@@ -1109,11 +1109,11 @@ Related proposals covered in §10 (neither is part of 3.0):
 
 In-repo:
 
-- [`docs/TYPE_IDENTITY.md`](TYPE_IDENTITY.md) — type identity, interning,
+- [`docs/TYPE_IDENTITY.md`](../TYPE_IDENTITY.md) — type identity, interning,
   `match`, and the `M1`–`M8` plan.
-- [`docs/ABI.md`](ABI.md) — VMContext passing, Store ownership, and the
+- [`docs/ABI.md`](../ABI.md) — VMContext passing, Store ownership, and the
   "spiritual successor to QVM" design philosophy.
-- [`docs/TESTING.md`](TESTING.md) — running/filtering the two test families.
+- [`docs/TESTING.md`](../TESTING.md) — running/filtering the two test families.
 - [`docs/THREADS.md`](THREADS.md) — companion note on the threads/atomics
   proposal (shared memory, atomics, wait/notify).
 - [`docs/SIMD.md`](SIMD.md) — companion note on fixed-width SIMD (2.0) and

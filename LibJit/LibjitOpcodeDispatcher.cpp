@@ -3,6 +3,7 @@
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmTrap.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
+#include "../WasmBase/wasm_simd_scalar.hpp"
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -649,7 +650,19 @@ void OpcodeDispatcher::markUnreachable()
 jit_value_t OpcodeDispatcher::zeroConstantForType(jit_type_t t)
 {
 	if (jit_type_is_struct(t)) {
+		// A struct-typed value is written through its *address*: in this LibJIT
+		// build `jit_insn_store_relative` does not write a `jit_value_create`d
+		// aggregate (verified — see the note in the header), so the old
+		// field-by-field loop would hand back an uninitialised slot. `v128` is
+		// the only struct type that reaches here; the SIMD helper zeroes its 16
+		// bytes, which is also what a `v128` local/block-parameter needs.
 		jit_value_t aggregate = jit_value_create(function, t);
+		if (jit_type_get_size(t) == 16) {
+			jit_type_t params[1] = {jit_type_void_ptr};
+			jit_value_t args[1] = {jit_insn_address_of(function, aggregate)};
+			callSimdHelper(reinterpret_cast<void*>(&wasm_v128_zero), jit_type_void, params, args);
+			return aggregate;
+		}
 		const unsigned int fieldCount = jit_type_num_fields(t);
 		for (unsigned int i = 0; i < fieldCount; ++i) {
 			jit_type_t fieldType = jit_type_get_field(t, i);
@@ -670,6 +683,70 @@ jit_value_t OpcodeDispatcher::zeroConstantForType(jit_type_t t)
 		return jit_value_create_nint_constant(function, t, 0);
 	// v128 / tagged: best-effort zero — expand when those opcodes are implemented
 	return jit_value_create_nint_constant(function, t, 0);
+}
+
+// ── SIMD lowering (docs/SIMD_LIBJIT.md §6) ──────────────────────────────────
+
+jit_type_t OpcodeDispatcher::v128Type()
+{
+	// The translator's lowered `{i32,i32,i32,i32}` struct: 16 bytes, 16-byte
+	// aligned (forced in LibJitTypeTranslator's constructor). Memoised per
+	// function — the translator's cache is keyed by value type, so this is just
+	// an extra indirection saved.
+	if (simdCachedType == nullptr) {
+		WASM::ValueType vt;
+		vt.opcode = WASM::ValueTypeCode::V128;
+		vt.heapType = -1;
+		simdCachedType = jitTypeForValueType(vt);
+	}
+	return simdCachedType;
+}
+
+jit_value_t OpcodeDispatcher::newV128Slot()
+{
+	// A struct-typed LibJIT local is the storage: helpers read and write its 16
+	// bytes through `jit_insn_address_of` (§6.2/§6.3).
+	return jit_value_create(function, v128Type());
+}
+
+jit_value_t OpcodeDispatcher::callSimdHelper(void* fptr, jit_type_t ret,
+		std::span<const jit_type_t> params, std::span<const jit_value_t> args)
+{
+	// Memoise by (return type, parameter types): the SIMD ops share a handful of
+	// shapes, so a function with hundreds of SIMD instructions still creates a
+	// handful of signatures instead of one per instruction (§6.4).
+	std::vector<jit_type_t> key;
+	key.reserve(params.size() + 1);
+	key.push_back(ret);
+	key.insert(key.end(), params.begin(), params.end());
+
+	jit_type_t sig = nullptr;
+	for (const auto& entry : simdSignatureCache) {
+		if (entry.first == key) {
+			sig = entry.second;
+			break;
+		}
+	}
+	if (sig == nullptr) {
+		std::vector<jit_type_t> mutableParams(params.begin(), params.end());
+		sig = jit_type_create_signature(jit_abi_cdecl, ret, mutableParams.data(),
+				static_cast<unsigned>(mutableParams.size()), 1);
+		simdSignatureCache.emplace_back(std::move(key), sig);
+	}
+
+	return jit_insn_call_native(function, "wasm.simd", fptr, sig,
+			const_cast<jit_value_t*>(args.data()), static_cast<unsigned>(args.size()), 0);
+}
+
+jit_value_t OpcodeDispatcher::callSimdOutHelper(void* fptr, jit_value_t out,
+		std::span<const jit_type_t> leadingTypes, std::span<const jit_value_t> leadingArgs)
+{
+	// The out-slot shape of §6.3: leading operands, then the result's address.
+	std::vector<jit_type_t> params(leadingTypes.begin(), leadingTypes.end());
+	params.push_back(jit_type_void_ptr);
+	std::vector<jit_value_t> args(leadingArgs.begin(), leadingArgs.end());
+	args.push_back(jit_insn_address_of(function, out));
+	return callSimdHelper(fptr, jit_type_void, params, args);
 }
 
 jit_value_t OpcodeDispatcher::castRefValue(jit_value_t value, jit_type_t targetType)
@@ -3940,7 +4017,26 @@ void OpcodeDispatcher::dispatchV128Store64Lane(WASM::MemArg arg1, uint8_t arg2) 
 	notImplemented(__func__);
 }
 void OpcodeDispatcher::dispatchV128Const(std::span<uint8_t> arg) {
-	notImplemented(__func__);
+	// The 16 immediate bytes are in memory order: bytes 0-7 are the low half,
+	// 8-15 the high half, each little-endian (hazard Y11). Lowered *through the
+	// helper* rather than four inline lane stores, because
+	// `jit_insn_store_relative` does not write a `jit_value_create`d aggregate
+	// (verified; docs/SIMD_LIBJIT.md §6.3).
+	if (arg.size() < 16)
+		return;
+	uint64_t lo = 0;
+	uint64_t hi = 0;
+	for (unsigned i = 0; i < 8; ++i) {
+		lo |= static_cast<uint64_t>(arg[i]) << (8u * i);
+		hi |= static_cast<uint64_t>(arg[8 + i]) << (8u * i);
+	}
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[2] = {jit_type_ulong, jit_type_ulong};
+	jit_value_t args[2] = {
+		jit_value_create_long_constant(function, jit_type_ulong, static_cast<jit_long>(lo)),
+		jit_value_create_long_constant(function, jit_type_ulong, static_cast<jit_long>(hi))};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_v128_const), out, types, args);
+	pushValue(out);
 }
 void OpcodeDispatcher::dispatchI8x16Shuffle(std::span<uint8_t> arg) {
 	notImplemented(__func__);
@@ -3948,65 +4044,195 @@ void OpcodeDispatcher::dispatchI8x16Shuffle(std::span<uint8_t> arg) {
 void OpcodeDispatcher::dispatchI8x16Swizzle() {
 	notImplemented(__func__);
 }
+// `*.splat`: pop the scalar, write 16 bytes of it into a fresh slot. The scalar
+// arrives with its wasm shape's LibJIT type (i32/i64/f32/f64), which is what the
+// helper's C signature expects (docs/SIMD_LIBJIT.md §6.3).
 void OpcodeDispatcher::dispatchI8x16Splat() {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); return; }
+	jit_value_t x = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[1] = {jit_type_int};
+	jit_value_t args[1] = {x};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_i8x16_splat), out, types, args);
+	pushValue(out);
 }
 void OpcodeDispatcher::dispatchI16x8Splat() {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); return; }
+	jit_value_t x = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[1] = {jit_type_int};
+	jit_value_t args[1] = {x};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_i16x8_splat), out, types, args);
+	pushValue(out);
 }
 void OpcodeDispatcher::dispatchI32x4Splat() {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); return; }
+	jit_value_t x = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[1] = {jit_type_int};
+	jit_value_t args[1] = {x};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_i32x4_splat), out, types, args);
+	pushValue(out);
 }
 void OpcodeDispatcher::dispatchI64x2Splat() {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); return; }
+	jit_value_t x = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[1] = {jit_type_long};
+	jit_value_t args[1] = {x};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_i64x2_splat), out, types, args);
+	pushValue(out);
 }
 void OpcodeDispatcher::dispatchF32x4Splat() {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); return; }
+	jit_value_t x = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[1] = {jit_type_float32};
+	jit_value_t args[1] = {x};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_f32x4_splat), out, types, args);
+	pushValue(out);
 }
 void OpcodeDispatcher::dispatchF64x2Splat() {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); return; }
+	jit_value_t x = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[1] = {jit_type_float64};
+	jit_value_t args[1] = {x};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_f64x2_splat), out, types, args);
+	pushValue(out);
 }
+// `*.extract_lane`: pop the vector, pass its address + the lane immediate, push
+// the scalar result (the scalar-result shape of docs/SIMD_LIBJIT.md §6.3).
 void OpcodeDispatcher::dispatchI8x16ExtractLaneS(uint8_t arg) {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); return; }
+	jit_value_t a = popValue();
+	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_uint};
+	jit_value_t args[2] = {jit_insn_address_of(function, a),
+			jit_value_create_nint_constant(function, jit_type_uint, arg)};
+	pushValue(callSimdHelper(reinterpret_cast<void*>(&wasm_i8x16_extract_lane_s), jit_type_int, types, args));
 }
 void OpcodeDispatcher::dispatchI8x16ExtractLaneU(uint8_t arg) {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); return; }
+	jit_value_t a = popValue();
+	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_uint};
+	jit_value_t args[2] = {jit_insn_address_of(function, a),
+			jit_value_create_nint_constant(function, jit_type_uint, arg)};
+	pushValue(callSimdHelper(reinterpret_cast<void*>(&wasm_i8x16_extract_lane_u), jit_type_int, types, args));
 }
+// `*.replace_lane`: the stack is [vector, scalar], so the scalar pops first.
 void OpcodeDispatcher::dispatchI8x16ReplaceLane(uint8_t arg) {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); popValue(); return; }
+	jit_value_t x = popValue();
+	jit_value_t a = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[3] = {jit_type_void_ptr, jit_type_uint, jit_type_int};
+	jit_value_t args[3] = {jit_insn_address_of(function, a),
+			jit_value_create_nint_constant(function, jit_type_uint, arg), x};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_i8x16_replace_lane), out, types, args);
+	pushValue(out);
 }
 void OpcodeDispatcher::dispatchI16x8ExtractLaneS(uint8_t arg) {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); return; }
+	jit_value_t a = popValue();
+	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_uint};
+	jit_value_t args[2] = {jit_insn_address_of(function, a),
+			jit_value_create_nint_constant(function, jit_type_uint, arg)};
+	pushValue(callSimdHelper(reinterpret_cast<void*>(&wasm_i16x8_extract_lane_s), jit_type_int, types, args));
 }
 void OpcodeDispatcher::dispatchI16x8ExtractLaneU(uint8_t arg) {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); return; }
+	jit_value_t a = popValue();
+	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_uint};
+	jit_value_t args[2] = {jit_insn_address_of(function, a),
+			jit_value_create_nint_constant(function, jit_type_uint, arg)};
+	pushValue(callSimdHelper(reinterpret_cast<void*>(&wasm_i16x8_extract_lane_u), jit_type_int, types, args));
 }
 void OpcodeDispatcher::dispatchI16x8ReplaceLane(uint8_t arg) {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); popValue(); return; }
+	jit_value_t x = popValue();
+	jit_value_t a = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[3] = {jit_type_void_ptr, jit_type_uint, jit_type_int};
+	jit_value_t args[3] = {jit_insn_address_of(function, a),
+			jit_value_create_nint_constant(function, jit_type_uint, arg), x};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_i16x8_replace_lane), out, types, args);
+	pushValue(out);
 }
 void OpcodeDispatcher::dispatchI32x4ExtractLane(uint8_t arg) {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); return; }
+	jit_value_t a = popValue();
+	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_uint};
+	jit_value_t args[2] = {jit_insn_address_of(function, a),
+			jit_value_create_nint_constant(function, jit_type_uint, arg)};
+	pushValue(callSimdHelper(reinterpret_cast<void*>(&wasm_i32x4_extract_lane), jit_type_int, types, args));
 }
 void OpcodeDispatcher::dispatchI32x4ReplaceLane(uint8_t arg) {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); popValue(); return; }
+	jit_value_t x = popValue();
+	jit_value_t a = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[3] = {jit_type_void_ptr, jit_type_uint, jit_type_int};
+	jit_value_t args[3] = {jit_insn_address_of(function, a),
+			jit_value_create_nint_constant(function, jit_type_uint, arg), x};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_i32x4_replace_lane), out, types, args);
+	pushValue(out);
 }
 void OpcodeDispatcher::dispatchI64x2ExtractLane(uint8_t arg) {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); return; }
+	jit_value_t a = popValue();
+	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_uint};
+	jit_value_t args[2] = {jit_insn_address_of(function, a),
+			jit_value_create_nint_constant(function, jit_type_uint, arg)};
+	pushValue(callSimdHelper(reinterpret_cast<void*>(&wasm_i64x2_extract_lane), jit_type_long, types, args));
 }
 void OpcodeDispatcher::dispatchI64x2ReplaceLane(uint8_t arg) {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); popValue(); return; }
+	jit_value_t x = popValue();
+	jit_value_t a = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[3] = {jit_type_void_ptr, jit_type_uint, jit_type_long};
+	jit_value_t args[3] = {jit_insn_address_of(function, a),
+			jit_value_create_nint_constant(function, jit_type_uint, arg), x};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_i64x2_replace_lane), out, types, args);
+	pushValue(out);
 }
 void OpcodeDispatcher::dispatchF32x4ExtractLane(uint8_t arg) {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); return; }
+	jit_value_t a = popValue();
+	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_uint};
+	jit_value_t args[2] = {jit_insn_address_of(function, a),
+			jit_value_create_nint_constant(function, jit_type_uint, arg)};
+	pushValue(callSimdHelper(reinterpret_cast<void*>(&wasm_f32x4_extract_lane), jit_type_float32, types, args));
 }
 void OpcodeDispatcher::dispatchF32x4ReplaceLane(uint8_t arg) {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); popValue(); return; }
+	jit_value_t x = popValue();
+	jit_value_t a = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[3] = {jit_type_void_ptr, jit_type_uint, jit_type_float32};
+	jit_value_t args[3] = {jit_insn_address_of(function, a),
+			jit_value_create_nint_constant(function, jit_type_uint, arg), x};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_f32x4_replace_lane), out, types, args);
+	pushValue(out);
 }
 void OpcodeDispatcher::dispatchF64x2ExtractLane(uint8_t arg) {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); return; }
+	jit_value_t a = popValue();
+	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_uint};
+	jit_value_t args[2] = {jit_insn_address_of(function, a),
+			jit_value_create_nint_constant(function, jit_type_uint, arg)};
+	pushValue(callSimdHelper(reinterpret_cast<void*>(&wasm_f64x2_extract_lane), jit_type_float64, types, args));
 }
 void OpcodeDispatcher::dispatchF64x2ReplaceLane(uint8_t arg) {
-	notImplemented(__func__);
+	if (unreachableCode) { popValue(); popValue(); return; }
+	jit_value_t x = popValue();
+	jit_value_t a = popValue();
+	jit_value_t out = newV128Slot();
+	const jit_type_t types[3] = {jit_type_void_ptr, jit_type_uint, jit_type_float64};
+	jit_value_t args[3] = {jit_insn_address_of(function, a),
+			jit_value_create_nint_constant(function, jit_type_uint, arg), x};
+	callSimdOutHelper(reinterpret_cast<void*>(&wasm_f64x2_replace_lane), out, types, args);
+	pushValue(out);
 }
 void OpcodeDispatcher::dispatchI8x16Eq() {
 	notImplemented(__func__);

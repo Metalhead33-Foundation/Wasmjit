@@ -32,27 +32,27 @@ struct VMContext;
 // The universal function reference.
 //
 // ABI note (see docs/ABI.md):
-//   - For direct `call` to an imported function, the JIT checks
+//   - For direct `call` to an imported function, the backend checks
 //     Callable::context at compile time:
 //       * nullptr → passes the caller's VMContext* as arg0 (native imports
 //         see the calling module's memory, globals, table, hostData).
 //       * non-null → burns that address into the machine code as a constant
 //         (cross-module Wasm→Wasm import, callee gets its own context).
-//   - For `call_indirect` and `call_ref`, the JIT loads Callable::context
+//   - For `call_indirect` and `call_ref`, the backend loads Callable::context
 //     at runtime and passes it as arg0 (callee's own context).
 //   - Embedders: register native imports with context=nullptr and set
 //     hostData on the instance after instantiation.
 struct Callable {
 	void* fnPtr;          // Signature: ret f(VMContext* ctx, params...)
-	VMContext* context;   // nullptr → JIT passes caller's VMContext (native import)
-	                      // non-null → JIT burns this address into code (Wasm import)
+	VMContext* context;   // nullptr → the backend passes caller's VMContext (native import)
+	                      // non-null → the backend burns this address into code (Wasm import)
 	uint32_t   localTypeIdx; // Module-local type index in the *defining* module.
 	// Canonical (process-wide) identity of this function's type. Set when the
 	// callable is produced by a module; `kNone` for native imports registered by
 	// an embedder without a canonical type. Used for cross-module type matching
 	// (`call_indirect`, `call_ref`, function imports).
 	TypeId     typeId = TypeId{TypeId::kNone};
-	// For JIT-compiled wasm functions: the raw compiled entry point. `fnPtr`
+	// For compiled wasm functions: the raw compiled entry point. `fnPtr`
 	// points at the trampoline *driver* that wraps it; the driver loads this to
 	// make the real call. Null for native imports (which have no driver).
 	// See docs/TAILCALLS.md (TC-2).

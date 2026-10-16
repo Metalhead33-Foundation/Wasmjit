@@ -6,7 +6,7 @@ Audience: anyone touching `WasmMemory`, `WasmStore`, `WasmOpcode`,
 `WasmOpcodeDispatcher`, `LibjitOpcodeDispatcher`, or the test harness.
 
 This note follows the same split as [`GC.md`](GC.md) and
-[`TYPE_IDENTITY.md`](TYPE_IDENTITY.md):
+[`TYPE_IDENTITY.md`](../TYPE_IDENTITY.md):
 
 1. what the threads proposal **demands**;
 2. what it explicitly does **not** demand (and where an engine is free);
@@ -313,7 +313,7 @@ In-repo:
 
 - [`docs/GC.md`](GC.md) — the companion design note and the format this one
   follows; §6.1 "hunks" also applies to the runtime data model.
-- [`docs/ABI.md`](ABI.md) — `VMContext`, Store ownership, and the single
+- [`docs/ABI.md`](../ABI.md) — `VMContext`, Store ownership, and the single
   process-global `Store`.
 - Source anchors: `WasmBase/WasmMemory.{hpp,cpp}`, `WasmBase/WasmStore.{hpp,cpp}`,
   `WasmBase/WasmType.hpp` (`MemoryType`, `Limits`),

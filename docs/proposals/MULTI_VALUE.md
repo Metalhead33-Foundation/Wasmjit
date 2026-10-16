@@ -121,7 +121,7 @@ between `packReturnValues` and `pushCallResults`.
   https://webassembly.github.io/spec/core/syntax/instructions.html
 - In-repo: [`docs/BULK_MEMORY.md`](BULK_MEMORY.md),
   [`docs/FUNCTION_REFERENCES.md`](FUNCTION_REFERENCES.md),
-  [`docs/ABI.md`](ABI.md); sources `WasmBase/WasmType.hpp` (`FuncType`,
+  [`docs/ABI.md`](../ABI.md); sources `WasmBase/WasmType.hpp` (`FuncType`,
   `BlockType`), `WasmBase/WasmModuleInstance.cpp` (`PreparedFunctionStack`),
   `LibJit/LibJitTypeTranslation.cpp` (struct-return signatures),
   `LibJit/LibjitOpcodeDispatcher.cpp` (`packReturnValues`,

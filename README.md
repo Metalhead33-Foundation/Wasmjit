@@ -50,6 +50,8 @@ per-milestone done markers, is the authoritative per-item status.
 | [`SAFETY.md`](docs/SAFETY.md) | The safety policies: artifact detection, input-derived allocation bounds, the allocation budget, traps vs `abort`, RAII for locks, and the pitfalls that produced them | Policy + pitfalls | `████████████████████` current |
 | [`NULL_JIT_VALUE_DIAGNOSIS.md`](docs/NULL_JIT_VALUE_DIAGNOSIS.md) | Why an unmodelled value type (`exnref`) lowers to `jit_type_void` and pushes a null `jit_value_t`, and the fix (reject such a module at load) that unblocked operand-stack ownership | Investigation note | `████████████████████` resolved |
 | [`SIMD_BACKENDS.md`](docs/SIMD_BACKENDS.md) | Whether LibJIT / SLJIT / AsmJit support SIMD, the workarounds when they do not, the recommended helper-based lowering, and a per-layer laxness budget for conforming loosely | Research note | `████████████████████` survey current |
+| [`SIMD_LIBJIT.md`](docs/SIMD_LIBJIT.md) | The LibJIT-only SIMD decision: `v128` in 16-byte-aligned frame slots, pointer-arg native helpers, Highway 1.4.0 (with the GLM/SLEEF/xsimd/psimd/SIMDe verdicts), the wasm semantics hazards, the four test layers and `SIMD-L0…SIMD-L8` | Design decision | `████████████████████` decided |
+| [`LAYERING.md`](docs/LAYERING.md) | The backend-agnosticism rule for `WasmBase/`: what the core may not name, the contracts it owns that a backend must honour, the vocabulary to use instead, and the check to run | Policy note | `████████████████████` current |
 
 ### Proposal notes (`docs/proposals/`)
 
@@ -67,7 +69,7 @@ per-milestone done markers, is the authoritative per-item status.
 | [`MUTABLE_GLOBALS.md`](docs/proposals/MUTABLE_GLOBALS.md) | Import/export of mutable globals | 2.0 | `█████████░░░░░░░░░░░` 45% | MG-1 done: imported globals are resolved before local initialisers run (`global` 70/0, was 10/63); a mutable import is still a *copy*, so the shared-write semantics (MG-2/MG-3) remain |
 | [`EXTENDED_CONST.md`](docs/proposals/EXTENDED_CONST.md) | Extended constant expressions | 3.0 | `█████████████████░░░` 85% | EC-1/EC-2 done: the six `i32`/`i64` `.add`/`.sub`/`.mul` forms evaluate with wrap-around and imported globals resolve (`data` 34/0); `v128.const` and validation remain |
 | [`EXCEPTIONS.md`](docs/proposals/EXCEPTIONS.md) | Exception handling (`exnref`) | 3.0 | `█████░░░░░░░░░░░░░░░` 25% | Tags and `throw`/`try_table` decode; the runtime is a stub (`throw` traps, `try_table` ignores catches, no `exnref`) |
-| [`SIMD.md`](docs/proposals/SIMD.md) | SIMD (fixed-width + relaxed) | 2.0 / 3.0 | `███░░░░░░░░░░░░░░░░░` 15% | Types/values and 236 opcodes are enumerated and decoded; every JIT handler aborts; relaxed SIMD is not enumerated |
+| [`SIMD.md`](docs/proposals/SIMD.md) | SIMD (fixed-width + relaxed) | 2.0 / 3.0 | `████░░░░░░░░░░░░░░░░` 20% | The `v128` ABI is measured and working (SIMD-0 done: 16-byte-aligned slots, `(param v128)(result v128)` round-trip) and 21 of the 236 fixed-width handlers execute (`v128.const`, splat, extract/replace lane) under 5 new tests; the other ~215 still abort; relaxed SIMD is not enumerated |
 | [`COMPONENT_MODEL.md`](docs/proposals/COMPONENT_MODEL.md) | WIT and the Component Model (forward-looking) | layered | `░░░░░░░░░░░░░░░░░░░░` 0% | No component support, but **CM-0 is done**: the `layer` field is read and a component is rejected with a component-specific error instead of being misparsed (all of CM-1…CM-7 are open) |
 
 Reading the estimates:
@@ -96,11 +98,11 @@ library per backend plus the test executable.
 
 | Path | What it is |
 |---|---|
-| `WasmBase/` | The core library (`libWasmBase`): binary decoding, the module/instance model, `Store`/`TypeRegistry`/`Value`, the opcode decoder |
+| `WasmBase/` | The core library (`libWasmBase`): binary decoding, the module/instance model, `Store`/`TypeRegistry`/`Value`, the opcode decoder, and the shared SIMD helper ABI. **Backend-agnostic by rule** — see [`docs/LAYERING.md`](docs/LAYERING.md) |
 | `WasmStub/` | `libWasmStub`: a non-JIT opcode dispatcher that pretty-prints instead of executing (inspection/debug) |
-| `LibJit/` | `libLibJit`: the GNU LibJIT backend (context, type translation, module compiler, dispatch) — the primary target |
-| `Asmjit/` | Scaffold for a future AsmJit backend |
-| `Sljit/` | Scaffold for a future SlJIT backend |
+| `LibJit/` | `libLibJit`: the GNU LibJIT backend (context, type translation, module compiler, dispatch) — the current implementation path, and the only backend that executes |
+| `Asmjit/` | Scaffold for the planned AsmJit backend (**empty today, no code**). Its MMX/SSE…AVX-512 instruction coverage and vector-aware register allocator are a planned SIMD-performance lever |
+| `Sljit/` | Scaffold for the planned SLJIT backend (**empty today, no code**). `sljit_emit_simd_*` / `SLJIT_SIMD_REG_*` are the other planned SIMD lever; both are documented, not built |
 | `Test/` | The Catch2 executable (`WasmJit`) and the spec-suite harness; see [`docs/TESTING.md`](docs/TESTING.md) |
 | `docs/` | Design notes and process guides; per-proposal notes live in `docs/proposals/` (see [Documentation](#documentation)) |
 | `extern/` | Submodules: `MhLib` (`Elvavena` I/O + `Euphemy`) and the upstream `WasmTestsuite` |

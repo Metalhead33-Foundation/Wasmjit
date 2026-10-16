@@ -9,7 +9,7 @@ namespace WASM {
 // deliberately no separate "ImportedMemory" handle any more.
 struct LinearMemory;
 // Tables are store-owned too (TableInstance/StoreOwnedTable in WasmTable.hpp).
-// A resolved table import is a borrowed TableInstance*: the same JIT-visible
+// A resolved table import is a borrowed TableInstance*: the same backend-visible
 // view the exporting module keeps in its own table index space.
 struct TableInstance;
 

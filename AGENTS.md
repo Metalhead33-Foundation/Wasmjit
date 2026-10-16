@@ -8,7 +8,16 @@
    env MAKE=/usr/bin/make /usr/bin/make -j16
    ```
 
+**`WasmBase/` is backend-agnostic. Never name a backend there** — not `LibJIT`, not its headers,
+types or API, and not its internals in prose. State the *contract* a backend has to satisfy
+instead. See **[`docs/LAYERING.md`](docs/LAYERING.md)** for the rule, the vocabulary to use, and
+the one-line check to run.
+
 ## Documentation to follow
+
+- **[`docs/LAYERING.md`](docs/LAYERING.md) — read before editing `WasmBase/` or working on a backend.**
+  The core must not name, include, link or describe any specific backend: `LibJit/` is the first of
+  several planned code generators, and `WasmBase/` states the contracts they all must honour.
 
 - **[`docs/SAFETY.md`](docs/SAFETY.md) — read before touching `WasmBase/` or a backend (currently `LibJit/`).**
   It is the policy for not letting a module take the host down: telling artifacts apart before decoding,

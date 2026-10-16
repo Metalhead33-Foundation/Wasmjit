@@ -1,7 +1,8 @@
 # SIMD Lowering Across Backends — Research Note: LibJIT, SLJIT, AsmJit, and the Native-Helper Middle Path
 
-Status: research note (revision 1 — initial survey of the three planned backends
-and of the lowering options; **defers all code**).
+Status: research note (revision 3 — records that the current implementation path
+is LibJIT only while AsmJit and SLJIT remain deferred-but-planned; the decision
+that follows from this survey now lives in [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md)).
 Audience: anyone about to start a milestone from
 [`proposals/SIMD.md`](proposals/SIMD.md) §7, or anyone touching the backend
 abstraction (`Project.pro`, the `*OpcodeDispatcher` families, the type
@@ -15,6 +16,15 @@ demands and where we may deviate*; this one says *what the engines in and around
 the tree can actually do about it*. It contains **no new code** and proposes no
 milestones of its own; its output is a decision on the lowering strategy and a
 laxness budget.
+
+**Scope (revision 3).** The current implementation path is **GNU LibJIT only**,
+but AsmJit and SLJIT are **deferred, not cancelled**: both remain planned
+backends and both are expected to be leveraged for SIMD once implemented
+([`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §3). §3.2/§3.3 and the third and fourth rows
+of §2 are therefore *forward-looking* background, not history. The decision
+LibJIT feeds into is recorded in [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md), which also
+supersedes §5/W2 (the `alloca` scratch bank) and §6 (the recommendation ranking)
+below.
 
 ## 1. Document map
 
@@ -210,6 +220,10 @@ Two notes that matter for correctness rather than speed:
   round-trips through a function" (SIMD-0's done-when) is unproven.
 
 ## 6. The path of least resistance
+
+> **Superseded (revision 2).** The decision is now recorded in
+> [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §4–§6. This section is kept as the reasoning
+> that led to it — history, not plan.
 
 **Recommendation: W1 (+ W3), with W5 as the only permitted optimisation — keep
 the current `{i32×4}` representation, lower every SIMD op to a native helper

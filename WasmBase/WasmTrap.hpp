@@ -9,7 +9,7 @@ namespace WASM {
 // ── Wasm traps ──────────────────────────────────────────────────────────────
 //
 // A trap is a non-local exit from the current Wasm invocation. The engine's
-// own frames — JIT-generated code plus the POD native helpers it calls — carry
+// own frames — generated code plus the POD native helpers it calls — carry
 // no unwind tables, so a trap is a `longjmp` to a scope the embedder armed
 // around the outermost call rather than a C++ exception. Jumping out of a call
 // chain also strands the tail-call trampoline's process-global state, so
@@ -87,7 +87,7 @@ TrapState& trapState();
 // is still recorded, so a comparison against trapKindName stays meaningful.
 [[noreturn]] void trap(TrapKind kind, const char* detail);
 
-// C-callable entry point for JIT-generated code: the kind travels as an int so
+// C-callable entry point for generated code: the kind travels as an int so
 // the calling convention does not depend on how a scoped enum is passed.
 extern "C" void wasm_trap_raise(int kind, const char* message);
 
