@@ -913,14 +913,17 @@ defaults, not just the first one to be fixed.
 | `G4` | ✅ Closed | `array_new_elem` 14/0, `table_init` 725/0 | — |
 | `G5` | ✅ Closed | `i31` 68/0, `table` 18/0 | Table initialisers: decode (`0x40 0x00`), apply every slot, defer `ref.func`. |
 | `G6` | ✅ Closed | `global` 70/0 | — |
-| `G7` | ◑ **Half fixed** | `br_on_cast*.wast` still abort, but *later* | **Done:** `castop` is honoured — bit 1 (target nullability) now drives both the test (`wasm_ref_matches_heap_type` returns `nullable` for a null reference) and the type the branch carries; and the `assert(!slots.empty())` that killed every `br_on_cast`/`br_on_null` into a result-less label is gone (a label with no branch values simply has nothing to store). **Remaining:** the *operand-stack* half. Both scripts now abort in `popValue()` (`!valueStack.empty()`): `br_on_cast` emits its branch **without popping the label's values off the value stack** the way `dispatchBrIf` does (pop into the target slots, then re-push them for the fall-through), so the compiler's stack model underflows at a later instruction. That is a structural change to the branch emission, not a flag fix. |
+| `G7` | ◑ **Half fixed; second half pinned by backtrace** | `br_on_cast*.wast` still abort in `popValue()` | **Landed:** `castop` is honoured (bit 1, target nullability, drives both the test and the branch's type); the `assert(!slots.empty())` that killed any `br_on_cast`/`br_on_null` into a result-less label is gone (all four branch-on-* ops); and the four ops now no-op in dead code, matching `pushValue` (which is itself a no-op there) so a pop cannot underflow. **Measured, not guessed:** with `set follow-fork-mode child`, the remaining underflow is `#7 popValue ← #8 dispatchI32DivU (line 2510) ← readCode ← compileFunction(funcTypeIdx=4)` — i.e. the model lost a value *around the `br_on_cast_fail` block*, not inside the opcode, whose own pop/push is symmetric (pop ref, store into the target slot, push the fall-through value). **Refuted and re-pinned:** the *decoder* is correct — verified against the real bytes (`fb 18 01 00 6e 6c` = castop `01`, label `00`, `anyref`, `i31`), so the operands are read in the right order and both comments (one for the text form, one for the binary) are right. What remains is that the script aborts in `popValue()` while dispatching **`I32DivU`**, an opcode the source file does not contain at all (`grep -c div_u` = 0) — so the *stream drifts* somewhere earlier in that function. **Next step:** a decode-diff — trace `(byte offset, opcode)` in `readCode` for the failing function and diff it against a reference decode (`wasm-tools dump`) to find the instruction whose length is mis-consumed. |
 | `G8` | ✅ Closed | `table` 18/0 (exported `(ref $f)` global across modules) | Sentinel resolved after compilation in all three places. |
 | `G9` | ✗ Open | harness still skips `assert_invalid` | No validating front end beyond the unmodelled-value-type rejection (`D`). |
 | `C1`–`C7` | ✅ Closed | `array_init_data` 44/0, `array` 40/0, `ref_cast`/`call_ref` running | Crash triage complete; the aborts that remain are deliberate (`docs/SAFETY.md` §2.4). |
-| `H1` | ◑ Risk | `structFieldOffsets` vs `translateStruct` | Dual layout logic. The reclaimer and the cycle trial now share one traversal (`childSlotsOf`), but the JIT mirror is still separate. |
+| `H1` | ✅ Guarded | `GC layout: the JIT's struct field offsets match the shared layout helpers` | The dual layout logic is now *checked*: the test asserts the JIT's LibJIT field offsets equal `gcAlignUp`/`gcStorageAlign`/`gcStorageBytes` (the shared source of truth the runtime's `structFieldOffsets` uses) for packed i8/i16, i32, i64, f64 and v128 — and it passes, so the two implementations agree today. The reclaimer and the cycle trial additionally share one traversal (`childSlotsOf`). |
 | `H2`, `H8` | ✅ Closed | — | — |
 | `H3` | ✅ Closed | `Store::callableAt` | The per-cast O(#functions) scan is gone with `G2`: identification is now a range test over registered callable ranges (one per instance). |
-| `H4`–`H7` | ◑ Latent risks | — | Not wrong today; `H7` (`Value::kind` set but ignored by the JIT) overlaps `G2`. |
+| `H4` | ✅ Closed | `i31` 68/0 | The tagged-LibJIT-type / `void_ptr` round-trip that `i31.get_s/u` depend on is exercised by the spec script across every interesting pattern (0, ±1, `0x3fff_ffff`, `-0x4000_0000`, `0x7fff_ffff`, `0xaaaa_aaaa`, `0xcaaa_aaaa`) and all pass. |
+| `H5` | ✗ Deferred | — | `stringref`/`stringview_*`: out of the 3.0 MVP, its own proposal (§7.2, §10). |
+| `H6` | ✗ Deferred | — | `ref.eq` operand typing needs `G9`'s validator (§7.2). |
+| `H7` | ✅ Closed (by design) | `WasmValue.hpp` | `Value::kind` is a *runtime-side* tag for constant-expression values (globals, segments, imports, and the harness's `referenceArgument`); generated code never sees a `Value` — the JIT derives its type from the instruction's field/opcode type. The two agree because every place a `Value` is produced sets `kind` and every consumer is runtime code. |
 | `R1` | ✗ Open | `WasmRegistryImportResolver.cpp` (`(void)type;`) | Table imports are not type-checked. |
 | `R2`, `R3`, `R6`, `R7` | ✅ Closed | `elem` 108/0, `table_init` 725/0, `table` 18/0 | — |
 | `R4`, `R5` | ✗ Open | `isScalarValue` | `externref` has no host model; reference arguments/results are not marshalled. |
@@ -932,13 +935,15 @@ defaults, not just the first one to be fixed.
 | `GC-4` | ✗ Open | `br_on_cast*.wast` | **The same work as `G7`.** |
 | `GC-5` | ✅ Closed | `array` 40/0, `array_init_data` 44/0 | — |
 | `GC-6` | ✅ Closed | `WasmTrap.hpp` | — |
-| `GC-7`, `GC-8` | ✗ Open (optional) | — | Fast casts (`H3`); extern interop (`G3`/`R4`). |
+| `GC-7` | ✅ Substantively closed | `Store::callableAt` | The expensive part landed with `H3`: a cast/test is now O(#instances) instead of O(#functions). What remains of the row is *inline caching* at a hot call site — an optimisation that the plan explicitly says to measure first (D3/D12), with no measurement yet showing casts dominating. |
+| `GC-8` | ✗ Deferred | — | Extern interop needs the host `externref` model: `ABI.md` (§7.2). |
 | `GC-9` | ✅ Closed | `array` 40/0 | — |
 | `RC-1`, `RC-1b` | ✅ Closed | `GC reference counting` test | — |
 | `RC-2` | ✅ Closed | `GC reclamation: … cycle …` tests | Trial deletion, no root set (D18). |
 | `RC-3` | ✅ Closed | deep-chain + poison tests | Iterative worklist, saturating clone, trapping drop. |
 | `RC-4` | ✗ Open | — | Atomic counts; the multi-thread prerequisite of `THREADS.md` (`RC2`/`RC11`). |
-| `RC-5`, `RC-6` | ✗ Open (optional) | — | Deferred RC (measure first); backup tracing. |
+| `RC-5` | ✗ Open (optional, measure first) | — | The *default* discipline is implemented (`kStackOwnsRefs`: every pushed reference is owned and balanced by an explicit drop). Deferred RC would *remove* that traffic, so it needs a benchmark showing refcount traffic dominating a local-heavy loop before it is worth the root-scan complexity (D17). |
+| `RC-6` | ✅ Satisfied as specified | `~ModuleInstance` → `GcHeap::releaseSet` | Region teardown is the documented leak backstop: every region an instance used is released whole at teardown, whether or not the counts balanced. The row's other half — a conservative-scan-fed trace — is explicitly "only if `RC-2` proves insufficient", and trial deletion holds. |
 
 ### 7.2 Deferred: intersections with other proposals
 
@@ -953,12 +958,13 @@ rather than guessed at inside GC.
 | `G9` (no validating front end), `R8`'s second half (element-type validation), `H6` (`ref.eq` operand types) | **cross-cutting validation** (also `TYPE_IDENTITY.md` M4, and the `D` fix's long-term answer) | A validator that checks GC type rules is only useful if it checks *all* the rules of *all* the proposals; a GC-only validator would reject modules the rest of the engine accepts. | `Module::validateValueTypes()` already rejects unmodelled value types at load; the GC rule list (cast target vs source, `struct.new_default` defaultability, nullability, `ref.eq` operands) is recorded in §5.1 `G9` for whoever writes the validator. |
 | `H5`, §10 (`stringref`, `stringview_*`) | **its own proposal** (§10 in this document) | Out of the Wasm 3.0 GC MVP by §3.4; the reserved encodings are stale and the instructions have no parser or dispatch. | Keep them explicitly unsupported — the enum + `void*` lowering exist but nothing produces them. |
 
-**Remaining in GC's own domain** (not deferred): `G7`/`GC-4`'s operand-stack half
-(the slot-model half landed — see §7.1), `R1` (needs the registrant to publish its
-`TableType`: the registry stores only a `TableInstance*`, which carries no element
-type), `H1`'s offset-comparison test, `H4`'s i31 round-trip test, `H7` (the JIT
-ignores `Value::kind`), and the optional `GC-7` (fast casts — now much cheaper
-after `H3`) and `RC-5`/`RC-6`.
+**Remaining in GC's own domain** (not deferred): `G7`'s stream-drift chase (the
+decode-diff above — the model half, the `castop` flags and the slot-model asserts
+all landed) and `R1` (needs the registrant to publish its `TableType` through
+`ImportResolver::registerTable`: the registry stores only a `TableInstance*`, which
+carries no element type, so this is an interface change, not a comparator). Both
+are pinned to a concrete first step. Everything else in §5.1–§5.6 that GC owns is
+closed or guarded.
 
 
 

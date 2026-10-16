@@ -1315,4 +1315,48 @@ TEST_CASE("GC refcount: clone saturates instead of wrapping the count")
 	REQUIRE(*count == 0xFFFFFFFFu);
 }
 
+TEST_CASE("GC layout: the JIT's struct field offsets match the shared layout helpers")
+{
+	// H1 (docs/proposals/GC.md §5.3/§7): the JIT's LibJIT layout and the
+	// runtime's byte offsets are two implementations of *one* layout. The helpers
+	// in WasmGcHeader.hpp are the shared source of truth, so assert the JIT
+	// agrees with them field by field — the risky spots are packed i8/i16 and
+	// v128, which lowers as four i32 at 4-byte alignment. Drift here is invisible
+	// until an object is read through the wrong offset.
+	const auto makeField = [](WASM::ValueTypeCode opcode, bool packed) {
+		WASM::StorageType storage;
+		storage.isPacked = packed;
+		storage.val.opcode = opcode;
+		storage.val.heapType = -1;
+		WASM::FieldType field;
+		field.storageType = storage;
+		field.isMutable = true;
+		return field;
+	};
+
+	using WASM::ValueTypeCode;
+	WASM::StructType structure;
+	structure.fields = {
+		makeField(ValueTypeCode::I8, /*packed*/ true),
+		makeField(ValueTypeCode::I32, false),
+		makeField(ValueTypeCode::I16, /*packed*/ true),
+		makeField(ValueTypeCode::F64, false),
+		makeField(ValueTypeCode::V128, false),
+		makeField(ValueTypeCode::I64, false)
+	};
+
+	LibJIT::LibJitTypeTranslator translator;
+	const jit_type_t jitStruct = translator.translateStruct(structure);
+	REQUIRE(jitStruct != nullptr);
+
+	size_t expectedOffset = WASM::GcHeader::kHeaderBytes;
+	for (size_t i = 0; i < structure.fields.size(); ++i) {
+		expectedOffset = WASM::gcAlignUp(expectedOffset, WASM::gcStorageAlign(structure.fields[i].storageType));
+		const size_t jitOffset = static_cast<size_t>(jit_type_get_offset(
+				jitStruct, static_cast<unsigned>(i + WASM::GcHeader::kHeaderFields)));
+		REQUIRE(jitOffset == expectedOffset);
+		expectedOffset += WASM::gcStorageBytes(structure.fields[i].storageType);
+	}
+}
+
 

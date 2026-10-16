@@ -3094,6 +3094,11 @@ void OpcodeDispatcher::dispatchRefAsNonNull() {
 	pushValue(ref);
 }
 void OpcodeDispatcher::dispatchBrOnNull(WASM::LabelIdx arg) {
+	// Dead code: the compile-time stack is polymorphic (see
+	// storeStackTopToSlots) — pushes are no-ops here, so a pop would underflow
+	// the model. Nothing to emit either way (GC.md G7/GC-4).
+	if (unreachableCode)
+		return;
 	ControlBlock& target = branchTarget(arg);
 	jit_value_t ref = popValue();
 	jit_value_t nullRef = typedNullRef(jit_value_get_type(ref));
@@ -3107,6 +3112,8 @@ void OpcodeDispatcher::dispatchBrOnNull(WASM::LabelIdx arg) {
 	pushValue(ref);
 }
 void OpcodeDispatcher::dispatchBrOnNonNull(WASM::LabelIdx arg) {
+	if (unreachableCode)
+		return;
 	ControlBlock& target = branchTarget(arg);
 	jit_value_t ref = popValue();
 	jit_value_t nullRef = typedNullRef(jit_value_get_type(ref));
@@ -3619,6 +3626,10 @@ void OpcodeDispatcher::dispatchBrOnCast(uint8_t castop, WASM::LabelIdx l, WASM::
 	// (docs/proposals/GC.md G7 / GC-4).
 	const bool targetNullable = (castop & 0x02) != 0;
 	(void)ht1;
+	// Dead code: the model stack is polymorphic and pushes are no-ops there, so
+	// popping would underflow — and there is nothing to branch with (GC.md G7).
+	if (unreachableCode)
+		return;
 	jit_value_t ref = popValue();
 	jit_type_t targetType = jitRefTypeForHeapType(ht2, targetNullable);
 	jit_value_t casted = castRefValue(ref, targetType);
@@ -3638,6 +3649,8 @@ void OpcodeDispatcher::dispatchBrOnCastFail(uint8_t castop, WASM::LabelIdx l, WA
 	// the original one (the `ht1 \ ht2` case).
 	const bool targetNullable = (castop & 0x02) != 0;
 	(void)ht1;
+	if (unreachableCode)
+		return;
 	jit_value_t ref = popValue();
 	jit_type_t targetType = jitRefTypeForHeapType(ht2, targetNullable);
 	jit_value_t casted = castRefValue(ref, targetType);
