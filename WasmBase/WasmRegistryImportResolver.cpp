@@ -225,6 +225,10 @@ std::optional<LinearMemory*> RegistryImportResolver::ModuleRegistry::resolveMemo
 
 std::optional<ImportedTable> RegistryImportResolver::ModuleRegistry::resolveTable(std::string_view fieldName, const TableType& type)
 {
+	// R1: `type` is still unchecked, because the registry keeps only a
+	// `TableInstance*` (see `ImportedTable`) and that struct carries no element
+	// type — so this needs the registrant to publish its `TableType`, not a
+	// comparator here. See docs/proposals/GC.md R1.
 	(void)type;
 	auto it = tables.find(fieldName);
 	if (it == tables.end())

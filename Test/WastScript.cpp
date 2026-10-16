@@ -151,6 +151,84 @@ const char* typeName(WASM::ValueTypeCode code)
 
 // We can only marshal scalar values with a literal representation; reference
 // and vector values (and "any function reference" placeholders) are skipped.
+// Marshal a reference argument (docs/TESTING.md, GC.md R5). The engine has no
+// host-object model for references yet (GC.md R4), so this is an *identity*
+// mapping, chosen to be stable so `ref.eq` holds across invocations:
+//   * `(ref.null …)`              → null;
+//   * `(ref.extern N)`/`(ref.host N)` → a non-null synthetic pointer derived
+//     from N (`ref.test externref` is true for it, which is all these tests
+//     need — an unknown pointer classifies as `extern`);
+//   * `(ref.i31 K)`               → the tagged immediate the module itself
+//     would build, `(K << 1) | 1`;
+//   * `(ref.func N)`              → the module's own callable for function
+//     index N, via the same sentinel resolution the runtime uses.
+void* referenceArgument(WASM::ModuleInstance& instance, WASM::ValueTypeCode code, const ScriptValue& arg)
+{
+	if (!arg.hasValue || arg.value.empty())
+		return nullptr;
+	if (arg.value == "null")
+		return nullptr;
+
+	const long long raw = std::strtoll(arg.value.c_str(), nullptr, 10);
+	switch (code) {
+	case WASM::ValueTypeCode::FuncRef: {
+		WASM::Value sentinel;
+		sentinel.kind = WASM::ValueTypeCode::FuncRef;
+		sentinel.ref = reinterpret_cast<void*>(static_cast<uintptr_t>(raw));
+		return instance.callableFromSegmentRef(sentinel);
+	}
+	case WASM::ValueTypeCode::I31Ref:
+		return reinterpret_cast<void*>(static_cast<uintptr_t>((raw << 1) | 1));
+	default:
+		// Host-owned: an even, non-null, never-GC-heap pointer.
+		return reinterpret_cast<void*>(static_cast<uintptr_t>(0xE0000000ull + 16ull * static_cast<unsigned long long>(raw)));
+	}
+}
+
+// Reference type names wasm-tools emits for *arguments* (GC.md R5). Deliberately
+// separate from `typeCodeFromName`, which also gates the expected-*result* path:
+// a reference result generally has no canonical pointer to compare against
+// (`(ref.null any)`), so results stay skipped while arguments become runnable.
+bool referenceArgTypeCode(const ScriptValue& value, WASM::ValueTypeCode& out)
+{
+	if (!value.hasValue)
+		return false;
+	if (value.type == "funcref") { out = WASM::ValueTypeCode::FuncRef; return true; }
+	if (value.type == "externref") { out = WASM::ValueTypeCode::ExternRef; return true; }
+	if (value.type == "anyref") { out = WASM::ValueTypeCode::AnyRef; return true; }
+	if (value.type == "eqref") { out = WASM::ValueTypeCode::EqRef; return true; }
+	if (value.type == "i31ref") { out = WASM::ValueTypeCode::I31Ref; return true; }
+	if (value.type == "structref") { out = WASM::ValueTypeCode::StructRef; return true; }
+	if (value.type == "arrayref") { out = WASM::ValueTypeCode::ArrayRef; return true; }
+	return false;
+}
+
+bool isReferenceArg(const ScriptValue& value)
+{
+	WASM::ValueTypeCode code = WASM::ValueTypeCode::Void;
+	return referenceArgTypeCode(value, code);
+}
+
+// True for the reference types `referenceArgument` can marshal.
+bool isMarshallableReference(WASM::ValueTypeCode code)
+{
+	switch (code) {
+	case WASM::ValueTypeCode::FuncRef:
+	case WASM::ValueTypeCode::ExternRef:
+	case WASM::ValueTypeCode::AnyRef:
+	case WASM::ValueTypeCode::EqRef:
+	case WASM::ValueTypeCode::I31Ref:
+	case WASM::ValueTypeCode::StructRef:
+	case WASM::ValueTypeCode::ArrayRef:
+	case WASM::ValueTypeCode::NullRef:
+	case WASM::ValueTypeCode::NullFuncRef:
+	case WASM::ValueTypeCode::NullExternRef:
+		return true;
+	default:
+		return false;
+	}
+}
+
 bool isScalarValue(const ScriptValue& value)
 {
 	if (!value.hasValue)
@@ -579,7 +657,7 @@ void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 	}
 
 	for (const ScriptValue& arg : action.args) {
-		if (!isScalarValue(arg)) {
+		if (!isScalarValue(arg) && !isReferenceArg(arg)) {
 			skip("argument type '" + arg.type + "' is not supported");
 			return;
 		}
@@ -658,7 +736,7 @@ void ScriptRunner::onAssertTrap(const ScriptCommand& command)
 		return;
 	}
 	for (const ScriptValue& arg : action.args) {
-		if (!isScalarValue(arg)) {
+		if (!isScalarValue(arg) && !isReferenceArg(arg)) {
 			skip("argument type '" + arg.type + "' is not supported");
 			return;
 		}
@@ -719,7 +797,7 @@ void ScriptRunner::onAction(const ScriptCommand& command)
 	}
 
 	for (const ScriptValue& arg : action.args) {
-		if (!isScalarValue(arg)) {
+		if (!isScalarValue(arg) && !isReferenceArg(arg)) {
 			skip("argument type '" + arg.type + "' is not supported");
 			return;
 		}
@@ -779,7 +857,7 @@ void ScriptRunner::onAssertExhaustion(const ScriptCommand& command)
 		return;
 	}
 	for (const ScriptValue& arg : action.args) {
-		if (!isScalarValue(arg)) {
+		if (!isScalarValue(arg) && !isReferenceArg(arg)) {
 			skip("argument type '" + arg.type + "' is not supported");
 			return;
 		}
@@ -830,8 +908,15 @@ bool ScriptRunner::invoke(WASM::ModuleInstance& instance, const ScriptAction& ac
 		const ScriptValue& arg = action.args[i];
 
 		WASM::ValueTypeCode code = WASM::ValueTypeCode::Void;
-		if (!typeCodeFromName(arg.type, code) || code != funcType.params[i].val.opcode)
+		const bool refArg = referenceArgTypeCode(arg, code);
+		if (!refArg) {
+			if (!typeCodeFromName(arg.type, code) || code != funcType.params[i].val.opcode)
+				return false;
+		} else if (!WASM::isReferenceType(funcType.params[i].val.opcode)) {
+			// A reference argument for a scalar parameter is a marshalling bug,
+			// not a test to skip.
 			return false;
+		}
 
 		switch (code) {
 		case WASM::ValueTypeCode::I32:
@@ -854,7 +939,14 @@ bool ScriptRunner::invoke(WASM::ModuleInstance& instance, const ScriptAction& ac
 			break;
 		}
 		default:
-			return false;
+			// Reference arguments (GC.md R5). Without this a reference-taking
+			// action is skipped, which silently leaves fixtures like
+			// `ref_test.wast`'s `(invoke "init" (ref.extern 0))` un-run and makes
+			// every dependent `ref.test` look wrong.
+			if (!isMarshallableReference(code))
+				return false;
+			*reinterpret_cast<void**>(slots[i].raw) = referenceArgument(instance, code, arg);
+			break;
 		}
 
 		arguments[i + 1] = slots[i].raw;

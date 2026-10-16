@@ -3099,8 +3099,10 @@ void OpcodeDispatcher::dispatchBrOnNull(WASM::LabelIdx arg) {
 	jit_value_t nullRef = typedNullRef(jit_value_get_type(ref));
 	jit_value_t isNull = jit_insn_eq(function, ref, nullRef);
 	const auto& slots = branchSlotsForTarget(target);
-	assert(!slots.empty());
-	jit_insn_store(function, slots.back(), castRefValue(ref, jit_value_get_type(slots.back())));
+	// A label that carries no branch values has no slot to store into; requiring
+	// one aborted every `br_on_null` in a block without results (GC.md G7).
+	if (!slots.empty())
+		jit_insn_store(function, slots.back(), castRefValue(ref, jit_value_get_type(slots.back())));
 	jit_insn_branch_if(function, isNull, &target.label);
 	pushValue(ref);
 }
@@ -3110,8 +3112,8 @@ void OpcodeDispatcher::dispatchBrOnNonNull(WASM::LabelIdx arg) {
 	jit_value_t nullRef = typedNullRef(jit_value_get_type(ref));
 	jit_value_t isNull = jit_insn_eq(function, ref, nullRef);
 	const auto& slots = branchSlotsForTarget(target);
-	assert(!slots.empty());
-	jit_insn_store(function, slots.back(), castRefValue(ref, jit_value_get_type(slots.back())));
+	if (!slots.empty())
+		jit_insn_store(function, slots.back(), castRefValue(ref, jit_value_get_type(slots.back())));
 	jit_insn_branch_if_not(function, isNull, &target.label);
 	pushValue(ref);
 }
@@ -3608,30 +3610,42 @@ void OpcodeDispatcher::dispatchRefCastNull(const WASM::HeapType& arg) {
 	pushValue(castRefValue(ref, jitRefTypeForHeapType(arg, true)));
 }
 void OpcodeDispatcher::dispatchBrOnCast(uint8_t castop, WASM::LabelIdx l, WASM::HeapType ht1, WASM::HeapType ht2) {
-	(void)castop;
+	// `castop` is the spec's castflags: bit 0 = the *source* is nullable, bit 1 =
+	// the *target* is nullable. Only the target's flag changes anything here — it
+	// decides both the test (`wasm_ref_matches_heap_type` returns `nullable` for
+	// a null reference) and the type the branch carries. The source's flag
+	// describes the fall-through type `ht1 \ ht2`, which the engine does not
+	// track: values are typed by their JIT type, not by heap type
+	// (docs/proposals/GC.md G7 / GC-4).
+	const bool targetNullable = (castop & 0x02) != 0;
 	(void)ht1;
 	jit_value_t ref = popValue();
-	jit_type_t targetType = jitRefTypeForHeapType(ht2, false);
+	jit_type_t targetType = jitRefTypeForHeapType(ht2, targetNullable);
 	jit_value_t casted = castRefValue(ref, targetType);
-	jit_value_t matched = emitRefTypeTest(ref, ht2, false);
+	jit_value_t matched = emitRefTypeTest(ref, ht2, targetNullable);
 	ControlBlock& target = branchTarget(l);
 	const auto& slots = branchSlotsForTarget(target);
-	assert(!slots.empty());
-	jit_insn_store(function, slots.back(), castRefValue(casted, jit_value_get_type(slots.back())));
+	// Branch with the cast reference — but a label may carry no values at all, in
+	// which case there is nothing to store. Asserting a non-empty slot list here
+	// is what aborted `br_on_cast.wast`.
+	if (!slots.empty())
+		jit_insn_store(function, slots.back(), castRefValue(casted, jit_value_get_type(slots.back())));
 	jit_insn_branch_if(function, matched, &target.label);
 	pushValue(ref);
 }
 void OpcodeDispatcher::dispatchBrOnCastFail(uint8_t castop, WASM::LabelIdx l, WASM::HeapType ht1, WASM::HeapType ht2) {
-	(void)castop;
+	// Same flags, opposite branch: fall through with the cast value, branch with
+	// the original one (the `ht1 \ ht2` case).
+	const bool targetNullable = (castop & 0x02) != 0;
 	(void)ht1;
 	jit_value_t ref = popValue();
-	jit_type_t targetType = jitRefTypeForHeapType(ht2, false);
+	jit_type_t targetType = jitRefTypeForHeapType(ht2, targetNullable);
 	jit_value_t casted = castRefValue(ref, targetType);
-	jit_value_t matched = emitRefTypeTest(ref, ht2, false);
+	jit_value_t matched = emitRefTypeTest(ref, ht2, targetNullable);
 	ControlBlock& target = branchTarget(l);
 	const auto& slots = branchSlotsForTarget(target);
-	assert(!slots.empty());
-	jit_insn_store(function, slots.back(), castRefValue(ref, jit_value_get_type(slots.back())));
+	if (!slots.empty())
+		jit_insn_store(function, slots.back(), castRefValue(ref, jit_value_get_type(slots.back())));
 	jit_insn_branch_if_not(function, matched, &target.label);
 	pushValue(casted);
 }
