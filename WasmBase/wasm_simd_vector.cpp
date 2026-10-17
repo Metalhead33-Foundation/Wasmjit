@@ -109,39 +109,42 @@ extern "C" void wasm_i64x2_relaxed_laneselect(const void* a, const void* b, cons
 	wasm_v128_bitselect(a, b, c, out);
 }
 
-HWY_EXPORT(f32x4RelaxedMadd);
-HWY_EXPORT(f32x4RelaxedNmadd);
-HWY_EXPORT(f64x2RelaxedMadd);
-HWY_EXPORT(f64x2RelaxedNmadd);
 HWY_EXPORT(relaxedDotI8x16I7x16S);
 HWY_EXPORT(relaxedDotI8x16I7x16AddS);
 
+// `relaxed_madd`/`nmadd` forward to the reference on purpose. The vector form
+// would be `Add(Mul(a, b), c)`, which `-O2` contracts into an FMA on the targets
+// Highway dispatches to while the reference (pinned by a `volatile`) stays
+// unfused — so debug and release returned different values for the same module.
+// The spec permits either rounding, and the benchmark shows the arithmetic behind
+// the call is ~1 cycle against a ~4 ns call, so paying the scalar path costs
+// nothing measurable and buys determinism across builds (`docs/TESTING.md` T4).
 extern "C" void wasm_f32x4_relaxed_madd(const void* a, const void* b, const void* c, void* out)
 {
-	HWY_DYNAMIC_DISPATCH(f32x4RelaxedMadd)(static_cast<const uint8_t*>(a),
-										   static_cast<const uint8_t*>(b),
-										   static_cast<const uint8_t*>(c), static_cast<uint8_t*>(out));
+	WASM::simd_scalar::f32x4RelaxedMadd(static_cast<const uint8_t*>(a),
+									   static_cast<const uint8_t*>(b),
+									   static_cast<const uint8_t*>(c), static_cast<uint8_t*>(out));
 }
 
 extern "C" void wasm_f32x4_relaxed_nmadd(const void* a, const void* b, const void* c, void* out)
 {
-	HWY_DYNAMIC_DISPATCH(f32x4RelaxedNmadd)(static_cast<const uint8_t*>(a),
-											static_cast<const uint8_t*>(b),
-											static_cast<const uint8_t*>(c), static_cast<uint8_t*>(out));
+	WASM::simd_scalar::f32x4RelaxedNmadd(static_cast<const uint8_t*>(a),
+									   static_cast<const uint8_t*>(b),
+									   static_cast<const uint8_t*>(c), static_cast<uint8_t*>(out));
 }
 
 extern "C" void wasm_f64x2_relaxed_madd(const void* a, const void* b, const void* c, void* out)
 {
-	HWY_DYNAMIC_DISPATCH(f64x2RelaxedMadd)(static_cast<const uint8_t*>(a),
-										   static_cast<const uint8_t*>(b),
-										   static_cast<const uint8_t*>(c), static_cast<uint8_t*>(out));
+	WASM::simd_scalar::f64x2RelaxedMadd(static_cast<const uint8_t*>(a),
+									   static_cast<const uint8_t*>(b),
+									   static_cast<const uint8_t*>(c), static_cast<uint8_t*>(out));
 }
 
 extern "C" void wasm_f64x2_relaxed_nmadd(const void* a, const void* b, const void* c, void* out)
 {
-	HWY_DYNAMIC_DISPATCH(f64x2RelaxedNmadd)(static_cast<const uint8_t*>(a),
-											static_cast<const uint8_t*>(b),
-											static_cast<const uint8_t*>(c), static_cast<uint8_t*>(out));
+	WASM::simd_scalar::f64x2RelaxedNmadd(static_cast<const uint8_t*>(a),
+									   static_cast<const uint8_t*>(b),
+									   static_cast<const uint8_t*>(c), static_cast<uint8_t*>(out));
 }
 
 extern "C" void wasm_i16x8_relaxed_dot_i8x16_i7x16_s(const void* a, const void* b, void* out)

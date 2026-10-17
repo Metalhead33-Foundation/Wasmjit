@@ -3,9 +3,11 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <iomanip>
 #include <limits>
 #include <type_traits>
 #include <vector>
@@ -2201,6 +2203,236 @@ TEST_CASE("simd relaxed: the hand-written ops match their reference")
 			REQUIRE(simdVectorsMatch(ref.data(), got.data(), op.laneSize, op.isFloat));
 		}
 	}
+}
+
+// ── T4: the SIMD benchmark (docs/SIMD_LIBJIT.md §8.2, docs/TESTING.md T4) ───
+//
+// Diagnostic only. `[simdbench]` keeps it out of the default run, and nothing
+// here is a pass/fail gate: the numbers decide whether the batched helper (D4)
+// is ever built, and are recorded back into docs/SIMD_LIBJIT.md §8.
+namespace {
+
+// A JIT-compiled `(const void* a, const void* b, void* out)` that performs one
+// `i32x4` operation *lane by lane* in scalar IR — the shape design D1 would
+// emit: no helper call, no SIMD instruction, four load/add/store triples.
+// Built through the same LibJIT the backend uses, so M3 measures codegen rather
+// than a different engine.
+class LaneWiseOp
+{
+public:
+	explicit LaneWiseOp(bool multiply) { build(multiply); }
+	~LaneWiseOp() { jit_context_destroy(context); }
+	LaneWiseOp(const LaneWiseOp&) = delete;
+	LaneWiseOp& operator=(const LaneWiseOp&) = delete;
+
+	void run(const void* a, const void* b, void* out) const { entry(a, b, out); }
+private:
+	using Entry = void (*)(const void*, const void*, void*);
+	void build(bool multiply);
+	Entry entry = nullptr;
+	jit_context_t context = nullptr;
+};
+
+void LaneWiseOp::build(bool multiply)
+{
+	context = jit_context_create();
+	jit_context_build_start(context);
+	jit_type_t params[3] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr};
+	jit_type_t signature = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 3, 1);
+	jit_function_t function = jit_function_create(context, signature);
+	jit_value_t a = jit_value_get_param(function, 0);
+	jit_value_t b = jit_value_get_param(function, 1);
+	jit_value_t out = jit_value_get_param(function, 2);
+	for (int lane = 0; lane < 4; ++lane) {
+		const jit_nint offset = lane * 4;
+		jit_value_t va = jit_insn_load_relative(function, a, offset, jit_type_int);
+		jit_value_t vb = jit_insn_load_relative(function, b, offset, jit_type_int);
+		jit_insn_store_relative(function, out, offset,
+								multiply ? jit_insn_mul(function, va, vb)
+										 : jit_insn_add(function, va, vb));
+	}
+	jit_insn_return(function, nullptr);
+	jit_function_compile(function);
+	jit_context_build_end(context);
+	entry = reinterpret_cast<Entry>(jit_function_to_closure(function));
+}
+
+// Best of seven: the fastest run is the least noisy estimate of the loop's cost
+// (the other runs pay for scheduling noise and nothing else). The body's result
+// goes through a volatile sink — a *pure* body whose value is discarded is dead
+// code, and GCC deletes the whole loop (measured: M4n reported 0.000 ns/op twice
+// before this was added).
+template <typename Body>
+double bestNsPerOp(Body&& body, uint32_t iterations, uint32_t opsPerIteration)
+{
+	double best = std::numeric_limits<double>::max();
+	for (int run = 0; run < 7; ++run) {
+		const auto start = std::chrono::steady_clock::now();
+		volatile uint32_t sink = body();
+		(void)sink;
+		const auto elapsed = std::chrono::steady_clock::now() - start;
+		const double ns = std::chrono::duration<double, std::nano>(elapsed).count();
+		best = std::min(best, ns / (double(iterations) * double(opsPerIteration)));
+	}
+	return best;
+}
+
+} // namespace
+
+TEST_CASE("simd benchmark: ns per v128 op (SIMD-L8)", "[.simdbench]")
+{
+	// The workload is `Test/wasm_wat/simd_bench.wat`: a loop doing
+	//     v128.load 0, v128.load 16, i32x4.add,
+	//     v128.load 32, i32x4.mul, i32x4.add
+	// per iteration — six `v128` ops, folding to `acc += (a + b) * c`. Short on
+	// purpose: §8.1's point is that the helper *boundary* dominates only when the
+	// body is short, so a longer body would hide what is being measured.
+	//
+	// Read through a volatile so the compiler cannot fold the M4n loop into a
+	// multiply and report a meaningless "upper bound".
+	static volatile uint32_t iterationsHint = 200000;
+	const uint32_t iterations = iterationsHint;
+	constexpr uint32_t kOpsPerIteration = 6;
+
+	static const uint32_t kA[4] = {1, 2, 3, 4};
+	static const uint32_t kB[4] = {5, 6, 7, 8};
+	static const uint32_t kC[4] = {9, 10, 11, 12};
+	static const uint32_t kAcc0[4] = {1, 2, 3, 4};
+	const auto expected = [&iterations](uint32_t lane) {
+		uint32_t value = kAcc0[lane];
+		for (uint32_t i = 0; i < iterations; ++i)
+			value += (kA[lane] + kB[lane]) * kC[lane];
+		return value;
+	};
+
+	// The working set, in the byte form the helpers take.
+	alignas(16) uint8_t a[16];
+	alignas(16) uint8_t b[16];
+	alignas(16) uint8_t c[16];
+	alignas(16) uint8_t acc0[16];
+	std::memcpy(a, kA, 16);
+	std::memcpy(b, kB, 16);
+	std::memcpy(c, kC, 16);
+	std::memcpy(acc0, kAcc0, 16);
+
+	// ── M1: the shipped design — the wasm loop, through the JIT ─────────────
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("simd_bench", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	auto benchFn = loaded.instance->exportedFunction("bench");
+	REQUIRE(benchFn.has_value());
+	const auto runM1 = [&] {
+		return static_cast<uint32_t>(
+			WASM::callCallable<int32_t>(*benchFn, static_cast<int32_t>(iterations)));
+	};
+
+	alignas(16) uint8_t t0[16];
+	alignas(16) uint8_t t1[16];
+	alignas(16) uint8_t acc[16];
+
+	// ── M4: the same helpers, called from C++ — same design, no JIT ─────────
+	const auto runM4 = [&] {
+		std::memcpy(acc, acc0, 16);
+		for (uint32_t i = 0; i < iterations; ++i) {
+			wasm_v128_load(a, t0);
+			wasm_v128_load(b, t1);
+			wasm_i32x4_add(t0, t1, t0);
+			wasm_v128_load(c, t1);
+			wasm_i32x4_mul(t0, t1, t0);
+			wasm_i32x4_add(t0, acc, acc);
+		}
+		uint32_t lane0;
+		std::memcpy(&lane0, acc, 4);
+		return lane0;
+	};
+
+	// ── M3: helper loads, lane-by-lane scalar IR for the arithmetic (D1) ────
+	LaneWiseOp laneAdd(false);
+	LaneWiseOp laneMul(true);
+	const auto runM3 = [&] {
+		std::memcpy(acc, acc0, 16);
+		for (uint32_t i = 0; i < iterations; ++i) {
+			wasm_v128_load(a, t0);
+			wasm_v128_load(b, t1);
+			laneAdd.run(t0, t1, t0);
+			wasm_v128_load(c, t1);
+			laneMul.run(t0, t1, t0);
+			laneAdd.run(t0, acc, acc);
+		}
+		uint32_t lane0;
+		std::memcpy(&lane0, acc, 4);
+		return lane0;
+	};
+
+	// ── M0: the cost of one helper call, with almost no work behind it ──────
+	// §8.1 models the boundary as a handful of cycles; these two loops measure the
+	// whole crossing — call, Highway's dispatch, and the helper's own load/store —
+	// with the arithmetic either absent (`v128.load` is a 16-byte copy) or minimal
+	// (`i32x4.add`). The gap between the two is what the SIMD work itself costs.
+	const auto runM0Load = [&] {
+		for (uint32_t i = 0; i < iterations; ++i)
+			wasm_v128_load(a, t0);
+		return 0u;
+	};
+	const auto runM0Add = [&] {
+		for (uint32_t i = 0; i < iterations; ++i)
+			wasm_i32x4_add(a, b, t0);
+		return 0u;
+	};
+
+	// ── M4n: native C with no calls at all — the upper bound ─────────────────
+	// The `break` that can never be taken is load-bearing: without it GCC folds
+	// the whole loop into its closed form (`lanes[lane] += N * step[lane]`) and
+	// reports 0.000 ns/op, which measures the compiler rather than the machine.
+	// Its target is read through a volatile so the compiler cannot *prove* the
+	// break unreachable and close the loop anyway (the first attempt used a
+	// literal, and GCC proved it impossible and collapsed the loop regardless).
+	static volatile uint32_t poisonHint = 0xFFFFFFFFu;
+	const uint32_t poison = poisonHint;
+	const auto runM4n = [&] {
+		uint32_t lanes[4] = {kAcc0[0], kAcc0[1], kAcc0[2], kAcc0[3]};
+		for (uint32_t i = 0; i < iterations; ++i) {
+			for (int lane = 0; lane < 4; ++lane)
+				lanes[lane] += (kA[lane] + kB[lane]) * kC[lane];
+			if (lanes[1] == poison)
+				break;
+		}
+		return lanes[0];
+	};
+
+	// Every variant must compute the same value before it may be timed: a
+	// benchmark that measures the wrong answer is worse than none.
+	REQUIRE(runM1() == expected(0));
+	REQUIRE(runM4() == expected(0));
+	REQUIRE(runM3() == expected(0));
+	REQUIRE(runM4n() == expected(0));
+	runM0Load();
+	REQUIRE(std::memcmp(t0, a, 16) == 0);
+	runM0Add();
+	uint32_t probeLane0;
+	std::memcpy(&probeLane0, t0, 4);
+	REQUIRE(probeLane0 == kA[0] + kB[0]);
+
+	const double m0Load = bestNsPerOp(runM0Load, iterations, 1);
+	const double m0Add = bestNsPerOp(runM0Add, iterations, 1);
+	const double m1 = bestNsPerOp(runM1, iterations, kOpsPerIteration);
+	const double m3 = bestNsPerOp(runM3, iterations, kOpsPerIteration);
+	const double m4 = bestNsPerOp(runM4, iterations, kOpsPerIteration);
+	const double m4n = bestNsPerOp(runM4n, iterations, kOpsPerIteration);
+
+	std::cout << std::fixed << std::setprecision(3)
+			  << "SIMD-L8 benchmark: " << iterations << " iterations x "
+			  << kOpsPerIteration << " v128 ops per iteration\n"
+			  << "  M0a one helper call: v128.load only        " << m0Load << " ns/call\n"
+			  << "  M0b one helper call: i32x4.add only        " << m0Add << " ns/call\n"
+			  << "  M1  shipped: JIT loop, pointer helpers     " << m1 << " ns/v128-op\n"
+			  << "  M3  D1 route: lane-wise scalar IR          " << m3 << " ns/v128-op\n"
+			  << "  M4  native C calling the same helpers      " << m4 << " ns/v128-op\n"
+			  << "  M4n native C inlined (no calls)            " << m4n << " ns/v128-op\n"
+			  << "  helper-call share of M1 (1 - M4n/M1)       "
+			  << (100.0 * (1.0 - m4n / m1)) << " %\n"
+			  << "  M1 over the no-call bound (M1 / M4n)       " << (m1 / m4n) << " x\n";
 }
 
 TEST_CASE("simd helpers: signedness corners are pinned")

@@ -358,62 +358,16 @@ HWY_INLINE VF wasmNoNaN(DF df, VF v)
 }
 
 // ── Relaxed SIMD (docs/proposals/SIMD.md SD5) ──────────────────────────────
-// `relaxed_madd`/`nmadd` may be fused or not; SD5 picks unfused, which is what an
-// explicit multiply followed by an add emits — and which is why the reference
-// needs a `volatile` hop to stop *its* compiler contracting.
-template <class V>
-HWY_INLINE V relaxedMadd(V a, V b, V c)
-{
-	return hn::Add(hn::Mul(a, b), c);
-}
-
-template <class V>
-HWY_INLINE V relaxedNmadd(V a, V b, V c)
-{
-	return hn::Sub(c, hn::Mul(a, b));
-}
-
-template <class D>
-HWY_INLINE void relaxedMaddBody(D d, const uint8_t* a, const uint8_t* b, const uint8_t* c,
-								uint8_t* out)
-{
-	using T = hn::TFromD<D>;
-	hn::StoreU(relaxedMadd(hn::LoadU(d, reinterpret_cast<const T*>(a)),
-						   hn::LoadU(d, reinterpret_cast<const T*>(b)),
-						   hn::LoadU(d, reinterpret_cast<const T*>(c))),
-			   d, reinterpret_cast<T*>(out));
-}
-
-template <class D>
-HWY_INLINE void relaxedNmaddBody(D d, const uint8_t* a, const uint8_t* b, const uint8_t* c,
-								 uint8_t* out)
-{
-	using T = hn::TFromD<D>;
-	hn::StoreU(relaxedNmadd(hn::LoadU(d, reinterpret_cast<const T*>(a)),
-							hn::LoadU(d, reinterpret_cast<const T*>(b)),
-							hn::LoadU(d, reinterpret_cast<const T*>(c))),
-			   d, reinterpret_cast<T*>(out));
-}
-
-inline void f32x4RelaxedMadd(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out)
-{
-	relaxedMaddBody(hn::CappedTag<float, 4>(), a, b, c, out);
-}
-
-inline void f32x4RelaxedNmadd(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out)
-{
-	relaxedNmaddBody(hn::CappedTag<float, 4>(), a, b, c, out);
-}
-
-inline void f64x2RelaxedMadd(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out)
-{
-	relaxedMaddBody(hn::CappedTag<double, 2>(), a, b, c, out);
-}
-
-inline void f64x2RelaxedNmadd(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out)
-{
-	relaxedNmaddBody(hn::CappedTag<double, 2>(), a, b, c, out);
-}
+// `relaxed_madd`/`nmadd` have **no per-target body**: they forward to the scalar
+// reference (see wasm_simd_vector.cpp). The vector form `Add(Mul(a, b), c)` looks
+// obvious, but at `-O2` GCC contracts it into an FMA on the FMA-capable targets
+// Highway dispatches to, while the reference — pinned by a `volatile` — cannot
+// be. Debug and release then disagree, and with them the differential and the
+// spec script `relaxed_madd_nmadd`, which is exactly the class of hazard
+// SD5/SD6 exist to prevent. The spec permits either rounding, so the fix is to
+// make the choice *structural* rather than to fight the optimiser; the work
+// behind the call is free anyway — a helper call costs ~4 ns and the arithmetic
+// behind it ~1 cycle (`docs/TESTING.md` T4).
 
 // The relaxed dots: the spec lets a byte of `b` be read signed *or* unsigned when
 // its high bit is set, and lets the i16 pair sum saturate *or* wrap. SD5 takes the

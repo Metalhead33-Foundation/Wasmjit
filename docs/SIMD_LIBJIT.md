@@ -426,18 +426,23 @@ result and stay conformant.
 
 ### 8.1 Where the cycles go for one `v128` op (design D5)
 
-| Component | Rough cost | Notes |
-|---|---|---|
-| Helper call | 2–5 cycles + predictor pressure | Direct `jit_insn_call_native` target; via `HWY_DYNAMIC_DISPATCH` it is one extra indirect hop inside the wrapper |
-| Argument setup | ~2 instructions | The slot addresses are frame offsets, so they are `lea`/immediate, not loads |
-| The actual SIMD op | 1–4 cycles | `paddd`, `pminub`, `pshufb`, … |
-| Slot round-trip | ~4–10 cycles | One 16-byte store into the `out` slot; the consumer reloads it |
+This table was the *model* the design was justified with. §8.4 then measured it,
+and the measurement moved the cost out of the slot and into the call — so the
+right-hand column now records both.
 
-So the boundary (call + slot traffic) is **roughly 5–10× the inner op**. That is
-why §6 fixes the boundary and §5 refuses to optimise the op, and why the only
-realistic step change is not "a better library" but **D4 (removing calls
-entirely for runs of ops)** or the **D5 peepholes** (removing the intermediate
-slot for producer/consumer pairs).
+| Component | Modelled cost | Measured (§8.4) |
+|---|---|---|
+| Helper call | 2–5 cycles + predictor pressure | **~12 cycles for the whole crossing**, and it is nearly all of it: `v128.load` behind one call is 4.02 ns, `i32x4.add` 4.30 ns, i.e. the work is below the noise. Two nested calls (entry point → Highway's dispatched body), one indirect branch each. |
+| Argument setup | ~2 instructions | as modelled — `lea`/immediate frame offsets |
+| The actual SIMD op | 1–4 cycles | ~1 cycle; invisible at this resolution (`paddd` behind a call) |
+| Slot round-trip | ~4–10 cycles | present but **minor** — the 16-byte store/load is a couple of cycles against a ~12-cycle call |
+
+So the boundary is **roughly 40× the inner op** (M1 = 4.10 ns/op, the no-call
+bound 0.099), and the *call*, not the slot, is the expensive part. That is why §6
+fixes the boundary and §5 refuses to optimise the op, and why the only realistic
+step change is not "a better library" but **removing calls**: **D4 (one call for
+a run of ops)** or the **D5 peepholes** (fusing `load`/`const` into the consumer,
+which removes a call rather than a copy).
 
 ### 8.2 What the benchmark (T4) must measure
 
@@ -463,7 +468,78 @@ built, *that* is when wider-than-128-bit vectors and Highway's runtime dispatch
 start paying for themselves, because a batched helper can process several
 `v128` values per instruction.
 
-## 9. The test plan, documented as tests
+### 8.4 Measured (SIMD-L8)
+
+Recorded 2026-10-17 on x86-64, `build/Release` (the project's release
+configuration: `-O2`, GCC 15), 200 000 iterations × 6 `v128` ops per iteration,
+best of seven, one representative run — repeat runs land within ±8 %, so read the
+figures as bound-resolving, not three-digit-precise. Run it with
+`./WasmJit '[.simdbench]'` (the leading dot keeps it out of the default run — T4);
+the workload is
+[`Test/wasm_wat/simd_bench.wat`](../Test/wasm_wat/simd_bench.wat):
+
+| Variant | What it is | ns per `v128` op |
+|---|---|---|
+| **M0a** | one helper call, `v128.load` only (a 16-byte copy behind it) | **4.02** |
+| **M0b** | one helper call, `i32x4.add` only | **4.30** |
+| **M1** | shipped design: the wasm loop through the JIT, pointer helpers | **4.10** |
+| **M3** | the D1 route: lane-wise scalar IR, one *direct* call per op | **3.35** |
+| **M4** | native C calling the same helpers (no JIT in the loop) | **4.71** |
+| **M4n** | native C, no calls at all (auto-vectorised) — the upper bound | **0.099** |
+
+Readings, in order of how much they change the picture:
+
+1. **The call *is* the cost.** M1 (4.10) sits between M0a (4.02) and M0b (4.30):
+   a whole per-op budget is one helper call, and the SIMD work behind it is
+   below the resolution of the measurement. M1/M4n = **42×**, i.e. 97.6 % of the
+   loop is `helper-call share`.
+2. **The lowering is not the problem.** M1 (4.10) beats M4 (4.71): the JIT emits
+   the same work C++ does and calls the entry points directly instead of through
+   the PLT. There is no JIT-side inefficiency to recover — which is exactly why
+   §5 refuses to optimise the op and §6 fixes the boundary instead.
+3. **§8.1's model was wrong about *where* the cycles go.** It predicted the
+   boundary as "call 2–5 cycles + slot round-trip 4–10"; measured, the whole
+   crossing is ~12 cycles at ~3 GHz and the arithmetic is ~1. The slot traffic is
+   not the expensive half — the call is (two nested calls: the entry point, then
+   Highway's dispatched body, and one indirect branch each).
+4. **M3 says an ABI-level fix has limited headroom.** Lane-wise scalar IR — four
+   loads, four adds, four stores *instead of one SIMD instruction* — is 18 %
+   **faster** (3.35 vs 4.10), purely because it is one direct call rather than a
+   dispatched one. So anything that removes a call wins more than anything that
+   makes the callee cheaper. Q4's answer follows: the D1 set should **not** grow
+   (the win is the call mechanics, not the IR), and D5's peepholes are the cheap
+   lever — they remove a call, not work.
+5. **A release build found a real defect in the relaxed ops — not a performance
+   one.** `relaxed_madd`/`nmadd` were implemented as `Add(Mul(a, b), c)`, which
+   GCC contracts into an FMA on the FMA-capable Highway targets while the
+   reference (pinned by a `volatile`) stays unfused: debug and release then
+   returned *different values for the same module*, and both the `simd relaxed`
+   differential and the `relaxed_madd_nmadd` spec script failed — in release
+   only. The four ops now forward to the reference, which makes the permitted
+   choice structural. The benchmark is what forced the release build, and the
+   release build is what found it: a suite that only ever runs unoptimised cannot
+   see this class of bug.
+6. **Unbuilt variants, stated plainly.** M2 (by-value 16-byte struct helpers) was
+   not measured: the ABI *works* (§6.6, verified at L1) but measuring "faster"
+   needs by-value signatures plumbed through the helper layer, which is a change
+   to §6.3 rather than a probe. M5 (peepholes applied) is not measurable because
+   the peepholes are not built (§5's L2 row defers them). Both are one
+   benchmark run away once built.
+
+**The gate (§8.3), applied as far as the built variants allow.** The condition is
+call + slot traffic > 50 % of loop time *after* the peepholes. Before them the
+measured share is **97.6 %**, and a peephole can only *remove* calls, never add
+any: at most it fuses `load`+op, which for this workload takes 6 calls per
+iteration to 3, leaving one call — ~4 ns — per op against a ~4.1 ns budget. The
+gate therefore holds for **any** peephole outcome, so D4's *justification* does
+not depend on M5. Its **verdict is deferred anyway**, for a reason the numbers
+make plain: the same measurement says a peephole is a small, contained change
+worth up to 2× on memory-fed loops, while D4 is a new design (a run script, a
+bank layout, a different helper ABI). Building the expensive thing before
+measuring the cheap one would be a guess dressed as a decision. Order: peephole
+(M5) → re-measure → D4.
+
+
 
 Four layers, each with a different job. Every layer is a documented artefact —
 a Catch2 case, a `.wat` file, a `wast_supported.txt` entry or a bench module —
@@ -526,7 +602,7 @@ cd build/Desktop-Debug/Test
 ./WasmJit 'simd helpers*'                 # T1 alone, by case-name prefix
 WASM_SPEC_TIMEOUT=10 ./WasmJit 'spec: simd_' -r compact   # T3, one script at a time
 WASM_SPEC_SCRIPTS=all ./WasmJit '[spec]'  # T3 sweep, for re-curation
-./WasmJit '[simdbench]'                   # T4, opt-in by tag
+./WasmJit '[.simdbench]'                  # T4, opt-in (hidden tag: the dot keeps it out of the default run)
 ```
 
 ### Indicative survey at the time of writing
@@ -553,7 +629,7 @@ WASM_SPEC_SCRIPTS=all ./WasmJit '[spec]'  # T3 sweep, for re-curation
 | T2 | `simd: float arithmetic and comparisons run through the JIT` | pass | **SIMD-L4**, driven by `simd_arith_f.wat` (32 exports, all as bit patterns: NaN comparisons, the zero rules, NaN propagation vs `pmin`/`pmax`, ties-to-even, and the `f64x2` families) |
 | T2 | `simd: the float/int conversions run through the JIT` | pass | **SIMD-L4**, driven by `simd_convert.wat` (19 exports at the ends of the ranges; two of them `FORWARD`, which is why their conformance rests on this case rather than on a differential) |
 | T3 | the 59 `simd_*.wast` scripts | **35 fully pass** (curated); none abort | **S7 is closed for functions with ≤ 2 `v128` operands.** What still fails splits cleanly in two, and neither is marshalling: five scripts need `v128` globals (SIMD-L5, not built), and sixteen pass three `v128` operands — the case libjit's `jit_apply` cannot reproduce (§6.6), while the generated code handles it correctly |
-| T4 | — | — | SIMD-L8 |
+| T4 | `simd benchmark: ns per v128 op (SIMD-L8)` | 4.10 ns/v128-op (M1) | **SIMD-L8.** 42× off the no-call bound; 97.6 % of it is the helper call — see §8.4 |
 
 Measured after SIMD-L4: `./WasmJit 'simd*'` reports **19 cases, 5884 assertions,
 all passing**; the whole default suite is **105 cases / 7421 assertions** (104 /
@@ -584,19 +660,21 @@ note (§6.5).
 | ✅ **SIMD-L3 — Integer and comparison ops** | **Done — all 133 ops.** The X-macro op list (§6.5); all 36 comparisons; the 23 `add`/`sub`/`mul`/`min`/`max` forms; the 8 `neg`/`abs` forms; the 12 shifts; saturating `add`/`sub` (8); `avgr_u` (2); `popcnt` (1); the reductions `all_true`/`bitmask`/`any_true` (9); and the width-changing family `narrow`/`extend`/`extmul`/`extadd_pairwise`/`dot`/`q15mulr_sat_s` (34). Each is differentially tested against the reference by construction, and the corners a differential cannot see are pinned by golden vectors (three of which corrected *the expectation*, never the code — §11 R8). | S1 | ✅ `simd_arith_i.wat` green (67 exports); T1 green for the whole op list; **184 of 236** handlers execute, and every remaining stub is a float op. |
 | ✅ **SIMD-L4 — Float and conversion ops** | **Done — all 52 ops.** The 12 float comparisons (with the unordered `ne` the library lacks), the 14 unary float ops (`ceil`/`floor`/`trunc`/`nearest` — ties to *even* — plus `abs`/`neg`/`sqrt`), the 16 binary ones (`add`/`sub`/`mul`/`div` and the four min/max flavours with wasm's NaN and `±0` rules — hazard Y1), and the 10 conversions (4 `trunc_sat`, 2 `convert`, 2 `convert_low`, `demote`/`promote`). Eight of the conversions are vectorised; two are marked `FORWARD` in the op list, because the library has no truncating float64→int32 conversion at all (§11 R10). | S1 | ✅ `simd_arith_f.wat` and `simd_convert.wat` green (51 exports between them, all V8-checked); T1 green for every float op; **236 of 236 handlers execute**. |
 | **SIMD-L5 — Globals and constant expressions** | `v128.const` in `evalConstantExpr`; `v128` global get/set; `v128` in the globals layout. | S3 | A module with a `v128` global initialised by `v128.const` runs and round-trips. |
-| ✅ **SIMD-L6 - Relaxed SIMD** | ✅ **All 20 sub-opcodes implemented.** Nine are strict-helper reuse (SD5) and ride the op-list differential; the other eleven are hand-written entry points — `relaxed_swizzle` and the four `relaxed_laneselect` delegate to the strict entry points (zeroing swizzle, `v128.bitselect`), the four `madd`/`nmadd` and the two dots have new per-target bodies. The dots are the hardware form with the operands swapped (`maddubs`), and the reference was written to match that choice. | S2 | ✅ Relaxed modules decode and run; T1 covers all 20 (op list + the `simd relaxed` table) and T2 covers the hand-written shapes through `simd_relaxed.wat`. |
+| ✅ **SIMD-L6 - Relaxed SIMD** | ✅ **All 20 sub-opcodes implemented.** Nine are strict-helper reuse (SD5) and ride the op-list differential; the other eleven are hand-written entry points — `relaxed_swizzle` and the four `relaxed_laneselect` delegate to the strict entry points (zeroing swizzle, `v128.bitselect`), the two dots have per-target bodies (the hardware `maddubs` form), and the four `madd`/`nmadd` **forward to the reference** because the vector form was contracted into an FMA at `-O2` while the reference was not — a debug/release divergence caught by §8.4's release build. | S2 | ✅ Relaxed modules decode and run; T1 covers all 20 (op list + the `simd relaxed` table) and T2 covers the hand-written shapes through `simd_relaxed.wat`. |
 | ◑ **SIMD-L7 — Harness marshalling** | ◑ **Done for ≤ 2 `v128` operands.** `WastScript.cpp` decodes `v128` arguments lane by lane (integer lanes as signed decimals, float lanes as bit patterns) and compares results lane-wise with the per-lane `nan:canonical`/`nan:arithmetic` policies; 35 of the 59 `simd_*.wast` scripts are curated as a result. The other 24 are blocked on two *other* pieces rather than on marshalling: `v128` globals (SIMD-L5) and the ≥ 3-operand `jit_apply` limit (§6.6). | S7 (partly), S8 | ◑ `./WasmJit 'spec: simd_*'` reports real counts and the curated scripts run in the default suite; the rest are listed as uncurated, with the cause, instead of failing silently. |
-| **SIMD-L8 — Benchmark and the D4 decision** | M1–M5 per §8.2; apply the §8.3 gate; record the numbers in this note's §8 and in `TESTING.md`. | — | The note states the measured `ns/v128-op` and whether D4 is built, deferred or rejected. |
+| ✅ **SIMD-L8 — Benchmark and the D4 decision** | ✅ **Measured; D4 justified but deliberately not built yet.** `[simdbench]` reports **M1 = 4.10 ns per `v128` op** against a no-call bound of 0.099 (42×), with a single helper call costing 4.02–4.30 ns — so 97.6 % of the loop is the call, not the SIMD work, and the JIT is at parity with native C doing the same thing (4.10 vs 4.71). §8.3's gate therefore holds for any peephole outcome, which makes D4's justification independent of M5; its verdict is deferred in favour of the cheaper peephole, which the same numbers say is worth up to 2× on memory-fed loops. M2 (by-value helpers) and M5 are unmeasured because they are unbuilt, and §8.4 says so explicitly. | — | ✅ The note states the measured `ns/v128-op` per variant, revises §8.1's cost model to match, and records the D4 verdict and the order of the next two steps. |
 
 **Why the D5 peepholes were deferred rather than built in L2.** Fusing
 `v128.load`+op or `v128.const`+op saves one slot round-trip, but it needs
 *lookahead*: the dispatcher is a single pass over the bytecode that emits each
 instruction as it decodes it, so fusion means buffering a decoded instruction
 and reconstructing its operands — real complexity in the hottest and most
-error-prone part of the backend. §8 already gates a peephole on the benchmark
-showing the boundary cost dominating, and that benchmark is SIMD-L8. Building it
-before the measurement would be speculative complexity, and the same measurement
-may well say D4 (fusing a whole run of ops into one call) is the better answer.
+error-prone part of the backend. §8 gates that peephole on the benchmark showing
+the boundary cost dominating. **That benchmark now exists (SIMD-L8) and the
+answer is unambiguous**: the crossing is ~12 cycles per op, the arithmetic ~1,
+so a peephole is worth building — and worth ~2× here, since it removes half the
+calls of a memory-fed loop. The *reason* it pays also changed: it was deferred to
+avoid a slot copy, and the measurement says the slot copy was never the cost.
 
 Guardrails: the scalar reference stays compiled and green at every step; run
 `./WasmJit '~[spec]'` after each milestone; never let a real fix regress the
@@ -616,10 +694,10 @@ curated spec set.
 | R8 | **The hand-computed expectations were wrong twice more — and the library disagrees with itself.** Writing SIMD-L3's goldens, two expectations were wrong (the `q15mulr_sat_s` `min×max` corner, and a chained example where I took `sub_sat_s(100, 100)` to be 127); the implementation was right both times. That is the third and fourth occurrence of R6, and the second was caught *only* because of the change below. Separately, the differential's blind spot is now concrete rather than theoretical: hazard Y5 is invisible to it, because both layers wrap the same way, and the random inputs never produced the one pair that would have exposed it. | Adopted: **a golden is cross-checked against an independent engine before it is written down**, not after a failure. `node` (V8) is installed and implements the shipped spec; it settled `q15mulr_sat_s` after a `wat2wasm`, and it checked all 67 expectations of `simd_arith_i.wat` in one run. `wasm-interp`, `spectest-interp` and `wasmer` are installed as alternatives. The gap that leaves is named rather than papered over: an engine check covers a module's *scalar* semantics, so it validates what a golden asserts but not the JIT path that produced it — that is what T2 is for. |
 | R9 | **A periodic test input hid a whole class of bug, and the library's float `Ne` is the wrong comparison.** Two findings from SIMD-L4 that only the *input design* could have produced. (1) The byte patterns the differential fed were periodic every 8 bytes, which makes a vector's two halves identical — so the reference's `extend_high`/`extmul_high` read the *lower* half while the vector read the upper one, and 184 passing assertions said nothing about it. The float corners (added for the float ops) broke the periodicity and it failed immediately; the two forms are now separate shapes, so the reference cannot read the wrong half at all. (2) Highway's float `Ne` is `_CMP_NEQ_OQ` — the **ordered** not-equal, false when an operand is NaN — while wasm's `ne` is unordered and true. A library that is right about `eq`/`lt`/`gt`/`le`/`ge` and wrong about `ne` is exactly the shape a "trust the library" rule gets wrong. | (1) The input families are now deliberately *non*-periodic, and §9's T1 note says why: an input that cannot distinguish the halves cannot test them. (2) `wasmFNe` implements `Not(Eq(a, b))`; §7's Y1 row records it, and the golden pins it (`cmp_ne_nan`). The general lesson is the one R6 keeps teaching from a different angle: a test that agrees with the implementation is not evidence until you know what it would have taken to disagree. |
 | R10 | **The library has no truncating float64→int32 conversion, and its saturation is exact where it exists.** Two facts about mapping wasm's conversions onto Highway, both found by trying to write the mapping. (1) There is no `DemoteTo`/`ConvertTo`/`TruncateTo` form for f64→i32 at all — its conversions are same-width (`ConvertTo`: i32↔f32, i64↔f64), same-kind (`PromoteTo`/`DemoteTo`) or *rounding* (`NearestInt`). `i32x4.trunc_sat_f64x2_*_zero` therefore has no vector path to map onto, so those two ops are delegated to the reference and marked `FORWARD` in the list (§6.5). (2) For the eight conversions that *do* map, the library's float→int `ConvertTo` is documented to saturate and its ends are exact — which the differential test then checked against my clamping reference at ±2^31, ±2^32 and the largest representable value below each, rather than my taking it on faith. | (1) The `FORWARD` shape, and a note in the list beside the two ops. (2) No change was needed — but the *claim* is now tested, and `simd_convert.wat` pins the same ends through the JIT with values read off V8 (`trunc_sat_u_near` = `0xffffff00` is the one that would show an off-by-one). |
-| Q1 | Does LibJIT's 16-byte aggregate ABI (S9) work *and* beat the pointer ABI? | **Correctness answered (SIMD-L1): the ABI works** — `(param v128)(result v128)` round-trips through the JIT and the C++ mirror `{uint32_t×4}` matches it (§6.6). Whether by-value *beats* by-pointer is still the M2 benchmark at L8. |
+| Q1 | Does LibJIT's 16-byte aggregate ABI (S9) work *and* beat the pointer ABI? | **Correctness answered (SIMD-L1): the ABI works** — `(param v128)(result v128)` round-trips through the JIT and the C++ mirror `{uint32_t×4}` matches it (§6.6). *Beating* is still unmeasured: M2 needs by-value signatures plumbed through the helper layer, which is a change to §6.3 rather than a probe (§8.4). The headroom it competes for is bounded by the measured crossing — 97.6 % of a 4.10 ns op is the call, so a by-value ABI can only win by eating into that, and the cheaper way to eat into it is to remove calls (peepholes, then D4). |
 | Q2 | How is a `v128` value printed on a test failure? | Lane-wise hex with lane indices, defined at L1 (T1 diagnostics and T3 output both use it). |
 | Q3 | Do `v128` globals live as 16 inline bytes in the VM context? | Confirm at L5 against `WasmModuleInstance`'s globals layout and `storageAlign`. |
-| Q4 | Does the D1 inline set grow beyond const/load/store/splat/extract/replace? | Decide from M3 at L8. |
+| Q4 | Does the D1 inline set grow beyond const/load/store/splat/extract/replace? | **No — answered by M3 at L8.** Lane-wise scalar IR for one per-lane op is 3.35 ns against the helper's 4.10, but the 18 % comes from issuing a *direct* call instead of a dispatched one, not from the IR: the IR does four loads, four adds and four stores where the helper does one `paddd`. Growing the D1 set would pay the IR-size and compile-time cost §5 D1 warns about to buy a difference that a call-mechanics fix would give for free. |
 | Q5 | Is the deterministic profile ever adopted for relaxed SIMD? | No (SD6); revisit only if cross-machine determinism becomes a requirement. |
 | Q6 | Is the SIMDe escape hatch ever needed? | Only if a second shared-library dependency becomes unacceptable; the helper bodies are written against a thin internal wrapper precisely so this stays cheap. |
 | Q7 | Does the harness marshal `v128` by pointer or as `WASM::Value`? | `WASM::Value` — it is already `alignas(16)` with a `v128[16]` member; L7 is a formatting task, not an ABI one. |

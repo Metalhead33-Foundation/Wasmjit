@@ -518,7 +518,7 @@ Current modules:
 Measured after SIMD-5:
 
 ```bash
-./WasmJit 'simd*'      # 22 cases, 6126 assertions, all passing
+./WasmJit 'simd*'      # 23 cases, 6134 assertions, all passing (includes the hidden [.simdbench] case)
 ./WasmJit              # 149 cases, 7745 assertions, all passing
 ```
 
@@ -573,17 +573,45 @@ WASM_SPEC_TIMEOUT=10 ./WasmJit 'spec: simd_load' -r compact
 
 ### T4 — the benchmark
 
-A `SIMD-L8` diagnostic. It is tagged `[simdbench]` so it stays out of the
-default run, and it prints `ns/v128-op` for the variants listed in
-`docs/SIMD_LIBJIT.md` §8.2:
+A `SIMD-L8` diagnostic. It is tagged `[.simdbench]` — the leading dot makes the
+tag *hidden*, which is what keeps a benchmark out of the default run (a plain
+`[simdbench]` tag does **not**; it was in the default suite for one build before
+this was noticed). Pass the hidden tag to run it; it prints `ns/v128-op` for the
+variants of `docs/SIMD_LIBJIT.md` §8.2:
 
 ```bash
-./WasmJit '[simdbench]'
+./WasmJit '[.simdbench]'
 ```
 
-It is not a CI gate and must not be turned into one — the numbers decide
-whether the batched helper path (design `D4`) is ever built, and they are
-recorded back into `docs/SIMD_LIBJIT.md` §8.
+The workload is `Test/wasm_wat/simd_bench.wat` (six `v128` ops per iteration:
+three loads, `i32x4.add`, `i32x4.mul`, `i32x4.add`, folding to `acc += (a+b)*c`)
+and the case reports M0a/M0b (one helper call, with and without arithmetic),
+M1 (shipped), M3 (lane-wise scalar IR), M4 (native C, same helpers) and M4n
+(native C, no calls).
+
+**Run it in a Release build.** This is the one measurement in the suite whose
+number is meaningless in a debug tree: the default `build/Desktop-Debug` compiles
+`WasmBase`/`LibJit` with `-g` and *no* `-O`, and the same benchmark then reports
+20–22 ns/v128-op instead of 4.1 — a 5× difference that looks like a design result
+and is really a build flag. `qmake CONFIG+=release CONFIG-=debug` into a separate
+shadow build (e.g. `build/Release`) is the configuration the recorded numbers
+come from.
+
+Every variant is checked against one expected value before it is timed, and the
+case fails if any of them disagrees — a benchmark that measures the wrong answer
+is worse than none. Two traps cost a build cycle each while writing it, and are
+worth knowing before editing it:
+
+- A pure body whose result is discarded is **dead code**: GCC deleted the
+  no-call loop and reported `0.000 ns/op` twice. `bestNsPerOp` therefore sends
+  every result through a `volatile` sink.
+- A `break` used to stop GCC closing a loop into its arithmetic-series form must
+  compare against a value the compiler *cannot* prove impossible — a literal
+  constant was proven unreachable and the loop collapsed anyway.
+
+It is not a CI gate and must not be turned into one — the numbers decide whether
+the batched helper path (design `D4`) is ever built, and they are recorded back
+into `docs/SIMD_LIBJIT.md` §8.4.
 
 ---
 
