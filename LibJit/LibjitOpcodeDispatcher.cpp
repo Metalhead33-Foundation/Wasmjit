@@ -1236,7 +1236,9 @@ std::vector<WASM::StorageType> OpcodeDispatcher::storageTypesForBlockType(const 
 	if (!bt.isTypeIndex) {
 		WASM::StorageType st;
 		st.isPacked = false;
-		st.val = WASM::ValueType{bt.valType, -1};
+		// `heapType` is the immediate of a typed-reference block type
+		// (`(block (result (ref $t)))`); -1 for the shorthand value types.
+		st.val = WASM::ValueType{bt.valType, bt.heapType};
 		return {st};
 	}
 	assert(static_cast<uint32_t>(bt.typeIndex) < module.types.size());
@@ -3409,30 +3411,58 @@ void OpcodeDispatcher::dispatchBrOnNull(WASM::LabelIdx arg) {
 	// the model. Nothing to emit either way (GC.md G7/GC-4).
 	if (unreachableCode)
 		return;
-	ControlBlock& target = branchTarget(arg);
 	jit_value_t ref = popValue();
 	jit_value_t nullRef = typedNullRef(jit_value_get_type(ref));
 	jit_value_t isNull = jit_insn_eq(function, ref, nullRef);
+
+	// `br_on_null l` has type `[t* (ref null ht)] -> [t* (ref ht)]`; the label
+	// carries only `t*` — the reference itself stays on the fall-through path.
+	if (arg >= controlStack.size()) {
+		// Conditional return of the function's results (the `t*` list).
+		jit_label_t skip = jit_label_undefined;
+		jit_insn_branch_if_not(function, isNull, &skip);
+		emitFunctionReturn(false);
+		jit_insn_label(function, &skip);
+		pushValue(ref);
+		return;
+	}
+	ControlBlock& target = branchTarget(arg);
 	const auto& slots = branchSlotsForTarget(target);
-	// A label that carries no branch values has no slot to store into; requiring
-	// one aborted every `br_on_null` in a block without results (GC.md G7).
-	if (!slots.empty())
-		jit_insn_store(function, slots.back(), castRefValue(ref, jit_value_get_type(slots.back())));
+	// The stack below the popped reference is exactly the label's `t*` list.
+	// Storing the reference into `slots.back()` (as this used to) overwrote the
+	// last `t*` value with a reference the label does not even expect.
+	storeStackTopToSlots(slots);
 	jit_insn_branch_if(function, isNull, &target.label);
 	pushValue(ref);
 }
 void OpcodeDispatcher::dispatchBrOnNonNull(WASM::LabelIdx arg) {
 	if (unreachableCode)
 		return;
-	ControlBlock& target = branchTarget(arg);
 	jit_value_t ref = popValue();
 	jit_value_t nullRef = typedNullRef(jit_value_get_type(ref));
 	jit_value_t isNull = jit_insn_eq(function, ref, nullRef);
+
+	// `br_on_non_null l` has type `[t* (ref null ht)] -> [t*]`; the branch
+	// carries `t* (ref ht)`, so the reference is consumed on *both* paths.
+	if (arg >= controlStack.size()) {
+		// Conditional return of the function's results (`t* (ref ht)`).
+		jit_label_t skip = jit_label_undefined;
+		jit_insn_branch_if(function, isNull, &skip);
+		valueStack.push_back(ref);
+		emitFunctionReturn(false);
+		valueStack.pop_back();
+		jit_insn_label(function, &skip);
+		return; // fall-through: the reference is consumed
+	}
+	ControlBlock& target = branchTarget(arg);
 	const auto& slots = branchSlotsForTarget(target);
-	if (!slots.empty())
-		jit_insn_store(function, slots.back(), castRefValue(ref, jit_value_get_type(slots.back())));
+	// Stage the reference over the `t*` operands and store the whole label
+	// window; the `t*` values must reach the label too.
+	valueStack.push_back(ref);
+	storeStackTopToSlots(slots);
+	valueStack.pop_back();
 	jit_insn_branch_if_not(function, isNull, &target.label);
-	pushValue(ref);
+	// Fall-through: only `t*` remains — the reference is consumed.
 }
 void OpcodeDispatcher::dispatchStructNew(WASM::TypeIdx arg) {
 	const WASM::StructType& st = structTypeForIndex(arg);
@@ -3937,20 +3967,42 @@ void OpcodeDispatcher::dispatchBrOnCast(uint8_t castop, WASM::LabelIdx l, WASM::
 	const bool targetNullable = (castop & 0x02) != 0;
 	(void)ht1;
 	// Dead code: the model stack is polymorphic and pushes are no-ops there, so
-	// popping would underflow — and there is nothing to branch with (GC.md G7).
+	// popping would underflow — and there is nothing to branch with.
 	if (unreachableCode)
 		return;
 	jit_value_t ref = popValue();
 	jit_type_t targetType = jitRefTypeForHeapType(ht2, targetNullable);
 	jit_value_t casted = castRefValue(ref, targetType);
 	jit_value_t matched = emitRefTypeTest(ref, ht2, targetNullable);
+
+	// A branch to the function's implicit block is a *conditional return*; the
+	// function's result list plays the role of the label's value list
+	// (dispatchBrIf handles the same case). The branch carries the casted
+	// reference, the fall-through keeps the original one.
+	if (l >= controlStack.size()) {
+		jit_label_t skip = jit_label_undefined;
+		jit_insn_branch_if_not(function, matched, &skip);
+		// emitFunctionReturn(false) reads the results from the top of the model
+		// stack without consuming them, so stage the branch's reference only.
+		valueStack.push_back(casted);
+		emitFunctionReturn(false);
+		valueStack.pop_back();
+		jit_insn_label(function, &skip);
+		pushValue(ref);
+		return;
+	}
+
 	ControlBlock& target = branchTarget(l);
 	const auto& slots = branchSlotsForTarget(target);
-	// Branch with the cast reference — but a label may carry no values at all, in
-	// which case there is nothing to store. Asserting a non-empty slot list here
-	// is what aborted `br_on_cast.wast`.
-	if (!slots.empty())
-		jit_insn_store(function, slots.back(), castRefValue(casted, jit_value_get_type(slots.back())));
+	// The label's values are `t* rt2`: the operands below the reference are the
+	// `t*` list, and the last slot is the reference. Store the whole window
+	// with the *branch's* reference staged on top, so a label that carries
+	// values actually receives them (`storeStackTopToSlots` aligns the slot
+	// window with the top of the model stack). Storing only `slots.back()` left
+	// the `t*` slots holding their previous contents.
+	valueStack.push_back(casted);
+	storeStackTopToSlots(slots);
+	valueStack.pop_back();
 	jit_insn_branch_if(function, matched, &target.label);
 	pushValue(ref);
 }
@@ -3965,10 +4017,27 @@ void OpcodeDispatcher::dispatchBrOnCastFail(uint8_t castop, WASM::LabelIdx l, WA
 	jit_type_t targetType = jitRefTypeForHeapType(ht2, targetNullable);
 	jit_value_t casted = castRefValue(ref, targetType);
 	jit_value_t matched = emitRefTypeTest(ref, ht2, targetNullable);
+
+	// Conditional return: branch (return) with the original reference when the
+	// cast fails, fall through with the casted one when it succeeds.
+	if (l >= controlStack.size()) {
+		jit_label_t skip = jit_label_undefined;
+		jit_insn_branch_if(function, matched, &skip);
+		valueStack.push_back(ref);
+		emitFunctionReturn(false);
+		valueStack.pop_back();
+		jit_insn_label(function, &skip);
+		pushValue(casted);
+		return;
+	}
+
 	ControlBlock& target = branchTarget(l);
 	const auto& slots = branchSlotsForTarget(target);
-	if (!slots.empty())
-		jit_insn_store(function, slots.back(), castRefValue(ref, jit_value_get_type(slots.back())));
+	// The branch carries `t* rt1\rt2` — the original reference — so stage it
+	// over the `t*` operands and store the whole label window.
+	valueStack.push_back(ref);
+	storeStackTopToSlots(slots);
+	valueStack.pop_back();
 	jit_insn_branch_if_not(function, matched, &target.label);
 	pushValue(casted);
 }

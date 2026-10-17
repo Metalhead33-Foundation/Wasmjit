@@ -1,7 +1,10 @@
 # Function References (Typed Function References) — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 2 — FR-1/FR-2 fixed by
-the shared trap sink; FR-3/FR-4/FR-6 and the manual test remain).
+Status: design note / implementation reference (revision 3 — FR-3 and FR-4 are
+closed by the Store's callable-range registry (`GC.md` GC-1) and the
+post-compilation `ref.func` resolution (`GC.md` G8); what remains is FR-6
+(generic reference storage, shared with GC `R4`/exceptions `EX5`) and the FR-7
+validation / FR-8 manual-test items).
 Audience: anyone touching `WasmValue` (`Callable`), `WasmTypeSystem`,
 `WasmModuleInstance`, `LibjitOpcodeDispatcher`, or the test harness.
 
@@ -72,8 +75,10 @@ WebAssembly **3.0** (it is the prerequisite the GC proposal builds on).
   (`wasm_callable_type_matches`) for the contravariant/covariant case.
 - `ref.as_non_null`, `br_on_null`, `br_on_non_null` are implemented from the
   same reference-instruction family.
-- `ref.test`/`ref.cast` classify function references via the `Callable`'s
-  `typeId` when the callable belongs to the current instance.
+- `ref.test`/`ref.cast` classify a function reference through the Store's
+  callable-range registry: every `Callable` carries its canonical `typeId`, and
+  a reference from any instance is identified by the range test — no
+  per-instance pointer scan (`GC.md` GC-1/H3).
 - Evidence: `call_indirect` 113/0, `func_ptrs` 23/0.
 
 ## 5. Gaps
@@ -82,8 +87,8 @@ WebAssembly **3.0** (it is the prerequisite the GC proposal builds on).
 |---|---|---|---|
 | ~~FR1~~ | ~~`call_ref` segfaults.~~ **Done (trap sink):** the null/invalid callable check in `dispatchCallThroughCallable` now traps (`emitTrapIfNull`) instead of dereferencing. `spec: call_ref` → **31 passed / 0 failed / 4 skipped**. | `spec: call_ref` | Closed |
 | ~~FR2~~ | ~~`ref_func.wast` produces no report.~~ **Done (trap sink):** the fatal path was a reference reaching a LibJIT null check; it is now a recoverable trap. `spec: ref_func` → **14 passed / 0 failed / 3 skipped**. | `spec: ref_func` | Closed |
-| FR3 | **Cross-module function references are mis-classified.** `ref.test`/`ref.cast` scan only the current instance's `importStorage`/`internalCallables`, and the "unknown reference" fallback does not include `func` — so a `funcref` from another instance fails `ref.test funcref`. | `refMatchesHeapType`; [`GC.md`](GC.md) G2 | High |
-| FR4 | **`ref.func` outside a segment is an unresolved sentinel** in `const` expressions (globals), so a `ref.func` global is a bogus pointer. | [`GC.md`](GC.md) G8 / [`EXTENDED_CONST.md`](EXTENDED_CONST.md) | Medium |
+| ~~FR3~~ | ~~**Cross-module function references are mis-classified.**~~ **Done (`GC-1`):** every `Callable` carries its canonical `typeId`, and `Store::callableAt` identifies a reference by a range test over the Store's registered callable ranges (one per instance), so a `funcref` produced by module B is classified correctly in module A. | `call_ref` 31/0, `ref_func` 14/0, `ref_test` 69/2 (the two failures are GC `G3`) | Closed |
+| ~~FR4~~ | ~~**`ref.func` outside a segment is an unresolved sentinel** in `const` expressions (globals), so a `ref.func` global is a bogus pointer.~~ **Done (`GC.md` G8):** `resolveGlobalRefFuncs()` rewrites the sentinel after compilation, so a `(global funcref (ref.func $f))` holds a real reference. | `global`, `table` (exported `(ref $f)` global across modules) | Closed |
 | ~~FR5~~ | ~~`return_call_ref` aborts~~ (tail-call codegen). **Done (TAILCALLS TC-1/TC-2 + trap sink):** `spec: return_call_ref` → **40 passed / 0 failed / 13 skipped**. | [`TAILCALLS.md`](TAILCALLS.md) | Closed |
 | FR6 | **Reference values cannot be stored generically.** Tables hold `Callable*` and globals hold `Value`; typed `(ref $t)` values live only on the operand stack. | `WasmTable.hpp`, `WasmModuleInstance.cpp` | Medium |
 | FR7 | **No validation that `ref.func`'s function is declared** in an element segment, nor that `call_ref`'s operand type matches at validation time. | no validating front-end | Low |
@@ -110,8 +115,8 @@ be the canonical, process-wide identity (not the module-local `typeidx`);
 |---|---|---|---|
 | **FR-1 — Fix `call_ref`** | ✅ The crash was a null/invalid callable pointer being dereferenced; the check now goes through `emitTrapIfNull` (the shared trap sink). | FR1 | Done: `call_ref.wast` runs (31/0/4). |
 | **FR-2 — Fix `ref_func`** | ✅ Same root cause; the reference reaches the trap sink. | FR2 | Done: `ref_func.wast` runs (14/0/3). |
-| **FR-3 — Discoverable callable type** | Give every `Callable` a header/registry entry so `refMatchesHeapType` needs no per-instance scan. | FR3 | A `funcref` produced by module B passes `ref.test funcref` in module A. |
-| **FR-4 — `ref.func` in `const`** | Resolve the `ref.func` sentinel for global initialisers. | FR4 | A `(global funcref (ref.func $f))` holds a real reference. |
+| **FR-3 — Discoverable callable type** | ✅ Done (`GC-1`): every `Callable` carries its canonical `TypeId`; `Store::callableAt` identifies a reference by a range test over the Store's registered callable ranges, so no per-instance scan is needed. | FR3 | Done: `ref_test` 69/2 — a `funcref` produced by module B is classified in module A; the two failures are the `extern`/`any` identity deviation (`GC.md` G3). |
+| **FR-4 — `ref.func` in `const`** | ✅ Done (`GC.md` G8): `resolveGlobalRefFuncs()` resolves the sentinel after compilation. | FR4 | Done: a `(global funcref (ref.func $f))` holds a real reference (`table` 18/0 exercises it across modules). |
 
 ## 8. Indicative test survey
 
@@ -119,11 +124,12 @@ be the canonical, process-wide identity (not the module-local `typeidx`);
 
 | Script | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| `call_indirect` | 133 | 0 | 39 | indirect calls work (was 113/0/59) |
+| `call_indirect` | 137 | 0 | 35 | indirect calls work (was 113/0/59) |
 | `func_ptrs` | 29 | 0 | 7 | `ref.func` in segments works |
 | `call_ref` | 31 | 0 | 4 | FR1 fixed by the trap sink |
 | `ref_func` | 14 | 0 | 3 | FR2 fixed |
 | `return_call_ref` | 40 | 0 | 13 | FR5 fixed (tail-call trampoline) |
+| `ref_test` | 69 | 2 | 0 | FR3 fixed by `GC-1`; the two failures are GC `G3` (`extern`/`any` identity) |
 
 ## 9. References
 

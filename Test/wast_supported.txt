@@ -25,6 +25,10 @@ align64
 array_new_data
 binary0
 binary_leb128_64
+br_on_cast
+br_on_cast_fail
+br_on_non_null
+br_on_null
 bulk64
 call
 call_indirect64

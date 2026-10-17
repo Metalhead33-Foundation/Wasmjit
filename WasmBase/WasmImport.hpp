@@ -13,10 +13,19 @@ struct LinearMemory;
 // view the exporting module keeps in its own table index space.
 struct TableInstance;
 
-// The result of resolving a table import. Wrapping the borrowed view keeps the
-// resolver signature stable if table imports ever need to carry extra state.
+// The result of resolving a table import. The borrowed `table` view is the
+// same backend-visible `TableInstance*` the exporting module keeps in its own
+// table index space. `type` is the exported table's declared type, published by
+// the exporter so the resolver can match it against an import; an embedder that
+// supplies a table directly may leave it empty and get no type check.
+// `elementTypeId` is the canonical identity of a *concrete* element type
+// (`TypeId::kNone` for an abstract one, whose heap type is then carried in
+// `type->elementType.heapType`) — module-local type indices are not comparable
+// across modules (docs/proposals/GC.md R1).
 struct ImportedTable {
-	TableInstance* table = nullptr;
+	TableInstance*        table = nullptr;
+	std::optional<TableType> type;
+	TypeId                elementTypeId {TypeId::kNone};
 };
 
 // The import resolver is the embedder's hook into the instantiation process.
@@ -87,10 +96,17 @@ public:
 		const MemoryType& type) = 0;
 
 	// Resolve a table import. Same ownership semantics as resolveMemory.
+	// `type` is the importing module's declared table type; `elementTypeId` is
+	// the canonical identity of its element type when that is a concrete
+	// (module-local) type index, or `TypeId::kNone` when it is abstract. The
+	// resolver must reject a provided table whose element type is not a subtype
+	// of the declared one, or whose limits do not match (docs/proposals/GC.md
+	// R1).
 	virtual std::optional<ImportedTable> resolveTable(
 		std::string_view moduleName,
 		std::string_view fieldName,
-		const TableType& type) = 0;
+		const TableType& type,
+		TypeId           elementTypeId) = 0;
 
 	// Tags are part of the exception handling proposal.
 	// Most embedders can leave this unimplemented (return nullopt).

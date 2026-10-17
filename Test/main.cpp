@@ -564,6 +564,28 @@ TEST_CASE("imported table is shared between two module instances")
 	REQUIRE(WASM::callCallable<int32_t>(*bIsNull, int32_t(0)) == 0);
 }
 
+TEST_CASE("table imports are matched against the exported table's type")
+{
+	// shared_table_a exports `(table 2 8 funcref)`. A compatible import already
+	// works (the shared-table test above); these two imports differ in exactly
+	// one dimension each and must fail to link (docs/proposals/GC.md R1).
+	WASM::Module moduleA        = loadTestModule("shared_table_a");
+	WASM::Module mismatchType   = loadTestModule("table_import_mismatch_type");
+	WASM::Module mismatchLimits = loadTestModule("table_import_mismatch_limits");
+	WASM::RegistryImportResolver registry;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+
+	auto instanceA = compiler.instantiate(moduleA, registry);
+	REQUIRE(instanceA.get() != nullptr);
+	instanceA->registerExports(registry, "a");
+
+	// funcref cannot satisfy an externref import.
+	REQUIRE_THROWS(compiler.instantiate(mismatchType, registry));
+	// The exported table starts at 2 entries, the import demands 5.
+	REQUIRE_THROWS(compiler.instantiate(mismatchLimits, registry));
+}
+
 TEST_CASE("LibJitTypeTranslator does not leak type caches across modules")
 {
 	const auto makeStructType = [](WASM::ValueTypeCode fieldOpcode) {

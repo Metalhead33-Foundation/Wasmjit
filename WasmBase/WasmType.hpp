@@ -126,6 +126,32 @@ inline bool isModeledValueTypeCode(ValueTypeCode code)
 	}
 }
 
+// The abstract heap type denoted by a *shorthand* reference value type:
+// `funcref` is `(ref null func)`, `externref` is `(ref null extern)`, and the
+// bottom shorthands (`nullexternref`, ...) map to `noextern`/`nofunc`/`none`.
+// Returns false for every other code (numeric types, and `ref`/`ref null`,
+// whose heap type is carried in ValueType::heapType). Used wherever two
+// spellings of the same reference type must be compared structurally — e.g.
+// table-import matching (docs/proposals/GC.md R1).
+inline bool shorthandRefHeapType(ValueTypeCode code, AbstractHeapType& heap)
+{
+	switch (code) {
+	case ValueTypeCode::FuncRef:       heap = AbstractHeapType::Func;     return true;
+	case ValueTypeCode::ExternRef:     heap = AbstractHeapType::Extern;   return true;
+	case ValueTypeCode::AnyRef:        heap = AbstractHeapType::Any;      return true;
+	case ValueTypeCode::EqRef:         heap = AbstractHeapType::Eq;       return true;
+	case ValueTypeCode::I31Ref:        heap = AbstractHeapType::I31;      return true;
+	case ValueTypeCode::StructRef:     heap = AbstractHeapType::Struct;   return true;
+	case ValueTypeCode::ArrayRef:      heap = AbstractHeapType::Array;    return true;
+	case ValueTypeCode::NullFuncRef:   heap = AbstractHeapType::NoFunc;   return true;
+	case ValueTypeCode::NullExternRef: heap = AbstractHeapType::NoExtern; return true;
+	case ValueTypeCode::NullRef:       heap = AbstractHeapType::None;     return true;
+	default:                           return false;
+	}
+}
+
+
+
 struct ValueType {
 	ValueTypeCode opcode;
 	int32_t heapType; // Only used if opcode is 0x6B (ref) or 0x6C (ref null)
@@ -391,6 +417,11 @@ struct BlockType {
 		int32_t       typeIndex;  // if isTypeIndex == true
 		ValueTypeCode valType;  // if isTypeIndex == false (incl. Void = 0x40)
 	};
+	// The heap-type immediate of a typed-reference block type (`0x63 ht` /
+	// `0x64 ht`), or -1 for every other block type. It has the same encoding
+	// value as ValueType::heapType (negative = AbstractHeapType, >= 0 =
+	// module-local type index).
+	int32_t heapType = -1;
 
 	inline bool isVoid()      const { return !isTypeIndex && valType == ValueTypeCode::Void; }
 	inline bool isValueType() const { return !isTypeIndex; }
@@ -405,12 +436,21 @@ Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& stream, BlockType
 	//   < 0            → ValueTypeCode (e.g. -0x01 = i32, -0x40 = void)
 	int32_t raw;
 	stream >> Elv::Io::Leb(raw);
+	bt.heapType = -1;
 	if (raw >= 0) {
 		bt.isTypeIndex = true;
 		bt.typeIndex   = raw;
 	} else {
 		bt.isTypeIndex = false;
 		bt.valType     = static_cast<ValueTypeCode>(raw);
+		// A block type may itself be a *typed* reference: `0x63 ht`
+		// (`(ref null ht)`) or `0x64 ht` (`(ref ht)`). The heap-type immediate
+		// must be consumed here or its first byte is decoded as the next
+		// instruction — `(block (result (ref i31)))` is `02 64 6C`, and the
+		// stray 0x6C (i32.mul) desynchronised the whole function body
+		// (docs/proposals/GC.md G7).
+		if (bt.valType == ValueTypeCode::Ref || bt.valType == ValueTypeCode::RefNull)
+			stream >> Elv::Io::Leb(bt.heapType);
 	}
 	return stream;
 }

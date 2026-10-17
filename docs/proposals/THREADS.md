@@ -187,10 +187,14 @@ engine must do", not "what 3.0 requires".
   `Test/wasm_wat/shared_memory_{a,b}.wat`, `shared_table_{a,b}.wat`) pass.
   Despite the names, these test **cross-module import sharing** (the Store
   ownership model), **not** threads shared memory.
-- **`extern/WasmTestsuite` contains no atomic/thread/shared script** (0 of the
-  257 `*.wast` files match `atomic|thread|shared|wait|notify`), and none are in
-  `Test/wast_supported.txt`. There is currently **no spec coverage** for this
-  feature area, so there is also no regression signal to protect.
+- **The submodule *does* carry a single-agent atomic script:**
+  `extern/WasmTestsuite/proposals/threads/atomic.wast` (142 `assert_return`s,
+  one `shared` memory, no second agent). It converts cleanly with
+  `wasm-tools 1.252.0 json-from-wast`, but `Test/Test.pro` globs only
+  `extern/WasmTestsuite/*.wast`, so it is **not** currently a Catch2 test case
+  and none of the threads scripts are in `Test/wast_supported.txt`. The runtime
+  therefore still has **no regression signal**; wiring this script in is part of
+  TH-4 and is the cheapest way to get one.
 
 ### 4.5 Cross-cutting: the tail-call trampoline's known limits
 
@@ -228,7 +232,7 @@ they are recorded here:
 | T7 | **`memory.size`/`grow` ordering is not published.** Shared `grow` takes a mutex, but `memory.size` is a plain load and no `seq_cst` fence is emitted around either, so the sequentially-consistent guarantee is not established for a future multi-agent build. | `dispatchMemorySize`, `SharedLinearMemory::growMemory` | Low (invisible while single-agent) |
 | T8 | **No data-segment init barrier semantics.** `applyActiveSegments` copies segment bytes directly; there is no fence/barrier before other agents are allowed to observe the memory. | `applyActiveSegments` | Low (single-agent) |
 | T9 | **No agent API / thread pool.** There is no way to run two instances concurrently, which is also what makes the current single-threaded stance safe. | no such API in `ModuleInstance`/`Store` | Informational |
-| T10 | **Zero test coverage.** No spec scripts exist in the submodule, and no manual threads test exercises atomics. | §4.4 | High (for future work) |
+| T10 | **No test coverage is wired in.** `proposals/threads/atomic.wast` exists in the submodule (142 `assert_return`s) and converts, but `Test/Test.pro` does not glob the `proposals/` subtree, so there is no `spec: atomic` test case and nothing threads-related is curated. | §4.4 | High (for future work) |
 | T11 | **The tail-call trampoline's pending state is process-global**, so two agents would corrupt each other's tail-call chains. Must become per-agent before any multi-agent build. | `WASM::g_tailCallState` (`WasmBase/WasmValue.hpp`); §4.5 | Medium (blocks multi-agent) |
 
 ## 6. Where we can and should play fast and loose
@@ -269,7 +273,7 @@ Ordered by value; `TH-n` is independent of the other documents' milestones.
 | **TH-1 — Single-agent atomics** | Implement atomic load/store/RMW/xchg/cmpxchg via native helpers (or inline `__atomic_*`), with natural-alignment traps and an `atomic.fence` that lowers to a seq_cst fence. | T1, T2, T4 | A hand-written module with `i32.atomic.rmw.add` and `atomic.fence` runs and returns correct values. |
 | **TH-2 — Wait/notify** | `memory.atomic.wait32/64` (load→compare→sleep/block→`1`/`2`) and `memory.atomic.notify` (`0`), including the unshared-memory trap. | T3, T5 | A module using `wait`/`notify` terminates; `wait` returns `1` on mismatch and `2` after a finite timeout. |
 | **TH-3 — Shared-memory hygiene** | Require a maximum for `shared` memories; assert shared-ness on import matching; emit a barrier after active data segments. | T6, T7, T8 | A shared memory without a max is rejected; `memory.grow`/`size` are fenced. |
-| **TH-4 — Threads test coverage** | Add manual WAT cases for each atomic family and wait/notify; add upstream `atomic.wast` / `threads.wast` to the testsuite if/when the submodule provides them. | T10 | At least one test per instruction family, plus a curated-list entry. |
+| **TH-4 — Threads test coverage** | Add manual WAT cases for each atomic family and wait/notify, and wire the submodule's `proposals/threads/atomic.wast` (142 `assert_return`s, single-agent) into `Test/Test.pro` as a converted spec script — it exists today and converts, it is just outside the current glob. | T10 | At least one test per instruction family, plus `spec: atomic` and curated-list entries. |
 | **TH-5 — Optional: real agents** | Embedder API to run an instance on another OS thread, with `__atomic_*` accesses and a real waiter table. Only if an embedder needs it. | T9 | Two agents produce the same results as the sequentially-consistent model. |
 
 Guardrails: run `./WasmJit '~[spec]'` after each step; keep the single-agent
@@ -281,13 +285,14 @@ Survey taken with `build/Desktop-Debug/Test/WasmJit` (2026-10-04).
 
 | Test | Result | Reading |
 |---|---|---|
-| `spec: atomic` / `spec: atomic_fence` | **no test case** | the testsuite submodule has no atomic/threads scripts |
+| `spec: atomic` | **not registered** | `proposals/threads/atomic.wast` exists (142 `assert_return`s) and converts, but `Test/Test.pro` only globs the top-level `*.wast`; wiring it in is TH-4's first step |
 | `imported memory is shared between two module instances` | pass (8 assertions) | cross-module *import* sharing, not threads |
 | `imported table is shared between two module instances` | pass (15 assertions) | cross-module *import* sharing, not threads |
-| any module containing `atomic.*` | abort | T1: `notImplemented` → `std::abort` |
+| any module containing `atomic.*` | abort | T1: `notImplemented` → `std::abort` (67 handlers) |
 
-Because there is no spec coverage, the practical gate for TH-1/TH-2 is new
-manual WAT tests (TH-4), not the upstream suite.
+Because the upstream script is not wired in yet, the practical gate for
+TH-1/TH-2 is that conversion plus the new manual WAT tests (TH-4), not the
+curated suite.
 
 ## 9. References
 

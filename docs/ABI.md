@@ -171,7 +171,11 @@ The same pattern extends to every runtime entity. The Store now also owns:
   **Table imports are supported.** `resolveImports()` resolves each
   `ImportTable` through `ImportResolver::resolveTable` and prepends the returned
   `ImportedTable` (a borrowed `TableInstance*`) to `tableRefs`, before the
-  module's own tables — exactly the Wasm table index space. Because that
+  module's own tables — exactly the Wasm table index space. The resolver also
+  receives the importing module's declared table type (plus the canonical
+  `TypeId` of a concrete element type) and rejects a provided table whose
+  element type is not a subtype or whose limits/index type/shared-ness do not
+  match (`docs/proposals/GC.md` R1). Because that
   `TableInstance*` is the *same* store-owned view the exporting module holds,
   two modules importing the same `(module, field)` share one table: growth and
   writes by either are visible to the other.

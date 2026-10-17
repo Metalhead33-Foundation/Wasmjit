@@ -49,7 +49,10 @@ std::basic_ostream<char>& operator<<(std::basic_ostream<char>& left, const WASM:
 }
 
 std::basic_ostream<char>& operator<<(std::basic_ostream<char>& left, const WASM::BlockType& right) {
-	return left << "valType: " << right.valType << ", typeIndex: " << right.typeIndex;
+	left << "valType: " << right.valType << ", typeIndex: " << right.typeIndex;
+	if (!right.isTypeIndex && right.heapType != -1)
+		left << ", heapType: " << right.heapType;
+	return left;
 }
 std::basic_ostream<char>& operator<<(std::basic_ostream<char>& left, const WASM::MemArg& right) {
 	return left << "alignment: " << right.align << ", memidx: " << right.memidx << ", offset: " << right.offset;

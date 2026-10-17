@@ -28,6 +28,18 @@ inline uint32_t decodeRefFuncIndex(uintptr_t raw)
 {
 	return static_cast<uint32_t>(raw - 1u);
 }
+
+// The process-wide identity of a table's *concrete* element type: a table's
+// element heap type may be a module-local type index, which is meaningless in
+// another module, so import matching compares canonical ids (GC.md R1).
+// Abstract element types (`funcref`, `(ref null any)`, …) have no id and are
+// compared structurally instead.
+inline TypeId canonicalTableElementTypeId(const Module& module, const TableType& type)
+{
+	if (type.elementType.heapType < 0)
+		return TypeId{TypeId::kNone};
+	return module.typeId(LocalTypeIdx{static_cast<uint32_t>(type.elementType.heapType)});
+}
 } // namespace
 
 std::unique_ptr<ModuleInstance> ModuleInstantiator::instantiate(const Module& module, ImportResolver& resolver)
@@ -343,8 +355,21 @@ void ModuleInstance::registerExports(ImportRegistrar& registrar, std::string_vie
 			TableInstance* table = ex.index < internals.tableRefs.size()
 				? internals.tableRefs[ex.index]
 				: nullptr;
-			registrar.registerTable(moduleName, ex.name,
-								ImportedTable{table});
+			// Publish the table's declared type alongside the view, so the
+			// resolver can match an import against it (GC.md R1). The table
+			// index space is imports first, then the module's own tables.
+			ImportedTable published;
+			published.table = table;
+			const TableType* exportedType = nullptr;
+			if (ex.index < module->importTables.size())
+				exportedType = &module->importTables[ex.index].table;
+			else if (ex.index - module->importTables.size() < module->tables.size())
+				exportedType = &module->tables[ex.index - module->importTables.size()];
+			if (exportedType != nullptr) {
+				published.type = *exportedType;
+				published.elementTypeId = canonicalTableElementTypeId(*module, *exportedType);
+			}
+			registrar.registerTable(moduleName, ex.name, published);
 			break;
 		}
 		case ExternalKind::Tag:
@@ -406,8 +431,12 @@ void ModuleInstance::resolveImports(ImportResolver& resolver)
 	// TableInstance*, i.e. library semantics require one Store-owned table.
 	internals.tableRefs.reserve(module->importTables.size() + module->tables.size());
 	for (const auto& imp : module->importTables) {
+		// Give the resolver the canonical identity of the declared element
+		// type, so cross-module concrete element types can be matched (GC.md
+		// R1) just like function import types.
+		const TypeId elementTypeId = canonicalTableElementTypeId(*module, imp.table);
 		std::optional<ImportedTable> table =
-			resolver.resolveTable(imp.moduleName, imp.fieldName, imp.table);
+			resolver.resolveTable(imp.moduleName, imp.fieldName, imp.table, elementTypeId);
 		if (!table.has_value())
 			throw UnresolvedImportException(imp.moduleName, imp.fieldName);
 		if (table->table == nullptr)

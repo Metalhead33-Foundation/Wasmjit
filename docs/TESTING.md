@@ -71,6 +71,7 @@ baked in at compile time through the `WASM_TEST_DIR` macro) and calls into it.
 | `non-trapping float-to-int conversions saturate instead of trapping` | `trunc_sat` | all eight `trunc_sat` ops: NaN → 0, ±overflow clamping, exact in-range values |
 | `branch hints are parsed and do not change results` | `branch_hint_loop` | `metadata.code.branch_hint` is parsed/rebased; acting on a hint is semantics-preserving |
 | `tail calls compute correct results` | `tail_call` | `return_call` / `return_call_indirect` / `return_call_ref`, `ref.func` via a global, and a 10⁷-deep self-recursive `count` (constant-stack native tail call) |
+| `table imports are matched against the exported table's type` | `shared_table_a`, `table_import_mismatch_{type,limits}` | a `funcref` table cannot satisfy an `externref` import, and a `2..8` table cannot satisfy a `5..8` import; the compatible import still links (`GC.md` R1) |
 
 The modules are produced either from AssemblyScript (`Test/wasm/*.ts`) or from hand-written WAT
 (`Test/wasm_wat/*.wat`); both land in `wasm_test_modules/`.

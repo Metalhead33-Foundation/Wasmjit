@@ -48,19 +48,7 @@ CanonHeapType toCanonHeapType(int32_t heapType, uint32_t groupFirst, uint32_t gr
 // `(ref null <abstract>)`; normalize so both spellings share an identity.
 bool shorthandRefHeap(ValueTypeCode code, AbstractHeapType& heap)
 {
-	switch (code) {
-	case ValueTypeCode::FuncRef:       heap = AbstractHeapType::Func;     return true;
-	case ValueTypeCode::ExternRef:     heap = AbstractHeapType::Extern;   return true;
-	case ValueTypeCode::AnyRef:        heap = AbstractHeapType::Any;      return true;
-	case ValueTypeCode::EqRef:         heap = AbstractHeapType::Eq;       return true;
-	case ValueTypeCode::I31Ref:        heap = AbstractHeapType::I31;      return true;
-	case ValueTypeCode::StructRef:     heap = AbstractHeapType::Struct;   return true;
-	case ValueTypeCode::ArrayRef:      heap = AbstractHeapType::Array;    return true;
-	case ValueTypeCode::NullFuncRef:   heap = AbstractHeapType::NoFunc;   return true;
-	case ValueTypeCode::NullExternRef: heap = AbstractHeapType::NoExtern; return true;
-	case ValueTypeCode::NullRef:       heap = AbstractHeapType::None;     return true;
-	default: return false;
-	}
+	return shorthandRefHeapType(code, heap);
 }
 
 CanonValueType toCanonValueType(const ValueType& vt, uint32_t groupFirst, uint32_t groupEnd,

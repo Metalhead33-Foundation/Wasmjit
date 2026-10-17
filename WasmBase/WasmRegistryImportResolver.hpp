@@ -32,7 +32,8 @@ public:
 		std::optional<Callable> resolveFunction(std::string_view fieldName, TypeId expectedType);
 		std::optional<Value> resolveGlobal(std::string_view fieldName, const GlobalType& type);
 		std::optional<LinearMemory*> resolveMemory(std::string_view fieldName, const MemoryType& type);
-		std::optional<ImportedTable> resolveTable(std::string_view fieldName, const TableType& type);
+		std::optional<ImportedTable> resolveTable(std::string_view fieldName, const TableType& type,
+											 TypeId elementTypeId);
 		std::optional<uint32_t> resolveTag(std::string_view fieldName, uint32_t typeIdx);
 	};
 
@@ -65,7 +66,8 @@ public:
 	std::optional<ImportedTable> resolveTable(
 		std::string_view moduleName,
 		std::string_view fieldName,
-		const TableType& type) override;
+		const TableType& type,
+		TypeId           elementTypeId) override;
 
 	std::optional<uint32_t> resolveTag(
 		std::string_view moduleName,
