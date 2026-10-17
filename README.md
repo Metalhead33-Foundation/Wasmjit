@@ -95,12 +95,12 @@ Reading the estimates:
 Most rows that end in "validation" share one blocker, and it is now measured
 rather than assumed: `WASM_SPEC_VALIDATE=1` executes the four negative-module
 families instead of skipping them, and the validator (`docs/VALIDATION.md`)
-rejects **all 2,056** curated `assert_invalid` cases plus all 127
-`assert_unlinkable` ones and all 27 `assert_uninstantiable` ones — **2,227 of
-2,227** binary negative commands. The strict run is fully green (the default
-suite is **7,987 assertions / 248 test cases**). All 17 curated
+rejects **all 2,211** curated `assert_invalid` cases plus all 127
+`assert_unlinkable` ones and all 27 `assert_uninstantiable` ones — **2,382 of
+2,382** binary negative commands. The strict run is fully green (the default
+suite is **8,003 assertions / 256 test cases**). All 17 curated
 `assert_malformed` cases are rejected too, including the strict LEB128 cases;
-the remaining malformed cases are *text-format* (765 commands across all kinds)
+the remaining malformed cases are *text-format* (946 commands across all kinds)
 and need a text parser, not a validator. See
 [`docs/TESTING.md`](docs/TESTING.md#measuring-the-negative-module-commands).
 

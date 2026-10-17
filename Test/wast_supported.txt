@@ -128,6 +128,17 @@ local_init
 ref_func
 select
 
+# Runtime gaps closed: br_table codegen/typing, float constants and min/max,
+# nearest/trunc NaN quieting, unsigned i64 conversions, trunc trap kinds.
+br_table
+const
+conversions
+exports
+f32
+f64
+float_literals
+func
+
 # The SIMD family, re-curated once `v128` globals (SIMD-4) and the ≥ 3-operand
 # call path (SIMD-6) landed: **all 66 of the 66 `simd_*` / relaxed scripts pass
 # with failed=0**, so the whole family is graded now. The skips they still report

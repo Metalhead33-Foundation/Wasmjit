@@ -326,14 +326,14 @@ Measured against the curated set:
 
 | Kind | Binary cases | Rejected (pass) | Accepted (fail) | Reading |
 | --- | ---: | ---: | ---: | --- |
-| `assert_invalid` | 2056 | **2056** | 0 | every curated invalid module is rejected: module structure, exact control-flow stack, core numeric/memory/table, 194 SIMD shapes, atomics, full reference subtyping, `br_on_*` and `try_table` catch labels, element/data offsets, table/segment typing and table initializers, `ref.func` declarations, local definite-initialization, untyped `select`, canonical type equivalence, `br_table` in unreachable code |
-| `assert_malformed` | 17 | **17** | 0 | decoder strictness, including strict LEB128 byte-width and final-byte fit. The **765** text-format commands across all kinds cannot run without a text parser |
+| `assert_invalid` | 2211 | **2211** | 0 | every curated invalid module is rejected: module structure, exact control-flow stack, core numeric/memory/table, 194 SIMD shapes, atomics, full reference subtyping, `br_on_*` and `try_table` catch labels, element/data offsets, table/segment typing and table initializers, `ref.func` declarations, local definite-initialization, untyped `select`, canonical type equivalence, `br_table` operand-vs-target subtyping |
+| `assert_malformed` | 17 | **17** | 0 | decoder strictness, including strict LEB128 byte-width and final-byte fit. The **946** text-format commands across all kinds cannot run without a text parser |
 | `assert_unlinkable` | 127 | **127** | 0 | the linker rejects all of them, including the four `memory64-imports` index-type cases (`MEMORY64` M2) and table imports whose limits do not match the provider's current size |
 | `assert_uninstantiable` | 27 | **27** | 0 | one trapping start (`start.wast`) and 26 instantiation errors from out-of-bounds `elem`/`data` segments |
-| **total** | **2227** | **2227** | **0** | **100 %** of the curated binary negative cases are rejected |
+| **total** | **2382** | **2382** | **0** | **100 %** of the curated binary negative cases are rejected |
 
-Even in strict mode 765 text-format commands stay skipped: the loader is
-binary-only. (The 53 core scripts re-curated after the validator landed are
+Even in strict mode 946 text-format commands stay skipped: the loader is
+binary-only. (The 61 core scripts re-curated after the validator landed are
 listed in `Test/wast_supported.txt` with their own notes.)
 The exercise paid for itself three times: it showed that the decoder and linker
 already cover a useful fraction; it exposed a real engine bug — the exception

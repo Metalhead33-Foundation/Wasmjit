@@ -18,7 +18,7 @@ stack, and throws `std::runtime_error` on the first failed rule.
 | Layer | Rules |
 | --- | --- |
 | Module | type indices name function types; function/code count consistency; data-count consistency; start function `[] -> []`; duplicate export names and export index bounds; memory/table limits (min ≤ max, memory32 ≤ 65536 pages, shared memories declare a max, table32 fits in 32 bits); tag types have no results; global/table initialisers and active element/data offsets (typed constant expressions); element/table type agreement, element item expressions and table initialiser typing; selected functions in element segments; empty modules |
-| Control | `block`/`loop`/`if`/`else`/`end` with typed params/results and exact stack height; `br`/`br_if`/`br_table` (including the polymorphic unreachable case)/`return`; `call`/`call_indirect`/`call_ref`; tail calls including result-type matching; `try_table` catch labels (payload, `exnref`, arity); `br_on_null`/`br_on_non_null`/`br_on_cast`/`br_on_cast_fail` |
+| Control | `block`/`loop`/`if`/`else`/`end` with typed params/results and exact stack height; `br`/`br_if`/`br_table` (operand values checked against every target; the unreachable stack is polymorphic)/`return`; `call`/`call_indirect`/`call_ref`; tail calls including result-type matching; `try_table` catch labels (payload, `exnref`, arity); `br_on_null`/`br_on_non_null`/`br_on_cast`/`br_on_cast_fail` |
 | Numeric | i32/i64/f32/f64 unary, binary, comparison, conversion, sign-extension and saturating forms, with exact operand/result types |
 | Memory | declared index type (`i32`/`i64`), alignment ≤ natural, 32-bit offset range, loads/stores, `memory.size/grow/init/copy/fill` |
 | Table | table64 index type, `get/set/grow/size/fill/copy/init`; table initialiser typing; `table.init` element-segment/table type match |
@@ -42,19 +42,19 @@ not check — the cost is coverage, measured below, not correctness.
 
 | Kind | Binary cases | Rejected | Accepted |
 | --- | ---: | ---: | ---: |
-| `assert_invalid` | 2056 | **2056** | 0 |
+| `assert_invalid` | 2211 | **2211** | 0 |
 | `assert_malformed` | 17 | **17** | 0 |
 | `assert_unlinkable` | 127 | **127** | 0 |
 | `assert_uninstantiable` | 27 | **27** | 0 |
-| **total** | **2227** | **2227** | **0** |
+| **total** | **2382** | **2382** | **0** |
 
-The default suite is **7987 assertions / 248 test cases, all green** (53 core
+The default suite is **8003 assertions / 256 test cases, all green** (61 core
 scripts were re-curated after the validator landed, plus `start.wast`). The
-strict run is **fully green** as well: every one of the 2,227 binary negative
+strict run is **fully green** as well: every one of the 2,382 binary negative
 commands is rejected, including all 17 `assert_malformed` cases and the strict
 LEB128 width/overflow cases. All 27 `assert_uninstantiable` cases pass: one
 traps in a start function (`start.wast`), the other 26 fail instantiation with
-a caught error (`elem`/`data` out-of-bounds segments). 765 text-format commands
+a caught error (`elem`/`data` out-of-bounds segments). 946 text-format commands
 remain skipped because the loader is binary-only.
 
 The `atomic.wait`-on-unshared check is deliberately **not** enforced: the

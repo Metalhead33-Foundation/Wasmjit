@@ -1621,14 +1621,22 @@ void Validator::dispatchBrTable(std::vector<LabelIdx>&& labels, LabelIdx default
 		return target.isLoop ? target.startTypes : target.endTypes;
 	};
 	const std::vector<ValueType> defaultTypes = typesFor(defaultLabel);
+	const std::size_t arity = defaultTypes.size();
+	if (typeStack.size() < arity)
+		fail("type mismatch: not enough operands for br_table");
+	// The values on the stack must be assignable to *every* target type. The
+	// default target alone is not enough: with reference subtyping, one target
+	// can be more specific than the default (br_table.wast's `$l1`/`$l2`).
+	const std::vector<ValueType> actual(typeStack.end() - static_cast<std::ptrdiff_t>(arity),
+			typeStack.end());
 	for (LabelIdx label : labels) {
 		if (label >= controlStack.size())
 			fail("unknown label " + std::to_string(label));
 		const std::vector<ValueType>& types = typesFor(label);
-		if (types.size() != defaultTypes.size())
+		if (types.size() != arity)
 			fail("type mismatch: br_table target arity differs");
-		for (std::size_t i = 0; i < types.size(); ++i) {
-			if (!assignable(types[i], defaultTypes[i]))
+		for (std::size_t i = 0; i < arity; ++i) {
+			if (!assignable(actual[i], types[i]))
 				fail("type mismatch: br_table target type differs");
 		}
 	}

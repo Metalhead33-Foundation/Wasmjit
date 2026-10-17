@@ -13,7 +13,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 
@@ -337,46 +339,134 @@ static uint64_t wasm_i64_rem_u(uint64_t a, uint64_t b)
 {
 	trap(WASM::TrapKind::InvalidConversionToInteger);
 }
+[[noreturn]] static void trapIntegerOverflow()
+{
+	trap(WASM::TrapKind::IntegerOverflow);
+}
 static int32_t wasm_i32_trunc_f32_s(float x)
 {
-	if (!(x >= -2147483648.0f && x < 2147483648.0f)) trapInvalidConversion();
+	if (std::isnan(x)) trapInvalidConversion();
+	const double d = x;
+	// The truncated result, not the input, must fit: allow (-2^31-1, 2^31).
+	if (!(d > -2147483649.0 && d < 2147483648.0))
+		trapIntegerOverflow();
 	return static_cast<int32_t>(x);
 }
 static uint32_t wasm_i32_trunc_f32_u(float x)
 {
-	if (!(x > -1.0f && x < 4294967296.0f)) trapInvalidConversion();
+	if (std::isnan(x)) trapInvalidConversion();
+	const double d = x;
+	if (!(d > -1.0 && d < 4294967296.0))
+		trapIntegerOverflow();
 	return static_cast<uint32_t>(x);
 }
 static int32_t wasm_i32_trunc_f64_s(double x)
 {
-	if (!(x >= -2147483648.0 && x < 2147483648.0)) trapInvalidConversion();
+	if (std::isnan(x)) trapInvalidConversion();
+	if (!(x > -2147483649.0 && x < 2147483648.0))
+		trapIntegerOverflow();
 	return static_cast<int32_t>(x);
 }
 static uint32_t wasm_i32_trunc_f64_u(double x)
 {
-	if (!(x > -1.0 && x < 4294967296.0)) trapInvalidConversion();
+	if (std::isnan(x)) trapInvalidConversion();
+	if (!(x > -1.0 && x < 4294967296.0))
+		trapIntegerOverflow();
 	return static_cast<uint32_t>(x);
 }
 static int64_t wasm_i64_trunc_f32_s(float x)
 {
-	if (!(x >= -9223372036854775808.0f && x < 9223372036854775808.0f)) trapInvalidConversion();
+	if (std::isnan(x)) trapInvalidConversion();
+	const double d = x;
+	if (!(d >= -9223372036854775808.0 && d < 9223372036854775808.0))
+		trapIntegerOverflow();
 	return static_cast<int64_t>(x);
 }
 static uint64_t wasm_i64_trunc_f32_u(float x)
 {
-	if (!(x > -1.0f && x < 18446744073709551616.0f)) trapInvalidConversion();
+	if (std::isnan(x)) trapInvalidConversion();
+	const double d = x;
+	if (!(d > -1.0 && d < 18446744073709551616.0))
+		trapIntegerOverflow();
 	return static_cast<uint64_t>(x);
 }
 static int64_t wasm_i64_trunc_f64_s(double x)
 {
-	if (!(x >= -9223372036854775808.0 && x < 9223372036854775808.0)) trapInvalidConversion();
+	if (std::isnan(x)) trapInvalidConversion();
+	if (!(x >= -9223372036854775808.0 && x < 9223372036854775808.0))
+		trapIntegerOverflow();
 	return static_cast<int64_t>(x);
 }
 static uint64_t wasm_i64_trunc_f64_u(double x)
 {
-	if (!(x > -1.0 && x < 18446744073709551616.0)) trapInvalidConversion();
+	if (std::isnan(x)) trapInvalidConversion();
+	if (!(x > -1.0 && x < 18446744073709551616.0))
+		trapIntegerOverflow();
 	return static_cast<uint64_t>(x);
 }
+
+// WebAssembly min/max: a NaN operand yields an arithmetic (quiet) NaN, and the
+// zero comparison is sign-aware (min(+0,-0) = -0, max(+0,-0) = +0).
+static float wasm_f32_min(float a, float b)
+{
+	if (std::isnan(a) || std::isnan(b))
+		return std::numeric_limits<float>::quiet_NaN();
+	if (a == 0.0f && b == 0.0f)
+		return (std::signbit(a) || std::signbit(b)) ? -0.0f : 0.0f;
+	return a < b ? a : b;
+}
+static float wasm_f32_max(float a, float b)
+{
+	if (std::isnan(a) || std::isnan(b))
+		return std::numeric_limits<float>::quiet_NaN();
+	if (a == 0.0f && b == 0.0f)
+		return (std::signbit(a) && std::signbit(b)) ? -0.0f : 0.0f;
+	return a > b ? a : b;
+}
+static double wasm_f64_min(double a, double b)
+{
+	if (std::isnan(a) || std::isnan(b))
+		return std::numeric_limits<double>::quiet_NaN();
+	if (a == 0.0 && b == 0.0)
+		return (std::signbit(a) || std::signbit(b)) ? -0.0 : 0.0;
+	return a < b ? a : b;
+}
+static double wasm_f64_max(double a, double b)
+{
+	if (std::isnan(a) || std::isnan(b))
+		return std::numeric_limits<double>::quiet_NaN();
+	if (a == 0.0 && b == 0.0)
+		return (std::signbit(a) && std::signbit(b)) ? -0.0 : 0.0;
+	return a > b ? a : b;
+}
+
+// LibJIT's float rounding primitives pass a signalling NaN through unchanged;
+// WebAssembly requires an arithmetic (quiet) NaN.
+static float wasm_f32_trunc_impl(float x)
+{
+	if (std::isnan(x)) return std::numeric_limits<float>::quiet_NaN();
+	return std::trunc(x);
+}
+static float wasm_f32_nearest_impl(float x)
+{
+	if (std::isnan(x)) return std::numeric_limits<float>::quiet_NaN();
+	return std::nearbyint(x);
+}
+static double wasm_f64_trunc_impl(double x)
+{
+	if (std::isnan(x)) return std::numeric_limits<double>::quiet_NaN();
+	return std::trunc(x);
+}
+static double wasm_f64_nearest_impl(double x)
+{
+	if (std::isnan(x)) return std::numeric_limits<double>::quiet_NaN();
+	return std::nearbyint(x);
+}
+
+// LibJIT's ulong -> float conversion mishandles values >= 2^63; the C++
+// conversion is correctly rounded for the whole unsigned range.
+static float wasm_f32_convert_i64_u_impl(uint64_t v) { return static_cast<float>(v); }
+static double wasm_f64_convert_i64_u_impl(uint64_t v) { return static_cast<double>(v); }
 
 static void* wasm_struct_new_default_impl(WASM::VMContext* vm, uint32_t size, uint32_t typeIndex)
 {
@@ -2010,6 +2100,10 @@ void OpcodeDispatcher::dispatchBrTable(std::vector<WASM::LabelIdx>&& arg1, WASM:
 	jit_value_t index = popValue();
 	jit_label_t defaultLabel = jit_label_undefined;
 	jit_label_t doneLabel = jit_label_undefined;
+	// Emitting a branch to the function's implicit label pops the branch values
+	// from the compile-time stack (`emitFunctionReturn`). A br_table emits one
+	// branch per target, so each case must see the same entry stack.
+	const std::vector<jit_value_t> entryStack = valueStack;
 
 	for (size_t i = 0; i < arg1.size(); ++i) {
 		jit_value_t caseValue = jit_value_create_nint_constant(
@@ -2017,12 +2111,14 @@ void OpcodeDispatcher::dispatchBrTable(std::vector<WASM::LabelIdx>&& arg1, WASM:
 		jit_value_t match = jit_insn_eq(function, index, caseValue);
 		jit_label_t nextLabel = jit_label_undefined;
 		jit_insn_branch_if_not(function, match, &nextLabel);
+		valueStack = entryStack;
 		emitBranchToLabel(arg1[i]);
 		jit_insn_label(function, &nextLabel);
 	}
 
 	jit_insn_branch(function, &defaultLabel);
 	jit_insn_label(function, &defaultLabel);
+	valueStack = entryStack;
 	emitBranchToLabel(arg2);
 	jit_insn_label(function, &doneLabel);
 	markUnreachable();
@@ -2775,12 +2871,36 @@ void OpcodeDispatcher::dispatchI64Const(int64_t arg)
 
 void OpcodeDispatcher::dispatchF32Const(float arg)
 {
-	pushValue(jit_value_create_float32_constant(function, jit_type_float32, static_cast<jit_float32>(arg)));
+	// LibJIT's float-constant API routes the value through an integer and loses
+	// the sign of -0.0. Keep each constant in a process-lifetime pool instead
+	// and load it: `std::deque` references stay valid across push_back.
+	static std::deque<float> pool;
+	static std::mutex poolMutex;
+	float* slot = nullptr;
+	{
+		std::lock_guard<std::mutex> lock(poolMutex);
+		pool.push_back(arg);
+		slot = &pool.back();
+	}
+	jit_value_t address = jit_value_create_nint_constant(
+			function, jit_type_void_ptr, reinterpret_cast<jit_nint>(slot));
+	pushValue(jit_insn_load_relative(function, address, 0, jit_type_float32));
 }
 
 void OpcodeDispatcher::dispatchF64Const(double arg)
 {
-	pushValue(jit_value_create_float64_constant(function, jit_type_float64, static_cast<jit_float64>(arg)));
+	// Same -0.0 limitation as dispatchF32Const.
+	static std::deque<double> pool;
+	static std::mutex poolMutex;
+	double* slot = nullptr;
+	{
+		std::lock_guard<std::mutex> lock(poolMutex);
+		pool.push_back(arg);
+		slot = &pool.back();
+	}
+	jit_value_t address = jit_value_create_nint_constant(
+			function, jit_type_void_ptr, reinterpret_cast<jit_nint>(slot));
+	pushValue(jit_insn_load_relative(function, address, 0, jit_type_float64));
 }
 void OpcodeDispatcher::dispatchI32Eqz()
 {
@@ -3293,12 +3413,14 @@ void OpcodeDispatcher::dispatchF32Floor()
 
 void OpcodeDispatcher::dispatchF32Trunc()
 {
-	pushValue(jit_insn_trunc(function, popValue()));
+	pushValue(callNativeUnary(function, reinterpret_cast<void*>(wasm_f32_trunc_impl),
+			jit_type_float32, jit_type_float32, popValue()));
 }
 
 void OpcodeDispatcher::dispatchF32Nearest()
 {
-	pushValue(jit_insn_rint(function, popValue()));
+	pushValue(callNativeUnary(function, reinterpret_cast<void*>(wasm_f32_nearest_impl),
+			jit_type_float32, jit_type_float32, popValue()));
 }
 
 void OpcodeDispatcher::dispatchF32Sqrt()
@@ -3338,14 +3460,16 @@ void OpcodeDispatcher::dispatchF32Min()
 {
 	jit_value_t b = popValue();
 	jit_value_t a = popValue();
-	pushValue(jit_insn_min(function, a, b));
+	pushValue(callNativeBinary(function, reinterpret_cast<void*>(wasm_f32_min),
+			jit_type_float32, jit_type_float32, jit_type_float32, a, b));
 }
 
 void OpcodeDispatcher::dispatchF32Max()
 {
 	jit_value_t b = popValue();
 	jit_value_t a = popValue();
-	pushValue(jit_insn_max(function, a, b));
+	pushValue(callNativeBinary(function, reinterpret_cast<void*>(wasm_f32_max),
+			jit_type_float32, jit_type_float32, jit_type_float32, a, b));
 }
 
 void OpcodeDispatcher::dispatchF32Copysign()
@@ -3381,12 +3505,14 @@ void OpcodeDispatcher::dispatchF64Floor()
 
 void OpcodeDispatcher::dispatchF64Trunc()
 {
-	pushValue(jit_insn_trunc(function, popValue()));
+	pushValue(callNativeUnary(function, reinterpret_cast<void*>(wasm_f64_trunc_impl),
+			jit_type_float64, jit_type_float64, popValue()));
 }
 
 void OpcodeDispatcher::dispatchF64Nearest()
 {
-	pushValue(jit_insn_rint(function, popValue()));
+	pushValue(callNativeUnary(function, reinterpret_cast<void*>(wasm_f64_nearest_impl),
+			jit_type_float64, jit_type_float64, popValue()));
 }
 
 void OpcodeDispatcher::dispatchF64Sqrt()
@@ -3426,14 +3552,16 @@ void OpcodeDispatcher::dispatchF64Min()
 {
 	jit_value_t b = popValue();
 	jit_value_t a = popValue();
-	pushValue(jit_insn_min(function, a, b));
+	pushValue(callNativeBinary(function, reinterpret_cast<void*>(wasm_f64_min),
+			jit_type_float64, jit_type_float64, jit_type_float64, a, b));
 }
 
 void OpcodeDispatcher::dispatchF64Max()
 {
 	jit_value_t b = popValue();
 	jit_value_t a = popValue();
-	pushValue(jit_insn_max(function, a, b));
+	pushValue(callNativeBinary(function, reinterpret_cast<void*>(wasm_f64_max),
+			jit_type_float64, jit_type_float64, jit_type_float64, a, b));
 }
 
 void OpcodeDispatcher::dispatchF64Copysign()
@@ -3485,7 +3613,10 @@ void OpcodeDispatcher::dispatchI64ExtendI32S()
 
 void OpcodeDispatcher::dispatchI64ExtendI32U()
 {
-	pushValue(jit_insn_convert(function, popValue(), jit_type_ulong, 0));
+	// Reinterpret the 32-bit value as unsigned first; converting a signed
+	// `int` directly to `ulong` would sign-extend.
+	jit_value_t v = jit_insn_convert(function, popValue(), jit_type_uint, 0);
+	pushValue(jit_insn_convert(function, v, jit_type_ulong, 0));
 }
 
 void OpcodeDispatcher::dispatchI64TruncF32S()
@@ -3533,7 +3664,8 @@ void OpcodeDispatcher::dispatchF32ConvertI64S()
 void OpcodeDispatcher::dispatchF32ConvertI64U()
 {
 	jit_value_t u = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
-	pushValue(jit_insn_convert(function, u, jit_type_float32, 0));
+	pushValue(callNativeUnary(function, reinterpret_cast<void*>(wasm_f32_convert_i64_u_impl),
+			jit_type_float32, jit_type_ulong, u));
 }
 
 void OpcodeDispatcher::dispatchF32DemoteF64()
@@ -3560,7 +3692,8 @@ void OpcodeDispatcher::dispatchF64ConvertI64S()
 void OpcodeDispatcher::dispatchF64ConvertI64U()
 {
 	jit_value_t u = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
-	pushValue(jit_insn_convert(function, u, jit_type_float64, 0));
+	pushValue(callNativeUnary(function, reinterpret_cast<void*>(wasm_f64_convert_i64_u_impl),
+			jit_type_float64, jit_type_ulong, u));
 }
 
 void OpcodeDispatcher::dispatchF64PromoteF32()
