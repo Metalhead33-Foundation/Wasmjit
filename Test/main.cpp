@@ -1064,6 +1064,8 @@ TEST_CASE("compact type records and the shared component store are present")
 	REQUIRE(component != nullptr);
 
 	REQUIRE(typeStore().recordCount() > typeStore().coreCount());
+	REQUIRE(typeStore().payloadBytes() > 0);
+	REQUIRE(typeStore().allocationCount() > 0);
 	for (const WASM::ComponentTypeDef& definition : component->types) {
 		if (definition.kind == WASM::ComponentTypeDef::Kind::DefinedValue
 				|| definition.kind == WASM::ComponentTypeDef::Kind::Func

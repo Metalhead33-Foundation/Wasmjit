@@ -280,15 +280,15 @@ the number of nested lists, not just with the number of distinct types.
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| TM1 | **Component types have no process-wide identity.** They are addressed by component-local indices and have no `TypeId`, no interning and no cross-component equality path. | `TypeRegistry` exposes only core `TypeId`s; `ResolvedType` is validator-local. | High |
-| TM2 | **Core types have two long-lived representations.** `Subtype` and `CanonicalType` both expand every function/struct/array, and the registry retains both. | `WasmTypeRegistry::registerModule` + `internModule`; §4.1. | High |
-| TM3 | **Component types are expanded twice.** The parser's `DefinedValueType`/`ComponentTypeDef` and the validator's `ResolvedValueType`/`ResolvedType` both retain the full structure. | `WasmComponentValidation.cpp` §46–128; §4.2. | High |
-| TM4 | **Every type pays for every alternative.** `Subtype` embeds `FuncType`'s vectors in structs/arrays; `DefinedValueType` and `ComponentTypeDef` embed every payload. | `WasmType.hpp` `CompositeDefinition`; `WasmComponentModel.hpp`. | High |
-| TM5 | **Per-node vectors and strings dominate the heap.** Each populated list and every label/name is a separate owning allocation; the registry also keeps a serialized intern key per group. | `FuncType`, `StructType`, `DefinedValueType`, `ResolvedValueType`, `std::unordered_map<std::string, RecGroupId>`. | High |
+| TM1 | **Component type definitions now have `TypeId`s, but structural interning is still absent.** Component-local indices are still the only way a value reference names a type, and there is no cross-component equality path yet. | `TypeStore::componentType` / `TypeId` handles; validator remains local. | High |
+| TM2 | **Core types still have a parser compatibility copy.** The canonical `CanonicalType` copy is temporary now, but `Subtype` remains the module/JIT-facing block. | `WasmTypeRegistry::registerModule` + `internModule`; §4.1. | Medium |
+| TM3 | **The component parser no longer keeps a parallel type tree**, but the validator still expands resolved types into `ResolvedValueType`/`ResolvedType`. | `WasmComponentValidation.cpp`; §4.2. | Medium |
+| TM4 | **Core `Subtype` still pays for every composite alternative.** Component type records and declarations are compact. | `WasmType.hpp` `CompositeDefinition`; `WasmComponentModel.hpp`. | Medium |
+| TM5 | **Core parser lists still allocate per node.** Component type lists are pooled and component labels/names are interned. | `FuncType`/`StructType`; `WasmTypeStore.cpp`. | Medium |
 | TM6 | **Scope-local component indices have no explicit global mapping.** A component type index is not a `TypeId`, and no table records the local-to-global relationship after validation. | `TypeScope::types`; `resolveTypeIndex`. | High |
-| TM7 | **Open component types are not modelled.** A `sub resource` import is a type parameter, but there is no scheme/substitution representation that distinguishes it from a concrete resource identity. This blocks a sound shared identity for CM-1d instantiation. | `ResolvedResourceType::abstract`; no type-parameter type. | High |
-| TM8 | **No footprint/identity instrumentation.** There are no `sizeof` assertions for the component records and no store-level byte/allocation counters, so the claimed footprint reduction cannot be tested. | Current tests cover parser/validator behaviour, not storage. | Medium |
-| TM9 | **No explicit ownership boundary for component type storage.** The parser AST and validator graph live in different places; nothing states which object owns the long-lived type structure. | Parser AST on `Component`; resolved graph local to `validateComponent`. | Medium |
+| TM7 | **Open component types are not modelled.** A `sub resource` import is a type parameter, but there is no scheme/substitution representation that distinguishes it from a concrete resource identity. This is CM-1d work. | `ResolvedResourceType::abstract`; no type-parameter type. | High |
+| ~~TM8~~ | ~~**No footprint/identity instrumentation.**~~ **Done (revision 2):** `TypeStore` exposes record/payload/allocation counters, and the test suite asserts the compact record sizes and the shared-store contents. | `WasmBase/WasmTypeStore.hpp`, `Test/main.cpp`. | Closed |
+| TM9 | **Component type scope ownership is explicit for the parser**, while the validator's resolved graph remains a temporary scaffold. | `TypeStore` + `ComponentTypeDef`; resolved graph in `WasmComponentValidation.cpp`. | Medium |
 
 
 ## 6. Where we can and should play fast and loose
@@ -536,7 +536,7 @@ writing; re-measure rather than trusting them after the first stage.
 
 | Script / test | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| default C++/wast suite | 8,376 assertions / 274 cases | 0 | 0 | Existing core, GC, SIMD, exceptions and component parser/validator behaviour is the refactor's regression floor. |
+| default C++/wast suite | 8,378 assertions / 274 cases | 0 | 0 | Existing core, GC, SIMD, exceptions and component parser/validator behaviour is the refactor's regression floor. |
 | strict validation suite (`WASM_SPEC_VALIDATE=1` and the curated negative sets) | same suite green | 0 | 0 | The compact store must not weaken any validator path, positive or negative. |
 | `Test/wasm_wat/component_types.wat` | pass | 0 | 0 | Every component value type, import/export and label shape survives the AST rewrite. |
 | `component_coretypes.wat`, `component_coreexterns.wat`, `component_coregc.wat` | pass | 0 | 0 | Core-type and core-extern payloads still map to the same core shapes. |
