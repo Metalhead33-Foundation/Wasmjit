@@ -98,7 +98,7 @@ Memory64 is a **Phase 5** proposal, integrated into WebAssembly **3.0**.
 |---|---|---|---|
 | ~~M1~~ | ~~Size/grow plumbing is 32-bit.~~ **Done (M64-1):** `memory.size`/`grow`, `table.size`/`grow`, `ModuleInstance::growMemory`/`growTable` and `wasm_{memory,table}_grow_impl` are all 64-bit now; a 64-bit memory/table pushes an i64. | `LibjitOpcodeDispatcher.cpp`, `WasmModuleInstance.cpp` | Closed |
 | ~~M4~~ | ~~`table64` width is suspicious.~~ **Done (M64-1):** `tableIs64Bit` (limits flag bit 2) selects an i64 result/delta; `table.size`/`grow` on a 64-bit table are exercised by `table64.wast` and the manual test. | `dispatchTableSize`, `dispatchTableGrow` | Closed |
-| M2 | **No index-type validation.** Nothing rejects an operand whose type disagrees with the memory's/table's declared index type at *validation* time; the address is now widened according to the *memory's* declared type, so the instruction behaves as its memory dictates rather than being rejected. This is the usual no-validating-front-end stance. `WASM_SPEC_VALIDATE=1` gives it a number: 4 of the 32 curated `assert_unlinkable` cases are accepted, all four from `memory64-imports.66–69` — an imported memory's index type is not matched during linking either. | no validating front-end; `WASM_SPEC_VALIDATE=1` (4/32 `assert_unlinkable` accepted) | Low (deliberate) |
+| M2 | **No index-type validation.** Nothing rejects an operand whose type disagrees with the memory's/table's declared index type at *validation* time; the address is now widened according to the *memory's* declared type, so the instruction behaves as its memory dictates rather than being rejected. This is the usual no-validating-front-end stance. The **link-time** half is fixed: `LinearMemory::is64` publishes the index type and `memorySatisfiesImport` matches it, so all 32 curated `assert_unlinkable` cases are rejected (`memory64-imports` 48/0/30 default, **78/0/0** with `WASM_SPEC_VALIDATE=1`). Only operand validation remains. | no validating front-end; link-time check done (`WASM_SPEC_VALIDATE=1`: 32/32 rejected) | Low (deliberate) |
 | M3 | **Unrepresentable maxima become "unbounded".** A `memory64` declaration whose max does not fit a byte count is treated as `UINT64_MAX`; growth then only fails at host allocation — which is now the Store's allocation budget, so it fails as `-1` instead of trying. | `StoreOwnedMemory` constructor, `WasmStore` | Closed in effect (Low) |
 | ~~M5~~ | ~~No manual 64-bit test.~~ **Done (M64-3):** `Test/wasm_wat/memory64_index.wat` + `memory64: 64-bit memory and table size/grow are 64-bit`, which also asserts that a delta beyond 2³² pages is rejected as `-1` rather than truncated. | `Test/main.cpp` | Closed |
 
@@ -121,7 +121,7 @@ memory (zero-extend the `i32`), so that `memoryBase + offset` cannot wrap
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **M64-1 — Widen size/grow** | ✅ Memory/table `size`/`grow` helpers are 64-bit and push `i64` for 64-bit memories/tables; index-space caps are enforced at instantiation; every byte is charged against the Store budget. | M1, M4 | Done: a 64-bit memory/table reports and accepts 64-bit values, and an over-2³²-page delta is rejected as `-1` instead of truncated. |
-| **M64-2 — Index-type check** | ◑ Not implemented as validation; instead the address is *widened according to the memory's declared index type* (`memoryIndexTypeForIndex`), and a mismatch is left to a validating front-end that does not exist. | M2 | Partially: the behaviour is well-defined; only the rejection is missing. |
+| **M64-2 — Index-type check** | ◑ The address is *widened according to the memory's declared index type* (`memoryIndexTypeForIndex`); the link-time index-type match is implemented (`LinearMemory::is64` + `memorySatisfiesImport`), and only operands are not rejected — that needs the validating front end. | M2 | Partially: behaviour and import matching are well-defined; only operand rejection is missing. |
 | **M64-3 — Manual test** | ✅ `Test/wasm_wat/memory64_index.wat` + `memory64: 64-bit memory and table size/grow are 64-bit`. | M5 | Done: store/load through an i64 address, `memory.size`/`grow`, `table.size`/`grow`, and the huge-delta rejection are all asserted. |
 
 ## 8. Indicative test survey
@@ -139,7 +139,7 @@ default green run:
 | `call_indirect64` | 2 / 0 / 0 | 64-bit table index |
 | `float_memory64` | 90 / 0 / 0 | f32/f64 access through i64 addresses |
 | `memory64` | 54 / 0 / 15 | core 64-bit memory semantics |
-| `memory64-imports` | 48 / 0 / 30 | importing a 64-bit memory |
+| `memory64-imports` | 48 / 0 / 30 | importing a 64-bit memory; the 30 skips are `assert_unlinkable` (strict mode: **78/0/0**, all 32 link cases rejected) |
 | `memory_grow64` | 49 / 0 / 0 | `memory.size`/`grow` return and accept i64 |
 | `memory_redundancy64` | 8 / 0 / 0 | redundant loads/stores |
 | `memory_trap64` | 172 / 0 / 0 | out-of-bounds i64 accesses **do** trap (M64-1/M1) |

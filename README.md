@@ -57,7 +57,7 @@ per-milestone done markers, is the authoritative per-item status.
 
 | Document | Feature / proposal | Wasm | Completeness | Where it stands |
 |---|---|---|---|---|
-| [`MULTI_VALUE.md`](docs/proposals/MULTI_VALUE.md) | Multi-value | 2.0 | `███████████████████░` 95% | Engine complete (block parameters, multi-result calls via a caller-provided result buffer) and exported multi-result values are now marshalled by `assert_return`; the remaining gaps are the non-`assert_return` harness paths and the embedder-facing `callCallable` API |
+| [`MULTI_VALUE.md`](docs/proposals/MULTI_VALUE.md) | Multi-value | 2.0 | `███████████████████░` 95% | Engine complete (block parameters, multi-result calls via a caller-provided result buffer) and exported multi-result values are marshalled on every harness path (`assert_return` compares the tuple; bare actions, `assert_trap`, `assert_exception` and `assert_exhaustion` pass a buffer); the remaining gap is the embedder-facing `callCallable` API |
 | [`TAILCALLS.md`](docs/proposals/TAILCALLS.md) | Tail calls | 3.0 | `██████████████████░░` 90% | TC-1…TC-4 done: direct, indirect and `ref` tails run in constant stack; the trampoline is signature-restricted |
 | [`SMALL_PROPOSALS.md`](docs/proposals/SMALL_PROPOSALS.md) | Sign-extension, non-trapping `trunc_sat`, branch hinting | 2.0 / 3.0 | `██████████████████░░` 90% | First two implemented + manually tested; the *trapping* `trunc_f*` and integer `div`/`rem` now genuinely trap (they used to silently produce a value); branch hints are parsed and deliberately non-semantic |
 | [`MEMORY64.md`](docs/proposals/MEMORY64.md) | Memory64 | 3.0 | `███████████████████░` 95% | M64-1/M64-3 done: 64-bit `size`/`grow`, the unsigned-address overflow-safe bound check, `spectest.table64`, and a manual 64-bit test; all 12 curated 64-bit scripts green; M2 (reject a mismatched index type) is the usual no-validator stance |
@@ -83,11 +83,12 @@ Reading the estimates:
 Most rows that end in "validation" share one blocker, and it is now measured
 rather than assumed: `WASM_SPEC_VALIDATE=1` executes the four negative-module
 families instead of skipping them. Of **1,198** binary negative cases in the
-curated set the decoder/linker already reject **36**; **1,149** of the remaining
-**1,162** are `assert_invalid`, i.e. the same missing validating front end. The
+curated set the decoder/linker already reject **40**; **1,149** of the remaining
+**1,158** are `assert_invalid`, i.e. the same missing validating front end. The
 `assert_malformed` and `assert_unlinkable` families are *not* validator work
-(9/13 and 4/32 residual gaps), and 656 of the 669 malformed cases are text-format
-and need a text parser, not a validator. See
+(a 9/13 residual decoder gap and **0/32** link failures, after the memory index
+type was matched at link time), and 656 of the 669 malformed cases are
+text-format and need a text parser, not a validator. See
 [`docs/TESTING.md`](docs/TESTING.md#measuring-the-negative-module-commands).
 
 To refresh a number, re-run the row's script from `build/Desktop-Debug/Test`:

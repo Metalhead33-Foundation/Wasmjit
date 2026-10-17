@@ -71,7 +71,7 @@ Store::~Store()
 		delete[] exception.storage;
 }
 
-Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPages, bool isShared)
+Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPages, bool isShared, bool is64)
 {
 	// Charge the initial commit against the process-wide budget (guardrail: an
 	// absurd initial size must fail loudly, not allocate).
@@ -86,8 +86,8 @@ Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPag
 
 	try {
 		std::unique_ptr<StoreOwnedMemory> memory = isShared
-			? std::unique_ptr<StoreOwnedMemory>(std::make_unique<SharedLinearMemory>(initialPages, maxPages))
-			: std::unique_ptr<StoreOwnedMemory>(std::make_unique<PrivateLinearMemory>(initialPages, maxPages));
+			? std::unique_ptr<StoreOwnedMemory>(std::make_unique<SharedLinearMemory>(initialPages, maxPages, is64))
+			: std::unique_ptr<StoreOwnedMemory>(std::make_unique<PrivateLinearMemory>(initialPages, maxPages, is64));
 
 		// The unique_ptr keeps the StoreOwnedMemory at a stable address, so the
 		// LinearMemory* handed out below stays valid across later insertions.

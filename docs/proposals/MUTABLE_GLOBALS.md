@@ -100,7 +100,7 @@ rule in [`ABI.md`](../ABI.md).
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **MG-1 — Pointer globals** | Represent the global index space as `Value*` (or a small `Global*` with an `isMutable` flag); keep local globals in the instance's storage. | MG2 | `ctx.globals` addresses can point into another instance. |
+| **MG-1 — Pointer globals** | Represent the global index space as `Value*` (or a small `Global*` with an `isMutable` flag); keep local globals in the instance's storage. Decision + staging: `docs/ABI.md` §Reference and Global Representation (R1). | MG2 | `ctx.globals` addresses can point into another instance. |
 | **MG-2 — Wire resolution** | ✅ `resolveImports` resolves every imported global during instantiation and installs it before local initialisers run. (The *aliasing* upgrade — a `Value*` index space — is still open, so a mutable import is a copy; see MG2/MG3.) | MG1 (MG4 open) | Done for reads: a module importing a global sees the exported value. |
 | **MG-3 — Export aliasing** | Export a global by publishing a pointer to the instance's slot, not a `Value` copy. | MG3 | A write through the importer is visible to the exporter. |
 | **MG-4 — Test** | Add `shared_global_a/b.wat` + a manual test that writes through B and reads through A. | MG5 | The test asserts the shared value. |

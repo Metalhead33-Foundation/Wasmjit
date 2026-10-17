@@ -42,8 +42,9 @@ humans write that graph; the Canonical ABI is how it runs.*
 - The Component Model is a **separate, layered specification**. The Wasm 3.0
   change history does not mention it; components are not a core-language
   feature. It **supersedes** the earlier *module-linking* and *interface-types*
-  proposals (the test harness still visibly skips `module_definition` /
-  `module_instance` as "module-linking proposal").
+  proposals (the test harness still visibly skips `module_instance` as
+  "module-linking proposal"; `module_definition` is decoded but not
+  instantiated).
 - It is developed in `WebAssembly/component-model` and reaches users through
   **WASI Developer Preview** releases:
   - **0.2.0** — the first component-based release: shared-nothing and
@@ -326,7 +327,7 @@ component support** anywhere in the tree — no `Component`, no `canon`, no
 | CM4 | **No Canonical ABI.** No lift/lower, flattening, memory representation, `canonopt`, `realloc`/`post-return`, or handle table. This is the actual JIT work. | — | High |
 | CM5 | **No component linking/instantiation.** No `ComponentInstance`, no `with` arguments, no component-level import matching by name + type. | `WasmModuleInstance.*` | High |
 | CM6 | **No type imports/exports**, so a component's type-level imports cannot be satisfied by the existing name registry. | `WasmImport.hpp`, `WasmRegistryImportResolver.hpp` | Medium |
-| CM7 | **No component test path.** The harness skips any `module_type != "binary"`, skips `module_definition`/`module_instance` as "module-linking proposal", and the submodule `extern/WasmTestsuite` is the *core* suite; the component reference tests live in `WebAssembly/component-model/test`. | `Test/WastScript.cpp`, `Test/wast_supported.txt` | Medium |
+| CM7 | **No component test path.** The harness skips any `module_type != "binary"`, decodes `module_definition` without instantiating it, skips `module_instance` as "module-linking proposal", and the submodule `extern/WasmTestsuite` is the *core* suite; the component reference tests live in `WebAssembly/component-model/test`. | `Test/WastScript.cpp`, `Test/wast_supported.txt` | Medium |
 | CM8 | **The JIT cannot host a lifted function directly.** A component host call needs a canonical-ABI thunk, but `Callable` assumes the Wasm callable ABI and `../ABI.md` states that no trampolines are generated for cross-module calls. | `../ABI.md`, `WasmImport.hpp` | Medium |
 | CM9 | **No WASI 0.2 interfaces**, so real-world components (which import `wasi:*`) cannot link. | — | Low (deliberate non-goal) |
 | CM10 | **No `error-context`, `map`, async/stream/future/threading** built-ins. | — | Low (deliberate non-goal) |
@@ -379,7 +380,7 @@ current harness would react.
 |---|---|---|
 | `extern/WasmTestsuite/*.wast` (core suite) | green where curated | contains **no** component cases; `wast_supported.txt` is a core-only list. |
 | a component script fed to the harness | skipped | `ScriptRunner::onModule` requires `module_type == "binary"`, so a text component is skipped as "text-format module". |
-| `module_definition` / `module_instance` commands | skipped as "module-linking proposal" | the linking model that the Component Model supersedes/built on; the harness has no support either way. |
+| `module_definition` / `module_instance` commands | `module_definition` decoded (not instantiated); `module_instance` skipped | the linking model that the Component Model supersedes/built on; the harness decodes definitions but does not implement linking. |
 | `WebAssembly/component-model/test/*.wast` | not in the tree | the real reference tests; their README runs them with `wasmtime wast` (and `nyi.txt` filters tests that land ahead of implementations). Adding this as a submodule is CM-7. |
 | manual test, CM-0 | **pass** | `Test/wasm_wat/component_reject.wat` (a bare `(component)`) is loaded and the loader's component-specific message is asserted; `a Component Model component is rejected instead of misparsed`. |
 | manual test, CM-4/CM-5 | none yet | a hand-authored component built with `wasm-tools component new` from a core module that was given a WIT-derived component-type section. |
@@ -391,8 +392,9 @@ external prerequisite is needed for the tooling-side milestones.
 ## 9. How this relates to the other notes in this folder
 
 - **module-linking** — superseded by the Component Model. The harness's
-  `module_definition`/`module_instance` skip is the visible trace of that
-  proposal; CM-4 is effectively "implement the layer that replaced it".
+  `module_instance` skip is the visible trace of that proposal (it already
+  decodes `module_definition`); CM-4 is effectively "implement the layer that
+  replaced it".
 - **type-imports** — a component imports and exports *types*. This proposal
   cannot be finished without the type-import feature on the core side, which is
   currently absent (CM6).

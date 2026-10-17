@@ -58,7 +58,8 @@ public:
 	// ── Linear memory ───────────────────────────────────────────────────
 	// Allocate a fresh linear memory owned by the store. Returns its store id;
 	// use memory(id) to obtain the backend-visible LinearMemory view.
-	MemoryId createLinearMemory(uint64_t initialPages, uint64_t maxPages, bool isShared);
+	MemoryId createLinearMemory(uint64_t initialPages, uint64_t maxPages, bool isShared,
+								bool is64 = false);
 
 	// Borrowed views into a store-owned memory. Nullptr for an unknown id.
 	LinearMemory*       memory(MemoryId id);

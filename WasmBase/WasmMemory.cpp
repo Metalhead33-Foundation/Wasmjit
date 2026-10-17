@@ -18,7 +18,7 @@ namespace WASM {
 constexpr uint64_t WASM_PAGE_SIZE = 0x10000; // 64 KiB
 constexpr uint64_t MAX_SHARED_BYTES = 4ULL * 1024 * 1024 * 1024; // 4 GiB Cap for unbounded shared memory
 
-StoreOwnedMemory::StoreOwnedMemory(uint64_t initialPages, uint64_t maxPages, bool isShared)
+StoreOwnedMemory::StoreOwnedMemory(uint64_t initialPages, uint64_t maxPages, bool isShared, bool is64)
 {
 	// Guard against initialPages/maxPages overflow in constructor calculations
 	if (initialPages > (UINT64_MAX / WASM_PAGE_SIZE)) {
@@ -44,6 +44,7 @@ StoreOwnedMemory::StoreOwnedMemory(uint64_t initialPages, uint64_t maxPages, boo
 	}
 
 	memory.isShared   = isShared;
+	memory.is64       = is64;
 	memory.memorySize = 0; // Commits set the actual size explicitly
 	memory.memoryBase = nullptr;
 	memory.hostData   = this;
@@ -61,8 +62,8 @@ LinearMemory* StoreOwnedMemory::getMemory()
 
 // ── Private (Unshared) Linear Memory Implementation ──
 
-PrivateLinearMemory::PrivateLinearMemory(uint64_t initialPages, uint64_t maxPages)
-	: StoreOwnedMemory(initialPages, maxPages, false)
+PrivateLinearMemory::PrivateLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64)
+	: StoreOwnedMemory(initialPages, maxPages, false, is64)
 {
 	uint64_t initialBytes = initialPages * WASM_PAGE_SIZE;
 
@@ -149,8 +150,8 @@ bool SharedLinearMemory::platformCommitMemory(size_t newBytes)
 	return true;
 }
 
-SharedLinearMemory::SharedLinearMemory(uint64_t initialPages, uint64_t maxPages)
-	: StoreOwnedMemory(initialPages, maxPages, true), reservedRegion(nullptr), reservedBytes(0)
+SharedLinearMemory::SharedLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64)
+	: StoreOwnedMemory(initialPages, maxPages, true, is64), reservedRegion(nullptr), reservedBytes(0)
 {
 	// 1. Calculate and reconcile true maximum reserved capacity. An unbounded
 	// (or unrepresentable, memory64-style) maximum is capped at MAX_SHARED_BYTES.

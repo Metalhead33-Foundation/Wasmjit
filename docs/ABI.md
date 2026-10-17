@@ -47,10 +47,94 @@ natural alignment; the caller passes the address of a buffer it allocated and
 reads the fields back after the call. Single-result and void signatures are
 unchanged, so the common `ret f(VMContext*, ...)` shape above still holds.
 
-The spec harness marshals them for `assert_return`
-(`docs/proposals/MULTI_VALUE.md` MV1); `callCallable` should not be used for
-them yet (MV4). Within a module, and across modules, direct/indirect calls and
-the tail-call driver all use the buffer convention.
+The spec harness marshals them for `assert_return` (comparing each field) and
+passes a caller-owned buffer on the result-discarding paths (bare `action`,
+`assert_trap`, `assert_exception`, `assert_exhaustion`) — see
+`docs/proposals/MULTI_VALUE.md` MV1. `callCallable` should not be used for a
+multi-result signature yet (MV4). Within a module, and across modules, direct/
+indirect calls and the tail-call driver all use the buffer convention.
+
+## Reference and Global Representation
+
+> **Status:** the decision is recorded here; the migration is staged and *not*
+> implemented yet. Nothing in this section changes the current behaviour.
+
+The engine currently uses one untyped `void*` for every reference, `Callable*`
+table slots, and a flat `Value` array for globals. That is enough for the core
+types in the common case, but it is the shared blocker behind four proposals:
+generic/typed tables (`FUNCTION_REFERENCES.md` FR6, `EXCEPTIONS.md` EX5), host
+externrefs and `any`/`extern` identity (`GC.md` R4/G3/D5), mutable imported
+globals (`MUTABLE_GLOBALS.md` MG2/MG3/MG4), and component-level reference
+bookkeeping (`COMPONENT_MODEL.md` CM8).
+
+### Today
+
+| Value / slot | Encoding | Consequence |
+| --- | --- | --- |
+| `funcref` | `Callable*` | fine |
+| `externref` | host `void*` | no box and no identity; only static typing separates it from a funcref |
+| `exnref` | exception-object pointer | fine on the stack or in a global, not storable in a table |
+| GC ref | Store-owned object pointer | fine |
+| `i31ref` | `(value << 1) \| 1` | fine |
+| table slot | `Callable*` (`TableInstance::base`) | only *nominally* a function table; externref/GC/exnref values are cast through it |
+| global | `Value` in a flat `VMContext::globals` array | imported globals are **copies**; an import cannot alias the exporter |
+| exported global | `Value` copied by `registerExports` | a later `global.set` is invisible to importers (and vice versa) |
+
+Static typing at each use site is why this works at all. It stops working when
+the static type is only `anyref` (an `ref.test`/`ref.cast` must distinguish a
+funcref from an externref from a GC object), and host interop needs identity.
+
+### Decision
+
+One **64-bit tagged reference word** for every reference value and table slot,
+plus **global cells**. The tag is in the low three bits; all heap pointers are
+8-byte aligned, so the word stays pointer-sized and every existing 8-byte slot
+keeps its size.
+
+| Tags | Payload |
+| --- | --- |
+| `0` `Func` | `Callable*` |
+| `1` `Extern` | `ExternBox*` (Store-owned) |
+| `2` `Gc` | GC object pointer |
+| `3` `Exn` | exception-object pointer |
+| `4` `I31` | signed 31-bit value in bits 3…33 |
+| `5`–`7` | reserved |
+| all-zero word | null (the only null representation) |
+
+- `ref.is_null` is `word == 0`; `ref.eq` is null==null, then payload equality
+  within one tag (i31s compare by value).
+- `ref.test`/`ref.cast` read the tag for the hierarchy, then the GC object's type
+  id; `any.convert_extern`/`extern.convert_any` become box/unbox, not identity.
+- `call_indirect`/`call_ref` require `Func` and non-null, otherwise the usual
+  trap. A non-funcref table can no longer be mistaken for a callable array.
+- Table slots become `Ref` (`uint64_t`); `TableInstance::base` stays the first
+  field, only its pointee type changes. The write barrier runs only for `Gc`.
+- Globals become **cells**: `VMContext::globals` is a `Value**` (one pointer per
+  global index) and an imported global's cell belongs to the exporter. All
+  `global.get`/`global.set` lowering funnels through `globalSlotAddress`, so the
+  backend change is: load the cell pointer, then load/store at the cell.
+- `ExternBox { const void* host; uint64_t identity; }` is Store-owned. The spec
+  harness maps `(ref.extern N)` to one box per `N` (memoized per script), which
+  makes `ref.eq` on externrefs meaningful and lets `table_fill`'s
+  `(ref.extern 1)` round-trip keep its identity.
+
+### Migration
+
+| Stage | Work | Unblocks | Acceptance |
+| --- | --- | --- | --- |
+| **R1 — Globals as cells** | `VMContext::globals` → `Value**`; `Internals::globalRefs` (one cell per index, defined globals point at the instance's storage); `ImportRegistrar::registerGlobal` publishes a `Value*` and `resolveGlobal` returns one; `registerExports` publishes the cell; release only *defined* cells (imported cells are the exporter's); `globalSlotAddress` loads the pointer; interpreter path. | MG2, MG3, MG4 | a write through a mutable import is visible to the exporter and back; `globals.wast`/`mutable-globals.wast` stay green |
+| **R2 — Tagged slots** | introduce `Ref` + tag constants (`WasmValue.hpp`); table slots become `Ref`; `call_indirect`/`call_ref` check `Func`; `table.get/set`, `ref.eq`, `ref.test/cast`, `ref.is_null` use the tag; exnref/GC/externref tables. | FR6, EX5, GC R4, CM8 | `try_table` stays 56/0; `table_fill` 36/0/9 and `array_new_data` 28/0/0 stay green; an `exnref` table test passes |
+| **R3 — Extern box** | Store-owned `ExternBox`; harness `(ref.extern N)` identity; host registration helper. | GC G3/D5, host interop | `ref_test` **69/2 → 71/0** (the two failures are `ref_test_extern`), and `(ref.extern 1)` result round-trips keep identity |
+
+R2 and R3 are independent after R1, but the tag values are fixed in R2, so R3
+lands second. R1 is the contained slice: one `VMContext` field type, one lowering
+site, and the import/export plumbing; the `LinearMemory`/`TableInstance` field
+offsets and `v128`/scalar layouts are untouched.
+
+**Rejected alternatives:** a 16-byte `{payload, tag}` reference (doubles the size
+of every call argument, table slot and global), and NaN-boxing (the value stack
+also carries `f64`, so payloads would collide). Neither is worth it for a
+single-threaded engine whose table indirection is already the hot path.
 
 ## Embedder Guide
 

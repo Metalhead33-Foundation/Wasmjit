@@ -75,15 +75,16 @@ Multi-value is a **Phase 5** proposal, integrated into WebAssembly **2.0**.
 
 **Not present:** nothing structural in the engine — the feature is implemented
 and exercised by internal calls in `call`, `if`, `fac`, `block` and `loop`, and
-`assert_return` now marshals exported multi-result functions too. The remaining
-limitations are the non-`assert_return` harness paths (MV1) and the embedder
-API (MV4).
+the harness marshals exported multi-result functions on every path: comparison
+(`assert_return`), bare actions, `assert_trap`, `assert_exception` and
+`assert_exhaustion` all pass a caller-owned result buffer. The only remaining
+limitation is the embedder API (MV4).
 
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| MV1 | **The spec harness now marshals multiple results for `assert_return`**: it passes the result tuple as the call's trailing parameter and compares each field. A bare `action`, `assert_trap` and `assert_exhaustion` still skip multi-result invokes. | `Test/WastScript.cpp` (`invoke`, `onAssertReturn`) | Low (remaining paths) |
+| ~~MV1~~ | ~~**The spec harness only marshals multiple results for `assert_return`.**~~ **Done:** `invoke` takes a caller-owned tuple on every path — `assert_return` compares it, and bare `action`, `assert_trap`, `assert_exception` and `assert_exhaustion` pass one so multi-result callees get the buffer their JIT signature requires. | `Test/WastScript.cpp` (`invoke`, `onAction`, `onAssert*`) | Closed |
 | MV2 | **No dedicated spec script is exercised.** The testsuite snapshot has no `multi-value.wast`; coverage comes indirectly from `block`, `loop`, `func`, `call`, `if`, `fac`, which are not all curated. | `extern/WasmTestsuite` | Medium |
 | MV3 | **No manual test for multi-result.** `Test/wasm_wat` now has `multi_value.wat` (MV-2). | `Test/main.cpp` | Resolved |
 | MV4 | **Multi-value exports to a host are not surfaced.** `exportedFunction`/`callCallable` assume the native signature the embedder chooses; nothing documents how to call a multi-result export from C++. | `WasmValue.hpp` (`callCallable`) | Low |
@@ -107,7 +108,7 @@ must move exactly the target's values; the result-tuple layout
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **MV-1 — Harness multi-result** | Marshal the result tuple in `invoke`/`onAssertReturn` and compare each field. | MV1 | `call` 73/0/18 and `if` 125/0/116 on the default run. ✅ Done for `assert_return` |
+| **MV-1 — Harness multi-result** | Marshal the result tuple in `invoke` and pass it on every call path. | MV1 | `call` 73/0/18 and `if` 125/0/116 on the default run; bare actions / `assert_trap` / `assert_exception` / `assert_exhaustion` no longer skip multi-result callees. ✅ Done |
 | **MV-2 — Manual tests** | Add WAT modules returning multiple values, with block parameters and a `br` carrying a list. | MV3 | Tests cover multi-result returns, block params, and `br_table` with lists. |
 | **MV-3 — Curate block/loop** | Add the passing `block`/`loop`/`func` scripts to `Test/wast_supported.txt`. | MV2 | The default run covers multi-value blocks. |
 | **MV-4 — Document the C++ ABI** | Document how `Callable`/`callCallable` handles a multi-result signature. | MV4 | `docs/ABI.md` has a multi-result example. |
@@ -125,7 +126,7 @@ must move exactly the target's values; the result-tuple layout
 | `block` | 52 | 0 | 171 | block params/results work; ref/vec assertions skipped |
 | `loop` | 78 | 0 | 43 | loop params/results work |
 | `multi_value.wat` | 16 assertions | 0 | 0 | direct, nested, mixed-width, if-with-params, `call_indirect` and the host-facing trailing-buffer ABI |
-| multi-result *exports* | executed | — | — | `assert_return` marshals them (MV1 closed for that path) |
+| multi-result *exports* | executed | — | — | every path marshals them: `assert_return` compares, the result-discarding commands pass a buffer (MV1 closed) |
 
 ## 9. References
 

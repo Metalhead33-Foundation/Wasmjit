@@ -19,6 +19,11 @@ struct LinearMemory {
 	void*     hostData;     // Opaque pointer for any external user data;
 	// Ownership/backing storage lives OUTSIDE this struct (see below) —
 	// LinearMemory itself is just the backend-visible view.
+	// Appended after the hot fields so every existing offset (including
+	// `hostData`) stays put: the index type of a memory64 declaration. Import
+	// matching compares it against the importing module's declared type
+	// (spec `match_memtype`; docs/proposals/MEMORY64.md M2).
+	bool      is64;
 };
 static_assert(offsetof(LinearMemory, memoryBase) == 0,
 			  "LinearMemory::memoryBase must remain first field for backend ABI compatibility");
@@ -30,7 +35,7 @@ class StoreOwnedMemory
 protected:
 	LinearMemory memory;
 public:
-	explicit StoreOwnedMemory(uint64_t initialPages, uint64_t maxPages, bool isShared);
+	explicit StoreOwnedMemory(uint64_t initialPages, uint64_t maxPages, bool isShared, bool is64 = false);
 	virtual ~StoreOwnedMemory() = default;
 	const LinearMemory* getMemory() const;
 	LinearMemory* getMemory();
@@ -43,7 +48,7 @@ class PrivateLinearMemory final : public StoreOwnedMemory {
 private:
 	std::vector<uint8_t> backing;
 public:
-	explicit PrivateLinearMemory(uint64_t initialPages, uint64_t maxPages);
+	explicit PrivateLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64 = false);
 	~PrivateLinearMemory() override = default;
 	bool growMemory(uint64_t deltaPages) override;
 };
@@ -58,7 +63,7 @@ private:
 	bool platformCommitMemory(size_t newBytes);
 	void platformDealloc();
 public:
-	explicit SharedLinearMemory(uint64_t initialPages, uint64_t maxPages);
+	explicit SharedLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64 = false);
 	~SharedLinearMemory() override;
 	bool growMemory(uint64_t deltaPages) override;
 };

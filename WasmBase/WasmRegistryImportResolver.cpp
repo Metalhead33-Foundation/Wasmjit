@@ -20,6 +20,12 @@ constexpr uint32_t LIMITS_FLAG_64BIT  = 0x04;
 // already have grown.
 bool memorySatisfiesImport(const LinearMemory& memory, const MemoryType& type)
 {
+	// The index type is part of the memory's type: a 64-bit import must be
+	// satisfied by a 64-bit memory (and vice versa), even though the limits
+	// match (spec `match_memtype`; docs/proposals/MEMORY64.md M2).
+	if (memory.is64 != (type.indexType == MemoryIndexType::I64))
+		return false;
+
 	const bool importShared = (type.limits.flags & LIMITS_FLAG_SHARED) != 0;
 	if (memory.isShared != importShared)
 		return false;

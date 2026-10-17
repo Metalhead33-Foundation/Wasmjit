@@ -684,9 +684,9 @@ effort.
 - `assert_trap` **is** executed, in-process, and its expected text is compared
   against the trap's *kind* (`WASM::trapKindName`): trapping for the wrong
   reason is a failure (`docs/SAFETY.md` §2.4). `assert_invalid`,
-  `assert_malformed`, `assert_unlinkable`, `module_definition`/
-  `module_instance` and text-format modules are still skipped, which removes
-  exactly the cases that would exercise GC validation (G9).
+  `assert_malformed`, `assert_unlinkable` and text-format modules are still
+  skipped, which removes exactly the cases that would exercise GC validation
+  (G9).
 
 ### 5.5 Reference-types-specific gaps
 
@@ -698,7 +698,7 @@ cause viewed through the reference-types feature.
 | ~~R1~~ | ~~**Table imports are not type-checked.**~~ **Done:** the exporter publishes its `TableType` (and the canonical `TypeId` of a concrete element type) in `ImportedTable`, and `RegistryImportResolver::resolveTable` matches it against the importing module's declared type — element type by subtyping (`TypeRegistry::matchesHeap`, with shorthands normalised and nullability checked) and limits/index-type/shared-ness by the spec's limit rule. A table registered directly by an embedder carries no type and stays unchecked, so native imports are unaffected. | `WasmImport.hpp` (`ImportedTable`), `WasmRegistryImportResolver.cpp` (`tableSatisfiesImport`), `WasmModuleInstance.cpp` (`registerExports`, `resolveImports`) | Closed |
 | ~~R2~~ | **Fixed.** `elem` → **108/0/46**, `table_init` → **725/0/67** (both previously aborted). The prime suspect was right: the segment evaluator, plus a null `call_indirect` slot left by an unresolved imported global. | `spec: elem`, `spec: table_init` |
 | ~~R3~~ | **Fixed.** A dropped segment is treated as *empty*: `bufferInitFromData`/`bufferInitFromElems` return for a zero-length access and trap only for a non-zero one, and the `array.new_data`/`array.new_elem` range check reads the same dropped flag. | `bufferInitFromElems`, `checkDataSegmentRange`/`checkElementSegmentRange` |
-| R4 | **`externref` has no host model.** An `externref` is just a `void*`; there is no way to create or inspect a host extern object, and `ref.eq` on externrefs is unvalidated pointer equality. | `Value::ref`, `refMatchesHeapType` |
+| R4 | **`externref` has no host model.** An `externref` is just a `void*`; there is no way to create or inspect a host extern object, and `ref.eq` on externrefs is unvalidated pointer equality. The representation decision is recorded in `docs/ABI.md` §Reference and Global Representation (R2/R3). | `Value::ref`, `refMatchesHeapType` |
 | ~~R5~~ | ~~**Reference arguments/results are never marshalled**~~ **Done (harness):** arguments use `referenceArgument`; results are compared as null, as a concrete identity through the same mapping, or as a bare placeholder (`(ref.func)` → registered callable, `(ref.array)`/… → non-null); `either` lists are checked alternative by alternative. `table_fill` 36/0/9, `array_new_data` 28/0/0, `relaxed_min_max` 25/0/0. | `Test/WastScript.cpp` | Closed |
 | ~~R6~~ | **Fixed (the same defect as G8).** `ref.func` is now resolved after compilation for globals, segment copies and table defaults alike. | `resolveGlobalRefFuncs`, `callableFromSegmentRef`, `resolveTableRefFuncs` |
 | ~~R7~~ | **Fixed.** Table-op bounds checks and the null-slot check route through `WASM::trap`, so `assert_trap` runs and in-process traps are recoverable. | `dispatchTable*`, `emitTrapIfNull` |

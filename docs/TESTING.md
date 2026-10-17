@@ -305,7 +305,8 @@ Correct results are deliberately **not required yet**; the run is meant to be in
 | `assert_trap` | executed | traps are recoverable (`WASM::trap` longjmps to a `TrapScope`; see `WasmBase/WasmTrap.hpp`), and the expected text is compared against the trap's **kind** (`trapKindName`), so a trap for the wrong reason fails |
 | `assert_exhaustion` | approximated | run in a nested child; an abnormal termination counts as the expected exhaustion trap |
 | `assert_malformed`, `assert_invalid`, `assert_unlinkable`, `assert_uninstantiable` | skipped by kind by default | `WASM_SPEC_VALIDATE=1` executes them and reports pass/fail (see below) |
-| `module_definition`, `module_instance` | skipped | module-linking proposal |
+| `module_definition` | executed | decoded but **not** instantiated (module-linking); the core suite uses it for limits that cannot be allocated, e.g. `(module definition (memory 65536))` |
+| `module_instance` | skipped | module-linking proposal |
 | `assert_exception` | executed | exception-handling proposal (EX-5) |
 | text-format modules (`.wat`, `module quote`) | skipped | only binary modules can be loaded |
 
@@ -326,17 +327,20 @@ Measured against the curated set:
 | --- | ---: | ---: | ---: | --- |
 | `assert_invalid` | 1153 | 4 | **1149** | needs a validating front end. The 4 rejections are `ref.1/2/6/7` — a type-section reference to a later rec group, a decoder rule rather than validation |
 | `assert_malformed` | 13 | 4 | **9** | decoder strictness. The other **656** malformed cases are text/`module quote` and cannot run without a text parser |
-| `assert_unlinkable` | 32 | 28 | **4** | the linker already rejects 87.5 %. The 4 accepted are `memory64-imports.66–69`: an imported memory's 64-bit index type is not matched (`MEMORY64` M2) |
+| `assert_unlinkable` | 32 | **32** | **0** | the linker now rejects all of them: 28 were already, and the 4 `memory64-imports.66–69` cases needed the index type to be published and matched (`MEMORY64` M2) |
 | `assert_uninstantiable` | 0 | — | — | no curated case |
-| **total** | **1198** | **36** | **1162** | 1149 of the failures — 96 % of the binary negative cases — are the missing validator |
+| **total** | **1198** | **40** | **1158** | 1149 of the failures — 96 % of the binary negative cases — are the missing validator |
 
 Even in strict mode 659 negative commands (3 `assert_invalid` + 656
 `assert_malformed`) are text-format and stay skipped: the loader is binary-only.
-The exercise paid for itself twice: it showed that the decoder and linker already
-cover a useful fraction, and it exposed a real engine bug — the exception classes
-in `WasmBase/WasmException.hpp` inherited `std::exception` **privately**, so an
-unresolved import escaped every `catch (const std::exception&)` (the harness's
-child died with `produced no report`). They now inherit publicly.
+The exercise paid for itself three times: it showed that the decoder and linker
+already cover a useful fraction; it exposed a real engine bug — the exception
+classes in `WasmBase/WasmException.hpp` inherited `std::exception` **privately**,
+so an unresolved import escaped every `catch (const std::exception&)` (the
+harness's child died with `produced no report`); and once that was fixed, the
+four residual `memory64-imports` link failures became visible — and were fixed by
+publishing the memory's index type (`LinearMemory::is64`) and matching it in
+`memorySatisfiesImport`. All 32 curated `assert_unlinkable` cases are now rejected.
 
 `assert_exhaustion` is the one command family that is *expected* to produce
 kernel `segfault` lines: its nested child is supposed to exhaust the host stack,
@@ -454,11 +458,11 @@ Per-script outcomes from the last sweep (2026-10-13, 256 scripts):
 Traps are **executed** now, so a *missing* trap is a failure rather than a silent
 skip — that is why some scripts that used to look clean now report real failures
 (`traps.wast`, `address.wast`, `memory_trap64.wast` were fixed on the way; see
-`docs/proposals/`). The harness marshals scalar, `v128` and reference values, and
-`assert_exception` runs; what it still cannot do is text-format modules and the
-module-linking/component commands (`module_definition`/`module_instance`).
-Validation is *measurable* (`WASM_SPEC_VALIDATE=1`, above) and `assert_invalid`
-is the one family that genuinely needs a validating front end.
+`docs/proposals/`). The harness marshals scalar, `v128` and reference values,
+runs `assert_exception`, and decodes `module_definition` declarations; what it
+still cannot do is text-format modules and `module_instance` / component
+commands. Validation is *measurable* (`WASM_SPEC_VALIDATE=1`, above) and
+`assert_invalid` is the one family that genuinely needs a validating front end.
 
 The harness surfaces these **real** mismatches, for example:
 

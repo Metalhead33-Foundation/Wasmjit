@@ -656,10 +656,9 @@ void ScriptRunner::installSpectest()
 		spectestMemory = store.memory(store.createLinearMemory(1, 2, false));
 	registry.registerMemory("spectest", "memory", spectestMemory);
 
-	// The 64-bit-index variants. Import matching does not compare the index
-	// type yet (docs/proposals/GC.md R1), so the name is what makes a
-	// `spectest.table64` import resolve; `table64.wast` needs it to
-	// instantiate at all.
+	// The 64-bit-index variants. The index type is part of the memory's type and
+	// is matched at link time now, so `spectest.memory64` must be a real
+	// memory64 (docs/proposals/MEMORY64.md M2).
 	static WASM::TableInstance* spectestTable64 = nullptr;
 	if (spectestTable64 == nullptr)
 		spectestTable64 = store.table(store.createTable(10, 20));
@@ -667,7 +666,7 @@ void ScriptRunner::installSpectest()
 
 	static WASM::LinearMemory* spectestMemory64 = nullptr;
 	if (spectestMemory64 == nullptr)
-		spectestMemory64 = store.memory(store.createLinearMemory(1, 2, false));
+		spectestMemory64 = store.memory(store.createLinearMemory(1, 2, false, true));
 	registry.registerMemory("spectest", "memory64", spectestMemory64);
 
 	// The scalar globals the reference interpreter's `spectest` exports. The
@@ -795,8 +794,22 @@ void ScriptRunner::runCommand(const ScriptCommand& command)
 		onAssertUninstantiable(command);
 		return;
 	}
-	if (command.type == "module_definition" || command.type == "module_instance") {
-		skip("module-linking proposal");
+	if (command.type == "module_definition") {
+		// Module-linking `(module definition …)`: decoded but *not* instantiated.
+		// The core suite uses it to declare limits that cannot be allocated
+		// (`(module definition (memory 65536))`, `(table i64 0xffff… )`).
+		if (command.moduleType != "binary") {
+			skip("text-format module definition '" + command.filename + "'");
+			return;
+		}
+		if (attemptModule(command, false) == ModuleAttempt::Accepted)
+			pass();
+		else
+			fail(command.line, "could not decode module definition ('" + command.filename + "')");
+		return;
+	}
+	if (command.type == "module_instance") {
+		skip("module-linking proposal: module_instance");
 		return;
 	}
 	if (command.type == "assert_exception") {
@@ -1036,10 +1049,6 @@ void ScriptRunner::onAssertTrap(const ScriptCommand& command)
 		fail(command.line, "arity mismatch for '" + action.field + "'");
 		return;
 	}
-	if (funcType->results.size() > 1) {
-		skip("multiple return values are not marshalled yet");
-		return;
-	}
 	for (const ScriptValue& arg : action.args) {
 		if (!isScalarValue(arg) && !isReferenceArg(arg)) {
 			skip("argument type '" + arg.type + "' is not supported");
@@ -1048,8 +1057,9 @@ void ScriptRunner::onAssertTrap(const ScriptCommand& command)
 	}
 
 	std::array<unsigned char, 16> returns {};
+	std::vector<unsigned char> tuple;
 	bool trapped = false;
-	if (!invoke(*instance, action, *funcType, *callable, returns, trapped)) {
+	if (!invoke(*instance, action, *funcType, *callable, returns, trapped, funcType->results.size() > 1 ? &tuple : nullptr)) {
 		skip("could not marshal the arguments of '" + action.field + "'");
 		return;
 	}
@@ -1107,10 +1117,6 @@ void ScriptRunner::onAssertException(const ScriptCommand& command)
 		fail(command.line, "arity mismatch for '" + action.field + "'");
 		return;
 	}
-	if (funcType->results.size() > 1) {
-		skip("multiple return values are not marshalled yet");
-		return;
-	}
 	for (const ScriptValue& arg : action.args) {
 		if (!isScalarValue(arg) && !isReferenceArg(arg)) {
 			skip("argument type '" + arg.type + "' is not supported");
@@ -1119,8 +1125,9 @@ void ScriptRunner::onAssertException(const ScriptCommand& command)
 	}
 
 	std::array<unsigned char, 16> returns {};
+	std::vector<unsigned char> tuple;
 	bool trapped = false;
-	if (!invoke(*instance, action, *funcType, *callable, returns, trapped)) {
+	if (!invoke(*instance, action, *funcType, *callable, returns, trapped, funcType->results.size() > 1 ? &tuple : nullptr)) {
 		skip("could not marshal the arguments of '" + action.field + "'");
 		return;
 	}
@@ -1300,8 +1307,8 @@ void ScriptRunner::onAction(const ScriptCommand& command)
 		return;
 	}
 
-	if (funcType->params.size() != action.args.size() || funcType->results.size() > 1) {
-		skip("action '" + action.field + "' cannot be marshalled yet");
+	if (funcType->params.size() != action.args.size()) {
+		fail(command.line, "arity mismatch for '" + action.field + "'");
 		return;
 	}
 
@@ -1313,8 +1320,11 @@ void ScriptRunner::onAction(const ScriptCommand& command)
 	}
 
 	std::array<unsigned char, 16> returns {};
+	// A bare action discards the results, but a multi-result callee still needs
+	// a caller-owned buffer in the JIT ABI (docs/ABI.md; MV1).
+	std::vector<unsigned char> tuple;
 	bool trapped = false;
-	if (!invoke(*instance, action, *funcType, *callable, returns, trapped)) {
+	if (!invoke(*instance, action, *funcType, *callable, returns, trapped, funcType->results.size() > 1 ? &tuple : nullptr)) {
 		skip("could not marshal the arguments of '" + action.field + "'");
 		return;
 	}
@@ -1366,10 +1376,6 @@ void ScriptRunner::onAssertExhaustion(const ScriptCommand& command)
 		fail(command.line, "arity mismatch for '" + action.field + "'");
 		return;
 	}
-	if (funcType->results.size() > 1) {
-		skip("multiple return values are not marshalled yet");
-		return;
-	}
 	for (const ScriptValue& arg : action.args) {
 		if (!isScalarValue(arg) && !isReferenceArg(arg)) {
 			skip("argument type '" + arg.type + "' is not supported");
@@ -1388,8 +1394,9 @@ void ScriptRunner::onAssertExhaustion(const ScriptCommand& command)
 		std::signal(SIGBUS, SIG_DFL);
 		std::signal(SIGFPE, SIG_DFL);
 		std::array<unsigned char, 16> returns {};
+		std::vector<unsigned char> tuple;
 		bool trapped = false;
-		invoke(*instance, action, *funcType, *callable, returns, trapped);
+		invoke(*instance, action, *funcType, *callable, returns, trapped, funcType->results.size() > 1 ? &tuple : nullptr);
 		_exit(0); // returned normally: no exhaustion
 	}
 
@@ -1416,8 +1423,8 @@ bool ScriptRunner::invoke(WASM::ModuleInstance& instance, const ScriptAction& ac
 	::wasm_exn_clear_pending();
 
 	// A multi-result function's JIT signature takes a result buffer as a
-	// trailing parameter (docs/ABI.md). Only the multi-result-aware caller
-	// (onAssertReturn) passes `tuple`; every other caller still skips.
+	// trailing parameter (docs/ABI.md). Every result-discarding caller passes
+	// an empty buffer too; callers that compare results pass their own.
 	if (funcType.results.size() > 1 && tuple == nullptr)
 		return false;
 
