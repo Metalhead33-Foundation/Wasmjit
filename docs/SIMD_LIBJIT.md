@@ -389,6 +389,8 @@ and the results are baked into the code comments:
 | `jit_insn_address_of` on a struct **local** | works — a helper's writes are visible to a later read and to `jit_insn_return` |
 | `jit_insn_load` of a struct local/param, then `address_of` | works (i.e. `local.get` of a `v128`) |
 | `jit_insn_store(local, param)` | works (i.e. `local.set` of a `v128`) |
+| `(param v128 v128 v128)` and `(param v128 ×4)` | round-trip exactly **through a direct call** — the stack-passed third and fourth aggregates are handled correctly by the generated code (SIMD-L7's `simd_abi_args.wat`) |
+| `jit_apply` with ≥ 3 `v128` arguments | **does not work** — the third aggregate, which the ABI stack-passes, arrives damaged. This is libjit's *dynamic-call* path disagreeing with the ABI its own generated code follows; the callee side is verified correct by the row above, so the limitation is in the harness's `jit_apply` use, not in our lowering. Sixteen spec scripts need it. |
 | **`jit_insn_store_relative` into a `jit_value_create`d aggregate** | **does not work** — the stores do not land. `v128.const` and the two v128 zero-value paths used it and were corrected in SIMD-L1. |
 
 The C++ mirror of the ABI is `struct { uint32_t a, b, c, d; }`: a four-`i32`
@@ -550,7 +552,7 @@ WASM_SPEC_SCRIPTS=all ./WasmJit '[spec]'  # T3 sweep, for re-curation
 | T1 | `simd helpers: the float corners the hardware gets wrong` | pass | golden: hazard Y1 (±0 ordering, NaN propagation) and `nearest`'s ties-to-even — **from an independent engine**, not from arithmetic of mine |
 | T2 | `simd: float arithmetic and comparisons run through the JIT` | pass | **SIMD-L4**, driven by `simd_arith_f.wat` (32 exports, all as bit patterns: NaN comparisons, the zero rules, NaN propagation vs `pmin`/`pmax`, ties-to-even, and the `f64x2` families) |
 | T2 | `simd: the float/int conversions run through the JIT` | pass | **SIMD-L4**, driven by `simd_convert.wat` (19 exports at the ends of the ranges; two of them `FORWARD`, which is why their conformance rests on this case rather than on a differential) |
-| T3 | the 59 `simd_*.wast` scripts | signal 6, 0 passing commands | **S1 is closed** (no handler aborts); what remains is S7, the harness's inability to marshal `v128` |
+| T3 | the 59 `simd_*.wast` scripts | **35 fully pass** (curated); none abort | **S7 is closed for functions with ≤ 2 `v128` operands.** What still fails splits cleanly in two, and neither is marshalling: five scripts need `v128` globals (SIMD-L5, not built), and sixteen pass three `v128` operands — the case libjit's `jit_apply` cannot reproduce (§6.6), while the generated code handles it correctly |
 | T4 | — | — | SIMD-L8 |
 
 Measured after SIMD-L4: `./WasmJit 'simd*'` reports **19 cases, 5884 assertions,
@@ -583,7 +585,7 @@ note (§6.5).
 | ✅ **SIMD-L4 — Float and conversion ops** | **Done — all 52 ops.** The 12 float comparisons (with the unordered `ne` the library lacks), the 14 unary float ops (`ceil`/`floor`/`trunc`/`nearest` — ties to *even* — plus `abs`/`neg`/`sqrt`), the 16 binary ones (`add`/`sub`/`mul`/`div` and the four min/max flavours with wasm's NaN and `±0` rules — hazard Y1), and the 10 conversions (4 `trunc_sat`, 2 `convert`, 2 `convert_low`, `demote`/`promote`). Eight of the conversions are vectorised; two are marked `FORWARD` in the op list, because the library has no truncating float64→int32 conversion at all (§11 R10). | S1 | ✅ `simd_arith_f.wat` and `simd_convert.wat` green (51 exports between them, all V8-checked); T1 green for every float op; **236 of 236 handlers execute**. |
 | **SIMD-L5 — Globals and constant expressions** | `v128.const` in `evalConstantExpr`; `v128` global get/set; `v128` in the globals layout. | S3 | A module with a `v128` global initialised by `v128.const` runs and round-trips. |
 | **SIMD-L6 — Relaxed SIMD** | Enumerate the 20 relaxed sub-opcodes; decode them; implement the SD5 scalar results. | S2 | A module using each relaxed family produces a member of the allowed set; T1 checks membership, not equality. |
-| **SIMD-L7 — Harness marshalling** | Marshal `v128` arguments/results in `WastScript.cpp` (16-byte values, lane formatting); then curate `simd_*.wast` into `wast_supported.txt`. | S7, S8 | `./WasmJit 'spec: simd_*'` reports real pass/fail counts, and every curated script is listed in the T3 survey. |
+| ◑ **SIMD-L7 — Harness marshalling** | ◑ **Done for ≤ 2 `v128` operands.** `WastScript.cpp` decodes `v128` arguments lane by lane (integer lanes as signed decimals, float lanes as bit patterns) and compares results lane-wise with the per-lane `nan:canonical`/`nan:arithmetic` policies; 35 of the 59 `simd_*.wast` scripts are curated as a result. The other 24 are blocked on two *other* pieces rather than on marshalling: `v128` globals (SIMD-L5) and the ≥ 3-operand `jit_apply` limit (§6.6). | S7 (partly), S8 | ◑ `./WasmJit 'spec: simd_*'` reports real counts and the curated scripts run in the default suite; the rest are listed as uncurated, with the cause, instead of failing silently. |
 | **SIMD-L8 — Benchmark and the D4 decision** | M1–M5 per §8.2; apply the §8.3 gate; record the numbers in this note's §8 and in `TESTING.md`. | — | The note states the measured `ns/v128-op` and whether D4 is built, deferred or rejected. |
 
 **Why the D5 peepholes were deferred rather than built in L2.** Fusing

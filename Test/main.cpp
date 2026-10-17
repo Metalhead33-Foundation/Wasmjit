@@ -2530,6 +2530,79 @@ TEST_CASE("simd: the float/int conversions run through the JIT")
 	REQUIRE(WASM::callCallable<int32_t>(i32Export("trunc_sat_f64_u_lane1")) == -1);       // UINT32_MAX
 }
 
+TEST_CASE("simd: three and four v128 parameters cross the boundary")
+{
+	// S9 was closed for *one* `v128` parameter: `(param v128)(result v128)`
+	// round-trips. The ABI has more cases than that, and the spec scripts exercise
+	// them — several pass three `v128` operands to one function, where the third no
+	// longer fits in a vector register and is stack-passed. This pins the two,
+	// three and four parameter cases so a regression shows up here rather than as
+	// an unexplained spec failure.
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("simd_abi_args", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	const auto fn = [&instance](const char* name) {
+		auto callable = instance.exportedFunction(name);
+		REQUIRE(callable.has_value());
+		return *callable;
+	};
+
+	// Distinct lanes in every operand, so a swapped or damaged slot cannot pass.
+	const V128 a{0x00000001u, 0x00000002u, 0x00000003u, 0x00000004u};
+	const V128 b{0x00000011u, 0x00000012u, 0x00000013u, 0x00000014u};
+	const V128 c{0x00000021u, 0x00000022u, 0x00000023u, 0x00000024u};
+	const V128 d{0x00000031u, 0x00000032u, 0x00000033u, 0x00000034u};
+
+	// The register-passed ones.
+	const V128 second = WASM::callCallable<V128>(fn("second"), a, b, c);
+	REQUIRE(second.a == b.a);
+	REQUIRE(second.d == b.d);
+
+	// The first stack-passed one: this is the case that was never exercised.
+	const V128 third = WASM::callCallable<V128>(fn("third"), a, b, c);
+	REQUIRE(third.a == c.a);
+	REQUIRE(third.d == c.d);
+
+	// All three used, so the result depends on the stack slot too.
+	const V128 sum = WASM::callCallable<V128>(fn("sum3"), a, b, c);
+	REQUIRE(sum.a == (a.a + b.a + c.a));
+	REQUIRE(sum.d == (a.d + b.d + c.d));
+
+	// A cross-lane op over the first and third operands: a broken slot yields a
+	// wrong permutation, not just a wrong number. The expectation is *computed*
+	// from the operands' bytes rather than written out by hand — hand-arithmetic
+	// across 16 lanes is where this project keeps getting its expectations wrong
+	// (§11 R6/R8).
+	const auto bytesOf = [](const V128& v) {
+		std::array<uint8_t, 16> bytes{};
+		std::memcpy(bytes.data(), &v, sizeof(bytes));
+		return bytes;
+	};
+	const auto swizzleOf = [&bytesOf](const V128& src, const V128& idx) {
+		const std::array<uint8_t, 16> s = bytesOf(src);
+		const std::array<uint8_t, 16> i = bytesOf(idx);
+		V128 out{};
+		uint8_t* o = reinterpret_cast<uint8_t*>(&out);
+		for (std::size_t k = 0; k < 16; ++k)
+			o[k] = i[k] < 16 ? s[i[k]] : 0;
+		return out;
+	};
+	const V128 expectSwizzle = swizzleOf(a, c);
+	const V128 swizzled = WASM::callCallable<V128>(fn("swizzle_third"), a, b, c);
+	REQUIRE(swizzled.a == expectSwizzle.a);
+	REQUIRE(swizzled.b == expectSwizzle.b);
+	REQUIRE(swizzled.c == expectSwizzle.c);
+	REQUIRE(swizzled.d == expectSwizzle.d);
+
+	// Four parameters: two in registers, two on the stack.
+	const V128 fourth = WASM::callCallable<V128>(fn("fourth"), a, b, c, d);
+	REQUIRE(fourth.a == d.a);
+	REQUIRE(fourth.d == d.d);
+}
+
 TEST_CASE("simd: memory loads and stores run through the JIT")
 {
 	// T2: the memory ops through decoding, the real bounds-checked address path

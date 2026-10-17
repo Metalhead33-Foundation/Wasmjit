@@ -134,6 +134,7 @@ bool typeCodeFromName(std::string_view name, WASM::ValueTypeCode& out)
 	if (name == "i64") { out = WASM::ValueTypeCode::I64; return true; }
 	if (name == "f32") { out = WASM::ValueTypeCode::F32; return true; }
 	if (name == "f64") { out = WASM::ValueTypeCode::F64; return true; }
+	if (name == "v128") { out = WASM::ValueTypeCode::V128; return true; }
 	return false;
 }
 
@@ -237,6 +238,93 @@ bool isScalarValue(const ScriptValue& value)
 	return typeCodeFromName(value.type, code);
 }
 
+// ── v128 marshalling (proposals/SIMD.md S7) ────────────────────────────────
+//
+// A `v128` crosses the harness boundary as the same 16 bytes the engine uses, so
+// the script's per-lane strings are decoded lane by lane in little-endian order.
+// Integer lanes are signed decimals; float lanes carry the raw IEEE-754 bit
+// pattern, exactly like the scalar encodings above.
+
+// One float lane against its script text: a bit pattern, or one of the two NaN
+// policies the spec allows (`got` is already widened to 64 bits).
+bool floatLaneMatches(const std::string& want, uint64_t got,
+		uint64_t absMask, uint64_t canonical, uint64_t arithmeticMask)
+{
+	if (want == "nan:canonical")
+		return (got & absMask) == canonical;
+	if (want == "nan:arithmetic")
+		return (got & arithmeticMask) == arithmeticMask;
+	return got == std::strtoull(want.c_str(), nullptr, 10);
+}
+
+// The lane type names the *lane*, not the shape: `wasm-tools` emits "i8" with 16
+// lanes, "i16" with 8, "i32"/"f32" with 4 and "i64"/"f64" with 2. The width comes
+// from the name and the count has to agree with it (lanes * width == 16).
+bool laneWidth(std::string_view laneType, std::size_t& width, bool& isFloat)
+{
+	if (laneType == "i8") { width = 1; isFloat = false; return true; }
+	if (laneType == "i16") { width = 2; isFloat = false; return true; }
+	if (laneType == "i32") { width = 4; isFloat = false; return true; }
+	if (laneType == "i64") { width = 8; isFloat = false; return true; }
+	if (laneType == "f32") { width = 4; isFloat = true; return true; }
+	if (laneType == "f64") { width = 8; isFloat = true; return true; }
+	return false;
+}
+
+bool decodeV128(std::string_view laneType, const std::vector<std::string>& lanes, unsigned char* out)
+{
+	std::size_t width = 0;
+	bool isFloat = false;
+	if (!laneWidth(laneType, width, isFloat) || lanes.size() * width != 16)
+		return false;
+
+	for (std::size_t i = 0; i < lanes.size(); ++i) {
+		// Integer lanes are signed decimals; float lanes are the raw bit pattern.
+		// Either way only the low `width` bytes are kept, which is the lane's
+		// little-endian encoding.
+		const uint64_t bits = isFloat
+				? std::strtoull(lanes[i].c_str(), nullptr, 10)
+				: static_cast<uint64_t>(std::strtoll(lanes[i].c_str(), nullptr, 10));
+		std::memcpy(out + i * width, &bits, width);
+	}
+	return true;
+}
+
+// Lane-wise comparison. The float NaN policies apply per lane, because a vector
+// operation's NaN result is exactly as unspecified as a scalar one's — which is
+// why `f32x4.min` can pass an `assert_return` with `nan:canonical` in a lane.
+bool compareV128(const ScriptValue& expected, const unsigned char* data)
+{
+	std::size_t width = 0;
+	bool isFloat = false;
+	if (!laneWidth(expected.laneType, width, isFloat)
+			|| expected.lanes.size() * width != 16)
+		return false;
+
+	const uint64_t mask = width == 8 ? ~uint64_t{0} : ((uint64_t{1} << (width * 8)) - 1);
+	for (std::size_t i = 0; i < expected.lanes.size(); ++i) {
+		uint64_t got = 0;
+		std::memcpy(&got, data + i * width, width);
+		const std::string& want = expected.lanes[i];
+
+		if (isFloat) {
+			const bool ok = width == 4
+					? floatLaneMatches(want, got, 0x7FFFFFFFull, 0x7FC00000ull, 0x7FC00000ull)
+					: floatLaneMatches(want, got, 0x7FFFFFFFFFFFFFFFull,
+							0x7FF8000000000000ull, 0x7FF8000000000000ull);
+			if (!ok)
+				return false;
+			continue;
+		}
+
+		// Signed decimal, masked to the lane's width so `-1` is `0xFF` in an i8 lane.
+		const uint64_t value = static_cast<uint64_t>(std::strtoll(want.c_str(), nullptr, 10));
+		if ((got & mask) != (value & mask))
+			return false;
+	}
+	return true;
+}
+
 // Formats a returned scalar for failure messages. Without this a mismatch only
 // reports the *type* of the unexpected value, which makes diagnosing a spec
 // failure needlessly hard.
@@ -270,6 +358,19 @@ std::string formatResultValue(WASM::ValueTypeCode code, const unsigned char* dat
 		std::memcpy(&bits, data, sizeof(bits));
 		std::memcpy(&v, data, sizeof(v));
 		out << v << " (0x" << std::hex << bits << ")";
+		break;
+	}
+	case WASM::ValueTypeCode::V128: {
+		// No lane type is available here (the declared result type is just
+		// `v128`), so the dump is the 16 bytes as hex, most significant first —
+		// enough to see which lane differs.
+		out << "0x" << std::hex;
+		for (int i = 15; i >= 0; --i) {
+			const unsigned byte = data[i];
+			if (byte < 16)
+				out << '0';
+			out << byte;
+		}
 		break;
 	}
 	default:
@@ -307,8 +408,9 @@ public:
 	ScriptReport run(const Script& script);
 
 private:
-	// Backing storage for one dynamically-marshalled argument. 16 bytes covers
-	// every scalar wasm value; v128 is skipped before we get this far.
+	// Backing storage for one dynamically-marshalled argument. 16 bytes is
+	// exactly one `v128`, and covers every scalar too; `alignas(16)` matches the
+	// ABI's requirement for a 16-byte aggregate (SIMD-0).
 	struct ArgSlot {
 		alignas(16) unsigned char raw[16] = {};
 	};
@@ -938,6 +1040,12 @@ bool ScriptRunner::invoke(WASM::ModuleInstance& instance, const ScriptAction& ac
 			std::memcpy(slots[i].raw, &bits, sizeof(bits));
 			break;
 		}
+		case WASM::ValueTypeCode::V128:
+			// The lanes are decoded into the slot the JIT's ABI expects: the same
+			// 16 bytes the engine stores a `v128` in (proposals/SIMD.md S7).
+			if (!decodeV128(arg.laneType, arg.lanes, slots[i].raw))
+				return false;
+			break;
 		default:
 			// Reference arguments (GC.md R5). Without this a reference-taking
 			// action is skipped, which silently leaves fixtures like
@@ -1014,6 +1122,8 @@ bool ScriptRunner::compareResult(const ScriptValue& expected, WASM::ValueTypeCod
 		const uint64_t want = std::strtoull(expected.value.c_str(), nullptr, 10);
 		return got == want;
 	}
+	case WASM::ValueTypeCode::V128:
+		return compareV128(expected, data);
 	default:
 		return false;
 	}

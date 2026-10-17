@@ -15,6 +15,9 @@
 #   2. keep every script whose line reads  passed=<n> failed=0  with n > 0
 #      and which was neither killed by a signal nor timed out.
 
+# ref_null is excluded: one of its modules declares `exnref`/`nullexnref`, which
+# this engine does not model, so the module is now rejected at load
+# (docs/NULL_JIT_VALUE_DIAGNOSIS.md).
 address
 address64
 align
@@ -51,12 +54,44 @@ memory_trap64
 names
 ref
 ref_eq
-# ref_null is excluded: one of its modules declares `exnref`/`nullexnref`, which
-# this engine does not model, so the module is now rejected at load
-# (docs/NULL_JIT_VALUE_DIAGNOSIS.md).
 return_call
 return_call_indirect
 return_call_ref
+simd_address
+simd_align
+simd_bit_shift
+simd_conversions
+simd_f32x4_cmp
+simd_f32x4_pmin_pmax
+simd_f32x4_rounding
+simd_f64x2_cmp
+simd_f64x2_pmin_pmax
+simd_f64x2_rounding
+simd_i16x8_cmp
+simd_i16x8_extadd_pairwise_i8x16
+simd_i16x8_extmul_i8x16
+simd_i16x8_q15mulr_sat_s
+simd_i32x4_cmp
+simd_i32x4_dot_i16x8
+simd_i32x4_extadd_pairwise_i16x8
+simd_i32x4_extmul_i16x8
+simd_i32x4_trunc_sat_f32x4
+simd_i32x4_trunc_sat_f64x2
+simd_i64x2_arith2
+simd_i64x2_cmp
+simd_i64x2_extmul_i32x4
+simd_i8x16_cmp
+simd_int_to_int_extend
+simd_load
+simd_load16_lane
+simd_load32_lane
+simd_load64_lane
+simd_load8_lane
+simd_load_extend
+simd_load_splat
+simd_load_zero
+simd_select
+simd_store
 skip-stack-guard-page
 stack
 store

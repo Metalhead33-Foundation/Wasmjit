@@ -200,8 +200,8 @@ None of them traps or has side effects; only the produced bits vary.
 | ~~S4~~ | **Alignment disagreement.** The JIT lowers `v128` to a 4-byte-aligned `{i32,i32,i32,i32}` struct, and the GC struct layout uses `storageAlign = 4`, while `WASM::Value` is `alignas(16)`. A `v128` struct field or operand-stack value can therefore be under-aligned relative to 16. | `LibJitTypeTranslation.cpp`, `WasmModuleInstance.cpp`, `WasmValue.hpp` | **Done (SIMD-L1)** — `jit_type_set_size_and_alignment(v128, 16, 16)` plus `gcStorageAlign` → 16 (`../SIMD_LIBJIT.md` §6.1/§6.6); the H1 layout test tracks both. |
 | ~~S5~~ | **`zeroConstantForType` is wrong for `v128`.** It returns an integer 0 for the struct type, which cannot be a valid 16-byte zero. | `LibjitOpcodeDispatcher.cpp:467` comment | **Done (SIMD-L1)** — both 16-byte zero-value paths (`zeroConstantForType`, `zeroValueForType`) now zero through the aggregate's address via `wasm_v128_zero`; `local_zero_*` in `simd_abi.wat` covers it. |
 | S6 | **No validation.** Lane indices, shuffle indices, and the "align ≤ natural" rule are never checked; an out-of-range lane immediate is used as-is. | no validating front-end (`docs/TESTING.md`) | Medium |
-| S7 | **The harness cannot verify SIMD.** `isScalarValue` skips `v128` args/results, so even a working implementation would not turn the `simd_*.wast` scripts green without harness work. | `Test/WastScript.cpp`; `docs/TESTING.md` | High (for progress measurement) |
-| S8 | **No test coverage in the curated set** and no manual SIMD test. | `Test/wast_supported.txt` | High (for regression safety) |
+| ◑ S7 | **The harness could not verify SIMD — now it can, within a bound.** `WastScript.cpp` decodes `v128` arguments lane by lane and compares results lane-wise with the per-lane `nan:canonical`/`nan:arithmetic` policies, so `simd_*.wast` is gradable and 35 of the 59 scripts pass in full. Two limits remain, neither of them marshalling: a third `v128` operand is stack-passed and libjit's `jit_apply` damages it (`../SIMD_LIBJIT.md` §6.6 — the generated code is verified correct), and `v128` globals need SIMD-4. | `Test/WastScript.cpp`; `docs/TESTING.md` | Medium |
+| ✅ S8 | **No test coverage in the curated set** — resolved: 35 `simd_*.wast` scripts are curated, on top of the T1/T2 layers (20 cases, ~5.9k assertions). | `Test/wast_supported.txt` | — |
 | ~~S9~~ | **`v128` calling convention is unverified.** Multi-value/struct ABI for `v128` parameters and returns (and v128 in globals/tables) has never been exercised. | no test passes a `v128` | **Done (SIMD-L1)** for parameters/returns/locals — `simd_abi.wat` + the round-trip test measure it (`../SIMD_LIBJIT.md` §6.6). `v128` in globals/tables stays open until SIMD-4. |
 
 ## 6. Where we can and should play fast and loose
@@ -278,7 +278,7 @@ documents' milestone names.
 | ✅ **SIMD-3 — Float ops** | ✅ **Done (SIMD-L4).** All 52 ops: comparisons (incl. the unordered `ne`), `add`/`sub`/`mul`/`div`, `abs`/`neg`/`sqrt`, `ceil`/`floor`/`trunc`/`nearest` (ties to even), `min`/`max`/`pmin`/`pmax` with wasm's NaN and `±0` rules, and the 10 conversions — `trunc_sat`, `convert`, `convert_low`, `demote`/`promote`. | S1 | ✅ `simd_arith_f.wat` and `simd_convert.wat` green (51 exports, all read off V8); T1 green for every float op. |
 | **SIMD-4 — Globals and constants** | `v128.const` in `evalConstantExpr`; `global.get`/`set` of `v128`. | S3 | A module with a `v128` global initialised by `v128.const` runs. |
 | **SIMD-5 — Relaxed SIMD** | Enumerate the relaxed sub-opcodes; decode them; implement the SD5 scalar results. | S2 | A module using each relaxed family produces a member of the allowed set. |
-| **SIMD-6 — Harness** | Marshal `v128` arguments/results (16-byte values, lane formatting) so `simd_*.wast` can be graded; add passing scripts to `wast_supported.txt`. | S7, S8 | `./WasmJit 'spec: simd_*'` reports real pass/fail counts. |
+| ◑ **SIMD-6 — Harness** | ◑ **Done for ≤ 2 `v128` operands.** Marshal `v128` arguments/results (16-byte values, lane-wise decoding and comparison, per-lane NaN policies) so `simd_*.wast` can be graded; 35 passing scripts added to `wast_supported.txt`. The ≥ 3-operand scripts stay uncurated until libjit's `jit_apply` is worked around or replaced. | S7 (partly), S8 | ◑ `./WasmJit 'spec: simd_*'` reports real pass/fail counts, and the curated scripts run in the default suite. |
 | **SIMD-7 — Hardware fast paths** | Write the helper bodies against Highway 1.4.0 (its `HWY_DYNAMIC_DISPATCH` replaces `__builtin_cpu_supports`); the scalar helper stays the fallback and the test oracle. | — | The microbenchmark in [`../SIMD_LIBJIT.md`](../SIMD_LIBJIT.md) §8 shows the expected speedup. |
 | **SIMD-8 — Native lowering per backend** | When a backend with vector registers lands (AsmJit, SLJIT), lower `v128` in *that backend*: values in its vector registers, per-op instructions, including several `v128` per instruction where the allocator allows. It may do so instead of, or in addition to, calling the helper entry points — the helper layer stays as the portable fallback and the oracle. | — (blocked on that backend existing; see [`../SIMD_LIBJIT.md`](../SIMD_LIBJIT.md) §3) | For every op the native path claims, the T1 differential against the helper layer passes, and SIMD-L8's benchmark records the gain over the helper call. |
 
@@ -288,20 +288,24 @@ re-derive them; run `./WasmJit '~[spec]'` after each step.
 
 ## 8. Indicative test survey
 
-Survey taken with `build/Desktop-Debug/Test/WasmJit` (2026-10-04).
+Survey taken with `build/Desktop-Debug/Test/WasmJit` (2026-10-17, after SIMD-6's
+marshalling work).
 
 | Script | Result | Reading |
 |---|---|---|
-| `simd_load` | signal 6, 0 passing commands | S1 |
-| `simd_const` | signal 6, 0 passing commands | S1, S3 |
-| `simd_bitwise` | signal 6, 0 passing commands | S1 |
-| `simd_lane` | signal 6, 0 passing commands | S1 |
-| `simd_splat` | signal 6, 0 passing commands | S1 |
+| `simd_f64x2_pmin_pmax` | 3873 passed, 0 failed | the largest passing script |
+| `simd_f32x4_cmp` | 2583 passed, 0 failed | comparisons, both signednesses' worth of NaN rules |
+| `simd_i8x16_cmp` | 415 passed, 0 failed | integer comparisons |
+| `simd_load` | 31 passed, 0 failed | curated |
+| `simd_store8_lane` | 0 passed, 49 failed | needs `v128` globals (SIMD-4) |
+| `simd_i8x16_arith2` | 163 passed, 23 failed | the failing assertions pass 3 `v128` operands (`jit_apply` limit) |
 
-All 59 `simd_*.wast` scripts behave the same way: they abort while the first
-module is being compiled. None are in `Test/wast_supported.txt`, and none can
-be graded until SIMD-6 because the harness skips `v128` values. Reproduce one
-row with:
+**35 of the 59 scripts now pass in full and are curated**; none abort. The 24
+that do not split into two causes, both recorded rather than assumed: five need
+`v128` globals (SIMD-4 / SIMD-L5) and sixteen pass three `v128` operands, where
+libjit's `jit_apply` does not reproduce the aggregate ABI its own generated code
+follows (`../SIMD_LIBJIT.md` §6.6 — the generated code itself is verified correct
+by `simd_abi_args.wat`). Reproduce one row with:
 
 ```bash
 WASM_SPEC_TIMEOUT=10 ./WasmJit 'spec: simd_load' -r compact

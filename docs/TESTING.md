@@ -525,13 +525,22 @@ node -e "WebAssembly.instantiate(require('fs').readFileSync('/tmp/<name>.wasm'))
 
 ### T3 — the spec scripts
 
-All 59 `simd_*.wast` scripts currently abort during module compilation, and even
-a working engine would report them as mostly *skipped*, because
-`Test/WastScript.cpp` skips `v128` arguments/results. Lifting that skip is
-milestone `SIMD-L7` in [`docs/SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §10. Until it
-lands, do not add SIMD scripts to `wast_supported.txt`: a script that reports
-`passed=N skipped=M` with `M > 0` is not evidence of conformance. Reproduce a
-row with:
+`Test/WastScript.cpp` now marshals `v128`: arguments are decoded lane by lane
+(integer lanes as signed decimals, float lanes as raw bit patterns) and results
+are compared lane-wise, with the `nan:canonical` / `nan:arithmetic` policies
+applied *per lane*. **35 of the 59 `simd_*.wast` scripts pass in full** and are
+curated in `wast_supported.txt`; none abort any more.
+
+The 24 that do not pass split into two causes, and neither is marshalling:
+
+| Cause | Scripts | What it would take |
+|---|---|---|
+| `v128` globals | 8 (`simd_const`, `simd_splat`, `simd_lane`, `simd_linking`, and the four `simd_store*_lane`) | SIMD-4 / `SIMD-L5` (`v128` globals and `v128.const` in `evalConstantExpr`) |
+| three `v128` operands | the rest — every remaining failing assertion is one of these | a workaround for libjit's `jit_apply`, which damages the stack-passed third aggregate — the *generated code* is correct, as `simd_abi_args.wat` verifies |
+
+Do not curate a script that reports `failed > 0`, or `skipped > 0` for reasons
+that are the *engine's*: a script only counts as evidence when its skips are
+features the runtime does not claim. Reproduce a row with:
 
 ```bash
 WASM_SPEC_TIMEOUT=10 ./WasmJit 'spec: simd_load' -r compact
