@@ -25,6 +25,7 @@
 #include "LibJit/LibjitModuleCompiler.hpp"
 #include "WasmBase/WasmModule.hpp"
 #include "WasmBase/WasmModuleInstance.hpp"
+#include "WasmBase/WasmExn.hpp"
 #include "WasmBase/WasmRegistryImportResolver.hpp"
 #include "WasmBase/WasmStore.hpp"
 #include "WasmBase/WasmTrap.hpp"
@@ -545,6 +546,7 @@ private:
 	void onRegister(const ScriptCommand& command);
 	void onAssertReturn(const ScriptCommand& command);
 	void onAssertTrap(const ScriptCommand& command);
+	void onAssertException(const ScriptCommand& command);
 	void onAction(const ScriptCommand& command);
 	void onAssertExhaustion(const ScriptCommand& command);
 
@@ -737,7 +739,7 @@ void ScriptRunner::runCommand(const ScriptCommand& command)
 		return;
 	}
 	if (command.type == "assert_exception") {
-		skip("exception-handling proposal");
+		onAssertException(command);
 		return;
 	}
 
@@ -874,6 +876,10 @@ void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 					+ std::string(lastTrapMessage != nullptr ? lastTrapMessage : "trap"));
 			return;
 		}
+		if (::wasm_exn_take_pending() != nullptr) {
+			fail(command.line, "uncaught exception from '" + action.field + "'");
+			return;
+		}
 
 		// The callee wrote its results into the caller-provided tuple, each at
 		// the offset of the corresponding result type (docs/ABI.md).
@@ -912,6 +918,10 @@ void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 	if (trapped) {
 		fail(command.line, "unexpected trap from '" + action.field + "': "
 				+ std::string(lastTrapMessage != nullptr ? lastTrapMessage : "trap"));
+		return;
+	}
+	if (::wasm_exn_take_pending() != nullptr) {
+		fail(command.line, "uncaught exception from '" + action.field + "'");
 		return;
 	}
 
@@ -997,7 +1007,76 @@ void ScriptRunner::onAssertTrap(const ScriptCommand& command)
 			"' (engine message: '" + (lastTrapMessage != nullptr ? lastTrapMessage : "?") + "')");
 		return;
 	}
+	if (::wasm_exn_take_pending() != nullptr) {
+		fail(command.line, "expected a trap from '" + action.field + "' but it threw an exception");
+		return;
+	}
 	fail(command.line, "expected a trap from '" + action.field + "' but it returned normally");
+}
+
+void ScriptRunner::onAssertException(const ScriptCommand& command)
+{
+	// A wasm exception is a *caught or pending* non-local exit, not a trap:
+	// `invoke` returns normally and leaves the exception in the pending slot
+	// (docs/proposals/EXCEPTIONS.md EXD1). A trap here is a failure (a trap is
+	// not catchable), as is a normal return.
+	const ScriptAction& action = command.action;
+
+	if (action.type != "invoke") {
+		skip("assert_exception with a non-invoke action ('" + action.type + "')");
+		return;
+	}
+
+	WASM::ModuleInstance* instance = instanceFor(action.module, command.line);
+	if (instance == nullptr)
+		return;
+
+	const auto callable = instance->exportedFunction(action.field);
+	if (!callable.has_value()) {
+		fail(command.line, "no exported function named '" + action.field + "'");
+		return;
+	}
+
+	const WASM::FuncType* funcType = funcTypeFor(*instance, *callable);
+	if (funcType == nullptr) {
+		skip("export '" + action.field + "' does not have a plain function type");
+		return;
+	}
+	if (funcType->params.size() != action.args.size()) {
+		fail(command.line, "arity mismatch for '" + action.field + "'");
+		return;
+	}
+	if (funcType->results.size() > 1) {
+		skip("multiple return values are not marshalled yet");
+		return;
+	}
+	for (const ScriptValue& arg : action.args) {
+		if (!isScalarValue(arg) && !isReferenceArg(arg)) {
+			skip("argument type '" + arg.type + "' is not supported");
+			return;
+		}
+	}
+
+	std::array<unsigned char, 16> returns {};
+	bool trapped = false;
+	if (!invoke(*instance, action, *funcType, *callable, returns, trapped)) {
+		skip("could not marshal the arguments of '" + action.field + "'");
+		return;
+	}
+
+	if (trapped) {
+		fail(command.line, "expected an exception from '" + action.field + "' but it trapped ('" +
+				WASM::trapKindName(lastTrapKind) + "')");
+		return;
+	}
+
+	// Take (and clear) the pending exception: a stale one must not leak into
+	// the next command.
+	if (::wasm_exn_take_pending() == nullptr) {
+		fail(command.line, "expected an exception from '" + action.field + "' but it returned normally");
+		return;
+	}
+	pass();
 }
 
 void ScriptRunner::onAction(const ScriptCommand& command)
@@ -1046,6 +1125,11 @@ void ScriptRunner::onAction(const ScriptCommand& command)
 	if (trapped) {
 		fail(command.line, "unexpected trap from '" + action.field + "': "
 				+ std::string(lastTrapMessage != nullptr ? lastTrapMessage : "trap"));
+		return;
+	}
+
+	if (::wasm_exn_take_pending() != nullptr) {
+		fail(command.line, "uncaught exception from '" + action.field + "'");
 		return;
 	}
 
@@ -1131,6 +1215,10 @@ bool ScriptRunner::invoke(WASM::ModuleInstance& instance, const ScriptAction& ac
 						  std::array<unsigned char, 16>& returns, bool& trapped,
 						  std::vector<unsigned char>* tuple)
 {
+	// A pending exception from a previous (failed) assertion must not leak into
+	// this invocation.
+	::wasm_exn_clear_pending();
+
 	// A multi-result function's JIT signature takes a result buffer as a
 	// trailing parameter (docs/ABI.md). Only the multi-result-aware caller
 	// (onAssertReturn) passes `tuple`; every other caller still skips.

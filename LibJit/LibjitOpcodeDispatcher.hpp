@@ -13,7 +13,7 @@
 namespace LibJIT {
 
 struct ControlBlock {
-	enum Kind { Block, Loop, If };
+	enum Kind { Block, Loop, If, TryTable };
 	Kind kind;
 
 	// For Block/If: a forward label at the end (bound when we see 'end').
@@ -36,6 +36,10 @@ struct ControlBlock {
 	std::vector<jit_value_t> resultSlots;
 	std::vector<jit_value_t> paramSlots;
 	bool hasElse = false;
+	// try_table only: the decoded catch clauses. They are not a runtime
+	// construct — throw sites dispatch to them statically (EXCEPTIONS.md
+	// EXD2). `labelIdx` is relative to this frame's *parent*.
+	std::vector<WASM::CatchClause> catchClauses;
 };
 
 // Drives WASM::OpcodeDispatcher::readCode for LibJIT: decodes the bytecode
@@ -257,6 +261,34 @@ private:
 								 std::vector<jit_type_t> paramTypes,
 								 std::vector<jit_value_t> args);
 	jit_value_t atomicUintConstant(uint32_t value);
+
+	// ── Exceptions (docs/proposals/EXCEPTIONS.md EX-3/EX-4) ────────────────
+	// Handlers are resolved statically: `throw` knows its tag at compile time,
+	// `throw_ref` emits a comparison chain. With no handler in this function
+	// the exception becomes *pending* and the function returns zeroes; every
+	// call site checks the pending slot (EXD1).
+	void pushBlockFrame(ControlBlock::Kind kind, const WASM::BlockType& arg,
+						std::vector<WASM::CatchClause>&& catches);
+	const WASM::FuncType& tagPayloadType(WASM::TagIdx tagIdx) const;
+	WASM::TagId tagIdForClause(const WASM::CatchClause& clause) const;
+	jit_value_t createException(WASM::TagId tagId, const WASM::FuncType& payload);
+	void storeExceptionPayload(jit_value_t exnPayload, const WASM::FuncType& payload,
+							   const std::vector<jit_value_t>& values);
+	std::vector<jit_value_t> loadExceptionPayload(jit_value_t exnPayload,
+												  const WASM::FuncType& payload);
+	void emitThrowToTarget(jit_value_t exn, std::vector<jit_value_t> values,
+						   ControlBlock& target, bool carryExn);
+	// Emits the static dispatch chain for `exn` over the enclosing try_tables;
+	// when no clause matches, sets the pending slot and returns zeroes. All
+	// emitted paths leave the current block.
+	void emitExceptionPropagation(jit_value_t exn);
+	jit_value_t emitPendingException();
+	// Used after every call: dispatches a pending exception locally or
+	// propagates it, leaving the continuation reachable when none is pending.
+	void emitPendingExceptionCheck();
+	// Returns zeroes of the current function's result types (the ABI still
+	// requires a well-formed return when an exception propagates).
+	void emitReturnZeroes();
 
 	WASM::GlobalType globalTypeForIndex(WASM::GlobalIdx idx) const;
 

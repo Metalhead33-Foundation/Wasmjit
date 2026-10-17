@@ -193,6 +193,27 @@ reclamation with `ModuleInstance::gcCollect()` at a safepoint. A reference hande
 out to the embedder is a **borrow** — do not hold it across a `gcCollect()`
 unless you have retained it.
 
+### Exceptions (`WasmBase/WasmExn.hpp`)
+
+An uncaught WebAssembly exception is **not** a trap: the invocation returns
+normally with the exception left in a process-global *pending* slot (the engine
+is single-agent, so one slot is correct). Traps keep their `TrapScope`
+`longjmp` path and are never catchable.
+
+| Entry point | Purpose |
+|---|---|
+| `void* wasm_exn_pending()` | The pending exception payload, or `nullptr`. |
+| `void* wasm_exn_take_pending()` | The same value, clearing the slot (what the spec harness uses). |
+| `void wasm_exn_clear_pending()` | Drop it without inspecting. |
+| `int32_t wasm_exn_tag_id(const void* payload)` | The thrown tag's process-wide `TagId` (compare with `ModuleInstance::tagIdForIndex`). |
+
+An `exnref` is a pointer to a Store-owned object (`{TagId, payload}`); the
+object lives until `Store` teardown, so an exception stored in a global stays
+valid. A caught exception is cleared by the generated catch path before it
+branches, so `wasm_exn_pending()` is non-null only for an exception the embedder
+must handle. `ModuleInstance::tagIds()`/`tagIdForIndex()` expose the module's
+tag index space (imports first).
+
 ### `Callable` (`WasmBase/WasmValue.hpp`)
 
 Universal function reference stored in tables and import storage.
@@ -210,6 +231,7 @@ Universal function reference stored in tables and import storage.
 |------|------|
 | `WasmBase/WasmVMContext.hpp` | VMContext struct |
 | `WasmBase/WasmValue.hpp` | Callable struct and `callCallable` helper |
+| `WasmBase/WasmExn.hpp` | Exception objects, the pending-exception slot and the tag-id accessor |
 | `LibJit/LibjitOpcodeDispatcher.cpp` | `dispatchCall` (line ~1027), `dispatchCallIndirect` (~1061), `dispatchCallThroughCallable` (~612) |
 | `LibJit/LibjitModuleCompiler.cpp` | `declareFunctions` sets internal `Callable::context` |
 | `WasmBase/WasmModuleInstance.cpp` | `resolveImports` stores resolved `Callable`s |

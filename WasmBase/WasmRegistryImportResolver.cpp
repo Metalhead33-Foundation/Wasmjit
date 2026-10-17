@@ -175,15 +175,15 @@ void RegistryImportResolver::registerTable(std::string_view moduleName, std::str
 }
 
 void RegistryImportResolver::registerTag(std::string_view moduleName, std::string_view fieldName,
-										 uint32_t tagValue)
+										 TagId tag)
 {
 	auto module = registeredModules.find(moduleName);
 	if (module == std::end(registeredModules)) {
 		ModuleRegistry modReg;
-		modReg.registerTag(fieldName, tagValue);
+		modReg.registerTag(fieldName, tag);
 		registeredModules.insert_or_assign(std::string(moduleName), std::move(modReg));
 	} else {
-		module->second.registerTag(fieldName, tagValue);
+		module->second.registerTag(fieldName, tag);
 	}
 }
 
@@ -232,15 +232,15 @@ std::optional<ImportedTable> RegistryImportResolver::resolveTable(
 	return module->second.resolveTable(fieldName, type, elementTypeId);
 }
 
-std::optional<uint32_t> RegistryImportResolver::resolveTag(
+std::optional<TagId> RegistryImportResolver::resolveTag(
 	std::string_view moduleName,
 	std::string_view fieldName,
-	uint32_t typeIdx)
+	TypeId expectedType)
 {
 	auto module = registeredModules.find(moduleName);
 	if (module == std::end(registeredModules))
 		return std::nullopt;
-	return module->second.resolveTag(fieldName, typeIdx);
+	return module->second.resolveTag(fieldName, expectedType);
 }
 
 void RegistryImportResolver::ModuleRegistry::registerFunction(std::string_view fieldName, const Callable& callable)
@@ -263,9 +263,9 @@ void RegistryImportResolver::ModuleRegistry::registerTable(std::string_view fiel
 	tables.insert_or_assign(std::string(fieldName), table);
 }
 
-void RegistryImportResolver::ModuleRegistry::registerTag(std::string_view fieldName, uint32_t tagValue)
+void RegistryImportResolver::ModuleRegistry::registerTag(std::string_view fieldName, TagId tag)
 {
-	tags.insert_or_assign(std::string(fieldName), tagValue);
+	tags.insert_or_assign(std::string(fieldName), tag);
 }
 
 std::optional<Callable> RegistryImportResolver::ModuleRegistry::resolveFunction(std::string_view fieldName, TypeId expectedType)
@@ -321,11 +321,20 @@ std::optional<ImportedTable> RegistryImportResolver::ModuleRegistry::resolveTabl
 	return it->second;
 }
 
-std::optional<uint32_t> RegistryImportResolver::ModuleRegistry::resolveTag(std::string_view fieldName, uint32_t typeIdx)
+std::optional<TagId> RegistryImportResolver::ModuleRegistry::resolveTag(std::string_view fieldName, TypeId expectedType)
 {
-	(void)typeIdx;
 	auto it = tags.find(fieldName);
 	if (it == tags.end())
+		return std::nullopt;
+
+	// The tag's payload is a function type; the provided tag must match the
+	// importing module's declared type (docs/proposals/EXCEPTIONS.md EX-2).
+	// The identity itself is the Store-assigned `TagId`, so two imports of one
+	// export resolve to the same id.
+	const Store::StoreOwnedTag* tag = Store::global().tag(it->second);
+	if (tag == nullptr)
+		return std::nullopt;
+	if (!Store::global().types().matches(tag->typeId, expectedType))
 		return std::nullopt;
 	return it->second;
 }

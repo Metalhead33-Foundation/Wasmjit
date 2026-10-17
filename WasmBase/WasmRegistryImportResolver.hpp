@@ -21,20 +21,20 @@ public:
 		// the same pointer under two names is how memory sharing happens.
 		Elv::Util::UnorderedStrMap<LinearMemory*> memories;
 		Elv::Util::UnorderedStrMap<ImportedTable> tables;
-		Elv::Util::UnorderedStrMap<uint32_t> tags;
+		Elv::Util::UnorderedStrMap<TagId> tags;
 
 		void registerFunction(std::string_view fieldName, const Callable& callable);
 		void registerGlobal(std::string_view fieldName, const Value& value);
 		void registerMemory(std::string_view fieldName, LinearMemory* memory);
 		void registerTable(std::string_view fieldName, const ImportedTable& table);
-		void registerTag(std::string_view fieldName, uint32_t tagValue);
+		void registerTag(std::string_view fieldName, TagId tag);
 
 		std::optional<Callable> resolveFunction(std::string_view fieldName, TypeId expectedType);
 		std::optional<Value> resolveGlobal(std::string_view fieldName, const GlobalType& type);
 		std::optional<LinearMemory*> resolveMemory(std::string_view fieldName, const MemoryType& type);
 		std::optional<ImportedTable> resolveTable(std::string_view fieldName, const TableType& type,
 											 TypeId elementTypeId);
-		std::optional<uint32_t> resolveTag(std::string_view fieldName, uint32_t typeIdx);
+		std::optional<TagId> resolveTag(std::string_view fieldName, TypeId expectedType);
 	};
 
 	void registerFunction(std::string_view moduleName, std::string_view fieldName,
@@ -46,7 +46,7 @@ public:
 	void registerTable(std::string_view moduleName, std::string_view fieldName,
 					   const ImportedTable& table) override;
 	void registerTag(std::string_view moduleName, std::string_view fieldName,
-					 uint32_t tagValue) override;
+					 TagId tag) override;
 
 	std::optional<Callable> resolveFunction(
 		std::string_view moduleName,
@@ -69,10 +69,10 @@ public:
 		const TableType& type,
 		TypeId           elementTypeId) override;
 
-	std::optional<uint32_t> resolveTag(
+	std::optional<TagId> resolveTag(
 		std::string_view moduleName,
 		std::string_view fieldName,
-		uint32_t typeIdx) override;
+		TypeId           expectedType) override;
 
 private:
 	Elv::Util::UnorderedStrMap<ModuleRegistry> registeredModules;

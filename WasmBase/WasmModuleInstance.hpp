@@ -39,6 +39,11 @@ struct ModuleInstanceInternals {
 	std::vector<TableInstance*> tableRefs;
 	std::vector<Callable> internalCallables;
 	std::vector<Callable>  importStorage; // Owns the WasmCallable objects for imports
+	// Tags are process-wide identities owned by the Store (`TagId`); this is the
+	// module's tag index space, imports first, then the module's own tags
+	// (docs/proposals/EXCEPTIONS.md EX-2). Filled before compilation, so the JIT
+	// can fold a `throw tagidx` into the constant id.
+	std::vector<TagId> tagIds;
 	std::vector<bool> dataSegmentDropped;
 	std::vector<bool> elementSegmentDropped;
 	// Element segments in expression form hold *references*, evaluated once at
@@ -193,6 +198,13 @@ public:
 	void gcCollect();
 	// Number of objects queued for the next gcCollect().
 	size_t gcPendingCount() const { return internals.gcPending.size(); }
+
+	// ── Tag identity (docs/proposals/EXCEPTIONS.md EX-2) ────────────────
+	// The module's tag index space: process-wide `TagId`s, imports first, then
+	// the module's own tags. Two imports of one export share an id; two tag
+	// declarations with the same payload type do not.
+	TagId tagIdForIndex(TagIdx idx) const { return internals.tagIds.at(idx); }
+	const std::vector<TagId>& tagIds() const { return internals.tagIds; }
 	// Resolve an element-segment reference (as produced by evalConstantExpr and
 	// cached in elementSegmentRefs) to the Callable* a table slot stores. A
 	// GC/heap reference is stored as-is: the slot is an opaque pointer.

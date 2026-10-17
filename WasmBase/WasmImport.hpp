@@ -62,7 +62,7 @@ public:
 	virtual void registerTag(
 		std::string_view moduleName,
 		std::string_view fieldName,
-		uint32_t tagValue) = 0;
+		TagId            tag) = 0;
 };
 
 class ImportResolver {
@@ -108,12 +108,15 @@ public:
 		const TableType& type,
 		TypeId           elementTypeId) = 0;
 
-	// Tags are part of the exception handling proposal.
-	// Most embedders can leave this unimplemented (return nullopt).
-	virtual std::optional<uint32_t> resolveTag(
+	// Tags are part of the exception handling proposal. `expectedType` is the
+	// canonical identity of the importing module's declared payload FuncType;
+	// the resolver must return the exporting tag's process-wide `TagId` and
+	// reject a tag whose payload type does not match
+	// (docs/proposals/EXCEPTIONS.md EX-2).
+	virtual std::optional<TagId> resolveTag(
 		std::string_view moduleName,
 		std::string_view fieldName,
-		uint32_t         typeIdx) = 0;
+		TypeId           expectedType) = 0;
 };
 }
 #endif // WASMIMPORT_HPP

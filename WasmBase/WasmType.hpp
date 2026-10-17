@@ -11,6 +11,10 @@ namespace WASM {
 template <Elv::Io::DeviceLike I> using WasmStream = Elv::Io::DataStream<Elv::Util::Endian::Little,I>;
 using DWasmStream = WasmStream<Elv::Io::Device>;
 typedef uint32_t TagIdx;
+// A *process-wide* tag identity (docs/proposals/EXCEPTIONS.md EX-2). Every tag
+// declaration is a distinct tag, even when two declare the same payload type;
+// an imported tag aliases the exporting tag's `TagId`.
+using TagId = int32_t;
 typedef uint32_t LabelIdx;
 typedef uint32_t TypeIdx;
 typedef uint32_t LocalIdx;

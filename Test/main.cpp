@@ -15,6 +15,7 @@
 #include "helper.hpp"
 #include "WasmBase/WasmGcHeader.hpp"
 #include "WasmBase/WasmGcHeap.hpp"
+#include "WasmBase/WasmExn.hpp"
 #include "WasmBase/WasmOpcode.hpp"
 #include "WasmBase/WasmStore.hpp"
 #include "WasmBase/WasmTrap.hpp"
@@ -584,6 +585,61 @@ TEST_CASE("table imports are matched against the exported table's type")
 	REQUIRE_THROWS(compiler.instantiate(mismatchType, registry));
 	// The exported table starts at 2 entries, the import demands 5.
 	REQUIRE_THROWS(compiler.instantiate(mismatchLimits, registry));
+}
+
+TEST_CASE("tag imports share the exporter's identity and check the payload type")
+{
+	WASM::Module moduleA = loadTestModule("tag_identity_a");
+	WASM::Module moduleB = loadTestModule("tag_identity_b");
+	WASM::Module badB    = loadTestModule("tag_identity_bad");
+	WASM::RegistryImportResolver registry;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+
+	auto instanceA = compiler.instantiate(moduleA, registry);
+	REQUIRE(instanceA.get() != nullptr);
+	instanceA->registerExports(registry, "a");
+
+	auto instanceB = compiler.instantiate(moduleB, registry);
+	REQUIRE(instanceB.get() != nullptr);
+
+	// Tag index space: e, e-alias, f. Both imports of "a"."e" resolve to the
+	// exporter's TagId; "f" declares an identical payload type but is a
+	// distinct tag (docs/proposals/EXCEPTIONS.md EX-2).
+	const std::vector<WASM::TagId>& ids = instanceB->tagIds();
+	REQUIRE(ids.size() == 3);
+	REQUIRE(ids[0] == ids[1]);
+	REQUIRE(ids[0] == instanceA->tagIdForIndex(0));
+	REQUIRE(ids[2] == instanceA->tagIdForIndex(1));
+	REQUIRE(ids[0] != ids[2]);
+
+	// A payload-type mismatch must be rejected at link time.
+	REQUIRE_THROWS(compiler.instantiate(badB, registry));
+}
+
+TEST_CASE("exceptions: a caught throw carries its payload and an uncaught one stays pending")
+{
+	WASM::Module module = loadTestModule("exceptions");
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	// The caller's try_table catches the callee's throw and receives the payload.
+	auto catchFn = instance->exportedFunction("catch");
+	REQUIRE(catchFn.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*catchFn, int32_t(41)) == 42);
+
+	// No handler: the invocation returns normally with the exception pending,
+	// which is what the embedder (and the spec harness) observes.
+	auto throwFn = instance->exportedFunction("throw-uncaught");
+	REQUIRE(throwFn.has_value());
+	REQUIRE(::wasm_exn_pending() == nullptr);
+	WASM::callCallable<void>(*throwFn, int32_t(7));
+	void* pending = ::wasm_exn_take_pending();
+	REQUIRE(pending != nullptr);
+	REQUIRE(::wasm_exn_tag_id(pending) == instance->tagIdForIndex(0));
 }
 
 TEST_CASE("LibJitTypeTranslator does not leak type caches across modules")

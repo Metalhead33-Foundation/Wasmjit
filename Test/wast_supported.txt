@@ -144,6 +144,9 @@ store
 table64
 table_fill
 tag
+throw
+throw_ref
 traps
+try_table
 type
 type-canon

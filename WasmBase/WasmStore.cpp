@@ -61,8 +61,14 @@ Store& Store::global()
 	return instance;
 }
 
-Store::Store() : nextMemoryId(0), nextTableId(0)
+Store::Store() : nextMemoryId(0), nextTableId(0), nextTagId(0)
 {
+}
+
+Store::~Store()
+{
+	for (const StoreOwnedException& exception : exceptions)
+		delete[] exception.storage;
 }
 
 Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPages, bool isShared)
@@ -184,6 +190,34 @@ bool Store::growTable(TableInstance* table, uint64_t deltaEntries)
 		return false;
 	}
 	return true;
+}
+
+// ── Tags (docs/proposals/EXCEPTIONS.md EX-2) ────────────────────────────────
+
+TagId Store::createTag(TypeId payloadType)
+{
+	const TagId id = nextTagId.fetch_add(1);
+	StoreOwnedTag tag;
+	tag.id = id;
+	tag.typeId = payloadType;
+	tags.emplace(id, tag);
+	return id;
+}
+
+const Store::StoreOwnedTag* Store::tag(TagId id) const
+{
+	auto it = tags.find(id);
+	return it == tags.end() ? nullptr : &it->second;
+}
+
+bool Store::ownException(std::byte* storage, uint64_t bytes)
+{
+	try {
+		exceptions.push_back(StoreOwnedException{storage, bytes});
+		return true;
+	} catch (...) {
+		return false;
+	}
 }
 // ── Function references (docs/proposals/GC.md G2 / §5.3 H3) ─────────────────
 

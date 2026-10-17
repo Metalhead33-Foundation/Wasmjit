@@ -396,9 +396,15 @@ void ModuleInstance::registerExports(ImportRegistrar& registrar, std::string_vie
 			registrar.registerTable(moduleName, ex.name, published);
 			break;
 		}
-		case ExternalKind::Tag:
-			registrar.registerTag(moduleName, ex.name, ex.index);
+		case ExternalKind::Tag: {
+			// Publish the process-wide TagId, not the module-local index: a
+			// re-exported imported tag must keep the exporter's identity
+			// (docs/proposals/EXCEPTIONS.md EX-2).
+			if (ex.index >= internals.tagIds.size())
+				throw std::runtime_error("module exports a tag index outside its index space");
+			registrar.registerTag(moduleName, ex.name, internals.tagIds[ex.index]);
 			break;
+		}
 		}
 	}
 }
@@ -466,6 +472,27 @@ void ModuleInstance::resolveImports(ImportResolver& resolver)
 		if (table->table == nullptr)
 			throw UnresolvedImportException(imp.moduleName, imp.fieldName);
 		internals.tableRefs.push_back(table->table);
+	}
+
+	// ── Tag imports (and the module's own tags) ─────────────────────
+	// Tags have no runtime state beyond their identity: a `TagId` owned by the
+	// Store. Imported tags occupy the low indices of the tag index space and
+	// alias the exporting tag, so two imports of one export compare equal; the
+	// module's own tags are created here. Everything is in place before
+	// compilation, so `throw tagidx` can fold the id into the generated code
+	// (docs/proposals/EXCEPTIONS.md EX-2).
+	internals.tagIds.reserve(module->importTags.size() + module->tags.size());
+	for (const auto& imp : module->importTags) {
+		const TypeId expectedType = module->typeId(LocalTypeIdx{imp.typeIdx});
+		std::optional<TagId> tag =
+			resolver.resolveTag(imp.moduleName, imp.fieldName, expectedType);
+		if (!tag.has_value())
+			throw UnresolvedImportException(imp.moduleName, imp.fieldName);
+		internals.tagIds.push_back(tag.value());
+	}
+	for (const auto& tag : module->tags) {
+		internals.tagIds.push_back(
+			Store::global().createTag(module->typeId(LocalTypeIdx{tag.typeIdx})));
 	}
 
 	// ── Global imports ──────────────────────────────────────────────

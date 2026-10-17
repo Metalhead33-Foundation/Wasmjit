@@ -15,6 +15,7 @@ DEFINES += HWY_SHARED_DEFINE
 # Avoid build errors with no files:
 SOURCES += \
         WasmException.cpp \
+        WasmExn.cpp \
         WasmGcHeap.cpp \
         WasmMemory.cpp \
         WasmModule.cpp \
@@ -34,6 +35,7 @@ SOURCES += \
 HEADERS += \
     WasmContext.hpp \
     WasmException.hpp \
+    WasmExn.hpp \
     WasmGcHeader.hpp \
     WasmGcHeap.hpp \
     WasmCanonicalType.hpp \

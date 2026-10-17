@@ -3,6 +3,7 @@
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmTrap.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
+#include "../WasmBase/WasmExn.hpp"
 #include "../WasmBase/wasm_atomic.hpp"
 #include "../WasmBase/wasm_simd_scalar.hpp"
 #include <algorithm>
@@ -1103,6 +1104,178 @@ void OpcodeDispatcher::pushCallResults(const WASM::FuncType& calleeSig, jit_valu
 	}
 }
 
+// ── Exceptions (docs/proposals/EXCEPTIONS.md EX-3/EX-4) ─────────────────────
+
+const WASM::FuncType& OpcodeDispatcher::tagPayloadType(WASM::TagIdx tagIdx) const
+{
+	const size_t imported = module.importTags.size();
+	uint32_t typeIdx = 0;
+	if (tagIdx < imported) {
+		typeIdx = module.importTags[tagIdx].typeIdx;
+	} else {
+		const size_t local = tagIdx - imported;
+		if (local >= module.tags.size())
+			throw std::runtime_error("tag index out of range for this module");
+		typeIdx = module.tags[local].typeIdx;
+	}
+	if (typeIdx >= module.types.size() || !module.types[typeIdx].isFunction())
+		throw std::runtime_error("tag does not name a function type");
+	return std::get<WASM::FuncType>(module.types[typeIdx].composite);
+}
+
+WASM::TagId OpcodeDispatcher::tagIdForClause(const WASM::CatchClause& clause) const
+{
+	if (clause.tagIdx >= internals.tagIds.size())
+		throw std::runtime_error("try_table catch names an out-of-range tag");
+	return internals.tagIds[clause.tagIdx];
+}
+
+jit_value_t OpcodeDispatcher::createException(WASM::TagId tagId, const WASM::FuncType& payload)
+{
+	jit_nint payloadBytes = 0;
+	if (!payload.params.empty())
+		payloadBytes = static_cast<jit_nint>(
+				jit_type_get_size(typeTranslator.translateStruct(payload.params)));
+	return callNativeHelper(reinterpret_cast<void*>(wasm_exn_create), jit_type_void_ptr,
+			{jit_type_int, jit_type_uint},
+			{jit_value_create_nint_constant(function, jit_type_int, static_cast<jit_nint>(tagId)),
+			 atomicUintConstant(static_cast<uint32_t>(payloadBytes))});
+}
+
+void OpcodeDispatcher::storeExceptionPayload(jit_value_t exnPayload, const WASM::FuncType& payload,
+											 const std::vector<jit_value_t>& values)
+{
+	if (payload.params.empty())
+		return;
+	if (values.size() != payload.params.size())
+		throw std::runtime_error("exception payload arity mismatch");
+	jit_type_t tuple = typeTranslator.translateStruct(payload.params);
+	for (size_t i = 0; i < values.size(); ++i) {
+		const jit_nint offset = static_cast<jit_nint>(
+				jit_type_get_offset(tuple, static_cast<unsigned int>(i)));
+		if (WASM::isReferenceType(payload.params[i].val.opcode)) {
+			// The exception object owns its payload references (same barrier as
+			// struct.new). The object is never freed, so this is a bounded
+			// lifetime cost, documented in the note.
+			jit_value_t slot = jit_insn_add(function, exnPayload,
+					jit_value_create_nint_constant(function, jit_type_nint, offset));
+			emitRefStore(slot, values[i]);
+			continue;
+		}
+		jit_insn_store_relative(function, exnPayload, offset, values[i]);
+	}
+}
+
+std::vector<jit_value_t> OpcodeDispatcher::loadExceptionPayload(jit_value_t exnPayload,
+																const WASM::FuncType& payload)
+{
+	std::vector<jit_value_t> values;
+	if (payload.params.empty())
+		return values;
+	jit_type_t tuple = typeTranslator.translateStruct(payload.params);
+	values.reserve(payload.params.size());
+	for (size_t i = 0; i < payload.params.size(); ++i) {
+		jit_type_t fieldType = jit_type_get_field(tuple, static_cast<unsigned int>(i));
+		const jit_nint offset = static_cast<jit_nint>(
+				jit_type_get_offset(tuple, static_cast<unsigned int>(i)));
+		values.push_back(jit_insn_load_relative(function, exnPayload, offset, fieldType));
+	}
+	return values;
+}
+
+void OpcodeDispatcher::emitThrowToTarget(jit_value_t exn, std::vector<jit_value_t> values,
+										 ControlBlock& target, bool carryExn)
+{
+	const auto& slots = branchSlotsForTarget(target);
+	if (slots.size() != values.size() + (carryExn ? 1u : 0u))
+		throw std::runtime_error("try_table catch target arity does not match the tag payload");
+	// A caught exception is consumed: clear the pending slot before branching,
+	// or the caller (and the embedder) would still observe it as uncaught.
+	callNativeHelper(reinterpret_cast<void*>(wasm_exn_clear_pending), jit_type_void, {}, {});
+	for (size_t i = 0; i < values.size(); ++i)
+		jit_insn_store(function, slots[i], values[i]);
+	if (carryExn)
+		jit_insn_store(function, slots.back(),
+				castRefValue(exn, jit_value_get_type(slots.back())));
+	jit_insn_branch(function, &target.label);
+}
+
+jit_value_t OpcodeDispatcher::emitPendingException()
+{
+	// The slot is a process-global (single-agent, THREADS.md TD9); reading it
+	// inline costs one load and keeps the check off the helper-call path.
+	jit_value_t slot = jit_value_create_nint_constant(function, jit_type_void_ptr,
+			reinterpret_cast<jit_nint>(&::g_wasmPendingException));
+	return jit_insn_load_relative(function, slot, 0, jit_type_void_ptr);
+}
+
+void OpcodeDispatcher::emitReturnZeroes()
+{
+	// An exception leaves the function, but the generated signature still has
+	// to return well-formed values. Zeroes are never observed by the caller:
+	// it sees the pending slot first.
+	const size_t n = currentFunc.results.size();
+	for (size_t i = 0; i < n; ++i)
+		pushOwnedValue(zeroConstantForType(jitTypeForValueType(currentFunc.results[i].val)));
+	emitFunctionReturn(true);
+}
+
+void OpcodeDispatcher::emitExceptionPropagation(jit_value_t exn)
+{
+	// Walk the enclosing try_table frames innermost-first; each frame's
+	// clauses are tried in source order. Every emitted path leaves the block.
+	for (size_t frameIndex = controlStack.size(); frameIndex-- > 0; ) {
+		ControlBlock& frame = controlStack[frameIndex];
+		if (frame.kind != ControlBlock::TryTable)
+			continue;
+		for (const WASM::CatchClause& clause : frame.catchClauses) {
+			if (clause.labelIdx >= frameIndex)
+				throw std::runtime_error("try_table catch label out of range");
+			ControlBlock& target = controlStack[frameIndex - 1 - clause.labelIdx];
+			const bool catchAll = clause.kind == WASM::CatchKind::CatchAll
+					|| clause.kind == WASM::CatchKind::CatchAllRef;
+			const bool carryExn = clause.kind == WASM::CatchKind::CatchRef
+					|| clause.kind == WASM::CatchKind::CatchAllRef;
+			if (!catchAll) {
+				const WASM::TagId clauseTagId = tagIdForClause(clause);
+				jit_value_t thrownTag = callNativeHelper(
+						reinterpret_cast<void*>(wasm_exn_tag_id), jit_type_int,
+						{jit_type_void_ptr}, {exn});
+				jit_value_t wantTag = jit_value_create_nint_constant(function, jit_type_int,
+						static_cast<jit_nint>(clauseTagId));
+				jit_value_t matches = jit_insn_eq(function, thrownTag, wantTag);
+				jit_label_t next = jit_label_undefined;
+				jit_insn_branch_if_not(function, matches, &next);
+				const WASM::FuncType& payload = tagPayloadType(clause.tagIdx);
+				emitThrowToTarget(exn, loadExceptionPayload(exn, payload), target, carryExn);
+				jit_insn_label(function, &next);
+				continue;
+			}
+			// `catch_all` / `catch_all_ref` matches unconditionally and is last
+			// in a valid module, so it ends the chain.
+			emitThrowToTarget(exn, {}, target, carryExn);
+			return;
+		}
+	}
+
+	// No handler anywhere in this function: keep it pending for the caller.
+	callNativeHelper(reinterpret_cast<void*>(wasm_exn_set_pending), jit_type_void,
+			{jit_type_void_ptr}, {exn});
+	emitReturnZeroes();
+}
+
+void OpcodeDispatcher::emitPendingExceptionCheck()
+{
+	jit_value_t pending = emitPendingException();
+	jit_value_t word = jit_insn_convert(function, pending, jit_type_ulong, 0);
+	jit_value_t none = jit_insn_eq(function, word,
+			jit_value_create_long_constant(function, jit_type_ulong, 0));
+	jit_label_t continuation = jit_label_undefined;
+	jit_insn_branch_if(function, none, &continuation);
+	emitExceptionPropagation(pending);
+	jit_insn_label(function, &continuation);
+}
+
 WASM::TypeIdx OpcodeDispatcher::functionTypeIndexForFunc(WASM::FuncIdx funcIdx) const
 {
 	if (funcIdx < importedFuncCount)
@@ -1196,6 +1369,7 @@ void OpcodeDispatcher::dispatchCallThroughCallable(jit_value_t callablePtr, WASM
 		function, callablePtr, offsetof(WASM::Callable, fnPtr), jit_type_void_ptr);
 	jit_value_t ret = jit_insn_call_indirect(
 		function, fnPtr, calleeJitSig, args.data(), static_cast<unsigned>(args.size()), 0);
+	emitPendingExceptionCheck();
 	pushCallResults(calleeSig, ret, outBuffer);
 }
 
@@ -1571,7 +1745,8 @@ void OpcodeDispatcher::dispatchNop()
 {
 }
 
-void OpcodeDispatcher::dispatchBlock(const WASM::BlockType& arg)
+void OpcodeDispatcher::pushBlockFrame(ControlBlock::Kind kind, const WASM::BlockType& arg,
+									  std::vector<WASM::CatchClause>&& catches)
 {
 	// A pathological body must not drive the operand/control bookkeeping (or
 	// LibJIT) into the realm of gigabytes; see docs/SAFETY.md.
@@ -1581,14 +1756,20 @@ void OpcodeDispatcher::dispatchBlock(const WASM::BlockType& arg)
 	const std::vector<WASM::StorageType> paramTypes = parameterTypesForBlockType(arg);
 
 	ControlBlock block;
-	block.kind = ControlBlock::Block;
+	block.kind = kind;
 	block.label = jit_label_undefined;
 	block.elseLabel = jit_label_undefined;
 	block.stackDepth = valueStack.size() - std::min(valueStack.size(), paramTypes.size());
 	block.paramTypes = paramTypes;
 	block.resultTypes = storageTypesForBlockType(arg);
 	block.resultSlots = createSlotsForTypes(block.resultTypes);
+	block.catchClauses = std::move(catches);
 	controlStack.push_back(std::move(block));
+}
+
+void OpcodeDispatcher::dispatchBlock(const WASM::BlockType& arg)
+{
+	pushBlockFrame(ControlBlock::Block, arg, {});
 }
 
 void OpcodeDispatcher::dispatchLoop(const WASM::BlockType& arg)
@@ -1662,14 +1843,64 @@ void OpcodeDispatcher::dispatchElse()
 
 void OpcodeDispatcher::dispatchThrow(WASM::TagIdx arg)
 {
-	(void)arg;
-	emitTrap(WASM::TrapKind::Internal, "throw: exception handling is not implemented");
+	// Dead code: the tag's operand stack is polymorphic here, and the throw can
+	// never execute.
+	if (unreachableCode)
+		return;
+	if (arg >= internals.tagIds.size())
+		throw std::runtime_error("throw names an out-of-range tag");
+
+	const WASM::TagId tagId = internals.tagIds[arg];
+	const WASM::FuncType& payload = tagPayloadType(arg);
+	std::vector<jit_value_t> values(payload.params.size());
+	for (size_t i = payload.params.size(); i-- > 0; )
+		values[i] = popValue();
+
+	// Materialise the exception first: a `catch_ref` clause needs it, and so
+	// does propagation to the caller.
+	jit_value_t exn = createException(tagId, payload);
+	storeExceptionPayload(exn, payload, values);
+
+	// Innermost enclosing try_table whose clause matches this (compile-time)
+	// tag; clauses are tried in source order.
+	for (size_t frameIndex = controlStack.size(); frameIndex-- > 0; ) {
+		ControlBlock& frame = controlStack[frameIndex];
+		if (frame.kind != ControlBlock::TryTable)
+			continue;
+		for (const WASM::CatchClause& clause : frame.catchClauses) {
+			const bool catchAll = clause.kind == WASM::CatchKind::CatchAll
+					|| clause.kind == WASM::CatchKind::CatchAllRef;
+			if (!catchAll && tagIdForClause(clause) != tagId)
+				continue;
+			if (clause.labelIdx >= frameIndex)
+				throw std::runtime_error("try_table catch label out of range");
+			ControlBlock& target = controlStack[frameIndex - 1 - clause.labelIdx];
+			const bool carryExn = clause.kind == WASM::CatchKind::CatchRef
+					|| clause.kind == WASM::CatchKind::CatchAllRef;
+			// `catch`/`catch_ref` carry the tag payload; `catch_all` carries none.
+			emitThrowToTarget(exn, catchAll ? std::vector<jit_value_t>{} : values,
+					target, carryExn);
+			markUnreachable();
+			return;
+		}
+	}
+
+	// No handler in this function: hand the exception to the caller.
+	callNativeHelper(reinterpret_cast<void*>(wasm_exn_set_pending), jit_type_void,
+			{jit_type_void_ptr}, {exn});
+	emitReturnZeroes();
 	markUnreachable();
 }
 
 void OpcodeDispatcher::dispatchThrowRef()
 {
-	emitTrap(WASM::TrapKind::Internal, "throw_ref: exception handling is not implemented");
+	if (unreachableCode)
+		return;
+	jit_value_t exn = popValue();
+	emitTrapIfNull(WASM::TrapKind::NullReference, refAsVoidPtr(exn));
+	// The tag id is dynamic, so the handler search runs at runtime over the
+	// same lexical frames (EXD2); no match propagates to the caller.
+	emitExceptionPropagation(exn);
 	markUnreachable();
 }
 
@@ -1915,6 +2146,7 @@ void OpcodeDispatcher::dispatchCall(WASM::FuncIdx funcIdx)
 		for (size_t i = 0; i < calleeSig.params.size(); ++i)
 			args[1 + i] = stackArgs[i];
 		jit_value_t ret = jit_insn_call_indirect(function, fnPtr, calleeJitSig, args.data(), numArgs, 0);
+		emitPendingExceptionCheck();
 		pushCallResults(calleeSig, ret, outBuffer);
 		return;
 	}
@@ -1935,6 +2167,7 @@ void OpcodeDispatcher::dispatchCall(WASM::FuncIdx funcIdx)
 	for (size_t i = 0; i < calleeSig.params.size(); ++i)
 		args[1 + i] = stackArgs[i];
 	jit_value_t ret = jit_insn_call_indirect(function, fnPtr, calleeJitSig, args.data(), numArgs, 0);
+	emitPendingExceptionCheck();
 	pushCallResults(calleeSig, ret, outBuffer);
 }
 
@@ -1973,6 +2206,7 @@ void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx typeIdx, WASM::TableId
 
 	jit_value_t ret = jit_insn_call_indirect(function, fnPtr, calleeJitSig, args.data(),
 											 static_cast<unsigned>(args.size()), 0);
+	emitPendingExceptionCheck();
 	pushCallResults(ft, ret, outBuffer);
 }
 
@@ -2160,8 +2394,10 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx arg)
 
 void OpcodeDispatcher::dispatchTryTable(const WASM::BlockType& arg1, std::vector<WASM::CatchClause>&& arg2)
 {
-	(void)arg2;
-	dispatchBlock(arg1);
+	// The catch clauses are not a runtime construct: every throw site in the
+	// dynamic extent dispatches to them statically (EXD2). The instruction
+	// itself therefore behaves exactly like a block with a label at its end.
+	pushBlockFrame(ControlBlock::TryTable, arg1, std::move(arg2));
 }
 
 void OpcodeDispatcher::dispatchDrop()

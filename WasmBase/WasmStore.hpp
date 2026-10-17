@@ -5,6 +5,7 @@
 #include "WasmTypeRegistry.hpp"
 #include "WasmGcHeap.hpp"
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
@@ -37,6 +38,7 @@ public:
 	Store& operator=(const Store&) = delete;
 	Store(Store&&) = delete;
 	Store& operator=(Store&&) = delete;
+	~Store();
 
 	// The single global Store. Constructed on first use so that it always
 	// outlives the module instances referencing its entities.
@@ -93,6 +95,35 @@ public:
 	bool reserveBytes(uint64_t bytes);
 	void releaseBytes(uint64_t bytes);
 
+	// ── Tags (exception handling) ───────────────────────────────────────
+	// A tag's identity is nominal: *every* declaration is a distinct tag, even
+	// if two declare the same payload type. `TagId` (WasmType.hpp) is the
+	// process-wide id; an imported tag aliases the exporting tag's id, which is
+	// what makes two imports of one export compare equal
+	// (docs/proposals/EXCEPTIONS.md EX-2). `typeId` is the canonical identity
+	// of the tag's FuncType and is what import matching compares.
+	struct StoreOwnedTag {
+		TagId  id = -1;
+		TypeId typeId {};
+	};
+
+	TagId createTag(TypeId payloadType);
+	// Nullptr for an unknown id.
+	const StoreOwnedTag* tag(TagId id) const;
+
+	// ── Exception objects (docs/proposals/EXCEPTIONS.md EX-3) ────────────
+	// The store owns every thrown exception until teardown: `exnref`s can be
+	// stored in globals and outlive the invocation that produced them, so
+	// freeing at invocation end would dangle. Exceptions are rare, and the
+	// bounded lifetime is documented in the note.
+	struct StoreOwnedException {
+		std::byte* storage;
+		uint64_t   bytes;
+	};
+	// Takes ownership of `storage`; false when the bookkeeping allocation
+	// fails (the caller frees and traps).
+	bool ownException(std::byte* storage, uint64_t bytes);
+
 	// ── Reserved: store-owned runtime entities (pre-declared) ───────────
 	// Every Wasm runtime entity is intended to be Store-owned, following the
 	// memory/table pattern: a POD "instance view" + a Store-owned backing
@@ -101,18 +132,16 @@ public:
 	// mechanical once they gain runtime behaviour. GC-dependent kinds are
 	// deferred entirely (see GcHeap).
 	struct StoreOwnedGlobal;          // globals               (TODO)
-	struct StoreOwnedTag;             // exception-handling tags (TODO)
 	struct StoreOwnedFunction;        // callables / functions (TODO)
 	struct StoreOwnedElementSegment;  // element segments      (TODO)
 	struct StoreOwnedDataSegment;     // data segments         (TODO)
 	// GC heap objects live in the Store-owned GcHeap (see gc()).
 
 	using GlobalId   = int32_t;
-	using TagId      = int32_t;
 	using FunctionId = int32_t;
 	using SegmentId  = int32_t;
 
-	// TODO: createGlobal/createTag/createFunction/... + accessors once the
+	// TODO: createGlobal/createFunction/... + accessors once the
 	// corresponding entity kinds are implemented.
 
 	// ── Function references (docs/proposals/GC.md G2 / §5.3 H3) ─────────
@@ -143,6 +172,13 @@ private:
 
 	TableMap             tables;
 	std::atomic<int32_t> nextTableId;
+
+	// Tags are tiny and never removed: id → canonical payload type.
+	std::unordered_map<TagId, StoreOwnedTag> tags;
+	std::atomic<int32_t>                     nextTagId;
+
+	// Exception objects live until Store teardown (see ownException).
+	std::vector<StoreOwnedException> exceptions;
 
 	// Charged/credited by reserveBytes/releaseBytes (see the header).
 	std::atomic<uint64_t> allocatedBytes_{0};
