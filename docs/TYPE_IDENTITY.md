@@ -191,6 +191,13 @@ global identities: `TypeRegistry` interning, surfaced to the rest of the engine
 as `TypeId Module::typeId(LocalTypeIdx) const`. Registry, runtime, linking, GC
 and JIT code reason in `TypeId`s and do not convert back and forth.
 
+**Component domain.** The identifiers above describe the core domain. Component
+value/function/instance/component types currently have only component-local
+indices and a validator-local resolved graph; they are not in `TypeRegistry`.
+The planned shared store, component `TypeId` domain, resource identity rules and
+migration stages are in
+[`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md).
+
 ### 6.2 Canonical form
 
 A canonical type is a recursion-free description. Its references are abstract
@@ -483,6 +490,11 @@ dedicated suite:
   `unordered_map<TypeId, jit_type_t>` keyed on the canonical `TypeId`, so
   translated types are shared across modules and translation order no longer
   matters.
+- **Component types are outside this identity path.** They use component-local
+  type indices and a validator-only `ResolvedType` graph; there is no
+  `TypeId`, no interning and no cross-component equality yet. The proposed
+  unified store and component domain are described in
+  [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md).
 
 ## 11. Non-goals / deferred
 
@@ -493,9 +505,9 @@ dedicated suite:
   multi-memory and multi-table are wired through the `memories`/`tables`
   index-space arrays (`VMContext`). GC constant expressions are evaluated by a
   small stack machine in `ModuleInstance::evalConstantExpr`.
-- Replacing the `Subtype` layout (footprint and options below). The canonical
-  form is a second, index-oriented representation; dedup is expected to offset
-  its cost.
+- Replacing the `Subtype` layout here. The canonical form is a second,
+  index-oriented representation in this note; the compact-store refactor is
+  planned separately in [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md).
 
 ## 12. Type storage footprint (`Subtype`) and future optimization
 
@@ -568,7 +580,11 @@ just the live modules. A transient 1,000-type module leaves ~0.2 MB behind.
   same category as the GC heap (§11) rather than a prerequisite for interning;
   neither requires the other.
 
-### 12.4 Possible future optimizations (not planned here)
+### 12.4 Possible future optimizations (planned separately)
+
+The layout work below is specified and sequenced in
+[`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md); this section remains the
+footprint rationale.
 
 - **Drop the `std::variant`.** Replace `CompositeDefinition` with a manually
   tagged union, or a structure-of-arrays registry (parallel `kind` / `isFinal` /
@@ -588,7 +604,8 @@ just the live modules. A transient 1,000-type module leaves ~0.2 MB behind.
 
 A compact representation on the order of 8–16 bytes per type for the common
 function-signature case (plus shared component storage) looks achievable — a
-roughly 5–10x cut in the fixed term — but that is a separate project.
+roughly 5–10x cut in the fixed term. That is the target of
+[`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md), not of this note.
 
 Reproduce the figures with:
 

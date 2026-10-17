@@ -92,7 +92,7 @@ gaps → where we deliberately deviate → plan → test survey → references.
 
 ## 4. What the folder holds today
 
-`docs/proposals/` holds **twenty-five** notes. Every one carries the §2.1 front
+`docs/proposals/` holds **twenty-six** notes. Every one carries the §2.1 front
 matter and the nine slots of §2.2 in order (or the grouped variant of §3); the
 wording drifts only as §3 permits. The ID conventions of §2.3 are used
 throughout; the prefixes actually in the tree are:
@@ -124,6 +124,7 @@ throughout; the prefixes actually in the tree are:
 | `TAILCALLS.md` | `TC<n>` | `TCD<n>` | `TC-<n>` |
 | `THREADS.md` | `T<n>` | `TD<n>` | `TH-<n>` |
 | `TYPE_IMPORTS.md` | `TI<n>` | `TID<n>` | `TI-<n>` |
+| `TYPE_MODEL.md` | `TM<n>` | `TMD<n>` | `TM-<n>` |
 
 `GC.md` shows the intended depth of a §6: a §6.1 discussion, a §6.2 deviation
 table, *and* a §6.3 list of the observable semantics we must **not** play loose
@@ -171,7 +172,7 @@ Guardrails (things that must stay true):
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **PM-0 — Re-cut this document** | ✅ Rewrite `PROPOSALS.md` into the §2 shape: front matter, §1 map, §2–§9, IDs. | PG1, PG2, PG3, PG4 | Done: this file's §1 map matches its own §2–§9, and §4/§8 match the folder. |
-| **PM-1 — Record the aliases** | ✅ List the sanctioned heading and section-count variants in §3/§6/§8. | PG5, PG6, PG7 | Done: §8 classifies every note (all twenty-five). |
+| **PM-1 — Record the aliases** | ✅ List the sanctioned heading and section-count variants in §3/§6/§8. | PG5, PG6, PG7 | Done: §8 classifies every note (all twenty-six). |
 | **PM-2 — Keep the survey current** | Update §4's prefix table and §8's matrix whenever a note is added or a section appears. | PG5, PG9 | A new note appears in both tables in the same change that adds it. |
 | **PM-3 — Optional structural lint** | Add a `grep`-based check (documented in `TESTING.md`) that each `docs/proposals/*.md` has front matter and §1…§9, allowing the §3 exceptions. | PG8 | The check runs and passes, or is explicitly waived. |
 
@@ -205,15 +206,18 @@ authoritative per-item status is each note's §7 plan.
 | `STRINGREF.md` | 9 | canonical | none | — | conforms exactly |
 | `TAILCALLS.md` | 9 | canonical | none | — | conforms exactly |
 | `TYPE_IMPORTS.md` | 9 | canonical | none | — | conforms exactly |
+| `TYPE_MODEL.md` | 9 | canonical | none | — | conforms exactly (internal design note) |
 | `SIMD.md` | 9 | canonical slots | §2/§3 say "the spec" | — | conforms (wording) |
 | `THREADS.md` | 9 | canonical slots | §2 "The proposal's model and what it demands" | — | conforms (wording) |
 | `GC.md` | 10 | canonical + appendix | §2/§3 "Wasm 3.0"; §5 "…and §2" | §10 "Beyond 3.0" after §9 | conforms (appendix) |
 | `COMPONENT_MODEL.md` | 10 | canonical + interleave | §2/§3 subject-named; §4 "What is in the tree today"; §7 "Staged plan" | §9 "How this relates…" before §10 References | conforms (parser + structural validation) |
 | `SMALL_PROPOSALS.md` | 8 | grouped (3-in-1) | §2–§4 are proposals; demands/non-demands/implemented/gaps embedded | §5 fast/loose, §6 plan, §7 survey, §8 refs | conforms (grouped variant, PD1) |
 
-Reading: twenty notes match §2 exactly; two reword §2/§3 and keep the nine slots;
-two append a section; one uses the grouped variant. No note is missing a slot,
-and none is missing its front matter.
+Reading: twenty-one notes match §2 exactly; two reword §2/§3 and keep the nine
+slots; two append a section; one uses the grouped variant. No note is missing a
+slot, and none is missing its front matter. `TYPE_MODEL.md` conforms to the nine
+slots but is an internal type-store design note, not a WebAssembly feature
+proposal.
 
 ## 9. References
 
