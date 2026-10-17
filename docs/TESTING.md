@@ -242,7 +242,7 @@ failure details:
 
 ```
 [spec] local_set: passed=20 failed=0 skipped=33
-[spec] local_set: skipped 33x: assert_invalid: no validating front end (set WASM_SPEC_VALIDATE=1 to measure)
+[spec] local_set: skipped 33x: assert_invalid: negative-module commands not executed by default (set WASM_SPEC_VALIDATE=1 to measure; see docs/VALIDATION.md)
 ```
 
 ```
@@ -318,18 +318,19 @@ different layers: the **decoder** (`assert_malformed`), a **validator**
 (`assert_uninstantiable`). `WASM_SPEC_VALIDATE=1` executes them instead of
 skipping them and prints one diagnostic per binary case
 (`[validate] <kind> <accepted|rejected|trapped> <file>`). The default run is
-unchanged and stays green; the strict run is expected to fail on
-`assert_invalid` until a validator exists.
+unchanged and stays green; the strict run is expected to fail on the invalid
+modules the validator does not model yet. The validator itself is documented in
+[`VALIDATION.md`](VALIDATION.md).
 
 Measured against the curated set:
 
 | Kind | Binary cases | Rejected (pass) | Accepted (fail) | Reading |
 | --- | ---: | ---: | ---: | --- |
-| `assert_invalid` | 1153 | 4 | **1149** | needs a validating front end. The 4 rejections are `ref.1/2/6/7` — a type-section reference to a later rec group, a decoder rule rather than validation |
-| `assert_malformed` | 13 | 4 | **9** | decoder strictness. The other **656** malformed cases are text/`module quote` and cannot run without a text parser |
-| `assert_unlinkable` | 32 | **32** | **0** | the linker now rejects all of them: 28 were already, and the 4 `memory64-imports.66–69` cases needed the index type to be published and matched (`MEMORY64` M2) |
+| `assert_invalid` | 1153 | **1086** | 67 | the validator types module structure, control flow, core numeric/memory/table instructions, 194 SIMD shapes and atomics. Remaining: reference/GC cast rules, `try_table` catch labels, `if` edge rules |
+| `assert_malformed` | 13 | 8 | 5 | decoder strictness. The other **656** malformed cases are text/`module quote` and cannot run without a text parser |
+| `assert_unlinkable` | 32 | **32** | 0 | the linker rejects all of them, including the four `memory64-imports` index-type cases (`MEMORY64` M2) |
 | `assert_uninstantiable` | 0 | — | — | no curated case |
-| **total** | **1198** | **40** | **1158** | 1149 of the failures — 96 % of the binary negative cases — are the missing validator |
+| **total** | **1198** | **1126** | **72** | 94 % rejected; the 67 remaining `assert_invalid` cases are the conservative-taint boundary, not false accepts of unchecked structure |
 
 Even in strict mode 659 negative commands (3 `assert_invalid` + 656
 `assert_malformed`) are text-format and stay skipped: the loader is binary-only.
@@ -337,10 +338,9 @@ The exercise paid for itself three times: it showed that the decoder and linker
 already cover a useful fraction; it exposed a real engine bug — the exception
 classes in `WasmBase/WasmException.hpp` inherited `std::exception` **privately**,
 so an unresolved import escaped every `catch (const std::exception&)` (the
-harness's child died with `produced no report`); and once that was fixed, the
-four residual `memory64-imports` link failures became visible — and were fixed by
-publishing the memory's index type (`LinearMemory::is64`) and matching it in
-`memorySatisfiesImport`. All 32 curated `assert_unlinkable` cases are now rejected.
+harness's child died with `produced no report`); and it exposed an uninitialised
+`Module::hasDataCount`/`dataSegmentCount` pair that the validator's consistency
+rule read as garbage.
 
 `assert_exhaustion` is the one command family that is *expected* to produce
 kernel `segfault` lines: its nested child is supposed to exhaust the host stack,

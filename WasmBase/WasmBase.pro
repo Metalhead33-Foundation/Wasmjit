@@ -28,6 +28,7 @@ SOURCES += \
         WasmTrap.cpp \
         WasmType.cpp \
         WasmTypeRegistry.cpp \
+        WasmValidator.cpp \
         wasm_atomic.cpp \
         wasm_simd_scalar.cpp \
         wasm_simd_vector.cpp
@@ -55,6 +56,7 @@ HEADERS += \
     WasmType.hpp \
     WasmTypeIdentity.hpp \
     WasmTypeRegistry.hpp \
+    WasmValidator.hpp \
     WasmVMContext.hpp \
     WasmValue.hpp \
     wasm_atomic.hpp \

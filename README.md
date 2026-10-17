@@ -47,6 +47,7 @@ per-milestone done markers, is the authoritative per-item status.
 | [`ABI.md`](docs/ABI.md) | The `VMContext*`-as-arg0 calling convention, the `Callable` layout, store-owned entities, and the embedder guide | Reference (describes shipped behaviour) | `████████████████████` current |
 | [`TYPE_IDENTITY.md`](docs/TYPE_IDENTITY.md) | Module-local type indices → process-wide `TypeId`: canonicalisation, interning, `rec` groups, the `match` relation | Design note + implementation reference | `███████████████████░` 95% — M0–M7 shipped; M8 (footprint measurement) pending |
 | [`TESTING.md`](docs/TESTING.md) | Building/running the Catch2 suite, the `wasm-tools` spec-suite conversion, the curated `wast_supported.txt` workflow, reading the output | Guide (process) | `████████████████████` current |
+| [`VALIDATION.md`](docs/VALIDATION.md) | The validating front end: what `Module::validate()` checks, the conservative taint policy, measured `assert_invalid` coverage, and the remaining rules | Design + status | `█████████████████░░░` 94 % of negative modules |
 | [`SAFETY.md`](docs/SAFETY.md) | The safety policies: artifact detection, input-derived allocation bounds, the allocation budget, traps vs `abort`, RAII for locks, and the pitfalls that produced them | Policy + pitfalls | `████████████████████` current |
 | [`NULL_JIT_VALUE_DIAGNOSIS.md`](docs/NULL_JIT_VALUE_DIAGNOSIS.md) | Why an unmodelled value type (`exnref`) lowers to `jit_type_void` and pushes a null `jit_value_t`, and the fix (reject such a module at load) that unblocked operand-stack ownership | Investigation note | `████████████████████` resolved |
 | [`SIMD_BACKENDS.md`](docs/SIMD_BACKENDS.md) | Whether LibJIT / SLJIT / AsmJit support SIMD, the workarounds when they do not, the recommended helper-based lowering for LibJIT — with the native path a backend that has vector registers takes instead (§4, SIMD-8) — and a per-layer laxness budget for conforming loosely | Research note | `████████████████████` survey current |
@@ -82,13 +83,11 @@ Reading the estimates:
 
 Most rows that end in "validation" share one blocker, and it is now measured
 rather than assumed: `WASM_SPEC_VALIDATE=1` executes the four negative-module
-families instead of skipping them. Of **1,198** binary negative cases in the
-curated set the decoder/linker already reject **40**; **1,149** of the remaining
-**1,158** are `assert_invalid`, i.e. the same missing validating front end. The
-`assert_malformed` and `assert_unlinkable` families are *not* validator work
-(a 9/13 residual decoder gap and **0/32** link failures, after the memory index
-type was matched at link time), and 656 of the 669 malformed cases are
-text-format and need a text parser, not a validator. See
+families instead of skipping them, and the validator (`docs/VALIDATION.md`)
+rejects **1,086 of 1,153** curated `assert_invalid` cases plus all 32
+`assert_unlinkable` ones. The default suite is unchanged. The `assert_malformed`
+family is still mostly *text-format* (656 of 669) and needs a text parser, not a
+validator. See
 [`docs/TESTING.md`](docs/TESTING.md#measuring-the-negative-module-commands).
 
 To refresh a number, re-run the row's script from `build/Desktop-Debug/Test`:

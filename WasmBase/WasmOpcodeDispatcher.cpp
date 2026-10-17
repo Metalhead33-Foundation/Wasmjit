@@ -1048,6 +1048,11 @@ void OpcodeDispatcher::dispatchOpcode(FastMemReader& stream, Opcode opcode)
 	}
 }
 
+void OpcodeDispatcher::onUnhandledOpcode(const char* name)
+{
+	throw std::logic_error(std::string("opcode dispatch is not implemented: ") + name);
+}
+
 void OpcodeDispatcher::readCode(FastMemReader& stream)
 {
 	bool shouldStop = false;

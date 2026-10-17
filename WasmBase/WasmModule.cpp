@@ -1,6 +1,7 @@
 #include "WasmModule.hpp"
 #include "WasmSafety.hpp"
 #include "WasmStore.hpp"
+#include "WasmValidator.hpp"
 #include <cstdio>
 #include <iostream>
 #include <stdexcept>
@@ -768,7 +769,9 @@ void Module::handleComplexElementSegment(DWasmStream& stream, ElementSegment& se
 	}
 }
 
-Module::Module() : version(0), startFunctionIndex(0), hasStartFunction(false) {
+Module::Module()
+	: version(0), startFunctionIndex(0), dataSegmentCount(0),
+	  hasStartFunction(false), hasDataCount(false) {
 }
 
 namespace {
@@ -827,6 +830,12 @@ void Module::validateValueTypes() const
 			check("local", i, l.type.opcode);
 }
 
+void Module::validate() const
+{
+	Validator validator(*this);
+	validator.validate();
+}
+
 void Module::fromFile(Elv::Io::Device& file)
 {
 	// Its own scope. Should go out of scope before processSecetions
@@ -862,6 +871,7 @@ void Module::fromFile(Elv::Io::Device& file)
 	// Reject a module that declares a value type this engine cannot lower, rather
 	// than compiling a null operand into a function (docs/NULL_JIT_VALUE_DIAGNOSIS.md).
 	validateValueTypes();
+	validate();
 }
 
 const std::span<const Section> Module::getSections() const

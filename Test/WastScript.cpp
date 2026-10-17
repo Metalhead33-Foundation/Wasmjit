@@ -1218,8 +1218,8 @@ void ScriptRunner::onAssertMalformed(const ScriptCommand& command)
 void ScriptRunner::onAssertInvalid(const ScriptCommand& command)
 {
 	if (!strictValidation) {
-		skip("assert_invalid: no validating front end "
-			 "(set WASM_SPEC_VALIDATE=1 to measure)");
+		skip("assert_invalid: negative-module commands not executed by default "
+			 "(set WASM_SPEC_VALIDATE=1 to measure; see docs/VALIDATION.md)");
 		return;
 	}
 	if (command.moduleType != "binary") {

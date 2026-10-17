@@ -82,6 +82,11 @@ public:
 	// std::runtime_error naming the offending declaration. See
 	// docs/NULL_JIT_VALUE_DIAGNOSIS.md.
 	void validateValueTypes() const;
+	// Structural validation of the decoded module (WasmValidator.cpp): section
+	// and index consistency, limits, exports, start, tags, global initialisers,
+	// active segment targets, and the immediate checks in every function body.
+	// Throws std::runtime_error naming the first failed rule.
+	void validate() const;
 	bool isSubtype(TypeIdx actual, TypeIdx expected) const;
 	bool heapTypeMatchesTypeIndex(TypeIdx actual, const HeapType& expected) const;
 	static std::string readLEB128String(DWasmStream& stream);
