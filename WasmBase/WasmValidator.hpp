@@ -65,6 +65,14 @@ private:
 	bool memoryIs64(uint32_t idx) const;
 	bool memoryIsShared(uint32_t idx) const;
 
+	// Reference subtyping (nullability + the func/extern/exn/any hierarchies).
+	bool refSubtype(const ValueType& actual, const ValueType& expected) const;
+	bool isEqRef(const ValueType& type) const {
+		return refSubtype(type, ValueType{ValueTypeCode::EqRef, -1});
+	}
+	// A typed reference's concrete heap type must name a declared type.
+	void requireWellFormedType(const ValueType& type, const std::string& where) const;
+
 	void checkLimits(const Limits& limits, bool is64, bool isMemory,
 					 const char* what, std::size_t index) const;
 	void requireMemoryAccess(const MemArg& arg, uint32_t naturalLog2) const;
@@ -137,6 +145,7 @@ private:
 	void validateGlobalInit(const Global& global, std::size_t index);
 	void validateElementSegment(const ElementSegment& segment, std::size_t index);
 	void validateDataSegment(const DataSegment& segment, std::size_t index);
+	void validateTableInit(const TableType& table, std::size_t index) const;
 	void validateFunctionBody(const FunctionBody& body, std::size_t index);
 
 	void onUnhandledOpcode(const char* name) override;
@@ -159,6 +168,11 @@ private:
 	void dispatchThrowRef() override;
 	void dispatchTryTable(const BlockType& arg1, std::vector<CatchClause>&& arg2) override;
 	void dispatchSelectT(std::vector<ValueType>&& arg) override;
+	void dispatchBrOnNull(LabelIdx arg) override;
+	void dispatchBrOnNonNull(LabelIdx arg) override;
+	void dispatchBrOnCast(uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2) override;
+	void dispatchBrOnCastFail(uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2) override;
+	void validateBrOnCast(bool isFail, uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2);
 
 	void dispatchTableGet(TableIdx arg) override;
 	void dispatchTableSet(TableIdx arg) override;
@@ -624,6 +638,9 @@ private:
 	void dispatchI16x8Bitmask() override;
 	void dispatchI32x4Bitmask() override;
 	void dispatchI64x2Bitmask() override;
+
+	void dispatchI8x16Swizzle() override;
+	void dispatchI8x16RelaxedSwizzle() override;
 
 	// SIMD memory accesses and lanes.
 	void dispatchV128Load(MemArg arg) override;

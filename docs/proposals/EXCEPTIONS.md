@@ -7,8 +7,8 @@ protocol, static cross-frame dispatch), EX-4 `try_table` catch routing
 (including `*_ref`) and EX-5 verification (`assert_exception`, a manual
 test, three curated scripts). `throw` **10/0**, `throw_ref` **13/0**,
 `try_table` **56/0**. What remains is `exnref` storage in tables (shared with
-`FUNCTION_REFERENCES.md` FR-6) and `try_table` catch-label typing in the
-validator; the rest of the instruction set is validated.
+`FUNCTION_REFERENCES.md` FR-6); validation now rejects every curated negative
+module, including `try_table` catch labels.
 Audience: anyone touching `WasmModule`, `WasmType`, `WasmStore`,
 `WasmVMContext`, `LibjitOpcodeDispatcher`, or the test harness.
 

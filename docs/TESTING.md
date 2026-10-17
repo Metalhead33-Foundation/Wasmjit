@@ -326,11 +326,11 @@ Measured against the curated set:
 
 | Kind | Binary cases | Rejected (pass) | Accepted (fail) | Reading |
 | --- | ---: | ---: | ---: | --- |
-| `assert_invalid` | 1193 | **1118** | 75 | the validator types module structure, control flow, core numeric/memory/table instructions, 194 SIMD shapes and atomics. Remaining: reference/GC cast rules, `try_table` catch labels, `if` edge rules |
+| `assert_invalid` | 1193 | **1193** | 0 | every curated invalid module is rejected: module structure, exact control-flow stack, core numeric/memory/table, 194 SIMD shapes, atomics, full reference subtyping, `br_on_*` and `try_table` catch labels |
 | `assert_malformed` | 17 | 8 | 9 | decoder strictness. The other **656** malformed cases are text/`module quote` and cannot run without a text parser |
 | `assert_unlinkable` | 32 | **32** | 0 | the linker rejects all of them, including the four `memory64-imports` index-type cases (`MEMORY64` M2) |
 | `assert_uninstantiable` | 0 | — | — | no curated case |
-| **total** | **1242** | **1158** | **84** | 93 % rejected; the 75 remaining `assert_invalid` cases are the conservative-taint boundary, not false accepts of unchecked structure |
+| **total** | **1242** | **1233** | **9** | 99.3 % rejected; the nine remaining strict failures are decoder-level `assert_malformed` cases |
 
 Even in strict mode 662 negative commands (6 `assert_invalid` + 656
 `assert_malformed`) are text-format and stay skipped: the loader is binary-only.

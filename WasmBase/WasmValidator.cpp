@@ -196,6 +196,9 @@ std::vector<ValueType> Validator::blockParams(const BlockType& blockType) const
 {
 	if (blockType.isTypeIndex)
 		return paramTypes(funcTypeAt(blockType.typeIndex));
+	if (blockType.heapType >= 0
+			&& static_cast<uint32_t>(blockType.heapType) >= module.types.size())
+		fail("block type: unknown type " + std::to_string(blockType.heapType));
 	// A value-typed block type is a single *result*; it never has parameters.
 	return {};
 }
@@ -206,6 +209,9 @@ std::vector<ValueType> Validator::blockResults(const BlockType& blockType) const
 		return resultTypes(funcTypeAt(blockType.typeIndex));
 	if (blockType.isVoid())
 		return {};
+	if (blockType.heapType >= 0
+			&& static_cast<uint32_t>(blockType.heapType) >= module.types.size())
+		fail("block type: unknown type " + std::to_string(blockType.heapType));
 	return {ValueType{blockType.valType, blockType.heapType}};
 }
 
@@ -238,7 +244,7 @@ void Validator::popExpect(ValueTypeCode code)
 
 bool Validator::assignable(const ValueType& actual, const ValueType& expected) const
 {
-	if (actual.opcode == expected.opcode)
+	if (actual.opcode == expected.opcode && actual.heapType == expected.heapType)
 		return true;
 	const auto isRef = [](ValueTypeCode code) {
 		return code == ValueTypeCode::FuncRef || code == ValueTypeCode::ExternRef
@@ -251,12 +257,131 @@ bool Validator::assignable(const ValueType& actual, const ValueType& expected) c
 	};
 	if (!isRef(actual.opcode) || !isRef(expected.opcode))
 		return false;
-	if (actual.heapType >= 0 && expected.heapType >= 0) {
-		return actual.heapType == expected.heapType
-				|| module.isSubtype(static_cast<TypeIdx>(actual.heapType),
-									static_cast<TypeIdx>(expected.heapType));
+	return refSubtype(actual, expected);
+}
+
+bool Validator::refSubtype(const ValueType& actual, const ValueType& expected) const
+{
+	enum class Kind { Func, Extern, Exn, Any, Eq, I31, Struct, Array,
+					  None, NoFunc, NoExtern, NoExn,
+					  ConcreteFunc, ConcreteStruct, ConcreteArray, Other };
+	struct Info { bool isRef = false; bool nullable = false; Kind kind = Kind::Other; uint32_t idx = 0; };
+
+	const auto info = [this](const ValueType& type) {
+		Info out;
+		switch (type.opcode) {
+		case ValueTypeCode::FuncRef:      out = {true, true, Kind::Func, 0}; break;
+		case ValueTypeCode::ExternRef:    out = {true, true, Kind::Extern, 0}; break;
+		case ValueTypeCode::ExnRef:       out = {true, true, Kind::Exn, 0}; break;
+		case ValueTypeCode::AnyRef:       out = {true, true, Kind::Any, 0}; break;
+		case ValueTypeCode::EqRef:        out = {true, true, Kind::Eq, 0}; break;
+		case ValueTypeCode::I31Ref:       out = {true, true, Kind::I31, 0}; break;
+		case ValueTypeCode::StructRef:    out = {true, true, Kind::Struct, 0}; break;
+		case ValueTypeCode::ArrayRef:     out = {true, true, Kind::Array, 0}; break;
+		case ValueTypeCode::NullRef:      out = {true, true, Kind::None, 0}; break;
+		case ValueTypeCode::NullFuncRef:  out = {true, true, Kind::NoFunc, 0}; break;
+		case ValueTypeCode::NullExternRef:out = {true, true, Kind::NoExtern, 0}; break;
+		case ValueTypeCode::NullExnRef:   out = {true, true, Kind::NoExn, 0}; break;
+		case ValueTypeCode::Ref:
+		case ValueTypeCode::RefNull: {
+			out.isRef = true;
+			out.nullable = (type.opcode == ValueTypeCode::RefNull);
+			if (type.heapType >= 0) {
+				const auto idx = static_cast<uint32_t>(type.heapType);
+				out.idx = idx;
+				if (idx >= module.types.size()) {
+					out.kind = Kind::Other;
+					break;
+				}
+				const Subtype& subtype = module.types[idx];
+				out.kind = subtype.isFunction() ? Kind::ConcreteFunc
+						: subtype.isStruct() ? Kind::ConcreteStruct
+						: subtype.isArray() ? Kind::ConcreteArray : Kind::Other;
+			} else {
+				switch (static_cast<ValueTypeCode>(type.heapType)) {
+				case ValueTypeCode::Func:
+				case ValueTypeCode::FuncRef:   out.kind = Kind::Func; break;
+				case ValueTypeCode::ExternRef: out.kind = Kind::Extern; break;
+				case ValueTypeCode::ExnRef:     out.kind = Kind::Exn; break;
+				case ValueTypeCode::AnyRef:     out.kind = Kind::Any; break;
+				case ValueTypeCode::EqRef:      out.kind = Kind::Eq; break;
+				case ValueTypeCode::I31Ref:     out.kind = Kind::I31; break;
+				case ValueTypeCode::StructRef:  out.kind = Kind::Struct; break;
+				case ValueTypeCode::ArrayRef:   out.kind = Kind::Array; break;
+				case ValueTypeCode::NullRef:    out.kind = Kind::None; break;
+				case ValueTypeCode::NullFuncRef:out.kind = Kind::NoFunc; break;
+				case ValueTypeCode::NullExternRef:out.kind = Kind::NoExtern; break;
+				case ValueTypeCode::NullExnRef: out.kind = Kind::NoExn; break;
+				default:                        out.kind = Kind::Other; break;
+				}
+			}
+			break;
+		}
+		default:
+			break;
+		}
+		return out;
+	};
+
+	const Info a = info(actual);
+	const Info e = info(expected);
+	if (!a.isRef || !e.isRef)
+		return false;
+	// A nullable value cannot satisfy a non-null requirement.
+	if (a.nullable && !e.nullable)
+		return false;
+
+	// Bottom types (nullref/nofunc/noextern/noexn) are subtypes of their hierarchy.
+	if (a.kind == Kind::None)
+		return e.kind == Kind::None || e.kind == Kind::Any || e.kind == Kind::Eq
+				|| e.kind == Kind::I31 || e.kind == Kind::Struct || e.kind == Kind::Array
+				|| e.kind == Kind::ConcreteStruct || e.kind == Kind::ConcreteArray;
+	if (a.kind == Kind::NoFunc)
+		return e.kind == Kind::NoFunc || e.kind == Kind::Func || e.kind == Kind::ConcreteFunc;
+	if (a.kind == Kind::NoExtern)
+		return e.kind == Kind::NoExtern || e.kind == Kind::Extern;
+	if (a.kind == Kind::NoExn)
+		return e.kind == Kind::NoExn || e.kind == Kind::Exn;
+
+	// A concrete expected type only accepts a concrete actual (with subtyping).
+	if (e.kind == Kind::ConcreteFunc || e.kind == Kind::ConcreteStruct || e.kind == Kind::ConcreteArray) {
+		if (a.kind == Kind::ConcreteFunc || a.kind == Kind::ConcreteStruct || a.kind == Kind::ConcreteArray)
+			return module.isSubtype(static_cast<TypeIdx>(a.idx), static_cast<TypeIdx>(e.idx));
+		return false;
 	}
-	return true; // nullability / abstract-hierarchy differences: stay permissive
+
+	// A concrete actual is a subtype of the matching abstract top(s).
+	if (a.kind == Kind::ConcreteFunc)
+		return e.kind == Kind::Func;
+	if (a.kind == Kind::ConcreteStruct)
+		return e.kind == Kind::Struct || e.kind == Kind::Eq || e.kind == Kind::Any;
+	if (a.kind == Kind::ConcreteArray)
+		return e.kind == Kind::Array || e.kind == Kind::Eq || e.kind == Kind::Any;
+
+	switch (e.kind) {
+	case Kind::Any:
+		return a.kind == Kind::Any || a.kind == Kind::Eq || a.kind == Kind::I31
+				|| a.kind == Kind::Struct || a.kind == Kind::Array;
+	case Kind::Eq:
+		return a.kind == Kind::Eq || a.kind == Kind::I31
+				|| a.kind == Kind::Struct || a.kind == Kind::Array;
+	case Kind::I31:    return a.kind == Kind::I31;
+	case Kind::Struct: return a.kind == Kind::Struct;
+	case Kind::Array:  return a.kind == Kind::Array;
+	case Kind::Func:   return a.kind == Kind::Func;
+	case Kind::Extern: return a.kind == Kind::Extern;
+	case Kind::Exn:    return a.kind == Kind::Exn;
+	default:           return a.kind == e.kind;
+	}
+}
+
+void Validator::requireWellFormedType(const ValueType& type, const std::string& where) const
+{
+	if ((type.opcode == ValueTypeCode::Ref || type.opcode == ValueTypeCode::RefNull)
+			&& type.heapType >= 0
+			&& static_cast<uint32_t>(type.heapType) >= module.types.size()) {
+		fail(where + ": unknown type " + std::to_string(type.heapType));
+	}
 }
 
 void Validator::popExpect(const ValueType& expected)
@@ -318,6 +443,8 @@ void Validator::endBlock(bool isElse)
 		if (!current.isIf || current.elseSeen)
 			fail("else without a matching if");
 		popTypes(current.endTypes);
+		if (!typeTainted && typeStack.size() != current.height)
+			fail("type mismatch: values remaining at else");
 		typeStack.resize(current.height);
 		pushTypes(current.startTypes);
 		current.unreachable = false;
@@ -325,6 +452,8 @@ void Validator::endBlock(bool isElse)
 		return;
 	}
 	popTypes(current.endTypes);
+	if (!typeTainted && typeStack.size() != current.height)
+		fail("type mismatch: values remaining at end");
 	if (current.isIf && !current.elseSeen) {
 		if (current.startTypes.size() != current.endTypes.size())
 			fail("type mismatch: if without else has a different result arity");
@@ -428,6 +557,36 @@ void Validator::validateModule()
 			fail("non-empty tag result type");
 	}
 
+	// Every typed reference must name a declared type.
+	for (std::size_t i = 0; i < module.types.size(); ++i) {
+		const Subtype& subtype = module.types[i];
+		if (subtype.isFunction()) {
+			for (const StorageType& p : std::get<FuncType>(subtype.composite).params)
+				requireWellFormedType(p.val, "function type parameter");
+			for (const StorageType& r : std::get<FuncType>(subtype.composite).results)
+				requireWellFormedType(r.val, "function type result");
+		} else if (subtype.isStruct()) {
+			for (const FieldType& field : std::get<StructType>(subtype.composite).fields)
+				requireWellFormedType(field.storageType.val, "struct field");
+		} else if (subtype.isArray()) {
+			requireWellFormedType(
+				std::get<ArrayType>(subtype.composite).elementType.storageType.val, "array element");
+		}
+	}
+	for (const ImportTable& imp : module.importTables)
+		requireWellFormedType(imp.table.elementType, "imported table");
+	for (const TableType& table : module.tables)
+		requireWellFormedType(table.elementType, "table");
+	for (const ImportGlobal& imp : module.importGlobals)
+		requireWellFormedType(imp.global.contentType, "imported global");
+	for (const Global& global : module.globals)
+		requireWellFormedType(global.type.contentType, "global");
+	for (const ElementSegment& segment : module.elementSegments)
+		requireWellFormedType(segment.elemType, "element segment");
+	for (const FunctionBody& body : module.functionBodies)
+		for (const LocalEntry& local : body.locals)
+			requireWellFormedType(local.type, "local");
+
 	if (module.functionBodies.size() != module.internalFunctionTypeIndices.size())
 		fail("function and code section have inconsistent lengths");
 	if (module.hasDataCount && module.dataSegmentCount != module.dataSegments.size())
@@ -467,10 +626,12 @@ void Validator::validateModule()
 	for (std::size_t i = 0; i < module.importTables.size(); ++i) {
 		const TableType& tt = module.importTables[i].table;
 		checkLimits(tt.limits, (tt.limits.flags & 0x04) != 0, false, "table", i);
+		validateTableInit(tt, i);
 	}
 	for (std::size_t i = 0; i < module.tables.size(); ++i) {
 		const TableType& tt = module.tables[i];
 		checkLimits(tt.limits, (tt.limits.flags & 0x04) != 0, false, "table", i);
+		validateTableInit(tt, i);
 	}
 
 	for (std::size_t i = 0; i < module.globals.size(); ++i)
@@ -529,7 +690,11 @@ void Validator::validateGlobalInit(const Global& global, std::size_t index)
 			uint32_t funcIdx = 0;
 			stream >> Elv::Io::Leb(funcIdx);
 			requireFunctionIndex(funcIdx);
-			push(ValueTypeCode::FuncRef);
+			const uint32_t typeIdx = funcIdx < module.importFunctions.size()
+					? module.importFunctions[funcIdx].typeIdx
+					: module.internalFunctionTypeIndices[funcIdx - module.importFunctions.size()];
+			// A function reference is non-null and has the function's concrete type.
+			stack.push_back(ValueType{ValueTypeCode::Ref, static_cast<int32_t>(typeIdx)});
 			break;
 		}
 		case 0x23: { // global.get: an earlier immutable global
@@ -564,18 +729,27 @@ void Validator::validateGlobalInit(const Global& global, std::size_t index)
 			uint32_t subOpcode = 0;
 			stream >> Elv::Io::Leb(subOpcode);
 			if (subOpcode != 12)
-				return; // not a modelled initializer form: accept
+				fail(label + ": constant expression required");
 			device.seek(16, Elv::Io::SeekOrigin::CUR);
 			push(ValueTypeCode::V128);
 			break;
+		}
+		case 0xFB: { // GC prefix: the constructors/conversions are const-eligible
+			uint32_t subOpcode = 0;
+			stream >> Elv::Io::Leb(subOpcode);
+			switch (subOpcode) {
+			case 0: case 1: case 6: case 7: case 8: case 9: case 10:
+			case 26: case 27: case 28:
+				return; // modelled by evalConstantExpr; conservatively accepted
+			default:
+				fail(label + ": constant expression required");
+			}
 		}
 		case 0x0B: // end
 			done = true;
 			break;
 		default:
-			// A const form this milestone does not model (v128.const, GC
-			// constructors, …): accept the initializer rather than guess.
-			return;
+			fail(label + ": constant expression required");
 		}
 	}
 
@@ -583,17 +757,51 @@ void Validator::validateGlobalInit(const Global& global, std::size_t index)
 		fail(label + ": type mismatch in initializer");
 	const ValueType& got = stack.back();
 	const ValueType& want = global.type.contentType;
-	const auto isRef = [](ValueTypeCode code) {
-		return code == ValueTypeCode::FuncRef || code == ValueTypeCode::ExternRef
-				|| code == ValueTypeCode::AnyRef || code == ValueTypeCode::EqRef
-				|| code == ValueTypeCode::I31Ref || code == ValueTypeCode::StructRef
-				|| code == ValueTypeCode::ArrayRef || code == ValueTypeCode::ExnRef
-				|| code == ValueTypeCode::NullFuncRef || code == ValueTypeCode::NullExternRef
-				|| code == ValueTypeCode::NullExnRef || code == ValueTypeCode::NullRef
-				|| code == ValueTypeCode::Ref || code == ValueTypeCode::RefNull;
-	};
-	if (got.opcode != want.opcode && !(isRef(got.opcode) && isRef(want.opcode)))
+	if (!assignable(got, want))
 		fail(label + ": initializer type does not match the global type");
+}
+
+void Validator::validateTableInit(const TableType& table, std::size_t index) const
+{
+	if (table.initExpr.empty())
+		return;
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(table.initExpr.data()), table.initExpr.size());
+	Euph::Io::ConstBufferDevice device(span);
+	FastMemReader stream(device);
+	while (true) {
+		uint8_t op = 0;
+		stream >> op;
+		switch (op) {
+		case 0x23: { // global.get: only globals declared before the table exist
+			uint32_t globalIdx = 0;
+			stream >> Elv::Io::Leb(globalIdx);
+			if (globalIdx >= module.importGlobals.size())
+				fail("table " + std::to_string(index) + ": unknown global in initializer");
+			if (module.importGlobals[globalIdx].global.isMutable)
+				fail("table " + std::to_string(index) + ": initializer must be immutable");
+			break;
+		}
+		case 0xD0: { // ref.null
+			HeapType ht;
+			stream >> ht;
+			if (ht.isTypeIndex && ht.typeIndex >= module.types.size())
+				fail("table " + std::to_string(index) + ": unknown type");
+			break;
+		}
+		case 0xD2: { // ref.func
+			uint32_t funcIdx = 0;
+			stream >> Elv::Io::Leb(funcIdx);
+			requireFunctionIndex(funcIdx);
+			break;
+		}
+		case 0x0B:
+			return;
+		default:
+			// A const form this milestone does not model: accept.
+			return;
+		}
+	}
 }
 
 void Validator::validateElementSegment(const ElementSegment& segment, std::size_t index)
@@ -718,7 +926,7 @@ void Validator::dispatchReturnCallIndirect(TypeIdx typeIdx, TableIdx tableIdx)
 void Validator::dispatchCallRef(TypeIdx typeIdx)
 {
 	const FuncType& type = funcTypeAt(typeIdx);
-	popExpect(ValueType{ValueTypeCode::Ref, -1});
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(typeIdx)});
 	popTypes(paramTypes(type));
 	pushTypes(resultTypes(type));
 }
@@ -726,7 +934,7 @@ void Validator::dispatchCallRef(TypeIdx typeIdx)
 void Validator::dispatchReturnCallRef(TypeIdx typeIdx)
 {
 	const FuncType& type = funcTypeAt(typeIdx);
-	popExpect(ValueType{ValueTypeCode::Ref, -1});
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(typeIdx)});
 	popTypes(paramTypes(type));
 	checkTailCallResults(type);
 	setUnreachable();
@@ -735,7 +943,11 @@ void Validator::dispatchReturnCallRef(TypeIdx typeIdx)
 void Validator::dispatchRefFunc(FuncIdx arg)
 {
 	requireFunctionIndex(arg);
-	pushValue(ValueType{ValueTypeCode::FuncRef, -1});
+	const uint32_t typeIdx = arg < module.importFunctions.size()
+			? module.importFunctions[arg].typeIdx
+			: module.internalFunctionTypeIndices[arg - module.importFunctions.size()];
+	// ref.func produces a *non-null* reference of the function's concrete type.
+	pushValue(ValueType{ValueTypeCode::Ref, static_cast<int32_t>(typeIdx)});
 }
 
 void Validator::dispatchRefNull(const HeapType& heapType)
@@ -766,24 +978,159 @@ void Validator::dispatchThrowRef()
 	setUnreachable();
 }
 
+void Validator::dispatchBrOnNull(LabelIdx label)
+{
+	const auto ref = popAny();
+	if (!ref)
+		return; // unreachable
+	if (!refSubtype(*ref, *ref))
+		fail("br_on_null requires a reference");
+	if (label >= controlStack.size())
+		fail("unknown label " + std::to_string(label));
+	const ControlFrame& target = controlStack[controlStack.size() - 1 - label];
+	const std::vector<ValueType>& types = target.isLoop ? target.startTypes : target.endTypes;
+	// The branch passes the values below the reference (the label's types);
+	// the non-null case falls through with those values *and* the refined ref.
+	popTypes(types);
+	pushTypes(types);
+
+	ValueType refined{};
+	refined.opcode = ValueTypeCode::Ref;
+	refined.heapType = (ref->opcode == ValueTypeCode::Ref || ref->opcode == ValueTypeCode::RefNull)
+			? ref->heapType
+			: static_cast<int32_t>(ref->opcode);
+	pushValue(refined);
+}
+
+void Validator::dispatchBrOnNonNull(LabelIdx label)
+{
+	const auto ref = popAny();
+	if (!ref)
+		return; // unreachable
+	if (!refSubtype(*ref, *ref))
+		fail("br_on_non_null requires a reference");
+	if (label >= controlStack.size())
+		fail("unknown label " + std::to_string(label));
+	const ControlFrame& target = controlStack[controlStack.size() - 1 - label];
+	const std::vector<ValueType>& types = target.isLoop ? target.startTypes : target.endTypes;
+	if (types.empty())
+		fail("type mismatch: br_on_non_null label arity");
+
+	ValueType refined{};
+	refined.opcode = ValueTypeCode::Ref;
+	refined.heapType = (ref->opcode == ValueTypeCode::Ref || ref->opcode == ValueTypeCode::RefNull)
+			? ref->heapType
+			: static_cast<int32_t>(ref->opcode);
+	if (!assignable(refined, types.back()))
+		fail("type mismatch: br_on_non_null label type");
+
+	// The branch passes the values below the ref plus the refined ref; the
+	// null case falls through with only the values below it.
+	std::vector<ValueType> prefix(types.begin(), types.end() - 1);
+	popTypes(prefix);
+	pushTypes(prefix);
+}
+
+void Validator::dispatchBrOnCast(uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2)
+{
+	validateBrOnCast(false, castop, label, ht1, ht2);
+}
+
+void Validator::dispatchBrOnCastFail(uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2)
+{
+	validateBrOnCast(true, castop, label, ht1, ht2);
+}
+
+void Validator::validateBrOnCast(bool isFail, uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2)
+{
+	const auto makeRef = [](bool nullable, const HeapType& ht) {
+		ValueType type{};
+		type.opcode = nullable ? ValueTypeCode::RefNull : ValueTypeCode::Ref;
+		type.heapType = ht.isTypeIndex ? static_cast<int32_t>(ht.typeIndex)
+									   : static_cast<int32_t>(ht.abstract);
+		return type;
+	};
+	// castop bit 0 = the input is nullable; bit 1 = the cast result is nullable.
+	const bool inputNullable = (castop & 0x01) != 0;
+	const bool castNullable = (castop & 0x02) != 0;
+	const ValueType input = makeRef(inputNullable, ht1);
+	const ValueType cast = makeRef(castNullable, ht2);
+	// The non-cast remainder `rt1 \ rt2`: when the cast target is nullable, null
+	// is part of the cast, so the remainder is non-null.
+	const ValueType difference = makeRef(inputNullable && !castNullable, ht1);
+	requireWellFormedType(input, "br_on_cast input");
+	requireWellFormedType(cast, "br_on_cast target");
+	if (!assignable(cast, input))
+		fail("type mismatch: br_on_cast target is not a subtype of the input");
+
+	const auto actual = popAny();
+	if (!actual)
+		return; // unreachable
+	if (!assignable(*actual, input))
+		fail("type mismatch: br_on_cast input");
+	if (label >= controlStack.size())
+		fail("unknown label " + std::to_string(label));
+	const ControlFrame& target = controlStack[controlStack.size() - 1 - label];
+	const std::vector<ValueType>& labelTypes = target.isLoop ? target.startTypes : target.endTypes;
+	if (labelTypes.empty())
+		fail("type mismatch: br_on_cast label arity");
+
+	// br_on_cast branches with the cast value and falls through with the
+	// remainder; br_on_cast_fail is the other way round.
+	const ValueType branchValue = isFail ? difference : cast;
+	if (!assignable(branchValue, labelTypes.back()))
+		fail("type mismatch: br_on_cast label type");
+	std::vector<ValueType> prefix(labelTypes.begin(), labelTypes.end() - 1);
+	popTypes(prefix);
+	pushTypes(prefix);
+	pushValue(isFail ? cast : difference);
+}
+
 void Validator::dispatchTryTable(const BlockType& blockType, std::vector<CatchClause>&& catches)
 {
 	for (const CatchClause& clause : catches) {
 		if (clause.kind == CatchKind::Catch || clause.kind == CatchKind::CatchRef)
 			requireTagIndex(clause.tagIdx);
+		if (clause.labelIdx >= controlStack.size())
+			fail("try_table catch: unknown label " + std::to_string(clause.labelIdx));
+
+		// Catch labels are resolved in the *enclosing* context (the try_table's
+		// own label is introduced inside its body and is not a catch target).
+		const ControlFrame& target = controlStack[controlStack.size() - 1 - clause.labelIdx];
+		const std::vector<ValueType>& labelTypes = target.isLoop ? target.startTypes : target.endTypes;
+		std::vector<ValueType> payload;
+		if (clause.kind == CatchKind::Catch || clause.kind == CatchKind::CatchRef) {
+			const uint32_t typeIdx = clause.tagIdx < module.importTags.size()
+					? module.importTags[clause.tagIdx].typeIdx
+					: module.tags[clause.tagIdx - module.importTags.size()].typeIdx;
+			payload = paramTypes(funcTypeAt(typeIdx));
+			if (clause.kind == CatchKind::CatchRef)
+				payload.push_back(ValueType{ValueTypeCode::Ref,
+						static_cast<int32_t>(ValueTypeCode::ExnRef)});
+		} else if (clause.kind == CatchKind::CatchAllRef) {
+			payload.push_back(ValueType{ValueTypeCode::Ref,
+					static_cast<int32_t>(ValueTypeCode::ExnRef)});
+		}
+		if (payload.size() != labelTypes.size())
+			fail("type mismatch: catch label arity");
+		for (std::size_t i = 0; i < payload.size(); ++i) {
+			if (!assignable(payload[i], labelTypes[i]))
+				fail("type mismatch: catch label type");
+		}
 	}
-	// Catch labels are checked once the tag payload rules land; the block
-	// itself is typed like any other block. A catch also injects the payload
-	// into an *outer* label, which this linear stack does not model, so stop
-	// trusting the operand stack from here (indices are still checked).
 	beginBlock(blockType, false, false);
-	typeTainted = true;
+	// A catch injects its payload into an *outer* label, which this linear
+	// stack does not model; keep immediate/index checks for the rest of the
+	// body but stop trusting the operand stack when there are catches.
+	if (!catches.empty())
+		typeTainted = true;
 }
 
 void Validator::dispatchSelectT(std::vector<ValueType>&& types)
 {
 	if (types.size() != 1)
 		fail("select: invalid result arity");
+	requireWellFormedType(types[0], "select result");
 	popExpect(ValueTypeCode::I32);
 	popExpect(types[0]);
 	popExpect(types[0]);
@@ -1113,8 +1460,12 @@ void Validator::dispatchRefIsNull()
 
 void Validator::dispatchRefEq()
 {
-	(void)popAny();
-	(void)popAny();
+	const auto right = popAny();
+	const auto left = popAny();
+	if (right && !isEqRef(*right))
+		fail("ref.eq requires eqref operands");
+	if (left && !isEqRef(*left))
+		fail("ref.eq requires eqref operands");
 	pushValue(ValueType{ValueTypeCode::I32, -1});
 }
 
@@ -1228,6 +1579,9 @@ WJ_SPLAT(I64x2Splat, I64)
 WJ_SPLAT(F32x4Splat, F32)
 WJ_SPLAT(F64x2Splat, F64)
 #undef WJ_SPLAT
+
+void Validator::dispatchI8x16Swizzle() { popExpect(ValueTypeCode::V128); popExpect(ValueTypeCode::V128); pushValue(ValueType{ValueTypeCode::V128, -1}); }
+void Validator::dispatchI8x16RelaxedSwizzle() { popExpect(ValueTypeCode::V128); popExpect(ValueTypeCode::V128); pushValue(ValueType{ValueTypeCode::V128, -1}); }
 
 // SIMD arithmetic/comparison/conversion typing: shapes from wasm_simd_ops.inc.
 #define WJ_SIMD_BIN(n) \

@@ -112,7 +112,7 @@ rule in [`ABI.md`](../ABI.md).
 
 | Script | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| `global` | 77 | 0 | 47 | R1/MG-2/MG-3: imported mutable globals alias the exporter. The 47 skips are 40 `assert_invalid` + 7 `assert_malformed`; strict run: 109 / 12 / 3 |
+| `global` | 77 | 0 | 47 | R1/MG-2/MG-3: imported mutable globals alias the exporter. The 47 skips are 40 `assert_invalid` + 7 `assert_malformed`; strict run: 117 / 4 / 3 (the four are `assert_malformed`) |
 | `exports0` | (curated) | | | plain exports work |
 
 `global` and `exports0` are curated.
