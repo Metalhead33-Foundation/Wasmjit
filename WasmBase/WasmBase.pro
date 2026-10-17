@@ -30,6 +30,7 @@ SOURCES += \
         WasmTable.cpp \
         WasmTrap.cpp \
         WasmType.cpp \
+        WasmTypeStore.cpp \
         WasmTypeRegistry.cpp \
         WasmValidator.cpp \
         wasm_atomic.cpp \
@@ -61,6 +62,7 @@ HEADERS += \
     WasmStore.hpp \
     WasmTable.hpp \
     WasmTrap.hpp \
+    WasmTypeStore.hpp \
     WasmType.hpp \
     WasmTypeIdentity.hpp \
     WasmTypeRegistry.hpp \

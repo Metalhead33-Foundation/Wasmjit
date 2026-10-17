@@ -189,7 +189,7 @@ void remapStorage(CanonStorageType& st, TypeId base) {
 }
 
 std::vector<CanonicalType> resolveGroup(const std::vector<CanonicalType>& pending, TypeId base,
-										const std::vector<CanonicalType>& canonicalTypes)
+										const TypeStore& store)
 {
 	std::vector<CanonicalType> out = pending; // deep copy
 	std::vector<uint32_t> depths(out.size(), 0);
@@ -198,7 +198,7 @@ std::vector<CanonicalType> resolveGroup(const std::vector<CanonicalType>& pendin
 		for (const CanonHeapType& s : out[i].supertypes) {
 			uint32_t sd = 0;
 			if (s.kind == CanonHeapType::Kind::Rec) sd = depths[s.memberIndex];
-			else if (s.kind == CanonHeapType::Kind::Global) sd = canonicalTypes[s.id.value].depth;
+			else if (s.kind == CanonHeapType::Kind::Global) sd = store.coreDepth(s.id);
 			if (sd + 1 > depth) depth = sd + 1;
 		}
 		out[i].depth = depth;
@@ -220,13 +220,13 @@ std::vector<CanonicalType> resolveGroup(const std::vector<CanonicalType>& pendin
 
 // --- declared-subtype / structural matching (M4; reused by M5) ---
 struct CanonView {
-	const std::vector<CanonicalType>* earlier = nullptr;
+	const TypeStore* earlier = nullptr;
 	const std::vector<CanonicalType>* group = nullptr; // group being interned, if any
 	TypeId groupBase{};
-	const CanonicalType& type(TypeId id) const {
+	CoreTypeView type(TypeId id) const {
 		if (group != nullptr && id.value >= groupBase.value)
-			return (*group)[id.value - groupBase.value];
-		return (*earlier)[id.value];
+			return CoreTypeView(&(*group)[id.value - groupBase.value]);
+		return CoreTypeView(earlier, id);
 	}
 };
 
@@ -253,14 +253,14 @@ bool abstractMatches(AbstractHeapType a, AbstractHeapType b) {
 }
 
 bool concreteMatchesAbstract(const CanonView& v, TypeId id, AbstractHeapType abs) {
-	const CanonicalType& t = v.type(id);
+	const CoreTypeView t = v.type(id);
 	switch (abs) {
 	case AbstractHeapType::Any:
 	case AbstractHeapType::Eq:
-		return t.kind == CanonTypeKind::Struct || t.kind == CanonTypeKind::Array;
-	case AbstractHeapType::Struct: return t.kind == CanonTypeKind::Struct;
-	case AbstractHeapType::Array:  return t.kind == CanonTypeKind::Array;
-	case AbstractHeapType::Func:   return t.kind == CanonTypeKind::Func;
+		return t.kind() == CanonTypeKind::Struct || t.kind() == CanonTypeKind::Array;
+	case AbstractHeapType::Struct: return t.kind() == CanonTypeKind::Struct;
+	case AbstractHeapType::Array:  return t.kind() == CanonTypeKind::Array;
+	case AbstractHeapType::Func:   return t.kind() == CanonTypeKind::Func;
 	default: return false;
 	}
 }
@@ -274,7 +274,7 @@ bool concreteMatches(const CanonView& v, TypeId a, TypeId b) {
 	while (!stack.empty()) {
 		const TypeId cur = stack.back();
 		stack.pop_back();
-		for (const CanonHeapType& s : v.type(cur).supertypes) {
+		for (const CanonHeapType& s : v.type(cur).supertypes()) {
 			if (s.kind != CanonHeapType::Kind::Global) continue;
 			if (s.id == b) return true;
 			if (seen.insert(s.id.value).second) stack.push_back(s.id);
@@ -320,26 +320,32 @@ bool fieldMatches(const CanonView& v, const CanonFieldType& a, const CanonFieldT
 
 // Structural comptype subtyping used to validate `sub` annotations: `actual` is
 // the subtype, `expected` the declared supertype's comptype.
-bool compMatches(const CanonView& v, const CanonicalType& actual, const CanonicalType& expected) {
-	if (actual.kind != expected.kind) return false;
-	switch (actual.kind) {
+bool compMatches(const CanonView& v, CoreTypeView actual, CoreTypeView expected) {
+	if (actual.kind() != expected.kind()) return false;
+	switch (actual.kind()) {
 	case CanonTypeKind::Func: {
-		if (actual.funcParams.size() != expected.funcParams.size()) return false;
-		if (actual.funcResults.size() != expected.funcResults.size()) return false;
-		for (size_t i = 0; i < actual.funcParams.size(); ++i)
-			if (!storageMatches(v, expected.funcParams[i], actual.funcParams[i])) return false; // contravariant
-		for (size_t i = 0; i < actual.funcResults.size(); ++i)
-			if (!storageMatches(v, actual.funcResults[i], expected.funcResults[i])) return false; // covariant
+		const auto actualParams = actual.funcParams();
+		const auto expectedParams = expected.funcParams();
+		const auto actualResults = actual.funcResults();
+		const auto expectedResults = expected.funcResults();
+		if (actualParams.size() != expectedParams.size()) return false;
+		if (actualResults.size() != expectedResults.size()) return false;
+		for (size_t i = 0; i < actualParams.size(); ++i)
+			if (!storageMatches(v, expectedParams[i], actualParams[i])) return false; // contravariant
+		for (size_t i = 0; i < actualResults.size(); ++i)
+			if (!storageMatches(v, actualResults[i], expectedResults[i])) return false; // covariant
 		return true;
 	}
 	case CanonTypeKind::Struct: {
-		if (actual.structFields.size() < expected.structFields.size()) return false; // width
-		for (size_t i = 0; i < expected.structFields.size(); ++i)
-			if (!fieldMatches(v, actual.structFields[i], expected.structFields[i])) return false;
+		const auto actualFields = actual.structFields();
+		const auto expectedFields = expected.structFields();
+		if (actualFields.size() < expectedFields.size()) return false; // width
+		for (size_t i = 0; i < expectedFields.size(); ++i)
+			if (!fieldMatches(v, actualFields[i], expectedFields[i])) return false;
 		return true;
 	}
 	case CanonTypeKind::Array:
-		return fieldMatches(v, actual.arrayElement, expected.arrayElement);
+		return fieldMatches(v, actual.arrayElement(), expected.arrayElement());
 	}
 	return false;
 }
@@ -363,20 +369,20 @@ std::vector<TypeId> TypeRegistry::internModule(std::span<const Subtype> types,
 		if (it != internTable.end()) {
 			base = recGroups[it->second.value].first;
 		} else {
-			base = TypeId{nextTypeId};
-			std::vector<CanonicalType> resolved = resolveGroup(pending, base, canonicalTypes);
+			base = TypeId{static_cast<uint32_t>(store_.recordCount())};
+			std::vector<CanonicalType> resolved = resolveGroup(pending, base, store_);
 
 			// M4: declared-subtype validation (docs/TYPE_IDENTITY.md §6.5). Every
 			// `sub` annotation must name a non-final supertype whose comptype the
 			// subtype structurally matches. Validation happens before the group is
 			// interned, so an invalid group never enters the intern table.
-			const CanonView view{&canonicalTypes, &resolved, base};
+			const CanonView view{&store_, &resolved, base};
 			for (const CanonicalType& member : resolved) {
 				for (const CanonHeapType& super : member.supertypes) {
 					if (super.kind != CanonHeapType::Kind::Global)
 						throw std::runtime_error("type section: unresolved supertype reference");
-					const CanonicalType& superType = view.type(super.id);
-					if (superType.isFinal)
+					const CoreTypeView superType = view.type(super.id);
+					if (superType.isFinal())
 						throw std::runtime_error("type section: a supertype must not be final");
 					if (!compMatches(view, member, superType))
 						throw std::runtime_error(
@@ -384,9 +390,8 @@ std::vector<TypeId> TypeRegistry::internModule(std::span<const Subtype> types,
 				}
 			}
 
-			for (CanonicalType& ct : resolved)
-				canonicalTypes.push_back(std::move(ct));
-			nextTypeId += group.count;
+			for (const CanonicalType& ct : resolved)
+				store_.appendCore(ct);
 			const RecGroupId groupId{static_cast<uint32_t>(recGroups.size())};
 			recGroups.push_back(CanonRecGroup{base, group.count});
 			internTable.emplace(std::move(key), groupId);
@@ -412,7 +417,7 @@ bool TypeRegistry::matches(TypeId actual, TypeId expected) const
 
 bool TypeRegistry::matchesHeap(CanonHeapType actual, CanonHeapType expected) const
 {
-	const CanonView view{&canonicalTypes, nullptr, TypeId{0}};
+	const CanonView view{&store_, nullptr, TypeId{0}};
 	return heapMatches(view, actual, expected);
 }
 

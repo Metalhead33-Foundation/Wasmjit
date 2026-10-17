@@ -1,5 +1,6 @@
 #include "WasmComponent.hpp"
 #include "WasmSafety.hpp"
+#include "WasmStore.hpp"
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <cstddef>
 #include <optional>
@@ -124,7 +125,7 @@ void Component::parseSectionPayload(ComponentSection& section,
 
 	switch (section.type) {
 	case ComponentSectionType::Custom: {
-		Reader r(device);
+		Reader r(device, Store::global().types().store());
 		section.name = r.name();
 		section.data = std::move(payload);
 		break;
@@ -140,7 +141,7 @@ void Component::parseSectionPayload(ComponentSection& section,
 				static_cast<uint32_t>(components.size() - 1)});
 		break;
 	default: {
-		Reader r(device);
+		Reader r(device, Store::global().types().store());
 		switch (section.type) {
 		case ComponentSectionType::CoreInstance:
 			r.vec([&] {

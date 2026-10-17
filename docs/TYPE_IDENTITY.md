@@ -192,10 +192,10 @@ as `TypeId Module::typeId(LocalTypeIdx) const`. Registry, runtime, linking, GC
 and JIT code reason in `TypeId`s and do not convert back and forth.
 
 **Component domain.** The identifiers above describe the core domain. Component
-value/function/instance/component types currently have only component-local
-indices and a validator-local resolved graph; they are not in `TypeRegistry`.
-The planned shared store, component `TypeId` domain, resource identity rules and
-migration stages are in
+types now have store `TypeId`s for their definitions, but they are not
+structurally interned and the validator still resolves them through a local
+`ResolvedType` graph. The planned shared store, component `TypeId` domain,
+resource identity rules and migration stages are in
 [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md).
 
 ### 6.2 Canonical form
@@ -490,11 +490,11 @@ dedicated suite:
   `unordered_map<TypeId, jit_type_t>` keyed on the canonical `TypeId`, so
   translated types are shared across modules and translation order no longer
   matters.
-- **Component types are outside this identity path.** They use component-local
-  type indices and a validator-only `ResolvedType` graph; there is no
-  `TypeId`, no interning and no cross-component equality yet. The proposed
-  unified store and component domain are described in
-  [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md).
+- **Component types are outside this interning path.** Definitions now receive
+  shared-store `TypeId`s, but they are not structurally interned and the
+  validator still builds a local `ResolvedType` graph; there is no
+  cross-component equality yet. The proposed component interning and resource
+  rules are described in [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md).
 
 ## 11. Non-goals / deferred
 

@@ -1,5 +1,6 @@
 #include "WasmComponentValidation.hpp"
 #include "WasmComponent.hpp"
+#include "WasmStore.hpp"
 #include <algorithm>
 #include <cctype>
 #include <map>
@@ -468,9 +469,9 @@ private:
 			const ValidationScope& scope);
 	ValuePtr resolveValue(const ComponentValueType& type,
 			const ValidationScope& scope);
-	TypePtr resolveDefinedValueType(const DefinedValueType& type,
+	TypePtr resolveDefinedValueType(ComponentTypeView type,
 			const ValidationScope& scope);
-	TypePtr resolveFuncType(const ComponentFuncType& type,
+	TypePtr resolveFuncType(ComponentTypeView type,
 			const ValidationScope& scope);
 	TypePtr resolveResourceType(const ResourceType& type,
 			ValidationScope& scope, bool insideType);
@@ -595,98 +596,118 @@ ValuePtr ComponentValidator::resolveValue(const ComponentValueType& type,
 	return resolveValueType(type, scope)->value;
 }
 
-TypePtr ComponentValidator::resolveDefinedValueType(const DefinedValueType& type,
+TypePtr ComponentValidator::resolveDefinedValueType(ComponentTypeView type,
 		const ValidationScope& scope)
 {
 	auto value = std::make_shared<ResolvedValueType>();
-	value->kind = static_cast<ResolvedValueType::Kind>(type.kind);
-	value->primitive = type.primitive;
-	value->fixedLength = type.fixedLength;
-	value->labels = type.labels;
+	value->primitive = type.primitive();
+	value->fixedLength = type.fixedLength();
+	for (const StringId label : type.labels())
+		value->labels.emplace_back(Store::global().types().store().string(label));
 
-	switch (type.kind) {
-	case DefinedValueType::Kind::Primitive:
-		if (type.primitive == PrimitiveValueType::Invalid)
+	switch (type.kind()) {
+	case TypeKind::ComponentPrimitive:
+		if (type.primitive() == PrimitiveValueType::Invalid)
 			fail("invalid primitive value type");
 		value->kind = ResolvedValueType::Kind::Primitive;
 		break;
-	case DefinedValueType::Kind::Record: {
-		if (type.fields.empty())
+	case TypeKind::ComponentRecord: {
+		const auto fields = type.fields();
+		if (fields.empty())
 			fail("record type must have at least one field");
 		std::set<std::string> labels;
-		for (const LabelValueType& field : type.fields) {
-			checkLabel(field.label, "record field", labels);
-			value->fields.emplace_back(field.label,
-					resolveValue(field.type, scope));
+		for (const ComponentField& field : fields) {
+			const std::string name(Store::global().types().store().string(field.name));
+			checkLabel(name, "record field", labels);
+			value->fields.emplace_back(name, resolveValue(field.type, scope));
 		}
+		value->kind = ResolvedValueType::Kind::Record;
 		break;
 	}
-	case DefinedValueType::Kind::Variant: {
-		if (type.cases.empty())
+	case TypeKind::ComponentVariant: {
+		const auto cases = type.cases();
+		if (cases.empty())
 			fail("variant type must have at least one case");
 		std::set<std::string> labels;
-		for (const CaseType& item : type.cases) {
-			checkLabel(item.label, "variant case", labels);
+		for (const ComponentCase& item : cases) {
+			const std::string name(Store::global().types().store().string(item.label));
+			checkLabel(name, "variant case", labels);
 			ResolvedCase resolved;
-			resolved.label = item.label;
-			if (item.type)
-				resolved.type = resolveValue(*item.type, scope);
+			resolved.label = name;
+			if (item.hasType)
+				resolved.type = resolveValue(item.type, scope);
 			value->cases.push_back(std::move(resolved));
 		}
+		value->kind = ResolvedValueType::Kind::Variant;
 		break;
 	}
-	case DefinedValueType::Kind::List:
-		value->element = resolveValue(type.element, scope);
+	case TypeKind::ComponentList:
+		value->kind = ResolvedValueType::Kind::List;
+		value->element = resolveValue(type.element(), scope);
 		break;
-	case DefinedValueType::Kind::FixedList:
-		if (type.fixedLength == 0)
+	case TypeKind::ComponentFixedList:
+		if (type.fixedLength() == 0)
 			fail("fixed-length list length must be larger than 0");
-		value->element = resolveValue(type.element, scope);
+		value->kind = ResolvedValueType::Kind::FixedList;
+		value->element = resolveValue(type.element(), scope);
 		break;
-	case DefinedValueType::Kind::Tuple:
-		if (type.tuple.empty())
+	case TypeKind::ComponentTuple: {
+		const auto elements = type.tuple();
+		if (elements.empty())
 			fail("tuple type must have at least one type");
-		for (const ComponentValueType& element : type.tuple)
+		value->kind = ResolvedValueType::Kind::Tuple;
+		for (const ComponentValueType& element : elements)
 			value->tuple.push_back(resolveValue(element, scope));
 		break;
-	case DefinedValueType::Kind::Flags: {
-		if (type.labels.empty())
+	}
+	case TypeKind::ComponentFlags: {
+		const auto labels = type.labels();
+		if (labels.empty())
 			fail("flags must have at least one entry");
-		if (type.labels.size() > 32)
+		if (labels.size() > 32)
 			fail("cannot have more than 32 flags");
-		std::set<std::string> labels;
-		for (const std::string& label : type.labels)
-			checkLabel(label, "flag", labels);
+		std::set<std::string> seen;
+		for (const StringId label : labels)
+			checkLabel(std::string(Store::global().types().store().string(label)),
+					"flag", seen);
+		value->kind = ResolvedValueType::Kind::Flags;
 		break;
 	}
-	case DefinedValueType::Kind::Enum: {
-		if (type.labels.empty())
+	case TypeKind::ComponentEnum: {
+		const auto labels = type.labels();
+		if (labels.empty())
 			fail("enum type must have at least one variant");
-		std::set<std::string> labels;
-		for (const std::string& label : type.labels)
-			checkLabel(label, "enum tag", labels);
+		std::set<std::string> seen;
+		for (const StringId label : labels)
+			checkLabel(std::string(Store::global().types().store().string(label)),
+					"enum tag", seen);
+		value->kind = ResolvedValueType::Kind::Enum;
 		break;
 	}
-	case DefinedValueType::Kind::Option:
-		value->element = resolveValue(type.element, scope);
+	case TypeKind::ComponentOption:
+		value->kind = ResolvedValueType::Kind::Option;
+		value->element = resolveValue(type.element(), scope);
 		break;
-	case DefinedValueType::Kind::Result:
-		if (type.ok)
-			value->ok = resolveValue(*type.ok, scope);
-		if (type.error)
-			value->error = resolveValue(*type.error, scope);
+	case TypeKind::ComponentResult:
+		value->kind = ResolvedValueType::Kind::Result;
+		if (type.hasResultOk())
+			value->ok = resolveValue(type.resultOk(), scope);
+		if (type.hasResultError())
+			value->error = resolveValue(type.resultError(), scope);
 		break;
-	case DefinedValueType::Kind::Own:
-	case DefinedValueType::Kind::Borrow: {
-		const TypePtr resource = resolveTypeIndex(type.typeIndex, scope,
+	case TypeKind::ComponentOwn:
+	case TypeKind::ComponentBorrow: {
+		const TypePtr resource = resolveTypeIndex(type.typeRef(), scope,
 				ResolvedType::Kind::Resource, "resource type");
 		value->resourceId = resource->resource->id;
 		value->resourceAbstract = resource->resource->abstract;
+		value->kind = type.kind() == TypeKind::ComponentOwn
+				? ResolvedValueType::Kind::Own : ResolvedValueType::Kind::Borrow;
 		break;
 	}
-	case DefinedValueType::Kind::Stream: {
-		if (type.streamElement) {
-			const TypePtr elementType = resolveValueType(*type.streamElement, scope);
+	case TypeKind::ComponentStream: {
+		if (type.hasStreamElement()) {
+			const TypePtr elementType = resolveValueType(type.streamElement(), scope);
 			const ValuePtr element = elementType->value;
 			if (element->kind == ResolvedValueType::Kind::Primitive
 					&& element->primitive == PrimitiveValueType::Char)
@@ -695,37 +716,43 @@ TypePtr ComponentValidator::resolveDefinedValueType(const DefinedValueType& type
 				fail("stream element type cannot contain a borrow");
 			value->streamElement = element;
 		}
+		value->kind = ResolvedValueType::Kind::Stream;
 		break;
 	}
-	case DefinedValueType::Kind::Future:
-		if (type.futureElement) {
-			const TypePtr elementType = resolveValueType(*type.futureElement, scope);
+	case TypeKind::ComponentFuture:
+		if (type.hasStreamElement()) {
+			const TypePtr elementType = resolveValueType(type.streamElement(), scope);
 			const ValuePtr element = elementType->value;
 			if (containsBorrow(element))
 				fail("future element type cannot contain a borrow");
 			value->futureElement = element;
 		}
+		value->kind = ResolvedValueType::Kind::Future;
 		break;
-	case DefinedValueType::Kind::Map:
-		value->mapKey = resolveValue(type.mapKey, scope);
-		value->mapValue = resolveValue(type.mapValue, scope);
+	case TypeKind::ComponentMap:
+		value->kind = ResolvedValueType::Kind::Map;
+		value->mapKey = resolveValue(type.mapKey(), scope);
+		value->mapValue = resolveValue(type.mapValue(), scope);
 		break;
+	default:
+		fail("component defined-value record has a non-value kind");
 	}
 	return makeType(value);
 }
-TypePtr ComponentValidator::resolveFuncType(const ComponentFuncType& type,
+TypePtr ComponentValidator::resolveFuncType(ComponentTypeView type,
 		const ValidationScope& scope)
 {
 	auto func = std::make_shared<ResolvedFuncType>();
-	func->isAsync = type.isAsync;
+	func->isAsync = (type.flags() & TypeFlagAsync) != 0;
 	std::set<std::string> labels;
-	for (const LabelValueType& param : type.params) {
-		checkLabel(param.label, "function parameter", labels);
-		func->params.emplace_back(param.label,
-				resolveValue(param.type, scope));
+	for (const ComponentFuncParam& param : type.params()) {
+		const std::string name(Store::global().types().store().string(param.name));
+		checkLabel(name, "function parameter", labels);
+		func->params.emplace_back(name, resolveValue(param.type, scope));
 	}
-	if (!type.results.empty()) {
-		const ValuePtr result = resolveValue(type.results.front(), scope);
+	const auto results = type.results();
+	if (!results.empty()) {
+		const ValuePtr result = resolveValue(results.front(), scope);
 		if (containsBorrow(result))
 			fail("function result type cannot contain a borrow");
 		func->result = result;
@@ -763,17 +790,19 @@ TypePtr ComponentValidator::resolveTypeDef(const ComponentTypeDef& definition,
 	TypePtr type;
 	switch (definition.kind) {
 	case ComponentTypeDef::Kind::DefinedValue:
-		type = resolveDefinedValueType(definition.definedValue, scope);
+		type = resolveDefinedValueType(
+				Store::global().types().store().componentType(definition.id), scope);
 		break;
 	case ComponentTypeDef::Kind::Func:
-		type = resolveFuncType(definition.func, scope);
+		type = resolveFuncType(
+				Store::global().types().store().componentType(definition.id), scope);
 		break;
 	case ComponentTypeDef::Kind::Component:
 	case ComponentTypeDef::Kind::Instance:
 		type = buildDeclaredType(definition, scope);
 		break;
 	case ComponentTypeDef::Kind::Resource:
-		type = resolveResourceType(definition.resource, scope, insideType);
+		type = resolveResourceType(definition.resource(), scope, insideType);
 		break;
 	}
 	typeCache_.emplace(&definition, type);
@@ -787,7 +816,7 @@ TypePtr ComponentValidator::buildDeclaredType(
 	local.typeScope.parent = &scope.typeScope;
 
 	if (definition.kind == ComponentTypeDef::Kind::Component) {
-		for (const ComponentDecl& declaration : definition.componentDecls)
+		for (const ComponentDecl& declaration : definition.componentDecls())
 			processComponentDecl(declaration, local);
 		auto result = std::make_shared<ResolvedComponentType>();
 		result->imports = local.imports;
@@ -796,7 +825,7 @@ TypePtr ComponentValidator::buildDeclaredType(
 	}
 
 	if (definition.kind == ComponentTypeDef::Kind::Instance) {
-		for (const InstanceDecl& declaration : definition.instanceDecls)
+		for (const InstanceDecl& declaration : definition.instanceDecls())
 			processInstanceDecl(declaration, local);
 		auto result = std::make_shared<ResolvedInstanceType>();
 		result->exports = local.exports;
@@ -925,40 +954,40 @@ void ComponentValidator::processComponentDecl(const ComponentDecl& declaration,
 {
 	switch (declaration.kind) {
 	case ComponentDecl::Kind::Import: {
-		ResolvedDecl resolved = resolveExternType(declaration.import.type, scope);
-		resolved.name = declaration.import.name;
+		ResolvedDecl resolved = resolveExternType(declaration.import().type, scope);
+		resolved.name = declaration.import().name;
 		const ComponentDefinitionRef ref{&component_, ComponentDefinitionKind::Import,
 				static_cast<uint32_t>(scope.imports.size())};
 		addImportOrExport(resolved, scope, true, ref);
 		break;
 	}
 	case ComponentDecl::Kind::Export: {
-		ResolvedDecl resolved = resolveExternType(declaration.exportDecl.type, scope);
-		resolved.name = declaration.exportDecl.name;
+		ResolvedDecl resolved = resolveExternType(declaration.exportDecl().type, scope);
+		resolved.name = declaration.exportDecl().name;
 		const ComponentDefinitionRef ref{&component_, ComponentDefinitionKind::Export,
 				static_cast<uint32_t>(scope.exports.size())};
 		addImportOrExport(resolved, scope, false, ref);
 		break;
 	}
 	case ComponentDecl::Kind::CoreType: {
-		validateCoreTypeDef(declaration.coreType, scope);
+		validateCoreTypeDef(declaration.coreType(), scope);
 		const uint32_t index = static_cast<uint32_t>(scope.typeScope.coreTypes.size());
-		scope.typeScope.coreTypes.push_back(&declaration.coreType);
+		scope.typeScope.coreTypes.push_back(&declaration.coreType());
 		Entity entity;
 		entity.ref = ComponentDefinitionRef{&component_, ComponentDefinitionKind::CoreType, index};
-		entity.coreType = &declaration.coreType;
+		entity.coreType = &declaration.coreType();
 		scope.spaces.coreTypes.push_back(std::move(entity));
 		break;
 	}
 	case ComponentDecl::Kind::Type: {
-		TypePtr type = resolveTypeDef(*declaration.type, scope, true);
+		TypePtr type = resolveTypeDef(declaration.type(), scope, true);
 		const uint32_t index = static_cast<uint32_t>(scope.typeScope.types.size());
 		scope.typeScope.types.push_back(type);
 		addTypeEntity(scope, type, ComponentDefinitionKind::Type, index);
 		break;
 	}
 	case ComponentDecl::Kind::Alias:
-		processAlias(declaration.alias, true, scope);
+		processAlias(declaration.alias(), true, scope);
 		break;
 	}
 }
@@ -968,32 +997,32 @@ void ComponentValidator::processInstanceDecl(const InstanceDecl& declaration,
 {
 	switch (declaration.kind) {
 	case InstanceDecl::Kind::CoreType: {
-		validateCoreTypeDef(declaration.coreType, scope);
+		validateCoreTypeDef(declaration.coreType(), scope);
 		const uint32_t index = static_cast<uint32_t>(scope.typeScope.coreTypes.size());
-		scope.typeScope.coreTypes.push_back(&declaration.coreType);
+		scope.typeScope.coreTypes.push_back(&declaration.coreType());
 		Entity entity;
 		entity.ref = ComponentDefinitionRef{&component_, ComponentDefinitionKind::CoreType, index};
-		entity.coreType = &declaration.coreType;
+		entity.coreType = &declaration.coreType();
 		scope.spaces.coreTypes.push_back(std::move(entity));
 		break;
 	}
 	case InstanceDecl::Kind::Type: {
-		TypePtr type = resolveTypeDef(*declaration.type, scope, true);
+		TypePtr type = resolveTypeDef(declaration.type(), scope, true);
 		const uint32_t index = static_cast<uint32_t>(scope.typeScope.types.size());
 		scope.typeScope.types.push_back(type);
 		addTypeEntity(scope, type, ComponentDefinitionKind::Type, index);
 		break;
 	}
 	case InstanceDecl::Kind::Export: {
-		ResolvedDecl resolved = resolveExternType(declaration.exportDecl.type, scope);
-		resolved.name = declaration.exportDecl.name;
+		ResolvedDecl resolved = resolveExternType(declaration.exportDecl().type, scope);
+		resolved.name = declaration.exportDecl().name;
 		const ComponentDefinitionRef ref{&component_, ComponentDefinitionKind::Export,
 				static_cast<uint32_t>(scope.exports.size())};
 		addImportOrExport(resolved, scope, false, ref);
 		break;
 	}
 	case InstanceDecl::Kind::Alias:
-		processAlias(declaration.alias, true, scope);
+		processAlias(declaration.alias(), true, scope);
 		break;
 	}
 }

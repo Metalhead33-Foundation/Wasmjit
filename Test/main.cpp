@@ -53,6 +53,21 @@ std::unique_ptr<WASM::Artifact> loadTestArtifact(const char* moduleName)
 	return WASM::Artifact::parse(file);
 }
 
+const WASM::TypeStore& typeStore()
+{
+	return WASM::Store::global().types().store();
+}
+
+WASM::ComponentTypeView componentTypeView(const WASM::ComponentTypeDef& definition)
+{
+	return typeStore().componentType(definition.id);
+}
+
+std::string componentLabel(WASM::StringId id)
+{
+	return std::string(typeStore().string(id));
+}
+
 }
 
 TEST_CASE("add_core exports add")
@@ -829,13 +844,13 @@ TEST_CASE("supertypes and finality participate in type identity")
 	const WASM::TypeId derivedId = first.typeId(WASM::LocalTypeIdx{1});
 	REQUIRE(baseId != derivedId); // $derived declares a supertype; $base does not
 
-	const WASM::CanonicalType& base = registry.canonicalType(baseId);
-	const WASM::CanonicalType& derived = registry.canonicalType(derivedId);
-	REQUIRE(base.depth == 0);
-	REQUIRE(derived.depth == 1);
-	REQUIRE(derived.supertypes.size() == 1);
-	REQUIRE(derived.supertypes[0].kind == WASM::CanonHeapType::Kind::Global);
-	REQUIRE(derived.supertypes[0].id == baseId); // intra-group Rec resolved to Global
+	const WASM::CoreTypeView base = registry.canonicalType(baseId);
+	const WASM::CoreTypeView derived = registry.canonicalType(derivedId);
+	REQUIRE(base.depth() == 0);
+	REQUIRE(derived.depth() == 1);
+	REQUIRE(derived.supertypes().size() == 1);
+	REQUIRE(derived.supertypes()[0].kind == WASM::CanonHeapType::Kind::Global);
+	REQUIRE(derived.supertypes()[0].id == baseId); // intra-group Rec resolved to Global
 
 	// $derived <: $base, but not the other way around (nominal supertype chain).
 	REQUIRE(registry.matches(derivedId, baseId));
@@ -974,49 +989,54 @@ TEST_CASE("a component's value-type grammar is parsed")
 	auto* component = artifact->asComponent();
 	REQUIRE(component != nullptr);
 	REQUIRE(component->types.size() == 14);
-	using DefKind = WASM::DefinedValueType::Kind;
+	using Kind = WASM::TypeKind;
 	using Prim = WASM::PrimitiveValueType;
 
-	REQUIRE(component->types[0].kind == WASM::ComponentTypeDef::Kind::DefinedValue);
-	REQUIRE(component->types[0].definedValue.kind == DefKind::Record);
-	REQUIRE(component->types[0].definedValue.fields.size() == 2);
-	REQUIRE(component->types[0].definedValue.fields[0].label == "a");
-	REQUIRE(component->types[0].definedValue.fields[0].type.primitive == Prim::U32);
-	REQUIRE(component->types[0].definedValue.fields[1].type.primitive == Prim::String);
-	REQUIRE(component->types[1].definedValue.kind == DefKind::Variant);
-	REQUIRE(component->types[1].definedValue.cases.size() == 2);
-	REQUIRE(component->types[1].definedValue.cases[1].label == "some");
-	REQUIRE(component->types[1].definedValue.cases[1].type.has_value());
-	REQUIRE(component->types[2].definedValue.kind == DefKind::Flags);
-	REQUIRE(component->types[2].definedValue.labels.size() == 2);
-	REQUIRE(component->types[3].definedValue.kind == DefKind::Enum);
-	REQUIRE(component->types[4].definedValue.kind == DefKind::Tuple);
-	REQUIRE(component->types[4].definedValue.tuple.size() == 2);
-	REQUIRE(component->types[5].definedValue.kind == DefKind::List);
-	REQUIRE(component->types[5].definedValue.element.primitive == Prim::U32);
-	REQUIRE(component->types[6].definedValue.kind == DefKind::FixedList);
-	REQUIRE(component->types[6].definedValue.fixedLength == 4);
-	REQUIRE(component->types[7].definedValue.kind == DefKind::Option);
-	REQUIRE(component->types[8].definedValue.kind == DefKind::Result);
-	REQUIRE(component->types[8].definedValue.ok.has_value());
-	REQUIRE(component->types[8].definedValue.error.has_value());
-	REQUIRE(component->types[9].definedValue.kind == DefKind::Map);
-	REQUIRE(component->types[9].definedValue.mapKey.primitive == Prim::String);
-	REQUIRE(component->types[9].definedValue.mapValue.primitive == Prim::U32);
-	REQUIRE(component->types[10].definedValue.kind == DefKind::Stream);
-	REQUIRE(component->types[10].definedValue.streamElement.has_value());
-	REQUIRE(component->types[11].definedValue.kind == DefKind::Future);
-	REQUIRE(component->types[11].definedValue.futureElement.has_value());
-	REQUIRE(component->types[12].definedValue.kind == DefKind::List);
-	REQUIRE(component->types[12].definedValue.element.kind == WASM::ComponentValueType::Kind::TypeIndex);
-	REQUIRE(component->types[12].definedValue.element.typeIndex == 0);
+	const auto type0 = componentTypeView(component->types[0]);
+	REQUIRE(type0.kind() == Kind::ComponentRecord);
+	REQUIRE(type0.fields().size() == 2);
+	REQUIRE(componentLabel(type0.fields()[0].name) == "a");
+	REQUIRE(type0.fields()[0].type.primitive == Prim::U32);
+	REQUIRE(type0.fields()[1].type.primitive == Prim::String);
+
+	const auto type1 = componentTypeView(component->types[1]);
+	REQUIRE(type1.kind() == Kind::ComponentVariant);
+	REQUIRE(type1.cases().size() == 2);
+	REQUIRE(componentLabel(type1.cases()[1].label) == "some");
+	REQUIRE(type1.cases()[1].hasType);
+
+	REQUIRE(componentTypeView(component->types[2]).kind() == Kind::ComponentFlags);
+	REQUIRE(componentTypeView(component->types[2]).labels().size() == 2);
+	REQUIRE(componentTypeView(component->types[3]).kind() == Kind::ComponentEnum);
+	REQUIRE(componentTypeView(component->types[4]).kind() == Kind::ComponentTuple);
+	REQUIRE(componentTypeView(component->types[4]).tuple().size() == 2);
+	REQUIRE(componentTypeView(component->types[5]).kind() == Kind::ComponentList);
+	REQUIRE(componentTypeView(component->types[5]).element().primitive == Prim::U32);
+	REQUIRE(componentTypeView(component->types[6]).kind() == Kind::ComponentFixedList);
+	REQUIRE(componentTypeView(component->types[6]).fixedLength() == 4);
+	REQUIRE(componentTypeView(component->types[7]).kind() == Kind::ComponentOption);
+	REQUIRE(componentTypeView(component->types[8]).kind() == Kind::ComponentResult);
+	REQUIRE(componentTypeView(component->types[8]).hasResultOk());
+	REQUIRE(componentTypeView(component->types[8]).hasResultError());
+	REQUIRE(componentTypeView(component->types[9]).kind() == Kind::ComponentMap);
+	REQUIRE(componentTypeView(component->types[9]).mapKey().primitive == Prim::String);
+	REQUIRE(componentTypeView(component->types[9]).mapValue().primitive == Prim::U32);
+	REQUIRE(componentTypeView(component->types[10]).kind() == Kind::ComponentStream);
+	REQUIRE(componentTypeView(component->types[10]).hasStreamElement());
+	REQUIRE(componentTypeView(component->types[11]).kind() == Kind::ComponentFuture);
+	REQUIRE(componentTypeView(component->types[11]).hasStreamElement());
+	REQUIRE(componentTypeView(component->types[12]).kind() == Kind::ComponentList);
+	REQUIRE(componentTypeView(component->types[12]).element().kind
+			== WASM::ComponentValueType::Kind::TypeIndex);
+	REQUIRE(componentTypeView(component->types[12]).element().typeIndex == 0);
 
 	REQUIRE(component->types[13].kind == WASM::ComponentTypeDef::Kind::Func);
-	REQUIRE(component->types[13].func.params.size() == 1);
-	REQUIRE(component->types[13].func.params[0].label == "x");
-	REQUIRE(component->types[13].func.params[0].type.primitive == Prim::U32);
-	REQUIRE(component->types[13].func.results.size() == 1);
-	REQUIRE(component->types[13].func.results[0].primitive == Prim::String);
+	const auto func = componentTypeView(component->types[13]);
+	REQUIRE(func.params().size() == 1);
+	REQUIRE(componentLabel(func.params()[0].name) == "x");
+	REQUIRE(func.params()[0].type.primitive == Prim::U32);
+	REQUIRE(func.results().size() == 1);
+	REQUIRE(func.results()[0].primitive == Prim::String);
 
 	REQUIRE(component->imports.size() == 1);
 	REQUIRE(component->imports[0].name.name == "in");
@@ -1027,6 +1047,32 @@ TEST_CASE("a component's value-type grammar is parsed")
 	REQUIRE(component->exports[0].sortIndex.sort == WASM::ComponentSort::Func);
 	REQUIRE(component->exports[0].sortIndex.index == 0);
 	REQUIRE_FALSE(component->exports[0].type.has_value());
+}
+
+TEST_CASE("compact type records and the shared component store are present")
+{
+	REQUIRE(sizeof(WASM::TypeSpan) == 8);
+	REQUIRE(sizeof(WASM::TypeRecord) == 16);
+	REQUIRE(sizeof(WASM::ComponentValueType) == 8);
+	REQUIRE(sizeof(WASM::ComponentTypeDef) <= 48);
+	REQUIRE(sizeof(WASM::ComponentDecl) <= 40);
+	REQUIRE(sizeof(WASM::InstanceDecl) <= 40);
+
+	auto artifact = loadTestArtifact("component_types");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+
+	REQUIRE(typeStore().recordCount() > typeStore().coreCount());
+	for (const WASM::ComponentTypeDef& definition : component->types) {
+		if (definition.kind == WASM::ComponentTypeDef::Kind::DefinedValue
+				|| definition.kind == WASM::ComponentTypeDef::Kind::Func
+				|| definition.kind == WASM::ComponentTypeDef::Kind::Resource) {
+			const WASM::TypeRecord& record = typeStore().record(definition.id);
+			REQUIRE(static_cast<uint16_t>(record.kind)
+					>= static_cast<uint16_t>(WASM::TypeKind::ComponentPrimitive));
+		}
+	}
 }
 
 TEST_CASE("component core instances and canon lifts are parsed")
@@ -1051,8 +1097,9 @@ TEST_CASE("component core instances and canon lifts are parsed")
 
 	REQUIRE(component->types.size() == 1);
 	REQUIRE(component->types[0].kind == WASM::ComponentTypeDef::Kind::Func);
-	REQUIRE(component->types[0].func.params.size() == 1);
-	REQUIRE(component->types[0].func.results.size() == 1);
+	const auto typeFunc = componentTypeView(component->types[0]);
+	REQUIRE(typeFunc.params().size() == 1);
+	REQUIRE(typeFunc.results().size() == 1);
 	REQUIRE(component->canons.size() == 1);
 	REQUIRE(component->canons[0].kind == WASM::Canon::Kind::Lift);
 	REQUIRE(component->canons[0].coreFuncIndex == 0);
@@ -1153,24 +1200,24 @@ TEST_CASE("component instances and declarator types are parsed")
 	REQUIRE(decls->types[0].kind == WASM::ComponentTypeDef::Kind::Component);
 	bool sawImport = false;
 	bool sawExport = false;
-	for (const WASM::ComponentDecl& decl : decls->types[0].componentDecls) {
+	for (const WASM::ComponentDecl& decl : decls->types[0].componentDecls()) {
 		if (decl.kind == WASM::ComponentDecl::Kind::Import) {
 			sawImport = true;
-			REQUIRE(decl.import.name.name == "x");
-			REQUIRE(decl.import.type.kind == WASM::ExternType::Kind::Func);
+			REQUIRE(decl.import().name.name == "x");
+			REQUIRE(decl.import().type.kind == WASM::ExternType::Kind::Func);
 		} else if (decl.kind == WASM::ComponentDecl::Kind::Export) {
 			sawExport = true;
-			REQUIRE(decl.exportDecl.name.name == "y");
+			REQUIRE(decl.exportDecl().name.name == "y");
 		}
 	}
 	REQUIRE(sawImport);
 	REQUIRE(sawExport);
 	REQUIRE(decls->types[1].kind == WASM::ComponentTypeDef::Kind::Instance);
 	bool sawInstanceExport = false;
-	for (const WASM::InstanceDecl& decl : decls->types[1].instanceDecls) {
+	for (const WASM::InstanceDecl& decl : decls->types[1].instanceDecls()) {
 		if (decl.kind == WASM::InstanceDecl::Kind::Export) {
 			sawInstanceExport = true;
-			REQUIRE(decl.exportDecl.name.name == "z");
+			REQUIRE(decl.exportDecl().name.name == "z");
 		}
 	}
 	REQUIRE(sawInstanceExport);
@@ -1181,12 +1228,12 @@ TEST_CASE("component instances and declarator types are parsed")
 	REQUIRE(resources != nullptr);
 	REQUIRE(resources->types.size() == 3);
 	REQUIRE(resources->types[0].kind == WASM::ComponentTypeDef::Kind::Resource);
-	REQUIRE(resources->types[0].resource.rep.opcode == WASM::ValueTypeCode::I32);
-	REQUIRE_FALSE(resources->types[0].resource.destructor.has_value());
-	REQUIRE(resources->types[1].definedValue.kind == WASM::DefinedValueType::Kind::Own);
-	REQUIRE(resources->types[1].definedValue.typeIndex == 0);
-	REQUIRE(resources->types[2].definedValue.kind == WASM::DefinedValueType::Kind::Borrow);
-	REQUIRE(resources->types[2].definedValue.typeIndex == 0);
+	REQUIRE(resources->types[0].resource().rep.opcode == WASM::ValueTypeCode::I32);
+	REQUIRE_FALSE(resources->types[0].resource().destructor.has_value());
+	REQUIRE(componentTypeView(resources->types[1]).kind() == WASM::TypeKind::ComponentOwn);
+	REQUIRE(componentTypeView(resources->types[1]).typeRef() == 0);
+	REQUIRE(componentTypeView(resources->types[2]).kind() == WASM::TypeKind::ComponentBorrow);
+	REQUIRE(componentTypeView(resources->types[2]).typeRef() == 0);
 }
 
 TEST_CASE("async functions with canon options and name attributes are parsed")
@@ -1197,9 +1244,10 @@ TEST_CASE("async functions with canon options and name attributes are parsed")
 	REQUIRE(asyncComponent != nullptr);
 	REQUIRE(asyncComponent->types.size() == 1);
 	REQUIRE(asyncComponent->types[0].kind == WASM::ComponentTypeDef::Kind::Func);
-	REQUIRE(asyncComponent->types[0].func.isAsync);
-	REQUIRE(asyncComponent->types[0].func.params.size() == 1);
-	REQUIRE(asyncComponent->types[0].func.results.size() == 1);
+	const auto asyncFunc = componentTypeView(asyncComponent->types[0]);
+	REQUIRE((asyncFunc.flags() & WASM::TypeFlagAsync) != 0);
+	REQUIRE(asyncFunc.params().size() == 1);
+	REQUIRE(asyncFunc.results().size() == 1);
 
 	auto optsArtifact = loadTestArtifact("component_canonopts");
 	REQUIRE(optsArtifact != nullptr);
@@ -1275,15 +1323,15 @@ TEST_CASE("component aliases and instance expressions are parsed")
 	REQUIRE(outer->types.size() == 1);
 	REQUIRE(outer->types[0].kind == WASM::ComponentTypeDef::Kind::Instance);
 	bool sawOuter = false;
-	for (const WASM::InstanceDecl& decl : outer->types[0].instanceDecls) {
+	for (const WASM::InstanceDecl& decl : outer->types[0].instanceDecls()) {
 		if (decl.kind == WASM::InstanceDecl::Kind::Alias) {
 			sawOuter = true;
-			REQUIRE(decl.alias.kind == WASM::Alias::Kind::Outer);
-			REQUIRE(decl.alias.outerCount == 1);
-			REQUIRE(decl.alias.index == 0);
-			REQUIRE(decl.alias.sort.sort == WASM::ComponentSort::Core);
-			REQUIRE(decl.alias.sort.core.has_value());
-			REQUIRE(decl.alias.sort.core->sort == WASM::CoreSort::Type);
+			REQUIRE(decl.alias().kind == WASM::Alias::Kind::Outer);
+			REQUIRE(decl.alias().outerCount == 1);
+			REQUIRE(decl.alias().index == 0);
+			REQUIRE(decl.alias().sort.sort == WASM::ComponentSort::Core);
+			REQUIRE(decl.alias().sort.core.has_value());
+			REQUIRE(decl.alias().sort.core->sort == WASM::CoreSort::Type);
 		}
 	}
 	REQUIRE(sawOuter);

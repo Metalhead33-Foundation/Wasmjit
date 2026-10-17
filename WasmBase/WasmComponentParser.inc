@@ -1,8 +1,10 @@
 // ── Bounded reader over one section payload ────────────────────────────────
 class Reader {
 public:
-	explicit Reader(Elv::Io::Device& source)
-		: device(source), stream(source) {}
+	Reader(Elv::Io::Device& source, TypeStore& typeStore)
+		: types(typeStore), device(source), stream(source) {}
+
+	TypeStore& types;
 
 	DWasmStream& raw() { return stream; }
 
@@ -489,114 +491,115 @@ NameAttributes parseNameAttributes(Reader& r)
 	return attributes;
 }
 
-DefinedValueType parseDefinedValueType(Reader& r, uint8_t opcode)
+TypeId parseDefinedValueType(Reader& r, uint8_t opcode)
 {
-	DefinedValueType type;
 	const PrimitiveValueType primitive = primitiveFromCode(opcode);
-	if (primitive != PrimitiveValueType::Invalid) {
-		type.kind = DefinedValueType::Kind::Primitive;
-		type.primitive = primitive;
-		return type;
-	}
+	if (primitive != PrimitiveValueType::Invalid)
+		return r.types.addComponentPrimitive(primitive);
 	switch (opcode) {
-	case 0x72: // record
-		type.kind = DefinedValueType::Kind::Record;
+	case 0x72: { // record
+		std::vector<ComponentField> fields;
 		r.vec([&] {
-			LabelValueType field;
-			field.label = r.name();
+			ComponentField field;
+			field.name = r.types.internString(r.name());
 			field.type = parseValueType(r);
-			type.fields.push_back(std::move(field));
+			fields.push_back(field);
 		});
-		break;
-	case 0x71: // variant
-		type.kind = DefinedValueType::Kind::Variant;
+		return r.types.addComponentRecord(r.types.appendFields(fields));
+	}
+	case 0x71: { // variant
+		std::vector<ComponentCase> cases;
 		r.vec([&] {
-			CaseType item;
-			item.label = r.name();
-			item.type = parseOptionalValueType(r);
+			ComponentCase item;
+			item.label = r.types.internString(r.name());
+			const std::optional<ComponentValueType> type = parseOptionalValueType(r);
+			item.hasType = type.has_value();
+			if (type)
+				item.type = *type;
 			if (r.u8() != 0x00)
 				throw std::runtime_error("component parse: malformed variant case");
-			type.cases.push_back(std::move(item));
+			cases.push_back(item);
 		});
-		break;
+		return r.types.addComponentVariant(r.types.appendCases(cases));
+	}
 	case 0x70: // list
-		type.kind = DefinedValueType::Kind::List;
-		type.element = parseValueType(r);
-		break;
-	case 0x67: // fixed-length list
-		type.kind = DefinedValueType::Kind::FixedList;
-		type.element = parseValueType(r);
-		type.fixedLength = r.u32();
-		break;
-	case 0x6F: // tuple
-		type.kind = DefinedValueType::Kind::Tuple;
-		r.vec([&] { type.tuple.push_back(parseValueType(r)); });
-		break;
-	case 0x6E: // flags
-		type.kind = DefinedValueType::Kind::Flags;
-		r.vec([&] { type.labels.push_back(r.name()); });
-		break;
-	case 0x6D: // enum
-		type.kind = DefinedValueType::Kind::Enum;
-		r.vec([&] { type.labels.push_back(r.name()); });
-		break;
+		return r.types.addComponentList(parseValueType(r));
+	case 0x67: { // fixed-length list
+		const ComponentValueType element = parseValueType(r);
+		return r.types.addComponentFixedList(element, r.u32());
+	}
+	case 0x6F: { // tuple
+		std::vector<ComponentValueType> elements;
+		r.vec([&] { elements.push_back(parseValueType(r)); });
+		return r.types.addComponentTuple(r.types.appendValues(elements));
+	}
+	case 0x6E: { // flags
+		std::vector<StringId> labels;
+		r.vec([&] { labels.push_back(r.types.internString(r.name())); });
+		return r.types.addComponentLabels(TypeKind::ComponentFlags,
+				r.types.appendLabels(labels));
+	}
+	case 0x6D: { // enum
+		std::vector<StringId> labels;
+		r.vec([&] { labels.push_back(r.types.internString(r.name())); });
+		return r.types.addComponentLabels(TypeKind::ComponentEnum,
+				r.types.appendLabels(labels));
+	}
 	case 0x6B: // option
-		type.kind = DefinedValueType::Kind::Option;
-		type.element = parseValueType(r);
-		break;
-	case 0x6A: // result
-		type.kind = DefinedValueType::Kind::Result;
-		type.ok = parseOptionalValueType(r);
-		type.error = parseOptionalValueType(r);
-		break;
+		return r.types.addComponentOption(parseValueType(r));
+	case 0x6A: { // result
+		const std::optional<ComponentValueType> ok = parseOptionalValueType(r);
+		const std::optional<ComponentValueType> error = parseOptionalValueType(r);
+		return r.types.addComponentResult(ok.value_or(ComponentValueType{}),
+				error.value_or(ComponentValueType{}), ok.has_value(), error.has_value());
+	}
 	case 0x69: // own
-		type.kind = DefinedValueType::Kind::Own;
-		type.typeIndex = r.u32();
-		break;
+		return r.types.addComponentTypeRef(TypeKind::ComponentOwn, r.u32());
 	case 0x68: // borrow
-		type.kind = DefinedValueType::Kind::Borrow;
-		type.typeIndex = r.u32();
-		break;
-	case 0x66: // stream
-		type.kind = DefinedValueType::Kind::Stream;
-		type.streamElement = parseOptionalValueType(r);
-		break;
-	case 0x65: // future
-		type.kind = DefinedValueType::Kind::Future;
-		type.futureElement = parseOptionalValueType(r);
-		break;
-	case 0x63: // map
-		type.kind = DefinedValueType::Kind::Map;
-		type.mapKey = parseValueType(r);
-		type.mapValue = parseValueType(r);
-		break;
+		return r.types.addComponentTypeRef(TypeKind::ComponentBorrow, r.u32());
+	case 0x66: { // stream
+		const std::optional<ComponentValueType> element = parseOptionalValueType(r);
+		return r.types.addComponentStream(TypeKind::ComponentStream,
+				element.value_or(ComponentValueType{}), element.has_value());
+	}
+	case 0x65: { // future
+		const std::optional<ComponentValueType> element = parseOptionalValueType(r);
+		return r.types.addComponentStream(TypeKind::ComponentFuture,
+				element.value_or(ComponentValueType{}), element.has_value());
+	}
+	case 0x63: { // map
+		const ComponentValueType key = parseValueType(r);
+		const ComponentValueType value = parseValueType(r);
+		return r.types.addComponentMap(key, value);
+	}
 	default:
 		throw std::runtime_error("component parse: invalid defined value type 0x" +
 				std::to_string(opcode));
 	}
-	return type;
 }
-ComponentFuncType parseComponentFuncType(Reader& r, bool isAsync)
+
+TypeId parseComponentFuncType(Reader& r, bool isAsync)
 {
-	ComponentFuncType type;
-	type.isAsync = isAsync;
-	const uint32_t params = r.count("component function parameters");
-	for (uint32_t i = 0; i < params; ++i) {
-		LabelValueType param;
-		param.label = r.name();
+	std::vector<ComponentFuncParam> params;
+	const uint32_t paramCount = r.count("component function parameters");
+	for (uint32_t i = 0; i < paramCount; ++i) {
+		ComponentFuncParam param;
+		param.name = r.types.internString(r.name());
 		param.type = parseValueType(r);
-		type.params.push_back(std::move(param));
+		params.push_back(param);
 	}
+	std::vector<ComponentValueType> results;
 	const uint8_t resultTag = r.u8();
 	if (resultTag == 0x00) {
-		type.results.push_back(parseValueType(r));
+		results.push_back(parseValueType(r));
 	} else if (resultTag == 0x01) {
 		if (r.u8() != 0x00)
 			throw std::runtime_error("component parse: malformed result list");
 	} else {
 		throw std::runtime_error("component parse: invalid result list tag");
 	}
-	return type;
+	return r.types.addComponentFunc(r.types.appendParams(params),
+			r.types.appendResults(results), isAsync);
 }
 
 ComponentTypeDef parseComponentTypeDef(Reader& r)
@@ -607,36 +610,47 @@ ComponentTypeDef parseComponentTypeDef(Reader& r)
 
 	if (opcode == 0x40 || opcode == 0x43) {
 		type.kind = ComponentTypeDef::Kind::Func;
-		type.func = parseComponentFuncType(r, opcode == 0x43);
+		type.id = parseComponentFuncType(r, opcode == 0x43);
 		return type;
 	}
 	if (opcode == 0x41) {
 		type.kind = ComponentTypeDef::Kind::Component;
+		std::vector<ComponentDecl> declarations;
 		const uint32_t count = r.count("component type declarations");
 		for (uint32_t i = 0; i < count; ++i)
-			type.componentDecls.push_back(parseComponentDecl(r));
+			declarations.push_back(parseComponentDecl(r));
+		type.declarations = std::move(declarations);
 		return type;
 	}
 	if (opcode == 0x42) {
 		type.kind = ComponentTypeDef::Kind::Instance;
+		std::vector<InstanceDecl> declarations;
 		const uint32_t count = r.count("instance type declarations");
 		for (uint32_t i = 0; i < count; ++i)
-			type.instanceDecls.push_back(parseInstanceDecl(r));
+			declarations.push_back(parseInstanceDecl(r));
+		type.declarations = std::move(declarations);
 		return type;
 	}
 	if (opcode == 0x3F) {
 		type.kind = ComponentTypeDef::Kind::Resource;
-		type.resource.rep.decode(r.raw());
+		ResourceType resource;
+		resource.rep.decode(r.raw());
 		const uint8_t hasDestructor = r.u8();
 		if (hasDestructor == 0x01)
-			type.resource.destructor = r.u32();
+			resource.destructor = r.u32();
 		else if (hasDestructor != 0x00)
 			throw std::runtime_error("component parse: malformed resource destructor");
+		ComponentResourcePayload payload;
+		payload.rep = resource.rep;
+		payload.hasDestructor = resource.destructor.has_value();
+		payload.destructor = resource.destructor.value_or(0);
+		type.id = r.types.addComponentResource(payload);
+		type.declarations = resource;
 		return type;
 	}
 
 	type.kind = ComponentTypeDef::Kind::DefinedValue;
-	type.definedValue = parseDefinedValueType(r, opcode);
+	type.id = parseDefinedValueType(r, opcode);
 	return type;
 }
 
@@ -647,23 +661,23 @@ ComponentDecl parseComponentDecl(Reader& r)
 	switch (kind) {
 	case 0x03:
 		decl.kind = ComponentDecl::Kind::Import;
-		decl.import = parseImportDecl(r);
+		decl.payload = std::make_unique<ImportDecl>(parseImportDecl(r));
 		break;
 	case 0x00:
 		decl.kind = ComponentDecl::Kind::CoreType;
-		decl.coreType = parseCoreTypeDef(r);
+		decl.payload = std::make_unique<CoreTypeDef>(parseCoreTypeDef(r));
 		break;
 	case 0x01:
 		decl.kind = ComponentDecl::Kind::Type;
-		decl.type = std::make_unique<ComponentTypeDef>(parseComponentTypeDef(r));
+		decl.payload = std::make_unique<ComponentTypeDef>(parseComponentTypeDef(r));
 		break;
 	case 0x02:
 		decl.kind = ComponentDecl::Kind::Alias;
-		decl.alias = parseAlias(r);
+		decl.payload = std::make_unique<Alias>(parseAlias(r));
 		break;
 	case 0x04:
 		decl.kind = ComponentDecl::Kind::Export;
-		decl.exportDecl = parseExportDecl(r);
+		decl.payload = std::make_unique<ExportDecl>(parseExportDecl(r));
 		break;
 	default:
 		throw std::runtime_error("component parse: invalid component declaration " +
@@ -679,19 +693,19 @@ InstanceDecl parseInstanceDecl(Reader& r)
 	switch (kind) {
 	case 0x00:
 		decl.kind = InstanceDecl::Kind::CoreType;
-		decl.coreType = parseCoreTypeDef(r);
+		decl.payload = std::make_unique<CoreTypeDef>(parseCoreTypeDef(r));
 		break;
 	case 0x01:
 		decl.kind = InstanceDecl::Kind::Type;
-		decl.type = std::make_unique<ComponentTypeDef>(parseComponentTypeDef(r));
+		decl.payload = std::make_unique<ComponentTypeDef>(parseComponentTypeDef(r));
 		break;
 	case 0x02:
 		decl.kind = InstanceDecl::Kind::Alias;
-		decl.alias = parseAlias(r);
+		decl.payload = std::make_unique<Alias>(parseAlias(r));
 		break;
 	case 0x04:
 		decl.kind = InstanceDecl::Kind::Export;
-		decl.exportDecl = parseExportDecl(r);
+		decl.payload = std::make_unique<ExportDecl>(parseExportDecl(r));
 		break;
 	default:
 		throw std::runtime_error("component parse: invalid instance declaration " +

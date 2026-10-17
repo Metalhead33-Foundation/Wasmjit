@@ -3,6 +3,7 @@
 #include "WasmCanonicalType.hpp"
 #include "WasmType.hpp"
 #include "WasmTypeIdentity.hpp"
+#include "WasmTypeStore.hpp"
 #include <cstddef>
 #include <memory>
 #include <span>
@@ -43,8 +44,14 @@ public:
 	bool matchesHeap(CanonHeapType actual, CanonHeapType expected) const;
 
 	// Canonical views. canonicalType(id) requires id.value < internedTypeCount().
-	const CanonicalType& canonicalType(TypeId id) const { return canonicalTypes[id.value]; }
+	CoreTypeView canonicalType(TypeId id) const { return store_.coreType(id); }
 	const CanonRecGroup& canonicalGroup(RecGroupId id) const { return recGroups[id.value]; }
+
+	// The shared compact store. Component parsing/validation uses the same
+	// owner so component TypeIds and core TypeIds can eventually share one
+	// identity space (docs/proposals/TYPE_MODEL.md).
+	TypeStore&       store()       { return store_; }
+	const TypeStore& store() const { return store_; }
 
 	size_t moduleCount() const { return blocks.size(); }
 	// Types physically stored in the registry (Subtype storage).
@@ -52,7 +59,7 @@ public:
 	// Types seen across all modules (the "parsed" side of the dedup ratio).
 	size_t parsedTypeCount() const { return parsedTypes; }
 	// Unique canonical types (the "interned" side of the dedup ratio).
-	size_t internedTypeCount() const { return canonicalTypes.size(); }
+	size_t internedTypeCount() const { return store_.coreCount(); }
 	size_t canonicalGroupCount() const { return recGroups.size(); }
 
 private:
@@ -62,11 +69,10 @@ private:
 	size_t totalTypes = 0;
 	size_t parsedTypes = 0;
 
-	// Canonical table, indexed by TypeId.value; entries are appended in group
-	// order, so a group's members are contiguous: ids [first, first + count).
-	std::vector<CanonicalType> canonicalTypes;
+	// Compact canonical records, indexed by TypeId.value; entries are appended
+	// in group order, so a group's members are contiguous: ids [first, first + count).
+	TypeStore store_;
 	std::vector<CanonRecGroup> recGroups;   // indexed by RecGroupId.value
-	uint32_t nextTypeId = 0;
 
 	// Group identity: canonical serialization -> group id.
 	std::unordered_map<std::string, RecGroupId> internTable;

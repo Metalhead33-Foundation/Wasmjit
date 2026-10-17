@@ -1,7 +1,9 @@
 # Unified Type Store and Component Type Identity — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / refactor plan (revision 1 — first cut of the type-store and
-type-identity plan).
+Status: design note / refactor plan (revision 2 — the compact core canonical
+store and the component value/function/resource records are implemented; the
+component validator still builds its resolved graph and the JIT still consumes
+the `Subtype` compatibility layer).
 Audience: anyone touching `WasmBase/WasmType.hpp`, `WasmBase/WasmCanonicalType.hpp`,
 `WasmBase/WasmTypeRegistry.{hpp,cpp}`, `WasmBase/WasmComponentModel.hpp`,
 `WasmBase/WasmComponentParser.inc`, `WasmBase/WasmComponentValidation.cpp`, or the
@@ -9,10 +11,18 @@ type-translation layer that consumes canonical identities.
 
 This note follows the nine-slot split used by [`GC.md`](GC.md),
 [`SIMD.md`](SIMD.md) and [`COMPONENT_MODEL.md`](COMPONENT_MODEL.md). It is an
-**internal type-representation design note**, not a WebAssembly proposal and not
-a record of a shipped feature. It contains **no new code**: §4 is the current
-representation, §5 is the gap between that representation and the target, and §7
-is the migration plan.
+**internal type-representation design note**, not a WebAssembly proposal. It
+contains **no new code**: §4 is the current representation, §5 is the gap between
+that representation and the target, and §7 is the migration plan.
+
+Revision 2 records the first implementation. `WasmTypeStore` owns compact core
+records and the shared component payload pools; `TypeRegistry` exposes core
+records through `CoreTypeView`; the component parser writes defined-value,
+function and resource types into the same store, and `ComponentTypeDef` is a
+small handle plus a declaration payload. `Subtype` remains the parser/JIT
+compatibility layer, and `ComponentValidator` still builds its `ResolvedType`
+graph. Component type interning and the final removal of those compatibility
+layers remain TM-3/TM-4.
 
 ## 1. Document map
 
@@ -153,50 +163,54 @@ that `Module` exposes and that the JIT type translation consumes. It is
 **88 bytes** on the current x86-64/libstdc++ toolchain, plus heap allocations for
 each non-empty list (`docs/TYPE_IDENTITY.md` §12.1).
 
-`WasmBase/WasmCanonicalType.hpp` defines a second representation:
+`WasmBase/WasmCanonicalType.hpp` still defines the temporary
 `CanonicalType { kind, isFinal, supertypes, depth, funcParams, funcResults,
-structFields, arrayElement }`. Every canonical type has four vectors, regardless
-of kind, and `CanonFieldType`/`CanonStorageType`/`CanonValueType` are embedded by
-value. The layout-derived size on the same toolchain is about **144 bytes**,
-before payload heap allocations.
+structFields, arrayElement }` used while a `rec` group is being built. It is no
+longer the long-lived canonical table: `WasmBase/WasmTypeStore.{hpp,cpp}` owns a
+16-byte `TypeRecord` plus shared `CanonStorageType`/`CanonFieldType`/
+`CanonHeapType` pools. `CoreTypeView` exposes the same shape from the store (or
+from the temporary group while interning).
 
 `WasmBase/WasmTypeRegistry.{hpp,cpp}` (`TypeRegistry`) does the following:
 
-- `registerModule(std::vector<Subtype>)` moves each module's parser output into
-  a stable heap block and returns a `std::span<const Subtype>`.
-- `internModule(...)` builds a `std::vector<CanonicalType>` for each `rec` group,
-  serializes the group to a `std::string` for the intern table, hash-conses it,
-  and stores the canonical copy in `canonicalTypes`.
-- `TypeId` is allocated from `nextTypeId`; `RecGroupId` indexes `recGroups`.
-- The registry retains both the `Subtype` block and the canonical records, plus
-  the intern table and its serialized keys. `TypeRegistry::typeCount()` and
-  `parsedTypeCount()` make the duplication visible.
+- `registerModule(std::vector<Subtype>)` still moves each module's parser output
+  into a stable heap block and returns a `std::span<const Subtype>`; `Subtype`
+  remains the parser/JIT compatibility layer.
+- `internModule(...)` builds the temporary `CanonicalType` group, validates and
+  interns it, then appends each resolved record to `TypeStore::appendCore`.
+- `TypeId` indexes the shared store; `RecGroupId` indexes `recGroups`.
+- `canonicalType(TypeId)` returns a `CoreTypeView`, not a copied
+  `CanonicalType`. The registry retains the `Subtype` block (for current
+  consumers) and the compact canonical records; the temporary canonical group is
+  discarded after interning.
 
-The current flow is therefore:
+The current core flow is therefore:
 
 ```text
-binary type section -> std::vector<Subtype> (module/registry block)
-                    -> CanonicalType group (canonical table)
-                    -> TypeId
+binary type section -> std::vector<Subtype> (parser/registry compatibility block)
+                    -> CanonicalType group (temporary interning form)
+                    -> TypeStore::appendCore (compact records/pools)
+                    -> TypeId -> CoreTypeView
 ```
 
 ### 4.2 Components: an AST plus a validator-only resolved graph
 
 `WasmBase/WasmComponentModel.hpp` defines the component AST:
 
-- `ComponentValueType` is a 12-byte `{kind, typeIndex, primitive}` pair.
-- `DefinedValueType` stores every alternative inline: `fields`, `cases`,
-  `element`, `fixedLength`, `tuple`, `labels`, `ok`, `error`, `typeIndex`,
-  `streamElement`, `futureElement`, `mapKey`, `mapValue`. Its layout-derived
-  size is about **216 bytes**.
-- `ComponentFuncType`, `ComponentTypeDef`, `ComponentDecl`, `InstanceDecl`,
-  `ImportDecl`, `ExportDecl`, `CoreTypeDef`, `Alias`, `NameAttributes` and
-  `Attribute` are similarly expanded. `ComponentTypeDef` is about **344 bytes**
-  because it contains all five alternatives; `ComponentDecl` is roughly **360
-  bytes** and `InstanceDecl` about **256 bytes** because every declaration
-  payload is inline.
-- Labels, names and attribute text are `std::string`; a `std::string` is 32 bytes
-  on this toolchain before its heap payload.
+- `ComponentValueType` is the compact 8-byte `{kind, primitive, typeIndex}`
+  reference defined in `WasmTypeStore.hpp`.
+- Defined-value and function payloads no longer live in the AST:
+  `ComponentTypeDef` is a small `{kind, TypeId, declaration payload}` handle.
+  `ComponentRecord`/`Variant`/`List`/`Tuple`/`Flags`/`Enum`/`Option`/`Result`/
+  `Map`/`Stream`/`Future`/`Own`/`Borrow` records and their shared arrays are in
+  `TypeStore`.
+- `ComponentDecl` and `InstanceDecl` are a tag plus a `std::variant` of owning
+  declaration payloads, so the old inline union is gone. The declaration stubs
+  themselves still allocate because `ImportDecl`/`ExportDecl`/`Alias` are not
+  pooled yet.
+- Labels, field names and function parameter names are interned `StringId`s in
+  the store's `StringTable`; `NameAttributes` text remains a `std::string` for
+  the declaration layer.
 
 `WasmBase/WasmComponentValidation.cpp` then builds a second graph with
 `std::shared_ptr` nodes:
@@ -215,14 +229,15 @@ binary type section -> std::vector<Subtype> (module/registry block)
 The current flow is therefore:
 
 ```text
-binary component -> ComponentTypeDef / DefinedValueType AST
+binary component -> ComponentTypeDef handle + TypeStore component records
                  -> ResolvedType / ResolvedValueType shared_ptr graph
                  -> component-local type index
 ```
 
-The second graph exists only for the validator's lifetime, but it expands every
-nested type and every string a second time. The AST remains allocated alongside
-it.
+The second graph still exists for the validator's lifetime and expands every
+nested type again, but the parser no longer keeps a parallel `DefinedValueType`
+or `ComponentFuncType` tree. Component type interning and the removal of the
+resolved graph remain TM-3/TM-4.
 
 
 ### 4.3 Identity and ownership today
@@ -231,9 +246,9 @@ it.
 |---|---|---|---|
 | Core defined type | `LocalTypeIdx` in a module; `TypeId` after `internModule` | Yes, by `rec` group | `Module` span + `TypeRegistry` block/table |
 | Core canonical type | `TypeId` | Yes | `TypeRegistry` |
-| Component value type | Component-local `typeIndex` | No | `ComponentTypeDef` AST + `ResolvedValueType` graph |
-| Component resource | Validator-local `resourceId` / `ResolvedResourceType` | No | Validator graph |
-| Component instance/component type | Component-local index | No | AST + validator graph |
+| Component value type | Component-local `typeIndex` in the value reference; the definition has a store `TypeId` | No | `TypeStore` + `ComponentTypeDef` handle + `ResolvedValueType` graph |
+| Component resource | Store `TypeId` for the definition; validator-local `resourceId` for the resolved resource | No | `TypeStore` + validator graph |
+| Component instance/component type | Component-local index; declarations remain in the AST | No | AST + validator graph |
 | Component type scheme | Not represented yet | No | — |
 
 The core identity machinery is real and tested; the component layer has a parser
@@ -454,6 +469,11 @@ baseline with `sizeof` and allocation counters; the last compares against it.
 | A label/name `std::string` | 32 B + heap | 4-byte `StringId` |
 | A populated type list | 24-byte vector + heap | 8-byte `TypeSpan` into a pool |
 
+Revision 2 implements the `TypeRecord`/`CoreTypeView`, the 8-byte
+`ComponentValueType`, the `ComponentTypeDef` handle and the declaration variant.
+`Subtype` (parser/JIT compatibility) and the validator's `ResolvedValueType`
+graph remain; their removal/replacement is TM-1/TM-4 work.
+
 The design target is not a single percentage. It is that a type-heavy fixture no
 longer pays for every alternative and no longer performs a separate allocation
 for every parameter/result/field/case/label list. TM-0 records the actual baseline
@@ -516,7 +536,7 @@ writing; re-measure rather than trusting them after the first stage.
 
 | Script / test | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| default C++/wast suite | 8,354 assertions / 273 cases | 0 | 0 | Existing core, GC, SIMD, exceptions and component parser/validator behaviour is the refactor's regression floor. |
+| default C++/wast suite | 8,376 assertions / 274 cases | 0 | 0 | Existing core, GC, SIMD, exceptions and component parser/validator behaviour is the refactor's regression floor. |
 | strict validation suite (`WASM_SPEC_VALIDATE=1` and the curated negative sets) | same suite green | 0 | 0 | The compact store must not weaken any validator path, positive or negative. |
 | `Test/wasm_wat/component_types.wat` | pass | 0 | 0 | Every component value type, import/export and label shape survives the AST rewrite. |
 | `component_coretypes.wat`, `component_coreexterns.wat`, `component_coregc.wat` | pass | 0 | 0 | Core-type and core-extern payloads still map to the same core shapes. |

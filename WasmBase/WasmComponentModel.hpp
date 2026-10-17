@@ -1,10 +1,12 @@
 #ifndef WASMCOMPONENTMODEL_HPP
 #define WASMCOMPONENTMODEL_HPP
 #include "WasmType.hpp"
+#include "WasmTypeStore.hpp"
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace WASM {
@@ -126,70 +128,6 @@ struct NameAttributes {
 	uint8_t tag = 0; // 0x00, 0x01 (plain/interface) or 0x02 (+ attributes)
 	std::string name;
 	std::vector<Attribute> attributes;
-};
-
-// ── Component value types ───────────────────────────────────────────────────
-enum class PrimitiveValueType : uint8_t {
-	Bool = 0x7F,
-	S8 = 0x7E,
-	U8 = 0x7D,
-	S16 = 0x7C,
-	U16 = 0x7B,
-	S32 = 0x7A,
-	U32 = 0x79,
-	S64 = 0x78,
-	U64 = 0x77,
-	F32 = 0x76,
-	F64 = 0x75,
-	Char = 0x74,
-	String = 0x73,
-	ErrorContext = 0x64,
-	Invalid = 0xFF
-};
-
-struct ComponentValueType {
-	enum class Kind : uint8_t { TypeIndex, Primitive };
-	Kind kind = Kind::Primitive;
-	uint32_t typeIndex = 0;
-	PrimitiveValueType primitive = PrimitiveValueType::Invalid;
-};
-
-struct LabelValueType {
-	std::string label;
-	ComponentValueType type;
-};
-
-struct CaseType {
-	std::string label;
-	std::optional<ComponentValueType> type;
-};
-
-struct DefinedValueType {
-	enum class Kind : uint8_t {
-		Primitive, Record, Variant, List, FixedList, Tuple, Flags, Enum,
-		Option, Result, Own, Borrow, Stream, Future, Map
-	};
-	Kind kind = Kind::Primitive;
-	PrimitiveValueType primitive = PrimitiveValueType::Invalid;
-	std::vector<LabelValueType> fields;       // record
-	std::vector<CaseType> cases;              // variant
-	ComponentValueType element;                        // list / fixed-list / option
-	uint32_t fixedLength = 0;                 // fixed-list
-	std::vector<ComponentValueType> tuple;             // tuple
-	std::vector<std::string> labels;          // flags / enum
-	std::optional<ComponentValueType> ok;              // result
-	std::optional<ComponentValueType> error;           // result
-	uint32_t typeIndex = 0;                   // own / borrow
-	std::optional<ComponentValueType> streamElement;   // stream
-	std::optional<ComponentValueType> futureElement;   // future
-	ComponentValueType mapKey;                         // map
-	ComponentValueType mapValue;                       // map
-};
-
-struct ComponentFuncType {
-	bool isAsync = false;
-	std::vector<LabelValueType> params;
-	std::vector<ComponentValueType> results; // 0 or 1
 };
 
 struct ResourceType {
@@ -333,20 +271,28 @@ struct InstanceDecl;
 struct ComponentDecl {
 	enum class Kind : uint8_t { Import, CoreType, Type, Alias, Export };
 	Kind kind = Kind::Import;
-	ImportDecl import;
-	CoreTypeDef coreType;
-	std::unique_ptr<ComponentTypeDef> type;
-	Alias alias;
-	ExportDecl exportDecl;
+	std::variant<std::monostate, std::unique_ptr<ImportDecl>,
+			std::unique_ptr<CoreTypeDef>, std::unique_ptr<ComponentTypeDef>,
+			std::unique_ptr<Alias>, std::unique_ptr<ExportDecl>> payload;
+
+	const ImportDecl& import() const { return *std::get<std::unique_ptr<ImportDecl>>(payload); }
+	const CoreTypeDef& coreType() const { return *std::get<std::unique_ptr<CoreTypeDef>>(payload); }
+	const ComponentTypeDef& type() const { return *std::get<std::unique_ptr<ComponentTypeDef>>(payload); }
+	const Alias& alias() const { return *std::get<std::unique_ptr<Alias>>(payload); }
+	const ExportDecl& exportDecl() const { return *std::get<std::unique_ptr<ExportDecl>>(payload); }
 };
 
 struct InstanceDecl {
 	enum class Kind : uint8_t { CoreType, Type, Alias, Export };
 	Kind kind = Kind::CoreType;
-	CoreTypeDef coreType;
-	std::unique_ptr<ComponentTypeDef> type;
-	Alias alias;
-	ExportDecl exportDecl;
+	std::variant<std::monostate, std::unique_ptr<CoreTypeDef>,
+			std::unique_ptr<ComponentTypeDef>, std::unique_ptr<Alias>,
+			std::unique_ptr<ExportDecl>> payload;
+
+	const CoreTypeDef& coreType() const { return *std::get<std::unique_ptr<CoreTypeDef>>(payload); }
+	const ComponentTypeDef& type() const { return *std::get<std::unique_ptr<ComponentTypeDef>>(payload); }
+	const Alias& alias() const { return *std::get<std::unique_ptr<Alias>>(payload); }
+	const ExportDecl& exportDecl() const { return *std::get<std::unique_ptr<ExportDecl>>(payload); }
 };
 
 struct ComponentTypeDef {
@@ -354,11 +300,25 @@ struct ComponentTypeDef {
 		DefinedValue, Func, Component, Instance, Resource
 	};
 	Kind kind = Kind::DefinedValue;
-	DefinedValueType definedValue;
-	ComponentFuncType func;
-	std::vector<ComponentDecl> componentDecls;
-	std::vector<InstanceDecl> instanceDecls;
-	ResourceType resource;
+	// Defined-value, function and resource payloads live in the shared store.
+	// Component/instance declarations are the remaining inline payloads for
+	// this pass; they keep their order because declaration order is scope.
+	TypeId id{TypeId::kNone};
+	std::variant<std::monostate, std::vector<ComponentDecl>,
+			std::vector<InstanceDecl>, ResourceType> declarations;
+
+	const std::vector<ComponentDecl>& componentDecls() const
+	{
+		return std::get<std::vector<ComponentDecl>>(declarations);
+	}
+	const std::vector<InstanceDecl>& instanceDecls() const
+	{
+		return std::get<std::vector<InstanceDecl>>(declarations);
+	}
+	const ResourceType& resource() const
+	{
+		return std::get<ResourceType>(declarations);
+	}
 };
 
 // ── Start and value definitions ────────────────────────────────────────────
