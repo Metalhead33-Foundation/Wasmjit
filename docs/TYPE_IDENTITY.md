@@ -18,7 +18,10 @@ The spec answers (1) declaratively; (2) follows from the spec being
 representation-agnostic; (3) is our design choice.
 
 Revision 2 turns the design (§6) into an ordered implementation plan (§8) and
-test plan (§9), and records decisions that were previously open (§7).
+test plan (§9), and records decisions that were previously open (§7). Revision 3
+adds the Store-owned/one-canonical-instance target and the JIT cutover pointer
+in §6.7/§10/§12.3; the detailed TM-6…TM-11 plan lives in
+[`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md) §7.10.
 
 ## 1. Scope
 
@@ -332,6 +335,13 @@ types may share one within a context. If more than one `jit_context` can exist,
 the cache must be per context. The per-module reset can then be dropped, or kept
 only as a defensive measure.
 
+The remaining cutover is documented in
+[`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md) §7.10.3 (TM-7): the JIT
+takes a local-index → `TypeId` map plus `CoreTypeView`, not a
+`span<const Subtype>`; `ModuleInstance::subtypeForTypeId` becomes a store lookup
+rather than a scan of the current module. That also fixes cross-module GC walking
+for a type the walking module did not itself declare.
+
 ### 6.8 Ill-formed input policy
 
 Canonicalization assumes well-formed input, and the policy for anything else is
@@ -462,12 +472,17 @@ dedicated suite:
 
 ## 10. Current state and gaps in this codebase
 
-- `TypeRegistry` (`WasmBase/WasmTypeRegistry.hpp`) owns type blocks but has **no
-  identity or interning**: `registerModule` hands out a
-  `std::span<const Subtype>` per module.
-- `Module::types` is that span; all type indices remain module-local.
+- `TypeRegistry` (`WasmBase/WasmTypeRegistry.hpp`) owns a compact canonical
+  `TypeStore`, but it still also retains one `std::vector<Subtype>` block per
+  module and hands out a `std::span<const Subtype>` view per module.
+- `Module::types` is that span; all type indices remain module-local. This is the
+  `TM-6`/`TM-10` ownership gap: the store is not yet the sole owner of the type
+  syntax.
 - `Module::isSubtype` walks declared `supertypeIndices` (module-local) and does
-  not implement structural composite subtyping or cross-module matching.
+  not implement structural composite subtyping or cross-module matching. The
+  target is to resolve this through `TypeRegistry::matches` and `CoreTypeView`.
+- The JIT/validator migration from `Subtype` to `CoreTypeView` is the `TM-7`/
+  `TM-11` plan in [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md) §7.10.3.
 - ~~`ModuleInstance::refMatchesHeapType` and GC object headers use module-local
   indices.~~ **Done (M6):** GC object headers store a canonical `TypeId`
   (`GcHeap::owns` locates the object by region, then the header is read);
@@ -493,8 +508,9 @@ dedicated suite:
 - **Component types are outside this interning path.** Definitions now receive
   shared-store `TypeId`s, but they are not structurally interned and the
   validator still builds a local `ResolvedType` graph; there is no
-  cross-component equality yet. The proposed component interning and resource
-  rules are described in [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md).
+  cross-component equality yet. The completion plan for closed-type interning,
+  schemes/resources, and the Canonical ABI metadata contract is in
+  [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md) §7.10.4–§7.10.5.
 
 ## 11. Non-goals / deferred
 
@@ -564,16 +580,23 @@ Because the registry never unregisters (§6.6), this is cumulative over the
 process lifetime: the total is `88 x (types across all modules ever parsed)`, not
 just the live modules. A transient 1,000-type module leaves ~0.2 MB behind.
 
+This is the **current** footprint, not the target. TM-6 removes the per-module
+`Subtype` blocks; after it, the `88 x N` term is replaced by the Store's compact
+records and each module retains only `LocalTypeIdx -> TypeId` references.
+
 ### 12.3 Relationship to the rest of this document
 
 - **Partly related (to interning).** The canonicalization in §6 changes how many
   types are stored: structurally identical `rec` groups are stored once, so
   repeated function signatures — the bulk of types in real modules — stop
-  multiplying the `88 x N` term. Interning therefore *improves* the footprint,
-  and its cost must be weighed against the extra canonical representation. Once
-  a global canonical table exists, per-module `Subtype` blocks become largely
-  redundant: they could shrink to a `LocalTypeIdx -> TypeId` map, reading shape
-  data from the shared, compact canonical table.
+  multiplying the `88 x N` term. The target is stronger: `TypeId` is the only
+  canonical identity, there is exactly one `TypeRecord` per canonical type, and
+  per-module `Subtype` blocks disappear entirely. A module keeps only its
+  `LocalTypeIdx -> TypeId` map and views into the Store. That removes the
+  `88 x N` term rather than merely deduplicating it; see
+  [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md) §7.10.1–§7.10.2.
+  Until that migration, the current `Subtype` blocks remain a compatibility
+  copy and must not be treated as a second identity.
 - **Mostly separate (layout vs. identity).** The 88-byte figure is a property of
   the current in-memory layout (`std::variant` + owning `std::vector`s), not of
   type identity or `match`. Shrinking it is an independent optimization, in the
@@ -598,6 +621,12 @@ footprint rationale.
   small inline form (one `TypeId` plus a "none" marker, spilling to a vector only
   when needed) replaces the 24-byte vector.
 - **Inline `isFinal`** into the kind tag, removing the padding.
+- **One canonical record, no retained syntax.** `TypeId` is the only canonical
+  identity; the store keeps exactly one `TypeRecord` per canonical type, and
+  `Module`/`Component` keep only local-index maps and views. `Subtype` becomes a
+  parser temporary instead of a per-module stored block. This is the TM-6
+  ownership/dedup target in
+  [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md) §7.10.1–§7.10.2.
 - **Measure the dedup ratio first.** Before investing in layout work, measure how
   many types interning collapses (M8); it may already remove most of the
   pressure.
