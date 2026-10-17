@@ -92,27 +92,38 @@ gaps → where we deliberately deviate → plan → test survey → references.
 
 ## 4. What the folder holds today
 
-`docs/proposals/` holds **fourteen** notes. Every one carries the §2.1 front
-matter and the nine slots of §2.2 in order; the wording drifts only as §3
-permits. The ID conventions of §2.3 are used throughout; the prefixes actually
-in the tree are:
+`docs/proposals/` holds **twenty-five** notes. Every one carries the §2.1 front
+matter and the nine slots of §2.2 in order (or the grouped variant of §3); the
+wording drifts only as §3 permits. The ID conventions of §2.3 are used
+throughout; the prefixes actually in the tree are:
 
 | Note | Gap | Deviation | Milestone |
 |---|---|---|---|
 | `BULK_MEMORY.md` | `BM<n>` | `BMD<n>` | `BM-<n>` |
+| `CALL_TAGS.md` | `CTA<n>` | `CTAD<n>` | `CTA-<n>` |
 | `COMPONENT_MODEL.md` | `CM<n>` | `CMD<n>` | `CM-<n>` |
+| `CONSTANT_TIME.md` | `CT<n>` | `CTD<n>` | `CT-<n>` |
 | `EXCEPTIONS.md` | `EX<n>` | `EXD<n>` | `EX-<n>` |
 | `EXTENDED_CONST.md` | `EC<n>` | `ECD<n>` | `EC-<n>` |
+| `EXTENDED_NAME_SECTION.md` | `ENS<n>` | `ENSD<n>` | `ENS-<n>` |
+| `FLEXIBLE_VECTORS.md` | `FV<n>` | `FVD<n>` | `FV-<n>` |
 | `FUNCTION_REFERENCES.md` | `FR<n>` | `FRD<n>` | `FR-<n>` |
 | `GC.md` | `G<n>` (plus `R`/`H`/`C`/`L` sub-families; `RC<n>` study rows in §6.4) | `D<n>` | `GC-<n>` / `RC-<n>` (and `SR-<n>`) |
+| `INSTRUMENT_TRACING.md` | `IT<n>` | `ITD<n>` | `IT-<n>` |
 | `MEMORY64.md` | `M<n>` | `M64D<n>` | `M64-<n>` |
+| `MEMORY_CONTROL.md` | `MC<n>` | `MCD<n>` | `MC-<n>` |
 | `MULTI_MEMORY.md` | `MM<n>` | `MMD<n>` | `MM-<n>` |
 | `MULTI_VALUE.md` | `MV<n>` | `MVD<n>` | `MV-<n>` |
 | `MUTABLE_GLOBALS.md` | `MG<n>` | `MGD<n>` | `MG-<n>` |
+| `PROFILES.md` | `PR<n>` | `PRD<n>` | `PR-<n>` |
+| `REFERENCE_TYPES.md` | `RT<n>` | `RTD<n>` | `RT-<n>` |
 | `SIMD.md` | `S<n>` | `SD<n>` | `SIMD-<n>` |
 | `SMALL_PROPOSALS.md` | (embedded) | `SPD<n>` | `SP-<n>` |
+| `STACK_SWITCHING.md` | `SS<n>` | `SSD<n>` | `SS-<n>` |
+| `STRINGREF.md` | `STR<n>` | `STRD<n>` | `STR-<n>` |
 | `TAILCALLS.md` | `TC<n>` | `TCD<n>` | `TC-<n>` |
 | `THREADS.md` | `T<n>` | `TD<n>` | `TH-<n>` |
+| `TYPE_IMPORTS.md` | `TI<n>` | `TID<n>` | `TI-<n>` |
 
 `GC.md` shows the intended depth of a §6: a §6.1 discussion, a §6.2 deviation
 table, *and* a §6.3 list of the observable semantics we must **not** play loose
@@ -127,7 +138,7 @@ actually does.
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
 | PG1 | **The previous revision prescribed a different section order.** It listed "play fast and loose" as §4 and "implemented"/"gaps" as §5/§6, as a bare numbered list, while the notes put implemented at §4, gaps at §5 and fast/loose at §6 with the table schemas of §2.2. | `git log` of `docs/PROPOSALS.md`; every note's §1 map. | High (fixed) |
-| PG2 | **Front matter was never specified.** `Status`, `Audience`, the "same split" line and "Contains **no new code**" appear in all fourteen notes, but the old index neither described them nor carried them. | `docs/proposals/*.md` front matter; old `docs/PROPOSALS.md`. | Medium (fixed) |
+| PG2 | **Front matter was never specified.** `Status`, `Audience`, the "same split" line and "Contains **no new code**" appear in all fourteen notes that existed when this row was written, but the old index neither described them nor carried them. | `docs/proposals/*.md` front matter; old `docs/PROPOSALS.md`. | Medium (fixed) |
 | PG3 | **The §1 map was named but not described.** The notes use a `\| Section \| Question it answers \|` table; the old text only said "Document map". | `docs/proposals/*.md` §1. | Low (fixed) |
 | PG4 | **No ID / marker conventions were stated** (gap, deviation and milestone prefixes; `✅`/`◑`/`~~strike~~`; the **Closes** link). | deviation / gap / milestone tables across the folder. | Low (fixed) |
 | PG5 | **Heading wording drifts** from the canonical strings in `SIMD.md`, `THREADS.md`, `GC.md` and `COMPONENT_MODEL.md`. Sanctioned by §3, but must be recorded or a literal reader calls it a defect. | §8 matrix. | Informational |
@@ -160,7 +171,7 @@ Guardrails (things that must stay true):
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **PM-0 — Re-cut this document** | ✅ Rewrite `PROPOSALS.md` into the §2 shape: front matter, §1 map, §2–§9, IDs. | PG1, PG2, PG3, PG4 | Done: this file's §1 map matches its own §2–§9, and §4/§8 match the folder. |
-| **PM-1 — Record the aliases** | ✅ List the sanctioned heading and section-count variants in §3/§6/§8. | PG5, PG6, PG7 | Done: §8 classifies all fourteen notes. |
+| **PM-1 — Record the aliases** | ✅ List the sanctioned heading and section-count variants in §3/§6/§8. | PG5, PG6, PG7 | Done: §8 classifies every note (all twenty-five). |
 | **PM-2 — Keep the survey current** | Update §4's prefix table and §8's matrix whenever a note is added or a section appears. | PG5, PG9 | A new note appears in both tables in the same change that adds it. |
 | **PM-3 — Optional structural lint** | Add a `grep`-based check (documented in `TESTING.md`) that each `docs/proposals/*.md` has front matter and §1…§9, allowing the §3 exceptions. | PG8 | The check runs and passes, or is explicitly waived. |
 
@@ -170,26 +181,37 @@ authoritative per-item status is each note's §7 plan.
 
 ## 8. Indicative structural survey
 
-`docs/proposals/` (2026-10-14), read from the `## N.` headings:
+`docs/proposals/` (2026-10-17), read from the `## N.` headings:
 
 | Note | §§ | Shape | Heading drift | Extra | Reading |
 |---|---:|---|---|---|---|
 | `BULK_MEMORY.md` | 9 | canonical | none | — | conforms exactly |
+| `CALL_TAGS.md` | 9 | canonical | none | — | conforms exactly |
+| `CONSTANT_TIME.md` | 9 | canonical | none | — | conforms exactly |
 | `EXCEPTIONS.md` | 9 | canonical | none | — | conforms exactly |
 | `EXTENDED_CONST.md` | 9 | canonical | none | — | conforms exactly |
+| `EXTENDED_NAME_SECTION.md` | 9 | canonical | none | — | conforms exactly |
+| `FLEXIBLE_VECTORS.md` | 9 | canonical | none | — | conforms exactly |
 | `FUNCTION_REFERENCES.md` | 9 | canonical | none | — | conforms exactly |
+| `INSTRUMENT_TRACING.md` | 9 | canonical | none | — | conforms exactly |
 | `MEMORY64.md` | 9 | canonical | none | — | conforms exactly |
+| `MEMORY_CONTROL.md` | 9 | canonical | none | — | conforms exactly |
 | `MULTI_MEMORY.md` | 9 | canonical | none | — | conforms exactly |
 | `MULTI_VALUE.md` | 9 | canonical | none | — | conforms exactly |
 | `MUTABLE_GLOBALS.md` | 9 | canonical | none | — | conforms exactly |
+| `PROFILES.md` | 9 | canonical | none | — | conforms exactly |
+| `REFERENCE_TYPES.md` | 9 | canonical | none | — | conforms exactly |
+| `STACK_SWITCHING.md` | 9 | canonical | none | — | conforms exactly |
+| `STRINGREF.md` | 9 | canonical | none | — | conforms exactly |
 | `TAILCALLS.md` | 9 | canonical | none | — | conforms exactly |
+| `TYPE_IMPORTS.md` | 9 | canonical | none | — | conforms exactly |
 | `SIMD.md` | 9 | canonical slots | §2/§3 say "the spec" | — | conforms (wording) |
 | `THREADS.md` | 9 | canonical slots | §2 "The proposal's model and what it demands" | — | conforms (wording) |
 | `GC.md` | 10 | canonical + appendix | §2/§3 "Wasm 3.0"; §5 "…and §2" | §10 "Beyond 3.0" after §9 | conforms (appendix) |
 | `COMPONENT_MODEL.md` | 10 | canonical + interleave | §2/§3 subject-named; §4 "What is in the tree today"; §7 "Staged plan" | §9 "How this relates…" before §10 References | conforms (forward-looking) |
 | `SMALL_PROPOSALS.md` | 8 | grouped (3-in-1) | §2–§4 are proposals; demands/non-demands/implemented/gaps embedded | §5 fast/loose, §6 plan, §7 survey, §8 refs | conforms (grouped variant, PD1) |
 
-Reading: nine notes match §2 exactly; two reword §2/§3 and keep the nine slots;
+Reading: twenty notes match §2 exactly; two reword §2/§3 and keep the nine slots;
 two append a section; one uses the grouped variant. No note is missing a slot,
 and none is missing its front matter.
 
