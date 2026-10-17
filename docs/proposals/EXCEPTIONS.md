@@ -6,7 +6,7 @@ EX-3 `throw`/`throw_ref` (Store-owned exception objects, pending-exception
 protocol, static cross-frame dispatch), EX-4 `try_table` catch routing
 (including `*_ref`) and EX-5 verification (`assert_exception`, a manual
 test, three curated scripts). `throw` **10/0**, `throw_ref` **13/0**,
-`try_table` **53/0**. What remains is `exnref` storage in tables (shared with
+`try_table` **56/0**. What remains is `exnref` storage in tables (shared with
 `FUNCTION_REFERENCES.md` FR-6) and validation (`assert_invalid` cases).
 Audience: anyone touching `WasmModule`, `WasmType`, `WasmStore`,
 `WasmVMContext`, `LibjitOpcodeDispatcher`, or the test harness.
@@ -125,7 +125,7 @@ instructions were **removed**.
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
 | ~~EX1~~ | ~~**`throw` and `throw_ref` are unconditional traps.**~~ **Done (EX-3):** both execute; `throw` dispatches statically to the innermost matching catch, `throw_ref` compares tag ids at runtime, and an unhandled throw becomes a pending exception that every call site re-propagates. | `throw` 10/0, `throw_ref` 13/0 | Closed |
-| ~~EX2~~ | ~~**`try_table` ignores all catch clauses.**~~ **Done (EX-4):** the frame carries its decoded clauses, and every throw site routes the payload (and the `exnref` for `*_ref`) to the catch label. | `try_table` 53/0 | Closed |
+| ~~EX2~~ | ~~**`try_table` ignores all catch clauses.**~~ **Done (EX-4):** the frame carries its decoded clauses, and every throw site routes the payload (and the `exnref` for `*_ref`) to the catch label. | `try_table` 56/0 | Closed |
 | ~~EX3~~ | ~~**`exnref` does not exist as a value type.**~~ **Done (EX-1):** `ExnRef` (0x69) and `NullExnRef` (0x74) are first-class value types at every use site (function signature, global, local, `ref.null`, block type), the `exn`/`noexn` heap types are decoded, and the JIT lowers them to `void*`. | `ref_null` 34/0/0 | Closed |
 | ~~EX4~~ | ~~**No tag instances or identity.**~~ **Done (EX-2):** every tag declaration gets a Store-owned `TagId`; imports alias the exporter's id; imported payload types are checked; exports publish the id. | `tag` 6/0; the tag-identity manual test | Closed |
 | EX5 | **Exnrefs cannot be stored in tables.** Globals hold a `Value` (so an `exnref` global works, EX-1), but a table slot is a `Callable*` and there is no place for a non-funcref reference — the same generic-slot gap as `FUNCTION_REFERENCES.md` FR-6. | `WasmTable.hpp`, `WasmModuleInstance.cpp` | Medium (shared with FR-6) |
@@ -167,7 +167,7 @@ instructions were **removed**.
 | **EX-1 — `exnref` type** | ✅ Done: `ValueTypeCode::ExnRef`/`NullExnRef` and `AbstractHeapType::Exn`/`NoExn`, the bottom-type encodings corrected to the final 3.0 values, JIT lowering to `void*`, and `(ref.null ht)` naming the hierarchy in its `Value::kind`. The harness now verifies `(ref.null …)` results. | EX3 | Done: every `ref_null.wast` module loads and the script is **34/0/0**, curated. |
 | **EX-2 — Tags** | ✅ Done: `StoreOwnedTag` + `Store::createTag`, a `tagIds` index space filled before compilation (imports first), `resolveTag` wired into instantiation (aliasing the exporter's id and checking the payload type), and `registerExports` publishing the `TagId`. | EX4 | Done: two modules importing the same tag share an id, a second tag with the identical payload type does not, and a payload-type mismatch fails to link (`tag` 6/0; manual identity test). |
 | **EX-3 — Throw/unwind** | ✅ Done: the pending-exception protocol (`EXD1`/`EXD2`) — Store-owned exception objects with a tuple-laid-out payload, static catch dispatch in the current function, an inline pending check at every call site, and static cross-frame propagation. | EX1 | Done: `throw` 10/0, `throw_ref` 13/0 (including a throw across a call boundary and `catch_ref`/`throw_ref`). |
-| **EX-4 — `try_table`** | ✅ Done: a `ControlBlock::TryTable` frame carries the clauses; catch labels resolve to the try_table's own frame; the payload and the `exnref` for `*_ref` are stored into the target label's slots. | EX2 | Done: `try_table` **53/0**; the two `assert_trap`s (`unreachable`, divide-by-zero) still trap rather than being caught. |
+| **EX-4 — `try_table`** | ✅ Done: a `ControlBlock::TryTable` frame carries the clauses; catch labels resolve to the try_table's own frame; the payload and the `exnref` for `*_ref` are stored into the target label's slots. | EX2 | Done: `try_table` **56/0**; the two `assert_trap`s (`unreachable`, divide-by-zero) still trap rather than being caught. |
 | **EX-5 — Harness/tests** | ✅ Done: `assert_exception` executes (and rejects a trap or a normal return); `assert_return`/`assert_trap`/plain actions reject a pending exception; a manual WAT test covers a caught payload and the uncaught case; all three scripts are curated. | EX6, EX7 | Done: the suite verifies exception behaviour; full run **7866 assertions / 191 test cases**, green in Debug and Release. |
 
 ## 8. Indicative test survey
@@ -180,7 +180,7 @@ instructions were **removed**.
 | `ref_null` | **34 / 0 / 0** | `exnref`/`nullexnref` and every other null form, verified |
 | `throw` | **10 / 0 / 3** | payloads of every scalar type, cross-function throw, polymorphic dead code; the 3 skips are `assert_invalid` |
 | `throw_ref` | **13 / 0 / 2** | `catch_ref` → `throw_ref` round trips; the 2 skips are `assert_invalid` |
-| `try_table` | **53 / 0 / 14** | every catch form, nested/multi-catch, imported tags, traps passing through; the 14 skips are 11 `assert_invalid` and 3 reference results |
+| `try_table` | **56 / 0 / 11** | every catch form, nested/multi-catch, imported tags, traps passing through; the 11 skips are all `assert_invalid` |
 | `exceptions.wat` | 7 assertions | caught payload (host call) and the uncaught, embedder-visible pending exception |
 
 `tag`, `ref_null`, `throw`, `throw_ref` and `try_table` are all in

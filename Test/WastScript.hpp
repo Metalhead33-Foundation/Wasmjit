@@ -18,12 +18,15 @@ namespace Spec {
 //   * v128     -> per-lane decimal strings in `lanes`, with `laneType` set
 //   * refs     -> "null" or an abstract reference id, sometimes with no
 //                 `value` at all (e.g. `(ref.func)` matches any function ref)
+//   * either   -> a list of allowed alternatives in `alternatives` (relaxed
+//                 SIMD — the engine may produce any one of them)
 struct ScriptValue {
-	std::string type;                 // "i32", "i64", "f32", "f64", "v128", "funcref", ...
+	std::string type;                 // "i32", "i64", "f32", "f64", "v128", "funcref", "either", ...
 	bool hasValue = false;
 	std::string value;                // scalar text, "null", "nan:canonical", ...
 	std::string laneType;             // v128 only
 	std::vector<std::string> lanes;   // v128 only
+	std::vector<ScriptValue> alternatives; // "either" only
 };
 
 // An `(invoke ...)` or `(get ...)` directive.
@@ -70,9 +73,10 @@ struct ScriptReport {
 // `wasmDir` holds the `*.wasm` files referenced by the script; a trailing
 // separator is optional.
 //
-// Commands that need functionality the runtime does not provide yet
-// (validation, recoverable traps, module linking, text-format modules) are
-// counted as *skipped* rather than failed. See WastScript.cpp for details.
+// Commands that need functionality the runtime or the harness does not provide
+// (text-format modules, module linking) are counted as *skipped* rather than
+// failed; the four negative-module families are split by kind and are executed
+// under `WASM_SPEC_VALIDATE=1`. See WastScript.cpp for details.
 ScriptReport runScript(const Script& script, const std::string& wasmDir, LibJIT::Context& jitContext);
 
 } // namespace Spec

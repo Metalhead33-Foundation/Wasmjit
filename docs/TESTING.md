@@ -242,7 +242,7 @@ failure details:
 
 ```
 [spec] local_set: passed=20 failed=0 skipped=33
-[spec] local_set: skipped 33x: module validation: malformed/invalid modules are not rejected yet
+[spec] local_set: skipped 33x: assert_invalid: no validating front end (set WASM_SPEC_VALIDATE=1 to measure)
 ```
 
 ```
@@ -301,14 +301,42 @@ Correct results are deliberately **not required yet**; the run is meant to be in
 | --- | --- | --- |
 | `module` (binary) | executed | loaded and instantiated |
 | `register` | executed | exports re-registered under the given name |
-| `assert_return`, `action` (`invoke`) | executed | i32/i64/f32/f64 arguments and results; `assert_return` also marshals multiple scalar results, a bare `action` still skips them |
+| `assert_return`, `action` (`invoke`) | executed | scalar, `v128` and reference arguments and results; multiple results, and `either` lists match any alternative |
 | `assert_trap` | executed | traps are recoverable (`WASM::trap` longjmps to a `TrapScope`; see `WasmBase/WasmTrap.hpp`), and the expected text is compared against the trap's **kind** (`trapKindName`), so a trap for the wrong reason fails |
 | `assert_exhaustion` | approximated | run in a nested child; an abnormal termination counts as the expected exhaustion trap |
-| `assert_malformed`, `assert_invalid`, `assert_unlinkable`, `assert_uninstantiable` | skipped | no validating / decoding front-end yet |
+| `assert_malformed`, `assert_invalid`, `assert_unlinkable`, `assert_uninstantiable` | skipped by kind by default | `WASM_SPEC_VALIDATE=1` executes them and reports pass/fail (see below) |
 | `module_definition`, `module_instance` | skipped | module-linking proposal |
-| `assert_exception` | skipped | exception-handling proposal |
-| text-format modules (`.wat`) | skipped | only binary modules can be loaded |
-| `v128` and reference values | skipped | not marshalled yet |
+| `assert_exception` | executed | exception-handling proposal (EX-5) |
+| text-format modules (`.wat`, `module quote`) | skipped | only binary modules can be loaded |
+
+### Measuring the negative-module commands
+
+The four negative-module families are kept separate because they test four
+different layers: the **decoder** (`assert_malformed`), a **validator**
+(`assert_invalid`), the **linker** (`assert_unlinkable`) and **instantiation**
+(`assert_uninstantiable`). `WASM_SPEC_VALIDATE=1` executes them instead of
+skipping them and prints one diagnostic per binary case
+(`[validate] <kind> <accepted|rejected|trapped> <file>`). The default run is
+unchanged and stays green; the strict run is expected to fail on
+`assert_invalid` until a validator exists.
+
+Measured against the curated set:
+
+| Kind | Binary cases | Rejected (pass) | Accepted (fail) | Reading |
+| --- | ---: | ---: | ---: | --- |
+| `assert_invalid` | 1153 | 4 | **1149** | needs a validating front end. The 4 rejections are `ref.1/2/6/7` — a type-section reference to a later rec group, a decoder rule rather than validation |
+| `assert_malformed` | 13 | 4 | **9** | decoder strictness. The other **656** malformed cases are text/`module quote` and cannot run without a text parser |
+| `assert_unlinkable` | 32 | 28 | **4** | the linker already rejects 87.5 %. The 4 accepted are `memory64-imports.66–69`: an imported memory's 64-bit index type is not matched (`MEMORY64` M2) |
+| `assert_uninstantiable` | 0 | — | — | no curated case |
+| **total** | **1198** | **36** | **1162** | 1149 of the failures — 96 % of the binary negative cases — are the missing validator |
+
+Even in strict mode 659 negative commands (3 `assert_invalid` + 656
+`assert_malformed`) are text-format and stay skipped: the loader is binary-only.
+The exercise paid for itself twice: it showed that the decoder and linker already
+cover a useful fraction, and it exposed a real engine bug — the exception classes
+in `WasmBase/WasmException.hpp` inherited `std::exception` **privately**, so an
+unresolved import escaped every `catch (const std::exception&)` (the harness's
+child died with `produced no report`). They now inherit publicly.
 
 `assert_exhaustion` is the one command family that is *expected* to produce
 kernel `segfault` lines: its nested child is supposed to exhaust the host stack,
@@ -426,11 +454,11 @@ Per-script outcomes from the last sweep (2026-10-13, 256 scripts):
 Traps are **executed** now, so a *missing* trap is a failure rather than a silent
 skip — that is why some scripts that used to look clean now report real failures
 (`traps.wast`, `address.wast`, `memory_trap64.wast` were fixed on the way; see
-`docs/proposals/`). What the harness still cannot do is marshalling and
-validation: reference/`v128` arguments and results,
-`assert_invalid`/`assert_malformed`/`assert_unlinkable`/`assert_uninstantiable`
-(no validating front-end), `module_definition`/`module_instance` (module
-linking) and `assert_exception` are skipped.
+`docs/proposals/`). The harness marshals scalar, `v128` and reference values, and
+`assert_exception` runs; what it still cannot do is text-format modules and the
+module-linking/component commands (`module_definition`/`module_instance`).
+Validation is *measurable* (`WASM_SPEC_VALIDATE=1`, above) and `assert_invalid`
+is the one family that genuinely needs a validating front end.
 
 The harness surfaces these **real** mismatches, for example:
 
@@ -576,11 +604,11 @@ takes the same route `WASM::callCallable` does. A signature that mixes `v128`
 with scalars still uses `jit_apply`, so the defect is bounded rather than fixed;
 it is libjit's to fix.
 
-What remains in these scripts is *skips*, and they are honest ones: the `either`
-expectation form the harness does not model (a relaxed op may return any of the
-listed vectors, so a harness that silently picked the first would assert
-something the spec does not promise) and modules whose rejection needs validation
-the engine does not implement. Do not curate a script that reports `failed > 0`.
+What remains in these scripts is *skips*, and they are honest ones: modules
+whose rejection needs validation the engine does not implement. (`either`
+result lists are modelled now — the result is compared against every
+alternative — so relaxed SIMD is graded in full.) Do not curate a script that
+reports `failed > 0`.
 Reproduce a row with:
 
 ```bash

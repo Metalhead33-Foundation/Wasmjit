@@ -124,6 +124,12 @@ ScriptValue valueFromJson(const Json& json)
 				}
 			}
 		}
+		// `(either ...)`: a list of alternatives the result may match.
+		const auto alternatives = json.find("values");
+		if (alternatives != json.end() && alternatives->is_array()) {
+			for (const Json& alternative : *alternatives)
+				value.alternatives.push_back(valueFromJson(alternative));
+		}
 	}
 	return value;
 }
@@ -291,6 +297,26 @@ bool isReferenceArg(const ScriptValue& value)
 {
 	WASM::ValueTypeCode code = WASM::ValueTypeCode::Void;
 	return referenceArgTypeCode(value, code);
+}
+
+// Defined below (after the scalar type table).
+bool isScalarValue(const ScriptValue& value);
+
+// True for an expected value the harness can verify: a scalar, a reference
+// (null, a concrete identity, or a bare `(ref.X)` placeholder), or an `either`
+// list whose alternatives are all verifiable (relaxed SIMD).
+bool isSupportedExpectation(const ScriptValue& value)
+{
+	if (value.type == "either") {
+		if (value.alternatives.empty())
+			return false;
+		for (const ScriptValue& alternative : value.alternatives) {
+			if (!isSupportedExpectation(alternative))
+				return false;
+		}
+		return true;
+	}
+	return isScalarValue(value) || isReferenceArg(value);
 }
 
 // True for the reference types `referenceArgument` can marshal.
@@ -496,6 +522,11 @@ public:
 	ScriptRunner(std::string wasmDir, LibJIT::Context& jitContext)
 		: wasmDir(std::move(wasmDir)), jitContext(jitContext)
 	{
+		// Measurement mode: execute the four negative-module command kinds
+		// instead of skipping them. The default suite stays a conformance run;
+		// `WASM_SPEC_VALIDATE=1` is how we see what the decoder/linker already
+		// reject and what still needs a validator (docs/TESTING.md).
+		strictValidation = std::getenv("WASM_SPEC_VALIDATE") != nullptr;
 		installSpectest();
 	}
 
@@ -511,6 +542,9 @@ private:
 
 	std::string wasmDir;
 	LibJIT::Context& jitContext;
+	// See the constructor: `WASM_SPEC_VALIDATE=1` executes the negative-module
+	// command kinds and reports real pass/fail instead of skipping them.
+	bool strictValidation = false;
 
 	// Imports visible to every module in this script: the `spectest` stubs plus
 	// whatever earlier `register` commands exposed.
@@ -547,13 +581,24 @@ private:
 	void onAssertReturn(const ScriptCommand& command);
 	void onAssertTrap(const ScriptCommand& command);
 	void onAssertException(const ScriptCommand& command);
+	// Negative-module commands (validation / linking / instantiation). They are
+	// skipped by default and executed under `WASM_SPEC_VALIDATE=1`.
+	enum class ModuleAttempt { Accepted, Rejected, Trapped };
+	ModuleAttempt attemptModule(const ScriptCommand& command, bool instantiate);
+	void onAssertMalformed(const ScriptCommand& command);
+	void onAssertInvalid(const ScriptCommand& command);
+	void onAssertUnlinkable(const ScriptCommand& command);
+	void onAssertUninstantiable(const ScriptCommand& command);
 	void onAction(const ScriptCommand& command);
 	void onAssertExhaustion(const ScriptCommand& command);
 
 	bool invoke(WASM::ModuleInstance& instance, const ScriptAction& action, const WASM::FuncType& funcType,
 				const WASM::Callable& callable, std::array<unsigned char, 16>& returns, bool& trapped,
 				std::vector<unsigned char>* tuple = nullptr);
-	bool compareResult(const ScriptValue& expected, WASM::ValueTypeCode actual, const unsigned char* data);
+	bool compareResult(const ScriptValue& expected, WASM::ValueTypeCode actual, const unsigned char* data,
+					   WASM::ModuleInstance& instance);
+	bool compareReferenceResult(const ScriptValue& expected, WASM::ValueTypeCode actual,
+								const unsigned char* data, WASM::ModuleInstance& instance);
 };
 
 } // namespace
@@ -718,9 +763,9 @@ void ScriptRunner::runCommand(const ScriptCommand& command)
 		return;
 	}
 
-	// The remaining command families need runtime features that do not exist
-	// yet. They are reported as skipped so the suite stays actionable while the
-	// JIT grows instead of drowning real regressions in expected failures.
+	// Command families that are deliberately not executed in a normal run. They
+	// are reported as skipped so the suite stays actionable while the engine
+	// grows instead of drowning real regressions in expected failures.
 	if (command.type == "assert_exhaustion") {
 		onAssertExhaustion(command);
 		return;
@@ -729,9 +774,25 @@ void ScriptRunner::runCommand(const ScriptCommand& command)
 		onAssertTrap(command);
 		return;
 	}
-	if (command.type == "assert_malformed" || command.type == "assert_invalid"
-			|| command.type == "assert_unlinkable" || command.type == "assert_uninstantiable") {
-		skip("module validation: malformed/invalid modules are not rejected yet");
+	// Negative-module commands are split by *why* the module should be refused:
+	// the decoder (malformed), a validator (invalid), the linker (unlinkable),
+	// or a trapping start function (uninstantiable). Only `assert_invalid`
+	// genuinely needs a validating front end; the harness executes all four
+	// under `WASM_SPEC_VALIDATE=1` and skips them (by kind) otherwise.
+	if (command.type == "assert_malformed") {
+		onAssertMalformed(command);
+		return;
+	}
+	if (command.type == "assert_invalid") {
+		onAssertInvalid(command);
+		return;
+	}
+	if (command.type == "assert_unlinkable") {
+		onAssertUnlinkable(command);
+		return;
+	}
+	if (command.type == "assert_uninstantiable") {
+		onAssertUninstantiable(command);
 		return;
 	}
 	if (command.type == "module_definition" || command.type == "module_instance") {
@@ -857,7 +918,7 @@ void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 		}
 	}
 	for (const ScriptValue& expected : command.expected) {
-		if (isScalarValue(expected) || isNullReferenceExpectation(expected))
+		if (isSupportedExpectation(expected))
 			continue;
 		skip("expected type '" + expected.type + "' is not supported");
 		return;
@@ -894,7 +955,7 @@ void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 				return;
 			}
 			const WASM::ValueTypeCode code = funcType->results[i].val.opcode;
-			if (compareResult(command.expected[i], code, tuple.data() + offset))
+			if (compareResult(command.expected[i], code, tuple.data() + offset, *instance))
 				continue;
 
 			std::stringstream message;
@@ -931,7 +992,7 @@ void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 	}
 
 	const WASM::ValueTypeCode resultCode = funcType->results[0].val.opcode;
-	if (compareResult(command.expected[0], resultCode, returns.data())) {
+	if (compareResult(command.expected[0], resultCode, returns.data(), *instance)) {
 		pass();
 		return;
 	}
@@ -1077,6 +1138,141 @@ void ScriptRunner::onAssertException(const ScriptCommand& command)
 		return;
 	}
 	pass();
+}
+
+ScriptRunner::ModuleAttempt ScriptRunner::attemptModule(const ScriptCommand& command, bool instantiate)
+{
+	std::string path = wasmDir;
+	if (!path.empty() && path.back() != '/')
+		path.push_back('/');
+	path += command.filename;
+
+	auto module = std::make_unique<WASM::Module>();
+	try {
+		Euph::Io::File file(path.c_str(), Elv::Io::Mode::READ);
+		module->fromFile(file);
+	} catch (const std::exception& error) {
+		if (std::getenv("WJ_TRACE") != nullptr)
+			std::fprintf(stderr, "[wj]   rejected %s: %s\n", command.filename.c_str(), error.what());
+		return ModuleAttempt::Rejected;
+	}
+	if (!instantiate)
+		return ModuleAttempt::Accepted;
+
+	// Keep the module alive: an instance holds a raw `const Module*`.
+	modules.push_back(std::move(module));
+
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	std::unique_ptr<WASM::ModuleInstance> instance;
+	// A start function may trap during instantiation; that is the expected
+	// outcome for `assert_uninstantiable`, not a host failure.
+	WASM::TrapScope trapScope;
+	if (setjmp(trapScope.buffer) != 0) {
+		lastTrapKind = trapScope.kind();
+		lastTrapMessage = trapScope.message();
+		return ModuleAttempt::Trapped;
+	}
+	try {
+		instance = compiler.instantiate(*modules.back(), registry);
+	} catch (const std::exception& error) {
+		if (std::getenv("WJ_TRACE") != nullptr)
+			std::fprintf(stderr, "[wj]   link rejected %s: %s\n", command.filename.c_str(), error.what());
+		return ModuleAttempt::Rejected;
+	}
+	if (instance == nullptr)
+		return ModuleAttempt::Rejected;
+	// Keep it alive for the script's lifetime (it may own Store references), but
+	// it is deliberately not the target of later `invoke`s.
+	instances.push_back(std::move(instance));
+	return ModuleAttempt::Accepted;
+}
+
+void ScriptRunner::onAssertMalformed(const ScriptCommand& command)
+{
+	if (!strictValidation) {
+		skip("assert_malformed: decoder rejection not exercised by default "
+			 "(set WASM_SPEC_VALIDATE=1 to measure)");
+		return;
+	}
+	if (command.moduleType != "binary") {
+		skip("text-format module '" + command.filename + "' (only binary modules can be loaded)");
+		return;
+	}
+	const ModuleAttempt attempt = attemptModule(command, false);
+	std::fprintf(stderr, "[validate] assert_malformed %s %s\n",
+			attempt == ModuleAttempt::Rejected ? "rejected" : "accepted",
+			command.filename.c_str());
+	if (attempt == ModuleAttempt::Rejected)
+		pass();
+	else
+		fail(command.line, "accepted a malformed module ('" + command.filename + "')");
+}
+
+void ScriptRunner::onAssertInvalid(const ScriptCommand& command)
+{
+	if (!strictValidation) {
+		skip("assert_invalid: no validating front end "
+			 "(set WASM_SPEC_VALIDATE=1 to measure)");
+		return;
+	}
+	if (command.moduleType != "binary") {
+		skip("text-format module '" + command.filename + "' (only binary modules can be loaded)");
+		return;
+	}
+	const ModuleAttempt attempt = attemptModule(command, false);
+	std::fprintf(stderr, "[validate] assert_invalid %s %s\n",
+			attempt == ModuleAttempt::Rejected ? "rejected" : "accepted",
+			command.filename.c_str());
+	if (attempt == ModuleAttempt::Rejected)
+		pass();
+	else
+		fail(command.line, "accepted an invalid module ('" + command.filename + "')");
+}
+
+void ScriptRunner::onAssertUnlinkable(const ScriptCommand& command)
+{
+	if (!strictValidation) {
+		skip("assert_unlinkable: link failures not verified by default "
+			 "(set WASM_SPEC_VALIDATE=1 to measure)");
+		return;
+	}
+	if (command.moduleType != "binary") {
+		skip("text-format module '" + command.filename + "' (only binary modules can be loaded)");
+		return;
+	}
+	const ModuleAttempt attempt = attemptModule(command, true);
+	std::fprintf(stderr, "[validate] assert_unlinkable %s %s\n",
+			attempt == ModuleAttempt::Rejected ? "rejected"
+					: (attempt == ModuleAttempt::Trapped ? "trapped" : "accepted"),
+			command.filename.c_str());
+	if (attempt == ModuleAttempt::Rejected)
+		pass();
+	else
+		fail(command.line, "instantiated an unlinkable module ('" + command.filename + "')");
+}
+
+void ScriptRunner::onAssertUninstantiable(const ScriptCommand& command)
+{
+	if (!strictValidation) {
+		skip("assert_uninstantiable: start-function traps not verified by default "
+			 "(set WASM_SPEC_VALIDATE=1 to measure)");
+		return;
+	}
+	if (command.moduleType != "binary") {
+		skip("text-format module '" + command.filename + "' (only binary modules can be loaded)");
+		return;
+	}
+	// A trap (the usual case) or a thrown instantiation error both mean the
+	// module did not become usable.
+	const ModuleAttempt attempt = attemptModule(command, true);
+	std::fprintf(stderr, "[validate] assert_uninstantiable %s %s\n",
+			attempt == ModuleAttempt::Accepted ? "accepted"
+					: (attempt == ModuleAttempt::Trapped ? "trapped" : "rejected"),
+			command.filename.c_str());
+	if (attempt == ModuleAttempt::Rejected || attempt == ModuleAttempt::Trapped)
+		pass();
+	else
+		fail(command.line, "instantiated an uninstantiable module ('" + command.filename + "')");
 }
 
 void ScriptRunner::onAction(const ScriptCommand& command)
@@ -1407,18 +1603,57 @@ bool ScriptRunner::invoke(WASM::ModuleInstance& instance, const ScriptAction& ac
 	return true;
 }
 
-bool ScriptRunner::compareResult(const ScriptValue& expected, WASM::ValueTypeCode actual, const unsigned char* data)
+bool ScriptRunner::compareReferenceResult(const ScriptValue& expected, WASM::ValueTypeCode actual,
+										  const unsigned char* data, WASM::ModuleInstance& instance)
 {
-	// A null reference result needs no host-object model: the returned pointer
-	// must be null. Non-null reference expectations are still skipped by the
-	// caller (there is no canonical pointer to compare against, GC.md R5).
-	if (isNullReferenceExpectation(expected)) {
-		if (!WASM::isReferenceType(actual))
-			return false;
-		const void* got = nullptr;
-		std::memcpy(&got, data, sizeof(got));
+	if (!WASM::isReferenceType(actual))
+		return false;
+	const void* got = nullptr;
+	std::memcpy(&got, data, sizeof(got));
+
+	// `(ref.null …)` and the bottom shorthands: the result must be null.
+	if (isNullReferenceExpectation(expected))
 		return got == nullptr;
+
+	// Every other reference expectation is non-null.
+	if (got == nullptr)
+		return false;
+
+	WASM::ValueTypeCode code = WASM::ValueTypeCode::Void;
+	if (!referenceArgTypeCode(expected, code))
+		return false;
+
+	if (!expected.value.empty() && expected.value != "null") {
+		// A concrete identity: `(ref.extern N)`, `(ref.i31 K)`, `(ref.func N)`.
+		// Reusing the argument mapping keeps `ref.eq` consistent (GC.md R4/R5).
+		return got == referenceArgument(instance, code, expected);
 	}
+
+	// Bare placeholders. `(ref.func)` promises a real function reference, which
+	// this engine represents as a registered `Callable*`; `(ref.array)` and the
+	// other bare forms only promise a non-null reference, which is all the
+	// harness can check without a host object model.
+	if (code == WASM::ValueTypeCode::FuncRef)
+		return WASM::Store::global().callableAt(got) != nullptr;
+	return true;
+}
+
+bool ScriptRunner::compareResult(const ScriptValue& expected, WASM::ValueTypeCode actual,
+								 const unsigned char* data, WASM::ModuleInstance& instance)
+{
+	// `(either ...)`: the script accepts any one alternative (relaxed SIMD).
+	if (expected.type == "either") {
+		for (const ScriptValue& alternative : expected.alternatives) {
+			if (compareResult(alternative, actual, data, instance))
+				return true;
+		}
+		return false;
+	}
+
+	// Reference results: null is exact, a concrete identity uses the argument
+	// mapping, a bare placeholder checks what it promises (GC.md R5).
+	if (isReferenceArg(expected))
+		return compareReferenceResult(expected, actual, data, instance);
 
 	WASM::ValueTypeCode expectedCode = WASM::ValueTypeCode::Void;
 	if (!expected.hasValue || !typeCodeFromName(expected.type, expectedCode) || expectedCode != actual)

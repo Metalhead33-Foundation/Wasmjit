@@ -4,7 +4,11 @@
 #include <sstream>
 namespace WASM {
 
-class UnresolvedImportException : std::exception {
+// These derive *publicly* from std::exception: an unresolved import or a
+// segment failure is an ordinary recoverable engine error, and embedders (and
+// the spec harness) catch it as `std::exception`. Private inheritance — the
+// `class` default — made every such error escape a normal catch block.
+class UnresolvedImportException : public std::exception {
 private:
 	std::string str;
 	static std::string getErrStr(std::string_view module, std::string_view import);
@@ -13,7 +17,7 @@ public:
 	UnresolvedImportException(std::string_view module, std::string_view import);
 	const char* what() const noexcept override;
 };
-class SegmentOutOfBoundsException : std::exception {
+class SegmentOutOfBoundsException : public std::exception {
 private:
 	std::string str;
 	static std::string getErrStr(size_t offset, size_t size, size_t memorySize);
@@ -22,7 +26,7 @@ public:
 	SegmentOutOfBoundsException(size_t offset, size_t size, size_t memorySize);
 	const char* what() const noexcept override;
 };
-template <typename T> class InvalidOpcodeException : std::exception {
+template <typename T> class InvalidOpcodeException : public std::exception {
 private:
 	std::string str;
 	static std::string getErrStr(const T& data) {
