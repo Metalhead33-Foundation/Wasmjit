@@ -153,6 +153,9 @@ public:
 	// the lookup is then O(#live instances) instead of O(#functions), and works
 	// across modules (which the old per-instance scan did not).
 	void registerCallableRange(const Callable* begin, size_t count);
+	// Withdraw a range registered above. No-op when `begin` was not registered
+	// (e.g. a constructor that threw before publishing it).
+	void unregisterCallableRange(const Callable* begin);
 	// The Callable `ref` points at, or nullptr when `ref` is not a function
 	// reference at all (a GC object, an i31 immediate, a host externref).
 	const Callable* callableAt(const void* ref) const;

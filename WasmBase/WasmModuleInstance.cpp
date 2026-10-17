@@ -303,10 +303,22 @@ ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver)
 	internals.dataSegmentDropped.resize(module.dataSegments.size(), false);
 	internals.elementSegmentDropped.resize(module.elementSegments.size(), false);
 	internals.elementSegmentRefs.resize(module.elementSegments.size());
+
+	// Publish the imported callables only after every step above succeeded, so
+	// a constructor that throws leaves no range pointing at freed storage.
+	// The range is what lets the Store map a cross-module `funcref` back to its
+	// owning `Callable` (docs/proposals/GC.md G2).
+	if (!internals.importStorage.empty())
+		Store::global().registerCallableRange(
+				internals.importStorage.data(), internals.importStorage.size());
 }
 
 ModuleInstance::~ModuleInstance()
 {
+	// Withdraw the range before the storage is freed (embedders may destroy
+	// instances while the process-wide Store lives on).
+	Store::global().unregisterCallableRange(internals.importStorage.data());
+
 	// Bulk reclamation: every region this instance used is unmapped and the
 	// budget credited, independent of the reference counts (the RC leak
 	// backstop, docs/proposals/GC.md §6.1/GC-2).
@@ -434,12 +446,9 @@ void ModuleInstance::resolveImports(ImportResolver& resolver)
 
 	// Point the VMContext at the resolved array. The pointer stays valid
 	// because importStorage never reallocates after this point.
-	//
-	// That stability is what lets the Store serve cross-module `funcref`
-	// discovery from this range (docs/proposals/GC.md G2).
-	if (!internals.importStorage.empty())
-		Store::global().registerCallableRange(
-				internals.importStorage.data(), internals.importStorage.size());
+	// The Store registration happens at the *end* of the constructor: if any
+	// later import or initializer throws, no range is left pointing at this
+	// instance's freed storage (docs/SAFETY.md).
 	ctx.importedFunctions      = internals.importStorage.data();
 	ctx.importedFunctionCount  = static_cast<uint32_t>(internals.importStorage.size());
 

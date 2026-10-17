@@ -228,6 +228,18 @@ void Store::registerCallableRange(const Callable* begin, size_t count)
 	callableRanges.push_back(CallableRange{begin, begin + count});
 }
 
+void Store::unregisterCallableRange(const Callable* begin)
+{
+	if (begin == nullptr)
+		return;
+	for (auto it = callableRanges.begin(); it != callableRanges.end(); ++it) {
+		if (it->begin == begin) {
+			callableRanges.erase(it);
+			return;
+		}
+	}
+}
+
 const Callable* Store::callableAt(const void* ref) const
 {
 	// Ranges are few — one per instance that has callables — so a linear scan

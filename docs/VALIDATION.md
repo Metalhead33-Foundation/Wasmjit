@@ -42,16 +42,17 @@ not check — the cost is coverage, measured below, not correctness.
 
 | Kind | Binary cases | Rejected | Accepted |
 | --- | ---: | ---: | ---: |
-| `assert_invalid` | 1193 | **1193** | 0 |
-| `assert_malformed` | 17 | 8 | 9 |
+| `assert_invalid` | 1919 | **1919** | 0 |
+| `assert_malformed` | 17 | 15 | 2 |
 | `assert_unlinkable` | 32 | **32** | 0 |
-| `assert_uninstantiable` | 0 | — | — |
-| **total** | **1242** | **1233** | **9** |
+| `assert_uninstantiable` | 1 | **1** | 0 |
+| **total** | **1969** | **1967** | **2** |
 
-The default suite is unchanged: **7879 assertions / 194 test cases, all
-green**; only 4 of 194 scripts fail in the strict run, and all four are
-decoder-level `assert_malformed` cases (`binary0`, `binary_leb128_64`, `custom`,
-`global`) — no curated `assert_invalid` module is accepted.
+The default suite is **7959 assertions / 234 test cases, all green** (39 core
+scripts were re-curated after the validator landed). Only 2 of 234 scripts fail
+in the strict run, both decoder-level LEB-width cases (`binary0.5`,
+`binary_leb128_64.1`) — no curated `assert_invalid` module is accepted, and
+`start.wast` covers `assert_uninstantiable` (the trapping start).
 
 The `atomic.wait`-on-unshared check is deliberately **not** enforced: the
 curated `atomic.wast` treats it as valid (`atomic.notify` likewise), so `T5`
@@ -70,4 +71,4 @@ The bug was latent because nothing read those fields before.
 - The “declared function reference” rule (`ref.func x` requires `x` to appear in
   an element segment) is not checked.
 - The nine remaining strict failures are decoder-level `assert_malformed` cases.
-- Add curated `assert_uninstantiable` coverage (the handler is already wired).
+- ~~Add curated `assert_uninstantiable` coverage~~ — done: `start.wast` is curated and its trapping start is verified under `WASM_SPEC_VALIDATE=1`.

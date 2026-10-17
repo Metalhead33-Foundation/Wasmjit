@@ -147,6 +147,8 @@ void Module::processImportSection(Elv::Io::Device& file, const Section& section)
 			global.contentType.decode(wasmStream);
 			uint8_t mut;
 			wasmStream >> mut;
+			if (mut > 1)
+				throw std::runtime_error("malformed global mutability");
 			global.isMutable = (mut == 0x01);
 			this->importGlobals.push_back({{moduleName, fieldName}, global});
 		}
@@ -236,6 +238,8 @@ void Module::processGlobalSection(Elv::Io::Device& file, const Section& section)
 		g.type.contentType.decode(wasmStream);
 		uint8_t mut;
 		wasmStream >> mut;
+		if (mut > 1)
+			throw std::runtime_error("malformed global mutability");
 		g.type.isMutable = (mut == 0x01);
 
 		// 2. Parse Init Expression.
@@ -452,8 +456,16 @@ void Module::processCustomSection(Elv::Io::Device& file, const Section& section)
 {
 	DWasmStream wasmStream(file);
 
-	// 1. Custom sections start with a string name
-	std::string customName = readLEB128String(wasmStream);
+	// 1. Custom sections start with a string name, bounded by the section.
+	const uint64_t sectionEnd = static_cast<uint64_t>(section.offset) + section.size;
+	uint32_t nameLength = 0;
+	wasmStream >> Elv::Io::Leb(nameLength);
+	const long position = file.tell();
+	if (position < 0 || static_cast<uint64_t>(position) > sectionEnd
+			|| nameLength > sectionEnd - static_cast<uint64_t>(position))
+		throw std::runtime_error("custom section name out of bounds");
+	std::string customName(nameLength, '\0');
+	file.read(customName.data(), 1, nameLength);
 
 	if (customName == "name") {
 		processNameSection(file, section);
@@ -857,6 +869,12 @@ void Module::fromFile(Elv::Io::Device& file)
 	do {
 		Section section;
 		wasmStream >> section;
+		if (section.type == SectionType::Invalid)
+			throw std::runtime_error("malformed section id");
+		const std::size_t totalSize = file.size();
+		if (totalSize != 0
+				&& static_cast<uint64_t>(section.offset) + section.size > totalSize)
+			throw std::runtime_error("section size exceeds the input");
 		sections.push_back(section);
 		file.seek(section.size, Elv::Io::SeekOrigin::CUR);
 		if( file.tell() >= file.size() )

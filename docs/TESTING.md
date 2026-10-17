@@ -326,14 +326,15 @@ Measured against the curated set:
 
 | Kind | Binary cases | Rejected (pass) | Accepted (fail) | Reading |
 | --- | ---: | ---: | ---: | --- |
-| `assert_invalid` | 1193 | **1193** | 0 | every curated invalid module is rejected: module structure, exact control-flow stack, core numeric/memory/table, 194 SIMD shapes, atomics, full reference subtyping, `br_on_*` and `try_table` catch labels |
-| `assert_malformed` | 17 | 8 | 9 | decoder strictness. The other **656** malformed cases are text/`module quote` and cannot run without a text parser |
+| `assert_invalid` | 1919 | **1919** | 0 | every curated invalid module is rejected: module structure, exact control-flow stack, core numeric/memory/table, 194 SIMD shapes, atomics, full reference subtyping, `br_on_*` and `try_table` catch labels |
+| `assert_malformed` | 17 | 15 | 2 | decoder strictness. The two remaining are LEB-width cases (`binary0.5`, `binary_leb128_64.1`); the **743** text-format commands across all kinds cannot run without a text parser |
 | `assert_unlinkable` | 32 | **32** | 0 | the linker rejects all of them, including the four `memory64-imports` index-type cases (`MEMORY64` M2) |
-| `assert_uninstantiable` | 0 | — | — | no curated case |
-| **total** | **1242** | **1233** | **9** | 99.3 % rejected; the nine remaining strict failures are decoder-level `assert_malformed` cases |
+| `assert_uninstantiable` | 1 | **1** | 0 | the trapping start function in `start.wast` |
+| **total** | **1969** | **1967** | **2** | 99.9 % rejected; the two remaining strict failures are decoder-level LEB-width cases |
 
-Even in strict mode 662 negative commands (6 `assert_invalid` + 656
-`assert_malformed`) are text-format and stay skipped: the loader is binary-only.
+Even in strict mode 743 text-format commands stay skipped: the loader is
+binary-only. (The 39 core scripts re-curated after the validator landed are
+listed in `Test/wast_supported.txt` with their own note.)
 The exercise paid for itself three times: it showed that the decoder and linker
 already cover a useful fraction; it exposed a real engine bug — the exception
 classes in `WasmBase/WasmException.hpp` inherited `std::exception` **privately**,

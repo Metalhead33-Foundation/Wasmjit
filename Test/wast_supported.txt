@@ -68,6 +68,49 @@ ref_null
 return_call
 return_call_indirect
 return_call_ref
+start
+# Re-curated after the validating front end: these run to completion in both
+# the default run and the strict negative-module run (WASM_SPEC_VALIDATE=1).
+block
+br
+br_if
+data0
+data_drop0
+i32
+i64
+int_literals
+labels
+left-to-right
+load
+load0
+load1
+load2
+load64
+local_get
+local_tee
+loop
+memory_copy
+memory_fill
+memory_grow
+memory_init
+memory_size1
+memory_size2
+memory_trap
+nop
+ref_as_non_null
+ref_cast
+ref_is_null
+return
+store0
+store1
+store2
+switch
+table_copy
+table_size
+traps0
+unreachable
+unwind
+
 # The SIMD family, re-curated once `v128` globals (SIMD-4) and the ≥ 3-operand
 # call path (SIMD-6) landed: **all 66 of the 66 `simd_*` / relaxed scripts pass
 # with failed=0**, so the whole family is graded now. The skips they still report
