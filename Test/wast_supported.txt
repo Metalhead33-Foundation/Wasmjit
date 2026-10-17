@@ -1,0 +1,115 @@
+# Scripts from extern/WasmTestsuite that currently run to completion, and are
+# therefore part of the default test run.
+#
+# Every converted script is registered as its own Catch2 test case ("spec: <name>").
+# Scripts listed here are the visible ones; everything else is tagged hidden
+# ([.]) so it is still listed by --list-tests and can be run on demand, but stays
+# out of the default run.
+#
+# Format: one script basename per line (no directory, no .wast extension).
+# Blank lines and '#' comments are ignored. Updating this file does NOT require
+# a rebuild.
+#
+# How to refresh it (see docs/TESTING.md for the full recipe):
+#   1. WASM_SPEC_TIMEOUT=10 WASM_SPEC_SCRIPTS=all ./WasmJit '[spec]' 2>&1 | tee all.log
+#   2. keep every script whose line reads  passed=<n> failed=0  with n > 0
+#      and which was neither killed by a signal nor timed out.
+
+# ref_null is excluded: one of its modules declares `exnref`/`nullexnref`, which
+# this engine does not model, so the module is now rejected at load
+# (docs/NULL_JIT_VALUE_DIAGNOSIS.md).
+address
+address64
+align
+align64
+array_new_data
+binary0
+binary_leb128_64
+bulk64
+call_indirect64
+custom
+exports0
+f32_bitwise
+f32_cmp
+f64_bitwise
+f64_cmp
+float_memory
+float_memory64
+float_misc
+forward
+id
+inline-module
+int_exprs
+local_set
+memory
+memory-multi
+memory64
+memory64-imports
+memory_grow64
+memory_redundancy
+memory_redundancy64
+memory_size
+memory_size0
+memory_trap64
+names
+ref
+ref_eq
+return_call
+return_call_indirect
+return_call_ref
+simd_address
+simd_align
+simd_bit_shift
+simd_conversions
+simd_f32x4_cmp
+simd_f32x4_pmin_pmax
+simd_f32x4_rounding
+simd_f64x2_cmp
+simd_f64x2_pmin_pmax
+simd_f64x2_rounding
+simd_i16x8_cmp
+simd_i16x8_extadd_pairwise_i8x16
+simd_i16x8_extmul_i8x16
+simd_i16x8_q15mulr_sat_s
+simd_i32x4_cmp
+simd_i32x4_dot_i16x8
+simd_i32x4_extadd_pairwise_i16x8
+simd_i32x4_extmul_i16x8
+simd_i32x4_trunc_sat_f32x4
+simd_i32x4_trunc_sat_f64x2
+simd_i64x2_arith2
+simd_i64x2_cmp
+simd_i64x2_extmul_i32x4
+simd_i8x16_cmp
+simd_int_to_int_extend
+simd_load
+simd_load16_lane
+simd_load32_lane
+simd_load64_lane
+simd_load8_lane
+simd_load_extend
+simd_load_splat
+simd_load_zero
+simd_select
+simd_store
+
+# Relaxed SIMD (docs/proposals/SIMD.md SIMD-5), added once all 20 sub-opcodes ran.
+# relaxed_dot_product is excluded: it passes 7 of its assertions and fails the two
+# that invoke `i32x4.relaxed_dot_i8x16_i7x16_add_s` with three v128 *arguments*,
+# which is the open libjit `jit_apply` defect (docs/TESTING.md T3), not a missing
+# instruction — the op itself is covered by the JIT case for simd_relaxed.wat.
+i16x8_relaxed_q15mulr_s
+i32x4_relaxed_trunc
+i8x16_relaxed_swizzle
+relaxed_laneselect
+relaxed_madd_nmadd
+relaxed_min_max
+skip-stack-guard-page
+stack
+store
+table64
+table_fill
+tag
+traps
+type
+type-canon
