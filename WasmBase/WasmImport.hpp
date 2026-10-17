@@ -47,7 +47,8 @@ public:
 	virtual void registerGlobal(
 		std::string_view moduleName,
 		std::string_view fieldName,
-		const Value& value) = 0;
+		Value* cell,
+		const GlobalType& type) = 0;
 
 	virtual void registerMemory(
 		std::string_view moduleName,
@@ -79,9 +80,13 @@ public:
 		std::string_view fieldName,
 		TypeId           expectedType) = 0;
 
-	// Resolve a global import. Returns the initial value; the instantiator
-	// writes it into the instance's globals array.
-	virtual std::optional<Value> resolveGlobal(
+	// Resolve a global import. Returns a borrowed *cell* owned by the exporter
+	// (or by the resolver, for a host-provided global). The importing instance
+	// stores the pointer, so a mutable import is shared with the exporter
+	// rather than copied (docs/proposals/MUTABLE_GLOBALS.md MG-2/MG-3). The
+	// resolver must reject a cell whose type or mutability does not match
+	// `type` (MG-4).
+	virtual std::optional<Value*> resolveGlobal(
 		std::string_view moduleName,
 		std::string_view fieldName,
 		const GlobalType& type) = 0;

@@ -125,6 +125,14 @@ bool Validator::memoryIs64(uint32_t idx) const
 	return module.memories[idx - module.importMemories.size()].indexType == MemoryIndexType::I64;
 }
 
+bool Validator::memoryIsShared(uint32_t idx) const
+{
+	const Limits& limits = idx < module.importMemories.size()
+			? module.importMemories[idx].memory.limits
+			: module.memories[idx - module.importMemories.size()].limits;
+	return (limits.flags & 0x02) != 0;
+}
+
 void Validator::checkLimits(const Limits& limits, bool is64, bool isMemory,
 							const char* what, std::size_t index) const
 {
@@ -524,25 +532,43 @@ void Validator::validateGlobalInit(const Global& global, std::size_t index)
 			push(ValueTypeCode::FuncRef);
 			break;
 		}
-		case 0x23: { // global.get: imported immutable globals only
+		case 0x23: { // global.get: an earlier immutable global
 			uint32_t globalIdx = 0;
 			stream >> Elv::Io::Leb(globalIdx);
-			if (globalIdx >= module.importGlobals.size()
-					|| module.importGlobals[globalIdx].global.isMutable)
-				fail(label + ": initializer may only read an imported immutable global");
-			stack.push_back(module.importGlobals[globalIdx].global.contentType);
+			const std::size_t imported = module.importGlobals.size();
+			// The current global's absolute index is imported + index; a
+			// constant expression may only read globals already declared.
+			if (globalIdx >= imported + index)
+				fail(label + ": initializer refers to a later global");
+			const bool targetMutable = globalIdx < imported
+					? module.importGlobals[globalIdx].global.isMutable
+					: module.globals[globalIdx - imported].type.isMutable;
+			if (targetMutable)
+				fail(label + ": initializer may only read an immutable global");
+			stack.push_back(globalIdx < imported
+					? module.importGlobals[globalIdx].global.contentType
+					: module.globals[globalIdx - imported].type.contentType);
 			break;
 		}
 		case 0x6A: case 0x6B: case 0x6C: // i32.add/sub/mul (extended const)
 			if (!pop(ValueTypeCode::I32) || !pop(ValueTypeCode::I32))
-				return; // not a modelled initializer form: accept
+				fail(label + ": type mismatch in initializer");
 			push(ValueTypeCode::I32);
 			break;
 		case 0x7C: case 0x7D: case 0x7E: // i64.add/sub/mul (extended const)
 			if (!pop(ValueTypeCode::I64) || !pop(ValueTypeCode::I64))
-				return; // not a modelled initializer form: accept
+				fail(label + ": type mismatch in initializer");
 			push(ValueTypeCode::I64);
 			break;
+		case 0xFD: { // SIMD prefix: v128.const is the only const form here
+			uint32_t subOpcode = 0;
+			stream >> Elv::Io::Leb(subOpcode);
+			if (subOpcode != 12)
+				return; // not a modelled initializer form: accept
+			device.seek(16, Elv::Io::SeekOrigin::CUR);
+			push(ValueTypeCode::V128);
+			break;
+		}
 		case 0x0B: // end
 			done = true;
 			break;
@@ -834,6 +860,8 @@ void Validator::dispatchMemoryGrow(MemIdx arg)
 
 void Validator::dispatchMemoryInit(uint32_t dataIdx, MemIdx memIdx)
 {
+	if (!module.hasDataCount)
+		fail("memory.init requires a data count section");
 	requireMemoryIndex(memIdx);
 	requireDataIndex(dataIdx);
 	const ValueTypeCode address = memoryAddressType(memIdx);
@@ -842,7 +870,12 @@ void Validator::dispatchMemoryInit(uint32_t dataIdx, MemIdx memIdx)
 	popExpect(address);            // dst
 }
 
-void Validator::dispatchDataDrop(uint32_t dataIdx) { requireDataIndex(dataIdx); }
+void Validator::dispatchDataDrop(uint32_t dataIdx)
+{
+	if (!module.hasDataCount)
+		fail("data.drop requires a data count section");
+	requireDataIndex(dataIdx);
+}
 
 void Validator::dispatchMemoryCopy(MemIdx dst, MemIdx src)
 {

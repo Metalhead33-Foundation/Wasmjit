@@ -1,8 +1,9 @@
 # Memory64 — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 2 — M64-1…M64-3
-implemented: 64-bit `size`/`grow` plumbing, the unsigned address widening, and a
-manual 64-bit test).
+Status: design note / implementation reference (revision 3 — M64-1…M64-3 and M2
+implemented: 64-bit `size`/`grow` plumbing, the unsigned address widening, a
+manual 64-bit test, and index-type typing in the validator plus link-time
+matching).
 Audience: anyone touching `WasmType` (`Limits`, `MemoryType`, `TableType`),
 `WasmMemory`, `WasmModuleInstance`, `LibjitOpcodeDispatcher`, or the test
 harness.

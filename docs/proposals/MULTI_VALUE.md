@@ -1,7 +1,8 @@
 # Multi-value — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 2 — the packed-struct
-return lowering was replaced by a caller-provided result buffer, MV5).
+Status: design note / implementation reference (revision 3 — the packed-struct
+return lowering was replaced by a caller-provided result buffer (MV5), and the
+host-facing multi-result helper is documented and tested (MV4)).
 Audience: anyone touching `WasmType`, `WasmModuleInstance`,
 `LibJitTypeTranslation`, `LibjitOpcodeDispatcher`, or the test harness.
 
@@ -87,7 +88,7 @@ limitation is the embedder API (MV4).
 | ~~MV1~~ | ~~**The spec harness only marshals multiple results for `assert_return`.**~~ **Done:** `invoke` takes a caller-owned tuple on every path — `assert_return` compares it, and bare `action`, `assert_trap`, `assert_exception` and `assert_exhaustion` pass one so multi-result callees get the buffer their JIT signature requires. | `Test/WastScript.cpp` (`invoke`, `onAction`, `onAssert*`) | Closed |
 | MV2 | **No dedicated spec script is exercised.** The testsuite snapshot has no `multi-value.wast`; coverage comes indirectly from `block`, `loop`, `func`, `call`, `if`, `fac`, which are not all curated. | `extern/WasmTestsuite` | Medium |
 | MV3 | **No manual test for multi-result.** `Test/wasm_wat` now has `multi_value.wat` (MV-2). | `Test/main.cpp` | Resolved |
-| MV4 | **Multi-value exports to a host are not surfaced.** `exportedFunction`/`callCallable` assume the native signature the embedder chooses; nothing documents how to call a multi-result export from C++. | `WasmValue.hpp` (`callCallable`) | Low |
+| ~~MV4~~ | ~~**Multi-value exports to a host are not surfaced.**~~ **Done:** `WASM::callCallableWithResults(callable, buffer, args...)` appends the caller-owned buffer; `docs/ABI.md` documents the layout and the multi-value test calls it. | `WasmValue.hpp`, `docs/ABI.md`, `Test/main.cpp` | Closed |
 | MV5 | **Packed-struct returns crashed on this LibJIT build.** A multi-result callee with parameters loaded the hidden result-buffer pointer from an unwritten frame slot (`mov -0x18(%rbp),%rax`), then stored its results through it: `segfault at 8` when the slot held zero, a general-protection fault when it held garbage. This killed every multi-result JIT-to-JIT call in `call.wast`, `if.wast` and `fac.wast`, and the harness's MV1 skip hid it. | `LibJitTypeTranslation.cpp` (struct-return signature), `packReturnValues`/`pushCallResults`; cores from `spec: call` | High (fixed) |
 
 ## 6. Where we can and should play fast and loose
@@ -111,7 +112,7 @@ must move exactly the target's values; the result-tuple layout
 | **MV-1 — Harness multi-result** | Marshal the result tuple in `invoke` and pass it on every call path. | MV1 | `call` 73/0/18 and `if` 125/0/116 on the default run; bare actions / `assert_trap` / `assert_exception` / `assert_exhaustion` no longer skip multi-result callees. ✅ Done |
 | **MV-2 — Manual tests** | Add WAT modules returning multiple values, with block parameters and a `br` carrying a list. | MV3 | Tests cover multi-result returns, block params, and `br_table` with lists. |
 | **MV-3 — Curate block/loop** | Add the passing `block`/`loop`/`func` scripts to `Test/wast_supported.txt`. | MV2 | The default run covers multi-value blocks. |
-| **MV-4 — Document the C++ ABI** | Document how `Callable`/`callCallable` handles a multi-result signature. | MV4 | `docs/ABI.md` has a multi-result example. |
+| **MV-4 — Document the C++ ABI** | ✅ Done: `callCallableWithResults` + the ABI.md buffer example, exercised by the multi-value test. | MV4 | Done. |
 | **MV-5 — Working multi-result ABI** | Replace the struct-return lowering with a caller-provided result buffer (trailing `void*`), update the direct/indirect/tail-call and driver paths, add `Test/wasm_wat/multi_value.wat` + its unit test, and re-curate `call`/`if`/`fac`. | MV5 | `spec: call`, `spec: if` and `spec: fac` pass; the unit test covers direct, nested, mixed-width, if-with-params and `call_indirect` calls. ✅ Done |
 
 ## 8. Indicative test survey

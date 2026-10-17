@@ -93,5 +93,25 @@ Ret callCallable(const Callable& callable, Args&&... args)
 	}
 }
 
+// Calls a function with more than one result.
+//
+// A multi-result callee's JIT signature is
+//   void f(VMContext*, params..., void* results)
+// (docs/ABI.md "Multiple Results"), so the embedder supplies the trailing
+// result buffer. It must be at least as large as the lowered result tuple;
+// field offsets are the ones the backend's struct translation assigns
+// (docs/proposals/MULTI_VALUE.md MV4). `callCallable<Ret>` remains the API for
+// void/single-result signatures.
+template<typename... Args>
+void callCallableWithResults(const Callable& callable, void* results, Args&&... args)
+{
+	if (callable.fnPtr == nullptr)
+		std::abort();
+
+	using Fn = void (*)(VMContext*, std::decay_t<Args>..., void*);
+	Fn fn = reinterpret_cast<Fn>(callable.fnPtr);
+	fn(callable.context, std::forward<Args>(args)..., results);
+}
+
 }
 #endif // WASMVALUE_H

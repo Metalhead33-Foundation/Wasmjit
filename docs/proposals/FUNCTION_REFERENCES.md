@@ -91,7 +91,7 @@ WebAssembly **3.0** (it is the prerequisite the GC proposal builds on).
 | ~~FR4~~ | ~~**`ref.func` outside a segment is an unresolved sentinel** in `const` expressions (globals), so a `ref.func` global is a bogus pointer.~~ **Done (`GC.md` G8):** `resolveGlobalRefFuncs()` rewrites the sentinel after compilation, so a `(global funcref (ref.func $f))` holds a real reference. | `global`, `table` (exported `(ref $f)` global across modules) | Closed |
 | ~~FR5~~ | ~~`return_call_ref` aborts~~ (tail-call codegen). **Done (TAILCALLS TC-1/TC-2 + trap sink):** `spec: return_call_ref` → **40 passed / 0 failed / 13 skipped**. | [`TAILCALLS.md`](TAILCALLS.md) | Closed |
 | FR6 | **Reference values cannot be stored generically.** Tables hold `Callable*` and globals hold `Value`; typed `(ref $t)` values live only on the operand stack. The representation decision (tagged 64-bit slots + global cells) is recorded in `docs/ABI.md` §Reference and Global Representation, stage R2. | `WasmTable.hpp`, `WasmModuleInstance.cpp` | Medium |
-| FR7 | **No validation that `ref.func`'s function is declared** in an element segment, nor that `call_ref`'s operand type matches at validation time. | no validating front-end | Low |
+| FR7 | **Validation is partial.** The validator types `call_ref`'s operand and results, but the “declared function reference” rule (`ref.func x` requires `x` to appear in an element segment) is not checked. | `WasmValidator.cpp` | Low (residual) |
 | FR8 | **No manual test** for `call_ref`/typed references. | `Test/main.cpp` | Medium |
 
 ## 6. Where we can and should play fast and loose

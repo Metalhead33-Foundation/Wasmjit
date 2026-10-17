@@ -326,13 +326,13 @@ Measured against the curated set:
 
 | Kind | Binary cases | Rejected (pass) | Accepted (fail) | Reading |
 | --- | ---: | ---: | ---: | --- |
-| `assert_invalid` | 1153 | **1086** | 67 | the validator types module structure, control flow, core numeric/memory/table instructions, 194 SIMD shapes and atomics. Remaining: reference/GC cast rules, `try_table` catch labels, `if` edge rules |
-| `assert_malformed` | 13 | 8 | 5 | decoder strictness. The other **656** malformed cases are text/`module quote` and cannot run without a text parser |
+| `assert_invalid` | 1193 | **1118** | 75 | the validator types module structure, control flow, core numeric/memory/table instructions, 194 SIMD shapes and atomics. Remaining: reference/GC cast rules, `try_table` catch labels, `if` edge rules |
+| `assert_malformed` | 17 | 8 | 9 | decoder strictness. The other **656** malformed cases are text/`module quote` and cannot run without a text parser |
 | `assert_unlinkable` | 32 | **32** | 0 | the linker rejects all of them, including the four `memory64-imports` index-type cases (`MEMORY64` M2) |
 | `assert_uninstantiable` | 0 | — | — | no curated case |
-| **total** | **1198** | **1126** | **72** | 94 % rejected; the 67 remaining `assert_invalid` cases are the conservative-taint boundary, not false accepts of unchecked structure |
+| **total** | **1242** | **1158** | **84** | 93 % rejected; the 75 remaining `assert_invalid` cases are the conservative-taint boundary, not false accepts of unchecked structure |
 
-Even in strict mode 659 negative commands (3 `assert_invalid` + 656
+Even in strict mode 662 negative commands (6 `assert_invalid` + 656
 `assert_malformed`) are text-format and stay skipped: the loader is binary-only.
 The exercise paid for itself three times: it showed that the decoder and linker
 already cover a useful fraction; it exposed a real engine bug — the exception

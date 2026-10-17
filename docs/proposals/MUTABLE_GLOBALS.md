@@ -1,7 +1,8 @@
 # Import/Export of Mutable Globals — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 2 — MG-1 implemented:
-imported globals are resolved; the aliasing half of MG-2/MG-3 is still open).
+Status: design note / implementation reference (revision 3 — MG-1…MG-5
+implemented: imported globals resolve, mutable imports alias the exporter, and
+the link-time type/mutability match is enforced).
 Audience: anyone touching `WasmModuleInstance` (globals), `WasmImport`,
 `WasmRegistryImportResolver`, `WasmModule`, or the test harness.
 
@@ -77,16 +78,16 @@ without a linear memory (see [`THREADS.md`](THREADS.md) §2.6).
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
 | ~~MG1~~ | ~~Imported globals are never resolved.~~ **Done (MG-1):** `resolveImports` calls `ImportResolver::resolveGlobal` for each imported global and installs the result into `globalsStorage` *before* any local initialiser runs. `spectest`'s `global_i32`…`global_f64` are registered so scripts can import them. `global.wast` went from 10/63 to **70 passed / 0 failed**. | `WasmModuleInstance.cpp` (`resolveImports`, `initializeGlobals`) | Closed |
-| MG2 | **The interface cannot alias.** `resolveGlobal` returns `std::optional<Value>` **by value**, and the resolver stores `Value` by value, so the resolved import is a *copy*. A read-only global is observationally identical, but a **mutable** import is not shared. | `WasmImport.hpp`, `WasmRegistryImportResolver.hpp` | Medium (only matters for mutable imports) |
-| MG3 | **Export is a snapshot.** `registerExports` copies `ctx.globals[i]`, so a later `global.set` by the exporter is invisible to importers (and vice versa). | `WasmModuleInstance.cpp` | Medium (same root as MG2) |
-| MG4 | **No import type/mutability check.** `resolveGlobal` ignores `GlobalType`. | `WasmRegistryImportResolver.cpp` | Low (no validating front-end) |
-| MG5 | **No test coverage of the shared *mutable* case.** There is no manual test where module B imports A's mutable global and both observe a write — which is exactly what MG2/MG3 would have to fix first. | `Test/main.cpp` | Medium |
+| ~~MG2~~ | ~~**The interface cannot alias.**~~ **Done (R1):** `resolveGlobal` returns a borrowed `Value*`; the instance stores it in `Internals::globalRefs`, so a mutable import aliases the exporter's cell. | `WasmImport.hpp`, `WasmRegistryImportResolver.hpp` | Closed |
+| ~~MG3~~ | ~~**Export is a snapshot.**~~ **Done (R1):** `registerExports` publishes the exporter's cell (`registerGlobal(..., Value*, GlobalType)`), so a later `global.set` is visible to importers and vice versa. | `WasmModuleInstance.cpp` | Closed |
+| ~~MG4~~ | ~~**No import type/mutability check.**~~ **Done:** `ModuleRegistry::resolveGlobal` compares the published `GlobalType` (opcode + mutability) before returning the cell; reference types are compared permissively. | `WasmRegistryImportResolver.cpp` | Closed |
+| ~~MG5~~ | ~~**No test coverage of the shared mutable case.**~~ **Done:** `Test/wasm_wat/shared_global_a/b.wat` write through B and read through A (and back); `shared_global_bad.wat` verifies the mutability mismatch is rejected. | `Test/main.cpp` | Closed |
 
 ## 6. Where we can and should play fast and loose
 
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
-| MGD1 | **Change `globals` to an array of `Value*`** (like `memories`/`tables`), so an imported global simply points into the exporter's `globalsStorage`. | §3: representation is free; aliasing becomes natural. | Closes MG1/MG2/MG3 with one structural change. |
+| MGD1 | **Change `globals` to an array of `Value*`** (like `memories`/`tables`), so an imported global simply points into the exporter's `globalsStorage` — **implemented** as `Value**` + `Internals::globalRefs`. | §3: representation is free; aliasing becomes natural. | Closes MG1/MG2/MG3 with one structural change. |
 | MGD2 | **Where a global is immutable, copying is fine**; only mutable globals need aliasing. | §2: immutable values cannot change, so a copy is observationally identical. | Avoids indirection for constant globals. |
 | MGD3 | **Bind the pointer at instantiation** (eager), not lazily. | §3: lazy resolution is optional. | Simple, and matches the existing import-resolution step. |
 | MGD4 | **Enforce the mutability/type check only in the resolver** (a `memcmp`-style `GlobalType` compare), or skip it as part of the no-validation stance — but then document it. | §2 requires the check for linking; §3/`GC.md` D6 let us require valid input. | Either is defensible; the important part is consistency with the chosen validation stance. |
@@ -100,21 +101,21 @@ rule in [`ABI.md`](../ABI.md).
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **MG-1 — Pointer globals** | Represent the global index space as `Value*` (or a small `Global*` with an `isMutable` flag); keep local globals in the instance's storage. Decision + staging: `docs/ABI.md` §Reference and Global Representation (R1). | MG2 | `ctx.globals` addresses can point into another instance. |
-| **MG-2 — Wire resolution** | ✅ `resolveImports` resolves every imported global during instantiation and installs it before local initialisers run. (The *aliasing* upgrade — a `Value*` index space — is still open, so a mutable import is a copy; see MG2/MG3.) | MG1 (MG4 open) | Done for reads: a module importing a global sees the exported value. |
-| **MG-3 — Export aliasing** | Export a global by publishing a pointer to the instance's slot, not a `Value` copy. | MG3 | A write through the importer is visible to the exporter. |
-| **MG-4 — Test** | Add `shared_global_a/b.wat` + a manual test that writes through B and reads through A. | MG5 | The test asserts the shared value. |
+| **MG-1 — Pointer globals** | ✅ Done (R1): `VMContext::globals` is `Value**`, `Internals::globalRefs` is the index space (imported cells are borrowed, defined cells point into `globalsStorage`), and `globalSlotAddress` loads the cell. | MG2 | `global` **77/0**; shared writes alias. |
+| **MG-2 — Wire resolution** | ✅ Done: `resolveImports` resolves every imported global to a cell before local initialisers run. | MG1, MG2 | Done. |
+| **MG-3 — Export aliasing** | ✅ Done: `registerExports` publishes the cell and its `GlobalType`. | MG3 | A write through the importer is visible to the exporter. |
+| **MG-4 — Test** | ✅ Done: `shared_global_a/b.wat` plus the two tests (shared write and mutability mismatch). | MG5 | The test asserts the shared value and the rejection. |
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-04):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-17):
 
 | Script | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| `global` | 70 | 0 | 54 | MG1 closed: imported globals resolve (was 10/63). The 54 skips are reference-typed and *shared mutable* cases |
+| `global` | 77 | 0 | 47 | R1/MG-2/MG-3: imported mutable globals alias the exporter. The 47 skips are 40 `assert_invalid` + 7 `assert_malformed`; strict run: 109 / 12 / 3 |
 | `exports0` | (curated) | | | plain exports work |
 
-`global.wast` is not in `Test/wast_supported.txt`; `exports0` is.
+`global` and `exports0` are curated.
 
 ## 9. References
 

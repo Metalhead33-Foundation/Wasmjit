@@ -142,7 +142,7 @@ void RegistryImportResolver::registerFunction(std::string_view moduleName, std::
 }
 
 void RegistryImportResolver::registerGlobal(std::string_view moduleName, std::string_view fieldName,
-											const Value& value)
+											 const Value& value)
 {
 	auto module = registeredModules.find(moduleName);
 	if (module == std::end(registeredModules)) {
@@ -151,6 +151,19 @@ void RegistryImportResolver::registerGlobal(std::string_view moduleName, std::st
 		registeredModules.insert_or_assign(std::string(moduleName), std::move(modReg));
 	} else {
 		module->second.registerGlobal(fieldName, value);
+	}
+}
+
+void RegistryImportResolver::registerGlobal(std::string_view moduleName, std::string_view fieldName,
+											 Value* cell, const GlobalType& type)
+{
+	auto module = registeredModules.find(moduleName);
+	if (module == std::end(registeredModules)) {
+		ModuleRegistry modReg;
+		modReg.registerGlobalCell(fieldName, cell, type);
+		registeredModules.insert_or_assign(std::string(moduleName), std::move(modReg));
+	} else {
+		module->second.registerGlobalCell(fieldName, cell, type);
 	}
 }
 
@@ -204,7 +217,7 @@ std::optional<Callable> RegistryImportResolver::resolveFunction(
 	return module->second.resolveFunction(fieldName, expectedType);
 }
 
-std::optional<Value> RegistryImportResolver::resolveGlobal(
+std::optional<Value*> RegistryImportResolver::resolveGlobal(
 	std::string_view moduleName,
 	std::string_view fieldName,
 	const GlobalType& type)
@@ -256,7 +269,22 @@ void RegistryImportResolver::ModuleRegistry::registerFunction(std::string_view f
 
 void RegistryImportResolver::ModuleRegistry::registerGlobal(std::string_view fieldName, const Value& value)
 {
-	globals.insert_or_assign(std::string(fieldName), value);
+	GlobalEntry entry;
+	entry.owned = std::make_unique<Value>(value);
+	entry.cell = entry.owned.get();
+	entry.type.contentType = ValueType{value.kind, -1};
+	entry.type.isMutable = false; // host-provided globals are immutable
+	globals.insert_or_assign(std::string(fieldName), std::move(entry));
+}
+
+void RegistryImportResolver::ModuleRegistry::registerGlobalCell(std::string_view fieldName,
+																 Value* cell,
+																 const GlobalType& type)
+{
+	GlobalEntry entry;
+	entry.cell = cell;
+	entry.type = type;
+	globals.insert_or_assign(std::string(fieldName), std::move(entry));
 }
 
 void RegistryImportResolver::ModuleRegistry::registerMemory(std::string_view fieldName, LinearMemory* memory)
@@ -290,13 +318,34 @@ std::optional<Callable> RegistryImportResolver::ModuleRegistry::resolveFunction(
 	return callable;
 }
 
-std::optional<Value> RegistryImportResolver::ModuleRegistry::resolveGlobal(std::string_view fieldName, const GlobalType& type)
+std::optional<Value*> RegistryImportResolver::ModuleRegistry::resolveGlobal(std::string_view fieldName, const GlobalType& type)
 {
-	(void)type;
 	auto it = globals.find(fieldName);
-	if (it == globals.end())
+	if (it == globals.end() || it->second.cell == nullptr)
 		return std::nullopt;
-	return it->second;
+
+	// Match the published type, including mutability (MG-4). Reference types
+	// are compared by opcode only: nullability/subtyping is deliberately left
+	// permissive here, like the validator's reference rules.
+	const GlobalEntry& entry = it->second;
+	if (entry.type.isMutable != type.isMutable)
+		return std::nullopt;
+	const ValueType& actual = entry.type.contentType;
+	const ValueType& expected = type.contentType;
+	if (actual.opcode != expected.opcode) {
+		const auto isRef = [](ValueTypeCode code) {
+			return code == ValueTypeCode::FuncRef || code == ValueTypeCode::ExternRef
+					|| code == ValueTypeCode::AnyRef || code == ValueTypeCode::EqRef
+					|| code == ValueTypeCode::I31Ref || code == ValueTypeCode::StructRef
+					|| code == ValueTypeCode::ArrayRef || code == ValueTypeCode::ExnRef
+					|| code == ValueTypeCode::NullFuncRef || code == ValueTypeCode::NullExternRef
+					|| code == ValueTypeCode::NullExnRef || code == ValueTypeCode::NullRef
+					|| code == ValueTypeCode::Ref || code == ValueTypeCode::RefNull;
+		};
+		if (!isRef(actual.opcode) || !isRef(expected.opcode))
+			return std::nullopt;
+	}
+	return entry.cell;
 }
 
 std::optional<LinearMemory*> RegistryImportResolver::ModuleRegistry::resolveMemory(std::string_view fieldName, const MemoryType& type)

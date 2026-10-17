@@ -1,7 +1,8 @@
 # Extended Constant Expressions — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 2 — EC-1/EC-2
-implemented: the six integer arithmetic forms and imported-global resolution).
+Status: design note / implementation reference (revision 3 — EC-1…EC-5
+implemented: the six integer arithmetic forms, imported/earlier-defined global
+resolution, `v128.const`, and typed initializer validation).
 Audience: anyone touching `WasmModuleInstance::evalConstantExpr`, `WasmType`,
 `WasmModule`, or the test harness.
 
@@ -77,8 +78,8 @@ by `initializeGlobals`, `applyActiveSegments`, `bufferInitFromData/Elems`, and
 | ~~EC1~~ | ~~The six arithmetic extensions are missing.~~ **Done (EC-1):** all six (`i32`/`i64` `.add`/`.sub`/`.mul`) are in `evalConstantExpr`, evaluated with wrap-around. | `evalConstantExpr` switch | Closed |
 | ~~EC2~~ | ~~`global.get` of an imported global yields zero.~~ **Done (EC-2 / MUTABLE_GLOBALS MG-1):** imported globals are resolved at instantiation before any local initialiser runs, and `spectest`'s globals are registered. | `WasmModuleInstance.cpp` | Closed |
 | ~~EC3~~ | ~~**`v128.const` is not a constant instruction here.**~~ **Done (SIMD-4):** `evalConstantExpr` decodes the `0xFD 0x0C` arm into the `Value`'s 16 bytes, and `v128` globals initialised by `v128.const` run (`simd_globals.wat` plus eight spec scripts). | `evalConstantExpr`; [`SIMD.md`](SIMD.md) S3 | Closed |
-| EC4 | **No validation.** A structurally valid but type-invalid `const` expression (e.g. `i32.add` on `f32` bits) is evaluated as raw bits rather than rejected. | no validating front-end | Low |
-| EC5 | **`Value::kind` tracking is shallow.** The evaluator sets `kind` per instruction but does not type-check operands; fine for valid modules, undefined for invalid ones. | `evalConstantExpr` | Low |
+| ~~EC4~~ | ~~**No validation.**~~ **Done:** the validator types the constant expression — a supported `i32`/`i64` arithmetic form with a wrong operand type is rejected, and `v128.const` is typed. | `WasmValidator.cpp` | Closed |
+| ~~EC5~~ | ~~**`Value::kind` tracking is shallow.**~~ **Done for validation:** the validator's own type stack checks operands; the runtime evaluator still trusts valid input, which is fine once `fromFile` has validated. | `WasmValidator.cpp`, `evalConstantExpr` | Closed |
 
 ## 6. Where we can and should play fast and loose
 

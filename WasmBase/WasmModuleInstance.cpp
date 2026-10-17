@@ -359,9 +359,12 @@ void ModuleInstance::registerExports(ImportRegistrar& registrar, std::string_vie
 			break;
 		}
 		case ExternalKind::Global: {
-			if (ctx.globals == nullptr)
-				throw std::runtime_error("module exports a global before its globals were initialised");
-			registrar.registerGlobal(moduleName, ex.name, ctx.globals[ex.index]);
+			if (ex.index >= internals.globalRefs.size() || internals.globalRefs[ex.index] == nullptr)
+				throw std::runtime_error("module exports a global outside its index space");
+			const GlobalType type = ex.index < module->importGlobals.size()
+					? module->importGlobals[ex.index].global
+					: module->globals[ex.index - module->importGlobals.size()].type;
+			registrar.registerGlobal(moduleName, ex.name, internals.globalRefs[ex.index], type);
 			break;
 		}
 		case ExternalKind::Memory: {
@@ -499,16 +502,17 @@ void ModuleInstance::resolveImports(ImportResolver& resolver)
 	// Imported globals occupy the low indices of the global index space and
 	// must be in place *before* any local initialiser evaluates a `global.get`
 	// (docs/proposals/MUTABLE_GLOBALS.md MG-1, docs/proposals/GC.md G6).
-	// initializeGlobals() later resizes this vector, which preserves these
-	// entries, and `ctx.globals` then points at the combined array.
-	internals.globalsStorage.resize(module->importGlobals.size());
+	// The resolver returns a borrowed cell: a mutable import aliases the
+	// exporter's storage instead of copying it (MG-2/MG-3).
+	internals.globalRefs.clear();
+	internals.globalRefs.reserve(module->importGlobals.size() + module->globals.size());
 	for (size_t i = 0; i < module->importGlobals.size(); ++i) {
 		const ImportGlobal& imp = module->importGlobals[i];
-		std::optional<Value> value =
+		std::optional<Value*> cell =
 			resolver.resolveGlobal(imp.moduleName, imp.fieldName, imp.global);
-		if (!value.has_value())
+		if (!cell.has_value() || *cell == nullptr)
 			throw UnresolvedImportException(imp.moduleName, imp.fieldName);
-		internals.globalsStorage[i] = value.value();
+		internals.globalRefs.push_back(*cell);
 	}
 
 	// Tags follow the same resolve-then-assign pattern but are not wired yet.
@@ -552,13 +556,12 @@ void ModuleInstance::initializeMemories()
 
 void ModuleInstance::initializeGlobals()
 {
-	// Total globals = imported globals (already resolved) + locally defined ones.
-	const size_t importedCount = module->importGlobals.size();
+	// Imported globals are already in `globalRefs` (resolveImports). Defined
+	// globals own cells in `globalsStorage`; `globalRefs` points at them, so
+	// ctx.globals can mix borrowed and owned cells.
 	const size_t definedCount  = module->globals.size();
-	internals.globalsStorage.resize(importedCount + definedCount);
+	internals.globalsStorage.resize(definedCount);
 
-	// Imported globals were already placed into globalsStorage by resolveImports().
-	// Now handle the locally-defined ones.
 	for (size_t i = 0; i < definedCount; ++i) {
 		const Global& g = module->globals[i];
 		// Initializer expressions for globals are restricted to a small set
@@ -570,10 +573,12 @@ void ModuleInstance::initializeGlobals()
 		// `global.set` releases a counted value rather than underflowing.
 		if (isReferenceType(g.type.contentType.opcode))
 			refClone(v.ref);
-		internals.globalsStorage[importedCount + i] = v;
+		internals.globalsStorage[i] = v;
+		internals.globalRefs.push_back(&internals.globalsStorage[i]);
 	}
 
-	ctx.globals = internals.globalsStorage.data();
+	// The vector is final at this point, so its data pointer is stable.
+	ctx.globals = internals.globalRefs.data();
 }
 
 void ModuleInstance::resolveTableRefFuncs()
@@ -808,9 +813,9 @@ Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 
 		case 0x23: { // global.get
 			const uint32_t globalIdx = stream.readLEB128<uint32_t>();
-			if (globalIdx >= internals.globalsStorage.size())
+			if (globalIdx >= internals.globalRefs.size() || internals.globalRefs[globalIdx] == nullptr)
 				throw std::runtime_error("global.get in constant expr: index out of range");
-			stack.push_back(internals.globalsStorage[globalIdx]);
+			stack.push_back(*internals.globalRefs[globalIdx]);
 			break;
 		}
 

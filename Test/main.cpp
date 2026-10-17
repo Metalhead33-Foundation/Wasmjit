@@ -433,6 +433,59 @@ TEST_CASE("imported memory is shared between two module instances")
 	REQUIRE(WASM::callCallable<int32_t>(*aLoad, int32_t(4)) == 7);
 }
 
+TEST_CASE("imported mutable global is shared between two module instances")
+{
+	WASM::Module moduleA = loadTestModule("shared_global_a");
+	WASM::Module moduleB = loadTestModule("shared_global_b");
+	WASM::RegistryImportResolver registry;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+
+	auto instanceA = compiler.instantiate(moduleA, registry);
+	REQUIRE(instanceA.get() != nullptr);
+
+	// Publish A's exports (including the mutable global) as module "a".
+	instanceA->registerExports(registry, "a");
+
+	auto instanceB = compiler.instantiate(moduleB, registry);
+	REQUIRE(instanceB.get() != nullptr);
+
+	auto aGet = instanceA->exportedFunction("get");
+	auto aSet = instanceA->exportedFunction("set");
+	auto bGet = instanceB->exportedFunction("get");
+	auto bSet = instanceB->exportedFunction("set");
+	REQUIRE(aGet.has_value());
+	REQUIRE(aSet.has_value());
+	REQUIRE(bGet.has_value());
+	REQUIRE(bSet.has_value());
+
+	REQUIRE(WASM::callCallable<int32_t>(*aGet) == 1);
+
+	// B writes; A reads the same cell (MG-2/MG-3).
+	WASM::callCallable<void>(*bSet, int32_t(42));
+	REQUIRE(WASM::callCallable<int32_t>(*aGet) == 42);
+
+	// ...and symmetrically, A writes and B reads it.
+	WASM::callCallable<void>(*aSet, int32_t(7));
+	REQUIRE(WASM::callCallable<int32_t>(*bGet) == 7);
+}
+
+TEST_CASE("imported global type and mutability are matched at link time")
+{
+	WASM::Module moduleA = loadTestModule("shared_global_a");
+	WASM::Module moduleB = loadTestModule("shared_global_bad");
+	WASM::RegistryImportResolver registry;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+
+	auto instanceA = compiler.instantiate(moduleA, registry);
+	REQUIRE(instanceA.get() != nullptr);
+	instanceA->registerExports(registry, "a");
+
+	// A exports `(mut i32)`; the bad module declares `i32` and must not link.
+	REQUIRE_THROWS(compiler.instantiate(moduleB, registry));
+}
+
 TEST_CASE("store owns the runtime type registry")
 {
 	WASM::Module module = loadTestModule("add_core");
@@ -3332,13 +3385,12 @@ TEST_CASE("multi-value: JIT-to-JIT calls marshal every result")
 	REQUIRE(WASM::callCallable<int32_t>(exported("indirect"), int32_t(3), int32_t(4)) == 7);
 
 	// The host-side ABI: a multi-result export is `void f(VMContext*, params...,
-	// void* results)` (docs/ABI.md). Calling the driver entry point directly
-	// pins that contract without going through the spec harness.
+	// void* results)` (docs/ABI.md). `callCallableWithResults` is the typed
+	// helper for exactly that shape (MV4).
 	auto swapExport = instance.exportedFunction("swap_export");
 	REQUIRE(swapExport.has_value());
 	alignas(16) unsigned char tuple[16] = {};
-	using MultiResultFn = void (*)(WASM::VMContext*, int32_t, int32_t, void*);
-	reinterpret_cast<MultiResultFn>(swapExport->fnPtr)(swapExport->context, 3, 4, tuple);
+	WASM::callCallableWithResults(*swapExport, tuple, int32_t(3), int32_t(4));
 	int32_t first = 0;
 	int32_t second = 0;
 	std::memcpy(&first, tuple, sizeof(first));

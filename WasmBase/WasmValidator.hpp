@@ -63,6 +63,7 @@ private:
 	bool globalIsMutable(uint32_t idx) const;
 	bool tableIsFuncRef(uint32_t idx) const;
 	bool memoryIs64(uint32_t idx) const;
+	bool memoryIsShared(uint32_t idx) const;
 
 	void checkLimits(const Limits& limits, bool is64, bool isMemory,
 					 const char* what, std::size_t index) const;

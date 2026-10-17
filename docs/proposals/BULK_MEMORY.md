@@ -1,8 +1,8 @@
 # Bulk Memory Operations — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 2 — BM-1…BM-3
-implemented: recoverable traps, dropped/empty semantics, and the `data`/`elem`
-fixes that came with them).
+Status: design note / implementation reference (revision 3 — BM-1…BM-6
+implemented: recoverable traps, dropped/empty semantics, the `data`/`elem`
+fixes, and the `data count` requirement).
 Audience: anyone touching `WasmModule`, `WasmModuleInstance`,
 `WasmOpcodeDispatcher`, `LibjitOpcodeDispatcher`, or the test harness.
 
@@ -124,7 +124,7 @@ Bulk Memory Operations is a **Phase 5** proposal, integrated into WebAssembly
 | ~~BM3~~ | ~~Dropped-segment zero-length access aborts.~~ **Done (BM-1/BM-3):** a dropped segment is empty — zero-length is a no-op, longer traps. | `memoryInit`, `tableInit`, `bufferInitFrom*` | Closed |
 | ~~BM4~~ | ~~`data.wast`: 30 passed / 4 failed.~~ **Done:** the four failures were extended-constant offsets (`i32.add/sub/mul`); `evalConstantExpr` now implements them (EXTENDED_CONST.md EC-1) and `spec: data` → **34 passed / 0 failed**. | `spec: data` | Closed |
 | ~~BM5~~ | ~~`elem.wast` produces no report.~~ **Done:** it was a null `call_indirect` slot once `table.init` reached a table slot left null by an unresolved imported global, plus the per-use re-evaluation of expression-form segments. Imported globals are resolved and segment references are cached; `spec: elem` → **108 passed / 0 failed**. | `spec: elem` | Closed |
-| BM6 | **No `data count` section handling.** `hasDataCount` is parsed but nothing validates it; a module that uses `memory.init` without a data-count section is accepted. | `WasmModule` | Low (needs a validating front-end) |
+| ~~BM6~~ | ~~**No `data count` section handling.**~~ **Done:** the validator rejects `memory.init`/`data.drop` when `hasDataCount` is false, and checks the count against the data section. | `WasmValidator.cpp` | Closed |
 
 ## 6. Where we can and should play fast and loose
 
@@ -149,7 +149,7 @@ Store; `memory.init` must respect the multi-memory `memidx`.
 | **BM-1 — Dropped/empty semantics** | ✅ Zero-length `*.init`/`bufferInitFrom*` on a dropped or empty segment is a no-op; a longer one traps. Active/declarative segments are dropped at instantiation. | BM3 | Done: `memory_init` and `table_init` pass their dropped-segment cases. |
 | **BM-2 — Trap sink** | ✅ `WASM::trap` (longjmp to a `TrapScope`) replaces the per-call-site `std::abort()`s; the harness runs `assert_trap`. | BM2, BM1 | Done: no `abort` on the memory/table/bulk runtime path; `assert_trap` is executed. |
 | **BM-3 — Triage `memory_init` / `data` / `elem`** | ✅ Fixed the dropped-segment abort, the four extended-const `data` offsets, and `elem`'s null slot / segment re-evaluation. | BM1, BM4, BM5 | Done: `memory_init` 183/0, `data` 34/0, `elem` 108/0. |
-| **BM-4 — `data count`** | ◑ Still open: validate `memory.init`/`data.drop` against `hasDataCount`. | BM6 | Needs a validating front-end; Low. |
+| **BM-4 — `data count`** | ✅ Done: `memory.init`/`data.drop` require a data-count section; the count must match the data section. | BM6 | Done. |
 
 Guardrail: run `./WasmJit '~[spec]'` and the bulk scripts (`~[spec]` plus
 `bulk64`, which is curated) after each change.

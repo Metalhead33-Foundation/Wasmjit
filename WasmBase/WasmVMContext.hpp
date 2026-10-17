@@ -22,10 +22,12 @@ struct VMContext {
 
 	const Module*    module;        // Runtime type graph and metadata for GC/reference checks
 
-	// Globals: flat WasmValue array, indexed by global index.
-	// At compile time we know each global's index, so global.get N
-	// compiles to: load [globals + N * sizeof(WasmValue)].
-	Value*     globals;
+	// Globals: one cell per global index (imports first, then locals). A
+	// defined global's cell is owned by the instance; an imported global's cell
+	// belongs to the exporter, so a mutable import aliases it
+	// (docs/proposals/MUTABLE_GLOBALS.md MG-2/MG-3). `global.get N` compiles to:
+	// load cell[N], then load from the cell.
+	Value**    globals;
 
 	// Tables: array of `tableCount` store-owned TableInstance views, indexed
 	// exactly like the Wasm table index space (imports first, then the

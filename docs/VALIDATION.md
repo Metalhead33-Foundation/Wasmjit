@@ -41,20 +41,24 @@ correctness.
 
 | Kind | Binary cases | Rejected | Accepted |
 | --- | ---: | ---: | ---: |
-| `assert_invalid` | 1153 | **1086** | 67 |
-| `assert_malformed` | 13 | 8 | 5 |
+| `assert_invalid` | 1193 | **1118** | 75 |
+| `assert_malformed` | 17 | 8 | 9 |
 | `assert_unlinkable` | 32 | **32** | 0 |
 | `assert_uninstantiable` | 0 | — | — |
-| **total** | **1198** | **1126** | **72** |
+| **total** | **1242** | **1158** | **84** |
 
-The default suite is unchanged: **7866 assertions / 191 test cases, all
-green**; only 20 of 191 scripts fail in the strict run (down from 86 when the
+The default suite is unchanged: **7879 assertions / 194 test cases, all
+green**; only 21 of 194 scripts fail in the strict run (down from 86 when the
 measurement started at 4/1153).
 
-Remaining accepted `assert_invalid` clusters: `if` edge rules (12),
-`try_table` catch-label typing (9), `return_call_ref` (8), and the reference/GC
-rules `ref_eq`, `ref`, `br_on_cast`, `br_on_cast_fail`, `br_on_null`,
-`br_on_non_null` (21), plus a handful of table/SIMD/alignment cases.
+Remaining accepted `assert_invalid` clusters: `if` edge rules, `try_table`
+catch-label typing, `return_call_ref`, and the reference/GC rules `ref_eq`,
+`ref`, `br_on_cast`, `br_on_cast_fail`, `br_on_null`, `br_on_non_null`, plus a
+handful of table/SIMD/alignment cases.
+
+The `atomic.wait`-on-unshared check is deliberately **not** enforced: the
+curated `atomic.wast` treats it as valid (`atomic.notify` likewise), so `T5`
+stays a documented single-agent deviation rather than a validator rule.
 
 ## Finding
 

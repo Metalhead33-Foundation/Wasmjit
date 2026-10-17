@@ -50,18 +50,32 @@ unchanged, so the common `ret f(VMContext*, ...)` shape above still holds.
 The spec harness marshals them for `assert_return` (comparing each field) and
 passes a caller-owned buffer on the result-discarding paths (bare `action`,
 `assert_trap`, `assert_exception`, `assert_exhaustion`) — see
-`docs/proposals/MULTI_VALUE.md` MV1. `callCallable` should not be used for a
-multi-result signature yet (MV4). Within a module, and across modules, direct/
-indirect calls and the tail-call driver all use the buffer convention.
+`docs/proposals/MULTI_VALUE.md` MV1. An embedder calls a multi-result export
+with
+
+```cpp
+alignas(16) unsigned char results[16] = {};   // translateStruct's size
+WASM::callCallableWithResults(callable, results, arg0, arg1);
+```
+
+— the helper appends the buffer to the native call. `callCallable<Ret>` remains
+the API for void/single-result signatures. The buffer must be at least as large
+as the lowered result tuple (`jit_type_get_size(translateStruct(results))`);
+fields sit at the offsets `translateStruct` assigns, in declaration order.
+Within a module, and across modules, direct/indirect calls and the tail-call
+driver all use the buffer convention.
 
 ## Reference and Global Representation
 
-> **Status:** the decision is recorded here; the migration is staged and *not*
-> implemented yet. Nothing in this section changes the current behaviour.
+> **Status:** **R1 (globals as cells) is implemented.** R2 (tagged table slots)
+> and R3 (host extern boxes) remain staged; nothing in their descriptions has
+> changed yet.
 
-The engine currently uses one untyped `void*` for every reference, `Callable*`
-table slots, and a flat `Value` array for globals. That is enough for the core
-types in the common case, but it is the shared blocker behind four proposals:
+Before R1 the engine used one untyped `void*` for every reference, `Callable*`
+table slots, and a flat `Value` array for globals. R1 has replaced the global
+half with cells; the reference/table half is still as described. That
+representation is enough for the core types in the common case, but it is the
+shared blocker behind four proposals:
 generic/typed tables (`FUNCTION_REFERENCES.md` FR6, `EXCEPTIONS.md` EX5), host
 externrefs and `any`/`extern` identity (`GC.md` R4/G3/D5), mutable imported
 globals (`MUTABLE_GLOBALS.md` MG2/MG3/MG4), and component-level reference
@@ -77,8 +91,8 @@ bookkeeping (`COMPONENT_MODEL.md` CM8).
 | GC ref | Store-owned object pointer | fine |
 | `i31ref` | `(value << 1) \| 1` | fine |
 | table slot | `Callable*` (`TableInstance::base`) | only *nominally* a function table; externref/GC/exnref values are cast through it |
-| global | `Value` in a flat `VMContext::globals` array | imported globals are **copies**; an import cannot alias the exporter |
-| exported global | `Value` copied by `registerExports` | a later `global.set` is invisible to importers (and vice versa) |
+| global | a `Value*` cell per index (R1); `VMContext::globals` is `Value**` | imported cells alias the exporter |
+| exported global | the exporter's cell is published (R1) | a later `global.set` is visible to importers (and vice versa) |
 
 Static typing at each use site is why this works at all. It stops working when
 the static type is only `anyref` (an `ref.test`/`ref.cast` must distinguish a
@@ -122,7 +136,7 @@ keeps its size.
 
 | Stage | Work | Unblocks | Acceptance |
 | --- | --- | --- | --- |
-| **R1 — Globals as cells** | `VMContext::globals` → `Value**`; `Internals::globalRefs` (one cell per index, defined globals point at the instance's storage); `ImportRegistrar::registerGlobal` publishes a `Value*` and `resolveGlobal` returns one; `registerExports` publishes the cell; release only *defined* cells (imported cells are the exporter's); `globalSlotAddress` loads the pointer; interpreter path. | MG2, MG3, MG4 | a write through a mutable import is visible to the exporter and back; `globals.wast`/`mutable-globals.wast` stay green |
+| **R1 — Globals as cells** ✅ | Done: `VMContext::globals` is `Value**`; `Internals::globalRefs` holds one cell per index (imported cells are the exporter's, defined cells point into `globalsStorage`); `ImportRegistrar::registerGlobal` publishes a `Value*` + `GlobalType` and `resolveGlobal` returns the cell; `registerExports` publishes the exporter's cell; `globalSlotAddress` loads it; the interpreter path dereferences it. | MG2, MG3, MG4 | Done: `global` **77/0**; `shared_global_a/b` prove writes cross both ways; `shared_global_bad` is rejected. |
 | **R2 — Tagged slots** | introduce `Ref` + tag constants (`WasmValue.hpp`); table slots become `Ref`; `call_indirect`/`call_ref` check `Func`; `table.get/set`, `ref.eq`, `ref.test/cast`, `ref.is_null` use the tag; exnref/GC/externref tables. | FR6, EX5, GC R4, CM8 | `try_table` stays 56/0; `table_fill` 36/0/9 and `array_new_data` 28/0/0 stay green; an `exnref` table test passes |
 | **R3 — Extern box** | Store-owned `ExternBox`; harness `(ref.extern N)` identity; host registration helper. | GC G3/D5, host interop | `ref_test` **69/2 → 71/0** (the two failures are `ref_test_extern`), and `(ref.extern 1)` result round-trips keep identity |
 
@@ -164,7 +178,7 @@ void my_native_func(WASM::VMContext* vm, int32_t arg1, double arg2) {
     // vm is the CALLER's VMContext — access everything the module sees:
     //   vm->memories    — array of LinearMemory* (imports first, then locals)
     //   vm->memoryCount — number of entries in vm->memories
-    //   vm->globals     — global variables
+    //   vm->globals     — one Value* cell per global index
     //   vm->table       — function table
     //   vm->hostData    — embedder state (set after instantiation)
 }
@@ -204,7 +218,7 @@ Plain-old-data struct passed as arg0 to every JIT function.
 | `memories`             | `LinearMemory* const*` | Memory index space (imports first, then locals)    |
 | `memoryCount`          | `uint32_t`             | Number of entries in `memories`                    |
 | `module`               | `const Module*`        | Type graph metadata for GC/reference checks        |
-| `globals`              | `Value*`        | Flat array of global values                            |
+| `globals`              | `Value**`       | One cell per global index (imported cells alias the exporter) |
 | `tables`               | `TableInstance**` | Table index space (imports first, then locals)       |
 | `tableCount`           | `uint32_t`      | Number of entries in `tables`                          |
 | `importedFunctions`    | `Callable*`     | Imported function handles (import section order)       |

@@ -45,6 +45,7 @@ float_memory
 float_memory64
 float_misc
 forward
+global
 id
 if
 inline-module

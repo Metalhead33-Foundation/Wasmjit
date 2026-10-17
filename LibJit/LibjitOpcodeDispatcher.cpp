@@ -2482,11 +2482,15 @@ void OpcodeDispatcher::dispatchLocalTee(WASM::LocalIdx arg)
 jit_value_t OpcodeDispatcher::globalSlotAddress(WASM::GlobalIdx arg)
 {
 	jit_value_t vm = vmContextValue();
-	jit_value_t gPtr = jit_insn_load_relative(function, vm,
+	// ctx.globals is a Value** (one cell per global index). Load the cell
+	// pointer, then return it as the slot address: imported globals point at
+	// the exporter's storage, defined ones at the instance's own storage.
+	jit_value_t cells = jit_insn_load_relative(function, vm,
 			offsetof(WASM::VMContext, globals), jit_type_void_ptr);
 	jit_value_t off = jit_value_create_nint_constant(
-		function, jit_type_nint, static_cast<jit_nint>(arg * sizeof(WASM::Value)));
-	return jit_insn_add(function, gPtr, off);
+		function, jit_type_nint, static_cast<jit_nint>(arg * sizeof(WASM::Value*)));
+	jit_value_t slot = jit_insn_add(function, cells, off);
+	return jit_insn_load_relative(function, slot, 0, jit_type_void_ptr);
 }
 
 void OpcodeDispatcher::dispatchGlobalGet(WASM::GlobalIdx arg)

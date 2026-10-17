@@ -4,6 +4,7 @@
 #include "WasmImport.hpp"
 #include "WasmMemory.hpp"
 #include <Elvavena/Util/ElvStringhashMap.hpp>
+#include <memory>
 
 namespace WASM {
 
@@ -14,9 +15,19 @@ namespace WASM {
 class RegistryImportResolver final : public ImportResolver, public ImportRegistrar
 {
 public:
+	// A registered global is a borrowed *cell*. A module export publishes its
+	// own cell (`owned` is null); a host registration copies the value into
+	// `owned` so the pointer stays valid for the registry's lifetime. The type
+	// is published so an import can be matched (mutability included, MG-4).
+	struct GlobalEntry {
+		Value* cell = nullptr;
+		GlobalType type{};
+		std::unique_ptr<Value> owned;
+	};
+
 	struct ModuleRegistry {
 		Elv::Util::UnorderedStrMap<Callable> functions;
-		Elv::Util::UnorderedStrMap<Value> globals;
+		Elv::Util::UnorderedStrMap<GlobalEntry> globals;
 		// Borrowed views into memories owned by the (global) Store. Registering
 		// the same pointer under two names is how memory sharing happens.
 		Elv::Util::UnorderedStrMap<LinearMemory*> memories;
@@ -25,12 +36,13 @@ public:
 
 		void registerFunction(std::string_view fieldName, const Callable& callable);
 		void registerGlobal(std::string_view fieldName, const Value& value);
+		void registerGlobalCell(std::string_view fieldName, Value* cell, const GlobalType& type);
 		void registerMemory(std::string_view fieldName, LinearMemory* memory);
 		void registerTable(std::string_view fieldName, const ImportedTable& table);
 		void registerTag(std::string_view fieldName, TagId tag);
 
 		std::optional<Callable> resolveFunction(std::string_view fieldName, TypeId expectedType);
-		std::optional<Value> resolveGlobal(std::string_view fieldName, const GlobalType& type);
+		std::optional<Value*> resolveGlobal(std::string_view fieldName, const GlobalType& type);
 		std::optional<LinearMemory*> resolveMemory(std::string_view fieldName, const MemoryType& type);
 		std::optional<ImportedTable> resolveTable(std::string_view fieldName, const TableType& type,
 											 TypeId elementTypeId);
@@ -39,8 +51,12 @@ public:
 
 	void registerFunction(std::string_view moduleName, std::string_view fieldName,
 						  const Callable& callable) override;
+	// Host overload: copies `value` into a registry-owned cell.
 	void registerGlobal(std::string_view moduleName, std::string_view fieldName,
-						const Value& value) override;
+						const Value& value);
+	// Exporter override: publishes the module's cell (non-owning).
+	void registerGlobal(std::string_view moduleName, std::string_view fieldName,
+						Value* cell, const GlobalType& type) override;
 	void registerMemory(std::string_view moduleName, std::string_view fieldName,
 						LinearMemory* memory) override;
 	void registerTable(std::string_view moduleName, std::string_view fieldName,
@@ -53,7 +69,7 @@ public:
 		std::string_view fieldName,
 		TypeId expectedType) override;
 
-	std::optional<Value> resolveGlobal(
+	std::optional<Value*> resolveGlobal(
 		std::string_view moduleName,
 		std::string_view fieldName,
 		const GlobalType& type) override;

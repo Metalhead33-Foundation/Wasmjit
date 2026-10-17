@@ -31,7 +31,12 @@ struct ModuleInstanceInternals {
 	// ctx.memories points at (imports first, then the module's own memories).
 	// It never needs resizing after instantiation, so the pointers stay valid.
 	std::vector<LinearMemory*> memoryRefs;
+	// Defined globals own their `Value` cells here. `globalRefs` is the global
+	// index space that ctx.globals points at: imported globals point into the
+	// exporter's (or resolver's) storage, defined ones into `globalsStorage`.
+	// A mutable import therefore aliases the exporter (MG-2/MG-3).
 	std::vector<Value>     globalsStorage;
+	std::vector<Value*>    globalRefs;
 	// Tables are owned by the Store as well; `tableRefs` is the table index
 	// space that ctx.tables points at (imports first, then own tables). It is
 	// borrowed, not owned, and never resized after instantiation. Each
