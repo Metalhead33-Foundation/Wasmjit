@@ -272,6 +272,91 @@ HWY_INLINE V satQ15(V a, V b)
 						  hn::MulFixedPoint15(a, b));
 }
 
+// Highway's float `Ne` is the *ordered* not-equal — on x86 it compiles to
+// `_CMP_NEQ_OQ`, which is false when either operand is a NaN — while wasm's `ne`
+// is the unordered one: a NaN operand makes it *true*. `Not(Eq)` is that
+// unordered form, and it is the only one of the six comparisons that needs help
+// (`eq`/`lt`/`le`/`gt`/`ge` are false for a NaN operand, which is what both the
+// library and the C++ operators already do).
+template <class V>
+HWY_INLINE auto wasmFNe(V a, V b)
+{
+	return hn::Not(hn::Eq(a, b));
+}
+
+// wasm's `fmin`/`fmax` differ from the hardware's `minps`/`maxps` in exactly the
+// two corners no test with ordinary numbers would catch (hazard Y1):
+//
+//   * a NaN operand must come out as a NaN, where the instruction returns the
+//     *other* operand; and
+//   * `+0` and `-0` are ordered — `min(+0, -0)` is `-0`, `max(+0, -0)` is `+0` —
+//     where the instruction returns whichever operand came second.
+//
+// The formulation below does not use the instruction at all: when neither operand
+// is less than the other they are equal or one is a NaN, and there the bitwise
+// `Or`/`And` gives the right answer for both cases — `(+0, -0)` ors to `-0` and
+// ands to `+0`, and a NaN stays a NaN. The bit patterns go through the unsigned
+// view because that is what the bitwise ops are defined on.
+// Both take the same shape: an explicit NaN step, then the ordering, then the
+// "equal" case. The NaN step is not decoration — it is *required* for `max`,
+// whose bitwise `And` (which is what resolves `+0` against `-0`) can clear a
+// NaN's exponent and return an ordinary number. `min`'s `Or` cannot do that,
+// since an OR can only add bits — but rather than let one function depend on that
+// asymmetry, both say what they mean. `Add` of a NaN operand is a NaN for free,
+// which is what produces the propagated NaN.
+template <class V>
+HWY_INLINE V wasmMin(V a, V b)
+{
+	const hn::DFromV<V> d;
+	const hn::RebindToUnsigned<decltype(d)> du;
+	const auto lt = hn::Lt(a, b);
+	const auto gt = hn::Lt(b, a);
+	const auto anyNan = hn::Or(wasmFNe(a, a), wasmFNe(b, b));
+	const V eq = hn::BitCast(d, hn::Or(hn::BitCast(du, a), hn::BitCast(du, b)));
+	return hn::IfThenElse(anyNan, hn::Add(a, b),
+						  hn::IfThenElse(lt, a, hn::IfThenElse(gt, b, eq)));
+}
+
+template <class V>
+HWY_INLINE V wasmMax(V a, V b)
+{
+	const hn::DFromV<V> d;
+	const hn::RebindToUnsigned<decltype(d)> du;
+	const auto lt = hn::Lt(a, b);
+	const auto gt = hn::Lt(b, a);
+	const auto anyNan = hn::Or(wasmFNe(a, a), wasmFNe(b, b));
+	const V eq = hn::BitCast(d, hn::And(hn::BitCast(du, a), hn::BitCast(du, b)));
+	return hn::IfThenElse(anyNan, hn::Add(a, b),
+						  hn::IfThenElse(gt, a, hn::IfThenElse(lt, b, eq)));
+}
+
+// `pmin`/`pmax` are the spec's plain `b < a ? b : a` and `a < b ? b : a`, so a NaN
+// operand falls out as `a` instead of propagating — the opposite of `min`/`max`,
+// which is exactly why wasm has both.
+template <class V>
+HWY_INLINE V wasmPMin(V a, V b)
+{
+	return hn::IfThenElse(hn::Lt(b, a), b, a);
+}
+
+template <class V>
+HWY_INLINE V wasmPMax(V a, V b)
+{
+	return hn::IfThenElse(hn::Lt(a, b), b, a);
+}
+
+// wasm's float→int conversions turn a NaN operand into zero; the library's
+// `ConvertTo`/`DemoteTo` then do the truncation and the saturation. Detecting the
+// NaN needs *our* unordered comparison, because the library's float `Ne` is the
+// ordered one (see above). That the library's saturation is exact at the ends is
+// not taken on faith: the differential test feeds it ±2^31, ±2^32 and the largest
+// representable values below each.
+template <class DF, class VF>
+HWY_INLINE VF wasmNoNaN(DF df, VF v)
+{
+	return hn::IfThenElse(hn::Not(hn::Eq(v, v)), hn::Zero(df), v);
+}
+
 // ── per-lane arithmetic and comparisons (the shared op list) ───────────────
 // The tag's lane type carries the *signedness the operation means*, which is
 // what lets one expression serve both `min_s` and `min_u`, or `lt_s` and
@@ -350,6 +435,37 @@ HWY_INLINE V satQ15(V a, V b)
 #define WASM_SIMD_OP_PAIRWISE2(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy)
 #define WASM_SIMD_OP_NARROW(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy)
 
+// The `.high` variants differ only in the *reference*, which reads the upper half
+// of the operand lanes, so every other layer treats them as the plain form.
+#define WASM_SIMD_OP_WIDEN1H(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
+#define WASM_SIMD_OP_WIDEN2H(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy)
+// The conversion shapes: one vector in, one out, with the library expression
+// written *completely* (not `hn::`-prefixed) because the saturating conversions
+// call a helper of ours and the `_zero` forms select around it. `CONVERT1` reads
+// as many operand lanes as it produces — so the shorter-output forms take the
+// low ones, which is what `convert_low`/`promote_low` mean. `EXPAND` is the
+// mirror: its conversion fills only the low lanes, and the rest are zeroed
+// explicitly, because the library leaves them undefined.
+#define WASM_SIMD_OP_CONVERT1(name, entry, TIn, TOut, expr, hwy) \
+	inline void name(const uint8_t* a, uint8_t* out) { \
+		const hn::CappedTag<TIn, 16 / sizeof(TIn)> din; \
+		const hn::CappedTag<TOut, 16 / sizeof(TOut)> dout; \
+		const hn::CappedTag<TIn, 16 / sizeof(TIn) / 2> dhalfin; \
+		const auto v = hn::LoadU(din, reinterpret_cast<const TIn*>(a)); \
+		hn::StoreU(hwy, dout, reinterpret_cast<TOut*>(out)); \
+	}
+// `FORWARD` has no per-target body: the vector TU defines its entry point to
+// call the reference, so there is nothing for a target to compile (§6.5).
+#define WASM_SIMD_OP_FORWARD(name, entry, TIn, TOut, expr, hwy)
+#define WASM_SIMD_OP_EXPAND(name, entry, TIn, TOut, expr, hwy) \
+	inline void name(const uint8_t* a, uint8_t* out) { \
+		const hn::CappedTag<TIn, 16 / sizeof(TIn)> din; \
+		const hn::CappedTag<TOut, 16 / sizeof(TOut)> dout; \
+		const hn::CappedTag<TOut, 16 / sizeof(TOut) / 2> dhalf; \
+		const auto v = hn::LoadU(din, reinterpret_cast<const TIn*>(a)); \
+		hn::StoreU(hwy, dout, reinterpret_cast<TOut*>(out)); \
+	}
+
 #include "wasm_simd_ops.inc"
 #undef WASM_SIMD_OP_BIN
 #undef WASM_SIMD_OP_CMP
@@ -358,8 +474,13 @@ HWY_INLINE V satQ15(V a, V b)
 #undef WASM_SIMD_OP_REDUCE_OR
 #undef WASM_SIMD_OP_REDUCE_AND
 #undef WASM_SIMD_OP_WIDEN1
+#undef WASM_SIMD_OP_WIDEN1H
 #undef WASM_SIMD_OP_PAIRWISE
 #undef WASM_SIMD_OP_WIDEN2
+#undef WASM_SIMD_OP_WIDEN2H
+#undef WASM_SIMD_OP_CONVERT1
+#undef WASM_SIMD_OP_EXPAND
+#undef WASM_SIMD_OP_FORWARD
 #undef WASM_SIMD_OP_PAIRWISE2
 #undef WASM_SIMD_OP_NARROW
 

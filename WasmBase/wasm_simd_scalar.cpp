@@ -1,4 +1,5 @@
 #include "wasm_simd_scalar.hpp"
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <type_traits>
@@ -406,25 +407,41 @@ void swizzleBytes(const uint8_t* a, const uint8_t* b, uint8_t* out)
 
 namespace {
 
+// Floating-point lanes are moved by bit pattern, not by numeric conversion:
+// `static_cast<float>(some_uint32)` would re-interpret the value, while the
+// helpers above deal in the bytes the wasm vector holds.
 template <typename T>
 T loadLane(const uint8_t* v, uint32_t lane)
 {
-	if constexpr (sizeof(T) == 1) return static_cast<T>(laneU8(v, lane));
-	else if constexpr (sizeof(T) == 2) return static_cast<T>(laneU16(v, lane));
-	else if constexpr (sizeof(T) == 4) return static_cast<T>(laneU32(v, lane));
-	else return static_cast<T>(laneU64(v, lane));
+	if constexpr (std::is_floating_point<T>::value) {
+		T x;
+		std::memcpy(&x, v + lane * sizeof(T), sizeof(T));
+		return x;
+	} else if constexpr (sizeof(T) == 1) {
+		return static_cast<T>(laneU8(v, lane));
+	} else if constexpr (sizeof(T) == 2) {
+		return static_cast<T>(laneU16(v, lane));
+	} else if constexpr (sizeof(T) == 4) {
+		return static_cast<T>(laneU32(v, lane));
+	} else {
+		return static_cast<T>(laneU64(v, lane));
+	}
 }
 
 template <typename T>
 void storeLane(uint8_t* v, uint32_t lane, T x)
 {
-	// Through the unsigned counterpart: the byte accessors are unsigned and the
-	// bit pattern is what has to survive.
-	const auto u = static_cast<std::make_unsigned_t<T>>(x);
-	if constexpr (sizeof(T) == 1) storeU8(v, lane, static_cast<uint8_t>(u));
-	else if constexpr (sizeof(T) == 2) storeU16(v, lane, static_cast<uint16_t>(u));
-	else if constexpr (sizeof(T) == 4) storeU32(v, lane, static_cast<uint32_t>(u));
-	else storeU64(v, lane, static_cast<uint64_t>(u));
+	if constexpr (std::is_floating_point<T>::value) {
+		std::memcpy(v + lane * sizeof(T), &x, sizeof(T));
+	} else {
+		// Through the unsigned counterpart: the byte accessors are unsigned and
+		// the bit pattern is what has to survive.
+		const auto u = static_cast<std::make_unsigned_t<T>>(x);
+		if constexpr (sizeof(T) == 1) storeU8(v, lane, static_cast<uint8_t>(u));
+		else if constexpr (sizeof(T) == 2) storeU16(v, lane, static_cast<uint16_t>(u));
+		else if constexpr (sizeof(T) == 4) storeU32(v, lane, static_cast<uint32_t>(u));
+		else storeU64(v, lane, static_cast<uint64_t>(u));
+	}
 }
 
 template <typename T, typename Op>
@@ -436,14 +453,43 @@ void binaryLanes(const uint8_t* a, const uint8_t* b, uint8_t* out, Op op)
 
 // A comparison yields a *mask* per lane: all ones where it holds, zero where it
 // does not — which is what makes every comparison usable as a bitselect input.
+// The mask is written as bytes rather than as `~0` of the lane type, so it works
+// for float lanes as well.
 template <typename T, typename Cmp>
 void compareLanes(const uint8_t* a, const uint8_t* b, uint8_t* out, Cmp cmp)
 {
-	using U = std::make_unsigned_t<T>;
-	for (uint32_t i = 0; i < 16 / sizeof(T); ++i)
-		storeLane<T>(out, i, cmp(loadLane<T>(a, i), loadLane<T>(b, i))
-							  ? static_cast<T>(~U(0))
-							  : static_cast<T>(0));
+	for (uint32_t i = 0; i < 16 / sizeof(T); ++i) {
+		const bool hit = cmp(loadLane<T>(a, i), loadLane<T>(b, i));
+		std::memset(out + i * sizeof(T), hit ? 0xFF : 0x00, sizeof(T));
+	}
+}
+
+// `trunc_sat`: the truncating float→int conversion that wasm specifies to
+// saturate and to turn NaN into zero. A C++ cast is undefined on both counts, so
+// the limits are compared in the *float* domain — where -2^31, 2^31 and 2^32 are
+// exactly representable — and the exact integer limit is selected, which keeps
+// the ends from being off by one.
+template <typename TInt, typename TFloat>
+TInt refTruncSat(TFloat x)
+{
+	if (std::isnan(x))
+		return 0;
+	if (static_cast<double>(x) <= static_cast<double>(std::numeric_limits<TInt>::min()))
+		return std::numeric_limits<TInt>::min();
+	if (static_cast<double>(x) >= static_cast<double>(std::numeric_limits<TInt>::max()))
+		return std::numeric_limits<TInt>::max();
+	return static_cast<TInt>(x);   // in range: truncation is exact
+}
+
+// `nearest` rounds to the nearest integer with ties to *even* (`2.5` -> `2`,
+// `3.5` -> `4`). `std::nearbyint` is the C++ spelling of that: it rounds according
+// to the current mode, which is `FE_TONEAREST` unless something changes it — and
+// nothing in this engine does. (Not `std::round`, which rounds halves *away* from
+// zero, nor `std::rint`'s "may raise inexact" variant.)
+template <typename T>
+T refNearest(T x)
+{
+	return std::nearbyint(x);
 }
 
 template <typename T, typename Op>
@@ -543,6 +589,52 @@ inline int32_t dot2(int16_t xlo, int16_t xhi, int16_t ylo, int16_t yhi)
 	const uint32_t p0 = static_cast<uint32_t>(static_cast<int32_t>(xlo) * static_cast<int32_t>(ylo));
 	const uint32_t p1 = static_cast<uint32_t>(static_cast<int32_t>(xhi) * static_cast<int32_t>(yhi));
 	return static_cast<int32_t>(p0 + p1);
+}
+
+// The reference's `min`/`max`/`pmin`/`pmax` for float lanes. They follow the
+// spec's wording rather than the hardware instructions, which differ from it in
+// two corners (hazard Y1): a NaN operand must produce a NaN rather than the other
+// operand, and `+0`/`-0` must be *ordered* rather than falling to whichever
+// operand came second. The NaN's payload is deliberately not pinned here — the
+// spec leaves it open, and the differential test compares NaN lanes by "is a
+// NaN" for that reason.
+template <typename T>
+T refFMin(T a, T b)
+{
+	if (std::isnan(a) || std::isnan(b))
+		return std::numeric_limits<T>::quiet_NaN();
+	if (a < b)
+		return a;
+	if (b < a)
+		return b;
+	// Equal, so the only thing left to decide is a zero's sign: min prefers -0.
+	return std::signbit(a) ? a : b;
+}
+
+template <typename T>
+T refFMax(T a, T b)
+{
+	if (std::isnan(a) || std::isnan(b))
+		return std::numeric_limits<T>::quiet_NaN();
+	if (a > b)
+		return a;
+	if (b > a)
+		return b;
+	return std::signbit(a) ? b : a;   // max prefers +0
+}
+
+// `pmin`/`pmax` do *not* propagate NaN: they are the plain `b < a ? b : a` and
+// `a < b ? b : a` of the spec, so a NaN operand falls out as `a`.
+template <typename T>
+T refFPMin(T a, T b)
+{
+	return (b < a) ? b : a;
+}
+
+template <typename T>
+T refFPMax(T a, T b)
+{
+	return (a < b) ? b : a;
 }
 
 // Saturating conversion into a narrower lane type: `narrow`'s per-lane rule, and
@@ -665,6 +757,52 @@ TOut satTo(TIn x)
 		} \
 	}
 
+// The `H` variants read the *upper* half of the operand's lanes: that is the only
+// difference from the plain forms, but it is a difference the differential test
+// used to miss — the byte patterns it fed were periodic every 8 bytes, which makes
+// a vector's two halves identical. The float corners broke that periodicity and
+// exposed it, so the two forms are now separate shapes and the misreading cannot
+// come back.
+#define WASM_SIMD_OP_WIDEN1H(name, entry, TIn, TOut, expr, hwy) \
+	void name(const uint8_t* a, uint8_t* out) { \
+		const uint32_t half = 8 / sizeof(TIn); \
+		for (uint32_t i = 0; i < 16 / sizeof(TOut); ++i) { \
+			const TIn x = loadLane<TIn>(a, half + i); \
+			storeLane<TOut>(out, i, static_cast<TOut>(expr)); \
+		} \
+	}
+
+#define WASM_SIMD_OP_WIDEN2H(name, entry, TIn, TOut, expr, hwy) \
+	void name(const uint8_t* a, const uint8_t* b, uint8_t* out) { \
+		const uint32_t half = 8 / sizeof(TIn); \
+		for (uint32_t i = 0; i < 16 / sizeof(TOut); ++i) { \
+			const TIn x = loadLane<TIn>(a, half + i); \
+			const TIn y = loadLane<TIn>(b, half + i); \
+			storeLane<TOut>(out, i, static_cast<TOut>(expr)); \
+		} \
+	}
+
+// `EXPAND`: the conversion fills the low lanes and wasm requires the rest to be
+// *zero*, so the reference's loop zeroes every lane the operand does not reach.
+// (`CONVERT1` needs no shape of its own here — its reference is the widening
+// loop, which reads as many operand lanes as it writes.)
+#define WASM_SIMD_OP_EXPAND(name, entry, TIn, TOut, expr, hwy) \
+	void name(const uint8_t* a, uint8_t* out) { \
+		const uint32_t have = 16 / sizeof(TIn); \
+		for (uint32_t i = 0; i < 16 / sizeof(TOut); ++i) { \
+			if (i < have) { \
+				const TIn x = loadLane<TIn>(a, i); \
+				storeLane<TOut>(out, i, static_cast<TOut>(expr)); \
+			} else { \
+				storeLane<TOut>(out, i, static_cast<TOut>(0)); \
+			} \
+		} \
+	}
+#define WASM_SIMD_OP_CONVERT1(name, entry, TIn, TOut, expr, hwy) \
+	WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
+#define WASM_SIMD_OP_FORWARD(name, entry, TIn, TOut, expr, hwy) \
+	WASM_SIMD_OP_EXPAND(name, entry, TIn, TOut, expr, hwy)
+
 #include "wasm_simd_ops.inc"
 #undef WASM_SIMD_OP_BIN
 #undef WASM_SIMD_OP_CMP
@@ -673,8 +811,13 @@ TOut satTo(TIn x)
 #undef WASM_SIMD_OP_REDUCE_OR
 #undef WASM_SIMD_OP_REDUCE_AND
 #undef WASM_SIMD_OP_WIDEN1
+#undef WASM_SIMD_OP_WIDEN1H
 #undef WASM_SIMD_OP_PAIRWISE
 #undef WASM_SIMD_OP_WIDEN2
+#undef WASM_SIMD_OP_WIDEN2H
+#undef WASM_SIMD_OP_CONVERT1
+#undef WASM_SIMD_OP_EXPAND
+#undef WASM_SIMD_OP_FORWARD
 #undef WASM_SIMD_OP_PAIRWISE2
 #undef WASM_SIMD_OP_NARROW
 

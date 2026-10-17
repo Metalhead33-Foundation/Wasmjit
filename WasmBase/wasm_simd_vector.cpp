@@ -211,6 +211,18 @@ extern "C" void wasm_i8x16_swizzle(const void* a, const void* b, void* out)
 	}
 #define WASM_SIMD_OP_PAIRWISE2(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy)
 #define WASM_SIMD_OP_NARROW(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy)
+// The `.high` variants differ only in the *reference*, which reads the upper half
+// of the operand lanes, so every other layer treats them as the plain form.
+#define WASM_SIMD_OP_WIDEN1H(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
+#define WASM_SIMD_OP_WIDEN2H(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy)
+// The conversion shapes share the one-vector-in, one-out signature, so every
+// layer but the vector bodies treats them as the widening form.
+#define WASM_SIMD_OP_CONVERT1(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
+#define WASM_SIMD_OP_EXPAND(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
+#define WASM_SIMD_OP_FORWARD(name, entry, TIn, TOut, expr, hwy) \
+	extern "C" void wasm_##entry(const void* a, void* out) { \
+		simd_scalar::name(static_cast<const uint8_t*>(a), static_cast<uint8_t*>(out)); \
+	}
 #include "wasm_simd_ops.inc"
 #undef WASM_SIMD_OP_BIN
 #undef WASM_SIMD_OP_CMP
@@ -219,8 +231,13 @@ extern "C" void wasm_i8x16_swizzle(const void* a, const void* b, void* out)
 #undef WASM_SIMD_OP_REDUCE_OR
 #undef WASM_SIMD_OP_REDUCE_AND
 #undef WASM_SIMD_OP_WIDEN1
+#undef WASM_SIMD_OP_WIDEN1H
 #undef WASM_SIMD_OP_PAIRWISE
 #undef WASM_SIMD_OP_WIDEN2
+#undef WASM_SIMD_OP_WIDEN2H
+#undef WASM_SIMD_OP_CONVERT1
+#undef WASM_SIMD_OP_EXPAND
+#undef WASM_SIMD_OP_FORWARD
 #undef WASM_SIMD_OP_PAIRWISE2
 #undef WASM_SIMD_OP_NARROW
 

@@ -124,12 +124,19 @@ void swizzleBytes(const uint8_t* a, const uint8_t* b, uint8_t* out);
 	int32_t name(const uint8_t* a);
 // Two vectors in, one out — whatever the operands' and result's lane widths are.
 #define WASM_SIMD_OP_CMP(name, entry, T, expr, hwy) WASM_SIMD_OP_BIN(name, entry, T, expr, hwy)
+#define WASM_SIMD_OP_WIDEN2H(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy)
 #define WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_BIN(name, entry, TOut, expr, hwy)
 #define WASM_SIMD_OP_PAIRWISE2(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_BIN(name, entry, TOut, expr, hwy)
 #define WASM_SIMD_OP_NARROW(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_BIN(name, entry, TOut, expr, hwy)
 // One vector in, one out, likewise.
+#define WASM_SIMD_OP_WIDEN1H(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
 #define WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_UNARY(name, entry, TOut, expr, hwy)
 #define WASM_SIMD_OP_PAIRWISE(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_UNARY(name, entry, TOut, expr, hwy)
+// The conversion shapes share the one-vector-in, one-out signature, so every
+// layer but the vector bodies treats them as the widening form.
+#define WASM_SIMD_OP_CONVERT1(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
+#define WASM_SIMD_OP_EXPAND(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
+#define WASM_SIMD_OP_FORWARD(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
 #include "wasm_simd_ops.inc"
 #undef WASM_SIMD_OP_BIN
 #undef WASM_SIMD_OP_UNARY
@@ -138,9 +145,14 @@ void swizzleBytes(const uint8_t* a, const uint8_t* b, uint8_t* out);
 #undef WASM_SIMD_OP_REDUCE_AND
 #undef WASM_SIMD_OP_CMP
 #undef WASM_SIMD_OP_WIDEN2
+#undef WASM_SIMD_OP_WIDEN2H
+#undef WASM_SIMD_OP_CONVERT1
+#undef WASM_SIMD_OP_EXPAND
+#undef WASM_SIMD_OP_FORWARD
 #undef WASM_SIMD_OP_PAIRWISE2
 #undef WASM_SIMD_OP_NARROW
 #undef WASM_SIMD_OP_WIDEN1
+#undef WASM_SIMD_OP_WIDEN1H
 #undef WASM_SIMD_OP_PAIRWISE
 
 } // namespace simd_scalar
@@ -221,11 +233,18 @@ void wasm_i8x16_swizzle(const void* a, const void* b, void* out);
 #define WASM_SIMD_OP_REDUCE_AND(name, entry, T, expr, hwy) \
 	int32_t wasm_##entry(const void* a);
 #define WASM_SIMD_OP_CMP(name, entry, T, expr, hwy) WASM_SIMD_OP_BIN(name, entry, T, expr, hwy)
+#define WASM_SIMD_OP_WIDEN2H(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy)
 #define WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_BIN(name, entry, TOut, expr, hwy)
 #define WASM_SIMD_OP_PAIRWISE2(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_BIN(name, entry, TOut, expr, hwy)
 #define WASM_SIMD_OP_NARROW(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_BIN(name, entry, TOut, expr, hwy)
+#define WASM_SIMD_OP_WIDEN1H(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
 #define WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_UNARY(name, entry, TOut, expr, hwy)
 #define WASM_SIMD_OP_PAIRWISE(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_UNARY(name, entry, TOut, expr, hwy)
+// The conversion shapes share the one-vector-in, one-out signature, so every
+// layer but the vector bodies treats them as the widening form.
+#define WASM_SIMD_OP_CONVERT1(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
+#define WASM_SIMD_OP_EXPAND(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
+#define WASM_SIMD_OP_FORWARD(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
 #include "wasm_simd_ops.inc"
 #undef WASM_SIMD_OP_BIN
 #undef WASM_SIMD_OP_UNARY
@@ -234,9 +253,14 @@ void wasm_i8x16_swizzle(const void* a, const void* b, void* out);
 #undef WASM_SIMD_OP_REDUCE_AND
 #undef WASM_SIMD_OP_CMP
 #undef WASM_SIMD_OP_WIDEN2
+#undef WASM_SIMD_OP_WIDEN2H
+#undef WASM_SIMD_OP_CONVERT1
+#undef WASM_SIMD_OP_EXPAND
+#undef WASM_SIMD_OP_FORWARD
 #undef WASM_SIMD_OP_PAIRWISE2
 #undef WASM_SIMD_OP_NARROW
 #undef WASM_SIMD_OP_WIDEN1
+#undef WASM_SIMD_OP_WIDEN1H
 #undef WASM_SIMD_OP_PAIRWISE
 }
 

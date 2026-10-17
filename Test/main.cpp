@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <type_traits>
 #include <vector>
 
 #include "helper.hpp"
@@ -1891,6 +1892,38 @@ TEST_CASE("simd: shuffle and swizzle run through the JIT")
 	REQUIRE(WASM::callCallable<int32_t>(i32Export("swizzle_u8_6")) == 3);   // a[2]
 }
 
+// One lane of a packed vector, as a float — used only to answer "is this lane a
+// NaN", which no bit comparison can answer portably.
+static bool simdLaneIsNaN(const uint8_t* p, size_t laneSize)
+{
+	if (laneSize == 4) {
+		float f;
+		std::memcpy(&f, p, 4);
+		return std::isnan(f) != 0;
+	}
+	double d;
+	std::memcpy(&d, p, 8);
+	return std::isnan(d) != 0;
+}
+
+// Bit-exact, with one exception for float lanes: **any NaN matches any NaN**. The
+// spec leaves the payload of a NaN result open, so the reference, the library and
+// the compiler are all free to differ there — and they do. Everything else must
+// match to the bit, including `+0` versus `-0`, which wasm requires to be
+// distinguishable (and which is exactly what a float `min`/`max` can get wrong).
+static bool simdVectorsMatch(const uint8_t* x, const uint8_t* y, size_t laneSize, bool isFloat)
+{
+	if (!isFloat)
+		return std::memcmp(x, y, 16) == 0;
+	for (size_t off = 0; off + laneSize <= 16; off += laneSize) {
+		if (std::memcmp(x + off, y + off, laneSize) == 0)
+			continue;
+		if (!simdLaneIsNaN(x + off, laneSize) || !simdLaneIsNaN(y + off, laneSize))
+			return false;
+	}
+	return true;
+}
+
 TEST_CASE("simd helpers: per-lane arithmetic and comparisons (differential)")
 {
 	// Driven by the same op list the implementation is generated from
@@ -1910,18 +1943,21 @@ TEST_CASE("simd helpers: per-lane arithmetic and comparisons (differential)")
 	using ReduceEntry = int32_t (*)(const void*);
 	using ReduceRef = int32_t (*)(const uint8_t*);
 
-	struct BinaryOp { const char* name; BinaryEntry entry; BinaryRef ref; };
-	struct UnaryOp { const char* name; UnaryEntry entry; UnaryRef ref; };
-	struct ShiftOp { const char* name; ShiftEntry entry; ShiftRef ref; };
-	struct ReduceOp { const char* name; ReduceEntry entry; ReduceRef ref; };
+	// `laneSize`/`isFloat` are derived from the list's lane type: the float
+	// comparison policy needs to know what a lane *is* (see `simdVectorsMatch`).
+	struct BinaryOp { const char* name; BinaryEntry entry; BinaryRef ref; uint8_t laneSize; bool isFloat; };
+	struct UnaryOp { const char* name; UnaryEntry entry; UnaryRef ref; uint8_t laneSize; bool isFloat; };
+	struct ShiftOp { const char* name; ShiftEntry entry; ShiftRef ref; uint8_t laneSize; bool isFloat; };
+	struct ReduceOp { const char* name; ReduceEntry entry; ReduceRef ref; uint8_t laneSize; bool isFloat; };
 
 	// Four tables, one per C signature. The list's shapes are aliased onto the
 	// signature they share, so every op in the list lands in exactly one table:
 	// a new op is covered the moment it is listed, and an op cannot be listed
 	// without being covered.
-#define WASM_SIMD_OP_BIN(name, entry, T, expr, hwy) {#entry, &wasm_##entry, &WASM::simd_scalar::name},
+#define WASM_SIMD_OP_BIN(name, entry, T, expr, hwy) {#entry, &wasm_##entry, &WASM::simd_scalar::name, sizeof(T), std::is_floating_point<T>::value},
 #define WASM_SIMD_OP_CMP(name, entry, T, expr, hwy) WASM_SIMD_OP_BIN(name, entry, T, expr, hwy)
 #define WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_BIN(name, entry, TOut, expr, hwy)
+#define WASM_SIMD_OP_WIDEN2H(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy)
 #define WASM_SIMD_OP_PAIRWISE2(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_BIN(name, entry, TOut, expr, hwy)
 #define WASM_SIMD_OP_NARROW(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_BIN(name, entry, TOut, expr, hwy)
 	static const BinaryOp kBinaryOps[] = {
@@ -1930,26 +1966,33 @@ TEST_CASE("simd helpers: per-lane arithmetic and comparisons (differential)")
 #undef WASM_SIMD_OP_BIN
 #undef WASM_SIMD_OP_CMP
 #undef WASM_SIMD_OP_WIDEN2
+#undef WASM_SIMD_OP_WIDEN2H
 #undef WASM_SIMD_OP_PAIRWISE2
 #undef WASM_SIMD_OP_NARROW
 
-#define WASM_SIMD_OP_UNARY(name, entry, T, expr, hwy) {#entry, &wasm_##entry, &WASM::simd_scalar::name},
+#define WASM_SIMD_OP_UNARY(name, entry, T, expr, hwy) {#entry, &wasm_##entry, &WASM::simd_scalar::name, sizeof(T), std::is_floating_point<T>::value},
 #define WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_UNARY(name, entry, TOut, expr, hwy)
+#define WASM_SIMD_OP_WIDEN1H(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
+#define WASM_SIMD_OP_CONVERT1(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
+#define WASM_SIMD_OP_EXPAND(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
 #define WASM_SIMD_OP_PAIRWISE(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_UNARY(name, entry, TOut, expr, hwy)
 	static const UnaryOp kUnaryOps[] = {
 #include "../WasmBase/wasm_simd_ops.inc"
 	};
 #undef WASM_SIMD_OP_UNARY
 #undef WASM_SIMD_OP_WIDEN1
+#undef WASM_SIMD_OP_WIDEN1H
+#undef WASM_SIMD_OP_CONVERT1
+#undef WASM_SIMD_OP_EXPAND
 #undef WASM_SIMD_OP_PAIRWISE
 
-#define WASM_SIMD_OP_SHIFT(name, entry, T, expr, hwy) {#entry, &wasm_##entry, &WASM::simd_scalar::name},
+#define WASM_SIMD_OP_SHIFT(name, entry, T, expr, hwy) {#entry, &wasm_##entry, &WASM::simd_scalar::name, sizeof(T), std::is_floating_point<T>::value},
 	static const ShiftOp kShiftOps[] = {
 #include "../WasmBase/wasm_simd_ops.inc"
 	};
 #undef WASM_SIMD_OP_SHIFT
 
-#define WASM_SIMD_OP_REDUCE_OR(name, entry, T, expr, hwy) {#entry, &wasm_##entry, &WASM::simd_scalar::name},
+#define WASM_SIMD_OP_REDUCE_OR(name, entry, T, expr, hwy) {#entry, &wasm_##entry, &WASM::simd_scalar::name, sizeof(T), std::is_floating_point<T>::value},
 #define WASM_SIMD_OP_REDUCE_AND(name, entry, T, expr, hwy) WASM_SIMD_OP_REDUCE_OR(name, entry, T, expr, hwy)
 	static const ReduceOp kReduceOps[] = {
 #include "../WasmBase/wasm_simd_ops.inc"
@@ -1971,38 +2014,83 @@ TEST_CASE("simd helpers: per-lane arithmetic and comparisons (differential)")
 	// lane sees `count mod lane-bits`, and 8/16/32/64 are the first wrong answers.
 	static const int32_t kCounts[10] = {0, 1, 7, 8, 15, 16, 31, 33, 63, 255};
 
-	for (uint32_t seed = 0; seed < 8; ++seed) {
-		for (size_t i = 0; i < a.size(); ++i) {
-			a[i] = kInteresting[i % 8];
-			b[i] = kInteresting[(i + 3 + seed) % 8];
-		}
+	// Every op, against one pair of inputs. Factored out because the case runs it
+	// over two input families: assorted byte patterns, and the float corners below.
+	std::string pass;
+	const auto runAll = [&]() {
 		for (const BinaryOp& op : kBinaryOps) {
-			INFO("binary op: " << op.name);
+			INFO(pass << " binary op: " << op.name);
 			op.ref(a.data(), b.data(), ref.data());
 			op.entry(a.data(), b.data(), got.data());
-			REQUIRE(ref == got);
+			REQUIRE(simdVectorsMatch(ref.data(), got.data(), op.laneSize, op.isFloat));
 		}
 		for (const UnaryOp& op : kUnaryOps) {
-			INFO("unary op: " << op.name);
+			INFO(pass << " unary op: " << op.name);
 			op.ref(a.data(), ref.data());
 			op.entry(a.data(), got.data());
-			REQUIRE(ref == got);
+			REQUIRE(simdVectorsMatch(ref.data(), got.data(), op.laneSize, op.isFloat));
 		}
 		// The reductions return their i32 rather than filling a vector, and the
 		// shifts take their count as a second argument.
 		for (const ReduceOp& op : kReduceOps) {
-			INFO("reduce op: " << op.name << " (seed " << seed << ')');
+			INFO(pass << " reduce op: " << op.name);
 			REQUIRE(op.ref(a.data()) == op.entry(a.data()));
 			REQUIRE(op.ref(b.data()) == op.entry(b.data()));
 		}
 		for (const ShiftOp& op : kShiftOps) {
 			for (int32_t count : kCounts) {
-				INFO("shift op: " << op.name << " count " << count);
+				INFO(pass << " shift op: " << op.name << " count " << count);
 				op.ref(a.data(), count, ref.data());
 				op.entry(a.data(), count, got.data());
-				REQUIRE(ref == got);
+				REQUIRE(simdVectorsMatch(ref.data(), got.data(), op.laneSize, op.isFloat));
 			}
 		}
+	};
+
+	for (uint32_t seed = 0; seed < 8; ++seed) {
+		for (size_t i = 0; i < a.size(); ++i) {
+			a[i] = kInteresting[i % 8];
+			b[i] = kInteresting[(i + 3 + seed) % 8];
+		}
+		pass = "byte pattern " + std::to_string(seed);
+		runAll();
+	}
+
+	// The float corners §9's T1 policy asks for, written as raw lane patterns so
+	// that no floating-point value has to be named and the sign of a zero stays
+	// visible. Each vector is paired with the next, so every one of them is also
+	// the second operand somewhere. Note that the byte-pattern pass above already
+	// feeds float ops denormals, infinities and NaNs, since those *are* bit
+	// patterns — these are the deliberate ones.
+	static const uint32_t kF32Corners[5][4] = {
+		{0x00000000u, 0x80000000u, 0x7F800000u, 0xFF800000u},   // +0 -0 +inf -inf
+		{0x7FC00000u, 0xFFC00000u, 0x7F800001u, 0xFF800001u},   // qNaN -qNaN sNaN -sNaN
+		{0x00000001u, 0x80000001u, 0x4F000000u, 0xCF000000u},   // denormals, ±2^31
+		{0x3F800000u, 0x40200000u, 0x40600000u, 0xBF800000u},   // 1.0, 2.5, 3.5, -1.0
+		{0x7F7FFFFFu, 0x00800000u, 0x4B000000u, 0x3F000000u},   // FLT_MAX, min normal, 2^23, 0.5
+	};
+	static const uint64_t kF64Corners[4][2] = {
+		{0x0000000000000000ull, 0x8000000000000000ull},         // +0 -0
+		{0x7FF0000000000000ull, 0xFFF0000000000000ull},         // +inf -inf
+		{0x7FF8000000000000ull, 0x0000000000000001ull},         // qNaN, denormal
+		{0x4004000000000000ull, 0x400C000000000000ull},         // 2.5, 3.5 — the ties-to-even halves
+	};
+	std::vector<std::array<uint8_t, 16>> corners;
+	for (const auto& lanes : kF32Corners) {
+		std::array<uint8_t, 16> v{};
+		std::memcpy(v.data(), lanes, sizeof(lanes));
+		corners.push_back(v);
+	}
+	for (const auto& lanes : kF64Corners) {
+		std::array<uint8_t, 16> v{};
+		std::memcpy(v.data(), lanes, sizeof(lanes));
+		corners.push_back(v);
+	}
+	for (size_t i = 0; i < corners.size(); ++i) {
+		a = corners[i];
+		b = corners[(i + 1) % corners.size()];
+		pass = "float corner " + std::to_string(i);
+		runAll();
 	}
 }
 
@@ -2233,6 +2321,213 @@ TEST_CASE("simd helpers: shift masking, narrowing layout and the widening family
 	wasm_i32x4_dot_i16x8_s(min16.data(), min16.data(), out.data());
 	REQUIRE(out[0] == 0x00);
 	REQUIRE(out[3] == 0x80);           // 2 * 2^30 wraps to 0x80000000
+}
+
+TEST_CASE("simd helpers: the float corners the hardware gets wrong")
+{
+	// Hazard Y1, and two more the library hides. Every value here comes from an
+	// independent engine (V8, docs/SIMD_LIBJIT.md §11 R8), not from arithmetic on
+	// my side — the differential test cannot judge these, because it is exactly
+	// where the library and wasm disagree and a naive implementation would agree
+	// with the library.
+	std::array<uint8_t, 16> out{};
+	const auto lane32 = [](const std::array<uint8_t, 16>& v) {
+		int32_t x;
+		std::memcpy(&x, v.data(), 4);
+		return x;
+	};
+
+	// NaN comparisons: `ne` is *unordered* (true), the rest are false. Highway's
+	// float `Ne` is the ordered one, so this is a case where the library had to be
+	// overridden rather than trusted.
+	const std::array<uint8_t, 16> nan32 = {0x00, 0x00, 0xC0, 0x7F, 0x00, 0x00, 0xC0, 0x7F,
+										   0x00, 0x00, 0xC0, 0x7F, 0x00, 0x00, 0xC0, 0x7F};
+	std::array<uint8_t, 16> one32{};
+	const int32_t oneBits = 0x3F800000;
+	for (size_t i = 0; i < 4; ++i)
+		std::memcpy(&one32[i * 4], &oneBits, 4);
+
+	wasm_f32x4_ne(nan32.data(), one32.data(), out.data());
+	REQUIRE(lane32(out) == -1);           // NaN != 1 is true
+	wasm_f32x4_eq(nan32.data(), nan32.data(), out.data());
+	REQUIRE(lane32(out) == 0);            // ...but NaN == NaN is false
+	wasm_f32x4_lt(nan32.data(), one32.data(), out.data());
+	REQUIRE(lane32(out) == 0);
+	wasm_f32x4_le(one32.data(), nan32.data(), out.data());
+	REQUIRE(lane32(out) == 0);
+
+	// `min`/`max` must order the zeros, where `minps`/`maxps` return whichever
+	// operand came second: min(+0, -0) is -0 and max(+0, -0) is +0.
+	std::array<uint8_t, 16> pos0{};
+	std::array<uint8_t, 16> neg0{};
+	const int32_t negZeroBits = static_cast<int32_t>(0x80000000u);
+	for (size_t i = 0; i < 4; ++i)
+		std::memcpy(&neg0[i * 4], &negZeroBits, 4);
+	wasm_f32x4_min(pos0.data(), neg0.data(), out.data());
+	REQUIRE(lane32(out) == negZeroBits);
+	wasm_f32x4_max(pos0.data(), neg0.data(), out.data());
+	REQUIRE(lane32(out) == 0);
+	wasm_f32x4_min(neg0.data(), pos0.data(), out.data());
+	REQUIRE(lane32(out) == negZeroBits);
+
+	// A NaN operand: `min`/`max` propagate it, `pmin`/`pmax` do not (they are the
+	// plain `b < a ? b : a` of the spec, which falls through to `a`).
+	wasm_f32x4_min(nan32.data(), one32.data(), out.data());
+	REQUIRE(simdLaneIsNaN(out.data(), 4));
+	wasm_f32x4_max(one32.data(), nan32.data(), out.data());
+	REQUIRE(simdLaneIsNaN(out.data(), 4));
+	wasm_f32x4_pmin(nan32.data(), one32.data(), out.data());
+	REQUIRE(simdLaneIsNaN(out.data(), 4));   // pmin returns `a` when nothing compares
+	wasm_f32x4_pmax(one32.data(), nan32.data(), out.data());
+	REQUIRE(lane32(out) == oneBits);         // pmax(1, NaN) = 1
+
+	// `nearest` rounds ties to *even*: 2.5 -> 2 but 3.5 -> 4, and the same below
+	// zero. `std::round` would give 3 and 4, which is why the reference uses
+	// `nearbyint`.
+	const auto nearestOf = [&](float value) {
+		std::array<uint8_t, 16> in{};
+		for (size_t i = 0; i < 4; ++i)
+			std::memcpy(&in[i * 4], &value, 4);
+		wasm_f32x4_nearest(in.data(), out.data());
+		float r;
+		std::memcpy(&r, out.data(), 4);
+		return r;
+	};
+	REQUIRE(nearestOf(2.5f) == 2.0f);
+	REQUIRE(nearestOf(3.5f) == 4.0f);
+	REQUIRE(nearestOf(-2.5f) == -2.0f);
+	REQUIRE(nearestOf(-3.5f) == -4.0f);
+	REQUIRE(nearestOf(2.4f) == 2.0f);
+	REQUIRE(nearestOf(-0.5f) == -0.0f);   // and it keeps the sign
+}
+
+TEST_CASE("simd: float arithmetic and comparisons run through the JIT")
+{
+	// T2 (docs/SIMD_LIBJIT.md §9): the float half of L4 through decoding, the slot
+	// bank and the runtime-dispatched helpers. Every export projects a bit pattern,
+	// so the values below are exact — a NaN's *payload* is not asserted, only that
+	// it is a NaN (`min_nan_exponent` asks for the exponent field), because the
+	// spec leaves the payload open and an engine is free to differ there.
+	//
+	// Every expectation was read off an independent engine before it was written
+	// here (§11 R8) — these are precisely the cases where a plausible
+	// implementation and the library both disagree with wasm.
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("simd_arith_f", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	const auto i32Export = [&instance](const char* name) {
+		auto fn = instance.exportedFunction(name);
+		REQUIRE(fn.has_value());
+		return *fn;
+	};
+
+	// Comparisons: `ne` is unordered (true on NaN), the rest are false.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("cmp_ne_nan")) == 0xFFFF);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("cmp_eq_nan")) == 0x0000);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("cmp_lt_nan")) == 0x0000);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("cmp_lt_ok")) == 0xFFFF);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("cmp_ge_ok")) == 0x0000);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("cmp_ge_eq")) == 0xFFFF);
+
+	// Arithmetic, as bit patterns.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("add_bits")) == 0x40400000);   // 3.0
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("sub_bits")) == static_cast<int32_t>(0xBF800000u));
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("mul_bits")) == 0x40000000);   // 2.0
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("div_bits")) == 0x3F000000);   // 0.5
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("sqrt_bits")) == 0x40000000);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("abs_bits")) == 0x3FC00000);   // 1.5
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("neg_bits")) == static_cast<int32_t>(0xBFC00000u));
+
+	// min/max: the zeros are ordered, and a NaN comes out as a NaN.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("min_zero_bits")) == static_cast<int32_t>(0x80000000u));
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("max_zero_bits")) == 0);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("min_nan_exponent")) == 0xFF);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("max_nan_exponent")) == 0xFF);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("pmin_nan_bits")) == 0x7FC00000);   // the NaN itself
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("pmax_nan_bits")) == 0x3F800000);   // 1.0
+
+	// `nearest` ties to even, and the directed roundings are directed.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("nearest_2_5")) == 0x40000000);    // 2.0
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("nearest_3_5")) == 0x40800000);    // 4.0
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("nearest_m2_5")) == static_cast<int32_t>(0xC0000000u));
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("nearest_m3_5")) == static_cast<int32_t>(0xC0800000u));
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("nearest_m0_5")) == static_cast<int32_t>(0x80000000u));
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("nearest_2_4")) == 0x40000000);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("nearest_inf")) == 0x7F800000);    // +inf passes through
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("ceil_m1_5")) == static_cast<int32_t>(0xBF800000u));
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("floor_m1_5")) == static_cast<int32_t>(0xC0000000u));
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("trunc_m1_5")) == static_cast<int32_t>(0xBF800000u));
+
+	// f64x2, the same three families.
+	REQUIRE(WASM::callCallable<int64_t>(i32Export("f64_add_bits")) == 0x4008000000000000ll);
+	REQUIRE(WASM::callCallable<int64_t>(i32Export("f64_min_zero_bits")) == static_cast<int64_t>(0x8000000000000000ull));
+	REQUIRE(WASM::callCallable<int64_t>(i32Export("f64_nearest_bits")) == 0x4000000000000000ll);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("f64_cmp_masks")) == 0xFFFF);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("f64_ne_nan")) == 0xFFFF);
+}
+
+TEST_CASE("simd: the float/int conversions run through the JIT")
+{
+	// T2 (docs/SIMD_LIBJIT.md §9): the conversion half of L4. The operands are the
+	// *ends* of the ranges rather than ordinary numbers, because that is where a
+	// conversion goes wrong: ±2^31 and 2^32 for the saturating forms, the largest
+	// value just below 2^32 (where an off-by-one would show), a NaN, and a
+	// fractional value that has to be truncated rather than rounded. The `_zero`
+	// operands carry a marker in the lanes that must come out zero.
+	//
+	// Expectations read off V8 (§11 R8). Two of the ten ops are `FORWARD` — the
+	// vector TU hands them to the reference, because the library has no truncating
+	// float64→int32 conversion — so for those this pins the *reference* through the
+	// entry point rather than a vector path, exactly as §6.5 says it must.
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("simd_convert", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	const auto i32Export = [&instance](const char* name) {
+		auto fn = instance.exportedFunction(name);
+		REQUIRE(fn.has_value());
+		return *fn;
+	};
+
+	// `trunc_sat`: NaN and both ends.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("trunc_sat_s_nan")) == 0);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("trunc_sat_s_pos")) == INT32_MAX);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("trunc_sat_s_neg")) == INT32_MIN);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("trunc_sat_s_frac")) == -1);   // truncated, not rounded
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("trunc_sat_u_neg")) == 0);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("trunc_sat_u_big")) == -1);    // UINT32_MAX
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("trunc_sat_u_near")) == static_cast<int32_t>(0xFFFFFF00u));
+
+	// `convert`: plain int→float, which rounds when f32 cannot hold the value.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("convert_s_neg")) == static_cast<int32_t>(0xBF800000u));
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("convert_u_max")) == 0x4F800000);   // 4294967296.0f
+
+	// `convert_low` takes the *low* lanes of a 4-lane operand, so the marker lanes
+	// (7, 7) must not appear.
+	REQUIRE(WASM::callCallable<int64_t>(i32Export("convert_low_s_lane1"))
+			== static_cast<int64_t>(0xC1E0000000000000ull));            // -2147483648.0
+	REQUIRE(WASM::callCallable<int64_t>(i32Export("convert_low_u_lane0"))
+			== 0x41EFFFFFFFE00000ll);                                  // 4294967295.0
+
+	// `promote_low` widens the low two f32 lanes, sign of zero included.
+	REQUIRE(WASM::callCallable<int64_t>(i32Export("promote_low_lane1"))
+			== static_cast<int64_t>(0x8000000000000000ull));            // -0.0
+
+	// `demote_zero` widens the other way: two f64 lanes to f32, upper lanes zero.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("demote_zero_lane0")) == 0x3FC00000);   // 1.5f
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("demote_zero_lane2")) == 0);
+
+	// The two forwarded ops, which the list marks `FORWARD`.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("trunc_sat_f64_s_lane0")) == INT32_MIN);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("trunc_sat_f64_s_lane1")) == -5);       // -5.5 truncates
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("trunc_sat_f64_s_lane2")) == 0);        // upper lane zeroed
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("trunc_sat_f64_u_lane0")) == 0);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("trunc_sat_f64_u_lane1")) == -1);       // UINT32_MAX
 }
 
 TEST_CASE("simd: memory loads and stores run through the JIT")

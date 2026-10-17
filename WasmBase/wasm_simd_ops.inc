@@ -80,6 +80,26 @@
 #define WASM_SIMD_OP_NARROW(...)
 #define WASM_SIMD_OPS_DEFAULTED
 #endif
+#ifndef WASM_SIMD_OP_WIDEN1H
+#define WASM_SIMD_OP_WIDEN1H(...)
+#define WASM_SIMD_OPS_DEFAULTED
+#endif
+#ifndef WASM_SIMD_OP_WIDEN2H
+#define WASM_SIMD_OP_WIDEN2H(...)
+#define WASM_SIMD_OPS_DEFAULTED
+#endif
+#ifndef WASM_SIMD_OP_CONVERT1
+#define WASM_SIMD_OP_CONVERT1(...)
+#define WASM_SIMD_OPS_DEFAULTED
+#endif
+#ifndef WASM_SIMD_OP_EXPAND
+#define WASM_SIMD_OP_EXPAND(...)
+#define WASM_SIMD_OPS_DEFAULTED
+#endif
+#ifndef WASM_SIMD_OP_FORWARD
+#define WASM_SIMD_OP_FORWARD(...)
+#define WASM_SIMD_OPS_DEFAULTED
+#endif
 
 // Two vectors in, one vector out, per lane.
 WASM_SIMD_OP_BIN(i8x16Add,  i8x16_add,   uint8_t,  x + y, Add)
@@ -239,30 +259,30 @@ WASM_SIMD_OP_REDUCE_OR(i64x2Bitmask, i64x2_bitmask, int64_t, ((x >> (8 * sizeof(
 // reference casts to TOut first: multiplying two i32 lanes in `int` would
 // overflow, while wasm's product needs the full width.
 WASM_SIMD_OP_WIDEN1(i16x8ExtendLowI8x16S,  i16x8_extend_low_i8x16_s,  int8_t,   int16_t,  x, PromoteLowerTo(dout, v))
-WASM_SIMD_OP_WIDEN1(i16x8ExtendHighI8x16S, i16x8_extend_high_i8x16_s, int8_t,   int16_t,  x, PromoteUpperTo(dout, v))
+WASM_SIMD_OP_WIDEN1H(i16x8ExtendHighI8x16S, i16x8_extend_high_i8x16_s, int8_t,   int16_t,  x, PromoteUpperTo(dout, v))
 WASM_SIMD_OP_WIDEN1(i16x8ExtendLowI8x16U,  i16x8_extend_low_i8x16_u,  uint8_t,  uint16_t, x, PromoteLowerTo(dout, v))
-WASM_SIMD_OP_WIDEN1(i16x8ExtendHighI8x16U, i16x8_extend_high_i8x16_u, uint8_t,  uint16_t, x, PromoteUpperTo(dout, v))
+WASM_SIMD_OP_WIDEN1H(i16x8ExtendHighI8x16U, i16x8_extend_high_i8x16_u, uint8_t,  uint16_t, x, PromoteUpperTo(dout, v))
 WASM_SIMD_OP_WIDEN1(i32x4ExtendLowI16x8S,  i32x4_extend_low_i16x8_s,  int16_t,  int32_t,  x, PromoteLowerTo(dout, v))
-WASM_SIMD_OP_WIDEN1(i32x4ExtendHighI16x8S, i32x4_extend_high_i16x8_s, int16_t,  int32_t,  x, PromoteUpperTo(dout, v))
+WASM_SIMD_OP_WIDEN1H(i32x4ExtendHighI16x8S, i32x4_extend_high_i16x8_s, int16_t,  int32_t,  x, PromoteUpperTo(dout, v))
 WASM_SIMD_OP_WIDEN1(i32x4ExtendLowI16x8U,  i32x4_extend_low_i16x8_u,  uint16_t, uint32_t, x, PromoteLowerTo(dout, v))
-WASM_SIMD_OP_WIDEN1(i32x4ExtendHighI16x8U, i32x4_extend_high_i16x8_u, uint16_t, uint32_t, x, PromoteUpperTo(dout, v))
+WASM_SIMD_OP_WIDEN1H(i32x4ExtendHighI16x8U, i32x4_extend_high_i16x8_u, uint16_t, uint32_t, x, PromoteUpperTo(dout, v))
 WASM_SIMD_OP_WIDEN1(i64x2ExtendLowI32x4S,  i64x2_extend_low_i32x4_s,  int32_t,  int64_t,  x, PromoteLowerTo(dout, v))
-WASM_SIMD_OP_WIDEN1(i64x2ExtendHighI32x4S, i64x2_extend_high_i32x4_s, int32_t,  int64_t,  x, PromoteUpperTo(dout, v))
+WASM_SIMD_OP_WIDEN1H(i64x2ExtendHighI32x4S, i64x2_extend_high_i32x4_s, int32_t,  int64_t,  x, PromoteUpperTo(dout, v))
 WASM_SIMD_OP_WIDEN1(i64x2ExtendLowI32x4U,  i64x2_extend_low_i32x4_u,  uint32_t, uint64_t, x, PromoteLowerTo(dout, v))
-WASM_SIMD_OP_WIDEN1(i64x2ExtendHighI32x4U, i64x2_extend_high_i32x4_u, uint32_t, uint64_t, x, PromoteUpperTo(dout, v))
+WASM_SIMD_OP_WIDEN1H(i64x2ExtendHighI32x4U, i64x2_extend_high_i32x4_u, uint32_t, uint64_t, x, PromoteUpperTo(dout, v))
 
 WASM_SIMD_OP_WIDEN2(i16x8ExtMulLowI8x16S,  i16x8_extmul_low_i8x16_s,  int8_t,   int16_t,  widenProduct(x, y), Mul(PromoteLowerTo(dout, va), PromoteLowerTo(dout, vb)))
-WASM_SIMD_OP_WIDEN2(i16x8ExtMulHighI8x16S, i16x8_extmul_high_i8x16_s, int8_t,   int16_t,  widenProduct(x, y), Mul(PromoteUpperTo(dout, va), PromoteUpperTo(dout, vb)))
+WASM_SIMD_OP_WIDEN2H(i16x8ExtMulHighI8x16S, i16x8_extmul_high_i8x16_s, int8_t,   int16_t,  widenProduct(x, y), Mul(PromoteUpperTo(dout, va), PromoteUpperTo(dout, vb)))
 WASM_SIMD_OP_WIDEN2(i16x8ExtMulLowI8x16U,  i16x8_extmul_low_i8x16_u,  uint8_t,  uint16_t, widenProduct(x, y), Mul(PromoteLowerTo(dout, va), PromoteLowerTo(dout, vb)))
-WASM_SIMD_OP_WIDEN2(i16x8ExtMulHighI8x16U, i16x8_extmul_high_i8x16_u, uint8_t,  uint16_t, widenProduct(x, y), Mul(PromoteUpperTo(dout, va), PromoteUpperTo(dout, vb)))
+WASM_SIMD_OP_WIDEN2H(i16x8ExtMulHighI8x16U, i16x8_extmul_high_i8x16_u, uint8_t,  uint16_t, widenProduct(x, y), Mul(PromoteUpperTo(dout, va), PromoteUpperTo(dout, vb)))
 WASM_SIMD_OP_WIDEN2(i32x4ExtMulLowI16x8S,  i32x4_extmul_low_i16x8_s,  int16_t,  int32_t,  widenProduct(x, y), Mul(PromoteLowerTo(dout, va), PromoteLowerTo(dout, vb)))
-WASM_SIMD_OP_WIDEN2(i32x4ExtMulHighI16x8S, i32x4_extmul_high_i16x8_s, int16_t,  int32_t,  widenProduct(x, y), Mul(PromoteUpperTo(dout, va), PromoteUpperTo(dout, vb)))
+WASM_SIMD_OP_WIDEN2H(i32x4ExtMulHighI16x8S, i32x4_extmul_high_i16x8_s, int16_t,  int32_t,  widenProduct(x, y), Mul(PromoteUpperTo(dout, va), PromoteUpperTo(dout, vb)))
 WASM_SIMD_OP_WIDEN2(i32x4ExtMulLowI16x8U,  i32x4_extmul_low_i16x8_u,  uint16_t, uint32_t, widenProduct(x, y), Mul(PromoteLowerTo(dout, va), PromoteLowerTo(dout, vb)))
-WASM_SIMD_OP_WIDEN2(i32x4ExtMulHighI16x8U, i32x4_extmul_high_i16x8_u, uint16_t, uint32_t, widenProduct(x, y), Mul(PromoteUpperTo(dout, va), PromoteUpperTo(dout, vb)))
+WASM_SIMD_OP_WIDEN2H(i32x4ExtMulHighI16x8U, i32x4_extmul_high_i16x8_u, uint16_t, uint32_t, widenProduct(x, y), Mul(PromoteUpperTo(dout, va), PromoteUpperTo(dout, vb)))
 WASM_SIMD_OP_WIDEN2(i64x2ExtMulLowI32x4S,  i64x2_extmul_low_i32x4_s,  int32_t,  int64_t,  widenProduct(x, y), Mul(PromoteLowerTo(dout, va), PromoteLowerTo(dout, vb)))
-WASM_SIMD_OP_WIDEN2(i64x2ExtMulHighI32x4S, i64x2_extmul_high_i32x4_s, int32_t,  int64_t,  widenProduct(x, y), Mul(PromoteUpperTo(dout, va), PromoteUpperTo(dout, vb)))
+WASM_SIMD_OP_WIDEN2H(i64x2ExtMulHighI32x4S, i64x2_extmul_high_i32x4_s, int32_t,  int64_t,  widenProduct(x, y), Mul(PromoteUpperTo(dout, va), PromoteUpperTo(dout, vb)))
 WASM_SIMD_OP_WIDEN2(i64x2ExtMulLowI32x4U,  i64x2_extmul_low_i32x4_u,  uint32_t, uint64_t, widenProduct(x, y), Mul(PromoteLowerTo(dout, va), PromoteLowerTo(dout, vb)))
-WASM_SIMD_OP_WIDEN2(i64x2ExtMulHighI32x4U, i64x2_extmul_high_i32x4_u, uint32_t, uint64_t, widenProduct(x, y), Mul(PromoteUpperTo(dout, va), PromoteUpperTo(dout, vb)))
+WASM_SIMD_OP_WIDEN2H(i64x2ExtMulHighI32x4U, i64x2_extmul_high_i32x4_u, uint32_t, uint64_t, widenProduct(x, y), Mul(PromoteUpperTo(dout, va), PromoteUpperTo(dout, vb)))
 
 // `extadd_pairwise`: each output lane is the sum of two *adjacent* input lanes,
 // so the library needs the even/odd promotion rather than the lower/upper half
@@ -286,6 +306,99 @@ WASM_SIMD_OP_NARROW(i8x16NarrowI16x8U, i8x16_narrow_i16x8_u, int16_t, uint8_t,  
 WASM_SIMD_OP_NARROW(i16x8NarrowI32x4S, i16x8_narrow_i32x4_s, int32_t, int16_t,  x, OrderedDemote2To(dout, va, vb))
 WASM_SIMD_OP_NARROW(i16x8NarrowI32x4U, i16x8_narrow_i32x4_u, int32_t, uint16_t, x, OrderedDemote2To(dout, va, vb))
 
+// ── Float lanes (SIMD-L4) ──────────────────────────────────────────────────
+// Same shapes, float lane types. Three things are settled by hand rather than
+// taken from the library, because the library (and the hardware) differ from wasm
+// exactly where it is easiest not to notice: `nearest` must round ties to *even*,
+// and `min`/`max` must propagate NaN and order `+0` against `-0` (hazard Y1).
+//
+// The comparisons are IEEE-quiet ones, which is what wasm specifies: a NaN input
+// makes `eq`/`lt`/`le`/`gt`/`ge` false and `ne` true — so the C++ operators and
+// the library's ops agree here without any help.
+WASM_SIMD_OP_CMP(f32x4Eq, f32x4_eq, float,  x == y, Eq)
+WASM_SIMD_OP_CMP(f32x4Ne, f32x4_ne, float,  x != y, wasmFNe)
+WASM_SIMD_OP_CMP(f32x4Lt, f32x4_lt, float,  x < y,  Lt)
+WASM_SIMD_OP_CMP(f32x4Gt, f32x4_gt, float,  x > y,  Gt)
+WASM_SIMD_OP_CMP(f32x4Le, f32x4_le, float,  x <= y, Le)
+WASM_SIMD_OP_CMP(f32x4Ge, f32x4_ge, float,  x >= y, Ge)
+WASM_SIMD_OP_CMP(f64x2Eq, f64x2_eq, double, x == y, Eq)
+WASM_SIMD_OP_CMP(f64x2Ne, f64x2_ne, double, x != y, wasmFNe)
+WASM_SIMD_OP_CMP(f64x2Lt, f64x2_lt, double, x < y,  Lt)
+WASM_SIMD_OP_CMP(f64x2Gt, f64x2_gt, double, x > y,  Gt)
+WASM_SIMD_OP_CMP(f64x2Le, f64x2_le, double, x <= y, Le)
+WASM_SIMD_OP_CMP(f64x2Ge, f64x2_ge, double, x >= y, Ge)
+
+// `nearest` is round-to-nearest with ties to *even* (2.5 -> 2, 3.5 -> 4), which is
+// what `refNearest` gives through the default rounding mode — and what the
+// library's `Round` compiles to on x86.
+WASM_SIMD_OP_UNARY(f32x4Ceil,    f32x4_ceil,    float,  std::ceil(x),    Ceil(v))
+WASM_SIMD_OP_UNARY(f32x4Floor,   f32x4_floor,   float,  std::floor(x),   Floor(v))
+WASM_SIMD_OP_UNARY(f32x4Trunc,   f32x4_trunc,   float,  std::trunc(x),   Trunc(v))
+WASM_SIMD_OP_UNARY(f32x4Nearest, f32x4_nearest, float,  refNearest(x),   Round(v))
+WASM_SIMD_OP_UNARY(f32x4Abs,     f32x4_abs,     float,  std::fabs(x),    Abs(v))
+WASM_SIMD_OP_UNARY(f32x4Neg,     f32x4_neg,     float,  -x,              Neg(v))
+WASM_SIMD_OP_UNARY(f32x4Sqrt,    f32x4_sqrt,    float,  std::sqrt(x),    Sqrt(v))
+WASM_SIMD_OP_UNARY(f64x2Ceil,    f64x2_ceil,    double, std::ceil(x),    Ceil(v))
+WASM_SIMD_OP_UNARY(f64x2Floor,   f64x2_floor,   double, std::floor(x),   Floor(v))
+WASM_SIMD_OP_UNARY(f64x2Trunc,   f64x2_trunc,   double, std::trunc(x),   Trunc(v))
+WASM_SIMD_OP_UNARY(f64x2Nearest, f64x2_nearest, double, refNearest(x),   Round(v))
+WASM_SIMD_OP_UNARY(f64x2Abs,     f64x2_abs,     double, std::fabs(x),    Abs(v))
+WASM_SIMD_OP_UNARY(f64x2Neg,     f64x2_neg,     double, -x,              Neg(v))
+WASM_SIMD_OP_UNARY(f64x2Sqrt,    f64x2_sqrt,    double, std::sqrt(x),    Sqrt(v))
+
+// Arithmetic, and the four min/max flavours. `add`/`sub`/`mul`/`div` are IEEE
+// operations that both the reference and the hardware implement identically, so
+// they need no help. The min/max family does: wasm's rules differ from
+// `minps`/`maxps` on NaN operands and on `+0`/`-0`, so those four go through
+// helpers of ours (named as callees here, so ADL finds them the same way it finds
+// the library's own ops).
+WASM_SIMD_OP_BIN(f32x4Add,  f32x4_add,  float, x + y, Add)
+WASM_SIMD_OP_BIN(f32x4Sub,  f32x4_sub,  float, x - y, Sub)
+WASM_SIMD_OP_BIN(f32x4Mul,  f32x4_mul,  float, x * y, Mul)
+WASM_SIMD_OP_BIN(f32x4Div,  f32x4_div,  float, x / y, Div)
+WASM_SIMD_OP_BIN(f32x4Min,  f32x4_min,  float, refFMin(x, y), wasmMin)
+WASM_SIMD_OP_BIN(f32x4Max,  f32x4_max,  float, refFMax(x, y), wasmMax)
+WASM_SIMD_OP_BIN(f32x4PMin, f32x4_pmin, float, refFPMin(x, y), wasmPMin)
+WASM_SIMD_OP_BIN(f32x4PMax, f32x4_pmax, float, refFPMax(x, y), wasmPMax)
+WASM_SIMD_OP_BIN(f64x2Add,  f64x2_add,  double, x + y, Add)
+WASM_SIMD_OP_BIN(f64x2Sub,  f64x2_sub,  double, x - y, Sub)
+WASM_SIMD_OP_BIN(f64x2Mul,  f64x2_mul,  double, x * y, Mul)
+WASM_SIMD_OP_BIN(f64x2Div,  f64x2_div,  double, x / y, Div)
+WASM_SIMD_OP_BIN(f64x2Min,  f64x2_min,  double, refFMin(x, y), wasmMin)
+WASM_SIMD_OP_BIN(f64x2Max,  f64x2_max,  double, refFMax(x, y), wasmMax)
+WASM_SIMD_OP_BIN(f64x2PMin, f64x2_pmin, double, refFPMin(x, y), wasmPMin)
+WASM_SIMD_OP_BIN(f64x2PMax, f64x2_pmax, double, refFPMax(x, y), wasmPMax)
+
+// ── The conversions (SIMD-L4, second half) ─────────────────────────────────
+// Two shapes, because wasm's conversions do not all preserve the lane count:
+//
+//   * `CONVERT1` is the one-vector-in, one-out shape, and it reads the operand's
+//     *output*-lane-count lanes — which is exactly what `convert_low` and
+//     `promote_low` need, their output being shorter than their input.
+//   * `EXPAND` is its mirror: the output is *wider* than the input, and the lanes
+//     the conversion does not fill are zero (the `_zero` in those op names). The
+//     library leaves those lanes undefined, so the shape zeroes them.
+//
+// Both name their library expression *completely* — unlike the `hn::`-prefixed
+// shapes above — because the saturating conversions need a helper of ours, and
+// the `_zero` forms need a select around it.
+WASM_SIMD_OP_CONVERT1(i32x4TruncSatF32x4S,   i32x4_trunc_sat_f32x4_s,   float,    int32_t,  refTruncSat<int32_t>(x),  hn::ConvertTo(dout, wasmNoNaN(din, v)))
+WASM_SIMD_OP_CONVERT1(i32x4TruncSatF32x4U,   i32x4_trunc_sat_f32x4_u,   float,    uint32_t, refTruncSat<uint32_t>(x), hn::ConvertTo(dout, wasmNoNaN(din, v)))
+WASM_SIMD_OP_CONVERT1(f32x4ConvertI32x4S,    f32x4_convert_i32x4_s,     int32_t,  float,    x, hn::ConvertTo(dout, v))
+WASM_SIMD_OP_CONVERT1(f32x4ConvertI32x4U,    f32x4_convert_i32x4_u,     uint32_t, float,    x, hn::ConvertTo(dout, v))
+WASM_SIMD_OP_CONVERT1(f64x2ConvertLowI32x4S, f64x2_convert_low_i32x4_s, int32_t,  double,   x, hn::PromoteLowerTo(dout, v))
+WASM_SIMD_OP_CONVERT1(f64x2ConvertLowI32x4U, f64x2_convert_low_i32x4_u, uint32_t, double,   x, hn::PromoteLowerTo(dout, v))
+WASM_SIMD_OP_CONVERT1(f64x2PromoteLowF32x4,  f64x2_promote_low_f32x4,   float,    double,   x, hn::PromoteLowerTo(dout, v))
+
+// These two are `FORWARD`: the vector TU delegates them to the reference rather
+// than vectorising. The library has no *truncating* float64→int32 conversion
+// at all (only a rounding same-width one), so a hand-rolled path here would be
+// a second implementation of the spec rather than a mapping onto the library —
+// exactly the case the ownership rule in §6.5 reserves delegation for.
+WASM_SIMD_OP_FORWARD(i32x4TruncSatF64x2SZero, i32x4_trunc_sat_f64x2_s_zero, double, int32_t,  refTruncSat<int32_t>(x),  hn::Combine(dout, hn::Zero(dhalf), hn::ConvertTo(dhalf, wasmNoNaN(din, v))))
+WASM_SIMD_OP_FORWARD(i32x4TruncSatF64x2UZero, i32x4_trunc_sat_f64x2_u_zero, double, uint32_t, refTruncSat<uint32_t>(x), hn::Combine(dout, hn::Zero(dhalf), hn::ConvertTo(dhalf, wasmNoNaN(din, v))))
+WASM_SIMD_OP_EXPAND(f32x4DemoteF64x2Zero,    f32x4_demote_f64x2_zero,       double, float,    x, hn::Combine(dout, hn::Zero(dhalf), hn::DemoteTo(dhalf, v)))
+
 // ── Undo the defaults from the top of this file ────────────────────────────
 // Only if some were created; the includer has already undone its own, so undoing
 // the rest is what restores the state a second inclusion should see.
@@ -302,4 +415,9 @@ WASM_SIMD_OP_NARROW(i16x8NarrowI32x4U, i16x8_narrow_i32x4_u, int32_t, uint16_t, 
 #undef WASM_SIMD_OP_WIDEN2
 #undef WASM_SIMD_OP_PAIRWISE2
 #undef WASM_SIMD_OP_NARROW
+#undef WASM_SIMD_OP_WIDEN1H
+#undef WASM_SIMD_OP_WIDEN2H
+#undef WASM_SIMD_OP_CONVERT1
+#undef WASM_SIMD_OP_EXPAND
+#undef WASM_SIMD_OP_FORWARD
 #endif

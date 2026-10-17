@@ -499,12 +499,14 @@ Current modules:
 | `simd_load_store.wat` | the 22 memory ops against a real linear memory: unaligned `v128.load`, widening loads, broadcasts, zero-extending loads, lane load/store (incl. the "only one lane is written" check) | `simd: memory loads and stores run through the JIT` |
 | `simd_shuffle.wat` | `i8x16.shuffle`'s two-operand mapping (Y4) and `i8x16.swizzle`'s `>= 16 → 0` rule (Y3), pinned at indices 16/127/128/255 | `simd: shuffle and swizzle run through the JIT` |
 | `simd_arith_i.wat` | the integer surface (SIMD-L3): comparisons in both signednesses, `min`/`max`, `add`/`sub`/`mul`, `neg`/`abs`, shifts with counts `≥` the lane width, saturating add/sub, `avgr_u`, `popcnt`, `q15mulr_sat_s`, the reductions `all_true`/`any_true`/`bitmask`, and the width-changing family (`extend`/`extmul` `_low` vs `_high`, `extadd_pairwise`, `dot`, `narrow`). 67 exports, every expected value cross-checked against an independent engine | `simd: integer arithmetic and comparisons run through the JIT` |
+| `simd_arith_f.wat` | the float surface (SIMD-L4): comparisons (incl. the unordered `ne`), `add`/`sub`/`mul`/`div`, `abs`/`neg`/`sqrt`, `ceil`/`floor`/`trunc`/`nearest`, and `min`/`max`/`pmin`/`pmax` with the `±0` and NaN rules (Y1), for `f32x4` and `f64x2`. 32 exports, projected as **bit patterns** (`i32.reinterpret_f32`) so a NaN's payload and a zero's sign reach the assertions; every value read off V8 | `simd: float arithmetic and comparisons run through the JIT` |
+| `simd_convert.wat` | the conversions (SIMD-L4): `trunc_sat` at its ends (NaN, ±2^31, 2^32 and the largest value below it), `convert`, `convert_low`, `promote`, and `demote`/`trunc_sat_f64x2_*_zero` with marker lanes proving the unfilled lanes are zero. 19 exports, all read off V8; two of them are `FORWARD`ed to the reference, so this case is their only conformance evidence | `simd: the float/int conversions run through the JIT` |
 
-Measured after SIMD-L3:
+Measured after SIMD-L4:
 
 ```bash
-./WasmJit 'simd*'      # 16 cases, 2659 assertions, all passing
-./WasmJit              # 102 cases, 4196 assertions, all passing (99 / 2567 after L3's first half)
+./WasmJit 'simd*'      # 19 cases, 5884 assertions, all passing
+./WasmJit              # 105 cases, 7421 assertions, all passing (104 / 7246 after L4's float half)
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed

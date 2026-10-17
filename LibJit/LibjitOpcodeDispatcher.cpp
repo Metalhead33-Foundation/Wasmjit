@@ -4450,42 +4450,18 @@ void OpcodeDispatcher::dispatchI32x4LeS() { emitSimdBinaryHelper(reinterpret_cas
 void OpcodeDispatcher::dispatchI32x4LeU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_le_u)); }
 void OpcodeDispatcher::dispatchI32x4GeS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_ge_s)); }
 void OpcodeDispatcher::dispatchI32x4GeU() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i32x4_ge_u)); }
-void OpcodeDispatcher::dispatchF32x4Eq() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4Ne() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4Lt() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4Gt() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4Le() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4Ge() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2Eq() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2Ne() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2Lt() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2Gt() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2Le() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2Ge() {
-	notImplemented(__func__);
-}
+void OpcodeDispatcher::dispatchF32x4Eq() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f32x4_eq)); }
+void OpcodeDispatcher::dispatchF32x4Ne() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f32x4_ne)); }
+void OpcodeDispatcher::dispatchF32x4Lt() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f32x4_lt)); }
+void OpcodeDispatcher::dispatchF32x4Gt() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f32x4_gt)); }
+void OpcodeDispatcher::dispatchF32x4Le() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f32x4_le)); }
+void OpcodeDispatcher::dispatchF32x4Ge() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f32x4_ge)); }
+void OpcodeDispatcher::dispatchF64x2Eq() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f64x2_eq)); }
+void OpcodeDispatcher::dispatchF64x2Ne() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f64x2_ne)); }
+void OpcodeDispatcher::dispatchF64x2Lt() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f64x2_lt)); }
+void OpcodeDispatcher::dispatchF64x2Gt() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f64x2_gt)); }
+void OpcodeDispatcher::dispatchF64x2Le() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f64x2_le)); }
+void OpcodeDispatcher::dispatchF64x2Ge() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f64x2_ge)); }
 // Bitwise ops are whole-vector, so they are the shape `callSimdOutHelper` exists
 // for: pop the operands, pass their addresses, write into a fresh slot. The
 // helpers are pure and never trap (docs/SIMD_LIBJIT.md §6.3).
@@ -4598,126 +4574,46 @@ void OpcodeDispatcher::dispatchI64x2ExtMulLowI32x4S() { emitSimdBinaryHelper(rei
 void OpcodeDispatcher::dispatchI64x2ExtMulHighI32x4S() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i64x2_extmul_high_i32x4_s)); }
 void OpcodeDispatcher::dispatchI64x2ExtMulLowI32x4U() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i64x2_extmul_low_i32x4_u)); }
 void OpcodeDispatcher::dispatchI64x2ExtMulHighI32x4U() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i64x2_extmul_high_i32x4_u)); }
-void OpcodeDispatcher::dispatchF32x4Ceil() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4Floor() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4Trunc() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4Nearest() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4Abs() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4Neg() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4Sqrt() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4Add() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4Sub() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4Mul() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4Div() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4Min() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4Max() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4PMin() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4PMax() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2Ceil() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2Floor() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2Trunc() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2Nearest() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2Abs() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2Neg() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2Sqrt() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2Add() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2Sub() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2Mul() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2Div() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2Min() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2Max() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2PMin() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2PMax() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4TruncSatF32x4S() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4TruncSatF32x4U() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4ConvertI32x4S() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4ConvertI32x4U() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4TruncSatF64x2SZero() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32x4TruncSatF64x2UZero() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2ConvertLowI32x4S() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2ConvertLowI32x4U() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF32x4DemoteF64x2Zero() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchF64x2PromoteLowF32x4() {
-	notImplemented(__func__);
-}
+void OpcodeDispatcher::dispatchF32x4Ceil() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f32x4_ceil)); }
+void OpcodeDispatcher::dispatchF32x4Floor() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f32x4_floor)); }
+void OpcodeDispatcher::dispatchF32x4Trunc() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f32x4_trunc)); }
+void OpcodeDispatcher::dispatchF32x4Nearest() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f32x4_nearest)); }
+void OpcodeDispatcher::dispatchF32x4Abs() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f32x4_abs)); }
+void OpcodeDispatcher::dispatchF32x4Neg() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f32x4_neg)); }
+void OpcodeDispatcher::dispatchF32x4Sqrt() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f32x4_sqrt)); }
+void OpcodeDispatcher::dispatchF32x4Add() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f32x4_add)); }
+void OpcodeDispatcher::dispatchF32x4Sub() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f32x4_sub)); }
+void OpcodeDispatcher::dispatchF32x4Mul() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f32x4_mul)); }
+void OpcodeDispatcher::dispatchF32x4Div() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f32x4_div)); }
+void OpcodeDispatcher::dispatchF32x4Min() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f32x4_min)); }
+void OpcodeDispatcher::dispatchF32x4Max() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f32x4_max)); }
+void OpcodeDispatcher::dispatchF32x4PMin() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f32x4_pmin)); }
+void OpcodeDispatcher::dispatchF32x4PMax() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f32x4_pmax)); }
+void OpcodeDispatcher::dispatchF64x2Ceil() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f64x2_ceil)); }
+void OpcodeDispatcher::dispatchF64x2Floor() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f64x2_floor)); }
+void OpcodeDispatcher::dispatchF64x2Trunc() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f64x2_trunc)); }
+void OpcodeDispatcher::dispatchF64x2Nearest() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f64x2_nearest)); }
+void OpcodeDispatcher::dispatchF64x2Abs() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f64x2_abs)); }
+void OpcodeDispatcher::dispatchF64x2Neg() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f64x2_neg)); }
+void OpcodeDispatcher::dispatchF64x2Sqrt() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f64x2_sqrt)); }
+void OpcodeDispatcher::dispatchF64x2Add() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f64x2_add)); }
+void OpcodeDispatcher::dispatchF64x2Sub() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f64x2_sub)); }
+void OpcodeDispatcher::dispatchF64x2Mul() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f64x2_mul)); }
+void OpcodeDispatcher::dispatchF64x2Div() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f64x2_div)); }
+void OpcodeDispatcher::dispatchF64x2Min() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f64x2_min)); }
+void OpcodeDispatcher::dispatchF64x2Max() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f64x2_max)); }
+void OpcodeDispatcher::dispatchF64x2PMin() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f64x2_pmin)); }
+void OpcodeDispatcher::dispatchF64x2PMax() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f64x2_pmax)); }
+void OpcodeDispatcher::dispatchI32x4TruncSatF32x4S() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i32x4_trunc_sat_f32x4_s)); }
+void OpcodeDispatcher::dispatchI32x4TruncSatF32x4U() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i32x4_trunc_sat_f32x4_u)); }
+void OpcodeDispatcher::dispatchF32x4ConvertI32x4S() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f32x4_convert_i32x4_s)); }
+void OpcodeDispatcher::dispatchF32x4ConvertI32x4U() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f32x4_convert_i32x4_u)); }
+void OpcodeDispatcher::dispatchI32x4TruncSatF64x2SZero() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i32x4_trunc_sat_f64x2_s_zero)); }
+void OpcodeDispatcher::dispatchI32x4TruncSatF64x2UZero() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i32x4_trunc_sat_f64x2_u_zero)); }
+void OpcodeDispatcher::dispatchF64x2ConvertLowI32x4S() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f64x2_convert_low_i32x4_s)); }
+void OpcodeDispatcher::dispatchF64x2ConvertLowI32x4U() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f64x2_convert_low_i32x4_u)); }
+void OpcodeDispatcher::dispatchF32x4DemoteF64x2Zero() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f32x4_demote_f64x2_zero)); }
+void OpcodeDispatcher::dispatchF64x2PromoteLowF32x4() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f64x2_promote_low_f32x4)); }
 void OpcodeDispatcher::dispatchMemoryAtomicNotify(WASM::MemArg arg) {
 	notImplemented(__func__);
 }
