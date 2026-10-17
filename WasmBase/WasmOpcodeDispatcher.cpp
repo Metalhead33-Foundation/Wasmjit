@@ -631,6 +631,28 @@ void WASM::OpcodeDispatcher::dispatchPrefixSIMD(FastMemReader& stream, SIMDOpcod
 		case SIMDOpcode::F32x4DemoteF64x2Zero:      { dispatchF32x4DemoteF64x2Zero();      break; }
 		case SIMDOpcode::F64x2PromoteLowF32x4:      { dispatchF64x2PromoteLowF32x4();      break; }
 
+		// Relaxed SIMD - no immediates
+		case SIMDOpcode::I8x16RelaxedSwizzle: { dispatchI8x16RelaxedSwizzle(); break; }
+		case SIMDOpcode::I32x4RelaxedTruncF32x4S: { dispatchI32x4RelaxedTruncF32x4S(); break; }
+		case SIMDOpcode::I32x4RelaxedTruncF32x4U: { dispatchI32x4RelaxedTruncF32x4U(); break; }
+		case SIMDOpcode::I32x4RelaxedTruncF64x2SZero: { dispatchI32x4RelaxedTruncF64x2SZero(); break; }
+		case SIMDOpcode::I32x4RelaxedTruncF64x2UZero: { dispatchI32x4RelaxedTruncF64x2UZero(); break; }
+		case SIMDOpcode::F32x4RelaxedMadd: { dispatchF32x4RelaxedMadd(); break; }
+		case SIMDOpcode::F32x4RelaxedNmadd: { dispatchF32x4RelaxedNmadd(); break; }
+		case SIMDOpcode::F64x2RelaxedMadd: { dispatchF64x2RelaxedMadd(); break; }
+		case SIMDOpcode::F64x2RelaxedNmadd: { dispatchF64x2RelaxedNmadd(); break; }
+		case SIMDOpcode::I8x16RelaxedLaneselect: { dispatchI8x16RelaxedLaneselect(); break; }
+		case SIMDOpcode::I16x8RelaxedLaneselect: { dispatchI16x8RelaxedLaneselect(); break; }
+		case SIMDOpcode::I32x4RelaxedLaneselect: { dispatchI32x4RelaxedLaneselect(); break; }
+		case SIMDOpcode::I64x2RelaxedLaneselect: { dispatchI64x2RelaxedLaneselect(); break; }
+		case SIMDOpcode::F32x4RelaxedMin: { dispatchF32x4RelaxedMin(); break; }
+		case SIMDOpcode::F32x4RelaxedMax: { dispatchF32x4RelaxedMax(); break; }
+		case SIMDOpcode::F64x2RelaxedMin: { dispatchF64x2RelaxedMin(); break; }
+		case SIMDOpcode::F64x2RelaxedMax: { dispatchF64x2RelaxedMax(); break; }
+		case SIMDOpcode::I16x8RelaxedQ15MulRS: { dispatchI16x8RelaxedQ15MulRS(); break; }
+		case SIMDOpcode::I16x8RelaxedDotI8x16I7x16S: { dispatchI16x8RelaxedDotI8x16I7x16S(); break; }
+		case SIMDOpcode::I32x4RelaxedDotI8x16I7x16AddS: { dispatchI32x4RelaxedDotI8x16I7x16AddS(); break; }
+
 		default:
 			throw std::runtime_error("Invalid or unsupported 0xFD SIMD sub-opcode");
 	}

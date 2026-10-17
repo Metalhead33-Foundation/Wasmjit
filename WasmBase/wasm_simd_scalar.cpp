@@ -821,6 +821,128 @@ TOut satTo(TIn x)
 #undef WASM_SIMD_OP_PAIRWISE2
 #undef WASM_SIMD_OP_NARROW
 
+// ── Relaxed SIMD (docs/proposals/SIMD.md SD5) ──────────────────────────────
+// Where the relaxed instruction permits the strict result, the reference *is* the
+// strict helper: `relaxed_swizzle` may zero out-of-range lanes, and every
+// `relaxed_laneselect` may be the bitwise `v128.bitselect`.
+
+void i8x16RelaxedSwizzle(const uint8_t* a, const uint8_t* b, uint8_t* out)
+{
+	swizzleBytes(a, b, out);
+}
+
+void i8x16RelaxedLaneselect(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out)
+{
+	bitselectBits(a, b, c, out);
+}
+
+void i16x8RelaxedLaneselect(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out)
+{
+	bitselectBits(a, b, c, out);
+}
+
+void i32x4RelaxedLaneselect(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out)
+{
+	bitselectBits(a, b, c, out);
+}
+
+void i64x2RelaxedLaneselect(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out)
+{
+	bitselectBits(a, b, c, out);
+}
+
+// `relaxed_madd(a, b, c) = a * b + c` and `relaxed_nmadd = c - a * b`, with
+// *either* rounding permitted (fused or not). SD5 picks unfused — which is also
+// what the vector path emits, since a Highway multiply and add cannot be
+// contracted — so the two agree bit for bit. The `volatile` hop is what stops the
+// *compiler* from contracting this side into an FMA: the spec would allow it, but
+// the differential could then not compare the two exactly.
+template <typename T>
+T relaxedMadd(T a, T b, T c)
+{
+	volatile T product = static_cast<T>(a * b);
+	return static_cast<T>(product + c);
+}
+
+template <typename T>
+T relaxedNmadd(T a, T b, T c)
+{
+	volatile T product = static_cast<T>(a * b);
+	return static_cast<T>(c - product);
+}
+
+template <typename T>
+void relaxedMaddLanes(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out)
+{
+	for (uint32_t i = 0; i < 16 / sizeof(T); ++i)
+		storeLane<T>(out, i, relaxedMadd<T>(loadLane<T>(a, i), loadLane<T>(b, i), loadLane<T>(c, i)));
+}
+
+template <typename T>
+void relaxedNmaddLanes(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out)
+{
+	for (uint32_t i = 0; i < 16 / sizeof(T); ++i)
+		storeLane<T>(out, i, relaxedNmadd<T>(loadLane<T>(a, i), loadLane<T>(b, i), loadLane<T>(c, i)));
+}
+
+void f32x4RelaxedMadd(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out)
+{
+	relaxedMaddLanes<float>(a, b, c, out);
+}
+
+void f32x4RelaxedNmadd(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out)
+{
+	relaxedNmaddLanes<float>(a, b, c, out);
+}
+
+void f64x2RelaxedMadd(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out)
+{
+	relaxedMaddLanes<double>(a, b, c, out);
+}
+
+void f64x2RelaxedNmadd(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out)
+{
+	relaxedNmaddLanes<double>(a, b, c, out);
+}
+
+// The relaxed dots: adjacent products of a signed i8 against an unsigned byte,
+// summed in pairs. The spec leaves two things open and SD5 takes the same choice
+// on both sides of the boundary, so the differential can be exact: a byte of `b`
+// with its high bit set is read as *unsigned* (one of the two permitted readings),
+// and the pair sum is *saturated* to i16 rather than wrapped (the other permitted
+// choice, and what the hardware form does).
+template <typename TPair>
+TPair relaxedDotPair(const uint8_t* a, const uint8_t* b, uint32_t i)
+{
+	const int32_t p0 = static_cast<int8_t>(a[2 * i]) * static_cast<int32_t>(b[2 * i]);
+	const int32_t p1 = static_cast<int8_t>(a[2 * i + 1]) * static_cast<int32_t>(b[2 * i + 1]);
+	const int32_t sum = p0 + p1;
+	// i16 saturation, in `int` so no intermediate can overflow.
+	const int32_t clamped = sum > 32767 ? 32767 : (sum < -32768 ? -32768 : sum);
+	return static_cast<TPair>(clamped);
+}
+
+void i16x8RelaxedDotI8x16I7x16S(const uint8_t* a, const uint8_t* b, uint8_t* out)
+{
+	for (uint32_t i = 0; i < 8; ++i)
+		storeLane<int16_t>(out, i, relaxedDotPair<int16_t>(a, b, i));
+}
+
+void i32x4RelaxedDotI8x16I7x16AddS(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out)
+{
+	int16_t pairs[8];
+	for (uint32_t i = 0; i < 8; ++i)
+		pairs[i] = relaxedDotPair<int16_t>(a, b, i);
+	for (uint32_t i = 0; i < 4; ++i) {
+		// The pair sums fit i32 exactly; the accumulation wraps, as wasm's i32 add
+		// does, which is why it goes through unsigned arithmetic.
+		const uint32_t sum = static_cast<uint32_t>(static_cast<int32_t>(pairs[2 * i]))
+				+ static_cast<uint32_t>(static_cast<int32_t>(pairs[2 * i + 1]))
+				+ static_cast<uint32_t>(laneU32(c, i));
+		storeU32(out, i, sum);
+	}
+}
+
 } // namespace simd_scalar
 } // namespace WASM
 

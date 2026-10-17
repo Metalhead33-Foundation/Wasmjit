@@ -727,6 +727,28 @@ protected:
 	void dispatchF64x2ConvertLowI32x4U() override;
 	void dispatchF32x4DemoteF64x2Zero() override;
 	void dispatchF64x2PromoteLowF32x4() override;
+
+	// Relaxed SIMD (0x100-0x113): SD5 picks the strict result for each.
+	void dispatchI8x16RelaxedSwizzle() override;
+	void dispatchI32x4RelaxedTruncF32x4S() override;
+	void dispatchI32x4RelaxedTruncF32x4U() override;
+	void dispatchI32x4RelaxedTruncF64x2SZero() override;
+	void dispatchI32x4RelaxedTruncF64x2UZero() override;
+	void dispatchF32x4RelaxedMadd() override;
+	void dispatchF32x4RelaxedNmadd() override;
+	void dispatchF64x2RelaxedMadd() override;
+	void dispatchF64x2RelaxedNmadd() override;
+	void dispatchI8x16RelaxedLaneselect() override;
+	void dispatchI16x8RelaxedLaneselect() override;
+	void dispatchI32x4RelaxedLaneselect() override;
+	void dispatchI64x2RelaxedLaneselect() override;
+	void dispatchF32x4RelaxedMin() override;
+	void dispatchF32x4RelaxedMax() override;
+	void dispatchF64x2RelaxedMin() override;
+	void dispatchF64x2RelaxedMax() override;
+	void dispatchI16x8RelaxedQ15MulRS() override;
+	void dispatchI16x8RelaxedDotI8x16I7x16S() override;
+	void dispatchI32x4RelaxedDotI8x16I7x16AddS() override;
 	void dispatchMemoryAtomicNotify(WASM::MemArg arg) override;
 	void dispatchMemoryAtomicWait32(WASM::MemArg arg) override;
 	void dispatchMemoryAtomicWait64(WASM::MemArg arg) override;

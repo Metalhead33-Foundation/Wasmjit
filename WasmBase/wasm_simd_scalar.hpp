@@ -156,6 +156,23 @@ void swizzleBytes(const uint8_t* a, const uint8_t* b, uint8_t* out);
 #undef WASM_SIMD_OP_WIDEN1H
 #undef WASM_SIMD_OP_PAIRWISE
 
+// ── Relaxed SIMD (docs/proposals/SIMD.md SD5) ──────────────────────────────
+// SD5's rule is to choose the *strict* instruction's result wherever the relaxed
+// proposal permits it, so most of these are the strict helpers under a relaxed
+// name. The ones that are not (`madd`/`nmadd`, the two dots) get their own
+// reference here.
+void i8x16RelaxedSwizzle(const uint8_t* a, const uint8_t* b, uint8_t* out);
+void i8x16RelaxedLaneselect(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out);
+void i16x8RelaxedLaneselect(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out);
+void i32x4RelaxedLaneselect(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out);
+void i64x2RelaxedLaneselect(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out);
+void f32x4RelaxedMadd(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out);
+void f32x4RelaxedNmadd(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out);
+void f64x2RelaxedMadd(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out);
+void f64x2RelaxedNmadd(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out);
+void i16x8RelaxedDotI8x16I7x16S(const uint8_t* a, const uint8_t* b, uint8_t* out);
+void i32x4RelaxedDotI8x16I7x16AddS(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out);
+
 } // namespace simd_scalar
 } // namespace WASM
 
@@ -265,6 +282,19 @@ void wasm_i8x16_swizzle(const void* a, const void* b, void* out);
 #undef WASM_SIMD_OP_WIDEN1
 #undef WASM_SIMD_OP_WIDEN1H
 #undef WASM_SIMD_OP_PAIRWISE
+
+// Relaxed SIMD (0x100-0x113), the same three C signatures as above.
+void wasm_i8x16_relaxed_swizzle(const void* a, const void* b, void* out);
+void wasm_i8x16_relaxed_laneselect(const void* a, const void* b, const void* c, void* out);
+void wasm_i16x8_relaxed_laneselect(const void* a, const void* b, const void* c, void* out);
+void wasm_i32x4_relaxed_laneselect(const void* a, const void* b, const void* c, void* out);
+void wasm_i64x2_relaxed_laneselect(const void* a, const void* b, const void* c, void* out);
+void wasm_f32x4_relaxed_madd(const void* a, const void* b, const void* c, void* out);
+void wasm_f32x4_relaxed_nmadd(const void* a, const void* b, const void* c, void* out);
+void wasm_f64x2_relaxed_madd(const void* a, const void* b, const void* c, void* out);
+void wasm_f64x2_relaxed_nmadd(const void* a, const void* b, const void* c, void* out);
+void wasm_i16x8_relaxed_dot_i8x16_i7x16_s(const void* a, const void* b, void* out);
+void wasm_i32x4_relaxed_dot_i8x16_i7x16_add_s(const void* a, const void* b, const void* c, void* out);
 }
 
 #endif // WASMSIMDSCALAR_HPP

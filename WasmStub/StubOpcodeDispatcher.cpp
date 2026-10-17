@@ -1986,6 +1986,86 @@ void OpcodeDispatcher::dispatchF64x2PromoteLowF32x4()
 {
 	*stream << '(' << "F64x2PromoteLowF32x4" << ')' << std::endl;
 }
+void OpcodeDispatcher::dispatchI8x16RelaxedSwizzle()
+{
+	*stream << '(' << "I8x16RelaxedSwizzle" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchI32x4RelaxedTruncF32x4S()
+{
+	*stream << '(' << "I32x4RelaxedTruncF32x4S" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchI32x4RelaxedTruncF32x4U()
+{
+	*stream << '(' << "I32x4RelaxedTruncF32x4U" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchI32x4RelaxedTruncF64x2SZero()
+{
+	*stream << '(' << "I32x4RelaxedTruncF64x2SZero" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchI32x4RelaxedTruncF64x2UZero()
+{
+	*stream << '(' << "I32x4RelaxedTruncF64x2UZero" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchF32x4RelaxedMadd()
+{
+	*stream << '(' << "F32x4RelaxedMadd" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchF32x4RelaxedNmadd()
+{
+	*stream << '(' << "F32x4RelaxedNmadd" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchF64x2RelaxedMadd()
+{
+	*stream << '(' << "F64x2RelaxedMadd" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchF64x2RelaxedNmadd()
+{
+	*stream << '(' << "F64x2RelaxedNmadd" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchI8x16RelaxedLaneselect()
+{
+	*stream << '(' << "I8x16RelaxedLaneselect" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchI16x8RelaxedLaneselect()
+{
+	*stream << '(' << "I16x8RelaxedLaneselect" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchI32x4RelaxedLaneselect()
+{
+	*stream << '(' << "I32x4RelaxedLaneselect" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchI64x2RelaxedLaneselect()
+{
+	*stream << '(' << "I64x2RelaxedLaneselect" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchF32x4RelaxedMin()
+{
+	*stream << '(' << "F32x4RelaxedMin" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchF32x4RelaxedMax()
+{
+	*stream << '(' << "F32x4RelaxedMax" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchF64x2RelaxedMin()
+{
+	*stream << '(' << "F64x2RelaxedMin" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchF64x2RelaxedMax()
+{
+	*stream << '(' << "F64x2RelaxedMax" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchI16x8RelaxedQ15MulRS()
+{
+	*stream << '(' << "I16x8RelaxedQ15MulRS" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchI16x8RelaxedDotI8x16I7x16S()
+{
+	*stream << '(' << "I16x8RelaxedDotI8x16I7x16S" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchI32x4RelaxedDotI8x16I7x16AddS()
+{
+	*stream << '(' << "I32x4RelaxedDotI8x16I7x16AddS" << ')' << std::endl;
+}
 void OpcodeDispatcher::dispatchMemoryAtomicNotify(WASM::MemArg arg)
 {
 	*stream << '(' << "MemoryAtomicNotify" << ' ' << '(' << arg << ')' << std::endl;

@@ -75,6 +75,89 @@ extern "C" void wasm_v128_bitselect(const void* a, const void* b, const void* c,
 										static_cast<const uint8_t*>(c), static_cast<uint8_t*>(out));
 }
 
+// ── Relaxed SIMD (0x100-0x113) ─────────────────────────────────────────────
+// Five of these are the *strict* entry points under a relaxed name, because the
+// proposal permits the strict result: `relaxed_swizzle` may zero out-of-range
+// lanes and every `relaxed_laneselect` may be the bitwise `v128.bitselect`. The
+// rest dispatch to per-target bodies of their own, like every other op.
+extern "C" void wasm_i8x16_relaxed_swizzle(const void* a, const void* b, void* out)
+{
+	wasm_i8x16_swizzle(a, b, out);
+}
+
+extern "C" void wasm_i8x16_relaxed_laneselect(const void* a, const void* b, const void* c,
+											  void* out)
+{
+	wasm_v128_bitselect(a, b, c, out);
+}
+
+extern "C" void wasm_i16x8_relaxed_laneselect(const void* a, const void* b, const void* c,
+											  void* out)
+{
+	wasm_v128_bitselect(a, b, c, out);
+}
+
+extern "C" void wasm_i32x4_relaxed_laneselect(const void* a, const void* b, const void* c,
+											  void* out)
+{
+	wasm_v128_bitselect(a, b, c, out);
+}
+
+extern "C" void wasm_i64x2_relaxed_laneselect(const void* a, const void* b, const void* c,
+											  void* out)
+{
+	wasm_v128_bitselect(a, b, c, out);
+}
+
+HWY_EXPORT(f32x4RelaxedMadd);
+HWY_EXPORT(f32x4RelaxedNmadd);
+HWY_EXPORT(f64x2RelaxedMadd);
+HWY_EXPORT(f64x2RelaxedNmadd);
+HWY_EXPORT(relaxedDotI8x16I7x16S);
+HWY_EXPORT(relaxedDotI8x16I7x16AddS);
+
+extern "C" void wasm_f32x4_relaxed_madd(const void* a, const void* b, const void* c, void* out)
+{
+	HWY_DYNAMIC_DISPATCH(f32x4RelaxedMadd)(static_cast<const uint8_t*>(a),
+										   static_cast<const uint8_t*>(b),
+										   static_cast<const uint8_t*>(c), static_cast<uint8_t*>(out));
+}
+
+extern "C" void wasm_f32x4_relaxed_nmadd(const void* a, const void* b, const void* c, void* out)
+{
+	HWY_DYNAMIC_DISPATCH(f32x4RelaxedNmadd)(static_cast<const uint8_t*>(a),
+											static_cast<const uint8_t*>(b),
+											static_cast<const uint8_t*>(c), static_cast<uint8_t*>(out));
+}
+
+extern "C" void wasm_f64x2_relaxed_madd(const void* a, const void* b, const void* c, void* out)
+{
+	HWY_DYNAMIC_DISPATCH(f64x2RelaxedMadd)(static_cast<const uint8_t*>(a),
+										   static_cast<const uint8_t*>(b),
+										   static_cast<const uint8_t*>(c), static_cast<uint8_t*>(out));
+}
+
+extern "C" void wasm_f64x2_relaxed_nmadd(const void* a, const void* b, const void* c, void* out)
+{
+	HWY_DYNAMIC_DISPATCH(f64x2RelaxedNmadd)(static_cast<const uint8_t*>(a),
+											static_cast<const uint8_t*>(b),
+											static_cast<const uint8_t*>(c), static_cast<uint8_t*>(out));
+}
+
+extern "C" void wasm_i16x8_relaxed_dot_i8x16_i7x16_s(const void* a, const void* b, void* out)
+{
+	HWY_DYNAMIC_DISPATCH(relaxedDotI8x16I7x16S)(static_cast<const uint8_t*>(a),
+											   static_cast<const uint8_t*>(b), static_cast<uint8_t*>(out));
+}
+
+extern "C" void wasm_i32x4_relaxed_dot_i8x16_i7x16_add_s(const void* a, const void* b,
+														 const void* c, void* out)
+{
+	HWY_DYNAMIC_DISPATCH(relaxedDotI8x16I7x16AddS)(static_cast<const uint8_t*>(a),
+												  static_cast<const uint8_t*>(b),
+												  static_cast<const uint8_t*>(c), static_cast<uint8_t*>(out));
+}
+
 // ── splats and whole-vector memory moves: also vector-path ops ─────────────
 HWY_EXPORT(splat8);
 HWY_EXPORT(splat16);

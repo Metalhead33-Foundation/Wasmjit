@@ -634,6 +634,29 @@ enum class SIMDOpcode : uint32_t {
 	F64x2ConvertLowI32x4U       = 255,
 	F32x4DemoteF64x2Zero        = 94,
 	F64x2PromoteLowF32x4        = 95,
+
+	// Relaxed SIMD (docs/proposals/SIMD.md SD5): 0x100-0x113. The values are the
+	// wasm sub-opcodes, like the rest of this enum.
+	I8x16RelaxedSwizzle         = 256,
+	I32x4RelaxedTruncF32x4S     = 257,
+	I32x4RelaxedTruncF32x4U     = 258,
+	I32x4RelaxedTruncF64x2SZero = 259,
+	I32x4RelaxedTruncF64x2UZero = 260,
+	F32x4RelaxedMadd            = 261,
+	F32x4RelaxedNmadd           = 262,
+	F64x2RelaxedMadd            = 263,
+	F64x2RelaxedNmadd           = 264,
+	I8x16RelaxedLaneselect      = 265,
+	I16x8RelaxedLaneselect      = 266,
+	I32x4RelaxedLaneselect      = 267,
+	I64x2RelaxedLaneselect      = 268,
+	F32x4RelaxedMin             = 269,
+	F32x4RelaxedMax             = 270,
+	F64x2RelaxedMin             = 271,
+	F64x2RelaxedMax             = 272,
+	I16x8RelaxedQ15MulRS        = 273,
+	I16x8RelaxedDotI8x16I7x16S  = 274,
+	I32x4RelaxedDotI8x16I7x16AddS= 275,
 };
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, SIMDOpcode right) {
 	return left.writeLEB128_enum(right);

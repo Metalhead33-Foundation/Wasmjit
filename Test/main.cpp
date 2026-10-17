@@ -1892,6 +1892,37 @@ TEST_CASE("simd: shuffle and swizzle run through the JIT")
 	REQUIRE(WASM::callCallable<int32_t>(i32Export("swizzle_u8_6")) == 3);   // a[2]
 }
 
+TEST_CASE("simd relaxed: the hand-written ops run through the JIT")
+{
+	// The 9 relaxed ops that reuse a strict helper are op-list entries and are
+	// covered by the helper differential; the 11 that need their own shape are
+	// exercised here, through generated code rather than through the entry points.
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("simd_relaxed", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	const auto export_i32 = [&instance](const char* name) {
+		auto fn = instance.exportedFunction(name);
+		REQUIRE(fn.has_value());
+		return WASM::callCallable<int32_t>(*fn);
+	};
+	const auto export_f32 = [&instance](const char* name) {
+		auto fn = instance.exportedFunction(name);
+		REQUIRE(fn.has_value());
+		return WASM::callCallable<float>(*fn);
+	};
+
+	REQUIRE(export_i32("relaxed_swizzle_lane0") == 12);      // a[2]
+	REQUIRE(export_i32("relaxed_laneselect_lane0") == 1);    // mask picks a
+	REQUIRE(export_f32("relaxed_madd_lane0") == 7.0f);       // 2*3 + 1
+	REQUIRE(export_f32("relaxed_nmadd_lane0") == -5.0f);     // 1 - 2*3
+	REQUIRE(export_i32("relaxed_dot_lane2") == 20000);
+	REQUIRE(export_i32("relaxed_dot_sat_lane3") == 32767);   // 64770 saturates
+	REQUIRE(export_i32("relaxed_dot_add_lane0") == 140);     // 14 + 26 + 100
+}
+
 // One lane of a packed vector, as a float — used only to answer "is this lane a
 // NaN", which no bit comparison can answer portably.
 static bool simdLaneIsNaN(const uint8_t* p, size_t laneSize)
@@ -2091,6 +2122,84 @@ TEST_CASE("simd helpers: per-lane arithmetic and comparisons (differential)")
 		b = corners[(i + 1) % corners.size()];
 		pass = "float corner " + std::to_string(i);
 		runAll();
+	}
+}
+
+TEST_CASE("simd relaxed: the hand-written ops match their reference")
+{
+	// The relaxed instructions are not op-list entries — most are ternary, and the
+	// dots are pairwise — so this table is their coverage gate: every one of the 20
+	// sub-opcodes is either an op-list entry (the 9 that reuse a strict helper,
+	// covered by the case above) or listed here (the 11 below).
+	//
+	// Both columns are hand-picked readings the spec permits — unfused madd, the
+	// bitwise laneselect, the unsigned dot byte, the saturating dot pair — and the
+	// point of the case is that the reference and the vector path make the *same*
+	// choice, so the comparison can be exact rather than "one of N permitted".
+	using BinaryEntry = void (*)(const void*, const void*, void*);
+	using BinaryRef = void (*)(const uint8_t*, const uint8_t*, uint8_t*);
+	using TernaryEntry = void (*)(const void*, const void*, const void*, void*);
+	using TernaryRef = void (*)(const uint8_t*, const uint8_t*, const uint8_t*, uint8_t*);
+
+	struct BinaryOp { const char* name; BinaryEntry entry; BinaryRef ref; uint8_t laneSize; bool isFloat; };
+	struct TernaryOp { const char* name; TernaryEntry entry; TernaryRef ref; uint8_t laneSize; bool isFloat; };
+
+	static const BinaryOp kBinaryOps[] = {
+		{"relaxed_swizzle", &wasm_i8x16_relaxed_swizzle,
+		 &WASM::simd_scalar::i8x16RelaxedSwizzle, 1, false},
+		{"relaxed_dot_i8x16_i7x16_s", &wasm_i16x8_relaxed_dot_i8x16_i7x16_s,
+		 &WASM::simd_scalar::i16x8RelaxedDotI8x16I7x16S, 2, false},
+	};
+	static const TernaryOp kTernaryOps[] = {
+		{"relaxed_laneselect i8x16", &wasm_i8x16_relaxed_laneselect,
+		 &WASM::simd_scalar::i8x16RelaxedLaneselect, 1, false},
+		{"relaxed_laneselect i16x8", &wasm_i16x8_relaxed_laneselect,
+		 &WASM::simd_scalar::i16x8RelaxedLaneselect, 2, false},
+		{"relaxed_laneselect i32x4", &wasm_i32x4_relaxed_laneselect,
+		 &WASM::simd_scalar::i32x4RelaxedLaneselect, 4, false},
+		{"relaxed_laneselect i64x2", &wasm_i64x2_relaxed_laneselect,
+		 &WASM::simd_scalar::i64x2RelaxedLaneselect, 8, false},
+		{"relaxed_madd f32x4", &wasm_f32x4_relaxed_madd,
+		 &WASM::simd_scalar::f32x4RelaxedMadd, 4, true},
+		{"relaxed_nmadd f32x4", &wasm_f32x4_relaxed_nmadd,
+		 &WASM::simd_scalar::f32x4RelaxedNmadd, 4, true},
+		{"relaxed_madd f64x2", &wasm_f64x2_relaxed_madd,
+		 &WASM::simd_scalar::f64x2RelaxedMadd, 8, true},
+		{"relaxed_nmadd f64x2", &wasm_f64x2_relaxed_nmadd,
+		 &WASM::simd_scalar::f64x2RelaxedNmadd, 8, true},
+		{"relaxed_dot_i8x16_i7x16_add_s", &wasm_i32x4_relaxed_dot_i8x16_i7x16_add_s,
+		 &WASM::simd_scalar::i32x4RelaxedDotI8x16I7x16AddS, 4, false},
+	};
+	REQUIRE(sizeof(kBinaryOps) / sizeof(kBinaryOps[0]) == 2);
+	REQUIRE(sizeof(kTernaryOps) / sizeof(kTernaryOps[0]) == 9);
+
+	std::array<uint8_t, 16> a{};
+	std::array<uint8_t, 16> b{};
+	std::array<uint8_t, 16> c{};
+	std::array<uint8_t, 16> ref{};
+	std::array<uint8_t, 16> got{};
+	// The same high-bit-heavy palette as the op-list case: 0x80/0xFF are where a
+	// signedness mix-up and a saturation bug both show up, and *all* bits set is
+	// where an unsigned dot byte differs from a signed one.
+	static const uint8_t kInteresting[8] = {0x00, 0x01, 0x7F, 0x80, 0xFF, 0x81, 0x40, 0xC0};
+	for (uint32_t seed = 0; seed < 8; ++seed) {
+		for (size_t i = 0; i < a.size(); ++i) {
+			a[i] = kInteresting[i % 8];
+			b[i] = kInteresting[(i + 3 + seed) % 8];
+			c[i] = kInteresting[(i + 5 + seed) % 8];
+		}
+		for (const BinaryOp& op : kBinaryOps) {
+			INFO("seed " << seed << " binary op: " << op.name);
+			op.ref(a.data(), b.data(), ref.data());
+			op.entry(a.data(), b.data(), got.data());
+			REQUIRE(simdVectorsMatch(ref.data(), got.data(), op.laneSize, op.isFloat));
+		}
+		for (const TernaryOp& op : kTernaryOps) {
+			INFO("seed " << seed << " ternary op: " << op.name);
+			op.ref(a.data(), b.data(), c.data(), ref.data());
+			op.entry(a.data(), b.data(), c.data(), got.data());
+			REQUIRE(simdVectorsMatch(ref.data(), got.data(), op.laneSize, op.isFloat));
+		}
 	}
 }
 

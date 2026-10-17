@@ -399,6 +399,23 @@ WASM_SIMD_OP_FORWARD(i32x4TruncSatF64x2SZero, i32x4_trunc_sat_f64x2_s_zero, doub
 WASM_SIMD_OP_FORWARD(i32x4TruncSatF64x2UZero, i32x4_trunc_sat_f64x2_u_zero, double, uint32_t, refTruncSat<uint32_t>(x), hn::Combine(dout, hn::Zero(dhalf), hn::ConvertTo(dhalf, wasmNoNaN(din, v))))
 WASM_SIMD_OP_EXPAND(f32x4DemoteF64x2Zero,    f32x4_demote_f64x2_zero,       double, float,    x, hn::Combine(dout, hn::Zero(dhalf), hn::DemoteTo(dhalf, v)))
 
+// ── Relaxed SIMD, the strict-result half (docs/proposals/SIMD.md SD5) ───────
+// Every relaxed instruction permits its *strict* counterpart's result, so these
+// nine are not new semantics at all — they are the strict helpers under a
+// relaxed name. That is the whole SD5 strategy, and it is why they cost one line
+// each: `relaxed_trunc` is `trunc_sat`, `relaxed_min`/`max` are wasm's NaN rules,
+// and `relaxed_q15mulr_s` is the saturating form (whose one ambiguous input,
+// `INT16_MIN × INT16_MIN`, is allowed to saturate).
+WASM_SIMD_OP_CONVERT1(i32x4RelaxedTruncF32x4S, i32x4_relaxed_trunc_f32x4_s, float, int32_t,  refTruncSat<int32_t>(x),  hn::ConvertTo(dout, wasmNoNaN(din, v)))
+WASM_SIMD_OP_CONVERT1(i32x4RelaxedTruncF32x4U, i32x4_relaxed_trunc_f32x4_u, float, uint32_t, refTruncSat<uint32_t>(x), hn::ConvertTo(dout, wasmNoNaN(din, v)))
+WASM_SIMD_OP_FORWARD(i32x4RelaxedTruncF64x2SZero, i32x4_relaxed_trunc_f64x2_s_zero, double, int32_t,  refTruncSat<int32_t>(x),  unused)
+WASM_SIMD_OP_FORWARD(i32x4RelaxedTruncF64x2UZero, i32x4_relaxed_trunc_f64x2_u_zero, double, uint32_t, refTruncSat<uint32_t>(x), unused)
+WASM_SIMD_OP_BIN(f32x4RelaxedMin, f32x4_relaxed_min, float,  refFMin(x, y), wasmMin)
+WASM_SIMD_OP_BIN(f32x4RelaxedMax, f32x4_relaxed_max, float,  refFMax(x, y), wasmMax)
+WASM_SIMD_OP_BIN(f64x2RelaxedMin, f64x2_relaxed_min, double, refFMin(x, y), wasmMin)
+WASM_SIMD_OP_BIN(f64x2RelaxedMax, f64x2_relaxed_max, double, refFMax(x, y), wasmMax)
+WASM_SIMD_OP_BIN(i16x8RelaxedQ15MulRS, i16x8_relaxed_q15mulr_s, int16_t, q15mulr(x, y), satQ15)
+
 // ── Undo the defaults from the top of this file ────────────────────────────
 // Only if some were created; the includer has already undone its own, so undoing
 // the rest is what restores the state a second inclusion should see.

@@ -472,6 +472,18 @@ families the comparison is "any NaN in → canonical NaN out", never `==`.
 Run `./WasmJit 'simd helpers*' -s` to see the per-assertion vector dumps when a
 case fails (each `v128` is printed lane-wise in hex).
 
+**Relaxed SIMD is covered twice.** The nine relaxed ops that reuse a strict helper
+are op-list entries, so the differential above covers them for free. The eleven
+that need their own shape (ternary `madd`/`nmadd` and `laneselect`, the swizzle, the
+two pairwise dots) are not list entries and get a hand-written table in
+`simd relaxed: the hand-written ops match their reference` — entry point against
+reference function, eight byte patterns, bit-exact. That comparison is only exact
+because both sides make the *same* choice among the readings the proposal permits:
+unfused `madd`, bitwise `laneselect`, the unsigned reading of the dot's second
+operand, the saturating pair sum. The reference needs a `volatile` hop in
+`relaxedMadd` to stop the compiler contracting it into an FMA and silently
+disagreeing with the vector path.
+
 ### T2 — the `simd_*.wat` modules
 
 Plain WAT under `Test/wasm_wat/`, parsed by `wasm-tools parse` at build time
@@ -501,12 +513,13 @@ Current modules:
 | `simd_arith_i.wat` | the integer surface (SIMD-L3): comparisons in both signednesses, `min`/`max`, `add`/`sub`/`mul`, `neg`/`abs`, shifts with counts `≥` the lane width, saturating add/sub, `avgr_u`, `popcnt`, `q15mulr_sat_s`, the reductions `all_true`/`any_true`/`bitmask`, and the width-changing family (`extend`/`extmul` `_low` vs `_high`, `extadd_pairwise`, `dot`, `narrow`). 67 exports, every expected value cross-checked against an independent engine | `simd: integer arithmetic and comparisons run through the JIT` |
 | `simd_arith_f.wat` | the float surface (SIMD-L4): comparisons (incl. the unordered `ne`), `add`/`sub`/`mul`/`div`, `abs`/`neg`/`sqrt`, `ceil`/`floor`/`trunc`/`nearest`, and `min`/`max`/`pmin`/`pmax` with the `±0` and NaN rules (Y1), for `f32x4` and `f64x2`. 32 exports, projected as **bit patterns** (`i32.reinterpret_f32`) so a NaN's payload and a zero's sign reach the assertions; every value read off V8 | `simd: float arithmetic and comparisons run through the JIT` |
 | `simd_convert.wat` | the conversions (SIMD-L4): `trunc_sat` at its ends (NaN, ±2^31, 2^32 and the largest value below it), `convert`, `convert_low`, `promote`, and `demote`/`trunc_sat_f64x2_*_zero` with marker lanes proving the unfilled lanes are zero. 19 exports, all read off V8; two of them are `FORWARD`ed to the reference, so this case is their only conformance evidence | `simd: the float/int conversions run through the JIT` |
+| `simd_relaxed.wat` | the relaxed ops that need their own shape (SIMD-5): `relaxed_swizzle`, `relaxed_laneselect`, `relaxed_madd`/`nmadd`, and both dots — including the pair that **saturates** (127×255×2 = 64770 → 32767), which is what tells the permitted readings apart | `simd relaxed: the hand-written ops run through the JIT` |
 
-Measured after SIMD-L4:
+Measured after SIMD-5:
 
 ```bash
-./WasmJit 'simd*'      # 19 cases, 5884 assertions, all passing
-./WasmJit              # 105 cases, 7421 assertions, all passing (104 / 7246 after L4's float half)
+./WasmJit 'simd*'      # 22 cases, 6126 assertions, all passing
+./WasmJit              # 149 cases, 7745 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed
@@ -530,6 +543,18 @@ node -e "WebAssembly.instantiate(require('fs').readFileSync('/tmp/<name>.wasm'))
 are compared lane-wise, with the `nan:canonical` / `nan:arithmetic` policies
 applied *per lane*. **35 of the 59 `simd_*.wast` scripts pass in full** and are
 curated in `wast_supported.txt`; none abort any more.
+
+Relaxed SIMD adds seven more scripts (SIMD-5), of which **six pass in full** and
+are curated alongside them: `i16x8_relaxed_q15mulr_s`, `i32x4_relaxed_trunc`,
+`i8x16_relaxed_swizzle`, `relaxed_laneselect`, `relaxed_madd_nmadd` and
+`relaxed_min_max`. The seventh, `relaxed_dot_product`, is the instructive one: its
+`i16x8` dot passes, and both failures are `i32x4.relaxed_dot_i8x16_i7x16_add_s`
+invoked with three `v128` arguments — the `jit_apply` row below, not a missing
+instruction. Across the seven, 32 assertions are skipped for `either` (the
+expectation form the harness does not model yet), which is honest rather than
+lucky: a relaxed op is *permitted* to return any of the listed vectors, so a
+harness that silently picked the first would be asserting something the spec does
+not promise.
 
 The 24 that do not pass split into two causes, and neither is marshalling:
 

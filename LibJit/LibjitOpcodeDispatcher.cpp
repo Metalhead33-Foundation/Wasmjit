@@ -4614,6 +4614,26 @@ void OpcodeDispatcher::dispatchF64x2ConvertLowI32x4S() { emitSimdUnaryHelper(rei
 void OpcodeDispatcher::dispatchF64x2ConvertLowI32x4U() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f64x2_convert_low_i32x4_u)); }
 void OpcodeDispatcher::dispatchF32x4DemoteF64x2Zero() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f32x4_demote_f64x2_zero)); }
 void OpcodeDispatcher::dispatchF64x2PromoteLowF32x4() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f64x2_promote_low_f32x4)); }
+void OpcodeDispatcher::dispatchI8x16RelaxedSwizzle() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i8x16_relaxed_swizzle)); }
+void OpcodeDispatcher::dispatchI32x4RelaxedTruncF32x4S() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i32x4_relaxed_trunc_f32x4_s)); }
+void OpcodeDispatcher::dispatchI32x4RelaxedTruncF32x4U() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i32x4_relaxed_trunc_f32x4_u)); }
+void OpcodeDispatcher::dispatchI32x4RelaxedTruncF64x2SZero() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i32x4_relaxed_trunc_f64x2_s_zero)); }
+void OpcodeDispatcher::dispatchI32x4RelaxedTruncF64x2UZero() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i32x4_relaxed_trunc_f64x2_u_zero)); }
+void OpcodeDispatcher::dispatchF32x4RelaxedMadd() { emitSimdTernaryHelper(reinterpret_cast<void*>(wasm_f32x4_relaxed_madd)); }
+void OpcodeDispatcher::dispatchF32x4RelaxedNmadd() { emitSimdTernaryHelper(reinterpret_cast<void*>(wasm_f32x4_relaxed_nmadd)); }
+void OpcodeDispatcher::dispatchF64x2RelaxedMadd() { emitSimdTernaryHelper(reinterpret_cast<void*>(wasm_f64x2_relaxed_madd)); }
+void OpcodeDispatcher::dispatchF64x2RelaxedNmadd() { emitSimdTernaryHelper(reinterpret_cast<void*>(wasm_f64x2_relaxed_nmadd)); }
+void OpcodeDispatcher::dispatchI8x16RelaxedLaneselect() { emitSimdTernaryHelper(reinterpret_cast<void*>(wasm_i8x16_relaxed_laneselect)); }
+void OpcodeDispatcher::dispatchI16x8RelaxedLaneselect() { emitSimdTernaryHelper(reinterpret_cast<void*>(wasm_i16x8_relaxed_laneselect)); }
+void OpcodeDispatcher::dispatchI32x4RelaxedLaneselect() { emitSimdTernaryHelper(reinterpret_cast<void*>(wasm_i32x4_relaxed_laneselect)); }
+void OpcodeDispatcher::dispatchI64x2RelaxedLaneselect() { emitSimdTernaryHelper(reinterpret_cast<void*>(wasm_i64x2_relaxed_laneselect)); }
+void OpcodeDispatcher::dispatchF32x4RelaxedMin() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f32x4_relaxed_min)); }
+void OpcodeDispatcher::dispatchF32x4RelaxedMax() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f32x4_relaxed_max)); }
+void OpcodeDispatcher::dispatchF64x2RelaxedMin() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f64x2_relaxed_min)); }
+void OpcodeDispatcher::dispatchF64x2RelaxedMax() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f64x2_relaxed_max)); }
+void OpcodeDispatcher::dispatchI16x8RelaxedQ15MulRS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_relaxed_q15mulr_s)); }
+void OpcodeDispatcher::dispatchI16x8RelaxedDotI8x16I7x16S() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_relaxed_dot_i8x16_i7x16_s)); }
+void OpcodeDispatcher::dispatchI32x4RelaxedDotI8x16I7x16AddS() { emitSimdTernaryHelper(reinterpret_cast<void*>(wasm_i32x4_relaxed_dot_i8x16_i7x16_add_s)); }
 void OpcodeDispatcher::dispatchMemoryAtomicNotify(WASM::MemArg arg) {
 	notImplemented(__func__);
 }

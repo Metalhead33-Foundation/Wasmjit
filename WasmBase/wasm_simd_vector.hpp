@@ -357,6 +357,93 @@ HWY_INLINE VF wasmNoNaN(DF df, VF v)
 	return hn::IfThenElse(hn::Not(hn::Eq(v, v)), hn::Zero(df), v);
 }
 
+// ── Relaxed SIMD (docs/proposals/SIMD.md SD5) ──────────────────────────────
+// `relaxed_madd`/`nmadd` may be fused or not; SD5 picks unfused, which is what an
+// explicit multiply followed by an add emits — and which is why the reference
+// needs a `volatile` hop to stop *its* compiler contracting.
+template <class V>
+HWY_INLINE V relaxedMadd(V a, V b, V c)
+{
+	return hn::Add(hn::Mul(a, b), c);
+}
+
+template <class V>
+HWY_INLINE V relaxedNmadd(V a, V b, V c)
+{
+	return hn::Sub(c, hn::Mul(a, b));
+}
+
+template <class D>
+HWY_INLINE void relaxedMaddBody(D d, const uint8_t* a, const uint8_t* b, const uint8_t* c,
+								uint8_t* out)
+{
+	using T = hn::TFromD<D>;
+	hn::StoreU(relaxedMadd(hn::LoadU(d, reinterpret_cast<const T*>(a)),
+						   hn::LoadU(d, reinterpret_cast<const T*>(b)),
+						   hn::LoadU(d, reinterpret_cast<const T*>(c))),
+			   d, reinterpret_cast<T*>(out));
+}
+
+template <class D>
+HWY_INLINE void relaxedNmaddBody(D d, const uint8_t* a, const uint8_t* b, const uint8_t* c,
+								 uint8_t* out)
+{
+	using T = hn::TFromD<D>;
+	hn::StoreU(relaxedNmadd(hn::LoadU(d, reinterpret_cast<const T*>(a)),
+							hn::LoadU(d, reinterpret_cast<const T*>(b)),
+							hn::LoadU(d, reinterpret_cast<const T*>(c))),
+			   d, reinterpret_cast<T*>(out));
+}
+
+inline void f32x4RelaxedMadd(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out)
+{
+	relaxedMaddBody(hn::CappedTag<float, 4>(), a, b, c, out);
+}
+
+inline void f32x4RelaxedNmadd(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out)
+{
+	relaxedNmaddBody(hn::CappedTag<float, 4>(), a, b, c, out);
+}
+
+inline void f64x2RelaxedMadd(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out)
+{
+	relaxedMaddBody(hn::CappedTag<double, 2>(), a, b, c, out);
+}
+
+inline void f64x2RelaxedNmadd(const uint8_t* a, const uint8_t* b, const uint8_t* c, uint8_t* out)
+{
+	relaxedNmaddBody(hn::CappedTag<double, 2>(), a, b, c, out);
+}
+
+// The relaxed dots: the spec lets a byte of `b` be read signed *or* unsigned when
+// its high bit is set, and lets the i16 pair sum saturate *or* wrap. SD5 takes the
+// unsigned reading and the saturating sum on both sides of the boundary, which is
+// exactly `maddubs` with the operands swapped — so the vector form is literally
+// the hardware instruction, and the reference had to be written to match it.
+inline void relaxedDotI8x16I7x16S(const uint8_t* a, const uint8_t* b, uint8_t* out)
+{
+	const hn::CappedTag<int16_t, 8> d16;
+	const hn::CappedTag<uint8_t, 16> du8;
+	const hn::CappedTag<int8_t, 16> di8;
+	hn::StoreU(hn::SatWidenMulPairwiseAdd(d16, hn::LoadU(du8, reinterpret_cast<const uint8_t*>(b)),
+										  hn::LoadU(di8, reinterpret_cast<const int8_t*>(a))),
+			   d16, reinterpret_cast<int16_t*>(out));
+}
+
+inline void relaxedDotI8x16I7x16AddS(const uint8_t* a, const uint8_t* b, const uint8_t* c,
+									 uint8_t* out)
+{
+	const hn::CappedTag<int16_t, 8> d16;
+	const hn::CappedTag<int32_t, 4> d32;
+	const hn::CappedTag<uint8_t, 16> du8;
+	const hn::CappedTag<int8_t, 16> di8;
+	const auto pairs = hn::SatWidenMulPairwiseAdd(d16, hn::LoadU(du8, reinterpret_cast<const uint8_t*>(b)),
+												  hn::LoadU(di8, reinterpret_cast<const int8_t*>(a)));
+	const auto sums = hn::Add(hn::PromoteEvenTo(d32, pairs), hn::PromoteOddTo(d32, pairs));
+	hn::StoreU(hn::Add(sums, hn::LoadU(d32, reinterpret_cast<const int32_t*>(c))),
+			   d32, reinterpret_cast<int32_t*>(out));
+}
+
 // ── per-lane arithmetic and comparisons (the shared op list) ───────────────
 // The tag's lane type carries the *signedness the operation means*, which is
 // what lets one expression serve both `min_s` and `min_u`, or `lt_s` and
