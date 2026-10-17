@@ -82,7 +82,7 @@ gaps → where we deliberately deviate → plan → test survey → references.
 - **No mandatory tables.** A section that does not warrant one may be prose or
   bold inline paragraphs (as in `SMALL_PROPOSALS.md`).
 - **No minimum length or exhaustiveness.** A forward-looking note may have an
-  almost empty §4 and its weight in §5/§7 (`COMPONENT_MODEL.md`).
+  almost empty §4 and its weight in §5/§7 (`COMPONENT_MODEL.md` before CM-1a).
 - **No fixed revision scheme.** Revision numbers and revision notes are the
   note's own.
 - **No requirement that §5 be empty.** Open gaps are normal.
@@ -152,7 +152,7 @@ actually does.
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
 | PD1 | **Batch small proposals into one note** (`SMALL_PROPOSALS.md`), with demands / non-demands / implemented / gaps embedded per proposal. | §3: no one-note-per-proposal rule; the proposals share one backend. | One document to keep current instead of three thin ones. |
-| PD2 | **Let a forward-looking note run empty in §4** and put the burden in §5/§7 (`COMPONENT_MODEL.md`). | §3: no exhaustiveness requirement; there is genuinely nothing implemented. | Honesty about a layer that does not exist yet. |
+| PD2 | **Let a forward-looking note run thin in §4** and put the burden in §5/§7 (`COMPONENT_MODEL.md` before CM-1a). | §3: no exhaustiveness requirement; there is genuinely nothing implemented. | Honesty about a layer that does not exist yet. |
 | PD3 | **Append extra sections** after §9 (`GC.md` §10) or before it (`COMPONENT_MODEL.md` §9). | §3: no fixed section count beyond the nine slots. | Room for "beyond the spec" and cross-note discussion. |
 | PD4 | **Reword the headings** and treat the §1 map as the contract. | §3: wording is free. | Each note can name its subject precisely. |
 | PD5 | **Record these divergences as sanctioned allowances** rather than over-claiming conformity or "fixing" notes that are correct. | §3. | The meta-document describes, rather than legislates. |
@@ -208,7 +208,7 @@ authoritative per-item status is each note's §7 plan.
 | `SIMD.md` | 9 | canonical slots | §2/§3 say "the spec" | — | conforms (wording) |
 | `THREADS.md` | 9 | canonical slots | §2 "The proposal's model and what it demands" | — | conforms (wording) |
 | `GC.md` | 10 | canonical + appendix | §2/§3 "Wasm 3.0"; §5 "…and §2" | §10 "Beyond 3.0" after §9 | conforms (appendix) |
-| `COMPONENT_MODEL.md` | 10 | canonical + interleave | §2/§3 subject-named; §4 "What is in the tree today"; §7 "Staged plan" | §9 "How this relates…" before §10 References | conforms (partial implementation) |
+| `COMPONENT_MODEL.md` | 10 | canonical + interleave | §2/§3 subject-named; §4 "What is in the tree today"; §7 "Staged plan" | §9 "How this relates…" before §10 References | conforms (parser implemented) |
 | `SMALL_PROPOSALS.md` | 8 | grouped (3-in-1) | §2–§4 are proposals; demands/non-demands/implemented/gaps embedded | §5 fast/loose, §6 plan, §7 survey, §8 refs | conforms (grouped variant, PD1) |
 
 Reading: twenty notes match §2 exactly; two reword §2/§3 and keep the nine slots;

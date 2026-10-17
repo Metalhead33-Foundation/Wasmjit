@@ -56,9 +56,12 @@ something.** Every such size is bounded, in one of two ways:
   otherwise ask for hundreds of millions of JIT slots), `kMaxControlNesting`
   (nested blocks in one function), and for components
   `kMaxComponentSections` / `kMaxComponentNesting` (repeated sections and
-  recursive nested components). Component section payloads are also bounded by
-  the enclosing section's end, and custom-section names are bounded by the
-  section rather than the file.
+  recursive nested components). Component section payloads are copied into a
+  bounded buffer before decoding, so a malformed LEB cannot read into the next
+  section; vector counts are checked against the remaining payload. Custom
+  section names are bounded by the section, and the custom payload is retained
+  at its input-derived size. Embedded core modules and nested components are
+  parsed through their own preamble from a section-bounded buffer.
 
 ### 2.3 Charge host memory against a process-wide budget
 

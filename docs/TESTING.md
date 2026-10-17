@@ -181,7 +181,7 @@ selection is explicit — which is why `./WasmJit '[spec]'` runs everything.
 | `./WasmJit '[spec]'` | all 256 spec scripts (~1.5 min; most of them fail today) |
 | `./WasmJit 'spec: address'` | just that script |
 | `./WasmJit '*float*'` | scripts whose name matches |
-| `./WasmJit --list-tests` | the default view (50 test cases) |
+| `./WasmJit --list-tests` | the default view (270 test cases) |
 | `./WasmJit --list-tests '[spec]'` | every script, one line each (256) |
 | `./WasmJit -# --list-tags` | all tags, including `[#main]` and `[#SpecSuite]` |
 
@@ -208,11 +208,11 @@ local_set
 Scripts listed there are the visible ones; everything else is hidden. The file is read when the test
 binary starts, so **editing it does not require a rebuild**.
 
-It currently holds 45 of the 256 scripts, and the default run is green:
+It currently holds 189 of the 256 scripts, and the default run is green:
 
 ```
 $ ./WasmJit
-All tests passed (111 assertions in 50 test cases)
+All tests passed (8298 assertions in 270 test cases)
 ```
 
 #### Refreshing the list
@@ -428,13 +428,12 @@ from module input.
 
 ### Current status (for orientation)
 
-The default run is the curated list (49 scripts) plus the 28 manual tests, and
+The default run is the curated list (189 scripts) plus the 81 manual tests, and
 it is green:
 
 ```
 $ ./WasmJit
-test cases:  77 | 77 passed | 0 failed
-assertions: 390 | 390 passed | 0 failed
+All tests passed (8298 assertions in 270 test cases)
 ```
 
 A full sweep is deliberately loud, because most of the suite is still beyond the
@@ -556,6 +555,14 @@ Current modules:
 | `component_reject.wat` | a bare `(component)`: the artifact factory recognizes the component preamble while the core-only `Module::fromFile` still rejects it | `the artifact factory distinguishes core modules and components`, `a Component Model component is rejected instead of misparsed` |
 | `component_embed.wat` | a component with an embedded core module and a `component-name` custom section: nested core preamble, regular core sections, custom-name parsing | `a component's embedded core module is parsed` |
 | `component_nested.wat` | a component embedding another component, which embeds a core module: recursive component-section parsing | `a component's nested component is parsed` |
+| `component_types.wat` | every component value type, a type-index reference, a func type, an import and an export | `a component's value-type grammar is parsed` |
+| `component_canon.wat` | core module/instance, core export alias, component func type, `canon lift`, export | `component core instances and canon lifts are parsed` |
+| `component_coretypes.wat`, `component_coreexterns.wat`, `component_coregc.wat` | core recursive/func/struct/array types and core module types with import/export/type declarations and every core external kind (table/memory/global/tag) | `component core types and core module types are parsed`, `core module type imports cover all core external kinds`, `core struct and array types inside a component are parsed` |
+| `component_instances.wat`, `component_decltypes.wat`, `component_resource.wat` | component instance, component/instance type declarators, resource/own/borrow | `component instances and declarator types are parsed` |
+| `component_async.wat`, `component_canonopts.wat`, `component_attributes.wat` | async func type, `canon lower` with `string-encoding=utf8`, interface/plain names and `implements` | `async functions with canon options and name attributes are parsed` |
+| `component_aliasexport.wat`, `component_instanceinline.wat`, `component_coreinline.wat`, `component_outer.wat` | component/core inline exports, instantiate args, export and outer aliases | `component aliases and instance expressions are parsed` |
+| `component_exporttype.wat` | a top-level export with an optional ascribed type | `a top-level component export can carry an ascribed type` |
+| hand-authored bytes in `Test/main.cpp` | start/value sections and the `0x00 0x50` / `0x4E` core-type encodings (gated constructs) | `component start and value sections are parsed`, `core non-final and recursive type encodings are parsed` |
 | `simd_abi.wat` | `(param v128)(result v128)` round-trip, `v128` locals incl. reading one before `local.set`, a `v128` through a block, lane projections | `simd: a v128 parameter and result round-trip through the JIT` |
 | `simd_const_lane.wat` | `v128.const` byte order, `*.splat`, signed/unsigned `extract_lane`, `replace_lane` | `simd: v128.const, splat and lane ops run through the JIT` |
 | `simd_bitwise.wat` | `v128.not/and/andnot/or/xor/bitselect`, with distinct lanes and golden values that pin which operand is complemented and which selects | `simd: bitwise ops run through the JIT` |
@@ -571,7 +578,7 @@ Measured after SIMD-5:
 
 ```bash
 ./WasmJit 'simd*'      # 24 cases, 6147 assertions, all passing (includes the hidden [.simdbench] case)
-./WasmJit              # 179 cases, 7830 assertions, all passing
+./WasmJit              # 270 cases, 8298 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed

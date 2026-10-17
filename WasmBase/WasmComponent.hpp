@@ -1,6 +1,7 @@
 #ifndef WASMCOMPONENT_HPP
 #define WASMCOMPONENT_HPP
 #include "WasmArtifact.hpp"
+#include "WasmComponentModel.hpp"
 #include "WasmComponentSection.hpp"
 #include "WasmModule.hpp"
 #include <memory>
@@ -9,13 +10,24 @@
 
 namespace WASM {
 
-// Parser-only Component Model artifact (CM-1a). Sections are recorded in
-// order; embedded core modules and nested components are fully parsed with the
-// same parser, everything else is metadata until the type/canon layers land.
+// Parser-only Component Model artifact. Every section kind and every binary
+// production is represented in the AST; no component-level validation, linking
+// or execution is performed. Embedded core modules and nested components are
+// parsed recursively (core modules keep their normal parser validation).
 struct Component : public Artifact {
 	std::vector<ComponentSection> sections;
 	std::vector<std::unique_ptr<Module>> coreModules;
+	std::vector<CoreInstance> coreInstances;
+	std::vector<CoreTypeDef> coreTypes;
 	std::vector<std::unique_ptr<Component>> components;
+	std::vector<ComponentInstance> instances;
+	std::vector<Alias> aliases;
+	std::vector<ComponentTypeDef> types;
+	std::vector<Canon> canons;
+	std::vector<Start> starts;
+	std::vector<ImportDecl> imports;
+	std::vector<ComponentExport> exports;
+	std::vector<ValueDecl> values;
 
 	Component();
 
@@ -35,7 +47,8 @@ protected:
 private:
 	void parseSections(Elv::Io::Device& file, std::optional<uint64_t> end,
 			unsigned depth);
-	void processCustomSection(Elv::Io::Device& file, uint64_t sectionEnd);
+	void parseSectionPayload(ComponentSection& section,
+			std::vector<uint8_t> payload, unsigned depth);
 };
 
 }

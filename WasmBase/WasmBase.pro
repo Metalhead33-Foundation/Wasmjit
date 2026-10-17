@@ -38,6 +38,7 @@ SOURCES += \
 HEADERS += \
     WasmArtifact.hpp \
     WasmComponent.hpp \
+    WasmComponentModel.hpp \
     WasmComponentSection.hpp \
     WasmContext.hpp \
     WasmException.hpp \
@@ -67,4 +68,5 @@ HEADERS += \
     wasm_atomic.hpp \
     wasm_simd_scalar.hpp \
     wasm_simd_vector.hpp \
-    wasm_simd_ops.inc
+    wasm_simd_ops.inc \
+    WasmComponentParser.inc

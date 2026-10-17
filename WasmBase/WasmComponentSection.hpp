@@ -2,6 +2,7 @@
 #define WASMCOMPONENTSECTION_HPP
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace WASM {
 
@@ -31,6 +32,9 @@ struct ComponentSection {
 	uint64_t offset = 0;
 	// Custom sections only (the name that starts the payload).
 	std::string name;
+	// Custom payload bytes. Opaque by definition; kept so no bytes are lost
+	// from the parser's view of the file.
+	std::vector<uint8_t> data;
 };
 
 }

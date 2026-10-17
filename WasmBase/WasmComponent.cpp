@@ -1,21 +1,18 @@
 #include "WasmComponent.hpp"
 #include "WasmSafety.hpp"
+#include <Euphemy/Io/EuphConstBufferDevice.hpp>
+#include <cstddef>
+#include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace WASM {
 
 namespace {
-
-uint64_t bodyLimit(Elv::Io::Device& file, std::optional<uint64_t> end)
-{
-	if (end)
-		return *end;
-	const std::size_t total = file.size();
-	return total != 0 ? static_cast<uint64_t>(total) : 0;
-}
-
+#include "WasmComponentParser.inc"
 }
 
 Component::Component()
@@ -76,7 +73,8 @@ void Component::parseSections(Elv::Io::Device& file, std::optional<uint64_t> end
 		throw std::runtime_error("component nesting exceeds the limit (" +
 				std::to_string(kMaxComponentNesting) + ")");
 
-	const uint64_t limit = bodyLimit(file, end);
+	const uint64_t limit = end ? *end : (file.size() != 0
+			? static_cast<uint64_t>(file.size()) : 0);
 	DWasmStream stream(file);
 
 	while (true) {
@@ -95,49 +93,87 @@ void Component::parseSections(Elv::Io::Device& file, std::optional<uint64_t> end
 					std::to_string(id));
 		const auto type = static_cast<ComponentSectionType>(id);
 
-		const uint64_t payload = file.tell() >= 0
+		const uint64_t offset = file.tell() >= 0
 				? static_cast<uint64_t>(file.tell()) : 0;
-		if (limit != 0 && (payload > limit || size > limit - payload))
+		if (limit != 0 && (offset > limit || size > limit - offset))
 			throw std::runtime_error("component section size exceeds the input");
-		const uint64_t sectionEnd = payload + size;
 
-		sections.push_back(ComponentSection{type, size, payload, {}});
+		std::vector<uint8_t> payload(size);
+		if (size != 0)
+			file.read(payload.data(), 1, size);
 
-		switch (type) {
-		case ComponentSectionType::Custom:
-			processCustomSection(file, sectionEnd);
-			break;
-		case ComponentSectionType::CoreModule:
-			coreModules.push_back(Module::parseNested(file, sectionEnd));
-			break;
-		case ComponentSectionType::NestedComponent:
-			components.push_back(Component::parseNested(file, sectionEnd, depth + 1));
-			break;
-		default:
-			// Types, aliases, canon, imports/exports, etc. are recorded as
-			// metadata only in this milestone.
-			break;
-		}
+		ComponentSection section{type, size, offset, {}, {}};
+		parseSectionPayload(section, std::move(payload), depth);
+		sections.push_back(std::move(section));
 
-		file.seek(static_cast<long>(sectionEnd), Elv::Io::SeekOrigin::SET);
 		if (limit == 0)
 			break;
 	}
 }
 
-void Component::processCustomSection(Elv::Io::Device& file, uint64_t sectionEnd)
+void Component::parseSectionPayload(ComponentSection& section,
+		std::vector<uint8_t> payload, unsigned depth)
 {
-	DWasmStream stream(file);
-	uint32_t length = 0;
-	stream >> Elv::Io::Leb(length);
-	const uint64_t position = file.tell() >= 0
-			? static_cast<uint64_t>(file.tell()) : 0;
-	if (position > sectionEnd || length > sectionEnd - position)
-		throw std::runtime_error("component custom section name out of bounds");
-	std::string name(length, '\0');
-	if (length != 0)
-		file.read(name.data(), 1, length);
-	sections.back().name = std::move(name);
+	static const std::byte emptyPayload{0};
+	const std::byte* payloadData = payload.empty()
+			? &emptyPayload
+			: reinterpret_cast<const std::byte*>(payload.data());
+	std::span<const std::byte> span(payloadData, payload.size());
+	Euph::Io::ConstBufferDevice device(span);
+
+	switch (section.type) {
+	case ComponentSectionType::Custom: {
+		Reader r(device);
+		section.name = r.name();
+		section.data = std::move(payload);
+		break;
+	}
+	case ComponentSectionType::CoreModule:
+		coreModules.push_back(Module::parseNested(device, payload.size()));
+		break;
+	case ComponentSectionType::NestedComponent:
+		components.push_back(Component::parseNested(device, payload.size(), depth + 1));
+		break;
+	default: {
+		Reader r(device);
+		switch (section.type) {
+		case ComponentSectionType::CoreInstance:
+			r.vec([&] { coreInstances.push_back(parseCoreInstance(r)); });
+			break;
+		case ComponentSectionType::CoreType:
+			r.vec([&] { coreTypes.push_back(parseCoreTypeDef(r)); });
+			break;
+		case ComponentSectionType::Instance:
+			r.vec([&] { instances.push_back(parseComponentInstance(r)); });
+			break;
+		case ComponentSectionType::Alias:
+			r.vec([&] { aliases.push_back(parseAlias(r)); });
+			break;
+		case ComponentSectionType::Type:
+			r.vec([&] { types.push_back(parseComponentTypeDef(r)); });
+			break;
+		case ComponentSectionType::Canon:
+			r.vec([&] { canons.push_back(parseCanon(r)); });
+			break;
+		case ComponentSectionType::Start:
+			starts.push_back(parseStart(r));
+			break;
+		case ComponentSectionType::Import:
+			r.vec([&] { imports.push_back(parseImportDecl(r)); });
+			break;
+		case ComponentSectionType::Export:
+			r.vec([&] { exports.push_back(parseComponentExport(r)); });
+			break;
+		case ComponentSectionType::Value:
+			r.vec([&] { values.push_back(parseValue(r)); });
+			break;
+		default:
+			throw std::runtime_error("component parse: unsupported section");
+		}
+		r.expectEnd();
+		break;
+	}
+	}
 }
 
 const char* getComponentSectionTypeName(ComponentSectionType type)

@@ -1,6 +1,7 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch_all.hpp>
 
+#include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -964,6 +965,443 @@ TEST_CASE("a component's nested component is parsed")
 	const WASM::Component& nested = *component->components[0];
 	REQUIRE(nested.isComponent());
 	REQUIRE(nested.coreModules.size() == 1);
+}
+
+TEST_CASE("a component's value-type grammar is parsed")
+{
+	auto artifact = loadTestArtifact("component_types");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	REQUIRE(component->types.size() == 14);
+	using DefKind = WASM::DefinedValueType::Kind;
+	using Prim = WASM::PrimitiveValueType;
+
+	REQUIRE(component->types[0].kind == WASM::ComponentTypeDef::Kind::DefinedValue);
+	REQUIRE(component->types[0].definedValue.kind == DefKind::Record);
+	REQUIRE(component->types[0].definedValue.fields.size() == 2);
+	REQUIRE(component->types[0].definedValue.fields[0].label == "a");
+	REQUIRE(component->types[0].definedValue.fields[0].type.primitive == Prim::U32);
+	REQUIRE(component->types[0].definedValue.fields[1].type.primitive == Prim::String);
+	REQUIRE(component->types[1].definedValue.kind == DefKind::Variant);
+	REQUIRE(component->types[1].definedValue.cases.size() == 2);
+	REQUIRE(component->types[1].definedValue.cases[1].label == "some");
+	REQUIRE(component->types[1].definedValue.cases[1].type.has_value());
+	REQUIRE(component->types[2].definedValue.kind == DefKind::Flags);
+	REQUIRE(component->types[2].definedValue.labels.size() == 2);
+	REQUIRE(component->types[3].definedValue.kind == DefKind::Enum);
+	REQUIRE(component->types[4].definedValue.kind == DefKind::Tuple);
+	REQUIRE(component->types[4].definedValue.tuple.size() == 2);
+	REQUIRE(component->types[5].definedValue.kind == DefKind::List);
+	REQUIRE(component->types[5].definedValue.element.primitive == Prim::U32);
+	REQUIRE(component->types[6].definedValue.kind == DefKind::FixedList);
+	REQUIRE(component->types[6].definedValue.fixedLength == 4);
+	REQUIRE(component->types[7].definedValue.kind == DefKind::Option);
+	REQUIRE(component->types[8].definedValue.kind == DefKind::Result);
+	REQUIRE(component->types[8].definedValue.ok.has_value());
+	REQUIRE(component->types[8].definedValue.error.has_value());
+	REQUIRE(component->types[9].definedValue.kind == DefKind::Map);
+	REQUIRE(component->types[9].definedValue.mapKey.primitive == Prim::String);
+	REQUIRE(component->types[9].definedValue.mapValue.primitive == Prim::U32);
+	REQUIRE(component->types[10].definedValue.kind == DefKind::Stream);
+	REQUIRE(component->types[10].definedValue.streamElement.has_value());
+	REQUIRE(component->types[11].definedValue.kind == DefKind::Future);
+	REQUIRE(component->types[11].definedValue.futureElement.has_value());
+	REQUIRE(component->types[12].definedValue.kind == DefKind::List);
+	REQUIRE(component->types[12].definedValue.element.kind == WASM::ComponentValueType::Kind::TypeIndex);
+	REQUIRE(component->types[12].definedValue.element.typeIndex == 0);
+
+	REQUIRE(component->types[13].kind == WASM::ComponentTypeDef::Kind::Func);
+	REQUIRE(component->types[13].func.params.size() == 1);
+	REQUIRE(component->types[13].func.params[0].label == "x");
+	REQUIRE(component->types[13].func.params[0].type.primitive == Prim::U32);
+	REQUIRE(component->types[13].func.results.size() == 1);
+	REQUIRE(component->types[13].func.results[0].primitive == Prim::String);
+
+	REQUIRE(component->imports.size() == 1);
+	REQUIRE(component->imports[0].name.name == "in");
+	REQUIRE(component->imports[0].type.kind == WASM::ExternType::Kind::Func);
+	REQUIRE(component->imports[0].type.typeIndex == 13);
+	REQUIRE(component->exports.size() == 1);
+	REQUIRE(component->exports[0].name.name == "out");
+	REQUIRE(component->exports[0].sortIndex.sort == WASM::ComponentSort::Func);
+	REQUIRE(component->exports[0].sortIndex.index == 0);
+	REQUIRE_FALSE(component->exports[0].type.has_value());
+}
+
+TEST_CASE("component core instances and canon lifts are parsed")
+{
+	auto artifact = loadTestArtifact("component_canon");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+
+	REQUIRE(component->coreModules.size() == 1);
+	REQUIRE(component->coreInstances.size() == 1);
+	REQUIRE(component->coreInstances[0].kind == WASM::CoreInstance::Kind::Instantiate);
+	REQUIRE(component->coreInstances[0].moduleIndex == 0);
+	REQUIRE(component->coreInstances[0].args.empty());
+	REQUIRE(component->aliases.size() == 1);
+	REQUIRE(component->aliases[0].kind == WASM::Alias::Kind::CoreExport);
+	REQUIRE(component->aliases[0].sort.sort == WASM::ComponentSort::Core);
+	REQUIRE(component->aliases[0].sort.core.has_value());
+	REQUIRE(component->aliases[0].sort.core->sort == WASM::CoreSort::Func);
+	REQUIRE(component->aliases[0].instanceIndex == 0);
+	REQUIRE(component->aliases[0].name == "f");
+
+	REQUIRE(component->types.size() == 1);
+	REQUIRE(component->types[0].kind == WASM::ComponentTypeDef::Kind::Func);
+	REQUIRE(component->types[0].func.params.size() == 1);
+	REQUIRE(component->types[0].func.results.size() == 1);
+	REQUIRE(component->canons.size() == 1);
+	REQUIRE(component->canons[0].kind == WASM::Canon::Kind::Lift);
+	REQUIRE(component->canons[0].coreFuncIndex == 0);
+	REQUIRE(component->canons[0].typeIndex == 0);
+	REQUIRE(component->canons[0].opts.empty());
+
+	REQUIRE(component->exports.size() == 1);
+	REQUIRE(component->exports[0].name.name == "f");
+	REQUIRE(component->exports[0].sortIndex.sort == WASM::ComponentSort::Func);
+	REQUIRE_FALSE(component->exports[0].type.has_value());
+}
+
+TEST_CASE("component core types and core module types are parsed")
+{
+	auto artifact = loadTestArtifact("component_coretypes");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	REQUIRE(component->coreTypes.size() == 2);
+
+	REQUIRE(component->coreTypes[0].kind == WASM::CoreTypeDef::Kind::RecType);
+	REQUIRE_FALSE(component->coreTypes[0].recType.isRecGroup);
+	REQUIRE(component->coreTypes[0].recType.subtypes.size() == 1);
+	const WASM::Subtype& subtype = component->coreTypes[0].recType.subtypes[0];
+	REQUIRE(subtype.isFunction());
+	const auto& func = std::get<WASM::FuncType>(subtype.composite);
+	REQUIRE(func.params.size() == 1);
+	REQUIRE(func.params[0].val.opcode == WASM::ValueTypeCode::I32);
+	REQUIRE(func.results.size() == 1);
+	REQUIRE(func.results[0].val.opcode == WASM::ValueTypeCode::I32);
+
+	REQUIRE(component->coreTypes[1].kind == WASM::CoreTypeDef::Kind::ModuleType);
+	bool sawImport = false;
+	bool sawExport = false;
+	bool sawType = false;
+	for (const WASM::CoreModuleDecl& decl : component->coreTypes[1].moduleDecls) {
+		if (decl.kind == WASM::CoreModuleDecl::Kind::Import) {
+			sawImport = true;
+			REQUIRE(decl.import.module == "m");
+			REQUIRE(decl.import.name == "x");
+			REQUIRE(decl.import.type.kind == WASM::CoreExternType::Kind::Function);
+		} else if (decl.kind == WASM::CoreModuleDecl::Kind::Export) {
+			sawExport = true;
+			REQUIRE(decl.exportDecl.name == "y");
+		} else if (decl.kind == WASM::CoreModuleDecl::Kind::Type) {
+			sawType = true;
+			REQUIRE_FALSE(decl.type.subtypes.empty());
+		}
+	}
+	REQUIRE(sawImport);
+	REQUIRE(sawExport);
+	REQUIRE(sawType);
+}
+
+TEST_CASE("component instances and declarator types are parsed")
+{
+	auto instancesArtifact = loadTestArtifact("component_instances");
+	REQUIRE(instancesArtifact != nullptr);
+	auto* instances = instancesArtifact->asComponent();
+	REQUIRE(instances != nullptr);
+	REQUIRE(instances->components.size() == 1);
+	REQUIRE(instances->instances.size() == 1);
+	REQUIRE(instances->instances[0].kind == WASM::ComponentInstance::Kind::Instantiate);
+	REQUIRE(instances->instances[0].componentIndex == 0);
+	REQUIRE(instances->instances[0].args.empty());
+	REQUIRE(instances->instances[0].exports.empty());
+
+	auto declArtifact = loadTestArtifact("component_decltypes");
+	REQUIRE(declArtifact != nullptr);
+	auto* decls = declArtifact->asComponent();
+	REQUIRE(decls != nullptr);
+	REQUIRE(decls->types.size() == 2);
+	REQUIRE(decls->types[0].kind == WASM::ComponentTypeDef::Kind::Component);
+	bool sawImport = false;
+	bool sawExport = false;
+	for (const WASM::ComponentDecl& decl : decls->types[0].componentDecls) {
+		if (decl.kind == WASM::ComponentDecl::Kind::Import) {
+			sawImport = true;
+			REQUIRE(decl.import.name.name == "x");
+			REQUIRE(decl.import.type.kind == WASM::ExternType::Kind::Func);
+		} else if (decl.kind == WASM::ComponentDecl::Kind::Export) {
+			sawExport = true;
+			REQUIRE(decl.exportDecl.name.name == "y");
+		}
+	}
+	REQUIRE(sawImport);
+	REQUIRE(sawExport);
+	REQUIRE(decls->types[1].kind == WASM::ComponentTypeDef::Kind::Instance);
+	bool sawInstanceExport = false;
+	for (const WASM::InstanceDecl& decl : decls->types[1].instanceDecls) {
+		if (decl.kind == WASM::InstanceDecl::Kind::Export) {
+			sawInstanceExport = true;
+			REQUIRE(decl.exportDecl.name.name == "z");
+		}
+	}
+	REQUIRE(sawInstanceExport);
+
+	auto resourceArtifact = loadTestArtifact("component_resource");
+	REQUIRE(resourceArtifact != nullptr);
+	auto* resources = resourceArtifact->asComponent();
+	REQUIRE(resources != nullptr);
+	REQUIRE(resources->types.size() == 3);
+	REQUIRE(resources->types[0].kind == WASM::ComponentTypeDef::Kind::Resource);
+	REQUIRE(resources->types[0].resource.rep.opcode == WASM::ValueTypeCode::I32);
+	REQUIRE_FALSE(resources->types[0].resource.destructor.has_value());
+	REQUIRE(resources->types[1].definedValue.kind == WASM::DefinedValueType::Kind::Own);
+	REQUIRE(resources->types[1].definedValue.typeIndex == 0);
+	REQUIRE(resources->types[2].definedValue.kind == WASM::DefinedValueType::Kind::Borrow);
+	REQUIRE(resources->types[2].definedValue.typeIndex == 0);
+}
+
+TEST_CASE("async functions with canon options and name attributes are parsed")
+{
+	auto asyncArtifact = loadTestArtifact("component_async");
+	REQUIRE(asyncArtifact != nullptr);
+	auto* asyncComponent = asyncArtifact->asComponent();
+	REQUIRE(asyncComponent != nullptr);
+	REQUIRE(asyncComponent->types.size() == 1);
+	REQUIRE(asyncComponent->types[0].kind == WASM::ComponentTypeDef::Kind::Func);
+	REQUIRE(asyncComponent->types[0].func.isAsync);
+	REQUIRE(asyncComponent->types[0].func.params.size() == 1);
+	REQUIRE(asyncComponent->types[0].func.results.size() == 1);
+
+	auto optsArtifact = loadTestArtifact("component_canonopts");
+	REQUIRE(optsArtifact != nullptr);
+	auto* optsComponent = optsArtifact->asComponent();
+	REQUIRE(optsComponent != nullptr);
+	REQUIRE(optsComponent->imports.size() == 1);
+	REQUIRE(optsComponent->canons.size() == 1);
+	REQUIRE(optsComponent->canons[0].kind == WASM::Canon::Kind::Lower);
+	REQUIRE(optsComponent->canons[0].funcIndex == 0);
+	REQUIRE(optsComponent->canons[0].opts.size() == 1);
+	REQUIRE(optsComponent->canons[0].opts[0].kind == WASM::CanonOptKind::Utf8);
+
+	auto attrArtifact = loadTestArtifact("component_attributes");
+	REQUIRE(attrArtifact != nullptr);
+	auto* attrComponent = attrArtifact->asComponent();
+	REQUIRE(attrComponent != nullptr);
+	REQUIRE(attrComponent->imports.size() == 2);
+	REQUIRE(attrComponent->imports[0].name.name == "wasi:io/streams@0.2.0");
+	REQUIRE(attrComponent->imports[1].name.name == "plain");
+	REQUIRE(attrComponent->imports[1].name.tag == 0x02);
+	REQUIRE(attrComponent->imports[1].name.attributes.size() == 1);
+	REQUIRE(attrComponent->imports[1].name.attributes[0].kind == WASM::Attribute::Kind::Implements);
+	REQUIRE(attrComponent->imports[1].name.attributes[0].text == "wasi:io/streams@0.2.0");
+}
+
+TEST_CASE("component aliases and instance expressions are parsed")
+{
+	auto aliasArtifact = loadTestArtifact("component_aliasexport");
+	REQUIRE(aliasArtifact != nullptr);
+	auto* aliasComponent = aliasArtifact->asComponent();
+	REQUIRE(aliasComponent != nullptr);
+	REQUIRE(aliasComponent->imports.size() == 1);
+	REQUIRE(aliasComponent->components.size() == 1);
+	REQUIRE(aliasComponent->instances.size() == 1);
+	REQUIRE(aliasComponent->instances[0].kind == WASM::ComponentInstance::Kind::Instantiate);
+	REQUIRE(aliasComponent->instances[0].args.size() == 1);
+	REQUIRE(aliasComponent->instances[0].args[0].name == "f");
+	REQUIRE(aliasComponent->instances[0].args[0].sortIndex.sort == WASM::ComponentSort::Func);
+	REQUIRE(aliasComponent->aliases.size() == 1);
+	REQUIRE(aliasComponent->aliases[0].kind == WASM::Alias::Kind::Export);
+	REQUIRE(aliasComponent->aliases[0].sort.sort == WASM::ComponentSort::Func);
+	REQUIRE(aliasComponent->aliases[0].instanceIndex == 0);
+	REQUIRE(aliasComponent->aliases[0].name == "f");
+
+	auto inlineArtifact = loadTestArtifact("component_instanceinline");
+	REQUIRE(inlineArtifact != nullptr);
+	auto* inlineComponent = inlineArtifact->asComponent();
+	REQUIRE(inlineComponent != nullptr);
+	REQUIRE(inlineComponent->instances.size() == 1);
+	REQUIRE(inlineComponent->instances[0].kind == WASM::ComponentInstance::Kind::InlineExports);
+	REQUIRE(inlineComponent->instances[0].exports.size() == 1);
+	REQUIRE(inlineComponent->instances[0].exports[0].name.name == "f");
+	REQUIRE(inlineComponent->instances[0].exports[0].sortIndex.sort == WASM::ComponentSort::Func);
+
+	auto coreInlineArtifact = loadTestArtifact("component_coreinline");
+	REQUIRE(coreInlineArtifact != nullptr);
+	auto* coreInline = coreInlineArtifact->asComponent();
+	REQUIRE(coreInline != nullptr);
+	REQUIRE(coreInline->coreInstances.size() == 2);
+	REQUIRE(coreInline->coreInstances[0].kind == WASM::CoreInstance::Kind::Instantiate);
+	REQUIRE(coreInline->coreInstances[1].kind == WASM::CoreInstance::Kind::InlineExports);
+	REQUIRE(coreInline->coreInstances[1].exports.size() == 1);
+	REQUIRE(coreInline->coreInstances[1].exports[0].name == "f");
+	REQUIRE(coreInline->coreInstances[1].exports[0].sortIndex.sort == WASM::CoreSort::Func);
+
+	auto outerArtifact = loadTestArtifact("component_outer");
+	REQUIRE(outerArtifact != nullptr);
+	auto* outer = outerArtifact->asComponent();
+	REQUIRE(outer != nullptr);
+	REQUIRE(outer->coreTypes.size() == 1);
+	REQUIRE(outer->types.size() == 1);
+	REQUIRE(outer->types[0].kind == WASM::ComponentTypeDef::Kind::Instance);
+	bool sawOuter = false;
+	for (const WASM::InstanceDecl& decl : outer->types[0].instanceDecls) {
+		if (decl.kind == WASM::InstanceDecl::Kind::Alias) {
+			sawOuter = true;
+			REQUIRE(decl.alias.kind == WASM::Alias::Kind::Outer);
+			REQUIRE(decl.alias.outerCount == 0);
+			REQUIRE(decl.alias.index == 0);
+			REQUIRE(decl.alias.sort.sort == WASM::ComponentSort::Core);
+			REQUIRE(decl.alias.sort.core.has_value());
+			REQUIRE(decl.alias.sort.core->sort == WASM::CoreSort::Type);
+		}
+	}
+	REQUIRE(sawOuter);
+}
+
+TEST_CASE("core module type imports cover all core external kinds")
+{
+	auto artifact = loadTestArtifact("component_coreexterns");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	REQUIRE(component->coreTypes.size() == 1);
+	REQUIRE(component->coreTypes[0].kind == WASM::CoreTypeDef::Kind::ModuleType);
+	bool sawTable = false;
+	bool sawMemory = false;
+	bool sawGlobal = false;
+	bool sawTag = false;
+	for (const WASM::CoreModuleDecl& decl : component->coreTypes[0].moduleDecls) {
+		if (decl.kind != WASM::CoreModuleDecl::Kind::Import)
+			continue;
+		const WASM::CoreExternType& type = decl.import.type;
+		if (type.kind == WASM::CoreExternType::Kind::Table) {
+			sawTable = true;
+			REQUIRE(type.table.elementType.opcode == WASM::ValueTypeCode::FuncRef);
+			REQUIRE(type.table.limits.initial == 1);
+		} else if (type.kind == WASM::CoreExternType::Kind::Memory) {
+			sawMemory = true;
+			REQUIRE(type.memory.limits.initial == 1);
+		} else if (type.kind == WASM::CoreExternType::Kind::Global) {
+			sawGlobal = true;
+			REQUIRE(type.global.contentType.opcode == WASM::ValueTypeCode::I32);
+		} else if (type.kind == WASM::CoreExternType::Kind::Tag) {
+			sawTag = true;
+			REQUIRE(type.typeIndex == 0);
+		}
+	}
+	REQUIRE(sawTable);
+	REQUIRE(sawMemory);
+	REQUIRE(sawGlobal);
+	REQUIRE(sawTag);
+}
+
+TEST_CASE("core struct and array types inside a component are parsed")
+{
+	auto artifact = loadTestArtifact("component_coregc");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	REQUIRE(component->coreTypes.size() == 2);
+
+	REQUIRE(component->coreTypes[0].kind == WASM::CoreTypeDef::Kind::RecType);
+	REQUIRE(component->coreTypes[0].recType.subtypes.size() == 1);
+	const WASM::Subtype& structSubtype = component->coreTypes[0].recType.subtypes[0];
+	REQUIRE(structSubtype.isStruct());
+	const auto& structType = std::get<WASM::StructType>(structSubtype.composite);
+	REQUIRE(structType.fields.size() == 2);
+	REQUIRE(structType.fields[0].storageType.val.opcode == WASM::ValueTypeCode::I32);
+	REQUIRE_FALSE(structType.fields[0].isMutable);
+	REQUIRE(structType.fields[1].storageType.val.opcode == WASM::ValueTypeCode::I64);
+	REQUIRE(structType.fields[1].isMutable);
+
+	REQUIRE(component->coreTypes[1].kind == WASM::CoreTypeDef::Kind::RecType);
+	REQUIRE(component->coreTypes[1].recType.subtypes.size() == 1);
+	const WASM::Subtype& arraySubtype = component->coreTypes[1].recType.subtypes[0];
+	REQUIRE(arraySubtype.isArray());
+	const auto& arrayType = std::get<WASM::ArrayType>(arraySubtype.composite);
+	REQUIRE(arrayType.elementType.storageType.isPacked);
+	REQUIRE(arrayType.elementType.storageType.val.opcode == WASM::ValueTypeCode::I8);
+	REQUIRE(arrayType.elementType.isMutable);
+}
+
+TEST_CASE("a top-level component export can carry an ascribed type")
+{
+	auto artifact = loadTestArtifact("component_exporttype");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	REQUIRE(component->types.size() == 1);
+	REQUIRE(component->imports.size() == 1);
+	REQUIRE(component->exports.size() == 1);
+	REQUIRE(component->exports[0].name.name == "f");
+	REQUIRE(component->exports[0].sortIndex.sort == WASM::ComponentSort::Func);
+	REQUIRE(component->exports[0].type.has_value());
+	REQUIRE(component->exports[0].type->kind == WASM::ExternType::Kind::Func);
+	REQUIRE(component->exports[0].type->typeIndex == 0);
+}
+
+TEST_CASE("core non-final and recursive type encodings are parsed")
+{
+	// Preamble + a core:type section with:
+	//   0x00 0x50 ...  a non-final subtype (the component-context prefix)
+	//   0x4E 0x01 ...  a one-member recursive group
+	const std::array<uint8_t, 22> bytes = {
+		0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00,
+		0x03, 0x0c, 0x02,
+		0x00, 0x50, 0x00, 0x60, 0x00, 0x00,
+		0x4e, 0x01, 0x60, 0x00, 0x00
+	};
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	REQUIRE(artifact->isComponent());
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	REQUIRE(component->coreTypes.size() == 2);
+
+	REQUIRE_FALSE(component->coreTypes[0].recType.isRecGroup);
+	REQUIRE(component->coreTypes[0].recType.subtypes.size() == 1);
+	REQUIRE_FALSE(component->coreTypes[0].recType.subtypes[0].isFinal);
+	REQUIRE(component->coreTypes[0].recType.subtypes[0].isFunction());
+
+	REQUIRE(component->coreTypes[1].recType.isRecGroup);
+	REQUIRE(component->coreTypes[1].recType.subtypes.size() == 1);
+	REQUIRE(component->coreTypes[1].recType.subtypes[0].isFinal);
+	REQUIRE(component->coreTypes[1].recType.subtypes[0].isFunction());
+}
+
+TEST_CASE("component start and value sections are parsed")
+{
+	// A hand-authored component with no types: preamble, a start section
+	// (func 0, no args, no results) and one bool value (encoded as true).
+	const std::array<uint8_t, 19> bytes = {
+		0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00,
+		0x09, 0x03, 0x00, 0x00, 0x00,
+		0x0c, 0x04, 0x01, 0x7f, 0x01, 0x01
+	};
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	REQUIRE(artifact->isComponent());
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	REQUIRE(component->starts.size() == 1);
+	REQUIRE(component->starts[0].funcIndex == 0);
+	REQUIRE(component->starts[0].args.empty());
+	REQUIRE(component->starts[0].resultCount == 0);
+	REQUIRE(component->values.size() == 1);
+	REQUIRE(component->values[0].type.primitive == WASM::PrimitiveValueType::Bool);
+	REQUIRE(component->values[0].encodedLength == 1);
+	REQUIRE(component->values[0].encoded.size() == 1);
+	REQUIRE(component->values[0].encoded[0] == 0x01);
 }
 
 TEST_CASE("a Component Model component is rejected instead of misparsed")
