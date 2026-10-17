@@ -1551,7 +1551,8 @@ jit_value_t OpcodeDispatcher::vmContextValue()
 	return jit_value_get_param(function, 0);
 }
 
-jit_value_t OpcodeDispatcher::checkedTableIndex(jit_value_t table, jit_value_t index, const char* opname)
+jit_value_t OpcodeDispatcher::checkedTableIndex(jit_value_t table, jit_value_t index, const char* opname,
+		WASM::TrapKind kind)
 {
 	(void)opname;
 	jit_value_t widened = jit_insn_convert(function, index, jit_type_ulong, 0);
@@ -1560,7 +1561,7 @@ jit_value_t OpcodeDispatcher::checkedTableIndex(jit_value_t table, jit_value_t i
 	jit_value_t inBounds = jit_insn_lt(function, widened, tableSize);
 	jit_label_t cont = jit_label_undefined;
 	jit_insn_branch_if(function, inBounds, &cont);
-	emitTrap(WASM::TrapKind::UndefinedElement);
+	emitTrap(kind);
 	jit_insn_label(function, &cont);
 	return widened;
 }
@@ -2545,7 +2546,8 @@ void OpcodeDispatcher::dispatchTableGet(WASM::TableIdx arg) {
 	jit_value_t tablePtr = jit_insn_load_relative(
 		function, table, offsetof(WASM::TableInstance, base), jit_type_void_ptr);
 	jit_type_t elementType = tableElementJitType(arg);
-	jit_value_t checkedIndex = checkedTableIndex(table, index, "dispatchTableGet");
+	jit_value_t checkedIndex = checkedTableIndex(table, index, "dispatchTableGet",
+			WASM::TrapKind::OutOfBoundsTableAccess);
 	jit_value_t loaded = jit_insn_load_elem(function, tablePtr, checkedIndex, jit_type_void_ptr);
 	pushValue(castRefValue(loaded, elementType));
 }
@@ -2555,7 +2557,8 @@ void OpcodeDispatcher::dispatchTableSet(WASM::TableIdx arg) {
 	jit_value_t table = tablePointerForIndex(arg);
 	jit_value_t tablePtr = jit_insn_load_relative(
 		function, table, offsetof(WASM::TableInstance, base), jit_type_void_ptr);
-	jit_value_t checkedIndex = checkedTableIndex(table, index, "dispatchTableSet");
+	jit_value_t checkedIndex = checkedTableIndex(table, index, "dispatchTableSet",
+			WASM::TrapKind::OutOfBoundsTableAccess);
 	// Table slots are reference-typed; go through the write barrier
 	// (docs/proposals/GC.md D15).
 	jit_value_t slot = jit_insn_load_elem_address(function, tablePtr, checkedIndex, jit_type_void_ptr);

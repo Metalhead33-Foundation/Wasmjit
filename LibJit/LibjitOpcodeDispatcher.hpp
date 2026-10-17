@@ -224,7 +224,8 @@ private:
 	std::vector<WASM::StorageType> storageTypesForBlockType(const WASM::BlockType& bt) const;
 
 	jit_value_t vmContextValue();
-	jit_value_t checkedTableIndex(jit_value_t table, jit_value_t index, const char* opname);
+	jit_value_t checkedTableIndex(jit_value_t table, jit_value_t index, const char* opname,
+			WASM::TrapKind kind = WASM::TrapKind::UndefinedElement);
 	// Emits code yielding the LinearMemory* for a (constant) memory index.
 	jit_value_t memoryPointerForIndex(WASM::MemIdx memidx);
 	// The declared index type (i32/i64) of memory `memidx`, for the address

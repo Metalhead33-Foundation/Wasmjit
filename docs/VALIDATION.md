@@ -17,14 +17,14 @@ stack, and throws `std::runtime_error` on the first failed rule.
 
 | Layer | Rules |
 | --- | --- |
-| Module | type indices name function types; function/code count consistency; data-count consistency; start function `[] -> []`; duplicate export names and export index bounds; memory/table limits (min ≤ max, memory32 ≤ 65536 pages, shared memories declare a max, table32 fits in 32 bits); tag types have no results; global initialisers (const/null/ref.func/imported immutable `global.get`, extended-const arithmetic); active element/data targets; element function indices |
-| Control | `block`/`loop`/`if`/`else`/`end` with typed params/results and exact stack height; `br`/`br_if`/`br_table`/`return`; `call`/`call_indirect`/`call_ref`; tail calls including result-type matching; `try_table` catch labels (payload, `exnref`, arity); `br_on_null`/`br_on_non_null`/`br_on_cast`/`br_on_cast_fail` |
+| Module | type indices name function types; function/code count consistency; data-count consistency; start function `[] -> []`; duplicate export names and export index bounds; memory/table limits (min ≤ max, memory32 ≤ 65536 pages, shared memories declare a max, table32 fits in 32 bits); tag types have no results; global/table initialisers and active element/data offsets (typed constant expressions); element/table type agreement, element item expressions and table initialiser typing; selected functions in element segments; empty modules |
+| Control | `block`/`loop`/`if`/`else`/`end` with typed params/results and exact stack height; `br`/`br_if`/`br_table` (including the polymorphic unreachable case)/`return`; `call`/`call_indirect`/`call_ref`; tail calls including result-type matching; `try_table` catch labels (payload, `exnref`, arity); `br_on_null`/`br_on_non_null`/`br_on_cast`/`br_on_cast_fail` |
 | Numeric | i32/i64/f32/f64 unary, binary, comparison, conversion, sign-extension and saturating forms, with exact operand/result types |
 | Memory | declared index type (`i32`/`i64`), alignment ≤ natural, 32-bit offset range, loads/stores, `memory.size/grow/init/copy/fill` |
-| Table | table64 index type, `get/set/grow/size/fill/copy/init` |
+| Table | table64 index type, `get/set/grow/size/fill/copy/init`; table initialiser typing; `table.init` element-segment/table type match |
 | SIMD | 194 arithmetic/comparison/conversion shapes taken from `wasm_simd_ops.inc`, plus const/bitwise/splat/bitmask, loads/stores, lanes/shuffle/swizzle |
 | Atomics | loads/stores/RMW/cmpxchg/wait/notify with access-size alignment and operand types |
-| References | `ref.null`/`ref.func`/`ref.is_null`/`ref.eq`/`ref.as_non_null`; `call_ref $t` requires `(ref null $t)`; full subtyping (nullability, func/extern/exn/any hierarchies, concrete-type subtyping) |
+| References | `ref.null`/`ref.func`/`ref.is_null`/`ref.eq`/`ref.as_non_null`; `ref.func x` requires `x` to be declared outside function bodies/start; `call_ref $t` requires `(ref null $t)`; full subtyping (nullability, func/extern/exn/any hierarchies, concrete-type subtyping and canonical structural type equivalence); untyped `select` is numeric/vector only; definite initialization of non-defaultable locals |
 
 ## Conservative policy
 
@@ -42,17 +42,20 @@ not check — the cost is coverage, measured below, not correctness.
 
 | Kind | Binary cases | Rejected | Accepted |
 | --- | ---: | ---: | ---: |
-| `assert_invalid` | 1919 | **1919** | 0 |
-| `assert_malformed` | 17 | 15 | 2 |
-| `assert_unlinkable` | 32 | **32** | 0 |
-| `assert_uninstantiable` | 1 | **1** | 0 |
-| **total** | **1969** | **1967** | **2** |
+| `assert_invalid` | 2056 | **2056** | 0 |
+| `assert_malformed` | 17 | **17** | 0 |
+| `assert_unlinkable` | 127 | **127** | 0 |
+| `assert_uninstantiable` | 27 | **27** | 0 |
+| **total** | **2227** | **2227** | **0** |
 
-The default suite is **7959 assertions / 234 test cases, all green** (39 core
-scripts were re-curated after the validator landed). Only 2 of 234 scripts fail
-in the strict run, both decoder-level LEB-width cases (`binary0.5`,
-`binary_leb128_64.1`) — no curated `assert_invalid` module is accepted, and
-`start.wast` covers `assert_uninstantiable` (the trapping start).
+The default suite is **7987 assertions / 248 test cases, all green** (53 core
+scripts were re-curated after the validator landed, plus `start.wast`). The
+strict run is **fully green** as well: every one of the 2,227 binary negative
+commands is rejected, including all 17 `assert_malformed` cases and the strict
+LEB128 width/overflow cases. All 27 `assert_uninstantiable` cases pass: one
+traps in a start function (`start.wast`), the other 26 fail instantiation with
+a caught error (`elem`/`data` out-of-bounds segments). 765 text-format commands
+remain skipped because the loader is binary-only.
 
 The `atomic.wait`-on-unshared check is deliberately **not** enforced: the
 curated `atomic.wast` treats it as valid (`atomic.notify` likewise), so `T5`
@@ -64,11 +67,20 @@ stays a documented single-agent deviation rather than a validator rule.
 rule read garbage and rejected valid modules until the constructor was fixed.
 The bug was latent because nothing read those fields before.
 
+The active-segment path widened a 32-bit offset by sign extension (`i32.const
+-1` became 0xFFFF_FFFF_FFFF_FFFF) and added the length before the bounds check,
+so an out-of-bounds `data`/`elem` segment wrapped to a small index and wrote
+past the backing array. `elem.wast` exposed it as a double free at teardown.
+Offsets are now zero-extended for 32-bit memories/tables (and `i64` for 64-bit
+ones), and the bounds check subtracts instead of adding.
+
 ## Next
 
 - Type `ref.test`/`ref.cast` (still conservative) and the relaxed ternary SIMD
   forms.
-- The “declared function reference” rule (`ref.func x` requires `x` to appear in
-  an element segment) is not checked.
-- The nine remaining strict failures are decoder-level `assert_malformed` cases.
-- ~~Add curated `assert_uninstantiable` coverage~~ — done: `start.wast` is curated and its trapping start is verified under `WASM_SPEC_VALIDATE=1`.
+- ~~The “declared function reference” rule~~ — done: `dispatchRefFunc` checks the
+  module's `C.refs` set (exports, globals, tables and element segments).
+- ~~The remaining strict failures~~ — done: strict LEB128 width/overflow
+  checking in the shared decoder rejects all 17 curated malformed modules.
+- ~~Add curated `assert_uninstantiable` coverage~~ — done: `start.wast` and the
+  `elem`/`data` segment cases are verified under `WASM_SPEC_VALIDATE=1`.

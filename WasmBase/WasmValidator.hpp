@@ -6,6 +6,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace WASM {
@@ -67,6 +68,14 @@ private:
 
 	// Reference subtyping (nullability + the func/extern/exn/any hierarchies).
 	bool refSubtype(const ValueType& actual, const ValueType& expected) const;
+	// True when a local of this type has an implicit default value, so reading it
+	// before any store is valid. Non-nullable references do not.
+	bool isDefaultable(const ValueType& type) const;
+	// `ref.func x` may only name a function that the module also mentions
+	// outside its function bodies or start function (the spec's `C.refs`).
+	std::unordered_set<uint32_t> declaredFunctions;
+	std::optional<ValueType> validateConstExpr(const std::vector<uint8_t>& bytes,
+			const std::string& label, std::size_t globalLimit);
 	bool isEqRef(const ValueType& type) const {
 		return refSubtype(type, ValueType{ValueTypeCode::EqRef, -1});
 	}
@@ -87,6 +96,11 @@ private:
 		bool isIf = false;
 		bool elseSeen = false;
 		bool unreachable = false;
+		// Definite assignment of non-defaultable locals. A frame inherits its
+		// parent's set on entry; stores made inside the frame do not escape it,
+		// and `else` restarts from the entry set (the spec's local-init rule).
+		std::vector<uint8_t> initialized;
+		std::vector<uint8_t> entryInitialized;
 	};
 	std::vector<ValueType> typeStack;
 	std::vector<ControlFrame> controlStack;
@@ -145,7 +159,7 @@ private:
 	void validateGlobalInit(const Global& global, std::size_t index);
 	void validateElementSegment(const ElementSegment& segment, std::size_t index);
 	void validateDataSegment(const DataSegment& segment, std::size_t index);
-	void validateTableInit(const TableType& table, std::size_t index) const;
+	void validateTableInit(const TableType& table, std::size_t index, bool isImport = false);
 	void validateFunctionBody(const FunctionBody& body, std::size_t index);
 
 	void onUnhandledOpcode(const char* name) override;

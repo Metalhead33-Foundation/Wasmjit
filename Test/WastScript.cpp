@@ -649,7 +649,15 @@ void ScriptRunner::installSpectest()
 	static WASM::TableInstance* spectestTable = nullptr;
 	if (spectestTable == nullptr)
 		spectestTable = store.table(store.createTable(10, 20));
-	registry.registerTable("spectest", "table", WASM::ImportedTable{spectestTable});
+	// Publish the host table's type too: `imports.wast` checks that a module
+	// importing `spectest.table` with incompatible limits is rejected.
+	WASM::TableType spectestTableType{};
+	spectestTableType.elementType = WASM::ValueType{WASM::ValueTypeCode::FuncRef, -1};
+	spectestTableType.limits.flags = 0x01; // has a maximum
+	spectestTableType.limits.initial = 10;
+	spectestTableType.limits.maximum = 20;
+	registry.registerTable("spectest", "table",
+			WASM::ImportedTable{spectestTable, spectestTableType});
 
 	static WASM::LinearMemory* spectestMemory = nullptr;
 	if (spectestMemory == nullptr)

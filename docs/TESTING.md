@@ -326,15 +326,15 @@ Measured against the curated set:
 
 | Kind | Binary cases | Rejected (pass) | Accepted (fail) | Reading |
 | --- | ---: | ---: | ---: | --- |
-| `assert_invalid` | 1919 | **1919** | 0 | every curated invalid module is rejected: module structure, exact control-flow stack, core numeric/memory/table, 194 SIMD shapes, atomics, full reference subtyping, `br_on_*` and `try_table` catch labels |
-| `assert_malformed` | 17 | 15 | 2 | decoder strictness. The two remaining are LEB-width cases (`binary0.5`, `binary_leb128_64.1`); the **743** text-format commands across all kinds cannot run without a text parser |
-| `assert_unlinkable` | 32 | **32** | 0 | the linker rejects all of them, including the four `memory64-imports` index-type cases (`MEMORY64` M2) |
-| `assert_uninstantiable` | 1 | **1** | 0 | the trapping start function in `start.wast` |
-| **total** | **1969** | **1967** | **2** | 99.9 % rejected; the two remaining strict failures are decoder-level LEB-width cases |
+| `assert_invalid` | 2056 | **2056** | 0 | every curated invalid module is rejected: module structure, exact control-flow stack, core numeric/memory/table, 194 SIMD shapes, atomics, full reference subtyping, `br_on_*` and `try_table` catch labels, element/data offsets, table/segment typing and table initializers, `ref.func` declarations, local definite-initialization, untyped `select`, canonical type equivalence, `br_table` in unreachable code |
+| `assert_malformed` | 17 | **17** | 0 | decoder strictness, including strict LEB128 byte-width and final-byte fit. The **765** text-format commands across all kinds cannot run without a text parser |
+| `assert_unlinkable` | 127 | **127** | 0 | the linker rejects all of them, including the four `memory64-imports` index-type cases (`MEMORY64` M2) and table imports whose limits do not match the provider's current size |
+| `assert_uninstantiable` | 27 | **27** | 0 | one trapping start (`start.wast`) and 26 instantiation errors from out-of-bounds `elem`/`data` segments |
+| **total** | **2227** | **2227** | **0** | **100 %** of the curated binary negative cases are rejected |
 
-Even in strict mode 743 text-format commands stay skipped: the loader is
-binary-only. (The 39 core scripts re-curated after the validator landed are
-listed in `Test/wast_supported.txt` with their own note.)
+Even in strict mode 765 text-format commands stay skipped: the loader is
+binary-only. (The 53 core scripts re-curated after the validator landed are
+listed in `Test/wast_supported.txt` with their own notes.)
 The exercise paid for itself three times: it showed that the decoder and linker
 already cover a useful fraction; it exposed a real engine bug — the exception
 classes in `WasmBase/WasmException.hpp` inherited `std::exception` **privately**,

@@ -260,6 +260,36 @@ bool Validator::assignable(const ValueType& actual, const ValueType& expected) c
 	return refSubtype(actual, expected);
 }
 
+bool Validator::isDefaultable(const ValueType& type) const
+{
+	switch (type.opcode) {
+	case ValueTypeCode::I32:
+	case ValueTypeCode::I64:
+	case ValueTypeCode::F32:
+	case ValueTypeCode::F64:
+	case ValueTypeCode::V128:
+	case ValueTypeCode::FuncRef:
+	case ValueTypeCode::ExternRef:
+	case ValueTypeCode::AnyRef:
+	case ValueTypeCode::EqRef:
+	case ValueTypeCode::I31Ref:
+	case ValueTypeCode::StructRef:
+	case ValueTypeCode::ArrayRef:
+	case ValueTypeCode::ExnRef:
+	case ValueTypeCode::NullRef:
+	case ValueTypeCode::NullFuncRef:
+	case ValueTypeCode::NullExternRef:
+	case ValueTypeCode::NullExnRef:
+	case ValueTypeCode::RefNull:
+		return true;
+	case ValueTypeCode::Ref:
+		return false;
+	default:
+		// A type this validator does not model: never reject a valid module.
+		return true;
+	}
+}
+
 bool Validator::refSubtype(const ValueType& actual, const ValueType& expected) const
 {
 	enum class Kind { Func, Extern, Exn, Any, Eq, I31, Struct, Array,
@@ -431,7 +461,11 @@ void Validator::beginBlock(const BlockType& blockType, bool isLoop, bool isIf)
 	popTypes(params);
 	const std::size_t height = typeStack.size();
 	pushTypes(params);
-	controlStack.push_back(ControlFrame{params, results, height, isLoop, isIf, false, false});
+	controlStack.push_back(ControlFrame{params, results, height, isLoop, isIf, false, false, {}, {}});
+	// A block inherits the definite-assignment state of its parent; stores made
+	// inside it do not escape at `end`.
+	controlStack.back().initialized = controlStack[controlStack.size() - 2].initialized;
+	controlStack.back().entryInitialized = controlStack.back().initialized;
 }
 
 void Validator::endBlock(bool isElse)
@@ -449,6 +483,9 @@ void Validator::endBlock(bool isElse)
 		pushTypes(current.startTypes);
 		current.unreachable = false;
 		current.elseSeen = true;
+		// The else branch starts from the same definite-assignment state as the
+		// then branch; stores in the then branch must not leak into it.
+		current.initialized = current.entryInitialized;
 		return;
 	}
 	popTypes(current.endTypes);
@@ -607,7 +644,7 @@ void Validator::validateModule()
 		if (!exportNames.insert(ex.name).second)
 			fail("duplicate export name '" + ex.name + "'");
 		switch (ex.kind) {
-		case ExternalKind::Function: requireFunctionIndex(ex.index); break;
+		case ExternalKind::Function: requireFunctionIndex(ex.index); declaredFunctions.insert(ex.index); break;
 		case ExternalKind::Table:    requireTableIndex(ex.index);    break;
 		case ExternalKind::Memory:   requireMemoryIndex(ex.index);   break;
 		case ExternalKind::Global:   requireGlobalIndex(ex.index);   break;
@@ -626,7 +663,7 @@ void Validator::validateModule()
 	for (std::size_t i = 0; i < module.importTables.size(); ++i) {
 		const TableType& tt = module.importTables[i].table;
 		checkLimits(tt.limits, (tt.limits.flags & 0x04) != 0, false, "table", i);
-		validateTableInit(tt, i);
+		validateTableInit(tt, i, true);
 	}
 	for (std::size_t i = 0; i < module.tables.size(); ++i) {
 		const TableType& tt = module.tables[i];
@@ -690,6 +727,7 @@ void Validator::validateGlobalInit(const Global& global, std::size_t index)
 			uint32_t funcIdx = 0;
 			stream >> Elv::Io::Leb(funcIdx);
 			requireFunctionIndex(funcIdx);
+			declaredFunctions.insert(funcIdx);
 			const uint32_t typeIdx = funcIdx < module.importFunctions.size()
 					? module.importFunctions[funcIdx].typeIdx
 					: module.internalFunctionTypeIndices[funcIdx - module.importFunctions.size()];
@@ -761,62 +799,189 @@ void Validator::validateGlobalInit(const Global& global, std::size_t index)
 		fail(label + ": initializer type does not match the global type");
 }
 
-void Validator::validateTableInit(const TableType& table, std::size_t index) const
+std::optional<ValueType> Validator::validateConstExpr(const std::vector<uint8_t>& bytes,
+		const std::string& label, std::size_t globalLimit)
 {
-	if (table.initExpr.empty())
-		return;
-	std::span<const std::byte> span(
-			reinterpret_cast<const std::byte*>(table.initExpr.data()), table.initExpr.size());
+	if (bytes.empty())
+		fail(label + ": missing constant expression");
+	std::span<const std::byte> span(reinterpret_cast<const std::byte*>(bytes.data()),
+			bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
 	FastMemReader stream(device);
-	while (true) {
+
+	std::vector<ValueType> stack;
+	const auto push = [&stack](const ValueType& type) { stack.push_back(type); };
+	const auto pop = [&stack](ValueTypeCode expected) {
+		if (stack.empty() || stack.back().opcode != expected)
+			return false;
+		stack.pop_back();
+		return true;
+	};
+
+	bool done = false;
+	while (!done) {
 		uint8_t op = 0;
 		stream >> op;
 		switch (op) {
-		case 0x23: { // global.get: only globals declared before the table exist
-			uint32_t globalIdx = 0;
-			stream >> Elv::Io::Leb(globalIdx);
-			if (globalIdx >= module.importGlobals.size())
-				fail("table " + std::to_string(index) + ": unknown global in initializer");
-			if (module.importGlobals[globalIdx].global.isMutable)
-				fail("table " + std::to_string(index) + ": initializer must be immutable");
-			break;
-		}
+		case 0x41: { int32_t v; stream >> Elv::Io::Leb(v); push(ValueType{ValueTypeCode::I32, -1}); break; }
+		case 0x42: { int64_t v; stream >> Elv::Io::Leb(v); push(ValueType{ValueTypeCode::I64, -1}); break; }
+		case 0x43: device.seek(4, Elv::Io::SeekOrigin::CUR); push(ValueType{ValueTypeCode::F32, -1}); break;
+		case 0x44: device.seek(8, Elv::Io::SeekOrigin::CUR); push(ValueType{ValueTypeCode::F64, -1}); break;
 		case 0xD0: { // ref.null
 			HeapType ht;
 			stream >> ht;
 			if (ht.isTypeIndex && ht.typeIndex >= module.types.size())
-				fail("table " + std::to_string(index) + ": unknown type");
+				fail(label + ": unknown type");
+			ValueType type{};
+			type.opcode = ValueTypeCode::RefNull;
+			type.heapType = ht.isTypeIndex
+					? static_cast<int32_t>(ht.typeIndex)
+					: static_cast<int32_t>(ht.abstract);
+			push(type);
 			break;
 		}
 		case 0xD2: { // ref.func
 			uint32_t funcIdx = 0;
 			stream >> Elv::Io::Leb(funcIdx);
 			requireFunctionIndex(funcIdx);
+			declaredFunctions.insert(funcIdx);
+			const uint32_t typeIdx = funcIdx < module.importFunctions.size()
+					? module.importFunctions[funcIdx].typeIdx
+					: module.internalFunctionTypeIndices[funcIdx - module.importFunctions.size()];
+			push(ValueType{ValueTypeCode::Ref, static_cast<int32_t>(typeIdx)});
 			break;
 		}
-		case 0x0B:
-			return;
+		case 0x23: { // global.get: immutable and already declared
+			uint32_t globalIdx = 0;
+			stream >> Elv::Io::Leb(globalIdx);
+			if (globalIdx >= globalLimit)
+				fail(label + ": unknown global " + std::to_string(globalIdx));
+			const std::size_t imported = module.importGlobals.size();
+			const bool mutableGlobal = globalIdx < imported
+					? module.importGlobals[globalIdx].global.isMutable
+					: module.globals[globalIdx - imported].type.isMutable;
+			if (mutableGlobal)
+				fail(label + ": constant expression required");
+			push(globalIdx < imported
+					? module.importGlobals[globalIdx].global.contentType
+					: module.globals[globalIdx - imported].type.contentType);
+			break;
+		}
+		case 0x6A: case 0x6B: case 0x6C: // i32.add/sub/mul (extended const)
+			if (!pop(ValueTypeCode::I32) || !pop(ValueTypeCode::I32))
+				fail(label + ": type mismatch in constant expression");
+			push(ValueType{ValueTypeCode::I32, -1});
+			break;
+		case 0x7C: case 0x7D: case 0x7E: // i64.add/sub/mul (extended const)
+			if (!pop(ValueTypeCode::I64) || !pop(ValueTypeCode::I64))
+				fail(label + ": type mismatch in constant expression");
+			push(ValueType{ValueTypeCode::I64, -1});
+			break;
+		case 0xFD: { // v128.const
+			uint32_t subOpcode = 0;
+			stream >> Elv::Io::Leb(subOpcode);
+			if (subOpcode != 12)
+				fail(label + ": constant expression required");
+			device.seek(16, Elv::Io::SeekOrigin::CUR);
+			push(ValueType{ValueTypeCode::V128, -1});
+			break;
+		}
+		case 0xFB: { // GC constructors: modelled by evalConstantExpr, accepted
+			uint32_t subOpcode = 0;
+			stream >> Elv::Io::Leb(subOpcode);
+			switch (subOpcode) {
+			case 0: case 1: case 6: case 7: case 8: case 9: case 10:
+			case 26: case 27: case 28:
+				return std::nullopt;
+			default:
+				fail(label + ": constant expression required");
+			}
+			break;
+		}
+		case 0x0B: // end
+			done = true;
+			break;
 		default:
-			// A const form this milestone does not model: accept.
-			return;
+			fail(label + ": constant expression required");
 		}
 	}
+
+	if (stack.size() != 1)
+		fail(label + ": type mismatch");
+	return stack.back();
+}
+
+void Validator::validateTableInit(const TableType& table, std::size_t index, bool isImport)
+{
+	const std::string label = "table " + std::to_string(index);
+	if (table.initExpr.empty()) {
+		// An imported table is supplied fully initialized by its provider; a
+		// locally-defined table with a non-defaultable element type needs an
+		// explicit initializer for every slot.
+		if (!isImport && !isDefaultable(table.elementType))
+			fail(label + ": non-defaultable element type needs an initializer");
+		return;
+	}
+	const auto actual = validateConstExpr(table.initExpr, label + " initializer",
+			module.importGlobals.size());
+	if (actual && !assignable(*actual, table.elementType))
+		fail(label + ": initializer type does not match the table type");
 }
 
 void Validator::validateElementSegment(const ElementSegment& segment, std::size_t index)
 {
-	if (segment.isActive() && segment.tableIdx >= totalTables)
-		fail("element segment " + std::to_string(index) + ": unknown table");
-	for (uint32_t funcIdx : segment.initIndices)
+	const std::string label = "element segment " + std::to_string(index);
+	requireWellFormedType(segment.elemType, label + " element type");
+	const bool indexForm = !segment.initIndices.empty();
+	std::optional<ValueType> activeTableType;
+	if (segment.isActive()) {
+		requireTableIndex(segment.tableIdx);
+		activeTableType = tableElementType(segment.tableIdx);
+		// An index-form segment stores non-null function references, so it may
+		// fill a non-null table even though its static kind is `funcref`; each
+		// entry is checked below. An expression-form segment has a declared type
+		// that must itself fit the table.
+		if (!indexForm && !assignable(segment.elemType, *activeTableType))
+			fail(label + ": element type does not match the table type");
+		if (segment.offsetExpr.empty())
+			fail(label + ": missing offset");
+		const auto offset = validateConstExpr(segment.offsetExpr, label + " offset", totalGlobals);
+		if (offset && offset->opcode != tableIndexType(segment.tableIdx))
+			fail(label + ": offset type mismatch");
+	}
+	for (uint32_t funcIdx : segment.initIndices) {
 		requireFunctionIndex(funcIdx);
+		declaredFunctions.insert(funcIdx);
+		const uint32_t typeIdx = funcIdx < module.importFunctions.size()
+				? module.importFunctions[funcIdx].typeIdx
+				: module.internalFunctionTypeIndices[funcIdx - module.importFunctions.size()];
+		const ValueType actual{ValueTypeCode::Ref, static_cast<int32_t>(typeIdx)};
+		if (!assignable(actual, segment.elemType))
+			fail(label + ": function element does not match the element type");
+		if (activeTableType && !assignable(actual, *activeTableType))
+			fail(label + ": function element does not match the table type");
+	}
+	for (const std::vector<uint8_t>& expr : segment.initExprs) {
+		const auto actual = validateConstExpr(expr, label + " initializer", totalGlobals);
+		if (actual && !assignable(*actual, segment.elemType))
+			fail(label + ": initializer does not match the element type");
+	}
 }
 
 void Validator::validateDataSegment(const DataSegment& segment, std::size_t index)
 {
 	// Mode bit 0: 0 = active, 1 = passive.
-	if ((segment.mode & 0x01) == 0 && segment.memoryIdx >= totalMemories)
-		fail("data segment " + std::to_string(index) + ": unknown memory");
+	if ((segment.mode & 0x01) != 0)
+		return;
+	const std::string label = "data segment " + std::to_string(index);
+	requireMemoryIndex(segment.memoryIdx);
+	if (segment.offsetExpr.empty())
+		fail(label + ": missing offset");
+	const auto offset = validateConstExpr(segment.offsetExpr, label + " offset", totalGlobals);
+	const ValueTypeCode want = memoryIs64(segment.memoryIdx)
+			? ValueTypeCode::I64 : ValueTypeCode::I32;
+	if (offset && offset->opcode != want)
+		fail(label + ": offset type mismatch");
 }
 
 void Validator::validateFunctionBody(const FunctionBody& body, std::size_t index)
@@ -836,7 +1001,14 @@ void Validator::validateFunctionBody(const FunctionBody& body, std::size_t index
 	typeStack.clear();
 	controlStack.clear();
 	typeTainted = false;
-	controlStack.push_back(ControlFrame{{}, resultTypes(funcType), 0, false, false, false, false});
+	controlStack.push_back(ControlFrame{{}, resultTypes(funcType), 0, false, false, false, false, {}, {}});
+	std::vector<uint8_t> initialized(locals.size(), 0);
+	for (std::size_t i = 0; i < locals.size(); ++i) {
+		if (i < funcType.params.size() || isDefaultable(locals[i]))
+			initialized[i] = 1;
+	}
+	controlStack.back().initialized = initialized;
+	controlStack.back().entryInitialized = initialized;
 
 	try {
 		std::span<const std::byte> span(
@@ -855,6 +1027,11 @@ void Validator::validateFunctionBody(const FunctionBody& body, std::size_t index
 void Validator::dispatchLocalGet(LocalIdx arg)
 {
 	requireLocalIndex(arg);
+	if (!isDefaultable(locals[arg])) {
+		const ControlFrame& current = controlStack.back();
+		if (arg >= current.initialized.size() || !current.initialized[arg])
+			fail("uninitialized local " + std::to_string(arg));
+	}
 	pushValue(locals[arg]);
 }
 
@@ -862,12 +1039,14 @@ void Validator::dispatchLocalSet(LocalIdx arg)
 {
 	requireLocalIndex(arg);
 	popExpect(locals[arg]);
+	controlStack.back().initialized[arg] = 1;
 }
 
 void Validator::dispatchLocalTee(LocalIdx arg)
 {
 	requireLocalIndex(arg);
 	popExpect(locals[arg]);
+	controlStack.back().initialized[arg] = 1;
 	pushValue(locals[arg]);
 }
 
@@ -943,6 +1122,8 @@ void Validator::dispatchReturnCallRef(TypeIdx typeIdx)
 void Validator::dispatchRefFunc(FuncIdx arg)
 {
 	requireFunctionIndex(arg);
+	if (declaredFunctions.find(arg) == declaredFunctions.end())
+		fail("undeclared function reference " + std::to_string(arg));
 	const uint32_t typeIdx = arg < module.importFunctions.size()
 			? module.importFunctions[arg].typeIdx
 			: module.internalFunctionTypeIndices[arg - module.importFunctions.size()];
@@ -1184,6 +1365,22 @@ void Validator::dispatchTableCopy(TableIdx dst, TableIdx src)
 void Validator::dispatchTableInit(uint32_t elemIdx, TableIdx tableIdx)
 {
 	requireElementIndex(elemIdx);
+	const ElementSegment& segment = module.elementSegments[elemIdx];
+	const ValueType tableType = tableElementType(tableIdx);
+	if (segment.initIndices.empty()) {
+		if (!assignable(segment.elemType, tableType))
+			fail("table.init: element segment type does not match the table type");
+	} else {
+		// Index-form entries are non-null function references.
+		for (uint32_t funcIdx : segment.initIndices) {
+			requireFunctionIndex(funcIdx);
+			const uint32_t typeIdx = funcIdx < module.importFunctions.size()
+					? module.importFunctions[funcIdx].typeIdx
+					: module.internalFunctionTypeIndices[funcIdx - module.importFunctions.size()];
+			if (!assignable(ValueType{ValueTypeCode::Ref, static_cast<int32_t>(typeIdx)}, tableType))
+				fail("table.init: function element does not match the table type");
+		}
+	}
 	popExpect(ValueTypeCode::I32);          // len
 	popExpect(ValueTypeCode::I32);          // src
 	popExpect(tableIndexType(tableIdx));    // dst
@@ -1408,6 +1605,17 @@ void Validator::dispatchBrTable(std::vector<LabelIdx>&& labels, LabelIdx default
 	popExpect(ValueTypeCode::I32);
 	if (defaultLabel >= controlStack.size())
 		fail("unknown label " + std::to_string(defaultLabel));
+	if (frame().unreachable || typeTainted) {
+		// The operand stack is polymorphic after `unreachable`, so the target
+		// result types need not agree (unreached-valid.wast's `meet-bottom`).
+		// Label indices are still checked.
+		for (LabelIdx label : labels) {
+			if (label >= controlStack.size())
+				fail("unknown label " + std::to_string(label));
+		}
+		setUnreachable();
+		return;
+	}
 	const auto typesFor = [this](LabelIdx label) -> const std::vector<ValueType>& {
 		const ControlFrame& target = controlStack[controlStack.size() - 1 - label];
 		return target.isLoop ? target.startTypes : target.endTypes;
@@ -1443,6 +1651,18 @@ void Validator::dispatchSelect()
 	const auto type = popAny();
 	if (!type)
 		return;
+	// The untyped form is only defined for numeric/vector operands; a reference
+	// needs the explicit `(result t)` form.
+	switch (type->opcode) {
+	case ValueTypeCode::I32:
+	case ValueTypeCode::I64:
+	case ValueTypeCode::F32:
+	case ValueTypeCode::F64:
+	case ValueTypeCode::V128:
+		break;
+	default:
+		fail("select: reference type requires an explicit result type");
+	}
 	popExpect(*type);
 	pushValue(*type);
 }

@@ -135,23 +135,29 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 		// Mode 1 = passive. We skip passive segments entirely here.
 		if (seg.mode == 1) continue;
 
-		// Evaluate the constant offset expression to get the destination
-		// address within linear memory. This is almost always just an
-		// i32.const followed by end, but we use the general evaluator
-		// for correctness.
-		const Value offsetVal = evalConstantExpr(
-			Euph::Io::ConstBufferDevice::span_cast<uint8_t>(seg.offsetExpr), instance);
-		const uint64_t offset = static_cast<uint64_t>(offsetVal.i32);
-
 		// Active segments name their target memory explicitly (mode 0 implies
 		// memory 0; mode 2 carries a memory index — multi-memory proposal).
 		if (seg.memoryIdx >= internals.memoryRefs.size())
 			throw std::runtime_error("active data segment references an unknown memory");
 		LinearMemory* memory = internals.memoryRefs[seg.memoryIdx];
 
+		// Evaluate the constant offset expression to get the destination
+		// address within linear memory. This is almost always just an
+		// i32.const followed by end, but we use the general evaluator
+		// for correctness. A 32-bit offset is *unsigned* (`i32.const -1` is
+		// 0xFFFF_FFFF), so zero-extend before widening; a 64-bit offset uses
+		// the i64 value directly.
+		const Value offsetVal = evalConstantExpr(
+			Euph::Io::ConstBufferDevice::span_cast<uint8_t>(seg.offsetExpr), instance);
+		const uint64_t offset = memory->is64
+				? static_cast<uint64_t>(offsetVal.i64)
+				: static_cast<uint64_t>(static_cast<uint32_t>(offsetVal.i32));
+
 		// Wasm spec: trap if the segment would write past the end of memory.
-		// This is a hard instantiation failure, not a soft error.
-		if (offset + seg.data.size() > memory->memorySize)
+		// This is a hard instantiation failure, not a soft error. Compare
+		// without adding, so a huge offset cannot wrap around.
+		if (offset > memory->memorySize
+				|| static_cast<uint64_t>(seg.data.size()) > memory->memorySize - offset)
 			throw SegmentOutOfBoundsException(offset, seg.data.size(), memory->memorySize);
 
 		// The actual copy. memoryBase is already a uint8_t*, so this is
@@ -201,22 +207,31 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 			continue;
 		}
 
-		// Same constant-expression evaluation for the table offset.
+		if (static_cast<size_t>(seg.tableIdx) >= instance.internals.tableRefs.size())
+			throw std::runtime_error("active element segment references an unknown table");
+		TableInstance* table = instance.internals.tableRefs[seg.tableIdx];
+
+		// Same constant-expression evaluation for the table offset. As with
+		// data segments, a 32-bit offset is unsigned (`i32.const -1` is
+		// 0xFFFF_FFFF); a table64 uses the i64 value.
+		const bool tableIs64 = seg.tableIdx < module.importTables.size()
+				? (module.importTables[seg.tableIdx].table.limits.flags & 0x04) != 0
+				: (module.tables[seg.tableIdx - module.importTables.size()].limits.flags & 0x04) != 0;
 		const Value offsetVal = evalConstantExpr(
 			Euph::Io::ConstBufferDevice::span_cast<uint8_t>(seg.offsetExpr), instance);
-		const uint64_t tableOffset = static_cast<uint64_t>(offsetVal.i32);
+		const uint64_t tableOffset = tableIs64
+				? static_cast<uint64_t>(offsetVal.i64)
+				: static_cast<uint64_t>(static_cast<uint32_t>(offsetVal.i32));
 
 		// Determine how many entries this segment contributes.
 		// A segment uses either initIndices (MVP index form) or
 		// initExprs (reference-types constant-expression form), never both.
-		const size_t entryCount = seg.initIndices.empty()
-			? seg.initExprs.size()
-			: seg.initIndices.size();
+		const uint64_t entryCount = static_cast<uint64_t>(seg.initIndices.empty()
+				? seg.initExprs.size()
+				: seg.initIndices.size());
 
-		if (static_cast<size_t>(seg.tableIdx) >= instance.internals.tableRefs.size())
-			throw std::runtime_error("active element segment references an unknown table");
-		TableInstance* table = instance.internals.tableRefs[seg.tableIdx];
-		if (tableOffset + entryCount > table->size)
+		// Compare without adding, so a huge offset cannot wrap around.
+		if (tableOffset > table->size || entryCount > table->size - tableOffset)
 			throw std::runtime_error("Element segment out of bounds");
 
 		for (size_t i = 0; i < entryCount; ++i)

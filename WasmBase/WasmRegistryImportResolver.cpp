@@ -99,7 +99,13 @@ bool tableSatisfiesImport(const ImportedTable& provided, const TableType& declar
 	if ((p.limits.flags & LIMITS_FLAG_SHARED) != (declared.limits.flags & LIMITS_FLAG_SHARED))
 		return false;
 
-	if (p.limits.initial < declared.limits.initial)
+	// Import matching uses the table's *current* size as its minimum: a
+	// table declared `1` and grown to `2` satisfies an import that declares a
+	// minimum of `2` (table_grow.wast's `grown-table` cases).
+	const uint64_t providedMinimum = provided.table != nullptr
+			? provided.table->size
+			: p.limits.initial;
+	if (providedMinimum < declared.limits.initial)
 		return false;
 	if (declared.limits.maximum.has_value()) {
 		// An unbounded table cannot satisfy an import that declares a maximum.

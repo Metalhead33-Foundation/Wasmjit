@@ -78,6 +78,8 @@ data0
 data_drop0
 i32
 i64
+imports
+table
 int_literals
 labels
 left-to-right
@@ -106,10 +108,25 @@ store1
 store2
 switch
 table_copy
+table_get
+table_grow
+table_set
 table_size
 traps0
+type-equivalence
+type-rec
+unreached-valid
 unreachable
 unwind
+
+# Re-curated after the element/data offset, `table.init`, untyped-select,
+# `ref.func` declaration and local-initialization rules landed.
+data
+elem
+func_ptrs
+local_init
+ref_func
+select
 
 # The SIMD family, re-curated once `v128` globals (SIMD-4) and the ≥ 3-operand
 # call path (SIMD-6) landed: **all 66 of the 66 `simd_*` / relaxed scripts pass

@@ -865,24 +865,23 @@ void Module::fromFile(Elv::Io::Device& file)
 	version = versionLow;
 	if(magicNumber != 0x6D736100) throw std::runtime_error("Invalid WASM module!\nMismatch in the magic number!");
 	if(layer != 0) throw std::runtime_error("Unsupported WebAssembly artifact!\nThis file is a Component Model component (preamble layer 1), not a core module.\nWasmJit has no component support yet; see docs/proposals/COMPONENT_MODEL.md.");
-	bool canReadMoreSections = true;
-	do {
+	while (true) {
+		const std::size_t totalSize = file.size();
+		if (totalSize != 0 && file.tell() >= 0
+				&& static_cast<std::size_t>(file.tell()) >= totalSize)
+			break; // an empty module has no sections at all
 		Section section;
 		wasmStream >> section;
 		if (section.type == SectionType::Invalid)
 			throw std::runtime_error("malformed section id");
-		const std::size_t totalSize = file.size();
 		if (totalSize != 0
 				&& static_cast<uint64_t>(section.offset) + section.size > totalSize)
 			throw std::runtime_error("section size exceeds the input");
 		sections.push_back(section);
 		file.seek(section.size, Elv::Io::SeekOrigin::CUR);
-		if( file.tell() >= file.size() )
-		{
-			canReadMoreSections = false;
-			break;
-		}
-	} while(canReadMoreSections);
+		if (totalSize == 0)
+			break; // the device cannot report where the input ends
+	}
 	}
 	processSecetions(file);
 
@@ -910,6 +909,15 @@ bool Module::isSubtype(TypeIdx actual, TypeIdx expected) const
 		return true;
 	if (actual >= types.size() || expected >= types.size())
 		return false;
+
+	// Two distinct local indices can still denote the same type: the canonical
+	// registry interns structurally equivalent definitions (including recursive
+	// and isomorphic groups) to one process-wide TypeId. That identity is the
+	// spec's type equivalence, so it implies subtyping in both directions.
+	const TypeId actualId = typeIds[actual];
+	const TypeId expectedId = typeIds[expected];
+	if (actualId == expectedId && actualId != TypeId{TypeId::kNone})
+		return true;
 
 	const Subtype& subtype = types[actual];
 	for (uint32_t super : subtype.supertypeIndices) {
