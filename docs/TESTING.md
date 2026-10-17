@@ -181,7 +181,7 @@ selection is explicit — which is why `./WasmJit '[spec]'` runs everything.
 | `./WasmJit '[spec]'` | all 256 spec scripts (~1.5 min; most of them fail today) |
 | `./WasmJit 'spec: address'` | just that script |
 | `./WasmJit '*float*'` | scripts whose name matches |
-| `./WasmJit --list-tests` | the default view (270 test cases) |
+| `./WasmJit --list-tests` | the default view (273 test cases) |
 | `./WasmJit --list-tests '[spec]'` | every script, one line each (256) |
 | `./WasmJit -# --list-tags` | all tags, including `[#main]` and `[#SpecSuite]` |
 
@@ -212,7 +212,7 @@ It currently holds 189 of the 256 scripts, and the default run is green:
 
 ```
 $ ./WasmJit
-All tests passed (8298 assertions in 270 test cases)
+All tests passed (8354 assertions in 273 test cases)
 ```
 
 #### Refreshing the list
@@ -428,12 +428,12 @@ from module input.
 
 ### Current status (for orientation)
 
-The default run is the curated list (189 scripts) plus the 81 manual tests, and
+The default run is the curated list (189 scripts) plus the 84 manual tests, and
 it is green:
 
 ```
 $ ./WasmJit
-All tests passed (8298 assertions in 270 test cases)
+All tests passed (8354 assertions in 273 test cases)
 ```
 
 A full sweep is deliberately loud, because most of the suite is still beyond the
@@ -562,6 +562,9 @@ Current modules:
 | `component_async.wat`, `component_canonopts.wat`, `component_attributes.wat` | async func type, `canon lower` with `string-encoding=utf8`, interface/plain names and `implements` | `async functions with canon options and name attributes are parsed` |
 | `component_aliasexport.wat`, `component_instanceinline.wat`, `component_coreinline.wat`, `component_outer.wat` | component/core inline exports, instantiate args, export and outer aliases | `component aliases and instance expressions are parsed` |
 | `component_exporttype.wat` | a top-level export with an optional ascribed type | `a top-level component export can carry an ascribed type` |
+| `component_typeimports.wat` | structural type export and abstract resource type import entering the type index space | `component type imports and exports enter the type index space` |
+| `component_coremoduleexport.wat` | an exported core module introducing an index that is instantiated later | `an exported core module can be instantiated` |
+| `component_invalid_*.wat` (17 files) | out-of-bounds type/function/alias/start/instance references, duplicate import/export names, missing instantiation arguments, bad canon type, bad labels/flags, borrow/stream/resource restrictions, incompatible export ascription and invalid outer alias | `invalid component references and types are rejected` |
 | hand-authored bytes in `Test/main.cpp` | start/value sections and the `0x00 0x50` / `0x4E` core-type encodings (gated constructs) | `component start and value sections are parsed`, `core non-final and recursive type encodings are parsed` |
 | `simd_abi.wat` | `(param v128)(result v128)` round-trip, `v128` locals incl. reading one before `local.set`, a `v128` through a block, lane projections | `simd: a v128 parameter and result round-trip through the JIT` |
 | `simd_const_lane.wat` | `v128.const` byte order, `*.splat`, signed/unsigned `extract_lane`, `replace_lane` | `simd: v128.const, splat and lane ops run through the JIT` |
@@ -578,7 +581,7 @@ Measured after SIMD-5:
 
 ```bash
 ./WasmJit 'simd*'      # 24 cases, 6147 assertions, all passing (includes the hidden [.simdbench] case)
-./WasmJit              # 270 cases, 8298 assertions, all passing
+./WasmJit              # 273 cases, 8354 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed

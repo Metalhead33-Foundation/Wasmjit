@@ -3,6 +3,7 @@
 #include "WasmArtifact.hpp"
 #include "WasmComponentModel.hpp"
 #include "WasmComponentSection.hpp"
+#include "WasmComponentValidation.hpp"
 #include "WasmModule.hpp"
 #include <memory>
 #include <span>
@@ -10,10 +11,11 @@
 
 namespace WASM {
 
-// Parser-only Component Model artifact. Every section kind and every binary
-// production is represented in the AST; no component-level validation, linking
-// or execution is performed. Embedded core modules and nested components are
-// parsed recursively (core modules keep their normal parser validation).
+// Parser + structural validator for a Component Model artifact. Every section
+// kind and binary production is represented in the AST; `validate()` checks
+// index spaces, sortidx resolution, type/name/declarator rules and local
+// compatibility. No linking, codegen, execution or Canonical ABI lowering is
+// performed. Embedded core modules keep their normal parser validation.
 struct Component : public Artifact {
 	std::vector<ComponentSection> sections;
 	std::vector<std::unique_ptr<Module>> coreModules;
@@ -28,6 +30,9 @@ struct Component : public Artifact {
 	std::vector<ImportDecl> imports;
 	std::vector<ComponentExport> exports;
 	std::vector<ValueDecl> values;
+	// Flattened section/definition order. Each entry indexes the corresponding
+	// vector above; custom sections and section metadata are not entities.
+	std::vector<ComponentDefinition> definitions;
 
 	Component();
 
@@ -40,6 +45,12 @@ struct Component : public Artifact {
 			Elv::Io::Device& file, uint64_t end, unsigned depth = 0);
 
 	std::span<const ComponentSection> getSections() const;
+
+	// Component-level structural validation (index spaces, sortidx resolution,
+	// type/declaration checks). Throws std::runtime_error on the first failure.
+	// No linking, execution or Canonical ABI lowering.
+	void validate() const;
+	ComponentIndexSpaces buildIndexSpaces() const;
 
 protected:
 	void parseBody(Elv::Io::Device& file, std::optional<uint64_t> end) override;

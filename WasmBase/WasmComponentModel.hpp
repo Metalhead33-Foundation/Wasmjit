@@ -9,6 +9,29 @@
 
 namespace WASM {
 
+// ── Ordered source definitions ─────────────────────────────────────────────
+// Component definitions are acyclic and order-sensitive, but the binary groups
+// them by section. This list restores the order in which index spaces grow.
+enum class ComponentDefinitionKind : uint8_t {
+	CoreModule,
+	CoreInstance,
+	CoreType,
+	Component,
+	Instance,
+	Alias,
+	Type,
+	Canon,
+	Start,
+	Import,
+	Export,
+	Value
+};
+
+struct ComponentDefinition {
+	ComponentDefinitionKind kind = ComponentDefinitionKind::CoreModule;
+	uint32_t index = 0;
+};
+
 // ── Core sorts and indices ──────────────────────────────────────────────────
 enum class CoreSort : uint8_t {
 	Func = 0x00,

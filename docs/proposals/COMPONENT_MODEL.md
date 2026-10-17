@@ -1,19 +1,20 @@
 # WIT and the Component Model — Spec Status, Design Space, and a QVM-Style Scope
 
-Status: proposal + implementation note (revision 4 — CM-0, the CM-1a framing
-parser and the CM-1b full binary AST parser are implemented; component
-semantics, index-space resolution, linking and the Canonical ABI are still
-unbuilt).
+Status: proposal + implementation note (revision 5 — CM-0, the CM-1a framing
+parser, the CM-1b full binary AST parser, and CM-1c index spaces + structural
+validation are implemented; component semantics, linking and the Canonical ABI
+are still unbuilt).
 Audience: whoever touches `WasmModule` (binary decoding), `WasmStore`,
 `WasmTypeRegistry`, `WasmImport`, the `LibJit*` backend, or the test harness —
 i.e. whoever would decide where a component parser lives.
 
 This note follows the same split as [`GC.md`](GC.md) / [`SIMD.md`](SIMD.md) /
 [`THREADS.md`](THREADS.md), with one honest difference: the other notes describe
-a layer that is implemented; this one documents the complete parser that exists
-and the much larger runtime layer that does not. §4 says what is there, §5 is
-therefore long, and §7 is a staging plan rather than a list of gap closures. The
-CM-1a/CM-1b parser code is real; the rest is still a plan.
+a layer that is implemented; this one documents the complete parser and
+structural validator that exist and the much larger runtime layer that does not.
+§4 says what is there, §5 is therefore long, and §7 is a staging plan rather
+than a list of gap closures. The CM-1a/CM-1b/CM-1c parser and validator code is
+real; the rest is still a plan.
 
 **One document or two?** WIT and the Component Model are covered together
 deliberately. WIT is the *interface definition language*, the component binary
@@ -324,7 +325,7 @@ execution, no `realloc`, no component-value lowering, no linking.
   or `component wit --json`.
 - The test harness cannot drive component scripts (§8).
 
-### 4.4 CM-1a/CM-1b — parser (implemented)
+### 4.4 CM-1a/CM-1b/CM-1c — parser, index spaces and structural validation
 
 The binary parser now distinguishes the two artifact kinds and decodes the whole
 component grammar into an AST:
@@ -374,17 +375,51 @@ component grammar into an AST:
   their section, and `kMaxComponentSections` / `kMaxComponentNesting` cap
   repeated sections and recursion.
 
-Still absent: per-kind index spaces and `sortidx` resolution, component
-validation/subtyping, linking/instantiation, `canon` execution and every
-Canonical ABI step (CM-1c, CM-2…CM-7). Parsing a gated construct (async, stream,
-`map`, `start`, `value`, …) does **not** mean the engine executes it.
+- CM-1c keeps a flattened `definitions` list on every `Component`; the binary
+  groups sections, but index spaces grow in source/definition order. Imports,
+  exports, aliases, canon builtins and type definitions all introduce indices.
+- `WasmBase/WasmComponentValidation.{hpp,cpp}` exposes
+  `ComponentIndexSpaces`: thirteen per-sort vectors (eight core, five
+  component) plus `resolve(SortIdx)` / `resolve(CoreSortIdx)`. Resolving is
+  bounds-checked and returns the introducing `ComponentDefinitionRef`.
+  `Component::buildIndexSpaces()` builds it without execution.
+- `Component::validate()` (called automatically after parsing a concrete
+  component, recursively for nested components) performs structural
+  component-level validation:
+  - every `sortidx` is in bounds and has the expected sort;
+  - component/core type indices are in bounds and point at the right type
+    constructor;
+  - aliases resolve to an existing instance export/name or outer declaration,
+    with the declarator restrictions (export aliases only instance/type, outer
+    aliases only core type/type);
+  - import/export names are unique, attributes are unique, and
+    `implements` is restricted to instance imports/exports with plain names;
+  - value/function types are well-formed: kebab-case, case-insensitively
+    unique labels; non-empty records/variants/tuples/enums/flags; fixed lists
+    larger than zero; at most 32 flags; resource `own`/`borrow` targets;
+    no result/stream/future borrows; `stream<char>` rejected;
+  - component/instance type declarator scopes are validated recursively and
+    resource definitions are rejected inside them;
+  - core types and module types are checked for index bounds/kind;
+  - core/component instantiation checks argument names, sorts, arity and the
+    resolved signature types available at this stage;
+  - canon builtins check their referenced sort/type indices and `canonopt`
+    duplicates/indices; start checks its function, argument values and result
+    count; value definitions check their type.
+- This is intentionally **not** a runtime or a complete canonical-ABI
+  validator. Still absent: full external-visibility rules for named types,
+  type substitution through imported type parameters, resource generativity
+  across instantiation, exact core-module-type matching, canonical-ABI
+  flattening/maximum-size checks, linking/instantiation and `canon` execution.
+  Parsing/validating a gated construct (async, stream, `map`, `start`, `value`,
+  …) does **not** mean the engine executes it.
 
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
 | ~~CM1~~ | ~~No `layer` discrimination.~~ **Done (CM-0):** `Module::fromFile` reads magic/version/layer separately and throws a component-specific error when the layer is non-zero, so a component is refused instead of misparsed. | `WasmModule.cpp` `fromFile` | Closed |
-| CM2 | **Parser complete (CM-1b); index spaces missing.** Every section and production decodes into `Component`/`WasmComponentModel.hpp`. Missing: per-kind core/component index spaces, `sortidx` resolution and the index introduction performed by imports/exports/aliases. | `WasmComponent.*`, `WasmComponentModel.hpp` | High |
+| CM2 | **Closed for structural validation (CM-1c).** All 13 index spaces, definition-order growth and `sortidx` resolution are implemented; `Component::validate()` checks references/types/declarations/aliases/instantiation signatures/canon/start/values. Remaining full-validation rules (external visibility, type substitution, canonical-ABI signatures) and linking are separate gaps. | `WasmComponentValidation.*` | Closed (structural) |
 | CM3 | **AST exists; interning/lowering missing.** `ComponentValueType` and `DefinedValueType` model `bool`…`string`, `list`/`record`/`variant`/`tuple`/`flags`/`enum`/`option`/`result`/fixed-list/`map`/`stream`/`future`, `own`/`borrow`, plus component/instance/resource types. They are not interned in `TypeRegistry` and have no Canonical ABI representation yet. | `WasmComponentModel.hpp`, `WasmTypeRegistry.hpp` | High |
 | CM4 | **No Canonical ABI.** No lift/lower, flattening, memory representation, `canonopt`, `realloc`/`post-return`, or handle table. This is the actual JIT work. | — | High |
 | CM5 | **No component linking/instantiation.** No `ComponentInstance`, no `with` arguments, no component-level import matching by name + type. | `WasmModuleInstance.*` | High |
@@ -425,7 +460,8 @@ caller reuses the callee's buffer.
 | **CM-0 — Reject honestly** | ✅ `Module::fromFile` reads and records the `layer` field (magic/version/layer as 4+2+2 bytes) and throws a component-specific error for a non-zero layer. | CM1 | Done: a component fails with "This file is a Component Model component …", asserted by `Test/wasm_wat/component_reject.wat` + `a Component Model component is rejected instead of misparsed`. |
 | **CM-1a — Parser skeleton** | ✅ `Artifact` base + `Artifact::parse` (preamble/layer dispatch, `isCoreModule`/`isComponent`/`as*`), `Component` section framing, custom names, embedded core modules, nested components. No semantics, nothing executes. | CM1, CM2 (partly) | Done: a component can be walked section by section; embedded core modules are validated; `Test/wasm_wat/component_{reject,embed,nested}.wat` and three manual tests pass. |
 | **CM-1b — Full binary grammar** | ✅ Complete AST + decoder for every section id and production: core instance/types (incl. module types), component instances/aliases/types (all value, func, component, instance and resource types), every `canon` builtin/`canonopt`, start, imports/exports with attributes, values and custom payloads. Parser only; no index spaces. | CM2, CM3 (AST) | Done: `WasmComponentModel.hpp` has no unrepresented production; the parser is tested against `wasm-tools`-generated fixtures covering every major section and the hand-authored start/value case. |
-| **CM-1c — Component index spaces** | Per-kind core/component index spaces and `sortidx` resolution; apply the index introduction rules of imports, exports, aliases and type definitions. | CM2 | A component can be dumped with every definition in the right index space; no execution yet. |
+| **CM-1c — Component index spaces + structural validation** | ✅ Definition-order index spaces (`ComponentIndexSpaces`), public `sortidx` resolution, ordered `definitions`, and `Component::validate()` covering references, type/name/declarator rules, aliases, instantiation signatures, canon indices/options, start and values. No execution. | CM2 (structural) | Done: all valid fixtures validate; the invalid reference/type/alias/instantiation/canon/start/label cases are rejected; `Component::buildIndexSpaces()` exposes all 13 spaces. |
+| **CM-1d — Full component validation** | External visibility of named types, type substitution through type imports, resource generativity across instantiation, exact core-module-type matching, Canonical ABI signature/flattening checks, annotated-name rules. | CM2 (rest) | Remaining spec-validation rules can be added without a runtime. |
 | **CM-2 — Component types in the store** | Component value/definition types (`bool`…`string`, `list`/`record`/`variant`/`tuple`/`flags`/`enum`/`option`/`result`, `own`/`borrow`) plus structural equality, interned through the `Store`'s registry. | CM3, CMD9 | Two structurally equal component types from different components intern to the same id; `matches` agrees with the spec's equality rules. |
 | **CM-3 — WIT ingestion (tooling)** | Consume `wasm-tools component wit --json` (and/or a binary WIT package) **in the test harness**, not the runtime; a hand-written `Wit/` parser stays a later option. | CM6 (partly) | A test can assert a component's expected world/import/export shape against a `.wit` file. |
 | **CM-4 — Core modules + instances** | `core:module`/`core:instance`/`alias`: instantiate embedded core modules in the `Store` and run them; implement `(with "name" (sort idx))*`. | CM2, CM5 | A component embedding one core module and re-exporting its function instantiates and runs. |
@@ -436,9 +472,9 @@ caller reuses the callee's buffer.
 
 ## 8. Indicative test survey
 
-Also unlike the other notes, only CM-0, CM-1a and CM-1b have anything to run;
-the rest of this section says where component coverage would have to come from
-and how the current harness would react.
+Also unlike the other notes, only CM-0, CM-1a, CM-1b and CM-1c have anything
+to run; the rest of this section says where component coverage would have to
+come from and how the current harness would react.
 
 | Test / script | Current result | Reading |
 |---|---|---|
@@ -449,6 +485,7 @@ and how the current harness would react.
 | manual test, CM-0 | **pass** | `Test/wasm_wat/component_reject.wat` (a bare `(component)`) is loaded and the loader's component-specific message is asserted; `a Component Model component is rejected instead of misparsed`. |
 | manual test, CM-1a | **pass** | `Artifact::parse` distinguishes `add_core` from `component_reject`; `component_embed.wat` parses a core:module section (including the nested core preamble and `component-name` custom section); `component_nested.wat` parses a nested component recursively. |
 | manual test, CM-1b | **pass** | `component_types.wat` (all value types + import/export), `component_exporttype.wat` (ascribed export), `component_canon.wat` (module/instance/alias/lift/export), `component_coretypes.wat` + `component_coreexterns.wat` + `component_coregc.wat` (core rec/func/struct/array/module types and every core external kind), `component_{instances,decltypes,resource,async,canonopts,attributes,aliasexport,instanceinline,coreinline,outer}.wat`, plus hand-authored start/value and non-final/`0x4E` core-type binaries. Each fixture has its own assertions; all pass. |
+| manual test, CM-1c | **pass** | `Component::buildIndexSpaces()` returns the 13 spaces and resolves definitions/exports; the valid type-import/export and exported-core-module fixtures validate; the eight reference/type/alias/instantiation/canon/start/label invalid fixtures and the extra borrow/stream/flags/sort invalid fixtures are all rejected. |
 | manual test, CM-4/CM-5 | none yet | a hand-authored component built with `wasm-tools component new` from a core module that was given a WIT-derived component-type section. |
 
 `wasm-tools` is already required to build `Test` and already supports both
@@ -502,7 +539,8 @@ external prerequisite is needed for the tooling-side milestones.
   `WasmBase/WasmComponent.{hpp,cpp}` (`Component`, `Module::parseNested`,
   `Component::parseNested`), `WasmBase/WasmComponentModel.hpp` (the complete
   component AST), `WasmBase/WasmComponentParser.inc` (the section/production
-  decoders), `WasmBase/WasmComponentSection.hpp`
+  decoders), `WasmBase/WasmComponentValidation.{hpp,cpp}` (index spaces and
+  structural validation), `WasmBase/WasmComponentSection.hpp`
   (`ComponentSectionType`/`ComponentSection`), `WasmBase/WasmModule.cpp`
   (`Module::fromFile`/`Module::parseBody`), `WasmBase/WasmSection.hpp`
   (`SectionType`), `WasmBase/WasmStore.hpp`, `WasmBase/WasmTypeRegistry.hpp`,

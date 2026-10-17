@@ -16,6 +16,7 @@ DEFINES += HWY_SHARED_DEFINE
 SOURCES += \
         WasmArtifact.cpp \
         WasmComponent.cpp \
+        WasmComponentValidation.cpp \
         WasmException.cpp \
         WasmExn.cpp \
         WasmGcHeap.cpp \
@@ -40,6 +41,7 @@ HEADERS += \
     WasmComponent.hpp \
     WasmComponentModel.hpp \
     WasmComponentSection.hpp \
+    WasmComponentValidation.hpp \
     WasmContext.hpp \
     WasmException.hpp \
     WasmExn.hpp \

@@ -61,7 +61,9 @@ something.** Every such size is bounded, in one of two ways:
   section; vector counts are checked against the remaining payload. Custom
   section names are bounded by the section, and the custom payload is retained
   at its input-derived size. Embedded core modules and nested components are
-  parsed through their own preamble from a section-bounded buffer.
+  parsed through their own preamble from a section-bounded buffer. Component
+  index spaces and structural validation add one bounded entry per parsed
+  definition; they do not allocate code, link, or mutate the `Store`.
 
 ### 2.3 Charge host memory against a process-wide budget
 

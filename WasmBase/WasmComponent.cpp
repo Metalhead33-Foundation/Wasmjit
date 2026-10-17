@@ -64,6 +64,7 @@ std::span<const ComponentSection> Component::getSections() const
 void Component::parseBody(Elv::Io::Device& file, std::optional<uint64_t> end)
 {
 	parseSections(file, end, 0);
+	validate();
 }
 
 void Component::parseSections(Elv::Io::Device& file, std::optional<uint64_t> end,
@@ -130,42 +131,84 @@ void Component::parseSectionPayload(ComponentSection& section,
 	}
 	case ComponentSectionType::CoreModule:
 		coreModules.push_back(Module::parseNested(device, payload.size()));
+		definitions.push_back({ComponentDefinitionKind::CoreModule,
+				static_cast<uint32_t>(coreModules.size() - 1)});
 		break;
 	case ComponentSectionType::NestedComponent:
 		components.push_back(Component::parseNested(device, payload.size(), depth + 1));
+		definitions.push_back({ComponentDefinitionKind::Component,
+				static_cast<uint32_t>(components.size() - 1)});
 		break;
 	default: {
 		Reader r(device);
 		switch (section.type) {
 		case ComponentSectionType::CoreInstance:
-			r.vec([&] { coreInstances.push_back(parseCoreInstance(r)); });
+			r.vec([&] {
+				coreInstances.push_back(parseCoreInstance(r));
+				definitions.push_back({ComponentDefinitionKind::CoreInstance,
+						static_cast<uint32_t>(coreInstances.size() - 1)});
+			});
 			break;
 		case ComponentSectionType::CoreType:
-			r.vec([&] { coreTypes.push_back(parseCoreTypeDef(r)); });
+			r.vec([&] {
+				coreTypes.push_back(parseCoreTypeDef(r));
+				definitions.push_back({ComponentDefinitionKind::CoreType,
+						static_cast<uint32_t>(coreTypes.size() - 1)});
+			});
 			break;
 		case ComponentSectionType::Instance:
-			r.vec([&] { instances.push_back(parseComponentInstance(r)); });
+			r.vec([&] {
+				instances.push_back(parseComponentInstance(r));
+				definitions.push_back({ComponentDefinitionKind::Instance,
+						static_cast<uint32_t>(instances.size() - 1)});
+			});
 			break;
 		case ComponentSectionType::Alias:
-			r.vec([&] { aliases.push_back(parseAlias(r)); });
+			r.vec([&] {
+				aliases.push_back(parseAlias(r));
+				definitions.push_back({ComponentDefinitionKind::Alias,
+						static_cast<uint32_t>(aliases.size() - 1)});
+			});
 			break;
 		case ComponentSectionType::Type:
-			r.vec([&] { types.push_back(parseComponentTypeDef(r)); });
+			r.vec([&] {
+				types.push_back(parseComponentTypeDef(r));
+				definitions.push_back({ComponentDefinitionKind::Type,
+						static_cast<uint32_t>(types.size() - 1)});
+			});
 			break;
 		case ComponentSectionType::Canon:
-			r.vec([&] { canons.push_back(parseCanon(r)); });
+			r.vec([&] {
+				canons.push_back(parseCanon(r));
+				definitions.push_back({ComponentDefinitionKind::Canon,
+						static_cast<uint32_t>(canons.size() - 1)});
+			});
 			break;
 		case ComponentSectionType::Start:
 			starts.push_back(parseStart(r));
+			definitions.push_back({ComponentDefinitionKind::Start,
+					static_cast<uint32_t>(starts.size() - 1)});
 			break;
 		case ComponentSectionType::Import:
-			r.vec([&] { imports.push_back(parseImportDecl(r)); });
+			r.vec([&] {
+				imports.push_back(parseImportDecl(r));
+				definitions.push_back({ComponentDefinitionKind::Import,
+						static_cast<uint32_t>(imports.size() - 1)});
+			});
 			break;
 		case ComponentSectionType::Export:
-			r.vec([&] { exports.push_back(parseComponentExport(r)); });
+			r.vec([&] {
+				exports.push_back(parseComponentExport(r));
+				definitions.push_back({ComponentDefinitionKind::Export,
+						static_cast<uint32_t>(exports.size() - 1)});
+			});
 			break;
 		case ComponentSectionType::Value:
-			r.vec([&] { values.push_back(parseValue(r)); });
+			r.vec([&] {
+				values.push_back(parseValue(r));
+				definitions.push_back({ComponentDefinitionKind::Value,
+						static_cast<uint32_t>(values.size() - 1)});
+			});
 			break;
 		default:
 			throw std::runtime_error("component parse: unsupported section");

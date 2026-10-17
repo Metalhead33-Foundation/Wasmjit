@@ -1,7 +1,8 @@
 // ── Bounded reader over one section payload ────────────────────────────────
 class Reader {
 public:
-	explicit Reader(Elv::Io::Device& device) : stream(device), device(device) {}
+	explicit Reader(Elv::Io::Device& source)
+		: device(source), stream(source) {}
 
 	DWasmStream& raw() { return stream; }
 

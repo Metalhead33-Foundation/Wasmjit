@@ -1063,6 +1063,31 @@ TEST_CASE("component core instances and canon lifts are parsed")
 	REQUIRE(component->exports[0].name.name == "f");
 	REQUIRE(component->exports[0].sortIndex.sort == WASM::ComponentSort::Func);
 	REQUIRE_FALSE(component->exports[0].type.has_value());
+
+	const WASM::ComponentIndexSpaces spaces = component->buildIndexSpaces();
+	REQUIRE(spaces.coreModules.size() == 1);
+	REQUIRE(spaces.coreInstances.size() == 1);
+	REQUIRE(spaces.coreFuncs.size() == 1);
+	REQUIRE(spaces.types.size() == 1);
+	REQUIRE(spaces.funcs.size() == 2);
+	REQUIRE(spaces.resolve(WASM::CoreSort::Func, 1) == std::nullopt);
+	REQUIRE(spaces.resolve(WASM::ComponentSort::Func, 2) == std::nullopt);
+	const auto coreFunc = spaces.resolve(WASM::CoreSort::Func, 0);
+	REQUIRE(coreFunc.has_value());
+	REQUIRE(coreFunc->kind == WASM::ComponentDefinitionKind::Alias);
+	const auto canonFunc = spaces.resolve(WASM::ComponentSort::Func, 0);
+	REQUIRE(canonFunc.has_value());
+	REQUIRE(canonFunc->kind == WASM::ComponentDefinitionKind::Canon);
+	const auto exportFunc = spaces.resolve(WASM::ComponentSort::Func, 1);
+	REQUIRE(exportFunc.has_value());
+	REQUIRE(exportFunc->kind == WASM::ComponentDefinitionKind::Export);
+	const auto typeRef = spaces.resolve(WASM::ComponentSort::Type, 0);
+	REQUIRE(typeRef.has_value());
+	REQUIRE(typeRef->kind == WASM::ComponentDefinitionKind::Type);
+	WASM::SortIdx coreModule;
+	coreModule.sort = WASM::ComponentSort::Core;
+	coreModule.core = WASM::CoreSortIdx{WASM::CoreSort::Module, 0};
+	REQUIRE(spaces.resolve(coreModule).has_value());
 }
 
 TEST_CASE("component core types and core module types are parsed")
@@ -1193,7 +1218,9 @@ TEST_CASE("async functions with canon options and name attributes are parsed")
 	REQUIRE(attrComponent != nullptr);
 	REQUIRE(attrComponent->imports.size() == 2);
 	REQUIRE(attrComponent->imports[0].name.name == "wasi:io/streams@0.2.0");
+	REQUIRE(attrComponent->imports[0].type.kind == WASM::ExternType::Kind::Instance);
 	REQUIRE(attrComponent->imports[1].name.name == "plain");
+	REQUIRE(attrComponent->imports[1].type.kind == WASM::ExternType::Kind::Instance);
 	REQUIRE(attrComponent->imports[1].name.tag == 0x02);
 	REQUIRE(attrComponent->imports[1].name.attributes.size() == 1);
 	REQUIRE(attrComponent->imports[1].name.attributes[0].kind == WASM::Attribute::Kind::Implements);
@@ -1252,7 +1279,7 @@ TEST_CASE("component aliases and instance expressions are parsed")
 		if (decl.kind == WASM::InstanceDecl::Kind::Alias) {
 			sawOuter = true;
 			REQUIRE(decl.alias.kind == WASM::Alias::Kind::Outer);
-			REQUIRE(decl.alias.outerCount == 0);
+			REQUIRE(decl.alias.outerCount == 1);
 			REQUIRE(decl.alias.index == 0);
 			REQUIRE(decl.alias.sort.sort == WASM::ComponentSort::Core);
 			REQUIRE(decl.alias.sort.core.has_value());
@@ -1380,8 +1407,10 @@ TEST_CASE("component start and value sections are parsed")
 {
 	// A hand-authored component with no types: preamble, a start section
 	// (func 0, no args, no results) and one bool value (encoded as true).
-	const std::array<uint8_t, 19> bytes = {
+	const std::array<uint8_t, 34> bytes = {
 		0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00,
+		0x07, 0x05, 0x01, 0x40, 0x00, 0x01, 0x00,
+		0x0a, 0x06, 0x01, 0x00, 0x01, 0x66, 0x01, 0x00,
 		0x09, 0x03, 0x00, 0x00, 0x00,
 		0x0c, 0x04, 0x01, 0x7f, 0x01, 0x01
 	};
@@ -1402,6 +1431,82 @@ TEST_CASE("component start and value sections are parsed")
 	REQUIRE(component->values[0].encodedLength == 1);
 	REQUIRE(component->values[0].encoded.size() == 1);
 	REQUIRE(component->values[0].encoded[0] == 0x01);
+}
+
+TEST_CASE("component type imports and exports enter the type index space")
+{
+	auto artifact = loadTestArtifact("component_typeimports");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	REQUIRE(component->types.size() == 1);
+	REQUIRE(component->imports.size() == 1);
+	REQUIRE(component->imports[0].type.kind == WASM::ExternType::Kind::Type);
+	REQUIRE(component->imports[0].type.typeBound.kind == WASM::TypeBound::Kind::SubResource);
+	REQUIRE(component->exports.size() == 1);
+	REQUIRE(component->exports[0].sortIndex.sort == WASM::ComponentSort::Type);
+
+	const WASM::ComponentIndexSpaces spaces = component->buildIndexSpaces();
+	REQUIRE(spaces.types.size() == 3);
+	REQUIRE(spaces.resolve(WASM::ComponentSort::Type, 1).has_value());
+	REQUIRE(spaces.resolve(WASM::ComponentSort::Type, 2).has_value());
+}
+
+TEST_CASE("an exported core module can be instantiated")
+{
+	auto artifact = loadTestArtifact("component_coremoduleexport");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	REQUIRE(component->coreModules.size() == 1);
+	REQUIRE(component->exports.size() == 1);
+	REQUIRE(component->coreInstances.size() == 1);
+	REQUIRE(component->coreInstances[0].moduleIndex == 1);
+
+	const WASM::ComponentIndexSpaces spaces = component->buildIndexSpaces();
+	REQUIRE(spaces.coreModules.size() == 2);
+	REQUIRE(spaces.coreInstances.size() == 1);
+	const auto moduleExport = spaces.resolve(WASM::CoreSort::Module, 1);
+	REQUIRE(moduleExport.has_value());
+	REQUIRE(moduleExport->kind == WASM::ComponentDefinitionKind::Export);
+}
+
+TEST_CASE("invalid component references and types are rejected")
+{
+	REQUIRE_THROWS_AS(loadTestArtifact("component_invalid_type_index"),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(loadTestArtifact("component_invalid_duplicate_import"),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(loadTestArtifact("component_invalid_alias"),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(loadTestArtifact("component_invalid_instantiate"),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(loadTestArtifact("component_invalid_canon"),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(loadTestArtifact("component_invalid_start"),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(loadTestArtifact("component_invalid_label"),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(loadTestArtifact("component_invalid_outer"),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(loadTestArtifact("component_invalid_borrow_result"),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(loadTestArtifact("component_invalid_stream_char"),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(loadTestArtifact("component_invalid_resource_in_type"),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(loadTestArtifact("component_invalid_export_ascription"),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(loadTestArtifact("component_invalid_duplicate_export"),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(loadTestArtifact("component_invalid_component_arg"),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(loadTestArtifact("component_invalid_core_instantiate"),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(loadTestArtifact("component_invalid_flags"),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(loadTestArtifact("component_invalid_func_sort"),
+			std::runtime_error);
 }
 
 TEST_CASE("a Component Model component is rejected instead of misparsed")
