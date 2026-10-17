@@ -120,6 +120,10 @@ private:
 	jit_type_t v128Type();
 	// A fresh 16-byte slot for a `v128` result.
 	jit_value_t newV128Slot();
+	// Address of a global's 16 bytes in the VMContext's `globals` array. The
+	// `v128` member sits at offset 0 of the `Value` union, so this is also the
+	// pointer the load/store helpers accept (SIMD-L5).
+	jit_value_t globalSlotAddress(WASM::GlobalIdx arg);
 	// Calls a helper through a memoised signature (§6.4) and returns its result
 	// (`void` for the out-slot shapes — the caller then pushes the slot).
 	jit_value_t callSimdHelper(void* fptr, jit_type_t ret,

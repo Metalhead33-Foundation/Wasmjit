@@ -2239,31 +2239,52 @@ void OpcodeDispatcher::dispatchLocalTee(WASM::LocalIdx arg)
 		emitDropValue(v);
 	pushValue(jit_insn_load(function, locals[arg]));
 }
+jit_value_t OpcodeDispatcher::globalSlotAddress(WASM::GlobalIdx arg)
+{
+	jit_value_t vm = vmContextValue();
+	jit_value_t gPtr = jit_insn_load_relative(function, vm,
+			offsetof(WASM::VMContext, globals), jit_type_void_ptr);
+	jit_value_t off = jit_value_create_nint_constant(
+		function, jit_type_nint, static_cast<jit_nint>(arg * sizeof(WASM::Value)));
+	return jit_insn_add(function, gPtr, off);
+}
+
 void OpcodeDispatcher::dispatchGlobalGet(WASM::GlobalIdx arg)
 {
 	WASM::GlobalType gt = globalTypeForIndex(arg);
-	if (gt.contentType.opcode == WASM::ValueTypeCode::V128)
-		notImplemented("dispatchGlobalGet (v128)");
+	if (gt.contentType.opcode == WASM::ValueTypeCode::V128) {
+		// A `v128` global is 16 bytes at the start of its `Value`, so reading it
+		// is `v128.load` from there — the same helper and the same verified
+		// shape, rather than a struct load this LibJIT build has never been
+		// asked for (SIMD-L5).
+		jit_value_t out = newV128Slot();
+		const jit_type_t types[1] = {jit_type_void_ptr};
+		jit_value_t args[1] = {globalSlotAddress(arg)};
+		callSimdOutHelper(reinterpret_cast<void*>(wasm_v128_load), out, types, args);
+		pushValue(out);
+		return;
+	}
 	jit_type_t jt = jitTypeForValueType(gt.contentType);
-	jit_value_t vm = vmContextValue();
-	jit_value_t gPtr = jit_insn_load_relative(function, vm, offsetof(WASM::VMContext, globals), jit_type_void_ptr);
-	jit_value_t off = jit_value_create_nint_constant(
-		function, jit_type_nint, static_cast<jit_nint>(arg * sizeof(WASM::Value)));
-	jit_value_t slot = jit_insn_add(function, gPtr, off);
+	jit_value_t slot = globalSlotAddress(arg);
 	pushValue(jit_insn_load_relative(function, slot, 0, jt));
 }
 
 void OpcodeDispatcher::dispatchGlobalSet(WASM::GlobalIdx arg)
 {
 	WASM::GlobalType gt = globalTypeForIndex(arg);
-	if (gt.contentType.opcode == WASM::ValueTypeCode::V128)
-		notImplemented("dispatchGlobalSet (v128)");
+	if (gt.contentType.opcode == WASM::ValueTypeCode::V128) {
+		// Symmetric: `v128.store` into the global's 16 bytes. `global.set` of a
+		// `v128` is a plain 16-byte copy with no GC barrier (SIMD-L5).
+		jit_value_t v = popValue();
+		if (unreachableCode)
+			return;
+		const jit_type_t types[2] = {jit_type_void_ptr, jit_type_void_ptr};
+		jit_value_t args[2] = {globalSlotAddress(arg), jit_insn_address_of(function, v)};
+		callSimdHelper(reinterpret_cast<void*>(wasm_v128_store), jit_type_void, types, args);
+		return;
+	}
 	jit_value_t v = popValue();
-	jit_value_t vm = vmContextValue();
-	jit_value_t gPtr = jit_insn_load_relative(function, vm, offsetof(WASM::VMContext, globals), jit_type_void_ptr);
-	jit_value_t off = jit_value_create_nint_constant(
-		function, jit_type_nint, static_cast<jit_nint>(arg * sizeof(WASM::Value)));
-	jit_value_t slot = jit_insn_add(function, gPtr, off);
+	jit_value_t slot = globalSlotAddress(arg);
 	if (WASM::isReferenceType(gt.contentType.opcode)) {
 		// The `ref` member is at offset 0 of the Value union, so `slot` is
 		// already the slot address; go through the barrier (GC.md D15), then

@@ -522,12 +522,13 @@ Current modules:
 | `simd_arith_f.wat` | the float surface (SIMD-L4): comparisons (incl. the unordered `ne`), `add`/`sub`/`mul`/`div`, `abs`/`neg`/`sqrt`, `ceil`/`floor`/`trunc`/`nearest`, and `min`/`max`/`pmin`/`pmax` with the `±0` and NaN rules (Y1), for `f32x4` and `f64x2`. 32 exports, projected as **bit patterns** (`i32.reinterpret_f32`) so a NaN's payload and a zero's sign reach the assertions; every value read off V8 | `simd: float arithmetic and comparisons run through the JIT` |
 | `simd_convert.wat` | the conversions (SIMD-L4): `trunc_sat` at its ends (NaN, ±2^31, 2^32 and the largest value below it), `convert`, `convert_low`, `promote`, and `demote`/`trunc_sat_f64x2_*_zero` with marker lanes proving the unfilled lanes are zero. 19 exports, all read off V8; two of them are `FORWARD`ed to the reference, so this case is their only conformance evidence | `simd: the float/int conversions run through the JIT` |
 | `simd_relaxed.wat` | the relaxed ops that need their own shape (SIMD-5): `relaxed_swizzle`, `relaxed_laneselect`, `relaxed_madd`/`nmadd`, and both dots — including the pair that **saturates** (127×255×2 = 64770 → 32767), which is what tells the permitted readings apart | `simd relaxed: the hand-written ops run through the JIT` |
+| `simd_globals.wat` | `v128` globals (SIMD-4 / `SIMD-L5`): a `v128.const` initialiser through the constant-expression path, `global.get`/`set`, a read-modify-write that must survive between calls, and a `v128` copied through a local — with the byte-order assertion (`i8x16 0…15` read as an `i32` lane is `0x0B0A0908`) that pins hazard Y11 | `simd: v128 globals run through the JIT` |
 
 Measured after SIMD-5:
 
 ```bash
-./WasmJit 'simd*'      # 23 cases, 6134 assertions, all passing (includes the hidden [.simdbench] case)
-./WasmJit              # 149 cases, 7745 assertions, all passing
+./WasmJit 'simd*'      # 24 cases, 6147 assertions, all passing (includes the hidden [.simdbench] case)
+./WasmJit              # 179 cases, 7830 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed
@@ -546,34 +547,34 @@ node -e "WebAssembly.instantiate(require('fs').readFileSync('/tmp/<name>.wasm'))
 
 ### T3 — the spec scripts
 
-`Test/WastScript.cpp` now marshals `v128`: arguments are decoded lane by lane
+`Test/WastScript.cpp` marshals `v128`: arguments are decoded lane by lane
 (integer lanes as signed decimals, float lanes as raw bit patterns) and results
 are compared lane-wise, with the `nan:canonical` / `nan:arithmetic` policies
-applied *per lane*. **35 of the 59 `simd_*.wast` scripts pass in full** and are
-curated in `wast_supported.txt`; none abort any more.
+applied *per lane*. **All 66 `simd_*` / relaxed scripts pass with `failed=0`** and
+are curated in `wast_supported.txt`; none abort.
 
-Relaxed SIMD adds seven more scripts (SIMD-5), of which **six pass in full** and
-are curated alongside them: `i16x8_relaxed_q15mulr_s`, `i32x4_relaxed_trunc`,
-`i8x16_relaxed_swizzle`, `relaxed_laneselect`, `relaxed_madd_nmadd` and
-`relaxed_min_max`. The seventh, `relaxed_dot_product`, is the instructive one: its
-`i16x8` dot passes, and both failures are `i32x4.relaxed_dot_i8x16_i7x16_add_s`
-invoked with three `v128` arguments — the `jit_apply` row below, not a missing
-instruction. Across the seven, 32 assertions are skipped for `either` (the
-expectation form the harness does not model yet), which is honest rather than
-lucky: a relaxed op is *permitted* to return any of the listed vectors, so a
-harness that silently picked the first would be asserting something the spec does
-not promise.
+Getting there took three separate causes, and only the first was marshalling:
 
-The 24 that do not pass split into two causes, and neither is marshalling:
-
-| Cause | Scripts | What it would take |
+| Cause | Scripts | What closed it |
 |---|---|---|
-| `v128` globals | 8 (`simd_const`, `simd_splat`, `simd_lane`, `simd_linking`, and the four `simd_store*_lane`) | SIMD-4 / `SIMD-L5` (`v128` globals and `v128.const` in `evalConstantExpr`) |
-| three `v128` operands | the rest — every remaining failing assertion is one of these | a workaround for libjit's `jit_apply`, which damages the stack-passed third aggregate — the *generated code* is correct, as `simd_abi_args.wat` verifies |
+| `v128` arguments and results | all 59 `simd_*` (the original blocker) | lane-wise decode/compare in `WastScript.cpp` (SIMD-L7) |
+| `v128` globals | 8 (`simd_const`, `simd_splat`, `simd_lane`, `simd_linking`, the four `simd_store*_lane`) | SIMD-4 / `SIMD-L5`: the `0xFD` arm in `evalConstantExpr`, and `global.get`/`set` as 16-byte loads/stores |
+| three `v128` operands | the `*_arith` family, `simd_boolean`'s `bitselect` sweeps, `relaxed_dot_product` | SIMD-L7: the harness calls one-to-four-`v128` signatures through the host C ABI instead of `jit_apply` |
 
-Do not curate a script that reports `failed > 0`, or `skipped > 0` for reasons
-that are the *engine's*: a script only counts as evidence when its skips are
-features the runtime does not claim. Reproduce a row with:
+The last one is worth stating precisely, because it looked like an engine bug for
+a while: libjit's `jit_apply` damages a stack-passed *third* 16-byte aggregate.
+The generated code is not at fault — `simd_abi_args.wat` passes 2, 3 and 4 `v128`
+parameters through the host ABI and reads them back exactly — so the harness now
+takes the same route `WASM::callCallable` does. A signature that mixes `v128`
+with scalars still uses `jit_apply`, so the defect is bounded rather than fixed;
+it is libjit's to fix.
+
+What remains in these scripts is *skips*, and they are honest ones: the `either`
+expectation form the harness does not model (a relaxed op may return any of the
+listed vectors, so a harness that silently picked the first would assert
+something the spec does not promise) and modules whose rejection needs validation
+the engine does not implement. Do not curate a script that reports `failed > 0`.
+Reproduce a row with:
 
 ```bash
 WASM_SPEC_TIMEOUT=10 ./WasmJit 'spec: simd_load' -r compact

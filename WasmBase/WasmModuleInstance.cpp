@@ -733,6 +733,22 @@ Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 			break;
 		}
 
+		// SIMD (docs/proposals/SIMD.md S3): `v128.const` is the only `v128`
+		// instruction a constant expression may contain. Its 16 immediates are raw
+		// bytes, byte 0 = lane 0's least significant byte, so a straight copy is
+		// the little-endian layout the engine stores a vector in (hazard Y11).
+		case 0xFD: {
+			const uint32_t sub = stream.readLEB128<uint32_t>();
+			if (sub != static_cast<uint32_t>(SIMDOpcode::V128Const))
+				throw InvalidOpcodeException(0xFD0000u | sub);
+			Value v{};
+			for (size_t i = 0; i < 16; ++i)
+				v.v128[i] = stream.read<uint8_t>();
+			v.kind = ValueTypeCode::V128;
+			stack.push_back(v);
+			break;
+		}
+
 		case 0xD0: { // ref.null <heaptype>
 			(void)stream.readLEB128<int32_t>();
 			Value v{}; v.ref = nullptr; v.kind = ValueTypeCode::FuncRef;

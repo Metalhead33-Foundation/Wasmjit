@@ -2279,6 +2279,40 @@ double bestNsPerOp(Body&& body, uint32_t iterations, uint32_t opsPerIteration)
 
 } // namespace
 
+TEST_CASE("simd: v128 globals run through the JIT")
+{
+	// SIMD-4 / SIMD-L5. The spec scripts grade this too (`simd_const`,
+	// `simd_splat`, `simd_lane`, `simd_linking`, the four `simd_store*_lane`),
+	// but those go through the harness; this case pins the lowering itself:
+	// `evalConstantExpr` decoding the 16 immediates, `global.get` as a load helper
+	// on the global's bytes, `global.set` as the matching store helper, and the
+	// value surviving between calls.
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("simd_globals", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	const auto i32Export = [&instance](const char* name) {
+		auto fn = instance.exportedFunction(name);
+		REQUIRE(fn.has_value());
+		return *fn;
+	};
+
+	// Lane 2 of `i8x16 0 1 … 15` is bytes 8..11, i.e. 0x0B0A0908 — the assertion
+	// that pins the byte order through the constant-expression path.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("imm_lane2")) == 0x0B0A0908);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("imm_byte15")) == 15);
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("mut_lane0")) == 1);
+	// 0x0F0E0D0C: bytes 12..15 of the constant, little-endian (hazard Y11).
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("copy_from_imm")) == 0x0F0E0D0C);
+
+	// Order matters from here on: the global carries state between calls.
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("set_and_read")) == 10);
+	V128 ones{1, 1, 1, 1};
+	REQUIRE(WASM::callCallable<int32_t>(i32Export("accumulate"), ones) == 8);
+}
+
 TEST_CASE("simd benchmark: ns per v128 op (SIMD-L8)", "[.simdbench]")
 {
 	// The workload is `Test/wasm_wat/simd_bench.wat`: a loop doing

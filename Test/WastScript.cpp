@@ -36,6 +36,47 @@ namespace {
 
 using Json = nlohmann::json;
 
+// The host C ABI's shape for a `v128` argument: 16 bytes, no padding, which
+// System V classifies as two INTEGER eightbytes. It is the same mirror the T2
+// tests call `V128` in `main.cpp` (docs/SIMD_LIBJIT.md §6.6).
+struct AbiV128 { uint32_t lane[4]; };
+
+// Calls `Ret f(void* ctx, AbiV128, …)` for one to four `v128` parameters, i.e.
+// the shape of a compiled wasm function wrapper around a ternary SIMD op. Used
+// only where `jit_apply` cannot be (see the note in `ScriptRunner::invoke`).
+template <typename Ret>
+Ret callWithV128Params(void* fnPtr, void* context, const AbiV128* args, size_t count)
+{
+	switch (count) {
+	case 1:
+		return reinterpret_cast<Ret (*)(void*, AbiV128)>(fnPtr)(context, args[0]);
+	case 2:
+		return reinterpret_cast<Ret (*)(void*, AbiV128, AbiV128)>(fnPtr)(context, args[0], args[1]);
+	case 3:
+		return reinterpret_cast<Ret (*)(void*, AbiV128, AbiV128, AbiV128)>(fnPtr)(context, args[0], args[1], args[2]);
+	default:
+		return reinterpret_cast<Ret (*)(void*, AbiV128, AbiV128, AbiV128, AbiV128)>(fnPtr)(context, args[0], args[1], args[2], args[3]);
+	}
+}
+
+void callWithV128ParamsVoid(void* fnPtr, void* context, const AbiV128* args, size_t count)
+{
+	switch (count) {
+	case 1:
+		reinterpret_cast<void (*)(void*, AbiV128)>(fnPtr)(context, args[0]);
+		return;
+	case 2:
+		reinterpret_cast<void (*)(void*, AbiV128, AbiV128)>(fnPtr)(context, args[0], args[1]);
+		return;
+	case 3:
+		reinterpret_cast<void (*)(void*, AbiV128, AbiV128, AbiV128)>(fnPtr)(context, args[0], args[1], args[2]);
+		return;
+	default:
+		reinterpret_cast<void (*)(void*, AbiV128, AbiV128, AbiV128, AbiV128)>(fnPtr)(context, args[0], args[1], args[2], args[3]);
+		return;
+	}
+}
+
 // ── JSON access helpers ─────────────────────────────────────────────────────
 
 std::string stringOr(const Json& object, const char* key)
@@ -1142,6 +1183,84 @@ bool ScriptRunner::invoke(WASM::ModuleInstance& instance, const ScriptAction& ac
 		lastTrapKind = trapScope.kind();
 		return true;
 	}
+
+	// libjit's `jit_apply` damages a third stack-passed 16-byte aggregate
+	// (docs/SIMD_LIBJIT.md §6.6). The *callee* side is verified correct — the T2
+	// case for `simd_abi_args.wat` passes 2, 3 and 4 `v128` parameters through
+	// the host ABI and reads them back exactly — so the defect is in the
+	// dynamic-call shim, not in the generated code. Every ternary SIMD op is
+	// invoked in precisely that shape, which is why sixteen spec scripts could
+	// not be graded at all.
+	//
+	// So those calls do not go through `jit_apply`: an all-`v128` signature with a
+	// single `v128` result is called through the C ABI directly, which is the ABI
+	// the callee was generated for and the one `WASM::callCallable` uses. The
+	// arguments are already marshalled into 16-byte slots by this point.
+	const auto v128AbiCall = [&]() {
+		if (tuple != nullptr)
+			return false;
+		if (funcType.params.empty() || funcType.params.size() > 4)
+			return false;
+		for (const auto& param : funcType.params)
+			if (param.val.opcode != WASM::ValueTypeCode::V128)
+				return false;
+		// The result may be absent, a `v128`, or one scalar — `v128.bitselect`
+		// wrapped in a comparison returns `i32`, and that shape was the last
+		// failing group in `simd_boolean.wast`.
+		WASM::ValueTypeCode resultCode = WASM::ValueTypeCode::Void;
+		if (funcType.results.size() == 1) {
+			resultCode = funcType.results[0].val.opcode;
+			const bool ok = resultCode == WASM::ValueTypeCode::V128
+					|| resultCode == WASM::ValueTypeCode::I32
+					|| resultCode == WASM::ValueTypeCode::I64
+					|| resultCode == WASM::ValueTypeCode::F32
+					|| resultCode == WASM::ValueTypeCode::F64;
+			if (!ok)
+				return false;
+		} else if (funcType.results.size() > 1) {
+			return false;
+		}
+
+		AbiV128 args[4];
+		for (size_t i = 0; i < funcType.params.size(); ++i)
+			std::memcpy(&args[i], slots[i].raw, sizeof(AbiV128));
+
+		const size_t count = funcType.params.size();
+		void* fnPtr = callable.fnPtr;
+		switch (resultCode) {
+		case WASM::ValueTypeCode::V128: {
+			const AbiV128 result = callWithV128Params<AbiV128>(fnPtr, context, args, count);
+			std::memcpy(returns.data(), &result, sizeof(result));
+			break;
+		}
+		case WASM::ValueTypeCode::I32: {
+			const int32_t result = callWithV128Params<int32_t>(fnPtr, context, args, count);
+			std::memcpy(returns.data(), &result, sizeof(result));
+			break;
+		}
+		case WASM::ValueTypeCode::I64: {
+			const int64_t result = callWithV128Params<int64_t>(fnPtr, context, args, count);
+			std::memcpy(returns.data(), &result, sizeof(result));
+			break;
+		}
+		case WASM::ValueTypeCode::F32: {
+			const float result = callWithV128Params<float>(fnPtr, context, args, count);
+			std::memcpy(returns.data(), &result, sizeof(result));
+			break;
+		}
+		case WASM::ValueTypeCode::F64: {
+			const double result = callWithV128Params<double>(fnPtr, context, args, count);
+			std::memcpy(returns.data(), &result, sizeof(result));
+			break;
+		}
+		default:
+			callWithV128ParamsVoid(fnPtr, context, args, count);
+			break;
+		}
+		return true;
+	};
+	if (v128AbiCall())
+		return true;
 
 	const unsigned int numArgs = static_cast<unsigned int>(funcType.params.size() + 1)
 			+ (tupleType != nullptr ? 1u : 0u);
