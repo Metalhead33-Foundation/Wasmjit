@@ -29,11 +29,18 @@ enum class AbstractHeapType : int32_t {
 	I31       = -0x14, // 0x6C
 	Struct    = -0x15, // 0x6B
 	Array     = -0x16, // 0x6A
-	NoExtern  = -0x17, // 0x69
-	NoFunc    = -0x18, // 0x68
-	None      = -0x19, // 0x67
-	// Note: Some experimental versions used different offsets;
-	// these are the standard GC proposal values.
+	Exn       = -0x17, // 0x69 (exception handling: `(ref null exn)` = exnref)
+	None      = -0x0F, // 0x71
+	NoFunc    = -0x0D, // 0x73
+	NoExtern  = -0x0E, // 0x72
+	NoExn     = -0x0C, // 0x74
+	// These are the final Wasm 3.0 encodings. Note that the bottom types
+	// (none/nofunc/noextern/noexn) are *not* -0x19/-0x18/-0x17/-0x16: an early
+	// GC draft placed them just below `array`, while the final spec moved them
+	// below `func` and inserted `exn` at 0x69. The shorthand ValueTypeCodes
+	// (NullRef 0x71, NullExternRef 0x72, NullFuncRef 0x73, NullExnRef 0x74)
+	// always used the final numbering, so the two must agree for
+	// canonicalisation to identify `nullexternref` with `(ref null noextern)`.
 };
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, AbstractHeapType& right) {
 	return left.readLEB128_enum(right);
@@ -64,8 +71,10 @@ enum class ValueTypeCode : int8_t {
 	I31Ref          = -0x14, // 0x6C
 	StructRef       = -0x15, // 0x6B
 	ArrayRef        = -0x16, // 0x6A
+	ExnRef          = -0x17, // 0x69 (exception handling)
 	NullFuncRef     = -0x0D, // 0x73
 	NullExternRef   = -0x0E, // 0x72
+	NullExnRef      = -0x0C, // 0x74
 	NullRef         = -0x0F, // 0x71
 
 	// Stringref (Standardized Values)
@@ -111,8 +120,10 @@ inline bool isModeledValueTypeCode(ValueTypeCode code)
 	case ValueTypeCode::I31Ref:
 	case ValueTypeCode::StructRef:
 	case ValueTypeCode::ArrayRef:
+	case ValueTypeCode::ExnRef:
 	case ValueTypeCode::NullFuncRef:
 	case ValueTypeCode::NullExternRef:
+	case ValueTypeCode::NullExnRef:
 	case ValueTypeCode::NullRef:
 	case ValueTypeCode::StringRef:
 	case ValueTypeCode::StringViewWtf8:
@@ -143,8 +154,10 @@ inline bool shorthandRefHeapType(ValueTypeCode code, AbstractHeapType& heap)
 	case ValueTypeCode::I31Ref:        heap = AbstractHeapType::I31;      return true;
 	case ValueTypeCode::StructRef:     heap = AbstractHeapType::Struct;   return true;
 	case ValueTypeCode::ArrayRef:      heap = AbstractHeapType::Array;    return true;
+	case ValueTypeCode::ExnRef:        heap = AbstractHeapType::Exn;      return true;
 	case ValueTypeCode::NullFuncRef:   heap = AbstractHeapType::NoFunc;   return true;
 	case ValueTypeCode::NullExternRef: heap = AbstractHeapType::NoExtern; return true;
+	case ValueTypeCode::NullExnRef:    heap = AbstractHeapType::NoExn;    return true;
 	case ValueTypeCode::NullRef:       heap = AbstractHeapType::None;     return true;
 	default:                           return false;
 	}

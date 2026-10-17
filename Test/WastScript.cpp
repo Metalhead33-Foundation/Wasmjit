@@ -223,20 +223,24 @@ void* referenceArgument(WASM::ModuleInstance& instance, WASM::ValueTypeCode code
 	}
 	case WASM::ValueTypeCode::I31Ref:
 		return reinterpret_cast<void*>(static_cast<uintptr_t>((raw << 1) | 1));
+	case WASM::ValueTypeCode::ExnRef:
+	case WASM::ValueTypeCode::NullExnRef:
+		// An exception reference has no host-side constructor; only `null` is
+		// marshallable until throw/catch land (EXCEPTIONS.md EX-3).
+		return nullptr;
 	default:
 		// Host-owned: an even, non-null, never-GC-heap pointer.
 		return reinterpret_cast<void*>(static_cast<uintptr_t>(0xE0000000ull + 16ull * static_cast<unsigned long long>(raw)));
 	}
 }
 
-// Reference type names wasm-tools emits for *arguments* (GC.md R5). Deliberately
-// separate from `typeCodeFromName`, which also gates the expected-*result* path:
-// a reference result generally has no canonical pointer to compare against
-// (`(ref.null any)`), so results stay skipped while arguments become runnable.
+// The reference code a script *type name* denotes. This covers every name the
+// converter emits for a reference — including the bottom shorthands — and does
+// not require a value payload: `(ref.null)` is emitted as `{"type":"refnull"}`
+// with no `value`. Used for arguments *and* expected results (GC.md R5); an
+// `exnref`/`nullexnref` is just an opaque pointer for now (EXCEPTIONS.md EX-1).
 bool referenceArgTypeCode(const ScriptValue& value, WASM::ValueTypeCode& out)
 {
-	if (!value.hasValue)
-		return false;
 	if (value.type == "funcref") { out = WASM::ValueTypeCode::FuncRef; return true; }
 	if (value.type == "externref") { out = WASM::ValueTypeCode::ExternRef; return true; }
 	if (value.type == "anyref") { out = WASM::ValueTypeCode::AnyRef; return true; }
@@ -244,7 +248,42 @@ bool referenceArgTypeCode(const ScriptValue& value, WASM::ValueTypeCode& out)
 	if (value.type == "i31ref") { out = WASM::ValueTypeCode::I31Ref; return true; }
 	if (value.type == "structref") { out = WASM::ValueTypeCode::StructRef; return true; }
 	if (value.type == "arrayref") { out = WASM::ValueTypeCode::ArrayRef; return true; }
+	if (value.type == "exnref") { out = WASM::ValueTypeCode::ExnRef; return true; }
+	if (value.type == "nullref") { out = WASM::ValueTypeCode::NullRef; return true; }
+	if (value.type == "nullfuncref") { out = WASM::ValueTypeCode::NullFuncRef; return true; }
+	if (value.type == "nullexternref") { out = WASM::ValueTypeCode::NullExternRef; return true; }
+	if (value.type == "nullexnref") { out = WASM::ValueTypeCode::NullExnRef; return true; }
+	// `(ref.null)` with no heap type, and `(ref null $t)` for a concrete type.
+	if (value.type == "refnull") { out = WASM::ValueTypeCode::NullRef; return true; }
 	return false;
+}
+
+// True when a script's expected value is a *null* reference. Such a result can
+// be verified without a host object model: the returned pointer must be null.
+//
+// Only two forms are null: an explicit `(ref.null …)` (whose value is "null",
+// or whose type is `refnull`), and a bottom-type shorthand (`nullref`,
+// `nullfuncref`, `nullexternref`, `nullexnref`) — the sole inhabitant of a
+// bottom type is null. A bare `arrayref`/`anyref`/`funcref` without a value is
+// a *non-null placeholder*, not a null.
+bool isNullReferenceExpectation(const ScriptValue& value)
+{
+	WASM::ValueTypeCode code = WASM::ValueTypeCode::Void;
+	if (!referenceArgTypeCode(value, code))
+		return false;
+	if (value.value == "null")
+		return true;
+	if (!value.value.empty())
+		return false;
+	switch (code) {
+	case WASM::ValueTypeCode::NullRef:
+	case WASM::ValueTypeCode::NullFuncRef:
+	case WASM::ValueTypeCode::NullExternRef:
+	case WASM::ValueTypeCode::NullExnRef:
+		return true;
+	default:
+		return false;
+	}
 }
 
 bool isReferenceArg(const ScriptValue& value)
@@ -264,9 +303,11 @@ bool isMarshallableReference(WASM::ValueTypeCode code)
 	case WASM::ValueTypeCode::I31Ref:
 	case WASM::ValueTypeCode::StructRef:
 	case WASM::ValueTypeCode::ArrayRef:
+	case WASM::ValueTypeCode::ExnRef:
 	case WASM::ValueTypeCode::NullRef:
 	case WASM::ValueTypeCode::NullFuncRef:
 	case WASM::ValueTypeCode::NullExternRef:
+	case WASM::ValueTypeCode::NullExnRef:
 		return true;
 	default:
 		return false;
@@ -417,6 +458,15 @@ std::string formatResultValue(WASM::ValueTypeCode code, const unsigned char* dat
 		break;
 	}
 	default:
+		if (WASM::isReferenceType(code)) {
+			const void* p = nullptr;
+			std::memcpy(&p, data, sizeof(p));
+			if (p == nullptr)
+				out << "null";
+			else
+				out << p;
+			break;
+		}
 		out << "?";
 		break;
 	}
@@ -805,10 +855,10 @@ void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 		}
 	}
 	for (const ScriptValue& expected : command.expected) {
-		if (!isScalarValue(expected)) {
-			skip("expected type '" + expected.type + "' is not supported");
-			return;
-		}
+		if (isScalarValue(expected) || isNullReferenceExpectation(expected))
+			continue;
+		skip("expected type '" + expected.type + "' is not supported");
+		return;
 	}
 
 	if (funcType->results.size() > 1) {
@@ -1271,6 +1321,17 @@ bool ScriptRunner::invoke(WASM::ModuleInstance& instance, const ScriptAction& ac
 
 bool ScriptRunner::compareResult(const ScriptValue& expected, WASM::ValueTypeCode actual, const unsigned char* data)
 {
+	// A null reference result needs no host-object model: the returned pointer
+	// must be null. Non-null reference expectations are still skipped by the
+	// caller (there is no canonical pointer to compare against, GC.md R5).
+	if (isNullReferenceExpectation(expected)) {
+		if (!WASM::isReferenceType(actual))
+			return false;
+		const void* got = nullptr;
+		std::memcpy(&got, data, sizeof(got));
+		return got == nullptr;
+	}
+
 	WASM::ValueTypeCode expectedCode = WASM::ValueTypeCode::Void;
 	if (!expected.hasValue || !typeCodeFromName(expected.type, expectedCode) || expectedCode != actual)
 		return false;

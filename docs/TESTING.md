@@ -5,7 +5,7 @@
 | Family | Sources | Selection | Test data |
 | --- | --- | --- | --- |
 | Manual unit tests | `Test/main.cpp` | by name (no tag) | `Test/wasm/*.ts`, compiled to `.wasm` at build time |
-| WebAssembly spec testsuite | `Test/SpecSuite.cpp`, `Test/WastScript.cpp` | `[spec]`, one test case per script | `extern/WasmTestsuite/*.wast`, converted at build time |
+| WebAssembly spec testsuite | `Test/SpecSuite.cpp`, `Test/WastScript.cpp` | `[spec]`, one test case per script | `extern/WasmTestsuite/*.wast` (plus the explicitly listed `proposals/threads/atomic.wast`), converted at build time |
 
 Both live in the same binary, so a bare `./WasmJit` runs everything the runtime can currently handle.
 
@@ -137,7 +137,11 @@ used elsewhere in this project (never `wabt`).
 ### Build-time conversion
 
 `Test/Test.pro` declares a `wast2json` extra compiler that converts every `*.wast` script into
-`<build>/wasm_testsuite/<name>.json`, plus the `<name>.<N>.wasm` modules that script references:
+`<build>/wasm_testsuite/<name>.json`, plus the `<name>.<N>.wasm` modules that script references.
+The `WAST_SOURCES` list is the top-level `extern/WasmTestsuite/*.wast` plus explicitly listed
+sub-directory scripts that are relevant to the engine's execution model —
+`extern/WasmTestsuite/proposals/threads/atomic.wast` is the one such script
+(docs/proposals/THREADS.md TH-1). Adding another one is a one-line `WAST_SOURCES +=`.
 
 ```bash
 wasm-tools json-from-wast <script>.wast -o <build>/wasm_testsuite/<name>.json \

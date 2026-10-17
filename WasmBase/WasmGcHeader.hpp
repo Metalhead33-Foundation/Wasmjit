@@ -103,8 +103,10 @@ inline bool isReferenceType(ValueTypeCode code)
 	case ValueTypeCode::I31Ref:
 	case ValueTypeCode::StructRef:
 	case ValueTypeCode::ArrayRef:
+	case ValueTypeCode::ExnRef:
 	case ValueTypeCode::NullFuncRef:
 	case ValueTypeCode::NullExternRef:
+	case ValueTypeCode::NullExnRef:
 	case ValueTypeCode::NullRef:
 	case ValueTypeCode::StringRef:
 	case ValueTypeCode::StringViewWtf8:

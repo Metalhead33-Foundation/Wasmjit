@@ -245,6 +245,7 @@ bool abstractMatches(AbstractHeapType a, AbstractHeapType b) {
 	if (a == AbstractHeapType::None)     return isInternalAbstract(b);
 	if (a == AbstractHeapType::NoFunc)   return b == AbstractHeapType::Func;
 	if (a == AbstractHeapType::NoExtern) return b == AbstractHeapType::Extern;
+	if (a == AbstractHeapType::NoExn)    return b == AbstractHeapType::Exn;
 	if (a == AbstractHeapType::I31 || a == AbstractHeapType::Struct || a == AbstractHeapType::Array)
 		return b == AbstractHeapType::Eq || b == AbstractHeapType::Any;
 	if (a == AbstractHeapType::Eq) return b == AbstractHeapType::Any;

@@ -234,13 +234,30 @@ private:
 	// Emits a runtime check that `callablePtr`'s canonical type id matches the
 	// module-local type index `typeIdx` (id fast path, registry fallback).
 	void emitCallableTypeCheck(jit_value_t callablePtr, WASM::TypeIdx typeIdx);
-	// Some opcodes are enumerated and decoded but not lowered yet (SIMD, the
-	// atomics). Their handlers call notImplemented(), which throws; the LibJIT
-	// build region in ModuleCompiler::compileFunctions is RAII-guarded, so the
-	// exception surfaces as a clean instantiation failure (docs/SAFETY.md).
+	// A lowering the backend cannot perform (in practice: an unmodelled value
+	// type, docs/NULL_JIT_VALUE_DIAGNOSIS.md). `notImplemented()` throws, which
+	// surfaces as a clean instantiation failure; the LibJIT build region in
+	// ModuleCompiler::compileFunctions is RAII-guarded (docs/SAFETY.md).
 	[[noreturn]] void notImplemented(const char* name);
 
 	jit_value_t effectiveMemoryAddress(const WASM::MemArg& ma, jit_nint accessSize);
+
+	// ── 0xFE atomics (docs/proposals/THREADS.md TH-1) ──────────────────────
+	// The shared helpers in WasmBase (wasm_atomic.hpp) perform the access with
+	// `__atomic_*` at seq_cst and trap on a misaligned effective address; these
+	// emit the call and adapt the value types. `effectiveMemoryAddress` has
+	// already bounds-checked the address (and trapped on out-of-bounds).
+	jit_value_t emitAtomicLoad(const WASM::MemArg& ma, uint32_t width, jit_type_t resultType);
+	void        emitAtomicStore(const WASM::MemArg& ma, uint32_t width);
+	jit_value_t emitAtomicRmw(const WASM::MemArg& ma, uint32_t width, uint32_t op,
+							  jit_type_t resultType);
+	jit_value_t emitAtomicCmpxchg(const WASM::MemArg& ma, uint32_t width,
+								  jit_type_t resultType);
+	jit_value_t callNativeHelper(void* fptr, jit_type_t resultType,
+								 std::vector<jit_type_t> paramTypes,
+								 std::vector<jit_value_t> args);
+	jit_value_t atomicUintConstant(uint32_t value);
+
 	WASM::GlobalType globalTypeForIndex(WASM::GlobalIdx idx) const;
 
 public:

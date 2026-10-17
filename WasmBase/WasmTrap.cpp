@@ -20,6 +20,7 @@ const char* trapKindName(TrapKind kind)
 	case TrapKind::OutOfBoundsMemoryAccess:    return "out of bounds memory access";
 	case TrapKind::OutOfBoundsTableAccess:     return "out of bounds table access";
 	case TrapKind::OutOfBoundsArrayAccess:     return "out of bounds array access";
+	case TrapKind::UnalignedAtomicAccess:      return "unaligned atomic";
 	case TrapKind::UninitializedElement:       return "uninitialized element";
 	case TrapKind::UndefinedElement:           return "undefined element";
 	case TrapKind::IndirectCallTypeMismatch:   return "indirect call type mismatch";

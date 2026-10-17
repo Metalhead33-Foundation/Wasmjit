@@ -197,3 +197,23 @@ With the null source removed, the operand-stack ownership layer
 (`kStackOwnsRefs`) is now **enabled** and the full suite is green
 (1446 assertions / 78 test cases), with every GC/array/table spec script at its
 baseline.
+
+## Follow-up: the rejection is no longer triggered by `exnref` (EX-1)
+
+The guard is still the right policy for a genuinely unmodelled type — a module
+must be refused at load rather than compiled into a null `jit_value_t`. But the
+particular type that triggered it was `exnref`/`nullexnref`, and those are
+**modelled now** (`docs/proposals/EXCEPTIONS.md` EX-1):
+
+- `ValueTypeCode::ExnRef` (0x69) and `NullExnRef` (0x74), with
+  `AbstractHeapType::Exn`/`NoExn` and the bottom-type encodings corrected to the
+  final 3.0 numbering (the old draft values collided with `exn` at 0x69);
+- `LibJitTypeTranslator` lowers both to `void*`, and `isModeledValueTypeCode`
+  accepts them, so `Module::fromFile` no longer refuses such a module;
+- `ref_null.wast` runs **34 passed / 0 failed / 0 skipped** and is curated.
+  (The harness now compares `(ref.null …)` *results* against a null pointer,
+  which is what turned its 32 skips into real assertions.)
+
+The `NULL_JIT_VALUE_DIAGNOSIS` failure mode itself — an unmodelled code lowering
+to `jit_type_void` and pushing a null backend handle — is unchanged and still
+guarded; a future unmodelled type will be rejected exactly as described above.

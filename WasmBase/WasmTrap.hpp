@@ -52,6 +52,7 @@ enum class TrapKind : uint8_t {
 	OutOfBoundsMemoryAccess,     // "out of bounds memory access"
 	OutOfBoundsTableAccess,      // "out of bounds table access"
 	OutOfBoundsArrayAccess,      // "out of bounds array access"
+	UnalignedAtomicAccess,       // "unaligned atomic"
 	UninitializedElement,        // "uninitialized element"
 	UndefinedElement,            // "undefined element"
 	IndirectCallTypeMismatch,    // "indirect call type mismatch"

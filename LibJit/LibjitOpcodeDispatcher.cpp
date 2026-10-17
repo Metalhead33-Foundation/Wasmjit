@@ -3,6 +3,7 @@
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmTrap.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
+#include "../WasmBase/wasm_atomic.hpp"
 #include "../WasmBase/wasm_simd_scalar.hpp"
 #include <algorithm>
 #include <cassert>
@@ -1210,11 +1211,12 @@ void OpcodeDispatcher::emitTrap(WASM::TrapKind kind, const char* detail)
 
 void OpcodeDispatcher::notImplemented(const char* name)
 {
-	// The backend does not lower this opcode yet (SIMD, the atomics, …). It is
-	// a compile-time limitation rather than a Wasm trap, so it is reported as a
-	// clean instantiation failure. The LibJIT context's build region is guard by
-	// RAII in compileFunctions(), so unwinding from here cannot wedge it
-	// (docs/SAFETY.md).
+	// The backend cannot lower `name` — in practice only a value type the engine
+	// does not model reaches this now that SIMD and the atomics have handlers
+	// (docs/NULL_JIT_VALUE_DIAGNOSIS.md). It is a compile-time limitation rather
+	// than a Wasm trap, so it is reported as a clean instantiation failure. The
+	// LibJIT context's build region is guarded by RAII in compileFunctions(), so
+	// unwinding from here cannot wedge it (docs/SAFETY.md).
 	throw std::runtime_error(std::string("LibJIT backend: opcode is not lowered yet: ") + name);
 }
 
@@ -4790,206 +4792,213 @@ void OpcodeDispatcher::dispatchF64x2RelaxedMax() { emitSimdBinaryHelper(reinterp
 void OpcodeDispatcher::dispatchI16x8RelaxedQ15MulRS() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_relaxed_q15mulr_s)); }
 void OpcodeDispatcher::dispatchI16x8RelaxedDotI8x16I7x16S() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_i16x8_relaxed_dot_i8x16_i7x16_s)); }
 void OpcodeDispatcher::dispatchI32x4RelaxedDotI8x16I7x16AddS() { emitSimdTernaryHelper(reinterpret_cast<void*>(wasm_i32x4_relaxed_dot_i8x16_i7x16_add_s)); }
-void OpcodeDispatcher::dispatchMemoryAtomicNotify(WASM::MemArg arg) {
-	notImplemented(__func__);
+// ── 0xFE atomics (docs/proposals/THREADS.md TH-1) ──────────────────────────
+//
+// Every access reuses `effectiveMemoryAddress`, so the memory index, the
+// unsigned address widening, the wrap-safe bounds check and the allocation
+// budget behave exactly as for a scalar load/store. The shared helpers in
+// WasmBase (wasm_atomic.hpp) add natural-alignment trapping and perform the
+// `__atomic_*` access at seq_cst; here we only adapt the value types.
+// wait/notify are the single-agent form (TH-2 / TD9).
+
+jit_value_t OpcodeDispatcher::atomicUintConstant(uint32_t value)
+{
+	return jit_value_create_nint_constant(function, jit_type_uint,
+static_cast<jit_nint>(value));
 }
-void OpcodeDispatcher::dispatchMemoryAtomicWait32(WASM::MemArg arg) {
-	notImplemented(__func__);
+
+jit_value_t OpcodeDispatcher::callNativeHelper(void* fptr, jit_type_t resultType,
+											   std::vector<jit_type_t> paramTypes,
+											   std::vector<jit_value_t> args)
+{
+	jit_type_t signature = jit_type_create_signature(jit_abi_cdecl, resultType,
+			paramTypes.data(), static_cast<unsigned>(paramTypes.size()), 1);
+	return jit_insn_call_native(function, "wasm.atomic", fptr, signature,
+			args.data(), static_cast<unsigned>(args.size()), 0);
 }
-void OpcodeDispatcher::dispatchMemoryAtomicWait64(WASM::MemArg arg) {
-	notImplemented(__func__);
+
+jit_value_t OpcodeDispatcher::emitAtomicLoad(const WASM::MemArg& ma, uint32_t width,
+											 jit_type_t resultType)
+{
+	jit_value_t address = effectiveMemoryAddress(ma, static_cast<jit_nint>(width));
+	jit_value_t raw = callNativeHelper(reinterpret_cast<void*>(wasm_atomic_load),
+			jit_type_ulong, {jit_type_void_ptr, jit_type_uint},
+			{address, atomicUintConstant(width)});
+	return jit_insn_convert(function, raw, resultType, 0);
 }
+
+void OpcodeDispatcher::emitAtomicStore(const WASM::MemArg& ma, uint32_t width)
+{
+	// The value is on top of the stack, the address below it.
+	jit_value_t value = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t address = effectiveMemoryAddress(ma, static_cast<jit_nint>(width));
+	callNativeHelper(reinterpret_cast<void*>(wasm_atomic_store), jit_type_void,
+			{jit_type_void_ptr, jit_type_ulong, jit_type_uint},
+			{address, value, atomicUintConstant(width)});
+}
+
+jit_value_t OpcodeDispatcher::emitAtomicRmw(const WASM::MemArg& ma, uint32_t width,
+											uint32_t op, jit_type_t resultType)
+{
+	jit_value_t value = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t address = effectiveMemoryAddress(ma, static_cast<jit_nint>(width));
+	jit_value_t raw = callNativeHelper(reinterpret_cast<void*>(wasm_atomic_rmw),
+			jit_type_ulong,
+			{jit_type_void_ptr, jit_type_ulong, jit_type_uint, jit_type_uint},
+			{address, value, atomicUintConstant(width), atomicUintConstant(op)});
+	return jit_insn_convert(function, raw, resultType, 0);
+}
+
+jit_value_t OpcodeDispatcher::emitAtomicCmpxchg(const WASM::MemArg& ma, uint32_t width,
+											   jit_type_t resultType)
+{
+	// Stack: address, expected, replacement (replacement on top).
+	jit_value_t replacement = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t expected = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t address = effectiveMemoryAddress(ma, static_cast<jit_nint>(width));
+	jit_value_t raw = callNativeHelper(reinterpret_cast<void*>(wasm_atomic_cmpxchg),
+			jit_type_ulong,
+			{jit_type_void_ptr, jit_type_ulong, jit_type_ulong, jit_type_uint},
+			{address, expected, replacement, atomicUintConstant(width)});
+	return jit_insn_convert(function, raw, resultType, 0);
+}
+
 void OpcodeDispatcher::dispatchAtomicFence() {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicLoad(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicLoad(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicLoad8U(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicLoad16U(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicLoad8U(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicLoad16U(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicLoad32U(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicStore(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicStore(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicStore8(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicStore16(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicStore8(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicStore16(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicStore32(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmwAdd(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmwAdd(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmw8AddU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmw16AddU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw8AddU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw16AddU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw32AddU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmwSub(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmwSub(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmw8SubU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmw16SubU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw8SubU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw16SubU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw32SubU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmwAnd(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmwAnd(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmw8AndU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmw16AndU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw8AndU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw16AndU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw32AndU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmwOr(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmwOr(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmw8OrU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmw16OrU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw8OrU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw16OrU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw32OrU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmwXor(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmwXor(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmw8XorU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmw16XorU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw8XorU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw16XorU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw32XorU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmwXchg(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmwXchg(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmw8XchgU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmw16XchgU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw8XchgU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw16XchgU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw32XchgU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmwCmpxchg(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmwCmpxchg(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmw8CmpxchgU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI32AtomicRmw16CmpxchgU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw8CmpxchgU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw16CmpxchgU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
-void OpcodeDispatcher::dispatchI64AtomicRmw32CmpxchgU(WASM::MemArg arg) {
-	notImplemented(__func__);
-}
+	// All atomics are seq_cst, so the fence is the same ordering for everyone.
+	callNativeHelper(reinterpret_cast<void*>(wasm_atomic_fence), jit_type_void, {}, {});
+}
+
+void OpcodeDispatcher::dispatchMemoryAtomicNotify(WASM::MemArg arg) {
+	jit_value_t count = popValue();
+	jit_value_t address = effectiveMemoryAddress(arg, 4); // 4-byte access size
+	jit_value_t result = callNativeHelper(reinterpret_cast<void*>(wasm_atomic_notify),
+			jit_type_uint, {jit_type_void_ptr, jit_type_uint}, {address, count});
+	pushValue(jit_insn_convert(function, result, jit_type_int, 0));
+}
+
+void OpcodeDispatcher::dispatchMemoryAtomicWait32(WASM::MemArg arg) {
+	jit_value_t timeout = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	// The expected operand is a 32-bit bit pattern: zero-extend it, or a
+	// negative expectation would not compare equal to the loaded bytes.
+	jit_value_t expected = jit_insn_convert(function,
+			jit_insn_convert(function, popValue(), jit_type_uint, 0), jit_type_ulong, 0);
+	jit_value_t address = effectiveMemoryAddress(arg, 4);
+	jit_value_t result = callNativeHelper(reinterpret_cast<void*>(wasm_atomic_wait),
+			jit_type_uint,
+			{jit_type_void_ptr, jit_type_ulong, jit_type_ulong, jit_type_uint},
+			{address, expected, timeout, atomicUintConstant(4)});
+	pushValue(jit_insn_convert(function, result, jit_type_int, 0));
+}
+
+void OpcodeDispatcher::dispatchMemoryAtomicWait64(WASM::MemArg arg) {
+	jit_value_t timeout = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t expected = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t address = effectiveMemoryAddress(arg, 8);
+	jit_value_t result = callNativeHelper(reinterpret_cast<void*>(wasm_atomic_wait),
+			jit_type_uint,
+			{jit_type_void_ptr, jit_type_ulong, jit_type_ulong, jit_type_uint},
+			{address, expected, timeout, atomicUintConstant(8)});
+	pushValue(jit_insn_convert(function, result, jit_type_int, 0));
+}
+
+// One line per opcode. The macro list keeps the 67 handlers auditable against
+// `AtomicOpcode` (WasmBase/WasmOpcode.hpp) and impossible to drift from the
+// declarations in WasmOpcodeDispatcher.hpp.
+#define WASM_ATOMIC_LOADS(X) \
+	X(I32AtomicLoad,     4, jit_type_int) \
+	X(I64AtomicLoad,     8, jit_type_long) \
+	X(I32AtomicLoad8U,   1, jit_type_int) \
+	X(I32AtomicLoad16U,  2, jit_type_int) \
+	X(I64AtomicLoad8U,   1, jit_type_long) \
+	X(I64AtomicLoad16U,  2, jit_type_long) \
+	X(I64AtomicLoad32U,  4, jit_type_long)
+#define WASM_ATOMIC_LOAD_IMPL(name, width, jt) \
+	void OpcodeDispatcher::dispatch##name(WASM::MemArg arg) { \
+		pushValue(emitAtomicLoad(arg, width, jt)); \
+	}
+WASM_ATOMIC_LOADS(WASM_ATOMIC_LOAD_IMPL)
+#undef WASM_ATOMIC_LOAD_IMPL
+#undef WASM_ATOMIC_LOADS
+
+#define WASM_ATOMIC_STORES(X) \
+	X(I32AtomicStore,    4) \
+	X(I64AtomicStore,    8) \
+	X(I32AtomicStore8,   1) \
+	X(I32AtomicStore16,  2) \
+	X(I64AtomicStore8,   1) \
+	X(I64AtomicStore16,  2) \
+	X(I64AtomicStore32,  4)
+#define WASM_ATOMIC_STORE_IMPL(name, width) \
+	void OpcodeDispatcher::dispatch##name(WASM::MemArg arg) { emitAtomicStore(arg, width); }
+WASM_ATOMIC_STORES(WASM_ATOMIC_STORE_IMPL)
+#undef WASM_ATOMIC_STORE_IMPL
+#undef WASM_ATOMIC_STORES
+
+#define WASM_ATOMIC_RMWS(X) \
+	X(I32AtomicRmwAdd,         4, jit_type_int,  WASM_ATOMIC_ADD) \
+	X(I64AtomicRmwAdd,         8, jit_type_long, WASM_ATOMIC_ADD) \
+	X(I32AtomicRmw8AddU,       1, jit_type_int,  WASM_ATOMIC_ADD) \
+	X(I32AtomicRmw16AddU,      2, jit_type_int,  WASM_ATOMIC_ADD) \
+	X(I64AtomicRmw8AddU,       1, jit_type_long, WASM_ATOMIC_ADD) \
+	X(I64AtomicRmw16AddU,      2, jit_type_long, WASM_ATOMIC_ADD) \
+	X(I64AtomicRmw32AddU,      4, jit_type_long, WASM_ATOMIC_ADD) \
+	X(I32AtomicRmwSub,         4, jit_type_int,  WASM_ATOMIC_SUB) \
+	X(I64AtomicRmwSub,         8, jit_type_long, WASM_ATOMIC_SUB) \
+	X(I32AtomicRmw8SubU,       1, jit_type_int,  WASM_ATOMIC_SUB) \
+	X(I32AtomicRmw16SubU,      2, jit_type_int,  WASM_ATOMIC_SUB) \
+	X(I64AtomicRmw8SubU,       1, jit_type_long, WASM_ATOMIC_SUB) \
+	X(I64AtomicRmw16SubU,      2, jit_type_long, WASM_ATOMIC_SUB) \
+	X(I64AtomicRmw32SubU,      4, jit_type_long, WASM_ATOMIC_SUB) \
+	X(I32AtomicRmwAnd,         4, jit_type_int,  WASM_ATOMIC_AND) \
+	X(I64AtomicRmwAnd,         8, jit_type_long, WASM_ATOMIC_AND) \
+	X(I32AtomicRmw8AndU,       1, jit_type_int,  WASM_ATOMIC_AND) \
+	X(I32AtomicRmw16AndU,      2, jit_type_int,  WASM_ATOMIC_AND) \
+	X(I64AtomicRmw8AndU,       1, jit_type_long, WASM_ATOMIC_AND) \
+	X(I64AtomicRmw16AndU,      2, jit_type_long, WASM_ATOMIC_AND) \
+	X(I64AtomicRmw32AndU,      4, jit_type_long, WASM_ATOMIC_AND) \
+	X(I32AtomicRmwOr,          4, jit_type_int,  WASM_ATOMIC_OR) \
+	X(I64AtomicRmwOr,          8, jit_type_long, WASM_ATOMIC_OR) \
+	X(I32AtomicRmw8OrU,        1, jit_type_int,  WASM_ATOMIC_OR) \
+	X(I32AtomicRmw16OrU,       2, jit_type_int,  WASM_ATOMIC_OR) \
+	X(I64AtomicRmw8OrU,        1, jit_type_long, WASM_ATOMIC_OR) \
+	X(I64AtomicRmw16OrU,       2, jit_type_long, WASM_ATOMIC_OR) \
+	X(I64AtomicRmw32OrU,       4, jit_type_long, WASM_ATOMIC_OR) \
+	X(I32AtomicRmwXor,         4, jit_type_int,  WASM_ATOMIC_XOR) \
+	X(I64AtomicRmwXor,         8, jit_type_long, WASM_ATOMIC_XOR) \
+	X(I32AtomicRmw8XorU,       1, jit_type_int,  WASM_ATOMIC_XOR) \
+	X(I32AtomicRmw16XorU,      2, jit_type_int,  WASM_ATOMIC_XOR) \
+	X(I64AtomicRmw8XorU,       1, jit_type_long, WASM_ATOMIC_XOR) \
+	X(I64AtomicRmw16XorU,      2, jit_type_long, WASM_ATOMIC_XOR) \
+	X(I64AtomicRmw32XorU,      4, jit_type_long, WASM_ATOMIC_XOR) \
+	X(I32AtomicRmwXchg,        4, jit_type_int,  WASM_ATOMIC_XCHG) \
+	X(I64AtomicRmwXchg,        8, jit_type_long, WASM_ATOMIC_XCHG) \
+	X(I32AtomicRmw8XchgU,      1, jit_type_int,  WASM_ATOMIC_XCHG) \
+	X(I32AtomicRmw16XchgU,     2, jit_type_int,  WASM_ATOMIC_XCHG) \
+	X(I64AtomicRmw8XchgU,      1, jit_type_long, WASM_ATOMIC_XCHG) \
+	X(I64AtomicRmw16XchgU,     2, jit_type_long, WASM_ATOMIC_XCHG) \
+	X(I64AtomicRmw32XchgU,     4, jit_type_long, WASM_ATOMIC_XCHG)
+#define WASM_ATOMIC_RMW_IMPL(name, width, jt, op) \
+	void OpcodeDispatcher::dispatch##name(WASM::MemArg arg) { \
+		pushValue(emitAtomicRmw(arg, width, op, jt)); \
+	}
+WASM_ATOMIC_RMWS(WASM_ATOMIC_RMW_IMPL)
+#undef WASM_ATOMIC_RMW_IMPL
+#undef WASM_ATOMIC_RMWS
+
+#define WASM_ATOMIC_CMPXCHGS(X) \
+	X(I32AtomicRmwCmpxchg,     4, jit_type_int) \
+	X(I64AtomicRmwCmpxchg,     8, jit_type_long) \
+	X(I32AtomicRmw8CmpxchgU,   1, jit_type_int) \
+	X(I32AtomicRmw16CmpxchgU,  2, jit_type_int) \
+	X(I64AtomicRmw8CmpxchgU,   1, jit_type_long) \
+	X(I64AtomicRmw16CmpxchgU,  2, jit_type_long) \
+	X(I64AtomicRmw32CmpxchgU,  4, jit_type_long)
+#define WASM_ATOMIC_CMPXCHG_IMPL(name, width, jt) \
+	void OpcodeDispatcher::dispatch##name(WASM::MemArg arg) { \
+		pushValue(emitAtomicCmpxchg(arg, width, jt)); \
+	}
+WASM_ATOMIC_CMPXCHGS(WASM_ATOMIC_CMPXCHG_IMPL)
+#undef WASM_ATOMIC_CMPXCHG_IMPL
+#undef WASM_ATOMIC_CMPXCHGS
 
 }

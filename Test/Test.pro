@@ -59,6 +59,12 @@ isEmpty(WASM_TOOLS) {
 # refuses to parse, so drop it: one unparsable file must not break the build.
 WAST_SOURCES = $$files($$PWD/../extern/WasmTestsuite/*.wast)
 WAST_SOURCES -= $$PWD/../extern/WasmTestsuite/type-subtyping.wast
+# The threads proposal's atomic semantics test lives in a subdirectory, so the
+# top-level glob does not see it. It is a *single-agent* script (one shared
+# memory, no second thread), which matches this engine's execution model — see
+# docs/proposals/THREADS.md TH-1/TD9. Listed explicitly rather than globbing the
+# whole `proposals/` tree, whose other scripts are for features we do not ship.
+WAST_SOURCES += $$PWD/../extern/WasmTestsuite/proposals/threads/atomic.wast
 
 wast2json.name = wasm-tools json-from-wast ${QMAKE_FILE_IN}
 wast2json.input = WAST_SOURCES

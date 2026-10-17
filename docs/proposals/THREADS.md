@@ -1,7 +1,11 @@
 # Threads and Atomics — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 2 — §4.5/T11 record
-the tail-call trampoline's process-global state).
+Status: design note / implementation reference (revision 3 — TH-1 landed:
+single-agent atomics and the single-agent form of wait/notify execute, and the
+submodule's `atomic.wast` is wired in and curated. §3 records the project's
+explicit execution model: **single-agent only, for the foreseeable future**;
+true multithreading/agents are *deferred indefinitely but not ruled out*, and
+the single-agent build is a long-term stop-gap, not an oversight).
 Audience: anyone touching `WasmMemory`, `WasmStore`, `WasmOpcode`,
 `WasmOpcodeDispatcher`, `LibjitOpcodeDispatcher`, or the test harness.
 
@@ -107,6 +111,16 @@ engine must do", not "what 3.0 requires".
   execution model every atomic access is trivially sequentially consistent and
   there is no observable difference from a real implementation. Nothing in the
   proposal forces the embedder to spawn OS threads.
+
+  **Project decision (revision 3).** This engine deliberately targets
+  **single-agent execution only**. True multithreading — agents, OS threads, a
+  scheduler, TLS, cross-agent `wait`/`notify` — is **deferred indefinitely, but
+  not ruled out**: every piece of the representation (stable shared-memory
+  bases, `__atomic_*` accesses, per-thread trap state) is kept in a shape that a
+  later multi-agent build can use. The single-agent model is a **long-term
+  stop-gap**, chosen because it keeps the runtime simple and the spec suite
+  meaningful; it is not a claim that the engine must never be concurrent. See
+  `TD9` in §6 and the deferred `TH-5` in §7.
 - **No scheduling model.** No thread pool, fairness, work stealing, priority,
   or number of parallel agents is specified.
 - **`notify` may wake fewer waiters than asked** (including zero); it returns
@@ -162,23 +176,32 @@ engine must do", not "what 3.0 requires".
 - `WasmOpcodeDispatcher::dispatchPrefixAtomic` decodes the immediates
   correctly: a reserved `0x00` byte for `atomic.fence` (checked, throws if not
   zero) and a `MemArg` for everything else, then dispatches to virtuals.
-- **All 67 `LibJIT::OpcodeDispatcher` handlers are stubs** that call
-  `notImplemented(__func__)`, which prints
-  `LibJIT: unimplemented opcode handler <name>` to `stderr` and calls
-  `std::abort()`. A module containing any atomic instruction therefore aborts
-  during compilation/instantiation.
+- **All 67 handlers execute (TH-1).** Each one reuses `effectiveMemoryAddress`,
+  so the memory index, unsigned address widening, wrap-safe bounds check and
+  allocation budget are identical to a scalar load/store, then calls a helper
+  in `WasmBase/wasm_atomic.*` that performs the access with `__atomic_*` at
+  seq_cst and traps on a misaligned effective address
+  (`TrapKind::UnalignedAtomicAccess` → "unaligned atomic"). The 67 entry points
+  are generated from four macro lists in one place, so they cannot drift from
+  the virtual declarations. `i64.atomic.rmw8/16/32.*` pass their width and get
+  the zero-extended old value back, exactly like the instruction.
+- `atomic.fence` lowers to `wasm_atomic_fence()` = `__atomic_thread_fence(
+  __ATOMIC_SEQ_CST)`; `wait`/`notify` are the single-agent forms (TH-2, `TD9`).
 - The non-JIT `Stub::OpcodeDispatcher` implements the same handlers as textual
   pretty-printers (useful for inspection, no execution).
 
 ### 4.3 What is absent
 
-- **No execution of any atomic instruction**, hence no load/store/RMW/cmpxchg,
-  no wait/notify, no fence lowering.
-- **No agent/thread model**: one `ModuleInstance` executes on the caller's
-  thread, the `Store` is a single process-global, and there is no API to create
-  an agent or run instances concurrently.
-- The shared-memory **allocation/growth** machinery exists, but nothing
-  consumes it atomically.
+- **No agent/thread model — by decision, not by omission.** One
+  `ModuleInstance` executes on the caller's thread, the `Store` is a single
+  process-global, and there is no API to create an agent or run instances
+  concurrently. True multithreading is **deferred indefinitely but not ruled
+  out** (§3, `TD9`, TH-5): the stable shared-memory base, the real `__atomic_*`
+  helpers and the thread-local trap state are all shaped so that a future agent
+  build changes the *scheduler*, not the representation. The one structural
+  prerequisite left is the process-global tail-call trampoline (`T11`).
+- There is no cross-agent waiter table, so `wait` cannot be woken (`notify`
+  returns 0) and the timeout is not slept (`TD4`).
 
 ### 4.4 Tests
 
@@ -187,14 +210,13 @@ engine must do", not "what 3.0 requires".
   `Test/wasm_wat/shared_memory_{a,b}.wat`, `shared_table_{a,b}.wat`) pass.
   Despite the names, these test **cross-module import sharing** (the Store
   ownership model), **not** threads shared memory.
-- **The submodule *does* carry a single-agent atomic script:**
-  `extern/WasmTestsuite/proposals/threads/atomic.wast` (142 `assert_return`s,
-  one `shared` memory, no second agent). It converts cleanly with
-  `wasm-tools 1.252.0 json-from-wast`, but `Test/Test.pro` globs only
-  `extern/WasmTestsuite/*.wast`, so it is **not** currently a Catch2 test case
-  and none of the threads scripts are in `Test/wast_supported.txt`. The runtime
-  therefore still has **no regression signal**; wiring this script in is part of
-  TH-4 and is the cheapest way to get one.
+- **The submodule's single-agent atomic script is wired in and curated
+  (TH-4).** `extern/WasmTestsuite/proposals/threads/atomic.wast` (142
+  `assert_return`s, 28 misaligned `assert_trap`s, one shared memory, no second
+  agent) is listed explicitly in `Test/Test.pro`, converts at build time, and
+  runs as `spec: atomic` — **249 passed / 0 failed / 48 skipped**; the 48 skips
+  are `assert_invalid` module-validation cases (no validating front end). It is
+  in `Test/wast_supported.txt`, so it runs in the default suite.
 
 ### 4.5 Cross-cutting: the tail-call trampoline's known limits
 
@@ -223,17 +245,17 @@ they are recorded here:
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| T1 | **Every atomic instruction aborts.** 67 dispatch stubs call `notImplemented` → `std::abort`. | `LibjitOpcodeDispatcher.cpp` 0xFE block; any `atomic.*` module crashes at instantiation. | High |
-| T2 | **`atomic.fence` is not lowered.** No compiler or hardware fence is emitted, so even a future single-threaded atomic implementation would need this before cross-agent use. | `dispatchAtomicFence` | Medium |
-| T3 | **Wait/notify missing**, so no blocking primitive: `memory.atomic.wait*` and `notify` abort. | `dispatchMemoryAtomicWait32/64`, `dispatchMemoryAtomicNotify` | High |
-| T4 | **No runtime alignment check.** The proposal requires misaligned atomic accesses to trap and the memarg alignment to be exactly natural; nothing enforces either. | no validation pass; `dispatchPrefixAtomic` only decodes `MemArg` | Medium |
-| T5 | **No shared-ness validation.** The `shared` flag drives allocation, but nothing rejects `wait` on an unshared memory, or an import whose shared-ness disagrees with the declaration. | `resolveImports` checks only memories' existence; `dispatchMemoryAtomicWait*` unimplemented | Medium |
+| ~~T1~~ | ~~**Every atomic instruction aborts.**~~ **Done (TH-1):** all 67 handlers lower to the shared helpers (`WasmBase/wasm_atomic.*`), which perform the access with `__atomic_*` at seq_cst; `spec: atomic` is **249/0/48** and curated. | `LibjitOpcodeDispatcher.cpp` 0xFE block; `wasm_atomic.cpp` | Closed |
+| ~~T2~~ | ~~**`atomic.fence` is not lowered.**~~ **Done (TH-1):** `wasm_atomic_fence()` is `__atomic_thread_fence(__ATOMIC_SEQ_CST)`; every atomic access already uses seq_cst, so the fence and the operations share one ordering. | `dispatchAtomicFence`, `wasm_atomic_fence` | Closed |
+| ~~T3~~ | ~~**Wait/notify missing.**~~ **Done, single-agent form (TH-2):** `notify` returns 0 (no agent can be waiting); `wait32/64` returns 1 on a value mismatch and 2 (timeout) otherwise, with the timeout not slept — legal per §3 and documented as `TD9`. The three wait/notify assertions in `atomic.wast` pass. | `dispatchMemoryAtomicNotify/Wait32/Wait64`, `wasm_atomic_wait` | Closed (multi-agent wake-up deferred with TH-5) |
+| ~~T4~~ | ~~**No runtime alignment check.**~~ **Done (TH-1):** every helper traps with `TrapKind::UnalignedAtomicAccess` ("unaligned atomic") when the *effective* address is not naturally aligned — before a typed pointer is formed. `atomic.wast`'s 28 `assert_trap … "unaligned atomic"` cases pass. The *immediate* (`align == natural`) remains a validation concern (no validator; `TD6`). | `wasm_atomic.cpp` (`requireAlignment`) | Closed (runtime half) |
+| T5 | **No shared-ness validation.** The `shared` flag drives allocation and memory import matching now checks it (`memorySatisfiesImport`), but nothing rejects `wait` on an **unshared** memory at runtime/validation time. | `dispatchMemoryAtomicWait*`; no validating front end | Low (deliberate, `TD6`) |
 | T6 | **No maximum requirement.** The proposal makes a maximum mandatory for shared memory; the code accepts a shared memory without one (it caps at 4 GiB internally instead). | `initializeMemories`, `SharedLinearMemory` | Low |
 | T7 | **`memory.size`/`grow` ordering is not published.** Shared `grow` takes a mutex, but `memory.size` is a plain load and no `seq_cst` fence is emitted around either, so the sequentially-consistent guarantee is not established for a future multi-agent build. | `dispatchMemorySize`, `SharedLinearMemory::growMemory` | Low (invisible while single-agent) |
 | T8 | **No data-segment init barrier semantics.** `applyActiveSegments` copies segment bytes directly; there is no fence/barrier before other agents are allowed to observe the memory. | `applyActiveSegments` | Low (single-agent) |
-| T9 | **No agent API / thread pool.** There is no way to run two instances concurrently, which is also what makes the current single-threaded stance safe. | no such API in `ModuleInstance`/`Store` | Informational |
-| T10 | **No test coverage is wired in.** `proposals/threads/atomic.wast` exists in the submodule (142 `assert_return`s) and converts, but `Test/Test.pro` does not glob the `proposals/` subtree, so there is no `spec: atomic` test case and nothing threads-related is curated. | §4.4 | High (for future work) |
-| T11 | **The tail-call trampoline's pending state is process-global**, so two agents would corrupt each other's tail-call chains. Must become per-agent before any multi-agent build. | `WASM::g_tailCallState` (`WasmBase/WasmValue.hpp`); §4.5 | Medium (blocks multi-agent) |
+| T9 | **No agent API / thread pool — deferred indefinitely, not ruled out (`TD9`).** There is no way to run two instances concurrently, which is also what makes the current single-threaded stance safe. | no such API in `ModuleInstance`/`Store`; §3 project decision | Deferred by decision |
+| ~~T10~~ | ~~**No test coverage is wired in.**~~ **Done (TH-1/TH-4):** `proposals/threads/atomic.wast` is listed explicitly in `Test/Test.pro`, converts at build time, runs as `spec: atomic` (**249 passed / 0 failed / 48 skipped** — the skips are `assert_invalid` module-validation cases) and is curated in `Test/wast_supported.txt`. | `Test/Test.pro`, `Test/wast_supported.txt` | Closed |
+| T11 | **The tail-call trampoline's pending state is process-global**, so two agents would corrupt each other's tail-call chains. Must become per-agent before any multi-agent build. | `WASM::g_tailCallState` (`WasmBase/WasmValue.hpp`); §4.5 | Medium (blocks multi-agent; part of the deferred TH-5) |
 
 ## 6. Where we can and should play fast and loose
 
@@ -244,13 +266,14 @@ almost all of the threads proposal into trivial semantics.
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
 | TD1 | **Keep the one-agent execution model.** Accept shared memories and atomics, but never run two agents at once. | §3: no concurrency is mandated; with one agent every atomic is trivially sequentially consistent. | The whole proposal collapses to ordinary memory accesses plus a few returns. |
-| TD2 | **Lower atomic load/store/RMW/cmpxchg to plain accesses**, wrapped in a `std::atomic_thread_fence(seq_cst)` before and after (or `__atomic_*` ops if multi-agent is ever enabled). | Matches observable behaviour for a single agent; fences are cheap and keep the code future-proof. | No locking, no libatomic dependency, correct single-agent semantics. |
+| TD2 | **Lower atomics to real `__atomic_*` operations at seq_cst** (`wasm_atomic.*`), rather than plain accesses plus fences. | §2.5/§3: only observability matters; seq_cst is the ordering the spec exposes, and it is free on x86. | Correct under one agent *and* ready for a second agent without changing the helper layer. |
 | TD3 | **`memory.atomic.notify` returns `0`.** | §3: notify may wake fewer than requested; no waiter can exist without a second agent. | A one-line implementation instead of a waiter table. |
-| TD4 | **`memory.atomic.wait*`**: atomic-load; if `!= expected` return `1`; else if `timeout < 0` block (legitimately, since a single-agent program that waits forever for a notify is deadlocked); else sleep the requested duration and return `2`. | §3: no spurious wakeups, and `2` is the correct result when the timeout expires; no other agent can notify. | Real (if boring) blocking semantics with no scheduler. |
+| TD4 | **`memory.atomic.wait*`**: atomic-load; if `!= expected` return `1`; otherwise return `2` **without sleeping**. | §3: an implementation that cannot suspend an agent may return `2` for a finite timeout; with no second agent nothing can notify, so the value can only time out. The one documented cost: an *infinite* wait also returns `2` instead of blocking forever (`TD9`). | Deterministic tests, no scheduler, no sleeping daemon. |
 | TD5 | **`atomic.fence` lowers to `__atomic_thread_fence(seq_cst)`** (or a compiler barrier). | §2.5; a no-op would be wrong the moment two agents exist, and a seq_cst fence is nearly free on x86. | Correct ordering with one instruction. |
 | TD6 | **Enforce natural alignment only for atomics** (a cheap `addr % size == 0` check → `trap()`), and skip the memarg-alignment validation entirely. | §2.3 requires the misaligned *effective address* to trap; the memarg check is a validation concern we already skip globally (no validating front-end). | Safe on non-x86; no validation engine. |
 | TD7 | **Do not implement a thread pool, agents, `Atomics.wait` host interop, or TLS.** | §3: none is required. | Scope control; the Store/instance design already models a single process-global. |
 | TD8 | **Keep `SharedLinearMemory`'s reserve/commit base-stability** even in the single-agent build — it is what makes a later multi-agent step a change of *scheduler* rather than a change of *representation*. | It is already implemented and costs nothing when only one agent maps it. | A clean upgrade path. |
+| TD9 | **Ship a single-agent engine only** — one `ModuleInstance` runs on the caller's thread; atomics are real `__atomic_*` operations (so they are seq-cst even here), but there is no agent API and no scheduler. True multithreading is **deferred indefinitely, not abandoned**: the memory representation, the per-thread trap state and the atomic helpers are all kept in a shape a future agent model can reuse. | §3 first bullet: one agent is conformant; every atomic is trivially sequentially consistent. | No thread pool, TLS, scheduling, cross-agent waiter table or data-race tooling — the runtime stays simple and the spec suite stays deterministic. The cost is documented: `wait` cannot actually be woken by a second agent, and the process-global tail-call state (`T11`) would have to become per-agent first. |
 
 **Guardrails.**
 
@@ -270,29 +293,31 @@ Ordered by value; `TH-n` is independent of the other documents' milestones.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **TH-1 — Single-agent atomics** | Implement atomic load/store/RMW/xchg/cmpxchg via native helpers (or inline `__atomic_*`), with natural-alignment traps and an `atomic.fence` that lowers to a seq_cst fence. | T1, T2, T4 | A hand-written module with `i32.atomic.rmw.add` and `atomic.fence` runs and returns correct values. |
-| **TH-2 — Wait/notify** | `memory.atomic.wait32/64` (load→compare→sleep/block→`1`/`2`) and `memory.atomic.notify` (`0`), including the unshared-memory trap. | T3, T5 | A module using `wait`/`notify` terminates; `wait` returns `1` on mismatch and `2` after a finite timeout. |
-| **TH-3 — Shared-memory hygiene** | Require a maximum for `shared` memories; assert shared-ness on import matching; emit a barrier after active data segments. | T6, T7, T8 | A shared memory without a max is rejected; `memory.grow`/`size` are fenced. |
-| **TH-4 — Threads test coverage** | Add manual WAT cases for each atomic family and wait/notify, and wire the submodule's `proposals/threads/atomic.wast` (142 `assert_return`s, single-agent) into `Test/Test.pro` as a converted spec script — it exists today and converts, it is just outside the current glob. | T10 | At least one test per instruction family, plus `spec: atomic` and curated-list entries. |
-| **TH-5 — Optional: real agents** | Embedder API to run an instance on another OS thread, with `__atomic_*` accesses and a real waiter table. Only if an embedder needs it. | T9 | Two agents produce the same results as the sequentially-consistent model. |
+| **TH-1 — Single-agent atomics** | ✅ Done: the 67 handlers call `wasm_atomic_*` helpers (`WasmBase/wasm_atomic.*`) that perform the access with `__atomic_*` at seq_cst, after the shared `effectiveMemoryAddress` bounds check; natural-alignment traps (`UnalignedAtomicAccess`); `atomic.fence` is `__atomic_thread_fence(seq_cst)`. | T1, T2, T4 | Done: `spec: atomic` **249/0/48**, curated. |
+| **TH-2 — Wait/notify** | ✅ Done in the single-agent form: `notify` returns 0; `wait32/64` returns 1 on a value mismatch and 2 otherwise without sleeping (`TD4`). The unshared-memory trap is a validation concern (`T5`, no front end). | T3 | Done: the script's wait/notify assertions pass (mismatch → 1, timeout → 2, notify → 0). |
+| **TH-3 — Shared-memory hygiene** | ◑ Partial: import matching now compares shared-ness (GC.md R1), and `SharedLinearMemory` never moves its base. Still open: a maximum is not *required* for a shared memory (`T6`), and `size`/`grow` + active data segments are not fenced (`T7`/`T8`) — invisible while single-agent. | T6, T7, T8 | A shared memory without a max is rejected; `memory.grow`/`size` are fenced. |
+| **TH-4 — Threads test coverage** | ✅ Done: `proposals/threads/atomic.wast` is wired into `Test/Test.pro` (single-agent atomic semantics, including the 28 misaligned `assert_trap`s) and curated. | T10 | Done: `spec: atomic` runs in the default suite (`Test/wast_supported.txt`). |
+| **TH-5 — Optional: real agents** | ✗ **Deferred indefinitely (not ruled out):** an embedder API to run an instance on another OS thread, with a real waiter table. Only if an embedder needs it. Until then the engine is explicitly single-agent (`TD9`). | T9 | Two agents produce the same results as the sequentially-consistent model. |
 
 Guardrails: run `./WasmJit '~[spec]'` after each step; keep the single-agent
-default so existing behaviour is unchanged.
+default so existing behaviour is unchanged. The single-agent choice is
+*documented and deliberate* (`TD9`) — do not add a partial thread model without
+first making the tail-call trampoline per-agent (`T11`).
 
 ## 8. Indicative test survey
 
-Survey taken with `build/Desktop-Debug/Test/WasmJit` (2026-10-04).
+`build/Desktop-Debug/Test/WasmJit` (2026-10-17, after TH-1/TH-2/TH-4):
 
 | Test | Result | Reading |
 |---|---|---|
-| `spec: atomic` | **not registered** | `proposals/threads/atomic.wast` exists (142 `assert_return`s) and converts, but `Test/Test.pro` only globs the top-level `*.wast`; wiring it in is TH-4's first step |
+| `spec: atomic` | **249 passed / 0 failed / 48 skipped** | all 67 atomic handlers execute (loads, stores, RMW/xchg/cmpxchg, fence), natural-alignment traps, and the single-agent wait/notify triple; the skips are `assert_invalid` cases (no validating front end). Curated |
 | `imported memory is shared between two module instances` | pass (8 assertions) | cross-module *import* sharing, not threads |
 | `imported table is shared between two module instances` | pass (15 assertions) | cross-module *import* sharing, not threads |
-| any module containing `atomic.*` | abort | T1: `notImplemented` → `std::abort` (67 handlers) |
+| any module containing `atomic.*` | executes | TH-1: the 67 `notImplemented` stubs are gone |
 
-Because the upstream script is not wired in yet, the practical gate for
-TH-1/TH-2 is that conversion plus the new manual WAT tests (TH-4), not the
-curated suite.
+The upstream script is now the regression signal for the whole atomic opcode
+surface; no second-agent test can exist while the engine is single-agent
+(`TD9`, TH-5).
 
 ## 9. References
 

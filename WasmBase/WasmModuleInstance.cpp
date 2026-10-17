@@ -40,6 +40,30 @@ inline TypeId canonicalTableElementTypeId(const Module& module, const TableType&
 		return TypeId{TypeId::kNone};
 	return module.typeId(LocalTypeIdx{static_cast<uint32_t>(type.elementType.heapType)});
 }
+
+// The `Value::kind` carried by a `(ref.null ht)` constant. The value is always
+// null, but naming the actual hierarchy keeps `(ref.null exn)` / `nullexnref`
+// distinguishable from `funcref` for the sentinel paths and diagnostics.
+inline ValueTypeCode nullReferenceKind(int32_t heapType)
+{
+	if (heapType >= 0)
+		return ValueTypeCode::RefNull; // `(ref null $t)`
+	switch (static_cast<AbstractHeapType>(heapType)) {
+	case AbstractHeapType::Func:     return ValueTypeCode::FuncRef;
+	case AbstractHeapType::Extern:   return ValueTypeCode::ExternRef;
+	case AbstractHeapType::Any:      return ValueTypeCode::AnyRef;
+	case AbstractHeapType::Eq:       return ValueTypeCode::EqRef;
+	case AbstractHeapType::I31:      return ValueTypeCode::I31Ref;
+	case AbstractHeapType::Struct:   return ValueTypeCode::StructRef;
+	case AbstractHeapType::Array:    return ValueTypeCode::ArrayRef;
+	case AbstractHeapType::Exn:      return ValueTypeCode::ExnRef;
+	case AbstractHeapType::None:     return ValueTypeCode::NullRef;
+	case AbstractHeapType::NoFunc:   return ValueTypeCode::NullFuncRef;
+	case AbstractHeapType::NoExtern: return ValueTypeCode::NullExternRef;
+	case AbstractHeapType::NoExn:    return ValueTypeCode::NullExnRef;
+	}
+	return ValueTypeCode::FuncRef;
+}
 } // namespace
 
 std::unique_ptr<ModuleInstance> ModuleInstantiator::instantiate(const Module& module, ImportResolver& resolver)
@@ -779,8 +803,8 @@ Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 		}
 
 		case 0xD0: { // ref.null <heaptype>
-			(void)stream.readLEB128<int32_t>();
-			Value v{}; v.ref = nullptr; v.kind = ValueTypeCode::FuncRef;
+			const int32_t heapType = stream.readLEB128<int32_t>();
+			Value v{}; v.ref = nullptr; v.kind = nullReferenceKind(heapType);
 			stack.push_back(v);
 			break;
 		}

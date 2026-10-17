@@ -15,14 +15,16 @@
 #   2. keep every script whose line reads  passed=<n> failed=0  with n > 0
 #      and which was neither killed by a signal nor timed out.
 
-# ref_null is excluded: one of its modules declares `exnref`/`nullexnref`, which
-# this engine does not model, so the module is now rejected at load
-# (docs/NULL_JIT_VALUE_DIAGNOSIS.md).
+# ref_null used to be excluded: one of its modules declares `exnref`/
+# `nullexnref`, which this engine did not model, so the module was rejected at
+# load. `exnref` is modelled now (docs/proposals/EXCEPTIONS.md EX-1), and the
+# script's null-reference results are verified rather than skipped.
 address
 address64
 align
 align64
 array_new_data
+atomic
 binary0
 binary_leb128_64
 br_on_cast
@@ -61,6 +63,7 @@ memory_trap64
 names
 ref
 ref_eq
+ref_null
 return_call
 return_call_indirect
 return_call_ref

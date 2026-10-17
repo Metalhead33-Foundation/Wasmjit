@@ -1003,7 +1003,7 @@ now executed, so the "skipped" column no longer hides the trap cases).
 | `i31` | 63 | 5 | 5 | G5 (table init expressions) |
 | `ref_eq` | 83 | 0 | 6 | works |
 | `ref_is_null` | 15 | 1 | 6 | table init (G5) |
-| `ref_null` | 2 | 0 | 32 | mostly skipped |
+| `ref_null` | 34 | 0 | 0 | `exnref`/`nullexnref` modelled (EXCEPTIONS.md EX-1); null results verified |
 | `ref_as_non_null` | 6 | 0 | 1 | works |
 | `ref_test` | 69 | 2 | 0 | `G2` closed; the two failures are `ref_test_extern` (`G3`/`D5`) |
 | `ref_cast` | 33 | 11 | 1 | C2 fixed; remaining failures are G1/G2 |
@@ -1033,7 +1033,7 @@ coverage that is not GC-specific.
 |---|---:|---:|---:|---|
 | `ref` | 1 | 0 | 12 | mostly skipped |
 | `ref_eq` | 83 | 0 | 6 | works |
-| `ref_null` | 2 | 0 | 32 | mostly skipped |
+| `ref_null` | 34 | 0 | 0 | `exnref`/`nullexnref` modelled (EXCEPTIONS.md EX-1); null results verified |
 | `ref_is_null` | 14 | 2 | 6 | table/segment init |
 | `ref_as_non_null` | 4 | 0 | 3 | works |
 | `ref_func` | — | no report | — | C2 |

@@ -1,6 +1,13 @@
 # Exception Handling (with `exnref`) — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 1).
+Status: design note / implementation reference (revision 2 — **EX-1 is done**:
+`exn` / `exnref` / `nullexnref` are modelled end-to-end (function types,
+globals, locals, `ref.null`, block types), the abstract-heap-type encodings were
+corrected to the final Wasm 3.0 numbering, and null-reference *results* are
+verified by the harness, so `ref_null.wast` is green (34/0) and curated.
+`throw`/`throw_ref`/`try_table` modules now load instead of being rejected —
+what remains is the runtime: tags (EX-2), unwinding (EX-3), `try_table`
+dispatch (EX-4) and `assert_exception` (EX-5)).
 Audience: anyone touching `WasmModule`, `WasmType`, `WasmStore`,
 `WasmVMContext`, `LibjitOpcodeDispatcher`, or the test harness.
 
@@ -38,9 +45,12 @@ instructions were **removed**.
   - `catch_ref tagidx labelidx` — same, plus the `exnref`;
   - `catch_all labelidx` — any tag, no payload;
   - `catch_all_ref labelidx` — any tag, plus the `exnref`.
-- **`exnref` value type.** Heap type `exn`, a subtype of `extern`.
-  `(ref null exn)` is a first-class reference: it can be stored in tables and
-  globals, returned, and compared; `throw_ref` re-throws it. On the web it is
+- **`exnref` value type.** Heap type `exn`, a first-class reference that is
+  *its own top-level heap type* — it is **not** a subtype of `any` or `extern`
+  (verified against the spec with `wasm-tools validate`: `exnref → externref`
+  and `exnref → anyref` are both invalid, while `nullexnref → exnref` is
+  valid). `(ref null exn)` can be stored in tables and globals, returned, and
+  compared; `throw_ref` re-throws it. On the web it is
   `WebAssembly.Exception`.
 - **Tag identity matters**: a catch matches only the exact tag that was thrown.
 
@@ -61,6 +71,15 @@ instructions were **removed**.
 - **Parsing**: the tag section (`processTagSection`, `Tag { attribute;
   typeIdx }`), tag imports (`ImportTag`), and the `ExternalKind::Tag` export
   kind are all decoded.
+- **`exnref` is modelled (EX-1).** `ValueTypeCode::ExnRef` (0x69) and
+  `NullExnRef` (0x74), `AbstractHeapType::Exn` (0x69) and `NoExn` (0x74); any
+  function type/global/local/`ref.null`/block type that names them lowers to a
+  `void*`, exactly like the other references. The bottom abstract heap types
+  (`none`/`nofunc`/`noextern`/`noexn`) were re-numbered to the final 3.0
+  encodings (0x71/0x73/0x72/0x74) — the old GC-draft values collided with
+  `exn` at 0x69. `ref_null.wast` (34 assertions across `exnref`,
+  `nullexnref` and every other null form) runs green and is curated; the
+  harness verifies `(ref.null …)` *results* against a null pointer.
 - **Instructions**: `Opcode::Throw` (`0x08`), `Opcode::ThrowRef` (`0x0A`) and
   `Opcode::TryTable` (`0x1F`) are decoded; `CatchClause` supports
   `Catch`/`CatchRef`/`CatchAll`/`CatchAllRef` with a `tagIdx` and `labelIdx`,
@@ -71,11 +90,10 @@ instructions were **removed**.
   - `dispatchThrow` and `dispatchThrowRef` emit an **unconditional trap**
     (`emitTrapUnreachable` + `markUnreachable`), so a `throw` never reaches a
     handler;
-  - there is **no `exnref` value type** (`ValueTypeCode` has no `exn`), no tag
-    runtime instance, and no tag storage (`Store::StoreOwnedTag` is still a
-    forward declaration marked TODO);
+  - there is no tag runtime instance and no tag storage
+    (`Store::StoreOwnedTag` is still a forward declaration marked TODO);
   - `resolveTag` exists on the resolver but is **never called** by the
-    instantiator (the same gap as imported globals, [`MUTABLE_GLOBALS.md`](MUTABLE_GLOBALS.md)).
+    instantiator (the same gap imported globals had, [`MUTABLE_GLOBALS.md`](MUTABLE_GLOBALS.md)).
 
 ## 5. Gaps
 
@@ -83,9 +101,9 @@ instructions were **removed**.
 |---|---|---|---|
 | EX1 | **`throw` and `throw_ref` are unconditional traps.** `throw.wast` → signal 6; `throw_ref.wast` → signal 11. No exception ever propagates. | `dispatchThrow`, `dispatchThrowRef` | High |
 | EX2 | **`try_table` ignores all catch clauses.** It behaves as a plain block, so nothing catches; `try_table.wast` → signal 6. | `dispatchTryTable` | High |
-| EX3 | **`exnref` does not exist as a value type.** `CatchRef`/`CatchAllRef` cannot push the exception reference; `throw_ref`/`ref.null exn` have no representation. | `WasmType.hpp` (`ValueTypeCode`, `AbstractHeapType`) | High |
+| ~~EX3~~ | ~~**`exnref` does not exist as a value type.**~~ **Done (EX-1):** `ExnRef` (0x69) and `NullExnRef` (0x74) are first-class value types at every use site (function signature, global, local, `ref.null`, block type), the `exn`/`noexn` heap types are decoded, and the JIT lowers them to `void*`. | `ref_null` 34/0/0; `throw_ref`/`try_table` modules now load | Closed |
 | EX4 | **No tag instances or identity.** Tags are parsed but never instantiated; `resolveTag` is never called; matching by tag identity is impossible. | `Store::StoreOwnedTag`, `resolveTag` | High |
-| EX5 | **Exnrefs cannot be stored.** Tables hold `Callable*`; there is no place for an `exnref` in a table or (aliased) global. | `WasmTable.hpp`, `WasmModuleInstance.cpp` | Medium |
+| EX5 | **Exnrefs cannot be stored in tables.** Globals hold a `Value` (so an `exnref` global works, EX-1), but a table slot is a `Callable*` and there is no place for a non-funcref reference — the same generic-slot gap as `FUNCTION_REFERENCES.md` FR-6. | `WasmTable.hpp`, `WasmModuleInstance.cpp` | Medium |
 | EX6 | **The harness skips `assert_exception`.** No exception behaviour is verified. | `docs/TESTING.md` | High (verification) |
 | EX7 | **No manual test.** | `Test/main.cpp` | Medium |
 
@@ -114,7 +132,7 @@ instructions were **removed**.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **EX-1 — `exnref` type** | Add `exn`/`exnref` to the type system and the `0x69` shorthand, plus `ref.null exn`. | EX3, EX5 (partly) | A module declaring an `exnref` global/param loads. |
+| **EX-1 — `exnref` type** | ✅ Done: `ValueTypeCode::ExnRef`/`NullExnRef` and `AbstractHeapType::Exn`/`NoExn`, the bottom-type encodings corrected to the final 3.0 values, JIT lowering to `void*`, and `(ref.null ht)` naming the hierarchy in its `Value::kind`. The harness now verifies `(ref.null …)` results. | EX3 | Done: every `ref_null.wast` module loads and the script is **34/0/0**, curated. |
 | **EX-2 — Tags** | Instantiate tags (a process-wide `TagId`), wire `resolveTag`, and expose tag identity to the JIT. | EX4 | Two modules importing the same tag compare equal; different tags do not. |
 | **EX-3 — Throw/unwind** | Implement `throw`/`throw_ref` with the handler stack (`setjmp`/`longjmp`). | EX1 | A caught `throw` reaches the right `catch` clause with the right payload. |
 | **EX-4 — `try_table`** | Emit handler entry/exit for `try_table` and route each catch clause, including `*_ref`. | EX2 | `try_table.wast` runs; `catch_ref` pushes the `exnref`. |
@@ -122,16 +140,19 @@ instructions were **removed**.
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-04):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-17, after EX-1):
 
 | Script | Result | Reading |
 |---|---|---|
 | `tag` | 6 passed / 0 failed / 4 skipped | tag parsing/validation works |
-| `throw` | signal 6, 0 passing commands | EX1 |
-| `throw_ref` | signal 11, 0 passing commands | EX1 |
-| `try_table` | signal 6, 0 passing commands | EX2 |
+| `ref_null` | **34 passed / 0 failed / 0 skipped** | `exnref`/`nullexnref` (and every other null form) load, run and are verified; curated |
+| `throw` | 2 / 1 / 10 | loads; `throw` still traps (EX-3) |
+| `throw_ref` | 1 / 5 / 9 | **loads now** (was signal 11); the runtime is EX-3 |
+| `try_table` | 15 / 37 / 15 | **loads now** (was signal 6); catch routing is EX-2/EX-4 |
 
-`tag` is in `Test/wast_supported.txt`; the other three are not.
+`tag` and `ref_null` are in `Test/wast_supported.txt`; the other three are not
+until their milestones close. The remaining failures are runtime behaviour, not
+decoding or type-system rejections.
 
 ## 9. References
 

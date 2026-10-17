@@ -18,8 +18,10 @@ std::basic_ostream<char>& operator<<(std::basic_ostream<char>& left, const WASM:
 		case WASM::ValueTypeCode::I31Ref: left << "I31Ref"; break;
 		case WASM::ValueTypeCode::StructRef: left << "StructRef"; break;
 		case WASM::ValueTypeCode::ArrayRef: left << "ArrayRef"; break;
+		case WASM::ValueTypeCode::ExnRef: left << "ExnRef"; break;
 		case WASM::ValueTypeCode::NullFuncRef: left << "NullFuncRef"; break;
 		case WASM::ValueTypeCode::NullExternRef: left << "NullExternRef"; break;
+		case WASM::ValueTypeCode::NullExnRef: left << "NullExnRef"; break;
 		case WASM::ValueTypeCode::NullRef: left << "NullRef"; break;
 		case WASM::ValueTypeCode::StringRef: left << "StringRef"; break;
 		case WASM::ValueTypeCode::StringViewWtf8: left << "StringViewWtf8"; break;
@@ -40,8 +42,10 @@ std::basic_ostream<char>& operator<<(std::basic_ostream<char>& left, const WASM:
 		case WASM::AbstractHeapType::I31: left << "I31"; break;
 		case WASM::AbstractHeapType::Struct: left << "Struct"; break;
 		case WASM::AbstractHeapType::Array: left << "Array"; break;
+		case WASM::AbstractHeapType::Exn: left << "Exn"; break;
 		case WASM::AbstractHeapType::NoExtern: left << "NoExtern"; break;
 		case WASM::AbstractHeapType::NoFunc: left << "NoFunc"; break;
+		case WASM::AbstractHeapType::NoExn: left << "NoExn"; break;
 		case WASM::AbstractHeapType::None: left << "None"; break;
 		default: left << "Invalid"; break;
 	}
