@@ -32,6 +32,26 @@ ensure correct lifetimes.
 | `call_indirect`       | `Callable::context` loaded at runtime — callee's context     |
 | `call_ref`            | `Callable::context` loaded at runtime — callee's context     |
 
+## Multiple Results
+
+A function type with more than one result does **not** return an aggregate by
+value. The backend lowers it to
+
+```
+void f(VMContext*, <params...>, void* results)
+```
+
+where the last argument points at a result buffer owned by the caller. The
+callee writes the results through it, in declaration order, each field at its
+natural alignment; the caller passes the address of a buffer it allocated and
+reads the fields back after the call. Single-result and void signatures are
+unchanged, so the common `ret f(VMContext*, ...)` shape above still holds.
+
+The spec harness marshals them for `assert_return`
+(`docs/proposals/MULTI_VALUE.md` MV1); `callCallable` should not be used for
+them yet (MV4). Within a module, and across modules, direct/indirect calls and
+the tail-call driver all use the buffer convention.
+
 ## Embedder Guide
 
 ### Native (host) function imports

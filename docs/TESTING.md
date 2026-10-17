@@ -294,7 +294,7 @@ Correct results are deliberately **not required yet**; the run is meant to be in
 | --- | --- | --- |
 | `module` (binary) | executed | loaded and instantiated |
 | `register` | executed | exports re-registered under the given name |
-| `assert_return`, `action` (`invoke`) | executed | i32/i64/f32/f64 arguments and results |
+| `assert_return`, `action` (`invoke`) | executed | i32/i64/f32/f64 arguments and results; `assert_return` also marshals multiple scalar results, a bare `action` still skips them |
 | `assert_trap` | executed | traps are recoverable (`WASM::trap` longjmps to a `TrapScope`; see `WasmBase/WasmTrap.hpp`), and the expected text is compared against the trap's **kind** (`trapKindName`), so a trap for the wrong reason fails |
 | `assert_exhaustion` | approximated | run in a nested child; an abnormal termination counts as the expected exhaustion trap |
 | `assert_malformed`, `assert_invalid`, `assert_unlinkable`, `assert_uninstantiable` | skipped | no validating / decoding front-end yet |
@@ -302,6 +302,14 @@ Correct results are deliberately **not required yet**; the run is meant to be in
 | `assert_exception` | skipped | exception-handling proposal |
 | text-format modules (`.wat`) | skipped | only binary modules can be loaded |
 | `v128` and reference values | skipped | not marshalled yet |
+
+`assert_exhaustion` is the one command family that is *expected* to produce
+kernel `segfault` lines: its nested child is supposed to exhaust the host stack,
+and the harness counts the abnormal exit as the pass. With the default 8 MiB
+stack, `spec: skip-stack-guard-page` produces ten of them per run (one per
+assertion). They are not engine regressions. Run with `ulimit -c 0` to avoid
+writing a core dump for each expected exhaustion; a stack-limit check in the
+generated code (a future change) would turn them into Wasm traps instead.
 
 The `spectest` host module is provided in full for the entities the runtime
 models: the `print*` stubs, a shared table (`10..20 funcref`), a shared memory

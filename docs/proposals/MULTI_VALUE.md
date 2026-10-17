@@ -1,6 +1,7 @@
 # Multi-value — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 1).
+Status: design note / implementation reference (revision 2 — the packed-struct
+return lowering was replaced by a caller-provided result buffer, MV5).
 Audience: anyone touching `WasmType`, `WasmModuleInstance`,
 `LibJitTypeTranslation`, `LibjitOpcodeDispatcher`, or the test harness.
 
@@ -58,57 +59,73 @@ Multi-value is a **Phase 5** proposal, integrated into WebAssembly **2.0**.
   call `createSlotsForTypes(block.paramTypes)`, `storeStackTopToSlots`, and
   `restoreValuesFromSlots` (`LibjitOpcodeDispatcher.cpp`), so block parameters
   are supported.
-- **Multiple results** are packed into a LibJIT struct on return
-  (`packReturnValues`) and unpacked at a call (`pushCallResults`), for both
-  internal and indirect/`call_ref` calls. `LibJitTypeTranslator` lowers a
-  multi-result signature to a struct return type.
+- **Multiple results** are written into a caller-provided result buffer: a
+  multi-result signature appends one trailing `void*` parameter and returns
+  void (`LibJitTypeTranslation.cpp`). `packReturnValues` stores the results
+  through that pointer at every return site, and `pushCallResults` reads them
+  back from a tuple allocated at the call site, for direct, indirect and
+  `call_ref` calls. The tuple layout is `translateStruct(results)` (fields in
+  declaration order at their natural alignment). This replaced an earlier
+  packed-struct **return** lowering: LibJIT's aggregate-return ABI reads the
+  hidden result-buffer pointer from an unwritten frame slot when the callee has
+  parameters, so the first multi-result JIT-to-JIT call wrote through 0 or
+  through stack garbage (MV5).
 - `select` (`Select` and `SelectT`) and the full branch family are implemented;
   `block` (52 passed) and `loop` (78 passed) exercise parameter/result blocks.
 
-**Not present:** nothing structural — the feature is implemented; the
-limitations are in the *harness*, not the engine (see §5).
+**Not present:** nothing structural in the engine — the feature is implemented
+and exercised by internal calls in `call`, `if`, `fac`, `block` and `loop`, and
+`assert_return` now marshals exported multi-result functions too. The remaining
+limitations are the non-`assert_return` harness paths (MV1) and the embedder
+API (MV4).
 
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| MV1 | **The spec harness cannot marshal multiple results.** `ScriptRunner::onAssertReturn` and `onAction` skip any function whose `results.size() > 1` ("multiple return values are not marshalled yet"), so multi-result behaviour is never checked end-to-end. | `Test/WastScript.cpp` | High (verification) |
-| MV2 | **No dedicated spec script is exercised.** The testsuite snapshot has no `multi-value.wast`; coverage comes indirectly from `block`, `loop`, `func`, `call`, which are not all curated. | `extern/WasmTestsuite` | Medium |
-| MV3 | **No manual test for multi-result.** `Test/wasm_wat` has no multi-result module; the AssemblyScript modules are single-result. | `Test/main.cpp` | Medium |
+| MV1 | **The spec harness now marshals multiple results for `assert_return`**: it passes the result tuple as the call's trailing parameter and compares each field. A bare `action`, `assert_trap` and `assert_exhaustion` still skip multi-result invokes. | `Test/WastScript.cpp` (`invoke`, `onAssertReturn`) | Low (remaining paths) |
+| MV2 | **No dedicated spec script is exercised.** The testsuite snapshot has no `multi-value.wast`; coverage comes indirectly from `block`, `loop`, `func`, `call`, `if`, `fac`, which are not all curated. | `extern/WasmTestsuite` | Medium |
+| MV3 | **No manual test for multi-result.** `Test/wasm_wat` now has `multi_value.wat` (MV-2). | `Test/main.cpp` | Resolved |
 | MV4 | **Multi-value exports to a host are not surfaced.** `exportedFunction`/`callCallable` assume the native signature the embedder chooses; nothing documents how to call a multi-result export from C++. | `WasmValue.hpp` (`callCallable`) | Low |
+| MV5 | **Packed-struct returns crashed on this LibJIT build.** A multi-result callee with parameters loaded the hidden result-buffer pointer from an unwritten frame slot (`mov -0x18(%rbp),%rax`), then stored its results through it: `segfault at 8` when the slot held zero, a general-protection fault when it held garbage. This killed every multi-result JIT-to-JIT call in `call.wast`, `if.wast` and `fac.wast`, and the harness's MV1 skip hid it. | `LibJitTypeTranslation.cpp` (struct-return signature), `packReturnValues`/`pushCallResults`; cores from `spec: call` | High (fixed) |
 
 ## 6. Where we can and should play fast and loose
 
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
-| MVD1 | **Packed-struct returns (already the design).** | §3: the ABI is free. | One lowering for 0/1/N results; no hidden out-params. |
+| MVD1 | **Result buffer as a trailing out-parameter.** The WebAssembly ABI is free (§3), and this backend never returns an aggregate by value. | Matches the backend-wide rule "write a struct-typed value through its address" (`docs/SIMD_LIBJIT.md` §6); single-result functions keep their scalar ABI (MVD2). | One lowering for 0/1/N results, and LibJIT's broken aggregate-return ABI is not used at all. |
 | MVD2 | **Keep single-result functions returning scalars directly.** | §3: scalar conventions need not change. | Fast path for the common case. |
 | MVD3 | **Do not expose multi-result exports to the host.** | §3: the JS API forbids it anyway. | No host-side ABI work. |
 | MVD4 | **Extend the *harness*, not the engine, to close MV1** (marshal up to N scalar results into a small array). | The engine already computes the right values; only the test harness is blind. | Real verification without touching the JIT. |
 
 Guardrails: a block's *result* arity must equal its label's arity; branching
-must move exactly the target's values; the struct return layout must match
-between `packReturnValues` and `pushCallResults`.
+must move exactly the target's values; the result-tuple layout
+(`translateStruct(results)`) must agree between the callee's buffer writes
+(`packReturnValues`) and the caller's field loads (`pushCallResults`).
 
 ## 7. Plan
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **MV-1 — Harness multi-result** | Marshal up to, say, 4 scalar results in `invoke`/`compareResult`. | MV1 | A hand-written `(func (result i32 i32))` assertion is checked, not skipped. |
+| **MV-1 — Harness multi-result** | Marshal the result tuple in `invoke`/`onAssertReturn` and compare each field. | MV1 | `call` 73/0/18 and `if` 125/0/116 on the default run. ✅ Done for `assert_return` |
 | **MV-2 — Manual tests** | Add WAT modules returning multiple values, with block parameters and a `br` carrying a list. | MV3 | Tests cover multi-result returns, block params, and `br_table` with lists. |
 | **MV-3 — Curate block/loop** | Add the passing `block`/`loop`/`func` scripts to `Test/wast_supported.txt`. | MV2 | The default run covers multi-value blocks. |
 | **MV-4 — Document the C++ ABI** | Document how `Callable`/`callCallable` handles a multi-result signature. | MV4 | `docs/ABI.md` has a multi-result example. |
+| **MV-5 — Working multi-result ABI** | Replace the struct-return lowering with a caller-provided result buffer (trailing `void*`), update the direct/indirect/tail-call and driver paths, add `Test/wasm_wat/multi_value.wat` + its unit test, and re-curate `call`/`if`/`fac`. | MV5 | `spec: call`, `spec: if` and `spec: fac` pass; the unit test covers direct, nested, mixed-width, if-with-params and `call_indirect` calls. ✅ Done |
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-04):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-17, default stack):
 
 | Script | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
+| `call` | 73 | 0 | 18 | multi-result values consumed on the stack (`as-mixed-operands`), fed into another call (`as-call-all-operands`) and asserted as exports |
+| `if` | 125 | 0 | 116 | `add64_u_saturated` (`(i64,i32)`), `params-id-break` and the multi-result export assertions |
+| `fac` | 8 | 0 | 0 | `fac-ssa` calls `$pick0 (result i64 i64)` |
 | `block` | 52 | 0 | 171 | block params/results work; ref/vec assertions skipped |
 | `loop` | 78 | 0 | 43 | loop params/results work |
-| multi-result assertions | — | — | all | MV1: skipped by the harness |
-| `multi-value.wast` | — | — | — | not present in this testsuite snapshot (MV2) |
+| `multi_value.wat` | 16 assertions | 0 | 0 | direct, nested, mixed-width, if-with-params, `call_indirect` and the host-facing trailing-buffer ABI |
+| multi-result *exports* | executed | — | — | `assert_return` marshals them (MV1 closed for that path) |
 
 ## 9. References
 
@@ -123,6 +140,7 @@ between `packReturnValues` and `pushCallResults`.
   [`docs/FUNCTION_REFERENCES.md`](FUNCTION_REFERENCES.md),
   [`docs/ABI.md`](../ABI.md); sources `WasmBase/WasmType.hpp` (`FuncType`,
   `BlockType`), `WasmBase/WasmModuleInstance.cpp` (`PreparedFunctionStack`),
-  `LibJit/LibJitTypeTranslation.cpp` (struct-return signatures),
+  `LibJit/LibJitTypeTranslation.cpp` (result-buffer signatures),
   `LibJit/LibjitOpcodeDispatcher.cpp` (`packReturnValues`,
-  `pushCallResults`, `dispatchBlock`, `dispatchLoop`), `Test/WastScript.cpp`.
+  `pushCallResults`, `dispatchBlock`, `dispatchLoop`), `Test/WastScript.cpp`,
+  and the regression module `Test/wasm_wat/multi_value.wat`.

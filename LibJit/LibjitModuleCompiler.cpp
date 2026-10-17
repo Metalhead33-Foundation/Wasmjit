@@ -256,7 +256,14 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		jit_type_t sig = static_cast<jit_type_t>(internals.translatedTypes[typeIdx]);
 		jit_function_t driver = jit_function_create(context, sig);
 		jit_type_t retType = jit_type_get_return(sig);
-		const unsigned int paramCount = jit_type_num_params(sig) - 1;
+		assert(module.types[typeIdx].isFunction());
+		const WASM::FuncType& driverSig =
+				std::get<WASM::FuncType>(module.types[typeIdx].composite);
+		// The JIT signature may carry a trailing result-buffer parameter for a
+		// multi-result function (LibJitTypeTranslation.cpp), so the wasm
+		// parameter count comes from the FuncType, not from the signature.
+		const unsigned int paramCount = static_cast<unsigned int>(driverSig.params.size());
+		const bool hasResultBuffer = driverSig.results.size() > 1;
 
 		WASM::Callable* selfCallable = &internals.internalCallables[i];
 		jit_value_t target = jit_value_create(driver, jit_type_void_ptr);
@@ -278,10 +285,13 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 			offsetof(WASM::Callable, rawFnPtr), jit_type_void_ptr);
 		jit_value_t calleeCtx = jit_insn_load_relative(driver, target,
 			offsetof(WASM::Callable, context), jit_type_void_ptr);
-		std::vector<jit_value_t> callArgs(1 + static_cast<size_t>(paramCount));
+		std::vector<jit_value_t> callArgs(1 + static_cast<size_t>(paramCount)
+				+ (hasResultBuffer ? 1u : 0u));
 		callArgs[0] = calleeCtx;
 		for (unsigned int p = 0; p < paramCount; ++p)
 			callArgs[1 + p] = jit_insn_load(driver, slots[p]);
+		if (hasResultBuffer)
+			callArgs.back() = jit_value_get_param(driver, paramCount + 1);
 		jit_value_t callRet = jit_insn_call_indirect(driver, fnPtr, sig, callArgs.data(),
 			static_cast<unsigned>(callArgs.size()), 0);
 

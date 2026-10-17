@@ -57,7 +57,7 @@ per-milestone done markers, is the authoritative per-item status.
 
 | Document | Feature / proposal | Wasm | Completeness | Where it stands |
 |---|---|---|---|---|
-| [`MULTI_VALUE.md`](docs/proposals/MULTI_VALUE.md) | Multi-value | 2.0 | `██████████████████░░` 90% | Engine complete (block parameters, packed multi-result returns); the gap is verification — the harness skips functions with multiple results |
+| [`MULTI_VALUE.md`](docs/proposals/MULTI_VALUE.md) | Multi-value | 2.0 | `███████████████████░` 95% | Engine complete (block parameters, multi-result calls via a caller-provided result buffer) and exported multi-result values are now marshalled by `assert_return`; the remaining gaps are the non-`assert_return` harness paths and the embedder-facing `callCallable` API |
 | [`TAILCALLS.md`](docs/proposals/TAILCALLS.md) | Tail calls | 3.0 | `██████████████████░░` 90% | TC-1…TC-4 done: direct, indirect and `ref` tails run in constant stack; the trampoline is signature-restricted |
 | [`SMALL_PROPOSALS.md`](docs/proposals/SMALL_PROPOSALS.md) | Sign-extension, non-trapping `trunc_sat`, branch hinting | 2.0 / 3.0 | `██████████████████░░` 90% | First two implemented + manually tested; the *trapping* `trunc_f*` and integer `div`/`rem` now genuinely trap (they used to silently produce a value); branch hints are parsed and deliberately non-semantic |
 | [`MEMORY64.md`](docs/proposals/MEMORY64.md) | Memory64 | 3.0 | `███████████████████░` 95% | M64-1/M64-3 done: 64-bit `size`/`grow`, the unsigned-address overflow-safe bound check, `spectest.table64`, and a manual 64-bit test; all 12 curated 64-bit scripts green; M2 (reject a mismatched index type) is the usual no-validator stance |

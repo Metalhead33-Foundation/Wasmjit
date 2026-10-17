@@ -1041,42 +1041,64 @@ jit_value_t OpcodeDispatcher::arrayElementBase(jit_value_t arrayRef, WASM::TypeI
 	return castRefValue(addr, dataPtrType);
 }
 
-jit_value_t OpcodeDispatcher::packReturnValues(jit_type_t returnType, size_t resultCount)
+jit_type_t OpcodeDispatcher::resultTupleType(const WASM::FuncType& wasm_func)
 {
-	assert(jit_type_is_struct(returnType));
-	assert(jit_type_num_fields(returnType) == resultCount);
-
-	jit_value_t packed = jit_value_create(function, returnType);
-	for (size_t i = resultCount; i-- > 0; ) {
-		jit_nuint fieldOffset = jit_type_get_offset(returnType, static_cast<unsigned int>(i));
-		jit_insn_store_relative(function, packed, static_cast<jit_nint>(fieldOffset), popValue());
-	}
-	return jit_insn_load(function, packed);
+	// The result buffer of a multi-result function. A fresh struct type per
+	// site is deliberate: only its field offsets and field types are used, and
+	// LibJIT keeps every type alive for the context's lifetime. Deriving it
+	// from the FuncType on both sides keeps caller and callee agreeing.
+	return typeTranslator.translateStruct(wasm_func.results);
 }
 
-void OpcodeDispatcher::pushCallResults(const WASM::FuncType& calleeSig, jit_type_t calleeJitSig, jit_value_t ret)
+jit_value_t OpcodeDispatcher::newResultBuffer(const WASM::FuncType& calleeSig)
+{
+	if (calleeSig.results.size() <= 1)
+		return nullptr;
+	jit_value_t slot = jit_value_create(function, resultTupleType(calleeSig));
+	// A struct-typed `jit_value_create` is a real frame slot; pass its address
+	// rather than the aggregate (docs/SIMD_LIBJIT.md §6.1).
+	return jit_insn_address_of(function, slot);
+}
+
+void OpcodeDispatcher::packReturnValues(jit_type_t tupleType, jit_value_t out, size_t resultCount)
+{
+	assert(jit_type_is_struct(tupleType));
+	assert(jit_type_num_fields(tupleType) == resultCount);
+	assert(out != nullptr);
+
+	// Pop in reverse so field 0 is the bottom-most result, matching the tuple
+	// layout that pushCallResults reads back.
+	std::vector<jit_value_t> values(resultCount);
+	for (size_t i = resultCount; i-- > 0; )
+		values[i] = popValue();
+	for (size_t i = 0; i < resultCount; ++i) {
+		jit_nuint fieldOffset = jit_type_get_offset(tupleType, static_cast<unsigned int>(i));
+		jit_insn_store_relative(function, out, static_cast<jit_nint>(fieldOffset), values[i]);
+	}
+}
+
+void OpcodeDispatcher::pushCallResults(const WASM::FuncType& calleeSig, jit_value_t ret, jit_value_t outBuffer)
 {
 	if (calleeSig.results.empty()) {
 		(void)ret;
+		(void)outBuffer;
 		return;
 	}
 	if (calleeSig.results.size() == 1) {
 		// A call result is already owned by the caller (the callee transferred
 		// it), so it is pushed without an extra clone.
+		(void)outBuffer;
 		pushOwnedValue(ret);
 		return;
 	}
 
-	jit_type_t returnType = jit_type_get_return(calleeJitSig);
-	assert(jit_type_is_struct(returnType));
-	assert(jit_type_num_fields(returnType) == calleeSig.results.size());
-
-	jit_value_t packed = jit_value_create(function, returnType);
-	jit_insn_store(function, packed, ret);
+	// The callee wrote its results into the caller's tuple; read them back.
+	assert(outBuffer != nullptr);
+	jit_type_t tupleType = resultTupleType(calleeSig);
 	for (size_t i = 0; i < calleeSig.results.size(); ++i) {
-		jit_type_t fieldType = jit_type_get_field(returnType, static_cast<unsigned int>(i));
-		jit_nuint fieldOffset = jit_type_get_offset(returnType, static_cast<unsigned int>(i));
-		pushOwnedValue(jit_insn_load_relative(function, packed, static_cast<jit_nint>(fieldOffset), fieldType));
+		jit_type_t fieldType = jit_type_get_field(tupleType, static_cast<unsigned int>(i));
+		jit_nuint fieldOffset = jit_type_get_offset(tupleType, static_cast<unsigned int>(i));
+		pushOwnedValue(jit_insn_load_relative(function, outBuffer, static_cast<jit_nint>(fieldOffset), fieldType));
 	}
 }
 
@@ -1160,17 +1182,20 @@ void OpcodeDispatcher::dispatchCallThroughCallable(jit_value_t callablePtr, WASM
 	for (size_t i = calleeSig.params.size(); i--; )
 		stackArgs[i] = popValue();
 
-	std::vector<jit_value_t> args(1 + calleeSig.params.size());
+	jit_value_t outBuffer = newResultBuffer(calleeSig);
+	std::vector<jit_value_t> args(1 + calleeSig.params.size() + (outBuffer != nullptr ? 1 : 0));
 	args[0] = jit_insn_load_relative(
 		function, callablePtr, offsetof(WASM::Callable, context), jit_type_void_ptr);
 	for (size_t i = 0; i < calleeSig.params.size(); ++i)
 		args[1 + i] = stackArgs[i];
+	if (outBuffer != nullptr)
+		args.back() = outBuffer;
 
 	jit_value_t fnPtr = jit_insn_load_relative(
 		function, callablePtr, offsetof(WASM::Callable, fnPtr), jit_type_void_ptr);
 	jit_value_t ret = jit_insn_call_indirect(
 		function, fnPtr, calleeJitSig, args.data(), static_cast<unsigned>(args.size()), 0);
-	pushCallResults(calleeSig, calleeJitSig, ret);
+	pushCallResults(calleeSig, ret, outBuffer);
 }
 
 void OpcodeDispatcher::emitTrap(WASM::TrapKind kind)
@@ -1331,13 +1356,16 @@ void OpcodeDispatcher::emitImplicitFunctionReturn()
 		jit_insn_return(function, rv);
 		return;
 	}
-	jit_type_t signature = jit_function_get_signature(function);
-	jit_type_t returnType = jit_type_get_return(signature);
-	jit_value_t packed = packReturnValues(returnType, n);
+	// Multiple results: the caller passed a result buffer as the trailing
+	// parameter; write the values there and return void.
+	assert(jit_type_get_return(jit_function_get_signature(function)) == jit_type_void);
+	jit_value_t out = jit_value_get_param(function,
+		static_cast<unsigned int>(currentFunc.params.size() + 1));
+	packReturnValues(resultTupleType(currentFunc), out, n);
 	// The result(s) are on the way out (owned by the caller); release the
 	// frame's own references before returning (docs/proposals/GC.md RC-5).
 	emitDropRefLocals();
-	jit_insn_return(function, packed);
+	jit_insn_return(function, nullptr);
 }
 
 jit_value_t OpcodeDispatcher::vmContextValue()
@@ -1651,7 +1679,28 @@ void OpcodeDispatcher::dispatchEnd()
 	controlStack.pop_back();
 
 	if (block.kind == ControlBlock::If && !block.hasElse) {
+		// No explicit else. If the then path is reachable it stores its
+		// results and jumps over the implicit else; the implicit else yields
+		// the block's parameters (validation requires params == results for an
+		// `if` with no else). Binding `elseLabel` *before* the result store
+		// used to make the else path execute the then path's store, and when
+		// the then body ended in `br`/`return` the store was skipped entirely
+		// (the `unreachableCode` early-out), leaving the result slots at zero.
+		const bool thenReachable = !unreachableCode;
+		if (thenReachable) {
+			storeStackTopToSlots(block.resultSlots);
+			jit_insn_branch(function, &block.label);
+		}
 		jit_insn_label(function, &block.elseLabel);
+		unreachableCode = false;
+		const size_t copies = std::min(block.resultSlots.size(), block.paramSlots.size());
+		for (size_t i = 0; i < copies; ++i)
+			jit_insn_store(function, block.resultSlots[i],
+				jit_insn_load(function, block.paramSlots[i]));
+		jit_insn_label(function, &block.label);
+		resizeValueStack(block.stackDepth);
+		restoreValuesFromSlots(block.resultSlots);
+		return;
 	}
 
 	if (block.kind != ControlBlock::Loop) {
@@ -1769,9 +1818,6 @@ void OpcodeDispatcher::emitFunctionReturn(bool consume)
 		return;
 	}
 
-	jit_type_t signature = jit_function_get_signature(function);
-	jit_type_t returnType = jit_type_get_return(signature);
-
 	if (consume) {
 		if (n == 1) {
 			jit_value_t rv = popValue();
@@ -1779,9 +1825,14 @@ void OpcodeDispatcher::emitFunctionReturn(bool consume)
 			jit_insn_return(function, rv);
 			return;
 		}
-		jit_value_t packed = packReturnValues(returnType, n);
+		// Multiple results travel through the trailing result-buffer
+		// parameter (LibJitTypeTranslation.cpp); the signature returns void.
+		assert(jit_type_get_return(jit_function_get_signature(function)) == jit_type_void);
+		jit_value_t out = jit_value_get_param(function,
+			static_cast<unsigned int>(currentFunc.params.size() + 1));
+		packReturnValues(resultTupleType(currentFunc), out, n);
 		emitDropRefLocals();
-		jit_insn_return(function, packed);
+		jit_insn_return(function, nullptr);
 		return;
 	}
 
@@ -1798,10 +1849,12 @@ void OpcodeDispatcher::emitFunctionReturn(bool consume)
 	const std::vector<jit_value_t> saved(valueStack.begin() + base, valueStack.end());
 	for (jit_value_t v : saved)
 		valueStack.push_back(v);
-	jit_value_t packed = packReturnValues(returnType, n);
+	jit_value_t out = jit_value_get_param(function,
+		static_cast<unsigned int>(currentFunc.params.size() + 1));
+	packReturnValues(resultTupleType(currentFunc), out, n);
 	valueStack.resize(depth);
 	emitDropRefLocals();
-	jit_insn_return(function, packed);
+	jit_insn_return(function, nullptr);
 }
 
 void OpcodeDispatcher::emitBranchToLabel(WASM::LabelIdx arg)
@@ -1824,8 +1877,12 @@ void OpcodeDispatcher::dispatchCall(WASM::FuncIdx funcIdx)
 	for (size_t i = calleeSig.params.size(); i--; )
 		stackArgs[i] = popValue();
 
-	const unsigned numArgs = 1 + static_cast<unsigned>(calleeSig.params.size());
+	jit_value_t outBuffer = newResultBuffer(calleeSig);
+	const unsigned numArgs = 1 + static_cast<unsigned>(calleeSig.params.size())
+			+ (outBuffer != nullptr ? 1u : 0u);
 	std::vector<jit_value_t> args(numArgs);
+	if (outBuffer != nullptr)
+		args.back() = outBuffer;
 
 	if (funcIdx < importedFuncCount) {
 		const WASM::VMContext* calleeCtx = internals.importStorage[funcIdx].context;
@@ -1854,7 +1911,7 @@ void OpcodeDispatcher::dispatchCall(WASM::FuncIdx funcIdx)
 		for (size_t i = 0; i < calleeSig.params.size(); ++i)
 			args[1 + i] = stackArgs[i];
 		jit_value_t ret = jit_insn_call_indirect(function, fnPtr, calleeJitSig, args.data(), numArgs, 0);
-		pushCallResults(calleeSig, calleeJitSig, ret);
+		pushCallResults(calleeSig, ret, outBuffer);
 		return;
 	}
 
@@ -1874,7 +1931,7 @@ void OpcodeDispatcher::dispatchCall(WASM::FuncIdx funcIdx)
 	for (size_t i = 0; i < calleeSig.params.size(); ++i)
 		args[1 + i] = stackArgs[i];
 	jit_value_t ret = jit_insn_call_indirect(function, fnPtr, calleeJitSig, args.data(), numArgs, 0);
-	pushCallResults(calleeSig, calleeJitSig, ret);
+	pushCallResults(calleeSig, ret, outBuffer);
 }
 
 void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx typeIdx, WASM::TableIdx tableIdx)
@@ -1902,14 +1959,17 @@ void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx typeIdx, WASM::TableId
 	jit_value_t calleeCtx = jit_insn_load_relative(
 		function, callablePtr, offsetof(WASM::Callable, context), jit_type_void_ptr);
 
-	std::vector<jit_value_t> args(1 + ft.params.size());
+	jit_value_t outBuffer = newResultBuffer(ft);
+	std::vector<jit_value_t> args(1 + ft.params.size() + (outBuffer != nullptr ? 1 : 0));
 	args[0] = calleeCtx;
 	for (size_t i = 0; i < ft.params.size(); ++i)
 		args[1 + i] = stackArgs[i];
+	if (outBuffer != nullptr)
+		args.back() = outBuffer;
 
 	jit_value_t ret = jit_insn_call_indirect(function, fnPtr, calleeJitSig, args.data(),
 											 static_cast<unsigned>(args.size()), 0);
-	pushCallResults(ft, calleeJitSig, ret);
+	pushCallResults(ft, ret, outBuffer);
 }
 
 bool OpcodeDispatcher::emitDirectTailCall(WASM::FuncIdx funcIdx)
@@ -1936,11 +1996,17 @@ bool OpcodeDispatcher::emitDirectTailCall(WASM::FuncIdx funcIdx)
 	for (size_t i = calleeSig.params.size(); i--; )
 		stackArgs[i] = popValue();
 
-	const unsigned numArgs = 1 + static_cast<unsigned>(calleeSig.params.size());
+	const unsigned numArgs = 1 + static_cast<unsigned>(calleeSig.params.size())
+			+ (calleeSig.results.size() > 1 ? 1u : 0u);
 	std::vector<jit_value_t> args(numArgs);
 	args[0] = vmContextValue();
 	for (size_t i = 0; i < calleeSig.params.size(); ++i)
 		args[1 + i] = stackArgs[i];
+	if (calleeSig.results.size() > 1) {
+		// Direct self-recursion: the caller's result buffer is the callee's.
+		args.back() = jit_value_get_param(function,
+			static_cast<unsigned int>(currentFunc.params.size() + 1));
+	}
 
 	// The callee's result becomes this function's result; control leaves the
 	// frame entirely, so no `return` is emitted and the rest is unreachable.

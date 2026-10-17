@@ -211,11 +211,19 @@ jit_type_t LibJitTypeTranslator::translateFunctionSignature(const WASM::FuncType
 	else if(return_types.size() == 1) {
 		return jit_type_create_signature(jit_abi_cdecl, return_types[0], params.data(), params.size(), 1);
 	}
-	else {
-		// Perfectly valid way to handle multiple returns in LibJIT
-		jit_type_t return_type = jit_type_create_struct(return_types.data(), return_types.size(), 1);
-		return jit_type_create_signature(jit_abi_cdecl, return_type, params.data(), params.size(), 1);
-	}
+	// Multiple results: do NOT return an aggregate by value. LibJIT's
+	// aggregate-return ABI reads the hidden result-buffer pointer from an
+	// unwritten frame slot when the callee has parameters, so the callee's
+	// first store lands at whatever that slot happened to contain (zero ->
+	// `segfault at 8`, garbage -> a general-protection fault). That crashed
+	// every JIT-to-JIT call in call.wast, if.wast and fac.wast. Instead the
+	// caller passes a buffer for the result tuple as a trailing `void*`
+	// parameter, and the function returns void. The buffer is laid out as the
+	// struct `translateStruct(results)` describes; call and return sites derive
+	// it from the same FuncType, so both sides agree.
+	// See docs/proposals/MULTI_VALUE.md MV5.
+	params.push_back(jit_type_void_ptr);
+	return jit_type_create_signature(jit_abi_cdecl, jit_type_void, params.data(), params.size(), 1);
 }
 
 jit_type_t LibJitTypeTranslator::translateStruct(const WASM::StructType& wasm_struct) {

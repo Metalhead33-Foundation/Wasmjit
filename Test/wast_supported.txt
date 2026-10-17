@@ -26,6 +26,7 @@ array_new_data
 binary0
 binary_leb128_64
 bulk64
+call
 call_indirect64
 custom
 exports0
@@ -33,11 +34,13 @@ f32_bitwise
 f32_cmp
 f64_bitwise
 f64_cmp
+fac
 float_memory
 float_memory64
 float_misc
 forward
 id
+if
 inline-module
 int_exprs
 local_set

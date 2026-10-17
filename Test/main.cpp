@@ -3185,3 +3185,53 @@ TEST_CASE("simd: v128.const, splat and lane ops run through the JIT")
 }
 
 
+// ── Multi-value (docs/proposals/MULTI_VALUE.md MV5) ─────────────────────────
+// A multi-result function writes its results into a caller-provided buffer
+// passed as a trailing JIT parameter; it does not return an aggregate by
+// value. These are the shapes that used to crash (call.wast, if.wast, fac.wast).
+TEST_CASE("multi-value: JIT-to-JIT calls marshal every result")
+{
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("multi_value", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	const auto exported = [&instance](const char* name) {
+		auto fn = instance.exportedFunction(name);
+		REQUIRE(fn.has_value());
+		return *fn;
+	};
+
+	// call.wast's `as-mixed-operands`: swap(3,4) = (4,3); (3 + 5) * 4 = 32.
+	REQUIRE(WASM::callCallable<int32_t>(exported("mixed"), int32_t(3), int32_t(4)) == 32);
+
+	// Nested multi-result calls: swap(swap(3,4)) = (3,4); 3 + 4 = 7.
+	REQUIRE(WASM::callCallable<int32_t>(exported("nested")) == 7);
+
+	// A mixed i64/i32 tuple: the i32 result is on top and is dropped.
+	REQUIRE(WASM::callCallable<int64_t>(exported("mixed64"), int64_t(1234), int32_t(1)) == 1234);
+
+	// if.wast's `params-id-break`: the implicit else and `br 0` both yield (1,2).
+	REQUIRE(WASM::callCallable<int32_t>(exported("params_id_break"), int32_t(0)) == 3);
+	REQUIRE(WASM::callCallable<int32_t>(exported("params_id_break"), int32_t(1)) == 3);
+
+	// call_indirect to a multi-result callee: swap(3,4) = (4,3); 4 + 3 = 7.
+	REQUIRE(WASM::callCallable<int32_t>(exported("indirect"), int32_t(3), int32_t(4)) == 7);
+
+	// The host-side ABI: a multi-result export is `void f(VMContext*, params...,
+	// void* results)` (docs/ABI.md). Calling the driver entry point directly
+	// pins that contract without going through the spec harness.
+	auto swapExport = instance.exportedFunction("swap_export");
+	REQUIRE(swapExport.has_value());
+	alignas(16) unsigned char tuple[16] = {};
+	using MultiResultFn = void (*)(WASM::VMContext*, int32_t, int32_t, void*);
+	reinterpret_cast<MultiResultFn>(swapExport->fnPtr)(swapExport->context, 3, 4, tuple);
+	int32_t first = 0;
+	int32_t second = 0;
+	std::memcpy(&first, tuple, sizeof(first));
+	std::memcpy(&second, tuple + sizeof(first), sizeof(second));
+	REQUIRE(first == 4);
+	REQUIRE(second == 3);
+}
+

@@ -1,7 +1,9 @@
 #include "WastScript.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
+#include <cstddef>
 #include <csignal>
 #include <csetjmp>
 #include <cstdlib>
@@ -456,7 +458,8 @@ private:
 	void onAssertExhaustion(const ScriptCommand& command);
 
 	bool invoke(WASM::ModuleInstance& instance, const ScriptAction& action, const WASM::FuncType& funcType,
-				const WASM::Callable& callable, std::array<unsigned char, 16>& returns, bool& trapped);
+				const WASM::Callable& callable, std::array<unsigned char, 16>& returns, bool& trapped,
+				std::vector<unsigned char>* tuple = nullptr);
 	bool compareResult(const ScriptValue& expected, WASM::ValueTypeCode actual, const unsigned char* data);
 };
 
@@ -749,10 +752,6 @@ void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 		fail(command.line, "arity mismatch for '" + action.field + "'");
 		return;
 	}
-	if (funcType->results.size() > 1) {
-		skip("multiple return values are not marshalled yet");
-		return;
-	}
 	if (command.expected.size() != funcType->results.size()) {
 		fail(command.line, "result count mismatch for '" + action.field + "'");
 		return;
@@ -769,6 +768,48 @@ void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 			skip("expected type '" + expected.type + "' is not supported");
 			return;
 		}
+	}
+
+	if (funcType->results.size() > 1) {
+		std::array<unsigned char, 16> unused {};
+		std::vector<unsigned char> tuple;
+		bool trapped = false;
+		if (!invoke(*instance, action, *funcType, *callable, unused, trapped, &tuple)) {
+			skip("could not marshal the arguments of '" + action.field + "'");
+			return;
+		}
+		if (trapped) {
+			fail(command.line, "unexpected trap from '" + action.field + "': "
+					+ std::string(lastTrapMessage != nullptr ? lastTrapMessage : "trap"));
+			return;
+		}
+
+		// The callee wrote its results into the caller-provided tuple, each at
+		// the offset of the corresponding result type (docs/ABI.md).
+		const jit_type_t tupleType = jitContext.getTranslator().translateStruct(funcType->results);
+		for (size_t i = 0; i < command.expected.size(); ++i) {
+			const jit_type_t fieldType = jit_type_get_field(tupleType, static_cast<unsigned int>(i));
+			const size_t offset = static_cast<size_t>(
+					jit_type_get_offset(tupleType, static_cast<unsigned int>(i)));
+			const size_t fieldSize = static_cast<size_t>(jit_type_get_size(fieldType));
+			if (offset + fieldSize > tuple.size()) {
+				skip("multi-result value is larger than the marshalling buffer");
+				return;
+			}
+			const WASM::ValueTypeCode code = funcType->results[i].val.opcode;
+			if (compareResult(command.expected[i], code, tuple.data() + offset))
+				continue;
+
+			std::stringstream message;
+			message << "assert_return failed for '" << action.field << "' result #" << i
+					<< ": expected " << command.expected[i].type << " "
+					<< command.expected[i].value << " but got " << typeName(code) << " "
+					<< formatResultValue(code, tuple.data() + offset);
+			fail(command.line, message.str());
+			return;
+		}
+		pass();
+		return;
 	}
 
 	std::array<unsigned char, 16> returns {};
@@ -996,8 +1037,15 @@ void ScriptRunner::onAssertExhaustion(const ScriptCommand& command)
 
 bool ScriptRunner::invoke(WASM::ModuleInstance& instance, const ScriptAction& action,
 						  const WASM::FuncType& funcType, const WASM::Callable& callable,
-						  std::array<unsigned char, 16>& returns, bool& trapped)
+						  std::array<unsigned char, 16>& returns, bool& trapped,
+						  std::vector<unsigned char>* tuple)
 {
+	// A multi-result function's JIT signature takes a result buffer as a
+	// trailing parameter (docs/ABI.md). Only the multi-result-aware caller
+	// (onAssertReturn) passes `tuple`; every other caller still skips.
+	if (funcType.results.size() > 1 && tuple == nullptr)
+		return false;
+
 	std::vector<ArgSlot> slots(funcType.params.size());
 	std::vector<void*> arguments(funcType.params.size() + 1);
 
@@ -1060,6 +1108,23 @@ bool ScriptRunner::invoke(WASM::ModuleInstance& instance, const ScriptAction& ac
 		arguments[i + 1] = slots[i].raw;
 	}
 
+	// Multi-result callee: the JIT signature has one extra trailing `void*`
+	// parameter pointing at the result tuple (docs/ABI.md). The caller owns
+	// the buffer; the callee writes its results through it.
+	jit_type_t tupleType = nullptr;
+	void* tupleAddress = nullptr;
+	if (tuple != nullptr && funcType.results.size() > 1) {
+		tupleType = jitContext.getTranslator().translateStruct(funcType.results);
+		const size_t size = static_cast<size_t>(jit_type_get_size(tupleType));
+		if (jit_type_get_alignment(tupleType) > alignof(std::max_align_t))
+			return false; // a vector's storage is max_align_t-aligned
+		tuple->assign(std::max<size_t>(size, 16), 0);
+		tupleAddress = tuple->data();
+		// jit_apply wants a pointer to each argument *value* (like arguments[0],
+		// which points at the `context` local), not the value itself.
+		arguments.push_back(&tupleAddress);
+	}
+
 	// jit_apply knows the calling convention for an arbitrary signature, so we
 	// can marshal runtime-typed arguments without generating a template
 	// instantiation for every (arity, type) combination. The signature is
@@ -1078,8 +1143,10 @@ bool ScriptRunner::invoke(WASM::ModuleInstance& instance, const ScriptAction& ac
 		return true;
 	}
 
-	jit_apply(signature, callable.fnPtr, arguments.data(),
-			  static_cast<unsigned int>(funcType.params.size() + 1), returns.data());
+	const unsigned int numArgs = static_cast<unsigned int>(funcType.params.size() + 1)
+			+ (tupleType != nullptr ? 1u : 0u);
+	jit_apply(signature, callable.fnPtr, arguments.data(), numArgs,
+			  tupleType != nullptr ? nullptr : returns.data());
 	return true;
 }
 

@@ -176,8 +176,21 @@ private:
 	// Arrays store their elements inline (docs/proposals/GC.md D13/GC-9), so
 	// there is no `data` field to load.
 	jit_value_t arrayElementBase(jit_value_t arrayRef, WASM::TypeIdx arg);
-	jit_value_t packReturnValues(jit_type_t returnType, size_t resultCount);
-	void pushCallResults(const WASM::FuncType& calleeSig, jit_type_t calleeJitSig, jit_value_t ret);
+	// Layout of a multi-result function's result tuple. A multi-result
+	// signature carries a trailing `void*` result buffer instead of returning
+	// an aggregate by value (see LibJitTypeTranslation.cpp); this struct type
+	// describes that buffer.
+	jit_type_t resultTupleType(const WASM::FuncType& wasm_func);
+	// Writes the top `resultCount` values into `out`, the caller-provided
+	// result buffer (a multi-result function's trailing parameter).
+	void packReturnValues(jit_type_t tupleType, jit_value_t out, size_t resultCount);
+	// Pushes a call's results. For a multi-result callee `outBuffer` is the
+	// address of the caller's result tuple and `ret` is unused (the callee
+	// returns void); for 0/1 results `outBuffer` is null.
+	void pushCallResults(const WASM::FuncType& calleeSig, jit_value_t ret, jit_value_t outBuffer);
+	// Allocates the caller-side result tuple in this function's frame and
+	// returns its address, or null when `calleeSig` has 0/1 results.
+	jit_value_t newResultBuffer(const WASM::FuncType& calleeSig);
 	std::vector<WASM::StorageType> parameterTypesForBlockType(const WASM::BlockType& bt) const;
 	std::vector<jit_value_t> createSlotsForTypes(const std::vector<WASM::StorageType>& types);
 	void storeStackTopToSlots(const std::vector<jit_value_t>& slots);
