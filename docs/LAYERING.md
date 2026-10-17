@@ -66,9 +66,10 @@ whatever they like.
    statement the next backend can actually act on.
 3. **It is what makes the shared layers testable.** The SIMD helper layer
    (`wasm_simd_scalar.{hpp,cpp}`) is backend-neutral by design — every backend
-   compiles to the same `extern "C"` entry points — so its reference
-   implementation *has* to live in the core. If the core were allowed to be
-   LibJIT-shaped, that layer would have nowhere to live.
+   *can* call the same `extern "C"` entry points, and one that lowers `v128` on
+   its own vector instructions must still match their semantics (§4) — so its
+   reference implementation *has* to live in the core. If the core were allowed
+   to be LibJIT-shaped, that layer would have nowhere to live.
 
 ## 4. What the core owns, and what a backend must agree with
 

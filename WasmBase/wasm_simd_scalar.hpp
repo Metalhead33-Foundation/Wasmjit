@@ -11,9 +11,10 @@
 // fast path.
 //
 // This layer is backend-neutral and lives in the core on purpose: every backend
-// compiles to the same `extern "C"` entry points declared at the bottom of this
-// header, so the entry points are a core contract and not any one backend's
-// business (docs/LAYERING.md).
+// can call the same `extern "C"` entry points declared at the bottom of this
+// header, and a backend that lowers `v128` on its own vector instructions must
+// still match their semantics — so the entry points are a core contract and not
+// any one backend's business (docs/LAYERING.md §4).
 //
 // The wasm semantics being implemented are in docs/proposals/SIMD.md. The byte
 // order is spelled out everywhere instead of being inherited from the host: a
@@ -162,10 +163,12 @@ void swizzleBytes(const uint8_t* a, const uint8_t* b, uint8_t* out);
 //
 // `const void*` in, `void* out`, immediates as scalars, scalar results by
 // value; no traps, no allocation, and no context parameter except for the
-// memory accesses. Today these forward to WASM::simd_scalar above; a vectorised
-// implementation is free to replace the body behind the same symbols, so
-// callers must never depend on which implementation they get — only on this
-// contract.
+// memory accesses. The bodies live in `wasm_simd_vector.cpp` — compiled once per
+// CPU target, with the few ops where a byte move *is* the optimal lowering
+// forwarding to the reference — and `WASM::simd_scalar` above is what they are
+// checked against, so a caller must never depend on which implementation it
+// gets: only on this contract. A backend that lowers `v128` natively keeps its
+// own path and must match the same semantics (docs/LAYERING.md §4).
 extern "C" {
 void wasm_v128_const(uint64_t lo, uint64_t hi, void* out);
 void wasm_v128_zero(void* out);

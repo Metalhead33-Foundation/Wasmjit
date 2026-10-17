@@ -335,6 +335,14 @@ Two things about this layout are worth stating explicitly, because they were
    would be a second hand-written implementation of the spec rather than a
    mapping onto the library, which is precisely what the rule calls delegation
    for.
+
+   This rule is *inside* the helper layer: it decides which of the two
+   core-owned implementations answers a call. Above it sits the backend-level
+   equivalent — these entry points are what LibJIT calls, and a backend with
+   native vector registers may lower `v128` itself instead, keeping the same
+   semantics ([`LAYERING.md`](LAYERING.md) §4; `proposals/SIMD.md` SIMD-8). That
+   path is deliberately not one of §10's milestones: it belongs to the backend
+   that has the registers.
 3. **The per-lane op set is one list, expanded four ways.** At 133 ops in
    SIMD-L3 alone, four hand-written layers (reference, per-target bodies, entry
    points and the test table) would be hundreds of near-identical functions that
@@ -561,7 +569,10 @@ Reproduce one T3 row with
 
 `SIMD-L<n>` are this note's milestones; `SIMD-<n>` are
 [`proposals/SIMD.md`](proposals/SIMD.md) §7's, and `S<n>` are its §5 gaps. The
-two lists line up: L1–L7 are the *how* for SIMD-0…SIMD-6.
+two lists line up: L1–L7 are the *how* for SIMD-0…SIMD-6. `SIMD-8` (native
+lowering in a future backend) deliberately has no `L` counterpart — that path
+belongs to the backend that has the vector registers, not to this LibJIT-only
+note (§6.5).
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|

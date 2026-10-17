@@ -59,10 +59,12 @@ Two consequences fall out immediately:
    LibJIT today and survives a move to SLJIT/AsmJit later." That is exactly what
    [`proposals/SIMD.md`](proposals/SIMD.md) SD1/SD2/SD7 already assume.
 
-**Recommendation (detail in §6): lower SIMD to native helper functions over a
-16-byte payload, keep the `{i32,i32,i32,i32}` representation, and treat
-hardware vector fast paths as an optional later optimisation.** Helpers are
-conformant, backend-neutral, and cost no LibJIT features that do not exist.
+**Recommendation (detail in §6): on LibJIT, lower SIMD to native helper
+functions over a 16-byte payload, keep the `{i32,i32,i32,i32}` representation,
+and treat hardware vector fast paths as an optional later optimisation.**
+Helpers are conformant, backend-neutral, and cost no LibJIT features that do not
+exist. They are the permanent *baseline* and the test oracle — and, for a backend
+that has real vector registers, a fallback rather than the only path (§6, §8).
 
 ## 3. What each engine actually offers
 
@@ -188,9 +190,13 @@ that matter at the WasmJit layer.
 | **C6** Runtime CPU feature detection + fast/portable dispatch | ✗ | ✗ | ✗ (traits query only) | **yes** (optional, §5/W5) |
 
 Reading the table: C1/C3/C5/C6 are WasmJit-layer work by necessity. C2 is the
-only capability LibJIT lacks *and* SLJIT/AsmJit have — which is why switching
-backend does not make SIMD cheap today, while switching *strategy* (helpers)
-does.
+only capability LibJIT lacks *and* SLJIT/AsmJit have. That is why switching
+backend does not make SIMD cheap *today* — neither of those backends exists, and
+C1/C3/C5 are ours either way — while switching *strategy* (helpers) does. It is
+also why that switch pays later: C2 is register residency and per-op
+instructions, which a helper call cannot provide on *any* backend, and a backend
+that has it is expected to use it instead of, or in addition to, the helpers
+(§6, and the SIMD contract row in [`LAYERING.md`](LAYERING.md) §4).
 
 ## 5. The workarounds when a backend has no SIMD (LibJIT)
 
@@ -238,13 +244,19 @@ detection.** Concretely:
 | — | *(deferred)* W2 memory staging as the helper ABI | Adopt only if the 16-byte by-value aggregate ABI proves unreliable (S9); it changes the *helper signatures*, not the plan. |
 | — | *(deferred)* Real vector lowering on SLJIT or AsmJit | The correct long-term answer for performance, but blocked on those backends existing at all — and the C3/C5 work that helpers do is a prerequisite for it, not wasted by it. |
 
-Why helpers are not merely a stopgap:
+Why the helper layer is not a stopgap — and not the only lowering:
 
-1. **They are backend-neutral.** A helper table is a set of `extern "C"` C
-   functions. SLJIT and AsmJit can call them the same way LibJIT does with
-   `jit_insn_call_native`, and any future backend gets SIMD for free. A
-   vector-lowering built directly on one emitter, by contrast, is thrown away
-   when the backend changes.
+1. **They are backend-neutral, and they are not exclusive.** A helper table is a
+   set of `extern "C"` C functions. SLJIT and AsmJit can call them the same way
+   LibJIT does with `jit_insn_call_native`, so any future backend gets a
+   *correct* SIMD path for free. What a helper call cannot give any backend is
+   what a backend with vector registers has: `v128` values living in those
+   registers, and per-op instructions instead of a call. That path is expected
+   (`SIMD_LIBJIT.md` §3; the contract row in [`LAYERING.md`](LAYERING.md) §4 —
+   "or provide its own but keep the same semantics"), and it reuses everything
+   that is expensive to build: the semantics layer, the `v128` ABI, the 236-op
+   mapping and this test oracle. What must not be built twice is a *second
+   semantics layer* — which is why none of those four is optional.
 2. **They separate the two hard parts.** The `v128` ABI (C3) and the ~256
    opcode→semantics mapping (C5) are WasmJit-layer problems under *any*
    strategy; only the *quality* of the generated code is backend-specific. Doing
@@ -358,7 +370,7 @@ note is next revised (IDs follow the proposal note's existing scheme).
 | §3 | Add a bullet: "no backend in the tree has a `v128` value type; only LibJIT exists and it has no vector surface at all." | Makes the freedom concrete instead of theoretical; it is the premise of SD1. |
 | §4.2 | Note that the 236 stub handlers are the *whole* remaining execution problem, and that they are pure functions of 16 bytes. | Reframes the work as a helper table rather than 236 independent features. |
 | §5 / S4, S9 | Fold the alignment question (W3) into S4/S9 rather than leaving it a latent risk: the JIT type must be 16-byte aligned if `v128` crosses a call boundary by value. | `WASM::Value` is `alignas(16)`, the JIT type is 4-aligned; SIMD-0's done-when depends on it. |
-| §6 / SD1 | Keep SD1, but state that helpers are the **permanent baseline**, not a placeholder to be replaced; a later backend adds vectors *behind* the helpers. | Matches §6 of this note; stops the helper layer being treated as throwaway. |
+| §6 / SD1 | Keep SD1, but say precisely what is permanent: the **semantics layer, the `v128` ABI, and the helper entry points as the portable baseline and the test oracle**. What is *not* permanent is the helper *call* as the only lowering: a backend with native vector registers is expected to lower `v128` itself — instead of, or in addition to, calling the helpers — keeping the same semantics. [`LAYERING.md`](LAYERING.md) §4 already permits exactly that ("or provide its own but keep the same semantics"), and [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §3 expects it of AsmJit/SLJIT. | Stops the helper layer being treated as throwaway *without* putting a future backend's vector registers out of reach — which "a later backend adds vectors *behind* the helpers" would have done. Add SIMD-8 for that path. |
 | §6 / SD2 | As-is — the hybrid helper library (W5) is exactly SD2. | Confirmed feasible without JIT-level SIMD. |
 | §6 / SD7 | As-is, with W3 making the choice explicit. | Recommended representation stays `{i32×4}` + unaligned access. |
 | §7 / SIMD-0 | Add "and set the lowered type to 16-byte alignment" to the work column. | Cheapest fix for S4/S9. |

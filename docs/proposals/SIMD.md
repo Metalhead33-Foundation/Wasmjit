@@ -210,13 +210,21 @@ SIMD is the feature where the spec's freedom (§3) is least used today: the
 engine is scalar and single-threaded, and this project is a QVM successor, not
 a graphics kernel.
 
-The lowering these deviations assume — one native helper per op, hardware fast
-paths added *inside* the helpers — is surveyed against the three planned
-backends (GNU LibJIT has no SIMD surface at all; SLJIT and AsmJit have vector
-instructions but no value model, and neither is wired up) in
+The lowering these deviations assume **on LibJIT** — one native helper per op,
+with hardware fast paths added *inside* the helpers — is surveyed against the
+three planned backends (GNU LibJIT has no SIMD surface at all; SLJIT and AsmJit
+have vector instructions but no value model, and neither is wired up) in
 [`../SIMD_BACKENDS.md`](../SIMD_BACKENDS.md). That note reaches the same
 conclusion SD1/SD2/SD7 assume and adds a per-layer "laxness budget" for how far
 conformance may be relaxed.
+
+The helper layer is the permanent **baseline and oracle**, not the only permitted
+lowering. A backend that has native vector registers is expected to lower `v128`
+itself — values in those registers, per-op instructions — instead of, or in
+addition to, calling the helpers, and must match the same semantics: that is the
+`SIMD-8` milestone, it is what [`../LAYERING.md`](../LAYERING.md) §4's SIMD
+contract row already permits, and it is why the semantics layer of §6/§7 is
+written once and separately from the lowering.
 
 **The first implementation path is LibJIT-only** — AsmJit and SLJIT are
 deferred, not cancelled, and are expected to be leveraged for SIMD when they land
@@ -272,9 +280,11 @@ documents' milestone names.
 | **SIMD-5 — Relaxed SIMD** | Enumerate the relaxed sub-opcodes; decode them; implement the SD5 scalar results. | S2 | A module using each relaxed family produces a member of the allowed set. |
 | **SIMD-6 — Harness** | Marshal `v128` arguments/results (16-byte values, lane formatting) so `simd_*.wast` can be graded; add passing scripts to `wast_supported.txt`. | S7, S8 | `./WasmJit 'spec: simd_*'` reports real pass/fail counts. |
 | **SIMD-7 — Hardware fast paths** | Write the helper bodies against Highway 1.4.0 (its `HWY_DYNAMIC_DISPATCH` replaces `__builtin_cpu_supports`); the scalar helper stays the fallback and the test oracle. | — | The microbenchmark in [`../SIMD_LIBJIT.md`](../SIMD_LIBJIT.md) §8 shows the expected speedup. |
+| **SIMD-8 — Native lowering per backend** | When a backend with vector registers lands (AsmJit, SLJIT), lower `v128` in *that backend*: values in its vector registers, per-op instructions, including several `v128` per instruction where the allocator allows. It may do so instead of, or in addition to, calling the helper entry points — the helper layer stays as the portable fallback and the oracle. | — (blocked on that backend existing; see [`../SIMD_LIBJIT.md`](../SIMD_LIBJIT.md) §3) | For every op the native path claims, the T1 differential against the helper layer passes, and SIMD-L8's benchmark records the gain over the helper call. |
 
 Guardrails: keep the scalar helpers as the reference implementation and the
-fallback; run `./WasmJit '~[spec]'` after each step.
+fallback; a native per-backend lowering must match their semantics rather than
+re-derive them; run `./WasmJit '~[spec]'` after each step.
 
 ## 8. Indicative test survey
 
