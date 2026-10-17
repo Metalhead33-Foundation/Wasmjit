@@ -30,6 +30,12 @@ inline constexpr uint32_t kMaxFunctionLocals = 100000;
 // nesting, so pathological input gets a clear error instead.
 inline constexpr std::size_t kMaxControlNesting = 10000;
 
+// Component Model parser bounds. A component may nest components, and a
+// hostile file may contain a very large number of sections; both are capped
+// independently of the input size (docs/SAFETY.md).
+inline constexpr uint32_t kMaxComponentNesting = 100;
+inline constexpr uint32_t kMaxComponentSections = 100000;
+
 // Throws unless `requested` bytes can still be read from `device`. Devices
 // that do not report a size are treated as unbounded (nothing to compare
 // against), which keeps exotic embedder devices working.

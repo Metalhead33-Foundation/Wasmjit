@@ -1,17 +1,19 @@
 #ifndef WASMMODULE_HPP
 #define WASMMODULE_HPP
+#include "WasmArtifact.hpp"
 #include "WasmSection.hpp"
 #include "WasmType.hpp"
 #include "WasmTypeIdentity.hpp"
+#include <memory>
+#include <optional>
 #include <vector>
 #include <span>
 #include <map>
 namespace WASM {
 
-struct Module
+struct Module : public Artifact
 {
 public:
-	uint32_t version;
 	std::vector<Section> sections;
 	// Non-owning view into the Store's TypeRegistry (see WasmTypeRegistry.hpp).
 	// Indices stay module-local, so this is exactly the module's slice.
@@ -48,6 +50,7 @@ public:
 	bool hasStartFunction;
 	bool hasDataCount;
 private:
+	void parseBody(Elv::Io::Device& file, std::optional<uint64_t> end) override;
 	void processSecetions(Elv::Io::Device& file);
 	// Section processors
 	void processTypeSection(Elv::Io::Device& file, const Section& section);
@@ -73,6 +76,9 @@ private:
 public:
 	Module();
 	void fromFile(Elv::Io::Device& file);
+	// Parses an embedded core module body (no preamble) between the current
+	// position and `end`. Used by a component's core:module section.
+	static std::unique_ptr<Module> parseNested(Elv::Io::Device& file, uint64_t end);
 	const std::span<const Section> getSections() const;
 	// Map a module-local type index to its process-wide identity. Throws if the
 	// index is out of range.

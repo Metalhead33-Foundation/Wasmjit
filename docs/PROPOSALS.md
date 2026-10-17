@@ -208,7 +208,7 @@ authoritative per-item status is each note's §7 plan.
 | `SIMD.md` | 9 | canonical slots | §2/§3 say "the spec" | — | conforms (wording) |
 | `THREADS.md` | 9 | canonical slots | §2 "The proposal's model and what it demands" | — | conforms (wording) |
 | `GC.md` | 10 | canonical + appendix | §2/§3 "Wasm 3.0"; §5 "…and §2" | §10 "Beyond 3.0" after §9 | conforms (appendix) |
-| `COMPONENT_MODEL.md` | 10 | canonical + interleave | §2/§3 subject-named; §4 "What is in the tree today"; §7 "Staged plan" | §9 "How this relates…" before §10 References | conforms (forward-looking) |
+| `COMPONENT_MODEL.md` | 10 | canonical + interleave | §2/§3 subject-named; §4 "What is in the tree today"; §7 "Staged plan" | §9 "How this relates…" before §10 References | conforms (partial implementation) |
 | `SMALL_PROPOSALS.md` | 8 | grouped (3-in-1) | §2–§4 are proposals; demands/non-demands/implemented/gaps embedded | §5 fast/loose, §6 plan, §7 survey, §8 refs | conforms (grouped variant, PD1) |
 
 Reading: twenty notes match §2 exactly; two reword §2/§3 and keep the nine slots;

@@ -29,11 +29,16 @@ and what is deliberately *not* guarded. It contains **no new code**.
 
 ### 2.1 Tell artifacts apart before decoding them
 
-`Module::fromFile` reads the preamble as magic (4) + version (2) + **layer** (2)
-and rejects a non-zero layer, so a component is refused with a clear message
-instead of having its section ids decoded as core sections.
-*Encountered pitfall:* before this check a component "loaded" as a nonsense
-module ([`proposals/COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md) §4.1).
+`Artifact::parse` (`WasmBase/WasmArtifact.cpp`) reads the preamble as magic (4) +
+version (2) + **layer** (2) once and dispatches: layer 0 constructs a `Module`,
+layer 1 a `Component`. `Module::fromFile` remains the core-only entry point and
+rejects layer 1 with the component-specific message; `Component::fromFile`
+requires layer 1 and version `0x0d`. Embedded core modules and nested components
+inside a component are **full binaries with their own preambles**; the parser
+reads each one through the same factory logic, with the enclosing section end as
+a hard boundary.
+*Encountered pitfall:* before CM-0 a component "loaded" as a nonsense module
+([`proposals/COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md) §4.1).
 
 ### 2.2 Never allocate on an input-derived size without a bound
 
@@ -48,8 +53,12 @@ something.** Every such size is bounded, in one of two ways:
   opcode list lengths in the body — `br_table`, `select_t`, catch clauses —
   (`WasmBase/WasmOpcodeDispatcher.cpp`, `readList`/`readListLEB128`).
 - **By an explicit cap** — `kMaxFunctionLocals` (declared locals; one LEB can
-  otherwise ask for hundreds of millions of JIT slots) and `kMaxControlNesting`
-  (nested blocks in one function).
+  otherwise ask for hundreds of millions of JIT slots), `kMaxControlNesting`
+  (nested blocks in one function), and for components
+  `kMaxComponentSections` / `kMaxComponentNesting` (repeated sections and
+  recursive nested components). Component section payloads are also bounded by
+  the enclosing section's end, and custom-section names are bounded by the
+  section rather than the file.
 
 ### 2.3 Charge host memory against a process-wide budget
 

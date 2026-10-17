@@ -14,6 +14,8 @@ DEFINES += HWY_SHARED_DEFINE
 
 # Avoid build errors with no files:
 SOURCES += \
+        WasmArtifact.cpp \
+        WasmComponent.cpp \
         WasmException.cpp \
         WasmExn.cpp \
         WasmGcHeap.cpp \
@@ -34,6 +36,9 @@ SOURCES += \
         wasm_simd_vector.cpp
 
 HEADERS += \
+    WasmArtifact.hpp \
+    WasmComponent.hpp \
+    WasmComponentSection.hpp \
     WasmContext.hpp \
     WasmException.hpp \
     WasmExn.hpp \

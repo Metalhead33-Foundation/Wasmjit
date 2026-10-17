@@ -9,10 +9,14 @@
 #include <cstring>
 #include <iomanip>
 #include <limits>
+#include <memory>
+#include <string>
 #include <type_traits>
 #include <vector>
 
 #include "helper.hpp"
+#include "WasmBase/WasmArtifact.hpp"
+#include "WasmBase/WasmComponent.hpp"
 #include "WasmBase/WasmGcHeader.hpp"
 #include "WasmBase/WasmGcHeap.hpp"
 #include "WasmBase/WasmExn.hpp"
@@ -35,6 +39,19 @@ void nativeDebugMessage(const WASM::VMContext* context)
 	DebugHost* host = reinterpret_cast<DebugHost*>(context->hostData);
 	++host->callCount;
 	std::cout << "This is a C function called from WASM\n";
+}
+
+namespace {
+
+// Parses the file through the artifact factory, so the test does not assume
+// whether the fixture is a core module or a component.
+std::unique_ptr<WASM::Artifact> loadTestArtifact(const char* moduleName)
+{
+	const std::string path = std::string(WASM_TEST_DIR) + moduleName + ".wasm";
+	Euph::Io::File file(path.c_str(), Elv::Io::Mode::READ);
+	return WASM::Artifact::parse(file);
+}
+
 }
 
 TEST_CASE("add_core exports add")
@@ -888,6 +905,65 @@ TEST_CASE("JIT type cache is keyed by canonical TypeId")
 	// Same canonical type -> same lowered jit_type_t, with no new cache entry.
 	REQUIRE(sigA == sigB);
 	REQUIRE(translator.canonicalCacheSize() == cacheAfterA);
+}
+
+TEST_CASE("the artifact factory distinguishes core modules and components")
+{
+	auto core = loadTestArtifact("add_core");
+	REQUIRE(core != nullptr);
+	REQUIRE(core->isCoreModule());
+	REQUIRE_FALSE(core->isComponent());
+	REQUIRE(core->asCoreModule() != nullptr);
+	REQUIRE(core->asComponent() == nullptr);
+	REQUIRE(core->version == 1);
+	REQUIRE(core->layer == 0);
+
+	auto component = loadTestArtifact("component_reject");
+	REQUIRE(component != nullptr);
+	REQUIRE(component->isComponent());
+	REQUIRE_FALSE(component->isCoreModule());
+	REQUIRE(component->asComponent() != nullptr);
+	REQUIRE(component->asCoreModule() == nullptr);
+	REQUIRE(component->version == 0x0D);
+	REQUIRE(component->layer == 1);
+	REQUIRE(component->asComponent()->sections.empty());
+}
+
+TEST_CASE("a component's embedded core module is parsed")
+{
+	auto artifact = loadTestArtifact("component_embed");
+	REQUIRE(artifact != nullptr);
+	REQUIRE(artifact->isComponent());
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	REQUIRE(component->sections.size() == 2);
+	REQUIRE(component->sections[0].type == WASM::ComponentSectionType::CoreModule);
+	REQUIRE(component->sections[1].type == WASM::ComponentSectionType::Custom);
+	REQUIRE(component->sections[1].name == "component-name");
+	REQUIRE(component->coreModules.size() == 1);
+	REQUIRE(component->components.empty());
+
+	const WASM::Module& module = *component->coreModules[0];
+	REQUIRE(module.exports.size() == 1);
+	REQUIRE(module.exports[0].name == "answer");
+	REQUIRE(module.internalFunctionTypeIndices.size() == 1);
+}
+
+TEST_CASE("a component's nested component is parsed")
+{
+	auto artifact = loadTestArtifact("component_nested");
+	REQUIRE(artifact != nullptr);
+	REQUIRE(artifact->isComponent());
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	REQUIRE(component->sections.size() == 1);
+	REQUIRE(component->sections[0].type == WASM::ComponentSectionType::NestedComponent);
+	REQUIRE(component->components.size() == 1);
+	REQUIRE(component->coreModules.empty());
+
+	const WASM::Component& nested = *component->components[0];
+	REQUIRE(nested.isComponent());
+	REQUIRE(nested.coreModules.size() == 1);
 }
 
 TEST_CASE("a Component Model component is rejected instead of misparsed")

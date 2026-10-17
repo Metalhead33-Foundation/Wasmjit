@@ -782,7 +782,8 @@ void Module::handleComplexElementSegment(DWasmStream& stream, ElementSegment& se
 }
 
 Module::Module()
-	: version(0), startFunctionIndex(0), dataSegmentCount(0),
+	: Artifact(ArtifactKind::CoreModule),
+	  startFunctionIndex(0), dataSegmentCount(0),
 	  hasStartFunction(false), hasDataCount(false) {
 }
 
@@ -850,36 +851,41 @@ void Module::validate() const
 
 void Module::fromFile(Elv::Io::Device& file)
 {
+	const Preamble preamble = Artifact::readPreamble(file);
+	version = preamble.version;
+	if (preamble.layer == kComponentLayer)
+		throw std::runtime_error("Unsupported WebAssembly artifact!\nThis file is a Component Model component (preamble layer 1), not a core module.\nUse Artifact::parse to load a component; see docs/proposals/COMPONENT_MODEL.md.");
+	if (preamble.layer != 0)
+		throw std::runtime_error("Unsupported WebAssembly artifact layer " +
+				std::to_string(preamble.layer) +
+				"; expected 0 (core module) or 1 (component).");
+	layer = 0;
+	parseBody(file, std::nullopt);
+}
+
+void Module::parseBody(Elv::Io::Device& file, std::optional<uint64_t> end)
+{
+	const std::size_t totalSize = file.size();
+	const uint64_t limit = end ? *end : (totalSize != 0
+			? static_cast<uint64_t>(totalSize) : 0);
+
 	// Its own scope. Should go out of scope before processSecetions
 	{
 	DWasmStream wasmStream(file);
-	// The 8-byte preamble is magic (4 bytes) + version (2) + layer (2).
-	// A core module has an implicit layer of 0; a Component Model component
-	// sets layer = 1. Reading the halves separately lets us reject a
-	// component outright instead of decoding it as a nonsensical core module
-	// (docs/proposals/COMPONENT_MODEL.md §2.2, CM-0).
-	uint32_t magicNumber;
-	uint16_t versionLow;
-	uint16_t layer;
-	wasmStream >> magicNumber >> versionLow >> layer;
-	version = versionLow;
-	if(magicNumber != 0x6D736100) throw std::runtime_error("Invalid WASM module!\nMismatch in the magic number!");
-	if(layer != 0) throw std::runtime_error("Unsupported WebAssembly artifact!\nThis file is a Component Model component (preamble layer 1), not a core module.\nWasmJit has no component support yet; see docs/proposals/COMPONENT_MODEL.md.");
 	while (true) {
-		const std::size_t totalSize = file.size();
-		if (totalSize != 0 && file.tell() >= 0
-				&& static_cast<std::size_t>(file.tell()) >= totalSize)
+		if (limit != 0 && file.tell() >= 0
+				&& static_cast<uint64_t>(file.tell()) >= limit)
 			break; // an empty module has no sections at all
 		Section section;
 		wasmStream >> section;
 		if (section.type == SectionType::Invalid)
 			throw std::runtime_error("malformed section id");
-		if (totalSize != 0
-				&& static_cast<uint64_t>(section.offset) + section.size > totalSize)
+		if (limit != 0
+				&& static_cast<uint64_t>(section.offset) + section.size > limit)
 			throw std::runtime_error("section size exceeds the input");
 		sections.push_back(section);
 		file.seek(section.size, Elv::Io::SeekOrigin::CUR);
-		if (totalSize == 0)
+		if (limit == 0)
 			break; // the device cannot report where the input ends
 	}
 	}
@@ -889,6 +895,24 @@ void Module::fromFile(Elv::Io::Device& file)
 	// than compiling a null operand into a function (docs/NULL_JIT_VALUE_DIAGNOSIS.md).
 	validateValueTypes();
 	validate();
+}
+
+std::unique_ptr<Module> Module::parseNested(Elv::Io::Device& file, uint64_t end)
+{
+	const long position = file.tell();
+	if (position < 0 || static_cast<uint64_t>(position) > end
+			|| 8 > end - static_cast<uint64_t>(position))
+		throw std::runtime_error("embedded core module is smaller than its preamble");
+
+	const Preamble preamble = Artifact::readPreamble(file);
+	if (preamble.layer != 0)
+		throw std::runtime_error("a component's core module has a non-core layer");
+
+	auto module = std::make_unique<Module>();
+	module->version = preamble.version;
+	module->layer = 0;
+	module->parseBody(file, end);
+	return module;
 }
 
 const std::span<const Section> Module::getSections() const

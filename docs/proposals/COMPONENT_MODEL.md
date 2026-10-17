@@ -1,16 +1,18 @@
 # WIT and the Component Model — Spec Status, Design Space, and a QVM-Style Scope
 
-Status: design note / forward-looking proposal (revision 2 — CM-0, honest
-rejection, is implemented; everything else is still unbuilt).
+Status: proposal + implementation note (revision 3 — CM-0 and the CM-1a parser
+skeleton are implemented; component semantics, linking and the Canonical ABI
+are still unbuilt).
 Audience: whoever touches `WasmModule` (binary decoding), `WasmStore`,
 `WasmTypeRegistry`, `WasmImport`, the `LibJit*` backend, or the test harness —
 i.e. whoever would decide where a component parser lives.
 
 This note follows the same split as [`GC.md`](GC.md) / [`SIMD.md`](SIMD.md) /
-[`THREADS.md`](THREADS.md), with one honest difference: **the other notes
-describe code that exists; this one describes a layer that does not exist at
-all.** §4 says so plainly, §5 is therefore long, and §7 is a staging plan rather
-than a list of gap closures. It contains **no new code**.
+[`THREADS.md`](THREADS.md), with one honest difference: the other notes describe
+a layer that is implemented; this one documents the small parser skeleton that
+now exists and the much larger runtime layer that does not. §4 says what is
+there, §5 is therefore long, and §7 is a staging plan rather than a list of gap
+closures. The CM-1a parser code is real; the rest is still a plan.
 
 **One document or two?** WIT and the Component Model are covered together
 deliberately. WIT is the *interface definition language*, the component binary
@@ -78,7 +80,13 @@ After the preamble comes a flat list of sections (`component ::= <preamble>
 s*:<section>*`). A component is **not** shaped like a core module. A core module
 has at most one section of each kind in a fixed order; a component's sections
 form an ordered stream of *definitions*, sections may repeat, and the index
-spaces grow as they are decoded:
+spaces grow as they are decoded.
+
+Embedded artifacts are **full binaries with their own preambles**: a
+`core:module` payload starts with the core preamble (`00 61 73 6d 01 00 00 00`)
+and a nested `component` payload starts with the component preamble. Only the
+top-level preamble is the one that discriminates the artifact; the parser still
+validates each nested one.
 
 | id | section | meaning |
 |---|---|---|
@@ -236,27 +244,23 @@ handles, named imports/exports, and WIT as the authoring format. Everything in
 
 ## 4. What is in the tree today
 
-### 4.1 Short answer: no component support — but the rejection is now honest (CM-0)
+### 4.1 Short answer: an honest rejection (CM-0), plus a parser skeleton (CM-1a)
 
-`Module::fromFile` (`WasmBase/WasmModule.cpp`) reads the 8-byte preamble as
-magic (4) + version (2) + **layer** (2) and rejects a non-zero layer:
+`Artifact::parse` (`WasmBase/WasmArtifact.cpp`) reads the 8-byte preamble as
+magic (4) + version (2) + **layer** (2) and dispatches:
 
 ```cpp
-uint32_t magicNumber;
-uint16_t versionLow;
-uint16_t layer;
-wasmStream >> magicNumber >> versionLow >> layer;
-version = versionLow;
-if(magicNumber != 0x6D736100) throw std::runtime_error("Invalid WASM module!...");
-if(layer != 0) throw std::runtime_error("Unsupported WebAssembly artifact!\n"
-    "This file is a Component Model component (preamble layer 1), not a core module.\n"
-    "WasmJit has no component support yet; see docs/proposals/COMPONENT_MODEL.md.");
+const Preamble preamble = Artifact::readPreamble(file); // magic/version/layer
+if (preamble.layer == 0)                { /* Module */ }
+if (preamble.layer == kComponentLayer)  { /* Component */ }
 ```
 
-So a component (`00 61 73 6D 0D 00 01 00`) fails fast, while a core module
-(`… 01 00 00 00`, layer 0) is unaffected. Regression coverage:
-`Test/wasm_wat/component_reject.wat` (a bare `(component)`, which `wasm-tools`
-encodes as exactly that preamble) plus the manual test
+`Module::fromFile` remains the core-only entry point and still rejects layer 1
+with the component-specific error, so existing callers cannot accidentally
+decode component sections as core ones. `Component::fromFile` requires layer 1
+and version `0x0d`; `Artifact::parse` is the generic "parse this file" API.
+Regression coverage: `Test/wasm_wat/component_reject.wat` plus
+`the artifact factory distinguishes core modules and components` and
 `a Component Model component is rejected instead of misparsed`.
 
 **Before CM-0 the behaviour was worse than "unsupported".** The magic matched,
@@ -280,9 +284,10 @@ dispatching it to the wrong processor:
 | 12 `value` | 12 `DataCount` | parsed values as a data-count section |
 
 The result was either an unrelated exception (`"type section: ..."`) or a
-nonsense module that decoded far enough to keep going. There is still **no
-component support** anywhere in the tree — no `Component`, no `canon`, no
-`realloc`, no component value types — only the honest failure above.
+nonsense module that decoded far enough to keep going. CM-0 closed that hole;
+CM-1a (below) now parses the component shape itself, but there is still **no
+component runtime** anywhere in the tree — no `canon`, no `realloc`, no
+component value types, no linking.
 
 ### 4.2 Seams that already fit
 
@@ -298,7 +303,8 @@ component support** anywhere in the tree — no `Component`, no `canon`, no
 
 ### 4.3 What is *not* there
 
-- No component decoder (the preamble check now exists, §4.1): no
+- No complete component decoder yet (§4.4 handles section framing, custom names,
+  embedded core modules and nested components): no
   `core:instance`/`core:type` handling, no
   component-level instance/alias/canon/start/import/export/value sections, no
   separate index spaces, no `sortidx` resolution.
@@ -317,12 +323,41 @@ component support** anywhere in the tree — no `Component`, no `canon`, no
   or `component wit --json`.
 - The test harness cannot drive component scripts (§8).
 
+### 4.4 CM-1a — parser skeleton (implemented)
+
+The binary parser now distinguishes the two artifact kinds and walks a component:
+
+- `WasmBase/WasmArtifact.{hpp,cpp}`: `Artifact` is the common base (`kind`,
+  `version`, `layer`, `isCoreModule()`, `isComponent()`, `asCoreModule()`,
+  `asComponent()`). `Artifact::parse(Device&)` reads the preamble once and
+  returns a `Module` or a `Component`; `Module::fromFile` stays core-only and
+  still rejects layer 1.
+- `WasmBase/WasmComponentSection.hpp` and `WasmComponent.{hpp,cpp}`:
+  `ComponentSectionType` covers section ids 0–12; `ComponentSection` records
+  `(type, size, offset)` and the name of a custom section. Sections may repeat
+  and are all recorded; an unknown section id is rejected.
+- Embedded artifacts are parsed recursively. A `core:module` payload is a full
+  core-module binary (including its 8-byte preamble) and goes through
+  `Module::parseNested`, so the regular parser validates every embedded core
+  module. A nested `component` payload is likewise a full component binary and
+  goes through `Component::parseNested`.
+- `wasm-tools` emits a `component-name` custom section in the embedded-module
+  fixture; the parser reads the custom name and the test asserts it.
+- Safety: section payloads are bounded by the enclosing section end, embedded
+  parsers (including their preambles) cannot read past their section, custom
+  names are section-bounded, and `kMaxComponentSections` /
+  `kMaxComponentNesting` cap repeated sections and recursion.
+
+Still absent: per-kind index spaces, `sortidx` resolution, aliases, `canon`,
+component types/values, linking/instantiation and every Canonical ABI step
+(CM-1b, CM-2…CM-7).
+
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
 | ~~CM1~~ | ~~No `layer` discrimination.~~ **Done (CM-0):** `Module::fromFile` reads magic/version/layer separately and throws a component-specific error when the layer is non-zero, so a component is refused instead of misparsed. | `WasmModule.cpp` `fromFile` | Closed |
-| CM2 | **No component decoder.** Missing `core:instance`/`core:type` and component-level instance/alias/canon/start/import/export/value sections; missing the separate core/component index spaces and `sortidx` resolution. | — | High |
+| CM2 | **Partial (CM-1a):** the `Component` parser reads the section framing, custom names, embedded core modules and nested components. Missing: `core:instance`/`core:type`, component-level instance/alias/canon/start/import/export/value sections, the separate core/component index spaces and `sortidx` resolution. | `WasmComponent.*`, `WasmArtifact.*` | High |
 | CM3 | **No component type/value model.** `bool`…`string`, `list`/`record`/`variant`/`tuple`/`flags`/`enum`/`option`/`result`, `own`/`borrow`, `componenttype`/`instancetype`/`resourcetype` have nowhere to live; `TypeRegistry`/`CanonicalType` are core-only. | `WasmType.hpp`, `WasmCanonicalType.hpp` | High |
 | CM4 | **No Canonical ABI.** No lift/lower, flattening, memory representation, `canonopt`, `realloc`/`post-return`, or handle table. This is the actual JIT work. | — | High |
 | CM5 | **No component linking/instantiation.** No `ComponentInstance`, no `with` arguments, no component-level import matching by name + type. | `WasmModuleInstance.*` | High |
@@ -361,7 +396,8 @@ caller reuses the callee's buffer.
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **CM-0 — Reject honestly** | ✅ `Module::fromFile` reads and records the `layer` field (magic/version/layer as 4+2+2 bytes) and throws a component-specific error for a non-zero layer. | CM1 | Done: a component fails with "This file is a Component Model component …", asserted by `Test/wasm_wat/component_reject.wat` + `a Component Model component is rejected instead of misparsed`. |
-| **CM-1 — `Component` skeleton** | A `Component` type + decoder mirroring `Module`: preamble (`version` *and* `layer`), repeated sections, per-kind index spaces, `sortidx` resolution. No semantics, nothing executes. | CM1, CM2 | A component can be walked section by section and dumped; each section's definitions land in the right index space. |
+| **CM-1a — Parser skeleton** | ✅ `Artifact` base + `Artifact::parse` (preamble/layer dispatch, `isCoreModule`/`isComponent`/`as*`), `Component` section framing, custom names, embedded core modules, nested components. No semantics, nothing executes. | CM1, CM2 (partly) | Done: a component can be walked section by section; embedded core modules are validated; `Test/wasm_wat/component_{reject,embed,nested}.wat` and three manual tests pass. |
+| **CM-1b — Component index spaces** | Per-kind core/component index spaces and `sortidx` resolution; decode `core:instance`/`core:type`, alias, component type/value definitions and `canon` into the correct spaces. | CM2 | A component can be dumped with every definition in the right index space; no execution yet. |
 | **CM-2 — Component types in the store** | Component value/definition types (`bool`…`string`, `list`/`record`/`variant`/`tuple`/`flags`/`enum`/`option`/`result`, `own`/`borrow`) plus structural equality, interned through the `Store`'s registry. | CM3, CMD9 | Two structurally equal component types from different components intern to the same id; `matches` agrees with the spec's equality rules. |
 | **CM-3 — WIT ingestion (tooling)** | Consume `wasm-tools component wit --json` (and/or a binary WIT package) **in the test harness**, not the runtime; a hand-written `Wit/` parser stays a later option. | CM6 (partly) | A test can assert a component's expected world/import/export shape against a `.wit` file. |
 | **CM-4 — Core modules + instances** | `core:module`/`core:instance`/`alias`: instantiate embedded core modules in the `Store` and run them; implement `(with "name" (sort idx))*`. | CM2, CM5 | A component embedding one core module and re-exporting its function instantiates and runs. |
@@ -372,9 +408,9 @@ caller reuses the callee's buffer.
 
 ## 8. Indicative test survey
 
-Also unlike the other notes, only CM-0 has anything to run; the rest of this
-section says where component coverage would have to come from and how the
-current harness would react.
+Also unlike the other notes, only CM-0 and CM-1a have anything to run; the rest
+of this section says where component coverage would have to come from and how
+the current harness would react.
 
 | Test / script | Current result | Reading |
 |---|---|---|
@@ -383,6 +419,7 @@ current harness would react.
 | `module_definition` / `module_instance` commands | `module_definition` decoded (not instantiated); `module_instance` skipped | the linking model that the Component Model supersedes/built on; the harness decodes definitions but does not implement linking. |
 | `WebAssembly/component-model/test/*.wast` | not in the tree | the real reference tests; their README runs them with `wasmtime wast` (and `nyi.txt` filters tests that land ahead of implementations). Adding this as a submodule is CM-7. |
 | manual test, CM-0 | **pass** | `Test/wasm_wat/component_reject.wat` (a bare `(component)`) is loaded and the loader's component-specific message is asserted; `a Component Model component is rejected instead of misparsed`. |
+| manual test, CM-1a | **pass** | `Artifact::parse` distinguishes `add_core` from `component_reject`; `component_embed.wat` parses a core:module section (including the nested core preamble and `component-name` custom section); `component_nested.wat` parses a nested component recursively. |
 | manual test, CM-4/CM-5 | none yet | a hand-authored component built with `wasm-tools component new` from a core module that was given a WIT-derived component-type section. |
 
 `wasm-tools` is already required to build `Test` and already supports both
@@ -432,9 +469,13 @@ external prerequisite is needed for the tooling-side milestones.
   https://github.com/WebAssembly/component-model/tree/main/test
 - Tooling: https://github.com/bytecodealliance/wasm-tools
   (`component new|wit|embed|unbundle`, `parse`, `json-from-wast`)
-- In-repo: `WasmBase/WasmModule.cpp` (`Module::fromFile`), `WasmBase/WasmModule.hpp`
-  (`Section`), `WasmBase/WasmSection.hpp` (`SectionType`), `WasmBase/WasmStore.hpp`,
-  `WasmBase/WasmTypeRegistry.hpp`, `WasmBase/WasmCanonicalType.hpp`,
-  `WasmBase/WasmImport.hpp`, `WasmBase/WasmVMContext.hpp`, `Test/WastScript.cpp`,
-  `Test/Test.pro`; notes [`../ABI.md`](../ABI.md),
-  [`../TYPE_IDENTITY.md`](../TYPE_IDENTITY.md), [`GC.md`](GC.md).
+- In-repo: `WasmBase/WasmArtifact.{hpp,cpp}` (`Artifact`/`Artifact::parse`),
+  `WasmBase/WasmComponent.{hpp,cpp}` (`Component`, `Module::parseNested`,
+  `Component::parseNested`), `WasmBase/WasmComponentSection.hpp`
+  (`ComponentSectionType`/`ComponentSection`), `WasmBase/WasmModule.cpp`
+  (`Module::fromFile`/`Module::parseBody`), `WasmBase/WasmSection.hpp`
+  (`SectionType`), `WasmBase/WasmStore.hpp`, `WasmBase/WasmTypeRegistry.hpp`,
+  `WasmBase/WasmCanonicalType.hpp`, `WasmBase/WasmImport.hpp`,
+  `WasmBase/WasmVMContext.hpp`, `Test/WastScript.cpp`, `Test/Test.pro`; notes
+  [`../ABI.md`](../ABI.md), [`../TYPE_IDENTITY.md`](../TYPE_IDENTITY.md),
+  [`GC.md`](GC.md).

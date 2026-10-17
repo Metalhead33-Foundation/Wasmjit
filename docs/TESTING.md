@@ -553,6 +553,9 @@ Current modules:
 
 | Module | Covers | Case |
 |---|---|---|
+| `component_reject.wat` | a bare `(component)`: the artifact factory recognizes the component preamble while the core-only `Module::fromFile` still rejects it | `the artifact factory distinguishes core modules and components`, `a Component Model component is rejected instead of misparsed` |
+| `component_embed.wat` | a component with an embedded core module and a `component-name` custom section: nested core preamble, regular core sections, custom-name parsing | `a component's embedded core module is parsed` |
+| `component_nested.wat` | a component embedding another component, which embeds a core module: recursive component-section parsing | `a component's nested component is parsed` |
 | `simd_abi.wat` | `(param v128)(result v128)` round-trip, `v128` locals incl. reading one before `local.set`, a `v128` through a block, lane projections | `simd: a v128 parameter and result round-trip through the JIT` |
 | `simd_const_lane.wat` | `v128.const` byte order, `*.splat`, signed/unsigned `extract_lane`, `replace_lane` | `simd: v128.const, splat and lane ops run through the JIT` |
 | `simd_bitwise.wat` | `v128.not/and/andnot/or/xor/bitselect`, with distinct lanes and golden values that pin which operand is complemented and which selects | `simd: bitwise ops run through the JIT` |
