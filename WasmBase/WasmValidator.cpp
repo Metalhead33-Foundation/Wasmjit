@@ -1439,6 +1439,50 @@ void Validator::dispatchMemoryFill(MemIdx arg)
 	popExpect(address);            // dst
 }
 
+void Validator::dispatchMemoryDiscard(MemIdx arg)
+{
+	requireMemoryIndex(arg);
+	const ValueTypeCode address = memoryAddressType(arg);
+	popExpect(address); // len
+	popExpect(address); // dst
+}
+
+void Validator::dispatchI64Add128()
+{
+	popExpect(ValueTypeCode::I64); // rhs high
+	popExpect(ValueTypeCode::I64); // rhs low
+	popExpect(ValueTypeCode::I64); // lhs high
+	popExpect(ValueTypeCode::I64); // lhs low
+	pushValue(ValueType{ValueTypeCode::I64, -1}); // low
+	pushValue(ValueType{ValueTypeCode::I64, -1}); // high
+}
+
+void Validator::dispatchI64Sub128()
+{
+	popExpect(ValueTypeCode::I64); // rhs high
+	popExpect(ValueTypeCode::I64); // rhs low
+	popExpect(ValueTypeCode::I64); // lhs high
+	popExpect(ValueTypeCode::I64); // lhs low
+	pushValue(ValueType{ValueTypeCode::I64, -1}); // low
+	pushValue(ValueType{ValueTypeCode::I64, -1}); // high
+}
+
+void Validator::dispatchI64MulWideS()
+{
+	popExpect(ValueTypeCode::I64); // rhs
+	popExpect(ValueTypeCode::I64); // lhs
+	pushValue(ValueType{ValueTypeCode::I64, -1}); // low
+	pushValue(ValueType{ValueTypeCode::I64, -1}); // high
+}
+
+void Validator::dispatchI64MulWideU()
+{
+	popExpect(ValueTypeCode::I64); // rhs
+	popExpect(ValueTypeCode::I64); // lhs
+	pushValue(ValueType{ValueTypeCode::I64, -1}); // low
+	pushValue(ValueType{ValueTypeCode::I64, -1}); // high
+}
+
 #define WJ_LOAD(name, result, naturalLog2) \
 	void Validator::dispatch##name(MemArg arg) { \
 		requireMemoryAccess(arg, naturalLog2); \

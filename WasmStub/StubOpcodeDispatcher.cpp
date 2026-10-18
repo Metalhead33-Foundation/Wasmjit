@@ -1025,6 +1025,26 @@ void OpcodeDispatcher::dispatchMemoryFill(WASM::MemIdx arg)
 {
 	*stream << '(' << "MemoryFill" << ' ' << '(' << arg << ')' << std::endl;
 }
+void OpcodeDispatcher::dispatchMemoryDiscard(WASM::MemIdx arg)
+{
+	*stream << '(' << "MemoryDiscard" << ' ' << '(' << arg << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchI64Add128()
+{
+	*stream << '(' << "I64Add128" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchI64Sub128()
+{
+	*stream << '(' << "I64Sub128" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchI64MulWideS()
+{
+	*stream << '(' << "I64MulWideS" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchI64MulWideU()
+{
+	*stream << '(' << "I64MulWideU" << ')' << std::endl;
+}
 void OpcodeDispatcher::dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2)
 {
 	*stream << '(' << "TableInit" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;

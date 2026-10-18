@@ -269,6 +269,19 @@ void WASM::OpcodeDispatcher::dispatchPrefixMisc(FastMemReader& stream, MiscOpcod
 			dispatchMemoryFill(x);
 			break;
 		}
+		case MiscOpcode::MemoryDiscard: {
+			MemIdx x = stream.readLEB128<MemIdx>();
+			dispatchMemoryDiscard(x);
+			break;
+		}
+
+		// ----------------------------------------------------------------
+		// Wide arithmetic (no immediates)
+		// ----------------------------------------------------------------
+		case MiscOpcode::I64Add128:   { dispatchI64Add128();   break; }
+		case MiscOpcode::I64Sub128:   { dispatchI64Sub128();   break; }
+		case MiscOpcode::I64MulWideS: { dispatchI64MulWideS(); break; }
+		case MiscOpcode::I64MulWideU: { dispatchI64MulWideU(); break; }
 
 		// ----------------------------------------------------------------
 		// Bulk table

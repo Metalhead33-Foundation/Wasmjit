@@ -4068,3 +4068,248 @@ TEST_CASE("multi-value: JIT-to-JIT calls marshal every result")
 	REQUIRE(second == 3);
 }
 
+
+// ── Extended name section (docs/proposals/EXTENDED_NAME_SECTION.md) ──────────
+namespace {
+
+std::string nameOrEmpty(const WASM::Module& module, WASM::NameKind kind,
+                        uint32_t index, uint32_t subIndex = 0)
+{
+	const std::string* name = module.findName(kind, index, subIndex);
+	return name == nullptr ? std::string() : *name;
+}
+
+} // namespace
+
+TEST_CASE("extended name section: parsed names are exposed by kind and index")
+{
+	WASM::Module module = loadTestModule("name_section");
+
+	REQUIRE(nameOrEmpty(module, WASM::NameKind::Module, 0) == "mod");
+	REQUIRE(nameOrEmpty(module, WASM::NameKind::Function, 0) == "f");
+	REQUIRE(nameOrEmpty(module, WASM::NameKind::Local, 0, 0) == "p");
+	REQUIRE(nameOrEmpty(module, WASM::NameKind::Label, 0, 0) == "lbl");
+	REQUIRE(nameOrEmpty(module, WASM::NameKind::Type, 0) == "ft");
+	REQUIRE(nameOrEmpty(module, WASM::NameKind::Type, 1) == "st");
+	REQUIRE(nameOrEmpty(module, WASM::NameKind::Type, 2) == "tagt");
+	REQUIRE(nameOrEmpty(module, WASM::NameKind::Table, 0) == "tab");
+	REQUIRE(nameOrEmpty(module, WASM::NameKind::Memory, 0) == "mem");
+	REQUIRE(nameOrEmpty(module, WASM::NameKind::Global, 0) == "g");
+	REQUIRE(nameOrEmpty(module, WASM::NameKind::Element, 0) == "e");
+	REQUIRE(nameOrEmpty(module, WASM::NameKind::Data, 0) == "d");
+	REQUIRE(nameOrEmpty(module, WASM::NameKind::Field, 1, 0) == "a");
+	REQUIRE(nameOrEmpty(module, WASM::NameKind::Field, 1, 1) == "b");
+	REQUIRE(nameOrEmpty(module, WASM::NameKind::Tag, 0) == "tag");
+
+	// Absent names are null, not an error.
+	REQUIRE(module.findName(WASM::NameKind::Function, 99) == nullptr);
+	REQUIRE(module.findName(WASM::NameKind::Local, 0, 99) == nullptr);
+}
+
+TEST_CASE("name section: indirect maps and unknown subsections are bounded and skipped")
+{
+	// A minimal module plus a hand-built name section:
+	//   0  module name "mod"
+	//   12 indirect param map: type 0, param 0 -> "p"
+	//   13 indirect tag-param map: tag 0, param 0 -> "tp"
+	//   42 an unknown subsection that must be skipped by its size
+	// The tag does not exist; names are metadata and are not validated (ENSD2).
+	const std::array<uint8_t, 63> bytes = {
+		0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+		0x03, 0x02, 0x01, 0x00,
+		0x0a, 0x06, 0x01, 0x04, 0x00, 0x20, 0x00, 0x0b,
+		0x00, 0x21, 0x04, 0x6e, 0x61, 0x6d, 0x65,
+		0x00, 0x04, 0x03, 0x6d, 0x6f, 0x64,
+		0x0c, 0x06, 0x01, 0x00, 0x01, 0x00, 0x01, 0x70,
+		0x0d, 0x07, 0x01, 0x00, 0x01, 0x00, 0x02, 0x74, 0x70,
+		0x2a, 0x03, 0x01, 0x02, 0x03
+	};
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	REQUIRE(artifact->isCoreModule());
+	WASM::Module* module = artifact->asCoreModule();
+	REQUIRE(module != nullptr);
+	REQUIRE(module->functionBodies.size() == 1);
+
+	REQUIRE(nameOrEmpty(*module, WASM::NameKind::Module, 0) == "mod");
+	REQUIRE(nameOrEmpty(*module, WASM::NameKind::Param, 0, 0) == "p");
+	REQUIRE(nameOrEmpty(*module, WASM::NameKind::TagParam, 0, 0) == "tp");
+}
+
+TEST_CASE("name section: a subsection size past the section end is rejected")
+{
+	// Preamble + a custom "name" section whose first subsection claims 127
+	// bytes while the section has none left. The parser must reject it rather
+	// than read into whatever follows (docs/SAFETY.md §2.2).
+	const std::array<uint8_t, 17> bytes = {
+		0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x00, 0x07, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x00, 0x7f
+	};
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	REQUIRE_THROWS_AS(WASM::Artifact::parse(device), std::runtime_error);
+}
+
+TEST_CASE("unknown custom sections leave code and data decoding unchanged")
+{
+	WASM::Module module = loadTestModule("custom_section");
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto answer = instance->exportedFunction("answer");
+	REQUIRE(answer.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*answer) == 42);
+}
+
+
+// ── memory.discard (docs/proposals/MEMORY_CONTROL.md MC-1/MC-2) ─────────────
+TEST_CASE("memory.discard zeroes whole pages, preserves the rest, and traps out of bounds")
+{
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("memory_discard", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	const auto exported = [&instance](const char* name) {
+		auto fn = instance.exportedFunction(name);
+		REQUIRE(fn.has_value());
+		return *fn;
+	};
+	auto store8 = exported("store8");
+	auto load8 = exported("load8");
+	auto discard = exported("discard");
+	auto store8_64 = exported("store8_64");
+	auto load8_64 = exported("load8_64");
+	auto discard64 = exported("discard64");
+
+	const auto load = [&](uint32_t address) {
+		return WASM::callCallable<int32_t>(load8, static_cast<int32_t>(address));
+	};
+	const auto store = [&](uint32_t address, int32_t value) {
+		WASM::callCallable<void>(store8, static_cast<int32_t>(address), value);
+	};
+
+	store(0, 0x11);
+	store(0xFFFF, 0x22);
+	store(0x10000, 0x33);
+	store(0x1FFFF, 0x44);
+
+	// A one-byte range in the second page is rounded up to the page end.
+	WASM::callCallable<void>(discard, int32_t(0x10000), int32_t(1));
+	REQUIRE(load(0) == 0x11);
+	REQUIRE(load(0xFFFF) == 0x22);
+	REQUIRE(load(0x10000) == 0);
+	REQUIRE(load(0x1FFFF) == 0);
+
+	// ...and a range in the first page is rounded down to the page start.
+	store(0, 0x55);
+	WASM::callCallable<void>(discard, int32_t(100), int32_t(10));
+	REQUIRE(load(0) == 0);
+	REQUIRE(load(0xFFFF) == 0);
+
+	// A zero-length range is a no-op, not a trap, even when the address is not
+	// page-aligned (MCD6).
+	store(0, 0x77);
+	WASM::callCallable<void>(discard, int32_t(100), int32_t(0));
+	REQUIRE(load(0) == 0x77);
+	WASM::callCallable<void>(discard, int32_t(0x20000), int32_t(0));
+
+	const auto expectTrap = [](const WASM::Callable& callable, auto address, auto length) {
+		WASM::TrapScope scope;
+		volatile bool trapped = false;
+		if (setjmp(scope.buffer) == 0) {
+			WASM::callCallable<void>(callable, address, length);
+		} else {
+			trapped = true;
+		}
+		REQUIRE(trapped);
+	};
+	expectTrap(discard, int32_t(0x1FFFF), int32_t(2));
+	expectTrap(discard, int32_t(-1), int32_t(2)); // i32 -1 is a huge unsigned address
+	expectTrap(discard64, int64_t(0xFFFF), int64_t(2));
+
+	// memory64 uses the same lowering; the index type only changes the operand
+	// width (docs/proposals/MEMORY64.md).
+	WASM::callCallable<void>(store8_64, int64_t(0), int32_t(0x66));
+	REQUIRE(WASM::callCallable<int32_t>(load8_64, int64_t(0)) == 0x66);
+	WASM::callCallable<void>(discard64, int64_t(100), int64_t(10));
+	REQUIRE(WASM::callCallable<int32_t>(load8_64, int64_t(0)) == 0);
+	WASM::callCallable<void>(discard64, int64_t(0x10000), int64_t(0));
+}
+
+
+// ── Wide arithmetic (docs/proposals/NUMERIC_PROPOSALS.md NUM-1) ─────────────
+TEST_CASE("wide arithmetic: add128, sub128 and mul_wide match reference values")
+{
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("wide_arithmetic", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	const auto exported = [&instance](const char* name) {
+		auto fn = instance.exportedFunction(name);
+		REQUIRE(fn.has_value());
+		return *fn;
+	};
+	auto add128 = exported("add128");
+	auto sub128 = exported("sub128");
+	auto mulS = exported("mul_wide_s");
+	auto mulU = exported("mul_wide_u");
+
+	const auto call2 = [](const WASM::Callable& callable, auto... args) {
+		alignas(16) uint64_t out[2] = {};
+		WASM::callCallableWithResults(callable, out, args...);
+		return std::array<uint64_t, 2>{out[0], out[1]};
+	};
+
+	// add128: carry from the low half into the high half.
+	auto r = call2(add128, uint64_t(1), uint64_t(0), uint64_t(2), uint64_t(0));
+	REQUIRE(r[0] == 3);
+	REQUIRE(r[1] == 0);
+	r = call2(add128, UINT64_MAX, uint64_t(0), uint64_t(1), uint64_t(0));
+	REQUIRE(r[0] == 0);
+	REQUIRE(r[1] == 1);
+	r = call2(add128, uint64_t(1), uint64_t(2), uint64_t(3), uint64_t(4));
+	REQUIRE(r[0] == 4);
+	REQUIRE(r[1] == 6);
+
+	// sub128: borrow from the high half.
+	r = call2(sub128, uint64_t(0), uint64_t(1), uint64_t(1), uint64_t(0));
+	REQUIRE(r[0] == UINT64_MAX);
+	REQUIRE(r[1] == 0);
+	r = call2(sub128, uint64_t(1), uint64_t(2), uint64_t(3), uint64_t(4));
+	REQUIRE(r[0] == UINT64_MAX - 1);
+	REQUIRE(r[1] == UINT64_MAX - 2);
+
+	// mul_wide_s: sign extension of both operands.
+	r = call2(mulS, uint64_t(-1), uint64_t(2));
+	REQUIRE(r[0] == UINT64_MAX - 1);
+	REQUIRE(r[1] == UINT64_MAX);
+	r = call2(mulS, uint64_t(INT64_MIN), uint64_t(2));
+	REQUIRE(r[0] == 0);
+	REQUIRE(r[1] == UINT64_MAX);
+	r = call2(mulS, uint64_t(INT64_MAX), uint64_t(INT64_MAX));
+	REQUIRE(r[0] == 1);
+	REQUIRE(r[1] == UINT64_C(0x3FFFFFFFFFFFFFFF));
+
+	// mul_wide_u: zero extension of both operands.
+	r = call2(mulU, UINT64_MAX, UINT64_MAX);
+	REQUIRE(r[0] == 1);
+	REQUIRE(r[1] == UINT64_MAX - 1);
+	r = call2(mulU, uint64_t(1) << 63, uint64_t(2));
+	REQUIRE(r[0] == 0);
+	REQUIRE(r[1] == 1);
+	r = call2(mulU, UINT64_C(0x123456789ABCDEF0), uint64_t(0x10));
+	REQUIRE(r[0] == UINT64_C(0x23456789ABCDEF00));
+	REQUIRE(r[1] == 1);
+}
+

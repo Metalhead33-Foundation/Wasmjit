@@ -203,6 +203,11 @@ private:
 	void dispatchDataDrop(uint32_t arg) override;
 	void dispatchMemoryCopy(MemIdx arg1, MemIdx arg2) override;
 	void dispatchMemoryFill(MemIdx arg) override;
+	void dispatchMemoryDiscard(MemIdx arg) override;
+	void dispatchI64Add128() override;
+	void dispatchI64Sub128() override;
+	void dispatchI64MulWideS() override;
+	void dispatchI64MulWideU() override;
 
 	// Core memory accesses.
 	void dispatchI32Load(MemArg arg) override;

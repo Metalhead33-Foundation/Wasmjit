@@ -2,8 +2,11 @@
 #include "WasmSafety.hpp"
 #include "WasmStore.hpp"
 #include "WasmValidator.hpp"
+#include <Euphemy/Io/EuphConstBufferDevice.hpp>
+#include <cstddef>
 #include <cstdio>
 #include <iostream>
+#include <span>
 #include <stdexcept>
 #include <utility>
 
@@ -11,6 +14,25 @@ namespace WASM {
 typedef Elv::Io::DataStream<Elv::Util::Endian::Little> DWasmStream;
 
 namespace {
+
+// Name-section lookups shared by Module::findName. Names are metadata only;
+// the map is allowed to contain an out-of-range index (ENSD2).
+const std::string* findDirectName(const std::map<uint32_t,std::string>& map, uint32_t idx)
+{
+	const auto it = map.find(idx);
+	return it == map.end() ? nullptr : &it->second;
+}
+
+const std::string* findIndirectName(
+		const std::map<uint32_t,std::map<uint32_t,std::string>>& map,
+		uint32_t outer, uint32_t inner)
+{
+	const auto it = map.find(outer);
+	if (it == map.end())
+		return nullptr;
+	const auto innerIt = it->second.find(inner);
+	return innerIt == it->second.end() ? nullptr : &innerIt->second;
+}
 
 // A member of a `rec` group may reference types in earlier groups or any member
 // of its own group. A *supertype* must additionally be strictly earlier than
@@ -481,37 +503,145 @@ void Module::processCustomSection(Elv::Io::Device& file, const Section& section)
 
 void Module::processNameSection(Elv::Io::Device& file, const Section& section)
 {
-	DWasmStream wasmStream(file);
-	// Note: We are already past the "name" string.
+	// The whole name payload is copied into a bounded buffer and every
+	// subsection is parsed from its own bounded sub-device. A malformed name
+	// subsection therefore cannot read into the next section or desynchronise
+	// decoding (docs/SAFETY.md §2.2; ENSD1).
+	const uint64_t sectionEnd = static_cast<uint64_t>(section.offset) + section.size;
+	const long position = file.tell();
+	if (position < 0 || static_cast<uint64_t>(position) > sectionEnd)
+		throw std::runtime_error("name section out of bounds");
+	const uint64_t payloadSize = sectionEnd - static_cast<uint64_t>(position);
+	std::vector<std::byte> payload(requireAvailable(file, payloadSize, "the name section"));
+	if (!payload.empty() && file.read(payload.data(), 1, payload.size()) != payload.size())
+		throw std::runtime_error("malformed module: truncated name section");
 
-	while (file.tell() < section.offset + section.size) {
-		uint8_t subId;
-		uint32_t subSize;
-		wasmStream >> subId;
-		wasmStream >> Elv::Io::Leb(subSize);
+	Euph::Io::ConstBufferDevice payloadDevice(
+			std::span<const std::byte>(payload.data(), payload.size()));
+	DWasmStream payloadStream(payloadDevice);
 
-		size_t nextSubSection = file.tell() + subSize;
+	const auto remaining = [](DWasmStream& stream) -> size_t {
+		const long pos = stream.device.tell();
+		const size_t total = stream.device.size();
+		return (pos >= 0 && static_cast<size_t>(pos) < total)
+				? total - static_cast<size_t>(pos) : 0;
+	};
 
-		if (subId == 0) { // <--- FIXED: Sub-ID 0 is Module Name
-			this->debugName = readLEB128String(wasmStream);
+	const auto readName = [&remaining](DWasmStream& stream) {
+		if (remaining(stream) == 0)
+			throw std::runtime_error("name subsection string out of bounds");
+		uint32_t length;
+		stream >> Elv::Io::Leb(length);
+		if (length > remaining(stream))
+			throw std::runtime_error("name subsection string out of bounds");
+		std::string str(length, '\0');
+		if (length != 0 && stream.device.read(str.data(), 1, length) != length)
+			throw std::runtime_error("malformed module: truncated name");
+		return str;
+	};
+
+	const auto readCount = [&remaining](DWasmStream& stream, const char* what) {
+		if (remaining(stream) == 0)
+			throw std::runtime_error(std::string("malformed module: ") + what + " is missing");
+		uint32_t count;
+		stream >> Elv::Io::Leb(count);
+		// Every map entry is at least one byte (its index), so the
+		// subsection's remaining bytes bound the count (docs/SAFETY.md §2.2).
+		if (count > remaining(stream))
+			throw std::runtime_error(std::string("malformed module: ") + what +
+					" claims more entries than its subsection has bytes");
+		return count;
+	};
+
+	const auto readDirectMap = [&readName, &readCount](DWasmStream& stream, auto& map) {
+		const uint32_t count = readCount(stream, "a name map");
+		for (uint32_t i = 0; i < count; ++i) {
+			uint32_t idx;
+			stream >> Elv::Io::Leb(idx);
+			map[idx] = readName(stream);
 		}
-		else if (subId == 1) { // <--- FIXED: Sub-ID 1 is Function Names
-			uint32_t count;
-			wasmStream >> Elv::Io::Leb(count);
-			for(uint32_t i = 0; i < count; ++i) {
-				uint32_t idx;
-				wasmStream >> Elv::Io::Leb(idx);
-				this->funcNames[idx] = readLEB128String(wasmStream);
+	};
+
+	const auto readIndirectMap = [&readName, &readCount](DWasmStream& stream, auto& map) {
+		const uint32_t count = readCount(stream, "an indirect name map");
+		for (uint32_t i = 0; i < count; ++i) {
+			uint32_t outer;
+			stream >> Elv::Io::Leb(outer);
+			const uint32_t innerCount = readCount(stream, "an indirect name map entry");
+			for (uint32_t j = 0; j < innerCount; ++j) {
+				uint32_t inner;
+				stream >> Elv::Io::Leb(inner);
+				map[outer][inner] = readName(stream);
 			}
 		}
-		else {
-			// Skip others safely
-			file.seek(nextSubSection, Elv::Io::SeekOrigin::SET);
+	};
+
+	while (true) {
+		const long at = payloadDevice.tell();
+		if (at < 0)
+			throw std::runtime_error("name section position out of bounds");
+		if (static_cast<uint64_t>(at) >= payloadSize)
+			break;
+
+		uint8_t subId;
+		uint32_t subSize;
+		payloadStream >> subId;
+		payloadStream >> Elv::Io::Leb(subSize);
+
+		const long payloadStart = payloadDevice.tell();
+		if (payloadStart < 0 || static_cast<uint64_t>(payloadStart) > payloadSize
+				|| subSize > payloadSize - static_cast<uint64_t>(payloadStart))
+			throw std::runtime_error("name subsection out of bounds");
+
+		Euph::Io::ConstBufferDevice subDevice(
+				std::span<const std::byte>(payload.data() + payloadStart, subSize));
+		DWasmStream subStream(subDevice);
+
+		switch (subId) {
+			case 0: this->debugName = readName(subStream); break;
+			case 1: readDirectMap(subStream, this->funcNames); break;
+			case 2: readIndirectMap(subStream, this->localNames); break;
+			case 3: readIndirectMap(subStream, this->labelNames); break;
+			case 4: readDirectMap(subStream, this->typeNames); break;
+			case 5: readDirectMap(subStream, this->tableNames); break;
+			case 6: readDirectMap(subStream, this->memoryNames); break;
+			case 7: readDirectMap(subStream, this->globalNames); break;
+			case 8: readDirectMap(subStream, this->elementNames); break;
+			case 9: readDirectMap(subStream, this->dataNames); break;
+			case 10: readIndirectMap(subStream, this->fieldNames); break;
+			case 11: readDirectMap(subStream, this->tagNames); break;
+			case 12: readIndirectMap(subStream, this->paramNames); break;
+			case 13: readIndirectMap(subStream, this->tagParamNames); break;
+			default: break; // Skip unknown subsections by subSize.
 		}
 
-		// Always ensure we are aligned for the next subsection
-		file.seek(nextSubSection, Elv::Io::SeekOrigin::SET);
+		// Resume at the exact subsection boundary. A known subsection that
+		// under-read simply skips its tail; an unknown one is skipped whole.
+		payloadDevice.seek(payloadStart + static_cast<long>(subSize),
+						   Elv::Io::SeekOrigin::SET);
 	}
+}
+
+const std::string* Module::findName(NameKind kind, uint32_t index, uint32_t subIndex) const
+{
+	switch (kind) {
+		case NameKind::Module:
+			return index == 0 && !debugName.empty() ? &debugName : nullptr;
+		case NameKind::Function: return findDirectName(funcNames, index);
+		case NameKind::Type:     return findDirectName(typeNames, index);
+		case NameKind::Table:    return findDirectName(tableNames, index);
+		case NameKind::Memory:   return findDirectName(memoryNames, index);
+		case NameKind::Global:   return findDirectName(globalNames, index);
+		case NameKind::Element:  return findDirectName(elementNames, index);
+		case NameKind::Data:     return findDirectName(dataNames, index);
+		case NameKind::Tag:      return findDirectName(tagNames, index);
+		case NameKind::Local:    return findIndirectName(localNames, index, subIndex);
+		case NameKind::Label:    return findIndirectName(labelNames, index, subIndex);
+		case NameKind::Field:    return findIndirectName(fieldNames, index, subIndex);
+		case NameKind::Param:    return findIndirectName(paramNames, index, subIndex);
+		case NameKind::TagParam: return findIndirectName(tagParamNames, index, subIndex);
+	}
+	return nullptr;
 }
 
 void Module::processBranchHintSection(Elv::Io::Device& file, const Section& section)

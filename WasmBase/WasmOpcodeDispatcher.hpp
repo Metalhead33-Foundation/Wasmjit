@@ -259,6 +259,11 @@ protected:
 	virtual void dispatchDataDrop(uint32_t arg) { onUnhandledOpcode("dispatchDataDrop"); }
 	virtual void dispatchMemoryCopy(MemIdx arg1, MemIdx arg2) { onUnhandledOpcode("dispatchMemoryCopy"); }
 	virtual void dispatchMemoryFill(MemIdx arg) { onUnhandledOpcode("dispatchMemoryFill"); }
+	virtual void dispatchMemoryDiscard(MemIdx arg) { onUnhandledOpcode("dispatchMemoryDiscard"); }
+	virtual void dispatchI64Add128() { onUnhandledOpcode("dispatchI64Add128"); }
+	virtual void dispatchI64Sub128() { onUnhandledOpcode("dispatchI64Sub128"); }
+	virtual void dispatchI64MulWideS() { onUnhandledOpcode("dispatchI64MulWideS"); }
+	virtual void dispatchI64MulWideU() { onUnhandledOpcode("dispatchI64MulWideU"); }
 	virtual void dispatchTableInit(uint32_t arg1, TableIdx arg2) { onUnhandledOpcode("dispatchTableInit"); }
 	virtual void dispatchElemDrop(uint32_t arg) { onUnhandledOpcode("dispatchElemDrop"); }
 	virtual void dispatchTableCopy(TableIdx arg1, TableIdx arg2) { onUnhandledOpcode("dispatchTableCopy"); }

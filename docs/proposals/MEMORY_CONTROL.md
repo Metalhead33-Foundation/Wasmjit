@@ -1,7 +1,8 @@
 # Memory Control — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / forward-looking reference (revision 1 — the proposal is an
-early umbrella of sub-proposals; none of them is implemented).
+Status: design note / implementation reference (revision 2 — the umbrella's one
+concrete instruction, `memory.discard`, decodes, validates and zero-fills; the
+remaining sub-proposals are still design space).
 Audience: anyone touching `WasmMemory`, `WasmType` (`MemoryType`), the memory
 instructions, `WasmOpcode` (`MiscOpcode`), or the host memory API.
 
@@ -61,10 +62,21 @@ others are design space.
   memories, memory64 and shared/atomic memories.
 - Every access is bounds-checked (`effectiveMemoryAddress`, the bulk-memory
   helpers, the atomic helpers); memory64 uses the overflow-safe unsigned check.
-- `MiscOpcode` (`WasmOpcode.hpp`) defines `0xFC` sub-opcodes `0`–`17`
-  (trunc-sat, bulk memory, table ops). Sub-opcode `0x12` (18, the prototype
-  `memory.discard`) is **unassigned**; `dispatchPrefixMisc`'s `default` throws
-  `"Invalid or unsupported 0xFC misc sub-opcode"`.
+- `MiscOpcode` (`WasmOpcode.hpp`) defines `0xFC` sub-opcodes `0`–`18`. Sub-opcode
+  `0x12` (18) is `MemoryDiscard`; `dispatchPrefixMisc` reads the `memidx`
+  immediate and calls `dispatchMemoryDiscard`.
+- The validator types it as `[addr:idx size:idx] -> []`, with both operands
+  using `memoryAddressType(memidx)` (so memory64 takes `i64`).
+- `LibJit` lowers it to `wasm_memory_discard_impl`: the bounds check runs before
+  any page is touched, a zero-length range is a no-op, and the start is aligned
+  down / the end up to the engine's 64 KiB page size. Operands are widened to
+  `uint64_t` (with the memory's index type selecting the source width), so a
+  negative i32 is a huge failing address rather than a wrapped small one. The
+  helper uses `memorySize`/`memoryBase`, so it works for both memory32 and
+  memory64.
+- The stub backend prints `MemoryDiscard` for parity with the bulk-memory ops.
+- There is deliberately **no decommit hint** yet (`MC3`): the instruction is a
+  plain zero-fill, which is the spec's fallback on every host.
 - `MemoryType` carries only `indexType` and `limits`. There is no protection,
   mappable or virtual mode; unknown limit flags are preserved but not acted on.
 - There is no `memory.commit` and no page-protection API.
@@ -73,22 +85,23 @@ others are design space.
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| MC1 | **`memory.discard` does not decode.** `0xFC 0x12` is unassigned and reaches the misc dispatcher's default. | `WasmOpcode.hpp` (`MiscOpcode`), `WasmOpcodeDispatcher.cpp` | High |
-| MC2 | **No zero-fill helper.** There is no bounds-checked page-zeroing primitive to lower `memory.discard` onto. | `WasmMemory.cpp`, `wasm_simd_scalar`/bulk helpers | Medium |
-| MC3 | **No decommit hint.** The engine never releases physical pages to the host. | `WasmMemory.cpp` | Low |
+| ~~MC1~~ | ~~**`memory.discard` does not decode.**~~ **Done (MC-1):** `MiscOpcode::MemoryDiscard = 18` and the `memidx` immediate are decoded. | `WasmOpcode.hpp`, `WasmOpcodeDispatcher.cpp` | Closed |
+| ~~MC2~~ | ~~**No zero-fill helper.**~~ **Done (MC-2):** `wasm_memory_discard_impl` is bounds-checked and page-rounded (with `memoryIndexTypeForIndex` for i32/i64 operand widening). | `LibJit/LibjitOpcodeDispatcher.cpp` | Closed |
+| MC3 | **No decommit hint.** The engine never releases physical pages to the host. | `WasmMemory.cpp`, `wasm_memory_discard_impl` | Low |
 | MC4 | **No static protection / `mappable` / `virtual` mode.** `MemoryType` has only index type and limits. | `WasmType.hpp` (`MemoryType`) | Low |
 | MC5 | **No BYOB / host memory window API.** A non-web embedder has no way to hand a writable window to a producer. | `WasmMemory.hpp` | Low |
-| MC6 | **No test.** There is no `memory.discard` script in the snapshot. | `extern/WasmTestsuite` | Low |
+| ~~MC6~~ | ~~**No test.**~~ **Done (MC-4):** `Test/wasm_wat/memory_discard.wat` plus the manual test cover page rounding, preservation, zero-length and out-of-bounds traps (memory32 and memory64). | `Test/main.cpp`, `Test/wasm_wat/memory_discard.wat` | Closed |
 
 ## 6. Where we can and should play fast and loose
 
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
-| MCD1 | **Implement `memory.discard` as a bounds-checked zero-fill.** | §2/§3: zero-fill is the specified semantics and the OS hint is optional. | Exact behaviour on every host, with an optional fast path. |
+| MCD1 | **Implement `memory.discard` as a bounds-checked zero-fill** (implemented). | §2/§3: zero-fill is the specified semantics and the OS hint is optional. | Exact behaviour on every host, with an optional fast path. |
 | MCD2 | **Drop the decommit hint** on hosts without a usable virtual-memory API. | §3: no particular OS mechanism is required. | Portability. |
-| MCD3 | **Keep the `memidx` immediate** and reuse the existing bounds check. | §2's signature carries `$memidx`; §3 leaves the addressing free and multi-memory is already in the tree. | No new address path. |
+| MCD3 | **Keep the `memidx` immediate** and reuse the existing bounds check (implemented). | §2's signature carries `$memidx`; §3 leaves the addressing free and multi-memory is already in the tree. | No new address path. |
 | MCD4 | **Do not implement protection/mappable/virtual from the umbrella.** | §3: sub-proposals are independent and may disappear. | Scope stays on the one concrete instruction. |
 | MCD5 | **Treat an unknown memory flag as data, not behavior.** | §3: no behaviour is attached until the proposal defines it. | Forward compatibility with future flags. |
+| MCD6 | **Treat a zero-length `memory.discard` as a no-op**, even at a non-page-aligned address. | §3: the range is empty, and an empty range frees/zeroes no pages. | Avoids zeroing an unrelated page for an empty request. |
 
 Guardrail: `memory.discard` must never trap on a valid in-bounds range, and an
 out-of-bounds range must trap (or be rejected) before any page is touched.
@@ -98,26 +111,27 @@ Zeroing must also be visible to a shared memory's other agents.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **MC-0 — Honest rejection** | Keep `0xFC 0x12` rejected until the helper exists (no accidental interpretation). | MC1 | A `memory.discard` module fails with a named error. |
-| **MC-1 — Decode** | Add the misc sub-opcode and the `memidx` immediate. | MC1 | The instruction decodes. |
-| **MC-2 — Zero-fill** | Lower to a bounds-checked page-zeroing helper. | MC2 | A discard makes the range read as zero and preserves the rest. |
-| **MC-3 — Hint** | Optionally `madvise`/`VirtualFree`/`mmap` the pages when the host supports it. | MC3 | The fast path is observable only in RSS, not results. |
-| **MC-4 — Tests** | Add a manual `memory.discard` test (no script in the snapshot). | MC6 | The test asserts zeroing, bounds and cross-memory behaviour. |
-| **MC-5 — Later sub-proposals** | Revisit protection/mappable/virtual when they reach a stable design. | MC4, MC5 | A separate note/milestones exist. |
+| **MC-0 — Honest rejection** | ✅ Superseded: `0xFC 0x12` is now decoded, so an unknown sub-opcode still fails loudly while `memory.discard` executes. | MC1 | Done: no accidental interpretation of unassigned sub-opcodes. |
+| **MC-1 — Decode** | ✅ Added `MiscOpcode::MemoryDiscard` and the `memidx` immediate. | MC1 | Done: `memory_discard.wat` loads. |
+| **MC-2 — Zero-fill** | ✅ Lowered to `wasm_memory_discard_impl` with bounds checks and 64 KiB page rounding. | MC2 | Done: the manual test asserts page rounding, preservation, zero-length and traps on memory32 and memory64. |
+| **MC-3 — Hint** | ◑ Optionally `madvise`/`VirtualFree`/`mmap` the pages when the host supports it. | MC3 | Remaining: the fast path is observable only in RSS, not results. |
+| **MC-4 — Tests** | ✅ `Test/wasm_wat/memory_discard.wat` plus `memory.discard zeroes whole pages, preserves the rest, and traps out of bounds`. | MC6 | Done: 19 assertions, including the memory64 and zero-length paths. |
+| **MC-5 — Later sub-proposals** | ◑ Revisit protection/mappable/virtual when they reach a stable design. | MC4, MC5 | Remaining: a separate note/milestones. |
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-17):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-18):
 
-| Script | passed | failed | skipped | Reading |
+| Script / fixture | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
 | `memory` | 65 | 0 | 25 | the existing size/grow surface is green |
 | `memory-multi` | 6 | 0 | 0 | multiple memories are the base for `memidx` |
 | `memory64` | 55 | 0 | 14 | 64-bit addresses are already handled |
-| `memory.discard` | — | — | — | no script in the snapshot |
+| `memory_discard` manual test | 19 assertions | 0 | 0 | page rounding, preservation, zero-length and OOB traps on memory32 and memory64 |
+| `memory.discard` script | — | — | — | no script in the snapshot |
 
-Reading: the memory substrate is solid; there is simply no discard script to
-grade. MC-4's manual test is the first real coverage.
+Reading: the memory substrate is solid and the one concrete instruction in the
+umbrella is now exercised; MC-4 is the coverage that used to be missing.
 
 ## 9. References
 
@@ -130,5 +144,7 @@ grade. MC-4's manual test is the first real coverage.
   dimension), [`BULK_MEMORY.md`](BULK_MEMORY.md), [`THREADS.md`](THREADS.md),
   [`../SAFETY.md`](../SAFETY.md), [`../ABI.md`](../ABI.md); sources
   `WasmBase/WasmMemory.hpp`/`.cpp`, `WasmBase/WasmType.hpp` (`MemoryType`),
-  `WasmBase/WasmOpcode.hpp` (`MiscOpcode`),
-  `WasmBase/WasmOpcodeDispatcher.cpp` (`dispatchPrefixMisc`).
+  `WasmBase/WasmOpcode.hpp` (`MiscOpcode::MemoryDiscard`),
+  `WasmBase/WasmOpcodeDispatcher.cpp` (`dispatchPrefixMisc`),
+  `LibJit/LibjitOpcodeDispatcher.cpp` (`dispatchMemoryDiscard`,
+  `wasm_memory_discard_impl`), `Test/wasm_wat/memory_discard.wat`.

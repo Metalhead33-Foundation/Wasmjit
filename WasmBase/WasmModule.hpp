@@ -6,10 +6,31 @@
 #include "WasmTypeIdentity.hpp"
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 #include <span>
 #include <map>
 namespace WASM {
+
+// Identifies a well-known name subsection (docs/proposals/EXTENDED_NAME_SECTION.md).
+// `Local`, `Label`, `Field`, `Param` and `TagParam` are indirect maps: their
+// `index` is the function/type/tag index and `subIndex` is the inner index.
+enum class NameKind : uint8_t {
+	Module,
+	Function,
+	Local,
+	Label,
+	Type,
+	Table,
+	Memory,
+	Global,
+	Element,
+	Data,
+	Field,
+	Tag,
+	Param,
+	TagParam
+};
 
 struct Module : public Artifact
 {
@@ -45,6 +66,22 @@ public:
 	std::map<uint32_t, std::vector<BranchHint>> branchHintsByFuncIndex;
 	std::map<uint32_t,std::string> funcNames;
 	std::string debugName;
+	// Extended name subsections (docs/proposals/EXTENDED_NAME_SECTION.md).
+	// Direct maps use the index space of the named thing; the indirect maps
+	// (`localNames`, `labelNames`, `fieldNames`, `paramNames`,
+	// `tagParamNames`) are keyed by an outer index first.
+	std::map<uint32_t,std::string> typeNames;
+	std::map<uint32_t,std::string> tableNames;
+	std::map<uint32_t,std::string> memoryNames;
+	std::map<uint32_t,std::string> globalNames;
+	std::map<uint32_t,std::string> elementNames;
+	std::map<uint32_t,std::string> dataNames;
+	std::map<uint32_t,std::string> tagNames;
+	std::map<uint32_t,std::map<uint32_t,std::string>> localNames;
+	std::map<uint32_t,std::map<uint32_t,std::string>> labelNames;
+	std::map<uint32_t,std::map<uint32_t,std::string>> fieldNames;
+	std::map<uint32_t,std::map<uint32_t,std::string>> paramNames;
+	std::map<uint32_t,std::map<uint32_t,std::string>> tagParamNames;
 	uint32_t startFunctionIndex;
 	uint32_t dataSegmentCount;
 	bool hasStartFunction;
@@ -83,6 +120,11 @@ public:
 	// Map a module-local type index to its process-wide identity. Throws if the
 	// index is out of range.
 	TypeId typeId(LocalTypeIdx idx) const;
+	// Looks up a name from the well-known `name` custom section. Returns
+	// nullptr when the subsection or the index is absent. Names are metadata
+	// only: they never participate in validation, dispatch or identity
+	// (ENSD3, docs/proposals/EXTENDED_NAME_SECTION.md).
+	const std::string* findName(NameKind kind, uint32_t index, uint32_t subIndex = 0) const;
 	// Reject a module that declares a value type this engine cannot model
 	// (`isModeledValueTypeCode`). Called at the end of fromFile(); throws a
 	// std::runtime_error naming the offending declaration. See

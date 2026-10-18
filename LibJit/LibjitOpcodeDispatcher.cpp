@@ -160,6 +160,94 @@ static void wasm_memory_fill_impl(WASM::VMContext* vm, uint32_t memIdx, int32_t 
 	std::memset(memory->memoryBase + udst, value & 0xFF, static_cast<size_t>(ulen));
 }
 
+// memory.discard: zero-fill a byte range, aligning the start down and the end
+// up to the engine's 64 KiB page size (docs/proposals/MEMORY_CONTROL.md MC-2).
+// The bounds check happens before any page is touched, and a zero-length range
+// is a no-op so a valid empty range at the end of memory cannot trap.
+static void wasm_memory_discard_impl(WASM::VMContext* vm, uint32_t memIdx,
+									 uint64_t dst, uint64_t len)
+{
+	if (memIdx >= vm->memoryCount)
+		trap(WASM::TrapKind::Internal, "memory index out of range");
+	const WASM::LinearMemory* memory = vm->memories[memIdx];
+	const uint64_t size = memory->memorySize;
+	if (dst > size || len > size - dst)
+		trap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+	if (len == 0)
+		return;
+
+	constexpr uint64_t page = 0x10000;
+	const uint64_t start = dst & ~(page - 1);
+	const uint64_t end = dst + len;
+	const uint64_t rounded = end + (page - 1);
+	uint64_t roundedEnd = (rounded < end) ? size : (rounded & ~(page - 1));
+	if (roundedEnd > size)
+		roundedEnd = size;
+	if (roundedEnd > start)
+		std::memset(memory->memoryBase + start, 0,
+					static_cast<size_t>(roundedEnd - start));
+}
+
+// 64x64 -> 128 multiplication in portable 32-bit limbs. Kept backend-local so
+// the lowering does not depend on `__int128`
+// (docs/proposals/NUMERIC_PROPOSALS.md NUM-1).
+static void mulWideU64(uint64_t a, uint64_t b, uint64_t& lo, uint64_t& hi)
+{
+	const uint64_t a0 = a & 0xFFFFFFFFu;
+	const uint64_t a1 = a >> 32;
+	const uint64_t b0 = b & 0xFFFFFFFFu;
+	const uint64_t b1 = b >> 32;
+	const uint64_t p00 = a0 * b0;
+	const uint64_t p01 = a0 * b1;
+	const uint64_t p10 = a1 * b0;
+	const uint64_t p11 = a1 * b1;
+	const uint64_t mid = (p00 >> 32) + (p01 & 0xFFFFFFFFu) + (p10 & 0xFFFFFFFFu);
+	lo = (mid << 32) | (p00 & 0xFFFFFFFFu);
+	hi = p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32);
+}
+
+static void mulWideS64(int64_t a, int64_t b, uint64_t& lo, uint64_t& hi)
+{
+	mulWideU64(static_cast<uint64_t>(a), static_cast<uint64_t>(b), lo, hi);
+	// Correct the unsigned high half for the two's-complement sign bits.
+	if (a < 0)
+		hi -= static_cast<uint64_t>(b);
+	if (b < 0)
+		hi -= static_cast<uint64_t>(a);
+}
+
+static uint64_t wasm_i64_mul_wide_u_lo(uint64_t a, uint64_t b)
+{
+	uint64_t lo, hi;
+	mulWideU64(a, b, lo, hi);
+	(void)hi;
+	return lo;
+}
+
+static uint64_t wasm_i64_mul_wide_u_hi(uint64_t a, uint64_t b)
+{
+	uint64_t lo, hi;
+	mulWideU64(a, b, lo, hi);
+	(void)lo;
+	return hi;
+}
+
+static uint64_t wasm_i64_mul_wide_s_lo(int64_t a, int64_t b)
+{
+	uint64_t lo, hi;
+	mulWideS64(a, b, lo, hi);
+	(void)hi;
+	return lo;
+}
+
+static uint64_t wasm_i64_mul_wide_s_hi(int64_t a, int64_t b)
+{
+	uint64_t lo, hi;
+	mulWideS64(a, b, lo, hi);
+	(void)lo;
+	return hi;
+}
+
 static uint64_t wasm_table_grow_impl(WASM::VMContext* vm, uint32_t tableIdx, void* initRef, uint64_t deltaEntries)
 {
 	WASM::ModuleInstance* m = reinterpret_cast<WASM::ModuleInstance*>(vm);
@@ -4531,6 +4619,77 @@ void OpcodeDispatcher::dispatchMemoryFill(WASM::MemIdx arg) {
 		dst, value, len};
 	jit_insn_call_native(function, "wasm_memory_fill_impl",
 						 reinterpret_cast<void*>(wasm_memory_fill_impl), sig, args, 5, 0);
+}
+void OpcodeDispatcher::dispatchMemoryDiscard(WASM::MemIdx arg) {
+	jit_value_t len = popValue();
+	jit_value_t dst = popValue();
+	const bool is64 = memoryIndexTypeForIndex(arg) == WASM::MemoryIndexType::I64;
+	// Interpret both operands as unsigned: a negative i32 becomes a huge
+	// (failing) request rather than a wrapped small one.
+	if (!is64) {
+		dst = jit_insn_convert(function, dst, jit_type_uint, 0);
+		len = jit_insn_convert(function, len, jit_type_uint, 0);
+	}
+	dst = jit_insn_convert(function, dst, jit_type_ulong, 0);
+	len = jit_insn_convert(function, len, jit_type_ulong, 0);
+
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_ulong, jit_type_ulong};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 4, 1);
+	jit_value_t args[] = {vmContextValue(),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg)),
+		dst, len};
+	jit_insn_call_native(function, "wasm_memory_discard_impl",
+						 reinterpret_cast<void*>(wasm_memory_discard_impl), sig, args, 4, 0);
+}
+void OpcodeDispatcher::dispatchI64Add128() {
+	// [lhs_lo lhs_hi rhs_lo rhs_hi] -> [lo hi]. The operands are converted to
+	// unsigned so the carry comparison is unsigned.
+	jit_value_t bHi = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t bLo = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t aHi = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t aLo = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t lo = jit_insn_add(function, aLo, bLo);
+	jit_value_t carry = jit_insn_lt(function, lo, aLo);
+	jit_value_t hi = jit_insn_add(function, jit_insn_add(function, aHi, bHi),
+			jit_insn_convert(function, carry, jit_type_ulong, 0));
+	pushValue(jit_insn_convert(function, lo, jit_type_long, 0));
+	pushValue(jit_insn_convert(function, hi, jit_type_long, 0));
+}
+void OpcodeDispatcher::dispatchI64Sub128() {
+	jit_value_t bHi = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t bLo = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t aHi = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t aLo = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t lo = jit_insn_sub(function, aLo, bLo);
+	jit_value_t borrow = jit_insn_lt(function, aLo, bLo);
+	jit_value_t hi = jit_insn_sub(function, jit_insn_sub(function, aHi, bHi),
+			jit_insn_convert(function, borrow, jit_type_ulong, 0));
+	pushValue(jit_insn_convert(function, lo, jit_type_long, 0));
+	pushValue(jit_insn_convert(function, hi, jit_type_long, 0));
+}
+void OpcodeDispatcher::dispatchI64MulWideS() {
+	jit_value_t b = popValue();
+	jit_value_t a = popValue();
+	jit_value_t lo = callNativeBinary(function,
+			reinterpret_cast<void*>(wasm_i64_mul_wide_s_lo),
+			jit_type_ulong, jit_type_long, jit_type_long, a, b);
+	jit_value_t hi = callNativeBinary(function,
+			reinterpret_cast<void*>(wasm_i64_mul_wide_s_hi),
+			jit_type_ulong, jit_type_long, jit_type_long, a, b);
+	pushValue(jit_insn_convert(function, lo, jit_type_long, 0));
+	pushValue(jit_insn_convert(function, hi, jit_type_long, 0));
+}
+void OpcodeDispatcher::dispatchI64MulWideU() {
+	jit_value_t b = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t a = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t lo = callNativeBinary(function,
+			reinterpret_cast<void*>(wasm_i64_mul_wide_u_lo),
+			jit_type_ulong, jit_type_ulong, jit_type_ulong, a, b);
+	jit_value_t hi = callNativeBinary(function,
+			reinterpret_cast<void*>(wasm_i64_mul_wide_u_hi),
+			jit_type_ulong, jit_type_ulong, jit_type_ulong, a, b);
+	pushValue(jit_insn_convert(function, lo, jit_type_long, 0));
+	pushValue(jit_insn_convert(function, hi, jit_type_long, 0));
 }
 void OpcodeDispatcher::dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2) {
 	jit_value_t len = popValue();

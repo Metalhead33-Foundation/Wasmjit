@@ -348,6 +348,15 @@ enum class MiscOpcode : uint32_t {
 	TableGrow           = 15,  // table.grow tableidx
 	TableSize           = 16,  // table.size tableidx
 	TableFill           = 17,  // table.fill tableidx
+
+	// Memory control (prototype encoding; docs/proposals/MEMORY_CONTROL.md MC1)
+	MemoryDiscard       = 18,  // memory.discard memidx
+
+	// Wide arithmetic (docs/proposals/NUMERIC_PROPOSALS.md NUM-1)
+	I64Add128           = 19,  // [i64 i64 i64 i64] -> [i64 i64]
+	I64Sub128           = 20,  // [i64 i64 i64 i64] -> [i64 i64]
+	I64MulWideS         = 21,  // [i64 i64] -> [i64 i64]
+	I64MulWideU         = 22,  // [i64 i64] -> [i64 i64]
 };
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, MiscOpcode right) {
 	return left.writeLEB128_enum(right);
