@@ -234,7 +234,8 @@ handles, named imports/exports, and WIT as the authoring format. Everything in
   specified; the object behind a handle (`rep`) is engine-defined.
 - **No JS embedding.** The spec *also* defines a JS API and ESM integration, but
   nothing requires a non-browser engine to have them, or to implement
-  `wasm:js-string`.
+  `wasm:js-string`. [`JS_INTEGRATION.md`](JS_INTEGRATION.md) records the
+  optional, embedder-owned hook; it does not add JavaScript to components.
 - **No concurrency.** `async`, `stream`, `future`, tasks, `waitable-set*`, and
   thread built-ins are gated on later previews.
 - **No value imports/exports and no component `start`** (🪙).
@@ -442,7 +443,7 @@ deviation is accepted where it simplifies the implementation.
 | CMD3 | **Target the shared-nothing WASI 0.2 subset only.** Reject `async`, `stream`, `future`, `task.*`, `waitable-set.*`, `thread.*`, `value`, `start`, `map`, `error-context`. | §3: all are gated on later previews, and `canonopt` validation permits rejecting unsupported options. | A finite scope that can actually be finished. |
 | CMD4 | **Implement only `string-encoding=utf8`** and reject lifts/lowers that ask for `utf16` / `latin1+utf16`. | §3: no encoding is mandatory; the option is per lift/lower, so a component can be refused at link time. | One string path instead of three. |
 | CMD5 | **Restrict the first lift/lower subset to values that need no memory representation** (scalars, chars, handles) and add `memory`+`realloc` afterwards. | §3: an engine may reject a lift/lower whose types need an option it does not support. | A component that exports `add: func(a: u32, b: u32) -> u32` runs before any allocator work. |
-| CMD6 | **No JS/ESM embedding; the host surface stays `ImportResolver` + `VMContext::hostData`.** | §3: the JS API is optional; this project's embedder is C++. | No JS glue, no `wasm:js-string`. |
+| CMD6 | **No in-engine JS/ESM embedding; the host surface stays `ImportResolver` + `VMContext::hostData`.** An optional embedder-owned adapter is surveyed in [`JS_INTEGRATION.md`](JS_INTEGRATION.md); it adds no JS dependency to `WasmBase/` or a backend. | §3: the JS API is optional; this project's embedder is C++. | No JS glue in core; an embedder may still wire a JS engine through the same hook. |
 | CMD7 | **Store resource `rep` as an opaque engine value** (the handle is still an `i32` table index). | §3: the object behind a handle is engine-defined; only the table behaviour is specified. | Resources can wrap arbitrary C++ objects. |
 | CMD8 | **Ignore the `component-name` custom section and WIT at runtime.** | §3: name sections are non-validating metadata, and WIT is a build-time format. | Nothing to do at load time. |
 | CMD9 | **Reuse `TypeRegistry` interning for component types** even though the AST is different. | §2.3: component type equality is structural too. | One interning table for the process, consistent with `TYPE_IDENTITY.md`. |
@@ -501,6 +502,13 @@ external prerequisite is needed for the tooling-side milestones.
 - **type-imports** — a component imports and exports *types*. This proposal
   cannot be finished without the type-import feature on the core side, which is
   currently absent (CM6).
+- **[`JS_INTEGRATION.md`](JS_INTEGRATION.md)** — no JavaScript or ESM embedding
+  in the component layer. The note records an optional, embedder-owned adapter
+  over the core import/export boundary; it does not add a JS dependency or a
+  JavaScript value model to components (CMD6).
+- **[`SHARED_EVERYTHING_THREADS.md`](SHARED_EVERYTHING_THREADS.md)** — the
+  proposed thread lifecycle and shared-GC extensions are future work; CM10
+  deliberately excludes them from the current component scope.
 - **[`GC.md`](GC.md) / [`../TYPE_IDENTITY.md`](../TYPE_IDENTITY.md)** — keep the
   two type systems apart on purpose. GC heap types (`struct`/`array`/`i31`,
   `CanonicalType`, `TypeId`) describe *heap objects*; component value types

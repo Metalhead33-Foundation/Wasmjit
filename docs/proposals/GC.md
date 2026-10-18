@@ -1293,6 +1293,9 @@ Notes:
   those are pointers into embedder-owned state (`VMContext::hostData`), which
   is already the `externref` contract (§4.7). A non-JS host simply resolves
   `wasm:js-string` imports to its own implementations, or rejects them.
+  [`JS_INTEGRATION.md`](JS_INTEGRATION.md) is the consolidated survey of the
+  JavaScript proposals and the optional embedder-owned hook; this section
+  remains the GC/string-specific analysis.
 - **`wasm:js-string` is a resolver problem, not a codegen problem** — unless
   we want the inlining the proposal is designed around. A first cut registers
   the builtins through `ImportResolver::resolveFunction` with
@@ -1315,3 +1318,7 @@ Notes:
 Until then, keep the enum entries documented as **placeholders only**, and do
 not add a `string` arm to `AbstractHeapType` without fixing the `-0x19`
 (`none`) collision first.
+
+[`GC_EXTENSIONS.md`](GC_EXTENSIONS.md) covers the adjacent post-3.0 GC
+proposals (multibyte array access, more array constructors and frozen values);
+this section remains the stringref/JS-string-specific analysis.

@@ -49,7 +49,7 @@ attached wherever an identifier binds. The proposal does not change execution.
 - No required API for name lookup; names are for debuggers and tooling.
 - No fixed consumer format beyond the subsection encoding.
 - No requirement to parse the text format (this engine consumes binary modules
-  produced by `wasm-tools`).
+  produced by `wasm-tools`; WAT parsing is permanently outside its scope).
 
 ## 4. What we have implemented today
 
@@ -71,7 +71,7 @@ attached wherever an identifier binds. The proposal does not change execution.
 | ENS2 | **Even the core name subsections are incomplete.** Local (2), type (4), field (10) and tag (11) names are skipped too. | same | Medium |
 | ENS3 | **No consumer.** `debugName` and `funcNames` are written by the parser but never read, so there is no API to look up a name and no diagnostic uses it. | `Test/` has no reference to either field | Medium |
 | ENS4 | **`names.wast` does not assert names.** It passes because names are ignored, not because they are parsed. | `spec: names` 486/0/0 | Low |
-| ENS5 | **No text-format annotation support.** The engine has no `.wat` parser; `@name` handling belongs to the toolchain that produces the binary. | `Test/Test.pro` uses `wasm-tools` | Informational |
+| ENS5 | **No text-format annotation support.** The engine has no `.wat` parser and will never have one; `@name` handling belongs to the toolchain that produces the binary. | `Test/Test.pro` uses `wasm-tools` | Informational |
 
 ## 6. Where we can and should play fast and loose
 
@@ -117,7 +117,10 @@ Reading: green here means "the custom section does not break decoding", not
 - Spec — Custom sections and the name section:
   https://webassembly.github.io/spec/core/appendix/custom.html
 - In-repo: [`INSTRUMENT_TRACING.md`](INSTRUMENT_TRACING.md) (other non-semantic
-  metadata), [`SMALL_PROPOSALS.md`](SMALL_PROPOSALS.md) §4 (branch hints);
+  metadata), [`SMALL_PROPOSALS.md`](SMALL_PROPOSALS.md) §4 (branch hints),
+  [`PARSER_PROPOSALS.md`](PARSER_PROPOSALS.md) (compilation hints and relaxed
+  dead-code validation), [`ANNOTATIONS.md`](ANNOTATIONS.md) (the text-format
+  annotation grammar);
   sources `WasmBase/WasmModule.hpp` (`debugName`, `funcNames`),
   `WasmBase/WasmModule.cpp` (`processCustomSection`, `processNameSection`),
   `Test/wast_supported.txt`.

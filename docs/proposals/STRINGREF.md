@@ -54,6 +54,9 @@ value-type encodings are the ones listed in §5 (STR1).
 - No JS API for `stringview_*` in the MVP; that is explicitly post-MVP.
 - No GC requirement: a non-GC host may own strings and hand out references.
 - No requirement that every opcode be efficient; only that it is correct.
+- No JavaScript string semantics. The separate `wasm:js-string` host-import
+  proposal operates on `externref`, not on `stringref`; see
+  [`JS_INTEGRATION.md`](JS_INTEGRATION.md).
 
 ## 4. What we have implemented today
 

@@ -350,6 +350,8 @@ In-repo:
   for `v128` inside aggregates).
 - [`docs/THREADS.md`](THREADS.md) — the companion note for the other
   "post-2.0 / non-3.0" feature area.
+- [`NUMERIC_PROPOSALS.md`](NUMERIC_PROPOSALS.md) — the adjacent FP16 lane and
+  rounding-variant proposals, plus Wide Arithmetic; none is implemented.
 - [`docs/TESTING.md`](../TESTING.md) — why `v128` values are currently skipped by
   the spec harness.
 - Source anchors: `WasmBase/WasmType.hpp` (`ValueTypeCode::V128`),

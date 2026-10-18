@@ -104,7 +104,7 @@ permission to mix the `func` and `extern` hierarchies at run time.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **RT-1 — Host externref model** | Give the embedder typed extern objects and identity, instead of raw `void*` (`GC.md` R4/G3, `ABI.md` R2/R3). | RT1 | `ref.eq` on two host objects is well-defined and `ref_test extern` passes. |
+| **RT-1 — Host externref model** | Give the embedder typed extern objects and identity, instead of raw `void*` (`GC.md` R4/G3, `ABI.md` R2/R3). The optional JS adapter in [`JS_INTEGRATION.md`](JS_INTEGRATION.md) consumes this generic contract; it does not define a JavaScript-specific reference type. | RT1 | `ref.eq` on two host objects is well-defined and `ref_test extern` passes. |
 | **RT-2 — Split table traps** | Distinguish a bounds trap from an uninitialised/undefined slot in `checkedTableIndex` and `emitTrapIfNull`. | RT2 | `table_get` / `table_set` / `table_grow` trap with the spec's expected kind. |
 | **RT-3 — Validate references** | Check element-segment values against the table element type and type `ref.eq` operands. | RT3 | The remaining `assert_invalid` table families reject for the right reason. |
 | **RT-4 — Alias globals** | Follow `MUTABLE_GLOBALS.md` MG-2/MG-3: a `Value*` global index space. | RT4 | A write through an importer is visible to the exporter. |

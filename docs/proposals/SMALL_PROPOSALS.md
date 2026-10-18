@@ -161,8 +161,10 @@ that check divide-by-zero, `INT_MIN / -1`, `NaN` and out-of-range and raise
 - Spec — Custom sections and annotations:
   https://webassembly.github.io/spec/core/appendix/custom.html
 - In-repo: [`docs/GC.md`](GC.md) / [`docs/SIMD.md`](SIMD.md) (same structure);
-  sources `WasmBase/WasmOpcode.hpp` (opcode enum, `PrefixMisc`),
-  `WasmBase/WasmModule.cpp` (`processCustomSection`),
+  [`PARSER_PROPOSALS.md`](PARSER_PROPOSALS.md) (compilation hints and relaxed
+  dead-code validation), [`ANNOTATIONS.md`](ANNOTATIONS.md) (text-format
+  annotations); sources `WasmBase/WasmOpcode.hpp` (opcode enum,
+  `PrefixMisc`), `WasmBase/WasmModule.cpp` (`processCustomSection`),
   `LibJit/LibjitOpcodeDispatcher.cpp` (`dispatchI32Extend8S` …,
   `dispatchI32TruncSatF32S` …), `Test/wast_supported.txt`,
   `docs/TESTING.md`.

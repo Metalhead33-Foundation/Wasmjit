@@ -78,6 +78,9 @@ ones), and the bounds check subtracts instead of adding.
 
 - Type `ref.test`/`ref.cast` (still conservative) and the relaxed ternary SIMD
   forms.
+- Adopt and test the relaxed dead-code algorithm described in
+  [`proposals/PARSER_PROPOSALS.md`](proposals/PARSER_PROPOSALS.md); the current
+  unreachable stack is close but not claimed as the proposal's algorithm.
 - ~~The “declared function reference” rule~~ — done: `dispatchRefFunc` checks the
   module's `C.refs` set (exports, globals, tables and element segments).
 - ~~The remaining strict failures~~ — done: strict LEB128 width/overflow

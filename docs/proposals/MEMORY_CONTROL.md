@@ -126,7 +126,8 @@ grade. MC-4's manual test is the first real coverage.
 - `memory.discard` sub-proposal:
   https://github.com/WebAssembly/memory-control/blob/main/proposals/memory-control/discard.md
 - In-repo: [`MULTI_MEMORY.md`](MULTI_MEMORY.md), [`MEMORY64.md`](MEMORY64.md),
-  [`BULK_MEMORY.md`](BULK_MEMORY.md), [`THREADS.md`](THREADS.md),
+  [`CUSTOM_PAGE_SIZES.md`](CUSTOM_PAGE_SIZES.md) (the static page-size
+  dimension), [`BULK_MEMORY.md`](BULK_MEMORY.md), [`THREADS.md`](THREADS.md),
   [`../SAFETY.md`](../SAFETY.md), [`../ABI.md`](../ABI.md); sources
   `WasmBase/WasmMemory.hpp`/`.cpp`, `WasmBase/WasmType.hpp` (`MemoryType`),
   `WasmBase/WasmOpcode.hpp` (`MiscOpcode`),

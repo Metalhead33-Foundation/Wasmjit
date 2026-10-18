@@ -343,6 +343,10 @@ In-repo:
 
 - [`docs/GC.md`](GC.md) — the companion design note and the format this one
   follows; §6.1 "hunks" also applies to the runtime data model.
+- [`ACQUIRE_RELEASE_ATOMICS.md`](ACQUIRE_RELEASE_ATOMICS.md) — the weaker
+  ordering/`pause` extension to the baseline atomics.
+- [`SHARED_EVERYTHING_THREADS.md`](SHARED_EVERYTHING_THREADS.md) — the shared
+  GC/tables/TLS/waitqueue follow-on, and its multi-agent prerequisites.
 - [`docs/ABI.md`](../ABI.md) — `VMContext`, Store ownership, and the single
   process-global `Store`.
 - Source anchors: `WasmBase/WasmMemory.{hpp,cpp}`, `WasmBase/WasmStore.{hpp,cpp}`,

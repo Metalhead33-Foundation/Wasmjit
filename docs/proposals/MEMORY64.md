@@ -111,7 +111,7 @@ Memory64 is a **Phase 5** proposal, integrated into WebAssembly **3.0**.
 | M64D2 | **Cap a memory/table at the host allocation budget and let `grow` fail beyond it.** | §3: addressing 2⁶⁴ bytes is explicitly not required; the spec's implementation-limitation rules cover it. | A single, portable failure mode that also protects the host (`docs/TESTING.md` "Allocation guardrails"). |
 | M64D3 | **Treat an unrepresentable maximum as "unbounded" and let the budget fail the grow.** | §3; the budget is the concrete host limit. | No oversized integer math at declaration time, no giant allocation attempt. |
 | M64D4 | **Keep the 32-bit result plumbing for now, documented.** The truncation is unobservable for any memory a host can actually back. | §3; only reachable with a >2³²-page memory. | Avoids a JIT ABI change until needed. |
-| M64D5 | **Do not implement the BigInt JS API.** | §3: web-embedding only. | Scope control. |
+| M64D5 | **Do not implement the BigInt JS API.** | §3: web-embedding only. | Scope control; an optional external adapter may map `i64` to BigInt ([`JS_INTEGRATION.md`](JS_INTEGRATION.md)). |
 
 Guardrail: effective-address computation must stay in 64-bit even for a 32-bit
 memory (zero-extend the `i32`), so that `memoryBase + offset` cannot wrap
@@ -160,7 +160,8 @@ ran: before that, every trap case was skipped. See `docs/TESTING.md`.
   https://webassembly.github.io/spec/core/syntax/instructions.html
 - In-repo: [`docs/MULTI_MEMORY.md`](MULTI_MEMORY.md),
   [`docs/BULK_MEMORY.md`](BULK_MEMORY.md), [`docs/THREADS.md`](THREADS.md)
-  (shared-memory cap), [`docs/ABI.md`](../ABI.md);
+  (shared-memory cap), [`CUSTOM_PAGE_SIZES.md`](CUSTOM_PAGE_SIZES.md)
+  (the page-size dimension on top of `MemoryType`), [`docs/ABI.md`](../ABI.md);
   sources `WasmBase/WasmType.hpp` (`Limits`, `MemoryType`),
   `WasmBase/WasmMemory.{hpp,cpp}`, `WasmBase/WasmModuleInstance.cpp`,
   `LibJit/LibjitOpcodeDispatcher.cpp` (`effectiveMemoryAddress`,
