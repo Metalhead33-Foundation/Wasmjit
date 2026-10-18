@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace WASM {
@@ -254,21 +255,32 @@ public:
 	CoreTypeView coreType(TypeId id) const;
 
 	TypeId addComponentPrimitive(PrimitiveValueType primitive);
-	TypeId addComponentRecord(TypeSpan fields);
-	TypeId addComponentVariant(TypeSpan cases);
+	// These take the source lists directly so a structural hit does not append
+	// orphaned payload entries. A record whose nested ComponentValueType
+	// contains an unresolved local index is *not* interned; see the note.
+	TypeId addComponentRecord(std::span<const ComponentField> fields);
+	TypeId addComponentVariant(std::span<const ComponentCase> cases);
 	TypeId addComponentList(ComponentValueType element);
 	TypeId addComponentFixedList(ComponentValueType element, uint32_t length);
-	TypeId addComponentTuple(TypeSpan elements);
-	TypeId addComponentLabels(TypeKind kind, TypeSpan labels);
+	TypeId addComponentTuple(std::span<const ComponentValueType> elements);
+	TypeId addComponentLabels(TypeKind kind, std::span<const StringId> labels);
 	TypeId addComponentOption(ComponentValueType element);
 	TypeId addComponentResult(ComponentValueType ok, ComponentValueType error,
 			bool hasOk, bool hasError);
 	TypeId addComponentTypeRef(TypeKind kind, uint32_t typeIndex);
 	TypeId addComponentStream(TypeKind kind, ComponentValueType element, bool hasElement);
 	TypeId addComponentMap(ComponentValueType key, ComponentValueType value);
-	TypeId addComponentFunc(TypeSpan params, TypeSpan results, bool isAsync);
+	TypeId addComponentFunc(std::span<const ComponentFuncParam> params,
+			std::span<const ComponentValueType> results, bool isAsync);
 	TypeId addComponentResource(const ComponentResourcePayload& resource);
 	ComponentTypeView componentType(TypeId id) const;
+
+	// Structural component interning diagnostics (TM-8 first slice). Only
+	// records with no unresolved local type index participate; resources and
+	// component/instance declarations are nominal and never interned.
+	std::size_t componentInternedCount() const { return componentIntern_.size(); }
+	std::size_t componentInternHits() const { return componentInternHits_; }
+	std::size_t componentInternMisses() const { return componentInternMisses_; }
 
 	TypeSpan appendFields(std::span<const ComponentField> fields);
 	TypeSpan appendCases(std::span<const ComponentCase> cases);
@@ -298,6 +310,22 @@ private:
 	friend class CoreTypeView;
 	friend class ComponentTypeView;
 	TypeId addComponentRecord(TypeKind kind, uint16_t flags, uint32_t payload);
+
+	// Intern `key` to the record created by `create` on a miss. Only closed,
+	// local-index-free records are passed here.
+	template <typename Create>
+	TypeId internComponent(std::string key, Create&& create)
+	{
+		const auto it = componentIntern_.find(key);
+		if (it != componentIntern_.end()) {
+			++componentInternHits_;
+			return it->second;
+		}
+		++componentInternMisses_;
+		const TypeId id = create();
+		componentIntern_.emplace(std::move(key), id);
+		return id;
+	}
 
 	std::vector<TypeRecord> records_;
 	std::size_t coreCount_ = 0;
@@ -333,6 +361,14 @@ private:
 
 	std::vector<std::string> strings_;
 	std::unordered_map<std::string, StringId> stringIds_;
+
+	// Closed component records keyed by a canonical byte key. Records that
+	// contain a component-local type index are deliberately absent: the index
+	// is only meaningful inside one component, so interning them would make
+	// two unrelated components share an identity.
+	std::unordered_map<std::string, TypeId> componentIntern_;
+	std::size_t componentInternHits_ = 0;
+	std::size_t componentInternMisses_ = 0;
 };
 
 } // namespace WASM

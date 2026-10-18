@@ -7,10 +7,21 @@
 
 namespace WASM {
 
+namespace {
+std::string serializeSubtypeBlock(std::span<const Subtype> types);
+}
+
 std::span<const Subtype> TypeRegistry::registerModule(std::vector<Subtype> types)
 {
 	if (types.empty())
 		return {};
+
+	const std::string key = serializeSubtypeBlock(types);
+	const auto interned = blockIntern.find(key);
+	if (interned != blockIntern.end()) {
+		parsedTypes += types.size();
+		return std::span<const Subtype>(*blocks[interned->second]);
+	}
 
 	// Move the vector into a heap block, then take a span over the block's
 	// buffer. The block pointer is stable, so the span remains valid.
@@ -18,6 +29,7 @@ std::span<const Subtype> TypeRegistry::registerModule(std::vector<Subtype> types
 	totalTypes  += block->size();
 	parsedTypes += block->size();
 	std::span<const Subtype> view(*block);
+	blockIntern.emplace(key, blocks.size());
 	blocks.push_back(std::move(block));
 	return view;
 }
@@ -174,6 +186,50 @@ std::string serializeGroup(const std::vector<CanonicalType>& group) {
 	std::string s;
 	appendU32(s, static_cast<uint32_t>(group.size()));
 	for (const CanonicalType& t : group) serializeType(s, t);
+	return s;
+}
+
+// Raw parser-block key. Unlike the canonical group key this deliberately keeps
+// module-local indices; the block is a syntax view, and two blocks are
+// interchangeable only when the whole section is byte-for-byte equivalent.
+void serializeRawValue(std::string& s, const ValueType& v) {
+	appendU8(s, static_cast<uint8_t>(v.opcode));
+	appendI32(s, v.heapType);
+}
+void serializeRawStorage(std::string& s, const StorageType& st) {
+	appendU8(s, st.isPacked ? 1 : 0);
+	if (st.isPacked) appendU8(s, static_cast<uint8_t>(st.val.opcode));
+	else serializeRawValue(s, st.val);
+}
+void serializeRawField(std::string& s, const FieldType& f) {
+	serializeRawStorage(s, f.storageType);
+	appendU8(s, f.isMutable ? 1 : 0);
+}
+void serializeRawSubtype(std::string& s, const Subtype& t) {
+	appendU8(s, t.isFinal ? 1 : 0);
+	appendU32(s, static_cast<uint32_t>(t.supertypeIndices.size()));
+	for (uint32_t super : t.supertypeIndices) appendU32(s, super);
+	if (t.isFunction()) {
+		appendU8(s, 0);
+		const FuncType& ft = std::get<FuncType>(t.composite);
+		appendU32(s, static_cast<uint32_t>(ft.params.size()));
+		for (const StorageType& p : ft.params) serializeRawStorage(s, p);
+		appendU32(s, static_cast<uint32_t>(ft.results.size()));
+		for (const StorageType& r : ft.results) serializeRawStorage(s, r);
+	} else if (t.isStruct()) {
+		appendU8(s, 1);
+		const StructType& st = std::get<StructType>(t.composite);
+		appendU32(s, static_cast<uint32_t>(st.fields.size()));
+		for (const FieldType& f : st.fields) serializeRawField(s, f);
+	} else {
+		appendU8(s, 2);
+		serializeRawField(s, std::get<ArrayType>(t.composite).elementType);
+	}
+}
+std::string serializeSubtypeBlock(std::span<const Subtype> types) {
+	std::string s;
+	appendU32(s, static_cast<uint32_t>(types.size()));
+	for (const Subtype& t : types) serializeRawSubtype(s, t);
 	return s;
 }
 

@@ -867,6 +867,22 @@ TEST_CASE("type interning dedups identical rec groups across modules")
 		REQUIRE(first.typeId(WASM::LocalTypeIdx{i}) == second.typeId(WASM::LocalTypeIdx{i}));
 }
 
+TEST_CASE("identical type sections share the store-owned parser block")
+{
+	WASM::TypeRegistry& registry = WASM::Store::global().types();
+
+	WASM::Module first = loadTestModule("rec_groups");
+	const size_t physicalAfterFirst = registry.typeCount();
+	WASM::Module second = loadTestModule("rec_groups");
+
+	// A duplicate raw type section reuses the existing block: no new physical
+	// Subtype storage, and both modules view the same bytes. The canonical
+	// TypeIds were already deduplicated by internModule.
+	REQUIRE(registry.typeCount() == physicalAfterFirst);
+	REQUIRE(first.types.data() == second.types.data());
+	REQUIRE(first.types.size() == second.types.size());
+}
+
 TEST_CASE("singleton rec group interns to the same identity as a plain type")
 {
 	WASM::Module plain = loadTestModule("rec_groups");        // $sig is bare (i32)->i32
@@ -1092,6 +1108,77 @@ TEST_CASE("a component's value-type grammar is parsed")
 	REQUIRE(component->exports[0].sortIndex.sort == WASM::ComponentSort::Func);
 	REQUIRE(component->exports[0].sortIndex.index == 0);
 	REQUIRE_FALSE(component->exports[0].type.has_value());
+}
+
+TEST_CASE("component closed records intern by structure (TM-8 first slice)")
+{
+	// Two parses of the same component. Every closed, local-index-free record
+	// (record/variant/flags/enum/tuple/list/fixed-list/option/result/map/
+	// stream/future/func) must reuse the first parse's TypeId.
+	auto first = loadTestArtifact("component_types");
+	auto second = loadTestArtifact("component_types");
+	REQUIRE(first != nullptr);
+	REQUIRE(second != nullptr);
+	WASM::Component* firstComponent = first->asComponent();
+	WASM::Component* secondComponent = second->asComponent();
+	REQUIRE(firstComponent != nullptr);
+	REQUIRE(secondComponent != nullptr);
+	REQUIRE(firstComponent->types.size() == secondComponent->types.size());
+
+	const auto beforeHits = typeStore().componentInternHits();
+	const auto beforeMisses = typeStore().componentInternMisses();
+	const auto beforeRecords = typeStore().recordCount();
+	auto third = loadTestArtifact("component_types");
+	REQUIRE(third != nullptr);
+	WASM::Component* thirdComponent = third->asComponent();
+	REQUIRE(thirdComponent != nullptr);
+	REQUIRE(typeStore().componentInternHits() - beforeHits == 13);
+	// `$listRecord` is skipped, not a miss: its element is a component-local
+	// index, so the record is not eligible for structural interning yet.
+	REQUIRE(typeStore().componentInternMisses() == beforeMisses);
+	REQUIRE(typeStore().recordCount() - beforeRecords == 1);
+	REQUIRE(typeStore().componentInternedCount() > 0);
+
+	const std::array<size_t, 13> interned = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13};
+	for (size_t index : interned)
+		REQUIRE(firstComponent->types[index].id == secondComponent->types[index].id);
+	// A local index is not an identity until TM-8 resolves it to a TypeId.
+	REQUIRE(firstComponent->types[12].id != secondComponent->types[12].id);
+}
+
+TEST_CASE("component structural interning crosses components and respects labels/resources")
+{
+	auto baseArtifact = loadTestArtifact("component_types");
+	auto dupArtifact = loadTestArtifact("component_record_dup");
+	REQUIRE(baseArtifact != nullptr);
+	REQUIRE(dupArtifact != nullptr);
+	WASM::Component* base = baseArtifact->asComponent();
+	WASM::Component* dup = dupArtifact->asComponent();
+	REQUIRE(base != nullptr);
+	REQUIRE(dup != nullptr);
+	REQUIRE(dup->types.size() == 3);
+
+	// Same record shape in a different component -> same TypeId.
+	REQUIRE(dup->types[0].id == base->types[0].id);
+	// Label order is part of the key.
+	REQUIRE(dup->types[1].id != dup->types[0].id);
+	// Same list<u32> shape in a different component -> same TypeId.
+	REQUIRE(dup->types[2].id == base->types[5].id);
+
+	// Resources are nominal: reloading the same component must not reuse them.
+	auto resourceA = loadTestArtifact("component_resource");
+	auto resourceB = loadTestArtifact("component_resource");
+	REQUIRE(resourceA != nullptr);
+	REQUIRE(resourceB != nullptr);
+	WASM::Component* ra = resourceA->asComponent();
+	WASM::Component* rb = resourceB->asComponent();
+	REQUIRE(ra != nullptr);
+	REQUIRE(rb != nullptr);
+	REQUIRE(ra->types.size() == 3);
+	REQUIRE(ra->types[0].id != rb->types[0].id);
+	// own/borrow carry the resource identity and are not structural either.
+	REQUIRE(ra->types[1].id != rb->types[1].id);
+	REQUIRE(ra->types[2].id != rb->types[2].id);
 }
 
 TEST_CASE("compact type records and the shared component store are present")

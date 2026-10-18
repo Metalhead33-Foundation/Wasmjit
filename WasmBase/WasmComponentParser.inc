@@ -505,7 +505,7 @@ TypeId parseDefinedValueType(Reader& r, uint8_t opcode)
 			field.type = parseValueType(r);
 			fields.push_back(field);
 		});
-		return r.types.addComponentRecord(r.types.appendFields(fields));
+		return r.types.addComponentRecord(fields);
 	}
 	case 0x71: { // variant
 		std::vector<ComponentCase> cases;
@@ -520,7 +520,7 @@ TypeId parseDefinedValueType(Reader& r, uint8_t opcode)
 				throw std::runtime_error("component parse: malformed variant case");
 			cases.push_back(item);
 		});
-		return r.types.addComponentVariant(r.types.appendCases(cases));
+		return r.types.addComponentVariant(cases);
 	}
 	case 0x70: // list
 		return r.types.addComponentList(parseValueType(r));
@@ -531,19 +531,17 @@ TypeId parseDefinedValueType(Reader& r, uint8_t opcode)
 	case 0x6F: { // tuple
 		std::vector<ComponentValueType> elements;
 		r.vec([&] { elements.push_back(parseValueType(r)); });
-		return r.types.addComponentTuple(r.types.appendValues(elements));
+		return r.types.addComponentTuple(elements);
 	}
 	case 0x6E: { // flags
 		std::vector<StringId> labels;
 		r.vec([&] { labels.push_back(r.types.internString(r.name())); });
-		return r.types.addComponentLabels(TypeKind::ComponentFlags,
-				r.types.appendLabels(labels));
+		return r.types.addComponentLabels(TypeKind::ComponentFlags, labels);
 	}
 	case 0x6D: { // enum
 		std::vector<StringId> labels;
 		r.vec([&] { labels.push_back(r.types.internString(r.name())); });
-		return r.types.addComponentLabels(TypeKind::ComponentEnum,
-				r.types.appendLabels(labels));
+		return r.types.addComponentLabels(TypeKind::ComponentEnum, labels);
 	}
 	case 0x6B: // option
 		return r.types.addComponentOption(parseValueType(r));
@@ -598,8 +596,7 @@ TypeId parseComponentFuncType(Reader& r, bool isAsync)
 	} else {
 		throw std::runtime_error("component parse: invalid result list tag");
 	}
-	return r.types.addComponentFunc(r.types.appendParams(params),
-			r.types.appendResults(results), isAsync);
+	return r.types.addComponentFunc(params, results, isAsync);
 }
 
 ComponentTypeDef parseComponentTypeDef(Reader& r)

@@ -28,7 +28,11 @@ class TypeRegistry
 public:
 	using TypeBlock = std::vector<Subtype>;
 
-	// Take ownership of one module's types and return a stable view of them.
+	// Take ownership of one module's type block and return a stable view. An
+	// identical raw type section (same module-local indices and contents) reuses
+	// the existing store-owned block, so modules never own a duplicate syntax
+	// copy of the same section. (This is a TM-6 transition step; the compact
+	// TypeStore records are already the canonical identity.)
 	std::span<const Subtype> registerModule(std::vector<Subtype> types);
 
 	// Canonicalize and intern each `rec` group, returning the process-wide
@@ -53,8 +57,10 @@ public:
 	TypeStore&       store()       { return store_; }
 	const TypeStore& store() const { return store_; }
 
+	// Unique store-owned parser blocks (not loaded modules): identical type
+	// sections share one block.
 	size_t moduleCount() const { return blocks.size(); }
-	// Types physically stored in the registry (Subtype storage).
+	// Types physically stored in the unique parser blocks (Subtype storage).
 	size_t typeCount() const { return totalTypes; }
 	// Types seen across all modules (the "parsed" side of the dedup ratio).
 	size_t parsedTypeCount() const { return parsedTypes; }
@@ -66,6 +72,8 @@ private:
 	// unique_ptr keeps every block at a fixed address; the deque-free layout is
 	// deliberate so spans into a block are never invalidated by later modules.
 	std::vector<std::unique_ptr<TypeBlock>> blocks;
+	// Raw subtype-block key -> index into `blocks`.
+	std::unordered_map<std::string, size_t> blockIntern;
 	size_t totalTypes = 0;
 	size_t parsedTypes = 0;
 
