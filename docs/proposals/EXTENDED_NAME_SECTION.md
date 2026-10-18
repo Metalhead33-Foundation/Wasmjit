@@ -71,6 +71,8 @@ attached wherever an identifier binds. The proposal does not change execution.
 - `Module::findName(NameKind, index, subIndex = 0)` is the public lookup. It
   returns `nullptr` for an absent subsection or index; names are metadata and
   are never validated against an index space (`ENSD2`).
+- `Validator::fail` consumes the function-name map: a validation error keeps the
+  numeric prefix and appends `($name)` when the name section has one.
 - `names.wast` remains curated and runs to completion (`486 passed / 0 failed /
   0 skipped`, 2026-10-17). The manual `name_section` fixture now asserts the
   stored strings, so passing no longer only proves tolerance.
@@ -81,7 +83,7 @@ attached wherever an identifier binds. The proposal does not change execution.
 |---|---|---|---|
 | ~~ENS1~~ | ~~**Only subsections 0 and 1 are parsed.**~~ **Done (ENS-1/ENS-2):** direct maps 4/5/6/7/8/9/11 and indirect maps 2/3/10/12/13 are parsed, including the extended ids 3, 5, 6, 7, 8, 9, 12 and 13. | `WasmModule.cpp` (`processNameSection`); `name_section` manual test | Closed |
 | ~~ENS2~~ | ~~**Even the core name subsections are incomplete.**~~ **Done (ENS-2):** local (2), type (4), field (10) and tag (11) names are parsed too. | same | Closed |
-| ENS3 | **No diagnostic consumer yet.** `Module::findName(NameKind, index, subIndex)` is the public lookup and the test reads it, but trap/disassembly diagnostics still print raw indices. | `WasmModule.hpp` (`findName`); `Test/main.cpp` | Low |
+| ~~ENS3~~ | ~~**No diagnostic consumer yet.**~~ **Done (ENS-3):** `Module::findName` is the public lookup, and `Validator::fail` appends the current function's `($name)` while keeping the numeric index; `named_invalid.wat` asserts the message. Trap/disassembly text still uses indices. | `WasmModule.hpp` (`findName`), `WasmValidator.cpp` (`fail`), `Test/wasm_wat/named_invalid.wat` | Closed |
 | ~~ENS4~~ | ~~**`names.wast` does not assert names.**~~ **Done (ENS-4):** `Test/wasm_wat/name_section.wat` + `extended name section: parsed names are exposed by kind and index` assert every subsection's strings; `name section: indirect maps and unknown subsections are bounded and skipped` covers 12/13 and unknown-id skipping. | `Test/main.cpp`, `Test/wasm_wat/name_section.wat` | Closed |
 | ENS5 | **No text-format annotation support.** The engine has no `.wat` parser and will never have one; `@name` handling belongs to the toolchain that produces the binary. | `Test/Test.pro` uses `wasm-tools` | Informational |
 
@@ -104,7 +106,7 @@ not know.
 |---|---|---|---|
 | **ENS-1 — Parse direct maps** | ✅ Read subsections 4/5/6/7/8/9/11 into per-index name tables. | ENS1 | Done: `name_section` asserts type, table, memory, global, element, data and tag names. |
 | **ENS-2 — Parse indirect maps** | ✅ Read subsections 2/3/10/12/13 and the core 2/4/10/11. | ENS1, ENS2 | Done: local, label, field, parameter and tag-parameter names are addressable; a hand-built fixture covers 12/13. |
-| **ENS-3 — Expose lookup** | ◑ `Module::findName(NameKind, index, subIndex)` is public and tested; trap/disassembly diagnostics still print raw indices. | ENS3 | The API half is done; a diagnostic half remains. |
+| **ENS-3 — Expose lookup** | ✅ `Module::findName(NameKind, index, subIndex)` is public and tested; `Validator::fail` appends the function name to validation errors. | ENS3 | Done: `named_invalid.wat` asserts `function 0 ($bad)`; trap/disassembly text still uses raw indices. |
 | **ENS-4 — Assert names** | ✅ `Test/wasm_wat/name_section.wat` + two manual tests check the stored strings and the 12/13/unknown-id paths. | ENS4 | Done: the tests fail if a subsection is dropped or desynchronised. |
 
 ENS5 is explicitly triaged as not-worth-closing: the engine has no text
@@ -120,6 +122,7 @@ parser, and `@name` handling belongs to `wasm-tools`.
 | `name_section` manual test | 17 assertions | 0 | 0 | every parsed subsection is read back through `findName` |
 | hand-built 12/13 + unknown id | 7 assertions | 0 | 0 | indirect maps work and an unknown subsection is skipped by size |
 | `custom_section` | 3 assertions | 0 | 0 | an annotation-generated custom section leaves code decoding unchanged |
+| `named_invalid` | 2 assertions | 0 | 0 | a validation error includes `function 0 ($bad)` from the name section |
 
 Reading: `names.wast` still means "the custom section does not break decoding";
 `name_section` and the hand-built fixture are the tests that prove the names

@@ -24,34 +24,35 @@ stack, and throws `std::runtime_error` on the first failed rule.
 | Table | table64 index type, `get/set/grow/size/fill/copy/init`; table initialiser typing; `table.init` element-segment/table type match |
 | SIMD | 194 arithmetic/comparison/conversion shapes taken from `wasm_simd_ops.inc`, plus const/bitwise/splat/bitmask, loads/stores, lanes/shuffle/swizzle |
 | Atomics | loads/stores/RMW/cmpxchg/wait/notify with access-size alignment and operand types |
-| References | `ref.null`/`ref.func`/`ref.is_null`/`ref.eq`/`ref.as_non_null`; `ref.func x` requires `x` to be declared outside function bodies/start; `call_ref $t` requires `(ref null $t)`; full subtyping (nullability, func/extern/exn/any hierarchies, concrete-type subtyping and canonical structural type equivalence); untyped `select` is numeric/vector only; definite initialization of non-defaultable locals |
+| References | `ref.null`/`ref.func`/`ref.is_null`/`ref.eq`/`ref.as_non_null`; `ref.func x` requires `x` to be declared outside function bodies/start; `call_ref $t` requires `(ref null $t)`; `ref.test`/`ref.cast` (both nullability forms) require the operand to be a reference in the target's hierarchy; full subtyping (nullability, func/extern/exn/any hierarchies, concrete-type subtyping and canonical structural type equivalence); untyped `select` is numeric/vector only; definite initialization of non-defaultable locals |
 
 ## Conservative policy
 
-An opcode without a rule (`ref.test`/`ref.cast`, the relaxed ternary SIMD
-forms) sets `typeTainted`: the rest of the body is still scanned for immediate
-checks, but the operand stack is no longer trusted and no type error is
-reported there. A `try_table` **with catches** is tainted after its catch labels
-are checked, because a catch injects its payload into an outer label, which the
-linear stack does not model. A validator must never reject a module it could
-not check — the cost is coverage, measured below, not correctness.
+An opcode without a rule (parts of the GC aggregate/array surface and the
+relaxed ternary SIMD forms) sets `typeTainted`: the rest of the body is still
+scanned for immediate checks, but the operand stack is no longer trusted and no
+type error is reported there. A `try_table` **with catches** is tainted after
+its catch labels are checked, because a catch injects its payload into an outer
+label, which the linear stack does not model. A validator must never reject a
+module it could not check — the cost is coverage, measured below, not
+correctness.
 
 ## Measured coverage
 
-`WASM_SPEC_VALIDATE=1` on the curated set (2026-10-17):
+`WASM_SPEC_VALIDATE=1` on the curated set (2026-10-18):
 
-| Kind | Binary cases | Rejected | Accepted |
+| Kind | Binary cases | Handled | Accepted |
 | --- | ---: | ---: | ---: |
-| `assert_invalid` | 2211 | **2211** | 0 |
-| `assert_malformed` | 17 | **17** | 0 |
-| `assert_unlinkable` | 127 | **127** | 0 |
-| `assert_uninstantiable` | 27 | **27** | 0 |
+| `assert_invalid` | 2211 | **2211** rejected | 0 |
+| `assert_malformed` | 17 | **17** rejected | 0 |
+| `assert_unlinkable` | 127 | **127** rejected | 0 |
+| `assert_uninstantiable` | 27 | **27** (26 rejected + 1 start trap) | 0 |
 | **total** | **2382** | **2382** | **0** |
 
-The default suite is **8354 assertions / 273 test cases, all green** (61 core
+The default suite is **8477 assertions / 283 test cases, all green** (61 core
 scripts were re-curated after the validator landed, plus `start.wast`). The
 strict run is **fully green** as well: every one of the 2,382 binary negative
-commands is rejected, including all 17 `assert_malformed` cases and the strict
+commands is handled, including all 17 `assert_malformed` cases and the strict
 LEB128 width/overflow cases. All 27 `assert_uninstantiable` cases pass: one
 traps in a start function (`start.wast`), the other 26 fail instantiation with
 a caught error (`elem`/`data` out-of-bounds segments). 946 text-format commands
@@ -76,8 +77,8 @@ ones), and the bounds check subtracts instead of adding.
 
 ## Next
 
-- Type `ref.test`/`ref.cast` (still conservative) and the relaxed ternary SIMD
-  forms.
+- Type the remaining GC aggregate/array and relaxed ternary SIMD forms (the
+  remaining `typeTainted` paths).
 - Adopt and test the relaxed dead-code algorithm described in
   [`proposals/PARSER_PROPOSALS.md`](proposals/PARSER_PROPOSALS.md); the current
   unreachable stack is close but not claimed as the proposal's algorithm.

@@ -80,6 +80,9 @@ baked in at compile time through the `WASM_TEST_DIR` macro) and calls into it.
 | `unknown custom sections leave code and data decoding unchanged` | `custom_section` | an `(@custom ...)`-generated section is skipped and the export still runs (`ANNOTATIONS.md` ANN-2) |
 | `memory.discard zeroes whole pages, preserves the rest, and traps out of bounds` | `memory_discard` | `0xFC 0x12` page rounding, zero-length no-op and out-of-bounds traps on memory32 and memory64 (`MEMORY_CONTROL.md` MC-1/MC-2) |
 | `wide arithmetic: add128, sub128 and mul_wide match reference values` | `wide_arithmetic` | `0xFC 19`–`22` carry/borrow and signed/unsigned 64×64→128 results (`NUMERIC_PROPOSALS.md` NUM-1) |
+| `gc cast validation: ref.test/ref.cast accept every reference in the target hierarchy` | `gc_cast_validation` | both nullability forms and the same-hierarchy operand rule, plus null test/cast behaviour (`GC.md` G9/GC-10) |
+| `imported mutable externref global aliases the exporter across modules` | `externref_global_a/b` | a host reference written through the importer is read through the exporter, and vice versa (`REFERENCE_TYPES.md` RT4/RT5) |
+| `validation errors name the offending function when the name section has it` | `named_invalid` | a validation error includes `function 0 ($bad)` from the name section (`EXTENDED_NAME_SECTION.md` ENS-3) |
 
 The modules are produced either from AssemblyScript (`Test/wasm/*.ts`) or from hand-written WAT
 (`Test/wasm_wat/*.wat`); both land in `wasm_test_modules/`.

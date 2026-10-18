@@ -83,8 +83,8 @@ The raw details of table storage and element evaluation are in
 | RT1 | **No host `externref` model.** An `externref` is only a `void*`; there is no way to create or inspect a host object, and `ref.eq` is pointer equality without a type check. | `Value::ref`, `refMatchesHeapType`; `ref_test` 69/2 (both failures are `ref_test_extern`) | Medium |
 | RT2 | **Table bounds and null-slot traps share a kind.** An out-of-bounds `table.get`/`table.set` reports "undefined element" instead of "out of bounds table access". | `spec: table_get` 7/4/5, `spec: table_set` 11/8/7, `spec: table_grow` 40/11/7 (2026-10-17) | Medium |
 | RT3 | **Reference validation is partial.** An element segment's declared value type is not checked against the table's element type, and `ref.eq` operand compatibility is not checked. | `GC.md` R8, G9; `WasmBase/WasmValidator.cpp` | Medium |
-| RT4 | **Imported mutable globals are still copies.** A reference stored in a mutable global is shared by pointer, but a later `global.set` through an importer is not seen by the exporter. | `MUTABLE_GLOBALS.md` MG-2/MG-3 | Low |
-| RT5 | **No cross-module `externref` sharing test.** The manual tests cover tables and globals within one module, not a reference written by one instance and read by another. | `Test/wasm_wat` | Low |
+| ~~RT4~~ | ~~**Imported mutable globals are still copies.**~~ **Done (RT-4):** `MUTABLE_GLOBALS.md` MG-2/MG-3 make `VMContext::globals` a `Value**` cell array, so a reference-typed global aliases exactly like an `i32` one. | `WasmModuleInstance.cpp` (`globalRefs`, `globalsStorage`); the shared-global tests | Closed |
+| ~~RT5~~ | ~~**No cross-module `externref` sharing test.**~~ **Done (RT-5):** `externref_global_a/b.wat` plus `imported mutable externref global aliases the exporter across modules` write a host reference through one instance and read it through the other. | `Test/wasm_wat/externref_global_{a,b}.wat`, `Test/main.cpp` | Closed |
 
 ## 6. Where we can and should play fast and loose
 
@@ -107,8 +107,8 @@ permission to mix the `func` and `extern` hierarchies at run time.
 | **RT-1 — Host externref model** | Give the embedder typed extern objects and identity, instead of raw `void*` (`GC.md` R4/G3, `ABI.md` R2/R3). The optional JS adapter in [`JS_INTEGRATION.md`](JS_INTEGRATION.md) consumes this generic contract; it does not define a JavaScript-specific reference type. | RT1 | `ref.eq` on two host objects is well-defined and `ref_test extern` passes. |
 | **RT-2 — Split table traps** | Distinguish a bounds trap from an uninitialised/undefined slot in `checkedTableIndex` and `emitTrapIfNull`. | RT2 | `table_get` / `table_set` / `table_grow` trap with the spec's expected kind. |
 | **RT-3 — Validate references** | Check element-segment values against the table element type and type `ref.eq` operands. | RT3 | The remaining `assert_invalid` table families reject for the right reason. |
-| **RT-4 — Alias globals** | Follow `MUTABLE_GLOBALS.md` MG-2/MG-3: a `Value*` global index space. | RT4 | A write through an importer is visible to the exporter. |
-| **RT-5 — Cross-module test** | Add a two-module `externref` table/global test. | RT5 | The test reads a value written by the other instance. |
+| **RT-4 — Alias globals** | ✅ Done by `MUTABLE_GLOBALS.md` MG-2/MG-3: `VMContext::globals` is a `Value*` index space, so reference-typed globals alias too. | RT4 | Done: a write through an importer is visible to the exporter. |
+| **RT-5 — Cross-module test** | ✅ `externref_global_a/b.wat` plus `imported mutable externref global aliases the exporter across modules`. | RT5 | Done: the test reads a host pointer written by the other instance, then nulls it and reads that back through both instances. |
 
 ## 8. Indicative test survey
 
@@ -132,10 +132,12 @@ permission to mix the `func` and `extern` hierarchies at run time.
 | `table_init` | 725 | 0 | 67 | green |
 | `elem` | 116 | 0 | 38 | green since BM-2 |
 | `ref_test` | 69 | 2 | 0 | the two `ref_test_extern` cases are GC G3/D5 |
+| `externref_global_a/b` (manual) | 14 assertions | 0 | 0 | a mutable `externref` global aliases across two module instances (RT-4/RT-5) |
 
 Reading: the core table and reference surface is green. The red is one
 trap-kind defect (RT2) and the deliberate `extern`/`any` identity deviation
-(`GC.md` G3/D5), not missing reference types.
+(`GC.md` G3/D5), not missing reference types. Mutable global aliasing is now
+covered for both numeric and reference values.
 
 ## 9. References
 

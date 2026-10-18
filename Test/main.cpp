@@ -503,6 +503,51 @@ TEST_CASE("imported mutable global is shared between two module instances")
 	REQUIRE(WASM::callCallable<int32_t>(*bGet) == 7);
 }
 
+TEST_CASE("imported mutable externref global aliases the exporter across modules")
+{
+	WASM::Module moduleA = loadTestModule("externref_global_a");
+	WASM::Module moduleB = loadTestModule("externref_global_b");
+	WASM::RegistryImportResolver registry;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+
+	auto instanceA = compiler.instantiate(moduleA, registry);
+	REQUIRE(instanceA.get() != nullptr);
+	instanceA->registerExports(registry, "a");
+
+	auto instanceB = compiler.instantiate(moduleB, registry);
+	REQUIRE(instanceB.get() != nullptr);
+
+	auto aGet = instanceA->exportedFunction("get");
+	auto aSet = instanceA->exportedFunction("set");
+	auto aIsNull = instanceA->exportedFunction("is_null");
+	auto bGet = instanceB->exportedFunction("get");
+	auto bSet = instanceB->exportedFunction("set");
+	REQUIRE(aGet.has_value());
+	REQUIRE(aSet.has_value());
+	REQUIRE(aIsNull.has_value());
+	REQUIRE(bGet.has_value());
+	REQUIRE(bSet.has_value());
+
+	int hostObject = 0;
+	void* hostRef = &hostObject;
+
+	REQUIRE(WASM::callCallable<int32_t>(*aIsNull) == 1);
+	WASM::callCallable<void>(*bSet, hostRef);
+	REQUIRE(WASM::callCallable<void*>(*aGet) == hostRef);
+	REQUIRE(WASM::callCallable<void*>(*bGet) == hostRef);
+	REQUIRE(WASM::callCallable<int32_t>(*aIsNull) == 0);
+
+	// A write through the exporter is visible through the importer.
+	WASM::callCallable<void>(*aSet, static_cast<void*>(nullptr));
+	REQUIRE(WASM::callCallable<void*>(*bGet) == nullptr);
+	REQUIRE(WASM::callCallable<int32_t>(*aIsNull) == 1);
+
+	// ...and a second import set updates the same cell again.
+	WASM::callCallable<void>(*bSet, hostRef);
+	REQUIRE(WASM::callCallable<void*>(*aGet) == hostRef);
+}
+
 TEST_CASE("imported global type and mutability are matched at link time")
 {
 	WASM::Module moduleA = loadTestModule("shared_global_a");
@@ -4311,5 +4356,56 @@ TEST_CASE("wide arithmetic: add128, sub128 and mul_wide match reference values")
 	r = call2(mulU, UINT64_C(0x123456789ABCDEF0), uint64_t(0x10));
 	REQUIRE(r[0] == UINT64_C(0x23456789ABCDEF00));
 	REQUIRE(r[1] == 1);
+}
+
+
+// ── GC cast validation (docs/proposals/GC.md G9/GC-10) ──────────────────────
+TEST_CASE("gc cast validation: ref.test/ref.cast accept every reference in the target hierarchy")
+{
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	auto loaded = loadAndInstantiateTestModule("gc_cast_validation", imports, jitContext);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	const auto exported = [&instance](const char* name) {
+		auto fn = instance.exportedFunction(name);
+		REQUIRE(fn.has_value());
+		return *fn;
+	};
+	auto testAny = exported("test_any");
+	auto testNullable = exported("test_nullable");
+	auto castAny = exported("cast_any");
+	auto castNull = exported("cast_null");
+
+	// A null value fails a non-null target test but matches a nullable one.
+	REQUIRE(WASM::callCallable<int32_t>(testAny, static_cast<void*>(nullptr)) == 0);
+	REQUIRE(WASM::callCallable<int32_t>(testNullable, static_cast<void*>(nullptr)) == 1);
+
+	// `ref.cast null` preserves the null; the non-null form traps.
+	REQUIRE(WASM::callCallable<void*>(castNull, static_cast<void*>(nullptr)) == nullptr);
+	{
+		WASM::TrapScope scope;
+		volatile bool trapped = false;
+		if (setjmp(scope.buffer) == 0)
+			WASM::callCallable<void*>(castAny, static_cast<void*>(nullptr));
+		else
+			trapped = true;
+		REQUIRE(trapped);
+	}
+}
+
+
+// ── Named validation errors (docs/proposals/EXTENDED_NAME_SECTION.md ENS-3) ──
+TEST_CASE("validation errors name the offending function when the name section has it")
+{
+	bool threw = false;
+	try {
+		(void)loadTestModule("named_invalid");
+	} catch (const std::exception& error) {
+		threw = true;
+		REQUIRE(std::string(error.what()).find("function 0 ($bad)") != std::string::npos);
+	}
+	REQUIRE(threw);
 }
 

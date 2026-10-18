@@ -17,10 +17,16 @@ Validator::Validator(const Module& module)
 
 void Validator::fail(const std::string& message) const
 {
-	const std::string prefix = currentBody == kNoBody
-			? std::string()
-			: "function " + std::to_string(currentBody) + " at instruction "
-					+ std::to_string(instructionOffset) + ": ";
+	if (currentBody == kNoBody)
+		throw ValidationError(message);
+
+	std::string prefix = "function " + std::to_string(currentBody);
+	// `currentBody` indexes the internal function bodies; the name section is
+	// keyed by the global function index (imports first).
+	const std::size_t globalIndex = currentBody + module.importFunctions.size();
+	if (const std::string* name = module.findName(NameKind::Function, globalIndex))
+		prefix += " ($" + *name + ")";
+	prefix += " at instruction " + std::to_string(instructionOffset) + ": ";
 	throw ValidationError(prefix + message);
 }
 
@@ -1143,6 +1149,11 @@ void Validator::dispatchRefNull(const HeapType& heapType)
 	pushValue(type);
 }
 
+void Validator::dispatchRefTest(const HeapType& arg) { validateRefTest(false, arg); }
+void Validator::dispatchRefTestNull(const HeapType& arg) { validateRefTest(true, arg); }
+void Validator::dispatchRefCast(const HeapType& arg) { validateRefCast(false, arg); }
+void Validator::dispatchRefCastNull(const HeapType& arg) { validateRefCast(true, arg); }
+
 void Validator::dispatchThrow(TagIdx arg)
 {
 	requireTagIndex(arg);
@@ -1210,6 +1221,72 @@ void Validator::dispatchBrOnNonNull(LabelIdx label)
 	std::vector<ValueType> prefix(types.begin(), types.end() - 1);
 	popTypes(prefix);
 	pushTypes(prefix);
+}
+
+ValueType Validator::refType(bool nullable, const HeapType& heapType) const
+{
+	ValueType type{};
+	type.opcode = nullable ? ValueTypeCode::RefNull : ValueTypeCode::Ref;
+	type.heapType = heapType.isTypeIndex
+			? static_cast<int32_t>(heapType.typeIndex)
+			: static_cast<int32_t>(heapType.abstract);
+	return type;
+}
+
+ValueType Validator::refTopForHeap(const HeapType& heapType) const
+{
+	ValueType top{};
+	top.heapType = -1;
+	if (heapType.isTypeIndex) {
+		top.opcode = subtypeAt(heapType.typeIndex).isFunction()
+				? ValueTypeCode::FuncRef : ValueTypeCode::AnyRef;
+		return top;
+	}
+	switch (heapType.abstract) {
+		case AbstractHeapType::Func:
+		case AbstractHeapType::NoFunc:
+			top.opcode = ValueTypeCode::FuncRef;
+			break;
+		case AbstractHeapType::Extern:
+		case AbstractHeapType::NoExtern:
+			top.opcode = ValueTypeCode::ExternRef;
+			break;
+		case AbstractHeapType::Exn:
+		case AbstractHeapType::NoExn:
+			top.opcode = ValueTypeCode::ExnRef;
+			break;
+		default:
+			// Any/Eq/I31/Struct/Array/None share the `any` hierarchy.
+			top.opcode = ValueTypeCode::AnyRef;
+			break;
+	}
+	return top;
+}
+
+void Validator::validateRefTest(bool nullable, const HeapType& heapType)
+{
+	const ValueType target = refType(nullable, heapType);
+	requireWellFormedType(target, "ref.test target");
+	const ValueType top = refTopForHeap(heapType);
+	const auto actual = popAny();
+	if (!actual)
+		return; // unreachable: the stack is polymorphic
+	if (!assignable(*actual, top))
+		fail("type mismatch: ref.test operand is outside the target hierarchy");
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::validateRefCast(bool nullable, const HeapType& heapType)
+{
+	const ValueType target = refType(nullable, heapType);
+	requireWellFormedType(target, "ref.cast target");
+	const ValueType top = refTopForHeap(heapType);
+	const auto actual = popAny();
+	if (!actual)
+		return; // unreachable: the stack is polymorphic
+	if (!assignable(*actual, top))
+		fail("type mismatch: ref.cast operand is outside the target hierarchy");
+	pushValue(target);
 }
 
 void Validator::dispatchBrOnCast(uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2)

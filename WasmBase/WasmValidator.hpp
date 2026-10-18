@@ -82,6 +82,13 @@ private:
 	// A typed reference's concrete heap type must name a declared type.
 	void requireWellFormedType(const ValueType& type, const std::string& where) const;
 
+	// `ref.test`/`ref.cast` target construction and the top of the target's
+	// heap hierarchy (used for the operand's same-hierarchy rule).
+	ValueType refType(bool nullable, const HeapType& heapType) const;
+	ValueType refTopForHeap(const HeapType& heapType) const;
+	void validateRefTest(bool nullable, const HeapType& heapType);
+	void validateRefCast(bool nullable, const HeapType& heapType);
+
 	void checkLimits(const Limits& limits, bool is64, bool isMemory,
 					 const char* what, std::size_t index) const;
 	void requireMemoryAccess(const MemArg& arg, uint32_t naturalLog2) const;
@@ -178,6 +185,10 @@ private:
 	void dispatchReturnCallRef(TypeIdx arg) override;
 	void dispatchRefFunc(FuncIdx arg) override;
 	void dispatchRefNull(const HeapType& arg) override;
+	void dispatchRefTest(const HeapType& arg) override;
+	void dispatchRefTestNull(const HeapType& arg) override;
+	void dispatchRefCast(const HeapType& arg) override;
+	void dispatchRefCastNull(const HeapType& arg) override;
 	void dispatchThrow(TagIdx arg) override;
 	void dispatchThrowRef() override;
 	void dispatchTryTable(const BlockType& arg1, std::vector<CatchClause>&& arg2) override;
