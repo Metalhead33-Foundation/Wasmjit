@@ -225,7 +225,10 @@ The GC proposal is built around *representation independence* and *pay as you
 go*. The following are **not** required, which is precisely the room we use in
 §6.
 
-### 3.1 No collector, no collection schedule
+### 3.1 No required collector or collection schedule
+
+The engine *does* implement reclamation — reference counting plus cycle
+collection (§6.1/§7); this section records only what the spec leaves free.
 
 - **Nothing requires that unreachable objects ever be reclaimed.** A
   conforming engine may allocate forever and never collect; the only observable
@@ -342,8 +345,8 @@ for the full design.)
   backing is `mmap` and not the libc allocator, **no `malloc`/`calloc`/`free`
   happens while generated code runs** (§6.1/GC-2, `docs/SAFETY.md` §2.3).
 - `allocateStructObject(size, localTypeIdx)`: allocates from the heap, writes the
-  canonical `TypeId` and a reference count of 1 into the 8-byte header
-  (`[u32 TypeId][u32 refcount]`, `WasmGcHeader.hpp`).
+  canonical `TypeId` and a reference count of **0** (unowned at birth) into the
+  8-byte header (`[u32 TypeId][u32 refcount]`, `WasmGcHeader.hpp`).
 - `allocateArrayObject(dataOffset, elementSize, length, localTypeIdx)`: **one**
   heap block — `[u32 TypeId][u32 refcount][u32 length]` followed by the inline
   elements at `dataOffset` (§4.8, D13/GC-9).
@@ -351,7 +354,7 @@ for the full design.)
   "is this a GC pointer" from the region ranges, and `tryGetGcTypeId` then reads
   the `TypeId` at the header — the old per-object `gcObjectTypes` map is gone
   (D2/GC-1), so matching works across instances and allocates nothing per object.
-- **Reference counting & ownership (RC-5/RC-1b).** `ModuleInstance::refClone/`
+- **Reference counting & ownership (RC-1/RC-1b).** `ModuleInstance::refClone/`
   `refDrop`/`refStore` maintain the header count through `std::atomic_ref`
   (saturating clone, trapping underflow). A fresh object is **unowned** (count
   0); the first *owning slot* retains it — heap slots (`struct.set`/`struct.new`,
@@ -710,17 +713,18 @@ cause viewed through the reference-types feature.
 
 ### 5.6 Collector / lifetime gaps (closed by RC-1…RC-3)
 
-§3.1 lets an engine never reclaim, so an absent collector is a *choice*, not a
-defect. Revision 3 nevertheless committed to reclaiming by reference counting, so
-these three rows are what had to close for "objects are never freed" to stop
-being a defect — and they have. What remains on the lifetime side is the
-borrow-side leak documented with `RC-1b` in §7 (parameters and control-flow slots
-hold *uncounted* borrows, so a reference only ever held there leaks until
-teardown).
+§3.1 lets an engine never reclaim, so a non-collecting engine would still be
+conformant; this engine nevertheless committed to reclaiming, and the collector
+is present. `RC-1`/`RC-1b`/`RC-2`/`RC-3` are closed, and the reclamation/refcount/
+heap tests assert `GcHeap::liveObjectCount()` returns to its baseline, including
+a two-object cycle and a cycle still referenced from outside. What remains on the
+lifetime side is the borrow-side leak documented with `RC-1b` in §7 (parameters
+and control-flow slots hold *uncounted* borrows, so a reference only ever held
+there leaks until teardown).
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| ~~L1~~ | ~~**Nothing is recycled yet.** Objects are allocated from the GC heap, but `reclaimGcObject` only records the 0 transition; the region holds them until instance teardown.~~ **Done:** `reclaimGcObject` queues a zero-count object and `gcCollect()` recycles it at a safepoint, releasing the object's own references iteratively (RC-1b/RC-3); a graph kept alive only by its own cycles is reclaimed by trial deletion (RC-2). Asserted by the seven `GC reclamation:` tests against `GcHeap::liveObjectCount()`. | `WasmModuleInstance.cpp` (`gcCollect`, `collectCycles`), `WasmGcHeap.cpp` | Closed |
+| ~~L1~~ | ~~**Nothing is recycled yet.** Objects are allocated from the GC heap, but `reclaimGcObject` only records the 0 transition; the region holds them until instance teardown.~~ **Done:** `reclaimGcObject` queues a zero-count object and `gcCollect()` recycles it at a safepoint, releasing the object's own references iteratively (RC-1b/RC-3); a graph kept alive only by its own cycles is reclaimed by trial deletion (RC-2). Asserted by the `GC reference counting`, `GC heap` and `GC reclamation:` tests against `GcHeap::liveObjectCount()`. | `WasmModuleInstance.cpp` (`gcCollect`, `collectCycles`), `WasmGcHeap.cpp` | Closed |
 | ~~L2~~ | ~~**No ownership or refcount exists.** A `void*` reference carries no count and no lifetime; there is nowhere to hook reclamation.~~ **Done (RC-1):** every GC object carries `[u32 TypeId][u32 refcount]` (`WasmGcHeader.hpp`, D14) and is *unowned at birth*; `refClone`/`refDrop`/`refStore` move the count. Non-objects (`i31`, `externref`, `funcref`) are deliberately uncounted (RC12). | `WasmGcHeader.hpp`, `ModuleInstance::ref*` | Closed |
 | ~~L3~~ | ~~**Reference slots are written as raw pointers.** `struct.set` / `array.set` / `table.set` / globals store `void*` with no retain/release barrier, and the JIT emits the store directly.~~ **Done (RC-1 / D15):** every reference-typed store goes through `wasm_ref_store` (retain the new value, release the overwritten one) — `struct.set`, `array.set`/`fill`/`copy`, `local.set`/`tee`, `global.set`, `table.set` and the segment copies. §7's guardrail forbids a bare store into a reference slot. | `emitRefStore`, `dispatch*Set` | Closed |
 
@@ -779,7 +783,7 @@ host is a bug, not an implementation-limitation footnote. Therefore:
 
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
-| D1 | **Reference counting with a region-backed allocator** (§6.1): a refcount in the object header, mmap-backed per-instance regions segregated by size class with per-region free lists, region teardown as the leak backstop. ◑ The backing allocator landed (`GC-2a`); recycle/RC-1b is next. | §3.1: any reclamation algorithm (and none) is conformant; §3.1 also does not require cycles to be collected. | Deterministic, pause-free reclamation with **no stack maps and no root scanning** — the two things this JIT cannot cheaply provide — and no libc allocator call in generated code. |
+| D1 | **Reference counting with a region-backed allocator** (§6.1): a refcount in the object header, mmap-backed per-instance regions segregated by size class with per-region free lists, region teardown as the leak backstop. ✅ Implemented: `RC-1`/`RC-1b`/`RC-2`/`RC-3` are closed; the header count, safepoint reclaimer, trial deletion and block recycling are in the tree. | §3.1: any reclamation algorithm (and none) is conformant; §3.1 also does not require cycles to be collected. | Deterministic, pause-free reclamation with **no stack maps and no root scanning** — the two things this JIT cannot cheaply provide — and no libc allocator call in generated code. |
 | D2 | ✅ **Type identity only in the header; `gcObjectTypes` deleted.** The tag is read from `ref[0]`, and `GcHeap::owns(ref)` (region ranges) is the GC-pointer test. | The `TypeId` is stamped at offset 0; §3.2 lets us choose the representation. | Done (GC-2a): fixes cross-instance casts (G1), removes a hash-map lookup per cast, removes a permanently-growing map (H2) and a per-object libc allocation. |
 | D3 | **Cache subtype `depth` in the tag / canonical table** so `ref.test`/`ref.cast` against an abstract type becomes an integer range/bitset check, not a `TypeRegistry` call. | `CanonicalType` already stores `depth`; cast semantics are ours to implement (§3.2). | Inline-able casts on the hot path. |
 | D4 | **Keep `i31` unboxed**, low-bit tagged; require heap allocations to be ≥8-byte aligned so the tag is unambiguous. | §3.2 explicitly allows unboxed scalars; already implemented. | No allocation for i31, trivial `ref.eq`. |
@@ -939,7 +943,7 @@ defaults, not just the first one to be fixed.
 | `R4` | ✗ Open (deferred) | — | `externref` has no host model (`ABI.md`, §7.2); it stays a `void*` and `ref.eq` on externrefs is unvalidated pointer equality. |
 | `R5` | ✅ Closed | `table_fill` 36/0/9, `array_new_data` 28/0/0, `relaxed_min_max` 25/0/0 | Reference arguments *and* results are marshalled; `either` result lists are verified against each alternative. |
 | **`R8`** | ✅ **Closed** | `validateElementSegment`; strict run | The validator checks the segment's declared type against the table and every item against both; the table-initialiser half was already fixed (`G5`). |
-| `L1`, `L2`, `L3` | ✅ Closed | the seven `GC reclamation:` tests | Reclamation, refcounts and the store barrier all landed. |
+| `L1`, `L2`, `L3` | ✅ Closed | the reclamation/refcount/heap tests | Reclamation, refcounts and the store barrier all landed. |
 | `GC-1` | ✅ Closed | `ref_test` 69/2, `ref_cast` 45/0 | Function references are identified through the Store's callable-range registry and carry their canonical `TypeId`, so a cross-module cast needs no per-instance pointer scan. |
 | `GC-2` | ✅ Closed | `GC heap` test, poison-on-free | Recycler wired; debug poison on free landed. |
 | `GC-3` | ✅ Closed | `i31` 68/0 | — |
@@ -1063,17 +1067,22 @@ from actions the harness silently skips: `table_get.wast:23` is
 `assert_return` observes the untouched table. These are §5.4 artifacts, not
 runtime bugs.
 
-Reference counting now has **two manual tests**. `GC reference counting: clone,
-drop and store barriers` (`Test/wasm_wat/gc_refcount.wat`) covers the header
-count, `refClone`/`refDrop`/`refStore`, the underflow trap, the safepoint
-`gcCollect` + block reuse (RC-1b), runs the JIT `struct.set` barrier end to end,
-and asserts `array.new_default` is a **single** heap block (inline arrays, GC-9).
-`GC heap: region allocation, alignment and
-recycling` covers 16-byte alignment, mmap zero-fill, region batching (1000
-objects → at most one extra region), free-list reuse, dedicated large regions,
-`owns()` classification and bulk `releaseSet`. Still absent: an end-to-end
-*reclamation* check (memory returning) and a cycle test, both of which need
-`RC-2`/`RC-1b`; until then a leak is visible only through process RSS.
+Reference counting and reclamation are covered by the `GC reference counting`,
+`GC heap` and `GC reclamation:` tests. `GC reference counting: clone, drop and
+store barriers` (`Test/wasm_wat/gc_refcount.wat`) covers the header count,
+`refClone`/`refDrop`/`refStore`, the underflow trap, the safepoint `gcCollect` +
+block reuse (RC-1b), runs the JIT `struct.set` barrier end to end, and asserts
+`array.new_default` is a **single** heap block (inline arrays, GC-9). `GC heap:
+region allocation, alignment and recycling` covers 16-byte alignment, mmap
+zero-fill, region batching (1000 objects → at most one extra region), free-list
+reuse, dedicated large regions, `owns()` classification and bulk `releaseSet`.
+The reclamation tests assert `GcHeap::liveObjectCount()` returns to its baseline
+(RC-1b), that a dying object releases its reference fields (RC-3), that a deep
+chain is released iteratively, that a two-object cycle is collected (RC-2), and
+that a cycle still referenced from outside survives the trial with its counts
+restored. A leak is therefore visible through `liveObjectCount()`, not only
+through process RSS; the known remaining leak is the uncounted-borrow case in
+RC-1b.
 
 ## 9. References
 

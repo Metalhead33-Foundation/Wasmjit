@@ -1333,8 +1333,9 @@ void OpcodeDispatcher::storeExceptionPayload(jit_value_t exnPayload, const WASM:
 				jit_type_get_offset(tuple, static_cast<unsigned int>(i)));
 		if (WASM::isReferenceType(payload.params[i].val.opcode)) {
 			// The exception object owns its payload references (same barrier as
-			// struct.new). The object is never freed, so this is a bounded
-			// lifetime cost, documented in the note.
+			// struct.new). Exception objects are Store-owned and live until
+			// teardown, so this is a bounded lifetime cost, documented in the
+			// exceptions note; GC objects themselves are reclaimed normally.
 			jit_value_t slot = jit_insn_add(function, exnPayload,
 					jit_value_create_nint_constant(function, jit_type_nint, offset));
 			emitRefStore(slot, values[i]);

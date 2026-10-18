@@ -1176,7 +1176,7 @@ void* ModuleInstance::allocateStructObject(uint32_t size, uint32_t localTypeIdx)
 		trap(TrapKind::OutOfMemory);
 	*reinterpret_cast<uint32_t*>(object + GcHeader::kTypeIdOffset) = typeId.value;
 	// A fresh object is *unowned*: count 0 until a reference-typed slot retains
-	// it (docs/proposals/GC.md RC-5/RC-1b). A value on the operand stack is a
+	// it (docs/proposals/GC.md RC-1/RC-1b). A value on the operand stack is a
 	// borrow, so the creator does not own a reference.
 	*reinterpret_cast<uint32_t*>(object + GcHeader::kRefcountOffset) = 0;
 	++internals.gcAllocatedObjects;

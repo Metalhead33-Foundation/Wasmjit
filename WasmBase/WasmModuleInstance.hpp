@@ -111,12 +111,13 @@ private:
 	void reclaimGcObject(void* ref);
 
 	// ── Safepoint walker (docs/proposals/GC.md RC-3) ────────────────────────
-	// A dying object's reference-typed slots must be released too, or the whole
-	// child graph leaks — plain reference counting, not cycle collection. This
-	// is the runtime's typed layout walk: `TypeId` -> the reference-typed field
-	// /element offsets. The backend-side mirror is `structFieldOffsets`; both derive
-	// offsets from the shared gcAlignUp/gcStorageAlign/gcStorageBytes helpers
-	// (docs/proposals/GC.md §6.3 / H1).
+	// A dying object's reference-typed slots must be released too, or its
+	// acyclic child graph leaks until teardown; cycles are handled separately by
+	// the trial deletion below (RC-2). This is the runtime's typed layout walk:
+	// `TypeId` -> the reference-typed field/element offsets. The backend-side
+	// mirror is `structFieldOffsets`; both derive offsets from the shared
+	// gcAlignUp/gcStorageAlign/gcStorageBytes helpers (docs/proposals/GC.md
+	// §6.3 / H1).
 	const Subtype* subtypeForTypeId(TypeId typeId) const;
 	// Release every reference `ref` holds, appending children that reach zero to
 	// `work` (the caller's iterative worklist — no recursion, so a 10⁶-deep

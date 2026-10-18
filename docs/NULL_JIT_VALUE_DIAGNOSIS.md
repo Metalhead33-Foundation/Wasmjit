@@ -3,7 +3,7 @@
 Status: investigation note (revision 2 — root cause confirmed empirically; **fix
 D implemented** — unmodelled value types are rejected at load).
 Audience: anyone touching LibJIT codegen, the reference-counting ownership work
-([`proposals/GC.md`](proposals/GC.md) RC-5/RC-1b), or adding a new value type.
+([`proposals/GC.md`](proposals/GC.md) RC-1/RC-1b), or adding a new value type.
 
 This note records the investigation into the crash that keeps
 `kStackOwnsRefs` (`LibJit/LibjitOpcodeDispatcher.cpp`) disabled. It is a
@@ -156,7 +156,7 @@ if (loaded == nullptr)
 
 ## 10. References
 
-- [`proposals/GC.md`](proposals/GC.md) RC-5/RC-1b — the ownership model and the
+- [`proposals/GC.md`](proposals/GC.md) RC-1/RC-1b — the ownership model and the
   `kStackOwnsRefs` flag this note explains.
 - `WasmBase/WasmType.hpp` — `ValueTypeCode` (no `exnref` / `nullexnref`).
 - `LibJit/LibJitTypeTranslation.cpp` — `translatePrimitiveType` `default:
