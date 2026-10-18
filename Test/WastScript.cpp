@@ -573,7 +573,7 @@ private:
 	void skip(const std::string& reason);
 
 	WASM::ModuleInstance* instanceFor(const std::string& name, int line);
-	const WASM::FuncType* funcTypeFor(const WASM::ModuleInstance& instance, const WASM::Callable& callable);
+	std::optional<WASM::FuncType> funcTypeFor(const WASM::ModuleInstance& instance, const WASM::Callable& callable);
 
 	void runCommand(const ScriptCommand& command);
 	void onModule(const ScriptCommand& command);
@@ -722,17 +722,14 @@ WASM::ModuleInstance* ScriptRunner::instanceFor(const std::string& name, int lin
 	return lastInstance;
 }
 
-const WASM::FuncType* ScriptRunner::funcTypeFor(const WASM::ModuleInstance& instance, const WASM::Callable& callable)
+std::optional<WASM::FuncType> ScriptRunner::funcTypeFor(const WASM::ModuleInstance& instance, const WASM::Callable& callable)
 {
 	const WASM::Module* module = instance.context()->module;
-	if (module == nullptr || callable.localTypeIdx >= module->types.size())
-		return nullptr;
-
-	const WASM::Subtype& subtype = module->types[callable.localTypeIdx];
-	if (!subtype.isFunction())
-		return nullptr;
-
-	return &std::get<WASM::FuncType>(subtype.composite);
+	if (module == nullptr || callable.localTypeIdx >= module->typeCount())
+		return std::nullopt;
+	if (module->typeView(callable.localTypeIdx).kind() != WASM::CanonTypeKind::Func)
+		return std::nullopt;
+	return module->funcTypeAt(callable.localTypeIdx);
 }
 
 ScriptReport ScriptRunner::run(const Script& script)
@@ -917,8 +914,8 @@ void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 		return;
 	}
 
-	const WASM::FuncType* funcType = funcTypeFor(*instance, *callable);
-	if (funcType == nullptr) {
+	auto funcType = funcTypeFor(*instance, *callable);
+	if (!funcType) {
 		skip("export '" + action.field + "' does not have a plain function type");
 		return;
 	}
@@ -1048,8 +1045,8 @@ void ScriptRunner::onAssertTrap(const ScriptCommand& command)
 		return;
 	}
 
-	const WASM::FuncType* funcType = funcTypeFor(*instance, *callable);
-	if (funcType == nullptr) {
+	auto funcType = funcTypeFor(*instance, *callable);
+	if (!funcType) {
 		skip("export '" + action.field + "' does not have a plain function type");
 		return;
 	}
@@ -1116,8 +1113,8 @@ void ScriptRunner::onAssertException(const ScriptCommand& command)
 		return;
 	}
 
-	const WASM::FuncType* funcType = funcTypeFor(*instance, *callable);
-	if (funcType == nullptr) {
+	auto funcType = funcTypeFor(*instance, *callable);
+	if (!funcType) {
 		skip("export '" + action.field + "' does not have a plain function type");
 		return;
 	}
@@ -1309,8 +1306,8 @@ void ScriptRunner::onAction(const ScriptCommand& command)
 		return;
 	}
 
-	const WASM::FuncType* funcType = funcTypeFor(*instance, *callable);
-	if (funcType == nullptr) {
+	auto funcType = funcTypeFor(*instance, *callable);
+	if (!funcType) {
 		skip("export '" + action.field + "' does not have a plain function type");
 		return;
 	}
@@ -1375,8 +1372,8 @@ void ScriptRunner::onAssertExhaustion(const ScriptCommand& command)
 		return;
 	}
 
-	const WASM::FuncType* funcType = funcTypeFor(*instance, *callable);
-	if (funcType == nullptr) {
+	auto funcType = funcTypeFor(*instance, *callable);
+	if (!funcType) {
 		skip("export '" + action.field + "' does not have a plain function type");
 		return;
 	}

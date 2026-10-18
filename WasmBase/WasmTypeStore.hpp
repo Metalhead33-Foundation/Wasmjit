@@ -183,6 +183,25 @@ struct ComponentResourcePayload {
 	bool hasDestructor = false;
 };
 
+// One import/export declaration of a component or instance type. This is a
+// compact identity record, not the parser AST: names are interned, the sort is
+// encoded, and a referenced type is a Store TypeId (kNone when the declaration
+// is not type-bearing or its identity is still validator-only).
+struct ComponentDeclRecord {
+	StringId name = 0;
+	uint16_t sort = 0;      // ComponentSort
+	uint16_t coreSort = 0;  // CoreSort when sort == ComponentSort::Core
+	TypeId type{TypeId::kNone};
+};
+
+struct ComponentInstancePayload {
+	TypeSpan declarations;
+};
+
+struct ComponentComponentPayload {
+	TypeSpan declarations;
+};
+
 class TypeStore;
 
 // A view over a core record in the store, or over a temporary core record
@@ -238,6 +257,7 @@ public:
 	bool hasStreamElement() const;
 	std::span<const ComponentFuncParam> params() const;
 	std::span<const ComponentValueType> results() const;
+	std::span<const ComponentDeclRecord> declarations() const;
 	const ComponentResourcePayload& resource() const;
 	uint32_t typeRef() const;
 
@@ -273,6 +293,11 @@ public:
 	TypeId addComponentFunc(std::span<const ComponentFuncParam> params,
 			std::span<const ComponentValueType> results, bool isAsync);
 	TypeId addComponentResource(const ComponentResourcePayload& resource);
+	// Component/instance declarations are Store-owned nominal records for now:
+	// the declaration-set equality rule still has to be pinned against
+	// wasm-tools, so these are not structurally interned yet (TYPE_MODEL §7.11.2).
+	TypeId addComponentInstance(std::span<const ComponentDeclRecord> declarations);
+	TypeId addComponentComponent(std::span<const ComponentDeclRecord> declarations);
 	ComponentTypeView componentType(TypeId id) const;
 
 	// Structural component interning diagnostics (TM-8 first slice). Only
@@ -288,6 +313,7 @@ public:
 	TypeSpan appendLabels(std::span<const StringId> labels);
 	TypeSpan appendParams(std::span<const ComponentFuncParam> params);
 	TypeSpan appendResults(std::span<const ComponentValueType> results);
+	TypeSpan appendComponentDecls(std::span<const ComponentDeclRecord> declarations);
 
 	StringId internString(std::string_view text);
 	std::string_view string(StringId id) const;
@@ -301,6 +327,12 @@ public:
 	{
 		return record(id).kind <= TypeKind::CoreArray
 				? TypeDomain::Core : TypeDomain::Component;
+	}
+	// The TypeId space is shared, so core records are *not* a dense prefix:
+	// component records may have been appended between two core definitions.
+	bool isCoreType(TypeId id) const
+	{
+		return id.value < records_.size() && domain(id) == TypeDomain::Core;
 	}
 
 	std::size_t payloadBytes() const;
@@ -358,6 +390,9 @@ private:
 	std::vector<ComponentFuncPayload> componentFuncs_;
 	std::vector<ComponentResourcePayload> componentResources_;
 	std::vector<uint32_t> componentTypeRefs_;
+	std::vector<ComponentDeclRecord> componentDeclRecords_;
+	std::vector<ComponentInstancePayload> componentInstancePayloads_;
+	std::vector<ComponentComponentPayload> componentComponentPayloads_;
 
 	std::vector<std::string> strings_;
 	std::unordered_map<std::string, StringId> stringIds_;

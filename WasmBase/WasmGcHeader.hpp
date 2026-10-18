@@ -1,5 +1,6 @@
 #ifndef WASMGCHEADER_HPP
 #define WASMGCHEADER_HPP
+#include "WasmCanonicalType.hpp"
 #include "WasmType.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -80,12 +81,39 @@ inline size_t gcStorageAlign(const StorageType& st)
 	return gcStorageBytes(st);
 }
 
+// Canonical storage views carry no module-local type index; layout depends only
+// on opcode/packedness, so this is a lossless conversion for the GC layout and
+// store paths. Heap references remain opaque pointers in those paths.
+inline StorageType gcStorageView(const CanonStorageType& st)
+{
+	StorageType out;
+	out.isPacked = st.isPacked;
+	out.val.opcode = st.isPacked ? st.packed : st.value.opcode;
+	out.val.heapType = -1;
+	return out;
+}
+
+inline size_t gcStorageBytes(const CanonStorageType& st)
+{
+	return gcStorageBytes(gcStorageView(st));
+}
+
+inline size_t gcStorageAlign(const CanonStorageType& st)
+{
+	return gcStorageAlign(gcStorageView(st));
+}
+
 // The byte offset of an array's first element within the array object. It must
 // be identical in the runtime's allocateArrayObject/evalConstantExpr and in a
 // backend's array addressing (docs/proposals/GC.md §6.3 / H1).
 inline size_t gcArrayDataOffset(const StorageType& element)
 {
 	return gcAlignUp(GcHeader::kArrayHeaderBytes, gcStorageAlign(element));
+}
+
+inline size_t gcArrayDataOffset(const CanonStorageType& element)
+{
+	return gcArrayDataOffset(gcStorageView(element));
 }
 
 // True for every value type that *may* point at a GC heap object (or be null).

@@ -118,7 +118,7 @@ private:
 	// mirror is `structFieldOffsets`; both derive offsets from the shared
 	// gcAlignUp/gcStorageAlign/gcStorageBytes helpers (docs/proposals/GC.md
 	// §6.3 / H1).
-	const Subtype* subtypeForTypeId(TypeId typeId) const;
+	CoreTypeView subtypeForTypeId(TypeId typeId) const;
 	// Release every reference `ref` holds, appending children that reach zero to
 	// `work` (the caller's iterative worklist — no recursion, so a 10⁶-deep
 	// chain costs O(1) C stack). `slots` is caller-owned scratch, reused across

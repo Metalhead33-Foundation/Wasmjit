@@ -4,9 +4,11 @@
 #include "WasmSection.hpp"
 #include "WasmType.hpp"
 #include "WasmTypeIdentity.hpp"
+#include "WasmTypeStore.hpp"
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <span>
 #include <map>
@@ -36,14 +38,11 @@ struct Module : public Artifact
 {
 public:
 	std::vector<Section> sections;
-	// Non-owning view into the Store's TypeRegistry (see WasmTypeRegistry.hpp).
-	// Indices stay module-local, so this is exactly the module's slice.
-	std::span<const Subtype> types;
 	// Recursive type groups, in section order (see TypeGroup).
 	std::vector<TypeGroup> typeGroups;
-	// Process-wide identity of each local type. M2 scaffold: unique ids, not yet
-	// interned across modules (see docs/TYPE_IDENTITY.md). typeIds[i] matches
-	// types[i].
+	// Process-wide identity of each local type. The parser's `Subtype` buffer is
+	// discarded after interning; this vector is the module's only type state
+	// (docs/proposals/TYPE_MODEL.md TM-6). typeIds[i] names local type i.
 	std::vector<TypeId> typeIds;
 	std::vector<ImportFunction> importFunctions;
 	std::vector<ImportTable> importTables;
@@ -120,6 +119,15 @@ public:
 	// Map a module-local type index to its process-wide identity. Throws if the
 	// index is out of range.
 	TypeId typeId(LocalTypeIdx idx) const;
+	std::size_t typeCount() const { return typeIds.size(); }
+	// Store-owned view of one local type. This is the consumer-facing API: it
+	// never exposes a module-owned `Subtype` block.
+	CoreTypeView typeView(uint32_t idx) const;
+	CoreTypeView typeView(LocalTypeIdx idx) const { return typeView(idx.value); }
+	// Transitional compatibility signature view for backend compile paths. It
+	// contains only `StorageType`s derived from the Store; runtime paths use
+	// typeView() directly (TM-7).
+	FuncType funcTypeAt(uint32_t idx) const;
 	// Looks up a name from the well-known `name` custom section. Returns
 	// nullptr when the subsection or the index is absent. Names are metadata
 	// only: they never participate in validation, dispatch or identity
@@ -137,6 +145,15 @@ public:
 	void validate() const;
 	bool isSubtype(TypeIdx actual, TypeIdx expected) const;
 	bool heapTypeMatchesTypeIndex(TypeIdx actual, const HeapType& expected) const;
+private:
+	// Reverse local-map used only to materialise a compatibility `Subtype` whose
+	// references use module-local indices. It stores indices, not type payloads.
+	std::unordered_map<uint32_t, uint32_t> typeIndexById;
+	uint32_t localTypeIndex(TypeId id) const;
+	ValueType valueTypeFromCanon(const CanonValueType& type) const;
+	StorageType storageTypeFromCanon(const CanonStorageType& type) const;
+	FuncType funcTypeFromView(CoreTypeView view) const;
+public:
 	static std::string readLEB128String(DWasmStream& stream);
 };
 

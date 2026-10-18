@@ -124,11 +124,16 @@ void Module::processTypeSection(Elv::Io::Device& file, const Section& section)
 		parsedGroups.push_back(TypeGroup{LocalTypeIdx{groupFirst}, numSubtypes});
 	}
 
-	types = Store::global().types().registerModule(std::move(parsedTypes));
-	typeGroups = std::move(parsedGroups);
 	// Canonicalize and intern the groups; typeIds[i] is the process-wide identity
-	// of types[i] (docs/TYPE_IDENTITY.md §6.3).
-	typeIds = Store::global().types().internModule(types, typeGroups);
+	// of parsedTypes[i]. The parser vector is intentionally a local scratch
+	// buffer: after this call the Module owns no Subtype payload (TM-6).
+	typeIds = Store::global().types().internModule(parsedTypes, parsedGroups);
+	typeGroups = std::move(parsedGroups);
+	typeIndexById.clear();
+	typeIndexById.reserve(typeIds.size());
+	for (uint32_t i = 0; i < typeIds.size(); ++i)
+		if (!typeIds[i].isNone())
+			typeIndexById.emplace(typeIds[i].value, i);
 }
 
 void Module::processImportSection(Elv::Io::Device& file, const Section& section)
@@ -150,7 +155,7 @@ void Module::processImportSection(Elv::Io::Device& file, const Section& section)
 		if (kind == (uint8_t)ExternalKind::Function) {
 			uint32_t typeIdx;
 			wasmStream >> Elv::Io::Leb(typeIdx);
-			// This index points to your Module::types vector!
+			// This index points into the module-local type index space.
 			this->importFunctions.push_back({{moduleName, fieldName}, typeIdx});
 		}
 		else if (kind == (uint8_t)ExternalKind::Table) {
@@ -943,19 +948,25 @@ void Module::validateValueTypes() const
 			rejectUnsupportedValueType(where, index, code);
 	};
 
-	for (size_t i = 0; i < types.size(); ++i) {
-		const Subtype& st = types[i];
-		if (st.isFunction()) {
-			const FuncType& ft = std::get<FuncType>(st.composite);
-			for (const StorageType& p : ft.params)
-				check("function type parameter", i, p.val.opcode);
-			for (const StorageType& r : ft.results)
-				check("function type result", i, r.val.opcode);
-		} else if (st.isStruct()) {
-			for (const FieldType& f : std::get<StructType>(st.composite).fields)
-				check("struct field", i, f.storageType.val.opcode);
-		} else if (st.isArray()) {
-			check("array element", i, std::get<ArrayType>(st.composite).elementType.storageType.val.opcode);
+	const auto checkStorage = [&check](const CanonStorageType& storage, const char* where, size_t index) {
+		check(where, index, storage.isPacked ? storage.packed : storage.value.opcode);
+	};
+	for (size_t i = 0; i < typeCount(); ++i) {
+		const CoreTypeView view = typeView(static_cast<uint32_t>(i));
+		switch (view.kind()) {
+		case CanonTypeKind::Func:
+			for (const CanonStorageType& p : view.funcParams())
+				checkStorage(p, "function type parameter", i);
+			for (const CanonStorageType& r : view.funcResults())
+				checkStorage(r, "function type result", i);
+			break;
+		case CanonTypeKind::Struct:
+			for (const CanonFieldType& f : view.structFields())
+				checkStorage(f.storage, "struct field", i);
+			break;
+		case CanonTypeKind::Array:
+			checkStorage(view.arrayElement().storage, "array element", i);
+			break;
 		}
 	}
 	for (size_t i = 0; i < importTables.size(); ++i)
@@ -1057,30 +1068,84 @@ TypeId Module::typeId(LocalTypeIdx idx) const
 	return typeIds[idx.value];
 }
 
+CoreTypeView Module::typeView(uint32_t idx) const
+{
+	if (idx >= typeIds.size())
+		throw std::out_of_range("Module::typeView: local type index out of range");
+	if (typeIds[idx].isNone())
+		throw std::runtime_error("Module::typeView: local type has no canonical identity");
+	return Store::global().types().canonicalType(typeIds[idx]);
+}
+
+uint32_t Module::localTypeIndex(TypeId id) const
+{
+	const auto it = typeIndexById.find(id.value);
+	if (it == typeIndexById.end())
+		throw std::runtime_error("Module: canonical type reference is not declared by this module");
+	return it->second;
+}
+
+ValueType Module::valueTypeFromCanon(const CanonValueType& type) const
+{
+	ValueType out;
+	out.opcode = type.opcode;
+	out.heapType = -1;
+	if (type.opcode == ValueTypeCode::Ref || type.opcode == ValueTypeCode::RefNull) {
+		switch (type.heap.kind) {
+		case CanonHeapType::Kind::Abstract:
+			out.heapType = static_cast<int32_t>(type.heap.abstract);
+			break;
+		case CanonHeapType::Kind::Global:
+			out.heapType = static_cast<int32_t>(localTypeIndex(type.heap.id));
+			break;
+		case CanonHeapType::Kind::Rec:
+			throw std::runtime_error("Module: unresolved recursive type reference");
+		}
+	}
+	return out;
+}
+
+StorageType Module::storageTypeFromCanon(const CanonStorageType& type) const
+{
+	StorageType out;
+	out.isPacked = type.isPacked;
+	if (type.isPacked) {
+		out.val.opcode = type.packed;
+		out.val.heapType = -1;
+	} else {
+		out.val = valueTypeFromCanon(type.value);
+	}
+	return out;
+}
+
+FuncType Module::funcTypeFromView(CoreTypeView view) const
+{
+	if (view.kind() != CanonTypeKind::Func)
+		throw std::runtime_error("Module: type is not a function type");
+	FuncType out;
+	out.params.reserve(view.funcParams().size());
+	out.results.reserve(view.funcResults().size());
+	for (const CanonStorageType& p : view.funcParams())
+		out.params.push_back(storageTypeFromCanon(p));
+	for (const CanonStorageType& r : view.funcResults())
+		out.results.push_back(storageTypeFromCanon(r));
+	return out;
+}
+
+FuncType Module::funcTypeAt(uint32_t idx) const
+{
+	return funcTypeFromView(typeView(idx));
+}
+
 bool Module::isSubtype(TypeIdx actual, TypeIdx expected) const
 {
-	if (actual == expected)
-		return true;
-	if (actual >= types.size() || expected >= types.size())
+	if (actual >= typeIds.size() || expected >= typeIds.size())
 		return false;
-
-	// Two distinct local indices can still denote the same type: the canonical
-	// registry interns structurally equivalent definitions (including recursive
-	// and isomorphic groups) to one process-wide TypeId. That identity is the
-	// spec's type equivalence, so it implies subtyping in both directions.
 	const TypeId actualId = typeIds[actual];
 	const TypeId expectedId = typeIds[expected];
-	if (actualId == expectedId && actualId != TypeId{TypeId::kNone})
-		return true;
-
-	const Subtype& subtype = types[actual];
-	for (uint32_t super : subtype.supertypeIndices) {
-		if (super == expected)
-			return true;
-		if (super < types.size() && isSubtype(super, expected))
-			return true;
-	}
-	return false;
+	if (actualId.isNone() || expectedId.isNone())
+		return actual == expected;
+	return Store::global().types().matches(actualId, expectedId);
 }
 
 bool Module::heapTypeMatchesTypeIndex(TypeIdx actual, const HeapType& expected) const

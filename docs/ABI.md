@@ -249,12 +249,12 @@ is fully wired: memory instructions carry a `MemIdx`, and the JIT indexes
 
 The same pattern extends to every runtime entity. The Store now also owns:
 
-- **The runtime type registry** (`TypeRegistry`, `WasmTypeRegistry.hpp`). Each
-  parsed module registers its type block; the registry owns the block's storage
-  and `Module::types` is a non-owning `std::span<const Subtype>` over it. Type
-  indices remain module-local, so `module.types[i]` is unchanged. Blocks are
-  heap-allocated and never relocated, so the views stay valid for the process
-  lifetime.
+- **The runtime type registry** (`TypeRegistry`, `WasmTypeRegistry.hpp`). The
+  registry owns the compact canonical records in `TypeStore`; a parsed module
+  keeps only its local→`TypeId` mapping (`Module::typeIds`) and exposes
+  `TypeStore` views through `Module::typeView`. Type indices remain module-local.
+  The parser's `Subtype` vector is temporary and is discarded after interning,
+  so the Store is the sole owner of the type definitions.
 - **Tables** (`StoreOwnedTable` / `TableInstance`, `WasmTable.hpp`). The store
   owns each slot array (`Callable**`); `ModuleInstance` borrows one
   `TableInstance*` per declared table into `internals.tableRefs`, which is

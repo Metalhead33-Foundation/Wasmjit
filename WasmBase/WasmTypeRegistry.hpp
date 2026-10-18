@@ -5,7 +5,6 @@
 #include "WasmTypeIdentity.hpp"
 #include "WasmTypeStore.hpp"
 #include <cstddef>
-#include <memory>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -15,29 +14,17 @@ namespace WASM {
 /*
 Owns the runtime type definitions of every loaded module on behalf of the Store.
 
-Historically each Module owned its own `std::vector<Subtype>`. The registry now
-owns those blocks, while a Module keeps only a non-owning `std::span<const
-Subtype>` view. Type indices stay module-local: a span covers exactly one
-module's slice, so `module.types[i]` keeps its old meaning.
-
-Each block is heap-allocated and never relocated, so the views stay valid for
-the lifetime of the process (the Store outlives every module).
+`internModule` consumes a temporary parser vector, writes the compact canonical
+records into `TypeStore`, and returns only the local-index -> TypeId map. The
+parser vector is discarded before `Module::processTypeSection` returns, so a
+loaded module holds no `Subtype` block (docs/proposals/TYPE_MODEL.md TM-6).
 */
 class TypeRegistry
 {
 public:
-	using TypeBlock = std::vector<Subtype>;
-
-	// Take ownership of one module's type block and return a stable view. An
-	// identical raw type section (same module-local indices and contents) reuses
-	// the existing store-owned block, so modules never own a duplicate syntax
-	// copy of the same section. (This is a TM-6 transition step; the compact
-	// TypeStore records are already the canonical identity.)
-	std::span<const Subtype> registerModule(std::vector<Subtype> types);
-
 	// Canonicalize and intern each `rec` group, returning the process-wide
-	// TypeId of every local type (indexed by LocalTypeIdx). `types` must be the
-	// span previously returned by registerModule.
+	// TypeId of every local type (indexed by LocalTypeIdx). `types` is a
+	// temporary parser buffer owned by the caller; it is not retained.
 	std::vector<TypeId> internModule(std::span<const Subtype> types,
 									 std::span<const TypeGroup> groups);
 
@@ -49,6 +36,7 @@ public:
 
 	// Canonical views. canonicalType(id) requires id.value < internedTypeCount().
 	CoreTypeView canonicalType(TypeId id) const { return store_.coreType(id); }
+	bool isCoreType(TypeId id) const { return store_.isCoreType(id); }
 	const CanonRecGroup& canonicalGroup(RecGroupId id) const { return recGroups[id.value]; }
 
 	// The shared compact store. Component parsing/validation uses the same
@@ -57,11 +45,6 @@ public:
 	TypeStore&       store()       { return store_; }
 	const TypeStore& store() const { return store_; }
 
-	// Unique store-owned parser blocks (not loaded modules): identical type
-	// sections share one block.
-	size_t moduleCount() const { return blocks.size(); }
-	// Types physically stored in the unique parser blocks (Subtype storage).
-	size_t typeCount() const { return totalTypes; }
 	// Types seen across all modules (the "parsed" side of the dedup ratio).
 	size_t parsedTypeCount() const { return parsedTypes; }
 	// Unique canonical types (the "interned" side of the dedup ratio).
@@ -69,12 +52,6 @@ public:
 	size_t canonicalGroupCount() const { return recGroups.size(); }
 
 private:
-	// unique_ptr keeps every block at a fixed address; the deque-free layout is
-	// deliberate so spans into a block are never invalidated by later modules.
-	std::vector<std::unique_ptr<TypeBlock>> blocks;
-	// Raw subtype-block key -> index into `blocks`.
-	std::unordered_map<std::string, size_t> blockIntern;
-	size_t totalTypes = 0;
 	size_t parsedTypes = 0;
 
 	// Compact canonical records, indexed by TypeId.value; entries are appended

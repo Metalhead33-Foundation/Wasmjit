@@ -729,28 +729,31 @@ constexpr size_t kArrayLengthOffset = GcHeader::kArrayLengthOffset;
 // Delegate to the shared helpers so the runtime and the backend cannot drift (H1).
 size_t storageBytes(const StorageType& st) { return gcStorageBytes(st); }
 size_t storageAlign(const StorageType& st) { return gcStorageAlign(st); }
+size_t storageBytes(const CanonStorageType& st) { return gcStorageBytes(st); }
+size_t storageAlign(const CanonStorageType& st) { return gcStorageAlign(st); }
 size_t alignUp(size_t value, size_t alignment) { return gcAlignUp(value, alignment); }
 
-std::vector<size_t> structFieldOffsets(const StructType& st)
+std::vector<size_t> structFieldOffsets(CoreTypeView st)
 {
 	std::vector<size_t> offsets;
-	offsets.reserve(st.fields.size());
+	const auto fields = st.structFields();
+	offsets.reserve(fields.size());
 	size_t offset = kGcHeaderBytes;
-	for (const FieldType& f : st.fields) {
-		offset = alignUp(offset, storageAlign(f.storageType));
+	for (const CanonFieldType& f : fields) {
+		offset = alignUp(offset, storageAlign(f.storage));
 		offsets.push_back(offset);
-		offset += storageBytes(f.storageType);
+		offset += storageBytes(f.storage);
 	}
 	return offsets;
 }
 
-size_t structSize(const StructType& st)
+size_t structSize(CoreTypeView st)
 {
 	size_t end = kGcHeaderBytes;
 	size_t maxAlign = kGcHeaderBytes;
-	for (const FieldType& f : st.fields) {
-		const size_t a = storageAlign(f.storageType);
-		end = alignUp(end, a) + storageBytes(f.storageType);
+	for (const CanonFieldType& f : st.structFields()) {
+		const size_t a = storageAlign(f.storage);
+		end = alignUp(end, a) + storageBytes(f.storage);
 		if (a > maxAlign) maxAlign = a;
 	}
 	return alignUp(end, maxAlign);
@@ -889,21 +892,22 @@ Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 
 			case GCOpcode::StructNewDefault: {
 				const uint32_t typeIdx = stream.readLEB128<uint32_t>();
-				const StructType& st = std::get<StructType>(module->types[typeIdx].composite);
+				const CoreTypeView st = module->typeView(typeIdx);
 				Value v{}; v.ref = allocateStructObject(static_cast<uint32_t>(structSize(st)), typeIdx); v.kind = ValueTypeCode::StructRef;
 				stack.push_back(v);
 				break;
 			}
 			case GCOpcode::StructNew: {
 				const uint32_t typeIdx = stream.readLEB128<uint32_t>();
-				const StructType& st = std::get<StructType>(module->types[typeIdx].composite);
+				const CoreTypeView st = module->typeView(typeIdx);
+				const auto stFields = st.structFields();
 				const std::vector<size_t> offsets = structFieldOffsets(st);
-				std::vector<Value> fields(st.fields.size());
-				for (size_t i = st.fields.size(); i-- > 0; )
-					fields[i] = popValue();
+				std::vector<Value> fieldValues(stFields.size());
+				for (size_t i = stFields.size(); i-- > 0; )
+					fieldValues[i] = popValue();
 				void* object = allocateStructObject(static_cast<uint32_t>(structSize(st)), typeIdx);
-				for (size_t i = 0; i < st.fields.size(); ++i)
-					storeValue(object, offsets[i], st.fields[i].storageType, fields[i]);
+				for (size_t i = 0; i < stFields.size(); ++i)
+					storeValue(object, offsets[i], gcStorageView(stFields[i].storage), fieldValues[i]);
 				Value v{}; v.ref = object; v.kind = ValueTypeCode::StructRef;
 				stack.push_back(v);
 				break;
@@ -911,27 +915,29 @@ Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 
 			case GCOpcode::ArrayNewDefault: {
 				const uint32_t typeIdx = stream.readLEB128<uint32_t>();
-				const ArrayType& at = std::get<ArrayType>(module->types[typeIdx].composite);
+				const CoreTypeView at = module->typeView(typeIdx);
+				const CanonFieldType& element = at.arrayElement();
 				const uint32_t length = static_cast<uint32_t>(popValue().i32);
 				Value v{}; v.ref = allocateArrayObject(
-					static_cast<uint32_t>(gcArrayDataOffset(at.elementType.storageType)),
-					static_cast<uint32_t>(storageBytes(at.elementType.storageType)), length, typeIdx);
+					static_cast<uint32_t>(gcArrayDataOffset(element.storage)),
+					static_cast<uint32_t>(storageBytes(element.storage)), length, typeIdx);
 				v.kind = ValueTypeCode::ArrayRef;
 				stack.push_back(v);
 				break;
 			}
 			case GCOpcode::ArrayNew: {
 				const uint32_t typeIdx = stream.readLEB128<uint32_t>();
-				const ArrayType& at = std::get<ArrayType>(module->types[typeIdx].composite);
+				const CoreTypeView at = module->typeView(typeIdx);
+				const CanonFieldType& element = at.arrayElement();
 				const uint32_t length = static_cast<uint32_t>(popValue().i32);
 				const Value init = popValue();
-				const uint32_t dataOffset = static_cast<uint32_t>(gcArrayDataOffset(at.elementType.storageType));
+				const uint32_t dataOffset = static_cast<uint32_t>(gcArrayDataOffset(element.storage));
 				void* object = allocateArrayObject(dataOffset,
-					static_cast<uint32_t>(storageBytes(at.elementType.storageType)), length, typeIdx);
+					static_cast<uint32_t>(storageBytes(element.storage)), length, typeIdx);
 				uint8_t* data = static_cast<uint8_t*>(object) + dataOffset;
-				const size_t elementSize = storageBytes(at.elementType.storageType);
+				const size_t elementSize = storageBytes(element.storage);
 				for (uint32_t i = 0; i < length; ++i)
-					storeValue(data + static_cast<size_t>(i) * elementSize, 0, at.elementType.storageType, init);
+					storeValue(data + static_cast<size_t>(i) * elementSize, 0, gcStorageView(element.storage), init);
 				Value v{}; v.ref = object; v.kind = ValueTypeCode::ArrayRef;
 				stack.push_back(v);
 				break;
@@ -939,17 +945,18 @@ Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 			case GCOpcode::ArrayNewFixed: {
 				const uint32_t typeIdx = stream.readLEB128<uint32_t>();
 				const uint32_t count = stream.readLEB128<uint32_t>();
-				const ArrayType& at = std::get<ArrayType>(module->types[typeIdx].composite);
+				const CoreTypeView at = module->typeView(typeIdx);
+				const CanonFieldType& element = at.arrayElement();
 				std::vector<Value> values(count);
 				for (size_t i = count; i-- > 0; )
 					values[i] = popValue();
-				const uint32_t dataOffset = static_cast<uint32_t>(gcArrayDataOffset(at.elementType.storageType));
+				const uint32_t dataOffset = static_cast<uint32_t>(gcArrayDataOffset(element.storage));
 				void* object = allocateArrayObject(dataOffset,
-					static_cast<uint32_t>(storageBytes(at.elementType.storageType)), count, typeIdx);
+					static_cast<uint32_t>(storageBytes(element.storage)), count, typeIdx);
 				uint8_t* data = static_cast<uint8_t*>(object) + dataOffset;
-				const size_t elementSize = storageBytes(at.elementType.storageType);
+				const size_t elementSize = storageBytes(element.storage);
 				for (uint32_t i = 0; i < count; ++i)
-					storeValue(data + static_cast<size_t>(i) * elementSize, 0, at.elementType.storageType, values[i]);
+					storeValue(data + static_cast<size_t>(i) * elementSize, 0, gcStorageView(element.storage), values[i]);
 				Value v{}; v.ref = object; v.kind = ValueTypeCode::ArrayRef;
 				stack.push_back(v);
 				break;
@@ -1403,47 +1410,45 @@ void ModuleInstance::reclaimGcObject(void* ref)
 	++internals.gcReclaimedObjects;
 }
 
-const Subtype* ModuleInstance::subtypeForTypeId(TypeId typeId) const
+CoreTypeView ModuleInstance::subtypeForTypeId(TypeId typeId) const
 {
-	// The type section is small and this runs once per dying object, so a linear
-	// scan over the canonical ids is enough — and comparing *canonical* ids means
-	// an object created from an identical type in another module is walked too.
-	for (uint32_t i = 0; i < module->types.size(); ++i) {
-		const Subtype& subtype = module->types[i];
-		if (!subtype.isStruct() && !subtype.isArray())
-			continue;
-		if (module->typeId(LocalTypeIdx{i}).value == typeId.value)
-			return &subtype;
-	}
-	return nullptr;
+	// The canonical id is process-wide: an object created from an identical type
+	// in another module is walked too. Core records are a prefix of the store, so
+	// a non-core or out-of-range id is simply not this walker's type.
+	const TypeRegistry& registry = Store::global().types();
+	if (!registry.isCoreType(typeId))
+		return {};
+	const CoreTypeView view = registry.canonicalType(typeId);
+	if (view.kind() != CanonTypeKind::Struct && view.kind() != CanonTypeKind::Array)
+		return {};
+	return view;
 }
 
 void ModuleInstance::childSlotsOf(void* ref, TypeId typeId, std::vector<uint8_t*>& slots)
 {
-	const Subtype* subtype = subtypeForTypeId(typeId);
-	if (subtype == nullptr)
+	const CoreTypeView subtype = subtypeForTypeId(typeId);
+	if (!subtype.valid())
 		return; // not this instance's type: nothing to walk (leaks, never corrupts)
 
 	uint8_t* bytes = static_cast<uint8_t*>(ref);
-	if (subtype->isStruct()) {
+	if (subtype.kind() == CanonTypeKind::Struct) {
 		// The same offset arithmetic as structFieldOffsets (H1).
-		const StructType& st = std::get<StructType>(subtype->composite);
 		size_t offset = GcHeader::kHeaderBytes;
-		for (const FieldType& field : st.fields) {
-			offset = gcAlignUp(offset, gcStorageAlign(field.storageType));
-			if (isReferenceType(field.storageType.val.opcode))
+		for (const CanonFieldType& field : subtype.structFields()) {
+			offset = gcAlignUp(offset, gcStorageAlign(field.storage));
+			if (!field.storage.isPacked && isReferenceType(field.storage.value.opcode))
 				slots.push_back(bytes + offset);
-			offset += gcStorageBytes(field.storageType);
+			offset += gcStorageBytes(field.storage);
 		}
 		return;
 	}
 
-	const FieldType& element = std::get<ArrayType>(subtype->composite).elementType;
-	if (!isReferenceType(element.storageType.val.opcode))
+	const CanonFieldType& element = subtype.arrayElement();
+	if (element.storage.isPacked || !isReferenceType(element.storage.value.opcode))
 		return;
 	const uint32_t length = *reinterpret_cast<const uint32_t*>(bytes + GcHeader::kArrayLengthOffset);
-	const size_t dataOffset = gcArrayDataOffset(element.storageType);
-	const size_t stride = gcStorageBytes(element.storageType);
+	const size_t dataOffset = gcArrayDataOffset(element.storage);
+	const size_t stride = gcStorageBytes(element.storage);
 	for (uint32_t i = 0; i < length; ++i)
 		slots.push_back(bytes + dataOffset + i * stride);
 }

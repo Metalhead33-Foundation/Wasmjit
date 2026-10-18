@@ -320,12 +320,13 @@ These appear in Post-MVP documents, not in the standard:
 `WasmBase/WasmTypeRegistry.{hpp,cpp}` — see [`TYPE_IDENTITY.md`](../TYPE_IDENTITY.md)
 for the full design.)
 
-- `TypeRegistry::registerModule` takes ownership of a module's `Subtype` block
-  and hands back a stable `span`.
-- `TypeRegistry::internModule` canonicalises each `rec` group into
-  `CanonicalType` records, serialises the group to a key, interns it, and
-  returns a `LocalTypeIdx -> TypeId` map. `CanonRecGroup` records the
-  `[first, first+count)` run so a group's members stay contiguous.
+- `TypeRegistry::internModule` consumes a temporary parser vector, canonicalises
+  each `rec` group into `CanonicalType` records, serialises the group to a key,
+  interns it, and returns a `LocalTypeIdx -> TypeId` map. It retains no
+  per-module `Subtype` block.
+- `CanonRecGroup` records the `[first, first+count)` run so a group's members
+  stay contiguous. `Module::typeView`/`ModuleInstance` resolve GC object
+  `TypeId`s to `CoreTypeView` without a module-local type scan.
 - Declared-subtype validation runs before interning: a supertype must exist,
   must not be `final`, and the comptype must match structurally
   (`subtypes.wat`, `bad_subtype_*` tests).

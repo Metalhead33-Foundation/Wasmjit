@@ -1,4 +1,5 @@
 #include "WasmValidator.hpp"
+#include "WasmStore.hpp"
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <limits>
 #include <unordered_set>
@@ -30,19 +31,13 @@ void Validator::fail(const std::string& message) const
 	throw ValidationError(prefix + message);
 }
 
-const Subtype& Validator::subtypeAt(uint32_t typeIdx) const
+FuncType Validator::funcTypeAt(uint32_t typeIdx) const
 {
-	if (typeIdx >= module.types.size())
+	if (typeIdx >= module.typeCount())
 		fail("unknown type " + std::to_string(typeIdx));
-	return module.types[typeIdx];
-}
-
-const FuncType& Validator::funcTypeAt(uint32_t typeIdx) const
-{
-	const Subtype& subtype = subtypeAt(typeIdx);
-	if (!subtype.isFunction())
+	if (module.typeView(typeIdx).kind() != CanonTypeKind::Func)
 		fail("type " + std::to_string(typeIdx) + " is not a function type");
-	return std::get<FuncType>(subtype.composite);
+	return module.funcTypeAt(typeIdx);
 }
 
 void Validator::requireFunctionIndex(uint32_t idx) const
@@ -116,7 +111,8 @@ bool Validator::tableIsFuncRef(uint32_t idx) const
 	case ValueTypeCode::RefNull:
 		if (element->heapType >= 0) {
 			const auto typeIdx = static_cast<uint32_t>(element->heapType);
-			return typeIdx < module.types.size() && module.types[typeIdx].isFunction();
+			return typeIdx < module.typeCount()
+					&& module.typeView(typeIdx).kind() == CanonTypeKind::Func;
 		}
 		return element->heapType == static_cast<int32_t>(ValueTypeCode::Func);
 	default:
@@ -203,7 +199,7 @@ std::vector<ValueType> Validator::blockParams(const BlockType& blockType) const
 	if (blockType.isTypeIndex)
 		return paramTypes(funcTypeAt(blockType.typeIndex));
 	if (blockType.heapType >= 0
-			&& static_cast<uint32_t>(blockType.heapType) >= module.types.size())
+			&& static_cast<uint32_t>(blockType.heapType) >= module.typeCount())
 		fail("block type: unknown type " + std::to_string(blockType.heapType));
 	// A value-typed block type is a single *result*; it never has parameters.
 	return {};
@@ -216,7 +212,7 @@ std::vector<ValueType> Validator::blockResults(const BlockType& blockType) const
 	if (blockType.isVoid())
 		return {};
 	if (blockType.heapType >= 0
-			&& static_cast<uint32_t>(blockType.heapType) >= module.types.size())
+			&& static_cast<uint32_t>(blockType.heapType) >= module.typeCount())
 		fail("block type: unknown type " + std::to_string(blockType.heapType));
 	return {ValueType{blockType.valType, blockType.heapType}};
 }
@@ -325,14 +321,15 @@ bool Validator::refSubtype(const ValueType& actual, const ValueType& expected) c
 			if (type.heapType >= 0) {
 				const auto idx = static_cast<uint32_t>(type.heapType);
 				out.idx = idx;
-				if (idx >= module.types.size()) {
+				if (idx >= module.typeCount()) {
 					out.kind = Kind::Other;
 					break;
 				}
-				const Subtype& subtype = module.types[idx];
-				out.kind = subtype.isFunction() ? Kind::ConcreteFunc
-						: subtype.isStruct() ? Kind::ConcreteStruct
-						: subtype.isArray() ? Kind::ConcreteArray : Kind::Other;
+				switch (module.typeView(idx).kind()) {
+				case CanonTypeKind::Func:   out.kind = Kind::ConcreteFunc; break;
+				case CanonTypeKind::Struct: out.kind = Kind::ConcreteStruct; break;
+				case CanonTypeKind::Array:  out.kind = Kind::ConcreteArray; break;
+				}
 			} else {
 				switch (static_cast<ValueTypeCode>(type.heapType)) {
 				case ValueTypeCode::Func:
@@ -415,7 +412,7 @@ void Validator::requireWellFormedType(const ValueType& type, const std::string& 
 {
 	if ((type.opcode == ValueTypeCode::Ref || type.opcode == ValueTypeCode::RefNull)
 			&& type.heapType >= 0
-			&& static_cast<uint32_t>(type.heapType) >= module.types.size()) {
+			&& static_cast<uint32_t>(type.heapType) >= module.typeCount()) {
 		fail(where + ": unknown type " + std::to_string(type.heapType));
 	}
 }
@@ -545,7 +542,7 @@ ValueTypeCode Validator::tableIndexType(TableIdx tableIdx) const
 	return (limits.flags & 0x04) != 0 ? ValueTypeCode::I64 : ValueTypeCode::I32;
 }
 
-const FuncType& Validator::functionType(FuncIdx idx) const
+FuncType Validator::functionType(FuncIdx idx) const
 {
 	requireFunctionIndex(idx);
 	if (idx < module.importFunctions.size())
@@ -600,20 +597,33 @@ void Validator::validateModule()
 			fail("non-empty tag result type");
 	}
 
-	// Every typed reference must name a declared type.
-	for (std::size_t i = 0; i < module.types.size(); ++i) {
-		const Subtype& subtype = module.types[i];
-		if (subtype.isFunction()) {
-			for (const StorageType& p : std::get<FuncType>(subtype.composite).params)
-				requireWellFormedType(p.val, "function type parameter");
-			for (const StorageType& r : std::get<FuncType>(subtype.composite).results)
-				requireWellFormedType(r.val, "function type result");
-		} else if (subtype.isStruct()) {
-			for (const FieldType& field : std::get<StructType>(subtype.composite).fields)
-				requireWellFormedType(field.storageType.val, "struct field");
-		} else if (subtype.isArray()) {
-			requireWellFormedType(
-				std::get<ArrayType>(subtype.composite).elementType.storageType.val, "array element");
+	// Every typed reference must name a declared type. This walks the canonical
+	// view directly: no module-owned Subtype and no module-local index is read.
+	const auto checkStorage = [this](const CanonStorageType& storage, const char* where) {
+		if (storage.isPacked)
+			return;
+		const CanonValueType& value = storage.value;
+		if ((value.opcode == ValueTypeCode::Ref || value.opcode == ValueTypeCode::RefNull)
+				&& value.heap.kind == CanonHeapType::Kind::Global
+				&& !Store::global().types().isCoreType(value.heap.id))
+			fail(std::string(where) + ": unknown type");
+	};
+	for (std::size_t i = 0; i < module.typeCount(); ++i) {
+		const CoreTypeView view = module.typeView(static_cast<uint32_t>(i));
+		switch (view.kind()) {
+		case CanonTypeKind::Func:
+			for (const CanonStorageType& p : view.funcParams())
+				checkStorage(p, "function type parameter");
+			for (const CanonStorageType& r : view.funcResults())
+				checkStorage(r, "function type result");
+			break;
+		case CanonTypeKind::Struct:
+			for (const CanonFieldType& field : view.structFields())
+				checkStorage(field.storage, "struct field");
+			break;
+		case CanonTypeKind::Array:
+			checkStorage(view.arrayElement().storage, "array element");
+			break;
 		}
 	}
 	for (const ImportTable& imp : module.importTables)
@@ -719,7 +729,7 @@ void Validator::validateGlobalInit(const Global& global, std::size_t index)
 		case 0xD0: { // ref.null
 			HeapType ht;
 			stream >> ht;
-			if (ht.isTypeIndex && ht.typeIndex >= module.types.size())
+			if (ht.isTypeIndex && ht.typeIndex >= module.typeCount())
 				fail(label + ": unknown type");
 			ValueType vt{};
 			vt.opcode = ValueTypeCode::RefNull;
@@ -836,7 +846,7 @@ std::optional<ValueType> Validator::validateConstExpr(const std::vector<uint8_t>
 		case 0xD0: { // ref.null
 			HeapType ht;
 			stream >> ht;
-			if (ht.isTypeIndex && ht.typeIndex >= module.types.size())
+			if (ht.isTypeIndex && ht.typeIndex >= module.typeCount())
 				fail(label + ": unknown type");
 			ValueType type{};
 			type.opcode = ValueTypeCode::RefNull;
@@ -1140,7 +1150,7 @@ void Validator::dispatchRefFunc(FuncIdx arg)
 void Validator::dispatchRefNull(const HeapType& heapType)
 {
 	if (heapType.isTypeIndex)
-		subtypeAt(heapType.typeIndex);
+		(void)module.typeView(heapType.typeIndex);
 	ValueType type{};
 	type.opcode = ValueTypeCode::RefNull;
 	type.heapType = heapType.isTypeIndex
@@ -1238,7 +1248,7 @@ ValueType Validator::refTopForHeap(const HeapType& heapType) const
 	ValueType top{};
 	top.heapType = -1;
 	if (heapType.isTypeIndex) {
-		top.opcode = subtypeAt(heapType.typeIndex).isFunction()
+		top.opcode = module.typeView(heapType.typeIndex).kind() == CanonTypeKind::Func
 				? ValueTypeCode::FuncRef : ValueTypeCode::AnyRef;
 		return top;
 	}

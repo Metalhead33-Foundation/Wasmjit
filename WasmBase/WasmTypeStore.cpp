@@ -403,6 +403,22 @@ TypeId TypeStore::addComponentResource(const ComponentResourcePayload& resource)
 	return addComponentRecord(TypeKind::ComponentResource, 0, payload);
 }
 
+TypeId TypeStore::addComponentInstance(std::span<const ComponentDeclRecord> declarations)
+{
+	const TypeSpan span = appendComponentDecls(declarations);
+	const uint32_t payload = static_cast<uint32_t>(componentInstancePayloads_.size());
+	componentInstancePayloads_.push_back(ComponentInstancePayload{span});
+	return addComponentRecord(TypeKind::ComponentInstance, 0, payload);
+}
+
+TypeId TypeStore::addComponentComponent(std::span<const ComponentDeclRecord> declarations)
+{
+	const TypeSpan span = appendComponentDecls(declarations);
+	const uint32_t payload = static_cast<uint32_t>(componentComponentPayloads_.size());
+	componentComponentPayloads_.push_back(ComponentComponentPayload{span});
+	return addComponentRecord(TypeKind::ComponentComponent, 0, payload);
+}
+
 TypeSpan TypeStore::appendFields(std::span<const ComponentField> fields)
 {
 	const TypeSpan span{static_cast<uint32_t>(componentFields_.size()),
@@ -448,6 +464,15 @@ TypeSpan TypeStore::appendResults(std::span<const ComponentValueType> results)
 	const TypeSpan span{static_cast<uint32_t>(componentResults_.size()),
 			static_cast<uint32_t>(results.size())};
 	componentResults_.insert(componentResults_.end(), results.begin(), results.end());
+	return span;
+}
+
+TypeSpan TypeStore::appendComponentDecls(std::span<const ComponentDeclRecord> declarations)
+{
+	const TypeSpan span{static_cast<uint32_t>(componentDeclRecords_.size()),
+			static_cast<uint32_t>(declarations.size())};
+	componentDeclRecords_.insert(componentDeclRecords_.end(),
+			declarations.begin(), declarations.end());
 	return span;
 }
 
@@ -505,7 +530,10 @@ std::size_t TypeStore::payloadBytes() const
 			+ componentStreams_.capacity() * sizeof(ComponentStreamPayload)
 			+ componentFuncs_.capacity() * sizeof(ComponentFuncPayload)
 			+ componentResources_.capacity() * sizeof(ComponentResourcePayload)
-			+ componentTypeRefs_.capacity() * sizeof(uint32_t);
+			+ componentTypeRefs_.capacity() * sizeof(uint32_t)
+			+ componentDeclRecords_.capacity() * sizeof(ComponentDeclRecord)
+			+ componentInstancePayloads_.capacity() * sizeof(ComponentInstancePayload)
+			+ componentComponentPayloads_.capacity() * sizeof(ComponentComponentPayload);
 	for (const std::string& text : strings_)
 		bytes += text.size() + 1;
 	bytes += stringIds_.size() * (sizeof(std::string) + sizeof(StringId));
@@ -549,6 +577,9 @@ std::size_t TypeStore::allocationCount() const
 	add(componentFuncs_);
 	add(componentResources_);
 	add(componentTypeRefs_);
+	add(componentDeclRecords_);
+	add(componentInstancePayloads_);
+	add(componentComponentPayloads_);
 	add(strings_);
 	add(stringIds_);
 	add(componentIntern_);
@@ -745,6 +776,21 @@ std::span<const ComponentValueType> ComponentTypeView::results() const
 	const TypeRecord& record = store_->record(id_);
 	const ComponentFuncPayload& payload = store_->componentFuncs_[record.payload];
 	return spanOf(store_->componentResults_, payload.results);
+}
+
+std::span<const ComponentDeclRecord> ComponentTypeView::declarations() const
+{
+	const TypeRecord& record = store_->record(id_);
+	switch (record.kind) {
+	case TypeKind::ComponentInstance:
+		return spanOf(store_->componentDeclRecords_,
+				store_->componentInstancePayloads_[record.payload].declarations);
+	case TypeKind::ComponentComponent:
+		return spanOf(store_->componentDeclRecords_,
+				store_->componentComponentPayloads_[record.payload].declarations);
+	default:
+		return {};
+	}
 }
 
 const ComponentResourcePayload& ComponentTypeView::resource() const

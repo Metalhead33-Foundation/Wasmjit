@@ -1172,23 +1172,25 @@ jit_type_t OpcodeDispatcher::arrayRefType(WASM::TypeIdx arg, bool nullable) cons
 	return const_cast<OpcodeDispatcher*>(this)->jitRefTypeForHeapType(ht, nullable);
 }
 
-const WASM::StructType& OpcodeDispatcher::structTypeForIndex(WASM::TypeIdx arg) const
+WASM::CoreTypeView OpcodeDispatcher::structTypeForIndex(WASM::TypeIdx arg) const
 {
-	assert(arg < module.types.size());
-	assert(module.types[arg].isStruct());
-	return std::get<WASM::StructType>(module.types[arg].composite);
+	assert(arg < module.typeCount());
+	const WASM::CoreTypeView view = module.typeView(arg);
+	assert(view.kind() == WASM::CanonTypeKind::Struct);
+	return view;
 }
 
-const WASM::ArrayType& OpcodeDispatcher::arrayTypeForIndex(WASM::TypeIdx arg) const
+WASM::CoreTypeView OpcodeDispatcher::arrayTypeForIndex(WASM::TypeIdx arg) const
 {
-	assert(arg < module.types.size());
-	assert(module.types[arg].isArray());
-	return std::get<WASM::ArrayType>(module.types[arg].composite);
+	assert(arg < module.typeCount());
+	const WASM::CoreTypeView view = module.typeView(arg);
+	assert(view.kind() == WASM::CanonTypeKind::Array);
+	return view;
 }
 
 jit_type_t OpcodeDispatcher::arrayElementJitType(WASM::TypeIdx arg) const
 {
-	return const_cast<OpcodeDispatcher*>(this)->jitTypeForValueType(arrayTypeForIndex(arg).elementType.storageType.val);
+	return typeTranslator.translateCanonStorage(arrayTypeForIndex(arg).arrayElement().storage);
 }
 
 jit_nint OpcodeDispatcher::structFieldOffset(WASM::TypeIdx arg, uint32_t fieldIndex) const
@@ -1209,7 +1211,7 @@ jit_nint OpcodeDispatcher::arrayDataOffset(WASM::TypeIdx arg) const
 	// Elements are inline; the offset depends only on the element's alignment,
 	// and must match the runtime's allocateArrayObject / gcArrayDataOffset (H1).
 	return static_cast<jit_nint>(
-			WASM::gcArrayDataOffset(arrayTypeForIndex(arg).elementType.storageType));
+			WASM::gcArrayDataOffset(arrayTypeForIndex(arg).arrayElement().storage));
 }
 
 jit_value_t OpcodeDispatcher::arrayElementBase(jit_value_t arrayRef, WASM::TypeIdx arg)
@@ -1284,7 +1286,7 @@ void OpcodeDispatcher::pushCallResults(const WASM::FuncType& calleeSig, jit_valu
 
 // ── Exceptions (docs/proposals/EXCEPTIONS.md EX-3/EX-4) ─────────────────────
 
-const WASM::FuncType& OpcodeDispatcher::tagPayloadType(WASM::TagIdx tagIdx) const
+WASM::FuncType OpcodeDispatcher::tagPayloadType(WASM::TagIdx tagIdx) const
 {
 	const size_t imported = module.importTags.size();
 	uint32_t typeIdx = 0;
@@ -1296,9 +1298,10 @@ const WASM::FuncType& OpcodeDispatcher::tagPayloadType(WASM::TagIdx tagIdx) cons
 			throw std::runtime_error("tag index out of range for this module");
 		typeIdx = module.tags[local].typeIdx;
 	}
-	if (typeIdx >= module.types.size() || !module.types[typeIdx].isFunction())
+	if (typeIdx >= module.typeCount()
+			|| module.typeView(typeIdx).kind() != WASM::CanonTypeKind::Func)
 		throw std::runtime_error("tag does not name a function type");
-	return std::get<WASM::FuncType>(module.types[typeIdx].composite);
+	return module.funcTypeAt(typeIdx);
 }
 
 WASM::TagId OpcodeDispatcher::tagIdForClause(const WASM::CatchClause& clause) const
@@ -1465,10 +1468,10 @@ WASM::TypeIdx OpcodeDispatcher::functionTypeIndexForFunc(WASM::FuncIdx funcIdx) 
 	return module.internalFunctionTypeIndices[internalIdx];
 }
 
-const WASM::FuncType& OpcodeDispatcher::functionSignatureForType(WASM::TypeIdx typeIdx) const
+WASM::FuncType OpcodeDispatcher::functionSignatureForType(WASM::TypeIdx typeIdx) const
 {
-	assert(module.types[typeIdx].isFunction());
-	return std::get<WASM::FuncType>(module.types[typeIdx].composite);
+	assert(module.typeView(typeIdx).kind() == WASM::CanonTypeKind::Func);
+	return module.funcTypeAt(typeIdx);
 }
 
 jit_value_t OpcodeDispatcher::callablePointerForFuncIndex(WASM::FuncIdx funcIdx)
@@ -1596,10 +1599,9 @@ std::vector<WASM::StorageType> OpcodeDispatcher::storageTypesForBlockType(const 
 		st.val = WASM::ValueType{bt.valType, bt.heapType};
 		return {st};
 	}
-	assert(static_cast<uint32_t>(bt.typeIndex) < module.types.size());
-	const WASM::Subtype& sub = module.types[bt.typeIndex];
-	assert(sub.isFunction());
-	const WASM::FuncType& ft = std::get<WASM::FuncType>(sub.composite);
+	assert(static_cast<uint32_t>(bt.typeIndex) < module.typeCount());
+	assert(module.typeView(bt.typeIndex).kind() == WASM::CanonTypeKind::Func);
+	const WASM::FuncType ft = module.funcTypeAt(bt.typeIndex);
 	return ft.results;
 }
 
@@ -1607,10 +1609,9 @@ std::vector<WASM::StorageType> OpcodeDispatcher::parameterTypesForBlockType(cons
 {
 	if (!bt.isTypeIndex)
 		return {};
-	assert(static_cast<uint32_t>(bt.typeIndex) < module.types.size());
-	const WASM::Subtype& sub = module.types[bt.typeIndex];
-	assert(sub.isFunction());
-	const WASM::FuncType& ft = std::get<WASM::FuncType>(sub.composite);
+	assert(static_cast<uint32_t>(bt.typeIndex) < module.typeCount());
+	assert(module.typeView(bt.typeIndex).kind() == WASM::CanonTypeKind::Func);
+	const WASM::FuncType ft = module.funcTypeAt(bt.typeIndex);
 	return ft.params;
 }
 
@@ -2359,8 +2360,8 @@ void OpcodeDispatcher::dispatchCall(WASM::FuncIdx funcIdx)
 
 void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx typeIdx, WASM::TableIdx tableIdx)
 {
-	assert(module.types[typeIdx].isFunction());
-	const WASM::FuncType& ft = std::get<WASM::FuncType>(module.types[typeIdx].composite);
+	assert(module.typeView(typeIdx).kind() == WASM::CanonTypeKind::Func);
+	const WASM::FuncType ft = module.funcTypeAt(typeIdx);
 	jit_type_t calleeJitSig = jitTypeForTypeIdx(typeIdx);
 
 	jit_value_t tableElemIdx = popValue();
@@ -2529,9 +2530,8 @@ void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::Tabl
 {
 	// Trampoline when the callee's declared type matches this function's own
 	// signature (see docs/TAILCALLS.md TC-2).
-	if (signatureIsUniform(std::get<WASM::FuncType>(module.types[arg1].composite)) &&
-		std::get<WASM::FuncType>(module.types[arg1].composite).params.size() <= WASM::kTailCallArgSlots) {
-		const WASM::FuncType& ft = std::get<WASM::FuncType>(module.types[arg1].composite);
+	const WASM::FuncType ft = module.funcTypeAt(arg1);
+	if (signatureIsUniform(ft) && ft.params.size() <= WASM::kTailCallArgSlots) {
 		jit_value_t tableElemIdx = popValue();
 		std::vector<jit_value_t> stackArgs(ft.params.size());
 		for (size_t i = ft.params.size(); i--; )
@@ -2562,9 +2562,8 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx arg)
 	// Trampoline when the referenced type matches this function's own signature
 	// (see docs/TAILCALLS.md TC-2). This is what makes `return_call_ref`-based
 	// self-recursion (e.g. return_call_ref.wast's `count`) constant-stack.
-	if (signatureIsUniform(std::get<WASM::FuncType>(module.types[arg].composite)) &&
-		std::get<WASM::FuncType>(module.types[arg].composite).params.size() <= WASM::kTailCallArgSlots) {
-		const WASM::FuncType& ft = std::get<WASM::FuncType>(module.types[arg].composite);
+	const WASM::FuncType ft = module.funcTypeAt(arg);
+	if (signatureIsUniform(ft) && ft.params.size() <= WASM::kTailCallArgSlots) {
 		jit_value_t callablePtr = popValue();
 		std::vector<jit_value_t> stackArgs(ft.params.size());
 		for (size_t i = ft.params.size(); i--; )
@@ -3932,7 +3931,8 @@ void OpcodeDispatcher::dispatchBrOnNonNull(WASM::LabelIdx arg) {
 	// Fall-through: only `t*` remains — the reference is consumed.
 }
 void OpcodeDispatcher::dispatchStructNew(WASM::TypeIdx arg) {
-	const WASM::StructType& st = structTypeForIndex(arg);
+	const WASM::CoreTypeView st = structTypeForIndex(arg);
+	const auto fields = st.structFields();
 	jit_type_t structType = jitTypeForTypeIdx(arg);
 	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint};
 	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, params, 3, 1);
@@ -3944,12 +3944,13 @@ void OpcodeDispatcher::dispatchStructNew(WASM::TypeIdx arg) {
 	jit_value_t object = jit_insn_call_native(function, "wasm_struct_new_default_impl",
 		reinterpret_cast<void*>(wasm_struct_new_default_impl), sig, args, 3, 0);
 
-	std::vector<jit_value_t> values(st.fields.size());
-	for (size_t i = st.fields.size(); i-- > 0; )
+	std::vector<jit_value_t> values(fields.size());
+	for (size_t i = fields.size(); i-- > 0; )
 		values[i] = popValue();
-	for (size_t i = 0; i < st.fields.size(); ++i) {
-		jit_type_t fieldType = jitTypeForValueType(st.fields[i].storageType.val);
-		if (WASM::isReferenceType(st.fields[i].storageType.val.opcode)) {
+	for (size_t i = 0; i < fields.size(); ++i) {
+		const WASM::CanonStorageType& storage = fields[i].storage;
+		jit_type_t fieldType = typeTranslator.translateCanonStorage(storage);
+		if (!storage.isPacked && WASM::isReferenceType(storage.value.opcode)) {
 			// The new object's reference field owns a count (RC-5).
 			jit_value_t slot = jit_insn_add(function, object,
 					jit_value_create_nint_constant(function, jit_type_nint,
@@ -3976,39 +3977,44 @@ void OpcodeDispatcher::dispatchStructNewDefault(WASM::TypeIdx arg) {
 	pushValue(castRefValue(object, structRefType(arg, false)));
 }
 void OpcodeDispatcher::dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2) {
-	const WASM::StructType& st = structTypeForIndex(arg1);
-	assert(arg2 < st.fields.size());
+	const auto fields = structTypeForIndex(arg1).structFields();
+	assert(arg2 < fields.size());
 	jit_value_t ref = popValue();
 	emitTrapIfNull(WASM::TrapKind::NullStructureReference, refAsVoidPtr(ref));
-	jit_type_t fieldType = jitTypeForValueType(st.fields[arg2].storageType.val);
+	jit_type_t fieldType = typeTranslator.translateCanonStorage(fields[arg2].storage);
 	pushValue(jit_insn_load_relative(function, refAsVoidPtr(ref), structFieldOffset(arg1, arg2), fieldType));
 }
 void OpcodeDispatcher::dispatchStructGetS(WASM::TypeIdx arg1, uint32_t arg2) {
-	const WASM::StructType& st = structTypeForIndex(arg1);
-	assert(arg2 < st.fields.size());
+	const auto fields = structTypeForIndex(arg1).structFields();
+	assert(arg2 < fields.size());
 	jit_value_t ref = popValue();
 	emitTrapIfNull(WASM::TrapKind::NullStructureReference, refAsVoidPtr(ref));
-	jit_type_t loadType = st.fields[arg2].storageType.val.opcode == WASM::ValueTypeCode::I8 ? jit_type_sbyte : jit_type_short;
+	const bool isI8 = fields[arg2].storage.isPacked
+			&& fields[arg2].storage.packed == WASM::ValueTypeCode::I8;
+	jit_type_t loadType = isI8 ? jit_type_sbyte : jit_type_short;
 	jit_value_t raw = jit_insn_load_relative(function, refAsVoidPtr(ref), structFieldOffset(arg1, arg2), loadType);
 	pushValue(jit_insn_convert(function, raw, jit_type_int, 0));
 }
 void OpcodeDispatcher::dispatchStructGetU(WASM::TypeIdx arg1, uint32_t arg2) {
-	const WASM::StructType& st = structTypeForIndex(arg1);
-	assert(arg2 < st.fields.size());
+	const auto fields = structTypeForIndex(arg1).structFields();
+	assert(arg2 < fields.size());
 	jit_value_t ref = popValue();
 	emitTrapIfNull(WASM::TrapKind::NullStructureReference, refAsVoidPtr(ref));
-	jit_type_t loadType = st.fields[arg2].storageType.val.opcode == WASM::ValueTypeCode::I8 ? jit_type_ubyte : jit_type_ushort;
+	const bool isI8 = fields[arg2].storage.isPacked
+			&& fields[arg2].storage.packed == WASM::ValueTypeCode::I8;
+	jit_type_t loadType = isI8 ? jit_type_ubyte : jit_type_ushort;
 	jit_value_t raw = jit_insn_load_relative(function, refAsVoidPtr(ref), structFieldOffset(arg1, arg2), loadType);
 	pushValue(jit_insn_convert(function, raw, jit_type_int, 0));
 }
 void OpcodeDispatcher::dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2) {
-	const WASM::StructType& st = structTypeForIndex(arg1);
-	assert(arg2 < st.fields.size());
+	const auto fields = structTypeForIndex(arg1).structFields();
+	assert(arg2 < fields.size());
 	jit_value_t value = popValue();
 	jit_value_t ref = popValue();
 	emitTrapIfNull(WASM::TrapKind::NullStructureReference, refAsVoidPtr(ref));
 	const jit_nint offset = structFieldOffset(arg1, arg2);
-	if (WASM::isReferenceType(st.fields[arg2].storageType.val.opcode)) {
+	const WASM::CanonStorageType& storage = fields[arg2].storage;
+	if (!storage.isPacked && WASM::isReferenceType(storage.value.opcode)) {
 		// Reference-typed field: go through the write barrier (retain new,
 		// release old), then release the stack's ownership of the new value.
 		jit_value_t slot = jit_insn_add(function, refAsVoidPtr(ref),
@@ -4018,7 +4024,7 @@ void OpcodeDispatcher::dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2) {
 		emitDropValue(ref);
 		return;
 	}
-	jit_type_t fieldType = jitTypeForValueType(st.fields[arg2].storageType.val);
+	jit_type_t fieldType = typeTranslator.translateCanonStorage(storage);
 	jit_insn_store_relative(function, refAsVoidPtr(ref), offset,
 							castRefValue(value, fieldType));
 	emitDropValue(ref);
@@ -4047,7 +4053,7 @@ void OpcodeDispatcher::dispatchArrayNew(WASM::TypeIdx arg) {
 	jit_value_t idx = jit_insn_load(function, idxSlot);
 	jit_value_t cond = jit_insn_lt(function, idx, jit_insn_convert(function, length, jit_type_uint, 0));
 	jit_insn_branch_if_not(function, cond, &endLabel);
-	if (WASM::isReferenceType(arrayTypeForIndex(arg).elementType.storageType.val.opcode)) {
+	if (WASM::isReferenceType(arrayTypeForIndex(arg).arrayElement().storage.value.opcode)) {
 		jit_value_t slot = jit_insn_load_elem_address(function, dataPtr, idx, elemType);
 		emitRefStore(slot, init);
 	} else {
@@ -4093,7 +4099,7 @@ void OpcodeDispatcher::dispatchArrayNewFixed(WASM::TypeIdx arg1, uint32_t arg2) 
 		values[i] = popValue();
 	for (uint32_t i = 0; i < arg2; ++i) {
 		jit_value_t idx = jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(i));
-		if (WASM::isReferenceType(arrayTypeForIndex(arg1).elementType.storageType.val.opcode)) {
+		if (WASM::isReferenceType(arrayTypeForIndex(arg1).arrayElement().storage.value.opcode)) {
 			jit_value_t slot = jit_insn_load_elem_address(function, dataPtr, idx, elemType);
 			emitRefStore(slot, values[i]);
 		} else {
@@ -4244,7 +4250,9 @@ void OpcodeDispatcher::dispatchArrayGetU(WASM::TypeIdx arg) {
 	jit_type_t elemType = arrayElementJitType(arg);
 	jit_value_t dataPtr = arrayElementBase(ref, arg);
 	jit_value_t addr = jit_insn_load_elem_address(function, dataPtr, index, elemType);
-	jit_type_t loadType = arrayTypeForIndex(arg).elementType.storageType.val.opcode == WASM::ValueTypeCode::I8 ? jit_type_ubyte : jit_type_ushort;
+	const WASM::CanonStorageType& element = arrayTypeForIndex(arg).arrayElement().storage;
+	const bool isI8 = element.isPacked && element.packed == WASM::ValueTypeCode::I8;
+	jit_type_t loadType = isI8 ? jit_type_ubyte : jit_type_ushort;
 	jit_value_t raw = jit_insn_load_relative(function, addr, 0, loadType);
 	pushValue(jit_insn_convert(function, raw, jit_type_int, 0));
 }
@@ -4261,7 +4269,7 @@ void OpcodeDispatcher::dispatchArraySet(WASM::TypeIdx arg) {
 	jit_insn_label(function, &cont);
 	jit_type_t elemType = arrayElementJitType(arg);
 	jit_value_t dataPtr = arrayElementBase(ref, arg);
-	if (WASM::isReferenceType(arrayTypeForIndex(arg).elementType.storageType.val.opcode)) {
+	if (WASM::isReferenceType(arrayTypeForIndex(arg).arrayElement().storage.value.opcode)) {
 		jit_value_t slot = jit_insn_load_elem_address(function, dataPtr, index, elemType);
 		emitRefStore(slot, value);
 		emitDropValue(value);
@@ -4301,7 +4309,7 @@ void OpcodeDispatcher::dispatchArrayFill(WASM::TypeIdx arg) {
 	jit_value_t idx = jit_insn_load(function, idxSlot);
 	jit_value_t loopCond = jit_insn_lt(function, idx, end);
 	jit_insn_branch_if_not(function, loopCond, &endLabel);
-	if (WASM::isReferenceType(arrayTypeForIndex(arg).elementType.storageType.val.opcode)) {
+	if (WASM::isReferenceType(arrayTypeForIndex(arg).arrayElement().storage.value.opcode)) {
 		jit_value_t slot = jit_insn_load_elem_address(function, dataPtr, idx, elemType);
 		emitRefStore(slot, value);
 	} else {
@@ -4342,7 +4350,7 @@ void OpcodeDispatcher::dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2)
 		vmContextValue(), refAsVoidPtr(dstPtr), dstIndex, refAsVoidPtr(srcPtr), srcIndex, len,
 		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(jit_type_get_size(dstElemType))),
 		jit_value_create_nint_constant(function, jit_type_int,
-				WASM::isReferenceType(arrayTypeForIndex(arg1).elementType.storageType.val.opcode) ? 1 : 0)
+				WASM::isReferenceType(arrayTypeForIndex(arg1).arrayElement().storage.value.opcode) ? 1 : 0)
 	};
 	jit_insn_call_native(function, "wasm_buffer_copy_impl",
 						 reinterpret_cast<void*>(wasm_buffer_copy_impl), sig, args, 8, 0);

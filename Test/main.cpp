@@ -567,16 +567,16 @@ TEST_CASE("imported global type and mutability are matched at link time")
 TEST_CASE("store owns the runtime type registry")
 {
 	WASM::Module module = loadTestModule("add_core");
-	REQUIRE(!module.types.empty());
+	REQUIRE(module.typeCount() > 0);
 
-	// Module::types is a non-owning view into the Store-owned registry.
-	REQUIRE(WASM::Store::global().types().typeCount() >= module.types.size());
+	// The module holds only canonical identities; the Store owns the records.
+	REQUIRE(WASM::Store::global().types().internedTypeCount() >= module.typeCount());
 
-	// The view must survive another module registering its own type block.
-	const bool firstIsFunction = module.types[0].isFunction();
+	// The view must survive another module interning its own type section.
+	const bool firstIsFunction = module.typeView(0).kind() == WASM::CanonTypeKind::Func;
 	WASM::Module other = loadTestModule("loop_test");
-	REQUIRE(!other.types.empty());
-	REQUIRE(module.types[0].isFunction() == firstIsFunction);
+	REQUIRE(other.typeCount() > 0);
+	REQUIRE((module.typeView(0).kind() == WASM::CanonTypeKind::Func) == firstIsFunction);
 }
 
 TEST_CASE("store owns tables and table.grow works")
@@ -825,7 +825,7 @@ TEST_CASE("LibJitTypeTranslator does not leak type caches across modules")
 TEST_CASE("rec groups survive parsing")
 {
 	WASM::Module module = loadTestModule("rec_groups");
-	REQUIRE(module.types.size() == 3);
+	REQUIRE(module.typeCount() == 3);
 	REQUIRE(module.typeGroups.size() == 2);
 
 	// Group 0 is the explicit `(rec $a $b)`; group 1 is the bare `$sig`.
@@ -859,28 +859,37 @@ TEST_CASE("type interning dedups identical rec groups across modules")
 
 	// Loading the same module again adds parsed types but no new canonical ones.
 	WASM::Module second = loadTestModule("rec_groups");
-	REQUIRE(registry.parsedTypeCount() == parsedAfterFirst + first.types.size());
+	REQUIRE(registry.parsedTypeCount() == parsedAfterFirst + first.typeCount());
 	REQUIRE(registry.internedTypeCount() == internedAfterFirst);
 
-	REQUIRE(first.types.size() == second.types.size());
-	for (uint32_t i = 0; i < first.types.size(); ++i)
+	REQUIRE(first.typeCount() == second.typeCount());
+	for (uint32_t i = 0; i < first.typeCount(); ++i)
 		REQUIRE(first.typeId(WASM::LocalTypeIdx{i}) == second.typeId(WASM::LocalTypeIdx{i}));
 }
 
-TEST_CASE("identical type sections share the store-owned parser block")
+namespace {
+template <typename T, typename = void>
+struct HasTypesMember : std::false_type {};
+template <typename T>
+struct HasTypesMember<T, std::void_t<decltype(std::declval<T>().types)>> : std::true_type {};
+} // namespace
+
+// TM-6 ownership gate: the parser buffer is temporary, never a Module member.
+static_assert(!HasTypesMember<WASM::Module>::value,
+		"WASM::Module must not retain Subtype type storage");
+
+TEST_CASE("loaded modules retain only canonical type identities")
 {
 	WASM::TypeRegistry& registry = WASM::Store::global().types();
-
 	WASM::Module first = loadTestModule("rec_groups");
-	const size_t physicalAfterFirst = registry.typeCount();
+	const size_t internedBefore = registry.internedTypeCount();
 	WASM::Module second = loadTestModule("rec_groups");
 
-	// A duplicate raw type section reuses the existing block: no new physical
-	// Subtype storage, and both modules view the same bytes. The canonical
-	// TypeIds were already deduplicated by internModule.
-	REQUIRE(registry.typeCount() == physicalAfterFirst);
-	REQUIRE(first.types.data() == second.types.data());
-	REQUIRE(first.types.size() == second.types.size());
+	REQUIRE(registry.internedTypeCount() == internedBefore);
+	REQUIRE(first.typeCount() == second.typeCount());
+	REQUIRE(first.typeView(0).valid());
+	for (uint32_t i = 0; i < first.typeCount(); ++i)
+		REQUIRE(first.typeId(WASM::LocalTypeIdx{i}) == second.typeId(WASM::LocalTypeIdx{i}));
 }
 
 TEST_CASE("singleton rec group interns to the same identity as a plain type")
@@ -921,7 +930,7 @@ TEST_CASE("supertypes and finality participate in type identity")
 	const size_t parsedAfterFirst = registry.parsedTypeCount();
 	const size_t internedAfterFirst = registry.internedTypeCount();
 	WASM::Module second = loadTestModule("subtypes");
-	REQUIRE(registry.parsedTypeCount() == parsedAfterFirst + first.types.size());
+	REQUIRE(registry.parsedTypeCount() == parsedAfterFirst + first.typeCount());
 	REQUIRE(registry.internedTypeCount() == internedAfterFirst);
 	REQUIRE(second.typeId(WASM::LocalTypeIdx{1}) == derivedId);
 }
@@ -936,7 +945,7 @@ TEST_CASE("declared-subtype validation rejects malformed sub annotations")
 
 	// A well-formed annotation (ref_eq.wast's shape) is still accepted.
 	WASM::Module ok = loadTestModule("subtypes");
-	REQUIRE_FALSE(ok.types.empty());
+	REQUIRE(ok.typeCount() > 0);
 }
 
 TEST_CASE("function import type matching across modules")
@@ -971,12 +980,12 @@ TEST_CASE("JIT type cache is keyed by canonical TypeId")
 
 	LibJIT::LibJitTypeTranslator translator;
 
-	translator.translateTypes(a.types, a.typeIds);
+	translator.translateTypes(a.typeIds, WASM::Store::global().types().store());
 	const jit_type_t sigA = translator.getTranslatedTypes()[2];
 	REQUIRE(sigA != nullptr);
 	const size_t cacheAfterA = translator.canonicalCacheSize();
 
-	translator.translateTypes(b.types, b.typeIds);
+	translator.translateTypes(b.typeIds, WASM::Store::global().types().store());
 	const jit_type_t sigB = translator.getTranslatedTypes()[0];
 
 	// Same canonical type -> same lowered jit_type_t, with no new cache entry.
@@ -1108,6 +1117,48 @@ TEST_CASE("a component's value-type grammar is parsed")
 	REQUIRE(component->exports[0].sortIndex.sort == WASM::ComponentSort::Func);
 	REQUIRE(component->exports[0].sortIndex.index == 0);
 	REQUIRE_FALSE(component->exports[0].type.has_value());
+}
+
+TEST_CASE("component local type indices map to Store TypeIds after validation")
+{
+	auto artifact = loadTestArtifact("component_types");
+	REQUIRE(artifact != nullptr);
+	WASM::Component* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	component->validate();
+	REQUIRE(component->localTypeIds.size() == component->types.size());
+	for (uint32_t i = 0; i < component->types.size(); ++i) {
+		REQUIRE_FALSE(component->typeId(i).isNone());
+		REQUIRE(component->typeId(i) == component->types[i].id);
+	}
+
+	// Resources and own/borrow have parser-assigned ids too.
+	auto resourceArtifact = loadTestArtifact("component_resource");
+	REQUIRE(resourceArtifact != nullptr);
+	WASM::Component* resources = resourceArtifact->asComponent();
+	REQUIRE(resources != nullptr);
+	resources->validate();
+	REQUIRE(resources->localTypeIds.size() == resources->types.size());
+	for (uint32_t i = 0; i < resources->types.size(); ++i) {
+		REQUIRE_FALSE(resources->typeId(i).isNone());
+		REQUIRE(resources->typeId(i) == resources->types[i].id);
+	}
+
+	// Component/instance declarations get nominal Store records and payloads.
+	auto declarationArtifact = loadTestArtifact("component_decltypes");
+	REQUIRE(declarationArtifact != nullptr);
+	WASM::Component* declarations = declarationArtifact->asComponent();
+	REQUIRE(declarations != nullptr);
+	declarations->validate();
+	REQUIRE(declarations->types.size() == 2);
+	REQUIRE_FALSE(declarations->typeId(0).isNone());
+	REQUIRE_FALSE(declarations->typeId(1).isNone());
+	const auto componentType = typeStore().componentType(declarations->typeId(0));
+	REQUIRE(componentType.kind() == WASM::TypeKind::ComponentComponent);
+	REQUIRE(componentType.declarations().size() == 2);
+	const auto instanceType = typeStore().componentType(declarations->typeId(1));
+	REQUIRE(instanceType.kind() == WASM::TypeKind::ComponentInstance);
+	REQUIRE(instanceType.declarations().size() == 1);
 }
 
 TEST_CASE("component closed records intern by structure (TM-8 first slice)")
@@ -1835,8 +1886,8 @@ TEST_CASE("GC reference counting: clone, drop and store barriers")
 
 	// Locate the module's struct type so we can allocate an object of it.
 	uint32_t structIdx = UINT32_MAX;
-	for (uint32_t i = 0; i < loaded.module->types.size(); ++i) {
-		if (loaded.module->types[i].isStruct()) { structIdx = i; break; }
+	for (uint32_t i = 0; i < loaded.module->typeCount(); ++i) {
+		if (loaded.module->typeView(i).kind() == WASM::CanonTypeKind::Struct) { structIdx = i; break; }
 	}
 	REQUIRE(structIdx != UINT32_MAX);
 
@@ -1991,8 +2042,8 @@ constexpr size_t kPairRefFieldOffset = 16;
 
 uint32_t firstStructType(const WASM::Module& module)
 {
-	for (uint32_t i = 0; i < module.types.size(); ++i)
-		if (module.types[i].isStruct())
+	for (uint32_t i = 0; i < module.typeCount(); ++i)
+		if (module.typeView(i).kind() == WASM::CanonTypeKind::Struct)
 			return i;
 	return UINT32_MAX;
 }

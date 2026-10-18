@@ -268,6 +268,121 @@ jit_type_t LibJitTypeTranslator::translateArray(const WASM::ArrayType& wasm_arra
 	return jit_type_create_struct(fields, WASM::GcHeader::kArrayLengthField + 1, 1);
 }
 
+jit_type_t LibJitTypeTranslator::translateCanonValue(const WASM::CanonValueType& value)
+{
+	if (value.opcode != WASM::ValueTypeCode::Ref && value.opcode != WASM::ValueTypeCode::RefNull)
+		return translatePrimitiveType(value.opcode);
+	if (value.heap.kind == WASM::CanonHeapType::Kind::Global) {
+		const auto it = canonicalCache.find(value.heap.id);
+		if (it != canonicalCache.end())
+			return jit_type_create_pointer(it->second, 1);
+		return jit_type_void_ptr;
+	}
+	if (value.heap.kind == WASM::CanonHeapType::Kind::Abstract
+			&& value.heap.abstract == WASM::AbstractHeapType::I31)
+		return i31Type;
+	return jit_type_void_ptr;
+}
+
+jit_type_t LibJitTypeTranslator::translateCanonStorage(const WASM::CanonStorageType& storage)
+{
+	if (storage.isPacked)
+		return translatePrimitiveType(storage.packed);
+	return translateCanonValue(storage.value);
+}
+
+jit_type_t LibJitTypeTranslator::translateFunctionSignature(WASM::CoreTypeView view)
+{
+	std::vector<jit_type_t> params;
+	std::vector<jit_type_t> return_types;
+	params.reserve(view.funcParams().size() + 1);
+	return_types.reserve(view.funcResults().size());
+
+	params.push_back(translateVMContextPointerType());
+	for (const WASM::CanonStorageType& p : view.funcParams())
+		params.push_back(translateCanonStorage(p));
+	for (const WASM::CanonStorageType& r : view.funcResults())
+		return_types.push_back(translateCanonStorage(r));
+
+	if (return_types.empty())
+		return jit_type_create_signature(jit_abi_cdecl, jit_type_void, params.data(), params.size(), 1);
+	if (return_types.size() == 1)
+		return jit_type_create_signature(jit_abi_cdecl, return_types[0], params.data(), params.size(), 1);
+	// Multi-result convention: trailing result buffer, void return (MV5).
+	params.push_back(jit_type_void_ptr);
+	return jit_type_create_signature(jit_abi_cdecl, jit_type_void, params.data(), params.size(), 1);
+}
+
+jit_type_t LibJitTypeTranslator::translateStruct(WASM::CoreTypeView view)
+{
+	std::vector<jit_type_t> fields;
+	for (unsigned i = 0; i < WASM::GcHeader::kHeaderFields; ++i)
+		fields.push_back(jit_type_uint);
+	for (const WASM::CanonFieldType& field : view.structFields())
+		fields.push_back(translateCanonStorage(field.storage));
+	return jit_type_create_struct(fields.data(), fields.size(), 1);
+}
+
+jit_type_t LibJitTypeTranslator::translateArray(WASM::CoreTypeView view)
+{
+	(void)view;
+	jit_type_t fields[WASM::GcHeader::kArrayLengthField + 1] =
+			{jit_type_uint, jit_type_uint, jit_type_uint};
+	return jit_type_create_struct(fields, WASM::GcHeader::kArrayLengthField + 1, 1);
+}
+
+void LibJitTypeTranslator::translateTypes(std::span<const WASM::TypeId> typeIds,
+										  const WASM::TypeStore& store)
+{
+	translatedTypes.clear();
+	typemap.clear();
+	for (const auto& it : DefaultValueTypes)
+		translateType(it);
+
+	localTypeIds.assign(typeIds.begin(), typeIds.end());
+	translatedTypes.resize(typeIds.size(), nullptr);
+
+	const auto lookup = [this](size_t i) -> jit_type_t {
+		if (i >= localTypeIds.size())
+			return nullptr;
+		const auto it = canonicalCache.find(localTypeIds[i]);
+		return it == canonicalCache.end() ? nullptr : it->second;
+	};
+	const auto cachedOrLower = [this](size_t i, jit_type_t lowered) -> jit_type_t {
+		if (i >= localTypeIds.size())
+			return lowered;
+		return canonicalCache.emplace(localTypeIds[i], lowered).first->second;
+	};
+
+	// PASS 1 — composite layouts (struct/array).
+	for (size_t i = 0; i < typeIds.size(); ++i) {
+		const WASM::CoreTypeView view = store.coreType(typeIds[i]);
+		if (view.kind() != WASM::CanonTypeKind::Struct
+				&& view.kind() != WASM::CanonTypeKind::Array)
+			continue;
+		if (jit_type_t cached = lookup(i); cached != nullptr) {
+			translatedTypes[i] = cached;
+			continue;
+		}
+		jit_type_t lowered = view.kind() == WASM::CanonTypeKind::Struct
+				? translateStruct(view) : translateArray(view);
+		translatedTypes[i] = cachedOrLower(i, lowered);
+	}
+
+	// PASS 2 — function signatures.
+	for (size_t i = 0; i < typeIds.size(); ++i) {
+		const WASM::CoreTypeView view = store.coreType(typeIds[i]);
+		if (view.kind() != WASM::CanonTypeKind::Func)
+			continue;
+		if (jit_type_t cached = lookup(i); cached != nullptr) {
+			translatedTypes[i] = cached;
+			continue;
+		}
+		jit_type_t lowered = translateFunctionSignature(view);
+		translatedTypes[i] = cachedOrLower(i, lowered);
+	}
+}
+
 void LibJitTypeTranslator::translateTypes(const std::span<const WASM::Subtype>& types,
 										  const std::span<const WASM::TypeId>& typeIds)
 {

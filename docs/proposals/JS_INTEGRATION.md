@@ -313,11 +313,12 @@ see a JS engine type.
   signatures via `internalFunctionTypeIndices`, and `typeIds` for local types.
   `TypeRegistry::canonicalType(TypeId)` returns a `CoreTypeView`; this is the
   canonical type view a host adapter should use for signatures.
-- The current `Module::types` is still a non-owning `span<const Subtype>`;
-  `TypeRegistry` still owns per-module `Subtype` blocks. That is the temporary
-  compatibility layer tracked by [`TYPE_MODEL.md`](TYPE_MODEL.md) TM-6/TM-10.
-  An adapter must not depend on the temporary layout; it should depend on
-  `TypeId` and `CoreTypeView`.
+- `Module` no longer exposes a `types` block: core modules are Store-owned.
+  `Module::typeView(localIndex)` returns `CoreTypeView`; a process-wide
+  `TypeId` resolves through `TypeRegistry::canonicalType(TypeId)`. A host
+  adapter must depend on those views, not on a parser layout. Component
+  `CoreRecType` still has parser scratch storage, tracked by
+  [`TYPE_MODEL.md`](TYPE_MODEL.md) §7.11.2; do not expose it through the adapter.
 - `Export` does not carry the exported object's type. The adapter must resolve
   the index through `Module` (and `TypeId`/`TypeRegistry`) or through
   `ModuleInstance::exportedFunction`/`registerExports`. There is no stable

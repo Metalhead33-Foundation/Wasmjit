@@ -1,10 +1,7 @@
 #include "WasmType.hpp"
 namespace WASM {
 
-void PreparedFunctionStack::prepare(const Subtype& type, const FunctionBody& body) {
-	if(!type.isFunction()) return; // Quick safety check
-	// 1. Get the signature (assuming it's a FuncType)
-	const auto& sig = std::get<FuncType>(type.composite);
+void PreparedFunctionStack::prepare(const FuncType& sig, const FunctionBody& body) {
 	parameterCount = sig.params.size();
 
 	// 2. Add Returns and Parameters first

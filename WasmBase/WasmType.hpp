@@ -419,7 +419,7 @@ struct PreparedFunctionStack {
 	uint32_t parameterCount;
 	uint32_t localCount;
 
-	void prepare(const Subtype& type, const FunctionBody& body);
+	void prepare(const FuncType& type, const FunctionBody& body);
 };
 
 // =============================================================================

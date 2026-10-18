@@ -174,8 +174,8 @@ private:
 	jit_type_t jitRefTypeForHeapType(const WASM::HeapType& ht, bool nullable);
 	jit_type_t structRefType(WASM::TypeIdx arg, bool nullable) const;
 	jit_type_t arrayRefType(WASM::TypeIdx arg, bool nullable) const;
-	const WASM::StructType& structTypeForIndex(WASM::TypeIdx arg) const;
-	const WASM::ArrayType& arrayTypeForIndex(WASM::TypeIdx arg) const;
+	WASM::CoreTypeView structTypeForIndex(WASM::TypeIdx arg) const;
+	WASM::CoreTypeView arrayTypeForIndex(WASM::TypeIdx arg) const;
 	jit_type_t arrayElementJitType(WASM::TypeIdx arg) const;
 	jit_nint structFieldOffset(WASM::TypeIdx arg, uint32_t fieldIndex) const;
 	jit_nint arrayLengthOffset(WASM::TypeIdx arg) const;
@@ -209,7 +209,7 @@ private:
 	const std::vector<jit_value_t>& branchSlotsForTarget(const ControlBlock& target) const;
 	void emitBranchToTarget(ControlBlock& target);
 	WASM::TypeIdx functionTypeIndexForFunc(WASM::FuncIdx funcIdx) const;
-	const WASM::FuncType& functionSignatureForType(WASM::TypeIdx typeIdx) const;
+	WASM::FuncType functionSignatureForType(WASM::TypeIdx typeIdx) const;
 	jit_value_t callablePointerForFuncIndex(WASM::FuncIdx funcIdx);
 	void dispatchCallThroughCallable(jit_value_t callablePtr, WASM::TypeIdx typeIdx);
 	// Emit a trap of `kind` (docs/SAFETY.md §2.4). `detail` overrides the log
@@ -270,7 +270,7 @@ private:
 	// call site checks the pending slot (EXD1).
 	void pushBlockFrame(ControlBlock::Kind kind, const WASM::BlockType& arg,
 						std::vector<WASM::CatchClause>&& catches);
-	const WASM::FuncType& tagPayloadType(WASM::TagIdx tagIdx) const;
+	WASM::FuncType tagPayloadType(WASM::TagIdx tagIdx) const;
 	WASM::TagId tagIdForClause(const WASM::CatchClause& clause) const;
 	jit_value_t createException(WASM::TagId tagId, const WASM::FuncType& payload);
 	void storeExceptionPayload(jit_value_t exnPayload, const WASM::FuncType& payload,
@@ -311,7 +311,7 @@ public:
 
 	// OpcodeDispatcher interface
 protected:
-	// `internals.translatedTypes` is parallel to `module.types` (filled in translateTypes).
+	// `internals.translatedTypes` is parallel to `module.typeIds` (filled in translateTypes).
 	jit_type_t jitTypeForTypeIdx(WASM::TypeIdx idx) const;
 	jit_type_t jitTypeForValueType(const WASM::ValueType& vt);
 

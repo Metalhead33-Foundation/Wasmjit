@@ -473,16 +473,20 @@ dedicated suite:
 ## 10. Current state and gaps in this codebase
 
 - `TypeRegistry` (`WasmBase/WasmTypeRegistry.hpp`) owns a compact canonical
-  `TypeStore`, but it still also retains one `std::vector<Subtype>` block per
-  module and hands out a `std::span<const Subtype>` view per module.
-- `Module::types` is that span; all type indices remain module-local. This is the
-  `TM-6`/`TM-10` ownership gap: the store is not yet the sole owner of the type
-  syntax.
-- `Module::isSubtype` walks declared `supertypeIndices` (module-local) and does
-  not implement structural composite subtyping or cross-module matching. The
-  target is to resolve this through `TypeRegistry::matches` and `CoreTypeView`.
-- The JIT/validator migration from `Subtype` to `CoreTypeView` is the `TM-7`/
-  `TM-11` plan in [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md) §7.10.3.
+  `TypeStore`. `internModule` consumes a temporary parser vector and retains no
+  per-module `Subtype` block; `Module` keeps `typeIds`, `typeGroups` and a
+  TypeId→local-index map only.
+- `Module::typeView`/`typeId` are the consumer API; type indices remain
+  module-local. This closes the core-module half of the `TM-6`/`TM-10` ownership
+  gap. Component `CoreRecType` still stores parser `Subtype`s and is tracked in
+  [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md) §7.11.2.
+- `Module::isSubtype` resolves local indices to canonical `TypeId`s and delegates
+  to `TypeRegistry::matches`, so structural composite subtyping and cross-module
+  matching use the same relation as the rest of the store.
+- The JIT/validator migration from `Subtype` to `CoreTypeView` is complete for
+  core modules; `funcTypeAt` is a Store-derived `FuncType` signature view for
+  compile/test paths. See [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md)
+  §7.10.3/§7.11.1.
 - ~~`ModuleInstance::refMatchesHeapType` and GC object headers use module-local
   indices.~~ **Done (M6):** GC object headers store a canonical `TypeId`
   (`GcHeap::owns` locates the object by region, then the header is read);
@@ -522,14 +526,19 @@ dedicated suite:
   index-space arrays (`VMContext`). GC constant expressions are evaluated by a
   small stack machine in `ModuleInstance::evalConstantExpr`.
 - Replacing the `Subtype` layout here. The canonical form is a second,
-  index-oriented representation in this note; the compact-store refactor is
-  planned separately in [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md).
+  index-oriented representation in this note; the compact-store refactor is in
+  [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md). Revision 5 of that note
+  removes the per-module `Subtype` block: a loaded core `Module` retains only
+  `typeIds`/`typeGroups`, and the JIT/validator/runtime use `CoreTypeView`.
+  `Subtype` remains the component parser's `CoreRecType` scratch type.
 
 ## 12. Type storage footprint (`Subtype`) and future optimization
 
-The registry stores each module's types as a contiguous `std::vector<Subtype>`
-block (`TypeRegistry::registerModule`), so the per-type cost is dominated by
-`sizeof(Subtype)`.
+The registry no longer stores a module's types as a `std::vector<Subtype>`
+block: `internModule` consumes a temporary parser vector and keeps compact
+Store records. The parser/component `Subtype` cost below therefore applies to
+the temporary type section and to component `CoreRecType`, not to the
+long-lived core `Module`.
 
 ### 12.1 Measured size
 

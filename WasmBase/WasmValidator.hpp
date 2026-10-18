@@ -51,8 +51,7 @@ private:
 
 	[[noreturn]] void fail(const std::string& message) const;
 
-	const Subtype& subtypeAt(uint32_t typeIdx) const;
-	const FuncType& funcTypeAt(uint32_t typeIdx) const;
+	FuncType funcTypeAt(uint32_t typeIdx) const;
 	void requireFunctionIndex(uint32_t idx) const;
 	void requireTableIndex(uint32_t idx) const;
 	void requireMemoryIndex(uint32_t idx) const;
@@ -133,7 +132,7 @@ private:
 	void branchIf(LabelIdx label);
 	ValueTypeCode memoryAddressType(MemIdx memIdx) const;
 	ValueTypeCode tableIndexType(TableIdx tableIdx) const;
-	const FuncType& functionType(FuncIdx idx) const;
+	FuncType functionType(FuncIdx idx) const;
 	ValueType globalType(GlobalIdx idx) const;
 	ValueType tableElementType(TableIdx idx) const;
 	const FuncType* currentFuncType = nullptr;

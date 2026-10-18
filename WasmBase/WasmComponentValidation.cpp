@@ -121,6 +121,10 @@ struct ResolvedComponentType {
 struct ResolvedType {
 	enum class Kind : uint8_t { Value, Func, Resource, Instance, Component };
 	Kind kind = Kind::Value;
+	// Parser-assigned Store identity for a defined value/function/resource type;
+	// kNone for component/instance types and schemes until the local-index
+	// closure in TYPE_MODEL §7.11.2 assigns one.
+	mutable TypeId typeId{TypeId::kNone};
 	ValuePtr value;
 	std::shared_ptr<const ResolvedFuncType> func;
 	std::shared_ptr<const ResolvedResourceType> resource;
@@ -481,6 +485,7 @@ private:
 			const char* what);
 	TypePtr buildDeclaredType(const ComponentTypeDef& definition,
 			ValidationScope& scope);
+	TypeId publishDeclaredType(const ResolvedType& type);
 	void processComponentDecl(const ComponentDecl& declaration,
 			ValidationScope& scope);
 	void processInstanceDecl(const InstanceDecl& declaration,
@@ -521,6 +526,14 @@ void ComponentValidator::run()
 	for (const ComponentDefinition& definition : component_.definitions)
 		processDefinition(definition);
 	signature_ = buildSignature();
+
+	// Publish the local-index -> TypeId map. The vector mirrors the component
+	// type index space exactly, including aliases and imported types; a kNone
+	// entry is a type whose closed identity is still validator-only.
+	component_.localTypeIds.clear();
+	component_.localTypeIds.reserve(scope_.typeScope.types.size());
+	for (const TypePtr& type : scope_.typeScope.types)
+		component_.localTypeIds.push_back(type ? type->typeId : TypeId{TypeId::kNone});
 }
 
 ComponentIndexSpaces ComponentValidator::publicSpaces() const
@@ -805,6 +818,12 @@ TypePtr ComponentValidator::resolveTypeDef(const ComponentTypeDef& definition,
 		type = resolveResourceType(definition.resource(), scope, insideType);
 		break;
 	}
+	// Defined value/function/resource definitions already have a Store id from
+	// the parser. Component/instance types and schemes stay kNone until their
+	// declaration payloads are canonicalised.
+	if (definition.kind != ComponentTypeDef::Kind::Component
+			&& definition.kind != ComponentTypeDef::Kind::Instance)
+		type->typeId = definition.id;
 	typeCache_.emplace(&definition, type);
 	return type;
 }
@@ -821,7 +840,9 @@ TypePtr ComponentValidator::buildDeclaredType(
 		auto result = std::make_shared<ResolvedComponentType>();
 		result->imports = local.imports;
 		result->exports = local.exports;
-		return makeType(result);
+		TypePtr type = makeType(result);
+		type->typeId = publishDeclaredType(*type);
+		return type;
 	}
 
 	if (definition.kind == ComponentTypeDef::Kind::Instance) {
@@ -829,10 +850,42 @@ TypePtr ComponentValidator::buildDeclaredType(
 			processInstanceDecl(declaration, local);
 		auto result = std::make_shared<ResolvedInstanceType>();
 		result->exports = local.exports;
-		return makeType(result);
+		TypePtr type = makeType(result);
+		type->typeId = publishDeclaredType(*type);
+		return type;
 	}
 
 	fail("buildDeclaredType called for a non-declaring type");
+}
+
+TypeId ComponentValidator::publishDeclaredType(const ResolvedType& type)
+{
+	if (type.kind != ResolvedType::Kind::Component
+			&& type.kind != ResolvedType::Kind::Instance)
+		return TypeId{TypeId::kNone};
+
+	std::vector<ComponentDeclRecord> declarations;
+	const auto add = [&declarations](const ResolvedDecl& declaration) {
+		ComponentDeclRecord record;
+		record.name = Store::global().types().store().internString(declaration.name.name);
+		record.sort = static_cast<uint16_t>(declaration.sort.sort);
+		if (declaration.sort.core)
+			record.coreSort = static_cast<uint16_t>(declaration.sort.core->sort);
+		if (declaration.type)
+			record.type = declaration.type->typeId;
+		declarations.push_back(record);
+	};
+
+	if (type.kind == ResolvedType::Kind::Component) {
+		for (const ResolvedDecl& declaration : type.component->imports)
+			add(declaration);
+		for (const ResolvedDecl& declaration : type.component->exports)
+			add(declaration);
+		return Store::global().types().store().addComponentComponent(declarations);
+	}
+	for (const ResolvedDecl& declaration : type.instance->exports)
+		add(declaration);
+	return Store::global().types().store().addComponentInstance(declarations);
 }
 
 void ComponentValidator::validateAttributes(const NameAttributes& name,

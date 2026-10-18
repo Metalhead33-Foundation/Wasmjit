@@ -2,6 +2,7 @@
 #define LIBJITTYPETRANSLATION_HPP
 #include "../WasmBase/WasmType.hpp"
 #include "../WasmBase/WasmTypeIdentity.hpp"
+#include "../WasmBase/WasmTypeStore.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
 #include <jit/jit.h>
 #include <vector>
@@ -41,9 +42,19 @@ public:
 	// LibJIT models that ABI parameter as `jit_type_void_ptr`.
 	jit_type_t translateVMContextPointerType() const;
 	jit_type_t translateFunctionSignature(const WASM::FuncType& wasm_func);
+	jit_type_t translateFunctionSignature(WASM::CoreTypeView wasm_func);
 	jit_type_t translateStruct(const WASM::StructType& wasm_struct);
+	jit_type_t translateStruct(WASM::CoreTypeView wasm_struct);
 	jit_type_t translateStruct(const std::span<const WASM::StorageType>& types);
 	jit_type_t translateArray(const WASM::ArrayType& wasm_array);
+	jit_type_t translateArray(WASM::CoreTypeView wasm_array);
+	jit_type_t translateCanonValue(const WASM::CanonValueType& value);
+	jit_type_t translateCanonStorage(const WASM::CanonStorageType& storage);
+	// Store-owned canonical cutover: `typeIds[i]` is module-local i. The old
+	// parser-view overload below remains for the translator's cache regression
+	// test; production callers use this one.
+	void translateTypes(std::span<const WASM::TypeId> typeIds,
+						const WASM::TypeStore& store);
 	void translateTypes(const std::span<const WASM::Subtype>& types,
 						const std::span<const WASM::TypeId>& typeIds);
 

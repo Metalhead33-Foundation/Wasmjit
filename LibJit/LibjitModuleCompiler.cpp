@@ -92,7 +92,7 @@ void ModuleCompiler::compileFunction(jit_function_t fn, uint32_t funcTypeIdx, co
 									 uint32_t importedFuncCount)
 {
 	WASM::PreparedFunctionStack stack;
-	stack.prepare(module.types[funcTypeIdx], body);
+	stack.prepare(module.funcTypeAt(funcTypeIdx), body);
 
 	std::vector<jit_value_t> locals;
 	locals.reserve(stack.allLocals.size());
@@ -134,7 +134,7 @@ void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::
 	// We must do this before declaring any function, because each
 	// function's signature is expressed as a type index, and we need
 	// the jit_type_t for that index to create the jit_function_t.
-	typeTranslator.translateTypes(module.types, module.typeIds);
+	typeTranslator.translateTypes(module.typeIds, WASM::Store::global().types().store());
 	internals.translatedTypes.resize(typeTranslator.getTranslatedTypes().size());
 	for(size_t i = 0; i < typeTranslator.getTranslatedTypes().size();++i)
 	{
@@ -202,9 +202,8 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 
 		// The Subtype at that index must be a FuncType — the validator
 		// should have ensured this, but an assert here catches mistakes early.
-		assert(module.types[typeIdx].isFunction());
-		const WASM::FuncType& funcType =
-			std::get<WASM::FuncType>(module.types[typeIdx].composite);
+		assert(module.typeView(typeIdx).kind() == WASM::CanonTypeKind::Func);
+		const WASM::FuncType funcType = module.funcTypeAt(typeIdx);
 
 		// Compile the body. This is where the real work happens.
 		compileFunction(fn, typeIdx, funcType, module.functionBodies[i],
@@ -256,9 +255,8 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		jit_type_t sig = static_cast<jit_type_t>(internals.translatedTypes[typeIdx]);
 		jit_function_t driver = jit_function_create(context, sig);
 		jit_type_t retType = jit_type_get_return(sig);
-		assert(module.types[typeIdx].isFunction());
-		const WASM::FuncType& driverSig =
-				std::get<WASM::FuncType>(module.types[typeIdx].composite);
+		assert(module.typeView(typeIdx).kind() == WASM::CanonTypeKind::Func);
+		const WASM::FuncType driverSig = module.funcTypeAt(typeIdx);
 		// The JIT signature may carry a trailing result-buffer parameter for a
 		// multi-result function (LibJitTypeTranslation.cpp), so the wasm
 		// parameter count comes from the FuncType, not from the signature.
