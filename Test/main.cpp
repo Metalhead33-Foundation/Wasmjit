@@ -26,6 +26,7 @@
 #include "WasmBase/WasmTrap.hpp"
 #include "WasmBase/wasm_simd_scalar.hpp"
 #include "LibJit/ComponentRuntime.hpp"
+#include "WastScript.hpp"
 
 Euph::Conf::Configuration GLOBAL_CONFIGURATION;
 
@@ -1235,14 +1236,8 @@ TEST_CASE("component runtime lifts a canonical string")
 	REQUIRE(function->paramTypes.size() == 1);
 	REQUIRE(function->resultTypes.size() == 1);
 	const WASM::Callable coreEcho = runtime.coreFunction(0);
-	alignas(16) unsigned char rawResults[16]{};
-	WASM::callCallableWithResults(coreEcho, rawResults, uint32_t(1024), uint32_t(5));
-	uint32_t rawPtr = 0;
-	uint32_t rawLen = 0;
-	std::memcpy(&rawPtr, rawResults, sizeof(rawPtr));
-	std::memcpy(&rawLen, rawResults + 4, sizeof(rawLen));
-	REQUIRE(rawPtr == 1024);
-	REQUIRE(rawLen == 5);
+	REQUIRE(WASM::callCallable<int32_t>(
+			coreEcho, int32_t(1024), int32_t(5)) == 2048);
 	LibJIT::ComponentValue arg;
 	arg.kind = LibJIT::ComponentValue::Kind::String;
 	arg.string = "hello";
@@ -1262,6 +1257,7 @@ TEST_CASE("component runtime joins variant payloads")
 	LibJIT::ComponentRuntime runtime(context.rawContext(), *component);
 	auto function = runtime.exportedFunction("echo");
 	REQUIRE(function.has_value());
+	REQUIRE(function->indirectResults);
 	LibJIT::ComponentValue input;
 	input.kind = LibJIT::ComponentValue::Kind::Variant;
 	input.discriminant = 0;
@@ -1285,6 +1281,55 @@ TEST_CASE("component runtime joins variant payloads")
 	REQUIRE(std::abs(output.elements[0].f64 - 3.5) < 1e-6);
 }
 
+TEST_CASE("component runtime lowers and lifts a map")
+{
+	auto artifact = loadTestArtifact("component_runtime_map");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	LibJIT::Context context;
+	LibJIT::ComponentRuntime runtime(context.rawContext(), *component);
+	auto function = runtime.exportedFunction("echo");
+	REQUIRE(function.has_value());
+	REQUIRE(function->indirectResults);
+	REQUIRE(WASM::callCallable<int32_t>(
+			runtime.coreFunction(0), int32_t(1024), int32_t(1)) == 2048);
+	LibJIT::ComponentValue input;
+	input.kind = LibJIT::ComponentValue::Kind::Map;
+	input.elements.resize(1);
+	input.elements[0].kind = LibJIT::ComponentValue::Kind::Tuple;
+	input.elements[0].elements.resize(2);
+	input.elements[0].elements[0].kind = LibJIT::ComponentValue::Kind::U32;
+	input.elements[0].elements[0].u64 = 7;
+	input.elements[0].elements[1].kind = LibJIT::ComponentValue::Kind::U32;
+	input.elements[0].elements[1].u64 = 9;
+	LibJIT::ComponentValue output;
+	function->callValues({&input, 1}, {&output, 1});
+	REQUIRE(output.kind == LibJIT::ComponentValue::Kind::Map);
+	REQUIRE(output.elements.size() == 1);
+	REQUIRE(output.elements[0].elements.size() == 2);
+	REQUIRE(output.elements[0].elements[0].u64 == 7);
+	REQUIRE(output.elements[0].elements[1].u64 == 9);
+}
+
+TEST_CASE("component script harness invokes a component")
+{
+	const auto script = Spec::Script::parse(R"json(
+		{"source_filename":"component_runtime.json","commands":[
+			{"type":"module","line":1,"filename":"component_runtime.wasm","module_type":"binary"},
+			{"type":"assert_return","line":2,
+			 "action":{"type":"invoke","field":"add","args":[
+				{"type":"i32","value":"20"},{"type":"i32","value":"22"}]},
+			 "expected":[{"type":"u32","value":"42"}]}
+		]}
+	)json");
+	LibJIT::Context context;
+	const Spec::ScriptReport report = Spec::runScript(
+			script, WASM_TEST_DIR, context);
+	REQUIRE(report.failed == 0);
+	REQUIRE(report.passed == 2);
+}
+
 TEST_CASE("component runtime instantiates a nested component")
 {
 	auto artifact = loadTestArtifact("component_runtime_nested");
@@ -1303,6 +1348,24 @@ TEST_CASE("component runtime instantiates a nested component")
 	WASM::Value result;
 	function->call({args, 2}, {&result, 1});
 	REQUIRE(result.i32 == 42);
+}
+
+TEST_CASE("component runtime stream handles")
+{
+	auto artifact = loadTestArtifact("component_runtime_stream");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	LibJIT::Context context;
+	LibJIT::ComponentRuntime runtime(context.rawContext(), *component);
+	const int64_t packed = WASM::callCallable<int64_t>(runtime.coreFunction(0));
+	const int32_t readable = int32_t(uint32_t(uint64_t(packed)));
+	const int32_t writable = int32_t(uint32_t(uint64_t(packed) >> 32));
+	REQUIRE(readable > 0);
+	REQUIRE(writable > 0);
+	REQUIRE(readable != writable);
+	WASM::callCallable<void>(runtime.coreFunction(1), readable);
+	WASM::callCallable<void>(runtime.coreFunction(2), writable);
 }
 
 TEST_CASE("component runtime resource handles")

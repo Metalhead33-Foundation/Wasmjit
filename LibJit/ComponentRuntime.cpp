@@ -313,6 +313,31 @@ std::vector<WASM::AbiCoreType> flatTypesOf(const WASM::TypeStore& store,
 	return types;
 }
 
+WASM::CanonicalAbiLayout layoutOf(const WASM::TypeStore& store,
+		const WASM::ComponentValueType& type, const MemView& memory);
+
+struct MapPairLayout {
+	WASM::CanonicalAbiLayout key;
+	WASM::CanonicalAbiLayout value;
+	uint64_t valueOffset = 0;
+	uint64_t size = 0;
+	uint32_t align = 1;
+};
+
+MapPairLayout mapPairLayout(const WASM::TypeStore& store,
+		const WASM::ComponentValueType& keyType,
+		const WASM::ComponentValueType& valueType, const MemView& memory)
+{
+	MapPairLayout layout;
+	layout.key = layoutOf(store, keyType, memory);
+	layout.value = layoutOf(store, valueType, memory);
+	layout.valueOffset = alignUp(layout.key.size, layout.value.align);
+	layout.size = alignUp(layout.valueOffset + layout.value.size,
+			std::max(layout.key.align, layout.value.align));
+	layout.align = std::max(layout.key.align, layout.value.align);
+	return layout;
+}
+
 void lowerValue(const WASM::TypeStore& store,
 		const WASM::ComponentValueType& type, const ComponentValue& value,
 		const MemView& memory, std::vector<WASM::Value>& out, unsigned depth);
@@ -461,9 +486,25 @@ void lowerValue(const WASM::TypeStore& store,
 				out.push_back(zeroFlat(type));
 		return;
 	}
-	case WASM::TypeKind::ComponentMap:
-		throw std::runtime_error(
-				"component runtime: map values are not lowered by this runtime");
+	case WASM::TypeKind::ComponentMap: {
+		const MapPairLayout pair = mapPairLayout(store, view.mapKey(),
+				view.mapValue(), memory);
+		const uint64_t data = allocate(memory,
+				pair.size * value.elements.size(), pair.align);
+		for (std::size_t i = 0; i < value.elements.size(); ++i) {
+			const ComponentValue& entry = value.elements[i];
+			if (entry.elements.size() != 2)
+				throw std::runtime_error("component runtime: map entry is not a pair");
+			const uint64_t address = data + uint64_t(i) * pair.size;
+			storeValueAt(store, view.mapKey(), entry.elements[0], address,
+					memory, depth + 1);
+			storeValueAt(store, view.mapValue(), entry.elements[1],
+					address + pair.valueOffset, memory, depth + 1);
+		}
+		pushPtr(out, data, memory);
+		pushPtr(out, value.elements.size(), memory);
+		return;
+	}
 	default:
 		throw std::runtime_error("component runtime: type is not a value");
 	}
@@ -690,9 +731,32 @@ void liftValue(const WASM::TypeStore& store,
 		}
 		return;
 	}
-	case WASM::TypeKind::ComponentMap:
-		throw std::runtime_error(
-				"component runtime: map values are not lifted by this runtime");
+	case WASM::TypeKind::ComponentMap: {
+		if (index + 2 > flat.size())
+			throw std::runtime_error("component runtime: missing map pointer/length");
+		const uint64_t data = memory.options.pointerSize == 8
+				? flat[index].ui64 : flat[index].u32;
+		const uint64_t length = memory.options.pointerSize == 8
+				? flat[index + 1].ui64 : flat[index + 1].u32;
+		index += 2;
+		if (length > (uint64_t{1} << 30))
+			throw std::runtime_error("component runtime: map length too large");
+		const MapPairLayout pair = mapPairLayout(store, view.mapKey(),
+				view.mapValue(), memory);
+		ensureRange(memory, data, pair.size * length);
+		out.kind = ComponentValue::Kind::Map;
+		out.elements.resize(std::size_t(length));
+		for (std::size_t i = 0; i < out.elements.size(); ++i) {
+			out.elements[i].kind = ComponentValue::Kind::Tuple;
+			out.elements[i].elements.resize(2);
+			const uint64_t address = data + uint64_t(i) * pair.size;
+			loadValueAt(store, view.mapKey(), address, memory,
+					out.elements[i].elements[0], depth + 1);
+			loadValueAt(store, view.mapValue(), address + pair.valueOffset,
+					memory, out.elements[i].elements[1], depth + 1);
+		}
+		return;
+	}
 	default:
 		throw std::runtime_error("component runtime: type is not a value");
 	}
@@ -870,6 +934,26 @@ void storeValueAt(const WASM::TypeStore& store,
 			storeValueAt(store, *payloadType, value.elements.front(),
 					address + alignUp(discWidth, payload.align), memory, depth + 1);
 		}
+		return;
+	}
+	case WASM::TypeKind::ComponentMap: {
+		const MapPairLayout pair = mapPairLayout(store, view.mapKey(),
+				view.mapValue(), memory);
+		const uint64_t data = allocate(memory,
+				pair.size * value.elements.size(), pair.align);
+		for (std::size_t i = 0; i < value.elements.size(); ++i) {
+			const ComponentValue& entry = value.elements[i];
+			if (entry.elements.size() != 2)
+				throw std::runtime_error("component runtime: map entry is not a pair");
+			const uint64_t entryAddress = data + uint64_t(i) * pair.size;
+			storeValueAt(store, view.mapKey(), entry.elements[0], entryAddress,
+					memory, depth + 1);
+			storeValueAt(store, view.mapValue(), entry.elements[1],
+					entryAddress + pair.valueOffset, memory, depth + 1);
+		}
+		writeUInt(memory, address, data, memory.options.pointerSize);
+		writeUInt(memory, address + memory.options.pointerSize,
+				value.elements.size(), memory.options.pointerSize);
 		return;
 	}
 	case WASM::TypeKind::ComponentOwn:
@@ -1079,6 +1163,29 @@ void loadValueAt(const WASM::TypeStore& store,
 		}
 		return;
 	}
+	case WASM::TypeKind::ComponentMap: {
+		const uint64_t data = readUInt(memory, address, memory.options.pointerSize);
+		const uint64_t length = readUInt(memory,
+				address + memory.options.pointerSize, memory.options.pointerSize);
+		if (length > (uint64_t{1} << 30))
+			throw std::runtime_error("component runtime: map length too large");
+		const MapPairLayout pair = mapPairLayout(store, view.mapKey(),
+				view.mapValue(), memory);
+		ensureRange(memory, data, pair.size * length);
+		out.kind = ComponentValue::Kind::Map;
+		out.elements.resize(std::size_t(length));
+		for (std::size_t i = 0; i < out.elements.size(); ++i) {
+			out.elements[i].kind = ComponentValue::Kind::Tuple;
+			out.elements[i].elements.resize(2);
+			const uint64_t entryAddress = data + uint64_t(i) * pair.size;
+			loadValueAt(store, view.mapKey(), entryAddress, memory,
+					out.elements[i].elements[0], depth + 1);
+			loadValueAt(store, view.mapValue(),
+					entryAddress + pair.valueOffset, memory,
+					out.elements[i].elements[1], depth + 1);
+		}
+		return;
+	}
 	case WASM::TypeKind::ComponentOwn:
 	case WASM::TypeKind::ComponentBorrow:
 	case WASM::TypeKind::ComponentStream:
@@ -1119,37 +1226,56 @@ struct LowerData {
 void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 {
 	auto* data = static_cast<LowerData*>(userData);
-	std::vector<WASM::Value> input(data->function.params.size());
-	for (std::size_t i = 0; i < input.size(); ++i) {
-		switch (data->function.params[i]) {
-		case WASM::AbiCoreType::I32:
-			input[i].kind = WASM::ValueTypeCode::I32;
-			input[i].i32 = *static_cast<int32_t*>(args[i + 1]);
-			break;
-		case WASM::AbiCoreType::I64:
-			input[i].kind = WASM::ValueTypeCode::I64;
-			input[i].i64 = *static_cast<int64_t*>(args[i + 1]);
-			break;
-		case WASM::AbiCoreType::F32:
-			input[i].kind = WASM::ValueTypeCode::F32;
-			input[i].f32 = *static_cast<float*>(args[i + 1]);
-			break;
-		case WASM::AbiCoreType::F64:
-			input[i].kind = WASM::ValueTypeCode::F64;
-			input[i].f64 = *static_cast<double*>(args[i + 1]);
-			break;
+	const WASM::TypeStore& store = WASM::Store::global().types().store();
+	std::vector<WASM::Value> input;
+	if (!data->function.indirectParams) {
+		input.resize(data->function.params.size());
+		for (std::size_t i = 0; i < input.size(); ++i) {
+			switch (data->function.params[i]) {
+			case WASM::AbiCoreType::I32:
+				input[i].kind = WASM::ValueTypeCode::I32;
+				input[i].i32 = *static_cast<int32_t*>(args[i + 1]);
+				break;
+			case WASM::AbiCoreType::I64:
+				input[i].kind = WASM::ValueTypeCode::I64;
+				input[i].i64 = *static_cast<int64_t*>(args[i + 1]);
+				break;
+			case WASM::AbiCoreType::F32:
+				input[i].kind = WASM::ValueTypeCode::F32;
+				input[i].f32 = *static_cast<float*>(args[i + 1]);
+				break;
+			case WASM::AbiCoreType::F64:
+				input[i].kind = WASM::ValueTypeCode::F64;
+				input[i].f64 = *static_cast<double*>(args[i + 1]);
+				break;
+			}
 		}
 	}
 	std::vector<WASM::Value> output(data->function.results.size());
+	std::vector<ComponentValue> structuredOutput;
 	if (data->function.callValues) {
 		std::vector<ComponentValue> structuredInput(data->function.paramTypes.size());
 		std::size_t index = 0;
-		const WASM::TypeStore& store = WASM::Store::global().types().store();
-		for (std::size_t i = 0; i < structuredInput.size(); ++i)
-			liftValue(store, data->function.paramTypes[i], input, index,
-					data->memory, structuredInput[i], 0);
-		std::vector<ComponentValue> structuredOutput(
-				data->function.resultTypes.size());
+		if (data->function.indirectParams) {
+			const uint64_t paramsAddress = data->function.options.pointerSize == 8
+					? *static_cast<uint64_t*>(args[1])
+					: *static_cast<uint32_t*>(args[1]);
+			uint64_t offset = 0;
+			for (std::size_t i = 0; i < structuredInput.size(); ++i) {
+				const WASM::CanonicalAbiLayout layout = layoutOf(store,
+						data->function.paramTypes[i], data->memory);
+				offset = alignUp(offset, layout.align);
+				loadValueAt(store, data->function.paramTypes[i],
+						paramsAddress + offset, data->memory,
+						structuredInput[i], 0);
+				offset += layout.size;
+			}
+		} else {
+			for (std::size_t i = 0; i < structuredInput.size(); ++i)
+				liftValue(store, data->function.paramTypes[i], input, index,
+						data->memory, structuredInput[i], 0);
+		}
+		structuredOutput.resize(data->function.resultTypes.size());
 		data->function.callValues(structuredInput, structuredOutput);
 		output.clear();
 		for (std::size_t i = 0; i < structuredOutput.size(); ++i)
@@ -1162,31 +1288,26 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 		return;
 	if (output.empty())
 		throw std::runtime_error("component runtime: lower produced no result");
-	if (data->function.results.size() > 1) {
-		auto* buffer = static_cast<unsigned char*>(
-				args[1 + data->function.params.size()]);
-		std::size_t offset = 0;
-		for (std::size_t i = 0; i < data->function.results.size(); ++i) {
-			const std::size_t size = data->function.results[i] == WASM::AbiCoreType::I64
-					|| data->function.results[i] == WASM::AbiCoreType::F64 ? 8 : 4;
-			offset = alignUp(offset, size);
-			switch (data->function.results[i]) {
-			case WASM::AbiCoreType::I32:
-				std::memcpy(buffer + offset, &output[i].i32, 4);
-				break;
-			case WASM::AbiCoreType::I64:
-				std::memcpy(buffer + offset, &output[i].i64, 8);
-				break;
-			case WASM::AbiCoreType::F32:
-				std::memcpy(buffer + offset, &output[i].f32, 4);
-				break;
-			case WASM::AbiCoreType::F64:
-				std::memcpy(buffer + offset, &output[i].f64, 8);
-				break;
+	if (data->function.indirectResults) {
+		const std::size_t resultIndex = 1 + (data->function.indirectParams
+				? 1 : data->function.params.size());
+		const uint64_t buffer = data->function.options.pointerSize == 8
+				? *static_cast<uint64_t*>(args[resultIndex])
+				: *static_cast<uint32_t*>(args[resultIndex]);
+		if (!structuredOutput.empty()) {
+			uint64_t offset = 0;
+			for (std::size_t i = 0; i < structuredOutput.size(); ++i) {
+				const WASM::CanonicalAbiLayout layout = layoutOf(store,
+						data->function.resultTypes[i], data->memory);
+				offset = alignUp(offset, layout.align);
+				storeValueAt(store, data->function.resultTypes[i],
+						structuredOutput[i], buffer + offset, data->memory, 0);
+				offset += layout.size;
 			}
-			offset += size;
+			return;
 		}
-		return;
+		throw std::runtime_error(
+				"component runtime: indirect lower result needs a structured function");
 	}
 	switch (data->function.results.front()) {
 	case WASM::AbiCoreType::I32:
@@ -1358,6 +1479,70 @@ void ComponentRuntime::processAlias(const WASM::Alias& alias)
 	coreFuncs_.push_back(*callable);
 }
 
+void ComponentRuntime::processStreamCanon(const WASM::Canon& canon)
+{
+	const bool isNew = canon.kind == WASM::Canon::Kind::StreamNew
+			|| canon.kind == WASM::Canon::Kind::FutureNew;
+	auto data = std::make_unique<ResourceClosureData>();
+	data->argumentTypes.push_back(&ffi_type_pointer);
+	if (!isNew)
+		data->argumentTypes.push_back(&ffi_type_sint32);
+	data->cif = new ffi_cif;
+	if (ffi_prep_cif(data->cif, FFI_DEFAULT_ABI,
+			static_cast<unsigned>(data->argumentTypes.size()),
+			isNew ? &ffi_type_sint64 : &ffi_type_void,
+			data->argumentTypes.data()) != FFI_OK)
+		throw std::runtime_error("component runtime: stream ffi_prep_cif failed");
+	const auto addHandle = [this] {
+		if (!freeResourceSlots_.empty()) {
+			const uint32_t handle = freeResourceSlots_.back();
+			freeResourceSlots_.pop_back();
+			resourceSlots_[handle] = ResourceSlot{0, true};
+			return handle;
+		}
+		const uint32_t handle = static_cast<uint32_t>(resourceSlots_.size());
+		resourceSlots_.push_back(ResourceSlot{0, true});
+		return handle;
+	};
+	if (isNew) {
+		data->handler = [addHandle](void* result, void**) {
+			const uint32_t readable = addHandle();
+			const uint32_t writable = addHandle();
+			*static_cast<int64_t*>(result) =
+					int64_t(uint64_t(readable) | (uint64_t(writable) << 32));
+		};
+	} else {
+		data->handler = [this](void*, void** args) {
+			const uint32_t handle = uint32_t(*static_cast<int32_t*>(args[1]));
+			if (handle == 0 || handle >= resourceSlots_.size()
+					|| !resourceSlots_[handle].live)
+				throw std::runtime_error("component runtime: invalid stream handle");
+			resourceSlots_[handle] = ResourceSlot{};
+			freeResourceSlots_.push_back(handle);
+		};
+	}
+	void* code = nullptr;
+	ffi_closure* closure = static_cast<ffi_closure*>(
+			ffi_closure_alloc(sizeof(ffi_closure), &code));
+	if (!closure || !code || ffi_prep_closure_loc(closure, data->cif,
+			resourceCallback, data.get(), code) != FFI_OK) {
+		if (closure)
+			ffi_closure_free(closure);
+		delete data->cif;
+		data->cif = nullptr;
+		throw std::runtime_error("component runtime: stream closure allocation failed");
+	}
+	WASM::Callable callable;
+	callable.fnPtr = code;
+	callable.context = nullptr;
+	callable.localTypeIdx = 0;
+	callable.typeId = WASM::TypeId{WASM::TypeId::kNone};
+	coreFuncs_.push_back(callable);
+	resourceClosures_.push_back(closure);
+	resourceCifs_.push_back(data->cif);
+	resourceData_.push_back(data.release());
+}
+
 void ComponentRuntime::processResourceCanon(const WASM::Canon& canon)
 {
 	const WASM::TypeId typeId = component_.typeId(canon.typeIndex);
@@ -1434,11 +1619,38 @@ void ComponentRuntime::processResourceCanon(const WASM::Canon& canon)
 			writeRep(result, resourceSlots_[handle].representation);
 		};
 	} else {
-		data->handler = [this](void*, void** args) {
+		const bool hasDestructor = view.resource().hasDestructor;
+		const uint32_t destructor = view.resource().destructor;
+		data->handler = [this, rep, hasDestructor, destructor](void*, void** args) {
 			const uint32_t handle = uint32_t(*static_cast<int32_t*>(args[1]));
 			if (handle == 0 || handle >= resourceSlots_.size()
 					|| !resourceSlots_[handle].live)
 				throw std::runtime_error("component runtime: invalid resource handle");
+			const uint64_t representation = resourceSlots_[handle].representation;
+			if (hasDestructor && destructor < coreFuncs_.size()) {
+				ComponentFunction drop;
+				drop.params = {rep};
+				WASM::Value value{};
+				value.kind = rep == WASM::AbiCoreType::I32
+						? WASM::ValueTypeCode::I32
+						: rep == WASM::AbiCoreType::I64
+								? WASM::ValueTypeCode::I64
+								: rep == WASM::AbiCoreType::F32
+										? WASM::ValueTypeCode::F32
+										: WASM::ValueTypeCode::F64;
+				if (rep == WASM::AbiCoreType::I32)
+					value.u32 = uint32_t(representation);
+				else if (rep == WASM::AbiCoreType::I64)
+					value.ui64 = representation;
+				else if (rep == WASM::AbiCoreType::F32) {
+					const uint32_t bits = uint32_t(representation);
+					std::memcpy(&value.f32, &bits, 4);
+				} else {
+					std::memcpy(&value.f64, &representation, 8);
+				}
+				invokeCore(coreFuncs_[destructor], drop,
+						std::span<const WASM::Value>(&value, 1), {});
+			}
 			resourceSlots_[handle] = ResourceSlot{};
 			freeResourceSlots_.push_back(handle);
 		};
@@ -1478,6 +1690,15 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 		processResourceCanon(canon);
 		return;
 	}
+	if (canon.kind == WASM::Canon::Kind::StreamNew
+			|| canon.kind == WASM::Canon::Kind::FutureNew
+			|| canon.kind == WASM::Canon::Kind::StreamDropReadable
+			|| canon.kind == WASM::Canon::Kind::StreamDropWritable
+			|| canon.kind == WASM::Canon::Kind::FutureDropReadable
+			|| canon.kind == WASM::Canon::Kind::FutureDropWritable) {
+		processStreamCanon(canon);
+		return;
+	}
 	if (canon.kind == WASM::Canon::Kind::Lower) {
 		if (canon.funcIndex >= componentFuncs_.size())
 			throw std::runtime_error(
@@ -1488,10 +1709,16 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 		const AbiMemory abiMemory = memoryFor(data->function.options);
 		data->memory = MemView{abiMemory.memory, abiMemory.realloc,
 				data->function.options};
-		const bool indirectResults = data->function.results.size() > 1;
+		const bool indirectParams = data->function.indirectParams;
+		const bool indirectResults = data->function.indirectResults;
 		data->argumentTypes.push_back(&ffi_type_pointer);
-		for (WASM::AbiCoreType type : data->function.params)
-			data->argumentTypes.push_back(ffiType(type));
+		if (indirectParams) {
+			data->argumentTypes.push_back(data->function.options.pointerSize == 8
+					? &ffi_type_sint64 : &ffi_type_sint32);
+		} else {
+			for (WASM::AbiCoreType type : data->function.params)
+				data->argumentTypes.push_back(ffiType(type));
+		}
 		if (indirectResults)
 			data->argumentTypes.push_back(&ffi_type_pointer);
 		data->cif = new ffi_cif;
@@ -1549,6 +1776,8 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 	function.params = abi->flatParams;
 	function.results = abi->flatResults;
 	function.options = options;
+	function.indirectParams = abi->indirectParams;
+	function.indirectResults = abi->indirectResults;
 	for (const WASM::ComponentFuncParam& param : functionType.params())
 		function.paramTypes.push_back(param.type);
 	for (const WASM::ComponentValueType& result : functionType.results())
@@ -1562,14 +1791,58 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 			std::span<const ComponentValue> args,
 			std::span<ComponentValue> results) {
 		const AbiMemory memory = memoryFor(function.options);
+		const WASM::TypeStore& store = WASM::Store::global().types().store();
+		const MemView view{memory.memory, memory.realloc, function.options};
+		ComponentFunction core = function;
 		std::vector<WASM::Value> flatArgs;
-		lowerValues(function, args, memory, flatArgs);
-		std::vector<WASM::Value> flatResults(function.results.size());
-		invokeCore(callable, function, flatArgs, flatResults);
-		liftValues(function, flatResults, memory, results);
+		if (function.indirectParams) {
+			uint64_t offset = 0;
+			uint32_t alignment = 1;
+			std::vector<uint64_t> offsets(function.paramTypes.size());
+			for (std::size_t i = 0; i < function.paramTypes.size(); ++i) {
+				const WASM::CanonicalAbiLayout layout = layoutOf(
+						store, function.paramTypes[i], view);
+				alignment = std::max(alignment, layout.align);
+				offset = alignUp(offset, layout.align);
+				offsets[i] = offset;
+				offset += layout.size;
+			}
+			const uint64_t paramsAddress = allocate(view, offset, alignment);
+			for (std::size_t i = 0; i < args.size(); ++i)
+				storeValueAt(store, function.paramTypes[i], args[i],
+						paramsAddress + offsets[i], view, 0);
+			pushPtr(flatArgs, paramsAddress, view);
+			core.params = {function.options.pointerSize == 8
+					? WASM::AbiCoreType::I64 : WASM::AbiCoreType::I32};
+		} else {
+			lowerValues(function, args, memory, flatArgs);
+		}
+		core.results = function.indirectResults
+				? std::vector<WASM::AbiCoreType>{function.options.pointerSize == 8
+						? WASM::AbiCoreType::I64 : WASM::AbiCoreType::I32}
+				: function.results;
+		std::vector<WASM::Value> flatResults(core.results.size());
+		invokeCore(callable, core, flatArgs, flatResults);
+		if (function.indirectResults) {
+			const uint64_t address = function.options.pointerSize == 8
+					? flatResults[0].ui64 : flatResults[0].u32;
+			uint64_t offset = 0;
+			uint32_t alignment = 1;
+			for (std::size_t i = 0; i < function.resultTypes.size(); ++i) {
+				const WASM::CanonicalAbiLayout layout = layoutOf(
+						store, function.resultTypes[i], view);
+				alignment = std::max(alignment, layout.align);
+				offset = alignUp(offset, layout.align);
+				loadValueAt(store, function.resultTypes[i], address + offset,
+						view, results[i], 0);
+				offset += layout.size;
+			}
+		} else {
+			liftValues(function, flatResults, memory, results);
+		}
 		if (memory.postReturn.fnPtr) {
 			ComponentFunction post;
-			post.params = function.results;
+			post.params = core.results;
 			invokeCore(memory.postReturn, post, flatResults, {});
 		}
 	};
@@ -1600,6 +1873,8 @@ void ComponentRuntime::processImport(const WASM::ImportDecl& importDecl)
 				"component runtime: host function signature does not match import");
 	ComponentFunction function = found->second;
 	function.typeId = typeId;
+	function.indirectParams = abi->indirectParams;
+	function.indirectResults = abi->indirectResults;
 	const WASM::ComponentTypeView functionType =
 			WASM::Store::global().types().store().componentType(typeId);
 	function.paramTypes.clear();

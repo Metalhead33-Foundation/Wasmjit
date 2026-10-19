@@ -440,6 +440,9 @@ void ModuleInstance::registerExports(ImportRegistrar& registrar, std::string_vie
 			registrar.registerTable(moduleName, ex.name, published);
 			break;
 		}
+		case ExternalKind::Type:
+			throw std::runtime_error(
+					"type exports are not linked yet (TYPE_IMPORTS.md TI-0)");
 		case ExternalKind::Tag: {
 			// Publish the process-wide TagId, not the module-local index: a
 			// re-exported imported tag must keep the exporter's identity

@@ -1,6 +1,6 @@
 # Threads and Atomics — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 3 — TH-1 landed:
+Status: design note / implementation reference (revision 4 — TH-1 landed:
 single-agent atomics and the single-agent form of wait/notify execute, and the
 submodule's `atomic.wast` is wired in and curated. §3 records the project's
 explicit execution model: **single-agent only, for the foreseeable future**;
@@ -256,6 +256,25 @@ they are recorded here:
 | T9 | **No agent API / thread pool — deferred indefinitely, not ruled out (`TD9`).** There is no way to run two instances concurrently, which is also what makes the current single-threaded stance safe. | no such API in `ModuleInstance`/`Store`; §3 project decision | Deferred by decision |
 | ~~T10~~ | ~~**No test coverage is wired in.**~~ **Done (TH-1/TH-4):** `proposals/threads/atomic.wast` is listed explicitly in `Test/Test.pro`, converts at build time, runs as `spec: atomic` (**249 passed / 0 failed / 48 skipped** — the skips are `assert_invalid` module-validation cases) and is curated in `Test/wast_supported.txt`. | `Test/Test.pro`, `Test/wast_supported.txt` | Closed |
 | T11 | **The tail-call trampoline's pending state is process-global**, so two agents would corrupt each other's tail-call chains. Must become per-agent before any multi-agent build. | `WASM::g_tailCallState` (`WasmBase/WasmValue.hpp`); §4.5 | Medium (blocks multi-agent; part of the deferred TH-5) |
+
+## 5.1 Component-model async, streams, futures and tasks — deferred here
+
+The Component Model's asynchronous execution model is explicitly folded into
+this note rather than duplicated in `COMPONENT_MODEL.md`:
+
+- `stream`/`future` **read**, **write**, **cancel-read**, **cancel-write**,
+  **forward**, waitable sets, subtasks and task scheduling are deferred
+  **indefinitely** together with true multithreading.
+- The existing component runtime only allocates and drops opaque
+  stream/future handles (`stream.new`/`future.new` and the drop builtins).
+  Those handles are table entries; they do **not** implement copying, blocking,
+  wakeups or cancellation.
+- This is not a rejection of the component-model concurrency proposal. It is
+  the same staging decision as §3: single-agent execution and synchronous
+  component calls first. Revisit stream/future copy semantics only when the
+  thread/waitable machinery in §§7–8 exists, because every read/write/cancel
+  operation is defined in terms of task state, waitables and the exclusive
+  thread.
 
 ## 6. Where we can and should play fast and loose
 

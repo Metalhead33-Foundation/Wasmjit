@@ -98,6 +98,9 @@ baked in at compile time through the `WASM_TEST_DIR` macro) and calls into it.
 | `component runtime joins variant payloads` | `component_runtime_variant` | i32/f32 variant payloads join to i32 and round-trip |
 | `component runtime resource handles` | `component_runtime_resource` | `resource.new`/`rep`/`drop` use the runtime handle table |
 | `component runtime instantiates a nested component` | `component_runtime_nested` | nested component instantiation, export alias and call |
+| `component runtime lowers and lifts a map` | `component_runtime_map` | map entries are stored as canonical key/value pairs |
+| `component runtime stream handles` | `component_runtime_stream` | stream.new packs readable/writable handles; drop releases them |
+| `component script harness invokes a component` | `component_runtime.wasm` via JSON | WastScript detects component binaries and marshals scalar component invokes |
 | `open component types intern as alpha-equivalent schemes` | `component_open_type`, `component_open_scheme` | open types keep `typeId == kNone` and share a `SchemeId` across loads; a two-parameter scheme has distinct identity and parameter arity |
 | `canonical ABI metadata is keyed by type and options` | `component_types` | flat function signature, same `(TypeId, options)` cache hit and different string encoding produces a distinct entry |
 | `canonical ABI flattens records, tuples, lists and fixed lists` | `component_abi`, `component_types` | record/tuple/fixed-list/list flat shapes and size/alignment layouts, including 32/64-bit pointer widths and enum/flags layouts |
@@ -247,7 +250,7 @@ It currently holds 189 of the 256 scripts, and the default run is green:
 
 ```
 $ ./WasmJit
-All tests passed (8822 assertions in 307 test cases)
+All tests passed (8839 assertions in 310 test cases)
 ```
 
 #### Refreshing the list
@@ -468,7 +471,7 @@ it is green:
 
 ```
 $ ./WasmJit
-All tests passed (8822 assertions in 307 test cases)
+All tests passed (8839 assertions in 310 test cases)
 ```
 
 A full sweep is deliberately loud, because most of the suite is still beyond the
@@ -621,6 +624,8 @@ Current modules:
 | `component_runtime_variant.wat` | i32/f32 variant join round-trip | `component runtime joins variant payloads` |
 | `component_runtime_resource.wat` | resource.new/rep/drop builtins | `component runtime resource handles` |
 | `component_runtime_nested.wat` | nested component instantiation and export alias | `component runtime instantiates a nested component` |
+| `component_runtime_map.wat` | canonical map key/value memory layout | `component runtime lowers and lifts a map` |
+| `component_runtime_stream.wat` | stream.new/drop-readable/drop-writable | `component runtime stream handles` |
 | `component_typeimports.wat` | structural type export and abstract resource type import entering the type index space | `component type imports and exports enter the type index space` |
 | `component_coremoduleexport.wat` | an exported core module introducing an index that is instantiated later | `an exported core module can be instantiated` |
 | `component_invalid_*.wat` (17 files) | out-of-bounds type/function/alias/start/instance references, duplicate import/export names, missing instantiation arguments, bad canon type, bad labels/flags, borrow/stream/resource restrictions, incompatible export ascription and invalid outer alias | `invalid component references and types are rejected` |

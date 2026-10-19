@@ -155,6 +155,12 @@ struct CanonicalAbiSignature {
 	CanonicalAbiOptions options;
 	std::vector<AbiCoreType> flatParams;
 	std::vector<AbiCoreType> flatResults;
+	// Canonical ABI MAX_FLAT_PARAMS (16) / MAX_FLAT_RESULTS (1) spill the
+	// component values through memory. `flatParams`/`flatResults` still describe
+	// the component-level flattening; consumers use these flags for the core
+	// signature.
+	bool indirectParams = false;
+	bool indirectResults = false;
 };
 
 struct CanonicalAbiLayout {

@@ -1,8 +1,8 @@
 # Type Imports and Exports — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / forward-looking proposal (revision 1 — nothing is
-implemented; the import decoder does not even reject the new external kind
-cleanly).
+Status: design note / forward-looking proposal (revision 2 — TI-0 is done: the
+new external kind is decoded and rejected with a named error instead of
+desynchronising the import stream; TI-1…TI-4 remain).
 Audience: anyone touching `WasmModule` (type/import/export sections),
 `WasmTypeRegistry`, `WasmImport`, `WasmRegistryImportResolver`, or the
 validator.
@@ -77,7 +77,7 @@ only functions, tables, memories, globals and tags.
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| TI1 | **No Type external kind.** Kind `0x05` has no enum value, no parser arm and no payload consumption. | `WasmType.hpp` (`ExternalKind`), `WasmModule.cpp` (`processImportSection`) | High |
+| TI1 | **Type external kind is decoded but not linked.** `ExternalKind::Type` exists; the decoder rejects imports/exports with a named TI-0 error so the stream stays aligned. Full `typetype`/bound and type-namespace linking are still absent. | `WasmType.hpp`, `WasmModule.cpp` | High |
 | TI2 | **No `typetype` / bound decoding.** `boundkind` and `heaptype` are never read, and a pre-type import section is not a supported ordering. | `WasmModule.cpp` | High |
 | TI3 | **Type exports are ignored.** Kind `0x05` in the export section is stored as an out-of-range `ExternalKind`, then skipped by both the validator and `registerExports`. | `WasmModule.cpp`, `WasmValidator.cpp`, `WasmModuleInstance.cpp` | High |
 | TI4 | **No type namespace in the resolver.** Even a decoded type import could not be resolved or matched against an exported type. | `WasmRegistryImportResolver.hpp` | High |

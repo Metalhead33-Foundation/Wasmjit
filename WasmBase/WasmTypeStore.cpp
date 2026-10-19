@@ -847,6 +847,8 @@ const CanonicalAbiSignature* TypeStore::canonicalAbi(TypeId type,
 	for (const ComponentValueType& result : view.results())
 		if (!appendAbiFlat(*this, result, signature.flatResults, 0))
 			return nullptr;
+	signature.indirectParams = signature.flatParams.size() > 16;
+	signature.indirectResults = signature.flatResults.size() > 1;
 	const auto inserted = canonicalAbi_.emplace(std::move(key),
 			std::move(signature));
 	return &inserted.first->second;

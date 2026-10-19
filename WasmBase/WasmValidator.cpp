@@ -665,6 +665,7 @@ void Validator::validateModule()
 		case ExternalKind::Memory:   requireMemoryIndex(ex.index);   break;
 		case ExternalKind::Global:   requireGlobalIndex(ex.index);   break;
 		case ExternalKind::Tag:      requireTagIndex(ex.index);      break;
+		case ExternalKind::Type:     fail("type exports are not linked yet"); break;
 		}
 	}
 

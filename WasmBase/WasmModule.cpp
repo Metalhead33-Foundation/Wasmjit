@@ -186,6 +186,16 @@ void Module::processImportSection(Elv::Io::Device& file, const Section& section)
 			wasmStream >> Elv::Io::Leb(typeIdx); // Points to a FuncType in Type Section
 			this->importTags.push_back({{moduleName, fieldName}, attribute, typeIdx});
 		}
+		else if (kind == (uint8_t)ExternalKind::Type) {
+			// Type Imports/Exports is not linked yet. Reject the descriptor by
+			// name instead of leaving its `typetype` payload in the stream and
+			// desynchronising every following import (TYPE_IMPORTS.md TI-0).
+			throw std::runtime_error(
+					"type imports are not supported (TYPE_IMPORTS.md TI-0)");
+		}
+		else {
+			throw std::runtime_error("unknown import kind");
+		}
 	}
 }
 
@@ -296,6 +306,9 @@ void Module::processExportSection(Elv::Io::Device& file, const Section& section)
 		uint8_t kindByte;
 		wasmStream >> kindByte;
 		ex.kind = static_cast<ExternalKind>(kindByte);
+		if (ex.kind == ExternalKind::Type)
+			throw std::runtime_error(
+					"type exports are not supported (TYPE_IMPORTS.md TI-0)");
 
 		// 3. Read the index within that kind's index space
 		wasmStream >> Elv::Io::Leb(ex.index);

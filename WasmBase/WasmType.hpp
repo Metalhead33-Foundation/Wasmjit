@@ -321,7 +321,8 @@ enum class ExternalKind : uint8_t {
 	Table    = 0x01,
 	Memory   = 0x02,
 	Global   = 0x03,
-	Tag      = 0x04  // Exception Handling proposal
+	Tag      = 0x04, // Exception Handling proposal
+	Type     = 0x05  // Type Imports/Exports proposal (decoded but not linked yet)
 };
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, ExternalKind& right) {
 	return left.read_enum(right);

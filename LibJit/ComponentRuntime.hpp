@@ -50,6 +50,8 @@ struct ComponentFunction {
 	std::vector<WASM::ComponentValueType> paramTypes;
 	std::vector<WASM::ComponentValueType> resultTypes;
 	WASM::CanonicalAbiOptions options;
+	bool indirectParams = false;
+	bool indirectResults = false;
 	std::function<void(std::span<const WASM::Value>, std::span<WASM::Value>)> call;
 	std::function<void(std::span<const ComponentValue>, std::span<ComponentValue>)> callValues;
 };
@@ -113,6 +115,7 @@ private:
 	void processAlias(const WASM::Alias& alias);
 	void processCanon(const WASM::Canon& canon);
 	void processResourceCanon(const WASM::Canon& canon);
+	void processStreamCanon(const WASM::Canon& canon);
 	void processImport(const WASM::ImportDecl& importDecl);
 	void processExport(const WASM::ComponentExport& exportDecl);
 	AbiMemory memoryFor(const WASM::CanonicalAbiOptions& options) const;

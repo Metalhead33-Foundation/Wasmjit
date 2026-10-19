@@ -2,9 +2,10 @@
 (component
   (core module $m
     (memory (export "memory") 1)
-    (func (export "echo") (param i32 i32) (result i32 i32)
-      (local.get 0)
-      (local.get 1)
+    (func (export "echo") (param i32 i32) (result i32)
+      (i32.store (i32.const 2048) (local.get 0))
+      (i32.store (i32.const 2052) (local.get 1))
+      (i32.const 2048)
     )
     (func (export "realloc") (param i32 i32 i32 i32) (result i32)
       (i32.const 1024)

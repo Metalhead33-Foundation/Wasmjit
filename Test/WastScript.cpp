@@ -8,6 +8,7 @@
 #include <csetjmp>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -23,6 +24,8 @@
 #include <nlohmann/json.hpp>
 
 #include "LibJit/LibjitModuleCompiler.hpp"
+#include "LibJit/ComponentRuntime.hpp"
+#include "WasmBase/WasmComponent.hpp"
 #include "WasmBase/WasmModule.hpp"
 #include "WasmBase/WasmModuleInstance.hpp"
 #include "WasmBase/WasmExn.hpp"
@@ -79,6 +82,18 @@ void callWithV128ParamsVoid(void* fnPtr, void* context, const AbiV128* args, siz
 }
 
 // ── JSON access helpers ─────────────────────────────────────────────────────
+
+bool isComponentFile(const std::string& path)
+{
+	std::ifstream stream(path, std::ios::binary);
+	unsigned char preamble[8]{};
+	stream.read(reinterpret_cast<char*>(preamble), sizeof(preamble));
+	if (stream.gcount() != static_cast<std::streamsize>(sizeof(preamble)))
+		return false;
+	return preamble[0] == 0x00 && preamble[1] == 0x61
+			&& preamble[2] == 0x73 && preamble[3] == 0x6D
+			&& preamble[6] == 0x01 && preamble[7] == 0x00;
+}
 
 std::string stringOr(const Json& object, const char* key)
 {
@@ -554,9 +569,14 @@ private:
 	// must keep their contents alive (and stable) for the whole script.
 	std::vector<std::unique_ptr<WASM::Module>> modules;
 	std::vector<std::unique_ptr<WASM::ModuleInstance>> instances;
+	std::vector<std::unique_ptr<WASM::Component>> components;
+	std::vector<std::unique_ptr<LibJIT::ComponentRuntime>> componentRuntimes;
 
 	std::unordered_map<std::string, WASM::ModuleInstance*> namedInstances;
+	std::unordered_map<std::string, LibJIT::ComponentRuntime*> namedComponents;
 	WASM::ModuleInstance* lastInstance = nullptr;
+	LibJIT::ComponentRuntime* lastComponent = nullptr;
+	bool lastWasComponent = false;
 
 	ScriptReport report;
 
@@ -573,6 +593,7 @@ private:
 	void skip(const std::string& reason);
 
 	WASM::ModuleInstance* instanceFor(const std::string& name, int line);
+	LibJIT::ComponentRuntime* componentFor(const std::string& name, int line);
 	std::optional<WASM::FuncType> funcTypeFor(const WASM::ModuleInstance& instance, const WASM::Callable& callable);
 
 	void runCommand(const ScriptCommand& command);
@@ -722,6 +743,24 @@ WASM::ModuleInstance* ScriptRunner::instanceFor(const std::string& name, int lin
 	return lastInstance;
 }
 
+LibJIT::ComponentRuntime* ScriptRunner::componentFor(const std::string& name,
+		int line)
+{
+	if (!name.empty()) {
+		const auto it = namedComponents.find(name);
+		if (it == namedComponents.end()) {
+			fail(line, "action refers to unknown component '" + name + "'");
+			return nullptr;
+		}
+		return it->second;
+	}
+	if (lastComponent == nullptr) {
+		fail(line, "no component has been instantiated yet");
+		return nullptr;
+	}
+	return lastComponent;
+}
+
 std::optional<WASM::FuncType> ScriptRunner::funcTypeFor(const WASM::ModuleInstance& instance, const WASM::Callable& callable)
 {
 	const WASM::Module* module = instance.context()->module;
@@ -842,6 +881,34 @@ void ScriptRunner::onModule(const ScriptCommand& command)
 		std::fflush(stderr);
 	}
 
+	if (isComponentFile(path)) {
+		auto component = std::make_unique<WASM::Component>();
+		try {
+			Euph::Io::File file(path.c_str(), Elv::Io::Mode::READ);
+			component->fromFile(file);
+		} catch (const std::exception& error) {
+			fail(command.line, "could not load component '" + command.filename
+					+ "': " + error.what());
+			return;
+		}
+		components.push_back(std::move(component));
+		try {
+			auto runtime = std::make_unique<LibJIT::ComponentRuntime>(
+					jitContext.rawContext(), *components.back());
+			lastComponent = runtime.get();
+			lastWasComponent = true;
+			if (!command.name.empty())
+				namedComponents[command.name] = lastComponent;
+			componentRuntimes.push_back(std::move(runtime));
+		} catch (const std::exception& error) {
+			fail(command.line, "component instantiation of '" + command.filename
+					+ "' failed: " + error.what());
+			return;
+		}
+		pass();
+		return;
+	}
+
 	auto module = std::make_unique<WASM::Module>();
 	try {
 		Euph::Io::File file(path.c_str(), Elv::Io::Mode::READ);
@@ -878,6 +945,7 @@ void ScriptRunner::onModule(const ScriptCommand& command)
 	WASM::ModuleInstance* raw = instance.get();
 	instances.push_back(std::move(instance));
 	lastInstance = raw;
+	lastWasComponent = false;
 
 	if (!command.name.empty())
 		namedInstances[command.name] = raw;
@@ -895,12 +963,129 @@ void ScriptRunner::onRegister(const ScriptCommand& command)
 	pass();
 }
 
+bool componentValueFromScript(const ScriptValue& value,
+		LibJIT::ComponentValue& out)
+{
+	using K = LibJIT::ComponentValue::Kind;
+	if (value.type == "i32" || value.type == "s32") {
+		out.kind = K::S32;
+		out.s64 = std::strtoll(value.value.c_str(), nullptr, 10);
+		return true;
+	}
+	if (value.type == "u32") {
+		out.kind = K::U32;
+		out.u64 = std::strtoull(value.value.c_str(), nullptr, 10);
+		return true;
+	}
+	if (value.type == "i64" || value.type == "s64") {
+		out.kind = K::S64;
+		out.s64 = std::strtoll(value.value.c_str(), nullptr, 10);
+		return true;
+	}
+	if (value.type == "u64") {
+		out.kind = K::U64;
+		out.u64 = std::strtoull(value.value.c_str(), nullptr, 10);
+		return true;
+	}
+	if (value.type == "f32") {
+		const uint32_t bits = uint32_t(std::strtoull(value.value.c_str(), nullptr, 10));
+		out.kind = K::F32;
+		float number;
+		std::memcpy(&number, &bits, sizeof(number));
+		out.f64 = number;
+		return true;
+	}
+	if (value.type == "f64") {
+		const uint64_t bits = std::strtoull(value.value.c_str(), nullptr, 10);
+		out.kind = K::F64;
+		std::memcpy(&out.f64, &bits, sizeof(bits));
+		return true;
+	}
+	if (value.type == "string") {
+		out.kind = K::String;
+		out.string = value.value;
+		return true;
+	}
+	if (value.type == "bool") {
+		out.kind = K::Bool;
+		out.u64 = value.value == "true" || value.value == "1";
+		return true;
+	}
+	return false;
+}
+
+bool componentValueMatches(const LibJIT::ComponentValue& actual,
+		const ScriptValue& expected)
+{
+	LibJIT::ComponentValue wanted;
+	if (!componentValueFromScript(expected, wanted))
+		return false;
+	using K = LibJIT::ComponentValue::Kind;
+	if (actual.kind != wanted.kind)
+		return false;
+	switch (actual.kind) {
+	case K::String: return actual.string == wanted.string;
+	case K::F32:
+	case K::F64: return actual.f64 == wanted.f64;
+	default: return actual.u64 == wanted.u64;
+	}
+}
+
 void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 {
 	const ScriptAction& action = command.action;
 
 	if (action.type != "invoke") {
 		skip("assert_return with a non-invoke action ('" + action.type + "')");
+		return;
+	}
+
+	const bool componentAction = action.module.empty()
+			? lastWasComponent : namedComponents.count(action.module) != 0;
+	if (componentAction) {
+		LibJIT::ComponentRuntime* component = componentFor(action.module, command.line);
+		if (component == nullptr)
+			return;
+		const auto function = component->exportedFunction(action.field);
+		if (!function.has_value()) {
+			fail(command.line, "no component function named '" + action.field + "'");
+			return;
+		}
+		if (!function->callValues) {
+			skip("component function '" + action.field + "' has no structured entry point");
+			return;
+		}
+		if (function->paramTypes.size() != action.args.size()) {
+			fail(command.line, "component arity mismatch for '" + action.field + "'");
+			return;
+		}
+		if (function->resultTypes.size() != command.expected.size()) {
+			fail(command.line, "component result count mismatch for '" + action.field + "'");
+			return;
+		}
+		std::vector<LibJIT::ComponentValue> args(action.args.size());
+		for (std::size_t i = 0; i < action.args.size(); ++i) {
+			if (!componentValueFromScript(action.args[i], args[i])) {
+				skip("component argument type '" + action.args[i].type + "' is not supported");
+				return;
+			}
+		}
+		std::vector<LibJIT::ComponentValue> results(function->resultTypes.size());
+		try {
+			function->callValues(args, results);
+		} catch (const std::exception& error) {
+			fail(command.line, "component invocation of '" + action.field
+					+ "' failed: " + error.what());
+			return;
+		}
+		for (std::size_t i = 0; i < results.size(); ++i) {
+			if (!componentValueMatches(results[i], command.expected[i])) {
+				fail(command.line, "component assert_return failed for '"
+						+ action.field + "' result #" + std::to_string(i));
+				return;
+			}
+		}
+		pass();
 		return;
 	}
 
