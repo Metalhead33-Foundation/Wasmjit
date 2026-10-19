@@ -108,9 +108,10 @@ enum class PrimitiveValueType : uint8_t {
 };
 
 struct ComponentValueType {
-	enum class Kind : uint8_t { TypeIndex, Primitive };
+	enum class Kind : uint8_t { TypeIndex, Primitive, TypeId };
 	Kind kind = Kind::Primitive;
 	PrimitiveValueType primitive = PrimitiveValueType::Invalid;
+	// TypeIndex for parser syntax, TypeId.value for canonical records.
 	uint32_t typeIndex = 0;
 };
 
@@ -181,6 +182,9 @@ struct ComponentResourcePayload {
 	ValueType rep;
 	uint32_t destructor = 0;
 	bool hasDestructor = false;
+	// An abstract `sub resource` import has no representation or destructor yet;
+	// it still receives a fresh nominal TypeId.
+	bool abstract = false;
 };
 
 // One import/export declaration of a component or instance type. This is a
@@ -288,6 +292,9 @@ public:
 	TypeId addComponentResult(ComponentValueType ok, ComponentValueType error,
 			bool hasOk, bool hasError);
 	TypeId addComponentTypeRef(TypeKind kind, uint32_t typeIndex);
+	// Canonical own/borrow reference: the resource identity is a Store TypeId,
+	// so identical references to the same nominal resource share a record.
+	TypeId addComponentTypeRefCanonical(TypeKind kind, TypeId resource);
 	TypeId addComponentStream(TypeKind kind, ComponentValueType element, bool hasElement);
 	TypeId addComponentMap(ComponentValueType key, ComponentValueType value);
 	TypeId addComponentFunc(std::span<const ComponentFuncParam> params,

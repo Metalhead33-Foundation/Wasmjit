@@ -89,7 +89,28 @@ bool appendValueKey(std::string& key, const ComponentValueType& value)
 	appendKeyU8(key, static_cast<uint8_t>(value.kind));
 	if (value.kind == ComponentValueType::Kind::TypeIndex)
 		return false;
-	appendKeyU8(key, static_cast<uint8_t>(value.primitive));
+	if (value.kind == ComponentValueType::Kind::Primitive) {
+		appendKeyU8(key, static_cast<uint8_t>(value.primitive));
+		return true;
+	}
+	// Kind::TypeId: the field carries a canonical Store TypeId.
+	if (value.typeIndex == TypeId::kNone)
+		return false;
+	appendKeyU32(key, value.typeIndex);
+	return true;
+}
+
+bool appendDeclKeys(std::string& key, std::span<const ComponentDeclRecord> declarations)
+{
+	appendKeyU32(key, static_cast<uint32_t>(declarations.size()));
+	for (const ComponentDeclRecord& declaration : declarations) {
+		if (declaration.type.isNone())
+			return false;
+		appendKeyU32(key, declaration.name);
+		appendKeyU16(key, declaration.sort);
+		appendKeyU16(key, declaration.coreSort);
+		appendKeyU32(key, declaration.type.value);
+	}
 	return true;
 }
 
@@ -341,11 +362,24 @@ TypeId TypeStore::addComponentResult(ComponentValueType ok, ComponentValueType e
 
 TypeId TypeStore::addComponentTypeRef(TypeKind kind, uint32_t typeIndex)
 {
-	// own/borrow carry a resource identity. Resources are nominal, so this is
-	// never structurally interned; TM-9 supplies the resource TypeId instead.
+	// Parser syntax: the index is component-local, so it is never structurally
+	// interned. The validated canonical path uses addComponentTypeRefCanonical.
 	const uint32_t payload = static_cast<uint32_t>(componentTypeRefs_.size());
 	componentTypeRefs_.push_back(typeIndex);
 	return addComponentRecord(kind, 0, payload);
+}
+
+TypeId TypeStore::addComponentTypeRefCanonical(TypeKind kind, TypeId resource)
+{
+	std::string key;
+	appendKeyU16(key, static_cast<uint16_t>(kind));
+	appendKeyU32(key, resource.value);
+	const auto create = [&] {
+		const uint32_t payload = static_cast<uint32_t>(componentTypeRefs_.size());
+		componentTypeRefs_.push_back(resource.value);
+		return addComponentRecord(kind, 0, payload);
+	};
+	return resource.isNone() ? create() : internComponent(std::move(key), create);
 }
 
 TypeId TypeStore::addComponentStream(TypeKind kind, ComponentValueType element,
@@ -405,18 +439,30 @@ TypeId TypeStore::addComponentResource(const ComponentResourcePayload& resource)
 
 TypeId TypeStore::addComponentInstance(std::span<const ComponentDeclRecord> declarations)
 {
-	const TypeSpan span = appendComponentDecls(declarations);
-	const uint32_t payload = static_cast<uint32_t>(componentInstancePayloads_.size());
-	componentInstancePayloads_.push_back(ComponentInstancePayload{span});
-	return addComponentRecord(TypeKind::ComponentInstance, 0, payload);
+	std::string key;
+	appendKeyU16(key, static_cast<uint16_t>(TypeKind::ComponentInstance));
+	const bool internable = appendDeclKeys(key, declarations);
+	const auto create = [&] {
+		const TypeSpan span = appendComponentDecls(declarations);
+		const uint32_t payload = static_cast<uint32_t>(componentInstancePayloads_.size());
+		componentInstancePayloads_.push_back(ComponentInstancePayload{span});
+		return addComponentRecord(TypeKind::ComponentInstance, 0, payload);
+	};
+	return internable ? internComponent(std::move(key), create) : create();
 }
 
 TypeId TypeStore::addComponentComponent(std::span<const ComponentDeclRecord> declarations)
 {
-	const TypeSpan span = appendComponentDecls(declarations);
-	const uint32_t payload = static_cast<uint32_t>(componentComponentPayloads_.size());
-	componentComponentPayloads_.push_back(ComponentComponentPayload{span});
-	return addComponentRecord(TypeKind::ComponentComponent, 0, payload);
+	std::string key;
+	appendKeyU16(key, static_cast<uint16_t>(TypeKind::ComponentComponent));
+	const bool internable = appendDeclKeys(key, declarations);
+	const auto create = [&] {
+		const TypeSpan span = appendComponentDecls(declarations);
+		const uint32_t payload = static_cast<uint32_t>(componentComponentPayloads_.size());
+		componentComponentPayloads_.push_back(ComponentComponentPayload{span});
+		return addComponentRecord(TypeKind::ComponentComponent, 0, payload);
+	};
+	return internable ? internComponent(std::move(key), create) : create();
 }
 
 TypeSpan TypeStore::appendFields(std::span<const ComponentField> fields)

@@ -1129,10 +1129,16 @@ TEST_CASE("component local type indices map to Store TypeIds after validation")
 	REQUIRE(component->localTypeIds.size() == component->types.size());
 	for (uint32_t i = 0; i < component->types.size(); ++i) {
 		REQUIRE_FALSE(component->typeId(i).isNone());
-		REQUIRE(component->typeId(i) == component->types[i].id);
+		REQUIRE(typeStore().componentType(component->typeId(i)).kind()
+				== componentTypeView(component->types[i]).kind());
 	}
+	// `$listRecord` is the canonical local-reference proof.
+	const auto canonicalList = typeStore().componentType(component->typeId(12));
+	REQUIRE(canonicalList.kind() == WASM::TypeKind::ComponentList);
+	REQUIRE(canonicalList.element().kind == WASM::ComponentValueType::Kind::TypeId);
+	REQUIRE(canonicalList.element().typeIndex == component->typeId(0).value);
 
-	// Resources and own/borrow have parser-assigned ids too.
+	// Resources keep their nominal ids; own/borrow carry the resource TypeId.
 	auto resourceArtifact = loadTestArtifact("component_resource");
 	REQUIRE(resourceArtifact != nullptr);
 	WASM::Component* resources = resourceArtifact->asComponent();
@@ -1141,10 +1147,13 @@ TEST_CASE("component local type indices map to Store TypeIds after validation")
 	REQUIRE(resources->localTypeIds.size() == resources->types.size());
 	for (uint32_t i = 0; i < resources->types.size(); ++i) {
 		REQUIRE_FALSE(resources->typeId(i).isNone());
-		REQUIRE(resources->typeId(i) == resources->types[i].id);
+		REQUIRE(typeStore().componentType(resources->typeId(i)).kind()
+				== componentTypeView(resources->types[i]).kind());
 	}
+	REQUIRE(typeStore().componentType(resources->typeId(1)).typeRef()
+			== resources->typeId(0).value);
 
-	// Component/instance declarations get nominal Store records and payloads.
+	// Component/instance declarations get canonical Store records and payloads.
 	auto declarationArtifact = loadTestArtifact("component_decltypes");
 	REQUIRE(declarationArtifact != nullptr);
 	WASM::Component* declarations = declarationArtifact->asComponent();
@@ -1159,6 +1168,74 @@ TEST_CASE("component local type indices map to Store TypeIds after validation")
 	const auto instanceType = typeStore().componentType(declarations->typeId(1));
 	REQUIRE(instanceType.kind() == WASM::TypeKind::ComponentInstance);
 	REQUIRE(instanceType.declarations().size() == 1);
+	for (const auto& declaration : componentType.declarations())
+		REQUIRE_FALSE(declaration.type.isNone());
+	for (const auto& declaration : instanceType.declarations())
+		REQUIRE_FALSE(declaration.type.isNone());
+}
+
+TEST_CASE("component instantiation substitutes abstract resource types")
+{
+	auto artifact = loadTestArtifact("component_resource_substitution");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	REQUIRE(component->instances.size() == 3);
+	component->validate();
+	for (const auto& instance : component->instances)
+		REQUIRE_FALSE(instance.typeId.isNone());
+	REQUIRE(component->instances[0].typeId
+			== component->instances[2].typeId);
+	REQUIRE(component->instances[0].typeId
+			!= component->instances[1].typeId);
+	const auto instanceType = typeStore().componentType(
+			component->instances[0].typeId);
+	REQUIRE(instanceType.kind() == WASM::TypeKind::ComponentInstance);
+	REQUIRE(instanceType.declarations().size() == 1);
+	REQUIRE_FALSE(instanceType.declarations()[0].type.isNone());
+}
+
+TEST_CASE("component canonical value payloads and declaration sets intern")
+{
+	auto firstArtifact = loadTestArtifact("component_types");
+	auto secondArtifact = loadTestArtifact("component_types");
+	REQUIRE(firstArtifact != nullptr);
+	REQUIRE(secondArtifact != nullptr);
+	WASM::Component* first = firstArtifact->asComponent();
+	WASM::Component* second = secondArtifact->asComponent();
+	REQUIRE(first != nullptr);
+	REQUIRE(second != nullptr);
+	first->validate();
+	second->validate();
+
+	// Primitive records keep their canonical id; the list with a local record
+	// reference is now interned through its canonical TypeId child.
+	REQUIRE(first->typeId(0) == second->typeId(0));
+	REQUIRE(first->typeId(12) == second->typeId(12));
+	const auto list = typeStore().componentType(first->typeId(12));
+	REQUIRE(list.kind() == WASM::TypeKind::ComponentList);
+	REQUIRE(list.element().kind == WASM::ComponentValueType::Kind::TypeId);
+	REQUIRE(list.element().typeIndex == first->typeId(0).value);
+
+	// A component/instance declaration set with type-bearing declarations is
+	// structurally interned across loads.
+	auto declA = loadTestArtifact("component_decltypes");
+	auto declB = loadTestArtifact("component_decltypes");
+	REQUIRE(declA != nullptr);
+	REQUIRE(declB != nullptr);
+	WASM::Component* a = declA->asComponent();
+	WASM::Component* b = declB->asComponent();
+	REQUIRE(a != nullptr);
+	REQUIRE(b != nullptr);
+	a->validate();
+	b->validate();
+	REQUIRE(a->typeId(0) == b->typeId(0));
+	REQUIRE(a->typeId(1) == b->typeId(1));
+	const auto componentType = typeStore().componentType(a->typeId(0));
+	REQUIRE(componentType.kind() == WASM::TypeKind::ComponentComponent);
+	REQUIRE(componentType.declarations().size() == 2);
+	for (const auto& declaration : componentType.declarations())
+		REQUIRE_FALSE(declaration.type.isNone());
 }
 
 TEST_CASE("component closed records intern by structure (TM-8 first slice)")
@@ -1183,7 +1260,9 @@ TEST_CASE("component closed records intern by structure (TM-8 first slice)")
 	REQUIRE(third != nullptr);
 	WASM::Component* thirdComponent = third->asComponent();
 	REQUIRE(thirdComponent != nullptr);
-	REQUIRE(typeStore().componentInternHits() - beforeHits == 13);
+	// Parsing the same component again hits the parser records *and* the
+	// canonical validation records installed by revision 8.
+	REQUIRE(typeStore().componentInternHits() - beforeHits >= 13);
 	// `$listRecord` is skipped, not a miss: its element is a component-local
 	// index, so the record is not eligible for structural interning yet.
 	REQUIRE(typeStore().componentInternMisses() == beforeMisses);
@@ -1693,6 +1772,13 @@ TEST_CASE("component type imports and exports enter the type index space")
 	REQUIRE(spaces.types.size() == 3);
 	REQUIRE(spaces.resolve(WASM::ComponentSort::Type, 1).has_value());
 	REQUIRE(spaces.resolve(WASM::ComponentSort::Type, 2).has_value());
+
+	component->validate();
+	REQUIRE(component->localTypeIds.size() == 3);
+	REQUIRE_FALSE(component->typeId(2).isNone());
+	const auto abstractResource = typeStore().componentType(component->typeId(2));
+	REQUIRE(abstractResource.kind() == WASM::TypeKind::ComponentResource);
+	REQUIRE(abstractResource.resource().abstract);
 }
 
 TEST_CASE("an exported core module can be instantiated")

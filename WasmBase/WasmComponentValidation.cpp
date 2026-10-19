@@ -8,6 +8,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -68,6 +69,7 @@ struct ResolvedValueType {
 	std::optional<ValuePtr> ok;
 	std::optional<ValuePtr> error;
 	std::optional<uint32_t> resourceId;
+	TypeId resourceTypeId{TypeId::kNone};
 	bool resourceAbstract = false;
 	std::optional<ValuePtr> streamElement;
 	std::optional<ValuePtr> futureElement;
@@ -451,6 +453,9 @@ private:
 	ValidationScope scope_;
 	std::map<const ComponentTypeDef*, TypePtr> typeCache_;
 	std::shared_ptr<const ResolvedComponentType> signature_;
+	// Canonical component interning: resolved node -> Store TypeId.
+	std::unordered_map<const ResolvedValueType*, TypeId> valueTypeIds_;
+	std::unordered_map<const ResolvedType*, TypeId> resolvedTypeIds_;
 
 	void processDefinition(const ComponentDefinition& definition);
 	void processCoreModule(uint32_t index);
@@ -485,7 +490,19 @@ private:
 			const char* what);
 	TypePtr buildDeclaredType(const ComponentTypeDef& definition,
 			ValidationScope& scope);
-	TypeId publishDeclaredType(const ResolvedType& type);
+	TypeId internValue(const ValuePtr& value);
+	TypeId internResolvedType(const TypePtr& type);
+	std::vector<ComponentDeclRecord> canonicalDeclarations(
+			const std::vector<ResolvedDecl>& declarations);
+	ValuePtr substituteValue(const ValuePtr& value,
+			const std::map<uint32_t, TypePtr>& resources) const;
+	TypePtr substituteType(const TypePtr& type,
+			const std::map<uint32_t, TypePtr>& resources) const;
+	ResolvedDecl substituteDeclaration(const ResolvedDecl& declaration,
+			const std::map<uint32_t, TypePtr>& resources) const;
+	std::vector<ResolvedDecl> substituteDeclarations(
+			const std::vector<ResolvedDecl>& declarations,
+			const std::map<uint32_t, TypePtr>& resources) const;
 	void processComponentDecl(const ComponentDecl& declaration,
 			ValidationScope& scope);
 	void processInstanceDecl(const InstanceDecl& declaration,
@@ -525,11 +542,25 @@ void ComponentValidator::run()
 	scope_.typeScope.parent = parent_;
 	for (const ComponentDefinition& definition : component_.definitions)
 		processDefinition(definition);
+	// Canonicalise the resolved component graph before publishing the local map.
+	for (const TypePtr& type : scope_.typeScope.types)
+		internResolvedType(type);
+	const auto& instanceEntities =
+			scope_.spaces.componentSpace(ComponentSort::Instance);
+	for (const Entity& entity : instanceEntities)
+		if (entity.type)
+			internResolvedType(entity.type);
+	for (const Entity& entity : instanceEntities) {
+		if (entity.type && entity.ref.owner == &component_
+				&& entity.ref.kind == ComponentDefinitionKind::Instance
+				&& entity.ref.index < component_.instances.size())
+			component_.instances[entity.ref.index].typeId = entity.type->typeId;
+	}
 	signature_ = buildSignature();
 
-	// Publish the local-index -> TypeId map. The vector mirrors the component
-	// type index space exactly, including aliases and imported types; a kNone
-	// entry is a type whose closed identity is still validator-only.
+	// Publish the canonical local-index -> TypeId map. The vector mirrors the
+	// component type index space exactly, including aliases and imported types;
+	// a kNone entry is unvalidated or a future open/scheme type.
 	component_.localTypeIds.clear();
 	component_.localTypeIds.reserve(scope_.typeScope.types.size());
 	for (const TypePtr& type : scope_.typeScope.types)
@@ -586,6 +617,7 @@ void ComponentValidator::addTypeEntity(ValidationScope& scope,
 {
 	Entity entity;
 	entity.ref = ComponentDefinitionRef{&component_, kind, index};
+	entity.sort = componentSortIndex(ComponentSort::Type);
 	entity.type = type;
 	scope.spaces.types.push_back(std::move(entity));
 }
@@ -595,6 +627,8 @@ TypePtr ComponentValidator::resolveValueType(const ComponentValueType& type,
 	if (type.kind == ComponentValueType::Kind::TypeIndex)
 		return resolveTypeIndex(type.typeIndex, scope, ResolvedType::Kind::Value,
 				"defined type");
+	if (type.kind == ComponentValueType::Kind::TypeId)
+		fail("canonical value reference cannot be resolved in a local scope");
 	if (type.primitive == PrimitiveValueType::Invalid)
 		fail("invalid primitive value type");
 	auto value = std::make_shared<ResolvedValueType>();
@@ -713,6 +747,7 @@ TypePtr ComponentValidator::resolveDefinedValueType(ComponentTypeView type,
 		const TypePtr resource = resolveTypeIndex(type.typeRef(), scope,
 				ResolvedType::Kind::Resource, "resource type");
 		value->resourceId = resource->resource->id;
+		value->resourceTypeId = resource->typeId;
 		value->resourceAbstract = resource->resource->abstract;
 		value->kind = type.kind() == TypeKind::ComponentOwn
 				? ResolvedValueType::Kind::Own : ResolvedValueType::Kind::Borrow;
@@ -840,9 +875,7 @@ TypePtr ComponentValidator::buildDeclaredType(
 		auto result = std::make_shared<ResolvedComponentType>();
 		result->imports = local.imports;
 		result->exports = local.exports;
-		TypePtr type = makeType(result);
-		type->typeId = publishDeclaredType(*type);
-		return type;
+		return makeType(result);
 	}
 
 	if (definition.kind == ComponentTypeDef::Kind::Instance) {
@@ -850,42 +883,339 @@ TypePtr ComponentValidator::buildDeclaredType(
 			processInstanceDecl(declaration, local);
 		auto result = std::make_shared<ResolvedInstanceType>();
 		result->exports = local.exports;
-		TypePtr type = makeType(result);
-		type->typeId = publishDeclaredType(*type);
-		return type;
+		return makeType(result);
 	}
 
 	fail("buildDeclaredType called for a non-declaring type");
 }
 
-TypeId ComponentValidator::publishDeclaredType(const ResolvedType& type)
+ValuePtr ComponentValidator::substituteValue(const ValuePtr& value,
+		const std::map<uint32_t, TypePtr>& resources) const
 {
-	if (type.kind != ResolvedType::Kind::Component
-			&& type.kind != ResolvedType::Kind::Instance)
-		return TypeId{TypeId::kNone};
+	if (!value)
+		return {};
+	auto out = std::make_shared<ResolvedValueType>(*value);
+	switch (value->kind) {
+	case ResolvedValueType::Kind::Record:
+		out->fields.clear();
+		out->fields.reserve(value->fields.size());
+		for (const auto& [name, field] : value->fields)
+			out->fields.emplace_back(name, substituteValue(field, resources));
+		break;
+	case ResolvedValueType::Kind::Variant:
+		out->cases.clear();
+		out->cases.reserve(value->cases.size());
+		for (const ResolvedCase& item : value->cases) {
+			ResolvedCase replacement;
+			replacement.label = item.label;
+			if (item.type)
+				replacement.type = substituteValue(*item.type, resources);
+			out->cases.push_back(std::move(replacement));
+		}
+		break;
+	case ResolvedValueType::Kind::List:
+	case ResolvedValueType::Kind::FixedList:
+	case ResolvedValueType::Kind::Option:
+		out->element = substituteValue(value->element, resources);
+		break;
+	case ResolvedValueType::Kind::Tuple:
+		out->tuple.clear();
+		out->tuple.reserve(value->tuple.size());
+		for (const ValuePtr& element : value->tuple)
+			out->tuple.push_back(substituteValue(element, resources));
+		break;
+	case ResolvedValueType::Kind::Result:
+		if (value->ok)
+			out->ok = substituteValue(*value->ok, resources);
+		if (value->error)
+			out->error = substituteValue(*value->error, resources);
+		break;
+	case ResolvedValueType::Kind::Stream:
+		if (value->streamElement)
+			out->streamElement = substituteValue(*value->streamElement, resources);
+		break;
+	case ResolvedValueType::Kind::Future:
+		if (value->futureElement)
+			out->futureElement = substituteValue(*value->futureElement, resources);
+		break;
+	case ResolvedValueType::Kind::Map:
+		out->mapKey = substituteValue(value->mapKey, resources);
+		out->mapValue = substituteValue(value->mapValue, resources);
+		break;
+	case ResolvedValueType::Kind::Own:
+	case ResolvedValueType::Kind::Borrow:
+		if (value->resourceId) {
+			const auto found = resources.find(*value->resourceId);
+			if (found != resources.end() && found->second
+					&& found->second->kind == ResolvedType::Kind::Resource) {
+				out->resourceId = found->second->resource->id;
+				out->resourceTypeId = found->second->typeId;
+				out->resourceAbstract = found->second->resource->abstract;
+			}
+		}
+		break;
+	default:
+		break;
+	}
+	return out;
+}
 
-	std::vector<ComponentDeclRecord> declarations;
-	const auto add = [&declarations](const ResolvedDecl& declaration) {
+TypePtr ComponentValidator::substituteType(const TypePtr& type,
+		const std::map<uint32_t, TypePtr>& resources) const
+{
+	if (!type)
+		return {};
+	if (type->kind == ResolvedType::Kind::Resource) {
+		const auto found = resources.find(type->resource->id);
+		return found != resources.end() ? found->second : type;
+	}
+
+	auto out = std::make_shared<ResolvedType>(*type);
+	out->typeId = TypeId{TypeId::kNone};
+	switch (type->kind) {
+	case ResolvedType::Kind::Value:
+		out->value = substituteValue(type->value, resources);
+		break;
+	case ResolvedType::Kind::Func: {
+		auto func = std::make_shared<ResolvedFuncType>(*type->func);
+		func->params.clear();
+		func->params.reserve(type->func->params.size());
+		for (const auto& [name, value] : type->func->params)
+			func->params.emplace_back(name, substituteValue(value, resources));
+		if (type->func->result)
+			func->result = substituteValue(*type->func->result, resources);
+		out->func = std::move(func);
+		break;
+	}
+	case ResolvedType::Kind::Instance: {
+		auto instance = std::make_shared<ResolvedInstanceType>(*type->instance);
+		instance->exports = substituteDeclarations(type->instance->exports,
+				resources);
+		out->instance = std::move(instance);
+		break;
+	}
+	case ResolvedType::Kind::Component: {
+		auto component = std::make_shared<ResolvedComponentType>(*type->component);
+		component->imports = substituteDeclarations(type->component->imports,
+				resources);
+		component->exports = substituteDeclarations(type->component->exports,
+				resources);
+		out->component = std::move(component);
+		break;
+	}
+	case ResolvedType::Kind::Resource:
+		break;
+	}
+	return out;
+}
+
+ResolvedDecl ComponentValidator::substituteDeclaration(
+		const ResolvedDecl& declaration,
+		const std::map<uint32_t, TypePtr>& resources) const
+{
+	ResolvedDecl out = declaration;
+	if (declaration.type)
+		out.type = substituteType(declaration.type, resources);
+	return out;
+}
+
+std::vector<ResolvedDecl> ComponentValidator::substituteDeclarations(
+		const std::vector<ResolvedDecl>& declarations,
+		const std::map<uint32_t, TypePtr>& resources) const
+{
+	std::vector<ResolvedDecl> out;
+	out.reserve(declarations.size());
+	for (const ResolvedDecl& declaration : declarations)
+		out.push_back(substituteDeclaration(declaration, resources));
+	return out;
+}
+
+TypeId ComponentValidator::internValue(const ValuePtr& value)
+{
+	if (!value)
+		return TypeId{TypeId::kNone};
+	const auto found = valueTypeIds_.find(value.get());
+	if (found != valueTypeIds_.end())
+		return found->second;
+
+	TypeStore& store = Store::global().types().store();
+	const auto canon = [this](const ValuePtr& child) {
+		ComponentValueType out;
+		out.kind = ComponentValueType::Kind::TypeId;
+		out.typeIndex = internValue(child).value;
+		return out;
+	};
+
+	TypeId id{TypeId::kNone};
+	switch (value->kind) {
+	case ResolvedValueType::Kind::Primitive:
+		id = store.addComponentPrimitive(value->primitive);
+		break;
+	case ResolvedValueType::Kind::Record: {
+		std::vector<ComponentField> fields;
+		fields.reserve(value->fields.size());
+		for (const auto& [name, fieldType] : value->fields) {
+			ComponentField field;
+			field.name = store.internString(name);
+			field.type = canon(fieldType);
+			fields.push_back(field);
+		}
+		id = store.addComponentRecord(fields);
+		break;
+	}
+	case ResolvedValueType::Kind::Variant: {
+		std::vector<ComponentCase> cases;
+		cases.reserve(value->cases.size());
+		for (const ResolvedCase& item : value->cases) {
+			ComponentCase out;
+			out.label = store.internString(item.label);
+			out.hasType = item.type.has_value();
+			if (item.type)
+				out.type = canon(*item.type);
+			cases.push_back(out);
+		}
+		id = store.addComponentVariant(cases);
+		break;
+	}
+	case ResolvedValueType::Kind::List:
+		id = store.addComponentList(canon(value->element));
+		break;
+	case ResolvedValueType::Kind::FixedList:
+		id = store.addComponentFixedList(canon(value->element), value->fixedLength);
+		break;
+	case ResolvedValueType::Kind::Tuple: {
+		std::vector<ComponentValueType> elements;
+		elements.reserve(value->tuple.size());
+		for (const ValuePtr& element : value->tuple)
+			elements.push_back(canon(element));
+		id = store.addComponentTuple(elements);
+		break;
+	}
+	case ResolvedValueType::Kind::Flags:
+	case ResolvedValueType::Kind::Enum: {
+		std::vector<StringId> labels;
+		labels.reserve(value->labels.size());
+		for (const std::string& label : value->labels)
+			labels.push_back(store.internString(label));
+		id = store.addComponentLabels(
+				value->kind == ResolvedValueType::Kind::Flags
+						? TypeKind::ComponentFlags : TypeKind::ComponentEnum,
+				labels);
+		break;
+	}
+	case ResolvedValueType::Kind::Option:
+		id = store.addComponentOption(canon(value->element));
+		break;
+	case ResolvedValueType::Kind::Result:
+		id = store.addComponentResult(
+				value->ok ? canon(*value->ok) : ComponentValueType{},
+				value->error ? canon(*value->error) : ComponentValueType{},
+				value->ok.has_value(), value->error.has_value());
+		break;
+	case ResolvedValueType::Kind::Map:
+		id = store.addComponentMap(canon(value->mapKey), canon(value->mapValue));
+		break;
+	case ResolvedValueType::Kind::Stream:
+		id = store.addComponentStream(TypeKind::ComponentStream,
+				value->streamElement ? canon(*value->streamElement) : ComponentValueType{},
+				value->streamElement.has_value());
+		break;
+	case ResolvedValueType::Kind::Future:
+		id = store.addComponentStream(TypeKind::ComponentFuture,
+				value->futureElement ? canon(*value->futureElement) : ComponentValueType{},
+				value->futureElement.has_value());
+		break;
+	case ResolvedValueType::Kind::Own:
+		id = store.addComponentTypeRefCanonical(TypeKind::ComponentOwn,
+				value->resourceTypeId);
+		break;
+	case ResolvedValueType::Kind::Borrow:
+		id = store.addComponentTypeRefCanonical(TypeKind::ComponentBorrow,
+				value->resourceTypeId);
+		break;
+	}
+	valueTypeIds_.emplace(value.get(), id);
+	return id;
+}
+
+std::vector<ComponentDeclRecord> ComponentValidator::canonicalDeclarations(
+		const std::vector<ResolvedDecl>& declarations)
+{
+	TypeStore& store = Store::global().types().store();
+	std::vector<ComponentDeclRecord> out;
+	out.reserve(declarations.size());
+	for (const ResolvedDecl& declaration : declarations) {
 		ComponentDeclRecord record;
-		record.name = Store::global().types().store().internString(declaration.name.name);
+		record.name = store.internString(declaration.name.name);
 		record.sort = static_cast<uint16_t>(declaration.sort.sort);
 		if (declaration.sort.core)
 			record.coreSort = static_cast<uint16_t>(declaration.sort.core->sort);
 		if (declaration.type)
-			record.type = declaration.type->typeId;
-		declarations.push_back(record);
-	};
-
-	if (type.kind == ResolvedType::Kind::Component) {
-		for (const ResolvedDecl& declaration : type.component->imports)
-			add(declaration);
-		for (const ResolvedDecl& declaration : type.component->exports)
-			add(declaration);
-		return Store::global().types().store().addComponentComponent(declarations);
+			record.type = internResolvedType(declaration.type);
+		out.push_back(record);
 	}
-	for (const ResolvedDecl& declaration : type.instance->exports)
-		add(declaration);
-	return Store::global().types().store().addComponentInstance(declarations);
+	return out;
+}
+
+TypeId ComponentValidator::internResolvedType(const TypePtr& type)
+{
+	if (!type)
+		return TypeId{TypeId::kNone};
+	const auto found = resolvedTypeIds_.find(type.get());
+	if (found != resolvedTypeIds_.end())
+		return found->second;
+
+	// Guard recursive declaration graphs: a cycle gets no closed id rather than
+	// recursing forever.
+	resolvedTypeIds_.emplace(type.get(), TypeId{TypeId::kNone});
+
+	TypeStore& store = Store::global().types().store();
+	TypeId id{TypeId::kNone};
+	switch (type->kind) {
+	case ResolvedType::Kind::Value:
+		id = internValue(type->value);
+		break;
+	case ResolvedType::Kind::Func: {
+		std::vector<ComponentFuncParam> params;
+		params.reserve(type->func->params.size());
+		for (const auto& [name, value] : type->func->params) {
+			ComponentFuncParam param;
+			param.name = store.internString(name);
+			param.type.kind = ComponentValueType::Kind::TypeId;
+			param.type.typeIndex = internValue(value).value;
+			params.push_back(param);
+		}
+		std::vector<ComponentValueType> results;
+		if (type->func->result) {
+			ComponentValueType result;
+			result.kind = ComponentValueType::Kind::TypeId;
+			result.typeIndex = internValue(*type->func->result).value;
+			results.push_back(result);
+		}
+		id = store.addComponentFunc(params, results, type->func->isAsync);
+		break;
+	}
+	case ResolvedType::Kind::Resource:
+		id = type->typeId;
+		break;
+	case ResolvedType::Kind::Instance:
+		id = store.addComponentInstance(
+				canonicalDeclarations(type->instance->exports));
+		break;
+	case ResolvedType::Kind::Component: {
+		std::vector<ComponentDeclRecord> declarations =
+				canonicalDeclarations(type->component->imports);
+		const std::vector<ComponentDeclRecord> exports =
+				canonicalDeclarations(type->component->exports);
+		declarations.insert(declarations.end(), exports.begin(), exports.end());
+		id = store.addComponentComponent(declarations);
+		break;
+	}
+	}
+	if (!id.isNone())
+		type->typeId = id;
+	resolvedTypeIds_.insert_or_assign(type.get(), id);
+	return id;
 }
 
 void ComponentValidator::validateAttributes(const NameAttributes& name,
@@ -986,7 +1316,14 @@ ResolvedDecl ComponentValidator::resolveExternType(const ExternType& type,
 			auto resource = std::make_shared<ResolvedResourceType>();
 			resource->id = state_.nextResourceId++;
 			resource->abstract = true;
-			declaration.type = makeType(resource);
+			const TypePtr type = makeType(resource);
+			ComponentResourcePayload payload;
+			payload.rep.opcode = ValueTypeCode::I32;
+			payload.rep.heapType = 0;
+			payload.abstract = true;
+			type->typeId = Store::global().types().store()
+					.addComponentResource(payload);
+			declaration.type = type;
 		}
 		break;
 	case ExternType::Kind::Component:
@@ -1547,6 +1884,7 @@ void ComponentValidator::instantiateComponent(const ComponentInstance& instance,
 			fail("component instantiate target is not a component");
 		const ResolvedComponentType& signature = *componentEntity->type->component;
 
+		std::map<uint32_t, TypePtr> substitutions;
 		std::map<std::string, const InstantiateArg*> args;
 		for (const InstantiateArg& arg : instance.args) {
 			if (!args.emplace(arg.name, &arg).second)
@@ -1573,6 +1911,14 @@ void ComponentValidator::instantiateComponent(const ComponentInstance& instance,
 				fail("component instantiate argument `" + import.name.name +
 						"` has an incompatible type");
 			}
+			if (import.type && import.type->kind == ResolvedType::Kind::Resource
+					&& import.type->resource->abstract) {
+				if (!actual->type
+						|| actual->type->kind != ResolvedType::Kind::Resource)
+					fail("type argument `" + import.name.name +
+							"` does not provide a resource");
+				substitutions.emplace(import.type->resource->id, actual->type);
+			}
 		}
 		for (const auto& arg : args) {
 			bool known = false;
@@ -1585,7 +1931,8 @@ void ComponentValidator::instantiateComponent(const ComponentInstance& instance,
 				fail("unknown component instantiate argument `" + arg.first + "`");
 		}
 
-		instanceType->exports = signature.exports;
+		instanceType->exports = substituteDeclarations(signature.exports,
+				substitutions);
 	} else {
 		std::set<std::string> names;
 		for (const InlineExport& exportDecl : instance.exports) {

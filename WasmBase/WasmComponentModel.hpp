@@ -223,6 +223,9 @@ struct ComponentInstance {
 	uint32_t componentIndex = 0;
 	std::vector<InstantiateArg> args;
 	std::vector<InlineExport> exports;
+	// Filled by Component::validate() after type substitution: the canonical
+	// identity of the resulting instance type. kNone before validation.
+	mutable TypeId typeId{TypeId::kNone};
 };
 
 enum class CanonOptKind : uint8_t {

@@ -33,9 +33,10 @@ struct Component : public Artifact {
 	// Flattened section/definition order. Each entry indexes the corresponding
 	// vector above; custom sections and section metadata are not entities.
 	std::vector<ComponentDefinition> definitions;
-	// Filled by validate(): component-local type index -> Store TypeId. Defined
-	// value/function/resource types and aliases/imports carry an id; component,
-	// instance and scheme types are still kNone (TYPE_MODEL §7.11.2).
+	// Filled by validate(): canonical component-local type index -> Store TypeId.
+	// Defined value/function/resource types, component/instance types and
+	// aliases/imports carry an id; only an unvalidated component or a future
+	// open/scheme type is kNone (TYPE_MODEL §7.11.2).
 	mutable std::vector<TypeId> localTypeIds;
 
 	Component();
@@ -55,9 +56,9 @@ struct Component : public Artifact {
 	// No linking, execution or Canonical ABI lowering.
 	void validate() const;
 	ComponentIndexSpaces buildIndexSpaces() const;
-	// Process-wide identity of a component-local type index. Returns kNone for a
-	// type that has no closed Store identity yet (component/instance/scheme and
-	// an unvalidated component).
+	// Process-wide canonical identity of a component-local type index. Returns
+	// kNone for an unvalidated component or a type with no closed Store identity
+	// yet (a future open/scheme type).
 	TypeId typeId(uint32_t localIndex) const
 	{
 		return localIndex < localTypeIds.size()

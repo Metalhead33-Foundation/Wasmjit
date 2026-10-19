@@ -510,12 +510,12 @@ dedicated suite:
   `unordered_map<TypeId, jit_type_t>` keyed on the canonical `TypeId`, so
   translated types are shared across modules and translation order no longer
   matters.
-- **Component types are outside this interning path.** Definitions now receive
-  shared-store `TypeId`s, but they are not structurally interned and the
-  validator still builds a local `ResolvedType` graph; there is no
-  cross-component equality yet. The completion plan for closed-type interning,
-  schemes/resources, and the Canonical ABI metadata contract is in
-  [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md) §7.10.4–§7.10.5.
+- **Component types now intern through the shared store.** Validation rewrites
+  the local `ResolvedType` graph into compact `TypeStore` records with canonical
+  `TypeId` children, so closed records intern across components; parser syntax
+  records remain an AST. The pending work is schemes/resources and the Canonical
+  ABI metadata contract in
+  [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md) §7.11.3–§7.11.4.
 
 ## 11. Non-goals / deferred
 
