@@ -28,6 +28,14 @@ public:
 	std::vector<TypeId> internModule(std::span<const Subtype> types,
 									 std::span<const TypeGroup> groups);
 
+	// Intern one `rec` group against an existing local-index -> TypeId map.
+	// `scratch` must contain the group's members at `group.first` (earlier slots
+	// are placeholders and are never read); `outer` is the prior mapping. This is
+	// the component-core-type entry point and never retains the parser buffer.
+	std::vector<TypeId> internGroup(std::span<const Subtype> scratch,
+									const TypeGroup& group,
+									std::span<const TypeId> outer);
+
 	// Declared-subtype / structural matching (docs/TYPE_IDENTITY.md §3.1, §6.4).
 	// M4 uses these to validate `sub` annotations during internModule; M5 will
 	// use them for link-time import matching.
@@ -52,6 +60,10 @@ public:
 	size_t canonicalGroupCount() const { return recGroups.size(); }
 
 private:
+	std::vector<TypeId> internGroupImpl(std::span<const Subtype> types,
+									   const TypeGroup& group,
+									   std::vector<TypeId>& localToGlobal);
+
 	size_t parsedTypes = 0;
 
 	// Compact canonical records, indexed by TypeId.value; entries are appended

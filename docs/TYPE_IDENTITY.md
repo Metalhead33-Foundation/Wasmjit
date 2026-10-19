@@ -479,7 +479,8 @@ dedicated suite:
 - `Module::typeView`/`typeId` are the consumer API; type indices remain
   module-local. This closes the core-module half of the `TM-6`/`TM-10` ownership
   gap. Component `CoreRecType` still stores parser `Subtype`s and is tracked in
-  [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md) §7.11.2.
+  [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md) §7.11.2. A validated
+  `CoreRecType` stores Store `TypeId`s and clears its parser `Subtype` scratch.
 - `Module::isSubtype` resolves local indices to canonical `TypeId`s and delegates
   to `TypeRegistry::matches`, so structural composite subtyping and cross-module
   matching use the same relation as the rest of the store.

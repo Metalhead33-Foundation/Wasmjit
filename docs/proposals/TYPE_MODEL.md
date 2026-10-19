@@ -6,10 +6,11 @@ the JIT/runtime/validator consume `CoreTypeView` or Store-derived signature
 views. Closed component records whose nested value types are already
 primitive/interned share TypeIds across components, and validation publishes a
 component-local type index → `TypeId` map for defined value/function/resource
-types; component/instance declarations now have nominal Store records and
-TypeIds. The remaining structural component/instance interning, `CoreRecType`
-ownership, type schemes/resources and Canonical ABI metadata remain; §7.11
-records their exact blockers, including the cross-proposal ones).
+types; component/instance declarations have nominal Store records and TypeIds,
+and component `CoreRecType` groups intern to Store TypeIds and drop their parser
+scratch. The remaining structural component/instance interning, canonical value
+payload references, type schemes/resources and Canonical ABI metadata remain;
+§7.11 records their exact blockers, including the cross-proposal ones).
 Audience: anyone touching `WasmBase/WasmType.hpp`, `WasmBase/WasmCanonicalType.hpp`,
 `WasmBase/WasmTypeRegistry.{hpp,cpp}`, `WasmBase/WasmComponentModel.hpp`,
 `WasmBase/WasmComponentParser.inc`, `WasmBase/WasmComponentValidation.cpp`, or the
@@ -46,9 +47,10 @@ the remaining Store-derived `FuncType` compatibility view for compile/test
 paths. The validator's module-level well-formedness walk, JIT type translation,
 JIT struct/array access, the runtime GC walker and constant-expression GC
 construction use canonical views/storage. The old `module.types` reads are gone.
-Component `CoreRecType` still owns parser `Subtype` vectors; that is the
-remaining TM-6 sub-item and is coupled to the component local-index resolver in
-§7.11.2.
+Component `CoreRecType` now interns its groups into Store records and clears the
+parser `Subtype` scratch at validation; a validated component retains only
+`typeIds`. The remaining component work is canonical value-payload references,
+structural declaration interning and schemes/ABI (§7.11.2).
 
 Revision 6 adds the first half of that resolver: `ResolvedType` carries the
 parser-assigned `TypeId` for defined value/function/resource definitions, and
@@ -57,6 +59,12 @@ component type index space (including aliases/imports). Component/instance
 declarations are copied into compact `ComponentDeclRecord` spans and receive
 nominal Store TypeIds. They are not structurally interned yet, because the
 declaration-set equality rule still has to be pinned against `wasm-tools`.
+
+Revision 7 closes the `CoreRecType` ownership residue. `TypeRegistry::internGroup`
+interns one `rec` group against a component-local TypeId map; `validateCoreTypeDef`
+uses it for top-level core types and module-type declarations, stores the result
+in `CoreRecType::typeIds`, and clears `CoreRecType::subtypes`. A validated
+component therefore retains only canonical TypeIds for its core types.
 
 ## 1. Document map
 
@@ -316,10 +324,11 @@ no `Subtype`, and the validator, JIT and runtime GC paths use Store views. The
 component layer has a parser and a structural validator; revision 4 added
 Store-level identity for closed, local-index-free records, and revision 5 moved
 the core modules to Store-owned views. The owner column is
-the current state, not the target: `Component` still retains component
-declarations and `CoreRecType` still retains core-type parser vectors, while the
-target is Store-only type definitions with component references. §7.10 defines
-the completion plan and §7.11 records what gates each remaining row.
+the current state, not the target: `Component` still retains parser declaration
+ASTs, while validated `CoreRecType` groups and component/instance declaration
+records are Store-owned with `TypeId`s. The target is Store-only type definitions
+with component references. §7.10 defines the completion plan and §7.11 records
+what gates each remaining row.
 
 ### 4.4 Why the current form is expensive
 
@@ -334,8 +343,8 @@ The fixed per-type costs are only part of the problem:
 - `ComponentDecl`/`InstanceDecl` reserve every declaration alternative.
 - Every non-empty list and every `std::string` is a separate allocation.
 - The core module no longer keeps the parser block; the component AST keeps its
-  declarations and `CoreRecType` parser vectors, and the component validator
-  keeps the resolved graph.
+  declaration syntax, while validated `CoreRecType` groups are reduced to
+  `TypeId`s and the component validator keeps the resolved graph.
 - The intern table stores a serialized `std::string` per group in addition to
   the canonical group itself.
 
@@ -348,27 +357,28 @@ the number of nested lists, not just with the number of distinct types.
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
 | ◑ TM1 | **Component structural interning is partial.** Closed records with primitive children now share a `TypeId` across components (record/variant/flags/enum/tuple/list/fixed-list/option/result/map/stream/future/func), and `Component::typeId(localIndex)` publishes ids for defined value/function/resource types. Component/instance declarations have **nominal** Store records, not structural interning yet. A record containing a component-local `TypeIndex`, a resource, `own`/`borrow` or a scheme is still non-interned. | `TypeStore::addComponent*`, `componentIntern*`, `Component::localTypeIds`; §7.11.2. | High |
-| ◑ TM2 | **Core modules no longer retain a parser copy.** `processTypeSection` discards the temporary `Subtype` buffer after interning. Component core types still keep parser `Subtype` vectors in `CoreRecType`; `Subtype` remains the component parser scratch type. | `WasmModule::processTypeSection`; `WasmComponentModel.hpp` `CoreRecType`; §4.1. | Medium |
+| ✅ TM2 | **No long-lived parser compatibility copy.** `Module::processTypeSection` discards its temporary `Subtype` buffer, and validated `CoreRecType` groups clear their parser scratch; both retain canonical `TypeId`s. `Subtype` remains only transient parser scratch. | `WasmModule::processTypeSection`; `WasmComponentValidation.cpp`; §4.1. | Closed |
 | TM3 | **The component parser no longer keeps a parallel type tree**, but the validator still expands resolved types into `ResolvedValueType`/`ResolvedType`. | `WasmComponentValidation.cpp`; §4.2. | Medium |
-| ◑ TM4 | **Core `Subtype` still pays for every composite alternative** in the component parser's `CoreRecType`; core modules use the compact Store records. | `WasmType.hpp` `CompositeDefinition`; `WasmComponentModel.hpp`. | Medium |
-| ◑ TM5 | **Core parser lists still allocate per node** while a component core type is parsed; core modules discard them after interning. Component type lists are pooled and component labels/names are interned. | `FuncType`/`StructType`; `WasmTypeStore.cpp`. | Medium |
-| TM6 | **Scope-local component indices have no explicit global mapping.** A component type index is not a `TypeId`, and no table records the local-to-global relationship after validation. | `TypeScope::types`; `resolveTypeIndex`. | High |
+| ◑ TM4 | **`Subtype` still pays for every composite alternative while parsing** a component core type; validated types use compact Store records. | `WasmType.hpp` `CompositeDefinition`; `WasmComponentModel.hpp`. | Medium |
+| ◑ TM5 | **Parser lists still allocate per node while parsing**; validated core/module types discard them. Component type lists are pooled and labels/names interned. | `FuncType`/`StructType`; `WasmTypeStore.cpp`. | Medium |
+| ✅ TM6 | **Component local indices now have a global mapping.** `Component::localTypeIds` records the validated component/component-core type index → `TypeId` relation, including aliases/imports. | `Component::localTypeIds`; `CoreRecType::typeIds`. | Closed |
 | TM7 | **Open component types are not modelled.** A `sub resource` import is a type parameter, but there is no scheme/substitution representation that distinguishes it from a concrete resource identity. This is CM-1d work. | `ResolvedResourceType::abstract`; no type-parameter type. | High |
 | ~~TM8~~ | ~~**No footprint/identity instrumentation.**~~ **Done (revision 2):** `TypeStore` exposes record/payload/allocation counters, and the test suite asserts the compact record sizes and the shared-store contents. | `WasmBase/WasmTypeStore.hpp`, `Test/main.cpp`. | Closed |
 | TM9 | **Component type scope ownership is explicit for the parser**, while the validator's resolved graph remains a temporary scaffold. | `TypeStore` + `ComponentTypeDef`; resolved graph in `WasmComponentValidation.cpp`. | Medium |
-| ◑ TM10 | **The canonical store is not the only type owner yet.** Core modules are Store-owned: `Module` keeps no `Subtype` block, and `TypeRegistry` keeps no parser blocks. Component core types still keep `Subtype` vectors inside `CoreRecType`, and component declarations remain in the AST. | `CoreRecType::subtypes`; `ComponentTypeDef`; §7.11.2. | High |
+| ◑ TM10 | **The canonical store is not the only type owner yet.** Core modules and validated component core types are Store-owned (`Module` keeps no `Subtype`, `CoreRecType` keeps `typeIds`). Component/instance declaration ASTs remain in `ComponentTypeDef`, though their compact records are Store-owned. | `ComponentTypeDef` declarations; `Component::localTypeIds`; §7.11.2. | High |
 | ✅ TM11 | **The core JIT/validator cutover is complete.** `LibJitTypeTranslator` has a canonical `translateTypes(typeIds, store)` overload; `LibjitOpcodeDispatcher`/`ModuleCompiler` use `typeView`/`funcTypeAt`; `ModuleInstance` GC walking and constant expressions use `CoreTypeView`; `WasmValidator` reads canonical views and `typeCount()`. The old translator `span<Subtype>` overload is test-only; `FuncType` signature materialisation remains a Store-derived compile view, not a retained module block. | `LibJit/LibJitTypeTranslation.*`, `WasmBase/WasmValidator.cpp`, `WasmBase/WasmModuleInstance.cpp`. | Closed (core) |
 | ◑ TM12 | **Component type resolution is still validator-only.** Closed local-index-free definitions intern through `TypeStore`; validation publishes `Component::localTypeIds` and gives component/instance types nominal Store records. Records with local refs, structural declaration interning, `eq`/`sub resource` mapping and canonical `TypeId` references in value payloads remain. | `TypeScope::types`; `ResolvedType::typeId`; `Component::localTypeIds`; `ComponentDeclRecord`; §7.11.2. | High |
 | TM13 | **Type schemes and resource substitution are not modelled.** There is no scheme/template, type-parameter identity, substitution map, or distinction between an open component type and a closed instantiated type. | `ResolvedResourceType::abstract`; no `TypeSchemeId`/`TypeParamId`. | High |
 | TM14 | **Canonical ABI metadata is not represented.** There is no flatten/join/layout table keyed by resolved component type, no `canonopt`-qualified ABI signature, and no canonical-ABI runtime type path for resources/handles. | `WasmComponentValidation.cpp` validates `canon` indices only; no ABI lowering. | High |
-| ◑ TM15 | **The ownership/dedup/ABI gates are partially test-enforced.** New tests pin the core-module no-`types` gate, repeated-load identity, closed-component cross-component interning, label-order sensitivity, resource freshness, the component `localTypeIds` map and nominal declaration records. Still absent: the component `CoreRecType` ownership gate, structural declaration interning and ABI cache identity. | `Test/main.cpp`; §7.11.5. | Medium |
+| ◑ TM15 | **The ownership/dedup/ABI gates are partially test-enforced.** New tests pin the core-module no-`types` gate, repeated-load identity, closed-component cross-component interning, label-order sensitivity, resource freshness, the component `localTypeIds` map, nominal declaration records and `CoreRecType` scratch clearing. Still absent: structural declaration interning and ABI cache identity. | `Test/main.cpp`; §7.11.5. | Medium |
 
-Revision 4 closed the local-index-free half of TM1/TM12. Revision 5 closes the
-core-module half of TM6/TM10 and all of TM11: a loaded `Module` retains no type
-payload and the JIT/validator/runtime read Store views. The remaining TM2/TM4/
-TM5/TM10 residue is the component parser's `CoreRecType`; TM6 (component
-local-index mapping), TM9, TM13 and TM14 remain open. §7.11 states which are
-internal work and which depend on another proposal.
+Revision 4 closed the local-index-free half of TM1/TM12. Revision 5 closed the
+core-module half of TM6/TM10 and all of TM11. Revision 7 closes TM2's long-lived
+parser copy and TM6's component local-index mapping, and removes the
+`CoreRecType` ownership residue: validated core-type groups retain `TypeIds`
+only. The remaining TM4/TM5 cost is transient parser scratch; TM10's declaration
+AST, TM9/TM12 schemes/payload canonicalisation, TM13 and TM14 remain. §7.11
+states which are internal work and which depend on another proposal.
 
 
 ## 6. Where we can and should play fast and loose
@@ -532,10 +542,9 @@ type translation or the runtime:
   target.
 - TM-6/TM-7 are complete for core modules: the module-owned blocks are deleted
   and the JIT/validator/runtime consumers use `CoreTypeView` or Store-derived
-  signature views. `Subtype` is now parser/component scratch; the remaining
-  `CoreRecType` conversion is the first item of the component closure in
-  §7.11.2. §7.10.3 is the contract for the cutover, including the cross-module GC
-  `subtypeForTypeId` change.
+  signature views. `Subtype` is now transient parser scratch; `CoreRecType`
+  groups intern to `TypeId`s and clear it at validation. §7.10.3 is the contract
+  for the cutover, including the cross-module GC `subtypeForTypeId` change.
 
 ### 7.6 Target footprint
 
@@ -697,14 +706,14 @@ The key rules:
   hit or an intern miss that creates exactly one record. There is no
   “allocate a private `TypeId` for this module” path.
 - **No retained syntax.** Core modules no longer have `TypeRegistry::blocks` or
-  `Module::types`; the parser uses a temporary `std::vector<Subtype>` and keeps
-  only `typeIds`/`typeGroups`/a reverse index map. `CoreRecType::subtypes` and
-  the component declaration vectors remain transitional and are tracked in
-  §7.11.2.
+  `Module::types`; validated component `CoreRecType` groups retain only
+  `typeIds` and clear their parser `Subtype` scratch. Component/instance
+  declaration ASTs remain, but their compact `ComponentDeclRecord` payloads are
+  Store-owned.
 
-The core state now matches the target; the component `CoreRecType` is the only
-remaining retained type syntax. “Same type” is “same `TypeId`” for both domains,
-but component local indices still need their `TypeId` map.
+The core and validated-component stores now match the ownership target.
+“Same type” is “same `TypeId`” for both domains; `Component::localTypeIds`
+provides the local-index bridge.
 
 Acceptance metrics for TM-6:
 
@@ -714,13 +723,14 @@ Acceptance metrics for TM-6:
   retained storage.
 - **Done (core):** a repeated module load leaves the canonical store unchanged;
   two modules with the same signature share a `TypeId`.
-- **Done (core):** the only `Subtype` during a core module parse is the temporary
-  parser buffer; its lifetime ends at interning.
-- **Remaining (component):** a component's `CoreRecType` still stores
-  `std::vector<Subtype>`; it should reference Store `TypeId`/`CoreTypeView`.
-- `ComponentTypeDef` for component/instance types references store-owned
-  declaration records (`TypeSpan`), not `std::vector<ComponentDecl>` /
-  `std::vector<InstanceDecl>` owned by the component AST.
+- **Done:** the only `Subtype` during parsing is temporary parser scratch; its
+  lifetime ends at interning for modules and at validation for component core
+  types.
+- **Done:** a component's `CoreRecType` stores `typeIds`, not `Subtype` vectors,
+  after validation.
+- **Partial:** `ComponentTypeDef` for component/instance types still keeps its
+  parser declaration vectors, though the compact `ComponentDeclRecord` form is
+  Store-owned. Removing the AST form waits on the declaration equality rule.
 
 #### 7.10.3 JIT-facing view cutover
 
@@ -854,9 +864,9 @@ after TM-10 is:
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **TM-6 — Store-owned canonical partition** | ◑ Core modules done: remove per-module `Subtype` blocks; parse a temporary group, intern it to `TypeId`, retain only local maps/views. Remaining: `CoreRecType::subtypes` and component declaration vectors (coupled to §7.11.2). | TM10 (core) | Core modules retain no type syntax; `TypeRegistry` stores one record per canonical type. Component `CoreRecType` remains. |
+| **TM-6 — Store-owned canonical partition** | ◑ Core modules and validated `CoreRecType` groups are done: parse a temporary group, intern it to `TypeId`, retain only local maps/views. Remaining: component/instance parser declaration vectors (compact Store records already exist). | TM10 (core/component-core) | Core modules and component core types retain no type syntax; `TypeRegistry` stores one record per canonical type. Component/instance AST declarations remain. |
 | **TM-7 — JIT view cutover** | ✅ Core modules done: `LibJitTypeTranslator`, `LibjitModuleCompiler`, `LibjitOpcodeDispatcher`, `ModuleInstance`, `WasmValidator` use `CoreTypeView`/`TypeId`; `funcTypeAt` is a Store-derived compile/test signature view. | TM11 | No JIT/validator path reads `Subtype` from a module; cross-module GC walking uses the store. |
-| **TM-8 — Component closed-type interning** | ◑ First slices: `TypeStore` interns closed records whose nested `ComponentValueType`s are primitive; validation publishes `Component::localTypeIds`; component/instance declarations have nominal Store records. Remaining: records with local refs, canonical `TypeId` references in payloads, structural declaration interning, `CoreRecType`. | TM12 (partial) | Done for local-index-free records, the local map and nominal declaration records; the remaining work is tracked in §7.11.2. |
+| **TM-8 — Component closed-type interning** | ◑ First slices: `TypeStore` interns closed records whose nested `ComponentValueType`s are primitive; validation publishes `Component::localTypeIds`; component/instance declarations have nominal Store records; component core types are Store-owned. Remaining: records with local refs, canonical `TypeId` references in payloads, structural declaration interning. | TM12 (partial) | Done for local-index-free records, the local map, nominal declaration records and core types; the remaining work is tracked in §7.11.2. |
 | **TM-9 — Schemes and resources** | Add `TypeSchemeId`/`TypeParamId`, resource IDs, substitution maps and instantiate-to-closed-type. | TM13 | `eq` aliases share, `sub resource` gives a fresh parameter, and two substitutions produce distinct closed types when resources differ. |
 | **TM-10 — Canonical ABI metadata** | Add `CanonicalAbiSignature` derivation keyed by `(TypeId, CanonOptsKey)`; expose flat/layout data without changing type identity. | TM14 | A closed component function has a stable ABI signature; flat scalar/string/resource fixtures resolve it; no ABI cache aliases different options. |
 | **TM-11 — Ownership/dedup/ABI gates** | Assert one record per canonical type, no retained `Subtype` in Module/Component, store-owned views, and ABI cache identity. | TM15 | Tests fail if any module/component owns a type payload or if identical closed types get distinct ids. |
@@ -873,7 +883,7 @@ The completion plan splits into internal gating work and decisions another
 proposal owns. This section is the authoritative status list; the §5 rows keep
 their IDs.
 
-#### 7.11.1 Core consumer cutover (TM-6/TM-7): core modules closed, `CoreRecType` remains
+#### 7.11.1 Core consumer cutover (TM-6/TM-7): core modules and `CoreRecType` closed
 
 Revision 5 closes the core-module half. The solution is a Store-boundary adapter,
 not a change to `ValueType`:
@@ -899,12 +909,12 @@ not a change to `ValueType`:
   construction use `CoreTypeView`/`CanonStorageType` and `gcStorageView`.
   `WastScript` uses `funcTypeAt` for its test-side callable signature.
 
-Remaining: component `CoreRecType` still owns `std::vector<Subtype>`, and
-`ComponentValidator::validateCoreTypeDef` still builds `std::vector<const
-Subtype*>` across component core-type scopes. Converting it needs the same
-component local-index → `TypeId` map as §7.11.2, so it is tracked there rather
-than duplicated here. The `FuncType` compatibility view is Store-derived and
-does not reintroduce a module-owned type block.
+`CoreRecType` is now Store-owned too: `TypeRegistry::internGroup` interns a
+group against the component local map, `CoreRecType::typeIds` receives the
+result, and the parser `subtypes` vector is cleared. `validateCoreTypeDef` uses
+`TypeId` slots (never `Subtype*`) for module-type declarations. The `FuncType`
+compatibility view remains Store-derived and does not reintroduce a module-owned
+type block.
 
 #### 7.11.2 Internal gating: component local indices and declarations (TM-8/TM-12)
 
@@ -913,16 +923,15 @@ a nested `ComponentValueType::Kind::TypeIndex` is still a component-local index.
 Interning such a record would make two unrelated components share an identity, so
 the store deliberately skips it: `TypeStore::addComponent*` returns a fresh
 record when a nested value is `TypeIndex`, and the `$listRecord` test keeps that
-distinction. This resolver also owns the remaining TM-6 sub-item: component
-`CoreRecType` still stores parser `Subtype`s and `validateCoreTypeDef` still
-walks `const Subtype*` slots. Closing this needs:
+distinction. Closing this needs:
 
-0. replace `CoreRecType::subtypes` with `TypeId`s/`CoreTypeView` and convert
-   `validateCoreTypeDef` to the same local-index map;
-1. **Partially done:** `ComponentValidator::run()` publishes
-   `Component::localTypeIds` over the component type index space for defined
-   value/function/resource types (aliases/imports included); component/instance
-   types and schemes still map to `kNone`;
+0. **Done:** `CoreRecType` stores `typeIds` after `validateCoreTypeDef` interns
+   the group through `TypeRegistry::internGroup` and clears its parser
+   `subtypes`; module-type declarations use `TypeId` slots.
+1. **Done for validated definitions:** `ComponentValidator::run()` publishes
+   `Component::localTypeIds` over the component type index space, including
+   defined value/function/resource, component and instance types; schemes remain
+   unrepresented;
 2. a canonical `ComponentValueType` that can carry a `TypeId`, not only a local
    index, plus a rewrite of the store payloads from syntax to canonical form;
 3. **Partially done:** component/instance declarations are copied into
@@ -970,14 +979,16 @@ Implemented in revision 4/5:
 - closed component records share across components; label order is significant;
 - resources and `own`/`borrow` stay fresh; a record with a local index is not
   interned;
-- `Component::localTypeIds` publishes defined value/function/resource identities;
-  component/instance types get nominal Store records with compact
-  `ComponentDeclRecord` spans (structural interning still pending).
+- `Component::localTypeIds` publishes validated type identities; component and
+  instance types get nominal Store records with compact `ComponentDeclRecord`
+  spans, and `CoreRecType` groups retain `TypeId`s only (parser `subtypes`
+  cleared; structural declaration interning still pending).
 
 Still gated:
 
-- “no `Subtype`/declaration payload in `Component`” — `CoreRecType` and the
-  component declaration variants remain (§7.11.2);
+- “no `Subtype`/declaration payload in `Component`” — component/instance parser
+  declaration vectors are the remaining AST form; `CoreRecType` scratch is
+  already cleared at validation (§7.11.2);
 - “one canonical record per closed component type” — needs §7.11.2;
 - ABI cache identity — needs CM-4…CM-7 (§7.11.4);
 - the ASAN/allocation-budget footprint sweep over the full suite — the counters
@@ -992,7 +1003,7 @@ writing; re-measure rather than trusting them after the first stage.
 
 | Script / test | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| default C++/wast suite | 8,573 assertions / 287 cases | 0 | 0 | Existing core, GC, SIMD, exceptions and component parser/validator behaviour is the refactor's regression floor, plus the revision-4/5/6 identity tests. |
+| default C++/wast suite | 8,581 assertions / 287 cases | 0 | 0 | Existing core, GC, SIMD, exceptions and component parser/validator behaviour is the refactor's regression floor, plus the revision-4/5/6/7 identity tests. |
 | strict validation suite (`WASM_SPEC_VALIDATE=1` and the curated negative sets) | same suite green | 0 | 0 | The compact store must not weaken any validator path, positive or negative. |
 | `Test/wasm_wat/component_types.wat` | pass | 0 | 0 | Every component value type, import/export and label shape survives the AST rewrite. |
 | `component_coretypes.wat`, `component_coreexterns.wat`, `component_coregc.wat` | pass | 0 | 0 | Core-type and core-extern payloads still map to the same core shapes. |
@@ -1000,7 +1011,7 @@ writing; re-measure rather than trusting them after the first stage.
 | invalid component fixtures (reference/type/alias/instantiation/canon/start/label) | pass (rejected) | 0 | 0 | Local-index mapping must reject the same bad inputs before intern. |
 | new `sizeof`/allocation assertions | pass | 0 | 0 | Revision 2 pins the compact record sizes and exercises the store's byte/allocation counters; the full target ceiling remains a TM-6 gate. |
 | new core identity tests | pass | 0 | 0 | Same `rec` group in two modules -> same `TypeId`; distinct groups -> distinct IDs; `match` unchanged; a loaded Module has no `types` member and retains only canonical ids. |
-| new component identity tests | pass (partial) | 0 | 0 | Closed local-index-free records share across components; label order matters; resources/`own`/`borrow` stay fresh; a local-index list is deliberately not interned; `Component::localTypeIds` maps every parsed type, with component/instance declarations carrying nominal Store records and `ComponentDeclRecord` spans. `eq`/`sub resource` schemes remain §7.11.3. |
+| new component identity tests | pass (partial) | 0 | 0 | Closed local-index-free records share across components; label order matters; resources/`own`/`borrow` stay fresh; a local-index list is deliberately not interned; `Component::localTypeIds` maps every parsed type; component/instance declarations carry nominal Store records; validated `CoreRecType` groups retain `TypeId`s and clear parser `Subtype`. `eq`/`sub resource` schemes remain §7.11.3. |
 | new footprint benchmark | partial | — | — | `payloadBytes()`/`allocationCount()` include the component intern keys; the full byte/RSS ceiling and no-per-type-list-allocation measurement remain a TM-6/TM-11 gate. |
 | ASAN + allocation-budget run | none yet | — | — | No use-after-free from pooled views; every input-derived count is bounded. Remains a CI gate. |
 
@@ -1016,7 +1027,8 @@ writing; re-measure rather than trusting them after the first stage.
   `record { a: u64 }` differ; label order in a record is respected;
   optional/result/stream/future payloads with primitive children share an ID;
   `Component::localTypeIds` maps every parsed type; component/instance
-  declarations get nominal Store records and `ComponentDeclRecord` spans.
+  declarations get nominal Store records and `ComponentDeclRecord` spans;
+  validated component core groups retain `TypeId`s and clear parser scratch.
   **Remaining:** records with local-index children, canonical `TypeId` payload
   references and structural declaration interning; see §7.11.2.
 - **Resources:** **Done for nominal freshness:** two `resource` declarations with
@@ -1068,9 +1080,10 @@ planned in §7.10.4/§7.10.5; the actual thunks remain CM-4…CM-7 in
 
 - **Ownership:** a loaded module/component retains no `Subtype`, compact record
   or component type payload. **Core done:** `Module` has no `types` member and
-  `TypeRegistry` keeps no parser blocks. **Component remaining:** `CoreRecType`
-  and structural declaration interning are §7.11.2; component/instance
-  declarations already have nominal Store records.
+  `TypeRegistry` keeps no parser blocks; validated `CoreRecType` groups retain
+  `TypeId`s. **Component remaining:** structural declaration interning and the
+  parser declaration vectors are §7.11.2; component/instance declarations
+  already have nominal Store records.
 - **Canonical partition:** load the same module twice, then a second module with
   the same signatures; `TypeId`s match and `store.recordCount()` does not grow
   per reload. **Done:** repeated modules are covered by `loaded modules retain
@@ -1085,9 +1098,9 @@ planned in §7.10.4/§7.10.5; the actual thunks remain CM-4…CM-7 in
 - **Component closure:** equal closed component types from different components
   share an id; no closed record contains a local index; component/instance
   declaration order is tested against `wasm-tools`. **Partial:** local-index-free
-  records, defined-type local ids and nominal component/instance declaration
-  records are done; structural declaration interning, canonical payload
-  references and `CoreRecType` remain in §7.11.2.
+  records, defined-type local ids, nominal component/instance declaration
+  records and Store-owned `CoreRecType` groups are done; structural declaration
+  interning and canonical value-payload references remain in §7.11.2.
 - **Schemes/resources:** `eq` aliases share, `sub resource` creates a parameter,
   and two instantiated substitutions with different resource IDs produce
   different closed types. **Gated by CM-1d (§7.11.3).**

@@ -504,10 +504,10 @@ private:
 	void validateCoreTypeDef(const CoreTypeDef& definition,
 			ValidationScope& scope);
 	void validateCoreExternType(const CoreExternType& type,
-			const std::vector<const Subtype*>& coreTypes,
+			const std::vector<TypeId>& coreTypes,
 			const char* what);
 	void validateCoreValueType(const ValueType& type,
-			const std::vector<const Subtype*>& coreTypes,
+			const std::vector<TypeId>& coreTypes,
 			const char* what);
 	CoreExportMap buildCoreExports(const Module& module) const;
 	Entity coreEntityFromInfo(const CoreExportInfo& info) const;
@@ -1996,29 +1996,37 @@ bool ComponentValidator::typeSubtype(const TypePtr& actual,
 	return false;
 }
 void ComponentValidator::validateCoreValueType(const ValueType& type,
-		const std::vector<const Subtype*>& coreTypes, const char* what)
+		const std::vector<TypeId>& coreTypes, const char* what)
 {
 	if (type.opcode == ValueTypeCode::Ref || type.opcode == ValueTypeCode::RefNull) {
-		if (type.heapType >= 0
-				&& static_cast<std::size_t>(type.heapType) >= coreTypes.size())
-			fail(std::string(what) + " heap type index out of bounds");
+		if (type.heapType >= 0) {
+			const auto index = static_cast<std::size_t>(type.heapType);
+			if (index >= coreTypes.size())
+				fail(std::string(what) + " heap type index out of bounds");
+			if (coreTypes[index].isNone())
+				fail(std::string(what) + " heap type does not name a core type");
+		}
 	}
 }
 
 void ComponentValidator::validateCoreExternType(const CoreExternType& type,
-		const std::vector<const Subtype*>& coreTypes, const char* what)
+		const std::vector<TypeId>& coreTypes, const char* what)
 {
 	switch (type.kind) {
 	case CoreExternType::Kind::Function:
 		if (type.typeIndex >= coreTypes.size())
 			fail(std::string(what) + " function type index out of bounds");
-		if (!coreTypes[type.typeIndex] || !coreTypes[type.typeIndex]->isFunction())
+		if (coreTypes[type.typeIndex].isNone()
+				|| Store::global().types().canonicalType(coreTypes[type.typeIndex]).kind()
+						!= CanonTypeKind::Func)
 			fail(std::string(what) + " function type index is not a function type");
 		break;
 	case CoreExternType::Kind::Tag:
 		if (type.typeIndex >= coreTypes.size())
 			fail(std::string(what) + " tag type index out of bounds");
-		if (!coreTypes[type.typeIndex] || !coreTypes[type.typeIndex]->isFunction())
+		if (coreTypes[type.typeIndex].isNone()
+				|| Store::global().types().canonicalType(coreTypes[type.typeIndex]).kind()
+						!= CanonTypeKind::Func)
 			fail(std::string(what) + " tag type index is not a function type");
 		break;
 	case CoreExternType::Kind::Table:
@@ -2032,25 +2040,46 @@ void ComponentValidator::validateCoreTypeDef(const CoreTypeDef& definition,
 		ValidationScope& scope)
 {
 	std::vector<const Subtype*> outer;
+	std::vector<TypeId> outerIds;
 	for (const CoreTypeDef* coreType : scope.typeScope.coreTypes) {
 		if (coreType->kind == CoreTypeDef::Kind::RecType) {
-			for (const Subtype& subtype : coreType->recType.subtypes)
-				outer.push_back(&subtype);
+			// Prior groups were validated (and their parser scratch cleared)
+			// before they entered the scope; their TypeIds occupy the slots.
+			for (TypeId id : coreType->recType.typeIds) {
+				outer.push_back(nullptr);
+				outerIds.push_back(id);
+			}
 		} else {
 			outer.push_back(nullptr);
+			outerIds.push_back(TypeId{TypeId::kNone});
 		}
 	}
 
 	auto validateStorage = [&](const StorageType& storage,
-			const std::vector<const Subtype*>& slots, const char* what) {
+			const std::vector<TypeId>& slots, const char* what) {
 		if (!storage.isPacked)
 			validateCoreValueType(storage.val, slots, what);
 	};
 	auto validateRec = [&](const CoreRecType& rec,
-			std::vector<const Subtype*>& slots, const char* what) {
+			std::vector<const Subtype*>& slots, std::vector<TypeId>& ids,
+			const char* what) {
+		if (rec.subtypes.empty()) {
+			// A second visit (for example through an alias) sees only the
+			// canonical group; append placeholders and ids without re-interning.
+			for (TypeId id : rec.typeIds) {
+				slots.push_back(nullptr);
+				ids.push_back(id);
+			}
+			return;
+		}
+
 		std::vector<const Subtype*> all = slots;
 		for (const Subtype& subtype : rec.subtypes)
 			all.push_back(&subtype);
+		// Current-group refs are legal but have no ids until interning; reserve
+		// non-none placeholders so validation only rejects genuinely absent slots.
+		std::vector<TypeId> checkIds = ids;
+		checkIds.resize(ids.size() + rec.subtypes.size(), TypeId{0});
 		for (const Subtype& subtype : rec.subtypes) {
 			for (uint32_t parent : subtype.supertypeIndices)
 				if (parent >= all.size())
@@ -2059,41 +2088,54 @@ void ComponentValidator::validateCoreTypeDef(const CoreTypeDef& definition,
 			if (std::holds_alternative<FuncType>(composite)) {
 				const FuncType& func = std::get<FuncType>(composite);
 				for (const StorageType& param : func.params)
-					validateStorage(param, all, what);
+					validateStorage(param, checkIds, what);
 				for (const StorageType& result : func.results)
-					validateStorage(result, all, what);
+					validateStorage(result, checkIds, what);
 			} else if (std::holds_alternative<StructType>(composite)) {
 				const StructType& object = std::get<StructType>(composite);
 				for (const FieldType& field : object.fields)
-					validateStorage(field.storageType, all, what);
+					validateStorage(field.storageType, checkIds, what);
 			} else if (std::holds_alternative<ArrayType>(composite)) {
 				const ArrayType& array = std::get<ArrayType>(composite);
-				validateStorage(array.elementType.storageType, all, what);
+				validateStorage(array.elementType.storageType, checkIds, what);
 			}
 		}
-		for (const Subtype& subtype : rec.subtypes)
-			slots.push_back(&subtype);
+
+		const uint32_t groupFirst = static_cast<uint32_t>(ids.size());
+		const uint32_t count = static_cast<uint32_t>(rec.subtypes.size());
+		std::vector<Subtype> scratch(groupFirst);
+		scratch.insert(scratch.end(), rec.subtypes.begin(), rec.subtypes.end());
+		const TypeGroup group{LocalTypeIdx{groupFirst}, count};
+		rec.typeIds = Store::global().types().internGroup(scratch, group, ids);
+		for (uint32_t i = 0; i < count; ++i) {
+			slots.push_back(nullptr);
+			ids.push_back(rec.typeIds[i]);
+		}
+		// The validated component retains only the canonical TypeIds.
+		rec.subtypes.clear();
 	};
 
 	if (definition.kind == CoreTypeDef::Kind::RecType) {
 		std::vector<const Subtype*> slots = outer;
-		validateRec(definition.recType, slots, "core type");
+		std::vector<TypeId> ids = outerIds;
+		validateRec(definition.recType, slots, ids, "core type");
 		return;
 	}
 
-	std::vector<const Subtype*> local;
+	std::vector<const Subtype*> localSlots;
+	std::vector<TypeId> localIds;
 	for (const CoreModuleDecl& declaration : definition.moduleDecls) {
 		switch (declaration.kind) {
 		case CoreModuleDecl::Kind::Import:
-			validateCoreExternType(declaration.import.type, local,
+			validateCoreExternType(declaration.import.type, localIds,
 					"core module import");
 			break;
 		case CoreModuleDecl::Kind::Export:
-			validateCoreExternType(declaration.exportDecl.type, local,
+			validateCoreExternType(declaration.exportDecl.type, localIds,
 					"core module export");
 			break;
 		case CoreModuleDecl::Kind::Type:
-			validateRec(declaration.type, local, "core module type");
+			validateRec(declaration.type, localSlots, localIds, "core module type");
 			break;
 		case CoreModuleDecl::Kind::Alias: {
 			const TypeScope* target = &scope.typeScope;
@@ -2106,10 +2148,13 @@ void ComponentValidator::validateCoreTypeDef(const CoreTypeDef& definition,
 				fail("core module type alias index out of bounds");
 			const CoreTypeDef* aliased = target->coreTypes[declaration.alias.index];
 			if (aliased && aliased->kind == CoreTypeDef::Kind::RecType) {
-				for (const Subtype& subtype : aliased->recType.subtypes)
-					local.push_back(&subtype);
+				for (TypeId id : aliased->recType.typeIds) {
+					localSlots.push_back(nullptr);
+					localIds.push_back(id);
+				}
 			} else {
-				local.push_back(nullptr);
+				localSlots.push_back(nullptr);
+				localIds.push_back(TypeId{TypeId::kNone});
 			}
 			break;
 		}

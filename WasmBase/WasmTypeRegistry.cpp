@@ -339,6 +339,68 @@ bool compMatches(const CanonView& v, CoreTypeView actual, CoreTypeView expected)
 
 } // namespace
 
+std::vector<TypeId> TypeRegistry::internGroupImpl(std::span<const Subtype> types,
+											  const TypeGroup& group,
+											  std::vector<TypeId>& localToGlobal)
+{
+	const uint32_t groupFirst = group.first.value;
+	const uint32_t groupEnd = groupFirst + group.count;
+	if (localToGlobal.size() < groupEnd)
+		localToGlobal.resize(groupEnd, TypeId{TypeId::kNone});
+
+	std::vector<CanonicalType> pending = buildGroup(types, group, localToGlobal, groupEnd);
+	std::string key = serializeGroup(pending);
+
+	TypeId base{};
+	auto it = internTable.find(key);
+	if (it != internTable.end()) {
+		base = recGroups[it->second.value].first;
+	} else {
+		base = TypeId{static_cast<uint32_t>(store_.recordCount())};
+		std::vector<CanonicalType> resolved = resolveGroup(pending, base, store_);
+		const CanonView view{&store_, &resolved, base};
+		for (const CanonicalType& member : resolved) {
+			for (const CanonHeapType& super : member.supertypes) {
+				if (super.kind != CanonHeapType::Kind::Global)
+					throw std::runtime_error("type section: unresolved supertype reference");
+				const CoreTypeView superType = view.type(super.id);
+				if (superType.isFinal())
+					throw std::runtime_error("type section: a supertype must not be final");
+				if (!compMatches(view, member, superType))
+					throw std::runtime_error(
+						"type section: invalid `sub` annotation (comptype does not match its supertype)");
+			}
+		}
+		for (const CanonicalType& ct : resolved)
+			store_.appendCore(ct);
+		const RecGroupId groupId{static_cast<uint32_t>(recGroups.size())};
+		recGroups.push_back(CanonRecGroup{base, group.count});
+		internTable.emplace(std::move(key), groupId);
+	}
+
+	std::vector<TypeId> ids;
+	ids.reserve(group.count);
+	for (uint32_t i = 0; i < group.count; ++i) {
+		localToGlobal[groupFirst + i] = TypeId{base.value + i};
+		ids.push_back(TypeId{base.value + i});
+	}
+	return ids;
+}
+
+std::vector<TypeId> TypeRegistry::internGroup(std::span<const Subtype> scratch,
+											  const TypeGroup& group,
+											  std::span<const TypeId> outer)
+{
+	const uint32_t groupEnd = group.first.value + group.count;
+	if (scratch.size() < groupEnd)
+		throw std::runtime_error("type registry: rec group scratch buffer is too small");
+	std::vector<TypeId> localToGlobal(outer.begin(), outer.end());
+	localToGlobal.resize(groupEnd, TypeId{TypeId::kNone});
+	parsedTypes += group.count;
+	return internGroupImpl(scratch, group, localToGlobal);
+}
+
+
 std::vector<TypeId> TypeRegistry::internModule(std::span<const Subtype> types,
 											   std::span<const TypeGroup> groups)
 {

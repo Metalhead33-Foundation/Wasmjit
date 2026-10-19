@@ -1332,14 +1332,15 @@ TEST_CASE("component core types and core module types are parsed")
 
 	REQUIRE(component->coreTypes[0].kind == WASM::CoreTypeDef::Kind::RecType);
 	REQUIRE_FALSE(component->coreTypes[0].recType.isRecGroup);
-	REQUIRE(component->coreTypes[0].recType.subtypes.size() == 1);
-	const WASM::Subtype& subtype = component->coreTypes[0].recType.subtypes[0];
-	REQUIRE(subtype.isFunction());
-	const auto& func = std::get<WASM::FuncType>(subtype.composite);
-	REQUIRE(func.params.size() == 1);
-	REQUIRE(func.params[0].val.opcode == WASM::ValueTypeCode::I32);
-	REQUIRE(func.results.size() == 1);
-	REQUIRE(func.results[0].val.opcode == WASM::ValueTypeCode::I32);
+	REQUIRE(component->coreTypes[0].recType.typeIds.size() == 1);
+	REQUIRE(component->coreTypes[0].recType.subtypes.empty());
+	const WASM::CoreTypeView func = typeStore().coreType(
+			component->coreTypes[0].recType.typeIds[0]);
+	REQUIRE(func.kind() == WASM::CanonTypeKind::Func);
+	REQUIRE(func.funcParams().size() == 1);
+	REQUIRE(func.funcParams()[0].value.opcode == WASM::ValueTypeCode::I32);
+	REQUIRE(func.funcResults().size() == 1);
+	REQUIRE(func.funcResults()[0].value.opcode == WASM::ValueTypeCode::I32);
 
 	REQUIRE(component->coreTypes[1].kind == WASM::CoreTypeDef::Kind::ModuleType);
 	bool sawImport = false;
@@ -1356,7 +1357,8 @@ TEST_CASE("component core types and core module types are parsed")
 			REQUIRE(decl.exportDecl.name == "y");
 		} else if (decl.kind == WASM::CoreModuleDecl::Kind::Type) {
 			sawType = true;
-			REQUIRE_FALSE(decl.type.subtypes.empty());
+			REQUIRE_FALSE(decl.type.typeIds.empty());
+			REQUIRE(decl.type.subtypes.empty());
 		}
 	}
 	REQUIRE(sawImport);
@@ -1568,24 +1570,26 @@ TEST_CASE("core struct and array types inside a component are parsed")
 	REQUIRE(component->coreTypes.size() == 2);
 
 	REQUIRE(component->coreTypes[0].kind == WASM::CoreTypeDef::Kind::RecType);
-	REQUIRE(component->coreTypes[0].recType.subtypes.size() == 1);
-	const WASM::Subtype& structSubtype = component->coreTypes[0].recType.subtypes[0];
-	REQUIRE(structSubtype.isStruct());
-	const auto& structType = std::get<WASM::StructType>(structSubtype.composite);
-	REQUIRE(structType.fields.size() == 2);
-	REQUIRE(structType.fields[0].storageType.val.opcode == WASM::ValueTypeCode::I32);
-	REQUIRE_FALSE(structType.fields[0].isMutable);
-	REQUIRE(structType.fields[1].storageType.val.opcode == WASM::ValueTypeCode::I64);
-	REQUIRE(structType.fields[1].isMutable);
+	REQUIRE(component->coreTypes[0].recType.typeIds.size() == 1);
+	REQUIRE(component->coreTypes[0].recType.subtypes.empty());
+	const WASM::CoreTypeView structType = typeStore().coreType(
+			component->coreTypes[0].recType.typeIds[0]);
+	REQUIRE(structType.kind() == WASM::CanonTypeKind::Struct);
+	REQUIRE(structType.structFields().size() == 2);
+	REQUIRE(structType.structFields()[0].storage.value.opcode == WASM::ValueTypeCode::I32);
+	REQUIRE_FALSE(structType.structFields()[0].isMutable);
+	REQUIRE(structType.structFields()[1].storage.value.opcode == WASM::ValueTypeCode::I64);
+	REQUIRE(structType.structFields()[1].isMutable);
 
 	REQUIRE(component->coreTypes[1].kind == WASM::CoreTypeDef::Kind::RecType);
-	REQUIRE(component->coreTypes[1].recType.subtypes.size() == 1);
-	const WASM::Subtype& arraySubtype = component->coreTypes[1].recType.subtypes[0];
-	REQUIRE(arraySubtype.isArray());
-	const auto& arrayType = std::get<WASM::ArrayType>(arraySubtype.composite);
-	REQUIRE(arrayType.elementType.storageType.isPacked);
-	REQUIRE(arrayType.elementType.storageType.val.opcode == WASM::ValueTypeCode::I8);
-	REQUIRE(arrayType.elementType.isMutable);
+	REQUIRE(component->coreTypes[1].recType.typeIds.size() == 1);
+	REQUIRE(component->coreTypes[1].recType.subtypes.empty());
+	const WASM::CoreTypeView arrayType = typeStore().coreType(
+			component->coreTypes[1].recType.typeIds[0]);
+	REQUIRE(arrayType.kind() == WASM::CanonTypeKind::Array);
+	REQUIRE(arrayType.arrayElement().storage.isPacked);
+	REQUIRE(arrayType.arrayElement().storage.packed == WASM::ValueTypeCode::I8);
+	REQUIRE(arrayType.arrayElement().isMutable);
 }
 
 TEST_CASE("a top-level component export can carry an ascribed type")
@@ -1626,14 +1630,20 @@ TEST_CASE("core non-final and recursive type encodings are parsed")
 	REQUIRE(component->coreTypes.size() == 2);
 
 	REQUIRE_FALSE(component->coreTypes[0].recType.isRecGroup);
-	REQUIRE(component->coreTypes[0].recType.subtypes.size() == 1);
-	REQUIRE_FALSE(component->coreTypes[0].recType.subtypes[0].isFinal);
-	REQUIRE(component->coreTypes[0].recType.subtypes[0].isFunction());
+	REQUIRE(component->coreTypes[0].recType.typeIds.size() == 1);
+	REQUIRE(component->coreTypes[0].recType.subtypes.empty());
+	const WASM::CoreTypeView firstType = typeStore().coreType(
+			component->coreTypes[0].recType.typeIds[0]);
+	REQUIRE_FALSE(firstType.isFinal());
+	REQUIRE(firstType.kind() == WASM::CanonTypeKind::Func);
 
 	REQUIRE(component->coreTypes[1].recType.isRecGroup);
-	REQUIRE(component->coreTypes[1].recType.subtypes.size() == 1);
-	REQUIRE(component->coreTypes[1].recType.subtypes[0].isFinal);
-	REQUIRE(component->coreTypes[1].recType.subtypes[0].isFunction());
+	REQUIRE(component->coreTypes[1].recType.typeIds.size() == 1);
+	REQUIRE(component->coreTypes[1].recType.subtypes.empty());
+	const WASM::CoreTypeView secondType = typeStore().coreType(
+			component->coreTypes[1].recType.typeIds[0]);
+	REQUIRE(secondType.isFinal());
+	REQUIRE(secondType.kind() == WASM::CanonTypeKind::Func);
 }
 
 TEST_CASE("component start and value sections are parsed")

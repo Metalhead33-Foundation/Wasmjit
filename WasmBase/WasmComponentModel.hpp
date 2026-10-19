@@ -98,7 +98,10 @@ struct CoreRecType {
 	// True when the producing `core:rectype` was a `0x4E` recursive group.
 	// A one-member rec group is otherwise indistinguishable from a bare subtype.
 	bool isRecGroup = false;
-	std::vector<Subtype> subtypes;
+	// Parser scratch. Validation interns the group and clears this vector, so a
+	// validated component retains only `typeIds` (TYPE_MODEL TM-6 residue).
+	mutable std::vector<Subtype> subtypes;
+	mutable std::vector<TypeId> typeIds;
 };
 
 struct CoreModuleDecl {
