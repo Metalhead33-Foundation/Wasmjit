@@ -81,6 +81,8 @@ struct MemView {
 	WASM::LinearMemory* memory = nullptr;
 	WASM::Callable realloc;
 	WASM::CanonicalAbiOptions options;
+	ComponentRuntime* runtime = nullptr;
+	uint32_t borrowScope = 0;
 };
 
 uint64_t alignUp(uint64_t value, uint64_t alignment)
@@ -432,7 +434,19 @@ void lowerValue(const WASM::TypeStore& store,
 		return;
 	}
 	case WASM::TypeKind::ComponentOwn:
-	case WASM::TypeKind::ComponentBorrow:
+	case WASM::TypeKind::ComponentBorrow: {
+		uint32_t handle = value.discriminant;
+		if (memory.runtime != nullptr) {
+			const WASM::TypeId resource{view.typeRef()};
+			if (view.kind() == WASM::TypeKind::ComponentBorrow)
+				handle = memory.runtime->useResourceHandle(handle, resource,
+						true, memory.borrowScope);
+			else
+				memory.runtime->validateResourceHandle(handle, resource);
+		}
+		pushI32(out, handle);
+		return;
+	}
 	case WASM::TypeKind::ComponentStream:
 	case WASM::TypeKind::ComponentFuture:
 		pushI32(out, value.discriminant);
@@ -656,6 +670,11 @@ void liftValue(const WASM::TypeStore& store,
 	case WASM::TypeKind::ComponentFuture:
 		if (index >= flat.size())
 			throw std::runtime_error("component runtime: missing handle");
+		if ((view.kind() == WASM::TypeKind::ComponentOwn
+				|| view.kind() == WASM::TypeKind::ComponentBorrow)
+				&& memory.runtime != nullptr)
+			memory.runtime->validateResourceHandle(flat[index].u32,
+					WASM::TypeId{view.typeRef()});
 		out.kind = view.kind() == WASM::TypeKind::ComponentOwn
 				? ComponentValue::Kind::Own
 				: view.kind() == WASM::TypeKind::ComponentBorrow
@@ -958,6 +977,11 @@ void storeValueAt(const WASM::TypeStore& store,
 	}
 	case WASM::TypeKind::ComponentOwn:
 	case WASM::TypeKind::ComponentBorrow:
+		if (memory.runtime != nullptr)
+			memory.runtime->validateResourceHandle(value.discriminant,
+					WASM::TypeId{view.typeRef()});
+		writeUInt(memory, address, value.discriminant, 4);
+		return;
 	case WASM::TypeKind::ComponentStream:
 	case WASM::TypeKind::ComponentFuture:
 		writeUInt(memory, address, value.discriminant, 4);
@@ -1189,7 +1213,13 @@ void loadValueAt(const WASM::TypeStore& store,
 	case WASM::TypeKind::ComponentOwn:
 	case WASM::TypeKind::ComponentBorrow:
 	case WASM::TypeKind::ComponentStream:
-	case WASM::TypeKind::ComponentFuture:
+	case WASM::TypeKind::ComponentFuture: {
+		const uint32_t handle = uint32_t(readUInt(memory, address, 4));
+		if ((view.kind() == WASM::TypeKind::ComponentOwn
+				|| view.kind() == WASM::TypeKind::ComponentBorrow)
+				&& memory.runtime != nullptr)
+			memory.runtime->validateResourceHandle(handle,
+					WASM::TypeId{view.typeRef()});
 		out.kind = view.kind() == WASM::TypeKind::ComponentOwn
 				? ComponentValue::Kind::Own
 				: view.kind() == WASM::TypeKind::ComponentBorrow
@@ -1197,8 +1227,9 @@ void loadValueAt(const WASM::TypeStore& store,
 						: view.kind() == WASM::TypeKind::ComponentStream
 								? ComponentValue::Kind::Stream
 								: ComponentValue::Kind::Future;
-		out.discriminant = uint32_t(readUInt(memory, address, 4));
+		out.discriminant = handle;
 		return;
+	}
 	default:
 		throw std::runtime_error(
 				"component runtime: this value cannot be loaded from canonical memory");
@@ -1226,6 +1257,14 @@ struct LowerData {
 void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 {
 	auto* data = static_cast<LowerData*>(userData);
+	const uint32_t borrowScope = data->memory.runtime
+			? data->memory.runtime->beginBorrowScope() : 0;
+	data->memory.borrowScope = borrowScope;
+	struct BorrowScopeGuard {
+		ComponentRuntime* runtime;
+		uint32_t scope;
+		~BorrowScopeGuard() { if (runtime) runtime->endBorrowScope(scope); }
+	} borrowGuard{data->memory.runtime, borrowScope};
 	const WASM::TypeStore& store = WASM::Store::global().types().store();
 	std::vector<WASM::Value> input;
 	if (!data->function.indirectParams) {
@@ -1497,11 +1536,13 @@ void ComponentRuntime::processStreamCanon(const WASM::Canon& canon)
 		if (!freeResourceSlots_.empty()) {
 			const uint32_t handle = freeResourceSlots_.back();
 			freeResourceSlots_.pop_back();
-			resourceSlots_[handle] = ResourceSlot{0, true};
+			resourceSlots_[handle] = ResourceSlot{0, WASM::TypeId::kNone,
+					true, true, 0};
 			return handle;
 		}
 		const uint32_t handle = static_cast<uint32_t>(resourceSlots_.size());
-		resourceSlots_.push_back(ResourceSlot{0, true});
+		resourceSlots_.push_back(ResourceSlot{0, WASM::TypeId::kNone,
+				true, true, 0});
 		return handle;
 	};
 	if (isNew) {
@@ -1598,34 +1639,40 @@ void ComponentRuntime::processResourceCanon(const WASM::Canon& canon)
 		}
 	};
 	if (canon.kind == WASM::Canon::Kind::ResourceNew) {
-		data->handler = [this, readRep](void* result, void** args) {
+		data->handler = [this, readRep, typeId](void* result, void** args) {
 			const uint64_t representation = readRep(args[1]);
 			uint32_t handle;
 			if (!freeResourceSlots_.empty()) {
 				handle = freeResourceSlots_.back();
 				freeResourceSlots_.pop_back();
-				resourceSlots_[handle] = ResourceSlot{representation, true};
+				resourceSlots_[handle] = ResourceSlot{representation, typeId,
+						true, true, 0};
 			} else {
 				handle = static_cast<uint32_t>(resourceSlots_.size());
-				resourceSlots_.push_back(ResourceSlot{representation, true});
+				resourceSlots_.push_back(ResourceSlot{representation, typeId,
+						true, true, 0});
 			}
 			*static_cast<int32_t*>(result) = int32_t(handle);
 		};
 	} else if (canon.kind == WASM::Canon::Kind::ResourceRep) {
-		data->handler = [this, writeRep](void* result, void** args) {
+		data->handler = [this, writeRep, typeId](void* result, void** args) {
 			const uint32_t handle = uint32_t(*static_cast<int32_t*>(args[1]));
-			if (handle >= resourceSlots_.size() || !resourceSlots_[handle].live)
+			if (handle >= resourceSlots_.size() || !resourceSlots_[handle].live
+					|| resourceSlots_[handle].typeId != typeId)
 				throw std::runtime_error("component runtime: invalid resource handle");
 			writeRep(result, resourceSlots_[handle].representation);
 		};
 	} else {
 		const bool hasDestructor = view.resource().hasDestructor;
 		const uint32_t destructor = view.resource().destructor;
-		data->handler = [this, rep, hasDestructor, destructor](void*, void** args) {
+		data->handler = [this, rep, hasDestructor, destructor, typeId](void*, void** args) {
 			const uint32_t handle = uint32_t(*static_cast<int32_t*>(args[1]));
 			if (handle == 0 || handle >= resourceSlots_.size()
-					|| !resourceSlots_[handle].live)
+					|| !resourceSlots_[handle].live
+					|| resourceSlots_[handle].typeId != typeId)
 				throw std::runtime_error("component runtime: invalid resource handle");
+			if (!resourceSlots_[handle].own)
+				throw std::runtime_error("component runtime: cannot drop a borrowed handle");
 			const uint64_t representation = resourceSlots_[handle].representation;
 			if (hasDestructor && destructor < coreFuncs_.size()) {
 				ComponentFunction drop;
@@ -1708,7 +1755,7 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 		data->function.options = canonicalOptions(canon);
 		const AbiMemory abiMemory = memoryFor(data->function.options);
 		data->memory = MemView{abiMemory.memory, abiMemory.realloc,
-				data->function.options};
+				data->function.options, this, 0};
 		const bool indirectParams = data->function.indirectParams;
 		const bool indirectResults = data->function.indirectResults;
 		data->argumentTypes.push_back(&ffi_type_pointer);
@@ -1792,7 +1839,9 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 			std::span<ComponentValue> results) {
 		const AbiMemory memory = memoryFor(function.options);
 		const WASM::TypeStore& store = WASM::Store::global().types().store();
-		const MemView view{memory.memory, memory.realloc, function.options};
+		const uint32_t borrowScope = beginBorrowScope();
+		const MemView view{memory.memory, memory.realloc, function.options, this,
+				borrowScope};
 		ComponentFunction core = function;
 		std::vector<WASM::Value> flatArgs;
 		if (function.indirectParams) {
@@ -1845,6 +1894,7 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 			post.params = core.results;
 			invokeCore(memory.postReturn, post, flatResults, {});
 		}
+		endBorrowScope(borrowScope);
 	};
 	componentFuncs_.push_back(std::move(function));
 }
@@ -1919,6 +1969,62 @@ WASM::LinearMemory* ComponentRuntime::coreMemory(std::size_t index) const
 	return coreMemories_[index];
 }
 
+uint32_t ComponentRuntime::beginBorrowScope()
+{
+	currentBorrowScope_ = borrowScopeSerial_++;
+	return currentBorrowScope_;
+}
+
+void ComponentRuntime::endBorrowScope(uint32_t scope)
+{
+	for (std::size_t i = 1; i < resourceSlots_.size(); ++i) {
+		ResourceSlot& slot = resourceSlots_[i];
+		if (slot.live && !slot.own && slot.borrowScope == scope) {
+			slot = ResourceSlot{};
+			freeResourceSlots_.push_back(static_cast<uint32_t>(i));
+		}
+	}
+	currentBorrowScope_ = 0;
+}
+
+void ComponentRuntime::validateResourceHandle(uint32_t handle,
+		WASM::TypeId expected) const
+{
+	if (handle == 0 || handle >= resourceSlots_.size()
+			|| !resourceSlots_[handle].live)
+		throw std::runtime_error("component runtime: invalid resource handle");
+	if (expected != WASM::TypeId{WASM::TypeId::kNone}
+			&& resourceSlots_[handle].typeId != expected)
+		throw std::runtime_error("component runtime: resource handle type mismatch");
+}
+
+uint32_t ComponentRuntime::useResourceHandle(uint32_t handle,
+		WASM::TypeId expected, bool borrow, uint32_t scope)
+{
+	validateResourceHandle(handle, expected);
+	const ResourceSlot& original = resourceSlots_[handle];
+	if (!borrow)
+		return handle;
+	if (!original.own)
+		throw std::runtime_error("component runtime: cannot lend a borrowed handle");
+	uint32_t borrowed;
+	if (!freeResourceSlots_.empty()) {
+		borrowed = freeResourceSlots_.back();
+		freeResourceSlots_.pop_back();
+		resourceSlots_[borrowed] = ResourceSlot{};
+	} else {
+		borrowed = static_cast<uint32_t>(resourceSlots_.size());
+		resourceSlots_.push_back(ResourceSlot{});
+	}
+	ResourceSlot& slot = resourceSlots_[borrowed];
+	slot.representation = original.representation;
+	slot.typeId = original.typeId;
+	slot.live = true;
+	slot.own = false;
+	slot.borrowScope = scope;
+	return borrowed;
+}
+
 ComponentRuntime::AbiMemory ComponentRuntime::memoryFor(
 		const WASM::CanonicalAbiOptions& options) const
 {
@@ -1947,24 +2053,26 @@ ComponentRuntime::AbiMemory ComponentRuntime::memoryFor(
 
 void ComponentRuntime::lowerValues(const ComponentFunction& function,
 		std::span<const ComponentValue> values, const AbiMemory& memory,
-		std::vector<WASM::Value>& flat) const
+		std::vector<WASM::Value>& flat)
 {
 	if (values.size() != function.paramTypes.size())
 		throw std::runtime_error("component runtime: argument count mismatch");
 	const WASM::TypeStore& store = WASM::Store::global().types().store();
-	const MemView view{memory.memory, memory.realloc, function.options};
+	const MemView view{memory.memory, memory.realloc, function.options, this,
+			currentBorrowScope_};
 	for (std::size_t i = 0; i < values.size(); ++i)
 		lowerValue(store, function.paramTypes[i], values[i], view, flat, 0);
 }
 
 void ComponentRuntime::liftValues(const ComponentFunction& function,
 		std::span<const WASM::Value> flat, const AbiMemory& memory,
-		std::span<ComponentValue> values) const
+		std::span<ComponentValue> values)
 {
 	if (values.size() != function.resultTypes.size())
 		throw std::runtime_error("component runtime: result count mismatch");
 	const WASM::TypeStore& store = WASM::Store::global().types().store();
-	const MemView view{memory.memory, memory.realloc, function.options};
+	const MemView view{memory.memory, memory.realloc, function.options, this,
+			currentBorrowScope_};
 	std::size_t index = 0;
 	for (std::size_t i = 0; i < values.size(); ++i)
 		liftValue(store, function.resultTypes[i], flat, index, view, values[i], 0);

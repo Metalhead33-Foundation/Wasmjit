@@ -75,6 +75,13 @@ public:
 	WASM::Callable coreFunction(std::size_t index) const;
 	WASM::LinearMemory* coreMemory(std::size_t index) const;
 
+	// Resource-handle validation used by the canonical value walkers.
+	uint32_t useResourceHandle(uint32_t handle, WASM::TypeId expected,
+			bool borrow, uint32_t scope);
+	uint32_t beginBorrowScope();
+	void endBorrowScope(uint32_t scope);
+	void validateResourceHandle(uint32_t handle, WASM::TypeId expected) const;
+
 private:
 	struct AbiMemory {
 		WASM::LinearMemory* memory = nullptr;
@@ -85,7 +92,10 @@ private:
 
 	struct ResourceSlot {
 		uint64_t representation = 0;
+		WASM::TypeId typeId{WASM::TypeId::kNone};
 		bool live = false;
+		bool own = true;
+		uint32_t borrowScope = 0;
 	};
 
 	jit_context_t context_;
@@ -104,8 +114,11 @@ private:
 	std::vector<void*> resourceClosures_;
 	std::vector<void*> resourceCifs_;
 	std::vector<void*> resourceData_;
-	std::vector<ResourceSlot> resourceSlots_{ResourceSlot{0, false}};
+	std::vector<ResourceSlot> resourceSlots_{ResourceSlot{0, WASM::TypeId::kNone,
+			false, true, 0}};
 	std::vector<uint32_t> freeResourceSlots_;
+	uint32_t borrowScopeSerial_ = 1;
+	uint32_t currentBorrowScope_ = 0;
 	std::unordered_map<std::string, size_t> exportedFuncs_;
 
 	void build();
@@ -122,11 +135,11 @@ private:
 	void lowerValues(const ComponentFunction& function,
 			std::span<const ComponentValue> values,
 			const AbiMemory& memory,
-			std::vector<WASM::Value>& flat) const;
+			std::vector<WASM::Value>& flat);
 	void liftValues(const ComponentFunction& function,
 			std::span<const WASM::Value> flat,
 			const AbiMemory& memory,
-			std::span<ComponentValue> values) const;
+			std::span<ComponentValue> values);
 	void invokeCore(const WASM::Callable& callable,
 			const ComponentFunction& function,
 			std::span<const WASM::Value> args,
