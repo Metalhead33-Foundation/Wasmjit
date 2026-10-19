@@ -513,8 +513,10 @@ dedicated suite:
 - **Component types now intern through the shared store.** Validation rewrites
   the local `ResolvedType` graph into compact `TypeStore` records with canonical
   `TypeId` children, so closed records intern across components; parser syntax
-  records remain an AST. The pending work is schemes/resources and the Canonical
-  ABI metadata contract in
+  records remain an AST. Resource parameters substitute/regenerate during
+  instantiation, open types intern as alpha-equivalent `SchemeId`s (a separate
+  identity domain from `TypeId`), and ABI flat/layout metadata is keyed by
+  `(TypeId, options)`; the ABI runtime/remaining compound layouts remain in
   [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md) §7.11.3–§7.11.4.
 
 ## 11. Non-goals / deferred

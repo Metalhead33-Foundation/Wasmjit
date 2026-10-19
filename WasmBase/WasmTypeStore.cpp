@@ -1,4 +1,5 @@
 #include "WasmTypeStore.hpp"
+#include <algorithm>
 #include <stdexcept>
 
 namespace WASM {
@@ -112,6 +113,318 @@ bool appendDeclKeys(std::string& key, std::span<const ComponentDeclRecord> decla
 		appendKeyU32(key, declaration.type.value);
 	}
 	return true;
+}
+
+// ── Canonical ABI flattening (TM-10 first slice) ───────────────────────────
+// This is the flat subset only: primitives, strings, lists, records, tuples,
+// fixed lists and resource handles. Variants/options/results/maps/streams are
+// deliberately rejected until the Canonical ABI runtime defines their join
+// rules. The cap keeps a malformed fixed-list length from driving an unbounded
+// metadata allocation (SAFETY.md).
+constexpr std::size_t kMaxAbiFlatValues = 1024;
+constexpr unsigned kMaxAbiDepth = 64;
+constexpr uint64_t kMaxAbiLayoutSize = uint64_t{1} << 30;
+
+uint64_t alignAbiOffset(uint64_t value, uint64_t alignment)
+{
+	return (value + alignment - 1) / alignment * alignment;
+}
+
+bool appendAbiFlat(const TypeStore& store, const ComponentValueType& value,
+		std::vector<AbiCoreType>& out, unsigned depth)
+{
+	if (depth > kMaxAbiDepth)
+		return false;
+	if (value.kind == ComponentValueType::Kind::TypeIndex)
+		return false;
+	if (value.kind == ComponentValueType::Kind::Primitive) {
+		switch (value.primitive) {
+		case PrimitiveValueType::Bool:
+		case PrimitiveValueType::S8:
+		case PrimitiveValueType::U8:
+		case PrimitiveValueType::S16:
+		case PrimitiveValueType::U16:
+		case PrimitiveValueType::S32:
+		case PrimitiveValueType::U32:
+		case PrimitiveValueType::Char:
+			out.push_back(AbiCoreType::I32);
+			return out.size() <= kMaxAbiFlatValues;
+		case PrimitiveValueType::S64:
+		case PrimitiveValueType::U64:
+			out.push_back(AbiCoreType::I64);
+			return out.size() <= kMaxAbiFlatValues;
+		case PrimitiveValueType::F32:
+			out.push_back(AbiCoreType::F32);
+			return out.size() <= kMaxAbiFlatValues;
+		case PrimitiveValueType::F64:
+			out.push_back(AbiCoreType::F64);
+			return out.size() <= kMaxAbiFlatValues;
+		case PrimitiveValueType::String:
+			out.push_back(AbiCoreType::I32);
+			out.push_back(AbiCoreType::I32);
+			return out.size() <= kMaxAbiFlatValues;
+		default:
+			return false;
+		}
+	}
+	if (value.kind == ComponentValueType::Kind::TypeId) {
+		if (value.typeIndex == TypeId::kNone
+				|| store.isCoreType(TypeId{value.typeIndex}))
+			return false;
+		const ComponentTypeView type = store.componentType(TypeId{value.typeIndex});
+		switch (type.kind()) {
+		case TypeKind::ComponentPrimitive: {
+			ComponentValueType primitive;
+			primitive.kind = ComponentValueType::Kind::Primitive;
+			primitive.primitive = type.primitive();
+			return appendAbiFlat(store, primitive, out, depth + 1);
+		}
+		case TypeKind::ComponentRecord:
+			for (const ComponentField& field : type.fields())
+				if (!appendAbiFlat(store, field.type, out, depth + 1))
+					return false;
+			return true;
+		case TypeKind::ComponentTuple:
+			for (const ComponentValueType& element : type.tuple())
+				if (!appendAbiFlat(store, element, out, depth + 1))
+					return false;
+			return true;
+		case TypeKind::ComponentFixedList: {
+			for (uint32_t i = 0; i < type.fixedLength(); ++i)
+				if (!appendAbiFlat(store, type.element(), out, depth + 1))
+					return false;
+			return true;
+		}
+		case TypeKind::ComponentList:
+			out.push_back(AbiCoreType::I32);
+			out.push_back(AbiCoreType::I32);
+			return out.size() <= kMaxAbiFlatValues;
+		case TypeKind::ComponentOwn:
+		case TypeKind::ComponentBorrow:
+		case TypeKind::ComponentEnum:
+		case TypeKind::ComponentFlags:
+		case TypeKind::ComponentStream:
+		case TypeKind::ComponentFuture:
+			out.push_back(AbiCoreType::I32);
+			return out.size() <= kMaxAbiFlatValues;
+		case TypeKind::ComponentOption:
+			out.push_back(AbiCoreType::I32);
+			return appendAbiFlat(store, type.element(), out, depth + 1);
+		case TypeKind::ComponentMap:
+			out.push_back(AbiCoreType::I32);
+			out.push_back(AbiCoreType::I32);
+			return out.size() <= kMaxAbiFlatValues;
+		case TypeKind::ComponentResult: {
+			std::vector<AbiCoreType> ok;
+			std::vector<AbiCoreType> error;
+			if (type.hasResultOk()
+					&& !appendAbiFlat(store, type.resultOk(), ok, depth + 1))
+				return false;
+			if (type.hasResultError()
+					&& !appendAbiFlat(store, type.resultError(), error, depth + 1))
+				return false;
+			if (!ok.empty() && !error.empty() && ok != error)
+				return false;
+			const std::vector<AbiCoreType>& payload =
+					!ok.empty() ? ok : error;
+			out.push_back(AbiCoreType::I32);
+			out.insert(out.end(), payload.begin(), payload.end());
+			return out.size() <= kMaxAbiFlatValues;
+		}
+		case TypeKind::ComponentVariant: {
+			std::vector<AbiCoreType> payload;
+			bool havePayload = false;
+			for (const ComponentCase& item : type.cases()) {
+				if (!item.hasType)
+					continue;
+				std::vector<AbiCoreType> casePayload;
+				if (!appendAbiFlat(store, item.type, casePayload, depth + 1))
+					return false;
+				if (casePayload.empty())
+					continue;
+				if (havePayload && casePayload != payload)
+					return false;
+				payload = std::move(casePayload);
+				havePayload = true;
+			}
+			out.push_back(AbiCoreType::I32);
+			out.insert(out.end(), payload.begin(), payload.end());
+			return out.size() <= kMaxAbiFlatValues;
+		}
+		default:
+			return false;
+		}
+	}
+	return false;
+}
+
+bool layoutAbiValue(const TypeStore& store, const ComponentValueType& value,
+		const CanonicalAbiOptions& options, CanonicalAbiLayout& out,
+		unsigned depth)
+{
+	if (depth > kMaxAbiDepth || (options.pointerSize != 4
+			&& options.pointerSize != 8))
+		return false;
+	if (value.kind == ComponentValueType::Kind::TypeIndex)
+		return false;
+	if (value.kind == ComponentValueType::Kind::Primitive) {
+		switch (value.primitive) {
+		case PrimitiveValueType::Bool:
+		case PrimitiveValueType::S8:
+		case PrimitiveValueType::U8:
+			out = CanonicalAbiLayout{1, 1};
+			return true;
+		case PrimitiveValueType::S16:
+		case PrimitiveValueType::U16:
+			out = CanonicalAbiLayout{2, 2};
+			return true;
+		case PrimitiveValueType::S32:
+		case PrimitiveValueType::U32:
+		case PrimitiveValueType::Char:
+		case PrimitiveValueType::F32:
+			out = CanonicalAbiLayout{4, 4};
+			return true;
+		case PrimitiveValueType::S64:
+		case PrimitiveValueType::U64:
+		case PrimitiveValueType::F64:
+			out = CanonicalAbiLayout{8, 8};
+			return true;
+		case PrimitiveValueType::String:
+			out = CanonicalAbiLayout{options.pointerSize * 2u,
+					options.pointerSize};
+			return true;
+		default:
+			return false;
+		}
+	}
+	if (value.kind != ComponentValueType::Kind::TypeId
+			|| value.typeIndex == TypeId::kNone
+			|| store.isCoreType(TypeId{value.typeIndex}))
+		return false;
+	const ComponentTypeView type = store.componentType(TypeId{value.typeIndex});
+	switch (type.kind()) {
+	case TypeKind::ComponentPrimitive: {
+		ComponentValueType primitive;
+		primitive.kind = ComponentValueType::Kind::Primitive;
+		primitive.primitive = type.primitive();
+		return layoutAbiValue(store, primitive, options, out, depth + 1);
+	}
+	case TypeKind::ComponentRecord:
+	case TypeKind::ComponentTuple: {
+		uint64_t offset = 0;
+		uint32_t alignment = 1;
+		const auto add = [&](const ComponentValueType& element) {
+			CanonicalAbiLayout elementLayout;
+			if (!layoutAbiValue(store, element, options, elementLayout,
+					depth + 1))
+				return false;
+			alignment = std::max(alignment, elementLayout.align);
+			offset = alignAbiOffset(offset, elementLayout.align)
+					+ elementLayout.size;
+			return offset <= kMaxAbiLayoutSize;
+		};
+		if (type.kind() == TypeKind::ComponentRecord) {
+			for (const ComponentField& field : type.fields())
+				if (!add(field.type))
+					return false;
+		} else {
+			for (const ComponentValueType& element : type.tuple())
+				if (!add(element))
+					return false;
+		}
+		offset = alignAbiOffset(offset, alignment);
+		if (offset > kMaxAbiLayoutSize)
+			return false;
+		out = CanonicalAbiLayout{static_cast<uint32_t>(offset), alignment};
+		return true;
+	}
+	case TypeKind::ComponentFixedList: {
+		CanonicalAbiLayout element;
+		if (!layoutAbiValue(store, type.element(), options, element,
+				depth + 1))
+			return false;
+		const uint64_t size = uint64_t{element.size} * type.fixedLength();
+		if (size > kMaxAbiLayoutSize)
+			return false;
+		out = CanonicalAbiLayout{static_cast<uint32_t>(size), element.align};
+		return true;
+	}
+	case TypeKind::ComponentList:
+		out = CanonicalAbiLayout{options.pointerSize * 2u,
+				options.pointerSize};
+		return true;
+	case TypeKind::ComponentOwn:
+	case TypeKind::ComponentBorrow:
+		out = CanonicalAbiLayout{4, 4};
+		return true;
+	case TypeKind::ComponentEnum: {
+		const std::size_t count = type.labels().size();
+		const uint32_t width = count <= 0x100 ? 1
+				: count <= 0x10000 ? 2 : 4;
+		out = CanonicalAbiLayout{width, width};
+		return true;
+	}
+	case TypeKind::ComponentFlags:
+		out = CanonicalAbiLayout{4, 4};
+		return true;
+	case TypeKind::ComponentOption: {
+		CanonicalAbiLayout element;
+		if (!layoutAbiValue(store, type.element(), options, element,
+				depth + 1))
+			return false;
+		const uint64_t offset = alignAbiOffset(1, element.align);
+		const uint64_t size = offset + element.size;
+		if (size > kMaxAbiLayoutSize)
+			return false;
+		out = CanonicalAbiLayout{static_cast<uint32_t>(size),
+				std::max<uint32_t>(1, element.align)};
+		return true;
+	}
+	case TypeKind::ComponentResult:
+	case TypeKind::ComponentVariant: {
+		uint64_t payloadSize = 0;
+		uint32_t payloadAlign = 1;
+		const auto addPayload = [&](const ComponentValueType& type) {
+			CanonicalAbiLayout payload;
+			if (!layoutAbiValue(store, type, options, payload, depth + 1))
+				return false;
+			payloadSize = std::max<uint64_t>(payloadSize, payload.size);
+			payloadAlign = std::max(payloadAlign, payload.align);
+			return true;
+		};
+		if (type.kind() == TypeKind::ComponentResult) {
+			if (type.hasResultOk() && !addPayload(type.resultOk()))
+				return false;
+			if (type.hasResultError() && !addPayload(type.resultError()))
+				return false;
+		} else {
+			for (const ComponentCase& item : type.cases())
+				if (item.hasType && !addPayload(item.type))
+					return false;
+		}
+		const std::size_t caseCount = type.kind() == TypeKind::ComponentResult
+				? 2 : type.cases().size();
+		const uint32_t discWidth = caseCount <= 0x100 ? 1
+				: caseCount <= 0x10000 ? 2 : 4;
+		const uint32_t alignment = std::max(discWidth, payloadAlign);
+		const uint64_t offset = alignAbiOffset(discWidth, alignment);
+		const uint64_t size = offset + payloadSize;
+		if (size > kMaxAbiLayoutSize)
+			return false;
+		out = CanonicalAbiLayout{static_cast<uint32_t>(size), alignment};
+		return true;
+	}
+	case TypeKind::ComponentMap:
+		out = CanonicalAbiLayout{options.pointerSize * 2u,
+				options.pointerSize};
+		return true;
+	case TypeKind::ComponentStream:
+	case TypeKind::ComponentFuture:
+		out = CanonicalAbiLayout{4, 4};
+		return true;
+	default:
+		return false;
+	}
 }
 
 bool appendFieldKeys(std::string& key, std::span<const ComponentField> fields)
@@ -437,6 +750,20 @@ TypeId TypeStore::addComponentResource(const ComponentResourcePayload& resource)
 	return addComponentRecord(TypeKind::ComponentResource, 0, payload);
 }
 
+SchemeId TypeStore::internScheme(std::string key, uint32_t parameterCount)
+{
+	const auto found = schemeIntern_.find(key);
+	if (found != schemeIntern_.end()) {
+		++schemeInternHits_;
+		return found->second;
+	}
+	++schemeInternMisses_;
+	const SchemeId id{static_cast<uint32_t>(schemes_.size())};
+	schemes_.push_back(TypeScheme{parameterCount});
+	schemeIntern_.emplace(std::move(key), id);
+	return id;
+}
+
 TypeId TypeStore::addComponentInstance(std::span<const ComponentDeclRecord> declarations)
 {
 	std::string key;
@@ -463,6 +790,55 @@ TypeId TypeStore::addComponentComponent(std::span<const ComponentDeclRecord> dec
 		return addComponentRecord(TypeKind::ComponentComponent, 0, payload);
 	};
 	return internable ? internComponent(std::move(key), create) : create();
+}
+
+const CanonicalAbiSignature* TypeStore::canonicalAbi(TypeId type,
+		const CanonicalAbiOptions& options) const
+{
+	if (type.isNone() || isCoreType(type))
+		return nullptr;
+	std::string key;
+	appendKeyU32(key, type.value);
+	appendKeyU8(key, static_cast<uint8_t>(options.stringEncoding));
+	appendKeyU32(key, options.memory);
+	appendKeyU32(key, options.realloc);
+	appendKeyU32(key, options.postReturn);
+	appendKeyU8(key, options.async ? 1 : 0);
+	appendKeyU8(key, options.pointerSize);
+
+	const auto found = canonicalAbi_.find(key);
+	if (found != canonicalAbi_.end()) {
+		++canonicalAbiHits_;
+		return &found->second;
+	}
+	++canonicalAbiMisses_;
+
+	const ComponentTypeView view = componentType(type);
+	if (view.kind() != TypeKind::ComponentFunc)
+		return nullptr;
+	CanonicalAbiSignature signature;
+	signature.type = type;
+	signature.options = options;
+	for (const ComponentFuncParam& param : view.params())
+		if (!appendAbiFlat(*this, param.type, signature.flatParams, 0))
+			return nullptr;
+	for (const ComponentValueType& result : view.results())
+		if (!appendAbiFlat(*this, result, signature.flatResults, 0))
+			return nullptr;
+	const auto inserted = canonicalAbi_.emplace(std::move(key),
+			std::move(signature));
+	return &inserted.first->second;
+}
+
+bool TypeStore::canonicalAbiLayout(TypeId type,
+		const CanonicalAbiOptions& options, CanonicalAbiLayout& out) const
+{
+	if (type.isNone() || isCoreType(type))
+		return false;
+	ComponentValueType value;
+	value.kind = ComponentValueType::Kind::TypeId;
+	value.typeIndex = type.value;
+	return layoutAbiValue(*this, value, options, out, 0);
 }
 
 TypeSpan TypeStore::appendFields(std::span<const ComponentField> fields)
@@ -579,7 +955,8 @@ std::size_t TypeStore::payloadBytes() const
 			+ componentTypeRefs_.capacity() * sizeof(uint32_t)
 			+ componentDeclRecords_.capacity() * sizeof(ComponentDeclRecord)
 			+ componentInstancePayloads_.capacity() * sizeof(ComponentInstancePayload)
-			+ componentComponentPayloads_.capacity() * sizeof(ComponentComponentPayload);
+			+ componentComponentPayloads_.capacity() * sizeof(ComponentComponentPayload)
+			+ schemes_.capacity() * sizeof(TypeScheme);
 	for (const std::string& text : strings_)
 		bytes += text.size() + 1;
 	bytes += stringIds_.size() * (sizeof(std::string) + sizeof(StringId));
@@ -587,6 +964,14 @@ std::size_t TypeStore::payloadBytes() const
 	// a conservative node overhead so the footprint test sees them.
 	for (const auto& entry : componentIntern_)
 		bytes += entry.first.size() + sizeof(TypeId) + 2 * sizeof(void*);
+	for (const auto& entry : schemeIntern_)
+		bytes += entry.first.size() + sizeof(SchemeId) + 2 * sizeof(void*);
+	for (const auto& entry : canonicalAbi_) {
+		bytes += entry.first.size() + sizeof(CanonicalAbiSignature)
+				+ 2 * sizeof(void*)
+				+ entry.second.flatParams.capacity() * sizeof(AbiCoreType)
+				+ entry.second.flatResults.capacity() * sizeof(AbiCoreType);
+	}
 	return bytes;
 }
 
@@ -629,6 +1014,10 @@ std::size_t TypeStore::allocationCount() const
 	add(strings_);
 	add(stringIds_);
 	add(componentIntern_);
+	add(schemes_);
+	add(schemeIntern_);
+	if (!canonicalAbi_.empty())
+		++count;
 	return count;
 }
 

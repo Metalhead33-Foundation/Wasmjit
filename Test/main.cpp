@@ -1160,8 +1160,11 @@ TEST_CASE("component local type indices map to Store TypeIds after validation")
 	REQUIRE(declarations != nullptr);
 	declarations->validate();
 	REQUIRE(declarations->types.size() == 2);
+	REQUIRE(declarations->localSchemeIds.size() == 2);
 	REQUIRE_FALSE(declarations->typeId(0).isNone());
 	REQUIRE_FALSE(declarations->typeId(1).isNone());
+	REQUIRE(declarations->schemeId(0).isNone());
+	REQUIRE(declarations->schemeId(1).isNone());
 	const auto componentType = typeStore().componentType(declarations->typeId(0));
 	REQUIRE(componentType.kind() == WASM::TypeKind::ComponentComponent);
 	REQUIRE(componentType.declarations().size() == 2);
@@ -1193,6 +1196,265 @@ TEST_CASE("component instantiation substitutes abstract resource types")
 	REQUIRE(instanceType.kind() == WASM::TypeKind::ComponentInstance);
 	REQUIRE(instanceType.declarations().size() == 1);
 	REQUIRE_FALSE(instanceType.declarations()[0].type.isNone());
+}
+
+TEST_CASE("component resource name annotations bind to resources")
+{
+	auto validArtifact = loadTestArtifact("component_annotations");
+	REQUIRE(validArtifact != nullptr);
+	REQUIRE(validArtifact->asComponent() != nullptr);
+
+	bool rejected = false;
+	try {
+		(void)loadTestArtifact("component_invalid_annotation");
+	} catch (const std::exception&) {
+		rejected = true;
+	}
+	REQUIRE(rejected);
+}
+
+TEST_CASE("component imports and exports require externally visible structural types")
+{
+	auto validArtifact = loadTestArtifact("component_structural_visibility");
+	REQUIRE(validArtifact != nullptr);
+	REQUIRE(validArtifact->asComponent() != nullptr);
+
+	bool rejected = false;
+	try {
+		(void)loadTestArtifact("component_invalid_structural_visibility");
+	} catch (const std::exception&) {
+		rejected = true;
+	}
+	REQUIRE(rejected);
+}
+
+TEST_CASE("component imports and exports require externally visible resources")
+{
+	auto validArtifact = loadTestArtifact("component_resource_visibility");
+	REQUIRE(validArtifact != nullptr);
+	REQUIRE(validArtifact->asComponent() != nullptr);
+
+	bool rejected = false;
+	try {
+		(void)loadTestArtifact("component_invalid_resource_visibility");
+	} catch (const std::exception&) {
+		rejected = true;
+	}
+	REQUIRE(rejected);
+}
+
+TEST_CASE("component instantiation checks exact core module types")
+{
+	auto artifact = loadTestArtifact("component_coremodule_type");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	component->validate();
+	REQUIRE(component->instances.size() == 1);
+	REQUIRE_FALSE(component->instances[0].typeId.isNone());
+
+	// Component parsing validates immediately, so the rejection happens here.
+	bool rejected = false;
+	try {
+		(void)loadTestArtifact("component_invalid_coremodule_type");
+	} catch (const std::exception&) {
+		rejected = true;
+	}
+	REQUIRE(rejected);
+}
+
+TEST_CASE("canonical ABI metadata is keyed by type and options")
+{
+	auto artifact = loadTestArtifact("component_types");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	component->validate();
+	const WASM::TypeId functionType = component->typeId(13);
+	REQUIRE_FALSE(functionType.isNone());
+
+	WASM::CanonicalAbiOptions options;
+	const auto* signature = typeStore().canonicalAbi(functionType, options);
+	REQUIRE(signature != nullptr);
+	REQUIRE(signature->type == functionType);
+	REQUIRE(signature->flatParams.size() == 1);
+	REQUIRE(signature->flatParams[0] == WASM::AbiCoreType::I32);
+	REQUIRE(signature->flatResults.size() == 2);
+	REQUIRE(signature->flatResults[0] == WASM::AbiCoreType::I32);
+	REQUIRE(signature->flatResults[1] == WASM::AbiCoreType::I32);
+
+	const auto* same = typeStore().canonicalAbi(functionType, options);
+	REQUIRE(same == signature);
+	options.stringEncoding = WASM::CanonicalAbiOptions::StringEncoding::Utf16;
+	const auto* different = typeStore().canonicalAbi(functionType, options);
+	REQUIRE(different != nullptr);
+	REQUIRE(different != signature);
+	REQUIRE(different->flatParams == signature->flatParams);
+
+	// Variants are outside the first flat subset.
+	REQUIRE(typeStore().canonicalAbi(component->typeId(1), options) == nullptr);
+}
+
+TEST_CASE("canonical ABI flattens compound value shapes")
+{
+	auto artifact = loadTestArtifact("component_abi_compound");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	component->validate();
+	WASM::CanonicalAbiOptions options;
+	const auto* signature = typeStore().canonicalAbi(component->typeId(8), options);
+	REQUIRE(signature != nullptr);
+	REQUIRE(signature->flatParams.size() == 12);
+	for (const auto& type : signature->flatParams)
+		REQUIRE(type == WASM::AbiCoreType::I32);
+	REQUIRE(signature->flatResults.empty());
+
+	WASM::CanonicalAbiLayout layout;
+	REQUIRE(typeStore().canonicalAbiLayout(component->typeId(0), options, layout));
+	REQUIRE(layout.size == 1);
+	REQUIRE(layout.align == 1);
+	REQUIRE(typeStore().canonicalAbiLayout(component->typeId(1), options, layout));
+	REQUIRE(layout.size == 4);
+	REQUIRE(layout.align == 4);
+	REQUIRE(typeStore().canonicalAbiLayout(component->typeId(2), options, layout));
+	REQUIRE(layout.size == 8);
+	REQUIRE(layout.align == 4);
+	REQUIRE(typeStore().canonicalAbiLayout(component->typeId(3), options, layout));
+	REQUIRE(layout.size == 8);
+	REQUIRE(layout.align == 4);
+	REQUIRE(typeStore().canonicalAbiLayout(component->typeId(4), options, layout));
+	REQUIRE(layout.size == 8);
+	REQUIRE(layout.align == 4);
+	REQUIRE(typeStore().canonicalAbiLayout(component->typeId(5), options, layout));
+	REQUIRE(layout.size == 8);
+	REQUIRE(layout.align == 4);
+	REQUIRE(typeStore().canonicalAbiLayout(component->typeId(6), options, layout));
+	REQUIRE(layout.size == 4);
+	REQUIRE(layout.align == 4);
+	REQUIRE(typeStore().canonicalAbiLayout(component->typeId(7), options, layout));
+	REQUIRE(layout.size == 4);
+	REQUIRE(layout.align == 4);
+}
+
+TEST_CASE("canonical ABI flattens records, tuples, lists and fixed lists")
+{
+	auto artifact = loadTestArtifact("component_abi");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	component->validate();
+	WASM::CanonicalAbiOptions options;
+	const auto* fn = typeStore().canonicalAbi(component->typeId(4), options);
+	REQUIRE(fn != nullptr);
+	REQUIRE(fn->flatParams.size() == 7);
+	for (const auto& type : fn->flatParams)
+		REQUIRE(type == WASM::AbiCoreType::I32);
+	REQUIRE(fn->flatResults.size() == 3);
+	for (const auto& type : fn->flatResults)
+		REQUIRE(type == WASM::AbiCoreType::I32);
+
+	const auto* listFn = typeStore().canonicalAbi(component->typeId(5), options);
+	REQUIRE(listFn != nullptr);
+	REQUIRE(listFn->flatParams.size() == 2);
+	REQUIRE(listFn->flatParams[0] == WASM::AbiCoreType::I32);
+	REQUIRE(listFn->flatParams[1] == WASM::AbiCoreType::I32);
+	REQUIRE(listFn->flatResults.empty());
+
+	WASM::CanonicalAbiLayout layout;
+	REQUIRE(typeStore().canonicalAbiLayout(component->typeId(0), options, layout));
+	REQUIRE(layout.size == 12);
+	REQUIRE(layout.align == 4);
+	REQUIRE(typeStore().canonicalAbiLayout(component->typeId(1), options, layout));
+	REQUIRE(layout.size == 12);
+	REQUIRE(layout.align == 4);
+	REQUIRE(typeStore().canonicalAbiLayout(component->typeId(2), options, layout));
+	REQUIRE(layout.size == 16);
+	REQUIRE(layout.align == 4);
+	REQUIRE(typeStore().canonicalAbiLayout(component->typeId(3), options, layout));
+	REQUIRE(layout.size == 8);
+	REQUIRE(layout.align == 4);
+	options.pointerSize = 8;
+	REQUIRE(typeStore().canonicalAbiLayout(component->typeId(0), options, layout));
+	REQUIRE(layout.size == 24);
+	REQUIRE(layout.align == 8);
+	REQUIRE(typeStore().canonicalAbiLayout(component->typeId(3), options, layout));
+	REQUIRE(layout.size == 16);
+	REQUIRE(layout.align == 8);
+	REQUIRE_FALSE(typeStore().canonicalAbiLayout(component->typeId(4), options,
+			layout));
+
+	auto scalarArtifact = loadTestArtifact("component_types");
+	REQUIRE(scalarArtifact != nullptr);
+	auto* scalar = scalarArtifact->asComponent();
+	REQUIRE(scalar != nullptr);
+	REQUIRE(typeStore().canonicalAbiLayout(scalar->typeId(2), options, layout));
+	REQUIRE(layout.size == 4);
+	REQUIRE(layout.align == 4);
+	REQUIRE(typeStore().canonicalAbiLayout(scalar->typeId(3), options, layout));
+	REQUIRE(layout.size == 1);
+	REQUIRE(layout.align == 1);
+}
+
+TEST_CASE("open component types intern as alpha-equivalent schemes")
+{
+	auto firstArtifact = loadTestArtifact("component_open_type");
+	auto secondArtifact = loadTestArtifact("component_open_type");
+	REQUIRE(firstArtifact != nullptr);
+	REQUIRE(secondArtifact != nullptr);
+	auto* first = firstArtifact->asComponent();
+	auto* second = secondArtifact->asComponent();
+	REQUIRE(first != nullptr);
+	REQUIRE(second != nullptr);
+	REQUIRE(first->types.size() == 1);
+	first->validate();
+	second->validate();
+	REQUIRE(first->localTypeIds.size() == 1);
+	REQUIRE(first->localSchemeIds.size() == 1);
+	REQUIRE(first->typeId(0).isNone());
+	REQUIRE_FALSE(first->schemeId(0).isNone());
+	REQUIRE(first->schemeId(0) == second->schemeId(0));
+	REQUIRE(typeStore().scheme(first->schemeId(0)).parameterCount == 1);
+
+	auto twoArtifact = loadTestArtifact("component_open_scheme");
+	auto twoAgainArtifact = loadTestArtifact("component_open_scheme");
+	REQUIRE(twoArtifact != nullptr);
+	REQUIRE(twoAgainArtifact != nullptr);
+	auto* two = twoArtifact->asComponent();
+	auto* twoAgain = twoAgainArtifact->asComponent();
+	REQUIRE(two != nullptr);
+	REQUIRE(twoAgain != nullptr);
+	two->validate();
+	twoAgain->validate();
+	REQUIRE(two->typeId(0).isNone());
+	REQUIRE_FALSE(two->schemeId(0).isNone());
+	REQUIRE(two->schemeId(0) != first->schemeId(0));
+	REQUIRE(two->schemeId(0) == twoAgain->schemeId(0));
+	REQUIRE(typeStore().scheme(two->schemeId(0)).parameterCount == 2);
+}
+
+TEST_CASE("component instantiation generates fresh resources")
+{
+	auto artifact = loadTestArtifact("component_resource_generativity");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	REQUIRE(component->instances.size() == 2);
+	component->validate();
+	REQUIRE_FALSE(component->instances[0].typeId.isNone());
+	REQUIRE_FALSE(component->instances[1].typeId.isNone());
+	REQUIRE(component->instances[0].typeId
+			!= component->instances[1].typeId);
+	const auto first = typeStore().componentType(component->instances[0].typeId);
+	const auto second = typeStore().componentType(component->instances[1].typeId);
+	REQUIRE(first.kind() == WASM::TypeKind::ComponentInstance);
+	REQUIRE(second.kind() == WASM::TypeKind::ComponentInstance);
+	REQUIRE(first.declarations().size() == 1);
+	REQUIRE(second.declarations().size() == 1);
+	REQUIRE_FALSE(first.declarations()[0].type.isNone());
+	REQUIRE_FALSE(second.declarations()[0].type.isNone());
+	REQUIRE(first.declarations()[0].type
+			!= second.declarations()[0].type);
 }
 
 TEST_CASE("component canonical value payloads and declaration sets intern")

@@ -5,6 +5,7 @@
 #include "WasmTypeIdentity.hpp"
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <span>
 #include <string>
 #include <string_view>
@@ -118,6 +119,53 @@ struct ComponentValueType {
 struct ComponentField {
 	StringId name = 0;
 	ComponentValueType type;
+};
+
+// ── Canonical ABI metadata (TM-10 first slice) ─────────────────────────────
+// The ABI signature is derived metadata: it is keyed by a canonical TypeId plus
+// the canon options that affect lowering, and never enters the type intern key.
+enum class AbiCoreType : uint8_t { I32, I64, F32, F64 };
+
+struct CanonicalAbiOptions {
+	enum class StringEncoding : uint8_t { Utf8, Utf16, Latin1Utf16 };
+	static constexpr uint32_t kNoIndex = ~uint32_t{0};
+
+	StringEncoding stringEncoding = StringEncoding::Utf8;
+	uint32_t memory = kNoIndex;
+	uint32_t realloc = kNoIndex;
+	uint32_t postReturn = kNoIndex;
+	bool async = false;
+	// Canonical ABI pointer/length width: 4 for memory32, 8 for memory64.
+	uint8_t pointerSize = 4;
+
+	bool operator==(const CanonicalAbiOptions& other) const
+	{
+		return stringEncoding == other.stringEncoding && memory == other.memory
+				&& realloc == other.realloc && postReturn == other.postReturn
+				&& async == other.async && pointerSize == other.pointerSize;
+	}
+	bool operator!=(const CanonicalAbiOptions& other) const
+	{
+		return !(*this == other);
+	}
+};
+
+struct CanonicalAbiSignature {
+	TypeId type{TypeId::kNone};
+	CanonicalAbiOptions options;
+	std::vector<AbiCoreType> flatParams;
+	std::vector<AbiCoreType> flatResults;
+};
+
+struct CanonicalAbiLayout {
+	uint32_t size = 0;
+	uint32_t align = 1;
+};
+
+// Open component type scheme metadata. The structural key lives in the store's
+// intern table; the closed TypeId space never contains a scheme parameter.
+struct TypeScheme {
+	uint32_t parameterCount = 0;
 };
 
 struct ComponentCase {
@@ -300,16 +348,39 @@ public:
 	TypeId addComponentFunc(std::span<const ComponentFuncParam> params,
 			std::span<const ComponentValueType> results, bool isAsync);
 	TypeId addComponentResource(const ComponentResourcePayload& resource);
-	// Component/instance declarations are Store-owned nominal records for now:
-	// the declaration-set equality rule still has to be pinned against
-	// wasm-tools, so these are not structurally interned yet (TYPE_MODEL §7.11.2).
+	// Component/instance declarations are Store-owned compact records. Sets whose
+	// declarations all carry a TypeId intern structurally; a set containing a
+	// memory/global/table declaration stays nominal because the compact record has
+	// no core payload for it.
 	TypeId addComponentInstance(std::span<const ComponentDeclRecord> declarations);
 	TypeId addComponentComponent(std::span<const ComponentDeclRecord> declarations);
 	ComponentTypeView componentType(TypeId id) const;
 
-	// Structural component interning diagnostics (TM-8 first slice). Only
-	// records with no unresolved local type index participate; resources and
-	// component/instance declarations are nominal and never interned.
+	// Open component/value/func schemes. `key` is the alpha-normalized
+	// structural key produced by the validator; parameters are placeholders.
+	SchemeId internScheme(std::string key, uint32_t parameterCount);
+	const TypeScheme& scheme(SchemeId id) const { return schemes_[id.value]; }
+	std::size_t schemeCount() const { return schemes_.size(); }
+	std::size_t schemeInternHits() const { return schemeInternHits_; }
+	std::size_t schemeInternMisses() const { return schemeInternMisses_; }
+
+	// Derived Canonical ABI metadata (TM-10 first slice). Returns nullptr when
+	// the type is not a function or uses a value shape this slice cannot
+	// flatten. The result is cached by (TypeId, options) and is inert: it does
+	// not affect structural identity.
+	const CanonicalAbiSignature* canonicalAbi(TypeId type,
+			const CanonicalAbiOptions& options) const;
+	// Memory layout for a value type (not a component function/instance). Returns
+	// false for shapes whose layout this slice does not derive yet (variants,
+	// options/results/maps/streams/futures).
+	bool canonicalAbiLayout(TypeId type, const CanonicalAbiOptions& options,
+			CanonicalAbiLayout& out) const;
+	std::size_t canonicalAbiCacheSize() const { return canonicalAbi_.size(); }
+	std::size_t canonicalAbiHits() const { return canonicalAbiHits_; }
+	std::size_t canonicalAbiMisses() const { return canonicalAbiMisses_; }
+
+	// Structural component interning diagnostics. Closed records participate;
+	// parser syntax records with a local index and nominal resources do not.
 	std::size_t componentInternedCount() const { return componentIntern_.size(); }
 	std::size_t componentInternHits() const { return componentInternHits_; }
 	std::size_t componentInternMisses() const { return componentInternMisses_; }
@@ -411,6 +482,15 @@ private:
 	std::unordered_map<std::string, TypeId> componentIntern_;
 	std::size_t componentInternHits_ = 0;
 	std::size_t componentInternMisses_ = 0;
+
+	mutable std::map<std::string, CanonicalAbiSignature> canonicalAbi_;
+	mutable std::size_t canonicalAbiHits_ = 0;
+	mutable std::size_t canonicalAbiMisses_ = 0;
+
+	std::vector<TypeScheme> schemes_;
+	std::unordered_map<std::string, SchemeId> schemeIntern_;
+	std::size_t schemeInternHits_ = 0;
+	std::size_t schemeInternMisses_ = 0;
 };
 
 } // namespace WASM

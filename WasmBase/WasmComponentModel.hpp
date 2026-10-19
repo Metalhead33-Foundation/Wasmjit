@@ -224,8 +224,10 @@ struct ComponentInstance {
 	std::vector<InstantiateArg> args;
 	std::vector<InlineExport> exports;
 	// Filled by Component::validate() after type substitution: the canonical
-	// identity of the resulting instance type. kNone before validation.
+	// identity of the resulting instance type. Exactly one of typeId/schemeId is
+	// set for a validated instance type.
 	mutable TypeId typeId{TypeId::kNone};
+	mutable SchemeId schemeId{SchemeId::kNone};
 };
 
 enum class CanonOptKind : uint8_t {

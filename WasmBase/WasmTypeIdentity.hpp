@@ -33,6 +33,18 @@ struct TypeId {
 	constexpr bool isNone() const { return value == kNone; }
 };
 
+// Process-wide identity of an open component type scheme. A scheme is
+// alpha-equivalent by construction: its abstract resource parameters are
+// serialized as placeholders, not nominal resource TypeIds.
+struct SchemeId {
+	static constexpr uint32_t kNone = 0xFFFFFFFFu;
+	uint32_t value = 0;
+	constexpr bool operator==(const SchemeId& o) const { return value == o.value; }
+	constexpr bool operator!=(const SchemeId& o) const { return value != o.value; }
+	constexpr bool operator<(const SchemeId& o) const { return value < o.value; }
+	constexpr bool isNone() const { return value == kNone; }
+};
+
 // Identity of an interned `rec` group: a contiguous run of TypeIds.
 struct RecGroupId {
 	uint32_t value = 0;

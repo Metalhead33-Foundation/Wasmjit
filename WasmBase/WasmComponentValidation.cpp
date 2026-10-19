@@ -45,6 +45,8 @@ bool sameSort(const SortIdx& left, const SortIdx& right)
 	return left.core && right.core && left.core->sort == right.core->sort;
 }
 
+struct ResolvedType;
+using TypePtr = std::shared_ptr<const ResolvedType>;
 struct ResolvedValueType;
 using ValuePtr = std::shared_ptr<const ResolvedValueType>;
 
@@ -54,6 +56,9 @@ struct ResolvedCase {
 };
 
 struct ResolvedValueType {
+	// Owning defined-value type, if this node came from a type index. This is a
+	// non-owning backlink: the owning ResolvedType also owns this node.
+	const ResolvedType* owner = nullptr;
 	enum class Kind : uint8_t {
 		Primitive, Record, Variant, List, FixedList, Tuple, Flags, Enum,
 		Option, Result, Own, Borrow, Stream, Future, Map
@@ -70,6 +75,7 @@ struct ResolvedValueType {
 	std::optional<ValuePtr> error;
 	std::optional<uint32_t> resourceId;
 	TypeId resourceTypeId{TypeId::kNone};
+	TypePtr resourceType;
 	bool resourceAbstract = false;
 	std::optional<ValuePtr> streamElement;
 	std::optional<ValuePtr> futureElement;
@@ -90,15 +96,13 @@ struct ResolvedFuncType {
 	std::optional<ValuePtr> result;
 };
 
-struct ResolvedType;
-using TypePtr = std::shared_ptr<const ResolvedType>;
-
 struct ResolvedDecl {
 	NameAttributes name;
 	SortIdx sort;
 	TypePtr type;
 	bool coreModule = false;
 	uint32_t coreTypeIndex = 0;
+	const CoreTypeDef* coreTypeValue = nullptr;
 	const Module* coreModuleValue = nullptr;
 };
 
@@ -118,6 +122,9 @@ struct ResolvedInstanceType {
 struct ResolvedComponentType {
 	std::vector<ResolvedDecl> imports;
 	std::vector<ResolvedDecl> exports;
+	// Resources defined by this component are generative: every instantiation
+	// must create a fresh identity. Imported/provided resources are absent.
+	std::map<uint32_t, TypePtr> generativeResources;
 };
 
 struct ResolvedType {
@@ -393,14 +400,229 @@ bool anyBorrow(const std::vector<ValuePtr>& values)
 	return false;
 }
 
-bool containsBorrow(const ValuePtr& value)
+void appendSchemeU8(std::string& key, uint8_t value)
+{
+	key.push_back(static_cast<char>(value));
+}
+
+void appendSchemeU16(std::string& key, uint16_t value)
+{
+	for (unsigned i = 0; i < 2; ++i)
+		key.push_back(static_cast<char>((value >> (i * 8)) & 0xFF));
+}
+
+void appendSchemeU32(std::string& key, uint32_t value)
+{
+	for (unsigned i = 0; i < 4; ++i)
+		key.push_back(static_cast<char>((value >> (i * 8)) & 0xFF));
+}
+
+void appendSchemeString(std::string& key, const std::string& value)
+{
+	appendSchemeU32(key, static_cast<uint32_t>(value.size()));
+	key.append(value);
+}
+
+bool limitsEqual(const Limits& left, const Limits& right)
+{
+	return left.flags == right.flags && left.initial == right.initial
+			&& left.maximum == right.maximum;
+}
+
+bool coreValueTypeEqual(const ValueType& left, const ValueType& right)
+{
+	return left.opcode == right.opcode && left.heapType == right.heapType;
+}
+
+bool coreTableTypeEqual(const TableType& left, const TableType& right)
+{
+	return coreValueTypeEqual(left.elementType, right.elementType)
+			&& limitsEqual(left.limits, right.limits)
+			&& left.initExpr == right.initExpr;
+}
+
+bool coreMemoryTypeEqual(const MemoryType& left, const MemoryType& right)
+{
+	return left.indexType == right.indexType
+			&& limitsEqual(left.limits, right.limits);
+}
+
+bool coreGlobalTypeEqual(const GlobalType& left, const GlobalType& right)
+{
+	return coreValueTypeEqual(left.contentType, right.contentType)
+			&& left.isMutable == right.isMutable;
+}
+
+bool coreExternTypeEqual(const CoreExternType& left, const CoreExternType& right,
+		std::span<const TypeId> leftTypes,
+		std::span<const TypeId> rightTypes)
+{
+	if (left.kind != right.kind)
+		return false;
+	switch (left.kind) {
+	case CoreExternType::Kind::Function:
+	case CoreExternType::Kind::Tag: {
+		if (left.typeIndex < leftTypes.size()
+				&& right.typeIndex < rightTypes.size()
+				&& !leftTypes[left.typeIndex].isNone()
+				&& !rightTypes[right.typeIndex].isNone())
+			return leftTypes[left.typeIndex] == rightTypes[right.typeIndex];
+		if (left.typeIndex != right.typeIndex)
+			return false;
+		return left.kind != CoreExternType::Kind::Tag
+				|| left.tagAttribute == right.tagAttribute;
+	}
+	case CoreExternType::Kind::Table:
+		return coreTableTypeEqual(left.table, right.table);
+	case CoreExternType::Kind::Memory:
+		return coreMemoryTypeEqual(left.memory, right.memory);
+	case CoreExternType::Kind::Global:
+		return coreGlobalTypeEqual(left.global, right.global);
+	}
+	return false;
+}
+
+bool coreRecTypeEqual(const CoreRecType& left, const CoreRecType& right)
+{
+	return left.isRecGroup == right.isRecGroup
+			&& left.typeIds == right.typeIds;
+}
+
+bool coreModuleTypeEqual(const CoreTypeDef& left, const CoreTypeDef& right)
+{
+	if (&left == &right)
+		return true;
+	if (left.kind != CoreTypeDef::Kind::ModuleType
+			|| right.kind != CoreTypeDef::Kind::ModuleType
+			|| left.moduleDecls.size() != right.moduleDecls.size())
+		return false;
+	std::vector<TypeId> leftTypes;
+	std::vector<TypeId> rightTypes;
+	for (std::size_t i = 0; i < left.moduleDecls.size(); ++i) {
+		const CoreModuleDecl& a = left.moduleDecls[i];
+		const CoreModuleDecl& b = right.moduleDecls[i];
+		if (a.kind != b.kind)
+			return false;
+		switch (a.kind) {
+		case CoreModuleDecl::Kind::Import:
+			if (a.import.module != b.import.module
+					|| a.import.name != b.import.name
+					|| !coreExternTypeEqual(a.import.type, b.import.type,
+							leftTypes, rightTypes))
+				return false;
+			break;
+		case CoreModuleDecl::Kind::Type:
+			if (!coreRecTypeEqual(a.type, b.type))
+				return false;
+			leftTypes.insert(leftTypes.end(), a.type.typeIds.begin(),
+					a.type.typeIds.end());
+			rightTypes.insert(rightTypes.end(), b.type.typeIds.begin(),
+					b.type.typeIds.end());
+			break;
+		case CoreModuleDecl::Kind::Alias:
+			if (a.alias.count != b.alias.count
+					|| a.alias.index != b.alias.index)
+				return false;
+			break;
+		case CoreModuleDecl::Kind::Export:
+			if (a.exportDecl.name != b.exportDecl.name
+					|| !coreExternTypeEqual(a.exportDecl.type,
+							b.exportDecl.type, leftTypes, rightTypes))
+				return false;
+			break;
+		}
+	}
+	return true;
+}
+
+bool containsAbstractResource(const ValuePtr& value);
+bool containsAbstractResource(const TypePtr& type);
+
+bool containsAbstractResource(const ValuePtr& value)
 {
 	if (!value)
 		return false;
 	switch (value->kind) {
 	case ResolvedValueType::Kind::Own:
 	case ResolvedValueType::Kind::Borrow:
+		return value->resourceAbstract;
+	case ResolvedValueType::Kind::Record:
+		for (const auto& field : value->fields)
+			if (containsAbstractResource(field.second))
+				return true;
+		return false;
+	case ResolvedValueType::Kind::Variant:
+		for (const ResolvedCase& item : value->cases)
+			if (item.type && containsAbstractResource(*item.type))
+				return true;
+		return false;
+	case ResolvedValueType::Kind::List:
+	case ResolvedValueType::Kind::FixedList:
+	case ResolvedValueType::Kind::Option:
+		return containsAbstractResource(value->element);
+	case ResolvedValueType::Kind::Tuple:
+		for (const ValuePtr& element : value->tuple)
+			if (containsAbstractResource(element))
+				return true;
+		return false;
+	case ResolvedValueType::Kind::Result:
+		return (value->ok && containsAbstractResource(*value->ok))
+				|| (value->error && containsAbstractResource(*value->error));
+	case ResolvedValueType::Kind::Stream:
+		return value->streamElement
+				&& containsAbstractResource(*value->streamElement);
+	case ResolvedValueType::Kind::Future:
+		return value->futureElement
+				&& containsAbstractResource(*value->futureElement);
+	case ResolvedValueType::Kind::Map:
+		return containsAbstractResource(value->mapKey)
+				|| containsAbstractResource(value->mapValue);
+	default:
+		return false;
+	}
+}
+
+bool containsAbstractResource(const TypePtr& type)
+{
+	if (!type)
+		return false;
+	switch (type->kind) {
+	case ResolvedType::Kind::Value:
+		return containsAbstractResource(type->value);
+	case ResolvedType::Kind::Func:
+		for (const auto& [name, value] : type->func->params)
+			if (containsAbstractResource(value))
+				return true;
+		return type->func->result
+				&& containsAbstractResource(*type->func->result);
+	case ResolvedType::Kind::Resource:
+		return type->resource->abstract;
+	case ResolvedType::Kind::Instance:
+		for (const ResolvedDecl& declaration : type->instance->exports)
+			if (containsAbstractResource(declaration.type))
+				return true;
+		return false;
+	case ResolvedType::Kind::Component:
+		for (const ResolvedDecl& declaration : type->component->imports)
+			if (containsAbstractResource(declaration.type))
+				return true;
+		for (const ResolvedDecl& declaration : type->component->exports)
+			if (containsAbstractResource(declaration.type))
+				return true;
+		return false;
+	}
+	return false;
+}
+
+bool containsBorrow(const ValuePtr& value)
+{
+	if (!value)
+		return false;
+	switch (value->kind) {
+	case ResolvedValueType::Kind::Borrow:
 		return true;
+	case ResolvedValueType::Kind::Own:
+		return false;
 	case ResolvedValueType::Kind::Record:
 		for (const auto& field : value->fields)
 			if (containsBorrow(field.second))
@@ -452,10 +674,15 @@ private:
 	ValidationState& state_;
 	ValidationScope scope_;
 	std::map<const ComponentTypeDef*, TypePtr> typeCache_;
+	std::map<uint32_t, TypePtr> localResources_;
+	std::set<const ResolvedType*> importVisibleTypes_;
+	std::set<const ResolvedType*> exportVisibleTypes_;
 	std::shared_ptr<const ResolvedComponentType> signature_;
 	// Canonical component interning: resolved node -> Store TypeId.
 	std::unordered_map<const ResolvedValueType*, TypeId> valueTypeIds_;
 	std::unordered_map<const ResolvedType*, TypeId> resolvedTypeIds_;
+	// Open scheme identity: resolved node -> alpha-equivalent SchemeId.
+	std::unordered_map<const ResolvedType*, SchemeId> schemeIds_;
 
 	void processDefinition(const ComponentDefinition& definition);
 	void processCoreModule(uint32_t index);
@@ -492,6 +719,19 @@ private:
 			ValidationScope& scope);
 	TypeId internValue(const ValuePtr& value);
 	TypeId internResolvedType(const TypePtr& type);
+	TypePtr cloneExportedType(const TypePtr& type);
+	SchemeId internScheme(const TypePtr& type);
+	void appendSchemeValue(std::string& key, const ValuePtr& value,
+			std::map<uint32_t, uint32_t>& parameters) const;
+	void appendSchemeType(std::string& key, const TypePtr& type,
+			std::map<uint32_t, uint32_t>& parameters) const;
+	void appendSchemeDeclarations(std::string& key,
+			const std::vector<ResolvedDecl>& declarations,
+			std::map<uint32_t, uint32_t>& parameters) const;
+	bool isExternallyVisible(const ResolvedType* type, bool isImport) const;
+	void validateExternalVisibility(const TypePtr& type, bool isImport,
+			const ResolvedType* root);
+	void validateExternalValueVisibility(const ValuePtr& value, bool isImport);
 	std::vector<ComponentDeclRecord> canonicalDeclarations(
 			const std::vector<ResolvedDecl>& declarations);
 	ValuePtr substituteValue(const ValuePtr& value,
@@ -516,6 +756,8 @@ private:
 			ComponentDefinitionKind kind, uint32_t index);
 	void validateAttributes(const NameAttributes& name, const SortIdx& sort,
 			bool isImport);
+	void validateFunctionAnnotations(const ResolvedDecl& declaration,
+			const ValidationScope& scope);
 	void validateCanonOpts(const Canon& canon);
 	void validateCanon(const Canon& canon);
 	void validateCoreTypeDef(const CoreTypeDef& definition,
@@ -551,20 +793,38 @@ void ComponentValidator::run()
 		if (entity.type)
 			internResolvedType(entity.type);
 	for (const Entity& entity : instanceEntities) {
-		if (entity.type && entity.ref.owner == &component_
-				&& entity.ref.kind == ComponentDefinitionKind::Instance
-				&& entity.ref.index < component_.instances.size())
-			component_.instances[entity.ref.index].typeId = entity.type->typeId;
+		if (!entity.type || entity.ref.owner != &component_
+				|| entity.ref.kind != ComponentDefinitionKind::Instance
+				|| entity.ref.index >= component_.instances.size())
+			continue;
+		const ComponentInstance& instance = component_.instances[entity.ref.index];
+		instance.typeId = entity.type->typeId;
+		instance.schemeId = SchemeId{SchemeId::kNone};
+		if (entity.type->typeId.isNone()) {
+			const auto found = schemeIds_.find(entity.type.get());
+			if (found != schemeIds_.end())
+				instance.schemeId = found->second;
+		}
 	}
 	signature_ = buildSignature();
 
-	// Publish the canonical local-index -> TypeId map. The vector mirrors the
-	// component type index space exactly, including aliases and imported types;
-	// a kNone entry is unvalidated or a future open/scheme type.
+	// Publish parallel closed and scheme identities. Both vectors mirror the
+	// component type index space exactly, including aliases and imported types.
 	component_.localTypeIds.clear();
+	component_.localSchemeIds.clear();
 	component_.localTypeIds.reserve(scope_.typeScope.types.size());
-	for (const TypePtr& type : scope_.typeScope.types)
-		component_.localTypeIds.push_back(type ? type->typeId : TypeId{TypeId::kNone});
+	component_.localSchemeIds.reserve(scope_.typeScope.types.size());
+	for (const TypePtr& type : scope_.typeScope.types) {
+		component_.localTypeIds.push_back(type
+				? type->typeId : TypeId{TypeId::kNone});
+		SchemeId scheme{SchemeId::kNone};
+		if (type && type->typeId.isNone()) {
+			const auto found = schemeIds_.find(type.get());
+			if (found != schemeIds_.end())
+				scheme = found->second;
+		}
+		component_.localSchemeIds.push_back(scheme);
+	}
 }
 
 ComponentIndexSpaces ComponentValidator::publicSpaces() const
@@ -748,6 +1008,7 @@ TypePtr ComponentValidator::resolveDefinedValueType(ComponentTypeView type,
 				ResolvedType::Kind::Resource, "resource type");
 		value->resourceId = resource->resource->id;
 		value->resourceTypeId = resource->typeId;
+		value->resourceType = resource;
 		value->resourceAbstract = resource->resource->abstract;
 		value->kind = type.kind() == TypeKind::ComponentOwn
 				? ResolvedValueType::Kind::Own : ResolvedValueType::Kind::Borrow;
@@ -785,7 +1046,9 @@ TypePtr ComponentValidator::resolveDefinedValueType(ComponentTypeView type,
 	default:
 		fail("component defined-value record has a non-value kind");
 	}
-	return makeType(value);
+	const TypePtr resolved = makeType(value);
+	value->owner = resolved.get();
+	return resolved;
 }
 TypePtr ComponentValidator::resolveFuncType(ComponentTypeView type,
 		const ValidationScope& scope)
@@ -825,7 +1088,9 @@ TypePtr ComponentValidator::resolveResourceType(const ResourceType& type,
 				*type.destructor, "resource destructor");
 		resource->destructor = dtor->ref;
 	}
-	return makeType(resource);
+	const TypePtr resolved = makeType(resource);
+	localResources_.emplace(resource->id, resolved);
+	return resolved;
 }
 
 TypePtr ComponentValidator::resolveTypeDef(const ComponentTypeDef& definition,
@@ -950,6 +1215,7 @@ ValuePtr ComponentValidator::substituteValue(const ValuePtr& value,
 					&& found->second->kind == ResolvedType::Kind::Resource) {
 				out->resourceId = found->second->resource->id;
 				out->resourceTypeId = found->second->typeId;
+				out->resourceType = found->second;
 				out->resourceAbstract = found->second->resource->abstract;
 			}
 		}
@@ -1027,6 +1293,278 @@ std::vector<ResolvedDecl> ComponentValidator::substituteDeclarations(
 	out.reserve(declarations.size());
 	for (const ResolvedDecl& declaration : declarations)
 		out.push_back(substituteDeclaration(declaration, resources));
+	return out;
+}
+
+void ComponentValidator::appendSchemeValue(std::string& key,
+		const ValuePtr& value,
+		std::map<uint32_t, uint32_t>& parameters) const
+{
+	if (!value) {
+		appendSchemeU8(key, 0);
+		return;
+	}
+	appendSchemeU8(key, static_cast<uint8_t>(value->kind) + 1);
+	switch (value->kind) {
+	case ResolvedValueType::Kind::Primitive:
+		appendSchemeU8(key, static_cast<uint8_t>(value->primitive));
+		break;
+	case ResolvedValueType::Kind::Record:
+		appendSchemeU32(key, static_cast<uint32_t>(value->fields.size()));
+		for (const auto& [name, field] : value->fields) {
+			appendSchemeString(key, name);
+			appendSchemeValue(key, field, parameters);
+		}
+		break;
+	case ResolvedValueType::Kind::Variant:
+		appendSchemeU32(key, static_cast<uint32_t>(value->cases.size()));
+		for (const ResolvedCase& item : value->cases) {
+			appendSchemeString(key, item.label);
+			appendSchemeU8(key, item.type ? 1 : 0);
+			if (item.type)
+				appendSchemeValue(key, *item.type, parameters);
+		}
+		break;
+	case ResolvedValueType::Kind::List:
+	case ResolvedValueType::Kind::FixedList:
+	case ResolvedValueType::Kind::Option:
+		appendSchemeValue(key, value->element, parameters);
+		if (value->kind == ResolvedValueType::Kind::FixedList)
+			appendSchemeU32(key, value->fixedLength);
+		break;
+	case ResolvedValueType::Kind::Tuple:
+		appendSchemeU32(key, static_cast<uint32_t>(value->tuple.size()));
+		for (const ValuePtr& element : value->tuple)
+			appendSchemeValue(key, element, parameters);
+		break;
+	case ResolvedValueType::Kind::Flags:
+	case ResolvedValueType::Kind::Enum:
+		appendSchemeU32(key, static_cast<uint32_t>(value->labels.size()));
+		for (const std::string& label : value->labels)
+			appendSchemeString(key, label);
+		break;
+	case ResolvedValueType::Kind::Result:
+		appendSchemeU8(key, value->ok ? 1 : 0);
+		if (value->ok)
+			appendSchemeValue(key, *value->ok, parameters);
+		appendSchemeU8(key, value->error ? 1 : 0);
+		if (value->error)
+			appendSchemeValue(key, *value->error, parameters);
+		break;
+	case ResolvedValueType::Kind::Map:
+		appendSchemeValue(key, value->mapKey, parameters);
+		appendSchemeValue(key, value->mapValue, parameters);
+		break;
+	case ResolvedValueType::Kind::Stream:
+		appendSchemeU8(key, value->streamElement ? 1 : 0);
+		if (value->streamElement)
+			appendSchemeValue(key, *value->streamElement, parameters);
+		break;
+	case ResolvedValueType::Kind::Future:
+		appendSchemeU8(key, value->futureElement ? 1 : 0);
+		if (value->futureElement)
+			appendSchemeValue(key, *value->futureElement, parameters);
+		break;
+	case ResolvedValueType::Kind::Own:
+	case ResolvedValueType::Kind::Borrow: {
+		if (value->resourceAbstract && value->resourceId) {
+			const auto inserted = parameters.emplace(*value->resourceId,
+					static_cast<uint32_t>(parameters.size()));
+			appendSchemeU8(key, 1);
+			appendSchemeU32(key, inserted.first->second);
+		} else {
+			appendSchemeU8(key, 0);
+			appendSchemeU32(key, value->resourceTypeId.value);
+		}
+		break;
+	}
+	}
+}
+
+void ComponentValidator::appendSchemeDeclarations(std::string& key,
+		const std::vector<ResolvedDecl>& declarations,
+		std::map<uint32_t, uint32_t>& parameters) const
+{
+	appendSchemeU32(key, static_cast<uint32_t>(declarations.size()));
+	for (const ResolvedDecl& declaration : declarations) {
+		appendSchemeString(key, declaration.name.name);
+		appendSchemeU16(key, static_cast<uint16_t>(declaration.sort.sort));
+		appendSchemeU16(key, declaration.sort.core
+				? static_cast<uint16_t>(declaration.sort.core->sort) : 0);
+		appendSchemeU8(key, declaration.coreModule ? 1 : 0);
+		appendSchemeU8(key, declaration.type ? 1 : 0);
+		if (declaration.type)
+			appendSchemeType(key, declaration.type, parameters);
+	}
+}
+
+void ComponentValidator::appendSchemeType(std::string& key,
+		const TypePtr& type,
+		std::map<uint32_t, uint32_t>& parameters) const
+{
+	if (!type) {
+		appendSchemeU8(key, 0);
+		return;
+	}
+	appendSchemeU8(key, static_cast<uint8_t>(type->kind) + 1);
+	switch (type->kind) {
+	case ResolvedType::Kind::Value:
+		appendSchemeValue(key, type->value, parameters);
+		break;
+	case ResolvedType::Kind::Func:
+		appendSchemeU8(key, type->func->isAsync ? 1 : 0);
+		appendSchemeU32(key,
+				static_cast<uint32_t>(type->func->params.size()));
+		for (const auto& [name, value] : type->func->params) {
+			appendSchemeString(key, name);
+			appendSchemeValue(key, value, parameters);
+		}
+		appendSchemeU8(key, type->func->result ? 1 : 0);
+		if (type->func->result)
+			appendSchemeValue(key, *type->func->result, parameters);
+		break;
+	case ResolvedType::Kind::Resource:
+		if (type->resource->abstract) {
+			const auto inserted = parameters.emplace(type->resource->id,
+					static_cast<uint32_t>(parameters.size()));
+			appendSchemeU8(key, 1);
+			appendSchemeU32(key, inserted.first->second);
+		} else {
+			appendSchemeU8(key, 0);
+			appendSchemeU32(key, type->typeId.value);
+		}
+		break;
+	case ResolvedType::Kind::Instance:
+		appendSchemeDeclarations(key, type->instance->exports, parameters);
+		break;
+	case ResolvedType::Kind::Component:
+		appendSchemeDeclarations(key, type->component->imports, parameters);
+		appendSchemeDeclarations(key, type->component->exports, parameters);
+		break;
+	}
+}
+
+SchemeId ComponentValidator::internScheme(const TypePtr& type)
+{
+	std::string key;
+	std::map<uint32_t, uint32_t> parameters;
+	appendSchemeType(key, type, parameters);
+	return Store::global().types().store().internScheme(std::move(key),
+			static_cast<uint32_t>(parameters.size()));
+}
+
+bool ComponentValidator::isExternallyVisible(const ResolvedType* type,
+		bool isImport) const
+{
+	if (!type)
+		return false;
+	if (importVisibleTypes_.count(type))
+		return true;
+	return !isImport && exportVisibleTypes_.count(type);
+}
+
+void ComponentValidator::validateExternalValueVisibility(const ValuePtr& value,
+		bool isImport)
+{
+	if (!value)
+		return;
+	switch (value->kind) {
+	case ResolvedValueType::Kind::Own:
+	case ResolvedValueType::Kind::Borrow:
+		if (!isExternallyVisible(value->resourceType.get(), isImport))
+			fail("resource type used by an import/export has no external name");
+		break;
+	case ResolvedValueType::Kind::Record:
+	case ResolvedValueType::Kind::Variant:
+	case ResolvedValueType::Kind::Enum:
+	case ResolvedValueType::Kind::Flags:
+		if (!isExternallyVisible(value->owner, isImport))
+			fail("named structural type used by an import/export has no external name");
+		if (value->kind == ResolvedValueType::Kind::Record) {
+			for (const auto& field : value->fields)
+				validateExternalValueVisibility(field.second, isImport);
+			break;
+		}
+		if (value->kind == ResolvedValueType::Kind::Variant) {
+			for (const ResolvedCase& item : value->cases)
+				if (item.type)
+					validateExternalValueVisibility(*item.type, isImport);
+		}
+		break;
+	case ResolvedValueType::Kind::List:
+	case ResolvedValueType::Kind::FixedList:
+	case ResolvedValueType::Kind::Option:
+		validateExternalValueVisibility(value->element, isImport);
+		break;
+	case ResolvedValueType::Kind::Tuple:
+		for (const ValuePtr& element : value->tuple)
+			validateExternalValueVisibility(element, isImport);
+		break;
+	case ResolvedValueType::Kind::Result:
+		if (value->ok)
+			validateExternalValueVisibility(*value->ok, isImport);
+		if (value->error)
+			validateExternalValueVisibility(*value->error, isImport);
+		break;
+	case ResolvedValueType::Kind::Stream:
+		if (value->streamElement)
+			validateExternalValueVisibility(*value->streamElement, isImport);
+		break;
+	case ResolvedValueType::Kind::Future:
+		if (value->futureElement)
+			validateExternalValueVisibility(*value->futureElement, isImport);
+		break;
+	case ResolvedValueType::Kind::Map:
+		validateExternalValueVisibility(value->mapKey, isImport);
+		validateExternalValueVisibility(value->mapValue, isImport);
+		break;
+	default:
+		break;
+	}
+}
+
+void ComponentValidator::validateExternalVisibility(const TypePtr& type,
+		bool isImport, const ResolvedType* root)
+{
+	if (!type || type.get() == root)
+		return;
+	switch (type->kind) {
+	case ResolvedType::Kind::Value:
+		validateExternalValueVisibility(type->value, isImport);
+		break;
+	case ResolvedType::Kind::Func:
+		for (const auto& [name, value] : type->func->params)
+			validateExternalValueVisibility(value, isImport);
+		if (type->func->result)
+			validateExternalValueVisibility(*type->func->result, isImport);
+		break;
+	case ResolvedType::Kind::Resource:
+		if (!isExternallyVisible(type.get(), isImport))
+			fail("resource type used by an import/export has no external name");
+		break;
+	case ResolvedType::Kind::Instance:
+		for (const ResolvedDecl& declaration : type->instance->exports)
+			validateExternalVisibility(declaration.type, isImport, root);
+		break;
+	case ResolvedType::Kind::Component:
+		for (const ResolvedDecl& declaration : type->component->imports)
+			validateExternalVisibility(declaration.type, isImport, root);
+		for (const ResolvedDecl& declaration : type->component->exports)
+			validateExternalVisibility(declaration.type, isImport, root);
+		break;
+	}
+}
+
+TypePtr ComponentValidator::cloneExportedType(const TypePtr& type)
+{
+	if (!type)
+		return {};
+	auto out = std::make_shared<ResolvedType>(*type);
+	if (out->kind == ResolvedType::Kind::Value && out->value) {
+		auto value = std::make_shared<ResolvedValueType>(*out->value);
+		value->owner = out.get();
+		out->value = std::move(value);
+	}
 	return out;
 }
 
@@ -1165,6 +1703,17 @@ TypeId ComponentValidator::internResolvedType(const TypePtr& type)
 	if (found != resolvedTypeIds_.end())
 		return found->second;
 
+	// An open type is a scheme, not a closed Store identity. Abstract resource
+	// parameters make a value/func/instance/component type open; they are
+	// serialized as placeholders so alpha-equivalent schemes share a SchemeId.
+	if (type->kind != ResolvedType::Kind::Resource
+			&& containsAbstractResource(type)) {
+		if (schemeIds_.find(type.get()) == schemeIds_.end())
+			schemeIds_.emplace(type.get(), internScheme(type));
+		resolvedTypeIds_.emplace(type.get(), TypeId{TypeId::kNone});
+		return TypeId{TypeId::kNone};
+	}
+
 	// Guard recursive declaration graphs: a cycle gets no closed id rather than
 	// recursing forever.
 	resolvedTypeIds_.emplace(type.get(), TypeId{TypeId::kNone});
@@ -1218,9 +1767,109 @@ TypeId ComponentValidator::internResolvedType(const TypePtr& type)
 	return id;
 }
 
+bool isSemverComponent(const std::string& text)
+{
+	if (text.empty())
+		return false;
+	for (char c : text)
+		if (!std::isalnum(static_cast<unsigned char>(c))
+				&& c != '-' && c != '.')
+			return false;
+	return true;
+}
+
+bool isSemver(const std::string& text, bool requirePatch)
+{
+	const std::size_t pre = text.find_first_of("-+");
+	const std::string core = text.substr(0, pre);
+	std::size_t dots = 0;
+	std::size_t start = 0;
+	while (start <= core.size()) {
+		const std::size_t end = core.find('.', start);
+		const std::string part = core.substr(start,
+				end == std::string::npos ? std::string::npos : end - start);
+		if (part.empty()
+				|| !std::all_of(part.begin(), part.end(),
+						[](char c) { return std::isdigit(static_cast<unsigned char>(c)); }))
+			return false;
+		if (end == std::string::npos)
+			break;
+		++dots;
+		start = end + 1;
+	}
+	if (requirePatch ? dots != 2 : dots > 2)
+		return false;
+	if (pre != std::string::npos
+			&& !isSemverComponent(text.substr(pre + 1)))
+		return false;
+	return true;
+}
+
+bool isInterfaceName(const std::string& name)
+{
+	const std::size_t colon = name.find(':');
+	if (colon == std::string::npos || colon == 0)
+		return false;
+	const std::size_t slash = name.find('/', colon + 1);
+	if (slash == std::string::npos || slash == colon + 1
+			|| slash + 1 >= name.size())
+		return false;
+	const std::size_t at = name.find('@', slash + 1);
+	if (at != std::string::npos) {
+		if (at == slash + 1 || at + 1 >= name.size())
+			return false;
+		if (!isSemver(name.substr(at + 1), false))
+			return false;
+	}
+	return true;
+}
+
+void validateExternName(const std::string& name)
+{
+	if (name.empty())
+		throw std::runtime_error("component validation: import/export name cannot be empty");
+	if (name[0] == '[') {
+		const std::size_t close = name.find(']');
+		if (close == std::string::npos || close + 1 >= name.size())
+			throw std::runtime_error("component validation: malformed annotated name `" + name + "`");
+		const std::string annotation = name.substr(0, close + 1);
+		const std::string rest = name.substr(close + 1);
+		if (annotation == "[constructor]") {
+			if (!isKebabLabel(rest))
+				throw std::runtime_error("component validation: invalid constructor name `" + name + "`");
+		} else if (annotation == "[method]" || annotation == "[static]") {
+			const std::size_t dot = rest.find('.');
+			if (dot == std::string::npos || !isKebabLabel(rest.substr(0, dot))
+					|| !isKebabLabel(rest.substr(dot + 1)))
+				throw std::runtime_error("component validation: invalid annotated name `" + name + "`");
+		} else if (annotation != "[get]" && annotation != "[set]") {
+			throw std::runtime_error("component validation: unknown name annotation `" + annotation + "`");
+		}
+		return;
+	}
+	if (name.find(':') != std::string::npos) {
+		if (!isInterfaceName(name))
+			throw std::runtime_error("component validation: invalid interface name `" + name + "`");
+		return;
+	}
+	if (!isKebabLabel(name))
+		throw std::runtime_error("component validation: invalid plain name `" + name + "`");
+}
+
+void validateVersionSuffix(const NameAttributes& name, const std::string& suffix)
+{
+	const std::size_t at = name.name.find('@');
+	if (at == std::string::npos || at + 1 >= name.name.size())
+		throw std::runtime_error("component validation: versionsuffix requires an interface version");
+	const std::string version = name.name.substr(at + 1) + suffix;
+	if (!isSemver(version, true))
+		throw std::runtime_error("component validation: versionsuffix does not form a valid semver");
+}
+
 void ComponentValidator::validateAttributes(const NameAttributes& name,
 		const SortIdx& sort, bool isImport)
 {
+	validateExternName(name.name);
 	std::set<Attribute::Kind> seen;
 	for (const Attribute& attribute : name.attributes) {
 		if (!seen.insert(attribute.kind).second)
@@ -1230,9 +1879,83 @@ void ComponentValidator::validateAttributes(const NameAttributes& name,
 				fail("`implements` is only valid on instance imports/exports");
 			if (name.name.find(':') != std::string::npos)
 				fail("`implements` requires a plain import/export name");
+			if (!isInterfaceName(attribute.text))
+				fail("`implements` value is not a valid interface name");
+		} else if (attribute.kind == Attribute::Kind::VersionSuffix) {
+			validateVersionSuffix(name, attribute.text);
+		} else if (attribute.kind == Attribute::Kind::ExternalId
+				&& attribute.text.empty()) {
+			fail("`external-id` cannot be empty");
 		}
 	}
 	(void)isImport;
+}
+
+void ComponentValidator::validateFunctionAnnotations(
+		const ResolvedDecl& declaration, const ValidationScope& scope)
+{
+	const std::string& name = declaration.name.name;
+	if (name.empty() || name[0] != '[')
+		return;
+	const std::size_t close = name.find(']');
+	if (close == std::string::npos)
+		return;
+	const std::string annotation = name.substr(0, close + 1);
+	const std::string rest = name.substr(close + 1);
+	if (annotation == "[get]" || annotation == "[set]")
+		return;
+	std::string resourceName = rest;
+	std::size_t dot = std::string::npos;
+	if (annotation == "[method]" || annotation == "[static]") {
+		dot = rest.find('.');
+		if (dot == std::string::npos)
+			return;
+		resourceName = rest.substr(0, dot);
+	}
+	const ResolvedDecl* resource = nullptr;
+	const auto findResource = [&](const std::vector<ResolvedDecl>& declarations) {
+		for (const ResolvedDecl& candidate : declarations)
+			if (candidate.name.name == resourceName
+					&& candidate.sort.sort == ComponentSort::Type
+					&& candidate.type
+					&& candidate.type->kind == ResolvedType::Kind::Resource)
+				resource = &candidate;
+	};
+	findResource(scope.imports);
+	findResource(scope.exports);
+	if (!resource)
+		fail("annotated function name `" + name +
+				"` does not name a preceding resource import/export");
+	if (declaration.sort.sort != ComponentSort::Func || !declaration.type
+			|| declaration.type->kind != ResolvedType::Kind::Func)
+		fail("resource name annotations are only valid on function imports/exports");
+
+	const ResolvedFuncType& func = *declaration.type->func;
+	if (annotation == "[constructor]") {
+		if (!func.result)
+			fail("constructor annotation requires a result");
+		const ValuePtr& result = *func.result;
+		const auto ownMatches = [&](const ValuePtr& value) {
+			return value && value->kind == ResolvedValueType::Kind::Own
+					&& value->resourceType.get() == resource->type.get();
+		};
+		if (ownMatches(result))
+			return;
+		if (result->kind == ResolvedValueType::Kind::Result && result->ok
+				&& ownMatches(*result->ok))
+			return;
+		fail("constructor annotation result must be `own " + resourceName + "`");
+	}
+	if (annotation == "[method]") {
+		if (func.params.empty() || func.params.front().first != "self"
+				|| !func.params.front().second
+				|| func.params.front().second->kind
+						!= ResolvedValueType::Kind::Borrow
+				|| func.params.front().second->resourceType.get()
+						!= resource->type.get())
+			fail("method annotation requires a first `self: borrow " +
+					resourceName + "` parameter");
+	}
 }
 
 void ComponentValidator::addImportOrExport(const ResolvedDecl& declaration,
@@ -1245,12 +1968,25 @@ void ComponentValidator::addImportOrExport(const ResolvedDecl& declaration,
 		fail("duplicate " + std::string(isImport ? "import" : "export") +
 				" name `" + declaration.name.name + "`");
 	validateAttributes(declaration.name, declaration.sort, isImport);
+	validateFunctionAnnotations(declaration, scope);
+
+	if (declaration.sort.sort == ComponentSort::Type && declaration.type) {
+		if (isImport)
+			importVisibleTypes_.insert(declaration.type.get());
+		else
+			exportVisibleTypes_.insert(declaration.type.get());
+	}
+	if (declaration.type)
+		validateExternalVisibility(declaration.type, isImport,
+				declaration.sort.sort == ComponentSort::Type
+						? declaration.type.get() : nullptr);
 
 	Entity entity;
 	entity.ref = ref;
 	entity.sort = declaration.sort;
 	entity.type = declaration.type;
 	entity.coreModule = declaration.coreModuleValue;
+	entity.coreType = declaration.coreTypeValue;
 	entity.coreModuleType = declaration.coreModule
 			|| (declaration.sort.sort == ComponentSort::Core
 					&& declaration.sort.core
@@ -1290,6 +2026,7 @@ ResolvedDecl ComponentValidator::resolveExternType(const ExternType& type,
 		declaration.sort = coreSortIndex(CoreSort::Module);
 		declaration.coreModule = true;
 		declaration.coreTypeIndex = type.typeIndex;
+		declaration.coreTypeValue = &coreType;
 		break;
 	}
 	case ExternType::Kind::Func:
@@ -1490,6 +2227,18 @@ void ComponentValidator::processAlias(const Alias& alias, bool insideType,
 	}
 	}
 
+	if (alias.sort.sort == ComponentSort::Type && entity.type) {
+		const bool importVisible =
+				importVisibleTypes_.count(entity.type.get()) != 0;
+		const bool exportVisible =
+				exportVisibleTypes_.count(entity.type.get()) != 0;
+		entity.type = cloneExportedType(entity.type);
+		if (importVisible)
+			importVisibleTypes_.insert(entity.type.get());
+		if (exportVisible)
+			exportVisibleTypes_.insert(entity.type.get());
+	}
+
 	entity.sort = alias.sort;
 	if (alias.sort.sort == ComponentSort::Core) {
 		const CoreSort core = alias.sort.core->sort;
@@ -1614,8 +2363,14 @@ void ComponentValidator::processExport(uint32_t index)
 	if (exportDecl.sortIndex.sort == ComponentSort::Core) {
 		declaration.coreModule = target->coreModuleType;
 		declaration.coreTypeIndex = target->coreTypeIndex;
+		declaration.coreTypeValue = target->coreType;
 		declaration.coreModuleValue = target->coreModule;
 		declaration.type = target->type;
+	} else if (exportDecl.sortIndex.sort == ComponentSort::Type
+			&& target->type) {
+		// The export introduces a new externally-visible type index. Keep it
+		// distinct from the local definition so visibility cannot leak backward.
+		declaration.type = cloneExportedType(target->type);
 	} else {
 		declaration.type = target->type;
 	}
@@ -1626,10 +2381,16 @@ void ComponentValidator::processExport(uint32_t index)
 			fail("export type ascription sort does not match the exported definition");
 		if (declaration.sort.sort == ComponentSort::Core
 				&& declaration.sort.core->sort == CoreSort::Module) {
-			if (!ascribed.coreModule)
+			if (!ascribed.coreModule || !ascribed.coreTypeValue)
 				fail("export type ascription is not a core module type");
-			if (declaration.coreTypeIndex != ascribed.coreTypeIndex)
+			// An embedded core module has no parsed module type; the ascription
+			// supplies the only type information we have.
+			if (declaration.coreTypeValue
+					&& !coreModuleTypeEqual(*declaration.coreTypeValue,
+							*ascribed.coreTypeValue))
 				fail("core module export type does not match its ascription");
+			declaration.coreTypeValue = ascribed.coreTypeValue;
+			declaration.coreTypeIndex = ascribed.coreTypeIndex;
 		} else if (!declaration.type || !ascribed.type
 				|| !typeSubtype(declaration.type, ascribed.type)) {
 			fail("export type ascription does not match the exported definition");
@@ -1650,7 +2411,8 @@ void ComponentValidator::processExport(uint32_t index)
 		exported.global = target->global;
 		exported.tagTypeIndex = target->tagTypeIndex;
 		exported.coreExports = target->coreExports;
-		exported.coreType = target->coreType;
+		exported.coreType = target->coreType
+				? target->coreType : declaration.coreTypeValue;
 		if (exportDecl.sortIndex.core->sort == CoreSort::Type
 				&& exported.coreType)
 			scope_.typeScope.coreTypes.push_back(exported.coreType);
@@ -1675,6 +2437,7 @@ std::shared_ptr<const ResolvedComponentType> ComponentValidator::buildSignature(
 	auto signature = std::make_shared<ResolvedComponentType>();
 	signature->imports = scope_.imports;
 	signature->exports = scope_.exports;
+	signature->generativeResources = localResources_;
 	return signature;
 }
 CoreExportMap ComponentValidator::buildCoreExports(const Module& module) const
@@ -1885,6 +2648,20 @@ void ComponentValidator::instantiateComponent(const ComponentInstance& instance,
 		const ResolvedComponentType& signature = *componentEntity->type->component;
 
 		std::map<uint32_t, TypePtr> substitutions;
+		for (const auto& [id, original] : signature.generativeResources) {
+			if (!original || original->kind != ResolvedType::Kind::Resource)
+				continue;
+			auto resource = std::make_shared<ResolvedResourceType>(
+					*original->resource);
+			resource->id = state_.nextResourceId++;
+			const TypePtr fresh = makeType(resource);
+			ComponentResourcePayload payload;
+			payload.rep = resource->rep;
+			payload.abstract = false;
+			fresh->typeId = Store::global().types().store()
+					.addComponentResource(payload);
+			substitutions.emplace(id, fresh);
+		}
 		std::map<std::string, const InstantiateArg*> args;
 		for (const InstantiateArg& arg : instance.args) {
 			if (!args.emplace(arg.name, &arg).second)
@@ -1906,6 +2683,11 @@ void ComponentValidator::instantiateComponent(const ComponentInstance& instance,
 					&& import.sort.core->sort == CoreSort::Module) {
 				if (!actual->coreModuleType)
 					fail("component instantiate argument is not a core module");
+				if (!import.coreTypeValue || !actual->coreType
+						|| !coreModuleTypeEqual(*import.coreTypeValue,
+								*actual->coreType))
+					fail("component instantiate argument `" + import.name.name +
+							"` has an incompatible core module type");
 			} else if (!actual->type || !import.type
 					|| !typeSubtype(actual->type, import.type)) {
 				fail("component instantiate argument `" + import.name.name +

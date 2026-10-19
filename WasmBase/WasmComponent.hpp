@@ -38,6 +38,9 @@ struct Component : public Artifact {
 	// aliases/imports carry an id; only an unvalidated component or a future
 	// open/scheme type is kNone (TYPE_MODEL §7.11.2).
 	mutable std::vector<TypeId> localTypeIds;
+	// Parallel to localTypeIds: the alpha-equivalent scheme identity for an open
+	// type. Exactly one of typeId(i)/schemeId(i) is set for a validated type.
+	mutable std::vector<SchemeId> localSchemeIds;
 
 	Component();
 
@@ -56,13 +59,20 @@ struct Component : public Artifact {
 	// No linking, execution or Canonical ABI lowering.
 	void validate() const;
 	ComponentIndexSpaces buildIndexSpaces() const;
-	// Process-wide canonical identity of a component-local type index. Returns
-	// kNone for an unvalidated component or a type with no closed Store identity
-	// yet (a future open/scheme type).
+	// Process-wide canonical identity of a closed component-local type. Returns
+	// kNone for an unvalidated component or an open type; use schemeId() for the
+	// latter.
 	TypeId typeId(uint32_t localIndex) const
 	{
 		return localIndex < localTypeIds.size()
 				? localTypeIds[localIndex] : TypeId{TypeId::kNone};
+	}
+	// Process-wide scheme identity of an open component-local type. Returns
+	// kNone for a closed type or an unvalidated component.
+	SchemeId schemeId(uint32_t localIndex) const
+	{
+		return localIndex < localSchemeIds.size()
+				? localSchemeIds[localIndex] : SchemeId{SchemeId::kNone};
 	}
 
 protected:

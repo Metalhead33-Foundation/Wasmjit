@@ -83,6 +83,15 @@ baked in at compile time through the `WASM_TEST_DIR` macro) and calls into it.
 | `component closed records intern by structure (TM-8 first slice)` | `component_types` | parser syntax records reuse TypeIds for closed local-index-free shapes; the parser's local-index list stays fresh |
 | `component canonical value payloads and declaration sets intern` | `component_types`, `component_decltypes` | canonical validation records use `TypeId` children, cross-load list/record identity, and type-bearing component/instance declaration-set interning |
 | `component instantiation substitutes abstract resource types` | `component_resource_substitution` | abstract `sub resource` imports get nominal ids; instantiation substitutes the provided resource, so different resources yield different canonical instance types and a reused resource interns to the same id |
+| `component instantiation generates fresh resources` | `component_resource_generativity` | resources defined by the instantiated component get fresh ids/TypeIds per instantiation |
+| `component instantiation checks exact core module types` | `component_coremodule_type`, `component_invalid_coremodule_type` | a matching declared module type instantiates; a different function signature is rejected |
+| `component imports and exports require externally visible resources` | `component_resource_visibility`, `component_invalid_resource_visibility` | imported resource is visible; a local resource used by an import is rejected |
+| `component imports and exports require externally visible structural types` | `component_structural_visibility`, `component_invalid_structural_visibility` | exported record is visible; a local record used by an import is rejected |
+| `component resource name annotations bind to resources` | `component_annotations`, `component_invalid_annotation` | constructor/method annotations validate against a preceding resource import; an unbound annotation is rejected |
+| `open component types intern as alpha-equivalent schemes` | `component_open_type`, `component_open_scheme` | open types keep `typeId == kNone` and share a `SchemeId` across loads; a two-parameter scheme has distinct identity and parameter arity |
+| `canonical ABI metadata is keyed by type and options` | `component_types` | flat function signature, same `(TypeId, options)` cache hit, different string encoding produces a distinct entry, variants are unsupported |
+| `canonical ABI flattens records, tuples, lists and fixed lists` | `component_abi`, `component_types` | record/tuple/fixed-list/list flat shapes and size/alignment layouts, including 32/64-bit pointer widths and enum/flags layouts |
+| `canonical ABI flattens compound value shapes` | `component_abi_compound` | enum/flags/option/result/variant/map/stream/future flat shapes and layouts, with conservative incompatible-payload joins |
 | `component structural interning crosses components and respects labels/resources` | `component_types`, `component_record_dup`, `component_resource` | cross-component record/list sharing, label-order sensitivity and nominal resource/own/borrow identity |
 | `loaded modules retain only canonical type identities` | `rec_groups` | a repeated load reuses the same `TypeId`s; `WASM::Module` has no `types` member and exposes only `typeIds`/`typeView` |
 | `component local type indices map to Store TypeIds after validation` | `component_types`, `component_resource`, `component_decltypes` | validation publishes canonical `TypeId`s for every parsed type; canonical local-reference payloads use `TypeId`, component/instance declarations publish canonical Store records, and `own`/`borrow` reference the nominal resource id |
@@ -580,6 +589,19 @@ Current modules:
 | `component_aliasexport.wat`, `component_instanceinline.wat`, `component_coreinline.wat`, `component_outer.wat` | component/core inline exports, instantiate args, export and outer aliases | `component aliases and instance expressions are parsed` |
 | `component_exporttype.wat` | a top-level export with an optional ascribed type | `a top-level component export can carry an ascribed type` |
 | `component_resource_substitution.wat` | a component type importing `sub resource`, instantiated with two concrete resources plus one repeat | `component instantiation substitutes abstract resource types` |
+| `component_resource_generativity.wat` | a nested component defining a resource, instantiated twice | `component instantiation generates fresh resources` |
+| `component_open_type.wat` | a component type with one abstract resource import | `open component types intern as alpha-equivalent schemes` |
+| `component_open_scheme.wat` | an open component type with two abstract resource parameters used by `own`/`borrow` | `open component types intern as alpha-equivalent schemes` |
+| `component_abi.wat` | record/tuple/fixed-list/list function types | `canonical ABI flattens records, tuples, lists and fixed lists` |
+| `component_abi_compound.wat` | enum/flags/option/result/variant/map/stream/future function types | `canonical ABI flattens compound value shapes` |
+| `component_coremodule_type.wat` | a component core module import type passed to a matching nested import | `component instantiation checks exact core module types` |
+| `component_invalid_coremodule_type.wat` | a provided core module with a different function signature | `component instantiation checks exact core module types` |
+| `component_resource_visibility.wat` | a resource type import used by a function import | `component imports and exports require externally visible resources` |
+| `component_invalid_resource_visibility.wat` | a local resource used by a function import | `component imports and exports require externally visible resources` |
+| `component_structural_visibility.wat` | an exported record used by a function export | `component imports and exports require externally visible structural types` |
+| `component_invalid_structural_visibility.wat` | a local record used by a function import | `component imports and exports require externally visible structural types` |
+| `component_annotations.wat` | resource import plus `[constructor]`/`[method]` function imports | `component resource name annotations bind to resources` |
+| `component_invalid_annotation.wat` | a `[constructor]` name without a preceding resource | `component resource name annotations bind to resources` |
 | `component_typeimports.wat` | structural type export and abstract resource type import entering the type index space | `component type imports and exports enter the type index space` |
 | `component_coremoduleexport.wat` | an exported core module introducing an index that is instantiated later | `an exported core module can be instantiated` |
 | `component_invalid_*.wat` (17 files) | out-of-bounds type/function/alias/start/instance references, duplicate import/export names, missing instantiation arguments, bad canon type, bad labels/flags, borrow/stream/resource restrictions, incompatible export ascription and invalid outer alias | `invalid component references and types are rejected` |
