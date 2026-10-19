@@ -130,6 +130,18 @@ uint64_t alignAbiOffset(uint64_t value, uint64_t alignment)
 	return (value + alignment - 1) / alignment * alignment;
 }
 
+// Canonical ABI `join`: only i32/f32 can be joined to i32; every other
+// mismatch widens to i64 (CanonicalABI.md §Flattening).
+AbiCoreType joinAbi(AbiCoreType left, AbiCoreType right)
+{
+	if (left == right)
+		return left;
+	if ((left == AbiCoreType::I32 && right == AbiCoreType::F32)
+			|| (left == AbiCoreType::F32 && right == AbiCoreType::I32))
+		return AbiCoreType::I32;
+	return AbiCoreType::I64;
+}
+
 bool appendAbiFlat(const TypeStore& store, const ComponentValueType& value,
 		std::vector<AbiCoreType>& out, unsigned depth)
 {
@@ -223,32 +235,42 @@ bool appendAbiFlat(const TypeStore& store, const ComponentValueType& value,
 			if (type.hasResultError()
 					&& !appendAbiFlat(store, type.resultError(), error, depth + 1))
 				return false;
-			if (!ok.empty() && !error.empty() && ok != error)
-				return false;
-			const std::vector<AbiCoreType>& payload =
-					!ok.empty() ? ok : error;
+			const std::size_t count = std::max(ok.size(), error.size());
 			out.push_back(AbiCoreType::I32);
-			out.insert(out.end(), payload.begin(), payload.end());
+			for (std::size_t i = 0; i < count; ++i) {
+				if (i < ok.size() && i < error.size())
+					out.push_back(joinAbi(ok[i], error[i]));
+				else
+					out.push_back(i < ok.size() ? ok[i] : error[i]);
+			}
 			return out.size() <= kMaxAbiFlatValues;
 		}
 		case TypeKind::ComponentVariant: {
-			std::vector<AbiCoreType> payload;
-			bool havePayload = false;
+			std::size_t count = 0;
+			std::vector<std::vector<AbiCoreType>> payloads;
 			for (const ComponentCase& item : type.cases()) {
-				if (!item.hasType)
+				if (!item.hasType) {
+					payloads.emplace_back();
 					continue;
+				}
 				std::vector<AbiCoreType> casePayload;
 				if (!appendAbiFlat(store, item.type, casePayload, depth + 1))
 					return false;
-				if (casePayload.empty())
-					continue;
-				if (havePayload && casePayload != payload)
-					return false;
-				payload = std::move(casePayload);
-				havePayload = true;
+				count = std::max(count, casePayload.size());
+				payloads.push_back(std::move(casePayload));
 			}
 			out.push_back(AbiCoreType::I32);
-			out.insert(out.end(), payload.begin(), payload.end());
+			for (std::size_t i = 0; i < count; ++i) {
+				AbiCoreType joined = AbiCoreType::I32;
+				bool have = false;
+				for (const auto& payload : payloads) {
+					if (i >= payload.size())
+						continue;
+					joined = have ? joinAbi(joined, payload[i]) : payload[i];
+					have = true;
+				}
+				out.push_back(joined);
+			}
 			return out.size() <= kMaxAbiFlatValues;
 		}
 		default:
@@ -839,6 +861,18 @@ bool TypeStore::canonicalAbiLayout(TypeId type,
 	value.kind = ComponentValueType::Kind::TypeId;
 	value.typeIndex = type.value;
 	return layoutAbiValue(*this, value, options, out, 0);
+}
+
+bool TypeStore::canonicalAbiLayoutValue(const ComponentValueType& value,
+		const CanonicalAbiOptions& options, CanonicalAbiLayout& out) const
+{
+	return layoutAbiValue(*this, value, options, out, 0);
+}
+
+bool TypeStore::canonicalAbiFlatValue(const ComponentValueType& value,
+		std::vector<AbiCoreType>& out) const
+{
+	return appendAbiFlat(*this, value, out, 0);
 }
 
 TypeSpan TypeStore::appendFields(std::span<const ComponentField> fields)

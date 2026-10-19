@@ -152,6 +152,7 @@ public:
 	VMContext* context() { return &ctx; }
 	const VMContext* context() const { return &ctx; }
 	std::optional<Callable> exportedFunction(std::string_view name) const;
+	std::optional<LinearMemory*> exportedMemory(std::string_view name) const;
 	void registerExports(ImportRegistrar& registrar, std::string_view moduleName) const;
 
 	// Called when memory.grow executes. Delegates to the owning Store and

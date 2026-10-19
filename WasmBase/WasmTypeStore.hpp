@@ -375,6 +375,13 @@ public:
 	// options/results/maps/streams/futures).
 	bool canonicalAbiLayout(TypeId type, const CanonicalAbiOptions& options,
 			CanonicalAbiLayout& out) const;
+	// Same layout query for a value node that may be a parser-level primitive or
+	// a canonical TypeId. Used by the runtime when walking list elements.
+	bool canonicalAbiLayoutValue(const ComponentValueType& value,
+			const CanonicalAbiOptions& options, CanonicalAbiLayout& out) const;
+	// Flat core signature of one value type, for variant/option payload padding.
+	bool canonicalAbiFlatValue(const ComponentValueType& value,
+			std::vector<AbiCoreType>& out) const;
 	std::size_t canonicalAbiCacheSize() const { return canonicalAbi_.size(); }
 	std::size_t canonicalAbiHits() const { return canonicalAbiHits_; }
 	std::size_t canonicalAbiMisses() const { return canonicalAbiMisses_; }

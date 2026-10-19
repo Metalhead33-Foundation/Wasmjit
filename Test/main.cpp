@@ -1222,6 +1222,105 @@ TEST_CASE("component runtime lifts a flat core function")
 	REQUIRE(results[0].i32 == 42);
 }
 
+TEST_CASE("component runtime lifts a canonical string")
+{
+	auto artifact = loadTestArtifact("component_runtime_string");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	LibJIT::Context context;
+	LibJIT::ComponentRuntime runtime(context.rawContext(), *component);
+	auto function = runtime.exportedFunction("echo");
+	REQUIRE(function.has_value());
+	REQUIRE(function->paramTypes.size() == 1);
+	REQUIRE(function->resultTypes.size() == 1);
+	const WASM::Callable coreEcho = runtime.coreFunction(0);
+	alignas(16) unsigned char rawResults[16]{};
+	WASM::callCallableWithResults(coreEcho, rawResults, uint32_t(1024), uint32_t(5));
+	uint32_t rawPtr = 0;
+	uint32_t rawLen = 0;
+	std::memcpy(&rawPtr, rawResults, sizeof(rawPtr));
+	std::memcpy(&rawLen, rawResults + 4, sizeof(rawLen));
+	REQUIRE(rawPtr == 1024);
+	REQUIRE(rawLen == 5);
+	LibJIT::ComponentValue arg;
+	arg.kind = LibJIT::ComponentValue::Kind::String;
+	arg.string = "hello";
+	LibJIT::ComponentValue result;
+	function->callValues({&arg, 1}, {&result, 1});
+	REQUIRE(result.kind == LibJIT::ComponentValue::Kind::String);
+	REQUIRE(result.string == "hello");
+}
+
+TEST_CASE("component runtime joins variant payloads")
+{
+	auto artifact = loadTestArtifact("component_runtime_variant");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	LibJIT::Context context;
+	LibJIT::ComponentRuntime runtime(context.rawContext(), *component);
+	auto function = runtime.exportedFunction("echo");
+	REQUIRE(function.has_value());
+	LibJIT::ComponentValue input;
+	input.kind = LibJIT::ComponentValue::Kind::Variant;
+	input.discriminant = 0;
+	input.hasValue = true;
+	input.elements.resize(1);
+	input.elements[0].kind = LibJIT::ComponentValue::Kind::U32;
+	input.elements[0].u64 = 42;
+	LibJIT::ComponentValue output;
+	function->callValues({&input, 1}, {&output, 1});
+	REQUIRE(output.kind == LibJIT::ComponentValue::Kind::Variant);
+	REQUIRE(output.discriminant == 0);
+	REQUIRE(output.elements.size() == 1);
+	REQUIRE(output.elements[0].u64 == 42);
+
+	input.discriminant = 1;
+	input.elements[0].kind = LibJIT::ComponentValue::Kind::F32;
+	input.elements[0].f64 = 3.5;
+	function->callValues({&input, 1}, {&output, 1});
+	REQUIRE(output.discriminant == 1);
+	REQUIRE(output.elements.size() == 1);
+	REQUIRE(std::abs(output.elements[0].f64 - 3.5) < 1e-6);
+}
+
+TEST_CASE("component runtime instantiates a nested component")
+{
+	auto artifact = loadTestArtifact("component_runtime_nested");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	LibJIT::Context context;
+	LibJIT::ComponentRuntime runtime(context.rawContext(), *component);
+	auto function = runtime.exportedFunction("add");
+	REQUIRE(function.has_value());
+	WASM::Value args[2];
+	args[0].kind = WASM::ValueTypeCode::I32;
+	args[0].i32 = 20;
+	args[1].kind = WASM::ValueTypeCode::I32;
+	args[1].i32 = 22;
+	WASM::Value result;
+	function->call({args, 2}, {&result, 1});
+	REQUIRE(result.i32 == 42);
+}
+
+TEST_CASE("component runtime resource handles")
+{
+	auto artifact = loadTestArtifact("component_runtime_resource");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	LibJIT::Context context;
+	LibJIT::ComponentRuntime runtime(context.rawContext(), *component);
+	const int32_t handle = WASM::callCallable<int32_t>(
+			runtime.coreFunction(0), int32_t(77));
+	REQUIRE(handle > 0);
+	REQUIRE(WASM::callCallable<int32_t>(
+			runtime.coreFunction(1), handle) == 77);
+	WASM::callCallable<void>(runtime.coreFunction(2), handle);
+}
+
 TEST_CASE("component runtime links host component function imports")
 {
 	auto artifact = loadTestArtifact("component_runtime_import");
@@ -1270,6 +1369,29 @@ TEST_CASE("component runtime lowers a host import to a core callable")
 			{{"host-add", host}});
 	const WASM::Callable lowered = runtime.coreFunction(0);
 	REQUIRE(WASM::callCallable<int32_t>(lowered, int32_t(20), int32_t(22)) == 42);
+}
+
+TEST_CASE("component runtime lowers a host string import")
+{
+	auto artifact = loadTestArtifact("component_runtime_import_lower_string");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	LibJIT::ComponentFunction host;
+	host.params = {WASM::AbiCoreType::I32, WASM::AbiCoreType::I32};
+	host.results = {WASM::AbiCoreType::I32};
+	host.callValues = [](std::span<const LibJIT::ComponentValue> args,
+			std::span<LibJIT::ComponentValue> results) {
+		results[0].kind = LibJIT::ComponentValue::Kind::U32;
+		results[0].u64 = args[0].string.size();
+	};
+	LibJIT::Context context;
+	LibJIT::ComponentRuntime runtime(context.rawContext(), *component,
+			{{"host-len", host}});
+	const WASM::Callable lowered = runtime.coreFunction(1);
+	WASM::LinearMemory* memory = runtime.coreMemory(0);
+	std::memcpy(memory->memoryBase + 1024, "hello", 5);
+	REQUIRE(WASM::callCallable<int32_t>(lowered, int32_t(1024), int32_t(5)) == 5);
 }
 
 TEST_CASE("component runtime lowers a lifted function to a core callable")

@@ -1056,11 +1056,12 @@ apply field alignment/padding, and strings/lists use the options' 32- or 64-bit
 pointer width. Joins are conservative: incompatible variant/result payload
 shapes are reported unsupported rather than guessed.
 
-A flat execution slice now exists in `LibJIT::ComponentRuntime`: embedded core
-instances are instantiated, `canon lift`/`lower` run through libffi, and host
-component function imports can be linked. Exact canonical join promotion for
-incompatible payloads, per-encoding string layout, resource handle tables and
-memory-backed values remain. Those are `COMPONENT_MODEL.md` CM-4…CM-7;
+The runtime now covers more than the original flat slice: embedded and nested
+components instantiate, `canon lift`/`lower` run through libffi, strings/lists/
+records use canonical memory and `realloc`, exact variant/result/option joins
+are implemented, `post-return` runs, and basic resource handles exist. Async/
+stream/future, resource destructors/borrow scopes, maps and the component-script
+harness remain. Those are `COMPONENT_MODEL.md` CM-4…CM-7;
 [`ABI.md`](../ABI.md)'s host-reference model
 (R2/R3/R4) and GC `G3` own the `externref` representation the resource/handle
 path will consume. Blocker: CM-4…CM-7 plus `ABI.md` R4.
@@ -1114,7 +1115,7 @@ writing; re-measure rather than trusting them after the first stage.
 
 | Script / test | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| default C++/wast suite | 8,792 assertions / 302 cases | 0 | 0 | Existing core, GC, SIMD, exceptions and component parser/validator/runtime behaviour is the refactor's regression floor, plus the revision-4…11 identity, scheme, visibility, annotation, ABI-metadata and flat-runtime tests. |
+| default C++/wast suite | 8,822 assertions / 307 cases | 0 | 0 | Existing core, GC, SIMD, exceptions and component parser/validator/runtime behaviour is the refactor's regression floor, plus the revision-4…11 identity, scheme, visibility, annotation, ABI-metadata and flat-runtime tests. |
 | strict validation suite (`WASM_SPEC_VALIDATE=1` and the curated negative sets) | same suite green | 0 | 0 | The compact store must not weaken any validator path, positive or negative. |
 | `Test/wasm_wat/component_types.wat` | pass | 0 | 0 | Every component value type, import/export and label shape survives the AST rewrite. |
 | `component_coretypes.wat`, `component_coreexterns.wat`, `component_coregc.wat` | pass | 0 | 0 | Core-type and core-extern payloads still map to the same core shapes. |

@@ -93,10 +93,15 @@ baked in at compile time through the `WASM_TEST_DIR` macro) and calls into it.
 | `component runtime lowers a lifted function to a core callable` | `component_runtime_lower` | `canon lower` produces an ffi closure callable |
 | `component runtime lowers a host import to a core callable` | `component_runtime_import_lower` | host import + `canon lower` execute through one closure |
 | `component runtime links host component function imports` | `component_runtime_import` | host `ComponentFunction` links to a component import and export |
+| `component runtime lifts a canonical string` | `component_runtime_string` | string parameter/result lower/lift through memory and `realloc` |
+| `component runtime lowers a host string import` | `component_runtime_import_lower_string` | `canon lower` lifts a string from core memory before calling the host |
+| `component runtime joins variant payloads` | `component_runtime_variant` | i32/f32 variant payloads join to i32 and round-trip |
+| `component runtime resource handles` | `component_runtime_resource` | `resource.new`/`rep`/`drop` use the runtime handle table |
+| `component runtime instantiates a nested component` | `component_runtime_nested` | nested component instantiation, export alias and call |
 | `open component types intern as alpha-equivalent schemes` | `component_open_type`, `component_open_scheme` | open types keep `typeId == kNone` and share a `SchemeId` across loads; a two-parameter scheme has distinct identity and parameter arity |
-| `canonical ABI metadata is keyed by type and options` | `component_types` | flat function signature, same `(TypeId, options)` cache hit, different string encoding produces a distinct entry, variants are unsupported |
+| `canonical ABI metadata is keyed by type and options` | `component_types` | flat function signature, same `(TypeId, options)` cache hit and different string encoding produces a distinct entry |
 | `canonical ABI flattens records, tuples, lists and fixed lists` | `component_abi`, `component_types` | record/tuple/fixed-list/list flat shapes and size/alignment layouts, including 32/64-bit pointer widths and enum/flags layouts |
-| `canonical ABI flattens compound value shapes` | `component_abi_compound` | enum/flags/option/result/variant/map/stream/future flat shapes and layouts, with conservative incompatible-payload joins |
+| `canonical ABI flattens compound value shapes` | `component_abi_compound` | enum/flags/option/result/variant/map/stream/future flat shapes and layouts, with exact Canonical ABI `join` promotion |
 | `component structural interning crosses components and respects labels/resources` | `component_types`, `component_record_dup`, `component_resource` | cross-component record/list sharing, label-order sensitivity and nominal resource/own/borrow identity |
 | `loaded modules retain only canonical type identities` | `rec_groups` | a repeated load reuses the same `TypeId`s; `WASM::Module` has no `types` member and exposes only `typeIds`/`typeView` |
 | `component local type indices map to Store TypeIds after validation` | `component_types`, `component_resource`, `component_decltypes` | validation publishes canonical `TypeId`s for every parsed type; canonical local-reference payloads use `TypeId`, component/instance declarations publish canonical Store records, and `own`/`borrow` reference the nominal resource id |
@@ -242,7 +247,7 @@ It currently holds 189 of the 256 scripts, and the default run is green:
 
 ```
 $ ./WasmJit
-All tests passed (8354 assertions in 273 test cases)
+All tests passed (8822 assertions in 307 test cases)
 ```
 
 #### Refreshing the list
@@ -463,7 +468,7 @@ it is green:
 
 ```
 $ ./WasmJit
-All tests passed (8354 assertions in 273 test cases)
+All tests passed (8822 assertions in 307 test cases)
 ```
 
 A full sweep is deliberately loud, because most of the suite is still beyond the
@@ -611,6 +616,11 @@ Current modules:
 | `component_runtime_lower.wat` | canon lift plus canon lower | `component runtime lowers a lifted function to a core callable` |
 | `component_runtime_import_lower.wat` | host function import plus canon lower | `component runtime lowers a host import to a core callable` |
 | `component_runtime_import.wat` | host function component import/export | `component runtime links host component function imports` |
+| `component_runtime_string.wat` | core memory/realloc plus a lifted string function | `component runtime lifts a canonical string` |
+| `component_runtime_import_lower_string.wat` | host string import plus canon lower | `component runtime lowers a host string import` |
+| `component_runtime_variant.wat` | i32/f32 variant join round-trip | `component runtime joins variant payloads` |
+| `component_runtime_resource.wat` | resource.new/rep/drop builtins | `component runtime resource handles` |
+| `component_runtime_nested.wat` | nested component instantiation and export alias | `component runtime instantiates a nested component` |
 | `component_typeimports.wat` | structural type export and abstract resource type import entering the type index space | `component type imports and exports enter the type index space` |
 | `component_coremoduleexport.wat` | an exported core module introducing an index that is instantiated later | `an exported core module can be instantiated` |
 | `component_invalid_*.wat` (17 files) | out-of-bounds type/function/alias/start/instance references, duplicate import/export names, missing instantiation arguments, bad canon type, bad labels/flags, borrow/stream/resource restrictions, incompatible export ascription and invalid outer alias | `invalid component references and types are rejected` |

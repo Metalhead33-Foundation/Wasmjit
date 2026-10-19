@@ -341,6 +341,20 @@ ModuleInstance::~ModuleInstance()
 	internals.gcSet = nullptr;
 }
 
+std::optional<LinearMemory*> ModuleInstance::exportedMemory(
+		std::string_view name) const
+{
+	for (const Export& ex : module->exports) {
+		if (ex.kind != ExternalKind::Memory || ex.name != name)
+			continue;
+		if (ex.index >= internals.memoryRefs.size())
+			throw std::runtime_error(
+					"module exports a memory index outside its index space");
+		return internals.memoryRefs[ex.index];
+	}
+	return std::nullopt;
+}
+
 std::optional<Callable> ModuleInstance::exportedFunction(std::string_view name) const
 {
 	const uint32_t importedFuncCount = static_cast<uint32_t>(module->importFunctions.size());
