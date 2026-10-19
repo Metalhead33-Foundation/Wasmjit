@@ -15,6 +15,7 @@ Both live in the same binary, so a bare `./WasmJit` runs everything the runtime 
 | --- | --- |
 | Qt 6 `qmake` (`/usr/bin/qmake6`) and a C++20 compiler | building |
 | GNU LibJIT (`-ljit`) | the JIT backend |
+| libffi (`pkg-config libffi`) | flat component `canon lower` closures |
 | Catch2 3.x (`-lCatch2 -lCatch2Main`) | the test framework |
 | `nlohmann_json` headers | parsing the generated spec manifests |
 | Node.js + npm | AssemblyScript → `.wasm` for the manual tests |
@@ -88,6 +89,10 @@ baked in at compile time through the `WASM_TEST_DIR` macro) and calls into it.
 | `component imports and exports require externally visible resources` | `component_resource_visibility`, `component_invalid_resource_visibility` | imported resource is visible; a local resource used by an import is rejected |
 | `component imports and exports require externally visible structural types` | `component_structural_visibility`, `component_invalid_structural_visibility` | exported record is visible; a local record used by an import is rejected |
 | `component resource name annotations bind to resources` | `component_annotations`, `component_invalid_annotation` | constructor/method annotations validate against a preceding resource import; an unbound annotation is rejected |
+| `component runtime lifts a flat core function` | `component_runtime` | embedded core instance + core export alias + `canon lift` + component export execute |
+| `component runtime lowers a lifted function to a core callable` | `component_runtime_lower` | `canon lower` produces an ffi closure callable |
+| `component runtime lowers a host import to a core callable` | `component_runtime_import_lower` | host import + `canon lower` execute through one closure |
+| `component runtime links host component function imports` | `component_runtime_import` | host `ComponentFunction` links to a component import and export |
 | `open component types intern as alpha-equivalent schemes` | `component_open_type`, `component_open_scheme` | open types keep `typeId == kNone` and share a `SchemeId` across loads; a two-parameter scheme has distinct identity and parameter arity |
 | `canonical ABI metadata is keyed by type and options` | `component_types` | flat function signature, same `(TypeId, options)` cache hit, different string encoding produces a distinct entry, variants are unsupported |
 | `canonical ABI flattens records, tuples, lists and fixed lists` | `component_abi`, `component_types` | record/tuple/fixed-list/list flat shapes and size/alignment layouts, including 32/64-bit pointer widths and enum/flags layouts |
@@ -602,6 +607,10 @@ Current modules:
 | `component_invalid_structural_visibility.wat` | a local record used by a function import | `component imports and exports require externally visible structural types` |
 | `component_annotations.wat` | resource import plus `[constructor]`/`[method]` function imports | `component resource name annotations bind to resources` |
 | `component_invalid_annotation.wat` | a `[constructor]` name without a preceding resource | `component resource name annotations bind to resources` |
+| `component_runtime.wat` | embedded core module/instance, core alias, canon lift and component export | `component runtime lifts a flat core function` |
+| `component_runtime_lower.wat` | canon lift plus canon lower | `component runtime lowers a lifted function to a core callable` |
+| `component_runtime_import_lower.wat` | host function import plus canon lower | `component runtime lowers a host import to a core callable` |
+| `component_runtime_import.wat` | host function component import/export | `component runtime links host component function imports` |
 | `component_typeimports.wat` | structural type export and abstract resource type import entering the type index space | `component type imports and exports enter the type index space` |
 | `component_coremoduleexport.wat` | an exported core module introducing an index that is instantiated later | `an exported core module can be instantiated` |
 | `component_invalid_*.wat` (17 files) | out-of-bounds type/function/alias/start/instance references, duplicate import/export names, missing instantiation arguments, bad canon type, bad labels/flags, borrow/stream/resource restrictions, incompatible export ascription and invalid outer alias | `invalid component references and types are rejected` |

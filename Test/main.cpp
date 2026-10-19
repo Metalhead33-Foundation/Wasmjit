@@ -25,6 +25,7 @@
 #include "WasmBase/WasmStore.hpp"
 #include "WasmBase/WasmTrap.hpp"
 #include "WasmBase/wasm_simd_scalar.hpp"
+#include "LibJit/ComponentRuntime.hpp"
 
 Euph::Conf::Configuration GLOBAL_CONFIGURATION;
 
@@ -1196,6 +1197,91 @@ TEST_CASE("component instantiation substitutes abstract resource types")
 	REQUIRE(instanceType.kind() == WASM::TypeKind::ComponentInstance);
 	REQUIRE(instanceType.declarations().size() == 1);
 	REQUIRE_FALSE(instanceType.declarations()[0].type.isNone());
+}
+
+TEST_CASE("component runtime lifts a flat core function")
+{
+	auto artifact = loadTestArtifact("component_runtime");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	LibJIT::Context context;
+	LibJIT::ComponentRuntime runtime(context.rawContext(), *component);
+	auto function = runtime.exportedFunction("add");
+	REQUIRE(function.has_value());
+	REQUIRE(function->params.size() == 2);
+	REQUIRE(function->results.size() == 1);
+	WASM::Value args[2];
+	args[0].kind = WASM::ValueTypeCode::I32;
+	args[0].i32 = 20;
+	args[1].kind = WASM::ValueTypeCode::I32;
+	args[1].i32 = 22;
+	WASM::Value results[1];
+	function->call(args, results);
+	REQUIRE(results[0].kind == WASM::ValueTypeCode::I32);
+	REQUIRE(results[0].i32 == 42);
+}
+
+TEST_CASE("component runtime links host component function imports")
+{
+	auto artifact = loadTestArtifact("component_runtime_import");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	LibJIT::ComponentFunction host;
+	host.params = {WASM::AbiCoreType::I32, WASM::AbiCoreType::I32};
+	host.results = {WASM::AbiCoreType::I32};
+	host.call = [](std::span<const WASM::Value> args,
+			std::span<WASM::Value> results) {
+		results[0].kind = WASM::ValueTypeCode::I32;
+		results[0].i32 = args[0].i32 + args[1].i32;
+	};
+	LibJIT::Context context;
+	LibJIT::ComponentRuntime runtime(context.rawContext(), *component,
+			{{"host-add", host}});
+	auto function = runtime.exportedFunction("host-add");
+	REQUIRE(function.has_value());
+	WASM::Value args[2];
+	args[0].kind = WASM::ValueTypeCode::I32;
+	args[0].i32 = 20;
+	args[1].kind = WASM::ValueTypeCode::I32;
+	args[1].i32 = 22;
+	WASM::Value results[1];
+	function->call(args, results);
+	REQUIRE(results[0].i32 == 42);
+}
+
+TEST_CASE("component runtime lowers a host import to a core callable")
+{
+	auto artifact = loadTestArtifact("component_runtime_import_lower");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	LibJIT::ComponentFunction host;
+	host.params = {WASM::AbiCoreType::I32, WASM::AbiCoreType::I32};
+	host.results = {WASM::AbiCoreType::I32};
+	host.call = [](std::span<const WASM::Value> args,
+			std::span<WASM::Value> results) {
+		results[0].kind = WASM::ValueTypeCode::I32;
+		results[0].i32 = args[0].i32 + args[1].i32;
+	};
+	LibJIT::Context context;
+	LibJIT::ComponentRuntime runtime(context.rawContext(), *component,
+			{{"host-add", host}});
+	const WASM::Callable lowered = runtime.coreFunction(0);
+	REQUIRE(WASM::callCallable<int32_t>(lowered, int32_t(20), int32_t(22)) == 42);
+}
+
+TEST_CASE("component runtime lowers a lifted function to a core callable")
+{
+	auto artifact = loadTestArtifact("component_runtime_lower");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	LibJIT::Context context;
+	LibJIT::ComponentRuntime runtime(context.rawContext(), *component);
+	const WASM::Callable lowered = runtime.coreFunction(1);
+	REQUIRE(WASM::callCallable<int32_t>(lowered, int32_t(20), int32_t(22)) == 42);
 }
 
 TEST_CASE("component resource name annotations bind to resources")

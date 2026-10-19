@@ -1056,9 +1056,11 @@ apply field alignment/padding, and strings/lists use the options' 32- or 64-bit
 pointer width. Joins are conservative: incompatible variant/result payload
 shapes are reported unsupported rather than guessed.
 
-Exact canonical join promotion rules for incompatible payloads, per-encoding
-string layout, `canon lift`/`lower`, resource handle tables and the
-thunk/`VMContext` path remain. Those are `COMPONENT_MODEL.md` CM-4…CM-7;
+A flat execution slice now exists in `LibJIT::ComponentRuntime`: embedded core
+instances are instantiated, `canon lift`/`lower` run through libffi, and host
+component function imports can be linked. Exact canonical join promotion for
+incompatible payloads, per-encoding string layout, resource handle tables and
+memory-backed values remain. Those are `COMPONENT_MODEL.md` CM-4…CM-7;
 [`ABI.md`](../ABI.md)'s host-reference model
 (R2/R3/R4) and GC `G3` own the `externref` representation the resource/handle
 path will consume. Blocker: CM-4…CM-7 plus `ABI.md` R4.
@@ -1112,7 +1114,7 @@ writing; re-measure rather than trusting them after the first stage.
 
 | Script / test | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| default C++/wast suite | 8,775 assertions / 298 cases | 0 | 0 | Existing core, GC, SIMD, exceptions and component parser/validator behaviour is the refactor's regression floor, plus the revision-4…11 identity, scheme, visibility, annotation and ABI-metadata tests. |
+| default C++/wast suite | 8,792 assertions / 302 cases | 0 | 0 | Existing core, GC, SIMD, exceptions and component parser/validator/runtime behaviour is the refactor's regression floor, plus the revision-4…11 identity, scheme, visibility, annotation, ABI-metadata and flat-runtime tests. |
 | strict validation suite (`WASM_SPEC_VALIDATE=1` and the curated negative sets) | same suite green | 0 | 0 | The compact store must not weaken any validator path, positive or negative. |
 | `Test/wasm_wat/component_types.wat` | pass | 0 | 0 | Every component value type, import/export and label shape survives the AST rewrite. |
 | `component_coretypes.wat`, `component_coreexterns.wat`, `component_coregc.wat` | pass | 0 | 0 | Core-type and core-extern payloads still map to the same core shapes. |
@@ -1226,8 +1228,9 @@ planned in §7.10.4/§7.10.5; the actual thunks remain CM-4…CM-7 in
   scalar/string/resource/record/tuple/list/fixed-list and conservative
   enum/flags/option/result/variant/map/stream/future shapes and layouts are
   covered, including 32/64-bit pointer widths. **Done for the flat/layout
-  metadata slice.** Exact incompatible-payload join promotion and the
-  resource-handle runtime/traps remain gated by CM-4…CM-7 (§7.11.4).
+  metadata slice and flat lift/lower execution.** Exact incompatible-payload
+  join promotion and resource/memory-backed runtime/traps remain gated by
+  CM-4…CM-7 (§7.11.4).
 
 
 ## 9. References
