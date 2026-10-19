@@ -1,6 +1,6 @@
 # Unified Type Store and Component Type Identity — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 11 — core modules are
+Status: design note / implementation reference (revision 12 — core modules are
 Store-owned: `Module` keeps only `typeIds`, groups and a reverse index map, and
 the JIT/runtime/validator consume `CoreTypeView` or Store-derived signature
 views. Closed component records and type-bearing component/instance declaration
@@ -11,8 +11,8 @@ parameters substitute and regenerate per instantiation, open types intern as
 alpha-equivalent `SchemeId`s, and `TypeStore::canonicalAbi` provides
 option-keyed flat/layout ABI metadata. Parser syntax records remain as the
 component AST; external visibility now has a resource/structural slice, while
-annotated-name rules and the ABI runtime/layout remain, and §7.11 records their
-exact cross-proposal blockers).
+`[get]`/`[set]` validation, full core Type linking and async component semantics
+remain, and §7.11 records the exact cross-proposal blockers).
 Audience: anyone touching `WasmBase/WasmType.hpp`, `WasmBase/WasmCanonicalType.hpp`,
 `WasmBase/WasmTypeRegistry.{hpp,cpp}`, `WasmBase/WasmComponentModel.hpp`,
 `WasmBase/WasmComponentParser.inc`, `WasmBase/WasmComponentValidation.cpp`, or the
@@ -426,8 +426,8 @@ the number of nested lists, not just with the number of distinct types.
 | ✅ TM11 | **The core JIT/validator cutover is complete.** `LibJitTypeTranslator` has a canonical `translateTypes(typeIds, store)` overload; `LibjitOpcodeDispatcher`/`ModuleCompiler` use `typeView`/`funcTypeAt`; `ModuleInstance` GC walking and constant expressions use `CoreTypeView`; `WasmValidator` reads canonical views and `typeCount()`. The old translator `span<Subtype>` overload is test-only; `FuncType` signature materialisation remains a Store-derived compile view, not a retained module block. | `LibJit/LibJitTypeTranslation.*`, `WasmBase/WasmValidator.cpp`, `WasmBase/WasmModuleInstance.cpp`. | Closed (core) |
 | ◑ TM12 | **Component type resolution is still validator-only.** Validation canonicalises the resolved value/func/instance/component graph into Store records with `TypeId` children, publishes canonical `Component::localTypeIds`, and structurally interns type-bearing declaration sets. `eq` aliases share the nominal resource id; `sub resource`/open schemes and parser-AST ownership remain. | `TypeScope::types`; `ResolvedType::typeId`; `Component::localTypeIds`; `ComponentDeclRecord`; §7.11.2. | High |
 | ✅ TM13 | **Type schemes and resource substitution are modelled.** `SchemeId` interns alpha-equivalent open types with parameter placeholders; abstract resources substitute through instantiation and locally defined resources regenerate per instantiation. | `SchemeId`; `TypeStore::internScheme`; `ComponentResourcePayload::abstract`; `ComponentInstance::{typeId,schemeId}`. | Closed |
-| ◑ TM14 | **Canonical ABI metadata is partially represented.** `TypeStore::canonicalAbi` derives and caches flat params/results keyed by `(TypeId, CanonicalAbiOptions)`; `canonicalAbiLayout` derives size/alignment for primitives, strings, lists, fixed lists, records, tuples, enums, flags, options, results, variants, maps, streams, futures and resource handles, with a configurable pointer width. Exact core joins, structured lift/lower, and MAX_FLAT_PARAMS/MAX_FLAT_RESULTS indirect memory passing are now implemented in `LibJIT::ComponentRuntime`; per-encoding string layout and async stream/future runtime remain. | `WasmTypeStore.*`; `WasmComponentValidation.cpp` validates `canon` indices only; no ABI lowering. | High |
-| ◑ TM15 | **The ownership/dedup/ABI gates are partially test-enforced.** Tests pin the core-module no-`types` gate, repeated-load identity, closed-component cross-component interning, label-order sensitivity, resource freshness/generativity, canonical `Component::localTypeIds`, alpha-equivalent `SchemeId` interning and parameter arity, canonical `TypeId` payloads, structural declaration interning, core-module type matching, external-visibility accept/reject cases, extern-name/annotation accept/reject cases, ABI flat shapes/layout and cache identity. Still absent: parser-AST removal and ABI runtime/variant layout. | `Test/main.cpp`; §7.11.5. | Medium |
+| ✅ TM14 | **Canonical ABI metadata is represented for the supported value set.** `TypeStore::canonicalAbi` derives and caches flat params/results keyed by `(TypeId, CanonicalAbiOptions)`; `canonicalAbiLayout` derives size/alignment for primitives, strings, lists, fixed lists, records, tuples, enums, flags, options, results, variants, maps, streams, futures and resource handles, with a configurable pointer width. Exact core joins, structured lift/lower, and MAX_FLAT_PARAMS/MAX_FLAT_RESULTS indirect memory passing are now implemented in `LibJIT::ComponentRuntime`; per-encoding string layout and async stream/future runtime remain. | `WasmTypeStore.*`; `WasmComponentValidation.cpp` validates `canon` indices; `LibJit/ComponentRuntime.*` executes the lifted/lowered subset. | Closed (supported subset) |
+| ◑ TM15 | **The ownership/dedup/ABI gates are partially test-enforced.** Tests pin the core-module no-`types` gate, repeated-load identity, closed-component cross-component interning, label-order sensitivity, resource freshness/generativity, canonical `Component::localTypeIds`, alpha-equivalent `SchemeId` interning and parameter arity, canonical `TypeId` payloads, structural declaration interning, core-module type matching, external-visibility accept/reject cases, extern-name/annotation accept/reject cases, ABI flat shapes/layout and cache identity. Still absent: parser-AST removal and per-instance ABI identity. | `Test/main.cpp`; §7.11.5. | Medium |
 
 Revision 4 closed the local-index-free half of TM1/TM12. Revision 5 closed the
 core-module half of TM6/TM10 and all of TM11. Revision 7 closed TM2's long-lived
@@ -912,11 +912,12 @@ deliverable is the ABI metadata contract and its ownership/lifetime rule; the
 actual thunks belong to `COMPONENT_MODEL.md` CM-4/CM-5/CM-6. The runtime order
 after TM-10 is:
 
-1. flat `lift`/`lower` for scalars, chars and handles (CMD5);
-2. `memory` + `realloc` + `post-return` and the utf8 string subset;
-3. resource handle tables, `own`/`borrow`, resource builtins and destructors;
-4. async/stream/future/task paths only if they remain in scope; they are
-   deliberately gated non-goals in `COMPONENT_MODEL.md`.
+1. ✅ flat `lift`/`lower` for scalars, chars and handles;
+2. ✅ `memory` + `realloc` + `post-return` and the utf8 string subset;
+3. ✅ resource handle tables, `own`/`borrow` scopes, resource builtins and
+   destructors;
+4. async/stream/future copy and task paths are deferred to
+   `THREADS.md` §5.1 and remain gated non-goals in `COMPONENT_MODEL.md`.
 
 
 #### 7.10.6 Completion milestones and gates
@@ -927,8 +928,8 @@ after TM-10 is:
 | **TM-7 — JIT view cutover** | ✅ Core modules done: `LibJitTypeTranslator`, `LibjitModuleCompiler`, `LibjitOpcodeDispatcher`, `ModuleInstance`, `WasmValidator` use `CoreTypeView`/`TypeId`; `funcTypeAt` is a Store-derived compile/test signature view. | TM11 | No JIT/validator path reads `Subtype` from a module; cross-module GC walking uses the store. |
 | **TM-8 — Component closed-type interning** | ✅ `TypeStore` interns closed records; after validation every nested reference is a canonical `TypeId`, including local references and `own`/`borrow`. `Component::localTypeIds` is canonical, type-bearing component/instance declaration sets intern structurally, and component core types are Store-owned. Parser syntax records remain an AST. | TM12 (scheme residue) | Closed for closed types; schemes/resources are TM-9/TM-13. |
 | **TM-9 — Schemes and resources** | ✅ `SchemeId` alpha-equivalent scheme interning, abstract-resource placeholders, substitution through instantiate and concrete-resource generation per instantiation. | TM13 | `eq` aliases share, `sub resource` gives a fresh parameter, two substitutions produce distinct closed types when resources differ, and a repeated resource interns back. |
-| **TM-10 — Canonical ABI metadata** | ◑ First slice: `CanonicalAbiSignature` keyed by `(TypeId, CanonicalAbiOptions)`, flat params/results for the scalar/string/resource/record/tuple/list/fixed-list subset. Remaining: full async/stream/future runtime and resource borrow scopes. | TM14 (partial) | A closed component function has a stable ABI signature; flat fixtures resolve it; no ABI cache aliases different options. |
-| **TM-11 — Ownership/dedup/ABI gates** | ◑ Assert one record per canonical type, no retained `Subtype` in Module/Component, store-owned views, open-scheme non-identity and ABI cache identity. Remaining: parser AST removal and ABI runtime/layout. | TM15 (partial) | Tests fail if any module/component owns a type payload, an open scheme gets a closed id, or identical closed types get distinct ids. |
+| **TM-10 — Canonical ABI metadata** | ✅ `CanonicalAbiSignature` keyed by `(TypeId, CanonicalAbiOptions)`, flat params/results and indirect flags for the supported value set; layout covers the documented shapes. Remaining: full async stream/future runtime only. | TM14 | A closed component function has a stable ABI signature; flat fixtures resolve it; no ABI cache aliases different options; indirect params/results and the supported lift/lower paths are exercised. |
+| **TM-11 — Ownership/dedup/ABI gates** | ◑ Assert one record per canonical type, no retained `Subtype` in Module/Component, store-owned views, open-scheme non-identity and ABI cache identity. Remaining: parser AST removal and per-instance ABI identity. | TM15 (partial) | Tests fail if any module/component owns a type payload, an open scheme gets a closed id, or identical closed types get distinct ids. |
 
 The order is deliberate: TM-6 removes the duplicate raw owner; TM-7 proves the
 existing consumers can work from store views; TM-8–TM-10 add the component
@@ -1037,31 +1038,33 @@ sides carry type metadata.
 
 `SchemeId` is the first-class open-type identity; `TypeScheme::parameterCount`
 records arity, and the intern key is alpha-normalized. The remaining CM-1d rules
-(annotated-name rules and Canonical ABI signature checks) are outside this
+(`[get]`/`[set]` semantics and full ABI signature checks) are outside this
 note. External visibility for resource/record/variant/enum/flags types is
 implemented at the import/export boundary. Blocker for the rest: `COMPONENT_MODEL.md` CM-1d.
 
-#### 7.11.4 Canonical ABI metadata (TM-10/TM-14) — flat/layout slice
+#### 7.11.4 Canonical ABI metadata (TM-10/TM-14) — supported value/ABI slice
 
 `TypeStore::canonicalAbi(TypeId, CanonicalAbiOptions)` now derives and caches
 flat params/results for component function types keyed by both the canonical
 type and the options that affect lowering (`string-encoding`, memory, realloc,
-post-return, async). The first slice covers primitives, strings, lists, fixed
-lists, records, tuples and `own`/`borrow`; it is inert and never enters the
-type intern key. A 1024-value/depth-64 cap prevents input-derived fixed-list
+post-return, async). It covers primitives, strings, lists, fixed lists,
+records, tuples, variants/results/options, maps, resources and the supported
+compound shapes; it is inert and never enters the type intern key. A 1024-value/depth-64 cap prevents input-derived fixed-list
 lengths from driving unbounded metadata allocation.
 `canonicalAbiLayout` adds size/alignment for the same value shapes plus enums,
 flags, options, results, variants, maps, streams and futures; records and tuples
 apply field alignment/padding, and strings/lists use the options' 32- or 64-bit
-pointer width. Joins are conservative: incompatible variant/result payload
-shapes are reported unsupported rather than guessed.
+pointer width. Joins implement the Canonical ABI `join`: i32/f32 → i32 and other
+mismatches → i64; the runtime lowers/lifts variant, result and option values.
 
 The runtime now covers more than the original flat slice: embedded and nested
 components instantiate, `canon lift`/`lower` run through libffi, strings/lists/
 records use canonical memory and `realloc`, exact variant/result/option joins
-are implemented, `post-return` runs, and basic resource handles exist. Async/
-stream/future, resource borrow scopes, full resource destructor semantics and
-full component-script value marshalling remain. Those are `COMPONENT_MODEL.md` CM-4…CM-7;
+are implemented, `post-return` runs, and resource handles track own/borrow scope
+and invoke destructors; maps and stream/future handle allocation/drop also run.
+Full async copy/task semantics (deferred to `THREADS.md` §5.1), full core Type
+linking and full component-script marshalling remain. Those are
+`COMPONENT_MODEL.md` CM-4…CM-7;
 [`ABI.md`](../ABI.md)'s host-reference model
 (R2/R3/R4) and GC `G3` own the `externref` representation the resource/handle
 path will consume. Blocker: CM-4…CM-7 plus `ABI.md` R4.
@@ -1101,8 +1104,8 @@ Still gated:
   already interned (§7.11.2);
 - remaining CM-1d validation rules (`[get]`/`[set]` semantics and ABI signature
   checks) — §7.11.3;
-- variant/option/result/map/stream ABI join and layout, plus lift/lower runtime
-  — CM-4…CM-7 (§7.11.4);
+- full core Type import/export linking and the upstream component-script corpus
+  — CM-4…CM-7 / `TYPE_IMPORTS.md` (§7.11.4);
 - the ASAN/allocation-budget footprint sweep over the full suite — the counters
   and the new identity paths are tested, but the full sweep remains a CI gate.
 
@@ -1226,12 +1229,11 @@ planned in §7.10.4/§7.10.5; the actual thunks remain CM-4…CM-7 in
   `TypeId`s. See `open component types intern as alpha-equivalent schemes`.
 - **ABI metadata:** the same `TypeId` under different `canonopt` sets produces
   distinct ABI signatures; the same `(TypeId, opts)` reuses one signature; flat
-  scalar/string/resource/record/tuple/list/fixed-list and conservative
+  scalar/string/resource/record/tuple/list/fixed-list and the supported
   enum/flags/option/result/variant/map/stream/future shapes and layouts are
-  covered, including 32/64-bit pointer widths. **Done for the flat/layout
-  metadata slice and flat lift/lower execution.** Exact incompatible-payload
-  join promotion and resource/memory-backed runtime/traps remain gated by
-  CM-4…CM-7 (§7.11.4).
+  covered, including 32/64-bit pointer widths and exact `join` promotion.
+  **Done for the metadata and supported runtime.** Full core Type linking and
+  async copy/task semantics remain (CM-4…CM-7; `THREADS.md` §5.1).
 
 
 ## 9. References

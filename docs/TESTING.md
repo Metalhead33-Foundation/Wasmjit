@@ -645,7 +645,7 @@ Measured after SIMD-5:
 
 ```bash
 ./WasmJit 'simd*'      # 24 cases, 6147 assertions, all passing (includes the hidden [.simdbench] case)
-./WasmJit              # 273 cases, 8354 assertions, all passing
+./WasmJit              # 310 cases, 8839 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed
