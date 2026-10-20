@@ -90,6 +90,8 @@ private:
 	// Nuff said.
 	ModuleInstanceInternals internals;
 	void resolveImports(ImportResolver& importResolver);
+	void resolveTypeImports(ImportResolver& importResolver);
+	std::vector<TypeId> importedTypeIds;
 	void initializeMemories();
 	void initializeGlobals();
 	void initializeTable();
@@ -154,6 +156,10 @@ public:
 	std::optional<Callable> exportedFunction(std::string_view name) const;
 	std::optional<LinearMemory*> exportedMemory(std::string_view name) const;
 	void registerExports(ImportRegistrar& registrar, std::string_view moduleName) const;
+	// Process-wide identities of the module's type imports, in import order
+	// (TYPE_IMPORTS.md TI-3). The module's local type records stay nominal
+	// imports; this vector records what the linker supplied.
+	const std::vector<TypeId>& typeImports() const { return importedTypeIds; }
 
 	// Called when memory.grow executes. Delegates to the owning Store and
 	// returns the previous page count, or -1 on a trap-worthy failure.

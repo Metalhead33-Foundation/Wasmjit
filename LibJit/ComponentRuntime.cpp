@@ -2,12 +2,21 @@
 #include "../WasmBase/WasmRegistryImportResolver.hpp"
 #include "../WasmBase/WasmStore.hpp"
 #include <array>
+#include <atomic>
 #include <cstring>
+#include <string>
+#include <utf8cpp/utf8.h>
 #include <ffi.h>
 #include <stdexcept>
 
 namespace LibJIT {
 namespace {
+
+uint64_t nextComponentAbiInstanceId()
+{
+	static std::atomic<uint64_t> next{1};
+	return next.fetch_add(1, std::memory_order_relaxed);
+}
 
 union AbiSlot {
 	int32_t i32;
@@ -37,6 +46,38 @@ WASM::ValueTypeCode valueKind(WASM::AbiCoreType type)
 	case WASM::AbiCoreType::F64: return WASM::ValueTypeCode::F64;
 	}
 	throw std::runtime_error("component runtime: unknown ABI core type");
+}
+
+WASM::AbiCoreType abiCoreTypeForValue(WASM::ValueTypeCode code)
+{
+	switch (code) {
+	case WASM::ValueTypeCode::I32: return WASM::AbiCoreType::I32;
+	case WASM::ValueTypeCode::I64: return WASM::AbiCoreType::I64;
+	case WASM::ValueTypeCode::F32: return WASM::AbiCoreType::F32;
+	case WASM::ValueTypeCode::F64: return WASM::AbiCoreType::F64;
+	default:
+		throw std::runtime_error(
+				"component runtime: async context type is not numeric");
+	}
+}
+
+ffi_type* ffiTypeForAddress(bool pointer64)
+{
+	return pointer64 ? &ffi_type_sint64 : &ffi_type_sint32;
+}
+
+uint64_t readAddress(void* argument, bool pointer64)
+{
+	return pointer64 ? static_cast<uint64_t>(*static_cast<int64_t*>(argument))
+			: static_cast<uint64_t>(*static_cast<int32_t*>(argument));
+}
+
+void writeAddress(void* result, uint64_t value, bool pointer64)
+{
+	if (pointer64)
+		*static_cast<int64_t*>(result) = static_cast<int64_t>(value);
+	else
+		*static_cast<int32_t*>(result) = static_cast<int32_t>(value);
 }
 
 WASM::CanonicalAbiOptions canonicalOptions(const WASM::Canon& canon)
@@ -84,6 +125,170 @@ struct MemView {
 	ComponentRuntime* runtime = nullptr;
 	uint32_t borrowScope = 0;
 };
+
+// ── Canonical ABI strings ──────────────────────────────────────────────────
+// `ComponentValue::string` is always UTF-8. The guest representation depends on
+// the canonopt: utf8, utf16 (LE code units), or latin1+utf16 (Latin-1 bytes when
+// possible, otherwise UTF-16 with the pointer-width high bit set on the length).
+struct EncodedString {
+	uint64_t address = 0;
+	uint64_t taggedCodeUnits = 0;
+};
+
+uint64_t allocate(const MemView& memory, uint64_t size, uint64_t alignment);
+void ensureRange(const MemView& memory, uint64_t offset, uint64_t size);
+
+std::string latin1ToUtf8(std::span<const uint8_t> bytes)
+{
+	std::string out;
+	out.reserve(bytes.size());
+	for (uint8_t byte : bytes)
+		utf8::append(byte, std::back_inserter(out));
+	return out;
+}
+
+std::string utf16ToUtf8(const uint8_t* data, std::size_t codeUnits)
+{
+	std::u16string units(codeUnits, u'\0');
+	for (std::size_t i = 0; i < codeUnits; ++i)
+		units[i] = static_cast<char16_t>(uint16_t(data[2 * i])
+				| (uint16_t(data[2 * i + 1]) << 8));
+	std::string out;
+	try {
+		utf8::utf16to8(units.begin(), units.end(), std::back_inserter(out));
+	} catch (const utf8::exception&) {
+		throw std::runtime_error(
+				"component runtime: invalid UTF-16 canonical string");
+	}
+	return out;
+}
+
+uint64_t stringTag(const MemView& memory)
+{
+	return uint64_t{1} << (memory.options.pointerSize * 8 - 1);
+}
+
+void writeUtf16(const std::u16string& text, uint64_t address,
+		const MemView& memory)
+{
+	for (std::size_t i = 0; i < text.size(); ++i) {
+		memory.memory->memoryBase[address + 2 * i] = uint8_t(text[i] & 0xFF);
+		memory.memory->memoryBase[address + 2 * i + 1] =
+				uint8_t(text[i] >> 8);
+	}
+}
+
+EncodedString storeString(const std::string& text, const MemView& memory)
+{
+	constexpr uint64_t kMaxStringBytes = (uint64_t{1} << 28) - 1;
+	if (!utf8::is_valid(text.begin(), text.end()))
+		throw std::runtime_error(
+				"component runtime: host string is not valid UTF-8");
+	std::u16string utf16;
+	utf8::utf8to16(text.begin(), text.end(), std::back_inserter(utf16));
+	const uint64_t tag = stringTag(memory);
+
+	switch (memory.options.stringEncoding) {
+	case WASM::CanonicalAbiOptions::StringEncoding::Utf8: {
+		if (text.size() > kMaxStringBytes)
+			throw std::runtime_error("component runtime: string is too long");
+		const uint64_t address = allocate(memory, text.size(), 1);
+		ensureRange(memory, address, text.size());
+		if (!text.empty())
+			std::memcpy(memory.memory->memoryBase + address, text.data(),
+					text.size());
+		return EncodedString{address, text.size()};
+	}
+	case WASM::CanonicalAbiOptions::StringEncoding::Utf16: {
+		if (utf16.size() * 2 > kMaxStringBytes)
+			throw std::runtime_error("component runtime: string is too long");
+		const uint64_t address = allocate(memory, utf16.size() * 2, 2);
+		ensureRange(memory, address, utf16.size() * 2);
+		writeUtf16(utf16, address, memory);
+		return EncodedString{address, utf16.size()};
+	}
+	case WASM::CanonicalAbiOptions::StringEncoding::Latin1Utf16: {
+		bool latin1 = true;
+		for (char16_t unit : utf16)
+			if (unit >= 0x100) {
+				latin1 = false;
+				break;
+			}
+		if (latin1) {
+			if (utf16.size() > kMaxStringBytes)
+				throw std::runtime_error(
+						"component runtime: string is too long");
+			const uint64_t address = allocate(memory, utf16.size(), 2);
+			ensureRange(memory, address, utf16.size());
+			for (std::size_t i = 0; i < utf16.size(); ++i)
+				memory.memory->memoryBase[address + i] = uint8_t(utf16[i]);
+			return EncodedString{address, utf16.size()};
+		}
+		if (utf16.size() * 2 > kMaxStringBytes)
+			throw std::runtime_error("component runtime: string is too long");
+		const uint64_t address = allocate(memory, utf16.size() * 2, 2);
+		ensureRange(memory, address, utf16.size() * 2);
+		writeUtf16(utf16, address, memory);
+		return EncodedString{address, utf16.size() | tag};
+	}
+	}
+	throw std::runtime_error("component runtime: unknown string encoding");
+}
+
+std::string loadString(uint64_t address, uint64_t taggedCodeUnits,
+		const MemView& memory)
+{
+	constexpr uint64_t kMaxStringBytes = (uint64_t{1} << 28) - 1;
+	const uint64_t tag = stringTag(memory);
+	auto decodeUtf8 = [&](uint64_t length) {
+		ensureRange(memory, address, length);
+		const char* data = reinterpret_cast<const char*>(
+				memory.memory->memoryBase + address);
+		if (!utf8::is_valid(data, data + length))
+			throw std::runtime_error(
+					"component runtime: invalid UTF-8 canonical string");
+		return std::string(data, std::size_t(length));
+	};
+
+	switch (memory.options.stringEncoding) {
+	case WASM::CanonicalAbiOptions::StringEncoding::Utf8:
+		if (taggedCodeUnits > kMaxStringBytes)
+			throw std::runtime_error("component runtime: string is too long");
+		return decodeUtf8(taggedCodeUnits);
+	case WASM::CanonicalAbiOptions::StringEncoding::Utf16:
+		if (taggedCodeUnits * 2 > kMaxStringBytes)
+			throw std::runtime_error("component runtime: string is too long");
+		if ((address & 1) != 0)
+			throw std::runtime_error(
+					"component runtime: misaligned UTF-16 canonical string");
+		ensureRange(memory, address, taggedCodeUnits * 2);
+		return utf16ToUtf8(memory.memory->memoryBase + address,
+				std::size_t(taggedCodeUnits));
+	case WASM::CanonicalAbiOptions::StringEncoding::Latin1Utf16: {
+		const bool isUtf16 = (taggedCodeUnits & tag) != 0;
+		const uint64_t length = isUtf16 ? taggedCodeUnits ^ tag
+				: taggedCodeUnits;
+		if (isUtf16) {
+			if (length * 2 > kMaxStringBytes)
+				throw std::runtime_error(
+						"component runtime: string is too long");
+			if ((address & 1) != 0)
+				throw std::runtime_error(
+						"component runtime: misaligned UTF-16 canonical string");
+			ensureRange(memory, address, length * 2);
+			return utf16ToUtf8(memory.memory->memoryBase + address,
+					std::size_t(length));
+		}
+		if (length > kMaxStringBytes)
+			throw std::runtime_error("component runtime: string is too long");
+		ensureRange(memory, address, length);
+		return latin1ToUtf8(std::span<const uint8_t>(
+				memory.memory->memoryBase + address, std::size_t(length)));
+	}
+	}
+	throw std::runtime_error("component runtime: unknown string encoding");
+}
+
 
 uint64_t alignUp(uint64_t value, uint64_t alignment)
 {
@@ -182,13 +387,9 @@ void lowerPrimitive(const WASM::ComponentValueType& type,
 	case P::F64: flat.kind = WASM::ValueTypeCode::F64; flat.f64 = value.f64; break;
 	case P::Char: flat.kind = WASM::ValueTypeCode::I32; flat.u32 = value.discriminant; break;
 	case P::String: {
-		const uint64_t address = allocate(memory, value.string.size(), 1);
-		ensureRange(memory, address, value.string.size());
-		if (!value.string.empty())
-			std::memcpy(memory.memory->memoryBase + address,
-					value.string.data(), value.string.size());
-		pushPtr(out, address, memory);
-		pushPtr(out, value.string.size(), memory);
+		const EncodedString encoded = storeString(value.string, memory);
+		pushPtr(out, encoded.address, memory);
+		pushPtr(out, encoded.taggedCodeUnits, memory);
 		return;
 	}
 	default:
@@ -231,12 +432,10 @@ void liftPrimitive(const WASM::ComponentValueType& type,
 		const WASM::Value lengthValue = flat[index++];
 		const uint64_t address = memory.options.pointerSize == 8
 				? value.ui64 : value.u32;
-		const uint64_t length = memory.options.pointerSize == 8
+		const uint64_t taggedCodeUnits = memory.options.pointerSize == 8
 				? lengthValue.ui64 : lengthValue.u32;
-		ensureRange(memory, address, length);
 		out.kind = K::String;
-		out.string.assign(reinterpret_cast<const char*>(
-				memory.memory->memoryBase + address), std::size_t(length));
+		out.string = loadString(address, taggedCodeUnits, memory);
 		break;
 	}
 	default:
@@ -826,14 +1025,10 @@ void storePrimitiveAt(const WASM::ComponentValueType& type,
 		break;
 	}
 	case P::String: {
-		const uint64_t data = allocate(memory, value.string.size(), 1);
-		ensureRange(memory, data, value.string.size());
-		if (!value.string.empty())
-			std::memcpy(memory.memory->memoryBase + data,
-					value.string.data(), value.string.size());
-		writeUInt(memory, address, data, memory.options.pointerSize);
+		const EncodedString encoded = storeString(value.string, memory);
+		writeUInt(memory, address, encoded.address, memory.options.pointerSize);
 		writeUInt(memory, address + memory.options.pointerSize,
-				value.string.size(), memory.options.pointerSize);
+				encoded.taggedCodeUnits, memory.options.pointerSize);
 		break;
 	}
 	default:
@@ -1031,12 +1226,10 @@ void loadPrimitiveAt(const WASM::ComponentValueType& type, uint64_t address,
 	case P::Char: out.kind = K::Char; out.discriminant = uint32_t(readUInt(memory, address, 4)); break;
 	case P::String: {
 		const uint64_t data = readUInt(memory, address, memory.options.pointerSize);
-		const uint64_t length = readUInt(memory,
+		const uint64_t taggedCodeUnits = readUInt(memory,
 				address + memory.options.pointerSize, memory.options.pointerSize);
-		ensureRange(memory, data, length);
 		out.kind = K::String;
-		out.string.assign(reinterpret_cast<const char*>(
-				memory.memory->memoryBase + data), std::size_t(length));
+		out.string = loadString(data, taggedCodeUnits, memory);
 		break;
 	}
 	default:
@@ -1247,6 +1440,41 @@ void resourceCallback(ffi_cif*, void* result, void** args, void* userData)
 	static_cast<ResourceClosureData*>(userData)->handler(result, args);
 }
 
+// Prepares the libffi closure for a canonical builtin and publishes it as the
+// next core function. The caller owns the handler and argument types.
+void pushBuiltinClosure(std::vector<void*>& closures, std::vector<void*>& cifs,
+		std::vector<void*>& dataSlots, std::vector<WASM::Callable>& coreFuncs,
+		std::unique_ptr<ResourceClosureData> data, ffi_type* returnType)
+{
+	data->cif = new ffi_cif;
+	if (ffi_prep_cif(data->cif, FFI_DEFAULT_ABI,
+			static_cast<unsigned>(data->argumentTypes.size()), returnType,
+			data->argumentTypes.data()) != FFI_OK) {
+		delete data->cif;
+		throw std::runtime_error("component runtime: builtin ffi_prep_cif failed");
+	}
+	void* code = nullptr;
+	ffi_closure* closure = static_cast<ffi_closure*>(
+			ffi_closure_alloc(sizeof(ffi_closure), &code));
+	if (!closure || !code || ffi_prep_closure_loc(closure, data->cif,
+			resourceCallback, data.get(), code) != FFI_OK) {
+		if (closure)
+			ffi_closure_free(closure);
+		delete data->cif;
+		throw std::runtime_error(
+				"component runtime: builtin closure allocation failed");
+	}
+	WASM::Callable callable;
+	callable.fnPtr = code;
+	callable.context = nullptr;
+	callable.localTypeIdx = 0;
+	callable.typeId = WASM::TypeId{WASM::TypeId::kNone};
+	coreFuncs.push_back(callable);
+	closures.push_back(closure);
+	cifs.push_back(data->cif);
+	dataSlots.push_back(data.release());
+}
+
 struct LowerData {
 	ComponentFunction function;
 	MemView memory;
@@ -1364,12 +1592,313 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 	}
 }
 
+// ── Component `value` decoding ─────────────────────────────────────────────
+// The value grammar is length-delimited and type-directed (Binary.md). The
+// runtime uses it for the `value` section and for `start` arguments. Nested
+// lists/maps are bounded by both the input and a depth cap.
+struct ValueReader {
+	const uint8_t* current = nullptr;
+	const uint8_t* end = nullptr;
+
+	bool take(uint8_t& out)
+	{
+		if (current >= end)
+			return false;
+		out = *current++;
+		return true;
+	}
+	bool takeU32(uint32_t& out)
+	{
+		out = 0;
+		unsigned shift = 0;
+		while (current < end && shift < 35) {
+			const uint8_t byte = *current++;
+			out |= uint32_t(byte & 0x7F) << shift;
+			if ((byte & 0x80) == 0)
+				return true;
+			shift += 7;
+		}
+		return false;
+	}
+	bool takeU64(uint64_t& out)
+	{
+		out = 0;
+		unsigned shift = 0;
+		while (current < end && shift < 70) {
+			const uint8_t byte = *current++;
+			out |= uint64_t(byte & 0x7F) << shift;
+			if ((byte & 0x80) == 0)
+				return true;
+			shift += 7;
+		}
+		return false;
+	}
+	bool takeS64(int64_t& out)
+	{
+		uint64_t raw = 0;
+		unsigned shift = 0;
+		uint8_t byte = 0;
+		do {
+			if (current >= end || shift >= 70)
+				return false;
+			byte = *current++;
+			raw |= uint64_t(byte & 0x7F) << shift;
+			shift += 7;
+		} while ((byte & 0x80) != 0);
+		if (shift < 64 && (byte & 0x40) != 0)
+			raw |= ~uint64_t{0} << shift;
+		out = static_cast<int64_t>(raw);
+		return true;
+	}
+	bool takeBytes(uint8_t* out, std::size_t size)
+	{
+		if (size > std::size_t(end - current))
+			return false;
+		if (size != 0)
+			std::memcpy(out, current, size);
+		current += size;
+		return true;
+	}
+};
+
+uint64_t readLittleEndian(ValueReader& reader, unsigned bytes)
+{
+	uint8_t buffer[8]{};
+	if (!reader.takeBytes(buffer, bytes))
+		throw std::runtime_error(
+				"component runtime: truncated component value");
+	uint64_t value = 0;
+	for (unsigned i = 0; i < bytes; ++i)
+		value |= uint64_t(buffer[i]) << (i * 8);
+	return value;
+}
+
+void decodeComponentValue(const WASM::TypeStore& store,
+		const WASM::ComponentValueType& type, ValueReader& reader,
+		ComponentValue& out, unsigned depth)
+{
+	if (depth > 64)
+		throw std::runtime_error(
+				"component runtime: component value nesting is too deep");
+	using K = ComponentValue::Kind;
+	using P = WASM::PrimitiveValueType;
+
+	if (type.kind == WASM::ComponentValueType::Kind::Primitive) {
+		switch (type.primitive) {
+		case P::Bool: {
+			uint8_t byte = 0;
+			if (!reader.take(byte) || byte > 1)
+				throw std::runtime_error("component runtime: invalid bool value");
+			out.kind = K::Bool;
+			out.u64 = byte;
+			return;
+		}
+		case P::S8: { int64_t v; if (!reader.takeS64(v)) throw std::runtime_error("truncated s8"); out.kind = K::S8; out.s64 = int8_t(v); return; }
+		case P::U8: { uint64_t v; if (!reader.takeU64(v)) throw std::runtime_error("truncated u8"); out.kind = K::U8; out.u64 = uint8_t(v); return; }
+		case P::S16: { int64_t v; if (!reader.takeS64(v)) throw std::runtime_error("truncated s16"); out.kind = K::S16; out.s64 = int16_t(v); return; }
+		case P::U16: { uint64_t v; if (!reader.takeU64(v)) throw std::runtime_error("truncated u16"); out.kind = K::U16; out.u64 = uint16_t(v); return; }
+		case P::S32: { int64_t v; if (!reader.takeS64(v)) throw std::runtime_error("truncated s32"); out.kind = K::S32; out.s64 = int32_t(v); return; }
+		case P::U32: { uint64_t v; if (!reader.takeU64(v)) throw std::runtime_error("truncated u32"); out.kind = K::U32; out.u64 = uint32_t(v); return; }
+		case P::S64: { int64_t v; if (!reader.takeS64(v)) throw std::runtime_error("truncated s64"); out.kind = K::S64; out.s64 = v; return; }
+		case P::U64: { uint64_t v; if (!reader.takeU64(v)) throw std::runtime_error("truncated u64"); out.kind = K::U64; out.u64 = v; return; }
+		case P::F32: {
+			const uint32_t bits = uint32_t(readLittleEndian(reader, 4));
+			out.kind = K::F32;
+			float value;
+			std::memcpy(&value, &bits, sizeof(value));
+			out.f64 = value;
+			return;
+		}
+		case P::F64: {
+			const uint64_t bits = readLittleEndian(reader, 8);
+			out.kind = K::F64;
+			std::memcpy(&out.f64, &bits, sizeof(bits));
+			return;
+		}
+		case P::Char: {
+			uint32_t codepoint = 0;
+			if (!reader.takeU32(codepoint))
+				throw std::runtime_error("component runtime: truncated char value");
+			out.kind = K::Char;
+			out.discriminant = codepoint;
+			return;
+		}
+		case P::String: {
+			uint32_t length = 0;
+			if (!reader.takeU32(length)
+					|| length > std::size_t(reader.end - reader.current))
+				throw std::runtime_error(
+						"component runtime: truncated string value");
+			out.kind = K::String;
+			out.string.assign(reinterpret_cast<const char*>(reader.current),
+					length);
+			reader.current += length;
+			return;
+		}
+		default:
+			throw std::runtime_error(
+					"component runtime: unsupported component value primitive");
+		}
+	}
+
+	if (type.kind != WASM::ComponentValueType::Kind::TypeId)
+		throw std::runtime_error(
+				"component runtime: value type is not canonical");
+	const WASM::ComponentTypeView view =
+			store.componentType(WASM::TypeId{type.typeIndex});
+	switch (view.kind()) {
+	case WASM::TypeKind::ComponentPrimitive: {
+		WASM::ComponentValueType primitive;
+		primitive.kind = WASM::ComponentValueType::Kind::Primitive;
+		primitive.primitive = view.primitive();
+		decodeComponentValue(store, primitive, reader, out, depth + 1);
+		return;
+	}
+	case WASM::TypeKind::ComponentRecord:
+		out.kind = K::Record;
+		out.elements.resize(view.fields().size());
+		for (std::size_t i = 0; i < view.fields().size(); ++i)
+			decodeComponentValue(store, view.fields()[i].type, reader,
+					out.elements[i], depth + 1);
+		return;
+	case WASM::TypeKind::ComponentList:
+	case WASM::TypeKind::ComponentFixedList: {
+		out.kind = view.kind() == WASM::TypeKind::ComponentList ? K::List
+				: K::FixedList;
+		uint32_t count = view.fixedLength();
+		if (view.kind() == WASM::TypeKind::ComponentList) {
+			if (!reader.takeU32(count) || count > (1u << 20))
+				throw std::runtime_error(
+						"component runtime: invalid list length");
+		}
+		out.elements.resize(count);
+		for (uint32_t i = 0; i < count; ++i)
+			decodeComponentValue(store, view.element(), reader, out.elements[i],
+					depth + 1);
+		return;
+	}
+	case WASM::TypeKind::ComponentTuple:
+		out.kind = K::Tuple;
+		out.elements.resize(view.tuple().size());
+		for (std::size_t i = 0; i < view.tuple().size(); ++i)
+			decodeComponentValue(store, view.tuple()[i], reader,
+					out.elements[i], depth + 1);
+		return;
+
+
+	case WASM::TypeKind::ComponentVariant: {
+		uint32_t tag = 0;
+		if (!reader.takeU32(tag) || tag >= view.cases().size())
+			throw std::runtime_error("component runtime: invalid variant tag");
+		out.kind = K::Variant;
+		out.discriminant = tag;
+		const WASM::ComponentCase& item = view.cases()[tag];
+		out.hasValue = item.hasType;
+		if (item.hasType) {
+			out.elements.resize(1);
+			decodeComponentValue(store, item.type, reader, out.elements[0],
+					depth + 1);
+		}
+		return;
+	}
+	case WASM::TypeKind::ComponentEnum: {
+		uint32_t tag = 0;
+		if (!reader.takeU32(tag) || tag >= view.labels().size())
+			throw std::runtime_error("component runtime: invalid enum tag");
+		out.kind = K::Enum;
+		out.discriminant = tag;
+		return;
+	}
+	case WASM::TypeKind::ComponentFlags: {
+		out.kind = K::Flags;
+		out.flags.assign(view.labels().size(), false);
+		const std::size_t bytes = (view.labels().size() + 7) / 8;
+		for (std::size_t i = 0; i < bytes; ++i) {
+			uint8_t byte = 0;
+			if (!reader.take(byte))
+				throw std::runtime_error("component runtime: truncated flags value");
+			for (unsigned bit = 0; bit < 8 && i * 8 + bit < out.flags.size(); ++bit)
+				out.flags[i * 8 + bit] = (byte & (1u << bit)) != 0;
+		}
+		return;
+	}
+	case WASM::TypeKind::ComponentOption: {
+		uint8_t tag = 0;
+		if (!reader.take(tag) || tag > 1)
+			throw std::runtime_error("component runtime: invalid option tag");
+		out.kind = K::Option;
+		out.hasValue = tag != 0;
+		if (out.hasValue) {
+			out.elements.resize(1);
+			decodeComponentValue(store, view.element(), reader, out.elements[0],
+					depth + 1);
+		}
+		return;
+	}
+	case WASM::TypeKind::ComponentResult: {
+		uint8_t tag = 0;
+		if (!reader.take(tag) || tag > 1)
+			throw std::runtime_error("component runtime: invalid result tag");
+		out.kind = K::Result;
+		out.discriminant = tag;
+		const bool present = tag == 0 ? view.hasResultOk()
+				: view.hasResultError();
+		out.hasValue = present;
+		if (present) {
+			out.elements.resize(1);
+			decodeComponentValue(store,
+					tag == 0 ? view.resultOk() : view.resultError(), reader,
+					out.elements[0], depth + 1);
+		}
+		return;
+	}
+	case WASM::TypeKind::ComponentMap: {
+		uint32_t count = 0;
+		if (!reader.takeU32(count) || count > (1u << 20))
+			throw std::runtime_error("component runtime: invalid map length");
+		out.kind = K::Map;
+		out.elements.resize(count);
+		for (uint32_t i = 0; i < count; ++i) {
+			out.elements[i].kind = K::Tuple;
+			out.elements[i].elements.resize(2);
+			decodeComponentValue(store, view.mapKey(), reader,
+					out.elements[i].elements[0], depth + 1);
+			decodeComponentValue(store, view.mapValue(), reader,
+					out.elements[i].elements[1], depth + 1);
+		}
+		return;
+	}
+	case WASM::TypeKind::ComponentOwn:
+	case WASM::TypeKind::ComponentBorrow:
+	case WASM::TypeKind::ComponentStream:
+	case WASM::TypeKind::ComponentFuture: {
+		uint32_t handle = 0;
+		if (!reader.takeU32(handle))
+			throw std::runtime_error("component runtime: truncated handle value");
+		out.kind = view.kind() == WASM::TypeKind::ComponentOwn ? K::Own
+				: view.kind() == WASM::TypeKind::ComponentBorrow ? K::Borrow
+				: view.kind() == WASM::TypeKind::ComponentStream ? K::Stream
+				: K::Future;
+		out.discriminant = handle;
+		return;
+	}
+	default:
+		throw std::runtime_error(
+				"component runtime: unsupported component value shape");
+	}
+}
+
+
 } // namespace
 
 ComponentRuntime::ComponentRuntime(jit_context_t context,
 		const WASM::Component& component, ComponentImports imports)
 	: context_(context), compiler_(context), component_(component),
-	  imports_(std::move(imports))
+	  imports_(std::move(imports)),
+	  async_([this] { return addHandle(); },
+			  [this](uint32_t handle) { freeHandle(handle); }),
+	  abi_(WASM::Store::global().types().store(),
+			  nextComponentAbiInstanceId())
 {
 	build();
 }
@@ -1394,6 +1923,20 @@ ComponentRuntime::~ComponentRuntime()
 
 void ComponentRuntime::build()
 {
+	const WASM::TypeStore& store = WASM::Store::global().types().store();
+	componentValues_.clear();
+	componentValues_.reserve(component_.values.size());
+	for (const WASM::ValueDecl& value : component_.values) {
+		ValueReader reader{value.encoded.data(),
+				value.encoded.data() + value.encoded.size()};
+		ComponentValue decoded;
+		decodeComponentValue(store, resolveValueType(value.type), reader,
+				decoded, 0);
+		if (reader.current != reader.end)
+			throw std::runtime_error(
+					"component runtime: component value has trailing bytes");
+		componentValues_.push_back(std::move(decoded));
+	}
 	for (const WASM::ComponentDefinition& definition : component_.definitions) {
 		switch (definition.kind) {
 		case WASM::ComponentDefinitionKind::CoreInstance:
@@ -1417,17 +1960,75 @@ void ComponentRuntime::build()
 		case WASM::ComponentDefinitionKind::Export:
 			processExport(component_.exports[definition.index]);
 			break;
+		case WASM::ComponentDefinitionKind::Start:
+			processStart(component_.starts[definition.index]);
+			break;
 		default:
 			break;
 		}
 	}
 }
 
+std::optional<WASM::Callable> ComponentRuntime::CoreInstanceHandle::exportedFunction(
+		std::string_view name) const
+{
+	if (moduleInstance)
+		return moduleInstance->exportedFunction(name);
+	const auto it = inlineFunctions.find(std::string(name));
+	if (it == inlineFunctions.end())
+		return std::nullopt;
+	return it->second;
+}
+
+std::optional<WASM::LinearMemory*> ComponentRuntime::CoreInstanceHandle::exportedMemory(
+		std::string_view name) const
+{
+	if (moduleInstance)
+		return moduleInstance->exportedMemory(name);
+	const auto it = inlineMemories.find(std::string(name));
+	if (it == inlineMemories.end())
+		return std::nullopt;
+	return it->second;
+}
+
+void ComponentRuntime::CoreInstanceHandle::registerExports(
+		WASM::ImportRegistrar& registrar, std::string_view moduleName) const
+{
+	if (moduleInstance) {
+		moduleInstance->registerExports(registrar, moduleName);
+		return;
+	}
+	for (const auto& [name, callable] : inlineFunctions)
+		registrar.registerFunction(moduleName, name, callable);
+	for (const auto& [name, memory] : inlineMemories)
+		registrar.registerMemory(moduleName, name, memory);
+}
+
 void ComponentRuntime::processCoreInstance(const WASM::CoreInstance& instance)
 {
-	if (instance.kind != WASM::CoreInstance::Kind::Instantiate)
-		throw std::runtime_error(
-				"component runtime: inline core instances are not supported");
+	if (instance.kind == WASM::CoreInstance::Kind::InlineExports) {
+		auto handle = std::make_unique<CoreInstanceHandle>();
+		for (const WASM::CoreInlineExport& exportDecl : instance.exports) {
+			if (exportDecl.sortIndex.sort == WASM::CoreSort::Func) {
+				if (exportDecl.sortIndex.index >= coreFuncs_.size())
+					throw std::runtime_error(
+							"component runtime: inline core func export is out of bounds");
+				handle->inlineFunctions.emplace(exportDecl.name,
+						coreFuncs_[exportDecl.sortIndex.index]);
+			} else if (exportDecl.sortIndex.sort == WASM::CoreSort::Memory) {
+				if (exportDecl.sortIndex.index >= coreMemories_.size())
+					throw std::runtime_error(
+							"component runtime: inline core memory export is out of bounds");
+				handle->inlineMemories.emplace(exportDecl.name,
+						coreMemories_[exportDecl.sortIndex.index]);
+			} else {
+				throw std::runtime_error(
+						"component runtime: inline core export sort is not supported");
+			}
+		}
+		coreInstances_.push_back(std::move(handle));
+		return;
+	}
 	if (instance.moduleIndex >= component_.coreModules.size())
 		throw std::runtime_error(
 				"component runtime: core instance module index out of bounds");
@@ -1442,8 +2043,11 @@ void ComponentRuntime::processCoreInstance(const WASM::CoreInstance& instance)
 			*component_.coreModules[instance.moduleIndex], resolver);
 	if (!moduleInstance)
 		throw std::runtime_error("component runtime: core instantiation failed");
-	coreInstances_.push_back(std::move(moduleInstance));
+	auto handle = std::make_unique<CoreInstanceHandle>();
+	handle->moduleInstance = std::move(moduleInstance);
+	coreInstances_.push_back(std::move(handle));
 }
+
 
 void ComponentRuntime::processComponent(uint32_t index)
 {
@@ -1520,69 +2124,296 @@ void ComponentRuntime::processAlias(const WASM::Alias& alias)
 
 void ComponentRuntime::processStreamCanon(const WASM::Canon& canon)
 {
+	// `stream.new`/`future.new` and the drop builtins are the endpoint-lifecycle
+	// half of the async surface. Read/write/cancel/forward live in
+	// processAsyncCanon because they need the canonical memory and ABI layout.
 	const bool isNew = canon.kind == WASM::Canon::Kind::StreamNew
 			|| canon.kind == WASM::Canon::Kind::FutureNew;
-	auto data = std::make_unique<ResourceClosureData>();
-	data->argumentTypes.push_back(&ffi_type_pointer);
-	if (!isNew)
-		data->argumentTypes.push_back(&ffi_type_sint32);
-	data->cif = new ffi_cif;
-	if (ffi_prep_cif(data->cif, FFI_DEFAULT_ABI,
-			static_cast<unsigned>(data->argumentTypes.size()),
-			isNew ? &ffi_type_sint64 : &ffi_type_void,
-			data->argumentTypes.data()) != FFI_OK)
-		throw std::runtime_error("component runtime: stream ffi_prep_cif failed");
-	const auto addHandle = [this] {
-		if (!freeResourceSlots_.empty()) {
-			const uint32_t handle = freeResourceSlots_.back();
-			freeResourceSlots_.pop_back();
-			resourceSlots_[handle] = ResourceSlot{0, WASM::TypeId::kNone,
-					true, true, 0};
-			return handle;
+	const bool isFuture = canon.kind == WASM::Canon::Kind::FutureNew
+			|| canon.kind == WASM::Canon::Kind::FutureDropReadable
+			|| canon.kind == WASM::Canon::Kind::FutureDropWritable;
+	const bool readable = canon.kind == WASM::Canon::Kind::StreamDropReadable
+			|| canon.kind == WASM::Canon::Kind::FutureDropReadable;
+
+	uint32_t elementSize = 0;
+	if (const WASM::TypeId typeId = component_.typeId(canon.typeIndex);
+			!typeId.isNone()) {
+		const WASM::TypeStore& store = WASM::Store::global().types().store();
+		const WASM::ComponentTypeView view = store.componentType(typeId);
+		const WASM::CanonicalAbiOptions options = canonicalOptions(canon);
+		if (view.hasStreamElement()) {
+			WASM::CanonicalAbiLayout layout;
+			if (store.canonicalAbiLayoutValue(view.streamElement(), options,
+					layout))
+				elementSize = layout.size;
 		}
-		const uint32_t handle = static_cast<uint32_t>(resourceSlots_.size());
-		resourceSlots_.push_back(ResourceSlot{0, WASM::TypeId::kNone,
-				true, true, 0});
-		return handle;
-	};
+	}
+
+	auto data = std::make_unique<ResourceClosureData>();
+	ffi_type* returnType = &ffi_type_void;
 	if (isNew) {
-		data->handler = [addHandle](void* result, void**) {
-			const uint32_t readable = addHandle();
-			const uint32_t writable = addHandle();
-			*static_cast<int64_t*>(result) =
-					int64_t(uint64_t(readable) | (uint64_t(writable) << 32));
+		returnType = &ffi_type_sint64;
+		data->handler = [this, elementSize, isFuture](void* result, void**) {
+			const auto handles = async_.newStreamFuture(isFuture, elementSize);
+			*static_cast<int64_t*>(result) = int64_t(
+					uint64_t(handles.first) | (uint64_t(handles.second) << 32));
 		};
 	} else {
-		data->handler = [this](void*, void** args) {
+		data->argumentTypes.push_back(&ffi_type_pointer);
+		data->argumentTypes.push_back(&ffi_type_sint32);
+		data->handler = [this, readable](void*, void** args) {
 			const uint32_t handle = uint32_t(*static_cast<int32_t*>(args[1]));
-			if (handle == 0 || handle >= resourceSlots_.size()
-					|| !resourceSlots_[handle].live)
-				throw std::runtime_error("component runtime: invalid stream handle");
-			resourceSlots_[handle] = ResourceSlot{};
-			freeResourceSlots_.push_back(handle);
+			async_.drop(handle, readable ? WASM::ComponentEndDirection::Readable
+					: WASM::ComponentEndDirection::Writable);
 		};
 	}
-	void* code = nullptr;
-	ffi_closure* closure = static_cast<ffi_closure*>(
-			ffi_closure_alloc(sizeof(ffi_closure), &code));
-	if (!closure || !code || ffi_prep_closure_loc(closure, data->cif,
-			resourceCallback, data.get(), code) != FFI_OK) {
-		if (closure)
-			ffi_closure_free(closure);
-		delete data->cif;
-		data->cif = nullptr;
-		throw std::runtime_error("component runtime: stream closure allocation failed");
-	}
-	WASM::Callable callable;
-	callable.fnPtr = code;
-	callable.context = nullptr;
-	callable.localTypeIdx = 0;
-	callable.typeId = WASM::TypeId{WASM::TypeId::kNone};
-	coreFuncs_.push_back(callable);
-	resourceClosures_.push_back(closure);
-	resourceCifs_.push_back(data->cif);
-	resourceData_.push_back(data.release());
+	pushBuiltinClosure(resourceClosures_, resourceCifs_, resourceData_,
+			coreFuncs_, std::move(data), returnType);
 }
+
+
+
+void ComponentRuntime::processAsyncCanon(const WASM::Canon& canon)
+{
+	const WASM::CanonicalAbiOptions options = canonicalOptions(canon);
+	const bool pointer64 = options.pointerSize == 8;
+	ffi_type* const addressType = ffiTypeForAddress(pointer64);
+	auto data = std::make_unique<ResourceClosureData>();
+	data->argumentTypes.push_back(&ffi_type_pointer); // VMContext*
+	ffi_type* returnType = &ffi_type_void;
+
+	switch (canon.kind) {
+	case WASM::Canon::Kind::StreamRead:
+	case WASM::Canon::Kind::StreamWrite:
+	case WASM::Canon::Kind::FutureRead:
+	case WASM::Canon::Kind::FutureWrite: {
+		const bool isFuture = canon.kind == WASM::Canon::Kind::FutureRead
+				|| canon.kind == WASM::Canon::Kind::FutureWrite;
+		const bool isRead = canon.kind == WASM::Canon::Kind::StreamRead
+				|| canon.kind == WASM::Canon::Kind::FutureRead;
+		uint32_t elementSize = 0;
+		const WASM::TypeId typeId = component_.typeId(canon.typeIndex);
+		if (!typeId.isNone()) {
+			const WASM::TypeStore& store = WASM::Store::global().types().store();
+			const WASM::ComponentTypeView view = store.componentType(typeId);
+			if (view.hasStreamElement()) {
+				WASM::CanonicalAbiLayout layout;
+				if (store.canonicalAbiLayoutValue(view.streamElement(), options,
+						layout))
+					elementSize = layout.size;
+			}
+		}
+		data->argumentTypes.push_back(&ffi_type_sint32); // end handle
+		data->argumentTypes.push_back(addressType);     // buffer address
+		if (!isFuture)
+			data->argumentTypes.push_back(addressType); // element count
+		returnType = addressType;
+		data->handler = [this, isFuture, isRead, elementSize, options,
+				pointer64](void* result, void** args) {
+			const uint32_t handle = uint32_t(*static_cast<int32_t*>(args[1]));
+			const uint64_t address = readAddress(args[2], pointer64);
+			const uint64_t count = isFuture ? 1
+					: readAddress(args[3], pointer64);
+			const AbiMemory abi = memoryFor(options);
+			if (abi.memory == nullptr)
+				throw std::runtime_error(
+						"component async: stream/future builtin needs a memory");
+			const uint32_t packed = isRead
+					? async_.read(handle, *abi.memory, address, count,
+							options.async)
+					: async_.write(handle, *abi.memory, address, count,
+							options.async);
+			(void)elementSize;
+			writeAddress(result, packed, pointer64);
+		};
+		break;
+	}
+	case WASM::Canon::Kind::StreamCancelRead:
+	case WASM::Canon::Kind::StreamCancelWrite:
+	case WASM::Canon::Kind::FutureCancelRead:
+	case WASM::Canon::Kind::FutureCancelWrite:
+		data->argumentTypes.push_back(&ffi_type_sint32);
+		returnType = &ffi_type_sint32;
+		data->handler = [this, options](void* result, void** args) {
+			const uint32_t handle = uint32_t(*static_cast<int32_t*>(args[1]));
+			*static_cast<int32_t*>(result) =
+					int32_t(async_.cancel(handle, options.async));
+		};
+		break;
+	case WASM::Canon::Kind::StreamForward:
+	case WASM::Canon::Kind::FutureForward:
+		data->argumentTypes.push_back(&ffi_type_sint32);
+		data->argumentTypes.push_back(&ffi_type_sint32);
+		data->handler = [this](void*, void** args) {
+			const uint32_t readable = uint32_t(*static_cast<int32_t*>(args[1]));
+			const uint32_t writable = uint32_t(*static_cast<int32_t*>(args[2]));
+			async_.forward(readable, writable);
+			async_.discard(readable);
+			async_.discard(writable);
+		};
+		break;
+	case WASM::Canon::Kind::TaskReturn: {
+		// `task.return` takes the flattened results of the current task. The
+		// single-agent runtime records that the task resolved; it does not need
+		// to re-materialise them because the caller's values are already in the
+		// core frame.
+		const WASM::TypeStore& store = WASM::Store::global().types().store();
+		for (const WASM::ComponentValueType& value : canon.results) {
+			const WASM::ComponentValueType resolved = resolveValueType(value);
+			std::vector<WASM::AbiCoreType> flat;
+			if (!store.canonicalAbiFlatValue(resolved, flat))
+				throw std::runtime_error(
+						"component async: task.return result is not flattenable");
+			for (WASM::AbiCoreType type : flat)
+				data->argumentTypes.push_back(ffiType(type));
+		}
+		data->handler = [this](void*, void**) { async_.taskReturn(); };
+		break;
+	}
+	case WASM::Canon::Kind::TaskCancel:
+		data->handler = [this](void*, void**) { async_.taskCancel(); };
+		break;
+	case WASM::Canon::Kind::ContextGet: {
+		const WASM::AbiCoreType type =
+				abiCoreTypeForValue(canon.contextType.opcode);
+		returnType = ffiType(type);
+		data->handler = [this, type, index = canon.contextIndex](void* result,
+				void**) {
+			const WASM::ComponentContextSlot slot =
+					async_.currentTask().contextSlot(index);
+			switch (type) {
+			case WASM::AbiCoreType::I32: *static_cast<int32_t*>(result) = slot.i32; break;
+			case WASM::AbiCoreType::I64: *static_cast<int64_t*>(result) = slot.i64; break;
+			case WASM::AbiCoreType::F32: *static_cast<float*>(result) = slot.f32; break;
+			case WASM::AbiCoreType::F64: *static_cast<double*>(result) = slot.f64; break;
+			}
+		};
+		break;
+	}
+	case WASM::Canon::Kind::ContextSet: {
+		const WASM::AbiCoreType type =
+				abiCoreTypeForValue(canon.contextType.opcode);
+		data->argumentTypes.push_back(ffiType(type));
+		data->handler = [this, type, index = canon.contextIndex](void*,
+				void** args) {
+			WASM::ComponentContextSlot slot;
+			switch (type) {
+			case WASM::AbiCoreType::I32: slot.i32 = *static_cast<int32_t*>(args[1]); break;
+			case WASM::AbiCoreType::I64: slot.i64 = *static_cast<int64_t*>(args[1]); break;
+			case WASM::AbiCoreType::F32: slot.f32 = *static_cast<float*>(args[1]); break;
+			case WASM::AbiCoreType::F64: slot.f64 = *static_cast<double*>(args[1]); break;
+			}
+			async_.currentTask().setContextSlot(index, slot);
+		};
+		break;
+	}
+	case WASM::Canon::Kind::BackpressureInc:
+	case WASM::Canon::Kind::BackpressureDec:
+		data->handler = [this, increment = canon.kind
+				== WASM::Canon::Kind::BackpressureInc](void*, void**) {
+			async_.setBackpressure(increment);
+		};
+		break;
+	case WASM::Canon::Kind::WaitableSetNew:
+		returnType = &ffi_type_sint32;
+		data->handler = [this](void* result, void**) {
+			*static_cast<int32_t*>(result) =
+					int32_t(async_.newWaitableSet());
+		};
+		break;
+	case WASM::Canon::Kind::WaitableSetWait:
+	case WASM::Canon::Kind::WaitableSetPoll: {
+		// The memory immediate is not a canonopt for this builtin.
+		WASM::CanonicalAbiOptions waitOptions = options;
+		waitOptions.memory = canon.memoryIndex;
+		const bool isWait = canon.kind == WASM::Canon::Kind::WaitableSetWait;
+		data->argumentTypes.push_back(&ffi_type_sint32);
+		data->argumentTypes.push_back(addressType);
+		returnType = &ffi_type_sint32;
+		data->handler = [this, waitOptions, pointer64, isWait](void* result,
+				void** args) {
+			const uint32_t set = uint32_t(*static_cast<int32_t*>(args[1]));
+			const uint64_t address = readAddress(args[2], pointer64);
+			const WASM::ComponentAsyncEvent event = isWait
+					? async_.wait(set) : async_.poll(set);
+			const AbiMemory abi = memoryFor(waitOptions);
+			if (abi.memory == nullptr || address + 8 > abi.memory->memorySize)
+				throw std::runtime_error(
+						"component async: waitable-set payload address is out of bounds");
+			const auto store32 = [&](uint32_t offset, uint32_t value) {
+				for (unsigned i = 0; i < 4; ++i)
+					abi.memory->memoryBase[address + offset + i] =
+							uint8_t(value >> (i * 8));
+			};
+			store32(0, event.payload1);
+			store32(4, event.payload2);
+			*static_cast<int32_t*>(result) =
+					static_cast<int32_t>(event.code);
+		};
+		break;
+	}
+	case WASM::Canon::Kind::WaitableSetDrop:
+		data->argumentTypes.push_back(&ffi_type_sint32);
+		data->handler = [this](void*, void** args) {
+			async_.dropWaitableSet(uint32_t(*static_cast<int32_t*>(args[1])));
+		};
+		break;
+	case WASM::Canon::Kind::WaitableJoin:
+		data->argumentTypes.push_back(&ffi_type_sint32);
+		data->argumentTypes.push_back(&ffi_type_sint32);
+		data->handler = [this](void*, void** args) {
+			async_.join(uint32_t(*static_cast<int32_t*>(args[1])),
+					uint32_t(*static_cast<int32_t*>(args[2])));
+		};
+		break;
+	case WASM::Canon::Kind::SubtaskCancel:
+		data->argumentTypes.push_back(&ffi_type_sint32);
+		returnType = &ffi_type_sint32;
+		data->handler = [this](void* result, void** args) {
+			*static_cast<int32_t*>(result) = int32_t(async_.cancelSubtask(
+					uint32_t(*static_cast<int32_t*>(args[1]))));
+		};
+		break;
+	case WASM::Canon::Kind::SubtaskDrop:
+		data->argumentTypes.push_back(&ffi_type_sint32);
+		data->handler = [this](void*, void** args) {
+			async_.dropSubtask(uint32_t(*static_cast<int32_t*>(args[1])));
+		};
+		break;
+	default:
+		throw std::runtime_error(
+				"component runtime: processAsyncCanon received a non-stream canon");
+	}
+	pushBuiltinClosure(resourceClosures_, resourceCifs_, resourceData_,
+			coreFuncs_, std::move(data), returnType);
+}
+
+
+uint32_t ComponentRuntime::addHandle()
+{
+	if (!freeResourceSlots_.empty()) {
+		const uint32_t handle = freeResourceSlots_.back();
+		freeResourceSlots_.pop_back();
+		resourceSlots_[handle] = ResourceSlot{0, WASM::TypeId::kNone,
+				true, true, 0};
+		return handle;
+	}
+	const uint32_t handle = static_cast<uint32_t>(resourceSlots_.size());
+	resourceSlots_.push_back(ResourceSlot{0, WASM::TypeId::kNone,
+			true, true, 0});
+	return handle;
+}
+
+void ComponentRuntime::freeHandle(uint32_t handle)
+{
+	if (handle == 0 || handle >= resourceSlots_.size())
+		return;
+	if (!resourceSlots_[handle].live)
+		return;
+	resourceSlots_[handle] = ResourceSlot{};
+	freeResourceSlots_.push_back(handle);
+}
+
 
 void ComponentRuntime::processResourceCanon(const WASM::Canon& canon)
 {
@@ -1746,6 +2577,54 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 		processStreamCanon(canon);
 		return;
 	}
+	switch (canon.kind) {
+	case WASM::Canon::Kind::StreamRead:
+	case WASM::Canon::Kind::StreamWrite:
+	case WASM::Canon::Kind::StreamCancelRead:
+	case WASM::Canon::Kind::StreamCancelWrite:
+	case WASM::Canon::Kind::StreamForward:
+	case WASM::Canon::Kind::FutureRead:
+	case WASM::Canon::Kind::FutureWrite:
+	case WASM::Canon::Kind::FutureCancelRead:
+	case WASM::Canon::Kind::FutureCancelWrite:
+	case WASM::Canon::Kind::FutureForward:
+	case WASM::Canon::Kind::TaskReturn:
+	case WASM::Canon::Kind::TaskCancel:
+	case WASM::Canon::Kind::ContextGet:
+	case WASM::Canon::Kind::ContextSet:
+	case WASM::Canon::Kind::BackpressureInc:
+	case WASM::Canon::Kind::BackpressureDec:
+	case WASM::Canon::Kind::WaitableSetNew:
+	case WASM::Canon::Kind::WaitableSetWait:
+	case WASM::Canon::Kind::WaitableSetPoll:
+	case WASM::Canon::Kind::WaitableSetDrop:
+	case WASM::Canon::Kind::WaitableJoin:
+	case WASM::Canon::Kind::SubtaskCancel:
+	case WASM::Canon::Kind::SubtaskDrop:
+		processAsyncCanon(canon);
+		return;
+	case WASM::Canon::Kind::ErrorContextNew:
+	case WASM::Canon::Kind::ErrorContextDebugMessage:
+	case WASM::Canon::Kind::ErrorContextDrop:
+		processErrorContextCanon(canon);
+		return;
+	case WASM::Canon::Kind::ThreadIndex:
+	case WASM::Canon::Kind::ThreadNewIndirect:
+	case WASM::Canon::Kind::ThreadResumeLater:
+	case WASM::Canon::Kind::ThreadSuspend:
+	case WASM::Canon::Kind::ThreadYield:
+	case WASM::Canon::Kind::ThreadSuspendThenResume:
+	case WASM::Canon::Kind::ThreadYieldThenResume:
+	case WASM::Canon::Kind::ThreadSuspendThenPromote:
+	case WASM::Canon::Kind::ThreadYieldThenPromote:
+	case WASM::Canon::Kind::ThreadSpawnRef:
+	case WASM::Canon::Kind::ThreadSpawnIndirect:
+	case WASM::Canon::Kind::ThreadAvailableParallelism:
+		processThreadCanon(canon);
+		return;
+	default:
+		break;
+	}
 	if (canon.kind == WASM::Canon::Kind::Lower) {
 		if (canon.funcIndex >= componentFuncs_.size())
 			throw std::runtime_error(
@@ -1811,7 +2690,7 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 				"component runtime: canon lift type has no closed identity");
 	const WASM::CanonicalAbiOptions options = canonicalOptions(canon);
 	const WASM::CanonicalAbiSignature* abi =
-			WASM::Store::global().types().store().canonicalAbi(typeId, options);
+			abi_.resolve(typeId, options);
 	if (!abi)
 		throw std::runtime_error(
 				"component runtime: canon lift type is outside the flat ABI subset");
@@ -1899,6 +2778,107 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 	componentFuncs_.push_back(std::move(function));
 }
 
+void ComponentRuntime::processErrorContextCanon(const WASM::Canon& canon)
+{
+	const WASM::CanonicalAbiOptions options = canonicalOptions(canon);
+	const bool pointer64 = options.pointerSize == 8;
+	ffi_type* const addressType = ffiTypeForAddress(pointer64);
+	auto data = std::make_unique<ResourceClosureData>();
+	data->argumentTypes.push_back(&ffi_type_pointer);
+	ffi_type* returnType = &ffi_type_void;
+
+	switch (canon.kind) {
+	case WASM::Canon::Kind::ErrorContextNew:
+		data->argumentTypes.push_back(addressType);
+		data->argumentTypes.push_back(addressType);
+		returnType = &ffi_type_sint32;
+		data->handler = [this, options, pointer64](void* result, void** args) {
+			const uint64_t address = readAddress(args[1], pointer64);
+			const uint64_t length = readAddress(args[2], pointer64);
+			const AbiMemory abi = memoryFor(options);
+			if (abi.memory == nullptr)
+				throw std::runtime_error(
+						"component async: error-context buffer needs a memory");
+			const MemView view{abi.memory, abi.realloc, options, this, 0};
+			std::string message = loadString(address, length, view);
+			*static_cast<int32_t*>(result) =
+					int32_t(async_.newErrorContext(std::move(message)));
+		};
+		break;
+	case WASM::Canon::Kind::ErrorContextDebugMessage:
+		data->argumentTypes.push_back(&ffi_type_sint32);
+		data->argumentTypes.push_back(addressType);
+		data->handler = [this, options, pointer64](void*, void** args) {
+			const uint32_t handle = uint32_t(*static_cast<int32_t*>(args[1]));
+			const uint64_t address = readAddress(args[2], pointer64);
+			const std::string message = async_.errorContext(handle);
+			const AbiMemory abi = memoryFor(options);
+			if (abi.memory == nullptr)
+				throw std::runtime_error(
+						"component async: error-context output needs a memory");
+			const MemView view{abi.memory, abi.realloc, options, this, 0};
+			const EncodedString encoded = storeString(message, view);
+			writeUInt(view, address, encoded.address, options.pointerSize);
+			writeUInt(view, address + options.pointerSize,
+					encoded.taggedCodeUnits, options.pointerSize);
+		};
+		break;
+	case WASM::Canon::Kind::ErrorContextDrop:
+		data->argumentTypes.push_back(&ffi_type_sint32);
+		data->handler = [this](void*, void** args) {
+			async_.dropErrorContext(uint32_t(*static_cast<int32_t*>(args[1])));
+		};
+		break;
+	default:
+		throw std::runtime_error(
+				"component runtime: processErrorContextCanon received a non-error canon");
+	}
+	pushBuiltinClosure(resourceClosures_, resourceCifs_, resourceData_,
+			coreFuncs_, std::move(data), returnType);
+}
+
+void ComponentRuntime::processThreadCanon(const WASM::Canon& canon)
+{
+	auto data = std::make_unique<ResourceClosureData>();
+	data->argumentTypes.push_back(&ffi_type_pointer);
+	ffi_type* returnType = &ffi_type_void;
+	switch (canon.kind) {
+	case WASM::Canon::Kind::ThreadIndex:
+		returnType = &ffi_type_sint32;
+		data->handler = [this](void* result, void**) {
+			*static_cast<int32_t*>(result) =
+					int32_t(async_.executor().threadIndex());
+		};
+		break;
+	case WASM::Canon::Kind::ThreadAvailableParallelism:
+		returnType = &ffi_type_sint32;
+		data->handler = [this](void* result, void**) {
+			*static_cast<int32_t*>(result) =
+					int32_t(async_.executor().availableParallelism());
+		};
+		break;
+	case WASM::Canon::Kind::ThreadYield:
+		data->handler = [](void*, void**) {
+			// A single-agent executor has nothing else to run; yield is a no-op.
+		};
+		break;
+	default:
+		// Every remaining thread builtin creates or manipulates a real
+		// concurrent agent. The interface exists, but the single-agent backend
+		// refuses the operation rather than pretending to schedule it.
+		data->handler = [kind = canon.kind](void*, void**) {
+			throw std::runtime_error(
+					"component runtime: thread builtin " +
+					std::to_string(static_cast<unsigned>(kind)) +
+					" requires a multi-agent backend (docs/proposals/THREADS.md TD9)");
+		};
+		break;
+	}
+	pushBuiltinClosure(resourceClosures_, resourceCifs_, resourceData_,
+			coreFuncs_, std::move(data), returnType);
+}
+
+
 void ComponentRuntime::processImport(const WASM::ImportDecl& importDecl)
 {
 	if (importDecl.type.kind != WASM::ExternType::Kind::Func)
@@ -1913,7 +2893,7 @@ void ComponentRuntime::processImport(const WASM::ImportDecl& importDecl)
 		throw std::runtime_error(
 				"component runtime: imported function type has no closed identity");
 	const WASM::CanonicalAbiSignature* abi =
-			WASM::Store::global().types().store().canonicalAbi(typeId, {});
+			abi_.resolve(typeId, {});
 	if (!abi)
 		throw std::runtime_error(
 				"component runtime: imported function type is outside the flat ABI subset");
@@ -1945,6 +2925,43 @@ void ComponentRuntime::processExport(const WASM::ComponentExport& exportDecl)
 				"component runtime: function export index out of bounds");
 	exportedFuncs_[exportDecl.name.name] = exportDecl.sortIndex.index;
 }
+
+WASM::ComponentValueType ComponentRuntime::resolveValueType(
+		const WASM::ComponentValueType& type) const
+{
+	if (type.kind == WASM::ComponentValueType::Kind::Primitive
+			|| type.kind == WASM::ComponentValueType::Kind::TypeId)
+		return type;
+	const WASM::TypeId id = component_.typeId(type.typeIndex);
+	if (id.isNone())
+		throw std::runtime_error(
+				"component runtime: value type has no closed identity");
+	WASM::ComponentValueType resolved;
+	resolved.kind = WASM::ComponentValueType::Kind::TypeId;
+	resolved.typeIndex = id.value;
+	return resolved;
+}
+
+void ComponentRuntime::processStart(const WASM::Start& start)
+{
+	if (start.funcIndex >= componentFuncs_.size())
+		throw std::runtime_error(
+				"component runtime: start function index out of bounds");
+	if (start.args.size() > componentValues_.size())
+		throw std::runtime_error(
+				"component runtime: start argument index out of bounds");
+	std::vector<ComponentValue> args;
+	args.reserve(start.args.size());
+	for (uint32_t index : start.args)
+		args.push_back(componentValues_[index]);
+	std::vector<ComponentValue> results(start.resultCount);
+	const ComponentFunction& function = componentFuncs_[start.funcIndex];
+	if (!function.callValues)
+		throw std::runtime_error(
+				"component runtime: start function has no structured entry point");
+	function.callValues(args, results);
+}
+
 
 std::optional<ComponentFunction> ComponentRuntime::exportedFunction(
 		std::string_view name) const

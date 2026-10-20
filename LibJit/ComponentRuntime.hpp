@@ -1,6 +1,9 @@
 #ifndef COMPONENTRUNTIME_HPP
 #define COMPONENTRUNTIME_HPP
 #include "../WasmBase/WasmComponent.hpp"
+#include "../WasmBase/WasmComponentAbi.hpp"
+#include "../WasmBase/WasmComponentAsync.hpp"
+#include "../WasmBase/WasmImport.hpp"
 #include "../WasmBase/WasmModuleInstance.hpp"
 #include "../WasmBase/WasmTypeStore.hpp"
 #include "LibjitModuleCompiler.hpp"
@@ -74,6 +77,9 @@ public:
 	std::optional<ComponentFunction> exportedFunction(std::string_view name) const;
 	WASM::Callable coreFunction(std::size_t index) const;
 	WASM::LinearMemory* coreMemory(std::size_t index) const;
+	// Instance-owned Canonical ABI signatures (TYPE_MODEL TM-15). Store metadata
+	// is process-wide; this table is per component instance.
+	const WASM::ComponentAbiInstance& abi() const { return abi_; }
 
 	// Resource-handle validation used by the canonical value walkers.
 	uint32_t useResourceHandle(uint32_t handle, WASM::TypeId expected,
@@ -98,10 +104,26 @@ private:
 		uint32_t borrowScope = 0;
 	};
 
+	// A core instance in the component graph: either an instantiated core
+	// module or an inline bag of core exports (the form canon built-ins use to
+	// reach a core module's imports).
+	struct CoreInstanceHandle {
+		std::unique_ptr<WASM::ModuleInstance> moduleInstance;
+		std::unordered_map<std::string, WASM::Callable> inlineFunctions;
+		std::unordered_map<std::string, WASM::LinearMemory*> inlineMemories;
+
+		std::optional<WASM::Callable> exportedFunction(
+				std::string_view name) const;
+		std::optional<WASM::LinearMemory*> exportedMemory(
+				std::string_view name) const;
+		void registerExports(WASM::ImportRegistrar& registrar,
+				std::string_view moduleName) const;
+	};
+
 	jit_context_t context_;
 	ModuleCompiler compiler_;
 	const WASM::Component& component_;
-	std::vector<std::unique_ptr<WASM::ModuleInstance>> coreInstances_;
+	std::vector<std::unique_ptr<CoreInstanceHandle>> coreInstances_;
 	ComponentImports imports_;
 	std::vector<const WASM::Component*> nestedComponents_;
 	std::vector<std::unique_ptr<ComponentRuntime>> nestedRuntimes_;
@@ -117,6 +139,17 @@ private:
 	std::vector<ResourceSlot> resourceSlots_{ResourceSlot{0, WASM::TypeId::kNone,
 			false, true, 0}};
 	std::vector<uint32_t> freeResourceSlots_;
+	// Single-agent async state. The allocator/releaser keep async handles in the
+	// same index space as resources (docs/proposals/THREADS.md TD9).
+	WASM::ComponentAsyncState async_;
+	// Instance-owned Canonical ABI signatures. Declared after `async_` so the
+	// handle table is constructed first; the table itself only references the
+	// process-lifetime Store.
+	mutable WASM::ComponentAbiInstance abi_;
+	// Decoded component `value` definitions, in the value index space. A start
+	// definition refers to these by index. Values are decoded once, after
+	// validation, before the definition walk reaches `start`.
+	std::vector<ComponentValue> componentValues_;
 	uint32_t borrowScopeSerial_ = 1;
 	uint32_t currentBorrowScope_ = 0;
 	std::unordered_map<std::string, size_t> exportedFuncs_;
@@ -129,8 +162,17 @@ private:
 	void processCanon(const WASM::Canon& canon);
 	void processResourceCanon(const WASM::Canon& canon);
 	void processStreamCanon(const WASM::Canon& canon);
+	void processAsyncCanon(const WASM::Canon& canon);
+	void processErrorContextCanon(const WASM::Canon& canon);
+	void processThreadCanon(const WASM::Canon& canon);
 	void processImport(const WASM::ImportDecl& importDecl);
 	void processExport(const WASM::ComponentExport& exportDecl);
+	void processStart(const WASM::Start& start);
+	WASM::ComponentValueType resolveValueType(
+			const WASM::ComponentValueType& type) const;
+	uint32_t addHandle();
+	void freeHandle(uint32_t handle);
+
 	AbiMemory memoryFor(const WASM::CanonicalAbiOptions& options) const;
 	void lowerValues(const ComponentFunction& function,
 			std::span<const ComponentValue> values,

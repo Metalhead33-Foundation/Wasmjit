@@ -64,6 +64,13 @@ public:
 		std::string_view moduleName,
 		std::string_view fieldName,
 		TagId            tag) = 0;
+
+	// Publish an exported type (TYPE_IMPORTS.md TI-2). The type namespace is
+	// separate from the function/global/memory/table/tag namespaces.
+	virtual void registerType(
+		std::string_view moduleName,
+		std::string_view fieldName,
+		TypeId           type) = 0;
 };
 
 class ImportResolver {
@@ -122,6 +129,14 @@ public:
 		std::string_view moduleName,
 		std::string_view fieldName,
 		TypeId           expectedType) = 0;
+
+	// Resolve a type import. The provided type must be a subtype of the
+	// declared abstract bound; the resolver enforces that through the canonical
+	// registry rather than structural guessing (TYPE_IMPORTS.md TI-3).
+	virtual std::optional<TypeId> resolveType(
+		std::string_view moduleName,
+		std::string_view fieldName,
+		AbstractHeapType bound) = 0;
 };
 }
 #endif // WASMIMPORT_HPP

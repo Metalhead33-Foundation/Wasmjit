@@ -12,6 +12,7 @@ TypeKind coreKind(CanonTypeKind kind)
 	case CanonTypeKind::Func: return TypeKind::CoreFunc;
 	case CanonTypeKind::Struct: return TypeKind::CoreStruct;
 	case CanonTypeKind::Array: return TypeKind::CoreArray;
+	case CanonTypeKind::Import: return TypeKind::CoreImport;
 	}
 	throw std::runtime_error("type store: unknown core type kind");
 }
@@ -22,6 +23,7 @@ CanonTypeKind canonKind(TypeKind kind)
 	case TypeKind::CoreFunc: return CanonTypeKind::Func;
 	case TypeKind::CoreStruct: return CanonTypeKind::Struct;
 	case TypeKind::CoreArray: return CanonTypeKind::Array;
+	case TypeKind::CoreImport: return CanonTypeKind::Import;
 	default: break;
 	}
 	throw std::runtime_error("type store: record is not a core type");
@@ -534,10 +536,44 @@ TypeId TypeStore::appendCore(const CanonicalType& type)
 		record.payload = static_cast<uint32_t>(coreArrays_.size());
 		coreArrays_.push_back(CoreArrayPayload{type.arrayElement});
 		break;
+	case CanonTypeKind::Import:
+		// Imported types are created through internCoreImport(), not here.
+		throw std::runtime_error(
+				"type store: an imported type cannot enter appendCore");
 	}
 	records_.push_back(record);
 	depths_.push_back(type.depth);
 	++coreCount_;
+	return id;
+}
+
+TypeId TypeStore::internCoreImport(std::string_view module,
+		std::string_view field, AbstractHeapType bound)
+{
+	std::string key;
+	appendKeyU32(key, static_cast<uint32_t>(module.size()));
+	key.append(module);
+	appendKeyU32(key, static_cast<uint32_t>(field.size()));
+	key.append(field);
+	appendKeyU32(key, static_cast<uint32_t>(bound));
+	const auto found = coreImportIntern_.find(key);
+	if (found != coreImportIntern_.end())
+		return found->second;
+
+	CoreImportPayload payload;
+	payload.bound.kind = CanonHeapType::Kind::Abstract;
+	payload.bound.abstract = bound;
+	const uint32_t payloadIndex = static_cast<uint32_t>(coreImports_.size());
+	coreImports_.push_back(payload);
+	TypeRecord record;
+	record.kind = TypeKind::CoreImport;
+	record.flags = 0;
+	record.payload = payloadIndex;
+	records_.push_back(record);
+	depths_.push_back(0);
+	++coreCount_;
+	const TypeId id{static_cast<uint32_t>(records_.size() - 1)};
+	coreImportIntern_.emplace(std::move(key), id);
 	return id;
 }
 
@@ -967,6 +1003,7 @@ std::size_t TypeStore::payloadBytes() const
 			+ coreSupertypes_.capacity() * sizeof(CanonHeapType)
 			+ coreStorage_.capacity() * sizeof(CanonStorageType)
 			+ coreFields_.capacity() * sizeof(CanonFieldType)
+			+ coreImports_.capacity() * sizeof(CoreImportPayload)
 			+ coreFuncs_.capacity() * sizeof(CoreFuncPayload)
 			+ coreStructs_.capacity() * sizeof(CoreStructPayload)
 			+ coreArrays_.capacity() * sizeof(CoreArrayPayload)
@@ -1000,6 +1037,8 @@ std::size_t TypeStore::payloadBytes() const
 	// a conservative node overhead so the footprint test sees them.
 	for (const auto& entry : componentIntern_)
 		bytes += entry.first.size() + sizeof(TypeId) + 2 * sizeof(void*);
+	for (const auto& entry : coreImportIntern_)
+		bytes += entry.first.size() + sizeof(TypeId) + 2 * sizeof(void*);
 	for (const auto& entry : schemeIntern_)
 		bytes += entry.first.size() + sizeof(SchemeId) + 2 * sizeof(void*);
 	for (const auto& entry : canonicalAbi_) {
@@ -1022,6 +1061,7 @@ std::size_t TypeStore::allocationCount() const
 	add(coreSupertypes_);
 	add(coreStorage_);
 	add(coreFields_);
+	add(coreImports_);
 	add(coreFuncs_);
 	add(coreStructs_);
 	add(coreArrays_);
@@ -1050,6 +1090,7 @@ std::size_t TypeStore::allocationCount() const
 	add(strings_);
 	add(stringIds_);
 	add(componentIntern_);
+	add(coreImportIntern_);
 	add(schemes_);
 	add(schemeIntern_);
 	if (!canonicalAbi_.empty())
@@ -1119,6 +1160,17 @@ const CanonFieldType& CoreTypeView::arrayElement() const
 		return pending_->arrayElement;
 	const TypeRecord& record = store_->record(id_);
 	return store_->coreArrays_[record.payload].element;
+}
+
+CanonHeapType CoreTypeView::importBound() const
+{
+	if (pending_)
+		throw std::runtime_error(
+				"type store: a pending canonical type is not an import");
+	const TypeRecord& record = store_->record(id_);
+	if (record.kind != TypeKind::CoreImport)
+		throw std::runtime_error("type store: record is not an imported type");
+	return store_->coreImports_[record.payload].bound;
 }
 
 TypeKind ComponentTypeView::kind() const

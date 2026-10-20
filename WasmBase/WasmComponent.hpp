@@ -20,11 +20,13 @@ struct Component : public Artifact {
 	std::vector<ComponentSection> sections;
 	std::vector<std::unique_ptr<Module>> coreModules;
 	std::vector<CoreInstance> coreInstances;
-	std::vector<CoreTypeDef> coreTypes;
+	// Mutable so validate() can release the parser AST after the canonical
+	// Store records are published (TYPE_MODEL TM-10).
+	mutable std::vector<CoreTypeDef> coreTypes;
 	std::vector<std::unique_ptr<Component>> components;
 	std::vector<ComponentInstance> instances;
 	std::vector<Alias> aliases;
-	std::vector<ComponentTypeDef> types;
+	mutable std::vector<ComponentTypeDef> types;
 	std::vector<Canon> canons;
 	std::vector<Start> starts;
 	std::vector<ImportDecl> imports;
@@ -41,6 +43,10 @@ struct Component : public Artifact {
 	// Parallel to localTypeIds: the alpha-equivalent scheme identity for an open
 	// type. Exactly one of typeId(i)/schemeId(i) is set for a validated type.
 	mutable std::vector<SchemeId> localSchemeIds;
+	// Validation may run only once now that it releases the parser AST. The
+	// snapshot keeps buildIndexSpaces() available without re-parsing.
+	mutable bool validated_ = false;
+	mutable std::optional<ComponentIndexSpaces> indexSpaces_;
 
 	Component();
 
@@ -79,6 +85,7 @@ protected:
 	void parseBody(Elv::Io::Device& file, std::optional<uint64_t> end) override;
 
 private:
+	void releaseParserAst() const;
 	void parseSections(Elv::Io::Device& file, std::optional<uint64_t> end,
 			unsigned depth);
 	void parseSectionPayload(ComponentSection& section,

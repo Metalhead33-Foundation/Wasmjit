@@ -296,6 +296,9 @@ ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver)
 	// can evaluate any initializer expressions (which might call imports).
 	resolveImports(resolver);
 
+	if (!module.importTypes.empty())
+		resolveTypeImports(resolver);
+
 	// ── Step 2: Set up the memory index space ──────────────────────
 	// Imported memories were resolved by resolveImports(); locally-defined
 	// ones are allocated in the Store here. Either way the instance only
@@ -441,8 +444,12 @@ void ModuleInstance::registerExports(ImportRegistrar& registrar, std::string_vie
 			break;
 		}
 		case ExternalKind::Type:
-			throw std::runtime_error(
-					"type exports are not linked yet (TYPE_IMPORTS.md TI-0)");
+			if (ex.index >= module->typeCount())
+				throw std::runtime_error(
+						"module exports a type index outside its index space");
+			registrar.registerType(moduleName, ex.name,
+					module->typeId(LocalTypeIdx{ex.index}));
+			break;
 		case ExternalKind::Tag: {
 			// Publish the process-wide TagId, not the module-local index: a
 			// re-exported imported tag must keep the exporter's identity
@@ -455,6 +462,22 @@ void ModuleInstance::registerExports(ImportRegistrar& registrar, std::string_vie
 		}
 	}
 }
+
+void ModuleInstance::resolveTypeImports(ImportResolver& resolver)
+{
+	importedTypeIds.clear();
+	importedTypeIds.reserve(module->importTypes.size());
+	for (const ImportType& import : module->importTypes) {
+		const std::optional<TypeId> provided = resolver.resolveType(
+				import.moduleName, import.fieldName, import.bound);
+		if (!provided)
+			throw std::runtime_error("unresolved type import `" +
+					import.moduleName + "` `" + import.fieldName +
+					"` (the provided type does not satisfy its `sub` bound)");
+		importedTypeIds.push_back(*provided);
+	}
+}
+
 
 void ModuleInstance::resolveImports(ImportResolver& resolver)
 {

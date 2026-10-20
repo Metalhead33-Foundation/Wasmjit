@@ -241,6 +241,8 @@ bool abstractMatches(AbstractHeapType a, AbstractHeapType b) {
 
 bool concreteMatchesAbstract(const CanonView& v, TypeId id, AbstractHeapType abs) {
 	const CoreTypeView t = v.type(id);
+	if (t.kind() == CanonTypeKind::Import)
+		return abstractMatches(t.importBound().abstract, abs);
 	switch (abs) {
 	case AbstractHeapType::Any:
 	case AbstractHeapType::Eq:
@@ -255,6 +257,18 @@ bool concreteMatchesAbstract(const CanonView& v, TypeId id, AbstractHeapType abs
 // Nominal subtyping between concrete types: equality or a declared supertype.
 bool concreteMatches(const CanonView& v, TypeId a, TypeId b) {
 	if (a == b) return true;
+	const CoreTypeView actual = v.type(a);
+	if (actual.kind() == CanonTypeKind::Import) {
+		// An imported type is a subtype of its abstract bound only; it does not
+		// become a structurally known definition.
+		const CoreTypeView expected = v.type(b);
+		return expected.kind() == CanonTypeKind::Import
+				&& abstractMatches(actual.importBound().abstract,
+						expected.importBound().abstract);
+	}
+	const CoreTypeView expected = v.type(b);
+	if (expected.kind() == CanonTypeKind::Import)
+		return concreteMatchesAbstract(v, a, expected.importBound().abstract);
 	std::unordered_set<uint32_t> seen;
 	std::vector<TypeId> stack{a};
 	seen.insert(a.value);
@@ -309,6 +323,8 @@ bool fieldMatches(const CanonView& v, const CanonFieldType& a, const CanonFieldT
 // the subtype, `expected` the declared supertype's comptype.
 bool compMatches(const CanonView& v, CoreTypeView actual, CoreTypeView expected) {
 	if (actual.kind() != expected.kind()) return false;
+	if (actual.kind() == CanonTypeKind::Import)
+		return true;
 	switch (actual.kind()) {
 	case CanonTypeKind::Func: {
 		const auto actualParams = actual.funcParams();
@@ -402,10 +418,16 @@ std::vector<TypeId> TypeRegistry::internGroup(std::span<const Subtype> scratch,
 
 
 std::vector<TypeId> TypeRegistry::internModule(std::span<const Subtype> types,
-											   std::span<const TypeGroup> groups)
+											   std::span<const TypeGroup> groups,
+											   std::span<const TypeId> prefix)
 {
-	parsedTypes += types.size();
+	if (prefix.size() > types.size())
+		throw std::runtime_error(
+				"type registry: imported-type prefix is larger than the type space");
+	parsedTypes += types.size() - prefix.size();
 	std::vector<TypeId> localToGlobal(types.size());
+	for (std::size_t i = 0; i < prefix.size(); ++i)
+		localToGlobal[i] = prefix[i];
 
 	for (const TypeGroup& group : groups) {
 		const uint32_t groupFirst = group.first.value;

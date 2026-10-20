@@ -26,7 +26,8 @@ public:
 	// TypeId of every local type (indexed by LocalTypeIdx). `types` is a
 	// temporary parser buffer owned by the caller; it is not retained.
 	std::vector<TypeId> internModule(std::span<const Subtype> types,
-									 std::span<const TypeGroup> groups);
+			std::span<const TypeGroup> groups,
+			std::span<const TypeId> prefix = {});
 
 	// Intern one `rec` group against an existing local-index -> TypeId map.
 	// `scratch` must contain the group's members at `group.first` (earlier slots

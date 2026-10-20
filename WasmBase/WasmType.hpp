@@ -1,5 +1,6 @@
 #ifndef WASMTYPE_HPP
 #define WASMTYPE_HPP
+#include "WasmTypeIdentity.hpp"
 #include <cstdint>
 #include <vector>
 #include <variant>
@@ -350,6 +351,16 @@ struct ImportGlobal : public Import {
 struct ImportTag : public Import {
 	uint8_t attribute; // currently always 0x00
 	uint32_t typeIdx;
+};
+
+// A type import (docs/proposals/TYPE_IMPORTS.md TI-1). The MVP bound is
+// always `sub <abstract heaptype>`; the imported type enters the local type
+// index space before every definition. `typeId` is the process-wide nominal
+// identity derived from (module, field, bound).
+struct ImportType : public Import {
+	uint8_t boundKind = 0; // 0x00 = sub
+	AbstractHeapType bound = AbstractHeapType::Any;
+	TypeId typeId{TypeId::kNone};
 };
 struct Global {
 	GlobalType type;

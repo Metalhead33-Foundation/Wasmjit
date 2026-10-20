@@ -1,11 +1,12 @@
 # Threads and Atomics — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 4 — TH-1 landed:
+Status: design note / implementation reference (revision 5 — TH-1 landed:
 single-agent atomics and the single-agent form of wait/notify execute, and the
-submodule's `atomic.wast` is wired in and curated. §3 records the project's
-explicit execution model: **single-agent only, for the foreseeable future**;
-true multithreading/agents are *deferred indefinitely but not ruled out*, and
-the single-agent build is a long-term stop-gap, not an oversight).
+submodule's `atomic.wast` is wired in and curated. TH-6 adds the component async
+interfaces and their single-agent backend. §3 records the project's explicit
+execution model: **single-agent only, for the foreseeable future**; true
+multithreading/agents are *deferred indefinitely but not ruled out*, and the
+single-agent build is a long-term stop-gap, not an oversight).
 Audience: anyone touching `WasmMemory`, `WasmStore`, `WasmOpcode`,
 `WasmOpcodeDispatcher`, `LibjitOpcodeDispatcher`, or the test harness.
 
@@ -257,24 +258,28 @@ they are recorded here:
 | ~~T10~~ | ~~**No test coverage is wired in.**~~ **Done (TH-1/TH-4):** `proposals/threads/atomic.wast` is listed explicitly in `Test/Test.pro`, converts at build time, runs as `spec: atomic` (**249 passed / 0 failed / 48 skipped** — the skips are `assert_invalid` module-validation cases) and is curated in `Test/wast_supported.txt`. | `Test/Test.pro`, `Test/wast_supported.txt` | Closed |
 | T11 | **The tail-call trampoline's pending state is process-global**, so two agents would corrupt each other's tail-call chains. Must become per-agent before any multi-agent build. | `WASM::g_tailCallState` (`WasmBase/WasmValue.hpp`); §4.5 | Medium (blocks multi-agent; part of the deferred TH-5) |
 
-## 5.1 Component-model async, streams, futures and tasks — deferred here
+## 5.1 Component-model async, streams, futures and tasks — single-agent backend
 
-The Component Model's asynchronous execution model is explicitly folded into
-this note rather than duplicated in `COMPONENT_MODEL.md`:
+The Component Model's asynchronous execution model is folded into this note
+rather than duplicated in `COMPONENT_MODEL.md`:
 
-- `stream`/`future` **read**, **write**, **cancel-read**, **cancel-write**,
-  **forward**, waitable sets, subtasks and task scheduling are deferred
-  **indefinitely** together with true multithreading.
-- The existing component runtime only allocates and drops opaque
-  stream/future handles (`stream.new`/`future.new` and the drop builtins).
-  Those handles are table entries; they do **not** implement copying, blocking,
-  wakeups or cancellation.
-- This is not a rejection of the component-model concurrency proposal. It is
-  the same staging decision as §3: single-agent execution and synchronous
-  component calls first. Revisit stream/future copy semantics only when the
-  thread/waitable machinery in §§7–8 exists, because every read/write/cancel
-  operation is defined in terms of task state, waitables and the exclusive
-  thread.
+- The **interfaces** are implemented in `WasmBase/WasmComponentAsync.hpp`:
+  task/context/backpressure state, waitables and waitable sets, stream/future
+  endpoints over a shared element queue, copy results/event codes, and a
+  `ComponentExecutor` seam with a `SingleAgentExecutor` implementation
+  (`thread.index` 0, `available-parallelism` 1, no OS thread).
+- The **single-agent semantics execute** in `LibJIT::ComponentRuntime`:
+  `stream.new`/`future.new`, read/write (including a blocked async read completed
+  by a later write), cancel, drop and forward; `task.return`/`task.cancel`;
+  `context.get`/`set`; `backpressure.inc`/`dec`; `waitable-set.new/wait/poll/
+  drop`, `waitable.join`; `subtask.cancel`/`drop`; `error-context.new/
+  debug-message/drop`; and `thread.*` single-agent answers. A synchronous copy
+  that would block traps with a named single-agent error rather than hanging.
+- **Deferred**: true concurrent copies, a second agent, real wakeups, an
+  out-of-line event loop, and the async lift/lower calling convention. These are
+  the same staging decision as §3/`TD9`: one agent, synchronous calls, no
+  scheduler. The interface is deliberately the seam a future TH-5 backend fills
+  in, so no caller changes when that happens.
 
 ## 6. Where we can and should play fast and loose
 
@@ -317,6 +322,7 @@ Ordered by value; `TH-n` is independent of the other documents' milestones.
 | **TH-3 — Shared-memory hygiene** | ◑ Partial: import matching compares shared-ness, `SharedLinearMemory` never moves its base, and the validator requires a maximum (T6). Still open: `size`/`grow` and active data segments are not fenced (T7/T8) — invisible while single-agent; T5 is a documented deviation. | T6, T7, T8 | Shared memory without a max is rejected; `memory.grow`/`size` fenced. |
 | **TH-4 — Threads test coverage** | ✅ Done: `proposals/threads/atomic.wast` is wired into `Test/Test.pro` (single-agent atomic semantics, including the 28 misaligned `assert_trap`s) and curated. | T10 | Done: `spec: atomic` runs in the default suite (`Test/wast_supported.txt`). |
 | **TH-5 — Optional: real agents** | ✗ **Deferred indefinitely (not ruled out):** an embedder API to run an instance on another OS thread, with a real waiter table. Only if an embedder needs it. Until then the engine is explicitly single-agent (`TD9`). | T9 | Two agents produce the same results as the sequentially-consistent model. |
+| **TH-6 — Component async interface** | ✅ `WasmComponentAsync.hpp` defines tasks, waitables, stream/future endpoints and the `ComponentExecutor` seam; `SingleAgentExecutor` and `ComponentRuntime` execute the synchronous subset. | T9/T11 (interfaces), TH-5 (backend) | All single-agent async tests pass; replacing the executor is the only change a multi-agent backend needs. |
 
 Guardrails: run `./WasmJit '~[spec]'` after each step; keep the single-agent
 default so existing behaviour is unchanged. The single-agent choice is

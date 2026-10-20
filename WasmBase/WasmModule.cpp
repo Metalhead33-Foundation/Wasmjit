@@ -102,10 +102,16 @@ void Module::processTypeSection(Elv::Io::Device& file, const Section& section)
 	uint32_t numGroups;
 	wasmStream >> Elv::Io::Leb(numGroups);
 
-	// Parse into a scratch buffer; the Store's TypeRegistry takes ownership of
-	// the finished block and we keep a non-owning span view of it.
-	std::vector<Subtype> parsedTypes;
+	// Type imports occupy the low indices of the type index space. The parser
+	// scratch vector therefore starts with one placeholder per imported type;
+	// internModule receives the nominal imported ids as a prefix and only reads
+	// the positions that belong to real definitions.
+	std::vector<Subtype> parsedTypes(importTypes.size());
 	std::vector<TypeGroup> parsedGroups;
+	std::vector<TypeId> importedIds;
+	importedIds.reserve(importTypes.size());
+	for (const ImportType& import : importTypes)
+		importedIds.push_back(import.typeId);
 	for(uint32_t i = 0; i < numGroups; ++i)
 	{
 		uint8_t typePrefix;
@@ -127,8 +133,10 @@ void Module::processTypeSection(Elv::Io::Device& file, const Section& section)
 	// Canonicalize and intern the groups; typeIds[i] is the process-wide identity
 	// of parsedTypes[i]. The parser vector is intentionally a local scratch
 	// buffer: after this call the Module owns no Subtype payload (TM-6).
-	typeIds = Store::global().types().internModule(parsedTypes, parsedGroups);
+	typeIds = Store::global().types().internModule(parsedTypes, parsedGroups,
+			importedIds);
 	typeGroups = std::move(parsedGroups);
+	typeSectionProcessed = true;
 	typeIndexById.clear();
 	typeIndexById.reserve(typeIds.size());
 	for (uint32_t i = 0; i < typeIds.size(); ++i)
@@ -187,11 +195,50 @@ void Module::processImportSection(Elv::Io::Device& file, const Section& section)
 			this->importTags.push_back({{moduleName, fieldName}, attribute, typeIdx});
 		}
 		else if (kind == (uint8_t)ExternalKind::Type) {
-			// Type Imports/Exports is not linked yet. Reject the descriptor by
-			// name instead of leaving its `typetype` payload in the stream and
-			// desynchronising every following import (TYPE_IMPORTS.md TI-0).
-			throw std::runtime_error(
-					"type imports are not supported (TYPE_IMPORTS.md TI-0)");
+			// TI-1: `typetype ::= boundkind:u8 heaptype`. The MVP permits only
+			// `sub <abstract heaptype>` and only in the pre-type section.
+			if (typeSectionProcessed)
+				throw std::runtime_error(
+						"type imports must precede the type section "
+						"(TYPE_IMPORTS.md TI-1)");
+			uint8_t boundKind;
+			wasmStream >> boundKind;
+			if (boundKind != 0x00)
+				throw std::runtime_error(
+						"type import bound kind is not `sub` (TYPE_IMPORTS.md)");
+			int32_t heapType;
+			wasmStream >> Elv::Io::Leb(heapType);
+			if (heapType >= 0)
+				throw std::runtime_error(
+						"type import bound must be an abstract heap type "
+						"(TYPE_IMPORTS.md TI-1)");
+			const auto bound = static_cast<AbstractHeapType>(heapType);
+			switch (bound) {
+			case AbstractHeapType::Func:
+			case AbstractHeapType::Extern:
+			case AbstractHeapType::Any:
+			case AbstractHeapType::Eq:
+			case AbstractHeapType::I31:
+			case AbstractHeapType::Struct:
+			case AbstractHeapType::Array:
+			case AbstractHeapType::Exn:
+			case AbstractHeapType::None:
+			case AbstractHeapType::NoFunc:
+			case AbstractHeapType::NoExtern:
+			case AbstractHeapType::NoExn:
+				break;
+			default:
+				throw std::runtime_error(
+						"type import bound is not a supported abstract heap type");
+			}
+			ImportType import;
+			import.moduleName = moduleName;
+			import.fieldName = fieldName;
+			import.boundKind = boundKind;
+			import.bound = bound;
+			import.typeId = Store::global().types().store().internCoreImport(
+					moduleName, fieldName, bound);
+			this->importTypes.push_back(std::move(import));
 		}
 		else {
 			throw std::runtime_error("unknown import kind");
@@ -306,9 +353,8 @@ void Module::processExportSection(Elv::Io::Device& file, const Section& section)
 		uint8_t kindByte;
 		wasmStream >> kindByte;
 		ex.kind = static_cast<ExternalKind>(kindByte);
-		if (ex.kind == ExternalKind::Type)
-			throw std::runtime_error(
-					"type exports are not supported (TYPE_IMPORTS.md TI-0)");
+		if (ex.kind > ExternalKind::Type)
+			throw std::runtime_error("unknown export kind");
 
 		// 3. Read the index within that kind's index space
 		wasmStream >> Elv::Io::Leb(ex.index);
@@ -980,6 +1026,9 @@ void Module::validateValueTypes() const
 		case CanonTypeKind::Array:
 			checkStorage(view.arrayElement().storage, "array element", i);
 			break;
+		case CanonTypeKind::Import:
+			// An imported type has only an abstract representation bound.
+			break;
 		}
 	}
 	for (size_t i = 0; i < importTables.size(); ++i)
@@ -1044,6 +1093,20 @@ void Module::parseBody(Elv::Io::Device& file, std::optional<uint64_t> end)
 	}
 	}
 	processSecetions(file);
+
+	// A module may contain only type imports and no type section. They still
+	// occupy the local type index space (and are the only entries in it).
+	if (!typeSectionProcessed && !importTypes.empty()) {
+		typeIds.clear();
+		typeIds.reserve(importTypes.size());
+		for (const ImportType& import : importTypes)
+			typeIds.push_back(import.typeId);
+		typeIndexById.clear();
+		for (uint32_t i = 0; i < typeIds.size(); ++i)
+			if (!typeIds[i].isNone())
+				typeIndexById.emplace(typeIds[i].value, i);
+		typeSectionProcessed = true;
+	}
 
 	// Reject a module that declares a value type this engine cannot lower, rather
 	// than compiling a null operand into a function (docs/NULL_JIT_VALUE_DIAGNOSIS.md).

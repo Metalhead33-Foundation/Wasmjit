@@ -1330,6 +1330,76 @@ TEST_CASE("component script harness invokes a component")
 	REQUIRE(report.passed == 2);
 }
 
+TEST_CASE("component script marshals structured values")
+{
+	// Variant and map arguments/results cross the scalar-only boundary: the
+	// harness builds a ComponentValue from the JSON and compares the structured
+	// result, using the function's canonical component types.
+	const auto script = Spec::Script::parse(R"json(
+		{"source_filename":"component_structured.json","commands":[
+			{"type":"module","line":1,"filename":"component_runtime_variant.wasm","module_type":"binary"},
+			{"type":"assert_return","line":2,
+			 "action":{"type":"invoke","field":"echo","args":[
+				{"type":"variant","case":"i","payload":{"type":"u32","value":"7"}}]},
+			 "expected":[{"type":"variant","case":"i","payload":{"type":"u32","value":"7"}}]},
+			{"type":"module","line":3,"filename":"component_runtime_map.wasm","module_type":"binary"},
+			{"type":"assert_return","line":4,
+			 "action":{"type":"invoke","field":"echo","args":[
+				{"type":"map","entries":[
+					{"key":{"type":"u32","value":"7"},"value":{"type":"u32","value":"9"}}]}]},
+			 "expected":[{"type":"map","entries":[
+				{"key":{"type":"u32","value":"7"},"value":{"type":"u32","value":"9"}}]}]}
+		]}
+	)json");
+	LibJIT::Context context;
+	const Spec::ScriptReport report = Spec::runScript(script, WASM_TEST_DIR, context);
+	for (const std::string& failure : report.failures)
+		fprintf(stderr, "FAILURE: %s\n", failure.c_str());
+	REQUIRE(report.failed == 0);
+	REQUIRE(report.passed == 4);
+}
+
+TEST_CASE("component start executes a decoded value definition")
+{
+	// Preamble, one component func type `(param "x" u32)`, an imported host
+	// function "start", a u32 value 42, and a start definition calling the
+	// import with that value.
+	const std::vector<uint8_t> bytes = {
+		0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00,
+		0x07, 0x08, 0x01, 0x40, 0x01, 0x01, 0x78, 0x79, 0x01, 0x00,
+		0x0a, 0x0a, 0x01, 0x00, 0x05, 0x73, 0x74, 0x61, 0x72, 0x74,
+		0x01, 0x00,
+		0x0c, 0x04, 0x01, 0x79, 0x01, 0x2a,
+		0x09, 0x04, 0x00, 0x01, 0x00, 0x00
+	};
+	const std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	REQUIRE(artifact->isComponent());
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	REQUIRE(component->values.size() == 1);
+	REQUIRE(component->starts.size() == 1);
+
+	uint64_t observed = 0;
+	LibJIT::ComponentFunction host;
+	host.params = {WASM::AbiCoreType::I32};
+	host.callValues = [&observed](std::span<const LibJIT::ComponentValue> args,
+			std::span<LibJIT::ComponentValue>) {
+		REQUIRE(args.size() == 1);
+		observed = args[0].u64;
+	};
+	LibJIT::ComponentRuntime::ComponentImports imports;
+	imports.emplace("start", host);
+
+	LibJIT::Context context;
+	LibJIT::ComponentRuntime runtime(context.rawContext(), *component,
+			std::move(imports));
+	REQUIRE(observed == 42);
+}
+
 TEST_CASE("component runtime instantiates a nested component")
 {
 	auto artifact = loadTestArtifact("component_runtime_nested");
@@ -1368,6 +1438,24 @@ TEST_CASE("component runtime stream handles")
 	WASM::callCallable<void>(runtime.coreFunction(2), writable);
 }
 
+TEST_CASE("component runtime executes single-agent async builtins")
+{
+	// THREADS.md TD9: the async surface executes synchronously on one agent.
+	// The fixture blocks an async stream read, completes it with a write, and
+	// polls the resulting waitable-set event; it then round-trips a future.
+	auto artifact = loadTestArtifact("component_runtime_async");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	LibJIT::Context context;
+	LibJIT::ComponentRuntime runtime(context.rawContext(), *component);
+	const auto function = runtime.exportedFunction("run");
+	REQUIRE(function.has_value());
+	WASM::Value result;
+	function->call(std::span<const WASM::Value>(), {&result, 1});
+	REQUIRE(result.u32 == 0);
+}
+
 TEST_CASE("component runtime resource handles")
 {
 	auto artifact = loadTestArtifact("component_runtime_resource");
@@ -1381,7 +1469,25 @@ TEST_CASE("component runtime resource handles")
 	REQUIRE(handle > 0);
 	REQUIRE(WASM::callCallable<int32_t>(
 			runtime.coreFunction(1), handle) == 77);
+	const WASM::TypeId resourceType = component->typeId(0);
+	REQUIRE_FALSE(resourceType.isNone());
+	const uint32_t scope = runtime.beginBorrowScope();
+	const uint32_t borrow = runtime.useResourceHandle(handle, resourceType, true,
+			scope);
+	runtime.validateResourceHandle(borrow, resourceType);
+	// A borrow cannot itself be lent, and it dies with its scope.
+	REQUIRE_THROWS_AS(runtime.useResourceHandle(borrow, resourceType, true, scope),
+			std::runtime_error);
+	runtime.endBorrowScope(scope);
+	REQUIRE_THROWS_AS(runtime.validateResourceHandle(borrow, resourceType),
+			std::runtime_error);
+
 	WASM::callCallable<void>(runtime.coreFunction(2), handle);
+	// Use-after-drop and double-drop are traps, never undefined behaviour.
+	REQUIRE_THROWS_AS(runtime.validateResourceHandle(handle, resourceType),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(WASM::callCallable<void>(runtime.coreFunction(2), handle),
+			std::runtime_error);
 }
 
 TEST_CASE("component runtime links host component function imports")
@@ -1411,6 +1517,34 @@ TEST_CASE("component runtime links host component function imports")
 	WASM::Value results[1];
 	function->call(args, results);
 	REQUIRE(results[0].i32 == 42);
+}
+
+TEST_CASE("component runtime transcodes canonical string encodings")
+{
+	auto artifact = loadTestArtifact("component_runtime_string_encodings");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	LibJIT::Context context;
+	LibJIT::ComponentRuntime runtime(context.rawContext(), *component);
+	const std::array<const char*, 3> encodings = {"utf8", "utf16", "latin1"};
+	const std::array<const char*, 4> samples = {
+		"hello", "h\xC3\xA9llo", "\xF0\x9F\x98\x80 smile", ""
+	};
+	for (const char* encoding : encodings) {
+		const auto function = runtime.exportedFunction(encoding);
+		REQUIRE(function.has_value());
+		REQUIRE(function->callValues);
+		for (const char* sample : samples) {
+			LibJIT::ComponentValue input;
+			input.kind = LibJIT::ComponentValue::Kind::String;
+			input.string = sample;
+			LibJIT::ComponentValue output;
+			function->callValues({&input, 1}, {&output, 1});
+			REQUIRE(output.kind == LibJIT::ComponentValue::Kind::String);
+			REQUIRE(output.string == sample);
+		}
+	}
 }
 
 TEST_CASE("component runtime lowers a host import to a core callable")
@@ -1532,6 +1666,37 @@ TEST_CASE("component instantiation checks exact core module types")
 		rejected = true;
 	}
 	REQUIRE(rejected);
+}
+
+TEST_CASE("canonical ABI signatures are instance-owned")
+{
+	// The Store owns the derived metadata; each ComponentRuntime owns the
+	// signatures it actually uses. Two instances of the same component share a
+	// TypeId but not a signature object (TYPE_MODEL TM-15).
+	auto artifact = loadTestArtifact("component_runtime");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	LibJIT::Context context;
+	LibJIT::ComponentRuntime first(context.rawContext(), *component);
+	LibJIT::ComponentRuntime second(context.rawContext(), *component);
+	const auto function = first.exportedFunction("add");
+	REQUIRE(function.has_value());
+	REQUIRE(!function->typeId.isNone());
+	const WASM::CanonicalAbiSignature* firstSignature =
+			first.abi().resolve(function->typeId, function->options);
+	const WASM::CanonicalAbiSignature* firstAgain =
+			first.abi().resolve(function->typeId, function->options);
+	REQUIRE(firstSignature != nullptr);
+	REQUIRE(firstSignature == firstAgain);
+	const WASM::CanonicalAbiSignature* secondSignature =
+			second.abi().resolve(function->typeId, function->options);
+	REQUIRE(secondSignature != nullptr);
+	REQUIRE(secondSignature != firstSignature);
+	REQUIRE(first.abi().instanceId() != second.abi().instanceId());
+	REQUIRE(first.abi().signatureCount() == 1);
+	REQUIRE(second.abi().signatureCount() == 1);
+	REQUIRE(first.abi().hits() >= 1);
 }
 
 TEST_CASE("canonical ABI metadata is keyed by type and options")
@@ -1997,26 +2162,34 @@ TEST_CASE("component instances and declarator types are parsed")
 	REQUIRE(decls != nullptr);
 	REQUIRE(decls->types.size() == 2);
 	REQUIRE(decls->types[0].kind == WASM::ComponentTypeDef::Kind::Component);
+	// Validation released the parser declaration AST: the definition is a
+	// canonical TypeId and the payload is empty (TYPE_MODEL TM-10).
+	REQUIRE(std::holds_alternative<std::monostate>(decls->types[0].declarations));
+	REQUIRE_FALSE(decls->typeId(0).isNone());
+	// After validation the declaration AST is gone; the canonical Store record
+	// carries the same import/export names and sorts.
+	const auto componentDecls = typeStore().componentType(decls->typeId(0)).declarations();
 	bool sawImport = false;
 	bool sawExport = false;
-	for (const WASM::ComponentDecl& decl : decls->types[0].componentDecls()) {
-		if (decl.kind == WASM::ComponentDecl::Kind::Import) {
+	for (const WASM::ComponentDeclRecord& decl : componentDecls) {
+		const std::string name(typeStore().string(decl.name));
+		if (name == "x") {
 			sawImport = true;
-			REQUIRE(decl.import().name.name == "x");
-			REQUIRE(decl.import().type.kind == WASM::ExternType::Kind::Func);
-		} else if (decl.kind == WASM::ComponentDecl::Kind::Export) {
+			REQUIRE(decl.sort == static_cast<uint16_t>(WASM::ComponentSort::Func));
+		} else if (name == "y") {
 			sawExport = true;
-			REQUIRE(decl.exportDecl().name.name == "y");
+			REQUIRE(decl.sort == static_cast<uint16_t>(WASM::ComponentSort::Func));
 		}
 	}
 	REQUIRE(sawImport);
 	REQUIRE(sawExport);
 	REQUIRE(decls->types[1].kind == WASM::ComponentTypeDef::Kind::Instance);
 	bool sawInstanceExport = false;
-	for (const WASM::InstanceDecl& decl : decls->types[1].instanceDecls()) {
-		if (decl.kind == WASM::InstanceDecl::Kind::Export) {
+	for (const WASM::ComponentDeclRecord& decl
+			: typeStore().componentType(decls->typeId(1)).declarations()) {
+		if (typeStore().string(decl.name) == "z") {
 			sawInstanceExport = true;
-			REQUIRE(decl.exportDecl().name.name == "z");
+			REQUIRE(decl.sort == static_cast<uint16_t>(WASM::ComponentSort::Func));
 		}
 	}
 	REQUIRE(sawInstanceExport);
@@ -2027,8 +2200,9 @@ TEST_CASE("component instances and declarator types are parsed")
 	REQUIRE(resources != nullptr);
 	REQUIRE(resources->types.size() == 3);
 	REQUIRE(resources->types[0].kind == WASM::ComponentTypeDef::Kind::Resource);
-	REQUIRE(resources->types[0].resource().rep.opcode == WASM::ValueTypeCode::I32);
-	REQUIRE_FALSE(resources->types[0].resource().destructor.has_value());
+	const auto resource = typeStore().componentType(resources->typeId(0)).resource();
+	REQUIRE(resource.rep.opcode == WASM::ValueTypeCode::I32);
+	REQUIRE_FALSE(resource.hasDestructor);
 	REQUIRE(componentTypeView(resources->types[1]).kind() == WASM::TypeKind::ComponentOwn);
 	REQUIRE(componentTypeView(resources->types[1]).typeRef() == 0);
 	REQUIRE(componentTypeView(resources->types[2]).kind() == WASM::TypeKind::ComponentBorrow);
@@ -2121,19 +2295,11 @@ TEST_CASE("component aliases and instance expressions are parsed")
 	REQUIRE(outer->coreTypes.size() == 1);
 	REQUIRE(outer->types.size() == 1);
 	REQUIRE(outer->types[0].kind == WASM::ComponentTypeDef::Kind::Instance);
-	bool sawOuter = false;
-	for (const WASM::InstanceDecl& decl : outer->types[0].instanceDecls()) {
-		if (decl.kind == WASM::InstanceDecl::Kind::Alias) {
-			sawOuter = true;
-			REQUIRE(decl.alias().kind == WASM::Alias::Kind::Outer);
-			REQUIRE(decl.alias().outerCount == 1);
-			REQUIRE(decl.alias().index == 0);
-			REQUIRE(decl.alias().sort.sort == WASM::ComponentSort::Core);
-			REQUIRE(decl.alias().sort.core.has_value());
-			REQUIRE(decl.alias().sort.core->sort == WASM::CoreSort::Type);
-		}
-	}
-	REQUIRE(sawOuter);
+	// The only declaration is an outer alias, which is syntax rather than an
+	// instance-type export, so the canonical declaration set is empty. The
+	// parser AST that held the alias is released after validation.
+	REQUIRE(typeStore().componentType(outer->typeId(0)).declarations().empty());
+	REQUIRE_FALSE(outer->typeId(0).isNone());
 }
 
 TEST_CASE("core module type imports cover all core external kinds")
@@ -2288,6 +2454,74 @@ TEST_CASE("component start and value sections are parsed")
 	REQUIRE(component->values[0].encoded[0] == 0x01);
 }
 
+TEST_CASE("core type imports link by their abstract bound")
+{
+	// Exporter: one struct type, exported as "t".
+	const std::vector<uint8_t> exporterBytes = {
+		0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x05, 0x01, 0x5f, 0x01, 0x7f, 0x00,
+		0x07, 0x05, 0x01, 0x01, 0x74, 0x05, 0x00
+	};
+	// Importer: a pre-type import `(import "m" "t" (type (sub any)))`, a local
+	// function type whose parameter is `(ref null $t)`, and an exported no-op.
+	auto importerBytes = [](uint8_t bound) {
+		return std::vector<uint8_t>{
+			0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+			0x02, 0x08, 0x01, 0x01, 0x6d, 0x01, 0x74, 0x05, 0x00, bound,
+			0x01, 0x06, 0x01, 0x60, 0x01, 0x63, 0x00, 0x00,
+			0x03, 0x02, 0x01, 0x01,
+			0x07, 0x05, 0x01, 0x01, 0x66, 0x00, 0x00,
+			0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b
+		};
+	};
+	const auto parseModule = [](const std::vector<uint8_t>& bytes) {
+		const std::span<const std::byte> span(
+				reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+		Euph::Io::ConstBufferDevice device(span);
+		auto artifact = WASM::Artifact::parse(device);
+		REQUIRE(artifact != nullptr);
+		REQUIRE(artifact->isCoreModule());
+		return artifact;
+	};
+
+	auto exporterArtifact = parseModule(exporterBytes);
+	WASM::Module* exporter = exporterArtifact->asCoreModule();
+	REQUIRE(exporter != nullptr);
+	REQUIRE(exporter->importTypes.empty());
+	REQUIRE(exporter->typeCount() == 1);
+	const WASM::TypeId exportedType = exporter->typeId(WASM::LocalTypeIdx{0});
+
+	LibJIT::Context context;
+	LibJIT::ModuleCompiler compiler(context.rawContext());
+	WASM::RegistryImportResolver emptyResolver;
+	auto exporterInstance = compiler.instantiate(*exporter, emptyResolver);
+	REQUIRE(exporterInstance.get() != nullptr);
+	WASM::RegistryImportResolver registry;
+	exporterInstance->registerExports(registry, "m");
+
+	const uint8_t anyBound = 0x6E; // AbstractHeapType::Any
+	auto importerArtifact = parseModule(importerBytes(anyBound));
+	WASM::Module* importer = importerArtifact->asCoreModule();
+	REQUIRE(importer != nullptr);
+	REQUIRE(importer->importTypes.size() == 1);
+	REQUIRE(importer->importTypes[0].bound == WASM::AbstractHeapType::Any);
+	REQUIRE(importer->typeCount() == 2);
+	REQUIRE(importer->typeView(0).kind() == WASM::CanonTypeKind::Import);
+	REQUIRE(importer->typeView(1).kind() == WASM::CanonTypeKind::Func);
+
+	auto importerInstance = compiler.instantiate(*importer, registry);
+	REQUIRE(importerInstance.get() != nullptr);
+	REQUIRE(importerInstance->typeImports().size() == 1);
+	REQUIRE(importerInstance->typeImports()[0] == exportedType);
+
+	// A `sub func` bound cannot be satisfied by a struct export.
+	const uint8_t funcBound = 0x70; // AbstractHeapType::Func
+	auto badArtifact = parseModule(importerBytes(funcBound));
+	WASM::Module* badImporter = badArtifact->asCoreModule();
+	REQUIRE(badImporter != nullptr);
+	REQUIRE_THROWS(compiler.instantiate(*badImporter, registry));
+}
+
 TEST_CASE("component type imports and exports enter the type index space")
 {
 	auto artifact = loadTestArtifact("component_typeimports");
@@ -2331,6 +2565,60 @@ TEST_CASE("an exported core module can be instantiated")
 	const auto moduleExport = spaces.resolve(WASM::CoreSort::Module, 1);
 	REQUIRE(moduleExport.has_value());
 	REQUIRE(moduleExport->kind == WASM::ComponentDefinitionKind::Export);
+}
+
+TEST_CASE("WIT JSON is ingested by the test harness")
+{
+	const auto package = Spec::WitPackage::parse(R"json({
+		"worlds": [{
+			"name": "demo",
+			"imports": {"interface-0": {"interface": {"id": 0}}},
+			"exports": {"run": {"function": {
+				"name": "run", "kind": "freestanding", "params": [], "result": "u32"}}},
+			"package": 0
+		}],
+		"interfaces": [{
+			"name": "iface",
+			"types": {},
+			"functions": {"add": {
+				"name": "add", "kind": "freestanding",
+				"params": [{"name": "a", "type": "u32"}, {"name": "b", "type": "u32"}],
+				"result": "u32"}},
+			"package": 0
+		}],
+		"packages": [{"name": "test:demo@0.1.0", "interfaces": {"iface": 0},
+			"worlds": {"demo": 0}}]
+	})json");
+	REQUIRE(package.name == "test:demo@0.1.0");
+	REQUIRE(package.interfaces.size() == 1);
+	REQUIRE(package.interfaces[0].name == "iface");
+	REQUIRE(package.interfaces[0].functions.size() == 1);
+	REQUIRE(package.interfaces[0].functions.at("add").params.size() == 2);
+	REQUIRE(package.interfaces[0].functions.at("add").params[0].second == "u32");
+	REQUIRE(package.interfaces[0].functions.at("add").result.has_value());
+	REQUIRE(*package.interfaces[0].functions.at("add").result == "u32");
+	REQUIRE(package.worlds.size() == 1);
+	REQUIRE(package.worlds[0].name == "demo");
+	REQUIRE(package.worlds[0].imports.at("interface-0") == "iface");
+	REQUIRE(package.worlds[0].exports.count("run") == 1);
+}
+
+TEST_CASE("component getter/setter annotations and strong uniqueness")
+{
+	// The valid fixture has a plain property, a method property and a static
+	// property. Each setter repeats its matching getter's property type.
+	auto artifact = loadTestArtifact("component_getters_setters");
+	REQUIRE(artifact != nullptr);
+	REQUIRE(artifact->asComponent() != nullptr);
+
+	// A setter without a preceding getter, a getter with parameters, and two
+	// names that canonicalize to the same strongly-unique name are rejected.
+	REQUIRE_THROWS_AS(loadTestArtifact("component_invalid_setter_without_getter"),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(loadTestArtifact("component_invalid_getter_params"),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(loadTestArtifact("component_invalid_strong_name"),
+			std::runtime_error);
 }
 
 TEST_CASE("invalid component references and types are rejected")

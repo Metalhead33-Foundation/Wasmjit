@@ -1,8 +1,10 @@
 # Type Imports and Exports — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / forward-looking proposal (revision 2 — TI-0 is done: the
-new external kind is decoded and rejected with a named error instead of
-desynchronising the import stream; TI-1…TI-4 remain).
+Status: design note / implementation reference (revision 3 — TI-0…TI-4 are
+done: type imports decode `sub <abstract heaptype>`, enter the local type index
+space before definitions, receive nominal Store ids, type exports are
+registered by name, and link-time matching enforces the declared bound.
+Private/opaque types remain post-MVP.)
 Audience: anyone touching `WasmModule` (type/import/export sections),
 `WasmTypeRegistry`, `WasmImport`, `WasmRegistryImportResolver`, or the
 validator.
@@ -55,40 +57,46 @@ only functions, tables, memories, globals and tags.
 
 ## 4. What we have implemented today
 
-- `ExternalKind` (`WasmBase/WasmType.hpp`) has `Function` 0, `Table` 1,
-  `Memory` 2, `Global` 3 and `Tag` 4; **there is no Type kind**.
-- `Module::processImportSection` (`WasmBase/WasmModule.cpp`) is an if-chain
-  over those five kinds with **no `else`**. An unknown kind is not consumed and
-  not rejected: the `typetype` payload stays in the stream, so a single type
-  import is silently dropped and a following import is decoded from the wrong
-  offset.
-- `processExportSection` casts any kind byte to `ExternalKind`. The validator's
-  export switch and `ModuleInstance::registerExports` have no Type arm, so a
-  type export is silently accepted and never registered.
-- `WasmTypeRegistry` already gives every type a canonical `TypeId` and supports
-  structural matching; `Module::typeIds` maps local indices to it. This is the
-  substrate a type-import implementation would use.
-- The registry (`WasmRegistryImportResolver`) keys functions, globals, memories,
-  tables and tags by name. It has **no type namespace**.
-- `Module::processSecetions` walks sections in file order, so an import section
-  before the type section would run before any type is registered.
+- `ExternalKind` has `Function` 0, `Table` 1, `Memory` 2, `Global` 3, `Tag` 4
+  and `Type` 5.
+- `Module::processImportSection` decodes a type import's `boundkind` and
+  abstract `heaptype`, rejects a post-type-section type import, and interns the
+  nominal `(module, field, bound)` identity through
+  `TypeStore::internCoreImport`. Type imports occupy the low indices of the
+  local type index space; `processTypeSection` passes their ids as the interning
+  prefix.
+- `processExportSection` accepts `ExternalKind::Type`; `WasmValidator` bounds-
+  checks the index; `ModuleInstance::registerExports` publishes
+  `module->typeId(index)` through `ImportRegistrar::registerType`.
+- `RegistryImportResolver` has a separate type namespace and
+  `resolveType(module, field, bound)` checks the provided type with
+  `WasmTypeRegistry::matchesHeap` before returning its canonical `TypeId`.
+- `CoreTypeView` exposes `CanonTypeKind::Import` and `importBound()`; matching,
+  JIT translation and validation treat an imported type as the abstract type its
+  bound denotes.
+- `ModuleInstance::typeImports()` records the resolved ids in import order.
 
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| TI1 | **Type external kind is decoded but not linked.** `ExternalKind::Type` exists; the decoder rejects imports/exports with a named TI-0 error so the stream stays aligned. Full `typetype`/bound and type-namespace linking are still absent. | `WasmType.hpp`, `WasmModule.cpp` | High |
-| TI2 | **No `typetype` / bound decoding.** `boundkind` and `heaptype` are never read, and a pre-type import section is not a supported ordering. | `WasmModule.cpp` | High |
-| TI3 | **Type exports are ignored.** Kind `0x05` in the export section is stored as an out-of-range `ExternalKind`, then skipped by both the validator and `registerExports`. | `WasmModule.cpp`, `WasmValidator.cpp`, `WasmModuleInstance.cpp` | High |
-| TI4 | **No type namespace in the resolver.** Even a decoded type import could not be resolved or matched against an exported type. | `WasmRegistryImportResolver.hpp` | High |
-| TI5 | **No validation/linking rule.** The bound/subtyping/transparency rules of §2 are not modelled. | `WasmValidator.cpp` | Medium |
-| TI6 | **No test.** No type-import script exists in the snapshot. | `extern/WasmTestsuite` | Low |
+| ~~TI1~~ | ~~Type external kind is decoded but not linked.~~ **Done (TI-1/TI-2).** | `WasmType.hpp`, `WasmModule.cpp`, `WasmTypeStore.cpp` | Closed |
+| ~~TI2~~ | ~~No `typetype` / bound decoding.~~ **Done (TI-1).** | `WasmModule.cpp` | Closed |
+| ~~TI3~~ | ~~Type exports are ignored.~~ **Done (TI-2).** | `WasmModule.cpp`, `WasmValidator.cpp`, `WasmModuleInstance.cpp` | Closed |
+| ~~TI4~~ | ~~No type namespace in the resolver.~~ **Done (TI-2/TI-3).** | `WasmRegistryImportResolver.*` | Closed |
+| ~~TI5~~ | ~~No validation/linking rule.~~ **Done (TI-3):** the provided type must be a subtype of the declared abstract bound; a mismatch fails instantiation. | `WasmValidator.cpp`, `WasmRegistryImportResolver.cpp` | Closed |
+| ~~TI6~~ | ~~No test.~~ **Done (TI-4):** hand-authored exporter/importer binaries cover a positive `sub any` link and a negative `sub func` link. | `Test/main.cpp` | Closed |
+
+Remaining post-MVP: `private.new`/`private.get`, opaque exports and casts to an
+imported type. The proposal leaves those out of the MVP; the importing module
+sees the imported type as abstract, so no dependent local type is rewritten to
+the provided definition.
 
 ## 6. Where we can and should play fast and loose
 
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
-| TID1 | **Reject kind `0x05` with a named error before full support.** | §3: type imports have no runtime semantics; `SAFETY.md`: an unsupported descriptor must not be guessed at; silent desync is worse than a clear rejection. | A type-import module fails at the boundary, not mid-section. |
+| TID1 | **Represent an imported type as a nominal Store record with an abstract representation bound.** | §3: type imports have no runtime semantics; `SAFETY.md`: an unsupported descriptor must not be guessed at. | No dependent local type is rewritten; a cast to an imported type is the proposal's own post-MVP item. |
 | TID2 | **Represent an imported type as a canonical `TypeId`** and reuse `WasmTypeRegistry` matching. | §3: no new class of type definitions; representation is known at compile time. | One identity mechanism for imports, exports and `(ref $t)`. |
 | TID3 | **Allow the pre-type import section only for type imports**, as the proposal says. | §2/§3: this is the one sanctioned ordering relaxation. | The MVP avoids mutual section dependencies. |
 | TID4 | **Defer `private.new`/`private.get` and opaque exports.** | §3: they are explicitly post-MVP. | A smaller, sound MVP. |
@@ -101,22 +109,23 @@ canonical registry, and an unmatched import must fail instantiation.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **TI-0 — Honest rejection** | Give `ExternalKind` a Type value or an explicit rejection and consume/report the descriptor. | TI1 | A type-import module fails with a named error instead of desynchronising. |
-| **TI-1 — Decode `typetype`** | Parse the pre-type import section, `boundkind` and `heaptype`; keep the declared bound. | TI1, TI2 | A hand-built module decodes its type imports. |
-| **TI-2 — Type exports** | Decode export kind `0x05`, register the type under its name and publish its canonical id. | TI3, TI4 | A second module can import the exported type. |
-| **TI-3 — Match at link time** | Check the provided type against the bound with registry subtyping; fail instantiation on a mismatch. | TI5 | A positive and a negative link test both behave as specified. |
-| **TI-4 — Tests** | Add MVP import/export and subtyping cases (private types excluded). | TI6 | The tests run in the default suite. |
+| **TI-0 — Honest rejection** | ✅ Consume/report the descriptor; later folded into TI-1. | TI1 | A type-import module never desynchronises the import stream. |
+| **TI-1 — Decode `typetype`** | ✅ Parse `boundkind`, the abstract `heaptype`, the pre-type import ordering and the local-index prefix. | TI1, TI2 | A hand-built module decodes its type imports. |
+| **TI-2 — Type exports** | ✅ Decode export kind `0x05`, validate the index, register the type under its name and publish its canonical id. | TI3, TI4 | A second module can import the exported type. |
+| **TI-3 — Match at link time** | ✅ Check the provided type against the bound with registry subtyping; fail instantiation on a mismatch. | TI5 | A positive and a negative link test both behave as specified. |
+| **TI-4 — Tests** | ✅ Hand-authored exporter/importer binaries cover `sub any` and a `sub func` mismatch (private types excluded). | TI6 | The tests run in the default suite. |
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-17):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-20): no upstream type-import script
+exists in the testsuite snapshot. The feature is graded by the hand-authored
+`core type imports link by their abstract bound` test: a struct type exported as
+`m.t` satisfies a `(type (sub any))` import, the importer records the exporter's
+canonical `TypeId`, and a `(sub func)` bound rejects the same export. The test
+runs in the default suite.
 
-| Script | passed | failed | skipped | Reading |
-|---|---:|---:|---:|---|
-| (none) | — | — | — | no type-import/export script in the testsuite snapshot |
-
-Reading: nothing to grade. TI-0 is the first milestone because a type import
-currently does not fail safely.
+Reading: TI-0…TI-4 are closed; only the proposal's post-MVP private/opaque type
+surface remains out of scope.
 
 ## 9. References
 

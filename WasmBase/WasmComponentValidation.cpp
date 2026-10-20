@@ -83,6 +83,88 @@ struct ResolvedValueType {
 	ValuePtr mapValue;
 };
 
+// Structural equality for resolved value trees. Component value types are
+// acyclic, so the recursive comparison terminates; resource leaves compare by
+// their nominal identity (pointer or Store TypeId), never by representation.
+bool sameResolvedValue(const ValuePtr& left, const ValuePtr& right)
+{
+	if (!left || !right)
+		return left.get() == right.get();
+	if (left.get() == right.get())
+		return true;
+	if (left->kind != right->kind)
+		return false;
+	switch (left->kind) {
+	case ResolvedValueType::Kind::Primitive:
+		return left->primitive == right->primitive;
+	case ResolvedValueType::Kind::Record:
+		if (left->fields.size() != right->fields.size())
+			return false;
+		for (std::size_t i = 0; i < left->fields.size(); ++i)
+			if (left->fields[i].first != right->fields[i].first
+					|| !sameResolvedValue(left->fields[i].second,
+							right->fields[i].second))
+				return false;
+		return true;
+	case ResolvedValueType::Kind::Variant:
+		if (left->cases.size() != right->cases.size())
+			return false;
+		for (std::size_t i = 0; i < left->cases.size(); ++i) {
+			if (left->cases[i].label != right->cases[i].label)
+				return false;
+			const ValuePtr& leftType = left->cases[i].type ? *left->cases[i].type
+					: ValuePtr{};
+			const ValuePtr& rightType = right->cases[i].type ? *right->cases[i].type
+					: ValuePtr{};
+			if (!sameResolvedValue(leftType, rightType))
+				return false;
+		}
+		return true;
+	case ResolvedValueType::Kind::List:
+	case ResolvedValueType::Kind::FixedList:
+		return left->fixedLength == right->fixedLength
+				&& sameResolvedValue(left->element, right->element);
+	case ResolvedValueType::Kind::Tuple:
+		if (left->tuple.size() != right->tuple.size())
+			return false;
+		for (std::size_t i = 0; i < left->tuple.size(); ++i)
+			if (!sameResolvedValue(left->tuple[i], right->tuple[i]))
+				return false;
+		return true;
+	case ResolvedValueType::Kind::Flags:
+	case ResolvedValueType::Kind::Enum:
+		return left->labels == right->labels;
+	case ResolvedValueType::Kind::Option:
+		return sameResolvedValue(left->element, right->element);
+	case ResolvedValueType::Kind::Result:
+		return left->ok.has_value() == right->ok.has_value()
+				&& left->error.has_value() == right->error.has_value()
+				&& (!left->ok || sameResolvedValue(*left->ok, *right->ok))
+				&& (!left->error || sameResolvedValue(*left->error, *right->error));
+	case ResolvedValueType::Kind::Own:
+	case ResolvedValueType::Kind::Borrow:
+		if (left->resourceId || right->resourceId)
+			return left->resourceId == right->resourceId;
+		if (!left->resourceTypeId.isNone() || !right->resourceTypeId.isNone())
+			return left->resourceTypeId == right->resourceTypeId;
+		return left->resourceType.get() == right->resourceType.get();
+	case ResolvedValueType::Kind::Stream:
+		return left->streamElement.has_value() == right->streamElement.has_value()
+				&& (!left->streamElement
+						|| sameResolvedValue(*left->streamElement,
+								*right->streamElement));
+	case ResolvedValueType::Kind::Future:
+		return left->futureElement.has_value() == right->futureElement.has_value()
+				&& (!left->futureElement
+						|| sameResolvedValue(*left->futureElement,
+								*right->futureElement));
+	case ResolvedValueType::Kind::Map:
+		return sameResolvedValue(left->mapKey, right->mapKey)
+				&& sameResolvedValue(left->mapValue, right->mapValue);
+	}
+	return false;
+}
+
 struct ResolvedResourceType {
 	uint32_t id = 0;
 	ValueType rep; // core valtype
@@ -283,8 +365,8 @@ struct ValidationScope {
 	LocalSpaces spaces;
 	std::vector<ResolvedDecl> imports;
 	std::vector<ResolvedDecl> exports;
-	std::set<std::string> importNames;
-	std::set<std::string> exportNames;
+	std::map<std::string, std::string> importNames; // strong name -> original
+	std::map<std::string, std::string> exportNames;
 };
 
 struct ValidationState {
@@ -757,9 +839,10 @@ private:
 	void validateAttributes(const NameAttributes& name, const SortIdx& sort,
 			bool isImport);
 	void validateFunctionAnnotations(const ResolvedDecl& declaration,
-			const ValidationScope& scope);
+			const ValidationScope& scope, bool isImport);
 	void validateCanonOpts(const Canon& canon);
 	void validateCanon(const Canon& canon);
+	void validateCanonicalAbi();
 	void validateCoreTypeDef(const CoreTypeDef& definition,
 			ValidationScope& scope);
 	void validateCoreExternType(const CoreExternType& type,
@@ -824,6 +907,113 @@ void ComponentValidator::run()
 				scheme = found->second;
 		}
 		component_.localSchemeIds.push_back(scheme);
+	}
+	// The local TypeIds are now published, so the Canonical ABI checks can use
+	// the same closed identities the runtime will see.
+	validateCanonicalAbi();
+}
+
+void ComponentValidator::validateCanonicalAbi()
+{
+	const TypeStore& store = Store::global().types().store();
+	const auto optionsFor = [](const Canon& canon,
+			WASM::CanonicalAbiOptions& options) {
+		for (const CanonOpt& opt : canon.opts) {
+			switch (opt.kind) {
+			case CanonOptKind::Utf8:
+				options.stringEncoding =
+						WASM::CanonicalAbiOptions::StringEncoding::Utf8;
+				break;
+			case CanonOptKind::Utf16:
+				options.stringEncoding =
+						WASM::CanonicalAbiOptions::StringEncoding::Utf16;
+				break;
+			case CanonOptKind::Latin1Utf16:
+				options.stringEncoding =
+						WASM::CanonicalAbiOptions::StringEncoding::Latin1Utf16;
+				break;
+			case CanonOptKind::Memory:
+				options.memory = opt.index;
+				break;
+			case CanonOptKind::Realloc:
+				options.realloc = opt.index;
+				break;
+			case CanonOptKind::PostReturn:
+				options.postReturn = opt.index;
+				break;
+			case CanonOptKind::Async:
+				options.async = true;
+				break;
+			case CanonOptKind::Callback:
+				break;
+			}
+		}
+		if (canon.async)
+			options.async = *canon.async;
+	};
+	const auto canonicalTypeOf = [&](const Canon& canon) -> TypeId {
+		if (canon.kind == Canon::Kind::Lift)
+			return component_.typeId(canon.typeIndex);
+		const Entity* entity = scope_.spaces.require(ComponentSort::Func,
+				canon.funcIndex, "canon lower function type");
+		if (!entity || !entity->type)
+			return TypeId{TypeId::kNone};
+		if (!entity->type->typeId.isNone())
+			return entity->type->typeId;
+		return TypeId{TypeId::kNone};
+	};
+
+	for (const Canon& canon : component_.canons) {
+		WASM::CanonicalAbiOptions options;
+		optionsFor(canon, options);
+		switch (canon.kind) {
+		case Canon::Kind::Lift:
+		case Canon::Kind::Lower: {
+			const TypeId type = canonicalTypeOf(canon);
+			if (type.isNone())
+				fail("canon lift/lower type has no closed identity");
+			if (store.canonicalAbi(type, options) == nullptr)
+				fail("canon lift/lower type cannot be flattened by the "
+						"Canonical ABI");
+			break;
+		}
+		case Canon::Kind::TaskReturn:
+			for (const ComponentValueType& result : canon.results) {
+				ComponentValueType resolved = result;
+				if (resolved.kind == ComponentValueType::Kind::TypeIndex) {
+					const TypeId id = component_.typeId(resolved.typeIndex);
+					if (id.isNone())
+						fail("task.return result has no closed identity");
+					resolved.kind = ComponentValueType::Kind::TypeId;
+					resolved.typeIndex = id.value;
+				}
+				std::vector<AbiCoreType> flat;
+				if (!store.canonicalAbiFlatValue(resolved, flat))
+					fail("task.return result cannot be flattened");
+			}
+			break;
+		case Canon::Kind::StreamRead:
+		case Canon::Kind::StreamWrite:
+		case Canon::Kind::FutureRead:
+		case Canon::Kind::FutureWrite: {
+			const TypeId type = component_.typeId(canon.typeIndex);
+			if (type.isNone())
+				continue; // already reported by validateCanon()
+			const ComponentTypeView view = store.componentType(type);
+			if (view.hasStreamElement()) {
+				WASM::CanonicalAbiLayout layout;
+				if (!store.canonicalAbiLayoutValue(view.streamElement(), options,
+						layout))
+					fail("stream/future element type has no Canonical ABI layout");
+				if (options.memory
+						== WASM::CanonicalAbiOptions::kNoIndex)
+					fail("stream/future copy requires a memory canonopt");
+			}
+			break;
+		}
+		default:
+			break;
+		}
 	}
 }
 
@@ -1824,37 +2014,179 @@ bool isInterfaceName(const std::string& name)
 	return true;
 }
 
+// Decomposed `plainname` (Explainer.md "External names"). The Component Model
+// allows a constructor/method/static annotation and, for 0.3.1, a getter/setter
+// marker around it. Keeping the parsed form in one place lets name validation,
+// annotation validation and strong-uniqueness agree.
+struct ParsedPlainName {
+	enum class Kind : uint8_t {
+		Plain, Interface, Constructor,
+		Get, Set, Method, MethodGet, MethodSet, Static, StaticGet, StaticSet
+	};
+	Kind kind = Kind::Plain;
+	std::string resource; // method/static/constructor resource label
+	std::string field;    // getter/setter/method/static field label
+	bool valid = true;
+
+	bool annotated() const { return kind != Kind::Plain && kind != Kind::Interface; }
+	bool isMethod() const { return kind == Kind::Method || kind == Kind::MethodGet || kind == Kind::MethodSet; }
+	bool isStatic() const { return kind == Kind::Static || kind == Kind::StaticGet || kind == Kind::StaticSet; }
+	bool isGet() const { return kind == Kind::Get || kind == Kind::MethodGet || kind == Kind::StaticGet; }
+	bool isSet() const { return kind == Kind::Set || kind == Kind::MethodSet || kind == Kind::StaticSet; }
+};
+
+ParsedPlainName parsePlainName(const std::string& name)
+{
+	ParsedPlainName parsed;
+	if (name.empty()) {
+		parsed.valid = false;
+		return parsed;
+	}
+	if (name[0] != '[') {
+		parsed.kind = name.find(':') != std::string::npos
+				? ParsedPlainName::Kind::Interface : ParsedPlainName::Kind::Plain;
+		return parsed;
+	}
+
+	std::size_t position = 0;
+	std::string annotation;
+	const auto readAnnotation = [&](std::string& out) {
+		if (position >= name.size() || name[position] != '[')
+			return false;
+		const std::size_t close = name.find(']', position + 1);
+		if (close == std::string::npos)
+			return false;
+		out = name.substr(position, close - position + 1);
+		position = close + 1;
+		return true;
+	};
+	if (!readAnnotation(annotation)) {
+		parsed.valid = false;
+		return parsed;
+	}
+
+	const auto splitResourceField = [&](const std::string& rest) {
+		const std::size_t dot = rest.find('.');
+		if (dot == std::string::npos || rest.find('.', dot + 1) != std::string::npos)
+			return false;
+		parsed.resource = rest.substr(0, dot);
+		parsed.field = rest.substr(dot + 1);
+		return isKebabLabel(parsed.resource) && isKebabLabel(parsed.field);
+	};
+
+	if (annotation == "[constructor]") {
+		parsed.kind = ParsedPlainName::Kind::Constructor;
+		parsed.field = name.substr(position);
+		parsed.resource = parsed.field;
+		if (!isKebabLabel(parsed.field))
+			parsed.valid = false;
+		return parsed;
+	}
+	if (annotation == "[get]" || annotation == "[set]") {
+		parsed.kind = annotation == "[get]" ? ParsedPlainName::Kind::Get
+				: ParsedPlainName::Kind::Set;
+		parsed.field = name.substr(position);
+		if (!isKebabLabel(parsed.field))
+			parsed.valid = false;
+		return parsed;
+	}
+	if (annotation != "[method]" && annotation != "[static]") {
+		parsed.valid = false;
+		return parsed;
+	}
+
+	const bool method = annotation == "[method]";
+	ParsedPlainName::Kind kind = method ? ParsedPlainName::Kind::Method
+			: ParsedPlainName::Kind::Static;
+	std::string second;
+	if (position < name.size() && name[position] == '[') {
+		if (!readAnnotation(second)) {
+			parsed.valid = false;
+			return parsed;
+		}
+		if (second == "[get]")
+			kind = method ? ParsedPlainName::Kind::MethodGet
+					: ParsedPlainName::Kind::StaticGet;
+		else if (second == "[set]")
+			kind = method ? ParsedPlainName::Kind::MethodSet
+					: ParsedPlainName::Kind::StaticSet;
+		else {
+			parsed.valid = false;
+			return parsed;
+		}
+	}
+	parsed.kind = kind;
+	if (!splitResourceField(name.substr(position)))
+		parsed.valid = false;
+	return parsed;
+}
+
+std::string canonicalLabel(const std::string& text)
+{
+	std::string out;
+	out.reserve(text.size());
+	for (char c : text)
+		if (c != '-')
+			out.push_back(static_cast<char>(
+					std::tolower(static_cast<unsigned char>(c))));
+	return out;
+}
+
+// Explainer.md "strongly-unique": canonicalize by removing hyphens, lowering
+// acronyms, collapsing `[...]*l.l` to `l`, and stripping every annotation
+// except `[constructor]` and `[set]`.
+std::string strongName(const std::string& name)
+{
+	const ParsedPlainName parsed = parsePlainName(name);
+	if (!parsed.valid)
+		return canonicalLabel(name);
+	const std::string resource = canonicalLabel(parsed.resource);
+	const std::string field = canonicalLabel(parsed.field);
+	if ((parsed.isMethod() || parsed.isStatic()) && !resource.empty()
+			&& resource == field)
+		return field;
+	switch (parsed.kind) {
+	case ParsedPlainName::Kind::Constructor:
+		return "[constructor]" + field;
+	case ParsedPlainName::Kind::Set:
+	case ParsedPlainName::Kind::MethodSet:
+	case ParsedPlainName::Kind::StaticSet:
+		return "[set]" + (parsed.isMethod() || parsed.isStatic()
+				? resource + "." + field : field);
+	case ParsedPlainName::Kind::Method:
+	case ParsedPlainName::Kind::MethodGet:
+	case ParsedPlainName::Kind::Static:
+	case ParsedPlainName::Kind::StaticGet:
+		return resource + "." + field;
+	case ParsedPlainName::Kind::Get:
+		return field;
+	default:
+		return canonicalLabel(name);
+	}
+}
+
 void validateExternName(const std::string& name)
 {
 	if (name.empty())
-		throw std::runtime_error("component validation: import/export name cannot be empty");
-	if (name[0] == '[') {
-		const std::size_t close = name.find(']');
-		if (close == std::string::npos || close + 1 >= name.size())
-			throw std::runtime_error("component validation: malformed annotated name `" + name + "`");
-		const std::string annotation = name.substr(0, close + 1);
-		const std::string rest = name.substr(close + 1);
-		if (annotation == "[constructor]") {
-			if (!isKebabLabel(rest))
-				throw std::runtime_error("component validation: invalid constructor name `" + name + "`");
-		} else if (annotation == "[method]" || annotation == "[static]") {
-			const std::size_t dot = rest.find('.');
-			if (dot == std::string::npos || !isKebabLabel(rest.substr(0, dot))
-					|| !isKebabLabel(rest.substr(dot + 1)))
-				throw std::runtime_error("component validation: invalid annotated name `" + name + "`");
-		} else if (annotation != "[get]" && annotation != "[set]") {
-			throw std::runtime_error("component validation: unknown name annotation `" + annotation + "`");
-		}
-		return;
-	}
-	if (name.find(':') != std::string::npos) {
+		throw std::runtime_error(
+				"component validation: import/export name cannot be empty");
+	const ParsedPlainName parsed = parsePlainName(name);
+	if (!parsed.valid)
+		throw std::runtime_error(
+				"component validation: malformed annotated name `" + name + "`");
+	if (parsed.kind == ParsedPlainName::Kind::Interface) {
 		if (!isInterfaceName(name))
-			throw std::runtime_error("component validation: invalid interface name `" + name + "`");
+			throw std::runtime_error(
+					"component validation: invalid interface name `" + name + "`");
 		return;
 	}
+	if (parsed.annotated())
+		return; // parsePlainName already validated both labels
 	if (!isKebabLabel(name))
-		throw std::runtime_error("component validation: invalid plain name `" + name + "`");
+		throw std::runtime_error(
+				"component validation: invalid plain name `" + name + "`");
 }
+
 
 void validateVersionSuffix(const NameAttributes& name, const std::string& suffix)
 {
@@ -1892,69 +2224,128 @@ void ComponentValidator::validateAttributes(const NameAttributes& name,
 }
 
 void ComponentValidator::validateFunctionAnnotations(
-		const ResolvedDecl& declaration, const ValidationScope& scope)
+		const ResolvedDecl& declaration, const ValidationScope& scope,
+		bool isImport)
 {
-	const std::string& name = declaration.name.name;
-	if (name.empty() || name[0] != '[')
+	const ParsedPlainName parsed = parsePlainName(declaration.name.name);
+	if (!parsed.valid)
+		fail("malformed annotated name `" + declaration.name.name + "`");
+	if (!parsed.annotated())
 		return;
-	const std::size_t close = name.find(']');
-	if (close == std::string::npos)
-		return;
-	const std::string annotation = name.substr(0, close + 1);
-	const std::string rest = name.substr(close + 1);
-	if (annotation == "[get]" || annotation == "[set]")
-		return;
-	std::string resourceName = rest;
-	std::size_t dot = std::string::npos;
-	if (annotation == "[method]" || annotation == "[static]") {
-		dot = rest.find('.');
-		if (dot == std::string::npos)
-			return;
-		resourceName = rest.substr(0, dot);
-	}
-	const ResolvedDecl* resource = nullptr;
-	const auto findResource = [&](const std::vector<ResolvedDecl>& declarations) {
-		for (const ResolvedDecl& candidate : declarations)
-			if (candidate.name.name == resourceName
-					&& candidate.sort.sort == ComponentSort::Type
-					&& candidate.type
-					&& candidate.type->kind == ResolvedType::Kind::Resource)
-				resource = &candidate;
-	};
-	findResource(scope.imports);
-	findResource(scope.exports);
-	if (!resource)
-		fail("annotated function name `" + name +
-				"` does not name a preceding resource import/export");
 	if (declaration.sort.sort != ComponentSort::Func || !declaration.type
 			|| declaration.type->kind != ResolvedType::Kind::Func)
 		fail("resource name annotations are only valid on function imports/exports");
-
 	const ResolvedFuncType& func = *declaration.type->func;
-	if (annotation == "[constructor]") {
+	if ((parsed.isGet() || parsed.isSet()) && func.isAsync)
+		fail("getter/setter names must not be async");
+
+	const std::vector<ResolvedDecl>& declarations = isImport
+			? scope.imports : scope.exports;
+	const auto findNamed = [&](const std::string& name) -> const ResolvedDecl* {
+		for (const ResolvedDecl& candidate : declarations)
+			if (candidate.name.name == name)
+				return &candidate;
+		return nullptr;
+	};
+
+	const ResolvedDecl* resource = nullptr;
+	if (parsed.kind == ParsedPlainName::Kind::Constructor
+			|| parsed.isMethod() || parsed.isStatic()) {
+		const ResolvedDecl* candidate = findNamed(parsed.resource);
+		if (candidate != nullptr && candidate->sort.sort == ComponentSort::Type
+				&& candidate->type
+				&& candidate->type->kind == ResolvedType::Kind::Resource)
+			resource = candidate;
+		if (resource == nullptr)
+			fail("annotated function name `" + declaration.name.name +
+					"` does not name a preceding resource import/export");
+	}
+
+	const auto sameResource = [&](const ValuePtr& value) {
+		if (!value || !resource || !resource->type)
+			return false;
+		if (value->resourceType.get() == resource->type.get())
+			return true;
+		return !value->resourceTypeId.isNone()
+				&& value->resourceTypeId == resource->type->typeId;
+	};
+
+	if (parsed.isMethod()) {
+		if (func.params.empty() || func.params.front().first != "self"
+				|| !func.params.front().second
+				|| func.params.front().second->kind
+						!= ResolvedValueType::Kind::Borrow
+				|| !sameResource(func.params.front().second))
+			fail("method annotation requires a first `self: borrow " +
+					parsed.resource + "` parameter");
+	}
+
+	if (parsed.kind == ParsedPlainName::Kind::Constructor) {
 		if (!func.result)
 			fail("constructor annotation requires a result");
 		const ValuePtr& result = *func.result;
 		const auto ownMatches = [&](const ValuePtr& value) {
 			return value && value->kind == ResolvedValueType::Kind::Own
-					&& value->resourceType.get() == resource->type.get();
+					&& sameResource(value);
 		};
-		if (ownMatches(result))
-			return;
-		if (result->kind == ResolvedValueType::Kind::Result && result->ok
-				&& ownMatches(*result->ok))
-			return;
-		fail("constructor annotation result must be `own " + resourceName + "`");
+		if (!ownMatches(result)
+				&& !(result->kind == ResolvedValueType::Kind::Result
+						&& result->ok && ownMatches(*result->ok)))
+			fail("constructor annotation result must be `own " +
+					parsed.resource + "` or `(result (own " + parsed.resource + "))`");
 	}
-	if (annotation == "[method]") {
-		if (func.params.empty() || func.params.front().first != "self"
-				|| !func.params.front().second
-				|| func.params.front().second->kind
-						!= ResolvedValueType::Kind::Borrow
-				|| func.params.front().second->resourceType.get()
-						!= resource->type.get())
-			fail("method annotation requires a first `self: borrow " +
-					resourceName + "` parameter");
+
+	const auto propertyType = [](const ValuePtr& result) -> ValuePtr {
+		if (result && result->kind == ResolvedValueType::Kind::Result)
+			return result->ok ? *result->ok : ValuePtr{};
+		return result;
+	};
+
+	if (parsed.isGet()) {
+		const std::size_t expectedParams = parsed.isMethod() ? 1u : 0u;
+		if (func.params.size() != expectedParams)
+			fail("getter name requires no parameters" +
+					std::string(parsed.isMethod() ? " besides self" : ""));
+		if (!func.result)
+			fail("getter name requires a result type");
+		if (!propertyType(*func.result))
+			fail("getter result must carry a value type");
+	}
+
+	if (parsed.isSet()) {
+		std::string getterName;
+		if (parsed.kind == ParsedPlainName::Kind::Set)
+			getterName = "[get]" + parsed.field;
+		else if (parsed.kind == ParsedPlainName::Kind::MethodSet)
+			getterName = "[method][get]" + parsed.resource + "." + parsed.field;
+		else
+			getterName = "[static][get]" + parsed.resource + "." + parsed.field;
+		const ResolvedDecl* getter = findNamed(getterName);
+		if (getter == nullptr || getter->sort.sort != ComponentSort::Func
+				|| !getter->type || getter->type->kind != ResolvedType::Kind::Func)
+			fail("setter name `" + declaration.name.name +
+					"` requires a preceding matching getter");
+		const ResolvedFuncType& getterFunc = *getter->type->func;
+		const ValuePtr property = getterFunc.result
+				? propertyType(*getterFunc.result) : ValuePtr{};
+		if (!property)
+			fail("matching getter has no property type");
+		if (parsed.isMethod()) {
+			if (func.params.size() != 2)
+				fail("setter method must take `self` and one value parameter");
+			if (!sameResolvedValue(func.params[1].second, property))
+				fail("setter parameter type must match the getter property type");
+		} else {
+			if (func.params.size() != 1)
+				fail("setter name requires exactly one parameter");
+			if (!sameResolvedValue(func.params[0].second, property))
+				fail("setter parameter type must match the getter property type");
+		}
+		if (func.result) {
+			const ValuePtr& result = *func.result;
+			if (result->kind != ResolvedValueType::Kind::Result || result->ok)
+				fail("setter result must be empty or `(result (error ...))`");
+		}
 	}
 }
 
@@ -1964,11 +2355,15 @@ void ComponentValidator::addImportOrExport(const ResolvedDecl& declaration,
 	if (declaration.name.name.empty())
 		fail("import/export name cannot be empty");
 	auto& names = isImport ? scope.importNames : scope.exportNames;
-	if (!names.insert(declaration.name.name).second)
-		fail("duplicate " + std::string(isImport ? "import" : "export") +
-				" name `" + declaration.name.name + "`");
+	const std::string strong = strongName(declaration.name.name);
+	const auto previous = names.find(strong);
+	if (previous != names.end())
+		fail(std::string(isImport ? "import" : "export") + " name `" +
+				declaration.name.name + "` conflicts with previous name `" +
+				previous->second + "`");
+	names.emplace(strong, declaration.name.name);
 	validateAttributes(declaration.name, declaration.sort, isImport);
-	validateFunctionAnnotations(declaration, scope);
+	validateFunctionAnnotations(declaration, scope, isImport);
 
 	if (declaration.sort.sort == ComponentSort::Type && declaration.type) {
 		if (isImport)
@@ -3384,13 +3779,36 @@ void validateComponent(const Component& component)
 	validator.run();
 }
 
+void Component::releaseParserAst() const
+{
+	// The canonical Store records and Component::localTypeIds are the identity.
+	// The parser declaration vectors and value-type syntax payloads are not
+	// needed after validation, so drop them (TYPE_MODEL TM-10).
+	for (ComponentTypeDef& type : types)
+		type.declarations = std::monostate{};
+	for (CoreTypeDef& type : coreTypes)
+		type.recType.subtypes.clear();
+	for (const std::unique_ptr<Component>& nested : components)
+		if (nested)
+			nested->releaseParserAst();
+}
+
 void Component::validate() const
 {
+	if (validated_)
+		return;
 	validateComponent(*this);
+	// Snapshot the spaces while the AST is still present; buildIndexSpaces()
+	// must not require a second parse now that releaseParserAst() has run.
+	indexSpaces_ = buildComponentIndexSpaces(*this);
+	releaseParserAst();
+	validated_ = true;
 }
 
 ComponentIndexSpaces Component::buildIndexSpaces() const
 {
+	if (validated_ && indexSpaces_)
+		return *indexSpaces_;
 	return buildComponentIndexSpaces(*this);
 }
 

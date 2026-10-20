@@ -33,6 +33,7 @@ public:
 		Elv::Util::UnorderedStrMap<LinearMemory*> memories;
 		Elv::Util::UnorderedStrMap<ImportedTable> tables;
 		Elv::Util::UnorderedStrMap<TagId> tags;
+		Elv::Util::UnorderedStrMap<TypeId> types;
 
 		void registerFunction(std::string_view fieldName, const Callable& callable);
 		void registerGlobal(std::string_view fieldName, const Value& value);
@@ -40,6 +41,7 @@ public:
 		void registerMemory(std::string_view fieldName, LinearMemory* memory);
 		void registerTable(std::string_view fieldName, const ImportedTable& table);
 		void registerTag(std::string_view fieldName, TagId tag);
+		void registerType(std::string_view fieldName, TypeId type);
 
 		std::optional<Callable> resolveFunction(std::string_view fieldName, TypeId expectedType);
 		std::optional<Value*> resolveGlobal(std::string_view fieldName, const GlobalType& type);
@@ -47,6 +49,7 @@ public:
 		std::optional<ImportedTable> resolveTable(std::string_view fieldName, const TableType& type,
 											 TypeId elementTypeId);
 		std::optional<TagId> resolveTag(std::string_view fieldName, TypeId expectedType);
+		std::optional<TypeId> resolveType(std::string_view fieldName, AbstractHeapType bound);
 	};
 
 	void registerFunction(std::string_view moduleName, std::string_view fieldName,
@@ -63,6 +66,8 @@ public:
 					   const ImportedTable& table) override;
 	void registerTag(std::string_view moduleName, std::string_view fieldName,
 					 TagId tag) override;
+	void registerType(std::string_view moduleName, std::string_view fieldName,
+					  TypeId type) override;
 
 	std::optional<Callable> resolveFunction(
 		std::string_view moduleName,
@@ -89,6 +94,11 @@ public:
 		std::string_view moduleName,
 		std::string_view fieldName,
 		TypeId           expectedType) override;
+
+	std::optional<TypeId> resolveType(
+		std::string_view moduleName,
+		std::string_view fieldName,
+		AbstractHeapType bound) override;
 
 private:
 	Elv::Util::UnorderedStrMap<ModuleRegistry> registeredModules;

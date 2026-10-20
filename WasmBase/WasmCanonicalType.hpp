@@ -10,7 +10,7 @@ namespace WASM {
 // §6.2). Type references are abstract heap types, process-wide ids, or (only
 // while a group is being built) positions within that group.
 
-enum class CanonTypeKind : uint8_t { Func, Struct, Array };
+enum class CanonTypeKind : uint8_t { Func, Struct, Array, Import };
 
 struct CanonHeapType {
 	enum class Kind : uint8_t { Abstract, Global, Rec };

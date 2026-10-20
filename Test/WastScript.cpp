@@ -145,6 +145,41 @@ ScriptValue valueFromJson(const Json& json)
 			for (const Json& alternative : *alternatives)
 				value.alternatives.push_back(valueFromJson(alternative));
 		}
+		// Structured component values.
+		if (const auto fields = json.find("fields"); fields != json.end()
+				&& fields->is_array()) {
+			for (const Json& field : *fields) {
+				ScriptValue fieldValue = valueFromJson(field);
+				const std::string name = stringOr(field, "name");
+				value.fields.emplace_back(name, std::move(fieldValue));
+			}
+		}
+		if (const auto elements = json.find("elements"); elements != json.end()
+				&& elements->is_array())
+			for (const Json& element : *elements)
+				value.elements.push_back(valueFromJson(element));
+		if (const auto entries = json.find("entries"); entries != json.end()
+				&& entries->is_array()) {
+			for (const Json& entry : *entries) {
+				ScriptValue key = valueFromJson(entry.value("key", Json{}));
+				ScriptValue item = valueFromJson(entry.value("value", Json{}));
+				value.entries.emplace_back(std::move(key), std::move(item));
+			}
+		}
+		value.caseLabel = stringOr(json, "case");
+		if (const auto payload = json.find("payload"); payload != json.end()) {
+			value.payload = std::make_unique<ScriptValue>(valueFromJson(*payload));
+			value.hasPayload = true;
+		}
+		if (const auto flags = json.find("flags"); flags != json.end()
+				&& flags->is_array())
+			for (const Json& flag : *flags)
+				if (flag.is_string())
+					value.flags.push_back(flag.get<std::string>());
+		if (const auto some = json.find("some"); some != json.end())
+			value.some = some->get<bool>();
+		if (const auto ok = json.find("ok"); ok != json.end())
+			value.ok = ok->get<bool>();
 	}
 	return value;
 }
@@ -624,6 +659,77 @@ private:
 
 } // namespace
 
+WitFunction witFunctionFromJson(const Json& json)
+{
+	WitFunction function;
+	function.name = stringOr(json, "name");
+	if (json.is_object()) {
+		const auto params = json.find("params");
+		if (params != json.end() && params->is_array())
+			for (const Json& param : *params)
+				function.params.emplace_back(stringOr(param, "name"),
+						stringOr(param, "type"));
+		const auto result = json.find("result");
+		if (result != json.end() && result->is_string())
+			function.result = result->get<std::string>();
+	}
+	return function;
+}
+
+WitPackage WitPackage::parse(std::string_view json)
+{
+	const Json root = Json::parse(json);
+	WitPackage package;
+	if (const auto packages = root.find("packages");
+			packages != root.end() && packages->is_array() && !packages->empty())
+		package.name = stringOr((*packages)[0], "name");
+
+	if (const auto interfaces = root.find("interfaces");
+			interfaces != root.end() && interfaces->is_array()) {
+		for (const Json& entry : *interfaces) {
+			WitInterface interface;
+			interface.name = stringOr(entry, "name");
+			if (const auto functions = entry.find("functions");
+					functions != entry.end() && functions->is_object())
+				for (const auto& [name, function] : functions->items())
+					interface.functions.emplace(name,
+							witFunctionFromJson(function));
+			package.interfaces.push_back(std::move(interface));
+		}
+	}
+
+	if (const auto worlds = root.find("worlds");
+			worlds != root.end() && worlds->is_array()) {
+		for (const Json& entry : *worlds) {
+			WitWorld world;
+			world.name = stringOr(entry, "name");
+			if (const auto imports = entry.find("imports");
+					imports != entry.end() && imports->is_object()) {
+				for (const auto& [name, import] : imports->items()) {
+					std::string description = "<function>";
+					const auto interface = import.find("interface");
+					if (interface != import.end()) {
+						const int id = intOr(*interface, "id");
+						if (id >= 0
+								&& std::size_t(id) < package.interfaces.size())
+							description = package.interfaces[std::size_t(id)].name;
+					}
+					world.imports.emplace(name, description);
+				}
+			}
+			if (const auto exports = entry.find("exports");
+					exports != entry.end() && exports->is_object())
+				for (const auto& [name, exportEntry] : exports->items()) {
+					const auto function = exportEntry.find("function");
+					if (function != exportEntry.end())
+						world.exports.emplace(name, witFunctionFromJson(*function));
+				}
+			package.worlds.push_back(std::move(world));
+		}
+	}
+	return package;
+}
+
 Script Script::parse(std::string_view json)
 {
 	const Json document = Json::parse(json);
@@ -963,72 +1069,266 @@ void ScriptRunner::onRegister(const ScriptCommand& command)
 	pass();
 }
 
-bool componentValueFromScript(const ScriptValue& value,
-		LibJIT::ComponentValue& out)
+const WASM::TypeStore& componentStore()
 {
-	using K = LibJIT::ComponentValue::Kind;
-	if (value.type == "i32" || value.type == "s32") {
-		out.kind = K::S32;
-		out.s64 = std::strtoll(value.value.c_str(), nullptr, 10);
-		return true;
-	}
-	if (value.type == "u32") {
-		out.kind = K::U32;
-		out.u64 = std::strtoull(value.value.c_str(), nullptr, 10);
-		return true;
-	}
-	if (value.type == "i64" || value.type == "s64") {
-		out.kind = K::S64;
-		out.s64 = std::strtoll(value.value.c_str(), nullptr, 10);
-		return true;
-	}
-	if (value.type == "u64") {
-		out.kind = K::U64;
-		out.u64 = std::strtoull(value.value.c_str(), nullptr, 10);
-		return true;
-	}
-	if (value.type == "f32") {
-		const uint32_t bits = uint32_t(std::strtoull(value.value.c_str(), nullptr, 10));
-		out.kind = K::F32;
-		float number;
-		std::memcpy(&number, &bits, sizeof(number));
-		out.f64 = number;
-		return true;
-	}
-	if (value.type == "f64") {
-		const uint64_t bits = std::strtoull(value.value.c_str(), nullptr, 10);
-		out.kind = K::F64;
-		std::memcpy(&out.f64, &bits, sizeof(bits));
-		return true;
-	}
-	if (value.type == "string") {
-		out.kind = K::String;
-		out.string = value.value;
-		return true;
-	}
-	if (value.type == "bool") {
-		out.kind = K::Bool;
-		out.u64 = value.value == "true" || value.value == "1";
-		return true;
-	}
-	return false;
+return WASM::Store::global().types().store();
+}
+
+bool componentTypeViewFromValue(const WASM::ComponentValueType& type,
+WASM::ComponentTypeView& view)
+{
+if (type.kind != WASM::ComponentValueType::Kind::TypeId
+|| WASM::TypeId{type.typeIndex}.isNone())
+return false;
+view = componentStore().componentType(WASM::TypeId{type.typeIndex});
+return true;
+}
+
+bool componentPrimitiveFromScript(const ScriptValue& value,
+WASM::PrimitiveValueType primitive, LibJIT::ComponentValue& out)
+{
+using K = LibJIT::ComponentValue::Kind;
+using P = WASM::PrimitiveValueType;
+switch (primitive) {
+case P::Bool:
+out.kind = K::Bool;
+out.u64 = value.value == "true" || value.value == "1";
+return true;
+case P::S8: out.kind = K::S8; out.s64 = std::strtoll(value.value.c_str(), nullptr, 10); return true;
+case P::U8: out.kind = K::U8; out.u64 = std::strtoull(value.value.c_str(), nullptr, 10); return true;
+case P::S16: out.kind = K::S16; out.s64 = std::strtoll(value.value.c_str(), nullptr, 10); return true;
+case P::U16: out.kind = K::U16; out.u64 = std::strtoull(value.value.c_str(), nullptr, 10); return true;
+case P::S32: out.kind = K::S32; out.s64 = std::strtoll(value.value.c_str(), nullptr, 10); return true;
+case P::U32: out.kind = K::U32; out.u64 = std::strtoull(value.value.c_str(), nullptr, 10); return true;
+case P::S64: out.kind = K::S64; out.s64 = std::strtoll(value.value.c_str(), nullptr, 10); return true;
+case P::U64: out.kind = K::U64; out.u64 = std::strtoull(value.value.c_str(), nullptr, 10); return true;
+case P::F32: {
+const uint32_t bits = uint32_t(std::strtoull(value.value.c_str(), nullptr, 10));
+out.kind = K::F32;
+float number;
+std::memcpy(&number, &bits, sizeof(number));
+out.f64 = number;
+return true;
+}
+case P::F64: {
+const uint64_t bits = std::strtoull(value.value.c_str(), nullptr, 10);
+out.kind = K::F64;
+std::memcpy(&out.f64, &bits, sizeof(bits));
+return true;
+}
+case P::Char:
+out.kind = K::Char;
+out.discriminant = uint32_t(std::strtoul(value.value.c_str(), nullptr, 10));
+return true;
+case P::String:
+out.kind = K::String;
+out.string = value.value;
+return true;
+default:
+return false;
+}
+}
+
+// Converts one script value against the canonical component type it is being
+// passed/compared as. Structured values are ordered by the *type*, not by the
+// script text, so record field order and variant labels are checked.
+bool componentValueFromScript(const ScriptValue& value,
+const WASM::ComponentValueType& type, LibJIT::ComponentValue& out)
+{
+using K = LibJIT::ComponentValue::Kind;
+if (type.kind == WASM::ComponentValueType::Kind::Primitive)
+return componentPrimitiveFromScript(value, type.primitive, out);
+
+WASM::ComponentTypeView view;
+if (!componentTypeViewFromValue(type, view))
+return false;
+
+switch (view.kind()) {
+case WASM::TypeKind::ComponentPrimitive:
+return componentPrimitiveFromScript(value, view.primitive(), out);
+case WASM::TypeKind::ComponentRecord: {
+out.kind = K::Record;
+out.elements.resize(view.fields().size());
+for (std::size_t i = 0; i < view.fields().size(); ++i) {
+const std::string name(componentStore().string(view.fields()[i].name));
+const ScriptValue* field = nullptr;
+for (const auto& candidate : value.fields)
+if (candidate.first == name)
+field = &candidate.second;
+if (field == nullptr
+|| !componentValueFromScript(*field, view.fields()[i].type,
+out.elements[i]))
+return false;
+}
+return true;
+}
+case WASM::TypeKind::ComponentList:
+case WASM::TypeKind::ComponentFixedList: {
+out.kind = view.kind() == WASM::TypeKind::ComponentList ? K::List
+: K::FixedList;
+out.elements.resize(value.elements.size());
+if (view.kind() == WASM::TypeKind::ComponentFixedList
+&& value.elements.size() != view.fixedLength())
+return false;
+for (std::size_t i = 0; i < value.elements.size(); ++i)
+if (!componentValueFromScript(value.elements[i], view.element(),
+out.elements[i]))
+return false;
+return true;
+}
+case WASM::TypeKind::ComponentTuple: {
+out.kind = K::Tuple;
+out.elements.resize(view.tuple().size());
+if (value.elements.size() != view.tuple().size())
+return false;
+for (std::size_t i = 0; i < view.tuple().size(); ++i)
+if (!componentValueFromScript(value.elements[i], view.tuple()[i],
+out.elements[i]))
+return false;
+return true;
+}
+case WASM::TypeKind::ComponentVariant: {
+out.kind = K::Variant;
+out.discriminant = 0;
+bool found = false;
+for (std::size_t i = 0; i < view.cases().size(); ++i) {
+if (componentStore().string(view.cases()[i].label) != value.caseLabel)
+continue;
+out.discriminant = static_cast<uint32_t>(i);
+found = true;
+if (view.cases()[i].hasType) {
+if (!value.hasPayload || !value.payload)
+return false;
+LibJIT::ComponentValue payloadValue;
+if (!componentValueFromScript(*value.payload,
+view.cases()[i].type, payloadValue))
+return false;
+out.elements.resize(1);
+out.elements[0] = std::move(payloadValue);
+out.hasValue = true;
+}
+break;
+}
+return found;
+}
+case WASM::TypeKind::ComponentEnum: {
+out.kind = K::Enum;
+out.discriminant = 0;
+for (std::size_t i = 0; i < view.labels().size(); ++i)
+if (componentStore().string(view.labels()[i]) == value.value) {
+out.discriminant = static_cast<uint32_t>(i);
+return true;
+}
+return false;
+}
+case WASM::TypeKind::ComponentFlags: {
+out.kind = K::Flags;
+out.flags.assign(view.labels().size(), false);
+for (const std::string& flag : value.flags) {
+bool found = false;
+for (std::size_t i = 0; i < view.labels().size(); ++i)
+if (componentStore().string(view.labels()[i]) == flag) {
+out.flags[i] = true;
+found = true;
+break;
+}
+if (!found)
+return false;
+}
+return true;
+}
+case WASM::TypeKind::ComponentOption:
+out.kind = K::Option;
+out.hasValue = value.some;
+if (!value.some)
+return true;
+if (!value.payload)
+return false;
+out.elements.resize(1);
+return componentValueFromScript(*value.payload, view.element(),
+out.elements[0]);
+case WASM::TypeKind::ComponentResult:
+out.kind = K::Result;
+out.discriminant = value.ok ? 0u : 1u;
+out.hasValue = value.hasPayload;
+if (!value.hasPayload)
+return true;
+if (!value.payload)
+return false;
+out.elements.resize(1);
+return componentValueFromScript(*value.payload,
+value.ok ? view.resultOk() : view.resultError(), out.elements[0]);
+case WASM::TypeKind::ComponentMap:
+out.kind = K::Map;
+out.elements.resize(value.entries.size());
+for (std::size_t i = 0; i < value.entries.size(); ++i) {
+out.elements[i].kind = K::Tuple;
+out.elements[i].elements.resize(2);
+if (!componentValueFromScript(value.entries[i].first, view.mapKey(),
+out.elements[i].elements[0])
+|| !componentValueFromScript(value.entries[i].second,
+view.mapValue(), out.elements[i].elements[1]))
+return false;
+}
+return true;
+case WASM::TypeKind::ComponentOwn:
+case WASM::TypeKind::ComponentBorrow:
+out.kind = view.kind() == WASM::TypeKind::ComponentOwn ? K::Own : K::Borrow;
+out.discriminant = uint32_t(std::strtoul(value.value.c_str(), nullptr, 10));
+return true;
+case WASM::TypeKind::ComponentStream:
+case WASM::TypeKind::ComponentFuture:
+out.kind = view.kind() == WASM::TypeKind::ComponentStream ? K::Stream : K::Future;
+out.discriminant = uint32_t(std::strtoul(value.value.c_str(), nullptr, 10));
+return true;
+default:
+return false;
+}
+}
+
+bool sameComponentValue(const LibJIT::ComponentValue& actual,
+const LibJIT::ComponentValue& expected)
+{
+using K = LibJIT::ComponentValue::Kind;
+if (actual.kind != expected.kind)
+return false;
+switch (actual.kind) {
+case K::String: return actual.string == expected.string;
+case K::F32:
+case K::F64: return actual.f64 == expected.f64;
+case K::Bool:
+case K::S8: case K::U8: case K::S16: case K::U16:
+case K::S32: case K::U32: case K::S64: case K::U64:
+return actual.u64 == expected.u64;
+case K::Char: case K::Variant: case K::Enum:
+case K::Own: case K::Borrow: case K::Stream: case K::Future:
+return actual.discriminant == expected.discriminant;
+default: break;
+}
+if (actual.flags != expected.flags || actual.hasValue != expected.hasValue)
+return false;
+if (actual.elements.size() != expected.elements.size())
+return false;
+for (std::size_t i = 0; i < actual.elements.size(); ++i)
+if (!sameComponentValue(actual.elements[i], expected.elements[i]))
+return false;
+return true;
 }
 
 bool componentValueMatches(const LibJIT::ComponentValue& actual,
-		const ScriptValue& expected)
+const ScriptValue& expected, const WASM::ComponentValueType& type)
 {
-	LibJIT::ComponentValue wanted;
-	if (!componentValueFromScript(expected, wanted))
-		return false;
-	using K = LibJIT::ComponentValue::Kind;
-	if (actual.kind != wanted.kind)
-		return false;
-	switch (actual.kind) {
-	case K::String: return actual.string == wanted.string;
-	case K::F32:
-	case K::F64: return actual.f64 == wanted.f64;
-	default: return actual.u64 == wanted.u64;
-	}
+if (!expected.alternatives.empty()) {
+for (const ScriptValue& alternative : expected.alternatives)
+if (componentValueMatches(actual, alternative, type))
+return true;
+return false;
+}
+LibJIT::ComponentValue wanted;
+if (!componentValueFromScript(expected, type, wanted))
+return false;
+const bool same = sameComponentValue(actual, wanted);
+return same;
 }
 
 void ScriptRunner::onAssertReturn(const ScriptCommand& command)
@@ -1065,7 +1365,8 @@ void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 		}
 		std::vector<LibJIT::ComponentValue> args(action.args.size());
 		for (std::size_t i = 0; i < action.args.size(); ++i) {
-			if (!componentValueFromScript(action.args[i], args[i])) {
+			if (!componentValueFromScript(action.args[i],
+					function->paramTypes[i], args[i])) {
 				skip("component argument type '" + action.args[i].type + "' is not supported");
 				return;
 			}
@@ -1079,7 +1380,8 @@ void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 			return;
 		}
 		for (std::size_t i = 0; i < results.size(); ++i) {
-			if (!componentValueMatches(results[i], command.expected[i])) {
+			if (!componentValueMatches(results[i], command.expected[i],
+					function->resultTypes[i])) {
 				fail(command.line, "component assert_return failed for '"
 						+ action.field + "' result #" + std::to_string(i));
 				return;

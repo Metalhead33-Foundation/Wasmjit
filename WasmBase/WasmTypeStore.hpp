@@ -24,6 +24,10 @@ enum class TypeKind : uint16_t {
 	CoreFunc = 1,
 	CoreStruct,
 	CoreArray,
+	// A nominal type imported with `(type (sub <heaptype>))` (TYPE_IMPORTS.md).
+	// Its representation is the abstract bound; it is never structurally
+	// interned and never equals a definition with the same shape.
+	CoreImport,
 	ComponentPrimitive,
 	ComponentRecord,
 	ComponentVariant,
@@ -84,6 +88,12 @@ struct CoreStructPayload {
 
 struct CoreArrayPayload {
 	CanonFieldType element;
+};
+
+// An imported type is nominal; only its abstract representation bound is
+// stored. `bound` is always abstract in the MVP (no concrete type bound).
+struct CoreImportPayload {
+	CanonHeapType bound;
 };
 
 // ── Component type records ──────────────────────────────────────────────────
@@ -282,6 +292,8 @@ public:
 	std::span<const CanonStorageType> funcResults() const;
 	std::span<const CanonFieldType> structFields() const;
 	const CanonFieldType& arrayElement() const;
+	// The abstract bound of a `CoreImport` record; `AbstractHeapType::Func` etc.
+	CanonHeapType importBound() const;
 
 private:
 	const TypeStore* store_ = nullptr;
@@ -331,6 +343,11 @@ class TypeStore
 public:
 	TypeId appendCore(const CanonicalType& type);
 	CoreTypeView coreType(TypeId id) const;
+	// Intern a nominal imported type by (module, field, abstract bound). Two
+	// modules importing the same export share the identity; a different name or
+	// bound is a different nominal type.
+	TypeId internCoreImport(std::string_view module, std::string_view field,
+			AbstractHeapType bound);
 
 	TypeId addComponentPrimitive(PrimitiveValueType primitive);
 	// These take the source lists directly so a structural hit does not append
@@ -416,7 +433,7 @@ public:
 	const TypeRecord& record(TypeId id) const { return records_[id.value]; }
 	TypeDomain domain(TypeId id) const
 	{
-		return record(id).kind <= TypeKind::CoreArray
+		return record(id).kind <= TypeKind::CoreImport
 				? TypeDomain::Core : TypeDomain::Component;
 	}
 	// The TypeId space is shared, so core records are *not* a dense prefix:
@@ -457,6 +474,7 @@ private:
 	std::vector<CanonHeapType> coreSupertypes_;
 	std::vector<CanonStorageType> coreStorage_;
 	std::vector<CanonFieldType> coreFields_;
+	std::vector<CoreImportPayload> coreImports_;
 	std::vector<CoreFuncPayload> coreFuncs_;
 	std::vector<CoreStructPayload> coreStructs_;
 	std::vector<CoreArrayPayload> coreArrays_;
@@ -493,6 +511,8 @@ private:
 	// is only meaningful inside one component, so interning them would make
 	// two unrelated components share an identity.
 	std::unordered_map<std::string, TypeId> componentIntern_;
+	// Nominal core type imports, keyed by length-prefixed module/field + bound.
+	std::unordered_map<std::string, TypeId> coreImportIntern_;
 	std::size_t componentInternHits_ = 0;
 	std::size_t componentInternMisses_ = 0;
 

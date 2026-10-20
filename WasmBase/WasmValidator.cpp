@@ -329,6 +329,17 @@ bool Validator::refSubtype(const ValueType& actual, const ValueType& expected) c
 				case CanonTypeKind::Func:   out.kind = Kind::ConcreteFunc; break;
 				case CanonTypeKind::Struct: out.kind = Kind::ConcreteStruct; break;
 				case CanonTypeKind::Array:  out.kind = Kind::ConcreteArray; break;
+				case CanonTypeKind::Import: {
+					const CanonHeapType bound = module.typeView(idx).importBound();
+					switch (bound.abstract) {
+					case AbstractHeapType::Func:   out.kind = Kind::ConcreteFunc; break;
+					case AbstractHeapType::Struct: out.kind = Kind::ConcreteStruct; break;
+					case AbstractHeapType::Array:  out.kind = Kind::ConcreteArray; break;
+					case AbstractHeapType::Extern: out.kind = Kind::Extern; break;
+					default:                       out.kind = Kind::Any; break;
+					}
+					break;
+				}
 				}
 			} else {
 				switch (static_cast<ValueTypeCode>(type.heapType)) {
@@ -624,6 +635,9 @@ void Validator::validateModule()
 		case CanonTypeKind::Array:
 			checkStorage(view.arrayElement().storage, "array element");
 			break;
+		case CanonTypeKind::Import:
+			// An imported type is bounded by an abstract heap type only.
+			break;
 		}
 	}
 	for (const ImportTable& imp : module.importTables)
@@ -665,7 +679,10 @@ void Validator::validateModule()
 		case ExternalKind::Memory:   requireMemoryIndex(ex.index);   break;
 		case ExternalKind::Global:   requireGlobalIndex(ex.index);   break;
 		case ExternalKind::Tag:      requireTagIndex(ex.index);      break;
-		case ExternalKind::Type:     fail("type exports are not linked yet"); break;
+		case ExternalKind::Type:
+			if (ex.index >= module.typeCount())
+				fail("unknown type " + std::to_string(ex.index));
+			break;
 		}
 	}
 
@@ -1249,8 +1266,23 @@ ValueType Validator::refTopForHeap(const HeapType& heapType) const
 	ValueType top{};
 	top.heapType = -1;
 	if (heapType.isTypeIndex) {
-		top.opcode = module.typeView(heapType.typeIndex).kind() == CanonTypeKind::Func
-				? ValueTypeCode::FuncRef : ValueTypeCode::AnyRef;
+		const CoreTypeView view = module.typeView(heapType.typeIndex);
+		if (view.kind() == CanonTypeKind::Import) {
+			switch (view.importBound().abstract) {
+			case AbstractHeapType::Func:
+				top.opcode = ValueTypeCode::FuncRef;
+				break;
+			case AbstractHeapType::Extern:
+				top.opcode = ValueTypeCode::ExternRef;
+				break;
+			default:
+				top.opcode = ValueTypeCode::AnyRef;
+				break;
+			}
+		} else {
+			top.opcode = view.kind() == CanonTypeKind::Func
+					? ValueTypeCode::FuncRef : ValueTypeCode::AnyRef;
+		}
 		return top;
 	}
 	switch (heapType.abstract) {

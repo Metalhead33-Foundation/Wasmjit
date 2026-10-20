@@ -18,6 +18,7 @@ Both live in the same binary, so a bare `./WasmJit` runs everything the runtime 
 | libffi (`pkg-config libffi`) | flat component `canon lower` closures |
 | Catch2 3.x (`-lCatch2 -lCatch2Main`) | the test framework |
 | `nlohmann_json` headers | parsing the generated spec manifests |
+| `utf8cpp` headers (`dev-libs/utfcpp` or the `utf8cpp` package) | Canonical ABI `utf8`/`utf16`/`latin1+utf16` transcoding |
 | Node.js + npm | AssemblyScript → `.wasm` for the manual tests |
 | `wasm-tools` on `PATH` | `.wast` → `.json`/`.wasm` for the spec suite |
 
@@ -166,6 +167,27 @@ lists are built with `$$files()` at qmake time, so `make` alone will not notice
 the new file (regenerate the `Test` Makefile, or re-run qmake on `Project.pro`).
 
 ---
+
+### Structured component-script values
+
+Structured component-script values use the harness's JSON schema (the scalar
+entries keep the `wasm-tools json-from-wast` shape):
+
+- `record`: `{"type":"record","fields":[{"name":"a","value":{...}} , ...]}`;
+- `list` / `fixed-list` / `tuple`: `{"type":"list","elements":[...]}`
+  (fixed lists also accept the `elements` array and are length-checked);
+- `variant`: `{"type":"variant","case":"some","payload":{...}}` (payload
+  optional);
+- `enum`: `{"type":"enum","value":"case"}`;
+- `flags`: `{"type":"flags","flags":["a","c"]}`;
+- `option`: `{"type":"option","some":true,"payload":{...}}`;
+- `result`: `{"type":"result","ok":true,"payload":{...}}`;
+- `map`: `{"type":"map","entries":[{"key":{...},"value":{...}}]}`;
+- handles: `{"type":"own","value":"3"}` / `"borrow"` / `"stream"` / `"future"`.
+
+The conversion is type-directed: field order, variant labels and case payloads
+are checked against the function's canonical `paramTypes`/`resultTypes`, so a
+script cannot silently pass the wrong record shape.
 
 ## Part 2 — the official WebAssembly spec testsuite
 
@@ -630,6 +652,14 @@ Current modules:
 | `component_coremoduleexport.wat` | an exported core module introducing an index that is instantiated later | `an exported core module can be instantiated` |
 | `component_invalid_*.wat` (17 files) | out-of-bounds type/function/alias/start/instance references, duplicate import/export names, missing instantiation arguments, bad canon type, bad labels/flags, borrow/stream/resource restrictions, incompatible export ascription and invalid outer alias | `invalid component references and types are rejected` |
 | hand-authored bytes in `Test/main.cpp` | start/value sections and the `0x00 0x50` / `0x4E` core-type encodings (gated constructs) | `component start and value sections are parsed`, `core non-final and recursive type encodings are parsed` |
+| `component_runtime_string_encodings.wat` | utf8/utf16/latin1+utf16 round-trips, including a non-Latin-1 emoji and an empty string | `component runtime transcodes canonical string encodings` |
+| `component_runtime_async.wat` | stream.new/read/write/drop, a blocked async read completed by a later write, waitable-set event delivery, future round trip | `component runtime executes single-agent async builtins` |
+| `component_getters_setters.wat` + `component_invalid_{setter_without_getter,getter_params,strong_name}.wat` | matching `[get]`/`[set]` property types, method/static forms, strong-uniqueness canonicalization | `component getter/setter annotations and strong uniqueness` |
+| hand-authored bytes in `Test/main.cpp` | an exporter struct type + `(sub any)` type import/link and a `(sub func)` rejection | `core type imports link by their abstract bound` |
+| hand-authored bytes in `Test/main.cpp` | a `value` definition (u32 42) and a `start` invoking a host import with it | `component start executes a decoded value definition` |
+| `Spec::WitPackage::parse` | `wasm-tools component wit --json` shape: packages, worlds, interfaces, function params/results | `WIT JSON is ingested by the test harness` |
+| component script JSON | structured `variant` and `map` arguments/results through the harness | `component script marshals structured values` |
+| `runtime.abi()` | two runtimes with the same `TypeId` own distinct signature objects; one runtime reuses its entry | `canonical ABI signatures are instance-owned` |
 | `simd_abi.wat` | `(param v128)(result v128)` round-trip, `v128` locals incl. reading one before `local.set`, a `v128` through a block, lane projections | `simd: a v128 parameter and result round-trip through the JIT` |
 | `simd_const_lane.wat` | `v128.const` byte order, `*.splat`, signed/unsigned `extract_lane`, `replace_lane` | `simd: v128.const, splat and lane ops run through the JIT` |
 | `simd_bitwise.wat` | `v128.not/and/andnot/or/xor/bitselect`, with distinct lanes and golden values that pin which operand is complemented and which selects | `simd: bitwise ops run through the JIT` |

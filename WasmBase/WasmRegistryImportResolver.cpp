@@ -400,4 +400,50 @@ std::optional<TagId> RegistryImportResolver::ModuleRegistry::resolveTag(std::str
 	return it->second;
 }
 
+void RegistryImportResolver::registerType(std::string_view moduleName,
+		std::string_view fieldName, TypeId type)
+{
+	auto module = registeredModules.find(moduleName);
+	if (module == std::end(registeredModules)) {
+		ModuleRegistry modReg;
+		modReg.registerType(fieldName, type);
+		registeredModules.insert_or_assign(std::string(moduleName), std::move(modReg));
+	} else {
+		module->second.registerType(fieldName, type);
+	}
+}
+
+std::optional<TypeId> RegistryImportResolver::resolveType(
+		std::string_view moduleName, std::string_view fieldName,
+		AbstractHeapType bound)
+{
+	auto module = registeredModules.find(moduleName);
+	if (module == std::end(registeredModules))
+		return std::nullopt;
+	return module->second.resolveType(fieldName, bound);
+}
+
+void RegistryImportResolver::ModuleRegistry::registerType(
+		std::string_view fieldName, TypeId type)
+{
+	types.insert_or_assign(std::string(fieldName), type);
+}
+
+std::optional<TypeId> RegistryImportResolver::ModuleRegistry::resolveType(
+		std::string_view fieldName, AbstractHeapType bound)
+{
+	const auto it = types.find(fieldName);
+	if (it == types.end())
+		return std::nullopt;
+	CanonHeapType actual;
+	actual.kind = CanonHeapType::Kind::Global;
+	actual.id = it->second;
+	CanonHeapType expected;
+	expected.kind = CanonHeapType::Kind::Abstract;
+	expected.abstract = bound;
+	if (!Store::global().types().matchesHeap(actual, expected))
+		return std::nullopt;
+	return it->second;
+}
+
 } // namespace WASM

@@ -1,16 +1,16 @@
 # WIT and the Component Model — Spec Status, Design Space, and a QVM-Style Scope
 
-Status: proposal + implementation note (revision 13 — CM-0, the CM-1a framing
-parser, the CM-1b full binary AST parser, CM-1c index spaces + structural
-validation, the CM-1d visibility/substitution/scheme slice, flat/layout
-Canonical ABI metadata, and an executable Canonical ABI runtime covering flat
-values, strings/lists/records, exact variant joins, `memory`/`realloc`/
-`post-return`, resource handle tables with own/borrow scopes and destructor matching, map
-values, stream/future handle allocation/drop, host imports, nested component
-instantiation and scalar component-script execution are implemented; full
-async/stream/future copy/task semantics (deferred to
-[`THREADS.md`](THREADS.md) §5.1), full core Type linking and full component-
-script value marshalling remain).
+Status: proposal + implementation note (revision 14 — CM-0 … CM-7 are complete:
+the parser decodes every section/production, the validator covers references,
+scopes, labels, declarations, aliases, instantiation signatures, canon, start,
+values, `[get]`/`[set]`, strong uniqueness and Canonical ABI flattenability,
+and the runtime executes embedded/nested components, inline core instances,
+flat/layout Canonical ABI values, resources, start/value definitions,
+structured component scripts and the single-agent async surface (streams,
+futures, tasks, context, backpressure, waitables, subtasks, error-context).
+Core Type imports/exports link by abstract `sub` bound. True multi-agent
+scheduling remains deferred to [`THREADS.md`](THREADS.md) §5.1; WIT is ingested
+harness-side and WASI is host-provided.)
 Audience: whoever touches `WasmModule` (binary decoding), `WasmStore`,
 `WasmTypeRegistry`, `WasmImport`, the `LibJit*` backend, or the test harness —
 i.e. whoever would decide where a component parser lives.
@@ -221,7 +221,7 @@ most to this project:
 
 For a shared-nothing, non-browser engine the relevant surface is exactly the
 WASI 0.2 baseline: the binary format above, structural type equality, `canon
-lift`/`lower` with `string-encoding=utf8`, one `memory` and a `realloc`, resource
+lift`/`lower` with all three string encodings, one `memory` and a `realloc`, resource
 handles, named imports/exports, and WIT as the authoring format. Everything in
 §2.3–§2.6 marked 🪙/🔀/🗺️/🏷️/🧵/🔧/📝/🐘/📡/➡️/🪺 can be rejected at the door.
 
@@ -233,7 +233,7 @@ handles, named imports/exports, and WIT as the authoring format. Everything in
 - **No obligation to implement every `canonopt`.** `canon lift`/`lower`
   validation only demands the options the involved types need; an engine may
   reject a lift/lower it cannot service. A shared-nothing engine can support
-  only `string-encoding=utf8`, a single `memory`, and `realloc`.
+  all three string encodings, a single `memory`, and `realloc`.
 - **No required string encoding.** `utf8`, `utf16` and `latin1+utf16` are all
   legal; the component declares which one a given lift/lower uses.
 - **No required resource representation.** The handle-table *behaviour* is
@@ -298,9 +298,10 @@ CM-1a/CM-1b (below) now parse every component section and binary production.
 A component runtime is also present (`LibJit/ComponentRuntime.{hpp,cpp}`): it
 instantiates embedded/nested core modules and components, executes
 `canon lift`/`lower`, lowers/lifts the supported canonical values through
-linear memory, manages resource/stream/future handles, and exposes component
-functions to C++ and the scalar script harness. The remaining limits are listed
-in §4.3 and §5.
+linear memory, manages resource/stream/future handles, executes start/value
+definitions, and exposes component functions to C++ and the structured script
+harness. The remaining limits are the deferred multi-agent work listed in
+§4.3 and §5.
 
 ### 4.2 Seams that already fit
 
@@ -316,21 +317,17 @@ in §4.3 and §5.
 
 ### 4.3 What is still not there
 
-- Full core **Type import/export linking**: `ExternalKind::Type` is decoded and
-  rejected with a named TI-0 error, but imported types are not yet given Store
-  identities or substituted per instance (see `TYPE_IMPORTS.md`).
-- Full **component-script value marshalling**: WastScript detects component
-  binaries and supports scalar/string invokes; records, lists, variants and
-  handles are not yet marshalled from component-script JSON.
-- **Async/stream/future read, write, cancel, forward and task scheduling**;
-  only opaque stream/future handle allocation/drop exists. This is deferred to
-  `THREADS.md` §5.1.
-- Full **resource destructor/borrow edge semantics** beyond the implemented
-  nominal handle table, scope expiry and destructor invocation; WIT-defined
-  resource subtyping/private types are not in scope.
-- **WIT ingestion, package resolution, component `start`/value execution, WIT
-  worlds and WASI 0.2 interfaces.** The binary AST can represent `start` and
-  `value` sections, but the runtime does not execute them.
+- **True multi-agent execution** of component async/streams/futures/tasks.
+  The interfaces and a working single-agent backend exist
+  (`WasmBase/WasmComponentAsync.hpp`, `THREADS.md` §5.1); a second agent, real
+  wakeups and concurrent copies are the deliberately deferred TH-5 work.
+- **WIT-defined resource subtyping/private types** (post-MVP in the component
+  model) and engine-side WASI 0.2 implementations. WIT itself is a build-time
+  format: the harness ingests `component wit --json`, and WASI interfaces are
+  provided by the embedder through the ordinary host component-import hook.
+- The upstream `WebAssembly/component-model/test/*.wast` corpus is not checked
+  into the tree; the equivalent cases are hand-authored C++/WAT tests. Value
+  imports/exports remain gated (🪙) in the specification.
 
 ### 4.4 CM-1a/CM-1b/CM-1c — parser, index spaces and structural validation
 
@@ -396,8 +393,11 @@ component grammar into an AST:
   components, resolves core export aliases, implements `canon lift`/`lower`
   through libffi closures, links host `ComponentFunction` imports, runs
   `memory`/`realloc`/`post-return`, and lowers/lifts strings, lists, records,
-  maps, variants/options/results and resource/stream/future handles. Async copy
-  semantics remain deferred (§4.3 / `THREADS.md` §5.1).
+  maps, variants/options/results and resource/stream/future handles. The
+  single-agent async surface (copy/cancel/forward, tasks, context,
+  backpressure, waitable sets, subtasks, error-context) is implemented in the
+  same runtime; only true multi-agent scheduling is deferred
+  (§4.3 / `THREADS.md` §5.1).
 - `Component::validate()` (called automatically after parsing a concrete
   component, recursively for nested components) performs structural
   component-level validation:
@@ -421,28 +421,28 @@ component grammar into an AST:
   - canon builtins check their referenced sort/type indices and `canonopt`
     duplicates/indices; start checks its function, argument values and result
     count; value definitions check their type.
-- This is intentionally **not** a runtime or a complete canonical-ABI
-  validator. Still absent: full external-visibility rules for named types,
-  type substitution through imported type parameters, resource generativity
-  across instantiation, exact core-module-type matching, canonical-ABI
-  flattening/maximum-size checks, linking/instantiation and `canon` execution.
-  Parsing/validating a gated construct (async, stream, `map`, `start`, `value`,
-  …) does **not** mean the engine executes it.
+- This is a full structural/type validator and an executable runtime. It checks
+  references, scopes, labels, declarations, aliases, instantiation signatures,
+  canon, start, values, external visibility, resource substitution, exact
+  core-module types, `[get]`/`[set]`, strong-uniqueness and Canonical ABI
+  flattenability. Parsing/validating a gated construct (async, stream, `map`,
+  `start`, `value`, …) now means the single-agent runtime executes it; only
+  true multi-agent scheduling remains deferred.
 
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
 | ~~CM1~~ | ~~No `layer` discrimination.~~ **Done (CM-0):** `Module::fromFile` reads magic/version/layer separately and throws a component-specific error when the layer is non-zero, so a component is refused instead of misparsed. | `WasmModule.cpp` `fromFile` | Closed |
-| CM2 | **Closed for structural validation (CM-1c).** All 13 index spaces, definition-order growth and `sortidx` resolution are implemented; `Component::validate()` checks references/types/declarations/aliases/instantiation signatures/canon/start/values. External visibility, resource substitution and core-module matching have since been added; remaining validation is `[get]`/`[set]` semantics and full core Type linking/ABI signature checks. | `WasmComponentValidation.*` | Closed (structural) |
-| CM3 | **Runtime bridge exists; remaining work is specification breadth.** `ComponentValueType`/`ComponentTypeDef` model the value grammar; validation canonicalises records and `ComponentRuntime` executes flat values, strings/lists/records/maps, variant joins and nested components. Remaining: async copy/task semantics, full Type linking and complete script marshalling. | `WasmComponentModel.hpp`, `WasmTypeStore.hpp`, `LibJit/ComponentRuntime.*` | Medium |
-| CM4 | **Canonical ABI runtime implemented for the supported value/ABI set.** `ComponentRuntime` handles flat values, strings/lists/records/maps, exact variant/result/option joins, `memory`/`realloc`/`post-return`, `MAX_FLAT_PARAMS`/`MAX_FLAT_RESULTS` spill, and resource/stream/future handles. Async copy/read/write/cancel/forward and full Type linking remain. | `WasmTypeStore.*`, `LibJit/ComponentRuntime.*` | High |
-| CM5 | **Component runtime is executable for the supported graph.** Embedded/nested components, core export aliases, `canon lift`/`lower`, host imports, strings/lists/records/maps, variant joins and indirect ABI execute. Core-module import linking, full type matching and async functions remain. | `LibJit/ComponentRuntime.*` | High |
-| CM6 | **Function/resource linking and TI-0 exist; full Type linking remains.** Host `ComponentFunction` imports, nominal resource handles with own/borrow scope and destructor matching execute; Type imports/exports reject with a named TI-0 error. Type identity substitution/per-instance linking remains in [`TYPE_IMPORTS.md`](TYPE_IMPORTS.md). | `WasmImport.hpp`, `WasmRegistryImportResolver.hpp`, `LibJit/ComponentRuntime.*` | Medium |
-| CM7 | **C++ component-runtime tests and a scalar component-script path exist.** Tests cover lift/lower, strings, variants, maps, resources, streams and nested components; WastScript detects component binaries and supports scalar/string `invoke`/`assert_return`. Full component-script value marshalling remains. | `Test/main.cpp`, `Test/WastScript.cpp`, `Test/wast_supported.txt` | Medium |
-| CM8 | **Lifted/lowered functions have a thunk path.** `ComponentRuntime` uses libffi closures for `canon lower`, stream/future and resource builtins; the core `Callable` ABI is unchanged. Async copy semantics remain deferred. | `LibJit/ComponentRuntime.*`, `../ABI.md` | Medium |
-| CM9 | **No WASI 0.2 interfaces**, so real-world components (which import `wasi:*`) cannot link. | — | Low (deliberate non-goal) |
-| CM10 | **No `error-context`, async/stream/future copy semantics or threading built-ins.** `map` values and opaque stream/future handle allocation/drop are implemented. | — | Low (deliberate non-goal) |
+| ~~CM2~~ | ~~**Structural/type validation incomplete.**~~ **Done (CM-1c/CM-1d):** all 13 index spaces, definition-order growth, `sortidx` resolution, references, scopes, labels, declarations, aliases, instantiation signatures, canon, start, values, external visibility, resource substitution, core-module matching, `[get]`/`[set]`, strong uniqueness and Canonical ABI flattenability are validated. | `WasmComponentValidation.*` | Closed |
+| ~~CM3~~ | ~~**Runtime bridge has specification gaps.**~~ **Done:** the value grammar is modelled and canonicalised; `ComponentRuntime` executes flat values, strings/lists/records/maps, variant joins, start/value definitions, inline core instances and nested components, and the single-agent async surface. | `WasmComponentModel.hpp`, `WasmTypeStore.hpp`, `LibJit/ComponentRuntime.*` | Closed |
+| ~~CM4~~ | ~~**Canonical ABI runtime has gaps.**~~ **Done:** flat values, strings/lists/records/maps, exact variant/result/option joins, `memory`/`realloc`/`post-return`, indirect parameters/results, resource handles, stream/future copy and waitable events execute. | `WasmTypeStore.*`, `LibJit/ComponentRuntime.*` | Closed |
+| ~~CM5~~ | ~~**Component graph execution incomplete.**~~ **Done:** embedded/nested components, inline core instances, core export aliases, `canon lift`/`lower`, host imports and canonical values execute; multi-agent async functions remain a THREADS deferral. | `LibJit/ComponentRuntime.*` | Closed |
+| ~~CM6~~ | ~~**Full Type linking absent.**~~ **Done (TI-1…TI-4):** type imports decode `sub <abstract heaptype>`, enter the local type index space, receive nominal Store ids, are published by type exports and are linked with `WasmTypeRegistry` bound matching. The importing module sees imported types as abstract, as the MVP specifies; casts to imported types remain post-MVP in the proposal. | `WasmImport.hpp`, `WasmModule.*`, `WasmRegistryImportResolver.*`, `WasmTypeStore.*` | Closed |
+| ~~CM7~~ | ~~**Component-script value marshalling incomplete.**~~ **Done:** component scripts marshal primitives, strings, records, lists, tuples, variants, enums, flags, options, results, maps, own/borrow, streams and futures, using the function's canonical component types. The upstream corpus is not checked in; equivalent C++/WAT tests are. | `Test/main.cpp`, `Test/WastScript.cpp` | Closed |
+| ~~CM8~~ | ~~**Async copy semantics deferred.**~~ **Done for the single-agent engine:** libffi closures back `canon lower`, resources, stream/future new/read/write/cancel/forward, tasks, context, backpressure, waitable sets, subtasks and error-context. Real concurrent scheduling remains THREADS TH-5. | `LibJit/ComponentRuntime.*`, `WasmBase/WasmComponentAsync.hpp` | Closed (single-agent) |
+| ~~CM9~~ | ~~**No WASI 0.2 interfaces.**~~ **Closed by contract:** WASI is an embedder interface; a `wasi:*` import is an ordinary host component import resolved by the embedder. No engine-side WASI implementation is required by the Component Model. | `LibJit/ComponentRuntime.*`, `Test/main.cpp` host-import tests | Closed (host-provided) |
+| ~~CM10~~ | ~~**No error-context, async copy or threading built-ins.**~~ **Done:** `error-context.new/debug-message/drop`, stream/future copy/cancel/forward, task/context/backpressure, waitable sets, subtasks and the component async interfaces exist. `thread.*` returns single-agent answers (`index` 0, `yield` no-op, `available-parallelism` 1) and traps for thread creation, which requires a multi-agent backend. | `WasmComponentAsync.hpp`, `LibJit/ComponentRuntime.*` | Closed (single-agent) |
 
 ## 6. Where we can and should play fast and loose
 
@@ -454,8 +454,8 @@ deviation is accepted where it simplifies the implementation.
 |---|---|---|---|
 | CMD1 | **Refuse components at the door until CM-1.** Read `layer`, and if it is `0x01` throw a clear "components are not supported yet" instead of decoding garbage. | §4.1: today the outcome is an unrelated error or a nonsense module. | An honest failure mode, and it removes a whole class of confusing diagnostics. |
 | CMD2 | **Parse, do not validate.** Do not port the component validation algorithm; accept what is structurally decodable. | §3; matches the existing stance (`TESTING.md`: "malformed/invalid modules are not rejected yet"). | No second type checker. |
-| CMD3 | **Target the shared-nothing WASI 0.2 subset only.** Reject `async`, `stream`, `future`, `task.*`, `waitable-set.*`, `thread.*`, `value`, `start`, `map`, `error-context`. | §3: all are gated on later previews, and `canonopt` validation permits rejecting unsupported options. | A finite scope that can actually be finished. |
-| CMD4 | **Implement only `string-encoding=utf8`** and reject lifts/lowers that ask for `utf16` / `latin1+utf16`. | §3: no encoding is mandatory; the option is per lift/lower, so a component can be refused at link time. | One string path instead of three. |
+| CMD3 | **Execute the shared-nothing WASI 0.2 subset, including the later-preview value/async surface, on one agent.** `async`, `stream`, `future`, `task.*`, `waitable-set.*`, `value`, `start`, `map` and `error-context` execute in single-agent mode; `thread.*` thread creation traps because it needs a multi-agent backend. | §3: an engine may support a gated feature; the THREADS staging decision (one agent) keeps every operation deterministic. | A finite, testable scope without a scheduler. |
+| CMD4 | **Implement all three Canonical ABI string encodings** (`utf8`, `utf16`, `latin1+utf16`) with utfcpp transcoding. | §3: no encoding is mandatory; supporting all three removes a link-time rejection. | One internal UTF-8 `ComponentValue` and a type-directed guest representation. |
 | CMD5 | **Restrict the first lift/lower subset to values that need no memory representation** (scalars, chars, handles) and add `memory`+`realloc` afterwards. | §3: an engine may reject a lift/lower whose types need an option it does not support. | A component that exports `add: func(a: u32, b: u32) -> u32` runs before any allocator work. |
 | CMD6 | **No in-engine JS/ESM embedding; the host surface stays `ImportResolver` + `VMContext::hostData`.** An optional embedder-owned adapter is surveyed in [`JS_INTEGRATION.md`](JS_INTEGRATION.md); it adds no JS dependency to `WasmBase/` or a backend. | §3: the JS API is optional; this project's embedder is C++. | No JS glue in core; an embedder may still wire a JS engine through the same hook. |
 | CMD7 | **Store resource `rep` as an opaque engine value** (the handle is still an `i32` table index). | §3: the object behind a handle is engine-defined; only the table behaviour is specified. | Resources can wrap arbitrary C++ objects. |
@@ -476,14 +476,14 @@ caller reuses the callee's buffer.
 | **CM-1a — Parser skeleton** | ✅ `Artifact` base + `Artifact::parse` (preamble/layer dispatch, `isCoreModule`/`isComponent`/`as*`), `Component` section framing, custom names, embedded core modules, nested components. No semantics, nothing executes. | CM1, CM2 (partly) | Done: a component can be walked section by section; embedded core modules are validated; `Test/wasm_wat/component_{reject,embed,nested}.wat` and three manual tests pass. |
 | **CM-1b — Full binary grammar** | ✅ Complete AST + decoder for every section id and production: core instance/types (incl. module types), component instances/aliases/types (all value, func, component, instance and resource types), every `canon` builtin/`canonopt`, start, imports/exports with attributes, values and custom payloads. Parser only; no index spaces. | CM2, CM3 (AST) | Done: `WasmComponentModel.hpp` has no unrepresented production; the parser is tested against `wasm-tools`-generated fixtures covering every major section and the hand-authored start/value case. |
 | **CM-1c — Component index spaces + structural validation** | ✅ Definition-order index spaces (`ComponentIndexSpaces`), public `sortidx` resolution, ordered `definitions`, and `Component::validate()` covering references, type/name/declarator rules, aliases, instantiation signatures, canon indices/options, start and values. No execution. | CM2 (structural) | Done: all valid fixtures validate; the invalid reference/type/alias/instantiation/canon/start/label cases are rejected; `Component::buildIndexSpaces()` exposes all 13 spaces. |
-| **CM-1d — Full component validation** | External visibility of named types, type substitution through type imports, resource generativity across instantiation, exact core-module-type matching, Canonical ABI signature/flattening checks, annotated-name rules. **Done slice:** abstract `sub resource` imports have nominal Store ids, instantiation substitutes the provided resource through the instance exports (`ComponentInstance::typeId` pins the canonical result), locally defined resources regenerate per instantiation, open component types intern as alpha-equivalent `SchemeId`s, core-module arguments are matched by module-type structure, and import/export types enforce external visibility for resources and named structural types. Extern-name syntax, `implements`, `versionsuffix` and `[constructor]`/`[method]`/`[static]` resource binding are validated. The scheme/resource design is in [`TYPE_MODEL.md`](TYPE_MODEL.md) §7.11.3; `[get]`/`[set]` semantics and ABI checks remain. | CM2 (rest) | Remaining spec-validation rules can be added without a runtime. |
+| **CM-1d — Full component validation** | External visibility of named types, type substitution through type imports, resource generativity across instantiation, exact core-module-type matching, Canonical ABI signature/flattening checks, annotated-name rules. **Done slice:** abstract `sub resource` imports have nominal Store ids, instantiation substitutes the provided resource through the instance exports (`ComponentInstance::typeId` pins the canonical result), locally defined resources regenerate per instantiation, open component types intern as alpha-equivalent `SchemeId`s, core-module arguments are matched by module-type structure, and import/export types enforce external visibility for resources and named structural types. Extern-name syntax, `implements`, `versionsuffix` and `[constructor]`/`[method]`/`[static]` resource binding are validated. The scheme/resource design is in [`TYPE_MODEL.md`](TYPE_MODEL.md) §7.11.3; `[get]`/`[set]`, strong uniqueness and Canonical ABI flattenability are now enforced. | CM2 (rest) | Remaining spec-validation rules can be added without a runtime. |
 | **CM-2 — Component types in the store** | Component value/definition types (`bool`…`string`, `list`/`record`/`variant`/`tuple`/`flags`/`enum`/`option`/`result`, `own`/`borrow`) plus structural equality, interned through the `Store`'s registry. The concrete compact representation, domain tagging, resource rules and staged migration are in [`TYPE_MODEL.md`](TYPE_MODEL.md); closed-type interning and scope mapping are TM-8 in §7.10.6. | CM3, CMD9 | Two structurally equal component types from different components intern to the same id; `matches` agrees with the spec's equality rules. |
-| **CM-3 — WIT ingestion (tooling)** | Consume `wasm-tools component wit --json` (and/or a binary WIT package) **in the test harness**, not the runtime; a hand-written `Wit/` parser stays a later option. | CM6 (partly) | A test can assert a component's expected world/import/export shape against a `.wit` file. |
-| **CM-4 — Core modules + instances** | ✅ Embedded `core:module`/`core:instance`/`alias` execute; core-instance arguments resolve through `RegistryImportResolver`; function exports/aliases are wired. Component-instance `with` arguments remain limited to functions. | CM2, CM5 | A component embedding one core module and re-exporting its function instantiates and runs. |
-| **CM-5 — `canon lift`/`lower`** | ✅ Flat values, strings/lists/records/maps, exact `join` for variants/results/options, `memory`/`realloc`, `post-return`, indirect params/results, host imports and nested component instantiation. Remaining: async functions/copy semantics. | CM4, CM8 | A component function with scalar/string/variant/map parameters is callable from C++ and returns the right values. |
-| **CM-6 — Resources** | ✅ Nominal handle table, own/borrow scope tracking, `resource.new`/`drop`/`rep`, type-checked handles and core destructor invocation. Remaining: the full WIT/private-resource and borrowing edge cases. | CM4 | A handle round trip traps correctly on out-of-range index, double drop, borrow escape and use-after-drop. |
-| **CM-7 — Component tests** | ⏳ C++ runtime tests cover lift/lower, strings, variants, maps, resources, streams and nested components; WastScript detects component binaries and executes scalar/string invokes. Remaining: full component-script value marshalling and the upstream component test corpus. | CM7 | "spec: components" cases run or skip with a stated reason, the way "spec: <script>" does today. |
-| **(non-goals)** | async/stream/future copy/read/write/cancel/forward and tasks/threading (see [`THREADS.md`](THREADS.md) §5.1), value imports/exports, component `start`/value execution, `error-context`, WASI 0.2 interfaces, the JS API. | CM9, CM10 | — |
+| **CM-3 — WIT ingestion (tooling)** | ✅ `Spec::WitPackage::parse` consumes `wasm-tools component wit --json` and exposes worlds, interfaces, imports and exports for harness assertions; WIT is never loaded by the runtime. | CM6 (partly) | A test asserts a component's expected world/import/export shape against a `.wit` source. |
+| **CM-4 — Core modules + instances** | ✅ Embedded `core:module`/`core:instance`/`alias` execute; core-instance arguments resolve through `RegistryImportResolver`; inline core exports are a first-class handle kind; function exports/aliases are wired. Component-instance `with` arguments remain function-valued. | CM2, CM5 | A component embedding one core module and re-exporting its function instantiates and runs. |
+| **CM-5 — `canon lift`/`lower`** | ✅ Flat values, strings/lists/records/maps, exact `join` for variants/results/options, `memory`/`realloc`, `post-return`, indirect params/results, host imports, nested components, start/value definitions and single-agent async copy/task built-ins. | CM4, CM8 | A component function with scalar/string/variant/map parameters is callable from C++ and returns the right values. |
+| **CM-6 — Resources** | ✅ Nominal handle table, own/borrow scope tracking, `resource.new`/`drop`/`rep`, type-checked handles, destructor invocation, use-after-drop/double-drop/borrow-escape traps. WIT private-resource subtyping is post-MVP. | CM4 | A handle round trip traps correctly on out-of-range index, double drop, borrow escape and use-after-drop. |
+| **CM-7 — Component tests** | ✅ C++ runtime tests cover lift/lower, strings, variants, maps, resources, streams, futures, async events, start/value, inline instances and structured script marshalling; WastScript executes component scripts. The upstream corpus is not checked in. | CM7 | "spec: components" cases run or skip with a stated reason, the way "spec: <script>" does today. |
+| **(deferred non-goals)** | True multi-agent async/stream/future scheduling (THREADS TH-5), WIT value imports/exports, WIT private-type subtyping, and engine-side WASI 0.2 implementations (WASI is host-provided). | CM9, CM10 | — |
 
 ## 8. Indicative test survey
 
@@ -493,14 +493,19 @@ C++ tests and WAT fixtures; the upstream component test corpus is still absent.
 | Test / script | Current result | Reading |
 |---|---|---|
 | `extern/WasmTestsuite/*.wast` (core suite) | green where curated | contains **no** component cases; `wast_supported.txt` is a core-only list. |
-| a binary component script fed to the harness | scalar path implemented | `ScriptRunner::onModule` detects the component preamble, instantiates `ComponentRuntime`, and marshals scalar/string `invoke`/`assert_return`; non-scalar values are skipped. |
+| a binary component script fed to the harness | **pass** | `ScriptRunner::onModule` detects the component preamble, instantiates `ComponentRuntime`, and marshals scalar and structured `invoke`/`assert_return` values (records, lists, tuples, variants, enums, flags, options, results, maps, handles). |
 | `module_definition` / `module_instance` commands | `module_definition` decoded (not instantiated); `module_instance` skipped | the linking model that the Component Model supersedes/built on; the harness decodes definitions but does not implement linking. |
-| `WebAssembly/component-model/test/*.wast` | not in the tree | the real reference tests; their README runs them with `wasmtime wast` (and `nyi.txt` filters tests that land ahead of implementations). Adding this as a submodule is CM-7. |
+| `WebAssembly/component-model/test/*.wast` | not in the tree | the reference corpus is run upstream with `wasmtime wast`. The equivalent cases are covered by `Test/main.cpp` and `Test/wasm_wat/*.wat`; adding the corpus remains optional test breadth, not a runtime gap. |
 | manual test, CM-0 | **pass** | `Test/wasm_wat/component_reject.wat` (a bare `(component)`) is loaded and the loader's component-specific message is asserted; `a Component Model component is rejected instead of misparsed`. |
 | manual test, CM-1a | **pass** | `Artifact::parse` distinguishes `add_core` from `component_reject`; `component_embed.wat` parses a core:module section (including the nested core preamble and `component-name` custom section); `component_nested.wat` parses a nested component recursively. |
 | manual test, CM-1b | **pass** | `component_types.wat` (all value types + import/export), `component_exporttype.wat` (ascribed export), `component_canon.wat` (module/instance/alias/lift/export), `component_coretypes.wat` + `component_coreexterns.wat` + `component_coregc.wat` (core rec/func/struct/array/module types and every core external kind), `component_{instances,decltypes,resource,async,canonopts,attributes,aliasexport,instanceinline,coreinline,outer}.wat`, plus hand-authored start/value and non-final/`0x4E` core-type binaries. Each fixture has its own assertions; all pass. |
 | manual test, CM-1c | **pass** | `Component::buildIndexSpaces()` returns the 13 spaces and resolves definitions/exports; the valid type-import/export and exported-core-module fixtures validate; the eight reference/type/alias/instantiation/canon/start/label invalid fixtures and the extra borrow/stream/flags/sort invalid fixtures are all rejected. |
-| manual runtime tests, CM-4/CM-5 | **pass** | `component_runtime*` fixtures cover flat lift/lower, host imports, strings, lists/maps, variant joins, indirect ABI, resource/stream handles and nested components. |
+| manual runtime tests, CM-4/CM-5 | **pass** | `component_runtime*` fixtures cover flat lift/lower, host imports, strings (utf8/utf16/latin1+utf16), lists/maps, variant joins, indirect ABI, resource/stream/future handles, inline core instances, start/value execution and nested components. |
+| manual async tests, CM-5 | **pass** | `component_runtime_async.wat` blocks an async stream read, completes it with a write, delivers the `stream-read` waitable event and round-trips a future. |
+| manual getter/setter tests, CM-1d | **pass** | `component_getters_setters.wat` covers plain/method/static getters and setters; the three invalid fixtures reject a missing getter, a parameterised getter and a strongly-conflicting name. |
+| manual Type import/export tests, CM-6 | **pass** | hand-authored core binaries link a struct export to a `sub any` import and reject a `sub func` bound. |
+| tooling test, CM-3 | **pass** | `Spec::WitPackage::parse` ingests `wasm-tools component wit --json` and exposes packages/worlds/interfaces/functions. |
+| component-script marshalling, CM-7 | **pass** | structured `variant` and `map` values round-trip through the JSON harness; the JSON schema is documented in [`../TESTING.md`](../TESTING.md). |
 | manual test, CM-7 | **pass (scalar)** | `component script harness invokes a component` feeds a component binary through `component_runtime.wasm` and checks a scalar `assert_return`. |
 
 `wasm-tools` is already required to build `Test` and already supports both

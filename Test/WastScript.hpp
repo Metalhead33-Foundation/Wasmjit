@@ -2,8 +2,12 @@
 #define WASTSCRIPT_HPP
 
 #include <cstddef>
+#include <map>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "LibJit/LibJitContext.hpp"
@@ -27,6 +31,19 @@ struct ScriptValue {
 	std::string laneType;             // v128 only
 	std::vector<std::string> lanes;   // v128 only
 	std::vector<ScriptValue> alternatives; // "either" only
+
+	// Structured component values. The JSON shape is documented in
+	// docs/TESTING.md: `fields` for records, `elements` for lists/tuples,
+	// `case`+`value` for variants, `flags` for flags, and `entries` for maps.
+	std::vector<std::pair<std::string, ScriptValue>> fields;
+	std::vector<ScriptValue> elements;
+	std::vector<std::pair<ScriptValue, ScriptValue>> entries;
+	std::vector<std::string> flags;
+	std::string caseLabel;
+	std::unique_ptr<ScriptValue> payload;
+	bool hasPayload = false;
+	bool some = false;                // option
+	bool ok = true;                   // result
 };
 
 // An `(invoke ...)` or `(get ...)` directive.
@@ -57,6 +74,36 @@ struct Script {
 
 	// Throws nlohmann::json::exception (or std::exception) on malformed input.
 	static Script parse(std::string_view json);
+};
+
+// A tooling-side WIT model (COMPONENT_MODEL CM-3). WIT is a build-time format:
+// the runtime never sees it. The harness consumes the JSON emitted by
+// `wasm-tools component wit --json` so a test can assert a component's expected
+// world/import/export shape against its `.wit` source.
+struct WitFunction {
+	std::string name;
+	std::vector<std::pair<std::string, std::string>> params;
+	std::optional<std::string> result;
+};
+
+struct WitInterface {
+	std::string name;
+	std::map<std::string, WitFunction> functions;
+};
+
+struct WitWorld {
+	std::string name;
+	// name -> interface name, or "<function>" for a freestanding function.
+	std::map<std::string, std::string> imports;
+	std::map<std::string, WitFunction> exports;
+};
+
+struct WitPackage {
+	std::string name;
+	std::vector<WitWorld> worlds;
+	std::vector<WitInterface> interfaces;
+
+	static WitPackage parse(std::string_view json);
 };
 
 // Per-script execution summary.

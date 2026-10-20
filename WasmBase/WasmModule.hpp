@@ -49,6 +49,7 @@ public:
 	std::vector<ImportMemory> importMemories;
 	std::vector<ImportGlobal> importGlobals;
 	std::vector<ImportTag> importTags;
+	std::vector<ImportType> importTypes;
 	std::vector<uint32_t> internalFunctionTypeIndices;
 	std::vector<TableType> tables;
 	std::vector<MemoryType> memories;
@@ -149,6 +150,9 @@ private:
 	// Reverse local-map used only to materialise a compatibility `Subtype` whose
 	// references use module-local indices. It stores indices, not type payloads.
 	std::unordered_map<uint32_t, uint32_t> typeIndexById;
+	// True once the type section has been scanned; a type import after that
+	// point is rejected (the pre-type import section is the sanctioned ordering).
+	bool typeSectionProcessed = false;
 	uint32_t localTypeIndex(TypeId id) const;
 	ValueType valueTypeFromCanon(const CanonValueType& type) const;
 	StorageType storageTypeFromCanon(const CanonStorageType& type) const;
