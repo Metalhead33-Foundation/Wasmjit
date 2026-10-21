@@ -3,6 +3,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace WASM {
@@ -45,6 +48,26 @@ public:
 	StringObject* create(std::vector<uint32_t> codePoints);
 	StringViewObject* createView(const StringObject* string);
 	StringIteratorObject* createIterator(const StringObject* string);
+
+	// ── Embedder bridge (docs/proposals/STRINGREF.md STR-7) ─────────────
+	// Host→string. The input is decoded strictly (WTF-8 permits isolated
+	// surrogates); malformed input or input beyond the implementation limit
+	// returns nullptr and, when `valid` is non-null, sets it to false without
+	// changing the store. Allocation failure still traps with
+	// TrapKind::OutOfMemory.
+	StringObject* createFromUtf8(std::string_view utf8, bool* valid = nullptr);
+	StringObject* createFromWtf8(std::string_view wtf8, bool* valid = nullptr);
+	StringObject* createFromWtf16(std::span<const uint16_t> units,
+								  bool* valid = nullptr);
+
+	// string→host. `false` means the string cannot be represented in the
+	// requested form (strict UTF-8 with an isolated surrogate); a null string
+	// also returns false.
+	bool copyToUtf8(const StringObject* string, std::string& out,
+					bool lossy = false) const;
+	bool copyToWtf8(const StringObject* string, std::vector<uint8_t>& out) const;
+	bool copyToWtf16(const StringObject* string, std::vector<uint16_t>& out) const;
+
 	std::size_t count() const { return objects_.size(); }
 private:
 	std::deque<StringObject> objects_;

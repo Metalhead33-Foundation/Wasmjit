@@ -679,7 +679,7 @@ effort.
 | ~~H2~~ | ~~`gcObjectTypes` is never pruned.~~ **Done (GC-2a):** the map is gone; the type tag is read from the object header and `GcHeap::owns` uses region ranges. |
 | H3 | **`refMatchesHeapType` is O(#functions)** for function references (two linear scans) and is called for every cast/test. |
 | H4 | **`i31` uses a tagged LibJIT type** while `i31.get_s/u` take `void_ptr`; correctness depends on `castRefValue`/`jit_insn_convert` being a bit-preserving reinterpretation. Worth a focused test. |
-| H5 | **`stringref`/`stringview_*` are partially implemented** (not in 3.0): types, section 14, `string.const`, the core instructions and the full `stringview_*` facility are in `STRINGREF.md` STR-1/STR-2/STR-3/STR-4; the GC-array variants remain. The engine keeps its reserved encodings because the proposal's current `0x64`/`0x63` collide with `ref`/`ref null` (STR1). |
+| H5 | **`stringref`/`stringview_*` are implemented** (not in 3.0): types, section 14, `string.const`, the core instructions, the full `stringview_*` facility, the GC-array variants and the embedder bridge are in `STRINGREF.md` STR-1/STR-2/STR-3/STR-4/STR-6/STR-7; optional lifetime (`STR-8`) and `wasm:js-string` imports remain. The engine keeps its reserved encodings because the proposal's current `0x64`/`0x63` collide with `ref`/`ref null` (STR1). |
 | ~~H6~~ | ~~**`ref.eq` is raw pointer equality with no type check**; unboxed `i31` compares by value only because the representation is canonical. `ref.eq` on non-`eq` operands is not rejected.~~ **Done (GC-10):** `dispatchRefEq` now rejects non-`eq` operands; runtime equality stays pointer equality, which is exact for the `eq` hierarchy (D5). |
 | H7 | **`Value::kind` is set ad hoc** when a GC constant is produced (`I31Ref`, `StructRef`, `ArrayRef`), but the JIT ignores it; two paths must agree that the union payload is represented the same way. |
 | ~~H8~~ | ~~Arrays cost two allocations and two indirections.~~ **Done (GC-9 / D13):** arrays are inline — one allocation, one indirection per access. |
@@ -936,7 +936,7 @@ defaults, not just the first one to be fixed.
 | `H2`, `H8` | ✅ Closed | — | — |
 | `H3` | ✅ Closed | `Store::callableAt` | The per-cast O(#functions) scan is gone with `G2`: identification is now a range test over registered callable ranges (one per instance). |
 | `H4` | ✅ Closed | `i31` 68/0 | The tagged-LibJIT-type / `void_ptr` round-trip that `i31.get_s/u` depend on is exercised by the spec script across every interesting pattern (0, ±1, `0x3fff_ffff`, `-0x4000_0000`, `0x7fff_ffff`, `0xaaaa_aaaa`, `0xcaaa_aaaa`) and all pass. |
-| `H5` | ◑ Partial | `STRINGREF.md` STR-5 tests | `stringref`/`stringview_*`: out of the 3.0 MVP, its own proposal (§7.2, §10). Types, section 14, `string.const`, the core instructions and the full view facility are implemented; the GC-array variants remain. |
+| `H5` | ✅ Closed (own proposal) | `STRINGREF.md` STR-5/STR-6/STR-7 tests | `stringref`/`stringview_*`: out of the 3.0 MVP, its own proposal (§7.2, §10). Types, section 14, `string.const`, the core instructions, the full view facility, the GC-array variants and the embedder bridge are implemented; the optional lifetime and `wasm:js-string` remain outside this proposal's opcode surface. |
 | **`H6`** | ✅ **Closed** | `dispatchRefEq` | The validator rejects non-`eq` operands; runtime equality remains pointer equality, exact for the `eq` hierarchy (D5). |
 | `H7` | ✅ Closed (by design) | `WasmValue.hpp` | `Value::kind` is a *runtime-side* tag for constant-expression values (globals, segments, imports, and the harness's `referenceArgument`); generated code never sees a `Value` — the JIT derives its type from the instruction's field/opcode type. The two agree because every place a `Value` is produced sets `kind` and every consumer is runtime code. |
 | `R1` | ✅ Closed | `table imports are matched against the exported table's type`; `table`/`table_init`/`elem`/`call_indirect` unchanged | The exporter publishes its `TableType` + canonical element `TypeId`; `resolveTable` matches element type by subtyping and limits/index-type/shared-ness by the spec's limit rule (`tableSatisfiesImport`). The manual test asserts that a `funcref` table cannot satisfy an `externref` import and that a `2..8` table cannot satisfy a `5..8` import, while the compatible `shared_table_b` import still links. Embedder-registered tables without a published type stay unchecked. |
@@ -971,7 +971,7 @@ rather than guessed at inside GC.
 |---|---|---|---|
 | `G3` (extern/any conversion fidelity), `R4` (host `externref` model), `GC-8` (extern interop) | **`ABI.md`** | Distinguishing the `extern` and `any` hierarchies needs a representation for a *host* extern object (tag or box), and that representation is the embedder's value model. `GC.md` D5 chose identity deliberately, under a "no host/reference mixing" contract that the spec suite does not honour. | Nothing further: the engine side is consistent with D5. When `ABI.md` fixes the host model, revisit D5 and delete `R4`/`G3`. |
 | `RC-4` (atomic counts; `RC2`/`RC11`) | **`THREADS.md`** | The count already uses `std::atomic_ref` and is therefore *safe*, but acquire/release ordering and a two-thread stress test are only meaningful once shared memory and agents exist. | The relaxed-ordering choice is documented in `WasmGcHeader.hpp`; the upgrade is a one-line ordering change plus a stress test, for whoever owns threads. |
-| `H5`, §10 (`stringref`, `stringview_*`) | **its own proposal** (§10 in this document) | Out of the Wasm 3.0 GC MVP by §3.4; the reserved encodings collide with `ref`/`ref null` and the instruction surface is partial. | Keep the work in `STRINGREF.md`: the core and the full view facility are implemented (STR-1…STR-4), the GC-array variants remain. |
+| `H5`, §10 (`stringref`, `stringview_*`) | **its own proposal** (§10 in this document) | Out of the Wasm 3.0 GC MVP by §3.4; the reserved encodings collide with `ref`/`ref null` and the optional lifetime is still open. | Keep the work in `STRINGREF.md`: the core, the full view facility, the GC-array variants and the embedder bridge are implemented (STR-1…STR-4, STR-6, STR-7); the optional lifetime (`STR-8`) and the blocked encoding alignment (`STR1`) remain. |
 
 **Remaining in GC's own domain:** none of the conformance rows. The optional or
 deferred rows — `GC-7` (inline-cache optimisation, measure first), `GC-8`
@@ -1237,10 +1237,11 @@ STR-1/STR-2/STR-3):
 - `WasmString.{hpp,cpp}` defines the Store-owned `StringObject` (code points),
   the codecs (UTF-8 / WTF-8 / WTF-16) and the `StringStore`.
 - Section 14 is parsed, `string.const` works in constant expressions, the core
-  `0xFB 0x80`–`0x8E` instructions are lowered, and the full `stringview_*`
-  facility (`0x90`–`0xA4`) is typed and lowered.
-- Still absent: the GC-array variants (`0xB0`–`0xB7`) and `wasm:js-string`
-  import resolution.
+  `0xFB 0x80`–`0x8E` instructions are lowered, the full `stringview_*` facility
+  (`0x90`–`0xA4`) is typed and lowered, and the GC-array variants
+  (`0xB0`–`0xB7`) bridge to inline array elements.
+- Still absent: the optional string lifetime work (`STRINGREF.md` STR-8) and
+  `wasm:js-string` import resolution.
 
 **The encodings still collide with GC.** `WasmType.hpp` uses
 `StringRef = -0x19 (0x67)`, `StringViewWtf8 = -0x1A`, `StringViewWtf16 = -0x1B`,

@@ -362,7 +362,7 @@ enum class StringOpcode : uint32_t {
 	StringViewIterRewind       = 0xA3,
 	StringViewIterSlice        = 0xA4,
 
-	// GC-array variants (out of this slice)
+	// GC-array variants (docs/proposals/STRINGREF.md STR-6)
 	StringNewUtf8Array        = 0xB0,
 	StringNewWtf16Array       = 0xB1,
 	StringEncodeUtf8Array     = 0xB2,

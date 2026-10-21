@@ -2991,6 +2991,331 @@ TEST_CASE("stringview WTF-8, WTF-16 and iterator positions run through the JIT")
 	REQUIRE(call("ia") == 1);
 }
 
+TEST_CASE("the embedder bridge creates and copies stringrefs")
+{
+	StringFixtureBuilder module;
+	// Type 0: (param stringref) -> i32; type 1: () -> stringref.
+	module.section(0x01, {0x02,
+		0x60, 0x01, 0x67, 0x01, 0x7f,
+		0x60, 0x00, 0x01, 0x67});
+	module.section(0x03, {0x02, 0x00, 0x01});
+	module.section(0x0e, {0x00, 0x01, 0x02, 'H', 'i'});
+	module.exports({{"measure", 0}, {"get", 1}});
+	module.code({
+		// measure: local.get 0; string.measure_wtf8.
+		{0x00, 0x20, 0x00, 0xfb, 0x84, 0x01, 0x0b},
+		// get: string.const 0.
+		{0x00, 0xfb, 0x82, 0x01, 0x00, 0x0b}
+	});
+
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto instance = compiler.instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto measure = instance->exportedFunction("measure");
+	auto get = instance->exportedFunction("get");
+	REQUIRE(measure.has_value());
+	REQUIRE(get.has_value());
+
+	WASM::StringStore& strings = WASM::Store::global().strings();
+	bool valid = false;
+	WASM::StringObject* hello = strings.createFromUtf8("h\xc3\xa9llo", &valid);
+	REQUIRE(valid);
+	REQUIRE(hello != nullptr);
+	REQUIRE(WASM::callCallable<int32_t>(*measure, static_cast<void*>(hello)) == 6);
+
+	// wasm -> host: the literal produced by `get`. The JIT's `stringref` result
+	// is a `void*`, matching the engine's reference ABI.
+	void* hiRaw = WASM::callCallable<void*>(*get);
+	REQUIRE(hiRaw != nullptr);
+	WASM::StringObject* hi = static_cast<WASM::StringObject*>(hiRaw);
+	std::string hiUtf8;
+	REQUIRE(strings.copyToUtf8(hi, hiUtf8));
+	REQUIRE(hiUtf8 == "Hi");
+	REQUIRE(WASM::callCallable<int32_t>(*measure, hiRaw) == 2);
+
+	// Host WTF-8 with an isolated surrogate.
+	WASM::StringObject* surrogate = strings.createFromWtf8("\xed\xa0\x80", &valid);
+	REQUIRE(valid);
+	REQUIRE(surrogate != nullptr);
+	REQUIRE(WASM::callCallable<int32_t>(*measure, static_cast<void*>(surrogate)) == 3);
+	std::vector<uint16_t> units;
+	REQUIRE(strings.copyToWtf16(surrogate, units));
+	REQUIRE(units.size() == 1);
+	REQUIRE(units[0] == 0xd800);
+	std::string strictUtf8;
+	REQUIRE_FALSE(strings.copyToUtf8(surrogate, strictUtf8));
+	REQUIRE(strings.copyToUtf8(surrogate, strictUtf8, true));
+	REQUIRE(strictUtf8 == "\xef\xbf\xbd");
+
+	// Host WTF-16 input follows the same rules.
+	const uint16_t surrogateUnit[] = {0xd800};
+	WASM::StringObject* fromUnits = strings.createFromWtf16(surrogateUnit, &valid);
+	REQUIRE(valid);
+	REQUIRE(fromUnits != nullptr);
+	std::vector<uint8_t> wtf8;
+	REQUIRE(strings.copyToWtf8(fromUnits, wtf8));
+	REQUIRE(wtf8 == std::vector<uint8_t>({0xed, 0xa0, 0x80}));
+
+	// Malformed host input is reported, not trapped.
+	valid = true;
+	REQUIRE(strings.createFromUtf8("\xff", &valid) == nullptr);
+	REQUIRE_FALSE(valid);
+}
+
+TEST_CASE("string array constructors and encoders bridge to GC arrays")
+{
+	StringFixtureBuilder module;
+	// Type 0: (array (mut i8)); type 1: () -> i32; type 2: (array (mut i16)).
+	module.section(0x01, {0x03,
+		0x5e, 0x78, 0x01,
+		0x60, 0x00, 0x01, 0x7f,
+		0x5e, 0x77, 0x01});
+	module.section(0x03, {0x04, 0x01, 0x01, 0x01, 0x01});
+	module.section(0x0e, {0x00, 0x01, 0x05, 'H', 'e', 'l', 'l', 'o'});
+	// Four globals:
+	//   0: i8 array [H, i]           (array.new_fixed)
+	//   1: i8 array length 8         (array.new_default)
+	//   2: i16 array [H, i]
+	//   3: i16 array length 8
+	module.section(0x06, {0x04,
+		0x63, 0x00, 0x00, 0x41, 0xc8, 0x00, 0x41, 0xe9, 0x00, 0xfb, 0x08, 0x00, 0x02, 0x0b,
+		0x63, 0x00, 0x00, 0x41, 0x08, 0xfb, 0x07, 0x00, 0x0b,
+		0x63, 0x02, 0x00, 0x41, 0xc8, 0x00, 0x41, 0xe9, 0x00, 0xfb, 0x08, 0x02, 0x02, 0x0b,
+		0x63, 0x02, 0x00, 0x41, 0x08, 0xfb, 0x07, 0x02, 0x0b});
+	module.exports({{"ni8", 0}, {"ei8", 1}, {"ni16", 2}, {"ei16", 3}});
+	module.code({
+		// ni8: new_utf8_array(global 0, 0, 2); measure_wtf8 = 2.
+		{0x00, 0x23, 0x00, 0x41, 0x00, 0x41, 0x02, 0xfb, 0xb0, 0x01, 0x00,
+		 0xfb, 0x84, 0x01, 0x0b},
+		// ei8: encode_utf8_array("Hello", global 1, 0) = 5.
+		{0x00, 0xfb, 0x82, 0x01, 0x00, 0x23, 0x01, 0x41, 0x00,
+		 0xfb, 0xb2, 0x01, 0x00, 0x0b},
+		// ni16: new_wtf16_array(global 2, 0, 2); measure_wtf8 = 2.
+		{0x00, 0x23, 0x02, 0x41, 0x00, 0x41, 0x02, 0xfb, 0xb1, 0x01, 0x02,
+		 0xfb, 0x84, 0x01, 0x0b},
+		// ei16: encode_wtf16_array("Hello", global 3, 0) = 5.
+		{0x00, 0xfb, 0x82, 0x01, 0x00, 0x23, 0x03, 0x41, 0x00,
+		 0xfb, 0xb3, 0x01, 0x02, 0x0b}
+	});
+
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto instance = compiler.instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	const auto call = [&instance](const char* name) {
+		auto function = instance->exportedFunction(name);
+		REQUIRE(function.has_value());
+		return WASM::callCallable<int32_t>(*function);
+	};
+	REQUIRE(call("ni8") == 2);
+	REQUIRE(call("ei8") == 5);
+	REQUIRE(call("ni16") == 2);
+	REQUIRE(call("ei16") == 5);
+
+	const WASM::Value* i8Global = instance->context()->globals[1];
+	REQUIRE(i8Global != nullptr);
+	REQUIRE(i8Global->ref != nullptr);
+	const std::string encodedI8(
+			reinterpret_cast<const char*>(static_cast<const uint8_t*>(i8Global->ref)
+					+ WASM::GcHeader::kArrayHeaderBytes), 5);
+	REQUIRE(encodedI8 == "Hello");
+
+	const WASM::Value* i16Global = instance->context()->globals[3];
+	REQUIRE(i16Global != nullptr);
+	REQUIRE(i16Global->ref != nullptr);
+	const uint8_t* i16Bytes = static_cast<const uint8_t*>(i16Global->ref)
+			+ WASM::GcHeader::kArrayHeaderBytes;
+	const uint16_t expected[] = {'H', 'e', 'l', 'l', 'o'};
+	for (std::size_t i = 0; i < 5; ++i) {
+		uint16_t unit = 0;
+		std::memcpy(&unit, i16Bytes + i * 2, sizeof(unit));
+		REQUIRE(unit == expected[i]);
+	}
+}
+
+TEST_CASE("string array variants enforce bounds, strictness and lossy encoding")
+{
+	StringFixtureBuilder module;
+	// Type 0: (array (mut i8)); type 1: () -> i32.
+	module.section(0x01, {0x02,
+		0x5e, 0x78, 0x01,
+		0x60, 0x00, 0x01, 0x7f});
+	module.section(0x03, {0x07, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01});
+	// Two literals: "Hello" and the isolated surrogate U+D800 in WTF-8.
+	module.section(0x0e, {0x00, 0x02, 0x05, 'H', 'e', 'l', 'l', 'o',
+		0x03, 0xed, 0xa0, 0x80});
+	// Globals: [H,i], a length-3 scratch array, [0xFF], [ED A0 80].
+	module.section(0x06, {0x04,
+		0x63, 0x00, 0x00, 0x41, 0xc8, 0x00, 0x41, 0xe9, 0x00, 0xfb, 0x08, 0x00, 0x02, 0x0b,
+		0x63, 0x00, 0x00, 0x41, 0x03, 0xfb, 0x07, 0x00, 0x0b,
+		0x63, 0x00, 0x00, 0x41, 0xff, 0x01, 0xfb, 0x08, 0x00, 0x01, 0x0b,
+		0x63, 0x00, 0x00, 0x41, 0xed, 0x01, 0x41, 0xa0, 0x01, 0x41, 0x80, 0x01,
+		0xfb, 0x08, 0x00, 0x03, 0x0b});
+	module.exports({{"oob", 0}, {"small", 1}, {"lossy", 2}, {"wtf8", 3},
+		{"strict", 4}, {"encLossy", 5}, {"encWtf8", 6}});
+	module.code({
+		// oob: end 3 is past the length-2 array.
+		{0x00, 0x23, 0x00, 0x41, 0x00, 0x41, 0x03, 0xfb, 0xb0, 0x01, 0x00,
+		 0xfb, 0x84, 0x01, 0x0b},
+		// small: "Hello" does not fit in the length-3 array.
+		{0x00, 0xfb, 0x82, 0x01, 0x00, 0x23, 0x01, 0x41, 0x00,
+		 0xfb, 0xb2, 0x01, 0x00, 0x0b},
+		// lossy: 0xFF decodes to U+FFFD, three WTF-8 bytes.
+		{0x00, 0x23, 0x02, 0x41, 0x00, 0x41, 0x01, 0xfb, 0xb4, 0x01, 0x00,
+		 0xfb, 0x84, 0x01, 0x0b},
+		// wtf8: the isolated surrogate is one WTF-16 code unit.
+		{0x00, 0x23, 0x03, 0x41, 0x00, 0x41, 0x03, 0xfb, 0xb5, 0x01, 0x00,
+		 0xfb, 0x85, 0x01, 0x0b},
+		// strict: the same bytes are not valid UTF-8.
+		{0x00, 0x23, 0x03, 0x41, 0x00, 0x41, 0x03, 0xfb, 0xb0, 0x01, 0x00,
+		 0xfb, 0x84, 0x01, 0x0b},
+		// encLossy: the surrogate becomes EF BF BD in the scratch array.
+		{0x00, 0xfb, 0x82, 0x01, 0x01, 0x23, 0x01, 0x41, 0x00,
+		 0xfb, 0xb6, 0x01, 0x00, 0x0b},
+		// encWtf8: the surrogate is preserved as ED A0 80.
+		{0x00, 0xfb, 0x82, 0x01, 0x01, 0x23, 0x01, 0x41, 0x00,
+		 0xfb, 0xb7, 0x01, 0x00, 0x0b}
+	});
+
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto instance = compiler.instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	const auto call = [&instance](const char* name) {
+		auto function = instance->exportedFunction(name);
+		REQUIRE(function.has_value());
+		return WASM::callCallable<int32_t>(*function);
+	};
+	const auto trap = [&instance](const char* name) {
+		auto function = instance->exportedFunction(name);
+		REQUIRE(function.has_value());
+		WASM::TrapScope scope;
+		volatile bool trapped = false;
+		if (setjmp(scope.buffer) == 0)
+			WASM::callCallable<int32_t>(*function);
+		else
+			trapped = true;
+		REQUIRE(trapped);
+		return scope.kind();
+	};
+
+	REQUIRE(call("lossy") == 3);
+	REQUIRE(call("wtf8") == 1);
+	REQUIRE(trap("oob") == WASM::TrapKind::OutOfBoundsArrayAccess);
+	REQUIRE(trap("small") == WASM::TrapKind::OutOfBoundsArrayAccess);
+	REQUIRE(trap("strict") == WASM::TrapKind::InvalidString);
+
+	REQUIRE(call("encLossy") == 3);
+	const WASM::Value* scratch = instance->context()->globals[1];
+	REQUIRE(scratch != nullptr);
+	REQUIRE(scratch->ref != nullptr);
+	const uint8_t* lossyBytes = static_cast<const uint8_t*>(scratch->ref)
+			+ WASM::GcHeader::kArrayHeaderBytes;
+	REQUIRE(lossyBytes[0] == 0xef);
+	REQUIRE(lossyBytes[1] == 0xbf);
+	REQUIRE(lossyBytes[2] == 0xbd);
+
+	REQUIRE(call("encWtf8") == 3);
+	REQUIRE(lossyBytes[0] == 0xed);
+	REQUIRE(lossyBytes[1] == 0xa0);
+	REQUIRE(lossyBytes[2] == 0x80);
+}
+
+TEST_CASE("string array validation checks element type and mutability")
+{
+	const auto instantiate = [](StringFixtureBuilder& module) {
+		std::span<const std::byte> span(
+				reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
+		Euph::Io::ConstBufferDevice device(span);
+		auto artifact = WASM::Artifact::parse(device);
+		REQUIRE(artifact != nullptr);
+		WASM::Module* parsed = artifact->asCoreModule();
+		REQUIRE(parsed != nullptr);
+		WASM::RegistryImportResolver imports;
+		LibJIT::Context jitContext;
+		LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+		return compiler.instantiate(*parsed, imports);
+	};
+
+	// new_utf8_array needs an i8 array; this type is i16.
+	{
+		StringFixtureBuilder wrongElement;
+		wrongElement.section(0x01, {0x02,
+			0x5e, 0x77, 0x01,
+			0x60, 0x00, 0x01, 0x7f});
+		wrongElement.section(0x03, {0x01, 0x01});
+		wrongElement.section(0x06, {0x01,
+			0x63, 0x00, 0x00, 0x41, 0x00, 0xfb, 0x07, 0x00, 0x0b});
+		wrongElement.exports({{"bad", 0}});
+		wrongElement.code({{
+			0x00, 0x23, 0x00, 0x41, 0x00, 0x41, 0x00, 0xfb, 0xb0, 0x01, 0x00,
+			0x1a, 0x41, 0x00, 0x0b}});
+		bool threw = false;
+		try {
+			instantiate(wrongElement);
+		} catch (const std::exception& e) {
+			threw = true;
+			CHECK(std::string(e.what()).find("packed type") != std::string::npos);
+		}
+		REQUIRE(threw);
+	}
+
+	// encode_utf8_array writes, so an immutable array is rejected.
+	{
+		StringFixtureBuilder immutable;
+		immutable.section(0x01, {0x02,
+			0x5e, 0x78, 0x00,
+			0x60, 0x00, 0x01, 0x7f});
+		immutable.section(0x03, {0x01, 0x01});
+		immutable.section(0x0e, {0x00, 0x01, 0x01, 'A'});
+		immutable.section(0x06, {0x01,
+			0x63, 0x00, 0x00, 0x41, 0x00, 0xfb, 0x07, 0x00, 0x0b});
+		immutable.exports({{"bad", 0}});
+		immutable.code({{
+			0x00, 0xfb, 0x82, 0x01, 0x00, 0x23, 0x00, 0x41, 0x00,
+			0xfb, 0xb2, 0x01, 0x00, 0x1a, 0x41, 0x00, 0x0b}});
+		bool threw = false;
+		try {
+			instantiate(immutable);
+		} catch (const std::exception& e) {
+			threw = true;
+			CHECK(std::string(e.what()).find("not mutable") != std::string::npos);
+		}
+		REQUIRE(threw);
+	}
+}
+
 TEST_CASE("stringview encode returns the next position and bytes written")
 {
 	StringFixtureBuilder module;

@@ -124,6 +124,102 @@ StringIteratorObject* StringStore::createIterator(const StringObject* string)
 	return &iterators_.back();
 }
 
+// ── Embedder bridge (docs/proposals/STRINGREF.md STR-7) ─────────────────────
+
+StringObject* StringStore::createFromUtf8(std::string_view utf8, bool* valid)
+{
+	if (valid)
+		*valid = false;
+	if (utf8.size() > kMaxStringBytes)
+		return nullptr;
+	std::vector<uint32_t> codePoints;
+	if (!decodeUtf8(reinterpret_cast<const uint8_t*>(utf8.data()), utf8.size(),
+			codePoints))
+		return nullptr;
+	if (valid)
+		*valid = true;
+	return create(std::move(codePoints));
+}
+
+StringObject* StringStore::createFromWtf8(std::string_view wtf8, bool* valid)
+{
+	if (valid)
+		*valid = false;
+	if (wtf8.size() > kMaxStringBytes)
+		return nullptr;
+	std::vector<uint32_t> codePoints;
+	if (!decodeWtf8(reinterpret_cast<const uint8_t*>(wtf8.data()), wtf8.size(),
+			codePoints))
+		return nullptr;
+	if (valid)
+		*valid = true;
+	return create(std::move(codePoints));
+}
+
+StringObject* StringStore::createFromWtf16(std::span<const uint16_t> units,
+										   bool* valid)
+{
+	if (valid)
+		*valid = false;
+	if (units.size() > kMaxStringCodeUnits)
+		return nullptr;
+	// The codec reads little-endian code units, matching the in-memory
+	// representation of WTF-16 in linear memory and GC arrays.
+	std::vector<uint8_t> bytes(units.size() * 2);
+	for (std::size_t i = 0; i < units.size(); ++i) {
+		bytes[2 * i] = static_cast<uint8_t>(units[i] & 0xFFu);
+		bytes[2 * i + 1] = static_cast<uint8_t>(units[i] >> 8);
+	}
+	std::vector<uint32_t> codePoints;
+	decodeWtf16(bytes.data(), units.size(), codePoints);
+	if (valid)
+		*valid = true;
+	return create(std::move(codePoints));
+}
+
+bool StringStore::copyToUtf8(const StringObject* string, std::string& out,
+							 bool lossy) const
+{
+	if (string == nullptr)
+		return false;
+	std::vector<uint8_t> bytes;
+	if (!encodeUtf8(string->codePoints, bytes, lossy))
+		return false;
+	if (bytes.empty())
+		out.clear();
+	else
+		out.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+	return true;
+}
+
+bool StringStore::copyToWtf8(const StringObject* string,
+							 std::vector<uint8_t>& out) const
+{
+	if (string == nullptr)
+		return false;
+	std::vector<uint8_t> bytes;
+	if (!encodeWtf8(string->codePoints, bytes))
+		return false;
+	out = std::move(bytes);
+	return true;
+}
+
+bool StringStore::copyToWtf16(const StringObject* string,
+							  std::vector<uint16_t>& out) const
+{
+	if (string == nullptr)
+		return false;
+	std::vector<uint8_t> bytes;
+	if (!encodeWtf16(string->codePoints, bytes))
+		return false;
+	out.resize(bytes.size() / 2);
+	for (std::size_t i = 0; i < out.size(); ++i) {
+		out[i] = static_cast<uint16_t>(bytes[2 * i]
+				| (static_cast<uint16_t>(bytes[2 * i + 1]) << 8));
+	}
+	return true;
+}
+
 bool decodeWtf8(const uint8_t* bytes, std::size_t size, std::vector<uint32_t>& out)
 {
 	out.clear();

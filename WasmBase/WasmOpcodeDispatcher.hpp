@@ -284,6 +284,16 @@ protected:
 	virtual void dispatchStringViewIterAdvance() { onUnhandledOpcode("dispatchStringViewIterAdvance"); }
 	virtual void dispatchStringViewIterRewind() { onUnhandledOpcode("dispatchStringViewIterRewind"); }
 	virtual void dispatchStringViewIterSlice() { onUnhandledOpcode("dispatchStringViewIterSlice"); }
+
+	// GC-array string bridge (STR-6)
+	virtual void dispatchStringNewUtf8Array(TypeIdx arg) { onUnhandledOpcode("dispatchStringNewUtf8Array"); }
+	virtual void dispatchStringNewWtf16Array(TypeIdx arg) { onUnhandledOpcode("dispatchStringNewWtf16Array"); }
+	virtual void dispatchStringEncodeUtf8Array(TypeIdx arg) { onUnhandledOpcode("dispatchStringEncodeUtf8Array"); }
+	virtual void dispatchStringEncodeWtf16Array(TypeIdx arg) { onUnhandledOpcode("dispatchStringEncodeWtf16Array"); }
+	virtual void dispatchStringNewLossyUtf8Array(TypeIdx arg) { onUnhandledOpcode("dispatchStringNewLossyUtf8Array"); }
+	virtual void dispatchStringNewWtf8Array(TypeIdx arg) { onUnhandledOpcode("dispatchStringNewWtf8Array"); }
+	virtual void dispatchStringEncodeLossyUtf8Array(TypeIdx arg) { onUnhandledOpcode("dispatchStringEncodeLossyUtf8Array"); }
+	virtual void dispatchStringEncodeWtf8Array(TypeIdx arg) { onUnhandledOpcode("dispatchStringEncodeWtf8Array"); }
 	virtual void dispatchI32TruncSatF32S() { onUnhandledOpcode("dispatchI32TruncSatF32S"); }
 	virtual void dispatchI32TruncSatF32U() { onUnhandledOpcode("dispatchI32TruncSatF32U"); }
 	virtual void dispatchI32TruncSatF64S() { onUnhandledOpcode("dispatchI32TruncSatF64S"); }

@@ -1126,6 +1126,38 @@ void OpcodeDispatcher::dispatchStringViewIterSlice()
 {
 	*stream << '(' << "StringViewIterSlice" << ')' << std::endl;
 }
+void OpcodeDispatcher::dispatchStringNewUtf8Array(WASM::TypeIdx arg)
+{
+	*stream << '(' << "StringNewUtf8Array" << ' ' << '(' << arg << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringNewWtf16Array(WASM::TypeIdx arg)
+{
+	*stream << '(' << "StringNewWtf16Array" << ' ' << '(' << arg << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringEncodeUtf8Array(WASM::TypeIdx arg)
+{
+	*stream << '(' << "StringEncodeUtf8Array" << ' ' << '(' << arg << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringEncodeWtf16Array(WASM::TypeIdx arg)
+{
+	*stream << '(' << "StringEncodeWtf16Array" << ' ' << '(' << arg << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringNewLossyUtf8Array(WASM::TypeIdx arg)
+{
+	*stream << '(' << "StringNewLossyUtf8Array" << ' ' << '(' << arg << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringNewWtf8Array(WASM::TypeIdx arg)
+{
+	*stream << '(' << "StringNewWtf8Array" << ' ' << '(' << arg << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringEncodeLossyUtf8Array(WASM::TypeIdx arg)
+{
+	*stream << '(' << "StringEncodeLossyUtf8Array" << ' ' << '(' << arg << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringEncodeWtf8Array(WASM::TypeIdx arg)
+{
+	*stream << '(' << "StringEncodeWtf8Array" << ' ' << '(' << arg << ')' << std::endl;
+}
 void OpcodeDispatcher::dispatchI32TruncSatF32S()
 {
 	*stream << '(' << "I32TruncSatF32S" << ')' << std::endl;

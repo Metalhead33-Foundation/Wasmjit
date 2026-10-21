@@ -1,10 +1,11 @@
 # Reference-Typed Strings (`stringref`) — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 4 — the value types,
-section 14, `string.const`, the core string instructions and the full
-`stringview_*` facility are implemented; the GC-array variants and the embedder
-bridge remain. The engine keeps its own reserved value-type encodings because
-the proposal's current ones collide with GC — see §5 STR1 / §6 STRD5).
+Status: design note / implementation reference (revision 6 — the value types,
+section 14, `string.const`, the core string instructions, the full
+`stringview_*` facility, the GC-array variants and the embedder bridge are
+implemented; optional lifetime work remains. The engine keeps its own reserved
+value-type encodings because the proposal's current ones collide with GC — see
+§5 STR1 / §6 STRD5).
 Audience: anyone touching `WasmType`, `WasmModule` (sections), `WasmOpcode`,
 `LibjitOpcodeDispatcher`, the GC heap, or the host boundary.
 
@@ -96,9 +97,21 @@ value-type encodings are the ones listed in §5 (STR1).
   including the multi-value `stringview_wtf8.encode_*` pair, the WTF-8/WTF-16
   position treatment, the two-byte alignment check on `stringview_wtf16.encode`,
   and `slice` returning a new stringref.
-- The **GC-array variants** (`0xB0`…`0xB7`) are decoded and named but fall to
-  `onUnhandledOpcode`; they need GC array access.
-- The `WasmStub` listing prints the core string and view instructions.
+- The **GC-array variants** (`0xB0`…`0xB7`) are lowered:
+  `new_utf8_array`, `new_lossy_utf8_array`, `new_wtf8_array`, `new_wtf16_array`,
+  `encode_utf8_array`, `encode_lossy_utf8_array`, `encode_wtf8_array` and
+  `encode_wtf16_array`. The validator requires the immediate to name an array of
+  packed `i8` (`i16` for WTF-16) and, for the encoders, a mutable array. The
+  runtime reads and writes the array's inline elements, traps on a null array,
+  on negative or out-of-range `start`/`end`, and when the encoded string does
+  not fit.
+- The **embedder bridge** (`StringStore::createFromUtf8` / `createFromWtf8` /
+  `createFromWtf16`, and `copyToUtf8` / `copyToWtf8` / `copyToWtf16`) creates
+  host strings in the Store and copies them back. A wasm `stringref` parameter
+  or result is passed to `callCallable` as a `StringObject*`. Malformed host
+  input returns nullptr and reports `valid = false`; allocation failure still
+  traps with `OutOfMemory`.
+- The `WasmStub` listing prints the core, view and GC-array string instructions.
 - The tests use hand-built modules because `wasm-tools` 1.252 cannot parse
   `stringref` text: parsing/round-trip, a `string.const` global, the core
   instructions through the JIT, `new_utf8`/`new_wtf16` + `encode_*` through
@@ -113,10 +126,10 @@ value-type encodings are the ones listed in §5 (STR1).
 | ~~STR2~~ | ~~**No string table section.**~~ **Done (STR-2):** `SectionType::String` (14) is parsed with the `0x00` form byte, `vec(vec(u8))`, WTF-8 validation and the positional rule; a pathological count is rejected. | `WasmSection.hpp`, `WasmModule.cpp` (`processStringSection`) | Closed |
 | ~~STR3~~ | ~~**No string/stringview instructions.**~~ **Done (STR-3/STR-4):** the core instruction set and the full `stringview_*` facility are decoded, typed, lowered and executed; `string.const` is const-eligible. | `WasmOpcode.hpp` (`StringOpcode`), `LibjitOpcodeDispatcher.cpp`, `WasmValidator.cpp` | Closed |
 | ~~STR4~~ | ~~**Declared string types are accepted but unimplemented.**~~ **Done (STR-1/STR-3):** all four codes are modelled as nullable host references, and the instructions produce real `StringObject*`/view values. The old load-time rejection (`STR-0`) is superseded. | `WasmType.hpp`, `WasmString.*`, `WasmModuleInstance.cpp` | Closed |
-| STR5 | **No embedder string bridge.** There is no API to hand a host string in as a `stringref` or to read one out; only literals and instructions produce values. This is the proposal's zero-copy goal and is explicitly adapter/embedder work (`STRD3`). | `WasmValue.hpp`, `WasmStore.hpp` (`StringStore`) | Medium |
+| ~~STR5~~ | ~~**No embedder string bridge.**~~ **Done (STR-7):** `StringStore` creates strings from host UTF-8/WTF-8/WTF-16 and copies them back; `callCallable` carries a `StringObject*` as a `stringref`. Malformed input returns nullptr instead of trapping. | `WasmString.hpp`, `Test/main.cpp` | Closed |
 | ~~STR6~~ | ~~**No test coverage.**~~ **Done (STR-5):** eight manual tests cover parsing, the section, `string.const`, the core JIT path, memory round-trips, strict-vs-lossy decoding, the view positions and the multi-value view encoders. No upstream `stringref` script exists in the snapshot (and `wasm-tools` 1.252 cannot emit one), so the tests are hand-built. | `Test/main.cpp` | Closed (manual) |
 | ~~STR7~~ | ~~**The `stringview_*` facility is not lowered.**~~ **Done (STR-4):** `string.as_*` and every view operation (`0x90`–`0xA4`) are typed, lowered and tested, including multi-value encodes and the position treatment. | `WasmOpcode.hpp`, `WasmString.*`, `LibjitOpcodeDispatcher.cpp`, `WasmValidator.cpp` | Closed |
-| STR8 | **The GC-array variants are not lowered.** `string.new_*_array` / `encode_*_array` (`0xB0`–`0xB7`) need array access and are out of this slice. | `StringOpcode` enum | Low |
+| ~~STR8~~ | ~~**The GC-array variants are not lowered.**~~ **Done (STR-6):** `string.new_*_array` / `encode_*_array` (`0xB0`–`0xB7`) share the GC array layout, validate the packed element type and mutability, and read/write inline elements with the spec's bounds traps. | `StringOpcode`, `WasmValidator.cpp`, `LibjitOpcodeDispatcher.cpp` | Closed |
 | STR9 | **Strings are never freed before Store teardown.** `StringStore` is a monotonic arena charged to the allocation budget; there is no reference count or collection. A long-lived Store that creates many short-lived strings retains them (bounded by the budget). | `WasmString.hpp`, `StringStore::create` | Medium (documented lifetime) |
 | STR10 | **Literals are materialised per instance.** Each `ModuleInstance` decodes section 14 into fresh `StringObject`s; identical literals in two instances are not shared. | `ModuleInstance::initializeStringLiterals` | Low |
 
@@ -125,8 +138,8 @@ value-type encodings are the ones listed in §5 (STR1).
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
 | STRD1 | **Keep the four type codes as reserved placeholders** and model them as nullable host references. | §3: representation is free; the exact-match hierarchy is the proposal's MVP shape. | No `string` heap type or subtype machinery. |
-| STRD2 | **Accept a declared string type and implement the core**, rather than keeping the old load-time rejection. | §3 permits a subset; the core instructions are correct and the remaining surface fails loudly (`onUnhandledOpcode`). | Real values and real failures, with no silent null. |
-| STRD3 | **Do not model host strings as wasm values.** A `stringref` is a handle to a Store-owned `StringObject`; there is no JS string runtime or zero-copy bridge. | §3: representation and host API are free. | The engine need not implement a JS string runtime. |
+| STRD2 | **Accept a declared string type and implement it**, rather than keeping the old load-time rejection. | §3 permits a subset; the implemented surface is correct and any future instruction still fails loudly (`onUnhandledOpcode`). | Real values and real failures, with no silent null. |
+| STRD3 | **Do not model host strings as wasm values.** A `stringref` is a handle to a Store-owned `StringObject`; the embedder bridge copies bytes in and out, and there is no JS string runtime or zero-copy adapter. | §3: representation and host API are free. | The engine need not implement a JS string runtime. |
 | STRD4 | **Centralise the null rule** ("trap on every instruction except `string.eq`") in the helpers rather than in every dispatch arm. Implemented. | §3: the lowering is free; §2's rule is uniform. | One check, no per-op duplication. |
 | STRD5 | **Use the engine's reserved encodings (`0x67`/`0x66`/`0x65`/`0x62`) instead of the proposal's current `0x64`/`0x63`/`0x62`/`0x61`.** | §3: the wire encoding is the proposal's, not a semantic guarantee; the current values make `stringref` indistinguishable from GC `ref` and `ref null`. | The engine stays internally consistent until the proposal resolves the collision (`STR1`). |
 | STRD6 | **Represent strings as code points**, deriving UTF-8/WTF-8/WTF-16 on demand. | §3: no internal representation is required; all encodings are deterministic functions of the code-point sequence. | Exact round-trips and a single implementation of `measure_*`, `encode_*`, `eq` and `concat` (including the surrogate-combining boundary rule). |
@@ -134,9 +147,9 @@ value-type encodings are the ones listed in §5 (STR1).
 | STRD8 | **Model WTF-8/WTF-16 views as stateless handles over the code-point string, and the iterator as a mutable position.** `slice` returns a new stringref. | §3: view representation and position bookkeeping are free; the instructions' observable results are the positions and the returned strings. | No materialised WTF-8/WTF-16 buffer per view; one code-point source of truth, with positions translated per operation. |
 
 Guardrail: `isModeledValueTypeCode` is a *lowering* statement, not a
-conformance claim. The core and the views are supported; the GC-array variants
-(`STR8`) and the embedder bridge (`STR5`) are not, and a module that uses them
-must fail loudly rather than silently produce a null value.
+conformance claim. The core, the views, the GC-array variants and the embedder
+bridge are supported; the remaining lifetime work (`STR9`) is a documented
+retention policy, not a silently missing instruction.
 
 ## 7. Plan
 
@@ -148,14 +161,14 @@ must fail loudly rather than silently produce a null value.
 | **STR-3 — String core** | ✅ `new_*`, `measure_*`, `encode_*`, `concat`, `eq`, `is_usv_sequence` over the Store-owned `StringObject`, with the centralised null rule and `InvalidString` traps. | STR3, STR4 | The core instruction tests pass and `stringref` values round-trip through linear memory. |
 | **STR-4 — Views** | ✅ `string.as_wtf8`/`as_wtf16`/`as_iter`, every `stringview_*` operation, multi-value WTF-8 encodes, the position treatment, the WTF-16 alignment check and `slice`. | STR7 | The view fixtures pass, including the position and multi-value cases. |
 | **STR-5 — Tests** | ✅ Eight hand-built tests cover parsing, section 14, `string.const`, the core JIT path, memory round-trips, strict-vs-lossy decoding, the three view position models and the multi-value encoders. No upstream script exists in the snapshot. | STR6 | The tests run in the default suite. |
-| **STR-6 — GC-array variants** | ◑ Implement the `0xB0`–`0xB7` constructors/encoders once the GC array slice can share the layout. | STR8 | A multibyte/GC-array fixture passes. |
-| **STR-7 — Embedder bridge** | ◑ Add a host API to create a `stringref` from host bytes and to copy one out (the zero-copy goal is adapter work). | STR5 | A host string survives a call round-trip. |
+| **STR-6 — GC-array variants** | ✅ `new_*_array` / `encode_*_array` (`0xB0`–`0xB7`) over the GC array's inline elements, with packed-element and mutability validation and the spec's bounds/capacity traps. | STR8 | The multibyte and GC-array fixtures pass. |
+| **STR-7 — Embedder bridge** | ✅ `createFromUtf8`/`createFromWtf8`/`createFromWtf16` and `copyToUtf8`/`copyToWtf8`/`copyToWtf16`, with `StringObject*` passed through `callCallable`. | STR5 | A host string survives a call round-trip. |
 | **STR-8 — Lifetime** | ◑ Optional: reference-count or region-release strings instead of retaining them until Store teardown. | STR9 | A long-lived Store creating many short strings stays bounded without the budget. |
 
 The encoding-level staging is `GC.md` §10.6 (`SR-1`…`SR-3`); this note's
 milestones are the same work seen from the proposal side. The implemented slice
-is the type/section/core/view surface; the GC-array variants (`STR-6`), the host
-bridge (`STR-7`) and the optional lifetime work (`STR-8`) remain.
+is the type/section/core/view/GC-array/bridge surface; only the optional
+lifetime work (`STR-8`) and the blocked encoding alignment (`STR1`) remain.
 
 ## 8. Indicative test survey
 
@@ -172,12 +185,16 @@ bridge (`STR-7`) and the optional lifetime work (`STR-8`) remain.
 | `string.new_utf8 is strict while new_lossy_utf8 replaces bad bytes` | 11 assertions | 0 | 0 | invalid UTF-8 traps in `new_utf8`; `new_lossy_utf8` yields U+FFFD; `encode_utf8` traps on an isolated surrogate |
 | `stringview WTF-8, WTF-16 and iterator positions run through the JIT` | 23 assertions | 0 | 0 | position treatment, advance/slice, WTF-16 length/code unit, iterator next/advance/rewind/slice |
 | `stringview encode returns the next position and bytes written` | 14 assertions | 0 | 0 | the multi-value WTF-8 pair and the WTF-16 encode write the expected bytes |
+| `string array constructors and encoders bridge to GC arrays` | 21 assertions | 0 | 0 | i8/i16 globals constructed with `array.new_fixed`/`new_default`, both directions of the bridge, and the encoded bytes inspected in place |
+| `string array variants enforce bounds, strictness and lossy encoding` | 28 assertions | 0 | 0 | strict/lossy/WTF-8 constructors, out-of-bounds and insufficient-capacity traps, and the lossy/WTF-8 encoder outputs |
+| `string array validation checks element type and mutability` | 4 assertions | 0 | 0 | an i16 argument to `new_utf8_array` and an immutable array argument to `encode_utf8_array` are rejected |
+| `the embedder bridge creates and copies stringrefs` | 27 assertions | 0 | 0 | host UTF-8/WTF-8/WTF-16 in, `StringObject*` through a wasm call, and UTF-8/WTF-8/WTF-16 out (including strict-vs-lossy) |
 
 Reading: the upstream snapshot has no stringref script, so the evidence is the
 hand-built set above. It covers the whole implemented slice — types, section
 14, `string.const`, the core instructions, memory round-trips, strict/lossy
-decoding and the full view facility. The total default suite is **9047
-assertions / 329 test cases**, green.
+decoding, the full view facility, the GC-array bridge and the embedder bridge.
+The total default suite is **9,127 assertions / 333 test cases**, green.
 
 ## 9. References
 

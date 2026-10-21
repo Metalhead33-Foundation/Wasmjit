@@ -2622,4 +2622,93 @@ void Validator::dispatchStringViewIterSlice()
 	pushValue(ValueType{ValueTypeCode::StringRef, -1});
 }
 
+// ── GC-array string bridge typing (docs/proposals/STRINGREF.md STR-6) ──────
+
+void Validator::requireStringArrayType(TypeIdx idx, ValueTypeCode packed,
+									   bool requireMutable) const
+{
+	if (idx >= module.typeCount())
+		fail("string array: unknown type " + std::to_string(idx));
+	const CoreTypeView view = module.typeView(idx);
+	if (view.kind() != CanonTypeKind::Array)
+		fail("string array: type " + std::to_string(idx) + " is not an array");
+	const CanonFieldType& element = view.arrayElement();
+	if (!element.storage.isPacked || element.storage.packed != packed)
+		fail("string array: element type is not the required packed type");
+	if (requireMutable && !element.isMutable)
+		fail("string array: the array is not mutable");
+}
+
+void Validator::dispatchStringNewUtf8Array(TypeIdx arg)
+{
+	requireStringArrayType(arg, ValueTypeCode::I8, false);
+	popExpect(ValueTypeCode::I32); // end
+	popExpect(ValueTypeCode::I32); // start
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+	pushValue(ValueType{ValueTypeCode::StringRef, -1});
+}
+
+void Validator::dispatchStringNewLossyUtf8Array(TypeIdx arg)
+{
+	requireStringArrayType(arg, ValueTypeCode::I8, false);
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+	pushValue(ValueType{ValueTypeCode::StringRef, -1});
+}
+
+void Validator::dispatchStringNewWtf8Array(TypeIdx arg)
+{
+	requireStringArrayType(arg, ValueTypeCode::I8, false);
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+	pushValue(ValueType{ValueTypeCode::StringRef, -1});
+}
+
+void Validator::dispatchStringNewWtf16Array(TypeIdx arg)
+{
+	requireStringArrayType(arg, ValueTypeCode::I16, false);
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+	pushValue(ValueType{ValueTypeCode::StringRef, -1});
+}
+
+void Validator::dispatchStringEncodeUtf8Array(TypeIdx arg)
+{
+	requireStringArrayType(arg, ValueTypeCode::I8, true);
+	popExpect(ValueTypeCode::I32); // start
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+	popExpect(ValueTypeCode::StringRef);
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchStringEncodeLossyUtf8Array(TypeIdx arg)
+{
+	requireStringArrayType(arg, ValueTypeCode::I8, true);
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+	popExpect(ValueTypeCode::StringRef);
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchStringEncodeWtf8Array(TypeIdx arg)
+{
+	requireStringArrayType(arg, ValueTypeCode::I8, true);
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+	popExpect(ValueTypeCode::StringRef);
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchStringEncodeWtf16Array(TypeIdx arg)
+{
+	requireStringArrayType(arg, ValueTypeCode::I16, true);
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+	popExpect(ValueTypeCode::StringRef);
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
 } // namespace WASM

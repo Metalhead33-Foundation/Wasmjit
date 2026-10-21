@@ -359,6 +359,106 @@ static void* wasm_stringview_iter_slice(void* iteratorHandle, int32_t count)
 										   count));
 }
 
+// ── GC-array string bridge (docs/proposals/STRINGREF.md STR-6) ──────────────
+// The array type is validated at compile time; the JIT passes the inline data
+// offset and the packed element size (1 for i8, 2 for i16). The array length is
+// the GC header word shared with every other array access.
+
+enum class StringArrayMode { Utf8 = 0, LossyUtf8 = 1, Wtf8 = 2, Wtf16 = 3 };
+
+static uint32_t stringArrayLength(void* handle)
+{
+	if (handle == nullptr)
+		trap(WASM::TrapKind::NullArrayReference, "null array reference");
+	return *reinterpret_cast<const uint32_t*>(
+			static_cast<const uint8_t*>(handle) + WASM::GcHeader::kArrayLengthOffset);
+}
+
+static void* wasm_string_new_array(void* arrayHandle, int32_t start, int32_t end,
+								   uint32_t dataOffset, uint32_t elementSize, int mode)
+{
+	if ((mode == static_cast<int>(StringArrayMode::Wtf16) && elementSize != 2)
+			|| (mode != static_cast<int>(StringArrayMode::Wtf16) && elementSize != 1))
+		trap(WASM::TrapKind::Internal, "string array element size mismatch");
+	const uint32_t length = stringArrayLength(arrayHandle);
+	if (start < 0 || end < 0)
+		trap(WASM::TrapKind::OutOfBoundsArrayAccess);
+	const uint64_t first = static_cast<uint32_t>(start);
+	const uint64_t last = static_cast<uint32_t>(end);
+	if (first > length || last > length || last < first)
+		trap(WASM::TrapKind::OutOfBoundsArrayAccess);
+	const uint64_t count = last - first;
+	const uint64_t limit = mode == static_cast<int>(StringArrayMode::Wtf16)
+			? WASM::kMaxStringCodeUnits : WASM::kMaxStringBytes;
+	if (count > limit)
+		trap(WASM::TrapKind::OutOfMemory, "string exceeds the implementation limit");
+
+	const uint8_t* data = static_cast<const uint8_t*>(arrayHandle) + dataOffset
+			+ static_cast<std::size_t>(first) * elementSize;
+	std::vector<uint32_t> codePoints;
+	switch (static_cast<StringArrayMode>(mode)) {
+	case StringArrayMode::Utf8:
+		if (!WASM::decodeUtf8(data, static_cast<std::size_t>(count), codePoints))
+			trap(WASM::TrapKind::InvalidString, "string.new_utf8_array: invalid UTF-8");
+		break;
+	case StringArrayMode::LossyUtf8:
+		WASM::decodeUtf8Lossy(data, static_cast<std::size_t>(count), codePoints);
+		break;
+	case StringArrayMode::Wtf8:
+		if (!WASM::decodeWtf8(data, static_cast<std::size_t>(count), codePoints))
+			trap(WASM::TrapKind::InvalidString, "string.new_wtf8_array: invalid WTF-8");
+		break;
+	case StringArrayMode::Wtf16:
+		WASM::decodeWtf16(data, static_cast<std::size_t>(count), codePoints);
+		break;
+	}
+	return makeString(std::move(codePoints));
+}
+
+static int32_t wasm_string_encode_array(void* stringHandle, void* arrayHandle, int32_t start,
+										uint32_t dataOffset, uint32_t elementSize, int mode)
+{
+	if ((mode == static_cast<int>(StringArrayMode::Wtf16) && elementSize != 2)
+			|| (mode != static_cast<int>(StringArrayMode::Wtf16) && elementSize != 1))
+		trap(WASM::TrapKind::Internal, "string array element size mismatch");
+	const WASM::StringObject* string = stringObjectOrTrap(stringHandle);
+	const uint32_t length = stringArrayLength(arrayHandle);
+	if (start < 0)
+		trap(WASM::TrapKind::OutOfBoundsArrayAccess);
+	const uint64_t first = static_cast<uint32_t>(start);
+	if (first > length)
+		trap(WASM::TrapKind::OutOfBoundsArrayAccess);
+	// Every code point needs at least one code unit; this cheap check avoids
+	// encoding a large string only to discover that the array is too small.
+	if (string->codePoints.size() > length - first)
+		trap(WASM::TrapKind::OutOfBoundsArrayAccess);
+
+	std::vector<uint8_t> encoded;
+	switch (static_cast<StringArrayMode>(mode)) {
+	case StringArrayMode::Utf8:
+		if (!WASM::encodeUtf8(string->codePoints, encoded, false))
+			trap(WASM::TrapKind::InvalidString, "string.encode_utf8_array: isolated surrogate");
+		break;
+	case StringArrayMode::LossyUtf8:
+		WASM::encodeUtf8(string->codePoints, encoded, true);
+		break;
+	case StringArrayMode::Wtf8:
+		WASM::encodeWtf8(string->codePoints, encoded);
+		break;
+	case StringArrayMode::Wtf16:
+		WASM::encodeWtf16(string->codePoints, encoded);
+		break;
+	}
+	const uint64_t units = encoded.size() / elementSize;
+	if (first + units > length)
+		trap(WASM::TrapKind::OutOfBoundsArrayAccess);
+	if (!encoded.empty())
+		std::memcpy(static_cast<uint8_t*>(arrayHandle) + dataOffset
+							+ static_cast<std::size_t>(first) * elementSize,
+					encoded.data(), encoded.size());
+	return static_cast<int32_t>(units);
+}
+
 extern "C" {
 static uint32_t wasm_i32_clz(uint32_t x)
 {
@@ -5280,6 +5380,104 @@ void OpcodeDispatcher::dispatchStringViewIterSlice()
 			reinterpret_cast<void*>(&wasm_stringview_iter_slice), jit_type_void_ptr,
 			jit_type_void_ptr, jit_type_int, refAsVoidPtr(iterator), count));
 }
+
+// ── GC-array string bridge (docs/proposals/STRINGREF.md STR-6) ─────────────
+
+static jit_value_t callStringArrayNew(jit_function_t fn, void* target,
+									  jit_value_t array, jit_value_t start,
+									  jit_value_t end, jit_value_t dataOffset,
+									  jit_value_t elementSize, int mode)
+{
+	jit_type_t params[6] = {jit_type_void_ptr, jit_type_int, jit_type_int,
+							jit_type_uint, jit_type_uint, jit_type_int};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, params, 6, 1);
+	jit_value_t args[6] = {array, start, end, dataOffset, elementSize,
+			jit_value_create_nint_constant(fn, jit_type_int, mode)};
+	return jit_insn_call_native(fn, "wasm.string.array.new", target, sig, args, 6, 0);
+}
+
+static jit_value_t callStringArrayEncode(jit_function_t fn, void* target,
+										 jit_value_t string, jit_value_t array,
+										 jit_value_t start, jit_value_t dataOffset,
+										 jit_value_t elementSize, int mode)
+{
+	jit_type_t params[6] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_int,
+							jit_type_uint, jit_type_uint, jit_type_int};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 6, 1);
+	jit_value_t args[6] = {string, array, start, dataOffset, elementSize,
+			jit_value_create_nint_constant(fn, jit_type_int, mode)};
+	return jit_insn_call_native(fn, "wasm.string.array.encode", target, sig, args, 6, 0);
+}
+
+void OpcodeDispatcher::dispatchStringNewArrayImpl(WASM::TypeIdx arg, void* helper, int mode)
+{
+	jit_value_t end = popValue();
+	jit_value_t start = popValue();
+	jit_value_t array = popValue();
+	if (unreachableCode)
+		return;
+	const jit_nint dataOffset = arrayDataOffset(arg);
+	const jit_nint elementSize = jit_type_get_size(arrayElementJitType(arg));
+	pushValue(callStringArrayNew(function, helper, refAsVoidPtr(array), start, end,
+			jit_value_create_nint_constant(function, jit_type_uint, dataOffset),
+			jit_value_create_nint_constant(function, jit_type_uint, elementSize), mode));
+}
+
+void OpcodeDispatcher::dispatchStringEncodeArrayImpl(WASM::TypeIdx arg, void* helper, int mode)
+{
+	jit_value_t start = popValue();
+	jit_value_t array = popValue();
+	jit_value_t string = popValue();
+	if (unreachableCode)
+		return;
+	const jit_nint dataOffset = arrayDataOffset(arg);
+	const jit_nint elementSize = jit_type_get_size(arrayElementJitType(arg));
+	pushValue(callStringArrayEncode(function, helper, refAsVoidPtr(string),
+			refAsVoidPtr(array), start,
+			jit_value_create_nint_constant(function, jit_type_uint, dataOffset),
+			jit_value_create_nint_constant(function, jit_type_uint, elementSize), mode));
+}
+
+void OpcodeDispatcher::dispatchStringNewUtf8Array(WASM::TypeIdx arg)
+{
+	dispatchStringNewArrayImpl(arg, reinterpret_cast<void*>(&wasm_string_new_array), 0);
+}
+
+void OpcodeDispatcher::dispatchStringNewLossyUtf8Array(WASM::TypeIdx arg)
+{
+	dispatchStringNewArrayImpl(arg, reinterpret_cast<void*>(&wasm_string_new_array), 1);
+}
+
+void OpcodeDispatcher::dispatchStringNewWtf8Array(WASM::TypeIdx arg)
+{
+	dispatchStringNewArrayImpl(arg, reinterpret_cast<void*>(&wasm_string_new_array), 2);
+}
+
+void OpcodeDispatcher::dispatchStringNewWtf16Array(WASM::TypeIdx arg)
+{
+	dispatchStringNewArrayImpl(arg, reinterpret_cast<void*>(&wasm_string_new_array), 3);
+}
+
+void OpcodeDispatcher::dispatchStringEncodeUtf8Array(WASM::TypeIdx arg)
+{
+	dispatchStringEncodeArrayImpl(arg, reinterpret_cast<void*>(&wasm_string_encode_array), 0);
+}
+
+void OpcodeDispatcher::dispatchStringEncodeLossyUtf8Array(WASM::TypeIdx arg)
+{
+	dispatchStringEncodeArrayImpl(arg, reinterpret_cast<void*>(&wasm_string_encode_array), 1);
+}
+
+void OpcodeDispatcher::dispatchStringEncodeWtf8Array(WASM::TypeIdx arg)
+{
+	dispatchStringEncodeArrayImpl(arg, reinterpret_cast<void*>(&wasm_string_encode_array), 2);
+}
+
+void OpcodeDispatcher::dispatchStringEncodeWtf16Array(WASM::TypeIdx arg)
+{
+	dispatchStringEncodeArrayImpl(arg, reinterpret_cast<void*>(&wasm_string_encode_array), 3);
+}
+
 void OpcodeDispatcher::dispatchI32TruncSatF32S() {
 	pushValue(callNativeUnary(function, reinterpret_cast<void*>(wasm_i32_trunc_sat_f32_s),
 							  jit_type_int, jit_type_float32, popValue()));

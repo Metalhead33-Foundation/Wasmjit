@@ -285,6 +285,15 @@ protected:
 	void dispatchStringViewIterAdvance() override;
 	void dispatchStringViewIterRewind() override;
 	void dispatchStringViewIterSlice() override;
+	// GC-array string bridge (docs/proposals/STRINGREF.md STR-6)
+	void dispatchStringNewUtf8Array(WASM::TypeIdx arg) override;
+	void dispatchStringNewWtf16Array(WASM::TypeIdx arg) override;
+	void dispatchStringEncodeUtf8Array(WASM::TypeIdx arg) override;
+	void dispatchStringEncodeWtf16Array(WASM::TypeIdx arg) override;
+	void dispatchStringNewLossyUtf8Array(WASM::TypeIdx arg) override;
+	void dispatchStringNewWtf8Array(WASM::TypeIdx arg) override;
+	void dispatchStringEncodeLossyUtf8Array(WASM::TypeIdx arg) override;
+	void dispatchStringEncodeWtf8Array(WASM::TypeIdx arg) override;
 	void dispatchI32TruncSatF32S() override;
 	void dispatchI32TruncSatF32U() override;
 	void dispatchI32TruncSatF64S() override;

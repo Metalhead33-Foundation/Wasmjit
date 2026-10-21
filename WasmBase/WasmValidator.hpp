@@ -59,6 +59,9 @@ private:
 	void requireFunctionIndex(uint32_t idx) const;
 	void requireTableIndex(uint32_t idx) const;
 	void requireMemoryIndex(uint32_t idx) const;
+	// `string.*_array` type checks: the type index must be an array of the
+	// required packed element type; encode variants require a mutable array.
+	void requireStringArrayType(TypeIdx idx, ValueTypeCode packed, bool requireMutable) const;
 	void requireGlobalIndex(uint32_t idx) const;
 	void requireTagIndex(uint32_t idx) const;
 	void requireLocalIndex(uint32_t idx) const;
@@ -205,6 +208,16 @@ private:
 	void dispatchStringViewIterAdvance() override;
 	void dispatchStringViewIterRewind() override;
 	void dispatchStringViewIterSlice() override;
+
+	// GC-array string bridge (docs/proposals/STRINGREF.md STR-6)
+	void dispatchStringNewUtf8Array(TypeIdx arg) override;
+	void dispatchStringNewWtf16Array(TypeIdx arg) override;
+	void dispatchStringEncodeUtf8Array(TypeIdx arg) override;
+	void dispatchStringEncodeWtf16Array(TypeIdx arg) override;
+	void dispatchStringNewLossyUtf8Array(TypeIdx arg) override;
+	void dispatchStringNewWtf8Array(TypeIdx arg) override;
+	void dispatchStringEncodeLossyUtf8Array(TypeIdx arg) override;
+	void dispatchStringEncodeWtf8Array(TypeIdx arg) override;
 	void onUnhandledOpcode(const char* name) override;
 
 	// Immediate-only checks (no operand stack yet).

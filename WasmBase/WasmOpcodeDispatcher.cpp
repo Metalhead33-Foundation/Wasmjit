@@ -78,9 +78,25 @@ void WASM::OpcodeDispatcher::dispatchPrefixString(FastMemReader& stream, StringO
 	case StringOpcode::StringViewIterAdvance: dispatchStringViewIterAdvance(); break;
 	case StringOpcode::StringViewIterRewind:  dispatchStringViewIterRewind(); break;
 	case StringOpcode::StringViewIterSlice:   dispatchStringViewIterSlice(); break;
+
+	case StringOpcode::StringNewUtf8Array:
+		dispatchStringNewUtf8Array(stream.readLEB128<TypeIdx>()); break;
+	case StringOpcode::StringNewWtf16Array:
+		dispatchStringNewWtf16Array(stream.readLEB128<TypeIdx>()); break;
+	case StringOpcode::StringEncodeUtf8Array:
+		dispatchStringEncodeUtf8Array(stream.readLEB128<TypeIdx>()); break;
+	case StringOpcode::StringEncodeWtf16Array:
+		dispatchStringEncodeWtf16Array(stream.readLEB128<TypeIdx>()); break;
+	case StringOpcode::StringNewLossyUtf8Array:
+		dispatchStringNewLossyUtf8Array(stream.readLEB128<TypeIdx>()); break;
+	case StringOpcode::StringNewWtf8Array:
+		dispatchStringNewWtf8Array(stream.readLEB128<TypeIdx>()); break;
+	case StringOpcode::StringEncodeLossyUtf8Array:
+		dispatchStringEncodeLossyUtf8Array(stream.readLEB128<TypeIdx>()); break;
+	case StringOpcode::StringEncodeWtf8Array:
+		dispatchStringEncodeWtf8Array(stream.readLEB128<TypeIdx>()); break;
 	default:
-		// GC-array variants are decoded but not lowered.
-		onUnhandledOpcode("GC-array string instruction is not implemented yet");
+		onUnhandledOpcode("unknown 0xFB string sub-opcode");
 	}
 }
 
