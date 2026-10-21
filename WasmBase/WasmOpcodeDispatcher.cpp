@@ -37,6 +37,33 @@ template <typename T> static std::vector<T> readListLEB128(FastMemReader& stream
 }
 
 // =============================================================================
+// dispatchPrefixString  –  0xFB sub-opcodes >= 0x80 (stringref proposal)
+// =============================================================================
+void WASM::OpcodeDispatcher::dispatchPrefixString(FastMemReader& stream, StringOpcode opcode)
+{
+	switch (opcode) {
+	case StringOpcode::StringNewUtf8:         dispatchStringNewUtf8(stream.readLEB128<MemIdx>()); break;
+	case StringOpcode::StringNewWtf16:        dispatchStringNewWtf16(stream.readLEB128<MemIdx>()); break;
+	case StringOpcode::StringConst:           dispatchStringConst(stream.readLEB128<uint32_t>()); break;
+	case StringOpcode::StringMeasureUtf8:     dispatchStringMeasureUtf8(); break;
+	case StringOpcode::StringMeasureWtf8:     dispatchStringMeasureWtf8(); break;
+	case StringOpcode::StringMeasureWtf16:    dispatchStringMeasureWtf16(); break;
+	case StringOpcode::StringEncodeUtf8:      dispatchStringEncodeUtf8(stream.readLEB128<MemIdx>()); break;
+	case StringOpcode::StringEncodeWtf16:     dispatchStringEncodeWtf16(stream.readLEB128<MemIdx>()); break;
+	case StringOpcode::StringConcat:          dispatchStringConcat(); break;
+	case StringOpcode::StringEq:              dispatchStringEq(); break;
+	case StringOpcode::StringIsUsvSequence:   dispatchStringIsUsvSequence(); break;
+	case StringOpcode::StringNewLossyUtf8:    dispatchStringNewLossyUtf8(stream.readLEB128<MemIdx>()); break;
+	case StringOpcode::StringNewWtf8:         dispatchStringNewWtf8(stream.readLEB128<MemIdx>()); break;
+	case StringOpcode::StringEncodeLossyUtf8: dispatchStringEncodeLossyUtf8(stream.readLEB128<MemIdx>()); break;
+	case StringOpcode::StringEncodeWtf8:      dispatchStringEncodeWtf8(stream.readLEB128<MemIdx>()); break;
+	default:
+		// Views (STR-4) and the GC-array variants are decoded but not lowered.
+		onUnhandledOpcode("stringview / GC-array string instruction is not implemented yet");
+	}
+}
+
+// =============================================================================
 // dispatchPrefixGC  –  0xFB sub-opcodes
 // =============================================================================
 void WASM::OpcodeDispatcher::dispatchPrefixGC(FastMemReader& stream, GCOpcode opcode)
@@ -1036,8 +1063,14 @@ void OpcodeDispatcher::dispatchOpcode(FastMemReader& stream, Opcode opcode)
 		// Sub-opcodes: 0xFB/0xFD use LEB128 u32; 0xFC and 0xFE use plain byte.
 		// ----------------------------------------------------------------
 		case Opcode::PrefixGC: {
-			auto sub = stream.readLEB128_enum<GCOpcode>();
-			dispatchPrefixGC(stream, sub);
+			const uint32_t sub = stream.readLEB128<uint32_t>();
+			// The stringref proposal reuses 0xFB for its own sub-opcodes and
+			// gives them values >= 0x80; GC keeps 0x00..0x7F
+			// (docs/proposals/STRINGREF.md STR-3).
+			if (sub >= 0x80u)
+				dispatchPrefixString(stream, static_cast<StringOpcode>(sub));
+			else
+				dispatchPrefixGC(stream, static_cast<GCOpcode>(sub));
 			break;
 		}
 		case Opcode::PrefixMisc: {

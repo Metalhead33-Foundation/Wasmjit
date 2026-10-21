@@ -1,6 +1,7 @@
 #ifndef WASMSTORE_HPP
 #define WASMSTORE_HPP
 #include "WasmMemory.hpp"
+#include "WasmString.hpp"
 #include "WasmTable.hpp"
 #include "WasmTypeRegistry.hpp"
 #include "WasmGcHeap.hpp"
@@ -54,6 +55,13 @@ public:
 	// GC.md §6.1/GC-2). Instances hold a RegionSet handle and allocate from it.
 	GcHeap&       gc()       { return gcHeap; }
 	const GcHeap& gc() const { return gcHeap; }
+
+	// ── Strings (docs/proposals/STRINGREF.md) ───────────────────────────
+	// Host-owned string objects: stable pointers, no reference counting, and a
+	// lifetime that ends with the Store. `string.const` literals and every
+	// `string.new_*`/`string.concat` result live here.
+	StringStore&       strings()       { return stringStore; }
+	const StringStore& strings() const { return stringStore; }
 
 	// ── Linear memory ───────────────────────────────────────────────────
 	// Allocate a fresh linear memory owned by the store. Returns its store id;
@@ -189,6 +197,9 @@ private:
 
 	// The GC object heap: mmap-backed regions, no per-object libc allocation.
 	GcHeap gcHeap;
+
+	// Host-owned string objects (STRINGREF.md). Never freed before teardown.
+	StringStore stringStore;
 };
 }
 #endif // WASMSTORE_HPP

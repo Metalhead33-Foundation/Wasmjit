@@ -1,6 +1,7 @@
 #include "WasmModule.hpp"
 #include "WasmSafety.hpp"
 #include "WasmStore.hpp"
+#include "WasmString.hpp"
 #include "WasmValidator.hpp"
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <cstddef>
@@ -73,6 +74,44 @@ void validateTypeGroupMember(const Subtype& subtype, uint32_t selfIndex, uint32_
 
 void Module::processSecetions(Elv::Io::Device& file)
 {
+	// Section 14 is positional: at most one, immediately before the global
+	// section or in the slot the global section would occupy. Custom sections
+	// do not participate (docs/proposals/STRINGREF.md STR-2).
+	{
+		bool seenString = false;
+		bool seenGlobal = false;
+		bool seenAfterGlobalSlot = false;
+		for (const Section& section : sections) {
+			const SectionType type = section.type;
+			if (type == SectionType::Custom)
+				continue;
+			if (type == SectionType::String) {
+				if (seenString)
+					throw std::runtime_error("malformed module: multiple string sections");
+				if (seenGlobal || seenAfterGlobalSlot)
+					throw std::runtime_error(
+						"malformed module: the string section must precede the global section");
+				seenString = true;
+				continue;
+			}
+			if (type == SectionType::Global) {
+				seenGlobal = true;
+				seenAfterGlobalSlot = true;
+				continue;
+			}
+			const uint8_t id = static_cast<uint8_t>(type);
+			// Type(1)..Memory(5) and Tag(13) canonically precede Global.
+			const bool beforeGlobal = (id >= 1 && id <= 5) || type == SectionType::Tag;
+			// Export(7)..DataCount(12) canonically follow Global.
+			const bool afterGlobal = (id >= 7 && id <= 12);
+			if (afterGlobal)
+				seenAfterGlobalSlot = true;
+			if (beforeGlobal && seenString)
+				throw std::runtime_error(
+					"malformed module: the string section is out of order");
+		}
+	}
+
 	for(const auto& it : sections)
 	{
 		switch (it.type) {
@@ -90,6 +129,7 @@ void Module::processSecetions(Elv::Io::Device& file)
 			case SectionType::Data: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processDataSection(file, it); break;
 			case SectionType::DataCount: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processDataCountSection(file, it); break;
 			case SectionType::Tag: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processTagSection(file, it); break;
+			case SectionType::String: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processStringSection(file, it); break;
 			case SectionType::Invalid: break;
 			default: break;
 		}
@@ -538,6 +578,54 @@ void Module::processTagSection(Elv::Io::Device& file, const Section& section)
 	}
 }
 
+void Module::processStringSection(Elv::Io::Device& file, const Section& section)
+{
+	// Section 14: `0x00 vec(vec(u8))` (docs/proposals/STRINGREF.md STR-2).
+	// The 0x00 is a placeholder for a future deferred-literal form.
+	const uint64_t sectionEnd = static_cast<uint64_t>(section.offset) + section.size;
+	DWasmStream wasmStream(file);
+	uint8_t form = 0;
+	wasmStream >> form;
+	if (form != 0x00)
+		throw std::runtime_error("malformed module: unsupported string section form");
+
+	uint32_t count = 0;
+	wasmStream >> Elv::Io::Leb(count);
+	// Each literal costs at least its length LEB, so the input bounds `count`.
+	requireCountAvailable(file, count, "a string literal count");
+	// A pathological count would otherwise size an input-derived vector before
+	// any bytes are read. The Store charges the decoded strings to the
+	// allocation budget when they are materialised (docs/SAFETY.md).
+	constexpr uint32_t kMaxStringLiterals = 1u << 20;
+	if (count > kMaxStringLiterals)
+		throw std::runtime_error("malformed module: too many string literals");
+
+	for (uint32_t i = 0; i < count; ++i) {
+		uint32_t length = 0;
+		wasmStream >> Elv::Io::Leb(length);
+		const long position = file.tell();
+		if (position < 0 || static_cast<uint64_t>(position) > sectionEnd
+				|| length > sectionEnd - static_cast<uint64_t>(position))
+			throw std::runtime_error("string literal out of bounds");
+		// The proposal allows more restrictive embedding limits; this also
+		// bounds the code-point vector decoded at instantiation.
+		if (length > WASM::kMaxStringBytes)
+			throw std::runtime_error("string literal exceeds the implementation limit");
+
+		std::string literal(length, '\0');
+		if (length != 0)
+			file.read(literal.data(), 1, length);
+
+		std::vector<uint32_t> codePoints;
+		if (!WASM::decodeWtf8(reinterpret_cast<const uint8_t*>(literal.data()),
+							  literal.size(), codePoints))
+			throw std::runtime_error(
+				"malformed module: string literal is not valid WTF-8");
+
+		stringLiterals.push_back(std::move(literal));
+	}
+}
+
 void Module::processCustomSection(Elv::Io::Device& file, const Section& section)
 {
 	DWasmStream wasmStream(file);
@@ -877,6 +965,12 @@ std::vector<uint8_t> Module::parseInitExpr(DWasmStream& stream) {
 				uint32_t subOp;
 				stream >> Elv::Io::Leb(subOp);
 				switch (subOp) {
+				case 0x82: // string.const idx (docs/proposals/STRINGREF.md STR-2)
+				{
+					uint32_t idx;
+					stream >> Elv::Io::Leb(idx);
+					break;
+				}
 				case 0:  // struct.new typeidx
 				case 1:  // struct.new_default typeidx
 				case 6:  // array.new typeidx
@@ -997,12 +1091,16 @@ namespace {
 // at load instead of being compiled into a silently broken function.
 [[noreturn]] void rejectUnsupportedValueType(const char* where, size_t index, WASM::ValueTypeCode code)
 {
-	const unsigned byte = static_cast<unsigned>(static_cast<uint8_t>(code));
+	const int value = static_cast<int>(code);
+	// `code` is the *decoded* signed value, while the module carries a signed
+	// LEB128. For the one-byte codes this engine knows, the wire byte is the
+	// low seven bits (e.g. -25 is 0x67, not its two's-complement 0xE7).
+	const unsigned wireByte = static_cast<unsigned>(value) & 0x7Fu;
 	char buffer[256];
 	std::snprintf(buffer, sizeof(buffer),
 			"malformed module: unsupported value type 0x%02X (%d) in %s #%zu — this "
 			"engine does not model it (docs/NULL_JIT_VALUE_DIAGNOSIS.md)",
-			byte, static_cast<int>(code), where, index);
+			wireByte, value, where, index);
 	throw std::runtime_error(buffer);
 }
 

@@ -172,6 +172,21 @@ private:
 	void validateTableInit(const TableType& table, std::size_t index, bool isImport = false);
 	void validateFunctionBody(const FunctionBody& body, std::size_t index);
 
+	void dispatchStringNewUtf8(MemIdx arg) override;
+	void dispatchStringNewWtf16(MemIdx arg) override;
+	void dispatchStringNewLossyUtf8(MemIdx arg) override;
+	void dispatchStringNewWtf8(MemIdx arg) override;
+	void dispatchStringConst(uint32_t idx) override;
+	void dispatchStringMeasureUtf8() override;
+	void dispatchStringMeasureWtf8() override;
+	void dispatchStringMeasureWtf16() override;
+	void dispatchStringEncodeUtf8(MemIdx arg) override;
+	void dispatchStringEncodeLossyUtf8(MemIdx arg) override;
+	void dispatchStringEncodeWtf8(MemIdx arg) override;
+	void dispatchStringEncodeWtf16(MemIdx arg) override;
+	void dispatchStringConcat() override;
+	void dispatchStringEq() override;
+	void dispatchStringIsUsvSequence() override;
 	void onUnhandledOpcode(const char* name) override;
 
 	// Immediate-only checks (no operand stack yet).

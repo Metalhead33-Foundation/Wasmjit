@@ -82,7 +82,10 @@ enum class ValueTypeCode : int8_t {
 	NullExnRef      = -0x0C, // 0x74
 	NullRef         = -0x0F, // 0x71
 
-	// Stringref (Standardized Values)
+	// Stringref proposal: host-owned nullable reference types. The engine uses
+	// its own reserved encodings (0x67/0x66/0x65/0x62) because the proposal's
+	// current 0x64/0x63 collide with GC `ref`/`ref null`
+	// (docs/proposals/STRINGREF.md STR1/STRD5).
 	StringRef       = -0x19, // 0x67
 	StringViewWtf8  = -0x1A, // 0x66
 	StringViewWtf16 = -0x1B, // 0x65
@@ -100,12 +103,12 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 }
 
 // ── Value types this engine models ──────────────────────────────────────────
-// True only for the codes this engine can lower and run. Anything else (the
-// exception-handling `exnref` / `nullexnref` opcodes 0x69 / 0x74 are the ones the
-// spec suite exercises) has no representation: the type lowers to a void/absent
-// value, and loading one yields a null backend handle. Rather than compile such
-// a module into an operand that is silently broken, `Module::fromFile` rejects
-// it — see docs/NULL_JIT_VALUE_DIAGNOSIS.md.
+// True only for the codes this engine can lower and run. The four stringref
+// codes are host-owned references (docs/proposals/STRINGREF.md STR-1/STR-3);
+// anything else (a future proposal code) has no representation: the type
+// lowers to a void/absent value, and loading one yields a null backend handle.
+// Rather than compile such a module into an operand that is silently broken,
+// `Module::fromFile` rejects it — see docs/NULL_JIT_VALUE_DIAGNOSIS.md.
 inline bool isModeledValueTypeCode(ValueTypeCode code)
 {
 	switch (code) {

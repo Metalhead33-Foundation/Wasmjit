@@ -1002,6 +1002,66 @@ void OpcodeDispatcher::dispatchI31GetU()
 {
 	*stream << '(' << "I31GetU" << ')' << std::endl;
 }
+void OpcodeDispatcher::dispatchStringNewUtf8(WASM::MemIdx arg)
+{
+	*stream << '(' << "StringNewUtf8" << ' ' << '(' << arg << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringNewWtf16(WASM::MemIdx arg)
+{
+	*stream << '(' << "StringNewWtf16" << ' ' << '(' << arg << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringNewLossyUtf8(WASM::MemIdx arg)
+{
+	*stream << '(' << "StringNewLossyUtf8" << ' ' << '(' << arg << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringNewWtf8(WASM::MemIdx arg)
+{
+	*stream << '(' << "StringNewWtf8" << ' ' << '(' << arg << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringConst(uint32_t idx)
+{
+	*stream << '(' << "StringConst" << ' ' << '(' << idx << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringMeasureUtf8()
+{
+	*stream << '(' << "StringMeasureUtf8" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringMeasureWtf8()
+{
+	*stream << '(' << "StringMeasureWtf8" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringMeasureWtf16()
+{
+	*stream << '(' << "StringMeasureWtf16" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringEncodeUtf8(WASM::MemIdx arg)
+{
+	*stream << '(' << "StringEncodeUtf8" << ' ' << '(' << arg << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringEncodeLossyUtf8(WASM::MemIdx arg)
+{
+	*stream << '(' << "StringEncodeLossyUtf8" << ' ' << '(' << arg << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringEncodeWtf8(WASM::MemIdx arg)
+{
+	*stream << '(' << "StringEncodeWtf8" << ' ' << '(' << arg << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringEncodeWtf16(WASM::MemIdx arg)
+{
+	*stream << '(' << "StringEncodeWtf16" << ' ' << '(' << arg << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringConcat()
+{
+	*stream << '(' << "StringConcat" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringEq()
+{
+	*stream << '(' << "StringEq" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringIsUsvSequence()
+{
+	*stream << '(' << "StringIsUsvSequence" << ')' << std::endl;
+}
 void OpcodeDispatcher::dispatchI32TruncSatF32S()
 {
 	*stream << '(' << "I32TruncSatF32S" << ')' << std::endl;

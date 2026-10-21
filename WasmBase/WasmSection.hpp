@@ -21,6 +21,7 @@ enum class SectionType : uint8_t {
 	Data = 11, //! Data segment initializers
 	DataCount = 12, //! It decodes into an optional u32 count that represents the number of data segments in the data section. If this count does not match the length of the data segment list, the module is malformed
 	Tag = 13, //! It decodes into the list of tags defined by a module.
+	String = 14, //! String literals (proposals/STRINGREF.md STR-2), before Global
 	Invalid = 255
 };
 const char* getSectionTypeName(SectionType sectType);

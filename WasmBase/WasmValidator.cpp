@@ -305,6 +305,7 @@ bool Validator::isDefaultable(const ValueType& type) const
 bool Validator::refSubtype(const ValueType& actual, const ValueType& expected) const
 {
 	enum class Kind { Func, Extern, Exn, Any, Eq, I31, Struct, Array,
+					  String, StringViewWtf8, StringViewWtf16, StringViewIter,
 					  None, NoFunc, NoExtern, NoExn,
 					  ConcreteFunc, ConcreteStruct, ConcreteArray, Other };
 	struct Info { bool isRef = false; bool nullable = false; Kind kind = Kind::Other; uint32_t idx = 0; };
@@ -320,6 +321,10 @@ bool Validator::refSubtype(const ValueType& actual, const ValueType& expected) c
 		case ValueTypeCode::I31Ref:       out = {true, true, Kind::I31, 0}; break;
 		case ValueTypeCode::StructRef:    out = {true, true, Kind::Struct, 0}; break;
 		case ValueTypeCode::ArrayRef:     out = {true, true, Kind::Array, 0}; break;
+		case ValueTypeCode::StringRef:       out = {true, true, Kind::String, 0}; break;
+		case ValueTypeCode::StringViewWtf8:  out = {true, true, Kind::StringViewWtf8, 0}; break;
+		case ValueTypeCode::StringViewWtf16: out = {true, true, Kind::StringViewWtf16, 0}; break;
+		case ValueTypeCode::StringViewIter:  out = {true, true, Kind::StringViewIter, 0}; break;
 		case ValueTypeCode::NullRef:      out = {true, true, Kind::None, 0}; break;
 		case ValueTypeCode::NullFuncRef:  out = {true, true, Kind::NoFunc, 0}; break;
 		case ValueTypeCode::NullExternRef:out = {true, true, Kind::NoExtern, 0}; break;
@@ -825,12 +830,23 @@ void Validator::validateGlobalInit(const Global& global, std::size_t index)
 			uint32_t subOpcode = 0;
 			stream >> Elv::Io::Leb(subOpcode);
 			switch (subOpcode) {
+			case 0x82: { // string.const idx (docs/proposals/STRINGREF.md STR-2)
+				uint32_t idx = 0;
+				stream >> Elv::Io::Leb(idx);
+				if (idx >= module.stringLiterals.size())
+					fail(label + ": string.const index out of range");
+				push(ValueTypeCode::StringRef);
+				break;
+			}
 			case 0: case 1: case 6: case 7: case 8: case 9: case 10:
 			case 26: case 27: case 28:
 				return; // modelled by evalConstantExpr; conservatively accepted
 			default:
 				fail(label + ": constant expression required");
 			}
+			// `string.const` is followed by the rest of the expression (at
+			// least `end`); keep scanning so it is not silently truncated.
+			break;
 		}
 		case 0x0B: // end
 			done = true;
@@ -940,6 +956,14 @@ std::optional<ValueType> Validator::validateConstExpr(const std::vector<uint8_t>
 			uint32_t subOpcode = 0;
 			stream >> Elv::Io::Leb(subOpcode);
 			switch (subOpcode) {
+			case 0x82: { // string.const idx (docs/proposals/STRINGREF.md STR-2)
+				uint32_t idx = 0;
+				stream >> Elv::Io::Leb(idx);
+				if (idx >= module.stringLiterals.size())
+					fail(label + ": string.const index out of range");
+				push(ValueType{ValueTypeCode::StringRef, -1});
+				break;
+			}
 			case 0: case 1: case 6: case 7: case 8: case 9: case 10:
 			case 26: case 27: case 28:
 				return std::nullopt;
@@ -2365,5 +2389,116 @@ WJ_CONV(I64TruncSatF64U, F64, I64)
 #undef WJ_BINOP
 #undef WJ_RELOP
 #undef WJ_CONV
+
+// ── Stringref core instruction typing (docs/proposals/STRINGREF.md STR-3) ──
+
+void Validator::dispatchStringNewUtf8(MemIdx arg)
+{
+	requireMemoryIndex(arg);
+	popExpect(ValueTypeCode::I32); // len
+	popExpect(ValueTypeCode::I32); // ptr
+	pushValue(ValueType{ValueTypeCode::StringRef, -1});
+}
+
+void Validator::dispatchStringNewWtf16(MemIdx arg)
+{
+	requireMemoryIndex(arg);
+	popExpect(ValueTypeCode::I32); // code units
+	popExpect(ValueTypeCode::I32); // ptr
+	pushValue(ValueType{ValueTypeCode::StringRef, -1});
+}
+
+void Validator::dispatchStringNewLossyUtf8(MemIdx arg)
+{
+	requireMemoryIndex(arg);
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueTypeCode::I32);
+	pushValue(ValueType{ValueTypeCode::StringRef, -1});
+}
+
+void Validator::dispatchStringNewWtf8(MemIdx arg)
+{
+	requireMemoryIndex(arg);
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueTypeCode::I32);
+	pushValue(ValueType{ValueTypeCode::StringRef, -1});
+}
+
+void Validator::dispatchStringConst(uint32_t idx)
+{
+	if (idx >= module.stringLiterals.size())
+		fail("string.const index " + std::to_string(idx) + " is out of range");
+	pushValue(ValueType{ValueTypeCode::StringRef, -1});
+}
+
+void Validator::dispatchStringMeasureUtf8()
+{
+	popExpect(ValueTypeCode::StringRef);
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchStringMeasureWtf8()
+{
+	popExpect(ValueTypeCode::StringRef);
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchStringMeasureWtf16()
+{
+	popExpect(ValueTypeCode::StringRef);
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchStringEncodeUtf8(MemIdx arg)
+{
+	requireMemoryIndex(arg);
+	popExpect(ValueTypeCode::I32); // ptr
+	popExpect(ValueTypeCode::StringRef);
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchStringEncodeLossyUtf8(MemIdx arg)
+{
+	requireMemoryIndex(arg);
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueTypeCode::StringRef);
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchStringEncodeWtf8(MemIdx arg)
+{
+	requireMemoryIndex(arg);
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueTypeCode::StringRef);
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchStringEncodeWtf16(MemIdx arg)
+{
+	requireMemoryIndex(arg);
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueTypeCode::StringRef);
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchStringConcat()
+{
+	popExpect(ValueTypeCode::StringRef);
+	popExpect(ValueTypeCode::StringRef);
+	pushValue(ValueType{ValueTypeCode::StringRef, -1});
+}
+
+void Validator::dispatchStringEq()
+{
+	popExpect(ValueTypeCode::StringRef);
+	popExpect(ValueTypeCode::StringRef);
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchStringIsUsvSequence()
+{
+	popExpect(ValueTypeCode::StringRef);
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
 
 } // namespace WASM

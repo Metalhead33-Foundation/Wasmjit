@@ -9,11 +9,13 @@
 #include <cstdint>
 #include <cstring>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "helper.hpp"
@@ -24,6 +26,7 @@
 #include "WasmBase/WasmExn.hpp"
 #include "WasmBase/WasmOpcode.hpp"
 #include "WasmBase/WasmStore.hpp"
+#include "WasmBase/WasmString.hpp"
 #include "WasmBase/WasmTrap.hpp"
 #include "WasmBase/wasm_simd_scalar.hpp"
 #include "LibJit/ComponentRuntime.hpp"
@@ -2522,6 +2525,381 @@ TEST_CASE("core type imports link by their abstract bound")
 	WASM::Module* badImporter = badArtifact->asCoreModule();
 	REQUIRE(badImporter != nullptr);
 	REQUIRE_THROWS(compiler.instantiate(*badImporter, registry));
+}
+
+TEST_CASE("stringref types and the string section are parsed (STR-1/STR-2)")
+{
+	// One function type `(param stringref)` (the engine's reserved 0x67) and
+	// a string section holding "A" and "€" (docs/proposals/STRINGREF.md
+	// STR-1/STR-2). No functions or globals are needed to exercise parsing.
+	const std::vector<uint8_t> bytes = {
+		0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x05, 0x01, 0x60, 0x01, 0x67, 0x00,
+		0x0e, 0x08, 0x00, 0x02, 0x01, 0x41, 0x03, 0xe2, 0x82, 0xac
+	};
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	REQUIRE(artifact->isCoreModule());
+	WASM::Module* module = artifact->asCoreModule();
+	REQUIRE(module != nullptr);
+
+	REQUIRE(module->typeCount() == 1);
+	const WASM::CoreTypeView view = module->typeView(0);
+	REQUIRE(view.kind() == WASM::CanonTypeKind::Func);
+	REQUIRE(view.funcParams().size() == 1);
+	REQUIRE(view.funcParams()[0].value.opcode == WASM::ValueTypeCode::StringRef);
+
+	REQUIRE(module->stringLiterals.size() == 2);
+	REQUIRE(module->stringLiterals[0] == std::string("A"));
+	REQUIRE(module->stringLiterals[1] == std::string("\xE2\x82\xAC"));
+}
+
+TEST_CASE("an unmodelled value type is still rejected at load")
+{
+	// 0x68 is not assigned by any proposal this engine knows; the load-time
+	// type walk must still reject it rather than compile a null operand
+	// (docs/NULL_JIT_VALUE_DIAGNOSIS.md).
+	const std::vector<uint8_t> bytes = {
+		0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x05, 0x01, 0x60, 0x01, 0x68, 0x00
+	};
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	std::string message;
+	try {
+		(void)WASM::Artifact::parse(device);
+	} catch (const std::exception& error) {
+		message = error.what();
+	}
+	CAPTURE(message);
+	REQUIRE(message.find("unsupported value type 0x68") != std::string::npos);
+	REQUIRE(message.find("function type parameter #0") != std::string::npos);
+}
+
+TEST_CASE("string.const initializes a stringref global")
+{
+	// Section 14 holds "A" and "€"; the global's initializer is
+	// `(string.const 0)`: the 0xFB sub-opcode is a u32 LEB (0x82 0x01),
+	// followed by the literal index (docs/proposals/STRINGREF.md STR-2/STR-3).
+	const std::vector<uint8_t> bytes = {
+		0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x0e, 0x08, 0x00, 0x02, 0x01, 0x41, 0x03, 0xe2, 0x82, 0xac,
+		0x06, 0x08, 0x01, 0x67, 0x00, 0xfb, 0x82, 0x01, 0x00, 0x0b
+	};
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* module = artifact->asCoreModule();
+	REQUIRE(module != nullptr);
+
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto instance = compiler.instantiate(*module, imports);
+	REQUIRE(instance.get() != nullptr);
+	REQUIRE(instance->context()->globals != nullptr);
+
+	const WASM::Value* global = instance->context()->globals[0];
+	REQUIRE(global != nullptr);
+	REQUIRE(global->kind == WASM::ValueTypeCode::StringRef);
+	REQUIRE(global->ref != nullptr);
+	const auto* string = static_cast<const WASM::StringObject*>(global->ref);
+	REQUIRE(string->codePoints.size() == 1);
+	REQUIRE(string->codePoints[0] == 0x41);
+}
+
+TEST_CASE("string.const, measure, eq and concat run through the JIT")
+{
+	// Every function is `[] -> i32`; the bodies exercise the core string
+	// instructions. Literals: "A", "€", and an isolated surrogate U+D800
+	// (WTF-8 ED A0 80).
+	const std::vector<std::vector<uint8_t>> bodies = {
+		{0x00, 0xfb, 0x82, 0x01, 0x00, 0xfb, 0x84, 0x01, 0x0b},                   // measure_wtf8("A") = 1
+		{0x00, 0xfb, 0x82, 0x01, 0x01, 0xfb, 0x83, 0x01, 0x0b},                   // measure_utf8("€") = 3
+		{0x00, 0xfb, 0x82, 0x01, 0x01, 0xfb, 0x85, 0x01, 0x0b},                   // measure_wtf16("€") = 1
+		{0x00, 0xfb, 0x82, 0x01, 0x00, 0xfb, 0x82, 0x01, 0x00, 0xfb, 0x89, 0x01, 0x0b}, // eq("A","A") = 1
+		{0x00, 0xfb, 0x82, 0x01, 0x00, 0xfb, 0x82, 0x01, 0x01, 0xfb, 0x89, 0x01, 0x0b}, // eq("A","€") = 0
+		{0x00, 0xfb, 0x82, 0x01, 0x00, 0xfb, 0x82, 0x01, 0x01, 0xfb, 0x88, 0x01, 0xfb, 0x84, 0x01, 0x0b}, // measure(concat("A","€")) = 4
+		{0x00, 0xfb, 0x82, 0x01, 0x02, 0xfb, 0x83, 0x01, 0x0b},                   // measure_utf8(isolated surrogate) = -1
+		{0x00, 0xfb, 0x82, 0x01, 0x02, 0xfb, 0x8a, 0x01, 0x0b}                    // is_usv_sequence(surrogate) = 0
+	};
+	const char* const exportNames[] = {"a", "e1", "e2", "eq", "ne", "cc", "s1", "s2"};
+	const std::size_t functionCount = bodies.size();
+	REQUIRE(std::size(exportNames) == functionCount);
+
+	std::vector<uint8_t> module = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00};
+	const auto leb = [](std::vector<uint8_t>& buffer, uint32_t value) {
+		do {
+			uint8_t byte = static_cast<uint8_t>(value & 0x7f);
+			value >>= 7;
+			if (value != 0)
+				byte |= 0x80;
+			buffer.push_back(byte);
+		} while (value != 0);
+	};
+	const auto section = [&module, &leb](uint8_t id, const std::vector<uint8_t>& payload) {
+		module.push_back(id);
+		leb(module, static_cast<uint32_t>(payload.size()));
+		module.insert(module.end(), payload.begin(), payload.end());
+	};
+
+	std::vector<uint8_t> types;
+	leb(types, static_cast<uint32_t>(functionCount));
+	for (std::size_t i = 0; i < functionCount; ++i) {
+		types.insert(types.end(), {0x60, 0x00, 0x01, 0x7f}); // () -> i32
+	}
+	section(0x01, types);
+
+	std::vector<uint8_t> functions;
+	leb(functions, static_cast<uint32_t>(functionCount));
+	for (std::size_t i = 0; i < functionCount; ++i)
+		functions.push_back(0x00);
+	section(0x03, functions);
+
+	// Section 14 must sit in the global slot: after Function, before Export.
+	const std::vector<uint8_t> strings = {
+		0x00, 0x03,
+		0x01, 0x41,
+		0x03, 0xe2, 0x82, 0xac,
+		0x03, 0xed, 0xa0, 0x80
+	};
+	section(0x0e, strings);
+
+	std::vector<uint8_t> exports;
+	leb(exports, static_cast<uint32_t>(functionCount));
+	for (std::size_t i = 0; i < functionCount; ++i) {
+		const std::size_t length = std::strlen(exportNames[i]);
+		leb(exports, static_cast<uint32_t>(length));
+		exports.insert(exports.end(), exportNames[i], exportNames[i] + length);
+		exports.push_back(0x00);
+		leb(exports, static_cast<uint32_t>(i));
+	}
+	section(0x07, exports);
+
+	std::vector<uint8_t> code;
+	leb(code, static_cast<uint32_t>(functionCount));
+	for (const std::vector<uint8_t>& body : bodies) {
+		leb(code, static_cast<uint32_t>(body.size()));
+		code.insert(code.end(), body.begin(), body.end());
+	}
+	section(0x0a, code);
+
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(module.data()), module.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto instance = compiler.instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	const auto call = [&instance](const char* name) {
+		auto function = instance->exportedFunction(name);
+		REQUIRE(function.has_value());
+		return WASM::callCallable<int32_t>(*function);
+	};
+	REQUIRE(call("a") == 1);
+	REQUIRE(call("e1") == 3);
+	REQUIRE(call("e2") == 1);
+	REQUIRE(call("eq") == 1);
+	REQUIRE(call("ne") == 0);
+	REQUIRE(call("cc") == 4);
+	REQUIRE(call("s1") == -1);
+	REQUIRE(call("s2") == 0);
+}
+
+namespace {
+
+// Minimal builder for the hand-written string modules below. Every function
+// in these fixtures is `[] -> i32`.
+struct StringFixtureBuilder
+{
+	std::vector<uint8_t> bytes = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00};
+
+	static void appendLeb(std::vector<uint8_t>& out, uint32_t value)
+	{
+		do {
+			uint8_t byte = static_cast<uint8_t>(value & 0x7f);
+			value >>= 7;
+			if (value != 0)
+				byte |= 0x80;
+			out.push_back(byte);
+		} while (value != 0);
+	}
+	void section(uint8_t id, const std::vector<uint8_t>& payload)
+	{
+		bytes.push_back(id);
+		appendLeb(bytes, static_cast<uint32_t>(payload.size()));
+		bytes.insert(bytes.end(), payload.begin(), payload.end());
+	}
+	void functionTypes(std::size_t count)
+	{
+		std::vector<uint8_t> payload;
+		appendLeb(payload, static_cast<uint32_t>(count));
+		for (std::size_t i = 0; i < count; ++i)
+			payload.insert(payload.end(), {0x60, 0x00, 0x01, 0x7f});
+		section(0x01, payload);
+	}
+	void functions(std::size_t count)
+	{
+		std::vector<uint8_t> payload;
+		appendLeb(payload, static_cast<uint32_t>(count));
+		for (std::size_t i = 0; i < count; ++i)
+			payload.push_back(0x00);
+		section(0x03, payload);
+	}
+	void exports(const std::vector<std::pair<std::string, uint32_t>>& entries)
+	{
+		std::vector<uint8_t> payload;
+		appendLeb(payload, static_cast<uint32_t>(entries.size()));
+		for (const auto& [name, index] : entries) {
+			appendLeb(payload, static_cast<uint32_t>(name.size()));
+			payload.insert(payload.end(), name.begin(), name.end());
+			payload.push_back(0x00); // external kind: function
+			appendLeb(payload, index);
+		}
+		section(0x07, payload);
+	}
+	void code(const std::vector<std::vector<uint8_t>>& bodies)
+	{
+		std::vector<uint8_t> payload;
+		appendLeb(payload, static_cast<uint32_t>(bodies.size()));
+		for (const std::vector<uint8_t>& body : bodies) {
+			appendLeb(payload, static_cast<uint32_t>(body.size()));
+			payload.insert(payload.end(), body.begin(), body.end());
+		}
+		section(0x0a, payload);
+	}
+};
+
+} // namespace
+
+TEST_CASE("string.new_utf8/wtf16 and encode round-trip through memory")
+{
+	StringFixtureBuilder module;
+	module.functionTypes(2);
+	module.functions(2);
+	// One page, "Hello" at 0 and UTF-16LE "Hi" at 8.
+	module.section(0x05, {0x01, 0x00, 0x01});
+	module.section(0x0b, {
+		0x01, 0x00, 0x41, 0x00, 0x0b, 0x0c,
+		0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x00, 0x00, 0x00,
+		0x48, 0x00, 0x69, 0x00
+	});
+	module.exports({{"u", 0}, {"w", 1}});
+	module.code({
+		// "u": new_utf8(0, 5) then encode_wtf8 at 32 -> 5.
+		{0x00, 0x41, 0x00, 0x41, 0x05, 0xfb, 0x80, 0x01, 0x00,
+		 0x41, 0x20, 0xfb, 0x8e, 0x01, 0x00, 0x0b},
+		// "w": new_wtf16(8, 2) then encode_utf8 at 32 -> 2.
+		{0x00, 0x41, 0x08, 0x41, 0x02, 0xfb, 0x81, 0x01, 0x00,
+		 0x41, 0x20, 0xfb, 0x86, 0x01, 0x00, 0x0b}
+	});
+
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto instance = compiler.instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+	const WASM::LinearMemory* memory = instance->context()->memories[0];
+	REQUIRE(memory != nullptr);
+
+	const auto call = [&instance](const char* name) {
+		INFO("calling " << name);
+		auto function = instance->exportedFunction(name);
+		REQUIRE(function.has_value());
+		return WASM::callCallable<int32_t>(*function);
+	};
+
+	INFO("u / memory size " << memory->memorySize);
+	REQUIRE(call("u") == 5);
+	REQUIRE(std::string(reinterpret_cast<const char*>(memory->memoryBase + 32), 5) == "Hello");
+
+	INFO("w / memory size " << memory->memorySize);
+	REQUIRE(call("w") == 2);
+	REQUIRE(std::string(reinterpret_cast<const char*>(memory->memoryBase + 32), 2) == "Hi");
+}
+
+TEST_CASE("string.new_utf8 is strict while new_lossy_utf8 replaces bad bytes")
+{
+	StringFixtureBuilder module;
+	module.functionTypes(3);
+	module.functions(3);
+	module.section(0x05, {0x01, 0x00, 0x01});
+	// Section 14: one isolated surrogate U+D800 (WTF-8 ED A0 80).
+	module.section(0x0e, {0x00, 0x01, 0x03, 0xed, 0xa0, 0x80});
+	// One invalid byte (0xFF) at offset 0.
+	module.section(0x0b, {0x01, 0x00, 0x41, 0x00, 0x0b, 0x01, 0xff});
+	module.exports({{"lossy", 0}, {"strict", 1}, {"encode", 2}});
+	module.code({
+		// measure_wtf8(new_lossy_utf8(0, 1)) = 3 (U+FFFD is three bytes).
+		{0x00, 0x41, 0x00, 0x41, 0x01, 0xfb, 0x8b, 0x01, 0x00,
+		 0xfb, 0x84, 0x01, 0x0b},
+		// measure_wtf8(new_utf8(0, 1)) traps on the invalid byte.
+		{0x00, 0x41, 0x00, 0x41, 0x01, 0xfb, 0x80, 0x01, 0x00,
+		 0xfb, 0x84, 0x01, 0x0b},
+		// encode_utf8(const 0, 32) traps: the literal is an isolated surrogate.
+		{0x00, 0xfb, 0x82, 0x01, 0x00, 0x41, 0x20, 0xfb, 0x86, 0x01, 0x00, 0x0b}
+	});
+
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto instance = compiler.instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto lossy = instance->exportedFunction("lossy");
+	REQUIRE(lossy.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*lossy) == 3);
+
+	auto strict = instance->exportedFunction("strict");
+	REQUIRE(strict.has_value());
+	WASM::TrapScope scope;
+	volatile bool trapped = false;
+	if (setjmp(scope.buffer) == 0)
+		WASM::callCallable<int32_t>(*strict);
+	else
+		trapped = true;
+	REQUIRE(trapped);
+	REQUIRE(scope.kind() == WASM::TrapKind::InvalidString);
+
+	auto encode = instance->exportedFunction("encode");
+	REQUIRE(encode.has_value());
+	WASM::TrapScope encodeScope;
+	volatile bool encodeTrapped = false;
+	if (setjmp(encodeScope.buffer) == 0)
+		WASM::callCallable<int32_t>(*encode);
+	else
+		encodeTrapped = true;
+	REQUIRE(encodeTrapped);
+	REQUIRE(encodeScope.kind() == WASM::TrapKind::InvalidString);
 }
 
 TEST_CASE("component type imports and exports enter the type index space")

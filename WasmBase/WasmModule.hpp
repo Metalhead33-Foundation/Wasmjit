@@ -38,6 +38,10 @@ struct Module : public Artifact
 {
 public:
 	std::vector<Section> sections;
+	// String literals from section 14 (docs/proposals/STRINGREF.md STR-2), in
+	// source order. `string.const idx` addresses this vector; they are decoded
+	// to code points and materialised in the Store at instantiation.
+	std::vector<std::string> stringLiterals;
 	// Recursive type groups, in section order (see TypeGroup).
 	std::vector<TypeGroup> typeGroups;
 	// Process-wide identity of each local type. The parser's `Subtype` buffer is
@@ -103,6 +107,7 @@ private:
 	void processDataSection(Elv::Io::Device& file, const Section& section);
 	void processDataCountSection(Elv::Io::Device& file, const Section& section);
 	void processTagSection(Elv::Io::Device& file, const Section& section);
+	void processStringSection(Elv::Io::Device& file, const Section& section);
 	void processCustomSection(Elv::Io::Device& file, const Section& section);
 	void processNameSection(Elv::Io::Device& file, const Section& section);
 	void processBranchHintSection(Elv::Io::Device& file, const Section& section);

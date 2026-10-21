@@ -241,7 +241,7 @@ selection is explicit — which is why `./WasmJit '[spec]'` runs everything.
 | `./WasmJit '[spec]'` | all 257 spec scripts (~8 s; 249 pass, 8 known failures) |
 | `./WasmJit 'spec: address'` | just that script |
 | `./WasmJit '*float*'` | scripts whose name matches |
-| `./WasmJit --list-tests` | the default view (321 test cases) |
+| `./WasmJit --list-tests` | the default view (327 test cases) |
 | `./WasmJit --list-tests '[spec]'` | every script, one line each (257) |
 | `./WasmJit -# --list-tags` | all tags, including `[#main]` and `[#SpecSuite]` |
 
@@ -272,7 +272,7 @@ It currently holds 189 of the 257 scripts, and the default run is green:
 
 ```
 $ ./WasmJit
-All tests passed (8948 assertions in 321 test cases)
+All tests passed (9010 assertions in 327 test cases)
 ```
 
 #### Refreshing the list
@@ -493,7 +493,7 @@ tests, and it is green:
 
 ```
 $ ./WasmJit
-All tests passed (8948 assertions in 321 test cases)
+All tests passed (9010 assertions in 327 test cases)
 ```
 
 A full sweep is deliberately loud, because most of the suite is still beyond the
@@ -675,7 +675,7 @@ Measured after SIMD-5:
 
 ```bash
 ./WasmJit 'simd*'      # 24 cases, 6147 assertions, all passing (includes the hidden [.simdbench] case)
-./WasmJit              # 321 cases, 8948 assertions, all passing
+./WasmJit              # 327 cases, 9010 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed

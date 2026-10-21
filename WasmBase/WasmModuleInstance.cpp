@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 namespace WASM {
 
 TailCallState g_tailCallState;
@@ -304,6 +305,11 @@ ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver)
 	// ones are allocated in the Store here. Either way the instance only
 	// borrows the resulting LinearMemory*.
 	initializeMemories();
+
+	// ── Step 2.5: Materialize string literals ──────────────────────
+	// `string.const` is const-eligible, so the literals must exist before
+	// initializeGlobals() evaluates any initializer expression.
+	initializeStringLiterals();
 
 	// ── Step 3: Initialize globals ──────────────────────────────────
 	// Global initializer expressions are constant-only in MVP Wasm,
@@ -618,6 +624,24 @@ void ModuleInstance::initializeMemories()
 	ctx.memoryCount = static_cast<uint32_t>(internals.memoryRefs.size());
 }
 
+void ModuleInstance::initializeStringLiterals()
+{
+	// Section 14 has already been validated as WTF-8 at load; decode it into
+	// the proposal's code-point model and hand ownership to the Store. The
+	// pointers are stable and live until Store teardown (STRD3/STRD5).
+	internals.stringLiterals.clear();
+	internals.stringLiterals.reserve(module->stringLiterals.size());
+	for (const std::string& literal : module->stringLiterals) {
+		std::vector<uint32_t> codePoints;
+		if (!decodeWtf8(reinterpret_cast<const uint8_t*>(literal.data()),
+						literal.size(), codePoints))
+			throw std::runtime_error(
+				"malformed module: string literal is not valid WTF-8");
+		internals.stringLiterals.push_back(
+			Store::global().strings().create(std::move(codePoints)));
+	}
+}
+
 void ModuleInstance::initializeGlobals()
 {
 	// Imported globals are already in `globalRefs` (resolveImports). Defined
@@ -918,6 +942,16 @@ Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 
 		case 0xFB: { // GC prefix
 			const uint32_t sub = stream.readLEB128<uint32_t>();
+			if (sub == 0x82) { // string.const idx (STRINGREF.md STR-2)
+				const uint32_t idx = stream.readLEB128<uint32_t>();
+				if (idx >= internals.stringLiterals.size())
+					throw std::runtime_error("string.const index out of range");
+				Value v{};
+				v.ref = internals.stringLiterals[idx];
+				v.kind = ValueTypeCode::StringRef;
+				stack.push_back(v);
+				break;
+			}
 			switch (static_cast<GCOpcode>(sub)) {
 			case GCOpcode::RefI31: {
 				const uint32_t raw = static_cast<uint32_t>(popValue().i32);

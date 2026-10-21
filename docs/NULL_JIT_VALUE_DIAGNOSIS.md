@@ -114,9 +114,10 @@ produced anywhere an unmodelled type is lowered to a value:
   type can yield null, not only loads.
 - Any *future* consumer that inspects a stack value — the RC-5 clone/drop, a
   type check, a validator — will hit the same null.
-- **Not** affected: the `stringref`-family opcodes, which *are* in the enum and
-  map to `jit_type_void_ptr`; only opcodes the enum cannot name lower to
-  `jit_type_void`.
+- **Now modelled:** the `stringref`-family codes are nullable host references
+  (`docs/proposals/STRINGREF.md` STR-1/STR-3). They lower to a `void*` handle
+  to a Store-owned `StringObject`, not to an absent value, so they no longer
+  exercise this path.
 
 ## 8. Candidate fixes (evaluated, not implemented)
 
@@ -173,7 +174,8 @@ Fix **D** was chosen and implemented rather than A/B/C: the engine now refuses a
 module that declares a value type it cannot model.
 
 - `WASM::isModeledValueTypeCode(ValueTypeCode)` (`WasmBase/WasmType.hpp`) is the
-  whitelist (exactly the `ValueTypeCode` members).
+  whitelist of codes the engine can lower and run. The `stringref` family is
+  included as host-reference handles (`docs/proposals/STRINGREF.md`).
 - `Module::validateValueTypes()` (`WasmBase/WasmModule.cpp`) walks the declared
   types, tables, globals, imports, element segments and function locals, and
   throws for any other code. It runs at the end of `Module::fromFile`, so the
@@ -185,9 +187,15 @@ module that declares a value type it cannot model.
 Effect on `ref_null.wast`: instead of segfaulting it now fails with
 
 ```
-malformed module: unsupported value type 0xE9 (-23) in function type result #3
+malformed module: unsupported value type 0x69 (-23) in function type result #3
 — this engine does not model it (docs/NULL_JIT_VALUE_DIAGNOSIS.md)
 ```
+
+(The formatter printed the enum's two's-complement byte at the time; it now
+prints the signed-LEB wire byte, so the same code reads `0x69` rather than
+`0xE9`. The same formatter also covers any future unassigned code, e.g.
+`unsupported value type 0x68 (…)`; `stringref` itself is modelled now and
+produces a real host handle — see `STRINGREF.md` STR-1/STR-3.)
 
 Because the spec suite treats a refused module as a failed command, `ref_null` is
 no longer in `Test/wast_supported.txt` (documented inline there). It can still be

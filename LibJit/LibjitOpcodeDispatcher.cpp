@@ -4,6 +4,7 @@
 #include "../WasmBase/WasmTrap.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
 #include "../WasmBase/WasmExn.hpp"
+#include "../WasmBase/WasmString.hpp"
 #include "../WasmBase/wasm_atomic.hpp"
 #include "../WasmBase/wasm_simd_scalar.hpp"
 #include <algorithm>
@@ -18,6 +19,8 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace LibJIT {
 
@@ -45,6 +48,170 @@ void emitAbort(jit_function_t fn, WASM::TrapKind kind, const char* detail)
 	};
 	jit_insn_call_native(fn, "wasm_trap_raise", reinterpret_cast<void*>(&WASM::wasm_trap_raise),
 		sig, args, 2, JIT_CALL_NORETURN);
+}
+
+// ── Stringref runtime helpers (docs/proposals/STRINGREF.md STR-3) ───────────
+// These are the fallible operations the generated code calls. Strings are
+// host-owned Store objects; the pointer in a `stringref` is a StringObject*.
+
+static const uint8_t* checkedStringRange(WASM::LinearMemory* memory,
+										 uint64_t offset, uint64_t length)
+{
+	if (memory == nullptr)
+		trap(WASM::TrapKind::Internal, "null linear memory");
+	const uint64_t size = memory->memorySize;
+	if (offset > size || length > size - offset)
+		trap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+	return memory->memoryBase + offset;
+}
+
+static const WASM::StringObject* stringObjectOrTrap(void* handle)
+{
+	if (handle == nullptr)
+		trap(WASM::TrapKind::NullReference, "null string reference");
+	return static_cast<const WASM::StringObject*>(handle);
+}
+
+static void* makeString(std::vector<uint32_t> codePoints)
+{
+	return WASM::Store::global().strings().create(std::move(codePoints));
+}
+
+static void* wasm_string_new_utf8(WASM::LinearMemory* memory, uint32_t ptr, uint32_t len)
+{
+	if (len > WASM::kMaxStringBytes)
+		trap(WASM::TrapKind::OutOfMemory, "string exceeds the implementation limit");
+	const uint8_t* bytes = checkedStringRange(memory, ptr, len);
+	std::vector<uint32_t> codePoints;
+	if (!WASM::decodeUtf8(bytes, len, codePoints))
+		trap(WASM::TrapKind::InvalidString, "string.new_utf8: invalid UTF-8");
+	return makeString(std::move(codePoints));
+}
+
+static void* wasm_string_new_lossy_utf8(WASM::LinearMemory* memory, uint32_t ptr, uint32_t len)
+{
+	if (len > WASM::kMaxStringBytes)
+		trap(WASM::TrapKind::OutOfMemory, "string exceeds the implementation limit");
+	const uint8_t* bytes = checkedStringRange(memory, ptr, len);
+	std::vector<uint32_t> codePoints;
+	WASM::decodeUtf8Lossy(bytes, len, codePoints);
+	return makeString(std::move(codePoints));
+}
+
+static void* wasm_string_new_wtf8(WASM::LinearMemory* memory, uint32_t ptr, uint32_t len)
+{
+	if (len > WASM::kMaxStringBytes)
+		trap(WASM::TrapKind::OutOfMemory, "string exceeds the implementation limit");
+	const uint8_t* bytes = checkedStringRange(memory, ptr, len);
+	std::vector<uint32_t> codePoints;
+	if (!WASM::decodeWtf8(bytes, len, codePoints))
+		trap(WASM::TrapKind::InvalidString, "string.new_wtf8: invalid WTF-8");
+	return makeString(std::move(codePoints));
+}
+
+static void* wasm_string_new_wtf16(WASM::LinearMemory* memory, uint32_t ptr, uint32_t codeUnits)
+{
+	if (codeUnits > WASM::kMaxStringCodeUnits)
+		trap(WASM::TrapKind::OutOfMemory, "string exceeds the implementation limit");
+	// `codeUnits` is a count of 16-bit units, so the byte range is twice that.
+	const uint64_t bytes = static_cast<uint64_t>(codeUnits) * 2u;
+	const uint8_t* data = checkedStringRange(memory, ptr, bytes);
+	std::vector<uint32_t> codePoints;
+	WASM::decodeWtf16(data, codeUnits, codePoints);
+	return makeString(std::move(codePoints));
+}
+
+static int32_t wasm_string_measure_utf8(void* handle)
+{
+	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	uint32_t length = 0;
+	return WASM::measureUtf8(string->codePoints, length)
+			? static_cast<int32_t>(length) : -1;
+}
+
+static int32_t wasm_string_measure_wtf8(void* handle)
+{
+	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	uint32_t length = 0;
+	return WASM::measureWtf8(string->codePoints, length)
+			? static_cast<int32_t>(length) : -1;
+}
+
+static int32_t wasm_string_measure_wtf16(void* handle)
+{
+	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	uint32_t length = 0;
+	return WASM::measureWtf16(string->codePoints, length)
+			? static_cast<int32_t>(length) : -1;
+}
+
+static int32_t writeEncodedString(WASM::LinearMemory* memory, uint32_t ptr,
+								  const std::vector<uint8_t>& bytes)
+{
+	uint8_t* destination = const_cast<uint8_t*>(
+			checkedStringRange(memory, ptr, bytes.size()));
+	if (!bytes.empty())
+		std::memcpy(destination, bytes.data(), bytes.size());
+	return static_cast<int32_t>(bytes.size());
+}
+
+static int32_t wasm_string_encode_utf8(WASM::LinearMemory* memory, void* handle, uint32_t ptr)
+{
+	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	std::vector<uint8_t> bytes;
+	if (!WASM::encodeUtf8(string->codePoints, bytes, false))
+		trap(WASM::TrapKind::InvalidString, "string.encode_utf8: isolated surrogate");
+	return writeEncodedString(memory, ptr, bytes);
+}
+
+static int32_t wasm_string_encode_lossy_utf8(WASM::LinearMemory* memory, void* handle, uint32_t ptr)
+{
+	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	std::vector<uint8_t> bytes;
+	WASM::encodeUtf8(string->codePoints, bytes, true);
+	return writeEncodedString(memory, ptr, bytes);
+}
+
+static int32_t wasm_string_encode_wtf8(WASM::LinearMemory* memory, void* handle, uint32_t ptr)
+{
+	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	std::vector<uint8_t> bytes;
+	WASM::encodeWtf8(string->codePoints, bytes);
+	return writeEncodedString(memory, ptr, bytes);
+}
+
+static int32_t wasm_string_encode_wtf16(WASM::LinearMemory* memory, void* handle, uint32_t ptr)
+{
+	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	std::vector<uint8_t> bytes;
+	WASM::encodeWtf16(string->codePoints, bytes);
+	writeEncodedString(memory, ptr, bytes);
+	// The result is a count of 16-bit code units, not of bytes.
+	return static_cast<int32_t>(bytes.size() / 2u);
+}
+
+static void* wasm_string_concat(void* leftHandle, void* rightHandle)
+{
+	const WASM::StringObject* left = stringObjectOrTrap(leftHandle);
+	const WASM::StringObject* right = stringObjectOrTrap(rightHandle);
+	return makeString(WASM::concatCodePoints(left->codePoints, right->codePoints));
+}
+
+static int32_t wasm_string_eq(void* leftHandle, void* rightHandle)
+{
+	// `string.eq` is the one string instruction where null is not a trap:
+	// null == null, and a null is unequal to any non-null string.
+	if (leftHandle == nullptr || rightHandle == nullptr)
+		return leftHandle == rightHandle ? 1 : 0;
+	const auto* left = static_cast<const WASM::StringObject*>(leftHandle);
+	const auto* right = static_cast<const WASM::StringObject*>(rightHandle);
+	return left->codePoints == right->codePoints ? 1 : 0;
+}
+
+static int32_t wasm_string_is_usv_sequence(void* handle)
+{
+	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	return WASM::isUsvSequence(string->codePoints) ? 1 : 0;
 }
 
 extern "C" {
@@ -4551,6 +4718,188 @@ void OpcodeDispatcher::dispatchI31GetU() {
 	emitTrapIfNull(WASM::TrapKind::NullI31Reference, refAsVoidPtr(ref));
 	pushValue(callNativeUnary(function, reinterpret_cast<void*>(wasm_i31_get_u_impl),
 							  jit_type_int, jit_type_void_ptr, refAsVoidPtr(ref)));
+}
+
+// ── Stringref core instructions (docs/proposals/STRINGREF.md STR-3) ─────────
+
+void OpcodeDispatcher::dispatchStringNewUtf8(WASM::MemIdx arg)
+{
+	jit_value_t len = popValue();
+	jit_value_t ptr = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeTernary(function,
+			reinterpret_cast<void*>(&wasm_string_new_utf8), jit_type_void_ptr,
+			jit_type_void_ptr, jit_type_uint, jit_type_uint,
+			memoryPointerForIndex(arg),
+			jit_insn_convert(function, ptr, jit_type_uint, 0),
+			jit_insn_convert(function, len, jit_type_uint, 0)));
+}
+
+void OpcodeDispatcher::dispatchStringNewWtf16(WASM::MemIdx arg)
+{
+	jit_value_t len = popValue();
+	jit_value_t ptr = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeTernary(function,
+			reinterpret_cast<void*>(&wasm_string_new_wtf16), jit_type_void_ptr,
+			jit_type_void_ptr, jit_type_uint, jit_type_uint,
+			memoryPointerForIndex(arg),
+			jit_insn_convert(function, ptr, jit_type_uint, 0),
+			jit_insn_convert(function, len, jit_type_uint, 0)));
+}
+
+void OpcodeDispatcher::dispatchStringNewLossyUtf8(WASM::MemIdx arg)
+{
+	jit_value_t len = popValue();
+	jit_value_t ptr = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeTernary(function,
+			reinterpret_cast<void*>(&wasm_string_new_lossy_utf8), jit_type_void_ptr,
+			jit_type_void_ptr, jit_type_uint, jit_type_uint,
+			memoryPointerForIndex(arg),
+			jit_insn_convert(function, ptr, jit_type_uint, 0),
+			jit_insn_convert(function, len, jit_type_uint, 0)));
+}
+
+void OpcodeDispatcher::dispatchStringNewWtf8(WASM::MemIdx arg)
+{
+	jit_value_t len = popValue();
+	jit_value_t ptr = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeTernary(function,
+			reinterpret_cast<void*>(&wasm_string_new_wtf8), jit_type_void_ptr,
+			jit_type_void_ptr, jit_type_uint, jit_type_uint,
+			memoryPointerForIndex(arg),
+			jit_insn_convert(function, ptr, jit_type_uint, 0),
+			jit_insn_convert(function, len, jit_type_uint, 0)));
+}
+
+void OpcodeDispatcher::dispatchStringConst(uint32_t idx)
+{
+	if (idx >= internals.stringLiterals.size())
+		notImplemented("string.const index out of range");
+	pushValue(jit_value_create_nint_constant(function, jit_type_void_ptr,
+			reinterpret_cast<jit_nint>(internals.stringLiterals[idx])));
+}
+
+void OpcodeDispatcher::dispatchStringMeasureUtf8()
+{
+	jit_value_t string = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeUnary(function,
+			reinterpret_cast<void*>(&wasm_string_measure_utf8), jit_type_int,
+			jit_type_void_ptr, refAsVoidPtr(string)));
+}
+
+void OpcodeDispatcher::dispatchStringMeasureWtf8()
+{
+	jit_value_t string = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeUnary(function,
+			reinterpret_cast<void*>(&wasm_string_measure_wtf8), jit_type_int,
+			jit_type_void_ptr, refAsVoidPtr(string)));
+}
+
+void OpcodeDispatcher::dispatchStringMeasureWtf16()
+{
+	jit_value_t string = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeUnary(function,
+			reinterpret_cast<void*>(&wasm_string_measure_wtf16), jit_type_int,
+			jit_type_void_ptr, refAsVoidPtr(string)));
+}
+
+void OpcodeDispatcher::dispatchStringEncodeUtf8(WASM::MemIdx arg)
+{
+	jit_value_t ptr = popValue();
+	jit_value_t string = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeTernary(function,
+			reinterpret_cast<void*>(&wasm_string_encode_utf8), jit_type_int,
+			jit_type_void_ptr, jit_type_void_ptr, jit_type_uint,
+			memoryPointerForIndex(arg), refAsVoidPtr(string),
+			jit_insn_convert(function, ptr, jit_type_uint, 0)));
+}
+
+void OpcodeDispatcher::dispatchStringEncodeLossyUtf8(WASM::MemIdx arg)
+{
+	jit_value_t ptr = popValue();
+	jit_value_t string = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeTernary(function,
+			reinterpret_cast<void*>(&wasm_string_encode_lossy_utf8), jit_type_int,
+			jit_type_void_ptr, jit_type_void_ptr, jit_type_uint,
+			memoryPointerForIndex(arg), refAsVoidPtr(string),
+			jit_insn_convert(function, ptr, jit_type_uint, 0)));
+}
+
+void OpcodeDispatcher::dispatchStringEncodeWtf8(WASM::MemIdx arg)
+{
+	jit_value_t ptr = popValue();
+	jit_value_t string = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeTernary(function,
+			reinterpret_cast<void*>(&wasm_string_encode_wtf8), jit_type_int,
+			jit_type_void_ptr, jit_type_void_ptr, jit_type_uint,
+			memoryPointerForIndex(arg), refAsVoidPtr(string),
+			jit_insn_convert(function, ptr, jit_type_uint, 0)));
+}
+
+void OpcodeDispatcher::dispatchStringEncodeWtf16(WASM::MemIdx arg)
+{
+	jit_value_t ptr = popValue();
+	jit_value_t string = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeTernary(function,
+			reinterpret_cast<void*>(&wasm_string_encode_wtf16), jit_type_int,
+			jit_type_void_ptr, jit_type_void_ptr, jit_type_uint,
+			memoryPointerForIndex(arg), refAsVoidPtr(string),
+			jit_insn_convert(function, ptr, jit_type_uint, 0)));
+}
+
+void OpcodeDispatcher::dispatchStringConcat()
+{
+	jit_value_t right = popValue();
+	jit_value_t left = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeBinary(function,
+			reinterpret_cast<void*>(&wasm_string_concat), jit_type_void_ptr,
+			jit_type_void_ptr, jit_type_void_ptr,
+			refAsVoidPtr(left), refAsVoidPtr(right)));
+}
+
+void OpcodeDispatcher::dispatchStringEq()
+{
+	jit_value_t right = popValue();
+	jit_value_t left = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeBinary(function,
+			reinterpret_cast<void*>(&wasm_string_eq), jit_type_int,
+			jit_type_void_ptr, jit_type_void_ptr,
+			refAsVoidPtr(left), refAsVoidPtr(right)));
+}
+
+void OpcodeDispatcher::dispatchStringIsUsvSequence()
+{
+	jit_value_t string = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeUnary(function,
+			reinterpret_cast<void*>(&wasm_string_is_usv_sequence), jit_type_int,
+			jit_type_void_ptr, refAsVoidPtr(string)));
 }
 void OpcodeDispatcher::dispatchI32TruncSatF32S() {
 	pushValue(callNativeUnary(function, reinterpret_cast<void*>(wasm_i32_trunc_sat_f32_s),

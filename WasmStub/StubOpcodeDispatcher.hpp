@@ -252,6 +252,22 @@ protected:
 	void dispatchRefI31() override;
 	void dispatchI31GetS() override;
 	void dispatchI31GetU() override;
+	// stringref core instructions (docs/proposals/STRINGREF.md STR-3)
+	void dispatchStringNewUtf8(WASM::MemIdx arg) override;
+	void dispatchStringNewWtf16(WASM::MemIdx arg) override;
+	void dispatchStringNewLossyUtf8(WASM::MemIdx arg) override;
+	void dispatchStringNewWtf8(WASM::MemIdx arg) override;
+	void dispatchStringConst(uint32_t idx) override;
+	void dispatchStringMeasureUtf8() override;
+	void dispatchStringMeasureWtf8() override;
+	void dispatchStringMeasureWtf16() override;
+	void dispatchStringEncodeUtf8(WASM::MemIdx arg) override;
+	void dispatchStringEncodeLossyUtf8(WASM::MemIdx arg) override;
+	void dispatchStringEncodeWtf8(WASM::MemIdx arg) override;
+	void dispatchStringEncodeWtf16(WASM::MemIdx arg) override;
+	void dispatchStringConcat() override;
+	void dispatchStringEq() override;
+	void dispatchStringIsUsvSequence() override;
 	void dispatchI32TruncSatF32S() override;
 	void dispatchI32TruncSatF32U() override;
 	void dispatchI32TruncSatF64S() override;

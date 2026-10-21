@@ -17,6 +17,7 @@ const char* trapKindName(TrapKind kind)
 	case TrapKind::IntegerDivideByZero:        return "integer divide by zero";
 	case TrapKind::IntegerOverflow:            return "integer overflow";
 	case TrapKind::InvalidConversionToInteger: return "invalid conversion to integer";
+	case TrapKind::InvalidString:              return "invalid string";
 	case TrapKind::OutOfBoundsMemoryAccess:    return "out of bounds memory access";
 	case TrapKind::OutOfBoundsTableAccess:     return "out of bounds table access";
 	case TrapKind::OutOfBoundsArrayAccess:     return "out of bounds array access";

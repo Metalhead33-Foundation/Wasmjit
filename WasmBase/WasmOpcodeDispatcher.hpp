@@ -247,6 +247,25 @@ protected:
 	virtual void dispatchRefI31() { onUnhandledOpcode("dispatchRefI31"); }
 	virtual void dispatchI31GetS() { onUnhandledOpcode("dispatchI31GetS"); }
 	virtual void dispatchI31GetU() { onUnhandledOpcode("dispatchI31GetU"); }
+
+	// ── 0xFB >= 0x80: stringref (docs/proposals/STRINGREF.md STR-3) ──────
+	// The core instructions are implemented; the view (STR-4) and GC-array
+	// variants are deliberately left at the default.
+	virtual void dispatchStringNewUtf8(MemIdx arg) { onUnhandledOpcode("dispatchStringNewUtf8"); }
+	virtual void dispatchStringNewWtf16(MemIdx arg) { onUnhandledOpcode("dispatchStringNewWtf16"); }
+	virtual void dispatchStringNewLossyUtf8(MemIdx arg) { onUnhandledOpcode("dispatchStringNewLossyUtf8"); }
+	virtual void dispatchStringNewWtf8(MemIdx arg) { onUnhandledOpcode("dispatchStringNewWtf8"); }
+	virtual void dispatchStringConst(uint32_t idx) { (void)idx; onUnhandledOpcode("dispatchStringConst"); }
+	virtual void dispatchStringMeasureUtf8() { onUnhandledOpcode("dispatchStringMeasureUtf8"); }
+	virtual void dispatchStringMeasureWtf8() { onUnhandledOpcode("dispatchStringMeasureWtf8"); }
+	virtual void dispatchStringMeasureWtf16() { onUnhandledOpcode("dispatchStringMeasureWtf16"); }
+	virtual void dispatchStringEncodeUtf8(MemIdx arg) { onUnhandledOpcode("dispatchStringEncodeUtf8"); }
+	virtual void dispatchStringEncodeLossyUtf8(MemIdx arg) { onUnhandledOpcode("dispatchStringEncodeLossyUtf8"); }
+	virtual void dispatchStringEncodeWtf8(MemIdx arg) { onUnhandledOpcode("dispatchStringEncodeWtf8"); }
+	virtual void dispatchStringEncodeWtf16(MemIdx arg) { onUnhandledOpcode("dispatchStringEncodeWtf16"); }
+	virtual void dispatchStringConcat() { onUnhandledOpcode("dispatchStringConcat"); }
+	virtual void dispatchStringEq() { onUnhandledOpcode("dispatchStringEq"); }
+	virtual void dispatchStringIsUsvSequence() { onUnhandledOpcode("dispatchStringIsUsvSequence"); }
 	virtual void dispatchI32TruncSatF32S() { onUnhandledOpcode("dispatchI32TruncSatF32S"); }
 	virtual void dispatchI32TruncSatF32U() { onUnhandledOpcode("dispatchI32TruncSatF32U"); }
 	virtual void dispatchI32TruncSatF64S() { onUnhandledOpcode("dispatchI32TruncSatF64S"); }
@@ -595,6 +614,7 @@ protected:
 	virtual void dispatchI64AtomicRmw32CmpxchgU(MemArg arg) { onUnhandledOpcode("dispatchI64AtomicRmw32CmpxchgU"); }
 	// Prefix dispatches
 	void dispatchPrefixGC(FastMemReader& stream, GCOpcode opcode);
+	void dispatchPrefixString(FastMemReader& stream, StringOpcode opcode);
 	void dispatchPrefixMisc(FastMemReader& stream, MiscOpcode opcode);
 	void dispatchPrefixSIMD(FastMemReader& stream, SIMDOpcode opcode);
 	void dispatchPrefixAtomic(FastMemReader& stream, AtomicOpcode opcode);

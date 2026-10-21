@@ -49,6 +49,7 @@ enum class TrapKind : uint8_t {
 	IntegerDivideByZero,         // "integer divide by zero"
 	IntegerOverflow,             // "integer overflow"
 	InvalidConversionToInteger,  // "invalid conversion to integer"
+	InvalidString,               // "invalid string" (stringref encoding failure)
 	OutOfBoundsMemoryAccess,     // "out of bounds memory access"
 	OutOfBoundsTableAccess,      // "out of bounds table access"
 	OutOfBoundsArrayAccess,      // "out of bounds array access"

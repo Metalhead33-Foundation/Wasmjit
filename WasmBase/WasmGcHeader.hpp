@@ -117,10 +117,9 @@ inline size_t gcArrayDataOffset(const CanonStorageType& element)
 }
 
 // True for every value type that *may* point at a GC heap object (or be null).
-// Note that "is a reference" is wider than "is reference-counted": `i31` is a
-// tagged immediate, `externref` is host-owned and `funcref` is a Store-owned
-// callable, so none of them are counted (docs/proposals/GC.md D14/RC12).
-// Only a `ref` to a `struct`/`array` actually carries a header to count.
+// The string codes are nullable host-owned references. They are not
+// reference-counted (no GC header), so no value of these kinds reaches the
+// reference-counting paths (docs/proposals/STRINGREF.md STRD3).
 inline bool isReferenceType(ValueTypeCode code)
 {
 	switch (code) {
@@ -136,6 +135,9 @@ inline bool isReferenceType(ValueTypeCode code)
 	case ValueTypeCode::NullExternRef:
 	case ValueTypeCode::NullExnRef:
 	case ValueTypeCode::NullRef:
+	// String views and stringrefs are host-owned (`Store::strings()`); they
+	// have no GC header, so the reference-counting paths treat them like an
+	// externref (a no-op).
 	case ValueTypeCode::StringRef:
 	case ValueTypeCode::StringViewWtf8:
 	case ValueTypeCode::StringViewWtf16:

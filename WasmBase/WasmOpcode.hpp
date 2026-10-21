@@ -321,6 +321,65 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 }
 
 // ---------------------------------------------------------------------------
+// 0xFB sub-opcodes >= 0x80  –  stringref proposal
+// (docs/proposals/STRINGREF.md STR-3; the GC sub-opcodes stay below 0x80).
+// The view instructions (STR-4) and the GC-array variants are declared so the
+// decoder names them, but they are not lowered yet.
+// ---------------------------------------------------------------------------
+enum class StringOpcode : uint32_t {
+	// Core string instructions (implemented)
+	StringNewUtf8         = 0x80,
+	StringNewWtf16        = 0x81,
+	StringConst           = 0x82,
+	StringMeasureUtf8     = 0x83,
+	StringMeasureWtf8     = 0x84,
+	StringMeasureWtf16    = 0x85,
+	StringEncodeUtf8      = 0x86,
+	StringEncodeWtf16     = 0x87,
+	StringConcat          = 0x88,
+	StringEq              = 0x89,
+	StringIsUsvSequence   = 0x8A,
+	StringNewLossyUtf8    = 0x8B,
+	StringNewWtf8         = 0x8C,
+	StringEncodeLossyUtf8 = 0x8D,
+	StringEncodeWtf8      = 0x8E,
+
+	// Views (decoded, not lowered yet)
+	StringAsWtf8             = 0x90,
+	StringViewWtf8Advance    = 0x91,
+	StringViewWtf8EncodeUtf8 = 0x92,
+	StringViewWtf8Slice      = 0x93,
+	StringViewWtf8EncodeLossyUtf8 = 0x94,
+	StringViewWtf8EncodeWtf8      = 0x95,
+	StringAsWtf16              = 0x98,
+	StringViewWtf16Length      = 0x99,
+	StringViewWtf16GetCodeUnit = 0x9A,
+	StringViewWtf16Encode      = 0x9B,
+	StringViewWtf16Slice       = 0x9C,
+	StringAsIter               = 0xA0,
+	StringViewIterNext         = 0xA1,
+	StringViewIterAdvance      = 0xA2,
+	StringViewIterRewind       = 0xA3,
+	StringViewIterSlice        = 0xA4,
+
+	// GC-array variants (out of this slice)
+	StringNewUtf8Array        = 0xB0,
+	StringNewWtf16Array       = 0xB1,
+	StringEncodeUtf8Array     = 0xB2,
+	StringEncodeWtf16Array    = 0xB3,
+	StringNewLossyUtf8Array   = 0xB4,
+	StringNewWtf8Array        = 0xB5,
+	StringEncodeLossyUtf8Array = 0xB6,
+	StringEncodeWtf8Array      = 0xB7
+};
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, StringOpcode right) {
+	return left.writeLEB128_enum(right);
+}
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, StringOpcode& right) {
+	return left.readLEB128_enum(right);
+}
+
+// ---------------------------------------------------------------------------
 // 0xFC sub-opcodes  – Miscellaneous instructions
 // Covers: saturating integer truncation, bulk memory, and bulk table ops.
 // ---------------------------------------------------------------------------

@@ -27,6 +27,7 @@ SOURCES += \
         WasmRegistryImportResolver.cpp \
         WasmSection.cpp \
         WasmStore.cpp \
+        WasmString.cpp \
         WasmTable.cpp \
         WasmTrap.cpp \
         WasmType.cpp \
@@ -60,6 +61,7 @@ HEADERS += \
     WasmSafety.hpp \
     WasmSection.hpp \
     WasmStore.hpp \
+    WasmString.hpp \
     WasmTable.hpp \
     WasmTrap.hpp \
     WasmTypeStore.hpp \

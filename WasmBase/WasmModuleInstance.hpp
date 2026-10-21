@@ -3,6 +3,7 @@
 #include "WasmModule.hpp"
 #include "WasmGcHeader.hpp"
 #include "WasmGcHeap.hpp"
+#include "WasmString.hpp"
 #include "WasmVMContext.hpp"
 #include "WasmImport.hpp"
 #include <optional>
@@ -78,6 +79,10 @@ struct ModuleInstanceInternals {
 	std::vector<void*> compiledFunctions;
 	std::vector<void*> translatedTypes;
 
+	// Materialized string literals from section 14 (STRINGREF.md STR-2),
+	// parallel to Module::stringLiterals. Store-owned pointers are stable.
+	std::vector<StringObject*> stringLiterals;
+
 	// Stable storage for trap messages composed by a code generator. Generated
 	// code embeds the message *pointer*, and `WASM::trap` records it without
 	// copying (WasmTrap.hpp), so the string must outlive every call into the
@@ -110,6 +115,7 @@ private:
 	std::vector<TypeId> importedTypeIds;
 	void initializeMemories();
 	void initializeGlobals();
+	void initializeStringLiterals();
 	void initializeTable();
 	// Rewrites `ref.func` sentinels left in globalsStorage by evalConstantExpr
 	// into real Callable pointers. Must run after declareFunctions() /

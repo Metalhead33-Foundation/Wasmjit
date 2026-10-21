@@ -17,6 +17,7 @@ const char* getSectionTypeName(SectionType sectType) {
 		case SectionType::Data: return "Data";
 		case SectionType::DataCount: return "DataCount";
 		case SectionType::Tag: return "Tag";
+		case SectionType::String: return "String";
 		default: return "Unknown";
 	}
 }

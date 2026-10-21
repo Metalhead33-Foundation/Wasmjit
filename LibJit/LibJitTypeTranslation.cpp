@@ -1,5 +1,6 @@
 #include "LibJitTypeTranslation.hpp"
 #include "../WasmBase/WasmGcHeader.hpp"
+#include <stdexcept>
 
 namespace LibJIT {
 
