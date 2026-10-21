@@ -13,7 +13,7 @@ private:
 	void compileFunction(jit_function_t fn, uint32_t funcTypeIdx, const WASM::FuncType& funcType,
 						 const WASM::FunctionBody& body, WASM::ModuleInstance& instance,
 						 WASM::ModuleInstanceInternals& internals, const WASM::Module& module,
-						 uint32_t importedFuncCount);
+						 uint32_t importedFuncCount, uint32_t functionIndex);
 public:
 	ModuleCompiler(jit_context_t context);
 

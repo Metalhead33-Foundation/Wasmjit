@@ -228,7 +228,7 @@ The result on this revision is **256** scripts and roughly 5 800 `.wasm` modules
 ### Every script is its own test case
 
 `Test/SpecSuite.cpp` registers one Catch2 test case per converted script, named **`spec: <script>`**
-and tagged `[spec]`. So `--list-tests '[spec]'` prints all 256 scripts individually, and any single
+and tagged `[spec]`. So `--list-tests '[spec]'` prints all 257 scripts individually, and any single
 script can be selected by name.
 
 Scripts outside the curated list (see below) additionally carry the hidden marker `[.]`. Catch2 only
@@ -238,11 +238,11 @@ selection is explicit — which is why `./WasmJit '[spec]'` runs everything.
 | Command | What runs |
 | --- | --- |
 | `./WasmJit` | the manual tests + the curated spec scripts |
-| `./WasmJit '[spec]'` | all 256 spec scripts (~1.5 min; most of them fail today) |
+| `./WasmJit '[spec]'` | all 257 spec scripts (~8 s; 249 pass, 8 known failures) |
 | `./WasmJit 'spec: address'` | just that script |
 | `./WasmJit '*float*'` | scripts whose name matches |
-| `./WasmJit --list-tests` | the default view (273 test cases) |
-| `./WasmJit --list-tests '[spec]'` | every script, one line each (256) |
+| `./WasmJit --list-tests` | the default view (321 test cases) |
+| `./WasmJit --list-tests '[spec]'` | every script, one line each (257) |
 | `./WasmJit -# --list-tags` | all tags, including `[#main]` and `[#SpecSuite]` |
 
 `WASM_SPEC_SCRIPTS` is still honoured, but it now selects the **curated set** — i.e. which scripts are
@@ -250,7 +250,7 @@ visible and therefore part of the default run:
 
 ```bash
 WASM_SPEC_SCRIPTS=address,store ./WasmJit    # default run = manual tests + those two scripts
-WASM_SPEC_SCRIPTS=all ./WasmJit              # default run = manual tests + all 256 scripts
+WASM_SPEC_SCRIPTS=all ./WasmJit              # default run = manual tests + all 257 scripts
 ```
 
 ### The curated list lives in `Test/wast_supported.txt`
@@ -268,11 +268,11 @@ local_set
 Scripts listed there are the visible ones; everything else is hidden. The file is read when the test
 binary starts, so **editing it does not require a rebuild**.
 
-It currently holds 189 of the 256 scripts, and the default run is green:
+It currently holds 189 of the 257 scripts, and the default run is green:
 
 ```
 $ ./WasmJit
-All tests passed (8839 assertions in 310 test cases)
+All tests passed (8948 assertions in 321 test cases)
 ```
 
 #### Refreshing the list
@@ -488,12 +488,12 @@ from module input.
 
 ### Current status (for orientation)
 
-The default run is the curated list (189 scripts) plus the 84 manual tests, and
-it is green:
+The default run is the curated list (189 scripts) plus the manual and component
+tests, and it is green:
 
 ```
 $ ./WasmJit
-All tests passed (8839 assertions in 310 test cases)
+All tests passed (8948 assertions in 321 test cases)
 ```
 
 A full sweep is deliberately loud, because most of the suite is still beyond the
@@ -504,7 +504,7 @@ read the **per-script** lines):
 WASM_SPEC_TOLERANT=1 WASM_SPEC_TIMEOUT=8 WASM_SPEC_SCRIPTS=all ./WasmJit -r compact > sweep.log
 ```
 
-Per-script outcomes from the last sweep (2026-10-13, 256 scripts):
+Per-script outcomes from the last sweep (2026-10-13, 257 scripts):
 
 | Outcome | Scripts | Reading |
 |---|---:|---|
@@ -675,7 +675,7 @@ Measured after SIMD-5:
 
 ```bash
 ./WasmJit 'simd*'      # 24 cases, 6147 assertions, all passing (includes the hidden [.simdbench] case)
-./WasmJit              # 310 cases, 8839 assertions, all passing
+./WasmJit              # 321 cases, 8948 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed

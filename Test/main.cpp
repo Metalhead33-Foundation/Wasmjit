@@ -11,6 +11,7 @@
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -26,6 +27,7 @@
 #include "WasmBase/WasmTrap.hpp"
 #include "WasmBase/wasm_simd_scalar.hpp"
 #include "LibJit/ComponentRuntime.hpp"
+#include "WasmStub/StubOpcodeDispatcher.hpp"
 #include "WastScript.hpp"
 
 Euph::Conf::Configuration GLOBAL_CONFIGURATION;
@@ -5255,6 +5257,58 @@ TEST_CASE("name section: a subsection size past the section end is rejected")
 	REQUIRE_THROWS_AS(WASM::Artifact::parse(device), std::runtime_error);
 }
 
+TEST_CASE("stub listing consumes the name section")
+{
+	WASM::Module module = loadTestModule("name_section");
+	REQUIRE(module.functionBodies.size() == 1);
+	const WASM::FunctionBody& body = module.functionBodies.front();
+
+	std::ostringstream listing;
+	Stub::OpcodeDispatcher dispatcher(&listing);
+	dispatcher.setNameContext(&module,
+			static_cast<uint32_t>(module.importFunctions.size()));
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(body.code.data()), body.code.size());
+	Euph::Io::ConstBufferDevice device(span);
+	WASM::FastMemReader stream(device);
+	dispatcher.readCode(stream);
+
+	const std::string text = listing.str();
+	REQUIRE(text.find("(LocalGet (0 ($p))") != std::string::npos);
+	REQUIRE(text.find("(LocalGet (0)") == std::string::npos);
+}
+
+TEST_CASE("trap messages name the trapping function when the name section has it")
+{
+	WASM::Module module = loadTestModule("named_trap");
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	const auto trapMessage = [&instance](const char* name) {
+		auto fn = instance->exportedFunction(name);
+		REQUIRE(fn.has_value());
+		WASM::TrapScope scope;
+		volatile bool trapped = false;
+		std::string message;
+		if (setjmp(scope.buffer) == 0) {
+			WASM::callCallable<void>(*fn);
+		} else {
+			trapped = true;
+			message = scope.message() != nullptr ? scope.message() : "";
+		}
+		REQUIRE(trapped);
+		return message;
+	};
+
+	// The named function reports both its numeric index and its `$name`; the
+	// unnamed one keeps the index alone.
+	REQUIRE(trapMessage("boom") == "unreachable in function 0 ($boom)");
+	REQUIRE(trapMessage("plain") == "unreachable in function 1");
+}
+
 TEST_CASE("unknown custom sections leave code and data decoding unchanged")
 {
 	WASM::Module module = loadTestModule("custom_section");
@@ -5462,5 +5516,28 @@ TEST_CASE("validation errors name the offending function when the name section h
 		REQUIRE(std::string(error.what()).find("function 0 ($bad)") != std::string::npos);
 	}
 	REQUIRE(threw);
+}
+
+TEST_CASE("validation errors name other index spaces when the name section has them")
+{
+	const auto errorFor = [](const char* moduleName) {
+		try {
+			(void)loadTestModule(moduleName);
+		} catch (const std::exception& error) {
+			return std::string(error.what());
+		}
+		return std::string();
+	};
+
+	const std::string globalError = errorFor("named_invalid_global");
+	REQUIRE(globalError.find("global.set of an immutable global 0 ($answer)")
+			!= std::string::npos);
+
+	const std::string tableError = errorFor("named_invalid_table");
+	REQUIRE(tableError.find("call_indirect on a non-funcref table 0 ($objects)")
+			!= std::string::npos);
+
+	const std::string localError = errorFor("named_invalid_local");
+	REQUIRE(localError.find("uninitialized local 0 ($value)") != std::string::npos);
 }
 

@@ -57,6 +57,12 @@ private:
 	const WASM::Module& module;
 	const WASM::FuncType& currentFunc;
 	uint32_t importedFuncCount;
+	// Global function index of the body being compiled (imports first), and its
+	// diagnostic label (`function 3 ($name)`). Emitted traps carry the label so
+	// a runtime failure names the function, not just the trap kind
+	// (docs/proposals/EXTENDED_NAME_SECTION.md ENS-5).
+	uint32_t functionIndex;
+	std::string functionLabel;
 	std::vector<jit_value_t>& locals;
 	std::vector<jit_value_t>& valueStack;
 	std::vector<ControlBlock>& controlStack;
@@ -299,7 +305,7 @@ public:
 					 WASM::ModuleInstance& instance,
 					 WASM::ModuleInstanceInternals& internals,
 					 const WASM::Module& module, const WASM::FuncType& currentFunc,
-					 uint32_t importedFuncCount,
+					 uint32_t importedFuncCount, uint32_t functionIndex,
 					 std::vector<WASM::BranchHint> branchHints,
 					 std::vector<jit_value_t>& locals,
 					 std::vector<jit_value_t>& valueStack,

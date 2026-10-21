@@ -31,61 +31,69 @@ void Validator::fail(const std::string& message) const
 	throw ValidationError(prefix + message);
 }
 
+std::string Validator::describeLocal(uint32_t idx) const
+{
+	if (currentBody == kNoBody)
+		return std::to_string(idx);
+	const std::size_t globalIndex = currentBody + module.importFunctions.size();
+	return module.describeIndex(NameKind::Local, static_cast<uint32_t>(globalIndex), idx);
+}
+
 FuncType Validator::funcTypeAt(uint32_t typeIdx) const
 {
 	if (typeIdx >= module.typeCount())
-		fail("unknown type " + std::to_string(typeIdx));
+		fail("unknown type " + module.describeIndex(NameKind::Type, typeIdx));
 	if (module.typeView(typeIdx).kind() != CanonTypeKind::Func)
-		fail("type " + std::to_string(typeIdx) + " is not a function type");
+		fail("type " + module.describeIndex(NameKind::Type, typeIdx) + " is not a function type");
 	return module.funcTypeAt(typeIdx);
 }
 
 void Validator::requireFunctionIndex(uint32_t idx) const
 {
 	if (idx >= totalFunctions)
-		fail("unknown function " + std::to_string(idx));
+		fail("unknown function " + module.describeIndex(NameKind::Function, idx));
 }
 
 void Validator::requireTableIndex(uint32_t idx) const
 {
 	if (idx >= totalTables)
-		fail("unknown table " + std::to_string(idx));
+		fail("unknown table " + module.describeIndex(NameKind::Table, idx));
 }
 
 void Validator::requireMemoryIndex(uint32_t idx) const
 {
 	if (idx >= totalMemories)
-		fail("unknown memory " + std::to_string(idx));
+		fail("unknown memory " + module.describeIndex(NameKind::Memory, idx));
 }
 
 void Validator::requireGlobalIndex(uint32_t idx) const
 {
 	if (idx >= totalGlobals)
-		fail("unknown global " + std::to_string(idx));
+		fail("unknown global " + module.describeIndex(NameKind::Global, idx));
 }
 
 void Validator::requireTagIndex(uint32_t idx) const
 {
 	if (idx >= totalTags)
-		fail("unknown tag " + std::to_string(idx));
+		fail("unknown tag " + module.describeIndex(NameKind::Tag, idx));
 }
 
 void Validator::requireLocalIndex(uint32_t idx) const
 {
 	if (idx >= locals.size())
-		fail("unknown local " + std::to_string(idx));
+		fail("unknown local " + describeLocal(idx));
 }
 
 void Validator::requireElementIndex(uint32_t idx) const
 {
 	if (idx >= module.elementSegments.size())
-		fail("unknown element segment " + std::to_string(idx));
+		fail("unknown element segment " + module.describeIndex(NameKind::Element, idx));
 }
 
 void Validator::requireDataIndex(uint32_t idx) const
 {
 	if (idx >= module.dataSegments.size())
-		fail("unknown data segment " + std::to_string(idx));
+		fail("unknown data segment " + module.describeIndex(NameKind::Data, idx));
 }
 
 bool Validator::globalIsMutable(uint32_t idx) const
@@ -200,7 +208,8 @@ std::vector<ValueType> Validator::blockParams(const BlockType& blockType) const
 		return paramTypes(funcTypeAt(blockType.typeIndex));
 	if (blockType.heapType >= 0
 			&& static_cast<uint32_t>(blockType.heapType) >= module.typeCount())
-		fail("block type: unknown type " + std::to_string(blockType.heapType));
+		fail("block type: unknown type "
+			 + module.describeIndex(NameKind::Type, static_cast<uint32_t>(blockType.heapType)));
 	// A value-typed block type is a single *result*; it never has parameters.
 	return {};
 }
@@ -213,7 +222,8 @@ std::vector<ValueType> Validator::blockResults(const BlockType& blockType) const
 		return {};
 	if (blockType.heapType >= 0
 			&& static_cast<uint32_t>(blockType.heapType) >= module.typeCount())
-		fail("block type: unknown type " + std::to_string(blockType.heapType));
+		fail("block type: unknown type "
+			 + module.describeIndex(NameKind::Type, static_cast<uint32_t>(blockType.heapType)));
 	return {ValueType{blockType.valType, blockType.heapType}};
 }
 
@@ -599,13 +609,16 @@ void Validator::validateModule()
 		funcTypeAt(imp.typeIdx);
 	for (uint32_t typeIdx : module.internalFunctionTypeIndices)
 		funcTypeAt(typeIdx);
-	for (const ImportTag& imp : module.importTags) {
-		if (!funcTypeAt(imp.typeIdx).results.empty())
-			fail("non-empty tag result type");
+	for (std::size_t i = 0; i < module.importTags.size(); ++i) {
+		if (!funcTypeAt(module.importTags[i].typeIdx).results.empty())
+			fail("tag " + module.describeIndex(NameKind::Tag, static_cast<uint32_t>(i))
+				 + " has a non-empty result type");
 	}
-	for (const Tag& tag : module.tags) {
-		if (!funcTypeAt(tag.typeIdx).results.empty())
-			fail("non-empty tag result type");
+	for (std::size_t i = 0; i < module.tags.size(); ++i) {
+		if (!funcTypeAt(module.tags[i].typeIdx).results.empty())
+			fail("tag " + module.describeIndex(NameKind::Tag,
+					 static_cast<uint32_t>(module.importTags.size() + i))
+				 + " has a non-empty result type");
 	}
 
 	// Every typed reference must name a declared type. This walks the canonical
@@ -666,7 +679,9 @@ void Validator::validateModule()
 				: funcTypeAt(module.internalFunctionTypeIndices[
 						module.startFunctionIndex - module.importFunctions.size()]);
 		if (!startType.params.empty() || !startType.results.empty())
-			fail("start function must have type [] -> []");
+			fail("start function "
+				 + module.describeIndex(NameKind::Function, module.startFunctionIndex)
+				 + " must have type [] -> []");
 	}
 
 	std::unordered_set<std::string> exportNames;
@@ -681,7 +696,7 @@ void Validator::validateModule()
 		case ExternalKind::Tag:      requireTagIndex(ex.index);      break;
 		case ExternalKind::Type:
 			if (ex.index >= module.typeCount())
-				fail("unknown type " + std::to_string(ex.index));
+				fail("unknown type " + module.describeIndex(NameKind::Type, ex.index));
 			break;
 		}
 	}
@@ -889,7 +904,8 @@ std::optional<ValueType> Validator::validateConstExpr(const std::vector<uint8_t>
 			uint32_t globalIdx = 0;
 			stream >> Elv::Io::Leb(globalIdx);
 			if (globalIdx >= globalLimit)
-				fail(label + ": unknown global " + std::to_string(globalIdx));
+				fail(label + ": unknown global "
+					 + module.describeIndex(NameKind::Global, globalIdx));
 			const std::size_t imported = module.importGlobals.size();
 			const bool mutableGlobal = globalIdx < imported
 					? module.importGlobals[globalIdx].global.isMutable
@@ -1064,7 +1080,7 @@ void Validator::dispatchLocalGet(LocalIdx arg)
 	if (!isDefaultable(locals[arg])) {
 		const ControlFrame& current = controlStack.back();
 		if (arg >= current.initialized.size() || !current.initialized[arg])
-			fail("uninitialized local " + std::to_string(arg));
+			fail("uninitialized local " + describeLocal(arg));
 	}
 	pushValue(locals[arg]);
 }
@@ -1094,7 +1110,8 @@ void Validator::dispatchGlobalSet(GlobalIdx arg)
 {
 	requireGlobalIndex(arg);
 	if (!globalIsMutable(arg))
-		fail("global.set of an immutable global");
+		fail("global.set of an immutable global "
+			 + module.describeIndex(NameKind::Global, arg));
 	popExpect(globalType(arg));
 }
 
@@ -1118,7 +1135,8 @@ void Validator::dispatchCallIndirect(TypeIdx typeIdx, TableIdx tableIdx)
 	const FuncType& type = funcTypeAt(typeIdx);
 	requireTableIndex(tableIdx);
 	if (!tableIsFuncRef(tableIdx))
-		fail("call_indirect on a non-funcref table");
+		fail("call_indirect on a non-funcref table "
+			 + module.describeIndex(NameKind::Table, tableIdx));
 	popExpect(tableIndexType(tableIdx));
 	popTypes(paramTypes(type));
 	pushTypes(resultTypes(type));
@@ -1129,7 +1147,8 @@ void Validator::dispatchReturnCallIndirect(TypeIdx typeIdx, TableIdx tableIdx)
 	const FuncType& type = funcTypeAt(typeIdx);
 	requireTableIndex(tableIdx);
 	if (!tableIsFuncRef(tableIdx))
-		fail("return_call_indirect on a non-funcref table");
+		fail("return_call_indirect on a non-funcref table "
+			 + module.describeIndex(NameKind::Table, tableIdx));
 	popExpect(tableIndexType(tableIdx));
 	popTypes(paramTypes(type));
 	checkTailCallResults(type);
@@ -1157,7 +1176,8 @@ void Validator::dispatchRefFunc(FuncIdx arg)
 {
 	requireFunctionIndex(arg);
 	if (declaredFunctions.find(arg) == declaredFunctions.end())
-		fail("undeclared function reference " + std::to_string(arg));
+		fail("undeclared function reference "
+			 + module.describeIndex(NameKind::Function, arg));
 	const uint32_t typeIdx = arg < module.importFunctions.size()
 			? module.importFunctions[arg].typeIdx
 			: module.internalFunctionTypeIndices[arg - module.importFunctions.size()];
@@ -1489,7 +1509,10 @@ void Validator::dispatchTableInit(uint32_t elemIdx, TableIdx tableIdx)
 	const ValueType tableType = tableElementType(tableIdx);
 	if (segment.initIndices.empty()) {
 		if (!assignable(segment.elemType, tableType))
-			fail("table.init: element segment type does not match the table type");
+			fail("table.init: element segment "
+				 + module.describeIndex(NameKind::Element, elemIdx)
+				 + " type does not match table "
+				 + module.describeIndex(NameKind::Table, tableIdx) + " type");
 	} else {
 		// Index-form entries are non-null function references.
 		for (uint32_t funcIdx : segment.initIndices) {
@@ -1498,7 +1521,10 @@ void Validator::dispatchTableInit(uint32_t elemIdx, TableIdx tableIdx)
 					? module.importFunctions[funcIdx].typeIdx
 					: module.internalFunctionTypeIndices[funcIdx - module.importFunctions.size()];
 			if (!assignable(ValueType{ValueTypeCode::Ref, static_cast<int32_t>(typeIdx)}, tableType))
-				fail("table.init: function element does not match the table type");
+				fail("table.init: function element "
+					 + module.describeIndex(NameKind::Function, funcIdx)
+					 + " does not match table "
+					 + module.describeIndex(NameKind::Table, tableIdx) + " type");
 		}
 	}
 	popExpect(ValueTypeCode::I32);          // len

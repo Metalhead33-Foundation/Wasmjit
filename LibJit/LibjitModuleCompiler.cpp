@@ -89,7 +89,7 @@ private:
 void ModuleCompiler::compileFunction(jit_function_t fn, uint32_t funcTypeIdx, const WASM::FuncType& funcType,
 									 const WASM::FunctionBody& body, WASM::ModuleInstance& instance,
 									 WASM::ModuleInstanceInternals& internals, const WASM::Module& module,
-									 uint32_t importedFuncCount)
+									 uint32_t importedFuncCount, uint32_t functionIndex)
 {
 	WASM::PreparedFunctionStack stack;
 	stack.prepare(module.funcTypeAt(funcTypeIdx), body);
@@ -118,7 +118,8 @@ void ModuleCompiler::compileFunction(jit_function_t fn, uint32_t funcTypeIdx, co
 	WASM::WasmStream<Euph::Io::ConstBufferDevice> stream(device);
 
 	OpcodeDispatcher dispatcher(context, fn, typeTranslator, instance, internals, module, funcType,
-							  importedFuncCount, body.branchHints, locals, valueStack, controlStack);
+							  importedFuncCount, functionIndex, body.branchHints,
+							  locals, valueStack, controlStack);
 	dispatcher.readCode(stream);
 	dispatcher.emitImplicitFunctionReturn();
 }
@@ -207,7 +208,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 
 		// Compile the body. This is where the real work happens.
 		compileFunction(fn, typeIdx, funcType, module.functionBodies[i],
-						instance, internals, module, importedFuncCount);
+						instance, internals, module, importedFuncCount, importedFuncCount + i);
 
 		// Now that the body is fully emitted, back-fill the fnPtr in the
 		// WasmCallable wrapper so that table lookups and ref.func work.

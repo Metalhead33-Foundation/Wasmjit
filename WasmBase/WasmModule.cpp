@@ -708,6 +708,14 @@ const std::string* Module::findName(NameKind kind, uint32_t index, uint32_t subI
 	return nullptr;
 }
 
+std::string Module::describeIndex(NameKind kind, uint32_t index, uint32_t subIndex) const
+{
+	std::string described = std::to_string(index);
+	if (const std::string* name = findName(kind, index, subIndex))
+		described += " ($" + *name + ")";
+	return described;
+}
+
 void Module::processBranchHintSection(Elv::Io::Device& file, const Section& section)
 {
 	DWasmStream wasmStream(file);

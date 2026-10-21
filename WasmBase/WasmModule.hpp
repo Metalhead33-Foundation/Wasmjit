@@ -134,6 +134,11 @@ public:
 	// only: they never participate in validation, dispatch or identity
 	// (ENSD3, docs/proposals/EXTENDED_NAME_SECTION.md).
 	const std::string* findName(NameKind kind, uint32_t index, uint32_t subIndex = 0) const;
+	// Diagnostic form of an index in any name index space: `"3"`, or
+	// `"3 ($name)"` when the well-known name section carries a name for it.
+	// The numeric index is always present, so a message stays useful when no
+	// name exists (ENSD2/ENSD3, docs/proposals/EXTENDED_NAME_SECTION.md).
+	std::string describeIndex(NameKind kind, uint32_t index, uint32_t subIndex = 0) const;
 	// Reject a module that declares a value type this engine cannot model
 	// (`isModeledValueTypeCode`). Called at the end of fromFile(); throws a
 	// std::runtime_error naming the offending declaration. See

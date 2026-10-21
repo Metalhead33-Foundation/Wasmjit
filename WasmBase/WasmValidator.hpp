@@ -51,6 +51,10 @@ private:
 
 	[[noreturn]] void fail(const std::string& message) const;
 
+	// Diagnostic form of a local index in the body being validated
+	// (`"0 ($name)"`); the name-section outer key is the global function index.
+	std::string describeLocal(uint32_t idx) const;
+
 	FuncType funcTypeAt(uint32_t typeIdx) const;
 	void requireFunctionIndex(uint32_t idx) const;
 	void requireTableIndex(uint32_t idx) const;

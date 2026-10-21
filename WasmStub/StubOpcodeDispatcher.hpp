@@ -1,15 +1,29 @@
 #ifndef STUBOPCODEDISPATCHER_HPP
 #define STUBOPCODEDISPATCHER_HPP
 #include "../WasmBase/WasmOpcodeDispatcher.hpp"
+#include "../WasmBase/WasmModule.hpp"
 #include <ostream>
+#include <string>
 
 namespace Stub {
 class OpcodeDispatcher : public WASM::OpcodeDispatcher
 {
 private:
 	std::basic_ostream<char>* stream;
+	// Optional name context for the listing. `WASM::OpcodeDispatcher` is
+	// deliberately module-agnostic, so the consumer supplies it. Every named
+	// index space is printed as `index ($name)`, keeping the raw index when
+	// the name section has none (docs/proposals/EXTENDED_NAME_SECTION.md
+	// ENS-5/ENSD3).
+	const WASM::Module* module = nullptr;
+	uint32_t functionIndex = 0;
+	std::string describe(WASM::NameKind kind, uint32_t index, uint32_t subIndex = 0) const;
 public:
 	OpcodeDispatcher(std::basic_ostream<char>* stream);
+
+	// `globalFunctionIndex` selects the function whose local names apply
+	// (imports first). Passing nullptr disables name lookup.
+	void setNameContext(const WASM::Module* module, uint32_t globalFunctionIndex);
 
 	// OpcodeDispatcher interface
 protected:

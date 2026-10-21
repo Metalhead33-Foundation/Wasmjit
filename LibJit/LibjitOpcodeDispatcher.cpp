@@ -1557,12 +1557,19 @@ void OpcodeDispatcher::dispatchCallThroughCallable(jit_value_t callablePtr, WASM
 
 void OpcodeDispatcher::emitTrap(WASM::TrapKind kind)
 {
-	emitAbort(function, kind, WASM::trapKindName(kind));
+	emitTrap(kind, nullptr);
 }
 
 void OpcodeDispatcher::emitTrap(WASM::TrapKind kind, const char* detail)
 {
-	emitAbort(function, kind, (detail != nullptr) ? detail : WASM::trapKindName(kind));
+	const char* reason = (detail != nullptr) ? detail : WASM::trapKindName(kind);
+	// Compose the message once, at compile time, and intern it in the instance:
+	// the generated code embeds the pointer and `WASM::trap` does not copy it
+	// (WasmTrap.hpp, docs/SAFETY.md). The numeric kind still drives `assert_trap`
+	// comparisons; this only improves the log/embedder message
+	// (docs/proposals/EXTENDED_NAME_SECTION.md ENS-5).
+	emitAbort(function, kind,
+		internals.internTrapMessage(std::string(reason) + " in " + functionLabel));
 }
 
 void OpcodeDispatcher::notImplemented(const char* name)
@@ -1876,15 +1883,17 @@ OpcodeDispatcher::OpcodeDispatcher(jit_context_t context, jit_function_t functio
 								   WASM::ModuleInstance& instance,
 								   WASM::ModuleInstanceInternals& internals,
 								   const WASM::Module& module, const WASM::FuncType& currentFunc,
-								   uint32_t importedFuncCount,
+								   uint32_t importedFuncCount, uint32_t functionIndex,
 								   std::vector<WASM::BranchHint> branchHints,
 								   std::vector<jit_value_t>& locals,
 								   std::vector<jit_value_t>& valueStack,
 								   std::vector<ControlBlock>& controlStack)
 	: context(context), function(function), typeTranslator(typeTranslator), instance(instance),
 	  internals(internals), module(module), currentFunc(currentFunc), importedFuncCount(importedFuncCount),
+	  functionIndex(functionIndex),
 	  locals(locals), valueStack(valueStack), controlStack(controlStack), branchHints(std::move(branchHints))
 {
+	functionLabel = "function " + module.describeIndex(WASM::NameKind::Function, functionIndex);
 }
 
 const WASM::BranchHint* OpcodeDispatcher::currentBranchHint() const

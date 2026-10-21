@@ -77,6 +77,19 @@ OpcodeDispatcher::OpcodeDispatcher(std::basic_ostream<char>* stream)
 
 }
 
+std::string OpcodeDispatcher::describe(WASM::NameKind kind, uint32_t index, uint32_t subIndex) const
+{
+	if (module == nullptr)
+		return std::to_string(index);
+	return module->describeIndex(kind, index, subIndex);
+}
+
+void OpcodeDispatcher::setNameContext(const WASM::Module* module, uint32_t globalFunctionIndex)
+{
+	this->module = module;
+	functionIndex = globalFunctionIndex;
+}
+
 void OpcodeDispatcher::dispatchUnreachable()
 {
 	*stream << '(' << "Unreachable" << ')' << std::endl;
@@ -103,7 +116,7 @@ void OpcodeDispatcher::dispatchElse()
 }
 void OpcodeDispatcher::dispatchThrow(WASM::TagIdx arg)
 {
-	*stream << '(' << "Throw" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "Throw" << ' ' << '(' << describe(WASM::NameKind::Tag, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchThrowRef()
 {
@@ -131,27 +144,31 @@ void OpcodeDispatcher::dispatchReturn()
 }
 void OpcodeDispatcher::dispatchCall(WASM::FuncIdx arg)
 {
-	*stream << '(' << "Call" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "Call" << ' ' << '(' << describe(WASM::NameKind::Function, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2)
 {
-	*stream << '(' << "CallIndirect" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
+	*stream << '(' << "CallIndirect" << ' ' << '('
+			<< describe(WASM::NameKind::Type, arg1) << ' '
+			<< describe(WASM::NameKind::Table, arg2) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchReturnCall(WASM::FuncIdx arg)
 {
-	*stream << '(' << "ReturnCall" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "ReturnCall" << ' ' << '(' << describe(WASM::NameKind::Function, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2)
 {
-	*stream << '(' << "ReturnCallIndirect" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
+	*stream << '(' << "ReturnCallIndirect" << ' ' << '('
+			<< describe(WASM::NameKind::Type, arg1) << ' '
+			<< describe(WASM::NameKind::Table, arg2) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchCallRef(WASM::TypeIdx arg)
 {
-	*stream << '(' << "CallRef" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "CallRef" << ' ' << '(' << describe(WASM::NameKind::Type, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx arg)
 {
-	*stream << '(' << "ReturnCallRef" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "ReturnCallRef" << ' ' << '(' << describe(WASM::NameKind::Type, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchTryTable(const WASM::BlockType& arg1, std::vector<WASM::CatchClause>&& arg2)
 {
@@ -171,31 +188,34 @@ void OpcodeDispatcher::dispatchSelectT(std::vector<WASM::ValueType>&& arg)
 }
 void OpcodeDispatcher::dispatchLocalGet(WASM::LocalIdx arg)
 {
-	*stream << '(' << "LocalGet" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "LocalGet" << ' ' << '('
+			<< describe(WASM::NameKind::Local, functionIndex, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchLocalSet(WASM::LocalIdx arg)
 {
-	*stream << '(' << "LocalSet" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "LocalSet" << ' ' << '('
+			<< describe(WASM::NameKind::Local, functionIndex, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchLocalTee(WASM::LocalIdx arg)
 {
-	*stream << '(' << "LocalTee" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "LocalTee" << ' ' << '('
+			<< describe(WASM::NameKind::Local, functionIndex, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchGlobalGet(WASM::GlobalIdx arg)
 {
-	*stream << '(' << "GlobalGet" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "GlobalGet" << ' ' << '(' << describe(WASM::NameKind::Global, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchGlobalSet(WASM::GlobalIdx arg)
 {
-	*stream << '(' << "GlobalSet" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "GlobalSet" << ' ' << '(' << describe(WASM::NameKind::Global, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchTableGet(WASM::TableIdx arg)
 {
-	*stream << '(' << "TableGet" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "TableGet" << ' ' << '(' << describe(WASM::NameKind::Table, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchTableSet(WASM::TableIdx arg)
 {
-	*stream << '(' << "TableSet" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "TableSet" << ' ' << '(' << describe(WASM::NameKind::Table, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Load(WASM::MemArg addr)
 {
@@ -291,11 +311,11 @@ void OpcodeDispatcher::dispatchI64Store32(WASM::MemArg addr)
 }
 void OpcodeDispatcher::dispatchMemorySize(WASM::MemIdx arg)
 {
-	*stream << '(' << "MemorySize" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "MemorySize" << ' ' << '(' << describe(WASM::NameKind::Memory, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchMemoryGrow(WASM::MemIdx arg)
 {
-	*stream << '(' << "MemoryGrow" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "MemoryGrow" << ' ' << '(' << describe(WASM::NameKind::Memory, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI32Const(int32_t arg)
 {
@@ -827,7 +847,12 @@ void OpcodeDispatcher::dispatchI64Extend32S()
 }
 void OpcodeDispatcher::dispatchRefNull(const WASM::HeapType& arg)
 {
-	*stream << '(' << "RefNull" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "RefNull" << ' ';
+	if (arg.isTypeIndex)
+		*stream << '(' << describe(WASM::NameKind::Type, arg.typeIndex) << ')';
+	else
+		*stream << '(' << arg << ')';
+	*stream << std::endl;
 }
 void OpcodeDispatcher::dispatchRefIsNull()
 {
@@ -835,7 +860,7 @@ void OpcodeDispatcher::dispatchRefIsNull()
 }
 void OpcodeDispatcher::dispatchRefFunc(WASM::FuncIdx arg)
 {
-	*stream << '(' << "RefFunc" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "RefFunc" << ' ' << '(' << describe(WASM::NameKind::Function, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchRefEq()
 {
@@ -1011,23 +1036,27 @@ void OpcodeDispatcher::dispatchI64TruncSatF64U()
 }
 void OpcodeDispatcher::dispatchMemoryInit(uint32_t arg1, WASM::MemIdx arg2)
 {
-	*stream << '(' << "MemoryInit" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
+	*stream << '(' << "MemoryInit" << ' ' << '('
+			<< describe(WASM::NameKind::Data, arg1) << ' '
+			<< describe(WASM::NameKind::Memory, arg2) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchDataDrop(uint32_t arg)
 {
-	*stream << '(' << "DataDrop" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "DataDrop" << ' ' << '(' << describe(WASM::NameKind::Data, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchMemoryCopy(WASM::MemIdx arg1, WASM::MemIdx arg2)
 {
-	*stream << '(' << "MemoryCopy" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
+	*stream << '(' << "MemoryCopy" << ' ' << '('
+			<< describe(WASM::NameKind::Memory, arg1) << ' '
+			<< describe(WASM::NameKind::Memory, arg2) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchMemoryFill(WASM::MemIdx arg)
 {
-	*stream << '(' << "MemoryFill" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "MemoryFill" << ' ' << '(' << describe(WASM::NameKind::Memory, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchMemoryDiscard(WASM::MemIdx arg)
 {
-	*stream << '(' << "MemoryDiscard" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "MemoryDiscard" << ' ' << '(' << describe(WASM::NameKind::Memory, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchI64Add128()
 {
@@ -1047,27 +1076,31 @@ void OpcodeDispatcher::dispatchI64MulWideU()
 }
 void OpcodeDispatcher::dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2)
 {
-	*stream << '(' << "TableInit" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
+	*stream << '(' << "TableInit" << ' ' << '('
+			<< describe(WASM::NameKind::Element, arg1) << ' '
+			<< describe(WASM::NameKind::Table, arg2) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchElemDrop(uint32_t arg)
 {
-	*stream << '(' << "ElemDrop" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "ElemDrop" << ' ' << '(' << describe(WASM::NameKind::Element, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchTableCopy(WASM::TableIdx arg1, WASM::TableIdx arg2)
 {
-	*stream << '(' << "TableCopy" << ' ' << '(' << arg1 << ' ' << arg2 << ')' << std::endl;
+	*stream << '(' << "TableCopy" << ' ' << '('
+			<< describe(WASM::NameKind::Table, arg1) << ' '
+			<< describe(WASM::NameKind::Table, arg2) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchTableGrow(WASM::TableIdx arg)
 {
-	*stream << '(' << "TableGrow" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "TableGrow" << ' ' << '(' << describe(WASM::NameKind::Table, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchTableSize(WASM::TableIdx arg)
 {
-	*stream << '(' << "TableSize" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "TableSize" << ' ' << '(' << describe(WASM::NameKind::Table, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchTableFill(WASM::TableIdx arg)
 {
-	*stream << '(' << "TableFill" << ' ' << '(' << arg << ')' << std::endl;
+	*stream << '(' << "TableFill" << ' ' << '(' << describe(WASM::NameKind::Table, arg) << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchV128Load(WASM::MemArg arg)
 {

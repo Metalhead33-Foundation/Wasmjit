@@ -1,8 +1,9 @@
 # Extended Name Section — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 2 — every core and
-extended name subsection is parsed and exposed through `Module::findName`;
-diagnostics do not consume the names yet).
+Status: design note / implementation reference (revision 3 — every core and
+extended name subsection is parsed and exposed through `Module::findName`, and
+the diagnostic consumers use the names: validation errors, runtime trap
+messages and the `WasmStub` listing).
 Audience: anyone touching `WasmModule` (custom sections), `WasmSection`, or any
 tooling that wants to read names.
 
@@ -71,10 +72,26 @@ attached wherever an identifier binds. The proposal does not change execution.
 - `Module::findName(NameKind, index, subIndex = 0)` is the public lookup. It
   returns `nullptr` for an absent subsection or index; names are metadata and
   are never validated against an index space (`ENSD2`).
+- `Module::describeIndex(NameKind, index, subIndex = 0)` is the shared
+  diagnostic form: the numeric index, plus ` ($name)` when one exists. It keeps
+  the raw index when the name section has none, so a message is always useful.
 - `Validator::fail` consumes the function-name map: a validation error keeps the
-  numeric prefix and appends `($name)` when the name section has one.
+  numeric prefix and appends `($name)` when the name section has one. The
+  validator also names every other index that appears in an error when the
+  section has a name for it (types, tables, memories, globals, tags, element and
+  data segments, and locals).
+- Every trap emitted by generated code carries the trapping function's
+  `function <index> ($name)` label (`LibJit/LibjitOpcodeDispatcher.cpp`
+  `emitTrap`). The message is composed once at compile time and interned in
+  `ModuleInstanceInternals::trapMessages`, because `WASM::trap` records the
+  pointer rather than copying it. Traps raised inside a shared helper (integer
+  division, atomics, bulk-memory bounds) keep their precise kind text and do not
+  carry the label.
+- `Stub::OpcodeDispatcher::setNameContext` lets the inspection listing print
+  `index ($name)` for the index spaces it decodes (functions, types, tables,
+  memories, globals, tags, locals, element and data segments).
 - `names.wast` remains curated and runs to completion (`486 passed / 0 failed /
-  0 skipped`, 2026-10-17). The manual `name_section` fixture now asserts the
+  0 skipped`, 2026-10-17). The manual `name_section` fixture asserts the
   stored strings, so passing no longer only proves tolerance.
 
 ## 5. Gaps
@@ -83,9 +100,11 @@ attached wherever an identifier binds. The proposal does not change execution.
 |---|---|---|---|
 | ~~ENS1~~ | ~~**Only subsections 0 and 1 are parsed.**~~ **Done (ENS-1/ENS-2):** direct maps 4/5/6/7/8/9/11 and indirect maps 2/3/10/12/13 are parsed, including the extended ids 3, 5, 6, 7, 8, 9, 12 and 13. | `WasmModule.cpp` (`processNameSection`); `name_section` manual test | Closed |
 | ~~ENS2~~ | ~~**Even the core name subsections are incomplete.**~~ **Done (ENS-2):** local (2), type (4), field (10) and tag (11) names are parsed too. | same | Closed |
-| ~~ENS3~~ | ~~**No diagnostic consumer yet.**~~ **Done (ENS-3):** `Module::findName` is the public lookup, and `Validator::fail` appends the current function's `($name)` while keeping the numeric index; `named_invalid.wat` asserts the message. Trap/disassembly text still uses indices. | `WasmModule.hpp` (`findName`), `WasmValidator.cpp` (`fail`), `Test/wasm_wat/named_invalid.wat` | Closed |
+| ~~ENS3~~ | ~~**No diagnostic consumer yet.**~~ **Done (ENS-3):** `Module::findName` is the public lookup, and `Validator::fail` appends the current function's `($name)` while keeping the numeric index; `named_invalid.wat` asserts the message. The trap and disassembly consumers landed in ENS-5. | `WasmModule.hpp` (`findName`), `WasmValidator.cpp` (`fail`), `Test/wasm_wat/named_invalid.wat` | Closed |
 | ~~ENS4~~ | ~~**`names.wast` does not assert names.**~~ **Done (ENS-4):** `Test/wasm_wat/name_section.wat` + `extended name section: parsed names are exposed by kind and index` assert every subsection's strings; `name section: indirect maps and unknown subsections are bounded and skipped` covers 12/13 and unknown-id skipping. | `Test/main.cpp`, `Test/wasm_wat/name_section.wat` | Closed |
 | ENS5 | **No text-format annotation support.** The engine has no `.wat` parser and will never have one; `@name` handling belongs to the toolchain that produces the binary. | `Test/Test.pro` uses `wasm-tools` | Informational |
+| ~~ENS6~~ | ~~**No diagnostic consumer uses the names outside `Validator::fail`.**~~ **Done (ENS-5):** traps emitted by generated code report the function's index and `$name`; the validator names every index space that appears in an error; the `WasmStub` listing prints `index ($name)`. Tests: `named_trap`, `named_invalid_{global,table,local}`, and the stub listing test. | `LibJit/LibjitOpcodeDispatcher.cpp` (`emitTrap`), `WasmBase/WasmValidator.cpp`, `WasmStub/StubOpcodeDispatcher.cpp`, `Test/main.cpp` | Closed |
+| ENS7 | **Helper-raised traps do not carry the function label.** Integer division/`trunc`, the atomic helpers and the bulk-memory helpers call `WASM::trap` directly, so their message is the precise kind text without `in function …`. | `WasmBase/wasm_atomic.cpp`, `LibJit/LibjitOpcodeDispatcher.cpp` helpers | Low (informational) |
 
 ## 6. Where we can and should play fast and loose
 
@@ -93,7 +112,7 @@ attached wherever an identifier binds. The proposal does not change execution.
 |---|---|---|---|
 | ENSD1 | **Skip unknown subsections by `subSize`** (the current behaviour). | §3: names are metadata; the size prefix makes skipping exact. | Forward compatibility with future subsections. |
 | ENSD2 | **Store names without validating indices**; validate only at lookup. | §3: no execution effect; a name for an out-of-range index is still just a string. | The parser never rejects an otherwise valid module for a bad name. |
-| ENSD3 | **Use names only in diagnostics** (trap text, disassembly), never in identity or dispatch. | §3; names are not semantic identity. | Better error messages without changing behaviour. |
+| ENSD3 | **Use names only in diagnostics** (validation errors, trap text, disassembly), never in identity or dispatch. Implemented in `Module::describeIndex`, `Validator`, the LibJIT trap sink and the `WasmStub` listing. | §3; names are not semantic identity. | Better error messages without changing behaviour. |
 | ENSD4 | **Do not implement the text annotations.** | §3; the engine is binary-only. | No second parser to maintain. |
 
 Guardrail: a malformed name subsection must never change decoding of the code
@@ -106,15 +125,18 @@ not know.
 |---|---|---|---|
 | **ENS-1 — Parse direct maps** | ✅ Read subsections 4/5/6/7/8/9/11 into per-index name tables. | ENS1 | Done: `name_section` asserts type, table, memory, global, element, data and tag names. |
 | **ENS-2 — Parse indirect maps** | ✅ Read subsections 2/3/10/12/13 and the core 2/4/10/11. | ENS1, ENS2 | Done: local, label, field, parameter and tag-parameter names are addressable; a hand-built fixture covers 12/13. |
-| **ENS-3 — Expose lookup** | ✅ `Module::findName(NameKind, index, subIndex)` is public and tested; `Validator::fail` appends the function name to validation errors. | ENS3 | Done: `named_invalid.wat` asserts `function 0 ($bad)`; trap/disassembly text still uses raw indices. |
+| **ENS-3 — Expose lookup** | ✅ `Module::findName(NameKind, index, subIndex)` is public and tested; `Validator::fail` appends the function name to validation errors. | ENS3 | Done: `named_invalid.wat` asserts `function 0 ($bad)`. |
 | **ENS-4 — Assert names** | ✅ `Test/wasm_wat/name_section.wat` + two manual tests check the stored strings and the 12/13/unknown-id paths. | ENS4 | Done: the tests fail if a subsection is dropped or desynchronised. |
+| **ENS-5 — Diagnostic consumers** | ✅ `Module::describeIndex`; generated-code traps carry `in function <index> ($name)`; the validator names types/tables/memories/globals/tags/segments/locals; `Stub::OpcodeDispatcher::setNameContext` makes the listing name-aware. | ENS6 | Done: `trap messages name the trapping function…`, `validation errors name other index spaces…` and `stub listing consumes the name section` pass. |
 
 ENS5 is explicitly triaged as not-worth-closing: the engine has no text
-parser, and `@name` handling belongs to `wasm-tools`.
+parser, and `@name` handling belongs to `wasm-tools`. ENS7 records the one
+remaining diagnostic asymmetry: traps raised inside shared native helpers keep
+their precise kind text, without the function label.
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-18):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-21):
 
 | Script / fixture | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
@@ -123,10 +145,14 @@ parser, and `@name` handling belongs to `wasm-tools`.
 | hand-built 12/13 + unknown id | 7 assertions | 0 | 0 | indirect maps work and an unknown subsection is skipped by size |
 | `custom_section` | 3 assertions | 0 | 0 | an annotation-generated custom section leaves code decoding unchanged |
 | `named_invalid` | 2 assertions | 0 | 0 | a validation error includes `function 0 ($bad)` from the name section |
+| `named_invalid_{global,table,local}` | 3 assertions | 0 | 0 | errors name the global, table and local indices they describe |
+| `named_trap` manual test | 7 assertions | 0 | 0 | a trap says `unreachable in function 0 ($boom)`; an unnamed function keeps the index |
+| stub listing | 3 assertions | 0 | 0 | the inspection listing prints `LocalGet (0 ($p))` from the local name map |
 
 Reading: `names.wast` still means "the custom section does not break decoding";
-`name_section` and the hand-built fixture are the tests that prove the names
-are actually stored.
+`name_section` and the hand-built fixture prove the names are stored, and the
+four diagnostic tests prove that accepted name maps actually reach the three
+consumers.
 
 ## 9. References
 
@@ -139,6 +165,11 @@ are actually stored.
   [`PARSER_PROPOSALS.md`](PARSER_PROPOSALS.md) (compilation hints and relaxed
   dead-code validation), [`ANNOTATIONS.md`](ANNOTATIONS.md) (the text-format
   annotation grammar);
-  sources `WasmBase/WasmModule.hpp` (`NameKind`, `findName`, the name maps),
-  `WasmBase/WasmModule.cpp` (`processCustomSection`, `processNameSection`),
-  `Test/wasm_wat/name_section.wat`, `Test/wast_supported.txt`.
+  sources `WasmBase/WasmModule.hpp` (`NameKind`, `findName`, `describeIndex`,
+  the name maps), `WasmBase/WasmModule.cpp` (`processCustomSection`,
+  `processNameSection`), `WasmBase/WasmValidator.cpp` (named validation
+  diagnostics), `WasmBase/WasmModuleInstance.hpp` (`trapMessages`),
+  `LibJit/LibjitOpcodeDispatcher.cpp` (`emitTrap`), `WasmStub/StubOpcodeDispatcher.*`
+  (`setNameContext`), `Test/wasm_wat/name_section.wat`,
+  `Test/wasm_wat/named_trap.wat`, `Test/wasm_wat/named_invalid_*.wat`,
+  `Test/wast_supported.txt`.

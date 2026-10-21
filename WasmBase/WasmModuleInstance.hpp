@@ -6,7 +6,9 @@
 #include "WasmVMContext.hpp"
 #include "WasmImport.hpp"
 #include <optional>
+#include <set>
 #include <unordered_map>
+#include <utility>
 namespace WASM {
 
 // Forward declarations
@@ -75,6 +77,20 @@ struct ModuleInstanceInternals {
 	// Parallel to module->internalFunctionTypeIndices.
 	std::vector<void*> compiledFunctions;
 	std::vector<void*> translatedTypes;
+
+	// Stable storage for trap messages composed by a code generator. Generated
+	// code embeds the message *pointer*, and `WASM::trap` records it without
+	// copying (WasmTrap.hpp), so the string must outlive every call into the
+	// instance. Node-based storage keeps every `c_str()` valid for the
+	// instance's lifetime; duplicates collapse, which also bounds the pool.
+	// Backend-agnostic by contract: a backend that wants to attach context to a
+	// trap interns the finished message here (docs/SAFETY.md §2.4,
+	// docs/proposals/EXTENDED_NAME_SECTION.md ENS-5).
+	std::set<std::string> trapMessages;
+	const char* internTrapMessage(std::string message)
+	{
+		return trapMessages.insert(std::move(message)).first->c_str();
+	}
 };
 
 // ── The C++ owner of the VMContext and all its allocations. ──
