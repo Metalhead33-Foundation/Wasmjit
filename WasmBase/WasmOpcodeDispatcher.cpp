@@ -57,9 +57,30 @@ void WASM::OpcodeDispatcher::dispatchPrefixString(FastMemReader& stream, StringO
 	case StringOpcode::StringNewWtf8:         dispatchStringNewWtf8(stream.readLEB128<MemIdx>()); break;
 	case StringOpcode::StringEncodeLossyUtf8: dispatchStringEncodeLossyUtf8(stream.readLEB128<MemIdx>()); break;
 	case StringOpcode::StringEncodeWtf8:      dispatchStringEncodeWtf8(stream.readLEB128<MemIdx>()); break;
+
+	case StringOpcode::StringAsWtf8:          dispatchStringAsWtf8(); break;
+	case StringOpcode::StringViewWtf8Advance: dispatchStringViewWtf8Advance(); break;
+	case StringOpcode::StringViewWtf8EncodeUtf8:
+		dispatchStringViewWtf8EncodeUtf8(stream.readLEB128<MemIdx>()); break;
+	case StringOpcode::StringViewWtf8Slice:   dispatchStringViewWtf8Slice(); break;
+	case StringOpcode::StringViewWtf8EncodeLossyUtf8:
+		dispatchStringViewWtf8EncodeLossyUtf8(stream.readLEB128<MemIdx>()); break;
+	case StringOpcode::StringViewWtf8EncodeWtf8:
+		dispatchStringViewWtf8EncodeWtf8(stream.readLEB128<MemIdx>()); break;
+	case StringOpcode::StringAsWtf16:         dispatchStringAsWtf16(); break;
+	case StringOpcode::StringViewWtf16Length: dispatchStringViewWtf16Length(); break;
+	case StringOpcode::StringViewWtf16GetCodeUnit: dispatchStringViewWtf16GetCodeUnit(); break;
+	case StringOpcode::StringViewWtf16Encode:
+		dispatchStringViewWtf16Encode(stream.readLEB128<MemIdx>()); break;
+	case StringOpcode::StringViewWtf16Slice:  dispatchStringViewWtf16Slice(); break;
+	case StringOpcode::StringAsIter:          dispatchStringAsIter(); break;
+	case StringOpcode::StringViewIterNext:    dispatchStringViewIterNext(); break;
+	case StringOpcode::StringViewIterAdvance: dispatchStringViewIterAdvance(); break;
+	case StringOpcode::StringViewIterRewind:  dispatchStringViewIterRewind(); break;
+	case StringOpcode::StringViewIterSlice:   dispatchStringViewIterSlice(); break;
 	default:
-		// Views (STR-4) and the GC-array variants are decoded but not lowered.
-		onUnhandledOpcode("stringview / GC-array string instruction is not implemented yet");
+		// GC-array variants are decoded but not lowered.
+		onUnhandledOpcode("GC-array string instruction is not implemented yet");
 	}
 }
 

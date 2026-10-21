@@ -266,6 +266,24 @@ protected:
 	virtual void dispatchStringConcat() { onUnhandledOpcode("dispatchStringConcat"); }
 	virtual void dispatchStringEq() { onUnhandledOpcode("dispatchStringEq"); }
 	virtual void dispatchStringIsUsvSequence() { onUnhandledOpcode("dispatchStringIsUsvSequence"); }
+
+	// stringview facility (STR-4)
+	virtual void dispatchStringAsWtf8() { onUnhandledOpcode("dispatchStringAsWtf8"); }
+	virtual void dispatchStringViewWtf8Advance() { onUnhandledOpcode("dispatchStringViewWtf8Advance"); }
+	virtual void dispatchStringViewWtf8EncodeUtf8(MemIdx arg) { onUnhandledOpcode("dispatchStringViewWtf8EncodeUtf8"); }
+	virtual void dispatchStringViewWtf8Slice() { onUnhandledOpcode("dispatchStringViewWtf8Slice"); }
+	virtual void dispatchStringViewWtf8EncodeLossyUtf8(MemIdx arg) { onUnhandledOpcode("dispatchStringViewWtf8EncodeLossyUtf8"); }
+	virtual void dispatchStringViewWtf8EncodeWtf8(MemIdx arg) { onUnhandledOpcode("dispatchStringViewWtf8EncodeWtf8"); }
+	virtual void dispatchStringAsWtf16() { onUnhandledOpcode("dispatchStringAsWtf16"); }
+	virtual void dispatchStringViewWtf16Length() { onUnhandledOpcode("dispatchStringViewWtf16Length"); }
+	virtual void dispatchStringViewWtf16GetCodeUnit() { onUnhandledOpcode("dispatchStringViewWtf16GetCodeUnit"); }
+	virtual void dispatchStringViewWtf16Encode(MemIdx arg) { onUnhandledOpcode("dispatchStringViewWtf16Encode"); }
+	virtual void dispatchStringViewWtf16Slice() { onUnhandledOpcode("dispatchStringViewWtf16Slice"); }
+	virtual void dispatchStringAsIter() { onUnhandledOpcode("dispatchStringAsIter"); }
+	virtual void dispatchStringViewIterNext() { onUnhandledOpcode("dispatchStringViewIterNext"); }
+	virtual void dispatchStringViewIterAdvance() { onUnhandledOpcode("dispatchStringViewIterAdvance"); }
+	virtual void dispatchStringViewIterRewind() { onUnhandledOpcode("dispatchStringViewIterRewind"); }
+	virtual void dispatchStringViewIterSlice() { onUnhandledOpcode("dispatchStringViewIterSlice"); }
 	virtual void dispatchI32TruncSatF32S() { onUnhandledOpcode("dispatchI32TruncSatF32S"); }
 	virtual void dispatchI32TruncSatF32U() { onUnhandledOpcode("dispatchI32TruncSatF32U"); }
 	virtual void dispatchI32TruncSatF64S() { onUnhandledOpcode("dispatchI32TruncSatF64S"); }

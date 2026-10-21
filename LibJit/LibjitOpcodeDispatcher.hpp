@@ -563,6 +563,24 @@ protected:
 	void dispatchStringConcat() override;
 	void dispatchStringEq() override;
 	void dispatchStringIsUsvSequence() override;
+
+	// stringview facility (docs/proposals/STRINGREF.md STR-4)
+	void dispatchStringAsWtf8() override;
+	void dispatchStringViewWtf8Advance() override;
+	void dispatchStringViewWtf8EncodeUtf8(WASM::MemIdx arg) override;
+	void dispatchStringViewWtf8Slice() override;
+	void dispatchStringViewWtf8EncodeLossyUtf8(WASM::MemIdx arg) override;
+	void dispatchStringViewWtf8EncodeWtf8(WASM::MemIdx arg) override;
+	void dispatchStringAsWtf16() override;
+	void dispatchStringViewWtf16Length() override;
+	void dispatchStringViewWtf16GetCodeUnit() override;
+	void dispatchStringViewWtf16Encode(WASM::MemIdx arg) override;
+	void dispatchStringViewWtf16Slice() override;
+	void dispatchStringAsIter() override;
+	void dispatchStringViewIterNext() override;
+	void dispatchStringViewIterAdvance() override;
+	void dispatchStringViewIterRewind() override;
+	void dispatchStringViewIterSlice() override;
 	void dispatchI32TruncSatF32S() override;
 	void dispatchI32TruncSatF32U() override;
 	void dispatchI32TruncSatF64S() override;

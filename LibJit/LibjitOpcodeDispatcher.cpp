@@ -214,6 +214,151 @@ static int32_t wasm_string_is_usv_sequence(void* handle)
 	return WASM::isUsvSequence(string->codePoints) ? 1 : 0;
 }
 
+// ── stringview helpers (docs/proposals/STRINGREF.md STR-4) ──────────────────
+
+static const WASM::StringViewObject* viewObjectOrTrap(void* handle)
+{
+	if (handle == nullptr)
+		trap(WASM::TrapKind::NullReference, "null string view");
+	return static_cast<const WASM::StringViewObject*>(handle);
+}
+
+static WASM::StringIteratorObject* iteratorObjectOrTrap(void* handle)
+{
+	if (handle == nullptr)
+		trap(WASM::TrapKind::NullReference, "null string iterator");
+	return static_cast<WASM::StringIteratorObject*>(handle);
+}
+
+static void* wasm_string_as_wtf8(void* handle)
+{
+	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	return WASM::Store::global().strings().createView(string);
+}
+
+static void* wasm_string_as_wtf16(void* handle)
+{
+	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	return WASM::Store::global().strings().createView(string);
+}
+
+static void* wasm_string_as_iter(void* handle)
+{
+	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	return WASM::Store::global().strings().createIterator(string);
+}
+
+static int32_t wasm_stringview_wtf8_advance(void* viewHandle, int32_t pos, int32_t bytes)
+{
+	const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+	uint32_t next = 0;
+	if (!WASM::wtf8Advance(view->string->codePoints, pos, bytes, next))
+		trap(WASM::TrapKind::InvalidString,
+			 "stringview_wtf8.advance: position exceeds 2^31-1");
+	return static_cast<int32_t>(next);
+}
+
+static uint64_t wasm_stringview_wtf8_encode(WASM::LinearMemory* memory, void* viewHandle,
+											uint32_t ptr, int32_t pos, int32_t bytes,
+											int encoding)
+{
+	const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+	WASM::Wtf8Encoding mode = WASM::Wtf8Encoding::Wtf8;
+	if (encoding == 0)
+		mode = WASM::Wtf8Encoding::Utf8;
+	else if (encoding == 1)
+		mode = WASM::Wtf8Encoding::LossyUtf8;
+	std::vector<uint8_t> encoded;
+	uint32_t next = 0;
+	if (!WASM::wtf8Encode(view->string->codePoints, pos, bytes, mode, next, encoded))
+		trap(WASM::TrapKind::InvalidString,
+			 "stringview_wtf8.encode: isolated surrogate or position overflow");
+	writeEncodedString(memory, ptr, encoded);
+	return (static_cast<uint64_t>(next) << 32) | static_cast<uint32_t>(encoded.size());
+}
+
+static void* wasm_stringview_wtf8_slice(void* viewHandle, int32_t start, int32_t end)
+{
+	const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+	return makeString(WASM::sliceWtf8(view->string->codePoints, start, end));
+}
+
+static int32_t wasm_stringview_wtf16_length(void* viewHandle)
+{
+	const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+	uint32_t length = 0;
+	if (!WASM::measureWtf16(view->string->codePoints, length))
+		return -1;
+	return static_cast<int32_t>(length);
+}
+
+static int32_t wasm_stringview_wtf16_get_codeunit(void* viewHandle, int32_t pos)
+{
+	const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+	uint32_t unit = 0;
+	if (!WASM::wtf16CodeUnitAt(view->string->codePoints, pos, unit))
+		trap(WASM::TrapKind::InvalidString,
+			 "stringview_wtf16.get_codeunit: position out of range");
+	return static_cast<int32_t>(unit);
+}
+
+static int32_t wasm_stringview_wtf16_encode(WASM::LinearMemory* memory, void* viewHandle,
+											uint32_t ptr, int32_t pos, int32_t units)
+{
+	if ((ptr & 1u) != 0)
+		trap(WASM::TrapKind::InvalidString,
+			 "stringview_wtf16.encode: pointer is not two-byte aligned");
+	const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+	std::vector<uint8_t> encoded;
+	const uint32_t written = WASM::wtf16Encode(view->string->codePoints, pos, units, encoded);
+	writeEncodedString(memory, ptr, encoded);
+	return static_cast<int32_t>(written);
+}
+
+static void* wasm_stringview_wtf16_slice(void* viewHandle, int32_t start, int32_t end)
+{
+	const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+	return makeString(WASM::sliceWtf16(view->string->codePoints, start, end));
+}
+
+static int32_t wasm_stringview_iter_next(void* iteratorHandle)
+{
+	WASM::StringIteratorObject* iterator = iteratorObjectOrTrap(iteratorHandle);
+	if (iterator->position >= iterator->string->codePoints.size())
+		return -1;
+	return static_cast<int32_t>(iterator->string->codePoints[iterator->position++]);
+}
+
+static int32_t wasm_stringview_iter_advance(void* iteratorHandle, int32_t count)
+{
+	WASM::StringIteratorObject* iterator = iteratorObjectOrTrap(iteratorHandle);
+	const uint32_t size = static_cast<uint32_t>(iterator->string->codePoints.size());
+	const uint32_t remaining = size - iterator->position;
+	const uint32_t take = count < 0
+			? remaining
+			: std::min(static_cast<uint32_t>(count), remaining);
+	iterator->position += take;
+	return static_cast<int32_t>(take);
+}
+
+static int32_t wasm_stringview_iter_rewind(void* iteratorHandle, int32_t count)
+{
+	WASM::StringIteratorObject* iterator = iteratorObjectOrTrap(iteratorHandle);
+	const uint32_t take = count < 0
+			? iterator->position
+			: std::min(static_cast<uint32_t>(count), iterator->position);
+	iterator->position -= take;
+	return static_cast<int32_t>(take);
+}
+
+static void* wasm_stringview_iter_slice(void* iteratorHandle, int32_t count)
+{
+	WASM::StringIteratorObject* iterator = iteratorObjectOrTrap(iteratorHandle);
+	return makeString(WASM::sliceCodePoints(iterator->string->codePoints,
+										   static_cast<int32_t>(iterator->position),
+										   count));
+}
+
 extern "C" {
 static uint32_t wasm_i32_clz(uint32_t x)
 {
@@ -4900,6 +5045,240 @@ void OpcodeDispatcher::dispatchStringIsUsvSequence()
 	pushValue(callNativeUnary(function,
 			reinterpret_cast<void*>(&wasm_string_is_usv_sequence), jit_type_int,
 			jit_type_void_ptr, refAsVoidPtr(string)));
+}
+
+// ── stringview lowering (docs/proposals/STRINGREF.md STR-4) ────────────────
+
+static jit_value_t callStringViewWtf8Encode(jit_function_t fn, void* target,
+											jit_value_t memory, jit_value_t view,
+											jit_value_t ptr, jit_value_t pos,
+											jit_value_t bytes, int encoding)
+{
+	jit_type_t params[6] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_uint,
+							jit_type_int, jit_type_int, jit_type_int};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_ulong, params, 6, 1);
+	jit_value_t args[6] = {memory, view, ptr, pos, bytes,
+			jit_value_create_nint_constant(fn, jit_type_int, encoding)};
+	return jit_insn_call_native(fn, "wasm.stringview.wtf8.encode", target, sig, args, 6, 0);
+}
+
+static jit_value_t callStringViewWtf16Encode(jit_function_t fn, void* target,
+											 jit_value_t memory, jit_value_t view,
+											 jit_value_t ptr, jit_value_t pos,
+											 jit_value_t units)
+{
+	jit_type_t params[5] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_uint,
+							jit_type_int, jit_type_int};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 5, 1);
+	jit_value_t args[5] = {memory, view, ptr, pos, units};
+	return jit_insn_call_native(fn, "wasm.stringview.wtf16.encode", target, sig, args, 5, 0);
+}
+
+void OpcodeDispatcher::dispatchStringAsWtf8()
+{
+	jit_value_t string = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeUnary(function, reinterpret_cast<void*>(&wasm_string_as_wtf8),
+			jit_type_void_ptr, jit_type_void_ptr, refAsVoidPtr(string)));
+}
+
+void OpcodeDispatcher::dispatchStringAsWtf16()
+{
+	jit_value_t string = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeUnary(function, reinterpret_cast<void*>(&wasm_string_as_wtf16),
+			jit_type_void_ptr, jit_type_void_ptr, refAsVoidPtr(string)));
+}
+
+void OpcodeDispatcher::dispatchStringAsIter()
+{
+	jit_value_t string = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeUnary(function, reinterpret_cast<void*>(&wasm_string_as_iter),
+			jit_type_void_ptr, jit_type_void_ptr, refAsVoidPtr(string)));
+}
+
+void OpcodeDispatcher::dispatchStringViewWtf8Advance()
+{
+	jit_value_t bytes = popValue();
+	jit_value_t pos = popValue();
+	jit_value_t view = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeTernary(function,
+			reinterpret_cast<void*>(&wasm_stringview_wtf8_advance), jit_type_int,
+			jit_type_void_ptr, jit_type_int, jit_type_int,
+			refAsVoidPtr(view), pos, bytes));
+}
+
+void OpcodeDispatcher::dispatchStringViewWtf8EncodeUtf8(WASM::MemIdx arg)
+{
+	jit_value_t bytes = popValue();
+	jit_value_t pos = popValue();
+	jit_value_t ptr = popValue();
+	jit_value_t view = popValue();
+	if (unreachableCode)
+		return;
+	jit_value_t packed = callStringViewWtf8Encode(function,
+			reinterpret_cast<void*>(&wasm_stringview_wtf8_encode),
+			memoryPointerForIndex(arg), refAsVoidPtr(view),
+			jit_insn_convert(function, ptr, jit_type_uint, 0), pos, bytes, 0);
+	jit_value_t written = jit_insn_convert(function, packed, jit_type_uint, 0);
+	jit_value_t next = jit_insn_convert(function,
+			jit_insn_shr(function, packed,
+				jit_value_create_nint_constant(function, jit_type_uint, 32)),
+			jit_type_uint, 0);
+	pushValue(next);
+	pushValue(written);
+}
+
+void OpcodeDispatcher::dispatchStringViewWtf8EncodeLossyUtf8(WASM::MemIdx arg)
+{
+	jit_value_t bytes = popValue();
+	jit_value_t pos = popValue();
+	jit_value_t ptr = popValue();
+	jit_value_t view = popValue();
+	if (unreachableCode)
+		return;
+	jit_value_t packed = callStringViewWtf8Encode(function,
+			reinterpret_cast<void*>(&wasm_stringview_wtf8_encode),
+			memoryPointerForIndex(arg), refAsVoidPtr(view),
+			jit_insn_convert(function, ptr, jit_type_uint, 0), pos, bytes, 1);
+	jit_value_t written = jit_insn_convert(function, packed, jit_type_uint, 0);
+	jit_value_t next = jit_insn_convert(function,
+			jit_insn_shr(function, packed,
+				jit_value_create_nint_constant(function, jit_type_uint, 32)),
+			jit_type_uint, 0);
+	pushValue(next);
+	pushValue(written);
+}
+
+void OpcodeDispatcher::dispatchStringViewWtf8EncodeWtf8(WASM::MemIdx arg)
+{
+	jit_value_t bytes = popValue();
+	jit_value_t pos = popValue();
+	jit_value_t ptr = popValue();
+	jit_value_t view = popValue();
+	if (unreachableCode)
+		return;
+	jit_value_t packed = callStringViewWtf8Encode(function,
+			reinterpret_cast<void*>(&wasm_stringview_wtf8_encode),
+			memoryPointerForIndex(arg), refAsVoidPtr(view),
+			jit_insn_convert(function, ptr, jit_type_uint, 0), pos, bytes, 2);
+	jit_value_t written = jit_insn_convert(function, packed, jit_type_uint, 0);
+	jit_value_t next = jit_insn_convert(function,
+			jit_insn_shr(function, packed,
+				jit_value_create_nint_constant(function, jit_type_uint, 32)),
+			jit_type_uint, 0);
+	pushValue(next);
+	pushValue(written);
+}
+
+void OpcodeDispatcher::dispatchStringViewWtf8Slice()
+{
+	jit_value_t end = popValue();
+	jit_value_t start = popValue();
+	jit_value_t view = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeTernary(function,
+			reinterpret_cast<void*>(&wasm_stringview_wtf8_slice), jit_type_void_ptr,
+			jit_type_void_ptr, jit_type_int, jit_type_int,
+			refAsVoidPtr(view), start, end));
+}
+
+void OpcodeDispatcher::dispatchStringViewWtf16Length()
+{
+	jit_value_t view = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeUnary(function,
+			reinterpret_cast<void*>(&wasm_stringview_wtf16_length), jit_type_int,
+			jit_type_void_ptr, refAsVoidPtr(view)));
+}
+
+void OpcodeDispatcher::dispatchStringViewWtf16GetCodeUnit()
+{
+	jit_value_t pos = popValue();
+	jit_value_t view = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeBinary(function,
+			reinterpret_cast<void*>(&wasm_stringview_wtf16_get_codeunit), jit_type_int,
+			jit_type_void_ptr, jit_type_int, refAsVoidPtr(view), pos));
+}
+
+void OpcodeDispatcher::dispatchStringViewWtf16Encode(WASM::MemIdx arg)
+{
+	jit_value_t units = popValue();
+	jit_value_t pos = popValue();
+	jit_value_t ptr = popValue();
+	jit_value_t view = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callStringViewWtf16Encode(function,
+			reinterpret_cast<void*>(&wasm_stringview_wtf16_encode),
+			memoryPointerForIndex(arg), refAsVoidPtr(view),
+			jit_insn_convert(function, ptr, jit_type_uint, 0), pos, units));
+}
+
+void OpcodeDispatcher::dispatchStringViewWtf16Slice()
+{
+	jit_value_t end = popValue();
+	jit_value_t start = popValue();
+	jit_value_t view = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeTernary(function,
+			reinterpret_cast<void*>(&wasm_stringview_wtf16_slice), jit_type_void_ptr,
+			jit_type_void_ptr, jit_type_int, jit_type_int,
+			refAsVoidPtr(view), start, end));
+}
+
+void OpcodeDispatcher::dispatchStringViewIterNext()
+{
+	jit_value_t iterator = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeUnary(function,
+			reinterpret_cast<void*>(&wasm_stringview_iter_next), jit_type_int,
+			jit_type_void_ptr, refAsVoidPtr(iterator)));
+}
+
+void OpcodeDispatcher::dispatchStringViewIterAdvance()
+{
+	jit_value_t count = popValue();
+	jit_value_t iterator = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeBinary(function,
+			reinterpret_cast<void*>(&wasm_stringview_iter_advance), jit_type_int,
+			jit_type_void_ptr, jit_type_int, refAsVoidPtr(iterator), count));
+}
+
+void OpcodeDispatcher::dispatchStringViewIterRewind()
+{
+	jit_value_t count = popValue();
+	jit_value_t iterator = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeBinary(function,
+			reinterpret_cast<void*>(&wasm_stringview_iter_rewind), jit_type_int,
+			jit_type_void_ptr, jit_type_int, refAsVoidPtr(iterator), count));
+}
+
+void OpcodeDispatcher::dispatchStringViewIterSlice()
+{
+	jit_value_t count = popValue();
+	jit_value_t iterator = popValue();
+	if (unreachableCode)
+		return;
+	pushValue(callNativeBinary(function,
+			reinterpret_cast<void*>(&wasm_stringview_iter_slice), jit_type_void_ptr,
+			jit_type_void_ptr, jit_type_int, refAsVoidPtr(iterator), count));
 }
 void OpcodeDispatcher::dispatchI32TruncSatF32S() {
 	pushValue(callNativeUnary(function, reinterpret_cast<void*>(wasm_i32_trunc_sat_f32_s),

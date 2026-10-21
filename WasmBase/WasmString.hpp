@@ -22,6 +22,18 @@ struct StringObject {
 	std::vector<uint32_t> codePoints;
 };
 
+// Opaque views produced by `string.as_wtf8` / `string.as_wtf16`. They are
+// stateless: every operation takes an explicit byte/code-unit position.
+struct StringViewObject {
+	const StringObject* string;
+};
+
+// `string.as_iter` produces a mutable iterator; `next` advances its position.
+struct StringIteratorObject {
+	const StringObject* string;
+	uint32_t position = 0; // code-point index
+};
+
 // Store-owned arena for StringObjects. Pointers are stable for the Store's
 // lifetime. Strings are host-owned and are not reference-counted: they live
 // until Store teardown (docs/proposals/STRINGREF.md STRD3/STRD5).
@@ -31,9 +43,13 @@ public:
 	// May trap with TrapKind::OutOfMemory when the allocation budget is
 	// exhausted. The returned pointer is stable until the Store dies.
 	StringObject* create(std::vector<uint32_t> codePoints);
+	StringViewObject* createView(const StringObject* string);
+	StringIteratorObject* createIterator(const StringObject* string);
 	std::size_t count() const { return objects_.size(); }
 private:
 	std::deque<StringObject> objects_;
+	std::deque<StringViewObject> views_;
+	std::deque<StringIteratorObject> iterators_;
 };
 
 // ── Codecs ──────────────────────────────────────────────────────────────────
@@ -64,6 +80,33 @@ bool encodeWtf16(const std::vector<uint32_t>& codePoints, std::vector<uint8_t>& 
 // into one scalar value as the proposal requires.
 std::vector<uint32_t> concatCodePoints(const std::vector<uint32_t>& a,
 									   const std::vector<uint32_t>& b);
+
+// ── stringview helpers (docs/proposals/STRINGREF.md STR-4) ──────────────────
+// Positions use the proposal's "position treatment": an out-of-range position
+// is clamped, and a position inside a codepoint advances to the next boundary.
+// A negative `bytes`/`units`/`count` means "to the end" (or "to the beginning"
+// for `rewind`), matching the proposal's examples.
+uint32_t wtf8Length(const std::vector<uint32_t>& codePoints);
+
+// `wtf8Advance` returns false when the result would exceed 2^31-1 (a trap).
+bool wtf8Advance(const std::vector<uint32_t>& codePoints, int32_t pos,
+				 int32_t bytes, uint32_t& nextPos);
+
+enum class Wtf8Encoding { Utf8, LossyUtf8, Wtf8 };
+bool wtf8Encode(const std::vector<uint32_t>& codePoints, int32_t pos, int32_t bytes,
+				Wtf8Encoding encoding, uint32_t& nextPos, std::vector<uint8_t>& out);
+std::vector<uint32_t> sliceWtf8(const std::vector<uint32_t>& codePoints,
+								int32_t start, int32_t end);
+
+bool wtf16CodeUnitAt(const std::vector<uint32_t>& codePoints, int32_t pos,
+					 uint32_t& unit);
+uint32_t wtf16Encode(const std::vector<uint32_t>& codePoints, int32_t pos,
+					 int32_t units, std::vector<uint8_t>& out);
+std::vector<uint32_t> sliceWtf16(const std::vector<uint32_t>& codePoints,
+								 int32_t start, int32_t end);
+
+std::vector<uint32_t> sliceCodePoints(const std::vector<uint32_t>& codePoints,
+									  int32_t start, int32_t count);
 
 } // namespace WASM
 

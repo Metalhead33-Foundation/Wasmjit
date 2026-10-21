@@ -1062,6 +1062,70 @@ void OpcodeDispatcher::dispatchStringIsUsvSequence()
 {
 	*stream << '(' << "StringIsUsvSequence" << ')' << std::endl;
 }
+void OpcodeDispatcher::dispatchStringAsWtf8()
+{
+	*stream << '(' << "StringAsWtf8" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringAsWtf16()
+{
+	*stream << '(' << "StringAsWtf16" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringAsIter()
+{
+	*stream << '(' << "StringAsIter" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringViewWtf8Advance()
+{
+	*stream << '(' << "StringViewWtf8Advance" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringViewWtf8EncodeUtf8(WASM::MemIdx arg)
+{
+	*stream << '(' << "StringViewWtf8EncodeUtf8" << ' ' << '(' << arg << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringViewWtf8EncodeLossyUtf8(WASM::MemIdx arg)
+{
+	*stream << '(' << "StringViewWtf8EncodeLossyUtf8" << ' ' << '(' << arg << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringViewWtf8EncodeWtf8(WASM::MemIdx arg)
+{
+	*stream << '(' << "StringViewWtf8EncodeWtf8" << ' ' << '(' << arg << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringViewWtf8Slice()
+{
+	*stream << '(' << "StringViewWtf8Slice" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringViewWtf16Length()
+{
+	*stream << '(' << "StringViewWtf16Length" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringViewWtf16GetCodeUnit()
+{
+	*stream << '(' << "StringViewWtf16GetCodeUnit" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringViewWtf16Encode(WASM::MemIdx arg)
+{
+	*stream << '(' << "StringViewWtf16Encode" << ' ' << '(' << arg << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringViewWtf16Slice()
+{
+	*stream << '(' << "StringViewWtf16Slice" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringViewIterNext()
+{
+	*stream << '(' << "StringViewIterNext" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringViewIterAdvance()
+{
+	*stream << '(' << "StringViewIterAdvance" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringViewIterRewind()
+{
+	*stream << '(' << "StringViewIterRewind" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchStringViewIterSlice()
+{
+	*stream << '(' << "StringViewIterSlice" << ')' << std::endl;
+}
 void OpcodeDispatcher::dispatchI32TruncSatF32S()
 {
 	*stream << '(' << "I32TruncSatF32S" << ')' << std::endl;

@@ -265,6 +265,8 @@ bool Validator::assignable(const ValueType& actual, const ValueType& expected) c
 				|| code == ValueTypeCode::ArrayRef || code == ValueTypeCode::ExnRef
 				|| code == ValueTypeCode::NullFuncRef || code == ValueTypeCode::NullExternRef
 				|| code == ValueTypeCode::NullExnRef || code == ValueTypeCode::NullRef
+				|| code == ValueTypeCode::StringRef || code == ValueTypeCode::StringViewWtf8
+				|| code == ValueTypeCode::StringViewWtf16 || code == ValueTypeCode::StringViewIter
 				|| code == ValueTypeCode::Ref || code == ValueTypeCode::RefNull;
 	};
 	if (!isRef(actual.opcode) || !isRef(expected.opcode))
@@ -292,6 +294,10 @@ bool Validator::isDefaultable(const ValueType& type) const
 	case ValueTypeCode::NullFuncRef:
 	case ValueTypeCode::NullExternRef:
 	case ValueTypeCode::NullExnRef:
+	case ValueTypeCode::StringRef:
+	case ValueTypeCode::StringViewWtf8:
+	case ValueTypeCode::StringViewWtf16:
+	case ValueTypeCode::StringViewIter:
 	case ValueTypeCode::RefNull:
 		return true;
 	case ValueTypeCode::Ref:
@@ -2499,6 +2505,121 @@ void Validator::dispatchStringIsUsvSequence()
 {
 	popExpect(ValueTypeCode::StringRef);
 	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+// ── stringview typing (docs/proposals/STRINGREF.md STR-4) ──────────────────
+
+void Validator::dispatchStringAsWtf8()
+{
+	popExpect(ValueTypeCode::StringRef);
+	pushValue(ValueType{ValueTypeCode::StringViewWtf8, -1});
+}
+
+void Validator::dispatchStringAsWtf16()
+{
+	popExpect(ValueTypeCode::StringRef);
+	pushValue(ValueType{ValueTypeCode::StringViewWtf16, -1});
+}
+
+void Validator::dispatchStringAsIter()
+{
+	popExpect(ValueTypeCode::StringRef);
+	pushValue(ValueType{ValueTypeCode::StringViewIter, -1});
+}
+
+void Validator::dispatchStringViewWtf8Advance()
+{
+	popExpect(ValueTypeCode::I32); // bytes
+	popExpect(ValueTypeCode::I32); // pos
+	popExpect(ValueTypeCode::StringViewWtf8);
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchStringViewWtf8EncodeUtf8(MemIdx arg)
+{
+	requireMemoryIndex(arg);
+	popExpect(ValueTypeCode::I32); // bytes
+	popExpect(ValueTypeCode::I32); // pos
+	popExpect(ValueTypeCode::I32); // ptr
+	popExpect(ValueTypeCode::StringViewWtf8);
+	pushValue(ValueType{ValueTypeCode::I32, -1}); // next_pos
+	pushValue(ValueType{ValueTypeCode::I32, -1}); // written
+}
+
+void Validator::dispatchStringViewWtf8EncodeLossyUtf8(MemIdx arg)
+{
+	dispatchStringViewWtf8EncodeUtf8(arg);
+}
+
+void Validator::dispatchStringViewWtf8EncodeWtf8(MemIdx arg)
+{
+	dispatchStringViewWtf8EncodeUtf8(arg);
+}
+
+void Validator::dispatchStringViewWtf8Slice()
+{
+	popExpect(ValueTypeCode::I32); // end
+	popExpect(ValueTypeCode::I32); // start
+	popExpect(ValueTypeCode::StringViewWtf8);
+	pushValue(ValueType{ValueTypeCode::StringRef, -1});
+}
+
+void Validator::dispatchStringViewWtf16Length()
+{
+	popExpect(ValueTypeCode::StringViewWtf16);
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchStringViewWtf16GetCodeUnit()
+{
+	popExpect(ValueTypeCode::I32); // pos
+	popExpect(ValueTypeCode::StringViewWtf16);
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchStringViewWtf16Encode(MemIdx arg)
+{
+	requireMemoryIndex(arg);
+	popExpect(ValueTypeCode::I32); // units
+	popExpect(ValueTypeCode::I32); // pos
+	popExpect(ValueTypeCode::I32); // ptr
+	popExpect(ValueTypeCode::StringViewWtf16);
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchStringViewWtf16Slice()
+{
+	popExpect(ValueTypeCode::I32); // end
+	popExpect(ValueTypeCode::I32); // start
+	popExpect(ValueTypeCode::StringViewWtf16);
+	pushValue(ValueType{ValueTypeCode::StringRef, -1});
+}
+
+void Validator::dispatchStringViewIterNext()
+{
+	popExpect(ValueTypeCode::StringViewIter);
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchStringViewIterAdvance()
+{
+	popExpect(ValueTypeCode::I32); // count
+	popExpect(ValueTypeCode::StringViewIter);
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchStringViewIterRewind()
+{
+	popExpect(ValueTypeCode::I32); // count
+	popExpect(ValueTypeCode::StringViewIter);
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchStringViewIterSlice()
+{
+	popExpect(ValueTypeCode::I32); // count
+	popExpect(ValueTypeCode::StringViewIter);
+	pushValue(ValueType{ValueTypeCode::StringRef, -1});
 }
 
 } // namespace WASM

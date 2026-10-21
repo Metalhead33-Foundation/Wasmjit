@@ -2751,12 +2751,32 @@ struct StringFixtureBuilder
 			payload.insert(payload.end(), {0x60, 0x00, 0x01, 0x7f});
 		section(0x01, payload);
 	}
+	void functionTypesWithResults(const std::vector<uint8_t>& resultCounts)
+	{
+		std::vector<uint8_t> payload;
+		appendLeb(payload, static_cast<uint32_t>(resultCounts.size()));
+		for (uint8_t results : resultCounts) {
+			payload.push_back(0x60);
+			payload.push_back(0x00);
+			payload.push_back(results);
+			for (uint8_t i = 0; i < results; ++i)
+				payload.push_back(0x7f);
+		}
+		section(0x01, payload);
+	}
 	void functions(std::size_t count)
 	{
 		std::vector<uint8_t> payload;
 		appendLeb(payload, static_cast<uint32_t>(count));
 		for (std::size_t i = 0; i < count; ++i)
 			payload.push_back(0x00);
+		section(0x03, payload);
+	}
+	void functions(const std::vector<uint8_t>& typeIndices)
+	{
+		std::vector<uint8_t> payload;
+		appendLeb(payload, static_cast<uint32_t>(typeIndices.size()));
+		payload.insert(payload.end(), typeIndices.begin(), typeIndices.end());
 		section(0x03, payload);
 	}
 	void exports(const std::vector<std::pair<std::string, uint32_t>>& entries)
@@ -2900,6 +2920,130 @@ TEST_CASE("string.new_utf8 is strict while new_lossy_utf8 replaces bad bytes")
 		encodeTrapped = true;
 	REQUIRE(encodeTrapped);
 	REQUIRE(encodeScope.kind() == WASM::TrapKind::InvalidString);
+}
+
+TEST_CASE("stringview WTF-8, WTF-16 and iterator positions run through the JIT")
+{
+	StringFixtureBuilder module;
+	const std::vector<uint8_t> bodies[] = {
+		// "€" (literal 0) and "A€" (literal 1).
+		{0x00, 0xfb, 0x82, 0x01, 0x00, 0xfb, 0x90, 0x01, 0x41, 0x00, 0x41, 0x7f,
+		 0xfb, 0x91, 0x01, 0x0b}, // ae: wtf8.advance(0,-1) = 3
+		{0x00, 0xfb, 0x82, 0x01, 0x01, 0xfb, 0x90, 0x01, 0x41, 0x02, 0x41, 0x00,
+		 0xfb, 0x91, 0x01, 0x0b}, // awi: pos 2 is inside €, advances to 4
+		{0x00, 0xfb, 0x82, 0x01, 0x01, 0xfb, 0x90, 0x01, 0x41, 0x00, 0x41, 0x02,
+		 0xfb, 0x91, 0x01, 0x0b}, // aw2: 0..2 -> highest boundary 1
+		{0x00, 0xfb, 0x82, 0x01, 0x00, 0xfb, 0x90, 0x01, 0x41, 0x00, 0x41, 0x03,
+		 0xfb, 0x93, 0x01, 0xfb, 0x84, 0x01, 0x0b}, // as: slice(0,3) -> measure 3
+		{0x00, 0xfb, 0x82, 0x01, 0x01, 0xfb, 0x98, 0x01, 0xfb, 0x99, 0x01, 0x0b}, // l16: 2
+		{0x00, 0xfb, 0x82, 0x01, 0x01, 0xfb, 0x98, 0x01, 0x41, 0x01,
+		 0xfb, 0x9a, 0x01, 0x0b}, // u16: code unit 1 = 0x20AC
+		{0x00, 0xfb, 0x82, 0x01, 0x01, 0xfb, 0x98, 0x01, 0x41, 0x00, 0x41, 0x02,
+		 0xfb, 0x9c, 0x01, 0xfb, 0x85, 0x01, 0x0b}, // s16: slice(0,2) -> measure 2
+		{0x00, 0xfb, 0x82, 0x01, 0x00, 0xfb, 0xa0, 0x01, 0xfb, 0xa1, 0x01, 0x0b}, // in: next = 0x20AC
+		{0x01, 0x01, 0x62,
+		 0xfb, 0x82, 0x01, 0x01, 0xfb, 0xa0, 0x01, 0x21, 0x00,
+		 0x20, 0x00, 0x41, 0x7f, 0xfb, 0xa2, 0x01, 0x1a,
+		 0x20, 0x00, 0x41, 0x01, 0xfb, 0xa3, 0x01, 0x1a,
+		 0x20, 0x00, 0x41, 0x01, 0xfb, 0xa4, 0x01, 0xfb, 0x84, 0x01,
+		 0x0b}, // is: iterator in local 0; advance(-1), rewind(1), slice(1) = "€"
+		{0x00, 0xfb, 0x82, 0x01, 0x01, 0xfb, 0xa0, 0x01, 0x41, 0x01,
+		 0xfb, 0xa2, 0x01, 0x0b} // ia: advance(1) = 1
+	};
+	module.functionTypes(std::size(bodies));
+	module.functions(std::size(bodies));
+	module.section(0x0e, {0x00, 0x02,
+		0x03, 0xe2, 0x82, 0xac,
+		0x04, 0x41, 0xe2, 0x82, 0xac});
+	module.exports({{"ae", 0}, {"awi", 1}, {"aw2", 2}, {"as", 3}, {"l16", 4},
+					{"u16", 5}, {"s16", 6}, {"in", 7}, {"is", 8}, {"ia", 9}});
+	std::vector<std::vector<uint8_t>> codeBodies(std::begin(bodies), std::end(bodies));
+	module.code(codeBodies);
+
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto instance = compiler.instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	const auto call = [&instance](const char* name) {
+		auto function = instance->exportedFunction(name);
+		REQUIRE(function.has_value());
+		return WASM::callCallable<int32_t>(*function);
+	};
+	REQUIRE(call("ae") == 3);
+	REQUIRE(call("awi") == 4);
+	REQUIRE(call("aw2") == 1);
+	REQUIRE(call("as") == 3);
+	REQUIRE(call("l16") == 2);
+	REQUIRE(call("u16") == 0x20AC);
+	REQUIRE(call("s16") == 2);
+	REQUIRE(call("in") == 0x20AC);
+	REQUIRE(call("is") == 3);
+	REQUIRE(call("ia") == 1);
+}
+
+TEST_CASE("stringview encode returns the next position and bytes written")
+{
+	StringFixtureBuilder module;
+	module.functionTypesWithResults({2, 1});
+	module.functions({0, 1});
+	module.section(0x05, {0x01, 0x00, 0x01});
+	// Literal "A€": encoding from position 1 writes only the three bytes of €.
+	module.section(0x0e, {0x00, 0x01, 0x04, 0x41, 0xe2, 0x82, 0xac});
+	module.exports({{"w8", 0}, {"w16", 1}});
+	module.code({
+		// w8: as_wtf8; encode_wtf8 mem0 at 32, pos 1, bytes -1.
+		{0x00, 0xfb, 0x82, 0x01, 0x00, 0xfb, 0x90, 0x01,
+		 0x41, 0x20, 0x41, 0x01, 0x41, 0x7f, 0xfb, 0x95, 0x01, 0x00, 0x0b},
+		// w16: as_wtf16; encode mem0 at 32, pos 1, len 1.
+		{0x00, 0xfb, 0x82, 0x01, 0x00, 0xfb, 0x98, 0x01,
+		 0x41, 0x20, 0x41, 0x01, 0x41, 0x01, 0xfb, 0x9b, 0x01, 0x00, 0x0b}
+	});
+
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto instance = compiler.instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+	const WASM::LinearMemory* memory = instance->context()->memories[0];
+	REQUIRE(memory != nullptr);
+
+	auto w8 = instance->exportedFunction("w8");
+	REQUIRE(w8.has_value());
+	alignas(16) unsigned char tuple[16] = {};
+	WASM::callCallableWithResults(*w8, tuple);
+	int32_t nextPosition = 0;
+	int32_t written = 0;
+	std::memcpy(&nextPosition, tuple, sizeof(nextPosition));
+	std::memcpy(&written, tuple + sizeof(nextPosition), sizeof(written));
+	REQUIRE(nextPosition == 4);
+	REQUIRE(written == 3);
+	REQUIRE(static_cast<uint8_t>(memory->memoryBase[32]) == 0xe2);
+	REQUIRE(static_cast<uint8_t>(memory->memoryBase[33]) == 0x82);
+	REQUIRE(static_cast<uint8_t>(memory->memoryBase[34]) == 0xac);
+
+	auto w16 = instance->exportedFunction("w16");
+	REQUIRE(w16.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*w16) == 1);
+	REQUIRE(static_cast<uint8_t>(memory->memoryBase[32]) == 0xac);
+	REQUIRE(static_cast<uint8_t>(memory->memoryBase[33]) == 0x20);
 }
 
 TEST_CASE("component type imports and exports enter the type index space")

@@ -1,6 +1,8 @@
 #include "WasmString.hpp"
 #include "WasmStore.hpp"
 #include "WasmTrap.hpp"
+#include <algorithm>
+#include <limits>
 #include <utility>
 
 namespace WASM {
@@ -104,6 +106,22 @@ StringObject* StringStore::create(std::vector<uint32_t> codePoints)
 		trap(TrapKind::OutOfMemory, "string allocation exceeds the allocation budget");
 	objects_.push_back(StringObject{std::move(codePoints)});
 	return &objects_.back();
+}
+
+StringViewObject* StringStore::createView(const StringObject* string)
+{
+	if (!Store::global().reserveBytes(sizeof(StringViewObject)))
+		trap(TrapKind::OutOfMemory, "string view allocation exceeds the allocation budget");
+	views_.push_back(StringViewObject{string});
+	return &views_.back();
+}
+
+StringIteratorObject* StringStore::createIterator(const StringObject* string)
+{
+	if (!Store::global().reserveBytes(sizeof(StringIteratorObject)))
+		trap(TrapKind::OutOfMemory, "string iterator allocation exceeds the allocation budget");
+	iterators_.push_back(StringIteratorObject{string});
+	return &iterators_.back();
 }
 
 bool decodeWtf8(const uint8_t* bytes, std::size_t size, std::vector<uint32_t>& out)
@@ -281,6 +299,243 @@ std::vector<uint32_t> concatCodePoints(const std::vector<uint32_t>& a,
 		out.erase(out.begin() + static_cast<std::ptrdiff_t>(a.size()));
 	}
 	return out;
+}
+
+namespace {
+
+// Index of the first WTF-8 codepoint boundary at or after `offset`.
+std::size_t wtf8BoundaryIndex(const std::vector<uint32_t>& codePoints, uint64_t offset)
+{
+	uint64_t boundary = 0;
+	for (std::size_t i = 0; i < codePoints.size(); ++i) {
+		if (offset <= boundary)
+			return i;
+		const uint32_t length = utf8Length(codePoints[i]);
+		if (offset < boundary + length)
+			return i + 1; // inside this codepoint: advance to the next boundary
+		boundary += length;
+	}
+	return codePoints.size();
+}
+
+uint32_t wtf8OffsetForIndex(const std::vector<uint32_t>& codePoints, std::size_t index)
+{
+	uint32_t offset = 0;
+	for (std::size_t i = 0; i < index && i < codePoints.size(); ++i)
+		offset += utf8Length(codePoints[i]);
+	return offset;
+}
+
+uint32_t wtf8LengthUnchecked(const std::vector<uint32_t>& codePoints)
+{
+	uint32_t total = 0;
+	for (uint32_t cp : codePoints)
+		total += utf8Length(cp);
+	return total;
+}
+
+uint32_t wtf16LengthUnchecked(const std::vector<uint32_t>& codePoints)
+{
+	uint32_t total = 0;
+	for (uint32_t cp : codePoints)
+		total += (cp > 0xFFFFu) ? 2u : 1u;
+	return total;
+}
+
+std::vector<uint32_t> sliceByCodePointIndex(const std::vector<uint32_t>& codePoints,
+											std::size_t start, std::size_t end)
+{
+	if (end < start)
+		return {};
+	return std::vector<uint32_t>(codePoints.begin() + static_cast<std::ptrdiff_t>(start),
+								 codePoints.begin() + static_cast<std::ptrdiff_t>(end));
+}
+
+} // namespace
+
+uint32_t wtf8Length(const std::vector<uint32_t>& codePoints)
+{
+	return wtf8LengthUnchecked(codePoints);
+}
+
+bool wtf8Advance(const std::vector<uint32_t>& codePoints, int32_t pos,
+				 int32_t bytes, uint32_t& nextPos)
+{
+	const uint32_t total = wtf8LengthUnchecked(codePoints);
+	uint32_t start = pos < 0 ? 0u : static_cast<uint32_t>(pos);
+	if (start > total)
+		start = total;
+	const std::size_t startIndex = wtf8BoundaryIndex(codePoints, start);
+	const uint32_t startOffset = wtf8OffsetForIndex(codePoints, startIndex);
+	if (bytes < 0) {
+		nextPos = total;
+		return true;
+	}
+	const uint64_t limit = static_cast<uint64_t>(start) + static_cast<uint32_t>(bytes);
+	if (limit > 0x7FFFFFFFu)
+		return false;
+	uint32_t current = startOffset;
+	for (std::size_t i = startIndex; i < codePoints.size(); ++i) {
+		const uint32_t next = current + utf8Length(codePoints[i]);
+		if (next > limit)
+			break;
+		current = next;
+	}
+	nextPos = current;
+	return true;
+}
+
+bool wtf8Encode(const std::vector<uint32_t>& codePoints, int32_t pos, int32_t bytes,
+				Wtf8Encoding encoding, uint32_t& nextPos, std::vector<uint8_t>& out)
+{
+	const uint32_t total = wtf8LengthUnchecked(codePoints);
+	uint32_t start = pos < 0 ? 0u : static_cast<uint32_t>(pos);
+	if (start > total)
+		start = total;
+	const std::size_t startIndex = wtf8BoundaryIndex(codePoints, start);
+	uint32_t current = wtf8OffsetForIndex(codePoints, startIndex);
+	out.clear();
+	uint64_t limit = std::numeric_limits<uint64_t>::max();
+	if (bytes >= 0) {
+		limit = static_cast<uint64_t>(start) + static_cast<uint32_t>(bytes);
+		if (limit > 0x7FFFFFFFu)
+			return false;
+	}
+	for (std::size_t i = startIndex; i < codePoints.size(); ++i) {
+		const uint32_t cp = codePoints[i];
+		uint32_t encoded = cp;
+		if (encoding == Wtf8Encoding::Utf8 && isSurrogate(cp))
+			return false;
+		if (encoding == Wtf8Encoding::LossyUtf8 && isSurrogate(cp))
+			encoded = kReplacement;
+		const uint32_t length = utf8Length(encoded);
+		if (static_cast<uint64_t>(current) + length > limit)
+			break;
+		appendUtf8(out, encoded);
+		current += length;
+	}
+	nextPos = current;
+	return true;
+}
+
+std::vector<uint32_t> sliceWtf8(const std::vector<uint32_t>& codePoints,
+								int32_t start, int32_t end)
+{
+	const uint32_t total = wtf8LengthUnchecked(codePoints);
+	uint32_t first = start < 0 ? 0u : static_cast<uint32_t>(start);
+	if (first > total)
+		first = total;
+	uint32_t last = end < 0 ? total : static_cast<uint32_t>(end);
+	if (last > total)
+		last = total;
+	return sliceByCodePointIndex(codePoints,
+			wtf8BoundaryIndex(codePoints, first), wtf8BoundaryIndex(codePoints, last));
+}
+
+bool wtf16CodeUnitAt(const std::vector<uint32_t>& codePoints, int32_t pos,
+					 uint32_t& unit)
+{
+	if (pos < 0)
+		return false;
+	const uint32_t target = static_cast<uint32_t>(pos);
+	uint32_t index = 0;
+	for (uint32_t cp : codePoints) {
+		if (cp > 0xFFFFu) {
+			const uint32_t value = cp - 0x10000u;
+			if (index == target) {
+				unit = 0xD800u | (value >> 10);
+				return true;
+			}
+			++index;
+			if (index == target) {
+				unit = 0xDC00u | (value & 0x3FFu);
+				return true;
+			}
+			++index;
+		} else {
+			if (index == target) {
+				unit = cp;
+				return true;
+			}
+			++index;
+		}
+	}
+	return false;
+}
+
+uint32_t wtf16Encode(const std::vector<uint32_t>& codePoints, int32_t pos,
+					 int32_t units, std::vector<uint8_t>& out)
+{
+	const uint32_t total = wtf16LengthUnchecked(codePoints);
+	uint32_t start = pos < 0 ? 0u : static_cast<uint32_t>(pos);
+	if (start > total)
+		start = total;
+	uint32_t limit = units < 0 ? total - start : static_cast<uint32_t>(units);
+	if (limit > total - start)
+		limit = total - start;
+
+	out.clear();
+	out.reserve(static_cast<std::size_t>(limit) * 2u);
+	uint32_t index = 0;
+	uint32_t written = 0;
+	const auto emit = [&](uint32_t codeUnit) {
+		if (index >= start && written < limit) {
+			out.push_back(static_cast<uint8_t>(codeUnit & 0xFFu));
+			out.push_back(static_cast<uint8_t>(codeUnit >> 8));
+			++written;
+		}
+		++index;
+	};
+	for (uint32_t cp : codePoints) {
+		if (cp > 0xFFFFu) {
+			const uint32_t value = cp - 0x10000u;
+			emit(0xD800u | (value >> 10));
+			emit(0xDC00u | (value & 0x3FFu));
+		} else {
+			emit(cp);
+		}
+	}
+	return written;
+}
+
+std::vector<uint32_t> sliceWtf16(const std::vector<uint32_t>& codePoints,
+								 int32_t start, int32_t end)
+{
+	const uint32_t total = wtf16LengthUnchecked(codePoints);
+	uint32_t first = start < 0 ? 0u : static_cast<uint32_t>(start);
+	if (first > total)
+		first = total;
+	uint32_t last = end < 0 ? total : static_cast<uint32_t>(end);
+	if (last > total)
+		last = total;
+	if (last < first)
+		return {};
+
+	// Slicing by code units may cut a surrogate pair; decoding the selected
+	// units with `decodeWtf16` turns a lone half into an isolated surrogate and
+	// combines a complete pair, which is exactly the string model.
+	std::vector<uint8_t> bytes;
+	encodeWtf16(codePoints, bytes);
+	std::vector<uint32_t> out;
+	if (last > first)
+		decodeWtf16(bytes.data() + static_cast<std::size_t>(first) * 2u,
+					last - first, out);
+	return out;
+}
+
+std::vector<uint32_t> sliceCodePoints(const std::vector<uint32_t>& codePoints,
+									  int32_t start, int32_t count)
+{
+	std::size_t first = start < 0 ? 0u : static_cast<std::size_t>(start);
+	if (first > codePoints.size())
+		first = codePoints.size();
+	const std::size_t take = count < 0
+			? codePoints.size() - first
+			: std::min<std::size_t>(static_cast<std::size_t>(count),
+									codePoints.size() - first);
+	return std::vector<uint32_t>(
+			codePoints.begin() + static_cast<std::ptrdiff_t>(first),
+			codePoints.begin() + static_cast<std::ptrdiff_t>(first + take));
 }
 
 } // namespace WASM

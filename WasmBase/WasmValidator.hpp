@@ -187,6 +187,24 @@ private:
 	void dispatchStringConcat() override;
 	void dispatchStringEq() override;
 	void dispatchStringIsUsvSequence() override;
+
+	// stringview facility (docs/proposals/STRINGREF.md STR-4)
+	void dispatchStringAsWtf8() override;
+	void dispatchStringViewWtf8Advance() override;
+	void dispatchStringViewWtf8EncodeUtf8(MemIdx arg) override;
+	void dispatchStringViewWtf8Slice() override;
+	void dispatchStringViewWtf8EncodeLossyUtf8(MemIdx arg) override;
+	void dispatchStringViewWtf8EncodeWtf8(MemIdx arg) override;
+	void dispatchStringAsWtf16() override;
+	void dispatchStringViewWtf16Length() override;
+	void dispatchStringViewWtf16GetCodeUnit() override;
+	void dispatchStringViewWtf16Encode(MemIdx arg) override;
+	void dispatchStringViewWtf16Slice() override;
+	void dispatchStringAsIter() override;
+	void dispatchStringViewIterNext() override;
+	void dispatchStringViewIterAdvance() override;
+	void dispatchStringViewIterRewind() override;
+	void dispatchStringViewIterSlice() override;
 	void onUnhandledOpcode(const char* name) override;
 
 	// Immediate-only checks (no operand stack yet).
