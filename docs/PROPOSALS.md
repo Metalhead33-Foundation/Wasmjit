@@ -207,7 +207,7 @@ authoritative per-item status is each note's §7 plan.
 | `FUNCTION_REFERENCES.md` | 9 | canonical | none | — | conforms exactly |
 | `GC_EXTENSIONS.md` | 9 | canonical | none | — | conforms exactly |
 | `INSTRUMENT_TRACING.md` | 9 | canonical | none | — | conforms exactly |
-| `JS_INTEGRATION.md` | 9 | canonical | none | — | conforms (seven-proposal survey; external-boundary study) |
+| `JS_INTEGRATION.md` | 9 | canonical | none | — | conforms (seven-proposal survey; external-boundary study; generic `HostBridge` shipped, no JS semantics) |
 | `MEMORY64.md` | 9 | canonical | none | — | conforms exactly |
 | `MEMORY_CONTROL.md` | 9 | canonical | none | — | conforms exactly |
 | `MULTI_MEMORY.md` | 9 | canonical | none | — | conforms exactly |

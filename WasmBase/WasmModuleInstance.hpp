@@ -3,6 +3,7 @@
 #include "WasmModule.hpp"
 #include "WasmGcHeader.hpp"
 #include "WasmGcHeap.hpp"
+#include "WasmHostBridge.hpp"
 #include "WasmString.hpp"
 #include "WasmVMContext.hpp"
 #include "WasmImport.hpp"
@@ -62,6 +63,11 @@ struct ModuleInstanceInternals {
 	// The GC heap region set this instance allocates from. Owned by
 	// Store::gc() and released in ~ModuleInstance (bulk reclamation, GC-2).
 	GcHeap::RegionSet* gcSet = nullptr;
+	// True once the constructor has completed with a `HostBridge` installed.
+	// It gates the matching `instanceDestroying` callback, so a constructor that
+	// throws before publishing the bridge does not produce a half-initialised
+	// teardown callback.
+	bool hostBridgeActive = false;
 	// Reference-counting bookkeeping (docs/proposals/GC.md RC-1). Counts are
 	// for tests/diagnostics; reclamation is deferred, see ModuleInstance.
 	uint64_t gcAllocatedObjects = 0;
@@ -169,12 +175,19 @@ public:
 	// traversal, shared by the reclaimer and the trial-deletion DFS so the two
 	// cannot drift (docs/proposals/GC.md §6.3 / H1).
 	void childSlotsOf(void* ref, TypeId typeId, std::vector<uint8_t*>& slots);
-	ModuleInstance(const Module& module, ImportResolver& importResolver);
+	// `hostBridge` is optional and borrowed. Install it here, before
+	// instantiation, so initialisers and the start function see it; pass
+	// nullptr for the dependency-free default.
+	ModuleInstance(const Module& module, ImportResolver& importResolver,
+			const HostBridge* hostBridge = nullptr);
 	// Releases the instance's GC region set (bulk reclamation, GC-2).
 	~ModuleInstance();
 
 	VMContext* context() { return &ctx; }
 	const VMContext* context() const { return &ctx; }
+	// The optional host bridge installed for this instance, or nullptr for the
+	// default dependency-free boundary.
+	const HostBridge* hostBridge() const { return ctx.hostBridge; }
 	std::optional<Callable> exportedFunction(std::string_view name) const;
 	std::optional<LinearMemory*> exportedMemory(std::string_view name) const;
 	void registerExports(ImportRegistrar& registrar, std::string_view moduleName) const;
@@ -227,10 +240,27 @@ public:
 	// underflow. `refStore` is the single write barrier for a reference-typed
 	// slot: it retains `newRef` first (so self-assignment is safe), stores it,
 	// then releases the value it overwrote. Non-GC references (i31 immediates,
-	// externrefs, funcrefs) pass through clone/store and are no-ops for drop.
+	// externrefs, funcrefs) pass through clone/store; when an optional
+	// `HostBridge` is installed, a host `externref` additionally goes through
+	// its retain/release callbacks (see `WasmHostBridge.hpp`).
 	void* refClone(void* ref);
 	void  refDrop(void* ref);
 	void  refStore(void** slot, void* newRef);
+
+	// ── Optional host boundary ─────────────────────────────────────────
+	// True when `ref` is classified as an embedder-owned host reference. The
+	// bridge's `isHostReference` predicate wins when supplied; otherwise the
+	// fallback is "not null, not an i31 immediate, and not owned by the GC
+	// heap, the StringStore or a registered Callable".
+	bool isHostReference(const void* ref) const;
+	void retainHostReference(void* ref);
+	void releaseHostReference(void* ref);
+
+	// Host identity for two opaque references. Returns true for pointer
+	// equality, then delegates to `HostBridge::references.equals` when
+	// installed. This is an embedder utility, not Wasm `ref.eq` (which is
+	// defined only for `eqref`, never `externref`).
+	bool hostReferenceEquals(const void* lhs, const void* rhs) const;
 
 	// Diagnostics for the reference-counting test. `gcRefCount` returns 0 for
 	// a reference that is not counted (or unknown).
@@ -269,9 +299,11 @@ public:
 	// The main entry point. Creates an Instance (which runs the constructor
 	// above, handling imports/memory/globals), then calls compilefunctions()
 	// to fill in the compiled function handles, then runs the start function
-	// if one is present.
+	// if one is present. `hostBridge` is an optional, borrowed embedder hook;
+	// nullptr is the default and keeps the core dependency-free.
 	std::unique_ptr<ModuleInstance> instantiate(
-			const Module& module, ImportResolver& resolver);
+			const Module& module, ImportResolver& resolver,
+			const HostBridge* hostBridge = nullptr);
 
 protected:
 	Value evalConstantExpr(const std::span<const std::byte>& expr, ModuleInstance& instance);

@@ -25,6 +25,7 @@
 #include "WasmBase/WasmComponent.hpp"
 #include "WasmBase/WasmGcHeader.hpp"
 #include "WasmBase/WasmGcHeap.hpp"
+#include "WasmBase/WasmHostBridge.hpp"
 #include "WasmBase/WasmExn.hpp"
 #include "WasmBase/WasmOpcode.hpp"
 #include "WasmBase/WasmStore.hpp"
@@ -557,6 +558,202 @@ TEST_CASE("imported mutable externref global aliases the exporter across modules
 	// ...and a second import set updates the same cell again.
 	WASM::callCallable<void>(*bSet, hostRef);
 	REQUIRE(WASM::callCallable<void*>(*aGet) == hostRef);
+}
+
+namespace {
+
+// A deliberately engine-neutral stand-in for a JavaScript/other-host object.
+// The bridge only ever sees the opaque address and the counts this test keeps.
+struct HostBridgeHandle {
+	int refs = 1;
+	int value = 0;
+};
+
+struct HostBridgeProbe {
+	int created = 0;
+	int destroyed = 0;
+	int startCalls = 0;
+	int retains = 0;
+	int releases = 0;
+	int equalsCalls = 0;
+};
+
+void hostBridgeCreated(void* userData, WASM::VMContext* context)
+{
+	auto* probe = static_cast<HostBridgeProbe*>(userData);
+	++probe->created;
+	// Publish per-instance state before the start function runs.
+	context->hostData = probe;
+}
+
+void hostBridgeDestroying(void* userData, WASM::VMContext*)
+{
+	++static_cast<HostBridgeProbe*>(userData)->destroyed;
+}
+
+void hostBridgeRetain(void* userData, WASM::VMContext*, void* ref)
+{
+	auto* probe = static_cast<HostBridgeProbe*>(userData);
+	++probe->retains;
+	++static_cast<HostBridgeHandle*>(ref)->refs;
+}
+
+void hostBridgeRelease(void* userData, WASM::VMContext*, void* ref)
+{
+	auto* probe = static_cast<HostBridgeProbe*>(userData);
+	++probe->releases;
+	--static_cast<HostBridgeHandle*>(ref)->refs;
+}
+
+bool hostBridgeEquals(void* userData, WASM::VMContext*,
+		const void* lhs, const void* rhs)
+{
+	++static_cast<HostBridgeProbe*>(userData)->equalsCalls;
+	return static_cast<const HostBridgeHandle*>(lhs)->value
+			== static_cast<const HostBridgeHandle*>(rhs)->value;
+}
+
+void recordHostBridgeStart(WASM::VMContext* context, int32_t value)
+{
+	auto* probe = static_cast<HostBridgeProbe*>(context->hostData);
+	if (probe != nullptr)
+		probe->startCalls += value;
+}
+
+int32_t wasmJsStringLength(WASM::VMContext*, void*)
+{
+	// No JavaScript engine is linked here: this is the adapter slow path in
+	// miniature, proving that `wasm:js-string.length` is an ordinary import.
+	return 7;
+}
+
+} // namespace
+
+TEST_CASE("no host bridge is the default boundary")
+{
+	WASM::Module module = loadTestModule("add_core");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	REQUIRE(instance->hostBridge() == nullptr);
+	REQUIRE(instance->context()->hostBridge == nullptr);
+
+	auto add = instance->exportedFunction("add");
+	REQUIRE(add.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*add, int32_t(20), int32_t(22)) == 42);
+}
+
+TEST_CASE("host bridge lifecycle runs before start and before teardown")
+{
+	WASM::Module module = loadTestModule("host_bridge_start");
+	WASM::RegistryImportResolver imports;
+	registerHostFunction(imports, "env", "record_start", recordHostBridgeStart);
+
+	HostBridgeProbe probe;
+	WASM::HostBridge bridge;
+	bridge.userData = &probe;
+	bridge.instanceCreated = hostBridgeCreated;
+	bridge.instanceDestroying = hostBridgeDestroying;
+
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports, &bridge);
+	REQUIRE(instance.get() != nullptr);
+	REQUIRE(instance->hostBridge() == &bridge);
+	REQUIRE(probe.created == 1);
+	REQUIRE(probe.startCalls == 1);
+	REQUIRE(instance->context()->hostData == &probe);
+
+	auto answer = instance->exportedFunction("answer");
+	REQUIRE(answer.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*answer) == 42);
+
+	instance.reset();
+	REQUIRE(probe.destroyed == 1);
+}
+
+TEST_CASE("host bridge reference callbacks participate in externref barriers")
+{
+	WASM::Module module = loadTestModule("externref_global_a");
+	WASM::RegistryImportResolver imports;
+
+	HostBridgeHandle first{1, 7};
+	HostBridgeHandle second{1, 7};
+	HostBridgeProbe probe;
+	WASM::HostBridge bridge;
+	bridge.userData = &probe;
+	bridge.references.retain = hostBridgeRetain;
+	bridge.references.release = hostBridgeRelease;
+	bridge.references.equals = hostBridgeEquals;
+	bridge.instanceDestroying = hostBridgeDestroying;
+
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports, &bridge);
+	REQUIRE(instance.get() != nullptr);
+
+	auto set = instance->exportedFunction("set");
+	auto get = instance->exportedFunction("get");
+	auto isNull = instance->exportedFunction("is_null");
+	REQUIRE(set.has_value());
+	REQUIRE(get.has_value());
+	REQUIRE(isNull.has_value());
+
+	REQUIRE(WASM::callCallable<int32_t>(*isNull) == 1);
+	WASM::callCallable<void>(*set, static_cast<void*>(&first));
+	REQUIRE(first.refs == 2); // the host's own count plus the global's
+	REQUIRE(probe.retains >= 2);
+	void* result = WASM::callCallable<void*>(*get);
+	REQUIRE(result == &first);
+	// A reference result returned through callCallable carries the count the
+	// Wasm call produced; the embedder owns that count and must drop it.
+	instance->refDrop(result);
+	REQUIRE(first.refs == 2);
+
+	// Self-assignment must balance through the write barrier.
+	WASM::callCallable<void>(*set, static_cast<void*>(&first));
+	REQUIRE(first.refs == 2);
+
+	// Overwriting the global releases the value it held.
+	WASM::callCallable<void>(*set, static_cast<void*>(nullptr));
+	REQUIRE(first.refs == 1);
+	REQUIRE(WASM::callCallable<int32_t>(*isNull) == 1);
+
+	// Host identity can be broader than pointer identity (two handles to one
+	// host-language value); `ref.eq` itself remains an eqref operation.
+	REQUIRE(instance->hostReferenceEquals(&first, &first));
+	REQUIRE(instance->hostReferenceEquals(&first, &second));
+	REQUIRE(probe.equalsCalls == 1);
+
+	WASM::callCallable<void>(*set, static_cast<void*>(&first));
+	REQUIRE(first.refs == 2);
+	instance.reset();
+	REQUIRE(probe.destroyed == 1);
+}
+
+TEST_CASE("wasm js string builtin is an ordinary import, not engine support")
+{
+	WASM::Module module = loadTestModule("wasm_js_string_length");
+	auto backend = TestBackend::create();
+
+	// No JavaScript engine, and no special `wasm:` namespace: an unmatched
+	// import fails exactly like any other unresolved import.
+	WASM::RegistryImportResolver missing;
+	REQUIRE_THROWS(backend->instantiator().instantiate(module, missing));
+
+	WASM::RegistryImportResolver adapter;
+	registerHostFunction(adapter, "wasm:js-string", "length", wasmJsStringLength);
+	auto instance = backend->instantiator().instantiate(module, adapter);
+	REQUIRE(instance.get() != nullptr);
+
+	auto len = instance->exportedFunction("len");
+	auto identity = instance->exportedFunction("identity");
+	REQUIRE(len.has_value());
+	REQUIRE(identity.has_value());
+	int hostObject = 0;
+	REQUIRE(WASM::callCallable<int32_t>(*len, static_cast<void*>(&hostObject)) == 7);
+	REQUIRE(WASM::callCallable<void*>(*identity, static_cast<void*>(&hostObject))
+			== &hostObject);
 }
 
 TEST_CASE("imported global type and mutability are matched at link time")

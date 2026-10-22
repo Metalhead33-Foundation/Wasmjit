@@ -56,6 +56,7 @@ HEADERS += \
     WasmGcHeader.hpp \
     WasmGcHeap.hpp \
     WasmCanonicalType.hpp \
+    WasmHostBridge.hpp \
     WasmImport.hpp \
     WasmMemory.hpp \
     WasmModule.hpp \

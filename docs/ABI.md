@@ -189,6 +189,51 @@ void my_native_func(WASM::VMContext* vm, int32_t arg1, double arg2) {
 }
 ```
 
+### External host adapter (optional `HostBridge`)
+
+The engine has no JavaScript engine, host-language runtime, or `JSValue` type.
+An embedder that wants to bridge `externref` values to JavaScript, Lua, Python or
+another interpreter installs an optional `WASM::HostBridge` before
+instantiation. It is a plain aggregate of function pointers; every callback and
+the `VMContext::hostBridge` pointer default to `nullptr`:
+
+```cpp
+WASM::HostBridge bridge;
+bridge.userData           = &adapter;
+bridge.references.retain  = adapterRetain;   // optional, paired with release
+bridge.references.release = adapterRelease;
+bridge.references.equals  = adapterEquals;   // optional
+bridge.references.isHostReference = adapterOwns; // optional predicate
+bridge.instanceCreated    = publishHostData; // optional, before start
+bridge.instanceDestroying = dropArena;       // optional, before GC teardown
+
+auto instance = compiler.instantiate(module, resolver, &bridge);
+```
+
+The bridge is borrowed and must outlive the instance. With no bridge the old
+behaviour is unchanged: an `externref` is an opaque `void*` and
+`refClone`/`refDrop` do not call host code. With both `retain` and `release`
+installed, the engine's existing reference barriers call them for host
+references; `isHostReference` controls classification, with a conservative
+fallback when omitted (not an i31 immediate, GC-heap object, StringStore object
+or registered `Callable`). A reference callback may run during construction
+(global initialisers and segments) before `instanceCreated`, so it must use
+`userData` for any state it needs that early. `instanceCreated` runs after
+initialisation and before `start`, so `hostData` is available to imports called
+from `start`; `instanceDestroying` runs at the beginning of `~ModuleInstance`,
+before the GC region set is unmapped, and is the designated place to release
+per-instance host roots. Neither lifecycle callback may throw, trap, or re-enter
+Wasm.
+
+A reference returned by `callCallable` carries the count produced by the Wasm
+call; the embedder owns that count and must drop it (or use its own arena).
+`ModuleInstance::hostReferenceEquals` delegates to `references.equals`; Wasm
+`ref.eq` remains an `eqref` operation and is not changed by the bridge. This is
+a generic host-boundary contract, not an implementation of any JS API proposal:
+BigInt conversion, `wasm:js-*` builtins, JS Types wrappers and ESM loading stay
+in the external adapter. See
+[`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) §4.3.
+
 ### Cross-module Wasm function imports
 
 Register with `context` pointing to the **callee module instance's** `VMContext`.
@@ -229,6 +274,7 @@ Plain-old-data struct passed as arg0 to every JIT function.
 | `importedFunctions`    | `Callable*`     | Imported function handles (import section order)       |
 | `importedFunctionCount`| `uint32_t`      | Number of imported functions                           |
 | `hostData`             | `void*`         | Opaque pointer for embedder state                      |
+| `hostBridge`           | `const HostBridge*` | Optional, borrowed host boundary; `nullptr` is the default |
 
 ### Linear memory ownership (`Store`)
 
@@ -333,9 +379,10 @@ Universal function reference stored in tables and import storage.
 | File | What |
 |------|------|
 | `WasmBase/WasmVMContext.hpp` | VMContext struct |
+| `WasmBase/WasmHostBridge.hpp` | Optional host boundary (reference + lifecycle callbacks) |
 | `WasmBase/WasmValue.hpp` | Callable struct and `callCallable` helper |
 | `WasmBase/WasmExn.hpp` | Exception objects, the pending-exception slot and the tag-id accessor |
 | `LibJit/LibjitOpcodeDispatcher.cpp` | `dispatchCall` (line ~1027), `dispatchCallIndirect` (~1061), `dispatchCallThroughCallable` (~612) |
 | `LibJit/LibjitModuleCompiler.cpp` | `declareFunctions` sets internal `Callable::context` |
 | `WasmBase/WasmModuleInstance.cpp` | `resolveImports` stores resolved `Callable`s |
-| `Test/main.cpp` | `native_debug` test demonstrates native import pattern |
+| `Test/main.cpp` | `native_debug` demonstrates native import pattern; host-bridge tests use no JS engine |

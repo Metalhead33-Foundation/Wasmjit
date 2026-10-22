@@ -1,18 +1,22 @@
 # JavaScript-Related Proposals — Implementation Notes, Spec Status, and Deliberate Non-Integration
 
-Status: design note / implementation reference (revision 1 — consolidated survey
+Status: design note / implementation reference (revision 2 — consolidated survey
 of JS-BigInt integration, JS String Builtins, JSPI, custom descriptors, ESM
-integration, JS Primitive Builtins and JS Types. **No JavaScript support is
-implemented or planned inside the engine.** The only proposed surface is an
-opt-in, embedder-owned adapter built from the existing import/export boundary).
+integration, JS Primitive Builtins and JS Types, plus the shipped generic
+host-bridge groundwork. **No JavaScript support is implemented or planned inside
+the engine.** The only proposed surface is an opt-in, embedder-owned adapter
+built from the existing import/export boundary and the optional `HostBridge`).
 
 Audience: anyone touching `ImportResolver`, `Callable`, `VMContext`,
-`externref`, `Module` metadata, or considering a QuickJS/MuJS/other adapter.
+`HostBridge`, `externref`, `Module` metadata, or considering a
+QuickJS/MuJS/other adapter.
 
 Follows the same split as [`GC.md`](GC.md) / [`SIMD.md`](SIMD.md) /
 [`THREADS.md`](THREADS.md), with the grouped-proposal allowance of
 [`SMALL_PROPOSALS.md`](SMALL_PROPOSALS.md) (seven proposals in one note).
-Contains **no new code**.
+The only shipped code is the generic, JavaScript-free
+[`WasmHostBridge.hpp`](../../WasmBase/WasmHostBridge.hpp) hook; no JS semantic
+is implemented.
 
 ## 1. Document map
 
@@ -289,12 +293,11 @@ The core rule is therefore narrower than "support JavaScript":
   caller's `VMContext*` as argument zero. Non-null context is reserved for
   compiled Wasm functions and is burned in as a constant on a direct call.
 - `VMContext::hostData` is an opaque `void*` for embedder state. A JS adapter
-  stores its per-instance state there and never exposes it to the JIT.
-  Note that `hostData` is normally installed *after* `instantiate()` returns,
-  while a module's `start` function runs before that: an adapter whose imports
-  can be called from `start` must use a pre-instantiation/thread-local context,
-  or the engine must offer a pre-start hook. This is a generic lifecycle detail,
-  not a JavaScript one.
+  stores its per-instance state there and never exposes it to the JIT. Use
+  `HostBridge::instanceCreated` to publish it *before* the module's `start`
+  function runs; `hostData` set only after `instantiate()` returns is too late
+  for imports called from `start`. This is a generic lifecycle detail, not a
+  JavaScript one.
 - `callCallable<Ret>` and `callCallableWithResults` invoke a host or Wasm
   function through the same ABI. Multiple results use the trailing result
   buffer documented in `ABI.md` "Multiple Results".
@@ -324,7 +327,56 @@ see a JS engine type.
   `ModuleInstance::exportedFunction`/`registerExports`. There is no stable
   `ImportDescriptor`/`ExportDescriptor` API yet (JS2).
 
-### 4.3 What is deliberately absent
+### 4.3 The optional host bridge (shipped)
+
+`WasmBase/WasmHostBridge.hpp` is the first generic host-boundary contract. It is
+a plain aggregate of optional function pointers, deliberately not a virtual
+interface, and it contains no JS or engine-specific type:
+
+```cpp
+WASM::HostBridge bridge;
+bridge.userData          = &adapter;          // adapter-owned state
+bridge.references.retain = retainHandle;     // optional
+bridge.references.release = releaseHandle;   // optional
+bridge.references.equals = handlesEqual;     // optional
+bridge.instanceCreated   = publishHostData;  // optional, before start
+bridge.instanceDestroying = dropArena;       // optional, before GC teardown
+
+auto instance = compiler.instantiate(module, imports, &bridge);
+```
+
+- **Default is `nullptr`.** `ModuleInstantiator::instantiate(module, resolver)`
+  is unchanged; no bridge means host references remain opaque `void*` values,
+  with no callback, allocation, header or dependency. The bridge is borrowed and
+  must outlive the instance.
+- **Pre-start lifecycle.** `instanceCreated` runs after imports/globals/tables
+  are initialised and before `start`; an adapter can publish `hostData` there.
+  `instanceDestroying` runs once at the start of `~ModuleInstance`, before the
+  GC region set is unmapped. It is where an adapter drops its per-instance
+  handle arena; the engine deliberately does not walk a dying graph calling
+  `release` for every host pointer.
+- **Reference barriers.** With both `retain` and `release` installed, the
+  engine's existing `refClone`/`refStore`/`refDrop` barriers call them for
+  opaque host references. `HostBridge::ReferenceHooks::isHostReference` lets an
+  adapter supply the classification; without it, the engine uses the
+  conservative fallback (non-null, not an i31 immediate, not owned by the GC
+  heap, the StringStore or a registered `Callable`). A one-sided retain/release
+  pair is treated as disabled. A reference callback may run during construction
+  (global initialisers/segments), before `instanceCreated`, so it must use
+  `bridge.userData` for state it needs that early.
+- **Identity.** `ModuleInstance::hostReferenceEquals` delegates to
+  `references.equals` when installed. Wasm `ref.eq` is unchanged: it is defined
+  for `eqref`, not `externref`.
+- **Call results.** A reference returned through `callCallable` carries the count
+  the Wasm call produced. The embedder owns that count and must drop it (or use
+  its own arena); this is the same ownership rule as any other engine-produced
+  reference.
+
+This closes the *generic* part of JS1 without changing the reference
+representation (`ABI.md` R2/R3 remains staged). It also gives non-JS hosts — a
+Lua, Python or bespoke interpreter embedding — the same lifetime hook.
+
+### 4.4 What is deliberately absent
 
 - No JavaScript engine is linked or exposed by the engine, and no JS header,
   `JSValue` or JS API object appears in `WasmBase/` or a backend. The JS
@@ -334,10 +386,11 @@ see a JS engine type.
   like any other import and fails if the resolver does not provide it.
 - No compile-time builtin option, eager builtin validation, or
   `Module.imports()` filtering (those are JS-API behaviours).
-- No `externref` retain/release/identity hooks. `ModuleInstance::refClone` and
-  `refDrop` are no-ops for non-GC references, so an adapter that stores handles
-  in Wasm tables/globals must keep its own arena alive for the instance's
-  lifetime or use the future host-reference contract (JS1).
+- No *default* `externref` retain/release/identity policy. The optional
+  `HostBridge` is the only contract; when it is not installed, `refClone` and
+  `refDrop` remain no-ops for non-GC references and an adapter must keep its own
+  arena alive for the instance's lifetime. `HostBridge` does not add a tagged
+  reference representation, automatic graph walk, or a JS object model.
 - No JSPI suspension, custom-descriptor types/instructions, ESM loader, or JS
   type-reflection objects.
 
@@ -349,7 +402,7 @@ contract is needed, or whether the proposal is declined.
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| JS1 | **`externref` has no host identity or lifetime contract.** It is an opaque `void*`; equality is pointer equality, and `refClone`/`refDrop` do nothing for it. A JS object wrapper cannot know when the engine has dropped its last reference, and two handles to one JS object need not compare equal. | `WasmValue.hpp` (`Value::ref`), `WasmModuleInstance.cpp` (`refClone`, `refDrop`, `gcRefcountSlot`); `ABI.md` "Reference and Global Representation" (`R2`/`R3` staged); `REFERENCE_TYPES.md` RT1; `GC.md` R4/GC-8. | High for safe JS handle interop |
+| JS1 | **`externref` has no host identity or lifetime contract by default.** It is an opaque `void*`; equality is pointer equality, and `refClone`/`refDrop` do nothing for it unless an optional `HostBridge` is installed. A JS object wrapper cannot know when the engine has dropped its last reference, and two handles to one JS object need not compare equal. | `WasmValue.hpp` (`Value::ref`); `WasmHostBridge.hpp` (optional retain/release/equals + teardown); `WasmModuleInstance.cpp` (`refClone`, `refDrop`, `gcRefcountSlot`); `ABI.md` "External host adapter"; `REFERENCE_TYPES.md` RT1; `GC.md` R4/GC-8. | High for safe JS handle interop; addressed when the adapter opts in |
 | JS2 | **No stable type-reflection/descriptor API.** `Export` is only `{name, kind, index}`; import vectors expose raw parser structures. A host can read `Module` internals, but there is no `ImportDescriptor`/`ExportDescriptor`/`ExternType` view keyed by `TypeId`. JS Types needs one. | `WasmBase/WasmType.hpp` (`struct Export`), `WasmBase/WasmModule.hpp`; `TYPE_MODEL.md` TM-6/TM-10 still pending. | Medium |
 | JS3 | **No `wasm:` builtin policy.** The engine does not reserve `wasm:`, perform eager link-time builtin checks, hide builtin imports from metadata, or give a builtin a per-instantiation identity. It treats `wasm:js-string` as an ordinary import and leaves all semantics to the resolver. | `WasmImport.hpp` (name-based resolver only); no `wasm:` string in `WasmBase`/`LibJit`; `GC.md` §10.5 calls it a resolver problem. | Medium (acceptable slow path) |
 | JS4 | **JSPI cannot suspend a Wasm frame.** There is no continuation, stack capture, event-loop integration, or resume path; `STACK_SWITCHING.md` is 0%. An external hook cannot create the missing continuation. | `STACK_SWITCHING.md` §5 (0%, no `cont`/`0xE0`–`0xE6`); current execution uses the native C stack. | High for JSPI; declined |
@@ -393,12 +446,13 @@ are recorded as declined (`JS-4`), not disguised as adapter work.
 | Functions | `Callable` native ABI; `ImportResolver::resolveFunction`; multi-result buffer | One thunk per signature; JS call; result conversion; trap/exception conversion | No |
 | Imports | `(moduleName, fieldName)` lookup; `wasm:` is just a string | Policy for `wasm:` names; implementation of each builtin's exact semantics | No |
 | Exports | `ModuleInstance::exportedFunction` / `registerExports`; `Callable` | JS wrapper/`WebAssembly.Function` object; argument conversion | No |
+| Lifecycle | `HostBridge::instanceCreated` / `instanceDestroying`; `VMContext::hostData` | Publish per-instance state; release the handle arena | No |
 | Metadata | `Module` import/export vectors, `TypeId`, `CoreTypeView` | JS type objects / `.type()` accessors | No |
 | Control | `VMContext` / native C stack | JSPI: impossible without continuation support | No, but **unavailable** |
 | Loading | none | ESM URL resolution, graph, instantiation | No; embedder-only |
 
-The first five layers are a complete **synchronous** boundary. The last two are
-why the verdict is not simply "all proposals are hookable".
+The first six layers are a complete **synchronous** boundary. Control and
+loading are why the verdict is not simply "all proposals are hookable".
 
 ### 6.3 Backend-agnostic path
 
@@ -517,11 +571,12 @@ pretend to be a JS-API-conforming engine.
 |---|---|---|---|
 | JSD1 | **No JavaScript engine, JS API, or JS header in the core or a backend.** | §3: the JS API is optional; `COMPONENT_MODEL.md` CMD6 already scopes the project to a C++ embedder. | Zero link/dependency surface; every backend stays JS-agnostic. |
 | JSD2 | **`wasm:` imports are ordinary imports; no eager compile-time application, metadata hiding, or inlining.** | §3: those are JS-API behaviours; the binary is still a valid set of host imports. | A small, honest resolver contract; no duplicate builtin table in the engine. |
-| JSD3 | **`externref` remains opaque; no JS object model or automatic release in the first adapter.** | §3: reference representation is free (`REFERENCE_TYPES.md` §3); host objects may be owned by an instance-lifetime arena. | No premature ABI change; JS1 can be closed generically later. |
+| JSD3 | **`externref` remains opaque; host lifetime is opt-in through `HostBridge`, not an automatic JS release.** | §3: reference representation is free (`REFERENCE_TYPES.md` §3); the bridge is borrowed and every callback is optional. | No premature ABI change; a no-bridge instance keeps exactly the old behaviour, and a JS adapter can use an instance-lifetime arena. |
 | JSD4 | **No JSPI, Custom Descriptors, or ESM in the engine.** | §3: an engine may reject unsupported features; JSPI needs stack switching and descriptors need GC type support. | No false conformance claims and no half-implemented control flow. |
 | JSD5 | **One thunk per signature; no type-erased JS call in `WasmBase`.** | §3: the calling convention is the engine's contract; `Callable`+`TypeId` already carries the signature. | The adapter can be written with templates/hand code; core stays small. |
 | JSD6 | **Metadata is exposed as `TypeId`/`CoreTypeView`/module data, not as `WebAssembly` objects.** | §3: JS Types only constrains the JS API; a C++ embedder may expose raw descriptors. | The engine avoids a parallel type-object model; a host adapter can still provide one. |
-| JSD7 | **No JS test target; the first gate uses fake host values.** | §3: no JS engine is required to test a `Callable`/`externref` boundary. | The boundary can be verified without adding a JS dependency. |
+| JSD7 | **No JS test target; the gate uses fake host values.** | §3: no JS engine is required to test a `Callable`/`externref`/`HostBridge` boundary. | The boundary is verified without adding a JS dependency; a real adapter is tested against its own engine suite. |
+| JSD8 | **This note records one shipped generic hook, not only a survey.** | §3: proposal notes describe shipped behaviour; the hook is backend- and JS-agnostic and adds no JavaScript semantic. | The adapter contract is testable now while the note stays a reference. |
 
 Guardrail: if an adapter claims to implement a `wasm:` builtin, it must match
 the builtin's **observable** contract—argument width/sign reinterpretation,
@@ -541,31 +596,34 @@ model.
 ## 7. Plan
 
 All milestones are optional. None of them adds a JavaScript engine, a JS header,
-or a JS type to `WasmBase/` or a backend. `JS-0` is the gate; `JS-1` documents
-the only cross-cutting interface; `JS-2`/`JS-3` are generic improvements that
-also help non-JS hosts; `JS-4` records the declined proposals.
+or a JS type to `WasmBase/` or a backend. `JS-0` is the no-JS gate; `JS-1`/`JS-2`
+are the shipped generic contract; `JS-3` is an optional metadata improvement that
+also helps non-JS hosts; `JS-4` records the declined proposals.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **JS-0 — No-JS gate** | Add a fixture in which a module imports `wasm:js-string.length` and instantiation fails unless a test resolver explicitly supplies a `Callable`; add a second fixture that supplies it and checks an opaque `externref` round-trip. Document that `wasm:` is not reserved. | JS3, JS8 | The negative fixture fails with a named unresolved import, the positive fixture passes with no JS engine linked, and neither test introduces a `wasm:` special case in the engine. |
-| **JS-1 — Adapter contract** | Document the host-thunk rules: `Callable` with `context = nullptr`, `TypeId` from `resolveFunction`, `CoreTypeView` for signatures, `VMContext::hostData`, multi-result buffer, opaque `externref`. Add an `ABI.md` subsection "External host adapter" and keep it backend-neutral. | JS7 | A C++ adapter can be written against the documented contract without reading `LibJit` or a JS engine header. |
-| **JS-2 — Generic host-reference contract** (optional) | Add engine-neutral `retain`/`release`/`equals` hooks for host references, shared with `ABI.md` R2/R3 and `REFERENCE_TYPES.md` RT-1. Do not name JS or any JS engine. | JS1 | A host object stored in an `externref` table/global can be released at instance teardown and compared by host identity; no JS dependency appears in core. |
+| **JS-0 — No-JS gate** ✅ | `Test/wasm_wat/wasm_js_string_length.wat` imports `wasm:js-string.length`; one test case fails without a resolver entry and passes with a fake adapter `Callable`. | JS3, JS8 | **Done (2026-10-23):** the negative path is a named unresolved import, the positive path returns `7` with no JS engine linked, and neither path special-cases `wasm:` in the engine. |
+| **JS-1 — Adapter contract** ✅ | Documented the host-thunk rules (`Callable` with `context = nullptr`, `TypeId`, `CoreTypeView`, `hostData`, multi-result buffer, opaque `externref`) in `ABI.md` "External host adapter"; added the pre-start lifecycle hook so `hostData` is live during `start`. | JS7 | **Done (2026-10-23):** an adapter can be written from the ABI + bridge header without reading `LibJit` or a JS engine header. |
+| **JS-2 — Generic host-reference contract** ✅ | Added `WasmBase/WasmHostBridge.hpp`: optional allow-listed `retain`/`release`/`equals`, an optional host-reference predicate, and `instanceCreated`/`instanceDestroying`. All callbacks and the bridge pointer default to null. | JS1 | **Done (2026-10-23):** `externref` barriers call the host only when the embedder opts in, the start-function test observes `hostData`, teardown runs the host callback, and no JS dependency appears in `WasmBase/`. |
 | **JS-3 — Read-only metadata view** (optional) | Expose `ImportDescriptor`/`ExportDescriptor`/`ExternType` views keyed by `TypeId`, built from `Module` and `TypeRegistry`; keep the raw vectors private/stable. | JS2 | A host can answer import/export type queries without reading `Module` internals; `TypeId` remains the identity. |
-| **JS-4 — Declined core proposals** | Record JSPI, Custom Descriptors and ESM as not implemented; track their prerequisites (`STACK_SWITCHING.md`, GC descriptors, an ESM host loader). Revisit only when the prerequisite lands. | JS4, JS5, JS6 | This note and `README.md` say "not implemented"; no code path or test claims JSPI/descriptor/ESM support. |
+| **JS-4 — Declined core proposals** ✅ | Record JSPI, Custom Descriptors and ESM as not implemented; track their prerequisites (`STACK_SWITCHING.md`, GC descriptors, an ESM host loader). Revisit only when the prerequisite lands. | JS4, JS5, JS6 | **Done (2026-10-23):** this note and `README.md` say "not implemented"; no code path or test claims JSPI/descriptor/ESM support. |
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-18):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-23):
 
 | Script / fixture | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| `wasm:js-*`, JSPI, ESM, custom descriptors, JS Types | — | — | — | no JS-specific script or fixture exists; no JS engine is linked |
-| `Test/main.cpp` host-import / `externref` cases | — | — | — | nearest coverage: `RegistryImportResolver`, `Callable`, `externref` tables/globals and cross-module imports; none of it implements JavaScript semantics |
+| `wasm_js_string_length.wat` | 6 assertions / 1 case | 0 | 0 | `wasm:js-string.length` fails unresolved without a resolver entry and returns a fake scalar with one; an `externref` also round-trips opaquely. No JS engine is linked and `wasm:` is not reserved |
+| `host_bridge_start.wat` | 8 assertions / 1 case | 0 | 0 | `HostBridge::instanceCreated` publishes `hostData` before `start`; `instanceDestroying` runs at teardown |
+| `Test/main.cpp` `externref_global_a` + `HostBridge` | 17 assertions / 1 case | 0 | 0 | retain/release participate in `refClone`/`refStore`/`refDrop`, self-assignment balances, overwrite releases, and `hostReferenceEquals` uses a host predicate |
+| `no host bridge is the default boundary` | 5 assertions / 1 case | 0 | 0 | the old `instantiate(module, resolver)` path has `hostBridge == nullptr` |
+| JSPI, ESM, custom descriptors, JS Types | — | — | — | no fixture exists; these remain declined/out of scope |
 
-Reading: there is nothing to grade until `JS-0` adds a no-JS fixture. The
-existing tests prove the generic hook is usable, not that any JS proposal is
-supported. A future JS adapter is tested against the adapter's own JS engine
-test suite, outside this repository's dependency set.
+Reading: the generic hook is now exercised without any JavaScript dependency.
+These tests prove the boundary and lifetime contract, not JavaScript semantics;
+a future JS adapter is tested against its own JS engine test suite, outside this
+repository's dependency set.
 
 ## 9. References
 
@@ -595,7 +653,11 @@ test suite, outside this repository's dependency set.
   [`../SAFETY.md`](../SAFETY.md), [`../LAYERING.md`](../LAYERING.md),
   [`../TYPE_IDENTITY.md`](../TYPE_IDENTITY.md).
 - Sources: `WasmBase/WasmImport.hpp`, `WasmBase/WasmValue.hpp`,
-  `WasmBase/WasmVMContext.hpp`, `WasmBase/WasmModuleInstance.hpp`,
+  `WasmBase/WasmVMContext.hpp`, `WasmBase/WasmHostBridge.hpp`,
+  `WasmBase/WasmModuleInstance.hpp`, `WasmBase/WasmModuleInstance.cpp`,
   `WasmBase/WasmModule.hpp`, `WasmBase/WasmType.hpp`,
   `WasmBase/WasmTypeRegistry.hpp`.
+- No-JS fixtures/tests: `Test/wasm_wat/wasm_js_string_length.wat`,
+  `Test/wasm_wat/host_bridge_start.wat`, `Test/main.cpp` (`TestBackend` selects
+  the backend; no JavaScript engine is linked).
 

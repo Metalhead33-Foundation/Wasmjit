@@ -7,6 +7,7 @@
 namespace WASM {
 
 struct Module;
+struct HostBridge;
 
 // ── The raw POD context passed as arg0 to every compiled function. ──
 // Must remain standard-layout. The backend accesses fields via offsetof().
@@ -44,6 +45,12 @@ struct VMContext {
 	// Opaque pointer for host/native code that needs wider application state.
 	// WASI implementations, embedder callbacks, etc. store their state here.
 	void*          hostData;
+
+	// Optional embedder-owned host boundary. Null is the normal, dependency-
+	// free default: host references stay opaque `void*` values and the engine
+	// performs no retain/release/lifecycle calls. Installed before
+	// instantiation; see `WasmHostBridge.hpp`.
+	const HostBridge* hostBridge = nullptr;
 };
 
 static_assert(offsetof(VMContext, memories) == 0,

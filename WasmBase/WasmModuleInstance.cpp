@@ -72,10 +72,11 @@ inline ValueTypeCode nullReferenceKind(int32_t heapType)
 }
 } // namespace
 
-std::unique_ptr<ModuleInstance> ModuleInstantiator::instantiate(const Module& module, ImportResolver& resolver)
+std::unique_ptr<ModuleInstance> ModuleInstantiator::instantiate(const Module& module, ImportResolver& resolver,
+		const HostBridge* hostBridge)
 {
 	// The constructor does all the backend-agnostic setup.
-	auto instance = std::make_unique<ModuleInstance>(module, resolver);
+	auto instance = std::make_unique<ModuleInstance>(module, resolver, hostBridge);
 
 	// Two-pass compilation: first declare all functions (so mutual
 	// recursion works), then compile all bodies.
@@ -289,11 +290,15 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 		instance.internals.elementSegmentDropped[elemIdx] = true;
 	}
 }
-ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver)
+ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver,
+		const HostBridge* hostBridge)
 	: module(&module)
 {
 	ctx = {};
 	ctx.module = &module;
+	// Install the optional host boundary before any import, initialiser or
+	// segment is evaluated. It is borrowed; the embedder owns its lifetime.
+	ctx.hostBridge = hostBridge;
 
 	// ── Step 0: The GC heap region set this instance allocates from ─
 	// Created first, because constant expressions evaluated below
@@ -345,10 +350,29 @@ ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver)
 	if (!internals.importStorage.empty())
 		Store::global().registerCallableRange(
 				internals.importStorage.data(), internals.importStorage.size());
+
+	// Publish the instance to the optional host boundary. This is deliberately
+	// after import resolution and initialisation (so `VMContext` is complete)
+	// and before the start function (so imports called from `start` can find
+	// per-instance host state through `hostData`). The callback must not throw.
+	if (hostBridge != nullptr) {
+		if (hostBridge->instanceCreated != nullptr)
+			hostBridge->instanceCreated(hostBridge->userData, &ctx);
+		internals.hostBridgeActive = true;
+	}
 }
 
 ModuleInstance::~ModuleInstance()
 {
+	// Let the embedder drop host references before the storage that holds them
+	// disappears. This is the designated teardown point: the engine does not
+	// walk a dying instance's whole graph to call `release` for every host
+	// pointer (tables and GC objects are released in bulk below, and cannot be
+	// enumerated reliably after a trap). The callback must not throw or trap.
+	if (internals.hostBridgeActive && ctx.hostBridge != nullptr
+			&& ctx.hostBridge->instanceDestroying != nullptr)
+		ctx.hostBridge->instanceDestroying(ctx.hostBridge->userData, &ctx);
+
 	// Withdraw the range before the storage is freed (embedders may destroy
 	// instances while the process-wide Store lives on).
 	Store::global().unregisterCallableRange(internals.importStorage.data());
@@ -1503,15 +1527,73 @@ uint32_t ModuleInstance::gcRefCount(const void* ref) const
 	return std::atomic_ref<uint32_t>(*slot).load(std::memory_order_relaxed);
 }
 
+bool ModuleInstance::isHostReference(const void* ref) const
+{
+	if (ctx.hostBridge == nullptr || ref == nullptr)
+		return false;
+	// i31 immediates are tagged and are never host pointers.
+	if ((reinterpret_cast<uintptr_t>(ref) & 1u) != 0)
+		return false;
+
+	const HostBridge& bridge = *ctx.hostBridge;
+	if (bridge.references.isHostReference != nullptr)
+		return bridge.references.isHostReference(
+				bridge.userData, const_cast<VMContext*>(&ctx), ref);
+
+	// Conservative fallback. The engine owns three pointer-valued reference
+	// kinds; anything else that survives the checks is an opaque host
+	// `externref`. A host that has further opaque pointer kinds should supply
+	// the predicate rather than rely on this classification.
+	if (Store::global().gc().owns(ref))
+		return false;
+	if (Store::global().strings().owns(ref))
+		return false;
+	if (Store::global().callableAt(ref) != nullptr)
+		return false;
+	return true;
+}
+
+void ModuleInstance::retainHostReference(void* ref)
+{
+	if (!hostReferenceHooksEnabled(ctx.hostBridge) || !isHostReference(ref))
+		return;
+	ctx.hostBridge->references.retain(
+			ctx.hostBridge->userData, &ctx, ref);
+}
+
+void ModuleInstance::releaseHostReference(void* ref)
+{
+	if (!hostReferenceHooksEnabled(ctx.hostBridge) || !isHostReference(ref))
+		return;
+	ctx.hostBridge->references.release(
+			ctx.hostBridge->userData, &ctx, ref);
+}
+
+bool ModuleInstance::hostReferenceEquals(const void* lhs, const void* rhs) const
+{
+	if (lhs == rhs)
+		return true;
+	if (lhs == nullptr || rhs == nullptr || ctx.hostBridge == nullptr
+			|| ctx.hostBridge->references.equals == nullptr)
+		return false;
+	if (!isHostReference(lhs) || !isHostReference(rhs))
+		return false;
+	return ctx.hostBridge->references.equals(
+			ctx.hostBridge->userData, const_cast<VMContext*>(&ctx), lhs, rhs);
+}
+
 void* ModuleInstance::refClone(void* ref)
 {
 	// Host-owned strings/views/iterators use the StringStore's count; GC
-	// objects use the header count (STRINGREF.md STR-8).
+	// objects use the header count (STRINGREF.md STR-8). A host externref is
+	// uncounted by the engine and goes through the optional bridge.
 	if (Store::global().strings().retain(ref))
 		return ref;
 	uint32_t* slot = gcRefcountSlot(ref);
-	if (slot == nullptr)
+	if (slot == nullptr) {
+		retainHostReference(ref);
 		return ref;
+	}
 	std::atomic_ref<uint32_t> count(*slot);
 	uint32_t old = count.load(std::memory_order_relaxed);
 	for (;;) {
@@ -1528,8 +1610,10 @@ void ModuleInstance::refDrop(void* ref)
 	if (Store::global().strings().release(ref))
 		return;
 	uint32_t* slot = gcRefcountSlot(ref);
-	if (slot == nullptr)
+	if (slot == nullptr) {
+		releaseHostReference(ref);
 		return;
+	}
 	std::atomic_ref<uint32_t> count(*slot);
 	uint32_t old = count.load(std::memory_order_relaxed);
 	for (;;) {
@@ -1631,8 +1715,13 @@ void ModuleInstance::releaseOutgoingRefs(void* ref, TypeId typeId,
 		if (Store::global().strings().release(child))
 			continue; // a string/view/iterator holds its own count (STR-8)
 		uint32_t* count = gcRefcountSlot(child);
-		if (count == nullptr)
-			continue; // null, an i31 immediate, a funcref or an externref: uncounted
+		if (count == nullptr) {
+			// Null, an i31 immediate, a funcref or a host `externref`. Only the
+			// last can have a host count, and the helper ignores the others.
+			if (hostReferenceHooksEnabled(ctx.hostBridge))
+				releaseHostReference(child);
+			continue;
+		}
 		// Read the child's tag before the queue can stamp it.
 		const TypeId childTypeId{*reinterpret_cast<const uint32_t*>(
 				static_cast<const uint8_t*>(child) + GcHeader::kTypeIdOffset)};
