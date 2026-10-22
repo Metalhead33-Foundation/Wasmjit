@@ -796,6 +796,33 @@ TEST_CASE("exceptions: an exnref can be stored in a table")
 	REQUIRE(WASM::callCallable<int32_t>(*test) == 0);
 }
 
+TEST_CASE("function references: typed refs survive in tables and globals")
+{
+	WASM::Module module = loadTestModule("function_references");
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto store = instance->exportedFunction("store");
+	auto isNull = instance->exportedFunction("is-null");
+	auto callTable = instance->exportedFunction("call-table");
+	auto callGlobal = instance->exportedFunction("call-global");
+	auto tail = instance->exportedFunction("tail");
+	REQUIRE(store.has_value());
+	REQUIRE(isNull.has_value());
+	REQUIRE(callTable.has_value());
+	REQUIRE(callGlobal.has_value());
+	REQUIRE(tail.has_value());
+
+	WASM::callCallable<void>(*store);
+	REQUIRE(WASM::callCallable<int32_t>(*isNull) == 0);
+	REQUIRE(WASM::callCallable<int32_t>(*callTable, int32_t(41)) == 42);
+	REQUIRE(WASM::callCallable<int32_t>(*callGlobal, int32_t(41)) == 42);
+	REQUIRE(WASM::callCallable<int32_t>(*tail, int32_t(41)) == 42);
+}
+
 TEST_CASE("LibJitTypeTranslator does not leak type caches across modules")
 {
 	const auto makeStructType = [](WASM::ValueTypeCode fieldOpcode) {
@@ -3621,6 +3648,42 @@ TEST_CASE("a Component Model component is rejected instead of misparsed")
 	}
 }
 
+TEST_CASE("multi-memory: imported memories are shared and stay distinct")
+{
+	WASM::RegistryImportResolver registry;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+
+	WASM::Module exporter = loadTestModule("multi_memory_import_a");
+	auto exporterInstance = compiler.instantiate(exporter, registry);
+	REQUIRE(exporterInstance.get() != nullptr);
+	exporterInstance->registerExports(registry, "a");
+
+	WASM::Module importer = loadTestModule("multi_memory_import_b");
+	auto importerInstance = compiler.instantiate(importer, registry);
+	REQUIRE(importerInstance.get() != nullptr);
+
+	auto write0 = importerInstance->exportedFunction("write0");
+	auto write1 = importerInstance->exportedFunction("write1");
+	auto copy1to0 = importerInstance->exportedFunction("copy1to0");
+	auto read0 = exporterInstance->exportedFunction("read0");
+	auto read1 = exporterInstance->exportedFunction("read1");
+	REQUIRE(write0.has_value());
+	REQUIRE(write1.has_value());
+	REQUIRE(copy1to0.has_value());
+	REQUIRE(read0.has_value());
+	REQUIRE(read1.has_value());
+
+	WASM::callCallable<void>(*write0, int32_t(16), int32_t(0xAA));
+	WASM::callCallable<void>(*write1, int32_t(16), int32_t(0xBB));
+	REQUIRE(WASM::callCallable<int32_t>(*read0, int32_t(16)) == 0xAA);
+	REQUIRE(WASM::callCallable<int32_t>(*read1, int32_t(16)) == 0xBB);
+
+	WASM::callCallable<void>(*copy1to0, int32_t(32), int32_t(16), int32_t(4));
+	REQUIRE(WASM::callCallable<int32_t>(*read0, int32_t(32)) == 0xBB);
+	REQUIRE(WASM::callCallable<int32_t>(*read0, int32_t(16)) == 0xAA);
+}
+
 TEST_CASE("multi-memory: memory.copy moves bytes between two memories")
 {
 	WASM::RegistryImportResolver imports;
@@ -6286,6 +6349,9 @@ TEST_CASE("memory.discard zeroes whole pages, preserves the rest, and traps out 
 	auto store8_64 = exported("store8_64");
 	auto load8_64 = exported("load8_64");
 	auto discard64 = exported("discard64");
+	auto store8s = exported("store8_s");
+	auto load8s = exported("load8_s");
+	auto discardS = exported("discard_s");
 
 	const auto load = [&](uint32_t address) {
 		return WASM::callCallable<int32_t>(load8, static_cast<int32_t>(address));
@@ -6340,6 +6406,14 @@ TEST_CASE("memory.discard zeroes whole pages, preserves the rest, and traps out 
 	WASM::callCallable<void>(discard64, int64_t(100), int64_t(10));
 	REQUIRE(WASM::callCallable<int32_t>(load8_64, int64_t(0)) == 0);
 	WASM::callCallable<void>(discard64, int64_t(0x10000), int64_t(0));
+
+	// A shared memory takes the host decommit hint when available (MC-3); the
+	// observable contract is still the page-rounded zero-fill.
+	WASM::callCallable<void>(store8s, int32_t(0x100), int32_t(0x88));
+	WASM::callCallable<void>(store8s, int32_t(0x10000), int32_t(0x99));
+	WASM::callCallable<void>(discardS, int32_t(0x100), int32_t(1));
+	REQUIRE(WASM::callCallable<int32_t>(load8s, int32_t(0x100)) == 0);
+	REQUIRE(WASM::callCallable<int32_t>(load8s, int32_t(0x10000)) == 0x99);
 }
 
 

@@ -77,11 +77,13 @@ baked in at compile time through the `WASM_TEST_DIR` macro) and calls into it.
 | `tag imports share the exporter's identity and check the payload type` | `tag_identity_{a,b,bad}` | imports of one export share a `TagId`, a second tag with the same payload type does not, and a payload mismatch fails to link (`EXCEPTIONS.md` EX-2) |
 | `exceptions: a caught throw carries its payload and an uncaught one stays pending` | `exceptions` | a caller's `try_table` catches a callee's `throw` with its payload; an uncaught `throw` leaves the exception pending for the embedder (`EXCEPTIONS.md` EX-3) |
 | `exceptions: an exnref can be stored in a table` | `exnref_table` | a `catch_all_ref` `exnref` survives `table.set`/`table.get` (`EXCEPTIONS.md` EX-6) |
+| `multi-memory: imported memories are shared and stay distinct` | `multi_memory_import_{a,b}` | two imported memories alias the exporter, stay independent, and cross-copy (`MULTI_MEMORY.md` MM-4) |
+| `function references: typed refs survive in tables and globals` | `function_references` | a typed `(ref null $t)` survives a typed table and a mutable global; `call_ref`/`return_call_ref` call through both (`FUNCTION_REFERENCES.md` FR-6/FR-8) |
 | `extended name section: parsed names are exposed by kind and index` | `name_section` | every core and extended name subsection is parsed and readable through `Module::findName` (`EXTENDED_NAME_SECTION.md` ENS-1/ENS-2) |
 | `name section: indirect maps and unknown subsections are bounded and skipped` | hand-built | param/tag-param (12/13) indirect maps work and an unknown subsection is skipped by its size |
 | `name section: a subsection size past the section end is rejected` | hand-built | a malformed `subSize` is rejected before it can desynchronise the following sections |
 | `unknown custom sections leave code and data decoding unchanged` | `custom_section` | an `(@custom ...)`-generated section is skipped and the export still runs (`ANNOTATIONS.md` ANN-2) |
-| `memory.discard zeroes whole pages, preserves the rest, and traps out of bounds` | `memory_discard` | `0xFC 0x12` page rounding, zero-length no-op and out-of-bounds traps on memory32 and memory64 (`MEMORY_CONTROL.md` MC-1/MC-2) |
+| `memory.discard zeroes whole pages, preserves the rest, and traps out of bounds` | `memory_discard` | `0xFC 0x12` page rounding, zero-length no-op, out-of-bounds traps and the shared-memory decommit hint on memory32/memory64 (`MEMORY_CONTROL.md` MC-1…MC-3) |
 | `wide arithmetic: add128, sub128 and mul_wide match reference values` | `wide_arithmetic` | `0xFC 19`–`22` carry/borrow and signed/unsigned 64×64→128 results (`NUMERIC_PROPOSALS.md` NUM-1) |
 | `component closed records intern by structure (TM-8 first slice)` | `component_types` | parser syntax records reuse TypeIds for closed local-index-free shapes; the parser's local-index list stays fresh |
 | `component canonical value payloads and declaration sets intern` | `component_types`, `component_decltypes` | canonical validation records use `TypeId` children, cross-load list/record identity, and type-bearing component/instance declaration-set interning |
@@ -242,7 +244,7 @@ selection is explicit — which is why `./WasmJit '[spec]'` runs everything.
 | `./WasmJit '[spec]'` | all 257 spec scripts (~8 s; 249 pass, 8 known failures) |
 | `./WasmJit 'spec: address'` | just that script |
 | `./WasmJit '*float*'` | scripts whose name matches |
-| `./WasmJit --list-tests` | the default view (336 test cases) |
+| `./WasmJit --list-tests` | the default view (338 test cases) |
 | `./WasmJit --list-tests '[spec]'` | every script, one line each (257) |
 | `./WasmJit -# --list-tags` | all tags, including `[#main]` and `[#SpecSuite]` |
 
@@ -273,7 +275,7 @@ It currently holds 189 of the 257 scripts, and the default run is green:
 
 ```
 $ ./WasmJit
-All tests passed (9149 assertions in 336 test cases)
+All tests passed (9175 assertions in 338 test cases)
 ```
 
 #### Refreshing the list
@@ -494,7 +496,7 @@ tests, and it is green:
 
 ```
 $ ./WasmJit
-All tests passed (9149 assertions in 336 test cases)
+All tests passed (9175 assertions in 338 test cases)
 ```
 
 A full sweep is deliberately loud, because most of the suite is still beyond the
@@ -676,7 +678,7 @@ Measured after SIMD-5:
 
 ```bash
 ./WasmJit 'simd*'      # 24 cases, 6147 assertions, all passing (includes the hidden [.simdbench] case)
-./WasmJit              # 336 cases, 9149 assertions, all passing
+./WasmJit              # 338 cases, 9175 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed

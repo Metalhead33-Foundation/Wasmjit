@@ -595,9 +595,15 @@ static void wasm_memory_discard_impl(WASM::VMContext* vm, uint32_t memIdx,
 	uint64_t roundedEnd = (rounded < end) ? size : (rounded & ~(page - 1));
 	if (roundedEnd > size)
 		roundedEnd = size;
-	if (roundedEnd > start)
+	if (roundedEnd > start) {
+		// Shared memories can decommit through the StoreOwnedMemory hint; the
+		// portable fallback (and private memories) zero-fill here.
+		const auto* owner = static_cast<const WASM::StoreOwnedMemory*>(memory->hostData);
+		if (owner != nullptr && owner->discardHint(start, roundedEnd - start))
+			return;
 		std::memset(memory->memoryBase + start, 0,
 					static_cast<size_t>(roundedEnd - start));
+	}
 }
 
 // 64x64 -> 128 multiplication in portable 32-bit limbs. Kept backend-local so

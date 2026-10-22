@@ -1,7 +1,8 @@
 # Multiple Memories — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 2 — MM-1…MM-3
-implemented: `memidx` bounds checks, curation, and a cross-memory copy test).
+Status: design note / implementation reference (revision 3 — MM-1…MM-4
+implemented: `memidx` bounds checks, curated `memory-multi`, cross-memory copy,
+and multi-memory import/export linking with independent address spaces).
 Audience: anyone touching `WasmType` (`MemArg`), `WasmVMContext`,
 `WasmMemory`, `WasmStore`, `LibjitOpcodeDispatcher`, or the test harness.
 
@@ -86,8 +87,8 @@ Multiple Memories is a **Phase 5** proposal, integrated into WebAssembly
 |---|---|---|---|
 | ~~MM1~~ | ~~No bounds check on the memory index.~~ **Done (MM-1):** an out-of-range `memidx` is rejected at compile time by `memoryPointerForIndex` (and `tablePointerForIndex` for tables), and the `memory.*`/`table.*` helpers re-check before indexing. A malformed module can no longer read a wild pointer. | `LibjitOpcodeDispatcher.cpp` | Closed |
 | ~~MM2~~ | ~~`memory-multi` is not curated.~~ **Done (MM-2):** it is in `Test/wast_supported.txt` and runs by default. | `Test/wast_supported.txt` | Closed |
-| MM3 | **Import matching for memories is checked, but data-segment `memoryIdx` is not.** An active segment with an out-of-range memory throws a `runtime_error` at instantiation (a hard failure, which is the observable outcome the spec requires) rather than a Wasm *link* error. | `applyActiveSegments` | Low (deliberate: no validating front-end) |
-| MM4 | **Harness cannot marshal memories across modules.** The `spectest` host exposes one shared memory (plus `memory64`); multi-memory scripts that import/export more are only covered insofar as they use `memory` instructions. | `Test/WastScript.cpp` | Low |
+| ~~MM3~~ | ~~**Import matching for memories is checked, but data-segment `memoryIdx` is not.**~~ **Done:** `Validator::validateDataSegment` bounds-checks the active segment's `memoryIdx` (`requireMemoryIndex`) and its offset type before instantiation; `applyActiveSegments` keeps its defensive runtime check. | `WasmValidator.cpp` (`validateDataSegment`) | Closed |
+| ~~MM4~~ | ~~**Harness cannot marshal memories across modules.**~~ **Done (MM-4):** the manual `multi_memory_import_a/b` fixture links two imported memories through `RegistryImportResolver`, verifies they alias the exporter's independent address spaces, and copies between them. | `Test/wasm_wat/multi_memory_import_{a,b}.wat`, `Test/main.cpp` | Closed |
 
 ## 6. Where we can and should play fast and loose
 
@@ -109,16 +110,18 @@ destination `MemIdx` differ) with correct overlap behaviour within each memory.
 | **MM-1 — memidx bounds check** | ✅ `memoryPointerForIndex`/`tablePointerForIndex` reject an index past the module's index space at compile time; the native `memory.*`/`table.*` helpers re-check. | MM1 | Done: an out-of-range `memidx` fails instantiation instead of reading a wild pointer. |
 | **MM-2 — Curate** | ✅ Added `memory-multi` to `Test/wast_supported.txt`. | MM2 | Done: the default run covers multi-memory. |
 | **MM-3 — Manual cross-memory test** | ✅ `Test/wasm_wat/multi_memory.wat` gained `copy0to1`/`copy1to0`, exercised by `multi-memory: memory.copy moves bytes between two memories`. | guardrail | Done: the test asserts the copied bytes *and* that the source memory is untouched. |
+| **MM-4 — Imported multi-memory link** | ✅ `multi_memory_import_{a,b}.wat`: the exporter publishes two memories; the importer imports both, writes each, and cross-copies between them. | MM3, MM4 | Done: `multi-memory: imported memories are shared and stay distinct` passes (11 assertions). |
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-13; `assert_trap` now executed):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-22; `assert_trap` now executed):
 
 | Test / script | Result | Reading |
 |---|---|---|
 | `spec: memory-multi` | 6 passed / 0 failed / 0 skipped | multi-memory works (and is curated) |
 | manual `multi-memory: two linear memories are independent` | pass | independent address spaces |
 | manual `multi-memory: memory.copy moves bytes between two memories` | pass | cross-memory copy, both directions |
+| manual `multi-memory: imported memories are shared and stay distinct` | 11 assertions | two imported memories alias the exporter, stay independent, and cross-copy |
 | `memory` (single memory) | curated, passing | baseline |
 | `spec: memory_copy` / `spec: table_copy` | 4386/0/64, 1728/0/0 | bulk ops honour `memidx`; `memory.copy` may name two memories |
 

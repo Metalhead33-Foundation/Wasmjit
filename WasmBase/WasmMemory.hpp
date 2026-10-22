@@ -41,6 +41,16 @@ public:
 	LinearMemory* getMemory();
 	// Returns false on trap-worthy failure (exceeds max). Engine translates to a Wasm trap.
 	virtual bool growMemory(uint64_t deltaPages) = 0;
+	// Optional host hint for `memory.discard`: return true when the range was
+	// decommitted and is already zero-filled; false means the caller must
+	// perform the specified zero-fill itself. The default is the portable
+	// zero-fill path (docs/proposals/MEMORY_CONTROL.md MC-3).
+	virtual bool discardHint(uint64_t offset, uint64_t bytes) const
+	{
+		(void)offset;
+		(void)bytes;
+		return false;
+	}
 };
 
 // ── Non-shared: plain growable buffer. Realloc is fine — nobody else holds memoryBase concurrently. ──
@@ -66,6 +76,7 @@ public:
 	explicit SharedLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64 = false);
 	~SharedLinearMemory() override;
 	bool growMemory(uint64_t deltaPages) override;
+	bool discardHint(uint64_t offset, uint64_t bytes) const override;
 };
 
 

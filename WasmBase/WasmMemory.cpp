@@ -210,4 +210,23 @@ bool SharedLinearMemory::growMemory(uint64_t deltaPages)
 	return platformCommitMemory(static_cast<size_t>(newSize));
 }
 
+bool SharedLinearMemory::discardHint(uint64_t offset, uint64_t bytes) const
+{
+	// The reserved-region backing can return pages to the OS while keeping the
+	// address space valid: POSIX `madvise(MADV_DONTNEED)` makes subsequent reads
+	// zero-filled. On other hosts the caller's memset is the specified fallback.
+#if defined(PLATFORM_POSIX)
+	if (!reservedRegion || bytes == 0)
+		return false;
+	if (offset > memory.memorySize || bytes > memory.memorySize - offset)
+		return false;
+	void* start = static_cast<uint8_t*>(reservedRegion) + offset;
+	return ::madvise(start, static_cast<size_t>(bytes), MADV_DONTNEED) == 0;
+#else
+	(void)offset;
+	(void)bytes;
+	return false;
+#endif
+}
+
 }

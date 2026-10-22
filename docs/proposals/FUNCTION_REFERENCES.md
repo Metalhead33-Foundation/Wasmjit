@@ -1,11 +1,9 @@
 # Function References (Typed Function References) — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 4 — FR-3/FR-4 are
-closed by the Store's callable-range registry (`GC.md` GC-1) and the
-post-compilation `ref.func` resolution (`GC.md` G8), and FR-7's validation is
-closed by the validator (`call_ref`, `br_on_*`, and the declared-function
-rule). What remains is FR-6 (generic reference storage, shared with GC
-`R4`/exceptions `EX5`) and FR-8's manual test).
+Status: design note / implementation reference (revision 5 — FR-1…FR-8 are
+closed: typed references are stored in typed tables and globals, `call_ref` /
+`return_call_ref` consume them, and the manual fixture exercises both the
+table and global paths).
 Audience: anyone touching `WasmValue` (`Callable`), `WasmTypeSystem`,
 `WasmModuleInstance`, `LibjitOpcodeDispatcher`, or the test harness.
 
@@ -88,12 +86,12 @@ WebAssembly **3.0** (it is the prerequisite the GC proposal builds on).
 |---|---|---|---|
 | ~~FR1~~ | ~~`call_ref` segfaults.~~ **Done (trap sink):** the null/invalid callable check in `dispatchCallThroughCallable` now traps (`emitTrapIfNull`) instead of dereferencing. `spec: call_ref` → **31 passed / 0 failed / 4 skipped**. | `spec: call_ref` | Closed |
 | ~~FR2~~ | ~~`ref_func.wast` produces no report.~~ **Done (trap sink):** the fatal path was a reference reaching a LibJIT null check; it is now a recoverable trap. `spec: ref_func` → **14 passed / 0 failed / 3 skipped**. | `spec: ref_func` | Closed |
-| ~~FR3~~ | ~~**Cross-module function references are mis-classified.**~~ **Done (`GC-1`):** every `Callable` carries its canonical `typeId`, and `Store::callableAt` identifies a reference by a range test over the Store's registered callable ranges (one per instance), so a `funcref` produced by module B is classified correctly in module A. | `call_ref` 31/0, `ref_func` 14/0, `ref_test` 69/2 (the two failures are GC `G3`) | Closed |
+| ~~FR3~~ | ~~**Cross-module function references are mis-classified.**~~ **Done (`GC-1`):** every `Callable` carries its canonical `typeId`, and `Store::callableAt` identifies a reference by a range test over the Store's registered callable ranges (one per instance), so a `funcref` produced by module B is classified correctly in module A. | `call_ref` 35/0, `ref_func` 17/0, `ref_test` 71/0 | Closed |
 | ~~FR4~~ | ~~**`ref.func` outside a segment is an unresolved sentinel** in `const` expressions (globals), so a `ref.func` global is a bogus pointer.~~ **Done (`GC.md` G8):** `resolveGlobalRefFuncs()` rewrites the sentinel after compilation, so a `(global funcref (ref.func $f))` holds a real reference. | `global`, `table` (exported `(ref $f)` global across modules) | Closed |
 | ~~FR5~~ | ~~`return_call_ref` aborts~~ (tail-call codegen). **Done (TAILCALLS TC-1/TC-2 + trap sink):** `spec: return_call_ref` → **40 passed / 0 failed / 13 skipped**. | [`TAILCALLS.md`](TAILCALLS.md) | Closed |
-| FR6 | **Reference values cannot be stored generically.** Tables hold `Callable*` and globals hold `Value`; typed `(ref $t)` values live only on the operand stack. The representation decision (tagged 64-bit slots + global cells) is recorded in `docs/ABI.md` §Reference and Global Representation, stage R2. | `WasmTable.hpp`, `WasmModuleInstance.cpp` | Medium |
+| ~~FR6~~ | ~~**Reference values cannot be stored generically.**~~ **Done (FR-6):** table slots are pointer-sized reference words behind the funcref `Callable**` view, and globals hold `Value` cells; typed `(ref null $t)` values therefore survive `table.set/get` and `global.set/get`. The manual fixture calls through both a typed table and a typed global. | `WasmTable.hpp`, `WasmModuleInstance.cpp`, `Test/wasm_wat/function_references.wat` | Closed |
 | ~~FR7~~ | ~~**Validation is partial.**~~ **Done (FR-7):** the validator types `call_ref`'s operand/results, `br_on_*`, and the “declared function reference” rule (`dispatchRefFunc` requires `x` in `declaredFunctions`); the strict run is green. | `WasmValidator.cpp` | Closed |
-| FR8 | **No manual test** for `call_ref`/typed references. | `Test/main.cpp` | Medium |
+| ~~FR8~~ | ~~**No manual test** for `call_ref`/typed references.~~ **Done (FR-8):** `function_references.wat` stores a typed `ref.func` in a table and a mutable global, calls through both, and exercises `return_call_ref`. | `Test/main.cpp`, `Test/wasm_wat/function_references.wat` | Closed |
 
 ## 6. Where we can and should play fast and loose
 
@@ -114,25 +112,27 @@ be the canonical, process-wide identity (not the module-local `typeidx`);
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **FR-1 — Fix `call_ref`** | ✅ The crash was a null/invalid callable pointer being dereferenced; the check now goes through `emitTrapIfNull` (the shared trap sink). | FR1 | Done: `call_ref.wast` runs (31/0/4). |
-| **FR-2 — Fix `ref_func`** | ✅ Same root cause; the reference reaches the trap sink. | FR2 | Done: `ref_func.wast` runs (14/0/3). |
-| **FR-3 — Discoverable callable type** | ✅ Done (`GC-1`): every `Callable` carries its canonical `TypeId`; `Store::callableAt` identifies a reference by a range test over the Store's registered callable ranges, so no per-instance scan is needed. | FR3 | Done: `ref_test` 69/2 — a `funcref` produced by module B is classified in module A; the two failures are the `extern`/`any` identity deviation (`GC.md` G3). |
+| **FR-1 — Fix `call_ref`** | ✅ The crash was a null/invalid callable pointer being dereferenced; the check now goes through `emitTrapIfNull` (the shared trap sink). | FR1 | Done: `call_ref.wast` runs (35/0/0). |
+| **FR-2 — Fix `ref_func`** | ✅ Same root cause; the reference reaches the trap sink. | FR2 | Done: `ref_func.wast` runs (17/0/0). |
+| **FR-3 — Discoverable callable type** | ✅ Done (`GC-1`): every `Callable` carries its canonical `TypeId`; `Store::callableAt` identifies a reference by a range test over the Store's registered callable ranges, so no per-instance scan is needed. | FR3 | Done: `ref_test` 71/0 — a `funcref` produced by module B is classified in module A. |
 | **FR-4 — `ref.func` in `const`** | ✅ Done (`GC.md` G8): `resolveGlobalRefFuncs()` resolves the sentinel after compilation. | FR4 | Done: a `(global funcref (ref.func $f))` holds a real reference (`table` 18/0 exercises it across modules). |
 | **FR-7 — Reference validation** | ✅ The validator types `call_ref`, `br_on_*` and the declared-function rule. | FR7 | Done: the strict run is green, including the `ref_func`/`call_ref` negatives. |
-| **FR-8 — Manual test** | ◑ A focused `call_ref`/typed-reference fixture is still missing. | FR8 | Remaining: a manual test that reads a typed reference through both directions. |
+| **FR-6 — Generic typed storage** | ✅ Typed references survive `table.set/get` and `global.set/get`; `call_ref`/`return_call_ref` consume them. | FR6 | `function references: typed refs survive in tables and globals` passes (10 assertions). |
+| **FR-8 — Manual test** | ✅ `Test/wasm_wat/function_references.wat` covers the typed table, typed global, `call_ref` and `return_call_ref`. | FR8 | The manual test is in the default suite. |
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-04):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-22):
 
 | Script | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
 | `call_indirect` | 137 | 0 | 35 | indirect calls work (was 113/0/59) |
 | `func_ptrs` | 29 | 0 | 7 | `ref.func` in segments works |
-| `call_ref` | 31 | 0 | 4 | FR1 fixed by the trap sink |
-| `ref_func` | 14 | 0 | 3 | FR2 fixed |
-| `return_call_ref` | 40 | 0 | 13 | FR5 fixed (tail-call trampoline) |
-| `ref_test` | 69 | 2 | 0 | FR3 fixed by `GC-1`; the two failures are GC `G3` (`extern`/`any` identity) |
+| `call_ref` | 35 | 0 | 0 | strict run |
+| `ref_func` | 17 | 0 | 0 | strict run |
+| `return_call_ref` | 53 | 0 | 0 | strict run |
+| `ref_test` | 71 | 0 | 0 | FR3/GC extern boxes; strict run |
+| `function_references.wat` | 10 assertions | 0 | 0 | typed table + typed global + `call_ref`/`return_call_ref` |
 
 ## 9. References
 

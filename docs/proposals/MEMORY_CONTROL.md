@@ -1,8 +1,9 @@
 # Memory Control — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 2 — the umbrella's one
-concrete instruction, `memory.discard`, decodes, validates and zero-fills; the
-remaining sub-proposals are still design space).
+Status: design note / implementation reference (revision 3 — the umbrella's one
+concrete instruction, `memory.discard`, decodes, validates, zero-fills and uses
+a POSIX shared-memory decommit hint when available; the remaining sub-proposals
+(protection/mappable/virtual) are still design space).
 Audience: anyone touching `WasmMemory`, `WasmType` (`MemoryType`), the memory
 instructions, `WasmOpcode` (`MiscOpcode`), or the host memory API.
 
@@ -75,8 +76,14 @@ others are design space.
   helper uses `memorySize`/`memoryBase`, so it works for both memory32 and
   memory64.
 - The stub backend prints `MemoryDiscard` for parity with the bulk-memory ops.
-- There is deliberately **no decommit hint** yet (`MC3`): the instruction is a
-  plain zero-fill, which is the spec's fallback on every host.
+- **A decommit hint is used for shared memories (MC-3).** `StoreOwnedMemory`
+  exposes `discardHint(offset, bytes)`: `PrivateLinearMemory` keeps the
+  portable zero-fill, while `SharedLinearMemory` uses
+  `madvise(MADV_DONTNEED)` on the reserved region (POSIX) and returns true when
+  the pages are already zero-filled. The helper falls back to `memset` on every
+  other host. The observable contract is unchanged.
+- There is deliberately **no static protection / `mappable` / `virtual` mode**
+  (`MC4`/`MC5`): those sub-proposals have no stable binary design yet.
 - `MemoryType` carries only `indexType` and `limits`. There is no protection,
   mappable or virtual mode; unknown limit flags are preserved but not acted on.
 - There is no `memory.commit` and no page-protection API.
@@ -87,9 +94,9 @@ others are design space.
 |---|---|---|---|
 | ~~MC1~~ | ~~**`memory.discard` does not decode.**~~ **Done (MC-1):** `MiscOpcode::MemoryDiscard = 18` and the `memidx` immediate are decoded. | `WasmOpcode.hpp`, `WasmOpcodeDispatcher.cpp` | Closed |
 | ~~MC2~~ | ~~**No zero-fill helper.**~~ **Done (MC-2):** `wasm_memory_discard_impl` is bounds-checked and page-rounded (with `memoryIndexTypeForIndex` for i32/i64 operand widening). | `LibJit/LibjitOpcodeDispatcher.cpp` | Closed |
-| MC3 | **No decommit hint.** The engine never releases physical pages to the host. | `WasmMemory.cpp`, `wasm_memory_discard_impl` | Low |
-| MC4 | **No static protection / `mappable` / `virtual` mode.** `MemoryType` has only index type and limits. | `WasmType.hpp` (`MemoryType`) | Low |
-| MC5 | **No BYOB / host memory window API.** A non-web embedder has no way to hand a writable window to a producer. | `WasmMemory.hpp` | Low |
+| ~~MC3~~ | ~~**No decommit hint.**~~ **Done (MC-3):** `StoreOwnedMemory::discardHint` decommits shared-memory pages with `madvise(MADV_DONTNEED)` on POSIX; private memories and other hosts use the specified zero-fill fallback. | `WasmMemory.cpp` (`SharedLinearMemory::discardHint`), `wasm_memory_discard_impl` | Closed |
+| MC4 | **No static protection / `mappable` / `virtual` mode.** `MemoryType` has only index type and limits. | `WasmType.hpp` (`MemoryType`) | Deferred (sub-proposals are design space) |
+| MC5 | **No BYOB / host memory window API.** A non-web embedder has no way to hand a writable window to a producer. | `WasmMemory.hpp` | Deferred (web/API surface) |
 | ~~MC6~~ | ~~**No test.**~~ **Done (MC-4):** `Test/wasm_wat/memory_discard.wat` plus the manual test cover page rounding, preservation, zero-length and out-of-bounds traps (memory32 and memory64). | `Test/main.cpp`, `Test/wasm_wat/memory_discard.wat` | Closed |
 
 ## 6. Where we can and should play fast and loose
@@ -114,20 +121,20 @@ Zeroing must also be visible to a shared memory's other agents.
 | **MC-0 — Honest rejection** | ✅ Superseded: `0xFC 0x12` is now decoded, so an unknown sub-opcode still fails loudly while `memory.discard` executes. | MC1 | Done: no accidental interpretation of unassigned sub-opcodes. |
 | **MC-1 — Decode** | ✅ Added `MiscOpcode::MemoryDiscard` and the `memidx` immediate. | MC1 | Done: `memory_discard.wat` loads. |
 | **MC-2 — Zero-fill** | ✅ Lowered to `wasm_memory_discard_impl` with bounds checks and 64 KiB page rounding. | MC2 | Done: the manual test asserts page rounding, preservation, zero-length and traps on memory32 and memory64. |
-| **MC-3 — Hint** | ◑ Optionally `madvise`/`VirtualFree`/`mmap` the pages when the host supports it. | MC3 | Remaining: the fast path is observable only in RSS, not results. |
+| **MC-3 — Hint** | ✅ `StoreOwnedMemory::discardHint`; shared memories use `madvise(MADV_DONTNEED)` on POSIX, with the specified zero-fill fallback elsewhere. | MC3 | Done: shared-memory discard zeroes the page and preserves the rest; RSS behaviour is host-dependent by design. |
 | **MC-4 — Tests** | ✅ `Test/wasm_wat/memory_discard.wat` plus `memory.discard zeroes whole pages, preserves the rest, and traps out of bounds`. | MC6 | Done: 19 assertions, including the memory64 and zero-length paths. |
 | **MC-5 — Later sub-proposals** | ◑ Revisit protection/mappable/virtual when they reach a stable design. | MC4, MC5 | Remaining: a separate note/milestones. |
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-18):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-22):
 
 | Script / fixture | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
 | `memory` | 65 | 0 | 25 | the existing size/grow surface is green |
 | `memory-multi` | 6 | 0 | 0 | multiple memories are the base for `memidx` |
 | `memory64` | 55 | 0 | 14 | 64-bit addresses are already handled |
-| `memory_discard` manual test | 19 assertions | 0 | 0 | page rounding, preservation, zero-length and OOB traps on memory32 and memory64 |
+| `memory_discard` manual test | 24 assertions | 0 | 0 | page rounding, preservation, zero-length and OOB traps on memory32, memory64 and shared memory |
 | `memory.discard` script | — | — | — | no script in the snapshot |
 
 Reading: the memory substrate is solid and the one concrete instruction in the
