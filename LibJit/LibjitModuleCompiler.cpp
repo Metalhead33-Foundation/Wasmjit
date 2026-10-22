@@ -246,7 +246,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 	// ── Trampoline drivers ──────────────────────────────────────────
 	// Each internal function gets a driver with the same signature. The driver
 	// loops: it calls the current target's *raw* entry point and, when that
-	// returned with a pending tail call in g_tailCallState, reloads the target
+	// returned with a pending tail call in the host-thread-local state, reloads the target
 	// and arguments and iterates. Callables expose the driver as `fnPtr`; the
 	// raw entry lives in `rawFnPtr`. This is what keeps a tail-call chain from
 	// growing the host stack. See docs/TAILCALLS.md (TC-2).
@@ -294,8 +294,13 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		jit_value_t callRet = jit_insn_call_indirect(driver, fnPtr, sig, callArgs.data(),
 			static_cast<unsigned>(callArgs.size()), 0);
 
-		jit_value_t state = jit_value_create_nint_constant(driver, jit_type_void_ptr,
-			reinterpret_cast<jit_nint>(&WASM::g_tailCallState));
+		// The state is thread_local; ask the runtime for this host thread's
+		// address instead of embedding the compiling thread's TLS address.
+		jit_type_t stateSig = jit_type_create_signature(jit_abi_cdecl,
+			jit_type_void_ptr, nullptr, 0, 1);
+		jit_value_t state = jit_insn_call_native(driver, "wasm_tail_call_state",
+			reinterpret_cast<void*>(&WASM::currentTailCallState), stateSig,
+			nullptr, 0, 0);
 		jit_value_t pending = jit_insn_load_relative(driver, state,
 			offsetof(WASM::TailCallState, pending), jit_type_int);
 		jit_insn_branch_if_not(driver, pending, &doneLabel);

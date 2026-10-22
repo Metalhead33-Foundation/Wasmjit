@@ -40,6 +40,7 @@ CanonValueType toCanonValueType(const ValueType& vt, uint32_t groupFirst, uint32
 								const std::vector<TypeId>& localToGlobal)
 {
 	CanonValueType out;
+	out.isShared = vt.isShared;
 	AbstractHeapType shorthand{};
 	if (shorthandRefHeap(vt.opcode, shorthand)) {
 		out.opcode = ValueTypeCode::RefNull;
@@ -78,6 +79,7 @@ std::vector<CanonicalType> buildGroup(std::span<const Subtype> types, const Type
 		const Subtype& st = types[groupFirst + i];
 		CanonicalType ct;
 		ct.isFinal = st.isFinal;
+		ct.isShared = st.isShared;
 		for (uint32_t s : st.supertypeIndices)
 			ct.supertypes.push_back(
 				toCanonHeapType(static_cast<int32_t>(s), groupFirst, groupEnd, localToGlobal));
@@ -132,6 +134,7 @@ void serializeValue(std::string& s, const CanonValueType& v) {
 	appendI32(s, static_cast<int32_t>(v.opcode));
 	if (v.opcode == ValueTypeCode::Ref || v.opcode == ValueTypeCode::RefNull) {
 		appendU8(s, v.nullable ? 1 : 0);
+		appendU8(s, v.isShared ? 1 : 0);
 		serializeHeap(s, v.heap);
 	}
 }
@@ -146,6 +149,7 @@ void serializeField(std::string& s, const CanonFieldType& f) {
 void serializeType(std::string& s, const CanonicalType& t) {
 	appendU8(s, static_cast<uint8_t>(t.kind));
 	appendU8(s, t.isFinal ? 1 : 0);
+	appendU8(s, t.isShared ? 1 : 0);
 	appendU32(s, static_cast<uint32_t>(t.supertypes.size()));
 	for (const CanonHeapType& h : t.supertypes) serializeHeap(s, h);
 	if (t.kind == CanonTypeKind::Func) {
@@ -319,6 +323,7 @@ bool isRefOpcode(ValueTypeCode c) {
 bool valueMatches(const CanonView& v, const CanonValueType& a, const CanonValueType& b) {
 	if (isRefOpcode(a.opcode) || isRefOpcode(b.opcode)) {
 		if (!isRefOpcode(a.opcode) || !isRefOpcode(b.opcode)) return false;
+		if (a.isShared != b.isShared) return false; // shared and unshared never subtype
 		if (a.nullable && !b.nullable) return false;
 		return heapMatches(v, a.heap, b.heap);
 	}
@@ -341,6 +346,7 @@ bool fieldMatches(const CanonView& v, const CanonFieldType& a, const CanonFieldT
 // the subtype, `expected` the declared supertype's comptype.
 bool compMatches(const CanonView& v, CoreTypeView actual, CoreTypeView expected) {
 	if (actual.kind() != expected.kind()) return false;
+	if (actual.isShared() != expected.isShared()) return false;
 	if (actual.kind() == CanonTypeKind::Import)
 		return true;
 	switch (actual.kind()) {
@@ -379,6 +385,7 @@ std::vector<TypeId> TypeRegistry::internGroupImpl(std::span<const Subtype> types
 											  const TypeGroup& group,
 											  std::vector<TypeId>& localToGlobal)
 {
+	std::scoped_lock lock(internMutex_);
 	const uint32_t groupFirst = group.first.value;
 	const uint32_t groupEnd = groupFirst + group.count;
 	if (localToGlobal.size() < groupEnd)
@@ -427,6 +434,7 @@ std::vector<TypeId> TypeRegistry::internGroup(std::span<const Subtype> scratch,
 											  const TypeGroup& group,
 											  std::span<const TypeId> outer)
 {
+	std::scoped_lock lock(internMutex_);
 	const uint32_t groupEnd = group.first.value + group.count;
 	if (scratch.size() < groupEnd)
 		throw std::runtime_error("type registry: rec group scratch buffer is too small");
@@ -441,6 +449,7 @@ std::vector<TypeId> TypeRegistry::internModule(std::span<const Subtype> types,
 											   std::span<const TypeGroup> groups,
 											   std::span<const TypeId> prefix)
 {
+	std::scoped_lock lock(internMutex_);
 	if (prefix.size() > types.size())
 		throw std::runtime_error(
 				"type registry: imported-type prefix is larger than the type space");

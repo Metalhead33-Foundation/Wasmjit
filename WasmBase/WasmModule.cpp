@@ -214,6 +214,7 @@ void Module::processImportSection(Elv::Io::Device& file, const Section& section)
 			TableType table;
 			table.elementType.decode(wasmStream); // Reusing your RefType logic
 			table.limits.decode(wasmStream);
+			table.isShared = (table.limits.flags & 0x02) != 0;
 			this->importTables.push_back({{moduleName, fieldName}, table});
 		}
 		else if (kind == (uint8_t)ExternalKind::Memory) {
@@ -226,9 +227,10 @@ void Module::processImportSection(Elv::Io::Device& file, const Section& section)
 			global.contentType.decode(wasmStream);
 			uint8_t mut;
 			wasmStream >> mut;
-			if (mut > 1)
-				throw std::runtime_error("malformed global mutability");
-			global.isMutable = (mut == 0x01);
+			if (mut & ~0x03u)
+				throw std::runtime_error("malformed global mutability/shared flag");
+			global.isMutable = (mut & 0x01) != 0;
+			global.isShared = (mut & 0x02) != 0;
 			this->importGlobals.push_back({{moduleName, fieldName}, global});
 		}
 		else if (kind == (uint8_t)ExternalKind::Tag) { // Exception Handling
@@ -333,6 +335,7 @@ void Module::processTableSection(Elv::Io::Device& file, const Section& section)
 			table.elementType.decodeAfterFirstByte(wasmStream, firstByte);
 		}
 		table.limits.decode(wasmStream);      // Reads flags + initial + max
+		table.isShared = (table.limits.flags & 0x02) != 0;
 		if (hasInitExpr)
 			table.initExpr = parseInitExpr(wasmStream);
 
@@ -366,9 +369,10 @@ void Module::processGlobalSection(Elv::Io::Device& file, const Section& section)
 		g.type.contentType.decode(wasmStream);
 		uint8_t mut;
 		wasmStream >> mut;
-		if (mut > 1)
-			throw std::runtime_error("malformed global mutability");
-		g.type.isMutable = (mut == 0x01);
+		if (mut & ~0x03u)
+			throw std::runtime_error("malformed global mutability/shared flag");
+		g.type.isMutable = (mut & 0x01) != 0;
+		g.type.isShared = (mut & 0x02) != 0;
 
 		// 2. Parse Init Expression.
 		// Use the proper constant-expression reader: a naive "read until 0x0B"
@@ -427,7 +431,9 @@ void Module::processElementSection(Elv::Io::Device& file, const Section& section
 		wasmStream >> Elv::Io::Leb(mode);
 
 		ElementSegment seg;
-		seg.mode = mode;
+		seg.isShared = (mode & 0x08u) != 0;
+		seg.mode = mode & ~0x08u;
+		mode = seg.mode;
 
 		if (mode == 0) {
 			// Legacy V1 path
@@ -524,7 +530,9 @@ void Module::processDataSection(Elv::Io::Device& file, const Section& section)
 		wasmStream >> Elv::Io::Leb(mode);
 
 		DataSegment seg;
-		seg.mode = mode;
+		seg.isShared = (mode & 0x08u) != 0;
+		seg.mode = mode & ~0x08u;
+		mode = seg.mode;
 
 		if (mode == 0) {
 			// Active, implicitly Memory 0
@@ -883,6 +891,10 @@ void Module::processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t num
 		}
 
 		// 2. Handle Composite Type
+		if (prefix == 0x65) { // `sharecomptype` (shared-everything threads)
+			st.isShared = true;
+			stream >> prefix;
+		}
 		if (prefix == 0x5D) { // cont $ft (stack switching)
 			// `cont $ft` is a composite type whose payload is a function-type
 			// index. Keep the payload; the runtime is still rejected at the
@@ -1312,6 +1324,7 @@ ValueType Module::valueTypeFromCanon(const CanonValueType& type) const
 	ValueType out;
 	out.opcode = type.opcode;
 	out.heapType = -1;
+	out.isShared = type.isShared;
 	if (type.opcode == ValueTypeCode::Ref || type.opcode == ValueTypeCode::RefNull) {
 		switch (type.heap.kind) {
 		case CanonHeapType::Kind::Abstract:

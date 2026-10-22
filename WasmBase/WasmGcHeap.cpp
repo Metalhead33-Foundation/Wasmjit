@@ -56,6 +56,7 @@ GcHeap::~GcHeap()
 
 GcHeap::RegionSet* GcHeap::createSet()
 {
+	std::scoped_lock lock(mutex_);
 	RegionSet* set = new RegionSet();
 	set->heap = this;
 	return set;
@@ -65,6 +66,7 @@ void GcHeap::releaseSet(RegionSet* set)
 {
 	if (set == nullptr)
 		return;
+	std::scoped_lock lock(mutex_);
 	Region* r = set->list;
 	while (r != nullptr) {
 		Region* next = r->nextInSet;
@@ -76,6 +78,7 @@ void GcHeap::releaseSet(RegionSet* set)
 
 GcHeap::Region* GcHeap::createRegion(RegionSet& set, size_t blockSize, size_t capacity, uint32_t classIndex)
 {
+	std::scoped_lock lock(mutex_);
 	// Charge the whole region before backing it, exactly like the memory/table
 	// guardrail: an allocation that would exceed the budget fails without
 	// touching the host (docs/SAFETY.md §2.3).
@@ -115,6 +118,7 @@ void GcHeap::releaseRegion(Region* r)
 {
 	if (r == nullptr)
 		return;
+	std::scoped_lock lock(mutex_);
 
 	if (r->owner != nullptr) {
 		if (r->prevInSet != nullptr)
@@ -143,6 +147,7 @@ void GcHeap::releaseRegion(Region* r)
 
 GcHeap::Region* GcHeap::regionFor(const void* p) const
 {
+	std::scoped_lock lock(mutex_);
 	if (p == nullptr || regions.empty())
 		return nullptr;
 	const uint8_t* bytes = static_cast<const uint8_t*>(p);
@@ -158,11 +163,13 @@ GcHeap::Region* GcHeap::regionFor(const void* p) const
 
 bool GcHeap::owns(const void* p) const
 {
+	std::scoped_lock lock(mutex_);
 	return regionFor(p) != nullptr;
 }
 
 void* GcHeap::allocate(RegionSet& set, size_t size)
 {
+	std::scoped_lock lock(mutex_);
 	if (size == 0)
 		size = 1;
 	const size_t rounded = (size + kGranularity - 1) / kGranularity * kGranularity;
@@ -216,6 +223,7 @@ void* GcHeap::allocate(RegionSet& set, size_t size)
 
 void GcHeap::recycle(void* block)
 {
+	std::scoped_lock lock(mutex_);
 	Region* r = regionFor(block);
 	if (r == nullptr)
 		return;

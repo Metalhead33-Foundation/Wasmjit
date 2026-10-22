@@ -336,6 +336,10 @@ std::optional<Value*> RegistryImportResolver::ModuleRegistry::resolveGlobal(std:
 	const GlobalEntry& entry = it->second;
 	if (entry.type.isMutable != type.isMutable)
 		return std::nullopt;
+	// Shared-everything threads: import matching compares the shared annotation
+	// as well as mutability (SET-1).
+	if (entry.type.isShared != type.isShared)
+		return std::nullopt;
 	const ValueType& actual = entry.type.contentType;
 	const ValueType& expected = type.contentType;
 	if (actual.opcode != expected.opcode) {

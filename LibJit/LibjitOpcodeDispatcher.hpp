@@ -263,7 +263,27 @@ private:
 	jit_value_t emitAtomicRmw(const WASM::MemArg& ma, uint32_t width, uint32_t op,
 							  jit_type_t resultType);
 	jit_value_t emitAtomicCmpxchg(const WASM::MemArg& ma, uint32_t width,
-								  jit_type_t resultType);
+							  jit_type_t resultType);
+	jit_value_t emitAtomicLoadAddress(jit_value_t address, uint32_t width,
+									  uint8_t ordering, jit_type_t resultType);
+	void        emitAtomicStoreRaw(jit_value_t address, jit_value_t value,
+								   uint32_t width, uint8_t ordering);
+	jit_value_t emitAtomicRmwRaw(jit_value_t address, jit_value_t value,
+								 uint32_t width, uint32_t op, uint8_t ordering,
+								 jit_type_t resultType);
+	jit_value_t emitAtomicCmpxchgRaw(jit_value_t address, jit_value_t expected,
+									 jit_value_t replacement, uint32_t width,
+									 uint8_t ordering, jit_type_t resultType);
+	void        emitAtomicStoreAddress(jit_value_t address, uint32_t width,
+									   uint8_t ordering);
+	jit_value_t emitAtomicRmwAddress(jit_value_t address, uint32_t width,
+									 uint32_t op, uint8_t ordering,
+									 jit_type_t resultType);
+	jit_value_t emitAtomicCmpxchgAddress(jit_value_t address, uint32_t width,
+										 uint8_t ordering, jit_type_t resultType);
+	jit_value_t tableAtomicSlotAddress(WASM::TableIdx tableIdx);
+	jit_value_t structAtomicFieldAddress(WASM::TypeIdx typeIdx, uint32_t fieldIdx);
+	jit_value_t arrayAtomicElementAddress(WASM::TypeIdx typeIdx);
 	jit_value_t callNativeHelper(void* fptr, jit_type_t resultType,
 								 std::vector<jit_type_t> paramTypes,
 								 std::vector<jit_value_t> args);
@@ -879,7 +899,43 @@ protected:
 	void dispatchMemoryAtomicNotify(WASM::MemArg arg) override;
 	void dispatchMemoryAtomicWait32(WASM::MemArg arg) override;
 	void dispatchMemoryAtomicWait64(WASM::MemArg arg) override;
-	void dispatchAtomicFence() override;
+	void dispatchAtomicFence(uint8_t ordering) override;
+	void dispatchAtomicPause() override;
+	void dispatchGlobalAtomicGet(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicSet(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwAdd(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwSub(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwAnd(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwOr(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwXor(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwXchg(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwCmpxchg(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchTableAtomicGet(uint8_t ordering, WASM::TableIdx arg) override;
+	void dispatchTableAtomicSet(uint8_t ordering, WASM::TableIdx arg) override;
+	void dispatchTableAtomicRmwXchg(uint8_t ordering, WASM::TableIdx arg) override;
+	void dispatchTableAtomicRmwCmpxchg(uint8_t ordering, WASM::TableIdx arg) override;
+	void dispatchStructAtomicGet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicGetS(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicGetU(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicSet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwSub(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwAnd(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwOr(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwXor(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwXchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchArrayAtomicGet(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicGetS(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicGetU(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicSet(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwSub(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwAnd(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwOr(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwXor(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwXchg(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg) override;
 	void dispatchI32AtomicLoad(WASM::MemArg arg) override;
 	void dispatchI64AtomicLoad(WASM::MemArg arg) override;
 	void dispatchI32AtomicLoad8U(WASM::MemArg arg) override;

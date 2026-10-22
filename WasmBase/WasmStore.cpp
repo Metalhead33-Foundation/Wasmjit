@@ -91,6 +91,7 @@ Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPag
 
 		// The unique_ptr keeps the StoreOwnedMemory at a stable address, so the
 		// LinearMemory* handed out below stays valid across later insertions.
+		std::scoped_lock lock(storeMutex_);
 		memories.emplace(id, std::move(memory));
 	} catch (...) {
 		releaseBytes(initialBytes);
@@ -101,12 +102,14 @@ Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPag
 
 LinearMemory* Store::memory(MemoryId id)
 {
+	std::scoped_lock lock(storeMutex_);
 	auto it = memories.find(id);
 	return it == memories.end() ? nullptr : it->second->getMemory();
 }
 
 const LinearMemory* Store::memory(MemoryId id) const
 {
+	std::scoped_lock lock(storeMutex_);
 	auto it = memories.find(id);
 	return it == memories.end() ? nullptr : it->second->getMemory();
 }
@@ -132,6 +135,9 @@ bool Store::growMemory(LinearMemory* memory, uint64_t deltaPages)
 		store.releaseBytes(deltaBytes);
 		return false;
 	}
+	// THREADS.md TH-3/T7: publish the new size and zeroed pages to other host
+	// threads. `memory.size` performs the matching acquire load.
+	__atomic_thread_fence(__ATOMIC_SEQ_CST);
 	return true;
 }
 
@@ -150,6 +156,7 @@ Store::TableId Store::createTable(uint64_t initialSize, uint64_t maxSize)
 	try {
 		// unique_ptr keeps the StoreOwnedTable at a stable address, so the
 		// TableInstance* handed out below stays valid across later insertions.
+		std::scoped_lock lock(storeMutex_);
 		tables.emplace(id, std::make_unique<StoreOwnedTable>(initialSize, maxSize));
 	} catch (...) {
 		releaseBytes(initialBytes);
@@ -160,6 +167,7 @@ Store::TableId Store::createTable(uint64_t initialSize, uint64_t maxSize)
 
 StoreOwnedTable* Store::storeOwnedTable(TableId id)
 {
+	std::scoped_lock lock(storeMutex_);
 	auto it = tables.find(id);
 	return it == tables.end() ? nullptr : it->second.get();
 }
@@ -200,12 +208,14 @@ TagId Store::createTag(TypeId payloadType)
 	StoreOwnedTag tag;
 	tag.id = id;
 	tag.typeId = payloadType;
+	std::scoped_lock lock(storeMutex_);
 	tags.emplace(id, tag);
 	return id;
 }
 
 const Store::StoreOwnedTag* Store::tag(TagId id) const
 {
+	std::scoped_lock lock(storeMutex_);
 	auto it = tags.find(id);
 	return it == tags.end() ? nullptr : &it->second;
 }
@@ -213,6 +223,7 @@ const Store::StoreOwnedTag* Store::tag(TagId id) const
 bool Store::ownException(std::byte* storage, uint64_t bytes)
 {
 	try {
+		std::scoped_lock lock(storeMutex_);
 		exceptions.push_back(StoreOwnedException{storage, bytes});
 		return true;
 	} catch (...) {
@@ -226,6 +237,7 @@ Store::CallTagId Store::canonicalCallTag(TypeId signature)
 {
 	if (signature.isNone())
 		throw std::invalid_argument("canonical call tag requires a concrete TypeId");
+	std::scoped_lock lock(storeMutex_);
 	const auto it = canonicalCallTags.find(signature.value);
 	if (it != canonicalCallTags.end())
 		return it->second;
@@ -237,6 +249,7 @@ Store::CallTagId Store::canonicalCallTag(TypeId signature)
 
 const Store::StoreOwnedCallTag* Store::callTag(CallTagId id) const
 {
+	std::scoped_lock lock(storeMutex_);
 	const auto it = callTags.find(id);
 	return it == callTags.end() ? nullptr : &it->second;
 }
@@ -247,6 +260,7 @@ void Store::registerCallableRange(const Callable* begin, size_t count)
 {
 	if (begin == nullptr || count == 0)
 		return;
+	std::scoped_lock lock(storeMutex_);
 	callableRanges.push_back(CallableRange{begin, begin + count});
 }
 
@@ -254,6 +268,7 @@ void Store::unregisterCallableRange(const Callable* begin)
 {
 	if (begin == nullptr)
 		return;
+	std::scoped_lock lock(storeMutex_);
 	for (auto it = callableRanges.begin(); it != callableRanges.end(); ++it) {
 		if (it->begin == begin) {
 			callableRanges.erase(it);
@@ -267,6 +282,7 @@ const Callable* Store::callableAt(const void* ref) const
 	// Ranges are few — one per instance that has callables — so a linear scan
 	// beats maintaining a hash map. Integer comparison, like `GcHeap::owns`, to
 	// avoid comparing unrelated pointers.
+	std::scoped_lock lock(storeMutex_);
 	const uintptr_t value = reinterpret_cast<uintptr_t>(ref);
 	for (const CallableRange& range : callableRanges) {
 		if (value >= reinterpret_cast<uintptr_t>(range.begin) &&

@@ -30,6 +30,11 @@ static_assert(offsetof(LinearMemory, memoryBase) == 0,
 static_assert(std::is_standard_layout_v<LinearMemory>,
 			  "LinearMemory must remain standard-layout for offsetof() access from generated code");
 
+// Sequentially consistent read of a memory's current size. Generated code uses
+// this for `memory.size` instead of a plain field load, so a host thread
+// growing a shared memory is observed atomically (THREADS.md TH-3/T7).
+uint64_t wasm_memory_size(const LinearMemory* memory);
+
 class StoreOwnedMemory
 {
 protected:

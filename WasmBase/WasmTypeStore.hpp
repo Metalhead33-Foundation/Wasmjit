@@ -56,7 +56,9 @@ enum TypeFlags : uint16_t {
 	TypeFlagAsync = 1u << 1,
 	TypeFlagMutable = 1u << 2,
 	TypeFlagNullable = 1u << 3,
-	TypeFlagAbstract = 1u << 4
+	TypeFlagAbstract = 1u << 4,
+	// Shared-everything threads: `sharecomptype` (SET-1).
+	TypeFlagShared = 1u << 5
 };
 
 struct TypeSpan {
@@ -292,6 +294,7 @@ public:
 	bool valid() const { return store_ != nullptr || pending_ != nullptr; }
 	CanonTypeKind kind() const;
 	bool isFinal() const;
+	bool isShared() const;
 	uint32_t depth() const;
 	std::span<const CanonHeapType> supertypes() const;
 	std::span<const CanonStorageType> funcParams() const;

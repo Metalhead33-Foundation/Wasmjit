@@ -14,7 +14,12 @@
 #include <utility>
 namespace WASM {
 
-TailCallState g_tailCallState;
+thread_local TailCallState g_tailCallState;
+
+TailCallState* currentTailCallState()
+{
+	return &g_tailCallState;
+}
 
 namespace {
 // `ref.func $f` is stored in a constant-expression Value as a *biased* function
@@ -171,6 +176,11 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 		// An applied active segment is dropped (see the loop comment above).
 		internals.dataSegmentDropped[dataIdx] = true;
 	}
+
+	// THREADS.md TH-3/T8: data-segment initialisation synchronizes with other
+	// host threads before the instance is published or its start function runs.
+	// The copies above are the specified non-atomic writes.
+	__atomic_thread_fence(__ATOMIC_SEQ_CST);
 
 	// ── Element segment references ─────────────────────────────────────────
 	// An expression-form segment holds *references*: evaluate each entry once

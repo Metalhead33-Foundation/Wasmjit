@@ -2,6 +2,7 @@
 #define WASMGCHEAP_HPP
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <vector>
 
 namespace WASM {
@@ -103,6 +104,11 @@ public:
 	static constexpr uint8_t kPoisonByte = 0xDD;
 
 private:
+	// Host threads may allocate from/release different instances' RegionSets
+	// concurrently. Recursive because allocate/release use createRegion/
+	// releaseRegion internally. The lock is uncontended in the default
+	// single-agent build (SET-2).
+	mutable std::recursive_mutex mutex_;
 	Region* createRegion(RegionSet& set, size_t blockSize, size_t capacity, uint32_t classIndex);
 	void    releaseRegion(Region* r);
 	Region* regionFor(const void* p) const;

@@ -282,6 +282,7 @@ void WASM::OpcodeDispatcher::dispatchPrefixGC(FastMemReader& stream, GCOpcode op
 		case GCOpcode::AnyConvertExtern: { dispatchAnyConvertExtern(); break; }
 		case GCOpcode::ExternConvertAny: { dispatchExternConvertAny(); break; }
 		case GCOpcode::RefI31:           { dispatchRefI31();           break; }
+		case GCOpcode::RefI31Shared:     { dispatchRefI31();           break; }
 		case GCOpcode::I31GetS:          { dispatchI31GetS();          break; }
 		case GCOpcode::I31GetU:          { dispatchI31GetU();          break; }
 
@@ -756,18 +757,88 @@ void WASM::OpcodeDispatcher::dispatchPrefixSIMD(FastMemReader& stream, SIMDOpcod
 void OpcodeDispatcher::dispatchPrefixAtomic(FastMemReader& stream, AtomicOpcode opcode)
 {
 
-	// atomic.fence is the only instruction without a memarg.
+	// atomic.fence carries the acquire-release ordering byte instead of a
+	// memarg; atomic.pause (acquire-release proposal) has no immediate at all.
 	if (opcode == AtomicOpcode::AtomicFence) {
-		const uint8_t reserved = stream.read<uint8_t>();
-		if (reserved != 0x00) {
-			throw std::runtime_error("Invalid atomic.fence immediate: reserved byte must be 0x00");
+		const uint8_t ordering = stream.read<uint8_t>();
+		if (ordering > 1) {
+			throw std::runtime_error("Invalid atomic.fence ordering immediate: expected 0x00 (seqcst) or 0x01 (acqrel)");
 		}
-		dispatchAtomicFence();
+		dispatchAtomicFence(ordering);
+		return;
+	}
+	if (opcode == AtomicOpcode::AtomicPause) {
+		dispatchAtomicPause();
+		return;
+	}
+
+	// Shared-everything threads: `u8 ordering` then the named entity/type.
+	if (static_cast<uint8_t>(opcode) >= static_cast<uint8_t>(AtomicOpcode::GlobalAtomicGet)) {
+		const uint8_t ordering = stream.read<uint8_t>();
+		if (ordering > 1) {
+			throw std::runtime_error("Invalid shared atomic ordering immediate: expected 0x00 (seqcst) or 0x01 (acqrel)");
+		}
+		switch (opcode) {
+		case AtomicOpcode::GlobalAtomicGet:        dispatchGlobalAtomicGet(ordering, stream.readLEB128<GlobalIdx>()); break;
+		case AtomicOpcode::GlobalAtomicSet:        dispatchGlobalAtomicSet(ordering, stream.readLEB128<GlobalIdx>()); break;
+		case AtomicOpcode::GlobalAtomicRmwAdd:     dispatchGlobalAtomicRmwAdd(ordering, stream.readLEB128<GlobalIdx>()); break;
+		case AtomicOpcode::GlobalAtomicRmwSub:     dispatchGlobalAtomicRmwSub(ordering, stream.readLEB128<GlobalIdx>()); break;
+		case AtomicOpcode::GlobalAtomicRmwAnd:     dispatchGlobalAtomicRmwAnd(ordering, stream.readLEB128<GlobalIdx>()); break;
+		case AtomicOpcode::GlobalAtomicRmwOr:      dispatchGlobalAtomicRmwOr(ordering, stream.readLEB128<GlobalIdx>()); break;
+		case AtomicOpcode::GlobalAtomicRmwXor:     dispatchGlobalAtomicRmwXor(ordering, stream.readLEB128<GlobalIdx>()); break;
+		case AtomicOpcode::GlobalAtomicRmwXchg:    dispatchGlobalAtomicRmwXchg(ordering, stream.readLEB128<GlobalIdx>()); break;
+		case AtomicOpcode::GlobalAtomicRmwCmpxchg: dispatchGlobalAtomicRmwCmpxchg(ordering, stream.readLEB128<GlobalIdx>()); break;
+		case AtomicOpcode::TableAtomicGet:         dispatchTableAtomicGet(ordering, stream.readLEB128<TableIdx>()); break;
+		case AtomicOpcode::TableAtomicSet:         dispatchTableAtomicSet(ordering, stream.readLEB128<TableIdx>()); break;
+		case AtomicOpcode::TableAtomicRmwXchg:     dispatchTableAtomicRmwXchg(ordering, stream.readLEB128<TableIdx>()); break;
+		case AtomicOpcode::TableAtomicRmwCmpxchg:  dispatchTableAtomicRmwCmpxchg(ordering, stream.readLEB128<TableIdx>()); break;
+		case AtomicOpcode::StructAtomicGet:
+		case AtomicOpcode::StructAtomicGetS:
+		case AtomicOpcode::StructAtomicGetU:
+		case AtomicOpcode::StructAtomicSet:
+		case AtomicOpcode::StructAtomicRmwAdd:
+		case AtomicOpcode::StructAtomicRmwSub:
+		case AtomicOpcode::StructAtomicRmwAnd:
+		case AtomicOpcode::StructAtomicRmwOr:
+		case AtomicOpcode::StructAtomicRmwXor:
+		case AtomicOpcode::StructAtomicRmwXchg:
+		case AtomicOpcode::StructAtomicRmwCmpxchg: {
+			const TypeIdx type = stream.readLEB128<TypeIdx>();
+			const uint32_t field = stream.readLEB128<uint32_t>();
+			switch (opcode) {
+			case AtomicOpcode::StructAtomicGet:         dispatchStructAtomicGet(ordering, type, field); break;
+			case AtomicOpcode::StructAtomicGetS:        dispatchStructAtomicGetS(ordering, type, field); break;
+			case AtomicOpcode::StructAtomicGetU:        dispatchStructAtomicGetU(ordering, type, field); break;
+			case AtomicOpcode::StructAtomicSet:         dispatchStructAtomicSet(ordering, type, field); break;
+			case AtomicOpcode::StructAtomicRmwAdd:      dispatchStructAtomicRmwAdd(ordering, type, field); break;
+			case AtomicOpcode::StructAtomicRmwSub:      dispatchStructAtomicRmwSub(ordering, type, field); break;
+			case AtomicOpcode::StructAtomicRmwAnd:      dispatchStructAtomicRmwAnd(ordering, type, field); break;
+			case AtomicOpcode::StructAtomicRmwOr:       dispatchStructAtomicRmwOr(ordering, type, field); break;
+			case AtomicOpcode::StructAtomicRmwXor:      dispatchStructAtomicRmwXor(ordering, type, field); break;
+			case AtomicOpcode::StructAtomicRmwXchg:     dispatchStructAtomicRmwXchg(ordering, type, field); break;
+			default:                                    dispatchStructAtomicRmwCmpxchg(ordering, type, field); break;
+			}
+			break;
+		}
+		case AtomicOpcode::ArrayAtomicGet:         dispatchArrayAtomicGet(ordering, stream.readLEB128<TypeIdx>()); break;
+		case AtomicOpcode::ArrayAtomicGetS:        dispatchArrayAtomicGetS(ordering, stream.readLEB128<TypeIdx>()); break;
+		case AtomicOpcode::ArrayAtomicGetU:        dispatchArrayAtomicGetU(ordering, stream.readLEB128<TypeIdx>()); break;
+		case AtomicOpcode::ArrayAtomicSet:         dispatchArrayAtomicSet(ordering, stream.readLEB128<TypeIdx>()); break;
+		case AtomicOpcode::ArrayAtomicRmwAdd:      dispatchArrayAtomicRmwAdd(ordering, stream.readLEB128<TypeIdx>()); break;
+		case AtomicOpcode::ArrayAtomicRmwSub:      dispatchArrayAtomicRmwSub(ordering, stream.readLEB128<TypeIdx>()); break;
+		case AtomicOpcode::ArrayAtomicRmwAnd:      dispatchArrayAtomicRmwAnd(ordering, stream.readLEB128<TypeIdx>()); break;
+		case AtomicOpcode::ArrayAtomicRmwOr:       dispatchArrayAtomicRmwOr(ordering, stream.readLEB128<TypeIdx>()); break;
+		case AtomicOpcode::ArrayAtomicRmwXor:      dispatchArrayAtomicRmwXor(ordering, stream.readLEB128<TypeIdx>()); break;
+		case AtomicOpcode::ArrayAtomicRmwXchg:     dispatchArrayAtomicRmwXchg(ordering, stream.readLEB128<TypeIdx>()); break;
+		case AtomicOpcode::ArrayAtomicRmwCmpxchg:  dispatchArrayAtomicRmwCmpxchg(ordering, stream.readLEB128<TypeIdx>()); break;
+		default:
+			throw std::runtime_error("Invalid or unsupported shared atomic opcode");
+		}
 		return;
 	}
 
 	// All other atomic instructions carry a memarg.
-	MemArg m = stream.read<MemArg>();
+	MemArg m = stream.read<AtomicMemArg>();
 
 	switch (opcode) {
 		case AtomicOpcode::MemoryAtomicNotify:      { dispatchMemoryAtomicNotify(m);      break; }

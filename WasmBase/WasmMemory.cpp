@@ -18,6 +18,18 @@ namespace WASM {
 constexpr uint64_t WASM_PAGE_SIZE = 0x10000; // 64 KiB
 constexpr uint64_t MAX_SHARED_BYTES = 4ULL * 1024 * 1024 * 1024; // 4 GiB Cap for unbounded shared memory
 
+uint64_t wasm_memory_size(const LinearMemory* memory)
+{
+	if (memory == nullptr)
+		return 0;
+	// A shared memory's metadata can be updated by another host thread. The
+	// acquire load pairs with the release fence in Store::growMemory; an
+	// unshared memory is read directly (it has a single owner, THREADS.md TD9).
+	if (memory->isShared)
+		return __atomic_load_n(&memory->memorySize, __ATOMIC_ACQUIRE);
+	return memory->memorySize;
+}
+
 StoreOwnedMemory::StoreOwnedMemory(uint64_t initialPages, uint64_t maxPages, bool isShared, bool is64)
 {
 	// Guard against initialPages/maxPages overflow in constructor calculations

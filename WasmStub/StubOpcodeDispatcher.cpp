@@ -2302,10 +2302,65 @@ void OpcodeDispatcher::dispatchMemoryAtomicWait64(WASM::MemArg arg)
 {
 	*stream << '(' << "MemoryAtomicWait64" << ' ' << '(' << arg << ')' << std::endl;
 }
-void OpcodeDispatcher::dispatchAtomicFence()
+void OpcodeDispatcher::dispatchAtomicFence(uint8_t ordering)
 {
-	*stream << '(' << "AtomicFence" << ')' << std::endl;
+	*stream << '(' << "AtomicFence" << ' ' << static_cast<unsigned>(ordering) << ')' << std::endl;
 }
+void OpcodeDispatcher::dispatchAtomicPause()
+{
+	*stream << '(' << "AtomicPause" << ')' << std::endl;
+}
+#define WJ_STUB_ATOMIC_GLOBAL(n) \
+	void OpcodeDispatcher::dispatch##n(uint8_t o, WASM::GlobalIdx a) \
+	{ *stream << '(' << #n << ' ' << static_cast<unsigned>(o) << ' ' << a << ')' << std::endl; }
+WJ_STUB_ATOMIC_GLOBAL(GlobalAtomicGet)
+WJ_STUB_ATOMIC_GLOBAL(GlobalAtomicSet)
+WJ_STUB_ATOMIC_GLOBAL(GlobalAtomicRmwAdd)
+WJ_STUB_ATOMIC_GLOBAL(GlobalAtomicRmwSub)
+WJ_STUB_ATOMIC_GLOBAL(GlobalAtomicRmwAnd)
+WJ_STUB_ATOMIC_GLOBAL(GlobalAtomicRmwOr)
+WJ_STUB_ATOMIC_GLOBAL(GlobalAtomicRmwXor)
+WJ_STUB_ATOMIC_GLOBAL(GlobalAtomicRmwXchg)
+WJ_STUB_ATOMIC_GLOBAL(GlobalAtomicRmwCmpxchg)
+#undef WJ_STUB_ATOMIC_GLOBAL
+#define WJ_STUB_ATOMIC_TABLE(n) \
+	void OpcodeDispatcher::dispatch##n(uint8_t o, WASM::TableIdx a) \
+	{ *stream << '(' << #n << ' ' << static_cast<unsigned>(o) << ' ' << a << ')' << std::endl; }
+WJ_STUB_ATOMIC_TABLE(TableAtomicGet)
+WJ_STUB_ATOMIC_TABLE(TableAtomicSet)
+WJ_STUB_ATOMIC_TABLE(TableAtomicRmwXchg)
+WJ_STUB_ATOMIC_TABLE(TableAtomicRmwCmpxchg)
+#undef WJ_STUB_ATOMIC_TABLE
+#define WJ_STUB_ATOMIC_STRUCT(n) \
+	void OpcodeDispatcher::dispatch##n(uint8_t o, WASM::TypeIdx t, uint32_t f) \
+	{ *stream << '(' << #n << ' ' << static_cast<unsigned>(o) << ' ' << t << ' ' << f << ')' << std::endl; }
+WJ_STUB_ATOMIC_STRUCT(StructAtomicGet)
+WJ_STUB_ATOMIC_STRUCT(StructAtomicGetS)
+WJ_STUB_ATOMIC_STRUCT(StructAtomicGetU)
+WJ_STUB_ATOMIC_STRUCT(StructAtomicSet)
+WJ_STUB_ATOMIC_STRUCT(StructAtomicRmwAdd)
+WJ_STUB_ATOMIC_STRUCT(StructAtomicRmwSub)
+WJ_STUB_ATOMIC_STRUCT(StructAtomicRmwAnd)
+WJ_STUB_ATOMIC_STRUCT(StructAtomicRmwOr)
+WJ_STUB_ATOMIC_STRUCT(StructAtomicRmwXor)
+WJ_STUB_ATOMIC_STRUCT(StructAtomicRmwXchg)
+WJ_STUB_ATOMIC_STRUCT(StructAtomicRmwCmpxchg)
+#undef WJ_STUB_ATOMIC_STRUCT
+#define WJ_STUB_ATOMIC_ARRAY(n) \
+	void OpcodeDispatcher::dispatch##n(uint8_t o, WASM::TypeIdx t) \
+	{ *stream << '(' << #n << ' ' << static_cast<unsigned>(o) << ' ' << t << ')' << std::endl; }
+WJ_STUB_ATOMIC_ARRAY(ArrayAtomicGet)
+WJ_STUB_ATOMIC_ARRAY(ArrayAtomicGetS)
+WJ_STUB_ATOMIC_ARRAY(ArrayAtomicGetU)
+WJ_STUB_ATOMIC_ARRAY(ArrayAtomicSet)
+WJ_STUB_ATOMIC_ARRAY(ArrayAtomicRmwAdd)
+WJ_STUB_ATOMIC_ARRAY(ArrayAtomicRmwSub)
+WJ_STUB_ATOMIC_ARRAY(ArrayAtomicRmwAnd)
+WJ_STUB_ATOMIC_ARRAY(ArrayAtomicRmwOr)
+WJ_STUB_ATOMIC_ARRAY(ArrayAtomicRmwXor)
+WJ_STUB_ATOMIC_ARRAY(ArrayAtomicRmwXchg)
+WJ_STUB_ATOMIC_ARRAY(ArrayAtomicRmwCmpxchg)
+#undef WJ_STUB_ATOMIC_ARRAY
 void OpcodeDispatcher::dispatchI32AtomicLoad(WASM::MemArg arg)
 {
 	*stream << '(' << "I32AtomicLoad" << ' ' << '(' << arg << ')' << std::endl;

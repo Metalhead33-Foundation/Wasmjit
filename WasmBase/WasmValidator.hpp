@@ -98,6 +98,10 @@ private:
 	void checkLimits(const Limits& limits, bool is64, bool isMemory,
 					 const char* what, std::size_t index) const;
 	void requireMemoryAccess(const MemArg& arg, uint32_t naturalLog2) const;
+	// Atomic accesses have extra rules: the alignment immediate must equal the
+	// natural alignment, and the acquire-release ordering byte is 0 or 1.
+	void requireAtomicMemoryAccess(const MemArg& arg, uint32_t naturalLog2) const;
+	const CanonFieldType& requireStructField(TypeIdx type, uint32_t fieldIndex) const;
 	void requireLane(uint8_t lane, uint32_t laneCount, const char* what) const;
 
 	// Operand/control typing (core instructions only in this milestone).
@@ -643,7 +647,43 @@ private:
 	void dispatchMemoryAtomicNotify(MemArg arg) override;
 	void dispatchMemoryAtomicWait32(MemArg arg) override;
 	void dispatchMemoryAtomicWait64(MemArg arg) override;
-	void dispatchAtomicFence() override;
+	void dispatchAtomicFence(uint8_t ordering) override;
+	void dispatchAtomicPause() override;
+	void dispatchGlobalAtomicGet(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicSet(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwAdd(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwSub(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwAnd(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwOr(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwXor(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwXchg(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwCmpxchg(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchTableAtomicGet(uint8_t ordering, WASM::TableIdx arg) override;
+	void dispatchTableAtomicSet(uint8_t ordering, WASM::TableIdx arg) override;
+	void dispatchTableAtomicRmwXchg(uint8_t ordering, WASM::TableIdx arg) override;
+	void dispatchTableAtomicRmwCmpxchg(uint8_t ordering, WASM::TableIdx arg) override;
+	void dispatchStructAtomicGet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicGetS(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicGetU(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicSet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwSub(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwAnd(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwOr(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwXor(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwXchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchArrayAtomicGet(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicGetS(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicGetU(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicSet(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwSub(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwAnd(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwOr(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwXor(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwXchg(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg) override;
 	void dispatchI32AtomicLoad(MemArg arg) override;
 	void dispatchI32AtomicLoad16U(MemArg arg) override;
 	void dispatchI32AtomicLoad8U(MemArg arg) override;

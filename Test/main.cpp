@@ -4,6 +4,7 @@
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -14,6 +15,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -6632,5 +6634,263 @@ TEST_CASE("validation errors name other index spaces when the name section has t
 
 	const std::string localError = errorFor("named_invalid_local");
 	REQUIRE(localError.find("uninitialized local 0 ($value)") != std::string::npos);
+}
+
+// ── Acquire-release atomics (docs/proposals/ACQUIRE_RELEASE_ATOMICS.md) ─────
+TEST_CASE("acquire-release ordering and pause decode, validate, and execute")
+{
+	// (module (memory 1 1 shared) (func (export "f") (result i32)
+	//   i32.const 0 i32.const 7 i32.atomic.store acqrel
+	//   i32.const 0 i32.atomic.load acqrel pause))
+	const std::vector<uint8_t> bytes = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x01,0x05,0x01,0x60,0x00,0x01,0x7f,
+		0x03,0x02,0x01,0x00,
+		0x05,0x04,0x01,0x03,0x01,0x01,
+		0x07,0x05,0x01,0x01,'f',0x00,0x00,
+		0x0a,0x16,0x01,0x14,0x00,
+		0x41,0x00,0x41,0x07,0xfe,0x17,0x12,0x01,0x00,
+		0x41,0x00,0xfe,0x10,0x12,0x01,0x00,
+		0xfe,0x04,0x0b
+	};
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto f = instance->exportedFunction("f");
+	REQUIRE(f.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*f) == 7);
+}
+
+// ── Shared-everything threads (docs/proposals/SHARED_EVERYTHING_THREADS.md) ─
+TEST_CASE("shared global annotation and shared atomic opcodes execute")
+{
+	// (module (global (shared (mut i32)) (i32.const 0))
+	//   (func (export "f") (result i32)
+	//     i32.const 5 global.atomic.rmw.add acqrel 0 drop
+	//     global.atomic.get seqcst 0))
+	const std::vector<uint8_t> bytes = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x01,0x05,0x01,0x60,0x00,0x01,0x7f,
+		0x03,0x02,0x01,0x00,
+		0x06,0x06,0x01,0x7f,0x03,0x41,0x00,0x0b,
+		0x07,0x05,0x01,0x01,'f',0x00,0x00,
+		0x0a,0x0f,0x01,0x0d,0x00,0x41,0x05,0xfe,0x51,0x01,0x00,
+		0x1a,0xfe,0x4f,0x00,0x00,0x0b
+	};
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+	REQUIRE(parsed->globals.size() == 1);
+	REQUIRE(parsed->globals[0].type.isShared);
+	REQUIRE(parsed->globals[0].type.isMutable);
+
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto f = instance->exportedFunction("f");
+	REQUIRE(f.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*f) == 5);
+	REQUIRE(WASM::callCallable<int32_t>(*f) == 10);
+}
+
+TEST_CASE("align.109 regression: non-atomic memarg rejects the ordering bit")
+{
+	const std::vector<uint8_t> bytes = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x01,0x04,0x01,0x60,0x00,0x00,
+		0x03,0x02,0x01,0x00,
+		0x05,0x03,0x01,0x00,0x01,
+		0x0a,0x0a,0x01,0x08,0x00,0x41,0x00,0x28,0x1f,0x00,0x1a,0x0b
+	};
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	REQUIRE_THROWS(WASM::Artifact::parse(device));
+}
+
+TEST_CASE("shared type annotations decode as shared canonical types")
+{
+	// (type (shared (func))) — sharecomptype is 0x65 before the comptype byte.
+	const std::vector<uint8_t> bytes = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x01,0x05,0x01,0x65,0x60,0x00,0x00
+	};
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+	REQUIRE(parsed->typeCount() == 1);
+	REQUIRE(parsed->typeView(0).kind() == WASM::CanonTypeKind::Func);
+	REQUIRE(parsed->typeView(0).isShared());
+}
+
+TEST_CASE("shared table annotations and table atomics execute")
+{
+	// (module (table 1 1 funcref shared)
+	//   (func (export "f")
+	//     i32.const 0 ref.null func table.atomic.set seqcst 0
+	//     i32.const 0 table.atomic.get seqcst 0 drop))
+	const std::vector<uint8_t> bytes = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x01,0x04,0x01,0x60,0x00,0x00,
+		0x03,0x02,0x01,0x00,
+		0x04,0x05,0x01,0x70,0x03,0x01,0x01,
+		0x07,0x05,0x01,0x01,'f',0x00,0x00,
+		0x0a,0x13,0x01,0x11,0x00,
+		0x41,0x00,0xd0,0x70,0xfe,0x59,0x00,0x00,
+		0x41,0x00,0xfe,0x58,0x00,0x00,0x1a,0x0b
+	};
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+	REQUIRE(parsed->tables.size() == 1);
+	REQUIRE(parsed->tables[0].isShared);
+
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto f = instance->exportedFunction("f");
+	REQUIRE(f.has_value());
+	WASM::callCallable<void>(*f);
+}
+
+TEST_CASE("shared heap-type references decode with the shared bit")
+{
+	// (table 1 1 (ref null (shared any)) shared) — element type 0x63 0x65 0x6e,
+	// limits flags 0x03 (max + shared).
+	const std::vector<uint8_t> bytes = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x04,0x07,0x01,0x63,0x65,0x6e,0x03,0x01,0x01
+	};
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+	REQUIRE(parsed->tables.size() == 1);
+	REQUIRE(parsed->tables[0].isShared);
+	REQUIRE(parsed->tables[0].elementType.isShared);
+	REQUIRE(parsed->tables[0].elementType.heapType
+			== static_cast<int32_t>(WASM::AbstractHeapType::Any));
+}
+
+TEST_CASE("struct atomic get/set execute")
+{
+	// (type $s (struct (field (mut i32))))
+	// (func (export "f") (result i32) (local (ref null $s))
+	//   struct.new_default $s local.set 0
+	//   local.get 0 i32.const 7 struct.atomic.set seqcst $s 0
+	//   local.get 0 struct.atomic.get seqcst $s 0)
+	const std::vector<uint8_t> bytes = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x01,0x09,0x02,0x5f,0x01,0x7f,0x01,0x60,0x00,0x01,0x7f,
+		0x03,0x02,0x01,0x01,
+		0x07,0x05,0x01,0x01,'f',0x00,0x00,
+		0x0a,0x1c,0x01,0x1a,0x01,0x01,0x63,0x00,
+		0xfb,0x01,0x00,0x21,0x00,
+		0x20,0x00,0x41,0x07,0xfe,0x5f,0x00,0x00,0x00,
+		0x20,0x00,0xfe,0x5c,0x00,0x00,0x00,0x0b
+	};
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto f = instance->exportedFunction("f");
+	REQUIRE(f.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*f) == 7);
+}
+
+TEST_CASE("array atomic get/set execute")
+{
+	// (type $a (array (mut i32)))
+	// (func (export "f") (result i32) (local (ref null $a))
+	//   i32.const 1 array.new_default $a local.set 0
+	//   local.get 0 i32.const 0 i32.const 7 array.atomic.set seqcst $a
+	//   local.get 0 i32.const 0 array.atomic.get seqcst $a)
+	const std::vector<uint8_t> bytes = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x01,0x08,0x02,0x5e,0x7f,0x01,0x60,0x00,0x01,0x7f,
+		0x03,0x02,0x01,0x01,
+		0x07,0x05,0x01,0x01,'f',0x00,0x00,
+		0x0a,0x20,0x01,0x1e,0x01,0x01,0x63,0x00,
+		0x41,0x01,0xfb,0x07,0x00,0x21,0x00,
+		0x20,0x00,0x41,0x00,0x41,0x07,0xfe,0x6a,0x00,0x00,
+		0x20,0x00,0x41,0x00,0xfe,0x67,0x00,0x00,0x0b
+	};
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto f = instance->exportedFunction("f");
+	REQUIRE(f.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*f) == 7);
+}
+
+TEST_CASE("host threads instantiate and call independent modules concurrently")
+{
+	std::atomic<int> failures{0};
+	std::vector<std::thread> threads;
+	for (int t = 0; t < 4; ++t) {
+		threads.emplace_back([&failures] {
+			for (int iteration = 0; iteration < 8; ++iteration) {
+				try {
+					WASM::Module module = loadTestModule("add_core");
+					WASM::RegistryImportResolver imports;
+					auto backend = TestBackend::create();
+					auto instance = backend->instantiator().instantiate(module, imports);
+					auto add = instance->exportedFunction("add");
+					if (!add.has_value()
+							|| WASM::callCallable<int32_t>(*add, int32_t(20), int32_t(22)) != 42)
+						++failures;
+				} catch (...) {
+					++failures;
+				}
+			}
+		});
+	}
+	for (std::thread& thread : threads)
+		thread.join();
+	REQUIRE(failures.load() == 0);
 }
 

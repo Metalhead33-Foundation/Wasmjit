@@ -323,6 +323,7 @@ enum class GCOpcode : uint32_t {
 	RefI31              = 28,  // ref.i31
 	I31GetS             = 29,  // i31.get_s
 	I31GetU             = 30,  // i31.get_u
+	RefI31Shared        = 31,  // ref.i31_shared (SET-3)
 };
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, GCOpcode right) {
 	return left.writeLEB128_enum(right);
@@ -774,8 +775,10 @@ enum class AtomicOpcode : uint8_t {
 	MemoryAtomicWait32      = 0x01,  // memory.atomic.wait32   memarg32
 	MemoryAtomicWait64      = 0x02,  // memory.atomic.wait64   memarg64
 
-	// --- Fence (immediate is always 0x00) ---
+	// --- Fence (immediate is the acquire-release ordering byte) ---
 	AtomicFence             = 0x03,  // atomic.fence
+	// Acquire-release proposal: a spin-loop hint, semantically a no-op.
+	AtomicPause             = 0x04,  // pause
 
 	// --- Atomic loads ---
 	I32AtomicLoad           = 0x10,  // i32.atomic.load        memarg32
@@ -857,6 +860,45 @@ enum class AtomicOpcode : uint8_t {
 	I64AtomicRmw8CmpxchgU   = 0x4C,  // i64.atomic.rmw8.cmpxchg_u  memarg8
 	I64AtomicRmw16CmpxchgU  = 0x4D,  // i64.atomic.rmw16.cmpxchg_u memarg16
 	I64AtomicRmw32CmpxchgU  = 0x4E,  // i64.atomic.rmw32.cmpxchg_u memarg32
+
+	// --- Shared-everything threads (SHARED_EVERYTHING_THREADS.md SET-3) ---
+	// These do not use a memarg: they name a global/table/struct/array and
+	// carry a u8 memory-ordering immediate (0 seqcst, 1 acqrel).
+	GlobalAtomicGet              = 0x4F,
+	GlobalAtomicSet              = 0x50,
+	GlobalAtomicRmwAdd           = 0x51,
+	GlobalAtomicRmwSub           = 0x52,
+	GlobalAtomicRmwAnd           = 0x53,
+	GlobalAtomicRmwOr            = 0x54,
+	GlobalAtomicRmwXor           = 0x55,
+	GlobalAtomicRmwXchg          = 0x56,
+	GlobalAtomicRmwCmpxchg       = 0x57,
+	TableAtomicGet               = 0x58,
+	TableAtomicSet               = 0x59,
+	TableAtomicRmwXchg           = 0x5A,
+	TableAtomicRmwCmpxchg        = 0x5B,
+	StructAtomicGet              = 0x5C,
+	StructAtomicGetS             = 0x5D,
+	StructAtomicGetU             = 0x5E,
+	StructAtomicSet              = 0x5F,
+	StructAtomicRmwAdd           = 0x60,
+	StructAtomicRmwSub           = 0x61,
+	StructAtomicRmwAnd           = 0x62,
+	StructAtomicRmwOr            = 0x63,
+	StructAtomicRmwXor           = 0x64,
+	StructAtomicRmwXchg          = 0x65,
+	StructAtomicRmwCmpxchg       = 0x66,
+	ArrayAtomicGet               = 0x67,
+	ArrayAtomicGetS              = 0x68,
+	ArrayAtomicGetU              = 0x69,
+	ArrayAtomicSet               = 0x6A,
+	ArrayAtomicRmwAdd            = 0x6B,
+	ArrayAtomicRmwSub            = 0x6C,
+	ArrayAtomicRmwAnd            = 0x6D,
+	ArrayAtomicRmwOr             = 0x6E,
+	ArrayAtomicRmwXor            = 0x6F,
+	ArrayAtomicRmwXchg           = 0x70,
+	ArrayAtomicRmwCmpxchg        = 0x71,
 };
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, AtomicOpcode& right) {
 	return left.read_enum(right);

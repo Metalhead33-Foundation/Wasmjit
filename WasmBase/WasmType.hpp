@@ -2,6 +2,7 @@
 #define WASMTYPE_HPP
 #include "WasmTypeIdentity.hpp"
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 #include <variant>
 #include <optional>
@@ -194,6 +195,10 @@ inline bool shorthandRefHeapType(ValueTypeCode code, AbstractHeapType& heap)
 struct ValueType {
 	ValueTypeCode opcode;
 	int32_t heapType; // Only used if opcode is 0x6B (ref) or 0x6C (ref null)
+	// Shared-everything threads: `(ref null (shared ht))` (SET-1). The shared
+	// prefix is 0x65 in the heap-type position. Aggregate initializers that omit
+	// it value-initialize it to false; decode() always assigns it.
+	bool isShared;
 
 	template <Elv::Util::Endian E, Elv::Io::DeviceLike I> void decode(Elv::Io::DataStream<E,I>& stream) {
 		int8_t tmp_opcode;
@@ -207,10 +212,18 @@ struct ValueType {
 	// byte alone tells the two apart (docs/proposals/GC.md G5).
 	template <Elv::Util::Endian E, Elv::Io::DeviceLike I> void decodeAfterFirstByte(Elv::Io::DataStream<E,I>& stream, int8_t firstByte) {
 		opcode = static_cast<ValueTypeCode>(firstByte);
+		isShared = false;
 		// 0x6B (ref) or 0x6C (ref null)
 		if (opcode == ValueTypeCode::Ref || opcode == ValueTypeCode::RefNull) {
 			int32_t ht;
 			stream >> Elv::Io::Leb(ht);
+			// `0x65 ht` is the shared-heap-type prefix (the signed LEB is
+			// -0x1B, which is also the engine's StringViewWtf16 *value-type*
+			// code; in this heap-type position it unambiguously means shared).
+			if (ht == static_cast<int32_t>(ValueTypeCode::StringViewWtf16)) {
+				isShared = true;
+				stream >> Elv::Io::Leb(ht);
+			}
 			this->heapType = ht; // If ht >= 0, it's a TypeIndex
 		} else {
 			// Standard scalar types: 0x7F (i32), 0x7B (v128), etc.
@@ -242,8 +255,13 @@ struct StorageType {
 			// This was actually the opcode for a ValueType.
 			// We need to 'put it back' or handle the decode manually.
 			val.opcode = static_cast<ValueTypeCode>(byte);
+			val.isShared = false;
 			if (val.opcode == ValueTypeCode::Ref || val.opcode == ValueTypeCode::RefNull) {
 				stream >> Elv::Io::Leb(val.heapType);
+				if (val.heapType == static_cast<int32_t>(ValueTypeCode::StringViewWtf16)) {
+					val.isShared = true;
+					stream >> Elv::Io::Leb(val.heapType);
+				}
 			} else val.heapType = -1;
 		}
 	}
@@ -281,6 +299,9 @@ using CompositeDefinition = std::variant<FuncType, StructType, ArrayType, ContTy
 
 struct Subtype {
 	bool isFinal;
+	// Shared-everything threads: `(shared (func ...))` / `(shared (struct ...))`.
+	// Syntax `sharecomptype ::= 0x65 comptype` (SET-1).
+	bool isShared = false;
 	std::vector<uint32_t> supertypeIndices; // Usually 0 or 1 index
 	CompositeDefinition composite;
 
@@ -338,6 +359,8 @@ struct MemoryType {
 struct TableType {
 	ValueType elementType; // Must be a RefType (0x6B or 0x6C)
 	Limits limits;
+	// Shared-everything threads (SET-1): `limits` bit 1 marks the table shared.
+	bool isShared = false;
 	// The table's initialiser expression, when the entry carried one (the
 	// `0x40 0x00` form of the table section). A non-defaultable element type has
 	// no implicit `ref.null`, so every slot starts as this value instead
@@ -348,6 +371,8 @@ struct TableType {
 struct GlobalType {
 	ValueType contentType;
 	bool isMutable;
+	// Shared-everything threads (SET-1): `mut` bit 1 marks the global shared.
+	bool isShared = false;
 };
 
 enum class ExternalKind : uint8_t {
@@ -405,8 +430,9 @@ struct Export {
 	uint32_t index;
 };
 struct ElementSegment {
-	uint32_t mode;      // The raw bitmask/type
+	uint32_t mode;      // The raw bitmask/type (bit 3 = shared, SET-1)
 	uint32_t tableIdx;  // Only for active segments
+	bool isShared = false;
 
 	// The offset where this segment is placed in the table
 	// (Only for active segments)
@@ -427,6 +453,7 @@ struct ElementSegment {
 struct DataSegment {
 	uint32_t mode;
 	uint32_t memoryIdx;
+	bool isShared = false; // bit 3 of the segment flags (SET-1)
 	std::vector<uint8_t> offsetExpr; // Only for active
 	std::vector<uint8_t> data;       // The raw bytes to copy
 };
@@ -529,6 +556,8 @@ struct HeapType {
 		uint32_t          typeIndex;
 		AbstractHeapType  abstract;
 	};
+	// Shared-everything threads: `0x65 heaptype` (SET-1).
+	bool isShared;
 };
 
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I>
@@ -536,6 +565,11 @@ Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& stream, HeapType&
 {
 	int32_t raw;
 	stream >> Elv::Io::Leb(raw);
+	ht.isShared = false;
+	if (raw == static_cast<int32_t>(ValueTypeCode::StringViewWtf16)) {
+		ht.isShared = true;
+		stream >> Elv::Io::Leb(raw);
+	}
 	if (raw >= 0) {
 		ht.isTypeIndex = true;
 		ht.typeIndex   = static_cast<uint32_t>(raw);
@@ -590,37 +624,68 @@ struct MemArg {
 	uint32_t memidx; // Defaults to 0 for Wasm 1.0/2.0
 	uint32_t align;
 	uint64_t offset;
+	// Acquire-release proposal (docs/proposals/ACQUIRE_RELEASE_ATOMICS.md):
+	// bit 4 of the flags is an ordering immediate: 0 = seqcst, 1 = acqrel.
+	uint8_t ordering = 0;
 };
 
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I>
-Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, MemArg& right) {
+void readMemArg(Elv::Io::DataStream<E,I>& left, MemArg& right, bool allowOrdering) {
 	uint32_t raw_align;
 	left >> Elv::Io::Leb(raw_align);
+	if ((raw_align & ~0x7Fu) != 0)
+		throw std::runtime_error("malformed memop flags");
 
-	// Check the 7th bit (0x40)
-	if (raw_align & 0x40) {
-		// Wasm 3.0+ path: 7th bit is set
-		right.align = raw_align & 0x3F; // Strip the flag bit to get actual alignment
+	const bool hasMemIdx = (raw_align & 0x40u) != 0;
+	const bool hasOrdering = (raw_align & 0x10u) != 0;
+	right.align = raw_align & 0x3Fu;
+	if (hasOrdering)
+		right.align &= ~0x10u; // bit 4 is the ordering flag, not alignment
+	right.ordering = 0;
+	if (hasOrdering && !allowOrdering)
+		throw std::runtime_error(
+			"ordering immediate is only valid on atomic memory accesses");
+	if (hasMemIdx)
 		left >> Elv::Io::Leb(right.memidx);
-	} else {
-		// Wasm 1.0/2.0 path: 7th bit is NOT set
-		right.align = raw_align;
-		right.memidx = 0; // Implicitly memory 0
+	else
+		right.memidx = 0;
+	if (hasOrdering) {
+		left >> right.ordering;
+		if (right.ordering > 1)
+			throw std::runtime_error("atomic ordering immediate must be 0 (seqcst) or 1 (acqrel)");
 	}
+	left >> Elv::Io::Leb(right.offset);
+}
 
-	return left >> Elv::Io::Leb(right.offset);
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I>
+Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, MemArg& right) {
+	readMemArg(left, right, false);
+	return left;
+}
+
+// The atomic memarg permits the acquire-release ordering bit; ordinary
+// loads/stores do not (docs/proposals/ACQUIRE_RELEASE_ATOMICS.md ARA-1).
+struct AtomicMemArg : MemArg {};
+
+template <Elv::Util::Endian E, Elv::Io::DeviceLike I>
+Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, AtomicMemArg& right) {
+	readMemArg(left, static_cast<MemArg&>(right), true);
+	return left;
 }
 
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I>
 Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, MemArg right) {
-	if (right.memidx == 0) {
-		// Standard 1.0 encoding
-		return left << Elv::Io::Leb(right.align) << Elv::Io::Leb(right.offset);
-	} else {
-		// Multi-memory encoding (flip the 0x40 bit)
-		uint32_t flagged_align = right.align | 0x40;
-		return left << Elv::Io::Leb(flagged_align) << Elv::Io::Leb(right.memidx) << Elv::Io::Leb(right.offset);
-	}
+	uint32_t flags = right.align & 0x3Fu;
+	if (right.memidx != 0)
+		flags |= 0x40u;
+	if (right.ordering != 0)
+		flags |= 0x10u;
+	left << Elv::Io::Leb(flags);
+	if (right.memidx != 0)
+		left << Elv::Io::Leb(right.memidx);
+	if (right.ordering != 0)
+		left << right.ordering;
+	return left << Elv::Io::Leb(right.offset);
 }
 
 }

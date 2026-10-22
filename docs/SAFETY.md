@@ -1,6 +1,8 @@
 # Safety, Guardrails, and Known Pitfalls
 
-Status: policy / implementation reference (revision 1).
+Status: policy / implementation reference (revision 2 — adds the thread-safety
+pointer and updates the execution-state rule; the guardrails themselves are
+unchanged).
 Audience: anyone adding a feature to `WasmBase/` or a backend (currently
 `LibJit/`), and anyone embedding the library in a process that must stay up.
 
@@ -8,6 +10,8 @@ This note is different from the `docs/proposals/` notes: it is not about a Wasm
 proposal, it is about **not letting a module take the host down**. It records the
 rules the engine follows, the pitfalls that were actually hit while building it,
 and what is deliberately *not* guarded. It contains **no new code**.
+For the separate question of guest-side versus host-side thread safety — and
+which party is responsible for each — see [`THREADSAFETY.md`](THREADSAFETY.md).
 
 ## 1. Threat model (read this first)
 
@@ -136,15 +140,21 @@ the `TrapScope`. Therefore:
 - the native helpers and everything they call must hold only trivially
   destructible locals (pointers, references, pods) — that is why `memoryInit` /
   `tableInit` / `bufferInitFrom*` are written the way they are;
-- process-global transient state must be reset *by* `trap()` itself: the
-  tail-call trampoline's `g_tailCallState.pending` would otherwise strand the
-  next invocation on a dead target.
+- per-thread transient state must be reset *by* `trap()` itself: the
+  tail-call trampoline's per-thread state would otherwise strand the next
+  invocation on a dead target.
 
-### 2.7 Process-global state assumes one thread
+### 2.7 Execution state is per host thread, not per agent
 
-`WASM::g_tailCallState` and the (thread-local) trap state assume a single
-executing agent. This is documented in [`proposals/THREADS.md`](proposals/THREADS.md)
-and is fine for the current embedder, but a multi-agent build must revisit both.
+`WASM::g_tailCallState` and the trap state are **host-thread-local**; generated
+code reaches the tail-call state through `currentTailCallState()` so it is
+resolved on the thread actually executing the call. The `Store` remains a
+process-global owner with locked management containers, and one
+`ModuleInstance` is still not concurrently callable. These are host-side
+properties, not a multi-agent execution model. The distinction between guest,
+host and boundary safety, and the responsibilities of each party, is defined in
+[`THREADSAFETY.md`](THREADSAFETY.md); the single-agent execution model is
+[`proposals/THREADS.md`](proposals/THREADS.md) §3/TD9.
 
 ## 3. Known limitations and false alarms
 
@@ -255,7 +265,8 @@ killed a child that "produced no report".
   (preamble + parse-time bounds), `WasmBase/WasmOpcodeDispatcher.cpp`
   (opcode-list bounds), `WasmBase/WasmModuleInstance.cpp` (segments, GC
   allocation), `LibJit/LibjitModuleCompiler.cpp` (`JitBuildScope`),
-  `Test/wasm_wat/grow_guard.wat`, [`TESTING.md`](TESTING.md).
+  `Test/wasm_wat/grow_guard.wat`, [`TESTING.md`](TESTING.md), and the
+  guest/host boundary contract [`THREADSAFETY.md`](THREADSAFETY.md).
 - Proposal notes referenced above: [`proposals/BULK_MEMORY.md`](proposals/BULK_MEMORY.md),
   [`proposals/MEMORY64.md`](proposals/MEMORY64.md),
   [`proposals/MULTI_MEMORY.md`](proposals/MULTI_MEMORY.md),

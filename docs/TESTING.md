@@ -131,6 +131,7 @@ baked in at compile time through the `WASM_TEST_DIR` macro) and calls into it.
 | `gc cast validation: ref.test/ref.cast accept every reference in the target hierarchy` | `gc_cast_validation` | both nullability forms and the same-hierarchy operand rule, plus null test/cast behaviour (`GC.md` G9/GC-10) |
 | `imported mutable externref global aliases the exporter across modules` | `externref_global_a/b` | a host reference written through the importer is read through the exporter, and vice versa (`REFERENCE_TYPES.md` RT4/RT5) |
 | `validation errors name the offending function when the name section has it` | `named_invalid` | a validation error includes `function 0 ($bad)` from the name section (`EXTENDED_NAME_SECTION.md` ENS-3) |
+| `host threads instantiate and call independent modules concurrently` | `add_core` | four host threads each parse/instantiate/call 8 independent instances; verifies the host-side Store/type locking and per-thread sessions do not corrupt each other |
 
 The modules are produced either from AssemblyScript (`Test/wasm/*.ts`) or from hand-written WAT
 (`Test/wasm_wat/*.wat`); both land in `wasm_test_modules/`.

@@ -1,9 +1,11 @@
 # Shared-Everything Threads — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 1 — the proposal is
-**not implemented**. The engine has the baseline threads/atomics surface and a
-single-agent execution model, but no `shared` annotations, shared GC heap,
-thread-local globals, waitqueues or thread lifecycle.)
+Status: design note / implementation reference (revision 2 — **SET-1 partial,
+SET-2 host-side, and SET-3 implemented**; SET-4/SET-5 absent. The engine has
+`shared` table/global/segment annotations, shared `comptype`/heap-type encoding,
+and the working draft's `0xFE 0x4F–0x71` global/table/struct/array atomics plus
+`ref.i31_shared`. Wasm agents remain deferred (`THREADS.md` TH-5); the runtime
+is made safe for host-side multithreading, not for concurrent mutators.)
 
 Audience: anyone touching `WasmType` (`shared`/`globaltype`), `WasmStore`,
 `WasmModuleInstance`, the GC heap/refcount, `WasmOpcode` (`0xFE` atomics),
@@ -11,6 +13,7 @@ Audience: anyone touching `WasmType` (`shared`/`globaltype`), `WasmStore`,
 
 Follows the same split as [`GC.md`](GC.md) / [`SIMD.md`](SIMD.md) /
 [`THREADS.md`](THREADS.md). Contains **no new code**.
+The guest/host boundary contract is [`THREADSAFETY.md`](../THREADSAFETY.md).
 
 ## 1. Document map
 
@@ -68,53 +71,61 @@ form, instruction set and component builtins are not a stable target.
 
 ## 4. What we have implemented today
 
-- **Baseline threads only.** `WasmBase/WasmOpcode.hpp` has all 67 baseline
-  `0xFE` atomic opcodes; all execute at seqcst (`THREADS.md` TH-1). Shared
-  linear memory is implemented (`SharedLinearMemory`, `isShared`), but the
-  execution model is one agent on the caller's thread (`THREADS.md` §3/TD9).
-- **No shared annotations.** `Subtype` has no `shared` bit; `GlobalType` has no
-  `thread_local`; `TableType`/`StructType`/`ArrayType` have no shared variant.
-  Memory sharing is represented by the existing limits/`isShared` path, not by
-  the new general `share` production.
-- **No shared GC atomics.** `GcHeap` allocation/collection and each instance's
-  region set assume one mutator; individual refcount slots use atomics, but
-  that does not make collection concurrency-safe. The `Store` is a
-  process-global, and `g_tailCallState` is a process-global single-call-chain
-  trampoline (`ABI.md`/`TAILCALLS.md`). Those are prerequisites for a
-  multi-agent build.
-- **No waitqueue/TLS/lifecycle.** `wait`/`notify` are the single-agent baseline
-  forms (`THREADS.md` TD4); there is no `waitqueue` type, `thread_local` global
-  or component-level thread builtin.
-- **No test coverage.** The suite has the baseline `atomic` script, not a
-  shared-everything test.
+- **Baseline threads plus SET-3 atomics.** `WasmBase/WasmOpcode.hpp` has all 67
+  baseline `0xFE` atomics and the 35 working-draft shared-everything opcodes
+  `0x4F–0x71` (`global.atomic.*`, `table.atomic.*`, `struct.atomic.*`,
+  `array.atomic.*`), plus `ref.i31_shared` (`0xFB 0x1F`). The shared forms take
+  a `u8` ordering immediate (0 seqcst, 1 acqrel) and the named index/type
+  immediates; they lower through the same alignment-checked `wasm_atomic_*`
+  helpers as linear-memory atomics.
+- **Shared annotations (SET-1 partial).** `TableType::isShared` comes from
+  limits bit 1, `GlobalType::isShared` from the `mut` flag bit 1, and
+  element/data segments use bit 3. `Subtype`/`CanonicalType` carry `isShared`
+  from the `0x65` `sharecomptype` prefix; `ValueType::isShared` decodes the
+  `0x65` shared-heap-type prefix and shared refs are compared as a distinct
+  hierarchy. Shared tables/memories must declare a maximum, and global/table
+  import matching compares sharedness.
+- **Host-side hardening (SET-2 partial).** `Store` containers, type interning,
+  the GC heap and the string store are mutex-guarded; trap and tail-call state
+  are host-thread-local. A single `ModuleInstance` is still not concurrently
+  callable — the real multi-agent scheduler and shared GC heap are deferred.
+- **No waitqueue/TLS/lifecycle.** `waitqueue` (`0x68`) collides with the
+  stack-switching continuation heap type in this engine's current encoding
+  space, so it is not decoded; `thread_local` globals and component thread
+  spawn/join are absent.
+- **Tests.** Raw-binary fixtures cover a shared global with
+  `global.atomic.rmw.add`/`global.atomic.get`, a shared table with
+  `table.atomic.set`/`get`, `sharecomptype`, and `(ref null (shared any))`.
+  The 35 opcodes decode and execute in the single-agent model.
 
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| SET1 | **No `shared` annotations or shared-type validation.** Functions, tables, globals, tags and GC types cannot be marked shared, and the shared-to-nonshared rule is not checked. | `WasmType.hpp` (`Subtype`, `GlobalType`, `TableType`); `WasmValidator.cpp`; `THREADS.md`. | High |
-| SET2 | **No shared GC atomics.** There are no atomic struct/array/global/table operations, no shared `anyref` restriction and no acquire-release ordering for GC fields. | `WasmOpcode.hpp` (`AtomicOpcode` baseline); `GC.md`; no `struct.atomic.*`. | High |
-| SET3 | **No managed waitqueue.** There is no `waitqueue`/`shared waitqueue` type, `waitqueue.new`/`notify`, or GC-object `wait` operation. | `WasmType.hpp`; `THREADS.md` §4.3 (single-agent waiters). | High |
-| SET4 | **No thread-local globals.** `GlobalType` has only value/mutability; there is no `thread_local` annotation or per-thread storage. | `WasmType.hpp` (`GlobalType`); `WasmModuleInstance` globals. | High |
-| SET5 | **No thread lifecycle/component builtins.** There is no thread spawn/join or component-model integration. | `WasmComponentModel.hpp`; `COMPONENT_MODEL.md` CM10. | High |
-| SET6 | **The runtime substrate is single-agent.** `Store`, GC allocation/collection, the tail-call trampoline and trap state are not a multi-mutator design. | `WasmStore.hpp`; `WasmGcHeap.*`; `WasmBase/WasmValue.hpp` (`g_tailCallState`); `WasmTrap.cpp`. | High |
-| SET7 | **No tests.** No shared-everything fixture or proposal script exists. | `Test/wast_supported.txt`; `THREADS.md` §4.4. | Medium |
+| SET1 | **Shared annotations are not fully validated.** Table/global/segment/shared-comptype/shared-ref flags decode, but shared-to-shared restrictions on every referenced item (and shared tags) are not enforced. | `WasmValidator.cpp`; `WasmType.hpp`. | Medium |
+| SET2 | **No shared GC heap / multi-mutator collection.** Atomically accessed numeric fields are tear-free; reference-slot exchanges are pointer-atomic but do not yet run the GC retain/release write barrier, so reference-typed atomic fields are not advertised as leak-safe. The heap remains single-mutator. | `WasmGcHeap.*`; `LibjitOpcodeDispatcher.cpp` (`*Atomic*`); `THREADS.md` TH-5. | High (deferred) |
+| SET3 | **No managed waitqueue.** `0x68` is currently `AbstractHeapType::Cont`; the working draft's `waitqueue` type needs a collision-free assignment. | `WasmType.hpp`; `THREADS.md`. | High |
+| SET4 | **No thread-local globals.** `GlobalType` has `isShared` but no `thread_local` storage. | `WasmType.hpp`; `WasmModuleInstance` globals. | High |
+| SET5 | **No thread lifecycle/component builtins.** No spawn/join or component integration. | `WasmComponentModel.hpp`; `COMPONENT_MODEL.md`. | High |
+| SET6 | **Runtime is not multi-mutator.** Host-thread-safe, not agent-safe: one instance cannot be entered concurrently and the GC heap has one mutator. | `WasmStore.hpp`; `WasmGcHeap.*`; `WasmTrap.cpp`. | High (deferred with TH-5) |
 
 
 ## 6. Where we can and should play fast and loose
 
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
-| SETD1 | **Do not implement the proposal until it stabilizes.** Reject `shared`-annotated types/opcodes clearly rather than mis-decoding them. | §3: it is an active umbrella with no stable encoding; an engine may reject unsupported features. | No moving-target ABI in the core. |
+| SETD1 | **Implement only the stable-enough wire subset; reject unknown reserved encodings clearly.** The current `0x4F–0x71` atomics, annotation bits and `0x65` prefixes are decoded; `waitqueue`/TLS remain rejected or absent. | §3: it is an active umbrella; an engine may reject unsupported features. | Useful ABI surface without guessing the moving parts. |
 | SETD2 | **Keep the single-agent execution model as a stop-gap.** | §3: baseline threads and shared memory already work; agents are deferred by `THREADS.md` TD9. | No premature scheduler/GC redesign. |
 | SETD3 | **Do not allow shared-to-unshared references.** | §3: that is the conservative reading and the proposal's default validation rule. | No weak-reference or cross-heap-cycle semantics to guess. |
 | SETD4 | **Do not promise cross-heap cycle collection.** | §3: the spec does not mandate a collector or cross-heap cycle collection. | The existing single-heap RC collector remains honest. |
 | SETD5 | **Reject waits on an unsupported/main thread rather than block it.** | §2/§3: the proposal permits such waits to trap. | No host-thread deadlock. |
 
 Guardrail: a `shared` annotation is a static safety claim, not a runtime flag.
-Do not accept a shared type and then execute it on the single-agent heap without
-either implementing the multi-mutator rules or rejecting the module. Shared
-memory's existing `isShared` path is not a substitute for shared GC/tables.
+This revision accepts the annotations and executes the corresponding atomics in
+the documented single-agent model; it does **not** claim cross-agent safety for
+the GC heap, waitqueues or a migrating instance. Until `THREADS.md` TH-5 lands,
+the safe boundary is host-side concurrency (separate instances/Store operations)
+and one executing instance per thread.
 
 ## 7. Plan
 
@@ -124,26 +135,30 @@ has a usable stopping point.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **SET-1 — Shared annotations** | Add `shared` to the relevant type productions and the shared-to-shared validation rule. | SET1 | A shared function/table/global/GC type validates; a shared-to-unshared reference is rejected. |
-| **SET-2 — Multi-agent substrate** | Make `Store`, GC allocation/collection, trap state and the tail-call trampoline per-agent or otherwise concurrency-safe. | SET6 | Two agents can run and share a memory without corrupting the Store or trap state. |
-| **SET-3 — Shared GC atomics** | Add the working draft's struct/array/global/table atomics and shared-`anyref` restrictions. | SET2 | Atomic field/slot operations execute with the requested ordering and tear-free guarantees. |
-| **SET-4 — TLS and waitqueues** | Add `thread_local` globals and the `waitqueue`/wait/notify family. | SET3, SET4 | A thread-local counter and a managed wait/notify round-trip pass. |
+| **SET-1 — Shared annotations** | ◑ Table/global/element/data flags, `sharecomptype`, shared heap refs and sharedness-aware matching/validation are in. Full shared-to-shared restriction checking and shared tags remain. | SET1 | Shared table/global/GC type decodes; shared/unshared refs do not subtype. Still open: every referenced-item restriction. |
+| **SET-2 — Multi-agent substrate** | ◑ Host-side: Store/type-intern/GC/string locks, thread-local trap and tail-call state. Missing: multi-mutator GC and a public agent API. | SET6 | Host threads do not corrupt the Store; two wasm agents still wait for TH-5. |
+| **SET-3 — Shared GC atomics** | ✅ 35 opcodes `0x4F–0x71` plus `ref.i31_shared`, with ordering and natural-alignment checks, all lowered through `wasm_atomic_*`. | SET2 | Done for the single-agent model: global/table/struct/array atomic get/set/RMW/cmpxchg execute. |
+| **SET-4 — TLS and waitqueues** | Add `thread_local` globals and the `waitqueue`/wait/notify family (needs a collision-free `0x68` assignment). | SET3, SET4 | A thread-local counter and a managed wait/notify round-trip pass. |
 | **SET-5 — Lifecycle** | Add the component-model thread spawn/join builtins once their shape is stable. | SET5 | A component can spawn and join a thread without a JS host. |
-| **SET-6 — Tests** | Curate the proposal scripts and add multi-agent fixtures. | SET7 | The tests fail if shared validation, ordering or TLS is single-agent-only. |
+| **SET-6 — Tests** | ◑ Raw-binary tests cover shared annotations and table/global atomics; proposal scripts and multi-agent fixtures remain. | SET7 | The tests fail if shared validation, ordering or TLS is single-agent-only. |
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-18):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-22):
 
 | Script / fixture | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| `atomic` | 249 | 0 | 48 | baseline single-agent seqcst atomics, not shared-everything |
-| shared annotations | — | — | — | no script and no syntax |
-| shared GC / waitqueue / TLS | — | — | — | no script and no implementation |
-| thread lifecycle | — | — | — | no script and no component builtin |
+| `atomic` | 249 | 0 | 48 | baseline single-agent atomics |
+| shared global + `global.atomic.*` | 9 assertions | 0 | — | shared flag, acqrel RMW, get |
+| shared table + `table.atomic.*` | 6 assertions | 0 | — | shared table limit bit, set/get |
+| `struct.atomic.*` / `array.atomic.*` | 5 + 5 assertions | 0 | — | GC field/element atomic get/set |
+| host threads (4×8 parses/instantiates) | 1 assertion | 0 | — | concurrent Store/type/GC use does not corrupt |
+| `sharecomptype` / shared heap ref | 5 + 6 assertions | 0 | — | shared type and `(ref null (shared any))` |
+| full suite, default / strict | 9265 assertions / 352 cases | 0 | — | no regression |
 
-Reading: the baseline threads surface is the only green evidence. It does not
-exercise shared GC, TLS, waitqueues, or multiple agents; those are SET-1…SET-6.
+Reading: annotation decoding and the working-draft atomics are green in the
+single-agent model. Shared GC collection, waitqueues, TLS and lifecycle remain
+SET-2…SET-6.
 
 ## 9. References
 
@@ -154,7 +169,8 @@ exercise shared GC, TLS, waitqueues, or multiple agents; those are SET-1…SET-6
 - In-repo: [`THREADS.md`](THREADS.md), [`ACQUIRE_RELEASE_ATOMICS.md`](ACQUIRE_RELEASE_ATOMICS.md),
   [`GC.md`](GC.md), [`TYPE_IDENTITY.md`](../TYPE_IDENTITY.md),
   [`COMPONENT_MODEL.md`](COMPONENT_MODEL.md), [`../ABI.md`](../ABI.md),
-  [`../SAFETY.md`](../SAFETY.md); sources
+  [`../SAFETY.md`](../SAFETY.md), [`../THREADSAFETY.md`](../THREADSAFETY.md);
+  sources
   `WasmBase/WasmType.hpp`, `WasmBase/WasmStore.hpp`,
   `WasmBase/WasmGcHeap.*`, `WasmBase/WasmModuleInstance.*`,
   `WasmBase/WasmOpcode.hpp` (`AtomicOpcode`), `WasmBase/WasmTrap.cpp`,

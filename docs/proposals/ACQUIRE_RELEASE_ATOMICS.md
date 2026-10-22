@@ -1,8 +1,10 @@
 # Acquire-Release Atomics — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 1 — the proposal is
-**not implemented**. All existing atomic accesses and the fence are
-sequentially consistent; there is no ordering immediate and no `pause`.)
+Status: design note / implementation reference (revision 2 — **ARA-1…ARA-3
+implemented** in the single-agent build: `MemArg` bit 4 + `u8` ordering, the
+`0xFE 0x04` `pause` no-op, and order-accurate lowering to
+`__ATOMIC_SEQ_CST`/`__ATOMIC_ACQUIRE`/`__ATOMIC_RELEASE`/`__ATOMIC_ACQ_REL`.
+Two-agent observation remains deferred with `THREADS.md` TH-5.)
 
 Audience: anyone touching `WasmType` (`MemArg`), `WasmOpcode` (`AtomicOpcode`),
 `WasmOpcodeDispatcher`, `wasm_atomic.*`, `LibjitOpcodeDispatcher`, or the
@@ -10,6 +12,7 @@ threads/atomics test surface.
 
 Follows the same split as [`GC.md`](GC.md) / [`SIMD.md`](SIMD.md) /
 [`THREADS.md`](THREADS.md). Contains **no new code**.
+The guest/host boundary contract is [`THREADSAFETY.md`](../THREADSAFETY.md).
 
 ## 1. Document map
 
@@ -68,29 +71,31 @@ decode error.
 
 - `WasmBase/WasmOpcode.hpp` defines the complete baseline `AtomicOpcode`
   (`0xFE` prefix): 67 entries from `memory.atomic.notify` through the last
-  `cmpxchg` variant.
-- `WasmOpcodeDispatcher::dispatchPrefixAtomic` parses a `MemArg` for every
-  atomic except `atomic.fence`, whose reserved byte is checked to be zero.
-  `MemArg` itself only recognizes bit 6 for a memory index; there is no
-  ordering flag.
-- All 67 handlers execute; `WasmBase/wasm_atomic.*` performs the access with
-  `__atomic_*` at `__ATOMIC_SEQ_CST`, checks natural alignment, and traps on a
-  misaligned effective address (`THREADS.md` TH-1).
-- `atomic.fence` lowers to `__atomic_thread_fence(__ATOMIC_SEQ_CST)`.
-- There is no ordering byte in `MemArg`, no `acqrel` enum/helper, no
-  `0xFE 0x04` `pause`, and no acquire/release test script. `THREADS.md` records
-  the single-agent execution model (no agents/waiters), so the ordering is not
-  observable end-to-end yet.
+  `cmpxchg` variant, plus `AtomicPause = 0x04`.
+- `WasmBase/WasmType.hpp` has `MemArg` (with `ordering`) and `AtomicMemArg`.
+  Ordinary `MemArg` decoding rejects bit 4, so a non-atomic load cannot carry
+  an ordering byte. Atomic decoding accepts `0x10`, reads the following `u8`,
+  and rejects values other than 0 (`seqcst`) and 1 (`acqrel`).
+- `atomic.fence` consumes its ordering byte and accepts 0 or 1; its reserved
+  zero-only rule is gone. `0xFE 0x04` `pause` decodes with no immediate and
+  lowers to nothing (ARAD2).
+- `WasmBase/wasm_atomic.*` takes the ordering on every load/store/RMW/cmpxchg:
+  loads map `acqrel` to `__ATOMIC_ACQUIRE`, stores to `__ATOMIC_RELEASE`,
+  RMW/cmpxchg to `__ATOMIC_ACQ_REL`, and omission stays `__ATOMIC_SEQ_CST`.
+  The fence maps 1 to `__ATOMIC_ACQ_REL` and 0 to `__ATOMIC_SEQ_CST`.
+- `WasmValidator::requireAtomicMemoryAccess` checks ordering, natural
+  alignment and offset; `requireMemoryAccess` rejects an ordering on a normal
+  access. The acquire-release ordering is exercised end-to-end by a raw-binary
+  fixture (`acquire-release ordering and pause decode, validate, and execute`).
+- The two-agent message-passing half is still deferred (`THREADS.md` TH-5), so
+  the ordering is not *observable* between wasm threads yet; the encoding and
+  lowering are complete and distinct.
 
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| ARA1 | **No ordering immediate in `MemArg`.** The parser reads flags/offset and does not reserve bit 4 or consume a following `u8`. | `WasmBase/WasmType.hpp` (`MemArg`); `WasmOpcodeDispatcher::dispatchPrefixAtomic`. | Medium |
-| ARA2 | **Fence and RMW ordering are fixed at seqcst.** `atomic.fence` requires the reserved byte to be zero; all RMW helpers use `__ATOMIC_SEQ_CST`. | `WasmOpcodeDispatcher.cpp`; `WasmBase/wasm_atomic.*`. | Medium |
-| ARA3 | **`pause` is absent.** `0xFE 0x04` is not in `AtomicOpcode`; the dispatcher's default rejects it. | `WasmOpcode.hpp` (`AtomicOpcode`); `dispatchPrefixAtomic` default. | Low |
-| ARA4 | **No acquire/release lowering or scope tests.** There is no `__ATOMIC_ACQ_REL` path and no way to verify the ordering distinctions. | `wasm_atomic.*`; no ordering test. | Medium |
-| ARA5 | **No focused coverage.** The atomics script is single-agent and seqcst; it does not exercise ordering bytes or `pause`. | `THREADS.md` §4.4 (`atomic` 249/0/48); `Test/wast_supported.txt`. | Low |
+| ARA5 | **No focused multi-agent test.** A single-agent fixture covers decode/lowering, but there is no second agent to observe an acquire/release edge. | `Test/main.cpp` acquire-release case; `THREADS.md` TH-5. | Low (deferred) |
 
 
 ## 6. Where we can and should play fast and loose
@@ -111,21 +116,23 @@ map to `__ATOMIC_ACQ_REL` (not `__ATOMIC_SEQ_CST`, not `__ATOMIC_RELAXED`).
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **ARA-1 — Decode** | Add the ordering bit/byte to `MemArg`, validate it, and add `0xFE 0x04` `pause`. | ARA1, ARA3 | A fixture with `seqcst`, `acqrel` and `pause` decodes; a bad ordering or a non-atomic bit-4 use is rejected. |
-| **ARA-2 — Lowering** | Thread the ordering through the atomic helpers (`__ATOMIC_SEQ_CST` / `__ATOMIC_ACQ_REL`) and the fence. | ARA2, ARA4 | Fence and RMW lower to the requested ordering; a single-agent differential test sees the same values. |
-| **ARA-3 — Tests** | Add ordering/pause fixtures and, when agents exist, a two-agent message-passing test. | ARA5 | The test fails if `acqrel` silently falls back to seqcst or `pause` traps. |
+| **ARA-1 — Decode** | ✅ `MemArg` ordering bit/byte, `AtomicMemArg`, `pause`, decode-time rejection on non-atomics. | ARA1, ARA3 | Done: ordering/pause fixture decodes; malformed flags and ordinary bit-4 uses are rejected. |
+| **ARA-2 — Lowering** | ✅ Ordering threaded through every atomic helper and the fence (`__ATOMIC_SEQ_CST` / `__ATOMIC_ACQUIRE` / `__ATOMIC_RELEASE` / `__ATOMIC_ACQ_REL`). | ARA2, ARA4 | Done: fence and RMW use the requested ordering; the single-agent differential fixture sees the same values. |
+| **ARA-3 — Tests** | ◑ Single-agent ordering/pause fixture done. The two-agent message-passing test waits for `THREADS.md` TH-5. | ARA5 | Done for decode/lowering; multi-agent observation deferred. |
 
 ARA-1/ARA-2 are independent of a future multi-agent scheduler; ARA-3's
 two-agent half waits for `THREADS.md` TH-5.
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-18):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-22):
 
 | Script / fixture | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| `atomic` | 249 | 0 | 48 | single-agent seqcst baseline; 48 skips are validation cases |
-| acquire-release ordering | — | — | — | no script and no ordering byte |
+| `atomic` | 249 | 0 | 48 | single-agent baseline; 48 skips are validation cases |
+| acquire-release + `pause` fixture | 5 assertions | 0 | — | acqrel store/load execute; `pause` is a no-op |
+| full suite, default | 9265 assertions / 352 cases | 0 | — | no regression |
+| full suite, `WASM_SPEC_VALIDATE=1` | 9265 assertions / 352 cases | 0 | — | negative-module validation stays green |
 | `pause` | — | — | — | no script and no opcode |
 
 Reading: the baseline atomic surface is green, but it proves seqcst only. The
@@ -139,7 +146,8 @@ new ordering is not exercised by the snapshot.
   https://github.com/WebAssembly/threads/blob/main/proposals/threads/Overview.md
 - In-repo: [`THREADS.md`](THREADS.md), [`SHARED_EVERYTHING_THREADS.md`](SHARED_EVERYTHING_THREADS.md),
   [`GC_EXTENSIONS.md`](GC_EXTENSIONS.md) (shared `memarg` flags),
-  [`../ABI.md`](../ABI.md), [`../SAFETY.md`](../SAFETY.md); sources
+  [`../ABI.md`](../ABI.md), [`../SAFETY.md`](../SAFETY.md),
+  [`../THREADSAFETY.md`](../THREADSAFETY.md); sources
   `WasmBase/WasmType.hpp` (`MemArg`), `WasmBase/WasmOpcode.hpp` (`AtomicOpcode`),
   `WasmBase/WasmOpcodeDispatcher.cpp` (`dispatchPrefixAtomic`),
   `WasmBase/wasm_atomic.*`, `LibJit/LibjitOpcodeDispatcher.cpp`,

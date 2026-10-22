@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <unordered_map>
 namespace WASM {
 
@@ -195,6 +196,13 @@ private:
 	};
 	std::vector<CallableRange> callableRanges;
 	Store();
+
+	// Guards every member container below. The Store is process-wide because
+	// entities outlive instances, so host threads may create/lookup entities
+	// concurrently; each operation copies out a stable pointer/id under this
+	// lock. (A single module instance is still not concurrently *callable*;
+	// true wasm agents remain deferred — SET-2.)
+	mutable std::mutex storeMutex_;
 
 	MemoryMap            memories;
 	std::atomic<int32_t> nextMemoryId;

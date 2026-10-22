@@ -27,26 +27,35 @@ enum WasmAtomicOp : uint32_t {
 	WASM_ATOMIC_XCHG = 5,
 };
 
+// The acquire-release ordering immediate (docs/proposals/ACQUIRE_RELEASE_ATOMICS.md).
+// Kept explicit in the helper ABI so generated code can pass it as a constant.
+enum WasmAtomicOrdering : uint32_t {
+	WASM_ATOMIC_SEQCST = 0,
+	WASM_ATOMIC_ACQREL = 1,
+};
+
 extern "C" {
 
-// Loads `width` bytes and zero-extends them to 64 bits.
-uint64_t wasm_atomic_load(const void* address, uint32_t width);
+// Loads `width` bytes and zero-extends them to 64 bits. `ordering` is the
+// acquire-release immediate: 0 = seqcst, 1 = acqrel (acquire for a load).
+uint64_t wasm_atomic_load(const void* address, uint32_t width, uint32_t ordering);
 
-// Stores the low `width` bytes of `value`.
-void wasm_atomic_store(void* address, uint64_t value, uint32_t width);
+// Stores the low `width` bytes of `value`. `ordering` 1 = release for a store.
+void wasm_atomic_store(void* address, uint64_t value, uint32_t width,
+					   uint32_t ordering);
 
 // Performs the RMW selected by `op` on the low `width` bytes and returns the
-// *old* value, zero-extended.
-uint64_t wasm_atomic_rmw(void* address, uint64_t value, uint32_t width, uint32_t op);
+// *old* value, zero-extended. `ordering` 1 = acquire-release.
+uint64_t wasm_atomic_rmw(void* address, uint64_t value, uint32_t width,
+						 uint32_t op, uint32_t ordering);
 
 // Compares the low `width` bytes against `expected`; stores `replacement` if
 // they match. Returns the *old* value, zero-extended.
 uint64_t wasm_atomic_cmpxchg(void* address, uint64_t expected, uint64_t replacement,
-							 uint32_t width);
+							 uint32_t width, uint32_t ordering);
 
-// `atomic.fence`: a sequentially consistent fence (all atomics are seq_cst, so
-// this is the only ordering the engine exposes).
-void wasm_atomic_fence();
+// `atomic.fence`: 0 = seqcst, 1 = acqrel.
+void wasm_atomic_fence(uint32_t ordering);
 
 // Wait/notify, single-agent form (docs/proposals/THREADS.md TH-2/TD9).
 // `notify` always returns 0: no other agent can be waiting on the address.

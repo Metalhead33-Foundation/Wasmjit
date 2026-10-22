@@ -516,7 +516,8 @@ TypeId TypeStore::appendCore(const CanonicalType& type)
 	const TypeId id{static_cast<uint32_t>(records_.size())};
 	TypeRecord record;
 	record.kind = coreKind(type.kind);
-	record.flags = type.isFinal ? TypeFlagFinal : 0;
+	record.flags = (type.isFinal ? TypeFlagFinal : 0)
+			| (type.isShared ? TypeFlagShared : 0);
 	record.supertypes = appendSpan(coreSupertypes_, type.supertypes);
 	switch (type.kind) {
 	case CanonTypeKind::Func: {
@@ -1117,6 +1118,13 @@ bool CoreTypeView::isFinal() const
 	if (pending_)
 		return pending_->isFinal;
 	return (store_->record(id_).flags & TypeFlagFinal) != 0;
+}
+
+bool CoreTypeView::isShared() const
+{
+	if (pending_)
+		return pending_->isShared;
+	return (store_->record(id_).flags & TypeFlagShared) != 0;
 }
 
 uint32_t CoreTypeView::depth() const

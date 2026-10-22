@@ -5,6 +5,7 @@
 #include "WasmTypeIdentity.hpp"
 #include "WasmTypeStore.hpp"
 #include <cstddef>
+#include <mutex>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -61,6 +62,11 @@ public:
 	size_t canonicalGroupCount() const { return recGroups.size(); }
 
 private:
+	// Serializes interning. Host threads may load/instantiate modules
+	// concurrently; every existing TypeId remains valid once appended, but the
+	// intern tables themselves are not concurrent containers (SET-2).
+	mutable std::recursive_mutex internMutex_;
+
 	std::vector<TypeId> internGroupImpl(std::span<const Subtype> types,
 									   const TypeGroup& group,
 									   std::vector<TypeId>& localToGlobal);

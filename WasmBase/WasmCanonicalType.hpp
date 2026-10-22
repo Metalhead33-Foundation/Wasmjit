@@ -28,8 +28,10 @@ struct CanonValueType {
 	ValueTypeCode opcode = ValueTypeCode::Void; // numeric/vector, or Ref/RefNull
 	bool          nullable = false;             // when Ref/RefNull
 	CanonHeapType heap{};                       // when Ref/RefNull
+	bool          isShared = false;             // when Ref/RefNull, SET-1
 	bool operator==(const CanonValueType& o) const {
-		return opcode == o.opcode && nullable == o.nullable && heap == o.heap;
+		return opcode == o.opcode && nullable == o.nullable && heap == o.heap &&
+			   isShared == o.isShared;
 	}
 };
 
@@ -53,6 +55,7 @@ struct CanonFieldType {
 struct CanonicalType {
 	CanonTypeKind kind = CanonTypeKind::Func;
 	bool          isFinal = true;
+	bool          isShared = false; // SET-1: `sharecomptype`
 	std::vector<CanonHeapType> supertypes; // stored as Global after interning
 	uint32_t      depth = 0;               // 1 + max(supertype depths); 0 if none
 

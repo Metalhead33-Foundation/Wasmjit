@@ -147,7 +147,7 @@ void Validator::checkLimits(const Limits& limits, bool is64, bool isMemory,
 							const char* what, std::size_t index) const
 {
 	const bool hasMax = (limits.flags & 0x01) != 0;
-	const bool shared = isMemory && (limits.flags & 0x02) != 0;
+	const bool shared = (limits.flags & 0x02) != 0;
 	const std::string label = std::string(what) + " " + std::to_string(index);
 
 	if (hasMax && limits.initial > *limits.maximum)
@@ -167,10 +167,33 @@ void Validator::checkLimits(const Limits& limits, bool is64, bool isMemory,
 void Validator::requireMemoryAccess(const MemArg& arg, uint32_t naturalLog2) const
 {
 	requireMemoryIndex(arg.memidx);
+	if (arg.ordering != 0)
+		fail("ordering immediate is only valid on atomic memory accesses");
 	if (arg.align > naturalLog2)
 		fail("alignment must not be larger than natural");
 	if (!memoryIs64(arg.memidx) && arg.offset > 0xFFFFFFFFull)
 		fail("offset out of range");
+}
+
+void Validator::requireAtomicMemoryAccess(const MemArg& arg, uint32_t naturalLog2) const
+{
+	requireMemoryIndex(arg.memidx);
+	if (arg.align != naturalLog2)
+		fail("atomic access must use natural alignment");
+	if (arg.ordering > 1)
+		fail("atomic ordering immediate must be 0 (seqcst) or 1 (acqrel)");
+	if (!memoryIs64(arg.memidx) && arg.offset > 0xFFFFFFFFull)
+		fail("offset out of range");
+}
+
+const CanonFieldType& Validator::requireStructField(TypeIdx type, uint32_t fieldIndex) const
+{
+	if (type >= module.typeCount() || module.typeView(type).kind() != CanonTypeKind::Struct)
+		fail("struct.atomic: type is not a struct");
+	const auto fields = module.typeView(type).structFields();
+	if (fieldIndex >= fields.size())
+		fail("struct.atomic: field index out of range");
+	return fields[fieldIndex];
 }
 
 void Validator::requireLane(uint8_t lane, uint32_t laneCount, const char* what) const
@@ -314,7 +337,7 @@ bool Validator::refSubtype(const ValueType& actual, const ValueType& expected) c
 					  String, StringViewWtf8, StringViewWtf16, StringViewIter,
 					  None, NoFunc, NoExtern, NoExn, Cont, NoCont,
 					  ConcreteFunc, ConcreteStruct, ConcreteArray, ConcreteCont, Other };
-	struct Info { bool isRef = false; bool nullable = false; Kind kind = Kind::Other; uint32_t idx = 0; };
+	struct Info { bool isRef = false; bool nullable = false; Kind kind = Kind::Other; uint32_t idx = 0; bool shared = false; };
 
 	const auto info = [this](const ValueType& type) {
 		Info out;
@@ -339,6 +362,7 @@ bool Validator::refSubtype(const ValueType& actual, const ValueType& expected) c
 		case ValueTypeCode::RefNull: {
 			out.isRef = true;
 			out.nullable = (type.opcode == ValueTypeCode::RefNull);
+			out.shared = type.isShared;
 			if (type.heapType >= 0) {
 				const auto idx = static_cast<uint32_t>(type.heapType);
 				out.idx = idx;
@@ -403,6 +427,9 @@ bool Validator::refSubtype(const ValueType& actual, const ValueType& expected) c
 		return false;
 	// A nullable value cannot satisfy a non-null requirement.
 	if (a.nullable && !e.nullable)
+		return false;
+	// Shared and unshared heap types are never subtypes of one another (SET-1).
+	if (a.shared != e.shared)
 		return false;
 
 	// Bottom types (nullref/nofunc/noextern/noexn) are subtypes of their hierarchy.
@@ -2014,13 +2041,13 @@ void Validator::dispatchRefAsNonNull()
 
 // Atomic memory accesses: loads/stores/RMW/cmpxchg shapes.
 #define WJ_ATOMIC_LOAD(n, T, natural) \
-	void Validator::dispatch##n(MemArg a) { requireMemoryAccess(a, natural); popExpect(memoryAddressType(a.memidx)); pushValue(ValueType{ValueTypeCode::T, -1}); }
+	void Validator::dispatch##n(MemArg a) { requireAtomicMemoryAccess(a, natural); popExpect(memoryAddressType(a.memidx)); pushValue(ValueType{ValueTypeCode::T, -1}); }
 #define WJ_ATOMIC_STORE(n, T, natural) \
-	void Validator::dispatch##n(MemArg a) { requireMemoryAccess(a, natural); popExpect(ValueTypeCode::T); popExpect(memoryAddressType(a.memidx)); }
+	void Validator::dispatch##n(MemArg a) { requireAtomicMemoryAccess(a, natural); popExpect(ValueTypeCode::T); popExpect(memoryAddressType(a.memidx)); }
 #define WJ_ATOMIC_RMW(n, T, natural) \
-	void Validator::dispatch##n(MemArg a) { requireMemoryAccess(a, natural); popExpect(ValueTypeCode::T); popExpect(memoryAddressType(a.memidx)); pushValue(ValueType{ValueTypeCode::T, -1}); }
+	void Validator::dispatch##n(MemArg a) { requireAtomicMemoryAccess(a, natural); popExpect(ValueTypeCode::T); popExpect(memoryAddressType(a.memidx)); pushValue(ValueType{ValueTypeCode::T, -1}); }
 #define WJ_ATOMIC_CMPXCHG(n, T, natural) \
-	void Validator::dispatch##n(MemArg a) { requireMemoryAccess(a, natural); popExpect(ValueTypeCode::T); popExpect(ValueTypeCode::T); popExpect(memoryAddressType(a.memidx)); pushValue(ValueType{ValueTypeCode::T, -1}); }
+	void Validator::dispatch##n(MemArg a) { requireAtomicMemoryAccess(a, natural); popExpect(ValueTypeCode::T); popExpect(ValueTypeCode::T); popExpect(memoryAddressType(a.memidx)); pushValue(ValueType{ValueTypeCode::T, -1}); }
 
 WJ_ATOMIC_LOAD(I32AtomicLoad, I32, 2)
 WJ_ATOMIC_LOAD(I32AtomicLoad16U, I32, 1)
@@ -2091,10 +2118,241 @@ WJ_ATOMIC_STORE(I64AtomicStore8, I64, 0)
 #undef WJ_ATOMIC_RMW
 #undef WJ_ATOMIC_CMPXCHG
 
-void Validator::dispatchMemoryAtomicNotify(MemArg a) { requireMemoryAccess(a, 2); popExpect(ValueTypeCode::I32); popExpect(memoryAddressType(a.memidx)); pushValue(ValueType{ValueTypeCode::I32, -1}); }
-void Validator::dispatchMemoryAtomicWait32(MemArg a) { requireMemoryAccess(a, 2); popExpect(ValueTypeCode::I64); popExpect(ValueTypeCode::I32); popExpect(memoryAddressType(a.memidx)); pushValue(ValueType{ValueTypeCode::I32, -1}); }
-void Validator::dispatchMemoryAtomicWait64(MemArg a) { requireMemoryAccess(a, 3); popExpect(ValueTypeCode::I64); popExpect(ValueTypeCode::I64); popExpect(memoryAddressType(a.memidx)); pushValue(ValueType{ValueTypeCode::I32, -1}); }
-void Validator::dispatchAtomicFence() {}
+void Validator::dispatchMemoryAtomicNotify(MemArg a) { requireAtomicMemoryAccess(a, 2); popExpect(ValueTypeCode::I32); popExpect(memoryAddressType(a.memidx)); pushValue(ValueType{ValueTypeCode::I32, -1}); }
+void Validator::dispatchMemoryAtomicWait32(MemArg a) { requireAtomicMemoryAccess(a, 2); popExpect(ValueTypeCode::I64); popExpect(ValueTypeCode::I32); popExpect(memoryAddressType(a.memidx)); pushValue(ValueType{ValueTypeCode::I32, -1}); }
+void Validator::dispatchMemoryAtomicWait64(MemArg a) { requireAtomicMemoryAccess(a, 3); popExpect(ValueTypeCode::I64); popExpect(ValueTypeCode::I64); popExpect(memoryAddressType(a.memidx)); pushValue(ValueType{ValueTypeCode::I32, -1}); }
+void Validator::dispatchAtomicFence(uint8_t ordering) {
+	if (ordering > 1)
+		fail("atomic.fence ordering immediate must be 0 (seqcst) or 1 (acqrel)");
+}
+void Validator::dispatchAtomicPause() {}
+
+namespace {
+ValueType sharedStorageValueType(const CanonStorageType& storage)
+{
+	if (storage.isPacked)
+		return ValueType{ValueTypeCode::I32, -1};
+	return ValueType{storage.value.opcode, -1};
+}
+} // namespace
+
+void Validator::dispatchGlobalAtomicGet(uint8_t ordering, GlobalIdx arg)
+{
+	if (ordering > 1) fail("global.atomic: invalid ordering immediate");
+	pushValue(globalType(arg));
+}
+void Validator::dispatchGlobalAtomicSet(uint8_t ordering, GlobalIdx arg)
+{
+	if (ordering > 1) fail("global.atomic: invalid ordering immediate");
+	if (!globalIsMutable(arg)) fail("global.atomic.set of an immutable global");
+	popExpect(globalType(arg));
+}
+#define WJ_VALIDATE_GLOBAL_RMW(n) \
+void Validator::dispatchGlobalAtomicRmw##n(uint8_t ordering, GlobalIdx arg) { \
+	if (ordering > 1) fail("global.atomic: invalid ordering immediate"); \
+	if (!globalIsMutable(arg)) fail("global.atomic.rmw of an immutable global"); \
+	const ValueType t = globalType(arg); \
+	popExpect(t); \
+	pushValue(t); \
+}
+WJ_VALIDATE_GLOBAL_RMW(Add)
+WJ_VALIDATE_GLOBAL_RMW(Sub)
+WJ_VALIDATE_GLOBAL_RMW(And)
+WJ_VALIDATE_GLOBAL_RMW(Or)
+WJ_VALIDATE_GLOBAL_RMW(Xor)
+WJ_VALIDATE_GLOBAL_RMW(Xchg)
+#undef WJ_VALIDATE_GLOBAL_RMW
+void Validator::dispatchGlobalAtomicRmwCmpxchg(uint8_t ordering, GlobalIdx arg)
+{
+	if (ordering > 1) fail("global.atomic: invalid ordering immediate");
+	if (!globalIsMutable(arg)) fail("global.atomic.rmw.cmpxchg of an immutable global");
+	const ValueType t = globalType(arg);
+	popExpect(t);
+	popExpect(t);
+	pushValue(t);
+}
+
+void Validator::dispatchTableAtomicGet(uint8_t ordering, TableIdx arg)
+{
+	if (ordering > 1) fail("table.atomic: invalid ordering immediate");
+	const ValueType element = tableElementType(arg);
+	popExpect(tableIndexType(arg));
+	pushValue(element);
+}
+void Validator::dispatchTableAtomicSet(uint8_t ordering, TableIdx arg)
+{
+	if (ordering > 1) fail("table.atomic: invalid ordering immediate");
+	const ValueType element = tableElementType(arg);
+	popExpect(element);
+	popExpect(tableIndexType(arg));
+}
+void Validator::dispatchTableAtomicRmwXchg(uint8_t ordering, TableIdx arg)
+{
+	if (ordering > 1) fail("table.atomic: invalid ordering immediate");
+	const ValueType element = tableElementType(arg);
+	popExpect(element);
+	popExpect(tableIndexType(arg));
+	pushValue(element);
+}
+void Validator::dispatchTableAtomicRmwCmpxchg(uint8_t ordering, TableIdx arg)
+{
+	if (ordering > 1) fail("table.atomic: invalid ordering immediate");
+	const ValueType element = tableElementType(arg);
+	popExpect(element);
+	popExpect(element);
+	popExpect(tableIndexType(arg));
+	pushValue(element);
+}
+
+void Validator::dispatchStructAtomicGet(uint8_t ordering, TypeIdx arg1, uint32_t arg2)
+{
+	if (ordering > 1) fail("struct.atomic: invalid ordering immediate");
+	if (arg1 >= module.typeCount() || module.typeView(arg1).kind() != CanonTypeKind::Struct)
+		fail("struct.atomic: type is not a struct");
+	const CanonFieldType& f = requireStructField(arg1, arg2);
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg1)});
+	pushValue(sharedStorageValueType(f.storage));
+}
+void Validator::dispatchStructAtomicGetS(uint8_t ordering, TypeIdx arg1, uint32_t arg2)
+{
+	if (ordering > 1) fail("struct.atomic: invalid ordering immediate");
+	if (arg1 >= module.typeCount() || module.typeView(arg1).kind() != CanonTypeKind::Struct)
+		fail("struct.atomic: type is not a struct");
+	const CanonFieldType& f = requireStructField(arg1, arg2);
+	if (!f.storage.isPacked) fail("struct.atomic.get_s requires a packed field");
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg1)});
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+void Validator::dispatchStructAtomicGetU(uint8_t ordering, TypeIdx arg1, uint32_t arg2)
+{
+	if (ordering > 1) fail("struct.atomic: invalid ordering immediate");
+	if (arg1 >= module.typeCount() || module.typeView(arg1).kind() != CanonTypeKind::Struct)
+		fail("struct.atomic: type is not a struct");
+	const CanonFieldType& f = requireStructField(arg1, arg2);
+	if (!f.storage.isPacked) fail("struct.atomic.get_u requires a packed field");
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg1)});
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+void Validator::dispatchStructAtomicSet(uint8_t ordering, TypeIdx arg1, uint32_t arg2)
+{
+	if (ordering > 1) fail("struct.atomic: invalid ordering immediate");
+	if (arg1 >= module.typeCount() || module.typeView(arg1).kind() != CanonTypeKind::Struct)
+		fail("struct.atomic: type is not a struct");
+	const CanonFieldType& f = requireStructField(arg1, arg2);
+	if (!f.isMutable) fail("struct.atomic: field is immutable");
+	popExpect(sharedStorageValueType(f.storage));
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg1)});
+}
+
+#define WJ_VALIDATE_STRUCT_RMW(n) \
+void Validator::dispatchStructAtomicRmw##n(uint8_t ordering, TypeIdx arg1, uint32_t arg2) { \
+	if (ordering > 1) fail("struct.atomic: invalid ordering immediate"); \
+	if (arg1 >= module.typeCount() || module.typeView(arg1).kind() != CanonTypeKind::Struct) \
+		fail("struct.atomic: type is not a struct"); \
+	const CanonFieldType& f = requireStructField(arg1, arg2); \
+	if (!f.isMutable) fail("struct.atomic: field is immutable"); \
+	const ValueType t = sharedStorageValueType(f.storage); \
+	popExpect(t); \
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg1)}); \
+	pushValue(t); \
+}
+WJ_VALIDATE_STRUCT_RMW(Add)
+WJ_VALIDATE_STRUCT_RMW(Sub)
+WJ_VALIDATE_STRUCT_RMW(And)
+WJ_VALIDATE_STRUCT_RMW(Or)
+WJ_VALIDATE_STRUCT_RMW(Xor)
+WJ_VALIDATE_STRUCT_RMW(Xchg)
+#undef WJ_VALIDATE_STRUCT_RMW
+void Validator::dispatchStructAtomicRmwCmpxchg(uint8_t ordering, TypeIdx arg1, uint32_t arg2)
+{
+	if (ordering > 1) fail("struct.atomic: invalid ordering immediate");
+	if (arg1 >= module.typeCount() || module.typeView(arg1).kind() != CanonTypeKind::Struct)
+		fail("struct.atomic: type is not a struct");
+	const CanonFieldType& f = requireStructField(arg1, arg2);
+	if (!f.isMutable) fail("struct.atomic: field is immutable");
+	const ValueType t = sharedStorageValueType(f.storage);
+	popExpect(t);
+	popExpect(t);
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg1)});
+	pushValue(t);
+}
+
+void Validator::dispatchArrayAtomicGet(uint8_t ordering, TypeIdx arg)
+{
+	if (ordering > 1) fail("array.atomic: invalid ordering immediate");
+	if (arg >= module.typeCount() || module.typeView(arg).kind() != CanonTypeKind::Array)
+		fail("array.atomic: type is not an array");
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+	pushValue(sharedStorageValueType(module.typeView(arg).arrayElement().storage));
+}
+void Validator::dispatchArrayAtomicGetS(uint8_t ordering, TypeIdx arg)
+{
+	if (ordering > 1) fail("array.atomic: invalid ordering immediate");
+	if (arg >= module.typeCount() || module.typeView(arg).kind() != CanonTypeKind::Array)
+		fail("array.atomic: type is not an array");
+	if (!module.typeView(arg).arrayElement().storage.isPacked)
+		fail("array.atomic.get_s requires a packed array");
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+void Validator::dispatchArrayAtomicGetU(uint8_t ordering, TypeIdx arg)
+{
+	if (ordering > 1) fail("array.atomic: invalid ordering immediate");
+	if (arg >= module.typeCount() || module.typeView(arg).kind() != CanonTypeKind::Array)
+		fail("array.atomic: type is not an array");
+	if (!module.typeView(arg).arrayElement().storage.isPacked)
+		fail("array.atomic.get_u requires a packed array");
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+void Validator::dispatchArrayAtomicSet(uint8_t ordering, TypeIdx arg)
+{
+	if (ordering > 1) fail("array.atomic: invalid ordering immediate");
+	if (arg >= module.typeCount() || module.typeView(arg).kind() != CanonTypeKind::Array)
+		fail("array.atomic: type is not an array");
+	const CanonFieldType& e = module.typeView(arg).arrayElement();
+	if (!e.isMutable) fail("array.atomic: array is immutable");
+	popExpect(sharedStorageValueType(e.storage));
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+}
+#define WJ_VALIDATE_ARRAY_RMW(n) \
+void Validator::dispatchArrayAtomicRmw##n(uint8_t ordering, TypeIdx arg) { \
+	if (ordering > 1) fail("array.atomic: invalid ordering immediate"); \
+	if (arg >= module.typeCount() || module.typeView(arg).kind() != CanonTypeKind::Array) \
+		fail("array.atomic: type is not an array"); \
+	const CanonFieldType& e = module.typeView(arg).arrayElement(); \
+	if (!e.isMutable) fail("array.atomic: array is immutable"); \
+	const ValueType t = sharedStorageValueType(e.storage); \
+	popExpect(t); \
+	popExpect(ValueTypeCode::I32); \
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)}); \
+	pushValue(t); \
+}
+WJ_VALIDATE_ARRAY_RMW(Add)
+WJ_VALIDATE_ARRAY_RMW(Sub)
+WJ_VALIDATE_ARRAY_RMW(And)
+WJ_VALIDATE_ARRAY_RMW(Or)
+WJ_VALIDATE_ARRAY_RMW(Xor)
+WJ_VALIDATE_ARRAY_RMW(Xchg)
+#undef WJ_VALIDATE_ARRAY_RMW
+void Validator::dispatchArrayAtomicRmwCmpxchg(uint8_t ordering, TypeIdx arg)
+{
+	if (ordering > 1) fail("array.atomic: invalid ordering immediate");
+	if (arg >= module.typeCount() || module.typeView(arg).kind() != CanonTypeKind::Array)
+		fail("array.atomic: type is not an array");
+	const CanonFieldType& e = module.typeView(arg).arrayElement();
+	if (!e.isMutable) fail("array.atomic: array is immutable");
+	const ValueType t = sharedStorageValueType(e.storage);
+	popExpect(t);
+	popExpect(t);
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+	pushValue(t);
+}
 
 
 // SIMD bitwise / const / bitmask / splat typing.

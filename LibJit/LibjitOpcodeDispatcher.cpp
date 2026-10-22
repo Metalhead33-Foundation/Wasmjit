@@ -4,6 +4,7 @@
 #include "../WasmBase/WasmTrap.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
 #include "../WasmBase/WasmExn.hpp"
+#include "../WasmBase/WasmGcHeader.hpp"
 #include "../WasmBase/WasmString.hpp"
 #include "../WasmBase/WasmTracing.hpp"
 #include "../WasmBase/wasm_atomic.hpp"
@@ -2403,7 +2404,13 @@ jit_value_t OpcodeDispatcher::effectiveMemoryAddress(const WASM::MemArg& ma, jit
 	// Multi-memory: every access names its memory (defaulting to 0).
 	jit_value_t lm = memoryPointerForIndex(ma.memidx);
 	jit_value_t base = jit_insn_load_relative(function, lm, offsetof(WASM::LinearMemory, memoryBase), jit_type_void_ptr);
-	jit_value_t memorySize = jit_insn_load_relative(function, lm, offsetof(WASM::LinearMemory, memorySize), jit_type_ulong);
+	jit_type_t memorySizeParams[] = {jit_type_void_ptr};
+	jit_type_t memorySizeSig = jit_type_create_signature(jit_abi_cdecl,
+		jit_type_ulong, memorySizeParams, 1, 1);
+	jit_value_t memorySizeArgs[] = {lm};
+	jit_value_t memorySize = jit_insn_call_native(function, "wasm_memory_size",
+		reinterpret_cast<void*>(&WASM::wasm_memory_size), memorySizeSig,
+		memorySizeArgs, 1, 0);
 	jit_value_t wasmOff = popValue();
 
 	// The address operand is the memory's *unsigned* index. Widen it through
@@ -3049,8 +3056,8 @@ void OpcodeDispatcher::emitDummyReturn()
 void OpcodeDispatcher::emitTailCallViaPending(jit_value_t targetCallablePtr,
 											  const std::vector<jit_value_t>& args)
 {
-	jit_value_t state = jit_value_create_nint_constant(
-		function, jit_type_void_ptr, reinterpret_cast<jit_nint>(&WASM::g_tailCallState));
+	jit_value_t state = callNativeHelper(
+		reinterpret_cast<void*>(&WASM::currentTailCallState), jit_type_void_ptr, {}, {});
 
 	jit_insn_store_relative(function, state,
 		static_cast<jit_nint>(offsetof(WASM::TailCallState, target)), targetCallablePtr);
@@ -3493,7 +3500,11 @@ void OpcodeDispatcher::dispatchI64Store32(WASM::MemArg addr)
 void OpcodeDispatcher::dispatchMemorySize(WASM::MemIdx arg)
 {
 	jit_value_t lm = memoryPointerForIndex(arg);
-	jit_value_t ms = jit_insn_load_relative(function, lm, offsetof(WASM::LinearMemory, memorySize), jit_type_ulong);
+	jit_type_t params[] = {jit_type_void_ptr};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_ulong, params, 1, 1);
+	jit_value_t args[] = {lm};
+	jit_value_t ms = jit_insn_call_native(function, "wasm_memory_size",
+		reinterpret_cast<void*>(&WASM::wasm_memory_size), sig, args, 1, 0);
 	jit_value_t page = jit_value_create_long_constant(function, jit_type_ulong, 65536);
 	jit_value_t pages = jit_insn_div(function, ms, page);
 	// The result has the memory's index type: i64 for memory64 (M64-1).
@@ -6614,8 +6625,8 @@ jit_value_t OpcodeDispatcher::emitAtomicLoad(const WASM::MemArg& ma, uint32_t wi
 {
 	jit_value_t address = effectiveMemoryAddress(ma, static_cast<jit_nint>(width));
 	jit_value_t raw = callNativeHelper(reinterpret_cast<void*>(wasm_atomic_load),
-			jit_type_ulong, {jit_type_void_ptr, jit_type_uint},
-			{address, atomicUintConstant(width)});
+			jit_type_ulong, {jit_type_void_ptr, jit_type_uint, jit_type_uint},
+			{address, atomicUintConstant(width), atomicUintConstant(ma.ordering)});
 	return jit_insn_convert(function, raw, resultType, 0);
 }
 
@@ -6625,8 +6636,8 @@ void OpcodeDispatcher::emitAtomicStore(const WASM::MemArg& ma, uint32_t width)
 	jit_value_t value = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
 	jit_value_t address = effectiveMemoryAddress(ma, static_cast<jit_nint>(width));
 	callNativeHelper(reinterpret_cast<void*>(wasm_atomic_store), jit_type_void,
-			{jit_type_void_ptr, jit_type_ulong, jit_type_uint},
-			{address, value, atomicUintConstant(width)});
+			{jit_type_void_ptr, jit_type_ulong, jit_type_uint, jit_type_uint},
+			{address, value, atomicUintConstant(width), atomicUintConstant(ma.ordering)});
 }
 
 jit_value_t OpcodeDispatcher::emitAtomicRmw(const WASM::MemArg& ma, uint32_t width,
@@ -6636,8 +6647,9 @@ jit_value_t OpcodeDispatcher::emitAtomicRmw(const WASM::MemArg& ma, uint32_t wid
 	jit_value_t address = effectiveMemoryAddress(ma, static_cast<jit_nint>(width));
 	jit_value_t raw = callNativeHelper(reinterpret_cast<void*>(wasm_atomic_rmw),
 			jit_type_ulong,
-			{jit_type_void_ptr, jit_type_ulong, jit_type_uint, jit_type_uint},
-			{address, value, atomicUintConstant(width), atomicUintConstant(op)});
+			{jit_type_void_ptr, jit_type_ulong, jit_type_uint, jit_type_uint, jit_type_uint},
+			{address, value, atomicUintConstant(width), atomicUintConstant(op),
+			 atomicUintConstant(ma.ordering)});
 	return jit_insn_convert(function, raw, resultType, 0);
 }
 
@@ -6650,14 +6662,317 @@ jit_value_t OpcodeDispatcher::emitAtomicCmpxchg(const WASM::MemArg& ma, uint32_t
 	jit_value_t address = effectiveMemoryAddress(ma, static_cast<jit_nint>(width));
 	jit_value_t raw = callNativeHelper(reinterpret_cast<void*>(wasm_atomic_cmpxchg),
 			jit_type_ulong,
-			{jit_type_void_ptr, jit_type_ulong, jit_type_ulong, jit_type_uint},
-			{address, expected, replacement, atomicUintConstant(width)});
+			{jit_type_void_ptr, jit_type_ulong, jit_type_ulong, jit_type_uint, jit_type_uint},
+			{address, expected, replacement, atomicUintConstant(width),
+			 atomicUintConstant(ma.ordering)});
 	return jit_insn_convert(function, raw, resultType, 0);
 }
 
-void OpcodeDispatcher::dispatchAtomicFence() {
-	// All atomics are seq_cst, so the fence is the same ordering for everyone.
-	callNativeHelper(reinterpret_cast<void*>(wasm_atomic_fence), jit_type_void, {}, {});
+// ── Shared-everything threads: address-based atomic primitives (SET-3) ──────
+//
+// The global/table/GC forms share one lowering: compute the field/slot byte
+// address, then call the same alignment-checked `__atomic_*` helpers the
+// linear-memory atomics use. Reference slots are pointer-sized; the proposal
+// requires them to be tear-free, and a naturally aligned pointer exchange is.
+
+jit_value_t OpcodeDispatcher::emitAtomicLoadAddress(jit_value_t address, uint32_t width,
+													uint8_t ordering, jit_type_t resultType)
+{
+	jit_value_t raw = callNativeHelper(reinterpret_cast<void*>(wasm_atomic_load),
+			jit_type_ulong, {jit_type_void_ptr, jit_type_uint, jit_type_uint},
+			{address, atomicUintConstant(width), atomicUintConstant(ordering)});
+	return jit_insn_convert(function, raw, resultType, 0);
+}
+
+void OpcodeDispatcher::emitAtomicStoreAddress(jit_value_t address, uint32_t width,
+											  uint8_t ordering)
+{
+	jit_value_t value = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	emitAtomicStoreRaw(address, value, width, ordering);
+}
+
+void OpcodeDispatcher::emitAtomicStoreRaw(jit_value_t address, jit_value_t value,
+										  uint32_t width, uint8_t ordering)
+{
+	callNativeHelper(reinterpret_cast<void*>(wasm_atomic_store), jit_type_void,
+			{jit_type_void_ptr, jit_type_ulong, jit_type_uint, jit_type_uint},
+			{address, value, atomicUintConstant(width), atomicUintConstant(ordering)});
+}
+
+jit_value_t OpcodeDispatcher::emitAtomicRmwAddress(jit_value_t address, uint32_t width,
+												   uint32_t op, uint8_t ordering,
+												   jit_type_t resultType)
+{
+	jit_value_t value = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	return emitAtomicRmwRaw(address, value, width, op, ordering, resultType);
+}
+
+jit_value_t OpcodeDispatcher::emitAtomicRmwRaw(jit_value_t address, jit_value_t value,
+											   uint32_t width, uint32_t op,
+											   uint8_t ordering, jit_type_t resultType)
+{
+	jit_value_t raw = callNativeHelper(reinterpret_cast<void*>(wasm_atomic_rmw),
+			jit_type_ulong,
+			{jit_type_void_ptr, jit_type_ulong, jit_type_uint, jit_type_uint, jit_type_uint},
+			{address, value, atomicUintConstant(width), atomicUintConstant(op),
+			 atomicUintConstant(ordering)});
+	return jit_insn_convert(function, raw, resultType, 0);
+}
+
+jit_value_t OpcodeDispatcher::emitAtomicCmpxchgAddress(jit_value_t address, uint32_t width,
+													   uint8_t ordering, jit_type_t resultType)
+{
+	jit_value_t replacement = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t expected = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	return emitAtomicCmpxchgRaw(address, expected, replacement, width, ordering, resultType);
+}
+
+jit_value_t OpcodeDispatcher::emitAtomicCmpxchgRaw(jit_value_t address, jit_value_t expected,
+												   jit_value_t replacement, uint32_t width,
+												   uint8_t ordering, jit_type_t resultType)
+{
+	jit_value_t raw = callNativeHelper(reinterpret_cast<void*>(wasm_atomic_cmpxchg),
+			jit_type_ulong,
+			{jit_type_void_ptr, jit_type_ulong, jit_type_ulong, jit_type_uint, jit_type_uint},
+			{address, expected, replacement, atomicUintConstant(width),
+			 atomicUintConstant(ordering)});
+	return jit_insn_convert(function, raw, resultType, 0);
+}
+
+jit_value_t OpcodeDispatcher::tableAtomicSlotAddress(WASM::TableIdx tableIdx)
+{
+	jit_value_t index = popValue();
+	jit_value_t table = tablePointerForIndex(tableIdx);
+	jit_value_t tablePtr = jit_insn_load_relative(
+		function, table, offsetof(WASM::TableInstance, base), jit_type_void_ptr);
+	jit_value_t checked = checkedTableIndex(table, index, "shared atomic table access",
+		WASM::TrapKind::OutOfBoundsTableAccess);
+	return jit_insn_load_elem_address(function, tablePtr, checked, jit_type_void_ptr);
+}
+
+jit_value_t OpcodeDispatcher::structAtomicFieldAddress(WASM::TypeIdx typeIdx, uint32_t fieldIdx)
+{
+	jit_value_t ref = popValue();
+	emitTrapIfNull(WASM::TrapKind::NullStructureReference, refAsVoidPtr(ref));
+	return jit_insn_add(function, refAsVoidPtr(ref),
+		jit_value_create_nint_constant(function, jit_type_nint,
+									   structFieldOffset(typeIdx, fieldIdx)));
+}
+
+jit_value_t OpcodeDispatcher::arrayAtomicElementAddress(WASM::TypeIdx typeIdx)
+{
+	jit_value_t index = jit_insn_convert(function, popValue(), jit_type_uint, 0);
+	jit_value_t ref = popValue();
+	emitTrapIfNull(WASM::TrapKind::NullArrayReference, refAsVoidPtr(ref));
+	jit_value_t length = jit_insn_load_relative(function, refAsVoidPtr(ref),
+		arrayLengthOffset(typeIdx), jit_type_uint);
+	jit_value_t inBounds = jit_insn_lt(function, index, length);
+	jit_label_t ok = jit_label_undefined;
+	jit_insn_branch_if(function, inBounds, &ok);
+	emitTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
+	jit_insn_label(function, &ok);
+	jit_value_t data = arrayElementBase(ref, typeIdx);
+	return jit_insn_load_elem_address(function, data, index, arrayElementJitType(typeIdx));
+}
+
+void OpcodeDispatcher::dispatchAtomicFence(uint8_t ordering) {
+	callNativeHelper(reinterpret_cast<void*>(wasm_atomic_fence), jit_type_void,
+			{jit_type_uint}, {atomicUintConstant(ordering)});
+}
+
+void OpcodeDispatcher::dispatchAtomicPause() {
+	// Acquire-release proposal: a spin-loop hint with no architectural effect.
+	// Lowering it to nothing is explicitly permitted (ARAD2).
+}
+
+// ── Shared-everything threads (SET-3): global/table/GC atomics ──────────────
+// The ordering byte is passed through to the same `__atomic_*` helpers as the
+// linear-memory atomics; address formation is the only new part. A reference
+// slot is pointer-sized and naturally aligned.
+
+static uint32_t sharedAtomicWidth(WASM::ValueTypeCode code)
+{
+	switch (code) {
+	case WASM::ValueTypeCode::I32:
+	case WASM::ValueTypeCode::F32: return 4;
+	case WASM::ValueTypeCode::I64:
+	case WASM::ValueTypeCode::F64: return 8;
+	case WASM::ValueTypeCode::V128: return 16;
+	default: return static_cast<uint32_t>(sizeof(void*)); // references
+	}
+}
+
+static uint32_t sharedAtomicWidth(const WASM::CanonStorageType& storage)
+{
+	if (storage.isPacked)
+		return storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u;
+	return sharedAtomicWidth(storage.value.opcode);
+}
+
+void OpcodeDispatcher::dispatchGlobalAtomicGet(uint8_t ordering, WASM::GlobalIdx arg) {
+	const WASM::GlobalType gt = globalTypeForIndex(arg);
+	pushValue(emitAtomicLoadAddress(globalSlotAddress(arg),
+		sharedAtomicWidth(gt.contentType.opcode), ordering,
+		jitTypeForValueType(gt.contentType)));
+}
+
+void OpcodeDispatcher::dispatchGlobalAtomicSet(uint8_t ordering, WASM::GlobalIdx arg) {
+	const WASM::GlobalType gt = globalTypeForIndex(arg);
+	emitAtomicStoreAddress(globalSlotAddress(arg),
+		sharedAtomicWidth(gt.contentType.opcode), ordering);
+}
+
+#define WJ_SHARED_GLOBAL_RMW(n, op) \
+void OpcodeDispatcher::dispatchGlobalAtomicRmw##n(uint8_t ordering, WASM::GlobalIdx arg) { \
+	const WASM::GlobalType gt = globalTypeForIndex(arg); \
+	pushValue(emitAtomicRmwAddress(globalSlotAddress(arg), \
+		sharedAtomicWidth(gt.contentType.opcode), op, ordering, \
+		jitTypeForValueType(gt.contentType))); \
+}
+WJ_SHARED_GLOBAL_RMW(Add, WASM_ATOMIC_ADD)
+WJ_SHARED_GLOBAL_RMW(Sub, WASM_ATOMIC_SUB)
+WJ_SHARED_GLOBAL_RMW(And, WASM_ATOMIC_AND)
+WJ_SHARED_GLOBAL_RMW(Or, WASM_ATOMIC_OR)
+WJ_SHARED_GLOBAL_RMW(Xor, WASM_ATOMIC_XOR)
+WJ_SHARED_GLOBAL_RMW(Xchg, WASM_ATOMIC_XCHG)
+#undef WJ_SHARED_GLOBAL_RMW
+
+void OpcodeDispatcher::dispatchGlobalAtomicRmwCmpxchg(uint8_t ordering, WASM::GlobalIdx arg) {
+	const WASM::GlobalType gt = globalTypeForIndex(arg);
+	pushValue(emitAtomicCmpxchgAddress(globalSlotAddress(arg),
+		sharedAtomicWidth(gt.contentType.opcode), ordering,
+		jitTypeForValueType(gt.contentType)));
+}
+
+void OpcodeDispatcher::dispatchTableAtomicGet(uint8_t ordering, WASM::TableIdx arg) {
+	pushValue(emitAtomicLoadAddress(tableAtomicSlotAddress(arg), sizeof(void*), ordering,
+									tableElementJitType(arg)));
+}
+void OpcodeDispatcher::dispatchTableAtomicSet(uint8_t ordering, WASM::TableIdx arg) {
+	// Stack: index, value. Pop the value before the address helper consumes the
+	// index (the value is on top).
+	jit_value_t value = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t address = tableAtomicSlotAddress(arg);
+	emitAtomicStoreRaw(address, value, sizeof(void*), ordering);
+}
+void OpcodeDispatcher::dispatchTableAtomicRmwXchg(uint8_t ordering, WASM::TableIdx arg) {
+	jit_value_t value = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t address = tableAtomicSlotAddress(arg);
+	pushValue(emitAtomicRmwRaw(address, value, sizeof(void*), WASM_ATOMIC_XCHG, ordering,
+							   tableElementJitType(arg)));
+}
+void OpcodeDispatcher::dispatchTableAtomicRmwCmpxchg(uint8_t ordering, WASM::TableIdx arg) {
+	jit_value_t replacement = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t expected = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t address = tableAtomicSlotAddress(arg);
+	pushValue(emitAtomicCmpxchgRaw(address, expected, replacement, sizeof(void*), ordering,
+								   tableElementJitType(arg)));
+}
+
+void OpcodeDispatcher::dispatchStructAtomicGet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) {
+	const auto field = structTypeForIndex(arg1).structFields()[arg2];
+	jit_value_t address = structAtomicFieldAddress(arg1, arg2);
+	pushValue(emitAtomicLoadAddress(address, sharedAtomicWidth(field.storage), ordering,
+								   typeTranslator.translateCanonStorage(field.storage)));
+}
+void OpcodeDispatcher::dispatchStructAtomicGetS(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) {
+	const auto field = structTypeForIndex(arg1).structFields()[arg2];
+	jit_value_t address = structAtomicFieldAddress(arg1, arg2);
+	jit_value_t raw = emitAtomicLoadAddress(address, sharedAtomicWidth(field.storage),
+											ordering, jit_type_ulong);
+	jit_type_t narrow = field.storage.packed == WASM::ValueTypeCode::I8
+		? jit_type_sbyte : jit_type_short;
+	pushValue(jit_insn_convert(function,
+		jit_insn_convert(function, raw, narrow, 0), jit_type_int, 0));
+}
+void OpcodeDispatcher::dispatchStructAtomicGetU(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) {
+	const auto field = structTypeForIndex(arg1).structFields()[arg2];
+	jit_value_t address = structAtomicFieldAddress(arg1, arg2);
+	pushValue(emitAtomicLoadAddress(address, sharedAtomicWidth(field.storage), ordering,
+								   jit_type_int));
+}
+void OpcodeDispatcher::dispatchStructAtomicSet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) {
+	const auto field = structTypeForIndex(arg1).structFields()[arg2];
+	jit_value_t value = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t address = structAtomicFieldAddress(arg1, arg2);
+	emitAtomicStoreRaw(address, value, sharedAtomicWidth(field.storage), ordering);
+}
+#define WJ_SHARED_STRUCT_RMW(n, op) \
+void OpcodeDispatcher::dispatchStructAtomicRmw##n(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) { \
+	const auto field = structTypeForIndex(arg1).structFields()[arg2]; \
+	jit_value_t value = jit_insn_convert(function, popValue(), jit_type_ulong, 0); \
+	jit_value_t address = structAtomicFieldAddress(arg1, arg2); \
+	pushValue(emitAtomicRmwRaw(address, value, sharedAtomicWidth(field.storage), op, ordering, \
+							   typeTranslator.translateCanonStorage(field.storage))); \
+}
+WJ_SHARED_STRUCT_RMW(Add, WASM_ATOMIC_ADD)
+WJ_SHARED_STRUCT_RMW(Sub, WASM_ATOMIC_SUB)
+WJ_SHARED_STRUCT_RMW(And, WASM_ATOMIC_AND)
+WJ_SHARED_STRUCT_RMW(Or, WASM_ATOMIC_OR)
+WJ_SHARED_STRUCT_RMW(Xor, WASM_ATOMIC_XOR)
+WJ_SHARED_STRUCT_RMW(Xchg, WASM_ATOMIC_XCHG)
+#undef WJ_SHARED_STRUCT_RMW
+void OpcodeDispatcher::dispatchStructAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) {
+	const auto field = structTypeForIndex(arg1).structFields()[arg2];
+	jit_value_t replacement = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t expected = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t address = structAtomicFieldAddress(arg1, arg2);
+	pushValue(emitAtomicCmpxchgRaw(address, expected, replacement,
+								   sharedAtomicWidth(field.storage), ordering,
+								   typeTranslator.translateCanonStorage(field.storage)));
+}
+
+void OpcodeDispatcher::dispatchArrayAtomicGet(uint8_t ordering, WASM::TypeIdx arg) {
+	const auto element = arrayTypeForIndex(arg).arrayElement();
+	jit_value_t address = arrayAtomicElementAddress(arg);
+	pushValue(emitAtomicLoadAddress(address, sharedAtomicWidth(element.storage), ordering,
+								   typeTranslator.translateCanonStorage(element.storage)));
+}
+void OpcodeDispatcher::dispatchArrayAtomicGetS(uint8_t ordering, WASM::TypeIdx arg) {
+	const auto element = arrayTypeForIndex(arg).arrayElement();
+	jit_value_t address = arrayAtomicElementAddress(arg);
+	jit_value_t raw = emitAtomicLoadAddress(address, sharedAtomicWidth(element.storage),
+											ordering, jit_type_ulong);
+	jit_type_t narrow = element.storage.packed == WASM::ValueTypeCode::I8
+		? jit_type_sbyte : jit_type_short;
+	pushValue(jit_insn_convert(function,
+		jit_insn_convert(function, raw, narrow, 0), jit_type_int, 0));
+}
+void OpcodeDispatcher::dispatchArrayAtomicGetU(uint8_t ordering, WASM::TypeIdx arg) {
+	const auto element = arrayTypeForIndex(arg).arrayElement();
+	jit_value_t address = arrayAtomicElementAddress(arg);
+	pushValue(emitAtomicLoadAddress(address, sharedAtomicWidth(element.storage), ordering,
+								   jit_type_int));
+}
+void OpcodeDispatcher::dispatchArrayAtomicSet(uint8_t ordering, WASM::TypeIdx arg) {
+	const auto element = arrayTypeForIndex(arg).arrayElement();
+	jit_value_t value = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t address = arrayAtomicElementAddress(arg);
+	emitAtomicStoreRaw(address, value, sharedAtomicWidth(element.storage), ordering);
+}
+#define WJ_SHARED_ARRAY_RMW(n, op) \
+void OpcodeDispatcher::dispatchArrayAtomicRmw##n(uint8_t ordering, WASM::TypeIdx arg) { \
+	const auto element = arrayTypeForIndex(arg).arrayElement(); \
+	jit_value_t value = jit_insn_convert(function, popValue(), jit_type_ulong, 0); \
+	jit_value_t address = arrayAtomicElementAddress(arg); \
+	pushValue(emitAtomicRmwRaw(address, value, sharedAtomicWidth(element.storage), op, ordering, \
+							   typeTranslator.translateCanonStorage(element.storage))); \
+}
+WJ_SHARED_ARRAY_RMW(Add, WASM_ATOMIC_ADD)
+WJ_SHARED_ARRAY_RMW(Sub, WASM_ATOMIC_SUB)
+WJ_SHARED_ARRAY_RMW(And, WASM_ATOMIC_AND)
+WJ_SHARED_ARRAY_RMW(Or, WASM_ATOMIC_OR)
+WJ_SHARED_ARRAY_RMW(Xor, WASM_ATOMIC_XOR)
+WJ_SHARED_ARRAY_RMW(Xchg, WASM_ATOMIC_XCHG)
+#undef WJ_SHARED_ARRAY_RMW
+void OpcodeDispatcher::dispatchArrayAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg) {
+	const auto element = arrayTypeForIndex(arg).arrayElement();
+	jit_value_t replacement = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t expected = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t address = arrayAtomicElementAddress(arg);
+	pushValue(emitAtomicCmpxchgRaw(address, expected, replacement,
+								   sharedAtomicWidth(element.storage), ordering,
+								   typeTranslator.translateCanonStorage(element.storage)));
 }
 
 void OpcodeDispatcher::dispatchMemoryAtomicNotify(WASM::MemArg arg) {

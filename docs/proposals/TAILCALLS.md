@@ -86,7 +86,8 @@ Tail Call is a **Phase 5** proposal, integrated into WebAssembly **3.0**.
   signature (`LibjitModuleCompiler.cpp`); wasm-to-wasm calls reach the callee
   through the driver (`Callable::fnPtr`; the raw entry point is in
   `rawFnPtr`). A tail call whose callee has a *structurally identical signature*
-  writes `{target, args, pending}` into the global `WASM::g_tailCallState` and
+  writes `{target, args, pending}` into the host-thread-local
+  `WASM::g_tailCallState` and
   returns; the driver observes `pending`, re-dispatches to the target's raw
   entry point and loops, so the host stack stays constant. Signatures that
   differ keep the `call` + `return` lowering. This is what makes mutual

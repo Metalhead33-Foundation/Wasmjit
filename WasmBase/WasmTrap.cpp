@@ -74,10 +74,11 @@ void trap(TrapKind kind, const char* detail)
 	state.message = (detail != nullptr) ? detail : trapKindName(kind);
 
 	// The tail-call trampoline (docs/TAILCALLS.md TC-2) keeps its pending flag
-	// in process-global state. Longjmping past the driver would otherwise leave
-	// the next invocation re-dispatching to a dead target.
-	g_tailCallState.pending = 0;
-	g_tailCallState.target = nullptr;
+	// in host-thread-local state. Longjmping past the driver would otherwise
+	// leave the next invocation re-dispatching to a dead target.
+	TailCallState* tail = currentTailCallState();
+	tail->pending = 0;
+	tail->target = nullptr;
 
 	if (state.active != nullptr)
 		std::longjmp(state.active->buffer, 1);

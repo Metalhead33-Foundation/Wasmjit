@@ -581,7 +581,46 @@ protected:
 	virtual void dispatchMemoryAtomicNotify(MemArg arg) { onUnhandledOpcode("dispatchMemoryAtomicNotify"); }
 	virtual void dispatchMemoryAtomicWait32(MemArg arg) { onUnhandledOpcode("dispatchMemoryAtomicWait32"); }
 	virtual void dispatchMemoryAtomicWait64(MemArg arg) { onUnhandledOpcode("dispatchMemoryAtomicWait64"); }
-	virtual void dispatchAtomicFence() { onUnhandledOpcode("dispatchAtomicFence"); }
+	virtual void dispatchAtomicFence(uint8_t ordering) { onUnhandledOpcode("dispatchAtomicFence"); }
+	virtual void dispatchAtomicPause() { onUnhandledOpcode("dispatchAtomicPause"); }
+
+	// Shared-everything threads (SET-3): fixed u8 ordering + an index/type
+	// immediate. Named exactly like the instruction so the probe links.
+	virtual void dispatchGlobalAtomicGet(uint8_t, GlobalIdx arg) { onUnhandledOpcode("dispatchGlobalAtomicGet"); }
+	virtual void dispatchGlobalAtomicSet(uint8_t, GlobalIdx arg) { onUnhandledOpcode("dispatchGlobalAtomicSet"); }
+	virtual void dispatchGlobalAtomicRmwAdd(uint8_t, GlobalIdx arg) { onUnhandledOpcode("dispatchGlobalAtomicRmwAdd"); }
+	virtual void dispatchGlobalAtomicRmwSub(uint8_t, GlobalIdx arg) { onUnhandledOpcode("dispatchGlobalAtomicRmwSub"); }
+	virtual void dispatchGlobalAtomicRmwAnd(uint8_t, GlobalIdx arg) { onUnhandledOpcode("dispatchGlobalAtomicRmwAnd"); }
+	virtual void dispatchGlobalAtomicRmwOr(uint8_t, GlobalIdx arg) { onUnhandledOpcode("dispatchGlobalAtomicRmwOr"); }
+	virtual void dispatchGlobalAtomicRmwXor(uint8_t, GlobalIdx arg) { onUnhandledOpcode("dispatchGlobalAtomicRmwXor"); }
+	virtual void dispatchGlobalAtomicRmwXchg(uint8_t, GlobalIdx arg) { onUnhandledOpcode("dispatchGlobalAtomicRmwXchg"); }
+	virtual void dispatchGlobalAtomicRmwCmpxchg(uint8_t, GlobalIdx arg) { onUnhandledOpcode("dispatchGlobalAtomicRmwCmpxchg"); }
+	virtual void dispatchTableAtomicGet(uint8_t, TableIdx arg) { onUnhandledOpcode("dispatchTableAtomicGet"); }
+	virtual void dispatchTableAtomicSet(uint8_t, TableIdx arg) { onUnhandledOpcode("dispatchTableAtomicSet"); }
+	virtual void dispatchTableAtomicRmwXchg(uint8_t, TableIdx arg) { onUnhandledOpcode("dispatchTableAtomicRmwXchg"); }
+	virtual void dispatchTableAtomicRmwCmpxchg(uint8_t, TableIdx arg) { onUnhandledOpcode("dispatchTableAtomicRmwCmpxchg"); }
+	virtual void dispatchStructAtomicGet(uint8_t, TypeIdx, uint32_t) { onUnhandledOpcode("dispatchStructAtomicGet"); }
+	virtual void dispatchStructAtomicGetS(uint8_t, TypeIdx, uint32_t) { onUnhandledOpcode("dispatchStructAtomicGetS"); }
+	virtual void dispatchStructAtomicGetU(uint8_t, TypeIdx, uint32_t) { onUnhandledOpcode("dispatchStructAtomicGetU"); }
+	virtual void dispatchStructAtomicSet(uint8_t, TypeIdx, uint32_t) { onUnhandledOpcode("dispatchStructAtomicSet"); }
+	virtual void dispatchStructAtomicRmwAdd(uint8_t, TypeIdx, uint32_t) { onUnhandledOpcode("dispatchStructAtomicRmwAdd"); }
+	virtual void dispatchStructAtomicRmwSub(uint8_t, TypeIdx, uint32_t) { onUnhandledOpcode("dispatchStructAtomicRmwSub"); }
+	virtual void dispatchStructAtomicRmwAnd(uint8_t, TypeIdx, uint32_t) { onUnhandledOpcode("dispatchStructAtomicRmwAnd"); }
+	virtual void dispatchStructAtomicRmwOr(uint8_t, TypeIdx, uint32_t) { onUnhandledOpcode("dispatchStructAtomicRmwOr"); }
+	virtual void dispatchStructAtomicRmwXor(uint8_t, TypeIdx, uint32_t) { onUnhandledOpcode("dispatchStructAtomicRmwXor"); }
+	virtual void dispatchStructAtomicRmwXchg(uint8_t, TypeIdx, uint32_t) { onUnhandledOpcode("dispatchStructAtomicRmwXchg"); }
+	virtual void dispatchStructAtomicRmwCmpxchg(uint8_t, TypeIdx, uint32_t) { onUnhandledOpcode("dispatchStructAtomicRmwCmpxchg"); }
+	virtual void dispatchArrayAtomicGet(uint8_t, TypeIdx) { onUnhandledOpcode("dispatchArrayAtomicGet"); }
+	virtual void dispatchArrayAtomicGetS(uint8_t, TypeIdx) { onUnhandledOpcode("dispatchArrayAtomicGetS"); }
+	virtual void dispatchArrayAtomicGetU(uint8_t, TypeIdx) { onUnhandledOpcode("dispatchArrayAtomicGetU"); }
+	virtual void dispatchArrayAtomicSet(uint8_t, TypeIdx) { onUnhandledOpcode("dispatchArrayAtomicSet"); }
+	virtual void dispatchArrayAtomicRmwAdd(uint8_t, TypeIdx) { onUnhandledOpcode("dispatchArrayAtomicRmwAdd"); }
+	virtual void dispatchArrayAtomicRmwSub(uint8_t, TypeIdx) { onUnhandledOpcode("dispatchArrayAtomicRmwSub"); }
+	virtual void dispatchArrayAtomicRmwAnd(uint8_t, TypeIdx) { onUnhandledOpcode("dispatchArrayAtomicRmwAnd"); }
+	virtual void dispatchArrayAtomicRmwOr(uint8_t, TypeIdx) { onUnhandledOpcode("dispatchArrayAtomicRmwOr"); }
+	virtual void dispatchArrayAtomicRmwXor(uint8_t, TypeIdx) { onUnhandledOpcode("dispatchArrayAtomicRmwXor"); }
+	virtual void dispatchArrayAtomicRmwXchg(uint8_t, TypeIdx) { onUnhandledOpcode("dispatchArrayAtomicRmwXchg"); }
+	virtual void dispatchArrayAtomicRmwCmpxchg(uint8_t, TypeIdx) { onUnhandledOpcode("dispatchArrayAtomicRmwCmpxchg"); }
 	virtual void dispatchI32AtomicLoad(MemArg arg) { onUnhandledOpcode("dispatchI32AtomicLoad"); }
 	virtual void dispatchI64AtomicLoad(MemArg arg) { onUnhandledOpcode("dispatchI64AtomicLoad"); }
 	virtual void dispatchI32AtomicLoad8U(MemArg arg) { onUnhandledOpcode("dispatchI32AtomicLoad8U"); }

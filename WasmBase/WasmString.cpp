@@ -98,6 +98,7 @@ bool decodeOne(const uint8_t* bytes, std::size_t size, std::size_t& index,
 
 StringObject* StringStore::create(std::vector<uint32_t> codePoints)
 {
+	std::scoped_lock lock(mutex_);
 	if (codePoints.size() > kMaxStringBytes)
 		trap(TrapKind::OutOfMemory, "string exceeds the implementation limit");
 	const uint64_t bytes = sizeof(StringObject)
@@ -114,6 +115,7 @@ StringObject* StringStore::create(std::vector<uint32_t> codePoints)
 
 StringViewObject* StringStore::createView(const StringObject* string)
 {
+	std::scoped_lock lock(mutex_);
 	const uint64_t bytes = sizeof(StringViewObject);
 	if (!Store::global().reserveBytes(bytes))
 		trap(TrapKind::OutOfMemory, "string view allocation exceeds the allocation budget");
@@ -129,6 +131,7 @@ StringViewObject* StringStore::createView(const StringObject* string)
 
 StringIteratorObject* StringStore::createIterator(const StringObject* string)
 {
+	std::scoped_lock lock(mutex_);
 	const uint64_t bytes = sizeof(StringIteratorObject);
 	if (!Store::global().reserveBytes(bytes))
 		trap(TrapKind::OutOfMemory, "string iterator allocation exceeds the allocation budget");
@@ -144,6 +147,7 @@ StringIteratorObject* StringStore::createIterator(const StringObject* string)
 
 bool StringStore::retain(const void* ref)
 {
+	std::scoped_lock lock(mutex_);
 	if (ref == nullptr)
 		return false;
 	if (const auto* string = static_cast<const StringObject*>(ref);
@@ -172,6 +176,7 @@ bool StringStore::retain(const void* ref)
 
 bool StringStore::releaseView(const StringViewObject* view)
 {
+	std::scoped_lock lock(mutex_);
 	const auto it = views_.find(view);
 	if (it == views_.end())
 		return false;
@@ -192,6 +197,7 @@ bool StringStore::releaseView(const StringViewObject* view)
 
 bool StringStore::releaseIterator(const StringIteratorObject* iterator)
 {
+	std::scoped_lock lock(mutex_);
 	const auto it = iterators_.find(iterator);
 	if (it == iterators_.end())
 		return false;
@@ -211,6 +217,7 @@ bool StringStore::releaseIterator(const StringIteratorObject* iterator)
 
 bool StringStore::release(const void* ref)
 {
+	std::scoped_lock lock(mutex_);
 	if (ref == nullptr)
 		return false;
 	const auto* string = static_cast<const StringObject*>(ref);
@@ -235,6 +242,7 @@ bool StringStore::release(const void* ref)
 
 bool StringStore::owns(const void* ref) const
 {
+	std::scoped_lock lock(mutex_);
 	if (ref == nullptr)
 		return false;
 	return objects_.find(static_cast<const StringObject*>(ref)) != objects_.end()
@@ -307,6 +315,7 @@ StringObject* StringStore::createFromWtf16(std::span<const uint16_t> units,
 bool StringStore::copyToUtf8(const StringObject* string, std::string& out,
 							 bool lossy) const
 {
+	std::scoped_lock lock(mutex_);
 	if (string == nullptr)
 		return false;
 	std::vector<uint8_t> bytes;
@@ -322,6 +331,7 @@ bool StringStore::copyToUtf8(const StringObject* string, std::string& out,
 bool StringStore::copyToWtf8(const StringObject* string,
 							 std::vector<uint8_t>& out) const
 {
+	std::scoped_lock lock(mutex_);
 	if (string == nullptr)
 		return false;
 	std::vector<uint8_t> bytes;
@@ -334,6 +344,7 @@ bool StringStore::copyToWtf8(const StringObject* string,
 bool StringStore::copyToWtf16(const StringObject* string,
 							  std::vector<uint16_t>& out) const
 {
+	std::scoped_lock lock(mutex_);
 	if (string == nullptr)
 		return false;
 	std::vector<uint8_t> bytes;
@@ -345,6 +356,12 @@ bool StringStore::copyToWtf16(const StringObject* string,
 				| (static_cast<uint16_t>(bytes[2 * i + 1]) << 8));
 	}
 	return true;
+}
+
+std::size_t StringStore::count() const
+{
+	std::scoped_lock lock(mutex_);
+	return objects_.size();
 }
 
 bool decodeWtf8(const uint8_t* bytes, std::size_t size, std::vector<uint32_t>& out)

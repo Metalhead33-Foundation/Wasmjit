@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
@@ -81,8 +82,14 @@ public:
 	bool copyToWtf8(const StringObject* string, std::vector<uint8_t>& out) const;
 	bool copyToWtf16(const StringObject* string, std::vector<uint16_t>& out) const;
 
-	std::size_t count() const { return objects_.size(); }
+	std::size_t count() const;
 private:
+	// Recursive because createView/createIterator retain the string, and
+	// release paths may release a borrowed string. Host threads may create or
+	// drop strings concurrently (SET-2); a StringObject's code-point vector is
+	// immutable after creation, so readers only need the map lock.
+	mutable std::recursive_mutex mutex_;
+
 	struct StringEntry {
 		StringObject object;
 		uint32_t refcount = 0;
