@@ -1,16 +1,19 @@
 #ifndef LIBJITOPCODEDISPATCHER_HPP
 #define LIBJITOPCODEDISPATCHER_HPP
 
-#include "../Base/WasmModuleInstance.hpp"
-#include "../Base/WasmOpcodeDispatcher.hpp"
+#include "../WasmBase/WasmModuleInstance.hpp"
+#include "../WasmBase/WasmOpcodeDispatcher.hpp"
+#include "../WasmBase/WasmTrap.hpp"
 #include "LibJitTypeTranslation.hpp"
 #include <jit/jit.h>
+#include <span>
+#include <utility>
 #include <vector>
 
 namespace LibJIT {
 
 struct ControlBlock {
-	enum Kind { Block, Loop, If };
+	enum Kind { Block, Loop, If, TryTable };
 	Kind kind;
 
 	// For Block/If: a forward label at the end (bound when we see 'end').
@@ -29,6 +32,14 @@ struct ControlBlock {
 	// The types this block is expected to produce on exit.
 	// A 'br' to this block must leave these types on the stack.
 	std::vector<WASM::StorageType> resultTypes;
+	std::vector<WASM::StorageType> paramTypes;
+	std::vector<jit_value_t> resultSlots;
+	std::vector<jit_value_t> paramSlots;
+	bool hasElse = false;
+	// try_table only: the decoded catch clauses. They are not a runtime
+	// construct — throw sites dispatch to them statically (EXCEPTIONS.md
+	// EXD2). `labelIdx` is relative to this frame's *parent*.
+	std::vector<WASM::CatchClause> catchClauses;
 };
 
 // Drives WASM::OpcodeDispatcher::readCode for LibJIT: decodes the bytecode
@@ -44,24 +55,269 @@ private:
 	WASM::ModuleInstance& instance;
 	WASM::ModuleInstanceInternals& internals;
 	const WASM::Module& module;
+	const WASM::FuncType& currentFunc;
 	uint32_t importedFuncCount;
+	// Global function index of the body being compiled (imports first), and its
+	// diagnostic label (`function 3 ($name)`). Emitted traps carry the label so
+	// a runtime failure names the function, not just the trap kind
+	// (docs/proposals/EXTENDED_NAME_SECTION.md ENS-5).
+	uint32_t functionIndex;
+	std::string functionLabel;
 	std::vector<jit_value_t>& locals;
 	std::vector<jit_value_t>& valueStack;
 	std::vector<ControlBlock>& controlStack;
+
+	void pushValue(jit_value_t v);
+	// Push a reference whose ownership the stack takes over (no clone).
+	void pushOwnedValue(jit_value_t v);
+	// Release the operand stack's ownership of a popped reference.
+	void emitDropValue(jit_value_t v);
+	// Release every reference-typed non-parameter local (function exit).
+	void emitDropRefLocals();
+	jit_value_t popValue();
+	// Emits the function's epilogue (a `return`). Does nothing in unreachable
+	// code or when the model stack is short (dead tail). With `consume` false
+	// the return operands are left on the model stack (for a conditional
+	// branch to the function's implicit block, whose fallthrough needs them).
+	void emitFunctionReturn(bool consume = true);
+	// Emits a native tail call (LibJIT `JIT_CALL_TAIL`) when the target is this
+	// very function — the only case this LibJIT build lowers reliably (see
+	// docs/TAILCALLS.md §6). Returns false when the caller must fall back to
+	// `call` + `return`.
+	bool emitDirectTailCall(WASM::FuncIdx funcIdx);
+	// True when `calleeSig` has exactly this function's parameter and result
+	// types. Only then can the trampoline driver (built for this function's
+	// signature) re-dispatch to the callee. See docs/TAILCALLS.md TC-2.
+	bool signatureIsUniform(const WASM::FuncType& calleeSig) const;
+	// Publishes {target, args, pending} to the global trampoline state and
+	// returns a dummy value; the driver re-dispatches. Callers must have
+	// verified signatureIsUniform() and popped `args` already.
+	void emitTailCallViaPending(jit_value_t targetCallablePtr, const std::vector<jit_value_t>& args);
+	// Emits `return` of a zero value of this function's result type.
+	void emitDummyReturn();
+	// Emits the jump for a branch target; a target past the control stack is
+	// the function's implicit block (i.e. a return).
+	void emitBranchToLabel(WASM::LabelIdx arg);
+	// Marks the rest of the current block unreachable (after an unconditional
+	// transfer). In unreachable code the Wasm operand stack is polymorphic, so
+	// popValue() yields placeholders instead of underflowing.
+	void markUnreachable();
+	bool unreachableCode = false;
+
+	// Branch hints for the function being compiled, ordered by byte offset
+	// (already rebased onto the opcode stream). Empty when the module carries
+	// no `metadata.code.branch_hint` section, in which case codegen is
+	// byte-identical to the hint-less path.
+	std::vector<WASM::BranchHint> branchHints;
+	// Returns the hint attached to the instruction currently being dispatched,
+	// or nullptr if there is none. Purely an optimisation input; never changes
+	// results.
+	const WASM::BranchHint* currentBranchHint() const;
+	jit_value_t zeroConstantForType(jit_type_t t);
+
+	// ── SIMD lowering (docs/SIMD_LIBJIT.md §6) ───────────────────────────────
+	//
+	// A `v128` operand is a struct-typed LibJIT value whose 16 bytes live in a
+	// frame slot; helpers never see the value, only its *address* (§6.3), and
+	// they write their result into a fresh slot. The mechanics were verified
+	// against this LibJIT build before the design was written down:
+	//   - `jit_insn_address_of` works on a struct parameter, on a struct local,
+	//     and on `jit_insn_load` of either;
+	//   - `jit_insn_store(local, value)` works for a struct local (so `local.set`
+	//     of a `v128` is fine);
+	//   - `jit_insn_store_relative` does **not** write a `jit_value_create`d
+	//     aggregate, so `v128.const` must go through a helper, not inline stores.
+	jit_type_t v128Type();
+	// A fresh 16-byte slot for a `v128` result.
+	jit_value_t newV128Slot();
+	// Address of a global's 16 bytes in the VMContext's `globals` array. The
+	// `v128` member sits at offset 0 of the `Value` union, so this is also the
+	// pointer the load/store helpers accept (SIMD-L5).
+	jit_value_t globalSlotAddress(WASM::GlobalIdx arg);
+	// Calls a helper through a memoised signature (§6.4) and returns its result
+	// (`void` for the out-slot shapes — the caller then pushes the slot).
+	jit_value_t callSimdHelper(void* fptr, jit_type_t ret,
+			std::span<const jit_type_t> params, std::span<const jit_value_t> args);
+	// The common shape: leading operands, then the result slot's address.
+	jit_value_t callSimdOutHelper(void* fptr, jit_value_t out,
+			std::span<const jit_type_t> leadingTypes, std::span<const jit_value_t> leadingArgs);
+	// The `v128.load*` / `v128.store*` shapes. The effective address is computed
+	// and bounds-checked by `effectiveMemoryAddress` — the same path the scalar
+	// loads take, trap included — so the helpers themselves never trap and need
+	// no context (docs/SIMD_LIBJIT.md §6.3). Operand order is wasm's: for a lane
+	// or store form the vector is on top, the address below it.
+	void emitSimdLoad(const WASM::MemArg& ma, jit_nint width, void* helper);
+	void emitSimdLoadLane(const WASM::MemArg& ma, jit_nint width, uint8_t lane, void* helper);
+	void emitSimdStore(const WASM::MemArg& ma, jit_nint width, void* helper);
+	void emitSimdStoreLane(const WASM::MemArg& ma, jit_nint width, uint8_t lane, void* helper);
+	// The per-lane shapes: two vectors in and one out (used for the arithmetic
+	// *and* for the mask-producing comparisons — the difference is entirely in
+	// the helper), one vector in and one out, and the three-operand bitselect.
+	void emitSimdBinaryHelper(void* helper);
+	void emitSimdUnaryHelper(void* helper);
+	void emitSimdTernaryHelper(void* helper);
+	// A shift takes the vector plus a scalar count; a reduction yields a wasm i32
+	// rather than a vector, so it has no out slot at all.
+	void emitSimdShiftHelper(void* helper);
+	void emitSimdReduceI32Helper(void* helper);
+	// Signature cache: the SIMD ops share a handful of shapes, so memoise them
+	// instead of creating (and leaking) one signature per instruction (§6.4).
+	std::vector<std::pair<std::vector<jit_type_t>, jit_type_t>> simdSignatureCache;
+	jit_type_t simdCachedType = nullptr;
+	jit_value_t castRefValue(jit_value_t value, jit_type_t targetType);
+	jit_value_t refAsVoidPtr(jit_value_t value);
+	// Emits the reference-counting write barrier (`wasm_ref_store`): retain
+	// `newRef`, store it at `slotAddr`, release the value it overwrote. Used
+	// for every reference-typed slot store (docs/proposals/GC.md D15/RC-1).
+	void emitRefStore(jit_value_t slotAddr, jit_value_t newRef);
+	// `wasm_ref_clone` / `wasm_ref_drop` (retain / release), for slot stores
+	// that address a LibJIT local rather than memory (RC-5).
+	jit_value_t emitRefClone(jit_value_t ref);
+	void emitRefDrop(jit_value_t ref);
+	jit_value_t typedNullRef(jit_type_t refType);
+	jit_value_t emitRefTypeTest(jit_value_t ref, const WASM::HeapType& heapType, bool nullable);
+	jit_type_t tableElementJitType(WASM::TableIdx arg) const;
+	jit_type_t jitRefTypeForHeapType(const WASM::HeapType& ht, bool nullable);
+	jit_type_t structRefType(WASM::TypeIdx arg, bool nullable) const;
+	jit_type_t arrayRefType(WASM::TypeIdx arg, bool nullable) const;
+	WASM::CoreTypeView structTypeForIndex(WASM::TypeIdx arg) const;
+	WASM::CoreTypeView arrayTypeForIndex(WASM::TypeIdx arg) const;
+	jit_type_t arrayElementJitType(WASM::TypeIdx arg) const;
+	jit_nint structFieldOffset(WASM::TypeIdx arg, uint32_t fieldIndex) const;
+	jit_nint arrayLengthOffset(WASM::TypeIdx arg) const;
+	jit_nint arrayDataOffset(WASM::TypeIdx arg) const;
+	// `ref + dataOffset`, typed as a pointer to the array's element type.
+	// Arrays store their elements inline (docs/proposals/GC.md D13/GC-9), so
+	// there is no `data` field to load.
+	jit_value_t arrayElementBase(jit_value_t arrayRef, WASM::TypeIdx arg);
+	// Layout of a multi-result function's result tuple. A multi-result
+	// signature carries a trailing `void*` result buffer instead of returning
+	// an aggregate by value (see LibJitTypeTranslation.cpp); this struct type
+	// describes that buffer.
+	jit_type_t resultTupleType(const WASM::FuncType& wasm_func);
+	// Writes the top `resultCount` values into `out`, the caller-provided
+	// result buffer (a multi-result function's trailing parameter).
+	void packReturnValues(jit_type_t tupleType, jit_value_t out, size_t resultCount);
+	// Pushes a call's results. For a multi-result callee `outBuffer` is the
+	// address of the caller's result tuple and `ret` is unused (the callee
+	// returns void); for 0/1 results `outBuffer` is null.
+	void pushCallResults(const WASM::FuncType& calleeSig, jit_value_t ret, jit_value_t outBuffer);
+	// Allocates the caller-side result tuple in this function's frame and
+	// returns its address, or null when `calleeSig` has 0/1 results.
+	jit_value_t newResultBuffer(const WASM::FuncType& calleeSig);
+	std::vector<WASM::StorageType> parameterTypesForBlockType(const WASM::BlockType& bt) const;
+	std::vector<jit_value_t> createSlotsForTypes(const std::vector<WASM::StorageType>& types);
+	void storeStackTopToSlots(const std::vector<jit_value_t>& slots);
+	void restoreValuesFromSlots(const std::vector<jit_value_t>& slots);
+	void resizeValueStack(size_t newSize);
+	ControlBlock& branchTarget(WASM::LabelIdx arg);
+	const std::vector<WASM::StorageType>& branchTypesForTarget(const ControlBlock& target) const;
+	const std::vector<jit_value_t>& branchSlotsForTarget(const ControlBlock& target) const;
+	void emitBranchToTarget(ControlBlock& target);
+	WASM::TypeIdx functionTypeIndexForFunc(WASM::FuncIdx funcIdx) const;
+	WASM::FuncType functionSignatureForType(WASM::TypeIdx typeIdx) const;
+	jit_value_t callablePointerForFuncIndex(WASM::FuncIdx funcIdx);
+	void dispatchCallThroughCallable(jit_value_t callablePtr, WASM::TypeIdx typeIdx);
+	// Emit a trap of `kind` (docs/SAFETY.md §2.4). `detail` overrides the log
+	// message when the kind's spec name is too coarse for the situation.
+	void emitTrap(WASM::TrapKind kind);
+	void emitTrap(WASM::TrapKind kind, const char* detail);
+	// Emit a trap of `kind` when `pointer` is null (a null reference reached an
+	// instruction that dereferences it). The kind names *what* was dereferenced:
+	// NullReference, NullFunctionReference, NullStructureReference,
+	// NullArrayReference.
+	void emitTrapIfNull(WASM::TrapKind kind, jit_value_t pointer, const char* detail = nullptr);
+	std::vector<WASM::StorageType> storageTypesForBlockType(const WASM::BlockType& bt) const;
+
+	jit_value_t vmContextValue();
+	jit_value_t checkedTableIndex(jit_value_t table, jit_value_t index, const char* opname,
+			WASM::TrapKind kind = WASM::TrapKind::UndefinedElement);
+	// Emits code yielding the LinearMemory* for a (constant) memory index.
+	jit_value_t memoryPointerForIndex(WASM::MemIdx memidx);
+	// The declared index type (i32/i64) of memory `memidx`, for the address
+	// widening in effectiveMemoryAddress.
+	WASM::MemoryIndexType memoryIndexTypeForIndex(WASM::MemIdx memidx) const;
+	// True when table `tableidx` declares a 64-bit index (flag bit 2).
+	bool tableIs64Bit(WASM::TableIdx tableidx) const;
+
+	// Emits code yielding the TableInstance* for a (constant) table index.
+	jit_value_t tablePointerForIndex(WASM::TableIdx tableidx);
+	// Emits a runtime check that `callablePtr`'s canonical type id matches the
+	// module-local type index `typeIdx` (id fast path, registry fallback).
+	void emitCallableTypeCheck(jit_value_t callablePtr, WASM::TypeIdx typeIdx);
+	// A lowering the backend cannot perform (in practice: an unmodelled value
+	// type, docs/NULL_JIT_VALUE_DIAGNOSIS.md). `notImplemented()` throws, which
+	// surfaces as a clean instantiation failure; the LibJIT build region in
+	// ModuleCompiler::compileFunctions is RAII-guarded (docs/SAFETY.md).
+	[[noreturn]] void notImplemented(const char* name);
+
+	jit_value_t effectiveMemoryAddress(const WASM::MemArg& ma, jit_nint accessSize);
+
+	// ── 0xFE atomics (docs/proposals/THREADS.md TH-1) ──────────────────────
+	// The shared helpers in WasmBase (wasm_atomic.hpp) perform the access with
+	// `__atomic_*` at seq_cst and trap on a misaligned effective address; these
+	// emit the call and adapt the value types. `effectiveMemoryAddress` has
+	// already bounds-checked the address (and trapped on out-of-bounds).
+	jit_value_t emitAtomicLoad(const WASM::MemArg& ma, uint32_t width, jit_type_t resultType);
+	void        emitAtomicStore(const WASM::MemArg& ma, uint32_t width);
+	jit_value_t emitAtomicRmw(const WASM::MemArg& ma, uint32_t width, uint32_t op,
+							  jit_type_t resultType);
+	jit_value_t emitAtomicCmpxchg(const WASM::MemArg& ma, uint32_t width,
+								  jit_type_t resultType);
+	jit_value_t callNativeHelper(void* fptr, jit_type_t resultType,
+								 std::vector<jit_type_t> paramTypes,
+								 std::vector<jit_value_t> args);
+	jit_value_t atomicUintConstant(uint32_t value);
+
+	// ── Exceptions (docs/proposals/EXCEPTIONS.md EX-3/EX-4) ────────────────
+	// Handlers are resolved statically: `throw` knows its tag at compile time,
+	// `throw_ref` emits a comparison chain. With no handler in this function
+	// the exception becomes *pending* and the function returns zeroes; every
+	// call site checks the pending slot (EXD1).
+	void pushBlockFrame(ControlBlock::Kind kind, const WASM::BlockType& arg,
+						std::vector<WASM::CatchClause>&& catches);
+	WASM::FuncType tagPayloadType(WASM::TagIdx tagIdx) const;
+	WASM::TagId tagIdForClause(const WASM::CatchClause& clause) const;
+	jit_value_t createException(WASM::TagId tagId, const WASM::FuncType& payload);
+	void storeExceptionPayload(jit_value_t exnPayload, const WASM::FuncType& payload,
+							   const std::vector<jit_value_t>& values);
+	std::vector<jit_value_t> loadExceptionPayload(jit_value_t exnPayload,
+												  const WASM::FuncType& payload);
+	void emitThrowToTarget(jit_value_t exn, std::vector<jit_value_t> values,
+						   ControlBlock& target, bool carryExn);
+	// Emits the static dispatch chain for `exn` over the enclosing try_tables;
+	// when no clause matches, sets the pending slot and returns zeroes. All
+	// emitted paths leave the current block.
+	void emitExceptionPropagation(jit_value_t exn);
+	jit_value_t emitPendingException();
+	// Used after every call: dispatches a pending exception locally or
+	// propagates it, leaving the continuation reachable when none is pending.
+	void emitPendingExceptionCheck();
+	// Returns zeroes of the current function's result types (the ABI still
+	// requires a well-formed return when an exception propagates).
+	void emitReturnZeroes();
+
+	WASM::GlobalType globalTypeForIndex(WASM::GlobalIdx idx) const;
 
 public:
 	OpcodeDispatcher(jit_context_t context, jit_function_t function,
 					 LibJitTypeTranslator& typeTranslator,
 					 WASM::ModuleInstance& instance,
 					 WASM::ModuleInstanceInternals& internals,
-					 const WASM::Module& module, uint32_t importedFuncCount,
+					 const WASM::Module& module, const WASM::FuncType& currentFunc,
+					 uint32_t importedFuncCount, uint32_t functionIndex,
+					 std::vector<WASM::BranchHint> branchHints,
 					 std::vector<jit_value_t>& locals,
 					 std::vector<jit_value_t>& valueStack,
 					 std::vector<ControlBlock>& controlStack);
 
+	// Call after readCode() to emit return from the implicit function body (Wasm validation
+	// guarantees the value stack matches currentFunc.results).
+	void emitImplicitFunctionReturn();
+
 	// OpcodeDispatcher interface
 protected:
-	// `internals.translatedTypes` is parallel to `module.types` (filled in translateTypes).
+	// `internals.translatedTypes` is parallel to `module.typeIds` (filled in translateTypes).
 	jit_type_t jitTypeForTypeIdx(WASM::TypeIdx idx) const;
 	jit_type_t jitTypeForValueType(const WASM::ValueType& vt);
 
@@ -290,6 +546,53 @@ protected:
 	void dispatchRefI31() override;
 	void dispatchI31GetS() override;
 	void dispatchI31GetU() override;
+
+	// Stringref core instructions (docs/proposals/STRINGREF.md STR-3).
+	void dispatchStringNewUtf8(WASM::MemIdx arg) override;
+	void dispatchStringNewWtf16(WASM::MemIdx arg) override;
+	void dispatchStringNewLossyUtf8(WASM::MemIdx arg) override;
+	void dispatchStringNewWtf8(WASM::MemIdx arg) override;
+	void dispatchStringConst(uint32_t idx) override;
+	void dispatchStringMeasureUtf8() override;
+	void dispatchStringMeasureWtf8() override;
+	void dispatchStringMeasureWtf16() override;
+	void dispatchStringEncodeUtf8(WASM::MemIdx arg) override;
+	void dispatchStringEncodeLossyUtf8(WASM::MemIdx arg) override;
+	void dispatchStringEncodeWtf8(WASM::MemIdx arg) override;
+	void dispatchStringEncodeWtf16(WASM::MemIdx arg) override;
+	void dispatchStringConcat() override;
+	void dispatchStringEq() override;
+	void dispatchStringIsUsvSequence() override;
+
+	// stringview facility (docs/proposals/STRINGREF.md STR-4)
+	void dispatchStringAsWtf8() override;
+	void dispatchStringViewWtf8Advance() override;
+	void dispatchStringViewWtf8EncodeUtf8(WASM::MemIdx arg) override;
+	void dispatchStringViewWtf8Slice() override;
+	void dispatchStringViewWtf8EncodeLossyUtf8(WASM::MemIdx arg) override;
+	void dispatchStringViewWtf8EncodeWtf8(WASM::MemIdx arg) override;
+	void dispatchStringAsWtf16() override;
+	void dispatchStringViewWtf16Length() override;
+	void dispatchStringViewWtf16GetCodeUnit() override;
+	void dispatchStringViewWtf16Encode(WASM::MemIdx arg) override;
+	void dispatchStringViewWtf16Slice() override;
+	void dispatchStringAsIter() override;
+	void dispatchStringViewIterNext() override;
+	void dispatchStringViewIterAdvance() override;
+	void dispatchStringViewIterRewind() override;
+	void dispatchStringViewIterSlice() override;
+
+	// GC-array string bridge (docs/proposals/STRINGREF.md STR-6)
+	void dispatchStringNewUtf8Array(WASM::TypeIdx arg) override;
+	void dispatchStringNewWtf16Array(WASM::TypeIdx arg) override;
+	void dispatchStringEncodeUtf8Array(WASM::TypeIdx arg) override;
+	void dispatchStringEncodeWtf16Array(WASM::TypeIdx arg) override;
+	void dispatchStringNewLossyUtf8Array(WASM::TypeIdx arg) override;
+	void dispatchStringNewWtf8Array(WASM::TypeIdx arg) override;
+	void dispatchStringEncodeLossyUtf8Array(WASM::TypeIdx arg) override;
+	void dispatchStringEncodeWtf8Array(WASM::TypeIdx arg) override;
+	void dispatchStringNewArrayImpl(WASM::TypeIdx arg, void* helper, int mode);
+	void dispatchStringEncodeArrayImpl(WASM::TypeIdx arg, void* helper, int mode);
 	void dispatchI32TruncSatF32S() override;
 	void dispatchI32TruncSatF32U() override;
 	void dispatchI32TruncSatF64S() override;
@@ -302,6 +605,13 @@ protected:
 	void dispatchDataDrop(uint32_t arg) override;
 	void dispatchMemoryCopy(WASM::MemIdx arg1, WASM::MemIdx arg2) override;
 	void dispatchMemoryFill(WASM::MemIdx arg) override;
+	void dispatchMemoryDiscard(WASM::MemIdx arg) override;
+	void dispatchRoundingVariant(uint32_t sub) override;
+	void dispatchI64Add128() override;
+	void dispatchI64Sub128() override;
+	void dispatchI64MulWideS() override;
+	void dispatchI64MulWideU() override;
+	void dispatchI32Itt(uint32_t immediate) override;
 	void dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2) override;
 	void dispatchElemDrop(uint32_t arg) override;
 	void dispatchTableCopy(WASM::TableIdx arg1, WASM::TableIdx arg2) override;
@@ -544,6 +854,28 @@ protected:
 	void dispatchF64x2ConvertLowI32x4U() override;
 	void dispatchF32x4DemoteF64x2Zero() override;
 	void dispatchF64x2PromoteLowF32x4() override;
+
+	// Relaxed SIMD (0x100-0x113): SD5 picks the strict result for each.
+	void dispatchI8x16RelaxedSwizzle() override;
+	void dispatchI32x4RelaxedTruncF32x4S() override;
+	void dispatchI32x4RelaxedTruncF32x4U() override;
+	void dispatchI32x4RelaxedTruncF64x2SZero() override;
+	void dispatchI32x4RelaxedTruncF64x2UZero() override;
+	void dispatchF32x4RelaxedMadd() override;
+	void dispatchF32x4RelaxedNmadd() override;
+	void dispatchF64x2RelaxedMadd() override;
+	void dispatchF64x2RelaxedNmadd() override;
+	void dispatchI8x16RelaxedLaneselect() override;
+	void dispatchI16x8RelaxedLaneselect() override;
+	void dispatchI32x4RelaxedLaneselect() override;
+	void dispatchI64x2RelaxedLaneselect() override;
+	void dispatchF32x4RelaxedMin() override;
+	void dispatchF32x4RelaxedMax() override;
+	void dispatchF64x2RelaxedMin() override;
+	void dispatchF64x2RelaxedMax() override;
+	void dispatchI16x8RelaxedQ15MulRS() override;
+	void dispatchI16x8RelaxedDotI8x16I7x16S() override;
+	void dispatchI32x4RelaxedDotI8x16I7x16AddS() override;
 	void dispatchMemoryAtomicNotify(WASM::MemArg arg) override;
 	void dispatchMemoryAtomicWait32(WASM::MemArg arg) override;
 	void dispatchMemoryAtomicWait64(WASM::MemArg arg) override;

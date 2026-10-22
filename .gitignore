@@ -1,6 +1,11 @@
 # This file is used to ignore files which are generated
 # ----------------------------------------------------------------------------
 
+node_modules/
+Test/node_modules/
+node_modules/*
+Test/node_modules/*
+
 *~
 *.autosave
 *.a
@@ -75,6 +80,11 @@ CMakeLists.txt.user*
 
 # Directories with generated files
 .moc/
+
+# Node.js and AssemblyScript artifacts
+node_modules/
+**/node_modules/
+**/wasm_test_modules/
 .obj/
 .pch/
 .rcc/

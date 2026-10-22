@@ -1,0 +1,22 @@
+;; A lifted string round-trip through canonical ABI memory and realloc.
+(component
+  (core module $m
+    (memory (export "memory") 1)
+    (func (export "echo") (param i32 i32) (result i32)
+      (i32.store (i32.const 2048) (local.get 0))
+      (i32.store (i32.const 2052) (local.get 1))
+      (i32.const 2048)
+    )
+    (func (export "realloc") (param i32 i32 i32 i32) (result i32)
+      (i32.const 1024)
+    )
+  )
+  (core instance $i (instantiate $m))
+  (alias core export $i "echo" (core func $echo))
+  (alias core export $i "realloc" (core func $realloc))
+  (alias core export $i "memory" (core memory $mem))
+  (type $ft (func (param "s" string) (result string)))
+  (canon lift (core func $echo) (memory $mem) (realloc $realloc)
+    (func $f (type $ft)))
+  (export "echo" (func $f))
+)

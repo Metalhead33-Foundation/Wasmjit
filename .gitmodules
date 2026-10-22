@@ -1,0 +1,6 @@
+[submodule "extern/MhLib"]
+	path = extern/MhLib
+	url = https://github.com/Metalhead33-Foundation/GuiTest.git
+[submodule "extern/WasmTestsuite"]
+	path = extern/WasmTestsuite
+	url = https://github.com/WebAssembly/testsuite.git

@@ -11,6 +11,7 @@ private:
 public:
 	Context();
 	~Context();
+	jit_context_t rawContext() const;
 	LibJitTypeTranslator& getTranslator();
 	const LibJitTypeTranslator& getTranslator() const;
 };
