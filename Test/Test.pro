@@ -93,10 +93,13 @@ QMAKE_EXTRA_COMPILERS += wat2wasm
 
 SOURCES += main.cpp \
     helper.cpp \
+    TestBackend.cpp \
+    LibJitBackendTests.cpp \
     WastScript.cpp \
     SpecSuite.cpp
 HEADERS +=  \
     helper.hpp \
+    TestBackend.hpp \
     WastScript.hpp
 
 DISTFILES += \

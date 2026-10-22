@@ -347,6 +347,13 @@ void WASM::OpcodeDispatcher::dispatchPrefixMisc(FastMemReader& stream, MiscOpcod
 		case MiscOpcode::I64MulWideS: { dispatchI64MulWideS(); break; }
 		case MiscOpcode::I64MulWideU: { dispatchI64MulWideU(); break; }
 
+		// Instrument / tracing (provisional encoding, see WasmOpcode.hpp).
+		case MiscOpcode::I32Itt: {
+			uint32_t immediate = stream.readLEB128<uint32_t>();
+			dispatchI32Itt(immediate);
+			break;
+		}
+
 		// ----------------------------------------------------------------
 		// Bulk table
 		// ----------------------------------------------------------------

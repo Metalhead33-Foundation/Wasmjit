@@ -1675,6 +1675,11 @@ void Validator::dispatchMemoryDiscard(MemIdx arg)
 	popExpect(address); // dst
 }
 
+void Validator::dispatchI32Itt(uint32_t immediate)
+{
+	(void)immediate; // pure marker: no operand-stack or control-flow effect
+}
+
 void Validator::dispatchI64Add128()
 {
 	popExpect(ValueTypeCode::I64); // rhs high

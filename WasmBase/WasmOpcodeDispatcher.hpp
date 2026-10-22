@@ -314,6 +314,8 @@ protected:
 	virtual void dispatchI64Sub128() { onUnhandledOpcode("dispatchI64Sub128"); }
 	virtual void dispatchI64MulWideS() { onUnhandledOpcode("dispatchI64MulWideS"); }
 	virtual void dispatchI64MulWideU() { onUnhandledOpcode("dispatchI64MulWideU"); }
+	// Instrument/tracing marker: no stack effect, no runtime effect.
+	virtual void dispatchI32Itt(uint32_t immediate) { onUnhandledOpcode("dispatchI32Itt"); }
 	virtual void dispatchTableInit(uint32_t arg1, TableIdx arg2) { onUnhandledOpcode("dispatchTableInit"); }
 	virtual void dispatchElemDrop(uint32_t arg) { onUnhandledOpcode("dispatchElemDrop"); }
 	virtual void dispatchTableCopy(TableIdx arg1, TableIdx arg2) { onUnhandledOpcode("dispatchTableCopy"); }

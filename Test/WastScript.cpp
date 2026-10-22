@@ -20,10 +20,9 @@
 #include <unistd.h>
 
 #include <Euphemy/Io/EuphFile.hpp>
-#include <jit/jit.h>
 #include <nlohmann/json.hpp>
 
-#include "LibJit/LibjitModuleCompiler.hpp"
+#include "TestBackend.hpp"
 #include "WasmBase/WasmComponentRuntime.hpp"
 #include "WasmBase/WasmComponent.hpp"
 #include "WasmBase/WasmModule.hpp"
@@ -39,47 +38,6 @@ namespace Spec {
 namespace {
 
 using Json = nlohmann::json;
-
-// The host C ABI's shape for a `v128` argument: 16 bytes, no padding, which
-// System V classifies as two INTEGER eightbytes. It is the same mirror the T2
-// tests call `V128` in `main.cpp` (docs/SIMD_LIBJIT.md §6.6).
-struct AbiV128 { uint32_t lane[4]; };
-
-// Calls `Ret f(void* ctx, AbiV128, …)` for one to four `v128` parameters, i.e.
-// the shape of a compiled wasm function wrapper around a ternary SIMD op. Used
-// only where `jit_apply` cannot be (see the note in `ScriptRunner::invoke`).
-template <typename Ret>
-Ret callWithV128Params(void* fnPtr, void* context, const AbiV128* args, size_t count)
-{
-	switch (count) {
-	case 1:
-		return reinterpret_cast<Ret (*)(void*, AbiV128)>(fnPtr)(context, args[0]);
-	case 2:
-		return reinterpret_cast<Ret (*)(void*, AbiV128, AbiV128)>(fnPtr)(context, args[0], args[1]);
-	case 3:
-		return reinterpret_cast<Ret (*)(void*, AbiV128, AbiV128, AbiV128)>(fnPtr)(context, args[0], args[1], args[2]);
-	default:
-		return reinterpret_cast<Ret (*)(void*, AbiV128, AbiV128, AbiV128, AbiV128)>(fnPtr)(context, args[0], args[1], args[2], args[3]);
-	}
-}
-
-void callWithV128ParamsVoid(void* fnPtr, void* context, const AbiV128* args, size_t count)
-{
-	switch (count) {
-	case 1:
-		reinterpret_cast<void (*)(void*, AbiV128)>(fnPtr)(context, args[0]);
-		return;
-	case 2:
-		reinterpret_cast<void (*)(void*, AbiV128, AbiV128)>(fnPtr)(context, args[0], args[1]);
-		return;
-	case 3:
-		reinterpret_cast<void (*)(void*, AbiV128, AbiV128, AbiV128)>(fnPtr)(context, args[0], args[1], args[2]);
-		return;
-	default:
-		reinterpret_cast<void (*)(void*, AbiV128, AbiV128, AbiV128, AbiV128)>(fnPtr)(context, args[0], args[1], args[2], args[3]);
-		return;
-	}
-}
 
 // ── JSON access helpers ─────────────────────────────────────────────────────
 
@@ -569,9 +527,9 @@ void spectestPrintF64F64(WASM::VMContext*, double, double) {}
 class ScriptRunner
 {
 public:
-	ScriptRunner(std::string wasmDir, LibJIT::Context& jitContext)
-		: wasmDir(std::move(wasmDir)), jitContext(jitContext),
-		  moduleCompiler(jitContext.rawContext())
+	ScriptRunner(std::string wasmDir, TestBackend::Session& backend)
+		: wasmDir(std::move(wasmDir)), backend(backend),
+		  moduleCompiler(backend.instantiator())
 	{
 		// Measurement mode: execute the four negative-module command kinds
 		// instead of skipping them. The default suite stays a conformance run;
@@ -592,12 +550,12 @@ private:
 	};
 
 	std::string wasmDir;
-	LibJIT::Context& jitContext;
+	TestBackend::Session& backend;
 	// One instantiator for every module/component in this script. A
 	// ComponentRuntime borrows it; keeping it here gives the runtime a stable
 	// owner for the whole script (and lets a component instantiate its embedded
 	// core modules through the same backend).
-	LibJIT::ModuleCompiler moduleCompiler;
+	WASM::ModuleInstantiator& moduleCompiler;
 	// See the constructor: `WASM_SPEC_VALIDATE=1` executes the negative-module
 	// command kinds and reports real pass/fail instead of skipping them.
 	bool strictValidation = false;
@@ -622,7 +580,7 @@ private:
 	ScriptReport report;
 
 	// Set by invoke() when the call trapped (a non-local exit out of the JIT).
-	const char* lastTrapMessage = nullptr;
+	std::string lastTrapMessage;
 	// The kind of that trap, which is what assert_trap is checked against
 	// (docs/SAFETY.md §2.4): the free-text message is only a hint.
 	WASM::TrapKind lastTrapKind = WASM::TrapKind::Internal;
@@ -753,9 +711,9 @@ Script Script::parse(std::string_view json)
 	return script;
 }
 
-ScriptReport runScript(const Script& script, const std::string& wasmDir, LibJIT::Context& jitContext)
+ScriptReport runScript(const Script& script, const std::string& wasmDir, TestBackend::Session& backend)
 {
-	ScriptRunner runner(wasmDir, jitContext);
+	ScriptRunner runner(wasmDir, backend);
 	return runner.run(script);
 }
 
@@ -1444,7 +1402,7 @@ void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 		}
 		if (trapped) {
 			fail(command.line, "unexpected trap from '" + action.field + "': "
-					+ std::string(lastTrapMessage != nullptr ? lastTrapMessage : "trap"));
+					+ std::string(lastTrapMessage.empty() ? "trap" : lastTrapMessage.c_str()));
 			return;
 		}
 		if (::wasm_exn_take_pending() != nullptr) {
@@ -1454,12 +1412,10 @@ void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 
 		// The callee wrote its results into the caller-provided tuple, each at
 		// the offset of the corresponding result type (docs/ABI.md).
-		const jit_type_t tupleType = jitContext.getTranslator().translateStruct(funcType->results);
+		const TestBackend::AggregateLayout tupleLayout = backend.aggregateLayout(funcType->results);
 		for (size_t i = 0; i < command.expected.size(); ++i) {
-			const jit_type_t fieldType = jit_type_get_field(tupleType, static_cast<unsigned int>(i));
-			const size_t offset = static_cast<size_t>(
-					jit_type_get_offset(tupleType, static_cast<unsigned int>(i)));
-			const size_t fieldSize = static_cast<size_t>(jit_type_get_size(fieldType));
+			const size_t offset = tupleLayout.fields[i].offset;
+			const size_t fieldSize = tupleLayout.fields[i].size;
 			if (offset + fieldSize > tuple.size()) {
 				skip("multi-result value is larger than the marshalling buffer");
 				return;
@@ -1488,7 +1444,7 @@ void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 	}
 	if (trapped) {
 		fail(command.line, "unexpected trap from '" + action.field + "': "
-				+ std::string(lastTrapMessage != nullptr ? lastTrapMessage : "trap"));
+				+ std::string(lastTrapMessage.empty() ? "trap" : lastTrapMessage.c_str()));
 		return;
 	}
 	if (::wasm_exn_take_pending() != nullptr) {
@@ -1572,7 +1528,7 @@ void ScriptRunner::onAssertTrap(const ScriptCommand& command)
 			return;
 		}
 		fail(command.line, "expected trap '" + command.text + "' but trapped with '" + got +
-			"' (engine message: '" + (lastTrapMessage != nullptr ? lastTrapMessage : "?") + "')");
+			"' (engine message: '" + (lastTrapMessage.empty() ? "?" : lastTrapMessage.c_str()) + "')");
 		return;
 	}
 	if (::wasm_exn_take_pending() != nullptr) {
@@ -1826,7 +1782,7 @@ void ScriptRunner::onAction(const ScriptCommand& command)
 	}
 	if (trapped) {
 		fail(command.line, "unexpected trap from '" + action.field + "': "
-				+ std::string(lastTrapMessage != nullptr ? lastTrapMessage : "trap"));
+				+ std::string(lastTrapMessage.empty() ? "trap" : lastTrapMessage.c_str()));
 		return;
 	}
 
@@ -1910,199 +1866,93 @@ void ScriptRunner::onAssertExhaustion(const ScriptCommand& command)
 }
 
 bool ScriptRunner::invoke(WASM::ModuleInstance& instance, const ScriptAction& action,
-						  const WASM::FuncType& funcType, const WASM::Callable& callable,
-						  std::array<unsigned char, 16>& returns, bool& trapped,
-						  std::vector<unsigned char>* tuple)
+  const WASM::FuncType& funcType, const WASM::Callable& callable,
+  std::array<unsigned char, 16>& returns, bool& trapped,
+  std::vector<unsigned char>* tuple)
 {
-	// A pending exception from a previous (failed) assertion must not leak into
-	// this invocation.
-	::wasm_exn_clear_pending();
+// A pending exception from a previous (failed) assertion must not leak into
+// this invocation.
+::wasm_exn_clear_pending();
 
-	// A multi-result function's JIT signature takes a result buffer as a
-	// trailing parameter (docs/ABI.md). Every result-discarding caller passes
-	// an empty buffer too; callers that compare results pass their own.
-	if (funcType.results.size() > 1 && tuple == nullptr)
+if (funcType.results.size() > 1 && tuple == nullptr)
+return false;
+
+std::vector<ArgSlot> slots(funcType.params.size());
+std::vector<const void*> arguments;
+arguments.reserve(funcType.params.size());
+
+for (std::size_t i = 0; i < funcType.params.size(); ++i) {
+const ScriptValue& arg = action.args[i];
+
+WASM::ValueTypeCode code = WASM::ValueTypeCode::Void;
+const bool refArg = referenceArgTypeCode(arg, code);
+if (!refArg) {
+if (!typeCodeFromName(arg.type, code) || code != funcType.params[i].val.opcode)
+return false;
+} else if (!WASM::isReferenceType(funcType.params[i].val.opcode)) {
+// A reference argument for a scalar parameter is a marshalling bug,
+// not a test to skip.
+return false;
+}
+
+switch (code) {
+case WASM::ValueTypeCode::I32:
+*reinterpret_cast<int32_t*>(slots[i].raw) =
+static_cast<int32_t>(std::strtoll(arg.value.c_str(), nullptr, 10));
+break;
+case WASM::ValueTypeCode::I64:
+*reinterpret_cast<int64_t*>(slots[i].raw) =
+static_cast<int64_t>(std::strtoll(arg.value.c_str(), nullptr, 10));
+break;
+case WASM::ValueTypeCode::F32: {
+const uint32_t bits = static_cast<uint32_t>(std::strtoull(arg.value.c_str(), nullptr, 10));
+std::memcpy(slots[i].raw, &bits, sizeof(bits));
+break;
+}
+case WASM::ValueTypeCode::F64: {
+const uint64_t bits = std::strtoull(arg.value.c_str(), nullptr, 10);
+std::memcpy(slots[i].raw, &bits, sizeof(bits));
+break;
+}
+case WASM::ValueTypeCode::V128:
+if (!decodeV128(arg.laneType, arg.lanes, slots[i].raw))
+return false;
+break;
+default:
+if (!isMarshallableReference(code))
+return false;
+*reinterpret_cast<void**>(slots[i].raw) = referenceArgument(instance, code, arg);
+break;
+}
+
+arguments.push_back(slots[i].raw);
+}
+
+// Multi-result callees write into a caller-owned tuple; allocate it from the
+// backend's aggregate layout rather than from a backend type object.
+	void* result = returns.data();
+	std::size_t resultCapacity = returns.size();
+	if (funcType.results.size() > 1) {
+		const TestBackend::AggregateLayout layout = backend.aggregateLayout(funcType.results);
+		if (layout.size == 0)
+			return false;
+		const std::size_t needed = std::max<std::size_t>(layout.size, 16);
+		if (tuple->size() < needed)
+			tuple->assign(needed, 0);
+		result = tuple->data();
+		resultCapacity = tuple->size();
+	}
+
+	bool trappedNow = false;
+	WASM::TrapKind trapKind = WASM::TrapKind::Internal;
+	std::string trapMessage;
+	if (!backend.invoke(instance, callable, funcType, instance.context(), arguments,
+			result, resultCapacity, trappedNow, trapKind, trapMessage))
 		return false;
 
-	std::vector<ArgSlot> slots(funcType.params.size());
-	std::vector<void*> arguments(funcType.params.size() + 1);
-
-	// Slot 0 is always the implicit VMContext pointer that the JIT ABI expects
-	// as the first argument of every compiled function.
-	void* context = instance.context();
-	arguments[0] = &context;
-
-	for (std::size_t i = 0; i < funcType.params.size(); ++i) {
-		const ScriptValue& arg = action.args[i];
-
-		WASM::ValueTypeCode code = WASM::ValueTypeCode::Void;
-		const bool refArg = referenceArgTypeCode(arg, code);
-		if (!refArg) {
-			if (!typeCodeFromName(arg.type, code) || code != funcType.params[i].val.opcode)
-				return false;
-		} else if (!WASM::isReferenceType(funcType.params[i].val.opcode)) {
-			// A reference argument for a scalar parameter is a marshalling bug,
-			// not a test to skip.
-			return false;
-		}
-
-		switch (code) {
-		case WASM::ValueTypeCode::I32:
-			*reinterpret_cast<int32_t*>(slots[i].raw) =
-					static_cast<int32_t>(std::strtoll(arg.value.c_str(), nullptr, 10));
-			break;
-		case WASM::ValueTypeCode::I64:
-			*reinterpret_cast<int64_t*>(slots[i].raw) =
-					static_cast<int64_t>(std::strtoll(arg.value.c_str(), nullptr, 10));
-			break;
-		case WASM::ValueTypeCode::F32: {
-			// Float literals carry the raw IEEE-754 bit pattern.
-			const uint32_t bits = static_cast<uint32_t>(std::strtoull(arg.value.c_str(), nullptr, 10));
-			std::memcpy(slots[i].raw, &bits, sizeof(bits));
-			break;
-		}
-		case WASM::ValueTypeCode::F64: {
-			const uint64_t bits = std::strtoull(arg.value.c_str(), nullptr, 10);
-			std::memcpy(slots[i].raw, &bits, sizeof(bits));
-			break;
-		}
-		case WASM::ValueTypeCode::V128:
-			// The lanes are decoded into the slot the JIT's ABI expects: the same
-			// 16 bytes the engine stores a `v128` in (proposals/SIMD.md S7).
-			if (!decodeV128(arg.laneType, arg.lanes, slots[i].raw))
-				return false;
-			break;
-		default:
-			// Reference arguments (GC.md R5). Without this a reference-taking
-			// action is skipped, which silently leaves fixtures like
-			// `ref_test.wast`'s `(invoke "init" (ref.extern 0))` un-run and makes
-			// every dependent `ref.test` look wrong.
-			if (!isMarshallableReference(code))
-				return false;
-			*reinterpret_cast<void**>(slots[i].raw) = referenceArgument(instance, code, arg);
-			break;
-		}
-
-		arguments[i + 1] = slots[i].raw;
-	}
-
-	// Multi-result callee: the JIT signature has one extra trailing `void*`
-	// parameter pointing at the result tuple (docs/ABI.md). The caller owns
-	// the buffer; the callee writes its results through it.
-	jit_type_t tupleType = nullptr;
-	void* tupleAddress = nullptr;
-	if (tuple != nullptr && funcType.results.size() > 1) {
-		tupleType = jitContext.getTranslator().translateStruct(funcType.results);
-		const size_t size = static_cast<size_t>(jit_type_get_size(tupleType));
-		if (jit_type_get_alignment(tupleType) > alignof(std::max_align_t))
-			return false; // a vector's storage is max_align_t-aligned
-		tuple->assign(std::max<size_t>(size, 16), 0);
-		tupleAddress = tuple->data();
-		// jit_apply wants a pointer to each argument *value* (like arguments[0],
-		// which points at the `context` local), not the value itself.
-		arguments.push_back(&tupleAddress);
-	}
-
-	// jit_apply knows the calling convention for an arbitrary signature, so we
-	// can marshal runtime-typed arguments without generating a template
-	// instantiation for every (arity, type) combination. The signature is
-	// rebuilt per invocation (libjit keeps its own copy), which is fine for a
-	// test harness but would be worth caching in a hot path.
-	const jit_type_t signature = jitContext.getTranslator().translateFunctionSignature(funcType);
-
-	// Arm a trap scope: a Wasm trap longjmps back to here instead of aborting
-	// the process (docs/proposals/BULK_MEMORY.md BM-2), so the harness can
-	// report it — and assert_trap can expect it.
-	WASM::TrapScope trapScope;
-	if (setjmp(trapScope.buffer) != 0) {
-		trapped = true;
-		lastTrapMessage = trapScope.message();
-		lastTrapKind = trapScope.kind();
-		return true;
-	}
-
-	// libjit's `jit_apply` damages a third stack-passed 16-byte aggregate
-	// (docs/SIMD_LIBJIT.md §6.6). The *callee* side is verified correct — the T2
-	// case for `simd_abi_args.wat` passes 2, 3 and 4 `v128` parameters through
-	// the host ABI and reads them back exactly — so the defect is in the
-	// dynamic-call shim, not in the generated code. Every ternary SIMD op is
-	// invoked in precisely that shape, which is why sixteen spec scripts could
-	// not be graded at all.
-	//
-	// So those calls do not go through `jit_apply`: an all-`v128` signature with a
-	// single `v128` result is called through the C ABI directly, which is the ABI
-	// the callee was generated for and the one `WASM::callCallable` uses. The
-	// arguments are already marshalled into 16-byte slots by this point.
-	const auto v128AbiCall = [&]() {
-		if (tuple != nullptr)
-			return false;
-		if (funcType.params.empty() || funcType.params.size() > 4)
-			return false;
-		for (const auto& param : funcType.params)
-			if (param.val.opcode != WASM::ValueTypeCode::V128)
-				return false;
-		// The result may be absent, a `v128`, or one scalar — `v128.bitselect`
-		// wrapped in a comparison returns `i32`, and that shape was the last
-		// failing group in `simd_boolean.wast`.
-		WASM::ValueTypeCode resultCode = WASM::ValueTypeCode::Void;
-		if (funcType.results.size() == 1) {
-			resultCode = funcType.results[0].val.opcode;
-			const bool ok = resultCode == WASM::ValueTypeCode::V128
-					|| resultCode == WASM::ValueTypeCode::I32
-					|| resultCode == WASM::ValueTypeCode::I64
-					|| resultCode == WASM::ValueTypeCode::F32
-					|| resultCode == WASM::ValueTypeCode::F64;
-			if (!ok)
-				return false;
-		} else if (funcType.results.size() > 1) {
-			return false;
-		}
-
-		AbiV128 args[4];
-		for (size_t i = 0; i < funcType.params.size(); ++i)
-			std::memcpy(&args[i], slots[i].raw, sizeof(AbiV128));
-
-		const size_t count = funcType.params.size();
-		void* fnPtr = callable.fnPtr;
-		switch (resultCode) {
-		case WASM::ValueTypeCode::V128: {
-			const AbiV128 result = callWithV128Params<AbiV128>(fnPtr, context, args, count);
-			std::memcpy(returns.data(), &result, sizeof(result));
-			break;
-		}
-		case WASM::ValueTypeCode::I32: {
-			const int32_t result = callWithV128Params<int32_t>(fnPtr, context, args, count);
-			std::memcpy(returns.data(), &result, sizeof(result));
-			break;
-		}
-		case WASM::ValueTypeCode::I64: {
-			const int64_t result = callWithV128Params<int64_t>(fnPtr, context, args, count);
-			std::memcpy(returns.data(), &result, sizeof(result));
-			break;
-		}
-		case WASM::ValueTypeCode::F32: {
-			const float result = callWithV128Params<float>(fnPtr, context, args, count);
-			std::memcpy(returns.data(), &result, sizeof(result));
-			break;
-		}
-		case WASM::ValueTypeCode::F64: {
-			const double result = callWithV128Params<double>(fnPtr, context, args, count);
-			std::memcpy(returns.data(), &result, sizeof(result));
-			break;
-		}
-		default:
-			callWithV128ParamsVoid(fnPtr, context, args, count);
-			break;
-		}
-		return true;
-	};
-	if (v128AbiCall())
-		return true;
-
-	const unsigned int numArgs = static_cast<unsigned int>(funcType.params.size() + 1)
-			+ (tupleType != nullptr ? 1u : 0u);
-	jit_apply(signature, callable.fnPtr, arguments.data(), numArgs,
-			  tupleType != nullptr ? nullptr : returns.data());
+	trapped = trappedNow;
+	lastTrapKind = trapKind;
+	lastTrapMessage = std::move(trapMessage);
 	return true;
 }
 

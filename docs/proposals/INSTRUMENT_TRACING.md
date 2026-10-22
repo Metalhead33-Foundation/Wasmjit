@@ -1,7 +1,8 @@
 # Instruction Tracing (`i32.itt`) — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / forward-looking reference (revision 1 — the proposal is an
-early overview, assigns no binary encoding, and nothing is implemented).
+Status: design note / implementation reference (revision 2 — engine-reserved
+encoding, NOP lowering and optional compile-time callback implemented; the
+upstream proposal still assigns no encoding).
 Audience: anyone touching `WasmOpcode`, `WasmOpcodeDispatcher`, the JIT compiler,
 or an embedder that wants trace hooks.
 
@@ -49,25 +50,33 @@ overview:
 
 ## 4. What we have implemented today
 
-- Nothing. `WasmBase/WasmOpcode.hpp` has no `I32Itt` (or similarly named)
-  primary opcode.
-- An unknown primary byte reaches `OpcodeDispatcher::dispatch`'s `default` and
-  throws `"Invalid or unsupported primary opcode"`
-  (`WasmBase/WasmOpcodeDispatcher.cpp`).
-- There is no trace hook, no source-map metadata and no way for an embedder to
-  observe a marker.
+- The engine uses a **documented provisional encoding**: `0xFC 0x100`, followed
+  by a LEB128 `uint32_t` immediate (`MiscOpcode::I32Itt`). The upstream overview
+  does not assign one, so this is an engine extension, not a claim of upstream
+  binary compatibility.
+- `WasmOpcodeDispatcher::dispatchPrefixMisc` reads the immediate and calls
+  `dispatchI32Itt`.
+- The validator treats it as a pure marker: no operand-stack, control-flow or
+  trap effect.
+- The JIT lowers it to nothing; it calls the optional
+  `WASM::setTraceCallback` hook at **compile time**, so a run has no extra
+  branch or per-marker cost. The stub backend prints the marker.
+- `Test/main.cpp` builds a module with `i32.itt 7` before `i32.const 42`,
+  asserts the callback observes `7`, and asserts the function still returns
+  `42`.
 
-Because the proposal does not assign an encoding, there is not even a byte
-string that could be used as a conformance input today.
+Because the proposal does not assign an encoding, this is not an upstream
+conformance claim; it is the same "reserved encoding until the proposal settles"
+policy used for `stringref` (`STRINGREF.md` STR1/STRD5).
 
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| IT1 | **No encoding to implement.** The proposal specifies the spelling and semantics but not the opcode/immediate bytes. | `instrument-tracing` Overview | Informational |
-| IT2 | **No decoder/dispatch arm.** Unknown primary opcodes are rejected, not treated as NOPs. | `WasmOpcode.hpp`, `WasmOpcodeDispatcher.cpp` (`default`) | Low |
-| IT3 | **No trace hook.** Even if the marker decoded, nothing would emit a trace record or expose the immediate to an embedder. | no trace API in `WasmBase` / `LibJit` | Low |
-| IT4 | **No test.** There is no script in the testsuite snapshot. | `extern/WasmTestsuite` | Low |
+| IT1 | **No upstream encoding to pin.** The proposal specifies the spelling and semantics but not the opcode/immediate bytes; the engine keeps its provisional `0xFC 0x100` extension. | `instrument-tracing` Overview; `WasmOpcode.hpp` (`I32Itt`) | Informational |
+| ~~IT2~~ | ~~**No decoder/dispatch arm.**~~ **Done:** `0xFC 0x100` reads a LEB128 immediate and dispatches `dispatchI32Itt`. | `WasmOpcode.hpp`, `WasmOpcodeDispatcher.cpp` | Closed |
+| ~~IT3~~ | ~~**No trace hook.**~~ **Done:** `WASM::setTraceCallback` receives the immediate at compile time; the JIT emits no run-time marker code. | `WasmTracing.hpp`, `LibJit/LibjitOpcodeDispatcher.cpp` | Closed |
+| ~~IT4~~ | ~~**No test.**~~ **Done:** the hand-built `i32.itt` test checks the callback and result equality. | `Test/main.cpp` | Closed |
 
 ## 6. Where we can and should play fast and loose
 
@@ -75,7 +84,7 @@ string that could be used as a conformance input today.
 |---|---|---|---|
 | ITD1 | **Lower the marker to a plain NOP** once an encoding exists. | §3: no runtime effect is demanded. | Conformance with zero codegen cost. |
 | ITD2 | **Ignore markers entirely** rather than emit trace records. | §3: the engine is free to implement the marker for its platform; it may also do nothing. | No tooling dependency in the engine. |
-| ITD3 | **Reject the opcode until the encoding is stable.** | §3: no encoding is demanded yet; `SAFETY.md`: an unknown byte must not be guessed at. | No accidental interpretation of future opcodes. |
+| ITD3 | **Use a documented reserved encoding until the upstream one is stable.** | §3: no encoding is demanded yet; `SAFETY.md` forbids guessing at unknown bytes, but an explicit engine extension is not a guess. | The marker can be exercised without claiming an upstream opcode. |
 | ITD4 | **Offer an optional compile-time trace callback** instead of hard-coding one tool's format. | §3: format and API are free. | Embedders can plug in their own profiler. |
 
 Guardrail: the marker must never change the result of a function. If an
@@ -86,21 +95,22 @@ marker.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **IT-1 — Pin the encoding** | Track the proposal until an opcode byte and immediate encoding are assigned. | IT1 | The proposal has a binary encoding. |
-| **IT-2 — Decode as NOP** | Add the primary opcode, read the immediate, emit nothing. | IT2 | A module containing the marker runs with unchanged results. |
-| **IT-3 — Optional hook** | Expose the immediate to an embedder callback at compile time (no per-execution cost). | IT3 | A test observes both marker values. |
-| **IT-4 — Test** | Add a hand-built module plus a result-equality test. | IT4 | The curated/manual suite covers the marker. |
+| **IT-1 — Pin the encoding** | Track the proposal until an opcode byte and immediate encoding are assigned. | IT1 | The upstream proposal has a binary encoding; the engine can then replace its provisional `0xFC 0x100`. |
+| **IT-2 — Decode as NOP** | ✅ Added `MiscOpcode::I32Itt` (engine-reserved `0xFC 0x100`), immediate decoding and validator no-op. | IT2 | A module containing the marker runs with unchanged results. |
+| **IT-3 — Optional hook** | ✅ `WASM::setTraceCallback` receives the immediate during JIT compilation; no per-execution cost. | IT3 | The test observes the marker value. |
+| **IT-4 — Test** | ✅ Hand-built module plus callback/result-equality test. | IT4 | The manual suite covers the marker. |
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-17):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-22):
 
 | Script | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| (none) | — | — | — | no tracing/`i32.itt` script in the testsuite snapshot |
+| `i32.itt is a run-time NOP...` | 6 assertions | 0 | 0 | callback sees immediate `7`; function still returns `42` |
 
-Reading: nothing to grade. The first meaningful test is IT-2's
-"same results with and without the marker".
+Reading: the manual fixture is the only available test because the upstream
+proposal has no test script or encoding. It grades both required properties:
+the marker is observable at compile time and disappears from execution.
 
 ## 9. References
 

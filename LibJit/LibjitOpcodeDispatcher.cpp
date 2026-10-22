@@ -5,6 +5,7 @@
 #include "../WasmBase/WasmVMContext.hpp"
 #include "../WasmBase/WasmExn.hpp"
 #include "../WasmBase/WasmString.hpp"
+#include "../WasmBase/WasmTracing.hpp"
 #include "../WasmBase/wasm_atomic.hpp"
 #include "../WasmBase/wasm_simd_scalar.hpp"
 #include <algorithm>
@@ -5770,6 +5771,14 @@ void OpcodeDispatcher::dispatchMemoryFill(WASM::MemIdx arg) {
 	jit_insn_call_native(function, "wasm_memory_fill_impl",
 						 reinterpret_cast<void*>(wasm_memory_fill_impl), sig, args, 5, 0);
 }
+void OpcodeDispatcher::dispatchI32Itt(uint32_t immediate)
+{
+	// Compile-time only: the marker is a run-time NOP. The callback lets an
+	// embedder map the immediate to its own profiler without introducing a
+	// per-execution branch (docs/proposals/INSTRUMENT_TRACING.md IT-3).
+	WASM::traceImmediate(immediate);
+}
+
 void OpcodeDispatcher::dispatchRoundingVariant(uint32_t sub)
 {
 	const uint32_t rel = (sub - 0x80u) % 0x14u;

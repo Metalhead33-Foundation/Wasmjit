@@ -312,6 +312,7 @@ protected:
 	void dispatchI64Sub128() override;
 	void dispatchI64MulWideS() override;
 	void dispatchI64MulWideU() override;
+	void dispatchI32Itt(uint32_t immediate) override;
 	void dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2) override;
 	void dispatchElemDrop(uint32_t arg) override;
 	void dispatchTableCopy(WASM::TableIdx arg1, WASM::TableIdx arg2) override;

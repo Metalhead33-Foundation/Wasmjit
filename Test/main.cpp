@@ -27,9 +27,10 @@
 #include "WasmBase/WasmOpcode.hpp"
 #include "WasmBase/WasmStore.hpp"
 #include "WasmBase/WasmString.hpp"
+#include "WasmBase/WasmTracing.hpp"
+#include "TestBackend.hpp"
 #include "WasmBase/WasmTrap.hpp"
 #include "WasmBase/wasm_simd_scalar.hpp"
-#include "LibJit/LibjitModuleCompiler.hpp"
 #include "WasmBase/WasmComponentRuntime.hpp"
 #include "WasmStub/StubOpcodeDispatcher.hpp"
 #include "WastScript.hpp"
@@ -39,7 +40,7 @@ Euph::Conf::Configuration GLOBAL_CONFIGURATION;
 // The C++ mirror of the JIT's lowered `v128`: 16 bytes, four `i32` lanes. The
 // JIT's type is forced to 16-byte alignment (LibJitTypeTranslation), which
 // leaves the System V *register classification* of a four-lane aggregate
-// unchanged — verified against this LibJIT build before the design was written
+// unchanged — verified against this backend build before the design was written
 // down (docs/SIMD_LIBJIT.md §9) — so this plain struct matches it on the wire.
 struct V128 { uint32_t a, b, c, d; };
 
@@ -82,8 +83,8 @@ TEST_CASE("add_core exports add")
 {
 	WASM::Module module = loadTestModule("add_core");
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 
 	auto instance = compiler.instantiate(module, imports);
 	REQUIRE(instance.get() != nullptr);
@@ -97,8 +98,8 @@ TEST_CASE("add_core registered exports expose math.add")
 {
 	WASM::Module module = loadTestModule("add_core");
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 
 	auto instance = compiler.instantiate(module, imports);
 	REQUIRE(instance.get() != nullptr);
@@ -126,8 +127,8 @@ TEST_CASE("native_debug calls host import")
 	// We set hostData on the instance after instantiation.
 	registerHostFunction(debugImports, "env", "debug_message", nativeDebugMessage, nullptr);
 
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	auto debugInstance = compiler.instantiate(debugModule, debugImports);
 	REQUIRE(debugInstance.get() != nullptr);
 
@@ -145,8 +146,8 @@ TEST_CASE("native_debug calls host import")
 TEST_CASE("loop_test calculates sum and factorial")
 {
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("loop_test", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("loop_test", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 
 	auto sumUpto = loaded.instance->exportedFunction("sumUpto");
@@ -161,8 +162,8 @@ TEST_CASE("loop_test calculates sum and factorial")
 TEST_CASE("memory_buffer stores and loads data correctly")
 {
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("memory_buffer", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("memory_buffer", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 
 	auto writeAndSum = loaded.instance->exportedFunction("writeAndSum");
@@ -181,8 +182,8 @@ TEST_CASE("memory_buffer stores and loads data correctly")
 TEST_CASE("sign-extension operators sign-extend the low bits")
 {
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("sign_extension", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("sign_extension", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 
 	auto i32Extend8  = loaded.instance->exportedFunction("i32_extend8_s");
@@ -235,8 +236,8 @@ TEST_CASE("sign-extension operators sign-extend the low bits")
 TEST_CASE("non-trapping float-to-int conversions saturate instead of trapping")
 {
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("trunc_sat", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("trunc_sat", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 
 	auto i32F32S = loaded.instance->exportedFunction("i32_trunc_sat_f32_s");
@@ -361,8 +362,8 @@ TEST_CASE("branch hints are parsed and do not change results")
 
 	// A hint is a pure optimisation: acting on it must not change any result.
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	auto instance = compiler.instantiate(module, imports);
 	REQUIRE(instance.get() != nullptr);
 
@@ -376,8 +377,8 @@ TEST_CASE("branch hints are parsed and do not change results")
 TEST_CASE("tail calls compute correct results")
 {
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("tail_call", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("tail_call", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 
 	auto facAcc     = loaded.instance->exportedFunction("fac_acc");
@@ -419,8 +420,8 @@ TEST_CASE("tail calls compute correct results")
 TEST_CASE("multi-memory: two linear memories are independent")
 {
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("multi_memory", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("multi_memory", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 
 	auto write0 = loaded.instance->exportedFunction("write0");
@@ -444,8 +445,8 @@ TEST_CASE("imported memory is shared between two module instances")
 	WASM::Module moduleA = loadTestModule("shared_memory_a");
 	WASM::Module moduleB = loadTestModule("shared_memory_b");
 	WASM::RegistryImportResolver registry;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 
 	auto instanceA = compiler.instantiate(moduleA, registry);
 	REQUIRE(instanceA.get() != nullptr);
@@ -479,8 +480,8 @@ TEST_CASE("imported mutable global is shared between two module instances")
 	WASM::Module moduleA = loadTestModule("shared_global_a");
 	WASM::Module moduleB = loadTestModule("shared_global_b");
 	WASM::RegistryImportResolver registry;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 
 	auto instanceA = compiler.instantiate(moduleA, registry);
 	REQUIRE(instanceA.get() != nullptr);
@@ -516,8 +517,8 @@ TEST_CASE("imported mutable externref global aliases the exporter across modules
 	WASM::Module moduleA = loadTestModule("externref_global_a");
 	WASM::Module moduleB = loadTestModule("externref_global_b");
 	WASM::RegistryImportResolver registry;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 
 	auto instanceA = compiler.instantiate(moduleA, registry);
 	REQUIRE(instanceA.get() != nullptr);
@@ -561,8 +562,8 @@ TEST_CASE("imported global type and mutability are matched at link time")
 	WASM::Module moduleA = loadTestModule("shared_global_a");
 	WASM::Module moduleB = loadTestModule("shared_global_bad");
 	WASM::RegistryImportResolver registry;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 
 	auto instanceA = compiler.instantiate(moduleA, registry);
 	REQUIRE(instanceA.get() != nullptr);
@@ -590,8 +591,8 @@ TEST_CASE("store owns the runtime type registry")
 TEST_CASE("store owns tables and table.grow works")
 {
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("table_grow", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("table_grow", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 
 	auto size = loaded.instance->exportedFunction("size");
@@ -609,8 +610,8 @@ TEST_CASE("store owns tables and table.grow works")
 TEST_CASE("multi-table: independent tables, bulk ops and call_indirect")
 {
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("multi_table", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("multi_table", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 
@@ -664,8 +665,8 @@ TEST_CASE("imported table is shared between two module instances")
 	WASM::Module moduleA = loadTestModule("shared_table_a");
 	WASM::Module moduleB = loadTestModule("shared_table_b");
 	WASM::RegistryImportResolver registry;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 
 	auto instanceA = compiler.instantiate(moduleA, registry);
 	REQUIRE(instanceA.get() != nullptr);
@@ -713,8 +714,8 @@ TEST_CASE("table imports are matched against the exported table's type")
 	WASM::Module mismatchType   = loadTestModule("table_import_mismatch_type");
 	WASM::Module mismatchLimits = loadTestModule("table_import_mismatch_limits");
 	WASM::RegistryImportResolver registry;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 
 	auto instanceA = compiler.instantiate(moduleA, registry);
 	REQUIRE(instanceA.get() != nullptr);
@@ -732,8 +733,8 @@ TEST_CASE("tag imports share the exporter's identity and check the payload type"
 	WASM::Module moduleB = loadTestModule("tag_identity_b");
 	WASM::Module badB    = loadTestModule("tag_identity_bad");
 	WASM::RegistryImportResolver registry;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 
 	auto instanceA = compiler.instantiate(moduleA, registry);
 	REQUIRE(instanceA.get() != nullptr);
@@ -760,8 +761,8 @@ TEST_CASE("exceptions: a caught throw carries its payload and an uncaught one st
 {
 	WASM::Module module = loadTestModule("exceptions");
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	auto instance = compiler.instantiate(module, imports);
 	REQUIRE(instance.get() != nullptr);
 
@@ -785,8 +786,8 @@ TEST_CASE("exceptions: an exnref can be stored in a table")
 {
 	WASM::Module module = loadTestModule("exnref_table");
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	auto instance = compiler.instantiate(module, imports);
 	REQUIRE(instance.get() != nullptr);
 
@@ -800,8 +801,8 @@ TEST_CASE("function references: typed refs survive in tables and globals")
 {
 	WASM::Module module = loadTestModule("function_references");
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	auto instance = compiler.instantiate(module, imports);
 	REQUIRE(instance.get() != nullptr);
 
@@ -821,55 +822,6 @@ TEST_CASE("function references: typed refs survive in tables and globals")
 	REQUIRE(WASM::callCallable<int32_t>(*callTable, int32_t(41)) == 42);
 	REQUIRE(WASM::callCallable<int32_t>(*callGlobal, int32_t(41)) == 42);
 	REQUIRE(WASM::callCallable<int32_t>(*tail, int32_t(41)) == 42);
-}
-
-TEST_CASE("LibJitTypeTranslator does not leak type caches across modules")
-{
-	const auto makeStructType = [](WASM::ValueTypeCode fieldOpcode) {
-		WASM::StorageType storage;
-		storage.isPacked = false;
-		storage.val.opcode = fieldOpcode;
-		storage.val.heapType = -1;
-
-		WASM::FieldType field;
-		field.storageType = storage;
-		field.isMutable = false;
-
-		WASM::StructType structure;
-		structure.fields.push_back(field);
-
-		WASM::Subtype subtype;
-		subtype.isFinal = true;
-		subtype.composite = structure;
-		return subtype;
-	};
-	const auto makeFuncType = []() {
-		WASM::Subtype subtype;
-		subtype.isFinal = true;
-		subtype.composite = WASM::FuncType{};
-		return subtype;
-	};
-
-	// Index 1 is a *different* struct in each module, yet the key used by the
-	// translator's cache -- ValueType{Ref, heapType = 1} -- is identical for
-	// both, because type indices are module-local.
-	std::vector<WASM::Subtype> moduleA = { makeFuncType(), makeStructType(WASM::ValueTypeCode::I32) };
-	std::vector<WASM::Subtype> moduleB = { makeFuncType(), makeStructType(WASM::ValueTypeCode::F64) };
-
-	LibJIT::LibJitTypeTranslator translator;
-
-	translator.translateTypes(moduleA, std::span<const WASM::TypeId>{});
-	WASM::ValueType refToIndex1;
-	refToIndex1.opcode = WASM::ValueTypeCode::Ref;
-	refToIndex1.heapType = 1;
-	const jit_type_t refInA = translator.translateType(refToIndex1);
-	REQUIRE(refInA != nullptr);
-
-	translator.translateTypes(moduleB, std::span<const WASM::TypeId>{});
-	const jit_type_t refInB = translator.translateType(refToIndex1);
-
-	// Without a per-module cache reset this returns module A's cached type.
-	REQUIRE(refInB != refInA);
 }
 
 TEST_CASE("rec groups survive parsing")
@@ -1001,8 +953,8 @@ TEST_CASE("declared-subtype validation rejects malformed sub annotations")
 TEST_CASE("function import type matching across modules")
 {
 	WASM::RegistryImportResolver registry;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 
 	WASM::Module exporter = loadTestModule("m5_exporter");
 	auto exporterInstance = compiler.instantiate(exporter, registry);
@@ -1020,27 +972,6 @@ TEST_CASE("function import type matching across modules")
 	// Mismatching import type: (i64)->i64 vs the exported (i32)->i32 is rejected.
 	WASM::Module bad = loadTestModule("m5_importer_bad");
 	REQUIRE_THROWS(compiler.instantiate(bad, registry));
-}
-
-TEST_CASE("JIT type cache is keyed by canonical TypeId")
-{
-	WASM::Module a = loadTestModule("rec_groups");    // $sig at local index 2: (i32)->i32
-	WASM::Module b = loadTestModule("rec_singleton"); // local index 0: (i32)->i32
-	REQUIRE(a.typeId(WASM::LocalTypeIdx{2}) == b.typeId(WASM::LocalTypeIdx{0}));
-
-	LibJIT::LibJitTypeTranslator translator;
-
-	translator.translateTypes(a.typeIds, WASM::Store::global().types().store());
-	const jit_type_t sigA = translator.getTranslatedTypes()[2];
-	REQUIRE(sigA != nullptr);
-	const size_t cacheAfterA = translator.canonicalCacheSize();
-
-	translator.translateTypes(b.typeIds, WASM::Store::global().types().store());
-	const jit_type_t sigB = translator.getTranslatedTypes()[0];
-
-	// Same canonical type -> same lowered jit_type_t, with no new cache entry.
-	REQUIRE(sigA == sigB);
-	REQUIRE(translator.canonicalCacheSize() == cacheAfterA);
 }
 
 TEST_CASE("the artifact factory distinguishes core modules and components")
@@ -1254,8 +1185,8 @@ TEST_CASE("component runtime lifts a flat core function")
 	REQUIRE(artifact != nullptr);
 	auto* component = artifact->asComponent();
 	REQUIRE(component != nullptr);
-	LibJIT::Context context;
-	LibJIT::ModuleCompiler compiler(context.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	WASM::ComponentRuntime runtime(compiler, *component);
 	auto function = runtime.exportedFunction("add");
 	REQUIRE(function.has_value());
@@ -1278,8 +1209,8 @@ TEST_CASE("component runtime lifts a canonical string")
 	REQUIRE(artifact != nullptr);
 	auto* component = artifact->asComponent();
 	REQUIRE(component != nullptr);
-	LibJIT::Context context;
-	LibJIT::ModuleCompiler compiler(context.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	WASM::ComponentRuntime runtime(compiler, *component);
 	auto function = runtime.exportedFunction("echo");
 	REQUIRE(function.has_value());
@@ -1303,8 +1234,8 @@ TEST_CASE("component runtime joins variant payloads")
 	REQUIRE(artifact != nullptr);
 	auto* component = artifact->asComponent();
 	REQUIRE(component != nullptr);
-	LibJIT::Context context;
-	LibJIT::ModuleCompiler compiler(context.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	WASM::ComponentRuntime runtime(compiler, *component);
 	auto function = runtime.exportedFunction("echo");
 	REQUIRE(function.has_value());
@@ -1338,8 +1269,8 @@ TEST_CASE("component runtime lowers and lifts a map")
 	REQUIRE(artifact != nullptr);
 	auto* component = artifact->asComponent();
 	REQUIRE(component != nullptr);
-	LibJIT::Context context;
-	LibJIT::ModuleCompiler compiler(context.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	WASM::ComponentRuntime runtime(compiler, *component);
 	auto function = runtime.exportedFunction("echo");
 	REQUIRE(function.has_value());
@@ -1375,9 +1306,9 @@ TEST_CASE("component script harness invokes a component")
 			 "expected":[{"type":"u32","value":"42"}]}
 		]}
 	)json");
-	LibJIT::Context context;
+	auto backend = TestBackend::create();
 	const Spec::ScriptReport report = Spec::runScript(
-			script, WASM_TEST_DIR, context);
+			script, WASM_TEST_DIR, *backend);
 	REQUIRE(report.failed == 0);
 	REQUIRE(report.passed == 2);
 }
@@ -1403,8 +1334,8 @@ TEST_CASE("component script marshals structured values")
 				{"key":{"type":"u32","value":"7"},"value":{"type":"u32","value":"9"}}]}]}
 		]}
 	)json");
-	LibJIT::Context context;
-	const Spec::ScriptReport report = Spec::runScript(script, WASM_TEST_DIR, context);
+	auto backend = TestBackend::create();
+	const Spec::ScriptReport report = Spec::runScript(script, WASM_TEST_DIR, *backend);
 	for (const std::string& failure : report.failures)
 		fprintf(stderr, "FAILURE: %s\n", failure.c_str());
 	REQUIRE(report.failed == 0);
@@ -1446,8 +1377,8 @@ TEST_CASE("component start executes a decoded value definition")
 	WASM::ComponentRuntime::ComponentImports imports;
 	imports.emplace("start", host);
 
-	LibJIT::Context context;
-	LibJIT::ModuleCompiler compiler(context.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	WASM::ComponentRuntime runtime(compiler, *component,
 			std::move(imports));
 	REQUIRE(observed == 42);
@@ -1459,8 +1390,8 @@ TEST_CASE("component runtime instantiates a nested component")
 	REQUIRE(artifact != nullptr);
 	auto* component = artifact->asComponent();
 	REQUIRE(component != nullptr);
-	LibJIT::Context context;
-	LibJIT::ModuleCompiler compiler(context.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	WASM::ComponentRuntime runtime(compiler, *component);
 	auto function = runtime.exportedFunction("add");
 	REQUIRE(function.has_value());
@@ -1480,8 +1411,8 @@ TEST_CASE("component runtime stream handles")
 	REQUIRE(artifact != nullptr);
 	auto* component = artifact->asComponent();
 	REQUIRE(component != nullptr);
-	LibJIT::Context context;
-	LibJIT::ModuleCompiler compiler(context.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	WASM::ComponentRuntime runtime(compiler, *component);
 	const int64_t packed = WASM::callCallable<int64_t>(runtime.coreFunction(0));
 	const int32_t readable = int32_t(uint32_t(uint64_t(packed)));
@@ -1502,8 +1433,8 @@ TEST_CASE("component runtime executes single-agent async builtins")
 	REQUIRE(artifact != nullptr);
 	auto* component = artifact->asComponent();
 	REQUIRE(component != nullptr);
-	LibJIT::Context context;
-	LibJIT::ModuleCompiler compiler(context.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	WASM::ComponentRuntime runtime(compiler, *component);
 	const auto function = runtime.exportedFunction("run");
 	REQUIRE(function.has_value());
@@ -1518,8 +1449,8 @@ TEST_CASE("component runtime resource handles")
 	REQUIRE(artifact != nullptr);
 	auto* component = artifact->asComponent();
 	REQUIRE(component != nullptr);
-	LibJIT::Context context;
-	LibJIT::ModuleCompiler compiler(context.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	WASM::ComponentRuntime runtime(compiler, *component);
 	const int32_t handle = WASM::callCallable<int32_t>(
 			runtime.coreFunction(0), int32_t(77));
@@ -1561,8 +1492,8 @@ TEST_CASE("component runtime links host component function imports")
 		results[0].kind = WASM::ValueTypeCode::I32;
 		results[0].i32 = args[0].i32 + args[1].i32;
 	};
-	LibJIT::Context context;
-	LibJIT::ModuleCompiler compiler(context.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	WASM::ComponentRuntime runtime(compiler, *component,
 			{{"host-add", host}});
 	auto function = runtime.exportedFunction("host-add");
@@ -1583,8 +1514,8 @@ TEST_CASE("component runtime transcodes canonical string encodings")
 	REQUIRE(artifact != nullptr);
 	auto* component = artifact->asComponent();
 	REQUIRE(component != nullptr);
-	LibJIT::Context context;
-	LibJIT::ModuleCompiler compiler(context.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	WASM::ComponentRuntime runtime(compiler, *component);
 	const std::array<const char*, 3> encodings = {"utf8", "utf16", "latin1"};
 	const std::array<const char*, 4> samples = {
@@ -1620,8 +1551,8 @@ TEST_CASE("component runtime lowers a host import to a core callable")
 		results[0].kind = WASM::ValueTypeCode::I32;
 		results[0].i32 = args[0].i32 + args[1].i32;
 	};
-	LibJIT::Context context;
-	LibJIT::ModuleCompiler compiler(context.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	WASM::ComponentRuntime runtime(compiler, *component,
 			{{"host-add", host}});
 	const WASM::Callable lowered = runtime.coreFunction(0);
@@ -1642,8 +1573,8 @@ TEST_CASE("component runtime lowers a host string import")
 		results[0].kind = WASM::ComponentValue::Kind::U32;
 		results[0].u64 = args[0].string.size();
 	};
-	LibJIT::Context context;
-	LibJIT::ModuleCompiler compiler(context.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	WASM::ComponentRuntime runtime(compiler, *component,
 			{{"host-len", host}});
 	const WASM::Callable lowered = runtime.coreFunction(1);
@@ -1658,8 +1589,8 @@ TEST_CASE("component runtime lowers a lifted function to a core callable")
 	REQUIRE(artifact != nullptr);
 	auto* component = artifact->asComponent();
 	REQUIRE(component != nullptr);
-	LibJIT::Context context;
-	LibJIT::ModuleCompiler compiler(context.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	WASM::ComponentRuntime runtime(compiler, *component);
 	const WASM::Callable lowered = runtime.coreFunction(1);
 	REQUIRE(WASM::callCallable<int32_t>(lowered, int32_t(20), int32_t(22)) == 42);
@@ -1739,8 +1670,8 @@ TEST_CASE("canonical ABI signatures are instance-owned")
 	REQUIRE(artifact != nullptr);
 	auto* component = artifact->asComponent();
 	REQUIRE(component != nullptr);
-	LibJIT::Context context;
-	LibJIT::ModuleCompiler compiler(context.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	WASM::ComponentRuntime first(compiler, *component);
 	WASM::ComponentRuntime second(compiler, *component);
 	const auto function = first.exportedFunction("add");
@@ -2554,8 +2485,8 @@ TEST_CASE("core type imports link by their abstract bound")
 	REQUIRE(exporter->typeCount() == 1);
 	const WASM::TypeId exportedType = exporter->typeId(WASM::LocalTypeIdx{0});
 
-	LibJIT::Context context;
-	LibJIT::ModuleCompiler compiler(context.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	WASM::RegistryImportResolver emptyResolver;
 	auto exporterInstance = compiler.instantiate(*exporter, emptyResolver);
 	REQUIRE(exporterInstance.get() != nullptr);
@@ -2657,8 +2588,8 @@ TEST_CASE("string.const initializes a stringref global")
 	REQUIRE(module != nullptr);
 
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	auto instance = compiler.instantiate(*module, imports);
 	REQUIRE(instance.get() != nullptr);
 	REQUIRE(instance->context()->globals != nullptr);
@@ -2757,8 +2688,8 @@ TEST_CASE("string.const, measure, eq and concat run through the JIT")
 	REQUIRE(parsed != nullptr);
 
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	auto instance = compiler.instantiate(*parsed, imports);
 	REQUIRE(instance.get() != nullptr);
 
@@ -2894,8 +2825,8 @@ TEST_CASE("string.new_utf8/wtf16 and encode round-trip through memory")
 	REQUIRE(parsed != nullptr);
 
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	auto instance = compiler.instantiate(*parsed, imports);
 	REQUIRE(instance.get() != nullptr);
 	const WASM::LinearMemory* memory = instance->context()->memories[0];
@@ -2948,8 +2879,8 @@ TEST_CASE("string.new_utf8 is strict while new_lossy_utf8 replaces bad bytes")
 	REQUIRE(parsed != nullptr);
 
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	auto instance = compiler.instantiate(*parsed, imports);
 	REQUIRE(instance.get() != nullptr);
 
@@ -3027,8 +2958,8 @@ TEST_CASE("stringview WTF-8, WTF-16 and iterator positions run through the JIT")
 	REQUIRE(parsed != nullptr);
 
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	auto instance = compiler.instantiate(*parsed, imports);
 	REQUIRE(instance.get() != nullptr);
 
@@ -3075,8 +3006,8 @@ TEST_CASE("the embedder bridge creates and copies stringrefs")
 	REQUIRE(parsed != nullptr);
 
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	auto instance = compiler.instantiate(*parsed, imports);
 	REQUIRE(instance.get() != nullptr);
 
@@ -3183,8 +3114,8 @@ TEST_CASE("a discarded string concat result is released through the JIT")
 	REQUIRE(parsed != nullptr);
 
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	auto instance = compiler.instantiate(*parsed, imports);
 	REQUIRE(instance.get() != nullptr);
 
@@ -3241,8 +3172,8 @@ TEST_CASE("string array constructors and encoders bridge to GC arrays")
 	REQUIRE(parsed != nullptr);
 
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	auto instance = compiler.instantiate(*parsed, imports);
 	REQUIRE(instance.get() != nullptr);
 
@@ -3330,8 +3261,8 @@ TEST_CASE("string array variants enforce bounds, strictness and lossy encoding")
 	REQUIRE(parsed != nullptr);
 
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	auto instance = compiler.instantiate(*parsed, imports);
 	REQUIRE(instance.get() != nullptr);
 
@@ -3386,8 +3317,8 @@ TEST_CASE("string array validation checks element type and mutability")
 		WASM::Module* parsed = artifact->asCoreModule();
 		REQUIRE(parsed != nullptr);
 		WASM::RegistryImportResolver imports;
-		LibJIT::Context jitContext;
-		LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+		auto backend = TestBackend::create();
+		WASM::ModuleInstantiator& compiler = backend->instantiator();
 		return compiler.instantiate(*parsed, imports);
 	};
 
@@ -3466,8 +3397,8 @@ TEST_CASE("stringview encode returns the next position and bytes written")
 	REQUIRE(parsed != nullptr);
 
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	auto instance = compiler.instantiate(*parsed, imports);
 	REQUIRE(instance.get() != nullptr);
 	const WASM::LinearMemory* memory = instance->context()->memories[0];
@@ -3651,8 +3582,8 @@ TEST_CASE("a Component Model component is rejected instead of misparsed")
 TEST_CASE("multi-memory: imported memories are shared and stay distinct")
 {
 	WASM::RegistryImportResolver registry;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 
 	WASM::Module exporter = loadTestModule("multi_memory_import_a");
 	auto exporterInstance = compiler.instantiate(exporter, registry);
@@ -3687,8 +3618,8 @@ TEST_CASE("multi-memory: imported memories are shared and stay distinct")
 TEST_CASE("multi-memory: memory.copy moves bytes between two memories")
 {
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("multi_memory", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("multi_memory", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 
 	auto write0   = loaded.instance->exportedFunction("write0");
@@ -3725,8 +3656,8 @@ TEST_CASE("multi-memory: memory.copy moves bytes between two memories")
 TEST_CASE("memory64: 64-bit memory and table size/grow are 64-bit")
 {
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("memory64_index", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("memory64_index", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 
 	auto store     = loaded.instance->exportedFunction("store");
@@ -3767,8 +3698,8 @@ TEST_CASE("grow guardrail rejects absurd deltas without allocating")
 	// host-killing OOM the Store's allocation budget exists to prevent.
 	// See docs/TESTING.md ("Allocation guardrails") and WasmStore.hpp.
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("grow_guard", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("grow_guard", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 
 	auto growMemory = loaded.instance->exportedFunction("grow_memory");
@@ -3805,8 +3736,8 @@ TEST_CASE("GC reference counting: clone, drop and store barriers")
 	// zero traps instead of wrapping or freeing. Reclamation itself is deferred
 	// for this milestone, so `gcReclaimedObjects` counts the transitions.
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 
 	// Locate the module's struct type so we can allocate an object of it.
@@ -3978,8 +3909,8 @@ uint32_t firstStructType(const WASM::Module& module)
 TEST_CASE("GC reclamation: the live-object count returns to its baseline")
 {
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 	WASM::GcHeap& heap = WASM::Store::global().gc();
@@ -4019,8 +3950,8 @@ TEST_CASE("GC reclamation: a dying object releases its reference fields")
 	// Two parents share one child, which also checks that this is still
 	// reference counting — the child must survive the first parent.
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 	WASM::GcHeap& heap = WASM::Store::global().gc();
@@ -4068,8 +3999,8 @@ TEST_CASE("GC reclamation: a deep chain is released iteratively")
 	// more of the same, and the doc's number), so passing it means one safepoint
 	// walked a worklist instead of the call stack.
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 	WASM::GcHeap& heap = WASM::Store::global().gc();
@@ -4103,8 +4034,8 @@ TEST_CASE("GC reclamation: a deep chain is released iteratively")
 TEST_CASE("GC heap: poison-on-free marks recycled blocks and reuse clears them")
 {
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 	WASM::GcHeap& heap = WASM::Store::global().gc();
@@ -4147,8 +4078,8 @@ TEST_CASE("GC reclamation: a two-object reference cycle is collected")
 	// reference makes A a candidate and the trial deletion reads the pair as
 	// unreachable — no root set and no stack scan (D18).
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 	WASM::GcHeap& heap = WASM::Store::global().gc();
@@ -4183,8 +4114,8 @@ TEST_CASE("GC reclamation: a cycle still referenced from outside survives the tr
 	// their counts restored — the trial subtracts the internal references while
 	// greying, so forgetting to add them back would silently corrupt the counts.
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 	WASM::GcHeap& heap = WASM::Store::global().gc();
@@ -4218,8 +4149,8 @@ TEST_CASE("GC reclamation: a cycle still referenced from outside survives the tr
 TEST_CASE("GC refcount: clone saturates instead of wrapping the count")
 {
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 
@@ -4235,50 +4166,6 @@ TEST_CASE("GC refcount: clone saturates instead of wrapping the count")
 	// wrapped count would let a later drop look like the last reference.
 	REQUIRE(instance.refClone(object) == object);
 	REQUIRE(*count == 0xFFFFFFFFu);
-}
-
-TEST_CASE("GC layout: the JIT's struct field offsets match the shared layout helpers")
-{
-	// H1 (docs/proposals/GC.md §5.3/§7): the JIT's LibJIT layout and the
-	// runtime's byte offsets are two implementations of *one* layout. The helpers
-	// in WasmGcHeader.hpp are the shared source of truth, so assert the JIT
-	// agrees with them field by field — the risky spots are packed i8/i16 and
-	// v128, which lowers as four i32 at 4-byte alignment. Drift here is invisible
-	// until an object is read through the wrong offset.
-	const auto makeField = [](WASM::ValueTypeCode opcode, bool packed) {
-		WASM::StorageType storage;
-		storage.isPacked = packed;
-		storage.val.opcode = opcode;
-		storage.val.heapType = -1;
-		WASM::FieldType field;
-		field.storageType = storage;
-		field.isMutable = true;
-		return field;
-	};
-
-	using WASM::ValueTypeCode;
-	WASM::StructType structure;
-	structure.fields = {
-		makeField(ValueTypeCode::I8, /*packed*/ true),
-		makeField(ValueTypeCode::I32, false),
-		makeField(ValueTypeCode::I16, /*packed*/ true),
-		makeField(ValueTypeCode::F64, false),
-		makeField(ValueTypeCode::V128, false),
-		makeField(ValueTypeCode::I64, false)
-	};
-
-	LibJIT::LibJitTypeTranslator translator;
-	const jit_type_t jitStruct = translator.translateStruct(structure);
-	REQUIRE(jitStruct != nullptr);
-
-	size_t expectedOffset = WASM::GcHeader::kHeaderBytes;
-	for (size_t i = 0; i < structure.fields.size(); ++i) {
-		expectedOffset = WASM::gcAlignUp(expectedOffset, WASM::gcStorageAlign(structure.fields[i].storageType));
-		const size_t jitOffset = static_cast<size_t>(jit_type_get_offset(
-				jitStruct, static_cast<unsigned>(i + WASM::GcHeader::kHeaderFields)));
-		REQUIRE(jitOffset == expectedOffset);
-		expectedOffset += WASM::gcStorageBytes(structure.fields[i].storageType);
-	}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4441,8 +4328,8 @@ TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 	// this closes S4 (alignment) / S5 / S9 (calling convention) for the
 	// register-passing case. `V128` is the C++ mirror of the lowered struct.
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("simd_abi", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("simd_abi", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 
@@ -4775,8 +4662,8 @@ TEST_CASE("simd helpers: shuffle and swizzle")
 TEST_CASE("simd: shuffle and swizzle run through the JIT")
 {
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("simd_shuffle", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("simd_shuffle", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 
@@ -4808,8 +4695,8 @@ TEST_CASE("simd relaxed: the hand-written ops run through the JIT")
 	// covered by the helper differential; the 11 that need their own shape are
 	// exercised here, through generated code rather than through the entry points.
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("simd_relaxed", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("simd_relaxed", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 
@@ -5120,51 +5007,6 @@ TEST_CASE("simd relaxed: the hand-written ops match their reference")
 // is ever built, and are recorded back into docs/SIMD_LIBJIT.md §8.
 namespace {
 
-// A JIT-compiled `(const void* a, const void* b, void* out)` that performs one
-// `i32x4` operation *lane by lane* in scalar IR — the shape design D1 would
-// emit: no helper call, no SIMD instruction, four load/add/store triples.
-// Built through the same LibJIT the backend uses, so M3 measures codegen rather
-// than a different engine.
-class LaneWiseOp
-{
-public:
-	explicit LaneWiseOp(bool multiply) { build(multiply); }
-	~LaneWiseOp() { jit_context_destroy(context); }
-	LaneWiseOp(const LaneWiseOp&) = delete;
-	LaneWiseOp& operator=(const LaneWiseOp&) = delete;
-
-	void run(const void* a, const void* b, void* out) const { entry(a, b, out); }
-private:
-	using Entry = void (*)(const void*, const void*, void*);
-	void build(bool multiply);
-	Entry entry = nullptr;
-	jit_context_t context = nullptr;
-};
-
-void LaneWiseOp::build(bool multiply)
-{
-	context = jit_context_create();
-	jit_context_build_start(context);
-	jit_type_t params[3] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr};
-	jit_type_t signature = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 3, 1);
-	jit_function_t function = jit_function_create(context, signature);
-	jit_value_t a = jit_value_get_param(function, 0);
-	jit_value_t b = jit_value_get_param(function, 1);
-	jit_value_t out = jit_value_get_param(function, 2);
-	for (int lane = 0; lane < 4; ++lane) {
-		const jit_nint offset = lane * 4;
-		jit_value_t va = jit_insn_load_relative(function, a, offset, jit_type_int);
-		jit_value_t vb = jit_insn_load_relative(function, b, offset, jit_type_int);
-		jit_insn_store_relative(function, out, offset,
-								multiply ? jit_insn_mul(function, va, vb)
-										 : jit_insn_add(function, va, vb));
-	}
-	jit_insn_return(function, nullptr);
-	jit_function_compile(function);
-	jit_context_build_end(context);
-	entry = reinterpret_cast<Entry>(jit_function_to_closure(function));
-}
-
 // Best of seven: the fastest run is the least noisy estimate of the loop's cost
 // (the other runs pay for scheduling noise and nothing else). The body's result
 // goes through a volatile sink — a *pure* body whose value is discarded is dead
@@ -5196,8 +5038,8 @@ TEST_CASE("simd: v128 globals run through the JIT")
 	// on the global's bytes, `global.set` as the matching store helper, and the
 	// value surviving between calls.
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("simd_globals", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("simd_globals", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 
@@ -5259,8 +5101,8 @@ TEST_CASE("simd benchmark: ns per v128 op (SIMD-L8)", "[.simdbench]")
 
 	// ── M1: the shipped design — the wasm loop, through the JIT ─────────────
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("simd_bench", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("simd_bench", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	auto benchFn = loaded.instance->exportedFunction("bench");
 	REQUIRE(benchFn.has_value());
@@ -5290,17 +5132,17 @@ TEST_CASE("simd benchmark: ns per v128 op (SIMD-L8)", "[.simdbench]")
 	};
 
 	// ── M3: helper loads, lane-by-lane scalar IR for the arithmetic (D1) ────
-	LaneWiseOp laneAdd(false);
-	LaneWiseOp laneMul(true);
+	auto laneAdd = backend->createLaneWiseOp(false);
+	auto laneMul = backend->createLaneWiseOp(true);
 	const auto runM3 = [&] {
 		std::memcpy(acc, acc0, 16);
 		for (uint32_t i = 0; i < iterations; ++i) {
 			wasm_v128_load(a, t0);
 			wasm_v128_load(b, t1);
-			laneAdd.run(t0, t1, t0);
+			laneAdd->run(t0, t1, t0);
 			wasm_v128_load(c, t1);
-			laneMul.run(t0, t1, t0);
-			laneAdd.run(t0, acc, acc);
+			laneMul->run(t0, t1, t0);
+			laneAdd->run(t0, acc, acc);
 		}
 		uint32_t lane0;
 		std::memcpy(&lane0, acc, 4);
@@ -5696,8 +5538,8 @@ TEST_CASE("simd: float arithmetic and comparisons run through the JIT")
 	// here (§11 R8) — these are precisely the cases where a plausible
 	// implementation and the library both disagree with wasm.
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("simd_arith_f", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("simd_arith_f", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 
@@ -5766,8 +5608,8 @@ TEST_CASE("simd: the float/int conversions run through the JIT")
 	// float64→int32 conversion — so for those this pins the *reference* through the
 	// entry point rather than a vector path, exactly as §6.5 says it must.
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("simd_convert", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("simd_convert", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 
@@ -5822,8 +5664,8 @@ TEST_CASE("simd: three and four v128 parameters cross the boundary")
 	// three and four parameter cases so a regression shows up here rather than as
 	// an unexplained spec failure.
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("simd_abi_args", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("simd_abi_args", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 
@@ -5892,8 +5734,8 @@ TEST_CASE("simd: memory loads and stores run through the JIT")
 	// (the same one the scalar loads use, trap included) and the helpers. Every
 	// export projects one lane, because the harness cannot marshal a `v128`.
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("simd_load_store", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("simd_load_store", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 
@@ -5945,8 +5787,8 @@ TEST_CASE("simd: bitwise ops run through the JIT")
 	// runtime-dispatched helpers. `a` has four distinct lanes, so the values
 	// below also prove the lanes were not permuted.
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("simd_bitwise", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("simd_bitwise", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 
@@ -5989,8 +5831,8 @@ TEST_CASE("simd: integer arithmetic and comparisons run through the JIT")
 	// was written down — this project has now had its hand-computed expectations
 	// corrected three times, while the implementation was right each time (R6).
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("simd_arith_i", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("simd_arith_i", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 
@@ -6086,8 +5928,8 @@ TEST_CASE("simd: v128.const, splat and lane ops run through the JIT")
 	// but reached through decoding, the operand stack, the slot bank and the
 	// helpers. The byte pattern is the one hazard Y11 is about.
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("simd_const_lane", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("simd_const_lane", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 
@@ -6134,8 +5976,8 @@ TEST_CASE("simd: v128.const, splat and lane ops run through the JIT")
 TEST_CASE("multi-value: JIT-to-JIT calls marshal every result")
 {
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("multi_value", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("multi_value", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 
@@ -6288,8 +6130,8 @@ TEST_CASE("trap messages name the trapping function when the name section has it
 {
 	WASM::Module module = loadTestModule("named_trap");
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	auto instance = compiler.instantiate(module, imports);
 	REQUIRE(instance.get() != nullptr);
 
@@ -6319,8 +6161,8 @@ TEST_CASE("unknown custom sections leave code and data decoding unchanged")
 {
 	WASM::Module module = loadTestModule("custom_section");
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	auto instance = compiler.instantiate(module, imports);
 	REQUIRE(instance.get() != nullptr);
 	auto answer = instance->exportedFunction("answer");
@@ -6333,8 +6175,8 @@ TEST_CASE("unknown custom sections leave code and data decoding unchanged")
 TEST_CASE("memory.discard zeroes whole pages, preserves the rest, and traps out of bounds")
 {
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("memory_discard", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("memory_discard", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 
@@ -6421,8 +6263,8 @@ TEST_CASE("memory.discard zeroes whole pages, preserves the rest, and traps out 
 TEST_CASE("wide arithmetic: add128, sub128 and mul_wide match reference values")
 {
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("wide_arithmetic", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("wide_arithmetic", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 
@@ -6538,8 +6380,8 @@ TEST_CASE("rounding variants: ceil/floor/trunc are selected by the sub-opcode")
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
 	auto instance = compiler.instantiate(*parsed, imports);
 	REQUIRE(instance.get() != nullptr);
 
@@ -6556,12 +6398,82 @@ TEST_CASE("rounding variants: ceil/floor/trunc are selected by the sub-opcode")
 }
 
 
+// ── Instrument/tracing (docs/proposals/INSTRUMENT_TRACING.md IT-2/IT-3) ─────
+TEST_CASE("i32.itt is a run-time NOP and reports its immediate at compile time")
+{
+	// The proposal assigns no encoding yet; the engine uses its documented
+	// provisional 0xFC 0x100 sub-opcode. The marker sits before `i32.const 42`.
+	std::vector<uint8_t> bytes = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00};
+	const auto append = [&bytes](std::initializer_list<uint8_t> values) {
+		bytes.insert(bytes.end(), values.begin(), values.end());
+	};
+	append({0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f}); // type [] -> i32
+	append({0x03, 0x02, 0x01, 0x00});                   // function 0 : type 0
+	append({0x07, 0x05, 0x01, 0x01, 't', 0x00, 0x00});  // export "t" = func 0
+	// code: locals=0, i32.itt 7, i32.const 42, end
+	append({0x0a, 0x0a, 0x01, 0x08, 0x00, 0xfc, 0x80, 0x02, 0x07, 0x41, 0x2a, 0x0b});
+
+	static std::vector<uint32_t> traced;
+	traced.clear();
+	WASM::setTraceCallback([](uint32_t immediate) { traced.push_back(immediate); });
+
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	auto instance = compiler.instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	WASM::setTraceCallback(nullptr);
+	REQUIRE(traced == std::vector<uint32_t>{7});
+	auto fn = instance->exportedFunction("t");
+	REQUIRE(fn.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*fn) == 42);
+}
+
+
+// ── Constant-Time rejection (docs/proposals/CONSTANT_TIME.md CT-0) ──────────
+TEST_CASE("constant-time secret types and memories are rejected with a named error")
+{
+	const auto expectParseRejection = [](const std::vector<uint8_t>& bytes, const char* needle) {
+		bool threw = false;
+		try {
+			std::span<const std::byte> span(
+				reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+			Euph::Io::ConstBufferDevice device(span);
+			(void)WASM::Artifact::parse(device);
+		} catch (const std::exception& error) {
+			threw = true;
+			REQUIRE(std::string(error.what()).find(needle) != std::string::npos);
+		}
+		REQUIRE(threw);
+	};
+
+	// (s32) -> i32: the engine-reserved CT marker must not silently alias i32.
+	std::vector<uint8_t> secretType = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x06, 0x01, 0x60, 0x01, 0x75, 0x01, 0x7f};
+	expectParseRejection(secretType, "secret value type s32");
+
+	// A memory whose provisional secret flag (0x08) is set: rejected, not
+	// silently treated as an ordinary public memory.
+	std::vector<uint8_t> secretMemory = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x05, 0x03, 0x01, 0x08, 0x00};
+	expectParseRejection(secretMemory, "secret memory");
+}
+
+
 // ── GC cast validation (docs/proposals/GC.md G9/GC-10) ──────────────────────
 TEST_CASE("gc cast validation: ref.test/ref.cast accept every reference in the target hierarchy")
 {
 	WASM::RegistryImportResolver imports;
-	LibJIT::Context jitContext;
-	auto loaded = loadAndInstantiateTestModule("gc_cast_validation", imports, jitContext);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("gc_cast_validation", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
 

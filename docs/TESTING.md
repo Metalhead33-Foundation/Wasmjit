@@ -5,9 +5,15 @@
 | Family | Sources | Selection | Test data |
 | --- | --- | --- | --- |
 | Manual unit tests | `Test/main.cpp` | by name (no tag) | `Test/wasm/*.ts`, compiled to `.wasm` at build time |
+| Backend-specific lowering tests | `Test/LibJitBackendTests.cpp` | by name (no tag) | none; these inspect the backend's lowered types/layouts directly |
 | WebAssembly spec testsuite | `Test/SpecSuite.cpp`, `Test/WastScript.cpp` | `[spec]`, one test case per script | `extern/WasmTestsuite/*.wast` (plus the explicitly listed `proposals/threads/atomic.wast`), converted at build time |
 
-Both live in the same binary, so a bare `./WasmJit` runs everything the runtime can currently handle.
+The generic manual and spec tests use `TestBackend::Session` and
+`WASM::ModuleInstantiator`, not a backend header. `TestBackend::create()` selects
+the implementation through `WASMJIT_BACKEND` (empty or `libjit` currently); an
+unknown value fails with a clear error instead of silently falling back. The
+backend-specific lowering tests live in `LibJitBackendTests.cpp`, so a future
+backend can add its own tests without touching the shared fixtures.
 
 ## Prerequisites
 
@@ -54,6 +60,15 @@ Run it from that directory:
 cd build/Desktop-Debug/Test
 ./WasmJit
 ```
+
+The harness selects the backend through `WASMJIT_BACKEND` (default `libjit`):
+
+```bash
+WASMJIT_BACKEND=libjit ./WasmJit
+```
+
+Only LibJIT is built today; an unknown name is reported as a harness error
+rather than silently using a different backend.
 
 ---
 

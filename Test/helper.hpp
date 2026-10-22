@@ -8,10 +8,8 @@
 #include <optional>
 #include <string>
 #include <utility>
-#include "LibJit/LibJitContext.hpp"
-#include "LibJit/LibjitModuleCompiler.hpp"
+#include "TestBackend.hpp"
 #include "WasmBase/WasmModule.hpp"
-#include "WasmBase/WasmModuleInstance.hpp"
 #include "WasmBase/WasmRegistryImportResolver.hpp"
 #include "WasmBase/WasmValue.hpp"
 #include <memory>
@@ -27,7 +25,7 @@ struct LoadedModule {
 	std::unique_ptr<WASM::ModuleInstance> instance;
 };
 
-LoadedModule loadAndInstantiateTestModule(const char* moduleName, WASM::RegistryImportResolver& imports, LibJIT::Context& jitContext);
+LoadedModule loadAndInstantiateTestModule(const char* moduleName, WASM::RegistryImportResolver& imports, TestBackend::Session& backend);
 
 template<typename HostFunc>
 void registerHostFunction(WASM::RegistryImportResolver& resolver, const char* module, const char* name, HostFunc fn, WASM::VMContext* context = nullptr)
@@ -56,7 +54,7 @@ private:
 public:
 	TextFixture(TextFixture&& mov) = default;
 	TextFixture& operator=(TextFixture&& mov) = default;
-	explicit TextFixture(const char* moduleName, WASM::RegistryImportResolver& imports, LibJIT::Context& jitContext);
+	explicit TextFixture(const char* moduleName, WASM::RegistryImportResolver& imports, TestBackend::Session& backend);
 };
 
 #endif // HELPER_HPP

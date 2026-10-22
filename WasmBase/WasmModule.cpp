@@ -1089,6 +1089,21 @@ namespace {
 // no representation degenerates to a void/absent value whose loads yield a null
 // backend handle (docs/NULL_JIT_VALUE_DIAGNOSIS.md), so such a module is refused
 // at load instead of being compiled into a silently broken function.
+[[noreturn]] void rejectSecretValueType(const char* where, size_t index, WASM::ValueTypeCode code)
+{
+	const char* name = code == WASM::ValueTypeCode::S32 ? "s32" : "s64";
+	throw std::runtime_error(std::string("constant-time extension: secret value type ") + name
+			+ " in " + where + " #" + std::to_string(index)
+			+ " is not implemented (docs/proposals/CONSTANT_TIME.md CT-0)");
+}
+
+[[noreturn]] void rejectSecretMemory(const char* where, size_t index)
+{
+	throw std::runtime_error(std::string("constant-time extension: secret memory in ") + where
+			+ " #" + std::to_string(index)
+			+ " is not implemented (docs/proposals/CONSTANT_TIME.md CT-0)");
+}
+
 [[noreturn]] void rejectUnsupportedValueType(const char* where, size_t index, WASM::ValueTypeCode code)
 {
 	const int value = static_cast<int>(code);
@@ -1109,6 +1124,8 @@ namespace {
 void Module::validateValueTypes() const
 {
 	const auto check = [](const char* where, size_t index, WASM::ValueTypeCode code) {
+		if (WASM::isSecretValueTypeCode(code))
+			rejectSecretValueType(where, index, code);
 		if (!WASM::isModeledValueTypeCode(code))
 			rejectUnsupportedValueType(where, index, code);
 	};
@@ -1150,6 +1167,15 @@ void Module::validateValueTypes() const
 	for (size_t i = 0; i < functionBodies.size(); ++i)
 		for (const LocalEntry& l : functionBodies[i].locals)
 			check("local", i, l.type.opcode);
+
+	for (size_t i = 0; i < importMemories.size(); ++i) {
+		if (importMemories[i].memory.secret)
+			rejectSecretMemory("imported memory", i);
+	}
+	for (size_t i = 0; i < memories.size(); ++i) {
+		if (memories[i].secret)
+			rejectSecretMemory("memory", i);
+	}
 }
 
 void Module::validate() const

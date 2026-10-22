@@ -269,6 +269,7 @@ private:
 	void dispatchI64Sub128() override;
 	void dispatchI64MulWideS() override;
 	void dispatchI64MulWideU() override;
+	void dispatchI32Itt(uint32_t immediate) override;
 
 	// Core memory accesses.
 	void dispatchI32Load(MemArg arg) override;

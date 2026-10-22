@@ -64,6 +64,14 @@ enum class ValueTypeCode : int8_t {
 	F64             = -0x04, // 0x7C
 	V128            = -0x05, // 0x7B
 
+	// Constant-Time extension (docs/proposals/CONSTANT_TIME.md CT-0). The
+	// upstream proposal assigns no wire byte yet; these are the engine's
+	// documented provisional markers (0x75/0x76), deliberately not
+	// modeled/lowered: a module that uses them is rejected with a named
+	// secret-type error.
+	S32             = -0x0B, // 0x75
+	S64             = -0x0A, // 0x76
+
 	// Packed Types
 	I8              = -0x08, // 0x78
 	I16             = -0x09, // 0x77
@@ -143,6 +151,14 @@ inline bool isModeledValueTypeCode(ValueTypeCode code)
 	default:
 		return false;
 	}
+}
+
+// Constant-Time secret numeric types are recognized only so the loader can
+// reject them with a precise message; they have no representation or lowering
+// until the proposal assigns an encoding and the CT milestones land.
+inline bool isSecretValueTypeCode(ValueTypeCode code)
+{
+	return code == ValueTypeCode::S32 || code == ValueTypeCode::S64;
 }
 
 // The abstract heap type denoted by a *shorthand* reference value type:
@@ -295,9 +311,14 @@ enum class MemoryIndexType : uint8_t {
 struct MemoryType {
 	MemoryIndexType indexType;
 	Limits limits;
+	// Engine-provisional CT-Wasm secret-memory flag (CONSTANT_TIME.md CT-0).
+	// The upstream proposal has no encoding; the loader rejects this marker
+	// rather than pretending the memory has a constant-time guarantee.
+	bool secret = false;
 	template <Elv::Util::Endian E, Elv::Io::DeviceLike I> void decode(Elv::Io::DataStream<E,I>& stream)
 	{
 		limits.decode(stream);
+		secret = (limits.flags & 0x08) != 0;
 		if (limits.flags & 0x04)
 			indexType = MemoryIndexType::I64;
 		else

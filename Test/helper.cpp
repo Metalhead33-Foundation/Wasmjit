@@ -9,21 +9,19 @@ WASM::Module loadTestModule(const char* moduleName)
 	return module;
 }
 
-LoadedModule loadAndInstantiateTestModule(const char* moduleName, WASM::RegistryImportResolver& imports, LibJIT::Context& jitContext)
+LoadedModule loadAndInstantiateTestModule(const char* moduleName, WASM::RegistryImportResolver& imports, TestBackend::Session& backend)
 {
 	LoadedModule loaded;
 	loaded.module = std::make_unique<WASM::Module>(loadTestModule(moduleName));
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
-	loaded.instance = compiler.instantiate(*loaded.module, imports);
+	loaded.instance = backend.instantiator().instantiate(*loaded.module, imports);
 	return loaded;
 }
 
-TextFixture::TextFixture(const char* moduleName, WASM::RegistryImportResolver& imports, LibJIT::Context& jitContext)
+TextFixture::TextFixture(const char* moduleName, WASM::RegistryImportResolver& imports, TestBackend::Session& backend)
 	: module(std::make_unique<WASM::Module>(loadTestModule(moduleName))), resolver(std::make_unique<WASM::RegistryImportResolver>()),
 	/*vm_context(std::make_unique<WASM::VMContext>()),*/ debug_host(std::make_unique<DebugHost>())
 {
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
-	instance = compiler.instantiate(*module, imports);
+	instance = backend.instantiator().instantiate(*module, imports);
 	//vm_context->hostData = debug_host.get();
 	instance->context()->hostData = debug_host.get();
 }

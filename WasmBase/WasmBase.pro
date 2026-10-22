@@ -70,6 +70,7 @@ HEADERS += \
     WasmString.hpp \
     WasmTable.hpp \
     WasmTrap.hpp \
+    WasmTracing.hpp \
     WasmTypeStore.hpp \
     WasmType.hpp \
     WasmTypeIdentity.hpp \

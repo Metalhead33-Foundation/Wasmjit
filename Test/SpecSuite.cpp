@@ -235,8 +235,8 @@ IsolatedRun runIsolated(const Spec::Script& script, const std::string& wasmDir,
 		std::signal(SIGTERM, SIG_DFL);
 
 		try {
-			LibJIT::Context jitContext;
-			writeReport(fds[1], Spec::runScript(script, wasmDir, jitContext));
+			auto backend = TestBackend::create();
+			writeReport(fds[1], Spec::runScript(script, wasmDir, *backend));
 			::close(fds[1]);
 			::_exit(0);
 		} catch (const std::exception& error) {

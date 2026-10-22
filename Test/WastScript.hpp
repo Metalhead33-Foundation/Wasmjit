@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-#include "LibJit/LibJitContext.hpp"
+#include "TestBackend.hpp"
 
 namespace Spec {
 
@@ -124,7 +124,7 @@ struct ScriptReport {
 // (text-format modules, module linking) are counted as *skipped* rather than
 // failed; the four negative-module families are split by kind and are executed
 // under `WASM_SPEC_VALIDATE=1`. See WastScript.cpp for details.
-ScriptReport runScript(const Script& script, const std::string& wasmDir, LibJIT::Context& jitContext);
+ScriptReport runScript(const Script& script, const std::string& wasmDir, TestBackend::Session& backend);
 
 } // namespace Spec
 

@@ -421,7 +421,12 @@ enum class MiscOpcode : uint32_t {
 	// dispatched through one generic hook so the 60 entries do not need 60
 	// virtual declarations.
 	RoundingFirst       = 0x80,
-	RoundingLast        = 0xBB
+	RoundingLast        = 0xBB,
+
+	// Instrument/tracing proposal: `i32.itt immediate`. The upstream overview
+	// assigns no encoding, so this is the engine's documented provisional
+	// encoding (docs/proposals/INSTRUMENT_TRACING.md IT-2).
+	I32Itt              = 0x100
 };
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, MiscOpcode right) {
 	return left.writeLEB128_enum(right);
