@@ -6,6 +6,11 @@ Every JIT-compiled Wasm function takes a `VMContext*` as its first argument
 (arg0).  Which `VMContext*` gets passed depends on the call kind and on the
 value of `Callable::context`.
 
+> **Runtime thread-safety target:** one `ModuleInstance` per `Module`, with one
+> `VMContext` per instance. This ABI description covers the calling and context
+> shapes, not a licence to use per-thread instances as a concurrency model.
+> The guest/host responsibility split is in [`THREADSAFETY.md`](THREADSAFETY.md).
+
 ## Design Philosophy
 
 WasmJit is designed as a spiritual successor to Quake 3's QVM — not as a

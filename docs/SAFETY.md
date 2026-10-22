@@ -132,6 +132,10 @@ not an error. `JitBuildScope` (`LibJit/LibjitModuleCompiler.cpp`) makes the pair
 exception-safe. Any future "begin/end" API should get the same treatment.
 *Encountered pitfall:* see §4, case study 2.
 
+RAII is exception-safe, but **not longjmp-safe**: a Wasm trap can bypass
+destructors. Host locks held across a trap-capable call need the extra rules in
+[`THREADSAFETY.md`](THREADSAFETY.md) §5.6.
+
 ### 2.6 Longjmp skips destructors — keep the trap path POD-only
 
 `WASM::trap` unwinds the stack without running destructors between the trap and
@@ -143,6 +147,9 @@ the `TrapScope`. Therefore:
 - per-thread transient state must be reset *by* `trap()` itself: the
   tail-call trampoline's per-thread state would otherwise strand the next
   invocation on a dead target.
+The cross-thread and lock-ownership consequences (including why `std::lock_guard`
+cannot be relied on across a trapping call) are in
+[`THREADSAFETY.md`](THREADSAFETY.md) §5.6 and §10.1.
 
 ### 2.7 Execution state is per host thread, not per agent
 

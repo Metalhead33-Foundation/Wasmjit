@@ -1,8 +1,9 @@
 # Thread Safety — Guest, Host, and the Boundary Between Them
 
-Status: policy / reference note (revision 1 — defines the two thread-safety
-domains, their intersection, and the current guarantees of the single-agent
-engine. It contains **no new code** and changes no runtime behaviour.)
+Status: policy / reference note (revision 2 — records the **one instance per
+module** architectural target, the host C++ lock caveats, the open guest-lock
+question, and the trap/lock ownership questions that a future multi-agent build
+must answer. It contains **no new code** and changes no runtime behaviour.)
 
 Audience: embedders, Wasm module/toolchain authors, and anyone changing
 `WasmBase/`, a backend, the GC heap, the trap path, or a native-import helper.
@@ -33,7 +34,7 @@ The short version:
 | §7 | Responsibility matrix: engine, module author, embedder |
 | §8 | What the current implementation actually guarantees |
 | §9 | The embedder's minimum protocol |
-| §10 | The future multi-agent contract (non-normative) |
+| §10 | The future one-instance multi-agent contract, trap/lock ownership, and cancellation |
 | §11 | References |
 
 ## 2. Terms used precisely
@@ -106,41 +107,47 @@ flag.
 ### 4.1 A module is not “thread-safe”; executions are
 
 A `Module` is immutable decoded data. Thread safety is a property of an
-**instance** (its mutable state) and of the **calls/agents** that touch it. The
-same module can be instantiated once and called serially, or many times and
-called concurrently; those are different questions.
+**instance** (its mutable state) and of the **calls/agents** that touch it.
+The intended runtime model is deliberately **one `ModuleInstance` per
+`Module`**, one `VMContext` per instance, and no per-thread duplicate
+instances. The current API and test harness may still instantiate a module more
+than once (for isolation tests and spec fixtures), but that multiplicity is
+**not** the concurrency plan and must not be used as a thread-safety strategy.
+Concurrency has to be handled **around or inside the single instance**.
 
-There are three guest-side execution shapes:
+There are three guest-side execution shapes for that single instance:
 
-1. **One agent, one instance.** The ordinary case. No guest concurrency exists;
+1. **One agent, serial calls.** The ordinary case. No guest concurrency exists;
    only the host's own threads matter.
-2. **Several agents, separate instances of the same module.** Each instance has
-   its own unshared memories/globals/GC region. The code is shared but
-   immutable; the instances are independent **except** for store-owned entities
-   deliberately shared by import, host callbacks, or the Store.
-3. **Several agents sharing an instance or shared objects.** This is the
-   multi-agent case. It needs the threads/SET data model: shared memory/tables/
-   globals/GC plus atomics and ordering. It is **not implemented today**: there
-   is no scheduler and one instance is not concurrently callable.
+2. **One instance, several host calls serialized by a host/engine lock.** The
+   only thread-safe host model available today is external serialization; the
+   target is an instance-level synchronization mechanism rather than more
+   instances.
+3. **One instance, several concurrent agents or host threads.** This is the
+   multi-agent target. It needs shared instance state to be made safe: shared
+   memory/tables/globals/GC plus atomics and ordering, and/or an engine-owned
+   per-instance concurrency protocol. It is **not implemented today**: there is
+   no scheduler and one instance is not concurrently callable.
 
 ### 4.2 What “guest-threadsafe” must mean
 
 A Wasm instance/function is guest-threadsafe only relative to a stated
 execution model:
 
-- **G-A — serial instance.** At most one agent enters the instance at a time.
+- **G-A — serial instance.** At most one call enters the instance at a time.
   This is the current engine's model. It makes ordinary non-atomic Wasm code
   valid; it says nothing about concurrent calls.
-- **G-B — shared-nothing parallel instances.** Agents execute separate
-  instances and share no mutable Wasm object. Compiled code, type metadata and
-  immutable module data may be shared; each instance's memories, globals and GC
-  region are private. A host callback shared by those instances is **not**
-  automatically safe (it is a native import; see §5.3).
-- **G-C — shared-memory agents.** Agents share memory (and, when implemented,
-  shared tables/globals/GC). Every access to shared mutable data must follow the
-  Wasm memory model: atomic instructions for data races, acquire/release or
-  seqcst ordering as required, and no non-atomic access racing with an atomic
-  or another non-atomic access.
+- **G-B — single instance with serialized entry.** Several host threads may
+  exist, but every entry into the instance is serialized by an external lock (or
+  by a future engine-owned instance lock). Each call still sees the one
+  instance's unshared memory/globals/GC state. This is the current practical
+  host model; the lock is outside the Wasm code.
+- **G-C — shared-memory agents.** Several agents execute concurrently in the
+  one instance and share memory (and, when implemented, shared tables/globals/
+  GC). Every access to shared mutable data must follow the Wasm memory model:
+  atomic instructions for data races, acquire/release or seqcst ordering as
+  required, and no non-atomic access racing with an atomic or another non-atomic
+  access. Private/unshared instance state is not a concurrency primitive.
 - **G-D — shared GC/table agents.** The Shared-Everything Threads model. The
   static `shared` annotations restrict what may be referred to; the atomics
   provide tear-free access; the GC/refcount barriers and waitqueues are part of
@@ -152,7 +159,8 @@ execution model:
 A module author who claims “guest-threadsafe” should state **which** of
 G-A…G-D applies. “No unsynchronised shared state” under G-C/G-D is a
 module-author proof obligation; the engine cannot validate it and does not
-attempt to.
+attempt to. Separate instances are not a fourth model: they are outside the
+intended runtime architecture and are not a thread-safety answer.
 
 ### 4.3 The three guest-side call directions
 
@@ -173,9 +181,10 @@ attempt to.
   safety is a **contract supplied by the module author**; the Wasm function type
   has no thread-safety annotation. Two host threads calling the same export on
   the same instance are two agents entering shared instance state. The engine
-  does not add a mutex around this call. The host must serialize, use separate
-  instances, or use a module whose G-C/G-D contract explicitly covers it
-  (and a runtime that actually supports agents).
+  does not add a mutex around this call. The host must serialize the single
+  instance, or use a module whose G-C/G-D contract explicitly covers it (and a
+  runtime that actually supports agents). Creating more instances is not the
+  target workaround.
 
 ### 4.4 `shared` is a type/validation annotation, not a proof
 
@@ -207,6 +216,49 @@ It is one input to a G-C/G-D safety argument, not the conclusion.
   can rely on wake-up (`THREADS.md` TH-2/TD9/TH-5).
 
 
+### 4.6 Guest locks and semaphores — an open design, not a current primitive
+
+There is **no standard WebAssembly mutex, `std::mutex` equivalent, or
+semaphore object** in this tree. A counting semaphore can be sketched with an
+atomic counter plus `wait`/`notify`, but the wake-up and fairness questions
+below are the same; nothing here defines one. The current guest tools are
+shared-memory atomics and the single-agent `wait`/`notify` forms; a module can
+build a lock from an `i32`/`i64` control word using atomic RMW/cmpxchg and, when
+the runtime supports it, blocking `wait`/`notify`. That is a **module-level
+protocol**, not an engine-provided object, and it has not been standardized
+here.
+
+A future guest-lock design has to answer at least:
+
+- **Representation and ABI.** Is the lock a shared-memory word, a shared GC
+  object, or an engine-owned opaque object? Who initializes it, who destroys it,
+  and what is the owner/recursion representation?
+- **Blocking.** Spin, yield/`pause`, `memory.atomic.wait`, or a managed
+  waitqueue? How are spurious wakeups, timeouts, interruption and fairness
+  defined? The current single-agent `wait` cannot wake, so it is not sufficient
+  for a blocking mutex.
+- **Reentrancy and ordering.** Non-recursive, recursive or explicit owner? What
+  lock-order discipline is required to prevent deadlocks between several guest
+  locks and host locks?
+- **Traps.** Wasm traps do not run destructors and are not generally catchable
+  by Wasm exception handlers. If a thread traps out of a critical section, the
+  lock remains held unless the module has a way to run cleanup before the trap
+  is observed, or the engine records and releases/poisons it. There is no
+  automatic `finally` in Wasm, so a pure module-level lock has no cleanup path
+  for an escaping trap; this needs an engine/runtime policy (see §10.1).
+- **Tail calls.** A `return_call` cannot release a lock in the caller after the
+  call. The toolchain/author must not tail-call out of a critical section, or
+  the lock protocol must make that impossible/visible.
+- **Host interop.** If a native import waits on a guest lock, or a guest waits
+  on a host mutex, both sides need a common protocol. A C++ `std::mutex` and a
+  Wasm atomic word are not interchangeable.
+
+Until such a standard exists, the safe statement is: **guest code may implement
+its own lock protocol over the available shared-memory/GC atomics, but the
+engine does not provide or validate one.** `shared` annotations are necessary
+for some of these objects but remain a type restriction, not a lock.
+
+
 ## 5. Host-side / embedder-side thread safety
 
 Host-side safety is about the C++ objects and native callbacks an embedder
@@ -217,8 +269,8 @@ touches. It is **not** a statement that generated Wasm code is race-free.
 | Object | Mutability / ownership | Current concurrency rule |
 |---|---|---|
 | `WASM::Store` (process-wide singleton) | Owns memories, tables, tags, call tags, GC heap, strings; IDs/pointers stable | Management containers are mutex-guarded; `TypeRegistry` serializes interning; budget accounting is atomic. This protects **Store metadata**, not guest data. |
-| `WASM::Module` | Decoded, immutable after parse; may be instantiated repeatedly | Treat one `Module` as read-only after parsing. Do not parse into or mutate the same object concurrently. |
-| `WASM::ModuleInstance` | Mutable: globals, memory/table references, GC region, trap-visible state | **Not internally synchronized.** One thread/agent per instance at a time; use an external mutex or one instance per thread. |
+| `WASM::Module` | Decoded, immutable after parse; the target runtime owns **one** instance for it | Treat one `Module` as read-only after parsing. Current test/spec code may instantiate it more than once; that is not a concurrency model. |
+| `WASM::ModuleInstance` | Mutable: globals, memory/table references, GC region, trap-visible state | **Not internally synchronized.** One call at a time; guard it with an external mutex today. The target is instance-level synchronization, not one instance per thread. |
 | `ModuleInstantiator` / backend session | Mutable compiler state and code cache | **Not guaranteed reentrant.** Use one instantiator per host thread or serialize calls. Backend-specific build locks are not a general contract. |
 | `WASM::Callable` | Immutable function pointer, context, type identity after publication | May be read from multiple threads; the code and context must outlive every call. Do not mutate a `Callable` while calls are in flight. |
 | `WASM::VMContext` | Per-instance POD passed as arg0; contains index-space pointers, globals, `hostData` | Read by generated code without a lock. It must not be destroyed or re-pointed while a call using it is active. |
@@ -233,8 +285,7 @@ touches. It is **not** a statement that generated Wasm code is race-free.
 
 - per-host-thread trap and tail-call state;
 - Store/type/GC/string **management** locks, so concurrent creation/lookup of
-  Store entities and independent instance setup do not corrupt the Store's
-  containers;
+  Store entities and one-instance setup do not corrupt the Store's containers;
 - stable Store-owned entity addresses for the lifetime of the Store;
 - atomic, naturally aligned atomic accesses and alignment traps;
 - ordered shared `memory.grow`/`memory.size` and the data-segment barrier;
@@ -248,6 +299,8 @@ touches. It is **not** a statement that generated Wasm code is race-free.
   compilation;
 - that a `Module` or `ModuleInstance` may be mutated while another thread reads
   it;
+- that creating several instances of a module is a supported isolation or
+  thread-safety mechanism — the target is one instance per module;
 - that arbitrary concurrent module parsing is a verified immutable-snapshot
   operation for code that reads canonical type metadata (interning is
   serialized; the read path is not a formally snapshotted type store);
@@ -303,17 +356,17 @@ The **embedder** owns everything else:
 An export is just a `Callable`; `callCallable`/`callCallableWithResults` invoke
 its raw entry point. There is no hidden per-instance lock. Therefore:
 
-- **Same instance:** the embedder must externally serialize calls (or the module
-  must be explicitly G-C/G-D and the runtime must support agents; the latter is
-  future work). Two host threads calling the same export concurrently race on
-  globals, memory and GC state even if the function is “pure” in its own view.
-- **Distinct instances:** concurrent calls are allowed **provided** the
-  instances share no mutable Wasm entity except shared memory/tables/GC, whose
-  accesses follow G-C/G-D, and provided native imports/host state are safe.
+- **Same instance:** the only target model is the module's single instance. The
+  embedder must externally serialize calls today; a future engine may provide
+  per-instance synchronization. Two host threads calling the same export
+  concurrently race on globals, memory and GC state even if the function is
+  “pure” in its own view.
+- **Separate instances:** current API/tests may create them, but they are not
+  the intended concurrency architecture. Do not use instance multiplication as
+  a substitute for making the one instance's state safe.
 - **Exported function contract:** the Wasm type system has no `threadsafe`
   attribute. A module author must document which exports are reentrant,
-  which are serial-only, and what shared state they touch. The engine cannot
-  check this.
+  serial-only, and what shared state they touch. The engine cannot check this.
 - **Destruction:** no call may be in flight when its instance, module or
   `Callable` is destroyed.
 - **Trap state:** each host thread that catches traps needs its own
@@ -335,6 +388,52 @@ The host must use an atomic/locking protocol compatible with the Wasm side:
   but concurrent data accesses still need the module's atomic protocol.
 
 
+### 5.6 C++ mutexes, RAII, traps and tail calls
+
+For **host-only** state, yes: `std::mutex` and `std::lock_guard` are supported
+and are the expected primitive for protecting `hostData` and other native state.
+A native import may use `std::mutex` and `std::lock_guard` for **host-side**
+mutual exclusion; the engine does not ban them and nothing in the import ABI
+requires lock-free code. **Verdict:** they are the right host primitive, but
+only with the no-trap/no-cross-boundary discipline below; they are not safe as
+an RAII fence around an arbitrary Wasm call. The current trap path does not
+unwind C++:
+
+- `WASM::trap` uses `longjmp`. Destructors between the trap point and the armed
+  `TrapScope` do **not** run. A `std::lock_guard` whose scope contains a
+  potentially trapping Wasm call can therefore leave its `std::mutex` locked.
+- This covers a native import that calls `WASM::trap` itself, and a native
+  import that calls a Wasm export which later traps or calls back into native
+  code that traps.
+- If the embedder holds a mutex while calling a Wasm export, and a Wasm import
+  tries to take the same mutex, a non-recursive mutex deadlocks. A recursive
+  mutex only postpones the problem; it does not define reentrancy semantics.
+- **Tail calls** do not themselves `longjmp` in the current implementation: the
+  per-function driver returns normally through the trampoline. A trap in the
+  tail-called chain still has the same `longjmp` behaviour, and a guest lock or
+  host lock held across the tail call has no automatic release point.
+
+Practical rules under the current engine:
+
+1. Use `std::mutex`/`lock_guard` only around native-only critical sections that
+   cannot call back into Wasm and cannot trap. This is safe and supported.
+2. If a native import must call back into Wasm, use an explicit unlock before
+   the call, or a lock protocol that does not use RAII across the boundary; do
+   not rely on the destructor running after a trap.
+3. Do not hold a host mutex across an export call unless every import reachable
+   from it is proven not to take that mutex (and the trap leak is accepted or
+   prevented).
+4. Never hold a guest lock across a `return_call`; there is no caller frame left
+   to release it. This is a toolchain/module-author rule until the engine
+   defines automatic release/poisoning.
+5. Treat the trap/RAII interaction as an **open design item**, not a solved
+   guarantee. A future engine may replace `longjmp` with an unwind-safe trap
+   mechanism, add explicit lock ownership tracking, or require a host cleanup
+   protocol; until then, RAII is safe only where no trap can cross it.
+
+The same caveat applies to `std::unique_lock::unlock()` calls: they are safe
+only if control returns; `longjmp` bypasses the remainder of the native frame.
+
 ## 6. Intersections and non-implications
 
 The two domains overlap at the export/import boundaries and on any object that
@@ -348,13 +447,14 @@ most often mistaken for a claim about the other.
 | I3 | “The native import is thread-safe, so the Wasm side is thread-safe.” | The import may read/write shared Wasm memory non-atomically, call back into the same instance, or use `hostData` unsafely. |
 | I4 | “The module is marked `shared`, so it is safe to call concurrently.” | `shared` is a type/validation restriction; it does not prove data-race freedom, and the current runtime has no multi-agent scheduler or shared GC heap. |
 | I5 | “The test suite passes with atomics, so concurrent agents are tested.” | The current suite executes the single-agent forms. There is no second Wasm agent to expose a missing acquire/release edge, a waiter bug, or a GC/refcount race. |
-| I6 | “Two calls are independent because they use different host threads.” | If they use the same `ModuleInstance`, they share its mutable state. If they use different instances, they may still share a Store-owned memory/table imported by both, or a native import. |
+| I6 | “Two calls are independent because they use different host threads.” | They use the same single `ModuleInstance`, so they share its mutable state. Instance multiplicity is not the target isolation mechanism; serialization or instance-level safety is required. |
 | I7 | “Serialization by a host mutex makes non-atomic Wasm accesses safe.” | Only if **every** path into the data (host and every Wasm agent) honours the same protocol. A host mutex around one entry point does not stop another agent entering a different function. |
 | I8 | “The instance is alive because the host holds a `Module`.” | `Module` and `ModuleInstance` have independent lifetimes, and compiled cross-module calls bake `VMContext*` addresses into code. Lifetime is a separate precondition, not a thread-safety property. |
 | I9 | “The instance is published after `instantiate`, so its start/import call can be concurrent.” | Initialization, data segments and start run **before** publication. Calling while `instantiate`/start is still running is a race. |
 | I10 | “A trap is just an error return, so host locks survive it.” | `WASM::trap` uses `longjmp`; destructors between the trap and the armed `TrapScope` do not run. A lock held across a trapping native import can remain locked. |
 | I11 | “The native callback may throw C++ exceptions; the engine will handle them.” | There is no C++ exception unwind contract across a JIT frame. Catch inside the callback and return a value/trap. |
-| I12 | “An import called from Wasm is single-threaded because Wasm has no threads.” | Wasm agents are deferred, but the **host** may already call multiple instances from multiple threads; the same `Callable`/`hostData` can therefore be reached concurrently without any Wasm agent. |
+| I12 | “An import called from Wasm is single-threaded because Wasm has no threads.” | Wasm agents are deferred, but the **host** may call the one instance from several threads; the same `Callable`/`hostData` can therefore be reached concurrently without any Wasm agent. |
+| I13 | “Creating a new instance per thread is a valid workaround.” | The intended runtime is one instance per module, one `VMContext` per instance. Multiple instances are current test/API incidental, not a supported thread-safety architecture. |
 
 Two practical consequences:
 
@@ -374,11 +474,11 @@ the party has no obligation for that row.
 
 | Scenario | E | M | H |
 |---|---|---|---|
-| G-A: one agent per instance, ordinary non-atomic Wasm | Keep calls on one thread per instance; don't add hidden concurrency | Do not assume concurrent entry; document serial-only exports | Serialize or use one instance per thread |
-| G-B: separate instances in parallel | Keep Store/type management safe; immutable code | Avoid unshared state shared by design; state G-B contract | Use separate instances; make imports/hostData safe |
-| G-C: shared memory | Provide ordered atomics/alignment traps and size/grow ordering | Use atomic accesses/orderings for every shared location; no racing plain access | Use compatible atomics/locks for host accesses |
-| G-D: shared table/global/GC | Provide annotations/atomics; multi-mutator GC is **future** | State G-D only if the runtime supports it; use SET rules | Do not claim G-D until engine/agents exist |
-| H→W export | No implicit instance lock; preserve ABI/lifetime | Declare each export's reentrancy/state contract | Serialize same instance or use G-B/G-C/G-D explicitly |
+| G-A: one agent, serial calls on the single instance | No hidden concurrency; preserve one `ModuleInstance`/`VMContext` | Do not assume concurrent entry; document serial-only exports | Serialize calls to the instance |
+| G-B: single instance, host-serialized entry | No implicit instance safety today; target is instance-level synchronization | State the export/import contract for re-entry | Guard the single instance with an external mutex; do not create per-thread instances |
+| G-C: shared memory in the single instance | Provide ordered atomics/alignment traps and size/grow ordering | Use atomic accesses/orderings for every shared location; no racing plain access | Use compatible atomics/locks for host accesses |
+| G-D: shared table/global/GC in the single instance | Provide annotations/atomics; multi-mutator GC is **future** | State G-D only if the runtime supports it; use SET rules | Do not claim G-D until engine/agents exist |
+| H→W export | No implicit instance lock; preserve ABI/lifetime; target per-instance protocol | Declare each export's reentrancy/state contract | Serialize the single instance or wait for engine instance safety |
 | W→H import | Call the registered `fnPtr` with the correct context | Call only imports whose contract permits it | Make import reentrant/thread-safe; synchronize `hostData`; no C++ exceptions across the boundary |
 | Store/API management | Locks, stable IDs, per-thread trap/tail state | — | Treat `Module`/`ModuleInstance`/instantiator as not concurrently mutable |
 | Initialization | Apply data/elem/start before publication; barrier | Do not rely on concurrent initialization | Do not publish/call until `instantiate` returns |
@@ -393,6 +493,9 @@ its own host-side mechanisms. In particular, it must not:
 - advertise single-agent atomic tests as multi-agent race-freedom or
   acquire/release-edge tests;
 - claim `shared` annotations are a proof of data-race freedom;
+- present multiple instances of a module as the concurrency/isolation plan;
+- claim `std::lock_guard` survives a trap or that its destructor runs on the
+  `longjmp` path;
 - add a hidden per-instance or per-import global lock without making it part of
   the documented contract (and without considering the trap/longjmp path);
 - promise that a native import, `hostData`, `Callable` or `ModuleInstance` is
@@ -409,9 +512,10 @@ is undefined even if a particular run happens to work.
 
 | Property | Current status | Where |
 |---|---|---|
-| One agent per instance, serialized by the embedder | **Supported** (the only execution model) | `ModuleInstance`, `callCallable` |
-| Several host threads with **separate** instances | **Intended and tested**; keep imports/hostData and shared Store entities safe | `Test/main.cpp` host-thread test |
+| **One `ModuleInstance` per `Module`, one `VMContext` per instance** | **Target architecture**; no per-thread instances | `ModuleInstance`, `VMContext` |
+| One agent/call at a time on that instance | **Supported** (the only execution model) | `ModuleInstance`, `callCallable` |
 | Several host threads entering the **same** instance | **Not supported** | no instance lock |
+| Several host threads with **separate** instances | Current API/test incidental only; **not a target concurrency model** | `Test/main.cpp` host-thread test |
 | Concurrent `ModuleInstantiator`/backend compilation | **Not guaranteed**; use one per thread or serialize | backend session |
 | Concurrent `Module`/`ModuleInstance` mutation | **Not supported** | mutable fields |
 | Store entity creation/lookup and type interning | **Management-level locks**; not a guest-data lock | `WasmStore`, `TypeRegistry` |
@@ -423,11 +527,13 @@ is undefined even if a particular run happens to work.
 | Shared table/global/segment annotations | **Implemented/partial**; full shared-to-shared restriction checking remains | `SHARED_EVERYTHING_THREADS.md` SET-1 |
 | `global/table/struct/array.atomic.*` (working draft) | **Implemented single-agent**; reference-slot RC/shared GC is not complete | SET-3/SET-2 |
 | `wait`/`notify` | **Single-agent forms only**; no wake-up, timeout not slept | `THREADS.md` TH-2/TD9 |
+| Guest mutex/semaphore standard | **Absent**; only module-authored atomics over current primitives | §4.6 |
 | Multi-agent scheduler, shared GC heap, TLS, waitqueue, lifecycle | **Absent/deferred indefinitely** | `THREADS.md` TH-5; SET-4/5 |
 
-The host-thread test creates an independent session/instance per thread and
-does not test the same instance concurrently. Passing it is not evidence that
-same-instance calls are safe.
+The host-thread test exists to exercise the **current** API's independent
+session/instance setup; it deliberately does **not** test the target
+single-instance concurrency model. Passing it is not evidence that concurrent
+calls into the one instance are safe.
 
 ## 9. Minimum embedder protocol
 
@@ -436,10 +542,12 @@ The smallest protocol that is valid with the current engine is:
 1. **Bracket every call with a `TrapScope` on the calling thread.** Do not share
    the scope; do not assume C++ destructors run between `WASM::trap` and the
    scope.
-2. **Own one instance per thread, or guard an instance with an external mutex.**
-   Never let two calls into one instance overlap. Do not hold that mutex across
-   an import that can call back into the same instance unless it is recursive or
-   the callback is proven non-reentrant.
+2. **Treat the module's single instance as the unit of serialization.** Guard
+   it with an external mutex (or permit only one host thread) today. Do not
+   create per-thread instances as a design; that is not the target model. The
+   long-term requirement is an engine/instance-level concurrency protocol.
+   Do not hold the external mutex across an import that can call back into the
+   same instance unless it is recursive or the callback is proven non-reentrant.
 3. **Use one `ModuleInstantiator`/backend session per thread**, or serialize
    compilation. Do not compile into the same context from two threads.
 4. **Keep modules, instances, callables, contexts and result buffers alive**
@@ -447,7 +555,9 @@ The smallest protocol that is valid with the current engine is:
    addresses are baked into code.
 5. **Make each native import thread-safe if it can be reached concurrently**;
    synchronize `hostData`; catch C++ exceptions inside the import; return a
-   Wasm trap instead of throwing across the JIT frame.
+   Wasm trap instead of throwing across the JIT frame. Use `std::mutex`/
+   `lock_guard` for host-only state only, and see §5.6 before crossing a
+   trapping/tail-calling Wasm call with a lock held.
 6. **State the guest model for each module** (G-A/G-B/G-C/G-D). Use G-C/G-D
    only when the whole data-sharing protocol — Wasm and host — uses compatible
    atomics/locks. Do not infer it from `shared` alone.
@@ -457,9 +567,10 @@ The smallest protocol that is valid with the current engine is:
 8. **Do not publish an instance from another thread before `instantiate`
    returns**, and do not destroy objects while calls are in flight.
 
-If an embedder needs concurrent calls into one instance, the current engine
-cannot provide that contract. The correct options are: add host-side
-serialization, use separate instances, or wait for the multi-agent runtime.
+If an embedder needs concurrent calls into the single instance, the current
+engine cannot provide that contract. The correct options are: add host-side
+serialization, or wait for the engine's per-instance concurrency/agent
+mechanism. Creating more instances is not the intended workaround.
 
 
 ## 10. Future multi-agent contract (non-normative)
@@ -468,13 +579,22 @@ True multi-agent execution is **deferred indefinitely but not ruled out**
 (`THREADS.md` TH-5). The following is the shape any future implementation must
 preserve; it is not a current guarantee:
 
+- The target remains **one `ModuleInstance` per `Module`** and one `VMContext`
+  per instance. Agents must not be modelled as per-thread copies of the
+  instance; per-agent stack/trap/tail state lives outside the instance state.
+- An instance-level concurrency protocol (engine lock, per-agent executor, or a
+  documented guest/host protocol) must be designed; “make another instance” is
+  not an escape hatch. Candidate directions are a per-instance exclusive lock
+  (simple, no guest parallelism), an engine-managed agent scheduler with
+  per-agent stacks over the one instance, or module/toolchain-managed guest
+  locks over shared state; none is chosen or implemented here.
 - Each agent has its own evaluation stack, trap target and tail-call state;
   these must not live in process-global mutable variables. The current
   host-thread-local state is the first step.
 - A `VMContext` remains the native ABI's arg0, but an agent's current context
   must not be recovered from a process-global “current instance” slot.
 - The Store remains the shared ownership boundary. Shared memory/table/GC
-  objects need a multi-mutator protocol; private memories remain single-owner.
+  objects need a multi-mutator protocol; unshared memories remain single-owner.
 - The GC must either gain a shared-heap/multi-mutator collector or reject a
   shared-GC module; the current RC heap and reference-slot atomics are not a
   cross-agent collector.
@@ -485,6 +605,53 @@ preserve; it is not a current guarantee:
   documenting it as part of the contract.
 - An export API for agents needs an explicit concurrency mode; “a wasm function
   pointer” is not a thread-safe handle by itself.
+- Guest locks/semaphores (§4.6), host `std::mutex`/RAII (§5.6), and the trap
+  path (§10.1) are **open design items**, not established semantics.
+
+### 10.1 Traps, lock ownership, cancellation, and tail calls
+
+The current trap mechanism is a per-host-thread `longjmp` to an armed
+`TrapScope`. That model does not yet answer the multi-agent questions:
+
+- **Per-agent trap isolation.** A trap in one agent must unwind only that
+  agent's stack and must not disturb another agent's trap target, operand stack
+  or tail-call state. Today `TrapScope`/`trapState()` are per host thread;
+  agent-aware execution needs per-agent state even if several agents share a
+  host thread.
+- **C++ unwinding.** `longjmp` skips destructors inside native imports and
+  host call frames. `std::lock_guard` therefore cannot be relied on across a
+  potentially trapping Wasm/native call (§5.6). A future design must choose
+  between a genuinely unwind-safe trap (for example, exceptions with a
+  documented ABI and unwind tables), explicit cleanup before every trap-capable
+  call, or an engine-owned lock registry that can release/poison locks on trap.
+- **Guest lock ownership.** A Wasm trap is not a C++ exception and does not run
+  a `finally`. If an agent traps while holding a guest mutex, the lock stays
+  held unless the module can prevent/convert the escaping trap into a cleanup
+  path, or the engine records and releases/poisons it. There is no current
+  ownership tracking.
+- **Host lock ownership.** A host mutex held by a native import that calls
+  `WASM::trap`, or by a host frame around a trapping export, can remain locked
+  after the longjmp. A lock left held by a dead/trapped agent is a deadlock for
+  the surviving agents.
+- **Tail calls.** The trampoline returns normally, but a trap in the
+  tail-called chain still jumps out without C++ cleanup. A guest lock must not
+  be held across `return_call`; a host lock must not be held across a call that
+  can tail-call into a trap. Penalizing or forbidding tail calls inside critical
+  sections is a toolchain/module-author rule until the engine defines
+  otherwise.
+- **Cancellation/agent teardown.** Killing an agent (rather than letting a trap
+  propagate) needs an explicit policy for locks, waiters, GC references and
+  partially executed critical sections. “Trap equals return” is not enough.
+- **Instance state after a trap.** Is the single instance reusable after a trap
+  in one agent, or must it be poisoned/reinitialized? A trap that leaves guest
+  data, locks or a tail-call chain half-updated needs an explicit state machine;
+  the current engine has no such policy for a concurrent instance.
+
+This is an intentionally open design section. The engine must not silently
+promise unwind/cleanup semantics it does not implement. Any future agent
+implementation should define trap ownership, cleanup and lock-poisoning before
+advertising G-C/G-D safety.
+
 
 Until those points are implemented, the only valid guest model for shared
 state remains the documented single-agent forms. The tests that cover atomics
@@ -502,7 +669,9 @@ multi-agent race freedom.
   [`proposals/ACQUIRE_RELEASE_ATOMICS.md`](proposals/ACQUIRE_RELEASE_ATOMICS.md)
   (orderings and `pause`),
   [`proposals/GC.md`](proposals/GC.md) (reference counting and the single
-  mutator), [`TESTING.md`](TESTING.md) (the host-thread test and how to run it).
+  mutator), [`proposals/TAILCALLS.md`](proposals/TAILCALLS.md) (trampoline and
+  per-function drivers), [`TESTING.md`](TESTING.md) (the host-thread test and
+  how to run it).
 - Sources:
   `WasmBase/WasmStore.*` (Store locks and stable entities),
   `WasmBase/WasmTypeRegistry.*` (intern serialization),

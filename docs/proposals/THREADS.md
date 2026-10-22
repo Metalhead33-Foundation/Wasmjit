@@ -206,7 +206,9 @@ engine must do", not "what 3.0 requires".
 - Host-side concurrency hardening (SET-2, done without wasm agents): the Store's
   containers are mutex-guarded, type interning is serialized, and the GC heap and
   string store take recursive locks. A single instance is still not concurrently
-  callable — that is the deferred agent work.
+  callable — that is the deferred agent work. The target runtime is one
+  `ModuleInstance` per `Module` (one `VMContext`), so future concurrency must make
+  that single instance safe rather than multiplying instances.
 - There is no cross-agent waiter table, so `wait` cannot be woken (`notify`
   returns 0) and the timeout is not slept (`TD4`).
 
@@ -259,7 +261,7 @@ they are recorded here:
 | ~~T6~~ | ~~**No maximum requirement.**~~ **Done:** the validator's `checkLimits` rejects a shared memory without a maximum. | `WasmValidator.cpp` (`checkLimits`) | Closed |
 | ~~T7~~ | ~~**`memory.size`/`grow` ordering is not published.**~~ **Done (TH-3):** `Store::growMemory` issues a seq-cst release fence after committing pages, and generated `memory.size` calls `WASM::wasm_memory_size`, which performs an acquire load for shared memories (and a plain load for private ones). | `WasmMemory.cpp`, `WasmStore.cpp`, `LibjitOpcodeDispatcher.cpp` | Closed |
 | ~~T8~~ | ~~**No data-segment init barrier semantics.**~~ **Done (TH-3):** `applyActiveSegments` issues a seq-cst fence after the active-data loop, before the instance is published or its start function runs. | `applyActiveSegments` | Closed |
-| T9 | **No agent API / thread pool — deferred indefinitely, not ruled out (`TD9`).** There is no way to run two instances concurrently, which is also what makes the current single-threaded stance safe. | no such API in `ModuleInstance`/`Store`; §3 project decision | Deferred by decision |
+| T9 | **No agent API / thread pool — deferred indefinitely, not ruled out (`TD9`).** There is no way to run several agents concurrently on the single module instance, which is also what makes the current single-threaded stance safe. | no such API in `ModuleInstance`/`Store`; §3 project decision | Deferred by decision |
 | ~~T10~~ | ~~**No test coverage is wired in.**~~ **Done (TH-1/TH-4):** `proposals/threads/atomic.wast` is listed explicitly in `Test/Test.pro`, converts at build time, runs as `spec: atomic` (**249 passed / 0 failed / 48 skipped** — the skips are `assert_invalid` module-validation cases) and is curated in `Test/wast_supported.txt`. | `Test/Test.pro`, `Test/wast_supported.txt` | Closed |
 | ~~T11~~ | ~~**The tail-call trampoline's pending state is process-global.**~~ **Done (TH-3/SET-2):** `g_tailCallState` is `thread_local`, and generated code reaches it through `currentTailCallState()` so the address is resolved on the executing host thread. | `WASM::g_tailCallState` (`WasmBase/WasmValue.hpp`); §4.5 | Closed for host threads; agent migration is still a TH-5 design question |
 
@@ -326,13 +328,17 @@ Ordered by value; `TH-n` is independent of the other documents' milestones.
 | **TH-2 — Wait/notify** | ✅ Done in the single-agent form: `notify` returns 0; `wait32/64` returns 1 on a value mismatch and 2 otherwise without sleeping (`TD4`). The unshared-memory trap is a validation concern (`T5`, no front end). | T3 | Done: the script's wait/notify assertions pass (mismatch → 1, timeout → 2, notify → 0). |
 | **TH-3 — Shared-memory hygiene** | ✅ `SharedLinearMemory` never moves its base; import matching compares shared-ness; shared memories/tables must declare a maximum; `memory.grow` publishes with a seq-cst fence; `memory.size` acquire-loads shared metadata; active data-segment initialisation ends with a seq-cst barrier; the tail-call state is host-thread-local. | T6, T7, T8, T11 | Done: shared memory without a max is rejected; `memory.grow`/`size` are ordered; host threads do not share tail-call state. |
 | **TH-4 — Threads test coverage** | ✅ Done: `proposals/threads/atomic.wast` is wired into `Test/Test.pro` (single-agent atomic semantics, including the 28 misaligned `assert_trap`s) and curated. | T10 | Done: `spec: atomic` runs in the default suite (`Test/wast_supported.txt`). |
-| **TH-5 — Optional: real agents** | ✗ **Deferred indefinitely (not ruled out):** an embedder API to run an instance on another OS thread, with a real waiter table. Only if an embedder needs it. Until then the engine is explicitly single-agent (`TD9`). | T9 | Two agents produce the same results as the sequentially-consistent model. |
+| **TH-5 — Optional: real agents** | ✗ **Deferred indefinitely (not ruled out):** an embedder API to run agents on the one module instance across OS threads, with a real waiter table and per-agent trap/lock ownership. Only if an embedder needs it. Until then the engine is explicitly single-agent (`TD9`). | T9 | Two agents produce the same results as the sequentially-consistent model. |
 | **TH-6 — Component async interface** | ✅ `WasmComponentAsync.hpp` defines tasks, waitables, stream/future endpoints and the `ComponentExecutor` seam; `SingleAgentExecutor` and `ComponentRuntime` execute the synchronous subset. | T9/T11 (interfaces), TH-5 (backend) | All single-agent async tests pass; replacing the executor is the only change a multi-agent backend needs. |
 
 Guardrails: run `./WasmJit '~[spec]'` after each step; keep the single-agent
 default so existing behaviour is unchanged. The single-agent choice is
 *documented and deliberate* (`TD9`) — do not add a partial thread model without
-first making the tail-call trampoline per-agent (`T11`).
+first making the tail-call trampoline per-agent (`T11`). TH-5 is not just a
+scheduler: the target is **one `ModuleInstance` per `Module`**, so it must also
+settle per-agent trap/lock ownership and a guest lock/waitqueue standard before
+claiming concurrent G-C/G-D safety — see
+[`../THREADSAFETY.md`](../THREADSAFETY.md) §4.6, §5.6 and §10.1.
 
 ## 8. Indicative test survey
 

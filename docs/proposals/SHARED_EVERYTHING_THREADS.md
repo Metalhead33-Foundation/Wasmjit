@@ -124,8 +124,8 @@ Guardrail: a `shared` annotation is a static safety claim, not a runtime flag.
 This revision accepts the annotations and executes the corresponding atomics in
 the documented single-agent model; it does **not** claim cross-agent safety for
 the GC heap, waitqueues or a migrating instance. Until `THREADS.md` TH-5 lands,
-the safe boundary is host-side concurrency (separate instances/Store operations)
-and one executing instance per thread.
+the safe boundary is host-side serialization of the module's **single instance**
+(and Store operations), not per-thread instances.
 
 ## 7. Plan
 
