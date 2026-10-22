@@ -99,9 +99,9 @@ Tail Call is a **Phase 5** proposal, integrated into WebAssembly **3.0**.
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| TC1 | ~~Shallow `return_call` / `return_call_indirect` segfault~~ **Not a codegen bug.** Shallow results are correct; the SIGSEGV is stack exhaustion on deep recursion (TC3). | `spec: return_call` 35/0/16 and `spec: return_call_indirect` 44/0/39 on a 1 GB stack | Resolved (diagnosis) |
+| TC1 | ~~Shallow `return_call` / `return_call_indirect` segfault~~ **Not a codegen bug.** Shallow results are correct; the SIGSEGV is stack exhaustion on deep recursion (TC3). | default `spec: return_call` 37/0/14 and `spec: return_call_indirect` 53/0/30; strict 51/0/0 and 72/0/11 | Resolved (diagnosis) |
 | TC2 | **`return_call_ref` aborted at instantiation** (signal 6). | Fixed in Phase A (see §4); `tail_call.wat` `const_via_ref` | Resolved |
-| TC3 | **Tail-call space guarantee met for identical-signature chains** (C2 native self-calls + the trampoline for mutual/indirect). A tail call whose callee signature differs from the caller's still uses `call` + `return`. | `spec: return_call` 35/0/16, `return_call_indirect` 44/0/39, `return_call_ref` 36/0/17 on the default stack | Resolved (uniform signatures) |
+| TC3 | **Tail-call space guarantee met for identical-signature chains** (C2 native self-calls + the trampoline for mutual/indirect). A tail call whose callee signature differs from the caller's still uses `call` + `return`. | default `return_call` 37/0/14, `return_call_indirect` 53/0/30, `return_call_ref` 36/0/17; strict `return_call` 51/0/0, `return_call_ref` 53/0/0 | Resolved (uniform signatures) |
 | TC4 | **`assert_exhaustion` approximated** — run in a nested child, abnormal exit = exhaustion. `assert_trap` is still skipped. | `Test/WastScript.cpp`; `spec: skip-stack-guard-page` 11/0 | Resolved (approximation) |
 | TC5 | **Manual test** now exists, including a deep self-recursive case. | `Test/wasm_wat/tail_call.wat` + `Test/main.cpp` | Resolved |
 
@@ -144,8 +144,8 @@ caller's driver.
 
 | Script | Result | Reading |
 |---|---|---|
-| `return_call` | passed=35 failed=0 skipped=16 | self (`count`) via C2, mutual (`even`/`odd`) via the trampoline |
-| `return_call_indirect` | passed=44 failed=0 skipped=39 | constant-stack via the trampoline |
+| `return_call` | passed=37 failed=0 skipped=14 | self (`count`) via C2, mutual (`even`/`odd`) via the trampoline |
+| `return_call_indirect` | passed=53 failed=0 skipped=30 | constant-stack via the trampoline |
 | `return_call_ref` | passed=36 failed=0 skipped=17 | constant-stack via the trampoline (Phase A + TC-2) |
 
 All three are now in `Test/wast_supported.txt` and part of the default run.

@@ -416,6 +416,12 @@ enum class MiscOpcode : uint32_t {
 	I64Sub128           = 20,  // [i64 i64 i64 i64] -> [i64 i64]
 	I64MulWideS         = 21,  // [i64 i64] -> [i64 i64]
 	I64MulWideU         = 22,  // [i64 i64] -> [i64 i64]
+
+	// Rounding-mode-control variants occupy 0x80–0xBB (NUM-2). They are
+	// dispatched through one generic hook so the 60 entries do not need 60
+	// virtual declarations.
+	RoundingFirst       = 0x80,
+	RoundingLast        = 0xBB
 };
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, MiscOpcode right) {
 	return left.writeLEB128_enum(right);

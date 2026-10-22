@@ -1632,6 +1632,41 @@ void Validator::dispatchMemoryFill(MemIdx arg)
 	popExpect(address);            // dst
 }
 
+void Validator::dispatchRoundingVariant(uint32_t sub)
+{
+	if (sub < 0x80 || sub > 0xBB)
+		fail("invalid rounding-mode-control sub-opcode");
+	const uint32_t rel = (sub - 0x80) % 0x14;
+	if (rel < 10) {
+		const ValueTypeCode type = rel < 5 ? ValueTypeCode::F32 : ValueTypeCode::F64;
+		if (rel == 0 || rel == 5)
+			popExpect(type);
+		else {
+			popExpect(type);
+			popExpect(type);
+		}
+		pushValue(ValueType{type, -1});
+		return;
+	}
+	if (rel < 15) {
+		// f32 conversion: i32_s, i32_u, i64_s, i64_u, f64.
+		switch (rel) {
+		case 10: case 11: popExpect(ValueTypeCode::I32); break;
+		case 12: case 13: popExpect(ValueTypeCode::I64); break;
+		default: popExpect(ValueTypeCode::F64); break;
+		}
+		pushValue(ValueType{ValueTypeCode::F32, -1});
+		return;
+	}
+	// f64 conversion: i32_s, i32_u, i64_s, i64_u, f32.
+	switch (rel) {
+	case 15: case 16: popExpect(ValueTypeCode::I32); break;
+	case 17: case 18: popExpect(ValueTypeCode::I64); break;
+	default: popExpect(ValueTypeCode::F32); break;
+	}
+	pushValue(ValueType{ValueTypeCode::F64, -1});
+}
+
 void Validator::dispatchMemoryDiscard(MemIdx arg)
 {
 	requireMemoryIndex(arg);
@@ -2252,6 +2287,25 @@ WJ_SIMD_BIN(F32x4RelaxedMax)
 WJ_SIMD_BIN(F64x2RelaxedMin)
 WJ_SIMD_BIN(F64x2RelaxedMax)
 WJ_SIMD_BIN(I16x8RelaxedQ15MulRS)
+WJ_SIMD_BIN(I16x8RelaxedDotI8x16I7x16S)
+
+#define WJ_SIMD_TERNARY(name) \
+	void Validator::dispatch##name() { \
+		popExpect(ValueTypeCode::V128); \
+		popExpect(ValueTypeCode::V128); \
+		popExpect(ValueTypeCode::V128); \
+		pushValue(ValueType{ValueTypeCode::V128, -1}); \
+	}
+WJ_SIMD_TERNARY(F32x4RelaxedMadd)
+WJ_SIMD_TERNARY(F32x4RelaxedNmadd)
+WJ_SIMD_TERNARY(F64x2RelaxedMadd)
+WJ_SIMD_TERNARY(F64x2RelaxedNmadd)
+WJ_SIMD_TERNARY(I8x16RelaxedLaneselect)
+WJ_SIMD_TERNARY(I16x8RelaxedLaneselect)
+WJ_SIMD_TERNARY(I32x4RelaxedLaneselect)
+WJ_SIMD_TERNARY(I64x2RelaxedLaneselect)
+WJ_SIMD_TERNARY(I32x4RelaxedDotI8x16I7x16AddS)
+#undef WJ_SIMD_TERNARY
 
 #undef WJ_SIMD_BIN
 #undef WJ_SIMD_UN

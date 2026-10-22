@@ -22,20 +22,19 @@ stack, and throws `std::runtime_error` on the first failed rule.
 | Numeric | i32/i64/f32/f64 unary, binary, comparison, conversion, sign-extension and saturating forms, with exact operand/result types |
 | Memory | declared index type (`i32`/`i64`), alignment ≤ natural, 32-bit offset range, loads/stores, `memory.size/grow/init/copy/fill` |
 | Table | table64 index type, `get/set/grow/size/fill/copy/init`; table initialiser typing; `table.init` element-segment/table type match |
-| SIMD | 194 arithmetic/comparison/conversion shapes taken from `wasm_simd_ops.inc`, plus const/bitwise/splat/bitmask, loads/stores, lanes/shuffle/swizzle |
+| SIMD | 194 arithmetic/comparison/conversion shapes taken from `wasm_simd_ops.inc`, plus const/bitwise/splat/bitmask, loads/stores, lanes/shuffle/swizzle, and the relaxed ternary forms (madd/nmadd, laneselect, dot-add) |
 | Atomics | loads/stores/RMW/cmpxchg/wait/notify with access-size alignment and operand types |
 | References | `ref.null`/`ref.func`/`ref.is_null`/`ref.eq`/`ref.as_non_null`; `ref.func x` requires `x` to be declared outside function bodies/start; `call_ref $t` requires `(ref null $t)`; `ref.test`/`ref.cast` (both nullability forms) require the operand to be a reference in the target's hierarchy; full subtyping (nullability, func/extern/exn/any hierarchies, concrete-type subtyping and canonical structural type equivalence); untyped `select` is numeric/vector only; definite initialization of non-defaultable locals |
 
 ## Conservative policy
 
-An opcode without a rule (parts of the GC aggregate/array surface and the
-relaxed ternary SIMD forms) sets `typeTainted`: the rest of the body is still
-scanned for immediate checks, but the operand stack is no longer trusted and no
-type error is reported there. A `try_table` **with catches** is tainted after
-its catch labels are checked, because a catch injects its payload into an outer
-label, which the linear stack does not model. A validator must never reject a
-module it could not check — the cost is coverage, measured below, not
-correctness.
+An opcode without a rule (parts of the GC aggregate/array surface) sets
+`typeTainted`: the rest of the body is still scanned for immediate checks, but
+the operand stack is no longer trusted and no type error is reported there. A
+`try_table` **with catches** is tainted after its catch labels are checked,
+because a catch injects its payload into an outer label, which the linear stack
+does not model. A validator must never reject a module it could not check — the
+cost is coverage, measured below, not correctness.
 
 ## Measured coverage
 
@@ -77,8 +76,8 @@ ones), and the bounds check subtracts instead of adding.
 
 ## Next
 
-- Type the remaining GC aggregate/array and relaxed ternary SIMD forms (the
-  remaining `typeTainted` paths).
+- Type the remaining GC aggregate/array forms (the remaining `typeTainted`
+  paths).
 - Adopt and test the relaxed dead-code algorithm described in
   [`proposals/PARSER_PROPOSALS.md`](proposals/PARSER_PROPOSALS.md); the current
   unreachable stack is close but not claimed as the proposal's algorithm.

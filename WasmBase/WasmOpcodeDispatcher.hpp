@@ -307,6 +307,9 @@ protected:
 	virtual void dispatchMemoryCopy(MemIdx arg1, MemIdx arg2) { onUnhandledOpcode("dispatchMemoryCopy"); }
 	virtual void dispatchMemoryFill(MemIdx arg) { onUnhandledOpcode("dispatchMemoryFill"); }
 	virtual void dispatchMemoryDiscard(MemIdx arg) { onUnhandledOpcode("dispatchMemoryDiscard"); }
+	// One hook for the 0xFC 0x80–0xBB rounding-mode-control variants
+	// (docs/proposals/NUMERIC_PROPOSALS.md NUM-2).
+	virtual void dispatchRoundingVariant(uint32_t sub) { onUnhandledOpcode("dispatchRoundingVariant"); }
 	virtual void dispatchI64Add128() { onUnhandledOpcode("dispatchI64Add128"); }
 	virtual void dispatchI64Sub128() { onUnhandledOpcode("dispatchI64Sub128"); }
 	virtual void dispatchI64MulWideS() { onUnhandledOpcode("dispatchI64MulWideS"); }

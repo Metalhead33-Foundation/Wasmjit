@@ -1214,6 +1214,10 @@ void OpcodeDispatcher::dispatchMemoryDiscard(WASM::MemIdx arg)
 {
 	*stream << '(' << "MemoryDiscard" << ' ' << '(' << describe(WASM::NameKind::Memory, arg) << ')' << std::endl;
 }
+void OpcodeDispatcher::dispatchRoundingVariant(uint32_t sub)
+{
+	*stream << '(' << "RoundingVariant" << ' ' << sub << ')' << std::endl;
+}
 void OpcodeDispatcher::dispatchI64Add128()
 {
 	*stream << '(' << "I64Add128" << ')' << std::endl;

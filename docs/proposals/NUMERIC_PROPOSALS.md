@@ -1,8 +1,8 @@
 # Wide Arithmetic, Half Precision, and Rounding-Mode Control — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 2 — Wide Arithmetic is
-implemented; Half Precision and Rounding-Mode Control remain unimplemented.
-There is still no `f16` lane type and no rounding-variant opcode.)
+Status: design note / implementation reference (revision 3 — Wide Arithmetic
+and Rounding-Mode Control are implemented; Half Precision remains
+unimplemented. There is still no `f16` lane type.)
 
 Audience: anyone touching `WasmType`, `WasmOpcode`, `WasmOpcodeDispatcher`,
 `LibjitOpcodeDispatcher`, SIMD lowering, or the numeric test surface.
@@ -108,21 +108,26 @@ there is no process-global rounding state to save or restore.
 - **No new rounding for integer truncation.** The proposal leaves the
   `i32/i64.trunc_f*` rounding variants out for now.
 - **No requirement to implement any of these proposals.** An engine may reject
-  an unmodelled opcode at load; that remains the behaviour for FP16 and the
-  rounding variants.
+  an unmodelled opcode at load; that remains the behaviour for FP16.
 
 ## 4. What we have implemented today
 
-- `WasmBase/WasmOpcode.hpp` defines `MiscOpcode` (`0xFC`) sub-opcodes `0`–`22`:
-  the `trunc_sat` family, bulk memory/table operations, `memory.discard` (18)
-  and Wide Arithmetic (`19`–`22`). The `0x80`–`0xBB` rounding variants remain
-  absent and are rejected by the misc dispatcher's default.
+- `WasmBase/WasmOpcode.hpp` defines `MiscOpcode` (`0xFC`) sub-opcodes `0`–`22`
+  plus the `0x80`–`0xBB` rounding variants; the latter are dispatched through
+  the generic `dispatchRoundingVariant(uint32_t)` hook. The `0xFC 0x30/0x31`
+  FP16 memory opcodes remain unassigned.
 - **Wide Arithmetic is implemented.** `i64.add128`/`i64.sub128` use inline
   carry/borrow (unsigned comparisons on `jit_type_ulong`); `i64.mul_wide_s/u`
   call a portable 32-bit-limb 64×64→128 helper (no `__int128`). Both results are
   pushed low then high, so the existing multi-value ABI marshals them. The
   validator types the four instructions and the manual fixture covers carry,
   borrow and signed/unsigned multiplication edges.
+- **Rounding-Mode Control is implemented.** All 60 `0xFC 0x80`–`0xBB`
+  variants decode, validate and lower. The lowering computes the exact
+  `long double` result and then rounds it to the next/previous representable
+  f32/f64 in the requested direction (`roundToFloat`/`roundToDouble`), never by
+  changing the host FP environment. The explicit hook means the decoder,
+  validator, JIT and stub backend all share one range check.
 - There is no `ValueTypeCode::F16` and no `f16` lane shape. `ValueTypeCode`
   covers `i32`, `i64`, `f32`, `f64`, `v128` and the reference types; the SIMD
   type translation handles `v128` as a 16-byte aggregate.
@@ -134,7 +139,10 @@ there is no process-global rounding state to save or restore.
   existing ABI once the opcodes are decoded.
 - `Test/wasm_wat/wide_arithmetic.wat` plus
   `wide arithmetic: add128, sub128 and mul_wide match reference values` covers
-  the Wide Arithmetic edges. No fixture exercises FP16 or the rounding variants.
+  the Wide Arithmetic edges. `rounding variants: ceil/floor/trunc are selected
+  by the sub-opcode` builds the binary opcodes directly (no proposal spelling
+  in `wasm-tools` yet) and checks f32 arithmetic plus i32→f32 conversion. No
+  fixture exercises FP16.
 
 
 ## 5. Gaps
@@ -145,15 +153,15 @@ there is no process-global rounding state to save or restore.
 | ~~NUM2~~ | ~~**No Wide Arithmetic lowering.**~~ **Done (NUM-1):** inline carry/borrow for add/sub and a portable 64×64→128 multiply helper, with both results pushed low then high. | `LibJit/LibjitOpcodeDispatcher.cpp` | Closed |
 | NUM3 | **No `f16` type or lane shape.** `ValueTypeCode` has no FP16 code, and `translateValueType` has no `f16` case. | `WasmBase/WasmType.hpp`; `LibJit/LibJitTypeTranslation.cpp`. | Medium |
 | NUM4 | **No FP16 memory or SIMD opcodes.** `0xFC 0x30/0x31` and `0xFD 0x120`–`0x14F` are unassigned. | `WasmOpcode.hpp` (`MiscOpcode`, `SimdOpcode`); SIMD dispatcher. | Medium |
-| NUM5 | **No rounding-variant opcodes.** `0xFC 0x80`–`0xBB` are unassigned; only nearest-even forms exist. | `WasmOpcode.hpp` (`MiscOpcode` 0–17). | Medium |
-| NUM6 | **No rounding helpers or reference results.** Lowering a `_ceil`/`_floor`/`_trunc` opcode needs the proposal's exact zero-sign, NaN and overflow rules, not the host's ambient rounding mode. | `LibjitOpcodeDispatcher.cpp` numeric helpers; `SIMD_LIBJIT.md` helper policy. | Medium |
-| NUM7 | **Coverage is partial.** `wide_arithmetic.wat` covers Add/Sub/MulWide, but the suite still has no FP16 or rounding-variant scripts. | `Test/wasm_wat/wide_arithmetic.wat`; `Test/wast_supported.txt` | Low |
+| ~~NUM5~~ | ~~**No rounding-variant opcodes.**~~ **Done (NUM-2):** `0xFC 0x80`–`0xBB` decode through `dispatchRoundingVariant`, with the proposal's ceil/floor/trunc group layout. | `WasmOpcode.hpp` (`MiscOpcode` range); `WasmOpcodeDispatcher.cpp` | Closed |
+| ~~NUM6~~ | ~~**No rounding helpers or reference results.**~~ **Done (NUM-2):** `roundToFloat`/`roundToDouble` choose the adjacent representable f32/f64 in the requested direction from the exact `long double` result; no host FP-mode change. | `LibjitOpcodeDispatcher.cpp`; the hand-built rounding test | Closed |
+| NUM7 | **Coverage is partial.** `wide_arithmetic.wat` covers Add/Sub/MulWide, and the hand-built rounding test covers f32 arithmetic plus i32→f32 conversion; FP16 has no fixture because the type/opcodes are still absent. | `Test/wasm_wat/wide_arithmetic.wat`; `Test/main.cpp` rounding test | Low |
 
 ## 6. Where we can and should play fast and loose
 
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
-| NUMD1 | **Implement Wide Arithmetic now; defer FP16 and rounding until a toolchain needs them.** The other two are rejected at load meanwhile. | §3: none is a 3.0 requirement; an unmodelled opcode may be rejected. | No speculative type or ABI churn for the two larger proposals. |
+| NUMD1 | **Implement Wide Arithmetic and the explicit rounding variants now; defer FP16 until its lane/result surface is needed.** FP16 is still rejected at load. | §3: none is a 3.0 requirement; an unmodelled opcode may be rejected. | No speculative type or ABI churn for the largest proposal while the two smaller ones are exercisable. |
 | NUMD2 | **Lower Wide Arithmetic with helper calls first**, then add native carry/`mul_wide` fast paths behind the same semantics. | §3: lowering and performance are free; the two-result values are exact. | A small first implementation that works on every backend. |
 | NUMD3 | **Model `f16x8` as a `v128` lane shape with helper-backed conversions and arithmetic.** | §3: no first-class `f16` value or hardware path is required. | Reuses the existing SIMD frame and `v128` representation. |
 | NUMD4 | **Implement rounding as explicit opcode variants, never by changing the host FP environment.** | §3: the proposal defines explicit instructions and no global mode. | Deterministic results and no save/restore state across calls. |
@@ -169,9 +177,9 @@ host's current rounding mode is a bug even if it looks correct on x86.
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **NUM-1 — Wide Arithmetic** | ✅ Added `0xFC 19`–`22`, two-result typing, inline carry/borrow and portable `mul_wide_s/u` helpers. | NUM1, NUM2 | Done: `wide_arithmetic.wat` + 27 assertions covering carry, borrow and signed/unsigned edges. |
-| **NUM-2 — Rounding variants** | ◑ Add the `0xFC 0x80`–`0xBB` decode table and the `_ceil`/`_floor`/`_trunc` helpers/reference results. | NUM5, NUM6 | Remaining: every variant returns the exact rounded value and the specified zero sign/NaN for a fixture covering each family. |
+| **NUM-2 — Rounding variants** | ✅ Added the `0xFC 0x80`–`0xBB` generic decode/validate/dispatch hook and direction-correct `roundToFloat`/`roundToDouble` helpers. | NUM5, NUM6 | Done: the hand-built test checks f32 ceil/floor/trunc of an unrepresentable sum and an i32→f32 conversion; nearest-even forms are untouched. |
 | **NUM-3 — FP16** | ◑ Add the `f16` lane shape, `f32.load_f16`/`store_f16`, and the `0xFD` FP16 dispatch table. | NUM3, NUM4 | Remaining: FP16 memory round-trips and a representative `f16x8` fixture. |
-| **NUM-4 — Tests** | ◑ Wide Arithmetic is covered; FP16 and rounding variants are not yet. | NUM7 | Partially done: `wide_arithmetic.wat` fails if the result order or width is wrong; the other two proposals still need fixtures. |
+| **NUM-4 — Tests** | ◑ Wide Arithmetic and rounding variants are covered; FP16 is not yet. | NUM7 | Partially done: `wide_arithmetic.wat` and the rounding test fail if result order, width or direction is wrong; FP16 still needs fixtures. |
 
 These milestones are independent; none is required for Wasm 3.0. `NUM-1` is the
 smallest and can land without touching `ValueTypeCode`; `NUM-3` is the largest
@@ -184,13 +192,14 @@ because it adds a new lane shape to type translation, `Value`, and SIMD lowering
 | Script / fixture | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
 | `wide_arithmetic` manual test | 27 assertions | 0 | 0 | `add128`/`sub128` carry/borrow and `mul_wide_s/u` signed/unsigned edges |
+| `rounding variants` manual test | 13 assertions | 0 | 0 | f32 add ceil/floor/trunc on an unrepresentable sum and i32→f32 conversion direction |
 | wide-arithmetic script | — | — | — | no script in the snapshot |
 | FP16 / half-precision | — | — | — | no script and no `f16` type |
-| rounding-mode-control | — | — | — | no script; `simd_f32x4_rounding` covers existing nearest-even SIMD, not the new variants |
-| `i32` / `i64` / `simd_*` | existing | existing | existing | nearest-even integer/FP behaviour only; not evidence for the other two proposals |
+| rounding-mode-control script | — | — | — | no upstream script in the snapshot; the manual binary test is the evidence |
+| `i32` / `i64` / `simd_*` | existing | existing | existing | nearest-even integer/FP behaviour only; not evidence for FP16 |
 
-Reading: Wide Arithmetic is now graded by the manual fixture; FP16 and the
-rounding variants still have nothing to grade.
+Reading: Wide Arithmetic and Rounding-Mode Control are graded by manual
+fixtures; FP16 still has nothing to grade.
 
 ## 9. References
 
@@ -207,6 +216,8 @@ rounding variants still have nothing to grade.
   (`MiscOpcode`, `SimdOpcode`), `WasmBase/WasmOpcodeDispatcher.cpp`,
   `WasmBase/WasmValidator.cpp` (wide-arithmetic typing),
   `LibJit/LibJitTypeTranslation.cpp`, `LibJit/LibjitOpcodeDispatcher.cpp`
-  (`dispatchI64Add128`/`Sub128`/`MulWideS`/`MulWideU`, `mulWideU64`/`mulWideS64`),
-  `Test/wasm_wat/wide_arithmetic.wat`.
+  (`dispatchI64Add128`/`Sub128`/`MulWideS`/`MulWideU`, `mulWideU64`/`mulWideS64`,
+  `dispatchRoundingVariant`, `roundToFloat`/`roundToDouble`),
+  `Test/wasm_wat/wide_arithmetic.wat`, and the hand-built rounding test in
+  `Test/main.cpp`.
 

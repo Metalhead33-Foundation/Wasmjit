@@ -264,6 +264,7 @@ private:
 	void dispatchMemoryCopy(MemIdx arg1, MemIdx arg2) override;
 	void dispatchMemoryFill(MemIdx arg) override;
 	void dispatchMemoryDiscard(MemIdx arg) override;
+	void dispatchRoundingVariant(uint32_t sub) override;
 	void dispatchI64Add128() override;
 	void dispatchI64Sub128() override;
 	void dispatchI64MulWideS() override;
@@ -625,6 +626,16 @@ private:
 	void dispatchF64x2RelaxedMin() override;
 	void dispatchF64x2RelaxedMax() override;
 	void dispatchI16x8RelaxedQ15MulRS() override;
+	void dispatchF32x4RelaxedMadd() override;
+	void dispatchF32x4RelaxedNmadd() override;
+	void dispatchF64x2RelaxedMadd() override;
+	void dispatchF64x2RelaxedNmadd() override;
+	void dispatchI8x16RelaxedLaneselect() override;
+	void dispatchI16x8RelaxedLaneselect() override;
+	void dispatchI32x4RelaxedLaneselect() override;
+	void dispatchI64x2RelaxedLaneselect() override;
+	void dispatchI16x8RelaxedDotI8x16I7x16S() override;
+	void dispatchI32x4RelaxedDotI8x16I7x16AddS() override;
 
 
 	// Atomic memory accesses (operand/result typing).

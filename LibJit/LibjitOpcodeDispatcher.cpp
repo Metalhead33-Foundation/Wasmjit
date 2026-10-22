@@ -969,6 +969,144 @@ static double wasm_f64_nearest_impl(double x)
 	return std::nearbyint(x);
 }
 
+// ── Rounding-mode-control (docs/proposals/NUMERIC_PROPOSALS.md NUM-2) ──────
+// The 0xFC 0x80–0xBB block repeats one 20-entry group three times: ceil,
+// floor and trunc. The first five entries of a group are f32 arithmetic, the
+// next five f64 arithmetic, then five f32 conversions and five f64
+// conversions. The helpers take the raw sub-opcode and do the rounding on the
+// exact (long double) intermediate rather than through the host FP mode.
+static uint32_t roundingMode(uint32_t sub) { return (sub - 0x80u) / 0x14u; }
+
+// Round an exact real result to the nearest representable f32/f64 in the
+// requested direction. `std::ceil` followed by a cast would double-round a
+// value such as 16777217 to 16777216.
+static float roundToFloat(long double v, uint32_t mode)
+{
+	if (std::isnan(static_cast<double>(v)))
+		return std::numeric_limits<float>::quiet_NaN();
+	float r = static_cast<float>(v);
+	if (std::isinf(r))
+		return r;
+	const long double back = static_cast<long double>(r);
+	switch (mode) {
+	case 0: if (back < v) r = std::nextafter(r, std::numeric_limits<float>::infinity()); break;
+	case 1: if (back > v) r = std::nextafter(r, -std::numeric_limits<float>::infinity()); break;
+	default:
+		if (v >= 0.0L) { if (back > v) r = std::nextafter(r, -std::numeric_limits<float>::infinity()); }
+		else { if (back < v) r = std::nextafter(r, std::numeric_limits<float>::infinity()); }
+		break;
+	}
+	return r;
+}
+
+static double roundToDouble(long double v, uint32_t mode)
+{
+	if (std::isnan(static_cast<double>(v)))
+		return std::numeric_limits<double>::quiet_NaN();
+	double r = static_cast<double>(v);
+	if (std::isinf(r))
+		return r;
+	const long double back = static_cast<long double>(r);
+	switch (mode) {
+	case 0: if (back < v) r = std::nextafter(r, std::numeric_limits<double>::infinity()); break;
+	case 1: if (back > v) r = std::nextafter(r, -std::numeric_limits<double>::infinity()); break;
+	default:
+		if (v >= 0.0L) { if (back > v) r = std::nextafter(r, -std::numeric_limits<double>::infinity()); }
+		else { if (back < v) r = std::nextafter(r, std::numeric_limits<double>::infinity()); }
+		break;
+	}
+	return r;
+}
+
+static float wasm_rounding_f32_unary(uint32_t sub, float a)
+{
+	const uint32_t rel = (sub - 0x80u) % 0x14u;
+	long double v = (rel == 0) ? std::sqrt(static_cast<long double>(a))
+							   : static_cast<long double>(a);
+	return roundToFloat(v, roundingMode(sub));
+}
+
+static float wasm_rounding_f32_binary(uint32_t sub, float a, float b)
+{
+	const uint32_t rel = (sub - 0x80u) % 0x14u;
+	long double x = static_cast<long double>(a);
+	long double y = static_cast<long double>(b);
+	long double v = x;
+	switch (rel) {
+	case 1: v = x + y; break;
+	case 2: v = x - y; break;
+	case 3: v = x * y; break;
+	case 4: v = x / y; break;
+	default: v = x; break;
+	}
+	return roundToFloat(v, roundingMode(sub));
+}
+
+static double wasm_rounding_f64_unary(uint32_t sub, double a)
+{
+	const uint32_t rel = (sub - 0x80u) % 0x14u;
+	long double v = (rel == 5) ? std::sqrt(static_cast<long double>(a))
+							   : static_cast<long double>(a);
+	return roundToDouble(v, roundingMode(sub));
+}
+
+static double wasm_rounding_f64_binary(uint32_t sub, double a, double b)
+{
+	const uint32_t rel = (sub - 0x80u) % 0x14u;
+	long double x = static_cast<long double>(a);
+	long double y = static_cast<long double>(b);
+	long double v = x;
+	switch (rel) {
+	case 6: v = x + y; break;
+	case 7: v = x - y; break;
+	case 8: v = x * y; break;
+	case 9: v = x / y; break;
+	default: v = x; break;
+	}
+	return roundToDouble(v, roundingMode(sub));
+}
+
+static float wasm_rounding_i32_s_to_f32(uint32_t sub, int32_t v)
+{
+	return roundToFloat(static_cast<long double>(v), roundingMode(sub));
+}
+static float wasm_rounding_i32_u_to_f32(uint32_t sub, uint32_t v)
+{
+	return roundToFloat(static_cast<long double>(v), roundingMode(sub));
+}
+static float wasm_rounding_i64_s_to_f32(uint32_t sub, int64_t v)
+{
+	return roundToFloat(static_cast<long double>(v), roundingMode(sub));
+}
+static float wasm_rounding_i64_u_to_f32(uint32_t sub, uint64_t v)
+{
+	return roundToFloat(static_cast<long double>(v), roundingMode(sub));
+}
+static float wasm_rounding_f64_to_f32(uint32_t sub, double v)
+{
+	return roundToFloat(static_cast<long double>(v), roundingMode(sub));
+}
+static double wasm_rounding_i32_s_to_f64(uint32_t sub, int32_t v)
+{
+	return roundToDouble(static_cast<long double>(v), roundingMode(sub));
+}
+static double wasm_rounding_i32_u_to_f64(uint32_t sub, uint32_t v)
+{
+	return roundToDouble(static_cast<long double>(v), roundingMode(sub));
+}
+static double wasm_rounding_i64_s_to_f64(uint32_t sub, int64_t v)
+{
+	return roundToDouble(static_cast<long double>(v), roundingMode(sub));
+}
+static double wasm_rounding_i64_u_to_f64(uint32_t sub, uint64_t v)
+{
+	return roundToDouble(static_cast<long double>(v), roundingMode(sub));
+}
+static double wasm_rounding_f32_to_f64(uint32_t sub, float v)
+{
+	return roundToDouble(static_cast<long double>(v), roundingMode(sub));
+}
+
 // LibJIT's ulong -> float conversion mishandles values >= 2^63; the C++
 // conversion is correctly rounded for the whole unsigned range.
 static float wasm_f32_convert_i64_u_impl(uint64_t v) { return static_cast<float>(v); }
@@ -5632,6 +5770,104 @@ void OpcodeDispatcher::dispatchMemoryFill(WASM::MemIdx arg) {
 	jit_insn_call_native(function, "wasm_memory_fill_impl",
 						 reinterpret_cast<void*>(wasm_memory_fill_impl), sig, args, 5, 0);
 }
+void OpcodeDispatcher::dispatchRoundingVariant(uint32_t sub)
+{
+	const uint32_t rel = (sub - 0x80u) % 0x14u;
+	jit_value_t subValue = jit_value_create_nint_constant(function, jit_type_uint, sub);
+
+	if (rel < 5) {
+		if (rel == 0) {
+			jit_value_t a = popValue();
+			pushValue(callNativeBinary(function,
+				reinterpret_cast<void*>(wasm_rounding_f32_unary),
+				jit_type_float32, jit_type_uint, jit_type_float32, subValue, a));
+		} else {
+			jit_value_t b = popValue();
+			jit_value_t a = popValue();
+			pushValue(callNativeTernary(function,
+				reinterpret_cast<void*>(wasm_rounding_f32_binary),
+				jit_type_float32, jit_type_uint, jit_type_float32, jit_type_float32,
+				subValue, a, b));
+		}
+		return;
+	}
+	if (rel < 10) {
+		if (rel == 5) {
+			jit_value_t a = popValue();
+			pushValue(callNativeBinary(function,
+				reinterpret_cast<void*>(wasm_rounding_f64_unary),
+				jit_type_float64, jit_type_uint, jit_type_float64, subValue, a));
+		} else {
+			jit_value_t b = popValue();
+			jit_value_t a = popValue();
+			pushValue(callNativeTernary(function,
+				reinterpret_cast<void*>(wasm_rounding_f64_binary),
+				jit_type_float64, jit_type_uint, jit_type_float64, jit_type_float64,
+				subValue, a, b));
+		}
+		return;
+	}
+	if (rel < 15) {
+		jit_value_t a = popValue();
+		switch (rel) {
+		case 10:
+			pushValue(callNativeBinary(function,
+				reinterpret_cast<void*>(wasm_rounding_i32_s_to_f32),
+				jit_type_float32, jit_type_uint, jit_type_int, subValue, a));
+			break;
+		case 11:
+			pushValue(callNativeBinary(function,
+				reinterpret_cast<void*>(wasm_rounding_i32_u_to_f32),
+				jit_type_float32, jit_type_uint, jit_type_uint, subValue, a));
+			break;
+		case 12:
+			pushValue(callNativeBinary(function,
+				reinterpret_cast<void*>(wasm_rounding_i64_s_to_f32),
+				jit_type_float32, jit_type_uint, jit_type_long, subValue, a));
+			break;
+		case 13:
+			pushValue(callNativeBinary(function,
+				reinterpret_cast<void*>(wasm_rounding_i64_u_to_f32),
+				jit_type_float32, jit_type_uint, jit_type_ulong, subValue, a));
+			break;
+		default:
+			pushValue(callNativeBinary(function,
+				reinterpret_cast<void*>(wasm_rounding_f64_to_f32),
+				jit_type_float32, jit_type_uint, jit_type_float64, subValue, a));
+			break;
+		}
+		return;
+	}
+	jit_value_t a = popValue();
+	switch (rel) {
+	case 15:
+		pushValue(callNativeBinary(function,
+			reinterpret_cast<void*>(wasm_rounding_i32_s_to_f64),
+			jit_type_float64, jit_type_uint, jit_type_int, subValue, a));
+		break;
+	case 16:
+		pushValue(callNativeBinary(function,
+			reinterpret_cast<void*>(wasm_rounding_i32_u_to_f64),
+			jit_type_float64, jit_type_uint, jit_type_uint, subValue, a));
+		break;
+	case 17:
+		pushValue(callNativeBinary(function,
+			reinterpret_cast<void*>(wasm_rounding_i64_s_to_f64),
+			jit_type_float64, jit_type_uint, jit_type_long, subValue, a));
+		break;
+	case 18:
+		pushValue(callNativeBinary(function,
+			reinterpret_cast<void*>(wasm_rounding_i64_u_to_f64),
+			jit_type_float64, jit_type_uint, jit_type_ulong, subValue, a));
+		break;
+	default:
+		pushValue(callNativeBinary(function,
+			reinterpret_cast<void*>(wasm_rounding_f32_to_f64),
+			jit_type_float64, jit_type_uint, jit_type_float32, subValue, a));
+		break;
+	}
+}
+
 void OpcodeDispatcher::dispatchMemoryDiscard(WASM::MemIdx arg) {
 	jit_value_t len = popValue();
 	jit_value_t dst = popValue();

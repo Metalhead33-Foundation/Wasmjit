@@ -6485,6 +6485,77 @@ TEST_CASE("wide arithmetic: add128, sub128 and mul_wide match reference values")
 }
 
 
+// ── Rounding-mode-control variants (docs/proposals/NUMERIC_PROPOSALS.md NUM-2) ──
+TEST_CASE("rounding variants: ceil/floor/trunc are selected by the sub-opcode")
+{
+	// Hand-built module: the proposal has no wasm-tools text spelling yet.
+	std::vector<uint8_t> bytes = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00};
+	const auto leb = [](std::vector<uint8_t>& out, uint32_t value) {
+		do {
+			uint8_t byte = static_cast<uint8_t>(value & 0x7f);
+			value >>= 7;
+			if (value != 0) byte |= 0x80;
+			out.push_back(byte);
+		} while (value != 0);
+	};
+	const auto section = [&bytes, &leb](uint8_t id, const std::vector<uint8_t>& payload) {
+		bytes.push_back(id);
+		leb(bytes, static_cast<uint32_t>(payload.size()));
+		bytes.insert(bytes.end(), payload.begin(), payload.end());
+	};
+	// type 0: (f32, f32) -> f32; type 1: (i32) -> f32
+	section(0x01, {0x02,
+		0x60, 0x02, 0x7d, 0x7d, 0x01, 0x7d,
+		0x60, 0x01, 0x7f, 0x01, 0x7d});
+	section(0x03, {0x05, 0x00, 0x00, 0x00, 0x01, 0x01});
+	{
+		std::vector<uint8_t> payload;
+		leb(payload, 5);
+		const std::pair<const char*, uint32_t> exports[] = {
+			{"add_ceil", 0}, {"add_floor", 1}, {"add_trunc", 2},
+			{"convert_ceil", 3}, {"convert_trunc", 4}
+		};
+		for (const auto& [name, index] : exports) {
+			leb(payload, static_cast<uint32_t>(std::strlen(name)));
+			payload.insert(payload.end(), name, name + std::strlen(name));
+			payload.push_back(0x00);
+			leb(payload, index);
+		}
+		section(0x07, payload);
+	}
+	section(0x0a, {0x05,
+		0x09, 0x00, 0x20, 0x00, 0x20, 0x01, 0xfc, 0x81, 0x01, 0x0b,
+		0x09, 0x00, 0x20, 0x00, 0x20, 0x01, 0xfc, 0x95, 0x01, 0x0b,
+		0x09, 0x00, 0x20, 0x00, 0x20, 0x01, 0xfc, 0xa9, 0x01, 0x0b,
+		0x07, 0x00, 0x20, 0x00, 0xfc, 0x8a, 0x01, 0x0b,
+		0x07, 0x00, 0x20, 0x00, 0xfc, 0xb2, 0x01, 0x0b});
+
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto instance = compiler.instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	const auto exported = [&instance](const char* name) {
+		auto fn = instance->exportedFunction(name);
+		REQUIRE(fn.has_value());
+		return *fn;
+	};
+	REQUIRE(WASM::callCallable<float>(exported("add_ceil"), 16777216.0f, 1.0f) == 16777218.0f);
+	REQUIRE(WASM::callCallable<float>(exported("add_floor"), 16777216.0f, 1.0f) == 16777216.0f);
+	REQUIRE(WASM::callCallable<float>(exported("add_trunc"), 16777216.0f, 1.0f) == 16777216.0f);
+	REQUIRE(WASM::callCallable<float>(exported("convert_ceil"), int32_t(16777217)) == 16777218.0f);
+	REQUIRE(WASM::callCallable<float>(exported("convert_trunc"), int32_t(16777217)) == 16777216.0f);
+}
+
+
 // ── GC cast validation (docs/proposals/GC.md G9/GC-10) ──────────────────────
 TEST_CASE("gc cast validation: ref.test/ref.cast accept every reference in the target hierarchy")
 {

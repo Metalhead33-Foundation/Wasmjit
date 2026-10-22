@@ -384,6 +384,11 @@ void WASM::OpcodeDispatcher::dispatchPrefixMisc(FastMemReader& stream, MiscOpcod
 		}
 
 		default:
+			if (static_cast<uint32_t>(opcode) >= 0x80
+					&& static_cast<uint32_t>(opcode) <= 0xBB) {
+				dispatchRoundingVariant(static_cast<uint32_t>(opcode));
+				break;
+			}
 			throw std::runtime_error("Invalid or unsupported 0xFC misc sub-opcode");
 	}
 }

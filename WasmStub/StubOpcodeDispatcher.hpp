@@ -307,6 +307,7 @@ protected:
 	void dispatchMemoryCopy(WASM::MemIdx arg1, WASM::MemIdx arg2) override;
 	void dispatchMemoryFill(WASM::MemIdx arg) override;
 	void dispatchMemoryDiscard(WASM::MemIdx arg) override;
+	void dispatchRoundingVariant(uint32_t sub) override;
 	void dispatchI64Add128() override;
 	void dispatchI64Sub128() override;
 	void dispatchI64MulWideS() override;
