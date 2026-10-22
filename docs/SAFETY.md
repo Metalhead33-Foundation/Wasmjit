@@ -1,8 +1,8 @@
 # Safety, Guardrails, and Known Pitfalls
 
-Status: policy / implementation reference (revision 2 — adds the thread-safety
-pointer and updates the execution-state rule; the guardrails themselves are
-unchanged).
+Status: policy / implementation reference (revision 3 — adds the trap-cleanup
+design pointer and records that a Go-style defer stack is a candidate, not
+current behaviour; the guardrails themselves are unchanged).
 Audience: anyone adding a feature to `WasmBase/` or a backend (currently
 `LibJit/`), and anyone embedding the library in a process that must stay up.
 
@@ -147,9 +147,15 @@ the `TrapScope`. Therefore:
 - per-thread transient state must be reset *by* `trap()` itself: the
   tail-call trampoline's per-thread state would otherwise strand the next
   invocation on a dead target.
+
 The cross-thread and lock-ownership consequences (including why `std::lock_guard`
 cannot be relied on across a trapping call) are in
-[`THREADSAFETY.md`](THREADSAFETY.md) §5.6 and §10.1.
+[`THREADSAFETY.md`](THREADSAFETY.md) §5.6 and §10.1. A candidate for escaping
+this constraint without C++ unwinding is a fixed-capacity, Go-style cleanup
+stack that `WASM::trap()` drains before `longjmp`; the design, its limits, and
+the current trapping-start-function gap are recorded in
+[`TRAP_CLEANUP.md`](TRAP_CLEANUP.md). The stack is **not implemented** and does
+not relax the POD-only rule for skipped frames.
 
 ### 2.7 Execution state is per host thread, not per agent
 
@@ -317,8 +323,9 @@ killed a child that "produced no report".
   (preamble + parse-time bounds), `WasmBase/WasmOpcodeDispatcher.cpp`
   (opcode-list bounds), `WasmBase/WasmModuleInstance.cpp` (segments, GC
   allocation), `LibJit/LibjitModuleCompiler.cpp` (`JitBuildScope`),
-  `Test/wasm_wat/grow_guard.wat`, [`TESTING.md`](TESTING.md), and the
-  guest/host boundary contract [`THREADSAFETY.md`](THREADSAFETY.md).
+  `Test/wasm_wat/grow_guard.wat`, [`TESTING.md`](TESTING.md), the
+  guest/host boundary contract [`THREADSAFETY.md`](THREADSAFETY.md), and the
+  trap-cleanup design note [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md).
 - Proposal notes referenced above: [`proposals/BULK_MEMORY.md`](proposals/BULK_MEMORY.md),
   [`proposals/MEMORY64.md`](proposals/MEMORY64.md),
   [`proposals/MULTI_MEMORY.md`](proposals/MULTI_MEMORY.md),

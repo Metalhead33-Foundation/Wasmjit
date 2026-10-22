@@ -228,11 +228,18 @@ Wasm.
 A reference returned by `callCallable` carries the count produced by the Wasm
 call; the embedder owns that count and must drop it (or use its own arena).
 `ModuleInstance::hostReferenceEquals` delegates to `references.equals`; Wasm
-`ref.eq` remains an `eqref` operation and is not changed by the bridge. This is
-a generic host-boundary contract, not an implementation of any JS API proposal:
-BigInt conversion, `wasm:js-*` builtins, JS Types wrappers and ESM loading stay
-in the external adapter. See
+`ref.eq` remains an `eqref` operation and is not changed by the bridge.
+
+This is a generic host-boundary contract, not an implementation of any JS API
+proposal: BigInt conversion, `wasm:js-*` builtins, JS Types wrappers and ESM
+loading stay in the external adapter. See
 [`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) §4.3.
+
+Instance lifetime and call lifetime are separate. `instanceDestroying` is the
+backstop for a per-instance host arena, not a per-call cleanup hook. If an
+import can run host code that traps, the adapter needs a per-call handle scope;
+the current trap path and the proposed Go-style cleanup stack are described in
+[`TRAP_CLEANUP.md`](TRAP_CLEANUP.md).
 
 ### Cross-module Wasm function imports
 
@@ -408,6 +415,7 @@ Universal function reference stored in tables and import storage.
 |------|------|
 | `WasmBase/WasmVMContext.hpp` | VMContext struct |
 | `WasmBase/WasmHostBridge.hpp` | Optional host boundary (reference + lifecycle callbacks) |
+| `WasmBase/WasmTrap.hpp` / `WasmBase/WasmTrap.cpp` | `TrapScope` and the `longjmp` trap path; the cleanup constraints and candidate Go-style stack are in [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) |
 | `WasmBase/WasmValue.hpp` | Callable struct and `callCallable` helper |
 | `WasmBase/WasmExn.hpp` | Exception objects, the pending-exception slot and the tag-id accessor |
 | `LibJit/LibjitOpcodeDispatcher.cpp` | `dispatchCall` (line ~1027), `dispatchCallIndirect` (~1061), `dispatchCallThroughCallable` (~612) |

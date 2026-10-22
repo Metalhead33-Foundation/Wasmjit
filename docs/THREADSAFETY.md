@@ -1,9 +1,10 @@
 # Thread Safety — Guest, Host, and the Boundary Between Them
 
-Status: policy / reference note (revision 2 — records the **one instance per
+Status: policy / reference note (revision 3 — records the **one instance per
 module** architectural target, the host C++ lock caveats, the open guest-lock
-question, and the trap/lock ownership questions that a future multi-agent build
-must answer. It contains **no new code** and changes no runtime behaviour.)
+question, the trap/lock ownership questions that a future multi-agent build
+must answer, and the Go-style trap-cleanup candidate. It contains **no new code**
+and changes no runtime behaviour.)
 
 Audience: embedders, Wasm module/toolchain authors, and anyone changing
 `WasmBase/`, a backend, the GC heap, the trap path, or a native-import helper.
@@ -430,7 +431,10 @@ Practical rules under the current engine:
 5. Treat the trap/RAII interaction as an **open design item**, not a solved
    guarantee. A future engine may replace `longjmp` with an unwind-safe trap
    mechanism, add explicit lock ownership tracking, or require a host cleanup
-   protocol; until then, RAII is safe only where no trap can cross it.
+   protocol; until then, RAII is safe only where no trap can cross it. The
+   candidate cleanup protocol — and why it still cannot save a non-trivial
+   automatic object in a skipped frame — is in
+   [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md).
 
 The same caveat applies to `std::unique_lock::unlock()` calls: they are safe
 only if control returns; `longjmp` bypasses the remainder of the native frame.
@@ -521,6 +525,7 @@ is undefined even if a particular run happens to work.
 | Concurrent `Module`/`ModuleInstance` mutation | **Not supported** | mutable fields |
 | Store entity creation/lookup and type interning | **Management-level locks**; not a guest-data lock | `WasmStore`, `TypeRegistry` |
 | Host-thread trap state | **Per host thread** | `TrapScope` / `trapState()` |
+| Trap-time host cleanup (locks, roots, arenas) | **Absent**; `longjmp` skips destructors, so release before a trap-capable call or use a protocol that does not rely on RAII | §5.6, [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) |
 | Host-thread tail-call state | **Per host thread**; generated code resolves it dynamically | `currentTailCallState()` |
 | Shared-memory atomic loads/stores/RMW/cmpxchg | **Implemented single-agent**, hardware atomics and alignment traps | `wasm_atomic.*`, `THREADS.md` TH-1 |
 | Acquire-release ordering and `pause` | **Implemented single-agent** | `ACQUIRE_RELEASE_ATOMICS.md` |
@@ -625,6 +630,13 @@ The current trap mechanism is a per-host-thread `longjmp` to an armed
   between a genuinely unwind-safe trap (for example, exceptions with a
   documented ABI and unwind tables), explicit cleanup before every trap-capable
   call, or an engine-owned lock registry that can release/poison locks on trap.
+  The explicit-cleanup branch has a candidate shape: a fixed-capacity,
+  Go-style LIFO cleanup stack in the per-thread trap state, with `trap()`
+  draining `noexcept` thunks before `longjmp`. It gives native imports a way to
+  unlock or release external state, but it is not C++ unwinding and does not
+  make non-trivial locals in skipped frames safe. See
+  [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) for the design, the code sketches, the
+  comparison table, and the current trapping-start-function gap.
 - **Guest lock ownership.** A Wasm trap is not a C++ exception and does not run
   a `finally`. If an agent traps while holding a guest mutex, the lock stays
   held unless the module can prevent/convert the escaping trap into a cleanup
@@ -671,8 +683,9 @@ multi-agent race freedom.
   (orderings and `pause`),
   [`proposals/GC.md`](proposals/GC.md) (reference counting and the single
   mutator), [`proposals/TAILCALLS.md`](proposals/TAILCALLS.md) (trampoline and
-  per-function drivers), [`TESTING.md`](TESTING.md) (the host-thread test and
-  how to run it).
+  per-function drivers), [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) (the Go-style
+  trap-cleanup candidate and the start-function gap),
+  [`TESTING.md`](TESTING.md) (the host-thread test and how to run it).
 - Sources:
   `WasmBase/WasmStore.*` (Store locks and stable entities),
   `WasmBase/WasmTypeRegistry.*` (intern serialization),
