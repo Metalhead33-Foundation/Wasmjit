@@ -1,7 +1,8 @@
 # Stack Switching (Continuations) — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / forward-looking reference (revision 1 — nothing is
-implemented; the continuation type and the seven instructions do not decode).
+Status: design note / implementation reference (revision 3 — SS-0 rejection and
+SS-1's continuation type/heap model are implemented; the runtime stack
+capture/splice and instruction execution remain blocked).
 Audience: anyone touching `WasmModule` (types), `WasmType` (heap types),
 `WasmOpcode`, `WasmStore`, `WasmModuleInstance`, the JIT compiler, or the
 exception-tag machinery.
@@ -63,16 +64,16 @@ lightweight tasks.
 
 ## 4. What we have implemented today
 
-- No `cont` composite type: `Module::processSubtypes` recognizes `0x60` (func),
-  `0x5F` (struct) and `0x5E` (array). The continuation prefix `0x5D` falls
-  through without consuming its type payload, producing a default-empty subtype
-  and desynchronising the rest of the type section.
-- No `cont`/`nocont` heap types: `AbstractHeapType` stops at the GC and
-  exception hierarchies. `ValueTypeCode::Ref`/`RefNull` still decode the outer
-  reference form, so an unknown heap type is not rejected there.
-- No `0xE0`–`0xE6` opcodes. `WasmOpcode.hpp` marks `0xD7`–`0xFA` reserved;
-  `OpcodeDispatcher::dispatch`'s `default` throws
-  `"Invalid or unsupported primary opcode"`.
+- **SS-0 is implemented.** `0xE0`–`0xE6` are named opcodes and
+  `dispatchOpcode` rejects every one with a named
+  `stack-switching instruction is not implemented` error.
+- **SS-1's type model is implemented.** `0x5D` parses as `ContType { funcType }`;
+  `CanonTypeKind::Cont`, a canonical `contFunc` reference, `CoreCont` payloads
+  and `AbstractHeapType::Cont`/`NoCont` (`0x68`/`0x75`) are represented. A
+  `(ref null cont)` function parameter decodes and canonicalises correctly.
+- No continuation instructions execute. The seven names are reserved opcodes
+  that fail at validation/dispatch rather than reaching the generic unknown
+  primary-opcode path.
 - Exception tags exist (`TagId`, tag section, imports/exports, `throw` /
   `try_table`), but only with `attribute = 0` (exception); there is no
   continuation-signature variant.
@@ -80,25 +81,26 @@ lightweight tasks.
   ([`TAILCALLS.md`](TAILCALLS.md)), but there is no stack capture, copy, restore
   or splice, and the execution model is single-agent
   ([`THREADS.md`](THREADS.md) §3).
-- No test: the `switch.wast` in the snapshot is an old `br_table` test, not this
-  proposal.
+- Added the hand-built test
+  `stack-switching continuation types decode and opcodes fail clearly`, covering
+  the `cont` type, `(ref null cont)`, and the named opcode rejection.
 
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| SS1 | **No continuation composite type.** `0x5D` is neither recognized nor rejected; the type section desynchronises. | `WasmModule.cpp` (`processSubtypes`) | High |
-| SS2 | **No `cont`/`nocont` heap types.** `AbstractHeapType` has no continuation hierarchy. | `WasmType.hpp` (`AbstractHeapType`) | High |
-| SS3 | **No continuation instructions.** `0xE0`–`0xE6` reach the primary dispatch default and throw. | `WasmOpcode.hpp`, `WasmOpcodeDispatcher.cpp` | High |
-| SS4 | **No continuation runtime.** The engine executes on the native C stack; there is no capture/restore/splice and no one-shot bookkeeping. | `LibJit/LibjitModuleCompiler.cpp`, `WasmModuleInstance.cpp` | High |
+| ~~SS1~~ | ~~**No continuation composite type.**~~ **SS-1 done:** `0x5D` parses into `ContType`, canonicalises to `CanonTypeKind::Cont` with a `contFunc` reference, and no longer desynchronises the type section. | `WasmType.hpp` (`ContType`), `WasmModule.cpp`, `WasmTypeRegistry.cpp` | Closed (model) |
+| ~~SS2~~ | ~~**No `cont`/`nocont` heap types.**~~ **SS-1 done:** `AbstractHeapType::Cont`/`NoCont` and `(ref null cont)` canonicalisation are implemented. | `WasmType.hpp` (`AbstractHeapType`), `WasmValidator.cpp` | Closed (model) |
+| ~~SS3~~ | ~~**No continuation instructions.**~~ **SS-0 done:** `0xE0`–`0xE6` are named opcodes and fail with a named error. | `WasmOpcode.hpp`, `WasmOpcodeDispatcher.cpp` | Closed (rejection) |
+| SS4 | **No continuation runtime.** The engine executes on the native C stack; there is no capture/restore/splice and no one-shot bookkeeping. This is the remaining blocker for executing `cont.new`/`resume`/`suspend`/`switch`. | `LibJit/LibjitModuleCompiler.cpp`, `WasmModuleInstance.cpp` | High |
 | SS5 | **Tags carry no continuation signature.** The tag parser stores `attribute` and a payload type index only; `attribute` is always 0. | `WasmModule.cpp` (`processTagSection`), `WasmType.hpp` (`Tag`) | Medium |
-| SS6 | **No test.** The snapshot has no continuation script (`switch.wast` is unrelated). | `extern/WasmTestsuite` | Low |
+| ~~SS6~~ | ~~**No test.**~~ **SS-0/SS-1 test added:** `cont` type and `(ref null cont)` decode, and `0xE0` fails with a named error. | `Test/main.cpp` | Closed (model/rejection only) |
 
 ## 6. Where we can and should play fast and loose
 
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
-| SSD1 | **Reject `0x5D` and `0xE0`–`0xE6` with a named error** until the feature exists. | §3: the stack representation and encoding are free; `SAFETY.md` forbids guessing at unknown bytes, and silent desync is worse. | The current boundary is explicit (planned, see SS-0). |
+| SSD1 | **Keep `0xE0`–`0xE6` rejected and model `0x5D` only as metadata** until the runtime exists. | §3: the stack representation and encoding are free; `SAFETY.md` forbids guessing the execution semantics, and a named failure is better than a dead stack. | The type surface is usable without pretending execution works. |
 | SSD2 | **Reuse the exception-tag identity, add a continuation signature variant.** | §3: handler/tag mechanics are free; `EXCEPTIONS.md` EX-2 already gives tags a process-wide `TagId`. | One tag registry for both proposals. |
 | SSD3 | **Keep continuations one-shot.** | §3: multi-shot is explicitly out of the MVP. | No stack-copying collector. |
 | SSD4 | **Do not emulate continuations with heap-allocated state machines.** | §3 leaves the mechanism free, but §2 requires suspending the actual execution state; a state-machine rewrite changes observable one-shot/splice semantics. | No false conformance. |
@@ -112,23 +114,24 @@ second `resume` read a dead stack.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **SS-0 — Honest rejection** | Detect `0x5D` in the type section and `0xE0`–`0xE6` in code; fail with a named error. | SS1, SS3 | A continuation module fails cleanly, without desync. |
-| **SS-1 — Types** | Add `cont $ft`, the `cont`/`nocont` heap types and their subtyping to `WasmType`/`WasmTypeRegistry`. | SS1, SS2 | The type section decodes and type-checks a continuation type. |
-| **SS-2 — Tag signatures** | Extend the tag entry with the continuation signature form, keeping the exception form. | SS5 | A `(tag (cont ...))` decodes and imports/exports by `TagId`. |
-| **SS-3 — Runtime stacks** | Add the capture/restore/splice primitive and one-shot state behind a backend contract. | SS4 | A simple suspend/resume round-trip runs. |
-| **SS-4 — Instructions** | Implement `cont.new`, `cont.bind`, `suspend`, `resume*`, `switch` and handlers. | SS3 | The proposal's positive tests pass. |
-| **SS-5 — Tests** | Add the stack-switching scripts (none in the current snapshot). | SS6 | The scripts are curated. |
+| **SS-0 — Honest rejection** | ✅ `0xE0`–`0xE6` are named opcodes that fail with a named error. | SS3, SS6 | A continuation module fails cleanly, without desync. |
+| **SS-1 — Types** | ✅ `ContType`, `CanonTypeKind::Cont`, canonical `contFunc`, `CoreCont` payloads and `AbstractHeapType::Cont`/`NoCont`. | SS1, SS2 | The type section decodes and canonicalises a continuation type. |
+| **SS-2 — Tag signatures** | Blocked on the continuation tag-signature encoding; extend the tag entry while keeping the exception form. | SS5 | A `(tag (cont ...))` decodes and imports/exports by `TagId`. |
+| **SS-3 — Runtime stacks** | Blocked: add the capture/restore/splice primitive and one-shot state behind a backend contract. | SS4 | A simple suspend/resume round-trip runs. |
+| **SS-4 — Instructions** | Blocked on SS-3; implement `cont.new`, `cont.bind`, `suspend`, `resume*`, `switch` and handlers. | SS3 | The proposal's positive tests pass. |
+| **SS-5 — Tests** | SS-0/SS-1 model/rejection tests are in the default suite; positive continuation scripts need SS-3. | SS6 | The scripts are curated. |
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-17):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-22):
 
 | Script | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
+| `stack-switching continuation types...` | 14 assertions | 0 | 0 | SS-0/SS-1: `cont` + `(ref null cont)` decode; `0xE0` fails with a named error |
 | (none) | — | — | — | no stack-switching script; `switch.wast` is a `br_table` test |
 
-Reading: there is nothing to grade. The first useful test is SS-0's
-"reject without desync" case, followed by SS-3's suspend/resume round-trip.
+Reading: the type/rejection surface is graded; the first positive test is SS-3's
+suspend/resume round-trip, which remains blocked on a runtime stack model.
 
 ## 9. References
 

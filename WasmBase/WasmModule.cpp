@@ -67,6 +67,10 @@ void validateTypeGroupMember(const Subtype& subtype, uint32_t selfIndex, uint32_
 			checkStorage(f.storageType);
 	} else if (subtype.isArray()) {
 		checkStorage(std::get<ArrayType>(subtype.composite).elementType.storageType);
+	} else if (subtype.isCont()) {
+		const uint32_t funcTypeIdx = std::get<ContType>(subtype.composite).functionTypeIndex;
+		if (funcTypeIdx >= groupEnd)
+			throw std::runtime_error("type section: continuation function type is out of scope");
 	}
 }
 
@@ -879,7 +883,14 @@ void Module::processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t num
 		}
 
 		// 2. Handle Composite Type
-		if (prefix == 0x60) { // Function
+		if (prefix == 0x5D) { // cont $ft (stack switching)
+			// `cont $ft` is a composite type whose payload is a function-type
+			// index. Keep the payload; the runtime is still rejected at the
+			// execution boundary, but the type section is now well-formed.
+			uint32_t funcTypeIdx;
+			stream >> Elv::Io::Leb(funcTypeIdx);
+			st.composite = ContType{funcTypeIdx};
+		} else if (prefix == 0x60) { // Function
 			FuncType ft;
 			uint32_t pCount, rCount;
 			stream >> Elv::Io::Leb(pCount);
@@ -1148,6 +1159,9 @@ void Module::validateValueTypes() const
 			break;
 		case CanonTypeKind::Array:
 			checkStorage(view.arrayElement().storage, "array element", i);
+			break;
+		case CanonTypeKind::Cont:
+			// `cont $ft` has no storage of its own; its payload is a type index.
 			break;
 		case CanonTypeKind::Import:
 			// An imported type has only an abstract representation bound.

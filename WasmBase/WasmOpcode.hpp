@@ -249,7 +249,19 @@ enum class Opcode : uint8_t {
 	RefAsNonNull        = 0xD4,
 	BrOnNull            = 0xD5,  // followed by labelidx
 	BrOnNonNull         = 0xD6,  // followed by labelidx
-	// 0xD7-0xFA reserved
+	// 0xD7-0xDF reserved
+
+	// Stack switching (docs/proposals/STACK_SWITCHING.md SS-0). The proposal
+	// assigns these encodings, but the runtime stack model is not implemented;
+	// the dispatcher rejects them with a named error.
+	ContNew             = 0xE0,
+	ContBind            = 0xE1,
+	Suspend             = 0xE2,
+	Resume              = 0xE3,
+	ResumeThrow         = 0xE4,
+	ResumeThrowRef      = 0xE5,
+	Switch              = 0xE6,
+	// 0xE7-0xFA reserved
 
 	// --- Prefix bytes (not instructions themselves) ---
 	// When the decoder reads one of these bytes it must read a further

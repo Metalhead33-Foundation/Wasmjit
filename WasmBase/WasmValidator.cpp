@@ -312,8 +312,8 @@ bool Validator::refSubtype(const ValueType& actual, const ValueType& expected) c
 {
 	enum class Kind { Func, Extern, Exn, Any, Eq, I31, Struct, Array,
 					  String, StringViewWtf8, StringViewWtf16, StringViewIter,
-					  None, NoFunc, NoExtern, NoExn,
-					  ConcreteFunc, ConcreteStruct, ConcreteArray, Other };
+					  None, NoFunc, NoExtern, NoExn, Cont, NoCont,
+					  ConcreteFunc, ConcreteStruct, ConcreteArray, ConcreteCont, Other };
 	struct Info { bool isRef = false; bool nullable = false; Kind kind = Kind::Other; uint32_t idx = 0; };
 
 	const auto info = [this](const ValueType& type) {
@@ -350,6 +350,7 @@ bool Validator::refSubtype(const ValueType& actual, const ValueType& expected) c
 				case CanonTypeKind::Func:   out.kind = Kind::ConcreteFunc; break;
 				case CanonTypeKind::Struct: out.kind = Kind::ConcreteStruct; break;
 				case CanonTypeKind::Array:  out.kind = Kind::ConcreteArray; break;
+				case CanonTypeKind::Cont:   out.kind = Kind::ConcreteCont; break;
 				case CanonTypeKind::Import: {
 					const CanonHeapType bound = module.typeView(idx).importBound();
 					switch (bound.abstract) {
@@ -363,6 +364,14 @@ bool Validator::refSubtype(const ValueType& actual, const ValueType& expected) c
 				}
 				}
 			} else {
+				if (type.heapType == static_cast<int32_t>(AbstractHeapType::Cont)) {
+					out.kind = Kind::Cont;
+					break;
+				}
+				if (type.heapType == static_cast<int32_t>(AbstractHeapType::NoCont)) {
+					out.kind = Kind::NoCont;
+					break;
+				}
 				switch (static_cast<ValueTypeCode>(type.heapType)) {
 				case ValueTypeCode::Func:
 				case ValueTypeCode::FuncRef:   out.kind = Kind::Func; break;
@@ -407,6 +416,13 @@ bool Validator::refSubtype(const ValueType& actual, const ValueType& expected) c
 		return e.kind == Kind::NoExtern || e.kind == Kind::Extern;
 	if (a.kind == Kind::NoExn)
 		return e.kind == Kind::NoExn || e.kind == Kind::Exn;
+	if (a.kind == Kind::NoCont)
+		return e.kind == Kind::NoCont || e.kind == Kind::Cont
+				|| e.kind == Kind::ConcreteCont;
+	if (a.kind == Kind::Cont)
+		return e.kind == Kind::Cont || e.kind == Kind::ConcreteCont;
+	if (a.kind == Kind::ConcreteCont)
+		return e.kind == Kind::Cont || e.kind == Kind::ConcreteCont;
 
 	// A concrete expected type only accepts a concrete actual (with subtyping).
 	if (e.kind == Kind::ConcreteFunc || e.kind == Kind::ConcreteStruct || e.kind == Kind::ConcreteArray) {
@@ -658,6 +674,9 @@ void Validator::validateModule()
 			break;
 		case CanonTypeKind::Array:
 			checkStorage(view.arrayElement().storage, "array element");
+			break;
+		case CanonTypeKind::Cont:
+			// The continuation payload is only a type-index reference.
 			break;
 		case CanonTypeKind::Import:
 			// An imported type is bounded by an abstract heap type only.
@@ -1330,12 +1349,22 @@ ValueType Validator::refTopForHeap(const HeapType& heapType) const
 				break;
 			}
 		} else {
-			top.opcode = view.kind() == CanonTypeKind::Func
-					? ValueTypeCode::FuncRef : ValueTypeCode::AnyRef;
+			if (view.kind() == CanonTypeKind::Cont) {
+				top.opcode = ValueTypeCode::RefNull;
+				top.heapType = static_cast<int32_t>(heapType.typeIndex);
+			} else {
+				top.opcode = view.kind() == CanonTypeKind::Func
+						? ValueTypeCode::FuncRef : ValueTypeCode::AnyRef;
+			}
 		}
 		return top;
 	}
 	switch (heapType.abstract) {
+		case AbstractHeapType::Cont:
+		case AbstractHeapType::NoCont:
+			top.opcode = ValueTypeCode::RefNull;
+			top.heapType = static_cast<int32_t>(heapType.abstract);
+			break;
 		case AbstractHeapType::Func:
 		case AbstractHeapType::NoFunc:
 			top.opcode = ValueTypeCode::FuncRef;

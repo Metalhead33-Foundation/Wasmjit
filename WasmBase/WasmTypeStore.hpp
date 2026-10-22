@@ -24,6 +24,8 @@ enum class TypeKind : uint16_t {
 	CoreFunc = 1,
 	CoreStruct,
 	CoreArray,
+	// Stack-switching continuation composite type.
+	CoreCont,
 	// A nominal type imported with `(type (sub <heaptype>))` (TYPE_IMPORTS.md).
 	// Its representation is the abstract bound; it is never structurally
 	// interned and never equals a definition with the same shape.
@@ -88,6 +90,10 @@ struct CoreStructPayload {
 
 struct CoreArrayPayload {
 	CanonFieldType element;
+};
+
+struct CoreContPayload {
+	CanonHeapType func;
 };
 
 // An imported type is nominal; only its abstract representation bound is
@@ -292,6 +298,7 @@ public:
 	std::span<const CanonStorageType> funcResults() const;
 	std::span<const CanonFieldType> structFields() const;
 	const CanonFieldType& arrayElement() const;
+	CanonHeapType contFunc() const;
 	// The abstract bound of a `CoreImport` record; `AbstractHeapType::Func` etc.
 	CanonHeapType importBound() const;
 
@@ -478,6 +485,7 @@ private:
 	std::vector<CoreFuncPayload> coreFuncs_;
 	std::vector<CoreStructPayload> coreStructs_;
 	std::vector<CoreArrayPayload> coreArrays_;
+	std::vector<CoreContPayload> coreConts_;
 	std::vector<uint32_t> depths_;
 
 	// Component payloads.

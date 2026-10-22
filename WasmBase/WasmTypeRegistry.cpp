@@ -102,6 +102,11 @@ std::vector<CanonicalType> buildGroup(std::span<const Subtype> types, const Type
 			ct.arrayElement.storage =
 				toCanonStorage(at.elementType.storageType, groupFirst, groupEnd, localToGlobal);
 			ct.arrayElement.isMutable = at.elementType.isMutable;
+		} else if (st.isCont()) {
+			ct.kind = CanonTypeKind::Cont;
+			ct.contFunc = toCanonHeapType(
+					static_cast<int32_t>(std::get<ContType>(st.composite).functionTypeIndex),
+					groupFirst, groupEnd, localToGlobal);
 		}
 		out.push_back(std::move(ct));
 	}
@@ -151,6 +156,8 @@ void serializeType(std::string& s, const CanonicalType& t) {
 	} else if (t.kind == CanonTypeKind::Struct) {
 		appendU32(s, static_cast<uint32_t>(t.structFields.size()));
 		for (const CanonFieldType& f : t.structFields) serializeField(s, f);
+	} else if (t.kind == CanonTypeKind::Cont) {
+		serializeHeap(s, t.contFunc);
 	} else {
 		serializeField(s, t.arrayElement);
 	}
@@ -172,6 +179,13 @@ void remapStorage(CanonStorageType& st, TypeId base) {
 			v.heap.kind = CanonHeapType::Kind::Global;
 			v.heap.id = TypeId{base.value + v.heap.memberIndex};
 		}
+	}
+}
+
+void remapHeap(CanonHeapType& h, TypeId base) {
+	if (h.kind == CanonHeapType::Kind::Rec) {
+		h.kind = CanonHeapType::Kind::Global;
+		h.id = TypeId{base.value + h.memberIndex};
 	}
 }
 
@@ -201,6 +215,7 @@ std::vector<CanonicalType> resolveGroup(const std::vector<CanonicalType>& pendin
 		for (CanonStorageType& r : out[i].funcResults) remapStorage(r, base);
 		for (CanonFieldType& f : out[i].structFields) remapStorage(f.storage, base);
 		remapStorage(out[i].arrayElement.storage, base);
+		remapHeap(out[i].contFunc, base);
 	}
 	return out;
 }
@@ -233,6 +248,8 @@ bool abstractMatches(AbstractHeapType a, AbstractHeapType b) {
 	if (a == AbstractHeapType::NoFunc)   return b == AbstractHeapType::Func;
 	if (a == AbstractHeapType::NoExtern) return b == AbstractHeapType::Extern;
 	if (a == AbstractHeapType::NoExn)    return b == AbstractHeapType::Exn;
+	if (a == AbstractHeapType::NoCont)   return b == AbstractHeapType::Cont;
+	if (a == AbstractHeapType::Cont)    return b == AbstractHeapType::Cont;
 	if (a == AbstractHeapType::I31 || a == AbstractHeapType::Struct || a == AbstractHeapType::Array)
 		return b == AbstractHeapType::Eq || b == AbstractHeapType::Any;
 	if (a == AbstractHeapType::Eq) return b == AbstractHeapType::Any;
@@ -250,6 +267,7 @@ bool concreteMatchesAbstract(const CanonView& v, TypeId id, AbstractHeapType abs
 	case AbstractHeapType::Struct: return t.kind() == CanonTypeKind::Struct;
 	case AbstractHeapType::Array:  return t.kind() == CanonTypeKind::Array;
 	case AbstractHeapType::Func:   return t.kind() == CanonTypeKind::Func;
+	case AbstractHeapType::Cont:   return t.kind() == CanonTypeKind::Cont;
 	default: return false;
 	}
 }
@@ -349,6 +367,8 @@ bool compMatches(const CanonView& v, CoreTypeView actual, CoreTypeView expected)
 	}
 	case CanonTypeKind::Array:
 		return fieldMatches(v, actual.arrayElement(), expected.arrayElement());
+	case CanonTypeKind::Cont:
+		return actual.contFunc() == expected.contFunc();
 	}
 	return false;
 }

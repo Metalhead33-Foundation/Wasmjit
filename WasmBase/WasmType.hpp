@@ -35,6 +35,8 @@ enum class AbstractHeapType : int32_t {
 	Struct    = -0x15, // 0x6B
 	Array     = -0x16, // 0x6A
 	Exn       = -0x17, // 0x69 (exception handling: `(ref null exn)` = exnref)
+	Cont      = -0x18, // 0x68 (stack switching: top continuation type)
+	NoCont    = -0x0B, // 0x75 (bottom continuation type)
 	None      = -0x0F, // 0x71
 	NoFunc    = -0x0D, // 0x73
 	NoExtern  = -0x0E, // 0x72
@@ -269,7 +271,13 @@ struct ArrayType {
 	FieldType elementType;
 };
 
-using CompositeDefinition = std::variant<FuncType, StructType, ArrayType>;
+// Stack-switching proposal: `cont $ft` is a composite type whose payload is a
+// reference to a function type. It is not a function type itself.
+struct ContType {
+	uint32_t functionTypeIndex = 0;
+};
+
+using CompositeDefinition = std::variant<FuncType, StructType, ArrayType, ContType>;
 
 struct Subtype {
 	bool isFinal;
@@ -280,6 +288,7 @@ struct Subtype {
 	inline bool isFunction() const { return std::holds_alternative<FuncType>(composite); }
 	inline bool isStruct() const { return std::holds_alternative<StructType>(composite); }
 	inline bool isArray() const { return std::holds_alternative<ArrayType>(composite); }
+	inline bool isCont() const { return std::holds_alternative<ContType>(composite); }
 };
 
 struct Limits {

@@ -12,6 +12,7 @@ TypeKind coreKind(CanonTypeKind kind)
 	case CanonTypeKind::Func: return TypeKind::CoreFunc;
 	case CanonTypeKind::Struct: return TypeKind::CoreStruct;
 	case CanonTypeKind::Array: return TypeKind::CoreArray;
+	case CanonTypeKind::Cont: return TypeKind::CoreCont;
 	case CanonTypeKind::Import: return TypeKind::CoreImport;
 	}
 	throw std::runtime_error("type store: unknown core type kind");
@@ -23,6 +24,7 @@ CanonTypeKind canonKind(TypeKind kind)
 	case TypeKind::CoreFunc: return CanonTypeKind::Func;
 	case TypeKind::CoreStruct: return CanonTypeKind::Struct;
 	case TypeKind::CoreArray: return CanonTypeKind::Array;
+	case TypeKind::CoreCont: return CanonTypeKind::Cont;
 	case TypeKind::CoreImport: return CanonTypeKind::Import;
 	default: break;
 	}
@@ -536,6 +538,10 @@ TypeId TypeStore::appendCore(const CanonicalType& type)
 		record.payload = static_cast<uint32_t>(coreArrays_.size());
 		coreArrays_.push_back(CoreArrayPayload{type.arrayElement});
 		break;
+	case CanonTypeKind::Cont:
+		record.payload = static_cast<uint32_t>(coreConts_.size());
+		coreConts_.push_back(CoreContPayload{type.contFunc});
+		break;
 	case CanonTypeKind::Import:
 		// Imported types are created through internCoreImport(), not here.
 		throw std::runtime_error(
@@ -1007,6 +1013,7 @@ std::size_t TypeStore::payloadBytes() const
 			+ coreFuncs_.capacity() * sizeof(CoreFuncPayload)
 			+ coreStructs_.capacity() * sizeof(CoreStructPayload)
 			+ coreArrays_.capacity() * sizeof(CoreArrayPayload)
+			+ coreConts_.capacity() * sizeof(CoreContPayload)
 			+ depths_.capacity() * sizeof(uint32_t)
 			+ componentFields_.capacity() * sizeof(ComponentField)
 			+ componentCases_.capacity() * sizeof(ComponentCase)
@@ -1160,6 +1167,14 @@ const CanonFieldType& CoreTypeView::arrayElement() const
 		return pending_->arrayElement;
 	const TypeRecord& record = store_->record(id_);
 	return store_->coreArrays_[record.payload].element;
+}
+
+CanonHeapType CoreTypeView::contFunc() const
+{
+	if (pending_)
+		return pending_->contFunc;
+	const TypeRecord& record = store_->record(id_);
+	return store_->coreConts_[record.payload].func;
 }
 
 CanonHeapType CoreTypeView::importBound() const

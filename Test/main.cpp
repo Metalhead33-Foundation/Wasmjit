@@ -6432,6 +6432,65 @@ TEST_CASE("rounding variants: ceil/floor/trunc are selected by the sub-opcode")
 }
 
 
+// ── Stack switching (docs/proposals/STACK_SWITCHING.md SS-1) ────────────────
+TEST_CASE("stack-switching continuation types decode and opcodes fail clearly")
+{
+	const auto parse = [](const std::vector<uint8_t>& bytes) {
+		std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+		Euph::Io::ConstBufferDevice device(span);
+		return WASM::Artifact::parse(device);
+	};
+
+	// type 0: [] -> []; type 1: cont $ft (type 0). The type section must remain
+	// well-formed; SS-1 only models the type, not the stack runtime.
+	std::vector<uint8_t> contType = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x06, 0x02, 0x60, 0x00, 0x00, 0x5d, 0x00};
+	auto typeModule = parse(contType);
+	REQUIRE(typeModule != nullptr);
+	WASM::Module* typed = typeModule->asCoreModule();
+	REQUIRE(typed != nullptr);
+	REQUIRE(typed->typeCount() == 2);
+	const WASM::CoreTypeView contView = typed->typeView(1);
+	REQUIRE(contView.kind() == WASM::CanonTypeKind::Cont);
+	REQUIRE(contView.contFunc().kind == WASM::CanonHeapType::Kind::Global);
+	REQUIRE(contView.contFunc().id == typed->typeId(WASM::LocalTypeIdx{0}));
+
+	// `(ref null cont)` is a valid continuation heap type. It does not need a
+	// concrete `cont` type index to decode.
+	std::vector<uint8_t> contRef = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x06, 0x01, 0x60, 0x01, 0x63, 0x68, 0x00};
+	auto refModule = parse(contRef);
+	REQUIRE(refModule != nullptr);
+	WASM::Module* refTyped = refModule->asCoreModule();
+	REQUIRE(refTyped != nullptr);
+	const WASM::CoreTypeView refView = refTyped->typeView(0);
+	REQUIRE(refView.kind() == WASM::CanonTypeKind::Func);
+	REQUIRE(refView.funcParams().size() == 1);
+	REQUIRE(refView.funcParams()[0].value.opcode == WASM::ValueTypeCode::RefNull);
+	REQUIRE(refView.funcParams()[0].value.heap.abstract == WASM::AbstractHeapType::Cont);
+
+	// A body containing `cont.new` (0xE0) must be rejected by the validating
+	// decoder with a named error, rather than the generic unsupported-opcode one.
+	std::vector<uint8_t> contCode = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+		0x03, 0x02, 0x01, 0x00,
+		0x0a, 0x05, 0x01, 0x03, 0x00, 0xe0, 0x0b};
+	bool codeThrew = false;
+	try {
+		auto module = parse(contCode);
+		REQUIRE(module != nullptr);
+		WASM::Module* core = module->asCoreModule();
+		REQUIRE(core != nullptr);
+		core->validate();
+	} catch (const std::exception& error) {
+		codeThrew = true;
+		REQUIRE(std::string(error.what()).find("stack-switching") != std::string::npos);
+	}
+	REQUIRE(codeThrew);
+}
+
+
 // ── Instrument/tracing (docs/proposals/INSTRUMENT_TRACING.md IT-2/IT-3) ─────
 TEST_CASE("i32.itt is a run-time NOP and reports its immediate at compile time")
 {

@@ -1107,6 +1107,19 @@ void OpcodeDispatcher::dispatchOpcode(FastMemReader& stream, Opcode opcode)
 		case Opcode::RefEq:        { dispatchRefEq();       break; }
 		case Opcode::RefAsNonNull: { dispatchRefAsNonNull(); break; }
 
+		// Stack switching: SS-0 deliberately rejects the assigned opcodes
+		// instead of desynchronising the decoder or guessing a stack model.
+		case Opcode::ContNew:
+		case Opcode::ContBind:
+		case Opcode::Suspend:
+		case Opcode::Resume:
+		case Opcode::ResumeThrow:
+		case Opcode::ResumeThrowRef:
+		case Opcode::Switch:
+			throw std::runtime_error(
+					"stack-switching instruction is not implemented "
+					"(docs/proposals/STACK_SWITCHING.md SS-0)");
+
 		// ----------------------------------------------------------------
 		// Prefixed instruction groups
 		// Sub-opcodes: 0xFB/0xFD use LEB128 u32; 0xFC and 0xFE use plain byte.
