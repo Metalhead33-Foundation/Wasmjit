@@ -82,6 +82,7 @@ live, because every backend and the runtime both depend on them:
 | GC object layout: header words, per-type size/alignment, array data offset | `WasmGcHeader.hpp` (`gcStorageBytes` / `gcStorageAlign` / `gcArrayDataOffset`), invariant H1 in [`proposals/GC.md`](proposals/GC.md) | derive its lowered aggregate layout from those helpers, so field offsets cannot drift |
 | The POD views generated code may touch: `VMContext`, `LinearMemory`, `TableInstance` | `WasmVMContext.hpp`, `WasmMemory.hpp`, `WasmTable.hpp` (standard-layout + first-field `static_assert`s) | access them only through those layouts |
 | The trap entry point | `WasmTrap.hpp` ([`SAFETY.md`](SAFETY.md) §2.4) | call it with the same kind/message convention instead of inventing a failure mode |
+| Core-module instantiation: component execution instantiates embedded modules only through `ModuleInstantiator` | `WasmModuleInstance.hpp`, `WasmComponentRuntime.hpp` | implement the `ModuleInstantiator` hooks; `ComponentRuntime` must not be made to depend on one code generator |
 | The SIMD helper ABI (`const void*` / `void* out`, immediates as scalars) | `wasm_simd_scalar.hpp` | lower `v128` ops onto those entry points, or provide its own but keep the same semantics |
 | Unmodelled value types are rejected at load, so no backend is ever handed one | `WasmType.hpp`, `WasmModule.cpp` | nothing — this is the core protecting it |
 
@@ -126,6 +127,15 @@ First pass, 2026-10-16 (the change that added this note):
 No code changed behaviour: every edit was a comment (verified — no `WasmBase/`
 file includes a backend header or names a backend type in code, then or now),
 and the full suite was green before and after.
+
+Layering follow-up, 2026-10-22: the executable component runtime moved from
+`LibJit/ComponentRuntime.{hpp,cpp}` to
+`WasmBase/WasmComponentRuntime.{hpp,cpp}`. It now takes a
+`WASM::ModuleInstantiator&` instead of a `jit_context_t`, and `libffi` moved
+from `LibJit.pro` to `WasmBase.pro`; component execution is therefore available
+to every backend that implements the instantiator hooks. The runtime still owns
+the component graph, canonical ABI and async state; only core-module
+instantiation crosses the backend seam.
 
 ## 8. Deliberate tensions and waivers
 

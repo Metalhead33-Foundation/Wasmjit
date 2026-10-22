@@ -268,7 +268,7 @@ rather than duplicated in `COMPONENT_MODEL.md`:
   endpoints over a shared element queue, copy results/event codes, and a
   `ComponentExecutor` seam with a `SingleAgentExecutor` implementation
   (`thread.index` 0, `available-parallelism` 1, no OS thread).
-- The **single-agent semantics execute** in `LibJIT::ComponentRuntime`:
+- The **single-agent semantics execute** in `WASM::ComponentRuntime`:
   `stream.new`/`future.new`, read/write (including a blocked async read completed
   by a later write), cancel, drop and forward; `task.return`/`task.cancel`;
   `context.get`/`set`; `backpressure.inc`/`dec`; `waitable-set.new/wait/poll/

@@ -1,6 +1,6 @@
-#include "ComponentRuntime.hpp"
-#include "../WasmBase/WasmRegistryImportResolver.hpp"
-#include "../WasmBase/WasmStore.hpp"
+#include "WasmComponentRuntime.hpp"
+#include "WasmRegistryImportResolver.hpp"
+#include "WasmStore.hpp"
 #include <array>
 #include <atomic>
 #include <cstring>
@@ -9,7 +9,7 @@
 #include <ffi.h>
 #include <stdexcept>
 
-namespace LibJIT {
+namespace WASM {
 namespace {
 
 uint64_t nextComponentAbiInstanceId()
@@ -1891,9 +1891,9 @@ void decodeComponentValue(const WASM::TypeStore& store,
 
 } // namespace
 
-ComponentRuntime::ComponentRuntime(jit_context_t context,
+ComponentRuntime::ComponentRuntime(ModuleInstantiator& instantiator,
 		const WASM::Component& component, ComponentImports imports)
-	: context_(context), compiler_(context), component_(component),
+	: instantiator_(instantiator), component_(component),
 	  imports_(std::move(imports)),
 	  async_([this] { return addHandle(); },
 			  [this](uint32_t handle) { freeHandle(handle); }),
@@ -2039,7 +2039,7 @@ void ComponentRuntime::processCoreInstance(const WASM::CoreInstance& instance)
 					"component runtime: core instantiate argument index out of bounds");
 		coreInstances_[arg.instanceIndex]->registerExports(resolver, arg.name);
 	}
-	auto moduleInstance = compiler_.instantiate(
+	auto moduleInstance = instantiator_.instantiate(
 			*component_.coreModules[instance.moduleIndex], resolver);
 	if (!moduleInstance)
 		throw std::runtime_error("component runtime: core instantiation failed");
@@ -2075,7 +2075,7 @@ void ComponentRuntime::processComponentInstance(
 		childImports[arg.name] = componentFuncs_[arg.sortIndex.index];
 	}
 	nestedRuntimes_.push_back(std::make_unique<ComponentRuntime>(
-			context_, *nestedComponents_[instance.componentIndex],
+			instantiator_, *nestedComponents_[instance.componentIndex],
 			std::move(childImports)));
 }
 
@@ -3177,4 +3177,4 @@ void ComponentRuntime::invokeCore(const WASM::Callable& callable,
 	}
 }
 
-} // namespace LibJIT
+} // namespace WASM

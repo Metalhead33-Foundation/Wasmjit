@@ -49,8 +49,8 @@ struct ModuleInstanceInternals {
 	std::vector<Callable>  importStorage; // Owns the WasmCallable objects for imports
 	// Tags are process-wide identities owned by the Store (`TagId`); this is the
 	// module's tag index space, imports first, then the module's own tags
-	// (docs/proposals/EXCEPTIONS.md EX-2). Filled before compilation, so the JIT
-	// can fold a `throw tagidx` into the constant id.
+	// (docs/proposals/EXCEPTIONS.md EX-2). Filled before compilation, so the
+	// backend can fold a `throw tagidx` into the constant id.
 	std::vector<TagId> tagIds;
 	std::vector<bool> dataSegmentDropped;
 	std::vector<bool> elementSegmentDropped;

@@ -1,12 +1,11 @@
-#ifndef COMPONENTRUNTIME_HPP
-#define COMPONENTRUNTIME_HPP
-#include "../WasmBase/WasmComponent.hpp"
-#include "../WasmBase/WasmComponentAbi.hpp"
-#include "../WasmBase/WasmComponentAsync.hpp"
-#include "../WasmBase/WasmImport.hpp"
-#include "../WasmBase/WasmModuleInstance.hpp"
-#include "../WasmBase/WasmTypeStore.hpp"
-#include "LibjitModuleCompiler.hpp"
+#ifndef WASMCOMPONENTRUNTIME_HPP
+#define WASMCOMPONENTRUNTIME_HPP
+#include "WasmComponent.hpp"
+#include "WasmComponentAbi.hpp"
+#include "WasmComponentAsync.hpp"
+#include "WasmImport.hpp"
+#include "WasmModuleInstance.hpp"
+#include "WasmTypeStore.hpp"
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -17,7 +16,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace LibJIT {
+namespace WASM {
 
 // A structured host-facing component value. It is intentionally a small
 // discriminated union: the runtime owns conversion to/from the canonical ABI,
@@ -59,16 +58,17 @@ struct ComponentFunction {
 	std::function<void(std::span<const ComponentValue>, std::span<ComponentValue>)> callValues;
 };
 
-// Minimal executable component runtime for embedded core modules/instances and
-// `canon lift`. It intentionally stops at the flat Canonical ABI subset; nested
-// components, component imports, resource handles and canonical lower closures
-// remain explicit unsupported cases.
+// Executable component runtime for embedded core modules/instances, nested
+// components and `canon lift`/`lower`. It owns the component graph, the
+// canonical ABI value lowering/lifting, resource/stream/future handles and the
+// single-agent async surface. Core-module instantiation is delegated to a
+// `ModuleInstantiator`, so this class is independent of the code generator.
 class ComponentRuntime {
 public:
 	using ComponentImports = std::unordered_map<std::string, ComponentFunction>;
 
-	ComponentRuntime(jit_context_t context, const WASM::Component& component,
-			ComponentImports imports = {});
+	ComponentRuntime(ModuleInstantiator& instantiator,
+			const Component& component, ComponentImports imports = {});
 	~ComponentRuntime();
 
 	ComponentRuntime(const ComponentRuntime&) = delete;
@@ -120,8 +120,7 @@ private:
 				std::string_view moduleName) const;
 	};
 
-	jit_context_t context_;
-	ModuleCompiler compiler_;
+	ModuleInstantiator& instantiator_;
 	const WASM::Component& component_;
 	std::vector<std::unique_ptr<CoreInstanceHandle>> coreInstances_;
 	ComponentImports imports_;
@@ -188,5 +187,5 @@ private:
 			std::span<WASM::Value> results) const;
 };
 
-} // namespace LibJIT
-#endif // COMPONENTRUNTIME_HPP
+} // namespace WASM
+#endif // WASMCOMPONENTRUNTIME_HPP

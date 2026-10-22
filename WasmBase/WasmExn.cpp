@@ -37,7 +37,7 @@ void* wasm_exn_create(int32_t tagId, uint32_t payloadBytes)
 		storage = new std::byte[total];
 	} catch (...) {
 		// A failed allocation is a host limitation, reported as a recoverable
-		// trap rather than letting a C++ exception cross JIT frames.
+		// trap rather than letting a C++ exception cross generated-code frames.
 		store.releaseBytes(total);
 		WASM::trap(WASM::TrapKind::OutOfMemory);
 	}

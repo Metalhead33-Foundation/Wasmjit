@@ -295,13 +295,14 @@ dispatching it to the wrong processor:
 The result was either an unrelated exception (`"type section: ..."`) or a
 nonsense module that decoded far enough to keep going. CM-0 closed that hole;
 CM-1a/CM-1b (below) now parse every component section and binary production.
-A component runtime is also present (`LibJit/ComponentRuntime.{hpp,cpp}`): it
+A component runtime is also present (`WasmBase/WasmComponentRuntime.{hpp,cpp}`): it
 instantiates embedded/nested core modules and components, executes
 `canon lift`/`lower`, lowers/lifts the supported canonical values through
 linear memory, manages resource/stream/future handles, executes start/value
 definitions, and exposes component functions to C++ and the structured script
-harness. The remaining limits are the deferred multi-agent work listed in
-§4.3 and §5.
+harness. Core-module instantiation is delegated to a `WASM::ModuleInstantiator`,
+so the runtime itself is backend-neutral. The remaining limits are the deferred
+multi-agent work listed in §4.3 and §5.
 
 ### 4.2 Seams that already fit
 
@@ -387,13 +388,15 @@ component grammar into an AST:
   component) plus `resolve(SortIdx)` / `resolve(CoreSortIdx)`. Resolving is
   bounds-checked and returns the introducing `ComponentDefinitionRef`.
   `Component::buildIndexSpaces()` builds it without execution.
-- `LibJit/ComponentRuntime.{hpp,cpp}` executes the component graph. It walks the
+- `WasmBase/WasmComponentRuntime.{hpp,cpp}` executes the component graph. It walks the
   definition order, instantiates embedded core modules/instances (with
   core-instance arguments resolved through `RegistryImportResolver`) and nested
   components, resolves core export aliases, implements `canon lift`/`lower`
   through libffi closures, links host `ComponentFunction` imports, runs
   `memory`/`realloc`/`post-return`, and lowers/lifts strings, lists, records,
-  maps, variants/options/results and resource/stream/future handles. The
+  maps, variants/options/results and resource/stream/future handles. Embedded
+  modules are instantiated through `WASM::ModuleInstantiator`, the backend seam;
+  the runtime never names a code generator. The
   single-agent async surface (copy/cancel/forward, tasks, context,
   backpressure, waitable sets, subtasks, error-context) is implemented in the
   same runtime; only true multi-agent scheduling is deferred
@@ -435,14 +438,14 @@ component grammar into an AST:
 |---|---|---|---|
 | ~~CM1~~ | ~~No `layer` discrimination.~~ **Done (CM-0):** `Module::fromFile` reads magic/version/layer separately and throws a component-specific error when the layer is non-zero, so a component is refused instead of misparsed. | `WasmModule.cpp` `fromFile` | Closed |
 | ~~CM2~~ | ~~**Structural/type validation incomplete.**~~ **Done (CM-1c/CM-1d):** all 13 index spaces, definition-order growth, `sortidx` resolution, references, scopes, labels, declarations, aliases, instantiation signatures, canon, start, values, external visibility, resource substitution, core-module matching, `[get]`/`[set]`, strong uniqueness and Canonical ABI flattenability are validated. | `WasmComponentValidation.*` | Closed |
-| ~~CM3~~ | ~~**Runtime bridge has specification gaps.**~~ **Done:** the value grammar is modelled and canonicalised; `ComponentRuntime` executes flat values, strings/lists/records/maps, variant joins, start/value definitions, inline core instances and nested components, and the single-agent async surface. | `WasmComponentModel.hpp`, `WasmTypeStore.hpp`, `LibJit/ComponentRuntime.*` | Closed |
-| ~~CM4~~ | ~~**Canonical ABI runtime has gaps.**~~ **Done:** flat values, strings/lists/records/maps, exact variant/result/option joins, `memory`/`realloc`/`post-return`, indirect parameters/results, resource handles, stream/future copy and waitable events execute. | `WasmTypeStore.*`, `LibJit/ComponentRuntime.*` | Closed |
-| ~~CM5~~ | ~~**Component graph execution incomplete.**~~ **Done:** embedded/nested components, inline core instances, core export aliases, `canon lift`/`lower`, host imports and canonical values execute; multi-agent async functions remain a THREADS deferral. | `LibJit/ComponentRuntime.*` | Closed |
+| ~~CM3~~ | ~~**Runtime bridge has specification gaps.**~~ **Done:** the value grammar is modelled and canonicalised; `ComponentRuntime` executes flat values, strings/lists/records/maps, variant joins, start/value definitions, inline core instances and nested components, and the single-agent async surface. | `WasmComponentModel.hpp`, `WasmTypeStore.hpp`, `WasmBase/WasmComponentRuntime.*` | Closed |
+| ~~CM4~~ | ~~**Canonical ABI runtime has gaps.**~~ **Done:** flat values, strings/lists/records/maps, exact variant/result/option joins, `memory`/`realloc`/`post-return`, indirect parameters/results, resource handles, stream/future copy and waitable events execute. | `WasmTypeStore.*`, `WasmBase/WasmComponentRuntime.*` | Closed |
+| ~~CM5~~ | ~~**Component graph execution incomplete.**~~ **Done:** embedded/nested components, inline core instances, core export aliases, `canon lift`/`lower`, host imports and canonical values execute; multi-agent async functions remain a THREADS deferral. | `WasmBase/WasmComponentRuntime.*` | Closed |
 | ~~CM6~~ | ~~**Full Type linking absent.**~~ **Done (TI-1…TI-4):** type imports decode `sub <abstract heaptype>`, enter the local type index space, receive nominal Store ids, are published by type exports and are linked with `WasmTypeRegistry` bound matching. The importing module sees imported types as abstract, as the MVP specifies; casts to imported types remain post-MVP in the proposal. | `WasmImport.hpp`, `WasmModule.*`, `WasmRegistryImportResolver.*`, `WasmTypeStore.*` | Closed |
 | ~~CM7~~ | ~~**Component-script value marshalling incomplete.**~~ **Done:** component scripts marshal primitives, strings, records, lists, tuples, variants, enums, flags, options, results, maps, own/borrow, streams and futures, using the function's canonical component types. The upstream corpus is not checked in; equivalent C++/WAT tests are. | `Test/main.cpp`, `Test/WastScript.cpp` | Closed |
-| ~~CM8~~ | ~~**Async copy semantics deferred.**~~ **Done for the single-agent engine:** libffi closures back `canon lower`, resources, stream/future new/read/write/cancel/forward, tasks, context, backpressure, waitable sets, subtasks and error-context. Real concurrent scheduling remains THREADS TH-5. | `LibJit/ComponentRuntime.*`, `WasmBase/WasmComponentAsync.hpp` | Closed (single-agent) |
-| ~~CM9~~ | ~~**No WASI 0.2 interfaces.**~~ **Closed by contract:** WASI is an embedder interface; a `wasi:*` import is an ordinary host component import resolved by the embedder. No engine-side WASI implementation is required by the Component Model. | `LibJit/ComponentRuntime.*`, `Test/main.cpp` host-import tests | Closed (host-provided) |
-| ~~CM10~~ | ~~**No error-context, async copy or threading built-ins.**~~ **Done:** `error-context.new/debug-message/drop`, stream/future copy/cancel/forward, task/context/backpressure, waitable sets, subtasks and the component async interfaces exist. `thread.*` returns single-agent answers (`index` 0, `yield` no-op, `available-parallelism` 1) and traps for thread creation, which requires a multi-agent backend. | `WasmComponentAsync.hpp`, `LibJit/ComponentRuntime.*` | Closed (single-agent) |
+| ~~CM8~~ | ~~**Async copy semantics deferred.**~~ **Done for the single-agent engine:** libffi closures back `canon lower`, resources, stream/future new/read/write/cancel/forward, tasks, context, backpressure, waitable sets, subtasks and error-context. Real concurrent scheduling remains THREADS TH-5. | `WasmBase/WasmComponentRuntime.*`, `WasmBase/WasmComponentAsync.hpp` | Closed (single-agent) |
+| ~~CM9~~ | ~~**No WASI 0.2 interfaces.**~~ **Closed by contract:** WASI is an embedder interface; a `wasi:*` import is an ordinary host component import resolved by the embedder. No engine-side WASI implementation is required by the Component Model. | `WasmBase/WasmComponentRuntime.*`, `Test/main.cpp` host-import tests | Closed (host-provided) |
+| ~~CM10~~ | ~~**No error-context, async copy or threading built-ins.**~~ **Done:** `error-context.new/debug-message/drop`, stream/future copy/cancel/forward, task/context/backpressure, waitable sets, subtasks and the component async interfaces exist. `thread.*` returns single-agent answers (`index` 0, `yield` no-op, `available-parallelism` 1) and traps for thread creation, which requires a multi-agent backend. | `WasmComponentAsync.hpp`, `WasmBase/WasmComponentRuntime.*` | Closed (single-agent) |
 
 ## 6. Where we can and should play fast and loose
 

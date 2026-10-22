@@ -131,7 +131,7 @@ library per backend plus the test executable.
 
 | Path | What it is |
 |---|---|
-| `WasmBase/` | The core library (`libWasmBase`): binary decoding, the module/instance model, `Store`/`TypeRegistry`/`Value`, the opcode decoder, and the shared SIMD helper ABI. **Backend-agnostic by rule** — see [`docs/LAYERING.md`](docs/LAYERING.md) |
+| `WasmBase/` | The core library (`libWasmBase`): binary decoding, the module/instance model, `Store`/`TypeRegistry`/`Value`, the opcode decoder, the shared SIMD helper ABI, and the backend-neutral component runtime (`WasmComponentRuntime`). **Backend-agnostic by rule** — see [`docs/LAYERING.md`](docs/LAYERING.md) |
 | `WasmStub/` | `libWasmStub`: a non-JIT opcode dispatcher that pretty-prints instead of executing (inspection/debug) |
 | `LibJit/` | `libLibJit`: the GNU LibJIT backend (context, type translation, module compiler, dispatch) — the current implementation path, and the only backend that executes |
 | `Asmjit/` | Scaffold for the planned AsmJit backend (**empty today, no code**). Its MMX/SSE…AVX-512 instruction coverage and vector-aware register allocator are a planned SIMD-performance lever |
@@ -149,8 +149,8 @@ through qmake:
 - [`Project.pro`](Project.pro) is the top-level `subdirs` project
   (`WasmBase` + `WasmStub` + `LibJit` + `Test`, with the `Asmjit`/`Sljit`
   scaffolds);
-- the test target links against `libjit`, `libffi` (the flat component-runtime
-  closure path), Catch2 and the project libraries; the component runtime uses
+- the test target links against `libjit`, Catch2 and the project libraries;
+- `libWasmBase` links `libffi` (the flat component-runtime closure path) and
   the header-only `utf8cpp` package for Canonical ABI string transcoding;
 - the executable under `build/<config>/Test/WasmJit` is a development sandbox and
   test harness, not the final embeddable API.

@@ -24,7 +24,7 @@
 #include <nlohmann/json.hpp>
 
 #include "LibJit/LibjitModuleCompiler.hpp"
-#include "LibJit/ComponentRuntime.hpp"
+#include "WasmBase/WasmComponentRuntime.hpp"
 #include "WasmBase/WasmComponent.hpp"
 #include "WasmBase/WasmModule.hpp"
 #include "WasmBase/WasmModuleInstance.hpp"
@@ -570,7 +570,8 @@ class ScriptRunner
 {
 public:
 	ScriptRunner(std::string wasmDir, LibJIT::Context& jitContext)
-		: wasmDir(std::move(wasmDir)), jitContext(jitContext)
+		: wasmDir(std::move(wasmDir)), jitContext(jitContext),
+		  moduleCompiler(jitContext.rawContext())
 	{
 		// Measurement mode: execute the four negative-module command kinds
 		// instead of skipping them. The default suite stays a conformance run;
@@ -592,6 +593,11 @@ private:
 
 	std::string wasmDir;
 	LibJIT::Context& jitContext;
+	// One instantiator for every module/component in this script. A
+	// ComponentRuntime borrows it; keeping it here gives the runtime a stable
+	// owner for the whole script (and lets a component instantiate its embedded
+	// core modules through the same backend).
+	LibJIT::ModuleCompiler moduleCompiler;
 	// See the constructor: `WASM_SPEC_VALIDATE=1` executes the negative-module
 	// command kinds and reports real pass/fail instead of skipping them.
 	bool strictValidation = false;
@@ -605,12 +611,12 @@ private:
 	std::vector<std::unique_ptr<WASM::Module>> modules;
 	std::vector<std::unique_ptr<WASM::ModuleInstance>> instances;
 	std::vector<std::unique_ptr<WASM::Component>> components;
-	std::vector<std::unique_ptr<LibJIT::ComponentRuntime>> componentRuntimes;
+	std::vector<std::unique_ptr<WASM::ComponentRuntime>> componentRuntimes;
 
 	std::unordered_map<std::string, WASM::ModuleInstance*> namedInstances;
-	std::unordered_map<std::string, LibJIT::ComponentRuntime*> namedComponents;
+	std::unordered_map<std::string, WASM::ComponentRuntime*> namedComponents;
 	WASM::ModuleInstance* lastInstance = nullptr;
-	LibJIT::ComponentRuntime* lastComponent = nullptr;
+	WASM::ComponentRuntime* lastComponent = nullptr;
 	bool lastWasComponent = false;
 
 	ScriptReport report;
@@ -628,7 +634,7 @@ private:
 	void skip(const std::string& reason);
 
 	WASM::ModuleInstance* instanceFor(const std::string& name, int line);
-	LibJIT::ComponentRuntime* componentFor(const std::string& name, int line);
+	WASM::ComponentRuntime* componentFor(const std::string& name, int line);
 	std::optional<WASM::FuncType> funcTypeFor(const WASM::ModuleInstance& instance, const WASM::Callable& callable);
 
 	void runCommand(const ScriptCommand& command);
@@ -849,7 +855,7 @@ WASM::ModuleInstance* ScriptRunner::instanceFor(const std::string& name, int lin
 	return lastInstance;
 }
 
-LibJIT::ComponentRuntime* ScriptRunner::componentFor(const std::string& name,
+WASM::ComponentRuntime* ScriptRunner::componentFor(const std::string& name,
 		int line)
 {
 	if (!name.empty()) {
@@ -999,8 +1005,8 @@ void ScriptRunner::onModule(const ScriptCommand& command)
 		}
 		components.push_back(std::move(component));
 		try {
-			auto runtime = std::make_unique<LibJIT::ComponentRuntime>(
-					jitContext.rawContext(), *components.back());
+			auto runtime = std::make_unique<WASM::ComponentRuntime>(
+					moduleCompiler, *components.back());
 			lastComponent = runtime.get();
 			lastWasComponent = true;
 			if (!command.name.empty())
@@ -1031,10 +1037,9 @@ void ScriptRunner::onModule(const ScriptCommand& command)
 		std::fflush(stderr);
 	}
 
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
 	std::unique_ptr<WASM::ModuleInstance> instance;
 	try {
-		instance = compiler.instantiate(*modules.back(), registry);
+		instance = moduleCompiler.instantiate(*modules.back(), registry);
 	} catch (const std::exception& error) {
 		fail(command.line, "instantiation of '" + command.filename + "' failed: " + error.what());
 		return;
@@ -1085,9 +1090,9 @@ return true;
 }
 
 bool componentPrimitiveFromScript(const ScriptValue& value,
-WASM::PrimitiveValueType primitive, LibJIT::ComponentValue& out)
+WASM::PrimitiveValueType primitive, WASM::ComponentValue& out)
 {
-using K = LibJIT::ComponentValue::Kind;
+using K = WASM::ComponentValue::Kind;
 using P = WASM::PrimitiveValueType;
 switch (primitive) {
 case P::Bool:
@@ -1133,9 +1138,9 @@ return false;
 // passed/compared as. Structured values are ordered by the *type*, not by the
 // script text, so record field order and variant labels are checked.
 bool componentValueFromScript(const ScriptValue& value,
-const WASM::ComponentValueType& type, LibJIT::ComponentValue& out)
+const WASM::ComponentValueType& type, WASM::ComponentValue& out)
 {
-using K = LibJIT::ComponentValue::Kind;
+using K = WASM::ComponentValue::Kind;
 if (type.kind == WASM::ComponentValueType::Kind::Primitive)
 return componentPrimitiveFromScript(value, type.primitive, out);
 
@@ -1199,7 +1204,7 @@ found = true;
 if (view.cases()[i].hasType) {
 if (!value.hasPayload || !value.payload)
 return false;
-LibJIT::ComponentValue payloadValue;
+WASM::ComponentValue payloadValue;
 if (!componentValueFromScript(*value.payload,
 view.cases()[i].type, payloadValue))
 return false;
@@ -1286,10 +1291,10 @@ return false;
 }
 }
 
-bool sameComponentValue(const LibJIT::ComponentValue& actual,
-const LibJIT::ComponentValue& expected)
+bool sameComponentValue(const WASM::ComponentValue& actual,
+const WASM::ComponentValue& expected)
 {
-using K = LibJIT::ComponentValue::Kind;
+using K = WASM::ComponentValue::Kind;
 if (actual.kind != expected.kind)
 return false;
 switch (actual.kind) {
@@ -1315,7 +1320,7 @@ return false;
 return true;
 }
 
-bool componentValueMatches(const LibJIT::ComponentValue& actual,
+bool componentValueMatches(const WASM::ComponentValue& actual,
 const ScriptValue& expected, const WASM::ComponentValueType& type)
 {
 if (!expected.alternatives.empty()) {
@@ -1324,7 +1329,7 @@ if (componentValueMatches(actual, alternative, type))
 return true;
 return false;
 }
-LibJIT::ComponentValue wanted;
+WASM::ComponentValue wanted;
 if (!componentValueFromScript(expected, type, wanted))
 return false;
 const bool same = sameComponentValue(actual, wanted);
@@ -1343,7 +1348,7 @@ void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 	const bool componentAction = action.module.empty()
 			? lastWasComponent : namedComponents.count(action.module) != 0;
 	if (componentAction) {
-		LibJIT::ComponentRuntime* component = componentFor(action.module, command.line);
+		WASM::ComponentRuntime* component = componentFor(action.module, command.line);
 		if (component == nullptr)
 			return;
 		const auto function = component->exportedFunction(action.field);
@@ -1363,7 +1368,7 @@ void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 			fail(command.line, "component result count mismatch for '" + action.field + "'");
 			return;
 		}
-		std::vector<LibJIT::ComponentValue> args(action.args.size());
+		std::vector<WASM::ComponentValue> args(action.args.size());
 		for (std::size_t i = 0; i < action.args.size(); ++i) {
 			if (!componentValueFromScript(action.args[i],
 					function->paramTypes[i], args[i])) {
@@ -1371,7 +1376,7 @@ void ScriptRunner::onAssertReturn(const ScriptCommand& command)
 				return;
 			}
 		}
-		std::vector<LibJIT::ComponentValue> results(function->resultTypes.size());
+		std::vector<WASM::ComponentValue> results(function->resultTypes.size());
 		try {
 			function->callValues(args, results);
 		} catch (const std::exception& error) {
@@ -1661,7 +1666,6 @@ ScriptRunner::ModuleAttempt ScriptRunner::attemptModule(const ScriptCommand& com
 	// Keep the module alive: an instance holds a raw `const Module*`.
 	modules.push_back(std::move(module));
 
-	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
 	std::unique_ptr<WASM::ModuleInstance> instance;
 	// A start function may trap during instantiation; that is the expected
 	// outcome for `assert_uninstantiable`, not a host failure.
@@ -1672,7 +1676,7 @@ ScriptRunner::ModuleAttempt ScriptRunner::attemptModule(const ScriptCommand& com
 		return ModuleAttempt::Trapped;
 	}
 	try {
-		instance = compiler.instantiate(*modules.back(), registry);
+		instance = moduleCompiler.instantiate(*modules.back(), registry);
 	} catch (const std::exception& error) {
 		if (std::getenv("WJ_TRACE") != nullptr)
 			std::fprintf(stderr, "[wj]   link rejected %s: %s\n", command.filename.c_str(), error.what());

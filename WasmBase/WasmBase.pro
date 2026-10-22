@@ -2,6 +2,10 @@ TEMPLATE = lib
 TARGET = WasmBase
 CONFIG += shared c++2a
 CONFIG -= qt
+# libffi backs the component runtime's canonical ABI closures. It is a host
+# ABI library, not a wasm code generator; the runtime itself is backend-neutral.
+CONFIG += link_pkgconfig
+PKGCONFIG += libffi
 include(WasmBase.pri)
 
 # Highway (`libhwy`, per pkg-config: -I/usr/include -DHWY_SHARED_DEFINE): the
@@ -16,6 +20,7 @@ DEFINES += HWY_SHARED_DEFINE
 SOURCES += \
         WasmArtifact.cpp \
         WasmComponent.cpp \
+        WasmComponentRuntime.cpp \
         WasmComponentValidation.cpp \
         WasmException.cpp \
         WasmExn.cpp \
@@ -42,6 +47,7 @@ HEADERS += \
     WasmArtifact.hpp \
     WasmComponent.hpp \
     WasmComponentModel.hpp \
+    WasmComponentRuntime.hpp \
     WasmComponentSection.hpp \
     WasmComponentValidation.hpp \
     WasmContext.hpp \

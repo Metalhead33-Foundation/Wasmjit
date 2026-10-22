@@ -95,7 +95,7 @@ Ret callCallable(const Callable& callable, Args&&... args)
 
 // Calls a function with more than one result.
 //
-// A multi-result callee's JIT signature is
+// A multi-result callee's lowered signature is
 //   void f(VMContext*, params..., void* results)
 // (docs/ABI.md "Multiple Results"), so the embedder supplies the trailing
 // result buffer. It must be at least as large as the lowered result tuple;
