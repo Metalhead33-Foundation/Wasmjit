@@ -51,6 +51,13 @@ struct VMContext {
 	// performs no retain/release/lifecycle calls. Installed before
 	// instantiation; see `WasmHostBridge.hpp`.
 	const HostBridge* hostBridge = nullptr;
+
+	// Guest call-stack guard (WasmStack.hpp, docs/ABI.md, docs/SAFETY.md §2.8).
+	// The lowest address generated code may let its frame reach on the
+	// executing host thread; zero means no limit is installed and the backend
+	// must not check. Every compiled function calls `wasm_stack_check(this)`
+	// on entry and traps with `CallStackExhausted` when the probe is below it.
+	uintptr_t stackLimit = 0;
 };
 
 static_assert(offsetof(VMContext, memories) == 0,

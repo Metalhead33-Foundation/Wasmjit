@@ -1,5 +1,6 @@
 #include "LibjitModuleCompiler.hpp"
 #include "LibjitOpcodeDispatcher.hpp"
+#include "../WasmBase/WasmStack.hpp"
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/wasm_simd_scalar.hpp"
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
@@ -12,6 +13,23 @@
 namespace LibJIT {
 
 namespace {
+
+// ── Guest call-stack guard ──────────────────────────────────────────────────
+// Emitted as the first instruction of every compiled function. The contract is
+// backend-neutral and lives in the core (WasmBase/WasmStack.hpp, docs/ABI.md):
+// the helper probes the executing thread's stack pointer against
+// `VMContext::stackLimit` and raises `TrapKind::CallStackExhausted`, which is a
+// normal recoverable Wasm trap. Without it, unbounded Wasm recursion walks the
+// host stack into the guard page and the kernel kills the process (the
+// `segfault at <rsp> ... error 6` signature docs/TESTING.md used to document).
+void emitStackGuard(jit_function_t fn)
+{
+	jit_type_t params[1] = {jit_type_void_ptr};
+	jit_type_t signature = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 1, 1);
+	jit_value_t args[1] = {jit_value_get_param(fn, 0)};
+	jit_insn_call_native(fn, "wasm_stack_check",
+		reinterpret_cast<void*>(&WASM::wasm_stack_check), signature, args, 1, 0);
+}
 
 jit_value_t zeroValueForType(jit_function_t fn, jit_type_t t);
 
@@ -93,6 +111,11 @@ void ModuleCompiler::compileFunction(jit_function_t fn, uint32_t funcTypeIdx, co
 {
 	WASM::PreparedFunctionStack stack;
 	stack.prepare(module.funcTypeAt(funcTypeIdx), body);
+
+	// Check the host stack before the body runs. The prologue (and therefore the
+	// frame allocation) has already happened at this point, which is why a
+	// function's frame is bounded by `kMaxFunctionLocalBytes`.
+	emitStackGuard(fn);
 
 	std::vector<jit_value_t> locals;
 	locals.reserve(stack.allLocals.size());

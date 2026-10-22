@@ -1,4 +1,6 @@
 #include "WasmType.hpp"
+#include "WasmSafety.hpp"
+#include <stdexcept>
 namespace WASM {
 
 void PreparedFunctionStack::prepare(const FuncType& sig, const FunctionBody& body) {
@@ -19,6 +21,18 @@ void PreparedFunctionStack::prepare(const FuncType& sig, const FunctionBody& bod
 		}
 	}
 	localCount = allLocals.size() - parameterCount;
+
+	// 4. Bound the frame this function will need. The count cap in the decoder
+	// protects the vectors above; this protects the *host stack*: the backend's
+	// prologue allocates the frame before the generated stack guard runs, so an
+	// oversized frame could skip the guard page (WasmStack.hpp,
+	// docs/SAFETY.md §2.8). Parameters count too, not just declared locals.
+	uint64_t frameBytes = 0;
+	for (const auto& local : allLocals)
+		frameBytes += (local.opcode == ValueTypeCode::V128) ? 16u : 8u;
+	if (frameBytes > kMaxFunctionLocalBytes)
+		throw std::runtime_error(
+				"function body's parameters and locals exceed the engine's stack-frame limit");
 }
 
 }

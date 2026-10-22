@@ -108,7 +108,7 @@ families instead of skipping them, and the validator (`docs/VALIDATION.md`)
 rejects **all 2,211** curated `assert_invalid` cases plus all 127
 `assert_unlinkable` ones and all 27 `assert_uninstantiable` ones — **2,382 of
 2,382** binary negative commands. The strict run is fully green (the default
-suite is **9,175 assertions / 338 test cases**). All 17 curated
+suite is **9,310 assertions / 358 test cases**). All 17 curated
 `assert_malformed` cases are rejected too, including the strict LEB128 cases;
 the remaining malformed cases are *text-format* (946 commands across all kinds)
 and need a text parser, not a validator. See

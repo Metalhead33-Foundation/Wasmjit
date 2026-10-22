@@ -7091,3 +7091,61 @@ TEST_CASE("host threads instantiate and call independent modules concurrently")
 	REQUIRE(failures.load() == 0);
 }
 
+
+TEST_CASE("unbounded Wasm recursion traps with 'call stack exhausted'")
+{
+	// Regression test for the dmesg signature the engine used to produce:
+	// `segfault at <rsp> ... error 6` inside generated code, from an
+	// `assert_exhaustion` script. The generated stack guard must turn it into
+	// the spec's trap instead of letting the kernel kill the host, and the
+	// engine must stay usable afterwards (WasmBase/WasmStack.hpp,
+	// docs/SAFETY.md §2.8).
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("stack_exhaustion", imports, *backend);
+	REQUIRE(loaded.instance.get() != nullptr);
+
+	auto recurse = loaded.instance->exportedFunction("recurse");
+	REQUIRE(recurse.has_value());
+
+	WASM::TrapScope scope;
+	volatile bool trapped = false;
+	if (setjmp(scope.buffer) == 0)
+		WASM::callCallable<int32_t>(*recurse, int32_t(0));
+	else
+		trapped = true;
+	REQUIRE(trapped);
+	REQUIRE(scope.kind() == WASM::TrapKind::CallStackExhausted);
+
+	// The guard leaves the usable part of the stack intact: a deep but bounded
+	// descent still fits, and works after the trap unwound the recursion.
+	auto bounded = loaded.instance->exportedFunction("bounded");
+	REQUIRE(bounded.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*bounded, int32_t(10000)) == 10000);
+	REQUIRE(WASM::callCallable<int32_t>(*bounded, int32_t(10)) == 10);
+}
+
+
+TEST_CASE("a function frame larger than the stack guard's reserve is rejected")
+{
+	// The generated guard runs after the backend's prologue, so one frame larger
+	// than the reserve could skip over the host guard page before any check runs
+	// (docs/SAFETY.md §2.8). The core bounds that frame independently of the
+	// backend: 9000 i64 locals need 72 000 bytes, above the 64 KiB limit.
+	WASM::FuncType signature;
+	WASM::FunctionBody body;
+	body.locals.push_back(WASM::LocalEntry{
+			9000, WASM::ValueType{WASM::ValueTypeCode::I64, 0, false}});
+
+	WASM::PreparedFunctionStack oversized;
+	REQUIRE_THROWS_WITH(oversized.prepare(signature, body),
+			"function body's parameters and locals exceed the engine's stack-frame limit");
+
+	// Just under the limit is still accepted, so ordinary modules are untouched.
+	WASM::FunctionBody bounded;
+	bounded.locals.push_back(WASM::LocalEntry{
+			8000, WASM::ValueType{WASM::ValueTypeCode::I64, 0, false}});
+	WASM::PreparedFunctionStack accepted;
+	REQUIRE_NOTHROW(accepted.prepare(signature, bounded));
+}
+

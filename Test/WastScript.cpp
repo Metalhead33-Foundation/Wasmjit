@@ -1796,12 +1796,12 @@ void ScriptRunner::onAction(const ScriptCommand& command)
 
 void ScriptRunner::onAssertExhaustion(const ScriptCommand& command)
 {
-	// Approximated: the engine reports stack exhaustion by terminating
-	// abnormally (a real stack overflow, or a trap via std::abort()), so run
-	// the action in a *nested* child and treat an abnormal end as the expected
-	// exhaustion. A normal return is a failure — the call was supposed to
-	// exhaust the stack. `assert_trap` (whose recovery the runtime does not
-	// model yet) stays skipped.
+	// The engine raises TrapKind::CallStackExhausted when the host stack nears
+	// its limit (WasmBase/WasmStack.hpp, docs/SAFETY.md §2.8), so this is an
+	// ordinary recoverable trap like the one assert_trap checks: no nested
+	// child, no host SIGSEGV and no core dump standing in for the spec's trap.
+	// A normal return is a failure — the call was supposed to exhaust the stack
+	// — and so is a trap for a different reason.
 	const ScriptAction& action = command.action;
 
 	if (action.type != "invoke") {
@@ -1835,34 +1835,26 @@ void ScriptRunner::onAssertExhaustion(const ScriptCommand& command)
 		}
 	}
 
-	const pid_t child = ::fork();
-	if (child < 0) {
-		skip("could not fork to observe stack exhaustion");
+	std::array<unsigned char, 16> returns {};
+	std::vector<unsigned char> tuple;
+	bool trapped = false;
+	if (!invoke(*instance, action, *funcType, *callable, returns, trapped,
+			funcType->results.size() > 1 ? &tuple : nullptr)) {
+		skip("could not marshal the arguments of '" + action.field + "'");
 		return;
-	}
-	if (child == 0) {
-		std::signal(SIGABRT, SIG_DFL);
-		std::signal(SIGSEGV, SIG_DFL);
-		std::signal(SIGBUS, SIG_DFL);
-		std::signal(SIGFPE, SIG_DFL);
-		std::array<unsigned char, 16> returns {};
-		std::vector<unsigned char> tuple;
-		bool trapped = false;
-		invoke(*instance, action, *funcType, *callable, returns, trapped, funcType->results.size() > 1 ? &tuple : nullptr);
-		_exit(0); // returned normally: no exhaustion
 	}
 
-	int status = 0;
-	while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {
-	}
-	const bool abnormal = WIFSIGNALED(status) ||
-		(WIFEXITED(status) && WEXITSTATUS(status) != 0);
-	if (abnormal) {
-		pass();
+	if (!trapped) {
+		fail(command.line, "assert_exhaustion: '" + action.field +
+			"' returned instead of exhausting the stack");
 		return;
 	}
-	fail(command.line, "assert_exhaustion: '" + action.field +
-		"' returned instead of exhausting the stack");
+	if (lastTrapKind != WASM::TrapKind::CallStackExhausted) {
+		fail(command.line, "assert_exhaustion: '" + action.field + "' trapped with '" +
+			WASM::trapKindName(lastTrapKind) + "' instead of 'call stack exhausted'");
+		return;
+	}
+	pass();
 }
 
 bool ScriptRunner::invoke(WASM::ModuleInstance& instance, const ScriptAction& action,

@@ -92,9 +92,11 @@ Tail Call is a **Phase 5** proposal, integrated into WebAssembly **3.0**.
   entry point and loops, so the host stack stays constant. Signatures that
   differ keep the `call` + `return` lowering. This is what makes mutual
   `even`/`odd` and `return_call_indirect`/`_ref` recursion constant-stack.
-- **`assert_exhaustion` is now executed, not skipped** (`Test/WastScript.cpp`):
-  the action runs in a nested child and an abnormal termination counts as the
-  expected exhaustion trap. `assert_trap` remains skipped.
+- **`assert_exhaustion` is executed with a real trap** (`Test/WastScript.cpp`):
+  the guest stack guard (`WasmBase/WasmStack.hpp`, `docs/SAFETY.md` §2.8)
+  raises `TrapKind::CallStackExhausted` before the host stack runs out, and the
+  harness compares the trap's kind like `assert_trap` does. No nested child and
+  no `SIGSEGV` are involved any more.
 
 ## 5. Gaps
 
@@ -103,7 +105,7 @@ Tail Call is a **Phase 5** proposal, integrated into WebAssembly **3.0**.
 | TC1 | ~~Shallow `return_call` / `return_call_indirect` segfault~~ **Not a codegen bug.** Shallow results are correct; the SIGSEGV is stack exhaustion on deep recursion (TC3). | default `spec: return_call` 37/0/14 and `spec: return_call_indirect` 53/0/30; strict 51/0/0 and 72/0/11 | Resolved (diagnosis) |
 | TC2 | **`return_call_ref` aborted at instantiation** (signal 6). | Fixed in Phase A (see §4); `tail_call.wat` `const_via_ref` | Resolved |
 | TC3 | **Tail-call space guarantee met for identical-signature chains** (C2 native self-calls + the trampoline for mutual/indirect). A tail call whose callee signature differs from the caller's still uses `call` + `return`. | default `return_call` 37/0/14, `return_call_indirect` 53/0/30, `return_call_ref` 36/0/17; strict `return_call` 51/0/0, `return_call_ref` 53/0/0 | Resolved (uniform signatures) |
-| TC4 | **`assert_exhaustion` approximated** — run in a nested child, abnormal exit = exhaustion. `assert_trap` is still skipped. | `Test/WastScript.cpp`; `spec: skip-stack-guard-page` 11/0 | Resolved (approximation) |
+| TC4 | ~~**`assert_exhaustion` approximated**~~ **Real trap now**: the guest stack guard raises `TrapKind::CallStackExhausted` before the host stack runs out (`WasmBase/WasmStack.hpp`, [`SAFETY.md`](../SAFETY.md) §2.8), and the harness compares the trap's kind. | `Test/WastScript.cpp`; `spec: skip-stack-guard-page` 11/0 with no nested child and no `SIGSEGV` | Resolved |
 | TC5 | **Manual test** now exists, including a deep self-recursive case. | `Test/wasm_wat/tail_call.wat` + `Test/main.cpp` | Resolved |
 
 ## 6. Where we can and should play fast and loose
@@ -136,7 +138,7 @@ caller's driver.
 |---|---|---|---|
 | **TC-1 — Fix the crash** | ✅ Corrected the diagnosis (TC1 was stack exhaustion, not codegen) and fixed the `return_call_ref` instantiation abort: proper init-expr parsing (§4.1) + `ref.func` global resolution (§4.2). | TC1, TC2 | Done: shallow results are correct; `return_call_ref` instantiates and the global path is covered. |
 | **TC-2 — Space guarantee** | ✅ C2 (native `JIT_CALL_TAIL` for direct self-recursion) + the trampoline (`emitTailCallViaPending` / `g_tailCallState` / per-function drivers) for mutual and indirect recursion with identical signatures. | TC3 | `count`/`even`/`odd` at 10⁶ pass on the default stack; `tail_call.wat` `count(10⁷)` passes. |
-| **TC-3 — Harness** | ✅ `assert_exhaustion` runs in a nested child; abnormal exit = exhaustion. | TC4 | `spec: skip-stack-guard-page` 11/0; the space guarantee is exercised. |
+| **TC-3 — Harness** | ✅ `assert_exhaustion` is an ordinary recoverable trap: the guest stack guard raises `CallStackExhausted` before the host stack runs out (`WasmBase/WasmStack.hpp`), and the harness compares the trap's kind. | TC4 | `spec: skip-stack-guard-page` 11/0, no nested child and no `SIGSEGV`; the space guarantee is exercised. |
 | **TC-4 — Manual test** | ✅ `Test/wasm_wat/tail_call.wat` + `tail calls compute correct results` (direct / indirect / ref, plus a deep self-recursive `count`). | TC5 | Done. |
 
 ## 8. Indicative test survey

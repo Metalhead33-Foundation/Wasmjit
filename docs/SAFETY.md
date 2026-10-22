@@ -163,6 +163,41 @@ host and boundary safety, and the responsibilities of each party, is defined in
 [`THREADSAFETY.md`](THREADSAFETY.md); the single-agent execution model is
 [`proposals/THREADS.md`](proposals/THREADS.md) §3/TD9.
 
+### 2.8 The host stack is a bounded resource, and its limit is a trap
+
+Wasm recursion runs on the host stack, so unbounded recursion is a host resource
+failure exactly like an unbounded `memory.grow`. The kernel's guard page does
+**not** turn it into a Wasm trap: it delivers `SIGSEGV` — the
+`segfault at <rsp> ... error 6` line in `dmesg` — and takes the embedding process
+down. The engine therefore checks explicitly:
+
+- `VMContext::stackLimit` holds the lowest address generated code may let its
+  frame reach on the executing host thread. The core installs it from the
+  thread's real stack bounds, keeping `kDefaultStackReserveBytes` (512 KiB) back
+  from the guard page (`WasmBase/WasmStack.hpp`, `installStackLimit`), on the
+  thread that creates the instance (§2.7).
+- `PreparedFunctionStack::prepare` refuses a function whose parameters and
+  declared locals would need more than `kMaxFunctionLocalBytes` (64 KiB) of
+  stack storage. This is not cosmetic: a backend allocates the frame in its
+  prologue and the guard check runs only afterwards, so a frame larger than the
+  reserve could jump over the guard page before the check could trap.
+- Generated code calls `wasm_stack_check(VMContext*)` on every compiled-function
+  entry; the helper raises `TrapKind::CallStackExhausted` ("call stack
+  exhausted"), an ordinary recoverable trap (§2.4) that longjmps to the
+  embedder's `TrapScope`.
+- A platform that cannot report stack bounds, or a thread whose stack is not
+  larger than twice the reserve, leaves the limit at zero: the guard is then
+  disarmed rather than trapping on the first call. The embedder chooses thread
+  stack sizes, so this is a deliberate limitation (S7).
+
+*Encountered pitfall:* the spec harness used to run `assert_exhaustion` in a
+nested child and count that child's `SIGSEGV` as a pass. A full sweep produced
+hundreds of `dmesg` segfaults and a core dump per assertion, and a module that
+recursed outside `assert_exhaustion` killed the real process. The regression test
+is `Test/wasm_wat/stack_exhaustion.wat` plus the
+"unbounded Wasm recursion traps with 'call stack exhausted'" case in
+`Test/main.cpp`.
+
 ## 3. Known limitations and false alarms
 
 ### 3.1 Deliberate limitations
@@ -175,6 +210,7 @@ host and boundary safety, and the responsibilities of each party, is defined in
 | S4 | **Budgets are process-wide, not per-instance.** One module can exhaust the budget for every other module in the process. | Simpler, and the failure mode is a clean `-1` / trap. Per-instance accounting belongs in the Store if an embedder needs it. |
 | S5 | **Trap messages are not compared.** The harness checks *that* a trap happened, not its text. | Text differs between engines; the spec's strings are hints. |
 | S6 | **An opt-out can unguard everything**: `WASMJIT_MAX_TOTAL_BYTES=unlimited`, or a device that reports no size (`requireAvailable` then cannot bound). | Both are explicit choices. |
+| S7 | **A thread whose stack is not larger than twice the guard reserve runs unguarded** (`stackLimit == 0`), as does a platform that cannot report stack bounds. | A 64 KiB frame cannot be made safe on an arbitrarily small stack; the embedder owns thread stack sizes. §2.8. |
 
 ### 3.2 Things that looked like engine bugs but were not
 
@@ -234,7 +270,9 @@ from the input. Fix: §2.2. `PreparedFunctionStack::prepare` also truncated its
    make it RAII first (§2.5).
 5. Does it introduce **process-global state**? Reset it on trap (`WASM::trap`)
    and document the single-thread assumption (§2.6, §2.7).
-6. Add a **regression test** that would have caught the failure: a `*.wat` plus a
+6. Does it **recurse on the host stack** because of module input? Rely on the
+   guest stack guard, and keep one frame well below its reserve (§2.8).
+7. Add a **regression test** that would have caught the failure: a `*.wat` plus a
    `TEST_CASE`, or a budget-bounded run of the suite.
 
 ## 6. How to verify the guardrails
@@ -250,6 +288,12 @@ WASMJIT_MAX_TOTAL_BYTES=67108864 ./WasmJit
 
 # The dedicated regression test for the grow guardrail.
 ./WasmJit "grow guardrail rejects absurd deltas without allocating"
+
+# The dedicated regression test for the host stack guard: unbounded Wasm
+# recursion must trap, and must not add a `segfault` line to dmesg (§2.8).
+dmesg | grep -c 'WasmJit.*segfault'      # note the count first
+./WasmJit "unbounded Wasm recursion traps with 'call stack exhausted'"
+dmesg | grep -c 'WasmJit.*segfault'      # must be unchanged
 
 # Belt and braces: cap the address space as well, so a regression cannot touch
 # the machine even if the budget is bypassed.
@@ -268,7 +312,8 @@ killed a child that "produced no report".
 ## 7. References
 
 - In-repo: `WasmBase/WasmSafety.hpp` (the bounds and caps), `WasmStore.{hpp,cpp}`
-  (the budget), `WasmBase/WasmTrap.hpp` (traps), `WasmBase/WasmModule.cpp`
+  (the budget), `WasmBase/WasmTrap.hpp` (traps), `WasmBase/WasmStack.{hpp,cpp}`
+  (the host stack guard), `WasmBase/WasmModule.cpp`
   (preamble + parse-time bounds), `WasmBase/WasmOpcodeDispatcher.cpp`
   (opcode-list bounds), `WasmBase/WasmModuleInstance.cpp` (segments, GC
   allocation), `LibJit/LibjitModuleCompiler.cpp` (`JitBuildScope`),

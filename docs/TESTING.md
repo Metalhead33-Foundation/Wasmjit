@@ -257,10 +257,10 @@ selection is explicit — which is why `./WasmJit '[spec]'` runs everything.
 | Command | What runs |
 | --- | --- |
 | `./WasmJit` | the manual tests + the curated spec scripts |
-| `./WasmJit '[spec]'` | all 257 spec scripts (~8 s; 249 pass, 8 known failures) |
+| `./WasmJit '[spec]'` | all 257 spec scripts (~2 min in the debug build; 251 pass, 6 known failures) |
 | `./WasmJit 'spec: address'` | just that script |
 | `./WasmJit '*float*'` | scripts whose name matches |
-| `./WasmJit --list-tests` | the default view (338 test cases) |
+| `./WasmJit --list-tests` | the default view (358 test cases) |
 | `./WasmJit --list-tests '[spec]'` | every script, one line each (257) |
 | `./WasmJit -# --list-tags` | all tags, including `[#main]` and `[#SpecSuite]` |
 
@@ -291,7 +291,7 @@ It currently holds 189 of the 257 scripts, and the default run is green:
 
 ```
 $ ./WasmJit
-All tests passed (9175 assertions in 338 test cases)
+All tests passed (9310 assertions in 358 test cases)
 ```
 
 #### Refreshing the list
@@ -382,7 +382,7 @@ Correct results are deliberately **not required yet**; the run is meant to be in
 | `register` | executed | exports re-registered under the given name |
 | `assert_return`, `action` (`invoke`) | executed | scalar, `v128` and reference arguments and results; multiple results, and `either` lists match any alternative |
 | `assert_trap` | executed | traps are recoverable (`WASM::trap` longjmps to a `TrapScope`; see `WasmBase/WasmTrap.hpp`), and the expected text is compared against the trap's **kind** (`trapKindName`), so a trap for the wrong reason fails |
-| `assert_exhaustion` | approximated | run in a nested child; an abnormal termination counts as the expected exhaustion trap |
+| `assert_exhaustion` | executed | the guest stack guard (`WasmBase/WasmStack.hpp`) raises `CallStackExhausted` before the host stack runs out; the trap is recoverable like any other, and its kind is compared |
 | `assert_malformed`, `assert_invalid`, `assert_unlinkable`, `assert_uninstantiable` | skipped by kind by default | `WASM_SPEC_VALIDATE=1` executes them and reports pass/fail (see below) |
 | `module_definition` | executed | decoded but **not** instantiated (module-linking); the core suite uses it for limits that cannot be allocated, e.g. `(module definition (memory 65536))` |
 | `module_instance` | skipped | module-linking proposal |
@@ -422,13 +422,17 @@ harness's child died with `produced no report`); and it exposed an uninitialised
 `Module::hasDataCount`/`dataSegmentCount` pair that the validator's consistency
 rule read as garbage.
 
-`assert_exhaustion` is the one command family that is *expected* to produce
-kernel `segfault` lines: its nested child is supposed to exhaust the host stack,
-and the harness counts the abnormal exit as the pass. With the default 8 MiB
-stack, `spec: skip-stack-guard-page` produces ten of them per run (one per
-assertion). They are not engine regressions. Run with `ulimit -c 0` to avoid
-writing a core dump for each expected exhaustion; a stack-limit check in the
-generated code (a future change) would turn them into Wasm traps instead.
+`assert_exhaustion` used to be the one command family that produced kernel
+`segfault` lines: a nested child exhausted the host stack for real, and the
+harness counted the abnormal exit as the pass. The guest stack guard
+([`SAFETY.md`](SAFETY.md) §2.8, `WasmBase/WasmStack.hpp`) now raises
+`TrapKind::CallStackExhausted` before the host stack runs out, so
+`spec: skip-stack-guard-page` executes its ten assertions as ordinary recoverable
+traps — no nested child, no `SIGSEGV`, no core dump. A `dmesg` line of the form
+`WasmJit[...]: segfault at <rsp> ... error 6` is therefore an engine regression
+again, not an expected outcome. The dedicated regression test is
+`Test/wasm_wat/stack_exhaustion.wat` plus
+`./WasmJit "unbounded Wasm recursion traps with 'call stack exhausted'"`.
 
 The `spectest` host module is provided in full for the entities the runtime
 models: the `print*` stubs, a shared table (`10..20 funcref`), a shared memory
@@ -512,7 +516,7 @@ tests, and it is green:
 
 ```
 $ ./WasmJit
-All tests passed (9175 assertions in 338 test cases)
+All tests passed (9310 assertions in 358 test cases)
 ```
 
 A full sweep is deliberately loud, because most of the suite is still beyond the
@@ -694,7 +698,7 @@ Measured after SIMD-5:
 
 ```bash
 ./WasmJit 'simd*'      # 24 cases, 6147 assertions, all passing (includes the hidden [.simdbench] case)
-./WasmJit              # 338 cases, 9175 assertions, all passing
+./WasmJit              # 358 cases, 9310 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed

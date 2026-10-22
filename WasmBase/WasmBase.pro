@@ -31,6 +31,7 @@ SOURCES += \
         WasmOpcodeDispatcher.cpp \
         WasmRegistryImportResolver.cpp \
         WasmSection.cpp \
+        WasmStack.cpp \
         WasmStore.cpp \
         WasmString.cpp \
         WasmTable.cpp \
@@ -67,6 +68,7 @@ HEADERS += \
     WasmRuntime.hpp \
     WasmSafety.hpp \
     WasmSection.hpp \
+    WasmStack.hpp \
     WasmStore.hpp \
     WasmString.hpp \
     WasmTable.hpp \

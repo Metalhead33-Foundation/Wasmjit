@@ -1,6 +1,7 @@
 #include "WasmModuleInstance.hpp"
 #include "WasmException.hpp"
 #include "WasmOpcode.hpp"
+#include "WasmStack.hpp"
 #include "WasmStore.hpp"
 #include "WasmTrap.hpp"
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
@@ -299,6 +300,12 @@ ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver,
 	// Install the optional host boundary before any import, initialiser or
 	// segment is evaluated. It is borrowed; the embedder owns its lifetime.
 	ctx.hostBridge = hostBridge;
+	// Arm the guest call-stack guard for this thread. Generated code checks it
+	// on entry, so unbounded Wasm recursion becomes the spec's
+	// "call stack exhausted" trap instead of a host SIGSEGV (WasmStack.hpp,
+	// docs/SAFETY.md §2.8). A failure here leaves the guard disarmed, which is
+	// the documented behaviour on platforms that cannot report stack bounds.
+	installStackLimit(ctx);
 
 	// ── Step 0: The GC heap region set this instance allocates from ─
 	// Created first, because constant expressions evaluated below

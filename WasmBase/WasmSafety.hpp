@@ -25,6 +25,17 @@ namespace WASM {
 // deliberately more generous.
 inline constexpr uint32_t kMaxFunctionLocals = 100000;
 
+// Stack storage the declared parameters and locals of ONE function may need, in
+// bytes. This is a second, independent bound next to `kMaxFunctionLocals`: the
+// backend allocates the frame in its prologue, and the generated stack guard
+// (`WasmStack.hpp`) runs only after that. A frame larger than the guard's
+// reserve could therefore skip over the guard page before anyone can trap, so
+// every frame has to stay well below `kDefaultStackReserveBytes`
+// (docs/SAFETY.md §2.8). `PreparedFunctionStack::prepare` charges each slot the
+// widest scalar size, and a v128 the full 16 bytes, which over-estimates every
+// other type.
+inline constexpr uint64_t kMaxFunctionLocalBytes = 64 * 1024;
+
 // Nested blocks/loops/ifs in one function body. The dispatcher walks the body
 // iteratively, but the backend and the operand/control stacks still grow with the
 // nesting, so pathological input gets a clear error instead.

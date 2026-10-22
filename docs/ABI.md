@@ -275,6 +275,34 @@ Plain-old-data struct passed as arg0 to every JIT function.
 | `importedFunctionCount`| `uint32_t`      | Number of imported functions                           |
 | `hostData`             | `void*`         | Opaque pointer for embedder state                      |
 | `hostBridge`           | `const HostBridge*` | Optional, borrowed host boundary; `nullptr` is the default |
+| `stackLimit`           | `uintptr_t`     | Lowest address generated code may use for its frame; `0` = no limit |
+
+### The guest stack guard (`stackLimit`)
+
+`VMContext::stackLimit` is the lowest address generated code may let its own
+frame reach on the executing host thread; `0` means no limit is installed. The
+core computes it when the instance is created (`WASM::installStackLimit`,
+`WasmBase/WasmStack.hpp`) from the instantiating thread's real stack bounds,
+keeping `kDefaultStackReserveBytes` (512 KiB) back from the guard page. An
+instance therefore executes on the thread that created it — the same
+one-call-chain-per-host-thread model as the tail-call state
+([`SAFETY.md`](SAFETY.md) §2.7).
+
+Every backend has to honour one rule: **on entry to every compiled Wasm
+function, before its body runs, call `wasm_stack_check(VMContext*)`.** The
+helper probes the current stack pointer and raises
+`TrapKind::CallStackExhausted` ("call stack exhausted") when it is below the
+limit. That is what turns unbounded Wasm recursion into a recoverable trap
+instead of a host `SIGSEGV`, so the embedder's `TrapScope` sees it
+(`WasmBase/WasmTrap.hpp`).
+
+The frame is allocated by the backend's prologue *before* that check can run, so
+one frame must stay well below the reserve. The core enforces this independently
+of the backend: `PreparedFunctionStack::prepare` rejects a function whose
+parameters and declared locals would need more than `kMaxFunctionLocalBytes`
+(64 KiB) of stack storage (`WasmBase/WasmSafety.hpp`). A backend whose calling
+convention spills much more than the declared locals has to account for that
+difference itself.
 
 ### Linear memory ownership (`Store`)
 
