@@ -824,6 +824,40 @@ TEST_CASE("function references: typed refs survive in tables and globals")
 	REQUIRE(WASM::callCallable<int32_t>(*tail, int32_t(41)) == 42);
 }
 
+TEST_CASE("call-tag canonical identity is shared per concrete signature")
+{
+	// CTA-2 groundwork: the wire encoding of call_tag.canon is not stable yet,
+	// but the Store-owned identity it must expose already is. Two modules with
+	// the same function-type TypeId must get the same canonical tag; a different
+	// signature must get a different one.
+	WASM::Module a = loadTestModule("rec_groups");    // index 2: (i32)->i32
+	WASM::Module b = loadTestModule("rec_singleton"); // index 0: (i32)->i32
+	WASM::Module other = loadTestModule("add_core");
+
+	const WASM::TypeId sigA = a.typeId(WASM::LocalTypeIdx{2});
+	const WASM::TypeId sigB = b.typeId(WASM::LocalTypeIdx{0});
+	REQUIRE(sigA == sigB);
+	REQUIRE(sigA != other.typeId(WASM::LocalTypeIdx{0}));
+
+	WASM::Store& store = WASM::Store::global();
+	const WASM::Store::CallTagId tagA = store.canonicalCallTag(sigA);
+	const WASM::Store::CallTagId tagB = store.canonicalCallTag(sigB);
+	const WASM::Store::CallTagId tagOther =
+			store.canonicalCallTag(other.typeId(WASM::LocalTypeIdx{0}));
+
+	REQUIRE(tagA == tagB);
+	REQUIRE(tagA != tagOther);
+	REQUIRE(store.canonicalCallTag(sigA) == tagA);
+
+	const WASM::Store::StoreOwnedCallTag* tag = store.callTag(tagA);
+	REQUIRE(tag != nullptr);
+	REQUIRE(tag->canonical);
+	REQUIRE(tag->signature == sigA);
+	REQUIRE(store.callTag(-1) == nullptr);
+	REQUIRE(store.callTag(tagOther + 1) == nullptr);
+}
+
+
 TEST_CASE("rec groups survive parsing")
 {
 	WASM::Module module = loadTestModule("rec_groups");

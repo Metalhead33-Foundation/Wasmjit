@@ -1,8 +1,9 @@
 # Call Tags — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / forward-looking reference (revision 1 — exception tags
-exist, but **call tags do not**; the two are different proposals that share a
-word).
+Status: design note / implementation reference (revision 2 — CTA-2 canonical
+tag identity is implemented in the Store; the proposal has no binary encoding
+yet, so opcodes, tag references, `call_tag.*` section entries and
+`func_switch` remain blocked).
 Audience: anyone touching `WasmModule` (tag section), `WasmType`, `WasmStore`,
 `WasmRegistryImportResolver`, `WasmOpcode`, or the dispatcher.
 
@@ -66,29 +67,32 @@ handles.
   `attribute` and a payload type index, `TagId` is a process-wide identity,
   `importTags`/`tags` are parsed, `resolveTag`/`registerTag` handle imports and
   exports, and `throw`/`try_table` consume them (`EXCEPTIONS.md` EX-2).
-- There is no `call_with_tag`, `call_tag.*`, `call_indirect_with_tag`,
-  `call_return_with_tag` or `func_switch`. None of these names or opcodes
-  exists in `WasmOpcode.hpp`; an unknown primary opcode reaches the dispatcher's
-  `default` and throws.
-- There is no tag reference type: `AbstractHeapType` has the GC and exception
-  hierarchies (`exn` included), but no `tag` heap type, and tags are not values
-  on the operand stack.
-- `TagId` is an identity for an exception payload type, not a canonical
-  signature→tag mapping; there is no `call_tag.canon` table and no per-function
-  tag list.
-- No test: `tag.wast` exercises exception-tag import/export and link-time
-  typing, not call tags.
+- `TagId` is an identity for an exception payload type, not a call tag.
+  **Call tags now have their own Store-owned canonical identity**
+  (`Store::CallTagId` / `StoreOwnedCallTag`): `canonicalCallTag(TypeId)` is
+  idempotent per concrete signature, and two modules with the same function-type
+  `TypeId` receive the same tag. It is deliberately separate from `TagId`.
+- There is still no tag reference type: `AbstractHeapType` has the GC and
+  exception hierarchies (`exn` included), but no `tag` heap type, and tags are
+  not values on the operand stack.
+- The upstream overview assigns **no binary encoding** for
+  `call_with_tag`/`call_tag.canon`/`call_tag.new`/`func_switch`, so no opcode
+  or tag-section arm was guessed. An unknown primary opcode still reaches the
+  dispatcher's `default` and throws.
+- Added the hand-built/API test
+  `call-tag canonical identity is shared per concrete signature`, which checks
+  canonical equality across modules and distinctness for a different signature.
 
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| CTA1 | **No call-tag opcodes.** `call_with_tag`, `call_indirect_with_tag`, `call_return_with_tag`, `call_tag.canon` and `call_tag.new` do not exist. | `WasmOpcode.hpp`, `WasmOpcodeDispatcher.cpp` | High |
+| CTA1 | **No call-tag opcodes and no assigned encoding.** The upstream overview only names `call_with_tag`, `call_indirect_with_tag`, `call_return_with_tag`, `call_tag.canon` and `call_tag.new`; it assigns no byte values or section discriminants. | `WasmOpcode.hpp`, upstream `Overview.md` | **Blocker** |
 | CTA2 | **No tag heap type or tag values.** Tags cannot be referenced, passed or stored; `AbstractHeapType` has no `tag`. | `WasmType.hpp` | High |
-| CTA3 | **No canonical tag identity.** `TagId` identifies an exception payload type, not a signature→tag map, and there is no cross-module canonicalization. | `WasmModuleInstance.cpp`, `WasmStore.hpp` | High |
-| CTA4 | **No `func_switch` or per-function tag list.** The code and function declarations cannot express multiple handled signatures or a fallback. | `WasmModule.cpp` (`processCodeSection`), tag section parser | High |
+| ~~CTA3~~ | ~~**No canonical tag identity.**~~ **CTA-2 groundwork done:** `Store::canonicalCallTag(TypeId)` returns a stable canonical tag and records the signature; `Store::callTag(id)` exposes it. This is independent of the missing wire encoding. | `WasmStore.hpp` / `.cpp` | Closed (API) |
+| CTA4 | **No `func_switch` or per-function tag list.** The code and function declarations cannot express multiple handled signatures or a fallback; there is no encoding for either. | `WasmModule.cpp` (`processCodeSection`), tag section parser | High |
 | CTA5 | **No fallback-handler path.** An unhandled canonical tag cannot trap through a call-tag table because the table does not exist. | — | Medium |
-| CTA6 | **No tests.** There is no call-tags script in the snapshot; `tag.wast` covers exception tags only. | `extern/WasmTestsuite` | Low |
+| ~~CTA6~~ | ~~**No tests.**~~ **CTA-2 API test added:** canonical tags are equal across modules for one signature and distinct for another. No upstream call-tags script exists. | `Test/main.cpp` | Closed (CTA-2 only) |
 
 ## 6. Where we can and should play fast and loose
 
@@ -107,24 +111,25 @@ signature, and a private tag must not leak through an exported `funcref`.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **CTA-0 — Honest rejection** | Reject the call-tag opcodes and tag-reference types with a named error. | CTA1, CTA2 | A call-tag module fails at the boundary. |
-| **CTA-1 — Tag heap type** | Add the `tag` heap type, tag references and tag values (distinct from `exn`). | CTA2 | A tag can be a parameter/result/global and import/export by identity. |
-| **CTA-2 — Canonical tags** | Add a Store-owned canonical map from a concrete signature `TypeId` to a call tag, and `call_tag.new` entries to the tag section. | CTA3 | Two modules derive equal canonical tags for the same signature. |
-| **CTA-3 — Calling** | Implement `call_with_tag`, `call_indirect_with_tag` and `call_return_with_tag`, including the fallback/trap rules. | CTA1, CTA5 | A `funcref` with multiple handled signatures dispatches correctly. |
-| **CTA-4 — `func_switch`** | Decode the construct and the per-function `(call_tag ...)` declaration. | CTA4 | A `func_switch` selects the implementation by tag. |
-| **CTA-5 — Tests** | Add the proposal's scripts (none in the snapshot). | CTA6 | The call-tag tests are curated. |
+| **CTA-0 — Honest rejection** | Keep the unencoded call-tag opcodes out of the decoder; an unknown primary opcode still throws. | CTA1, CTA2 | A call-tag module fails at the boundary. |
+| **CTA-1 — Tag heap type** | Blocked on a wire encoding for the tag reference type; add the `tag` heap type, tag references and tag values (distinct from `exn`). | CTA2 | A tag can be a parameter/result/global and import/export by identity. |
+| **CTA-2 — Canonical tags** | ✅ Store-owned `CallTagId`/`StoreOwnedCallTag` and idempotent `canonicalCallTag(TypeId)`, plus the cross-module API test. The `call_tag.new` section entry is still blocked on the encoding. | CTA3, CTA6 | Two modules derive equal canonical tags for the same signature. |
+| **CTA-3 — Calling** | Blocked on the opcode and tag-value encodings; implement `call_with_tag`, `call_indirect_with_tag` and `call_return_with_tag`, including fallback/trap rules. | CTA1, CTA5 | A `funcref` with multiple handled signatures dispatches correctly. |
+| **CTA-4 — `func_switch`** | Blocked on the code-section encoding; decode the construct and per-function `(call_tag ...)`. | CTA4 | A `func_switch` selects the implementation by tag. |
+| **CTA-5 — Tests** | The canonical-tag API test is in the default suite; the proposal's scripts do not exist yet. | CTA6 | The call-tag tests are curated. |
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-17):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-22):
 
 | Script | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
 | `tag` | 6 | 0 | 4 | **exception tags only**; unrelated to call tags |
+| `call-tag canonical identity...` | 10 assertions | 0 | 0 | CTA-2 API: equal canonical tags across modules, distinct for a different signature |
 | (none) | — | — | — | no call-tags script in the snapshot |
 
-Reading: the green `tag` result must not be read as call-tag support. The
-skips are `assert_invalid` / `assert_unlinkable` cases for exception tags.
+Reading: canonical tag identity is graded; the wire-level call-tag operations
+remain blocked on the proposal's missing encoding.
 
 ## 9. References
 

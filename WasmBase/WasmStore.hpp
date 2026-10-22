@@ -120,6 +120,25 @@ public:
 	// Nullptr for an unknown id.
 	const StoreOwnedTag* tag(TagId id) const;
 
+	// ── Call tags (docs/proposals/CALL_TAGS.md CTA-2) ───────────────────
+	// Call tags are not exception tags: a call tag is keyed by a canonical
+	// *function-type identity*, not by a nominal payload declaration. The wire
+	// encoding is not stable yet, but the process-wide identity can already be
+	// represented independently of it. `canonicalCallTag` is idempotent for a
+	// given TypeId, so two modules with the same concrete signature get the same
+	// tag.
+	using CallTagId = int32_t;
+	struct StoreOwnedCallTag {
+		CallTagId id = -1;
+		TypeId     signature {};
+		bool       canonical = true;
+	};
+
+	// Returns a stable canonical tag id for `signature`. Rejects TypeId::kNone.
+	CallTagId canonicalCallTag(TypeId signature);
+	// Nullptr for an unknown id.
+	const StoreOwnedCallTag* callTag(CallTagId id) const;
+
 	// ── Exception objects (docs/proposals/EXCEPTIONS.md EX-3) ────────────
 	// The store owns every thrown exception until teardown: `exnref`s can be
 	// stored in globals and outlive the invocation that produced them, so
@@ -188,6 +207,9 @@ private:
 	// Tags are tiny and never removed: id → canonical payload type.
 	std::unordered_map<TagId, StoreOwnedTag> tags;
 	std::atomic<int32_t>                     nextTagId;
+	// Canonical call tags (CALL_TAGS.md CTA-2), keyed by TypeId.value.
+	std::unordered_map<uint32_t, CallTagId>  canonicalCallTags;
+	std::unordered_map<CallTagId, StoreOwnedCallTag> callTags;
 
 	// Exception objects live until Store teardown (see ownException).
 	std::vector<StoreOwnedException> exceptions;

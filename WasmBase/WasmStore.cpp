@@ -219,6 +219,28 @@ bool Store::ownException(std::byte* storage, uint64_t bytes)
 		return false;
 	}
 }
+
+// ── Call tags (docs/proposals/CALL_TAGS.md CTA-2) ──────────────────────────
+
+Store::CallTagId Store::canonicalCallTag(TypeId signature)
+{
+	if (signature.isNone())
+		throw std::invalid_argument("canonical call tag requires a concrete TypeId");
+	const auto it = canonicalCallTags.find(signature.value);
+	if (it != canonicalCallTags.end())
+		return it->second;
+	const CallTagId id = static_cast<CallTagId>(callTags.size());
+	callTags.emplace(id, StoreOwnedCallTag{id, signature, true});
+	canonicalCallTags.emplace(signature.value, id);
+	return id;
+}
+
+const Store::StoreOwnedCallTag* Store::callTag(CallTagId id) const
+{
+	const auto it = callTags.find(id);
+	return it == callTags.end() ? nullptr : &it->second;
+}
+
 // ── Function references (docs/proposals/GC.md G2 / §5.3 H3) ─────────────────
 
 void Store::registerCallableRange(const Callable* begin, size_t count)
