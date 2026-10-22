@@ -781,6 +781,21 @@ TEST_CASE("exceptions: a caught throw carries its payload and an uncaught one st
 	REQUIRE(::wasm_exn_tag_id(pending) == instance->tagIdForIndex(0));
 }
 
+TEST_CASE("exceptions: an exnref can be stored in a table")
+{
+	WASM::Module module = loadTestModule("exnref_table");
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto test = instance->exportedFunction("test");
+	REQUIRE(test.has_value());
+	// The caught exnref survives table.set/table.get and is non-null.
+	REQUIRE(WASM::callCallable<int32_t>(*test) == 0);
+}
+
 TEST_CASE("LibJitTypeTranslator does not leak type caches across modules")
 {
 	const auto makeStructType = [](WASM::ValueTypeCode fieldOpcode) {

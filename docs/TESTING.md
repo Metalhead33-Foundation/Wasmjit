@@ -76,6 +76,7 @@ baked in at compile time through the `WASM_TEST_DIR` macro) and calls into it.
 | `table imports are matched against the exported table's type` | `shared_table_a`, `table_import_mismatch_{type,limits}` | a `funcref` table cannot satisfy an `externref` import, and a `2..8` table cannot satisfy a `5..8` import; the compatible import still links (`GC.md` R1) |
 | `tag imports share the exporter's identity and check the payload type` | `tag_identity_{a,b,bad}` | imports of one export share a `TagId`, a second tag with the same payload type does not, and a payload mismatch fails to link (`EXCEPTIONS.md` EX-2) |
 | `exceptions: a caught throw carries its payload and an uncaught one stays pending` | `exceptions` | a caller's `try_table` catches a callee's `throw` with its payload; an uncaught `throw` leaves the exception pending for the embedder (`EXCEPTIONS.md` EX-3) |
+| `exceptions: an exnref can be stored in a table` | `exnref_table` | a `catch_all_ref` `exnref` survives `table.set`/`table.get` (`EXCEPTIONS.md` EX-6) |
 | `extended name section: parsed names are exposed by kind and index` | `name_section` | every core and extended name subsection is parsed and readable through `Module::findName` (`EXTENDED_NAME_SECTION.md` ENS-1/ENS-2) |
 | `name section: indirect maps and unknown subsections are bounded and skipped` | hand-built | param/tag-param (12/13) indirect maps work and an unknown subsection is skipped by its size |
 | `name section: a subsection size past the section end is rejected` | hand-built | a malformed `subSize` is rejected before it can desynchronise the following sections |
@@ -241,7 +242,7 @@ selection is explicit — which is why `./WasmJit '[spec]'` runs everything.
 | `./WasmJit '[spec]'` | all 257 spec scripts (~8 s; 249 pass, 8 known failures) |
 | `./WasmJit 'spec: address'` | just that script |
 | `./WasmJit '*float*'` | scripts whose name matches |
-| `./WasmJit --list-tests` | the default view (335 test cases) |
+| `./WasmJit --list-tests` | the default view (336 test cases) |
 | `./WasmJit --list-tests '[spec]'` | every script, one line each (257) |
 | `./WasmJit -# --list-tags` | all tags, including `[#main]` and `[#SpecSuite]` |
 
@@ -272,7 +273,7 @@ It currently holds 189 of the 257 scripts, and the default run is green:
 
 ```
 $ ./WasmJit
-All tests passed (9146 assertions in 335 test cases)
+All tests passed (9149 assertions in 336 test cases)
 ```
 
 #### Refreshing the list
@@ -493,7 +494,7 @@ tests, and it is green:
 
 ```
 $ ./WasmJit
-All tests passed (9146 assertions in 335 test cases)
+All tests passed (9149 assertions in 336 test cases)
 ```
 
 A full sweep is deliberately loud, because most of the suite is still beyond the
@@ -675,7 +676,7 @@ Measured after SIMD-5:
 
 ```bash
 ./WasmJit 'simd*'      # 24 cases, 6147 assertions, all passing (includes the hidden [.simdbench] case)
-./WasmJit              # 335 cases, 9146 assertions, all passing
+./WasmJit              # 336 cases, 9149 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed

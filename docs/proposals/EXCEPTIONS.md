@@ -1,14 +1,11 @@
 # Exception Handling (with `exnref`) — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 3 — the runtime is
-**complete**: EX-2 tags (process-wide `TagId`, `resolveTag`, payload typing),
-EX-3 `throw`/`throw_ref` (Store-owned exception objects, pending-exception
-protocol, static cross-frame dispatch), EX-4 `try_table` catch routing
-(including `*_ref`) and EX-5 verification (`assert_exception`, a manual
-test, three curated scripts). `throw` **10/0**, `throw_ref` **13/0**,
-`try_table` **56/0**. What remains is `exnref` storage in tables (shared with
-`FUNCTION_REFERENCES.md` FR-6); validation now rejects every curated negative
-module, including `try_table` catch labels.
+Status: design note / implementation reference (revision 4 — the runtime and the
+full proposal surface are **complete**: EX-1 `exnref`, EX-2 tags, EX-3
+`throw`/`throw_ref`, EX-4 `try_table` catch routing (including `*_ref`), EX-5
+harness verification and table storage. `throw` **13/0**, `throw_ref` **15/0**,
+`try_table` **65/0**, `ref_null` **34/0**; validation rejects every curated
+negative module, including `try_table` catch labels.
 Audience: anyone touching `WasmModule`, `WasmType`, `WasmStore`,
 `WasmVMContext`, `LibjitOpcodeDispatcher`, or the test harness.
 
@@ -110,10 +107,13 @@ instructions were **removed**.
   invocation. `Test/wasm_wat/exceptions.wat` covers a caught payload and the
   uncaught (embedder-visible) case. `throw`, `throw_ref` and `try_table` are
   curated.
-- **Still absent:** `exnref` cannot be stored in a **table** (a slot is a
-  `Callable*`; the generic-slot gap, `EX5`/FR-6). Payload references are retained
-  forever because exception objects live until Store teardown — a deliberate,
-  bounded lifetime choice.
+- **`exnref` table storage works (EX-5).** A table slot is a pointer-sized
+  reference word (the `Callable**` view is the funcref ABI); `table.set` goes
+  through the `wasm_ref_store` barrier and `table.get` loads the same word, so
+  an `exnref` captured by `catch_all_ref` round-trips through a table
+  unchanged. `exnref_table.wat` exercises that path. Payload references are
+  retained forever because exception objects live until Store teardown — a
+  deliberate, bounded lifetime choice.
 - **Known limitation (tail calls):** a `return_call` lowered to the trampoline
   replaces the frame, so the tail-calling function's `try_table`s are no longer
   active for the callee's exceptions (they propagate to the caller's caller).
@@ -129,7 +129,7 @@ instructions were **removed**.
 | ~~EX2~~ | ~~**`try_table` ignores all catch clauses.**~~ **Done (EX-4):** the frame carries its decoded clauses, and every throw site routes the payload (and the `exnref` for `*_ref`) to the catch label. | `try_table` 56/0 | Closed |
 | ~~EX3~~ | ~~**`exnref` does not exist as a value type.**~~ **Done (EX-1):** `ExnRef` (0x69) and `NullExnRef` (0x74) are first-class value types at every use site (function signature, global, local, `ref.null`, block type), the `exn`/`noexn` heap types are decoded, and the JIT lowers them to `void*`. | `ref_null` 34/0/0 | Closed |
 | ~~EX4~~ | ~~**No tag instances or identity.**~~ **Done (EX-2):** every tag declaration gets a Store-owned `TagId`; imports alias the exporter's id; imported payload types are checked; exports publish the id. | `tag` 6/0; the tag-identity manual test | Closed |
-| EX5 | **Exnrefs cannot be stored in tables.** Globals hold a `Value` (so an `exnref` global works, EX-1), but a table slot is a `Callable*` and there is no place for a non-funcref reference — the same generic-slot gap as `FUNCTION_REFERENCES.md` FR-6. See `docs/ABI.md` §Reference and Global Representation (R2). | `WasmTable.hpp`, `WasmModuleInstance.cpp` | Medium (shared with FR-6) |
+| ~~EX5~~ | ~~**Exnrefs cannot be stored in tables.**~~ **Done (EX-6):** the table slot is a generic pointer-sized reference word (the `Callable**` view is the funcref ABI); `table.set`/`table.get` store and load an `exnref` through the same `wasm_ref_store` barrier. A caught `exnref` survives a table round-trip (`exnref_table.wat`, 3 assertions). | `WasmTable.hpp`, `WasmModuleInstance.cpp`, `Test/wasm_wat/exnref_table.wat` | Closed |
 | ~~EX6~~ | ~~**The harness skips `assert_exception`.**~~ **Done (EX-5):** `assert_exception` executes; it fails when the call traps or returns without a pending exception, and `assert_return`/`assert_trap`/plain actions reject a pending exception. | `Test/WastScript.cpp` | Closed |
 | ~~EX7~~ | ~~**No manual test.**~~ **Done (EX-5):** `Test/wasm_wat/exceptions.wat` + `exceptions: a caught throw carries its payload and an uncaught one stays pending`. | `Test/main.cpp` | Closed |
 
@@ -167,26 +167,28 @@ instructions were **removed**.
 |---|---|---|---|
 | **EX-1 — `exnref` type** | ✅ Done: `ValueTypeCode::ExnRef`/`NullExnRef` and `AbstractHeapType::Exn`/`NoExn`, the bottom-type encodings corrected to the final 3.0 values, JIT lowering to `void*`, and `(ref.null ht)` naming the hierarchy in its `Value::kind`. The harness now verifies `(ref.null …)` results. | EX3 | Done: every `ref_null.wast` module loads and the script is **34/0/0**, curated. |
 | **EX-2 — Tags** | ✅ Done: `StoreOwnedTag` + `Store::createTag`, a `tagIds` index space filled before compilation (imports first), `resolveTag` wired into instantiation (aliasing the exporter's id and checking the payload type), and `registerExports` publishing the `TagId`. | EX4 | Done: two modules importing the same tag share an id, a second tag with the identical payload type does not, and a payload-type mismatch fails to link (`tag` 6/0; manual identity test). |
-| **EX-3 — Throw/unwind** | ✅ Done: the pending-exception protocol (`EXD1`/`EXD2`) — Store-owned exception objects with a tuple-laid-out payload, static catch dispatch in the current function, an inline pending check at every call site, and static cross-frame propagation. | EX1 | Done: `throw` 10/0, `throw_ref` 13/0 (including a throw across a call boundary and `catch_ref`/`throw_ref`). |
-| **EX-4 — `try_table`** | ✅ Done: a `ControlBlock::TryTable` frame carries the clauses; catch labels resolve to the try_table's own frame; the payload and the `exnref` for `*_ref` are stored into the target label's slots. | EX2 | Done: `try_table` **56/0**; the two `assert_trap`s (`unreachable`, divide-by-zero) still trap rather than being caught. |
-| **EX-5 — Harness/tests** | ✅ Done: `assert_exception` executes (and rejects a trap or a normal return); `assert_return`/`assert_trap`/plain actions reject a pending exception; a manual WAT test covers a caught payload and the uncaught case; all three scripts are curated. | EX6, EX7 | Done: the suite verifies exception behaviour; full run **7866 assertions / 191 test cases**, green in Debug and Release. |
+| **EX-3 — Throw/unwind** | ✅ Done: the pending-exception protocol (`EXD1`/`EXD2`) — Store-owned exception objects with a tuple-laid-out payload, static catch dispatch in the current function, an inline pending check at every call site, and static cross-frame propagation. | EX1 | Done: `throw` 13/0, `throw_ref` 15/0 (including a throw across a call boundary and `catch_ref`/`throw_ref`). |
+| **EX-4 — `try_table`** | ✅ Done: a `ControlBlock::TryTable` frame carries the clauses; catch labels resolve to the try_table's own frame; the payload and the `exnref` for `*_ref` are stored into the target label's slots. | EX2 | Done: `try_table` **65/0**; the two `assert_trap`s (`unreachable`, divide-by-zero) still trap rather than being caught. |
+| **EX-5 — Harness/tests** | ✅ Done: `assert_exception` executes (and rejects a trap or a normal return); `assert_return`/`assert_trap`/plain actions reject a pending exception; a manual WAT test covers a caught payload and the uncaught case; all three scripts are curated. | EX6, EX7 | Done: the suite verifies exception behaviour. |
+| **EX-6 — Table storage** | ✅ `exnref` values round-trip through `table.set`/`table.get`; the slot is a generic pointer word behind the funcref `Callable**` view, and `wasm_ref_store` covers the write barrier. | EX5 | `exceptions: an exnref can be stored in a table` passes (3 assertions). |
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-17, after EX-5):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-22, after EX-6):
 
 | Script | Result | Reading |
 |---|---|---|
-| `tag` | 6 / 0 / 4 | tag parsing/validation works (the 4 skips are `assert_invalid`) |
+| `tag` | 10 / 0 / 0 | tag parsing/validation works (strict run) |
 | `ref_null` | **34 / 0 / 0** | `exnref`/`nullexnref` and every other null form, verified |
-| `throw` | **10 / 0 / 3** | payloads of every scalar type, cross-function throw, polymorphic dead code; the 3 skips are `assert_invalid` |
-| `throw_ref` | **13 / 0 / 2** | `catch_ref` → `throw_ref` round trips; the 2 skips are `assert_invalid` |
-| `try_table` | **56 / 0 / 11** | every catch form, nested/multi-catch, imported tags, traps passing through; the 11 skips are all `assert_invalid` |
+| `throw` | **13 / 0 / 0** | payloads of every scalar type, cross-function throw, polymorphic dead code; strict run |
+| `throw_ref` | **15 / 0 / 0** | `catch_ref` → `throw_ref` round trips; strict run |
+| `try_table` | **65 / 0 / 2** | every catch form, nested/multi-catch, imported tags, traps passing through; the 2 skips are text-format modules |
+| `exnref_table.wat` | 3 assertions | a `catch_all_ref` `exnref` survives `table.set`/`table.get` |
 | `exceptions.wat` | 7 assertions | caught payload (host call) and the uncaught, embedder-visible pending exception |
 
 `tag`, `ref_null`, `throw`, `throw_ref` and `try_table` are all in
-`Test/wast_supported.txt`. The remaining skips are validation and reference
-*results* (the usual `R5`/validator items), not exception semantics.
+`Test/wast_supported.txt`. The default suite is **9,149 assertions / 336 test
+cases**, green.
 
 ## 9. References
 
