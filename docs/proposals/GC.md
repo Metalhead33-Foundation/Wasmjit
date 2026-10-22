@@ -1,14 +1,14 @@
 # Garbage Collection (Wasm 3.0) — Implementation Notes, Spec Conformance, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 12 — GC's own
-conformance surface is **complete**, and so is GC reference validation:
-`G9`'s `ref.test`/`ref.cast` typing landed, and the element-segment type and
-`ref.eq` rules were already in the validator. The strict run rejects every
-curated negative module. What remains is deferred by design (`G3`/`R4` need the
-embedder's host-reference model; optional/perf rows stay open). Revision 11
-recorded the last runtime gap, `br_on_cast` / `br_on_cast_fail` (`G7`/`GC-4`),
-a *decoder* bug — a typed-reference block type (`0x64 ht`) left its heap-type
-immediate in the byte stream, so the rest of the function was decoded from the
+Status: design note / implementation reference (revision 13 — GC's own
+conformance surface is **complete**, including GC reference validation and the
+`GC-8` extern interop: `G9`'s `ref.test`/`ref.cast` typing, the element-segment
+type and `ref.eq` rules, and the extern boxes are all in place. The strict run
+rejects every curated negative module; only optional/perf rows stay open.
+Revision 11 recorded the last runtime gap, `br_on_cast` / `br_on_cast_fail`
+(`G7`/`GC-4`), a *decoder* bug — a typed-reference block type (`0x64 ht`) left
+its heap-type immediate in the byte stream, so the rest of the function was
+decoded from the
 wrong offset — plus missing label-value modelling, now fixed for all four
 `br_on_*` instructions; table imports are type-checked (`R1`).
 Revision 10's collector is
@@ -649,9 +649,9 @@ effort.
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| ~~G1~~ | ~~Per-instance type tags.~~ **Done (GC-2a):** `GcHeap::owns(ref)` identifies a GC pointer from its region (a process-wide structure) and `tryGetGcTypeId` reads the `TypeId` back from the object header, so a cast/test from any instance sees it. Reference *arguments* are marshalled now, so cross-module verification runs (`ref_test` 69/2). | `GcHeap::owns`, `tryGetGcTypeId`; `ref_test` 69/2 | Closed |
-| ~~G2~~ | ~~**Cross-module function references.**~~ **Done (`GC-1`):** every `Callable` carries its canonical `TypeId`, and `Store::callableAt` identifies it by a range test over the Store's registered callable ranges (one per instance) — no per-instance `importStorage`/`internalCallables` scan, and the fallback no longer decides the answer. | `refMatchesHeapType`, `Store::callableAt`; `ref_test` 69/2 | Closed |
-| G3 | **`any.convert_extern` / `extern.convert_any` are identity.** The two hierarchies are merged: an `externref` that is really an `i31`/struct survives `any.convert_extern`, and an internal reference survives `extern.convert_any` and then still passes `ref.test i31`/`struct`/`array`. | `dispatchAnyConvertExtern` / `dispatchExternConvertAny`; `ref_test` extern cases. | High |
+| ~~G1~~ | ~~Per-instance type tags.~~ **Done (GC-2a):** `GcHeap::owns(ref)` identifies a GC pointer from its region (a process-wide structure) and `tryGetGcTypeId` reads the `TypeId` back from the object header, so a cast/test from any instance sees it. Reference *arguments* are marshalled now, so cross-module verification runs (`ref_test` 71/0). | `GcHeap::owns`, `tryGetGcTypeId`; `ref_test` 71/0 | Closed |
+| ~~G2~~ | ~~**Cross-module function references.**~~ **Done (`GC-1`):** every `Callable` carries its canonical `TypeId`, and `Store::callableAt` identifies it by a range test over the Store's registered callable ranges (one per instance) — no per-instance `importStorage`/`internalCallables` scan, and the fallback no longer decides the answer. | `refMatchesHeapType`, `Store::callableAt`; `ref_test` 71/0 | Closed |
+| ~~G3~~ | ~~**`any.convert_extern` / `extern.convert_any` are identity.**~~ **Done (GC-8/RT-1):** an internal i31/struct/array reference is wrapped in a reserved GC extern box by `extern.convert_any`; `any.convert_extern` unwraps it; `ref.test (ref extern)` sees the box as `extern`; and the GC walker releases the inner reference with the box. Opaque host pointers still pass through with their identity. `ref_test` **71/0**, `extern` **18/0**. | `ModuleInstance::externBox`/`externUnbox`; `GcHeader::kExternBoxTypeId` | Closed |
 | ~~G4~~ | ~~Element-segment initialisers are re-evaluated per use.~~ **Done (GC-3):** expression-form segments are evaluated once at instantiation into `elementSegmentRefs`; `table.init` and `array.new_elem` copy those references, so two arrays built from one segment are `ref.eq`. | `array_new_elem` 14/0, `table_init` 725/0 | Closed |
 | ~~G5~~ | ~~Table initialiser expressions are dropped.~~ **Done:** `TableType` carries the initialiser (`initExpr`), the decoder reads the spec's `0x40 0x00` form — note the marker byte, read as a *signed* LEB, is `-0x40` (`void`), which is exactly how it is detected — `initializeTable()` fills every slot with the value (each slot owning a reference, RC-5), and `resolveTableRefFuncs()` fills a `(ref.func …)` default *after* compilation, the same deferral `resolveGlobalRefFuncs()` uses because the callables do not exist during construction. Non-nullable reference tables now initialise. | `i31` `68/0` (was `63/5`); `table` `18/0` (it previously aborted on an unsized callable vector) | Closed |
 | ~~G6~~ | ~~Imported globals are never resolved.~~ **Done (GC-3 / MUTABLE_GLOBALS MG-1):** `resolveImports` resolves every imported global before any local initialiser runs. | `global` 70/0; `i31` 65/3 (the remaining failures are G5) | Closed |
@@ -679,14 +679,14 @@ effort.
 | ~~H2~~ | ~~`gcObjectTypes` is never pruned.~~ **Done (GC-2a):** the map is gone; the type tag is read from the object header and `GcHeap::owns` uses region ranges. |
 | H3 | **`refMatchesHeapType` is O(#functions)** for function references (two linear scans) and is called for every cast/test. |
 | H4 | **`i31` uses a tagged LibJIT type** while `i31.get_s/u` take `void_ptr`; correctness depends on `castRefValue`/`jit_insn_convert` being a bit-preserving reinterpretation. Worth a focused test. |
-| H5 | **`stringref`/`stringview_*` are implemented** (not in 3.0): types, section 14, `string.const`, the core instructions, the full `stringview_*` facility, the GC-array variants and the embedder bridge are in `STRINGREF.md` STR-1/STR-2/STR-3/STR-4/STR-6/STR-7; optional lifetime (`STR-8`) and `wasm:js-string` imports remain. The engine keeps its reserved encodings because the proposal's current `0x64`/`0x63` collide with `ref`/`ref null` (STR1). |
+| H5 | **`stringref`/`stringview_*` are implemented** (not in 3.0): types, section 14, `string.const`, the core instructions, the full `stringview_*` facility, the GC-array variants, the embedder bridge and reference-counted lifetime are in `STRINGREF.md` STR-1/STR-2/STR-3/STR-4/STR-6/STR-7/STR-8; `wasm:js-string` imports remain a separate host-import proposal. The engine keeps its reserved encodings because the proposal's current `0x64`/`0x63` collide with `ref`/`ref null` (STR1). |
 | ~~H6~~ | ~~**`ref.eq` is raw pointer equality with no type check**; unboxed `i31` compares by value only because the representation is canonical. `ref.eq` on non-`eq` operands is not rejected.~~ **Done (GC-10):** `dispatchRefEq` now rejects non-`eq` operands; runtime equality stays pointer equality, which is exact for the `eq` hierarchy (D5). |
 | H7 | **`Value::kind` is set ad hoc** when a GC constant is produced (`I31Ref`, `StructRef`, `ArrayRef`), but the JIT ignores it; two paths must agree that the union payload is represented the same way. |
 | ~~H8~~ | ~~Arrays cost two allocations and two indirections.~~ **Done (GC-9 / D13):** arrays are inline — one allocation, one indirection per access. |
 
 ### 5.4 Harness limitations that can look like implementation gaps
 
-- Reference **arguments and results** are marshalled now. Arguments use `referenceArgument`; results are compared as null (exact), as a concrete identity through the same mapping (`(ref.extern N)`, `(ref.i31 K)`), or as a bare placeholder (`(ref.func)` must be a registered `Callable*`; `(ref.array)` and the other bare forms must be non-null). `either` result lists (relaxed SIMD) are verified against every alternative. `ref_test` therefore reads **69 passed / 2 failed / 0 skipped**, and both failures are `ref_test_extern` — the `any`/`extern` identity deviation `G3`/`D5`, not `G2`. `R5` is closed: `table_fill` went 23→**36/0/9**, `array_new_data` 24→**28/0/0**.
+- Reference **arguments and results** are marshalled now. Arguments use `referenceArgument`; results are compared as null (exact), as a concrete identity through the same mapping (`(ref.extern N)`, `(ref.i31 K)`), or as a bare placeholder (`(ref.func)` must be a registered `Callable*`; `(ref.array)` and the other bare forms must be non-null). `either` result lists (relaxed SIMD) are verified against every alternative. `ref_test` now reads **71 passed / 0 failed / 0 skipped** after the GC-8 extern boxes closed `G3`/`D5`. `R5` is closed: `table_fill` went 23→**36/0/9**, `array_new_data` 24→**28/0/0**.
 - `compareResult` reports the actual *value* as well as the type, so a
   wrong-value failure reads `expected i32 42 but got i32 0`.
 - `assert_trap` **is** executed, in-process, and its expected text is compared
@@ -706,7 +706,7 @@ cause viewed through the reference-types feature.
 | ~~R1~~ | ~~**Table imports are not type-checked.**~~ **Done:** the exporter publishes its `TableType` (and the canonical `TypeId` of a concrete element type) in `ImportedTable`, and `RegistryImportResolver::resolveTable` matches it against the importing module's declared type — element type by subtyping (`TypeRegistry::matchesHeap`, with shorthands normalised and nullability checked) and limits/index-type/shared-ness by the spec's limit rule. A table registered directly by an embedder carries no type and stays unchecked, so native imports are unaffected. | `WasmImport.hpp` (`ImportedTable`), `WasmRegistryImportResolver.cpp` (`tableSatisfiesImport`), `WasmModuleInstance.cpp` (`registerExports`, `resolveImports`) | Closed |
 | ~~R2~~ | **Fixed.** `elem` → **108/0/46**, `table_init` → **725/0/67** (both previously aborted). The prime suspect was right: the segment evaluator, plus a null `call_indirect` slot left by an unresolved imported global. | `spec: elem`, `spec: table_init` | Closed |
 | ~~R3~~ | **Fixed.** A dropped segment is treated as *empty*: `bufferInitFromData`/`bufferInitFromElems` return for a zero-length access and trap only for a non-zero one, and the `array.new_data`/`array.new_elem` range check reads the same dropped flag. | `bufferInitFromElems`, `checkDataSegmentRange`/`checkElementSegmentRange` | Closed |
-| R4 | **`externref` has no host model.** An `externref` is just a `void*`; there is no way to create or inspect a host extern object, and `ref.eq` on externrefs is unvalidated pointer equality. The representation decision is recorded in `docs/ABI.md` §Reference and Global Representation (R2/R3). | `Value::ref`, `refMatchesHeapType` | Medium |
+| ~~R4~~ | ~~**`externref` has no host model.**~~ **Done (GC-8/RT-1):** host references remain opaque `void*` values — the proposal does not require a host object API — and their identity is preserved. Internal references crossing `extern.convert_any` are boxed so the two hierarchies are distinguishable; `any.convert_extern` is the inverse. `ref_test` 71/0. The representation is recorded in `docs/ABI.md` §Reference and Global Representation (R2/R3). | `ModuleInstance::externBox`/`externUnbox`; `Value::ref` | Closed |
 | ~~R5~~ | ~~**Reference arguments/results are never marshalled**~~ **Done (harness):** arguments use `referenceArgument`; results are compared as null, as a concrete identity through the same mapping, or as a bare placeholder (`(ref.func)` → registered callable, `(ref.array)`/… → non-null); `either` lists are checked alternative by alternative. `table_fill` 36/0/9, `array_new_data` 28/0/0, `relaxed_min_max` 25/0/0. | `Test/WastScript.cpp` | Closed |
 | ~~R6~~ | **Fixed (the same defect as G8).** `ref.func` is now resolved after compilation for globals, segment copies and table defaults alike. | `resolveGlobalRefFuncs`, `callableFromSegmentRef`, `resolveTableRefFuncs` | Closed |
 | ~~R7~~ | **Fixed.** Table-op bounds checks and the null-slot check route through `WASM::trap`, so `assert_trap` runs and in-process traps are recoverable. | `dispatchTable*`, `emitTrapIfNull` | Closed |
@@ -788,7 +788,7 @@ host is a bug, not an implementation-limitation footnote. Therefore:
 | D2 | ✅ **Type identity only in the header; `gcObjectTypes` deleted.** The tag is read from `ref[0]`, and `GcHeap::owns(ref)` (region ranges) is the GC-pointer test. | The `TypeId` is stamped at offset 0; §3.2 lets us choose the representation. | Done (GC-2a): fixes cross-instance casts (G1), removes a hash-map lookup per cast, removes a permanently-growing map (H2) and a per-object libc allocation. |
 | D3 | **Cache subtype `depth` in the tag / canonical table** so `ref.test`/`ref.cast` against an abstract type becomes an integer range/bitset check, not a `TypeRegistry` call. | `CanonicalType` already stores `depth`; cast semantics are ours to implement (§3.2). | Inline-able casts on the hot path. |
 | D4 | **Keep `i31` unboxed**, low-bit tagged; require heap allocations to be ≥8-byte aligned so the tag is unambiguous. | §3.2 explicitly allows unboxed scalars; already implemented. | No allocation for i31, trivial `ref.eq`. |
-| D5 | **`any.convert_extern` / `extern.convert_any` as identity**, documented as "no host/reference mixing". | §3.2/§3.5: extern representations are free; the inverse property is trivially satisfied by identity. | Removes a wrapper from the hot path (already the behaviour — make it intentional). |
+| D5 | **Box internal references at `extern.convert_any`, keep host pointers opaque.** An i31/struct/array crossing to the extern hierarchy becomes a reserved GC object (`kExternBoxTypeId`) holding the inner reference; `any.convert_extern` unwraps it. Host `externref`s remain opaque pointers, so their identity is unchanged. | §3.2/§3.5: extern representations are free; the inverse property holds for both paths. | Correct `ref.test (ref extern)` and round-trips, with no wrapper on the host-pointer path (GC-8/RT-1). |
 | D6 | **No validating front-end.** Trust the producer (AssemblyScript / `wasm-tools`), as QVM trusted its compiler. | §3.3: validation is required for *conforming modules*; we can choose to require valid input. | No validation engine to build, and no GC validation rules to encode. |
 | D7 | **Single `trap()` sink** (abort today, exceptions/longjmp later) instead of per-instruction trap tables. | §3.5: trap surfacing is an embedding choice. | One place to change; keeps JIT clean. |
 | D8 | **Materialise element/data segments once at instantiation** into the region. | §2.4 requires exactly "evaluated once"; this *closes* G4 while staying simple. | Correct `array.new_elem` identity, cheaper repeated use. |
@@ -814,7 +814,7 @@ host is a bug, not an implementation-limitation footnote. Therefore:
 | Array `len` and element stride consistency with the JIT lowering | Memory-safety invariant; a mismatch is silent corruption (H1). |
 | Process-wide `TypeId`s for cross-module `match` | Otherwise linking/casts across modules regress (`TYPE_IDENTITY.md`). |
 | Deterministic trap behaviour | Abort is acceptable, silent garbage is not. |
-| `extern`/`any` inverse property *if* a host passes externrefs | D5 is only safe under a no-mixing contract; it must be explicit, or box in a debug build. |
+| `extern`/`any` inverse property *if* a host passes externrefs | Host pointers pass through; internal references are boxed by `extern.convert_any` and unwrapped by `any.convert_extern` (GC-8/RT-1). |
 | **Aggregates are references, not by-value values** | A `struct`/`array` type is a heap-object *layout*; only `(ref ...)` is a value. Treating the aggregate type as a stack value (or passing it as a C struct) breaks object identity, aliasing and `struct.set` visibility (§2.6, §4.4). |
 | **Every ref store is a `wasm_ref_store`** | A raw `void*` store skips releasing the old value and retaining the new: a leak or a use-after-free, with no other barrier to catch it (§6.4/RC4). |
 | **Refcount header matches the JIT** | `[u32 TypeId][i32 rc]` offsets are read by both the runtime helpers and generated code; drift is silent corruption (extends H1). |
@@ -875,16 +875,16 @@ the collector is not considered shipped until cycles are reclaimed. The
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **GC-1 — Header-based tags** | ✅ Done (`GC-2a` + `GC-1`): aggregates read the `u32` at `ref[0]` and `gcObjectTypes` is deleted (`GcHeap::owns` is the GC-pointer test); function references are identified through the Store's callable-range registry and carry their canonical `TypeId`, so no per-instance pointer scan remains (`H3`). | G1, G2, H2, H3 | Done: cross-instance `ref.test`/`ref.cast` on structs/arrays read the header, and a cross-module `ref.test funcref` needs no scan (`ref_test` 69/2 — the two failures are `G3`). |
+| **GC-1 — Header-based tags** | ✅ Done (`GC-2a` + `GC-1`): aggregates read the `u32` at `ref[0]` and `gcObjectTypes` is deleted (`GcHeap::owns` is the GC-pointer test); function references are identified through the Store's callable-range registry and carry their canonical `TypeId`, so no per-instance pointer scan remains (`H3`). | G1, G2, H2, H3 | Done: cross-instance `ref.test`/`ref.cast` on structs/arrays read the header, and a cross-module `ref.test funcref` needs no scan (`ref_test` 71/0). |
 | **GC-2 — Region allocator** | ◑ Landed (`GC-2a`): the Store-owned `GcHeap` — mmap-backed regions segregated by size class, per-region free lists, budget-charged, released by `~ModuleInstance`; `allocateStructObject`/`allocateArrayObject` no longer call `calloc` and type tags come from the header (`GcHeap::owns`). **Open:** none of the original two — `reclaimGcObject` → `GcHeap::recycle` is wired (`RC-1b`) and the debug poison-on-free mode landed (`GcHeap::setPoisonOnFree`, `RC-3`). `allocate()` now re-zeroes a block taken off a free list: mmap zero-fills only the *first* use, and `struct.new_default` writes no fields at all, so a recycled block must be cleared before it is handed out. | D1, D2, L1, C7 (partly) | Done for backing: no per-object libc allocation; allocation is a free-list pop or a bump; instance teardown reclaims everything even if counting misses. |
 | **GC-3 — Instantiation-time materialisation** | ✅ Element/data segments are evaluated once (D8), imported globals are resolved (G6), and table initialiser expressions are decoded and applied (D9/G5): `TableType::initExpr` → `initializeTable()` for every default that is final at construction, `resolveTableRefFuncs()` for a `(ref.func …)` one after compilation. | G4, G5, G6 | Done: `array_new_elem` identity holds; GC `const` exprs reading imported globals work; typed/non-nullable tables initialise (`i31` `68/0`, `table` `18/0`). |
 | **GC-4 — `br_on_cast` correctness** | ✅ Done: `castop` is honoured; the crash was a **decoder** gap (`BlockType` dropped the heap-type immediate of a `0x64 ht` block type, desynchronising the function body) plus the label-value model; all four `br_on_*` instructions now model `t*`, stage the branch's reference with `storeStackTopToSlots`, and treat a branch to the function label as a conditional return. | G7 | Done: `br_on_cast` 31/0, `br_on_cast_fail` 31/0, `br_on_null` 9/0, `br_on_non_null` 11/0. |
 | **GC-5 — Crash triage** | ✅ `ref_cast`, `ref_func`, `call_ref`, `return_call_ref` and `type-equivalence` all run (the trap sink) and `array.init_elem` is clean. The ordering/offset bugs that the typed-`assert_trap` check then exposed are fixed too: the source range of `array.new_data`/`array.new_elem` is validated **before** the allocation (so an absurd length reports the out-of-bounds trap, not "out of memory"), and `array.init_data`'s source offset is a *byte* offset (scaling it by the element size broke every element wider than a byte). | C1–C5 | Done: no child aborts/segfaults; each script passes or fails with a real mismatch message. `array` is back to `40/0` and `array_init_data` to `44/0`. |
 | **GC-6 — Trap sink** | ✅ `WASM::trap` (longjmp to a `TrapScope`, `WasmBase/WasmTrap.hpp`) is the single sink; `emitAbort` and every `jit_insn_check_null` use it, and the harness executes `assert_trap`. Allocation failure and `notImplemented` still abort. | C6, D7 | Done: a failed cast / null deref is recoverable in-process; no `std::abort` on the memory/table/GC-reference path. |
 | **GC-7 — Fast casts (optional)** | Depth/range-tag encoding (D3), inline caches for repeated `ref.test`/`ref.cast` at a site, measured against the registry-call baseline. | H3 | Casts on a hot loop are a few instructions; benchmark recorded. |
-| **GC-8 — Extern interop (optional)** | Only if an embedder needs host externrefs: box `extern.convert_any` values, keep identity under the no-mixing contract (D5). | G3 | `ref_test` extern cases pass; the contract is documented in `ABI.md`. |
+| **GC-8 — Extern interop** | ✅ Done (RT-1): internal i31/struct/array references are boxed by `extern.convert_any` in a reserved GC object (`kExternBoxTypeId`); `any.convert_extern` unwraps; the GC walker releases the inner reference; opaque host pointers keep their identity. | G3, R4 | `ref_test` 71/0 and `extern` 18/0; the representation is documented in `ABI.md`. |
 | **GC-9 — Inline arrays** | ✅ Done: header-only JIT type, per-type `dataOffset` (`gcArrayDataOffset`), one allocation, and `arrayElementBase` for every element access. | D13, H8 | Done: `array.new_default` is one heap block (the `GC reference counting` test asserts `totalAllocations() + 1`), and all array scripts are unchanged from the §8 baseline. |
-| **GC-10 — GC reference validation closure** | ✅ Type `ref.test`/`ref.cast` (± null) against the target hierarchy; the existing validator already typed `ref.eq`, element segments and the declared-function rule. | G9, R8, H6 | Done: `ref_test` 69/2 (the 2 are G3), `ref_cast` 45/0, and the strict run rejects 2,211 `assert_invalid` + 17 malformed + 127 unlinkable + 26 uninstantiable modules, plus the start-function trap. |
+| **GC-10 — GC reference validation closure** | ✅ Type `ref.test`/`ref.cast` (± null) against the target hierarchy; the existing validator already typed `ref.eq`, element segments and the declared-function rule. | G9, R8, H6 | Done: `ref_test` 71/0, `ref_cast` 45/0, and the strict run rejects 2,211 `assert_invalid` + 17 malformed + 127 unlinkable + 26 uninstantiable modules, plus the start-function trap. |
 | **RC-1 — Reference-counted heap objects (core)** | ✅ Store barriers + slot ownership: `[u32 TypeId][u32 refcount]` header, **count 0 at birth**, `wasm_ref_store`/`_clone`/`_drop` (`WasmGcHeader.hpp`, `ModuleInstance::ref*`), and every ref-typed slot store retains — `struct.set`/`struct.new`, `array.set`/`fill`/`new*`/`copy`, `global.set`, `table.set`, `local.set`/`tee`, global initialisers, segment copies. | L2, L3, RC4, RC12, D14, D15 | Done: a created object is unowned until a slot retains it, and the JIT `struct.set`/`array.set`/`local` paths move the count. |
 | **RC-1b — Reclaim at a safepoint** | ✅ `reclaimGcObject` queues a zero-count object; `gcCollect()` recycles queued objects that are still at zero (resurrection-checked). Call it where no Wasm frame is live and the embedder holds no un-counted references. | RC4, RC9, L1, D19 | Done: the `GC reference counting` test drops an object to zero, collects, and reuses the recycled block. **Leak-side, not UAF:** parameters and control-flow slots are borrows, so a reference that is only ever held in one of those is never released and leaks until `GC-2` teardown. The operand stack **does** own its references (`kStackOwnsRefs`: push clones, pop/drop releases) and ref locals **are** released at frame exit, so those paths are exact. (Both used to be blocked by a module that pushed a null `jit_value_t`; such a module is now rejected at load — see [`NULL_JIT_VALUE_DIAGNOSIS.md`](../NULL_JIT_VALUE_DIAGNOSIS.md).) The safepoint also releases the dead object's **own** references (`releaseOutgoingRefs`, RC-3), so an object that dies together with its parent is reclaimed rather than leaked; the remaining leak is exactly the borrow case above. A resurrection (count 0 → 1 before the safepoint) now also restores the type tag the queue stamped over, which it previously left clobbered. |
 | **RC-2 — Cycle collection (day one, with RC-1)** | ✅ Bacon–Rajan synchronous trial deletion. The candidate buffer is fed by a release that leaves an object alive (`possibleCycleRoot`, bounded at `kMaxCycleCandidates`); the colours live in a map local to one trial, so no header word is needed and the JIT-mirrored layout is untouched (H1); the three phases are iterative DFSs over the same `childSlotsOf` walk the reclaimer uses. `gcCollect()` runs it at the same safepoint as the reclaimer — **including when nothing was queued**, which is the normal case for a cycle, since a cycle's last external release leaves every count above zero. No stack maps, no root set (D18). | RC1, D18 | ✅ A two-object cycle and a self-`struct` cycle are both reclaimed once their external references drop (the test asserts the live-object count returns to its pre-graph value), while a cycle still referenced from outside is kept **and its counts restored exactly** — asserted, because forgetting to add back the internal references would silently corrupt the count. **Trigger:** the trial is driven by releases, so a cycle is examined once something pointing at it was dropped, which is how it becomes unreachable in the first place. |
@@ -923,36 +923,36 @@ defaults, not just the first one to be fixed.
 | Number | Status | Evidence (current) | Notes |
 |---|---|---|---|
 | `G1` | ✅ Closed | `GcHeap::owns` + header `TypeId` (`ref_func` 14/0) | — |
-| **`G2`** | ✅ **Closed** | `ref_test` **38/32 → 69/2**, `ref_cast` **33/11 → 45/0** | Cross-module `funcref` identity. The Store now owns a registry of callable ranges (`registerCallableRange`/`callableAt`), so a `funcref` is identified — and its canonical `TypeId` read — from *any* module, in O(#instances) instead of the old per-instance O(#functions) scan; and the "unknown reference" fallback now lists `Func`. **The evidence only moved once `R5` was fixed**: these cases were gated behind a skipped `(invoke "init" (ref.extern 0))`. The range is published only after construction succeeds and is withdrawn in `~ModuleInstance`, so a failed instantiation or a destroyed instance cannot leave a dangling range. |
-| `G3` | ✗ **Deferred — intersects `ABI.md`** | `ref_test` 69/2 (the 2 are `ref_test_extern`) | `any.convert_extern`/`extern.convert_any` are identity (D5). The remaining 2 failures show *why* identity is not enough once the two hierarchies are mixed: `extern.convert_any` of an i31 leaves a tagged immediate in an `externref` slot, and `ref.test (ref extern)` then correctly reports false. Distinguishing the hierarchies needs a representation decision (tag or box) that is only coherent **together with the host-object model of `externref`** — which is `ABI.md`'s domain (`R4`), not GC's. See §7.2. |
+| **`G2`** | ✅ **Closed** | `ref_test` **38/32 → 71/0**, `ref_cast` **33/11 → 45/0** | Cross-module `funcref` identity. The Store now owns a registry of callable ranges (`registerCallableRange`/`callableAt`), so a `funcref` is identified — and its canonical `TypeId` read — from *any* module, in O(#instances) instead of the old per-instance O(#functions) scan; and the "unknown reference" fallback now lists `Func`. **The evidence only moved once `R5` was fixed**: these cases were gated behind a skipped `(invoke "init" (ref.extern 0))`. The range is published only after construction succeeds and is withdrawn in `~ModuleInstance`, so a failed instantiation or a destroyed instance cannot leave a dangling range. |
+| `G3` | ✅ **Closed (GC-8/RT-1)** | `ref_test` 71/0, `extern` 18/0 | `extern.convert_any` boxes internal references in a reserved GC object; `any.convert_extern` unwraps; `ref.test (ref extern)` distinguishes the hierarchies. Host pointers remain opaque and preserve identity. |
 | `G4` | ✅ Closed | `array_new_elem` 14/0, `table_init` 725/0 | — |
 | `G5` | ✅ Closed | `i31` 68/0, `table` 18/0 | Table initialisers: decode (`0x40 0x00`), apply every slot, defer `ref.func`. |
 | `G6` | ✅ Closed | `global` 70/0 | — |
 | `G7` / `GC-4` | ✅ Closed | `br_on_cast` 31/0, `br_on_cast_fail` 31/0, `br_on_null` 9/0, `br_on_non_null` 11/0 | **The decode-diff found it:** `BlockType` could not represent a typed reference, so `(block (result (ref i31)))` (`02 64 6C`) consumed `0x64` and left `0x6C` to be read as the next opcode — the stray `I32DivU`/`I32Mul` was the heap-type byte. `BlockType` now carries the heap-type immediate. The control-flow half also landed: all four `br_on_*` ops model the label's `t*` values and store the whole window with the branch's reference staged on top, and a function-label target is a conditional return (`emitFunctionReturn(false)`). |
 | `G8` | ✅ Closed | `table` 18/0 (exported `(ref $f)` global across modules) | Sentinel resolved after compilation in all three places. |
-| **`G9`** | ✅ **Closed** | strict run 2,211 + 17 + 127 + 26 rejected; `ref_test` 69/2, `ref_cast` 45/0 | The validator types `ref.test`/`ref.cast` (same-hierarchy operand, both nullability forms) and the declared-function rule; the two `ref_test` failures are the separate `G3`/`D5` deviation. |
+| **`G9`** | ✅ **Closed** | strict run 2,211 + 17 + 127 + 26 rejected; `ref_test` 71/0, `ref_cast` 45/0 | The validator types `ref.test`/`ref.cast` (same-hierarchy operand, both nullability forms) and the declared-function rule; the extern cases are covered separately by GC-8. |
 | `C1`–`C7` | ✅ Closed | `array_init_data` 44/0, `array` 40/0, `ref_cast`/`call_ref` running | Crash triage complete; the aborts that remain are deliberate (`docs/SAFETY.md` §2.4). |
 | `H1` | ✅ Guarded | `GC layout: the JIT's struct field offsets match the shared layout helpers` | The dual layout logic is now *checked*: the test asserts the JIT's LibJIT field offsets equal `gcAlignUp`/`gcStorageAlign`/`gcStorageBytes` (the shared source of truth the runtime's `structFieldOffsets` uses) for packed i8/i16, i32, i64, f64 and v128 — and it passes, so the two implementations agree today. The reclaimer and the cycle trial additionally share one traversal (`childSlotsOf`). |
 | `H2`, `H8` | ✅ Closed | — | — |
 | `H3` | ✅ Closed | `Store::callableAt` | The per-cast O(#functions) scan is gone with `G2`: identification is now a range test over registered callable ranges (one per instance). |
 | `H4` | ✅ Closed | `i31` 68/0 | The tagged-LibJIT-type / `void_ptr` round-trip that `i31.get_s/u` depend on is exercised by the spec script across every interesting pattern (0, ±1, `0x3fff_ffff`, `-0x4000_0000`, `0x7fff_ffff`, `0xaaaa_aaaa`, `0xcaaa_aaaa`) and all pass. |
-| `H5` | ✅ Closed (own proposal) | `STRINGREF.md` STR-5/STR-6/STR-7 tests | `stringref`/`stringview_*`: out of the 3.0 MVP, its own proposal (§7.2, §10). Types, section 14, `string.const`, the core instructions, the full view facility, the GC-array variants and the embedder bridge are implemented; the optional lifetime and `wasm:js-string` remain outside this proposal's opcode surface. |
+| `H5` | ✅ Closed (own proposal) | `STRINGREF.md` STR-5/STR-6/STR-7/STR-8 tests | `stringref`/`stringview_*`: out of the 3.0 MVP, its own proposal (§7.2, §10). Types, section 14, `string.const`, the core instructions, the full view facility, the GC-array variants, the embedder bridge and reference-counted lifetime are implemented; `wasm:js-string` remains a separate host-import surface. |
 | **`H6`** | ✅ **Closed** | `dispatchRefEq` | The validator rejects non-`eq` operands; runtime equality remains pointer equality, exact for the `eq` hierarchy (D5). |
 | `H7` | ✅ Closed (by design) | `WasmValue.hpp` | `Value::kind` is a *runtime-side* tag for constant-expression values (globals, segments, imports, and the harness's `referenceArgument`); generated code never sees a `Value` — the JIT derives its type from the instruction's field/opcode type. The two agree because every place a `Value` is produced sets `kind` and every consumer is runtime code. |
 | `R1` | ✅ Closed | `table imports are matched against the exported table's type`; `table`/`table_init`/`elem`/`call_indirect` unchanged | The exporter publishes its `TableType` + canonical element `TypeId`; `resolveTable` matches element type by subtyping and limits/index-type/shared-ness by the spec's limit rule (`tableSatisfiesImport`). The manual test asserts that a `funcref` table cannot satisfy an `externref` import and that a `2..8` table cannot satisfy a `5..8` import, while the compatible `shared_table_b` import still links. Embedder-registered tables without a published type stay unchecked. |
 | `R2`, `R3`, `R6`, `R7` | ✅ Closed | `elem` 108/0, `table_init` 725/0, `table` 18/0 | — |
-| `R4` | ✗ Open (deferred) | — | `externref` has no host model (`ABI.md`, §7.2); it stays a `void*` and `ref.eq` on externrefs is unvalidated pointer equality. |
+| `R4` | ✅ Closed (GC-8/RT-1) | `ref_test` 71/0, `extern` 18/0 | Host references remain opaque `void*` values with identity; internal references are boxed at `extern.convert_any`. |
 | `R5` | ✅ Closed | `table_fill` 36/0/9, `array_new_data` 28/0/0, `relaxed_min_max` 25/0/0 | Reference arguments *and* results are marshalled; `either` result lists are verified against each alternative. |
 | **`R8`** | ✅ **Closed** | `validateElementSegment`; strict run | The validator checks the segment's declared type against the table and every item against both; the table-initialiser half was already fixed (`G5`). |
 | `L1`, `L2`, `L3` | ✅ Closed | the reclamation/refcount/heap tests | Reclamation, refcounts and the store barrier all landed. |
-| `GC-1` | ✅ Closed | `ref_test` 69/2, `ref_cast` 45/0 | Function references are identified through the Store's callable-range registry and carry their canonical `TypeId`, so a cross-module cast needs no per-instance pointer scan. |
+| `GC-1` | ✅ Closed | `ref_test` 71/0, `ref_cast` 45/0 | Function references are identified through the Store's callable-range registry and carry their canonical `TypeId`, so a cross-module cast needs no per-instance pointer scan. |
 | `GC-2` | ✅ Closed | `GC heap` test, poison-on-free | Recycler wired; debug poison on free landed. |
 | `GC-3` | ✅ Closed | `i31` 68/0 | — |
 | `GC-4` | ✅ Closed | `br_on_cast*`, `br_on_null`, `br_on_non_null` | Same work as `G7`; both closed by the block-type decode fix plus the label-value model. |
 | `GC-5` | ✅ Closed | `array` 40/0, `array_init_data` 44/0 | — |
 | `GC-6` | ✅ Closed | `WasmTrap.hpp` | — |
 | `GC-7` | ✅ Substantively closed | `Store::callableAt` | The expensive part landed with `H3`: a cast/test is now O(#instances) instead of O(#functions). What remains of the row is *inline caching* at a hot call site — an optimisation that the plan explicitly says to measure first (D3/D12), with no measurement yet showing casts dominating. |
-| `GC-8` | ✗ Deferred | — | Extern interop needs the host `externref` model: `ABI.md` (§7.2). |
+| `GC-8` | ✅ Closed | `ref_test` 71/0, `extern` 18/0 | Extern boxes distinguish the hierarchies (RT-1). |
 | `GC-9` | ✅ Closed | `array` 40/0 | — |
 | `RC-1`, `RC-1b` | ✅ Closed | `GC reference counting` test | — |
 | `RC-2` | ✅ Closed | `GC reclamation: … cycle …` tests | Trial deletion, no root set (D18). |
@@ -969,15 +969,15 @@ rather than guessed at inside GC.
 
 | Item | Intersects | Why GC cannot decide it | What GC can do meanwhile |
 |---|---|---|---|
-| `G3` (extern/any conversion fidelity), `R4` (host `externref` model), `GC-8` (extern interop) | **`ABI.md`** | Distinguishing the `extern` and `any` hierarchies needs a representation for a *host* extern object (tag or box), and that representation is the embedder's value model. `GC.md` D5 chose identity deliberately, under a "no host/reference mixing" contract that the spec suite does not honour. | Nothing further: the engine side is consistent with D5. When `ABI.md` fixes the host model, revisit D5 and delete `R4`/`G3`. |
+| `G3` (extern/any conversion fidelity), `R4` (host `externref` model), `GC-8` (extern interop) | **`ABI.md`** | ✅ **Closed (GC-8/RT-1):** the engine keeps host references opaque, boxes internal references at `extern.convert_any`, and unwraps them at `any.convert_extern`. No embedder representation decision is needed for this conforming subset. | `ref_test` 71/0, `extern` 18/0; the opaque-pointer representation remains documented in `ABI.md`. |
 | `RC-4` (atomic counts; `RC2`/`RC11`) | **`THREADS.md`** | The count already uses `std::atomic_ref` and is therefore *safe*, but acquire/release ordering and a two-thread stress test are only meaningful once shared memory and agents exist. | The relaxed-ordering choice is documented in `WasmGcHeader.hpp`; the upgrade is a one-line ordering change plus a stress test, for whoever owns threads. |
-| `H5`, §10 (`stringref`, `stringview_*`) | **its own proposal** (§10 in this document) | Out of the Wasm 3.0 GC MVP by §3.4; the reserved encodings collide with `ref`/`ref null` and the optional lifetime is still open. | Keep the work in `STRINGREF.md`: the core, the full view facility, the GC-array variants and the embedder bridge are implemented (STR-1…STR-4, STR-6, STR-7); the optional lifetime (`STR-8`) and the blocked encoding alignment (`STR1`) remain. |
+| `H5`, §10 (`stringref`, `stringview_*`) | **its own proposal** (§10 in this document) | Out of the Wasm 3.0 GC MVP by §3.4; the reserved encodings collide with `ref`/`ref null`. | Keep the work in `STRINGREF.md`: the core, the full view facility, the GC-array variants, the embedder bridge and reference-counted lifetime are implemented (STR-1…STR-4, STR-6…STR-8); only the blocked encoding alignment (`STR1`) remains. |
 
 **Remaining in GC's own domain:** none of the conformance rows. The optional or
-deferred rows — `GC-7` (inline-cache optimisation, measure first), `GC-8`
-(extern interop, blocked on `ABI.md`), `RC-4` (atomic counts, blocked on
-`THREADS.md`) and `RC-5`/`RC-6` (optional collector strategies) — are listed
-above. Everything in §5.1–§5.6 that GC owns is closed or guarded.
+deferred rows — `GC-7` (inline-cache optimisation, measure first), `RC-4`
+(atomic counts, blocked on `THREADS.md`) and `RC-5`/`RC-6` (optional collector
+strategies) — are listed above. Everything in §5.1–§5.6 that GC owns is closed
+or guarded.
 
 
 
@@ -987,7 +987,7 @@ above. Everything in §5.1–§5.6 that GC owns is closed or guarded.
 > *motivated* the plan, and the numbers have moved since — `i31` 63/5 → **68/0**,
 > `array` 36/4 → **40/0**, `array_init_data` 41/3 → **44/0**, `array_init_elem` and
 > `table` clean, `table_init`/`elem` no longer aborting, `ref_test` 38/32 →
-> **69/2** (reference arguments are marshalled now; the two failures are `G3`),
+> **71/0** (reference arguments are marshalled and GC-8 boxes externs),
 > `type-equivalence` 30/1 → **31/0**, and the four `br_on_*` scripts are green
 > (`br_on_cast` 31/0, `br_on_cast_fail` 31/0, `br_on_null` 9/0,
 > `br_on_non_null` 11/0). **For current per-number status read §7.1**, not the
@@ -1012,7 +1012,7 @@ now executed, so the "skipped" column no longer hides the trap cases).
 | `ref_is_null` | 15 | 1 | 6 | table init (G5) |
 | `ref_null` | 34 | 0 | 0 | `exnref`/`nullexnref` modelled (EXCEPTIONS.md EX-1); null results verified |
 | `ref_as_non_null` | 6 | 0 | 1 | works |
-| `ref_test` | 69 | 2 | 0 | `G2` closed; the two failures are `ref_test_extern` (`G3`/`D5`) |
+| `ref_test` | 71 | 0 | 0 | `G2`/`G3` closed; extern boxes distinguish the hierarchies |
 | `ref_cast` | 45 | 0 | 0 | `G2`/`GC-10`: cross-module casts and the validator rules are green |
 | `gc_cast_validation` (manual) | 9 assertions | 0 | 0 | `ref.test`/`ref.cast` typing, both nullability forms, and null/cast-trap behaviour |
 | strict `WASM_SPEC_VALIDATE=1` | 2,211 + 17 + 127 + 26 | 0 | 0 | every curated negative module rejected, plus the start-function trap |
@@ -1240,8 +1240,9 @@ STR-1/STR-2/STR-3):
   `0xFB 0x80`–`0x8E` instructions are lowered, the full `stringview_*` facility
   (`0x90`–`0xA4`) is typed and lowered, and the GC-array variants
   (`0xB0`–`0xB7`) bridge to inline array elements.
-- Still absent: the optional string lifetime work (`STRINGREF.md` STR-8) and
-  `wasm:js-string` import resolution.
+- The stringref lifetime work is implemented (`STRINGREF.md` STR-8); only the
+  blocked encoding alignment (`STR1`) and the separate `wasm:js-string` host
+  imports remain.
 
 **The encodings still collide with GC.** `WasmType.hpp` uses
 `StringRef = -0x19 (0x67)`, `StringViewWtf8 = -0x1A`, `StringViewWtf16 = -0x1B`,
@@ -1332,11 +1333,12 @@ Notes:
 | **SR-3** | ✅ Core runtime: code-point `StringObject`, `new_*`, `measure_*`, `encode_*`, `eq`, `concat`, `is_usv_sequence` (`STRINGREF.md` STR-3). | The core tests pass for the UTF-8/WTF-8/WTF-16 paths. |
 | **SR-4** | ✅ Views: `as_wtf8` / `as_wtf16` / `as_iter`, `advance`, `slice`, `encode` (`STRINGREF.md` STR-4). | View round-trips match the proposal's worked examples. |
 | **SR-5** | ◑ `wasm:js-string` (and optionally `text-encoder` / `text-decoder`) via the import resolver. | A module importing `wasm:js-string.length` runs against a host-provided builtin. |
+| **SR-6** | ✅ Lifetime: `StringStore` retains/releases strings, views and iterators; `refClone`/`refDrop` and the GC walker drive the counts (`STRINGREF.md` STR-8). | Creating and dropping a concat result returns the Store's live-string count to its baseline. |
 
-The core milestones (SR-2/SR-3) and the views (SR-4) are implemented in
-[`STRINGREF.md`](STRINGREF.md); SR-1's encoding half is blocked and SR-5
-remains. Do not add a `string` arm to `AbstractHeapType` without resolving the
-`-0x19` (`none`) collision first.
+The core milestones (SR-2/SR-3), the views (SR-4) and lifetime (SR-6) are
+implemented in [`STRINGREF.md`](STRINGREF.md); SR-1's encoding half is blocked
+and SR-5 remains a separate host-import surface. Do not add a `string` arm to
+`AbstractHeapType` without resolving the `-0x19` (`none`) collision first.
 
 [`GC_EXTENSIONS.md`](GC_EXTENSIONS.md) covers the adjacent post-3.0 GC
 proposals (multibyte array access, more array constructors and frozen values);

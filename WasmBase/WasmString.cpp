@@ -104,24 +104,142 @@ StringObject* StringStore::create(std::vector<uint32_t> codePoints)
 			+ static_cast<uint64_t>(codePoints.size()) * sizeof(uint32_t);
 	if (!Store::global().reserveBytes(bytes))
 		trap(TrapKind::OutOfMemory, "string allocation exceeds the allocation budget");
-	objects_.push_back(StringObject{std::move(codePoints)});
-	return &objects_.back();
+	auto entry = std::make_unique<StringEntry>();
+	entry->object.codePoints = std::move(codePoints);
+	entry->bytes = bytes;
+	StringObject* result = &entry->object;
+	objects_.emplace(result, std::move(entry));
+	return result;
 }
 
 StringViewObject* StringStore::createView(const StringObject* string)
 {
-	if (!Store::global().reserveBytes(sizeof(StringViewObject)))
+	const uint64_t bytes = sizeof(StringViewObject);
+	if (!Store::global().reserveBytes(bytes))
 		trap(TrapKind::OutOfMemory, "string view allocation exceeds the allocation budget");
-	views_.push_back(StringViewObject{string});
-	return &views_.back();
+	auto entry = std::make_unique<ViewEntry>();
+	entry->object.string = string;
+	entry->bytes = bytes;
+	StringViewObject* result = &entry->object;
+	if (string != nullptr)
+		retain(string);
+	views_.emplace(result, std::move(entry));
+	return result;
 }
 
 StringIteratorObject* StringStore::createIterator(const StringObject* string)
 {
-	if (!Store::global().reserveBytes(sizeof(StringIteratorObject)))
+	const uint64_t bytes = sizeof(StringIteratorObject);
+	if (!Store::global().reserveBytes(bytes))
 		trap(TrapKind::OutOfMemory, "string iterator allocation exceeds the allocation budget");
-	iterators_.push_back(StringIteratorObject{string});
-	return &iterators_.back();
+	auto entry = std::make_unique<IteratorEntry>();
+	entry->object.string = string;
+	entry->bytes = bytes;
+	StringIteratorObject* result = &entry->object;
+	if (string != nullptr)
+		retain(string);
+	iterators_.emplace(result, std::move(entry));
+	return result;
+}
+
+bool StringStore::retain(const void* ref)
+{
+	if (ref == nullptr)
+		return false;
+	if (const auto* string = static_cast<const StringObject*>(ref);
+			objects_.find(string) != objects_.end()) {
+		StringEntry& entry = *objects_.find(string)->second;
+		if (entry.refcount != std::numeric_limits<uint32_t>::max())
+			++entry.refcount;
+		return true;
+	}
+	if (const auto* view = static_cast<const StringViewObject*>(ref);
+			views_.find(view) != views_.end()) {
+		ViewEntry& entry = *views_.find(view)->second;
+		if (entry.refcount != std::numeric_limits<uint32_t>::max())
+			++entry.refcount;
+		return true;
+	}
+	if (const auto* iterator = static_cast<const StringIteratorObject*>(ref);
+			iterators_.find(iterator) != iterators_.end()) {
+		IteratorEntry& entry = *iterators_.find(iterator)->second;
+		if (entry.refcount != std::numeric_limits<uint32_t>::max())
+			++entry.refcount;
+		return true;
+	}
+	return false;
+}
+
+bool StringStore::releaseView(const StringViewObject* view)
+{
+	const auto it = views_.find(view);
+	if (it == views_.end())
+		return false;
+	ViewEntry& entry = *it->second;
+	// An unowned view (count 0) is host/temporary state; leave it for teardown.
+	if (entry.refcount == 0)
+		return true;
+	if (--entry.refcount != 0)
+		return true;
+	const StringObject* inner = entry.object.string;
+	const uint64_t bytes = entry.bytes;
+	views_.erase(it);
+	Store::global().releaseBytes(bytes);
+	if (inner != nullptr)
+		release(inner);
+	return true;
+}
+
+bool StringStore::releaseIterator(const StringIteratorObject* iterator)
+{
+	const auto it = iterators_.find(iterator);
+	if (it == iterators_.end())
+		return false;
+	IteratorEntry& entry = *it->second;
+	if (entry.refcount == 0)
+		return true;
+	if (--entry.refcount != 0)
+		return true;
+	const StringObject* inner = entry.object.string;
+	const uint64_t bytes = entry.bytes;
+	iterators_.erase(it);
+	Store::global().releaseBytes(bytes);
+	if (inner != nullptr)
+		release(inner);
+	return true;
+}
+
+bool StringStore::release(const void* ref)
+{
+	if (ref == nullptr)
+		return false;
+	const auto* string = static_cast<const StringObject*>(ref);
+	const auto stringIt = objects_.find(string);
+	if (stringIt != objects_.end()) {
+		StringEntry& entry = *stringIt->second;
+		if (entry.refcount == 0)
+			return true; // unowned host/temporary string: Store teardown owns it
+		if (--entry.refcount != 0)
+			return true;
+		const uint64_t bytes = entry.bytes;
+		objects_.erase(stringIt);
+		Store::global().releaseBytes(bytes);
+		return true;
+	}
+	if (releaseView(static_cast<const StringViewObject*>(ref)))
+		return true;
+	if (releaseIterator(static_cast<const StringIteratorObject*>(ref)))
+		return true;
+	return false;
+}
+
+bool StringStore::owns(const void* ref) const
+{
+	if (ref == nullptr)
+		return false;
+	return objects_.find(static_cast<const StringObject*>(ref)) != objects_.end()
+			|| views_.find(static_cast<const StringViewObject*>(ref)) != views_.end()
+			|| iterators_.find(static_cast<const StringIteratorObject*>(ref)) != iterators_.end();
 }
 
 // ── Embedder bridge (docs/proposals/STRINGREF.md STR-7) ─────────────────────
@@ -138,7 +256,10 @@ StringObject* StringStore::createFromUtf8(std::string_view utf8, bool* valid)
 		return nullptr;
 	if (valid)
 		*valid = true;
-	return create(std::move(codePoints));
+	StringObject* result = create(std::move(codePoints));
+	if (result != nullptr)
+		retain(result);
+	return result;
 }
 
 StringObject* StringStore::createFromWtf8(std::string_view wtf8, bool* valid)
@@ -153,7 +274,10 @@ StringObject* StringStore::createFromWtf8(std::string_view wtf8, bool* valid)
 		return nullptr;
 	if (valid)
 		*valid = true;
-	return create(std::move(codePoints));
+	StringObject* result = create(std::move(codePoints));
+	if (result != nullptr)
+		retain(result);
+	return result;
 }
 
 StringObject* StringStore::createFromWtf16(std::span<const uint16_t> units,
@@ -174,7 +298,10 @@ StringObject* StringStore::createFromWtf16(std::span<const uint16_t> units,
 	decodeWtf16(bytes.data(), units.size(), codePoints);
 	if (valid)
 		*valid = true;
-	return create(std::move(codePoints));
+	StringObject* result = create(std::move(codePoints));
+	if (result != nullptr)
+		retain(result);
+	return result;
 }
 
 bool StringStore::copyToUtf8(const StringObject* string, std::string& out,

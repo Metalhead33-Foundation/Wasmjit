@@ -1,10 +1,10 @@
 # Type Imports and Exports — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 3 — TI-0…TI-4 are
+Status: design note / implementation reference (revision 4 — TI-0…TI-4 are
 done: type imports decode `sub <abstract heaptype>`, enter the local type index
 space before definitions, receive nominal Store ids, type exports are
-registered by name, and link-time matching enforces the declared bound.
-Private/opaque types remain post-MVP.)
+registered by name, and link-time matching enforces the declared bound. The
+proposal-side implementation is complete; private/opaque types remain post-MVP).
 Audience: anyone touching `WasmModule` (type/import/export sections),
 `WasmTypeRegistry`, `WasmImport`, `WasmRegistryImportResolver`, or the
 validator.

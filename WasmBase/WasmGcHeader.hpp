@@ -49,6 +49,15 @@ constexpr uint32_t kArrayHeaderBytes  = 12;
 // (docs/proposals/GC.md RC-1b). Same value as `TypeId::kNone`.
 constexpr uint32_t kReclaimedTypeId = 0xFFFFFFFFu;
 
+// Reserved TypeId for an extern box (docs/proposals/GC.md GC-8 / RT-1): a GC
+// object whose sole payload is the internal reference `extern.convert_any`
+// wrapped. It is not a registry type; the runtime walker special-cases it so
+// the inner reference is released with the box.
+constexpr uint32_t kExternBoxTypeId = 0xFFFFFFFEu;
+// [TypeId][refcount][inner]
+constexpr size_t kExternBoxInnerOffset = kHeaderBytes;
+constexpr size_t kExternBoxBytes = kHeaderBytes + sizeof(void*);
+
 } // namespace GcHeader
 
 // ── Storage layout helpers, shared so the runtime and the backend agree (H1) ────
@@ -117,9 +126,9 @@ inline size_t gcArrayDataOffset(const CanonStorageType& element)
 }
 
 // True for every value type that *may* point at a GC heap object (or be null).
-// The string codes are nullable host-owned references. They are not
-// reference-counted (no GC header), so no value of these kinds reaches the
-// reference-counting paths (docs/proposals/STRINGREF.md STRD3).
+// The string codes are Store-owned references with their own StringStore count
+// (docs/proposals/STRINGREF.md STR-8); they have no GC header, so the GC
+// reference-counting paths treat them separately.
 inline bool isReferenceType(ValueTypeCode code)
 {
 	switch (code) {
@@ -136,8 +145,8 @@ inline bool isReferenceType(ValueTypeCode code)
 	case ValueTypeCode::NullExnRef:
 	case ValueTypeCode::NullRef:
 	// String views and stringrefs are host-owned (`Store::strings()`); they
-	// have no GC header, so the reference-counting paths treat them like an
-	// externref (a no-op).
+	// have no GC header; they use the StringStore count instead
+	// (docs/proposals/STRINGREF.md STR-8).
 	case ValueTypeCode::StringRef:
 	case ValueTypeCode::StringViewWtf8:
 	case ValueTypeCode::StringViewWtf16:

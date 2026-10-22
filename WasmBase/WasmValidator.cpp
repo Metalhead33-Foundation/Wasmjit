@@ -1527,9 +1527,26 @@ void Validator::dispatchTableFill(TableIdx arg)
 
 void Validator::dispatchTableCopy(TableIdx dst, TableIdx src)
 {
-	popExpect(tableIndexType(dst)); // len
-	popExpect(tableIndexType(src));
-	popExpect(tableIndexType(dst));
+	// Mixed 32/64-bit tables are permitted. The length operand is the smaller
+	// address type: `i32` when either table is 32-bit, `i64` only when both are
+	// 64-bit (memory64's table.copy rule; exercised by table_copy_mixed.wast).
+	const ValueTypeCode dstIndex = tableIndexType(dst);
+	const ValueTypeCode srcIndex = tableIndexType(src);
+	const ValueTypeCode lenIndex = (dstIndex == ValueTypeCode::I32
+			|| srcIndex == ValueTypeCode::I32) ? ValueTypeCode::I32
+			: ValueTypeCode::I64;
+	// Every source element must be assignable to the destination table's
+	// element type (the spec's table.copy matching rule).
+	const ValueType dstElement = tableElementType(dst);
+	const ValueType srcElement = tableElementType(src);
+	if (!assignable(srcElement, dstElement))
+		fail("table.copy: table "
+			 + module.describeIndex(NameKind::Table, src)
+			 + " element type does not match table "
+			 + module.describeIndex(NameKind::Table, dst));
+	popExpect(lenIndex);
+	popExpect(srcIndex);
+	popExpect(dstIndex);
 }
 
 void Validator::dispatchTableInit(uint32_t elemIdx, TableIdx tableIdx)

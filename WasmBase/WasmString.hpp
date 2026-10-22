@@ -2,10 +2,11 @@
 #define WASMSTRING_HPP
 #include <cstddef>
 #include <cstdint>
-#include <deque>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace WASM {
@@ -17,7 +18,7 @@ namespace WASM {
 constexpr uint32_t kMaxStringBytes = 16u << 20;             // 16 MiB
 constexpr uint32_t kMaxStringCodeUnits = kMaxStringBytes / 2;
 
-// A host-owned string: the proposal's sequence of Unicode scalar values and
+// A Store-owned string: the proposal's sequence of Unicode scalar values and
 // isolated surrogates. Code points are stored directly (not bytes), so WTF-8,
 // WTF-16 and UTF-8 are derived without losing information
 // (docs/proposals/STRINGREF.md STRD3).
@@ -37,24 +38,36 @@ struct StringIteratorObject {
 	uint32_t position = 0; // code-point index
 };
 
-// Store-owned arena for StringObjects. Pointers are stable for the Store's
-// lifetime. Strings are host-owned and are not reference-counted: they live
-// until Store teardown (docs/proposals/STRINGREF.md STRD3/STRD5).
+// Store-owned arena for StringObjects and the views/iterators derived from
+// them. Pointers are stable while the object is retained. A stringref is
+// reference-counted here (docs/proposals/STRINGREF.md STR-8): `create` and
+// `createView`/`createIterator` return an *unowned* object (count 0), exactly
+// like a fresh GC aggregate; the runtime's `refClone`/`refDrop` barriers call
+// `retain`/`release`, and a zero count frees the object and credits its budget.
 class StringStore
 {
 public:
 	// May trap with TrapKind::OutOfMemory when the allocation budget is
-	// exhausted. The returned pointer is stable until the Store dies.
+	// exhausted. The returned pointer is stable until it is released.
 	StringObject* create(std::vector<uint32_t> codePoints);
 	StringViewObject* createView(const StringObject* string);
 	StringIteratorObject* createIterator(const StringObject* string);
+
+	// ── Reference counting (docs/proposals/STRINGREF.md STR-8) ──────────
+	// Retain/release a string, view or iterator by address. `false` means the
+	// address is not owned by this Store. A release that reaches zero frees the
+	// object (a view/iterator also releases the string it borrowed).
+	bool retain(const void* ref);
+	bool release(const void* ref);
+	bool owns(const void* ref) const;
 
 	// ── Embedder bridge (docs/proposals/STRINGREF.md STR-7) ─────────────
 	// Host→string. The input is decoded strictly (WTF-8 permits isolated
 	// surrogates); malformed input or input beyond the implementation limit
 	// returns nullptr and, when `valid` is non-null, sets it to false without
 	// changing the store. Allocation failure still traps with
-	// TrapKind::OutOfMemory.
+	// TrapKind::OutOfMemory. The result is owned (count 1); the host must call
+	// `release` when it no longer needs it.
 	StringObject* createFromUtf8(std::string_view utf8, bool* valid = nullptr);
 	StringObject* createFromWtf8(std::string_view wtf8, bool* valid = nullptr);
 	StringObject* createFromWtf16(std::span<const uint16_t> units,
@@ -70,9 +83,28 @@ public:
 
 	std::size_t count() const { return objects_.size(); }
 private:
-	std::deque<StringObject> objects_;
-	std::deque<StringViewObject> views_;
-	std::deque<StringIteratorObject> iterators_;
+	struct StringEntry {
+		StringObject object;
+		uint32_t refcount = 0;
+		uint64_t bytes = 0;
+	};
+	struct ViewEntry {
+		StringViewObject object;
+		uint32_t refcount = 0;
+		uint64_t bytes = 0;
+	};
+	struct IteratorEntry {
+		StringIteratorObject object;
+		uint32_t refcount = 0;
+		uint64_t bytes = 0;
+	};
+
+	bool releaseView(const StringViewObject* view);
+	bool releaseIterator(const StringIteratorObject* iterator);
+
+	std::unordered_map<const StringObject*, std::unique_ptr<StringEntry>> objects_;
+	std::unordered_map<const StringViewObject*, std::unique_ptr<ViewEntry>> views_;
+	std::unordered_map<const StringIteratorObject*, std::unique_ptr<IteratorEntry>> iterators_;
 };
 
 // ── Codecs ──────────────────────────────────────────────────────────────────

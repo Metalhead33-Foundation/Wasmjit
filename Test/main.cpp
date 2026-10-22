@@ -3087,6 +3087,71 @@ TEST_CASE("the embedder bridge creates and copies stringrefs")
 	valid = true;
 	REQUIRE(strings.createFromUtf8("\xff", &valid) == nullptr);
 	REQUIRE_FALSE(valid);
+
+	// Host-created strings are owned by the host (count 1); release them.
+	REQUIRE(strings.release(hello));
+	REQUIRE(strings.release(surrogate));
+	REQUIRE(strings.release(fromUnits));
+}
+
+TEST_CASE("stringref reference counting releases strings and views")
+{
+	WASM::StringStore& strings = WASM::Store::global().strings();
+	const std::size_t baseline = strings.count();
+
+	WASM::StringObject* string = strings.create({'A', 'B'});
+	REQUIRE(strings.count() == baseline + 1);
+	REQUIRE(strings.retain(string));
+	REQUIRE(strings.release(string));
+	REQUIRE(strings.count() == baseline); // zero refs frees the object
+
+	WASM::StringObject* inner = strings.create({'C'});
+	REQUIRE(strings.retain(inner));
+	WASM::StringViewObject* view = strings.createView(inner);
+	REQUIRE(strings.retain(view));
+	REQUIRE(strings.release(inner)); // the view still owns the string
+	REQUIRE(strings.count() == baseline + 1);
+	REQUIRE(strings.release(view));
+	REQUIRE(strings.count() == baseline);
+}
+
+TEST_CASE("a discarded string concat result is released through the JIT")
+{
+	StringFixtureBuilder module;
+	module.section(0x01, {0x01, 0x60, 0x00, 0x01, 0x7f});
+	module.section(0x03, {0x01, 0x00});
+	module.section(0x0e, {0x00, 0x02, 0x01, 'A', 0x01, 'B'});
+	module.exports({{"discard", 0}});
+	module.code({
+		{0x00,
+		 0xfb, 0x82, 0x01, 0x00, // string.const 0
+		 0xfb, 0x82, 0x01, 0x01, // string.const 1
+		 0xfb, 0x88, 0x01,       // string.concat
+		 0x1a,                   // drop
+		 0x41, 0x07,             // i32.const 7
+		 0x0b}
+	});
+
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+
+	WASM::RegistryImportResolver imports;
+	LibJIT::Context jitContext;
+	LibJIT::ModuleCompiler compiler(jitContext.rawContext());
+	auto instance = compiler.instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto discard = instance->exportedFunction("discard");
+	REQUIRE(discard.has_value());
+	WASM::StringStore& strings = WASM::Store::global().strings();
+	const std::size_t before = strings.count();
+	REQUIRE(WASM::callCallable<int32_t>(*discard) == 7);
+	REQUIRE(strings.count() == before); // the concat result was released by `drop`
 }
 
 TEST_CASE("string array constructors and encoders bridge to GC arrays")

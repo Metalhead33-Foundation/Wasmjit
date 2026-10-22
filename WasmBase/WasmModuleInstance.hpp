@@ -206,6 +206,21 @@ public:
 	bool tryGetGcTypeId(const void* ref, TypeId& typeId) const;
 	bool refMatchesHeapType(const void* ref, const HeapType& heapType, bool nullable) const;
 
+	// ── Extern hierarchy bridge (docs/proposals/GC.md GC-8, RT-1) ───────
+	// `extern.convert_any` must hand out an *external* reference, not the
+	// internal one: an i31 or struct tag would otherwise still look like an i31
+	// or struct to `ref.test`. Internal references are wrapped in a GC-allocated
+	// box whose reserved type id the type test and the GC walker recognise. Host
+	// pointers (unknown to the GC heap and not i31 immediates) pass through
+	// unchanged, so their identity is preserved. `externUnbox` is the inverse:
+	// box -> inner, anything else -> itself.
+	void* externBox(void* ref);
+	void* externUnbox(void* ref) const;
+	bool isExternBox(const void* ref) const;
+	// True for an i31 immediate or a GC-heap object; false for null and for an
+	// opaque host reference.
+	bool isInternalReference(const void* ref) const;
+
 	// ── Reference counting (docs/proposals/GC.md §6, RC-1/RC-3) ─────────
 	// `refClone` retains a GC reference and returns it (saturating on
 	// overflow: leak, never wrap). `refDrop` releases it and traps on

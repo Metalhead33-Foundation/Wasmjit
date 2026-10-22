@@ -1037,6 +1037,19 @@ static int32_t wasm_ref_matches_heap_type_impl(WASM::VMContext* vm, void* ref, i
 	return reinterpret_cast<WASM::ModuleInstance*>(vm)->refMatchesHeapType(ref, ht, nullable != 0) ? 1 : 0;
 }
 
+// The extern hierarchy bridge (docs/proposals/GC.md GC-8 / RT-1). The runtime
+// method owns the box allocation and the inner-reference count; these are the
+// plain C entry points generated code calls.
+static void* wasm_extern_box_impl(WASM::VMContext* vm, void* ref)
+{
+	return reinterpret_cast<WASM::ModuleInstance*>(vm)->externBox(ref);
+}
+
+static void* wasm_extern_unbox_impl(WASM::VMContext* vm, void* ref)
+{
+	return reinterpret_cast<WASM::ModuleInstance*>(vm)->externUnbox(ref);
+}
+
 // Copies `lenElems` elements between two inline buffers. When the element type
 // is a reference, every destination element must also be *retained*: the copy
 // creates a new owning slot for the object (docs/proposals/GC.md RC-5), so a
@@ -4938,10 +4951,28 @@ void OpcodeDispatcher::dispatchBrOnCastFail(uint8_t castop, WASM::LabelIdx l, WA
 	pushValue(casted);
 }
 void OpcodeDispatcher::dispatchAnyConvertExtern() {
-	pushValue(popValue());
+	jit_value_t ref = popValue();
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_void_ptr};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, params, 2, 1);
+	jit_value_t args[] = {vmContextValue(), refAsVoidPtr(ref)};
+	jit_value_t unboxed = jit_insn_call_native(function, "wasm_extern_unbox_impl",
+			reinterpret_cast<void*>(wasm_extern_unbox_impl), sig, args, 2, 0);
+	// The box (if this was one) owns the inner reference; move that ownership
+	// to the result before dropping the input.
+	emitDropValue(ref);
+	pushValue(unboxed);
 }
 void OpcodeDispatcher::dispatchExternConvertAny() {
-	pushValue(popValue());
+	jit_value_t ref = popValue();
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_void_ptr};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, params, 2, 1);
+	jit_value_t args[] = {vmContextValue(), refAsVoidPtr(ref)};
+	jit_value_t boxed = jit_insn_call_native(function, "wasm_extern_box_impl",
+			reinterpret_cast<void*>(wasm_extern_box_impl), sig, args, 2, 0);
+	// `externBox` retained the inner reference; the operand stack's count on
+	// the input is released here.
+	emitDropValue(ref);
+	pushValue(boxed);
 }
 void OpcodeDispatcher::dispatchRefI31() {
 	jit_value_t value = popValue();
@@ -5039,6 +5070,7 @@ void OpcodeDispatcher::dispatchStringMeasureUtf8()
 	pushValue(callNativeUnary(function,
 			reinterpret_cast<void*>(&wasm_string_measure_utf8), jit_type_int,
 			jit_type_void_ptr, refAsVoidPtr(string)));
+	emitDropValue(string);
 }
 
 void OpcodeDispatcher::dispatchStringMeasureWtf8()
@@ -5049,6 +5081,7 @@ void OpcodeDispatcher::dispatchStringMeasureWtf8()
 	pushValue(callNativeUnary(function,
 			reinterpret_cast<void*>(&wasm_string_measure_wtf8), jit_type_int,
 			jit_type_void_ptr, refAsVoidPtr(string)));
+	emitDropValue(string);
 }
 
 void OpcodeDispatcher::dispatchStringMeasureWtf16()
@@ -5059,6 +5092,7 @@ void OpcodeDispatcher::dispatchStringMeasureWtf16()
 	pushValue(callNativeUnary(function,
 			reinterpret_cast<void*>(&wasm_string_measure_wtf16), jit_type_int,
 			jit_type_void_ptr, refAsVoidPtr(string)));
+	emitDropValue(string);
 }
 
 void OpcodeDispatcher::dispatchStringEncodeUtf8(WASM::MemIdx arg)
@@ -5072,6 +5106,7 @@ void OpcodeDispatcher::dispatchStringEncodeUtf8(WASM::MemIdx arg)
 			jit_type_void_ptr, jit_type_void_ptr, jit_type_uint,
 			memoryPointerForIndex(arg), refAsVoidPtr(string),
 			jit_insn_convert(function, ptr, jit_type_uint, 0)));
+	emitDropValue(string);
 }
 
 void OpcodeDispatcher::dispatchStringEncodeLossyUtf8(WASM::MemIdx arg)
@@ -5085,6 +5120,7 @@ void OpcodeDispatcher::dispatchStringEncodeLossyUtf8(WASM::MemIdx arg)
 			jit_type_void_ptr, jit_type_void_ptr, jit_type_uint,
 			memoryPointerForIndex(arg), refAsVoidPtr(string),
 			jit_insn_convert(function, ptr, jit_type_uint, 0)));
+	emitDropValue(string);
 }
 
 void OpcodeDispatcher::dispatchStringEncodeWtf8(WASM::MemIdx arg)
@@ -5098,6 +5134,7 @@ void OpcodeDispatcher::dispatchStringEncodeWtf8(WASM::MemIdx arg)
 			jit_type_void_ptr, jit_type_void_ptr, jit_type_uint,
 			memoryPointerForIndex(arg), refAsVoidPtr(string),
 			jit_insn_convert(function, ptr, jit_type_uint, 0)));
+	emitDropValue(string);
 }
 
 void OpcodeDispatcher::dispatchStringEncodeWtf16(WASM::MemIdx arg)
@@ -5111,6 +5148,7 @@ void OpcodeDispatcher::dispatchStringEncodeWtf16(WASM::MemIdx arg)
 			jit_type_void_ptr, jit_type_void_ptr, jit_type_uint,
 			memoryPointerForIndex(arg), refAsVoidPtr(string),
 			jit_insn_convert(function, ptr, jit_type_uint, 0)));
+	emitDropValue(string);
 }
 
 void OpcodeDispatcher::dispatchStringConcat()
@@ -5123,6 +5161,8 @@ void OpcodeDispatcher::dispatchStringConcat()
 			reinterpret_cast<void*>(&wasm_string_concat), jit_type_void_ptr,
 			jit_type_void_ptr, jit_type_void_ptr,
 			refAsVoidPtr(left), refAsVoidPtr(right)));
+	emitDropValue(left);
+	emitDropValue(right);
 }
 
 void OpcodeDispatcher::dispatchStringEq()
@@ -5135,6 +5175,8 @@ void OpcodeDispatcher::dispatchStringEq()
 			reinterpret_cast<void*>(&wasm_string_eq), jit_type_int,
 			jit_type_void_ptr, jit_type_void_ptr,
 			refAsVoidPtr(left), refAsVoidPtr(right)));
+	emitDropValue(left);
+	emitDropValue(right);
 }
 
 void OpcodeDispatcher::dispatchStringIsUsvSequence()
@@ -5145,6 +5187,7 @@ void OpcodeDispatcher::dispatchStringIsUsvSequence()
 	pushValue(callNativeUnary(function,
 			reinterpret_cast<void*>(&wasm_string_is_usv_sequence), jit_type_int,
 			jit_type_void_ptr, refAsVoidPtr(string)));
+	emitDropValue(string);
 }
 
 // ── stringview lowering (docs/proposals/STRINGREF.md STR-4) ────────────────
@@ -5181,6 +5224,7 @@ void OpcodeDispatcher::dispatchStringAsWtf8()
 		return;
 	pushValue(callNativeUnary(function, reinterpret_cast<void*>(&wasm_string_as_wtf8),
 			jit_type_void_ptr, jit_type_void_ptr, refAsVoidPtr(string)));
+	emitDropValue(string);
 }
 
 void OpcodeDispatcher::dispatchStringAsWtf16()
@@ -5190,6 +5234,7 @@ void OpcodeDispatcher::dispatchStringAsWtf16()
 		return;
 	pushValue(callNativeUnary(function, reinterpret_cast<void*>(&wasm_string_as_wtf16),
 			jit_type_void_ptr, jit_type_void_ptr, refAsVoidPtr(string)));
+	emitDropValue(string);
 }
 
 void OpcodeDispatcher::dispatchStringAsIter()
@@ -5199,6 +5244,7 @@ void OpcodeDispatcher::dispatchStringAsIter()
 		return;
 	pushValue(callNativeUnary(function, reinterpret_cast<void*>(&wasm_string_as_iter),
 			jit_type_void_ptr, jit_type_void_ptr, refAsVoidPtr(string)));
+	emitDropValue(string);
 }
 
 void OpcodeDispatcher::dispatchStringViewWtf8Advance()
@@ -5212,6 +5258,7 @@ void OpcodeDispatcher::dispatchStringViewWtf8Advance()
 			reinterpret_cast<void*>(&wasm_stringview_wtf8_advance), jit_type_int,
 			jit_type_void_ptr, jit_type_int, jit_type_int,
 			refAsVoidPtr(view), pos, bytes));
+	emitDropValue(view);
 }
 
 void OpcodeDispatcher::dispatchStringViewWtf8EncodeUtf8(WASM::MemIdx arg)
@@ -5233,6 +5280,7 @@ void OpcodeDispatcher::dispatchStringViewWtf8EncodeUtf8(WASM::MemIdx arg)
 			jit_type_uint, 0);
 	pushValue(next);
 	pushValue(written);
+	emitDropValue(view);
 }
 
 void OpcodeDispatcher::dispatchStringViewWtf8EncodeLossyUtf8(WASM::MemIdx arg)
@@ -5254,6 +5302,7 @@ void OpcodeDispatcher::dispatchStringViewWtf8EncodeLossyUtf8(WASM::MemIdx arg)
 			jit_type_uint, 0);
 	pushValue(next);
 	pushValue(written);
+	emitDropValue(view);
 }
 
 void OpcodeDispatcher::dispatchStringViewWtf8EncodeWtf8(WASM::MemIdx arg)
@@ -5275,6 +5324,7 @@ void OpcodeDispatcher::dispatchStringViewWtf8EncodeWtf8(WASM::MemIdx arg)
 			jit_type_uint, 0);
 	pushValue(next);
 	pushValue(written);
+	emitDropValue(view);
 }
 
 void OpcodeDispatcher::dispatchStringViewWtf8Slice()
@@ -5288,6 +5338,7 @@ void OpcodeDispatcher::dispatchStringViewWtf8Slice()
 			reinterpret_cast<void*>(&wasm_stringview_wtf8_slice), jit_type_void_ptr,
 			jit_type_void_ptr, jit_type_int, jit_type_int,
 			refAsVoidPtr(view), start, end));
+	emitDropValue(view);
 }
 
 void OpcodeDispatcher::dispatchStringViewWtf16Length()
@@ -5298,6 +5349,7 @@ void OpcodeDispatcher::dispatchStringViewWtf16Length()
 	pushValue(callNativeUnary(function,
 			reinterpret_cast<void*>(&wasm_stringview_wtf16_length), jit_type_int,
 			jit_type_void_ptr, refAsVoidPtr(view)));
+	emitDropValue(view);
 }
 
 void OpcodeDispatcher::dispatchStringViewWtf16GetCodeUnit()
@@ -5309,6 +5361,7 @@ void OpcodeDispatcher::dispatchStringViewWtf16GetCodeUnit()
 	pushValue(callNativeBinary(function,
 			reinterpret_cast<void*>(&wasm_stringview_wtf16_get_codeunit), jit_type_int,
 			jit_type_void_ptr, jit_type_int, refAsVoidPtr(view), pos));
+	emitDropValue(view);
 }
 
 void OpcodeDispatcher::dispatchStringViewWtf16Encode(WASM::MemIdx arg)
@@ -5323,6 +5376,7 @@ void OpcodeDispatcher::dispatchStringViewWtf16Encode(WASM::MemIdx arg)
 			reinterpret_cast<void*>(&wasm_stringview_wtf16_encode),
 			memoryPointerForIndex(arg), refAsVoidPtr(view),
 			jit_insn_convert(function, ptr, jit_type_uint, 0), pos, units));
+	emitDropValue(view);
 }
 
 void OpcodeDispatcher::dispatchStringViewWtf16Slice()
@@ -5336,6 +5390,7 @@ void OpcodeDispatcher::dispatchStringViewWtf16Slice()
 			reinterpret_cast<void*>(&wasm_stringview_wtf16_slice), jit_type_void_ptr,
 			jit_type_void_ptr, jit_type_int, jit_type_int,
 			refAsVoidPtr(view), start, end));
+	emitDropValue(view);
 }
 
 void OpcodeDispatcher::dispatchStringViewIterNext()
@@ -5346,6 +5401,7 @@ void OpcodeDispatcher::dispatchStringViewIterNext()
 	pushValue(callNativeUnary(function,
 			reinterpret_cast<void*>(&wasm_stringview_iter_next), jit_type_int,
 			jit_type_void_ptr, refAsVoidPtr(iterator)));
+	emitDropValue(iterator);
 }
 
 void OpcodeDispatcher::dispatchStringViewIterAdvance()
@@ -5357,6 +5413,7 @@ void OpcodeDispatcher::dispatchStringViewIterAdvance()
 	pushValue(callNativeBinary(function,
 			reinterpret_cast<void*>(&wasm_stringview_iter_advance), jit_type_int,
 			jit_type_void_ptr, jit_type_int, refAsVoidPtr(iterator), count));
+	emitDropValue(iterator);
 }
 
 void OpcodeDispatcher::dispatchStringViewIterRewind()
@@ -5368,6 +5425,7 @@ void OpcodeDispatcher::dispatchStringViewIterRewind()
 	pushValue(callNativeBinary(function,
 			reinterpret_cast<void*>(&wasm_stringview_iter_rewind), jit_type_int,
 			jit_type_void_ptr, jit_type_int, refAsVoidPtr(iterator), count));
+	emitDropValue(iterator);
 }
 
 void OpcodeDispatcher::dispatchStringViewIterSlice()
@@ -5379,6 +5437,7 @@ void OpcodeDispatcher::dispatchStringViewIterSlice()
 	pushValue(callNativeBinary(function,
 			reinterpret_cast<void*>(&wasm_stringview_iter_slice), jit_type_void_ptr,
 			jit_type_void_ptr, jit_type_int, refAsVoidPtr(iterator), count));
+	emitDropValue(iterator);
 }
 
 // ── GC-array string bridge (docs/proposals/STRINGREF.md STR-6) ─────────────
@@ -5421,6 +5480,7 @@ void OpcodeDispatcher::dispatchStringNewArrayImpl(WASM::TypeIdx arg, void* helpe
 	pushValue(callStringArrayNew(function, helper, refAsVoidPtr(array), start, end,
 			jit_value_create_nint_constant(function, jit_type_uint, dataOffset),
 			jit_value_create_nint_constant(function, jit_type_uint, elementSize), mode));
+	emitDropValue(array);
 }
 
 void OpcodeDispatcher::dispatchStringEncodeArrayImpl(WASM::TypeIdx arg, void* helper, int mode)
@@ -5436,6 +5496,8 @@ void OpcodeDispatcher::dispatchStringEncodeArrayImpl(WASM::TypeIdx arg, void* he
 			refAsVoidPtr(array), start,
 			jit_value_create_nint_constant(function, jit_type_uint, dataOffset),
 			jit_value_create_nint_constant(function, jit_type_uint, elementSize), mode));
+	emitDropValue(string);
+	emitDropValue(array);
 }
 
 void OpcodeDispatcher::dispatchStringNewUtf8Array(WASM::TypeIdx arg)

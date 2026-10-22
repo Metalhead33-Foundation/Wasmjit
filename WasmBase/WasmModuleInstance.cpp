@@ -639,6 +639,9 @@ void ModuleInstance::initializeStringLiterals()
 				"malformed module: string literal is not valid WTF-8");
 		internals.stringLiterals.push_back(
 			Store::global().strings().create(std::move(codePoints)));
+		// A section-14 literal is a root: it must outlive every `string.const`
+		// borrow in globals/segments (STR-2/STR-8).
+		Store::global().strings().retain(internals.stringLiterals.back());
 	}
 }
 
@@ -959,10 +962,22 @@ Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 				stack.push_back(v);
 				break;
 			}
-			case GCOpcode::AnyConvertExtern:
-			case GCOpcode::ExternConvertAny:
-				stack.push_back(popValue()); // representation-preserving
+			case GCOpcode::AnyConvertExtern: {
+				Value v = popValue();
+				Value out{};
+				out.ref = externUnbox(v.ref);
+				out.kind = ValueTypeCode::AnyRef;
+				stack.push_back(out);
 				break;
+			}
+			case GCOpcode::ExternConvertAny: {
+				Value v = popValue();
+				Value out{};
+				out.ref = externBox(v.ref);
+				out.kind = ValueTypeCode::ExternRef;
+				stack.push_back(out);
+				break;
+			}
 
 			case GCOpcode::StructNewDefault: {
 				const uint32_t typeIdx = stream.readLEB128<uint32_t>();
@@ -1302,6 +1317,56 @@ bool ModuleInstance::tryGetGcTypeId(const void* ref, TypeId& typeId) const
 	return true;
 }
 
+bool ModuleInstance::isInternalReference(const void* ref) const
+{
+	if (ref == nullptr)
+		return false;
+	if ((reinterpret_cast<uintptr_t>(ref) & 1u) != 0)
+		return true; // unboxed i31 immediate
+	return Store::global().gc().owns(ref);
+}
+
+bool ModuleInstance::isExternBox(const void* ref) const
+{
+	if (ref == nullptr || (reinterpret_cast<uintptr_t>(ref) & 1u) != 0)
+		return false;
+	if (!Store::global().gc().owns(ref))
+		return false;
+	const auto* bytes = static_cast<const uint8_t*>(ref);
+	return *reinterpret_cast<const uint32_t*>(bytes + GcHeader::kTypeIdOffset)
+			== GcHeader::kExternBoxTypeId;
+}
+
+void* ModuleInstance::externBox(void* ref)
+{
+	// A host reference is already an external reference: keep its identity.
+	// Only a reference from the internal hierarchy needs a box.
+	if (!isInternalReference(ref))
+		return ref;
+	uint8_t* box = static_cast<uint8_t*>(
+			Store::global().gc().allocate(*internals.gcSet,
+					GcHeader::kExternBoxBytes));
+	if (box == nullptr)
+		trap(TrapKind::OutOfMemory);
+	*reinterpret_cast<uint32_t*>(box + GcHeader::kTypeIdOffset) =
+			GcHeader::kExternBoxTypeId;
+	*reinterpret_cast<uint32_t*>(box + GcHeader::kRefcountOffset) = 0;
+	*reinterpret_cast<void**>(box + GcHeader::kExternBoxInnerOffset) = ref;
+	// The box owns the inner reference until its own count reaches zero; the
+	// GC walker uses kExternBoxInnerOffset to release it then.
+	refClone(ref);
+	++internals.gcAllocatedObjects;
+	return box;
+}
+
+void* ModuleInstance::externUnbox(void* ref) const
+{
+	if (!isExternBox(ref))
+		return ref;
+	return *reinterpret_cast<void* const*>(
+			static_cast<const uint8_t*>(ref) + GcHeader::kExternBoxInnerOffset);
+}
+
 bool ModuleInstance::refMatchesHeapType(const void* ref, const HeapType& heapType, bool nullable) const
 {
 	const TypeRegistry& registry = Store::global().types();
@@ -1333,6 +1398,13 @@ bool ModuleInstance::refMatchesHeapType(const void* ref, const HeapType& heapTyp
 		default:
 			return false;
 		}
+	}
+
+	// An extern box is external by construction, even though it is a GC object.
+	if (isExternBox(ref)) {
+		if (heapType.isTypeIndex)
+			return false;
+		return heapType.abstract == AbstractHeapType::Extern;
 	}
 
 	// Function references carry their canonical type id.
@@ -1423,6 +1495,10 @@ uint32_t ModuleInstance::gcRefCount(const void* ref) const
 
 void* ModuleInstance::refClone(void* ref)
 {
+	// Host-owned strings/views/iterators use the StringStore's count; GC
+	// objects use the header count (STRINGREF.md STR-8).
+	if (Store::global().strings().retain(ref))
+		return ref;
 	uint32_t* slot = gcRefcountSlot(ref);
 	if (slot == nullptr)
 		return ref;
@@ -1439,6 +1515,8 @@ void* ModuleInstance::refClone(void* ref)
 
 void ModuleInstance::refDrop(void* ref)
 {
+	if (Store::global().strings().release(ref))
+		return;
 	uint32_t* slot = gcRefcountSlot(ref);
 	if (slot == nullptr)
 		return;
@@ -1500,6 +1578,12 @@ CoreTypeView ModuleInstance::subtypeForTypeId(TypeId typeId) const
 
 void ModuleInstance::childSlotsOf(void* ref, TypeId typeId, std::vector<uint8_t*>& slots)
 {
+	// An extern box has no registry type: its single payload is the wrapped
+	// internal reference at kExternBoxInnerOffset (GC-8 / RT-1).
+	if (typeId.value == GcHeader::kExternBoxTypeId) {
+		slots.push_back(static_cast<uint8_t*>(ref) + GcHeader::kExternBoxInnerOffset);
+		return;
+	}
 	const CoreTypeView subtype = subtypeForTypeId(typeId);
 	if (!subtype.valid())
 		return; // not this instance's type: nothing to walk (leaks, never corrupts)
@@ -1534,6 +1618,8 @@ void ModuleInstance::releaseOutgoingRefs(void* ref, TypeId typeId,
 	childSlotsOf(ref, typeId, slots);
 	for (uint8_t* slot : slots) {
 		void* child = *reinterpret_cast<void* const*>(slot);
+		if (Store::global().strings().release(child))
+			continue; // a string/view/iterator holds its own count (STR-8)
 		uint32_t* count = gcRefcountSlot(child);
 		if (count == nullptr)
 			continue; // null, an i31 immediate, a funcref or an externref: uncounted
