@@ -189,6 +189,71 @@ void my_native_func(WASM::VMContext* vm, int32_t arg1, double arg2) {
 }
 ```
 
+#### Writing an import: exceptions, traps and RAII
+
+An import is called **directly by generated code**, with no engine frame in
+between. The generated caller has no unwind table, so an exception escaping the
+import would have to unwind a frame the platform unwinder cannot describe —
+i.e. undefined behaviour, in practice `std::terminate`. The contract is:
+
+| Inside the import | Allowed? | What happens |
+|---|---|---|
+| `std::unique_ptr`, `std::string`, `std::vector`, `std::lock_guard`, … | **yes** | the body's own frames are ordinary C++ and unwind normally, as long as the exception stops inside the import |
+| `throw` / a library call that throws | **only if the import is wrapped** (below) | the wrapper catches it and reports a pending trap |
+| `WASM::trap(kind, msg)` | **only if wrapped**; otherwise abort with a diagnostic | wrapped: the wrapper re-reports the trap and returns a benign value |
+| `WASM::reportTrap(kind, msg)` + returning a benign value | **always** | the caller checks the pending slot and returns |
+| calling back into Wasm (`WASM::callCallable`) | yes | a trap there stays *pending*: the boundary does not throw into the import's caller |
+| letting an exception reach the generated frame | **never** | undefined behaviour — use `nativeImport` or `reportTrap` |
+
+`WasmBase/WasmNativeImport.hpp` implements the wrapper as a template, so the
+import keeps its exact Wasm signature and nothing is allocated:
+
+```cpp
+#include "WasmBase/WasmNativeImport.hpp"
+
+void host_log(WASM::VMContext* vm, int32_t value) {
+    auto* state = static_cast<MyState*>(vm->hostData);
+    if (state == nullptr)
+        WASM::trap(WASM::TrapKind::Internal, "host_log: no state");
+    std::string line = "value: " + std::to_string(value);   // RAII is fine
+    state->lines.push_back(std::move(line));                // may throw
+}
+
+resolver.registerFunction("env", "log", WASM::nativeImport<&host_log>());
+```
+
+The wrapper holds a `WASM::NativeImportScope` while the body runs and converts
+anything that escapes it into the engine's pending trap:
+
+| Thrown | Reported as |
+|---|---|
+| `WASM::Trap` (from `WASM::trap()`) | the same kind and message |
+| `std::bad_alloc` | `TrapKind::OutOfMemory` |
+| any other `std::exception` | `TrapKind::Internal`, message `what()` (copied into the slot) |
+| anything else | `TrapKind::Internal`, "native import threw a non-standard exception" |
+
+The wrapper then returns the zero of the result type; the generated caller sees
+the pending slot before it looks at the value. `WASM::Trap`'s message is copied
+into the engine's trap slot, so `what()` may point at the exception object's own
+storage.
+
+Notes and limits:
+
+- The template argument is the function itself, so two imports with the same
+  signature get distinct trampolines. A **capturing callable** cannot be a
+  non-type template argument; pass per-instance state through
+  `VMContext::hostData` (set after `instantiate`, or by
+  `HostBridge::instanceCreated`) or use a captureless lambda.
+- Imports may run **during instantiation** (start function, element/data
+  initialisation), so `hostData` may still be null. Check it, as `host_log`
+  does.
+- A wrapped import that returns normally is byte-for-byte the raw ABI: same
+  arguments, same result, no overhead beyond the `try` block (which costs
+  nothing on the non-throwing path on the usual ABIs).
+- Without the wrapper, a `throw` reaches the generated frame. That is the one
+  remaining "never do this" in the import contract; `WASM::trap()` detects the
+  situation and aborts with a diagnostic instead of letting the unwinder fail.
+
 ### External host adapter (optional `HostBridge`)
 
 The engine has no JavaScript engine, host-language runtime, or `JSValue` type.
@@ -297,11 +362,11 @@ one-call-chain-per-host-thread model as the tail-call state
 
 Every backend has to honour one rule: **on entry to every compiled Wasm
 function, before its body runs, call `wasm_stack_check(VMContext*)`.** The
-helper probes the current stack pointer and raises
+helper probes the current stack pointer and *reports*
 `TrapKind::CallStackExhausted` ("call stack exhausted") when it is below the
-limit. That is what turns unbounded Wasm recursion into a recoverable trap
-instead of a host `SIGSEGV`, so the embedder's `TrapScope` sees it
-(`WasmBase/WasmTrap.hpp`).
+limit; the backend then checks the pending slot and returns. That is what turns
+unbounded Wasm recursion into a recoverable trap instead of a host `SIGSEGV`,
+and the embedder sees a `WASM::Trap` exception (`WasmBase/WasmTrap.hpp`).
 
 The frame is allocated by the backend's prologue *before* that check can run, so
 one frame must stay well below the reserve. The core enforces this independently
@@ -380,12 +445,14 @@ unless you have retained it.
 ### Exceptions (`WasmBase/WasmExn.hpp`)
 
 An uncaught WebAssembly exception is **not** a trap: the invocation returns
-normally with the exception left in a process-global *pending* slot (the engine
-is single-agent, so one slot is correct). Traps keep their `TrapScope`
-`longjmp` path and are never catchable.
+normally with the exception left in a *pending* slot (thread-local, like the
+trap slot). Traps take the same shape — a pending status that unwinds by
+returning — but are never catchable by `try_table` and win over a pending
+exception.
 
 | Entry point | Purpose |
 |---|---|
+| `void** wasm_exn_slot()` | The calling thread's pending-exception slot; generated code resolves it once per function and loads through it. |
 | `void* wasm_exn_pending()` | The pending exception payload, or `nullptr`. |
 | `void* wasm_exn_take_pending()` | The same value, clearing the slot (what the spec harness uses). |
 | `void wasm_exn_clear_pending()` | Drop it without inspecting. |
@@ -415,7 +482,8 @@ Universal function reference stored in tables and import storage.
 |------|------|
 | `WasmBase/WasmVMContext.hpp` | VMContext struct |
 | `WasmBase/WasmHostBridge.hpp` | Optional host boundary (reference + lifecycle callbacks) |
-| `WasmBase/WasmTrap.hpp` / `WasmBase/WasmTrap.cpp` | `TrapScope` and the `longjmp` trap path; the cleanup constraints and candidate Go-style stack are in [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) |
+| `WasmBase/WasmTrap.hpp` / `WasmBase/WasmTrap.cpp` | The pending-trap protocol (`reportTrap`, `wasm_trap_slot`, `WASM::Trap`) and the deferred-cleanup stack; the design and its limits are in [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) |
+| `WasmBase/WasmNativeImport.hpp` | `WASM::nativeImport<&fn>()`: the typed trampoline that makes `throw`/`WASM::trap()` safe inside a host import ("Writing an import" above) |
 | `WasmBase/WasmValue.hpp` | Callable struct and `callCallable` helper |
 | `WasmBase/WasmExn.hpp` | Exception objects, the pending-exception slot and the tag-id accessor |
 | `LibJit/LibjitOpcodeDispatcher.cpp` | `dispatchCall` (line ~1027), `dispatchCallIndirect` (~1061), `dispatchCallThroughCallable` (~612) |

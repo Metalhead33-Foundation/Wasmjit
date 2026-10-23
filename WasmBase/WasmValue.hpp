@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <type_traits>
 #include <utility>
+#include "WasmTrap.hpp"
 #include "WasmType.hpp"
 #include "WasmTypeIdentity.hpp"
 namespace WASM {
@@ -95,10 +96,23 @@ Ret callCallable(const Callable& callable, Args&&... args)
 
 	using Fn = Ret (*)(VMContext*, std::decay_t<Args>...);
 	Fn fn = reinterpret_cast<Fn>(callable.fnPtr);
+	// The scope tells `checkTrap()` whether this is the host boundary (throw) or
+	// a re-entry from inside Wasm (leave the trap pending for the caller). It is
+	// closed *before* the check, so an outer call sees depth 0.
 	if constexpr (std::is_void_v<Ret>) {
-		fn(callable.context, std::forward<Args>(args)...);
+		{
+			CallDepthScope depth;
+			fn(callable.context, std::forward<Args>(args)...);
+		}
+		checkTrap();
 	} else {
-		return fn(callable.context, std::forward<Args>(args)...);
+		Ret result;
+		{
+			CallDepthScope depth;
+			result = fn(callable.context, std::forward<Args>(args)...);
+		}
+		checkTrap();
+		return result;
 	}
 }
 
@@ -119,7 +133,11 @@ void callCallableWithResults(const Callable& callable, void* results, Args&&... 
 
 	using Fn = void (*)(VMContext*, std::decay_t<Args>..., void*);
 	Fn fn = reinterpret_cast<Fn>(callable.fnPtr);
-	fn(callable.context, std::forward<Args>(args)..., results);
+	{
+		CallDepthScope depth;
+		fn(callable.context, std::forward<Args>(args)..., results);
+	}
+	checkTrap();
 }
 
 }

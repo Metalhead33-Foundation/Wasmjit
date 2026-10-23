@@ -86,9 +86,12 @@ form, instruction set and component builtins are not a stable target.
   hierarchy. Shared tables/memories must declare a maximum, and global/table
   import matching compares sharedness.
 - **Host-side hardening (SET-2 partial).** `Store` containers, type interning,
-  the GC heap and the string store are mutex-guarded; trap and tail-call state
-  are host-thread-local. A single `ModuleInstance` is still not concurrently
-  callable — the real multi-agent scheduler and shared GC heap are deferred.
+  the GC heap and the string store are mutex-guarded; trap, exception and
+  tail-call state are host-thread-local. A single `ModuleInstance` is still not
+  concurrently callable — the real multi-agent scheduler and shared GC heap are
+  deferred. Per-**agent** trap/exception/tail-call state is TRAP-6 in
+  [`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md) §12.1, **deferred with SET-4/SET-5
+  and `THREADS.md` TH-5**: there is no agent object to attach it to yet.
 - **No waitqueue/TLS/lifecycle.** `waitqueue` (`0x68`) collides with the
   stack-switching continuation heap type in this engine's current encoding
   space, so it is not decoded; `thread_local` globals and component thread
@@ -107,7 +110,7 @@ form, instruction set and component builtins are not a stable target.
 | SET3 | **No managed waitqueue.** `0x68` is currently `AbstractHeapType::Cont`; the working draft's `waitqueue` type needs a collision-free assignment. | `WasmType.hpp`; `THREADS.md`. | High |
 | SET4 | **No thread-local globals.** `GlobalType` has `isShared` but no `thread_local` storage. | `WasmType.hpp`; `WasmModuleInstance` globals. | High |
 | SET5 | **No thread lifecycle/component builtins.** No spawn/join or component integration. | `WasmComponentModel.hpp`; `COMPONENT_MODEL.md`. | High |
-| SET6 | **Runtime is not multi-mutator.** Host-thread-safe, not agent-safe: one instance cannot be entered concurrently and the GC heap has one mutator. | `WasmStore.hpp`; `WasmGcHeap.*`; `WasmTrap.cpp`. | High (deferred with TH-5) |
+| SET6 | **Runtime is not multi-mutator.** Host-thread-safe, not agent-safe: one instance cannot be entered concurrently and the GC heap has one mutator. Trap/exception/tail-call state is per host thread, not per agent (TRAP-6, [`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md) §12.1) — correct for today, deferred with TH-5. | `WasmStore.hpp`; `WasmGcHeap.*`; `WasmTrap.cpp`. | High (deferred with TH-5) |
 
 
 ## 6. Where we can and should play fast and loose
@@ -136,11 +139,12 @@ has a usable stopping point.
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **SET-1 — Shared annotations** | ◑ Table/global/element/data flags, `sharecomptype`, shared heap refs and sharedness-aware matching/validation are in. Full shared-to-shared restriction checking and shared tags remain. | SET1 | Shared table/global/GC type decodes; shared/unshared refs do not subtype. Still open: every referenced-item restriction. |
-| **SET-2 — Multi-agent substrate** | ◑ Host-side: Store/type-intern/GC/string locks, thread-local trap and tail-call state. Missing: multi-mutator GC and a public agent API. | SET6 | Host threads do not corrupt the Store; two wasm agents still wait for TH-5. |
+| **SET-2 — Multi-agent substrate** | ◑ Host-side: Store/type-intern/GC/string locks, thread-local trap/exception/tail-call state. Missing: multi-mutator GC and a public agent API. | SET6 | Host threads do not corrupt the Store; two wasm agents still wait for TH-5. |
 | **SET-3 — Shared GC atomics** | ✅ 35 opcodes `0x4F–0x71` plus `ref.i31_shared`, with ordering and natural-alignment checks, all lowered through `wasm_atomic_*`. | SET2 | Done for the single-agent model: global/table/struct/array atomic get/set/RMW/cmpxchg execute. |
 | **SET-4 — TLS and waitqueues** | Add `thread_local` globals and the `waitqueue`/wait/notify family (needs a collision-free `0x68` assignment). | SET3, SET4 | A thread-local counter and a managed wait/notify round-trip pass. |
 | **SET-5 — Lifecycle** | Add the component-model thread spawn/join builtins once their shape is stable. | SET5 | A component can spawn and join a thread without a JS host. |
 | **SET-6 — Tests** | ◑ Raw-binary tests cover shared annotations and table/global atomics; proposal scripts and multi-agent fixtures remain. | SET7 | The tests fail if shared validation, ordering or TLS is single-agent-only. |
+| **SET-7 — Per-agent state** | ◑ **Deferred with `THREADS.md` TH-5.** Move the trap/exception/tail-call state from host-thread-local to per-agent (**TRAP-6**, [`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md) §12.1) in the same change that introduces the agent object. No work before then. | SET6 (agent half) | Two agents sharing one host thread observe independent traps; scheduled only with the agent execution model. |
 
 ## 8. Indicative test survey
 

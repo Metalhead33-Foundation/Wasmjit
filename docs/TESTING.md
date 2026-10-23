@@ -260,7 +260,7 @@ selection is explicit — which is why `./WasmJit '[spec]'` runs everything.
 | `./WasmJit '[spec]'` | all 257 spec scripts (~2 min in the debug build; 251 pass, 6 known failures) |
 | `./WasmJit 'spec: address'` | just that script |
 | `./WasmJit '*float*'` | scripts whose name matches |
-| `./WasmJit --list-tests` | the default view (358 test cases) |
+| `./WasmJit --list-tests` | the default view (366 test cases) |
 | `./WasmJit --list-tests '[spec]'` | every script, one line each (257) |
 | `./WasmJit -# --list-tags` | all tags, including `[#main]` and `[#SpecSuite]` |
 
@@ -291,7 +291,7 @@ It currently holds 189 of the 257 scripts, and the default run is green:
 
 ```
 $ ./WasmJit
-All tests passed (9310 assertions in 358 test cases)
+All tests passed (9353 assertions in 366 test cases)
 ```
 
 #### Refreshing the list
@@ -381,7 +381,7 @@ Correct results are deliberately **not required yet**; the run is meant to be in
 | `module` (binary) | executed | loaded and instantiated |
 | `register` | executed | exports re-registered under the given name |
 | `assert_return`, `action` (`invoke`) | executed | scalar, `v128` and reference arguments and results; multiple results, and `either` lists match any alternative |
-| `assert_trap` | executed | traps are recoverable (`WASM::trap` longjmps to a `TrapScope`; see `WasmBase/WasmTrap.hpp`), and the expected text is compared against the trap's **kind** (`trapKindName`), so a trap for the wrong reason fails |
+| `assert_trap` | executed | traps are recoverable (`WASM::trap` records a pending trap and the boundary throws `WASM::Trap`; see `WasmBase/WasmTrap.hpp`), and the expected text is compared against the trap's **kind** (`trapKindName`), so a trap for the wrong reason fails |
 | `assert_exhaustion` | executed | the guest stack guard (`WasmBase/WasmStack.hpp`) raises `CallStackExhausted` before the host stack runs out; the trap is recoverable like any other, and its kind is compared |
 | `assert_malformed`, `assert_invalid`, `assert_unlinkable`, `assert_uninstantiable` | skipped by kind by default | `WASM_SPEC_VALIDATE=1` executes them and reports pass/fail (see below) |
 | `module_definition` | executed | decoded but **not** instantiated (module-linking); the core suite uses it for limits that cannot be allocated, e.g. `(module definition (memory 65536))` |
@@ -444,11 +444,14 @@ import `(import "spectest" "table" ...)` / `"memory"` instantiate correctly.
 ### Traps
 
 A Wasm trap is a non-local exit from the current invocation. The JIT-generated
-frames carry no unwind tables, so a trap is a `longjmp` to a `TrapScope` the
-harness arms around each invocation (`WasmBase/WasmTrap.hpp`), not a C++
-exception. `invoke()` arms one scope, so:
+frames carry no unwind tables, so a trap is a *pending status*, not a C++
+exception raised inside generated code: the failing helper records the trap and
+returns, every generated frame returns, and the harness boundary
+(`WASM::callCallable`) throws `WASM::Trap` after the last generated frame
+(`WasmBase/WasmTrap.hpp`, [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md)). `invoke()` calls
+through that boundary, so:
 
-- `assert_trap` runs the action, expects the scope to be jumped to, **and**
+- `assert_trap` runs the action, expects it to throw `WASM::Trap`, **and**
   compares the script's expected text with the trap's kind (`WASM::trapKindName`)
   — "it trapped, but not for the reason the script requires" is a failure
   (docs/SAFETY.md §2.4);
@@ -516,7 +519,7 @@ tests, and it is green:
 
 ```
 $ ./WasmJit
-All tests passed (9310 assertions in 358 test cases)
+All tests passed (9353 assertions in 366 test cases)
 ```
 
 A full sweep is deliberately loud, because most of the suite is still beyond the
@@ -698,7 +701,7 @@ Measured after SIMD-5:
 
 ```bash
 ./WasmJit 'simd*'      # 24 cases, 6147 assertions, all passing (includes the hidden [.simdbench] case)
-./WasmJit              # 358 cases, 9310 assertions, all passing
+./WasmJit              # 366 cases, 9353 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed

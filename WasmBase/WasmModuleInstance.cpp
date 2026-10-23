@@ -1137,10 +1137,14 @@ bool ModuleInstance::growTable(uint32_t tableIdx, uint64_t deltaEntries) {
 
 void ModuleInstance::memoryInit(uint32_t memIdx, uint32_t dataIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len)
 {
-	if (memIdx >= internals.memoryRefs.size())
-		trap(TrapKind::Internal, "memory index out of range");
-	if (dataIdx >= module->dataSegments.size())
-		trap(TrapKind::Internal, "data segment index out of range");
+	if (memIdx >= internals.memoryRefs.size()) {
+		reportTrap(TrapKind::Internal, "memory index out of range");
+		return;
+	}
+	if (dataIdx >= module->dataSegments.size()) {
+		reportTrap(TrapKind::Internal, "data segment index out of range");
+		return;
+	}
 
 	LinearMemory* memory = internals.memoryRefs[memIdx];
 	const DataSegment& seg = module->dataSegments[dataIdx];
@@ -1148,10 +1152,14 @@ void ModuleInstance::memoryInit(uint32_t memIdx, uint32_t dataIdx, uint32_t dstO
 	// A dropped segment behaves as if it were empty: a zero-length copy is a
 	// no-op, anything longer traps. See docs/proposals/BULK_MEMORY.md BM-1/BM-3.
 	const uint64_t segmentSize = internals.dataSegmentDropped[dataIdx] ? 0 : seg.data.size();
-	if (static_cast<uint64_t>(srcOffset) + len > segmentSize)
-		trap(TrapKind::OutOfBoundsMemoryAccess, "out of bounds memory.init source");
-	if (static_cast<uint64_t>(dstOffset) + len > memory->memorySize)
-		trap(TrapKind::OutOfBoundsMemoryAccess);
+	if (static_cast<uint64_t>(srcOffset) + len > segmentSize) {
+		reportTrap(TrapKind::OutOfBoundsMemoryAccess, "out of bounds memory.init source");
+		return;
+	}
+	if (static_cast<uint64_t>(dstOffset) + len > memory->memorySize) {
+		reportTrap(TrapKind::OutOfBoundsMemoryAccess);
+		return;
+	}
 
 	if (len == 0)
 		return;
@@ -1160,28 +1168,38 @@ void ModuleInstance::memoryInit(uint32_t memIdx, uint32_t dataIdx, uint32_t dstO
 
 void ModuleInstance::dataDrop(uint32_t dataIdx)
 {
-	if (dataIdx >= internals.dataSegmentDropped.size())
-		trap(TrapKind::Internal, "data segment index out of range");
+	if (dataIdx >= internals.dataSegmentDropped.size()) {
+		reportTrap(TrapKind::Internal, "data segment index out of range");
+		return;
+	}
 	internals.dataSegmentDropped[dataIdx] = true;
 }
 
 void ModuleInstance::tableInit(uint32_t elemIdx, uint32_t tableIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len)
 {
-	if (elemIdx >= module->elementSegments.size())
-		trap(TrapKind::Internal, "element segment index out of range");
-	if (tableIdx >= internals.tableRefs.size())
-		trap(TrapKind::Internal, "table index out of range");
+	if (elemIdx >= module->elementSegments.size()) {
+		reportTrap(TrapKind::Internal, "element segment index out of range");
+		return;
+	}
+	if (tableIdx >= internals.tableRefs.size()) {
+		reportTrap(TrapKind::Internal, "table index out of range");
+		return;
+	}
 
 	const ElementSegment& seg = module->elementSegments[elemIdx];
 	// Dropped -> empty segment, exactly like memoryInit above.
 	const size_t entryCount = internals.elementSegmentDropped[elemIdx]
 		? 0
 		: (seg.initIndices.empty() ? seg.initExprs.size() : seg.initIndices.size());
-	if (static_cast<uint64_t>(srcOffset) + len > entryCount)
-		trap(TrapKind::OutOfBoundsTableAccess, "out of bounds table.init source");
+	if (static_cast<uint64_t>(srcOffset) + len > entryCount) {
+		reportTrap(TrapKind::OutOfBoundsTableAccess, "out of bounds table.init source");
+		return;
+	}
 	TableInstance* table = internals.tableRefs[tableIdx];
-	if (static_cast<uint64_t>(dstOffset) + len > table->size)
-		trap(TrapKind::OutOfBoundsTableAccess);
+	if (static_cast<uint64_t>(dstOffset) + len > table->size) {
+		reportTrap(TrapKind::OutOfBoundsTableAccess);
+		return;
+	}
 	if (len == 0)
 		return;
 
@@ -1208,21 +1226,27 @@ void ModuleInstance::tableInit(uint32_t elemIdx, uint32_t tableIdx, uint32_t dst
 
 void ModuleInstance::elemDrop(uint32_t elemIdx)
 {
-	if (elemIdx >= internals.elementSegmentDropped.size())
-		trap(TrapKind::Internal, "element segment index out of range");
+	if (elemIdx >= internals.elementSegmentDropped.size()) {
+		reportTrap(TrapKind::Internal, "element segment index out of range");
+		return;
+	}
 	internals.elementSegmentDropped[elemIdx] = true;
 }
 
 void ModuleInstance::bufferInitFromData(uint32_t dataIdx, void* dst, uint32_t srcOffset, uint32_t lenBytes)
 {
-	if (dataIdx >= module->dataSegments.size())
-		trap(TrapKind::Internal, "data segment index out of range");
+	if (dataIdx >= module->dataSegments.size()) {
+		reportTrap(TrapKind::Internal, "data segment index out of range");
+		return;
+	}
 
 	const DataSegment& seg = module->dataSegments[dataIdx];
 	// Dropped segment == empty segment (BULK_MEMORY.md BM-1/BM-3).
 	const uint64_t segmentSize = internals.dataSegmentDropped[dataIdx] ? 0 : seg.data.size();
-	if (static_cast<uint64_t>(srcOffset) + lenBytes > segmentSize)
-		trap(TrapKind::OutOfBoundsMemoryAccess, "out of bounds data segment access");
+	if (static_cast<uint64_t>(srcOffset) + lenBytes > segmentSize) {
+		reportTrap(TrapKind::OutOfBoundsMemoryAccess, "out of bounds data segment access");
+		return;
+	}
 	if (lenBytes == 0)
 		return;
 	std::memcpy(dst, seg.data.data() + srcOffset, lenBytes);
@@ -1230,8 +1254,10 @@ void ModuleInstance::bufferInitFromData(uint32_t dataIdx, void* dst, uint32_t sr
 
 void ModuleInstance::checkDataSegmentRange(uint32_t dataIdx, uint32_t srcByteOffset, uint32_t lenElems, uint32_t elemSize)
 {
-	if (dataIdx >= module->dataSegments.size())
-		trap(TrapKind::Internal, "data segment index out of range");
+	if (dataIdx >= module->dataSegments.size()) {
+		reportTrap(TrapKind::Internal, "data segment index out of range");
+		return;
+	}
 
 	const DataSegment& seg = module->dataSegments[dataIdx];
 	// Dropped segment == empty segment (BULK_MEMORY.md BM-1/BM-3).
@@ -1239,35 +1265,45 @@ void ModuleInstance::checkDataSegmentRange(uint32_t dataIdx, uint32_t srcByteOff
 	// 64-bit, because `lenElems * elemSize` must not wrap: `(i32.const 0x8000_0000)`
 	// elements of 2 bytes would otherwise look like a zero-byte range.
 	const uint64_t byteLen = static_cast<uint64_t>(lenElems) * elemSize;
-	if (static_cast<uint64_t>(srcByteOffset) + byteLen > segmentSize)
-		trap(TrapKind::OutOfBoundsMemoryAccess, "out of bounds data segment access");
+	if (static_cast<uint64_t>(srcByteOffset) + byteLen > segmentSize) {
+		reportTrap(TrapKind::OutOfBoundsMemoryAccess, "out of bounds data segment access");
+		return;
+	}
 }
 
 void ModuleInstance::checkElementSegmentRange(uint32_t elemIdx, uint32_t srcIndex, uint32_t lenElems)
 {
-	if (elemIdx >= module->elementSegments.size())
-		trap(TrapKind::Internal, "element segment index out of range");
+	if (elemIdx >= module->elementSegments.size()) {
+		reportTrap(TrapKind::Internal, "element segment index out of range");
+		return;
+	}
 
 	const ElementSegment& seg = module->elementSegments[elemIdx];
 	const size_t entryCount = internals.elementSegmentDropped[elemIdx]
 		? 0
 		: (seg.initIndices.empty() ? seg.initExprs.size() : seg.initIndices.size());
-	if (static_cast<uint64_t>(srcIndex) + lenElems > entryCount)
-		trap(TrapKind::OutOfBoundsTableAccess, "out of bounds element segment access");
+	if (static_cast<uint64_t>(srcIndex) + lenElems > entryCount) {
+		reportTrap(TrapKind::OutOfBoundsTableAccess, "out of bounds element segment access");
+		return;
+	}
 }
 
 void ModuleInstance::bufferInitFromElems(uint32_t elemIdx, void* dst, uint32_t srcOffset, uint32_t lenElems)
 {
-	if (elemIdx >= module->elementSegments.size())
-		trap(TrapKind::Internal, "element segment index out of range");
+	if (elemIdx >= module->elementSegments.size()) {
+		reportTrap(TrapKind::Internal, "element segment index out of range");
+		return;
+	}
 
 	const ElementSegment& seg = module->elementSegments[elemIdx];
 	// Dropped segment == empty segment (BULK_MEMORY.md BM-1/BM-3).
 	const size_t entryCount = internals.elementSegmentDropped[elemIdx]
 		? 0
 		: (seg.initIndices.empty() ? seg.initExprs.size() : seg.initIndices.size());
-	if (static_cast<uint64_t>(srcOffset) + lenElems > entryCount)
-		trap(TrapKind::OutOfBoundsTableAccess, "out of bounds element segment access");
+	if (static_cast<uint64_t>(srcOffset) + lenElems > entryCount) {
+		reportTrap(TrapKind::OutOfBoundsTableAccess, "out of bounds element segment access");
+		return;
+	}
 	if (lenElems == 0)
 		return;
 
@@ -1309,8 +1345,10 @@ void* ModuleInstance::allocateStructObject(uint32_t size, uint32_t localTypeIdx)
 	// charged to the budget when it is backed; a refusal is a Wasm trap, never an
 	// abort (docs/SAFETY.md §2.3, docs/proposals/GC.md GC-2).
 	uint8_t* object = static_cast<uint8_t*>(Store::global().gc().allocate(*internals.gcSet, size));
-	if (object == nullptr)
-		trap(TrapKind::OutOfMemory);
+	if (object == nullptr) {
+		reportTrap(TrapKind::OutOfMemory);
+		return nullptr;
+	}
 	*reinterpret_cast<uint32_t*>(object + GcHeader::kTypeIdOffset) = typeId.value;
 	// A fresh object is *unowned*: count 0 until a reference-typed slot retains
 	// it (docs/proposals/GC.md RC-1/RC-1b). A value on the operand stack is a
@@ -1330,13 +1368,17 @@ void* ModuleInstance::allocateArrayObject(uint32_t dataOffset, uint32_t elementS
 	// (docs/SAFETY.md §2.3, docs/proposals/GC.md C7/GC-2). mmap zero-fills it.
 	const uint64_t totalBytes = static_cast<uint64_t>(dataOffset) +
 			static_cast<uint64_t>(elementSize) * static_cast<uint64_t>(length);
-	if (totalBytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
-		trap(TrapKind::OutOfMemory);
+	if (totalBytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+		reportTrap(TrapKind::OutOfMemory);
+		return nullptr;
+	}
 
 	uint8_t* object = static_cast<uint8_t*>(
 			Store::global().gc().allocate(*internals.gcSet, static_cast<size_t>(totalBytes)));
-	if (object == nullptr)
-		trap(TrapKind::OutOfMemory);
+	if (object == nullptr) {
+		reportTrap(TrapKind::OutOfMemory);
+		return nullptr;
+	}
 
 	*reinterpret_cast<uint32_t*>(object + GcHeader::kTypeIdOffset) = typeId.value;
 	// Unowned at birth, like a struct (RC-5): the first owning slot retains it.
@@ -1387,8 +1429,10 @@ void* ModuleInstance::externBox(void* ref)
 	uint8_t* box = static_cast<uint8_t*>(
 			Store::global().gc().allocate(*internals.gcSet,
 					GcHeader::kExternBoxBytes));
-	if (box == nullptr)
-		trap(TrapKind::OutOfMemory);
+	if (box == nullptr) {
+		reportTrap(TrapKind::OutOfMemory);
+		return nullptr;
+	}
 	*reinterpret_cast<uint32_t*>(box + GcHeader::kTypeIdOffset) =
 			GcHeader::kExternBoxTypeId;
 	*reinterpret_cast<uint32_t*>(box + GcHeader::kRefcountOffset) = 0;
@@ -1624,8 +1668,14 @@ void ModuleInstance::refDrop(void* ref)
 	std::atomic_ref<uint32_t> count(*slot);
 	uint32_t old = count.load(std::memory_order_relaxed);
 	for (;;) {
-		if (old == 0)
-			trap(TrapKind::Internal, "GC reference count underflow"); // D19: trap, never wrap
+		if (old == 0) {
+			reportTrap(TrapKind::Internal, "GC reference count underflow"); // D19: trap, never wrap
+			// Host callers (this is a public API) get the exception; from
+			// generated code the slot stays pending and the caller's check
+			// returns the frame (`checkTrap` is a no-op at depth > 0).
+			checkTrap();
+			return;
+		}
 		if (count.compare_exchange_weak(old, old - 1, std::memory_order_relaxed)) {
 			if (old == 1)
 				reclaimGcObject(ref);
@@ -1735,8 +1785,10 @@ void ModuleInstance::releaseOutgoingRefs(void* ref, TypeId typeId,
 		std::atomic_ref<uint32_t> refcount(*count);
 		uint32_t old = refcount.load(std::memory_order_relaxed);
 		for (;;) {
-			if (old == 0)
-				trap(TrapKind::Internal, "GC reference count underflow"); // D19
+			if (old == 0) {
+				reportTrap(TrapKind::Internal, "GC reference count underflow"); // D19
+				return;
+			}
 			if (refcount.compare_exchange_weak(old, old - 1, std::memory_order_relaxed))
 				break;
 		}

@@ -277,7 +277,7 @@ touches. It is **not** a statement that generated Wasm code is race-free.
 | `WASM::VMContext` | Per-instance POD passed as arg0; contains index-space pointers, globals, `hostData`, `hostBridge` | Read by generated code without a lock. It must not be destroyed or re-pointed while a call using it is active. |
 | `hostData` | Embedder-owned pointer inside `VMContext` | **Entirely host-owned.** The engine never synchronizes it; the embedder must. |
 | `WASM::HostBridge` | Borrowed embedder-owned callback table (`retain`/`release`/`equals`, `instanceCreated`/`instanceDestroying`) | **Not synchronized by the engine.** Callbacks run on whichever host thread executes the instance; the adapter must serialize its own state. A bridge must outlive the instance and its callbacks must not block on a Wasm call. |
-| `WASM::TrapScope` | Per-host-thread longjmp target | Must be constructed on the thread that will execute the call. Never share a `TrapScope` across threads. |
+| `WASM::TrapSlot` | Per-host-thread pending-trap state (`wasm_trap_slot()`) | Generated code resolves it on the executing thread; `callCallable` throws `WASM::Trap` from it at the boundary. |
 | `WASM::g_tailCallState` | `thread_local` pending tail-call state | Generated code asks `WASM::currentTailCallState()` for the executing host thread's address; a host thread never uses another thread's state. |
 | `GcHeap` / `StringStore` | Store-owned host metadata plus allocator locks | Their host-side bookkeeping is locked; generated Wasm code still has a single mutator and is not a multi-agent GC. |
 
@@ -291,7 +291,10 @@ touches. It is **not** a statement that generated Wasm code is race-free.
 - stable Store-owned entity addresses for the lifetime of the Store;
 - atomic, naturally aligned atomic accesses and alignment traps;
 - ordered shared `memory.grow`/`memory.size` and the data-segment barrier;
-- a host-thread-local `TrapScope` and a per-thread tail-call state.
+- a host-thread-local pending-trap slot (`TrapSlot`), a host-thread-local
+  pending-exception slot and a per-thread tail-call state; per-**agent** state is
+  TRAP-6, deferred until agents exist ([`TRAP_CLEANUP.md`](TRAP_CLEANUP.md)
+  §12.1);
 
 **It does not guarantee:**
 
@@ -336,9 +339,9 @@ The **embedder** owns everything else:
    native function must lock or use atomic host state. A plain `int` counter is
    not safe merely because it lives in C++.
 3. **Exception boundary.** Do not let a C++ exception propagate through a JIT
-   frame. Catch it in the import and return a Wasm value or call `WASM::trap`.
-   A trap uses `longjmp`, so destructors between the trap point and the
-   `TrapScope` do not run; keep the native path POD-only or exit normally
+   frame. A helper or import that detects a trap calls
+   `WASM::reportTrap(kind, detail)` and returns a benign value; the engine's
+   pending check turns that into the early return, and destructors run normally
    (see [`SAFETY.md`](SAFETY.md) §2.6).
 4. **Lifetime.** The `Callable`, its `context`, and any `VMContext` it captures
    must outlive every invocation. Cross-module contexts are burned into code at
@@ -348,10 +351,10 @@ The **embedder** owns everything else:
    Wasm agents share, it must use the same atomic/ordering discipline as the
    module. A host `std::mutex` does not make a non-atomic Wasm access safe
    against an unrelated Wasm agent; both sides must agree on the protocol.
-6. **Trap context.** A native import runs while the calling thread's
-   `TrapScope` is armed. It must not assume it can longjmp to a different
-   thread's scope, and must not leave host locks held on a path that calls
-   `WASM::trap`.
+6. **Trap context.** A native import runs inside the calling thread's Wasm call
+   chain. A trap it reports is propagated by returning and is observed by the
+   host boundary on that same thread; it must not try to signal another thread's
+   invocation.
 
 ### 5.4 Exported Wasm functions (host → Wasm)
 
@@ -371,8 +374,9 @@ its raw entry point. There is no hidden per-instance lock. Therefore:
   serial-only, and what shared state they touch. The engine cannot check this.
 - **Destruction:** no call may be in flight when its instance, module or
   `Callable` is destroyed.
-- **Trap state:** each host thread that catches traps needs its own
-  `TrapScope`; `callCallable` does not create one implicitly.
+- **Trap state:** the pending trap is thread-local, so each host thread observes
+  only its own traps; `callCallable` checks it and throws `WASM::Trap` at the
+  boundary. There is no scope object to arm.
 
 ### 5.5 Host code that shares data with Wasm
 
@@ -396,48 +400,52 @@ For **host-only** state, yes: `std::mutex` and `std::lock_guard` are supported
 and are the expected primitive for protecting `hostData` and other native state.
 A native import may use `std::mutex` and `std::lock_guard` for **host-side**
 mutual exclusion; the engine does not ban them and nothing in the import ABI
-requires lock-free code. **Verdict:** they are the right host primitive, but
-only with the no-trap/no-cross-boundary discipline below; they are not safe as
-an RAII fence around an arbitrary Wasm call. The current trap path does not
-unwind C++:
+requires lock-free code.
 
-- `WASM::trap` uses `longjmp`. Destructors between the trap point and the armed
-  `TrapScope` do **not** run. A `std::lock_guard` whose scope contains a
-  potentially trapping Wasm call can therefore leave its `std::mutex` locked.
-- This covers a native import that calls `WASM::trap` itself, and a native
-  import that calls a Wasm export which later traps or calls back into native
-  code that traps.
-- If the embedder holds a mutex while calling a Wasm export, and a Wasm import
-  tries to take the same mutex, a non-recursive mutex deadlocks. A recursive
-  mutex only postpones the problem; it does not define reentrancy semantics.
-- **Tail calls** do not themselves `longjmp` in the current implementation: the
-  per-function driver returns normally through the trampoline. A trap in the
-  tail-called chain still has the same `longjmp` behaviour, and a guest lock or
-  host lock held across the tail call has no automatic release point.
+**RAII is trap-safe.** A trap is *reported* and unwinds by returning through the
+engine's C++ frames, and only then becomes a `WASM::Trap` exception at the host
+boundary; no `longjmp` skips a destructor. A `std::lock_guard` whose scope
+contains a potentially trapping Wasm call therefore releases its mutex on the
+trap path exactly as it does on the normal path. The same holds for
+`std::unique_ptr`, `std::string` and any other automatic object.
+
+What remains is the *report* contract, not a lifetime one:
+
+- A helper called directly by generated code must not throw: it reports with
+  `WASM::reportTrap(kind, detail)` and returns a benign value, and the backend's
+  pending check turns that into the early return
+  ([`SAFETY.md`](SAFETY.md) §2.6). A native import that wants to trap uses the
+  same spelling — `reportTrap()` followed by returning — because a throw from an
+  import would have to unwind a generated frame.
+- **Lock ordering** is still the embedder's problem: if the embedder holds a
+  mutex while calling a Wasm export, and an import reachable from it takes the
+  same non-recursive mutex, that deadlocks. A recursive mutex only postpones the
+  problem; it does not define reentrancy semantics.
+- **Guest locks** are unaffected: a trap still does not run a Wasm `finally`, and
+  `return_call` leaves no caller frame to release a guest lock. Holding a guest
+  lock across a trapping call or a `return_call` remains a module-author rule
+  until the engine defines automatic release/poisoning (§10.1).
+- **Tail calls** do not introduce a separate path: the trampoline driver returns
+  normally and stops re-dispatching when a trap is pending, so host destructors
+  in the frames above it run.
 
 Practical rules under the current engine:
 
-1. Use `std::mutex`/`lock_guard` only around native-only critical sections that
-   cannot call back into Wasm and cannot trap. This is safe and supported.
-2. If a native import must call back into Wasm, use an explicit unlock before
-   the call, or a lock protocol that does not use RAII across the boundary; do
-   not rely on the destructor running after a trap.
-3. Do not hold a host mutex across an export call unless every import reachable
-   from it is proven not to take that mutex (and the trap leak is accepted or
-   prevented).
-4. Never hold a guest lock across a `return_call`; there is no caller frame left
-   to release it. This is a toolchain/module-author rule until the engine
-   defines automatic release/poisoning.
-5. Treat the trap/RAII interaction as an **open design item**, not a solved
-   guarantee. A future engine may replace `longjmp` with an unwind-safe trap
-   mechanism, add explicit lock ownership tracking, or require a host cleanup
-   protocol; until then, RAII is safe only where no trap can cross it. The
-   candidate cleanup protocol — and why it still cannot save a non-trivial
-   automatic object in a skipped frame — is in
-   [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md).
-
-The same caveat applies to `std::unique_lock::unlock()` calls: they are safe
-only if control returns; `longjmp` bypasses the remainder of the native frame.
+1. `std::lock_guard`/`std::unique_lock` around native-only critical sections are
+   safe, and so is a guard whose scope contains a trap-capable call: the trap
+   unwinds by returning.
+2. A native import that calls back into Wasm and observes a trap should release
+   its own state normally (its destructors do), then report the trap and return.
+3. Do not take the same non-recursive host mutex on both sides of an export call;
+   that is a lock-ordering deadlock, not a lifetime problem.
+4. Never hold a **guest** lock across a `return_call`; there is no caller frame
+   left to release it.
+5. For state that no object owns (an OS handle released by a C API, an adapter's
+   non-RAII root table), use the explicit cleanup stack: `WASM::defer(thunk, arg)`
+   on the normal path, `WASM::dismissDeferred(token)` before the resource goes
+   away. `reportTrap()` drains the remaining records, most recent first. The
+   design, its limits and the rejected alternatives are in
+   [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §5/§10.
 
 ## 6. Intersections and non-implications
 
@@ -456,7 +464,7 @@ most often mistaken for a claim about the other.
 | I7 | “Serialization by a host mutex makes non-atomic Wasm accesses safe.” | Only if **every** path into the data (host and every Wasm agent) honours the same protocol. A host mutex around one entry point does not stop another agent entering a different function. |
 | I8 | “The instance is alive because the host holds a `Module`.” | `Module` and `ModuleInstance` have independent lifetimes, and compiled cross-module calls bake `VMContext*` addresses into code. Lifetime is a separate precondition, not a thread-safety property. |
 | I9 | “The instance is published after `instantiate`, so its start/import call can be concurrent.” | Initialization, data segments and start run **before** publication. Calling while `instantiate`/start is still running is a race. |
-| I10 | “A trap is just an error return, so host locks survive it.” | `WASM::trap` uses `longjmp`; destructors between the trap and the armed `TrapScope` do not run. A lock held across a trapping native import can remain locked. |
+| I10 | “A trap skips the rest of the host frame, so host locks survive it.” | Traps unwind by returning through C++ frames and become a `WASM::Trap` exception only at the boundary, so destructors run and a `std::lock_guard` releases. What a trap does *not* do is release a **guest** lock or run Wasm `finally` code. |
 | I11 | “The native callback may throw C++ exceptions; the engine will handle them.” | There is no C++ exception unwind contract across a JIT frame. Catch inside the callback and return a value/trap. |
 | I12 | “An import called from Wasm is single-threaded because Wasm has no threads.” | Wasm agents are deferred, but the **host** may call the one instance from several threads; the same `Callable`/`hostData` can therefore be reached concurrently without any Wasm agent. |
 | I13 | “Creating a new instance per thread is a valid workaround.” | The intended runtime is one instance per module, one `VMContext` per instance. Multiple instances are current test/API incidental, not a supported thread-safety architecture. |
@@ -487,7 +495,7 @@ the party has no obligation for that row.
 | W→H import | Call the registered `fnPtr` with the correct context | Call only imports whose contract permits it | Make import reentrant/thread-safe; synchronize `hostData`; no C++ exceptions across the boundary |
 | Store/API management | Locks, stable IDs, per-thread trap/tail state | — | Treat `Module`/`ModuleInstance`/instantiator as not concurrently mutable |
 | Initialization | Apply data/elem/start before publication; barrier | Do not rely on concurrent initialization | Do not publish/call until `instantiate` returns |
-| Trap/failure | `TrapScope` per thread, POD trap path | Use Wasm traps, not host crashes | Arm a `TrapScope` per thread; expect destructors to be skipped on trap |
+| Trap/failure | Thread-local pending-trap slot; the boundary throws `WASM::Trap` | Use Wasm traps, not host crashes | Catch `WASM::Trap` (or read the harness trap result); host destructors run on the trap path |
 | Lifetime | Preserve code/context addresses | Keep exports/imports valid | Keep modules/instances/callables alive through every call; no destruction in flight |
 
 The library author (this project) must **not** infer guest safety from any of
@@ -499,10 +507,10 @@ its own host-side mechanisms. In particular, it must not:
   acquire/release-edge tests;
 - claim `shared` annotations are a proof of data-race freedom;
 - present multiple instances of a module as the concurrency/isolation plan;
-- claim `std::lock_guard` survives a trap or that its destructor runs on the
-  `longjmp` path;
+- claim a trap releases a **guest** lock or runs Wasm `finally` code (a host
+  `std::lock_guard` does release, because the trap unwinds by returning);
 - add a hidden per-instance or per-import global lock without making it part of
-  the documented contract (and without considering the trap/longjmp path);
+  the documented contract (and without considering the trap path);
 - promise that a native import, `hostData`, `Callable` or `ModuleInstance` is
   safe to share unless the corresponding section above says so.
 
@@ -524,8 +532,9 @@ is undefined even if a particular run happens to work.
 | Concurrent `ModuleInstantiator`/backend compilation | **Not guaranteed**; use one per thread or serialize | backend session |
 | Concurrent `Module`/`ModuleInstance` mutation | **Not supported** | mutable fields |
 | Store entity creation/lookup and type interning | **Management-level locks**; not a guest-data lock | `WasmStore`, `TypeRegistry` |
-| Host-thread trap state | **Per host thread** | `TrapScope` / `trapState()` |
-| Trap-time host cleanup (locks, roots, arenas) | **Absent**; `longjmp` skips destructors, so release before a trap-capable call or use a protocol that does not rely on RAII | §5.6, [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) |
+| Host-thread trap state | **Per host thread**; per-agent state is TRAP-6, deferred with the multi-agent model | `wasm_trap_slot()` / `TrapSlot` |
+| Host-thread pending Wasm exception | **Per host thread** (same discipline as the trap slot); per-agent state is TRAP-6 | `wasm_exn_slot()` |
+| Trap-time host cleanup (locks, roots, arenas) | **RAII works** (a trap unwinds by returning); non-RAII state can use the deferred-cleanup stack | §5.6, [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) |
 | Host-thread tail-call state | **Per host thread**; generated code resolves it dynamically | `currentTailCallState()` |
 | Shared-memory atomic loads/stores/RMW/cmpxchg | **Implemented single-agent**, hardware atomics and alignment traps | `wasm_atomic.*`, `THREADS.md` TH-1 |
 | Acquire-release ordering and `pause` | **Implemented single-agent** | `ACQUIRE_RELEASE_ATOMICS.md` |
@@ -545,9 +554,10 @@ calls into the one instance are safe.
 
 The smallest protocol that is valid with the current engine is:
 
-1. **Bracket every call with a `TrapScope` on the calling thread.** Do not share
-   the scope; do not assume C++ destructors run between `WASM::trap` and the
-   scope.
+1. **Call through `WASM::callCallable` and catch `WASM::Trap`.** The pending
+   trap is thread-local, and the boundary throws only after the generated frames
+   have returned, so host destructors run. Re-entrant calls from an import see
+   the pending slot instead of an exception.
 2. **Treat the module's single instance as the unit of serialization.** Guard
    it with an external mutex (or permit only one host thread) today. Do not
    create per-thread instances as a design; that is not the target model. The
@@ -611,47 +621,50 @@ preserve; it is not a current guarantee:
   documenting it as part of the contract.
 - An export API for agents needs an explicit concurrency mode; “a wasm function
   pointer” is not a thread-safe handle by itself.
-- Guest locks/semaphores (§4.6), host `std::mutex`/RAII (§5.6), and the trap
-  path (§10.1) are **open design items**, not established semantics.
+- Guest locks/semaphores (§4.6) remain an **open design item**; host
+  `std::mutex`/RAII (§5.6) and the trap path are settled — a trap unwinds by
+  returning, so host destructors run. §10.1 records what a *guest* lock still
+  cannot rely on.
 
 ### 10.1 Traps, lock ownership, cancellation, and tail calls
 
-The current trap mechanism is a per-host-thread `longjmp` to an armed
-`TrapScope`. That model does not yet answer the multi-agent questions:
+The trap model is a thread-local *pending status*: generated code and helpers
+report, every caller returns, and the host boundary throws `WASM::Trap` after
+the last generated frame is gone. `std::lock_guard` and every other host
+destructor therefore run on the trap path (§5.6). What the model does not yet
+answer is the multi-agent question:
 
-- **Per-agent trap isolation.** A trap in one agent must unwind only that
-  agent's stack and must not disturb another agent's trap target, operand stack
-  or tail-call state. Today `TrapScope`/`trapState()` are per host thread;
-  agent-aware execution needs per-agent state even if several agents share a
-  host thread.
-- **C++ unwinding.** `longjmp` skips destructors inside native imports and
-  host call frames. `std::lock_guard` therefore cannot be relied on across a
-  potentially trapping Wasm/native call (§5.6). A future design must choose
-  between a genuinely unwind-safe trap (for example, exceptions with a
-  documented ABI and unwind tables), explicit cleanup before every trap-capable
-  call, or an engine-owned lock registry that can release/poison locks on trap.
-  The explicit-cleanup branch has a candidate shape: a fixed-capacity,
-  Go-style LIFO cleanup stack in the per-thread trap state, with `trap()`
-  draining `noexcept` thunks before `longjmp`. It gives native imports a way to
-  unlock or release external state, but it is not C++ unwinding and does not
-  make non-trivial locals in skipped frames safe. See
-  [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) for the design, the code sketches, the
-  comparison table, the option set, the backend feasibility study, and the
-  current trapping-start-function gap.
+- **Per-agent trap isolation — TRAP-6, deferred by decision.** A trap in one
+  agent must unwind only that agent's stack and must not disturb another agent's
+  pending slot, operand stack or tail-call state. Today all of that is per *host
+  thread*, which is the correct granularity for the only execution model the
+  engine has. Per-agent state is tracked as TRAP-6 in
+  [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §12.1 and is **deferred until true
+  multi-agent execution exists** (`proposals/THREADS.md` TH-5/T9,
+  `proposals/SHARED_EVERYTHING_THREADS.md` SET-4/SET-5): there is no agent object
+  to attach the state to, and the migration is a mechanical replacement of the
+  `thread_local` slots behind `wasm_trap_slot()`/`wasm_exn_slot()` and the
+  counters, not a redesign.
+- **C++ unwinding.** The engine's own frames unwind safely because there is no
+  non-local jump at all; the one remaining constraint is that a helper reached
+  from generated code must report instead of throwing
+  ([`SAFETY.md`](SAFETY.md) §2.6). What is still open is guest-side cleanup: no
+  mechanism runs Wasm `finally`-like code on a trap, so a **guest** lock stays
+  held unless the module or the engine releases it.
 - **Guest lock ownership.** A Wasm trap is not a C++ exception and does not run
   a `finally`. If an agent traps while holding a guest mutex, the lock stays
   held unless the module can prevent/convert the escaping trap into a cleanup
   path, or the engine records and releases/poisons it. There is no current
   ownership tracking.
-- **Host lock ownership.** A host mutex held by a native import that calls
-  `WASM::trap`, or by a host frame around a trapping export, can remain locked
-  after the longjmp. A lock left held by a dead/trapped agent is a deadlock for
-  the surviving agents.
-- **Tail calls.** The trampoline returns normally, but a trap in the
-  tail-called chain still jumps out without C++ cleanup. A guest lock must not
-  be held across `return_call`; a host lock must not be held across a call that
-  can tail-call into a trap. Penalizing or forbidding tail calls inside critical
-  sections is a toolchain/module-author rule until the engine defines
+- **Host lock ownership.** A host mutex held around a trapping call is released
+  by its own destructor, so a dead agent cannot strand it. The remaining hazard
+  is lock *ordering*: a non-recursive mutex taken on both sides of an export
+  call deadlocks regardless of traps.
+- **Tail calls.** The trampoline returns normally and stops re-dispatching when
+  a trap is pending, so host destructors run. A **guest** lock must still not be
+  held across `return_call`, because no Wasm frame is left to release it.
+  Penalizing or forbidding tail calls inside guest critical sections is a
+  toolchain/module-author rule until the engine defines
   otherwise.
 - **Cancellation/agent teardown.** Killing an agent (rather than letting a trap
   propagate) needs an explicit policy for locks, waiters, GC references and
@@ -675,7 +688,7 @@ multi-agent race freedom.
 ## 11. References
 
 - In-repo:
-  [`SAFETY.md`](SAFETY.md) (trap/longjmp, locks, allocation),
+  [`SAFETY.md`](SAFETY.md) (traps, locks, allocation),
   [`ABI.md`](ABI.md) (`VMContext`, `Callable`, native imports),
   [`proposals/THREADS.md`](proposals/THREADS.md) (execution model, TH-3/TH-5),
   [`proposals/SHARED_EVERYTHING_THREADS.md`](proposals/SHARED_EVERYTHING_THREADS.md)

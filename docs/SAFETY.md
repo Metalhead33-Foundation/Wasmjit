@@ -101,11 +101,17 @@ so the kernel handed out pages until the machine froze. See §4, case study 1.
 
 ### 2.4 A runtime failure is a trap or an exception — never `std::abort()`
 
-- **Traps** are a `longjmp` to an embedder-armed `TrapScope`
-  (`WasmBase/WasmTrap.hpp`): the JIT-generated frames have no unwind tables, so a
-  C++ exception cannot cross them. The JIT's `emitTrap` / `emitTrapIfNull`, the
-  native helpers and the bulk/segment paths all raise traps this way. The test
-  harness arms a scope per invocation and *executes* `assert_trap`.
+- **Traps** are *reported*, not thrown across generated code
+  (`WasmBase/WasmTrap.hpp`): the generated frames have no unwind tables, so a C++
+  exception cannot cross them. Generated code, the JIT's `emitTrap` /
+  `emitTrapIfNull` paths and the native helpers call `reportTrap()` (or, from
+  generated code, `wasm_trap_report()`) and return a benign value; every caller
+  checks the pending slot and returns in turn. The host boundary
+  (`WASM::callCallable`, the start-function call, the test harness) converts the
+  pending trap into a `WASM::Trap` C++ exception *after* the generated frames
+  have returned, so ordinary C++ unwinding — and therefore ordinary destructors —
+  applies to every C++ frame. The test harness converts the exception into its
+  own trapped/kind/message result and *executes* `assert_trap`.
 - Every trap carries a **kind** (`WASM::TrapKind`) as well as a message. The kind
   is the spec's taxonomy and `trapKindName` returns the spec's own wording, so the
   harness compares an `assert_trap` expectation against `trapKindName(kind)`:
@@ -119,9 +125,10 @@ so the kernel handed out pages until the machine froze. See §4, case study 1.
   backend does not lower yet (`notImplemented`), a malformed export index, an
   out-of-range `memidx`, and a start-function index outside the index space.
 
-What still aborts, deliberately: a host allocation failure the budget could not
-prevent, and an unrecovered trap when **no** `TrapScope` is armed (`WASM::trap`
-has nowhere to jump, so it prints and aborts — arm a scope in an embedder).
+A report never aborts by itself: with no C++ frame left to check it, the trap
+simply remains pending until the boundary takes it. `WASM::trap()` is the
+host-facing spelling (report + throw) and is only valid where no generated frame
+is on the stack.
 
 ### 2.5 Locks and "regions" are RAII, not start/end pairs
 
@@ -132,46 +139,59 @@ not an error. `JitBuildScope` (`LibJit/LibjitModuleCompiler.cpp`) makes the pair
 exception-safe. Any future "begin/end" API should get the same treatment.
 *Encountered pitfall:* see §4, case study 2.
 
-RAII is exception-safe, but **not longjmp-safe**: a Wasm trap can bypass
-destructors. Host locks held across a trap-capable call need the extra rules in
-[`THREADSAFETY.md`](THREADSAFETY.md) §5.6.
+RAII is both exception-safe and trap-safe: a trap unwinds the engine's C++ frames
+by returning, so `std::lock_guard`, `std::unique_ptr` and `std::string` are valid
+across a trap-capable call. The one remaining rule is that a *helper called from
+generated code* must report and return rather than throw (§2.6).
 
-### 2.6 Longjmp skips destructors — keep the trap path POD-only
+### 2.6 A helper called from generated code reports; it never throws or jumps
 
-`WASM::trap` unwinds the stack without running destructors between the trap and
-the `TrapScope`. Therefore:
+The generated frames have no unwind tables, so an exception leaving a helper
+would have to unwind a frame the platform unwinder cannot describe. The contract
+for every helper that generated code calls directly is therefore:
 
-- the native helpers and everything they call must hold only trivially
-  destructible locals (pointers, references, pods) — that is why `memoryInit` /
-  `tableInit` / `bufferInitFrom*` are written the way they are;
-- per-thread transient state must be reset *by* `trap()` itself: the
-  tail-call trampoline's per-thread state would otherwise strand the next
-  invocation on a dead target.
+- a failure is `reportTrap(kind, detail)` followed by returning a benign value
+  (`nullptr`, `0`, or a `bool`/status that the helper's caller checks);
+- it must not call `WASM::trap()` (which throws), must not `throw`, and must not
+  `longjmp`; `trap()` detects the misuse at runtime (`wasmCallDepth() != 0`)
+  and aborts with a diagnostic rather than unwinding a generated frame;
+- a **native import** is the one place where a throw is allowed, because
+  `WasmBase/WasmNativeImport.hpp`'s `nativeImport<&fn>()` trampoline catches it
+  and converts it into a pending trap before it reaches generated code
+  ([`ABI.md`](ABI.md) "Writing an import"); an unwrapped import gets the abort
+  above;
+- it may hold any C++ object across the failure point — the early return runs its
+  destructor, which is exactly why the POD-only rule is gone;
+- the backend must emit a pending check after the call (`emitPendingTrapCheck`),
+  so a forgotten check cannot silently swallow the trap.
 
-The cross-thread and lock-ownership consequences (including why `std::lock_guard`
-cannot be relied on across a trapping call) are in
-[`THREADSAFETY.md`](THREADSAFETY.md) §5.6 and §10.1. A candidate for escaping
-this constraint without C++ unwinding is a fixed-capacity, Go-style cleanup
-stack that `WASM::trap()` drains before `longjmp`; the design, its limits, and
-the current trapping-start-function gap are recorded in
-[`TRAP_CLEANUP.md`](TRAP_CLEANUP.md). The stack is **not implemented** and does
-not relax the POD-only rule for skipped frames. The same note records that the
-string and array helpers the generated code already calls violate this rule
-today ([`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §7), and studies the alternatives —
-including a trap model with no non-local exit — against each backend
-([`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §10).
+`ModuleInstance::refDrop` (a *host* API, not a helper) reports through the
+internal path and then calls `checkTrap()`: at the host boundary that throws, and
+inside generated code it is a no-op because the slot is left pending for the
+caller's check.
+
+The cross-thread and lock-ownership consequences are in
+[`THREADSAFETY.md`](THREADSAFETY.md) §5.6 and §10.1. The design that replaced the
+old `longjmp`/`TrapScope` model, including the reasons each alternative was
+rejected, is [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md); the backend feasibility study
+is its §10, and the shipped subset is TRAP-1/TRAP-3 there.
 
 ### 2.7 Execution state is per host thread, not per agent
 
-`WASM::g_tailCallState` and the trap state are **host-thread-local**; generated
-code reaches the tail-call state through `currentTailCallState()` so it is
-resolved on the thread actually executing the call. The `Store` remains a
+`WASM::g_tailCallState` and the trap and pending-exception state are
+**host-thread-local**; generated code reaches the tail-call state through
+`currentTailCallState()` (and the two slots through `wasm_trap_slot()` /
+`wasm_exn_slot()`) so they are resolved on the thread actually executing the
+call. The `Store` remains a
 process-global owner with locked management containers, and one
 `ModuleInstance` is still not concurrently callable. These are host-side
 properties, not a multi-agent execution model. The distinction between guest,
 host and boundary safety, and the responsibilities of each party, is defined in
 [`THREADSAFETY.md`](THREADSAFETY.md); the single-agent execution model is
-[`proposals/THREADS.md`](proposals/THREADS.md) §3/TD9.
+[`proposals/THREADS.md`](proposals/THREADS.md) §3/TD9. Per-**agent** trap,
+exception and tail-call state (TRAP-6) is deliberately deferred until a real
+multi-agent execution model exists, because there is no agent object to attach
+it to yet ([`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §12.1).
 
 ### 2.8 The host stack is a bounded resource, and its limit is a trap
 
@@ -192,9 +212,9 @@ down. The engine therefore checks explicitly:
   prologue and the guard check runs only afterwards, so a frame larger than the
   reserve could jump over the guard page before the check could trap.
 - Generated code calls `wasm_stack_check(VMContext*)` on every compiled-function
-  entry; the helper raises `TrapKind::CallStackExhausted` ("call stack
-  exhausted"), an ordinary recoverable trap (§2.4) that longjmps to the
-  embedder's `TrapScope`.
+  entry; the helper reports `TrapKind::CallStackExhausted` ("call stack
+  exhausted"), an ordinary recoverable trap (§2.4) that unwinds by returning and
+  becomes `WASM::Trap` at the host boundary.
 - A platform that cannot report stack bounds, or a thread whose stack is not
   larger than twice the reserve, leaves the limit at zero: the guard is then
   disarmed rather than trapping on the first call. The embedder chooses thread

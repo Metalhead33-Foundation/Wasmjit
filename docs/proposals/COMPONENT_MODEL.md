@@ -321,7 +321,10 @@ multi-agent work listed in §4.3 and §5.
 - **True multi-agent execution** of component async/streams/futures/tasks.
   The interfaces and a working single-agent backend exist
   (`WasmBase/WasmComponentAsync.hpp`, `THREADS.md` §5.1); a second agent, real
-  wakeups and concurrent copies are the deliberately deferred TH-5 work.
+  wakeups and concurrent copies are the deliberately deferred TH-5 work. The
+  per-agent trap/exception state that a second agent needs is **TRAP-6**
+  ([`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md) §12.1), deferred with TH-5 rather
+  than scheduled separately.
 - **WIT-defined resource subtyping/private types** (post-MVP in the component
   model) and engine-side WASI 0.2 implementations. WIT itself is a build-time
   format: the harness ingests `component wit --json`, and WASI interfaces are

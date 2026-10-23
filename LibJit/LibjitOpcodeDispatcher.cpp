@@ -1,5 +1,6 @@
 #include "LibjitOpcodeDispatcher.hpp"
 #include "../WasmBase/WasmSafety.hpp"
+#include "../WasmBase/WasmStack.hpp"
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmTrap.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
@@ -28,17 +29,20 @@ namespace LibJIT {
 
 namespace {
 
-// A Wasm trap (docs/proposals/BULK_MEMORY.md BM-2, docs/SAFETY.md §2.4): jump
-// to the embedder's armed TrapScope when there is one, otherwise print and
-// abort. A `longjmp` rather than a C++ exception, because the JIT-generated
-// frames carry no unwind tables. `JIT_CALL_NORETURN` tells the emitter control
-// does not continue here.
+// ── Trap status ────────────────────────────────────────────────────────────
+// A Wasm trap (docs/SAFETY.md §2.4) is *reported*, not thrown or jumped:
+// `wasm_trap_report` records the kind/message in the engine's pending slot and
+// returns, and the dispatcher branches to the function's error epilogue, which
+// returns zeroes. The caller then checks the same slot after its call
+// (`emitPendingTrapCheck`). Nothing here needs an unwind table, and a helper may
+// hold a `std::string` across the trap point: it returns normally, so the
+// destructor runs (docs/TRAP_CLEANUP.md §8.5/§9.7).
 //
 // The *kind* travels as an int and the message as a constant string, because a
-// scoped enum cannot be passed through a jit_type signature; wasm_trap_raise
+// scoped enum cannot be passed through a jit_type signature; wasm_trap_report
 // re-assembles them. The kind is what makes the trap checkable
 // (docs/SAFETY.md §2.4), the message is only for the log.
-void emitAbort(jit_function_t fn, WASM::TrapKind kind, const char* detail)
+void emitTrapReportCall(jit_function_t fn, WASM::TrapKind kind, const char* detail)
 {
 	jit_type_t params[2] = {jit_type_int, jit_type_void_ptr};
 	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 2, 1);
@@ -48,29 +52,41 @@ void emitAbort(jit_function_t fn, WASM::TrapKind kind, const char* detail)
 		jit_value_create_nint_constant(fn, jit_type_void_ptr,
 			reinterpret_cast<jit_nint>(const_cast<char*>(detail)))
 	};
-	jit_insn_call_native(fn, "wasm_trap_raise", reinterpret_cast<void*>(&WASM::wasm_trap_raise),
-		sig, args, 2, JIT_CALL_NORETURN);
+	jit_insn_call_native(fn, "wasm_trap_report",
+		reinterpret_cast<void*>(&WASM::wasm_trap_report), sig, args, 2, 0);
 }
 
 // ── Stringref runtime helpers (docs/proposals/STRINGREF.md STR-3) ───────────
 // These are the fallible operations the generated code calls. Strings are
 // host-owned Store objects; the pointer in a `stringref` is a StringObject*.
+//
+// A failure is reported (`reportTrap`) and the helper returns a null/default
+// value; the generated caller checks the pending slot immediately after the
+// call and returns before it uses the value. The helpers hold `std::vector`
+// locals across their failure points on purpose: with status-return traps those
+// destructors run normally (docs/TRAP_CLEANUP.md §8.5).
 
 static const uint8_t* checkedStringRange(WASM::LinearMemory* memory,
 										 uint64_t offset, uint64_t length)
 {
-	if (memory == nullptr)
-		trap(WASM::TrapKind::Internal, "null linear memory");
+	if (memory == nullptr) {
+		reportTrap(WASM::TrapKind::Internal, "null linear memory");
+		return nullptr;
+	}
 	const uint64_t size = memory->memorySize;
-	if (offset > size || length > size - offset)
-		trap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+	if (offset > size || length > size - offset) {
+		reportTrap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+		return nullptr;
+	}
 	return memory->memoryBase + offset;
 }
 
 static const WASM::StringObject* stringObjectOrTrap(void* handle)
 {
-	if (handle == nullptr)
-		trap(WASM::TrapKind::NullReference, "null string reference");
+	if (handle == nullptr) {
+		reportTrap(WASM::TrapKind::NullReference, "null string reference");
+		return nullptr;
+	}
 	return static_cast<const WASM::StringObject*>(handle);
 }
 
@@ -81,20 +97,30 @@ static void* makeString(std::vector<uint32_t> codePoints)
 
 static void* wasm_string_new_utf8(WASM::LinearMemory* memory, uint32_t ptr, uint32_t len)
 {
-	if (len > WASM::kMaxStringBytes)
-		trap(WASM::TrapKind::OutOfMemory, "string exceeds the implementation limit");
+	if (len > WASM::kMaxStringBytes) {
+		reportTrap(WASM::TrapKind::OutOfMemory, "string exceeds the implementation limit");
+		return nullptr;
+	}
 	const uint8_t* bytes = checkedStringRange(memory, ptr, len);
+	if (bytes == nullptr)
+		return nullptr;
 	std::vector<uint32_t> codePoints;
-	if (!WASM::decodeUtf8(bytes, len, codePoints))
-		trap(WASM::TrapKind::InvalidString, "string.new_utf8: invalid UTF-8");
+	if (!WASM::decodeUtf8(bytes, len, codePoints)) {
+		reportTrap(WASM::TrapKind::InvalidString, "string.new_utf8: invalid UTF-8");
+		return nullptr;
+	}
 	return makeString(std::move(codePoints));
 }
 
 static void* wasm_string_new_lossy_utf8(WASM::LinearMemory* memory, uint32_t ptr, uint32_t len)
 {
-	if (len > WASM::kMaxStringBytes)
-		trap(WASM::TrapKind::OutOfMemory, "string exceeds the implementation limit");
+	if (len > WASM::kMaxStringBytes) {
+		reportTrap(WASM::TrapKind::OutOfMemory, "string exceeds the implementation limit");
+		return nullptr;
+	}
 	const uint8_t* bytes = checkedStringRange(memory, ptr, len);
+	if (bytes == nullptr)
+		return nullptr;
 	std::vector<uint32_t> codePoints;
 	WASM::decodeUtf8Lossy(bytes, len, codePoints);
 	return makeString(std::move(codePoints));
@@ -102,22 +128,32 @@ static void* wasm_string_new_lossy_utf8(WASM::LinearMemory* memory, uint32_t ptr
 
 static void* wasm_string_new_wtf8(WASM::LinearMemory* memory, uint32_t ptr, uint32_t len)
 {
-	if (len > WASM::kMaxStringBytes)
-		trap(WASM::TrapKind::OutOfMemory, "string exceeds the implementation limit");
+	if (len > WASM::kMaxStringBytes) {
+		reportTrap(WASM::TrapKind::OutOfMemory, "string exceeds the implementation limit");
+		return nullptr;
+	}
 	const uint8_t* bytes = checkedStringRange(memory, ptr, len);
+	if (bytes == nullptr)
+		return nullptr;
 	std::vector<uint32_t> codePoints;
-	if (!WASM::decodeWtf8(bytes, len, codePoints))
-		trap(WASM::TrapKind::InvalidString, "string.new_wtf8: invalid WTF-8");
+	if (!WASM::decodeWtf8(bytes, len, codePoints)) {
+		reportTrap(WASM::TrapKind::InvalidString, "string.new_wtf8: invalid WTF-8");
+		return nullptr;
+	}
 	return makeString(std::move(codePoints));
 }
 
 static void* wasm_string_new_wtf16(WASM::LinearMemory* memory, uint32_t ptr, uint32_t codeUnits)
 {
-	if (codeUnits > WASM::kMaxStringCodeUnits)
-		trap(WASM::TrapKind::OutOfMemory, "string exceeds the implementation limit");
+	if (codeUnits > WASM::kMaxStringCodeUnits) {
+		reportTrap(WASM::TrapKind::OutOfMemory, "string exceeds the implementation limit");
+		return nullptr;
+	}
 	// `codeUnits` is a count of 16-bit units, so the byte range is twice that.
 	const uint64_t bytes = static_cast<uint64_t>(codeUnits) * 2u;
 	const uint8_t* data = checkedStringRange(memory, ptr, bytes);
+	if (data == nullptr)
+		return nullptr;
 	std::vector<uint32_t> codePoints;
 	WASM::decodeWtf16(data, codeUnits, codePoints);
 	return makeString(std::move(codePoints));
@@ -126,6 +162,8 @@ static void* wasm_string_new_wtf16(WASM::LinearMemory* memory, uint32_t ptr, uin
 static int32_t wasm_string_measure_utf8(void* handle)
 {
 	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	if (string == nullptr)
+		return 0;
 	uint32_t length = 0;
 	return WASM::measureUtf8(string->codePoints, length)
 			? static_cast<int32_t>(length) : -1;
@@ -134,6 +172,8 @@ static int32_t wasm_string_measure_utf8(void* handle)
 static int32_t wasm_string_measure_wtf8(void* handle)
 {
 	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	if (string == nullptr)
+		return 0;
 	uint32_t length = 0;
 	return WASM::measureWtf8(string->codePoints, length)
 			? static_cast<int32_t>(length) : -1;
@@ -142,6 +182,8 @@ static int32_t wasm_string_measure_wtf8(void* handle)
 static int32_t wasm_string_measure_wtf16(void* handle)
 {
 	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	if (string == nullptr)
+		return 0;
 	uint32_t length = 0;
 	return WASM::measureWtf16(string->codePoints, length)
 			? static_cast<int32_t>(length) : -1;
@@ -152,6 +194,8 @@ static int32_t writeEncodedString(WASM::LinearMemory* memory, uint32_t ptr,
 {
 	uint8_t* destination = const_cast<uint8_t*>(
 			checkedStringRange(memory, ptr, bytes.size()));
+	if (destination == nullptr)
+		return 0;
 	if (!bytes.empty())
 		std::memcpy(destination, bytes.data(), bytes.size());
 	return static_cast<int32_t>(bytes.size());
@@ -160,15 +204,21 @@ static int32_t writeEncodedString(WASM::LinearMemory* memory, uint32_t ptr,
 static int32_t wasm_string_encode_utf8(WASM::LinearMemory* memory, void* handle, uint32_t ptr)
 {
 	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	if (string == nullptr)
+		return 0;
 	std::vector<uint8_t> bytes;
-	if (!WASM::encodeUtf8(string->codePoints, bytes, false))
-		trap(WASM::TrapKind::InvalidString, "string.encode_utf8: isolated surrogate");
+	if (!WASM::encodeUtf8(string->codePoints, bytes, false)) {
+		reportTrap(WASM::TrapKind::InvalidString, "string.encode_utf8: isolated surrogate");
+		return 0;
+	}
 	return writeEncodedString(memory, ptr, bytes);
 }
 
 static int32_t wasm_string_encode_lossy_utf8(WASM::LinearMemory* memory, void* handle, uint32_t ptr)
 {
 	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	if (string == nullptr)
+		return 0;
 	std::vector<uint8_t> bytes;
 	WASM::encodeUtf8(string->codePoints, bytes, true);
 	return writeEncodedString(memory, ptr, bytes);
@@ -177,6 +227,8 @@ static int32_t wasm_string_encode_lossy_utf8(WASM::LinearMemory* memory, void* h
 static int32_t wasm_string_encode_wtf8(WASM::LinearMemory* memory, void* handle, uint32_t ptr)
 {
 	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	if (string == nullptr)
+		return 0;
 	std::vector<uint8_t> bytes;
 	WASM::encodeWtf8(string->codePoints, bytes);
 	return writeEncodedString(memory, ptr, bytes);
@@ -185,6 +237,8 @@ static int32_t wasm_string_encode_wtf8(WASM::LinearMemory* memory, void* handle,
 static int32_t wasm_string_encode_wtf16(WASM::LinearMemory* memory, void* handle, uint32_t ptr)
 {
 	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	if (string == nullptr)
+		return 0;
 	std::vector<uint8_t> bytes;
 	WASM::encodeWtf16(string->codePoints, bytes);
 	writeEncodedString(memory, ptr, bytes);
@@ -195,7 +249,11 @@ static int32_t wasm_string_encode_wtf16(WASM::LinearMemory* memory, void* handle
 static void* wasm_string_concat(void* leftHandle, void* rightHandle)
 {
 	const WASM::StringObject* left = stringObjectOrTrap(leftHandle);
+	if (left == nullptr)
+		return nullptr;
 	const WASM::StringObject* right = stringObjectOrTrap(rightHandle);
+	if (right == nullptr)
+		return nullptr;
 	return makeString(WASM::concatCodePoints(left->codePoints, right->codePoints));
 }
 
@@ -213,6 +271,8 @@ static int32_t wasm_string_eq(void* leftHandle, void* rightHandle)
 static int32_t wasm_string_is_usv_sequence(void* handle)
 {
 	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	if (string == nullptr)
+		return 0;
 	return WASM::isUsvSequence(string->codePoints) ? 1 : 0;
 }
 
@@ -220,43 +280,57 @@ static int32_t wasm_string_is_usv_sequence(void* handle)
 
 static const WASM::StringViewObject* viewObjectOrTrap(void* handle)
 {
-	if (handle == nullptr)
-		trap(WASM::TrapKind::NullReference, "null string view");
+	if (handle == nullptr) {
+		reportTrap(WASM::TrapKind::NullReference, "null string view");
+		return nullptr;
+	}
 	return static_cast<const WASM::StringViewObject*>(handle);
 }
 
 static WASM::StringIteratorObject* iteratorObjectOrTrap(void* handle)
 {
-	if (handle == nullptr)
-		trap(WASM::TrapKind::NullReference, "null string iterator");
+	if (handle == nullptr) {
+		reportTrap(WASM::TrapKind::NullReference, "null string iterator");
+		return nullptr;
+	}
 	return static_cast<WASM::StringIteratorObject*>(handle);
 }
 
 static void* wasm_string_as_wtf8(void* handle)
 {
 	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	if (string == nullptr)
+		return nullptr;
 	return WASM::Store::global().strings().createView(string);
 }
 
 static void* wasm_string_as_wtf16(void* handle)
 {
 	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	if (string == nullptr)
+		return nullptr;
 	return WASM::Store::global().strings().createView(string);
 }
 
 static void* wasm_string_as_iter(void* handle)
 {
 	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	if (string == nullptr)
+		return nullptr;
 	return WASM::Store::global().strings().createIterator(string);
 }
 
 static int32_t wasm_stringview_wtf8_advance(void* viewHandle, int32_t pos, int32_t bytes)
 {
 	const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+	if (view == nullptr)
+		return 0;
 	uint32_t next = 0;
-	if (!WASM::wtf8Advance(view->string->codePoints, pos, bytes, next))
-		trap(WASM::TrapKind::InvalidString,
+	if (!WASM::wtf8Advance(view->string->codePoints, pos, bytes, next)) {
+		reportTrap(WASM::TrapKind::InvalidString,
 			 "stringview_wtf8.advance: position exceeds 2^31-1");
+		return 0;
+	}
 	return static_cast<int32_t>(next);
 }
 
@@ -265,6 +339,8 @@ static uint64_t wasm_stringview_wtf8_encode(WASM::LinearMemory* memory, void* vi
 											int encoding)
 {
 	const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+	if (view == nullptr)
+		return 0;
 	WASM::Wtf8Encoding mode = WASM::Wtf8Encoding::Wtf8;
 	if (encoding == 0)
 		mode = WASM::Wtf8Encoding::Utf8;
@@ -272,9 +348,11 @@ static uint64_t wasm_stringview_wtf8_encode(WASM::LinearMemory* memory, void* vi
 		mode = WASM::Wtf8Encoding::LossyUtf8;
 	std::vector<uint8_t> encoded;
 	uint32_t next = 0;
-	if (!WASM::wtf8Encode(view->string->codePoints, pos, bytes, mode, next, encoded))
-		trap(WASM::TrapKind::InvalidString,
+	if (!WASM::wtf8Encode(view->string->codePoints, pos, bytes, mode, next, encoded)) {
+		reportTrap(WASM::TrapKind::InvalidString,
 			 "stringview_wtf8.encode: isolated surrogate or position overflow");
+		return 0;
+	}
 	writeEncodedString(memory, ptr, encoded);
 	return (static_cast<uint64_t>(next) << 32) | static_cast<uint32_t>(encoded.size());
 }
@@ -282,12 +360,16 @@ static uint64_t wasm_stringview_wtf8_encode(WASM::LinearMemory* memory, void* vi
 static void* wasm_stringview_wtf8_slice(void* viewHandle, int32_t start, int32_t end)
 {
 	const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+	if (view == nullptr)
+		return nullptr;
 	return makeString(WASM::sliceWtf8(view->string->codePoints, start, end));
 }
 
 static int32_t wasm_stringview_wtf16_length(void* viewHandle)
 {
 	const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+	if (view == nullptr)
+		return 0;
 	uint32_t length = 0;
 	if (!WASM::measureWtf16(view->string->codePoints, length))
 		return -1;
@@ -297,20 +379,28 @@ static int32_t wasm_stringview_wtf16_length(void* viewHandle)
 static int32_t wasm_stringview_wtf16_get_codeunit(void* viewHandle, int32_t pos)
 {
 	const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+	if (view == nullptr)
+		return 0;
 	uint32_t unit = 0;
-	if (!WASM::wtf16CodeUnitAt(view->string->codePoints, pos, unit))
-		trap(WASM::TrapKind::InvalidString,
+	if (!WASM::wtf16CodeUnitAt(view->string->codePoints, pos, unit)) {
+		reportTrap(WASM::TrapKind::InvalidString,
 			 "stringview_wtf16.get_codeunit: position out of range");
+		return 0;
+	}
 	return static_cast<int32_t>(unit);
 }
 
 static int32_t wasm_stringview_wtf16_encode(WASM::LinearMemory* memory, void* viewHandle,
 											uint32_t ptr, int32_t pos, int32_t units)
 {
-	if ((ptr & 1u) != 0)
-		trap(WASM::TrapKind::InvalidString,
+	if ((ptr & 1u) != 0) {
+		reportTrap(WASM::TrapKind::InvalidString,
 			 "stringview_wtf16.encode: pointer is not two-byte aligned");
+		return 0;
+	}
 	const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+	if (view == nullptr)
+		return 0;
 	std::vector<uint8_t> encoded;
 	const uint32_t written = WASM::wtf16Encode(view->string->codePoints, pos, units, encoded);
 	writeEncodedString(memory, ptr, encoded);
@@ -320,6 +410,8 @@ static int32_t wasm_stringview_wtf16_encode(WASM::LinearMemory* memory, void* vi
 static void* wasm_stringview_wtf16_slice(void* viewHandle, int32_t start, int32_t end)
 {
 	const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+	if (view == nullptr)
+		return nullptr;
 	return makeString(WASM::sliceWtf16(view->string->codePoints, start, end));
 }
 
@@ -368,98 +460,132 @@ static void* wasm_stringview_iter_slice(void* iteratorHandle, int32_t count)
 
 enum class StringArrayMode { Utf8 = 0, LossyUtf8 = 1, Wtf8 = 2, Wtf16 = 3 };
 
-static uint32_t stringArrayLength(void* handle)
+static bool stringArrayLength(void* handle, uint32_t& length)
 {
-	if (handle == nullptr)
-		trap(WASM::TrapKind::NullArrayReference, "null array reference");
-	return *reinterpret_cast<const uint32_t*>(
+	if (handle == nullptr) {
+		reportTrap(WASM::TrapKind::NullArrayReference, "null array reference");
+		return false;
+	}
+	length = *reinterpret_cast<const uint32_t*>(
 			static_cast<const uint8_t*>(handle) + WASM::GcHeader::kArrayLengthOffset);
+	return true;
 }
 
 static void* wasm_string_new_array(void* arrayHandle, int32_t start, int32_t end,
-								   uint32_t dataOffset, uint32_t elementSize, int mode)
+   uint32_t dataOffset, uint32_t elementSize, int mode)
 {
-	if ((mode == static_cast<int>(StringArrayMode::Wtf16) && elementSize != 2)
-			|| (mode != static_cast<int>(StringArrayMode::Wtf16) && elementSize != 1))
-		trap(WASM::TrapKind::Internal, "string array element size mismatch");
-	const uint32_t length = stringArrayLength(arrayHandle);
-	if (start < 0 || end < 0)
-		trap(WASM::TrapKind::OutOfBoundsArrayAccess);
-	const uint64_t first = static_cast<uint32_t>(start);
-	const uint64_t last = static_cast<uint32_t>(end);
-	if (first > length || last > length || last < first)
-		trap(WASM::TrapKind::OutOfBoundsArrayAccess);
-	const uint64_t count = last - first;
-	const uint64_t limit = mode == static_cast<int>(StringArrayMode::Wtf16)
-			? WASM::kMaxStringCodeUnits : WASM::kMaxStringBytes;
-	if (count > limit)
-		trap(WASM::TrapKind::OutOfMemory, "string exceeds the implementation limit");
+if ((mode == static_cast<int>(StringArrayMode::Wtf16) && elementSize != 2)
+|| (mode != static_cast<int>(StringArrayMode::Wtf16) && elementSize != 1)) {
+reportTrap(WASM::TrapKind::Internal, "string array element size mismatch");
+return nullptr;
+}
+uint32_t length = 0;
+if (!stringArrayLength(arrayHandle, length))
+return nullptr;
+if (start < 0 || end < 0) {
+reportTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
+return nullptr;
+}
+const uint64_t first = static_cast<uint32_t>(start);
+const uint64_t last = static_cast<uint32_t>(end);
+if (first > length || last > length || last < first) {
+reportTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
+return nullptr;
+}
+const uint64_t count = last - first;
+const uint64_t limit = mode == static_cast<int>(StringArrayMode::Wtf16)
+? WASM::kMaxStringCodeUnits : WASM::kMaxStringBytes;
+if (count > limit) {
+reportTrap(WASM::TrapKind::OutOfMemory, "string exceeds the implementation limit");
+return nullptr;
+}
 
-	const uint8_t* data = static_cast<const uint8_t*>(arrayHandle) + dataOffset
-			+ static_cast<std::size_t>(first) * elementSize;
-	std::vector<uint32_t> codePoints;
-	switch (static_cast<StringArrayMode>(mode)) {
-	case StringArrayMode::Utf8:
-		if (!WASM::decodeUtf8(data, static_cast<std::size_t>(count), codePoints))
-			trap(WASM::TrapKind::InvalidString, "string.new_utf8_array: invalid UTF-8");
-		break;
-	case StringArrayMode::LossyUtf8:
-		WASM::decodeUtf8Lossy(data, static_cast<std::size_t>(count), codePoints);
-		break;
-	case StringArrayMode::Wtf8:
-		if (!WASM::decodeWtf8(data, static_cast<std::size_t>(count), codePoints))
-			trap(WASM::TrapKind::InvalidString, "string.new_wtf8_array: invalid WTF-8");
-		break;
-	case StringArrayMode::Wtf16:
-		WASM::decodeWtf16(data, static_cast<std::size_t>(count), codePoints);
-		break;
-	}
-	return makeString(std::move(codePoints));
+const uint8_t* data = static_cast<const uint8_t*>(arrayHandle) + dataOffset
++ static_cast<std::size_t>(first) * elementSize;
+std::vector<uint32_t> codePoints;
+switch (static_cast<StringArrayMode>(mode)) {
+case StringArrayMode::Utf8:
+if (!WASM::decodeUtf8(data, static_cast<std::size_t>(count), codePoints)) {
+reportTrap(WASM::TrapKind::InvalidString, "string.new_utf8_array: invalid UTF-8");
+return nullptr;
+}
+break;
+case StringArrayMode::LossyUtf8:
+WASM::decodeUtf8Lossy(data, static_cast<std::size_t>(count), codePoints);
+break;
+case StringArrayMode::Wtf8:
+if (!WASM::decodeWtf8(data, static_cast<std::size_t>(count), codePoints)) {
+reportTrap(WASM::TrapKind::InvalidString, "string.new_wtf8_array: invalid WTF-8");
+return nullptr;
+}
+break;
+case StringArrayMode::Wtf16:
+WASM::decodeWtf16(data, static_cast<std::size_t>(count), codePoints);
+break;
+}
+return makeString(std::move(codePoints));
 }
 
 static int32_t wasm_string_encode_array(void* stringHandle, void* arrayHandle, int32_t start,
-										uint32_t dataOffset, uint32_t elementSize, int mode)
+uint32_t dataOffset, uint32_t elementSize, int mode)
 {
-	if ((mode == static_cast<int>(StringArrayMode::Wtf16) && elementSize != 2)
-			|| (mode != static_cast<int>(StringArrayMode::Wtf16) && elementSize != 1))
-		trap(WASM::TrapKind::Internal, "string array element size mismatch");
-	const WASM::StringObject* string = stringObjectOrTrap(stringHandle);
-	const uint32_t length = stringArrayLength(arrayHandle);
-	if (start < 0)
-		trap(WASM::TrapKind::OutOfBoundsArrayAccess);
-	const uint64_t first = static_cast<uint32_t>(start);
-	if (first > length)
-		trap(WASM::TrapKind::OutOfBoundsArrayAccess);
-	// Every code point needs at least one code unit; this cheap check avoids
-	// encoding a large string only to discover that the array is too small.
-	if (string->codePoints.size() > length - first)
-		trap(WASM::TrapKind::OutOfBoundsArrayAccess);
-
-	std::vector<uint8_t> encoded;
-	switch (static_cast<StringArrayMode>(mode)) {
-	case StringArrayMode::Utf8:
-		if (!WASM::encodeUtf8(string->codePoints, encoded, false))
-			trap(WASM::TrapKind::InvalidString, "string.encode_utf8_array: isolated surrogate");
-		break;
-	case StringArrayMode::LossyUtf8:
-		WASM::encodeUtf8(string->codePoints, encoded, true);
-		break;
-	case StringArrayMode::Wtf8:
-		WASM::encodeWtf8(string->codePoints, encoded);
-		break;
-	case StringArrayMode::Wtf16:
-		WASM::encodeWtf16(string->codePoints, encoded);
-		break;
-	}
-	const uint64_t units = encoded.size() / elementSize;
-	if (first + units > length)
-		trap(WASM::TrapKind::OutOfBoundsArrayAccess);
-	if (!encoded.empty())
-		std::memcpy(static_cast<uint8_t*>(arrayHandle) + dataOffset
-							+ static_cast<std::size_t>(first) * elementSize,
-					encoded.data(), encoded.size());
-	return static_cast<int32_t>(units);
+if ((mode == static_cast<int>(StringArrayMode::Wtf16) && elementSize != 2)
+|| (mode != static_cast<int>(StringArrayMode::Wtf16) && elementSize != 1)) {
+reportTrap(WASM::TrapKind::Internal, "string array element size mismatch");
+return 0;
 }
+const WASM::StringObject* string = stringObjectOrTrap(stringHandle);
+if (string == nullptr)
+return 0;
+uint32_t length = 0;
+if (!stringArrayLength(arrayHandle, length))
+return 0;
+if (start < 0) {
+reportTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
+return 0;
+}
+const uint64_t first = static_cast<uint32_t>(start);
+if (first > length) {
+reportTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
+return 0;
+}
+// Every code point needs at least one code unit; this cheap check avoids
+// encoding a large string only to discover that the array is too small.
+if (string->codePoints.size() > length - first) {
+reportTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
+return 0;
+}
+
+std::vector<uint8_t> encoded;
+switch (static_cast<StringArrayMode>(mode)) {
+case StringArrayMode::Utf8:
+if (!WASM::encodeUtf8(string->codePoints, encoded, false)) {
+reportTrap(WASM::TrapKind::InvalidString, "string.encode_utf8_array: isolated surrogate");
+return 0;
+}
+break;
+case StringArrayMode::LossyUtf8:
+WASM::encodeUtf8(string->codePoints, encoded, true);
+break;
+case StringArrayMode::Wtf8:
+WASM::encodeWtf8(string->codePoints, encoded);
+break;
+case StringArrayMode::Wtf16:
+WASM::encodeWtf16(string->codePoints, encoded);
+break;
+}
+const uint64_t units = encoded.size() / elementSize;
+if (first + units > length) {
+reportTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
+return 0;
+}
+if (!encoded.empty())
+std::memcpy(static_cast<uint8_t*>(arrayHandle) + dataOffset
++ static_cast<std::size_t>(first) * elementSize,
+encoded.data(), encoded.size());
+return static_cast<int32_t>(units);
+}
+
 
 extern "C" {
 static uint32_t wasm_i32_clz(uint32_t x)
@@ -546,31 +672,43 @@ static uint64_t wasm_memory_grow_impl(WASM::VMContext* vm, uint32_t memIdx, uint
 static void wasm_memory_copy_impl(WASM::VMContext* vm, uint32_t dstMemIdx, uint32_t srcMemIdx,
 								  int32_t dst, int32_t src, int32_t len)
 {
-	if (dst < 0 || src < 0 || len < 0)
-		trap(WASM::TrapKind::OutOfBoundsMemoryAccess);
-	if (dstMemIdx >= vm->memoryCount || srcMemIdx >= vm->memoryCount)
-		trap(WASM::TrapKind::Internal, "memory index out of range");
+	if (dst < 0 || src < 0 || len < 0) {
+		reportTrap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+		return;
+	}
+	if (dstMemIdx >= vm->memoryCount || srcMemIdx >= vm->memoryCount) {
+		reportTrap(WASM::TrapKind::Internal, "memory index out of range");
+		return;
+	}
 	const WASM::LinearMemory* dstMem = vm->memories[dstMemIdx];
 	const WASM::LinearMemory* srcMem = vm->memories[srcMemIdx];
 	const uint64_t udst = static_cast<uint64_t>(dst);
 	const uint64_t usrc = static_cast<uint64_t>(src);
 	const uint64_t ulen = static_cast<uint64_t>(len);
-	if (udst + ulen > dstMem->memorySize || usrc + ulen > srcMem->memorySize)
-		trap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+	if (udst + ulen > dstMem->memorySize || usrc + ulen > srcMem->memorySize) {
+		reportTrap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+		return;
+	}
 	std::memmove(dstMem->memoryBase + udst, srcMem->memoryBase + usrc, static_cast<size_t>(ulen));
 }
 
 static void wasm_memory_fill_impl(WASM::VMContext* vm, uint32_t memIdx, int32_t dst, int32_t value, int32_t len)
 {
-	if (dst < 0 || len < 0)
-		trap(WASM::TrapKind::OutOfBoundsMemoryAccess);
-	if (memIdx >= vm->memoryCount)
-		trap(WASM::TrapKind::Internal, "memory index out of range");
+	if (dst < 0 || len < 0) {
+		reportTrap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+		return;
+	}
+	if (memIdx >= vm->memoryCount) {
+		reportTrap(WASM::TrapKind::Internal, "memory index out of range");
+		return;
+	}
 	const WASM::LinearMemory* memory = vm->memories[memIdx];
 	const uint64_t udst = static_cast<uint64_t>(dst);
 	const uint64_t ulen = static_cast<uint64_t>(len);
-	if (udst + ulen > memory->memorySize)
-		trap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+	if (udst + ulen > memory->memorySize) {
+		reportTrap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+		return;
+	}
 	std::memset(memory->memoryBase + udst, value & 0xFF, static_cast<size_t>(ulen));
 }
 
@@ -581,12 +719,16 @@ static void wasm_memory_fill_impl(WASM::VMContext* vm, uint32_t memIdx, int32_t 
 static void wasm_memory_discard_impl(WASM::VMContext* vm, uint32_t memIdx,
 									 uint64_t dst, uint64_t len)
 {
-	if (memIdx >= vm->memoryCount)
-		trap(WASM::TrapKind::Internal, "memory index out of range");
+	if (memIdx >= vm->memoryCount) {
+		reportTrap(WASM::TrapKind::Internal, "memory index out of range");
+		return;
+	}
 	const WASM::LinearMemory* memory = vm->memories[memIdx];
 	const uint64_t size = memory->memorySize;
-	if (dst > size || len > size - dst)
-		trap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+	if (dst > size || len > size - dst) {
+		reportTrap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+		return;
+	}
 	if (len == 0)
 		return;
 
@@ -684,15 +826,21 @@ static uint64_t wasm_table_grow_impl(WASM::VMContext* vm, uint32_t tableIdx, voi
 
 static void wasm_table_fill_impl(WASM::VMContext* vm, uint32_t tableIdx, int32_t start, void* ref, int32_t len)
 {
-	if (start < 0 || len < 0)
-		trap(WASM::TrapKind::OutOfBoundsTableAccess);
-	if (vm->tables == nullptr || tableIdx >= vm->tableCount)
-		trap(WASM::TrapKind::Internal, "table index out of range");
+	if (start < 0 || len < 0) {
+		reportTrap(WASM::TrapKind::OutOfBoundsTableAccess);
+		return;
+	}
+	if (vm->tables == nullptr || tableIdx >= vm->tableCount) {
+		reportTrap(WASM::TrapKind::Internal, "table index out of range");
+		return;
+	}
 	WASM::TableInstance* table = vm->tables[tableIdx];
 	const uint64_t ustart = static_cast<uint64_t>(start);
 	const uint64_t ulen = static_cast<uint64_t>(len);
-	if (ustart + ulen > table->size)
-		trap(WASM::TrapKind::OutOfBoundsTableAccess);
+	if (ustart + ulen > table->size) {
+		reportTrap(WASM::TrapKind::OutOfBoundsTableAccess);
+		return;
+	}
 	for (uint64_t i = 0; i < ulen; ++i)
 		table->base[ustart + i] = static_cast<WASM::Callable*>(ref);
 }
@@ -700,17 +848,23 @@ static void wasm_table_fill_impl(WASM::VMContext* vm, uint32_t tableIdx, int32_t
 static void wasm_table_copy_impl(WASM::VMContext* vm, uint32_t dstTableIdx, uint32_t srcTableIdx,
 								 int32_t dst, int32_t src, int32_t len)
 {
-	if (dst < 0 || src < 0 || len < 0)
-		trap(WASM::TrapKind::OutOfBoundsTableAccess);
-	if (vm->tables == nullptr || dstTableIdx >= vm->tableCount || srcTableIdx >= vm->tableCount)
-		trap(WASM::TrapKind::Internal, "table index out of range");
+	if (dst < 0 || src < 0 || len < 0) {
+		reportTrap(WASM::TrapKind::OutOfBoundsTableAccess);
+		return;
+	}
+	if (vm->tables == nullptr || dstTableIdx >= vm->tableCount || srcTableIdx >= vm->tableCount) {
+		reportTrap(WASM::TrapKind::Internal, "table index out of range");
+		return;
+	}
 	WASM::TableInstance* dstTable = vm->tables[dstTableIdx];
 	WASM::TableInstance* srcTable = vm->tables[srcTableIdx];
 	const uint64_t udst = static_cast<uint64_t>(dst);
 	const uint64_t usrc = static_cast<uint64_t>(src);
 	const uint64_t ulen = static_cast<uint64_t>(len);
-	if (udst + ulen > dstTable->size || usrc + ulen > srcTable->size)
-		trap(WASM::TrapKind::OutOfBoundsTableAccess);
+	if (udst + ulen > dstTable->size || usrc + ulen > srcTable->size) {
+		reportTrap(WASM::TrapKind::OutOfBoundsTableAccess);
+		return;
+	}
 	std::memmove(dstTable->base + udst, srcTable->base + usrc,
 				 static_cast<size_t>(ulen) * sizeof(WASM::Callable*));
 }
@@ -802,58 +956,58 @@ static uint64_t wasm_i64_trunc_sat_f64_u(double x)
 // here and raises a real Wasm trap via WASM::trap (WasmTrap.hpp).
 static int32_t wasm_i32_div_s(int32_t a, int32_t b)
 {
-	if (b == 0) trap(WASM::TrapKind::IntegerDivideByZero);
-	if (a == std::numeric_limits<int32_t>::min() && b == -1) trap(WASM::TrapKind::IntegerOverflow);
+	if (b == 0) { reportTrap(WASM::TrapKind::IntegerDivideByZero); return 0; }
+	if (a == std::numeric_limits<int32_t>::min() && b == -1) { reportTrap(WASM::TrapKind::IntegerOverflow); return 0; }
 	return a / b;
 }
 static uint32_t wasm_i32_div_u(uint32_t a, uint32_t b)
 {
-	if (b == 0) trap(WASM::TrapKind::IntegerDivideByZero);
+	if (b == 0) { reportTrap(WASM::TrapKind::IntegerDivideByZero); return 0; }
 	return a / b;
 }
 static int32_t wasm_i32_rem_s(int32_t a, int32_t b)
 {
-	if (b == 0) trap(WASM::TrapKind::IntegerDivideByZero);
+	if (b == 0) { reportTrap(WASM::TrapKind::IntegerDivideByZero); return 0; }
 	return (b == -1) ? 0 : (a % b); // INT_MIN % -1 is UB in C++
 }
 static uint32_t wasm_i32_rem_u(uint32_t a, uint32_t b)
 {
-	if (b == 0) trap(WASM::TrapKind::IntegerDivideByZero);
+	if (b == 0) { reportTrap(WASM::TrapKind::IntegerDivideByZero); return 0; }
 	return a % b;
 }
 static int64_t wasm_i64_div_s(int64_t a, int64_t b)
 {
-	if (b == 0) trap(WASM::TrapKind::IntegerDivideByZero);
-	if (a == std::numeric_limits<int64_t>::min() && b == -1) trap(WASM::TrapKind::IntegerOverflow);
+	if (b == 0) { reportTrap(WASM::TrapKind::IntegerDivideByZero); return 0; }
+	if (a == std::numeric_limits<int64_t>::min() && b == -1) { reportTrap(WASM::TrapKind::IntegerOverflow); return 0; }
 	return a / b;
 }
 static uint64_t wasm_i64_div_u(uint64_t a, uint64_t b)
 {
-	if (b == 0) trap(WASM::TrapKind::IntegerDivideByZero);
+	if (b == 0) { reportTrap(WASM::TrapKind::IntegerDivideByZero); return 0; }
 	return a / b;
 }
 static int64_t wasm_i64_rem_s(int64_t a, int64_t b)
 {
-	if (b == 0) trap(WASM::TrapKind::IntegerDivideByZero);
+	if (b == 0) { reportTrap(WASM::TrapKind::IntegerDivideByZero); return 0; }
 	return (b == -1) ? 0 : (a % b);
 }
 static uint64_t wasm_i64_rem_u(uint64_t a, uint64_t b)
 {
-	if (b == 0) trap(WASM::TrapKind::IntegerDivideByZero);
+	if (b == 0) { reportTrap(WASM::TrapKind::IntegerDivideByZero); return 0; }
 	return a % b;
 }
 
-[[noreturn]] static void trapInvalidConversion()
+static void trapInvalidConversion()
 {
-	trap(WASM::TrapKind::InvalidConversionToInteger);
+	reportTrap(WASM::TrapKind::InvalidConversionToInteger);
 }
-[[noreturn]] static void trapIntegerOverflow()
+static void trapIntegerOverflow()
 {
-	trap(WASM::TrapKind::IntegerOverflow);
+	reportTrap(WASM::TrapKind::IntegerOverflow);
 }
 static int32_t wasm_i32_trunc_f32_s(float x)
 {
-	if (std::isnan(x)) trapInvalidConversion();
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
 	const double d = x;
 	// The truncated result, not the input, must fit: allow (-2^31-1, 2^31).
 	if (!(d > -2147483649.0 && d < 2147483648.0))
@@ -862,7 +1016,7 @@ static int32_t wasm_i32_trunc_f32_s(float x)
 }
 static uint32_t wasm_i32_trunc_f32_u(float x)
 {
-	if (std::isnan(x)) trapInvalidConversion();
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
 	const double d = x;
 	if (!(d > -1.0 && d < 4294967296.0))
 		trapIntegerOverflow();
@@ -870,21 +1024,21 @@ static uint32_t wasm_i32_trunc_f32_u(float x)
 }
 static int32_t wasm_i32_trunc_f64_s(double x)
 {
-	if (std::isnan(x)) trapInvalidConversion();
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
 	if (!(x > -2147483649.0 && x < 2147483648.0))
 		trapIntegerOverflow();
 	return static_cast<int32_t>(x);
 }
 static uint32_t wasm_i32_trunc_f64_u(double x)
 {
-	if (std::isnan(x)) trapInvalidConversion();
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
 	if (!(x > -1.0 && x < 4294967296.0))
 		trapIntegerOverflow();
 	return static_cast<uint32_t>(x);
 }
 static int64_t wasm_i64_trunc_f32_s(float x)
 {
-	if (std::isnan(x)) trapInvalidConversion();
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
 	const double d = x;
 	if (!(d >= -9223372036854775808.0 && d < 9223372036854775808.0))
 		trapIntegerOverflow();
@@ -892,7 +1046,7 @@ static int64_t wasm_i64_trunc_f32_s(float x)
 }
 static uint64_t wasm_i64_trunc_f32_u(float x)
 {
-	if (std::isnan(x)) trapInvalidConversion();
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
 	const double d = x;
 	if (!(d > -1.0 && d < 18446744073709551616.0))
 		trapIntegerOverflow();
@@ -900,14 +1054,14 @@ static uint64_t wasm_i64_trunc_f32_u(float x)
 }
 static int64_t wasm_i64_trunc_f64_s(double x)
 {
-	if (std::isnan(x)) trapInvalidConversion();
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
 	if (!(x >= -9223372036854775808.0 && x < 9223372036854775808.0))
 		trapIntegerOverflow();
 	return static_cast<int64_t>(x);
 }
 static uint64_t wasm_i64_trunc_f64_u(double x)
 {
-	if (std::isnan(x)) trapInvalidConversion();
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
 	if (!(x > -1.0 && x < 18446744073709551616.0))
 		trapIntegerOverflow();
 	return static_cast<uint64_t>(x);
@@ -1485,8 +1639,13 @@ jit_value_t OpcodeDispatcher::callSimdHelper(void* fptr, jit_type_t ret,
 		simdSignatureCache.emplace_back(std::move(key), sig);
 	}
 
-	return jit_insn_call_native(function, "wasm.simd", fptr, sig,
+	jit_value_t result = jit_insn_call_native(function, "wasm.simd", fptr, sig,
 			const_cast<jit_value_t*>(args.data()), static_cast<unsigned>(args.size()), 0);
+	// A SIMD helper is allowed to report (it is engine code like any other); the
+	// check is emitted whether or not today's helpers can trap, so a later one
+	// cannot forget it.
+	emitPendingTrapCheck();
+	return result;
 }
 
 jit_value_t OpcodeDispatcher::callSimdOutHelper(void* fptr, jit_value_t out,
@@ -1688,6 +1847,7 @@ void OpcodeDispatcher::emitRefStore(jit_value_t slotAddr, jit_value_t newRef)
 	jit_value_t args[] = {vmContextValue(), refAsVoidPtr(slotAddr), refAsVoidPtr(newRef)};
 	jit_insn_call_native(function, "wasm_ref_store_impl",
 			reinterpret_cast<void*>(wasm_ref_store_impl), sig, args, 3, 0);
+	emitPendingTrapCheck();
 }
 
 jit_value_t OpcodeDispatcher::emitRefClone(jit_value_t ref)
@@ -1696,18 +1856,21 @@ jit_value_t OpcodeDispatcher::emitRefClone(jit_value_t ref)
 	jit_type_t params[] = {jit_type_void_ptr, jit_type_void_ptr};
 	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, params, 2, 1);
 	jit_value_t args[] = {vmContextValue(), refAsVoidPtr(ref)};
-	return jit_insn_call_native(function, "wasm_ref_clone_impl",
+	jit_value_t cloned = jit_insn_call_native(function, "wasm_ref_clone_impl",
 			reinterpret_cast<void*>(wasm_ref_clone_impl), sig, args, 2, 0);
+	emitPendingTrapCheck();
+	return cloned;
 }
 
 void OpcodeDispatcher::emitRefDrop(jit_value_t ref)
 {
-	// `wasm_ref_drop(ref)` -> count -1 (traps on underflow).
+	// `wasm_ref_drop(ref)` -> count -1 (reports on underflow).
 	jit_type_t params[] = {jit_type_void_ptr, jit_type_void_ptr};
 	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 2, 1);
 	jit_value_t args[] = {vmContextValue(), refAsVoidPtr(ref)};
 	jit_insn_call_native(function, "wasm_ref_drop_impl",
 			reinterpret_cast<void*>(wasm_ref_drop_impl), sig, args, 2, 0);
+	emitPendingTrapCheck();
 }
 
 jit_type_t OpcodeDispatcher::tableElementJitType(WASM::TableIdx arg) const
@@ -1955,11 +2118,9 @@ void OpcodeDispatcher::emitThrowToTarget(jit_value_t exn, std::vector<jit_value_
 
 jit_value_t OpcodeDispatcher::emitPendingException()
 {
-	// The slot is a process-global (single-agent, THREADS.md TD9); reading it
-	// inline costs one load and keeps the check off the helper-call path.
-	jit_value_t slot = jit_value_create_nint_constant(function, jit_type_void_ptr,
-			reinterpret_cast<jit_nint>(&::g_wasmPendingException));
-	return jit_insn_load_relative(function, slot, 0, jit_type_void_ptr);
+	// The slot is thread-local and resolved once per function (`exceptionSlot`
+	// in the entry block); reading it inline costs one load.
+	return jit_insn_load_relative(function, exceptionSlot, 0, jit_type_void_ptr);
 }
 
 void OpcodeDispatcher::emitReturnZeroes()
@@ -1971,6 +2132,60 @@ void OpcodeDispatcher::emitReturnZeroes()
 	for (size_t i = 0; i < n; ++i)
 		pushOwnedValue(zeroConstantForType(jitTypeForValueType(currentFunc.results[i].val)));
 	emitFunctionReturn(true);
+}
+
+void OpcodeDispatcher::emitFunctionEntry()
+{
+	// ── Guest call-stack guard ──────────────────────────────────────────────
+	// Checked before the body runs. The prologue (and therefore the frame
+	// allocation) has already happened at this point, which is why a function's
+	// frame is bounded by `kMaxFunctionLocalBytes`. The helper reports
+	// `CallStackExhausted`; the check below turns that into an early return, so
+	// the whole chain unwinds by returning (WasmBase/WasmStack.hpp,
+	// docs/SAFETY.md §2.8).
+	jit_type_t params[1] = {jit_type_void_ptr};
+	jit_type_t signature = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 1, 1);
+	jit_value_t args[1] = {jit_value_get_param(function, 0)};
+	jit_insn_call_native(function, "wasm_stack_check",
+		reinterpret_cast<void*>(&WASM::wasm_stack_check), signature, args, 1, 0);
+
+	// The trap slot is thread-local; resolve it once and keep the address in a
+	// function local. Every later check loads `pending` through it, so the hot
+	// path is a load and a branch rather than a call.
+	jit_type_t slotSig = jit_type_create_signature(jit_abi_cdecl,
+			jit_type_void_ptr, nullptr, 0, 1);
+	jit_value_t slot = jit_insn_call_native(function, "wasm_trap_slot",
+			reinterpret_cast<void*>(&WASM::wasm_trap_slot), slotSig, nullptr, 0, 0);
+	trapSlot = jit_value_create(function, jit_type_void_ptr);
+	jit_insn_store(function, trapSlot, slot);
+
+	// Same for the pending Wasm exception (a pointer slot the `throw` path
+	// writes and every call site checks).
+	jit_type_t exnSlotSig = jit_type_create_signature(jit_abi_cdecl,
+			jit_type_void_ptr, nullptr, 0, 1);
+	jit_value_t exnSlot = jit_insn_call_native(function, "wasm_exn_slot",
+			reinterpret_cast<void*>(&wasm_exn_slot), exnSlotSig, nullptr, 0, 0);
+	exceptionSlot = jit_value_create(function, jit_type_void_ptr);
+	jit_insn_store(function, exceptionSlot, exnSlot);
+
+	emitPendingTrapCheck();
+}
+
+void OpcodeDispatcher::emitTrapEpilogue()
+{
+	if (!trapEpilogueUsed)
+		return;
+
+	// The epilogue is reached only by branches emitted from trap checks. It
+	// returns the zero of each result type: the caller sees the pending slot
+	// before it looks at any value, so a zeroed result is never observed.
+	const bool savedUnreachable = unreachableCode;
+	suppressTrapChecks = true;
+	unreachableCode = false;
+	jit_insn_label(function, &trapEpilogueLabel);
+	emitReturnZeroes();
+	suppressTrapChecks = false;
+	unreachableCode = savedUnreachable;
 }
 
 void OpcodeDispatcher::emitExceptionPropagation(jit_value_t exn)
@@ -2019,6 +2234,10 @@ void OpcodeDispatcher::emitExceptionPropagation(jit_value_t exn)
 
 void OpcodeDispatcher::emitPendingExceptionCheck()
 {
+	// A trap wins over a pending Wasm exception, and must never be routed into a
+	// `try_table` handler: a trap is not catchable by Wasm code.
+	emitPendingTrapCheck();
+
 	jit_value_t pending = emitPendingException();
 	jit_value_t word = jit_insn_convert(function, pending, jit_type_ulong, 0);
 	jit_value_t none = jit_insn_eq(function, word,
@@ -2131,15 +2350,49 @@ void OpcodeDispatcher::emitTrap(WASM::TrapKind kind)
 	emitTrap(kind, nullptr);
 }
 
+void OpcodeDispatcher::emitReportTrap(WASM::TrapKind kind, const char* detail)
+{
+	// Record the trap, then leave through the shared error epilogue. The path
+	// continues (the report returns), so the branch — not a `noreturn` call — is
+	// what keeps the generated signature well-formed.
+	requestTrapEpilogue();
+	emitTrapReportCall(function, kind, detail);
+	jit_insn_branch(function, &trapEpilogueLabel);
+}
+
+void OpcodeDispatcher::requestTrapEpilogue()
+{
+	trapEpilogueUsed = true;
+}
+
+void OpcodeDispatcher::emitPendingTrapCheck()
+{
+	// A helper or callee reported a trap: return the zero of each result type
+	// instead of continuing. Skipped in the epilogue itself (a failure there must
+	// not branch back into the epilogue) and in dead code.
+	if (suppressTrapChecks || unreachableCode)
+		return;
+
+	jit_value_t pending = jit_insn_load_relative(function, trapSlot,
+			static_cast<jit_nint>(offsetof(WASM::TrapSlot, pending)), jit_type_int);
+	jit_value_t none = jit_insn_eq(function, pending,
+			jit_value_create_nint_constant(function, jit_type_int, 0));
+	jit_label_t continuation = jit_label_undefined;
+	jit_insn_branch_if(function, none, &continuation);
+	requestTrapEpilogue();
+	jit_insn_branch(function, &trapEpilogueLabel);
+	jit_insn_label(function, &continuation);
+}
+
 void OpcodeDispatcher::emitTrap(WASM::TrapKind kind, const char* detail)
 {
 	const char* reason = (detail != nullptr) ? detail : WASM::trapKindName(kind);
 	// Compose the message once, at compile time, and intern it in the instance:
-	// the generated code embeds the pointer and `WASM::trap` does not copy it
+	// the generated code embeds the pointer and `reportTrap` does not copy it
 	// (WasmTrap.hpp, docs/SAFETY.md). The numeric kind still drives `assert_trap`
 	// comparisons; this only improves the log/embedder message
 	// (docs/proposals/EXTENDED_NAME_SECTION.md ENS-5).
-	emitAbort(function, kind,
+	emitReportTrap(kind,
 		internals.internTrapMessage(std::string(reason) + " in " + functionLabel));
 }
 
@@ -2411,6 +2664,9 @@ jit_value_t OpcodeDispatcher::effectiveMemoryAddress(const WASM::MemArg& ma, jit
 	jit_value_t memorySize = jit_insn_call_native(function, "wasm_memory_size",
 		reinterpret_cast<void*>(&WASM::wasm_memory_size), memorySizeSig,
 		memorySizeArgs, 1, 0);
+	// The helper reports a bad memory index; do not compute an address from the
+	// value it returned.
+	emitPendingTrapCheck();
 	jit_value_t wasmOff = popValue();
 
 	// The address operand is the memory's *unsigned* index. Widen it through
@@ -6616,8 +6872,12 @@ jit_value_t OpcodeDispatcher::callNativeHelper(void* fptr, jit_type_t resultType
 {
 	jit_type_t signature = jit_type_create_signature(jit_abi_cdecl, resultType,
 			paramTypes.data(), static_cast<unsigned>(paramTypes.size()), 1);
-	return jit_insn_call_native(function, "wasm.atomic", fptr, signature,
+	jit_value_t result = jit_insn_call_native(function, "wasm.helper", fptr, signature,
 			args.data(), static_cast<unsigned>(args.size()), 0);
+	// Helpers report a trap and return; the check turns that into an early
+	// return before the caller uses the (zeroed) result.
+	emitPendingTrapCheck();
+	return result;
 }
 
 jit_value_t OpcodeDispatcher::emitAtomicLoad(const WASM::MemArg& ma, uint32_t width,

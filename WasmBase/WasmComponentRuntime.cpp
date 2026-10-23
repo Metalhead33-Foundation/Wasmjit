@@ -1,6 +1,7 @@
 #include "WasmComponentRuntime.hpp"
 #include "WasmRegistryImportResolver.hpp"
 #include "WasmStore.hpp"
+#include "WasmTrap.hpp"
 #include <array>
 #include <atomic>
 #include <cstring>
@@ -333,6 +334,12 @@ uint64_t allocate(const MemView& memory, uint64_t size, uint64_t alignment)
 					uint64_t(alignment), size)
 			: WASM::callCallable<uint32_t>(memory.realloc, uint32_t{0}, uint32_t{0},
 					uint32_t(alignment), uint32_t(size));
+	// A nested call (this runs inside a canonical-ABI closure, below generated
+	// code) reports a trap through the pending slot instead of throwing. Stop
+	// here: the generated caller checks the slot and returns, and a C++ throw
+	// would have to unwind a generated frame.
+	if (WASM::trapPending())
+		return 0;
 	if (address == 0)
 		throw std::runtime_error("component runtime: canonical ABI realloc returned null");
 	ensureRange(memory, address, size);
@@ -3019,7 +3026,9 @@ uint32_t ComponentRuntime::useResourceHandle(uint32_t handle,
 		WASM::TypeId expected, bool borrow, uint32_t scope)
 {
 	validateResourceHandle(handle, expected);
-	const ResourceSlot& original = resourceSlots_[handle];
+	// Copy: allocating the borrowed slot below may reallocate `resourceSlots_`,
+	// which would dangle a reference into it.
+	const ResourceSlot original = resourceSlots_[handle];
 	if (!borrow)
 		return handle;
 	if (!original.own)

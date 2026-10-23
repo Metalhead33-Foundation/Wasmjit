@@ -202,7 +202,10 @@ engine must do", not "what 3.0 requires".
   out** (§3, `TD9`, TH-5): the stable shared-memory base, the real `__atomic_*`
   helpers, the host-thread-local trap state and now the host-thread-local
   tail-call state are all shaped so that a future agent build changes the
-  *scheduler*, not the representation.
+  *scheduler*, not the representation. Per-agent trap/exception/tail-call state
+  is tracked as **TRAP-6 in [`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md) §12.1 and
+  is deferred with TH-5** — it moves in the same change that introduces the
+  agent object, not before it.
 - Host-side concurrency hardening (SET-2, done without wasm agents): the Store's
   containers are mutex-guarded, type interning is serialized, and the GC heap and
   string store take recursive locks. A single instance is still not concurrently
@@ -227,18 +230,30 @@ engine must do", not "what 3.0 requires".
   are `assert_invalid` module-validation cases (no validating front end). It is
   in `Test/wast_supported.txt`, so it runs in the default suite.
 
-### 4.5 Cross-cutting: the tail-call trampoline's known limits
+### 4.5 Cross-cutting: per-agent state and the tail-call trampoline
 
-The tail-call lowering (`docs/TAILCALLS.md`, TC-2) added host-thread-local state and
-a per-function call wrapper. Both interact with a future multi-agent build, so
-they are recorded here:
+Two pieces of per-thread state interact with a future multi-agent build, so they
+are recorded together:
 
+- **Per-agent trap/exception state is TRAP-6, deferred with TH-5.** The pending
+  trap slot (`wasm_trap_slot()`), the pending Wasm exception, the deferred-cleanup
+  stack and the call/import depth counters are `thread_local`. They are correct
+  for one call chain per host thread, and they are reached through
+  `WasmTrap.hpp`'s functions (`reportTrap`, `checkTrap`, `defer`,
+  `CallDepthScope`), so making them per-agent is a replacement of the backing
+  slot, not a change to generated code — see
+  [`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md) §12.1 for the migration sketch. It
+  is scheduled **in the same change as the agent execution model**, never as a
+  standalone task.
 - **The trampoline state is host-thread-local.** `WASM::g_tailCallState` is
   `thread_local`; generated code calls `WASM::currentTailCallState()` to obtain
   the executing thread's address rather than embedding the compiling thread's
   TLS address. Two host threads entering the JIT therefore do not race. A
   future multi-agent build must still decide whether one agent may migrate
   between OS threads; if so it needs an explicit per-agent state object.
+
+Two further limits of the tail-call lowering:
+
 - **It only engages for identical signatures.** A `return_call` whose callee's
   parameter/result types differ from the caller's falls back to `call` + `return`
   and does grow the host stack. (Direct self-recursion is lowered to a native
@@ -264,6 +279,7 @@ they are recorded here:
 | T9 | **No agent API / thread pool — deferred indefinitely, not ruled out (`TD9`).** There is no way to run several agents concurrently on the single module instance, which is also what makes the current single-threaded stance safe. | no such API in `ModuleInstance`/`Store`; §3 project decision | Deferred by decision |
 | ~~T10~~ | ~~**No test coverage is wired in.**~~ **Done (TH-1/TH-4):** `proposals/threads/atomic.wast` is listed explicitly in `Test/Test.pro`, converts at build time, runs as `spec: atomic` (**249 passed / 0 failed / 48 skipped** — the skips are `assert_invalid` module-validation cases) and is curated in `Test/wast_supported.txt`. | `Test/Test.pro`, `Test/wast_supported.txt` | Closed |
 | ~~T11~~ | ~~**The tail-call trampoline's pending state is process-global.**~~ **Done (TH-3/SET-2):** `g_tailCallState` is `thread_local`, and generated code reaches it through `currentTailCallState()` so the address is resolved on the executing host thread. | `WASM::g_tailCallState` (`WasmBase/WasmValue.hpp`); §4.5 | Closed for host threads; agent migration is still a TH-5 design question |
+| T12 | **Trap/exception state is per host thread, not per agent.** The pending trap slot, the pending Wasm exception, the deferred-cleanup stack and the call/import depth counters are `thread_local`. That is correct for the current single-agent model; two agents sharing one host thread would share one slot. | `WasmBase/WasmTrap.cpp`, `WasmExn.cpp`; [`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md) §12.1 | **Deferred by decision with TH-5** (TRAP-6); not a bug in the current model |
 
 ## 5.1 Component-model async, streams, futures and tasks — single-agent backend
 
@@ -328,13 +344,14 @@ Ordered by value; `TH-n` is independent of the other documents' milestones.
 | **TH-2 — Wait/notify** | ✅ Done in the single-agent form: `notify` returns 0; `wait32/64` returns 1 on a value mismatch and 2 otherwise without sleeping (`TD4`). The unshared-memory trap is a validation concern (`T5`, no front end). | T3 | Done: the script's wait/notify assertions pass (mismatch → 1, timeout → 2, notify → 0). |
 | **TH-3 — Shared-memory hygiene** | ✅ `SharedLinearMemory` never moves its base; import matching compares shared-ness; shared memories/tables must declare a maximum; `memory.grow` publishes with a seq-cst fence; `memory.size` acquire-loads shared metadata; active data-segment initialisation ends with a seq-cst barrier; the tail-call state is host-thread-local. | T6, T7, T8, T11 | Done: shared memory without a max is rejected; `memory.grow`/`size` are ordered; host threads do not share tail-call state. |
 | **TH-4 — Threads test coverage** | ✅ Done: `proposals/threads/atomic.wast` is wired into `Test/Test.pro` (single-agent atomic semantics, including the 28 misaligned `assert_trap`s) and curated. | T10 | Done: `spec: atomic` runs in the default suite (`Test/wast_supported.txt`). |
-| **TH-5 — Optional: real agents** | ✗ **Deferred indefinitely (not ruled out):** an embedder API to run agents on the one module instance across OS threads, with a real waiter table and per-agent trap/lock ownership. Only if an embedder needs it. Until then the engine is explicitly single-agent (`TD9`). | T9 | Two agents produce the same results as the sequentially-consistent model. |
+| **TH-5 — Optional: real agents** | ✗ **Deferred indefinitely (not ruled out):** an embedder API to run agents on the one module instance across OS threads, with a real waiter table and per-agent trap/lock ownership. Only if an embedder needs it. Includes **TRAP-6** (per-agent trap/exception/tail-call state, [`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md) §12.1). Until then the engine is explicitly single-agent (`TD9`). | T9, T12 | Two agents produce the same results as the sequentially-consistent model, and each sees only its own traps. |
 | **TH-6 — Component async interface** | ✅ `WasmComponentAsync.hpp` defines tasks, waitables, stream/future endpoints and the `ComponentExecutor` seam; `SingleAgentExecutor` and `ComponentRuntime` execute the synchronous subset. | T9/T11 (interfaces), TH-5 (backend) | All single-agent async tests pass; replacing the executor is the only change a multi-agent backend needs. |
 
 Guardrails: run `./WasmJit '~[spec]'` after each step; keep the single-agent
 default so existing behaviour is unchanged. The single-agent choice is
 *documented and deliberate* (`TD9`) — do not add a partial thread model without
-first making the tail-call trampoline per-agent (`T11`). TH-5 is not just a
+first making the tail-call trampoline per-agent (`T11`) and the trap state
+per-agent (TRAP-6 / `T12`). TH-5 is not just a
 scheduler: the target is **one `ModuleInstance` per `Module`**, so it must also
 settle per-agent trap/lock ownership and a guest lock/waitqueue standard before
 claiming concurrent G-C/G-D safety — see

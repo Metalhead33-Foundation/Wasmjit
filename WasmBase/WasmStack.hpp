@@ -21,9 +21,10 @@ struct VMContext;
 //     installed" and the backend must not check.
 //   * Generated code must call `wasm_stack_check(VMContext*)` on entry to every
 //     compiled Wasm function, before its body runs. The helper probes the
-//     current stack pointer and raises `TrapKind::CallStackExhausted` once it
-//     has crossed the limit. The trap is an ordinary recoverable Wasm trap, so
-//     the embedder's `TrapScope` sees it (`WasmTrap.hpp`).
+//     current stack pointer and *reports* `TrapKind::CallStackExhausted` once it
+//     has crossed the limit; the generated prologue then checks the pending
+//     slot and returns, which is an ordinary recoverable Wasm trap
+//     (`WasmTrap.hpp`).
 //   * The limit is installed by the core when the instance is created (see
 //     `installStackLimit`) and assumes a downward-growing host stack, which is
 //     what every host this engine builds for uses.

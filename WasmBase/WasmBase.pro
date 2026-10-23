@@ -62,6 +62,7 @@ HEADERS += \
     WasmMemory.hpp \
     WasmModule.hpp \
     WasmModuleInstance.hpp \
+    WasmNativeImport.hpp \
     WasmOpcode.hpp \
     WasmOpcodeDispatcher.hpp \
     WasmRegistryImportResolver.hpp \

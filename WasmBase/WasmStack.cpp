@@ -1,6 +1,8 @@
 #include "WasmStack.hpp"
 #include "WasmTrap.hpp"
 #include "WasmVMContext.hpp"
+#include <cstdio>
+#include <cstdlib>
 #include <sys/resource.h>
 #if defined(__linux__)
 #include <pthread.h>
@@ -67,13 +69,39 @@ extern "C" void wasm_stack_check(VMContext* ctx)
 	if (ctx == nullptr || ctx->stackLimit == 0)
 		return;
 
+	// The probe must report a *real* stack address. A local's address works in a
+	// normal build, but under AddressSanitizer instrumented locals live on a
+	// heap-allocated "fake stack", so `&local` would compare against the limit
+	// meaninglessly and trip on the first call. The frame address is the real
+	// stack pointer in both cases.
+	std::uintptr_t probeAddress;
+#if defined(__SANITIZE_ADDRESS__)
+	probeAddress = reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0));
+#elif defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+	probeAddress = reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0));
+#  else
+	const volatile unsigned char probe = 0;
+	(void)probe;
+	probeAddress = reinterpret_cast<std::uintptr_t>(&probe);
+#  endif
+#else
 	// The address of a local is a lower bound for this frame's stack pointer:
 	// the helper's own frame sits just below the caller's. Comparing that
 	// against the limit is therefore conservative by a few dozen bytes.
 	const volatile unsigned char probe = 0;
 	(void)probe;
-	if (reinterpret_cast<std::uintptr_t>(&probe) < ctx->stackLimit)
-		trap(TrapKind::CallStackExhausted);
+	probeAddress = reinterpret_cast<std::uintptr_t>(&probe);
+#endif
+	if (probeAddress < ctx->stackLimit) {
+		if (std::getenv("WASMJIT_STACK_TRACE") != nullptr) {
+			std::fprintf(stderr, "[stack] probe=%p limit=%p\n",
+					reinterpret_cast<void*>(probeAddress),
+					reinterpret_cast<void*>(ctx->stackLimit));
+			std::fflush(stderr);
+		}
+		reportTrap(TrapKind::CallStackExhausted);
+	}
 }
 
 } // namespace WASM

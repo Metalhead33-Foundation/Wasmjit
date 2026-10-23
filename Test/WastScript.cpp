@@ -5,7 +5,6 @@
 #include <cerrno>
 #include <cstddef>
 #include <csignal>
-#include <csetjmp>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -1624,15 +1623,15 @@ ScriptRunner::ModuleAttempt ScriptRunner::attemptModule(const ScriptCommand& com
 
 	std::unique_ptr<WASM::ModuleInstance> instance;
 	// A start function may trap during instantiation; that is the expected
-	// outcome for `assert_uninstantiable`, not a host failure.
-	WASM::TrapScope trapScope;
-	if (setjmp(trapScope.buffer) != 0) {
-		lastTrapKind = trapScope.kind();
-		lastTrapMessage = trapScope.message();
-		return ModuleAttempt::Trapped;
-	}
+	// outcome for `assert_uninstantiable`, not a host failure. The trap arrives
+	// as a `WASM::Trap` exception thrown by the boundary, after the partially
+	// built instance has been destroyed (docs/TRAP_CLEANUP.md §7).
 	try {
 		instance = moduleCompiler.instantiate(*modules.back(), registry);
+	} catch (const WASM::Trap& trap) {
+		lastTrapKind = trap.kind();
+		lastTrapMessage = trap.message() != nullptr ? trap.message() : "";
+		return ModuleAttempt::Trapped;
 	} catch (const std::exception& error) {
 		if (std::getenv("WJ_TRACE") != nullptr)
 			std::fprintf(stderr, "[wj]   link rejected %s: %s\n", command.filename.c_str(), error.what());

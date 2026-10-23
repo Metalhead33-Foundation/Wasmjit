@@ -87,8 +87,9 @@ Bulk Memory Operations is a **Phase 5** proposal, integrated into WebAssembly
     calls into native helpers, and are multi-memory / multi-table aware.
 - **Traps, not aborts (BM-2).** Every bounds failure in `memoryInit`,
   `tableInit`, `bufferInitFromData`, `bufferInitFromElems` and the native
-  helpers raises a real Wasm trap via `WASM::trap` — a `longjmp` to the
-  embedder's `TrapScope` (`WasmBase/WasmTrap.hpp`). The JIT's own bounds checks
+  helpers raises a real Wasm trap via `WASM::trap` — a pending status that
+  unwinds by returning and becomes `WASM::Trap` at the host boundary
+  (`WasmBase/WasmTrap.hpp`, docs/TRAP_CLEANUP.md). The JIT's own bounds checks
   (`effectiveMemoryAddress`, `checkedTableIndex`), the memory/table grow paths
   and an uninitialised table slot (`call_indirect`) go through the same sink.
   The harness consequently *executes* `assert_trap` instead of skipping it.
@@ -147,7 +148,7 @@ Store; `memory.init` must respect the multi-memory `memidx`.
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **BM-1 — Dropped/empty semantics** | ✅ Zero-length `*.init`/`bufferInitFrom*` on a dropped or empty segment is a no-op; a longer one traps. Active/declarative segments are dropped at instantiation. | BM3 | Done: `memory_init` and `table_init` pass their dropped-segment cases. |
-| **BM-2 — Trap sink** | ✅ `WASM::trap` (longjmp to a `TrapScope`) replaces the per-call-site `std::abort()`s; the harness runs `assert_trap`. | BM2, BM1 | Done: no `abort` on the memory/table/bulk runtime path; `assert_trap` is executed. |
+| **BM-2 — Trap sink** | ✅ `WASM::trap` (a pending status that the boundary turns into `WASM::Trap`) replaces the per-call-site `std::abort()`s; the harness runs `assert_trap`. | BM2, BM1 | Done: no `abort` on the memory/table/bulk runtime path; `assert_trap` is executed. |
 | **BM-3 — Triage `memory_init` / `data` / `elem`** | ✅ Fixed the dropped-segment abort, the four extended-const `data` offsets, and `elem`'s null slot / segment re-evaluation. | BM1, BM4, BM5 | Done: `memory_init` 183/0, `data` 34/0, `elem` 108/0. |
 | **BM-4 — `data count`** | ✅ Done: `memory.init`/`data.drop` require a data-count section; the count must match the data section. | BM6 | Done. |
 

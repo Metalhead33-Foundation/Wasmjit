@@ -91,11 +91,14 @@ instructions were **removed**.
   enclosing `try_table` frames (the tag is a compile-time index) and branches to
   the catch label with the payload (plus the `exnref` for `*_ref`);
   `throw_ref` emits a comparison chain over the same frames because its tag id
-  is dynamic. With no handler the exception is left in a Store-shared *pending*
-  slot and the function returns zeroes; every call site checks the slot inline
-  and either dispatches to a local catch or re-propagates. A caught exception
-  clears the slot. Traps remain traps (they longjmp to `TrapScope` and are never
-  caught).
+  is dynamic. With no handler the exception is left in a thread-local *pending*
+  slot (`wasm_exn_slot()`, the same discipline as `wasm_trap_slot()`) and the
+  function returns zeroes; every call site checks the slot inline and either
+  dispatches to a local catch or re-propagates. A caught exception clears the
+  slot. Traps remain traps: they travel as a pending status
+  ([`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md)), are never caught by a
+  `try_table`, and win over a pending exception. Per-*agent* rather than
+  per-host-thread state is TRAP-6, deferred with the multi-agent model.
 - **`try_table` routes its catches (EX-4).** The instruction pushes a
   `ControlBlock::TryTable` frame carrying the decoded clauses; the frame behaves
   like a block at its `end`. Catch labels are **parent-relative** (encoded label
@@ -137,8 +140,8 @@ instructions were **removed**.
 
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
-| EXD1 | **Unwind with a Store-owned *pending-exception* state plus per-call-site static dispatch**, not `setjmp`/`longjmp`. `throw`/`throw_ref` that find a handler in the current function branch directly to its catch label; otherwise they set the pending slot and return zeroes. Every call site checks the slot inline; on a pending exception it runs the same static dispatch for its own enclosing `try_table`s, or re-propagates. | §3: the mechanism is free. This is also the only workable mechanism here: `setjmp` cannot be armed in a JIT frame, and a helper's `jmp_buf` points at a dead frame, so `longjmp` cannot resume at a catch label. A Store-owned slot is shared by every module in the store. | Constant-time handler lookup for `throw` (the tag is a compile-time index), one inline load + branch per call, no unwind tables, no personality routine, no change to the value ABI. |
-| EXD2 | **Resolve handlers statically where possible.** `throw tagidx` searches the enclosing `try_table` frames (innermost first) for a matching catch at compile time; `throw_ref` emits a comparison chain over the same frames because its tag id is dynamic. Traps are never catchable: they still `longjmp` to the embedder's `TrapScope`. | §3: the handler set is lexically known. The spec requires a trap *not* to be an exception (`try_table.wast` asserts this with `unreachable` and `divide by zero`). | No handler stack at run time; `catch` arity and payload offsets are constants; traps and exceptions stay disjoint. |
+| EXD1 | **Unwind with a thread-local *pending-exception* state plus per-call-site static dispatch**, not `setjmp`/`longjmp`. `throw`/`throw_ref` that find a handler in the current function branch directly to its catch label; otherwise they set the pending slot and return zeroes. Every call site checks the slot inline; on a pending exception it runs the same static dispatch for its own enclosing `try_table`s, or re-propagates. | §3: the mechanism is free. This is also the only workable mechanism here: `setjmp` cannot be armed in a JIT frame, and a helper's `jmp_buf` points at a dead frame, so `longjmp` cannot resume at a catch label. The slot is per host thread (and shared by every module on that thread); per-agent state is TRAP-6, deferred with the multi-agent model. | Constant-time handler lookup for `throw` (the tag is a compile-time index), one inline load + branch per call, no unwind tables, no personality routine, no change to the value ABI. |
+| EXD2 | **Resolve handlers statically where possible.** `throw tagidx` searches the enclosing `try_table` frames (innermost first) for a matching catch at compile time; `throw_ref` emits a comparison chain over the same frames because its tag id is dynamic. Traps are never catchable: they travel as a separate pending status ([`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md)) and win over a pending exception. | §3: the handler set is lexically known. The spec requires a trap *not* to be an exception (`try_table.wast` asserts this with `unreachable` and `divide by zero`). | No handler stack at run time; `catch` arity and payload offsets are constants; traps and exceptions stay disjoint. |
 | EXD3 | **Represent an `exnref` as a hunk pointer** to `{ tagId, payload }` in the GC region ([`GC.md`](GC.md) §6.1). | §3: representation free; `exnref` is opaque. | Reuses the arena and GC object model; `throw_ref` is a re-jump. |
 | EXD4 | **Intern tags to a process-wide `TagId`**, exactly like `TypeId` ([`TYPE_IDENTITY.md`](../TYPE_IDENTITY.md)), and match by id. | §2 requires exact tag identity; a canonical id is one implementation. | Cheap, cross-module-correct matching. |
 | EXD5 | **Interpret the `catchop` flags directly** (`catch_ref`/`catch_all_ref`) so the label arity is known at compile time. | §2. | No runtime decision about whether to push the `exnref`. |
@@ -148,7 +151,7 @@ instructions were **removed**.
 
 - A trap must remain a trap; do not let the pending-exception protocol turn a
   genuine trap into a catchable exception (or vice versa). `try_table` never
-  catches the `TrapScope` path, which `try_table.wast` asserts with
+  catches the trap path, which `try_table.wast` asserts with
   `unreachable` and `divide by zero`.
 - A caught exception must **clear the pending slot** before branching, or the
   caller (and the embedder) still observes it as uncaught.

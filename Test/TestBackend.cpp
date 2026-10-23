@@ -1,7 +1,6 @@
 #include "TestBackend.hpp"
 
 #include <array>
-#include <csetjmp>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -243,22 +242,35 @@ bool LibJitSession::invoke(const WASM::ModuleInstance& instance,
 		return true;
 	};
 
-	WASM::TrapScope scope;
-	if (setjmp(scope.buffer) != 0) {
+	// The generated code reports a trap through the engine's pending slot; the
+	// harness turns that into its own trapped/kind/message result. A C++ frame
+	// below generated code must not throw (the engine would have to unwind a
+	// generated frame), which is exactly why the harness reads the slot instead
+	// of relying on an exception here.
+	const auto collectTrap = [&]() {
+		const WASM::TrapInfo info = WASM::takePendingTrap();
+		if (!info.trapped)
+			return false;
 		trapped = true;
-		trapKind = scope.kind();
-		trapMessage = scope.message();
+		trapKind = info.kind;
+		trapMessage = info.message != nullptr ? info.message : "";
 		return true;
+	};
+
+	{
+		WASM::CallDepthScope depth;
+		if (v128AbiCall()) {
+			collectTrap();
+			return true;
+		}
+
+		const jit_type_t signature =
+				context_.getTranslator().translateFunctionSignature(functionType);
+		const unsigned int numArgs = static_cast<unsigned int>(jitArguments.size());
+		jit_apply(signature, callable.fnPtr, jitArguments.data(), numArgs,
+				multiResult ? nullptr : result);
 	}
-
-	if (v128AbiCall())
-		return true;
-
-	const jit_type_t signature =
-			context_.getTranslator().translateFunctionSignature(functionType);
-	const unsigned int numArgs = static_cast<unsigned int>(jitArguments.size());
-	jit_apply(signature, callable.fnPtr, jitArguments.data(), numArgs,
-			multiResult ? nullptr : result);
+	collectTrap();
 	return true;
 }
 

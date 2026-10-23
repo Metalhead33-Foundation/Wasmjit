@@ -2,6 +2,7 @@
 #include <catch2/catch_all.hpp>
 
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
+#include <Elvavena/Util/ElvScopeGuard.hpp>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -26,6 +27,7 @@
 #include "WasmBase/WasmGcHeader.hpp"
 #include "WasmBase/WasmGcHeap.hpp"
 #include "WasmBase/WasmHostBridge.hpp"
+#include "WasmBase/WasmNativeImport.hpp"
 #include "WasmBase/WasmExn.hpp"
 #include "WasmBase/WasmOpcode.hpp"
 #include "WasmBase/WasmStore.hpp"
@@ -981,7 +983,79 @@ TEST_CASE("exceptions: a caught throw carries its payload and an uncaught one st
 	REQUIRE(::wasm_exn_tag_id(pending) == instance->tagIdForIndex(0));
 }
 
+TEST_CASE("exceptions: the pending slot is host-thread-local")
+{
+	// Regression test for the slot being a process-global: one host thread
+	// leaves an uncaught exception pending while another thread runs Wasm. The
+	// second thread's call-site checks must not see the first thread's
+	// exception (WasmBase/WasmExn.cpp, docs/THREADSAFETY.md §5.2/§10.1).
+	// Per-*agent* state is TRAP-6, deferred with the multi-agent model.
+	std::atomic<int> failures{0};
+	std::atomic<bool> pendingSet{false};
+	std::atomic<bool> observed{false};
+
+	std::thread thrower([&failures, &pendingSet, &observed] {
+		try {
+			WASM::Module module = loadTestModule("exceptions");
+			WASM::RegistryImportResolver imports;
+			auto backend = TestBackend::create();
+			auto instance = backend->instantiator().instantiate(module, imports);
+			auto throwFn = instance ? instance->exportedFunction("throw-uncaught")
+					: std::optional<WASM::Callable>{};
+			if (!throwFn.has_value()) {
+				++failures;
+			} else {
+				WASM::callCallable<void>(*throwFn, int32_t(1));
+				if (::wasm_exn_pending() == nullptr)
+					++failures;
+			}
+		} catch (...) {
+			++failures;
+		}
+		pendingSet.store(true);
+		// Hold the exception pending until the observer has looked.
+		while (!observed.load())
+			std::this_thread::yield();
+		if (::wasm_exn_pending() != nullptr)
+			::wasm_exn_clear_pending();
+		else
+			++failures;
+	});
+
+	std::thread observer([&failures, &pendingSet, &observed] {
+		while (!pendingSet.load())
+			std::this_thread::yield();
+		try {
+			// This thread never threw: its slot must be empty.
+			if (::wasm_exn_pending() != nullptr) {
+				++failures;
+				::wasm_exn_clear_pending();
+			}
+			// A Wasm call on this thread must complete normally, i.e. its
+			// inline pending check must not see the other thread's exception.
+			WASM::Module module = loadTestModule("exceptions");
+			WASM::RegistryImportResolver imports;
+			auto backend = TestBackend::create();
+			auto instance = backend->instantiator().instantiate(module, imports);
+			auto catchFn = instance ? instance->exportedFunction("catch")
+					: std::optional<WASM::Callable>{};
+			if (!catchFn.has_value()
+					|| WASM::callCallable<int32_t>(*catchFn, int32_t(1)) != 2)
+				++failures;
+		} catch (...) {
+			++failures;
+		}
+		observed.store(true);
+	});
+
+	thrower.join();
+	observer.join();
+	REQUIRE(failures.load() == 0);
+}
+
+
 TEST_CASE("exceptions: an exnref can be stored in a table")
+
 {
 	WASM::Module module = loadTestModule("exnref_table");
 	WASM::RegistryImportResolver imports;
@@ -3123,25 +3197,23 @@ TEST_CASE("string.new_utf8 is strict while new_lossy_utf8 replaces bad bytes")
 
 	auto strict = instance->exportedFunction("strict");
 	REQUIRE(strict.has_value());
-	WASM::TrapScope scope;
-	volatile bool trapped = false;
-	if (setjmp(scope.buffer) == 0)
+	WASM::TrapKind strictKind = WASM::TrapKind::Internal;
+	try {
 		WASM::callCallable<int32_t>(*strict);
-	else
-		trapped = true;
-	REQUIRE(trapped);
-	REQUIRE(scope.kind() == WASM::TrapKind::InvalidString);
+	} catch (const WASM::Trap& trap) {
+		strictKind = trap.kind();
+	}
+	REQUIRE(strictKind == WASM::TrapKind::InvalidString);
 
 	auto encode = instance->exportedFunction("encode");
 	REQUIRE(encode.has_value());
-	WASM::TrapScope encodeScope;
-	volatile bool encodeTrapped = false;
-	if (setjmp(encodeScope.buffer) == 0)
+	WASM::TrapKind encodeKind = WASM::TrapKind::Internal;
+	try {
 		WASM::callCallable<int32_t>(*encode);
-	else
-		encodeTrapped = true;
-	REQUIRE(encodeTrapped);
-	REQUIRE(encodeScope.kind() == WASM::TrapKind::InvalidString);
+	} catch (const WASM::Trap& trap) {
+		encodeKind = trap.kind();
+	}
+	REQUIRE(encodeKind == WASM::TrapKind::InvalidString);
 }
 
 TEST_CASE("stringview WTF-8, WTF-16 and iterator positions run through the JIT")
@@ -3507,14 +3579,13 @@ TEST_CASE("string array variants enforce bounds, strictness and lossy encoding")
 	const auto trap = [&instance](const char* name) {
 		auto function = instance->exportedFunction(name);
 		REQUIRE(function.has_value());
-		WASM::TrapScope scope;
-		volatile bool trapped = false;
-		if (setjmp(scope.buffer) == 0)
+		try {
 			WASM::callCallable<int32_t>(*function);
-		else
-			trapped = true;
-		REQUIRE(trapped);
-		return scope.kind();
+		} catch (const WASM::Trap& trap) {
+			return trap.kind();
+		}
+		REQUIRE(false);
+		return WASM::TrapKind::Internal;
 	};
 
 	REQUIRE(call("lossy") == 3);
@@ -4018,13 +4089,13 @@ TEST_CASE("GC reference counting: clone, drop and store barriers")
 	REQUIRE(instance.gcPendingCount() >= 1);
 
 	// A further drop underflows: it must trap, not wrap (docs/proposals/GC.md
-	// D19/RC-7).
+	// D19/RC-7). `refDrop` is a host-facing API, so the failure arrives as a
+	// `WASM::Trap` exception at this boundary.
 	{
-		WASM::TrapScope scope;
 		bool trapped = false;
-		if (setjmp(scope.buffer) == 0) {
+		try {
 			instance.refDrop(replacement);
-		} else {
+		} catch (const WASM::Trap&) {
 			trapped = true;
 		}
 		REQUIRE(trapped);
@@ -6371,16 +6442,13 @@ TEST_CASE("trap messages name the trapping function when the name section has it
 	const auto trapMessage = [&instance](const char* name) {
 		auto fn = instance->exportedFunction(name);
 		REQUIRE(fn.has_value());
-		WASM::TrapScope scope;
-		volatile bool trapped = false;
 		std::string message;
-		if (setjmp(scope.buffer) == 0) {
+		try {
 			WASM::callCallable<void>(*fn);
-		} else {
-			trapped = true;
-			message = scope.message() != nullptr ? scope.message() : "";
+		} catch (const WASM::Trap& trap) {
+			message = trap.message() != nullptr ? trap.message() : "";
 		}
-		REQUIRE(trapped);
+		REQUIRE(!message.empty());
 		return message;
 	};
 
@@ -6461,11 +6529,10 @@ TEST_CASE("memory.discard zeroes whole pages, preserves the rest, and traps out 
 	WASM::callCallable<void>(discard, int32_t(0x20000), int32_t(0));
 
 	const auto expectTrap = [](const WASM::Callable& callable, auto address, auto length) {
-		WASM::TrapScope scope;
-		volatile bool trapped = false;
-		if (setjmp(scope.buffer) == 0) {
+		bool trapped = false;
+		try {
 			WASM::callCallable<void>(callable, address, length);
-		} else {
+		} catch (const WASM::Trap&) {
 			trapped = true;
 		}
 		REQUIRE(trapped);
@@ -6786,12 +6853,12 @@ TEST_CASE("gc cast validation: ref.test/ref.cast accept every reference in the t
 	// `ref.cast null` preserves the null; the non-null form traps.
 	REQUIRE(WASM::callCallable<void*>(castNull, static_cast<void*>(nullptr)) == nullptr);
 	{
-		WASM::TrapScope scope;
-		volatile bool trapped = false;
-		if (setjmp(scope.buffer) == 0)
+		bool trapped = false;
+		try {
 			WASM::callCallable<void*>(castAny, static_cast<void*>(nullptr));
-		else
+		} catch (const WASM::Trap&) {
 			trapped = true;
+		}
 		REQUIRE(trapped);
 	}
 }
@@ -7108,14 +7175,13 @@ TEST_CASE("unbounded Wasm recursion traps with 'call stack exhausted'")
 	auto recurse = loaded.instance->exportedFunction("recurse");
 	REQUIRE(recurse.has_value());
 
-	WASM::TrapScope scope;
-	volatile bool trapped = false;
-	if (setjmp(scope.buffer) == 0)
+	WASM::TrapKind exhaustionKind = WASM::TrapKind::Internal;
+	try {
 		WASM::callCallable<int32_t>(*recurse, int32_t(0));
-	else
-		trapped = true;
-	REQUIRE(trapped);
-	REQUIRE(scope.kind() == WASM::TrapKind::CallStackExhausted);
+	} catch (const WASM::Trap& trap) {
+		exhaustionKind = trap.kind();
+	}
+	REQUIRE(exhaustionKind == WASM::TrapKind::CallStackExhausted);
 
 	// The guard leaves the usable part of the stack intact: a deep but bounded
 	// descent still fits, and works after the trap unwound the recursion.
@@ -7149,3 +7215,277 @@ TEST_CASE("a function frame larger than the stack guard's reserve is rejected")
 	REQUIRE_NOTHROW(accepted.prepare(signature, bounded));
 }
 
+
+// ── Status-return traps: RAII, deferred cleanup, and the start-function fix ──
+// These cover the guarantees docs/TRAP_CLEANUP.md §8.5/§9.7 introduced: a trap
+// is reported and unwinds by returning, so C++ destructors run, the explicit
+// cleanup stack drains once, and a trapping start function still destroys the
+// partially built instance.
+
+namespace {
+
+int g_deferredRuns = 0;
+void countDeferredRun(void*) noexcept { ++g_deferredRuns; }
+
+int g_deferredOrder[4] = {};
+int g_deferredCount = 0;
+void recordDeferredFirst(void*) noexcept { g_deferredOrder[g_deferredCount++] = 1; }
+void recordDeferredSecond(void*) noexcept { g_deferredOrder[g_deferredCount++] = 2; }
+
+} // namespace
+
+TEST_CASE("a trapping start function unwinds and destroys the partial instance")
+{
+	// Magic + version, one `() -> ()` type, one function of that type, a start
+	// section naming it, and a body that is just `unreachable`.
+	const std::vector<uint8_t> bytes = {
+		0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+		0x03, 0x02, 0x01, 0x00,
+		0x08, 0x01, 0x00,
+		0x0a, 0x05, 0x01, 0x03, 0x00, 0x00, 0x0b
+	};
+	const std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+
+	HostBridgeProbe probe;
+	WASM::HostBridge bridge;
+	bridge.userData = &probe;
+	bridge.instanceCreated = hostBridgeCreated;
+	bridge.instanceDestroying = hostBridgeDestroying;
+
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	bool threw = false;
+	WASM::TrapKind kind = WASM::TrapKind::Internal;
+	try {
+		(void)backend->instantiator().instantiate(*parsed, imports, &bridge);
+	} catch (const WASM::Trap& trap) {
+		threw = true;
+		kind = trap.kind();
+	}
+	REQUIRE(threw);
+	REQUIRE(kind == WASM::TrapKind::Unreachable);
+	// `instanceCreated` ran, and the exception unwinding `instantiate` destroyed
+	// the holder, so `~ModuleInstance` ran too (docs/TRAP_CLEANUP.md §7, TRAP-1).
+	REQUIRE(probe.created == 1);
+	REQUIRE(probe.destroyed == 1);
+}
+
+TEST_CASE("deferred cleanup runs LIFO on a trap and is dismissed on the normal path")
+{
+	// Start clean even if an earlier failing assertion left a record behind.
+	WASM::runDeferredCleanup();
+	REQUIRE(WASM::deferredCleanupCount() == 0);
+
+	WASM::Module module = loadTestModule("named_trap");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto boom = instance->exportedFunction("boom");
+	REQUIRE(boom.has_value());
+
+	// Normal path: the record is dismissed, so the thunk never runs.
+	g_deferredRuns = 0;
+	{
+		const WASM::TrapDeferToken token = WASM::defer(countDeferredRun, nullptr);
+		REQUIRE(token.valid());
+		REQUIRE(WASM::dismissDeferred(token));
+	}
+	REQUIRE(g_deferredRuns == 0);
+	REQUIRE(WASM::deferredCleanupCount() == 0);
+
+	// Trap path: every live record runs, most recent first, exactly once.
+	g_deferredCount = 0;
+	(void)WASM::defer(recordDeferredFirst, nullptr);
+	(void)WASM::defer(recordDeferredSecond, nullptr);
+	REQUIRE(WASM::deferredCleanupCount() == 2);
+	try {
+		WASM::callCallable<void>(*boom);
+	} catch (const WASM::Trap& trap) {
+		REQUIRE(trap.kind() == WASM::TrapKind::Unreachable);
+	}
+	REQUIRE(g_deferredCount == 2);
+	REQUIRE(g_deferredOrder[0] == 2);
+	REQUIRE(g_deferredOrder[1] == 1);
+	REQUIRE(WASM::deferredCleanupCount() == 0);
+}
+
+TEST_CASE("a trap leaves the instance usable for the next call")
+{
+	WASM::Module module = loadTestModule("named_trap");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	// Repeated traps must not poison the thread: each one is reported, unwinds by
+	// returning through the generated frames, and is consumed at the boundary.
+	auto plain = instance->exportedFunction("plain");
+	REQUIRE(plain.has_value());
+	for (int i = 0; i < 3; ++i) {
+		try {
+			WASM::callCallable<void>(*plain);
+		} catch (const WASM::Trap& trap) {
+			REQUIRE(trap.kind() == WASM::TrapKind::Unreachable);
+		}
+	}
+
+	// The engine is still usable afterwards, including for a fresh instance.
+	WASM::Module healthy = loadTestModule("add_core");
+	auto second = backend->instantiator().instantiate(healthy, imports);
+	REQUIRE(second.get() != nullptr);
+	auto add = second->exportedFunction("add");
+	REQUIRE(add.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*add, int32_t(20), int32_t(22)) == 42);
+}
+
+TEST_CASE("Elv scope guards cover exit, success and failure")
+{
+	int exits = 0;
+	int successes = 0;
+	int failures = 0;
+	{
+		ELV_SCOPE_EXIT { ++exits; };
+		ELV_SCOPE_SUCCESS { ++successes; };
+		ELV_SCOPE_FAIL { ++failures; };
+	}
+	REQUIRE(exits == 1);
+	REQUIRE(successes == 1);
+	REQUIRE(failures == 0);
+
+	exits = successes = failures = 0;
+	try {
+		ELV_SCOPE_EXIT { ++exits; };
+		ELV_SCOPE_SUCCESS { ++successes; };
+		ELV_SCOPE_FAIL { ++failures; };
+		throw std::runtime_error("boom");
+	} catch (const std::runtime_error&) {
+	}
+	REQUIRE(exits == 1);
+	REQUIRE(successes == 0);
+	REQUIRE(failures == 1);
+
+	int dismissed = 0;
+	{
+		auto guard = Elv::Util::makeScopeGuard([&]() noexcept { ++dismissed; });
+		guard.dismiss();
+	}
+	REQUIRE(dismissed == 0);
+}
+
+// ── Native imports: exceptions, traps and RAII at the Wasm boundary ─────────
+// `WASM::nativeImport<&fn>()` wraps a typed host function in the exact import
+// signature (docs/ABI.md "Writing an import"). These tests pin the contract:
+// an exception becomes a pending trap with the same message, `WASM::trap()`
+// keeps its kind, and the import's own locals are destroyed normally.
+
+namespace {
+
+int g_importLocalDestructions = 0;
+
+struct ImportScopedLocal {
+	~ImportScopedLocal() { ++g_importLocalDestructions; }
+};
+
+void throwingImport(WASM::VMContext*)
+{
+	ImportScopedLocal local;
+	(void)local;
+	throw std::runtime_error("host import failed");
+}
+
+void trappingImport(WASM::VMContext*)
+{
+	WASM::trap(WASM::TrapKind::OutOfBoundsMemoryAccess, "import said no");
+}
+
+void countingImport(WASM::VMContext* ctx)
+{
+	if (ctx != nullptr && ctx->hostData != nullptr)
+		++*static_cast<int*>(ctx->hostData);
+}
+
+} // namespace
+
+TEST_CASE("a wrapped native import converts exceptions into a trap")
+{
+	WASM::Module module = loadTestModule("native_debug");
+	WASM::RegistryImportResolver imports;
+	imports.registerFunction("env", "debug_message", WASM::nativeImport<&throwingImport>());
+
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto run = instance->exportedFunction("run");
+	REQUIRE(run.has_value());
+
+	g_importLocalDestructions = 0;
+	bool trapped = false;
+	WASM::TrapKind kind = WASM::TrapKind::Internal;
+	std::string message;
+	try {
+		WASM::callCallable<void>(*run);
+	} catch (const WASM::Trap& trap) {
+		trapped = true;
+		kind = trap.kind();
+		message = trap.message() != nullptr ? trap.message() : "";
+	}
+	REQUIRE(trapped);
+	REQUIRE(kind == WASM::TrapKind::Internal);
+	REQUIRE(message == "host import failed");
+	// The import's own frames unwound normally: its local was destroyed.
+	REQUIRE(g_importLocalDestructions == 1);
+}
+
+TEST_CASE("WASM::trap inside a wrapped native import keeps its kind")
+{
+	WASM::Module module = loadTestModule("native_debug");
+	WASM::RegistryImportResolver imports;
+	imports.registerFunction("env", "debug_message", WASM::nativeImport<&trappingImport>());
+
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto run = instance->exportedFunction("run");
+	REQUIRE(run.has_value());
+
+	WASM::TrapKind kind = WASM::TrapKind::Internal;
+	std::string message;
+	bool trapped = false;
+	try {
+		WASM::callCallable<void>(*run);
+	} catch (const WASM::Trap& trap) {
+		trapped = true;
+		kind = trap.kind();
+		message = trap.message() != nullptr ? trap.message() : "";
+	}
+	REQUIRE(trapped);
+	REQUIRE(kind == WASM::TrapKind::OutOfBoundsMemoryAccess);
+	REQUIRE(message == "import said no");
+}
+
+TEST_CASE("a wrapped native import still receives the caller's VMContext")
+{
+	WASM::Module module = loadTestModule("native_debug");
+	WASM::RegistryImportResolver imports;
+	imports.registerFunction("env", "debug_message", WASM::nativeImport<&countingImport>());
+
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	int calls = 0;
+	instance->context()->hostData = &calls;
+	auto run = instance->exportedFunction("run");
+	REQUIRE(run.has_value());
+	WASM::callCallable<void>(*run);
+	WASM::callCallable<void>(*run);
+	REQUIRE(calls == 2);
+}

@@ -317,6 +317,27 @@ private:
 	// requires a well-formed return when an exception propagates).
 	void emitReturnZeroes();
 
+	// ── Trap status (docs/TRAP_CLEANUP.md §8.5) ────────────────────────────
+	// A trap is *reported*, not thrown or jumped: generated code calls
+	// `wasm_trap_report` and branches to this function's error epilogue, which
+	// returns zeroes. Every call that can report is followed by a pending check.
+	// No unwind table and no `longjmp` is involved, so a helper may hold a
+	// `std::string` across the trap point.
+	void emitPendingTrapCheck();
+	void emitReportTrap(WASM::TrapKind kind, const char* detail);
+	void requestTrapEpilogue();
+	jit_label_t trapEpilogueLabel = jit_label_undefined;
+	bool trapEpilogueUsed = false;
+	// The calling thread's trap slot, obtained once per function in the entry
+	// block (`wasm_trap_slot()`); every check loads `pending` through it.
+	jit_value_t trapSlot = nullptr;
+	// The same for the pending Wasm exception (`wasm_exn_slot()`): a `throw`
+	// leaves a pointer there, and every call site checks it.
+	jit_value_t exceptionSlot = nullptr;
+	// Set while the epilogue itself emits helper calls: a failure there must not
+	// branch back into the epilogue.
+	bool suppressTrapChecks = false;
+
 	WASM::GlobalType globalTypeForIndex(WASM::GlobalIdx idx) const;
 
 public:
@@ -334,6 +355,14 @@ public:
 	// Call after readCode() to emit return from the implicit function body (Wasm validation
 	// guarantees the value stack matches currentFunc.results).
 	void emitImplicitFunctionReturn();
+
+	// Emits the function prologue: the guest call-stack guard and the pending
+	// check that turns a guard trap into an early return. Call before readCode().
+	void emitFunctionEntry();
+
+	// Emits the shared error epilogue (return zeroes) when any trap path was
+	// emitted. Call after emitImplicitFunctionReturn().
+	void emitTrapEpilogue();
 
 	// OpcodeDispatcher interface
 protected:

@@ -99,12 +99,16 @@ bool decodeOne(const uint8_t* bytes, std::size_t size, std::size_t& index,
 StringObject* StringStore::create(std::vector<uint32_t> codePoints)
 {
 	std::scoped_lock lock(mutex_);
-	if (codePoints.size() > kMaxStringBytes)
-		trap(TrapKind::OutOfMemory, "string exceeds the implementation limit");
+	if (codePoints.size() > kMaxStringBytes) {
+		reportTrap(TrapKind::OutOfMemory, "string exceeds the implementation limit");
+		return nullptr;
+	}
 	const uint64_t bytes = sizeof(StringObject)
 			+ static_cast<uint64_t>(codePoints.size()) * sizeof(uint32_t);
-	if (!Store::global().reserveBytes(bytes))
-		trap(TrapKind::OutOfMemory, "string allocation exceeds the allocation budget");
+	if (!Store::global().reserveBytes(bytes)) {
+		reportTrap(TrapKind::OutOfMemory, "string allocation exceeds the allocation budget");
+		return nullptr;
+	}
 	auto entry = std::make_unique<StringEntry>();
 	entry->object.codePoints = std::move(codePoints);
 	entry->bytes = bytes;
@@ -117,8 +121,10 @@ StringViewObject* StringStore::createView(const StringObject* string)
 {
 	std::scoped_lock lock(mutex_);
 	const uint64_t bytes = sizeof(StringViewObject);
-	if (!Store::global().reserveBytes(bytes))
-		trap(TrapKind::OutOfMemory, "string view allocation exceeds the allocation budget");
+	if (!Store::global().reserveBytes(bytes)) {
+		reportTrap(TrapKind::OutOfMemory, "string view allocation exceeds the allocation budget");
+		return nullptr;
+	}
 	auto entry = std::make_unique<ViewEntry>();
 	entry->object.string = string;
 	entry->bytes = bytes;
@@ -133,8 +139,10 @@ StringIteratorObject* StringStore::createIterator(const StringObject* string)
 {
 	std::scoped_lock lock(mutex_);
 	const uint64_t bytes = sizeof(StringIteratorObject);
-	if (!Store::global().reserveBytes(bytes))
-		trap(TrapKind::OutOfMemory, "string iterator allocation exceeds the allocation budget");
+	if (!Store::global().reserveBytes(bytes)) {
+		reportTrap(TrapKind::OutOfMemory, "string iterator allocation exceeds the allocation budget");
+		return nullptr;
+	}
 	auto entry = std::make_unique<IteratorEntry>();
 	entry->object.string = string;
 	entry->bytes = bytes;

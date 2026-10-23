@@ -1,33 +1,32 @@
 #ifndef WASMTRAP_HPP
 #define WASMTRAP_HPP
-#include <csetjmp>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 
 namespace WASM {
 
 // ── Wasm traps ──────────────────────────────────────────────────────────────
 //
-// A trap is a non-local exit from the current Wasm invocation. The engine's
-// own frames — generated code plus the POD native helpers it calls — carry
-// no unwind tables, so a trap is a `longjmp` to a scope the embedder armed
-// around the outermost call rather than a C++ exception. Jumping out of a call
-// chain also strands the tail-call trampoline's process-global state, so
-// trap() clears it before jumping.
+// A trap is a *report*, not a non-local jump. The engine's own frames — the
+// generated code plus the native helpers it calls — carry no unwind tables, so
+// a C++ exception cannot leave a helper: it would have to unwind through a
+// generated frame. Instead:
 //
-// Usage (setjmp must be expanded in a frame that outlives the wasm call):
+//   * generated code and helpers call `reportTrap()` (or, from generated code,
+//     `wasm_trap_report()`) and *return a benign value*;
+//   * every caller checks the pending slot and returns in turn;
+//   * the host boundary (`callCallable`, `callStartFunction`, the test harness)
+//     converts a pending trap into a `WASM::Trap` C++ exception **after** the
+//     generated frames have returned.
 //
-//     WASM::TrapScope scope;
-//     if (setjmp(scope.buffer) == 0) {
-//         result = ...call into wasm...;
-//     } else {
-//         std::fprintf(stderr, "trap: %s\n", scope.message());
-//     }
+// The consequence is that ordinary C++ lifetime rules hold everywhere: a helper
+// may hold `std::string`, `std::vector` or `std::unique_ptr` across a trap point
+// and its destructor runs on the early return. Nothing here requires an unwind
+// table in generated code, and there is no `setjmp`/`longjmp` anywhere.
 //
-// With no armed scope, trap() keeps the historical behaviour and aborts.
-// See docs/proposals/BULK_MEMORY.md (BM-2) and docs/proposals/GC.md (GC-6).
-
-class TrapScope;
+// See docs/TRAP_CLEANUP.md §8.5/§9.7 for the design and §10 for the backend
+// study that selected it.
 
 // The *kind* of a trap: the spec's trap taxonomy. The kind is what an embedder or
 // a test compares — "did it trap for the right reason?" — while the free-text
@@ -39,6 +38,7 @@ class TrapScope;
 // See docs/SAFETY.md §2.4: a trap is Wasm semantics. An engine problem (a
 // compile-time limitation, a bad index that validation should have rejected) is
 // *not* a trap and must not be reported as one.
+
 enum class TrapKind : uint8_t {
 	Unreachable,                 // "unreachable"
 	NullReference,               // "null reference"
@@ -69,50 +69,182 @@ enum class TrapKind : uint8_t {
 // TrapKind::Internal it returns "internal error"; use the message for detail.
 const char* trapKindName(TrapKind kind);
 
-struct TrapState {
-	TrapScope*  active;   // innermost armed scope, or nullptr
-	const char* message;  // reason for the most recent trap, or nullptr
-	TrapKind    kind;     // kind of the most recent trap
+// ── The pending-trap slot ───────────────────────────────────────────────────
+//
+// One call chain per host thread executes at a time (docs/SAFETY.md §2.7), so
+// the slot is thread-local: two host threads running Wasm must not observe each
+// other's traps. Generated code obtains its address once per function through
+// `wasm_trap_slot()` and reads `pending` inline from then on.
+//
+// Per-*agent* state (several agents on one host thread) is TRAP-6 in
+// docs/TRAP_CLEANUP.md §12.1: deferred by decision until a real multi-agent
+// execution model exists, because there is no agent object to attach the slot
+// (or the cleanup stack and depth counters beside it) to.
+//
+// The message is *stored in the slot*, not referenced: a native import that
+// reports `std::exception::what()` owns that text only until its frame returns,
+// and the boundary may read the trap much later.
+inline constexpr std::size_t kTrapMessageCapacity = 192;
+
+struct TrapSlot {
+	int  pending;                          // 0 = no trap, non-zero = pending
+	int  kind;                             // TrapKind as an int (the C ABI)
+	char message[kTrapMessageCapacity];    // NUL-terminated, truncated
 };
 
-// The thread-local trap state. One engine instance executes on one thread;
-// this is thread_local so a future multi-agent build degrades safely.
-TrapState& trapState();
+// The calling thread's slot. Never null; the returned object has static storage.
+extern "C" TrapSlot* wasm_trap_slot() noexcept;
 
-// Raise a trap of `kind`, reporting trapKindName(kind) as the reason. Never
-// returns: jumps to the innermost armed scope, or prints a diagnostic and aborts
-// when no scope is armed.
-[[noreturn]] void trap(TrapKind kind);
+// Records `kind`/`detail` for the current call chain and returns; the caller
+// must return a benign value so its frame unwinds normally. The *first* trap
+// wins: a second report before the slot is cleared is ignored, so a failure in
+// trap-time cleanup cannot overwrite the original reason. Also resets the
+// tail-call trampoline state and runs any deferred cleanup thunks.
+//
+// `detail` is copied into the slot (truncated to `kTrapMessageCapacity`), so the
+// caller keeps ownership of its own string.
+void reportTrap(TrapKind kind, const char* detail = nullptr) noexcept;
 
-// Raise a trap of `kind` with a more precise reason than the kind's name (e.g.
-// "out of bounds memory.init source" for an OutOfBoundsMemoryAccess). The kind
-// is still recorded, so a comparison against trapKindName stays meaningful.
-[[noreturn]] void trap(TrapKind kind, const char* detail);
+// C-callable entry point for generated code: the kind travels as an int so the
+// calling convention does not depend on how a scoped enum is passed.
+extern "C" void wasm_trap_report(int kind, const char* message);
 
-// C-callable entry point for generated code: the kind travels as an int so
-// the calling convention does not depend on how a scoped enum is passed.
-extern "C" void wasm_trap_raise(int kind, const char* message);
+// True while a trap is pending on the calling thread. Generated code reads
+// `TrapSlot::pending` directly; C++ code uses this.
+bool trapPending() noexcept;
 
-// Arms a trap target for its lifetime; scopes nest LIFO. The buffer is public
-// because setjmp must be expanded in the embedding function's own frame.
-class TrapScope
+// The pending trap's kind/message, or TrapKind::Internal/nullptr when none is
+// pending. The returned pointer is the slot's own buffer; it stays valid until
+// the slot is cleared.
+TrapKind pendingTrapKind() noexcept;
+const char* pendingTrapMessage() noexcept;
+
+// Clears the slot. The host boundary takes the trap before throwing it, so the
+// next call starts clean.
+void clearPendingTrap() noexcept;
+
+// A snapshot taken by the host boundary.
+struct TrapInfo {
+	bool        trapped = false;
+	TrapKind    kind = TrapKind::Internal;
+	const char* message = nullptr;
+};
+
+// Takes the pending trap and clears the slot. `trapped` is false (and kind/message
+// are the defaults) when nothing was pending.
+TrapInfo takePendingTrap() noexcept;
+
+// ── The host-boundary exception ────────────────────────────────────────────
+//
+// Thrown only after generated code has returned to C++, so it never unwinds a
+// generated frame. The message is copied into a fixed buffer: the source may be
+// owned by a `ModuleInstance` that is destroyed while the exception unwinds (a
+// trapping start function does exactly that).
+class Trap : public std::exception
 {
 public:
-	std::jmp_buf buffer;
-	explicit TrapScope();
-	~TrapScope();
-	TrapScope(const TrapScope&) = delete;
-	TrapScope& operator=(const TrapScope&) = delete;
+	static constexpr std::size_t kMessageCapacity = 240;
 
-	// The reason for the trap that jumped back to `buffer`, or nullptr.
-	const char* message() const;
+	Trap(TrapKind kind, const char* message) noexcept;
 
-	// The kind of the trap that jumped back to `buffer`.
-	TrapKind kind() const;
+	TrapKind kind() const noexcept { return kind_; }
+	const char* message() const noexcept { return message_; }
+	const char* what() const noexcept override { return message_; }
 
 private:
-	TrapScope* previous;
+	TrapKind kind_;
+	char     message_[kMessageCapacity];
 };
+
+// If a trap is pending, takes it and throws `Trap`; otherwise does nothing.
+// POD-only and `noinline`: it is the single frame between the last generated
+// frame and the throw. Call it only at the host boundary, after generated code
+// has returned.
+//
+// Nested calls are the exception: a host import (or the component runtime) that
+// re-enters Wasm must not throw into a generated frame. While `wasmCallDepth()`
+// is non-zero the trap is left pending and `checkTrap()` returns normally, so
+// the re-entering C++ code can observe `trapPending()` and return a benign
+// value; the generated caller then sees the pending slot.
+[[gnu::noinline]] void checkTrap();
+
+// Depth of host→Wasm calls on this thread. Zero means the caller is outside the
+// engine's generated frames, which is the only place `Trap` may be thrown.
+int wasmCallDepth() noexcept;
+
+// RAII increment/decrement of `wasmCallDepth()`. Every place that calls into
+// compiled code from C++ (the `callCallable` helpers, the start-function call,
+// the test harness) holds one for the duration of the call.
+class CallDepthScope
+{
+public:
+	CallDepthScope() noexcept;
+	~CallDepthScope();
+	CallDepthScope(const CallDepthScope&) = delete;
+	CallDepthScope& operator=(const CallDepthScope&) = delete;
+};
+
+// ── The native-import boundary ─────────────────────────────────────────────
+//
+// A host import is called *from* generated code, so nothing may unwind through
+// it. `WasmBase/WasmNativeImport.hpp` wraps a typed host function in a
+// trampoline that catches exceptions and converts them into a pending trap; the
+// trampoline holds a `NativeImportScope` while the body runs. That is what lets
+// `WASM::trap()` (and `throw`) be used inside an import: the depth counter tells
+// it a C++ catch frame stands between the import and the generated caller.
+int nativeImportDepth() noexcept;
+
+class NativeImportScope
+{
+public:
+	NativeImportScope() noexcept;
+	~NativeImportScope();
+	NativeImportScope(const NativeImportScope&) = delete;
+	NativeImportScope& operator=(const NativeImportScope&) = delete;
+};
+
+// Records `kind` and throws `Trap` without returning. This is the host-facing
+// "raise" used by C++ APIs whose failure is a Wasm trap (`refDrop` underflow,
+// for example). It must *not* be called while generated code is on the stack:
+// the exception would have to unwind a generated frame. Helpers and native
+// imports use `reportTrap()` and return instead.
+[[noreturn]] void trap(TrapKind kind, const char* detail = nullptr);
+
+// ── Deferred cleanup (the optional hybrid) ─────────────────────────────────
+//
+// Under status-return traps every C++ frame unwinds normally, so RAII is the
+// primary cleanup mechanism and this stack is only for state that is *not*
+// owned by an object (an OS handle released by a C API, a host lock acquired by
+// an adapter, a C callback registration). Records are registered on the normal
+// path and dismissed explicitly:
+//
+//     auto token = WASM::defer(releaseThing, thing);   // non-allocating
+//     ... work that may trap ...
+//     WASM::dismissDeferred(token);
+//
+// `reportTrap()` runs the remaining records in LIFO order, once, before any
+// frame returns. A thunk must be `noexcept`, must not trap, and must not enter
+// Wasm; it may assume the frames that registered it are still alive.
+struct TrapDeferToken {
+	std::uint32_t index = 0xFFFFFFFFu;
+	bool valid() const noexcept { return index != 0xFFFFFFFFu; }
+};
+
+// Registers `fn(arg)`. Returns an invalid token when the fixed-capacity stack is
+// full (the caller may then fall back to RAII or to its own cleanup).
+TrapDeferToken defer(void (*fn)(void*) noexcept, void* arg) noexcept;
+
+// Removes a record. Records are LIFO: dismissing a record that is not the most
+// recent one is a contract violation (asserted in debug builds) and returns
+// false; a no-op after a trap has drained the stack.
+bool dismissDeferred(TrapDeferToken token) noexcept;
+
+// Number of live records (diagnostics/tests).
+std::uint32_t deferredCleanupCount() noexcept;
+
+// Runs every live record in LIFO order and clears the stack. Called by
+// `reportTrap`; exposed for tests.
+void runDeferredCleanup() noexcept;
 
 } // namespace WASM
 

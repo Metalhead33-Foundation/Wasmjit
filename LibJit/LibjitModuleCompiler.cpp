@@ -2,6 +2,7 @@
 #include "LibjitOpcodeDispatcher.hpp"
 #include "../WasmBase/WasmStack.hpp"
 #include "../WasmBase/WasmStore.hpp"
+#include "../WasmBase/WasmTrap.hpp"
 #include "../WasmBase/wasm_simd_scalar.hpp"
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <cassert>
@@ -13,23 +14,6 @@
 namespace LibJIT {
 
 namespace {
-
-// ── Guest call-stack guard ──────────────────────────────────────────────────
-// Emitted as the first instruction of every compiled function. The contract is
-// backend-neutral and lives in the core (WasmBase/WasmStack.hpp, docs/ABI.md):
-// the helper probes the executing thread's stack pointer against
-// `VMContext::stackLimit` and raises `TrapKind::CallStackExhausted`, which is a
-// normal recoverable Wasm trap. Without it, unbounded Wasm recursion walks the
-// host stack into the guard page and the kernel kills the process (the
-// `segfault at <rsp> ... error 6` signature docs/TESTING.md used to document).
-void emitStackGuard(jit_function_t fn)
-{
-	jit_type_t params[1] = {jit_type_void_ptr};
-	jit_type_t signature = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 1, 1);
-	jit_value_t args[1] = {jit_value_get_param(fn, 0)};
-	jit_insn_call_native(fn, "wasm_stack_check",
-		reinterpret_cast<void*>(&WASM::wasm_stack_check), signature, args, 1, 0);
-}
 
 jit_value_t zeroValueForType(jit_function_t fn, jit_type_t t);
 
@@ -112,11 +96,6 @@ void ModuleCompiler::compileFunction(jit_function_t fn, uint32_t funcTypeIdx, co
 	WASM::PreparedFunctionStack stack;
 	stack.prepare(module.funcTypeAt(funcTypeIdx), body);
 
-	// Check the host stack before the body runs. The prologue (and therefore the
-	// frame allocation) has already happened at this point, which is why a
-	// function's frame is bounded by `kMaxFunctionLocalBytes`.
-	emitStackGuard(fn);
-
 	std::vector<jit_value_t> locals;
 	locals.reserve(stack.allLocals.size());
 
@@ -143,8 +122,12 @@ void ModuleCompiler::compileFunction(jit_function_t fn, uint32_t funcTypeIdx, co
 	OpcodeDispatcher dispatcher(context, fn, typeTranslator, instance, internals, module, funcType,
 							  importedFuncCount, functionIndex, body.branchHints,
 							  locals, valueStack, controlStack);
+	// Prologue: guest stack guard + a pending check, then the body.
+	dispatcher.emitFunctionEntry();
 	dispatcher.readCode(stream);
 	dispatcher.emitImplicitFunctionReturn();
+	// Trap paths branch here; the epilogue returns zeroes of the result types.
+	dispatcher.emitTrapEpilogue();
 }
 
 ModuleCompiler::ModuleCompiler(jit_context_t context)
@@ -301,6 +284,12 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 
 		jit_label_t loopLabel = jit_label_undefined;
 		jit_label_t doneLabel = jit_label_undefined;
+		// The trap slot is thread-local; resolve it once, before the loop.
+		jit_type_t trapSlotSig = jit_type_create_signature(jit_abi_cdecl,
+			jit_type_void_ptr, nullptr, 0, 1);
+		jit_value_t trapSlot = jit_value_create(driver, jit_type_void_ptr);
+		jit_insn_store(driver, trapSlot, jit_insn_call_native(driver, "wasm_trap_slot",
+			reinterpret_cast<void*>(&WASM::wasm_trap_slot), trapSlotSig, nullptr, 0, 0));
 		jit_insn_label(driver, &loopLabel);
 
 		jit_value_t fnPtr = jit_insn_load_relative(driver, target,
@@ -316,6 +305,14 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 			callArgs.back() = jit_value_get_param(driver, paramCount + 1);
 		jit_value_t callRet = jit_insn_call_indirect(driver, fnPtr, sig, callArgs.data(),
 			static_cast<unsigned>(callArgs.size()), 0);
+
+		// A trap reported by the callee unwinds by returning: stop the driver
+		// instead of re-dispatching.
+		jit_value_t trapPending = jit_insn_load_relative(driver, trapSlot,
+			static_cast<jit_nint>(offsetof(WASM::TrapSlot, pending)), jit_type_int);
+		jit_value_t noTrap = jit_insn_eq(driver, trapPending,
+			jit_value_create_nint_constant(driver, jit_type_int, 0));
+		jit_insn_branch_if_not(driver, noTrap, &doneLabel);
 
 		// The state is thread_local; ask the runtime for this host thread's
 		// address instead of embedding the compiling thread's TLS address.
@@ -380,7 +377,14 @@ void ModuleCompiler::callStartFunction(WASM::ModuleInstance& instance, uint32_t 
 
 	using StartFn = void (*)(WASM::VMContext*);
 	StartFn fn = reinterpret_cast<StartFn>(callable->fnPtr);
-	fn(callable->context);
+	// The start function runs at the host boundary: a trap it reports comes back
+	// here as a `WASM::Trap` exception, so `instantiate` unwinds normally and the
+	// partially built instance is destroyed (docs/TRAP_CLEANUP.md §7, TRAP-1).
+	{
+		WASM::CallDepthScope depth;
+		fn(callable->context);
+	}
+	WASM::checkTrap();
 }
 
 }

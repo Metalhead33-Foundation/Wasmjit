@@ -2794,20 +2794,23 @@ void ComponentValidator::processExport(uint32_t index)
 
 	const ComponentDefinitionRef ref{&component_,
 			ComponentDefinitionKind::Export, index};
+	// `addImportOrExport` pushes into a scope space, which may be the very space
+	// `target` points into; keep a copy so a reallocation cannot dangle it.
+	const Entity exportedTarget = *target;
 	addImportOrExport(declaration, scope_, false, ref);
 	if (exportDecl.sortIndex.sort == ComponentSort::Core) {
 		auto& space = scope_.spaces.coreSpace(exportDecl.sortIndex.core->sort);
 		Entity& exported = space.back();
-		exported.coreModule = target->coreModule;
-		exported.coreModuleType = target->coreModuleType;
-		exported.moduleTypeIndex = target->moduleTypeIndex;
-		exported.table = target->table;
-		exported.memory = target->memory;
-		exported.global = target->global;
-		exported.tagTypeIndex = target->tagTypeIndex;
-		exported.coreExports = target->coreExports;
-		exported.coreType = target->coreType
-				? target->coreType : declaration.coreTypeValue;
+		exported.coreModule = exportedTarget.coreModule;
+		exported.coreModuleType = exportedTarget.coreModuleType;
+		exported.moduleTypeIndex = exportedTarget.moduleTypeIndex;
+		exported.table = exportedTarget.table;
+		exported.memory = exportedTarget.memory;
+		exported.global = exportedTarget.global;
+		exported.tagTypeIndex = exportedTarget.tagTypeIndex;
+		exported.coreExports = exportedTarget.coreExports;
+		exported.coreType = exportedTarget.coreType
+				? exportedTarget.coreType : declaration.coreTypeValue;
 		if (exportDecl.sortIndex.core->sort == CoreSort::Type
 				&& exported.coreType)
 			scope_.typeScope.coreTypes.push_back(exported.coreType);
