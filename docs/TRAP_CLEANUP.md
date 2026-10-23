@@ -124,8 +124,8 @@ make the model work:
 - **No unwind table needed.** Nothing non-local happens across a generated
   frame: helpers return, generated functions return, and only the final C++
   boundary throws.
-- **The boundary checks once.** `WASM::checkTrap()` is `noinline` and POD-only;
-  it takes the trap and throws `WASM::Trap` (a copied, fixed-buffer message) when
+- **The boundary checks once.** `WASM::checkTrap()` is `[[gnu::noinline]]`; it
+  takes the trap and throws `WASM::Trap` (a copied, fixed-buffer message) when
   `wasmCallDepth() == 0`, and leaves the slot pending when a host import is
   re-entering Wasm.
 
@@ -205,13 +205,12 @@ the frame's local destructors.
 `reportTrap()` drains the remaining records most-recent-first. The backing store
 is `Elv::Util::DeferStack` (`extern/MhLib/Elvavena/Util/ElvDeferStack.hpp`), a
 fixed-capacity, non-allocating LIFO. It is an escape hatch for state no object
-owns, not a replacement for RAII. The sketch below is the original design, kept
-for the rationale and the identifier names.
+owns, not a replacement for RAII.
 
-The sketch below is the design as originally written; the shipped API
-(`WASM::defer`, `WASM::dismissDeferred`, `TrapDeferToken` in
-`WasmBase/WasmTrap.hpp`) keeps these names but is a free function pair, not a
-method on a scope object. There is no `TrapScope` any more.
+The sketch below is the design as originally written. The shipped API keeps the
+record/thunk vocabulary but is a free function pair, not a method on a scope
+object — there is no `TrapScope` any more — and `defer()` returns a token
+instead of taking a dismiss call by name.
 
 ### 5.1 API sketch
 
@@ -266,7 +265,7 @@ trap path allocation-free.
 
 When `WASM::trap(kind, detail)` is called:
 
-1. set `TrapState::kind`/`message`;
+1. set the slot's `kind`/`message` (`TrapSlot`);
 2. reset the tail-call trampoline state (already done today);
 3. mark cleanup dispatch as in progress so a cleanup thunk cannot recursively
    trap or register another cleanup;
@@ -502,12 +501,12 @@ of which direction is later taken.
 
 | Option | What it buys | Cost / risk | Verdict |
 |---|---|---|---|
-| Keep the current POD-only rule | no new runtime mechanism; the existing contract is honest | host locks/arenas still leak or deadlock on a trap; the start-function leak remains; the string/array helpers are already UB (§7) | status quo, not sufficient |
+| Keep the current POD-only rule | no new runtime mechanism; the existing contract is honest | host locks/arenas still leak or deadlock on a trap; the start-function leak remains; the string/array helpers are already UB (§7) | status quo at the time, not sufficient — **the rule is gone** (TRAP-3) |
 | C++ scope guards / `std::scope_exit` | familiar RAII syntax | destructors are exactly what `longjmp` skips; no improvement | does not solve it |
-| Go-style fixed-capacity cleanup stack (§5) | explicit trap-time release of host locks, arenas and handles; no backend or ABI change | normal-path dismiss discipline; fixed cap; callbacks must be no-throw/non-reentrant; still cannot make non-trivial locals safe | **pragmatic workaround**, keep as fallback |
+| Go-style fixed-capacity cleanup stack (§5) | explicit trap-time release of host locks, arenas and handles; no backend or ABI change | normal-path dismiss discipline; fixed cap; callbacks must be no-throw/non-reentrant; still cannot make non-trivial locals safe | **shipped** as an escape hatch (TRAP-4): `WASM::defer` |
 | Per-import `setjmp` boundary (§8.3) | import-local cleanup of non-trivial locals in the import's own frame | `setjmp` cost on every participating import; re-raise discipline; does not fix engine-internal frames | **narrow workaround**, interchangeable with the defer stack |
-| Confinement (§9) | most frames become unskippable, so native import bodies and `instantiate` may use ordinary C++ | import-ABI change or a backend-generated wrapper per import; a closed audited-helper list; a `callGuarded` per re-entry unless §9.7 is used; the rule must be policed in review | **recommended intermediate step**, M on each backend (§10.2) |
-| Status-return traps (§8.5) | removes the POD-only rule; ordinary RAII everywhere, including engine frames; no non-local exit at all | helper ABI conversion, an error epilogue per function, a check per call/helper site; a per-call-site branch (predict-not-taken) and extra code size | **cure; long-term direction**, gated (§10.5) |
+| Confinement (§9) | most frames become unskippable, so native import bodies and `instantiate` may use ordinary C++ | import-ABI change or a backend-generated wrapper per import; a closed audited-helper list; a `callGuarded` per re-entry unless §9.7 is used; the rule must be policed in review | **was** the recommended intermediate step (§10.2); **not taken** — §8.5 replaced the mechanism instead |
+| Status-return traps (§8.5) | removes the POD-only rule; ordinary RAII everywhere, including engine frames; no non-local exit at all | helper ABI conversion, an error epilogue per function, a check per call/helper site; a per-call-site branch (predict-not-taken) and extra code size | **shipped** as the pending-slot variant (TRAP-3) |
 | C++ exceptions with unwind tables (§8.4) | real C++ unwinding and RAII | no backend emits CFI; needs a documented ABI, a personality routine, `.eh_frame` registration and platform-specific work per backend; harder to debug across generated frames | not recommended |
 | Signals / SEH (§8.6) | catches hardware faults without instrumenting the instruction | Wasm traps here are explicit software checks, not faults; handlers are async-signal-unsafe and cannot run destructors either | rejected |
 | Engine-owned lock/resource registry | can release or poison host and guest locks after an agent dies; supports cancellation | needs per-agent ownership tracking, poisoning semantics, and a policy for partially executed critical sections | separate design item, [`THREADSAFETY.md`](THREADSAFETY.md) §10.1 |
@@ -519,6 +518,10 @@ returns, C++ exceptions) change the model. TRAP-1 is independent of both and is
 required under the current model either way.
 
 ### 8.3 Per-import `setjmp` boundary (narrow workaround)
+
+**Not taken.** The `nativeImport` trampoline (§9.2/TRAP-5) is what shipped:
+a `try` around the body, no `setjmp`, and the same "the import's own frame is
+ordinary C++" property.
 
 Each native import that wants cleanup arms its own `TrapScope` around the call
 back into Wasm, catches the trap locally, releases its own non-trivial locals
@@ -548,6 +551,9 @@ it (§12, TRAP-5). §9.7 describes a variant that keeps the import body's frame
 alive without a per-import `setjmp`.
 
 ### 8.4 C++ exceptions with unwind tables
+
+**Rejected** on every available backend (§10.1: no backend emits CFI, and
+LibJIT offers no hook to attach it).
 
 Traps become a C++ `throw` of a dedicated exception type, and every generated
 frame carries valid unwind information so the platform unwinder can step through
@@ -579,6 +585,11 @@ only on a backend where the CFI work is tractable (§10.2). It is not a candidat
 for fixing the trap path on its own.
 
 ### 8.5 Status-return traps (the cure)
+
+**Taken — but in the second shape.** TRAP-3 shipped the pending-slot variant
+(the one the engine already used for Wasm exceptions); the first variant below
+(status in the return value) was rejected on cost, because it changes every
+signature including imports and the tail-call trampoline.
 
 Every call into a helper or into generated code reports a trap through a status,
 and the code that made the call branches to a shared error epilogue instead of
@@ -969,6 +980,14 @@ header and README, the AsmJit API reference and issue tracker, and the code in
 `LibJit/`. `Asmjit/Asmjit.pro` and `Sljit/Sljit.pro` contain no sources, so
 "SLJIT/AsmJit cost" means greenfield work, not porting.
 
+> **Status:** this is the *pre-change* study (revision 2) that chose the model.
+> §10.1–§10.4 describe the tree **as it was before TRAP-3** — `setjmp`/`longjmp`,
+> `TrapScope`, the POD-only rule, process-global trap state — and are kept as the
+> record of why the choice was made; §10.5 is the resulting order, with its
+> per-step outcome. Two names below are the pre-change ones: `TrapState` shipped
+> as `TrapSlot`, and `emitAbort` does not exist (the second emitter helper is
+> `emitTrapIfNull`); §12 has the shipped inventory.
+
 ### 10.1 What each engine actually offers
 
 | Capability | GNU LibJIT (installed, primary) | SLJIT (scaffold) | AsmJit (scaffold) |
@@ -1022,10 +1041,10 @@ The qualitative comparison that usually drives the argument:
 
 | Approach | C++ destruction / RAII | Happy-path overhead | Backend complexity | Embedder ergonomics |
 |---|---|---|---|---|
-| `setjmp`/`longjmp` (today) | **broken** (UB for non-POD) | zero | low | poor: manual `defer` or nested scopes |
+| `setjmp`/`longjmp` (the pre-TRAP-3 model) | **broken** (UB for non-POD) | zero | low | poor: manual `defer` or nested scopes |
 | Defer stack | none in skipped frames; external state released | zero | none | moderate: register/dismiss discipline |
 | Confinement | full, outside the audited set | zero | low–medium: import thunk or call-site check | good: ordinary C++ in import bodies |
-| Pending-trap status | **full**, everywhere | one predict-not-taken branch per call/helper site | medium: epilogue + check, reusing existing machinery | good: `TrapScope` unchanged under §9.7 |
+| Pending-trap status | **full**, everywhere | one predict-not-taken branch per call/helper site | medium: epilogue + check, reusing existing machinery | good: the boundary throws `WASM::Trap` (§9.7, as shipped) |
 | Status in the return value | **full**, everywhere | call-site branch + wider returns | high: ABI, tail calls, multi-value, imports | good, but every import signature changes |
 | C++ exceptions | **full**, everywhere | zero on the happy path | very high: CFI, personality, registration, per platform | good, where it works at all |
 
@@ -1037,28 +1056,30 @@ Wasm exceptions. Concretely, in `LibJit/` and `WasmBase/`:
 
 | Fact | Where | Why it matters |
 |---|---|---|
-| A pending-failure slot that crosses module and function boundaries | `wasm_exn_slot()` (`WasmExn.cpp`) | the trap status can reuse the pattern and the TLS discipline |
+| A pending-failure slot that crosses module and function boundaries | `wasm_exn_slot()` (`WasmExn.cpp`) | the trap status reused the pattern and the TLS discipline |
 | Generated functions return zeroes when a failure is pending | `emitReturnZeroes()` | a trap epilogue already exists in concept: "return the zero of each result type" |
 | Every call site already checks a pending slot | `emitPendingExceptionCheck()` after `call`, imported `call`, internal `call`, `call_indirect` | adding a trap check is one more comparison at the same four emission points, plus the helper calls |
-| All generated-code traps funnel through two emitter helpers | `emitTrap()` / `emitAbort()` (`LibjitOpcodeDispatcher.cpp`) | the *failure target* changes; the 21 inline checks that call them do not |
+| All generated-code traps funnel through two emitter helpers | `emitTrap()` / `emitTrapIfNull()` (`LibjitOpcodeDispatcher.cpp`) | the *failure target* changed; the 21 inline checks that call them did not |
 | The Wasm operand stack lives in frame locals, not on a machine stack | `newV128Slot`, `pushValue`/`popValue`, `ControlBlock` slots | the error epilogue has nothing to unwind — no stack-depth bookkeeping, no `alloca` discipline |
 | A per-function entry trampoline already exists | the tail-call driver in `LibjitModuleCompiler.cpp` | the §9.7 boundary is a place the engine already generates |
 | ~49 native-helper call sites (`jit_insn_call_native`), ~21 inline `emitTrap` sites | `LibjitOpcodeDispatcher.cpp` | the size of the mechanical conversion, and it is mechanical |
 | ~55 `trap()` calls inside helper frames | `LibjitOpcodeDispatcher.cpp` | each is a candidate for "report + return"; the count is bounded and known |
-| Helpers holding non-POD locals at a trap point | the stringref/array helpers (§7) | the POD-only rule is *already* violated; part of the work is required whatever is decided |
-| Ten embedder/harness `setjmp` sites | `Test/main.cpp`, `Test/WastScript.cpp`, `Test/TestBackend.cpp` | the blast radius of changing the embedder contract — and the reason §9.7 keeps `TrapScope` |
-| Two failure mechanisms already coexist | `longjmp` for traps, pending slot + return for Wasm exceptions | the duplication Wasmtime cited as a reason to move is already here |
+| Helpers holding non-POD locals at a trap point | the stringref/array helpers (§7) | the POD-only rule was *already* violated; part of the work was required whatever was decided |
+| Ten embedder/harness `setjmp` sites **at the time** | `Test/main.cpp`, `Test/WastScript.cpp`, `Test/TestBackend.cpp` | the blast radius of changing the embedder contract — and the reason §9.7 proposed keeping a boundary bridge. They are **zero** today: the boundary throws `WASM::Trap` |
+| Two failure mechanisms coexisted in the tree | `longjmp` for traps, pending slot + return for Wasm exceptions | the duplication Wasmtime cited as a reason to move was already here — and is gone: TRAP-3 deleted the `longjmp` half |
 
-The last row deserves emphasis. The engine implements the Wasm exception
-proposal with a *status* model (`throw` becomes a pending payload plus a normal
-return) while traps use `longjmp`. Every argument in §8.7 about dual unwinding
-mechanisms therefore applies to this tree today, not hypothetically.
+The last row is why the change was small rather than speculative: the engine
+already implemented the Wasm exception proposal with a *status* model (`throw`
+becomes a pending payload plus a normal return) while traps used `longjmp`, so
+every argument in §8.7 about dual unwinding mechanisms applied to this tree at
+the time, not hypothetically. TRAP-3 unified them on the status model.
 
-### 10.4 The refactoring each option needs
+### 10.4 The refactoring each option needed
 
 **Defer stack (§5).** `WasmBase/WasmTrap.hpp/.cpp` only: the fixed-capacity
-record array and its top in `TrapState`, `TrapScope` saving depth before
-`setjmp`, `defer`/`dismiss`, the drain loop and the re-entrancy guard, plus debug
+record array and its top in the trap state, `TrapScope` saving depth before
+`setjmp` (both now gone), `defer`/`dismiss` (shipped as `WASM::defer` /
+`WASM::dismissDeferred`), the drain loop and the re-entrancy guard, plus debug
 assertions. No backend file changes, no ABI change, no test-harness change. It
 fixes neither §7 nor the string/array helpers.
 
@@ -1088,14 +1109,16 @@ pending exception — and branches to its epilogue. The import body keeps its
 existing signature, so no ABI change and no wrapper generator. What remains is
 the state machine: pending trap slot, call-site checks, boundary bridge.
 
-**Pending-trap status (§8.5, the §9.7 shape).** The concrete work list:
+**Pending-trap status (§8.5, the §9.7 shape).** The concrete work list. This is
+the list TRAP-3 executed, so it reads as the plan it was; the two deviations are
+noted in the rows they touch:
 
 | File | Change |
 |---|---|
-| `WasmBase/WasmTrap.hpp/.cpp` | add a pending trap to `TrapState`; add `reportTrap(kind, detail)` (returns) and `trapPending()`/`clearTrapPending()`; keep `trap()` `[[noreturn]]` only for the boundary/abort path, implemented as `reportTrap()` + the bridge jump; `TrapScope` keeps `buffer`/`kind()`/`message()` |
+| `WasmBase/WasmTrap.hpp/.cpp` | add a pending trap to the slot (shipped as `TrapSlot`); add `reportTrap(kind, detail)` (returns) and `trapPending()`/`clearTrapPending()`; keep `trap()` `[[noreturn]]` only for the boundary path, implemented as `reportTrap()` + the throw. **Deviation:** `TrapScope` was deleted rather than kept — the boundary throws `WASM::Trap` |
 | `WasmBase/WasmModuleInstance.cpp` | convert the ~25 `trap(...)` sites in `memoryInit`/`tableInit`/`bufferInitFrom*`/GC allocation to report-and-return (each function gains a status); the start-function call returns a status so `instantiate` can `instance.reset()` |
 | `WasmBase/WasmString.cpp`, `WasmExn.cpp`, `wasm_atomic.cpp` | same conversion for the remaining helper trap sites |
-| `LibJit/LibjitOpcodeDispatcher.cpp` | `emitTrap`/`emitAbort` become "record the trap, branch to this function's error epilogue"; add `emitPendingTrapCheck()` after helper calls and at the four existing `emitPendingExceptionCheck()` sites; drop `JIT_CALL_NORETURN` from `wasm_trap_raise` except on the boundary path; make exception propagation trap-first so `try_table` never catches a trap |
+| `LibJit/LibjitOpcodeDispatcher.cpp` | `emitTrap`/`emitTrapIfNull` become "record the trap, branch to this function's error epilogue"; add `emitPendingTrapCheck()` after helper calls and at the four existing `emitPendingExceptionCheck()` sites; drop the non-returning raise helper (`JIT_CALL_NORETURN`); make exception propagation trap-first so `try_table` never catches a trap. **All four shipped.** |
 | `LibJit/LibjitModuleCompiler.cpp` | the driver checks the pending slot after the callee returns and returns immediately; the start function is called through the status-returning path |
 | `Test/` | unchanged if `TrapScope` keeps its `setjmp` (boundary rethrow); otherwise ~10 sites move to a status check |
 | `docs/SAFETY.md` §2.6, `docs/THREADSAFETY.md` §10.1, `docs/ABI.md` | record the new rule once the model is chosen; until then §2.6 stays in force |
@@ -1280,7 +1303,7 @@ process or hides the state behind a global:
 The migration sketch, to be executed **in the same change that introduces the
 agent execution model**:
 
-1. an agent object owns a `TrapState` (slot + deferred-cleanup stack + the two
+1. an agent object owns a `TrapSlot` (slot + deferred-cleanup stack + the two
    counters) instead of the `thread_local` instances;
 2. `wasm_trap_slot()` returns the *current agent's* slot — the generated-code
    ABI and every call site stay as they are;
@@ -1330,15 +1353,14 @@ host-side; only the last three need codegen-level assertions.
 | `WASM::trap` inside a wrapped native import keeps its kind` (shipped) | the wrapper catches `WASM::Trap` and re-reports kind + message instead of unwinding generated code |
 | `a wrapped native import still receives the caller’s VMContext` (shipped) | the wrapped form is byte-for-byte the raw import ABI (`ctx->hostData` still reaches the body) |
 
-The current suite has one trapping start case (`start.wast`) in
-`assert_uninstantiable`; it should be extended with an adapter-level cleanup
-assertion, not merely a "the trap happened" check. Of the tests above, the
-non-trivial-local case fails today (the destructor is skipped), the
-start-function cleanup cases fail today (the instance is orphaned), and the
-trap-inside-`try_table` case passes today but is exactly the property TRAP-3 can
-break — a trap that starts travelling through the pending slot must not be
-routed into `emitExceptionPropagation`. Together they turn the reasoning above
-into a regression suite.
+The shipped rows are the ones named in the table. What is still *plan* rather
+than coverage: a dedicated case for a trap inside a `try_table` region (the
+trap-first property — today it is asserted only indirectly by the `traps` and
+`throw` scripts), one for a trap inside a tail-called chain, and one that proves a
+call-site check exists for a trapping import. The `callGuarded` rows are obsolete
+by construction: `TrapScope` and `callGuarded` were removed with TRAP-3, so
+"the inner scope catches" is now "the boundary throws `WASM::Trap` at the
+outermost `callCallable`".
 
 ## 14. Open questions
 
@@ -1348,57 +1370,70 @@ question that still gates work is guest-side cleanup (no Wasm `finally` on a
 trap). The per-agent question is **TRAP-6, deferred by decision** with the
 multi-agent execution model (§12.1), not tracked here as pending work.
 
-**For the defer stack (TRAP-4).**
+**For the defer stack (TRAP-4) — shipped.**
 
-- **Fixed capacity.** What is the cap, and what happens on overflow? A trap that
-  cannot run its cleanup is worse than a normal-path allocation failure.
-- **Cleanup failure.** If a thunk must not throw/trap, should a failure be
-  `std::abort`, a recorded secondary error, or a poisoned instance? There is no
-  safe general recovery path.
-- **Reentrancy.** Can a cleanup callback release a host lock that another host
-  thread needs in order to make progress, and can that deadlock trap handling?
-  The adapter must define its lock ordering.
-- **Host callbacks in cleanup.** If a host-language runtime's release hook can
-  itself fail, the adapter must decide before registering it.
-- **Normal-path ergonomics.** Largely moot under confinement or the status model
-  (§9.9); still relevant if the defer stack ships first.
+- **Fixed capacity — settled:** 32 records, thread-local (`kDeferCapacity` in
+  `WasmTrap.cpp`). `defer()` returns an invalid token instead of allocating when
+  the stack is full, and `dismissDeferred()` rejects an invalid token, so
+  overflow is observable exactly where the caller can still react to it.
+- **Cleanup failure — settled by signature:** the thunk type is
+  `void (*)(void*) noexcept`, so a throwing thunk terminates rather than
+  unwinding during a trap. There is deliberately no secondary-error channel: the
+  contract is that a cleanup thunk must not fail.
+- **Reentrancy — partly settled, partly open.** A thunk that traps *during the
+  drain* is ignored rather than re-entered: `reportTrap()` returns early once a
+  trap is pending, so the original reason survives and the drain cannot recurse.
+  A thunk that calls back into Wasm is **not** prevented — the depth counters see
+  an ordinary nested call — so the adapter's lock ordering and reentrancy rules
+  are still its own responsibility.
+- **Host callbacks in cleanup — open, and the embedder's decision:** if a
+  host-language runtime's release hook can itself fail, the adapter must decide
+  before registering it.
+- **Normal-path ergonomics — answered in practice:** `defer` +
+  `dismissDeferred` is at most two calls, and RAII remains the default; the stack
+  exists for state no object owns.
 
-**For confinement and the import contract (TRAP-5).**
+**For the import contract (TRAP-5) — shipped as `nativeImport`.**
 
-- **Message buffer size.** Is 96 bytes enough for the existing `trap()` detail
-  strings, and should truncation be observable to the embedder?
-- **Exception policy.** Convert an escaping body exception to a trap, or abort?
-- **Thunk generation.** A backend-generated wrapper per import, or a value-array
-  import ABI? The first keeps `Callable` as it is but puts codegen in the
-  instantiation path; the second changes [`ABI.md`](ABI.md) and every import.
-- **Embedder entry point.** Should the embedder-facing call also become a
-  guarded call, leaving a raw `TrapScope` as the low-level primitive only?
+- **Message buffer size — settled:** `kTrapMessageCapacity` is 192 bytes, and
+  truncation is silent. The message is free text; the comparison the harness
+  makes is against the *kind* ([`SAFETY.md`](SAFETY.md) §2.4).
+- **Exception policy — settled:** `WASM::Trap` keeps its kind and message,
+  `std::bad_alloc` becomes `OutOfMemory`, any other `std::exception` becomes
+  `Internal` with `what()`, and anything else becomes `Internal` with a fixed
+  message ([`ABI.md`](ABI.md)).
+- **Thunk generation — settled differently:** neither a backend-generated
+  wrapper per import nor a value-array import ABI. `nativeImport<&fn>()`
+  instantiates a template trampoline at compile time, so the import keeps its
+  Wasm signature and nothing is generated at instantiation time. The cost is
+  documented: a *capturing* callable cannot be wrapped — use
+  `VMContext::hostData`.
+- **Embedder entry point — settled:** there is no armed scope left to expose.
+  `CallDepthScope` marks "inside generated code" and `NativeImportScope` marks
+  "inside an import body"; `WASM::trap()` is legal only outside both, and
+  `checkTrap()` decides at the boundary.
 
-**For the pending-trap status (TRAP-3).**
+**For the pending-trap status (TRAP-3) — shipped.**
 
-- **Boundary-rethrow exactness.** How does the bridge know it is at the embedder
-  boundary rather than inside an import body? A counter, a flag, or a different
-  entry function — and what happens if a host adapter calls generated code
-  without telling the engine?
-- **Trap vs. exception precedence.** A trap must win over a pending Wasm
-  exception and must never be catchable by `try_table`. Confirm that no
-  combination (`throw` inside a trapping helper, `throw_ref` of a payload whose
-  destructor traps) routes the two through the same slot.
-- **Tail-call trampoline state.** `trap()` resets the pending target today. Under
-  the status model the reset has to happen where the trap is *reported*, not
-  where it is *observed*, or a driver may re-dispatch after a trap.
-- **Value-returning helpers.** Which audited helpers can return a status
-  cheaply, and which would need generated-code changes to branch on one? The
-  count in §10.3 is a first estimate; the per-helper shape is not.
-- **Cost.** One TLS read plus a compare per helper call. Measure before assuming
-  it is negligible; the branch is predictable but the load is not free.
-- **Zero results.** A trapping function whose result is a reference returns a
-  null reference; confirm that no consumer (GC barriers, `externref`
-  round-trips, multi-value buffers) treats the zero as a live value.
-- **`TrapScope` lifetime.** If `TrapScope` keeps `setjmp` for compatibility, does
-  it stay correct when a trap is reported on a different thread than the one
-  that armed it? Today the state is thread-local and the contract is one thread
-  per instance ([`SAFETY.md`](SAFETY.md) §2.7).
+- **Boundary-rethrow exactness — settled with two counters, not a flag:**
+  `wasmCallDepth() != 0` means a generated frame is live, so `WASM::trap()`
+  aborts with a diagnostic rather than unwinding it; at the boundary the counters
+  are zero and it throws `WASM::Trap`. A host adapter that calls generated code
+  without going through the engine is still the one way to get this wrong.
+- **Trap vs. exception precedence — settled:** a trap wins and is never routed
+  into `emitExceptionPropagation`, so `try_table` cannot catch one; the call-site
+  check runs before the exception check.
+- **Tail-call trampoline state — settled:** `reportTrap()` resets it where the
+  trap is *reported*, so no driver can re-dispatch a target after a trap.
+- **Value-returning helpers — settled per helper:** each audited helper returns a
+  benign value and its generated caller branches on the slot; §12 has the
+  inventory of what shipped.
+- **Cost — measured informally, never benchmarked:** one TLS load plus a
+  predictable branch per call/helper site. No test asserts a bound; a benchmark
+  belongs with SIMD's T4 layer, not here.
+- **Zero results — settled:** a trapping function returns the zero of each
+  result type and every consumer tests the pending slot before using a value, so a
+  null reference is never mistaken for a live one.
 
 **Cross-cutting.**
 
@@ -1422,8 +1457,9 @@ multi-agent execution model (§12.1), not tracked here as pending work.
 In-repo:
 
 - [`SAFETY.md`](SAFETY.md) §2.4–§2.6 — traps vs aborts, RAII for locks, and the
-  POD-only trap path this note starts from; §2.7 for the thread-local execution
-  model; §2.8 for `CallStackExhausted` and the checked stack limit.
+  report-and-return contract a generated-code helper must honour; §2.7 for the
+  thread-local execution model; §2.8 for `CallStackExhausted` and the checked
+  stack limit.
 - [`THREADSAFETY.md`](THREADSAFETY.md) §5.6 and §10.1 — host mutex/RAII caveats,
   trap/lock ownership, and the open multi-agent questions.
 - [`ABI.md`](ABI.md) — the trap contract at the boundary (`WASM::Trap`), the
@@ -1438,10 +1474,10 @@ In-repo:
 - `WasmBase/WasmModuleInstance.cpp` — `ModuleInstantiator::instantiate`, the
   start-function path, and the `memoryInit`/`tableInit`/segment helpers.
 - `WasmBase/WasmExn.hpp` / `WasmBase/WasmExn.cpp` — the pending-exception slot
-  and the status shape a trap status would mirror.
+  (`wasm_exn_slot()`), the shape the trap slot mirrors.
 - `WasmBase/WasmString.cpp`, `WasmBase/wasm_atomic.cpp` — engine helper trap
   sites outside the backend.
-- `LibJit/LibjitOpcodeDispatcher.cpp` — `emitTrap`/`emitAbort`,
+- `LibJit/LibjitOpcodeDispatcher.cpp` — `emitTrap`/`emitTrapIfNull`,
   `emitPendingExceptionCheck`, `emitReturnZeroes`, `callNativeHelper`, the
   inline bounds/null checks, and the stringref/array helpers of §7.
 - `LibJit/LibjitModuleCompiler.cpp` — the per-function driver and

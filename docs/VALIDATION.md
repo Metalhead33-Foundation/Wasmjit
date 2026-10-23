@@ -48,8 +48,9 @@ cost is coverage, measured below, not correctness.
 | `assert_uninstantiable` | 27 | **27** (26 rejected + 1 start trap) | 0 |
 | **total** | **2382** | **2382** | **0** |
 
-The default suite is **8477 assertions / 283 test cases, all green** (61 core
-scripts were re-curated after the validator landed, plus `start.wast`). The
+The default suite is **9353 assertions / 366 test cases, all green** (the
+curated list holds 193 of the 257 scripts, 61 of them re-curated when the
+validator landed, plus `start.wast`). The
 strict run is **fully green** as well: every one of the 2,382 binary negative
 commands is handled, including all 17 `assert_malformed` cases and the strict
 LEB128 width/overflow cases. All 27 `assert_uninstantiable` cases pass: one

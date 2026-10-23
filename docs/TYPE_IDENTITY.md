@@ -370,6 +370,12 @@ No tolerance mode is planned.
 Order: M0 -> M1 -> M2 -> M3, then M4 -> M5 -> M6, with M7 in parallel after M3.
 Each milestone leaves the engine working.
 
+**Status: M0–M7 shipped; M8 is the only outstanding milestone.** What each one
+left behind is recorded in §10 rather than in this list, which stays as written so
+the order and the "done when" clauses remain readable. M8 is a *measurement*
+(dedup ratio and registry footprint, plus the §12 `Subtype` decision), not
+unfinished behaviour.
+
 **M0 — Invariants and strong types.**
 - Introduce `LocalTypeIdx`, `TypeId`, `RecGroupId` as distinct types and
   `Module::typeId(LocalTypeIdx)`.

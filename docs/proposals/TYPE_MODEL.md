@@ -1209,10 +1209,13 @@ writing; re-measure rather than trusting them after the first stage.
 
 ### 8.3 What is not implemented or tested yet
 
-No Canonical ABI execution, component instantiation, handle table or WIT
-ingestion is part of this type-model pass. The metadata and runtime contracts are
-planned in §7.10.4/§7.10.5; the actual thunks remain CM-4…CM-7 in
-[`COMPONENT_MODEL.md`](COMPONENT_MODEL.md) §7.
+This section is about the *type-model* pass, and its remaining item is WIT
+ingestion: WIT text is not parsed, so a component has to be compiled to its binary
+form before this engine sees it. Everything else it names as out of scope has
+since shipped elsewhere — Canonical ABI execution, component instantiation and
+the handle table are CM-4/CM-5/CM-6, all complete
+([`COMPONENT_MODEL.md`](COMPONENT_MODEL.md) §7); the metadata and runtime
+contracts here are what those thunks were built on.
 
 
 ### 8.4 Completion gates for TM-6…TM-11

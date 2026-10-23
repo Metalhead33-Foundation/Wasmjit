@@ -1,20 +1,23 @@
 # WasmJit
 
-`WasmJit` is an experimental WebAssembly runtime/JIT project written in C++.
+`WasmJit` is an experimental WebAssembly runtime/JIT written in C++.
 
-The long-term goal is to turn this into a reusable shared library with pluggable code generation backends. At the moment, the project is still in an early prototyping phase, and the checked-in executable entry point is primarily a local testing harness.
+The library split is in place: `WasmBase/` is the backend-agnostic core
+(`libWasmBase`), every code generator is its own library (`LibJit/` is the one
+that executes; `Asmjit/` and `Sljit/` build against the core but contain no
+code generator yet), and `Test/` is a Catch2 harness over the libraries rather
+than the product. The `build/<config>/Test/WasmJit` executable is still a
+development sandbox, not the embeddable API. See
+[`docs/LAYERING.md`](docs/LAYERING.md) for the rule that keeps the core
+backend-agnostic.
 
-## Current Direction / Short-term TODOs:
+## Direction
 
-- Focus on GNU LibJIT first.
-
-## Long-term TODOs:
-
-- Build a reusable WebAssembly runtime/JIT library rather than a standalone app.
-- Support multiple backend implementations over time.
-- Add support for additional backends later, including SlJIT and AsmJit.
-- Convert from QMake to CMake in the long run
-- Modularize the project (one library for the base stuff, one library for each backend, one library/executable for unit tests, etc.)
+- **GNU LibJIT is the only executing backend**, and stays the implementation
+  path until a second code generator can run a module.
+- **Still open** (tracked, not started): a second and third backend
+  (`Asmjit/`, `Sljit/` are scaffolds), a published embedding API with
+  packaging/installation, and the long-term qmake → CMake move.
 
 ## Documentation
 
@@ -159,12 +162,14 @@ through qmake:
 
 ## Backends
 
-Planned backend strategy:
+| Backend | State |
+|---|---|
+| GNU LibJIT (`LibJit/`) | **The only executing backend** — loads, validates, compiles and runs modules, including SIMD via the shared helper layer |
+| SlJIT (`Sljit/`) | Scaffold: builds against the core, emits nothing |
+| AsmJit (`Asmjit/`) | Scaffold: builds against the core, emits nothing |
 
-- GNU LibJIT: primary implementation target for now
-- SlJIT: intended future backend
-- AsmJit: intended future backend
-- potentially more backends later if the abstraction layer proves useful
+A fourth backend stays an option only if the abstraction proves useful; the
+contract one must satisfy is in [`docs/LAYERING.md`](docs/LAYERING.md) §4.
 
 ## Build Notes
 

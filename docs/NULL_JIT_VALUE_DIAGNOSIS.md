@@ -91,9 +91,11 @@ mismatch.
 
 ## 6. Why it stayed hidden
 
-- The engine has **no validating front-end** (`docs/proposals/GC.md` D6): it
-  compiles every function it decodes, including ones whose types it cannot
-  represent.
+- At the time the engine had **no validating front-end** (`docs/proposals/GC.md`
+  D6, since superseded): it compiled every function it decoded, including ones
+  whose types it could not represent. `Module::validate()` now rejects such a
+  module at load ([`VALIDATION.md`](VALIDATION.md)), which is why the fix below
+  is a load-time rejection.
 - Nothing *observed* the value. A null `jit_value_t` was pushed, popped and
   stored as an opaque handle, so the engine produced a broken function silently
   instead of failing. The ownership work is the first consumer that inspects
@@ -119,24 +121,26 @@ produced anywhere an unmodelled type is lowered to a value:
   to a Store-owned `StringObject`, not to an absent value, so they no longer
   exercise this path.
 
-## 8. Candidate fixes (evaluated, not implemented)
+## 8. Candidate fixes (evaluated; **D** is the one that shipped — §11)
 
 | # | Fix | Cost | Trade-off |
 |---|---|---|---|
 | A | Treat `v == nullptr` as "not a reference" in `isRefJitValue` / `pushValue` / `emitDropValue` / `emitDropRefLocals`. | one guard, a few lines | Unblocks the ownership work immediately, but the engine still emits a silent null operand for an unmodelled type. |
 | B | At each lowering site, if the type is `jit_type_void` where a value is expected, call the existing `notImplemented("...")` instead of emitting. | a handful of sites | Turns silent garbage into a clear compile-time error; needs an audit of the sites. |
 | C | Change `translatePrimitiveType`'s `default` to `jit_type_void_ptr` (opaque word), as it already does for unknown *heap* types. | one line | Broadest/smallest diff and loads then yield a real value, but the engine would "run" unmodelled types generally, which is only correct for shapes like `ref.null exn`. |
-| D | Reject unmodelled value types at decode/instantiate (a validating front end). | large | The right long-term answer, and what the suite's `assert_invalid` cases expect; out of scope today (D6). |
+| D | Reject unmodelled value types at decode/instantiate (a validating front end). | large | The right long-term answer, and what the suite's `assert_invalid` cases expect. **Implemented** (`isModeledValueTypeCode` + `Module::fromFile`); §11. |
 
-Suggested order: **A** (unblock RC-5 now) + **B** (clear diagnostic), with **C**
-or **D** as the principled follow-up. Whichever is chosen must re-run
-`ref_null.wast` and the rest of the reference/GC scripts.
+Suggested order at the time: **A** (unblock RC-5 now) + **B** (a clear
+diagnostic), with **C** or **D** as the principled follow-up. What actually
+happened was **D** directly. Whichever is chosen has to re-run `ref_null` and the
+rest of the reference/GC scripts; §11 records that run.
 
 ## 9. Reproduction recipe
 
 ```bash
-# 1. enable the operand-stack ownership layer
-sed -i 's/kStackOwnsRefs = false/kStackOwnsRefs = true/' LibJit/LibjitOpcodeDispatcher.cpp
+# 1. the operand-stack ownership layer is `kStackOwnsRefs = true` now; to
+# reproduce the original crash, flip it to false first
+sed -i 's/kStackOwnsRefs = true/kStackOwnsRefs = false/' LibJit/LibjitOpcodeDispatcher.cpp
 /usr/bin/env MAKE=/usr/bin/make /usr/bin/make -C build/Desktop-Debug -j16
 
 # 2. follow the forked spec child and get the crash site
@@ -159,13 +163,15 @@ if (loaded == nullptr)
 
 - [`proposals/GC.md`](proposals/GC.md) RC-1/RC-1b — the ownership model and the
   `kStackOwnsRefs` flag this note explains.
-- `WasmBase/WasmType.hpp` — `ValueTypeCode` (no `exnref` / `nullexnref`).
+- `WasmBase/WasmType.hpp` — `ValueTypeCode` as it was during the diagnosis
+  (`exnref`/`nullexnref` are modelled now; see the follow-up above).
 - `LibJit/LibJitTypeTranslation.cpp` — `translatePrimitiveType` `default:
   return jit_type_void;`.
 - `LibJit/LibjitOpcodeDispatcher.cpp` — `pushValue`, `isRefJitValue`,
   `dispatchGlobalGet`.
-- [`SAFETY.md`](SAFETY.md) §2.4 (traps, not aborts) and the no-validator stance
-  in `proposals/GC.md` D6.
+- [`SAFETY.md`](SAFETY.md) §2.4 (traps, not aborts), and
+  [`VALIDATION.md`](VALIDATION.md) for the validating front end that later
+  replaced `proposals/GC.md`'s D6 stance.
 - LibJIT: `jit_insn_load_relative` with a `void` type returns null.
 
 ## 11. Resolution — fix D implemented
@@ -197,14 +203,15 @@ prints the signed-LEB wire byte, so the same code reads `0x69` rather than
 `unsupported value type 0x68 (…)`; `stringref` itself is modelled now and
 produces a real host handle — see `STRINGREF.md` STR-1/STR-3.)
 
-Because the spec suite treats a refused module as a failed command, `ref_null` is
-no longer in `Test/wast_supported.txt` (documented inline there). It can still be
-run on demand (`./WasmJit 'spec: ref_null'`) and fails *visibly*.
+At that point `ref_null` had to be dropped from `Test/wast_supported.txt`,
+because the spec suite treats a refused module as a failed command. It is back in
+the list now (see the follow-up below), and the inline note at the top of
+`wast_supported.txt` records why it was once excluded.
 
 With the null source removed, the operand-stack ownership layer
-(`kStackOwnsRefs`) is now **enabled** and the full suite is green
-(1446 assertions / 78 test cases), with every GC/array/table spec script at its
-baseline.
+(`kStackOwnsRefs`) was **enabled** and the suite was green at that point (1446
+assertions / 78 test cases; it has grown a lot since), with every GC/array/table
+spec script at its baseline.
 
 ## Follow-up: the rejection is no longer triggered by `exnref` (EX-1)
 

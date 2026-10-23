@@ -461,14 +461,19 @@ Notable emission details:
 - `emitRefTypeTest` lowers every `ref.test`/`ref.cast`/`br_on_cast` type check
   to a call to the native helper `wasm_ref_matches_heap_type_impl`, i.e. the
   test always goes through `refMatchesHeapType`.
-- `ref.cast` traps by branching to `emitAbort` (`std::abort()`), and
-  `struct.get` / `array.*` use `jit_insn_check_null`, which faults on null.
+- `ref.cast` traps by branching to the function's error epilogue
+  (`emitTrap`/`emitTrapIfNull`), and `struct.get` / `array.*` null checks go
+  through the same path — no `std::abort()` and no native fault.
 - `i31` helpers (`wasm_i31_new_impl`, `wasm_i31_get_s/u_impl`) implement the
   tagged-word representation; `ref.i31` masks to 31 bits by construction.
-- `any.convert_extern` / `extern.convert_any` are representation-preserving
-  no-ops (the value is pushed straight back).
-- `dispatchBrOnCast` / `dispatchBrOnCastFail` read the `castop` flags byte but
-  ignore it, and test only against `ht2`.
+- `extern.convert_any` / `any.convert_extern` box and unbox on the GC heap
+  (`externBox`/`externUnbox`, reserved type id `GcHeader::kExternBoxTypeId`):
+  an internal i31/struct/array reference crossing to the extern hierarchy is
+  wrapped so `ref.test extern` can tell the two apart, while an opaque host
+  pointer passes through unchanged (G3/D5, GC-8/RT-1).
+- `dispatchBrOnCast` / `dispatchBrOnCastFail` read the `castop` flags byte; the
+  target-nullability bit is honoured (it decides the test and the type the branch
+  carries) and the type test goes through `ht2`.
 - `dispatchReturnCallRef` is `dispatchCallRef` + `dispatchReturn` (correct
   results, no tail-call optimisation).
 
@@ -615,8 +620,9 @@ arithmetic:
 **Guardrails / caveats.**
 
 - Element **alignment** is the one thing that changes shape: `dataOffset` must
-  respect the element's alignment (`i64`/`f64` → 8, `v128` → 4 as lowered
-  today), so it is a per-type constant, not the fixed `8`.
+  respect the element's alignment (`i64`/`f64` → 8, `v128` → 16, matching the
+  backend's 16-byte `v128` type), so it is a per-type constant, not the fixed
+  `8`.
 - The runtime and JIT offset/stride constants must not drift (H1). Add a test
   that asserts the JIT's computed offsets equal the runtime helpers'.
 - `array.copy` between arrays of **different element sizes** currently emits a
@@ -631,9 +637,8 @@ what made most of §8 move:
 
 - **A trap sink.** `WasmBase/WasmTrap.hpp` implements `WASM::trap` as a pending
   status that unwinds by returning and becomes `WASM::Trap` at the host
-  boundary. The JIT's `emitAbort` (used by
-  `ref.cast`, `unreachable`, bounds checks) and every `jit_insn_check_null`
-  (now `emitTrapIfNull`) route through it, as do the native helpers. The harness
+  boundary. The JIT's `emitTrap`/`emitTrapIfNull` (used by `ref.cast`,
+  `unreachable`, bounds checks) route through it, as do the native helpers. The harness
   executes `assert_trap`; a *missing* trap is now a real failure
   (`docs/TESTING.md`).
 - **Segment materialisation.** Expression-form element segments are evaluated
@@ -665,7 +670,7 @@ effort.
 | # | Gap | Evidence |
 |---|---|---|
 | ~~C1~~ | **Done:** `array_init_elem` → **33/0/3** and `array_init_data` → **44/0/2** — the dropped-segment/bounds aborts now trap, and the data-offset bug behind the last 3 mismatches is fixed (`src` is a *byte* offset, not an element index). | `spec: array_init_data`, `spec: array_init_elem` |
-| ~~C2~~ | **Done:** `ref_cast` **33/11/1**, `ref_func` **14/0/3** — the fatal path was an invalid reference reaching `jit_insn_check_null`, which is now the trap sink. | SpecSuite child report |
+| ~~C2~~ | **Done:** `ref_cast` **33/11/1**, `ref_func` **14/0/3** — the fatal path was an invalid reference reaching the old null check (`jit_insn_check_null`), which now routes through `emitTrapIfNull`, i.e. the trap sink. | SpecSuite child report |
 | ~~C3~~ | **Done:** `call_ref` **31/0/4** (was SIGSEGV) — the null-callable check now traps instead of dereferencing. | `spec: call_ref` |
 | ~~C4~~ | **Done:** `return_call_ref` **40/0/13** (tail-call trampoline + trap sink). | `spec: return_call_ref` |
 | ~~C5~~ | **Done:** `type-equivalence` **30/1/1** (was an abort); one real mismatch remains. | `spec: type-equivalence` |
@@ -790,7 +795,7 @@ host is a bug, not an implementation-limitation footnote. Therefore:
 | D3 | **Cache subtype `depth` in the tag / canonical table** so `ref.test`/`ref.cast` against an abstract type becomes an integer range/bitset check, not a `TypeRegistry` call. | `CanonicalType` already stores `depth`; cast semantics are ours to implement (§3.2). | Inline-able casts on the hot path. |
 | D4 | **Keep `i31` unboxed**, low-bit tagged; require heap allocations to be ≥8-byte aligned so the tag is unambiguous. | §3.2 explicitly allows unboxed scalars; already implemented. | No allocation for i31, trivial `ref.eq`. |
 | D5 | **Box internal references at `extern.convert_any`, keep host pointers opaque.** An i31/struct/array crossing to the extern hierarchy becomes a reserved GC object (`kExternBoxTypeId`) holding the inner reference; `any.convert_extern` unwraps it. Host `externref`s remain opaque pointers, so their identity is unchanged. | §3.2/§3.5: extern representations are free; the inverse property holds for both paths. | Correct `ref.test (ref extern)` and round-trips, with no wrapper on the host-pointer path (GC-8/RT-1). |
-| D6 | **No validating front-end.** Trust the producer (AssemblyScript / `wasm-tools`), as QVM trusted its compiler. | §3.3: validation is required for *conforming modules*; we can choose to require valid input. | No validation engine to build, and no GC validation rules to encode. |
+| D6 | ~~**No validating front-end.**~~ **Superseded:** `Module::validate()` exists ([`../VALIDATION.md`](../VALIDATION.md)) and checks the module, control, numeric, memory, table, SIMD, atomics and reference layers. The GC aggregate/array opcodes are the remaining `typeTainted` paths; the reference rules that matter here (subtyping, `ref.func` declarations, definite initialization) are enforced. | §3.3 requires validation only for *conforming modules*; the front end is what makes coverage measurable instead of assumed. | Built anyway for the core surface; what it still does not model is GC's own opcode typing. |
 | D7 | **Single `trap()` sink** (abort today, exceptions/longjmp later) instead of per-instruction trap tables. | §3.5: trap surfacing is an embedding choice. | One place to change; keeps JIT clean. |
 | D8 | **Materialise element/data segments once at instantiation** into the region. | §2.4 requires exactly "evaluated once"; this *closes* G4 while staying simple. | Correct `array.new_elem` identity, cheaper repeated use. |
 | D9 | **Evaluate table initialisers once at instantiation** into the table's slot array. | §2.5; *closes* G5 and is needed for typed tables. | Non-nullable reference tables start working. |
@@ -881,7 +886,7 @@ the collector is not considered shipped until cycles are reclaimed. The
 | **GC-3 — Instantiation-time materialisation** | ✅ Element/data segments are evaluated once (D8), imported globals are resolved (G6), and table initialiser expressions are decoded and applied (D9/G5): `TableType::initExpr` → `initializeTable()` for every default that is final at construction, `resolveTableRefFuncs()` for a `(ref.func …)` one after compilation. | G4, G5, G6 | Done: `array_new_elem` identity holds; GC `const` exprs reading imported globals work; typed/non-nullable tables initialise (`i31` `68/0`, `table` `18/0`). |
 | **GC-4 — `br_on_cast` correctness** | ✅ Done: `castop` is honoured; the crash was a **decoder** gap (`BlockType` dropped the heap-type immediate of a `0x64 ht` block type, desynchronising the function body) plus the label-value model; all four `br_on_*` instructions now model `t*`, stage the branch's reference with `storeStackTopToSlots`, and treat a branch to the function label as a conditional return. | G7 | Done: `br_on_cast` 31/0, `br_on_cast_fail` 31/0, `br_on_null` 9/0, `br_on_non_null` 11/0. |
 | **GC-5 — Crash triage** | ✅ `ref_cast`, `ref_func`, `call_ref`, `return_call_ref` and `type-equivalence` all run (the trap sink) and `array.init_elem` is clean. The ordering/offset bugs that the typed-`assert_trap` check then exposed are fixed too: the source range of `array.new_data`/`array.new_elem` is validated **before** the allocation (so an absurd length reports the out-of-bounds trap, not "out of memory"), and `array.init_data`'s source offset is a *byte* offset (scaling it by the element size broke every element wider than a byte). | C1–C5 | Done: no child aborts/segfaults; each script passes or fails with a real mismatch message. `array` is back to `40/0` and `array_init_data` to `44/0`. |
-| **GC-6 — Trap sink** | ✅ `WASM::trap` (a pending status; `WASM::Trap` at the boundary, `WasmBase/WasmTrap.hpp`) is the single sink; `emitAbort` and every `jit_insn_check_null` use it, and the harness executes `assert_trap`. Allocation failure and `notImplemented` still abort. | C6, D7 | Done: a failed cast / null deref is recoverable in-process; no `std::abort` on the memory/table/GC-reference path. |
+| **GC-6 — Trap sink** | ✅ `WASM::trap` (a pending status; `WASM::Trap` at the boundary, `WasmBase/WasmTrap.hpp`) is the single sink; `emitTrap`/`emitTrapIfNull` and the GC allocation failures all report through it, and the harness executes `assert_trap`. `notImplemented` throws at compile time instead of aborting. | C6, D7 | Done: a failed cast / null deref / allocation is recoverable in-process; no `std::abort` on the memory/table/GC-reference path. |
 | **GC-7 — Fast casts (optional)** | Depth/range-tag encoding (D3), inline caches for repeated `ref.test`/`ref.cast` at a site, measured against the registry-call baseline. | H3 | Casts on a hot loop are a few instructions; benchmark recorded. |
 | **GC-8 — Extern interop** | ✅ Done (RT-1): internal i31/struct/array references are boxed by `extern.convert_any` in a reserved GC object (`kExternBoxTypeId`); `any.convert_extern` unwraps; the GC walker releases the inner reference; opaque host pointers keep their identity. | G3, R4 | `ref_test` 71/0 and `extern` 18/0; the representation is documented in `ABI.md`. |
 | **GC-9 — Inline arrays** | ✅ Done: header-only JIT type, per-type `dataOffset` (`gcArrayDataOffset`), one allocation, and `arrayElementBase` for every element access. | D13, H8 | Done: `array.new_default` is one heap block (the `GC reference counting` test asserts `totalAllocations() + 1`), and all array scripts are unchanged from the §8 baseline. |

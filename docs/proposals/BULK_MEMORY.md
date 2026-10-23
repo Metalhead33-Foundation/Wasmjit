@@ -135,7 +135,7 @@ Bulk Memory Operations is a **Phase 5** proposal, integrated into WebAssembly
 | BMD2 | **Drop = a single `bool`; never free anything.** | §3: dropping has no observable side effect beyond emptiness. | Trivial drop, no ownership churn. |
 | BMD3 | **Keep passive segments pointing into the module's bytes; never copy them at instantiation.** | §3: storage is free; the `Module` outlives its instances. | Zero-copy, less start-up work. |
 | BMD4 | **Copy active segments eagerly at instantiation (already done).** | §2/§3: active segments must be in place before the start function runs. | Simple, and matches the data-init rules. |
-| BMD5 | **Do not validate `data count`; require valid input.** | Consistent with the "no validating front-end" stance (`docs/GC.md` §6, D6). | No extra pass. |
+| BMD5 | ~~Do not validate `data count`; require valid input.~~ **Superseded — `Module::validate()` enforces it (BM6).** `memory.init`/`data.drop` without a data-count section are rejected, and the count must match the data section ([`../VALIDATION.md`](../VALIDATION.md)). | The old stance was "trust the producer" (`docs/proposals/GC.md` D6); a validating front end exists now. | One consistency check, no extra pass. |
 | BMD6 | **Route every bounds failure through the single `WASM::trap` sink** (implemented). | §2 requires a trap; §3 leaves the mechanism to the embedder. | Recoverable, testable traps — closes BM2. |
 | BMD7 | **Charge every memory/table byte against the Store's allocation budget**, so a bulk path that grows a memory cannot balloon the host either. | §3: the host limit is the engine's to choose; a failed grow is a spec-sanctioned outcome. | One guard for every allocation (`docs/TESTING.md` "Allocation guardrails"). |
 

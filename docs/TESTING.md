@@ -242,7 +242,7 @@ Because the `Test` Makefile is only regenerated when it is missing, remove
 `type-subtyping.wast` is excluded, because `wasm-tools` currently refuses to parse it; a single
 unparsable upstream file must not break the build.
 
-The result on this revision is **256** scripts and roughly 5 800 `.wasm` modules.
+The result on this revision is **257** scripts (the 256 core ones plus `proposals/threads/atomic.wast`) and roughly 6 000 `.wasm` modules.
 
 ### Every script is its own test case
 
@@ -287,7 +287,7 @@ local_set
 Scripts listed there are the visible ones; everything else is hidden. The file is read when the test
 binary starts, so **editing it does not require a rebuild**.
 
-It currently holds 189 of the 257 scripts, and the default run is green:
+It currently holds 193 of the 257 scripts, and the default run is green:
 
 ```
 $ ./WasmJit
@@ -397,9 +397,8 @@ different layers: the **decoder** (`assert_malformed`), a **validator**
 (`assert_uninstantiable`). `WASM_SPEC_VALIDATE=1` executes them instead of
 skipping them and prints one diagnostic per binary case
 (`[validate] <kind> <accepted|rejected|trapped> <file>`). The default run is
-unchanged and stays green; the strict run is expected to fail on the invalid
-modules the validator does not model yet. The validator itself is documented in
-[`VALIDATION.md`](VALIDATION.md).
+unchanged and stays green, and the strict run is green as well. The validator
+itself is documented in [`VALIDATION.md`](VALIDATION.md).
 
 Measured against the curated set:
 
@@ -477,8 +476,9 @@ Consequences worth knowing:
 - a missing trap is now a **real** failure (e.g. `traps.wast` requires integer
   divide-by-zero and the trapping `trunc_f*` forms to trap);
 - `std::abort()` on the *runtime* path is gone for the memory/table/bulk paths;
-  `notImplemented` (SIMD, atomics, unimplemented opcodes) still aborts, because
-  that is a compile-time limitation rather than a Wasm trap.
+  `notImplemented` now throws `std::runtime_error` instead (a clean instantiation
+  failure). After SIMD and the atomics got handlers, the only thing that reaches
+  it is an opcode for a value type the engine does not model.
 
 ### Allocation guardrails
 
@@ -514,7 +514,7 @@ from module input.
 
 ### Current status (for orientation)
 
-The default run is the curated list (189 scripts) plus the manual and component
+The default run is the curated list (193 scripts) plus the manual and component
 tests, and it is green:
 
 ```
@@ -530,33 +530,39 @@ read the **per-script** lines):
 WASM_SPEC_TOLERANT=1 WASM_SPEC_TIMEOUT=8 WASM_SPEC_SCRIPTS=all ./WasmJit -r compact > sweep.log
 ```
 
-Per-script outcomes from the last sweep (2026-10-13, 257 scripts):
+Per-script outcomes from the last sweep (2026-10-24, 257 scripts, debug build):
 
 | Outcome | Scripts | Reading |
 |---|---:|---|
-| clean (`passed > 0`, `failed = 0`) | 143 | the runtime handled every command the harness can marshal |
-| wrong results (`failed > 0`) | 94 | real mismatches — see below. Most are SIMD/atomic scripts, which now *report* failures instead of dying |
-| terminated by signal | 10 | genuine crashes still to be triaged (was 63 before unimplemented opcodes became clean failures) |
-| produced no report | 0 | the shared trap sink removed these; before it there were 8 |
+| clean (`passed > 0`, `failed = 0`) | 242 | the runtime handled every command the harness can marshal |
+| wrong results (`failed > 0`) | 6 | real mismatches — see below |
+| terminated by signal | 0 | — |
+| produced no report | 0 | the shared trap sink removed these |
 | timed out | 0 | — |
 | nothing executed (all commands skipped) | 9 | not real coverage |
 
+The same sweep reports `test cases: 257 | 251 passed | 6 failed`, which is what
+the `[spec]` row in the command table above quotes.
+
 Traps are **executed** now, so a *missing* trap is a failure rather than a silent
-skip — that is why some scripts that used to look clean now report real failures
-(`traps.wast`, `address.wast`, `memory_trap64.wast` were fixed on the way; see
-`docs/proposals/`). The harness marshals scalar, `v128` and reference values,
-runs `assert_exception`, and decodes `module_definition` declarations; what it
-still cannot do is text-format modules and `module_instance` / component
-commands. Validation is *measurable* (`WASM_SPEC_VALIDATE=1`, above) and
-`assert_invalid` is the one family that genuinely needs a validating front end.
+skip. The harness marshals scalar, `v128` and reference values, runs
+`assert_exception`, and decodes `module_definition` declarations; what it still
+cannot do is text-format modules and the `module_instance` linking command. The
+only other skips are the negative-module families, which run under
+`WASM_SPEC_VALIDATE=1` (above, and [`VALIDATION.md`](VALIDATION.md)).
 
-The harness surfaces these **real** mismatches, for example:
+The six scripts that still fail, and why (`passed`/`failed` per script):
 
-- `const` — the sign of `-0.0` is lost for `f32`/`f64`
-- `conversions` — `i64.extend_i32_u`, `f32.convert_i64_u`, `f64.convert_i64_u` produce wrong values
-- `f32`/`f64` — `min` mishandles negative zero and NaN propagation
-- `endianness` — 64-bit `store32`, `store` and `f64.store` results are wrong
-- `ref_test` / `br_on_cast` — cross-module GC casts (`docs/proposals/GC.md` G1/G2/G7)
+- `instance` (2/18) — each failure is `action refers to unknown module ...`: the
+  module-linking `module_instance` command the harness does not execute
+- `linking0` (3/1), `linking` (99/6), `linking3` (6/4) — the same proposal from
+  the other side: instances registered by `register` are not visible to each
+  other, so `call` traps on `uninitialized element` and a `load` reads `0`
+- `comments` (4/3) — its modules are text-format, so the module is never loaded
+  and the following assertions report `no exported function named 'f1'`
+- `bulk` (116/1) — line 221 expects the trap text `uninitialized element 2`;
+  the engine reports the kind `uninitialized element` (the index is in the free
+  text, not the kind). A trap-kind granularity difference, not a missing trap
 
 `WJ_TRACE=1` prints every command before it runs; because each script executes in
 a forked child that only writes its report at the end, that is how you find the
@@ -566,17 +572,19 @@ command that killed a "no report" child.
 
 ## Part 3 — the SIMD tests
 
-SIMD needs its own layers because the spec-suite harness cannot marshal `v128`
-arguments or results yet (the skip is described in
-[Part 2](#what-is-executed-and-what-is-skipped)). The design behind these layers
-is [`docs/SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §9; this section is the practical
-guide. Four layers, four jobs:
+SIMD has its own layers because the differential and golden-vector cases judge
+things the spec suite cannot: exact lane semantics for every helper, and the
+float edge cases where a single `==` would pass for the wrong reason. The harness
+*does* marshal `v128` arguments and results now (`decodeV128` /
+`compareV128`), which is why all 66 `simd_*` / relaxed scripts are graded. The
+design behind these layers is [`docs/SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §9; this
+section is the practical guide. Four layers, four jobs:
 
 | Layer | Artefact | Job |
 |---|---|---|
 | T1 | `TEST_CASE`s in `Test/main.cpp` | Differential oracle: each SIMD helper vs an independent scalar implementation |
 | T2 | `Test/wasm_wat/simd_*.wat` | End-to-end lane semantics through the JIT, with exact expected vectors |
-| T3 | `simd_*.wast` + `Test/wast_supported.txt` | Upstream spec conformance (blocked on harness marshalling) |
+| T3 | `simd_*.wast` + `Test/wast_supported.txt` | Upstream spec conformance: all 66 scripts curated and green |
 | T4 | a tagged benchmark case | `ns/v128-op` measurement; diagnostic, not a gate |
 
 ### T1 — the differential oracle
@@ -625,10 +633,11 @@ exactly like the existing WAT modules (see `Test/Test.pro`). They load through
 
 To add one:
 
-1. Write `Test/wasm_wat/simd_<topic>.wat` exporting functions with scalar
-   signatures — `v128` cannot cross the harness boundary yet, so an end-to-end
-   module returns its lanes as `i32`/`i64`/`f32`/`f64` (for example
-   `i32x4.extract_lane` results, or a `bitmask`).
+1. Write `Test/wasm_wat/simd_<topic>.wat`. `v128` parameters and results do
+   cross the harness boundary (`simd_abi.wat` round-trips them), but a module
+   that returns lanes as `i32`/`i64`/`f32`/`f64` (for example
+   `i32x4.extract_lane` results, or a `bitmask`) is easier to assert on and is
+   still the usual shape here.
 2. Add a `TEST_CASE` in `Test/main.cpp` that loads it and asserts the exact
    values.
 3. **Re-run qmake** — the WAT source list is built with `$$files()` at qmake

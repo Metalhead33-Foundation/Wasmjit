@@ -148,47 +148,52 @@ None of them traps or has side effects; only the produced bits vary.
 - `WASM::Value` (`WasmValue.hpp`) is `alignas(16)` and has a
   `uint8_t v128[16]` union member, so a `v128` fits its 16-byte payload.
 - `LibJitTypeTranslator` lowers `v128` to a **struct of four `jit_type_int`**
-  (`v128_definition`, created with `jit_type_create_struct(..., 4, 0)`) — a
-  16-byte, 4-byte-aligned aggregate.
+  (`v128_definition`, created with `jit_type_create_struct(..., 4, 0)`) and then
+  forces **16-byte size and 16-byte alignment** with
+  `jit_type_set_size_and_alignment` (SIMD-L1).
 - In the GC struct layout (`WasmModuleInstance.cpp`) a `v128` field contributes
-  `storageBytes = 16` and `storageAlign = 4`, with the comment "v128 lowers to a
-  4-aligned struct of ints" (kept in sync with the JIT, §5/S4).
+  `storageBytes = 16` and `storageAlign = 16` through `gcStorageAlign`
+  (`WasmGcHeader.hpp`), so the runtime and the backend derive the same layout from
+  one place (invariant H1).
 
 ### 4.2 Opcodes
 
-- `WasmOpcode.hpp` enumerates **236** `SIMDOpcode` entries covering the entire
-  fixed-width set (loads/stores incl. lane/splat/zero, `v128.const`, shuffle,
-  swizzle, splat/extract/replace, integer/float arithmetic and comparison, shifts,
-  bitwise, conversions, saturating ops). **Relaxed SIMD is not enumerated at
-  all.**
-- `WasmOpcodeDispatcher::dispatchPrefixSIMD` decodes every immediate form
-  correctly: `MemArg`, a raw lane-index byte, the 16 bytes of `v128.const`, and
-  the 16 shuffle lanes. An unknown (or relaxed) sub-opcode throws
+- `WasmOpcode.hpp` enumerates **236** fixed-width `SIMDOpcode` entries covering
+  the entire fixed-width set (loads/stores incl. lane/splat/zero, `v128.const`,
+  shuffle, swizzle, splat/extract/replace, integer/float arithmetic and
+  comparison, shifts, bitwise, conversions, saturating ops) **plus the 20 relaxed
+  sub-opcodes** (`0x100`–`0x113`, values 256–275).
+- `WasmOpcodeDispatcher::dispatchPrefixSIMD` decodes every immediate form:
+  `MemArg`, a raw lane-index byte, the 16 bytes of `v128.const`, and the 16
+  shuffle lanes. An unknown sub-opcode throws
   `std::runtime_error("Invalid or unsupported 0xFD SIMD sub-opcode")`.
-- **All 236 `LibJIT::OpcodeDispatcher` handlers are stubs** calling
-  `notImplemented(__func__)` (`fprintf` + `std::abort()`). `v128.const`,
-  `v128.load`/`store`, every arithmetic op, and **`global.get`/`global.set` of a
-  `v128` global** all abort.
+- Every one of those handlers executes: the `0xFD` block in the backend has no
+  `notImplemented` left. Each one lowers to a call into the shared helper layer
+  (`WasmBase/wasm_simd_vector.*`, SD5); that layer's twin scalar implementation
+  (`WasmBase/wasm_simd_scalar.*`) is the differential oracle in the tests, and a
+  backend with its own vector registers may lower the same op natively instead
+  ([`../SIMD_BACKENDS.md`](../SIMD_BACKENDS.md) §4).
 - The non-JIT `Stub::OpcodeDispatcher` implements the same handlers as textual
   pretty-printers (inspection only).
 
 ### 4.3 Constant expressions and globals
 
-- `evalConstantExpr` handles only `i32/i64/f32/f64.const`, `global.get`,
-  `ref.null`, `ref.func` and the GC constructors. **`v128.const` is not
-  handled**, so a `v128` global initialiser throws during instantiation.
-- `zeroConstantForType` returns a "best-effort" `nint` 0 for the `v128` struct
-  type, with an explicit "expand when those opcodes are implemented" comment.
+- `evalConstantExpr` decodes the `0xFD`/`0x0C` arm into the `Value`'s 16 bytes, so
+  a `v128.const` initialiser works.
+- `dispatchGlobalGet`/`Set` treat a `v128` global as what it is — 16 bytes at
+  offset 0 of its cell — and reuse the `v128.load`/`v128.store` helpers rather
+  than inventing a struct load.
 
 ### 4.4 Tests
 
-- `extern/WasmTestsuite` contains **59 `simd_*.wast` scripts**, but **none are in
-  `Test/wast_supported.txt`**. Every SIMD script currently terminates with
-  signal 6 (abort) after 0 passing commands, because instantiation compiles a
-  function containing a SIMD opcode.
-- The spec harness **cannot check SIMD results anyway**: `isScalarValue` skips
-  `v128` arguments and results (see `docs/TESTING.md`), so a passing SIMD script
-  would report mostly `skipped`, not `passed`.
+- **All 66 `simd_*` / relaxed scripts are curated and pass with `failed=0`**
+  (`Test/wast_supported.txt`); the harness decodes `v128` arguments lane by lane
+  and compares results with the `nan:canonical` / `nan:arithmetic` policies
+  applied per lane (`Test/WastScript.cpp`).
+- Four layers carry the detail [`../SIMD_LIBJIT.md`](../SIMD_LIBJIT.md) §9: the
+  differential oracle (T1), the `Test/wasm_wat/simd_*.wat` fixtures (T2), the
+  spec scripts (T3) and the tagged benchmark (T4). See
+  [`../TESTING.md`](../TESTING.md) Part 3.
 
 ## 5. Gaps
 

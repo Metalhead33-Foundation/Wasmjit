@@ -575,18 +575,19 @@ JIT path with exact expected vectors:
 | ✅ `simd_arith_i.wat` | **Built at SIMD-L3 (67 exports).** Comparisons in both signednesses, `add`/`sub`/`mul`, `neg`/`abs`, shifts incl. counts `≥` the lane width, `min/max`, `avgr_u`, the saturating forms, `popcnt`, `q15mulr_sat_s` (Y5), the reductions `all_true`/`any_true`/`bitmask` in every width (Y9), and the width-changing family — `extend`/`extmul` `_low` vs `_high`, `extadd_pairwise`, `dot`, `narrow`'s half order and clamping |
 | ✅ `simd_arith_f.wat` | **Built at SIMD-L4 (32 exports).** Float comparisons (incl. the unordered `ne`), `add`/`sub`/`mul`/`div`, `abs`/`neg`/`sqrt`, the rounding family, the four min/max flavours with the `±0` and NaN rules (Y1), and the `f64x2` counterparts — every value projected as a bit pattern, so a NaN's payload and a zero's sign survive the harness |
 | ✅ `simd_shuffle.wat` | `i8x16.shuffle` two-operand mapping (Y4), `i8x16.swizzle` out-of-range (Y3) |
-| ✅ `simd_convert.wat` | **Built at SIMD-L4 (19 exports).** The float↔int conversions at the ends of their ranges: `trunc_sat` (NaN, ±2^31, 2^32 and the largest value below it), `convert`, `convert_low` (with marker lanes proving the high half is ignored), `promote`, and `demote`/`trunc_sat_f64x2_*_zero` (with marker lanes proving the unfilled lanes are zero). Every value read off V8 | `simd: the float/int conversions run through the JIT` |
+| ✅ `simd_convert.wat` | **Built at SIMD-L4 (19 exports).** The float↔int conversions at the ends of their ranges: `trunc_sat` (NaN, ±2^31, 2^32 and the largest value below it), `convert`, `convert_low` (with marker lanes proving the high half is ignored), `promote`, and `demote`/`trunc_sat_f64x2_*_zero` (with marker lanes proving the unfilled lanes are zero). Every value read off V8 (case `simd: the float/int conversions run through the JIT`) |
 | ✅ `simd_abi.wat` | `(param v128) (result v128)` round-trip; `v128` locals; `v128` global get/set |
 
 These are the modules the milestone "done when" clauses refer to.
 
 ### T3 — Spec conformance (`simd_*.wast`)
 
-The 59 upstream SIMD scripts only become gradeable after the harness marshals
-`v128` arguments and results (`WastScript.cpp` currently skips them:
-[`TESTING.md`](TESTING.md)). Once lifted, curate the passing ones into
-`Test/wast_supported.txt` per the existing refresh recipe. Until then T3 stays
-red and progress is measured by T1/T2 — the note must keep saying so.
+The upstream SIMD scripts became gradeable once the harness learned to marshal
+`v128` arguments and results (`decodeV128` / `compareV128` in
+`Test/WastScript.cpp`, [`TESTING.md`](TESTING.md) Part 3). **All 66 `simd_*` /
+relaxed scripts are now curated in `Test/wast_supported.txt` and pass with
+`failed=0`**, so T3 is green; the per-script rows are in the survey below and the
+refresh recipe is the one in [`TESTING.md`](TESTING.md).
 
 ### T4 — Benchmark (diagnostic)
 
@@ -631,11 +632,13 @@ WASM_SPEC_SCRIPTS=all ./WasmJit '[spec]'  # T3 sweep, for re-curation
 | T3 | the 66 `simd_*` / relaxed scripts | **all 66 fully pass** (curated) | **S7 closed.** `v128` globals (SIMD-L5) and the ≥ 3-operand call path (SIMD-L7) were the last two causes; neither needed a change to the generated code — one was a missing constant-expression arm, the other libjit's `jit_apply` |
 | T4 | `simd benchmark: ns per v128 op (SIMD-L8)` | 4.10 ns/v128-op (M1) | **SIMD-L8.** 42× off the no-call bound; 97.6 % of it is the helper call — see §8.4 |
 
-Measured after SIMD-L4: `./WasmJit 'simd*'` reports **19 cases, 5884 assertions,
-all passing**; the whole default suite is **105 cases / 7421 assertions** (104 /
-7246 after L4's float half, 102 / 4196 after L3) — added coverage, no
-regressions. **All 236 fixed-width handlers execute**, and the op list holds 185
-of them (§6.5): the rest are the memory, lane and bitwise ops that predate it.
+Current measurement: `./WasmJit 'simd*'` reports **24 cases, 6147 assertions, all
+passing**, and the whole default suite is **366 cases / 9353 assertions**. The
+milestone-by-milestone progression was 102 cases / 4196 assertions after L3, 104 /
+7246 after L4's float half, 105 / 7421 at L4, and it has only grown since — added
+coverage, no regressions. **All 236 fixed-width handlers execute**, and the op
+list holds 185 of them (§6.5): the rest are the memory, lane and bitwise ops
+that predate it.
 
 The `.wat` modules are checked with `wasm-tools validate --features all` before
 they are run, so a T2 failure is a runtime bug rather than a malformed input.

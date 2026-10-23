@@ -59,9 +59,11 @@ Two consequences fall out immediately:
    LibJIT today and survives a move to SLJIT/AsmJit later." That is exactly what
    [`proposals/SIMD.md`](proposals/SIMD.md) SD1/SD2/SD7 already assume.
 
-**Recommendation (detail in §6): on LibJIT, lower SIMD to native helper
-functions over a 16-byte payload, keep the `{i32,i32,i32,i32}` representation,
-and treat hardware vector fast paths as an optional later optimisation.**
+**Recommendation (detail in §6) — adopted and shipped:** on LibJIT, lower SIMD
+to native helper functions over a 16-byte payload, keep the
+`{i32,i32,i32,i32}` representation, and treat hardware vector fast paths as an
+optional later optimisation. It is what [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md)
+records as the decision.
 Helpers are conformant, backend-neutral, and cost no LibJIT features that do not
 exist. They are the permanent *baseline* and the test oracle — and, for a backend
 that has real vector registers, a fallback rather than the only path (§6, §8).
@@ -221,9 +223,11 @@ Two notes that matter for correctness rather than speed:
   it, and the fallback is a helper anyway. W1/W2 + W5 dominates W4; W4's only
   real use is as an *inline* form of the trivial per-lane cases if a
   microbenchmark ever justifies it.
-- **W3 is not optional if we ever pass `v128` by value.** `WASM::Value` is
-  `alignas(16)`; the JIT type is 4-aligned. Until that is reconciled, "`v128`
-  round-trips through a function" (SIMD-0's done-when) is unproven.
+- **W3 was not optional once `v128` crosses a call by value — and it is done.**
+  `WASM::Value` is `alignas(16)` and the lowered type started out 4-aligned; the
+  two are now reconciled at 16 (`jit_type_set_size_and_alignment(v128, 16, 16)`
+  plus `gcStorageAlign` → 16, SIMD-L1), which is what makes "`v128` round-trips
+  through a function" (SIMD-0's done-when) provable rather than assumed.
 
 ## 6. The path of least resistance
 
@@ -302,12 +306,12 @@ where most of the ops live.
 | **L1 — relaxed semantics** | the 20 relaxed ops | **Maximally loose.** Any result from the allowed set is conformant; the deterministic profile is optional. | §2.4 / SD5 / SD6 |
 | **L2 — representation** | how a `v128` is stored: 4×`u32`, a `__m128`-shaped buffer, 2×`u64`, alignment, spilling, ABI | **Free, as long as the byte order is right.** The spec fixes the bit layout (bit 0 = LSB of byte 0, little-endian) and nothing else. | §3 bullets 2, 5; SD7 |
 | **L3 — code quality** | helpers vs intrinsics, vectorisation of adjacent ops, register residency, `i8x16.shuffle` lowering (helper loop vs `pshufb`) | **Completely free.** The spec "fixes results, never machine instructions"; no auto-vectorisation is required. | §3 bullets 1, 3, 6, 7; SD1, SD2, SD4 |
-| **L4 — validation** | lane immediates (0–31, 0–15, …), the `align ≤ natural` memarg rule, shuffle indices | **Loose in practice today, but this one is a trap.** The project skips validation wholesale, so "we skip it too" is consistent — but an out-of-range lane immediate used as-is is silent out-of-bounds lane access, unlike an unsupported opcode, which aborts loudly. | §2.2; §7 guardrails |
+| **L4 — validation** | lane immediates (0–31, 0–15, …), the `align ≤ natural` memarg rule, shuffle indices | **Not negotiable, and already enforced:** `Module::validate()` rejects an out-of-range lane index (`Validator::requireLane`), a shuffle index beyond the vector, and `alignment > natural` ([`VALIDATION.md`](VALIDATION.md), SIMD row). An out-of-range lane immediate used as-is would be silent out-of-bounds lane access, unlike an unsupported opcode, which fails loudly. | §2.2; §7 guardrails |
 
 So the practical rule is: **be maximally loose at L1–L3, be strict at L0, and
-be *deliberately* strict at L4 for lane immediates even though validation is
-otherwise skipped** — the cost is a range check per SIMD instruction at decode
-time, and the alternative failure mode is a memory-safety bug rather than a
+be *deliberately* strict at L4 for lane immediates** — the cost is a range check
+per SIMD instruction at validation time, and the alternative failure mode is a
+memory-safety bug rather than a
 wrong number.
 
 ### 7.2 What we may skip or defer (and what it buys)
@@ -317,7 +321,7 @@ wrong number.
 | F1 | Lower every op to a scalar helper | §3: no hardware SIMD required; per-lane scalar code or even a helper call is conformant | A portable implementation; no ISA matrix |
 | F2 | Never claim or exploit register residency | §3: no register-allocation or vectorisation contract | No new ABI or liveness machinery |
 | F3 | Use unaligned 16-byte moves everywhere | §3: unaligned access is legal when `align < natural`; x86 tolerates it | One `memcpy`-shaped helper per access; no alignment pathologies |
-| F4 | Keep the 4-aligned `{i32×4}` representation | §3: a 16-byte struct in memory is a valid representation | No change to the existing type/value layer (SD7) |
+| F4 | ~~Keep the 4-aligned `{i32×4}` representation~~ **Not taken:** the shape `{i32×4}` stayed, but its alignment is forced to 16 (W3/SIMD-L1), because a `v128` that crosses a call boundary by value must match `WASM::Value`'s `alignas(16)`. | §3: a 16-byte struct in memory is a valid representation | No change to the existing type/value layer (SD7) |
 | F5 | Implement `i8x16.shuffle` with a 16-iteration loop | §3: jump table, byte moves or `pshufb` are all fine | Correctness first, no `pshufb` feature gate |
 | F6 | Pick the plain scalar result for every relaxed op | §2.4/§3: any allowed result is conformant | Reproducible results, trivial code (SD5) |
 | F7 | Skip the deterministic profile, or adopt it later | §3: adopting it is optional | No cross-machine determinism work until wanted (SD6) |
@@ -361,9 +365,12 @@ place the spec already declares implementation-defined.
 
 ## 8. What this implies for `proposals/SIMD.md`
 
-Nothing in this survey justifies re-cutting the proposal note; it *does* confirm
-its strategy and sharpen why. The table lists the edits worth making when the
-note is next revised (IDs follow the proposal note's existing scheme).
+Nothing in this survey justified re-cutting the proposal note; it *does* confirm
+its strategy and sharpen why. **Status:** these edits were folded into
+[`proposals/SIMD.md`](proposals/SIMD.md) revision 5 (§4 rewritten, S4 closed by
+SIMD-L1, SIMD-8 added for a future backend's native lowering), so the table below
+is the record of the review rather than a to-do list. IDs follow the proposal
+note's scheme.
 
 | Where | Change implied | Why |
 |---|---|---|
@@ -382,21 +389,22 @@ and no new deviation. Every option in §5 is already sanctioned by SD1/SD2/SD7;
 the only genuinely *new* recommendation is L4 (validate lane immediates at
 decode) in §7.1, which the proposal's §6 guardrails already call for.
 
-## 9. Open questions to settle when the code starts
+## 9. Questions that had to be settled when the code started
 
-Deliberately unanswered here; each one changes a helper signature or a type rule,
-which is why they are written down rather than assumed.
+Each one changed a helper signature or a type rule, so they were written down
+rather than assumed. **All eight are settled**; the answers are the ones the
+implementation actually took ([`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §4–§6).
 
-| # | Question | Options | Lean |
+| # | Question | Options | Answer as shipped |
 |---|---|---|---|
-| Q1 | Helper ABI: by-value `{i32×4}` struct return, or pointer out-parameter? | by-value / pointer (W2) | Try by-value; fall back to W2 if LibJIT's 16-byte aggregate ABI misbehaves (S9). |
-| Q2 | One helper per opcode, or a few generic helpers with an op selector? | ~256 small helpers / ~8 generic ones | One per opcode — better for inlining, CPU dispatch and debugging; the count is mechanical. |
-| Q3 | Where does the helper translation unit live? | `WasmBase/` (shared) / `LibJit/` (private) | Shared, next to `WasmBase`, so SLJIT/AsmJit can reuse it without depending on LibJit. |
-| Q4 | Are helper calls batched per basic block, or emitted one per opcode? | per opcode / batched | Per opcode first; batching is an optimisation that must not change semantics. |
-| Q5 | Does a `v128` live in a GC struct as 16 inline bytes or as a reference? | inline / boxed | Inline (`storageBytes = 16`); the GC layout already assumes it. |
-| Q6 | Do we adopt the deterministic profile for relaxed SIMD from the start? | yes / later | Later (SD6): SD5's scalar results are conformant and reproducible on one machine. |
-| Q7 | When does hardware dispatch get initialised — per module, per store, or lazily? | per module / per store / lazy singleton | Lazy singleton behind `__builtin_cpu_supports`, so the helpers stay usable outside the JIT (e.g. from the harness). |
-| Q8 | Does the harness marshal `v128` by pointer or by `WASM::Value`? | either | `WASM::Value` (already `alignas(16)`, already has `v128[16]`); SIMD-6 is a marshalling/formatting task, not an ABI one. |
+| Q1 | Helper ABI: by-value `{i32×4}` struct return, or pointer out-parameter? | by-value / pointer (W2) | **Both**, chosen per shape: `callSimdHelper` returns the 16-byte aggregate directly where LibJIT's aggregate ABI handles it, and `callSimdOutHelper` passes an out-pointer for the forms that need one (loads, splats, lane inserts). |
+| Q2 | One helper per opcode, or a few generic helpers with an op selector? | ~256 small helpers / ~8 generic ones | **One per opcode**, generated from `WasmBase/wasm_simd_ops.inc`, which is also what the differential table iterates. |
+| Q3 | Where does the helper translation unit live? | `WasmBase/` (shared) / `LibJit/` (private) | **Shared** (`WasmBase/wasm_simd_vector.*`, `wasm_simd_scalar.*`), so another backend reuses it without depending on `LibJit/`. |
+| Q4 | Are helper calls batched per basic block, or emitted one per opcode? | per opcode / batched | **Per opcode.** Batching is still an optimisation that must not change semantics. |
+| Q5 | Does a `v128` live in a GC struct as 16 inline bytes or as a reference? | inline / boxed | **Inline**, `storageBytes = 16` and `storageAlign = 16` (`gcStorageAlign`). |
+| Q6 | Do we adopt the deterministic profile for relaxed SIMD from the start? | yes / later | **Later** (SD6): SD5's scalar results are conformant and reproducible on one machine. |
+| Q7 | When does hardware dispatch get initialised — per module, per store, or lazily? | per module / per store / lazy singleton | **Neither:** each helper is dispatched through Highway's own `HWY_EXPORT` table, which resolves to the best target the CPU supports on first call. There is no engine-side feature-detection singleton. |
+| Q8 | Does the harness marshal `v128` by pointer or by `WASM::Value`? | either | **`WASM::Value`-shaped 16-byte slots** (`alignas(16)`), decoded lane by lane in `Test/WastScript.cpp`. It was a marshalling/formatting task, not an ABI one. |
 
 ## 10. References
 
@@ -437,7 +445,8 @@ In-repo:
   gaps the strategy has to close, §7 (SIMD-0…SIMD-7) is the plan.
 - [`SAFETY.md`](SAFETY.md) — the policy a helper-based lowering inherits
   (bounds, trap-vs-`abort`, allocation budget).
-- [`TESTING.md`](TESTING.md) — why `v128` values are currently skipped by the
+- [`TESTING.md`](TESTING.md) — how `v128` values cross the harness boundary (they no
+  longer need to be skipped) and the
   spec harness, and the curated `wast_supported.txt` workflow SIMD-6 feeds.
 - [`PROPOSALS.md`](PROPOSALS.md) — the note conventions this survey does *not*
   claim to follow (it surveys engines, not a wasm proposal).

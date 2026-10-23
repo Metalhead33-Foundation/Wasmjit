@@ -72,43 +72,47 @@ driver all use the buffer convention.
 
 ## Reference and Global Representation
 
-> **Status:** **R1 (globals as cells) is implemented.** R2 (tagged table slots)
-> and R3 (host extern boxes) remain staged; nothing in their descriptions has
-> changed yet.
+> **Status:** all three stages are in, but **R2 and R3 reached their goal by a
+different route than the "Decision" below proposed.** The engine kept one
+pointer-sized word per reference value and table slot and tells classes apart by
+*provenance* (Store-registered callable, GC-heap header, i31 low bit, otherwise a
+host reference) instead of by tag bits. No tag word was introduced; the `Ref` /
+tag table below is the design that was considered and **not** taken, kept here
+because the *goals* it served (generic reference storage, extern identity) did
+have to be met.
 
-Before R1 the engine used one untyped `void*` for every reference, `Callable*`
-table slots, and a flat `Value` array for globals. R1 has replaced the global
-half with cells; the reference/table half is still as described. That
-representation is enough for the core types in the common case, but it is the
-shared blocker behind four proposals:
-generic/typed tables (`FUNCTION_REFERENCES.md` FR6, `EXCEPTIONS.md` EX5), host
-externrefs and `any`/`extern` identity (`GC.md` R4/G3/D5), mutable imported
-globals (`MUTABLE_GLOBALS.md` MG2/MG3/MG4), and component-level reference
-bookkeeping (`COMPONENT_MODEL.md` CM8).
+Before R1 the engine used a flat `Value` array for globals. R1 replaced that half
+with cells; R2's goal — a reference of any type surviving `table.set`/`table.get`
+— was closed by treating the existing pointer word as generic storage (FR-6,
+EX-6), and R3's goal — `externref` identity and a real `extern` hierarchy — by
+boxing on the GC heap at `extern.convert_any` (GC-8/RT-1).
 
 ### Today
 
 | Value / slot | Encoding | Consequence |
 | --- | --- | --- |
-| `funcref` | `Callable*` | fine |
-| `externref` | host `void*` | no box and no identity; only static typing separates it from a funcref |
-| `exnref` | exception-object pointer | fine on the stack or in a global, not storable in a table |
-| GC ref | Store-owned object pointer | fine |
-| `i31ref` | `(value << 1) \| 1` | fine |
-| table slot | `Callable*` (`TableInstance::base`) | only *nominally* a function table; externref/GC/exnref values are cast through it |
-| global | a `Value*` cell per index (R1); `VMContext::globals` is `Value**` | imported cells alias the exporter |
-| exported global | the exporter's cell is published (R1) | a later `global.set` is visible to importers (and vice versa) |
+| `funcref` | `Callable*`, recognised by `Store::callableAt()` | a callable from *another* module is still recognised (GC.md G2) |
+| `externref` | opaque `void*` | identity is pointer identity; a host pointer passes through every conversion unchanged |
+| `exnref` | exception-object pointer | survives a table round-trip through the same generic slot (EX-6) |
+| GC ref | Store-owned object pointer, canonical type id in `GcHeader` | the type id is what `ref.test`/`ref.cast` read |
+| `i31ref` | `(value << 1)` with the low bit set | also the reason a real pointer can never look like an i31 |
+| extern box | GC object with the reserved type id `GcHeader::kExternBoxTypeId` | produced by `extern.convert_any`, unwrapped by `any.convert_extern`, released by the GC walker with its inner reference |
+| table slot | one pointer-sized word (`TableInstance::base` is `Callable**`) | the funcref view is just the ABI; any reference fits |
+| global | a `Value*` cell per index; `VMContext::globals` is `Value**` | imported cells alias the exporter |
+| exported global | the exporter's cell is published | a later `global.set` is visible to importers (and vice versa) |
 
-Static typing at each use site is why this works at all. It stops working when
-the static type is only `anyref` (an `ref.test`/`ref.cast` must distinguish a
-funcref from an externref from a GC object), and host interop needs identity.
+Classification is therefore *by provenance*, in one place
+(`ModuleInstance::refMatchesHeapType`): a registered callable is a `func`, a
+GC-heap object carries its canonical type id, an i31 is an i31, and anything
+left is treated as an opaque host reference, which matches only the top abstract
+types. That is why `ref.test externref` is true for a pointer the engine has
+never seen — which is exactly what the harness relies on for `(ref.extern N)`.
 
-### Decision
+### Considered and not taken: a tagged reference word
 
-One **64-bit tagged reference word** for every reference value and table slot,
-plus **global cells**. The tag is in the low three bits; all heap pointers are
-8-byte aligned, so the word stays pointer-sized and every existing 8-byte slot
-keeps its size.
+The original decision was **one 64-bit tagged reference word** for every
+reference value and table slot, plus global cells, with the tag in the low three
+bits (all heap pointers are 8-byte aligned):
 
 | Tags | Payload |
 | --- | --- |
@@ -120,40 +124,40 @@ keeps its size.
 | `5`–`7` | reserved |
 | all-zero word | null (the only null representation) |
 
-- `ref.is_null` is `word == 0`; `ref.eq` is null==null, then payload equality
-  within one tag (i31s compare by value).
-- `ref.test`/`ref.cast` read the tag for the hierarchy, then the GC object's type
-  id; `any.convert_extern`/`extern.convert_any` become box/unbox, not identity.
-- `call_indirect`/`call_ref` require `Func` and non-null, otherwise the usual
-  trap. A non-funcref table can no longer be mistaken for a callable array.
-- Table slots become `Ref` (`uint64_t`); `TableInstance::base` stays the first
-  field, only its pointee type changes. The write barrier runs only for `Gc`.
-- Globals become **cells**: `VMContext::globals` is a `Value**` (one pointer per
-  global index) and an imported global's cell belongs to the exporter. All
-  `global.get`/`global.set` lowering funnels through `globalSlotAddress`, so the
-  backend change is: load the cell pointer, then load/store at the cell.
-- `ExternBox { const void* host; uint64_t identity; }` is Store-owned. The spec
-  harness maps `(ref.extern N)` to one box per `N` (memoized per script), which
-  makes `ref.eq` on externrefs meaningful and lets `table_fill`'s
-  `(ref.extern 1)` round-trip keep its identity.
+It was dropped because provenance classification answers the same questions
+(`ref.test`, `ref.cast`, `ref.eq`, `call_indirect`) without touching a single
+slot layout, and because the tag word would have rewritten every call argument,
+table slot and global for a hierarchy the engine can already name. What was kept
+from the design:
+
+- the **global cell** half (R1), including imported cells aliasing the exporter;
+  all `global.get`/`global.set` lowering funnels through `globalSlotAddress`, so
+  the backend loads the cell pointer and then the cell;
+- the **extern box** idea (R3), reimplemented as a reserved GC object rather than
+  a separate `ExternBox { host, identity }` — which also means the GC walker
+  releases the inner reference for free;
+- **box at the conversion, not at the boundary**: `extern.convert_any` boxes
+  internal references, `any.convert_extern` unboxes, and host pointers are never
+  wrapped, so their identity survives.
+
+The harness maps `(ref.extern N)` to a stable synthetic pointer derived from `N`
+(`Test/WastScript.cpp`), which is enough for `ref.eq` and `ref.test externref`;
+it is an identity *mapping*, not a host object model (the engine has none, by
+design — see `HostBridge` below for the embedder-supplied alternative).
 
 ### Migration
 
 | Stage | Work | Unblocks | Acceptance |
 | --- | --- | --- | --- |
 | **R1 — Globals as cells** ✅ | Done: `VMContext::globals` is `Value**`; `Internals::globalRefs` holds one cell per index (imported cells are the exporter's, defined cells point into `globalsStorage`); `ImportRegistrar::registerGlobal` publishes a `Value*` + `GlobalType` and `resolveGlobal` returns the cell; `registerExports` publishes the exporter's cell; `globalSlotAddress` loads it; the interpreter path dereferences it. | MG2, MG3, MG4 | Done: `global` **77/0**; `shared_global_a/b` prove writes cross both ways; `shared_global_bad` is rejected. |
-| **R2 — Tagged slots** | introduce `Ref` + tag constants (`WasmValue.hpp`); table slots become `Ref`; `call_indirect`/`call_ref` check `Func`; `table.get/set`, `ref.eq`, `ref.test/cast`, `ref.is_null` use the tag; exnref/GC/externref tables. | FR6, EX5, GC R4, CM8 | `try_table` stays 56/0; `table_fill` 36/0/9 and `array_new_data` 28/0/0 stay green; an `exnref` table test passes |
-| **R3 — Extern box** | Store-owned `ExternBox`; harness `(ref.extern N)` identity; host registration helper. | GC G3/D5, host interop | `ref_test` **69/2 → 71/0** (the two failures are `ref_test_extern`), and `(ref.extern 1)` result round-trips keep identity |
-
-R2 and R3 are independent after R1, but the tag values are fixed in R2, so R3
-lands second. R1 is the contained slice: one `VMContext` field type, one lowering
-site, and the import/export plumbing; the `LinearMemory`/`TableInstance` field
-offsets and `v128`/scalar layouts are untouched.
+| **R2 — Generic reference slots** ✅ (different route) | Done without tags: the table slot stays one pointer-sized word behind the funcref `Callable**` view, so any reference survives `table.set`/`table.get`; `wasm_ref_store` is the single write barrier; `ref.test`/`ref.cast` classify by provenance. | FR6, EX5, GC R4, CM8 | Done: `ref_test` **71/0**, `table_fill` **36/0/9**, `array_new_data` **28/0/0**; the `exnref` table round-trip is covered by `exnref_table.wat`. |
+| **R3 — Extern identity** ✅ (different route) | Done: internal i31/struct/array references are boxed by `extern.convert_any` in a reserved GC object (`GcHeader::kExternBoxTypeId`); `any.convert_extern` unwraps; host pointers stay opaque. The harness derives `(ref.extern N)` identity as a stable synthetic pointer. | GC G3/D5, host interop | Done: `ref_test` **71/0** and `extern` **18/0**, including the `ref_test_extern` cases that motivated R3. |
 
 **Rejected alternatives:** a 16-byte `{payload, tag}` reference (doubles the size
 of every call argument, table slot and global), and NaN-boxing (the value stack
 also carries `f64`, so payloads would collide). Neither is worth it for a
-single-threaded engine whose table indirection is already the hot path.
+single-threaded engine whose table indirection is already the hot path — and a
+low-bit tag turned out not to be needed either.
 
 ## Embedder Guide
 
@@ -164,11 +168,12 @@ at compile time, giving the native function access to the calling module's
 linear memory, globals, table, and `hostData`:
 
 ```cpp
-// Registration (before instantiation):
+// Registration (before instantiation). `localTypeIdx` is the index of the
+// import's type in the *importing* module; `typeId` may be left as kNone.
 resolver.registerFunction("env", "my_func", WASM::Callable{
-    .fnPtr     = reinterpret_cast<void*>(my_native_func),
-    .context   = nullptr,   // signals: use caller's VMContext
-    .typeIndex = typeIdx
+    .fnPtr        = reinterpret_cast<void*>(my_native_func),
+    .context      = nullptr,   // signals: use caller's VMContext
+    .localTypeIdx = typeIdx
 });
 
 // After instantiation, attach host state:
@@ -181,10 +186,11 @@ instance->context()->hostData = &myAppState;
 ```cpp
 void my_native_func(WASM::VMContext* vm, int32_t arg1, double arg2) {
     // vm is the CALLER's VMContext — access everything the module sees:
-    //   vm->memories    — array of LinearMemory* (imports first, then locals)
+    //   vm->memories    — LinearMemory* array, imports first then locals
     //   vm->memoryCount — number of entries in vm->memories
     //   vm->globals     — one Value* cell per global index
-    //   vm->table       — function table
+    //   vm->tables      — TableInstance** array, same index space as Wasm
+    //   vm->tableCount  — number of entries in vm->tables
     //   vm->hostData    — embedder state (set after instantiation)
 }
 ```
@@ -314,14 +320,12 @@ The JIT will burn this address into the machine code at compile time:
 ```cpp
 // Module A imports a function defined by module B:
 auto instanceB = compiler.instantiate(moduleB, importsB);
-auto exportedFunc = instanceB->exportedFunction("some_func");
+std::optional<WASM::Callable> exported = instanceB->exportedFunction("some_func");
 
-// In module A's import resolver:
-resolver.registerFunction("B", "some_func", WASM::Callable{
-    .fnPtr     = exportedFunc->fnPtr,
-    .context   = instanceB->context(),  // non-null → burned into Module A's JIT code
-    .typeIndex = exportedFunc->typeIndex
-});
+// In module A's import resolver: register the callee's own Callable. It already
+// carries the callee's `localTypeIdx` (in *its* module), its canonical `typeId`
+// and, for a compiled function, the raw entry point the driver calls.
+resolver.registerFunction("B", "some_func", *exported);
 ```
 
 **Caveat:** Module B's `ModuleInstance` must outlive all callers.  The address

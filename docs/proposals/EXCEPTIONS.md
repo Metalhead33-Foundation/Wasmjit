@@ -155,8 +155,9 @@ instructions were **removed**.
   `unreachable` and `divide by zero`.
 - A caught exception must **clear the pending slot** before branching, or the
   caller (and the embedder) still observes it as uncaught.
-- Exception helpers and the generated catch path are POD-only; the helpers trap
-  (`longjmp`) rather than throwing a C++ exception through JIT frames.
+- Exception helpers report through the pending slots and return; a helper
+  returns rather than jumping, so a C++ exception never crosses a generated frame
+  and a helper may hold ordinary C++ locals (§2.6 of [`../SAFETY.md`](../SAFETY.md)).
 - The exception object's payload uses the multi-value tuple layout
   (`translateStruct(tag params)`); a payload reference is retained, and objects
   live until Store teardown.
