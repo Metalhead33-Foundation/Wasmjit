@@ -238,8 +238,8 @@ loading stay in the external adapter. See
 Instance lifetime and call lifetime are separate. `instanceDestroying` is the
 backstop for a per-instance host arena, not a per-call cleanup hook. If an
 import can run host code that traps, the adapter needs a per-call handle scope;
-the current trap path and the proposed Go-style cleanup stack are described in
-[`TRAP_CLEANUP.md`](TRAP_CLEANUP.md).
+the current trap path, the cleanup options and the per-call arena discussion are
+in [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §11.
 
 ### Cross-module Wasm function imports
 

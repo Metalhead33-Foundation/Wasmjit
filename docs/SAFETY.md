@@ -155,7 +155,11 @@ this constraint without C++ unwinding is a fixed-capacity, Go-style cleanup
 stack that `WASM::trap()` drains before `longjmp`; the design, its limits, and
 the current trapping-start-function gap are recorded in
 [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md). The stack is **not implemented** and does
-not relax the POD-only rule for skipped frames.
+not relax the POD-only rule for skipped frames. The same note records that the
+string and array helpers the generated code already calls violate this rule
+today ([`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §7), and studies the alternatives —
+including a trap model with no non-local exit — against each backend
+([`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §10).
 
 ### 2.7 Execution state is per host thread, not per agent
 

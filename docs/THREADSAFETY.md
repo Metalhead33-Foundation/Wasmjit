@@ -636,7 +636,8 @@ The current trap mechanism is a per-host-thread `longjmp` to an armed
   unlock or release external state, but it is not C++ unwinding and does not
   make non-trivial locals in skipped frames safe. See
   [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) for the design, the code sketches, the
-  comparison table, and the current trapping-start-function gap.
+  comparison table, the option set, the backend feasibility study, and the
+  current trapping-start-function gap.
 - **Guest lock ownership.** A Wasm trap is not a C++ exception and does not run
   a `finally`. If an agent traps while holding a guest mutex, the lock stays
   held unless the module can prevent/convert the escaping trap into a cleanup
@@ -683,8 +684,9 @@ multi-agent race freedom.
   (orderings and `pause`),
   [`proposals/GC.md`](proposals/GC.md) (reference counting and the single
   mutator), [`proposals/TAILCALLS.md`](proposals/TAILCALLS.md) (trampoline and
-  per-function drivers), [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) (the Go-style
-  trap-cleanup candidate and the start-function gap),
+  per-function drivers), [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) (the trap-cleanup
+  option set — defer stack, confinement, status returns — and the start-function
+  gap),
   [`TESTING.md`](TESTING.md) (the host-thread test and how to run it).
 - Sources:
   `WasmBase/WasmStore.*` (Store locks and stable entities),
