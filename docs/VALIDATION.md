@@ -17,14 +17,14 @@ stack, and throws `std::runtime_error` on the first failed rule.
 
 | Layer | Rules |
 | --- | --- |
-| Module | type indices name function types; function/code count consistency; data-count consistency; start function `[] -> []`; duplicate export names and export index bounds; memory/table limits (min ≤ max, unknown limits flags, a byte-budget page cap — 65536 pages at 64 KiB or 2^32 at one byte — shared memories declare a max, table32 fits in 32 bits); tag types have no results; global/table initialisers and active element/data offsets (typed constant expressions); element/table type agreement, element item expressions and table initialiser typing; selected functions in element segments; empty modules |
+| Module | type indices name function types; function/code count consistency; data-count consistency; start function `[] -> []`; duplicate export names and export index bounds; memory/table limits (min ≤ max, unknown limits flags, a byte-budget page cap — 65536 pages at 64 KiB or 2^32 at one byte — shared memories declare a max, table32 fits in 32 bits); tag types name function types and may carry a result signature (control tags, `STACK_SWITCHING.md` SS-2); `throw`/`try_table` consume the parameter signature and ignore the results, and tag attributes must be 0; global/table initialisers and active element/data offsets (typed constant expressions); element/table type agreement, element item expressions and table initialiser typing; selected functions in element segments; empty modules |
 | Control | `block`/`loop`/`if`/`else`/`end` with typed params/results and exact stack height; `br`/`br_if`/`br_table` (operand values checked against every target; the unreachable stack is polymorphic)/`return`; `call`/`call_indirect`/`call_ref`; tail calls including result-type matching; `try_table` catch labels (payload, `exnref`, arity); `br_on_null`/`br_on_non_null`/`br_on_cast`/`br_on_cast_fail` |
 | Numeric | i32/i64/f32/f64 unary, binary, comparison, conversion, sign-extension and saturating forms, with exact operand/result types |
 | Memory | declared index type (`i32`/`i64`), alignment ≤ natural, 32-bit offset range, loads/stores, `memory.size/grow/init/copy/fill` |
 | Table | table64 index type, `get/set/grow/size/fill/copy/init`; table initialiser typing; `table.init` element-segment/table type match |
 | SIMD | 194 arithmetic/comparison/conversion shapes taken from `wasm_simd_ops.inc`, plus const/bitwise/splat/bitmask, loads/stores, lanes/shuffle/swizzle, and the relaxed ternary forms (madd/nmadd, laneselect, dot-add) |
 | Atomics | loads/stores/RMW/cmpxchg/wait/notify with access-size alignment and operand types |
-| References | `ref.null`/`ref.func`/`ref.is_null`/`ref.eq`/`ref.as_non_null`; `ref.func x` requires `x` to be declared outside function bodies/start; `call_ref $t` requires `(ref null $t)`; `ref.test`/`ref.cast` (both nullability forms) require the operand to be a reference in the target's hierarchy; full subtyping (nullability, func/extern/exn/any hierarchies, concrete-type subtyping and canonical structural type equivalence); untyped `select` is numeric/vector only; definite initialization of non-defaultable locals |
+| References | `ref.null`/`ref.func`/`ref.is_null`/`ref.eq`/`ref.as_non_null`; `ref.func x` requires `x` to be declared outside function bodies/start; `call_ref $t` requires `(ref null $t)`; `ref.test`/`ref.cast` (both nullability forms) require the operand to be a reference in the target's hierarchy; continuation references are not castable (`cont`/`nocont`/concrete `cont $ft` targets are rejected, `STACK_SWITCHING.md` SS-1); full subtyping (nullability, func/extern/exn/any hierarchies, concrete-type subtyping and canonical structural type equivalence); untyped `select` is numeric/vector only; definite initialization of non-defaultable locals |
 
 ## Conservative policy
 
@@ -69,7 +69,7 @@ restriction-only checks; they never change what an accepted module does.
 | `assert_uninstantiable` | 27 | **27** (26 rejected + 1 start trap) | 0 |
 | **total** | **2382** | **2382** | **0** |
 
-The default suite is **10377 assertions / 386 test cases, all green** (the
+The default suite is **10398 assertions / 387 test cases, all green** (the
 curated list holds 193 of the 257 scripts, 61 of them re-curated when the
 validator landed, plus `start.wast`). The
 strict run is **fully green** as well: every one of the 2,382 binary negative

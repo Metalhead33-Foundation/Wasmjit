@@ -154,6 +154,9 @@ private:
 	void popTypes(const std::vector<ValueType>& types);
 	void checkTailCallResults(const FuncType& callee);
 	bool assignable(const ValueType& actual, const ValueType& expected) const;
+	// True for `cont`, `nocont` and a concrete `cont $ft` type index. The
+	// stack-switching proposal forbids casting to any continuation type.
+	bool isContinuationHeap(const HeapType& type) const;
 	// More Array Constructors (GC_EXTENSIONS.md GX-2) helpers.
 	CoreTypeView requireArrayType(TypeIdx idx, const char* who) const;
 	bool storageAssignable(const CanonStorageType& actual,

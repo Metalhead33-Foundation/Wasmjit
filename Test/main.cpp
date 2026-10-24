@@ -6737,6 +6737,18 @@ TEST_CASE("stack-switching continuation types decode and opcodes fail clearly")
 	REQUIRE(refView.funcParams()[0].value.opcode == WASM::ValueTypeCode::RefNull);
 	REQUIRE(refView.funcParams()[0].value.heap.abstract == WASM::AbstractHeapType::Cont);
 
+	// `(ref null nocont)` is the bottom of the continuation hierarchy.
+	std::vector<uint8_t> noContRef = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x06, 0x01, 0x60, 0x01, 0x63, 0x75, 0x00};
+	auto noContModule = parse(noContRef);
+	REQUIRE(noContModule != nullptr);
+	WASM::Module* noContTyped = noContModule->asCoreModule();
+	REQUIRE(noContTyped != nullptr);
+	const WASM::CoreTypeView noContView = noContTyped->typeView(0);
+	REQUIRE(noContView.funcParams().size() == 1);
+	REQUIRE(noContView.funcParams()[0].value.heap.abstract
+			== WASM::AbstractHeapType::NoCont);
+
 	// A body containing `cont.new` (0xE0) must be rejected by the validating
 	// decoder with a named error, rather than the generic unsupported-opcode one.
 	std::vector<uint8_t> contCode = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
@@ -6755,6 +6767,107 @@ TEST_CASE("stack-switching continuation types decode and opcodes fail clearly")
 		REQUIRE(std::string(error.what()).find("stack-switching") != std::string::npos);
 	}
 	REQUIRE(codeThrew);
+}
+
+
+// ── Stack switching: control-tag signatures (STACK_SWITCHING.md SS-2) ───────
+TEST_CASE("stack-switching control tags carry a result signature")
+{
+	const auto load = [](const std::vector<uint8_t>& bytes) {
+		std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+		Euph::Io::ConstBufferDevice device(span);
+		auto module = std::make_unique<WASM::Module>();
+		module->fromFile(device); // parse + validate
+		return module;
+	};
+	const auto loadError = [](const std::vector<uint8_t>& bytes) -> std::string {
+		std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+		Euph::Io::ConstBufferDevice device(span);
+		try {
+			WASM::Module module;
+			module.fromFile(device);
+		} catch (const std::exception& error) {
+			return error.what();
+		}
+		return {};
+	};
+
+	// type 0: (func (param i32) (result i64)); tag 0: attribute 0, type 0.
+	auto controlTag = load({0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7e,
+		0x0d, 0x03, 0x01, 0x00, 0x00});
+	REQUIRE(controlTag->tags.size() == 1);
+	REQUIRE(controlTag->tags[0].attribute == 0);
+	REQUIRE(controlTag->tags[0].typeIdx == 0);
+	const WASM::FuncType signature = controlTag->funcTypeAt(0);
+	REQUIRE(signature.params.size() == 1);
+	REQUIRE(signature.params[0].val.opcode == WASM::ValueTypeCode::I32);
+	REQUIRE(signature.results.size() == 1);
+	REQUIRE(signature.results[0].val.opcode == WASM::ValueTypeCode::I64);
+
+	// The only defined tag attribute is 0 (exception/control payload).
+	REQUIRE(loadError({0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7e,
+		0x0d, 0x03, 0x01, 0x01, 0x00}).find("unsupported attribute")
+			!= std::string::npos);
+
+	// A result-bearing control tag is also a valid exception tag: `throw` and
+	// `try_table` use its parameters and ignore the result signature.
+	auto throwCatch = load({0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x0e, 0x03,
+		0x60, 0x01, 0x7f, 0x01, 0x7e,             // type 0: (i32) -> i64 (the tag)
+		0x60, 0x01, 0x7f, 0x00,                   // type 1: thrower
+		0x60, 0x00, 0x01, 0x7f,                   // type 2: catcher
+		0x03, 0x03, 0x02, 0x01, 0x02,
+		0x0d, 0x03, 0x01, 0x00, 0x00,
+		0x07, 0x15, 0x02,
+		0x07, 't', 'h', 'r', 'o', 'w', 'e', 'r', 0x00, 0x00,
+		0x07, 'c', 'a', 't', 'c', 'h', 'e', 'r', 0x00, 0x01,
+		0x0a, 0x1b, 0x02,
+		0x06, 0x00, 0x20, 0x00, 0x08, 0x00, 0x0b,
+		0x12, 0x00, 0x02, 0x7f, 0x1f, 0x40, 0x01, 0x00, 0x00, 0x00, 0x41, 0x2a,
+		0x10, 0x00, 0x0b, 0x41, 0x00, 0x0b, 0x0b});
+	WASM::RegistryImportResolver throwImports;
+	auto throwBackend = TestBackend::create();
+	auto throwInstance = throwBackend->instantiator().instantiate(*throwCatch, throwImports);
+	REQUIRE(throwInstance.get() != nullptr);
+	auto catcher = throwInstance->exportedFunction("catcher");
+	REQUIRE(catcher.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*catcher) == 42);
+
+	// Continuation references are not castable (the proposal's `castable`
+	// side condition): `ref.test`/`ref.cast`/`br_on_cast*` target no cont type.
+	REQUIRE(loadError({0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x07, 0x01, 0x60, 0x01, 0x63, 0x68, 0x01, 0x7f,
+		0x03, 0x02, 0x01, 0x00,
+		0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0xfb, 0x15, 0x68, 0x0b})
+		.find("not castable") != std::string::npos);
+
+	// A control tag exports and imports by the same process-wide TagId.
+	auto exporter = load({0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7e,
+		0x0d, 0x03, 0x01, 0x00, 0x00,
+		0x07, 0x05, 0x01, 0x01, 0x74, 0x04, 0x00});
+	auto importer = load({0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7e,
+		0x02, 0x08, 0x01, 0x01, 0x61, 0x01, 0x74, 0x04, 0x00, 0x00});
+	auto badImporter = load({0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+		0x02, 0x08, 0x01, 0x01, 0x61, 0x01, 0x74, 0x04, 0x00, 0x00});
+
+	WASM::RegistryImportResolver registry;
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	auto instanceA = compiler.instantiate(*exporter, registry);
+	REQUIRE(instanceA.get() != nullptr);
+	instanceA->registerExports(registry, "a");
+	auto instanceB = compiler.instantiate(*importer, registry);
+	REQUIRE(instanceB.get() != nullptr);
+	REQUIRE(instanceB->tagIds().size() == 1);
+	REQUIRE(instanceB->tagIds()[0] == instanceA->tagIdForIndex(0));
+	REQUIRE_THROWS(compiler.instantiate(*badImporter, registry));
 }
 
 

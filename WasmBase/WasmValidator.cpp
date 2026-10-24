@@ -931,16 +931,23 @@ void Validator::validateModule()
 		funcTypeAt(imp.typeIdx);
 	for (uint32_t typeIdx : module.internalFunctionTypeIndices)
 		funcTypeAt(typeIdx);
+	// Tag types are function types. A control tag (STACK_SWITCHING.md SS-2) may
+	// carry a non-empty result signature; the exception instructions that need a
+	// result-less payload (`throw`, `try_table` catches) reject it at use.
 	for (std::size_t i = 0; i < module.importTags.size(); ++i) {
-		if (!funcTypeAt(module.importTags[i].typeIdx).results.empty())
+		if (module.importTags[i].attribute != 0)
 			fail("tag " + module.describeIndex(NameKind::Tag, static_cast<uint32_t>(i))
-				 + " has a non-empty result type");
+					+ " uses unsupported attribute "
+					+ std::to_string(module.importTags[i].attribute));
+		funcTypeAt(module.importTags[i].typeIdx);
 	}
 	for (std::size_t i = 0; i < module.tags.size(); ++i) {
-		if (!funcTypeAt(module.tags[i].typeIdx).results.empty())
+		if (module.tags[i].attribute != 0)
 			fail("tag " + module.describeIndex(NameKind::Tag,
-					 static_cast<uint32_t>(module.importTags.size() + i))
-				 + " has a non-empty result type");
+					static_cast<uint32_t>(module.importTags.size() + i))
+					+ " uses unsupported attribute "
+					+ std::to_string(module.tags[i].attribute));
+		funcTypeAt(module.tags[i].typeIdx);
 	}
 
 	// Every typed reference must name a declared type. This walks the canonical
@@ -1554,6 +1561,9 @@ void Validator::dispatchThrow(TagIdx arg)
 	const uint32_t typeIdx = arg < module.importTags.size()
 			? module.importTags[arg].typeIdx
 			: module.tags[arg - module.importTags.size()].typeIdx;
+	// A control tag may carry a result signature (STACK_SWITCHING.md SS-2) and
+	// the same tag may be thrown; `throw` consumes the parameters and never
+	// returns, so the tag's results are irrelevant here.
 	popTypes(paramTypes(funcTypeAt(typeIdx)));
 	setUnreachable();
 }
@@ -1682,10 +1692,23 @@ ValueType Validator::refTopForHeap(const HeapType& heapType) const
 	return top;
 }
 
+bool Validator::isContinuationHeap(const HeapType& type) const
+{
+	if (type.isTypeIndex) {
+		if (type.typeIndex >= module.typeCount())
+			return false; // the well-formedness check reports the bad index
+		return module.typeView(type.typeIndex).kind() == CanonTypeKind::Cont;
+	}
+	return type.abstract == AbstractHeapType::Cont
+			|| type.abstract == AbstractHeapType::NoCont;
+}
+
 void Validator::validateRefTest(bool nullable, const HeapType& heapType)
 {
 	const ValueType target = refType(nullable, heapType);
 	requireWellFormedType(target, "ref.test target");
+	if (isContinuationHeap(heapType))
+		fail("ref.test: continuation types are not castable");
 	const ValueType top = refTopForHeap(heapType);
 	const auto actual = popAny();
 	if (!actual)
@@ -1699,6 +1722,8 @@ void Validator::validateRefCast(bool nullable, const HeapType& heapType)
 {
 	const ValueType target = refType(nullable, heapType);
 	requireWellFormedType(target, "ref.cast target");
+	if (isContinuationHeap(heapType))
+		fail("ref.cast: continuation types are not castable");
 	const ValueType top = refTopForHeap(heapType);
 	const auto actual = popAny();
 	if (!actual)
@@ -1720,6 +1745,8 @@ void Validator::dispatchBrOnCastFail(uint8_t castop, LabelIdx label, HeapType ht
 
 void Validator::validateBrOnCast(bool isFail, uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2)
 {
+	if (isContinuationHeap(ht2))
+		fail("br_on_cast: continuation types are not castable");
 	const auto makeRef = [](bool nullable, const HeapType& ht) {
 		ValueType type{};
 		type.opcode = nullable ? ValueTypeCode::RefNull : ValueTypeCode::Ref;
@@ -1780,6 +1807,8 @@ void Validator::dispatchTryTable(const BlockType& blockType, std::vector<CatchCl
 			const uint32_t typeIdx = clause.tagIdx < module.importTags.size()
 					? module.importTags[clause.tagIdx].typeIdx
 					: module.tags[clause.tagIdx - module.importTags.size()].typeIdx;
+			// A control tag may carry a result signature (STACK_SWITCHING.md
+			// SS-2); an exception catch carries the parameters and ignores them.
 			payload = paramTypes(funcTypeAt(typeIdx));
 			if (clause.kind == CatchKind::CatchRef)
 				payload.push_back(ValueType{ValueTypeCode::Ref,
