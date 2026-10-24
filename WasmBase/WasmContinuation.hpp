@@ -289,10 +289,18 @@ std::int32_t wasm_cont_suspend_ex(std::int32_t tagId,
 		std::uint32_t resultCapacity, std::uint32_t* resultCount,
 		const std::uint8_t* resultKinds);
 
+// Suspended-stack roots for a tracing collector. The refcounted engine keeps
+// these references alive on its own, but a tracing collector needs the explicit
+// list. The generated code registers pointer-typed locals/operand slots before
+// `suspend`; the provider transfers them to the collector's root set while the
+// stack is suspended and drops them when it resumes.
+void wasm_cont_add_root(void* ref);
+
 // Drops reference values in a caller-owned wide buffer (for an unhandled
 // suspension). No-op for scalar/v128 slots.
 void wasm_cont_drop_values(void* context, const std::uint8_t* kinds,
 		std::uint32_t count, void* values);
+
 
 // `cont.bind`: consume the continuation identity and bind a prefix of its
 // remaining arguments. The caller still owns/releases the old handle ref.

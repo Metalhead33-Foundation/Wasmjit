@@ -3357,6 +3357,31 @@ void OpcodeDispatcher::dispatchSuspend(WASM::TagIdx arg)
 	jit_value_t resultBuffer = allocateContinuationBuffer(tag.results.size());
 	jit_value_t resultCount = jit_value_create(function, jit_type_uint);
 
+	// Explicit suspended-stack roots for a tracing collector. Pointer-typed
+	// locals, remaining operands and live control slots are registered before
+	// the switch; the worker drops them when the continuation resumes.
+	jit_type_t rootParams[1] = {jit_type_void_ptr};
+	jit_type_t addRootParamSig = jit_type_create_signature(jit_abi_cdecl,
+			jit_type_void, rootParams, 1, 1);
+	const auto addRoot = [&](jit_value_t value) {
+		if (value == nullptr || jit_value_get_type(value) != jit_type_void_ptr)
+			return;
+		jit_value_t arg[1] = {value};
+		jit_insn_call_native(function, "wasm_cont_add_root",
+				reinterpret_cast<void*>(&WASM::wasm_cont_add_root),
+				addRootParamSig, arg, 1, 0);
+	};
+	for (jit_value_t value : locals)
+		addRoot(value);
+	for (jit_value_t value : valueStack)
+		addRoot(value);
+	for (const ControlBlock& block : controlStack) {
+		for (jit_value_t value : block.resultSlots)
+			addRoot(value);
+		for (jit_value_t value : block.paramSlots)
+			addRoot(value);
+	}
+
 	assert(arg < internals.tagIds.size());
 	jit_type_t params[8] = {jit_type_int, jit_type_void_ptr, jit_type_uint,
 			jit_type_void_ptr, jit_type_void_ptr, jit_type_uint,

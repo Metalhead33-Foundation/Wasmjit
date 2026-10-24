@@ -187,6 +187,24 @@ struct Worker {
 	std::vector<ContinuationValue> resultValues;
 	std::vector<ContinuationValue> tagValues;
 	std::vector<std::uint8_t> tagKinds;
+	std::vector<void*> roots;
+
+	void addRoot(void* ref)
+	{
+		if (ref == nullptr || creationContext == nullptr)
+			return;
+		roots.push_back(instanceFor(creationContext)->refClone(ref));
+	}
+
+	void dropRoots()
+	{
+		if (creationContext != nullptr) {
+			auto* instance = instanceFor(creationContext);
+			for (void* ref : roots)
+				instance->refDrop(ref);
+		}
+		roots.clear();
+	}
 
 	ExecutionState execution;
 	std::atomic<std::uint64_t> generation{0};
@@ -210,6 +228,7 @@ struct Worker {
 
 	virtual ~Worker()
 	{
+		dropRoots();
 		dropContinuationValues(boundKinds.data(), static_cast<std::uint32_t>(boundValues.size()),
 				boundValues.data(), creationContext);
 		dropContinuationValues(tagKinds.data(), static_cast<std::uint32_t>(tagValues.size()),
@@ -589,6 +608,7 @@ std::int32_t BWorker::suspend(std::int32_t tag,
 		return 0;
 	}
 
+	dropRoots();
 	std::vector<ContinuationValue> out = boundValues;
 	out.insert(out.end(), resumeValues.begin(), resumeValues.end());
 	boundValues.clear();
@@ -894,6 +914,7 @@ std::int32_t AWorker::suspend(std::int32_t tag,
 		return 0;
 	}
 
+	dropRoots();
 	std::vector<ContinuationValue> out = boundValues;
 	out.insert(out.end(), resumeValues.begin(), resumeValues.end());
 	boundValues.clear();
@@ -1408,6 +1429,12 @@ std::int32_t wasm_cont_suspend_ex(std::int32_t tagId,
 	}
 	return worker->suspend(tagId, args, argCount, argKinds, results,
 			resultCapacity, resultCount, resultKinds);
+}
+
+void wasm_cont_add_root(void* ref)
+{
+	if (t_currentWorker != nullptr)
+		t_currentWorker->addRoot(ref);
 }
 
 void wasm_cont_drop_values(void* context, const std::uint8_t* kinds,
