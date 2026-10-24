@@ -9715,6 +9715,56 @@ TEST_CASE("stack-switching dispatches multiple handlers and a loop handler")
 	REQUIRE(!WASM::trapPending());
 }
 
+TEST_CASE("host continuation scheduler exposes the JSPI-style hooks")
+{
+	struct State {
+		void* suspended = nullptr;
+		std::int32_t tag = 0;
+		std::int32_t payload = 0;
+		std::int32_t status = -1;
+	} state;
+	WASM::HostContinuationScheduler::Hooks hooks;
+	hooks.userData = &state;
+	hooks.onSuspended = [](void* user, void* continuation, std::int32_t tag,
+			std::int32_t value) noexcept {
+		auto* s = static_cast<State*>(user);
+		s->suspended = continuation;
+		s->tag = tag;
+		s->payload = value;
+	};
+	hooks.onCompleted = [](void* user, std::int32_t status) noexcept {
+		static_cast<State*>(user)->status = status;
+	};
+	WASM::HostContinuationScheduler scheduler(hooks);
+
+	static std::atomic<std::int32_t> resumedValue{0};
+	resumedValue.store(0);
+	WASM::Callable target{};
+	target.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) {
+		std::int32_t value = 0;
+		WASM::wasm_cont_suspend(71, 5, &value);
+		resumedValue.store(value);
+	});
+	void* raw = WASM::wasm_cont_new(&target, nullptr, 0, 0, 0);
+	REQUIRE(raw != nullptr);
+	REQUIRE(scheduler.submit(raw, 0, true));
+	REQUIRE(scheduler.pending() == 1);
+	REQUIRE(scheduler.step());
+	REQUIRE(scheduler.pending() == 0);
+	REQUIRE(state.suspended != nullptr);
+	REQUIRE(state.tag == 71);
+	REQUIRE(state.payload == 5);
+	REQUIRE(state.status == -1);
+	REQUIRE(resumedValue.load() == 0);
+
+	REQUIRE(scheduler.submit(state.suspended, 33, true));
+	state.suspended = nullptr;
+	REQUIRE(scheduler.step());
+	REQUIRE(resumedValue.load() == 33);
+	REQUIRE(state.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Completed));
+	REQUIRE(!WASM::trapPending());
+}
+
 TEST_CASE("stack-switching module drops a suspension with no handler")
 {
 	const std::uint32_t before = WASM::liveContinuationCount();

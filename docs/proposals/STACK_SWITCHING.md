@@ -138,9 +138,11 @@ The decision applies engine-wide and is recorded with its reasoning in §10.15
     worker (B).
 - **Host-facing handle.** `HostContinuation` wraps a `(ref cont)` lowered to
   `void*` (for example, an exported function result), owns one reference, and
-  offers `resume` plus `suspendCurrent` for a native import. This is the
-  JSPI/embedder seam and the groundwork for a future scheduler; it is **not**
-  an agent API and does not add concurrency.
+  offers `resume` plus `suspendCurrent` for a native import. `HostContinuationScheduler`
+  adds the opt-in, engine-agnostic JSPI/Lua/Python hook contract: `onSuspended`
+  receives the replacement handle and payload, and `onCompleted` receives the
+  final status. This is the JSPI/embedder seam and the groundwork for a future
+  scheduler; it is **not** an agent API and does not add concurrency.
 - **The validator and lowering are deliberately narrow.** At most one i32
   parameter and one i32 result (or void) for the continuation function. Multiple
   `(on $tag $label)` clauses and loop handler labels are supported; `cont.bind`
@@ -196,12 +198,12 @@ second `resume` read a dead stack.
 | **SS-6 — Execution state** | ✅ `Agent` owns an `ExecutionState` (trap slot, pending exception, tail-call state, defer stack, depth counters, stack limit); TLS holds the current state pointer; the helpers resolve it; isolation tests cover two agents on one thread, per-thread defaults and the per-state stack limit. | SS7 | Done: `Test/main.cpp` ("agent execution state…", "each host thread…", "the stack limit…"). |
 | **SS-3 — Runtime stacks** | ✅ **A and B implemented:** A is the default (mmap-backed stack, guard page, `ucontext` switch, per-stack state/limit, ASAN fiber hooks, serial cross-thread migration); B is the explicit fallback (one host thread per suspended continuation). Both enforce one-shot, transfer traps/exceptions, unwind/cancel on drop and charge the budget. A's references are kept alive by refcounts; a tracing collector would still need a root list. | SS4 | Suspend/resume round-trips run on both providers; A stack exhaustion traps; serial migration is tested. |
 | **SS-4 — Instructions** | ◑ **Narrow slice:** `cont.new`, `cont.bind`, `suspend`, `resume` with multiple/loop handlers, and `resume_throw*` without handler clauses; i32/void signatures. Remaining: `switch`, `resume_throw*` handler clauses, multi-value/reference payloads, suspension propagation. | SS3 | The supported instructions execute; `switch` and the wider value model do not. |
-| **SS-5 — Tests** | ✅ A/B runtime tests, the host handle, A stack guard/migration, multiple/loop handlers, `cont.bind`, `resume_throw`, WAT modules and the model/rejection surface are in the default suite. | SS6 | `10,567` assertions / `408` cases green. |
+| **SS-5 — Tests** | ✅ A/B runtime tests, the host handle, A stack guard/migration, multiple/loop handlers, `cont.bind`, `resume_throw`, WAT modules and the model/rejection surface are in the default suite. | SS6 | `10,582` assertions / `409` cases green. |
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-24; whole suite 10,567 assertions /
-408 test cases):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-24; whole suite 10,582 assertions /
+409 test cases):
 
 | Script | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
@@ -211,6 +213,7 @@ second `resume` read a dead stack.
 | `continuation provider...` | 5 assertions | 0 | 0 | A is the default; B can be selected explicitly and still completes |
 | `host-thread fallback...` | 9 assertions | 0 | 0 | B suspend/resume hand-off across host threads |
 | `host continuation handle...` (2 cases) | 24 assertions | 0 | 0 | `HostContinuation` wraps a native-created or exported continuation, resumes it, and supports `suspendCurrent` in a native import |
+| `host continuation scheduler...` | 15 assertions | 0 | 0 | The embedder-owned `HostContinuationScheduler` calls `onSuspended`/`onCompleted` and resumes the replacement handle |
 | `native-stack continuation exhaustion...` | 7 assertions | 0 | 0 | A's guarded mmap stack reports `CallStackExhausted`, not SIGSEGV |
 | `native-stack continuation can migrate...` | 7 assertions | 0 | 0 | A is resumed serially on a different host thread; the engine/backend TLS travels with the stack |
 | `stack-switching dispatches multiple handlers and a loop handler` | 8 assertions | 0 | 0 | Multiple `(on $tag $label)` clauses and a loop-labelled handler receive `[payload (ref null cont)]` |

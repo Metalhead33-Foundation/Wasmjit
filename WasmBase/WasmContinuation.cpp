@@ -931,6 +931,65 @@ std::int32_t HostContinuation::suspendCurrent(std::int32_t tag, std::int32_t val
 	return wasm_cont_suspend(tag, value, resumedValue);
 }
 
+HostContinuationScheduler::~HostContinuationScheduler()
+{
+	clear();
+}
+
+bool HostContinuationScheduler::submit(void* continuation, std::int32_t arg,
+		bool takeOwnership) noexcept
+{
+	if (!isContinuationRef(continuation))
+		return false;
+	if (!takeOwnership && !continuationRefRetain(continuation))
+		return false;
+	tasks_.push_back(Task{continuation, arg});
+	return true;
+}
+
+void HostContinuationScheduler::clear() noexcept
+{
+	for (const Task& task : tasks_) {
+		if (task.continuation != nullptr)
+			continuationRefRelease(task.continuation);
+	}
+	tasks_.clear();
+}
+
+bool HostContinuationScheduler::step() noexcept
+{
+	if (tasks_.empty())
+		return false;
+	Task task = tasks_.front();
+	tasks_.pop_front();
+
+	HostContinuation handle(task.continuation, true);
+	ContinuationResumeResult result;
+	if (!handle.resume(task.arg, &result))
+		return true;
+
+	if (result.status == static_cast<std::int32_t>(ContinuationStatus::Suspended)) {
+		if (result.continuation != nullptr) {
+			if (hooks_.onSuspended != nullptr)
+				hooks_.onSuspended(hooks_.userData, result.continuation,
+						result.tagId, result.value);
+			else
+				continuationRefRelease(result.continuation);
+		}
+	} else if (hooks_.onCompleted != nullptr) {
+		hooks_.onCompleted(hooks_.userData, result.status);
+	}
+	return true;
+}
+
+std::size_t HostContinuationScheduler::run() noexcept
+{
+	std::size_t count = 0;
+	while (step())
+		++count;
+	return count;
+}
+
 extern "C" {
 
 void* wasm_cont_new(void* callable, void* context, std::uint32_t paramCount,

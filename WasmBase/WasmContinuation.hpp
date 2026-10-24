@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 
 namespace WASM {
 
@@ -150,6 +151,70 @@ public:
 
 private:
 	void* ref_ = nullptr;
+};
+
+// ── Embedder-owned scheduling / JSPI-style promise seam ─────────────────────
+// WasmJit deliberately has no JavaScript, Lua or Python engine. This class is
+// the opt-in contract an embedder's glue code uses to connect a language
+// runtime's promise/task queue to a suspended Wasm continuation:
+//
+//   * `submit` owns (or retains) a continuation and queues a resume value;
+//   * `step` resumes exactly one task and invokes the hooks:
+//       - `onSuspended` receives the *replacement* continuation (ownership
+//         transferred to the callback) plus the tag and payload. The embedder
+//         stores it behind its Promise/async task and later calls `submit`;
+//       - `onCompleted` receives the final status; a trap/exception has
+//         already been recorded in the engine's per-execution-state slots;
+//   * `run` drains the queue, and the embedder may interleave `step` with its
+//     own event loop.
+//
+// No hook is required. With no hooks the scheduler still resumes tasks and
+// releases replacement continuations, which makes it useful as a simple
+// trampoline. Hooks are called synchronously on the thread that calls `step`,
+// so the scheduler remains serial and is not an agent API. True multi-agent
+// execution remains deferred.
+class HostContinuationScheduler {
+public:
+	struct Hooks {
+		void* userData = nullptr;
+		// Ownership of `continuation` is transferred to the callback. The
+		// callback must release it (or keep it alive with `submit`).
+		void (*onSuspended)(void* userData, void* continuation,
+				std::int32_t tagId, std::int32_t value) noexcept = nullptr;
+		// `status` is a `ContinuationStatus` value. Traps/exceptions are also
+		// visible through the usual pending slots.
+		void (*onCompleted)(void* userData, std::int32_t status) noexcept = nullptr;
+	};
+
+	HostContinuationScheduler() noexcept = default;
+	explicit HostContinuationScheduler(Hooks hooks) noexcept : hooks_(hooks) {}
+	~HostContinuationScheduler();
+
+	HostContinuationScheduler(const HostContinuationScheduler&) = delete;
+	HostContinuationScheduler& operator=(const HostContinuationScheduler&) = delete;
+
+	Hooks& hooks() noexcept { return hooks_; }
+	const Hooks& hooks() const noexcept { return hooks_; }
+
+	// Queue a continuation. `takeOwnership` has the same meaning as
+	// `HostContinuation(ref, takeOwnership)`. An invalid reference is rejected.
+	bool submit(void* continuation, std::int32_t arg,
+			bool takeOwnership = true) noexcept;
+	std::size_t pending() const noexcept { return tasks_.size(); }
+	void clear() noexcept;
+
+	// Resume one queued task. Returns false when the queue is empty.
+	bool step() noexcept;
+	// Resume tasks until the queue is empty. Returns the number of tasks run.
+	std::size_t run() noexcept;
+
+private:
+	struct Task {
+		void* continuation = nullptr;
+		std::int32_t arg = 0;
+	};
+	Hooks hooks_{};
+	std::deque<Task> tasks_{};
 };
 
 // ── Generated-code entry points (C ABI) ───────────────────────────────────

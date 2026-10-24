@@ -1,14 +1,15 @@
 # JavaScript-Related Proposals — Implementation Notes, Spec Status, and Deliberate Non-Integration
 
-Status: design note / implementation reference (revision 4 — consolidated survey
+Status: design note / implementation reference (revision 5 — consolidated survey
 of JS-BigInt integration, JS String Builtins, JSPI, custom descriptors, ESM
 integration, JS Primitive Builtins and JS Types, plus the shipped generic
 host-bridge groundwork. **No JavaScript support is implemented or planned inside
 the engine.** The only proposed surface is an opt-in, embedder-owned adapter
 built from the existing import/export boundary and the optional `HostBridge`.
-Revision 4 notes the stack-switching A/B providers and the C++ `HostContinuation`
-handle: JSPI now has a host-facing continuation primitive, but still needs a JS
-engine/event-loop/promise adapter and remains declined as an engine feature.)
+Revision 4 added the C++ `HostContinuation`; revision 5 adds the opt-in
+`HostContinuationScheduler` hooks, so an embedder can implement JSPI-style
+scheduling for JS, Lua, Python or any other runtime in its own glue code. No
+language engine, Promise type or event loop is part of WasmJit.)
 
 Audience: anyone touching `ImportResolver`, `Callable`, `VMContext`,
 `HostBridge`, `externref`, `Module` metadata, or considering a
@@ -125,6 +126,33 @@ itself does not provide those. JSPI therefore remains **not achievable with an
 import/export hook alone** and is declined as an engine feature. An adapter may
 still call an import that returns a non-`Promise` value synchronously; that is
 ordinary host-call behaviour, not JSPI support.
+
+### 2.3.1 Embedder hook for JSPI-style glue
+
+WasmJit does **not** integrate a JavaScript engine, and it does not need to:
+the opt-in `HostContinuationScheduler` contract in
+`WasmBase/WasmContinuation.hpp` lets an embedder connect *any* language runtime
+(JavaScript, Lua, Python, …) through its own glue code.
+
+The scheduler is a serial queue of `(continuation, resume value)` tasks. Its
+`step` method resumes one task and calls the embedder's hooks:
+
+| Hook | Meaning |
+|---|---|
+| `onSuspended(userData, continuation, tagId, value)` | The task suspended. Ownership of `continuation` is transferred to the callback. The embedder stores it behind its Promise/task object and later calls `submit(continuation, resumeValue)`. |
+| `onCompleted(userData, status)` | The task completed, trapped or raised. The status is a `ContinuationStatus`; trap/exception details remain in the engine's pending slots. |
+
+`submit(ref, arg, takeOwnership)` queues a continuation; `step()` runs one and
+`run()` drains the queue. With no hooks the scheduler still releases replacement
+continuations, so it is usable as a plain trampoline.
+
+A native import calls `HostContinuation::suspendCurrent(tag, value, &resumed)`
+exactly as it would in the engine; the scheduler receives the resulting
+suspension through `onSuspended`. The embedder's glue decides whether that
+becomes a JavaScript `Promise`, a Lua coroutine, a Python awaitable, or something
+else. No JS engine, Promise type, event loop, or scheduler is part of WasmJit;
+the hooks are opt-in and null by default. Calls remain serial and are not an
+agent API.
 
 ### 2.4 Custom Descriptors
 
@@ -409,7 +437,7 @@ contract is needed, or whether the proposal is declined.
 | JS1 | **`externref` has no host identity or lifetime contract by default.** It is an opaque `void*`; equality is pointer equality, and `refClone`/`refDrop` do nothing for it unless an optional `HostBridge` is installed. A JS object wrapper cannot know when the engine has dropped its last reference, and two handles to one JS object need not compare equal. | `WasmValue.hpp` (`Value::ref`); `WasmHostBridge.hpp` (optional retain/release/equals + teardown); `WasmModuleInstance.cpp` (`refClone`, `refDrop`, `gcRefcountSlot`); `ABI.md` "External host adapter"; `REFERENCE_TYPES.md` RT1; `GC.md` R4/GC-8. | High for safe JS handle interop; addressed when the adapter opts in |
 | JS2 | **No stable type-reflection/descriptor API.** `Export` is only `{name, kind, index}`; import vectors expose raw parser structures. A host can read `Module` internals, but there is no `ImportDescriptor`/`ExportDescriptor`/`ExternType` view keyed by `TypeId`. JS Types needs one. | `WasmBase/WasmType.hpp` (`struct Export`), `WasmBase/WasmModule.hpp`; `TYPE_MODEL.md` TM-6/TM-10 still pending. | Medium |
 | JS3 | **No `wasm:` builtin policy.** The engine does not reserve `wasm:`, perform eager link-time builtin checks, hide builtin imports from metadata, or give a builtin a per-instantiation identity. It treats `wasm:js-string` as an ordinary import and leaves all semantics to the resolver. | `WasmImport.hpp` (name-based resolver only); no `wasm:` string in `WasmBase`/`LibJit`; `GC.md` §10.5 calls it a resolver problem. | Medium (acceptable slow path) |
-| JS4 | **JSPI has no JS/event-loop adapter.** The stack-switching A/B providers and `HostContinuation` expose a C++ suspend/resume primitive, but there is no JS engine, Promise scheduling or event-loop integration, and no JS-side `WebAssembly.Suspending`/`promising` bridge. JSPI therefore remains declined as an engine feature; an external adapter must supply the JS half. | `STACK_SWITCHING.md` §4/§10.12 (A default, B fallback); `WasmContinuation.hpp` (`HostContinuation`); no JS engine in the tree. | High for JSPI; declined |
+| JS4 | **JSPI has no JS/event-loop adapter in-tree.** The stack-switching A/B providers, `HostContinuation` and `HostContinuationScheduler` expose a C++ suspend/resume + hook contract, but there is no JS engine, Promise scheduling or event-loop integration. The embedder supplies that glue; JSPI remains declined as an engine feature. | `STACK_SWITCHING.md` §4/§10.12 (A default, B fallback); `WasmContinuation.hpp` (`HostContinuation`, `HostContinuationScheduler`); no JS engine in the tree. | High for JSPI; external-adapter path |
 | JS5 | **Custom Descriptors has no core support.** There are no `descriptor`/`describes` clauses, exact heap types, exact imports, `struct.new_desc`/`ref.get_desc`/`ref.cast_desc_eq` instructions, or RTT-adjacent descriptor storage. The JS prototype half additionally needs a JS object model. | `WasmType.hpp`/`WasmModule.cpp` type parsing; `GC.md` §4; `TYPE_IDENTITY.md` canonicalisation rules. | High for custom descriptors; declined |
 | JS6 | **No ESM loader.** There is no URL resolution, module graph, source phase, import map, CSP check, or ESM evaluation. The engine only parses a binary and resolves `(module, field)` imports. | `WasmImport.hpp`; `WasmModule.hpp`; no loader module in `WasmBase/`. | Low for the engine; embedder-only |
 | JS7 | **Host thunks are per-signature.** `Callable::fnPtr` is a raw C function pointer with `VMContext*` as arg0; there is no type-erased `HostFunction::invoke(args, results)` entry point. A JS adapter must generate or hand-write one thunk per imported/exported signature and must implement the multi-result buffer itself. | `WasmValue.hpp` (`Callable`, `callCallable*`); `ABI.md`; `MULTI_VALUE.md` MV4. | Medium (adapter complexity, not a semantic gap) |
@@ -561,7 +589,7 @@ engine.
 | JS Primitive Builtins | **Yes for correctness** | None; `externref` + scalars | Adapter supplies `wasm:js-*`; no inlining |
 | JS Types | **Yes with metadata** | Optional read-only descriptor view (`JS-3`) | Adapter builds JS objects/`WebAssembly.Function` |
 | ESM integration | **No engine part** | None | Embedder loader; engine unchanged |
-| JSPI | **No** | Host-facing suspendable continuations now exist; a JS engine/event loop/Promise adapter does not | Declined as an engine feature (`JS-4`); an external adapter can build on `HostContinuation` |
+| JSPI | **No** | Host-facing `HostContinuation` + `HostContinuationScheduler` hooks exist; the embedder supplies the JS engine, Promise and event loop | Declined as an engine feature (`JS-4`); an external adapter is the supported path |
 | Custom Descriptors | **No** | Descriptor/exact type clauses, new GC instructions, RTT; then JS prototypes | Declined as an engine feature (`JS-4`) |
 
 The "slow path" caveat is deliberate. The JS String Builtins proposal exists to

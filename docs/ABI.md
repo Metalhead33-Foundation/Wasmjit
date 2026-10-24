@@ -488,9 +488,25 @@ is `(ref cont)`, or from `wasm_cont_resume`'s suspension result. The public
 
 `ContinuationResumeResult` carries `status`, `tagId`, `value` and the
 replacement handle. A is the default provider (serial; may migrate between host
-threads); B is the opt-in
-host-thread fallback. Neither is an agent API: calls are serial and true
-multi-agent execution remains deferred.
+threads); B is the opt-in host-thread fallback. Neither is an agent API: calls
+are serial and true multi-agent execution remains deferred.
+
+#### Embedder scheduling contract (`HostContinuationScheduler`)
+
+The scheduler is opt-in and engine-agnostic. It is a serial queue of
+`(continuation, resume value)` tasks; `step()` resumes one, `run()` drains the
+queue. Its two hooks are the embedder's insertion points:
+
+- `onSuspended(userData, continuation, tagId, value)` — ownership of the
+  replacement continuation is transferred to the callback. The embedder's glue
+  stores it behind its Promise/coroutine/task and later calls
+  `submit(continuation, resumeValue)`.
+- `onCompleted(userData, status)` — the task finished; a trap or uncaught
+  exception is also visible in the engine's pending slots.
+
+This is how a JavaScript (or Lua/Python) adapter connects without linking its
+engine into `WasmBase/`: the adapter supplies the hooks and its own event loop.
+See [`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) §2.3.1.
 
 ### `Callable` (`WasmBase/WasmValue.hpp`)
 
