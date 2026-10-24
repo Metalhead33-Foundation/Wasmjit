@@ -52,6 +52,7 @@ HEADERS += \
     WasmComponentSection.hpp \
     WasmComponentValidation.hpp \
     WasmContext.hpp \
+    WasmDeterminism.hpp \
     WasmException.hpp \
     WasmExn.hpp \
     WasmGcHeader.hpp \
@@ -81,6 +82,7 @@ HEADERS += \
     WasmTypeIdentity.hpp \
     WasmTypeRegistry.hpp \
     WasmValidator.hpp \
+    WasmValidation.hpp \
     WasmVMContext.hpp \
     WasmValue.hpp \
     wasm_atomic.hpp \

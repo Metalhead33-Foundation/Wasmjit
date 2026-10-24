@@ -1264,12 +1264,23 @@ void Module::validateValueTypes() const
 
 void Module::validate() const
 {
-	Validator validator(*this);
+	validate(ValidationOptions{});
+}
+
+void Module::validate(const ValidationOptions& options) const
+{
+	Validator validator(*this, options);
 	validator.validate();
 }
 
 void Module::fromFile(Elv::Io::Device& file)
 {
+	fromFile(file, ValidationOptions{});
+}
+
+void Module::fromFile(Elv::Io::Device& file, const ValidationOptions& options)
+{
+	parseOptions = options;
 	const Preamble preamble = Artifact::readPreamble(file);
 	version = preamble.version;
 	if (preamble.layer == kComponentLayer)
@@ -1327,7 +1338,7 @@ void Module::parseBody(Elv::Io::Device& file, std::optional<uint64_t> end)
 	// Reject a module that declares a value type this engine cannot lower, rather
 	// than compiling a null operand into a function (docs/NULL_JIT_VALUE_DIAGNOSIS.md).
 	validateValueTypes();
-	validate();
+	validate(parseOptions);
 }
 
 std::unique_ptr<Module> Module::parseNested(Elv::Io::Device& file, uint64_t end)

@@ -5,6 +5,7 @@
 #include "WasmType.hpp"
 #include "WasmTypeIdentity.hpp"
 #include "WasmTypeStore.hpp"
+#include "WasmValidation.hpp"
 #include <memory>
 #include <optional>
 #include <string>
@@ -139,6 +140,10 @@ private:
 public:
 	Module();
 	void fromFile(Elv::Io::Device& file);
+	// Parse with an explicit validation policy. `relaxedDeadCode` adopts the
+	// Relaxed Dead-Code Validation rule for this load only
+	// (docs/proposals/PARSER_PROPOSALS.md PP-2); the default stays conservative.
+	void fromFile(Elv::Io::Device& file, const ValidationOptions& options);
 	// Parses an embedded core module body (no preamble) between the current
 	// position and `end`. Used by a component's core:module section.
 	static std::unique_ptr<Module> parseNested(Elv::Io::Device& file, uint64_t end);
@@ -175,6 +180,11 @@ public:
 	// active segment targets, and the immediate checks in every function body.
 	// Throws std::runtime_error naming the first failed rule.
 	void validate() const;
+	void validate(const ValidationOptions& options) const;
+	// The policy this module was parsed with (PARSER_PROPOSALS.md PP-2). A
+	// profile-aware instantiation reuses `relaxedDeadCode` so a relaxed module
+	// is not re-validated conservatively.
+	const ValidationOptions& validationOptions() const { return parseOptions; }
 	bool isSubtype(TypeIdx actual, TypeIdx expected) const;
 	bool heapTypeMatchesTypeIndex(TypeIdx actual, const HeapType& expected) const;
 private:
@@ -184,6 +194,9 @@ private:
 	// True once the type section has been scanned; a type import after that
 	// point is rejected (the pre-type import section is the sanctioned ordering).
 	bool typeSectionProcessed = false;
+	// The policy the module was parsed with; `parseBody` reuses it for the
+	// validation pass at the end of decoding (PARSER_PROPOSALS.md PP-2).
+	ValidationOptions parseOptions{};
 	uint32_t localTypeIndex(TypeId id) const;
 	ValueType valueTypeFromCanon(const CanonValueType& type) const;
 	StorageType storageTypeFromCanon(const CanonStorageType& type) const;

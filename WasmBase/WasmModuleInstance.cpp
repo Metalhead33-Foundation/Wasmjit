@@ -74,8 +74,17 @@ inline ValueTypeCode nullReferenceKind(int32_t heapType)
 } // namespace
 
 std::unique_ptr<ModuleInstance> ModuleInstantiator::instantiate(const Module& module, ImportResolver& resolver,
-		const HostBridge* hostBridge)
+		const HostBridge* hostBridge, const ProfileConfig& profile)
 {
+	// A non-full profile gates the module here as well as at load time, so a
+	// module parsed under the full profile cannot bypass an exclusion.
+	if (!profile.isFull()) {
+		ValidationOptions options = module.validationOptions();
+		options.profile = profile;
+		module.validate(options);
+	}
+	activeProfile = profile;
+
 	// The constructor does all the backend-agnostic setup.
 	auto instance = std::make_unique<ModuleInstance>(module, resolver, hostBridge);
 

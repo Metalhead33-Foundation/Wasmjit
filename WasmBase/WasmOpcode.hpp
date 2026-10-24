@@ -750,6 +750,13 @@ enum class SIMDOpcode : uint32_t {
 	I16x8RelaxedDotI8x16I7x16S  = 274,
 	I32x4RelaxedDotI8x16I7x16AddS= 275,
 };
+
+// The relaxed-SIMD sub-opcodes occupy one contiguous tail range (0x100–0x113).
+// A profile that excludes the `N` marker (non-determinism) must reject them.
+inline constexpr bool isRelaxedSimdOpcode(SIMDOpcode opcode) noexcept
+{
+	return static_cast<uint32_t>(opcode) >= 256;
+}
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, SIMDOpcode right) {
 	return left.writeLEB128_enum(right);
 }

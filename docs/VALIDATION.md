@@ -36,6 +36,21 @@ because a catch injects its payload into an outer label, which the linear stack
 does not model. A validator must never reject a module it could not check — the
 cost is coverage, measured below, not correctness.
 
+`ValidationOptions::relaxedDeadCode` (`WasmValidation.hpp`) opts into the
+Relaxed Dead-Code Validation algorithm for one load
+(`Module::fromFile(file, options)` or `Module::validate(options)`): after
+`unreachable`, pushes and pops are skipped together with every pop-dependent
+check, while immediate widths and index bounds still apply. The default stays
+conservative (the curated suite still encodes the historical result for three
+dead `return_call*` cases, and the proposal permits a stricter engine), so the
+negative-module results below do not change.
+
+`ValidationOptions::profile` additionally gates the language profiles
+([`proposals/PROFILES.md`](proposals/PROFILES.md) PR-2/PR-4): the scalar profile
+rejects `v128` declarations and `0xFD` instructions, and the deterministic
+profile rejects shared constructs, atomics and relaxed SIMD. These are
+restriction-only checks; they never change what an accepted module does.
+
 ## Measured coverage
 
 `WASM_SPEC_VALIDATE=1` on the curated set (2026-10-18):
@@ -48,7 +63,7 @@ cost is coverage, measured below, not correctness.
 | `assert_uninstantiable` | 27 | **27** (26 rejected + 1 start trap) | 0 |
 | **total** | **2382** | **2382** | **0** |
 
-The default suite is **10269 assertions / 380 test cases, all green** (the
+The default suite is **10334 assertions / 384 test cases, all green** (the
 curated list holds 193 of the 257 scripts, 61 of them re-curated when the
 validator landed, plus `start.wast`). The
 strict run is **fully green** as well: every one of the 2,382 binary negative

@@ -1,6 +1,7 @@
 #ifndef WASMVALIDATOR_HPP
 #define WASMVALIDATOR_HPP
 #include "WasmModule.hpp"
+#include "WasmValidation.hpp"
 #include "WasmOpcodeDispatcher.hpp"
 #include <cstdint>
 #include <optional>
@@ -27,7 +28,7 @@ namespace WASM {
 class Validator final : public OpcodeDispatcher
 {
 public:
-	explicit Validator(const Module& module);
+	explicit Validator(const Module& module, ValidationOptions options = {});
 
 	// Throws std::runtime_error naming the first rule that failed.
 	void validate();
@@ -38,6 +39,7 @@ private:
 	};
 
 	const Module& module;
+	ValidationOptions options;
 	std::size_t totalFunctions = 0;
 	std::size_t totalTables = 0;
 	std::size_t totalMemories = 0;
@@ -94,6 +96,14 @@ private:
 	ValueType refTopForHeap(const HeapType& heapType) const;
 	void validateRefTest(bool nullable, const HeapType& heapType);
 	void validateRefCast(bool nullable, const HeapType& heapType);
+
+	// Profile gates (docs/proposals/PROFILES.md PR-2/PR-4): reject constructs an
+	// excluded marker forbids before any structural rule reports on them.
+	void checkProfile() const;
+	void checkProfileValueType(const ValueType& type, const std::string& where) const;
+	// Prefixed-instruction gates (shared with the base dispatcher's hooks).
+	void onSimdOpcode(SIMDOpcode opcode) override;
+	void onAtomicOpcode(AtomicOpcode opcode) override;
 
 	void checkLimits(const Limits& limits, bool is64, bool isMemory,
 					 const char* what, std::size_t index,

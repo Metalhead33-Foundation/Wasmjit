@@ -121,7 +121,7 @@ void ModuleCompiler::compileFunction(jit_function_t fn, uint32_t funcTypeIdx, co
 
 	OpcodeDispatcher dispatcher(context, fn, typeTranslator, instance, internals, module, funcType,
 							  importedFuncCount, functionIndex, body.branchHints,
-							  locals, valueStack, controlStack);
+							  locals, valueStack, controlStack, profile());
 	// Prologue: guest stack guard + a pending check, then the body.
 	dispatcher.emitFunctionEntry();
 	dispatcher.readCode(stream);

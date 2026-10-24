@@ -412,6 +412,7 @@ void WASM::OpcodeDispatcher::dispatchPrefixMisc(FastMemReader& stream, MiscOpcod
 // =============================================================================
 void WASM::OpcodeDispatcher::dispatchPrefixSIMD(FastMemReader& stream, SIMDOpcode opcode)
 {
+	onSimdOpcode(opcode);
 	switch (opcode) {
 		// ----------------------------------------------------------------
 		// Memory loads – memarg only
@@ -756,6 +757,7 @@ void WASM::OpcodeDispatcher::dispatchPrefixSIMD(FastMemReader& stream, SIMDOpcod
 // =============================================================================
 void OpcodeDispatcher::dispatchPrefixAtomic(FastMemReader& stream, AtomicOpcode opcode)
 {
+	onAtomicOpcode(opcode);
 
 	// atomic.fence carries the acquire-release ordering byte instead of a
 	// memarg; atomic.pause (acquire-release proposal) has no immediate at all.

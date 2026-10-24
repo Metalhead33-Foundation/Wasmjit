@@ -139,6 +139,10 @@ baked in at compile time through the `WASM_TEST_DIR` macro) and calls into it.
 | `AssemblyScript strings cross the native-import boundary in both encodings` | `string_interop.ts` | AS UTF-8 and UTF-16 encodings reach a native import; a host-filled buffer is decoded into an AS string and re-encoded back to C++ |
 | `AssemblyScript arrays and cached host handles cross the native-import boundary` | `native_interop.ts` | a managed `Int32Array`'s data pointer/length both ways, a host-owned token cached in AS state (acquire/read/release), and null/released-token rejection |
 | `AssemblyScript aborts and native import failures remain traps` | `native_interop.ts` | AS `abort()` via the implicit `env.abort` import, a native trap and a C++ exception crossing AS-generated frames |
+| `relaxed dead-code validation skips type-stack checks but keeps syntax` | `relaxed_dead_code` | the opt-in `ValidationOptions::relaxedDeadCode` accepts missing operands in dead code while retaining local/label/function bounds; the default policy still rejects the fixture |
+| `the scalar profile rejects vector types and SIMD instructions` | `profile_v128_type`, `profile_simd_op` | `{V}` rejects a `v128` declaration and a SIMD op that declares no `v128` type; `add_core` still runs (`PROFILES.md` PR-4) |
+| `the deterministic profile rejects threads and relaxed SIMD` | `profile_shared_memory`, `profile_atomic`, `profile_relaxed_simd` | `{N,T,V}` rejects shared memory and atomics; the `N` gate rejects relaxed SIMD (`PROFILES.md` PR-2) |
+| `the deterministic profile canonicalises observable NaNs` | `profile_nan` | `{N,T,V}` turns a signalling payload into the canonical NaN at stores, reinterprets, `global.set` and single/multi-value returns, for f32 and f64 (`PROFILES.md` PR-3) |
 
 The modules are produced either from AssemblyScript (`Test/wasm/*.ts`) or from hand-written WAT
 (`Test/wasm_wat/*.wat`); both land in `wasm_test_modules/`.
@@ -273,7 +277,7 @@ selection is explicit — which is why `./WasmJit '[spec]'` runs everything.
 | `./WasmJit '[spec]'` | all 257 spec scripts (~2 min in the debug build; 251 pass, 6 known failures) |
 | `./WasmJit 'spec: address'` | just that script |
 | `./WasmJit '*float*'` | scripts whose name matches |
-| `./WasmJit --list-tests` | the default view (380 test cases) |
+| `./WasmJit --list-tests` | the default view (384 test cases) |
 | `./WasmJit --list-tests '[spec]'` | every script, one line each (257) |
 | `./WasmJit -# --list-tags` | all tags, including `[#main]` and `[#SpecSuite]` |
 
@@ -304,7 +308,7 @@ It currently holds 193 of the 257 scripts, and the default run is green:
 
 ```
 $ ./WasmJit
-All tests passed (10269 assertions in 380 test cases)
+All tests passed (10334 assertions in 384 test cases)
 ```
 
 #### Refreshing the list
@@ -532,7 +536,7 @@ tests, and it is green:
 
 ```
 $ ./WasmJit
-All tests passed (10269 assertions in 380 test cases)
+All tests passed (10334 assertions in 384 test cases)
 ```
 
 A full sweep is deliberately loud, because most of the suite is still beyond the
@@ -723,7 +727,7 @@ Measured after SIMD-5:
 
 ```bash
 ./WasmJit 'simd*'      # 24 cases, 6147 assertions, all passing (includes the hidden [.simdbench] case)
-./WasmJit              # 380 cases, 10269 assertions, all passing
+./WasmJit              # 384 cases, 10334 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed

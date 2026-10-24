@@ -1,4 +1,5 @@
 #include "LibjitOpcodeDispatcher.hpp"
+#include "../WasmBase/WasmDeterminism.hpp"
 #include "../WasmBase/WasmSafety.hpp"
 #include "../WasmBase/WasmStack.hpp"
 #include "../WasmBase/WasmStore.hpp"
@@ -1988,8 +1989,17 @@ void OpcodeDispatcher::packReturnValues(jit_type_t tupleType, jit_value_t out, s
 	for (size_t i = resultCount; i-- > 0; )
 		values[i] = popValue();
 	for (size_t i = 0; i < resultCount; ++i) {
+		jit_value_t value = values[i];
+		// Canonicalise only float fields; integer/vector results are untouched.
+		if (i < currentFunc.results.size()) {
+			const WASM::ValueTypeCode code = currentFunc.results[i].val.opcode;
+			if (code == WASM::ValueTypeCode::F32)
+				value = canonicalizeFloat(value, false);
+			else if (code == WASM::ValueTypeCode::F64)
+				value = canonicalizeFloat(value, true);
+		}
 		jit_nuint fieldOffset = jit_type_get_offset(tupleType, static_cast<unsigned int>(i));
-		jit_insn_store_relative(function, out, static_cast<jit_nint>(fieldOffset), values[i]);
+		jit_insn_store_relative(function, out, static_cast<jit_nint>(fieldOffset), value);
 	}
 }
 
@@ -2541,6 +2551,15 @@ void OpcodeDispatcher::emitImplicitFunctionReturn()
 	}
 	if (n == 1) {
 		jit_value_t rv = popValue();
+		// Deterministic profile: canonicalise an observable NaN before it leaves
+		// the function (docs/proposals/PROFILES.md PR-3).
+		if (!currentFunc.results.empty()) {
+			const WASM::ValueTypeCode code = currentFunc.results[0].val.opcode;
+			if (code == WASM::ValueTypeCode::F32)
+				rv = canonicalizeFloat(rv, false);
+			else if (code == WASM::ValueTypeCode::F64)
+				rv = canonicalizeFloat(rv, true);
+		}
 		emitDropRefLocals();
 		jit_insn_return(function, rv);
 		return;
@@ -2720,13 +2739,30 @@ OpcodeDispatcher::OpcodeDispatcher(jit_context_t context, jit_function_t functio
 								   std::vector<WASM::BranchHint> branchHints,
 								   std::vector<jit_value_t>& locals,
 								   std::vector<jit_value_t>& valueStack,
-								   std::vector<ControlBlock>& controlStack)
+								   std::vector<ControlBlock>& controlStack,
+								   WASM::ProfileConfig profileConfig)
 	: context(context), function(function), typeTranslator(typeTranslator), instance(instance),
 	  internals(internals), module(module), currentFunc(currentFunc), importedFuncCount(importedFuncCount),
 	  functionIndex(functionIndex),
-	  locals(locals), valueStack(valueStack), controlStack(controlStack), branchHints(std::move(branchHints))
+	  locals(locals), valueStack(valueStack), controlStack(controlStack), branchHints(std::move(branchHints)),
+	  deterministicFloats(profileConfig.deterministic())
 {
 	functionLabel = "function " + module.describeIndex(WASM::NameKind::Function, functionIndex);
+}
+
+jit_value_t OpcodeDispatcher::canonicalizeFloat(jit_value_t value, bool isDouble)
+{
+	if (!deterministicFloats)
+		return value;
+	jit_type_t type = isDouble ? jit_type_float64 : jit_type_float32;
+	jit_type_t params[] = {type};
+	jit_type_t signature = jit_type_create_signature(jit_abi_cdecl, type, params, 1, 1);
+	jit_value_t args[] = {value};
+	void* helper = isDouble
+			? reinterpret_cast<void*>(&WASM::deterministicF64)
+			: reinterpret_cast<void*>(&WASM::deterministicF32);
+	return jit_insn_call_native(function, "wasm.deterministic_float", helper,
+			signature, args, 1, 0);
 }
 
 const WASM::BranchHint* OpcodeDispatcher::currentBranchHint() const
@@ -3085,6 +3121,15 @@ void OpcodeDispatcher::emitFunctionReturn(bool consume)
 	if (consume) {
 		if (n == 1) {
 			jit_value_t rv = popValue();
+			// Deterministic profile: canonicalise an observable NaN before it leaves
+			// the function (docs/proposals/PROFILES.md PR-3).
+			if (!currentFunc.results.empty()) {
+				const WASM::ValueTypeCode code = currentFunc.results[0].val.opcode;
+				if (code == WASM::ValueTypeCode::F32)
+					rv = canonicalizeFloat(rv, false);
+				else if (code == WASM::ValueTypeCode::F64)
+					rv = canonicalizeFloat(rv, true);
+			}
 			emitDropRefLocals();
 			jit_insn_return(function, rv);
 			return;
@@ -3105,6 +3150,15 @@ void OpcodeDispatcher::emitFunctionReturn(bool consume)
 	const size_t base = valueStack.size() - n;
 	if (n == 1) {
 		jit_value_t rv = valueStack[base];
+		// Deterministic profile: canonicalise an observable NaN before it leaves
+		// the function (docs/proposals/PROFILES.md PR-3).
+		if (!currentFunc.results.empty()) {
+			const WASM::ValueTypeCode code = currentFunc.results[0].val.opcode;
+			if (code == WASM::ValueTypeCode::F32)
+				rv = canonicalizeFloat(rv, false);
+			else if (code == WASM::ValueTypeCode::F64)
+				rv = canonicalizeFloat(rv, true);
+		}
 		emitDropRefLocals();
 		jit_insn_return(function, rv);
 		return;
@@ -3555,6 +3609,11 @@ void OpcodeDispatcher::dispatchGlobalSet(WASM::GlobalIdx arg)
 		return;
 	}
 	jit_value_t v = popValue();
+	// An exported global is host-observable, so canonicalise a deterministic NaN.
+	if (gt.contentType.opcode == WASM::ValueTypeCode::F32)
+		v = canonicalizeFloat(v, false);
+	else if (gt.contentType.opcode == WASM::ValueTypeCode::F64)
+		v = canonicalizeFloat(v, true);
 	jit_value_t slot = globalSlotAddress(arg);
 	if (WASM::isReferenceType(gt.contentType.opcode)) {
 		// The `ref` member is at offset 0 of the Value union, so `slot` is
@@ -3701,14 +3760,15 @@ void OpcodeDispatcher::dispatchI64Store(WASM::MemArg addr)
 
 void OpcodeDispatcher::dispatchF32Store(WASM::MemArg addr)
 {
-	jit_value_t val = popValue();
+	// Memory is an observability point: canonicalise a NaN in deterministic mode.
+	jit_value_t val = canonicalizeFloat(popValue(), false);
 	jit_value_t ptr = effectiveMemoryAddress(addr, 4);
 	jit_insn_store_relative(function, ptr, 0, val);
 }
 
 void OpcodeDispatcher::dispatchF64Store(WASM::MemArg addr)
 {
-	jit_value_t val = popValue();
+	jit_value_t val = canonicalizeFloat(popValue(), true);
 	jit_value_t ptr = effectiveMemoryAddress(addr, 8);
 	jit_insn_store_relative(function, ptr, 0, val);
 }
@@ -4640,14 +4700,17 @@ void OpcodeDispatcher::dispatchF64PromoteF32()
 
 void OpcodeDispatcher::dispatchI32ReinterpretF32()
 {
+	// `reinterpret` exposes the payload: canonicalise a NaN in deterministic mode.
+	jit_value_t value = canonicalizeFloat(popValue(), false);
 	pushValue(callNativeUnary(function, reinterpret_cast<void*>(wasm_i32_reinterpret_f32),
-							  jit_type_int, jit_type_float32, popValue()));
+							  jit_type_int, jit_type_float32, value));
 }
 
 void OpcodeDispatcher::dispatchI64ReinterpretF64()
 {
+	jit_value_t value = canonicalizeFloat(popValue(), true);
 	pushValue(callNativeUnary(function, reinterpret_cast<void*>(wasm_i64_reinterpret_f64),
-							  jit_type_long, jit_type_float64, popValue()));
+							  jit_type_long, jit_type_float64, value));
 }
 
 void OpcodeDispatcher::dispatchF32ReinterpretI32()

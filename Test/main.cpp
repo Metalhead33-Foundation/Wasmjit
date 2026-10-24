@@ -7492,16 +7492,29 @@ TEST_CASE("a wrapped native import still receives the caller's VMContext")
 // ── Language profiles (docs/proposals/PROFILES.md PR-1) ─────────────────────
 TEST_CASE("the engine declares the full profile")
 {
-	// The engine runs the full profile `{}` and claims nothing narrower:
-	// deterministic floats (PR-3) and the scalar vector gate (PR-4) do not
-	// exist yet, and a false claim would be worse than a missing one (PRD2).
+	// The engine supports the full profile, the scalar profile and the
+	// deterministic∩scalar intersection. `{N,T}` alone is not claimed: a SIMD
+	// NaN payload can be observed byte-wise, and this engine normalises only the
+	// scalar surface (PROFILES.md PRD2/PRD5).
 	REQUIRE(WASM::supportedProfile() == WASM::Profile::Full);
 	REQUIRE(WASM::supportsProfile(WASM::Profile::Full));
+	REQUIRE(WASM::supportsProfile(WASM::Profile::Scalar));
+	REQUIRE(WASM::supportsProfile(WASM::Profile::DeterministicScalar));
 	REQUIRE_FALSE(WASM::supportsProfile(WASM::Profile::Deterministic));
-	REQUIRE_FALSE(WASM::supportsProfile(WASM::Profile::Scalar));
 	REQUIRE(std::string(WASM::profileName(WASM::Profile::Full)) == "full");
 	REQUIRE(std::string(WASM::profileName(WASM::Profile::Deterministic)) == "deterministic");
 	REQUIRE(std::string(WASM::profileName(WASM::Profile::Scalar)) == "scalar");
+	REQUIRE(std::string(WASM::profileName(WASM::Profile::DeterministicScalar))
+			== "deterministic+scalar");
+
+	// Configuration-level capability: a deterministic configuration is honoured
+	// only when it also excludes vectors.
+	REQUIRE(WASM::supportsProfileConfig(WASM::fullProfile()));
+	REQUIRE(WASM::supportsProfileConfig(WASM::scalarProfile()));
+	REQUIRE(WASM::supportsProfileConfig(WASM::deterministicScalarProfile()));
+	REQUIRE_FALSE(WASM::supportsProfileConfig(WASM::deterministicProfile()));
+	REQUIRE_FALSE(WASM::supportsProfileConfig(
+			WASM::ProfileConfig{WASM::ProfileMarker::NonDeterministic}));
 }
 
 
@@ -8488,4 +8501,279 @@ TEST_CASE("AssemblyScript aborts and native import failures remain traps")
 	// A C++ exception in an import is converted to a trap before it can reach an
 	// AS-generated frame.
 	trapFor(*throwing, WASM::TrapKind::Internal, "AS interop: C++ import threw");
+}
+
+
+// ── Relaxed Dead-Code Validation (docs/proposals/PARSER_PROPOSALS.md PP-2) ──
+TEST_CASE("relaxed dead-code validation skips type-stack checks but keeps syntax")
+{
+	// The fixture's dead regions contain instructions whose operands are
+	// missing; loading it proves the relaxed rule. Every exported function
+	// starts with `unreachable`, so calling one traps before the dead code.
+	// The default (conservative) policy rejects this fixture: the first dead
+	// `i32.add` pushes a value the next instruction then sees. The relaxed
+	// policy is an explicit opt-in (`ValidationOptions::relaxedDeadCode`).
+	REQUIRE_THROWS_AS(loadTestModule("relaxed_dead_code"), std::runtime_error);
+
+	WASM::Module module;
+	{
+		const std::string path = std::string(WASM_TEST_DIR) + "relaxed_dead_code.wasm";
+		Euph::Io::File file(path.c_str(), Elv::Io::Mode::READ);
+		WASM::ValidationOptions relaxed;
+		relaxed.relaxedDeadCode = true;
+		module.fromFile(file, relaxed);
+	}
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	const auto expectUnreachable = [](const WASM::Callable& function, bool hasParam) {
+		bool trapped = false;
+		WASM::TrapKind kind = WASM::TrapKind::Internal;
+		try {
+			if (hasParam)
+				(void)WASM::callCallable<int32_t>(function, int32_t(41));
+			else
+				(void)WASM::callCallable<int32_t>(function);
+		} catch (const WASM::Trap& trap) {
+			trapped = true;
+			kind = trap.kind();
+		}
+		REQUIRE(trapped);
+		REQUIRE(kind == WASM::TrapKind::Unreachable);
+	};
+
+	auto dead = instance->exportedFunction("dead");
+	auto deadBlock = instance->exportedFunction("dead-block");
+	auto deadIf = instance->exportedFunction("dead-if");
+	REQUIRE(dead.has_value());
+	REQUIRE(deadBlock.has_value());
+	REQUIRE(deadIf.has_value());
+	expectUnreachable(*dead, false);
+	expectUnreachable(*deadBlock, true);
+	expectUnreachable(*deadIf, true);
+
+	// A one-function module assembled from a raw body. `StringFixtureBuilder`
+	// makes each type `() -> i32`; the body includes its locals declaration.
+	const auto build = [](const std::vector<uint8_t>& body) {
+		StringFixtureBuilder fixture;
+		fixture.functionTypes(1);
+		fixture.functions(1);
+		fixture.code({body});
+		return fixture.bytes;
+	};
+	const auto rejects = [](const std::vector<uint8_t>& bytes, const std::string& needle) {
+		std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+		Euph::Io::ConstBufferDevice device(span);
+		bool threw = false;
+		std::string message;
+		try {
+			WASM::Module relaxed;
+			WASM::ValidationOptions options;
+			options.relaxedDeadCode = true;
+			relaxed.fromFile(device, options);
+		} catch (const std::exception& error) {
+			threw = true;
+			message = error.what();
+		}
+		REQUIRE(threw);
+		REQUIRE(message.find(needle) != std::string::npos);
+	};
+
+	// Differential control: the same missing-operand instruction on a reachable
+	// path is still rejected.
+	rejects(build({0x00, 0x6a, 0x0b}), "operand stack underflow");
+
+	// In dead code only pop-dependent checks are skipped. Immediates and index
+	// bounds are type-stack-independent and still enforced.
+	rejects(build({0x00, 0x00, 0x20, 0x63, 0x0b}), "unknown local"); // local.get 99
+	rejects(build({0x00, 0x00, 0x0c, 0x63, 0x0b}), "unknown label"); // br 99
+	rejects(build({0x00, 0x00, 0x10, 0x63, 0x0b}), "unknown function"); // call 99
+}
+
+
+// ── Language profiles (docs/proposals/PROFILES.md PR-2, PR-4) ────────────────
+namespace {
+
+WASM::Module loadModuleWithProfile(const char* name, const WASM::ProfileConfig& profile)
+{
+	const std::string path = std::string(WASM_TEST_DIR) + name + ".wasm";
+	Euph::Io::File file(path.c_str(), Elv::Io::Mode::READ);
+	WASM::ValidationOptions options;
+	options.profile = profile;
+	WASM::Module module;
+	module.fromFile(file, options);
+	return module;
+}
+
+std::string profileRejection(const char* name, const WASM::ProfileConfig& profile)
+{
+	try {
+		(void)loadModuleWithProfile(name, profile);
+	} catch (const std::exception& error) {
+		return error.what();
+	}
+	return {};
+}
+
+} // namespace
+
+TEST_CASE("the scalar profile rejects vector types and SIMD instructions")
+{
+	// A declared v128 type is rejected by the module type scan.
+	const std::string typeMessage = profileRejection("profile_v128_type",
+			WASM::scalarProfile());
+	REQUIRE(typeMessage.find("scalar profile: v128 value type") != std::string::npos);
+
+	// A SIMD instruction is rejected even when no v128 type is declared.
+	const std::string simdMessage = profileRejection("profile_simd_op",
+			WASM::scalarProfile());
+	REQUIRE(simdMessage.find("scalar profile: SIMD instruction") != std::string::npos);
+
+	// Both modules are in the full profile and load there.
+	REQUIRE_NOTHROW(loadModuleWithProfile("profile_v128_type", WASM::fullProfile()));
+	REQUIRE_NOTHROW(loadModuleWithProfile("profile_simd_op", WASM::fullProfile()));
+
+	// A scalar module is unaffected by the gate and still runs.
+	WASM::Module scalar = loadModuleWithProfile("add_core", WASM::scalarProfile());
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(scalar, imports, nullptr,
+			WASM::scalarProfile());
+	REQUIRE(instance.get() != nullptr);
+	auto add = instance->exportedFunction("add");
+	REQUIRE(add.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*add, int32_t(20), int32_t(22)) == 42);
+}
+
+TEST_CASE("the deterministic profile rejects threads and relaxed SIMD")
+{
+	const std::string shared = profileRejection("profile_shared_memory",
+			WASM::deterministicScalarProfile());
+	REQUIRE(shared.find("deterministic profile: shared memory") != std::string::npos);
+
+	const std::string atomic = profileRejection("profile_atomic",
+			WASM::deterministicScalarProfile());
+	REQUIRE(atomic.find("deterministic profile: atomic instruction") != std::string::npos);
+
+	// `{N}` alone is not a supported configuration, but its relaxed-SIMD gate is
+	// still directly testable; the supported `{N,T,V}` rejects the same op via V.
+	const std::string relaxed = profileRejection("profile_relaxed_simd",
+			WASM::ProfileConfig{WASM::ProfileMarker::NonDeterministic});
+	REQUIRE(relaxed.find("deterministic profile: relaxed SIMD instruction")
+			!= std::string::npos);
+
+	// All three are in the full profile.
+	REQUIRE_NOTHROW(loadModuleWithProfile("profile_shared_memory", WASM::fullProfile()));
+	REQUIRE_NOTHROW(loadModuleWithProfile("profile_atomic", WASM::fullProfile()));
+	REQUIRE_NOTHROW(loadModuleWithProfile("profile_relaxed_simd", WASM::fullProfile()));
+
+	// A scalar module works under the supported intersection.
+	WASM::Module module = loadModuleWithProfile("add_core",
+			WASM::deterministicScalarProfile());
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports, nullptr,
+			WASM::deterministicScalarProfile());
+	REQUIRE(instance.get() != nullptr);
+	auto add = instance->exportedFunction("add");
+	REQUIRE(add.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*add, int32_t(2), int32_t(3)) == 5);
+}
+
+TEST_CASE("the deterministic profile canonicalises observable NaNs")
+{
+	constexpr uint32_t kSigNaN32 = 0x7fa00001u;   // signalling NaN, payload 1
+	constexpr uint32_t kCanonical32 = 0x7fc00000u;
+	constexpr uint64_t kSigNaN64 = 0x7ff4000000000001ull;
+	constexpr uint64_t kCanonical64 = 0x7ff8000000000000ull;
+
+	const auto bits32 = [](float value) {
+		uint32_t bits = 0;
+		std::memcpy(&bits, &value, sizeof(bits));
+		return bits;
+	};
+	const auto bits64 = [](double value) {
+		uint64_t bits = 0;
+		std::memcpy(&bits, &value, sizeof(bits));
+		return bits;
+	};
+
+	// Full profile: `reinterpret` is bit-preserving, so the payload survives.
+	WASM::Module full = loadModuleWithProfile("profile_nan", WASM::fullProfile());
+	WASM::RegistryImportResolver fullImports;
+	auto fullBackend = TestBackend::create();
+	auto fullInstance = fullBackend->instantiator().instantiate(full, fullImports);
+	REQUIRE(fullInstance.get() != nullptr);
+	auto fullRoundtrip = fullInstance->exportedFunction("reinterpret_roundtrip");
+	auto fullResult = fullInstance->exportedFunction("nan_result");
+	REQUIRE(fullRoundtrip.has_value());
+	REQUIRE(fullResult.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*fullRoundtrip, static_cast<int32_t>(kSigNaN32))
+			== static_cast<int32_t>(kSigNaN32));
+	REQUIRE(bits32(WASM::callCallable<float>(*fullResult,
+			static_cast<int32_t>(kSigNaN32))) == kSigNaN32);
+
+	// Deterministic+scalar: every observability point yields the canonical NaN.
+	WASM::Module det = loadModuleWithProfile("profile_nan",
+			WASM::deterministicScalarProfile());
+	WASM::RegistryImportResolver detImports;
+	auto detBackend = TestBackend::create();
+	auto detInstance = detBackend->instantiator().instantiate(det, detImports, nullptr,
+			WASM::deterministicScalarProfile());
+	REQUIRE(detInstance.get() != nullptr);
+
+	auto roundtrip = detInstance->exportedFunction("reinterpret_roundtrip");
+	auto store = detInstance->exportedFunction("store_nan");
+	auto setGlobal = detInstance->exportedFunction("set_global_nan");
+	auto nanResult = detInstance->exportedFunction("nan_result");
+	auto nanPair = detInstance->exportedFunction("nan_pair");
+	auto roundtrip64 = detInstance->exportedFunction("reinterpret_roundtrip64");
+	auto store64 = detInstance->exportedFunction("store_nan64");
+	REQUIRE(roundtrip.has_value());
+	REQUIRE(store.has_value());
+	REQUIRE(setGlobal.has_value());
+	REQUIRE(nanResult.has_value());
+	REQUIRE(nanPair.has_value());
+	REQUIRE(roundtrip64.has_value());
+	REQUIRE(store64.has_value());
+
+	// reinterpret_f32 / i32.reinterpret_f32.
+	REQUIRE(WASM::callCallable<int32_t>(*roundtrip, static_cast<int32_t>(kSigNaN32))
+			== static_cast<int32_t>(kCanonical32));
+
+	// f32.store.
+	WASM::callCallable<void>(*store, static_cast<int32_t>(kSigNaN32));
+	int32_t stored32 = 0;
+	std::memcpy(&stored32, detInstance->context()->memories[0]->memoryBase,
+			sizeof(stored32));
+	REQUIRE(static_cast<uint32_t>(stored32) == kCanonical32);
+
+	// A returned float, single and multi-value.
+	REQUIRE(bits32(WASM::callCallable<float>(*nanResult,
+			static_cast<int32_t>(kSigNaN32))) == kCanonical32);
+	struct FloatPair { float first; float second; } pair{};
+	WASM::callCallableWithResults(*nanPair, &pair, static_cast<int32_t>(kSigNaN32));
+	REQUIRE(bits32(pair.first) == kCanonical32);
+	REQUIRE(bits32(pair.second) == kCanonical32);
+
+	// global.set: read the published cell directly, without reinterpreting.
+	WASM::callCallable<void>(*setGlobal, static_cast<int32_t>(kSigNaN32));
+	WASM::RegistryImportResolver exports;
+	detInstance->registerExports(exports, "m");
+	REQUIRE(det.globals.size() == 1);
+	auto cell = exports.resolveGlobal("m", "g", det.globals[0].type);
+	REQUIRE(cell.has_value());
+	REQUIRE(bits32((*cell)->f32) == kCanonical32);
+
+	// The f64 paths use the f64 canonical NaN.
+	REQUIRE(static_cast<uint64_t>(WASM::callCallable<int64_t>(*roundtrip64,
+			static_cast<int64_t>(kSigNaN64))) == kCanonical64);
+	WASM::callCallable<void>(*store64, static_cast<int64_t>(kSigNaN64));
+	uint64_t stored64 = 0;
+	std::memcpy(&stored64, detInstance->context()->memories[0]->memoryBase + 8,
+			sizeof(stored64));
+	REQUIRE(stored64 == kCanonical64);
 }

@@ -6,8 +6,8 @@
 
 namespace WASM {
 
-Validator::Validator(const Module& module)
-	: module(module)
+Validator::Validator(const Module& module, ValidationOptions validationOptions)
+	: module(module), options(validationOptions)
 {
 	totalFunctions = module.importFunctions.size() + module.internalFunctionTypeIndices.size();
 	totalTables = module.importTables.size() + module.tables.size();
@@ -263,8 +263,16 @@ std::vector<ValueType> Validator::blockResults(const BlockType& blockType) const
 
 void Validator::pushValue(const ValueType& type)
 {
-	if (!typeTainted)
-		typeStack.push_back(type);
+	// Dead code carries the bottom type (Relaxed Dead-Code Validation): when the
+	// mode is enabled, pushes and pops are skipped and only
+	// type-stack-independent checks remain (PARSER_PROPOSALS.md PP-2). The
+	// control stack is empty only at the function's final `end`, where a result
+	// push is harmless.
+	if (typeTainted
+			|| (options.relaxedDeadCode && !controlStack.empty()
+				&& controlStack.back().unreachable))
+		return;
+	typeStack.push_back(type);
 }
 
 std::optional<ValueType> Validator::popAny()
@@ -512,6 +520,12 @@ void Validator::popExpect(const ValueType& expected)
 
 void Validator::pushTypes(const std::vector<ValueType>& types)
 {
+	// As with pushValue: in the relaxed mode an unreachable frame has the bottom
+	// type, so results are not materialised (PP-2). An empty control stack means
+	// the function's final `end`, after its frame was popped.
+	if (options.relaxedDeadCode && !controlStack.empty()
+			&& controlStack.back().unreachable)
+		return;
 	for (const ValueType& type : types)
 		typeStack.push_back(type);
 }
@@ -549,12 +563,15 @@ void Validator::beginBlock(const BlockType& blockType, bool isLoop, bool isIf)
 	const std::vector<ValueType> results = blockResults(blockType);
 	popTypes(params);
 	const std::size_t height = typeStack.size();
-	pushTypes(params);
+	// Push the frame first: a block starts reachable, so its parameters are
+	// pushed even when the enclosing frame was unreachable (the algorithm's
+	// `push_ctrl` does this unconditionally, PP-2).
 	controlStack.push_back(ControlFrame{params, results, height, isLoop, isIf, false, false, {}, {}});
 	// A block inherits the definite-assignment state of its parent; stores made
 	// inside it do not escape at `end`.
 	controlStack.back().initialized = controlStack[controlStack.size() - 2].initialized;
 	controlStack.back().entryInitialized = controlStack.back().initialized;
+	pushTypes(params);
 }
 
 void Validator::endBlock(bool isElse)
@@ -569,8 +586,10 @@ void Validator::endBlock(bool isElse)
 		if (!typeTainted && typeStack.size() != current.height)
 			fail("type mismatch: values remaining at else");
 		typeStack.resize(current.height);
-		pushTypes(current.startTypes);
+		// `else` starts a fresh, reachable frame with the same parameters; make
+		// the frame reachable before pushing them (PP-2).
 		current.unreachable = false;
+		pushTypes(current.startTypes);
 		current.elseSeen = true;
 		// The else branch starts from the same definite-assignment state as the
 		// then branch; stores in the then branch must not leak into it.
@@ -667,8 +686,138 @@ void Validator::onUnhandledOpcode(const char*)
 	typeTainted = true;
 }
 
+void Validator::checkProfileValueType(const ValueType& type, const std::string& where) const
+{
+	if (options.profile.excludes(ProfileMarker::Vectors)
+			&& type.opcode == ValueTypeCode::V128)
+		fail("scalar profile: v128 value type in " + where);
+}
+
+// Profile gates (docs/proposals/PROFILES.md PR-2/PR-4). They only *reject*; a
+// module accepted under a profile behaves exactly as it does under the full one.
+void Validator::checkProfile() const
+{
+	const bool scalar = options.profile.excludes(ProfileMarker::Vectors);
+	const bool noThreads = options.profile.excludes(ProfileMarker::Threads);
+	if (!scalar && !noThreads)
+		return;
+
+	const auto checkStorage = [this, scalar](const CanonStorageType& storage,
+			const std::string& where) {
+		if (!scalar || storage.isPacked)
+			return;
+		if (storage.value.opcode == ValueTypeCode::V128)
+			fail("scalar profile: v128 value type in " + where);
+	};
+
+	for (std::size_t i = 0; i < module.typeCount(); ++i) {
+		const CoreTypeView view = module.typeView(static_cast<uint32_t>(i));
+		const std::string where = "type "
+				+ module.describeIndex(NameKind::Type, static_cast<uint32_t>(i));
+		if (noThreads && view.isShared())
+			fail("deterministic profile: shared " + where);
+		switch (view.kind()) {
+		case CanonTypeKind::Func:
+			for (const CanonStorageType& p : view.funcParams())
+				checkStorage(p, where);
+			for (const CanonStorageType& r : view.funcResults())
+				checkStorage(r, where);
+			break;
+		case CanonTypeKind::Struct:
+			for (const CanonFieldType& f : view.structFields())
+				checkStorage(f.storage, where);
+			break;
+		case CanonTypeKind::Array:
+			checkStorage(view.arrayElement().storage, where);
+			break;
+		case CanonTypeKind::Cont:
+		case CanonTypeKind::Import:
+			break;
+		}
+	}
+
+	const auto checkGlobal = [&](const GlobalType& type, const std::string& where) {
+		if (scalar && type.contentType.opcode == ValueTypeCode::V128)
+			fail("scalar profile: v128 value type in " + where);
+		if (noThreads && type.isShared)
+			fail("deterministic profile: shared " + where);
+	};
+	for (std::size_t i = 0; i < module.importGlobals.size(); ++i)
+		checkGlobal(module.importGlobals[i].global, "global "
+				+ module.describeIndex(NameKind::Global, static_cast<uint32_t>(i)));
+	for (std::size_t i = 0; i < module.globals.size(); ++i)
+		checkGlobal(module.globals[i].type, "global "
+				+ module.describeIndex(NameKind::Global,
+						static_cast<uint32_t>(module.importGlobals.size() + i)));
+
+	const auto checkTable = [&](const TableType& type, const std::string& where) {
+		if (scalar && type.elementType.opcode == ValueTypeCode::V128)
+			fail("scalar profile: v128 value type in " + where);
+		if (noThreads && type.isShared)
+			fail("deterministic profile: shared " + where);
+	};
+	for (std::size_t i = 0; i < module.importTables.size(); ++i)
+		checkTable(module.importTables[i].table, "table "
+				+ module.describeIndex(NameKind::Table, static_cast<uint32_t>(i)));
+	for (std::size_t i = 0; i < module.tables.size(); ++i)
+		checkTable(module.tables[i], "table "
+				+ module.describeIndex(NameKind::Table,
+						static_cast<uint32_t>(module.importTables.size() + i)));
+
+	if (noThreads) {
+		for (std::size_t i = 0; i < module.importMemories.size(); ++i)
+			if ((module.importMemories[i].memory.limits.flags & 0x02) != 0)
+				fail("deterministic profile: shared memory "
+						+ module.describeIndex(NameKind::Memory, static_cast<uint32_t>(i)));
+		for (std::size_t i = 0; i < module.memories.size(); ++i)
+			if ((module.memories[i].limits.flags & 0x02) != 0)
+				fail("deterministic profile: shared memory "
+						+ module.describeIndex(NameKind::Memory,
+								static_cast<uint32_t>(module.importMemories.size() + i)));
+		for (std::size_t i = 0; i < module.dataSegments.size(); ++i)
+			if (module.dataSegments[i].isShared)
+				fail("deterministic profile: shared data segment "
+						+ std::to_string(i));
+		for (std::size_t i = 0; i < module.elementSegments.size(); ++i)
+			if (module.elementSegments[i].isShared)
+				fail("deterministic profile: shared element segment "
+						+ std::to_string(i));
+	}
+
+	if (scalar) {
+		for (std::size_t i = 0; i < module.elementSegments.size(); ++i)
+			checkProfileValueType(module.elementSegments[i].elemType,
+					"element segment " + std::to_string(i));
+		for (std::size_t i = 0; i < module.functionBodies.size(); ++i)
+			for (const LocalEntry& local : module.functionBodies[i].locals)
+				checkProfileValueType(local.type, "local in function "
+						+ module.describeIndex(NameKind::Function,
+								static_cast<uint32_t>(module.importFunctions.size() + i)));
+	}
+}
+
+void Validator::onSimdOpcode(SIMDOpcode opcode)
+{
+	if (options.profile.excludes(ProfileMarker::Vectors))
+		fail("scalar profile: SIMD instruction 0xFD "
+				+ std::to_string(static_cast<uint32_t>(opcode)) + " is excluded");
+	if (options.profile.excludes(ProfileMarker::NonDeterministic)
+			&& isRelaxedSimdOpcode(opcode))
+		fail("deterministic profile: relaxed SIMD instruction 0xFD "
+				+ std::to_string(static_cast<uint32_t>(opcode)) + " is excluded");
+}
+
+void Validator::onAtomicOpcode(AtomicOpcode opcode)
+{
+	if (options.profile.excludes(ProfileMarker::Threads))
+		fail("deterministic profile: atomic instruction 0xFE "
+				+ std::to_string(static_cast<uint32_t>(opcode)) + " is excluded");
+}
+
 void Validator::validateModule()
 {
+	checkProfile();
+
 	// A function/tag type index must name a function type.
 	for (const ImportFunction& imp : module.importFunctions)
 		funcTypeAt(imp.typeIdx);

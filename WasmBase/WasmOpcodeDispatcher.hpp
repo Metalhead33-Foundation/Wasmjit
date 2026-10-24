@@ -21,6 +21,14 @@ protected:
 	// skip (accept) a function body it does not model yet.
 	virtual void onUnhandledOpcode(const char* name);
 
+	// Profile hooks (docs/proposals/PROFILES.md PR-2/PR-4). Called once per
+	// prefixed instruction before its handler; the validator overrides them to
+	// reject a construct an excluded marker forbids. The default accepts
+	// everything, so a backend that is not validating pays one empty virtual
+	// call per prefixed instruction at compile time.
+	virtual void onSimdOpcode(SIMDOpcode) {}
+	virtual void onAtomicOpcode(AtomicOpcode) {}
+
 	// Concrete opcode dispatches:
 	virtual void dispatchUnreachable() { onUnhandledOpcode("dispatchUnreachable"); }
 	virtual void dispatchNop() { onUnhandledOpcode("dispatchNop"); }

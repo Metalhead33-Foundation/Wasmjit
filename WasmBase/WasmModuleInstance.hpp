@@ -301,9 +301,19 @@ public:
 	// to fill in the compiled function handles, then runs the start function
 	// if one is present. `hostBridge` is an optional, borrowed embedder hook;
 	// nullptr is the default and keeps the core dependency-free.
+	//
+	// `profile` gates the module at this boundary and configures the backend
+	// (docs/proposals/PROFILES.md PR-2…PR-4). A non-full profile re-validates
+	// the module with its exclusions before any allocation or code emission, so
+	// a module loaded under the full profile cannot bypass them.
 	std::unique_ptr<ModuleInstance> instantiate(
 			const Module& module, ImportResolver& resolver,
-			const HostBridge* hostBridge = nullptr);
+			const HostBridge* hostBridge = nullptr,
+			const ProfileConfig& profile = {});
+
+	// The profile this instantiator is currently operating under (set by the
+	// most recent `instantiate` call; read by a backend's compile step).
+	const ProfileConfig& profile() const { return activeProfile; }
 
 protected:
 	Value evalConstantExpr(const std::span<const std::byte>& expr, ModuleInstance& instance);
@@ -321,6 +331,7 @@ protected:
 private:
 	// These are concrete and shared across all backends.
 	void applyActiveSegments(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals);
+	ProfileConfig activeProfile{};
 };
 
 }

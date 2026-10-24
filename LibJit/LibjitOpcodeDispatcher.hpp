@@ -337,8 +337,17 @@ private:
 	// Set while the epilogue itself emits helper calls: a failure there must not
 	// branch back into the epilogue.
 	bool suppressTrapChecks = false;
+	// True when the active profile excludes the `N` marker: every scalar float
+	// result is canonicalised at an observability point (return, store,
+	// reinterpret, global.set). See docs/proposals/PROFILES.md PR-3.
+	const bool deterministicFloats;
 
 	WASM::GlobalType globalTypeForIndex(WASM::GlobalIdx idx) const;
+
+	// Deterministic-profile float canonicalisation (PROFILES.md PR-3): returns
+	// `value` unchanged unless `deterministicFloats` is set and the value is a
+	// NaN, in which case a canonical NaN of the same width is returned.
+	jit_value_t canonicalizeFloat(jit_value_t value, bool isDouble);
 
 public:
 	OpcodeDispatcher(jit_context_t context, jit_function_t function,
@@ -350,7 +359,8 @@ public:
 					 std::vector<WASM::BranchHint> branchHints,
 					 std::vector<jit_value_t>& locals,
 					 std::vector<jit_value_t>& valueStack,
-					 std::vector<ControlBlock>& controlStack);
+					 std::vector<ControlBlock>& controlStack,
+				 WASM::ProfileConfig profileConfig);
 
 	// Call after readCode() to emit return from the implicit function body (Wasm validation
 	// guarantees the value stack matches currentFunc.results).
