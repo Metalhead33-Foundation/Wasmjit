@@ -306,6 +306,12 @@ enum class GCOpcode : uint32_t {
 	ArrayCopy           = 17,  // array.copy typeidx typeidx
 	ArrayInitData       = 18,  // array.init_data typeidx dataidx
 	ArrayInitElem       = 19,  // array.init_elem typeidx elemidx
+	// More Array Constructors (docs/proposals/GC_EXTENSIONS.md GX-2). The
+	// upstream overview assigns no opcodes yet, so these are engine-provisional
+	// values in the GC range below 0x80 (the note's GXD3).
+	ArrayNewArray       = 32,  // array.new_array dsttypeidx srctypeidx
+	ArrayNewMemory      = 33,  // array.new_memory dsttypeidx memidx
+	ArrayNewTable       = 34,  // array.new_table dsttypeidx tableidx
 
 	// Extended reference instructions
 	RefTest             = 20,  // ref.test (ref ht)

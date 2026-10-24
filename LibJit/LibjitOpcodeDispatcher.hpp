@@ -585,6 +585,10 @@ protected:
 	void dispatchArrayNewFixed(WASM::TypeIdx arg1, uint32_t arg2) override;
 	void dispatchArrayNewData(WASM::TypeIdx arg1, uint32_t arg2) override;
 	void dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2) override;
+	// More Array Constructors (docs/proposals/GC_EXTENSIONS.md GX-2).
+	void dispatchArrayNewArray(WASM::TypeIdx dst, WASM::TypeIdx src) override;
+	void dispatchArrayNewMemory(WASM::TypeIdx dst, uint32_t src) override;
+	void dispatchArrayNewTable(WASM::TypeIdx dst, uint32_t src) override;
 	void dispatchArrayGet(WASM::TypeIdx arg) override;
 	void dispatchArrayGetS(WASM::TypeIdx arg) override;
 	void dispatchArrayGetU(WASM::TypeIdx arg) override;

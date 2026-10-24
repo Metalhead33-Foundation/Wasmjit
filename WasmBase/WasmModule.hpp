@@ -199,9 +199,12 @@ private:
 	ValidationOptions parseOptions{};
 	uint32_t localTypeIndex(TypeId id) const;
 	ValueType valueTypeFromCanon(const CanonValueType& type) const;
-	StorageType storageTypeFromCanon(const CanonStorageType& type) const;
 	FuncType funcTypeFromView(CoreTypeView view) const;
 public:
+	// Compatibility view of a canonical storage type with module-local type
+	// indices resolved. Validation gates and the array constructors need the
+	// `ValueType` form for mutability/subtyping checks.
+	StorageType storageTypeFromCanon(const CanonStorageType& type) const;
 	static std::string readLEB128String(DWasmStream& stream);
 };
 

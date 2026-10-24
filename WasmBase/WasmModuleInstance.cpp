@@ -1405,6 +1405,125 @@ void* ModuleInstance::allocateArrayObject(uint32_t dataOffset, uint32_t elementS
 	return object;
 }
 
+namespace {
+
+constexpr ValueTypeCode storageCode(const CanonStorageType& storage)
+{
+	return storage.isPacked ? storage.packed : storage.value.opcode;
+}
+
+} // namespace
+
+void* ModuleInstance::arrayNewArray(uint32_t dstTypeIdx, uint32_t srcTypeIdx,
+		void* src, uint32_t start, uint32_t length)
+{
+	if (src == nullptr) {
+		reportTrap(TrapKind::NullArrayReference);
+		return nullptr;
+	}
+	const CanonStorageType srcElement = module->typeView(srcTypeIdx).arrayElement().storage;
+	const CanonStorageType dstElement = module->typeView(dstTypeIdx).arrayElement().storage;
+	const size_t srcElementSize = gcStorageBytes(srcElement);
+	const size_t dstElementSize = gcStorageBytes(dstElement);
+
+	const auto* srcBytes = static_cast<const uint8_t*>(src);
+	const uint32_t srcLength = *reinterpret_cast<const uint32_t*>(
+			srcBytes + GcHeader::kArrayLengthOffset);
+	if (start > srcLength || length > srcLength - start) {
+		reportTrap(TrapKind::OutOfBoundsArrayAccess);
+		return nullptr;
+	}
+
+	// The range is valid: allocation may now fail as OOM (GC-5 order).
+	const uint32_t dataOffset = static_cast<uint32_t>(gcArrayDataOffset(dstElement));
+	uint8_t* dst = static_cast<uint8_t*>(allocateArrayObject(dataOffset,
+			static_cast<uint32_t>(dstElementSize), length, dstTypeIdx));
+	if (dst == nullptr)
+		return nullptr;
+
+	const uint8_t* srcData = srcBytes + gcArrayDataOffset(srcElement);
+	uint8_t* dstData = dst + dataOffset;
+	if (isReferenceType(storageCode(dstElement))
+			&& isReferenceType(storageCode(srcElement))) {
+		// A destination slot owns a reference (RC-5); the source slot is only
+		// borrowed, so each copied pointer is retained exactly once.
+		for (uint32_t i = 0; i < length; ++i) {
+			void* value = nullptr;
+			std::memcpy(&value, srcData + static_cast<size_t>(start + i) * srcElementSize,
+					sizeof(value));
+			refClone(value);
+			std::memcpy(dstData + static_cast<size_t>(i) * dstElementSize, &value,
+					sizeof(value));
+		}
+	} else {
+		// Validation admits only identical numeric/packed element types here, so
+		// the payload is a byte-for-byte copy.
+		std::memcpy(dstData, srcData + static_cast<size_t>(start) * srcElementSize,
+				static_cast<size_t>(length) * dstElementSize);
+	}
+	return dst;
+}
+
+void* ModuleInstance::arrayNewMemory(uint32_t dstTypeIdx, uint32_t memIdx,
+		uint32_t start, uint32_t length)
+{
+	if (memIdx >= internals.memoryRefs.size() || internals.memoryRefs[memIdx] == nullptr) {
+		reportTrap(TrapKind::Internal, "array.new_memory: unknown memory");
+		return nullptr;
+	}
+	const LinearMemory* memory = internals.memoryRefs[memIdx];
+	const CanonStorageType dstElement = module->typeView(dstTypeIdx).arrayElement().storage;
+	const size_t elementSize = gcStorageBytes(dstElement);
+	const uint64_t startByte = static_cast<uint64_t>(start) * elementSize;
+	const uint64_t totalBytes = static_cast<uint64_t>(length) * elementSize;
+	if (startByte > memory->memorySize
+			|| totalBytes > memory->memorySize - startByte) {
+		reportTrap(TrapKind::OutOfBoundsMemoryAccess);
+		return nullptr;
+	}
+
+	const uint32_t dataOffset = static_cast<uint32_t>(gcArrayDataOffset(dstElement));
+	uint8_t* dst = static_cast<uint8_t*>(allocateArrayObject(dataOffset,
+			static_cast<uint32_t>(elementSize), length, dstTypeIdx));
+	if (dst == nullptr)
+		return nullptr;
+	std::memcpy(dst + dataOffset, memory->memoryBase + startByte,
+			static_cast<size_t>(totalBytes));
+	return dst;
+}
+
+void* ModuleInstance::arrayNewTable(uint32_t dstTypeIdx, uint32_t tableIdx,
+		uint32_t start, uint32_t length)
+{
+	if (tableIdx >= internals.tableRefs.size() || internals.tableRefs[tableIdx] == nullptr) {
+		reportTrap(TrapKind::Internal, "array.new_table: unknown table");
+		return nullptr;
+	}
+	TableInstance* table = internals.tableRefs[tableIdx];
+	if (static_cast<uint64_t>(start) > table->size
+			|| static_cast<uint64_t>(length) > table->size - start) {
+		reportTrap(TrapKind::OutOfBoundsTableAccess);
+		return nullptr;
+	}
+
+	const CanonStorageType dstElement = module->typeView(dstTypeIdx).arrayElement().storage;
+	const size_t elementSize = gcStorageBytes(dstElement);
+	const uint32_t dataOffset = static_cast<uint32_t>(gcArrayDataOffset(dstElement));
+	uint8_t* dst = static_cast<uint8_t*>(allocateArrayObject(dataOffset,
+			static_cast<uint32_t>(elementSize), length, dstTypeIdx));
+	if (dst == nullptr)
+		return nullptr;
+
+	uint8_t* dstData = dst + dataOffset;
+	for (uint32_t i = 0; i < length; ++i) {
+		void* value = static_cast<void*>(table->base[start + i]);
+		refClone(value);
+		std::memcpy(dstData + static_cast<size_t>(i) * elementSize, &value,
+				sizeof(value));
+	}
+	return dst;
+}
+
 bool ModuleInstance::tryGetGcTypeId(const void* ref, TypeId& typeId) const
 {
 	// A GC pointer is identified by its region, and its type read straight from

@@ -1327,6 +1327,30 @@ static void wasm_buffer_init_from_elems_impl(WASM::VMContext* vm, uint32_t elemI
 	reinterpret_cast<WASM::ModuleInstance*>(vm)->bufferInitFromElems(elemIdx, dst, src, lenElems);
 }
 
+// More Array Constructors (docs/proposals/GC_EXTENSIONS.md GX-2). Each runtime
+// method performs the GC-5 range check before allocating and reports a trap
+// (returning null) on failure, so the caller checks the pending slot.
+static void* wasm_array_new_array_impl(WASM::VMContext* vm, uint32_t dstTypeIdx,
+		uint32_t srcTypeIdx, void* src, uint32_t start, uint32_t length)
+{
+	return reinterpret_cast<WASM::ModuleInstance*>(vm)->arrayNewArray(
+			dstTypeIdx, srcTypeIdx, src, start, length);
+}
+
+static void* wasm_array_new_memory_impl(WASM::VMContext* vm, uint32_t dstTypeIdx,
+		uint32_t memIdx, uint32_t start, uint32_t length)
+{
+	return reinterpret_cast<WASM::ModuleInstance*>(vm)->arrayNewMemory(
+			dstTypeIdx, memIdx, start, length);
+}
+
+static void* wasm_array_new_table_impl(WASM::VMContext* vm, uint32_t dstTypeIdx,
+		uint32_t tableIdx, uint32_t start, uint32_t length)
+{
+	return reinterpret_cast<WASM::ModuleInstance*>(vm)->arrayNewTable(
+			dstTypeIdx, tableIdx, start, length);
+}
+
 static int32_t wasm_ref_matches_heap_type_impl(WASM::VMContext* vm, void* ref, int32_t heapType, int32_t isTypeIndex, int32_t nullable)
 {
 	WASM::HeapType ht;
@@ -2673,6 +2697,57 @@ bool OpcodeDispatcher::tableIs64Bit(WASM::TableIdx tableidx) const
 
 jit_value_t OpcodeDispatcher::effectiveMemoryAddress(const WASM::MemArg& ma, jit_nint accessSize)
 {
+	if (ma.isArray) {
+		// Multibyte Array Access (docs/proposals/GC_EXTENSIONS.md GX-1):
+		// [ref (ref null $t), address i32]. The address is the top operand; the
+		// reference is below it (the caller already popped any stored value).
+		jit_value_t address = popValue();
+		jit_value_t ref = popValue();
+		emitTrapIfNull(WASM::TrapKind::NullArrayReference, refAsVoidPtr(ref));
+
+		const WASM::CoreTypeView view = arrayTypeForIndex(ma.arrayTypeIdx);
+		const size_t elementSize = WASM::gcStorageBytes(view.arrayElement().storage);
+		jit_value_t refVoid = refAsVoidPtr(ref);
+		jit_value_t base = jit_insn_add(function, refVoid,
+				jit_value_create_nint_constant(function, jit_type_nint,
+						static_cast<jit_nint>(arrayDataOffset(ma.arrayTypeIdx))));
+
+		// The address is an unsigned i32; widen through uint so a negative value
+		// becomes a large offset rather than sign-extending.
+		jit_value_t addrU = jit_insn_convert(function,
+				jit_insn_convert(function, address, jit_type_uint, 0),
+				jit_type_ulong, 0);
+		jit_value_t byteOff = jit_insn_add(function, addrU,
+				jit_value_create_long_constant(function, jit_type_ulong,
+						static_cast<jit_long>(ma.offset)));
+
+		// Bounds are over the array's byte payload: ea + width <= len * E.
+		jit_value_t len = jit_insn_load_relative(function, refVoid,
+				WASM::GcHeader::kArrayLengthOffset, jit_type_uint);
+		jit_value_t bound = jit_insn_mul(function,
+				jit_insn_convert(function, len, jit_type_ulong, 0),
+				jit_value_create_long_constant(function, jit_type_ulong,
+						static_cast<jit_long>(elementSize)));
+		jit_value_t endOff = byteOff;
+		if (accessSize > 0) {
+			endOff = jit_insn_add(function, byteOff,
+					jit_value_create_long_constant(function, jit_type_ulong,
+							static_cast<jit_long>(accessSize)));
+		}
+		// The offset addition and the width addition must not wrap, and the last
+		// accessed byte must still be inside the payload.
+		jit_value_t addrNoWrap = jit_insn_ge(function, byteOff, addrU);
+		jit_value_t widthNoWrap = jit_insn_ge(function, endOff, byteOff);
+		jit_value_t inSize = jit_insn_le(function, endOff, bound);
+		jit_value_t inBounds = jit_insn_and(function,
+				jit_insn_and(function, addrNoWrap, widthNoWrap), inSize);
+		jit_label_t cont = jit_label_undefined;
+		jit_insn_branch_if(function, inBounds, &cont);
+		emitTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
+		jit_insn_label(function, &cont);
+		return jit_insn_add(function, base, byteOff);
+	}
+
 	// Multi-memory: every access names its memory (defaulting to 0).
 	jit_value_t lm = memoryPointerForIndex(ma.memidx);
 	jit_value_t base = jit_insn_load_relative(function, lm, offsetof(WASM::LinearMemory, memoryBase), jit_type_void_ptr);
@@ -5120,6 +5195,69 @@ void OpcodeDispatcher::dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2) {
 						 reinterpret_cast<void*>(wasm_buffer_init_from_elems_impl), sig, args, 5, 0);
 	pushValue(castRefValue(arrayRef, arrayRefType(arg1, false)));
 }
+void OpcodeDispatcher::dispatchArrayNewArray(WASM::TypeIdx dst, WASM::TypeIdx src) {
+	jit_value_t length = jit_insn_convert(function, popValue(), jit_type_uint, 0);
+	jit_value_t start = jit_insn_convert(function, popValue(), jit_type_uint, 0);
+	jit_value_t srcRef = popValue();
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint,
+			jit_type_void_ptr, jit_type_uint, jit_type_uint};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, params, 6, 1);
+	jit_value_t args[] = {
+		vmContextValue(),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(dst)),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(src)),
+		refAsVoidPtr(srcRef),
+		start,
+		length
+	};
+	jit_value_t arrayRef = jit_insn_call_native(function, "wasm_array_new_array_impl",
+		reinterpret_cast<void*>(wasm_array_new_array_impl), sig, args, 6, 0);
+	// The helper reports a trap and returns null; stop before using it.
+	emitPendingTrapCheck();
+	// The helper copied (and retained) what it needed; release the operand
+	// stack's count on the source array.
+	emitDropValue(srcRef);
+	pushValue(castRefValue(arrayRef, arrayRefType(dst, false)));
+}
+
+void OpcodeDispatcher::dispatchArrayNewMemory(WASM::TypeIdx dst, uint32_t src) {
+	jit_value_t length = jit_insn_convert(function, popValue(), jit_type_uint, 0);
+	jit_value_t start = jit_insn_convert(function, popValue(), jit_type_uint, 0);
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint,
+			jit_type_uint, jit_type_uint};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, params, 5, 1);
+	jit_value_t args[] = {
+		vmContextValue(),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(dst)),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(src)),
+		start,
+		length
+	};
+	jit_value_t arrayRef = jit_insn_call_native(function, "wasm_array_new_memory_impl",
+		reinterpret_cast<void*>(wasm_array_new_memory_impl), sig, args, 5, 0);
+	emitPendingTrapCheck();
+	pushValue(castRefValue(arrayRef, arrayRefType(dst, false)));
+}
+
+void OpcodeDispatcher::dispatchArrayNewTable(WASM::TypeIdx dst, uint32_t src) {
+	jit_value_t length = jit_insn_convert(function, popValue(), jit_type_uint, 0);
+	jit_value_t start = jit_insn_convert(function, popValue(), jit_type_uint, 0);
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint,
+			jit_type_uint, jit_type_uint};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, params, 5, 1);
+	jit_value_t args[] = {
+		vmContextValue(),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(dst)),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(src)),
+		start,
+		length
+	};
+	jit_value_t arrayRef = jit_insn_call_native(function, "wasm_array_new_table_impl",
+		reinterpret_cast<void*>(wasm_array_new_table_impl), sig, args, 5, 0);
+	emitPendingTrapCheck();
+	pushValue(castRefValue(arrayRef, arrayRefType(dst, false)));
+}
+
 void OpcodeDispatcher::dispatchArrayGet(WASM::TypeIdx arg) {
 	jit_value_t index = jit_insn_convert(function, popValue(), jit_type_uint, 0);
 	jit_value_t ref = popValue();

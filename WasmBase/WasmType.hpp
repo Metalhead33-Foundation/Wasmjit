@@ -643,10 +643,16 @@ struct MemArg {
 	// Acquire-release proposal (docs/proposals/ACQUIRE_RELEASE_ATOMICS.md):
 	// bit 4 of the flags is an ordering immediate: 0 = seqcst, 1 = acqrel.
 	uint8_t ordering = 0;
+	// Multibyte Array Access (docs/proposals/GC_EXTENSIONS.md GX-1): flag bit 5
+	// turns a normal load/store into a byte-addressed access over a GC array.
+	// The memarg then carries the array's type index and never a memidx.
+	bool     isArray = false;
+	uint32_t arrayTypeIdx = 0;
 };
 
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I>
-void readMemArg(Elv::Io::DataStream<E,I>& left, MemArg& right, bool allowOrdering) {
+void readMemArg(Elv::Io::DataStream<E,I>& left, MemArg& right, bool allowOrdering,
+		bool allowArray = false) {
 	uint32_t raw_align;
 	left >> Elv::Io::Leb(raw_align);
 	if ((raw_align & ~0x7Fu) != 0)
@@ -654,10 +660,29 @@ void readMemArg(Elv::Io::DataStream<E,I>& left, MemArg& right, bool allowOrderin
 
 	const bool hasMemIdx = (raw_align & 0x40u) != 0;
 	const bool hasOrdering = (raw_align & 0x10u) != 0;
+	const bool isArray = (raw_align & 0x20u) != 0;
 	right.align = raw_align & 0x3Fu;
+	right.ordering = 0;
+	right.isArray = false;
+	right.arrayTypeIdx = 0;
+
+	if (isArray) {
+		// memarg ::= flags:u32 typeidx:u32 offset:u32   (flags & 0x60 == 0x20)
+		if (!allowArray)
+			throw std::runtime_error("array access is not valid for this instruction");
+		if (hasMemIdx)
+			throw std::runtime_error("array access cannot name a memory index");
+		if (hasOrdering)
+			throw std::runtime_error("array access has a reserved memarg flag bit");
+		right.isArray = true;
+		right.align = raw_align & 0x0Fu; // bits 0-3 are the alignment exponent
+		left >> Elv::Io::Leb(right.arrayTypeIdx);
+		left >> Elv::Io::Leb(right.offset);
+		return;
+	}
+
 	if (hasOrdering)
 		right.align &= ~0x10u; // bit 4 is the ordering flag, not alignment
-	right.ordering = 0;
 	if (hasOrdering && !allowOrdering)
 		throw std::runtime_error(
 			"ordering immediate is only valid on atomic memory accesses");
@@ -675,32 +700,41 @@ void readMemArg(Elv::Io::DataStream<E,I>& left, MemArg& right, bool allowOrderin
 
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I>
 Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, MemArg& right) {
-	readMemArg(left, right, false);
+	readMemArg(left, right, false, true);
 	return left;
 }
 
 // The atomic memarg permits the acquire-release ordering bit; ordinary
-// loads/stores do not (docs/proposals/ACQUIRE_RELEASE_ATOMICS.md ARA-1).
+// loads/stores do not (docs/proposals/ACQUIRE_RELEASE_ATOMICS.md ARA-1). An
+// array access is never atomic.
 struct AtomicMemArg : MemArg {};
 
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I>
 Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, AtomicMemArg& right) {
-	readMemArg(left, static_cast<MemArg&>(right), true);
+	readMemArg(left, static_cast<MemArg&>(right), true, false);
 	return left;
 }
 
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I>
 Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, MemArg right) {
-	uint32_t flags = right.align & 0x3Fu;
-	if (right.memidx != 0)
-		flags |= 0x40u;
-	if (right.ordering != 0)
-		flags |= 0x10u;
+	uint32_t flags = right.align & (right.isArray ? 0x0Fu : 0x3Fu);
+	if (right.isArray)
+		flags |= 0x20u;
+	else {
+		if (right.memidx != 0)
+			flags |= 0x40u;
+		if (right.ordering != 0)
+			flags |= 0x10u;
+	}
 	left << Elv::Io::Leb(flags);
-	if (right.memidx != 0)
-		left << Elv::Io::Leb(right.memidx);
-	if (right.ordering != 0)
-		left << right.ordering;
+	if (right.isArray) {
+		left << Elv::Io::Leb(right.arrayTypeIdx);
+	} else {
+		if (right.memidx != 0)
+			left << Elv::Io::Leb(right.memidx);
+		if (right.ordering != 0)
+			left << right.ordering;
+	}
 	return left << Elv::Io::Leb(right.offset);
 }
 

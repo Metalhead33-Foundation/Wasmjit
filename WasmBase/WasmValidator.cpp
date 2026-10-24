@@ -1,4 +1,5 @@
 #include "WasmValidator.hpp"
+#include "WasmGcHeader.hpp"
 #include "WasmStore.hpp"
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <limits>
@@ -177,6 +178,10 @@ void Validator::checkLimits(const Limits& limits, bool is64, bool isMemory,
 
 void Validator::requireMemoryAccess(const MemArg& arg, uint32_t naturalLog2) const
 {
+	if (arg.isArray) {
+		requireArrayAccess(arg, naturalLog2);
+		return;
+	}
 	requireMemoryIndex(arg.memidx);
 	if (arg.ordering != 0)
 		fail("ordering immediate is only valid on atomic memory accesses");
@@ -186,8 +191,111 @@ void Validator::requireMemoryAccess(const MemArg& arg, uint32_t naturalLog2) con
 		fail("offset out of range");
 }
 
+void Validator::requireArrayAccess(const MemArg& arg, uint32_t naturalLog2) const
+{
+	if (arg.arrayTypeIdx >= module.typeCount()
+			|| module.typeView(arg.arrayTypeIdx).kind() != CanonTypeKind::Array)
+		fail("array access: type " + std::to_string(arg.arrayTypeIdx)
+				+ " is not an array");
+	const CanonStorageType element = module.typeView(arg.arrayTypeIdx).arrayElement().storage;
+	const ValueTypeCode elementCode = element.isPacked ? element.packed : element.value.opcode;
+	if (isReferenceType(elementCode))
+		fail("array access: the array element type is not numeric");
+	if (arg.align > naturalLog2)
+		fail("array access: alignment must not be larger than natural");
+	if (arg.offset > 0xFFFFFFFFull)
+		fail("array access: offset out of range");
+}
+
+void Validator::requireArrayMutable(const MemArg& arg) const
+{
+	if (!arg.isArray)
+		return;
+	if (!module.typeView(arg.arrayTypeIdx).arrayElement().isMutable)
+		fail("array access: a store requires a mutable array");
+}
+
+void Validator::popMemoryAddress(const MemArg& arg)
+{
+	if (arg.isArray) {
+		// [ref (ref null $t), address i32]: the address is on top.
+		popExpect(ValueTypeCode::I32);
+		popExpect(ValueType{ValueTypeCode::RefNull,
+				static_cast<int32_t>(arg.arrayTypeIdx)});
+		return;
+	}
+	popExpect(memoryAddressType(arg.memidx));
+}
+
+CoreTypeView Validator::requireArrayType(TypeIdx idx, const char* who) const
+{
+	if (idx >= module.typeCount() || module.typeView(idx).kind() != CanonTypeKind::Array)
+		fail(std::string(who) + ": type " + std::to_string(idx) + " is not an array");
+	return module.typeView(idx);
+}
+
+bool Validator::storageAssignable(const CanonStorageType& actual,
+		const CanonStorageType& expected) const
+{
+	if (actual.isPacked != expected.isPacked)
+		return false;
+	const StorageType source = module.storageTypeFromCanon(actual);
+	const StorageType destination = module.storageTypeFromCanon(expected);
+	return assignable(source.val, destination.val);
+}
+
+void Validator::dispatchArrayNewArray(TypeIdx dst, TypeIdx src)
+{
+	const CoreTypeView dstView = requireArrayType(dst, "array.new_array");
+	const CoreTypeView srcView = requireArrayType(src, "array.new_array");
+	if (!storageAssignable(srcView.arrayElement().storage,
+			dstView.arrayElement().storage))
+		fail("array.new_array: source element type is not a subtype of the "
+				"destination element type");
+	popExpect(ValueTypeCode::I32); // length
+	popExpect(ValueTypeCode::I32); // start
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(src)});
+	pushValue(ValueType{ValueTypeCode::Ref, static_cast<int32_t>(dst)});
+}
+
+void Validator::dispatchArrayNewMemory(TypeIdx dst, MemIdx src)
+{
+	const CoreTypeView dstView = requireArrayType(dst, "array.new_memory");
+	requireMemoryIndex(src);
+	const CanonStorageType element = dstView.arrayElement().storage;
+	const ValueTypeCode code = element.isPacked ? element.packed : element.value.opcode;
+	if (isReferenceType(code))
+		fail("array.new_memory: the destination element type has no defined bit width");
+	popExpect(ValueTypeCode::I32); // length (elements, not bytes)
+	popExpect(ValueTypeCode::I32); // start
+	pushValue(ValueType{ValueTypeCode::Ref, static_cast<int32_t>(dst)});
+}
+
+void Validator::dispatchArrayNewTable(TypeIdx dst, TableIdx src)
+{
+	const CoreTypeView dstView = requireArrayType(dst, "array.new_table");
+	requireTableIndex(src);
+	const CanonStorageType element = dstView.arrayElement().storage;
+	const ValueTypeCode code = element.isPacked ? element.packed : element.value.opcode;
+	if (element.isPacked || !isReferenceType(code))
+		fail("array.new_table: the destination element type is not a reference");
+	const ValueType tableElement = src < module.importTables.size()
+			? module.importTables[src].table.elementType
+			: module.tables[src - module.importTables.size()].elementType;
+	const ValueType destinationElement =
+			module.storageTypeFromCanon(element).val;
+	if (!assignable(tableElement, destinationElement))
+		fail("array.new_table: the table element type is not a subtype of the "
+				"destination element type");
+	popExpect(ValueTypeCode::I32); // length
+	popExpect(ValueTypeCode::I32); // start
+	pushValue(ValueType{ValueTypeCode::Ref, static_cast<int32_t>(dst)});
+}
+
 void Validator::requireAtomicMemoryAccess(const MemArg& arg, uint32_t naturalLog2) const
 {
+	if (arg.isArray)
+		fail("array access is not atomic");
 	requireMemoryIndex(arg.memidx);
 	if (arg.align != naturalLog2)
 		fail("atomic access must use natural alignment");
@@ -1937,14 +2045,15 @@ void Validator::dispatchI64MulWideU()
 #define WJ_LOAD(name, result, naturalLog2) \
 	void Validator::dispatch##name(MemArg arg) { \
 		requireMemoryAccess(arg, naturalLog2); \
-		popExpect(memoryAddressType(arg.memidx)); \
+		popMemoryAddress(arg); \
 		pushValue(ValueType{ValueTypeCode::result, -1}); \
 	}
 #define WJ_STORE(name, value, naturalLog2) \
 	void Validator::dispatch##name(MemArg arg) { \
 		requireMemoryAccess(arg, naturalLog2); \
+		requireArrayMutable(arg); \
 		popExpect(ValueTypeCode::value); \
-		popExpect(memoryAddressType(arg.memidx)); \
+		popMemoryAddress(arg); \
 	}
 
 WJ_LOAD(I32Load, I32, 2)
@@ -1977,14 +2086,15 @@ WJ_STORE(I64Store32, I64, 2)
 #define WJ_SIMD_LOAD(name, naturalLog2) \
 	void Validator::dispatch##name(MemArg arg) { \
 		requireMemoryAccess(arg, naturalLog2); \
-		popExpect(memoryAddressType(arg.memidx)); \
+		popMemoryAddress(arg); \
 		pushValue(ValueType{ValueTypeCode::V128, -1}); \
 	}
 #define WJ_SIMD_STORE(name, naturalLog2) \
 	void Validator::dispatch##name(MemArg arg) { \
 		requireMemoryAccess(arg, naturalLog2); \
+		requireArrayMutable(arg); \
 		popExpect(ValueTypeCode::V128); \
-		popExpect(memoryAddressType(arg.memidx)); \
+		popMemoryAddress(arg); \
 	}
 
 WJ_SIMD_LOAD(V128Load, 4)
@@ -2010,15 +2120,16 @@ WJ_SIMD_STORE(V128Store, 4)
 		requireMemoryAccess(arg, naturalLog2); \
 		requireLane(lane, count, text); \
 		popExpect(ValueTypeCode::V128); \
-		popExpect(memoryAddressType(arg.memidx)); \
+		popMemoryAddress(arg); \
 		pushValue(ValueType{ValueTypeCode::V128, -1}); \
 	}
 #define WJ_SIMD_LANE_STORE(name, count, naturalLog2, text) \
 	void Validator::dispatch##name(MemArg arg, uint8_t lane) { \
 		requireMemoryAccess(arg, naturalLog2); \
+		requireArrayMutable(arg); \
 		requireLane(lane, count, text); \
 		popExpect(ValueTypeCode::V128); \
-		popExpect(memoryAddressType(arg.memidx)); \
+		popMemoryAddress(arg); \
 	}
 
 WJ_SIMD_LANE_LOAD(V128Load8Lane, 16, 0, "v128.load8_lane")

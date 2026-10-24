@@ -235,6 +235,10 @@ protected:
 	virtual void dispatchArrayNewFixed(TypeIdx arg1, uint32_t arg2) { onUnhandledOpcode("dispatchArrayNewFixed"); }
 	virtual void dispatchArrayNewData(TypeIdx arg1, uint32_t arg2) { onUnhandledOpcode("dispatchArrayNewData"); }
 	virtual void dispatchArrayNewElem(TypeIdx arg1, uint32_t arg2) { onUnhandledOpcode("dispatchArrayNewElem"); }
+	// More Array Constructors (GC_EXTENSIONS.md GX-2).
+	virtual void dispatchArrayNewArray(TypeIdx dst, TypeIdx src) { onUnhandledOpcode("dispatchArrayNewArray"); }
+	virtual void dispatchArrayNewMemory(TypeIdx dst, MemIdx src) { onUnhandledOpcode("dispatchArrayNewMemory"); }
+	virtual void dispatchArrayNewTable(TypeIdx dst, TableIdx src) { onUnhandledOpcode("dispatchArrayNewTable"); }
 	virtual void dispatchArrayGet(TypeIdx arg) { onUnhandledOpcode("dispatchArrayGet"); }
 	virtual void dispatchArrayGetS(TypeIdx arg) { onUnhandledOpcode("dispatchArrayGetS"); }
 	virtual void dispatchArrayGetU(TypeIdx arg) { onUnhandledOpcode("dispatchArrayGetU"); }

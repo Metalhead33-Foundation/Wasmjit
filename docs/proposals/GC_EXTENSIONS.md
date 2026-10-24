@@ -1,8 +1,8 @@
 # Multibyte Array Access, More Array Constructors, and Frozen Values — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 1 — three GC-adjacent
-proposals are surveyed together. None is implemented beyond the existing GC
-array surface.)
+Status: design note / implementation reference (revision 2 — Multibyte Array
+Access and More Array Constructors are implemented; Frozen Values stays
+deferred because the upstream proposal has no stable encoding or phase model.)
 
 Audience: anyone touching `WasmType` (`ArrayType`/`FieldType`), `WasmOpcode`,
 `WasmModule` (memory immediates), `ModuleInstance` array allocation, or the GC
@@ -11,7 +11,8 @@ test surface.
 Follows the same split as [`GC.md`](GC.md) / [`SIMD.md`](SIMD.md) /
 [`THREADS.md`](THREADS.md), with the grouped allowance of
 [`SMALL_PROPOSALS.md`](SMALL_PROPOSALS.md) (three related proposals in one
-note). Contains **no new code**.
+note). Revision 1 contained no code; revision 2 documents the implemented
+GX-1/GX-2 surface and the still-deferred GX-3.
 
 ## 1. Document map
 
@@ -91,42 +92,62 @@ not be treated as a stable binary feature yet.
 - **No new array representation.** More Array Constructors copies into the
   existing array layout; the GC heap does not need a separate slice object.
 - **No final encoding for More Array Constructors in the fetched overview.**
-  The proposal specifies types and behaviour; the implementation still needs a
-  final opcode assignment.
+  The proposal specifies types and behaviour; the implementation therefore uses
+  engine-provisional `0xFB` values (GXD3) that must be renumbered when upstream
+  assigns final ones.
 - **No stable Frozen Values binary.** The proposal is exploratory, has no final
   encoding, and may change its phase model.
 - **No required `f16`/FP16 support.** These proposals do not add element types;
   the FP16 proposal is separate.
 - **No requirement to implement any of them.** The existing GC surface can
-  reject an unmodelled array opcode or type clause.
+  reject an unmodelled array opcode or type clause; Frozen Values remains
+  unimplemented by design rather than by omission.
 
 ## 4. What we have implemented today
 
 - GC arrays are implemented with packed `i8`/`i16` and scalar/vector element
   types (`ArrayType`/`FieldType`), including mutability and type identity
   (`GC.md` §4.8, `TYPE_IDENTITY.md`).
-- `WasmOpcode.hpp` defines `ArrayNew`, `ArrayNewDefault`, `ArrayNewFixed`,
+- **Multibyte Array Access (GX-1) is implemented.** `MemArg` decodes flag bit 5
+  (`0x20`): `memarg ::= flags:u32 typeidx:u32 offset:u32`, with bit 6 rejected
+  and bits 0-3 read as the alignment exponent. Every scalar and SIMD load/store
+  keeps its normal opcode. `effectiveMemoryAddress` branches on `isArray`,
+  null-checks the reference, computes `address + offset` as unsigned 64-bit,
+  bounds-checks `ea + S <= array.len * elementSize`, and returns the inline
+  payload address. Inputs are `[ref, i32]` for loads and `[ref, i32, value]`
+  for stores; the validator checks the array type, the numeric/packed/vector
+  element, alignment/offset range and (for stores) mutability.
+- **More Array Constructors (GX-2) are implemented.** `array.new_array`,
+  `array.new_memory` and `array.new_table` decode with two immediates
+  (`typeidx typeidx`, `typeidx memidx`, `typeidx tableidx`), validate the
+  element relation (destination supertype, defined bit width, reference
+  element) and source index, and copy the slice in
+  `ModuleInstance::arrayNewArray/arrayNewMemory/arrayNewTable`. Each performs
+  the GC-5 range check before allocating, retains reference elements copied
+  from an array or table, and reports the usual GC trap kinds. The upstream
+  overview assigns no opcodes, so `0xFB 0x20/0x21/0x22` are engine-provisional
+  (below the `0x80` stringref range).
+- `WasmOpcode.hpp` also keeps `ArrayNew`, `ArrayNewDefault`, `ArrayNewFixed`,
   `ArrayNewData` and `ArrayNewElem`; `LibjitOpcodeDispatcher` implements all
-  five, including the GC-5 order-of-traps rule for `new_data`/`new_elem`.
-- `WasmType.hpp`'s `MemArg` recognizes only bit 6 (`0x40`) for a memory index;
-  it has no array `typeidx` and bit 5 would merely become part of the alignment.
-- `array.get`/`array.set` and the other existing array instructions operate one
-  element at a time; there is no multibyte `memarg` path.
-- There is no `array.new_array`, `array.new_memory` or `array.new_table`, and
-  no `freezable`/`freeze`/`ref.freeze` syntax or runtime support.
-- `array_new_data` is curated and green (`GC.md` §8: 28/0/0). There is no test
-  for the three proposals in this note.
+  five plus the three new constructors.
+- **Frozen Values (GX-3) is not implemented, deliberately.** There is no
+  `freezable`/`freeze` clause, `ref.freeze`, frozen bit or phase model. The
+  upstream proposal is exploratory, still suggests alternatives such as
+  `call_and_freeze`, and says its encoding "is not really thought", so GXD4
+  keeps it out of `TYPE_IDENTITY` until it stabilizes.
+- `array_new_data` is curated and green (`GC.md` §8: 28/0/0), and the new
+  hand-built fixtures cover GX-1 and GX-2 (§8).
 
 
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| GX1 | **Multibyte `memarg` does not decode.** The current memory immediate has no array `typeidx` field and does not interpret flag bit 5; an array access would be parsed as a linear-memory access (or desynchronise). | `WasmBase/WasmOpcode.hpp`/`WasmOpcodeDispatcher` memarg parsing; no `array` flag case. | Medium |
-| GX2 | **No array bounds/null helper.** The existing scalar load/store helpers take a `LinearMemory`; Multibyte needs a null check and an `array.len * elementSize` bound over the GC object. | `WasmBase/wasm_*` helpers; `ModuleInstance::childSlotsOf` only walks references. | Medium |
-| GX3 | **More Array Constructors are absent.** Only `new`, `new_default`, `new_fixed`, `new_data`, `new_elem` exist. | `WasmOpcode.hpp`; `LibjitOpcodeDispatcher.cpp` (`dispatchArrayNew*`). | Medium |
-| GX4 | **Frozen Values is absent.** There is no `freezable`/`freeze` clause, `ref.freeze`, frozen bit, or phase model. | `WasmType.hpp` (`Subtype`/`StructType`); `WasmModule.cpp`; `ModuleInstance` GC allocation. | High (for that proposal; it is exploratory) |
-| GX5 | **No focused coverage.** The suite has no multibyte-array, `new_array`/`new_memory`/`new_table`, or frozen-value fixture; `array_new_data` only covers an existing constructor. | `Test/wast_supported.txt`; `Test/wasm_wat/` | Low |
+| GX1 | **Closed.** `MemArg` decodes bit 5 with a `typeidx`, and every scalar/SIMD load/store accepts the array form. | `WasmBase/WasmType.hpp` (`readMemArg`), `LibJit/LibjitOpcodeDispatcher.cpp` (`effectiveMemoryAddress`). | Closed |
+| GX2 | **Closed.** The null check and `array.len * elementSize` bound live in the array branch of `effectiveMemoryAddress`; the array payload offset is the shared `gcArrayDataOffset`. | `LibJit/LibjitOpcodeDispatcher.cpp`; `WasmBase/WasmGcHeader.hpp`. | Closed |
+| GX3 | **Closed.** `array.new_array`, `array.new_memory` and `array.new_table` have decoder cases, validator rules and runtime copies. | `WasmOpcode.hpp` (`GCOpcode::ArrayNewArray/Memory/Table`); `ModuleInstance.hpp`; `LibjitOpcodeDispatcher.cpp`. | Closed |
+| GX4 | **Deferred by upstream, not an engine gap.** There is no stable `freezable`/`freeze`/`ref.freeze` encoding or phase model to implement. The note keeps the deferral explicit (GXD4) rather than inventing a binary. | upstream `frozen-values` overview; `WasmType.hpp` (`Subtype`/`StructType`); `WasmModule.cpp`. | Blocked (proposal) |
+| GX5 | **Closed.** Two focused tests cover the width/endianness/trap surface and all three constructors, including their validation rejections. | `Test/main.cpp`; §8 | Closed |
 
 ## 6. Where we can and should play fast and loose
 
@@ -134,9 +155,10 @@ not be treated as a stable binary feature yet.
 |---|---|---|---|
 | GXD1 | **Reuse the existing load/store opcode space and flag bit 5**, exactly as the proposal specifies. | §3: no new value type; the proposal explicitly reuses those opcodes. | One decoder path and no parallel instruction family. |
 | GXD2 | **Do not add `memidx` to array accesses.** | §2.1/§3: the array reference is the base; a `memidx` is invalid. | Keeps the `memarg` grammar unambiguous. |
-| GXD3 | **Implement `array.new_array` first**, then `new_memory`/`new_table` when their encodings are fixed. | §3: the three constructors are independent and the overview does not assign final opcodes. | A useful dynamic-slice constructor with the smallest GC change. |
+| GXD3 | **Implement all three constructors now with engine-provisional `0xFB 0x20/0x21/0x22`.** | §3: the overview assigns no final opcodes; the three are independent, and revision 1 already sanctioned a provisional assignment. | Full GX-2 now; one renumbering when upstream publishes. |
 | GXD4 | **Defer Frozen Values until its encoding and phase model stabilize.** | §3: exploratory proposal; no stable binary. | Avoids baking a moving type clause into `TYPE_IDENTITY`. |
 | GXD5 | **Use the same GC-5 trap order** (range check before allocation) for all new constructors. | `GC.md` GC-5; the spec requires the out-of-bounds trap before an allocation failure. | Consistent, testable error behaviour. |
+| GXD6 | **Report the existing GC trap kinds** (`NullArrayReference`, `OutOfBoundsArrayAccess`, `OutOfBoundsMemoryAccess`, `OutOfBoundsTableAccess`). | The proposals only require *a* trap; `array.get` and `array.new_data` already use these kinds. | Consistent error behaviour without new trap codes. |
 
 Guardrail: a multibyte access must not be mistaken for a linear-memory access
 when bit 5 is set, and an array access must trap on null before it reads the
@@ -148,27 +170,34 @@ because its encoding is provisional.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **GX-1 — Multibyte access** | Decode `memarg` bit 5 with a `typeidx`, add null/bounds helpers, and reuse the scalar/SIMD width rules. | GX1, GX2 | A numeric and a `v128` array access round-trip; null and out-of-bounds accesses trap. |
-| **GX-2 — More constructors** | Add `array.new_array` first, then `new_memory`/`new_table` once the encoding is fixed. | GX3 | A dynamic slice is copied into an immutable array with the GC-5 trap order. |
-| **GX-3 — Frozen Values** | Add the `freezable`/`freeze` type clauses, `ref.freeze`, and the phase rules only after the proposal stabilizes. | GX4 | A recursive immutable value can be built and a null field traps at freeze. |
-| **GX-4 — Tests** | Add focused array fixtures and curate the proposal scripts when they exist. | GX5 | The tests cover multibyte width/endianness, constructor bounds, and frozen recursion. |
+| **GX-1 — Multibyte access** (done) | Decode `memarg` bit 5 with a `typeidx`, add null/bounds checks, and reuse the scalar/SIMD width rules. | GX1, GX2 | Done: `i32`, `f64` and `v128` array accesses round-trip, and null/out-of-bounds accesses trap with `NullArrayReference`/`OutOfBoundsArrayAccess`. |
+| **GX-2 — More constructors** (done) | Add `array.new_array`, `new_memory` and `new_table` with provisional `0xFB` opcodes. | GX3 | Done: slices copy from arrays, memory and tables, with the GC-5 trap order and matching out-of-bounds trap kinds. |
+| **GX-3 — Frozen Values** (deferred) | Add the `freezable`/`freeze` type clauses, `ref.freeze`, and the phase rules only after the proposal stabilizes. | GX4 | Blocked upstream: the proposal has no stable encoding or phase model, so there is nothing to lower against yet. |
+| **GX-4 — Tests** (done for GX-1/GX-2) | Add focused array fixtures; curate proposal scripts when they exist. | GX5 | Done: two hand-built fixtures cover multibyte width/endianness/traps and constructor bounds/subtyping. Frozen recursion is not testable until GX-3 exists. |
 
 `GX-3` is deliberately last: Frozen Values interacts with `TYPE_IDENTITY.md`
 and the GC reference-counting model more deeply than the two copy proposals.
+Revision 2 closes the two stable proposals; GX-3 needs a new upstream revision,
+not more engine work.
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-18):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-24; whole suite 10,377 assertions /
+386 test cases):
 
 | Script / fixture | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| `array_new_data` | 28 | 0 | 0 | existing constructor only; not `new_array`/`new_memory`/`new_table` |
-| multibyte array access | — | — | — | no script and no implementation |
-| frozen values | — | — | — | no script; proposal has no stable encoding |
-| `array` / `struct` | existing | existing | existing | existing GC operations; no multibyte or freeze coverage |
+| `array_new_data` | 28 | 0 | 0 | existing constructor; unchanged |
+| multibyte array access | 19 assertions | 0 | 0 | hand-built fixture: `i32`/`f64`/`v128` byte-addressed round-trips, null and out-of-bounds traps, and four validation rejections |
+| more array constructors | 24 assertions | 0 | 0 | hand-built fixture: array/memory/table slices, the three out-of-bounds traps, and four validation rejections (bit width, reference element, array and table subtyping) |
+| frozen values | — | — | — | no implementation; the proposal has no stable encoding (GXD4) |
+| `array` / `struct` | existing | existing | existing | existing GC operations; unchanged |
 
-Reading: the existing GC arrays are the substrate, not evidence that these
-three proposals work. GX-1 is the first concrete gate.
+Reading: GX-1 and GX-2 are now evidenced by executable fixtures rather than by
+the existing GC substrate. The multibyte fixture deliberately uses unaligned
+byte addresses (3, 5, 1) so the alignment-is-only-a-hint rule is exercised, and
+the constructor fixture checks the GC-5 order via the trap kinds. Frozen Values
+has no row because there is no binary to test.
 
 ## 9. References
 

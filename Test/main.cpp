@@ -8594,6 +8594,300 @@ TEST_CASE("relaxed dead-code validation skips type-stack checks but keeps syntax
 }
 
 
+// ── Multibyte Array Access (docs/proposals/GC_EXTENSIONS.md GX-1) ───────────
+// The text format has no spelling for the array memarg yet, so the fixtures are
+// assembled from bytes. `flags` bit 5 (0x20) marks the access; the type index
+// follows the flags and the offset follows the type index.
+namespace {
+
+std::string gcValidationError(const StringFixtureBuilder& fixture)
+{
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(fixture.bytes.data()), fixture.bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	try {
+		WASM::Module module; // fromFile parses and validates; validate() is the gate
+		module.fromFile(device);
+		module.validate();
+	} catch (const std::exception& error) {
+		return error.what();
+	}
+	return {};
+}
+
+} // namespace
+
+TEST_CASE("multibyte array access reads and writes byte-addressed arrays")
+{
+	// type 0: (array (mut i8)); type 1: (array (mut i32));
+	// type 2: (i32)->i32; type 3: (f64)->f64; type 4: ()->i32.
+	StringFixtureBuilder module;
+	module.section(0x01, {0x05,
+		0x5e, 0x78, 0x01,
+		0x5e, 0x7f, 0x01,
+		0x60, 0x01, 0x7f, 0x01, 0x7f,
+		0x60, 0x01, 0x7c, 0x01, 0x7c,
+		0x60, 0x00, 0x01, 0x7f});
+	module.functions({0x02, 0x03, 0x04, 0x04, 0x02});
+	module.exports({{"roundtrip_i32", 0}, {"roundtrip_f64", 1}, {"oob", 2},
+			{"null_load", 3}, {"v128_roundtrip", 4}});
+	module.code({
+		// local 1: (ref null $bytes)
+		{0x01, 0x01, 0x63, 0x00,
+		 0x41, 0x10, 0xfb, 0x07, 0x00, 0x21, 0x01,                    // 16-byte array
+		 0x20, 0x01, 0x41, 0x03, 0x20, 0x00, 0x36, 0x20, 0x00, 0x00,  // i32.store @3
+		 0x20, 0x01, 0x41, 0x03, 0x28, 0x20, 0x00, 0x00,              // i32.load @3
+		 0x0b},
+		{0x01, 0x01, 0x63, 0x00,
+		 0x41, 0x20, 0xfb, 0x07, 0x00, 0x21, 0x01,
+		 0x20, 0x01, 0x41, 0x05, 0x20, 0x00, 0x39, 0x20, 0x00, 0x00,  // f64.store @5
+		 0x20, 0x01, 0x41, 0x05, 0x2b, 0x20, 0x00, 0x00,              // f64.load @5
+		 0x0b},
+		{0x01, 0x01, 0x63, 0x00,
+		 0x41, 0x04, 0xfb, 0x07, 0x00, 0x21, 0x00,
+		 0x20, 0x00, 0x41, 0x04, 0x28, 0x20, 0x00, 0x00, 0x0b},       // width 4 at 4 of 4
+		{0x00, 0xd0, 0x00, 0x41, 0x00, 0x28, 0x20, 0x00, 0x00, 0x0b},    // null base
+		{0x01, 0x01, 0x63, 0x00,
+		 0x41, 0x20, 0xfb, 0x07, 0x00, 0x21, 0x01,
+		 0x20, 0x01, 0x41, 0x01, 0x20, 0x00, 0xfd, 0x11,             // i32x4.splat
+		 0xfd, 0x0b, 0x20, 0x00, 0x00,                                // v128.store @1
+		 0x20, 0x01, 0x41, 0x01,
+		 0xfd, 0x00, 0x20, 0x00, 0x00,                                // v128.load @1
+		 0xfd, 0x1b, 0x00,                                            // extract_lane 0
+		 0x0b}
+	});
+
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
+
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto roundtrip32 = instance->exportedFunction("roundtrip_i32");
+	auto roundtrip64 = instance->exportedFunction("roundtrip_f64");
+	auto v128Roundtrip = instance->exportedFunction("v128_roundtrip");
+	auto oob = instance->exportedFunction("oob");
+	auto nullLoad = instance->exportedFunction("null_load");
+	REQUIRE(roundtrip32.has_value());
+	REQUIRE(roundtrip64.has_value());
+	REQUIRE(v128Roundtrip.has_value());
+	REQUIRE(oob.has_value());
+	REQUIRE(nullLoad.has_value());
+
+	// The byte address may be unaligned: alignment is only a hint.
+	REQUIRE(WASM::callCallable<int32_t>(*roundtrip32, int32_t(0x11223344))
+			== int32_t(0x11223344));
+	REQUIRE(WASM::callCallable<double>(*roundtrip64, 3.5) == 3.5);
+	REQUIRE(WASM::callCallable<int32_t>(*v128Roundtrip, int32_t(0x55667788))
+			== int32_t(0x55667788));
+
+	const auto trapKind = [](const WASM::Callable& callable) {
+		bool trapped = false;
+		WASM::TrapKind kind = WASM::TrapKind::Internal;
+		try {
+			(void)WASM::callCallable<int32_t>(callable);
+		} catch (const WASM::Trap& trap) {
+			trapped = true;
+			kind = trap.kind();
+		}
+		REQUIRE(trapped);
+		return kind;
+	};
+	REQUIRE(trapKind(*oob) == WASM::TrapKind::OutOfBoundsArrayAccess);
+	REQUIRE(trapKind(*nullLoad) == WASM::TrapKind::NullArrayReference);
+
+	// Validation: the type index must name an array.
+	StringFixtureBuilder notArray;
+	notArray.section(0x01, {0x02,
+		0x60, 0x00, 0x01, 0x7f,
+		0x60, 0x01, 0x7f, 0x01, 0x7f});
+	notArray.functions(std::vector<uint8_t>{0x01});
+	notArray.code({{0x00, 0x20, 0x00, 0x41, 0x00, 0x28, 0x20, 0x00, 0x00, 0x0b}});
+	REQUIRE(gcValidationError(notArray).find("is not an array") != std::string::npos);
+
+	// A store requires a mutable array.
+	StringFixtureBuilder immutable;
+	immutable.section(0x01, {0x02,
+		0x5e, 0x78, 0x00,             // (array i8)
+		0x60, 0x00, 0x01, 0x7f});
+	immutable.functions(std::vector<uint8_t>{0x01});
+	immutable.code({{0x00, 0xd0, 0x00, 0x41, 0x00, 0x41, 0x00,
+		0x36, 0x20, 0x00, 0x00, 0x41, 0x00, 0x0b}});
+	REQUIRE(gcValidationError(immutable).find("requires a mutable array")
+			!= std::string::npos);
+
+	// A reference element is not a numeric array.
+	StringFixtureBuilder referenceElement;
+	referenceElement.section(0x01, {0x02,
+		0x5e, 0x70, 0x00,             // (array funcref)
+		0x60, 0x00, 0x01, 0x7f});
+	referenceElement.functions(std::vector<uint8_t>{0x01});
+	referenceElement.code({{0x00, 0xd0, 0x00, 0x41, 0x00, 0x2d, 0x20, 0x00, 0x00, 0x0b}});
+	REQUIRE(gcValidationError(referenceElement).find("is not numeric")
+			!= std::string::npos);
+
+	// Bit 5 and bit 6 together are malformed: an array access has no memidx.
+	StringFixtureBuilder bothFlags;
+	bothFlags.section(0x01, {0x02,
+		0x5e, 0x78, 0x01,
+		0x60, 0x00, 0x01, 0x7f});
+	bothFlags.functions(std::vector<uint8_t>{0x01});
+	bothFlags.code({{0x00, 0xd0, 0x00, 0x41, 0x00, 0x28, 0x60, 0x00, 0x00, 0x0b}});
+	REQUIRE(gcValidationError(bothFlags).find("cannot name a memory index")
+			!= std::string::npos);
+}
+
+TEST_CASE("more array constructors copy from arrays, memory and tables")
+{
+	// type 0: (array (mut i32)); type 1: (array (mut funcref)); type 2: ()->i32.
+	StringFixtureBuilder module;
+	module.section(0x01, {0x03,
+		0x5e, 0x7f, 0x01,
+		0x5e, 0x70, 0x01,
+		0x60, 0x00, 0x01, 0x7f});
+	module.functions(std::vector<uint8_t>(9, 0x02));
+	module.section(0x04, {0x01, 0x70, 0x00, 0x02});          // (table 2 funcref)
+	module.section(0x05, {0x01, 0x00, 0x01});                // (memory 1)
+	module.exports({{"new_array_from_array", 2}, {"new_array_from_memory", 3},
+			{"new_array_from_table", 4}, {"new_array_from_refs", 5},
+			{"array_oob", 6}, {"memory_oob", 7}, {"table_oob", 8}});
+	// (elem (i32.const 0) func 0 1)
+	module.section(0x09, {0x01, 0x00, 0x41, 0x00, 0x0b, 0x02, 0x00, 0x01});
+	module.code({
+		{0x00, 0x41, 0x0b, 0x0b},                                // 11
+		{0x00, 0x41, 0x16, 0x0b},                                // 22
+		// [1,2,3] -> subslice (start 1, len 2) -> [2,3]; element 0 is 2.
+		{0x00, 0x41, 0x01, 0x41, 0x02, 0x41, 0x03, 0xfb, 0x08, 0x00, 0x03,
+		 0x41, 0x01, 0x41, 0x02, 0xfb, 0x20, 0x00, 0x00,
+		 0x41, 0x00, 0xfb, 0x0b, 0x00, 0x0b},
+		// Memory elements [10,20,30,40]; element 2 is 30.
+		{0x00, 0x41, 0x00, 0x41, 0x04, 0xfb, 0x21, 0x00, 0x00,
+		 0x41, 0x02, 0xfb, 0x0b, 0x00, 0x0b},
+		// Two table entries; the first is non-null.
+		{0x00, 0x41, 0x00, 0x41, 0x02, 0xfb, 0x22, 0x01, 0x00,
+		 0x41, 0x00, 0xfb, 0x0b, 0x01, 0xd1, 0x0b},
+		// Copy a reference-element array (both entries are null).
+		{0x00, 0xd0, 0x70, 0xd0, 0x70, 0xfb, 0x08, 0x01, 0x02,
+		 0x41, 0x00, 0x41, 0x02, 0xfb, 0x20, 0x01, 0x01,
+		 0x41, 0x00, 0xfb, 0x0b, 0x01, 0xd1, 0x0b},
+		// Source length 3, start 2, length 2 -> out of bounds.
+		{0x00, 0x41, 0x01, 0x41, 0x02, 0x41, 0x03, 0xfb, 0x08, 0x00, 0x03,
+		 0x41, 0x02, 0x41, 0x02, 0xfb, 0x20, 0x00, 0x00, 0x1a, 0x41, 0x00, 0x0b},
+		// 16384 i32 elements are exactly one page; one more traps.
+		{0x00, 0x41, 0x80, 0x80, 0x01, 0x41, 0x01, 0xfb, 0x21, 0x00, 0x00,
+		 0x1a, 0x41, 0x00, 0x0b},
+		// Table length 2, start 1, length 2 -> out of bounds.
+		{0x00, 0x41, 0x01, 0x41, 0x02, 0xfb, 0x22, 0x01, 0x00, 0x1a, 0x41, 0x00, 0x0b}
+	});
+	// Data segment 0: i32 [10, 20, 30, 40] at offset 0.
+	module.section(0x0b, {0x01, 0x00, 0x41, 0x00, 0x0b, 0x10,
+		0x0a, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00,
+		0x1e, 0x00, 0x00, 0x00, 0x28, 0x00, 0x00, 0x00});
+
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto fromArray = instance->exportedFunction("new_array_from_array");
+	auto fromMemory = instance->exportedFunction("new_array_from_memory");
+	auto fromTable = instance->exportedFunction("new_array_from_table");
+	auto fromRefs = instance->exportedFunction("new_array_from_refs");
+	auto arrayOob = instance->exportedFunction("array_oob");
+	auto memoryOob = instance->exportedFunction("memory_oob");
+	auto tableOob = instance->exportedFunction("table_oob");
+	REQUIRE(fromArray.has_value());
+	REQUIRE(fromMemory.has_value());
+	REQUIRE(fromTable.has_value());
+	REQUIRE(fromRefs.has_value());
+	REQUIRE(arrayOob.has_value());
+	REQUIRE(memoryOob.has_value());
+	REQUIRE(tableOob.has_value());
+
+	REQUIRE(WASM::callCallable<int32_t>(*fromArray) == 2);
+	REQUIRE(WASM::callCallable<int32_t>(*fromMemory) == 30);
+	REQUIRE(WASM::callCallable<int32_t>(*fromTable) == 0); // a non-null funcref
+	REQUIRE(WASM::callCallable<int32_t>(*fromRefs) == 1);  // copied null refs
+
+	const auto trapKind = [](const WASM::Callable& callable) {
+		bool trapped = false;
+		WASM::TrapKind kind = WASM::TrapKind::Internal;
+		try {
+			(void)WASM::callCallable<int32_t>(callable);
+		} catch (const WASM::Trap& trap) {
+			trapped = true;
+			kind = trap.kind();
+		}
+		REQUIRE(trapped);
+		return kind;
+	};
+	REQUIRE(trapKind(*arrayOob) == WASM::TrapKind::OutOfBoundsArrayAccess);
+	REQUIRE(trapKind(*memoryOob) == WASM::TrapKind::OutOfBoundsMemoryAccess);
+	REQUIRE(trapKind(*tableOob) == WASM::TrapKind::OutOfBoundsTableAccess);
+
+	// A memory source needs a destination element with a defined bit width.
+	StringFixtureBuilder refMemory;
+	refMemory.section(0x01, {0x02, 0x5e, 0x70, 0x01, 0x60, 0x00, 0x01, 0x7f});
+	refMemory.functions(std::vector<uint8_t>{0x01});
+	refMemory.section(0x05, {0x01, 0x00, 0x01});
+	refMemory.code({{0x00, 0x41, 0x00, 0x41, 0x00, 0xfb, 0x21, 0x00, 0x00,
+		0x1a, 0x41, 0x00, 0x0b}});
+	REQUIRE(gcValidationError(refMemory).find("has no defined bit width")
+			!= std::string::npos);
+
+	// A table source needs a reference destination element.
+	StringFixtureBuilder intTable;
+	intTable.section(0x01, {0x02, 0x5e, 0x7f, 0x01, 0x60, 0x00, 0x01, 0x7f});
+	intTable.functions(std::vector<uint8_t>{0x01});
+	intTable.section(0x04, {0x01, 0x70, 0x00, 0x01});
+	intTable.code({{0x00, 0x41, 0x00, 0x41, 0x00, 0xfb, 0x22, 0x00, 0x00,
+		0x1a, 0x41, 0x00, 0x0b}});
+	REQUIRE(gcValidationError(intTable).find("is not a reference")
+			!= std::string::npos);
+
+	// The source element must be a subtype of the destination's.
+	StringFixtureBuilder elementMismatch;
+	elementMismatch.section(0x01, {0x03,
+		0x5e, 0x7f, 0x01,             // (array (mut i32))
+		0x5e, 0x78, 0x01,             // (array (mut i8))
+		0x60, 0x00, 0x01, 0x7f});
+	elementMismatch.functions(std::vector<uint8_t>{0x02});
+	elementMismatch.code({{0x00, 0xd0, 0x01, 0x41, 0x00, 0x41, 0x00,
+		0xfb, 0x20, 0x00, 0x01, 0x1a, 0x41, 0x00, 0x0b}});
+	REQUIRE(gcValidationError(elementMismatch).find("is not a subtype")
+			!= std::string::npos);
+
+	// The table element type must be a subtype of the destination's.
+	StringFixtureBuilder tableMismatch;
+	tableMismatch.section(0x01, {0x03,
+		0x60, 0x00, 0x00,             // (func)
+		0x5e, 0x64, 0x00, 0x01,       // (array (mut (ref 0)))
+		0x60, 0x00, 0x01, 0x7f});
+	tableMismatch.functions(std::vector<uint8_t>{0x02});
+	tableMismatch.section(0x04, {0x01, 0x70, 0x00, 0x01});
+	tableMismatch.code({{0x00, 0x41, 0x00, 0x41, 0x00, 0xfb, 0x22, 0x01, 0x00,
+		0x1a, 0x41, 0x00, 0x0b}});
+	REQUIRE(gcValidationError(tableMismatch).find("is not a subtype")
+			!= std::string::npos);
+}
+
+
 // ── Language profiles (docs/proposals/PROFILES.md PR-2, PR-4) ────────────────
 namespace {
 

@@ -208,6 +208,15 @@ public:
 	void elemDrop(uint32_t elemIdx);
 	void bufferInitFromData(uint32_t dataIdx, void* dst, uint32_t srcOffset, uint32_t lenBytes);
 	void bufferInitFromElems(uint32_t elemIdx, void* dst, uint32_t srcOffset, uint32_t lenElems);
+	// More Array Constructors (docs/proposals/GC_EXTENSIONS.md GX-2). Each does
+	// the GC-5 range check *before* allocating, reports a trap and returns null
+	// on failure; the generated caller checks the pending slot.
+	void* arrayNewArray(uint32_t dstTypeIdx, uint32_t srcTypeIdx, void* src,
+			uint32_t start, uint32_t length);
+	void* arrayNewMemory(uint32_t dstTypeIdx, uint32_t memIdx,
+			uint32_t start, uint32_t length);
+	void* arrayNewTable(uint32_t dstTypeIdx, uint32_t tableIdx,
+			uint32_t start, uint32_t length);
 	// Range validation without copying. `array.new_data` / `array.new_elem` must
 	// report the spec's out-of-bounds trap *before* they allocate: with an absurd
 	// length the allocation fails first and reports "out of memory" instead

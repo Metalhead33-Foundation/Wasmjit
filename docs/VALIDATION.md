@@ -30,8 +30,14 @@ stack, and throws `std::runtime_error` on the first failed rule.
 
 An opcode without a rule (parts of the GC aggregate/array surface) sets
 `typeTainted`: the rest of the body is still scanned for immediate checks, but
-the operand stack is no longer trusted and no type error is reported there. A
-`try_table` **with catches** is tainted after its catch labels are checked,
+the operand stack is no longer trusted and no type error is reported there. The
+**multibyte array memarg** and the three **More Array Constructors** do have
+rules: a bit-5 memarg validates the array type, numeric/packed/vector element,
+alignment/offset and (for stores) mutability, and `array.new_array` /
+`array.new_memory` / `array.new_table` validate the element relation and the
+source array/memory/table index (`GC_EXTENSIONS.md` GX-1/GX-2). The older
+one-element `array.*`/`struct.*` forms remain tainted. A `try_table` **with
+catches** is tainted after its catch labels are checked,
 because a catch injects its payload into an outer label, which the linear stack
 does not model. A validator must never reject a module it could not check — the
 cost is coverage, measured below, not correctness.
@@ -63,7 +69,7 @@ restriction-only checks; they never change what an accepted module does.
 | `assert_uninstantiable` | 27 | **27** (26 rejected + 1 start trap) | 0 |
 | **total** | **2382** | **2382** | **0** |
 
-The default suite is **10334 assertions / 384 test cases, all green** (the
+The default suite is **10377 assertions / 386 test cases, all green** (the
 curated list holds 193 of the 257 scripts, 61 of them re-curated when the
 validator landed, plus `start.wast`). The
 strict run is **fully green** as well: every one of the 2,382 binary negative
@@ -92,8 +98,9 @@ ones), and the bounds check subtracts instead of adding.
 
 ## Next
 
-- Type the remaining GC aggregate/array forms (the remaining `typeTainted`
-  paths).
+- Type the remaining GC aggregate/array forms (the one-element `array.*` and
+  `struct.*` ops, which still set `typeTainted`; the multibyte memarg and the
+  three More Array Constructors are typed).
 - Adopt and test the relaxed dead-code algorithm described in
   [`proposals/PARSER_PROPOSALS.md`](proposals/PARSER_PROPOSALS.md); the current
   unreachable stack is close but not claimed as the proposal's algorithm.

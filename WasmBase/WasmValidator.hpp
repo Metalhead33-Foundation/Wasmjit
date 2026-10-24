@@ -109,6 +109,13 @@ private:
 					 const char* what, std::size_t index,
 					 uint64_t pageSize = 0x10000) const;
 	void requireMemoryAccess(const MemArg& arg, uint32_t naturalLog2) const;
+	// Multibyte Array Access (GC_EXTENSIONS.md GX-1): a load/store whose memarg
+	// sets bit 5 operates on a GC array. These helpers validate the type index
+	// and element shape, enforce mutability for stores, and pop `[ref, address]`
+	// instead of the linear-memory address.
+	void requireArrayAccess(const MemArg& arg, uint32_t naturalLog2) const;
+	void requireArrayMutable(const MemArg& arg) const;
+	void popMemoryAddress(const MemArg& arg);
 	// Atomic accesses have extra rules: the alignment immediate must equal the
 	// natural alignment, and the acquire-release ordering byte is 0 or 1.
 	void requireAtomicMemoryAccess(const MemArg& arg, uint32_t naturalLog2) const;
@@ -147,6 +154,10 @@ private:
 	void popTypes(const std::vector<ValueType>& types);
 	void checkTailCallResults(const FuncType& callee);
 	bool assignable(const ValueType& actual, const ValueType& expected) const;
+	// More Array Constructors (GC_EXTENSIONS.md GX-2) helpers.
+	CoreTypeView requireArrayType(TypeIdx idx, const char* who) const;
+	bool storageAssignable(const CanonStorageType& actual,
+			const CanonStorageType& expected) const;
 	void setUnreachable();
 	void beginBlock(const BlockType& blockType, bool isLoop, bool isIf);
 	void endBlock(bool isElse);
@@ -182,6 +193,11 @@ private:
 	void dispatchRefIsNull() override;
 	void dispatchRefEq() override;
 	void dispatchRefAsNonNull() override;
+
+	// More Array Constructors (docs/proposals/GC_EXTENSIONS.md GX-2).
+	void dispatchArrayNewArray(TypeIdx dst, TypeIdx src) override;
+	void dispatchArrayNewMemory(TypeIdx dst, MemIdx src) override;
+	void dispatchArrayNewTable(TypeIdx dst, TableIdx src) override;
 
 	void validateModule();
 	void validateGlobalInit(const Global& global, std::size_t index);

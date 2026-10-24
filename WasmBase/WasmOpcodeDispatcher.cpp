@@ -218,6 +218,26 @@ void WASM::OpcodeDispatcher::dispatchPrefixGC(FastMemReader& stream, GCOpcode op
 			dispatchArrayInitElem(x, y);
 			break;
 		}
+		// More Array Constructors (docs/proposals/GC_EXTENSIONS.md GX-2): the
+		// upstream overview assigns no opcodes, so these are engine-provisional.
+		case GCOpcode::ArrayNewArray: {
+			TypeIdx dst = stream.readLEB128<TypeIdx>();
+			TypeIdx src = stream.readLEB128<TypeIdx>();
+			dispatchArrayNewArray(dst, src);
+			break;
+		}
+		case GCOpcode::ArrayNewMemory: {
+			TypeIdx dst = stream.readLEB128<TypeIdx>();
+			uint32_t src = stream.readLEB128<uint32_t>(); // memidx
+			dispatchArrayNewMemory(dst, src);
+			break;
+		}
+		case GCOpcode::ArrayNewTable: {
+			TypeIdx dst = stream.readLEB128<TypeIdx>();
+			uint32_t src = stream.readLEB128<uint32_t>(); // tableidx
+			dispatchArrayNewTable(dst, src);
+			break;
+		}
 
 		// Array – two typeidxs
 		case GCOpcode::ArrayCopy: {
