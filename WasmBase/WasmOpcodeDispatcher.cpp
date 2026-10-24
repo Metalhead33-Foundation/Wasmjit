@@ -1200,18 +1200,94 @@ void OpcodeDispatcher::dispatchOpcode(FastMemReader& stream, Opcode opcode)
 		case Opcode::RefEq:        { dispatchRefEq();       break; }
 		case Opcode::RefAsNonNull: { dispatchRefAsNonNull(); break; }
 
-		// Stack switching: SS-0 deliberately rejects the assigned opcodes
-		// instead of desynchronising the decoder or guessing a stack model.
-		case Opcode::ContNew:
-		case Opcode::ContBind:
-		case Opcode::Suspend:
-		case Opcode::Resume:
-		case Opcode::ResumeThrow:
-		case Opcode::ResumeThrowRef:
+		// Stack switching (docs/proposals/STACK_SWITCHING.md). The stage-2 slice
+		// parses `cont.new`, `suspend` and `resume`; the rest stay named
+		// rejections so the decoder never guesses a stack model.
+		case Opcode::ContNew: {
+			auto x = stream.readLEB128<TypeIdx>();
+			dispatchContNew(x);
+			break;
+		}
+		case Opcode::Suspend: {
+			auto x = stream.readLEB128<TagIdx>();
+			dispatchSuspend(x);
+			break;
+		}
+		case Opcode::Resume: {
+			auto ct = stream.readLEB128<TypeIdx>();
+			const uint32_t count = stream.readLEB128<uint32_t>();
+			std::vector<ContHandlerClause> handlers;
+			for (uint32_t i = 0; i < count; ++i) {
+				ContHandlerClause handler;
+				const uint8_t shape = stream.read<uint8_t>();
+				if (shape == 0x00) {
+					handler.tag = stream.readLEB128<TagIdx>();
+					handler.label = stream.readLEB128<LabelIdx>();
+				} else if (shape == 0x01) {
+					handler.tag = stream.readLEB128<TagIdx>();
+					handler.isSwitch = true;
+				} else {
+					throw std::runtime_error(
+							"invalid resume handler shape (docs/proposals/STACK_SWITCHING.md)");
+				}
+				handlers.push_back(handler);
+			}
+			dispatchResume(ct, std::move(handlers));
+			break;
+		}
+		case Opcode::ContBind: {
+			auto ct = stream.readLEB128<TypeIdx>();
+			auto ct2 = stream.readLEB128<TypeIdx>();
+			dispatchContBind(ct, ct2);
+			break;
+		}
+		case Opcode::ResumeThrow: {
+			auto ct = stream.readLEB128<TypeIdx>();
+			auto exn = stream.readLEB128<TagIdx>();
+			const uint32_t count = stream.readLEB128<uint32_t>();
+			std::vector<ContHandlerClause> handlers;
+			for (uint32_t i = 0; i < count; ++i) {
+				ContHandlerClause handler;
+				const uint8_t shape = stream.read<uint8_t>();
+				if (shape == 0x00) {
+					handler.tag = stream.readLEB128<TagIdx>();
+					handler.label = stream.readLEB128<LabelIdx>();
+				} else if (shape == 0x01) {
+					handler.tag = stream.readLEB128<TagIdx>();
+					handler.isSwitch = true;
+				} else {
+					throw std::runtime_error("invalid resume_throw handler shape");
+				}
+				handlers.push_back(handler);
+			}
+			dispatchResumeThrow(ct, exn, std::move(handlers));
+			break;
+		}
+		case Opcode::ResumeThrowRef: {
+			auto ct = stream.readLEB128<TypeIdx>();
+			const uint32_t count = stream.readLEB128<uint32_t>();
+			std::vector<ContHandlerClause> handlers;
+			for (uint32_t i = 0; i < count; ++i) {
+				ContHandlerClause handler;
+				const uint8_t shape = stream.read<uint8_t>();
+				if (shape == 0x00) {
+					handler.tag = stream.readLEB128<TagIdx>();
+					handler.label = stream.readLEB128<LabelIdx>();
+				} else if (shape == 0x01) {
+					handler.tag = stream.readLEB128<TagIdx>();
+					handler.isSwitch = true;
+				} else {
+					throw std::runtime_error("invalid resume_throw_ref handler shape");
+				}
+				handlers.push_back(handler);
+			}
+			dispatchResumeThrowRef(ct, std::move(handlers));
+			break;
+		}
 		case Opcode::Switch:
 			throw std::runtime_error(
 					"stack-switching instruction is not implemented "
-					"(docs/proposals/STACK_SWITCHING.md SS-0)");
+					"(docs/proposals/STACK_SWITCHING.md SS-3 stage 2)");
 
 		// ----------------------------------------------------------------
 		// Prefixed instruction groups

@@ -200,7 +200,7 @@ malformed module: unsupported value type 0x69 (-23) in function type result #3
 (The formatter printed the enum's two's-complement byte at the time; it now
 prints the signed-LEB wire byte, so the same code reads `0x69` rather than
 `0xE9`. The same formatter also covers any future unassigned code, e.g.
-`unsupported value type 0x68 (…)`; `stringref` itself is modelled now and
+`unsupported value type 0x7A (…)`; `stringref` itself is modelled now and
 produces a real host handle — see `STRINGREF.md` STR-1/STR-3.)
 
 At that point `ref_null` had to be dropped from `Test/wast_supported.txt`,

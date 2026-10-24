@@ -216,6 +216,10 @@ private:
 	void emitBranchToTarget(ControlBlock& target);
 	WASM::TypeIdx functionTypeIndexForFunc(WASM::FuncIdx funcIdx) const;
 	WASM::FuncType functionSignatureForType(WASM::TypeIdx typeIdx) const;
+	// `cont $ft`: resolve the module-local function type index stored in the
+	// canonical continuation type (STACK_SWITCHING.md SS-1).
+	WASM::TypeIdx continuationFuncIndex(WASM::TypeIdx contTypeIdx) const;
+	WASM::FuncType continuationSignature(WASM::TypeIdx contTypeIdx) const;
 	jit_value_t callablePointerForFuncIndex(WASM::FuncIdx funcIdx);
 	void dispatchCallThroughCallable(jit_value_t callablePtr, WASM::TypeIdx typeIdx);
 	// Emit a trap of `kind` (docs/SAFETY.md §2.4). `detail` overrides the log
@@ -388,6 +392,14 @@ protected:
 	void dispatchElse() override;
 	void dispatchThrow(WASM::TagIdx arg) override;
 	void dispatchThrowRef() override;
+	void dispatchContNew(WASM::TypeIdx arg) override;
+	void dispatchContBind(WASM::TypeIdx arg1, WASM::TypeIdx arg2) override;
+	void dispatchSuspend(WASM::TagIdx arg) override;
+	void dispatchResume(WASM::TypeIdx arg, std::vector<WASM::ContHandlerClause>&& handlers) override;
+	void dispatchResumeThrow(WASM::TypeIdx arg1, WASM::TagIdx arg2,
+			std::vector<WASM::ContHandlerClause>&& handlers) override;
+	void dispatchResumeThrowRef(WASM::TypeIdx arg,
+			std::vector<WASM::ContHandlerClause>&& handlers) override;
 	void dispatchEnd() override;
 	void dispatchBr(WASM::LabelIdx arg) override;
 	void dispatchBrIf(WASM::LabelIdx arg) override;

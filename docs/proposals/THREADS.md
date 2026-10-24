@@ -1,11 +1,13 @@
 # Threads and Atomics — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 7 — TH-1, TH-2, TH-3,
+Status: design note / implementation reference (revision 9 — TH-1, TH-2, TH-3,
 TH-4 and TH-6 are implemented; TH-5 (real agents) is deferred indefinitely but
 not ruled out. The per-agent state groundwork is implemented: `Agent` owns an
-`ExecutionState` (trap, exception, tail-call, defer, counters and stack limit);
-what remains deferred is the execution/scheduling model. §3 records the
-project's explicit execution model: **single-agent only, for the foreseeable
+`ExecutionState` (trap, exception, tail-call, defer, counters and stack limit).
+The stack-switching stage adds continuation execution contexts: A switches
+native stacks on one host thread (default), B uses a host thread per suspended
+continuation (fallback). Neither is an agent and neither unlocks TH-5. §3 records
+the project's explicit execution model: **single-agent only, for the foreseeable
 future**; the single-agent build is a long-term stop-gap, not an oversight.)
 Audience: anyone touching `WasmMemory`, `WasmStore`, `WasmOpcode`,
 `WasmOpcodeDispatcher`, `LibjitOpcodeDispatcher`, or the test harness.
@@ -118,7 +120,7 @@ engine must do", not "what 3.0 requires".
   **single-agent execution only**. True multithreading — agents, OS threads, a
   scheduler, TLS, cross-agent `wait`/`notify` — is **deferred indefinitely, but
   not ruled out**: every piece of the representation (stable shared-memory
-  bases, `__atomic_*` accesses, per-thread trap state) is kept in a shape that a
+  bases, `__atomic_*` accesses, per-agent trap state) is kept in a shape that a
   later multi-agent build can use. The single-agent model is a **long-term
   stop-gap**, chosen because it keeps the runtime simple and the spec suite
   meaningful; it is not a claim that the engine must never be concurrent. See
@@ -249,6 +251,13 @@ belong to the execution context:
   compiling thread's TLS address. Two host threads — and two agents on one host
   thread — therefore do not race. If a future agent migrates between OS threads,
   the state moves with its agent rather than with the thread.
+- **A continuation is not an agent.** The stack-switching A provider switches
+  native stacks; its continuation is serial and may migrate between host threads,
+  but never runs concurrently with its resumer. The B fallback uses a host thread
+  per suspended continuation, but `resume` blocks and only one execution context
+  mutates the instance at a time. Neither has a scheduler, waiter table or
+  multi-mutator GC. TH-5 remains the gated feature for true multi-agent
+  execution.
 
 Two further limits of the tail-call lowering:
 
@@ -318,7 +327,7 @@ almost all of the threads proposal into trivial semantics.
 | TD6 | **Enforce natural alignment for atomics at run time** (a cheap `addr % size == 0` check → `trap()`); the static memarg rule is not a runtime concern. | §2.3 requires the misaligned *effective address* to trap for atomics; `alignment ≤ natural` is a static property and `Module::validate()` enforces it ([`../VALIDATION.md`](../VALIDATION.md)), so the backend only needs the dynamic half. | Safe on non-x86; one compare on the atomic path only. |
 | TD7 | **Do not implement a thread pool, agents, `Atomics.wait` host interop, or TLS.** | §3: none is required. | Scope control; the Store/instance design already models a single process-global. |
 | TD8 | **Keep `SharedLinearMemory`'s reserve/commit base-stability** even in the single-agent build — it is what makes a later multi-agent step a change of *scheduler* rather than a change of *representation*. | It is already implemented and costs nothing when only one agent maps it. | A clean upgrade path. |
-| TD9 | **Ship a single-agent engine only** — one `ModuleInstance` runs on the caller's thread; atomics are real `__atomic_*` operations (so they are seq-cst even here), but there is no agent API and no scheduler. True multithreading is **deferred indefinitely, not abandoned**: the memory representation, per-thread trap/tail-call state and atomic helpers are kept in a shape a future agent model can reuse. | §3 first bullet: one agent is conformant; every atomic is trivially sequentially consistent. | No thread pool, TLS, scheduling, cross-agent waiter table or data-race tooling — the runtime stays simple and the spec suite stays deterministic. The cost is documented: `wait` cannot actually be woken by a second agent. |
+| TD9 | **Ship a single-agent engine only** — one `ModuleInstance` runs on the caller's thread; atomics are real `__atomic_*` operations (so they are seq-cst even here), but there is no agent API and no scheduler. True multithreading is **deferred indefinitely, not abandoned**: the memory representation, per-agent trap/tail-call state and atomic helpers are kept in a shape a future agent model can reuse. | §3 first bullet: one agent is conformant; every atomic is trivially sequentially consistent. | No thread pool, TLS, scheduling, cross-agent waiter table or data-race tooling — the runtime stays simple and the spec suite stays deterministic. The cost is documented: `wait` cannot actually be woken by a second agent. |
 
 **Guardrails.**
 
@@ -342,7 +351,7 @@ Ordered by value; `TH-n` is independent of the other documents' milestones.
 | **TH-2 — Wait/notify** | ✅ Done in the single-agent form: `notify` returns 0; `wait32/64` returns 1 on a value mismatch and 2 otherwise without sleeping (`TD4`). The unshared-memory trap is a validation concern (`T5`, no front end). | T3 | Done: the script's wait/notify assertions pass (mismatch → 1, timeout → 2, notify → 0). |
 | **TH-3 — Shared-memory hygiene** | ✅ `SharedLinearMemory` never moves its base; import matching compares shared-ness; shared memories/tables must declare a maximum; `memory.grow` publishes with a seq-cst fence; `memory.size` acquire-loads shared metadata; active data-segment initialisation ends with a seq-cst barrier; the tail-call state is per-agent. | T6, T7, T8, T11 | Done: shared memory without a max is rejected; `memory.grow`/`size` are ordered; host threads do not share tail-call state. |
 | **TH-4 — Threads test coverage** | ✅ Done: `proposals/threads/atomic.wast` is wired into `Test/Test.pro` (single-agent atomic semantics, including the 28 misaligned `assert_trap`s) and curated. | T10 | Done: `spec: atomic` runs in the default suite (`Test/wast_supported.txt`). |
-| **TH-5 — Optional: real agents** | ✗ **Deferred indefinitely (not ruled out):** an embedder API to run agents on the one module instance across OS threads, with a real waiter table and per-agent trap/lock ownership. Only if an embedder needs it. The per-agent state groundwork (TRAP-6) is done; remaining: the scheduler, a real waiter table and multi-agent lock/GC ownership. Until then the engine is explicitly single-agent (`TD9`). | T9, T12 | Two agents produce the same results as the sequentially-consistent model, and each sees only its own traps. |
+| **TH-5 — Optional: real agents** | ✗ **Deferred indefinitely (not ruled out):** an embedder API to run agents on the one module instance across OS threads, with a real waiter table and per-agent trap/lock ownership. Only if an embedder needs it. The per-agent state groundwork (TRAP-6) is done; the stack-switching A/B continuations are execution contexts, not agents, and do not change this row. Remaining: the scheduler, a real waiter table and multi-agent lock/GC ownership. Until then the engine is explicitly single-agent (`TD9`). | T9, T12 | Two agents produce the same results as the sequentially-consistent model, and each sees only its own traps. |
 | **TH-6 — Component async interface** | ✅ `WasmComponentAsync.hpp` defines tasks, waitables, stream/future endpoints and the `ComponentExecutor` seam; `SingleAgentExecutor` and `ComponentRuntime` execute the synchronous subset. | T9/T11 (interfaces), TH-5 (backend) | All single-agent async tests pass; replacing the executor is the only change a multi-agent backend needs. |
 
 Guardrails: run `./WasmJit '~[spec]'` after each step; keep the single-agent

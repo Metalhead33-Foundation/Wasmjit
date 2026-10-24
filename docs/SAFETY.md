@@ -88,6 +88,12 @@ it charges every byte against a **process-wide budget** *before* allocating:
   generated code never calls `malloc`/`calloc`/`free`** — allocation is a
   per-region free-list pop or a bump, and anonymous `mmap` provides the
   zero-filled memory `calloc` used to. See `proposals/GC.md` §6.1/GC-2.
+- A continuation stack is charged to the same budget before it is created
+  (`WasmContinuation.cpp`): A charges the mmap'd usable stack plus its guard
+  page; B charges the pthread stack. The live-continuation count is separately
+  bounded by `WASMJIT_MAX_CONTINUATIONS`, and the stack request by
+  `WASMJIT_CONT_STACK_BYTES` (default 512 KiB). A refused `cont.new` or stack
+  allocation is a recoverable `OutOfMemory` trap, never an allocation attempt.
 
 Default budget **2 GiB**; override with `WASMJIT_MAX_TOTAL_BYTES` (bytes;
 `0`/`unlimited` disables it, at your own risk). The whole test suite fits in
@@ -189,12 +195,17 @@ future continuation context), not with the thread. A host thread that has not
 installed an explicit agent gets a lazily created default one. The `Store`
 remains a process-global owner with locked management containers, and one
 `ModuleInstance` is still not concurrently callable. These are host-side
-properties, not a multi-agent execution model. The distinction between guest,
-host and boundary safety, and the responsibilities of each party, is defined in
-[`THREADSAFETY.md`](THREADSAFETY.md); the single-agent execution model is
-[`proposals/THREADS.md`](proposals/THREADS.md) §3/TD9. Per-agent trap, exception
-and tail-call state (**TRAP-6**) is implemented; true multi-agent execution
-remains deferred ([`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §12.1).
+properties, not a multi-agent execution model. A continuation installs its own
+`ExecutionState` for the duration of its execution: A switches to it on a
+private native stack on the same host thread, B runs it on a worker thread. The
+state is private to the continuation, which is **not** an agent and does not
+enter the instance while the resumer is waiting. The distinction between
+guest, host and boundary safety, and the responsibilities of each party, is
+defined in [`THREADSAFETY.md`](THREADSAFETY.md); the single-agent execution
+model is [`proposals/THREADS.md`](proposals/THREADS.md) §3/TD9. Per-agent trap,
+exception and tail-call state (**TRAP-6**) is implemented; true multi-agent
+execution remains deferred indefinitely ([`TRAP_CLEANUP.md`](TRAP_CLEANUP.md)
+§12.1, [`proposals/THREADS.md`](proposals/THREADS.md) TH-5).
 
 ### 2.8 The host stack is a bounded resource, and its limit is a trap
 
@@ -218,10 +229,19 @@ down. The engine therefore checks explicitly:
   entry; the helper reports `TrapKind::CallStackExhausted` ("call stack
   exhausted"), an ordinary recoverable trap (§2.4) that unwinds by returning and
   becomes `WASM::Trap` at the host boundary.
-- A platform that cannot report stack bounds, or a thread whose stack is not
-  larger than twice the reserve, leaves the limit at zero: the guard is then
-  disarmed rather than trapping on the first call. The embedder chooses thread
-  stack sizes, so this is a deliberate limitation (S7).
+- A continuation installs the same guard for its own stack
+  (`WasmContinuation.cpp`): A places a `PROT_NONE` page below its mmap'd stack
+  and sets a 64 KiB reserve; B does the equivalent for its pthread stack. If the
+  platform cannot report B's bounds, B disarms the `VMContext` fallback rather
+  than compare two unrelated mappings. Each stack is charged to the allocation
+  budget and can be set with `WASMJIT_CONT_STACK_BYTES`.
+- A calls the weak `__sanitizer_start_switch_fiber` /
+  `__sanitizer_finish_switch_fiber` hooks around every `swapcontext` when the
+  sanitizer is linked; a normal build links no libasan and the hooks are no-ops.
+- For the instance-owning thread, a platform that cannot report stack bounds, or
+  a thread whose stack is not larger than twice the reserve, leaves the limit at
+  zero: the guard is then disarmed rather than trapping on the first call. The
+  embedder chooses thread stack sizes, so this is a deliberate limitation (S7).
 
 *Encountered pitfall:* the spec harness used to run `assert_exhaustion` in a
 nested child and count that child's `SIGSEGV` as a pass. A full sweep produced
@@ -244,6 +264,7 @@ is `Test/wasm_wat/stack_exhaustion.wat` plus the
 | S5 | **Trap messages are not compared.** The harness checks *that* a trap happened, not its text. | Text differs between engines; the spec's strings are hints. |
 | S6 | **An opt-out can unguard everything**: `WASMJIT_MAX_TOTAL_BYTES=unlimited`, or a device that reports no size (`requireAvailable` then cannot bound). | Both are explicit choices. |
 | S7 | **A thread whose stack is not larger than twice the guard reserve runs unguarded** (`stackLimit == 0`), as does a platform that cannot report stack bounds. | A 64 KiB frame cannot be made safe on an arbitrarily small stack; the embedder owns thread stack sizes. §2.8. |
+| S8 | **A continuation use is serial.** A suspended stack may migrate between host threads, but concurrent resume/drop of the same continuation is undefined; B cancels on its worker. | Keep one host thread active per continuation at a time; the provider does not add a scheduler. |
 
 ### 3.2 Things that looked like engine bugs but were not
 
@@ -353,7 +374,8 @@ killed a child that "produced no report".
   (the host stack guard), `WasmBase/WasmModule.cpp`
   (preamble + parse-time bounds), `WasmBase/WasmOpcodeDispatcher.cpp`
   (opcode-list bounds), `WasmBase/WasmModuleInstance.cpp` (segments, GC
-  allocation), `LibJit/LibjitModuleCompiler.cpp` (`JitBuildScope`),
+  allocation), `WasmBase/WasmContinuation.{hpp,cpp}` (continuation worker
+  stack/budget), `LibJit/LibjitModuleCompiler.cpp` (`JitBuildScope`),
   `Test/wasm_wat/grow_guard.wat`, [`TESTING.md`](TESTING.md), the
   guest/host boundary contract [`THREADSAFETY.md`](THREADSAFETY.md), and the
   trap-cleanup design note [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md).

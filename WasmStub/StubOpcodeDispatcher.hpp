@@ -40,6 +40,9 @@ protected:
 	void dispatchElse() override;
 	void dispatchThrow(WASM::TagIdx arg) override;
 	void dispatchThrowRef() override;
+	void dispatchContNew(WASM::TypeIdx arg) override;
+	void dispatchSuspend(WASM::TagIdx arg) override;
+	void dispatchResume(WASM::TypeIdx arg, std::vector<WASM::ContHandlerClause>&& handlers) override;
 	void dispatchEnd() override;
 	void dispatchBr(WASM::LabelIdx arg) override;
 	void dispatchBrIf(WASM::LabelIdx arg) override;

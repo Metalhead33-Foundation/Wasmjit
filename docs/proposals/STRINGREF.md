@@ -185,7 +185,7 @@ open, and that is an external format issue.
 |---|---:|---:|---:|---|
 | (none) | — | — | — | no `stringref`/`stringview` script in the testsuite snapshot (`wasm-tools` 1.252 cannot emit one) |
 | `stringref types and the string section are parsed (STR-1/STR-2)` | 10 assertions | 0 | 0 | the reserved type codes are modelled and section 14 holds the expected literals |
-| `an unmodelled value type is still rejected at load` | 2 assertions | 0 | 0 | an unassigned code (0x68) still fails at the boundary |
+| `an unmodelled value type is still rejected at load` | 2 assertions | 0 | 0 | an unassigned code (0x7A) still fails at the boundary |
 | `string.const initializes a stringref global` | 9 assertions | 0 | 0 | `(global stringref (string.const 0))` holds the first literal |
 | `string.const, measure, eq and concat run through the JIT` | 20 assertions | 0 | 0 | WTF-8/WTF-16/UTF-8 lengths, equality, concat, and the isolated-surrogate results |
 | `string.new_utf8/wtf16 and encode round-trip through memory` | 10 assertions | 0 | 0 | UTF-8 and WTF-16 input round-trip to memory in WTF-8/UTF-8 |

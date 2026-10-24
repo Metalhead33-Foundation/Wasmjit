@@ -58,6 +58,14 @@ private:
 	std::string describeLocal(uint32_t idx) const;
 
 	FuncType funcTypeAt(uint32_t typeIdx) const;
+	// Resolve `cont $ft` to the module-local function type index it names. The
+	// canonical view stores a process-wide TypeId, so the module-local index is
+	// recovered from `typeIds` (STACK_SWITCHING.md SS-1).
+	uint32_t continuationFuncIndex(TypeIdx contTypeIdx, const char* who) const;
+	FuncType continuationFuncType(TypeIdx contTypeIdx, const char* who) const;
+	// The stage-2 provider carries at most one i32 parameter and one i32 result
+	// for a continuation function, a control tag and a handler payload.
+	void requireMvpContinuationSignature(const FuncType& type, const char* who) const;
 	void requireFunctionIndex(uint32_t idx) const;
 	void requireTableIndex(uint32_t idx) const;
 	void requireMemoryIndex(uint32_t idx) const;
@@ -274,6 +282,16 @@ private:
 	void dispatchRefCastNull(const HeapType& arg) override;
 	void dispatchThrow(TagIdx arg) override;
 	void dispatchThrowRef() override;
+	void dispatchContNew(TypeIdx arg) override;
+	void dispatchContBind(TypeIdx arg1, TypeIdx arg2) override;
+	void dispatchSuspend(TagIdx arg) override;
+	// Shared validation for `resume`/`resume_throw*` handler clauses.
+	void validateContHandlers(const std::vector<ContHandlerClause>& handlers);
+	void dispatchResume(TypeIdx arg, std::vector<ContHandlerClause>&& handlers) override;
+	void dispatchResumeThrow(TypeIdx arg1, TagIdx arg2,
+			std::vector<ContHandlerClause>&& handlers) override;
+	void dispatchResumeThrowRef(TypeIdx arg,
+			std::vector<ContHandlerClause>&& handlers) override;
 	void dispatchTryTable(const BlockType& arg1, std::vector<CatchClause>&& arg2) override;
 	void dispatchSelectT(std::vector<ValueType>&& arg) override;
 	void dispatchBrOnNull(LabelIdx arg) override;

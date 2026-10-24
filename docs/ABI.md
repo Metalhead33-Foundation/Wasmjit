@@ -469,6 +469,29 @@ branches, so `wasm_exn_pending()` is non-null only for an exception the embedder
 must handle. `ModuleInstance::tagIds()`/`tagIdForIndex()` expose the module's
 tag index space (imports first).
 
+### Continuations (`WasmBase/WasmContinuation.hpp`)
+
+A continuation reference is a `void*` at the ABI (the same lowering as any
+reference). A host normally receives one from an exported function whose result
+is `(ref cont)`, or from `wasm_cont_resume`'s suspension result. The public
+`HostContinuation` handle owns one reference and exposes:
+
+- `HostContinuation(ref, takeOwnership)` — wrap a value; `takeOwnership=false`
+  retains an extra count;
+- `resume(arg, &result)` — consume the handle and block until the continuation
+  completes or suspends; a suspension returns the replacement continuation in
+  `result.continuation` (wrap it with `takeOwnership=true`);
+- `HostContinuation::suspendCurrent(tag, value, &resumed)` — the native-import
+  entry point for JSPI-style yielding. It returns 1 when resumed; 0 means there
+  is no current continuation or it was cancelled, with the trap slot explaining
+  why.
+
+`ContinuationResumeResult` carries `status`, `tagId`, `value` and the
+replacement handle. A is the default provider (serial; may migrate between host
+threads); B is the opt-in
+host-thread fallback. Neither is an agent API: calls are serial and true
+multi-agent execution remains deferred.
+
 ### `Callable` (`WasmBase/WasmValue.hpp`)
 
 Universal function reference stored in tables and import storage.

@@ -49,6 +49,51 @@ FuncType Validator::funcTypeAt(uint32_t typeIdx) const
 	return module.funcTypeAt(typeIdx);
 }
 
+uint32_t Validator::continuationFuncIndex(TypeIdx contTypeIdx, const char* who) const
+{
+	if (contTypeIdx >= module.typeCount())
+		fail(std::string(who) + ": unknown type "
+				+ module.describeIndex(NameKind::Type, contTypeIdx));
+	const CoreTypeView view = module.typeView(contTypeIdx);
+	if (view.kind() != CanonTypeKind::Cont)
+		fail(std::string(who) + ": type "
+				+ module.describeIndex(NameKind::Type, contTypeIdx)
+				+ " is not a continuation type");
+	const CanonHeapType func = view.contFunc();
+	if (func.kind != CanonHeapType::Kind::Global)
+		fail(std::string(who) + ": continuation function type is not module-local");
+	for (uint32_t i = 0; i < module.typeCount(); ++i) {
+		if (module.typeIds[i] != func.id)
+			continue;
+		if (module.typeView(i).kind() != CanonTypeKind::Func)
+			fail(std::string(who) + ": continuation function type is not a function");
+		return i;
+	}
+	fail(std::string(who) + ": continuation function type is not in this module");
+}
+
+FuncType Validator::continuationFuncType(TypeIdx contTypeIdx, const char* who) const
+{
+	return funcTypeAt(continuationFuncIndex(contTypeIdx, who));
+}
+
+void Validator::requireMvpContinuationSignature(const FuncType& type, const char* who) const
+{
+	const auto check = [&](const std::vector<StorageType>& values, const char* part,
+			std::size_t limit) {
+		if (values.size() > limit)
+			fail(std::string(who) + ": " + part
+					+ " carries more values than the current provider supports");
+		for (const StorageType& value : values) {
+			if (value.isPacked || value.val.opcode != ValueTypeCode::I32)
+				fail(std::string(who) + ": " + part
+						+ " is not i32; multi-value/reference payloads are not implemented");
+		}
+	};
+	check(type.params, "parameter", 2);
+	check(type.results, "result", 1);
+}
+
 void Validator::requireFunctionIndex(uint32_t idx) const
 {
 	if (idx >= totalFunctions)
@@ -413,6 +458,7 @@ bool Validator::assignable(const ValueType& actual, const ValueType& expected) c
 				|| code == ValueTypeCode::AnyRef || code == ValueTypeCode::EqRef
 				|| code == ValueTypeCode::I31Ref || code == ValueTypeCode::StructRef
 				|| code == ValueTypeCode::ArrayRef || code == ValueTypeCode::ExnRef
+				|| code == ValueTypeCode::ContRef
 				|| code == ValueTypeCode::NullFuncRef || code == ValueTypeCode::NullExternRef
 				|| code == ValueTypeCode::NullExnRef || code == ValueTypeCode::NullRef
 				|| code == ValueTypeCode::StringRef || code == ValueTypeCode::StringViewWtf8
@@ -440,6 +486,7 @@ bool Validator::isDefaultable(const ValueType& type) const
 	case ValueTypeCode::StructRef:
 	case ValueTypeCode::ArrayRef:
 	case ValueTypeCode::ExnRef:
+	case ValueTypeCode::ContRef:
 	case ValueTypeCode::NullRef:
 	case ValueTypeCode::NullFuncRef:
 	case ValueTypeCode::NullExternRef:
@@ -472,6 +519,7 @@ bool Validator::refSubtype(const ValueType& actual, const ValueType& expected) c
 		case ValueTypeCode::FuncRef:      out = {true, true, Kind::Func, 0}; break;
 		case ValueTypeCode::ExternRef:    out = {true, true, Kind::Extern, 0}; break;
 		case ValueTypeCode::ExnRef:       out = {true, true, Kind::Exn, 0}; break;
+		case ValueTypeCode::ContRef:      out = {true, true, Kind::Cont, 0}; break;
 		case ValueTypeCode::AnyRef:       out = {true, true, Kind::Any, 0}; break;
 		case ValueTypeCode::EqRef:        out = {true, true, Kind::Eq, 0}; break;
 		case ValueTypeCode::I31Ref:       out = {true, true, Kind::I31, 0}; break;
@@ -1572,6 +1620,151 @@ void Validator::dispatchThrowRef()
 {
 	popExpect(ValueTypeCode::ExnRef);
 	setUnreachable();
+}
+
+void Validator::dispatchContNew(TypeIdx arg)
+{
+	const uint32_t funcIdx = continuationFuncIndex(arg, "cont.new");
+	const FuncType func = funcTypeAt(funcIdx);
+	requireMvpContinuationSignature(func, "cont.new");
+	// [(ref null $ft)] -> [(ref $ct)]
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(funcIdx)});
+	pushValue(ValueType{ValueTypeCode::Ref, static_cast<int32_t>(arg)});
+}
+
+void Validator::dispatchContBind(TypeIdx arg1, TypeIdx arg2)
+{
+	const uint32_t fromFuncIdx = continuationFuncIndex(arg1, "cont.bind");
+	const uint32_t toFuncIdx = continuationFuncIndex(arg2, "cont.bind");
+	const FuncType from = funcTypeAt(fromFuncIdx);
+	const FuncType to = funcTypeAt(toFuncIdx);
+	requireMvpContinuationSignature(from, "cont.bind");
+	requireMvpContinuationSignature(to, "cont.bind");
+	if (from.params.size() < to.params.size())
+		fail("cont.bind: target continuation has more parameters than the source");
+	const std::size_t bound = from.params.size() - to.params.size();
+	// The remaining source parameters must satisfy the target's parameters.
+	for (std::size_t i = 0; i < to.params.size(); ++i) {
+		if (!assignable(from.params[bound + i].val, to.params[i].val))
+			fail("cont.bind: remaining parameter types do not match");
+	}
+	if (from.results.size() != to.results.size())
+		fail("cont.bind: result arity does not match");
+	for (std::size_t i = 0; i < from.results.size(); ++i) {
+		if (!assignable(from.results[i].val, to.results[i].val))
+			fail("cont.bind: result types do not match");
+	}
+
+	// [bound params* (ref null cont)] -> [(ref $ct2)]; the captured
+	// continuation from a handler is often typed as the abstract `cont`, so the
+	// operand is accepted at that level and the immediate names the refined type.
+	popExpect(ValueType{ValueTypeCode::RefNull,
+			static_cast<int32_t>(AbstractHeapType::Cont)});
+	for (std::size_t i = bound; i-- > 0; )
+		popExpect(from.params[i].val);
+	pushValue(ValueType{ValueTypeCode::Ref, static_cast<int32_t>(arg2)});
+}
+
+void Validator::dispatchSuspend(TagIdx arg)
+{
+	requireTagIndex(arg);
+	const uint32_t typeIdx = arg < module.importTags.size()
+			? module.importTags[arg].typeIdx
+			: module.tags[arg - module.importTags.size()].typeIdx;
+	const FuncType tag = funcTypeAt(typeIdx);
+	requireMvpContinuationSignature(tag, "suspend");
+	// [t1*] -> [t2*], exactly the control tag's signature.
+	popTypes(paramTypes(tag));
+	pushTypes(resultTypes(tag));
+}
+
+void Validator::validateContHandlers(const std::vector<ContHandlerClause>& handlers)
+{
+	if (handlers.size() > 16)
+		fail("resume: too many handler clauses");
+	for (const ContHandlerClause& handler : handlers) {
+		if (handler.isSwitch)
+			fail("resume: (on $tag switch) is not implemented; use (on $tag $label)");
+		requireTagIndex(handler.tag);
+		if (handler.label >= controlStack.size())
+			fail("resume: unknown handler label " + std::to_string(handler.label));
+		const uint32_t tagTypeIdx = handler.tag < module.importTags.size()
+				? module.importTags[handler.tag].typeIdx
+				: module.tags[handler.tag - module.importTags.size()].typeIdx;
+		const FuncType tag = funcTypeAt(tagTypeIdx);
+		requireMvpContinuationSignature(tag, "resume handler");
+
+		// The handler label receives the suspension payload followed by the
+		// captured continuation: [tag params* (ref null cont)]. A block's
+		// label type is its result type; a loop's branch type is its parameter
+		// type. Both forms are accepted.
+		const ControlFrame& target = controlStack[controlStack.size() - 1 - handler.label];
+		const std::vector<ValueType>& labelTypes = target.isLoop ? target.startTypes : target.endTypes;
+		std::vector<ValueType> expected = paramTypes(tag);
+		expected.push_back(ValueType{ValueTypeCode::RefNull,
+				static_cast<int32_t>(AbstractHeapType::Cont)});
+		if (labelTypes.size() != expected.size())
+			fail("resume: handler label arity does not match the tag payload plus the continuation");
+		for (std::size_t i = 0; i < expected.size(); ++i) {
+			if (!assignable(expected[i], labelTypes[i]))
+				fail("resume: handler label type does not accept the tag payload plus the continuation");
+		}
+	}
+}
+
+void Validator::dispatchResume(TypeIdx arg, std::vector<ContHandlerClause>&& handlers)
+{
+	const uint32_t funcIdx = continuationFuncIndex(arg, "resume");
+	const FuncType func = funcTypeAt(funcIdx);
+	validateContHandlers(handlers);
+	requireMvpContinuationSignature(func, "resume");
+
+	// [t1* (ref null $ct)] -> [t2*]
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+	popTypes(paramTypes(func));
+	pushTypes(resultTypes(func));
+}
+
+void Validator::dispatchResumeThrow(TypeIdx arg1, TagIdx arg2,
+		std::vector<ContHandlerClause>&& handlers)
+{
+	const uint32_t funcIdx = continuationFuncIndex(arg1, "resume_throw");
+	const FuncType func = funcTypeAt(funcIdx);
+	requireMvpContinuationSignature(func, "resume_throw");
+	if (!handlers.empty())
+		fail("resume_throw: handler clauses are not implemented yet");
+	requireTagIndex(arg2);
+	const uint32_t tagTypeIdx = arg2 < module.importTags.size()
+			? module.importTags[arg2].typeIdx
+			: module.tags[arg2 - module.importTags.size()].typeIdx;
+	const FuncType exn = funcTypeAt(tagTypeIdx);
+	if (!exn.results.empty())
+		fail("resume_throw: the exception tag must have an empty result");
+	requireMvpContinuationSignature(func, "resume_throw");
+	requireMvpContinuationSignature(exn, "resume_throw");
+	validateContHandlers(handlers);
+
+	// [te* (ref null $ct)] -> [t2*]
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg1)});
+	popTypes(paramTypes(exn));
+	pushTypes(resultTypes(func));
+}
+
+void Validator::dispatchResumeThrowRef(TypeIdx arg,
+		std::vector<ContHandlerClause>&& handlers)
+{
+	const uint32_t funcIdx = continuationFuncIndex(arg, "resume_throw_ref");
+	const FuncType func = funcTypeAt(funcIdx);
+	requireMvpContinuationSignature(func, "resume_throw_ref");
+	if (!handlers.empty())
+		fail("resume_throw_ref: handler clauses are not implemented yet");
+	validateContHandlers(handlers);
+	requireMvpContinuationSignature(func, "resume_throw_ref");
+
+	// [exnref (ref null $ct)] -> [t2*]
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+	popExpect(ValueTypeCode::ExnRef);
+	pushTypes(resultTypes(func));
 }
 
 void Validator::dispatchBrOnNull(LabelIdx label)

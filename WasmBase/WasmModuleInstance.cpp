@@ -1,4 +1,5 @@
 #include "WasmModuleInstance.hpp"
+#include "WasmContinuation.hpp"
 #include "WasmException.hpp"
 #include "WasmOpcode.hpp"
 #include "WasmStack.hpp"
@@ -1730,6 +1731,8 @@ bool ModuleInstance::isHostReference(const void* ref) const
 		return false;
 	if (Store::global().callableAt(ref) != nullptr)
 		return false;
+	if (isContinuationRef(ref))
+		return false;
 	return true;
 }
 
@@ -1765,8 +1768,11 @@ bool ModuleInstance::hostReferenceEquals(const void* lhs, const void* rhs) const
 void* ModuleInstance::refClone(void* ref)
 {
 	// Host-owned strings/views/iterators use the StringStore's count; GC
-	// objects use the header count (STRINGREF.md STR-8). A host externref is
-	// uncounted by the engine and goes through the optional bridge.
+	// objects use the header count (STRINGREF.md STR-8). A continuation handle
+	// has its own count (WasmContinuation.hpp); everything else is either
+	// uncounted or a host externref.
+	if (continuationRefRetain(ref))
+		return ref;
 	if (Store::global().strings().retain(ref))
 		return ref;
 	uint32_t* slot = gcRefcountSlot(ref);
@@ -1787,6 +1793,8 @@ void* ModuleInstance::refClone(void* ref)
 
 void ModuleInstance::refDrop(void* ref)
 {
+	if (continuationRefRelease(ref))
+		return;
 	if (Store::global().strings().release(ref))
 		return;
 	uint32_t* slot = gcRefcountSlot(ref);

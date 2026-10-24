@@ -19,6 +19,7 @@ std::basic_ostream<char>& operator<<(std::basic_ostream<char>& left, const WASM:
 		case WASM::ValueTypeCode::StructRef: left << "StructRef"; break;
 		case WASM::ValueTypeCode::ArrayRef: left << "ArrayRef"; break;
 		case WASM::ValueTypeCode::ExnRef: left << "ExnRef"; break;
+		case WASM::ValueTypeCode::ContRef: left << "ContRef"; break;
 		case WASM::ValueTypeCode::NullFuncRef: left << "NullFuncRef"; break;
 		case WASM::ValueTypeCode::NullExternRef: left << "NullExternRef"; break;
 		case WASM::ValueTypeCode::NullExnRef: left << "NullExnRef"; break;
@@ -43,6 +44,8 @@ std::basic_ostream<char>& operator<<(std::basic_ostream<char>& left, const WASM:
 		case WASM::AbstractHeapType::Struct: left << "Struct"; break;
 		case WASM::AbstractHeapType::Array: left << "Array"; break;
 		case WASM::AbstractHeapType::Exn: left << "Exn"; break;
+		case WASM::AbstractHeapType::Cont: left << "Cont"; break;
+		case WASM::AbstractHeapType::NoCont: left << "NoCont"; break;
 		case WASM::AbstractHeapType::NoExtern: left << "NoExtern"; break;
 		case WASM::AbstractHeapType::NoFunc: left << "NoFunc"; break;
 		case WASM::AbstractHeapType::NoExn: left << "NoExn"; break;
@@ -121,6 +124,27 @@ void OpcodeDispatcher::dispatchThrow(WASM::TagIdx arg)
 void OpcodeDispatcher::dispatchThrowRef()
 {
 	*stream << '(' << "ThrowRef" << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchContNew(WASM::TypeIdx arg)
+{
+	*stream << '(' << "ContNew" << ' ' << '(' << describe(WASM::NameKind::Type, arg) << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchSuspend(WASM::TagIdx arg)
+{
+	*stream << '(' << "Suspend" << ' ' << '(' << describe(WASM::NameKind::Tag, arg) << ')' << std::endl;
+}
+void OpcodeDispatcher::dispatchResume(WASM::TypeIdx arg, std::vector<WASM::ContHandlerClause>&& handlers)
+{
+	*stream << '(' << "Resume" << ' ' << '(' << describe(WASM::NameKind::Type, arg) << ')';
+	for (const WASM::ContHandlerClause& handler : handlers) {
+		*stream << " (on " << describe(WASM::NameKind::Tag, handler.tag);
+		if (handler.isSwitch)
+			*stream << " switch";
+		else
+			*stream << ' ' << handler.label;
+		*stream << ')';
+	}
+	*stream << ')' << std::endl;
 }
 void OpcodeDispatcher::dispatchEnd()
 {

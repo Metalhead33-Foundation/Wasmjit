@@ -285,7 +285,7 @@ touches. It is **not** a statement that generated Wasm code is race-free.
 
 **It does guarantee (within the current single-agent model):**
 
-- per-host-thread trap and tail-call state;
+- per-agent trap and tail-call state;
 - Store/type/GC/string **management** locks, so concurrent creation/lookup of
   Store entities and one-instance setup do not corrupt the Store's containers;
 - stable Store-owned entity addresses for the lifetime of the Store;
@@ -296,6 +296,12 @@ touches. It is **not** a statement that generated Wasm code is race-free.
   `Agent` owns an `ExecutionState` (`WasmBase/WasmAgent.hpp`) and a host
   thread's default agent is created lazily. True multi-agent execution remains
   deferred ([`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §12.1);
+- a continuation installs a **private** `ExecutionState`
+  (`WasmBase/WasmContinuation.hpp`). A switches native stacks on one host
+  thread; B runs a suspended continuation on its own host thread. In both cases
+  `resume` blocks the resumer and one execution context runs at a time; this is
+  execution-context hand-off, not concurrent entry into the instance, and it
+  does not make the continuation an agent;
 
 **It does not guarantee:**
 
@@ -312,6 +318,10 @@ touches. It is **not** a statement that generated Wasm code is race-free.
   serialized; the read path is not a formally snapshotted type store);
 - multi-mutator GC, cross-agent reference counting, waitqueues, or thread
   lifecycle;
+- that a continuation (A or B) is an agent or that it may enter the instance
+  concurrently with its resumer; it is a suspended execution context behind a
+  blocking resume, and A use is serial (the stack may migrate between threads,
+  but not concurrently);
 - any property of a native import or `hostData` implementation;
 - that a module using atomics is data-race-free (only the atomic operations
   themselves are tear-free and ordered);
@@ -691,6 +701,8 @@ multi-agent race freedom.
   [`SAFETY.md`](SAFETY.md) (traps, locks, allocation),
   [`ABI.md`](ABI.md) (`VMContext`, `Callable`, native imports),
   [`proposals/THREADS.md`](proposals/THREADS.md) (execution model, TH-3/TH-5),
+  [`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md) (A/B
+  providers, execution contexts vs agents),
   [`proposals/SHARED_EVERYTHING_THREADS.md`](proposals/SHARED_EVERYTHING_THREADS.md)
   (SET-1…SET-3, deferred shared GC/TLS/waitqueues),
   [`proposals/ACQUIRE_RELEASE_ATOMICS.md`](proposals/ACQUIRE_RELEASE_ATOMICS.md)

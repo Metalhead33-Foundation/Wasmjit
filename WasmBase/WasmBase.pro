@@ -23,6 +23,7 @@ SOURCES += \
         WasmComponent.cpp \
         WasmComponentRuntime.cpp \
         WasmComponentValidation.cpp \
+        WasmContinuation.cpp \
         WasmException.cpp \
         WasmExn.cpp \
         WasmGcHeap.cpp \
@@ -54,6 +55,7 @@ HEADERS += \
     WasmComponentSection.hpp \
     WasmComponentValidation.hpp \
     WasmContext.hpp \
+    WasmContinuation.hpp \
     WasmDeterminism.hpp \
     WasmException.hpp \
     WasmExn.hpp \

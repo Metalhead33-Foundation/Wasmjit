@@ -6,6 +6,16 @@
 namespace WASM {
 
 typedef WasmStream<Euph::Io::ConstBufferDevice> FastMemReader;
+
+// One `(on $tag $label)` or `(on $tag switch)` clause of `resume`. The switch
+// form is decoded so the stream stays in sync, then rejected by the validator
+// and the backend until the symmetric `switch` instruction exists.
+struct ContHandlerClause {
+	TagIdx tag = 0;
+	LabelIdx label = 0;
+	bool isSwitch = false;
+};
+
 class OpcodeDispatcher
 {
 protected:
@@ -38,6 +48,38 @@ protected:
 	virtual void dispatchElse() { onUnhandledOpcode("dispatchElse"); }
 	virtual void dispatchThrow(TagIdx arg) { onUnhandledOpcode("dispatchThrow"); }
 	virtual void dispatchThrowRef() { onUnhandledOpcode("dispatchThrowRef"); }
+	// Stack switching (docs/proposals/STACK_SWITCHING.md). Only the narrow
+	// stage-2 slice has handlers; the remaining instructions stay rejected at
+	// decode time.
+	virtual void dispatchContNew(TypeIdx arg) { onUnhandledOpcode("dispatchContNew"); }
+	virtual void dispatchContBind(TypeIdx arg1, TypeIdx arg2)
+	{
+		(void)arg1;
+		(void)arg2;
+		onUnhandledOpcode("dispatchContBind");
+	}
+	virtual void dispatchSuspend(TagIdx arg) { onUnhandledOpcode("dispatchSuspend"); }
+	virtual void dispatchResume(TypeIdx arg, std::vector<ContHandlerClause>&& handlers)
+	{
+		(void)arg;
+		(void)handlers;
+		onUnhandledOpcode("dispatchResume");
+	}
+	virtual void dispatchResumeThrow(TypeIdx arg1, TagIdx arg2,
+			std::vector<ContHandlerClause>&& handlers)
+	{
+		(void)arg1;
+		(void)arg2;
+		(void)handlers;
+		onUnhandledOpcode("dispatchResumeThrow");
+	}
+	virtual void dispatchResumeThrowRef(TypeIdx arg,
+			std::vector<ContHandlerClause>&& handlers)
+	{
+		(void)arg;
+		(void)handlers;
+		onUnhandledOpcode("dispatchResumeThrowRef");
+	}
 	virtual void dispatchEnd() { onUnhandledOpcode("dispatchEnd"); }
 	virtual void dispatchBr(LabelIdx arg) { onUnhandledOpcode("dispatchBr"); }
 	virtual void dispatchBrIf(LabelIdx arg) { onUnhandledOpcode("dispatchBrIf"); }

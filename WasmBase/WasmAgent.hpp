@@ -95,6 +95,12 @@ private:
 // a host thread that has not installed an agent gets its default agent lazily.
 ExecutionState& currentExecutionState() noexcept;
 
+// Raw current-state pointer, or null when this host thread has not installed
+// one yet. Used by a context switch that must save and restore the pointer
+// around a stack switch; prefer `currentExecutionState()` for ordinary code.
+ExecutionState* currentExecutionStatePointer() noexcept;
+void setCurrentExecutionState(ExecutionState* state) noexcept;
+
 // The agent that owns the current execution state, or null when the current
 // state was installed directly (a future continuation context).
 Agent* currentAgent() noexcept;

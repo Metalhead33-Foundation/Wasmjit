@@ -1,5 +1,6 @@
 #include "LibjitOpcodeDispatcher.hpp"
 #include "../WasmBase/WasmDeterminism.hpp"
+#include "../WasmBase/WasmContinuation.hpp"
 #include "../WasmBase/WasmSafety.hpp"
 #include "../WasmBase/WasmStack.hpp"
 #include "../WasmBase/WasmStore.hpp"
@@ -2298,6 +2299,28 @@ WASM::FuncType OpcodeDispatcher::functionSignatureForType(WASM::TypeIdx typeIdx)
 	return module.funcTypeAt(typeIdx);
 }
 
+WASM::TypeIdx OpcodeDispatcher::continuationFuncIndex(WASM::TypeIdx contTypeIdx) const
+{
+	if (contTypeIdx >= module.typeCount())
+		throw std::runtime_error("continuation type index is out of range");
+	const WASM::CoreTypeView view = module.typeView(contTypeIdx);
+	if (view.kind() != WASM::CanonTypeKind::Cont)
+		throw std::runtime_error("continuation instruction does not name a cont type");
+	const WASM::CanonHeapType func = view.contFunc();
+	if (func.kind != WASM::CanonHeapType::Kind::Global)
+		throw std::runtime_error("continuation function type is not module-local");
+	for (uint32_t i = 0; i < module.typeCount(); ++i) {
+		if (module.typeIds[i] == func.id)
+			return i;
+	}
+	throw std::runtime_error("continuation function type is not in this module");
+}
+
+WASM::FuncType OpcodeDispatcher::continuationSignature(WASM::TypeIdx contTypeIdx) const
+{
+	return module.funcTypeAt(continuationFuncIndex(contTypeIdx));
+}
+
 jit_value_t OpcodeDispatcher::callablePointerForFuncIndex(WASM::FuncIdx funcIdx)
 {
 	WASM::Callable* callable = nullptr;
@@ -3036,6 +3059,397 @@ void OpcodeDispatcher::dispatchThrowRef()
 	// same lexical frames (EXD2); no match propagates to the caller.
 	emitExceptionPropagation(exn);
 	markUnreachable();
+}
+
+void OpcodeDispatcher::dispatchContNew(WASM::TypeIdx arg)
+{
+	if (unreachableCode)
+		return;
+	const WASM::FuncType func = continuationSignature(arg);
+	jit_value_t callable = popValue();
+	emitTrapIfNull(WASM::TrapKind::NullFunctionReference, refAsVoidPtr(callable));
+
+	jit_type_t params[5] = {jit_type_void_ptr, jit_type_void_ptr,
+			jit_type_uint, jit_type_int, jit_type_int};
+	jit_type_t signature = jit_type_create_signature(jit_abi_cdecl,
+			jit_type_void_ptr, params, 5, 1);
+	jit_value_t args[5] = {
+		refAsVoidPtr(callable),
+		vmContextValue(),
+		jit_value_create_nint_constant(function, jit_type_uint,
+				static_cast<jit_nint>(func.params.size())),
+		jit_value_create_nint_constant(function, jit_type_int,
+				func.params.empty() ? 0 : 1),
+		jit_value_create_nint_constant(function, jit_type_int,
+				func.results.empty() ? 0 : 1),
+	};
+	jit_value_t continuation = jit_insn_call_native(function, "wasm_cont_new",
+			reinterpret_cast<void*>(&WASM::wasm_cont_new), signature, args, 5, 0);
+	emitPendingTrapCheck();
+
+	WASM::HeapType heap;
+	heap.isTypeIndex = true;
+	heap.typeIndex = arg;
+	pushOwnedValue(castRefValue(continuation, jitRefTypeForHeapType(heap, false)));
+}
+
+void OpcodeDispatcher::dispatchContBind(WASM::TypeIdx arg1, WASM::TypeIdx arg2)
+{
+	if (unreachableCode)
+		return;
+	const WASM::FuncType from = continuationSignature(arg1);
+	const WASM::FuncType to = continuationSignature(arg2);
+	if (from.params.size() < to.params.size())
+		throw std::runtime_error("cont.bind: target continuation has more parameters");
+	const size_t bound = from.params.size() - to.params.size();
+	jit_value_t continuation = popValue();
+	std::vector<jit_value_t> values(bound);
+	for (size_t i = bound; i--; )
+		values[i] = popValue();
+	emitTrapIfNull(WASM::TrapKind::NullReference, refAsVoidPtr(continuation));
+
+	for (const WASM::StorageType& type : from.params) {
+		if (type.val.opcode != WASM::ValueTypeCode::I32)
+			throw std::runtime_error("cont.bind: only i32 bound arguments are implemented");
+	}
+	jit_value_t buffer = jit_insn_alloca(function,
+			jit_value_create_nint_constant(function, jit_type_ulong,
+					static_cast<jit_nint>(std::max<size_t>(bound, 1) * sizeof(std::int32_t))));
+	for (size_t i = 0; i < bound; ++i) {
+		jit_value_t value = values[i];
+		if (jit_value_get_type(value) != jit_type_int)
+			value = jit_insn_convert(function, value, jit_type_int, 0);
+		jit_insn_store_relative(function, buffer,
+				static_cast<jit_nint>(i * sizeof(std::int32_t)), value);
+	}
+
+	jit_type_t params[3] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_uint};
+	jit_type_t signature = jit_type_create_signature(jit_abi_cdecl,
+			jit_type_void_ptr, params, 3, 1);
+	jit_value_t args[3] = {
+		refAsVoidPtr(continuation),
+		buffer,
+		jit_value_create_nint_constant(function, jit_type_uint,
+				static_cast<jit_nint>(bound)),
+	};
+	jit_value_t next = jit_insn_call_native(function, "wasm_cont_bind",
+			reinterpret_cast<void*>(&WASM::wasm_cont_bind), signature, args, 3, 0);
+	emitDropValue(continuation);
+	emitPendingTrapCheck();
+
+	WASM::HeapType heap;
+	heap.isTypeIndex = true;
+	heap.typeIndex = arg2;
+	pushOwnedValue(castRefValue(next, jitRefTypeForHeapType(heap, false)));
+}
+
+void OpcodeDispatcher::dispatchSuspend(WASM::TagIdx arg)
+{
+	if (unreachableCode)
+		return;
+	const WASM::FuncType tag = tagPayloadType(arg);
+	jit_value_t value = nullptr;
+	if (!tag.params.empty()) {
+		value = popValue();
+		if (jit_value_get_type(value) != jit_type_int)
+			value = jit_insn_convert(function, value, jit_type_int, 0);
+	} else {
+		value = jit_value_create_nint_constant(function, jit_type_int, 0);
+	}
+
+	assert(arg < internals.tagIds.size());
+	jit_value_t out = jit_value_create(function, jit_type_int);
+	jit_type_t params[3] = {jit_type_int, jit_type_int, jit_type_void_ptr};
+	jit_type_t signature = jit_type_create_signature(jit_abi_cdecl,
+			jit_type_int, params, 3, 1);
+	jit_value_t args[3] = {
+		jit_value_create_nint_constant(function, jit_type_int,
+				static_cast<jit_nint>(internals.tagIds[arg])),
+		value,
+		jit_insn_address_of(function, out),
+	};
+	jit_insn_call_native(function, "wasm_cont_suspend",
+			reinterpret_cast<void*>(&WASM::wasm_cont_suspend), signature, args, 3, 0);
+	emitPendingTrapCheck();
+	// A resume_throw injects an exception at this suspension point; it must be
+	// routed through the continuation's own try_table before the resumed value
+	// is used.
+	emitPendingExceptionCheck();
+	if (unreachableCode)
+		return;
+	if (!tag.results.empty())
+		pushOwnedValue(jit_insn_load(function, out));
+}
+
+void OpcodeDispatcher::dispatchResume(WASM::TypeIdx arg,
+		std::vector<WASM::ContHandlerClause>&& handlers)
+{
+	if (unreachableCode)
+		return;
+	const WASM::FuncType func = continuationSignature(arg);
+
+	jit_value_t continuation = popValue();
+	std::vector<jit_value_t> stackArgs(func.params.size());
+	for (size_t i = func.params.size(); i--; )
+		stackArgs[i] = popValue();
+	emitTrapIfNull(WASM::TrapKind::NullReference, refAsVoidPtr(continuation));
+
+	const size_t baseDepth = valueStack.size();
+	jit_type_t fields[4] = {jit_type_int, jit_type_int, jit_type_int, jit_type_void_ptr};
+	jit_type_t resultType = jit_type_create_struct(fields, 4, 1);
+	assert(jit_type_get_size(resultType) == sizeof(WASM::ContinuationResumeResult));
+	jit_value_t result = jit_value_create(function, resultType);
+	jit_value_t resultAddr = jit_insn_address_of(function, result);
+
+	jit_type_t params[3] = {jit_type_void_ptr, jit_type_int, jit_type_void_ptr};
+	jit_type_t signature = jit_type_create_signature(jit_abi_cdecl,
+			jit_type_void, params, 3, 1);
+	jit_value_t argValue = stackArgs.empty()
+			? jit_value_create_nint_constant(function, jit_type_int, 0)
+			: jit_insn_convert(function, stackArgs.front(), jit_type_int, 0);
+	jit_value_t args[3] = {refAsVoidPtr(continuation), argValue, resultAddr};
+	jit_insn_call_native(function, "wasm_cont_resume",
+			reinterpret_cast<void*>(&WASM::wasm_cont_resume), signature, args, 3, 0);
+
+	// `resume` consumes the continuation value. The helper may have created a
+	// new handle for a suspension; dropping this one must not invalidate it.
+	emitDropValue(continuation);
+	emitPendingExceptionCheck();
+	if (unreachableCode)
+		return;
+
+	jit_value_t resultSlot = nullptr;
+	if (!func.results.empty()) {
+		resultSlot = jit_value_create(function, jit_type_int);
+		jit_insn_store(function, resultSlot,
+				jit_value_create_nint_constant(function, jit_type_int, 0));
+	}
+
+	jit_label_t completedLabel = jit_label_undefined;
+	jit_label_t suspendedLabel = jit_label_undefined;
+	jit_label_t doneLabel = jit_label_undefined;
+
+	jit_value_t status = jit_insn_load_relative(function, resultAddr,
+			static_cast<jit_nint>(offsetof(WASM::ContinuationResumeResult, status)),
+			jit_type_int);
+	const auto dropSuspendedContinuation = [&]() {
+		jit_value_t next = jit_insn_load_relative(function, resultAddr,
+				static_cast<jit_nint>(offsetof(WASM::ContinuationResumeResult, continuation)),
+				jit_type_void_ptr);
+		emitDropValue(castRefValue(next, jit_type_void_ptr));
+	};
+	jit_insn_branch_if(function,
+			jit_insn_eq(function, status, jit_value_create_nint_constant(function,
+					jit_type_int, static_cast<jit_nint>(WASM::ContinuationStatus::Completed))),
+			&completedLabel);
+	jit_insn_branch_if(function,
+			jit_insn_eq(function, status, jit_value_create_nint_constant(function,
+					jit_type_int, static_cast<jit_nint>(WASM::ContinuationStatus::Suspended))),
+			&suspendedLabel);
+	emitTrap(WASM::TrapKind::Internal, "continuation resume failed");
+
+	jit_insn_label(function, &completedLabel);
+	if (resultSlot != nullptr)
+		jit_insn_store(function, resultSlot, jit_insn_load_relative(function, resultAddr,
+				static_cast<jit_nint>(offsetof(WASM::ContinuationResumeResult, value)),
+				jit_type_int));
+	jit_insn_branch(function, &doneLabel);
+
+	jit_insn_label(function, &suspendedLabel);
+	if (handlers.empty()) {
+		dropSuspendedContinuation();
+		emitTrap(WASM::TrapKind::Internal, "unhandled continuation suspension");
+	} else {
+		jit_value_t tag = jit_insn_load_relative(function, resultAddr,
+				static_cast<jit_nint>(offsetof(WASM::ContinuationResumeResult, tagId)),
+				jit_type_int);
+		std::vector<jit_label_t> handlerLabels(handlers.size(), jit_label_undefined);
+		for (size_t i = 0; i < handlers.size(); ++i) {
+			const WASM::ContHandlerClause& handler = handlers[i];
+			if (handler.isSwitch)
+				throw std::runtime_error("resume: switch handlers are not implemented");
+			assert(handler.tag < internals.tagIds.size());
+			jit_insn_branch_if(function,
+					jit_insn_eq(function, tag, jit_value_create_nint_constant(function,
+							jit_type_int, static_cast<jit_nint>(internals.tagIds[handler.tag]))),
+					&handlerLabels[i]);
+		}
+		dropSuspendedContinuation();
+		emitTrap(WASM::TrapKind::Internal, "unhandled continuation suspension");
+
+		for (size_t i = 0; i < handlers.size(); ++i) {
+			const WASM::ContHandlerClause& handler = handlers[i];
+			jit_insn_label(function, &handlerLabels[i]);
+			const WASM::FuncType tagType = tagPayloadType(handler.tag);
+			if (!tagType.params.empty()) {
+				pushOwnedValue(jit_insn_load_relative(function, resultAddr,
+						static_cast<jit_nint>(offsetof(WASM::ContinuationResumeResult, value)),
+						jit_type_int));
+			}
+			if (handler.label >= controlStack.size())
+				throw std::runtime_error("resume: handler label is out of range");
+			ControlBlock& target = controlStack[controlStack.size() - 1 - handler.label];
+			jit_value_t next = jit_insn_load_relative(function, resultAddr,
+					static_cast<jit_nint>(offsetof(WASM::ContinuationResumeResult, continuation)),
+					jit_type_void_ptr);
+			const std::vector<WASM::StorageType>& handlerTypes =
+					target.kind == ControlBlock::Loop ? target.paramTypes : target.resultTypes;
+			const jit_type_t contType = handlerTypes.empty()
+					? jit_type_void_ptr
+					: jitTypeForValueType(handlerTypes.back().val);
+			pushOwnedValue(castRefValue(next, contType));
+			emitBranchToTarget(target);
+			valueStack.resize(baseDepth);
+		}
+	}
+
+	jit_insn_label(function, &doneLabel);
+	if (resultSlot != nullptr)
+		pushOwnedValue(jit_insn_load(function, resultSlot));
+}
+
+void OpcodeDispatcher::dispatchResumeThrow(WASM::TypeIdx arg1, WASM::TagIdx arg2,
+		std::vector<WASM::ContHandlerClause>&& handlers)
+{
+	if (unreachableCode)
+		return;
+	if (!handlers.empty())
+		throw std::runtime_error("resume_throw: handlers are not implemented yet");
+	const WASM::FuncType func = continuationSignature(arg1);
+	const WASM::FuncType exnType = tagPayloadType(arg2);
+	jit_value_t continuation = popValue();
+	std::vector<jit_value_t> exnValues(exnType.params.size());
+	for (size_t i = exnType.params.size(); i--; )
+		exnValues[i] = popValue();
+	emitTrapIfNull(WASM::TrapKind::NullReference, refAsVoidPtr(continuation));
+
+	assert(arg2 < internals.tagIds.size());
+	jit_value_t exn = createException(internals.tagIds[arg2], exnType);
+	storeExceptionPayload(exn, exnType, exnValues);
+
+	jit_type_t fields[4] = {jit_type_int, jit_type_int, jit_type_int, jit_type_void_ptr};
+	jit_type_t resultType = jit_type_create_struct(fields, 4, 1);
+	jit_value_t result = jit_value_create(function, resultType);
+	jit_value_t resultAddr = jit_insn_address_of(function, result);
+
+	jit_type_t params[3] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr};
+	jit_type_t signature = jit_type_create_signature(jit_abi_cdecl,
+			jit_type_void, params, 3, 1);
+	jit_value_t args[3] = {refAsVoidPtr(continuation), refAsVoidPtr(exn), resultAddr};
+	jit_insn_call_native(function, "wasm_cont_resume_throw",
+			reinterpret_cast<void*>(&WASM::wasm_cont_resume_throw), signature, args, 3, 0);
+	emitDropValue(continuation);
+	emitPendingExceptionCheck();
+	if (unreachableCode)
+		return;
+
+	jit_label_t completedLabel = jit_label_undefined;
+	jit_label_t suspendedLabel = jit_label_undefined;
+	jit_label_t doneLabel = jit_label_undefined;
+	jit_value_t status = jit_insn_load_relative(function, resultAddr,
+			static_cast<jit_nint>(offsetof(WASM::ContinuationResumeResult, status)),
+			jit_type_int);
+	jit_insn_branch_if(function,
+			jit_insn_eq(function, status, jit_value_create_nint_constant(function,
+					jit_type_int, static_cast<jit_nint>(WASM::ContinuationStatus::Completed))),
+			&completedLabel);
+	jit_insn_branch_if(function,
+			jit_insn_eq(function, status, jit_value_create_nint_constant(function,
+					jit_type_int, static_cast<jit_nint>(WASM::ContinuationStatus::Suspended))),
+			&suspendedLabel);
+	emitTrap(WASM::TrapKind::Internal, "continuation resume_throw failed");
+
+	jit_insn_label(function, &completedLabel);
+	jit_value_t resultSlot = nullptr;
+	if (!func.results.empty()) {
+		resultSlot = jit_value_create(function, jit_type_int);
+		jit_insn_store(function, resultSlot, jit_insn_load_relative(function, resultAddr,
+				static_cast<jit_nint>(offsetof(WASM::ContinuationResumeResult, value)),
+				jit_type_int));
+	}
+	jit_insn_branch(function, &doneLabel);
+
+	jit_insn_label(function, &suspendedLabel);
+	{
+		jit_value_t next = jit_insn_load_relative(function, resultAddr,
+				static_cast<jit_nint>(offsetof(WASM::ContinuationResumeResult, continuation)),
+				jit_type_void_ptr);
+		emitDropValue(castRefValue(next, jit_type_void_ptr));
+	}
+	emitTrap(WASM::TrapKind::Internal, "unhandled continuation suspension");
+
+	jit_insn_label(function, &doneLabel);
+	if (resultSlot != nullptr)
+		pushOwnedValue(jit_insn_load(function, resultSlot));
+}
+
+void OpcodeDispatcher::dispatchResumeThrowRef(WASM::TypeIdx arg,
+		std::vector<WASM::ContHandlerClause>&& handlers)
+{
+	if (unreachableCode)
+		return;
+	if (!handlers.empty())
+		throw std::runtime_error("resume_throw_ref: handlers are not implemented yet");
+	const WASM::FuncType func = continuationSignature(arg);
+	jit_value_t continuation = popValue();
+	jit_value_t exn = popValue();
+	emitTrapIfNull(WASM::TrapKind::NullReference, refAsVoidPtr(continuation));
+	emitTrapIfNull(WASM::TrapKind::NullReference, refAsVoidPtr(exn));
+
+	jit_type_t fields[4] = {jit_type_int, jit_type_int, jit_type_int, jit_type_void_ptr};
+	jit_type_t resultType = jit_type_create_struct(fields, 4, 1);
+	jit_value_t result = jit_value_create(function, resultType);
+	jit_value_t resultAddr = jit_insn_address_of(function, result);
+
+	jit_type_t params[3] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr};
+	jit_type_t signature = jit_type_create_signature(jit_abi_cdecl,
+			jit_type_void, params, 3, 1);
+	jit_value_t args[3] = {refAsVoidPtr(continuation), refAsVoidPtr(exn), resultAddr};
+	jit_insn_call_native(function, "wasm_cont_resume_throw",
+			reinterpret_cast<void*>(&WASM::wasm_cont_resume_throw), signature, args, 3, 0);
+	emitDropValue(continuation);
+	emitPendingExceptionCheck();
+	if (unreachableCode)
+		return;
+
+	jit_label_t completedLabel = jit_label_undefined;
+	jit_label_t suspendedLabel = jit_label_undefined;
+	jit_label_t doneLabel = jit_label_undefined;
+	jit_value_t status = jit_insn_load_relative(function, resultAddr,
+			static_cast<jit_nint>(offsetof(WASM::ContinuationResumeResult, status)),
+			jit_type_int);
+	jit_insn_branch_if(function,
+			jit_insn_eq(function, status, jit_value_create_nint_constant(function,
+					jit_type_int, static_cast<jit_nint>(WASM::ContinuationStatus::Completed))),
+			&completedLabel);
+	jit_insn_branch_if(function,
+			jit_insn_eq(function, status, jit_value_create_nint_constant(function,
+					jit_type_int, static_cast<jit_nint>(WASM::ContinuationStatus::Suspended))),
+			&suspendedLabel);
+	emitTrap(WASM::TrapKind::Internal, "continuation resume_throw_ref failed");
+
+	jit_insn_label(function, &completedLabel);
+	jit_value_t resultSlot = nullptr;
+	if (!func.results.empty()) {
+		resultSlot = jit_value_create(function, jit_type_int);
+		jit_insn_store(function, resultSlot, jit_insn_load_relative(function, resultAddr,
+				static_cast<jit_nint>(offsetof(WASM::ContinuationResumeResult, value)),
+				jit_type_int));
+	}
+	jit_insn_branch(function, &doneLabel);
+
+	jit_insn_label(function, &suspendedLabel);
+	{
+		jit_value_t next = jit_insn_load_relative(function, resultAddr,
+				static_cast<jit_nint>(offsetof(WASM::ContinuationResumeResult, continuation)),
+				jit_type_void_ptr);
+		emitDropValue(castRefValue(next, jit_type_void_ptr));
+	}
+	emitTrap(WASM::TrapKind::Internal, "unhandled continuation suspension");
+
+	jit_insn_label(function, &doneLabel);
+	if (resultSlot != nullptr)
+		pushOwnedValue(jit_insn_load(function, resultSlot));
 }
 
 void OpcodeDispatcher::dispatchEnd()

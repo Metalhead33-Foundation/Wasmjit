@@ -1,3 +1,4 @@
+
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch_all.hpp>
 
@@ -23,6 +24,7 @@
 
 #include "helper.hpp"
 #include "WasmBase/WasmAgent.hpp"
+#include "WasmBase/WasmContinuation.hpp"
 #include "WasmBase/WasmArtifact.hpp"
 #include "WasmBase/WasmStack.hpp"
 #include "WasmBase/WasmVMContext.hpp"
@@ -2859,12 +2861,13 @@ TEST_CASE("stringref types and the string section are parsed (STR-1/STR-2)")
 
 TEST_CASE("an unmodelled value type is still rejected at load")
 {
-	// 0x68 is not assigned by any proposal this engine knows; the load-time
+	// 0x7A is not assigned by any proposal this engine knows; the load-time
 	// type walk must still reject it rather than compile a null operand
-	// (docs/NULL_JIT_VALUE_DIAGNOSIS.md).
+	// (docs/NULL_JIT_VALUE_DIAGNOSIS.md). (0x68 is now the stack-switching
+	// `(ref null cont)` shorthand, so it is no longer a negative example.)
 	const std::vector<uint8_t> bytes = {
 		0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-		0x01, 0x05, 0x01, 0x60, 0x01, 0x68, 0x00
+		0x01, 0x05, 0x01, 0x60, 0x01, 0x7a, 0x00
 	};
 	std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
@@ -2876,7 +2879,7 @@ TEST_CASE("an unmodelled value type is still rejected at load")
 		message = error.what();
 	}
 	CAPTURE(message);
-	REQUIRE(message.find("unsupported value type 0x68") != std::string::npos);
+	REQUIRE(message.find("unsupported value type 0x7A") != std::string::npos);
 	REQUIRE(message.find("function type parameter #0") != std::string::npos);
 }
 
@@ -6752,12 +6755,13 @@ TEST_CASE("stack-switching continuation types decode and opcodes fail clearly")
 	REQUIRE(noContView.funcParams()[0].value.heap.abstract
 			== WASM::AbstractHeapType::NoCont);
 
-	// A body containing `cont.new` (0xE0) must be rejected by the validating
-	// decoder with a named error, rather than the generic unsupported-opcode one.
+	// A body containing `switch` (0xE6), which the runtime still does not
+	// implement, must be rejected by the validating decoder with a named error
+	// rather than the generic unsupported-opcode one.
 	std::vector<uint8_t> contCode = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
 		0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
 		0x03, 0x02, 0x01, 0x00,
-		0x0a, 0x05, 0x01, 0x03, 0x00, 0xe0, 0x0b};
+		0x0a, 0x05, 0x01, 0x03, 0x00, 0xe6, 0x0b};
 	bool codeThrew = false;
 	try {
 		auto module = parse(contCode);
@@ -9319,4 +9323,429 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 	std::memcpy(&stored64, detInstance->context()->memories[0]->memoryBase + 8,
 			sizeof(stored64));
 	REQUIRE(stored64 == kCanonical64);
+}
+
+TEST_CASE("continuation runtime resumes a completed target")
+{
+	WASM::Callable target{};
+	target.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) -> int32_t {
+		return 42;
+	});
+	target.context = nullptr;
+
+	const std::uint32_t before = WASM::liveContinuationCount();
+	void* continuation = WASM::wasm_cont_new(&target, nullptr, 0, 0, 1);
+	REQUIRE(continuation != nullptr);
+	REQUIRE(WASM::liveContinuationCount() == before + 1);
+
+	WASM::ContinuationResumeResult result;
+	WASM::wasm_cont_resume(continuation, 0, &result);
+	REQUIRE(result.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Completed));
+	REQUIRE(result.value == 42);
+	REQUIRE(!WASM::trapPending());
+	REQUIRE(WASM::continuationRefRelease(continuation));
+	REQUIRE(WASM::liveContinuationCount() == before);
+}
+
+TEST_CASE("continuation runtime suspends and resumes across host threads")
+{
+	static std::atomic<std::int32_t> resumedValue{0};
+	resumedValue.store(0);
+	WASM::Callable target{};
+	target.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) {
+		std::int32_t value = 0;
+		WASM::wasm_cont_suspend(77, 7, &value);
+		resumedValue.store(value);
+	});
+	target.context = nullptr;
+
+	void* first = WASM::wasm_cont_new(&target, nullptr, 0, 0, 0);
+	REQUIRE(first != nullptr);
+	WASM::ContinuationResumeResult result;
+	WASM::wasm_cont_resume(first, 0, &result);
+	REQUIRE(result.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Suspended));
+	REQUIRE(result.tagId == 77);
+	REQUIRE(result.value == 7);
+	REQUIRE(result.continuation != nullptr);
+	REQUIRE(resumedValue.load() == 0);
+
+	// The first handle is consumed; the replacement handle owns the rest.
+	void* second = result.continuation;
+	REQUIRE(WASM::continuationRefRelease(first));
+	WASM::wasm_cont_resume(second, 35, &result);
+	REQUIRE(result.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Completed));
+	REQUIRE(resumedValue.load() == 35);
+	REQUIRE(!WASM::trapPending());
+	REQUIRE(WASM::continuationRefRelease(second));
+}
+
+TEST_CASE("continuation runtime transfers traps and exceptions to the resumer")
+{
+	WASM::Callable trapping{};
+	trapping.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) {
+		WASM::reportTrap(WASM::TrapKind::Unreachable, "worker trap");
+	});
+	trapping.context = nullptr;
+
+	void* trapped = WASM::wasm_cont_new(&trapping, nullptr, 0, 0, 0);
+	REQUIRE(trapped != nullptr);
+	WASM::ContinuationResumeResult result;
+	WASM::clearPendingTrap();
+	WASM::wasm_cont_resume(trapped, 0, &result);
+	REQUIRE(result.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Trapped));
+	REQUIRE(WASM::trapPending());
+	REQUIRE(WASM::pendingTrapKind() == WASM::TrapKind::Unreachable);
+	REQUIRE(std::string(WASM::pendingTrapMessage()) == "worker trap");
+	WASM::clearPendingTrap();
+	REQUIRE(WASM::continuationRefRelease(trapped));
+
+	WASM::Callable throwing{};
+	throwing.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) {
+		::wasm_exn_set_pending(reinterpret_cast<void*>(0x1));
+	});
+	throwing.context = nullptr;
+
+	void* exception = WASM::wasm_cont_new(&throwing, nullptr, 0, 0, 0);
+	REQUIRE(exception != nullptr);
+	::wasm_exn_clear_pending();
+	WASM::wasm_cont_resume(exception, 0, &result);
+	REQUIRE(result.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Exception));
+	REQUIRE(::wasm_exn_pending() == reinterpret_cast<void*>(0x1));
+	::wasm_exn_clear_pending();
+	REQUIRE(WASM::continuationRefRelease(exception));
+}
+
+TEST_CASE("continuation runtime enforces one-shot and the live budget")
+{
+	static std::atomic<std::int32_t> resumedValue{0};
+	resumedValue.store(0);
+	WASM::Callable target{};
+	target.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) {
+		std::int32_t value = 0;
+		WASM::wasm_cont_suspend(9, 1, &value);
+		resumedValue.store(value);
+	});
+	target.context = nullptr;
+
+	void* first = WASM::wasm_cont_new(&target, nullptr, 0, 0, 0);
+	REQUIRE(first != nullptr);
+	WASM::ContinuationResumeResult result;
+	WASM::wasm_cont_resume(first, 0, &result);
+	REQUIRE(result.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Suspended));
+	REQUIRE(result.continuation != nullptr);
+
+	// The consumed identity cannot be resumed even while the worker is still
+	// suspended under the new handle.
+	WASM::clearPendingTrap();
+	WASM::ContinuationResumeResult again;
+	WASM::wasm_cont_resume(first, 0, &again);
+	REQUIRE(WASM::trapPending());
+	REQUIRE(WASM::pendingTrapKind() == WASM::TrapKind::Internal);
+	WASM::clearPendingTrap();
+
+	// Dropping the replacement handle cancels and joins the suspended worker.
+	REQUIRE(WASM::continuationRefRelease(first));
+	REQUIRE(WASM::continuationRefRelease(result.continuation));
+
+	const WASM::ContinuationBudget saved = WASM::continuationBudget();
+	WASM::setContinuationBudget({0, saved.stackBytes});
+	WASM::clearPendingTrap();
+	void* refused = WASM::wasm_cont_new(&target, nullptr, 0, 0, 0);
+	WASM::setContinuationBudget(saved);
+	REQUIRE(refused == nullptr);
+	REQUIRE(WASM::trapPending());
+	REQUIRE(WASM::pendingTrapKind() == WASM::TrapKind::OutOfMemory);
+	WASM::clearPendingTrap();
+}
+
+TEST_CASE("stack-switching module runs cont.new and resume")
+{
+	WASM::Module module = loadTestModule("cont_resume");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto run = instance->exportedFunction("run");
+	REQUIRE(run.has_value());
+	REQUIRE(WASM::callCallable<std::int32_t>(*run) == 42);
+}
+
+TEST_CASE("stack-switching module passes an argument through resume")
+{
+	WASM::Module module = loadTestModule("cont_args");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto run = instance->exportedFunction("run");
+	REQUIRE(run.has_value());
+	REQUIRE(WASM::callCallable<std::int32_t>(*run, 41) == 42);
+}
+
+TEST_CASE("continuation provider can be switched to the host-thread fallback")
+{
+	struct ProviderRestore {
+		WASM::ContinuationProvider previous;
+		~ProviderRestore() { WASM::setContinuationProvider(previous); }
+	} restore{WASM::continuationProvider()};
+	WASM::setContinuationProvider(WASM::ContinuationProvider::HostThreads);
+	REQUIRE(WASM::continuationProvider() == WASM::ContinuationProvider::HostThreads);
+
+	WASM::Callable target{};
+	target.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) -> int32_t {
+		return 7;
+	});
+	void* continuation = WASM::wasm_cont_new(&target, nullptr, 0, 0, 1);
+	REQUIRE(continuation != nullptr);
+	WASM::ContinuationResumeResult result;
+	WASM::wasm_cont_resume(continuation, 0, &result);
+	REQUIRE(result.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Completed));
+	REQUIRE(result.value == 7);
+	REQUIRE(WASM::continuationRefRelease(continuation));
+}
+
+TEST_CASE("native-stack continuation can migrate between host threads")
+{
+	static std::atomic<std::int32_t> resumedValue{0};
+	resumedValue.store(0);
+	WASM::Callable target{};
+	target.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) {
+		std::int32_t value = 0;
+		WASM::wasm_cont_suspend(61, 4, &value);
+		resumedValue.store(value);
+	});
+	void* first = WASM::wasm_cont_new(&target, nullptr, 0, 0, 0);
+	REQUIRE(first != nullptr);
+	WASM::ContinuationResumeResult result;
+	WASM::wasm_cont_resume(first, 0, &result);
+	REQUIRE(result.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Suspended));
+	REQUIRE(result.continuation != nullptr);
+	REQUIRE(WASM::continuationRefRelease(first));
+
+	void* second = result.continuation;
+	std::atomic<std::int32_t> status{static_cast<std::int32_t>(WASM::ContinuationStatus::Invalid)};
+	std::thread worker([&] {
+		WASM::ContinuationResumeResult migrated;
+		WASM::wasm_cont_resume(second, 17, &migrated);
+		status.store(migrated.status);
+		WASM::continuationRefRelease(second);
+	});
+	worker.join();
+	REQUIRE(status.load() == static_cast<std::int32_t>(WASM::ContinuationStatus::Completed));
+	REQUIRE(resumedValue.load() == 17);
+	REQUIRE(!WASM::trapPending());
+}
+
+TEST_CASE("host continuation handle resumes and suspends a native target")
+{
+	static std::atomic<std::int32_t> resumedValue{0};
+	static std::atomic<std::int32_t> suspendStatus{-1};
+	resumedValue.store(0);
+	suspendStatus.store(-1);
+	WASM::Callable target{};
+	target.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) {
+		std::int32_t value = 0;
+		suspendStatus.store(WASM::HostContinuation::suspendCurrent(91, 5, &value));
+		resumedValue.store(value);
+	});
+
+	void* raw = WASM::wasm_cont_new(&target, nullptr, 0, 0, 0);
+	REQUIRE(raw != nullptr);
+	WASM::HostContinuation handle(raw, true);
+	REQUIRE(handle.valid());
+
+	WASM::ContinuationResumeResult result;
+	REQUIRE(handle.resume(0, &result));
+	REQUIRE(!handle.valid());
+	REQUIRE(result.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Suspended));
+	REQUIRE(result.tagId == 91);
+	REQUIRE(result.value == 5);
+	REQUIRE(result.continuation != nullptr);
+	REQUIRE(resumedValue.load() == 0);
+
+	WASM::HostContinuation next(result.continuation, true);
+	REQUIRE(next.valid());
+	REQUIRE(next.resume(19, &result));
+	REQUIRE(!next.valid());
+	REQUIRE(result.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Completed));
+	REQUIRE(resumedValue.load() == 19);
+	REQUIRE(suspendStatus.load() == 1);
+	REQUIRE(!WASM::trapPending());
+}
+
+TEST_CASE("host-thread fallback suspends and resumes")
+{
+	struct ProviderRestore {
+		WASM::ContinuationProvider previous;
+		~ProviderRestore() { WASM::setContinuationProvider(previous); }
+	} restore{WASM::continuationProvider()};
+	WASM::setContinuationProvider(WASM::ContinuationProvider::HostThreads);
+
+	static std::atomic<std::int32_t> resumedValue{0};
+	resumedValue.store(0);
+	WASM::Callable target{};
+	target.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) {
+		std::int32_t value = 0;
+		WASM::wasm_cont_suspend(51, 3, &value);
+		resumedValue.store(value);
+	});
+	void* first = WASM::wasm_cont_new(&target, nullptr, 0, 0, 0);
+	REQUIRE(first != nullptr);
+	WASM::ContinuationResumeResult result;
+	WASM::wasm_cont_resume(first, 0, &result);
+	REQUIRE(result.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Suspended));
+	REQUIRE(result.tagId == 51);
+	REQUIRE(result.value == 3);
+	REQUIRE(result.continuation != nullptr);
+	REQUIRE(WASM::continuationRefRelease(first));
+	void* second = result.continuation;
+	WASM::wasm_cont_resume(second, 23, &result);
+	REQUIRE(result.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Completed));
+	REQUIRE(resumedValue.load() == 23);
+	REQUIRE(WASM::continuationRefRelease(second));
+}
+
+TEST_CASE("host continuation handle wraps an exported continuation")
+{
+	WASM::Module module = loadTestModule("cont_export");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto make = instance->exportedFunction("make");
+	REQUIRE(make.has_value());
+
+	void* raw = WASM::callCallable<void*>(*make);
+	REQUIRE(raw != nullptr);
+	WASM::HostContinuation handle(raw, true);
+	REQUIRE(handle.valid());
+	WASM::ContinuationResumeResult result;
+	REQUIRE(handle.resume(0, &result));
+	REQUIRE(result.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Completed));
+	REQUIRE(result.value == 99);
+	REQUIRE(!WASM::trapPending());
+}
+
+TEST_CASE("native-stack continuation exhaustion is a recoverable trap")
+{
+	WASM::Module module = loadTestModule("cont_stack");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto make = instance->exportedFunction("make");
+	REQUIRE(make.has_value());
+
+	void* raw = WASM::callCallable<void*>(*make);
+	REQUIRE(raw != nullptr);
+	WASM::HostContinuation handle(raw, true);
+	WASM::clearPendingTrap();
+	WASM::ContinuationResumeResult result;
+	REQUIRE(handle.resume(0, &result));
+	REQUIRE(result.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Trapped));
+	REQUIRE(WASM::trapPending());
+	REQUIRE(WASM::pendingTrapKind() == WASM::TrapKind::CallStackExhausted);
+	WASM::clearPendingTrap();
+}
+
+TEST_CASE("stack-switching injects an exception into a suspended continuation")
+{
+	WASM::Module module = loadTestModule("cont_throw");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto run = instance->exportedFunction("run");
+	REQUIRE(run.has_value());
+	REQUIRE(WASM::callCallable<std::int32_t>(*run) == 99);
+	REQUIRE(!WASM::trapPending());
+}
+
+TEST_CASE("stack-switching binds a suspended continuation")
+{
+	WASM::Module module = loadTestModule("cont_bind_suspended");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto run = instance->exportedFunction("run");
+	REQUIRE(run.has_value());
+	REQUIRE(WASM::callCallable<std::int32_t>(*run) == 11);
+	REQUIRE(!WASM::trapPending());
+}
+
+TEST_CASE("stack-switching binds a continuation argument prefix")
+{
+	WASM::Module module = loadTestModule("cont_bind");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto run = instance->exportedFunction("run");
+	REQUIRE(run.has_value());
+	REQUIRE(WASM::callCallable<std::int32_t>(*run, 5) == 15);
+	REQUIRE(!WASM::trapPending());
+}
+
+TEST_CASE("stack-switching dispatches multiple handlers and a loop handler")
+{
+	WASM::Module module = loadTestModule("cont_handlers");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto multiB = instance->exportedFunction("multi_b");
+	auto multiA = instance->exportedFunction("multi_a");
+	auto loopHandler = instance->exportedFunction("loop_handler");
+	REQUIRE(multiB.has_value());
+	REQUIRE(multiA.has_value());
+	REQUIRE(loopHandler.has_value());
+	REQUIRE(WASM::callCallable<std::int32_t>(*multiB) == 100);
+	REQUIRE(WASM::callCallable<std::int32_t>(*multiA) == 200);
+	REQUIRE(WASM::callCallable<std::int32_t>(*loopHandler) == 8);
+	REQUIRE(!WASM::trapPending());
+}
+
+TEST_CASE("stack-switching module drops a suspension with no handler")
+{
+	const std::uint32_t before = WASM::liveContinuationCount();
+	WASM::Module module = loadTestModule("cont_unhandled");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto run = instance->exportedFunction("run");
+	REQUIRE(run.has_value());
+	try {
+		(void)WASM::callCallable<std::int32_t>(*run);
+		FAIL("an unhandled suspension must trap");
+	} catch (const WASM::Trap& trap) {
+		REQUIRE(trap.kind() == WASM::TrapKind::Internal);
+		REQUIRE(std::string(trap.message()).find("unhandled continuation suspension")
+				!= std::string::npos);
+	}
+	REQUIRE(WASM::liveContinuationCount() == before);
+}
+
+TEST_CASE("stack-switching module routes a suspension to its handler")
+{
+	WASM::Module module = loadTestModule("cont_suspend");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto run = instance->exportedFunction("run");
+	REQUIRE(run.has_value());
+	REQUIRE(WASM::callCallable<std::int32_t>(*run) == 7);
 }

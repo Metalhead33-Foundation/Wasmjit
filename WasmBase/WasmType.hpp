@@ -89,6 +89,7 @@ enum class ValueTypeCode : int8_t {
 	StructRef       = -0x15, // 0x6B
 	ArrayRef        = -0x16, // 0x6A
 	ExnRef          = -0x17, // 0x69 (exception handling)
+	ContRef         = -0x18, // 0x68 (stack switching: shorthand for `(ref null cont)`)
 	NullFuncRef     = -0x0D, // 0x73
 	NullExternRef   = -0x0E, // 0x72
 	NullExnRef      = -0x0C, // 0x74
@@ -141,6 +142,7 @@ inline bool isModeledValueTypeCode(ValueTypeCode code)
 	case ValueTypeCode::StructRef:
 	case ValueTypeCode::ArrayRef:
 	case ValueTypeCode::ExnRef:
+	case ValueTypeCode::ContRef:
 	case ValueTypeCode::NullFuncRef:
 	case ValueTypeCode::NullExternRef:
 	case ValueTypeCode::NullExnRef:
@@ -183,6 +185,7 @@ inline bool shorthandRefHeapType(ValueTypeCode code, AbstractHeapType& heap)
 	case ValueTypeCode::StructRef:     heap = AbstractHeapType::Struct;   return true;
 	case ValueTypeCode::ArrayRef:      heap = AbstractHeapType::Array;    return true;
 	case ValueTypeCode::ExnRef:        heap = AbstractHeapType::Exn;      return true;
+	case ValueTypeCode::ContRef:       heap = AbstractHeapType::Cont;     return true;
 	case ValueTypeCode::NullFuncRef:   heap = AbstractHeapType::NoFunc;   return true;
 	case ValueTypeCode::NullExternRef: heap = AbstractHeapType::NoExtern; return true;
 	case ValueTypeCode::NullExnRef:    heap = AbstractHeapType::NoExn;    return true;

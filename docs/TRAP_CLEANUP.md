@@ -1288,10 +1288,16 @@ TRAP-6 shipped with the Agent/ExecutionState refactor. The state lives in
 | stack limit | `ExecutionState::stackLimit` (installed per stack) |
 
 `Agent` owns one `ExecutionState`; a host thread's default agent is created
-lazily; `AgentScope` installs another agent for a call. The generated-code ABI
-is unchanged: `wasm_trap_slot()`, `wasm_exn_slot()`, `currentTailCallState()` and
-`wasm_stack_check()` resolve the *current* state, and `wasm_stack_check()` reads
-the state's limit first with `VMContext::stackLimit` as the fallback.
+lazily; `AgentScope` installs another agent for a call. A stack-switching A/B
+continuation installs a private `ExecutionState` for its own execution: A
+switches to it on a native stack, B runs it on a worker thread. A trap or
+exception is transferred to the resumer rather than observed on the
+continuation's host context by accident. A continuation is an execution
+context, not an agent; no multi-agent execution is implied. The generated-code
+ABI is unchanged: `wasm_trap_slot()`, `wasm_exn_slot()`,
+`currentTailCallState()` and `wasm_stack_check()` resolve the *current* state,
+and `wasm_stack_check()` reads the state's limit first with
+`VMContext::stackLimit` as the fallback.
 
 What remains deferred is the **execution model**, not the state: agents do not
 run concurrently, there is no scheduler, no multi-mutator GC and no real
@@ -1337,6 +1343,7 @@ host-side; only the last three need codegen-level assertions.
 | `agent execution state isolates traps, exceptions, tail calls and deferred cleanup` (shipped) | two agents on one host thread own independent trap/exception/tail/defer/depth state; `AgentScope` restores the previous state (TRAP-6 / SS-6) |
 | `each host thread gets its own default agent and execution state` (shipped) | a host thread's default agent is per thread, and a worker's trap does not leak to the main agent (TRAP-6) |
 | `the stack limit belongs to the execution state` (shipped) | `wasm_stack_check` reads the current state's limit, with `VMContext::stackLimit` only as the compatibility fallback (SS-6) |
+| `continuation runtime transfers traps and exceptions to the resumer` (shipped) | the A/B continuation trap/exception surfaces at the resumer's execution state; one-shot and the live budget are checked in the same cases (`STACK_SWITCHING.md` SS-3) |
 
 The shipped rows are the ones named in the table. What is still *plan* rather
 than coverage: a dedicated case for a trap inside a `try_table` region (the

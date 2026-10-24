@@ -1,11 +1,17 @@
 # Stack Switching (Continuations) — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 7 — SS-0/SS-1/SS-2 and
-the per-execution-context Agent/ExecutionState refactor (SS-6) are implemented;
-§10.15 records the runtime decision: native stacks (A) are primary, host threads
-(B) are the opt-in fallback, and a bespoke interpreter fallback (C) is
-permanently rejected. Revision 7 restates that rejection as an engine-wide
-policy. The continuation runtime itself remains blocked.)
+Status: design note / implementation reference (revision 10 — SS-0/SS-1/SS-2,
+the per-execution-context Agent/ExecutionState refactor (SS-6), the A
+native-stack provider (default), the B host-thread fallback, the
+host-facing `HostContinuation` handle, multiple/loop handler dispatch,
+`cont.bind`, `resume_throw`/`resume_throw_ref` (without handler clauses so far),
+A cross-thread serial migration, and ASAN fiber annotations are implemented.
+The still-narrow executable slice keeps i32/void payloads and does not yet
+implement `switch`, multi-value/reference payloads, or load a root list for a
+tracing collector. §10.15 records the runtime decision: native stacks (A) are
+primary, host threads (B) are the opt-in fallback, and a bespoke interpreter
+fallback (C) is permanently rejected. True multi-agent execution remains
+deferred.)
 Audience: anyone touching `WasmModule` (types), `WasmType` (heap types),
 `WasmOpcode`, `WasmStore`, `WasmModuleInstance`, the JIT compiler, a backend's
 continuation lowering, or the exception-tag machinery.
@@ -13,9 +19,12 @@ continuation lowering, or the exception-tag machinery.
 Follows the same split as [`GC.md`](GC.md) / [`SIMD.md`](SIMD.md) /
 [`THREADS.md`](THREADS.md). Revision 1 contained no code; revisions 2–4
 implement the continuation type, heap and tag model, revision 6 adds the
-per-execution-context state and the runtime decision, and revision 7 propagates
-the no-bespoke-interpreter policy to the project-level documents while the
-runtime itself remains blocked.
+per-execution-context state and the runtime decision, revision 7 propagates
+the no-bespoke-interpreter policy to the project-level documents, revision 8
+adds the B-provider runtime and its instruction lowering, and revision 9 adds
+the A provider (default), the host-facing continuation handle, multiple/loop
+handlers, `cont.bind`, injected exceptions, cross-thread A migration and ASAN
+fiber annotations.
 
 ## 1. Document map
 
@@ -82,37 +91,74 @@ The decision applies engine-wide and is recorded with its reasoning in §10.15
 
 ## 4. What we have implemented today
 
-- **SS-0 is implemented.** `0xE0`–`0xE6` are named opcodes and
-  `dispatchOpcode` rejects every one with a named
-  `stack-switching instruction is not implemented` error.
+- **SS-0 / SS-3: the A and B providers execute the instruction set below.**
+  `cont.new`, `cont.bind`, `suspend`, `resume`, `resume_throw` and
+  `resume_throw_ref` are decoded, validated and lowered by LibJIT. `switch`
+  (`0xE6`) remains a named opcode and fails with a named
+  `stack-switching instruction is not implemented` error. **A (native stacks)
+  is the default; B (host threads) is the explicit fallback.**
 - **SS-1's type model is implemented.** `0x5D` parses as `ContType { funcType }`;
   `CanonTypeKind::Cont`, a canonical `contFunc` reference, `CoreCont` payloads
   and `AbstractHeapType::Cont`/`NoCont` (`0x68`/`0x75`) are represented. A
-  `(ref null cont)` function parameter decodes and canonicalises correctly.
-- No continuation instructions execute. The seven names are reserved opcodes
-  that fail at validation/dispatch rather than reaching the generic unknown
-  primary-opcode path.
-- Exception tags exist (`TagId`, tag section, imports/exports, `throw` /
-  `try_table`), and **SS-2 is implemented**: a tag type is a function type whose
+  `(ref null cont)` parameter, result or block type decodes and canonicalises
+  correctly. The proposal's shorthand `0x68` for `(ref null cont)` is modelled
+  as `ValueTypeCode::ContRef` and canonicalises to the same `(ref null cont)`
+  as the explicit form.
+- **SS-2 is implemented.** Exception tags exist (`TagId`, tag section,
+  imports/exports, `throw` / `try_table`); a tag type is a function type whose
   result signature may be non-empty (the control-tag form), `attribute` must be
-  0, and a result-bearing tag exports/imports by the same process-wide `TagId`.
-  The upstream rule that one control tag may be used by `throw`, `suspend` and
-  `switch` holds: `throw` and a `try_table` `catch`/`catch_ref` consume the
-  tag's parameters and ignore its result signature, so a result-bearing tag is
-  also a valid exception tag. The test throws and catches one.
-- **The cast side condition is implemented.** `ref.test`, `ref.cast` and the
-  `br_on_cast*` branches reject a `cont`, `nocont` or concrete `cont $ft`
-  target (`isContinuationHeap` in the validator).
-- Execution uses the native C stack. Tail calls have a trampoline
-  ([`TAILCALLS.md`](TAILCALLS.md)), but there is no stack capture, copy, restore
-  or splice, and the execution model is single-agent
-  ([`THREADS.md`](THREADS.md) §3).
-- Two hand-built tests cover the model and the rejection surface:
-  `stack-switching continuation types decode and opcodes fail clearly`
-  (`cont`, `(ref null cont)`, `(ref null nocont)`, and the named opcode
-  rejection) and `stack-switching control tags carry a result signature`
-  (result-bearing tags, throw/catch behaviour, the cast gate, and import/export
-  identity).
+  0, and a result-bearing tag exports/imports by the same process-wide
+  `TagId`. The upstream rule that one control tag may be used by `throw`,
+  `suspend` and `switch` holds: `throw` and a `try_table` `catch`/`catch_ref`
+  consume the tag's parameters and ignore its result signature, so a
+  result-bearing tag is also a valid exception tag.
+- **SS-6 is implemented.** `Agent` owns an `ExecutionState` (trap slot, pending
+  exception, tail-call state, deferred cleanup, depth counters and stack
+  limit); a host thread holds only a pointer to the current state. A
+  continuation worker installs its **own** `ExecutionState`, so a trap,
+  exception, tail-call target or defer record never leaks into the resumer.
+- **The providers live in
+  [`WasmContinuation.hpp`](../../WasmBase/WasmContinuation.hpp).** The contract
+  is backend-neutral; `LibJit/` only emits the calls and branches on the
+  returned status.
+  - **A — native stacks (default):** an mmap-backed stack with a `PROT_NONE`
+    guard page, a `ucontext` switch, and a per-stack
+    `ExecutionState`/`stackLimit`. A can be resumed/dropped on a different host
+    thread when the calls are serial (the engine TLS and LibJIT state travel
+    with the stack); concurrent use is not allowed. ASAN fiber annotations are
+    called on every switch when the sanitizer is linked.
+  - **B — host threads (explicit fallback):** one host thread per suspended
+    continuation, a pthread stack charged to the budget, and a condition
+    variable hand-off.
+  - Both enforce one-shot semantics with a per-worker generation plus a
+    consumed flag; transfer a trap (kind + copied message) or an uncaught
+    exception to the resumer's `ExecutionState`; bound live continuations and
+    charge stack memory against the Store budget (`OutOfMemory` on refusal);
+    and unwind a dropped suspended continuation (A) or cancel and join its
+    worker (B).
+- **Host-facing handle.** `HostContinuation` wraps a `(ref cont)` lowered to
+  `void*` (for example, an exported function result), owns one reference, and
+  offers `resume` plus `suspendCurrent` for a native import. This is the
+  JSPI/embedder seam and the groundwork for a future scheduler; it is **not**
+  an agent API and does not add concurrency.
+- **The validator and lowering are deliberately narrow.** At most one i32
+  parameter and one i32 result (or void) for the continuation function. Multiple
+  `(on $tag $label)` clauses and loop handler labels are supported; `cont.bind`
+  accepts an i32 prefix and applies to new or suspended continuations;
+  `resume_throw`/`resume_throw_ref` currently accept no
+  handler clauses and inject the exception at the suspension point. `switch`,
+  multi-value/reference payloads and the rest remain unimplemented. A
+  suspended stack's references are kept alive by the engine's refcounts; a
+  tracing collector would additionally need the §10.9 root list.
+- **Execution remains single-agent.** Ordinary calls use the native C stack;
+  A switches continuations on one host thread, and B's worker threads are
+  execution contexts, **not agents**. Neither provider permits concurrent
+  entry into an instance, and THREADS TH-5 remains deferred indefinitely.
+- **Tests:** runtime coverage now includes both providers, the host handle,
+  trap/exception transfer, one-shot/budget, A stack exhaustion and serial
+  cross-thread migration; the WAT modules cover `cont.new`/`resume`, an
+  argument, a handled suspension, an unhandled suspension, multiple handlers,
+  a loop handler, `cont.bind`, `resume_throw` and an exported continuation.
 
 ## 5. Gaps
 
@@ -120,17 +166,17 @@ The decision applies engine-wide and is recorded with its reasoning in §10.15
 |---|---|---|---|
 | ~~SS1~~ | ~~**No continuation composite type.**~~ **SS-1 done:** `0x5D` parses into `ContType`, canonicalises to `CanonTypeKind::Cont` with a `contFunc` reference, and no longer desynchronises the type section. | `WasmType.hpp` (`ContType`), `WasmModule.cpp`, `WasmTypeRegistry.cpp` | Closed (model) |
 | ~~SS2~~ | ~~**No `cont`/`nocont` heap types.**~~ **SS-1 done:** `AbstractHeapType::Cont`/`NoCont` and `(ref null cont)` canonicalisation are implemented. | `WasmType.hpp` (`AbstractHeapType`), `WasmValidator.cpp` | Closed (model) |
-| ~~SS3~~ | ~~**No continuation instructions.**~~ **SS-0 done:** `0xE0`–`0xE6` are named opcodes and fail with a named error. | `WasmOpcode.hpp`, `WasmOpcodeDispatcher.cpp` | Closed (rejection) |
-| SS4 | **No continuation runtime.** The engine executes on the native C stack; there is no capture/restore/splice and no one-shot bookkeeping. This is the remaining blocker for executing `cont.new`/`resume`/`suspend`/`switch`. | `LibJit/LibjitModuleCompiler.cpp`, `WasmModuleInstance.cpp` | High |
+| ~~SS3~~ | ~~**No continuation instructions.**~~ **SS-0 + stage-2 done for three:** `cont.new`, `suspend` and `resume` execute; `cont.bind`, `resume_throw*` and `switch` remain named opcodes that fail with a named error. | `WasmOpcode.hpp`, `WasmOpcodeDispatcher.cpp`, `LibJit/LibjitOpcodeDispatcher.cpp` | Closed for three; open for the rest |
+| SS4 | **The runtime is a narrow A/B implementation, not the full continuation model.** It supports i32/void payloads, multiple handlers, loop handler labels, `cont.bind` (i32 prefix, on new and suspended continuations), `resume_throw*` at a suspension point (no handler clauses yet) and serial cross-thread A migration. It still lacks `switch`, multi-value/reference payloads, full `resume_throw` handler clauses and a tracing-collector root list. | `WasmBase/WasmContinuation.hpp`/`.cpp`, `LibJit/LibjitOpcodeDispatcher.cpp` | High for full conformance; closed for the implemented A/B slice |
 | ~~SS5~~ | ~~**Tags carry no continuation signature.**~~ **SS-2 done:** tag types are function types and may carry a non-empty result signature; `attribute` is checked, exception uses consume the parameter signature and ignore the results, and imports/exports match by `TagId`. | `WasmValidator.cpp` (`validateModule`); `WasmModule.cpp` (`processTagSection`); `WasmRegistryImportResolver.cpp` (`resolveTag`) | Closed |
-| ~~SS6~~ | ~~**No test.**~~ **SS-0/SS-1/SS-2 tests added:** `cont`/`nocont` decode, the named opcode rejection, result-bearing control tags, and their import/export identity. | `Test/main.cpp` | Closed (model/rejection only) |
+| ~~SS6~~ | ~~**No test.**~~ **Stage-2 done:** positive `cont.new`/`resume`/`suspend` modules plus runtime tests for one-shot, trap/exception transfer and the budget; the original model/rejection tests remain. | `Test/main.cpp`, `Test/wasm_wat/cont_*.wat` | Closed (stage-2 slice) |
 | ~~SS7~~ | ~~**Execution state is per host thread, not per execution context.** The trap slot, pending exception, tail-call state, defer stack, depth counters and stack limit are TLS or global, and there is no agent object to own them.~~ **SS-6 done:** `Agent` owns an `ExecutionState`; the generated-code helpers resolve the current state; two agents on one thread, per-thread defaults and the per-state stack limit are tested. | `WasmBase/WasmAgent.hpp`/`.cpp`; `WasmTrap.cpp`, `WasmExn.cpp`, `WasmStack.cpp`; `Test/main.cpp` | Closed |
 
 ## 6. Where we can and should play fast and loose
 
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
-| SSD1 | **Keep `0xE0`–`0xE6` rejected until the runtime exists**, while modelling `0x5D` and control tags fully. | §3: the stack representation and encoding are free; `SAFETY.md` forbids guessing the execution semantics, and a named failure is better than a dead stack. | The type and tag surfaces are usable without pretending execution works. |
+| SSD1 | **Keep `0xE1` and `0xE4`–`0xE6` rejected until the rest of the runtime exists**, while `0xE0`/`0xE2`/`0xE3` execute through the A/B providers. | §3: the stack representation and encoding are free; `SAFETY.md` forbids guessing the execution semantics, and a named failure is better than a dead stack. | The type, tag and three-instruction surfaces are usable without pretending the full instruction set works. |
 | SSD2 | **Reuse the exception-tag identity; encode a control tag as an ordinary function type with results.** | §2/§3: the tag's result signature is the proposal's control-tag form, and the same tag may be thrown, suspended and switched on; `EXCEPTIONS.md` EX-2 already gives tags a process-wide `TagId`. | One tag registry for both proposals, and exception semantics stay unchanged (results ignored). |
 | SSD3 | **Keep continuations one-shot.** | §3: multi-shot is explicitly out of the MVP. | No stack-copying collector. |
 | SSD4 | **Do not emulate continuations with heap-allocated state machines.** | §3 leaves the mechanism free, but §2 requires suspending the actual execution state; a state-machine rewrite changes observable one-shot/splice semantics. | No false conformance. |
@@ -144,31 +190,44 @@ second `resume` read a dead stack.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **SS-0 — Honest rejection** | ✅ `0xE0`–`0xE6` are named opcodes that fail with a named error. | SS3, SS6 | A continuation module fails cleanly, without desync. |
+| **SS-0 — Honest rejection** | ✅ `0xE0`–`0xE6` are named opcodes. Stage 2 executes `0xE0`/`0xE2`/`0xE3`; the other four still fail with a named error. | SS3, SS6 | A continuation module fails cleanly, without desync; the supported three execute. |
 | **SS-1 — Types** | ✅ `ContType`, `CanonTypeKind::Cont`, canonical `contFunc`, `CoreCont` payloads and `AbstractHeapType::Cont`/`NoCont`. | SS1, SS2 | The type section decodes and canonicalises a continuation type. |
 | **SS-2 — Tag signatures** | ✅ Tag types may carry a non-empty result signature (the control form); `attribute` is checked, exception uses consume the parameters and ignore the results, and imports/exports match by `TagId`. | SS5 | A result-bearing tag validates, is thrown/caught (payload = parameters), and exports/imports by identity. |
 | **SS-6 — Execution state** | ✅ `Agent` owns an `ExecutionState` (trap slot, pending exception, tail-call state, defer stack, depth counters, stack limit); TLS holds the current state pointer; the helpers resolve it; isolation tests cover two agents on one thread, per-thread defaults and the per-state stack limit. | SS7 | Done: `Test/main.cpp` ("agent execution state…", "each host thread…", "the stack limit…"). |
-| **SS-3 — Runtime stacks** | Decision recorded (§10.15): native stacks (A) are primary, host threads (B) are the opt-in fallback, and a bespoke interpreter (C) is rejected. Add the capture/restore/splice primitive and one-shot state behind the A/B contract. | SS4 | A simple suspend/resume round-trip runs. |
-| **SS-4 — Instructions** | Blocked on SS-3; implement `cont.new`, `cont.bind`, `suspend`, `resume*`, `switch` and handlers. | SS3 | The proposal's positive tests pass. |
-| **SS-5 — Tests** | SS-0/SS-1/SS-2 model and rejection tests are in the default suite; positive continuation scripts need SS-3. | SS6 | The model/rejection surface is covered; the scripts still need SS-3. |
+| **SS-3 — Runtime stacks** | ✅ **A and B implemented:** A is the default (mmap-backed stack, guard page, `ucontext` switch, per-stack state/limit, ASAN fiber hooks, serial cross-thread migration); B is the explicit fallback (one host thread per suspended continuation). Both enforce one-shot, transfer traps/exceptions, unwind/cancel on drop and charge the budget. A's references are kept alive by refcounts; a tracing collector would still need a root list. | SS4 | Suspend/resume round-trips run on both providers; A stack exhaustion traps; serial migration is tested. |
+| **SS-4 — Instructions** | ◑ **Narrow slice:** `cont.new`, `cont.bind`, `suspend`, `resume` with multiple/loop handlers, and `resume_throw*` without handler clauses; i32/void signatures. Remaining: `switch`, `resume_throw*` handler clauses, multi-value/reference payloads, suspension propagation. | SS3 | The supported instructions execute; `switch` and the wider value model do not. |
+| **SS-5 — Tests** | ✅ A/B runtime tests, the host handle, A stack guard/migration, multiple/loop handlers, `cont.bind`, `resume_throw`, WAT modules and the model/rejection surface are in the default suite. | SS6 | `10,567` assertions / `408` cases green. |
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-24; whole suite 10,443 assertions /
-390 test cases):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-24; whole suite 10,567 assertions /
+408 test cases):
 
 | Script | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| `stack-switching continuation types...` | 18 assertions | 0 | 0 | SS-0/SS-1: `cont`, `(ref null cont)` and `(ref null nocont)` decode; `0xE0` fails with a named error |
+| `stack-switching continuation types...` | 18 assertions | 0 | 0 | SS-0/SS-1: `cont`, `(ref null cont)` and `(ref null nocont)` decode; a still-unimplemented continuation instruction fails with a named error; `0x68` is now the modelled shorthand |
 | `stack-switching control tags...` | 17 assertions | 0 | 0 | SS-2: a result-bearing tag validates and `throw`/`catch` returns its parameter payload; a non-zero attribute is rejected; continuation cast targets are rejected; the tag exports/imports by `TagId` |
+| `continuation runtime...` (4 cases) | 38 assertions | 0 | 0 | A default: completion, suspend/resume, trap/exception transfer, one-shot and the live budget |
+| `continuation provider...` | 5 assertions | 0 | 0 | A is the default; B can be selected explicitly and still completes |
+| `host-thread fallback...` | 9 assertions | 0 | 0 | B suspend/resume hand-off across host threads |
+| `host continuation handle...` (2 cases) | 24 assertions | 0 | 0 | `HostContinuation` wraps a native-created or exported continuation, resumes it, and supports `suspendCurrent` in a native import |
+| `native-stack continuation exhaustion...` | 7 assertions | 0 | 0 | A's guarded mmap stack reports `CallStackExhausted`, not SIGSEGV |
+| `native-stack continuation can migrate...` | 7 assertions | 0 | 0 | A is resumed serially on a different host thread; the engine/backend TLS travels with the stack |
+| `stack-switching dispatches multiple handlers and a loop handler` | 8 assertions | 0 | 0 | Multiple `(on $tag $label)` clauses and a loop-labelled handler receive `[payload (ref null cont)]` |
+| `stack-switching binds a continuation argument prefix` | 4 assertions | 0 | 0 | `cont.bind` fixes the first of two i32 parameters; `resume` supplies the rest |
+| `stack-switching binds a suspended continuation` | 4 assertions | 0 | 0 | A suspended continuation's tag result is supplied by `cont.bind` |
+| `stack-switching injects an exception...` | 4 assertions | 0 | 0 | `resume_throw` raises `$abort` at the continuation's suspension point; its `try_table` catches it |
+| `stack-switching module...` (4 cases) | 14 assertions | 0 | 0 | `cont.new` + `resume` completion, an i32 argument through `resume`, a handled suspension, and an unhandled suspension that drops the replacement handle and traps |
 | `agent execution state isolates...` | 35 assertions | 0 | 0 | SS-6: trap, pending exception, tail-call target, depth counters and deferred cleanup are per agent |
 | `each host thread gets its own default agent...` | 5 assertions | 0 | 0 | SS-6: two host threads get distinct default agents and do not share a trap |
 | `the stack limit belongs to the execution state` | 3 assertions | 0 | 0 | SS-6: `wasm_stack_check` reads the current state's limit, not the shared `VMContext` field |
-| (none) | — | — | — | no positive continuation script; `switch.wast` is a `br_table` test |
 
-Reading: the type, tag, execution-state and rejection surface is graded; the
-first positive test is SS-3's suspend/resume round-trip, which remains blocked
-on a runtime stack model.
+Reading: the type, tag, execution-state, rejection, A/B runtime and host-handle
+surfaces are graded. Handler multiplicity/loop labels, `cont.bind`,
+`resume_throw` (no handler clauses), A stack exhaustion and serial A migration
+are verified. `switch`, multi-value/reference payloads, full `resume_throw`
+handler clauses and a tracing-collector root list are not covered because they
+do not exist yet. True multi-agent execution is not tested or claimed.
 
 ## 9. References
 
@@ -349,10 +408,9 @@ The corollary is that the hard parts are in the core, not the backends:
 
 ### 10.6 What each backend must emit
 
-The core should own a mechanism-neutral contract (working name
-`WasmContinuation.hpp`) and each backend should implement only the emission
-side. The contract is the same for A and B; it is the provider behind it that
-differs.
+The core owns the mechanism-neutral contract
+`WasmContinuation.hpp` and each backend implements only the emission side. The
+contract is the same for A and B; it is the provider behind it that differs.
 
 | Contract item | LibJIT | SLJIT | AsmJit |
 |---|---|---|---|
@@ -550,7 +608,8 @@ currently looks like a per-instance field but encodes a per-host-thread fact.
   stack and the real stack disagree. LibJIT's `wasm_stack_check` already has an
   ASAN-specific probe because of the fake stack; the fiber provider needs the
   matching annotation, and the study should treat a sanitizer build as an
-  acceptance gate.
+  acceptance gate. **Implemented:** the weak hooks are called around A's
+  `swapcontext`; B needs none.
 - **Budget.** Suspended continuations are a memory class the engine did not have
   before: a stack per live continuation, plus the continuation object and its
   root list. The budget must either charge them explicitly or cap the number of
@@ -623,9 +682,10 @@ Spike 1 or 2; they are not prerequisites for choosing the provider.
 7. the one-shot/splice/`switch` tests from the proposal pass, not just a
    single-threaded generator.
 
-Until those criteria are met, `0xE0`–`0xE6` stay rejected with the existing
-named error (SS-0/SSD1). A spike must not be promoted to “supported” by
-removing the rejection.
+Until the full criteria are met, `cont.bind`, `resume_throw`,
+`resume_throw_ref` and `switch` stay rejected with the existing named error.
+The stage-2 slice enables only `cont.new`, `suspend` and `resume`; it must not be
+described as full stack-switching support.
 
 ### 10.12 Preliminary recommendation and staging
 
@@ -636,9 +696,9 @@ remains:
 | Stage | Work | Why this order | Effort |
 |---|---|---|---|
 | **1. ExecutionContext** ✅ (SS-6) | Move the trap slot, pending exception, tail-call state, defer stack, depth counters and stack limit into a context object owned by an `Agent`; TLS holds the current pointer; helpers resolve it. Add Spike 0. | Done. Backend-independent; required by A and by true agents; it is the seam for later agents under B. | Done |
-| **2. B prototype on LibJIT** | Thread per suspended continuation; minimal `cont.new`/`resume`/`suspend` with one `(on $tag $label)`; one-shot; trap/exception transfer; stack budget. | No assembly, no new backend, no fiber ASAN hooks; validates the semantics and the tests early. B is the opt-in fallback, not the default. | M–L |
-| **3. A provider** | mmap'd stacks + guard, per-stack limit, context switch (ucontext/Boost.Context/asm), root list at `suspend`, fiber sanitizer hooks; same core contract as stage 2. | The default production provider; it is swappable without touching the instruction lowering | L |
-| **4. Full instruction set** | `switch`, `cont.bind`, `resume_throw*`, multiple handlers, multi-value payloads, continuation drop/root release. | Needs a proven provider; the semantics are the hard part | L |
+| **2. B prototype on LibJIT** ✅ | Thread per suspended continuation; `cont.new`/`resume`/`suspend` with zero/one `(on $tag $label)`; one-shot; trap/exception transfer; live/stack budget. Narrowed to i32/void payloads and non-loop handler labels. | No assembly, no new backend, no fiber ASAN hooks; validates the semantics and the tests early. B is the opt-in fallback, not the default. | Done (stage-2 slice) |
+| **3. A provider** ✅ (basic) | mmap'd stacks + guard, per-stack limit, `ucontext` context switch, serial cross-thread migration, ASAN fiber annotations; same core contract as stage 2. Refcounted references keep a suspended stack alive; a tracing collector would still need the root list. | The default production provider; it is swappable without touching the instruction lowering. | Done (basic) |
+| **4. Full instruction set** | `switch`, multi-value/reference payloads, full `resume_throw*` handler clauses, continuation drop/root release. | Needs the remaining value ABI and the symmetric-switch prompt model | L (next) |
 
 The implementation order (B prototype first) is **not** the product order: A is
 the default provider, B is the opt-in fallback, and C is excluded (§10.15).
@@ -726,8 +786,9 @@ effort rather than the semantics.
   `WasmBase/WasmStack.cpp`, `WasmBase/WasmTrap.hpp`, `WasmBase/WasmTrap.cpp`,
   `WasmBase/WasmExn.cpp`, `WasmBase/WasmValue.hpp`,
   `WasmBase/WasmModuleInstance.cpp`, `WasmBase/WasmVMContext.hpp`,
-  `LibJit/LibjitModuleCompiler.cpp`; scaffolds `Asmjit/Asmjit.pro`,
-  `Sljit/Sljit.pro`.
+  `WasmBase/WasmContinuation.hpp`, `WasmBase/WasmContinuation.cpp`,
+  `LibJit/LibjitModuleCompiler.cpp`, `LibJit/LibjitOpcodeDispatcher.cpp`;
+  scaffolds `Asmjit/Asmjit.pro`, `Sljit/Sljit.pro`.
 
 ### 10.15 Decision record
 
@@ -736,9 +797,9 @@ for a later study.
 
 | # | Decision | Consequence |
 |---|---|---|
-| **D-1** | **A — separate native stacks + context switch — is the primary and default continuation runtime.** | The production provider is a native-stack switch (`ucontext`, Boost.Context or a small per-architecture switch) behind the core contract. Any build with the provider uses A by default. |
-| **D-2** | **B — one host thread per suspended continuation — is the opt-in fallback provider.** | B is selected explicitly (build-time or runtime), never as a silent automatic fallback. It is the correctness prototype and the choice where A's provider is unavailable; its thread/stack budget is part of its contract. |
+| **D-1** | **A — separate native stacks + context switch — is the primary and default continuation runtime.** | A is implemented in `WasmContinuation.cpp` as an mmap-backed stack with a guard page and a `ucontext` switch. It is the default provider; calls are serial, but a suspended stack may migrate to another host thread. ASAN fiber annotations are installed. The remaining A work is a tracing-collector root list; the refcounted engine keeps live stack references alive without one. |
+| **D-2** | **B — one host thread per suspended continuation — is the opt-in fallback provider.** | B is selected explicitly (`setContinuationProvider(HostThreads)`), never as a silent automatic fallback. It is implemented in `WasmBase/WasmContinuation.hpp`/`.cpp`; it is the correctness prototype and the choice where A's provider is unavailable. Its thread/stack budget is part of its contract. |
 | **D-3** | **C — a bespoke interpreter fallback — is rejected permanently.** | No WasmJit interpreter will be written for continuations, or as a fallback for anything else, ever. If interpretation is ever required it must come from LibJIT's own compile/interpret configuration (LibJIT already provides both a compiler and an interpreter), not from a new WasmJit engine. The core continuation contract must not grow an interpreter path. |
 | **D-4** | **Execution state belongs to the execution context and is owned by an `Agent`.** | SS-6 is implemented: `ExecutionState` (trap slot, pending exception, tail-call state, defer stack, depth counters, stack limit) lives in `WasmBase/WasmAgent.hpp`; TLS holds the current pointer; `wasm_trap_slot()`, `wasm_exn_slot()`, `currentTailCallState()` and `wasm_stack_check()` resolve it. |
-| **D-5** | **Agents are present in the code; true multi-agent execution remains deferred.** | `Agent`, `AgentScope` and per-thread default agents exist and own the state. There is no scheduler, no multi-agent execution model, no multi-mutator GC and no real `wait`/`notify` table; THREADS TH-5/T9 remain deferred. |
-| **D-6** | **The provider contract is backend-neutral.** | A and B are implemented once in the core; LibJIT, SLJIT and AsmJit only emit the suspend call, the root array and the stack check. SLJIT/AsmJit remain prerequisites for their own measurements, not for the decision. |
+| **D-5** | **Agents are present in the code; true multi-agent execution remains deferred.** | `Agent`, `AgentScope` and per-thread default agents exist and own the state. A and B continuations are execution contexts, **not** agents: neither has a shared-instance entry point, scheduler, waiter table or multi-mutator GC. The host handle is serial-only. There is no multi-agent execution model; THREADS TH-5/T9 remain deferred indefinitely. |
+| **D-6** | **The provider contract is backend-neutral.** | The contract lives in `WasmBase/WasmContinuation.hpp`; A (default) and B (fallback) are implemented once there. LibJIT, SLJIT and AsmJit only emit the suspend call, the root array and the stack check. SLJIT/AsmJit remain prerequisites for their own measurements, not for the decision. |

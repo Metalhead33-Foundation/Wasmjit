@@ -49,6 +49,7 @@ static const std::vector<WASM::ValueType> DefaultValueTypes = {
 	{ WASM::ValueTypeCode::StructRef, -1} ,
 	{ WASM::ValueTypeCode::ArrayRef, -1} ,
 	{ WASM::ValueTypeCode::ExnRef, -1} ,
+	{ WASM::ValueTypeCode::ContRef, -1} ,
 	{ WASM::ValueTypeCode::NullFuncRef, -1} ,
 	{ WASM::ValueTypeCode::NullExternRef, -1} ,
 	{ WASM::ValueTypeCode::NullExnRef, -1} ,
@@ -128,6 +129,7 @@ jit_type_t LibJitTypeTranslator::translatePrimitiveType(WASM::ValueTypeCode prim
 		case WASM::ValueTypeCode::StructRef: return jit_type_void_ptr;
 		case WASM::ValueTypeCode::ArrayRef: return jit_type_void_ptr;
 		case WASM::ValueTypeCode::ExnRef: return jit_type_void_ptr;
+		case WASM::ValueTypeCode::ContRef: return jit_type_void_ptr;
 		case WASM::ValueTypeCode::NullFuncRef: return jit_type_void_ptr;
 		case WASM::ValueTypeCode::NullExternRef: return jit_type_void_ptr;
 		case WASM::ValueTypeCode::NullExnRef: return jit_type_void_ptr;

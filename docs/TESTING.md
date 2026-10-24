@@ -143,6 +143,15 @@ baked in at compile time through the `WASM_TEST_DIR` macro) and calls into it.
 | `the scalar profile rejects vector types and SIMD instructions` | `profile_v128_type`, `profile_simd_op` | `{V}` rejects a `v128` declaration and a SIMD op that declares no `v128` type; `add_core` still runs (`PROFILES.md` PR-4) |
 | `the deterministic profile rejects threads and relaxed SIMD` | `profile_shared_memory`, `profile_atomic`, `profile_relaxed_simd` | `{N,T,V}` rejects shared memory and atomics; the `N` gate rejects relaxed SIMD (`PROFILES.md` PR-2) |
 | `the deterministic profile canonicalises observable NaNs` | `profile_nan` | `{N,T,V}` turns a signalling payload into the canonical NaN at stores, reinterprets, `global.set` and single/multi-value returns, for f32 and f64 (`PROFILES.md` PR-3) |
+| `continuation runtime...` | hand-built C++ | A default: completion, suspend/resume, trap/exception transfer, one-shot and the live budget (`STACK_SWITCHING.md` SS-3) |
+| `continuation provider / host-thread fallback` | hand-built C++ | A/B selection; the B fallback completes and suspends/resumes correctly |
+| `host continuation handle...` | hand-built C++ and `cont_export.wat` | `HostContinuation` wraps a native-created or exported continuation, resumes it, and supports `suspendCurrent` |
+| `native-stack continuation exhaustion...` | `cont_stack.wat` | A's guarded mmap stack reports `CallStackExhausted` instead of a host SIGSEGV |
+| `native-stack continuation can migrate...` | hand-built C++ | A's suspended stack is resumed serially on another host thread |
+| `stack-switching dispatches multiple handlers and a loop handler` | `cont_handlers.wat` | multiple `(on $tag $label)` clauses and a loop-labelled handler |
+| `stack-switching binds a continuation argument prefix` | `cont_bind.wat` | `cont.bind` fixes the first i32 parameter; `resume` supplies the rest |
+| `stack-switching binds a suspended continuation` | `cont_bind_suspended.wat` | `cont.bind` supplies the next result of an already-suspended continuation |
+| `stack-switching injects an exception...` | `cont_throw.wat` | `resume_throw` injects `$abort` at a suspension point; the continuation's `try_table` catches it |
 
 The modules are produced either from AssemblyScript (`Test/wasm/*.ts`) or from hand-written WAT
 (`Test/wasm_wat/*.wat`); both land in `wasm_test_modules/`.
@@ -277,7 +286,7 @@ selection is explicit — which is why `./WasmJit '[spec]'` runs everything.
 | `./WasmJit '[spec]'` | all 257 spec scripts (~2 min in the debug build; 251 pass, 6 known failures) |
 | `./WasmJit 'spec: address'` | just that script |
 | `./WasmJit '*float*'` | scripts whose name matches |
-| `./WasmJit --list-tests` | the default view (390 test cases) |
+| `./WasmJit --list-tests` | the default view (408 test cases) |
 | `./WasmJit --list-tests '[spec]'` | every script, one line each (257) |
 | `./WasmJit -# --list-tags` | all tags, including `[#main]` and `[#SpecSuite]` |
 
@@ -308,7 +317,7 @@ It currently holds 193 of the 257 scripts, and the default run is green:
 
 ```
 $ ./WasmJit
-All tests passed (10443 assertions in 390 test cases)
+All tests passed (10567 assertions in 408 test cases)
 ```
 
 #### Refreshing the list
@@ -536,7 +545,7 @@ tests, and it is green:
 
 ```
 $ ./WasmJit
-All tests passed (10443 assertions in 390 test cases)
+All tests passed (10567 assertions in 408 test cases)
 ```
 
 A full sweep is deliberately loud, because most of the suite is still beyond the
@@ -722,12 +731,13 @@ Current modules:
 | `simd_convert.wat` | the conversions (SIMD-L4): `trunc_sat` at its ends (NaN, ±2^31, 2^32 and the largest value below it), `convert`, `convert_low`, `promote`, and `demote`/`trunc_sat_f64x2_*_zero` with marker lanes proving the unfilled lanes are zero. 19 exports, all read off V8; two of them are `FORWARD`ed to the reference, so this case is their only conformance evidence | `simd: the float/int conversions run through the JIT` |
 | `simd_relaxed.wat` | the relaxed ops that need their own shape (SIMD-5): `relaxed_swizzle`, `relaxed_laneselect`, `relaxed_madd`/`nmadd`, and both dots — including the pair that **saturates** (127×255×2 = 64770 → 32767), which is what tells the permitted readings apart | `simd relaxed: the hand-written ops run through the JIT` |
 | `simd_globals.wat` | `v128` globals (SIMD-4 / `SIMD-L5`): a `v128.const` initialiser through the constant-expression path, `global.get`/`set`, a read-modify-write that must survive between calls, and a `v128` copied through a local — with the byte-order assertion (`i8x16 0…15` read as an `i32` lane is `0x0B0A0908`) that pins hazard Y11 | `simd: v128 globals run through the JIT` |
+| `cont_*.wat` | stack switching: `cont.new` + `resume` completion, an i32 argument through `resume`, a handled/unhandled suspension, an exported continuation, A stack exhaustion, multiple/loop handlers, `cont.bind` and `resume_throw` | `stack-switching ...`, host-handle, native-stack, binds, dispatches and injects cases |
 
 Measured after SIMD-5:
 
 ```bash
 ./WasmJit 'simd*'      # 24 cases, 6147 assertions, all passing (includes the hidden [.simdbench] case)
-./WasmJit              # 390 cases, 10443 assertions, all passing
+./WasmJit              # 408 cases, 10567 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed

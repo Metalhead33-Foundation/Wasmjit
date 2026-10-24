@@ -1,11 +1,14 @@
 # JavaScript-Related Proposals — Implementation Notes, Spec Status, and Deliberate Non-Integration
 
-Status: design note / implementation reference (revision 2 — consolidated survey
+Status: design note / implementation reference (revision 4 — consolidated survey
 of JS-BigInt integration, JS String Builtins, JSPI, custom descriptors, ESM
 integration, JS Primitive Builtins and JS Types, plus the shipped generic
 host-bridge groundwork. **No JavaScript support is implemented or planned inside
 the engine.** The only proposed surface is an opt-in, embedder-owned adapter
-built from the existing import/export boundary and the optional `HostBridge`).
+built from the existing import/export boundary and the optional `HostBridge`.
+Revision 4 notes the stack-switching A/B providers and the C++ `HostContinuation`
+handle: JSPI now has a host-facing continuation primitive, but still needs a JS
+engine/event-loop/promise adapter and remains declined as an engine feature.)
 
 Audience: anyone touching `ImportResolver`, `Callable`, `VMContext`,
 `HostBridge`, `externref`, `Module` metadata, or considering a
@@ -43,7 +46,7 @@ a browser-style `WebAssembly` object.
 |---|---|---|---|
 | JS-BigInt integration | JS API value conversion | `i64` parameters, results and globals | **Yes** — host conversion only |
 | JS String Builtins | JS API builtin imports | `externref`, GC arrays, function imports under `wasm:` | **Yes, slow path** — ordinary imports |
-| JSPI | JS API suspension primitives | none in the binary; a call that may suspend | **No** without suspendable Wasm stacks |
+| JSPI | JS API suspension primitives | none in the binary; a call that may suspend | **No** without a JS/event-loop adapter (the C++ continuation primitive exists) |
 | Custom Descriptors | core GC types + JS prototypes | descriptor/exact type clauses, new GC instructions | **No** without GC RTT/descriptor support |
 | ESM integration | JS module loader | module imports/exports only | **Embedder-only** — no engine hook |
 | JS Primitive Builtins | JS API builtin imports | `externref` + scalar values | **Yes, slow path** — ordinary imports |
@@ -113,12 +116,13 @@ marks an import whose returned `Promise` suspends the Wasm computation, and
 The hard part is control flow, not value conversion. When an import returns a
 `Promise`, the engine must preserve the suspended Wasm call chain, yield to the
 JavaScript event loop, and later resume with the fulfilled value (or throw the
-rejection into the suspended computation). The current engine executes Wasm on
-the native C stack and has no continuation facility; `STACK_SWITCHING.md` is
-0%. A host adapter cannot manufacture a continuation inside compiled Wasm
-frames, so JSPI is **not achievable with an import/export hook alone**. This
-note therefore declines it as an engine feature; a future stack-switching or
-host-managed continuation mechanism would be the prerequisite. An adapter may
+rejection into the suspended computation). The engine executes Wasm on the
+native C stack for ordinary calls. The stack-switching A/B providers and the
+`HostContinuation` C++ handle (`STACK_SWITCHING.md` §4) now provide a host-facing
+suspend/resume primitive for a native import or an exported continuation. JSPI
+still needs a JS engine, event-loop and Promise scheduling adapter; the engine
+itself does not provide those. JSPI therefore remains **not achievable with an
+import/export hook alone** and is declined as an engine feature. An adapter may
 still call an import that returns a non-`Promise` value synchronously; that is
 ordinary host-call behaviour, not JSPI support.
 
@@ -223,7 +227,7 @@ on the host side.
 | [`GC.md`](GC.md) | GC arrays make the `wasm:js-string` array builtins possible. `GC.md` §10 already analyses the JS String Builtins interface. The missing host `externref` model (`R4`, `GC-8`) is the same prerequisite as JS1 below. Custom Descriptors would extend GC RTT and type identity, not just the host boundary. |
 | [`STRINGREF.md`](STRINGREF.md) | `stringref` is a native Wasm string type, not a JavaScript string. This note does not claim `STRINGREF.md` support and does not use `stringref` to implement `wasm:js-string`; the builtins use `externref` and GC arrays. |
 | [`FUNCTION_REFERENCES.md`](FUNCTION_REFERENCES.md) | `funcref`/`Callable` are the representation for `WebAssembly.Function` wrappers and for JS functions placed in Wasm tables. The wrapper is host-side; the `Callable` and its canonical `TypeId` are engine-side. |
-| [`EXCEPTIONS.md`](EXCEPTIONS.md) | JSPI's rejected promise becomes a thrown exception in the suspended Wasm computation. The engine can carry the exception, but it cannot suspend/resume the frames. |
+| [`EXCEPTIONS.md`](EXCEPTIONS.md) | JSPI's rejected promise becomes a thrown exception in the suspended Wasm computation. The engine can carry the exception, but there is no host-facing suspend/resume path. |
 | [`MULTI_VALUE.md`](MULTI_VALUE.md) | An imported JS function may have multiple results. A host thunk must use the trailing result-buffer convention from `ABI.md`; the adapter cannot assume a single C return value. |
 | [`MUTABLE_GLOBALS.md`](MUTABLE_GLOBALS.md) | Imported/exported mutable globals can be exposed as JS `WebAssembly.Global` objects by the adapter; the engine's `Value*` cell aliasing is the underlying mechanism. |
 | [`MEMORY64.md`](MEMORY64.md) | `i64` and 64-bit `memory.grow` are the BigInt boundary. The engine implements the numeric operations; the adapter does the `BigInt` conversion (`M64D5`). |
@@ -232,7 +236,7 @@ on the host side.
 | [`TYPE_IMPORTS.md`](TYPE_IMPORTS.md) | The JS String Builtins note mentions future typed builtins via type imports. Type imports are 0% here, so the adapter must use the fixed `externref`/GC-array signatures; it cannot offer `WebAssembly.Type`-based builtins. |
 | [`TYPE_MODEL.md`](TYPE_MODEL.md) / [`TYPE_IDENTITY.md`](../TYPE_IDENTITY.md) | Host functions are matched by canonical `TypeId`, and a JS wrapper needs the same identity for `call_indirect`/`call_ref`. The adapter should set `Callable::typeId` from the resolver's `expectedType` instead of leaving it `kNone`. |
 | [`COMPONENT_MODEL.md`](COMPONENT_MODEL.md) | The component note already declines JS/ESM embedding (`CMD6`). This note does not add JS to components; the canonical ABI remains a host-facing contract, not a JavaScript runtime. |
-| [`STACK_SWITCHING.md`](STACK_SWITCHING.md) | JSPI needs suspendable stacks. With stack switching at 0%, JSPI cannot be implemented by an external hook; this is the explicit prerequisite recorded in `JS-4`. |
+| [`STACK_SWITCHING.md`](STACK_SWITCHING.md) | JSPI needs suspendable stacks. A/B and `HostContinuation` now supply the C++ suspend/resume primitive, but JSPI still needs a JS engine, event-loop and Promise adapter; JSPI remains an external-adapter concern. This is the prerequisite recorded in `JS-4`. |
 | [`PROFILES.md`](PROFILES.md) | There is no JS profile. Whether an embedder enables a JS adapter is a host policy, not a Wasm feature selector. |
 | [`SMALL_PROPOSALS.md`](SMALL_PROPOSALS.md) | Provides the grouped-note precedent: seven related proposals can share one document when they share one boundary. |
 
@@ -405,7 +409,7 @@ contract is needed, or whether the proposal is declined.
 | JS1 | **`externref` has no host identity or lifetime contract by default.** It is an opaque `void*`; equality is pointer equality, and `refClone`/`refDrop` do nothing for it unless an optional `HostBridge` is installed. A JS object wrapper cannot know when the engine has dropped its last reference, and two handles to one JS object need not compare equal. | `WasmValue.hpp` (`Value::ref`); `WasmHostBridge.hpp` (optional retain/release/equals + teardown); `WasmModuleInstance.cpp` (`refClone`, `refDrop`, `gcRefcountSlot`); `ABI.md` "External host adapter"; `REFERENCE_TYPES.md` RT1; `GC.md` R4/GC-8. | High for safe JS handle interop; addressed when the adapter opts in |
 | JS2 | **No stable type-reflection/descriptor API.** `Export` is only `{name, kind, index}`; import vectors expose raw parser structures. A host can read `Module` internals, but there is no `ImportDescriptor`/`ExportDescriptor`/`ExternType` view keyed by `TypeId`. JS Types needs one. | `WasmBase/WasmType.hpp` (`struct Export`), `WasmBase/WasmModule.hpp`; `TYPE_MODEL.md` TM-6/TM-10 still pending. | Medium |
 | JS3 | **No `wasm:` builtin policy.** The engine does not reserve `wasm:`, perform eager link-time builtin checks, hide builtin imports from metadata, or give a builtin a per-instantiation identity. It treats `wasm:js-string` as an ordinary import and leaves all semantics to the resolver. | `WasmImport.hpp` (name-based resolver only); no `wasm:` string in `WasmBase`/`LibJit`; `GC.md` §10.5 calls it a resolver problem. | Medium (acceptable slow path) |
-| JS4 | **JSPI cannot suspend a Wasm frame.** There is no continuation, stack capture, event-loop integration, or resume path; `STACK_SWITCHING.md` is 0%. An external hook cannot create the missing continuation. | `STACK_SWITCHING.md` §5 (0%, no `cont`/`0xE0`–`0xE6`); current execution uses the native C stack. | High for JSPI; declined |
+| JS4 | **JSPI has no JS/event-loop adapter.** The stack-switching A/B providers and `HostContinuation` expose a C++ suspend/resume primitive, but there is no JS engine, Promise scheduling or event-loop integration, and no JS-side `WebAssembly.Suspending`/`promising` bridge. JSPI therefore remains declined as an engine feature; an external adapter must supply the JS half. | `STACK_SWITCHING.md` §4/§10.12 (A default, B fallback); `WasmContinuation.hpp` (`HostContinuation`); no JS engine in the tree. | High for JSPI; declined |
 | JS5 | **Custom Descriptors has no core support.** There are no `descriptor`/`describes` clauses, exact heap types, exact imports, `struct.new_desc`/`ref.get_desc`/`ref.cast_desc_eq` instructions, or RTT-adjacent descriptor storage. The JS prototype half additionally needs a JS object model. | `WasmType.hpp`/`WasmModule.cpp` type parsing; `GC.md` §4; `TYPE_IDENTITY.md` canonicalisation rules. | High for custom descriptors; declined |
 | JS6 | **No ESM loader.** There is no URL resolution, module graph, source phase, import map, CSP check, or ESM evaluation. The engine only parses a binary and resolves `(module, field)` imports. | `WasmImport.hpp`; `WasmModule.hpp`; no loader module in `WasmBase/`. | Low for the engine; embedder-only |
 | JS7 | **Host thunks are per-signature.** `Callable::fnPtr` is a raw C function pointer with `VMContext*` as arg0; there is no type-erased `HostFunction::invoke(args, results)` entry point. A JS adapter must generate or hand-write one thunk per imported/exported signature and must implement the multi-result buffer itself. | `WasmValue.hpp` (`Callable`, `callCallable*`); `ABI.md`; `MULTI_VALUE.md` MV4. | Medium (adapter complexity, not a semantic gap) |
@@ -448,7 +452,7 @@ are recorded as declined (`JS-4`), not disguised as adapter work.
 | Exports | `ModuleInstance::exportedFunction` / `registerExports`; `Callable` | JS wrapper/`WebAssembly.Function` object; argument conversion | No |
 | Lifecycle | `HostBridge::instanceCreated` / `instanceDestroying`; `VMContext::hostData` | Publish per-instance state; release the handle arena | No |
 | Metadata | `Module` import/export vectors, `TypeId`, `CoreTypeView` | JS type objects / `.type()` accessors | No |
-| Control | `VMContext` / native C stack | JSPI: impossible without continuation support | No, but **unavailable** |
+| Control | `VMContext` / native C stack | JSPI: needs a JS engine/event-loop/Promise adapter; the C++ `HostContinuation` primitive exists | No, external adapter |
 | Loading | none | ESM URL resolution, graph, instantiation | No; embedder-only |
 
 The first six layers are a complete **synchronous** boundary. Control and
@@ -557,7 +561,7 @@ engine.
 | JS Primitive Builtins | **Yes for correctness** | None; `externref` + scalars | Adapter supplies `wasm:js-*`; no inlining |
 | JS Types | **Yes with metadata** | Optional read-only descriptor view (`JS-3`) | Adapter builds JS objects/`WebAssembly.Function` |
 | ESM integration | **No engine part** | None | Embedder loader; engine unchanged |
-| JSPI | **No** | Suspendable stacks/continuations; `STACK_SWITCHING.md` | Declined until stack switching lands (`JS-4`) |
+| JSPI | **No** | Host-facing suspendable continuations now exist; a JS engine/event loop/Promise adapter does not | Declined as an engine feature (`JS-4`); an external adapter can build on `HostContinuation` |
 | Custom Descriptors | **No** | Descriptor/exact type clauses, new GC instructions, RTT; then JS prototypes | Declined as an engine feature (`JS-4`) |
 
 The "slow path" caveat is deliberate. The JS String Builtins proposal exists to
@@ -606,7 +610,7 @@ also helps non-JS hosts; `JS-4` records the declined proposals.
 | **JS-1 — Adapter contract** ✅ | Documented the host-thunk rules (`Callable` with `context = nullptr`, `TypeId`, `CoreTypeView`, `hostData`, multi-result buffer, opaque `externref`) in `ABI.md` "External host adapter"; added the pre-start lifecycle hook so `hostData` is live during `start`. | JS7 | **Done (2026-10-23):** an adapter can be written from the ABI + bridge header without reading `LibJit` or a JS engine header. |
 | **JS-2 — Generic host-reference contract** ✅ | Added `WasmBase/WasmHostBridge.hpp`: optional allow-listed `retain`/`release`/`equals`, an optional host-reference predicate, and `instanceCreated`/`instanceDestroying`. All callbacks and the bridge pointer default to null. | JS1 | **Done (2026-10-23):** `externref` barriers call the host only when the embedder opts in, the start-function test observes `hostData`, teardown runs the host callback, and no JS dependency appears in `WasmBase/`. |
 | **JS-3 — Read-only metadata view** (optional) | Expose `ImportDescriptor`/`ExportDescriptor`/`ExternType` views keyed by `TypeId`, built from `Module` and `TypeRegistry`; keep the raw vectors private/stable. | JS2 | A host can answer import/export type queries without reading `Module` internals; `TypeId` remains the identity. |
-| **JS-4 — Declined core proposals** ✅ | Record JSPI, Custom Descriptors and ESM as not implemented; track their prerequisites (`STACK_SWITCHING.md`, GC descriptors, an ESM host loader). Revisit only when the prerequisite lands. | JS4, JS5, JS6 | **Done (2026-10-23):** this note and `README.md` say "not implemented"; no code path or test claims JSPI/descriptor/ESM support. |
+| **JS-4 — Declined core proposals** ✅ | Record JSPI, Custom Descriptors and ESM as not implemented; track their prerequisites (`STACK_SWITCHING.md`, GC descriptors, an ESM host loader). Revisit only when the prerequisite lands. | JS4, JS5, JS6 | **Done (2026-10-23):** this note and `README.md` say "not implemented"; no code path or test claims JSPI/descriptor/ESM support. The C++ `HostContinuation` handle now exists, but the JS/event-loop half is still absent, so JS-4 remains. |
 
 ## 8. Indicative test survey
 

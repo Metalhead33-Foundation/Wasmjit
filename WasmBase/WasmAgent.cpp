@@ -36,6 +36,16 @@ ExecutionState& currentExecutionState() noexcept
 	return *t_currentState;
 }
 
+ExecutionState* currentExecutionStatePointer() noexcept
+{
+	return t_currentState;
+}
+
+void setCurrentExecutionState(ExecutionState* state) noexcept
+{
+	t_currentState = state;
+}
+
 Agent* currentAgent() noexcept
 {
 	return currentExecutionState().owner;
