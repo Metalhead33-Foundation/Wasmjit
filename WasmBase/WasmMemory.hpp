@@ -24,6 +24,12 @@ struct LinearMemory {
 	// matching compares it against the importing module's declared type
 	// (spec `match_memtype`; docs/proposals/MEMORY64.md M2).
 	bool      is64;
+	// Custom page sizes (docs/proposals/CUSTOM_PAGE_SIZES.md CPS-2): the byte
+	// size of one page (1 or 65536). Appended after `is64` so every existing
+	// field offset, including `hostData`, stays put. `memorySize`/`memoryMax`
+	// remain byte counts; `memory.size`/`memory.grow` speak in pages, so the
+	// generated code and the helpers divide/multiply by this field.
+	uint64_t  pageSize;
 };
 static_assert(offsetof(LinearMemory, memoryBase) == 0,
 			  "LinearMemory::memoryBase must remain first field for backend ABI compatibility");
@@ -40,7 +46,8 @@ class StoreOwnedMemory
 protected:
 	LinearMemory memory;
 public:
-	explicit StoreOwnedMemory(uint64_t initialPages, uint64_t maxPages, bool isShared, bool is64 = false);
+	explicit StoreOwnedMemory(uint64_t initialPages, uint64_t maxPages, bool isShared,
+			bool is64 = false, uint64_t pageSize = 0x10000);
 	virtual ~StoreOwnedMemory() = default;
 	const LinearMemory* getMemory() const;
 	LinearMemory* getMemory();
@@ -63,7 +70,8 @@ class PrivateLinearMemory final : public StoreOwnedMemory {
 private:
 	std::vector<uint8_t> backing;
 public:
-	explicit PrivateLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64 = false);
+	explicit PrivateLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64 = false,
+			uint64_t pageSize = 0x10000);
 	~PrivateLinearMemory() override = default;
 	bool growMemory(uint64_t deltaPages) override;
 };
@@ -78,7 +86,8 @@ private:
 	bool platformCommitMemory(size_t newBytes);
 	void platformDealloc();
 public:
-	explicit SharedLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64 = false);
+	explicit SharedLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64 = false,
+			uint64_t pageSize = 0x10000);
 	~SharedLinearMemory() override;
 	bool growMemory(uint64_t deltaPages) override;
 	bool discardHint(uint64_t offset, uint64_t bytes) const override;

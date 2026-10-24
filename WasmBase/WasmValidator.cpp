@@ -144,17 +144,28 @@ bool Validator::memoryIsShared(uint32_t idx) const
 }
 
 void Validator::checkLimits(const Limits& limits, bool is64, bool isMemory,
-							const char* what, std::size_t index) const
+							const char* what, std::size_t index, uint64_t pageSize) const
 {
 	const bool hasMax = (limits.flags & 0x01) != 0;
 	const bool shared = (limits.flags & 0x02) != 0;
 	const std::string label = std::string(what) + " " + std::to_string(index);
 
+	// Flag bit 3 carries the custom page-size exponent on a memory and is not
+	// defined for a table (CUSTOM_PAGE_SIZES.md CPS-1/CPS-3).
+	const uint32_t allowedFlags = isMemory ? 0x0Fu : 0x07u;
+	if ((limits.flags & ~allowedFlags) != 0)
+		fail(label + ": unknown limits flags");
+
 	if (hasMax && limits.initial > *limits.maximum)
 		fail(label + ": size minimum must not be greater than maximum");
 
+	// The cap is a byte budget expressed in pages: 2^32 bytes for memory32 and
+	// 2^64 for memory64. At 64 KiB that is the familiar 65536 / 2^48 pages; at
+	// one byte per page it is 2^32 / 2^64 (CPS-3). Tables keep an entry cap.
 	const uint64_t cap = isMemory
-			? (is64 ? (1ull << 48) : 65536ull)
+			? (pageSize == 1
+				? (is64 ? std::numeric_limits<uint64_t>::max() : (UINT64_C(1) << 32))
+				: (is64 ? (UINT64_C(1) << 48) : 65536ull))
 			: (is64 ? std::numeric_limits<uint64_t>::max() : 0xFFFFFFFFull);
 	if (limits.initial > cap)
 		fail(label + ": size minimum is out of range");
@@ -760,11 +771,13 @@ void Validator::validateModule()
 
 	for (std::size_t i = 0; i < module.importMemories.size(); ++i) {
 		const MemoryType& mt = module.importMemories[i].memory;
-		checkLimits(mt.limits, mt.indexType == MemoryIndexType::I64, true, "memory", i);
+		checkLimits(mt.limits, mt.indexType == MemoryIndexType::I64, true, "memory", i,
+				mt.pageSize);
 	}
 	for (std::size_t i = 0; i < module.memories.size(); ++i) {
 		const MemoryType& mt = module.memories[i];
-		checkLimits(mt.limits, mt.indexType == MemoryIndexType::I64, true, "memory", i);
+		checkLimits(mt.limits, mt.indexType == MemoryIndexType::I64, true, "memory", i,
+				mt.pageSize);
 	}
 	for (std::size_t i = 0; i < module.importTables.size(); ++i) {
 		const TableType& tt = module.importTables[i].table;

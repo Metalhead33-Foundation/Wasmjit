@@ -643,13 +643,18 @@ void ModuleInstance::initializeMemories()
 		uint64_t maxPages = memType.limits.maximum.has_value()
 			? memType.limits.maximum.value()
 			: UINT64_MAX;
-		// A 32-bit memory's index space caps it at 65536 pages (4 GiB); a 64-bit
-		// memory is bounded only by the host allocation budget (WasmStore).
-		if (memType.indexType == MemoryIndexType::I32)
-			maxPages = std::min<uint64_t>(maxPages, 65536);
+		// A 32-bit memory's *byte* budget caps its page count: 2^32 bytes, i.e.
+		// 65536 pages at 64 KiB or 2^32 pages at one byte per page
+		// (CUSTOM_PAGE_SIZES.md CPS-2/CPS-3). A 64-bit memory is bounded only
+		// by the host allocation budget (WasmStore).
+		if (memType.indexType == MemoryIndexType::I32) {
+			const uint64_t pageCap = memType.pageSize == 1
+					? (UINT64_C(1) << 32) : 65536;
+			maxPages = std::min<uint64_t>(maxPages, pageCap);
+		}
 
 		const Store::MemoryId id = store.createLinearMemory(initialPages, maxPages, isShared,
-				memType.indexType == MemoryIndexType::I64);
+				memType.indexType == MemoryIndexType::I64, memType.pageSize);
 		LinearMemory* memory = store.memory(id);
 		if (memory == nullptr)
 			throw std::runtime_error("failed to allocate linear memory");
@@ -1115,8 +1120,11 @@ int64_t ModuleInstance::growMemory(uint32_t memIdx, uint64_t deltaPages) {
 	LinearMemory* memory = internals.memoryRefs[memIdx];
 	// 64-bit throughout: a memory64 can grow past 2^32 pages, and the caller
 	// reports the old page count in the memory's own index type
-	// (docs/proposals/MEMORY64.md M64-1).
-	const uint64_t oldPages = memory->memorySize / 0x10000;
+	// (docs/proposals/MEMORY64.md M64-1). The page size is per memory because
+	// CUSTOM_PAGE_SIZES.md allows a one-byte page.
+	if (memory->pageSize == 0)
+		return -1;
+	const uint64_t oldPages = memory->memorySize / memory->pageSize;
 
 	// The Store owns the memory (and therefore its growth policy/limits).
 	if (!Store::growMemory(memory, deltaPages))

@@ -96,7 +96,8 @@ SOURCES += main.cpp \
     TestBackend.cpp \
     LibJitBackendTests.cpp \
     WastScript.cpp \
-    SpecSuite.cpp
+    SpecSuite.cpp \
+    ProposalDocsTests.cpp
 HEADERS +=  \
     helper.hpp \
     TestBackend.hpp \

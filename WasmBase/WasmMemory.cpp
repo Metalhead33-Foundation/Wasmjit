@@ -15,7 +15,6 @@
 
 namespace WASM {
 
-constexpr uint64_t WASM_PAGE_SIZE = 0x10000; // 64 KiB
 constexpr uint64_t MAX_SHARED_BYTES = 4ULL * 1024 * 1024 * 1024; // 4 GiB Cap for unbounded shared memory
 
 uint64_t wasm_memory_size(const LinearMemory* memory)
@@ -30,24 +29,27 @@ uint64_t wasm_memory_size(const LinearMemory* memory)
 	return memory->memorySize;
 }
 
-StoreOwnedMemory::StoreOwnedMemory(uint64_t initialPages, uint64_t maxPages, bool isShared, bool is64)
+StoreOwnedMemory::StoreOwnedMemory(uint64_t initialPages, uint64_t maxPages, bool isShared,
+		bool is64, uint64_t pageSize)
 {
-	// Guard against initialPages/maxPages overflow in constructor calculations
-	if (initialPages > (UINT64_MAX / WASM_PAGE_SIZE)) {
+	// Guard against initialPages/maxPages overflow in constructor calculations.
+	// `pageSize` comes from a decoded MemoryType (1 or 65536); a zero page size
+	// would make every byte calculation meaningless.
+	if (pageSize == 0 || initialPages > (UINT64_MAX / pageSize)) {
 		throw std::invalid_argument("initialPages exceeds addressable representation limit");
 	}
 
-	uint64_t initialBytes = initialPages * WASM_PAGE_SIZE;
+	const uint64_t initialBytes = initialPages * pageSize;
 
 	if (maxPages == UINT64_MAX) {
 		memory.memoryMax = UINT64_MAX;
-	} else if (maxPages > (UINT64_MAX / WASM_PAGE_SIZE)) {
-		// A memory64 declaration can request up to 2^48 pages (2^64 bytes),
-		// which is not representable as a byte count. Treat it as unbounded;
-		// an actual grow past the address space still fails at allocation.
+	} else if (maxPages > (UINT64_MAX / pageSize)) {
+		// A memory64 declaration can request up to 2^64 bytes, which is not
+		// representable as a byte count. Treat it as unbounded; an actual grow
+		// past the address space still fails at allocation.
 		memory.memoryMax = UINT64_MAX;
 	} else {
-		memory.memoryMax = maxPages * WASM_PAGE_SIZE;
+		memory.memoryMax = maxPages * pageSize;
 	}
 
 	// Invariant: initial size must never exceed max size
@@ -57,6 +59,7 @@ StoreOwnedMemory::StoreOwnedMemory(uint64_t initialPages, uint64_t maxPages, boo
 
 	memory.isShared   = isShared;
 	memory.is64       = is64;
+	memory.pageSize   = pageSize;
 	memory.memorySize = 0; // Commits set the actual size explicitly
 	memory.memoryBase = nullptr;
 	memory.hostData   = this;
@@ -74,10 +77,11 @@ LinearMemory* StoreOwnedMemory::getMemory()
 
 // ── Private (Unshared) Linear Memory Implementation ──
 
-PrivateLinearMemory::PrivateLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64)
-	: StoreOwnedMemory(initialPages, maxPages, false, is64)
+PrivateLinearMemory::PrivateLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64,
+		uint64_t pageSize)
+	: StoreOwnedMemory(initialPages, maxPages, false, is64, pageSize)
 {
-	uint64_t initialBytes = initialPages * WASM_PAGE_SIZE;
+	const uint64_t initialBytes = initialPages * pageSize;
 
 	if (initialBytes > std::numeric_limits<size_t>::max()) {
 		throw std::bad_alloc();
@@ -92,9 +96,10 @@ bool PrivateLinearMemory::growMemory(uint64_t deltaPages)
 {
 	if (deltaPages == 0) return true; // Conformance: zero growth always succeeds
 
-	if (deltaPages > (UINT64_MAX / WASM_PAGE_SIZE)) return false;
+	const uint64_t pageSize = memory.pageSize;
+	if (pageSize == 0 || deltaPages > (UINT64_MAX / pageSize)) return false;
 
-	const uint64_t deltaBytes = deltaPages * WASM_PAGE_SIZE;
+	const uint64_t deltaBytes = deltaPages * pageSize;
 	if (UINT64_MAX - memory.memorySize < deltaBytes) return false;
 
 	const uint64_t newSize = memory.memorySize + deltaBytes;
@@ -162,16 +167,17 @@ bool SharedLinearMemory::platformCommitMemory(size_t newBytes)
 	return true;
 }
 
-SharedLinearMemory::SharedLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64)
-	: StoreOwnedMemory(initialPages, maxPages, true, is64), reservedRegion(nullptr), reservedBytes(0)
+SharedLinearMemory::SharedLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64,
+		uint64_t pageSize)
+	: StoreOwnedMemory(initialPages, maxPages, true, is64, pageSize), reservedRegion(nullptr), reservedBytes(0)
 {
 	// 1. Calculate and reconcile true maximum reserved capacity. An unbounded
 	// (or unrepresentable, memory64-style) maximum is capped at MAX_SHARED_BYTES.
 	uint64_t requestedMaxBytes;
-	if (maxPages == UINT64_MAX || maxPages > (UINT64_MAX / WASM_PAGE_SIZE)) {
+	if (maxPages == UINT64_MAX || maxPages > (UINT64_MAX / pageSize)) {
 		requestedMaxBytes = MAX_SHARED_BYTES;
 	} else {
-		requestedMaxBytes = maxPages * WASM_PAGE_SIZE;
+		requestedMaxBytes = maxPages * pageSize;
 	}
 	uint64_t capBytes = std::min(requestedMaxBytes, MAX_SHARED_BYTES);
 
@@ -190,7 +196,7 @@ SharedLinearMemory::SharedLinearMemory(uint64_t initialPages, uint64_t maxPages,
 	memory.memoryBase = static_cast<uint8_t*>(reservedRegion);
 
 	// 3. Perform Initial Commit
-	uint64_t initialBytes = initialPages * WASM_PAGE_SIZE;
+	const uint64_t initialBytes = initialPages * pageSize;
 	if (initialBytes > 0) {
 		if (!platformCommitMemory(static_cast<size_t>(initialBytes))) {
 			platformDealloc();
@@ -210,9 +216,10 @@ bool SharedLinearMemory::growMemory(uint64_t deltaPages)
 
 	std::scoped_lock lock(mutex);
 
-	if (deltaPages > (UINT64_MAX / WASM_PAGE_SIZE)) return false;
+	const uint64_t pageSize = memory.pageSize;
+	if (pageSize == 0 || deltaPages > (UINT64_MAX / pageSize)) return false;
 
-	const uint64_t deltaBytes = deltaPages * WASM_PAGE_SIZE;
+	const uint64_t deltaBytes = deltaPages * pageSize;
 	if (UINT64_MAX - memory.memorySize < deltaBytes) return false;
 
 	const uint64_t newSize = memory.memorySize + deltaBytes;

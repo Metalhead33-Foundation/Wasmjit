@@ -17,7 +17,7 @@ stack, and throws `std::runtime_error` on the first failed rule.
 
 | Layer | Rules |
 | --- | --- |
-| Module | type indices name function types; function/code count consistency; data-count consistency; start function `[] -> []`; duplicate export names and export index bounds; memory/table limits (min ≤ max, memory32 ≤ 65536 pages, shared memories declare a max, table32 fits in 32 bits); tag types have no results; global/table initialisers and active element/data offsets (typed constant expressions); element/table type agreement, element item expressions and table initialiser typing; selected functions in element segments; empty modules |
+| Module | type indices name function types; function/code count consistency; data-count consistency; start function `[] -> []`; duplicate export names and export index bounds; memory/table limits (min ≤ max, unknown limits flags, a byte-budget page cap — 65536 pages at 64 KiB or 2^32 at one byte — shared memories declare a max, table32 fits in 32 bits); tag types have no results; global/table initialisers and active element/data offsets (typed constant expressions); element/table type agreement, element item expressions and table initialiser typing; selected functions in element segments; empty modules |
 | Control | `block`/`loop`/`if`/`else`/`end` with typed params/results and exact stack height; `br`/`br_if`/`br_table` (operand values checked against every target; the unreachable stack is polymorphic)/`return`; `call`/`call_indirect`/`call_ref`; tail calls including result-type matching; `try_table` catch labels (payload, `exnref`, arity); `br_on_null`/`br_on_non_null`/`br_on_cast`/`br_on_cast_fail` |
 | Numeric | i32/i64/f32/f64 unary, binary, comparison, conversion, sign-extension and saturating forms, with exact operand/result types |
 | Memory | declared index type (`i32`/`i64`), alignment ≤ natural, 32-bit offset range, loads/stores, `memory.size/grow/init/copy/fill` |
@@ -48,7 +48,7 @@ cost is coverage, measured below, not correctness.
 | `assert_uninstantiable` | 27 | **27** (26 rejected + 1 start trap) | 0 |
 | **total** | **2382** | **2382** | **0** |
 
-The default suite is **9353 assertions / 366 test cases, all green** (the
+The default suite is **10269 assertions / 380 test cases, all green** (the
 curated list holds 193 of the 257 scripts, 61 of them re-curated when the
 validator landed, plus `start.wast`). The
 strict run is **fully green** as well: every one of the 2,382 binary negative

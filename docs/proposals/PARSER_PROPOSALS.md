@@ -1,8 +1,8 @@
 # Compilation Hints and Relaxed Dead-Code Validation — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 1 — both proposals are
-unimplemented as such. The parser ignores all compilation-hint sections, and the
-validator has an unreachable-stack model but does not claim the relaxed
+Status: design note / implementation reference (revision 2 — PP-1 is
+implemented: the three compilation-hint sections parse into inert metadata. The
+validator still has an unreachable-stack model and does not claim the relaxed
 dead-code algorithm.)
 
 Audience: anyone touching `WasmModule` (custom sections), `WasmValidator`,
@@ -75,14 +75,20 @@ gives an algorithm that skips pushes and pops while unreachable.
 
 ## 4. What we have implemented today
 
-- `Module::processCustomSection` recognizes `name` and
-  `metadata.code.branch_hint`; every other custom section is skipped by its
-  section size. There is no parser or storage for `compilation_priority`,
-  `instr_freq` or `call_targets`.
-- The branch-hint parser already demonstrates the shared wire shape:
-  function index, a vector of `(offset, length, payload)` records. Reusing that
-  decoder for the new sections is straightforward; acting on the hints is not
-  required.
+- `Module::processCustomSection` recognizes `name`,
+  `metadata.code.branch_hint`, `metadata.code.compilation_priority`,
+  `metadata.code.instr_freq` and `metadata.code.call_targets`; every other
+  custom section is skipped by its section size.
+- The three compilation-hint families share the branch-hint wire shape
+  (function index, a vector of `(offset, length, payload)` records) and are
+  parsed by `Module::processCompilationHintSection` into
+  `compilationPriorityHints`, `instructionFrequencyHints` and
+  `callTargetHints` (`CompilationHint { offset, payload }`). The payload is kept
+  raw — the families differ only in how a consumer would read it — and nothing
+  in the engine consults it (PPD1/PPD4).
+- The parser copies the rest of the section into a bounded buffer before
+  decoding, so a declared hint length can never read past the section
+  (`docs/SAFETY.md` §2.2) and a hostile hint can at most be rejected.
 - `WasmValidator` tracks an `unreachable` flag on each control frame.
   `popAny()` returns "unknown" when the operand stack is at the frame height and
   the frame is unreachable, so some pops are already skipped. `br_table` has a
@@ -99,17 +105,17 @@ gives an algorithm that skips pushes and pops while unreachable.
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| PP1 | **Compilation hints are ignored.** `processCustomSection` only dispatches `metadata.code.branch_hint`; the three sections are skipped without storage or policy. | `WasmModule.cpp` (`processCustomSection`); `WasmModule.hpp` has only branch hints. | Low (hints are optional) |
+| ~~PP1~~ | ~~**Compilation hints are ignored.**~~ **Done (PP-1):** all three families parse into inert, section-bounded metadata; no consumer acts on them. | `WasmModule.cpp` (`processCompilationHintSection`); `WasmModule.hpp` | Closed |
 | PP2 | **The relaxed dead-code algorithm is not explicitly adopted or measured.** The validator's unreachable stack is close, but handlers still push values and perform type checks after an unreachable point; there is no dedicated conformance claim. | `WasmValidator.cpp` (`popAny`, `setUnreachable`, `endBlock`, instruction handlers); `VALIDATION.md` calls the stack polymorphic. | Medium |
-| PP3 | **No focused coverage.** `unreached-valid` exercises existing unreachable typing, but there is no fixture for the proposal's "skip every pop-dependent check" cases or for the three hint sections. | `Test/wast_supported.txt`; `Test/main.cpp`; no hint fixture. | Medium |
+| PP3 | **No relaxed-dead-code coverage.** The three hint sections have a hand-built fixture, but there is no fixture for the proposal's "skip every pop-dependent check" cases. | `Test/main.cpp` (hint fixture); no dead-code fixture. | Medium |
 
 
 ## 6. Where we can and should play fast and loose
 
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
-| PPD1 | **Ignore compilation hints by default.** Parse them only if a consumer asks, or skip the whole section by size. | §3: hints have no semantics and no required action. | Forward compatibility without a second heuristic layer. |
-| PPD2 | **Keep branch hints as the only parsed `metadata.code.*` family** until a consumer needs the others. | §3: each hint family is independent and optional. | No dead storage or interpretation. |
+| PPD1 | **Parse compilation hints but never act on them.** The records are stored as inert metadata; no codegen path reads them. | §3: hints have no semantics and no required action. | Forward compatibility without a second heuristic layer. |
+| PPD2 | **Store the payload bytes without decoding each family** (a priority byte, a frequency byte, or callee/percentage pairs). | §3: each hint family is independent and optional. | No speculative interpretation; a consumer can decode what it needs. |
 | PPD3 | **Keep validation conservative until a concrete dead-code fixture fails.** | §3: relaxation is permitted, not required; a stricter validator still accepts all reachable-valid modules. | No accidental acceptance of a malformed reachable path. |
 | PPD4 | **Never let a hint change decoding, validation or results.** | §3: hints are non-semantic; `SMALL_PROPOSALS.md` SPD3 already uses this rule for branch hints. | A malformed or hostile hint can at most be ignored. |
 
@@ -121,9 +127,9 @@ substitute for the actual function index/offset validation.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **PP-1 — Compilation hints** | Reuse the branch-hint record decoder for `compilation_priority`, `instr_freq` and `call_targets`; store them as inert metadata. Do not change codegen. | PP1 | A hand-built module with all three sections parses; results are unchanged with and without the sections. |
+| **PP-1 — Compilation hints** | ✅ `processCompilationHintSection` parses the shared record shape into the three inert maps with section-bounded lengths; results are unchanged with and without the sections. | PP1 | Done: the hand-built three-section module parses and still returns 42. |
 | **PP-2 — Relaxed dead code** | Adopt the proposal's skip-pops/pushes rule in the validator's unreachable path, keeping syntactic checks, and add the proposal's edge fixtures. | PP2 | The relaxed fixture accepts a type-stack-dependent operation in dead code while still rejecting a bad immediate or label. |
-| **PP-3 — Tests** | Add a marker/instrumented fixture for hint parsing and a differential fixture for dead code. | PP3 | The tests fail if a hint changes results or if a syntactic check is skipped. |
+| **PP-3 — Tests** | ◑ The hint fixture is in place (with and without the sections, plus an over-long-length rejection); the differential dead-code fixture is not. | PP3 | Partially done: the hint test fails if a hint changes results; the relaxed/conservative differential is still missing. |
 
 PP-1 is optional in practice; PP-2 is only worth doing if a real module or a
 curated proposal script needs it, since the current validator already accepts
@@ -136,12 +142,12 @@ curated proposal script needs it, since the current validator already accepts
 | Script / fixture | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
 | `unreached-valid` | existing | existing | existing | curated; exercises current unreachable typing, not the proposal's full relaxed algorithm |
-| compilation-hint sections | — | — | — | no script or manual fixture; sections are currently skipped |
+| `compilation hints parse as inert metadata and change no results` | 25 assertions | 0 | 0 | all three sections parse; results are identical with and without them |
+| `a compilation hint cannot claim bytes beyond its section` | 1 assertion | 0 | 0 | a declared length larger than the section is rejected (SAFETY) |
 | current `metadata.code.branch_hint` | existing | existing | existing | branch hints are parsed and deliberately non-semantic (`SMALL_PROPOSALS.md` §4) |
 
-Reading: the branch-hint path is the reusable decoder, not evidence for the
-compilation-hint proposal. No test currently distinguishes relaxed from
-conservative dead-code validation.
+Reading: the hint fixture grades PP-1, including the bounded-length rule. No
+test yet distinguishes relaxed from conservative dead-code validation.
 
 ## 9. References
 
@@ -154,8 +160,10 @@ conservative dead-code validation.
   [`ANNOTATIONS.md`](ANNOTATIONS.md) (the text-format annotation grammar),
   [`INSTRUMENT_TRACING.md`](INSTRUMENT_TRACING.md),
   [`VALIDATION.md`](../VALIDATION.md), [`ABI.md`](../ABI.md); sources
-  `WasmBase/WasmModule.hpp` (`branchHintsByFuncIndex`),
+  `WasmBase/WasmModule.hpp` (`branchHintsByFuncIndex`,
+  `compilationPriorityHints`, `instructionFrequencyHints`, `callTargetHints`),
   `WasmBase/WasmModule.cpp` (`processCustomSection`,
-  `processBranchHintSection`), `WasmBase/WasmValidator.cpp`
-  (`popAny`, `setUnreachable`, `dispatchBrTable`), `Test/wast_supported.txt`.
+  `processBranchHintSection`, `processCompilationHintSection`),
+  `WasmBase/WasmValidator.cpp` (`popAny`, `setUnreachable`, `dispatchBrTable`),
+  `Test/wast_supported.txt`.
 

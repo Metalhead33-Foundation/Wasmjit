@@ -153,7 +153,7 @@ actually does.
 | PG5 | **Heading wording drifts** from the canonical strings in `SIMD.md`, `THREADS.md`, `GC.md` and `COMPONENT_MODEL.md`. Sanctioned by §3, but must be recorded or a literal reader calls it a defect. | §8 matrix. | Informational |
 | PG6 | **Two notes append a tenth section** — `GC.md` §10 "Beyond 3.0", `COMPONENT_MODEL.md` §9 "How this relates to the other notes". Legitimate, but outside a literal §2.2. | §8 matrix. | Low |
 | PG7 | **`SMALL_PROPOSALS.md` uses the grouped variant:** §2–§4 are one proposal each, with demands / non-demands / implemented / gaps embedded as bold paragraphs, and no top-level §3/§4/§5. A one-note-per-proposal reading of §2.2 is wrong for it. | `SMALL_PROPOSALS.md` §2–§5. | Low |
-| PG8 | **Nothing enforces the shape.** No checklist or grep test checks that a new note has front matter and §1…§9; drift is caught by reading. | `TESTING.md` documents only the Catch2/wast workflows; no structural check exists. | Medium |
+| ~~PG8~~ | ~~**Nothing enforces the shape.**~~ **Done (PM-3):** `Test/ProposalDocsTests.cpp` checks the front matter, the §1 map ↔ heading agreement and the References section for every note (`TESTING.md` "Proposal-note structural check"). | `Test/ProposalDocsTests.cpp`; `Test/WasmJit '[docs]'` | Closed |
 | PG9 | **Status/revision is duplicated** in each note's front matter and in the `README.md` index; the two can disagree. | `README.md` "Proposal notes" vs each note's `Status:`. | Medium |
 
 ## 6. Where we can and should play fast and loose
@@ -168,7 +168,8 @@ actually does.
 
 Guardrails (things that must stay true):
 
-- The §1 map must name the sections that actually follow it.
+- The §1 map must name the sections that actually follow it (enforced by the
+  `[docs]` suite; `TESTING.md` "Proposal-note structural check").
 - Every §5 gap must have an ID and be either closed by a §7 milestone (**Closes**)
   or explicitly triaged as not-worth-closing.
 - Every §6 deviation must cite the §3 freedom (or `ABI.md`) that makes it safe.
@@ -182,7 +183,7 @@ Guardrails (things that must stay true):
 | **PM-0 — Re-cut this document** | ✅ Rewrite `PROPOSALS.md` into the §2 shape: front matter, §1 map, §2–§9, IDs. | PG1, PG2, PG3, PG4 | Done: this file's §1 map matches its own §2–§9, and §4/§8 match the folder. |
 | **PM-1 — Record the aliases** | ✅ List the sanctioned heading and section-count variants in §3/§6/§8. | PG5, PG6, PG7 | Done: §8 classifies every note (all thirty-four). |
 | **PM-2 — Keep the survey current** | Update §4's prefix table and §8's matrix whenever a note is added or a section appears. | PG5, PG9 | A new note appears in both tables in the same change that adds it. |
-| **PM-3 — Optional structural lint** | Add a `grep`-based check (documented in `TESTING.md`) that each `docs/proposals/*.md` has front matter and §1…§9, allowing the §3 exceptions. | PG8 | The check runs and passes, or is explicitly waived. |
+| **PM-3 — Optional structural lint** | ✅ `Test/ProposalDocsTests.cpp` (`[docs]`) checks front matter, §1 map ↔ headings and References; documented in `TESTING.md`. The map-based rule admits every §3 exception without a hard-coded list. | PG8 | Done: `./Test/WasmJit '[docs]'` runs and passes. |
 
 Guardrail: keep this index a *description* of the notes, not a second copy of
 their status — the completeness figures live in `README.md`, and the

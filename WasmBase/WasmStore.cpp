@@ -71,13 +71,14 @@ Store::~Store()
 		delete[] exception.storage;
 }
 
-Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPages, bool isShared, bool is64)
+Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPages, bool isShared,
+		bool is64, uint64_t pageSize)
 {
 	// Charge the initial commit against the process-wide budget (guardrail: an
 	// absurd initial size must fail loudly, not allocate).
-	if (initialPages > (UINT64_MAX / 0x10000ull))
+	if (pageSize == 0 || initialPages > (UINT64_MAX / pageSize))
 		throw std::runtime_error("linear memory initial size is not representable");
-	const uint64_t initialBytes = initialPages * 0x10000ull;
+	const uint64_t initialBytes = initialPages * pageSize;
 	if (!reserveBytes(initialBytes))
 		throw std::runtime_error(
 			"linear memory exceeds the allocation budget (see WASMJIT_MAX_TOTAL_BYTES)");
@@ -86,8 +87,8 @@ Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPag
 
 	try {
 		std::unique_ptr<StoreOwnedMemory> memory = isShared
-			? std::unique_ptr<StoreOwnedMemory>(std::make_unique<SharedLinearMemory>(initialPages, maxPages, is64))
-			: std::unique_ptr<StoreOwnedMemory>(std::make_unique<PrivateLinearMemory>(initialPages, maxPages, is64));
+			? std::unique_ptr<StoreOwnedMemory>(std::make_unique<SharedLinearMemory>(initialPages, maxPages, is64, pageSize))
+			: std::unique_ptr<StoreOwnedMemory>(std::make_unique<PrivateLinearMemory>(initialPages, maxPages, is64, pageSize));
 
 		// The unique_ptr keeps the StoreOwnedMemory at a stable address, so the
 		// LinearMemory* handed out below stays valid across later insertions.
@@ -120,9 +121,10 @@ bool Store::growMemory(LinearMemory* memory, uint64_t deltaPages)
 		return false;
 	if (deltaPages == 0)
 		return true; // conformance: a zero growth always succeeds
-	if (deltaPages > (UINT64_MAX / 0x10000ull))
+	const uint64_t pageSize = memory->pageSize;
+	if (pageSize == 0 || deltaPages > (UINT64_MAX / pageSize))
 		return false;
-	const uint64_t deltaBytes = deltaPages * 0x10000ull;
+	const uint64_t deltaBytes = deltaPages * pageSize;
 
 	// Reserve *before* the allocation attempt, so a grow that would exceed the
 	// budget fails as a failed grow (-1) rather than ballooning the host.

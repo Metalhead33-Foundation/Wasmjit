@@ -30,6 +30,7 @@
 #include "WasmBase/WasmNativeImport.hpp"
 #include "WasmBase/WasmExn.hpp"
 #include "WasmBase/WasmOpcode.hpp"
+#include "WasmBase/WasmProfile.hpp"
 #include "WasmBase/WasmStore.hpp"
 #include "WasmBase/WasmString.hpp"
 #include "WasmBase/WasmTracing.hpp"
@@ -6798,7 +6799,7 @@ TEST_CASE("i32.itt is a run-time NOP and reports its immediate at compile time")
 
 
 // ── Constant-Time rejection (docs/proposals/CONSTANT_TIME.md CT-0) ──────────
-TEST_CASE("constant-time secret types and memories are rejected with a named error")
+TEST_CASE("constant-time secret value types are rejected with a named error")
 {
 	const auto expectParseRejection = [](const std::vector<uint8_t>& bytes, const char* needle) {
 		bool threw = false;
@@ -6819,11 +6820,9 @@ TEST_CASE("constant-time secret types and memories are rejected with a named err
 		0x01, 0x06, 0x01, 0x60, 0x01, 0x75, 0x01, 0x7f};
 	expectParseRejection(secretType, "secret value type s32");
 
-	// A memory whose provisional secret flag (0x08) is set: rejected, not
-	// silently treated as an ordinary public memory.
-	std::vector<uint8_t> secretMemory = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-		0x05, 0x03, 0x01, 0x08, 0x00};
-	expectParseRejection(secretMemory, "secret memory");
+	// The provisional secret-*memory* marker is withdrawn: limits flag bit 3 is
+	// the standard custom-page-size flag now (CUSTOM_PAGE_SIZES.md CPS-1), so
+	// `0x08` must be decoded as a page-size memory, never as a secret one.
 }
 
 
@@ -7488,4 +7487,1005 @@ TEST_CASE("a wrapped native import still receives the caller's VMContext")
 	WASM::callCallable<void>(*run);
 	WASM::callCallable<void>(*run);
 	REQUIRE(calls == 2);
+}
+
+// ── Language profiles (docs/proposals/PROFILES.md PR-1) ─────────────────────
+TEST_CASE("the engine declares the full profile")
+{
+	// The engine runs the full profile `{}` and claims nothing narrower:
+	// deterministic floats (PR-3) and the scalar vector gate (PR-4) do not
+	// exist yet, and a false claim would be worse than a missing one (PRD2).
+	REQUIRE(WASM::supportedProfile() == WASM::Profile::Full);
+	REQUIRE(WASM::supportsProfile(WASM::Profile::Full));
+	REQUIRE_FALSE(WASM::supportsProfile(WASM::Profile::Deterministic));
+	REQUIRE_FALSE(WASM::supportsProfile(WASM::Profile::Scalar));
+	REQUIRE(std::string(WASM::profileName(WASM::Profile::Full)) == "full");
+	REQUIRE(std::string(WASM::profileName(WASM::Profile::Deterministic)) == "deterministic");
+	REQUIRE(std::string(WASM::profileName(WASM::Profile::Scalar)) == "scalar");
+}
+
+
+// ── Compilation hints (docs/proposals/PARSER_PROPOSALS.md PP-1) ─────────────
+TEST_CASE("compilation hints parse as inert metadata and change no results")
+{
+	// (module (func (export "f") (result i32) i32.const 42))
+	const std::vector<uint8_t> base = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x01,0x05,0x01,0x60,0x00,0x01,0x7f,
+		0x03,0x02,0x01,0x00,
+		0x07,0x05,0x01,0x01,'f',0x00,0x00,
+		0x0a,0x06,0x01,0x04,0x00,0x41,0x2a,0x0b
+	};
+
+	const auto parse = [](const std::vector<uint8_t>& bytes) {
+		std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+		Euph::Io::ConstBufferDevice device(span);
+		auto artifact = WASM::Artifact::parse(device);
+		REQUIRE(artifact != nullptr);
+		WASM::Module* module = artifact->asCoreModule();
+		REQUIRE(module != nullptr);
+		return std::make_pair(std::move(artifact), module);
+	};
+
+	auto plain = parse(base);
+	REQUIRE(plain.second->compilationPriorityHints.empty());
+	REQUIRE(plain.second->instructionFrequencyHints.empty());
+	REQUIRE(plain.second->callTargetHints.empty());
+
+	// The three custom sections, each with one record for function 0. The
+	// payload bytes are the proposal's value encodings (priority 3, log2
+	// frequency 0x20 = 1.0, and one callee at 100 %).
+	std::vector<uint8_t> annotated = base;
+	const std::vector<uint8_t> sections = {
+		// metadata.code.compilation_priority: (0, len 1, 3)
+		0x00,0x29,0x22,
+		'm','e','t','a','d','a','t','a','.','c','o','d','e','.',
+		'c','o','m','p','i','l','a','t','i','o','n','_','p','r','i','o','r','i','t','y',
+		0x01,0x00,0x01,0x00,0x01,0x03,
+		// metadata.code.instr_freq: (1, len 1, 0x20)
+		0x00,0x1f,0x18,
+		'm','e','t','a','d','a','t','a','.','c','o','d','e','.','i','n','s','t','r','_','f','r','e','q',
+		0x01,0x00,0x01,0x01,0x01,0x20,
+		// metadata.code.call_targets: (2, len 2, func 1 at 100 %)
+		0x00,0x22,0x1a,
+		'm','e','t','a','d','a','t','a','.','c','o','d','e','.','c','a','l','l','_','t','a','r','g','e','t','s',
+		0x01,0x00,0x01,0x02,0x02,0x01,0x64
+	};
+	annotated.insert(annotated.end(), sections.begin(), sections.end());
+
+	auto withHints = parse(annotated);
+	REQUIRE(withHints.second->compilationPriorityHints.size() == 1);
+	REQUIRE(withHints.second->instructionFrequencyHints.size() == 1);
+	REQUIRE(withHints.second->callTargetHints.size() == 1);
+
+	const auto& priority = withHints.second->compilationPriorityHints.at(0);
+	REQUIRE(priority.size() == 1);
+	REQUIRE(priority[0].offset == 0);
+	REQUIRE(priority[0].payload == std::vector<uint8_t>{0x03});
+
+	const auto& frequency = withHints.second->instructionFrequencyHints.at(0);
+	REQUIRE(frequency.size() == 1);
+	REQUIRE(frequency[0].offset == 1);
+	REQUIRE(frequency[0].payload == std::vector<uint8_t>{0x20});
+
+	const auto& targets = withHints.second->callTargetHints.at(0);
+	REQUIRE(targets.size() == 1);
+	REQUIRE(targets[0].offset == 2);
+	REQUIRE(targets[0].payload == (std::vector<uint8_t>{0x01, 0x64}));
+
+	// Inert means inert: the same module with and without the sections has the
+	// same observable behaviour (PPD4).
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto plainInstance = backend->instantiator().instantiate(*plain.second, imports);
+	auto annotatedInstance = backend->instantiator().instantiate(*withHints.second, imports);
+	REQUIRE(plainInstance.get() != nullptr);
+	REQUIRE(annotatedInstance.get() != nullptr);
+
+	auto plainF = plainInstance->exportedFunction("f");
+	auto annotatedF = annotatedInstance->exportedFunction("f");
+	REQUIRE(plainF.has_value());
+	REQUIRE(annotatedF.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*plainF) == 42);
+	REQUIRE(WASM::callCallable<int32_t>(*annotatedF) == 42);
+}
+
+TEST_CASE("a compilation hint cannot claim bytes beyond its section")
+{
+	// A record whose declared length is larger than the section payload must be
+	// rejected, never read into the next section (docs/SAFETY.md §2.2).
+	const std::vector<uint8_t> bytes = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x00,0x1e,0x18,
+		'm','e','t','a','d','a','t','a','.','c','o','d','e','.','i','n','s','t','r','_','f','r','e','q',
+		0x01,0x00,0x01,0x00,0x7f
+	};
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	REQUIRE_THROWS_WITH(WASM::Artifact::parse(device),
+		Catch::Matchers::ContainsSubstring("claims more bytes than the section has left"));
+}
+
+
+// ── Custom page sizes (docs/proposals/CUSTOM_PAGE_SIZES.md CPS-1…CPS-4) ─────
+TEST_CASE("custom page sizes: one-byte pages size and grow are byte-exact")
+{
+	// (module
+	//   (memory (export "mem") 3 5 (pagesize 1))
+	//   (func (export "size") (result i32) memory.size)
+	//   (func (export "grow") (param i32) (result i32) local.get 0 memory.grow)
+	//   (func (export "load") (param i32) (result i32) local.get 0 i32.load8_u)
+	//   (func (export "store") (param i32 i32)
+	//     local.get 0 local.get 1 i32.store8))
+	const std::vector<uint8_t> bytes = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x01,0x0f,0x03,0x60,0x01,0x7f,0x01,0x7f,0x60,0x02,0x7f,0x7f,0x00,
+		0x60,0x00,0x01,0x7f,
+		0x03,0x05,0x04,0x02,0x00,0x00,0x01,
+		// flags 0x09 = max + page-size exponent; min 3, max 5, p 0 (1 byte/page)
+		0x05,0x05,0x01,0x09,0x03,0x05,0x00,
+		0x07,0x24,0x05,
+		0x03,'m','e','m',0x02,0x00,
+		0x04,'s','i','z','e',0x00,0x00,
+		0x04,'g','r','o','w',0x00,0x01,
+		0x04,'l','o','a','d',0x00,0x02,
+		0x05,'s','t','o','r','e',0x00,0x03,
+		0x0a,0x1f,0x04,
+		0x04,0x00,0x3f,0x00,0x0b,
+		0x06,0x00,0x20,0x00,0x40,0x00,0x0b,
+		0x07,0x00,0x20,0x00,0x2d,0x00,0x00,0x0b,
+		0x09,0x00,0x20,0x00,0x20,0x01,0x3a,0x00,0x00,0x0b
+	};
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+	REQUIRE(parsed->memories.size() == 1);
+	REQUIRE(parsed->memories[0].pageSize == 1);
+	REQUIRE(parsed->memories[0].limits.initial == 3);
+	REQUIRE(parsed->memories[0].limits.maximum == 5);
+
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+	REQUIRE(instance->context()->memoryCount == 1);
+	// Three pages of one byte are exactly three bytes, not 192 KiB.
+	REQUIRE(instance->context()->memories[0]->memorySize == 3);
+	REQUIRE(instance->context()->memories[0]->pageSize == 1);
+
+	auto size = instance->exportedFunction("size");
+	auto grow = instance->exportedFunction("grow");
+	auto load = instance->exportedFunction("load");
+	auto store = instance->exportedFunction("store");
+	REQUIRE(size.has_value());
+	REQUIRE(grow.has_value());
+	REQUIRE(load.has_value());
+	REQUIRE(store.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*size) == 3);
+
+	WASM::callCallable<void>(*store, int32_t(0), int32_t(0xAA));
+	REQUIRE(WASM::callCallable<int32_t>(*load, int32_t(0)) == 0xAA);
+	WASM::callCallable<void>(*store, int32_t(2), int32_t(0xBB));
+	REQUIRE(WASM::callCallable<int32_t>(*load, int32_t(2)) == 0xBB);
+
+	// Byte-exact bound: index 3 is already outside the three-byte memory.
+	const auto expectOutOfBounds = [&load](int32_t index) {
+		bool trapped = false;
+		WASM::TrapKind kind = WASM::TrapKind::Internal;
+		try {
+			(void)WASM::callCallable<int32_t>(*load, index);
+		} catch (const WASM::Trap& trap) {
+			trapped = true;
+			kind = trap.kind();
+		}
+		REQUIRE(trapped);
+		REQUIRE(kind == WASM::TrapKind::OutOfBoundsMemoryAccess);
+	};
+	expectOutOfBounds(3);
+
+	// Two one-byte pages of growth are exactly two bytes.
+	REQUIRE(WASM::callCallable<int32_t>(*grow, int32_t(2)) == 3);
+	REQUIRE(WASM::callCallable<int32_t>(*size) == 5);
+	REQUIRE(instance->context()->memories[0]->memorySize == 5);
+
+	WASM::callCallable<void>(*store, int32_t(4), int32_t(0xCC));
+	REQUIRE(WASM::callCallable<int32_t>(*load, int32_t(4)) == 0xCC);
+	expectOutOfBounds(5);
+
+	// The declared maximum is five pages, so one more fails and changes nothing.
+	REQUIRE(WASM::callCallable<int32_t>(*grow, int32_t(1)) == -1);
+	REQUIRE(WASM::callCallable<int32_t>(*size) == 5);
+}
+
+TEST_CASE("custom page sizes: a page-size mismatch does not satisfy a memory import")
+{
+	// (module (import "m" "mem" (memory 0 1 (pagesize 1))))
+	const std::vector<uint8_t> importerBytes = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x02,0x0b,0x01,0x01,'m',0x03,'m','e','m',0x02,0x08,0x00,0x00
+	};
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(importerBytes.data()), importerBytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* importer = artifact->asCoreModule();
+	REQUIRE(importer != nullptr);
+	REQUIRE(importer->importMemories.size() == 1);
+	REQUIRE(importer->importMemories[0].memory.pageSize == 1);
+
+	auto backend = TestBackend::create();
+	WASM::Store& store = WASM::Store::global();
+
+	// The same limits at 64 KiB do not match: page sizes compare exactly and
+	// there is no page-size subtyping (CPS-3/CPSD3).
+	WASM::RegistryImportResolver wrongPageSize;
+	wrongPageSize.registerMemory("m", "mem",
+		store.memory(store.createLinearMemory(0, 1, false, false, 0x10000)));
+	REQUIRE_THROWS(backend->instantiator().instantiate(*importer, wrongPageSize));
+
+	// The matching page size links, and the instance borrows that memory.
+	WASM::RegistryImportResolver rightPageSize;
+	WASM::LinearMemory* provided =
+		store.memory(store.createLinearMemory(0, 1, false, false, 1));
+	rightPageSize.registerMemory("m", "mem", provided);
+	auto instance = backend->instantiator().instantiate(*importer, rightPageSize);
+	REQUIRE(instance.get() != nullptr);
+	REQUIRE(instance->context()->memoryCount == 1);
+	REQUIRE(instance->context()->memories[0] == provided);
+	REQUIRE(instance->context()->memories[0]->pageSize == 1);
+}
+
+TEST_CASE("custom page sizes: an unsupported page-size exponent is rejected at load")
+{
+	// (memory 0 (pagesize 256)): only exponents 0 and 16 are defined.
+	const std::vector<uint8_t> bytes = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x05,0x04,0x01,0x08,0x00,0x08
+	};
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	REQUIRE_THROWS_WITH(WASM::Artifact::parse(device),
+		Catch::Matchers::ContainsSubstring("unsupported page-size exponent 8"));
+}
+
+
+// ── Native imports: strings, host-owned references and exceptions ────────────
+//
+// These pin the two-way boundary described in docs/ABI.md: a native import is
+// called by generated code with the caller's VMContext, reference values are
+// pointer-sized words, and the failure channels (Wasm exception, trap, C++
+// exception) stay disjoint.
+
+namespace {
+
+// Strings cross the boundary as the engine's `stringref` ABI: a `void*` to a
+// Store-owned StringObject (LibJitTypeTranslation maps StringRef to void*).
+const void* g_nativeHostString = nullptr;
+std::string g_nativeStringSeen;
+const void* g_nativeStringPointer = nullptr;
+int g_nativeStringCalls = 0;
+int g_nativeMakeCalls = 0;
+
+int32_t nativeMeasureString(WASM::VMContext*, void* raw)
+{
+	++g_nativeStringCalls;
+	g_nativeStringPointer = raw;
+	std::string utf8;
+	if (raw == nullptr
+			|| !WASM::Store::global().strings().copyToUtf8(
+					static_cast<const WASM::StringObject*>(raw), utf8))
+		WASM::trap(WASM::TrapKind::InvalidString, "native import got a non-UTF-8 string");
+	g_nativeStringSeen = std::move(utf8);
+	return static_cast<int32_t>(g_nativeStringSeen.size());
+}
+
+void* nativeMakeString(WASM::VMContext*)
+{
+	++g_nativeMakeCalls;
+	return const_cast<void*>(g_nativeHostString);
+}
+
+} // namespace
+
+TEST_CASE("native imports exchange stringrefs with the guest")
+{
+	// type 0: (stringref) -> i32; type 1: () -> stringref; type 2: () -> i32.
+	// imports: env.measure (type 0), env.make (type 1).
+	// defined: echo (2), make_and_measure (3), literal (4).
+	StringFixtureBuilder module;
+	module.section(0x01, {0x03,
+		0x60, 0x01, 0x67, 0x01, 0x7f,
+		0x60, 0x00, 0x01, 0x67,
+		0x60, 0x00, 0x01, 0x7f});
+	module.section(0x02, {0x02,
+		0x03, 'e','n','v', 0x07, 'm','e','a','s','u','r','e', 0x00, 0x00,
+		0x03, 'e','n','v', 0x04, 'm','a','k','e', 0x00, 0x01});
+	module.functions({0x00, 0x02, 0x01});
+	module.section(0x0e, {0x00, 0x01, 0x02, 'H', 'i'});
+	module.exports({{"echo", 2}, {"make_and_measure", 3}, {"literal", 4}});
+	module.code({
+		// echo: local.get 0; call 0 (import measure).
+		{0x00, 0x20, 0x00, 0x10, 0x00, 0x0b},
+		// make_and_measure: call 1 (import make); call 0 (import measure).
+		{0x00, 0x10, 0x01, 0x10, 0x00, 0x0b},
+		// literal: string.const 0.
+		{0x00, 0xfb, 0x82, 0x01, 0x00, 0x0b}
+	});
+
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device);
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+
+	WASM::RegistryImportResolver imports;
+	imports.registerFunction("env", "measure", WASM::nativeImport<&nativeMeasureString>());
+	imports.registerFunction("env", "make", WASM::nativeImport<&nativeMakeString>());
+
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto echo = instance->exportedFunction("echo");
+	auto roundTrip = instance->exportedFunction("make_and_measure");
+	auto literal = instance->exportedFunction("literal");
+	REQUIRE(echo.has_value());
+	REQUIRE(roundTrip.has_value());
+	REQUIRE(literal.has_value());
+
+	// A host-created string passed into the guest and forwarded to C++.
+	WASM::StringStore& strings = WASM::Store::global().strings();
+	bool valid = false;
+	WASM::StringObject* hostString = strings.createFromUtf8("h\xc3\xb4tel", &valid);
+	REQUIRE(valid);
+	REQUIRE(hostString != nullptr);
+	g_nativeHostString = hostString;
+	g_nativeStringSeen.clear();
+	g_nativeStringPointer = nullptr;
+	g_nativeStringCalls = 0;
+	g_nativeMakeCalls = 0;
+
+	REQUIRE(WASM::callCallable<int32_t>(*echo, static_cast<void*>(hostString)) == 6);
+	REQUIRE(g_nativeStringSeen == "h\xc3\xb4tel");
+	REQUIRE(g_nativeStringPointer == hostString);
+	REQUIRE(g_nativeStringCalls == 1);
+
+	// The host-owned string returned by an import is consumed by the guest and
+	// by a second import; the pointer itself is never copied.
+	REQUIRE(WASM::callCallable<int32_t>(*roundTrip) == 6);
+	REQUIRE(g_nativeMakeCalls == 1);
+	REQUIRE(g_nativeStringSeen == "h\xc3\xb4tel");
+	REQUIRE(g_nativeStringPointer == hostString);
+
+	// A guest-produced literal is an ordinary stringref too.
+	void* guestLiteral = WASM::callCallable<void*>(*literal);
+	REQUIRE(guestLiteral != nullptr);
+	REQUIRE(guestLiteral != static_cast<void*>(hostString));
+	REQUIRE(WASM::callCallable<int32_t>(*echo, guestLiteral) == 2);
+	REQUIRE(g_nativeStringSeen == "Hi");
+	REQUIRE(g_nativeStringCalls == 3);
+
+	// The reference-argument/result path keeps a transient count for the
+	// duration of these calls (the operand stack owns a reference while it is
+	// in flight), so the host does not assume the object dies on one release:
+	// it releases every count it can see until the Store frees the object. That
+	// proves the host's own count is real, that no release underflows, and that
+	// the Store reclaims the string (STRINGREF.md STR-8).
+	REQUIRE(strings.owns(hostString));
+	int released = 0;
+	while (strings.owns(hostString) && strings.release(hostString))
+		++released;
+	REQUIRE(released >= 1);
+	REQUIRE_FALSE(strings.owns(hostString));
+}
+
+namespace {
+
+struct NativeExceptionProbe {
+	int observes = 0;
+	int observeRefs = 0;
+	int32_t lastValue = -1;
+	bool pendingSeen = false;
+	int32_t exnPayload = -1;
+	int32_t exnTag = -2;
+};
+
+NativeExceptionProbe g_exnProbe;
+
+void nativeObserve(WASM::VMContext*, int32_t value)
+{
+	++g_exnProbe.observes;
+	g_exnProbe.lastValue = value;
+	// A caught exception's pending slot must already be clear when the catch
+	// handler runs, or this import would observe a stale exception.
+	g_exnProbe.pendingSeen = ::wasm_exn_pending() != nullptr;
+}
+
+void nativeObserveRef(WASM::VMContext*, int32_t value, void* exnRef)
+{
+	++g_exnProbe.observeRefs;
+	g_exnProbe.lastValue = value;
+	g_exnProbe.pendingSeen = ::wasm_exn_pending() != nullptr;
+	if (exnRef != nullptr) {
+		g_exnProbe.exnTag = ::wasm_exn_tag_id(exnRef);
+		// The payload follows the 16-byte header at the pointer itself; the
+		// tag's single i32 parameter has offset 0 (docs/proposals/EXCEPTIONS.md
+		// EX-3).
+		g_exnProbe.exnPayload = *static_cast<const int32_t*>(exnRef);
+	}
+}
+
+void nativeFailTrap(WASM::VMContext*)
+{
+	WASM::trap(WASM::TrapKind::OutOfBoundsMemoryAccess, "native trap");
+}
+
+void nativeFailThrow(WASM::VMContext*)
+{
+	throw std::runtime_error("native C++ failure");
+}
+
+} // namespace
+
+TEST_CASE("guest exceptions and native imports keep their channels disjoint")
+{
+	WASM::Module module = loadTestModule("native_import_exceptions");
+	g_exnProbe = NativeExceptionProbe{};
+	REQUIRE(::wasm_exn_pending() == nullptr);
+
+	WASM::RegistryImportResolver imports;
+	imports.registerFunction("env", "observe", WASM::nativeImport<&nativeObserve>());
+	imports.registerFunction("env", "observe_ref", WASM::nativeImport<&nativeObserveRef>());
+	imports.registerFunction("env", "fail_trap", WASM::nativeImport<&nativeFailTrap>());
+	imports.registerFunction("env", "fail_throw", WASM::nativeImport<&nativeFailThrow>());
+
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto caught = instance->exportedFunction("catch-and-observe");
+	auto caughtRef = instance->exportedFunction("catch-ref-and-observe");
+	auto nativeTrap = instance->exportedFunction("catch-native-trap");
+	auto nativeException = instance->exportedFunction("catch-native-exception");
+	auto propagate = instance->exportedFunction("propagate-past-import");
+	REQUIRE(caught.has_value());
+	REQUIRE(caughtRef.has_value());
+	REQUIRE(nativeTrap.has_value());
+	REQUIRE(nativeException.has_value());
+	REQUIRE(propagate.has_value());
+
+	// A caught guest exception is a value by the time C++ sees it, and the
+	// catch has already cleared the pending slot.
+	REQUIRE(WASM::callCallable<int32_t>(*caught, int32_t(5)) == 7);
+	REQUIRE(g_exnProbe.observes == 1);
+	REQUIRE(g_exnProbe.lastValue == 5);
+	REQUIRE_FALSE(g_exnProbe.pendingSeen);
+	REQUIRE(::wasm_exn_pending() == nullptr);
+
+	// The exnref itself crosses the boundary, carrying the same payload.
+	REQUIRE(WASM::callCallable<int32_t>(*caughtRef, int32_t(9)) == 8);
+	REQUIRE(g_exnProbe.observeRefs == 1);
+	REQUIRE(g_exnProbe.lastValue == 9);
+	REQUIRE(g_exnProbe.exnPayload == 9);
+	REQUIRE(g_exnProbe.exnTag >= 0);
+	REQUIRE_FALSE(g_exnProbe.pendingSeen);
+	REQUIRE(::wasm_exn_pending() == nullptr);
+
+	const auto trapFrom = [](const WASM::Callable& callable) {
+		bool trapped = false;
+		WASM::TrapKind kind = WASM::TrapKind::Internal;
+		std::string message;
+		try {
+			(void)WASM::callCallable<int32_t>(callable);
+		} catch (const WASM::Trap& trap) {
+			trapped = true;
+			kind = trap.kind();
+			message = trap.message() != nullptr ? trap.message() : "";
+		}
+		REQUIRE(trapped);
+		return std::make_pair(kind, message);
+	};
+
+	// A trap raised by a native import is not catchable by try_table.
+	const auto nativeTrapResult = trapFrom(*nativeTrap);
+	REQUIRE(nativeTrapResult.first == WASM::TrapKind::OutOfBoundsMemoryAccess);
+	REQUIRE(nativeTrapResult.second == "native trap");
+
+	// A C++ exception is converted to a trap by nativeImport, so try_table does
+	// not catch that either.
+	const auto nativeThrowResult = trapFrom(*nativeException);
+	REQUIRE(nativeThrowResult.first == WASM::TrapKind::Internal);
+	REQUIRE(nativeThrowResult.second == "native C++ failure");
+
+	// An uncaught guest exception re-propagates at the call site: the following
+	// import never runs and the exception stays pending for the embedder.
+	const int observesBefore = g_exnProbe.observes;
+	REQUIRE(WASM::callCallable<int32_t>(*propagate, int32_t(11)) == 0);
+	REQUIRE(g_exnProbe.observes == observesBefore);
+	REQUIRE(::wasm_exn_pending() != nullptr);
+	::wasm_exn_clear_pending();
+}
+
+namespace {
+
+HostBridgeHandle g_nativeHostHandle{1, 41};
+int g_nativeGetCalls = 0;
+int g_nativeSameCalls = 0;
+
+// A host-owned object that is neither a GC object nor a StringObject. The
+// engine treats it as an `externref` and, with a bridge installed, calls the
+// bridge's retain/release for it.
+void* nativeGetHandle(WASM::VMContext*)
+{
+	++g_nativeGetCalls;
+	return &g_nativeHostHandle;
+}
+
+int32_t nativeReadHandle(WASM::VMContext*, void* raw)
+{
+	if (raw == nullptr)
+		WASM::trap(WASM::TrapKind::NullReference, "null host handle");
+	return static_cast<const HostBridgeHandle*>(raw)->value;
+}
+
+int32_t nativeSameHandle(WASM::VMContext*, void* lhs, void* rhs)
+{
+	++g_nativeSameCalls;
+	return lhs == rhs ? 1 : 0;
+}
+
+void nativeBadAlloc(WASM::VMContext*)
+{
+	throw std::bad_alloc();
+}
+
+void nativeNonStandardThrow(WASM::VMContext*)
+{
+	throw 7;
+}
+
+} // namespace
+
+TEST_CASE("native imports round-trip a host-owned reference through a global")
+{
+	WASM::Module module = loadTestModule("native_import_host_refs");
+	g_nativeHostHandle.refs = 1;
+	g_nativeHostHandle.value = 41;
+	g_nativeGetCalls = 0;
+	g_nativeSameCalls = 0;
+
+	WASM::RegistryImportResolver imports;
+	imports.registerFunction("env", "get_handle", WASM::nativeImport<&nativeGetHandle>());
+	imports.registerFunction("env", "read_handle", WASM::nativeImport<&nativeReadHandle>());
+	imports.registerFunction("env", "same_handle", WASM::nativeImport<&nativeSameHandle>());
+
+	HostBridgeProbe probe;
+	WASM::HostBridge bridge;
+	bridge.userData = &probe;
+	bridge.references.retain = hostBridgeRetain;
+	bridge.references.release = hostBridgeRelease;
+	bridge.instanceDestroying = hostBridgeDestroying;
+
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports, &bridge);
+	REQUIRE(instance.get() != nullptr);
+
+	auto roundTrip = instance->exportedFunction("round-trip");
+	auto identity = instance->exportedFunction("identity");
+	auto isNull = instance->exportedFunction("is-null");
+	auto clear = instance->exportedFunction("clear");
+	REQUIRE(roundTrip.has_value());
+	REQUIRE(identity.has_value());
+	REQUIRE(isNull.has_value());
+	REQUIRE(clear.has_value());
+
+	// Import -> global -> import: the same host pointer comes back and is
+	// readable, and the global's write barrier retained it.
+	REQUIRE(WASM::callCallable<int32_t>(*isNull) == 1);
+	REQUIRE(WASM::callCallable<int32_t>(*roundTrip) == 41);
+	REQUIRE(g_nativeGetCalls == 1);
+	REQUIRE(g_nativeHostHandle.refs >= 2); // the host's count + the global's
+	REQUIRE(probe.retains >= 1);
+	REQUIRE(WASM::callCallable<int32_t>(*isNull) == 0);
+
+	// Two import results are the identical host pointer.
+	REQUIRE(WASM::callCallable<int32_t>(*identity) == 1);
+	REQUIRE(g_nativeSameCalls == 1);
+	REQUIRE(g_nativeGetCalls == 3);
+
+	// Clearing the global releases exactly the count the global held, whatever
+	// transient counts the operand stack kept for the calls above.
+	const int refsBeforeClear = g_nativeHostHandle.refs;
+	const int releasesBeforeClear = probe.releases;
+	WASM::callCallable<void>(*clear);
+	REQUIRE(g_nativeHostHandle.refs == refsBeforeClear - 1);
+	REQUIRE(probe.releases == releasesBeforeClear + 1);
+	REQUIRE(WASM::callCallable<int32_t>(*isNull) == 1);
+
+	// Drop the fixture's own host count through the engine: the bridge sees the
+	// final release and the instance still dies cleanly.
+	const int releasesBeforeDrop = probe.releases;
+	instance->refDrop(&g_nativeHostHandle);
+	REQUIRE(probe.releases == releasesBeforeDrop + 1);
+
+	instance.reset();
+	REQUIRE(probe.destroyed == 1);
+}
+
+TEST_CASE("a wrapped native import classifies allocation and non-standard throws")
+{
+	// `nativeImport` documents these two paths (docs/ABI.md): bad_alloc becomes
+	// OutOfMemory, and a non-std exception becomes Internal with a fixed text.
+	WASM::Module module = loadTestModule("native_debug");
+
+	const auto trapFor = [&module](WASM::Callable importCallable) {
+		WASM::RegistryImportResolver imports;
+		imports.registerFunction("env", "debug_message", importCallable);
+		auto backend = TestBackend::create();
+		auto instance = backend->instantiator().instantiate(module, imports);
+		REQUIRE(instance.get() != nullptr);
+		auto run = instance->exportedFunction("run");
+		REQUIRE(run.has_value());
+
+		bool trapped = false;
+		WASM::TrapKind kind = WASM::TrapKind::Internal;
+		std::string message;
+		try {
+			WASM::callCallable<void>(*run);
+		} catch (const WASM::Trap& trap) {
+			trapped = true;
+			kind = trap.kind();
+			message = trap.message() != nullptr ? trap.message() : "";
+		}
+		REQUIRE(trapped);
+		return std::make_pair(kind, message);
+	};
+
+	const auto allocation = trapFor(WASM::nativeImport<&nativeBadAlloc>());
+	REQUIRE(allocation.first == WASM::TrapKind::OutOfMemory);
+	REQUIRE(allocation.second == "native import allocation failed");
+
+	const auto nonStandard = trapFor(WASM::nativeImport<&nativeNonStandardThrow>());
+	REQUIRE(nonStandard.first == WASM::TrapKind::Internal);
+	REQUIRE(nonStandard.second == "native import threw a non-standard exception");
+}
+
+
+// ── AssemblyScript interop stress tests ─────────────────────────────────────
+//
+// AssemblyScript targets wasm32, so `usize` is a 32-bit linear-memory offset and
+// a host-owned object is referenced by an opaque token, not a raw pointer. An AS
+// module that allocates also imports `env.abort` from its stub runtime, which
+// the embedder must provide. These helpers are the host side of
+// `Test/wasm/string_interop.ts` and `Test/wasm/native_interop.ts`.
+
+namespace {
+
+struct AsInteropState {
+	int32_t handleValue = 77;
+	bool handleReleased = false;
+	int32_t acquires = 0;
+	int32_t releases = 0;
+	int32_t observes = 0;
+};
+
+AsInteropState g_asInterop;
+std::string g_asObservedUtf8;
+std::vector<uint16_t> g_asObservedUtf16;
+std::vector<int32_t> g_asArraySeen;
+
+const uint8_t* asMemoryBytes(WASM::VMContext* ctx, int32_t ptr, int32_t bytes,
+		const char* what)
+{
+	if (ctx == nullptr || ctx->memoryCount == 0 || ctx->memories[0] == nullptr)
+		WASM::trap(WASM::TrapKind::Internal, "AS interop: the import has no memory");
+	const uint64_t offset = static_cast<uint32_t>(ptr);
+	const uint64_t length = static_cast<uint32_t>(bytes);
+	const WASM::LinearMemory* memory = ctx->memories[0];
+	if (offset > memory->memorySize || length > memory->memorySize - offset)
+		WASM::trap(WASM::TrapKind::OutOfBoundsMemoryAccess, what);
+	return memory->memoryBase + offset;
+}
+
+// The stub runtime's abort() is an `unreachable`; an embedder adapter must
+// provide this import for every AS module that allocates.
+void asAbort(WASM::VMContext*, int32_t, int32_t, int32_t, int32_t)
+{
+	WASM::trap(WASM::TrapKind::Unreachable, "AssemblyScript abort");
+}
+
+int32_t asObserveUtf8(WASM::VMContext* ctx, int32_t ptr, int32_t len)
+{
+	++g_asInterop.observes;
+	if (len < 0)
+		WASM::trap(WASM::TrapKind::Internal, "AS interop: negative string length");
+	const uint8_t* bytes = asMemoryBytes(ctx, ptr, len, "AS interop: string out of bounds");
+	g_asObservedUtf8.assign(reinterpret_cast<const char*>(bytes), static_cast<size_t>(len));
+	return len;
+}
+
+int32_t asObserveUtf16(WASM::VMContext* ctx, int32_t ptr, int32_t len)
+{
+	++g_asInterop.observes;
+	if (len < 0 || (len & 1) != 0)
+		WASM::trap(WASM::TrapKind::Internal, "AS interop: odd UTF-16 byte length");
+	const uint8_t* bytes = asMemoryBytes(ctx, ptr, len, "AS interop: string out of bounds");
+	g_asObservedUtf16.resize(static_cast<size_t>(len / 2));
+	std::memcpy(g_asObservedUtf16.data(), bytes, static_cast<size_t>(len));
+	return len / 2;
+}
+
+int32_t asFillGreeting(WASM::VMContext* ctx, int32_t ptr, int32_t capacity)
+{
+	static constexpr char kGreeting[] = "h\xc3\xa9llo"; // "héllo" in UTF-8
+	constexpr int32_t kLength = 6;
+	if (capacity < kLength)
+		WASM::trap(WASM::TrapKind::Internal, "AS interop: greeting buffer is too small");
+	uint8_t* out = const_cast<uint8_t*>(
+			asMemoryBytes(ctx, ptr, kLength, "AS interop: greeting out of bounds"));
+	std::memcpy(out, kGreeting, kLength);
+	return kLength;
+}
+
+int32_t asSumI32(WASM::VMContext* ctx, int32_t ptr, int32_t len)
+{
+	if (len < 0 || len > (INT32_MAX / 4))
+		WASM::trap(WASM::TrapKind::Internal, "AS interop: bad array length");
+	const uint8_t* bytes = asMemoryBytes(ctx, ptr, len * 4, "AS interop: array out of bounds");
+	int64_t sum = 0;
+	for (int32_t i = 0; i < len; ++i) {
+		int32_t value = 0;
+		std::memcpy(&value, bytes + static_cast<size_t>(i) * 4, sizeof(value));
+		g_asArraySeen.push_back(value);
+		sum += value;
+	}
+	return static_cast<int32_t>(sum);
+}
+
+int32_t asFillI32(WASM::VMContext* ctx, int32_t ptr, int32_t len)
+{
+	if (len < 0 || len > (INT32_MAX / 4))
+		WASM::trap(WASM::TrapKind::Internal, "AS interop: bad array length");
+	uint8_t* bytes = const_cast<uint8_t*>(
+			asMemoryBytes(ctx, ptr, len * 4, "AS interop: array out of bounds"));
+	for (int32_t i = 0; i < len; ++i) {
+		const int32_t value = (i + 1) * 10;
+		std::memcpy(bytes + static_cast<size_t>(i) * 4, &value, sizeof(value));
+	}
+	return len;
+}
+
+constexpr int32_t kAsHostHandle = 1;
+
+int32_t asAcquireHandle(WASM::VMContext*)
+{
+	++g_asInterop.acquires;
+	return kAsHostHandle;
+}
+
+int32_t asReadHandle(WASM::VMContext*, int32_t handle)
+{
+	if (handle != kAsHostHandle)
+		WASM::trap(WASM::TrapKind::NullReference, "AS interop: unknown host handle");
+	if (g_asInterop.handleReleased)
+		WASM::trap(WASM::TrapKind::NullReference, "AS interop: host handle was released");
+	return g_asInterop.handleValue;
+}
+
+void asReleaseHandle(WASM::VMContext*, int32_t handle)
+{
+	if (handle == kAsHostHandle) {
+		++g_asInterop.releases;
+		g_asInterop.handleReleased = true;
+	}
+}
+
+void asFailImport(WASM::VMContext*)
+{
+	WASM::trap(WASM::TrapKind::OutOfBoundsMemoryAccess, "AS interop: native import failed");
+}
+
+void asThrowImport(WASM::VMContext*)
+{
+	throw std::runtime_error("AS interop: C++ import threw");
+}
+
+void registerNativeInteropImports(WASM::RegistryImportResolver& imports)
+{
+	imports.registerFunction("env", "abort", WASM::nativeImport<&asAbort>());
+	imports.registerFunction("env", "host_sum_i32", WASM::nativeImport<&asSumI32>());
+	imports.registerFunction("env", "host_fill_i32", WASM::nativeImport<&asFillI32>());
+	imports.registerFunction("env", "acquire_handle", WASM::nativeImport<&asAcquireHandle>());
+	imports.registerFunction("env", "read_handle", WASM::nativeImport<&asReadHandle>());
+	imports.registerFunction("env", "release_handle", WASM::nativeImport<&asReleaseHandle>());
+	imports.registerFunction("env", "fail_import", WASM::nativeImport<&asFailImport>());
+	imports.registerFunction("env", "throw_import", WASM::nativeImport<&asThrowImport>());
+}
+
+// Decode UTF-16LE code units into code points (only what this fixture needs).
+std::u32string asUtf16ToU32(const std::vector<uint16_t>& units)
+{
+	std::u32string out;
+	for (size_t i = 0; i < units.size(); ++i) {
+		uint32_t cp = units[i];
+		if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < units.size()) {
+			const uint32_t low = units[i + 1];
+			if (low >= 0xDC00 && low <= 0xDFFF) {
+				cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+				++i;
+			}
+		}
+		out.push_back(cp);
+	}
+	return out;
+}
+
+} // namespace
+
+TEST_CASE("AssemblyScript strings cross the native-import boundary in both encodings")
+{
+	WASM::Module module = loadTestModule("string_interop");
+	WASM::RegistryImportResolver imports;
+	imports.registerFunction("env", "abort", WASM::nativeImport<&asAbort>());
+	imports.registerFunction("env", "host_observe_utf8", WASM::nativeImport<&asObserveUtf8>());
+	imports.registerFunction("env", "host_observe_utf16", WASM::nativeImport<&asObserveUtf16>());
+	imports.registerFunction("env", "host_fill_greeting", WASM::nativeImport<&asFillGreeting>());
+
+	g_asInterop = AsInteropState{};
+	g_asObservedUtf8.clear();
+	g_asObservedUtf16.clear();
+
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto observeLiteral = instance->exportedFunction("observeLiteral");
+	auto observeUtf16Literal = instance->exportedFunction("observeUtf16Literal");
+	auto greetingLength = instance->exportedFunction("greetingLength");
+	auto greetingObserved = instance->exportedFunction("greetingObserved");
+	REQUIRE(observeLiteral.has_value());
+	REQUIRE(observeUtf16Literal.has_value());
+	REQUIRE(greetingLength.has_value());
+	REQUIRE(greetingObserved.has_value());
+
+	// AS -> C++: the managed AS string encoded as UTF-8.
+	REQUIRE(WASM::callCallable<int32_t>(*observeLiteral) == 6);
+	REQUIRE(g_asObservedUtf8 == "h\xc3\xa9llo");
+
+	// AS -> C++: the UTF-16 code units the string actually stores (5 units).
+	REQUIRE(WASM::callCallable<int32_t>(*observeUtf16Literal) == 5);
+	REQUIRE(g_asObservedUtf16.size() == 5);
+	REQUIRE(asUtf16ToU32(g_asObservedUtf16) == U"h\u00e9llo");
+
+	// C++ -> AS -> C++: the host writes UTF-8 into an AS-allocated buffer, AS
+	// decodes it into a managed string, and re-encodes it for the same import.
+	REQUIRE(WASM::callCallable<int32_t>(*greetingLength) == 5);
+	REQUIRE(WASM::callCallable<int32_t>(*greetingObserved) == 6);
+	REQUIRE(g_asObservedUtf8 == "h\xc3\xa9llo");
+	REQUIRE(g_asInterop.observes == 3);
+}
+
+TEST_CASE("AssemblyScript arrays and cached host handles cross the native-import boundary")
+{
+	WASM::Module module = loadTestModule("native_interop");
+	WASM::RegistryImportResolver imports;
+	registerNativeInteropImports(imports);
+
+	g_asInterop = AsInteropState{};
+	g_asArraySeen.clear();
+
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto sumCreated = instance->exportedFunction("sumCreatedArray");
+	auto filledSum = instance->exportedFunction("filledSum");
+	auto openAndRead = instance->exportedFunction("openAndRead");
+	auto releaseCached = instance->exportedFunction("releaseCached");
+	auto readCached = instance->exportedFunction("readCached");
+	auto readReleased = instance->exportedFunction("readReleased");
+	REQUIRE(sumCreated.has_value());
+	REQUIRE(filledSum.has_value());
+	REQUIRE(openAndRead.has_value());
+	REQUIRE(releaseCached.has_value());
+	REQUIRE(readCached.has_value());
+	REQUIRE(readReleased.has_value());
+
+	// AS -> C++: a managed Int32Array's data pointer and length.
+	REQUIRE(WASM::callCallable<int32_t>(*sumCreated, int32_t(4)) == 10);
+	REQUIRE(g_asArraySeen == (std::vector<int32_t>{1, 2, 3, 4}));
+
+	// A zero-length managed array is a valid (empty) buffer.
+	g_asArraySeen.clear();
+	REQUIRE(WASM::callCallable<int32_t>(*sumCreated, int32_t(0)) == 0);
+	REQUIRE(g_asArraySeen.empty());
+
+	// C++ -> AS: the host fills the AS-allocated array, which AS then sums.
+	REQUIRE(WASM::callCallable<int32_t>(*filledSum, int32_t(4)) == 100);
+
+	// The host-owned handle is cached in AS module state and acquired once.
+	REQUIRE(WASM::callCallable<int32_t>(*openAndRead) == 77);
+	REQUIRE(WASM::callCallable<int32_t>(*openAndRead) == 77);
+	REQUIRE(g_asInterop.acquires == 1);
+	WASM::callCallable<void>(*releaseCached);
+	REQUIRE(g_asInterop.releases == 1);
+
+	// A null token and an already-released token are rejected by the host, not
+	// dereferenced.
+	const auto expectHandleTrap = [](const WASM::Callable& callable, const char* message) {
+		bool trapped = false;
+		WASM::TrapKind kind = WASM::TrapKind::Internal;
+		std::string text;
+		try {
+			(void)WASM::callCallable<int32_t>(callable);
+		} catch (const WASM::Trap& trap) {
+			trapped = true;
+			kind = trap.kind();
+			text = trap.message() != nullptr ? trap.message() : "";
+		}
+		REQUIRE(trapped);
+		REQUIRE(kind == WASM::TrapKind::NullReference);
+		REQUIRE(text == message);
+	};
+	expectHandleTrap(*readCached, "AS interop: unknown host handle");
+	expectHandleTrap(*readReleased, "AS interop: host handle was released");
+}
+
+TEST_CASE("AssemblyScript aborts and native import failures remain traps")
+{
+	WASM::Module module = loadTestModule("native_interop");
+	WASM::RegistryImportResolver imports;
+	registerNativeInteropImports(imports);
+	g_asInterop = AsInteropState{};
+
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto abortNow = instance->exportedFunction("abortNow");
+	auto failing = instance->exportedFunction("callFailingImport");
+	auto throwing = instance->exportedFunction("callThrowingImport");
+	REQUIRE(abortNow.has_value());
+	REQUIRE(failing.has_value());
+	REQUIRE(throwing.has_value());
+
+	const auto trapFor = [](const WASM::Callable& callable,
+			WASM::TrapKind expectedKind, const char* expectedMessage) {
+		bool trapped = false;
+		WASM::TrapKind kind = WASM::TrapKind::Internal;
+		std::string text;
+		try {
+			WASM::callCallable<void>(callable);
+		} catch (const WASM::Trap& trap) {
+			trapped = true;
+			kind = trap.kind();
+			text = trap.message() != nullptr ? trap.message() : "";
+		}
+		REQUIRE(trapped);
+		REQUIRE(kind == expectedKind);
+		REQUIRE(text == expectedMessage);
+	};
+
+	// AS abort() goes through the stub runtime's env.abort import, which an
+	// embedder adapter maps to `unreachable`.
+	trapFor(*abortNow, WASM::TrapKind::Unreachable, "AssemblyScript abort");
+
+	// A native trap crosses AS-generated frames unchanged, and is not a Wasm
+	// exception.
+	trapFor(*failing, WASM::TrapKind::OutOfBoundsMemoryAccess,
+		"AS interop: native import failed");
+
+	// A C++ exception in an import is converted to a trap before it can reach an
+	// AS-generated frame.
+	trapFor(*throwing, WASM::TrapKind::Internal, "AS interop: C++ import threw");
 }

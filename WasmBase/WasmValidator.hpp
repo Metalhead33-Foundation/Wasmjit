@@ -96,7 +96,8 @@ private:
 	void validateRefCast(bool nullable, const HeapType& heapType);
 
 	void checkLimits(const Limits& limits, bool is64, bool isMemory,
-					 const char* what, std::size_t index) const;
+					 const char* what, std::size_t index,
+					 uint64_t pageSize = 0x10000) const;
 	void requireMemoryAccess(const MemArg& arg, uint32_t naturalLog2) const;
 	// Atomic accesses have extra rules: the alignment immediate must equal the
 	// natural alignment, and the acquire-release ordering byte is 0 or 1.

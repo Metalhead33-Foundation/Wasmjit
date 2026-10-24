@@ -1,16 +1,18 @@
 # Constant-Time (`CT-Wasm`) — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 2 — CT-0 safe
-rejection only: provisional secret type/memory markers are recognized and
-rejected with named errors; no secret instruction or constant-time guarantee is
+Status: design note / implementation reference (revision 3 — CT-0 safe
+rejection only: the provisional secret *value-type* markers are recognized and
+rejected with named errors. The provisional secret-memory flag was withdrawn
+because limits bit 3 is the standard custom-page-size flag now
+(`CUSTOM_PAGE_SIZES.md`); no secret instruction or constant-time guarantee is
 implemented).
 Audience: anyone touching `WasmType` (value/memory types), `WasmOpcode`, the JIT
 backends, or an embedder that needs side-channel guarantees.
 
 Follows the same split as [`GC.md`](GC.md) / [`SIMD.md`](SIMD.md) /
 [`THREADS.md`](THREADS.md). The implementation currently stops at CT-0: it
-recognizes the provisional secret markers and rejects them rather than silently
-dropping secrecy.
+recognizes the provisional secret *type* markers and rejects them rather than
+silently dropping secrecy.
 
 ## 1. Document map
 
@@ -64,10 +66,10 @@ be written with side-channel resistance.
   `constant-time extension: secret value type s32 ... is not implemented`
   for a signature, local, global, table or element type; all other unmodelled
   types keep the generic unsupported-value-type error.
-- `MemoryType` carries a provisional `secret` marker decoded from the reserved
-  flag bit `0x08`; a secret memory (local or imported) is rejected with
-  `constant-time extension: secret memory ... is not implemented`. It is not
-  treated as an ordinary public memory.
+- The provisional secret-*memory* marker has been withdrawn: limits flag bit 3
+  is the standard custom-page-size flag now (`CUSTOM_PAGE_SIZES.md` CPS-1), so
+  it cannot also mean secrecy. No memory operation checks secrecy; when the
+  proposal assigns a stable memory encoding, CT-2 reintroduces the check.
 - There are no secret arithmetic or load/store opcodes and no
   `classify`/`declassify`; an unknown primary or `0xFC` sub-opcode hits the
   dispatcher's `default` and throws.
@@ -79,11 +81,11 @@ be written with side-channel resistance.
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
 | CT1 | **No secret value types.** `s32`/`s64` have provisional markers but are deliberately not modeled; they are rejected with a named CT error. | `WasmType.hpp` (`ValueTypeCode`, `isSecretValueTypeCode`), `WasmModule.cpp` (`validateValueTypes`) | High |
-| CT2 | **No secret memory semantics.** `MemoryType` recognizes the provisional flag only to reject the module; no memory operation checks secrecy. | `WasmType.hpp` (`MemoryType`), `WasmModule.cpp` (`validateValueTypes`) | High |
+| CT2 | **No secret memory semantics or encoding.** The provisional flag was withdrawn because bit 3 now carries the custom page size; no memory operation checks secrecy. | `CUSTOM_PAGE_SIZES.md` CPS-1; no `secret` field in `MemoryType` | High |
 | CT3 | **No secret instructions.** Arithmetic, load/store, `classify` and `declassify` do not exist. | `WasmOpcode.hpp`, `WasmOpcodeDispatcher.cpp` | High |
 | CT4 | **No constant-time guarantee.** Even for public i32/i64 code, the timing depends on the host and on the backend's lowering. | `LibJit/LibjitOpcodeDispatcher.cpp`; no CT pass anywhere | High |
 | CT5 | **No validation of the secrecy rules** (branching on secrets, secret indexes). | `WasmValidator.cpp` | Medium |
-| ~~CT6~~ | ~~**No tests.**~~ **CT-0 test added:** hand-built secret-type and secret-memory modules both fail at load with named errors. | `Test/main.cpp` | Closed for CT-0 |
+| ~~CT6~~ | ~~**No tests.**~~ **CT-0 test added:** a hand-built secret-*type* module fails at load with a named error; the memory half was withdrawn with the marker. | `Test/main.cpp` | Closed for CT-0 |
 
 ## 6. Where we can and should play fast and loose
 
@@ -103,9 +105,9 @@ the current rejection.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **CT-0 — Keep the rejection** | ✅ Reserved provisional secret type/memory markers and named rejection tests; no silent aliasing. | CT1, CT3, CT6 | A CT-Wasm module fails at load with a clear message. |
+| **CT-0 — Keep the rejection** | ✅ Reserved provisional secret *value-type* markers (`s32`/`s64`) and a named rejection test; the provisional memory flag was withdrawn in favour of the standard page-size bit (CPS-1). | CT1, CT3, CT6 | A CT-Wasm type module fails at load with a clear message. |
 | **CT-1 — Secret types** | Blocked on upstream type encodings; add `s32`/`s64` to the value model and the validator's secrecy rules. | CT1, CT5 | A secret signature decodes and type-checks. |
-| **CT-2 — Secret memory** | Add the memory flag and restrict secret loads/stores to it. | CT2 | A secret load on a public memory is rejected. |
+| **CT-2 — Secret memory** | Blocked on an upstream memory encoding; restrict secret loads/stores to an explicitly marked memory. | CT2 | A secret load on a public memory is rejected. |
 | **CT-3 — Secret ops** | Implement the constant-time arithmetic and classify/declassify set. | CT3 | The arithmetic tests produce the same values as their public counterparts. |
 | **CT-4 — Verify timing** | Add a lowering/verification pass (or documented backend contract) for constant time. | CT4 | A timing harness shows no secret-dependent branch or memory index. |
 | **CT-5 — Tests** | Wire the proposal's tests and a manual timing smoke test. | CT6 | The CT tests run in the default suite. |
@@ -116,7 +118,7 @@ the current rejection.
 
 | Script | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| `constant-time secret types...` | 4 assertions | 0 | 0 | provisional `s32` signature and secret memory both rejected with named CT errors |
+| `constant-time secret value types are rejected with a named error` | 2 assertions | 0 | 0 | the provisional `s32` signature is rejected with a named CT error |
 
 Reading: CT-0 is graded directly; no CT-Wasm script exists in the snapshot, and
 the proposal still has no stable secret type/opcode/memory encoding to grade

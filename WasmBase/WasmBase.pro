@@ -65,6 +65,7 @@ HEADERS += \
     WasmNativeImport.hpp \
     WasmOpcode.hpp \
     WasmOpcodeDispatcher.hpp \
+    WasmProfile.hpp \
     WasmRegistryImportResolver.hpp \
     WasmRuntime.hpp \
     WasmSafety.hpp \

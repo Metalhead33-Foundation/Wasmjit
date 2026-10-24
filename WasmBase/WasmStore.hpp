@@ -67,8 +67,11 @@ public:
 	// ── Linear memory ───────────────────────────────────────────────────
 	// Allocate a fresh linear memory owned by the store. Returns its store id;
 	// use memory(id) to obtain the backend-visible LinearMemory view.
+	// `pageSize` is the custom-page-size field (1 or 65536; CUSTOM_PAGE_SIZES.md
+	// CPS-2). Allocation, growth and the allocation budget are byte-based, so
+	// the same page count means a different byte size for a one-byte page.
 	MemoryId createLinearMemory(uint64_t initialPages, uint64_t maxPages, bool isShared,
-								bool is64 = false);
+								bool is64 = false, uint64_t pageSize = 0x10000);
 
 	// Borrowed views into a store-owned memory. Nullptr for an unknown id.
 	LinearMemory*       memory(MemoryId id);

@@ -3761,7 +3761,10 @@ void OpcodeDispatcher::dispatchMemorySize(WASM::MemIdx arg)
 	jit_value_t args[] = {lm};
 	jit_value_t ms = jit_insn_call_native(function, "wasm_memory_size",
 		reinterpret_cast<void*>(&WASM::wasm_memory_size), sig, args, 1, 0);
-	jit_value_t page = jit_value_create_long_constant(function, jit_type_ulong, 65536);
+	// The page size is a per-memory field: CUSTOM_PAGE_SIZES.md allows a
+	// one-byte page, so dividing by a constant 65536 would be wrong.
+	jit_value_t page = jit_insn_load_relative(function, lm,
+		offsetof(WASM::LinearMemory, pageSize), jit_type_ulong);
 	jit_value_t pages = jit_insn_div(function, ms, page);
 	// The result has the memory's index type: i64 for memory64 (M64-1).
 	if (memoryIndexTypeForIndex(arg) == WASM::MemoryIndexType::I64)

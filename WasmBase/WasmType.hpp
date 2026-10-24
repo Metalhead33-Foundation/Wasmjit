@@ -3,6 +3,7 @@
 #include "WasmTypeIdentity.hpp"
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 #include <vector>
 #include <variant>
 #include <optional>
@@ -341,18 +342,33 @@ enum class MemoryIndexType : uint8_t {
 struct MemoryType {
 	MemoryIndexType indexType;
 	Limits limits;
-	// Engine-provisional CT-Wasm secret-memory flag (CONSTANT_TIME.md CT-0).
-	// The upstream proposal has no encoding; the loader rejects this marker
-	// rather than pretending the memory has a constant-time guarantee.
-	bool secret = false;
+	// Custom page sizes (docs/proposals/CUSTOM_PAGE_SIZES.md CPS-1). The
+	// proposal permits exactly 1 byte (`p = 0`) and 64 KiB (`p = 16`); the
+	// default keeps every memory that omits the flag at the historical 64 KiB.
+	uint64_t pageSize = 0x10000;
 	template <Elv::Util::Endian E, Elv::Io::DeviceLike I> void decode(Elv::Io::DataStream<E,I>& stream)
 	{
 		limits.decode(stream);
-		secret = (limits.flags & 0x08) != 0;
 		if (limits.flags & 0x04)
 			indexType = MemoryIndexType::I64;
 		else
 			indexType = MemoryIndexType::I32;
+
+		// Limits flag bit 3 (`0x08`–`0x0F`) says a page-size exponent follows
+		// the limits. Only the two page sizes the proposal defines are
+		// accepted; anything else is rejected at load rather than mis-sized
+		// (CPS-1, CPSD1).
+		if (limits.flags & 0x08) {
+			uint32_t exponent;
+			stream >> Elv::Io::Leb(exponent);
+			if (exponent == 0)
+				pageSize = 1;
+			else if (exponent == 16)
+				pageSize = 0x10000;
+			else
+				throw std::runtime_error("custom page sizes: unsupported page-size exponent "
+						+ std::to_string(exponent) + " (only 0 and 16 are defined)");
+		}
 	}
 };
 

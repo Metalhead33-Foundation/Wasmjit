@@ -6,9 +6,9 @@ namespace WASM {
 
 namespace {
 
-// Wasm page size (64 KiB) and the flags bits used by the threads proposal to
-// mark a memory as shared and by Memory64 to select a 64-bit index type.
-constexpr uint64_t WASM_PAGE_SIZE = 0x10000;
+// The flags bits used by the threads proposal to mark a memory as shared and
+// by Memory64 to select a 64-bit index type. The page size comes from the
+// memory type itself (CUSTOM_PAGE_SIZES.md CPS-3), not a constant.
 constexpr uint32_t LIMITS_FLAG_SHARED = 0x02;
 constexpr uint32_t LIMITS_FLAG_64BIT  = 0x04;
 
@@ -30,7 +30,16 @@ bool memorySatisfiesImport(const LinearMemory& memory, const MemoryType& type)
 	if (memory.isShared != importShared)
 		return false;
 
-	const uint64_t currentPages = memory.memorySize / WASM_PAGE_SIZE;
+	// The page size is part of the memory's type: custom page sizes require an
+	// exact match and define no page-size subtyping (CUSTOM_PAGE_SIZES.md
+	// CPS-3/CPSD3).
+	if (memory.pageSize != type.pageSize)
+		return false;
+	const uint64_t pageSize = memory.pageSize;
+	if (pageSize == 0)
+		return false;
+
+	const uint64_t currentPages = memory.memorySize / pageSize;
 	if (currentPages < type.limits.initial)
 		return false;
 
@@ -38,7 +47,7 @@ bool memorySatisfiesImport(const LinearMemory& memory, const MemoryType& type)
 		// An unbounded memory cannot satisfy an import that declares a maximum.
 		if (memory.memoryMax == UINT64_MAX)
 			return false;
-		if (memory.memoryMax / WASM_PAGE_SIZE > type.limits.maximum.value())
+		if (memory.memoryMax / pageSize > type.limits.maximum.value())
 			return false;
 	}
 

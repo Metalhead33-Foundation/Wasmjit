@@ -1,8 +1,8 @@
 # Language Profiles — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / forward-looking reference (revision 1 — profiles are a
-specification-infrastructure proposal; this engine runs the full profile and
-offers no selection).
+Status: design note / forward-looking reference (revision 2 — the engine now
+*declares* the full profile through `WASM::supportedProfile()`; selection,
+marker gates and deterministic/scalar modes remain open).
 Audience: anyone touching feature gating, the validator, float semantics,
 SIMD/threads availability, or a host that needs a restricted Wasm subset.
 
@@ -63,14 +63,17 @@ requirements (determinism, no threads, no vectors, small footprint).
   instruction, and relaxed SIMD deliberately chooses one legal result. There is
   no canonical-NaN normalisation.
 - There is no scalar-only mode: a `v128` module is always accepted.
-- There is no profile metadata section (the proposal does not define one) and
-  no host API to query the supported profile.
+- There is no profile metadata section (the proposal does not define one).
+  The supported profile is instead a compile-time capability statement in
+  `WasmBase/WasmProfile.hpp`: `supportedProfile()` returns `Profile::Full`, and
+  `supportsProfile()` answers false for `Deterministic` and `Scalar` (PRD2).
+  This is an out-of-band declaration, not a selector (§3).
 
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| PR1 | **No profile declaration or selector.** The engine cannot say "full profile" programmatically or be configured for a subset. | no profile field in `WasmBase` / `Test` | Medium |
+| ~~PR1~~ | ~~**No profile declaration or selector.**~~ **Done (PR-1):** `WASM::supportedProfile()` declares the full profile and `supportsProfile()` refuses the narrower ones; the *selector* half remains open with PR-2. | `WasmBase/WasmProfile.hpp`; `Test/main.cpp` | Closed (declaration) |
 | PR2 | **No deterministic profile.** NaN propagation is host-defined; relaxed SIMD is non-deterministic by design. | `LibJit` float lowering; `SIMD.md` relaxed section | Medium |
 | PR3 | **No scalar profile.** SIMD is compiled whenever present. | `WasmOpcode.hpp` (`PrefixSIMD`), `LibjitOpcodeDispatcher.cpp` | Medium |
 | PR4 | **No marker-level gates.** There is no way to reject threads, GC or exceptions as out-of-profile. | `WasmValidator.cpp` | Low |
@@ -94,7 +97,7 @@ never change its results.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **PR-1 — Declare the profile** | Document (and expose) that the engine implements the full profile. | PR1 | The embedder can query the profile. |
+| **PR-1 — Declare the profile** | ✅ `WasmProfile.hpp` exposes `Profile`, `supportedProfile()`, `supportsProfile()` and `profileName()`; the full profile is the only claim (PRD1/PRD2). | PR1 | Done: the embedder can query the profile at compile time or run time. |
 | **PR-2 — Marker gates** | Add a configuration of allowed markers and reject a module that uses an excluded construct. | PR1, PR4 | A `scalar` configuration rejects a `v128` module. |
 | **PR-3 — Deterministic floats** | Normalise NaNs and pin relaxed-SIMD choices in a deterministic mode. | PR2 | The same inputs produce bit-identical results across hosts. |
 | **PR-4 — Scalar mode** | Gate vector types and instructions when the scalar profile is selected. | PR3 | A SIMD module is rejected in scalar mode. |
@@ -104,12 +107,13 @@ never change its results.
 
 `build/Desktop-Debug/Test/WasmJit` (2026-10-17):
 
-| Script | passed | failed | skipped | Reading |
+| Script / fixture | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| (none) | — | — | — | no profiles script in the snapshot |
+| `the engine declares the full profile` | 7 assertions | 0 | 0 | `supportedProfile()` is `Full`; `Deterministic` and `Scalar` are explicitly not claimed |
+| (no script) | — | — | — | no profiles script in the snapshot |
 
-Reading: nothing to grade. The SIMD scripts are full-profile tests; the
-deterministic-profile appendix is a spec reference, not a test here.
+Reading: the declaration is graded directly. The SIMD scripts are full-profile
+tests; the deterministic-profile appendix is a spec reference, not a test here.
 
 ## 9. References
 
@@ -120,5 +124,7 @@ deterministic-profile appendix is a spec reference, not a test here.
 - In-repo: [`SIMD.md`](SIMD.md) (relaxed SIMD and the deterministic appendix),
   [`THREADS.md`](THREADS.md) (the execution model a deterministic profile would
   restrict), [`../SIMD_BACKENDS.md`](../SIMD_BACKENDS.md),
-  [`../VALIDATION.md`](../VALIDATION.md); sources `WasmBase/WasmOpcode.hpp`,
-  `WasmBase/WasmValidator.cpp`, `WasmBase/WasmType.hpp` (`v128`).
+  [`../VALIDATION.md`](../VALIDATION.md); sources `WasmBase/WasmProfile.hpp`
+  (`Profile`, `supportedProfile`, `supportsProfile`, `profileName`),
+  `WasmBase/WasmOpcode.hpp`, `WasmBase/WasmValidator.cpp`, `WasmBase/WasmType.hpp`
+  (`v128`).

@@ -102,6 +102,9 @@ public:
 	// owned by the Store; the instance does NOT take ownership. Two modules
 	// that resolve the same (moduleName, fieldName) receive the same pointer,
 	// which is exactly what "sharing a linear memory" means at this layer.
+	// The resolver must also reject a memory whose page size differs from the
+	// declared one: custom page sizes match exactly, with no subtyping
+	// (docs/proposals/CUSTOM_PAGE_SIZES.md CPS-3).
 	virtual std::optional<LinearMemory*> resolveMemory(
 		std::string_view moduleName,
 		std::string_view fieldName,

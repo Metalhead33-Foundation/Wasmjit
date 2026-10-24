@@ -34,6 +34,18 @@ enum class NameKind : uint8_t {
 	TagParam
 };
 
+// One record from a `metadata.code.*` compilation-hint custom section
+// (docs/proposals/PARSER_PROPOSALS.md PP-1). `offset` is the proposal's byte
+// offset into the function body; `payload` keeps the raw hint value bytes. The
+// value encoding differs per family (a priority byte, a frequency byte, or a
+// vector of callee/percentage pairs) and no consumer exists yet, so the engine
+// stores them without interpreting them (PPD1/PPD2). Hints are inert: they
+// never affect decoding, validation, dispatch or results (PPD4).
+struct CompilationHint {
+	uint32_t offset;
+	std::vector<uint8_t> payload;
+};
+
 struct Module : public Artifact
 {
 public:
@@ -68,6 +80,13 @@ public:
 	// function's locals declaration; processCodeSection rebases them onto the
 	// matching FunctionBody::branchHints.
 	std::map<uint32_t, std::vector<BranchHint>> branchHintsByFuncIndex;
+	// Inert `metadata.code.{compilation_priority,instr_freq,call_targets}`
+	// records, keyed by the *global* function index (imports first). They are
+	// stored exactly as decoded and are never consulted (PARSER_PROPOSALS.md
+	// PP-1/PPD4).
+	std::map<uint32_t, std::vector<CompilationHint>> compilationPriorityHints;
+	std::map<uint32_t, std::vector<CompilationHint>> instructionFrequencyHints;
+	std::map<uint32_t, std::vector<CompilationHint>> callTargetHints;
 	std::map<uint32_t,std::string> funcNames;
 	std::string debugName;
 	// Extended name subsections (docs/proposals/EXTENDED_NAME_SECTION.md).
@@ -111,6 +130,8 @@ private:
 	void processCustomSection(Elv::Io::Device& file, const Section& section);
 	void processNameSection(Elv::Io::Device& file, const Section& section);
 	void processBranchHintSection(Elv::Io::Device& file, const Section& section);
+	void processCompilationHintSection(Elv::Io::Device& file, const Section& section,
+			std::map<uint32_t, std::vector<CompilationHint>>& out);
 	// Type processors
 	void processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t numSubTypes, std::vector<Subtype>& out, uint32_t groupFirst);
 	std::vector<uint8_t> parseInitExpr(DWasmStream& stream);

@@ -132,6 +132,13 @@ baked in at compile time through the `WASM_TEST_DIR` macro) and calls into it.
 | `imported mutable externref global aliases the exporter across modules` | `externref_global_a/b` | a host reference written through the importer is read through the exporter, and vice versa (`REFERENCE_TYPES.md` RT4/RT5) |
 | `validation errors name the offending function when the name section has it` | `named_invalid` | a validation error includes `function 0 ($bad)` from the name section (`EXTENDED_NAME_SECTION.md` ENS-3) |
 | `host threads instantiate and call independent modules concurrently` | `add_core` | four host threads each parse/instantiate/call 8 independent instances; this is a current-API/Store smoke test, **not** the target single-instance concurrency model |
+| `native imports exchange stringrefs with the guest` | hand-built | a host string and a guest literal reach a native import as the same `StringObject*`, and a host-owned string returned by an import is measured by a second import without a copy (`ABI.md` "Native (host) function imports") |
+| `guest exceptions and native imports keep their channels disjoint` | `native_import_exceptions` | a caught payload and an `exnref` reach C++; a native trap and a C++ exception are not caught by `try_table`; an uncaught guest exception re-propagates past a following import (`EXCEPTIONS.md` EXD2) |
+| `native imports round-trip a host-owned reference through a global` | `native_import_host_refs` | an `externref` returned by an import survives a global, is read by another import, and the bridge retain/release fire at the barrier and teardown |
+| `a wrapped native import classifies allocation and non-standard throws` | `native_debug` | `std::bad_alloc` becomes `OutOfMemory` and a non-`std::exception` throw becomes `Internal` with the fixed message |
+| `AssemblyScript strings cross the native-import boundary in both encodings` | `string_interop.ts` | AS UTF-8 and UTF-16 encodings reach a native import; a host-filled buffer is decoded into an AS string and re-encoded back to C++ |
+| `AssemblyScript arrays and cached host handles cross the native-import boundary` | `native_interop.ts` | a managed `Int32Array`'s data pointer/length both ways, a host-owned token cached in AS state (acquire/read/release), and null/released-token rejection |
+| `AssemblyScript aborts and native import failures remain traps` | `native_interop.ts` | AS `abort()` via the implicit `env.abort` import, a native trap and a C++ exception crossing AS-generated frames |
 
 The modules are produced either from AssemblyScript (`Test/wasm/*.ts`) or from hand-written WAT
 (`Test/wasm_wat/*.wat`); both land in `wasm_test_modules/`.
@@ -146,6 +153,12 @@ cd Test && npx asc <module>.ts -o <build>/wasm_test_modules/<module>.wasm \
 ```
 
 All modules share the single `Test/node_modules` tree, so `npm install` is only needed once.
+
+An AssemblyScript module that allocates (a managed string, `Int32Array`, …) also
+imports the stub runtime's `env.abort`, so a test that instantiates one must
+resolve `env.abort` as well as its own imports. The `string_interop` and
+`native_interop` cases show the adapter: `abort` traps as `Unreachable`, exactly
+like the runtime's own implementation.
 
 ### Running them
 
@@ -260,7 +273,7 @@ selection is explicit — which is why `./WasmJit '[spec]'` runs everything.
 | `./WasmJit '[spec]'` | all 257 spec scripts (~2 min in the debug build; 251 pass, 6 known failures) |
 | `./WasmJit 'spec: address'` | just that script |
 | `./WasmJit '*float*'` | scripts whose name matches |
-| `./WasmJit --list-tests` | the default view (366 test cases) |
+| `./WasmJit --list-tests` | the default view (380 test cases) |
 | `./WasmJit --list-tests '[spec]'` | every script, one line each (257) |
 | `./WasmJit -# --list-tags` | all tags, including `[#main]` and `[#SpecSuite]` |
 
@@ -291,7 +304,7 @@ It currently holds 193 of the 257 scripts, and the default run is green:
 
 ```
 $ ./WasmJit
-All tests passed (9353 assertions in 366 test cases)
+All tests passed (10269 assertions in 380 test cases)
 ```
 
 #### Refreshing the list
@@ -519,7 +532,7 @@ tests, and it is green:
 
 ```
 $ ./WasmJit
-All tests passed (9353 assertions in 366 test cases)
+All tests passed (10269 assertions in 380 test cases)
 ```
 
 A full sweep is deliberately loud, because most of the suite is still beyond the
@@ -710,7 +723,7 @@ Measured after SIMD-5:
 
 ```bash
 ./WasmJit 'simd*'      # 24 cases, 6147 assertions, all passing (includes the hidden [.simdbench] case)
-./WasmJit              # 366 cases, 9353 assertions, all passing
+./WasmJit              # 380 cases, 10269 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed
@@ -805,6 +818,31 @@ the batched helper path (design `D4`) is ever built, and they are recorded back
 into `docs/SIMD_LIBJIT.md` §8.4.
 
 ---
+
+## Proposal-note structural check
+
+`Test/ProposalDocsTests.cpp` is a `[docs]` test that enforces the shape
+[`PROPOSALS.md`](PROPOSALS.md) demands of every note, without hard-coding the
+sanctioned variants:
+
+- each `docs/proposals/*.md` has `Status:` and `Audience:` front matter before
+  its §1 map;
+- the §1 map exists and is the contract: every `## N.` heading (N ≥ 2) appears
+  in the map, and every `§N` the map names has a heading;
+- a References section exists.
+
+The check reads the notes from the source tree through
+`WASM_TESTSUITE_SOURCE_DIR`, so it works from any working directory. Run it on
+its own with:
+
+```bash
+./Test/WasmJit '[docs]'
+```
+
+It is part of the default suite, so drift fails the normal run. `GC.md` §10,
+`COMPONENT_MODEL.md` §9 and `SMALL_PROPOSALS.md`'s grouped §1–§8 shape all pass,
+because the rule is map ↔ headings rather than a fixed section count
+(`PROPOSALS.md` §3).
 
 ## Picking tests with Catch2 options
 

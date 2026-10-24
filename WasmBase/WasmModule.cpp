@@ -657,6 +657,12 @@ void Module::processCustomSection(Elv::Io::Device& file, const Section& section)
 		processNameSection(file, section);
 	} else if (customName == "metadata.code.branch_hint") {
 		processBranchHintSection(file, section);
+	} else if (customName == "metadata.code.compilation_priority") {
+		processCompilationHintSection(file, section, compilationPriorityHints);
+	} else if (customName == "metadata.code.instr_freq") {
+		processCompilationHintSection(file, section, instructionFrequencyHints);
+	} else if (customName == "metadata.code.call_targets") {
+		processCompilationHintSection(file, section, callTargetHints);
 	} else {
 		// Skip unknown custom sections
 		// The 'section' object you passed in should have the total size,
@@ -861,6 +867,74 @@ void Module::processBranchHintSection(Elv::Io::Device& file, const Section& sect
 					file.seek(static_cast<long>(length - 1), Elv::Io::SeekOrigin::CUR);
 			}
 			hints.push_back(hint);
+		}
+	}
+}
+
+void Module::processCompilationHintSection(Elv::Io::Device& file, const Section& section,
+		std::map<uint32_t, std::vector<CompilationHint>>& out)
+{
+	// Compilation hints (docs/proposals/PARSER_PROPOSALS.md PP-1) share one
+	// wire shape with branch hints:
+	//   vec(function-hint)
+	//     funcidx:u32
+	//     vec(hint)
+	//       offset:u32
+	//       length:u32
+	//       payload:byte[length]
+	// The payload is kept raw: it is inert metadata and the three families only
+	// differ in how a consumer would read it (PPD2/PPD4).
+	//
+	// The whole remaining section is copied into a bounded buffer first (the
+	// processNameSection pattern), so a hostile length can never read into the
+	// next section (docs/SAFETY.md §2.2).
+	const uint64_t sectionEnd = static_cast<uint64_t>(section.offset) + section.size;
+	const long position = file.tell();
+	if (position < 0 || static_cast<uint64_t>(position) > sectionEnd)
+		throw std::runtime_error("compilation-hint section out of bounds");
+	const uint64_t payloadSize = sectionEnd - static_cast<uint64_t>(position);
+	std::vector<std::byte> payload(requireAvailable(file, payloadSize, "a compilation-hint section"));
+	if (!payload.empty() && file.read(payload.data(), 1, payload.size()) != payload.size())
+		throw std::runtime_error("malformed module: truncated compilation-hint section");
+
+	Euph::Io::ConstBufferDevice payloadDevice(
+			std::span<const std::byte>(payload.data(), payload.size()));
+	DWasmStream payloadStream(payloadDevice);
+
+	const auto remaining = [](DWasmStream& stream) -> size_t {
+		const long pos = stream.device.tell();
+		const size_t total = stream.device.size();
+		return (pos >= 0 && static_cast<size_t>(pos) < total)
+				? total - static_cast<size_t>(pos) : 0;
+	};
+
+	uint32_t functionCount;
+	payloadStream >> Elv::Io::Leb(functionCount);
+	requireCountAvailable(payloadDevice, functionCount, "a compilation-hint function count");
+
+	for (uint32_t i = 0; i < functionCount; ++i) {
+		uint32_t funcIndex;
+		payloadStream >> Elv::Io::Leb(funcIndex);
+
+		uint32_t recordCount;
+		payloadStream >> Elv::Io::Leb(recordCount);
+		requireCountAvailable(payloadDevice, recordCount, "a compilation-hint count");
+
+		std::vector<CompilationHint>& records = out[funcIndex];
+		records.reserve(records.size() + recordCount);
+		for (uint32_t j = 0; j < recordCount; ++j) {
+			uint32_t offset;
+			uint32_t length;
+			payloadStream >> Elv::Io::Leb(offset);
+			payloadStream >> Elv::Io::Leb(length);
+			if (length > remaining(payloadStream))
+				throw std::runtime_error("malformed module: compilation hint claims more "
+						"bytes than the section has left");
+			CompilationHint record{offset, std::vector<uint8_t>(length)};
+			if (length != 0
+					&& payloadStream.device.read(record.payload.data(), 1, length) != length)
+				throw std::runtime_error("malformed module: truncated compilation hint");
+			records.push_back(std::move(record));
 		}
 	}
 }
@@ -1120,13 +1194,6 @@ namespace {
 			+ " is not implemented (docs/proposals/CONSTANT_TIME.md CT-0)");
 }
 
-[[noreturn]] void rejectSecretMemory(const char* where, size_t index)
-{
-	throw std::runtime_error(std::string("constant-time extension: secret memory in ") + where
-			+ " #" + std::to_string(index)
-			+ " is not implemented (docs/proposals/CONSTANT_TIME.md CT-0)");
-}
-
 [[noreturn]] void rejectUnsupportedValueType(const char* where, size_t index, WASM::ValueTypeCode code)
 {
 	const int value = static_cast<int>(code);
@@ -1193,15 +1260,6 @@ void Module::validateValueTypes() const
 	for (size_t i = 0; i < functionBodies.size(); ++i)
 		for (const LocalEntry& l : functionBodies[i].locals)
 			check("local", i, l.type.opcode);
-
-	for (size_t i = 0; i < importMemories.size(); ++i) {
-		if (importMemories[i].memory.secret)
-			rejectSecretMemory("imported memory", i);
-	}
-	for (size_t i = 0; i < memories.size(); ++i) {
-		if (memories[i].secret)
-			rejectSecretMemory("memory", i);
-	}
 }
 
 void Module::validate() const
