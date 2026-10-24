@@ -15,13 +15,6 @@
 #include <utility>
 namespace WASM {
 
-thread_local TailCallState g_tailCallState;
-
-TailCallState* currentTailCallState()
-{
-	return &g_tailCallState;
-}
-
 namespace {
 // `ref.func $f` is stored in a constant-expression Value as a *biased* function
 // index (index + 1), so that function index 0 is distinguishable from the null

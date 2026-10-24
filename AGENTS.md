@@ -19,6 +19,11 @@ the one-line check to run.
   The core must not name, include, link or describe any specific backend: `LibJit/` is the first of
   several planned code generators, and `WasmBase/` states the contracts they all must honour.
 
+- **No bespoke interpreter fallback.** WasmJit does not grow a Wasm interpreter: interpretation, if
+  ever required, is the backend's own compile/interpret configuration (currently GNU LibJIT, which
+  already provides an interpreter), never a core fallback or a new execution engine. See
+  [`docs/proposals/STACK_SWITCHING.md`](docs/proposals/STACK_SWITCHING.md) §10.15 (D-3).
+
 - **[`docs/SAFETY.md`](docs/SAFETY.md) — read before touching `WasmBase/` or a backend (currently `LibJit/`).**
   It is the policy for not letting a module take the host down: telling artifacts apart before decoding,
   input-derived allocation bounds, the allocation budget, traps vs `std::abort()`, and RAII for locks.

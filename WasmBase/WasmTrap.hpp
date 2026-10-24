@@ -71,15 +71,15 @@ const char* trapKindName(TrapKind kind);
 
 // ── The pending-trap slot ───────────────────────────────────────────────────
 //
-// One call chain per host thread executes at a time (docs/SAFETY.md §2.7), so
-// the slot is thread-local: two host threads running Wasm must not observe each
-// other's traps. Generated code obtains its address once per function through
-// `wasm_trap_slot()` and reads `pending` inline from then on.
+// The slot belongs to the current execution state (`WasmAgent.hpp`): each agent
+// has its own pending trap, so two host threads — and two agents sharing one
+// host thread — cannot observe each other's traps. Generated code obtains its
+// address once per function through `wasm_trap_slot()` and reads `pending`
+// inline from then on.
 //
-// Per-*agent* state (several agents on one host thread) is TRAP-6 in
-// docs/TRAP_CLEANUP.md §12.1: deferred by decision until a real multi-agent
-// execution model exists, because there is no agent object to attach the slot
-// (or the cleanup stack and depth counters beside it) to.
+// The cleanup stack and the two depth counters live in the same
+// `ExecutionState`, so they move with the agent rather than with the host
+// thread (TRAP-6, docs/TRAP_CLEANUP.md §12.1).
 //
 // The message is *stored in the slot*, not referenced: a native import that
 // reports `std::exception::what()` owns that text only until its frame returns,
@@ -168,8 +168,9 @@ private:
 // value; the generated caller then sees the pending slot.
 [[gnu::noinline]] void checkTrap();
 
-// Depth of host→Wasm calls on this thread. Zero means the caller is outside the
-// engine's generated frames, which is the only place `Trap` may be thrown.
+// Depth of host→Wasm calls in the current execution state. Zero means the
+// caller is outside the engine's generated frames, which is the only place
+// `Trap` may be thrown.
 int wasmCallDepth() noexcept;
 
 // RAII increment/decrement of `wasmCallDepth()`. Every place that calls into

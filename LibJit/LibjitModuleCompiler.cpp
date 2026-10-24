@@ -314,8 +314,8 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 			jit_value_create_nint_constant(driver, jit_type_int, 0));
 		jit_insn_branch_if_not(driver, noTrap, &doneLabel);
 
-		// The state is thread_local; ask the runtime for this host thread's
-		// address instead of embedding the compiling thread's TLS address.
+		// The state belongs to the current execution state (an Agent); ask the
+		// runtime for it instead of embedding the compiling thread's TLS address.
 		jit_type_t stateSig = jit_type_create_signature(jit_abi_cdecl,
 			jit_type_void_ptr, nullptr, 0, 1);
 		jit_value_t state = jit_insn_call_native(driver, "wasm_tail_call_state",

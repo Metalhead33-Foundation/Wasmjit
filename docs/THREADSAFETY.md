@@ -277,8 +277,8 @@ touches. It is **not** a statement that generated Wasm code is race-free.
 | `WASM::VMContext` | Per-instance POD passed as arg0; contains index-space pointers, globals, `hostData`, `hostBridge` | Read by generated code without a lock. It must not be destroyed or re-pointed while a call using it is active. |
 | `hostData` | Embedder-owned pointer inside `VMContext` | **Entirely host-owned.** The engine never synchronizes it; the embedder must. |
 | `WASM::HostBridge` | Borrowed embedder-owned callback table (`retain`/`release`/`equals`, `instanceCreated`/`instanceDestroying`) | **Not synchronized by the engine.** Callbacks run on whichever host thread executes the instance; the adapter must serialize its own state. A bridge must outlive the instance and its callbacks must not block on a Wasm call. |
-| `WASM::TrapSlot` | Per-host-thread pending-trap state (`wasm_trap_slot()`) | Generated code resolves it on the executing thread; `callCallable` throws `WASM::Trap` from it at the boundary. |
-| `WASM::g_tailCallState` | `thread_local` pending tail-call state | Generated code asks `WASM::currentTailCallState()` for the executing host thread's address; a host thread never uses another thread's state. |
+| `WASM::TrapSlot` | Per-agent pending-trap state (`ExecutionState::trapSlot`, via `wasm_trap_slot()`) | Generated code resolves it on the current agent; `callCallable` throws `WASM::Trap` from it at the boundary. |
+| `ExecutionState::tailCallState` | Per-agent pending tail-call state | Generated code asks `WASM::currentTailCallState()` for the current agent's state; a host thread or another agent never uses it. |
 | `GcHeap` / `StringStore` | Store-owned host metadata plus allocator locks | Their host-side bookkeeping is locked; generated Wasm code still has a single mutator and is not a multi-agent GC. |
 
 ### 5.2 What the current engine does and does not guarantee
@@ -291,10 +291,11 @@ touches. It is **not** a statement that generated Wasm code is race-free.
 - stable Store-owned entity addresses for the lifetime of the Store;
 - atomic, naturally aligned atomic accesses and alignment traps;
 - ordered shared `memory.grow`/`memory.size` and the data-segment barrier;
-- a host-thread-local pending-trap slot (`TrapSlot`), a host-thread-local
-  pending-exception slot and a per-thread tail-call state; per-**agent** state is
-  TRAP-6, deferred until agents exist ([`TRAP_CLEANUP.md`](TRAP_CLEANUP.md)
-  §12.1);
+- a **per-agent** pending-trap slot (`TrapSlot`), pending-exception slot,
+  tail-call state, deferred-cleanup stack, depth counters and stack limit:
+  `Agent` owns an `ExecutionState` (`WasmBase/WasmAgent.hpp`) and a host
+  thread's default agent is created lazily. True multi-agent execution remains
+  deferred ([`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §12.1);
 
 **It does not guarantee:**
 
@@ -374,9 +375,10 @@ its raw entry point. There is no hidden per-instance lock. Therefore:
   serial-only, and what shared state they touch. The engine cannot check this.
 - **Destruction:** no call may be in flight when its instance, module or
   `Callable` is destroyed.
-- **Trap state:** the pending trap is thread-local, so each host thread observes
-  only its own traps; `callCallable` checks it and throws `WASM::Trap` at the
-  boundary. There is no scope object to arm.
+- **Trap state:** the pending trap belongs to the current agent
+  (`ExecutionState`), so each host thread and each agent observes only its own
+  traps; `callCallable` checks it and throws `WASM::Trap` at the boundary. There
+  is no scope object to arm.
 
 ### 5.5 Host code that shares data with Wasm
 
@@ -493,9 +495,9 @@ the party has no obligation for that row.
 | G-D: shared table/global/GC in the single instance | Provide annotations/atomics; multi-mutator GC is **future** | State G-D only if the runtime supports it; use SET rules | Do not claim G-D until engine/agents exist |
 | H→W export | No implicit instance lock; preserve ABI/lifetime; target per-instance protocol | Declare each export's reentrancy/state contract | Serialize the single instance or wait for engine instance safety |
 | W→H import | Call the registered `fnPtr` with the correct context | Call only imports whose contract permits it | Make import reentrant/thread-safe; synchronize `hostData`; no C++ exceptions across the boundary |
-| Store/API management | Locks, stable IDs, per-thread trap/tail state | — | Treat `Module`/`ModuleInstance`/instantiator as not concurrently mutable |
+| Store/API management | Locks, stable IDs, per-agent trap/tail state | — | Treat `Module`/`ModuleInstance`/instantiator as not concurrently mutable |
 | Initialization | Apply data/elem/start before publication; barrier | Do not rely on concurrent initialization | Do not publish/call until `instantiate` returns |
-| Trap/failure | Thread-local pending-trap slot; the boundary throws `WASM::Trap` | Use Wasm traps, not host crashes | Catch `WASM::Trap` (or read the harness trap result); host destructors run on the trap path |
+| Trap/failure | Per-agent pending-trap slot (the execution state); the boundary throws `WASM::Trap` | Use Wasm traps, not host crashes | Catch `WASM::Trap` (or read the harness trap result); host destructors run on the trap path |
 | Lifetime | Preserve code/context addresses | Keep exports/imports valid | Keep modules/instances/callables alive through every call; no destruction in flight |
 
 The library author (this project) must **not** infer guest safety from any of
@@ -532,10 +534,10 @@ is undefined even if a particular run happens to work.
 | Concurrent `ModuleInstantiator`/backend compilation | **Not guaranteed**; use one per thread or serialize | backend session |
 | Concurrent `Module`/`ModuleInstance` mutation | **Not supported** | mutable fields |
 | Store entity creation/lookup and type interning | **Management-level locks**; not a guest-data lock | `WasmStore`, `TypeRegistry` |
-| Host-thread trap state | **Per host thread**; per-agent state is TRAP-6, deferred with the multi-agent model | `wasm_trap_slot()` / `TrapSlot` |
-| Host-thread pending Wasm exception | **Per host thread** (same discipline as the trap slot); per-agent state is TRAP-6 | `wasm_exn_slot()` |
-| Trap-time host cleanup (locks, roots, arenas) | **RAII works** (a trap unwinds by returning); non-RAII state can use the deferred-cleanup stack | §5.6, [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) |
-| Host-thread tail-call state | **Per host thread**; generated code resolves it dynamically | `currentTailCallState()` |
+| Host-thread trap state | **Per agent** (`ExecutionState::trapSlot`); a host thread's default agent is per thread, and `AgentScope` installs another agent for a call | `WasmAgent.hpp`, `wasm_trap_slot()` |
+| Host-thread pending Wasm exception | **Per agent** (`ExecutionState::pendingException`) | `WasmAgent.hpp`, `wasm_exn_slot()` |
+| Trap-time host cleanup (locks, roots, arenas) | **RAII works** (a trap unwinds by returning); non-RAII state can use the deferred-cleanup stack, which is per agent | §5.6, [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) |
+| Host-thread tail-call state | **Per agent** (`ExecutionState::tailCallState`); generated code resolves it dynamically | `currentTailCallState()` |
 | Shared-memory atomic loads/stores/RMW/cmpxchg | **Implemented single-agent**, hardware atomics and alignment traps | `wasm_atomic.*`, `THREADS.md` TH-1 |
 | Acquire-release ordering and `pause` | **Implemented single-agent** | `ACQUIRE_RELEASE_ATOMICS.md` |
 | Shared `memory.grow`/`memory.size` and data-init barrier | **Implemented** | `THREADS.md` TH-3 |
@@ -555,9 +557,9 @@ calls into the one instance are safe.
 The smallest protocol that is valid with the current engine is:
 
 1. **Call through `WASM::callCallable` and catch `WASM::Trap`.** The pending
-   trap is thread-local, and the boundary throws only after the generated frames
-   have returned, so host destructors run. Re-entrant calls from an import see
-   the pending slot instead of an exception.
+   trap belongs to the current agent, and the boundary throws only after the
+   generated frames have returned, so host destructors run. Re-entrant calls
+   from an import see the pending slot instead of an exception.
 2. **Treat the module's single instance as the unit of serialization.** Guard
    it with an external mutex (or permit only one host thread) today. Do not
    create per-thread instances as a design; that is not the target model. The
@@ -605,8 +607,10 @@ preserve; it is not a current guarantee:
   per-agent stacks over the one instance, or module/toolchain-managed guest
   locks over shared state; none is chosen or implemented here.
 - Each agent has its own evaluation stack, trap target and tail-call state;
-  these must not live in process-global mutable variables. The current
-  host-thread-local state is the first step.
+  these must not live in process-global mutable variables. The trap, exception,
+  tail-call, cleanup, depth-counter and stack-limit state now belongs to an
+  `Agent`/`ExecutionState`; the evaluation stack and the scheduler remain
+  future work.
 - A `VMContext` remains the native ABI's arg0, but an agent's current context
   must not be recovered from a process-global “current instance” slot.
 - The Store remains the shared ownership boundary. Shared memory/table/GC
@@ -628,23 +632,19 @@ preserve; it is not a current guarantee:
 
 ### 10.1 Traps, lock ownership, cancellation, and tail calls
 
-The trap model is a thread-local *pending status*: generated code and helpers
+The trap model is a per-agent *pending status*: generated code and helpers
 report, every caller returns, and the host boundary throws `WASM::Trap` after
 the last generated frame is gone. `std::lock_guard` and every other host
-destructor therefore run on the trap path (§5.6). What the model does not yet
-answer is the multi-agent question:
+destructor therefore run on the trap path (§5.6). What remains open is the
+multi-agent *execution* question:
 
-- **Per-agent trap isolation — TRAP-6, deferred by decision.** A trap in one
-  agent must unwind only that agent's stack and must not disturb another agent's
-  pending slot, operand stack or tail-call state. Today all of that is per *host
-  thread*, which is the correct granularity for the only execution model the
-  engine has. Per-agent state is tracked as TRAP-6 in
-  [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §12.1 and is **deferred until true
-  multi-agent execution exists** (`proposals/THREADS.md` TH-5/T9,
-  `proposals/SHARED_EVERYTHING_THREADS.md` SET-4/SET-5): there is no agent object
-  to attach the state to, and the migration is a mechanical replacement of the
-  `thread_local` slots behind `wasm_trap_slot()`/`wasm_exn_slot()` and the
-  counters, not a redesign.
+- **Per-agent trap isolation — TRAP-6 is implemented.** A trap in one agent
+  unwinds only that agent's stack and does not disturb another agent's pending
+  slot, operand stack or tail-call state: `Agent` owns an `ExecutionState` and
+  `AgentScope` installs it. What is still deferred is running several agents
+  concurrently (`proposals/THREADS.md` TH-5/T9,
+  `proposals/SHARED_EVERYTHING_THREADS.md` SET-4/SET-5) — the scheduler,
+  multi-mutator GC and waiter table, not the state.
 - **C++ unwinding.** The engine's own frames unwind safely because there is no
   non-local jump at all; the one remaining constraint is that a helper reached
   from generated code must report instead of throwing
@@ -705,8 +705,10 @@ multi-agent race freedom.
   `WasmBase/WasmStore.*` (Store locks and stable entities),
   `WasmBase/WasmTypeRegistry.*` (intern serialization),
   `WasmBase/WasmGcHeap.*` / `WasmBase/WasmString.*` (host-side recursive locks),
-  `WasmBase/WasmValue.hpp` (`Callable`, per-thread tail state),
-  `WasmBase/WasmTrap.*` (thread-local trap state),
+  `WasmBase/WasmAgent.hpp` / `WasmAgent.cpp` (`Agent`/`ExecutionState`: per-agent
+  trap, exception, tail-call, defer, counter and stack-limit state),
+  `WasmBase/WasmValue.hpp` (`Callable`, `TailCallState`),
+  `WasmBase/WasmTrap.*` (trap reporting),
   `WasmBase/wasm_atomic.*` (ordered atomic helpers),
   `WasmBase/WasmMemory.*` / `WasmStore.cpp` (shared-memory grow/size ordering),
   `WasmBase/WasmModuleInstance.cpp` (instance state and initialization).

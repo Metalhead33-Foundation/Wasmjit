@@ -43,7 +43,9 @@ Tail Call is a **Phase 5** proposal, integrated into WebAssembly **3.0**.
 
 - **No mechanism.** Reusing the frame, a `jmp`, a trampoline/dispatch loop, or
   an interpreter are all acceptable; only the *observable* stack behaviour is
-  constrained.
+  constrained. (The engine nevertheless does not use that freedom to add a
+  bespoke interpreter: the trampoline is the chosen mechanism, per
+  [`STACK_SWITCHING.md`](STACK_SWITCHING.md) §10.15 D-3.)
 - **No performance guarantee** beyond space; a tail call need not be faster
   than `call`+`return`.
 - **No ABI change**; a caller's frame may be reused or abandoned.
@@ -86,8 +88,8 @@ Tail Call is a **Phase 5** proposal, integrated into WebAssembly **3.0**.
   signature (`LibjitModuleCompiler.cpp`); wasm-to-wasm calls reach the callee
   through the driver (`Callable::fnPtr`; the raw entry point is in
   `rawFnPtr`). A tail call whose callee has a *structurally identical signature*
-  writes `{target, args, pending}` into the host-thread-local
-  `WASM::g_tailCallState` and
+  writes `{target, args, pending}` into the current execution state's
+  `ExecutionState::tailCallState` and
   returns; the driver observes `pending`, re-dispatches to the target's raw
   entry point and loops, so the host stack stays constant. Signatures that
   differ keep the `call` + `return` lowering. This is what makes mutual
@@ -113,7 +115,7 @@ Tail Call is a **Phase 5** proposal, integrated into WebAssembly **3.0**.
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
 | TCD1 | **Fix the crash first; do not attempt clever frame reuse yet.** | §3: the mechanism is free; the observable requirement is stack space, which only matters for unbounded recursion. | Unblocks correct results for the common (shallow) case. |
-| TCD2 | **Implement a trampoline (`dispatch loop`) rather than native frame reuse.** Each compiled function returns a "tail call requested (callee, args)" signal to a driver loop that re-enters without growing the stack. | §3 explicitly allows a trampoline/interpreter; it gives the unbounded-recursion guarantee without an ABI rewrite. | Conformance with a small, contained change — and it is exactly the QVM execution model. |
+| TCD2 | **Implement a trampoline (`dispatch loop`) rather than native frame reuse.** Each compiled function returns a "tail call requested (callee, args)" signal to a driver loop that re-enters without growing the stack. | §3 explicitly allows a trampoline (a bespoke interpreter is excluded engine-wide — D-3); it gives the unbounded-recursion guarantee without an ABI rewrite. | Conformance with a small, contained change — and it is exactly the QVM execution model. |
 | TCD3 | **Keep `call`+`return` as the semantic reference** and make the trampoline a lowering detail. | Same results, same traps. | Trivial fallback and a way to validate the trampoline. |
 | TCD4 | **Do not implement sibling-call stack compaction / `jmp` in the JIT.** | Not required, and fragile with LibJIT. | Avoids platform-specific assembly. |
 
@@ -137,7 +139,7 @@ caller's driver.
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **TC-1 — Fix the crash** | ✅ Corrected the diagnosis (TC1 was stack exhaustion, not codegen) and fixed the `return_call_ref` instantiation abort: proper init-expr parsing (§4.1) + `ref.func` global resolution (§4.2). | TC1, TC2 | Done: shallow results are correct; `return_call_ref` instantiates and the global path is covered. |
-| **TC-2 — Space guarantee** | ✅ C2 (native `JIT_CALL_TAIL` for direct self-recursion) + the trampoline (`emitTailCallViaPending` / `g_tailCallState` / per-function drivers) for mutual and indirect recursion with identical signatures. | TC3 | `count`/`even`/`odd` at 10⁶ pass on the default stack; `tail_call.wat` `count(10⁷)` passes. |
+| **TC-2 — Space guarantee** | ✅ C2 (native `JIT_CALL_TAIL` for direct self-recursion) + the trampoline (`emitTailCallViaPending` / `ExecutionState::tailCallState` / per-function drivers) for mutual and indirect recursion with identical signatures. | TC3 | `count`/`even`/`odd` at 10⁶ pass on the default stack; `tail_call.wat` `count(10⁷)` passes. |
 | **TC-3 — Harness** | ✅ `assert_exhaustion` is an ordinary recoverable trap: the guest stack guard raises `CallStackExhausted` before the host stack runs out (`WasmBase/WasmStack.hpp`), and the harness compares the trap's kind. | TC4 | `spec: skip-stack-guard-page` 11/0, no nested child and no `SIGSEGV`; the space guarantee is exercised. |
 | **TC-4 — Manual test** | ✅ `Test/wasm_wat/tail_call.wat` + `tail calls compute correct results` (direct / indirect / ref, plus a deep self-recursive `count`). | TC5 | Done. |
 

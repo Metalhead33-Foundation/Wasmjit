@@ -374,7 +374,7 @@ auto instance = compiler.instantiate(module, imports, &bridge);
 
 This closes the *generic* part of JS1 without changing the reference
 representation (`ABI.md` R2/R3 remains staged). It also gives non-JS hosts — a
-Lua, Python or bespoke interpreter embedding — the same lifetime hook.
+Lua, Python or other host runtime embedding — the same lifetime hook.
 
 ### 4.4 What is deliberately absent
 

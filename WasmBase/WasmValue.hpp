@@ -71,22 +71,21 @@ inline constexpr uint32_t kTailCallArgSlots = 16;
 // running function observes `pending`, re-dispatches to `target` with `args`,
 // and loops — so the host stack does not grow along the tail-call chain.
 //
-// Single-threaded *per host thread*: the engine executes one wasm call chain
-// at a time on each thread. The state is thread_local, and generated code
-// obtains its address through the helper below rather than embedding the TLS
-// address of the compiling thread (docs/proposals/SHARED_EVERYTHING_THREADS.md
-// SET-2; true wasm agents remain deferred).
+// Single agent *per execution context*. The engine still runs one agent per
+// host thread, but the state belongs to the current execution state
+// (`WasmAgent.hpp`), not to the thread; generated code obtains its address
+// through the helper below rather than embedding the TLS address of the
+// compiling thread (docs/proposals/SHARED_EVERYTHING_THREADS.md SET-2).
 struct TailCallState {
 	int32_t   pending = 0;
 	Callable* target  = nullptr;
 	uint64_t  args[kTailCallArgSlots] = {};
 };
-extern thread_local TailCallState g_tailCallState;
 
-// Address of the calling host thread's tail-call state. Generated code calls
-// this helper; it is the only supported way for a backend to reach the state,
-// because a `thread_local` object's address is not portable across threads.
-TailCallState* currentTailCallState();
+// Address of the current execution state's tail-call state. Generated code
+// calls this helper; it is the only supported way for a backend to reach the
+// state, because a context's address is not portable across host threads.
+TailCallState* currentTailCallState() noexcept;
 
 template<typename Ret, typename... Args>
 Ret callCallable(const Callable& callable, Args&&... args)

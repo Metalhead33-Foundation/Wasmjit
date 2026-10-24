@@ -68,8 +68,8 @@ humans write that graph; the Canonical ABI is how it runs.*
   🗺️ `map`; 🏷️ `implements`/`external-id`; 🧵 threading; 🔧 fixed-length lists;
   📝 `error-context`; 🐘 memory64; 📡 getters/setters; ➡️ `{stream,future}.forward`).
 - The repo currently ships **explainers** (AST, binary, WIT, Canonical ABI,
-  linking) plus a growing WAST test suite; the formal spec and reference
-  interpreter are still future work (`spec/` is a stub).
+  linking) plus a growing WAST test suite; the formal spec and upstream
+  reference interpreter are still future work (`spec/` is a stub).
 
 ### 2.2 Binary format: the same `.wasm` extension, discriminated by `layer`
 

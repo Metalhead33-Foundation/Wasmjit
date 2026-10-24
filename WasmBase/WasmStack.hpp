@@ -18,7 +18,10 @@ struct VMContext;
 //
 //   * `VMContext::stackLimit` holds the lowest address generated code may let
 //     its frame reach on the executing host thread. Zero means "no limit is
-//     installed" and the backend must not check.
+//     installed" and the backend must not check. The current execution state
+//     (`ExecutionState::stackLimit`, WasmAgent.hpp) is the authority; the
+//     `VMContext` field is the compatibility fallback for a state that has not
+//     installed its own limit.
 //   * Generated code must call `wasm_stack_check(VMContext*)` on entry to every
 //     compiled Wasm function, before its body runs. The helper probes the
 //     current stack pointer and *reports* `TrapKind::CallStackExhausted` once it
@@ -27,7 +30,10 @@ struct VMContext;
 //     (`WasmTrap.hpp`).
 //   * The limit is installed by the core when the instance is created (see
 //     `installStackLimit`) and assumes a downward-growing host stack, which is
-//     what every host this engine builds for uses.
+//     what every host this engine builds for uses. A continuation stack will
+//     install its own limit when it becomes current (§10.10 of
+//     docs/proposals/STACK_SWITCHING.md); one numeric limit cannot describe
+//     two disjoint mappings.
 //
 // The probe is a call, so a frame is already allocated when the check runs. A
 // single frame larger than the reserve could therefore still cross the guard
@@ -35,10 +41,9 @@ struct VMContext;
 // the parameters and declared locals of one function well below
 // `kDefaultStackReserveBytes`, so a module this engine accepts cannot get close.
 //
-// The limit is captured on the thread that creates the instance. That matches
-// the engine's execution model: one call chain per host thread, and an instance
-// executes on the thread that made it (docs/SAFETY.md §2.7,
-// docs/THREADSAFETY.md).
+// The limit is captured for the stack that creates the instance. That matches
+// the current one-agent-per-host-thread execution model; an agent or
+// continuation that runs on another stack installs its own.
 
 // Usable stack bytes held back at the bottom of the stack for the check itself,
 // the prologue of one frame, and the native helpers a frame may call.

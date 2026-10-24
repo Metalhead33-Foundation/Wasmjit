@@ -22,7 +22,10 @@
 #include <vector>
 
 #include "helper.hpp"
+#include "WasmBase/WasmAgent.hpp"
 #include "WasmBase/WasmArtifact.hpp"
+#include "WasmBase/WasmStack.hpp"
+#include "WasmBase/WasmVMContext.hpp"
 #include "WasmBase/WasmComponent.hpp"
 #include "WasmBase/WasmGcHeader.hpp"
 #include "WasmBase/WasmGcHeap.hpp"
@@ -7427,6 +7430,139 @@ TEST_CASE("deferred cleanup runs LIFO on a trap and is dismissed on the normal p
 	REQUIRE(g_deferredOrder[0] == 2);
 	REQUIRE(g_deferredOrder[1] == 1);
 	REQUIRE(WASM::deferredCleanupCount() == 0);
+}
+
+TEST_CASE("agent execution state isolates traps, exceptions, tail calls and deferred cleanup")
+{
+	// Snapshot the default agent: earlier tests may have left state behind, and
+	// this test must not disturb it either.
+	WASM::Agent* const defaultAgent = WASM::currentAgent();
+	REQUIRE(defaultAgent != nullptr);
+	const std::uint64_t defaultId = defaultAgent->id();
+	const bool defaultTrapPending = WASM::trapPending();
+	void* const defaultException = ::wasm_exn_pending();
+	const int32_t defaultTailPending = WASM::currentTailCallState()->pending;
+	const std::uint32_t defaultDeferCount = WASM::deferredCleanupCount();
+
+	WASM::Agent a;
+	WASM::Agent b;
+	REQUIRE(a.id() != b.id());
+	REQUIRE(a.id() != defaultId);
+	REQUIRE(a.execution().owner == &a);
+	REQUIRE(b.execution().owner == &b);
+
+	{
+		WASM::AgentScope scope(a);
+		REQUIRE(WASM::currentAgent() == &a);
+		REQUIRE(&WASM::currentExecutionState() == &a.execution());
+		REQUIRE(WASM::wasmCallDepth() == 0);
+
+		// Depth counters follow the current agent, not the host thread.
+		{
+			WASM::CallDepthScope depth;
+			REQUIRE(WASM::wasmCallDepth() == 1);
+			WASM::reportTrap(WASM::TrapKind::Unreachable, "agent A trap");
+		}
+		REQUIRE(WASM::wasmCallDepth() == 0);
+		REQUIRE(WASM::trapPending());
+		REQUIRE(WASM::pendingTrapKind() == WASM::TrapKind::Unreachable);
+		REQUIRE(std::string(WASM::pendingTrapMessage()) == "agent A trap");
+
+		// Pending exception and tail-call target are per agent as well.
+		::wasm_exn_set_pending(reinterpret_cast<void*>(0x1));
+		REQUIRE(::wasm_exn_pending() == reinterpret_cast<void*>(0x1));
+		WASM::currentTailCallState()->pending = 1;
+	}
+
+	{
+		WASM::AgentScope scope(b);
+		REQUIRE(WASM::currentAgent() == &b);
+		REQUIRE_FALSE(WASM::trapPending());
+		REQUIRE(::wasm_exn_pending() == nullptr);
+		REQUIRE(WASM::currentTailCallState()->pending == 0);
+		REQUIRE(WASM::wasmCallDepth() == 0);
+		REQUIRE(WASM::deferredCleanupCount() == 0);
+	}
+
+	{
+		WASM::AgentScope scope(a);
+		REQUIRE(WASM::pendingTrapKind() == WASM::TrapKind::Unreachable);
+		REQUIRE(std::string(WASM::pendingTrapMessage()) == "agent A trap");
+		REQUIRE(::wasm_exn_pending() == reinterpret_cast<void*>(0x1));
+		REQUIRE(WASM::currentTailCallState()->pending == 1);
+
+		// Deferred cleanup records belong to the agent that registered them.
+		int runs = 0;
+		const auto thunk = +[](void* arg) noexcept {
+			*static_cast<int*>(arg) += 1;
+		};
+		const WASM::TrapDeferToken token = WASM::defer(thunk, &runs);
+		REQUIRE(token.valid());
+		REQUIRE(WASM::deferredCleanupCount() == 1);
+		{
+			WASM::AgentScope other(b);
+			REQUIRE(WASM::deferredCleanupCount() == 0);
+		}
+		REQUIRE(WASM::deferredCleanupCount() == 1);
+		WASM::runDeferredCleanup();
+		REQUIRE(runs == 1);
+		REQUIRE(WASM::deferredCleanupCount() == 0);
+
+		// Leave agent A clean.
+		WASM::clearPendingTrap();
+		::wasm_exn_clear_pending();
+		WASM::currentTailCallState()->pending = 0;
+	}
+
+	// The default agent is current again and its state is unchanged.
+	REQUIRE(WASM::currentAgent() == defaultAgent);
+	REQUIRE(WASM::trapPending() == defaultTrapPending);
+	REQUIRE(::wasm_exn_pending() == defaultException);
+	REQUIRE(WASM::currentTailCallState()->pending == defaultTailPending);
+	REQUIRE(WASM::deferredCleanupCount() == defaultDeferCount);
+}
+
+TEST_CASE("each host thread gets its own default agent and execution state")
+{
+	const bool mainTrapPending = WASM::trapPending();
+	std::atomic<std::uint64_t> workerAgentId{0};
+	std::atomic<bool> workerWasClean{false};
+
+	std::thread worker([&] {
+		WASM::Agent* agent = WASM::currentAgent();
+		workerAgentId.store(agent != nullptr ? agent->id() : 0);
+		workerWasClean.store(!WASM::trapPending() && ::wasm_exn_pending() == nullptr);
+		WASM::reportTrap(WASM::TrapKind::Unreachable, "worker thread trap");
+	});
+	worker.join();
+
+	WASM::Agent* mainAgent = WASM::currentAgent();
+	REQUIRE(mainAgent != nullptr);
+	REQUIRE(workerAgentId.load() != 0);
+	REQUIRE(workerAgentId.load() != mainAgent->id());
+	REQUIRE(workerWasClean.load());
+	// The worker's trap stayed in the worker's agent.
+	REQUIRE(WASM::trapPending() == mainTrapPending);
+}
+
+TEST_CASE("the stack limit belongs to the execution state")
+{
+	WASM::Agent agent;
+	WASM::AgentScope scope(agent);
+	WASM::VMContext ctx{};
+
+	// Install a limit above every plausible probe: the helper must read the
+	// current execution state, not the shared VMContext field.
+	agent.execution().stackLimit = std::numeric_limits<std::uintptr_t>::max();
+	WASM::wasm_stack_check(&ctx);
+	REQUIRE(WASM::trapPending());
+	REQUIRE(WASM::pendingTrapKind() == WASM::TrapKind::CallStackExhausted);
+	WASM::clearPendingTrap();
+
+	agent.execution().stackLimit = 0;
+	ctx.stackLimit = 0;
+	WASM::wasm_stack_check(&ctx);
+	REQUIRE_FALSE(WASM::trapPending());
 }
 
 TEST_CASE("a trap leaves the instance usable for the next call")

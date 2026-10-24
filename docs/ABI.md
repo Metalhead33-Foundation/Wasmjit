@@ -149,7 +149,7 @@ design — see `HostBridge` below for the embedder-supplied alternative).
 
 | Stage | Work | Unblocks | Acceptance |
 | --- | --- | --- | --- |
-| **R1 — Globals as cells** ✅ | Done: `VMContext::globals` is `Value**`; `Internals::globalRefs` holds one cell per index (imported cells are the exporter's, defined cells point into `globalsStorage`); `ImportRegistrar::registerGlobal` publishes a `Value*` + `GlobalType` and `resolveGlobal` returns the cell; `registerExports` publishes the exporter's cell; `globalSlotAddress` loads it; the interpreter path dereferences it. | MG2, MG3, MG4 | Done: `global` **77/0**; `shared_global_a/b` prove writes cross both ways; `shared_global_bad` is rejected. |
+| **R1 — Globals as cells** ✅ | Done: `VMContext::globals` is `Value**`; `Internals::globalRefs` holds one cell per index (imported cells are the exporter's, defined cells point into `globalsStorage`); `ImportRegistrar::registerGlobal` publishes a `Value*` + `GlobalType` and `resolveGlobal` returns the cell; `registerExports` publishes the exporter's cell; `globalSlotAddress` loads it; generated code dereferences it. | MG2, MG3, MG4 | Done: `global` **77/0**; `shared_global_a/b` prove writes cross both ways; `shared_global_bad` is rejected. |
 | **R2 — Generic reference slots** ✅ (different route) | Done without tags: the table slot stays one pointer-sized word behind the funcref `Callable**` view, so any reference survives `table.set`/`table.get`; `wasm_ref_store` is the single write barrier; `ref.test`/`ref.cast` classify by provenance. | FR6, EX5, GC R4, CM8 | Done: `ref_test` **71/0**, `table_fill` **36/0/9**, `array_new_data` **28/0/0**; the `exnref` table round-trip is covered by `exnref_table.wat`. |
 | **R3 — Extern identity** ✅ (different route) | Done: internal i31/struct/array references are boxed by `extern.convert_any` in a reserved GC object (`GcHeader::kExternBoxTypeId`); `any.convert_extern` unwraps; host pointers stay opaque. The harness derives `(ref.extern N)` identity as a stable synthetic pointer. | GC G3/D5, host interop | Done: `ref_test` **71/0** and `extern` **18/0**, including the `ref_test_extern` cases that motivated R3. |
 
@@ -264,7 +264,7 @@ Notes and limits:
 
 The engine has no JavaScript engine, host-language runtime, or `JSValue` type.
 An embedder that wants to bridge `externref` values to JavaScript, Lua, Python or
-another interpreter installs an optional `WASM::HostBridge` before
+another host runtime installs an optional `WASM::HostBridge` before
 instantiation. It is a plain aggregate of function pointers; every callback and
 the `VMContext::hostBridge` pointer default to `nullptr`:
 
@@ -449,10 +449,10 @@ unless you have retained it.
 ### Exceptions (`WasmBase/WasmExn.hpp`)
 
 An uncaught WebAssembly exception is **not** a trap: the invocation returns
-normally with the exception left in a *pending* slot (thread-local, like the
-trap slot). Traps take the same shape — a pending status that unwinds by
-returning — but are never catchable by `try_table` and win over a pending
-exception.
+normally with the exception left in the execution state's *pending* slot (per
+agent, like the trap slot). Traps take the same shape — a pending status that
+unwinds by returning — but are never catchable by `try_table` and win over a
+pending exception.
 
 | Entry point | Purpose |
 |---|---|

@@ -86,6 +86,15 @@ live, because every backend and the runtime both depend on them:
 | The SIMD helper ABI (`const void*` / `void* out`, immediates as scalars) | `wasm_simd_scalar.hpp` | lower `v128` ops onto those entry points, or provide its own but keep the same semantics |
 | Unmodelled value types are rejected at load, so no backend is ever handed one | `WasmType.hpp`, `WasmModule.cpp` | nothing — this is the core protecting it |
 
+**No interpreter fallback.** The core must not grow a Wasm interpreter. In this
+note a backend is a code generator — or the non-compiling pretty-printer,
+`WasmStub/` — never an interpretation path hidden in the core. If
+interpretation is ever required, it is the backend's own configuration (for the
+current backend, GNU LibJIT already provides an interpreter alongside its
+compiler), not a new WasmJit interpreter. This is a project decision, not a
+layering preference:
+[`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md) §10.15 (D-3).
+
 ## 5. Vocabulary: how to refer to a backend from core code
 
 Name the **obligation**, not the implementer.
@@ -112,6 +121,10 @@ covered by the §8 waiver — no backend name, no backend type, no "the JIT" use
 a synonym for a backend. The same check on `WasmStub/` must be completely empty:
 it is a non-compiling backend and must not acquire a code generator's vocabulary
 by accident.
+
+That grep cannot catch the one rule that is not about names: the core must not
+implement an interpreter (§4). A decode-and-execute loop in `WasmBase/` is a
+review rejection whatever it is called.
 
 ## 7. State of the tree
 

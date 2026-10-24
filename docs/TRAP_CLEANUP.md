@@ -1,13 +1,20 @@
 # Trap Cleanup — Escaping the POD-Only Trap Path
 
-Status: design note / implementation reference (revision 3 — **implemented**).
-The trap path is now a thread-local pending status that unwinds by *returning*:
+Status: design note / implementation reference (revision 4 — **implemented**).
+The trap path is a per-agent pending status that unwinds by *returning*:
 generated code and engine helpers report and return a benign value, every caller
 checks the slot, and the host boundary throws `WASM::Trap` once the generated
 frames are gone. `longjmp` and `TrapScope` have been removed, the POD-only rule
 is gone, and the optional deferred-cleanup stack ships as `WASM::defer`. §10
 remains the feasibility study that selected this direction; §12 records what
 shipped and what is still open.
+
+**Revision 4:** TRAP-6 is implemented. The trap slot, pending exception,
+tail-call state, deferred-cleanup stack, both depth counters and the stack limit
+now live in `WASM::ExecutionState`, owned by an `Agent`
+(`WasmBase/WasmAgent.hpp`); a host thread only holds the current-state pointer.
+Where the historical sections below say "thread-local", read "the current
+execution state" for the shipped tree.
 
 Audience: anyone touching `WasmBase/WasmTrap.*`,
 `WasmBase/WasmModuleInstance.*`, backend trap emission, native imports, or the
@@ -58,9 +65,10 @@ contract, the confinement alternative, and the per-backend study. Where they say
 - **One narrow rule replaces it:** a helper reached from generated code must not
   throw (`SAFETY.md` §2.6). `WASM::trap()` is the host-facing spelling
   (report + throw) and is only valid where no generated frame is on the stack.
-- **The pending slot is thread-local.** Two host threads running Wasm cannot
-  observe each other's traps; generated code resolves the slot once per function
-  through `wasm_trap_slot()` and loads `pending` inline thereafter.
+- **The pending slot is per agent.** Two host threads running Wasm cannot
+  observe each other's traps, and neither can two agents sharing one host
+  thread; generated code resolves the slot once per function through
+  `wasm_trap_slot()` and loads `pending` inline thereafter.
 - **Explicit cleanup remains available** for state no object owns:
   `WASM::defer(thunk, arg)` / `WASM::dismissDeferred(token)`, drained most-recent
   first by `reportTrap()`. It is the §5 design, shipped as a small utility, and
@@ -70,9 +78,9 @@ contract, the confinement alternative, and the per-backend study. Where they say
   destroyed by C++ unwinding and `HostBridge::instanceDestroying` runs.
 - **No backend can emit unwind information** (§10.1), which is why C++
   exceptions crossed generated frames nowhere and are not the trap mechanism.
-- **What is still open:** per-agent trap state (**TRAP-6, deliberately deferred**
-  until a real multi-agent execution model exists — see §12.1), and guest-side
-  cleanup (no Wasm `finally` on a trap).
+- **What is still open:** guest-side cleanup (no Wasm `finally` on a trap), and
+  true multi-agent execution. Per-agent trap state (**TRAP-6**) is implemented —
+  see §12.1; what remains deferred is the execution model, not the state.
 
 | Section | Question it answers |
 |---|---|
@@ -86,14 +94,15 @@ contract, the confinement alternative, and the per-backend study. Where they say
 | §9 | How do we keep `longjmp` but confine it? (not taken) |
 | §10 | Which option can the three backends support, and what must be refactored? |
 | §11 | How does this interact with `HostBridge`? |
-| §12 | What shipped, what is deferred (TRAP-6), and what remains? |
+| §12 | What shipped, what remains, and how the per-agent state is owned? |
 | §13 | What proves it? |
 | §14 | What is still open? |
 | §15 | References |
 
 ## 2. The trap contract we have
 
-`WasmBase/WasmTrap.cpp` keeps the pending trap in a thread-local `TrapSlot`:
+`WasmBase/WasmAgent.hpp` keeps the pending trap in the current execution
+state's `TrapSlot`:
 
 ```cpp
 inline constexpr std::size_t kTrapMessageCapacity = 192;
@@ -303,17 +312,15 @@ The normal path itself can still use RAII for resources that never cross a
 trap-capable call. The explicit protocol is only for the resource that must be
 released if the call traps.
 
-### 5.4 Nesting and thread state
+### 5.4 Nesting and execution state
 
-The cleanup stack lives in the thread-local trap state, not in a C++ object
-per "scope". That was originally forced by the `setjmp` rule (a non-`volatile`
-automatic object changed between `setjmp()` and `longjmp()` is indeterminate
-after the jump); with the status model the same shape is simply the cheapest:
-there is one stack per call chain, and nesting is a saved index.
+The cleanup stack lives in the execution-state object (`ExecutionState` in
+`WasmAgent.hpp`), not in a C++ object per "scope". One state belongs to one
+agent (or, later, one continuation context); nesting is a saved index.
 
 The shipped shape is:
 
-- the records and the top index live in thread-local storage (`WasmTrap.cpp`);
+- the records and the top index live in `ExecutionState` (`WasmAgent.hpp`);
 - `reportTrap()` drains the remaining records most-recent-first; the drain runs
   **before** control leaves the reporting frame, so the thunks operate on live
   state;
@@ -321,10 +328,10 @@ The shipped shape is:
   `NativeImportScope`) records the depth on entry and drains only back to it, so
   an inner trap does not release the outer call's resources.
 
-For the current single-agent engine, thread-local is sufficient. The future
-multi-agent model in [`THREADSAFETY.md`](THREADSAFETY.md) §10.1 needs the same
-state per agent, because several agents may share a host thread — that is
-**TRAP-6, deferred with the multi-agent execution model** (§12.1).
+A host thread's default agent is created lazily; `AgentScope` installs another
+agent for a call, and a continuation runtime will install its own execution
+state for each suspended context. The state no longer depends on the host
+thread, which is what TRAP-6 needed.
 
 ### 5.5 Cleanup-thunk contract
 
@@ -437,7 +444,7 @@ shape is a normal C++ boundary around the start call:
    is still a valid C++ local;
 3. snapshot the trap kind and message **before** destroying anything, because
    teardown (`~ModuleInstance`, `instanceDestroying`, adapter callbacks) may
-   itself record or clear thread-local trap state;
+   itself record or clear the current execution state's trap state;
 4. destroy/reset the instance normally (which invokes
    `HostBridge::instanceDestroying`);
 5. re-raise the snapshotted trap to the outer scope, or return a controlled
@@ -607,7 +614,7 @@ being jumped over. Two shapes are possible, and the difference matters:
   exactly as they are.
 
 The engine already implements the second shape for Wasm exceptions: `throw` sets
-the thread-local pending-exception slot (`wasm_exn_slot()`), returns zeroes from the current function
+the current execution state's pending-exception slot (`wasm_exn_slot()`), returns zeroes from the current function
 (`emitReturnZeroes`), and every call site runs `emitPendingExceptionCheck`. The
 feasibility study (§10.3) argues that this makes the pending-slot variant the
 realistic one, and that the cost estimates in earlier revisions were too
@@ -902,7 +909,7 @@ the pending-failure protocol the engine already uses (§8.5), and it is the shap
 the recommendation in §10.5 lands on:
 
 1. Generated code and audited helpers never call `longjmp`. A trap records
-   `{kind, message}` in the thread-local trap state and *returns* — the
+   `{kind, message}` in the current execution state's trap state and *returns* — the
    generated function returns the zero of each result type, exactly as
    `emitReturnZeroes` already does for a pending Wasm exception.
 2. Every call site checks the pending slot and branches to the function's error
@@ -926,7 +933,7 @@ across frames that are generated or on the audited list.
 
 What it costs: the boundary must be a place the engine controls (it is: the
 per-function driver is generated by the backend), the pending slot must be
-thread-local and trap-first relative to the Wasm exception slot, and the
+per-agent and trap-first relative to the Wasm exception slot, and the
 "am I inside an import body?" test must be exact, because a wrong answer either
 jumps over an import body (the bug we are removing) or fails to report a trap to
 the embedder.
@@ -1153,8 +1160,8 @@ conservative:
 - the LibJIT codegen change is two emitter helpers, four call-site checks, one
   driver check and one epilogue — not a redesign.
 
-Recommended order (**followed in revision 3** — TRAP-1…TRAP-5 and TRAP-7 are
-shipped; TRAP-6 is deferred, see §12.1):
+Recommended order (**followed in revisions 3–4** — TRAP-1…TRAP-7 are
+shipped; TRAP-6 is implemented, see §12.1):
 
 1. **TRAP-1** — the start-function boundary. Required under every option.
 2. **TRAP-2** — the trap-path audit: publish the audited list and split the
@@ -1168,9 +1175,9 @@ shipped; TRAP-6 is deferred, see §12.1):
    release *external* state across a trap. Nothing in the tree does today.
 5. **TRAP-5** — the import contract of §9.2/§9.3 (shipped as the
    `nativeImport` trampoline, §9.2).
-6. **TRAP-6** — per-agent trap state, **deferred** with the multi-agent execution
-   model (§12.1, [`THREADSAFETY.md`](THREADSAFETY.md) §10.1); not scheduled in
-   the current step.
+6. **TRAP-6** — per-agent trap state, **implemented** (`ExecutionState` owned by
+   `Agent`; §12.1, [`THREADSAFETY.md`](THREADSAFETY.md) §10.1). The multi-agent
+   execution model remains deferred.
 
 When to revisit each option:
 
@@ -1240,9 +1247,8 @@ TRAP-1, TRAP-2 (the helper split; the enumerated list is the contract in
 `SAFETY.md` §2.6), TRAP-3 (as the boundary exception of §9.7 rather than a
 `TrapScope` bridge), TRAP-4 (the `WASM::defer` stack), TRAP-5 (the
 `nativeImport` trampoline, [`ABI.md`](ABI.md) “Writing an import”) and TRAP-7.
-TRAP-6 (per-agent state) is **deferred by decision**, not pending work: there is
-no agent object to attach the state to yet, so it is scheduled together with the
-multi-agent execution model itself (§12.1).
+TRAP-6 (per-agent state) is **implemented** by the Agent/ExecutionState
+refactor; true multi-agent execution remains deferred (§12.1).
 
 | Milestone | Work | Closes / enables | Done when |
 |---|---|---|---|
@@ -1252,7 +1258,7 @@ multi-agent execution model itself (§12.1).
 | **TRAP-3 — Pending-trap status** ✅ | `TrapSlot` pending trap, `reportTrap`, call-site checks, error epilogue, driver check, boundary `WASM::Trap` (§9.7). `TrapScope`/`longjmp` removed. Gated on TRAP-2. | §8.5, §10.4 | No helper or import calls `longjmp`; a helper holding a non-trivial local traps and its destructor runs; `try_table` never catches a trap; a tail-call chain propagates the trap; every embedder and harness call site catches `WASM::Trap`. |
 | **TRAP-4 — Cleanup stack** ✅ | Fixed-capacity LIFO cleanup stack (`Elv::Util::DeferStack`), `WASM::defer`/`dismissDeferred`, the drain loop, nesting by saved depth. Only if a TRAP-2 helper needs external-state release. | §5, §11 per-call arena | A helper or import can release a host mutex/arena on both normal return and trap; LIFO and nested scopes are tested. |
 | **TRAP-5 — Import contract** ✅ | `WASM::nativeImport<&fn>()` (`WasmBase/WasmNativeImport.hpp`) wraps a typed host function: it holds a `NativeImportScope`, catches `Trap`/`std::bad_alloc`/`std::exception`/`...`, reports the equivalent pending trap (message copied into the slot) and returns a benign value. The raw `reportTrap` + return contract remains for helpers. | §9.2–§9.4, §14 re-entry | A throwing import becomes a trap with its message and kind; `WASM::trap()` inside a wrapped import keeps its kind; the import’s own RAII locals are destroyed (tests in `Test/main.cpp`). |
-| **TRAP-6 — Per-agent trap state** ◑ **deferred** | Move the pending trap, the pending Wasm exception, the tail-call state, the defer stack and the `wasmCallDepth`/`nativeImportDepth` counters from host-thread-local to per-agent state. **Deferred until true multi-agent execution exists** (§12.1): the state is correct per host thread for the current model, and there is no agent object to hang it on. | §14 multi-agent; [`proposals/THREADS.md`](proposals/THREADS.md) TH-5/T9; [`proposals/SHARED_EVERYTHING_THREADS.md`](proposals/SHARED_EVERYTHING_THREADS.md) SET-4/SET-5 | An agent object owns the trap/exception/tail-call state; two agents sharing one host thread observe independent traps; scheduled in the same change that introduces the agent execution model, never before it. |
+| **TRAP-6 — Per-agent trap state** ✅ | `ExecutionState` owns the pending trap, pending Wasm exception, tail-call state, defer stack, depth counters and stack limit; `Agent` owns an `ExecutionState`; the generated-code helpers resolve the current state. | §14 multi-agent; [`proposals/THREADS.md`](proposals/THREADS.md) TH-5/T9; [`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md) SS-6 | Done: two agents on one host thread observe independent traps, exceptions, tail-call targets, cleanup stacks and stack limits; a host thread's default agent is per-thread. |
 | **TRAP-7 — Trap-model review** ✅ | Record the chosen model and the rejected alternatives in [`SAFETY.md`](SAFETY.md) §2.6 and [`THREADSAFETY.md`](THREADSAFETY.md) §10.1; update the README completeness row. | §10.5 | §2.6 cites the decision instead of describing a candidate. |
 
 Sequencing notes:
@@ -1267,54 +1273,30 @@ Sequencing notes:
   emission; otherwise the trap path is implemented twice with different rules
   ([`LAYERING.md`](LAYERING.md) §4).
 
-### 12.1 TRAP-6 is deferred by decision, not pending work
+### 12.1 TRAP-6 is implemented; multi-agent execution remains deferred
 
-The state in question is small and entirely thread-local today:
+TRAP-6 shipped with the Agent/ExecutionState refactor. The state lives in
+`WasmBase/WasmAgent.hpp` and belongs to the execution context:
 
-| State | Where |
+| State | Owner |
 |---|---|
-| pending trap (`TrapSlot`: flag, kind, message) | `WasmTrap.cpp` (`thread_local`) |
-| pending Wasm exception | `WasmExn.cpp` (`thread_local`, via `wasm_exn_slot()`) |
-| tail-call trampoline target/arguments | `WasmValue.hpp` (`thread_local`) |
-| deferred-cleanup stack | `WasmTrap.cpp` (`thread_local`) |
-| `wasmCallDepth` / `nativeImportDepth` counters | `WasmTrap.cpp` (`thread_local`) |
+| pending trap (`TrapSlot`: flag, kind, message) | `ExecutionState::trapSlot` |
+| pending Wasm exception | `ExecutionState::pendingException` |
+| tail-call trampoline target/arguments | `ExecutionState::tailCallState` |
+| deferred-cleanup stack | `ExecutionState::deferStack` |
+| `wasmCallDepth` / `nativeImportDepth` counters | `ExecutionState` fields |
+| stack limit | `ExecutionState::stackLimit` (installed per stack) |
 
-That is the **correct granularity for the current execution model**: there is one
-call chain per host thread, no agent object, and no way to run two agents on one
-thread ([`SAFETY.md`](SAFETY.md) §2.7,
-[`proposals/THREADS.md`](proposals/THREADS.md) TD9/TH-5,
-[`THREADSAFETY.md`](THREADSAFETY.md) §10.1). Moving the state "per agent" today
-would mean inventing an agent abstraction with exactly one member, which is why
-it is **deferred until true multi-agent execution exists** rather than left as
-an open gap.
+`Agent` owns one `ExecutionState`; a host thread's default agent is created
+lazily; `AgentScope` installs another agent for a call. The generated-code ABI
+is unchanged: `wasm_trap_slot()`, `wasm_exn_slot()`, `currentTailCallState()` and
+`wasm_stack_check()` resolve the *current* state, and `wasm_stack_check()` reads
+the state's limit first with `VMContext::stackLimit` as the fallback.
 
-Deferring it is safe because nothing in the shipped design assumes one state per
-process or hides the state behind a global:
-
-- generated code never embeds an address; it calls `wasm_trap_slot()` /
-  `wasm_exn_slot()` once per function, so the indirection that a per-agent slot
-  needs already exists;
-- the counters and the cleanup stack live behind `WasmTrap.hpp`'s functions
-  (`CallDepthScope`, `NativeImportScope`, `defer`), so they move with the slot
-  and no call site changes;
-- the harness and the embedder API already have nothing to arm — a trap is
-  thread-local, and `callCallable` throws at the boundary.
-
-The migration sketch, to be executed **in the same change that introduces the
-agent execution model**:
-
-1. an agent object owns a `TrapSlot` (slot + deferred-cleanup stack + the two
-   counters) instead of the `thread_local` instances;
-2. `wasm_trap_slot()` returns the *current agent's* slot — the generated-code
-   ABI and every call site stay as they are;
-3. `CallDepthScope`/`NativeImportScope`/`defer` resolve the current agent
-   exactly as `currentTailCallState()` does today;
-4. `THREADSAFETY.md` §10.1's "per-agent trap isolation" question is answered by
-   construction; the guest-lock question remains separate.
-
-Gating: [`proposals/THREADS.md`](proposals/THREADS.md) TH-5/T9 and
-[`proposals/SHARED_EVERYTHING_THREADS.md`](proposals/SHARED_EVERYTHING_THREADS.md)
-SET-4/SET-5. No scheduler, no agent migration, no TRAP-6 — in that order.
+What remains deferred is the **execution model**, not the state: agents do not
+run concurrently, there is no scheduler, no multi-mutator GC and no real
+`wait`/`notify` table. That is THREADS TH-5/T9, and the guest-lock question is
+separate. The isolation claim is covered by the tests listed in §13.
 
 ## 13. Test plan
 
@@ -1337,7 +1319,7 @@ host-side; only the last three need codegen-level assertions.
 | Trap message longer than the inline buffer | it is truncated and NUL-terminated, not overrun |
 | Import body throws a C++ exception | converted to a trap or aborts, per the chosen policy; never unwinds into generated frames |
 | Start function traps after a fake host adapter retains a reference | `~ModuleInstance` runs, `instanceDestroying` runs, the host count returns to zero, and the embedder observes the original `TrapKind` (TRAP-1) |
-| Start function traps, and `instanceDestroying` reads thread-local trap state | the snapshot-before-teardown ordering in TRAP-1 is correct; the propagated kind is not corrupted by host code running during teardown |
+| Start function traps, and `instanceDestroying` reads the execution state's trap state | the snapshot-before-teardown ordering in TRAP-1 is correct; the propagated kind is not corrupted by host code running during teardown |
 | Start function traps before any host reference exists | the partial instance is destroyed and the trap reaches the embedder with the original kind |
 | Existing `assert_uninstantiable` case (`start.wast`) | the expected start trap still reports `TrapKind` correctly |
 | A helper holding a non-trivial local traps (stringref constructor with an invalid encoding) | its destructor runs; the embedder sees the original kind (TRAP-2/TRAP-3 — this test fails today) |
@@ -1352,6 +1334,9 @@ host-side; only the last three need codegen-level assertions.
 | `a wrapped native import converts exceptions into a trap` (shipped) | `nativeImport<&fn>()` turns a thrown `std::exception` into `TrapKind::Internal` with its `what()` message, and the import’s own RAII locals are destroyed (TRAP-5) |
 | `WASM::trap` inside a wrapped native import keeps its kind` (shipped) | the wrapper catches `WASM::Trap` and re-reports kind + message instead of unwinding generated code |
 | `a wrapped native import still receives the caller’s VMContext` (shipped) | the wrapped form is byte-for-byte the raw import ABI (`ctx->hostData` still reaches the body) |
+| `agent execution state isolates traps, exceptions, tail calls and deferred cleanup` (shipped) | two agents on one host thread own independent trap/exception/tail/defer/depth state; `AgentScope` restores the previous state (TRAP-6 / SS-6) |
+| `each host thread gets its own default agent and execution state` (shipped) | a host thread's default agent is per thread, and a worker's trap does not leak to the main agent (TRAP-6) |
+| `the stack limit belongs to the execution state` (shipped) | `wasm_stack_check` reads the current state's limit, with `VMContext::stackLimit` only as the compatibility fallback (SS-6) |
 
 The shipped rows are the ones named in the table. What is still *plan* rather
 than coverage: a dedicated case for a trap inside a `try_table` region (the
@@ -1365,15 +1350,14 @@ outermost `callCallable`".
 ## 14. Open questions
 
 Revision 3 answered the defer-stack and `TrapScope` questions below by shipping
-or removing the mechanism; they are kept so the reasoning is not lost. The one
-question that still gates work is guest-side cleanup (no Wasm `finally` on a
-trap). The per-agent question is **TRAP-6, deferred by decision** with the
-multi-agent execution model (§12.1), not tracked here as pending work.
+or removing the mechanism; they are kept so the reasoning is not lost. The remaining
+open question is guest-side cleanup (no Wasm `finally` on a trap); per-agent
+state (**TRAP-6**) is implemented (§12.1).
 
 **For the defer stack (TRAP-4) — shipped.**
 
-- **Fixed capacity — settled:** 32 records, thread-local (`kDeferCapacity` in
-  `WasmTrap.cpp`). `defer()` returns an invalid token instead of allocating when
+- **Fixed capacity — settled:** 32 records per execution state
+  (`ExecutionState::kDeferCapacity` in `WasmAgent.hpp`). `defer()` returns an invalid token instead of allocating when
   the stack is full, and `dismissDeferred()` rejects an invalid token, so
   overflow is observable exactly where the caller can still react to it.
 - **Cleanup failure — settled by signature:** the thunk type is
@@ -1440,14 +1424,11 @@ multi-agent execution model (§12.1), not tracked here as pending work.
 - **Guest locks.** Nothing in this note releases a guest lock. A future engine
   needs either a Wasm-level cleanup/`finally` path or an engine-owned lock
   registry; a host defer stack cannot see guest mutexes.
-- **Multi-agent (TRAP-6, deferred by decision).** Per-host-thread trap state is
-  sufficient for the only execution model the engine has. An agent sharing a host
-  thread will need its own pending slot, deferred-cleanup stack and counters, but
-  there is no agent object to attach them to yet, so this is scheduled with the
-  agent execution model itself (§12.1,
-  [`THREADSAFETY.md`](THREADSAFETY.md) §10.1,
-  [`proposals/THREADS.md`](proposals/THREADS.md) TH-5/T9). It is deliberately
-  **not** a background task in the current step.
+- **Multi-agent state (TRAP-6, implemented).** The pending slot, deferred-cleanup
+  stack, counters and tail state belong to an `Agent`/`ExecutionState`; two
+  agents on one host thread are isolated. What remains deferred is the execution
+  model itself (§12.1, [`THREADSAFETY.md`](THREADSAFETY.md) §10.1,
+  [`proposals/THREADS.md`](proposals/THREADS.md) TH-5/T9).
 - **Backend parity.** When SLJIT/AsmJit are implemented, the trap model must be
   specified once in [`LAYERING.md`](LAYERING.md) terms (a contract), so that
   neither backend invents a third mechanism.
@@ -1458,7 +1439,7 @@ In-repo:
 
 - [`SAFETY.md`](SAFETY.md) §2.4–§2.6 — traps vs aborts, RAII for locks, and the
   report-and-return contract a generated-code helper must honour; §2.7 for the
-  thread-local execution model; §2.8 for `CallStackExhausted` and the checked
+  per-agent execution model; §2.8 for `CallStackExhausted` and the checked
   stack limit.
 - [`THREADSAFETY.md`](THREADSAFETY.md) §5.6 and §10.1 — host mutex/RAII caveats,
   trap/lock ownership, and the open multi-agent questions.

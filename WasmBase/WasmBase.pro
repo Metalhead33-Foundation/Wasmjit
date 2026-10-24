@@ -19,6 +19,7 @@ DEFINES += HWY_SHARED_DEFINE
 # Avoid build errors with no files:
 SOURCES += \
         WasmArtifact.cpp \
+        WasmAgent.cpp \
         WasmComponent.cpp \
         WasmComponentRuntime.cpp \
         WasmComponentValidation.cpp \
@@ -45,6 +46,7 @@ SOURCES += \
         wasm_simd_vector.cpp
 
 HEADERS += \
+    WasmAgent.hpp \
     WasmArtifact.hpp \
     WasmComponent.hpp \
     WasmComponentModel.hpp \

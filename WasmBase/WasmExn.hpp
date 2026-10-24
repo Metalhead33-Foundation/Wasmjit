@@ -15,16 +15,15 @@
 // Cross-frame propagation is a *pending* pointer. `throw`/`throw_ref` with no
 // handler in the current function set it and return zeroes; every call site
 // checks it inline and either dispatches to a local `try_table` or
-// re-propagates. It is thread-local, like the trap slot: two host threads must
-// not observe each other's uncaught exceptions. Generated code reaches it
-// through `wasm_exn_slot()` once per function. (Per-*agent* state, for several
-// agents on one host thread, is TRAP-6 in docs/TRAP_CLEANUP.md §12.1 and is
-// deferred with the multi-agent model.)
+// re-propagates. It belongs to the current execution state, like the trap slot:
+// two host threads, and two agents sharing one thread, must not observe each
+// other's uncaught exceptions. Generated code reaches it through
+// `wasm_exn_slot()` once per function.
 //
 // Every entry point is POD-only and C-callable (docs/SAFETY.md).
 
-// The calling thread's pending-exception slot. Generated code loads through it;
-// C++ code uses the accessors below. Never null; static storage duration.
+// The current execution state's pending-exception slot. Generated code loads
+// through it; C++ code uses the accessors below. Never null for a valid state.
 extern "C" void** wasm_exn_slot() noexcept;
 
 extern "C" {

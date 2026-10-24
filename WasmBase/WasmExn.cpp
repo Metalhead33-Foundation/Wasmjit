@@ -1,4 +1,5 @@
 #include "WasmExn.hpp"
+#include "WasmAgent.hpp"
 #include "WasmStore.hpp"
 #include "WasmTrap.hpp"
 
@@ -23,16 +24,15 @@ constexpr std::size_t kHeaderSize = sizeof(ExnHeader);
 
 namespace {
 
-// The calling thread's pending exception. Thread-local for the same reason the
-// trap slot is: one call chain per host thread, and no thread may observe
-// another's uncaught exception.
-thread_local void* g_pendingException = nullptr;
+// The pending exception is part of the current execution state (WasmAgent.hpp):
+// a trap or an uncaught exception must be invisible to another agent sharing
+// the host thread.
 
 } // namespace
 
 extern "C" void** wasm_exn_slot() noexcept
 {
-return &g_pendingException;
+return &WASM::currentExecutionState().pendingException;
 }
 
 extern "C" {
@@ -80,14 +80,14 @@ int32_t wasm_exn_tag_id(const void* payload)
 	return reinterpret_cast<const ExnHeader*>(base)->tagId;
 }
 
-void wasm_exn_set_pending(void* payload) { g_pendingException = payload; }
-void* wasm_exn_pending() { return g_pendingException; }
+void wasm_exn_set_pending(void* payload) { WASM::currentExecutionState().pendingException = payload; }
+void* wasm_exn_pending() { return WASM::currentExecutionState().pendingException; }
 void* wasm_exn_take_pending()
 {
-	void* pending = g_pendingException;
-	g_pendingException = nullptr;
+	void* pending = WASM::currentExecutionState().pendingException;
+	WASM::currentExecutionState().pendingException = nullptr;
 	return pending;
 }
-void wasm_exn_clear_pending() { g_pendingException = nullptr; }
+void wasm_exn_clear_pending() { WASM::currentExecutionState().pendingException = nullptr; }
 
 } // extern "C"

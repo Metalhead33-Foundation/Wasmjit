@@ -178,22 +178,23 @@ old `longjmp`/`TrapScope` model, including the reasons each alternative was
 rejected, is [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md); the backend feasibility study
 is its §10, and the shipped subset is TRAP-1/TRAP-3 there.
 
-### 2.7 Execution state is per host thread, not per agent
+### 2.7 Execution state is per agent, not per host thread
 
-`WASM::g_tailCallState` and the trap and pending-exception state are
-**host-thread-local**; generated code reaches the tail-call state through
-`currentTailCallState()` (and the two slots through `wasm_trap_slot()` /
-`wasm_exn_slot()`) so they are resolved on the thread actually executing the
-call. The `Store` remains a
-process-global owner with locked management containers, and one
+`WASM::ExecutionState` — owned by an `Agent` — holds the tail-call state, the
+trap slot, the pending exception, the deferred-cleanup stack, the call/import
+depth counters and the stack limit. A host thread only holds a pointer to the
+*current* state; generated code reaches it through `currentTailCallState()`,
+`wasm_trap_slot()` and `wasm_exn_slot()`, so the state moves with the agent (or a
+future continuation context), not with the thread. A host thread that has not
+installed an explicit agent gets a lazily created default one. The `Store`
+remains a process-global owner with locked management containers, and one
 `ModuleInstance` is still not concurrently callable. These are host-side
 properties, not a multi-agent execution model. The distinction between guest,
 host and boundary safety, and the responsibilities of each party, is defined in
 [`THREADSAFETY.md`](THREADSAFETY.md); the single-agent execution model is
-[`proposals/THREADS.md`](proposals/THREADS.md) §3/TD9. Per-**agent** trap,
-exception and tail-call state (TRAP-6) is deliberately deferred until a real
-multi-agent execution model exists, because there is no agent object to attach
-it to yet ([`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §12.1).
+[`proposals/THREADS.md`](proposals/THREADS.md) §3/TD9. Per-agent trap, exception
+and tail-call state (**TRAP-6**) is implemented; true multi-agent execution
+remains deferred ([`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §12.1).
 
 ### 2.8 The host stack is a bounded resource, and its limit is a trap
 
@@ -302,9 +303,9 @@ from the input. Fix: §2.2. `PreparedFunctionStack::prepare` also truncated its
 4. Does it **fail at load / instantiate / compile time**? Throw an exception with
    a message that says what was wrong — and if you are inside a begin/end region,
    make it RAII first (§2.5).
-5. Does it introduce **execution state**? Put it in the per-host-thread state
-   (`thread_local` behind an accessor such as `wasm_trap_slot()` /
-   `wasm_exn_slot()`), reset it when the trap is reported, and document the
+5. Does it introduce **execution state**? Put it in `ExecutionState`
+   (`WasmAgent.hpp`) behind the current-agent accessors, not in a new
+   `thread_local`; reset it when the trap is reported, and document the
    single-agent assumption (§2.6, §2.7).
 6. Does it **recurse on the host stack** because of module input? Rely on the
    guest stack guard, and keep one frame well below its reserve (§2.8).

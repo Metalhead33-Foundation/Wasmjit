@@ -89,10 +89,9 @@ decode error.
   fixture (`acquire-release ordering and pause decode, validate, and execute`).
 - The two-agent message-passing half is still deferred (`THREADS.md` TH-5), so
   the ordering is not *observable* between wasm threads yet; the encoding and
-  lowering are complete and distinct. The trap/exception/tail-call state is
-  likewise per host thread rather than per agent (**TRAP-6**,
-  [`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md) §12.1), deferred with the same
-  TH-5 work.
+  lowering are complete and distinct. The trap/exception/tail-call state
+  is per agent (`Agent`/`ExecutionState`, TRAP-6 done); only the two-agent
+  execution model remains deferred with TH-5.
 
 ## 5. Gaps
 

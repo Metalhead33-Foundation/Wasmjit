@@ -1,4 +1,5 @@
 #include "WasmStack.hpp"
+#include "WasmAgent.hpp"
 #include "WasmTrap.hpp"
 #include "WasmVMContext.hpp"
 #include <cstdio>
@@ -47,7 +48,9 @@ bool currentThreadStackBounds(std::uintptr_t& lowestAddress, std::uintptr_t& hig
 
 bool installStackLimit(VMContext& ctx, std::size_t reserve)
 {
+	ExecutionState& state = currentExecutionState();
 	ctx.stackLimit = 0;
+	state.stackLimit = 0;
 
 	std::uintptr_t lowestAddress = 0;
 	std::uintptr_t highestAddress = 0;
@@ -60,13 +63,21 @@ bool installStackLimit(VMContext& ctx, std::size_t reserve)
 	if (reserve == 0 || size <= reserve * 2)
 		return false;
 
-	ctx.stackLimit = lowestAddress + reserve;
+	// The execution state is the authority (WasmAgent.hpp); `ctx.stackLimit`
+	// stays in sync as the compatibility fallback for callers that have not
+	// installed a per-context limit yet.
+	state.stackLimit = lowestAddress + reserve;
+	ctx.stackLimit = state.stackLimit;
 	return true;
 }
 
 extern "C" void wasm_stack_check(VMContext* ctx)
 {
-	if (ctx == nullptr || ctx->stackLimit == 0)
+	const std::uintptr_t stateLimit = currentExecutionState().stackLimit;
+	const std::uintptr_t limit = stateLimit != 0
+			? stateLimit
+			: (ctx != nullptr ? ctx->stackLimit : 0);
+	if (limit == 0)
 		return;
 
 	// The probe must report a *real* stack address. A local's address works in a
@@ -93,11 +104,11 @@ extern "C" void wasm_stack_check(VMContext* ctx)
 	(void)probe;
 	probeAddress = reinterpret_cast<std::uintptr_t>(&probe);
 #endif
-	if (probeAddress < ctx->stackLimit) {
+	if (probeAddress < limit) {
 		if (std::getenv("WASMJIT_STACK_TRACE") != nullptr) {
 			std::fprintf(stderr, "[stack] probe=%p limit=%p\n",
 					reinterpret_cast<void*>(probeAddress),
-					reinterpret_cast<void*>(ctx->stackLimit));
+					reinterpret_cast<void*>(limit));
 			std::fflush(stderr);
 		}
 		reportTrap(TrapKind::CallStackExhausted);
