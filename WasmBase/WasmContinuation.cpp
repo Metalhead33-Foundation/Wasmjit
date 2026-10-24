@@ -5,6 +5,7 @@
 #include "WasmStore.hpp"
 #include "WasmTrap.hpp"
 #include "WasmValue.hpp"
+#include "WasmModuleInstance.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -160,14 +161,32 @@ enum class WorkerState {
 	Cancelled,
 };
 
+ModuleInstance* instanceFor(VMContext* context);
+void dropContinuationValues(const std::uint8_t* kinds, std::uint32_t count,
+		void* values, VMContext* context);
+void invokeScalarI32(void* target, void* context,
+		const ContinuationValue* args, std::uint32_t argCount,
+		ContinuationValue* results, std::uint32_t resultCount,
+		const std::uint8_t* paramKinds, const std::uint8_t* resultKinds);
+
 struct Worker {
 	const ContinuationProvider provider;
-	Callable* target = nullptr;
+	Callable target{};
 	VMContext* creationContext = nullptr;
 	std::uint32_t paramCount = 0;
+	std::uint32_t resultCount = 0;
 	bool takesArg = false;
 	bool returnsValue = false;
-	std::vector<std::int32_t> boundArgs;
+	ContinuationInvokeFn invoke = nullptr;
+	std::vector<std::uint8_t> paramKinds;
+	std::vector<std::uint8_t> resultKinds;
+	std::vector<ContinuationValue> boundValues;
+	std::vector<std::uint8_t> boundKinds;
+	std::vector<ContinuationValue> resumeValues;
+	std::vector<std::uint8_t> resumeKinds;
+	std::vector<ContinuationValue> resultValues;
+	std::vector<ContinuationValue> tagValues;
+	std::vector<std::uint8_t> tagKinds;
 
 	ExecutionState execution;
 	std::atomic<std::uint64_t> generation{0};
@@ -185,21 +204,36 @@ struct Worker {
 
 	Worker(ContinuationProvider provider, Callable* target, VMContext* creationContext,
 			std::uint32_t paramCount, bool takesArg, bool returnsValue)
-		: provider(provider), target(target), creationContext(creationContext),
-		  paramCount(paramCount), takesArg(takesArg), returnsValue(returnsValue) {}
+		: provider(provider), target(target == nullptr ? Callable{} : *target),
+		  creationContext(creationContext), paramCount(paramCount),
+		  takesArg(takesArg), returnsValue(returnsValue) {}
 
 	virtual ~Worker()
 	{
+		dropContinuationValues(boundKinds.data(), static_cast<std::uint32_t>(boundValues.size()),
+				boundValues.data(), creationContext);
+		dropContinuationValues(tagKinds.data(), static_cast<std::uint32_t>(tagValues.size()),
+				tagValues.data(), creationContext);
+		dropContinuationValues(resultKinds.data(), static_cast<std::uint32_t>(resultValues.size()),
+				resultValues.data(), creationContext);
+		const std::uint8_t* resumeKindsPtr =
+				resumeKinds.empty() ? paramKinds.data() : resumeKinds.data();
+		dropContinuationValues(resumeKindsPtr, static_cast<std::uint32_t>(resumeValues.size()),
+				resumeValues.data(), creationContext);
 		releaseContinuationSlot();
 	}
 
 	virtual ContinuationStatus resume(std::uint64_t expectedGeneration,
-			std::int32_t arg, void* injectedException) = 0;
-	virtual std::int32_t suspend(std::int32_t tag, std::int32_t value,
-			std::int32_t* result) = 0;
-	// Bind a prefix of the remaining arguments. The provider checks that the
-	// continuation is still New; a suspended bind is a later extension.
-	virtual bool bindArguments(const std::int32_t* values, std::uint32_t count) = 0;
+			const ContinuationValue* args, std::uint32_t argCount,
+			void* injectedException) = 0;
+	virtual std::int32_t suspend(std::int32_t tag,
+			const ContinuationValue* args, std::uint32_t argCount,
+			const std::uint8_t* argKinds,
+			ContinuationValue* results, std::uint32_t resultCapacity,
+			std::uint32_t* resultCount, const std::uint8_t* resultKinds) = 0;
+	// Bind a prefix of the remaining arguments.
+	virtual bool bindArguments(const ContinuationValue* values,
+			std::uint32_t count) = 0;
 
 	// Run the target once on the current stack/state. A suspend inside the
 	// target returns here only after the matching resume.
@@ -226,6 +260,68 @@ ContinuationStatus statusForState(WorkerState state)
 	default:                     return ContinuationStatus::Invalid;
 	}
 }
+ModuleInstance* instanceFor(VMContext* context)
+{
+	return context == nullptr ? nullptr : reinterpret_cast<ModuleInstance*>(context);
+}
+
+void dropContinuationValues(const std::uint8_t* kinds, std::uint32_t count,
+		void* values, VMContext* context)
+{
+	if (kinds == nullptr || values == nullptr || context == nullptr)
+		return;
+	auto* instance = instanceFor(context);
+	auto* slots = static_cast<ContinuationValue*>(values);
+	for (std::uint32_t i = 0; i < count; ++i) {
+		if (kinds[i] == static_cast<std::uint8_t>(ContinuationValueKind::Ref))
+			instance->refDrop(reinterpret_cast<void*>(slots[i].words[0]));
+	}
+}
+
+// Scalar compatibility invoker used by the old `wasm_cont_new` wrapper and its
+// tests. The generated-code path supplies a backend invoker instead.
+void invokeScalarI32(void* target, void* context,
+		const ContinuationValue* args, std::uint32_t argCount,
+		ContinuationValue* results, std::uint32_t resultCount,
+		const std::uint8_t* paramKinds, const std::uint8_t* resultKinds)
+{
+	(void)paramKinds;
+	(void)resultKinds;
+	Callable copy = *static_cast<Callable*>(target);
+	if (copy.context == nullptr)
+		copy.context = static_cast<VMContext*>(context);
+	switch (argCount) {
+	case 0:
+		if (resultCount != 0)
+			results[0].words[0] = static_cast<std::uint64_t>(
+					callCallable<std::int32_t>(copy));
+		else
+			callCallable<void>(copy);
+		break;
+	case 1:
+		if (resultCount != 0)
+			results[0].words[0] = static_cast<std::uint64_t>(
+					callCallable<std::int32_t>(copy, static_cast<std::int32_t>(args[0].words[0])));
+		else
+			callCallable<void>(copy, static_cast<std::int32_t>(args[0].words[0]));
+		break;
+	case 2:
+		if (resultCount != 0)
+			results[0].words[0] = static_cast<std::uint64_t>(
+					callCallable<std::int32_t>(copy,
+							static_cast<std::int32_t>(args[0].words[0]),
+							static_cast<std::int32_t>(args[1].words[0])));
+		else
+			callCallable<void>(copy,
+					static_cast<std::int32_t>(args[0].words[0]),
+					static_cast<std::int32_t>(args[1].words[0]));
+		break;
+	default:
+		throw std::runtime_error("scalar continuation arity is not supported");
+	}
+}
+
+
 
 void Worker::executeTarget()
 {
@@ -233,8 +329,11 @@ void Worker::executeTarget()
 	trapMessage.clear();
 	pendingException = nullptr;
 	resultValue = 0;
+	resultValues.clear();
+	if (resultCount != 0)
+		resultValues.resize(resultCount);
 
-	if (target == nullptr || target->fnPtr == nullptr) {
+	if (target.fnPtr == nullptr) {
 		trapped = true;
 		trapKind = TrapKind::Internal;
 		trapMessage = "continuation target has no entry point";
@@ -244,18 +343,24 @@ void Worker::executeTarget()
 		execution.trapSlot.pending = 1;
 		return;
 	}
+	if (invoke == nullptr) {
+		trapped = true;
+		trapKind = TrapKind::Internal;
+		trapMessage = "continuation target has no invoker";
+		std::snprintf(execution.trapSlot.message, sizeof(execution.trapSlot.message),
+				"%s", trapMessage.c_str());
+		execution.trapSlot.kind = static_cast<int>(trapKind);
+		execution.trapSlot.pending = 1;
+		return;
+	}
 
-	Callable targetCopy = *target;
-	// A native import carries a null context and normally receives the caller's
-	// VMContext. A continuation has no caller frame, so use the context that
-	// created it. Defined Wasm functions already carry their own context.
-	if (targetCopy.context == nullptr)
-		targetCopy.context = creationContext;
-
-	std::vector<std::int32_t> callArgs = boundArgs;
-	if (takesArg)
-		callArgs.push_back(resumeArg);
-	boundArgs.clear();
+	std::vector<ContinuationValue> callArgs = boundValues;
+	callArgs.insert(callArgs.end(), resumeValues.begin(), resumeValues.end());
+	boundValues.clear();
+	boundKinds.clear();
+	resumeValues.clear();
+	if (callArgs.size() > paramCount)
+		callArgs.resize(paramCount);
 	if (callArgs.size() != paramCount) {
 		trapped = true;
 		trapKind = TrapKind::Internal;
@@ -268,28 +373,13 @@ void Worker::executeTarget()
 	}
 
 	try {
-		switch (callArgs.size()) {
-		case 0:
-			if (returnsValue)
-				resultValue = callCallable<std::int32_t>(targetCopy);
-			else
-				callCallable<void>(targetCopy);
-			break;
-		case 1:
-			if (returnsValue)
-				resultValue = callCallable<std::int32_t>(targetCopy, callArgs[0]);
-			else
-				callCallable<void>(targetCopy, callArgs[0]);
-			break;
-		case 2:
-			if (returnsValue)
-				resultValue = callCallable<std::int32_t>(targetCopy, callArgs[0], callArgs[1]);
-			else
-				callCallable<void>(targetCopy, callArgs[0], callArgs[1]);
-			break;
-		default:
-			throw std::runtime_error("continuation signatures with more than two parameters are not implemented");
-		}
+		invoke(&target, creationContext, callArgs.data(),
+				static_cast<std::uint32_t>(callArgs.size()),
+				resultValues.empty() ? nullptr : resultValues.data(), resultCount,
+				paramKinds.empty() ? nullptr : paramKinds.data(),
+				resultKinds.empty() ? nullptr : resultKinds.data());
+		if (!resultValues.empty())
+			resultValue = static_cast<std::int32_t>(resultValues[0].words[0]);
 	} catch (const Trap& trap) {
 		trapped = true;
 		trapKind = trap.kind();
@@ -306,6 +396,11 @@ void Worker::executeTarget()
 
 	if (!trapped && execution.pendingException != nullptr)
 		pendingException = execution.pendingException;
+	if (!trapped && execution.trapSlot.pending != 0) {
+		trapKind = static_cast<TrapKind>(execution.trapSlot.kind);
+		trapMessage.assign(execution.trapSlot.message,
+				strnlen(execution.trapSlot.message, sizeof(execution.trapSlot.message)));
+	}
 }
 
 WorkerState Worker::outcomeState() const
@@ -335,10 +430,14 @@ struct BWorker final : Worker {
 	~BWorker() override;
 
 	ContinuationStatus resume(std::uint64_t expectedGeneration,
-			std::int32_t arg, void* injectedException) override;
-	std::int32_t suspend(std::int32_t tag, std::int32_t value,
-			std::int32_t* result) override;
-	bool bindArguments(const std::int32_t* values, std::uint32_t count) override;
+			const ContinuationValue* args, std::uint32_t argCount,
+			void* injectedException) override;
+	std::int32_t suspend(std::int32_t tag,
+			const ContinuationValue* args, std::uint32_t argCount,
+			const std::uint8_t* argKinds,
+			ContinuationValue* results, std::uint32_t resultCapacity,
+			std::uint32_t* resultCount, const std::uint8_t* resultKinds) override;
+	bool bindArguments(const ContinuationValue* values, std::uint32_t count) override;
 
 	void run();
 	bool startThread();
@@ -371,10 +470,14 @@ struct AWorker final : Worker {
 	~AWorker() override;
 
 	ContinuationStatus resume(std::uint64_t expectedGeneration,
-			std::int32_t arg, void* injectedException) override;
-	std::int32_t suspend(std::int32_t tag, std::int32_t value,
-			std::int32_t* result) override;
-	bool bindArguments(const std::int32_t* values, std::uint32_t count) override;
+			const ContinuationValue* args, std::uint32_t argCount,
+			void* injectedException) override;
+	std::int32_t suspend(std::int32_t tag,
+			const ContinuationValue* args, std::uint32_t argCount,
+			const std::uint8_t* argKinds,
+			ContinuationValue* results, std::uint32_t resultCapacity,
+			std::uint32_t* resultCount, const std::uint8_t* resultKinds) override;
+	bool bindArguments(const ContinuationValue* values, std::uint32_t count) override;
 
 	static void entryThunk();
 	void entry();
@@ -406,7 +509,8 @@ BWorker::~BWorker()
 		Store::global().releaseBytes(stackBytes);
 }
 
-ContinuationStatus BWorker::resume(std::uint64_t expectedGeneration, std::int32_t arg,
+ContinuationStatus BWorker::resume(std::uint64_t expectedGeneration,
+		const ContinuationValue* args, std::uint32_t argCount,
 		void* injectedException)
 {
 	std::unique_lock<std::mutex> lock(mutex);
@@ -435,7 +539,11 @@ ContinuationStatus BWorker::resume(std::uint64_t expectedGeneration, std::int32_
 	const bool start = (state == WorkerState::New);
 	consumed.store(true, std::memory_order_relaxed);
 	state = WorkerState::Running;
-	resumeArg = arg;
+	resumeValues.clear();
+	if (argCount != 0 && args != nullptr)
+		resumeValues.assign(args, args + argCount);
+	if (!resumeValues.empty())
+		resumeArg = static_cast<std::int32_t>(resumeValues.front().words[0]);
 	execution.pendingException = injectedException;
 	if (start) {
 		if (!startThread()) {
@@ -451,8 +559,11 @@ ContinuationStatus BWorker::resume(std::uint64_t expectedGeneration, std::int32_
 	return statusForState(state);
 }
 
-std::int32_t BWorker::suspend(std::int32_t tag, std::int32_t value,
-		std::int32_t* result)
+std::int32_t BWorker::suspend(std::int32_t tag,
+		const ContinuationValue* args, std::uint32_t argCount,
+		const std::uint8_t* argKinds,
+		ContinuationValue* results, std::uint32_t resultCapacity,
+		std::uint32_t* resultCount, const std::uint8_t* resultKinds)
 {
 	std::unique_lock<std::mutex> lock(mutex);
 	if (cancelRequested || state == WorkerState::Cancelled) {
@@ -460,7 +571,14 @@ std::int32_t BWorker::suspend(std::int32_t tag, std::int32_t value,
 		return 0;
 	}
 	suspendTag = tag;
-	suspendValue = value;
+	suspendValue = argCount == 0 ? 0 : static_cast<std::int32_t>(args[0].words[0]);
+	tagValues.assign(args, args + argCount);
+	tagKinds.clear();
+	if (argCount != 0 && argKinds != nullptr)
+		tagKinds.assign(argKinds, argKinds + argCount);
+	resumeKinds.clear();
+	if (resultCapacity != 0 && resultKinds != nullptr)
+		resumeKinds.assign(resultKinds, resultKinds + resultCapacity);
 	generation.fetch_add(1, std::memory_order_relaxed);
 	consumed.store(false, std::memory_order_relaxed);
 	state = WorkerState::Suspended;
@@ -470,27 +588,36 @@ std::int32_t BWorker::suspend(std::int32_t tag, std::int32_t value,
 		reportTrap(TrapKind::Internal, "continuation dropped while suspended");
 		return 0;
 	}
-	if (result != nullptr) {
-		if (!boundArgs.empty()) {
-			*result = boundArgs.front();
-			boundArgs.erase(boundArgs.begin());
-		} else {
-			*result = resumeArg;
-		}
+
+	std::vector<ContinuationValue> out = boundValues;
+	out.insert(out.end(), resumeValues.begin(), resumeValues.end());
+	boundValues.clear();
+	boundKinds.clear();
+	resumeValues.clear();
+	if (resultCount != nullptr)
+		*resultCount = static_cast<std::uint32_t>(
+				std::min<std::size_t>(out.size(), resultCapacity));
+	if (results != nullptr && resultCapacity != 0) {
+		for (std::uint32_t i = 0; i < *resultCount; ++i)
+			results[i] = out[i];
 	}
 	return 1;
 }
 
-bool BWorker::bindArguments(const std::int32_t* values, std::uint32_t count)
+bool BWorker::bindArguments(const ContinuationValue* values, std::uint32_t count)
 {
 	std::lock_guard<std::mutex> lock(mutex);
 	if ((state != WorkerState::New && state != WorkerState::Suspended) || values == nullptr)
 		return false;
-	if (state == WorkerState::New && boundArgs.size() + count > paramCount)
+	const std::vector<std::uint8_t>& kinds =
+			state == WorkerState::New ? paramKinds : tagKinds;
+	if (boundValues.size() + count > kinds.size())
 		return false;
-	boundArgs.insert(boundArgs.end(), values, values + count);
+	boundValues.insert(boundValues.end(), values, values + count);
+	boundKinds.insert(boundKinds.end(), kinds.begin() + boundValues.size() - count,
+			kinds.begin() + boundValues.size());
 	if (state == WorkerState::New)
-		takesArg = boundArgs.size() < paramCount;
+		takesArg = boundValues.size() < paramCount;
 	generation.fetch_add(1, std::memory_order_relaxed);
 	consumed.store(false, std::memory_order_relaxed);
 	return true;
@@ -676,7 +803,8 @@ void AWorker::switchToResumer()
 	swapcontext(&context, &resumer);
 }
 
-ContinuationStatus AWorker::resume(std::uint64_t expectedGeneration, std::int32_t arg,
+ContinuationStatus AWorker::resume(std::uint64_t expectedGeneration,
+		const ContinuationValue* args, std::uint32_t argCount,
 		void* injectedException)
 {
 	if (contextReady && owner != std::this_thread::get_id()) {
@@ -704,7 +832,11 @@ ContinuationStatus AWorker::resume(std::uint64_t expectedGeneration, std::int32_
 	}
 
 	const bool first = (state == WorkerState::New);
-	resumeArg = arg;
+	resumeValues.clear();
+	if (argCount != 0 && args != nullptr)
+		resumeValues.assign(args, args + argCount);
+	if (!resumeValues.empty())
+		resumeArg = static_cast<std::int32_t>(resumeValues.front().words[0]);
 	consumed.store(true, std::memory_order_relaxed);
 	state = WorkerState::Running;
 	execution.pendingException = injectedException;
@@ -727,18 +859,29 @@ ContinuationStatus AWorker::resume(std::uint64_t expectedGeneration, std::int32_
 	t_currentWorker = previousWorker;
 	previousState = nullptr;
 	previousWorker = nullptr;
-	return statusForState(state);
+	const ContinuationStatus result = statusForState(state);
+	return result;
 }
 
-std::int32_t AWorker::suspend(std::int32_t tag, std::int32_t value,
-		std::int32_t* result)
+std::int32_t AWorker::suspend(std::int32_t tag,
+		const ContinuationValue* args, std::uint32_t argCount,
+		const std::uint8_t* argKinds,
+		ContinuationValue* results, std::uint32_t resultCapacity,
+		std::uint32_t* resultCount, const std::uint8_t* resultKinds)
 {
 	if (previousState == nullptr) {
 		reportTrap(TrapKind::Internal, "suspend outside its continuation thread");
 		return 0;
 	}
 	suspendTag = tag;
-	suspendValue = value;
+	suspendValue = argCount == 0 ? 0 : static_cast<std::int32_t>(args[0].words[0]);
+	tagValues.assign(args, args + argCount);
+	tagKinds.clear();
+	if (argCount != 0 && argKinds != nullptr)
+		tagKinds.assign(argKinds, argKinds + argCount);
+	resumeKinds.clear();
+	if (resultCapacity != 0 && resultKinds != nullptr)
+		resumeKinds.assign(resultKinds, resultKinds + resultCapacity);
 	generation.fetch_add(1, std::memory_order_relaxed);
 	consumed.store(false, std::memory_order_relaxed);
 	state = WorkerState::Suspended;
@@ -750,26 +893,35 @@ std::int32_t AWorker::suspend(std::int32_t tag, std::int32_t value,
 		reportTrap(TrapKind::Internal, "continuation dropped while suspended");
 		return 0;
 	}
-	if (result != nullptr) {
-		if (!boundArgs.empty()) {
-			*result = boundArgs.front();
-			boundArgs.erase(boundArgs.begin());
-		} else {
-			*result = resumeArg;
-		}
+
+	std::vector<ContinuationValue> out = boundValues;
+	out.insert(out.end(), resumeValues.begin(), resumeValues.end());
+	boundValues.clear();
+	boundKinds.clear();
+	resumeValues.clear();
+	if (resultCount != nullptr)
+		*resultCount = static_cast<std::uint32_t>(
+				std::min<std::size_t>(out.size(), resultCapacity));
+	if (results != nullptr && resultCapacity != 0) {
+		for (std::uint32_t i = 0; i < *resultCount; ++i)
+			results[i] = out[i];
 	}
 	return 1;
 }
 
-bool AWorker::bindArguments(const std::int32_t* values, std::uint32_t count)
+bool AWorker::bindArguments(const ContinuationValue* values, std::uint32_t count)
 {
 	if ((state != WorkerState::New && state != WorkerState::Suspended) || values == nullptr)
 		return false;
-	if (state == WorkerState::New && boundArgs.size() + count > paramCount)
+	const std::vector<std::uint8_t>& kinds =
+			state == WorkerState::New ? paramKinds : tagKinds;
+	if (boundValues.size() + count > kinds.size())
 		return false;
-	boundArgs.insert(boundArgs.end(), values, values + count);
+	boundValues.insert(boundValues.end(), values, values + count);
+	boundKinds.insert(boundKinds.end(), kinds.begin() + boundValues.size() - count,
+			kinds.begin() + boundValues.size());
 	if (state == WorkerState::New)
-		takesArg = boundArgs.size() < paramCount;
+		takesArg = boundValues.size() < paramCount;
 	generation.fetch_add(1, std::memory_order_relaxed);
 	consumed.store(false, std::memory_order_relaxed);
 	return true;
@@ -995,6 +1147,17 @@ extern "C" {
 void* wasm_cont_new(void* callable, void* context, std::uint32_t paramCount,
 		std::int32_t takesArg, std::int32_t returnsValue)
 {
+	const std::uint8_t i32Kind = static_cast<std::uint8_t>(ContinuationValueKind::I32);
+	const std::uint8_t* paramKinds = takesArg != 0 ? &i32Kind : nullptr;
+	const std::uint8_t* resultKinds = returnsValue != 0 ? &i32Kind : nullptr;
+	return wasm_cont_new_ex(callable, context, invokeScalarI32, paramCount,
+			returnsValue != 0 ? 1u : 0u, paramKinds, resultKinds);
+}
+
+void* wasm_cont_new_ex(void* callable, void* context, ContinuationInvokeFn invoke,
+		std::uint32_t paramCount, std::uint32_t resultCount,
+		const std::uint8_t* paramKinds, const std::uint8_t* resultKinds)
+{
 	if (callable == nullptr) {
 		reportTrap(TrapKind::NullFunctionReference, "null continuation target");
 		return nullptr;
@@ -1008,13 +1171,19 @@ void* wasm_cont_new(void* callable, void* context, std::uint32_t paramCount,
 	try {
 		if (continuationProvider() == ContinuationProvider::HostThreads) {
 			worker = std::make_shared<BWorker>(static_cast<Callable*>(callable),
-					static_cast<VMContext*>(context), paramCount, takesArg != 0,
-					returnsValue != 0);
+					static_cast<VMContext*>(context), paramCount, paramCount != 0,
+					resultCount != 0);
 		} else {
 			worker = std::make_shared<AWorker>(static_cast<Callable*>(callable),
-					static_cast<VMContext*>(context), paramCount, takesArg != 0,
-					returnsValue != 0);
+					static_cast<VMContext*>(context), paramCount, paramCount != 0,
+					resultCount != 0);
 		}
+		worker->invoke = invoke;
+		worker->resultCount = resultCount;
+		if (paramKinds != nullptr)
+			worker->paramKinds.assign(paramKinds, paramKinds + paramCount);
+		if (resultKinds != nullptr)
+			worker->resultKinds.assign(resultKinds, resultKinds + resultCount);
 	} catch (...) {
 		releaseContinuationSlot();
 		reportTrap(TrapKind::OutOfMemory, "continuation allocation failed");
@@ -1030,6 +1199,15 @@ void* wasm_cont_new(void* callable, void* context, std::uint32_t paramCount,
 }
 
 void* wasm_cont_bind(void* continuation, const std::int32_t* values,
+		std::uint32_t count)
+{
+	std::vector<ContinuationValue> wide(count);
+	for (std::uint32_t i = 0; i < count; ++i)
+		wide[i].words[0] = static_cast<std::uint64_t>(values[i]);
+	return wasm_cont_bind_ex(continuation, wide.data(), count);
+}
+
+void* wasm_cont_bind_ex(void* continuation, const ContinuationValue* values,
 		std::uint32_t count)
 {
 	if (continuation == nullptr) {
@@ -1057,6 +1235,19 @@ void* wasm_cont_bind(void* continuation, const std::int32_t* values,
 void wasm_cont_resume(void* continuation, std::int32_t arg,
 		ContinuationResumeResult* result)
 {
+	ContinuationValue argValue;
+	argValue.words[0] = static_cast<std::uint64_t>(arg);
+	ContinuationValue resultValue;
+	ContinuationValue tagValue;
+	wasm_cont_resume_ex(continuation, &argValue, 1, &resultValue, 1,
+			&tagValue, 1, result);
+}
+
+void wasm_cont_resume_ex(void* continuation, const ContinuationValue* args,
+		std::uint32_t argCount, ContinuationValue* results,
+		std::uint32_t resultCapacity, ContinuationValue* tagValues,
+		std::uint32_t tagCapacity, ContinuationResumeResult* result)
+{
 	if (result == nullptr)
 		return;
 	*result = ContinuationResumeResult{};
@@ -1070,13 +1261,22 @@ void wasm_cont_resume(void* continuation, std::int32_t arg,
 		return;
 	}
 
-	const ContinuationStatus status = handle->worker->resume(handle->generation, arg,
-			nullptr);
+	const ContinuationStatus status = handle->worker->resume(handle->generation,
+			args, argCount, nullptr);
 	result->status = static_cast<std::int32_t>(status);
 	switch (status) {
 	case ContinuationStatus::Suspended:
 		result->tagId = handle->worker->suspendTag;
-		result->value = handle->worker->suspendValue;
+		result->tagValueCount = static_cast<std::uint32_t>(
+				std::min<std::size_t>(handle->worker->tagValues.size(), tagCapacity));
+		result->tagValues = tagValues;
+		result->tagKinds = handle->worker->tagKinds.empty()
+				? nullptr : handle->worker->tagKinds.data();
+		for (std::uint32_t i = 0; i < result->tagValueCount; ++i)
+			tagValues[i] = handle->worker->tagValues[i];
+		handle->worker->tagValues.clear();
+		result->value = result->tagValueCount == 0 ? 0
+				: static_cast<std::int32_t>(tagValues[0].words[0]);
 		try {
 			result->continuation = new Continuation(handle->worker,
 					handle->worker->generation.load(std::memory_order_relaxed));
@@ -1085,7 +1285,14 @@ void wasm_cont_resume(void* continuation, std::int32_t arg,
 		}
 		break;
 	case ContinuationStatus::Completed:
-		result->value = handle->worker->resultValue;
+		result->resultCount = static_cast<std::uint32_t>(
+				std::min<std::size_t>(handle->worker->resultValues.size(), resultCapacity));
+		result->resultValues = results;
+		for (std::uint32_t i = 0; i < result->resultCount; ++i)
+			results[i] = handle->worker->resultValues[i];
+		handle->worker->resultValues.clear();
+		result->value = result->resultCount == 0 ? 0
+				: static_cast<std::int32_t>(results[0].words[0]);
 		break;
 	case ContinuationStatus::Trapped:
 		reportTrap(handle->worker->trapKind, handle->worker->trapMessage.c_str());
@@ -1099,6 +1306,17 @@ void wasm_cont_resume(void* continuation, std::int32_t arg,
 }
 
 void wasm_cont_resume_throw(void* continuation, void* exception,
+		ContinuationResumeResult* result)
+{
+	ContinuationValue resultValue;
+	ContinuationValue tagValue;
+	wasm_cont_resume_throw_ex(continuation, exception, &resultValue, 1,
+			&tagValue, 1, result);
+}
+
+void wasm_cont_resume_throw_ex(void* continuation, void* exception,
+		ContinuationValue* results, std::uint32_t resultCapacity,
+		ContinuationValue* tagValues, std::uint32_t tagCapacity,
 		ContinuationResumeResult* result)
 {
 	if (result == nullptr)
@@ -1118,13 +1336,22 @@ void wasm_cont_resume_throw(void* continuation, void* exception,
 		return;
 	}
 
-	const ContinuationStatus status = handle->worker->resume(handle->generation, 0,
-			exception);
+	const ContinuationStatus status = handle->worker->resume(handle->generation,
+			nullptr, 0, exception);
 	result->status = static_cast<std::int32_t>(status);
 	switch (status) {
 	case ContinuationStatus::Suspended:
 		result->tagId = handle->worker->suspendTag;
-		result->value = handle->worker->suspendValue;
+		result->tagValueCount = static_cast<std::uint32_t>(
+				std::min<std::size_t>(handle->worker->tagValues.size(), tagCapacity));
+		result->tagValues = tagValues;
+		result->tagKinds = handle->worker->tagKinds.empty()
+				? nullptr : handle->worker->tagKinds.data();
+		for (std::uint32_t i = 0; i < result->tagValueCount; ++i)
+			tagValues[i] = handle->worker->tagValues[i];
+		handle->worker->tagValues.clear();
+		result->value = result->tagValueCount == 0 ? 0
+				: static_cast<std::int32_t>(tagValues[0].words[0]);
 		try {
 			result->continuation = new Continuation(handle->worker,
 					handle->worker->generation.load(std::memory_order_relaxed));
@@ -1133,7 +1360,14 @@ void wasm_cont_resume_throw(void* continuation, void* exception,
 		}
 		break;
 	case ContinuationStatus::Completed:
-		result->value = handle->worker->resultValue;
+		result->resultCount = static_cast<std::uint32_t>(
+				std::min<std::size_t>(handle->worker->resultValues.size(), resultCapacity));
+		result->resultValues = results;
+		for (std::uint32_t i = 0; i < result->resultCount; ++i)
+			results[i] = handle->worker->resultValues[i];
+		handle->worker->resultValues.clear();
+		result->value = result->resultCount == 0 ? 0
+				: static_cast<std::int32_t>(results[0].words[0]);
 		break;
 	case ContinuationStatus::Trapped:
 		reportTrap(handle->worker->trapKind, handle->worker->trapMessage.c_str());
@@ -1149,12 +1383,38 @@ void wasm_cont_resume_throw(void* continuation, void* exception,
 std::int32_t wasm_cont_suspend(std::int32_t tagId, std::int32_t value,
 		std::int32_t* result)
 {
+	ContinuationValue arg;
+	arg.words[0] = static_cast<std::uint64_t>(value);
+	ContinuationValue out;
+	const std::uint8_t i32Kind = static_cast<std::uint8_t>(ContinuationValueKind::I32);
+	std::uint32_t resultCount = 0;
+	const std::int32_t resumed = wasm_cont_suspend_ex(tagId, &arg, 1, &i32Kind,
+			&out, result != nullptr ? 1u : 0u, &resultCount, &i32Kind);
+	if (resumed != 0 && result != nullptr && resultCount != 0)
+		*result = static_cast<std::int32_t>(out.words[0]);
+	return resumed;
+}
+
+std::int32_t wasm_cont_suspend_ex(std::int32_t tagId,
+		const ContinuationValue* args, std::uint32_t argCount,
+		const std::uint8_t* argKinds, ContinuationValue* results,
+		std::uint32_t resultCapacity, std::uint32_t* resultCount,
+		const std::uint8_t* resultKinds)
+{
 	Worker* worker = t_currentWorker;
 	if (worker == nullptr) {
 		reportTrap(TrapKind::Internal, "suspend outside a continuation");
 		return 0;
 	}
-	return worker->suspend(tagId, value, result);
+	return worker->suspend(tagId, args, argCount, argKinds, results,
+			resultCapacity, resultCount, resultKinds);
+}
+
+void wasm_cont_drop_values(void* context, const std::uint8_t* kinds,
+		std::uint32_t count, void* values)
+{
+	dropContinuationValues(kinds, count, values,
+			static_cast<VMContext*>(context));
 }
 
 } // extern "C"

@@ -9351,7 +9351,7 @@ TEST_CASE("continuation runtime suspends and resumes across host threads")
 {
 	static std::atomic<std::int32_t> resumedValue{0};
 	resumedValue.store(0);
-	WASM::Callable target{};
+	static WASM::Callable target{};
 	target.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) {
 		std::int32_t value = 0;
 		WASM::wasm_cont_suspend(77, 7, &value);
@@ -9712,6 +9712,40 @@ TEST_CASE("stack-switching dispatches multiple handlers and a loop handler")
 	REQUIRE(WASM::callCallable<std::int32_t>(*multiB) == 100);
 	REQUIRE(WASM::callCallable<std::int32_t>(*multiA) == 200);
 	REQUIRE(WASM::callCallable<std::int32_t>(*loopHandler) == 8);
+	REQUIRE(!WASM::trapPending());
+}
+
+TEST_CASE("stack-switching suspends with a wide payload")
+{
+	WASM::Module module = loadTestModule("cont_wide_suspend");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto run = instance->exportedFunction("run");
+	REQUIRE(run.has_value());
+	REQUIRE(WASM::callCallable<std::int32_t>(*run) == 42);
+	REQUIRE(!WASM::trapPending());
+}
+
+TEST_CASE("stack-switching carries multi-value and reference payloads")
+{
+	WASM::Module module = loadTestModule("cont_wide");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto multi = instance->exportedFunction("multi");
+	auto ref = instance->exportedFunction("ref");
+	REQUIRE(multi.has_value());
+	REQUIRE(ref.has_value());
+	REQUIRE(WASM::callCallable<std::int32_t>(*multi) == 20);
+
+	int marker = 7;
+	void* returned = WASM::callCallable<void*>(*ref, static_cast<void*>(&marker));
+	REQUIRE(returned == static_cast<void*>(&marker));
 	REQUIRE(!WASM::trapPending());
 }
 

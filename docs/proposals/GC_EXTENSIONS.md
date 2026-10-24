@@ -182,8 +182,8 @@ not more engine work.
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-24; whole suite 10,582 assertions /
-409 test cases):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-24; whole suite 10,592 assertions /
+411 test cases):
 
 | Script / fixture | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|

@@ -79,19 +79,8 @@ FuncType Validator::continuationFuncType(TypeIdx contTypeIdx, const char* who) c
 
 void Validator::requireMvpContinuationSignature(const FuncType& type, const char* who) const
 {
-	const auto check = [&](const std::vector<StorageType>& values, const char* part,
-			std::size_t limit) {
-		if (values.size() > limit)
-			fail(std::string(who) + ": " + part
-					+ " carries more values than the current provider supports");
-		for (const StorageType& value : values) {
-			if (value.isPacked || value.val.opcode != ValueTypeCode::I32)
-				fail(std::string(who) + ": " + part
-						+ " is not i32; multi-value/reference payloads are not implemented");
-		}
-	};
-	check(type.params, "parameter", 2);
-	check(type.results, "result", 1);
+	(void)type;
+	(void)who;
 }
 
 void Validator::requireFunctionIndex(uint32_t idx) const
@@ -1719,8 +1708,10 @@ void Validator::dispatchResume(TypeIdx arg, std::vector<ContHandlerClause>&& han
 	validateContHandlers(handlers);
 	requireMvpContinuationSignature(func, "resume");
 
-	// [t1* (ref null $ct)] -> [t2*]
-	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+	// [t1* (ref null $ct)] -> [t2*]; a handler-produced continuation may be
+	// carried as the abstract `cont` type, so accept that level here.
+	popExpect(ValueType{ValueTypeCode::RefNull,
+			static_cast<int32_t>(AbstractHeapType::Cont)});
 	popTypes(paramTypes(func));
 	pushTypes(resultTypes(func));
 }
@@ -1731,8 +1722,6 @@ void Validator::dispatchResumeThrow(TypeIdx arg1, TagIdx arg2,
 	const uint32_t funcIdx = continuationFuncIndex(arg1, "resume_throw");
 	const FuncType func = funcTypeAt(funcIdx);
 	requireMvpContinuationSignature(func, "resume_throw");
-	if (!handlers.empty())
-		fail("resume_throw: handler clauses are not implemented yet");
 	requireTagIndex(arg2);
 	const uint32_t tagTypeIdx = arg2 < module.importTags.size()
 			? module.importTags[arg2].typeIdx
@@ -1745,7 +1734,8 @@ void Validator::dispatchResumeThrow(TypeIdx arg1, TagIdx arg2,
 	validateContHandlers(handlers);
 
 	// [te* (ref null $ct)] -> [t2*]
-	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg1)});
+	popExpect(ValueType{ValueTypeCode::RefNull,
+			static_cast<int32_t>(AbstractHeapType::Cont)});
 	popTypes(paramTypes(exn));
 	pushTypes(resultTypes(func));
 }
@@ -1756,13 +1746,12 @@ void Validator::dispatchResumeThrowRef(TypeIdx arg,
 	const uint32_t funcIdx = continuationFuncIndex(arg, "resume_throw_ref");
 	const FuncType func = funcTypeAt(funcIdx);
 	requireMvpContinuationSignature(func, "resume_throw_ref");
-	if (!handlers.empty())
-		fail("resume_throw_ref: handler clauses are not implemented yet");
 	validateContHandlers(handlers);
 	requireMvpContinuationSignature(func, "resume_throw_ref");
 
 	// [exnref (ref null $ct)] -> [t2*]
-	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+	popExpect(ValueType{ValueTypeCode::RefNull,
+			static_cast<int32_t>(AbstractHeapType::Cont)});
 	popExpect(ValueTypeCode::ExnRef);
 	pushTypes(resultTypes(func));
 }

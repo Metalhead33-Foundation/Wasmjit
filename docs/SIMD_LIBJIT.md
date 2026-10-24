@@ -633,7 +633,7 @@ WASM_SPEC_SCRIPTS=all ./WasmJit '[spec]'  # T3 sweep, for re-curation
 | T4 | `simd benchmark: ns per v128 op (SIMD-L8)` | 4.10 ns/v128-op (M1) | **SIMD-L8.** 42× off the no-call bound; 97.6 % of it is the helper call — see §8.4 |
 
 Current measurement: `./WasmJit 'simd*'` reports **24 cases, 6147 assertions, all
-passing**, and the whole default suite is **409 cases / 10582 assertions**. The
+passing**, and the whole default suite is **411 cases / 10592 assertions**. The
 milestone-by-milestone progression was 102 cases / 4196 assertions after L3, 104 /
 7246 after L4's float half, 105 / 7421 at L4, and it has only grown since — added
 coverage, no regressions. **All 236 fixed-width handlers execute**, and the op

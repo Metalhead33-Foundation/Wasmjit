@@ -508,6 +508,48 @@ This is how a JavaScript (or Lua/Python) adapter connects without linking its
 engine into `WasmBase/`: the adapter supplies the hooks and its own event loop.
 See [`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) §2.3.1.
 
+#### Wide value ABI
+
+The generated-code path passes payloads through fixed 16-byte slots
+(`WASM::ContinuationValue`, `kContinuationValueStride`). `ContinuationValueKind`
+describes each slot:
+
+| Kind | Payload |
+|---|---|
+| `I32` | 32-bit integer in the first word |
+| `I64` | 64-bit integer in the first word |
+| `F32` | IEEE-754 f32 bits in the first word |
+| `F64` | IEEE-754 f64 bits in the first word |
+| `Ref` | `void*` reference in the first word |
+| `V128` | 16 bytes across both words |
+
+The backend supplies `ContinuationInvokeFn`, which calls the target using its
+real C signature from the kind arrays (LibJIT uses `jit_apply`; another backend
+can use its own thunk). The core never interprets scalar payloads.
+
+The generated-code entry points are:
+
+```c
+void* wasm_cont_new_ex(callable, context, invoke, paramCount, resultCount,
+                       paramKinds, resultKinds);
+void* wasm_cont_bind_ex(continuation, values, count);
+void  wasm_cont_resume_ex(continuation, args, argCount,
+                          results, resultCapacity, tagValues, tagCapacity,
+                          result);
+void  wasm_cont_resume_throw_ex(continuation, exception,
+                                results, resultCapacity,
+                                tagValues, tagCapacity, result);
+int   wasm_cont_suspend_ex(tagId, args, argCount, argKinds,
+                           results, resultCapacity, resultCount, resultKinds);
+void  wasm_cont_drop_values(context, kinds, count, values);
+```
+
+`ContinuationResumeResult` carries `resultCount`/`resultValues` for a normal
+completion, `tagValueCount`/`tagValues`/`tagKinds` for a suspension, and the
+replacement `continuation`. The caller owns the buffers; the runtime moves
+reference values into them. An unhandled suspension is dropped through
+`wasm_cont_drop_values`, so a reference payload is not leaked.
+
 ### `Callable` (`WasmBase/WasmValue.hpp`)
 
 Universal function reference stored in tables and import storage.

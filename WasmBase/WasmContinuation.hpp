@@ -23,16 +23,12 @@ namespace WASM {
 // both providers execute one continuation at a time and keep the single-agent
 // model.
 //
-// The first slice is intentionally narrow and honest:
-//   * one i32 parameter and one i32 result at most (or void), for the
-//     continuation function, the control tag and the handler;
-//   * `cont.new`, `suspend` and `resume` with at most one `(on $tag $label)`
-//     handler;
-//   * one-shot continuations: resuming a consumed continuation traps;
-//   * a trap or an uncaught exception in the resumed context is transferred to
-//     the resumer.
-// `cont.bind`, `resume_throw`, `resume_throw_ref`, `switch` and multi-value
-// payloads remain rejected until the provider and the semantics are extended
+// The wide value ABI uses fixed 16-byte slots (`ContinuationValue`) and a
+// backend-supplied invoker (`ContinuationInvokeFn`): i32/i64/f32/f64,
+// references and v128 can cross `cont.new`, `cont.bind`, `suspend`, `resume`
+// and `resume_throw*`. The scalar `wasm_cont_*` entry points remain as a
+// compatibility path for i32/void tests; the generated code uses the `_ex`
+// forms. `switch` remains rejected until its prompt/peer model is implemented
 // (STACK_SWITCHING.md §10.12 stage 4).
 //
 // A continuation reference behaves like every other reference: it is cloned
@@ -64,10 +60,43 @@ enum class ContinuationStatus : std::int32_t {
 struct ContinuationResumeResult {
 	std::int32_t status = static_cast<std::int32_t>(ContinuationStatus::Invalid);
 	std::int32_t tagId = 0;
-	std::int32_t value = 0;
+	std::int32_t value = 0; // first i32 result/tag payload, for the narrow ABI
 	std::int32_t reserved = 0; // keeps `continuation` 8-byte aligned
 	void*        continuation = nullptr;
+	// Wide result/tag buffers. The caller owns the storage; the runtime moves
+	// values into it and sets the matching count. `tagKinds` describes the tag
+	// payload for an unhandled suspension so the caller can drop it correctly.
+	std::uint32_t resultCount = 0;
+	std::uint32_t tagValueCount = 0;
+	void*        resultValues = nullptr;
+	void*        tagValues = nullptr;
+	const std::uint8_t* tagKinds = nullptr;
 };
+
+// One continuation value slot. The runtime never interprets the payload; the
+// backend thunk knows the Wasm type. 16-byte slots make i32/i64/f32/f64/ref
+// and v128 equally addressable. Scalar values live at offset 0.
+enum class ContinuationValueKind : std::uint8_t {
+	I32 = 0,
+	I64 = 1,
+	F32 = 2,
+	F64 = 3,
+	Ref = 4,
+	V128 = 5,
+};
+inline constexpr std::size_t kContinuationValueStride = 16;
+struct alignas(16) ContinuationValue {
+	std::uint64_t words[2] = {0, 0};
+};
+
+// Backend-supplied generic target invocation. `target` is a `Callable*` and
+// `context` is the creation context; the callback calls the target's C ABI
+// using the kind arrays. It is implemented by the executing backend so
+// WasmBase does not depend on a particular backend library.
+using ContinuationInvokeFn = void (*)(void* target, void* context,
+		const ContinuationValue* args, std::uint32_t argCount,
+		ContinuationValue* results, std::uint32_t resultCount,
+		const std::uint8_t* paramKinds, const std::uint8_t* resultKinds);
 
 // ── Provider selection ─────────────────────────────────────────────────────
 // A (native stacks + context switch) is the product default. B (one host
@@ -227,6 +256,43 @@ extern "C" {
 
 void* wasm_cont_new(void* callable, void* context, std::uint32_t paramCount,
 		std::int32_t takesArg, std::int32_t returnsValue);
+
+// ── Wide continuation ABI ────────────────────────────────────────────────
+// `wasm_cont_new_ex` is the backend-facing constructor. It copies the kind
+// arrays and stores the backend invoker; the target's params/results may be
+// any supported scalar, reference or v128.
+void* wasm_cont_new_ex(void* callable, void* context, ContinuationInvokeFn invoke,
+		std::uint32_t paramCount, std::uint32_t resultCount,
+		const std::uint8_t* paramKinds, const std::uint8_t* resultKinds);
+
+void* wasm_cont_bind_ex(void* continuation, const ContinuationValue* values,
+		std::uint32_t count);
+
+// Resume with a wide argument buffer. `results`/`tagValues` are caller-owned
+// storage of `capacity` slots (16 bytes each); the runtime moves values in and
+// records the counts in `result`. The old `wasm_cont_resume` wrappers remain
+// for the scalar i32 ABI.
+void wasm_cont_resume_ex(void* continuation, const ContinuationValue* args,
+		std::uint32_t argCount, ContinuationValue* results,
+		std::uint32_t resultCapacity, ContinuationValue* tagValues,
+		std::uint32_t tagCapacity, ContinuationResumeResult* result);
+void wasm_cont_resume_throw_ex(void* continuation, void* exception,
+		ContinuationValue* results, std::uint32_t resultCapacity,
+		ContinuationValue* tagValues, std::uint32_t tagCapacity,
+		ContinuationResumeResult* result);
+
+// Suspend with a wide payload/result buffer. `argKinds` describes the tag
+// parameters; `resultKinds` describes the values the future resume supplies.
+std::int32_t wasm_cont_suspend_ex(std::int32_t tagId,
+		const ContinuationValue* args, std::uint32_t argCount,
+		const std::uint8_t* argKinds, ContinuationValue* results,
+		std::uint32_t resultCapacity, std::uint32_t* resultCount,
+		const std::uint8_t* resultKinds);
+
+// Drops reference values in a caller-owned wide buffer (for an unhandled
+// suspension). No-op for scalar/v128 slots.
+void wasm_cont_drop_values(void* context, const std::uint8_t* kinds,
+		std::uint32_t count, void* values);
 
 // `cont.bind`: consume the continuation identity and bind a prefix of its
 // remaining arguments. The caller still owns/releases the old handle ref.

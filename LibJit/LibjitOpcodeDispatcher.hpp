@@ -383,6 +383,14 @@ protected:
 	// `internals.translatedTypes` is parallel to `module.typeIds` (filled in translateTypes).
 	jit_type_t jitTypeForTypeIdx(WASM::TypeIdx idx) const;
 	jit_type_t jitTypeForValueType(const WASM::ValueType& vt);
+	static std::uint8_t continuationKindFor(const WASM::ValueType& vt);
+	jit_value_t allocateContinuationBuffer(std::size_t count);
+	void storeContinuationValues(const std::vector<jit_value_t>& values,
+			const std::vector<WASM::StorageType>& types, jit_value_t buffer);
+	void loadContinuationValues(jit_value_t buffer,
+			const std::vector<WASM::StorageType>& types);
+	void dropContinuationValues(jit_value_t buffer,
+			const std::vector<WASM::StorageType>& types);
 
 	void dispatchUnreachable() override;
 	void dispatchNop() override;
@@ -400,6 +408,10 @@ protected:
 			std::vector<WASM::ContHandlerClause>&& handlers) override;
 	void dispatchResumeThrowRef(WASM::TypeIdx arg,
 			std::vector<WASM::ContHandlerClause>&& handlers) override;
+	void emitContinuationResultHandling(const WASM::FuncType& func,
+			const std::vector<WASM::ContHandlerClause>& handlers,
+			jit_value_t resultAddr, jit_value_t resultBuffer,
+			jit_value_t tagBuffer, size_t baseDepth);
 	void dispatchEnd() override;
 	void dispatchBr(WASM::LabelIdx arg) override;
 	void dispatchBrIf(WASM::LabelIdx arg) override;
