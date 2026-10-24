@@ -408,6 +408,7 @@ protected:
 			std::vector<WASM::ContHandlerClause>&& handlers) override;
 	void dispatchResumeThrowRef(WASM::TypeIdx arg,
 			std::vector<WASM::ContHandlerClause>&& handlers) override;
+	void dispatchSwitch(WASM::TypeIdx arg1, WASM::TagIdx arg2) override;
 	void emitContinuationResultHandling(const WASM::FuncType& func,
 			const std::vector<WASM::ContHandlerClause>& handlers,
 			jit_value_t resultAddr, jit_value_t resultBuffer,

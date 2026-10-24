@@ -3418,6 +3418,106 @@ void OpcodeDispatcher::dispatchSuspend(WASM::TagIdx arg)
 		loadContinuationValues(resultBuffer, tag.results);
 }
 
+void OpcodeDispatcher::dispatchSwitch(WASM::TypeIdx arg1, WASM::TagIdx arg2)
+{
+	if (unreachableCode)
+		return;
+	const WASM::FuncType target = continuationSignature(arg1);
+	if (target.params.empty())
+		throw std::runtime_error("switch: target continuation has no peer parameter");
+	const WASM::StorageType& peerParam = target.params.back();
+	if ((peerParam.val.opcode != WASM::ValueTypeCode::Ref
+				&& peerParam.val.opcode != WASM::ValueTypeCode::RefNull)
+			|| peerParam.val.heapType < 0)
+		throw std::runtime_error("switch: target's last parameter is not a continuation");
+	const WASM::TypeIdx currentType = static_cast<WASM::TypeIdx>(peerParam.val.heapType);
+	const WASM::FuncType current = continuationSignature(currentType);
+	const WASM::FuncType tag = tagPayloadType(arg2);
+	if (!tag.params.empty())
+		throw std::runtime_error("switch: control tag has parameters");
+	(void)tag;
+
+	jit_value_t targetContinuation = popValue();
+	std::vector<jit_value_t> values(target.params.size() - 1);
+	for (size_t i = values.size(); i--; )
+		values[i] = popValue();
+	emitTrapIfNull(WASM::TrapKind::NullReference, refAsVoidPtr(targetContinuation));
+
+	jit_value_t argBuffer = allocateContinuationBuffer(values.size());
+	std::vector<WASM::StorageType> targetParams(target.params.begin(),
+			target.params.end() - 1);
+	storeContinuationValues(values, targetParams, argBuffer);
+	jit_value_t resultBuffer = allocateContinuationBuffer(current.params.size());
+
+	jit_type_t fields[10] = {jit_type_int, jit_type_int, jit_type_int,
+			jit_type_int, jit_type_void_ptr, jit_type_uint, jit_type_uint,
+			jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr};
+	jit_type_t resultType = jit_type_create_struct(fields, 10, 1);
+	assert(jit_type_get_size(resultType) == sizeof(WASM::ContinuationResumeResult));
+	jit_value_t result = jit_value_create(function, resultType);
+	jit_value_t resultAddr = jit_insn_address_of(function, result);
+
+	// Register suspended-stack roots while the peer runs.
+	jit_type_t rootParams[1] = {jit_type_void_ptr};
+	jit_type_t addRootSig = jit_type_create_signature(jit_abi_cdecl,
+			jit_type_void, rootParams, 1, 1);
+	const auto addRoot = [&](jit_value_t value) {
+		if (value == nullptr || jit_value_get_type(value) != jit_type_void_ptr)
+			return;
+		jit_value_t arg[1] = {value};
+		jit_insn_call_native(function, "wasm_cont_add_root",
+				reinterpret_cast<void*>(&WASM::wasm_cont_add_root),
+				addRootSig, arg, 1, 0);
+	};
+	for (jit_value_t value : locals)
+		addRoot(value);
+	for (jit_value_t value : valueStack)
+		addRoot(value);
+	for (const ControlBlock& block : controlStack) {
+		for (jit_value_t value : block.resultSlots)
+			addRoot(value);
+		for (jit_value_t value : block.paramSlots)
+			addRoot(value);
+	}
+
+	jit_type_t params[6] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_uint,
+			jit_type_void_ptr, jit_type_uint, jit_type_void_ptr};
+	jit_type_t signature = jit_type_create_signature(jit_abi_cdecl,
+			jit_type_void, params, 6, 1);
+	jit_value_t args[6] = {
+		refAsVoidPtr(targetContinuation),
+		argBuffer,
+		jit_value_create_nint_constant(function, jit_type_uint,
+				static_cast<jit_nint>(values.size())),
+		resultBuffer,
+		jit_value_create_nint_constant(function, jit_type_uint,
+				static_cast<jit_nint>(current.params.size())),
+		resultAddr,
+	};
+	jit_insn_call_native(function, "wasm_cont_switch",
+			reinterpret_cast<void*>(&WASM::wasm_cont_switch),
+			signature, args, 6, 0);
+	emitDropValue(targetContinuation);
+	emitPendingExceptionCheck();
+	emitPendingTrapCheck();
+	if (unreachableCode)
+		return;
+
+	jit_label_t completedLabel = jit_label_undefined;
+	jit_label_t doneLabel = jit_label_undefined;
+	jit_value_t status = jit_insn_load_relative(function, resultAddr,
+			static_cast<jit_nint>(offsetof(WASM::ContinuationResumeResult, status)),
+			jit_type_int);
+	jit_insn_branch_if(function,
+			jit_insn_eq(function, status, jit_value_create_nint_constant(function,
+					jit_type_int, static_cast<jit_nint>(WASM::ContinuationStatus::Completed))),
+			&completedLabel);
+	emitTrap(WASM::TrapKind::Internal, "continuation switch failed");
+	jit_insn_label(function, &completedLabel);
+	loadContinuationValues(resultBuffer, current.params);
+	jit_insn_label(function, &doneLabel);
+}
+
 void OpcodeDispatcher::emitContinuationResultHandling(const WASM::FuncType& func,
 		const std::vector<WASM::ContHandlerClause>& handlers,
 		jit_value_t resultAddr, jit_value_t resultBuffer,
@@ -3481,7 +3581,7 @@ void OpcodeDispatcher::emitContinuationResultHandling(const WASM::FuncType& func
 		for (size_t i = 0; i < handlers.size(); ++i) {
 			const WASM::ContHandlerClause& handler = handlers[i];
 			if (handler.isSwitch)
-				throw std::runtime_error("resume: switch handlers are not implemented");
+				continue;
 			assert(handler.tag < internals.tagIds.size());
 			jit_insn_branch_if(function,
 					jit_insn_eq(function, tag, jit_value_create_nint_constant(function,
@@ -3494,6 +3594,8 @@ void OpcodeDispatcher::emitContinuationResultHandling(const WASM::FuncType& func
 
 		for (size_t i = 0; i < handlers.size(); ++i) {
 			const WASM::ContHandlerClause& handler = handlers[i];
+			if (handler.isSwitch)
+				continue;
 			jit_insn_label(function, &handlerLabels[i]);
 			const WASM::FuncType tagType = tagPayloadType(handler.tag);
 			loadContinuationValues(tagBuffer, tagType.params);
@@ -3630,7 +3732,7 @@ void OpcodeDispatcher::dispatchResume(WASM::TypeIdx arg,
 		for (size_t i = 0; i < handlers.size(); ++i) {
 			const WASM::ContHandlerClause& handler = handlers[i];
 			if (handler.isSwitch)
-				throw std::runtime_error("resume: switch handlers are not implemented");
+				continue;
 			assert(handler.tag < internals.tagIds.size());
 			jit_insn_branch_if(function,
 					jit_insn_eq(function, tag, jit_value_create_nint_constant(function,
@@ -3643,6 +3745,8 @@ void OpcodeDispatcher::dispatchResume(WASM::TypeIdx arg,
 
 		for (size_t i = 0; i < handlers.size(); ++i) {
 			const WASM::ContHandlerClause& handler = handlers[i];
+			if (handler.isSwitch)
+				continue;
 			jit_insn_label(function, &handlerLabels[i]);
 			const WASM::FuncType tagType = tagPayloadType(handler.tag);
 			loadContinuationValues(tagBuffer, tagType.params);

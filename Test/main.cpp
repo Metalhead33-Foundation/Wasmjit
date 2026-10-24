@@ -6739,9 +6739,10 @@ TEST_CASE("stack-switching continuation types decode and opcodes fail clearly")
 	REQUIRE(refTyped != nullptr);
 	const WASM::CoreTypeView refView = refTyped->typeView(0);
 	REQUIRE(refView.kind() == WASM::CanonTypeKind::Func);
-	REQUIRE(refView.funcParams().size() == 1);
-	REQUIRE(refView.funcParams()[0].value.opcode == WASM::ValueTypeCode::RefNull);
-	REQUIRE(refView.funcParams()[0].value.heap.abstract == WASM::AbstractHeapType::Cont);
+	const auto refParams = refView.funcParams();
+	REQUIRE(refParams.size() == 1);
+	REQUIRE(refParams[0].value.opcode == WASM::ValueTypeCode::RefNull);
+	REQUIRE(refParams[0].value.heap.abstract == WASM::AbstractHeapType::Cont);
 
 	// `(ref null nocont)` is the bottom of the continuation hierarchy.
 	std::vector<uint8_t> noContRef = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
@@ -6750,14 +6751,13 @@ TEST_CASE("stack-switching continuation types decode and opcodes fail clearly")
 	REQUIRE(noContModule != nullptr);
 	WASM::Module* noContTyped = noContModule->asCoreModule();
 	REQUIRE(noContTyped != nullptr);
-	const WASM::CoreTypeView noContView = noContTyped->typeView(0);
-	REQUIRE(noContView.funcParams().size() == 1);
-	REQUIRE(noContView.funcParams()[0].value.heap.abstract
-			== WASM::AbstractHeapType::NoCont);
+	const WASM::FuncType noContFunc = noContTyped->funcTypeAt(0);
+	REQUIRE(noContFunc.params.size() == 1);
+	REQUIRE(noContFunc.params[0].val.heapType
+			== static_cast<int32_t>(WASM::AbstractHeapType::NoCont));
 
-	// A body containing `switch` (0xE6), which the runtime still does not
-	// implement, must be rejected by the validating decoder with a named error
-	// rather than the generic unsupported-opcode one.
+	// A body containing a truncated `switch` (0xE6) is malformed and must be
+	// rejected by the decoder rather than silently accepted.
 	std::vector<uint8_t> contCode = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
 		0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
 		0x03, 0x02, 0x01, 0x00,
@@ -6769,9 +6769,8 @@ TEST_CASE("stack-switching continuation types decode and opcodes fail clearly")
 		WASM::Module* core = module->asCoreModule();
 		REQUIRE(core != nullptr);
 		core->validate();
-	} catch (const std::exception& error) {
+	} catch (const std::exception&) {
 		codeThrew = true;
-		REQUIRE(std::string(error.what()).find("stack-switching") != std::string::npos);
 	}
 	REQUIRE(codeThrew);
 }
@@ -9746,6 +9745,53 @@ TEST_CASE("stack-switching carries multi-value and reference payloads")
 	int marker = 7;
 	void* returned = WASM::callCallable<void*>(*ref, static_cast<void*>(&marker));
 	REQUIRE(returned == static_cast<void*>(&marker));
+	REQUIRE(!WASM::trapPending());
+}
+
+TEST_CASE("stack-switching resume_throw dispatches a handler clause")
+{
+	WASM::Module module = loadTestModule("cont_throw_handler");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto run = instance->exportedFunction("run");
+	REQUIRE(run.has_value());
+	REQUIRE(WASM::callCallable<std::int32_t>(*run) == 5);
+	REQUIRE(!WASM::trapPending());
+}
+
+TEST_CASE("stack-switching switch performs a symmetric native-stack handoff")
+{
+	WASM::Module module = loadTestModule("cont_switch");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto run = instance->exportedFunction("run");
+	REQUIRE(run.has_value());
+	REQUIRE(WASM::callCallable<std::int32_t>(*run) == 7);
+	REQUIRE(!WASM::trapPending());
+}
+
+TEST_CASE("stack-switching switch performs a symmetric host-thread handoff")
+{
+	struct ProviderRestore {
+		WASM::ContinuationProvider previous;
+		~ProviderRestore() { WASM::setContinuationProvider(previous); }
+	} restore{WASM::continuationProvider()};
+	WASM::setContinuationProvider(WASM::ContinuationProvider::HostThreads);
+	WASM::Module module = loadTestModule("cont_switch");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto run = instance->exportedFunction("run");
+	REQUIRE(run.has_value());
+	REQUIRE(WASM::callCallable<std::int32_t>(*run) == 7);
 	REQUIRE(!WASM::trapPending());
 }
 

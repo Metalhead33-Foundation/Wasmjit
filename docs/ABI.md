@@ -541,6 +541,9 @@ void  wasm_cont_resume_throw_ex(continuation, exception,
                                 tagValues, tagCapacity, result);
 int   wasm_cont_suspend_ex(tagId, args, argCount, argKinds,
                            results, resultCapacity, resultCount, resultKinds);
+void  wasm_cont_switch(continuation, args, argCount,
+                       results, resultCapacity, result);
+void  wasm_cont_add_root(ref);
 void  wasm_cont_drop_values(context, kinds, count, values);
 ```
 
@@ -549,6 +552,13 @@ completion, `tagValueCount`/`tagValues`/`tagKinds` for a suspension, and the
 replacement `continuation`. The caller owns the buffers; the runtime moves
 reference values into them. An unhandled suspension is dropped through
 `wasm_cont_drop_values`, so a reference payload is not leaked.
+
+`wasm_cont_switch` appends the calling continuation to the target arguments and
+returns the caller's continuation parameters when the peer switches back. Both
+providers implement the symmetric handoff (`ucontext` handoff on NativeStacks,
+condition-variable handoff on HostThreads); cross-provider switch is rejected.
+A suspended stack's pointer-typed locals/operands are registered through
+`wasm_cont_add_root` for a tracing collector.
 
 ### `Callable` (`WasmBase/WasmValue.hpp`)
 

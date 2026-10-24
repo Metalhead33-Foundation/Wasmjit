@@ -80,6 +80,12 @@ protected:
 		(void)handlers;
 		onUnhandledOpcode("dispatchResumeThrowRef");
 	}
+	virtual void dispatchSwitch(TypeIdx arg1, TagIdx arg2)
+	{
+		(void)arg1;
+		(void)arg2;
+		onUnhandledOpcode("dispatchSwitch");
+	}
 	virtual void dispatchEnd() { onUnhandledOpcode("dispatchEnd"); }
 	virtual void dispatchBr(LabelIdx arg) { onUnhandledOpcode("dispatchBr"); }
 	virtual void dispatchBrIf(LabelIdx arg) { onUnhandledOpcode("dispatchBrIf"); }

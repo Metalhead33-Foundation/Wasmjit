@@ -281,6 +281,15 @@ void wasm_cont_resume_throw_ex(void* continuation, void* exception,
 		ContinuationValue* tagValues, std::uint32_t tagCapacity,
 		ContinuationResumeResult* result);
 
+// Symmetric switch: capture the calling continuation, transfer to `continuation`
+// with the caller's continuation appended to the target arguments, and return
+// when the target switches back. `results` receives the caller's continuation
+// parameters. Both providers implement the peer handoff; cross-provider
+// handoff is rejected explicitly.
+void wasm_cont_switch(void* continuation, const ContinuationValue* args,
+		std::uint32_t argCount, ContinuationValue* results,
+		std::uint32_t resultCapacity, ContinuationResumeResult* result);
+
 // Suspend with a wide payload/result buffer. `argKinds` describes the tag
 // parameters; `resultKinds` describes the values the future resume supplies.
 std::int32_t wasm_cont_suspend_ex(std::int32_t tagId,

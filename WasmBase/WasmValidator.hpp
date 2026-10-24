@@ -292,6 +292,7 @@ private:
 			std::vector<ContHandlerClause>&& handlers) override;
 	void dispatchResumeThrowRef(TypeIdx arg,
 			std::vector<ContHandlerClause>&& handlers) override;
+	void dispatchSwitch(TypeIdx arg1, TagIdx arg2) override;
 	void dispatchTryTable(const BlockType& arg1, std::vector<CatchClause>&& arg2) override;
 	void dispatchSelectT(std::vector<ValueType>&& arg) override;
 	void dispatchBrOnNull(LabelIdx arg) override;

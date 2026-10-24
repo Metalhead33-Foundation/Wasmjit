@@ -153,8 +153,11 @@ baked in at compile time through the `WASM_TEST_DIR` macro) and calls into it.
 | `stack-switching binds a continuation argument prefix` | `cont_bind.wat` | `cont.bind` fixes the first i32 parameter; `resume` supplies the rest |
 | `stack-switching binds a suspended continuation` | `cont_bind_suspended.wat` | `cont.bind` supplies the next result of an already-suspended continuation |
 | `stack-switching injects an exception...` | `cont_throw.wat` | `resume_throw` injects `$abort` at a suspension point; the continuation's `try_table` catches it |
+| `stack-switching resume_throw dispatches a handler clause` | `cont_throw_handler.wat` | after the injected exception is caught, the continuation suspends again; `resume_throw ... (on $yield 0)` handles that suspension |
 | `stack-switching carries multi-value and reference payloads` | `cont_wide.wat` | multi-value i32 params/results and an `externref` identity |
 | `stack-switching suspends with a wide payload` | `cont_wide_suspend.wat` | wide tag payload and wide resume result |
+| `stack-switching switch performs a symmetric native-stack handoff` | `cont_switch.wat` | A-provider `ucontext` peer handoff through `switch $ct $tag` |
+| `stack-switching switch performs a symmetric host-thread handoff` | `cont_switch.wat` | B-provider peer handoff through `switch $ct $tag` |
 
 The modules are produced either from AssemblyScript (`Test/wasm/*.ts`) or from hand-written WAT
 (`Test/wasm_wat/*.wat`); both land in `wasm_test_modules/`.
@@ -289,7 +292,7 @@ selection is explicit — which is why `./WasmJit '[spec]'` runs everything.
 | `./WasmJit '[spec]'` | all 257 spec scripts (~2 min in the debug build; 251 pass, 6 known failures) |
 | `./WasmJit 'spec: address'` | just that script |
 | `./WasmJit '*float*'` | scripts whose name matches |
-| `./WasmJit --list-tests` | the default view (411 test cases) |
+| `./WasmJit --list-tests` | the default view (414 test cases) |
 | `./WasmJit --list-tests '[spec]'` | every script, one line each (257) |
 | `./WasmJit -# --list-tags` | all tags, including `[#main]` and `[#SpecSuite]` |
 
@@ -320,7 +323,7 @@ It currently holds 193 of the 257 scripts, and the default run is green:
 
 ```
 $ ./WasmJit
-All tests passed (10592 assertions in 411 test cases)
+All tests passed (10603 assertions in 414 test cases)
 ```
 
 #### Refreshing the list
@@ -548,7 +551,7 @@ tests, and it is green:
 
 ```
 $ ./WasmJit
-All tests passed (10592 assertions in 411 test cases)
+All tests passed (10603 assertions in 414 test cases)
 ```
 
 A full sweep is deliberately loud, because most of the suite is still beyond the
@@ -734,13 +737,13 @@ Current modules:
 | `simd_convert.wat` | the conversions (SIMD-L4): `trunc_sat` at its ends (NaN, ±2^31, 2^32 and the largest value below it), `convert`, `convert_low`, `promote`, and `demote`/`trunc_sat_f64x2_*_zero` with marker lanes proving the unfilled lanes are zero. 19 exports, all read off V8; two of them are `FORWARD`ed to the reference, so this case is their only conformance evidence | `simd: the float/int conversions run through the JIT` |
 | `simd_relaxed.wat` | the relaxed ops that need their own shape (SIMD-5): `relaxed_swizzle`, `relaxed_laneselect`, `relaxed_madd`/`nmadd`, and both dots — including the pair that **saturates** (127×255×2 = 64770 → 32767), which is what tells the permitted readings apart | `simd relaxed: the hand-written ops run through the JIT` |
 | `simd_globals.wat` | `v128` globals (SIMD-4 / `SIMD-L5`): a `v128.const` initialiser through the constant-expression path, `global.get`/`set`, a read-modify-write that must survive between calls, and a `v128` copied through a local — with the byte-order assertion (`i8x16 0…15` read as an `i32` lane is `0x0B0A0908`) that pins hazard Y11 | `simd: v128 globals run through the JIT` |
-| `cont_*.wat` | stack switching: `cont.new` + `resume` completion, an i32 argument through `resume`, a handled/unhandled suspension, an exported continuation, A stack exhaustion, multiple/loop handlers, `cont.bind` and `resume_throw` | `stack-switching ...`, host-handle, native-stack, binds, dispatches and injects cases |
+| `cont_*.wat` | stack switching: `cont.new` + `resume` completion, an i32 argument through `resume`, a handled/unhandled suspension, an exported continuation, A stack exhaustion, multiple/loop handlers, `cont.bind`, `resume_throw`, a `resume_throw` handler clause and A/B `switch` | `stack-switching ...`, host-handle, native-stack, binds, dispatches, injects and switch cases |
 
 Measured after SIMD-5:
 
 ```bash
 ./WasmJit 'simd*'      # 24 cases, 6147 assertions, all passing (includes the hidden [.simdbench] case)
-./WasmJit              # 411 cases, 10592 assertions, all passing
+./WasmJit              # 414 cases, 10603 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed

@@ -1672,16 +1672,22 @@ void Validator::validateContHandlers(const std::vector<ContHandlerClause>& handl
 	if (handlers.size() > 16)
 		fail("resume: too many handler clauses");
 	for (const ContHandlerClause& handler : handlers) {
-		if (handler.isSwitch)
-			fail("resume: (on $tag switch) is not implemented; use (on $tag $label)");
 		requireTagIndex(handler.tag);
-		if (handler.label >= controlStack.size())
-			fail("resume: unknown handler label " + std::to_string(handler.label));
 		const uint32_t tagTypeIdx = handler.tag < module.importTags.size()
 				? module.importTags[handler.tag].typeIdx
 				: module.tags[handler.tag - module.importTags.size()].typeIdx;
 		const FuncType tag = funcTypeAt(tagTypeIdx);
 		requireMvpContinuationSignature(tag, "resume handler");
+		if (handler.isSwitch) {
+			// `(on $tag switch) : t*` iff the tag is `[] -> [t*]`. The handler
+			// does not branch to a Wasm label; it transfers to the target named
+			// by the matching `switch` instruction.
+			if (!tag.params.empty())
+				fail("resume: a switch handler requires a tag with no parameters");
+			continue;
+		}
+		if (handler.label >= controlStack.size())
+			fail("resume: unknown handler label " + std::to_string(handler.label));
 
 		// The handler label receives the suspension payload followed by the
 		// captured continuation: [tag params* (ref null cont)]. A block's
@@ -1754,6 +1760,50 @@ void Validator::dispatchResumeThrowRef(TypeIdx arg,
 			static_cast<int32_t>(AbstractHeapType::Cont)});
 	popExpect(ValueTypeCode::ExnRef);
 	pushTypes(resultTypes(func));
+}
+
+void Validator::dispatchSwitch(TypeIdx arg1, TagIdx arg2)
+{
+	const uint32_t funcIdx = continuationFuncIndex(arg1, "switch");
+	const FuncType target = funcTypeAt(funcIdx);
+	requireTagIndex(arg2);
+	const uint32_t tagTypeIdx = arg2 < module.importTags.size()
+			? module.importTags[arg2].typeIdx
+			: module.tags[arg2 - module.importTags.size()].typeIdx;
+	const FuncType tag = funcTypeAt(tagTypeIdx);
+	if (!tag.params.empty())
+		fail("switch: the control tag must have no parameters");
+	if (target.params.empty())
+		fail("switch: the target continuation must take the current continuation");
+
+	// `switch $ct1 $t : [t1* (ref null $ct1)] -> [t2*]` with
+	// `$ct1 = cont [t1* (ref null $ct2)] -> [te1*]`,
+	// `$ct2 = cont [t2*] -> [te2*]`, `te1* <: t*` and `t* <: te2*`.
+	const ValueType& peerType = target.params.back().val;
+	if ((peerType.opcode != ValueTypeCode::Ref
+				&& peerType.opcode != ValueTypeCode::RefNull)
+			|| peerType.heapType < 0)
+		fail("switch: the target's last parameter must be a concrete continuation");
+	const TypeIdx ct2 = static_cast<TypeIdx>(peerType.heapType);
+	const FuncType current = continuationFuncType(ct2, "switch");
+	if (target.results.size() != tag.results.size())
+		fail("switch: target results do not match the switch tag results");
+	for (std::size_t i = 0; i < target.results.size(); ++i) {
+		if (!assignable(target.results[i].val, tag.results[i].val))
+			fail("switch: target results do not match the switch tag results");
+	}
+	if (tag.results.size() != current.results.size())
+		fail("switch: the current continuation result does not match the switch tag result");
+	for (std::size_t i = 0; i < tag.results.size(); ++i) {
+		if (!assignable(tag.results[i].val, current.results[i].val))
+			fail("switch: the switch tag results do not match the current continuation");
+	}
+
+	// Operands: target args, then the target continuation.
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg1)});
+	for (std::size_t i = target.params.size() - 1; i-- > 0; )
+		popExpect(target.params[i].val);
+	pushTypes(paramTypes(current));
 }
 
 void Validator::dispatchBrOnNull(LabelIdx label)

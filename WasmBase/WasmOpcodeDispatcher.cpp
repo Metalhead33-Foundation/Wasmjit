@@ -1284,10 +1284,13 @@ void OpcodeDispatcher::dispatchOpcode(FastMemReader& stream, Opcode opcode)
 			dispatchResumeThrowRef(ct, std::move(handlers));
 			break;
 		}
-		case Opcode::Switch:
-			throw std::runtime_error(
-					"stack-switching instruction is not implemented "
-					"(docs/proposals/STACK_SWITCHING.md SS-3 stage 2)");
+		case Opcode::Switch: {
+			requireAvailable(stream.device, 2, "switch immediates");
+			auto ct = stream.readLEB128<TypeIdx>();
+			auto tag = stream.readLEB128<TagIdx>();
+			dispatchSwitch(ct, tag);
+			break;
+		}
 
 		// ----------------------------------------------------------------
 		// Prefixed instruction groups

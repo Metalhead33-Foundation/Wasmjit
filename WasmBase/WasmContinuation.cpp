@@ -169,7 +169,7 @@ void invokeScalarI32(void* target, void* context,
 		ContinuationValue* results, std::uint32_t resultCount,
 		const std::uint8_t* paramKinds, const std::uint8_t* resultKinds);
 
-struct Worker {
+struct Worker : std::enable_shared_from_this<Worker> {
 	const ContinuationProvider provider;
 	Callable target{};
 	VMContext* creationContext = nullptr;
@@ -250,6 +250,13 @@ struct Worker {
 			const std::uint8_t* argKinds,
 			ContinuationValue* results, std::uint32_t resultCapacity,
 			std::uint32_t* resultCount, const std::uint8_t* resultKinds) = 0;
+	// Symmetric handoff: capture this worker as a fresh continuation identity
+	// and transfer to `peer` with `args` (which already ends in the captured
+	// continuation reference). The provider marks this worker Suspended before
+	// returning; switchTo returns after the peer switches back or completes.
+	virtual std::uint64_t beginSwitch() = 0;
+	virtual ContinuationStatus switchTo(Worker* peer, std::uint64_t peerGeneration,
+			const ContinuationValue* args, std::uint32_t argCount) = 0;
 	// Bind a prefix of the remaining arguments.
 	virtual bool bindArguments(const ContinuationValue* values,
 			std::uint32_t count) = 0;
@@ -440,6 +447,7 @@ struct BWorker final : Worker {
 	std::uint32_t stackBytes = 0;
 	bool cancelRequested = false;
 	WorkerState state = WorkerState::New;
+	BWorker* switchPeer = nullptr;
 
 	BWorker(Callable* target, VMContext* context, std::uint32_t paramCount,
 			bool takesArg, bool returnsValue)
@@ -456,10 +464,16 @@ struct BWorker final : Worker {
 			const std::uint8_t* argKinds,
 			ContinuationValue* results, std::uint32_t resultCapacity,
 			std::uint32_t* resultCount, const std::uint8_t* resultKinds) override;
+	std::uint64_t beginSwitch() override;
+	ContinuationStatus switchTo(Worker* peer, std::uint64_t peerGeneration,
+			const ContinuationValue* args, std::uint32_t argCount) override;
 	bool bindArguments(const ContinuationValue* values, std::uint32_t count) override;
 
 	void run();
 	bool startThread();
+	ContinuationStatus resumeSwitchPeer(std::uint64_t expectedGeneration,
+			const ContinuationValue* args, std::uint32_t argCount,
+			void* injectedException);
 };
 
 struct AWorker final : Worker {
@@ -476,6 +490,10 @@ struct AWorker final : Worker {
 	Worker* previousWorker = nullptr;
 	bool cancelRequested = false;
 	WorkerState state = WorkerState::New;
+	AWorker* switchPeer = nullptr;
+	ucontext_t switchContext;
+	bool switchContextValid = false;
+	bool switchResume = false;
 	void* fakeStack = nullptr;
 	void* resumerFakeStack = nullptr;
 	const void* resumerBottom = nullptr;
@@ -496,6 +514,9 @@ struct AWorker final : Worker {
 			const std::uint8_t* argKinds,
 			ContinuationValue* results, std::uint32_t resultCapacity,
 			std::uint32_t* resultCount, const std::uint8_t* resultKinds) override;
+	std::uint64_t beginSwitch() override;
+	ContinuationStatus switchTo(Worker* peer, std::uint64_t peerGeneration,
+			const ContinuationValue* args, std::uint32_t argCount) override;
 	bool bindArguments(const ContinuationValue* values, std::uint32_t count) override;
 
 	static void entryThunk();
@@ -532,6 +553,8 @@ ContinuationStatus BWorker::resume(std::uint64_t expectedGeneration,
 		const ContinuationValue* args, std::uint32_t argCount,
 		void* injectedException)
 {
+	if (switchPeer != nullptr)
+		return resumeSwitchPeer(expectedGeneration, args, argCount, injectedException);
 	std::unique_lock<std::mutex> lock(mutex);
 	if (cancelRequested || state == WorkerState::Cancelled) {
 		lock.unlock();
@@ -622,6 +645,77 @@ std::int32_t BWorker::suspend(std::int32_t tag,
 			results[i] = out[i];
 	}
 	return 1;
+}
+
+std::uint64_t BWorker::beginSwitch()
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	if (state != WorkerState::Running) {
+		reportTrap(TrapKind::Internal, "switch outside a running continuation");
+		return 0;
+	}
+	state = WorkerState::Suspended;
+	consumed.store(false, std::memory_order_relaxed);
+	return generation.fetch_add(1, std::memory_order_relaxed) + 1;
+}
+
+ContinuationStatus BWorker::resumeSwitchPeer(std::uint64_t expectedGeneration,
+		const ContinuationValue* args, std::uint32_t argCount,
+		void* injectedException)
+{
+	BWorker* caller = static_cast<BWorker*>(t_currentWorker);
+	if (caller == nullptr || caller->provider != provider) {
+		reportTrap(TrapKind::Internal, "cross-provider switch is not supported");
+		return ContinuationStatus::Invalid;
+	}
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		if (generation.load(std::memory_order_relaxed) != expectedGeneration
+				|| consumed.load(std::memory_order_relaxed)) {
+			reportTrap(TrapKind::Internal, "continuation has already been consumed");
+			return ContinuationStatus::Invalid;
+		}
+		if (state != WorkerState::Suspended) {
+			reportTrap(TrapKind::Internal, "continuation is not resumable");
+			return ContinuationStatus::Invalid;
+		}
+		consumed.store(true, std::memory_order_relaxed);
+		state = WorkerState::Running;
+		resumeValues.clear();
+		if (argCount != 0 && args != nullptr)
+			resumeValues.assign(args, args + argCount);
+		if (!resumeValues.empty())
+			resumeArg = static_cast<std::int32_t>(resumeValues.front().words[0]);
+		execution.pendingException = injectedException;
+	}
+	// The caller is blocked in `switchTo` -> `caller->resume`, waiting on
+	// `caller->cv` for its state to leave Running. The caller already marked
+	// itself Suspended in beginSwitch, so notifying is enough to release it.
+	std::unique_lock<std::mutex> callerLock(caller->mutex);
+	caller->cv.notify_all();
+	caller->cv.wait(callerLock, [caller] {
+		return caller->state == WorkerState::Running;
+	});
+	return ContinuationStatus::Completed;
+}
+
+ContinuationStatus BWorker::switchTo(Worker* peer, std::uint64_t peerGeneration,
+		const ContinuationValue* args, std::uint32_t argCount)
+{
+	if (peer == nullptr || peer->provider != provider) {
+		reportTrap(TrapKind::Internal, "cross-provider switch is not supported");
+		return ContinuationStatus::Invalid;
+	}
+	BWorker* target = static_cast<BWorker*>(peer);
+	switchPeer = target;
+	const ContinuationStatus status = target->resume(peerGeneration, args, argCount, nullptr);
+	if (state == WorkerState::Running) {
+		switchPeer = nullptr;
+		dropRoots();
+		return ContinuationStatus::Completed;
+	}
+	switchPeer = nullptr;
+	return state == WorkerState::Suspended ? ContinuationStatus::Suspended : status;
 }
 
 bool BWorker::bindArguments(const ContinuationValue* values, std::uint32_t count)
@@ -851,6 +945,52 @@ ContinuationStatus AWorker::resume(std::uint64_t expectedGeneration,
 		return ContinuationStatus::Invalid;
 	}
 
+	if (switchPeer != nullptr) {
+		AWorker* peer = switchPeer;
+		const bool asSwitchTarget = switchResume;
+		switchResume = false;
+		consumed.store(true, std::memory_order_relaxed);
+		state = WorkerState::Running;
+		resumeValues.clear();
+		if (argCount != 0 && args != nullptr)
+			resumeValues.assign(args, args + argCount);
+		if (!resumeValues.empty())
+			resumeArg = static_cast<std::int32_t>(resumeValues.front().words[0]);
+		execution.pendingException = injectedException;
+		setCurrentExecutionState(&execution);
+		t_currentWorker = this;
+		sanitizerStartToFiber();
+		if (asSwitchTarget) {
+			// The peer's `switch` is resuming us. Keep this worker's original
+			// resumer: when it returns, it belongs to the prompt that started
+			// its switch, not to the target that resumed it. The tail runs on
+			// the peer's stack and must restore the peer's execution state.
+			auto* tailState = &peer->execution;
+			Worker* tailWorker = peer;
+			peer->switchContextValid = true;
+			swapcontext(&peer->switchContext, &peer->resumer);
+			sanitizerFinishInFiber();
+			setCurrentExecutionState(tailState);
+			t_currentWorker = tailWorker;
+			return statusForState(state);
+		}
+		// An explicit resume of a switch caller (the B-style `resume`
+		// hand-back). The current caller becomes the resumer, and its saved
+		// stack is the context captured by the peer's switch.
+		previousState = &peer->execution;
+		previousWorker = peer;
+		auto* tailState = previousState;
+		Worker* tailWorker = previousWorker;
+		if (!switchContextValid)
+			swapcontext(&resumer, &peer->resumer);
+		else
+			swapcontext(&resumer, &switchContext);
+		sanitizerFinishInFiber();
+		setCurrentExecutionState(tailState);
+		t_currentWorker = tailWorker;
+		return statusForState(state);
+	}
+
 	const bool first = (state == WorkerState::New);
 	resumeValues.clear();
 	if (argCount != 0 && args != nullptr)
@@ -928,6 +1068,37 @@ std::int32_t AWorker::suspend(std::int32_t tag,
 			results[i] = out[i];
 	}
 	return 1;
+}
+
+std::uint64_t AWorker::beginSwitch()
+{
+	if (state != WorkerState::Running) {
+		reportTrap(TrapKind::Internal, "switch outside a running continuation");
+		return 0;
+	}
+	state = WorkerState::Suspended;
+	consumed.store(false, std::memory_order_relaxed);
+	return generation.fetch_add(1, std::memory_order_relaxed) + 1;
+}
+
+ContinuationStatus AWorker::switchTo(Worker* peer, std::uint64_t peerGeneration,
+		const ContinuationValue* args, std::uint32_t argCount)
+{
+	if (peer == nullptr || peer->provider != provider) {
+		reportTrap(TrapKind::Internal, "cross-provider switch is not supported");
+		return ContinuationStatus::Invalid;
+	}
+	AWorker* target = static_cast<AWorker*>(peer);
+	switchPeer = target;
+	target->switchResume = target->state != WorkerState::New;
+	const ContinuationStatus status = target->resume(peerGeneration, args, argCount, nullptr);
+	if (state == WorkerState::Running) {
+		switchPeer = nullptr;
+		dropRoots();
+		return ContinuationStatus::Completed;
+	}
+	switchPeer = nullptr;
+	return state == WorkerState::Suspended ? ContinuationStatus::Suspended : status;
 }
 
 bool AWorker::bindArguments(const ContinuationValue* values, std::uint32_t count)
@@ -1398,6 +1569,76 @@ void wasm_cont_resume_throw_ex(void* continuation, void* exception,
 		break;
 	case ContinuationStatus::Invalid:
 		break;
+	}
+}
+
+void wasm_cont_switch(void* continuation, const ContinuationValue* args,
+		std::uint32_t argCount, ContinuationValue* results,
+		std::uint32_t resultCapacity, ContinuationResumeResult* result)
+{
+	if (result == nullptr)
+		return;
+	*result = ContinuationResumeResult{};
+	if (continuation == nullptr) {
+		reportTrap(TrapKind::NullReference, "null continuation");
+		return;
+	}
+	Continuation* handle = findContinuation(continuation);
+	if (handle == nullptr) {
+		reportTrap(TrapKind::Internal, "invalid continuation reference");
+		return;
+	}
+	Worker* current = t_currentWorker;
+	if (current == nullptr) {
+		reportTrap(TrapKind::Internal, "switch outside a continuation");
+		return;
+	}
+	if (current->provider != handle->worker->provider) {
+		reportTrap(TrapKind::Internal, "cross-provider switch is not supported");
+		return;
+	}
+
+	const std::uint64_t generation = current->beginSwitch();
+	if (generation == 0)
+		return;
+	Continuation* captured = nullptr;
+	try {
+		captured = new Continuation(current->shared_from_this(), generation);
+	} catch (...) {
+		reportTrap(TrapKind::OutOfMemory, "continuation allocation failed");
+		return;
+	}
+	std::vector<ContinuationValue> callArgs;
+	if (argCount != 0 && args != nullptr)
+		callArgs.assign(args, args + argCount);
+	ContinuationValue peer;
+	peer.words[0] = reinterpret_cast<std::uint64_t>(captured);
+	peer.words[1] = 0;
+	callArgs.push_back(peer);
+
+	const ContinuationStatus status = current->switchTo(handle->worker.get(),
+			handle->generation, callArgs.data(),
+			static_cast<std::uint32_t>(callArgs.size()));
+	result->status = static_cast<std::int32_t>(status);
+	if (status == ContinuationStatus::Completed) {
+		result->resultCount = static_cast<std::uint32_t>(
+				std::min<std::size_t>(current->resumeValues.size(), resultCapacity));
+		result->resultValues = results;
+		for (std::uint32_t i = 0; i < result->resultCount; ++i)
+			results[i] = current->resumeValues[i];
+		result->value = result->resultCount == 0 ? 0
+				: static_cast<std::int32_t>(results[0].words[0]);
+		current->resumeValues.clear();
+	} else if (status == ContinuationStatus::Suspended) {
+		// The target completed without handing control back. The current stack
+		// is still suspended, so there is no value to return to the caller.
+		reportTrap(TrapKind::Internal,
+				"switch target completed without switching back");
+		result->status = static_cast<std::int32_t>(ContinuationStatus::Invalid);
+	} else if (status == ContinuationStatus::Trapped) {
+		reportTrap(handle->worker->trapKind, handle->worker->trapMessage.c_str());
+	} else if (status == ContinuationStatus::Exception) {
+		wasm_exn_set_pending(handle->worker->pendingException);
 	}
 }
 
