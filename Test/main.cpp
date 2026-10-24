@@ -9845,6 +9845,203 @@ TEST_CASE("host continuation scheduler exposes the JSPI-style hooks")
 	REQUIRE(!WASM::trapPending());
 }
 
+TEST_CASE("host continuation scheduler carries wide payloads")
+{
+	struct WideState {
+		void* suspended = nullptr;
+		std::int32_t tag = 0;
+		std::uint32_t tagCount = 0;
+		std::array<WASM::ContinuationValue, 4> tagValues{};
+		std::array<std::uint8_t, 4> tagKinds{};
+		std::uint32_t resultCount = 0;
+		std::array<WASM::ContinuationValue, 4> resultValues{};
+		std::array<std::uint8_t, 4> resultKinds{};
+		std::int32_t status = -1;
+		void* rejected = nullptr;
+	} state;
+
+	static std::atomic<std::int32_t> wideSuspendOk{0};
+	wideSuspendOk.store(0);
+	static int refMarker = 0;
+
+	WASM::HostContinuationScheduler::Hooks hooks;
+	hooks.userData = &state;
+	hooks.onSuspendedEx = [](void* user, void* continuation, std::int32_t tag,
+			const WASM::ContinuationValue* values, std::uint32_t count,
+			const std::uint8_t* kinds) noexcept {
+		auto* s = static_cast<WideState*>(user);
+		s->suspended = continuation;
+		s->tag = tag;
+		s->tagCount = std::min<std::uint32_t>(count, 4);
+		for (std::uint32_t i = 0; i < s->tagCount; ++i)
+			s->tagValues[i] = values[i];
+		for (std::uint32_t i = 0; i < s->tagCount && kinds != nullptr; ++i)
+			s->tagKinds[i] = kinds[i];
+	};
+	hooks.onCompletedEx = [](void* user, std::int32_t status,
+			const WASM::ContinuationValue* values, std::uint32_t count,
+			const std::uint8_t* kinds) noexcept {
+		auto* s = static_cast<WideState*>(user);
+		s->status = status;
+		s->resultCount = std::min<std::uint32_t>(count, 4);
+		for (std::uint32_t i = 0; i < s->resultCount; ++i)
+			s->resultValues[i] = values[i];
+		for (std::uint32_t i = 0; i < s->resultCount && kinds != nullptr; ++i)
+			s->resultKinds[i] = kinds[i];
+	};
+	WASM::HostContinuationScheduler scheduler(hooks);
+
+	WASM::Callable suspendTarget{};
+	suspendTarget.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) {
+		WASM::ContinuationValue args[3];
+		args[0].words[0] = 0x1122334455667788ull;
+		args[1].words[0] = reinterpret_cast<std::uint64_t>(&refMarker);
+		args[2].words[0] = 0x0807060504030201ull;
+		args[2].words[1] = 0x100f0e0d0c0b0a09ull;
+		const std::uint8_t kinds[3] = {
+			static_cast<std::uint8_t>(WASM::ContinuationValueKind::I64),
+			static_cast<std::uint8_t>(WASM::ContinuationValueKind::Ref),
+			static_cast<std::uint8_t>(WASM::ContinuationValueKind::V128),
+		};
+		WASM::ContinuationValue results[2];
+		const std::uint8_t resultKinds[2] = {
+			static_cast<std::uint8_t>(WASM::ContinuationValueKind::I64),
+			static_cast<std::uint8_t>(WASM::ContinuationValueKind::F64),
+		};
+		std::uint32_t count = 0;
+		WASM::wasm_cont_suspend_ex(700, args, 3, kinds, results, 2, &count, resultKinds);
+		wideSuspendOk.store(count == 2 && results[0].words[0] == 0x123456789abcdef0ull
+				&& results[1].words[0] == 0x4000000000000000ull);
+	});
+	void* suspending = WASM::wasm_cont_new(&suspendTarget, nullptr, 0, 0, 0);
+	REQUIRE(suspending != nullptr);
+	REQUIRE(scheduler.submitEx(suspending, nullptr, 0, nullptr, 0, 8, true));
+	REQUIRE(scheduler.step());
+	REQUIRE(state.suspended != nullptr);
+	REQUIRE(state.tag == 700);
+	REQUIRE(state.tagCount == 3);
+	REQUIRE(state.tagKinds[0] == static_cast<std::uint8_t>(WASM::ContinuationValueKind::I64));
+	REQUIRE(state.tagKinds[1] == static_cast<std::uint8_t>(WASM::ContinuationValueKind::Ref));
+	REQUIRE(state.tagKinds[2] == static_cast<std::uint8_t>(WASM::ContinuationValueKind::V128));
+	REQUIRE(state.tagValues[0].words[0] == 0x1122334455667788ull);
+	REQUIRE(state.tagValues[1].words[0] == reinterpret_cast<std::uint64_t>(&refMarker));
+	REQUIRE(state.tagValues[2].words[1] == 0x100f0e0d0c0b0a09ull);
+
+	WASM::ContinuationValue resumeArgs[2];
+	resumeArgs[0].words[0] = 0x123456789abcdef0ull;
+	resumeArgs[1].words[0] = 0x4000000000000000ull;
+	const std::uint8_t resumeKinds[2] = {
+		static_cast<std::uint8_t>(WASM::ContinuationValueKind::I64),
+		static_cast<std::uint8_t>(WASM::ContinuationValueKind::F64),
+	};
+	REQUIRE(scheduler.submitEx(state.suspended, resumeArgs, 2, resumeKinds, 0, 8, true));
+	state.suspended = nullptr;
+	REQUIRE(scheduler.step());
+	REQUIRE(wideSuspendOk.load() == 1);
+	REQUIRE(state.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Completed));
+}
+
+TEST_CASE("host continuation scheduler carries wide completion and throw")
+{
+	struct State {
+		std::uint32_t resultCount = 0;
+		std::array<WASM::ContinuationValue, 4> resultValues{};
+		std::array<std::uint8_t, 4> resultKinds{};
+		std::int32_t status = -1;
+		void* rejected = nullptr;
+		void* suspended = nullptr;
+	} state;
+	static std::atomic<std::int32_t> rejectedSeen{0};
+	rejectedSeen.store(0);
+
+	WASM::HostContinuationScheduler::Hooks hooks;
+	hooks.userData = &state;
+	hooks.onCompletedEx = [](void* user, std::int32_t status,
+			const WASM::ContinuationValue* values, std::uint32_t count,
+			const std::uint8_t* kinds) noexcept {
+		auto* s = static_cast<State*>(user);
+		s->status = status;
+		s->resultCount = std::min<std::uint32_t>(count, 4);
+		for (std::uint32_t i = 0; i < s->resultCount; ++i)
+			s->resultValues[i] = values[i];
+		for (std::uint32_t i = 0; i < s->resultCount && kinds != nullptr; ++i)
+			s->resultKinds[i] = kinds[i];
+	};
+	hooks.onRejected = [](void* user, std::int32_t status, void* exception) noexcept {
+		auto* s = static_cast<State*>(user);
+		s->rejected = exception;
+		s->status = status;
+	};
+	hooks.onSuspended = [](void* user, void* continuation, std::int32_t,
+			std::int32_t) noexcept {
+		static_cast<State*>(user)->suspended = continuation;
+	};
+	WASM::HostContinuationScheduler scheduler(hooks);
+
+	WASM::Callable returnTarget{};
+	returnTarget.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*, std::int64_t value)
+			-> std::int64_t { return value + 7; });
+	const auto invokeReturn = +[](void* target, void* context,
+			const WASM::ContinuationValue* args, std::uint32_t,
+			WASM::ContinuationValue* results, std::uint32_t resultCount,
+			const std::uint8_t*, const std::uint8_t*) {
+		auto fn = reinterpret_cast<std::int64_t (*)(WASM::VMContext*, std::int64_t)>(
+				static_cast<WASM::Callable*>(target)->fnPtr);
+		if (resultCount != 0)
+			results[0].words[0] = static_cast<std::uint64_t>(
+					fn(static_cast<WASM::VMContext*>(context),
+						static_cast<std::int64_t>(args[0].words[0])));
+		if (resultCount > 1)
+			results[1].words[0] = 0x4000000000000000ull; // f64 2.0
+		if (resultCount > 2) {
+			results[2].words[0] = 0x0807060504030201ull;
+			results[2].words[1] = 0x100f0e0d0c0b0a09ull;
+		}
+	};
+	const std::uint8_t i64Kind = static_cast<std::uint8_t>(WASM::ContinuationValueKind::I64);
+	const std::uint8_t resultKinds[3] = {
+		i64Kind,
+		static_cast<std::uint8_t>(WASM::ContinuationValueKind::F64),
+		static_cast<std::uint8_t>(WASM::ContinuationValueKind::V128),
+	};
+	void* returning = WASM::wasm_cont_new_ex(&returnTarget, nullptr, invokeReturn, 1, 3,
+			&i64Kind, resultKinds);
+	REQUIRE(returning != nullptr);
+	WASM::ContinuationValue callArg;
+	callArg.words[0] = 35;
+	REQUIRE(scheduler.submitEx(returning, &callArg, 1, &i64Kind, 3, 0, true));
+	REQUIRE(scheduler.step());
+	REQUIRE(state.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Completed));
+	REQUIRE(state.resultCount == 3);
+	REQUIRE(state.resultKinds[0] == i64Kind);
+	REQUIRE(state.resultKinds[1] == static_cast<std::uint8_t>(WASM::ContinuationValueKind::F64));
+	REQUIRE(state.resultKinds[2] == static_cast<std::uint8_t>(WASM::ContinuationValueKind::V128));
+	REQUIRE(state.resultValues[0].words[0] == 42);
+	REQUIRE(state.resultValues[1].words[0] == 0x4000000000000000ull);
+	REQUIRE(state.resultValues[2].words[1] == 0x100f0e0d0c0b0a09ull);
+
+	WASM::Callable throwTarget{};
+	throwTarget.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) {
+		std::int32_t value = 0;
+		WASM::wasm_cont_suspend(701, 0, &value);
+		if (::wasm_exn_pending() != nullptr)
+			rejectedSeen.store(1);
+	});
+	void* throwing = WASM::wasm_cont_new(&throwTarget, nullptr, 0, 0, 0);
+	REQUIRE(throwing != nullptr);
+	REQUIRE(scheduler.submitEx(throwing, nullptr, 0, nullptr, 0, 8, true));
+	REQUIRE(scheduler.step());
+	REQUIRE(state.suspended != nullptr);
+	void* exception = ::wasm_exn_create(4242, 0);
+	REQUIRE(exception != nullptr);
+	REQUIRE(scheduler.submitThrow(state.suspended, exception, true));
+	REQUIRE(scheduler.step());
+	REQUIRE(rejectedSeen.load() == 1);
+	REQUIRE(state.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Exception));
+	REQUIRE(state.rejected != nullptr);
+	::wasm_exn_clear_pending();
+}
+
 TEST_CASE("stack-switching module drops a suspension with no handler")
 {
 	const std::uint32_t before = WASM::liveContinuationCount();

@@ -146,7 +146,9 @@ baked in at compile time through the `WASM_TEST_DIR` macro) and calls into it.
 | `continuation runtime...` | hand-built C++ | A default: completion, suspend/resume, trap/exception transfer, one-shot and the live budget (`STACK_SWITCHING.md` SS-3) |
 | `continuation provider / host-thread fallback` | hand-built C++ | A/B selection; the B fallback completes and suspends/resumes correctly |
 | `host continuation handle...` | hand-built C++ and `cont_export.wat` | `HostContinuation` wraps a native-created or exported continuation, resumes it, and supports `suspendCurrent` |
-| `host continuation scheduler...` | hand-built C++ | `HostContinuationScheduler` invokes `onSuspended`/`onCompleted`; the embedder resumes the replacement handle |
+| `host continuation scheduler...` | hand-built C++ | `HostContinuationScheduler` invokes the scalar and wide `onSuspended`/`onCompleted` hooks; `submitEx`/`submitThrow` carry i64/ref/f64/v128 payloads and a rejection path |
+| `host continuation scheduler carries wide payloads` | hand-built C++ | i64/reference/v128 suspension payloads, i64/f64 resume values, wide completion |
+| `host continuation scheduler carries wide completion and throw` | hand-built C++ | i64 completion through `onCompletedEx`; `submitThrow`/`resume_throw_ex` through `onRejected` |
 | `native-stack continuation exhaustion...` | `cont_stack.wat` | A's guarded mmap stack reports `CallStackExhausted` instead of a host SIGSEGV |
 | `native-stack continuation can migrate...` | hand-built C++ | A's suspended stack is resumed serially on another host thread |
 | `stack-switching dispatches multiple handlers and a loop handler` | `cont_handlers.wat` | multiple `(on $tag $label)` clauses and a loop-labelled handler |
@@ -292,7 +294,7 @@ selection is explicit — which is why `./WasmJit '[spec]'` runs everything.
 | `./WasmJit '[spec]'` | all 257 spec scripts (~2 min in the debug build; 251 pass, 6 known failures) |
 | `./WasmJit 'spec: address'` | just that script |
 | `./WasmJit '*float*'` | scripts whose name matches |
-| `./WasmJit --list-tests` | the default view (414 test cases) |
+| `./WasmJit --list-tests` | the default view (416 test cases) |
 | `./WasmJit --list-tests '[spec]'` | every script, one line each (257) |
 | `./WasmJit -# --list-tags` | all tags, including `[#main]` and `[#SpecSuite]` |
 
@@ -323,7 +325,7 @@ It currently holds 193 of the 257 scripts, and the default run is green:
 
 ```
 $ ./WasmJit
-All tests passed (10603 assertions in 414 test cases)
+All tests passed (10640 assertions in 416 test cases)
 ```
 
 #### Refreshing the list
@@ -551,7 +553,7 @@ tests, and it is green:
 
 ```
 $ ./WasmJit
-All tests passed (10603 assertions in 414 test cases)
+All tests passed (10640 assertions in 416 test cases)
 ```
 
 A full sweep is deliberately loud, because most of the suite is still beyond the
@@ -743,7 +745,7 @@ Measured after SIMD-5:
 
 ```bash
 ./WasmJit 'simd*'      # 24 cases, 6147 assertions, all passing (includes the hidden [.simdbench] case)
-./WasmJit              # 414 cases, 10603 assertions, all passing
+./WasmJit              # 416 cases, 10640 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed

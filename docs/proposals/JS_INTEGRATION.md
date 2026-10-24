@@ -1,15 +1,16 @@
 # JavaScript-Related Proposals — Implementation Notes, Spec Status, and Deliberate Non-Integration
 
-Status: design note / implementation reference (revision 5 — consolidated survey
+Status: design note / implementation reference (revision 7 — consolidated survey
 of JS-BigInt integration, JS String Builtins, JSPI, custom descriptors, ESM
 integration, JS Primitive Builtins and JS Types, plus the shipped generic
 host-bridge groundwork. **No JavaScript support is implemented or planned inside
 the engine.** The only proposed surface is an opt-in, embedder-owned adapter
 built from the existing import/export boundary and the optional `HostBridge`.
-Revision 4 added the C++ `HostContinuation`; revision 5 adds the opt-in
-`HostContinuationScheduler` hooks, so an embedder can implement JSPI-style
-scheduling for JS, Lua, Python or any other runtime in its own glue code. No
-language engine, Promise type or event loop is part of WasmJit.)
+Revision 4 added the C++ `HostContinuation`; revision 5 added the opt-in
+`HostContinuationScheduler` hooks; revision 6 added the proposed descriptor
+contract; revision 7 adds wide `ContinuationValue`/reference/i64/f64/v128 hook
+payloads and the `submitThrow`/`onRejected` path. No language engine, Promise
+type or event loop is part of WasmJit.)
 
 Audience: anyone touching `ImportResolver`, `Callable`, `VMContext`,
 `HostBridge`, `externref`, `Module` metadata, or considering a
@@ -29,6 +30,7 @@ is implemented.
 | §2 | What do the seven proposals demand, and which parts are engine-visible? |
 | §3 | What do they *not* demand, and what is deliberately not this engine's job? |
 | §4 | What is in the tree today that an external adapter can use? |
+| §4.2.1 | What would a read-only import/export descriptor API look like (JS-3)? |
 | §5 | Where do we fall short, and which gaps are declined rather than fixed? |
 | §6 | Is a backend- and JS-engine-agnostic hook feasible, and where do we play fast and loose? |
 | §7 | Plan (all milestones are optional and external to the engine core) |
@@ -135,16 +137,60 @@ the opt-in `HostContinuationScheduler` contract in
 (JavaScript, Lua, Python, …) through its own glue code.
 
 The scheduler is a serial queue of `(continuation, resume value)` tasks. Its
-`step` method resumes one task and calls the embedder's hooks:
+public contract is:
+
+```cpp
+struct HostContinuationScheduler::Hooks {
+    void* userData;
+    // Legacy scalar hooks.
+    void (*onSuspended)(void* userData, void* continuation,
+                        std::int32_t tagId, std::int32_t value) noexcept;
+    void (*onCompleted)(void* userData, std::int32_t status) noexcept;
+    // Wide hooks.
+    void (*onSuspendedEx)(void* userData, void* continuation,
+                          std::int32_t tagId,
+                          const ContinuationValue* values,
+                          std::uint32_t valueCount,
+                          const std::uint8_t* kinds) noexcept;
+    void (*onCompletedEx)(void* userData, std::int32_t status,
+                          const ContinuationValue* results,
+                          std::uint32_t resultCount,
+                          const std::uint8_t* kinds) noexcept;
+    void (*onRejected)(void* userData, std::int32_t status,
+                       void* exception) noexcept;
+};
+```
 
 | Hook | Meaning |
 |---|---|
-| `onSuspended(userData, continuation, tagId, value)` | The task suspended. Ownership of `continuation` is transferred to the callback. The embedder stores it behind its Promise/task object and later calls `submit(continuation, resumeValue)`. |
-| `onCompleted(userData, status)` | The task completed, trapped or raised. The status is a `ContinuationStatus`; trap/exception details remain in the engine's pending slots. |
+| `onSuspended(...)` | Legacy scalar suspension callback. Ownership of `continuation` is transferred. |
+| `onCompleted(status)` | Legacy completion callback. `status` is a `ContinuationStatus` value. |
+| `onSuspendedEx(..., values, count, kinds)` | Wide suspension callback. `values` and `kinds` are borrowed for the call; ownership of `continuation` is transferred. `kinds` uses `ContinuationValueKind`. |
+| `onCompletedEx(..., results, count, kinds)` | Wide completion callback. Results may be i32/i64/f32/f64/reference/v128; borrowed for the call. |
+| `onRejected(status, exception)` | Called instead of the completion hooks when a task ends with an uncaught exception. `exception` is the engine's pending exception payload, borrowed for the call. |
 
-`submit(ref, arg, takeOwnership)` queues a continuation; `step()` runs one and
-`run()` drains the queue. With no hooks the scheduler still releases replacement
-continuations, so it is usable as a plain trampoline.
+`submit(ref, arg, takeOwnership = true)` queues the legacy scalar task.
+`submitEx(ref, args, argCount, argKinds, resultCapacity = 0, tagCapacity = 0,
+takeOwnership = true)` queues a wide resume task. `resultCapacity` defaults to
+the target's declared result count; `tagCapacity` defaults to
+`HostContinuationScheduler::kDefaultValueCapacity` (64 slots). Reference
+arguments are retained by the scheduler for the task and released after
+`step`; reference results/tag values are borrowed by the hook and released
+after it returns. `submitThrow(ref, exception, takeOwnership = true)` queues a
+throw/reject task backed by `wasm_cont_resume_throw_ex`; the exception is
+borrowed until `step`.
+
+`pending()` reports the queue depth, `clear()` releases every queued handle and
+retained argument, `step()` resumes one task, and `run()` drains the queue.
+With no hooks the scheduler still releases replacement continuations, so it is
+usable as a plain trampoline. Hooks are called synchronously on the thread that
+calls `step()`; the scheduler is not an agent API.
+
+The wide hooks are the JSPI-facing path. A JavaScript adapter can carry
+`BigInt`/i64, reference, f64 and v128 Promise results through `ContinuationValue`
+and can inject a rejected Promise through `submitThrow`; the adapter still owns
+the JS engine, Promise object, event loop and conversion. The legacy scalar
+hooks remain for compatibility and are used when no `*Ex` hook is installed.
 
 A native import calls `HostContinuation::suspendCurrent(tag, value, &resumed)`
 exactly as it would in the engine; the scheduler receives the resulting
@@ -359,6 +405,49 @@ see a JS engine type.
   `ModuleInstance::exportedFunction`/`registerExports`. There is no stable
   `ImportDescriptor`/`ExportDescriptor` API yet (JS2).
 
+#### 4.2.1 Descriptor contract (JS-3, proposed — not shipped)
+
+The descriptor API is the missing metadata layer for JS Types. The intended
+contract is a read-only view keyed by canonical `TypeId`, not a second type
+registry and not a parser-layout exposure:
+
+```cpp
+namespace WASM {
+
+enum class ExternKind { Function, Table, Memory, Global, Tag, Type };
+
+struct ExternTypeDescriptor {
+    ExternKind kind;
+    TypeId typeId;          // TypeId::kNone when the kind has no Wasm type
+    bool nullable;          // meaningful for reference-shaped declarations
+};
+
+struct ImportDescriptor {
+    std::string_view module;
+    std::string_view name;
+    ExternTypeDescriptor type;
+};
+
+struct ExportDescriptor {
+    std::string_view name;
+    ExternTypeDescriptor type;
+};
+
+} // namespace WASM
+```
+
+`ImportDescriptor`/`ExportDescriptor` would be produced from the existing
+`Module` vectors and `TypeRegistry::canonicalType(TypeId)`. They would be
+borrowed views: the strings remain owned by the module and the `TypeId` remains
+the process-wide identity. The API must not expose `CoreRecType` parser scratch
+storage or a second canonicalisation path.
+
+**Status: design target, not implemented.** JS Types can be served today only by
+reading `Module`'s raw import/export vectors and resolving indexes manually;
+this is the `JS2`/`JS-3` gap. The descriptor contract is documented here so the
+expected shape and identity rules do not drift if the optional milestone is
+picked up.
+
 ### 4.3 The optional host bridge (shipped)
 
 `WasmBase/WasmHostBridge.hpp` is the first generic host-boundary contract. It is
@@ -435,18 +524,21 @@ contract is needed, or whether the proposal is declined.
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
 | JS1 | **`externref` has no host identity or lifetime contract by default.** It is an opaque `void*`; equality is pointer equality, and `refClone`/`refDrop` do nothing for it unless an optional `HostBridge` is installed. A JS object wrapper cannot know when the engine has dropped its last reference, and two handles to one JS object need not compare equal. | `WasmValue.hpp` (`Value::ref`); `WasmHostBridge.hpp` (optional retain/release/equals + teardown); `WasmModuleInstance.cpp` (`refClone`, `refDrop`, `gcRefcountSlot`); `ABI.md` "External host adapter"; `REFERENCE_TYPES.md` RT1; `GC.md` R4/GC-8. | High for safe JS handle interop; addressed when the adapter opts in |
-| JS2 | **No stable type-reflection/descriptor API.** `Export` is only `{name, kind, index}`; import vectors expose raw parser structures. A host can read `Module` internals, but there is no `ImportDescriptor`/`ExportDescriptor`/`ExternType` view keyed by `TypeId`. JS Types needs one. | `WasmBase/WasmType.hpp` (`struct Export`), `WasmBase/WasmModule.hpp`; `TYPE_MODEL.md` TM-6/TM-10 still pending. | Medium |
+| JS2 | **No stable type-reflection/descriptor API.** `Export` is only `{name, kind, index}`; import vectors expose raw parser structures. A host can read `Module` internals, but there is no `ImportDescriptor`/`ExportDescriptor`/`ExternTypeDescriptor` view keyed by `TypeId`; the intended shape is in §4.2.1. JS Types needs one. | `WasmBase/WasmType.hpp` (`struct Export`), `WasmBase/WasmModule.hpp`; `TYPE_MODEL.md` TM-6/TM-10 still pending. | Medium |
 | JS3 | **No `wasm:` builtin policy.** The engine does not reserve `wasm:`, perform eager link-time builtin checks, hide builtin imports from metadata, or give a builtin a per-instantiation identity. It treats `wasm:js-string` as an ordinary import and leaves all semantics to the resolver. | `WasmImport.hpp` (name-based resolver only); no `wasm:` string in `WasmBase`/`LibJit`; `GC.md` §10.5 calls it a resolver problem. | Medium (acceptable slow path) |
-| JS4 | **JSPI has no JS/event-loop adapter in-tree.** The stack-switching A/B providers, `HostContinuation` and `HostContinuationScheduler` expose a C++ suspend/resume + hook contract, but there is no JS engine, Promise scheduling or event-loop integration. The embedder supplies that glue; JSPI remains declined as an engine feature. | `STACK_SWITCHING.md` §4/§10.12 (A default, B fallback); `WasmContinuation.hpp` (`HostContinuation`, `HostContinuationScheduler`); no JS engine in the tree. | High for JSPI; external-adapter path |
+| JS4 | **JSPI has no JS/event-loop adapter in-tree.** The stack-switching A/B providers, `HostContinuation` and the scalar `HostContinuationScheduler` hooks expose a C++ suspend/resume contract, but there is no JS engine, Promise scheduling or event-loop integration. The embedder supplies that glue; JSPI remains declined as an engine feature. | `STACK_SWITCHING.md` §4/§10.12 (A default, B fallback); `WasmContinuation.hpp` (`HostContinuation`, `HostContinuationScheduler`); no JS engine in the tree. | High for JSPI; external-adapter path |
 | JS5 | **Custom Descriptors has no core support.** There are no `descriptor`/`describes` clauses, exact heap types, exact imports, `struct.new_desc`/`ref.get_desc`/`ref.cast_desc_eq` instructions, or RTT-adjacent descriptor storage. The JS prototype half additionally needs a JS object model. | `WasmType.hpp`/`WasmModule.cpp` type parsing; `GC.md` §4; `TYPE_IDENTITY.md` canonicalisation rules. | High for custom descriptors; declined |
 | JS6 | **No ESM loader.** There is no URL resolution, module graph, source phase, import map, CSP check, or ESM evaluation. The engine only parses a binary and resolves `(module, field)` imports. | `WasmImport.hpp`; `WasmModule.hpp`; no loader module in `WasmBase/`. | Low for the engine; embedder-only |
 | JS7 | **Host thunks are per-signature.** `Callable::fnPtr` is a raw C function pointer with `VMContext*` as arg0; there is no type-erased `HostFunction::invoke(args, results)` entry point. A JS adapter must generate or hand-write one thunk per imported/exported signature and must implement the multi-result buffer itself. | `WasmValue.hpp` (`Callable`, `callCallable*`); `ABI.md`; `MULTI_VALUE.md` MV4. | Medium (adapter complexity, not a semantic gap) |
 | JS8 | **No JS-boundary tests.** The suite has no `wasm:js-*`, JSPI, ESM, custom-descriptor or JS Types fixture, and no JS engine is linked. Existing import/`externref` tests exercise the generic hook but not JavaScript semantics. | `Test/main.cpp` host-import/externref cases; `Test/wast_supported.txt`; no JS test target. | Medium |
+| ~~JS9~~ | ~~**The JSPI-style scheduler hooks are narrow.**~~ **Done (revision 7):** `submitEx` and `submitThrow` expose `ContinuationValue` arguments, `onSuspendedEx`/`onCompletedEx` expose reference/i64/f32/f64/v128 values and kinds, and `onRejected` reports uncaught exceptions. The tests cover an i64/reference/v128 suspension, i64/f64 resume, i64 completion and a `resume_throw_ex` rejection. | `WasmBase/WasmContinuation.hpp` (`HostContinuationScheduler`, `Hooks`); `WasmBase/WasmContinuation.cpp` (`submitEx`, `submitThrow`, `step`); `Test/main.cpp` | Closed |
 
 Reading: JS1 and JS7 are the only gaps that affect a **correct, leak-free
 host-boundary adapter**; JS2/JS3 affect spec-shaped metadata and builtin
 behaviour; JS4–JS6 are declined or out of scope rather than latent engine bugs.
-JS8 is the reason the plan starts with a no-JS fixture, not a JS engine.
+The wide scheduler hooks are shipped (JS-5), so the remaining JSPI work is the
+JS engine/Promise/event-loop adapter. JS8 is the reason the plan starts with a no-JS fixture, not a JS
+engine.
 
 ## 6. Where we play fast and loose — the hook feasibility study
 
@@ -589,7 +681,7 @@ engine.
 | JS Primitive Builtins | **Yes for correctness** | None; `externref` + scalars | Adapter supplies `wasm:js-*`; no inlining |
 | JS Types | **Yes with metadata** | Optional read-only descriptor view (`JS-3`) | Adapter builds JS objects/`WebAssembly.Function` |
 | ESM integration | **No engine part** | None | Embedder loader; engine unchanged |
-| JSPI | **No** | Host-facing `HostContinuation` + `HostContinuationScheduler` hooks exist; the embedder supplies the JS engine, Promise and event loop | Declined as an engine feature (`JS-4`); an external adapter is the supported path |
+| JSPI | **No** | Host-facing `HostContinuation` + wide `HostContinuationScheduler` hooks exist; the embedder supplies the JS engine, Promise and event loop | Declined as an engine feature (`JS-4`); an external adapter is the supported path |
 | Custom Descriptors | **No** | Descriptor/exact type clauses, new GC instructions, RTT; then JS prototypes | Declined as an engine feature (`JS-4`) |
 
 The "slow path" caveat is deliberate. The JS String Builtins proposal exists to
@@ -637,8 +729,9 @@ also helps non-JS hosts; `JS-4` records the declined proposals.
 | **JS-0 — No-JS gate** ✅ | `Test/wasm_wat/wasm_js_string_length.wat` imports `wasm:js-string.length`; one test case fails without a resolver entry and passes with a fake adapter `Callable`. | JS3, JS8 | **Done (2026-10-23):** the negative path is a named unresolved import, the positive path returns `7` with no JS engine linked, and neither path special-cases `wasm:` in the engine. |
 | **JS-1 — Adapter contract** ✅ | Documented the host-thunk rules (`Callable` with `context = nullptr`, `TypeId`, `CoreTypeView`, `hostData`, multi-result buffer, opaque `externref`) in `ABI.md` "External host adapter"; added the pre-start lifecycle hook so `hostData` is live during `start`. | JS7 | **Done (2026-10-23):** an adapter can be written from the ABI + bridge header without reading `LibJit` or a JS engine header. |
 | **JS-2 — Generic host-reference contract** ✅ | Added `WasmBase/WasmHostBridge.hpp`: optional allow-listed `retain`/`release`/`equals`, an optional host-reference predicate, and `instanceCreated`/`instanceDestroying`. All callbacks and the bridge pointer default to null. | JS1 | **Done (2026-10-23):** `externref` barriers call the host only when the embedder opts in, the start-function test observes `hostData`, teardown runs the host callback, and no JS dependency appears in `WasmBase/`. |
-| **JS-3 — Read-only metadata view** (optional) | Expose `ImportDescriptor`/`ExportDescriptor`/`ExternType` views keyed by `TypeId`, built from `Module` and `TypeRegistry`; keep the raw vectors private/stable. | JS2 | A host can answer import/export type queries without reading `Module` internals; `TypeId` remains the identity. |
+| **JS-3 — Read-only metadata view** (optional) | Expose the §4.2.1 `ImportDescriptor`/`ExportDescriptor`/`ExternTypeDescriptor` views keyed by `TypeId`, built from `Module` and `TypeRegistry`; keep the raw vectors private/stable. | JS2 | A host can answer import/export type queries without reading `Module` internals; `TypeId` remains the identity. |
 | **JS-4 — Declined core proposals** ✅ | Record JSPI, Custom Descriptors and ESM as not implemented; track their prerequisites (`STACK_SWITCHING.md`, GC descriptors, an ESM host loader). Revisit only when the prerequisite lands. | JS4, JS5, JS6 | **Done (2026-10-23):** this note and `README.md` say "not implemented"; no code path or test claims JSPI/descriptor/ESM support. The C++ `HostContinuation` handle now exists, but the JS/event-loop half is still absent, so JS-4 remains. |
+| **JS-5 — Wide/throw scheduler variants** ✅ | Added `submitEx` over `ContinuationValue`, `onSuspendedEx`/`onCompletedEx`, and `submitThrow`/`onRejected`. | JS9 | **Done (2026-10-24):** wide i64/reference/v128 suspension, wide completion and `resume_throw_ex` rejection are tested in `Test/main.cpp`. |
 
 ## 8. Indicative test survey
 
@@ -650,7 +743,9 @@ also helps non-JS hosts; `JS-4` records the declined proposals.
 | `host_bridge_start.wat` | 8 assertions / 1 case | 0 | 0 | `HostBridge::instanceCreated` publishes `hostData` before `start`; `instanceDestroying` runs at teardown |
 | `Test/main.cpp` `externref_global_a` + `HostBridge` | 17 assertions / 1 case | 0 | 0 | retain/release participate in `refClone`/`refStore`/`refDrop`, self-assignment balances, overwrite releases, and `hostReferenceEquals` uses a host predicate |
 | `no host bridge is the default boundary` | 5 assertions / 1 case | 0 | 0 | the old `instantiate(module, resolver)` path has `hostBridge == nullptr` |
-| JSPI, ESM, custom descriptors, JS Types | — | — | — | no fixture exists; these remain declined/out of scope |
+| `host continuation scheduler carries wide payloads` | 16 assertions / 1 case | 0 | 0 | `submitEx` + `onSuspendedEx` carry i64/reference/v128 and i64/f64 resume values; `onCompletedEx` reports completion |
+| `host continuation scheduler carries wide completion and throw` | 21 assertions / 1 case | 0 | 0 | wide i64 completion and `submitThrow`/`resume_throw_ex` reach `onRejected` |
+| JSPI, ESM, custom descriptors, JS Types | — | — | — | no JS fixture exists; these remain declined/out of scope. The wide JSPI scheduler contract and the proposed descriptor shape are documented, not claimed as JS conformance |
 
 Reading: the generic hook is now exercised without any JavaScript dependency.
 These tests prove the boundary and lifetime contract, not JavaScript semantics;

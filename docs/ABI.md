@@ -493,20 +493,44 @@ are serial and true multi-agent execution remains deferred.
 
 #### Embedder scheduling contract (`HostContinuationScheduler`)
 
-The scheduler is opt-in and engine-agnostic. It is a serial queue of
-`(continuation, resume value)` tasks; `step()` resumes one, `run()` drains the
-queue. Its two hooks are the embedder's insertion points:
+The scheduler is opt-in and engine-agnostic. It is a serial queue of resume
+tasks; `step()` resumes one, `run()` drains the queue. It has a legacy scalar
+task and a wide task:
 
-- `onSuspended(userData, continuation, tagId, value)` — ownership of the
-  replacement continuation is transferred to the callback. The embedder's glue
-  stores it behind its Promise/coroutine/task and later calls
-  `submit(continuation, resumeValue)`.
-- `onCompleted(userData, status)` — the task finished; a trap or uncaught
-  exception is also visible in the engine's pending slots.
+```c
+bool submit(void* continuation, int32_t arg, bool takeOwnership = true);
+bool submitEx(void* continuation, const ContinuationValue* args,
+              uint32_t argCount, const uint8_t* argKinds,
+              uint32_t resultCapacity = 0, uint32_t tagCapacity = 0,
+              bool takeOwnership = true);
+bool submitThrow(void* continuation, void* exception,
+                 bool takeOwnership = true);
+```
 
-This is how a JavaScript (or Lua/Python) adapter connects without linking its
-engine into `WasmBase/`: the adapter supplies the hooks and its own event loop.
-See [`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) §2.3.1.
+`submitEx` carries any `ContinuationValueKind` payload (i32/i64/f32/f64/ref/
+v128); the completion result capacity defaults to the target's result count and
+the tag buffer defaults to `kDefaultValueCapacity` (64 slots). Reference
+arguments are retained by the scheduler for the task and released after
+`step`. `submitThrow` is backed by `wasm_cont_resume_throw_ex`; the exception is
+borrowed until the task runs.
+
+The hooks are:
+
+- `onSuspended(userData, continuation, tagId, value)` and
+  `onCompleted(userData, status)` — legacy scalar forms;
+- `onSuspendedEx(userData, continuation, tagId, values, valueCount, kinds)` —
+  wide suspension; values/kinds are borrowed for the callback and ownership of
+  the replacement continuation is transferred;
+- `onCompletedEx(userData, status, results, resultCount, kinds)` — wide
+  completion, including reference/i64/f32/f64/v128 results;
+- `onRejected(userData, status, exception)` — an uncaught exception
+  (`ContinuationStatus::Exception`); the exception payload is borrowed.
+
+If a wide hook is not installed, the scheduler falls back to the scalar hook
+(or releases the replacement handle when neither exists). This is how a
+JavaScript (or Lua/Python) adapter connects without linking its engine into
+`WasmBase/`: the adapter supplies the hooks and its own event loop. See
+[`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) §2.3.1.
 
 #### Wide value ABI
 

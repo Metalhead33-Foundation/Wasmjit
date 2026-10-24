@@ -1287,13 +1287,75 @@ bool HostContinuationScheduler::submit(void* continuation, std::int32_t arg,
 		return false;
 	if (!takeOwnership && !continuationRefRetain(continuation))
 		return false;
-	tasks_.push_back(Task{continuation, arg});
+	Task task;
+	task.continuation = continuation;
+	task.arg = arg;
+	tasks_.push_back(std::move(task));
+	return true;
+}
+
+bool HostContinuationScheduler::submitEx(void* continuation,
+		const ContinuationValue* args, std::uint32_t argCount,
+		const std::uint8_t* argKinds, std::uint32_t resultCapacity,
+		std::uint32_t tagCapacity, bool takeOwnership) noexcept
+{
+	Continuation* handle = findContinuation(continuation);
+	if (handle == nullptr)
+		return false;
+	if (!takeOwnership && !continuationRefRetain(continuation))
+		return false;
+	Task task;
+	task.wide = true;
+	task.kind = Task::Kind::Resume;
+	task.continuation = continuation;
+	task.creationContext = handle->worker->creationContext;
+	task.resultCapacity = resultCapacity;
+	task.tagCapacity = tagCapacity;
+	if (argCount != 0 && args != nullptr)
+		task.args.assign(args, args + argCount);
+	if (argCount != 0 && argKinds != nullptr)
+		task.argKinds.assign(argKinds, argKinds + argCount);
+	// Retain reference arguments for the task's lifetime. The target receives
+	// the raw values at `step`; the scheduler's retained counts are dropped
+	// after the resume, once the target has cloned/stored what it needs.
+	if (task.creationContext != nullptr) {
+		auto* instance = instanceFor(static_cast<VMContext*>(task.creationContext));
+		for (std::uint32_t i = 0; i < argCount && i < task.argKinds.size(); ++i) {
+			if (task.argKinds[i] == static_cast<std::uint8_t>(ContinuationValueKind::Ref))
+				instance->refClone(reinterpret_cast<void*>(task.args[i].words[0]));
+		}
+	}
+	tasks_.push_back(std::move(task));
+	return true;
+}
+
+bool HostContinuationScheduler::submitThrow(void* continuation, void* exception,
+		bool takeOwnership) noexcept
+{
+	Continuation* handle = findContinuation(continuation);
+	if (handle == nullptr || exception == nullptr)
+		return false;
+	if (!takeOwnership && !continuationRefRetain(continuation))
+		return false;
+	Task task;
+	task.wide = true;
+	task.kind = Task::Kind::Throw;
+	task.continuation = continuation;
+	task.exception = exception;
+	task.creationContext = handle->worker->creationContext;
+	tasks_.push_back(std::move(task));
 	return true;
 }
 
 void HostContinuationScheduler::clear() noexcept
 {
-	for (const Task& task : tasks_) {
+	for (Task& task : tasks_) {
+		if (task.creationContext != nullptr && !task.args.empty()) {
+			dropContinuationValues(task.argKinds.data(),
+					static_cast<std::uint32_t>(task.args.size()),
+					task.args.data(),
+					static_cast<VMContext*>(task.creationContext));
+		}
 		if (task.continuation != nullptr)
 			continuationRefRelease(task.continuation);
 	}
@@ -1304,25 +1366,101 @@ bool HostContinuationScheduler::step() noexcept
 {
 	if (tasks_.empty())
 		return false;
-	Task task = tasks_.front();
+	Task task = std::move(tasks_.front());
 	tasks_.pop_front();
 
-	HostContinuation handle(task.continuation, true);
-	ContinuationResumeResult result;
-	if (!handle.resume(task.arg, &result))
+	if (!task.wide) {
+		HostContinuation handle(task.continuation, true);
+		ContinuationResumeResult result;
+		if (!handle.resume(task.arg, &result))
+			return true;
+		if (result.status == static_cast<std::int32_t>(ContinuationStatus::Suspended)) {
+			if (result.continuation != nullptr) {
+				if (hooks_.onSuspended != nullptr)
+					hooks_.onSuspended(hooks_.userData, result.continuation,
+							result.tagId, result.value);
+				else
+					continuationRefRelease(result.continuation);
+			}
+		} else if (hooks_.onCompleted != nullptr) {
+			hooks_.onCompleted(hooks_.userData, result.status);
+		}
 		return true;
+	}
+
+	Continuation* handle = findContinuation(task.continuation);
+	if (handle == nullptr) {
+		continuationRefRelease(task.continuation);
+		return true;
+	}
+	const std::uint32_t resultCapacity = task.resultCapacity != 0
+			? task.resultCapacity
+			: handle->worker->resultCount;
+	const std::uint32_t tagCapacity = task.tagCapacity != 0
+			? task.tagCapacity
+			: kDefaultValueCapacity;
+	std::vector<ContinuationValue> results(resultCapacity);
+	std::vector<ContinuationValue> tagValues(tagCapacity);
+	ContinuationResumeResult result;
+	if (task.kind == Task::Kind::Throw) {
+		wasm_cont_resume_throw_ex(task.continuation, task.exception,
+				results.empty() ? nullptr : results.data(), resultCapacity,
+				tagValues.empty() ? nullptr : tagValues.data(), tagCapacity,
+				&result);
+	} else {
+		wasm_cont_resume_ex(task.continuation,
+				task.args.empty() ? nullptr : task.args.data(),
+				static_cast<std::uint32_t>(task.args.size()),
+				results.empty() ? nullptr : results.data(), resultCapacity,
+				tagValues.empty() ? nullptr : tagValues.data(), tagCapacity,
+				&result);
+	}
+	std::vector<std::uint8_t> tagKinds;
+	if (result.tagKinds != nullptr && result.tagValueCount != 0)
+		tagKinds.assign(result.tagKinds, result.tagKinds + result.tagValueCount);
+	const std::vector<std::uint8_t> resultKinds = handle->worker->resultKinds;
 
 	if (result.status == static_cast<std::int32_t>(ContinuationStatus::Suspended)) {
 		if (result.continuation != nullptr) {
-			if (hooks_.onSuspended != nullptr)
+			if (hooks_.onSuspendedEx != nullptr) {
+				hooks_.onSuspendedEx(hooks_.userData, result.continuation,
+						result.tagId, tagValues.data(), result.tagValueCount,
+						tagKinds.empty() ? nullptr : tagKinds.data());
+			} else if (hooks_.onSuspended != nullptr) {
 				hooks_.onSuspended(hooks_.userData, result.continuation,
 						result.tagId, result.value);
-			else
+			} else {
 				continuationRefRelease(result.continuation);
+			}
 		}
-	} else if (hooks_.onCompleted != nullptr) {
-		hooks_.onCompleted(hooks_.userData, result.status);
+		if (task.creationContext != nullptr) {
+			dropContinuationValues(tagKinds.data(), result.tagValueCount,
+					tagValues.data(), static_cast<VMContext*>(task.creationContext));
+		}
+	} else if (result.status ==
+			static_cast<std::int32_t>(ContinuationStatus::Exception)
+			&& hooks_.onRejected != nullptr) {
+		hooks_.onRejected(hooks_.userData, result.status, wasm_exn_pending());
+	} else {
+		if (hooks_.onCompletedEx != nullptr) {
+			hooks_.onCompletedEx(hooks_.userData, result.status,
+					results.data(), result.resultCount,
+					resultKinds.empty() ? nullptr : resultKinds.data());
+		} else if (hooks_.onCompleted != nullptr) {
+			hooks_.onCompleted(hooks_.userData, result.status);
+		}
+		if (task.creationContext != nullptr) {
+			dropContinuationValues(resultKinds.data(), result.resultCount,
+					results.data(), static_cast<VMContext*>(task.creationContext));
+		}
 	}
+
+	if (task.creationContext != nullptr && !task.args.empty()) {
+		dropContinuationValues(task.argKinds.data(),
+				static_cast<std::uint32_t>(task.args.size()), task.args.data(),
+				static_cast<VMContext*>(task.creationContext));
+	}
+	continuationRefRelease(task.continuation);
 	return true;
 }
 

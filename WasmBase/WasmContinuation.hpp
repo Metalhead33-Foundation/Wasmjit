@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <vector>
 
 namespace WASM {
 
@@ -200,19 +201,42 @@ private:
 // No hook is required. With no hooks the scheduler still resumes tasks and
 // releases replacement continuations, which makes it useful as a simple
 // trampoline. Hooks are called synchronously on the thread that calls `step`,
-// so the scheduler remains serial and is not an agent API. True multi-agent
-// execution remains deferred.
+// so the scheduler remains serial and is not an agent API. `submit`/`onSuspended`
+// are the legacy scalar-i32 path; `submitEx`/`submitThrow` and the `*Ex` hooks
+// carry wide `ContinuationValue` payloads and a throw/reject task. A reference
+// payload is retained by the scheduler for the task and released after `step`.
+// True multi-agent execution remains deferred.
 class HostContinuationScheduler {
 public:
+	// Default capacity for wide result/tag buffers. Callers can pass explicit
+	// capacities to `submitEx`; the completion result capacity is additionally
+	// clamped to the target's declared result count.
+	static constexpr std::uint32_t kDefaultValueCapacity = 64;
+
 	struct Hooks {
 		void* userData = nullptr;
-		// Ownership of `continuation` is transferred to the callback. The
-		// callback must release it (or keep it alive with `submit`).
+		// Legacy scalar hooks. Ownership of `continuation` is transferred to
+		// the callback. The callback must release it (or keep it alive with
+		// `submit`).
 		void (*onSuspended)(void* userData, void* continuation,
 				std::int32_t tagId, std::int32_t value) noexcept = nullptr;
 		// `status` is a `ContinuationStatus` value. Traps/exceptions are also
 		// visible through the usual pending slots.
 		void (*onCompleted)(void* userData, std::int32_t status) noexcept = nullptr;
+		// Wide hooks. `values`/`kinds` are borrowed for the duration of the
+		// call; copy them if the embedder needs them later. Ownership of
+		// `continuation` is transferred exactly as for `onSuspended`.
+		void (*onSuspendedEx)(void* userData, void* continuation,
+				std::int32_t tagId, const ContinuationValue* values,
+				std::uint32_t valueCount, const std::uint8_t* kinds) noexcept = nullptr;
+		void (*onCompletedEx)(void* userData, std::int32_t status,
+				const ContinuationValue* results, std::uint32_t resultCount,
+				const std::uint8_t* kinds) noexcept = nullptr;
+		// Called instead of the completion hooks when a task ends with an
+		// uncaught exception. `exception` is the engine's pending exception
+		// payload and is borrowed for the call.
+		void (*onRejected)(void* userData, std::int32_t status,
+				void* exception) noexcept = nullptr;
 	};
 
 	HostContinuationScheduler() noexcept = default;
@@ -229,6 +253,20 @@ public:
 	// `HostContinuation(ref, takeOwnership)`. An invalid reference is rejected.
 	bool submit(void* continuation, std::int32_t arg,
 			bool takeOwnership = true) noexcept;
+
+	// Wide resume task. `argKinds` is optional, but must describe reference
+	// arguments if their lifetime is to be retained. `resultCapacity`/`tagCapacity`
+	// default to the target's result count and `kDefaultValueCapacity`.
+	bool submitEx(void* continuation, const ContinuationValue* args,
+			std::uint32_t argCount, const std::uint8_t* argKinds,
+			std::uint32_t resultCapacity = 0, std::uint32_t tagCapacity = 0,
+			bool takeOwnership = true) noexcept;
+
+	// Throw/reject task: resumes through `wasm_cont_resume_throw_ex`. The
+	// exception is borrowed until `step` runs; ownership is not transferred.
+	bool submitThrow(void* continuation, void* exception,
+			bool takeOwnership = true) noexcept;
+
 	std::size_t pending() const noexcept { return tasks_.size(); }
 	void clear() noexcept;
 
@@ -239,8 +277,17 @@ public:
 
 private:
 	struct Task {
+		enum class Kind { Resume, Throw };
+		Kind kind = Kind::Resume;
 		void* continuation = nullptr;
 		std::int32_t arg = 0;
+		std::vector<ContinuationValue> args;
+		std::vector<std::uint8_t> argKinds;
+		void* exception = nullptr;
+		void* creationContext = nullptr;
+		std::uint32_t resultCapacity = 0;
+		std::uint32_t tagCapacity = 0;
+		bool wide = false;
 	};
 	Hooks hooks_{};
 	std::deque<Task> tasks_{};

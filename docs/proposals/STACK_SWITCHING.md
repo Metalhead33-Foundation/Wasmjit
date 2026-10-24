@@ -138,10 +138,13 @@ The decision applies engine-wide and is recorded with its reasoning in §10.15
 - **Host-facing handle.** `HostContinuation` wraps a `(ref cont)` lowered to
   `void*` (for example, an exported function result), owns one reference, and
   offers `resume` plus `suspendCurrent` for a native import. `HostContinuationScheduler`
-  adds the opt-in, engine-agnostic JSPI/Lua/Python hook contract: `onSuspended`
-  receives the replacement handle and payload, and `onCompleted` receives the
-  final status. This is the JSPI/embedder seam and the groundwork for a future
-  scheduler; it is **not** an agent API and does not add concurrency.
+  adds the opt-in, engine-agnostic JSPI/Lua/Python hook contract: `submitEx`
+  carries wide `ContinuationValue` arguments, `onSuspendedEx` receives the
+  replacement handle plus wide tag values/kinds, `onCompletedEx` receives wide
+  results, and `submitThrow`/`onRejected` cover the throw/reject path. Legacy
+  scalar `submit`/`onSuspended`/`onCompleted` remain. This is the JSPI/embedder
+  seam and the groundwork for a future scheduler; it is **not** an agent API
+  and does not add concurrency.
 - **The validator and lowering are deliberately wide now.** Continuation
   parameters, results and tag payloads use 16-byte value slots and a backend
   invoker; i32/i64/f32/f64, references and v128 are supported. Multiple
@@ -175,6 +178,15 @@ The decision applies engine-wide and is recorded with its reasoning in §10.15
 | ~~SS6~~ | ~~**No test.**~~ **Stage-2 done:** positive `cont.new`/`resume`/`suspend` modules plus runtime tests for one-shot, trap/exception transfer and the budget; the original model/rejection tests remain. | `Test/main.cpp`, `Test/wasm_wat/cont_*.wat` | Closed (stage-2 slice) |
 | ~~SS7~~ | ~~**Execution state is per host thread, not per execution context.** The trap slot, pending exception, tail-call state, defer stack, depth counters and stack limit are TLS or global, and there is no agent object to own them.~~ **SS-6 done:** `Agent` owns an `ExecutionState`; the generated-code helpers resolve the current state; two agents on one thread, per-thread defaults and the per-state stack limit are tested. | `WasmBase/WasmAgent.hpp`/`.cpp`; `WasmTrap.cpp`, `WasmExn.cpp`, `WasmStack.cpp`; `Test/main.cpp` | Closed |
 
+The continuation runtime does **not** close THREADS TH-5. The concrete blockers
+between the current single-agent engine and true multi-agent execution — the
+scheduler/thread lifecycle, one mutable `ModuleInstance`, multi-mutator GC,
+waiter table, host-side locks, execution-context-only continuations,
+provider/cross-provider gaps, the adapter-only JSPI seam and missing
+multi-agent tests — are enumerated in
+[`THREADS.md`](THREADS.md) §4.3.1. `switch` is a control-flow primitive, not an
+agent scheduler.
+
 ## 6. Where we can and should play fast and loose
 
 | # | Deviation | Why it is safe | What it buys |
@@ -199,12 +211,12 @@ second `resume` read a dead stack.
 | **SS-6 — Execution state** | ✅ `Agent` owns an `ExecutionState` (trap slot, pending exception, tail-call state, defer stack, depth counters, stack limit); TLS holds the current state pointer; the helpers resolve it; isolation tests cover two agents on one thread, per-thread defaults and the per-state stack limit. | SS7 | Done: `Test/main.cpp` ("agent execution state…", "each host thread…", "the stack limit…"). |
 | **SS-3 — Runtime stacks** | ✅ **A and B implemented:** A is the default (mmap-backed stack, guard page, `ucontext` switch, per-stack state/limit, ASAN fiber hooks, serial cross-thread migration, explicit suspended-stack root registry); B is the explicit fallback (one host thread per suspended continuation). Both enforce one-shot, transfer traps/exceptions, unwind/cancel on drop and charge the budget. | SS4 | Suspend/resume round-trips run on both providers; A stack exhaustion traps; serial migration is tested. |
 | **SS-4 — Instructions** | ✅ **Wide slice:** `cont.new`, `cont.bind`, `suspend`, `resume` with multiple/loop handlers, `resume_throw*` including handler clauses, wide payloads and `switch` on A and B. | SS3/SSD3 | All seven instructions execute |
-| **SS-5 — Tests** | ✅ A/B runtime tests, the host handle, A stack guard/migration, multiple/loop handlers, `cont.bind`, `resume_throw` plus a handler clause, A/B `switch`, WAT modules and the model/rejection surface are in the default suite. | SS6 | `10,603` assertions / `414` cases green. |
+| **SS-5 — Tests** | ✅ A/B runtime tests, the host handle, A stack guard/migration, multiple/loop handlers, `cont.bind`, `resume_throw` plus a handler clause, A/B `switch`, WAT modules and the model/rejection surface are in the default suite. | SS6 | `10,640` assertions / `416` cases green. |
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-24; whole suite 10,603 assertions /
-414 test cases):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-24; whole suite 10,640 assertions /
+416 test cases):
 
 | Script | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
@@ -807,5 +819,5 @@ for a later study.
 | **D-2** | **B — one host thread per suspended continuation — is the opt-in fallback provider.** | B is selected explicitly (`setContinuationProvider(HostThreads)`), never as a silent automatic fallback. It is implemented in `WasmBase/WasmContinuation.hpp`/`.cpp`; it is the correctness prototype and the choice where A's provider is unavailable. Its thread/stack budget is part of its contract. |
 | **D-3** | **C — a bespoke interpreter fallback — is rejected permanently.** | No WasmJit interpreter will be written for continuations, or as a fallback for anything else, ever. If interpretation is ever required it must come from LibJIT's own compile/interpret configuration (LibJIT already provides both a compiler and an interpreter), not from a new WasmJit engine. The core continuation contract must not grow an interpreter path. |
 | **D-4** | **Execution state belongs to the execution context and is owned by an `Agent`.** | SS-6 is implemented: `ExecutionState` (trap slot, pending exception, tail-call state, defer stack, depth counters, stack limit) lives in `WasmBase/WasmAgent.hpp`; TLS holds the current pointer; `wasm_trap_slot()`, `wasm_exn_slot()`, `currentTailCallState()` and `wasm_stack_check()` resolve it. |
-| **D-5** | **Agents are present in the code; true multi-agent execution remains deferred.** | `Agent`, `AgentScope` and per-thread default agents exist and own the state. A and B continuations are execution contexts, **not** agents: neither has a shared-instance entry point, scheduler, waiter table or multi-mutator GC. The host handle is serial-only. There is no multi-agent execution model; THREADS TH-5/T9 remain deferred indefinitely. |
+| **D-5** | **Agents are present in the code; true multi-agent execution remains deferred.** | `Agent`, `AgentScope` and per-thread default agents exist and own the state. A and B continuations are execution contexts, **not** agents: neither has a shared-instance entry point, scheduler, waiter table or multi-mutator GC. The host handle is serial-only. There is no multi-agent execution model; THREADS TH-5/T9 remain deferred indefinitely, and the blocker list is in [`THREADS.md`](THREADS.md) §4.3.1. |
 | **D-6** | **The provider contract is backend-neutral.** | The contract lives in `WasmBase/WasmContinuation.hpp`; A (default) and B (fallback) are implemented once there. LibJIT, SLJIT and AsmJit only emit the suspend call, the root array and the stack check. SLJIT/AsmJit remain prerequisites for their own measurements, not for the decision. |

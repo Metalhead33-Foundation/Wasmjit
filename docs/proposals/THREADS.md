@@ -1,6 +1,6 @@
 # Threads and Atomics — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 9 — TH-1, TH-2, TH-3,
+Status: design note / implementation reference (revision 10 — TH-1, TH-2, TH-3,
 TH-4 and TH-6 are implemented; TH-5 (real agents) is deferred indefinitely but
 not ruled out. The per-agent state groundwork is implemented: `Agent` owns an
 `ExecutionState` (trap, exception, tail-call, defer, counters and stack limit).
@@ -8,7 +8,8 @@ The stack-switching stage adds continuation execution contexts: A switches
 native stacks on one host thread (default), B uses a host thread per suspended
 continuation (fallback). Neither is an agent and neither unlocks TH-5. §3 records
 the project's explicit execution model: **single-agent only, for the foreseeable
-future**; the single-agent build is a long-term stop-gap, not an oversight.)
+future**; the single-agent build is a long-term stop-gap, not an oversight.
+§4.3.1 enumerates the concrete blockers between the current engine and TH-5.)
 Audience: anyone touching `WasmMemory`, `WasmStore`, `WasmOpcode`,
 `WasmOpcodeDispatcher`, `LibjitOpcodeDispatcher`, or the test harness.
 
@@ -31,6 +32,7 @@ assumes is stated in [`THREADSAFETY.md`](../THREADSAFETY.md).
 | §2 | What does the threads proposal require? |
 | §3 | What does it *not* require? |
 | §4 | What is in the tree today? |
+| §4.3.1 | What are the concrete blockers to true multi-agent / multithreaded execution? |
 | §5 | Where do we fall short of §2? |
 | §6 | Where do we *choose* to deviate, and why? |
 | §7 | Milestones to close the important gaps |
@@ -217,6 +219,29 @@ engine must do", not "what 3.0 requires".
   that single instance safe rather than multiplying instances.
 - There is no cross-agent waiter table, so `wait` cannot be woken (`notify`
   returns 0) and the timeout is not slept (`TD4`).
+
+### 4.3.1 Blockers to true multi-agent / multithreaded execution
+
+The short list below is the implementation gap between the current
+single-agent engine and TH-5. The per-agent `ExecutionState` is already done;
+everything else is deliberately absent, not accidentally missing.
+
+| # | Blocker | Why it blocks a second agent | Where it lives today |
+|---|---|---|---|
+| MA-1 | **No scheduler or thread lifecycle.** There is no API to start, park, wake, stop or join an agent, and no guarantee that two agents can enter one `ModuleInstance` concurrently. | `Agent`/`AgentScope` select an execution state; they do not create a scheduling policy or a thread pool. `wait`/`notify` therefore cannot wake a real waiter. | `WasmBase/WasmAgent.hpp`; `WasmBase/WasmModuleInstance.hpp`; `THREADS.md` TH-5/T9 |
+| MA-2 | **One mutable `ModuleInstance` per module.** Globals, tables, active data segments, export caches and instance lifecycle are not partitioned or synchronized per agent. | Two agents mutating one instance race even when their linear-memory accesses are atomic. There is no per-instance entry guard or agent ownership handoff. | `WasmModuleInstance.{hpp,cpp}`; `THREADSAFETY.md` §4.6 |
+| MA-3 | **No multi-mutator GC.** The GC heap, allocation counter, cycle-collector candidate set and reclaim queue assume one active mutator; `gcSet` is mutated by the running instance. | A second agent can allocate, release or collect while another agent's allocating frame is live; there is no safepoint/stop-the-world protocol or per-agent root set. | `WasmGcHeap.*`; `WasmModuleInstance.cpp` (`gcCollect`, `collectCycles`, `possibleCycleRoot`); `docs/proposals/GC.md` |
+| MA-4 | **No cross-agent wait/notify table.** `notify` returns 0 and `wait*` returns the not-equal or timeout result without sleeping. | A real agent needs a guest-address-keyed waiter table, wake ordering, timeout handling and a “not spuriously woken” protocol. | `wasm_atomic.*`; `THREADS.md` TD3/TD4/TH-2 |
+| MA-5 | **Store/type/string locks are host-side, not a concurrency model.** The Store containers, type interning, GC heap and string store take locks for host calls. | Those locks protect bookkeeping, not guest execution. They do not define lock ordering with guest globals, `wait` queues, GC safepoints or trap unwinding. | `WasmStore.*`; `WasmTypeRegistry.*`; `WasmGcHeap.*`; `THREADSAFETY.md` |
+| MA-6 | **Continuations are execution contexts, not agents.** A switches native stacks serially (with optional serial host migration); B uses one host thread per suspended continuation. Neither schedules concurrent entries into an instance. | A suspended continuation can preserve a call chain, but it does not own a guest lock, a wait token or a GC root set that a second agent could contend with. `HostContinuationScheduler` is a serial queue. | `WasmContinuation.{hpp,cpp}`; `STACK_SWITCHING.md` D-5 |
+| MA-7 | **Provider and cross-provider gaps.** A and B each implement the symmetric peer `switch`; cross-provider `switch` is rejected. A's stack may migrate only between serial host calls; B's thread-per-continuation fallback is not a scheduler. | A future agent model has to pick a provider policy, own a context/stack pool and synchronize context handoff with the GC and waiter table. | `WasmContinuation.cpp` (`switchTo`, `beginSwitch`, `switchResume`); `STACK_SWITCHING.md` D-1/D-2/D-5 |
+| MA-8 | **JS/JSPI is adapter-only.** The engine has a C++ suspend/resume hook with wide `ContinuationValue` and throw/reject variants, but no Promise, event loop or JS engine. | JSPI needs a JS agent/event-loop binding and a Promise adapter; the engine scheduler is still serial and is not a JS agent. | `JS_INTEGRATION.md` §2.3.1/§5 (JS4, JS9 closed); `WasmContinuation.hpp` |
+| MA-9 | **No multi-agent test or memory model.** There is no second-agent test, race detector, import/export sharing test with concurrent mutation, or documented guest lock/waitqueue standard. | TH-5's acceptance criterion (“two agents produce the same results as the sequentially-consistent model”) cannot be evaluated. | `THREADS.md` §8; `THREADSAFETY.md` |
+
+**Non-blockers.** Per-agent trap, exception, tail-call, defer, depth and stack
+limit state is already implemented (`TRAP-6`/SS-6), and atomic accesses are real
+seq-cst `__atomic_*` operations. Those are necessary groundwork, not a
+multi-agent implementation.
 
 ### 4.4 Tests
 
