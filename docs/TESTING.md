@@ -308,7 +308,7 @@ It currently holds 193 of the 257 scripts, and the default run is green:
 
 ```
 $ ./WasmJit
-All tests passed (10398 assertions in 387 test cases)
+All tests passed (10400 assertions in 387 test cases)
 ```
 
 #### Refreshing the list
@@ -536,7 +536,7 @@ tests, and it is green:
 
 ```
 $ ./WasmJit
-All tests passed (10398 assertions in 387 test cases)
+All tests passed (10400 assertions in 387 test cases)
 ```
 
 A full sweep is deliberately loud, because most of the suite is still beyond the
@@ -727,7 +727,7 @@ Measured after SIMD-5:
 
 ```bash
 ./WasmJit 'simd*'      # 24 cases, 6147 assertions, all passing (includes the hidden [.simdbench] case)
-./WasmJit              # 387 cases, 10398 assertions, all passing
+./WasmJit              # 387 cases, 10400 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed

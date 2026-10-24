@@ -219,7 +219,7 @@ authoritative per-item status is each note's §7 plan.
 | `PROFILES.md` | 9 | canonical | none | — | conforms exactly |
 | `REFERENCE_TYPES.md` | 9 | canonical | none | — | conforms exactly |
 | `SHARED_EVERYTHING_THREADS.md` | 9 | canonical | none | — | conforms exactly |
-| `STACK_SWITCHING.md` | 9 | canonical | none | — | conforms exactly |
+| `STACK_SWITCHING.md` | 10 | canonical + appendix | §10 follows §9 | — | conforms (appended backend feasibility study, PD3) |
 | `STRINGREF.md` | 9 | canonical | none | — | conforms exactly |
 | `TAILCALLS.md` | 9 | canonical | none | — | conforms exactly |
 | `TYPE_IMPORTS.md` | 9 | canonical | none | — | conforms exactly |

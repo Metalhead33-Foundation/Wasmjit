@@ -69,7 +69,7 @@ restriction-only checks; they never change what an accepted module does.
 | `assert_uninstantiable` | 27 | **27** (26 rejected + 1 start trap) | 0 |
 | **total** | **2382** | **2382** | **0** |
 
-The default suite is **10398 assertions / 387 test cases, all green** (the
+The default suite is **10400 assertions / 387 test cases, all green** (the
 curated list holds 193 of the 257 scripts, 61 of them re-curated when the
 validator landed, plus `start.wast`). The
 strict run is **fully green** as well: every one of the 2,382 binary negative
