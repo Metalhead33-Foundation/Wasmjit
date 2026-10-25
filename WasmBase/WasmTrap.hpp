@@ -159,7 +159,9 @@ private:
 // If a trap is pending, takes it and throws `Trap`; otherwise does nothing.
 // POD-only and `noinline`: it is the single frame between the last generated
 // frame and the throw. Call it only at the host boundary, after generated code
-// has returned.
+// has returned. Before throwing it records a `Diagnostic` through a `noexcept`
+// helper (docs/DIAGNOSTICS.md DG-2); that helper's own objects are destroyed
+// before the throw, so the throw itself still crosses a destructor-free frame.
 //
 // Nested calls are the exception: a host import (or the component runtime) that
 // re-enters Wasm must not throw into a generated frame. While `wasmCallDepth()`

@@ -1,12 +1,14 @@
 #ifndef WASMVALIDATOR_HPP
 #define WASMVALIDATOR_HPP
 #include "WasmModule.hpp"
+#include "WasmDiagnostics.hpp"
 #include "WasmValidation.hpp"
 #include "WasmOpcodeDispatcher.hpp"
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -51,7 +53,11 @@ private:
 	std::size_t currentBody = kNoBody;
 	std::vector<ValueType> locals;
 
-	[[noreturn]] void fail(const std::string& message) const;
+	// Records a structured diagnostic (`WASM.VALIDATE.<LEAF>`) and throws
+	// `ValidationError` with the same text. `id` defaults to the transitional
+	// `WASM.VALIDATE.RULE` for a rule that DG-0 has not mapped yet.
+	[[noreturn]] void fail(const std::string& message,
+			std::string_view id = DiagnosticId::kValidateRule) const;
 
 	// Diagnostic form of a local index in the body being validated
 	// (`"0 ($name)"`); the name-section outer key is the global function index.

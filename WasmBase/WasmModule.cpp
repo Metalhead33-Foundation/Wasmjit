@@ -1,4 +1,5 @@
 #include "WasmModule.hpp"
+#include "WasmDiagnostics.hpp"
 #include "WasmSafety.hpp"
 #include "WasmStore.hpp"
 #include "WasmString.hpp"
@@ -7,6 +8,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <iostream>
+#include <new>
 #include <span>
 #include <stdexcept>
 #include <utility>
@@ -1258,9 +1260,20 @@ namespace {
 [[noreturn]] void rejectSecretValueType(const char* where, size_t index, WASM::ValueTypeCode code)
 {
 	const char* name = code == WASM::ValueTypeCode::S32 ? "s32" : "s64";
-	throw std::runtime_error(std::string("constant-time extension: secret value type ") + name
+	std::string message = std::string("constant-time extension: secret value type ") + name
 			+ " in " + where + " #" + std::to_string(index)
-			+ " is not implemented (docs/proposals/CONSTANT_TIME.md CT-0)");
+			+ " is not implemented (docs/proposals/CONSTANT_TIME.md CT-0)";
+	WASM::Diagnostic diagnostic;
+	diagnostic.id = WASM::DiagnosticId::kDecodeUnsupportedValueType;
+	diagnostic.severity = WASM::DiagnosticSeverity::Error;
+	diagnostic.phase = WASM::DiagnosticPhase::Decode;
+	diagnostic.message = message;
+	diagnostic.remediation = "docs/proposals/CONSTANT_TIME.md";
+	try {
+		WASM::emitDiagnostic(std::move(diagnostic));
+	} catch (...) {
+	}
+	throw std::runtime_error(message);
 }
 
 [[noreturn]] void rejectUnsupportedValueType(const char* where, size_t index, WASM::ValueTypeCode code)
@@ -1275,6 +1288,16 @@ namespace {
 			"malformed module: unsupported value type 0x%02X (%d) in %s #%zu — this "
 			"engine does not model it (docs/NULL_JIT_VALUE_DIAGNOSIS.md)",
 			wireByte, value, where, index);
+	WASM::Diagnostic diagnostic;
+	diagnostic.id = WASM::DiagnosticId::kDecodeUnsupportedValueType;
+	diagnostic.severity = WASM::DiagnosticSeverity::Error;
+	diagnostic.phase = WASM::DiagnosticPhase::Decode;
+	diagnostic.message = buffer;
+	diagnostic.remediation = "docs/VALIDATION.md";
+	try {
+		WASM::emitDiagnostic(std::move(diagnostic));
+	} catch (...) {
+	}
 	throw std::runtime_error(buffer);
 }
 
@@ -1350,12 +1373,48 @@ void Module::fromFile(Elv::Io::Device& file)
 void Module::fromFile(Elv::Io::Device& file, const ValidationOptions& options)
 {
 	parseOptions = options;
-	const Preamble preamble = Artifact::readPreamble(file);
+
+	// Preamble problems are the earliest decode boundary (docs/SAFETY.md §2.1:
+	// tell artifacts apart before decoding them). Report, then keep the thrown
+	// message unchanged.
+	const Preamble preamble = [&]() {
+		try {
+			return Artifact::readPreamble(file);
+		} catch (const std::bad_alloc&) {
+			throw;
+		} catch (const std::exception& error) {
+			Diagnostic diagnostic;
+			diagnostic.id = DiagnosticId::kDecodePreamble;
+			diagnostic.severity = DiagnosticSeverity::Error;
+			diagnostic.phase = DiagnosticPhase::Decode;
+			diagnostic.message = error.what();
+			diagnostic.remediation = "docs/SAFETY.md#21-tell-artifacts-apart-before-decoding-them";
+			try {
+				emitDiagnostic(std::move(diagnostic));
+			} catch (...) {
+			}
+			throw;
+		}
+	}();
+
 	version = preamble.version;
+	const auto rejectArtifact = [](std::string message) {
+		Diagnostic diagnostic;
+		diagnostic.id = DiagnosticId::kDecodeUnsupportedArtifact;
+		diagnostic.severity = DiagnosticSeverity::Error;
+		diagnostic.phase = DiagnosticPhase::Decode;
+		diagnostic.message = message;
+		diagnostic.remediation = "docs/proposals/COMPONENT_MODEL.md";
+		try {
+			emitDiagnostic(std::move(diagnostic));
+		} catch (...) {
+		}
+		throw std::runtime_error(std::move(message));
+	};
 	if (preamble.layer == kComponentLayer)
-		throw std::runtime_error("Unsupported WebAssembly artifact!\nThis file is a Component Model component (preamble layer 1), not a core module.\nUse Artifact::parse to load a component; see docs/proposals/COMPONENT_MODEL.md.");
+		rejectArtifact("Unsupported WebAssembly artifact!\nThis file is a Component Model component (preamble layer 1), not a core module.\nUse Artifact::parse to load a component; see docs/proposals/COMPONENT_MODEL.md.");
 	if (preamble.layer != 0)
-		throw std::runtime_error("Unsupported WebAssembly artifact layer " +
+		rejectArtifact("Unsupported WebAssembly artifact layer " +
 				std::to_string(preamble.layer) +
 				"; expected 0 (core module) or 1 (component).");
 	layer = 0;
@@ -1368,27 +1427,37 @@ void Module::parseBody(Elv::Io::Device& file, std::optional<uint64_t> end)
 	const uint64_t limit = end ? *end : (totalSize != 0
 			? static_cast<uint64_t>(totalSize) : 0);
 
-	// Its own scope. Should go out of scope before processSecetions
-	{
-	DWasmStream wasmStream(file);
-	while (true) {
-		if (limit != 0 && file.tell() >= 0
-				&& static_cast<uint64_t>(file.tell()) >= limit)
-			break; // an empty module has no sections at all
-		Section section;
-		wasmStream >> section;
-		if (section.type == SectionType::Invalid)
-			throw std::runtime_error("malformed section id");
-		if (limit != 0
-				&& static_cast<uint64_t>(section.offset) + section.size > limit)
-			throw std::runtime_error("section size exceeds the input");
-		sections.push_back(section);
-		file.seek(section.size, Elv::Io::SeekOrigin::CUR);
-		if (limit == 0)
-			break; // the device cannot report where the input ends
+	// Decode errors are recorded at this boundary rather than in every section
+	// reader (docs/DIAGNOSTICS.md §8). Validation below is a separate phase and
+	// emits its own ids, so it is deliberately outside this block.
+	try {
+		// Its own scope. Should go out of scope before processSecetions
+		{
+			DWasmStream wasmStream(file);
+			while (true) {
+				if (limit != 0 && file.tell() >= 0
+						&& static_cast<uint64_t>(file.tell()) >= limit)
+					break; // an empty module has no sections at all
+				Section section;
+				wasmStream >> section;
+				if (section.type == SectionType::Invalid)
+					throw std::runtime_error("malformed section id");
+				if (limit != 0
+						&& static_cast<uint64_t>(section.offset) + section.size > limit)
+					throw std::runtime_error("section size exceeds the input");
+				sections.push_back(section);
+				file.seek(section.size, Elv::Io::SeekOrigin::CUR);
+				if (limit == 0)
+					break; // the device cannot report where the input ends
+			}
+		}
+		processSecetions(file);
+	} catch (const std::bad_alloc&) {
+		throw; // an allocation failure is not malformed input
+	} catch (const std::exception& error) {
+		emitDecodeFailure(error.what());
+		throw;
 	}
-	}
-	processSecetions(file);
 
 	// A module may contain only type imports and no type section. They still
 	// occupy the local type index space (and are the only entries in it).

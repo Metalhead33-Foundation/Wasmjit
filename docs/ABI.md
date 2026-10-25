@@ -650,6 +650,7 @@ Universal function reference stored in tables and import storage.
 | `WasmBase/WasmHostBridge.hpp` | Optional host boundary (reference + lifecycle callbacks) |
 | `WasmBase/WasmTrap.hpp` / `WasmBase/WasmTrap.cpp` | The pending-trap protocol (`reportTrap`, `wasm_trap_slot`, `WASM::Trap`) and the deferred-cleanup stack; the design and its limits are in [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) |
 | `WasmBase/WasmNativeImport.hpp` | `WASM::nativeImport<&fn>()`: the typed trampoline that makes `throw`/`WASM::trap()` safe inside a host import ("Writing an import" above) |
+| `WasmBase/WasmDiagnostics.hpp` / `.cpp` | Structured diagnostics: the record, bounded per-agent ring/sink, text/JSON forms, and the `env.info`/`warn`/`error`/`panic` log imports ([`DIAGNOSTICS.md`](DIAGNOSTICS.md)) |
 | `WasmBase/WasmValue.hpp` | Callable struct and `callCallable` helper |
 | `WasmBase/WasmExn.hpp` | Exception objects, the pending-exception slot and the tag-id accessor |
 | `LibJit/LibjitOpcodeDispatcher.cpp` | `dispatchCall` (line ~1027), `dispatchCallIndirect` (~1061), `dispatchCallThroughCallable` (~612) |

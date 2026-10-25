@@ -6,6 +6,10 @@ CONFIG -= qt
 # ABI library, not a wasm code generator; the runtime itself is backend-neutral.
 CONFIG += link_pkgconfig
 PKGCONFIG += libffi
+# nlohmann_json is header-only and used by the diagnostics JSON formatter
+# (`WasmBase/WasmDiagnostics.cpp`). It is a host utility library, not a wasm
+# code generator, so the dependency is backend-neutral.
+PKGCONFIG += nlohmann_json
 include(WasmBase.pri)
 
 # Highway (`libhwy`, per pkg-config: -I/usr/include -DHWY_SHARED_DEFINE): the
@@ -24,6 +28,7 @@ SOURCES += \
         WasmComponentRuntime.cpp \
         WasmComponentValidation.cpp \
         WasmContinuation.cpp \
+        WasmDiagnostics.cpp \
         WasmException.cpp \
         WasmExn.cpp \
         WasmGcHeap.cpp \
@@ -57,6 +62,7 @@ HEADERS += \
     WasmContext.hpp \
     WasmContinuation.hpp \
     WasmDeterminism.hpp \
+    WasmDiagnostics.hpp \
     WasmException.hpp \
     WasmExn.hpp \
     WasmGcHeader.hpp \

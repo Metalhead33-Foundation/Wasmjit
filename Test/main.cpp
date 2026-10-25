@@ -1,6 +1,7 @@
 
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch_all.hpp>
+#include <nlohmann/json.hpp>
 
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <Elvavena/Util/ElvScopeGuard.hpp>
@@ -26,6 +27,7 @@
 #include "WasmBase/WasmAgent.hpp"
 #include "WasmBase/WasmContinuation.hpp"
 #include "WasmBase/WasmArtifact.hpp"
+#include "WasmBase/WasmDiagnostics.hpp"
 #include "WasmBase/WasmStack.hpp"
 #include "WasmBase/WasmVMContext.hpp"
 #include "WasmBase/WasmComponent.hpp"
@@ -7953,6 +7955,361 @@ TEST_CASE("a wrapped native import still receives the caller's VMContext")
 	WASM::callCallable<void>(*run);
 	REQUIRE(calls == 2);
 }
+
+// ── Structured diagnostics (docs/DIAGNOSTICS.md) ────────────────────────────
+// DG-1…DG-3: one record at the boundaries, a bounded per-execution-state ring,
+// an optional sink, and stable ids in text and JSON. These tests assert ids
+// and fields, not prose, so the messages stay free to improve.
+
+namespace {
+
+void instantiateDiagnosticsLog(WASM::RegistryImportResolver& imports,
+		void (*call)(const std::unique_ptr<WASM::ModuleInstance>&))
+{
+	WASM::Module module = loadTestModule("diagnostics_log");
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	call(instance);
+}
+
+} // namespace
+
+TEST_CASE("diagnostics: env log imports emit structured records")
+{
+	WASM::clearDiagnostics();
+	WASM::RegistryImportResolver imports;
+	WASM::registerToEnv(imports);
+
+	instantiateDiagnosticsLog(imports, [](const std::unique_ptr<WASM::ModuleInstance>& instance) {
+		auto logAll = instance->exportedFunction("log_all");
+		REQUIRE(logAll.has_value());
+		WASM::callCallable<void>(*logAll);
+	});
+
+	const auto records = WASM::recentDiagnostics();
+	REQUIRE(records.size() == 3);
+
+	REQUIRE(records[0].id == "WASM.EXECUTE.LOG.INFO");
+	REQUIRE(records[0].severity == WASM::DiagnosticSeverity::Note);
+	REQUIRE(records[0].phase == WASM::DiagnosticPhase::Execute);
+	REQUIRE(records[0].message == "info from guest");
+
+	REQUIRE(records[1].id == "WASM.EXECUTE.LOG.WARN");
+	REQUIRE(records[1].severity == WASM::DiagnosticSeverity::Warning);
+	REQUIRE(records[1].message == "warn from guest");
+
+	REQUIRE(records[2].id == "WASM.EXECUTE.LOG.ERROR");
+	REQUIRE(records[2].severity == WASM::DiagnosticSeverity::Error);
+	REQUIRE(records[2].message == "error from guest");
+
+	// The sequence is per execution state and strictly increasing.
+	REQUIRE(records[0].sequence < records[1].sequence);
+	REQUIRE(records[1].sequence < records[2].sequence);
+
+	// Text form: severity, id and message on the first line, hint on the last.
+	const std::string text = WASM::formatDiagnostic(records[0]);
+	REQUIRE(text.rfind("note WASM.EXECUTE.LOG.INFO: info from guest", 0) == 0);
+	REQUIRE(text.find("hint: docs/DIAGNOSTICS.md#54-host-log-imports")
+			!= std::string::npos);
+
+	// JSON form: schema v1, the id and severity as strings, no host pointers.
+	// The serializer is nlohmann_json, so the test parses it with the same
+	// library instead of trusting substrings alone.
+	const std::string json = WASM::diagnosticToJson(records[2]);
+	const nlohmann::json parsed = nlohmann::json::parse(json);
+	REQUIRE(parsed.at("schema") == "wasmjit.diagnostic.v1");
+	REQUIRE(parsed.at("id") == "WASM.EXECUTE.LOG.ERROR");
+	REQUIRE(parsed.at("severity") == "error");
+	REQUIRE(parsed.at("phase") == "execute");
+	REQUIRE(parsed.at("message") == "error from guest");
+	REQUIRE(parsed.at("sequence").get<std::uint32_t>() == records[2].sequence);
+	REQUIRE_FALSE(parsed.contains("continuation")); // not populated
+	REQUIRE(json.find("0x") == std::string::npos);
+
+	const nlohmann::json stream = nlohmann::json::parse(
+			WASM::diagnosticsToJson(records));
+	REQUIRE(stream.is_array());
+	REQUIRE(stream.size() == 3);
+	REQUIRE(stream.at(0).at("id") == "WASM.EXECUTE.LOG.INFO");
+	REQUIRE(stream.at(2).at("id") == "WASM.EXECUTE.LOG.ERROR");
+}
+
+
+TEST_CASE("diagnostics: a sink sees records without replacing the ring")
+{
+	WASM::clearDiagnostics();
+	std::vector<std::string> seen;
+	WASM::setDiagnosticSink([](void* userData, const WASM::Diagnostic& diagnostic) noexcept {
+		auto* output = static_cast<std::vector<std::string>*>(userData);
+		try {
+			output->emplace_back(diagnostic.id);
+		} catch (...) {
+		}
+	}, &seen);
+
+	WASM::RegistryImportResolver imports;
+	WASM::registerToEnv(imports);
+	const auto logAll = [](const std::unique_ptr<WASM::ModuleInstance>& instance) {
+		auto log = instance->exportedFunction("log_all");
+		REQUIRE(log.has_value());
+		WASM::callCallable<void>(*log);
+	};
+	instantiateDiagnosticsLog(imports, logAll);
+
+	REQUIRE(seen.size() == 3);
+	REQUIRE(seen[0] == "WASM.EXECUTE.LOG.INFO");
+	REQUIRE(seen[1] == "WASM.EXECUTE.LOG.WARN");
+	REQUIRE(seen[2] == "WASM.EXECUTE.LOG.ERROR");
+	REQUIRE(WASM::recentDiagnostics().size() == 3);
+
+	// A zero capacity disables the ring but keeps the sink working: this is the
+	// documented zero-allocation-for-the-ring configuration.
+	WASM::setDiagnosticRingCapacity(0);
+	WASM::clearDiagnostics();
+	instantiateDiagnosticsLog(imports, logAll);
+	REQUIRE(seen.size() == 6);
+	REQUIRE(WASM::recentDiagnostics().empty());
+
+	WASM::setDiagnosticRingCapacity(WASM::DiagnosticState::kDefaultCapacity);
+	WASM::setDiagnosticSink(nullptr, nullptr);
+}
+
+TEST_CASE("diagnostics: env.panic records a fatal note and traps")
+{
+	WASM::clearDiagnostics();
+	WASM::RegistryImportResolver imports;
+	WASM::registerToEnv(imports);
+
+	WASM::Module module = loadTestModule("diagnostics_log");
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto panic = instance->exportedFunction("do_panic");
+	REQUIRE(panic.has_value());
+
+	bool trapped = false;
+	WASM::TrapKind kind = WASM::TrapKind::Internal;
+	std::string message;
+	try {
+		WASM::callCallable<void>(*panic);
+	} catch (const WASM::Trap& trap) {
+		trapped = true;
+		kind = trap.kind();
+		message = trap.message() != nullptr ? trap.message() : "";
+	}
+	REQUIRE(trapped);
+	// The panic is a host-defined failure, not a spec trap; its text survives.
+	REQUIRE(kind == WASM::TrapKind::Internal);
+	REQUIRE(message == "panic from guest");
+
+	const auto records = WASM::recentDiagnostics();
+	REQUIRE(records.size() == 2);
+	REQUIRE(records[0].id == "WASM.EXECUTE.LOG.PANIC");
+	REQUIRE(records[0].severity == WASM::DiagnosticSeverity::Fatal);
+	REQUIRE(records[0].message == "panic from guest");
+	REQUIRE(records[1].id == "WASM.EXECUTE.TRAP.INTERNAL");
+	REQUIRE(records[1].severity == WASM::DiagnosticSeverity::Error);
+	REQUIRE(records[1].message == "panic from guest");
+}
+
+TEST_CASE("diagnostics: an unreadable or oversized guest string degrades safely")
+{
+	WASM::clearDiagnostics();
+	WASM::RegistryImportResolver imports;
+	WASM::registerToEnv(imports);
+
+	WASM::Module module = loadTestModule("diagnostics_log");
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto badRange = instance->exportedFunction("bad_range");
+	REQUIRE(badRange.has_value());
+	WASM::callCallable<void>(*badRange);
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	REQUIRE(WASM::recentDiagnostics()[0].message
+			== "<guest string: range outside linear memory>");
+
+	WASM::clearDiagnostics();
+	auto truncated = instance->exportedFunction("truncated");
+	REQUIRE(truncated.has_value());
+	WASM::callCallable<void>(*truncated);
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	// The guest asked for 5000 bytes; the host copies at most 4096 and marks it.
+	REQUIRE(WASM::recentDiagnostics()[0].message.size()
+			== WASM::kMaxDiagnosticMessageBytes + 3);
+	REQUIRE(WASM::recentDiagnostics()[0].message.substr(
+			WASM::kMaxDiagnosticMessageBytes) == "...");
+
+	// A lone 0xFF is not valid UTF-8. nlohmann_json's replace handler turns it
+	// into U+FFFD, so serialization is total even for hostile guest bytes.
+	WASM::clearDiagnostics();
+	auto invalidUtf8 = instance->exportedFunction("invalid_utf8");
+	REQUIRE(invalidUtf8.has_value());
+	REQUIRE_NOTHROW(WASM::callCallable<void>(*invalidUtf8));
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	REQUIRE(WASM::recentDiagnostics()[0].message == std::string(1, '\xFF'));
+	const nlohmann::json parsed = nlohmann::json::parse(
+			WASM::diagnosticToJson(WASM::recentDiagnostics()[0]));
+	REQUIRE(parsed.at("message") == "\xEF\xBF\xBD");
+}
+
+
+TEST_CASE("diagnostics: a validation failure carries a stable id and a location")
+{
+	WASM::clearDiagnostics();
+	// `named_invalid.wat` is one function `$bad` with an empty operand stack at
+	// `i32.add`; the name section gives the record a function name (DG-5 seed).
+	REQUIRE_THROWS_AS(loadTestModule("named_invalid"), std::runtime_error);
+
+	const auto records = WASM::recentDiagnostics();
+	REQUIRE_FALSE(records.empty());
+	const WASM::Diagnostic& diagnostic = records.back();
+	REQUIRE(diagnostic.id == "WASM.VALIDATE.RULE"); // unmapped rule, see DG-0
+	REQUIRE(diagnostic.severity == WASM::DiagnosticSeverity::Error);
+	REQUIRE(diagnostic.phase == WASM::DiagnosticPhase::Validate);
+	REQUIRE(diagnostic.message.find("operand stack underflow") != std::string::npos);
+	REQUIRE(diagnostic.location.functionIndex == 0);
+	REQUIRE(diagnostic.location.functionName == "bad");
+	REQUIRE(diagnostic.location.instructionOffset != WASM::kNoDiagnosticIndex);
+
+	// The text and JSON forms carry the same location.
+	const std::string text = WASM::formatDiagnostic(diagnostic);
+	REQUIRE(text.find("at function 0 ($bad)") != std::string::npos);
+	const nlohmann::json parsed = nlohmann::json::parse(
+			WASM::diagnosticToJson(diagnostic));
+	REQUIRE(parsed.at("id") == "WASM.VALIDATE.RULE");
+	REQUIRE(parsed.at("location").at("function") == 0);
+	REQUIRE(parsed.at("location").at("name") == "bad");
+	REQUIRE(parsed.at("location").at("instruction").get<std::uint32_t>()
+			== diagnostic.location.instructionOffset);
+}
+
+TEST_CASE("diagnostics: a mapped validator rule keeps its own id")
+{
+	WASM::clearDiagnostics();
+	// A body that calls function 99: the index rule is `UNKNOWN_FUNCTION`.
+	const std::vector<uint8_t> bytes = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x01,0x04,0x01,0x60,0x00,0x00,       // type 0: () -> ()
+		0x03,0x02,0x01,0x00,                 // one function, type 0
+		0x0a,0x06,0x01,0x04,0x00,0x10,0x63,0x0b  // call 99
+	};
+	const std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	WASM::Module module;
+	REQUIRE_THROWS_AS(module.fromFile(device), std::runtime_error);
+
+	const auto records = WASM::recentDiagnostics();
+	REQUIRE_FALSE(records.empty());
+	REQUIRE(records.back().id == "WASM.VALIDATE.UNKNOWN_FUNCTION");
+	REQUIRE(records.back().phase == WASM::DiagnosticPhase::Validate);
+}
+
+TEST_CASE("diagnostics: a malformed module records a decode id")
+{
+	WASM::clearDiagnostics();
+	// Preamble plus a section that claims five bytes while the input has three.
+	const std::vector<uint8_t> bytes = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x01,0x05,0x01,0x60,0x00
+	};
+	const std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	WASM::Module module;
+	REQUIRE_THROWS_AS(module.fromFile(device), std::runtime_error);
+
+	const auto records = WASM::recentDiagnostics();
+	REQUIRE_FALSE(records.empty());
+	REQUIRE(records.back().id == "WASM.DECODE.MALFORMED");
+	REQUIRE(records.back().severity == WASM::DiagnosticSeverity::Error);
+	REQUIRE(records.back().phase == WASM::DiagnosticPhase::Decode);
+}
+
+TEST_CASE("diagnostics: an uncaught exception records WASM.EXECUTE.EXCEPTION")
+{
+	WASM::clearDiagnostics();
+	WASM::Module module = loadTestModule("exceptions");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto throwFn = instance->exportedFunction("throw-uncaught");
+	REQUIRE(throwFn.has_value());
+	WASM::callCallable<void>(*throwFn, int32_t(7));
+	REQUIRE(WASM::recentDiagnostics().empty()); // still pending, not yet observed
+
+	void* pending = ::wasm_exn_take_pending();
+	REQUIRE(pending != nullptr);
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	REQUIRE(WASM::recentDiagnostics()[0].id == "WASM.EXECUTE.EXCEPTION");
+	REQUIRE(WASM::recentDiagnostics()[0].severity == WASM::DiagnosticSeverity::Error);
+	REQUIRE(WASM::recentDiagnostics()[0].message.find("uncaught exception")
+			!= std::string::npos);
+}
+
+
+TEST_CASE("diagnostics: trap and continuation ids are stable and distinct")
+{
+	// DG-0's gate: every enum value maps to a non-empty, unique id. Adding a kind
+	// without an id therefore fails here (and the doc table in §5.1).
+	const std::array<WASM::TrapKind, 21> kinds = {
+		WASM::TrapKind::Unreachable,
+		WASM::TrapKind::NullReference,
+		WASM::TrapKind::NullFunctionReference,
+		WASM::TrapKind::NullStructureReference,
+		WASM::TrapKind::NullArrayReference,
+		WASM::TrapKind::NullI31Reference,
+		WASM::TrapKind::IntegerDivideByZero,
+		WASM::TrapKind::IntegerOverflow,
+		WASM::TrapKind::InvalidConversionToInteger,
+		WASM::TrapKind::InvalidString,
+		WASM::TrapKind::OutOfBoundsMemoryAccess,
+		WASM::TrapKind::OutOfBoundsTableAccess,
+		WASM::TrapKind::OutOfBoundsArrayAccess,
+		WASM::TrapKind::UnalignedAtomicAccess,
+		WASM::TrapKind::UninitializedElement,
+		WASM::TrapKind::UndefinedElement,
+		WASM::TrapKind::IndirectCallTypeMismatch,
+		WASM::TrapKind::CastFailure,
+		WASM::TrapKind::OutOfMemory,
+		WASM::TrapKind::CallStackExhausted,
+		WASM::TrapKind::Internal,
+	};
+	std::vector<std::string_view> trapIds;
+	for (const WASM::TrapKind kind : kinds) {
+		const std::string_view id = WASM::trapDiagnosticId(kind);
+		REQUIRE(id.rfind("WASM.EXECUTE.TRAP.", 0) == 0);
+		trapIds.push_back(id);
+	}
+	std::sort(trapIds.begin(), trapIds.end());
+	REQUIRE(std::unique(trapIds.begin(), trapIds.end()) == trapIds.end());
+	REQUIRE(WASM::trapDiagnosticId(WASM::TrapKind::NullReference)
+			== "WASM.EXECUTE.TRAP.NULL_REFERENCE");
+
+	const std::array<WASM::ContinuationStatus, 5> statuses = {
+		WASM::ContinuationStatus::Completed,
+		WASM::ContinuationStatus::Suspended,
+		WASM::ContinuationStatus::Trapped,
+		WASM::ContinuationStatus::Exception,
+		WASM::ContinuationStatus::Invalid,
+	};
+	std::vector<std::string_view> statusIds;
+	for (const WASM::ContinuationStatus status : statuses) {
+		const std::string_view id = WASM::continuationDiagnosticId(status);
+		REQUIRE(id.rfind("WASM.CONTINUATION.", 0) == 0);
+		statusIds.push_back(id);
+	}
+	std::sort(statusIds.begin(), statusIds.end());
+	REQUIRE(std::unique(statusIds.begin(), statusIds.end()) == statusIds.end());
+	REQUIRE(WASM::continuationDiagnosticId(WASM::ContinuationStatus::Invalid)
+			== "WASM.CONTINUATION.INVALID");
+}
+
 
 // ── Language profiles (docs/proposals/PROFILES.md PR-1) ─────────────────────
 TEST_CASE("the engine declares the full profile")

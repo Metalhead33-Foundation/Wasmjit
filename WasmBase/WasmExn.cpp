@@ -1,5 +1,6 @@
 #include "WasmExn.hpp"
 #include "WasmAgent.hpp"
+#include "WasmDiagnostics.hpp"
 #include "WasmStore.hpp"
 #include "WasmTrap.hpp"
 
@@ -86,6 +87,14 @@ void* wasm_exn_take_pending()
 {
 	void* pending = WASM::currentExecutionState().pendingException;
 	WASM::currentExecutionState().pendingException = nullptr;
+	if (pending != nullptr) {
+		// The host has just observed an uncaught exception: that is the
+		// conversion boundary DG-2 asks for. The header is the Store-owned
+		// `{tagId, payloadBytes, reserved}` layout above.
+		const auto* base = static_cast<const std::byte*>(pending) - kHeaderSize;
+		const auto* header = reinterpret_cast<const ExnHeader*>(base);
+		WASM::emitExceptionDiagnostic(header->tagId, header->payloadBytes);
+	}
 	return pending;
 }
 void wasm_exn_clear_pending() { WASM::currentExecutionState().pendingException = nullptr; }

@@ -1,6 +1,7 @@
 #ifndef WASMAGENT_HPP
 #define WASMAGENT_HPP
 
+#include "WasmDiagnostics.hpp"
 #include "WasmTrap.hpp"
 #include "WasmValue.hpp"
 #include <Elvavena/Util/ElvDeferStack.hpp>
@@ -57,6 +58,12 @@ struct ExecutionState {
 	// Fixed-capacity cleanup stack, inline so registering cannot allocate.
 	Elv::Util::DeferStack::Record deferRecords[kDeferCapacity];
 	Elv::Util::DeferStack deferStack;
+
+	// Structured diagnostics for this execution context (docs/DIAGNOSTICS.md).
+	// The ring is bounded and empty until a boundary emits; a null sink with a
+	// zero capacity is the zero-cost configuration. It is per state, not
+	// process-global, so two agents on one host thread stay independent.
+	DiagnosticState diagnostics;
 
 	// The owning agent, or null for a bare execution state (a future
 	// continuation context installed without an Agent wrapper).

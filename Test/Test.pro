@@ -1,6 +1,10 @@
 TEMPLATE = app
 CONFIG += console c++2a
 CONFIG -= qt
+# The spec-script reader and the diagnostics JSON assertions use nlohmann_json
+# (header-only; the same dependency WasmBase declares).
+CONFIG += link_pkgconfig
+PKGCONFIG += nlohmann_json
 
 TARGET = WasmJit
 

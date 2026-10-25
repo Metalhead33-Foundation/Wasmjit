@@ -1,10 +1,34 @@
 #include "WasmTrap.hpp"
 #include "WasmAgent.hpp"
+#include "WasmDiagnostics.hpp"
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <utility>
 
 namespace WASM {
+
+namespace {
+
+// Records the trap that is about to cross the host boundary. Kept out of the
+// pending-slot fast path: `checkTrap` only calls it once a trap exists, so a
+// succeeding call allocates nothing (docs/DIAGNOSTICS.md DG-2/DG-3).
+void emitTrapDiagnostic(TrapKind kind, const char* message) noexcept
+{
+	Diagnostic diagnostic;
+	diagnostic.id = trapDiagnosticId(kind);
+	diagnostic.severity = DiagnosticSeverity::Error;
+	diagnostic.phase = DiagnosticPhase::Execute;
+	diagnostic.remediation = "docs/ABI.md#native-host-function-imports";
+	try {
+		diagnostic.message = (message != nullptr) ? message : trapKindName(kind);
+		emitDiagnostic(std::move(diagnostic));
+	} catch (...) {
+		// A diagnostic is never allowed to change the trap it describes.
+	}
+}
+
+} // namespace
 
 const char* trapKindName(TrapKind kind)
 {
@@ -154,6 +178,10 @@ Trap::Trap(TrapKind kind, const char* message) noexcept
 	if (state.wasmCallDepth != 0)
 		return;
 	const TrapInfo info = takePendingTrap();
+	// This is the point where a pending status becomes a host exception, so it
+	// is the one place a runtime trap is recorded (DG-2). The slot was cleared
+	// by `takePendingTrap()`, but `info.message` still points into its buffer.
+	emitTrapDiagnostic(info.kind, info.message);
 	throw Trap(info.kind, info.message);
 }
 
@@ -199,6 +227,10 @@ NativeImportScope::~NativeImportScope()
 	// so there the throw is exactly what should happen.
 	if (state.wasmCallDepth != 0 && state.nativeImportDepth == 0) {
 		const TrapSlot& slot = state.trapSlot;
+		// Recorded before the abort so a sink can still explain the failure. The
+		// id follows the slot's kind, which is the first (winning) report.
+		emitTrapDiagnostic(static_cast<TrapKind>(slot.kind),
+				slot.message[0] != '\0' ? slot.message : trapKindName(kind));
 		std::fprintf(stderr,
 			"WasmJit: WASM::trap() called below generated code (%s); "
 			"report the trap and return, or wrap the import with "
@@ -208,6 +240,11 @@ NativeImportScope::~NativeImportScope()
 		std::abort();
 	}
 	const TrapInfo info = takePendingTrap();
+	// Inside a wrapped native import the trampoline re-publishes this trap and
+	// `checkTrap` records it at the actual host boundary; recording it here as
+	// well would duplicate the record.
+	if (state.wasmCallDepth == 0)
+		emitTrapDiagnostic(info.kind, info.message);
 	throw Trap(info.kind, info.message);
 }
 

@@ -70,7 +70,7 @@ per-milestone done markers, is the authoritative per-item status.
 
 | Document | Feature / proposal | Wasm | Completeness | Where it stands |
 |---|---|---|---|---|
-| [`DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) | Diagnostics and debugging (cross-cutting design/plan) | — | `░░░░░░░░░░░░░░░░░░░░` plan only | Defines a stable diagnostic id/schema, Wasm function/instruction location, continuation/scheduler context, an embedder sink and bounded ring, text/JSON forms, and DG-0…DG-8 milestones. It covers library developers, module authors, embedders and AI agents, with explicit privacy/performance gates. No runtime diagnostic API is implemented yet |
+| [`DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) | Diagnostics and debugging (cross-cutting design/plan) | — | `██████░░░░░░░░░░░░░░` DG-1…DG-3 shipped | Defines and now ships a stable diagnostic record/id/schema (`wasmjit.diagnostic.v1`), a bounded per-execution-state ring plus an embedder sink, text/JSON forms, and the `env.info`/`warn`/`error`/`panic` log imports. Validator/decode/trap/exception boundaries emit records; the index-rule ids are mapped, the remaining validator rules share `WASM.VALIDATE.RULE`. Continuation/scheduler context (DG-4), runtime-trap locations, CLI flags and the performance/privacy audit remain |
 | [`MULTI_VALUE.md`](docs/proposals/MULTI_VALUE.md) | Multi-value | 2.0 | `████████████████████` 100% | Engine complete (block parameters, multi-result calls via a caller-provided result buffer). The harness marshals every path (`assert_return` compares the tuple; bare actions, `assert_trap`, `assert_exception` and `assert_exhaustion` pass a buffer), and embedders get `WASM::callCallableWithResults(callable, buffer, args...)` with the buffer layout documented in `docs/ABI.md` (MV4); the multi-value test exercises it |
 | [`TAILCALLS.md`](docs/proposals/TAILCALLS.md) | Tail calls | 3.0 | `██████████████████░░` 90% | TC-1…TC-4 done: direct, indirect and `ref` tails run in constant stack; the trampoline is signature-restricted |
 | [`SMALL_PROPOSALS.md`](docs/proposals/SMALL_PROPOSALS.md) | Sign-extension, non-trapping `trunc_sat`, branch hinting | 2.0 / 3.0 | `██████████████████░░` 90% | First two implemented + manually tested; the *trapping* `trunc_f*` and integer `div`/`rem` now genuinely trap (they used to silently produce a value); branch hints are parsed and deliberately non-semantic |
@@ -120,7 +120,7 @@ families instead of skipping them, and the validator (`docs/VALIDATION.md`)
 rejects **all 2,211** curated `assert_invalid` cases plus all 127
 `assert_unlinkable` ones and all 27 `assert_uninstantiable` ones — **2,382 of
 2,382** binary negative commands. The strict run is fully green (the default
-suite is **10,724 assertions / 423 test cases**). All 17 curated
+suite is **10,850 assertions / 432 test cases**). All 17 curated
 `assert_malformed` cases are rejected too, including the strict LEB128 cases;
 the remaining malformed cases are *text-format* (946 commands across all kinds)
 and need a text parser, not a validator. See
@@ -165,6 +165,10 @@ through qmake:
 - the test target links against `libjit`, Catch2 and the project libraries;
 - `libWasmBase` links `libffi` (the flat component-runtime closure path) and
   the header-only `utf8cpp` package for Canonical ABI string transcoding;
+- JSON — the spec-script reader and the diagnostics serializer — uses the
+  header-only `nlohmann_json` package (declared through pkg-config in
+  `WasmBase.pro`/`Test.pro`, included only in the translation units that need
+  it);
 - the executable under `build/<config>/Test/WasmJit` is a development sandbox and
   test harness, not the final embeddable API.
 

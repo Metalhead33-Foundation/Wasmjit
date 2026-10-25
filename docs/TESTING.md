@@ -82,6 +82,7 @@ baked in at compile time through the `WASM_TEST_DIR` macro) and calls into it.
 | `add_core exports add` | `add_core` | calling an exported function directly |
 | `add_core registered exports expose math.add` | `add_core` | `registerExports` + resolving via a `RegistryImportResolver` |
 | `native_debug calls host import` | `native_debug` | a wasm module calling back into a host C function |
+| `diagnostics: env log imports emit structured records` … | `diagnostics_log` | the four `env.info`/`warn`/`error`/`panic` imports emit bounded structured records with stable ids, severities, text and JSON v1; `panic` traps after a `Fatal` record; a bad or oversized guest string degrades safely (`DIAGNOSTICS.md` DG-1…DG-3) |
 | `loop_test calculates sum and factorial` | `loop_test` | loops, branches, recursion |
 | `memory_buffer stores and loads data correctly` | `memory_buffer` | linear memory load / store / fill |
 | `sign-extension operators sign-extend the low bits` | `sign_extension` | all five sign-extension ops at their 7/8/15/16/31/32-bit boundaries |
@@ -295,7 +296,7 @@ selection is explicit — which is why `./WasmJit '[spec]'` runs everything.
 | `./WasmJit '[spec]'` | all 257 spec scripts (~2 min in the debug build; 251 pass, 6 known failures) |
 | `./WasmJit 'spec: address'` | just that script |
 | `./WasmJit '*float*'` | scripts whose name matches |
-| `./WasmJit --list-tests` | the default view (423 test cases) |
+| `./WasmJit --list-tests` | the default view (432 test cases) |
 | `./WasmJit --list-tests '[spec]'` | every script, one line each (257) |
 | `./WasmJit -# --list-tags` | all tags, including `[#main]` and `[#SpecSuite]` |
 
@@ -326,7 +327,7 @@ It currently holds 193 of the 257 scripts, and the default run is green:
 
 ```
 $ ./WasmJit
-All tests passed (10724 assertions in 423 test cases)
+All tests passed (10850 assertions in 432 test cases)
 ```
 
 #### Refreshing the list
@@ -554,7 +555,7 @@ tests, and it is green:
 
 ```
 $ ./WasmJit
-All tests passed (10724 assertions in 423 test cases)
+All tests passed (10850 assertions in 432 test cases)
 ```
 
 A full sweep is deliberately loud, because most of the suite is still beyond the
@@ -746,7 +747,7 @@ Measured after SIMD-5:
 
 ```bash
 ./WasmJit 'simd*'      # 24 cases, 6147 assertions, all passing (includes the hidden [.simdbench] case)
-./WasmJit              # 423 cases, 10724 assertions, all passing
+./WasmJit              # 432 cases, 10850 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed

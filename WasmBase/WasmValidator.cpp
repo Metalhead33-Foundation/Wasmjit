@@ -4,6 +4,7 @@
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <limits>
 #include <unordered_set>
+#include <utility>
 
 namespace WASM {
 
@@ -17,19 +18,42 @@ Validator::Validator(const Module& module, ValidationOptions validationOptions)
 	totalTags = module.importTags.size() + module.tags.size();
 }
 
-void Validator::fail(const std::string& message) const
+void Validator::fail(const std::string& message, std::string_view id) const
 {
-	if (currentBody == kNoBody)
-		throw ValidationError(message);
+	std::string text = message;
+	Diagnostic diagnostic;
+	diagnostic.id = id;
+	diagnostic.severity = DiagnosticSeverity::Error;
+	diagnostic.phase = DiagnosticPhase::Validate;
 
-	std::string prefix = "function " + std::to_string(currentBody);
-	// `currentBody` indexes the internal function bodies; the name section is
-	// keyed by the global function index (imports first).
-	const std::size_t globalIndex = currentBody + module.importFunctions.size();
-	if (const std::string* name = module.findName(NameKind::Function, globalIndex))
-		prefix += " ($" + *name + ")";
-	prefix += " at instruction " + std::to_string(instructionOffset) + ": ";
-	throw ValidationError(prefix + message);
+	if (currentBody != kNoBody) {
+		std::string prefix = "function " + std::to_string(currentBody);
+		// `currentBody` indexes the internal function bodies; the name section is
+		// keyed by the global function index (imports first).
+		const std::size_t globalIndex = currentBody + module.importFunctions.size();
+		if (const std::string* name = module.findName(NameKind::Function, globalIndex)) {
+			prefix += " ($" + *name + ")";
+			// Copied into the record so it survives the module (docs/DIAGNOSTICS.md §4.1).
+			diagnostic.location.functionName = *name;
+		}
+		prefix += " at instruction " + std::to_string(instructionOffset) + ": ";
+		diagnostic.location.functionIndex = static_cast<std::uint32_t>(globalIndex);
+		diagnostic.location.instructionOffset =
+				static_cast<std::uint32_t>(instructionOffset);
+		text = prefix + message;
+	}
+
+	// The record's prose stays unprefixed: the location is structured, so the
+	// text/JSON forms do not repeat it. The thrown exception keeps the prefix
+	// for backward-compatible messages (VALIDATION.md, ENS-3).
+	diagnostic.message = message;
+	diagnostic.remediation = "docs/VALIDATION.md";
+	try {
+		emitDiagnostic(std::move(diagnostic));
+	} catch (...) {
+		// A diagnostic never replaces the validation failure.
+	}
+	throw ValidationError(text);
 }
 
 std::string Validator::describeLocal(uint32_t idx) const
@@ -43,9 +67,11 @@ std::string Validator::describeLocal(uint32_t idx) const
 FuncType Validator::funcTypeAt(uint32_t typeIdx) const
 {
 	if (typeIdx >= module.typeCount())
-		fail("unknown type " + module.describeIndex(NameKind::Type, typeIdx));
+		fail("unknown type " + module.describeIndex(NameKind::Type, typeIdx),
+				DiagnosticId::kValidateUnknownType);
 	if (module.typeView(typeIdx).kind() != CanonTypeKind::Func)
-		fail("type " + module.describeIndex(NameKind::Type, typeIdx) + " is not a function type");
+		fail("type " + module.describeIndex(NameKind::Type, typeIdx) + " is not a function type",
+				DiagnosticId::kValidateTypeNotFunction);
 	return module.funcTypeAt(typeIdx);
 }
 
@@ -53,7 +79,8 @@ uint32_t Validator::continuationFuncIndex(TypeIdx contTypeIdx, const char* who) 
 {
 	if (contTypeIdx >= module.typeCount())
 		fail(std::string(who) + ": unknown type "
-				+ module.describeIndex(NameKind::Type, contTypeIdx));
+				+ module.describeIndex(NameKind::Type, contTypeIdx),
+				DiagnosticId::kValidateUnknownType);
 	const CoreTypeView view = module.typeView(contTypeIdx);
 	if (view.kind() != CanonTypeKind::Cont)
 		fail(std::string(who) + ": type "
@@ -86,49 +113,56 @@ void Validator::requireMvpContinuationSignature(const FuncType& type, const char
 void Validator::requireFunctionIndex(uint32_t idx) const
 {
 	if (idx >= totalFunctions)
-		fail("unknown function " + module.describeIndex(NameKind::Function, idx));
+		fail("unknown function " + module.describeIndex(NameKind::Function, idx),
+				DiagnosticId::kValidateUnknownFunction);
 }
 
 void Validator::requireTableIndex(uint32_t idx) const
 {
 	if (idx >= totalTables)
-		fail("unknown table " + module.describeIndex(NameKind::Table, idx));
+		fail("unknown table " + module.describeIndex(NameKind::Table, idx),
+				DiagnosticId::kValidateUnknownTable);
 }
 
 void Validator::requireMemoryIndex(uint32_t idx) const
 {
 	if (idx >= totalMemories)
-		fail("unknown memory " + module.describeIndex(NameKind::Memory, idx));
+		fail("unknown memory " + module.describeIndex(NameKind::Memory, idx),
+				DiagnosticId::kValidateUnknownMemory);
 }
 
 void Validator::requireGlobalIndex(uint32_t idx) const
 {
 	if (idx >= totalGlobals)
-		fail("unknown global " + module.describeIndex(NameKind::Global, idx));
+		fail("unknown global " + module.describeIndex(NameKind::Global, idx),
+				DiagnosticId::kValidateUnknownGlobal);
 }
 
 void Validator::requireTagIndex(uint32_t idx) const
 {
 	if (idx >= totalTags)
-		fail("unknown tag " + module.describeIndex(NameKind::Tag, idx));
+		fail("unknown tag " + module.describeIndex(NameKind::Tag, idx),
+				DiagnosticId::kValidateUnknownTag);
 }
 
 void Validator::requireLocalIndex(uint32_t idx) const
 {
 	if (idx >= locals.size())
-		fail("unknown local " + describeLocal(idx));
+		fail("unknown local " + describeLocal(idx), DiagnosticId::kValidateUnknownLocal);
 }
 
 void Validator::requireElementIndex(uint32_t idx) const
 {
 	if (idx >= module.elementSegments.size())
-		fail("unknown element segment " + module.describeIndex(NameKind::Element, idx));
+		fail("unknown element segment " + module.describeIndex(NameKind::Element, idx),
+				DiagnosticId::kValidateUnknownElement);
 }
 
 void Validator::requireDataIndex(uint32_t idx) const
 {
 	if (idx >= module.dataSegments.size())
-		fail("unknown data segment " + module.describeIndex(NameKind::Data, idx));
+		fail("unknown data segment " + module.describeIndex(NameKind::Data, idx),
+				DiagnosticId::kValidateUnknownData);
 }
 
 bool Validator::globalIsMutable(uint32_t idx) const
