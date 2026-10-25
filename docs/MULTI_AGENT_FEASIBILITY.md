@@ -28,6 +28,13 @@ than embedded addresses. The expensive part is *not* the code generators; it is
 the GC safepoint, the per-instance bookkeeping and the scheduler, all of which
 are core-side and can be staged.
 
+The direction this study serves is recorded in §2.3: **at most one instance per
+module (multiple instances are ruled out), and many agents on that one instance
+is the accepted multithreading model.** Concurrent *execution* of compiled code
+and a re-entrant invoker are therefore requirements, not questions; concurrent
+*compilation* is rejected as a feature, because it is unsafe and its only consumer
+would be the instance multiplicity the rule forbids.
+
 ## 1. Document map
 
 | Section | Question it answers |
@@ -77,6 +84,119 @@ The study succeeds only if all three of these hold:
 | The seam stays | A backend that satisfies today's [`LAYERING.md`](LAYERING.md) §4 rows needs **no new obligation** to run under several agents. |
 | The stages are independent | Each stage compiles, tests green and ships alone; no stage requires the next one to be honest. |
 | The default stays free | An embedder that does not ask for agents pays no lock, allocation or branch it does not already pay (the `HostBridge` / `ProfileConfig` precedent). |
+
+### 2.3 The design direction (recorded 2026-10-25)
+
+The owner's direction, stated here so it stops being folklore. It is **one rule
+about cardinality** plus **one decision about concurrency**:
+
+> **One instance per module — at most.** Multiple instances of the same `Module`
+> are **ruled out by design**, not merely unsupported. **Many agents may execute
+> that one instance's compiled code.** That is the accepted multithreading model.
+
+This is deliberately not "WasmJit is single-threaded". It is: *the instance is
+the unit of state, the agent is the unit of execution, and the population of
+instances per module is exactly zero or one.*
+
+### 2.3.1 What the cardinality rule buys
+
+| Consequence | Why it matters |
+|---|---|
+| **`ModuleInstance` becomes a per-`Module` singleton** | `Runtime::instantiate(module)` can be idempotent: it returns the existing instance or creates the only one. There is no "which instance?" question in the API, in the type registry, or in a `Callable`. |
+| **A baked `VMContext*` stays unambiguous** | `ABI.md` burns `Callable::context` into generated code; with one instance per module there is exactly one context to burn. |
+| **"Make another instance" stops being a workaround** | [`THREADSAFETY.md`](THREADSAFETY.md) §9 already refuses it; the rule makes it a design fact instead of advice. |
+| **It removes the consumer of concurrent compilation** | §2.3.3: the only reason to compile one module twice in parallel is to build two instances of it. |
+| **Isolation is achieved by loading a module twice, not instantiating twice** | Two games, two tenants, two variants: two `Module` loads (two decoded modules, two type blocks in the `Store`) — which is what a runtime boundary already gives you. |
+
+### 2.3.2 The accepted scenarios
+
+Everything in this table is **acceptable** design — the question is only whether
+the engine supports it *today* and what an embedder must supply.
+
+| # | Scenario | What it actually uses | Status |
+|---|---|---|---|
+| **C1** | Two host threads execute code from **two different instances** | Two `ModuleInstance`s, two `VMContext`s, one process `Store` | **Supported today** (host-thread test; `THREADSAFETY.md` §8) |
+| **C2** | **Many agents on one instance** — two host threads both call into the same `ModuleInstance` | N `Agent`s, one instance, shared memories/tables/globals | **Accepted direction**, not supported yet (§4–§7) |
+| **C2a** | *GPU-style*: launch N workers and pass a thread index | Ordinary Wasm arguments; an import that spawns/parks agents | Same as C2 — the "thread id" is just an `i32` parameter |
+| **C2b** | *Classic style*: thread A runs export `f`, thread B runs export `g` | Two `Callable` calls on one instance | Same as C2 |
+| **C2c** | *One compiled function called from several host threads* | `callCallable` on the same `Callable`, different arguments | **Yes, multi-agent by the engine's definition** — one agent per host thread; the minimal C2 case |
+| **C3** | *Async/await*: an event loop, `await`, promise-style suspension | Continuations (stack switching) + `HostContinuationScheduler` | **Supported today**; concurrency without parallelism, and composable with C2 |
+| **C4** | *Intra-Wasm threading*: `pthread`-like or WASI-threads primitives inside the guest | Agents created by an import, atomics, a waiter table, thread-local globals, per-agent stacks | **Accepted direction**; the WASI/guest ABI is not ours to invent (§2.3.4) |
+
+The answer to the standing question — *"a Wasm function compiled to native code,
+executed from multiple host threads: does that count as multi-agent /
+multithreading?"* — is **yes**. `Agent` is the engine's name for an execution
+context, and a host thread always carries one. Calling the same compiled function
+from two threads is therefore the *same* problem as C2b, not a separate, easier
+case: what makes it safe is the instance hardening in §2.3.5, not the fact that
+the code path is shared (compiled code is re-entrant by construction, §4.2).
+
+### 2.3.3 What is ruled out
+
+| # | Ruled out | Rationale |
+|---|---|---|
+| **R1** | **Multiple instances of one module** (per-thread instances, "one instance per CPU", instance pools as an isolation model) | The design rule. It keeps `VMContext` identity, type identity and the `Callable` contract unambiguous, and it refuses the workaround that would otherwise hide every missing instance-level guarantee. Component semantics are the one sanctioned exception (§2.3.6). |
+| **R2** | **Concurrent compilation** as a feature (two threads compiling at the same time) | Two reasons. **(a) Unsafe**: a backend's build region is a lock, not a parallel region — LibJIT's `jit_context_build_start`/`end` serialises the context, and the AsmJit allocator question is still open ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §7). **(b) It has no consumer**: the only use for compiling one module twice in parallel is building two instances of it, which R1 forbids. Compilation is therefore **serialized by the frontend**: one compilation at a time, on whatever thread the embedder chose. |
+| **R2′** | Concurrent *parsing/validation* as a guarantee | Not a feature either; the documented state is that it is not a formally snapshotted read path (`THREADSAFETY.md` §6). Loading happens on the loading thread. |
+
+### 2.3.4 Accepted *capabilities* (no longer open questions)
+
+These are not things to evaluate; they are requirements any backend and any
+embedder path must satisfy:
+
+| Capability | Status |
+|---|---|
+| **Concurrent execution of compiled code** | **Accepted.** Two agents may run generated code at the same time. Code is native code over `VMContext*`; nothing in the codegen layer is per-thread. |
+| **Re-entrant invoker** | **Accepted and required.** `callCallable`, the harness invoker and a backend's `ContinuationInvokeFn` must keep all per-call state on the stack. A backend that caches "the current call" in its session is non-conforming (§4.3, §5). |
+| **A guest-visible thread API** (`thread.spawn`, `pthread_create`, WASI threads) | **Accepted as direction, but it is an *import*.** The engine exposes agents; the embedder (or a WASI adapter) implements spawn/join by creating an agent that enters an export. `WasmBase` grows no scheduler and no guest runtime. |
+| **An event loop *inside* the guest** | **Accepted.** A guest may implement its own loop; inside Wasm it is a loop, and its `await`-like points are whatever the guest builds. If it wants real suspension it uses continuations (C3), which the engine already provides. |
+
+This is where the engine is deliberately **WASI-shaped**: primitives and
+contracts, not the policy. The Component Model is what keeps the boundary honest
+— a component is a typed, linkable unit, so "threads inside a component" is a
+component-level question rather than a core-engine one
+([`proposals/COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md),
+[`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) `JS7`).
+
+### 2.3.5 The instance hardening this implies
+
+C2 is acceptable **only if** the shared instance is safe. The list below is what
+"hardened" means; §4.4 assigns each item a class, §7 sequences it, and
+[`SAFETY.md`](SAFETY.md) §3.3 records the security half.
+
+| Shared thing | Required before C2 is claimed |
+|---|---|
+| GC reclamation queue (`gcPending`, `gcCycleRoots`) | Per agent, or guarded by a per-instance safepoint lock |
+| Reference count (`std::atomic_ref<uint32_t>`) | Already atomic — no change |
+| Reference-slot stores | Must run the GC retain/release barrier (today a documented `SET2` gap) |
+| Segment drop flags | Atomic |
+| Safepoint (`gcCollect()`) | A documented quiescence rule for agents |
+| Globals / tables / shared memory | Guest-synchronized (atomics); documented, not engine-enforced |
+| `hostData` | Host-synchronized (embedder responsibility, `THREADSAFETY.md` §9) |
+| Trap / exception / tail-call / defer / diagnostics | Already per agent (`TRAP-6`) |
+| Invoker scratch | Per call (already) + required of every backend |
+| Waiter table | Needed for C4 and for blocking `wait` under C2 |
+| Compilation | Serialized (R2) |
+
+### 2.3.6 The one sanctioned exception: the component runtime
+
+There is exactly one place in the tree that creates more than one instance of one
+`Module`, and it is not an embedder mechanism: a **component** may declare two
+core instances of the same embedded core module
+(`ComponentRuntime::processCoreInstance` calls `instantiator_.instantiate(...)`
+once per declared `core instance`). Those are genuinely distinct instances —
+separate memories, globals and tables — which is what instantiation *means* in
+the component model.
+
+So the rule is stated precisely:
+
+> **An embedder (and a runtime) creates at most one instance per `Module`. The
+> component runtime creates one instance per declared core instance, because that
+> is the component model's own semantics — and it is therefore also the owner
+> that must keep those instances serialized.**
+
+This is not a loophole: it changes no embedder-facing capability, and it is
+recorded here so that nobody "discovers" it later and concludes the rule is soft.
 
 ## 3. Today's model: one agent per host thread, state already outside the instance
 
@@ -230,36 +350,39 @@ project already made.
 | **T-b: several agents on the *same* instance** | One instance, several `ExecutionState`s, shared globals/tables/memory/GC heap | Also none — the backend was never in this picture |
 
 Both need the same backend properties, so the study asks one set of questions per
-engine:
+engine. Note that **Q1 is no longer "can it?"**: concurrent compilation is
+rejected as a feature (§2.3.3 R2), so the question is only *which object must be
+per-thread* and *whether the engine documents the serialization*.
 
 | # | Property | Why it matters |
 |---|---|---|
-| Q1 | Can two threads **compile** concurrently? | Module loading at runtime (a game streaming content) is the realistic case. |
-| Q2 | Can separately compiled code **execute** concurrently? | T-a and T-b both need it. |
+| Q1 | Which object must be **per compilation** (and is compilation serialized)? | Compilation is serialized by rule (R2); the backend must not rely on being called concurrently, and must not require a shared build object. |
+| Q2 | Can separately compiled code **execute** concurrently? | C1 and C2 both need it — **accepted, required**. |
 | Q3 | Does the engine hold **mutable global state** a second thread would race on? | The only class-B risk a backend can introduce. |
-| Q4 | Is the **invoker** re-entrant (per-call scratch)? | Needed for concurrent `callCallable` / continuation resume. |
+| Q4 | Is the **invoker** re-entrant (per-call scratch)? | **Required** (§2.3.4): several agents may call through it at once. |
 
 ### 5.1 GNU LibJIT (the only executable backend)
 
 | Question | Finding | Evidence |
 |---|---|---|
-| Q1 | **Yes, with one context per compilation.** Compilation is bracketed by `jit_context_build_start()` / `jit_context_build_end()`, which the code documents as *a lock on that context*; a wedged context blocks every later build. Two threads must therefore use two `LibJIT::Context` objects — which is what the harness already does per `TestBackend::Session`. | `LibJit/LibjitModuleCompiler.cpp:67–82`; `Test/TestBackend.cpp` (`LibJitSession` owns one `LibJIT::Context`) |
+| Q1 | **Serialized, and the context is the unit.** Compilation is bracketed by `jit_context_build_start()` / `jit_context_build_end()`, which the code documents as *a lock on that context*; a wedged context blocks every later build. The frontend never compiles two modules at once (R2), and the harness already uses one `LibJIT::Context` per session — so the build lock is never contended. | `LibJit/LibjitModuleCompiler.cpp:67–82`; `Test/TestBackend.cpp` (`LibJitSession` owns one `LibJIT::Context`) |
 | Q2 | **Yes.** Generated functions are ordinary native code taking `VMContext*`; they embed no per-compilation mutable state. The only per-call machinery is the host-side invoker. | `ABI.md` "Overview"; `WasmValue.hpp` |
 | Q3 | **The type translator is per-context** (`LibJIT::Context` owns it and its `TypeId`-keyed cache), so there is no shared translator. LibJIT's built-in types are immutable. | `LibJitContext.hpp`; `LibJitTypeTranslation.cpp` |
-| Q4 | **Yes for the harness invoker**: its scratch is a local `std::vector` per call, and the `v128` workaround builds arguments on the stack. `jit_apply` is called with a per-call argument array. Verify with a two-thread invoke test at `MF-1`. | `Test/TestBackend.cpp` `LibJitSession::invoke` |
+| Q4 | **Yes for the harness invoker**: its scratch is a local `std::vector` per call, and the `v128` workaround builds arguments on the stack. `jit_apply` is called with a per-call argument array. `MF-1` turns this into a test (concurrent *invoke*, not concurrent compile). | `Test/TestBackend.cpp` `LibJitSession::invoke` |
 
 Residual LibJIT-specific tension: the installed build has quirks already
 documented (`jit_insn_store_relative` on aggregates; the `jit_apply` path for a
 third stack-passed aggregate, which is why the harness has a `v128` path). Those
 are *correctness* quirks, not concurrency ones, but a second agent makes any
-"per-session hidden state" more visible, so `MF-1` should include a two-thread
-compile+invoke test rather than assume.
+"per-session hidden state" more visible, so `MF-1` should exercise concurrent
+**invocation** and a deliberately interleaved two-agent call rather than assume
+the invoker is re-entrant.
 
 ### 5.2 SLJIT
 
 | Question | Finding | Evidence |
 |---|---|---|
-| Q1 | **Yes.** Upstream states "The compiler is thread-safe", and the model is one `sljit_compiler` per compilation unit; SLJIT can even be compiled with multithreading disabled for single-threaded applications. | upstream `sljit_src/sljitLir.h` (feature list), read 2026-10-25 |
+| Q1 | **Not relied upon.** Upstream states "The compiler is thread-safe", which is a bonus, not a dependency: one `sljit_compiler` per compilation and compilation is serialized (R2). | upstream `sljit_src/sljitLir.h` (feature list), read 2026-10-25 |
 | Q2 | **Yes.** SLJIT emits into a caller-owned buffer; the generated code has no runtime dependency on the compiler object once emitted. The backend owns the W^X handoff (allocate → emit → `mprotect` RX). | same header; `SIMD_BACKENDS.md` §3 |
 | Q3 | **None documented.** Registers and stack are handled manually per `sljit_emit_enter`; the local area is fixed at entry, so per-call scratch must be a *frame* slot, not a compiler field. | `STACK_SWITCHING.md` §10.3 |
 | Q4 | **Our obligation**, not SLJIT's: the invoker must not cache "the current call" in the session. | design rule |
@@ -268,21 +391,23 @@ compile+invoke test rather than assume.
 
 | Question | Finding | Evidence |
 |---|---|---|
-| Q1 | **Yes, with per-thread objects.** `CodeHolder` + a `BaseEmitter` are per-compilation objects; `Function`/`FuncFrame`/PEI are per-emit. | upstream `asmjit` core docs (read 2026-10-25); `STACK_SWITCHING.md` §10.3 |
+| Q1 | **Not relied upon.** `CodeHolder` + a `BaseEmitter` per compilation, `Function`/`FuncFrame`/PEI per emit, and compilation is serialized (R2). The allocator question below therefore only asks whether one allocator can serve several *sequential* compilations. | upstream `asmjit` core docs (read 2026-10-25); `STACK_SWITCHING.md` §10.3 |
 | Q2 | **Yes.** Emitted code is plain native code in executable memory; AsmJit keeps no thread-local execution state. | same |
-| Q3 | **One open item: executable-memory ownership.** `JitRuntime`/`JitAllocator` own the code pages; whether `add()` may be called concurrently is *not* stated in the API docs we have read. Treat it as **one allocator per session, or serialized**, and verify at bring-up. | to verify (`MF-1` checklist) |
-| Q4 | Same design rule as SLJIT. | design rule |
+| Q3 | **One open item: executable-memory ownership.** `JitRuntime`/`JitAllocator` own the code pages; whether `add()` may be called concurrently is *not* stated in the API docs we have read. Under R2 that question is moot for compilation; it only matters if two *sessions* share one allocator, so the rule is one allocator per session, and a bring-up check. | to verify (`MF-1` checklist) |
+| Q4 | Same requirement as SLJIT: the invoker keeps its per-call state on the stack. | design rule |
 
 ### 5.4 The matrix
 
 `◑` = feasible with the stated precondition (here: the backend exists).
+`R2` = rejected as a feature by §2.3.3, so it is *not* a capability to assess.
 
 | Capability | LibJIT | SLJIT | AsmJit | Caveat |
 |---|---|---|---|---|
-| Concurrent **compilation** (separate contexts/compilers) | **✅ S** | **◑ S** | **◑ S** | LibJIT: one context per thread. AsmJit: allocator ownership. |
-| Concurrent **execution** of compiled code | **✅ S** | **◑ S** | **◑ S** | Needs the core-side partitioning (§4.4 `MA-2`/`MA-3`), not backend work. |
-| **Re-entrant invoker** | **✅ S** (verify) | **◑ S** | **◑ S** | Keep all per-call state on the stack. |
-| Shared mutable **global state** in the engine | **none found** | **none documented** | **none documented** | The one AsmJit question is the code allocator. |
+| **Compilation is serialized** (never two at once) | **✅ by rule** | **✅ by rule** | **✅ by rule** | The frontend serializes; the backend's build lock/allocator is never contended. |
+| Concurrent **compilation** | **✗ R2** | **✗ R2** | **✗ R2** | Rejected: unsafe and without a consumer (R1). |
+| Concurrent **execution** of compiled code | **✅ S** | **◑ S** | **◑ S** | Required; needs the core-side partitioning (§4.4 `MA-2`/`MA-3`), not backend work. |
+| **Re-entrant invoker** | **✅ S** (verify) | **◑ S** | **◑ S** | Required; keep all per-call state on the stack. |
+| Shared mutable **global state** in the engine | **none found** | **none documented** | **none documented** | The one AsmJit question is the code allocator, and only across sessions. |
 | **Helper layer** (SIMD, atomics) used concurrently | **✅ already** | **✅** | **✅** | Pure `extern "C"` functions over caller buffers. |
 | **Continuation provider** used from several threads | **✅ core-owned** | **✅** | **✅** | Each suspended stack is an execution context; the backend only supplies the invoker. |
 
@@ -306,8 +431,8 @@ they are identical for all three engines:
 | Question | Answer |
 |---|---|
 | Does any engine prohibit multithreaded *use* of compiled code? | **No.** All three emit native code with no execution-time engine state. |
-| Does any engine prohibit concurrent *compilation*? | **No.** LibJIT needs one context per thread; SLJIT is documented thread-safe per compiler; AsmJit needs one emitter/code-holder per compilation and an allocator-ownership decision. |
-| Is the per-backend work "re-architect" or "verify"? | **Verify.** Three one-line rules, one test per backend. |
+| Does any engine require concurrent compilation to be available? | **No, and none is asked for it** (R2). LibJIT's build region is a lock, SLJIT's compiler is documented thread-safe, and AsmJit needs one emitter/code-holder per compilation — all three are compatible with a serialized frontend. |
+| Is the per-backend work "re-architect" or "verify"? | **Verify.** Three one-line rules (serialize compilation, re-entrant invoker, one allocator per session), one test per backend. |
 | Does it stay class B? | **Yes** — and only because the obligations already exist (`LAYERING.md` §4 rows 1, 4, 5). |
 
 ## 6. Study 3 — can multi-agent execution be opt-in?
@@ -330,11 +455,12 @@ why the JS-integration comparison the question invites is the right one.
 
 | Piece | Contents | Class |
 |---|---|---|
-| **A concurrency mode** in the runtime/instantiation config | `enum class ConcurrencyModel { Single, SerialAgents, ConcurrentAgents }`, default `Single`, validated at `instantiate()` the way `ProfileConfig` is | A |
+| **A concurrency mode** in the runtime/instantiation config | `enum class ConcurrencyModel { Single, Agents }`, default `Single` (one agent inside a call at a time), validated at `instantiate()` the way `ProfileConfig` is | A |
 | **A capability query** | `supportsConcurrency(model)`; a backend or the runtime may refuse a model at the boundary, loudly | A |
 | **A host scheduler hook** | `HostAgentScheduler`: an aggregate of function pointers (`spawn`, `park`, `wake`, `join`, `step`) plus `userData`, borrowed and never owned | A |
 | **An agent handle** | `Agent&` / `AgentId` exposed to the embedder; one per OS thread by default | A |
-| **Per-instance entry discipline** | The core guarantees "one agent inside a call at a time" for `Single`/`SerialAgents`, and only `ConcurrentAgents` relaxes it (with the §4.4 `MA-2`/`MA-3` work) | B |
+| **Instance cardinality** | `Runtime::instantiate` enforces R1: one instance per `Module`, returned idempotently; a second instantiation is refused | A |
+| **Per-instance entry discipline** | `Single` keeps "one agent inside a call at a time" (the `MF-2` guard); `Agents` relaxes it with the §4.4 `MA-2`/`MA-3` work | B |
 
 The core still owns **no scheduler**. The embedder supplies it, exactly as it
 supplies the JS event loop in `proposals/JS_INTEGRATION.md` — the engine gives
@@ -346,7 +472,7 @@ the seam, the game gives the policy.
    extra allocation, no behaviour change. The default must not read the config
    beyond a null check.
 2. **Unsupported models fail at the boundary**, not mid-call. A module loaded
-   with `ConcurrentAgents` on an engine that cannot honour it is rejected at
+   with `Agents` on an engine that cannot honour it is rejected at
    `instantiate()` (the `ProfileConfig` precedent), before any code is generated.
 3. **The engine never invents a thread.** Spawning a host thread, growing a
    thread pool or installing a signal handler is the embedder's act.
@@ -364,7 +490,7 @@ the seam, the game gives the policy.
 | Blocking `wait` with no other runnable agent | Today `wait` returns "timeout" without sleeping — legal but degenerate | The waiter table (`MA-4`) plus the scheduler hook; keep the degenerate result legal for `Single` |
 | A trapped agent | Trap state is already per agent | Nothing to do — this is the `TRAP-6` payoff |
 | Cancelling/joining an agent mid-call | No current concept | Scheduler-level; the core exposes "is this agent in a call" and a `park` point at the boundary |
-| Deterministic replay | Single-agent determinism is a `PROFILES.md` claim | `ConcurrentAgents` is *outside* the deterministic profile; document it |
+| Deterministic replay | Single-agent determinism is a `PROFILES.md` claim | `Agents` is *outside* the deterministic profile; document it |
 | Unloading a module whose code an agent is inside | The `ABI.md` lifetime rule ("instances never move; callers own lifetimes") | Same rule, now per agent: join before teardown |
 
 ### 6.5 Verdict for question 3
@@ -384,8 +510,8 @@ invalidating the ones before it.
 | Milestone | Work | Class | Closes | Done when |
 |---|---|---|---|---|
 | **MF-0 — This study** ✅ | The demotion analysis, the per-backend matrix, the opt-in shape. No code. | — | — | This note is linked from `API_ABI_STABILITY.md` and `README.md`. |
-| **MF-1 — Verify, do not assume** | A two-thread compile + two-thread invoke test per backend; write "one context/emitter/allocator per session" down as a backend rule; record the AsmJit allocator answer. | B | Question 2 | LibJIT's test runs green in the default suite; SLJIT/AsmJit inherit the test at bring-up. |
-| **MF-2 — Make concurrent entry *fail* instead of corrupt** | An explicit `AgentScope` at every host boundary; a per-instance "in call" guard that refuses or traps a second concurrent entry under `Single`; `callCallable` always acts on the current agent. | A | `MA-1` (first half), `MA-9` (model) | Two host threads calling one instance under `Single` produce a deterministic error, not a data race. |
+| **MF-1 — Verify, do not assume** | A concurrent-***invoke*** test per backend (the same compiled function called from two host threads) and an interleaved two-agent call; write "one context/emitter/allocator per session" and "compilation is serialized" down as backend rules; record the AsmJit allocator answer. | B | Question 2 | LibJIT's test runs green in the default suite; SLJIT/AsmJit inherit the test at bring-up. |
+| **MF-2 — Make concurrent entry *fail* instead of corrupt** | An explicit `AgentScope` at every host boundary; a per-instance "in call" guard that refuses or traps a second concurrent entry under `Single`; `callCallable` always acts on the current agent; `Runtime::instantiate` refuses a second instance of one `Module` (R1). | A | `MA-1` (first half), `MA-9` (model), **R1 enforcement** | Two host threads calling one instance under `Single` produce a deterministic error, not a data race; a second instantiation is refused with a named error. |
 | **MF-3 — Partition the instance's mutable GC bookkeeping** | `gcPending` / `gcCycleRoots` / counters per agent (or guarded by a per-instance safepoint lock); keep the frozen fields frozen. | B | `MA-3` (half) | A stress test with two agents allocating and releasing shows no lost queue entry and no double recycle. |
 | **MF-4 — Safepoint protocol for collection** | Define and document when `gcCollect()` is legal with agents (quiescence or per-agent collect); enforce it. | B | `MA-3` (rest) | A documented rule an embedder can follow, and a test that violates it and gets a clean failure. |
 | **MF-5 — Real `wait`/`notify`** | A guest-address-keyed waiter table behind the existing `wasm_atomic_wait*`/`notify`; keep the single-agent return values legal. | B | `MA-4` | A two-agent message-passing fixture (`ARA5`) passes without relying on the degenerate path. |
@@ -406,7 +532,7 @@ production-readiness improvement on its own.
 | 2 | **`ucontext` + threads.** Provider A migrates a suspended stack between host threads *serially*; concurrent resume of the same continuation is undefined. | A careless scheduler would break it. | Keep the serial rule; the scheduler documents it. |
 | 3 | **ASan/TSan fiber hooks.** Provider A already calls the sanitizer fiber hooks; a second agent multiplies fake-stack bookkeeping. | Sanitizer builds are how races are found. | `MF-1`/`MF-7` add a TSan configuration. |
 | 4 | **`currentExecutionState()` is thread-local.** Two agents on one host thread need explicit `AgentScope` nesting; a library that forgets gets the wrong trap slot. | Silently wrong agent. | `MF-2` (boundary scoping) + a debug assertion. |
-| 5 | **Determinism.** `PROFILES.md` claims a deterministic profile; concurrency breaks it. | A false claim is worse than a missing one (PRD2). | `ConcurrentAgents` is outside the deterministic profile. |
+| 5 | **Determinism.** `PROFILES.md` claims a deterministic profile; concurrency breaks it. | A false claim is worse than a missing one (PRD2). | `Agents` is outside the deterministic profile. |
 | 6 | **Waiter-table encoding.** `waitqueue` (`0x68`) collides with `cont`. | Guest-visible type, upstream draft. | Class C until upstream assigns one; `MF-5` can ship the runtime table without the type. |
 | 7 | **Cost of `refMatchesHeapType` (O(#functions))** and the ad-hoc `Value::kind` tagging (`GC H3`/`H7`) | Perf and latent correctness under load. | Existing risks; unchanged by agents, more visible with them. |
 | 8 | **Unload/teardown with an agent in flight.** | Dangling `Callable`/`VMContext` — the existing `ABI.md` lifetime rule. | `MF-6` refuses teardown while an agent is inside a call. |
@@ -414,13 +540,19 @@ production-readiness improvement on its own.
 
 ## 9. What this does not change
 
-- **The current milestone stays single-agent.** `API_ABI_STABILITY.md` §5.3 pins
-  it; nothing here reopens it. G1's QVM-successor framing explicitly wants one
-  agent at a time.
-- **`TD9`/`TH-5` stay the shipping decision.** This note makes the decision
-  *reversible at a known price*, which is what a feasibility study is for.
-- **No code, no header, no build change.** The only artefact is this document.
-- **No new backend obligation.** Every stage is core-side or embedder-side.
+- **The current milestone's gates stay as they are.** `API_ABI_STABILITY.md`
+  G1–G4 describe a QVM-successor for a *single-agent* embedding; nothing here
+  reopens them, and no gate waits on `MF-*`. What the design direction changes is
+  the **status of the family**: multi-agent is no longer "deferred indefinitely",
+  it is "accepted, opt-in, not built".
+- **`TD9`/`TH-5` remain the shipping decision.** Until the opt-in surface (`MF-6`)
+  and the hardening (`MF-3`…`MF-5`) land, the engine still runs one agent at a
+  time and `THREADSAFETY.md` §9 still tells an embedder to serialize. The
+  direction says where the road goes; it does not say the bridge is open.
+- **No code, no header, no build change.** The only artefacts are documents.
+- **No new backend obligation.** Every stage is core-side or embedder-side; the
+  plugin rules gain two clauses (serialized compilation, re-entrant invoke) and
+  nothing else.
 
 ## 10. Test survey
 
@@ -449,8 +581,8 @@ says otherwise):
   mechanism × backend matrix this note's effort scale and shape follow.
 - [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §12 — the `TRAP-6` per-agent state that
   makes trap isolation free.
-- [`SAFETY.md`](SAFETY.md) §3.1 (`S1`, `S8`) — no step budget, serial
-  continuation use.
+- [`SAFETY.md`](SAFETY.md) §3.1 (`S1`, `S8`) and §3.3 (the multi-agent threat-model
+  rows) — no step budget, serial continuation use, and what N agents sharpen.
 - [`ABI.md`](ABI.md) "Other store-owned entities" — `gcCollect()` as an
   embedder-driven safepoint.
 - [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §4/§5.3 — the class vocabulary

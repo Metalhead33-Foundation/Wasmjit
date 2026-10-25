@@ -80,7 +80,7 @@ onto WasmJit:
 | JS-engine role | WasmJit counterpart today | Fit |
 |---|---|---|
 | `JSRuntime`: heap, process-wide engine state, loaded code | `Store` (types, GC heap, strings, memories, tables, tags) **plus** the loaded `Module` objects **plus** the backend session | **Split across three objects that nobody owns** — the role exists, the object does not |
-| `JSContext` / realm: isolated globals and scope | `ModuleInstance` (+ its `VMContext` POD): memory/table/global index spaces, element/data segments, exports, `hostData` | **Good fit.** One instance *is* one isolated scope; two instances of one module are two realms. |
+| `JSContext` / realm: isolated globals and scope | `ModuleInstance` (+ its `VMContext` POD): memory/table/global index spaces, element/data segments, exports, `hostData` | **Good fit, with one extra rule:** one instance per module — so a module has exactly one realm, and a second realm means a second `Module` ([`THREADSAFETY.md`](THREADSAFETY.md) §3.1) |
 | Per-thread execution state | `Agent` / `ExecutionState` | **Better than the analogy.** Trap, exception, tail-call, defer, depth, stack limit and diagnostics are per agent. |
 | Global object / prototype chain | — | **No analogue, deliberately.** A Wasm module has no global object; its "globals" are indices in an instance, and the embedder boundary is imports/exports ([`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md)). |
 | Compile-and-run scripts, eval, realms-from-same-code | Loading a validated binary and instantiating it | **Partial.** There is no eval and no text format (`ANN-0`); instantiating one module twice is closer to a second realm than anything JS has. |
@@ -112,6 +112,7 @@ as arg0 — which is *not* the realm, it is the realm's address. So:
 | Member | Today | Why the runtime is the right owner |
 |---|---|---|
 | `Store&` (types, GC heap, strings, memories, tables, tags, exceptions) | `Store::global()` — a process-wide singleton | One runtime = one heap, one type namespace, one allocation budget |
+| **The instance registry** (one `ModuleInstance` per `Module`, at most) | nowhere — the caller holds it | The runtime is the natural place to *enforce* the cardinality rule ([`THREADSAFETY.md`](THREADSAFETY.md) §3.1): `instantiate()` returns the existing instance or creates the only one, and refuses a second |
 | Loaded `Module`s (`std::shared_ptr<const Module>`) | owned ad hoc by the embedder/harness | An instance refers to its module for its whole life; the runtime can keep the module alive and cache by content hash |
 | Backend session (`ModuleInstantiator&` / plugin handle) | constructed by the harness per test | Compilation belongs to the engine instance, not to a call site |
 | Default `HostBridge`, `DiagnosticSink`, `ProfileConfig`, `ValidationOptions` | passed per call / per instantiation | Policy belongs to the runtime; per-call overrides remain |
@@ -175,6 +176,7 @@ two, it is the difference between isolation and corruption.
 | **Call ergonomics** | `exportedFunction()` + `callCallable` by hand | `callExport<int32_t>(instance, "name", args...)`, which is the same path with the lookup done once |
 | **Capability/version query** | none (P4) | `runtime.version()`, `runtime.capabilities()`, `runtime.backendName()` — also what the plugin loader needs ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md)) |
 | **Lifetime rule** | "do not destroy the instance before its callers" in prose | The runtime owns instances and modules, so the rule becomes structural |
+| **Instance cardinality** | Nothing stops a caller instantiating twice; the rule lives only in prose | `instantiate()` is idempotent (same `Module` → same instance) and a second attempt is refused with a named error ([`THREADSAFETY.md`](THREADSAFETY.md) §3.1) |
 
 ## 5. Salvage review of the earlier sketch
 
@@ -196,7 +198,7 @@ repository) is *influential*, not a template. Element by element:
 | `call(instance, funcIndex, span<Value>) → vector<Value>` | **Adopt as a convenience only** | The typed `callCallable` / `callCallableWithResults` path is the frozen ABI; a `Value`-vector wrapper is sugar on top and must not become the primary calling convention (it would hide the multi-result buffer rule). |
 | `callByName` | **Adopt** | The lookup is a one-liner over `exportedFunction`; embedders should not write it twice. |
 | `compileFunction(instance, funcIndex)` (lazy, per function) | **Reject** | The seam is module-granular (`declareFunctions` + `compileFunctions`); per-function lazy compilation would change the backend contract — a class-E change to satisfy a convenience. |
-| `JitRuntime::createContext()` / `createGCContext()` | **Reject** | There is no context object (the realm is `ModuleInstance`) and no separate GC realm (the heap is a `Store` member). |
+| `JitRuntime::createContext()` / `createGCContext()` | **Reject** | There is no context object (the realm is `ModuleInstance`) and no separate GC realm (the heap is a `Store` member). `createContext()` would also read as "make another realm", which the one-instance-per-module rule forbids ([`THREADSAFETY.md`](THREADSAFETY.md) §3.1). |
 | `createRuntime(JitBackend)` factory | **Adopt the factory, reject the closed enum** | A plugin-loaded backend cannot be added to a frontend enum without recompiling the frontend. Use a name/query (`createRuntime("libjit")`), which is also what a plugin descriptor gives you. |
 | `getName()` / `getVersion()` | **Adopt** | Needed by the embedder *and* by the plugin loader. |
 | `loadModule` / `loadModuleFromFile` | **Adopt, without the `Elv::Io::Device`** | `loadBytes(span)` / `loadFile(path)` are the two entry points an embedder expects. |
@@ -338,7 +340,7 @@ must name whatever §6.2 decides about `Elvavena`/`Euphemy`.
 
 | Milestone | Work | Class | Closes | Done when |
 |---|---|---|---|---|
-| **ES-1 — `WASM::Runtime` skeleton** | Fill `WasmRuntime.hpp`: `create(name)`, `loadFile`/`loadBytes`, `instantiate`, `callExport`, `safepoint`, `version`/`capabilities`, owning a `Store` via option C (§4.3). Delete `WasmContext.hpp`; retire `LibJit::Runtime`. | A | P1, P2, P4, P5, P6 | The five-line example in §6.4 compiles and runs against the real library; the default suite is unchanged. |
+| **ES-1 — `WASM::Runtime` skeleton** | Fill `WasmRuntime.hpp`: `create(name)`, `loadFile`/`loadBytes`, `instantiate` (idempotent — one instance per `Module`, a second attempt refused), `callExport`, `safepoint`, `version`/`capabilities`, owning a `Store` via option C (§4.3). Delete `WasmContext.hpp`; retire `LibJit::Runtime`. | A | P1, P2, P4, P5, P6; R1 enforcement | The five-line example in §6.4 compiles and runs against the real library; the default suite is unchanged. |
 | **ES-2 — Store scoping migration** | Finish §4.3 option B: thread `Store&` through the 12 TUs; update `TYPE_IDENTITY.md` to "runtime-scoped" (or record the deliberate shared-registry exception) and add the cross-runtime `Callable` rejection rule. | A (wide) | Multi-tenancy; §4.4 | `Store::global()` has no remaining callers; two runtimes in one process have independent heaps and reject cross-runtime callables. |
 | **ES-3 — Header tiers and umbrella** | Classify every header into the three tiers; add `WasmJit.hpp`; move `Elv` out of the public *signatures* where §6.2 says it is feasible; add a compile-only test per public header. | A | P3, `AAS2` (partly) | Every public header compiles alone; the umbrella compiles with only the public include path; no public header includes a backend header. |
 | **ES-4 — Visibility and versioning** | `-fvisibility=hidden` + `WASMJIT_API`; version macros/functions; explicit `VERSION`/soname per library; a documented bump rule. | A | P4; ABI hygiene | The exported symbol set is a declared list; `abidiff` runs clean between two builds of the same headers. |
@@ -387,6 +389,8 @@ want `ES-3`'s tier list; `ES-6` is pure documentation and can land first.
   `Runtime::create(name)` is designed to make possible.
 - [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6 — the concurrency
   mode a `RuntimeConfig` would eventually carry.
+- [`THREADSAFETY.md`](THREADSAFETY.md) §3.1–§3.2 — the instance-cardinality rule
+  and the accepted concurrency scenarios the runtime has to enforce.
 - [`TYPE_IDENTITY.md`](TYPE_IDENTITY.md) — the "process-wide" `TypeId` statement
   §4.4 would revise.
 - [`LAYERING.md`](LAYERING.md) §2/§4/§6 — the rule the public headers must keep,

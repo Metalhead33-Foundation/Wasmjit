@@ -100,13 +100,17 @@ completing WebAssembly. In particular:
   keeps every JS engine, Promise and ESM concern on the embedder's side of
   `ImportResolver` / `Callable` / `HostBridge`. Its 0% row means "nothing
   shipped *and nothing should be*", except the generic hooks that already exist.
-- **No multi-agent execution.** [`proposals/THREADS.md`](proposals/THREADS.md)
-  `TD9`/`TH-5` defer real agents indefinitely and not ruled out. A QVM successor
-  is a single-agent, one-instance, embedder-scheduled engine; concurrent entry
-  into one instance is explicitly *not* supported (§9, and
-  [`THREADSAFETY.md`](THREADSAFETY.md) §8). [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md)
-  studies what demoting that class-E family would cost — the answer is "no
-  backend change, staged core work" — and it does **not** reopen this gate.
+- **No multi-agent execution *required*.** [`proposals/THREADS.md`](proposals/THREADS.md)
+  `TD9`/`TH-5` still describe what ships: one agent at a time. Multi-agent
+  execution on that one instance is the **accepted design direction** — opt-in,
+  not built, and not a gate here
+  ([`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §2.3, §6). What the
+  milestone does require is the cardinality rule that makes it tractable: **at
+  most one instance per module; multiple instances are ruled out**, and
+  concurrent compilation is rejected as a feature. A QVM successor is a
+  single-agent, one-instance, embedder-scheduled engine; concurrent entry into
+  one instance is explicitly *not* supported today (§9, and
+  [`THREADSAFETY.md`](THREADSAFETY.md) §3.1/§8).
 - **No second backend has to ship.** G3 asks that work *can safely begin*, not
   that `Asmjit/` or `Sljit/` executes a module.
 - **No packaging/distro requirement.** A stable surface needs headers, a version
@@ -196,15 +200,28 @@ into one mutable instance, a multi-mutator GC with a write barrier on
 reference-slot atomics, a waiter table, thread-local globals and shared tags
 ([`proposals/THREADS.md`](proposals/THREADS.md) §4.3.1, `T9`/`TH-5`;
 [`proposals/SHARED_EVERYTHING_THREADS.md`](proposals/SHARED_EVERYTHING_THREADS.md)
-`SET2`/`SET4`/`SET6`). It is deferred **indefinitely and not ruled out**, by
-decision, and [`THREADSAFETY.md`](THREADSAFETY.md) §8 states the supported model
-is one agent at a time.
+`SET2`/`SET4`/`SET6`). The **design direction accepts it** — many agents on one
+instance is the intended multithreading model — but it is opt-in and not built,
+and [`THREADSAFETY.md`](THREADSAFETY.md) §8 still describes one agent at a time as
+the contract. [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) splits
+the family and finds that no backend change is needed (§4): the class-E part is
+core-side and stages into B/A work.
 
-This note therefore pins the boundary explicitly: **the milestone is declared in
-the single-agent model.** If that decision is ever reversed, it is a *new
-milestone* with its own gates — not a gap closure under this one. Recording it
-here is what keeps the "heavy refactoring" clause honest rather than
-convenient.
+Two things follow for **this** note:
+
+1. **The milestone's gates are unchanged and still describe a single-agent
+   embedding.** Nothing here waits on `MF-*`, and no gate is relaxed because the
+   direction is now accepted.
+2. **The cardinality rule is part of the frozen ground truth**, not a detail:
+   *at most one instance per module; multiple instances are ruled out*, and
+   concurrent compilation is rejected as a feature
+   ([`THREADSAFETY.md`](THREADSAFETY.md) §3.1/§3.2). That rule is what removes the
+   largest class-E *escape hatch* ("just make another instance") and keeps a
+   future multi-agent implementation additive.
+
+If the direction ever turns into "build it", it is a *new milestone* with its own
+gates — not a gap closure under this one. Recording it here is what keeps the
+"heavy refactoring" clause honest rather than convenient.
 
 ### 5.4 The watch list (would become class E if it entered scope)
 
@@ -465,7 +482,7 @@ These deviations are what make the frozen set small enough to keep.
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
 | AASD1 | **Baked `VMContext*` pointers and no cross-module trampolines.** | [`ABI.md`](ABI.md) "Design Philosophy": instances are `std::unique_ptr<ModuleInstance>` and never move; the embedder owns the lifetime rule. | One indirect load fewer per cross-module call, and no trampoline machinery in any backend. |
-| AASD2 | **One agent at a time; one instance per module; the embedder schedules.** | [`THREADSAFETY.md`](THREADSAFETY.md) §8–§9: this is the supported model, and a QVM successor needs exactly it. §5.3 pins it as the milestone's boundary. | No scheduler, no instance lock, no multi-mutator GC — the largest class-E risk stays out by decision. |
+| AASD2 | **One agent at a time *today*; at most one instance per module; the embedder schedules.** Many agents on that instance is the accepted direction, opt-in and not built. | [`THREADSAFETY.md`](THREADSAFETY.md) §3.1/§8–§9: this is the current contract, and a QVM successor needs exactly it; §5.3 pins it as the milestone's boundary. | No scheduler, no instance lock, no multi-mutator GC in this milestone — the largest class-E risk stays out until a deliberate decision reopens it. |
 | AASD3 | **`ModuleInstantiator` is the product seam, and the richer façade lives in the harness for now.** | [`LAYERING.md`](LAYERING.md) §2: the core states the contract; the harness may name the backend. `Test/LibJitBackendTests.cpp` is the one permitted leak and says so. | The core stays four hooks; a backend author gets a working façade before the product API is frozen. AAS8 is the debt this creates. |
 | AASD4 | **SIMD through a pointer-based `extern "C"` helper layer** instead of a `v128` value ABI in the core. | [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) D3: no aggregate-ABI risk; every backend can call the same entry points. | Portability plus a reference implementation; a vector-capable backend can still lower natively (§5.4). |
 | AASD5 | **Provisional encodings** where upstream has none (`stringref` reserved codes, `array.new_array` `0xFB 0x20–0x22`, `i32.itt` `0xFC 0x100`). | Each is recorded in its note with the reason, and each is engine-reserved rather than colliding with a final opcode. | Working features today without guessing at a spec. Guardrail: renumbering is one deliberate change with its tests, announced in the owning note. |

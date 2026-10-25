@@ -209,16 +209,22 @@ read. That makes `BP-1` useful even if `dlopen` never ships.
    call.
 3. **No global mutable state.** One plugin handle per runtime; sessions are per
    compilation context. Anything else makes a runtime non-isolatable.
-4. **No threads, no signal handlers, no `atexit` games.** A code generator does
+4. **Compilation is serialized; execution may be concurrent.** The host never
+   calls `compile` on two threads at once (concurrent compilation is rejected as
+   a feature — `THREADSAFETY.md` §3.2 R2), and the plugin may cache per-compilation
+   state in the session. **Invocation must be re-entrant**: several agents may call
+   through the same session concurrently, so the invoker keeps every per-call
+   value on the stack, never in the session.
+5. **No threads, no signal handlers, no `atexit` games.** A code generator does
    not schedule; a plugin that wants concurrency asks through the host table.
-5. **Never `abort()` or throw.** Report a `wasmjit_status` and let the core decide.
-6. **Declare capabilities, do not guess.** A backend that cannot do components or
+6. **Never `abort()` or throw.** Report a `wasmjit_status` and let the core decide.
+7. **Declare capabilities, do not guess.** A backend that cannot do components or
    continuations says so; `Runtime` refuses the module before codegen, the way
    `ProfileConfig` does.
-7. **Do not unload while code is live.** A `Callable::fnPtr` points into the
+8. **Do not unload while code is live.** A `Callable::fnPtr` points into the
    plugin forever; the loader must refuse `dlclose` (or leak intentionally) while
    any instance from that plugin exists.
-8. **Executable memory is the plugin's**, with a W^X handoff; the core never
+9. **Executable memory is the plugin's**, with a W^X handoff; the core never
    patches code.
 
 ## 7. The hard problems
@@ -298,7 +304,9 @@ works.
 - [`ABI.md`](ABI.md) "Wide value ABI", "Callable" — the C-shaped pieces the plugin
   already exchanges, and the helper entry points it calls.
 - [`SAFETY.md`](SAFETY.md) §2.4 — no exceptions/`abort` on the trap path, which is
-  rule 5.
+  rule 6.
+- [`THREADSAFETY.md`](THREADSAFETY.md) §3.1–§3.2 — the cardinality rule and the
+  serialized-compilation / re-entrant-execution split behind rule 4.
 - [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §5 — the per-backend
   threading rules a plugin inherits.
 - [`SIMD_BACKENDS.md`](SIMD_BACKENDS.md) §3 — what each engine offers, which is

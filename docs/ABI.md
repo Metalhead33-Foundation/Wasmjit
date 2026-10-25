@@ -6,10 +6,14 @@ Every JIT-compiled Wasm function takes a `VMContext*` as its first argument
 (arg0).  Which `VMContext*` gets passed depends on the call kind and on the
 value of `Callable::context`.
 
-> **Runtime thread-safety target:** one `ModuleInstance` per `Module`, with one
-> `VMContext` per instance. This ABI description covers the calling and context
-> shapes, not a licence to use per-thread instances as a concurrency model.
-> The guest/host responsibility split is in [`THREADSAFETY.md`](THREADSAFETY.md).
+> **Runtime model:** **at most one `ModuleInstance` per `Module`**, with one
+> `VMContext` per instance. Multiple instances of one module are ruled out by
+> design; isolation comes from loading a module twice. Many *agents* (execution
+> contexts) may run that one instance's compiled code — that is the accepted
+> multithreading direction, opt-in and not built yet. This ABI description covers
+> the calling and context shapes, not a licence to use per-thread instances as a
+> concurrency model. The guest/host responsibility split is in
+> [`THREADSAFETY.md`](THREADSAFETY.md); the scenario table is §3.1–§3.2 there.
 
 ## Design Philosophy
 

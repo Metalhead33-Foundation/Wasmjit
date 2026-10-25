@@ -113,7 +113,6 @@ form, instruction set and component builtins are not a stable target.
 | SET5 | **No thread lifecycle/component builtins.** No spawn/join or component integration. | `WasmComponentModel.hpp`; `COMPONENT_MODEL.md`. | High |
 | SET6 | **Runtime is not multi-mutator.** Host-thread-safe, not agent-safe: one instance cannot be entered concurrently and the GC heap has one mutator. Trap/exception/tail-call state is per agent (`Agent`/`ExecutionState`, TRAP-6 done); the stack-switching A/B continuations are execution contexts, not agents. What remains is the multi-mutator execution model, deferred with TH-5. | `WasmStore.hpp`; `WasmGcHeap.*`; `WasmAgent.hpp`; `WasmContinuation.hpp`. | High (deferred with TH-5) |
 
-
 ## 6. Where we can and should play fast and loose
 
 | # | Deviation | Why it is safe | What it buys |
@@ -140,7 +139,7 @@ has a usable stopping point.
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **SET-1 — Shared annotations** | ◑ Table/global/element/data flags, `sharecomptype`, shared heap refs and sharedness-aware matching/validation are in. Full shared-to-shared restriction checking and shared tags remain. | SET1 | Shared table/global/GC type decodes; shared/unshared refs do not subtype. Still open: every referenced-item restriction. |
-| **SET-2 — Multi-agent substrate** | ◑ Host-side: Store/type-intern/GC/string locks and per-agent trap/exception/tail-call state (TRAP-6 done). Missing: multi-mutator GC and a public agent API. The stack-switching A/B continuations are execution contexts, not agents, and do not close this row. | SET6 | Host threads do not corrupt the Store; two wasm agents still wait for TH-5. |
+| **SET-2 — Multi-agent substrate** | ◑ Host-side: Store/type-intern/GC/string locks and per-agent trap/exception/tail-call state (TRAP-6 done). Missing: multi-mutator GC and a public agent API. The stack-switching A/B continuations are execution contexts, not agents, and do not close this row. **Direction (2026-10-25):** many agents on the *one* module instance is the accepted target; multiple instances are ruled out, and concurrent compilation is rejected — see [`../MULTI_AGENT_FEASIBILITY.md`](../MULTI_AGENT_FEASIBILITY.md) §2.3 and [`../THREADSAFETY.md`](../THREADSAFETY.md) §3.1–§3.2. | SET6 | Host threads do not corrupt the Store; two wasm agents still wait for TH-5. |
 | **SET-3 — Shared GC atomics** | ✅ 35 opcodes `0x4F–0x71` plus `ref.i31_shared`, with ordering and natural-alignment checks, all lowered through `wasm_atomic_*`. | SET2 | Done for the single-agent model: global/table/struct/array atomic get/set/RMW/cmpxchg execute. |
 | **SET-4 — TLS and waitqueues** | Add `thread_local` globals and the `waitqueue`/wait/notify family (needs a collision-free `0x68` assignment). | SET3, SET4 | A thread-local counter and a managed wait/notify round-trip pass. |
 | **SET-5 — Lifecycle** | Add the component-model thread spawn/join builtins once their shape is stable. | SET5 | A component can spawn and join a thread without a JS host. |

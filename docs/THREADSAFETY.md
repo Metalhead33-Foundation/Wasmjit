@@ -1,8 +1,11 @@
 # Thread Safety — Guest, Host, and the Boundary Between Them
 
-Status: policy / reference note (revision 3 — records the **one instance per
-module** architectural target, the host C++ lock caveats, the open guest-lock
-question, the trap/lock ownership questions that a future multi-agent build
+Status: policy / reference note (revision 4 — records the **one instance per
+module** rule as a *design fact* rather than a target, the accepted concurrency
+scenarios (many agents on that one instance, including GPU-style, classic
+thread-per-function, async/await and intra-Wasm threading), the rejection of
+concurrent compilation as a feature, the host C++ lock caveats, the open
+guest-lock question, the trap/lock ownership questions that a multi-agent build
 must answer, and the Go-style trap-cleanup candidate. It contains **no new code**
 and changes no runtime behaviour.)
 
@@ -28,14 +31,14 @@ The short version:
 | Section | Question it answers |
 |---|---|
 | §2 | What exactly do “thread-safe”, “guest”, and “host” mean here? |
-| §3 | The two independent axes and their overlap |
+| §3 | The two independent axes, the instance-cardinality rule, and the accepted concurrency scenarios |
 | §4 | Guest-side / intra-WASM thread safety |
 | §5 | Host-side / embedder-side thread safety |
 | §6 | Intersections, non-implications, and common false inferences |
 | §7 | Responsibility matrix: engine, module author, embedder |
 | §8 | What the current implementation actually guarantees |
 | §9 | The embedder's minimum protocol |
-| §10 | The future one-instance multi-agent contract, trap/lock ownership, and cancellation |
+| §10 | The multi-agent contract (design direction), trap/lock ownership, and cancellation |
 | §11 | References |
 
 ## 2. Terms used precisely
@@ -103,18 +106,73 @@ A program can be safe on one axis and unsafe on another. The rest of this note
 keeps the axes separate instead of collapsing them into a single “thread-safe”
 flag.
 
+### 3.1 Instance cardinality: at most one instance per module
+
+This is the rule the rest of the note assumes, and it is a **design fact**, not a
+target:
+
+> An embedder (or a `WASM::Runtime`) creates **at most one `ModuleInstance` per
+> `Module`**. Multiple instances of the same module are **ruled out** — not
+> "unsupported for now", and not an isolation or thread-safety mechanism.
+
+| Consequence | Detail |
+|---|---|
+| A second `instantiate()` of the same `Module` | Refused with a named error (planned: enforced by `WASM::Runtime`, [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §4). |
+| "One instance per thread" / an instance pool | **Not a model.** It is the workaround this rule exists to forbid (§9, §10). |
+| Isolation between tenants / variants | Load the module twice: two `Module`s, two decoded type blocks in the `Store`, one instance each. |
+| `VMContext*` identity | Unambiguous: one instance per module means one context per module, which is what `ABI.md` bakes into generated code. |
+| `Callable` identity | Unambiguous: the module and the instance are in one-to-one correspondence. |
+
+**The one sanctioned exception is the component runtime.** A component may declare
+two `core instance`s of the same embedded core module; those are genuinely
+distinct instances (separate memories, globals and tables), which is what
+instantiation means in the component model, and `ComponentRuntime` creates one per
+declaration. It is not available to an embedder, and the component runtime is
+therefore responsible for serializing entry into them. The full argument is in
+[`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §2.3.6.
+
+### 3.2 The accepted concurrency scenarios
+
+The rule above says how many instances exist, not how many *executions* may run.
+Many agents may execute that one instance's compiled code; that is the accepted
+multithreading model.
+
+| # | Scenario | Status |
+|---|---|---|
+| **C1** | Two host threads execute code from two different instances | **Supported today** |
+| **C2** | **Many agents on one instance** — two host threads call into the same `ModuleInstance` (whether the same exported function or different ones) | **Accepted design direction**, not implemented; opt-in ([`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6) |
+| **C2a** | *GPU-style*: N workers, each given a thread index as an ordinary argument | Same as C2 — the index is just an `i32` |
+| **C2b** | *Classic style*: thread A runs export `f`, thread B runs export `g` | Same as C2 |
+| **C2c** | *One compiled function called from several host threads* | **Yes, this is C2** — an agent is an execution context, and a host thread always carries one |
+| **C3** | *Async/await*: event loop, promise-style suspension | **Supported today** via continuations + `HostContinuationScheduler`; concurrency without parallelism |
+| **C4** | *Intra-Wasm threading*: `pthread`-like or WASI-threads primitives inside the guest | **Accepted direction**; the spawn/join is an *import* the embedder implements over agents; the engine grows no scheduler |
+| **R1** | Multiple instances of one module | **Ruled out** (§3.1) |
+| **R2** | Concurrent compilation (two modules compiled at the same time) | **Ruled out as a feature.** Unsafe (a backend's build region is a lock — LibJIT's `jit_context_build_start`/`end`) and without a consumer: its only use would be building the second instance R1 forbids. Compilation is serialized by the frontend. |
+
+What is **required** rather than merely allowed, once C2 is claimed:
+
+- **Concurrent execution of compiled code** — accepted and required.
+- **A re-entrant invoker** — `callCallable`, the harness invoker and a backend's
+  `ContinuationInvokeFn` keep all per-call state on the stack.
+
+What "hardened" means for the instance itself (the GC reclamation queue, the
+drop flags, the safepoint rule, the waiter table) is listed in
+[`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §2.3.5 and §4.4;
+the security half is [`SAFETY.md`](SAFETY.md) §3.3.
+
 ## 4. Guest-side / intra-WASM thread safety
 
 ### 4.1 A module is not “thread-safe”; executions are
 
 A `Module` is immutable decoded data. Thread safety is a property of an
 **instance** (its mutable state) and of the **calls/agents** that touch it.
-The intended runtime model is deliberately **one `ModuleInstance` per
-`Module`**, one `VMContext` per instance, and no per-thread duplicate
-instances. The current API and test harness may still instantiate a module more
-than once (for isolation tests and spec fixtures), but that multiplicity is
-**not** the concurrency plan and must not be used as a thread-safety strategy.
-Concurrency has to be handled **around or inside the single instance**.
+The runtime model is deliberately **at most one `ModuleInstance` per `Module`**,
+one `VMContext` per instance, and no per-thread duplicate instances (§3.1). A
+second `instantiate()` is refused at the runtime boundary; the current low-level
+API and some spec fixtures can still construct one, but that multiplicity is
+**not** a concurrency plan and must not be used as a thread-safety strategy.
+Concurrency has to be handled **inside the single instance** (C2) — or by loading
+the module twice, which yields two independent modules, not two instances of one.
 
 There are three guest-side execution shapes for that single instance:
 
@@ -216,7 +274,6 @@ It is one input to a G-C/G-D safety argument, not the conclusion.
   A multi-agent build must replace it with a real waiter table before a module
   can rely on wake-up (`THREADS.md` TH-2/TD9/TH-5).
 
-
 ### 4.6 Guest locks and semaphores — an open design, not a current primitive
 
 There is **no standard WebAssembly mutex, `std::mutex` equivalent, or
@@ -258,7 +315,6 @@ Until such a standard exists, the safe statement is: **guest code may implement
 its own lock protocol over the available shared-memory/GC atomics, but the
 engine does not provide or validate one.** `shared` annotations are necessary
 for some of these objects but remain a type restriction, not a lock.
-
 
 ## 5. Host-side / embedder-side thread safety
 
@@ -312,7 +368,8 @@ touches. It is **not** a statement that generated Wasm code is race-free.
 - that a `Module` or `ModuleInstance` may be mutated while another thread reads
   it;
 - that creating several instances of a module is a supported isolation or
-  thread-safety mechanism — the target is one instance per module;
+  thread-safety mechanism — **multiple instances are ruled out by design**
+  (§3.1), and a second instantiation is refused;
 - that arbitrary concurrent module parsing is a verified immutable-snapshot
   operation for code that reads canonical type metadata (interning is
   serialized; the read path is not a formally snapshotted type store);
@@ -329,7 +386,6 @@ touches. It is **not** a statement that generated Wasm code is race-free.
 
 The `Store` locks are a **metadata-safety** measure, not a global interpreter
 lock. They do not serialize calls, memory accesses or GC mutation.
-
 
 ### 5.3 Native imports (Wasm → native C/C++)
 
@@ -405,7 +461,6 @@ The host must use an atomic/locking protocol compatible with the Wasm side:
 - for shared memory, `memoryBase` is stable (the engine reserves the maximum),
   but concurrent data accesses still need the module's atomic protocol.
 
-
 ### 5.6 C++ mutexes, RAII, traps and tail calls
 
 For **host-only** state, yes: `std::mutex` and `std::lock_guard` are supported
@@ -479,7 +534,7 @@ most often mistaken for a claim about the other.
 | I10 | “A trap skips the rest of the host frame, so host locks survive it.” | Traps unwind by returning through C++ frames and become a `WASM::Trap` exception only at the boundary, so destructors run and a `std::lock_guard` releases. What a trap does *not* do is release a **guest** lock or run Wasm `finally` code. |
 | I11 | “The native callback may throw C++ exceptions; the engine will handle them.” | There is no C++ exception unwind contract across a JIT frame. Catch inside the callback and return a value/trap. |
 | I12 | “An import called from Wasm is single-threaded because Wasm has no threads.” | Wasm agents are deferred, but the **host** may call the one instance from several threads; the same `Callable`/`hostData` can therefore be reached concurrently without any Wasm agent. |
-| I13 | “Creating a new instance per thread is a valid workaround.” | The intended runtime is one instance per module, one `VMContext` per instance. Multiple instances are current test/API incidental, not a supported thread-safety architecture. |
+| I13 | “Creating a new instance per thread is a valid workaround.” | **Ruled out by design** (§3.1): at most one instance per module. Multiple instances are not an isolation or thread-safety mechanism, and a second instantiation is refused rather than silently tolerated. |
 
 Two practical consequences:
 
@@ -518,15 +573,15 @@ its own host-side mechanisms. In particular, it must not:
 - advertise single-agent atomic tests as multi-agent race-freedom or
   acquire/release-edge tests;
 - claim `shared` annotations are a proof of data-race freedom;
-- present multiple instances of a module as the concurrency/isolation plan;
+- present multiple instances of a module as the concurrency/isolation plan — they
+  are ruled out by design (§3.1); the isolation boundary is the runtime, and a
+  second instance is refused;
 - claim a trap releases a **guest** lock or runs Wasm `finally` code (a host
   `std::lock_guard` does release, because the trap unwinds by returning);
 - add a hidden per-instance or per-import global lock without making it part of
   the documented contract (and without considering the trap path);
 - promise that a native import, `hostData`, `Callable` or `ModuleInstance` is
   safe to share unless the corresponding section above says so.
-
-
 
 ## 8. Current implementation status
 
@@ -537,11 +592,13 @@ is undefined even if a particular run happens to work.
 
 | Property | Current status | Where |
 |---|---|---|
-| **One `ModuleInstance` per `Module`, one `VMContext` per instance** | **Target architecture**; no per-thread instances | `ModuleInstance`, `VMContext` |
-| One agent/call at a time on that instance | **Supported** (the only execution model) | `ModuleInstance`, `callCallable` |
-| Several host threads entering the **same** instance | **Not supported** | no instance lock |
-| Several host threads with **separate** instances | Current API/test incidental only; **not a target concurrency model** | `Test/main.cpp` host-thread test |
-| Concurrent `ModuleInstantiator`/backend compilation | **Not guaranteed**; use one per thread or serialize | backend session |
+| **At most one `ModuleInstance` per `Module`, one `VMContext` per instance** | **Design rule** (§3.1); multiple instances are ruled out, not merely unsupported | `ModuleInstance`, `VMContext` |
+| One agent/call at a time on that instance | **Supported** — the current execution model (`ConcurrencyModel::Single`) | `ModuleInstance`, `callCallable` |
+| Several host threads entering the **same** instance | **Not supported yet**; it is the accepted direction **C2**, gated behind the opt-in surface and the instance hardening ([`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6–§7) | no instance lock; `gcPending`/drop flags |
+| Concurrent **execution** of compiled code | **Accepted and required** (C1 today; C2 needs the hardening) | native code, `VMContext*` |
+| Re-entrant invoker | **Required**; the harness invoker keeps per-call state on the stack | `callCallable`, `TestBackend` |
+| Several host threads with **separate** instances | Fine for *different modules*; **not** a model for one module (R1) | `Test/main.cpp` host-thread test |
+| Concurrent `ModuleInstantiator`/backend compilation | **Rejected as a feature** (R2): serialize; one compilation at a time | backend session, build lock |
 | Concurrent `Module`/`ModuleInstance` mutation | **Not supported** | mutable fields |
 | Store entity creation/lookup and type interning | **Management-level locks**; not a guest-data lock | `WasmStore`, `TypeRegistry` |
 | Host-thread trap state | **Per agent** (`ExecutionState::trapSlot`); a host thread's default agent is per thread, and `AgentScope` installs another agent for a call | `WasmAgent.hpp`, `wasm_trap_slot()` |
@@ -555,7 +612,7 @@ is undefined even if a particular run happens to work.
 | `global/table/struct/array.atomic.*` (working draft) | **Implemented single-agent**; reference-slot RC/shared GC is not complete | SET-3/SET-2 |
 | `wait`/`notify` | **Single-agent forms only**; no wake-up, timeout not slept | `THREADS.md` TH-2/TD9 |
 | Guest mutex/semaphore standard | **Absent**; only module-authored atomics over current primitives | §4.6 |
-| Multi-agent scheduler, shared GC heap, TLS, waitqueue, lifecycle | **Absent/deferred indefinitely** | `THREADS.md` TH-5; SET-4/5 |
+| Multi-agent scheduler, shared GC heap, TLS, waitqueue, lifecycle | **Absent**; the accepted direction (C2/C4), opt-in and not yet built | `THREADS.md` TH-5; SET-4/5 |
 
 The host-thread test exists to exercise the **current** API's independent
 session/instance setup; it deliberately does **not** test the target
@@ -572,12 +629,14 @@ The smallest protocol that is valid with the current engine is:
    from an import see the pending slot instead of an exception.
 2. **Treat the module's single instance as the unit of serialization.** Guard
    it with an external mutex (or permit only one host thread) today. Do not
-   create per-thread instances as a design; that is not the target model. The
-   long-term requirement is an engine/instance-level concurrency protocol.
+   create per-thread instances as a design — §3.1 rules multiple instances out.
+   Multi-agent entry (C2) is the accepted direction but not yet implemented; when
+   it lands it will be an explicit, opt-in concurrency mode, not a default.
    Do not hold the external mutex across an import that can call back into the
    same instance unless it is recursive or the callback is proven non-reentrant.
-3. **Use one `ModuleInstantiator`/backend session per thread**, or serialize
-   compilation. Do not compile into the same context from two threads.
+3. **Serialize compilation.** One `ModuleInstantiator`/backend session per
+   runtime, and one compilation at a time: concurrent compilation is rejected as
+   a feature (§3.2 R2). Do not compile into the same context from two threads.
 4. **Keep modules, instances, callables, contexts and result buffers alive**
    until every call using them has completed. Cross-module `VMContext*`
    addresses are baked into code.
@@ -597,25 +656,29 @@ The smallest protocol that is valid with the current engine is:
 
 If an embedder needs concurrent calls into the single instance, the current
 engine cannot provide that contract. The correct options are: add host-side
-serialization, or wait for the engine's per-instance concurrency/agent
-mechanism. Creating more instances is not the intended workaround.
+serialization today, or wait for the engine's opt-in multi-agent mode (C2). What
+is **not** an option is creating more instances of the module: §3.1 rules it out,
+and the runtime will refuse it.
 
+## 10. Multi-agent contract (design direction; not yet implemented)
 
-## 10. Future multi-agent contract (non-normative)
+Multi-agent execution is the **accepted design direction** and an opt-in feature
+still to be built (`THREADS.md` TH-5; the plan is
+[`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §7). Until it exists,
+the single-agent rule in §3.2 (C2 not supported) is the contract. The shape any
+implementation must preserve:
 
-True multi-agent execution is **deferred indefinitely but not ruled out**
-(`THREADS.md` TH-5). The following is the shape any future implementation must
-preserve; it is not a current guarantee:
-
-- The target remains **one `ModuleInstance` per `Module`** and one `VMContext`
-  per instance. Agents must not be modelled as per-thread copies of the
-  instance; per-agent stack/trap/tail state lives outside the instance state.
-- An instance-level concurrency protocol (engine lock, per-agent executor, or a
-  documented guest/host protocol) must be designed; “make another instance” is
-  not an escape hatch. Candidate directions are a per-instance exclusive lock
-  (simple, no guest parallelism), an engine-managed agent scheduler with
-  per-agent stacks over the one instance, or module/toolchain-managed guest
-  locks over shared state; none is chosen or implemented here.
+- **At most one `ModuleInstance` per `Module`** and one `VMContext` per instance —
+  a design rule, not a target (§3.1). Agents must not be modelled as per-thread
+  copies of the instance; per-agent stack/trap/tail state lives outside the
+  instance state.
+- An instance-level concurrency protocol (safepoint lock, per-agent executor, or
+  a documented guest/host protocol) must be designed; “make another instance” is
+  **ruled out**. Candidate directions are a per-instance exclusive lock (simple,
+  no guest parallelism), an embedder-supplied scheduler over agents
+  (`HostAgentScheduler`), or module/toolchain-managed guest locks over shared
+  state; the first two are the shapes sketched in
+  [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6.
 - Each agent has its own evaluation stack, trap target and tail-call state;
   these must not live in process-global mutable variables. The trap, exception,
   tail-call, cleanup, depth-counter and stack-limit state now belongs to an
@@ -689,7 +752,6 @@ promise unwind/cleanup semantics it does not implement. Any future agent
 implementation should define trap ownership, cleanup and lock-poisoning before
 advertising G-C/G-D safety.
 
-
 Until those points are implemented, the only valid guest model for shared
 state remains the documented single-agent forms. The tests that cover atomics
 and shared annotations prove decoding/lowering and single-agent execution, not
@@ -698,7 +760,12 @@ multi-agent race freedom.
 ## 11. References
 
 - In-repo:
-  [`SAFETY.md`](SAFETY.md) (traps, locks, allocation),
+  [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) (the design
+  direction, the C1–C4 / R1–R2 scenario table, the per-backend threading matrix
+  and the opt-in staging plan),
+  [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) (`WASM::Runtime`, which enforces
+  one instance per module and will own the concurrency mode),
+  [`SAFETY.md`](SAFETY.md) (traps, locks, allocation, §3.3 hardening),
   [`ABI.md`](ABI.md) (`VMContext`, `Callable`, native imports),
   [`proposals/THREADS.md`](proposals/THREADS.md) (execution model, TH-3/TH-5),
   [`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md) (A/B
