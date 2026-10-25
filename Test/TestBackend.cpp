@@ -13,6 +13,7 @@
 
 #include "LibJit/LibJitContext.hpp"
 #include "LibJit/LibjitModuleCompiler.hpp"
+#include "WasmBase/WasmDiagnostics.hpp"
 
 namespace TestBackend {
 
@@ -254,6 +255,9 @@ bool LibJitSession::invoke(const WASM::ModuleInstance& instance,
 		trapped = true;
 		trapKind = info.kind;
 		trapMessage = info.message != nullptr ? info.message : "";
+		// This harness reads the slot directly instead of calling `checkTrap`,
+		// so it is the host boundary: record the trap here exactly once.
+		WASM::emitTrapDiagnostic(info.kind, info.message);
 		return true;
 	};
 

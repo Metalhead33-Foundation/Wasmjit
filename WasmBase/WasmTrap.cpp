@@ -4,31 +4,8 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
-#include <utility>
 
 namespace WASM {
-
-namespace {
-
-// Records the trap that is about to cross the host boundary. Kept out of the
-// pending-slot fast path: `checkTrap` only calls it once a trap exists, so a
-// succeeding call allocates nothing (docs/DIAGNOSTICS.md DG-2/DG-3).
-void emitTrapDiagnostic(TrapKind kind, const char* message) noexcept
-{
-	Diagnostic diagnostic;
-	diagnostic.id = trapDiagnosticId(kind);
-	diagnostic.severity = DiagnosticSeverity::Error;
-	diagnostic.phase = DiagnosticPhase::Execute;
-	diagnostic.remediation = "docs/ABI.md#native-host-function-imports";
-	try {
-		diagnostic.message = (message != nullptr) ? message : trapKindName(kind);
-		emitDiagnostic(std::move(diagnostic));
-	} catch (...) {
-		// A diagnostic is never allowed to change the trap it describes.
-	}
-}
-
-} // namespace
 
 const char* trapKindName(TrapKind kind)
 {

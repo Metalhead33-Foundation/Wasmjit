@@ -1,21 +1,24 @@
 # Diagnostics and Debugging — Current Surface, Gaps, and Plan
 
-Status: design note / implementation plan. **Revision 4** implements DG-1…DG-4,
-the harness half of DG-6/DG-7 and the privacy/boundedness half of DG-8. It also
-adds the terminal-facing extension of DG-3:
+Status: design note / implementation plan. **Revision 5** implements DG-1…DG-4,
+DG-6 and DG-7, the harness half of DG-8, and the terminal-facing extension of
+DG-3:
 
 - DG-1 — the structured record and the validator/decode boundaries.
 - DG-2 — runtime traps, uncaught exceptions and the four guest log imports.
+  The harness's own trap boundary (`TestBackend::invoke`) now calls
+  `emitTrapDiagnostic`, so a trap recorded through `backend.invoke` exists too.
 - DG-3 — the bounded per-execution-state ring, the sink and the text/JSON forms,
-  now with a per-record `std::time_t` and a `{schema, startedAt, records}`
-  JSON envelope for a collected run.
-- DG-4 — continuation and scheduler records: the reason leaf, provider,
-  generation, state, tag, value/result counts and root presence, plus the
-  scheduler's invalid-handle, unhandled-suspension, rejected and trapped
-  records.
-- DG-6/DG-7 — `--diagnostics=text|json|none`, `--diagnostics-file=PATH` and
-  `--diagnostics-limit=N` on the test binary, so an agent can consume the JSON
-  stream without reading prose.
+  with a per-record `std::time_t` and a `{schema, startedAt, records}` envelope.
+- DG-4 — continuation and scheduler records: reason leaf, provider, generation,
+  state, tag, value/result counts and root presence, including the scheduler's
+  invalid-handle, unhandled-suspension, rejected and trapped records.
+- DG-6 — the harness's `--diagnose=PATH [--invoke=EXPORT] [--args=…]` mode: load,
+  print the module shape, optionally call one export, and print the structured
+  diagnostics of a failure — no Catch2 case required.
+- DG-7 — `--diagnostics=text|json|none`, `--diagnostics-file` and
+  `--diagnostics-limit`, plus spec-suite failures that attach the command's
+  structured reason (`line N: … [error WASM.EXECUTE.TRAP.…: …]`).
 - DG-8 — the ring bound and the pointer-redaction gate are tested; the
   benchmark is still open.
 - **Pretty terminal form** — an opt-in emoji + ANSI line for host-log records,
@@ -58,7 +61,8 @@ the repository's documentation conventions but is not constrained by
 | Continuations | `ContinuationStatus`, trap/exception transfer, provider state, worker generation/roots; resume and scheduler failures record `WASM.CONTINUATION.*` with provider/generation/state/tag/root context | `WasmBase/WasmContinuation.*`, `WasmBase/WasmDiagnostics.*` |
 | Tests | Named Catch2 cases, WAT fixtures, curated spec scripts, expected trap assertions, and the diagnostics cases in §7 | `Test/main.cpp`, `Test/wasm_wat/` |
 | Debug symbols | Native debug build (`-g`), but no Wasm call-chain metadata in a diagnostic API | build configuration |
-| Machine output | `--diagnostics=text\|json\|none`, `--diagnostics-file=PATH` and `--diagnostics-limit=N` on `Test/WasmJit`; the JSON array is the last stdout line or the whole file | `Test/main.cpp` |
+| Module diagnose | `Test/WasmJit --diagnose=PATH [--invoke=EXPORT] [--args=1,2]`: module shape, one call, structured failure report | `Test/Diagnose.*` |
+| Machine output | `--diagnostics=text\|json\|none`, `--diagnostics-file=PATH` and `--diagnostics-limit=N` on `Test/WasmJit`; the JSON envelope is the last stdout line or the whole file; spec failures attach the command's `[error ID: …]` reason | `Test/main.cpp`, `Test/SpecSuite.cpp`, `Test/WastScript.cpp` |
 
 What is still missing is **correlation across an entire Wasm call chain**,
 runtime-trap source locations and a standalone module-author CLI. A module
@@ -96,7 +100,15 @@ embedder can attach a sink and query the ring; an agent can run the harness with
 - Harness flags `--diagnostics=text|json|none`, `--diagnostics-file=PATH` and
   `--diagnostics-limit=N` (§5.3); the harness enables the pretty host-log lines
   by default.
-- Fifteen Catch2 cases (§7) and `Test/wasm_wat/diagnostics_log.wat`.
+- `--diagnose=PATH [--invoke=EXPORT] [--args=1,2]`: a one-shot module reader
+  that loads/instantiates a core module, prints imports/exports with signatures
+  and counts, optionally calls i32-parameter exports, and prints the structured
+  failure (`Test/Diagnose.*`).
+- `emitTrapDiagnostic()` is public so any host boundary that reads the pending
+  slot directly (the test backend does) records the trap exactly once.
+- Spec-suite failures attach up to three structured reasons emitted by that
+  command, so a failed script no longer needs a second run to say why.
+- Seventeen Catch2 cases (§7) and `Test/wasm_wat/diagnostics_log.wat`.
 
 
 ## 2. Personas and what they need
@@ -483,6 +495,10 @@ Implemented:
   throw — records the trap exactly once. `trap()` records a host-facing raise
   when `wasmCallDepth() == 0` and skips the import path, where the trampoline
   re-publishes the trap and `checkTrap()` records it (no duplicate records).
+- `emitTrapDiagnostic()` is the shared "record this trap" helper. A host
+  boundary that takes the slot directly instead of calling `checkTrap` — the
+  test backend's `invoke` does — calls it itself, so every trap record appears
+  exactly once.
 - `wasm_exn_take_pending()` records `WASM.EXECUTE.EXCEPTION` with the tag id and
   payload size when the host observes the exception. `wasm_exn_clear_pending()`
   (used when a handler consumed it) records nothing.
@@ -519,6 +535,44 @@ is a quiet run (no pretty lines and no JSON/text dump), while `text`/`json`
 re-enable them. The standalone `--diagnostics-context=module|continuation|full`
 flag remains open: the record already carries the structured fields, so the flag
 would only choose which ones a text renderer prints.
+
+#### One-shot module diagnose (DG-6)
+
+For agent and module-author debugging there is a mode that does not need a
+Catch2 case:
+
+```bash
+./WasmJit --diagnose=wasm_test_modules/add_core.wasm
+./WasmJit --diagnose=wasm_test_modules/add_core.wasm --invoke=add --args=20,22
+./WasmJit --diagnose=wasm_test_modules/named_invalid.wasm --diagnostics=json
+```
+
+It prints the module's imports, exports (function signatures included), and
+index-space counts, instantiates it with the `env` log imports registered, and
+— with `--invoke` — calls one export. `--args` currently accepts i32 parameters
+only; any other parameter type is reported with the signature. A load,
+validation, link or instantiation failure prints the exception text followed by
+every record in the ring (`formatDiagnostic`); a trap prints `trap: <kind>: …`
+followed by the `WASM.EXECUTE.TRAP.*` record. Exit status is 0 for a clean load
+and call, 1 for a module/call failure, 2 for a malformed invocation of the tool.
+`--diagnostics=json` still emits the envelope at exit.
+
+Limitations: core modules only (components are rejected by `Module::fromFile`
+with its usual message), only the `env` log imports are pre-registered, and one
+export is called per run. Those are deliberate first-pass bounds, not contracts.
+
+#### Spec-suite failure reasons
+
+A failing spec command now carries the structured reasons it produced, without
+a second run:
+
+```
+[spec] traps: line 19: expected kind 'integer divide by zero', got … [error WASM.EXECUTE.TRAP.INTEGER_DIVIDE_BY_ZERO: …]
+```
+
+`ScriptRunner` snapshots the newest sequence before each command and `fail()`
+appends up to three newer records in one-line form. A wrong return value with no
+emitted record simply has no bracket.
 
 ### 5.4 Host log imports (implemented)
 
@@ -562,8 +616,8 @@ Status: ✅ implemented, ◐ partial, ☐ open.
 | **DG-3 — Bounded sink and JSON** ✅ | Add per-agent sink/ring and harness JSON output. | JSON schema v1 snapshots pass; ring is bounded; no allocation in the trap fast path unless a sink/ring is enabled. **Done: `DiagnosticState`, text/JSON forms, numeric timestamps + `{schema, startedAt, records}` envelope, default capacity 32, capacity 0 disables the ring; the opt-in emoji/ANSI pretty host-log form is the terminal extension.** | P1 |
 | **DG-4 — Continuation/scheduler context** ✅ | Add provider/generation/state/tag/result/root/switch context and scheduler rejection reason. | The wide/throw scheduler tests assert ids and context; no raw pointers by default. **Done: reason leaves + context at every resume/switch failure and scheduler outcome; `switchPeer` never serialized; records emitted inside a worker state are not merged into the resumer (documented in §4.3).** | P1 |
 | **DG-5 — Name/source correlation** ◐ | Consume the Wasm name section; expose function names and, where available, WAT/source positions supplied by tooling. | A named WAT fixture reports `$function`; missing names degrade to indices. **Done for validation/decode records; runtime-trap locations need a backend-preserved map.** | P2 |
-| **DG-6 — Module-author tooling** ◐ | A small diagnostic reader/CLI and editor-friendly JSON; document stable ids. | A module author can localize a validation error and a runtime trap without reading engine source. **Done: harness text/JSON output plus `--diagnostics-file` and the documented id table; a standalone reader for a `.wasm` is still open.** | P2 |
-| **DG-7 — Agent affordances** ✅ | `--diagnostics=json`, stable fixture names and a docs/test map; add `docs/DIAGNOSTICS.md#id` anchors. | An automated agent can go from id → docs → test → source in one pass. **Done: `--diagnostics=json`, the §4.2 id→test table, and the diagnostic test suite names.** | P2 |
+| **DG-6 — Module-author tooling** ✅ | A small diagnostic reader/CLI and editor-friendly JSON; document stable ids. | A module author can localize a validation error and a runtime trap without reading engine source. **Done: `--diagnose=PATH [--invoke=EXPORT] [--args=…]` loads, summarizes, calls and reports the structured failure; `--diagnostics=json`/`--diagnostics-file` provide the machine form.** | P2 |
+| **DG-7 — Agent affordances** ✅ | `--diagnostics=json`, stable fixture names and a docs/test map; add `docs/DIAGNOSTICS.md#id` anchors. | An automated agent can go from id → docs → test → source in one pass. **Done: `--diagnostics=json`, the §4.2 id→test table, the diagnostic test suite names, and spec-suite failures that carry the command's `[error ID: …]` reason.** | P2 |
 | **DG-8 — Performance and privacy audit** ◐ | Verify no hot-path regressions when diagnostics are off; redact pointers/values by default; document retention. | Benchmarks unchanged within budget; a redaction test passes. **Done: bounded-ring and pointer-redaction tests, and the trap fast path still returns on `pending == 0`; the benchmark remains open.** | P3 |
 
 ### 6.1 Explicitly out of scope for the first pass
@@ -577,7 +631,7 @@ Status: ✅ implemented, ◐ partial, ☐ open.
 
 ## 7. Test plan
 
-Implemented (15 cases, 240 assertions; fixture
+Implemented (17 cases, 258 assertions; fixture
 `Test/wasm_wat/diagnostics_log.wat`):
 
 | Gate | Catch2 case | What it pins |
@@ -597,6 +651,8 @@ Implemented (15 cases, 240 assertions; fixture
 | Scheduler | `diagnostics: scheduler tasks record rejection, traps and invalid handles` | distinct ids for invalid handle, unhandled suspension, rejected and trapped tasks; messages name the task kind |
 | Bounded/redaction | `diagnostics: the ring is bounded and never serializes developer pointers` | capacity 4 keeps the newest records; `switchPeer` never appears in text/JSON |
 | Harness CLI | `diagnostics: the harness parses its documented CLI flags` | text/json/none, file path and limit parse; malformed values are rejected |
+| Diagnose CLI | `diagnostics: the harness parses the --diagnose flags` | path/invoke/args parse; `--diagnose` without a path is consumed and reported |
+| Spec failure reason | `diagnostics: a spec-suite failure carries its structured reason` | a failing `assert_return` line includes `WASM.EXECUTE.TRAP.UNREACHABLE` from the command's record |
 
 Still open, from the original plan:
 
@@ -605,9 +661,9 @@ Still open, from the original plan:
    rejected scheduler task.
 2. **Runtime-trap location**: the JIT must preserve a decode-to-code map before
    an execute record can carry a function/instruction location (DG-5).
-3. **Standalone module-author reader/CLI**: the harness flags exist; a tool that
-   loads a `.wasm` and prints the same records without the test binary does not
-   (DG-6).
+3. **Diagnose breadth**: `--diagnose` currently accepts core modules, the `env`
+   log imports, one call per run and i32 arguments only; a component mode,
+   general value arguments and resolving other host imports are follow-ups.
 4. **Performance**: a benchmark showing no hot-path regression when the ring is
    disabled and no sink is installed (DG-8).
 
@@ -629,6 +685,12 @@ Still open, from the original plan:
   records only, caps the rendered message at 256 bytes and replaces control
   bytes with spaces. A redirected run should consume the JSON envelope instead
   (the record itself always keeps the full message).
+- `--diagnose` is a harness mode, not a stable embedder API: the summary text may
+  change; the JSON envelope is the machine-readable contract. It pre-registers
+  only the `env` log imports, takes i32 arguments and calls one export per run.
+- Spec-failure reasons are best-effort: a command attaches at most three records
+  emitted while it ran. A pure value mismatch (expected 42, got 7) emits no
+  record and therefore has no bracket; the existing message is the whole story.
 - Function/instruction offsets require a stable location in generated code.
   The existing `instructionOffset` at decode time is the seed; the JIT must
   preserve a mapping rather than invent one from a native address. That map is
@@ -664,6 +726,7 @@ Still open, from the original plan:
 - `WasmBase/WasmAgent.hpp`, `WasmBase/WasmVMContext.hpp`
 - `docs/VALIDATION.md`, `docs/ABI.md`, `docs/SAFETY.md`
 - `docs/proposals/JS_INTEGRATION.md`, `docs/proposals/THREADS.md`
-- `Test/main.cpp`, `Test/wasm_wat/diagnostics_log.wat`, `Test/wasm_wat/`,
-  `Test/wast_supported.txt`
+- `Test/main.cpp`, `Test/Diagnose.cpp`, `Test/SpecSuite.cpp`,
+  `Test/WastScript.cpp`, `Test/TestBackend.cpp`,
+  `Test/wasm_wat/diagnostics_log.wat`, `Test/wast_supported.txt`
 

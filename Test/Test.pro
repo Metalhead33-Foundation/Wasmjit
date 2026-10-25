@@ -97,6 +97,7 @@ QMAKE_EXTRA_COMPILERS += wat2wasm
 
 SOURCES += main.cpp \
     helper.cpp \
+    Diagnose.cpp \
     TestBackend.cpp \
     LibJitBackendTests.cpp \
     WastScript.cpp \
@@ -104,6 +105,7 @@ SOURCES += main.cpp \
     ProposalDocsTests.cpp
 HEADERS +=  \
     helper.hpp \
+    Diagnose.hpp \
     TestBackend.hpp \
     WastScript.hpp
 

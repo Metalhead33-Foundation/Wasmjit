@@ -24,6 +24,7 @@
 #include "TestBackend.hpp"
 #include "WasmBase/WasmComponentRuntime.hpp"
 #include "WasmBase/WasmComponent.hpp"
+#include "WasmBase/WasmDiagnostics.hpp"
 #include "WasmBase/WasmModule.hpp"
 #include "WasmBase/WasmModuleInstance.hpp"
 #include "WasmBase/WasmExn.hpp"
@@ -578,6 +579,11 @@ private:
 
 	ScriptReport report;
 
+	// The newest diagnostic sequence before the current command started. `fail`
+	// attaches only records newer than this, so a spec failure carries the
+	// engine's structured reason without re-running the script (DG-7).
+	std::uint32_t diagnosticWatermark = 0;
+
 	// Set by invoke() when the call trapped (a non-local exit out of the JIT).
 	std::string lastTrapMessage;
 	// The kind of that trap, which is what assert_trap is checked against
@@ -785,7 +791,27 @@ void ScriptRunner::pass()
 void ScriptRunner::fail(int line, const std::string& message)
 {
 	++report.failed;
-	report.failures.push_back("line " + std::to_string(line) + ": " + message);
+	std::string detail = "line " + std::to_string(line) + ": " + message;
+
+	// Attach the structured reasons this command produced (at most three), in
+	// their one-line form: `[error WASM.VALIDATE.RULE: …]`. The parent prints
+	// the failure on one line, so the location is already inside the message for
+	// validator/trap records. A command that failed without a record (a wrong
+	// return value, for example) simply gains no bracket.
+	const std::span<const WASM::Diagnostic> records = WASM::recentDiagnostics();
+	std::size_t attached = 0;
+	for (const WASM::Diagnostic& diagnostic : records) {
+		if (diagnostic.sequence <= diagnosticWatermark)
+			continue;
+		if (attached++ == 3)
+			break;
+		const std::string text = WASM::formatDiagnostic(diagnostic);
+		const std::size_t newline = text.find('\n');
+		detail += " [";
+		detail += text.substr(0, newline);
+		detail += "]";
+	}
+	report.failures.push_back(std::move(detail));
 }
 
 void ScriptRunner::skip(const std::string& reason)
@@ -857,6 +883,10 @@ void ScriptRunner::runCommand(const ScriptCommand& command)
 					 command.action.field.c_str());
 		std::fflush(stderr);
 	}
+
+	// Only diagnostics emitted by *this* command are attached to its failure.
+	const std::span<const WASM::Diagnostic> before = WASM::recentDiagnostics();
+	diagnosticWatermark = before.empty() ? 0 : before.back().sequence;
 
 	if (command.type == "module") {
 		onModule(command);

@@ -497,6 +497,21 @@ void emitExceptionDiagnostic(std::int32_t tagId, std::uint32_t payloadBytes) noe
 	}
 }
 
+void emitTrapDiagnostic(TrapKind kind, const char* message) noexcept
+{
+	Diagnostic diagnostic;
+	diagnostic.id = trapDiagnosticId(kind);
+	diagnostic.severity = DiagnosticSeverity::Error;
+	diagnostic.phase = DiagnosticPhase::Execute;
+	diagnostic.remediation = "docs/ABI.md#native-host-function-imports";
+	try {
+		diagnostic.message = (message != nullptr) ? message : trapKindName(kind);
+		emitDiagnostic(std::move(diagnostic));
+	} catch (...) {
+		// A diagnostic is never allowed to change the trap it describes.
+	}
+}
+
 void emitContinuationDiagnostic(std::string_view id, DiagnosticSeverity severity,
 		std::string message, DiagnosticContinuation continuation,
 		std::string_view remediation) noexcept

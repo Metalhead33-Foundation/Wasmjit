@@ -320,6 +320,11 @@ void emitDecodeFailure(std::string_view message) noexcept;
 // Records an uncaught exception at the point the host takes it from the
 // pending slot (`wasm_exn_take_pending`).
 void emitExceptionDiagnostic(std::int32_t tagId, std::uint32_t payloadBytes) noexcept;
+// Records a trap the host has just observed. The engine's own boundaries
+// (`checkTrap`, `trap`) call this; a harness that reads the pending slot
+// directly — the test backend and the diagnose tool do — must call it at its
+// own boundary so the record exists exactly once.
+void emitTrapDiagnostic(TrapKind kind, const char* message) noexcept;
 // Records a continuation/scheduler failure with the provider, generation,
 // state, tag, value/result counts and root presence the runtime already has
 // (DG-4). `continuation.state` is the "populated" marker; when it is empty the

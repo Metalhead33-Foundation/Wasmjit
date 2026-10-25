@@ -93,6 +93,30 @@ The harness also enables the pretty host-log form by default: `env.info`,
 stderr. `--diagnostics=none` is a quiet run (no pretty lines, no dump); `text`
 and `json` re-enable them.
 
+### Diagnosing one module (no test case)
+
+`--diagnose=PATH` loads/instantiates a core module, prints imports/exports with
+function signatures and index-space counts, and reports the structured
+diagnostics of any failure. `--invoke=EXPORT` additionally calls one export;
+`--args=1,2` supplies i32 parameters.
+
+```bash
+./WasmJit --diagnose=wasm_test_modules/add_core.wasm
+./WasmJit --diagnose=wasm_test_modules/add_core.wasm --invoke=add --args=20,22
+./WasmJit --diagnose=wasm_test_modules/named_invalid.wasm --diagnostics=json
+```
+
+Exit status: 0 for a clean load/call, 1 for a module/call failure, 2 for a
+malformed invocation. Only the `env` log imports are pre-registered, and the
+mode is for core modules; a component gets the usual `Module::fromFile`
+rejection. See docs/DIAGNOSTICS.md §5.3.
+
+A failing spec command also carries the structured reason it produced:
+
+```
+[spec] traps: line 19: … [error WASM.EXECUTE.TRAP.INTEGER_DIVIDE_BY_ZERO: …]
+```
+
 ---
 
 ## Part 1 — the manual unit tests
@@ -106,6 +130,8 @@ baked in at compile time through the `WASM_TEST_DIR` macro) and calls into it.
 | `add_core registered exports expose math.add` | `add_core` | `registerExports` + resolving via a `RegistryImportResolver` |
 | `native_debug calls host import` | `native_debug` | a wasm module calling back into a host C function |
 | `diagnostics: env log imports emit structured records` … | `diagnostics_log`, `named_invalid`, `exceptions`, continuation/scheduler fixtures | the four `env.info`/`warn`/`error`/`panic` imports emit bounded structured records with stable ids, severities, numeric timestamps, text, JSON v1 and the `{schema, startedAt, records}` envelope; the pretty form uses the documented emoji/ANSI colours and a `ctime` date; `panic` traps after a `Fatal` record; a bad or oversized guest string degrades safely; validator/decode/exception records carry ids, continuation/scheduler failures carry provider/generation/state context, and the harness flags parse (`DIAGNOSTICS.md` DG-1…DG-4, DG-7) |
+| `diagnostics: the harness parses the --diagnose flags` | — | `--diagnose=PATH`, `--invoke` and `--args` parse; a path-less `--diagnose` is consumed and reported (`DIAGNOSTICS.md` DG-6) |
+| `diagnostics: a spec-suite failure carries its structured reason` | `named_trap` | a failing `assert_return` line includes the command's `WASM.EXECUTE.TRAP.*` record (`DIAGNOSTICS.md` DG-7) |
 | `loop_test calculates sum and factorial` | `loop_test` | loops, branches, recursion |
 | `memory_buffer stores and loads data correctly` | `memory_buffer` | linear memory load / store / fill |
 | `sign-extension operators sign-extend the low bits` | `sign_extension` | all five sign-extension ops at their 7/8/15/16/31/32-bit boundaries |
@@ -319,7 +345,7 @@ selection is explicit — which is why `./WasmJit '[spec]'` runs everything.
 | `./WasmJit '[spec]'` | all 257 spec scripts (~2 min in the debug build; 251 pass, 6 known failures) |
 | `./WasmJit 'spec: address'` | just that script |
 | `./WasmJit '*float*'` | scripts whose name matches |
-| `./WasmJit --list-tests` | the default view (438 test cases) |
+| `./WasmJit --list-tests` | the default view (440 test cases) |
 | `./WasmJit --list-tests '[spec]'` | every script, one line each (257) |
 | `./WasmJit -# --list-tags` | all tags, including `[#main]` and `[#SpecSuite]` |
 
@@ -350,7 +376,7 @@ It currently holds 193 of the 257 scripts, and the default run is green:
 
 ```
 $ ./WasmJit
-All tests passed (10964 assertions in 438 test cases)
+All tests passed (10982 assertions in 440 test cases)
 ```
 
 #### Refreshing the list
@@ -578,7 +604,7 @@ tests, and it is green:
 
 ```
 $ ./WasmJit
-All tests passed (10964 assertions in 438 test cases)
+All tests passed (10982 assertions in 440 test cases)
 ```
 
 A full sweep is deliberately loud, because most of the suite is still beyond the
@@ -770,7 +796,7 @@ Measured after SIMD-5:
 
 ```bash
 ./WasmJit 'simd*'      # 24 cases, 6147 assertions, all passing (includes the hidden [.simdbench] case)
-./WasmJit              # 438 cases, 10964 assertions, all passing
+./WasmJit              # 440 cases, 10982 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed

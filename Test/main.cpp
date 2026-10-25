@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "helper.hpp"
+#include "Diagnose.hpp"
 #include "WasmBase/WasmAgent.hpp"
 #include "WasmBase/WasmContinuation.hpp"
 #include "WasmBase/WasmArtifact.hpp"
@@ -10433,6 +10434,57 @@ TEST_CASE("diagnostics: the harness parses its documented CLI flags")
 	REQUIRE(parseDiagnosticsArgument("--diagnostics=xml", badMode));
 	REQUIRE_FALSE(badMode.valid);
 }
+TEST_CASE("diagnostics: the harness parses the --diagnose flags")
+{
+	DiagnoseOptions options;
+	REQUIRE_FALSE(options.specified);
+	REQUIRE(parseDiagnoseArgument("--diagnose=/tmp/module.wasm", options));
+	REQUIRE(options.specified);
+	REQUIRE(options.path == "/tmp/module.wasm");
+	REQUIRE(options.invoke.empty());
+	REQUIRE(parseDiagnoseArgument("--invoke=add", options));
+	REQUIRE(options.invoke == "add");
+	REQUIRE(parseDiagnoseArgument("--args=20,22", options));
+	REQUIRE(options.args == "20,22");
+
+	// `--diagnose` without a path is consumed and reported by runDiagnose.
+	DiagnoseOptions missingPath;
+	REQUIRE(parseDiagnoseArgument("--diagnose", missingPath));
+	REQUIRE(missingPath.specified);
+	REQUIRE(missingPath.path.empty());
+
+	// A non-diagnose argument belongs to Catch2.
+	DiagnoseOptions unrelated;
+	REQUIRE_FALSE(parseDiagnoseArgument("--reporter", unrelated));
+	REQUIRE_FALSE(unrelated.specified);
+}
+TEST_CASE("diagnostics: a spec-suite failure carries its structured reason")
+{
+	// The spec harness turns a trap into a compact result; `backend.invoke` now
+	// records it, and `ScriptRunner::fail` attaches the record to the failure
+	// line. This is the agent-facing payoff: a failed script says *why* without
+	// a second run.
+	const auto script = Spec::Script::parse(R"json(
+		{"source_filename":"trap_diag.json","commands":[
+			{"type":"module","line":1,"filename":"named_trap.wasm","module_type":"binary"},
+			{"type":"assert_return","line":2,
+			 "action":{"type":"invoke","field":"boom"},
+			 "expected":[]}
+		]}
+	)json");
+	auto backend = TestBackend::create();
+	WASM::clearDiagnostics();
+	const Spec::ScriptReport report = Spec::runScript(script, WASM_TEST_DIR, *backend);
+	REQUIRE(report.failed == 1);
+	REQUIRE_FALSE(report.failures.empty());
+	REQUIRE(report.failures[0].find("line 2:") != std::string::npos);
+	REQUIRE(report.failures[0].find("WASM.EXECUTE.TRAP.UNREACHABLE")
+			!= std::string::npos);
+}
+
+
+
+
 
 
 
@@ -11141,9 +11193,12 @@ TEST_CASE("stack-switching module routes a suspension to its handler")
 int main(int argc, char* argv[])
 {
 	DiagnosticsHarness diagnostics;
+	DiagnoseOptions diagnose;
 	int kept = 1;
 	for (int i = 1; i < argc; ++i) {
 		if (parseDiagnosticsArgument(argv[i], diagnostics))
+			continue;
+		if (parseDiagnoseArgument(argv[i], diagnose))
 			continue;
 		argv[kept++] = argv[i];
 	}
@@ -11155,6 +11210,11 @@ int main(int argc, char* argv[])
 		return 2;
 	}
 	diagnostics.install();
+	if (diagnose.specified) {
+		const int result = runDiagnose(diagnose);
+		diagnostics.flush();
+		return result;
+	}
 	const int result = Catch::Session().run(kept, argv);
 	diagnostics.flush();
 	return result;
