@@ -209,6 +209,18 @@ private:
 	void dispatchArrayNewArray(TypeIdx dst, TypeIdx src) override;
 	void dispatchArrayNewMemory(TypeIdx dst, MemIdx src) override;
 	void dispatchArrayNewTable(TypeIdx dst, TableIdx src) override;
+	// Custom Descriptors (0xFB 32..38).
+	void dispatchStructNew(TypeIdx arg) override;
+	void dispatchStructNewDefault(TypeIdx arg) override;
+	void dispatchStructNewDesc(TypeIdx arg) override;
+	void dispatchStructNewDefaultDesc(TypeIdx arg) override;
+	void dispatchRefGetDesc(TypeIdx arg) override;
+	void dispatchRefCastDescEq(const HeapType& arg) override;
+	void dispatchRefCastDescEqNull(const HeapType& arg) override;
+	void dispatchBrOnCastDescEq(uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2) override;
+	void dispatchBrOnCastDescEqFail(uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2) override;
+	void validateCastDescEq(bool nullableTarget, const HeapType& target);
+	void validateBrOnCastDescEq(bool isFail, uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2);
 
 	void validateModule();
 	void validateGlobalInit(const Global& global, std::size_t index);

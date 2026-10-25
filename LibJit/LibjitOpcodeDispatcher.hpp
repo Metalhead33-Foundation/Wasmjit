@@ -601,6 +601,14 @@ protected:
 	void dispatchBrOnNonNull(WASM::LabelIdx arg) override;
 	void dispatchStructNew(WASM::TypeIdx arg) override;
 	void dispatchStructNewDefault(WASM::TypeIdx arg) override;
+	// Custom Descriptors (0xFB 32..38).
+	void dispatchStructNewDesc(WASM::TypeIdx arg) override;
+	void dispatchStructNewDefaultDesc(WASM::TypeIdx arg) override;
+	void dispatchRefGetDesc(WASM::TypeIdx arg) override;
+	void dispatchRefCastDescEq(const WASM::HeapType& arg) override;
+	void dispatchRefCastDescEqNull(const WASM::HeapType& arg) override;
+	void dispatchBrOnCastDescEq(uint8_t castop, WASM::LabelIdx l, WASM::HeapType ht1, WASM::HeapType ht2) override;
+	void dispatchBrOnCastDescEqFail(uint8_t castop, WASM::LabelIdx l, WASM::HeapType ht1, WASM::HeapType ht2) override;
 	void dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2) override;
 	void dispatchStructGetS(WASM::TypeIdx arg1, uint32_t arg2) override;
 	void dispatchStructGetU(WASM::TypeIdx arg1, uint32_t arg2) override;

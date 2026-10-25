@@ -239,9 +239,11 @@ Notes:
   type in the same `rec` group; the pair must agree, must not be
   self-referential, and is serialized into the interning key. Exact heap types
   (`exact $t`) also carry an `isExact` bit distinct from ordinary `$t`, because
-  `(ref exact $t)` and `(ref $t)` are not the same type. Exact function imports
-  (`0x20 typeidx`) record `ImportFunction::isExact`; exports do not repeat the
-  flag.
+  `(ref exact $t)` and `(ref $t)` are not the same type. The exact form is a
+  subtype of its base form, but an exact target accepts only the same exact
+  source; it is not a supertype of the base type's declared subtypes. Exact
+  function imports (`0x20 typeidx`) record `ImportFunction::isExact`; exports do
+  not repeat the flag.
 - After interning, every `Rec(i)` is rewritten to `Global(TypeId)`, so the stored
   graph is purely id-based. Canonical types never contain a `LocalTypeIdx`.
 

@@ -326,6 +326,160 @@ void Validator::dispatchArrayNewTable(TypeIdx dst, TableIdx src)
 	pushValue(ValueType{ValueTypeCode::Ref, static_cast<int32_t>(dst)});
 }
 
+void Validator::dispatchStructNew(TypeIdx arg)
+{
+	if (arg >= module.typeCount() || module.typeView(arg).kind() != CanonTypeKind::Struct)
+		fail("struct.new: type " + std::to_string(arg) + " is not a struct");
+	const CoreTypeView view = module.typeView(arg);
+	if (view.descriptor())
+		fail("struct.new: a type with a descriptor requires struct.new_desc");
+	std::vector<ValueType> fields;
+	for (const CanonFieldType& field : view.structFields())
+		fields.push_back(module.storageTypeFromCanon(field.storage).val);
+	popTypes(fields);
+	ValueType result{ValueTypeCode::Ref, static_cast<int32_t>(arg)};
+	result.isExact = true;
+	pushValue(result);
+}
+
+void Validator::dispatchStructNewDefault(TypeIdx arg)
+{
+	if (arg >= module.typeCount() || module.typeView(arg).kind() != CanonTypeKind::Struct)
+		fail("struct.new_default: type " + std::to_string(arg) + " is not a struct");
+	const CoreTypeView view = module.typeView(arg);
+	if (view.descriptor())
+		fail("struct.new_default: a type with a descriptor requires struct.new_default_desc");
+	for (const CanonFieldType& field : view.structFields())
+		if (!isDefaultable(module.storageTypeFromCanon(field.storage).val))
+			fail("struct.new_default: a field is not defaultable");
+	ValueType result{ValueTypeCode::Ref, static_cast<int32_t>(arg)};
+	result.isExact = true;
+	pushValue(result);
+}
+
+void Validator::dispatchStructNewDesc(TypeIdx arg)
+{
+	if (arg >= module.typeCount() || module.typeView(arg).kind() != CanonTypeKind::Struct)
+		fail("struct.new_desc: type " + std::to_string(arg) + " is not a struct");
+	const CoreTypeView view = module.typeView(arg);
+	if (!view.descriptor())
+		fail("struct.new_desc: type has no descriptor clause");
+	const auto descriptorIndex = module.typeIndexForId(view.descriptor()->id);
+	if (!descriptorIndex)
+		fail("struct.new_desc: descriptor type is not a defined type in this module");
+	popExpect(ValueType{ValueTypeCode::RefNull,
+			static_cast<int32_t>(*descriptorIndex), true});
+	std::vector<ValueType> fields;
+	for (const CanonFieldType& field : view.structFields())
+		fields.push_back(module.storageTypeFromCanon(field.storage).val);
+	popTypes(fields);
+	ValueType result{ValueTypeCode::Ref, static_cast<int32_t>(arg)};
+	result.isExact = true;
+	pushValue(result);
+}
+
+void Validator::dispatchStructNewDefaultDesc(TypeIdx arg)
+{
+	if (arg >= module.typeCount() || module.typeView(arg).kind() != CanonTypeKind::Struct)
+		fail("struct.new_default_desc: type " + std::to_string(arg) + " is not a struct");
+	const CoreTypeView view = module.typeView(arg);
+	if (!view.descriptor())
+		fail("struct.new_default_desc: type has no descriptor clause");
+	const auto descriptorIndex = module.typeIndexForId(view.descriptor()->id);
+	if (!descriptorIndex)
+		fail("struct.new_default_desc: descriptor type is not a defined type");
+	popExpect(ValueType{ValueTypeCode::RefNull,
+			static_cast<int32_t>(*descriptorIndex), true});
+	for (const CanonFieldType& field : view.structFields())
+		if (!isDefaultable(module.storageTypeFromCanon(field.storage).val))
+			fail("struct.new_default_desc: a field is not defaultable");
+	ValueType result{ValueTypeCode::Ref, static_cast<int32_t>(arg)};
+	result.isExact = true;
+	pushValue(result);
+}
+
+void Validator::dispatchRefGetDesc(TypeIdx arg)
+{
+	if (arg >= module.typeCount() || module.typeView(arg).kind() != CanonTypeKind::Struct)
+		fail("ref.get_desc: type is not a struct");
+	const CoreTypeView view = module.typeView(arg);
+	if (!view.descriptor())
+		fail("ref.get_desc: type has no descriptor clause");
+	const auto descriptorIndex = module.typeIndexForId(view.descriptor()->id);
+	if (!descriptorIndex)
+		fail("ref.get_desc: descriptor type is not a defined type");
+	const auto actual = popAny();
+	if (!actual)
+		return;
+	const ValueType input{ValueTypeCode::RefNull, static_cast<int32_t>(arg)};
+	if (!assignable(*actual, input))
+		fail("ref.get_desc: expected a reference to the described type");
+	ValueType result{ValueTypeCode::Ref, static_cast<int32_t>(*descriptorIndex)};
+	result.isExact = actual->isExact;
+	pushValue(result);
+}
+
+void Validator::validateCastDescEq(bool nullableTarget, const HeapType& target)
+{
+	if (!target.isTypeIndex || target.typeIndex >= module.typeCount())
+		fail("cast_desc_eq: target is not a defined type");
+	const CoreTypeView view = module.typeView(target.typeIndex);
+	if (!view.descriptor())
+		fail("cast_desc_eq: target has no descriptor clause");
+	const auto descriptorIndex = module.typeIndexForId(view.descriptor()->id);
+	if (!descriptorIndex)
+		fail("cast_desc_eq: descriptor type is not a defined type");
+	popExpect(ValueType{ValueTypeCode::RefNull,
+			static_cast<int32_t>(*descriptorIndex), true});
+	const auto actual = popAny();
+	if (!actual)
+		return;
+	if (!refSubtype(*actual, ValueType{ValueTypeCode::RefNull,
+			static_cast<int32_t>(target.typeIndex)}))
+		fail("cast_desc_eq: expected a reference to the target hierarchy");
+	ValueType result{nullableTarget ? ValueTypeCode::RefNull : ValueTypeCode::Ref,
+			static_cast<int32_t>(target.typeIndex), target.isExact};
+	pushValue(result);
+}
+
+void Validator::dispatchRefCastDescEq(const HeapType& arg)
+{
+	validateCastDescEq(false, arg);
+}
+
+void Validator::dispatchRefCastDescEqNull(const HeapType& arg)
+{
+	validateCastDescEq(true, arg);
+}
+
+void Validator::validateBrOnCastDescEq(bool isFail, uint8_t castop, LabelIdx label,
+		HeapType ht1, HeapType ht2)
+{
+	if (!ht2.isTypeIndex || ht2.typeIndex >= module.typeCount())
+		fail("br_on_cast_desc_eq: target is not a defined type");
+	const CoreTypeView view = module.typeView(ht2.typeIndex);
+	if (!view.descriptor())
+		fail("br_on_cast_desc_eq: target has no descriptor clause");
+	const auto descriptorIndex = module.typeIndexForId(view.descriptor()->id);
+	if (!descriptorIndex)
+		fail("br_on_cast_desc_eq: descriptor type is not a defined type");
+	popExpect(ValueType{ValueTypeCode::RefNull,
+			static_cast<int32_t>(*descriptorIndex), true});
+	validateBrOnCast(isFail, castop, label, ht1, ht2);
+}
+
+void Validator::dispatchBrOnCastDescEq(uint8_t castop, LabelIdx label,
+		HeapType ht1, HeapType ht2)
+{
+	validateBrOnCastDescEq(false, castop, label, ht1, ht2);
+}
+
+void Validator::dispatchBrOnCastDescEqFail(uint8_t castop, LabelIdx label,
+		HeapType ht1, HeapType ht2)
+{
+	validateBrOnCastDescEq(true, castop, label, ht1, ht2);
+}
+
 void Validator::requireAtomicMemoryAccess(const MemArg& arg, uint32_t naturalLog2) const
 {
 	if (arg.isArray)
@@ -595,6 +749,14 @@ bool Validator::refSubtype(const ValueType& actual, const ValueType& expected) c
 	const Info a = info(actual);
 	const Info e = info(expected);
 	if (!a.isRef || !e.isRef)
+		return false;
+	// Custom Descriptors exact types: an exact target requires the same exact
+	// source type; an exact source may still flow to a non-exact target.
+	if (expected.isExact
+			&& (!actual.isExact || actual.heapType != expected.heapType))
+		return false;
+	if (actual.isExact && expected.isExact
+			&& actual.heapType != expected.heapType)
 		return false;
 	// A nullable value cannot satisfy a non-null requirement.
 	if (a.nullable && !e.nullable)
@@ -1160,7 +1322,10 @@ void Validator::validateGlobalInit(const Global& global, std::size_t index)
 					? module.importFunctions[funcIdx].typeIdx
 					: module.internalFunctionTypeIndices[funcIdx - module.importFunctions.size()];
 			// A function reference is non-null and has the function's concrete type.
-			stack.push_back(ValueType{ValueTypeCode::Ref, static_cast<int32_t>(typeIdx)});
+			ValueType fnType{ValueTypeCode::Ref, static_cast<int32_t>(typeIdx)};
+			fnType.isExact = funcIdx >= module.importFunctions.size()
+					|| module.importFunctions[funcIdx].isExact;
+			stack.push_back(fnType);
 			break;
 		}
 		case 0x23: { // global.get: an earlier immutable global
@@ -1214,6 +1379,7 @@ void Validator::validateGlobalInit(const Global& global, std::size_t index)
 			}
 			case 0: case 1: case 6: case 7: case 8: case 9: case 10:
 			case 26: case 27: case 28:
+			case 32: case 33: case 34: // Custom Descriptors constant forms
 				return; // modelled by evalConstantExpr; conservatively accepted
 			default:
 				fail(label + ": constant expression required");
@@ -1288,7 +1454,10 @@ std::optional<ValueType> Validator::validateConstExpr(const std::vector<uint8_t>
 			const uint32_t typeIdx = funcIdx < module.importFunctions.size()
 					? module.importFunctions[funcIdx].typeIdx
 					: module.internalFunctionTypeIndices[funcIdx - module.importFunctions.size()];
-			push(ValueType{ValueTypeCode::Ref, static_cast<int32_t>(typeIdx)});
+			ValueType fnType{ValueTypeCode::Ref, static_cast<int32_t>(typeIdx)};
+			fnType.isExact = funcIdx >= module.importFunctions.size()
+					|| module.importFunctions[funcIdx].isExact;
+			push(fnType);
 			break;
 		}
 		case 0x23: { // global.get: immutable and already declared
@@ -1341,6 +1510,7 @@ std::optional<ValueType> Validator::validateConstExpr(const std::vector<uint8_t>
 			}
 			case 0: case 1: case 6: case 7: case 8: case 9: case 10:
 			case 26: case 27: case 28:
+			case 32: case 33: case 34: // Custom Descriptors constant forms
 				return std::nullopt;
 			default:
 				fail(label + ": constant expression required");
@@ -1580,8 +1750,13 @@ void Validator::dispatchRefFunc(FuncIdx arg)
 	const uint32_t typeIdx = arg < module.importFunctions.size()
 			? module.importFunctions[arg].typeIdx
 			: module.internalFunctionTypeIndices[arg - module.importFunctions.size()];
-	// ref.func produces a *non-null* reference of the function's concrete type.
-	pushValue(ValueType{ValueTypeCode::Ref, static_cast<int32_t>(typeIdx)});
+	// A function reference is non-null and has the function's concrete type.
+	ValueType result{ValueTypeCode::Ref, static_cast<int32_t>(typeIdx)};
+	// A defined function is exact; an imported function is exact only when its
+	// import used the Custom Descriptors `0x20` form.
+	result.isExact = arg >= module.importFunctions.size()
+			|| module.importFunctions[arg].isExact;
+	pushValue(result);
 }
 
 void Validator::dispatchRefNull(const HeapType& heapType)

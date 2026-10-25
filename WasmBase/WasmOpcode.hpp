@@ -308,10 +308,21 @@ enum class GCOpcode : uint32_t {
 	ArrayInitElem       = 19,  // array.init_elem typeidx elemidx
 	// More Array Constructors (docs/proposals/GC_EXTENSIONS.md GX-2). The
 	// upstream overview assigns no opcodes yet, so these are engine-provisional
-	// values in the GC range below 0x80 (the note's GXD3).
-	ArrayNewArray       = 32,  // array.new_array dsttypeidx srctypeidx
-	ArrayNewMemory      = 33,  // array.new_memory dsttypeidx memidx
-	ArrayNewTable       = 34,  // array.new_table dsttypeidx tableidx
+	// values in the GC range below 0x80 (the note's GXD3). They are deliberately
+	// above the standard Custom Descriptors range 0x20-0x26.
+	ArrayNewArray       = 64,  // array.new_array dsttypeidx srctypeidx
+	ArrayNewMemory      = 65,  // array.new_memory dsttypeidx memidx
+	ArrayNewTable       = 66,  // array.new_table dsttypeidx tableidx
+
+	// Custom Descriptors (0xFB 32..38). The clauses and exact heap types are
+	// decoded elsewhere; these are the GC instruction forms.
+	StructNewDesc          = 32, // struct.new_desc typeidx
+	StructNewDefaultDesc   = 33, // struct.new_default_desc typeidx
+	RefGetDesc             = 34, // ref.get_desc typeidx
+	RefCastDescEq          = 35, // ref.cast_desc_eq (ref ht)
+	RefCastDescEqNull      = 36, // ref.cast_desc_eq (ref null ht)
+	BrOnCastDescEq         = 37, // br_on_cast_desc_eq
+	BrOnCastDescEqFail     = 38, // br_on_cast_desc_eq_fail
 
 	// Extended reference instructions
 	RefTest             = 20,  // ref.test (ref ht)

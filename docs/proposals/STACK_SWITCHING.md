@@ -144,7 +144,10 @@ The decision applies engine-wide and is recorded with its reasoning in §10.15
   results, and `submitThrow`/`onRejected` cover the throw/reject path. Legacy
   scalar `submit`/`onSuspended`/`onCompleted` remain. This is the JSPI/embedder
   seam and the groundwork for a future scheduler; it is **not** an agent API
-  and does not add concurrency.
+  and does not add concurrency. The JavaScript API binding, Promise object,
+  event loop and JS/Wasm conversion are host-owned; see
+  [`JS_INTEGRATION.md`](JS_INTEGRATION.md) §4.2.2 for the complete embedder
+  contract.
 - **The validator and lowering are deliberately wide now.** Continuation
   parameters, results and tag payloads use 16-byte value slots and a backend
   invoker; i32/i64/f32/f64, references and v128 are supported. Multiple
@@ -211,12 +214,12 @@ second `resume` read a dead stack.
 | **SS-6 — Execution state** | ✅ `Agent` owns an `ExecutionState` (trap slot, pending exception, tail-call state, defer stack, depth counters, stack limit); TLS holds the current state pointer; the helpers resolve it; isolation tests cover two agents on one thread, per-thread defaults and the per-state stack limit. | SS7 | Done: `Test/main.cpp` ("agent execution state…", "each host thread…", "the stack limit…"). |
 | **SS-3 — Runtime stacks** | ✅ **A and B implemented:** A is the default (mmap-backed stack, guard page, `ucontext` switch, per-stack state/limit, ASAN fiber hooks, serial cross-thread migration, explicit suspended-stack root registry); B is the explicit fallback (one host thread per suspended continuation). Both enforce one-shot, transfer traps/exceptions, unwind/cancel on drop and charge the budget. | SS4 | Suspend/resume round-trips run on both providers; A stack exhaustion traps; serial migration is tested. |
 | **SS-4 — Instructions** | ✅ **Wide slice:** `cont.new`, `cont.bind`, `suspend`, `resume` with multiple/loop handlers, `resume_throw*` including handler clauses, wide payloads and `switch` on A and B. | SS3/SSD3 | All seven instructions execute |
-| **SS-5 — Tests** | ✅ A/B runtime tests, the host handle, A stack guard/migration, multiple/loop handlers, `cont.bind`, `resume_throw` plus a handler clause, A/B `switch`, WAT modules and the model/rejection surface are in the default suite. | SS6 | `10,688` assertions / `420` cases green. |
+| **SS-5 — Tests** | ✅ A/B runtime tests, the host handle, A stack guard/migration, multiple/loop handlers, `cont.bind`, `resume_throw` plus a handler clause, A/B `switch`, WAT modules and the model/rejection surface are in the default suite. | SS6 | `10,724` assertions / `423` cases green. |
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-25; whole suite 10,688 assertions /
-420 test cases):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-25; whole suite 10,724 assertions /
+423 test cases):
 
 | Script | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|

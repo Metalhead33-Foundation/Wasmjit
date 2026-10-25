@@ -224,12 +224,13 @@ void RegistryImportResolver::registerTag(std::string_view moduleName, std::strin
 std::optional<Callable> RegistryImportResolver::resolveFunction(
 	std::string_view moduleName,
 	std::string_view fieldName,
-	TypeId expectedType)
+	TypeId expectedType,
+	bool exact)
 {
 	auto module = registeredModules.find(moduleName);
 	if (module == std::end(registeredModules))
 		return std::nullopt;
-	return module->second.resolveFunction(fieldName, expectedType);
+	return module->second.resolveFunction(fieldName, expectedType, exact);
 }
 
 std::optional<Value*> RegistryImportResolver::resolveGlobal(
@@ -317,7 +318,7 @@ void RegistryImportResolver::ModuleRegistry::registerTag(std::string_view fieldN
 	tags.insert_or_assign(std::string(fieldName), tag);
 }
 
-std::optional<Callable> RegistryImportResolver::ModuleRegistry::resolveFunction(std::string_view fieldName, TypeId expectedType)
+std::optional<Callable> RegistryImportResolver::ModuleRegistry::resolveFunction(std::string_view fieldName, TypeId expectedType, bool exact)
 {
 	auto it = functions.find(fieldName);
 	if (it == functions.end())
@@ -327,6 +328,12 @@ std::optional<Callable> RegistryImportResolver::ModuleRegistry::resolveFunction(
 	// type. Native imports registered without a canonical id (`TypeId::kNone`)
 	// are accepted, since their type is not known to the registry.
 	const Callable& callable = it->second;
+	if (exact) {
+		// Custom Descriptors exact import: the provider must have exactly the
+		// declared type, not a subtype, and an unknown type cannot be exact.
+		return (!callable.typeId.isNone() && callable.typeId == expectedType)
+				? std::optional<Callable>(callable) : std::nullopt;
+	}
 	if (callable.typeId != TypeId{TypeId::kNone} &&
 		!Store::global().types().matches(callable.typeId, expectedType))
 		return std::nullopt;

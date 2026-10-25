@@ -43,7 +43,8 @@ public:
 		void registerTag(std::string_view fieldName, TagId tag);
 		void registerType(std::string_view fieldName, TypeId type);
 
-		std::optional<Callable> resolveFunction(std::string_view fieldName, TypeId expectedType);
+		std::optional<Callable> resolveFunction(std::string_view fieldName, TypeId expectedType,
+				bool exact = false);
 		std::optional<Value*> resolveGlobal(std::string_view fieldName, const GlobalType& type);
 		std::optional<LinearMemory*> resolveMemory(std::string_view fieldName, const MemoryType& type);
 		std::optional<ImportedTable> resolveTable(std::string_view fieldName, const TableType& type,
@@ -72,7 +73,8 @@ public:
 	std::optional<Callable> resolveFunction(
 		std::string_view moduleName,
 		std::string_view fieldName,
-		TypeId expectedType) override;
+		TypeId expectedType,
+		bool exact = false) override;
 
 	std::optional<Value*> resolveGlobal(
 		std::string_view moduleName,

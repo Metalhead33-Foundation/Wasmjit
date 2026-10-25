@@ -9,35 +9,35 @@ namespace WASM {
 
 // ── GC heap-object header layout (shared by the runtime and the backend) ────────
 //
-// Every GC heap object (a `struct` or an `array`) begins with a fixed header
-// that carries its canonical `TypeId` and its reference count:
+// Every GC heap object begins with the common [u32 TypeId][u32 refcount]
+// header. A **struct** then carries the Custom Descriptors RTT reference:
 //
-//     struct:  [u32 TypeId][u32 refcount] <fields...>
+//     struct:  [u32 TypeId][u32 refcount][void* descriptor] <fields...>
 //     array:   [u32 TypeId][u32 refcount][u32 length] <elements...>
+//
+// The descriptor slot is null for an ordinary struct. `struct.new_desc` and
+// `struct.new_default_desc` retain the descriptor reference; the safepoint
+// walker/reclaimer therefore treats it as a child reference. Arrays have no
+// descriptor clause and keep the compact 12-byte header.
 //
 // Array elements are **inline**: they start at a per-element-type `dataOffset`
 // (see `gcArrayDataOffset`), so an array is one allocation rather than two
 // (docs/proposals/GC.md D13/GC-9), and each element access is one indirection.
-//
-// The refcount is the engine's reclamation currency (docs/proposals/GC.md
-// D14/RC-1). It is stored as a plain `u32` word and accessed through
-// `std::atomic_ref`, so the Threads work can share an object later (D16)
-// without an ABI change.
-//
-// This layout is mirrored by each backend's structure/array lowering: the
-// runtime addresses fields by byte offset, the backend by lowered field index,
-// so both constants live here and must move together
-// (docs/proposals/GC.md §6.3 / H1).
 namespace GcHeader {
 
 constexpr uint32_t kTypeIdOffset   = 0;
 constexpr uint32_t kRefcountOffset = 4;
-constexpr uint32_t kHeaderBytes    = 8;
-
-// Header *words* that precede a struct's first Wasm field: a backend's lowered
-// struct type carries them before the Wasm fields, so Wasm field `i` sits at
-// lowered field index `i + kHeaderFields`.
-constexpr uint32_t kHeaderFields = 2;
+// Common TypeId+refcount prefix, used by extern boxes and as the base of the
+// array header.
+constexpr uint32_t kTypeHeaderBytes = 8;
+// Custom Descriptors: the struct's RTT/descriptor reference.
+constexpr uint32_t kDescriptorOffset = 8;
+// Struct header: TypeId, refcount, descriptor pointer.
+constexpr uint32_t kHeaderBytes    = 16;
+// Struct *lowered fields*: two uint words plus one pointer. A Wasm field `i`
+// sits at lowered field index `i + kHeaderFields`.
+constexpr uint32_t kHeaderFields = 3;
+constexpr uint32_t kDescriptorField = 2;
 
 // Array header: [TypeId][refcount][length], then inline elements at dataOffset.
 constexpr uint32_t kArrayLengthOffset = 8;
@@ -54,9 +54,9 @@ constexpr uint32_t kReclaimedTypeId = 0xFFFFFFFFu;
 // wrapped. It is not a registry type; the runtime walker special-cases it so
 // the inner reference is released with the box.
 constexpr uint32_t kExternBoxTypeId = 0xFFFFFFFEu;
-// [TypeId][refcount][inner]
-constexpr size_t kExternBoxInnerOffset = kHeaderBytes;
-constexpr size_t kExternBoxBytes = kHeaderBytes + sizeof(void*);
+// [TypeId][refcount][inner] — an extern box has no descriptor slot.
+constexpr size_t kExternBoxInnerOffset = kTypeHeaderBytes;
+constexpr size_t kExternBoxBytes = kTypeHeaderBytes + sizeof(void*);
 
 } // namespace GcHeader
 

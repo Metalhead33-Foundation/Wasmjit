@@ -194,6 +194,9 @@ public:
 	const ValidationOptions& validationOptions() const { return parseOptions; }
 	bool isSubtype(TypeIdx actual, TypeIdx expected) const;
 	bool heapTypeMatchesTypeIndex(TypeIdx actual, const HeapType& expected) const;
+	// Reverse lookup for canonical descriptor/cast metadata: the module-local
+	// index of a canonical type, or nullopt when this module does not declare it.
+	std::optional<uint32_t> typeIndexForId(TypeId id) const;
 private:
 	// Reverse local-map used only to materialise a compatibility `Subtype` whose
 	// references use module-local indices. It stores indices, not type payloads.

@@ -1136,6 +1136,9 @@ std::vector<uint8_t> Module::parseInitExpr(DWasmStream& stream) {
 				}
 				case 0:  // struct.new typeidx
 				case 1:  // struct.new_default typeidx
+				case 32: // struct.new_desc typeidx
+				case 33: // struct.new_default_desc typeidx
+				case 34: // ref.get_desc typeidx
 				case 6:  // array.new typeidx
 				case 7:  // array.new_default typeidx
 				{
@@ -1451,6 +1454,14 @@ uint32_t Module::localTypeIndex(TypeId id) const
 	const auto it = typeIndexById.find(id.value);
 	if (it == typeIndexById.end())
 		throw std::runtime_error("Module: canonical type reference is not declared by this module");
+	return it->second;
+}
+
+std::optional<uint32_t> Module::typeIndexForId(TypeId id) const
+{
+	const auto it = typeIndexById.find(id.value);
+	if (it == typeIndexById.end())
+		return std::nullopt;
 	return it->second;
 }
 

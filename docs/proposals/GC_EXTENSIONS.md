@@ -94,7 +94,8 @@ not be treated as a stable binary feature yet.
 - **No final encoding for More Array Constructors in the fetched overview.**
   The proposal specifies types and behaviour; the implementation therefore uses
   engine-provisional `0xFB` values (GXD3) that must be renumbered when upstream
-  assigns final ones.
+  assigns final ones. They are placed at `0x40..0x42` so the standard Custom
+  Descriptors range `0x20..0x26` stays free.
 - **No stable Frozen Values binary.** The proposal is exploratory, has no final
   encoding, and may change its phase model.
 - **No required `f16`/FP16 support.** These proposals do not add element types;
@@ -125,7 +126,7 @@ not be treated as a stable binary feature yet.
   `ModuleInstance::arrayNewArray/arrayNewMemory/arrayNewTable`. Each performs
   the GC-5 range check before allocating, retains reference elements copied
   from an array or table, and reports the usual GC trap kinds. The upstream
-  overview assigns no opcodes, so `0xFB 0x20/0x21/0x22` are engine-provisional
+  overview assigns no opcodes, so `0xFB 0x40/0x41/0x42` are engine-provisional
   (below the `0x80` stringref range).
 - `WasmOpcode.hpp` also keeps `ArrayNew`, `ArrayNewDefault`, `ArrayNewFixed`,
   `ArrayNewData` and `ArrayNewElem`; `LibjitOpcodeDispatcher` implements all
@@ -155,7 +156,7 @@ not be treated as a stable binary feature yet.
 |---|---|---|---|
 | GXD1 | **Reuse the existing load/store opcode space and flag bit 5**, exactly as the proposal specifies. | §3: no new value type; the proposal explicitly reuses those opcodes. | One decoder path and no parallel instruction family. |
 | GXD2 | **Do not add `memidx` to array accesses.** | §2.1/§3: the array reference is the base; a `memidx` is invalid. | Keeps the `memarg` grammar unambiguous. |
-| GXD3 | **Implement all three constructors now with engine-provisional `0xFB 0x20/0x21/0x22`.** | §3: the overview assigns no final opcodes; the three are independent, and revision 1 already sanctioned a provisional assignment. | Full GX-2 now; one renumbering when upstream publishes. |
+| GXD3 | **Implement all three constructors now with engine-provisional `0xFB 0x40/0x41/0x42`.** | §3: the overview assigns no final opcodes; the three are independent, and revision 1 already sanctioned a provisional assignment. | Full GX-2 now; one renumbering when upstream publishes. |
 | GXD4 | **Defer Frozen Values until its encoding and phase model stabilize.** | §3: exploratory proposal; no stable binary. | Avoids baking a moving type clause into `TYPE_IDENTITY`. |
 | GXD5 | **Use the same GC-5 trap order** (range check before allocation) for all new constructors. | `GC.md` GC-5; the spec requires the out-of-bounds trap before an allocation failure. | Consistent, testable error behaviour. |
 | GXD6 | **Report the existing GC trap kinds** (`NullArrayReference`, `OutOfBoundsArrayAccess`, `OutOfBoundsMemoryAccess`, `OutOfBoundsTableAccess`). | The proposals only require *a* trap; `array.get` and `array.new_data` already use these kinds. | Consistent error behaviour without new trap codes. |
@@ -182,8 +183,8 @@ not more engine work.
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-25; whole suite 10,688 assertions /
-420 test cases):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-25; whole suite 10,724 assertions /
+423 test cases):
 
 | Script / fixture | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|

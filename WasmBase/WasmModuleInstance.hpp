@@ -128,6 +128,7 @@ private:
 	// compileFunctions(), because those callable tables do not exist yet when
 	// initializeGlobals() runs (i.e. in the constructor).
 	void resolveGlobalRefFuncs();
+	void resolveRefFuncsInObject(void* ref, std::vector<void*>& visited);
 	// The same rewrite for table initialiser expressions: `initializeTable()` runs
 	// in the constructor, so a `(ref.func …)` initialiser is stored as null there
 	// and every slot of that table is filled in here, once the callables exist
@@ -223,8 +224,17 @@ public:
 	// (docs/proposals/GC.md GC-5 / §5.1). 64-bit arithmetic, no overflow.
 	void checkDataSegmentRange(uint32_t dataIdx, uint32_t srcByteOffset, uint32_t lenElems, uint32_t elemSize);
 	void checkElementSegmentRange(uint32_t elemIdx, uint32_t srcIndex, uint32_t lenElems);
-	void* allocateStructObject(uint32_t size, uint32_t localTypeIdx);
+	void* allocateStructObject(uint32_t size, uint32_t localTypeIdx, void* descriptor = nullptr);
 	void* allocateArrayObject(uint32_t dataOffset, uint32_t elementSize, uint32_t length, uint32_t localTypeIdx);
+	// Custom Descriptors: the RTT/descriptor reference stored in a struct's
+	// header, or nullptr for a null/non-struct reference. `ref.get_desc` traps
+	// when this returns nullptr.
+	void* structDescriptor(const void* ref) const;
+	// The custom descriptor's first field when it is an immutable
+	// `externref`/`(ref extern)`, otherwise nullptr. This is the engine-side
+	// lookup an adapter uses for the JS `[[GetPrototypeOf]]` rule; the core
+	// deliberately does not create JS objects or prototype chains.
+	void* descriptorPrototype(const void* ref) const;
 	bool tryGetGcTypeId(const void* ref, TypeId& typeId) const;
 	bool refMatchesHeapType(const void* ref, const HeapType& heapType, bool nullable) const;
 

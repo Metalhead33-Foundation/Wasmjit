@@ -345,12 +345,14 @@ for the full design.)
   an instance's regions are released in bulk by `~ModuleInstance`. Because the
   backing is `mmap` and not the libc allocator, **no `malloc`/`calloc`/`free`
   happens while generated code runs** (§6.1/GC-2, `docs/SAFETY.md` §2.3).
-- `allocateStructObject(size, localTypeIdx)`: allocates from the heap, writes the
-  canonical `TypeId` and a reference count of **0** (unowned at birth) into the
-  8-byte header (`[u32 TypeId][u32 refcount]`, `WasmGcHeader.hpp`).
+- `allocateStructObject(size, localTypeIdx, descriptor = nullptr)`: allocates from
+  the heap, writes the canonical `TypeId` and a reference count of **0**
+  (unowned at birth), and stores/retains the optional Custom Descriptors RTT
+  reference in the 16-byte struct header
+  (`[u32 TypeId][u32 refcount][void* descriptor]`, `WasmGcHeader.hpp`).
 - `allocateArrayObject(dataOffset, elementSize, length, localTypeIdx)`: **one**
   heap block — `[u32 TypeId][u32 refcount][u32 length]` followed by the inline
-  elements at `dataOffset` (§4.8, D13/GC-9).
+  elements at `dataOffset` (§4.8, D13/GC-9). Arrays have no descriptor clause.
 - **Type tags come from the header, not a side map.** `GcHeap::owns(ref)` decides
   "is this a GC pointer" from the region ranges, and `tryGetGcTypeId` then reads
   the `TypeId` at the header — the old per-object `gcObjectTypes` map is gone
@@ -359,9 +361,9 @@ for the full design.)
   `refDrop`/`refStore` maintain the header count through `std::atomic_ref`
   (saturating clone, trapping underflow). A fresh object is **unowned** (count
   0); the first *owning slot* retains it — heap slots (`struct.set`/`struct.new`,
-  `array.set`/`fill`/`new*`, `global.set`, `table.set`), reference-typed
-  **locals** (`local.set`/`tee`, via `wasm_ref_clone`/`drop`), global
-  initialisers, and the segment/bulk-copy paths (`bufferInitFromElems`,
+  `array.set`/`fill`/`new*`, `global.set`, `table.set`), the descriptor slot of a
+  `struct.new_desc*` object, reference-typed **locals** (`local.set`/`tee`, via
+  `wasm_ref_clone`/`drop`), global initialisers, and the segment/bulk-copy paths (`bufferInitFromElems`,
   `wasm_buffer_copy_impl`). Parameters and control-flow slots are **borrows**
   (uncounted). Reclamation is deferred to an explicit **safepoint**:
   `reclaimGcObject` queues a zero-count object and `gcCollect()` recycles queued
@@ -371,8 +373,10 @@ for the full design.)
 - `refMatchesHeapType(ref, ht, nullable)` implements a *runtime* `match`:
   - `null` matches only nullable targets;
   - tagged `i31` immediates (low bit set) match `any`/`eq`/`i31`;
-  - function references are recognised by pointer-scanning
-    `importStorage` / `internalCallables` and matched via `Callable::typeId`;
+  - an **exact** concrete target matches only that `TypeId` (Custom Descriptors),
+    not its declared subtypes;
+  - function references are recognised through the Store's callable registry and
+    matched via `Callable::typeId`;
   - GC objects are matched via `GcHeap::owns` + the header `TypeId` +
     `TypeRegistry::matchesHeap`;
   - unknown references match only `any`/`extern`/`nofunc`.
@@ -381,7 +385,8 @@ for the full design.)
   explicitly marked "keep in sync with translateStruct / translateArray".
 - `evalConstantExpr` is a small stack machine covering `i32/i64/f32/f64.const`,
   `global.get`, `ref.null`, `ref.func` (sentinel form), and the GC `const`
-  extensions: `ref.i31`, `struct.new`, `struct.new_default`, `array.new`,
+  extensions: `ref.i31`, `struct.new`, `struct.new_default`,
+  `struct.new_desc`, `struct.new_default_desc`, `ref.get_desc`, `array.new`,
   `array.new_default`, `array.new_fixed`, `any.convert_extern`,
   `extern.convert_any`.
 - Element segments feed GC expressions through `bufferInitFromElems` and
@@ -394,8 +399,9 @@ There are **two distinct lowerings** here, matching the two-level model of
 
 **Aggregate layout (the pointee).**
 
-- `struct` lowers to `[u32 TypeId header][field...]` using LibJIT's struct
-  layout; packed `i8`/`i16` fields lower to `jit_type_sbyte` / `jit_type_short`.
+- `struct` lowers to `[u32 TypeId][u32 refcount][void* descriptor][field...]`
+  using LibJIT's struct layout; packed `i8`/`i16` fields lower to
+  `jit_type_sbyte` / `jit_type_short`.
 - `array` lowers to `[u32 TypeId header][u32 length][element* data]`.
 - `translateStruct` / `translateArray` return this **bare struct type**. It is
   a *layout descriptor*, never a runtime value: it is consumed by
@@ -915,7 +921,8 @@ Guardrails for every milestone:
 - **No raw reference stores.** Every ref-typed store in generated code goes
   through `wasm_ref_store` (D15); review for a bare `jit_insn_store` into a ref
   slot.
-- Keep the refcount-header offsets (`TypeId@0`, `rc@4`) identical in the runtime
+- Keep the struct-header offsets (`TypeId@0`, `rc@4`, descriptor pointer@8) and
+  the array header (`TypeId@0`, `rc@4`, length@8`) identical in the runtime
   helpers and the JIT, and add them to the H1 offset test.
 
 ### 7.1 Consolidated status — one row per number

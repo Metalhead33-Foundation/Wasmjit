@@ -94,7 +94,7 @@ boxing on the GC heap at `extern.convert_any` (GC-8/RT-1).
 | `funcref` | `Callable*`, recognised by `Store::callableAt()` | a callable from *another* module is still recognised (GC.md G2) |
 | `externref` | opaque `void*` | identity is pointer identity; a host pointer passes through every conversion unchanged |
 | `exnref` | exception-object pointer | survives a table round-trip through the same generic slot (EX-6) |
-| GC ref | Store-owned object pointer, canonical type id in `GcHeader` | the type id is what `ref.test`/`ref.cast` read |
+| GC ref | Store-owned object pointer, canonical type id in `GcHeader` | the type id is what `ref.test`/`ref.cast` read; a struct also carries the optional Custom Descriptors RTT reference at `GcHeader::kDescriptorOffset` |
 | `i31ref` | `(value << 1)` with the low bit set | also the reason a real pointer can never look like an i31 |
 | extern box | GC object with the reserved type id `GcHeader::kExternBoxTypeId` | produced by `extern.convert_any`, unwrapped by `any.convert_extern`, released by the GC walker with its inner reference |
 | table slot | one pointer-sized word (`TableInstance::base` is `Callable**`) | the funcref view is just the ABI; any reference fits |
@@ -446,6 +446,14 @@ reclamation with `ModuleInstance::gcCollect()` at a safepoint. A reference hande
 out to the embedder is a **borrow** — do not hold it across a `gcCollect()`
 unless you have retained it.
 
+A GC **struct** header is now 16 bytes:
+`[u32 TypeId][u32 refcount][void* descriptor]` (`GcHeader::kHeaderBytes`); the
+descriptor slot is null for an ordinary struct and holds a retained RTT/descriptor
+reference for `struct.new_desc*`. Arrays keep the 12-byte
+`[u32 TypeId][u32 refcount][u32 length]` header. These offsets are an internal
+ABI between `WasmBase` and a backend; an embedder must not hard-code the old
+8-byte struct layout.
+
 ### Module metadata descriptors (`WasmBase/WasmModule.hpp`)
 
 `Module::importDescriptors()` and `Module::exportDescriptors()` return the
@@ -455,6 +463,7 @@ read-only metadata view used by JS Types and other embedders:
 struct ExternTypeDescriptor {
     ExternalKind kind;
     TypeId typeId;          // function/tag/type where applicable
+    bool isExact;           // exact function import (`0x20`)
     GlobalType globalType;  // Global
     TableType tableType;    // Table
     MemoryType memoryType;  // Memory
@@ -520,6 +529,14 @@ is `(ref cont)`, or from `wasm_cont_resume`'s suspension result. The public
 replacement handle. A is the default provider (serial; may migrate between host
 threads); B is the opt-in host-thread fallback. Neither is an agent API: calls
 are serial and true multi-agent execution remains deferred.
+
+This header is only the Wasm-side JSPI substrate. The JavaScript API binding,
+Promise object, microtask/event loop and JS/Wasm value conversion are the
+embedder's responsibility; the full contract is in
+[`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) §4.2.2. In
+particular, `onSuspendedEx`/`onCompletedEx`/`onRejected` callbacks are
+synchronous with `step()`, borrowed buffers are valid only during the callback,
+and the host must schedule the next `step()` itself.
 
 #### Embedder scheduling contract (`HostContinuationScheduler`)
 

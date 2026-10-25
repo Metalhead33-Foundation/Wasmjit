@@ -17,6 +17,12 @@
 namespace WASM {
 
 namespace {
+// Defined with the GC layout helpers below; forward-declared for the global
+// descriptor walk, which runs earlier in this translation unit.
+std::vector<size_t> structFieldOffsets(CoreTypeView st);
+}
+
+namespace {
 // `ref.func $f` is stored in a constant-expression Value as a *biased* function
 // index (index + 1), so that function index 0 is distinguishable from the null
 // pointer that `ref.null` produces. Both element segments and global
@@ -538,7 +544,8 @@ void ModuleInstance::resolveImports(ImportResolver& resolver)
 		// Cross-module type matching: give the resolver the canonical identity of
 		// the importing module's declared function type.
 		const TypeId expectedType = module->typeId(LocalTypeIdx{imp.typeIdx});
-		auto callable = resolver.resolveFunction(imp.moduleName, imp.fieldName, expectedType);
+		auto callable = resolver.resolveFunction(imp.moduleName, imp.fieldName, expectedType,
+				imp.isExact);
 
 		// A missing import is a hard instantiation-time error in Wasm,
 		// not a runtime trap. We fail loudly here rather than storing
@@ -757,6 +764,73 @@ void ModuleInstance::resolveTableRefFuncs()
 	}
 }
 
+void ModuleInstance::resolveRefFuncsInObject(void* ref, std::vector<void*>& visited)
+{
+	if (ref == nullptr
+			|| std::find(visited.begin(), visited.end(), ref) != visited.end())
+		return;
+	TypeId typeId{};
+	if (!tryGetGcTypeId(ref, typeId))
+		return;
+	const CoreTypeView view = subtypeForTypeId(typeId);
+	if (!view.valid())
+		return;
+	visited.push_back(ref);
+
+	const uint32_t importedFuncCount =
+		static_cast<uint32_t>(module->importFunctions.size());
+	const uint32_t totalFuncs = importedFuncCount +
+		static_cast<uint32_t>(module->internalFunctionTypeIndices.size());
+	const auto rewriteSlot = [&](uint8_t* slot, const CanonStorageType* storage) {
+		void* child = *reinterpret_cast<void* const*>(slot);
+		if (child == nullptr)
+			return;
+		const bool functionStorage = storage != nullptr && !storage->isPacked
+				&& (storage->value.opcode == ValueTypeCode::Ref
+					|| storage->value.opcode == ValueTypeCode::RefNull)
+				&& ((storage->value.heap.kind == CanonHeapType::Kind::Abstract
+						&& (storage->value.heap.abstract == AbstractHeapType::Func
+							|| storage->value.heap.abstract == AbstractHeapType::NoFunc))
+					|| (storage->value.heap.kind == CanonHeapType::Kind::Global
+						&& [&] {
+							const auto idx = module->typeIndexForId(storage->value.heap.id);
+							return idx && module->typeView(*idx).kind() == CanonTypeKind::Func;
+						}()));
+		if (functionStorage) {
+			const uintptr_t raw = reinterpret_cast<uintptr_t>(child);
+			if (raw > 0 && raw <= totalFuncs) {
+				const uint32_t funcIdx = decodeRefFuncIndex(raw);
+				if (funcIdx < importedFuncCount)
+					child = &internals.importStorage[funcIdx];
+				else
+					child = &internals.internalCallables[funcIdx - importedFuncCount];
+				*reinterpret_cast<void**>(slot) = child;
+			}
+		}
+		if (child != nullptr && Store::global().gc().owns(child))
+			resolveRefFuncsInObject(child, visited);
+	};
+
+	if (view.kind() == CanonTypeKind::Struct) {
+		rewriteSlot(static_cast<uint8_t*>(ref) + GcHeader::kDescriptorOffset, nullptr);
+		const std::vector<size_t> offsets = structFieldOffsets(view);
+		const auto fields = view.structFields();
+		for (size_t i = 0; i < fields.size(); ++i)
+			rewriteSlot(static_cast<uint8_t*>(ref) + offsets[i], &fields[i].storage);
+		return;
+	}
+	if (view.kind() == CanonTypeKind::Array) {
+		const CanonFieldType& element = view.arrayElement();
+		const size_t dataOffset = gcArrayDataOffset(element.storage);
+		const size_t stride = gcStorageBytes(element.storage);
+		const uint32_t length = *reinterpret_cast<const uint32_t*>(
+				static_cast<uint8_t*>(ref) + GcHeader::kArrayLengthOffset);
+		for (uint32_t i = 0; i < length; ++i)
+			rewriteSlot(static_cast<uint8_t*>(ref) + dataOffset + i * stride,
+					&element.storage);
+	}
+}
+
 void ModuleInstance::resolveGlobalRefFuncs()
 {
 	// evalConstantExpr() returns `ref.func` as a sentinel: the raw function
@@ -778,6 +852,16 @@ void ModuleInstance::resolveGlobalRefFuncs()
 			v.ref = &internals.importStorage[funcIdx];
 		else
 			v.ref = &internals.internalCallables[funcIdx - importedFuncCount];
+	}
+
+	// Custom Descriptors can put a `ref.func` in a descriptor/vtable field
+	// whose value is reachable from a global. Those fields are not global cells;
+	// walk the object graph once so the same sentinel rewrite applies there.
+	std::vector<void*> visited;
+	for (Value& v : internals.globalsStorage) {
+		if ((v.kind == ValueTypeCode::StructRef || v.kind == ValueTypeCode::ArrayRef)
+				&& v.ref != nullptr)
+			resolveRefFuncsInObject(v.ref, visited);
 	}
 }
 
@@ -1031,6 +1115,8 @@ Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 			case GCOpcode::StructNewDefault: {
 				const uint32_t typeIdx = stream.readLEB128<uint32_t>();
 				const CoreTypeView st = module->typeView(typeIdx);
+				if (st.descriptor())
+					throw std::runtime_error("struct.new_default: described type requires struct.new_default_desc");
 				Value v{}; v.ref = allocateStructObject(static_cast<uint32_t>(structSize(st)), typeIdx); v.kind = ValueTypeCode::StructRef;
 				stack.push_back(v);
 				break;
@@ -1038,6 +1124,8 @@ Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 			case GCOpcode::StructNew: {
 				const uint32_t typeIdx = stream.readLEB128<uint32_t>();
 				const CoreTypeView st = module->typeView(typeIdx);
+				if (st.descriptor())
+					throw std::runtime_error("struct.new: described type requires struct.new_desc");
 				const auto stFields = st.structFields();
 				const std::vector<size_t> offsets = structFieldOffsets(st);
 				std::vector<Value> fieldValues(stFields.size());
@@ -1051,6 +1139,42 @@ Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 				break;
 			}
 
+			case GCOpcode::StructNewDesc: {
+				const uint32_t typeIdx = stream.readLEB128<uint32_t>();
+				const CoreTypeView st = module->typeView(typeIdx);
+				const auto stFields = st.structFields();
+				const std::vector<size_t> offsets = structFieldOffsets(st);
+				const Value descriptor = popValue();
+				std::vector<Value> fieldValues(stFields.size());
+				for (size_t i = stFields.size(); i-- > 0; )
+					fieldValues[i] = popValue();
+				void* object = allocateStructObject(static_cast<uint32_t>(structSize(st)),
+						typeIdx, descriptor.ref);
+				for (size_t i = 0; i < stFields.size(); ++i)
+					storeValue(object, offsets[i], gcStorageView(stFields[i].storage), fieldValues[i]);
+				Value v{}; v.ref = object; v.kind = ValueTypeCode::StructRef;
+				stack.push_back(v);
+				break;
+			}
+			case GCOpcode::StructNewDefaultDesc: {
+				const uint32_t typeIdx = stream.readLEB128<uint32_t>();
+				const CoreTypeView st = module->typeView(typeIdx);
+				const Value descriptor = popValue();
+				Value v{}; v.ref = allocateStructObject(static_cast<uint32_t>(structSize(st)),
+						typeIdx, descriptor.ref); v.kind = ValueTypeCode::StructRef;
+				stack.push_back(v);
+				break;
+			}
+			case GCOpcode::RefGetDesc: {
+				const uint32_t typeIdx = stream.readLEB128<uint32_t>();
+				const CoreTypeView st = module->typeView(typeIdx);
+				if (!st.descriptor())
+					throw std::runtime_error("ref.get_desc in constant expression: no descriptor");
+				const Value ref = popValue();
+				Value v{}; v.ref = structDescriptor(ref.ref); v.kind = ValueTypeCode::StructRef;
+				stack.push_back(v);
+				break;
+			}
 			case GCOpcode::ArrayNewDefault: {
 				const uint32_t typeIdx = stream.readLEB128<uint32_t>();
 				const CoreTypeView at = module->typeView(typeIdx);
@@ -1344,7 +1468,7 @@ void ModuleInstance::bufferInitFromElems(uint32_t elemIdx, void* dst, uint32_t s
 	}
 }
 
-void* ModuleInstance::allocateStructObject(uint32_t size, uint32_t localTypeIdx)
+void* ModuleInstance::allocateStructObject(uint32_t size, uint32_t localTypeIdx, void* descriptor)
 {
 	// Resolve the module-local index against this instance's module and stamp the
 	// canonical TypeId into the header, so a later cast can match it even from
@@ -1365,8 +1489,56 @@ void* ModuleInstance::allocateStructObject(uint32_t size, uint32_t localTypeIdx)
 	// it (docs/proposals/GC.md RC-1/RC-1b). A value on the operand stack is a
 	// borrow, so the creator does not own a reference.
 	*reinterpret_cast<uint32_t*>(object + GcHeader::kRefcountOffset) = 0;
+	// The RTT/descriptor slot is present in every struct header. An ordinary
+	// struct leaves it null; `struct.new_desc` supplies a reference and the new
+	// object owns a count on it, exactly like a reference field.
+	void** descriptorSlot = reinterpret_cast<void**>(object + GcHeader::kDescriptorOffset);
+	*descriptorSlot = descriptor == nullptr ? nullptr : refClone(descriptor);
 	++internals.gcAllocatedObjects;
 	return object;
+}
+
+void* ModuleInstance::structDescriptor(const void* ref) const
+{
+	if (ref == nullptr || !isInternalReference(ref) || isExternBox(ref))
+		return nullptr;
+	TypeId typeId{};
+	if (!tryGetGcTypeId(ref, typeId))
+		return nullptr;
+	const CoreTypeView view = subtypeForTypeId(typeId);
+	if (!view.valid() || view.kind() != CanonTypeKind::Struct)
+		return nullptr;
+	return *reinterpret_cast<void* const*>(
+			static_cast<const uint8_t*>(ref) + GcHeader::kDescriptorOffset);
+}
+
+void* ModuleInstance::descriptorPrototype(const void* ref) const
+{
+	void* descriptor = structDescriptor(ref);
+	if (descriptor == nullptr)
+		return nullptr;
+	TypeId typeId{};
+	if (!tryGetGcTypeId(descriptor, typeId))
+		return nullptr;
+	const CoreTypeView view = subtypeForTypeId(typeId);
+	if (!view.valid() || view.kind() != CanonTypeKind::Struct)
+		return nullptr;
+	const auto fields = view.structFields();
+	if (fields.empty() || fields.front().isMutable)
+		return nullptr;
+	const CanonStorageType& storage = fields.front().storage;
+	if (storage.isPacked || (storage.value.opcode != ValueTypeCode::Ref
+			&& storage.value.opcode != ValueTypeCode::RefNull))
+		return nullptr;
+	const CanonHeapType& heap = storage.value.heap;
+	const bool externHeap = (heap.kind == CanonHeapType::Kind::Abstract
+			&& heap.abstract == AbstractHeapType::Extern);
+	if (!externHeap)
+		return nullptr;
+	const size_t offset = gcAlignUp(GcHeader::kHeaderBytes,
+			gcStorageAlign(storage));
+	return *reinterpret_cast<void* const*>(
+			static_cast<const uint8_t*>(descriptor) + offset);
 }
 
 void* ModuleInstance::allocateArrayObject(uint32_t dataOffset, uint32_t elementSize, uint32_t length, uint32_t localTypeIdx)
@@ -1599,6 +1771,20 @@ bool ModuleInstance::refMatchesHeapType(const void* ref, const HeapType& heapTyp
 
 	if (ref == nullptr)
 		return nullable; // null matches only nullable target types
+
+	// Exact concrete targets match only that canonical type; they are not a
+	// supertype of the target's declared subtypes (Custom Descriptors).
+	if (heapType.isExact) {
+		if (!heapType.isTypeIndex)
+			return false;
+		const TypeId target = module->typeId(LocalTypeIdx{heapType.typeIndex});
+		if (const Callable* callable = Store::global().callableAt(ref))
+			return !callable->typeId.isNone() && callable->typeId == target;
+		TypeId gcTypeId;
+		if (tryGetGcTypeId(ref, gcTypeId))
+			return gcTypeId == target;
+		return false;
+	}
 
 	// Unboxed i31 immediate (low bit set).
 	const uintptr_t raw = reinterpret_cast<uintptr_t>(ref);
@@ -1878,6 +2064,9 @@ void ModuleInstance::childSlotsOf(void* ref, TypeId typeId, std::vector<uint8_t*
 
 	uint8_t* bytes = static_cast<uint8_t*>(ref);
 	if (subtype.kind() == CanonTypeKind::Struct) {
+		// The descriptor/RTT slot is a reference too (Custom Descriptors), even
+		// when the struct is an ordinary one with a null descriptor.
+		slots.push_back(bytes + GcHeader::kDescriptorOffset);
 		// The same offset arithmetic as structFieldOffsets (H1).
 		size_t offset = GcHeader::kHeaderBytes;
 		for (const CanonFieldType& field : subtype.structFields()) {

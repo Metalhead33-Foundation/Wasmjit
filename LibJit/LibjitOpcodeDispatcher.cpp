@@ -1373,6 +1373,50 @@ static void* wasm_struct_new_default_impl(WASM::VMContext* vm, uint32_t size, ui
 	return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateStructObject(size, typeIndex);
 }
 
+// Custom Descriptors: the descriptor operand is retained by the new object.
+static void* wasm_struct_new_desc_impl(WASM::VMContext* vm, uint32_t size,
+		uint32_t typeIndex, void* descriptor)
+{
+	return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateStructObject(
+			size, typeIndex, descriptor);
+}
+
+static void* wasm_ref_get_desc_impl(WASM::VMContext* vm, void* ref)
+{
+	WASM::ModuleInstance* instance = reinterpret_cast<WASM::ModuleInstance*>(vm);
+	if (ref == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::NullStructureReference,
+				"ref.get_desc: null structure reference");
+		return nullptr;
+	}
+	void* descriptor = instance->structDescriptor(ref);
+	if (descriptor == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::NullReference,
+				"ref.get_desc: null custom descriptor");
+		return nullptr;
+	}
+	return descriptor;
+}
+
+static int32_t wasm_desc_eq_impl(WASM::VMContext* vm, void* ref, void* descriptor,
+		int32_t allowNull)
+{
+	WASM::ModuleInstance* instance = reinterpret_cast<WASM::ModuleInstance*>(vm);
+	if (descriptor == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::NullReference,
+				"cast_desc_eq: null custom descriptor");
+		return 0;
+	}
+	if (ref == nullptr) {
+		if (allowNull)
+			return 1;
+		WASM::reportTrap(WASM::TrapKind::NullStructureReference,
+				"cast_desc_eq: null structure reference");
+		return 0;
+	}
+	return instance->structDescriptor(ref) == descriptor ? 1 : 0;
+}
+
 static void* wasm_array_new_default_impl(WASM::VMContext* vm, uint32_t dataOffset, uint32_t elementSize, uint32_t length, uint32_t typeIndex)
 {
 	return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateArrayObject(dataOffset, elementSize, length, typeIndex);
@@ -5766,6 +5810,8 @@ void OpcodeDispatcher::dispatchBrOnNonNull(WASM::LabelIdx arg) {
 }
 void OpcodeDispatcher::dispatchStructNew(WASM::TypeIdx arg) {
 	const WASM::CoreTypeView st = structTypeForIndex(arg);
+	if (st.descriptor())
+		throw std::runtime_error("struct.new: use struct.new_desc for a described type");
 	const auto fields = st.structFields();
 	jit_type_t structType = jitTypeForTypeIdx(arg);
 	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint};
@@ -5798,6 +5844,8 @@ void OpcodeDispatcher::dispatchStructNew(WASM::TypeIdx arg) {
 	pushValue(castRefValue(object, structRefType(arg, false)));
 }
 void OpcodeDispatcher::dispatchStructNewDefault(WASM::TypeIdx arg) {
+	if (structTypeForIndex(arg).descriptor())
+		throw std::runtime_error("struct.new_default: use struct.new_default_desc for a described type");
 	jit_type_t structType = jitTypeForTypeIdx(arg);
 	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint};
 	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, params, 3, 1);
@@ -5810,6 +5858,90 @@ void OpcodeDispatcher::dispatchStructNewDefault(WASM::TypeIdx arg) {
 		reinterpret_cast<void*>(wasm_struct_new_default_impl), sig, args, 3, 0);
 	pushValue(castRefValue(object, structRefType(arg, false)));
 }
+void OpcodeDispatcher::dispatchStructNewDesc(WASM::TypeIdx arg) {
+	const WASM::CoreTypeView st = structTypeForIndex(arg);
+	const auto fields = st.structFields();
+	jit_type_t structType = jitTypeForTypeIdx(arg);
+	jit_value_t descriptor = popValue();
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint, jit_type_void_ptr};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, params, 4, 1);
+	jit_value_t args[] = {
+		vmContextValue(),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(jit_type_get_size(structType))),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg)),
+		refAsVoidPtr(descriptor)
+	};
+	jit_value_t object = jit_insn_call_native(function, "wasm_struct_new_desc_impl",
+		reinterpret_cast<void*>(wasm_struct_new_desc_impl), sig, args, 4, 0);
+	// The helper retained the descriptor; release the operand stack's own
+	// ownership of that reference.
+	emitDropValue(descriptor);
+
+	std::vector<jit_value_t> values(fields.size());
+	for (size_t i = fields.size(); i-- > 0; )
+		values[i] = popValue();
+	for (size_t i = 0; i < fields.size(); ++i) {
+		const WASM::CanonStorageType& storage = fields[i].storage;
+		jit_type_t fieldType = typeTranslator.translateCanonStorage(storage);
+		if (!storage.isPacked && WASM::isReferenceType(storage.value.opcode)) {
+			jit_value_t slot = jit_insn_add(function, object,
+					jit_value_create_nint_constant(function, jit_type_nint,
+							structFieldOffset(arg, static_cast<uint32_t>(i))));
+			emitRefStore(slot, values[i]);
+			continue;
+		}
+		jit_insn_store_relative(function, object, structFieldOffset(arg, static_cast<uint32_t>(i)),
+				castRefValue(values[i], fieldType));
+	}
+	pushValue(castRefValue(object, structRefType(arg, false)));
+}
+
+void OpcodeDispatcher::dispatchStructNewDefaultDesc(WASM::TypeIdx arg) {
+	jit_type_t structType = jitTypeForTypeIdx(arg);
+	jit_value_t descriptor = popValue();
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint, jit_type_void_ptr};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, params, 4, 1);
+	jit_value_t args[] = {
+		vmContextValue(),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(jit_type_get_size(structType))),
+		jit_value_create_nint_constant(function, jit_type_uint, static_cast<jit_nint>(arg)),
+		refAsVoidPtr(descriptor)
+	};
+	jit_value_t object = jit_insn_call_native(function, "wasm_struct_new_desc_impl",
+		reinterpret_cast<void*>(wasm_struct_new_desc_impl), sig, args, 4, 0);
+	emitDropValue(descriptor);
+	pushValue(castRefValue(object, structRefType(arg, false)));
+}
+
+void OpcodeDispatcher::dispatchRefGetDesc(WASM::TypeIdx arg) {
+	jit_value_t ref = popValue();
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_void_ptr};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, params, 2, 1);
+	jit_value_t args[] = {vmContextValue(), refAsVoidPtr(ref)};
+	jit_value_t descriptor = jit_insn_call_native(function, "wasm_ref_get_desc_impl",
+		reinterpret_cast<void*>(wasm_ref_get_desc_impl), sig, args, 2, 0);
+	const WASM::CoreTypeView view = structTypeForIndex(arg);
+	if (!view.descriptor())
+		throw std::runtime_error("ref.get_desc: type has no descriptor");
+	const WASM::CanonHeapType canonical = *view.descriptor();
+	WASM::HeapType heap;
+	if (canonical.kind == WASM::CanonHeapType::Kind::Global) {
+		const auto local = module.typeIndexForId(canonical.id);
+		if (!local)
+			throw std::runtime_error("ref.get_desc: descriptor type is not local");
+		heap.isTypeIndex = true;
+		heap.typeIndex = *local;
+	} else if (canonical.kind == WASM::CanonHeapType::Kind::Abstract) {
+		heap.isTypeIndex = false;
+		heap.abstract = canonical.abstract;
+	} else {
+		throw std::runtime_error("ref.get_desc: unresolved descriptor type");
+	}
+	heap.isExact = canonical.isExact;
+	pushValue(castRefValue(descriptor, jitRefTypeForHeapType(heap, false)));
+	emitDropValue(ref);
+}
+
 void OpcodeDispatcher::dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2) {
 	const auto fields = structTypeForIndex(arg1).structFields();
 	assert(arg2 < fields.size());
@@ -6328,6 +6460,78 @@ void OpcodeDispatcher::dispatchRefCastNull(const WASM::HeapType& arg) {
 	jit_insn_label(function, &matched);
 	pushValue(castRefValue(ref, jitRefTypeForHeapType(arg, true)));
 }
+void OpcodeDispatcher::dispatchRefCastDescEq(const WASM::HeapType& arg) {
+	jit_value_t descriptor = popValue();
+	jit_value_t ref = popValue();
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr, jit_type_int};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 4, 1);
+	jit_value_t args[] = {vmContextValue(), refAsVoidPtr(ref), refAsVoidPtr(descriptor),
+			jit_value_create_nint_constant(function, jit_type_int, 0)};
+	jit_value_t matched = jit_insn_call_native(function, "wasm_desc_eq_impl",
+			reinterpret_cast<void*>(wasm_desc_eq_impl), sig, args, 4, 0);
+	jit_label_t ok = jit_label_undefined;
+	jit_insn_branch_if(function, matched, &ok);
+	emitTrap(WASM::TrapKind::CastFailure);
+	jit_insn_label(function, &ok);
+	pushValue(castRefValue(ref, jitRefTypeForHeapType(arg, false)));
+	emitDropValue(descriptor);
+	emitDropValue(ref);
+}
+
+void OpcodeDispatcher::dispatchRefCastDescEqNull(const WASM::HeapType& arg) {
+	jit_value_t descriptor = popValue();
+	jit_value_t ref = popValue();
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr, jit_type_int};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 4, 1);
+	jit_value_t args[] = {vmContextValue(), refAsVoidPtr(ref), refAsVoidPtr(descriptor),
+			jit_value_create_nint_constant(function, jit_type_int, 1)};
+	jit_value_t matched = jit_insn_call_native(function, "wasm_desc_eq_impl",
+			reinterpret_cast<void*>(wasm_desc_eq_impl), sig, args, 4, 0);
+	jit_label_t ok = jit_label_undefined;
+	jit_insn_branch_if(function, matched, &ok);
+	emitTrap(WASM::TrapKind::CastFailure);
+	jit_insn_label(function, &ok);
+	pushValue(castRefValue(ref, jitRefTypeForHeapType(arg, true)));
+	emitDropValue(descriptor);
+	emitDropValue(ref);
+}
+void OpcodeDispatcher::dispatchBrOnCastDescEq(uint8_t castop, WASM::LabelIdx l,
+		WASM::HeapType ht1, WASM::HeapType ht2) {
+	(void)ht1;
+	const bool targetNullable = (castop & 0x02) != 0;
+	if (unreachableCode)
+		return;
+	jit_value_t descriptor = popValue();
+	jit_value_t ref = popValue();
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr, jit_type_int};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 4, 1);
+	jit_value_t args[] = {vmContextValue(), refAsVoidPtr(ref), refAsVoidPtr(descriptor),
+			jit_value_create_nint_constant(function, jit_type_int, targetNullable ? 1 : 0)};
+	jit_value_t matched = jit_insn_call_native(function, "wasm_desc_eq_impl",
+			reinterpret_cast<void*>(wasm_desc_eq_impl), sig, args, 4, 0);
+	emitDropValue(descriptor);
+	jit_type_t targetType = jitRefTypeForHeapType(ht2, targetNullable);
+	jit_value_t casted = castRefValue(ref, targetType);
+
+	if (l >= controlStack.size()) {
+		jit_label_t skip = jit_label_undefined;
+		jit_insn_branch_if_not(function, matched, &skip);
+		valueStack.push_back(casted);
+		emitFunctionReturn(false);
+		valueStack.pop_back();
+		jit_insn_label(function, &skip);
+		pushValue(ref);
+		return;
+	}
+	ControlBlock& target = branchTarget(l);
+	const auto& slots = branchSlotsForTarget(target);
+	valueStack.push_back(casted);
+	storeStackTopToSlots(slots);
+	valueStack.pop_back();
+	jit_insn_branch_if(function, matched, &target.label);
+	pushValue(ref);
+}
+
 void OpcodeDispatcher::dispatchBrOnCast(uint8_t castop, WASM::LabelIdx l, WASM::HeapType ht1, WASM::HeapType ht2) {
 	// `castop` is the spec's castflags: bit 0 = the *source* is nullable, bit 1 =
 	// the *target* is nullable. Only the target's flag changes anything here — it
@@ -6378,6 +6582,43 @@ void OpcodeDispatcher::dispatchBrOnCast(uint8_t castop, WASM::LabelIdx l, WASM::
 	jit_insn_branch_if(function, matched, &target.label);
 	pushValue(ref);
 }
+void OpcodeDispatcher::dispatchBrOnCastDescEqFail(uint8_t castop, WASM::LabelIdx l,
+		WASM::HeapType ht1, WASM::HeapType ht2) {
+	(void)ht1;
+	const bool targetNullable = (castop & 0x02) != 0;
+	if (unreachableCode)
+		return;
+	jit_value_t descriptor = popValue();
+	jit_value_t ref = popValue();
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr, jit_type_int};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 4, 1);
+	jit_value_t args[] = {vmContextValue(), refAsVoidPtr(ref), refAsVoidPtr(descriptor),
+			jit_value_create_nint_constant(function, jit_type_int, targetNullable ? 1 : 0)};
+	jit_value_t matched = jit_insn_call_native(function, "wasm_desc_eq_impl",
+			reinterpret_cast<void*>(wasm_desc_eq_impl), sig, args, 4, 0);
+	emitDropValue(descriptor);
+	jit_type_t targetType = jitRefTypeForHeapType(ht2, targetNullable);
+	jit_value_t casted = castRefValue(ref, targetType);
+
+	if (l >= controlStack.size()) {
+		jit_label_t skip = jit_label_undefined;
+		jit_insn_branch_if(function, matched, &skip);
+		valueStack.push_back(ref);
+		emitFunctionReturn(false);
+		valueStack.pop_back();
+		jit_insn_label(function, &skip);
+		pushValue(casted);
+		return;
+	}
+	ControlBlock& target = branchTarget(l);
+	const auto& slots = branchSlotsForTarget(target);
+	valueStack.push_back(ref);
+	storeStackTopToSlots(slots);
+	valueStack.pop_back();
+	jit_insn_branch_if_not(function, matched, &target.label);
+	pushValue(casted);
+}
+
 void OpcodeDispatcher::dispatchBrOnCastFail(uint8_t castop, WASM::LabelIdx l, WASM::HeapType ht1, WASM::HeapType ht2) {
 	// Same flags, opposite branch: fall through with the cast value, branch with
 	// the original one (the `ht1 \ ht2` case).

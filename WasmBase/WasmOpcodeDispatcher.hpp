@@ -274,6 +274,14 @@ protected:
 	virtual void dispatchBrOnNonNull(LabelIdx arg) { onUnhandledOpcode("dispatchBrOnNonNull"); }
 	virtual void dispatchStructNew(TypeIdx arg) { onUnhandledOpcode("dispatchStructNew"); }
 	virtual void dispatchStructNewDefault(TypeIdx arg) { onUnhandledOpcode("dispatchStructNewDefault"); }
+	// Custom Descriptors (0xFB 32..38).
+	virtual void dispatchStructNewDesc(TypeIdx arg) { onUnhandledOpcode("dispatchStructNewDesc"); }
+	virtual void dispatchStructNewDefaultDesc(TypeIdx arg) { onUnhandledOpcode("dispatchStructNewDefaultDesc"); }
+	virtual void dispatchRefGetDesc(TypeIdx arg) { onUnhandledOpcode("dispatchRefGetDesc"); }
+	virtual void dispatchRefCastDescEq(const HeapType& arg) { onUnhandledOpcode("dispatchRefCastDescEq"); }
+	virtual void dispatchRefCastDescEqNull(const HeapType& arg) { onUnhandledOpcode("dispatchRefCastDescEqNull"); }
+	virtual void dispatchBrOnCastDescEq(uint8_t castop, LabelIdx l, HeapType ht1, HeapType ht2) { onUnhandledOpcode("dispatchBrOnCastDescEq"); }
+	virtual void dispatchBrOnCastDescEqFail(uint8_t castop, LabelIdx l, HeapType ht1, HeapType ht2) { onUnhandledOpcode("dispatchBrOnCastDescEqFail"); }
 	virtual void dispatchStructGet(TypeIdx arg1, uint32_t arg2) { onUnhandledOpcode("dispatchStructGet"); }
 	virtual void dispatchStructGetS(TypeIdx arg1, uint32_t arg2) { onUnhandledOpcode("dispatchStructGetS"); }
 	virtual void dispatchStructGetU(TypeIdx arg1, uint32_t arg2) { onUnhandledOpcode("dispatchStructGetU"); }

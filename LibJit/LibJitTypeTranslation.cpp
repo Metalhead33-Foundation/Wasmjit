@@ -233,11 +233,12 @@ jit_type_t LibJitTypeTranslator::translateFunctionSignature(const WASM::FuncType
 jit_type_t LibJitTypeTranslator::translateStruct(const WASM::StructType& wasm_struct) {
 	std::vector<jit_type_t> fields;
 
-	// 1. HIDDEN GC HEADER: TypeId + refcount (docs/proposals/GC.md D14; layout
-	//    in WasmGcHeader.hpp). Must match the runtime structFieldOffsets and the
-	//    field-index base used by structFieldOffset (docs/proposals/GC.md §6.3).
-	for (unsigned i = 0; i < WASM::GcHeader::kHeaderFields; ++i)
-		fields.push_back(jit_type_uint);
+	// 1. HIDDEN GC HEADER: TypeId + refcount + descriptor pointer (Custom
+	//    Descriptors; layout in WasmGcHeader.hpp). Must match the runtime
+	//    structFieldOffsets and structFieldOffset (docs/proposals/GC.md §6.3).
+	fields.push_back(jit_type_uint);
+	fields.push_back(jit_type_uint);
+	fields.push_back(jit_type_void_ptr);
 
 	// 2. The actual WASM fields
 	for(const auto& it : wasm_struct.fields) {
@@ -316,8 +317,9 @@ jit_type_t LibJitTypeTranslator::translateFunctionSignature(WASM::CoreTypeView v
 jit_type_t LibJitTypeTranslator::translateStruct(WASM::CoreTypeView view)
 {
 	std::vector<jit_type_t> fields;
-	for (unsigned i = 0; i < WASM::GcHeader::kHeaderFields; ++i)
-		fields.push_back(jit_type_uint);
+	fields.push_back(jit_type_uint);
+	fields.push_back(jit_type_uint);
+	fields.push_back(jit_type_void_ptr);
 	for (const WASM::CanonFieldType& field : view.structFields())
 		fields.push_back(translateCanonStorage(field.storage));
 	return jit_type_create_struct(fields.data(), fields.size(), 1);

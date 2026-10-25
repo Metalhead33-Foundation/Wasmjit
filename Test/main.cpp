@@ -1215,6 +1215,93 @@ TEST_CASE("custom descriptor clauses round-trip and agree")
 	REQUIRE(chain.typeView(2).describes()->id == chain.typeId(WASM::LocalTypeIdx{1}));
 }
 
+TEST_CASE("custom descriptor exposes the JS prototype prerequisite")
+{
+	WASM::RegistryImportResolver imports;
+	int hostTarget = 0;
+	WASM::Value hostValue{};
+	hostValue.kind = WASM::ValueTypeCode::ExternRef;
+	hostValue.ref = &hostTarget;
+	imports.registerGlobal("env", "proto", hostValue);
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("custom_prototype", imports, *backend);
+	REQUIRE(loaded.instance.get() != nullptr);
+	auto counter = loaded.instance->exportedFunction("counter");
+	REQUIRE(counter.has_value());
+	void* object = WASM::callCallable<void*>(*counter);
+	REQUIRE(object != nullptr);
+	REQUIRE(loaded.instance->descriptorPrototype(object) == &hostTarget);
+}
+
+TEST_CASE("custom descriptors allocate and retrieve their RTT")
+{
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("custom_runtime", imports, *backend);
+	REQUIRE(loaded.instance.get() != nullptr);
+	auto descriptor = loaded.instance->exportedFunction("descriptor");
+	auto make = loaded.instance->exportedFunction("new");
+	auto first = loaded.instance->exportedFunction("first");
+	auto descriptorValue = loaded.instance->exportedFunction("desc_value");
+	auto cast = loaded.instance->exportedFunction("cast");
+	REQUIRE(descriptor.has_value());
+	REQUIRE(make.has_value());
+	REQUIRE(first.has_value());
+	REQUIRE(descriptorValue.has_value());
+	REQUIRE(cast.has_value());
+
+	void* desc = WASM::callCallable<void*>(*descriptor);
+	REQUIRE(desc != nullptr);
+	void* object = WASM::callCallable<void*>(*make, desc);
+	REQUIRE(object != nullptr);
+	REQUIRE(WASM::callCallable<int32_t>(*first, object) == 7);
+	REQUIRE(WASM::callCallable<int32_t>(*descriptorValue, object) == 42);
+	REQUIRE(WASM::callCallable<int32_t>(*cast, object, desc) == 7);
+	auto makeDefault = loaded.instance->exportedFunction("new_default");
+	auto castNull = loaded.instance->exportedFunction("cast_null");
+	auto globalDescValue = loaded.instance->exportedFunction("global_desc_value");
+	auto branch = loaded.instance->exportedFunction("branch");
+	auto branchFail = loaded.instance->exportedFunction("branch_fail");
+	auto getDescNull = loaded.instance->exportedFunction("get_desc_null");
+	REQUIRE(makeDefault.has_value());
+	REQUIRE(castNull.has_value());
+	REQUIRE(globalDescValue.has_value());
+	REQUIRE(branch.has_value());
+	REQUIRE(branchFail.has_value());
+	REQUIRE(getDescNull.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*makeDefault, desc) == 0);
+	REQUIRE(WASM::callCallable<int32_t>(*castNull, desc) == 1);
+	REQUIRE(WASM::callCallable<int32_t>(*globalDescValue) == 42);
+	REQUIRE(WASM::callCallable<void*>(*branch, object, desc) == object);
+	REQUIRE(WASM::callCallable<void*>(*branchFail, object, desc) == object);
+	REQUIRE_THROWS_AS(WASM::callCallable<int32_t>(*getDescNull,
+			static_cast<void*>(nullptr)), WASM::Trap);
+
+	// The descriptor slot is a real child reference: when the described object
+	// dies, its descriptor count is released.
+	void* releasedDesc = WASM::callCallable<void*>(*descriptor);
+	void* releasedObject = WASM::callCallable<void*>(*make, releasedDesc);
+	REQUIRE(releasedObject != nullptr);
+	REQUIRE(loaded.instance->refClone(releasedObject) == releasedObject);
+	loaded.instance->refDrop(releasedObject);
+	loaded.instance->refDrop(releasedObject);
+	loaded.instance->gcCollect();
+	REQUIRE(loaded.instance->gcRefCount(releasedDesc) == 1);
+	loaded.instance->refDrop(releasedDesc);
+	loaded.instance->gcCollect();
+
+	void* other = WASM::callCallable<void*>(*descriptor);
+	REQUIRE(other != nullptr);
+	REQUIRE_THROWS_AS(WASM::callCallable<int32_t>(*cast, object, other),
+			WASM::Trap);
+	REQUIRE(loaded.instance->gcRefCount(desc) >= 1);
+}
+
+TEST_CASE("custom descriptor allocation requires the descriptor instruction")
+{
+	REQUIRE_THROWS(loadTestModule("bad_struct_new"));
+}
+
 TEST_CASE("custom descriptor clauses must agree")
 {
 	REQUIRE_THROWS(loadTestModule("bad_descriptor"));
@@ -1239,6 +1326,22 @@ TEST_CASE("exact heap types preserve exactness")
 	REQUIRE(imports.importDescriptors().size() == 1);
 	REQUIRE(imports.importDescriptors()[0].type.kind == WASM::ExternalKind::Function);
 	REQUIRE(imports.importDescriptors()[0].type.isExact);
+
+	// Exact import linking requires a provider with exactly the declared type;
+	// an untyped native callable is not enough.
+	WASM::RegistryImportResolver resolver;
+	WASM::Callable exactCallable{};
+	exactCallable.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) {});
+	exactCallable.typeId = imports.typeId(WASM::LocalTypeIdx{0});
+	resolver.registerFunction("m", "f", exactCallable);
+	auto backend = TestBackend::create();
+	REQUIRE(backend->instantiator().instantiate(imports, resolver).get() != nullptr);
+
+	WASM::RegistryImportResolver untyped;
+	WASM::Callable untypedCallable{};
+	untypedCallable.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) {});
+	untyped.registerFunction("m", "f", untypedCallable);
+	REQUIRE_THROWS(backend->instantiator().instantiate(imports, untyped));
 
 	// Exactness is part of canonical identity: the same function type with an
 	// ordinary `(ref $foo)` parameter is a different TypeId.
@@ -4312,10 +4415,10 @@ TEST_CASE("GC heap: region allocation, alignment and recycling")
 namespace {
 
 // `$pair` in gc_refcount.wat is `(struct (field i32) (field (ref null any)))`:
-// header 8 bytes, i32 at 8, reference field at 16 — the same layout the JIT and
-// structFieldOffsets use (H1).
-constexpr size_t kPairBytes = 24;
-constexpr size_t kPairRefFieldOffset = 16;
+// struct header 16 bytes (TypeId + refcount + descriptor), i32 at 16, reference
+// field at 24 — the same layout the JIT and structFieldOffsets use (H1).
+constexpr size_t kPairBytes = 32;
+constexpr size_t kPairRefFieldOffset = 24;
 
 uint32_t firstStructType(const WASM::Module& module)
 {
@@ -9128,26 +9231,26 @@ TEST_CASE("more array constructors copy from arrays, memory and tables")
 		{0x00, 0x41, 0x16, 0x0b},                                // 22
 		// [1,2,3] -> subslice (start 1, len 2) -> [2,3]; element 0 is 2.
 		{0x00, 0x41, 0x01, 0x41, 0x02, 0x41, 0x03, 0xfb, 0x08, 0x00, 0x03,
-		 0x41, 0x01, 0x41, 0x02, 0xfb, 0x20, 0x00, 0x00,
+		 0x41, 0x01, 0x41, 0x02, 0xfb, 0x40, 0x00, 0x00,
 		 0x41, 0x00, 0xfb, 0x0b, 0x00, 0x0b},
 		// Memory elements [10,20,30,40]; element 2 is 30.
-		{0x00, 0x41, 0x00, 0x41, 0x04, 0xfb, 0x21, 0x00, 0x00,
+		{0x00, 0x41, 0x00, 0x41, 0x04, 0xfb, 0x41, 0x00, 0x00,
 		 0x41, 0x02, 0xfb, 0x0b, 0x00, 0x0b},
 		// Two table entries; the first is non-null.
-		{0x00, 0x41, 0x00, 0x41, 0x02, 0xfb, 0x22, 0x01, 0x00,
+		{0x00, 0x41, 0x00, 0x41, 0x02, 0xfb, 0x42, 0x01, 0x00,
 		 0x41, 0x00, 0xfb, 0x0b, 0x01, 0xd1, 0x0b},
 		// Copy a reference-element array (both entries are null).
 		{0x00, 0xd0, 0x70, 0xd0, 0x70, 0xfb, 0x08, 0x01, 0x02,
-		 0x41, 0x00, 0x41, 0x02, 0xfb, 0x20, 0x01, 0x01,
+		 0x41, 0x00, 0x41, 0x02, 0xfb, 0x40, 0x01, 0x01,
 		 0x41, 0x00, 0xfb, 0x0b, 0x01, 0xd1, 0x0b},
 		// Source length 3, start 2, length 2 -> out of bounds.
 		{0x00, 0x41, 0x01, 0x41, 0x02, 0x41, 0x03, 0xfb, 0x08, 0x00, 0x03,
-		 0x41, 0x02, 0x41, 0x02, 0xfb, 0x20, 0x00, 0x00, 0x1a, 0x41, 0x00, 0x0b},
+		 0x41, 0x02, 0x41, 0x02, 0xfb, 0x40, 0x00, 0x00, 0x1a, 0x41, 0x00, 0x0b},
 		// 16384 i32 elements are exactly one page; one more traps.
-		{0x00, 0x41, 0x80, 0x80, 0x01, 0x41, 0x01, 0xfb, 0x21, 0x00, 0x00,
+		{0x00, 0x41, 0x80, 0x80, 0x01, 0x41, 0x01, 0xfb, 0x41, 0x00, 0x00,
 		 0x1a, 0x41, 0x00, 0x0b},
 		// Table length 2, start 1, length 2 -> out of bounds.
-		{0x00, 0x41, 0x01, 0x41, 0x02, 0xfb, 0x22, 0x01, 0x00, 0x1a, 0x41, 0x00, 0x0b}
+		{0x00, 0x41, 0x01, 0x41, 0x02, 0xfb, 0x42, 0x01, 0x00, 0x1a, 0x41, 0x00, 0x0b}
 	});
 	// Data segment 0: i32 [10, 20, 30, 40] at offset 0.
 	module.section(0x0b, {0x01, 0x00, 0x41, 0x00, 0x0b, 0x10,
@@ -9208,7 +9311,7 @@ TEST_CASE("more array constructors copy from arrays, memory and tables")
 	refMemory.section(0x01, {0x02, 0x5e, 0x70, 0x01, 0x60, 0x00, 0x01, 0x7f});
 	refMemory.functions(std::vector<uint8_t>{0x01});
 	refMemory.section(0x05, {0x01, 0x00, 0x01});
-	refMemory.code({{0x00, 0x41, 0x00, 0x41, 0x00, 0xfb, 0x21, 0x00, 0x00,
+	refMemory.code({{0x00, 0x41, 0x00, 0x41, 0x00, 0xfb, 0x41, 0x00, 0x00,
 		0x1a, 0x41, 0x00, 0x0b}});
 	REQUIRE(gcValidationError(refMemory).find("has no defined bit width")
 			!= std::string::npos);
@@ -9218,7 +9321,7 @@ TEST_CASE("more array constructors copy from arrays, memory and tables")
 	intTable.section(0x01, {0x02, 0x5e, 0x7f, 0x01, 0x60, 0x00, 0x01, 0x7f});
 	intTable.functions(std::vector<uint8_t>{0x01});
 	intTable.section(0x04, {0x01, 0x70, 0x00, 0x01});
-	intTable.code({{0x00, 0x41, 0x00, 0x41, 0x00, 0xfb, 0x22, 0x00, 0x00,
+	intTable.code({{0x00, 0x41, 0x00, 0x41, 0x00, 0xfb, 0x42, 0x00, 0x00,
 		0x1a, 0x41, 0x00, 0x0b}});
 	REQUIRE(gcValidationError(intTable).find("is not a reference")
 			!= std::string::npos);
@@ -9231,7 +9334,7 @@ TEST_CASE("more array constructors copy from arrays, memory and tables")
 		0x60, 0x00, 0x01, 0x7f});
 	elementMismatch.functions(std::vector<uint8_t>{0x02});
 	elementMismatch.code({{0x00, 0xd0, 0x01, 0x41, 0x00, 0x41, 0x00,
-		0xfb, 0x20, 0x00, 0x01, 0x1a, 0x41, 0x00, 0x0b}});
+		0xfb, 0x40, 0x00, 0x01, 0x1a, 0x41, 0x00, 0x0b}});
 	REQUIRE(gcValidationError(elementMismatch).find("is not a subtype")
 			!= std::string::npos);
 
@@ -9243,7 +9346,7 @@ TEST_CASE("more array constructors copy from arrays, memory and tables")
 		0x60, 0x00, 0x01, 0x7f});
 	tableMismatch.functions(std::vector<uint8_t>{0x02});
 	tableMismatch.section(0x04, {0x01, 0x70, 0x00, 0x01});
-	tableMismatch.code({{0x00, 0x41, 0x00, 0x41, 0x00, 0xfb, 0x22, 0x01, 0x00,
+	tableMismatch.code({{0x00, 0x41, 0x00, 0x41, 0x00, 0xfb, 0x42, 0x01, 0x00,
 		0x1a, 0x41, 0x00, 0x0b}});
 	REQUIRE(gcValidationError(tableMismatch).find("is not a subtype")
 			!= std::string::npos);

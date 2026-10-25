@@ -119,6 +119,43 @@ void WASM::OpcodeDispatcher::dispatchPrefixGC(FastMemReader& stream, GCOpcode op
 			dispatchStructNewDefault(x);
 			break;
 		}
+		// Custom Descriptors: descriptor-taking allocation and access.
+		case GCOpcode::StructNewDesc: {
+			TypeIdx x = stream.readLEB128<TypeIdx>();
+			dispatchStructNewDesc(x);
+			break;
+		}
+		case GCOpcode::StructNewDefaultDesc: {
+			TypeIdx x = stream.readLEB128<TypeIdx>();
+			dispatchStructNewDefaultDesc(x);
+			break;
+		}
+		case GCOpcode::RefGetDesc: {
+			TypeIdx x = stream.readLEB128<TypeIdx>();
+			dispatchRefGetDesc(x);
+			break;
+		}
+		case GCOpcode::RefCastDescEq:
+		case GCOpcode::RefCastDescEqNull: {
+			HeapType ht; stream >> ht;
+			if (opcode == GCOpcode::RefCastDescEq)
+				dispatchRefCastDescEq(ht);
+			else
+				dispatchRefCastDescEqNull(ht);
+			break;
+		}
+		case GCOpcode::BrOnCastDescEq:
+		case GCOpcode::BrOnCastDescEqFail: {
+			uint8_t castop = stream.read<uint8_t>();
+			LabelIdx l = stream.readLEB128<LabelIdx>();
+			HeapType ht1; stream >> ht1;
+			HeapType ht2; stream >> ht2;
+			if (opcode == GCOpcode::BrOnCastDescEq)
+				dispatchBrOnCastDescEq(castop, l, ht1, ht2);
+			else
+				dispatchBrOnCastDescEqFail(castop, l, ht1, ht2);
+			break;
+		}
 		case GCOpcode::StructGet: {
 			TypeIdx  x = stream.readLEB128<TypeIdx>();
 			uint32_t i = stream.readLEB128<uint32_t>();
