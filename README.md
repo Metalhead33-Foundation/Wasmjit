@@ -22,6 +22,12 @@ backend-agnostic.
   and `WasmStub/` stays a pretty-printer. The decision and its reasoning are in
   [`docs/proposals/STACK_SWITCHING.md`](docs/proposals/STACK_SWITCHING.md)
   §10.15 (D-3).
+- **Current milestone: API/ABI stability.** Declared and measured in
+  [`docs/API_ABI_STABILITY.md`](docs/API_ABI_STABILITY.md): four gates (a
+  production-grade LibJIT backend, additive-only evolution, a backend set that
+  can grow, a mergeable branch), the nine surfaces they freeze, and the per-gate
+  distance. It is met when all four pass; today two do, and the rest is
+  documentation plus embedding-API work — no heavy refactoring.
 - **Still open** (tracked, not started): a second and third backend
   (`Asmjit/`, `Sljit/` are scaffolds), a published embedding API with
   packaging/installation, and the long-term qmake → CMake move.
@@ -65,6 +71,7 @@ per-milestone done markers, is the authoritative per-item status.
 | [`SIMD_BACKENDS.md`](docs/SIMD_BACKENDS.md) | Whether LibJIT / SLJIT / AsmJit support SIMD, the workarounds when they do not, the recommended helper-based lowering for LibJIT — with the native path a backend that has vector registers takes instead (§4, SIMD-8) — and a per-layer laxness budget for conforming loosely | Research note | `████████████████████` survey current |
 | [`SIMD_LIBJIT.md`](docs/SIMD_LIBJIT.md) | The LibJIT-only SIMD decision: `v128` in 16-byte-aligned frame slots, pointer-arg native helpers, Highway 1.4.0 (with the GLM/SLEEF/xsimd/psimd/SIMDe verdicts), the wasm semantics hazards, the four test layers and `SIMD-L0…SIMD-L8` | Design decision | `████████████████████` decided |
 | [`LAYERING.md`](docs/LAYERING.md) | The backend-agnosticism rule for `WasmBase/`: what the core may not name, the contracts it owns that a backend must honour, the vocabulary to use instead, and the check to run | Policy note | `████████████████████` current |
+| [`API_ABI_STABILITY.md`](docs/API_ABI_STABILITY.md) | **The current milestone.** The four gates that declare API/ABI stability, the nine surfaces they freeze, the gap classes (additive / per-backend / upstream-blocked / deferred / heavy-refactor), the "no heavy refactoring" audit, the `LibjitDispatcher` → `master` merge readiness, and the measured verdict per gate | Milestone + proximity study | `██████████░░░░░░░░░░` 2 of 4 gates — G2 (additive-only evolution) and G4 (mergeable branch) pass; G1/G3 are one documentation-plus-API pass away |
 
 ### Proposal notes (`docs/proposals/`)
 

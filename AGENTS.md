@@ -29,6 +29,11 @@ the one-line check to run.
   input-derived allocation bounds, the allocation budget, traps vs `std::abort()`, and RAII for locks.
   Any change on the loader / instantiator / JIT path must respect it.
 
+- **[`docs/API_ABI_STABILITY.md`](docs/API_ABI_STABILITY.md) — read before changing an embedder-facing surface or the backend seam.**
+  It declares the current milestone (API/ABI stability), freezes the surfaces an embedder may depend on, classifies
+  every open documented gap, and records the merge readiness of the branch. A change that would alter one of those
+  frozen surfaces needs a milestone decision, not just a commit.
+
 - **[`docs/PROPOSALS.md`](docs/PROPOSALS.md) — read before adding or editing a note under `docs/proposals/`.**
   It defines the shape of a proposal note (front matter, the nine `§` slots, the `§1` document map, the
   gap / deviation / plan / test-survey table schemas, and the ID + status-marker conventions) and, at the
