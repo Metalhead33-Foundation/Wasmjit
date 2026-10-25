@@ -32,7 +32,10 @@ the one-line check to run.
 - **[`docs/API_ABI_STABILITY.md`](docs/API_ABI_STABILITY.md) — read before changing an embedder-facing surface or the backend seam.**
   It declares the current milestone (API/ABI stability), freezes the surfaces an embedder may depend on, classifies
   every open documented gap, and records the merge readiness of the branch. A change that would alter one of those
-  frozen surfaces needs a milestone decision, not just a commit.
+  frozen surfaces needs a milestone decision, not just a commit. Its follow-up studies carry the plans:
+  [`EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) (the `WASM::Runtime`, headers, versioning, install),
+  [`BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md) (loading a backend behind a C descriptor) and
+  [`MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) (demoting the multi-agent blocker).
 
 - **[`docs/PROPOSALS.md`](docs/PROPOSALS.md) — read before adding or editing a note under `docs/proposals/`.**
   It defines the shape of a proposal note (front matter, the nine `§` slots, the `§1` document map, the

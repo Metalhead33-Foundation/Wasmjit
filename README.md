@@ -30,7 +30,12 @@ backend-agnostic.
   documentation plus embedding-API work — no heavy refactoring.
 - **Still open** (tracked, not started): a second and third backend
   (`Asmjit/`, `Sljit/` are scaffolds), a published embedding API with
-  packaging/installation, and the long-term qmake → CMake move.
+  packaging/installation, and the long-term qmake → CMake move. The designs for
+  the first two are written down —
+  [`docs/EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) and
+  [`docs/BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md) — and the one
+  deferred execution-model question (multi-agent) has its own demotion study in
+  [`docs/MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md).
 
 ## Documentation
 
@@ -72,6 +77,9 @@ per-milestone done markers, is the authoritative per-item status.
 | [`SIMD_LIBJIT.md`](docs/SIMD_LIBJIT.md) | The LibJIT-only SIMD decision: `v128` in 16-byte-aligned frame slots, pointer-arg native helpers, Highway 1.4.0 (with the GLM/SLEEF/xsimd/psimd/SIMDe verdicts), the wasm semantics hazards, the four test layers and `SIMD-L0…SIMD-L8` | Design decision | `████████████████████` decided |
 | [`LAYERING.md`](docs/LAYERING.md) | The backend-agnosticism rule for `WasmBase/`: what the core may not name, the contracts it owns that a backend must honour, the vocabulary to use instead, and the check to run | Policy note | `████████████████████` current |
 | [`API_ABI_STABILITY.md`](docs/API_ABI_STABILITY.md) | **The current milestone.** The four gates that declare API/ABI stability, the nine surfaces they freeze, the gap classes (additive / per-backend / upstream-blocked / deferred / heavy-refactor), the "no heavy refactoring" audit, the `LibjitDispatcher` → `master` merge readiness, and the measured verdict per gate | Milestone + proximity study | `██████████░░░░░░░░░░` 2 of 4 gates — G2 (additive-only evolution) and G4 (mergeable branch) pass; G1/G3 are one documentation-plus-API pass away |
+| [`EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) | The plan for the embedder-facing surface: `WASM::Runtime` (what it owns, and the `Store::global()` migration), the three header tiers and the umbrella header, the version/soname/symbol-visibility policy, the install layout, and a salvage review of an earlier `JitRuntime`/`JitContext` sketch | Design note + plan | `░░░░░░░░░░░░░░░░░░░░` planned — `ES-1…ES-7`; closes `AAS1`/`AAS2` |
+| [`BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md) | Loading code generators from shared libraries behind a narrow C ABI (the Unreal-renderer analogy): the query/descriptor, what may cross the boundary, the eight plugin rules, the nine hard problems, and why the seam stays C++ for now | Feasibility study + interface sketch | `░░░░░░░░░░░░░░░░░░░░` study only — `BP-0` done, `BP-1…BP-5` planned |
+| [`MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) | Whether the class-E multi-agent blocker can be demoted: the per-agent state already in place, the `MA-1…MA-9` re-classification (E → B + A), multithreading on LibJIT/SLJIT/AsmJit, and the opt-in embedder hooks that would mirror the JS-integration seam | Feasibility study | `░░░░░░░░░░░░░░░░░░░░` study only — `MF-0` done; the single-agent decision stands |
 
 ### Proposal notes (`docs/proposals/`)
 

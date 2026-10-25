@@ -70,6 +70,11 @@ optional hook, (c) a documented deviation recorded in §9 of this note or in the
 owning note. Anything else is a breaking change and needs a new milestone
 decision, not a commit.
 
+**S10 is reserved.** When the backend plugin ABI is adopted
+([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md)), the `wasmjit_backend.h`
+descriptor joins this list with its own `abi_version`; it is not frozen yet, and
+nothing in the current milestone depends on it.
+
 ### 2.3 The acceptance rule
 
 The milestone is met when G1–G4 are all `✅`. A gate may be `◑` (partially
@@ -99,7 +104,9 @@ completing WebAssembly. In particular:
   `TD9`/`TH-5` defer real agents indefinitely and not ruled out. A QVM successor
   is a single-agent, one-instance, embedder-scheduled engine; concurrent entry
   into one instance is explicitly *not* supported (§9, and
-  [`THREADSAFETY.md`](THREADSAFETY.md) §8).
+  [`THREADSAFETY.md`](THREADSAFETY.md) §8). [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md)
+  studies what demoting that class-E family would cost — the answer is "no
+  backend change, staged core work" — and it does **not** reopen this gate.
 - **No second backend has to ship.** G3 asks that work *can safely begin*, not
   that `Asmjit/` or `Sljit/` executes a module.
 - **No packaging/distro requirement.** A stable surface needs headers, a version
@@ -177,6 +184,9 @@ Three structural changes are visible in the tree's history. All three are
 The lesson for G2: the tree has already paid for its two structural taxes (type
 identity, per-agent state). Anything the roadmap currently asks for is a new
 record, a new opcode, a new rule — or a refusal.
+[`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) tests that claim
+against the one family that looks like an exception (§5.3) and finds that the
+backend share of it is class B, not E.
 
 ### 5.3 The one family that is still class-E-shaped, and why it is out of scope
 
@@ -303,7 +313,7 @@ the authoritative per-item status.
 
 | # | Finding | Evidence | Class |
 |---|---|---|---|
-| AAS1 | **The embedder's API is the test harness.** `README.md` says the executable is "a development sandbox, not the embeddable API", the API shape is "not finalized", and packaging/installation is not in place. `WasmRuntime.hpp` is an empty `namespace WASM {}`. There is no umbrella header, no version/soname policy, no documented include set. | `README.md` "Current Status" / "Near-Term Expectations"; `WasmBase/WasmRuntime.hpp` | A |
+| AAS1 | **The embedder's API is the test harness.** `README.md` says the executable is "a development sandbox, not the embeddable API", the API shape is "not finalized", and packaging/installation is not in place. `WasmRuntime.hpp` is an empty `namespace WASM {}`. There is no umbrella header, no version/soname policy, no documented include set. | `README.md` "Current Status" / "Near-Term Expectations"; `WasmBase/WasmRuntime.hpp`; the plan is [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §8 | A |
 | AAS2 | **The ABI note does not cover every signature the backend compiles.** `v128` by value (`(param v128)(result v128)`) is implemented and tested, but the only spelling of its host ABI is `Test/TestBackend.cpp`'s `AbiV128`; [`ABI.md`](ABI.md) mentions `v128` only in the continuation section. Aggregate layout for multi-result returns is likewise reachable only through the harness's `aggregateLayout`. | `ABI.md`; `Test/TestBackend.cpp`; `SIMD.md` S9 | A |
 | AAS3 | **The strict negative-module run is not part of the default gate.** It is documented as fully green, but it needs `WASM_SPEC_VALIDATE=1`, so "green by default" and "validator complete" are two different claims. | [`VALIDATION.md`](VALIDATION.md) "Measured coverage"; `SAFETY.md` `S2` | A |
 | AAS4 | **Memory-safety evidence is manual.** An ASan shadow build exists on the development machine (`build/Desktop-ASan`) but no note documents it as a gate, and no sanitizer row appears in `TESTING.md`. | `build/Desktop-ASan`; `TESTING.md` | A |
@@ -362,7 +372,7 @@ clause polices, which is why §10 closes it.
 |---|---|---|---|
 | AAS8 | **The backend façade is test-local.** `TestBackend::Session` is the interface a backend author would actually implement, and it lives in `Test/`. The product exposes only `ModuleInstantiator` plus conventions, so a second backend either writes product code inside the harness or re-derives the façade. | `Test/TestBackend.hpp`; `WasmModuleInstance.hpp` | A |
 | AAS9 | **There is no backend work order.** [`LAYERING.md`](LAYERING.md) §4 says what a backend *may not* violate; it does not enumerate what a backend *must provide*: `ContinuationInvokeFn`, the `currentTailCallState()` access path, `Callable::typeId` maintenance, aggregate layout for multi-result returns, the `v128` host ABI, the trap-slot protocol, the profile gate, the helper entry points it is expected to call. | `LAYERING.md` §4; `ABI.md`; `WasmValue.hpp` | A |
-| AAS10 | **The seam has never had a second implementation.** `Asmjit/` and `Sljit/` contain only a `.pro` that includes `WasmBase.pri`; `LibJIT::ModuleCompiler` is the only subclass of `ModuleInstantiator`, and `libjit` the only `WASMJIT_BACKEND`. Nothing in the build would notice if a hook grew a LibJIT-shaped assumption. | `Asmjit/Asmjit.pro`, `Sljit/Sljit.pro`; `Test/TestBackend.cpp` | A |
+| AAS10 | **The seam has never had a second implementation.** `Asmjit/` and `Sljit/` contain only a `.pro` that includes `WasmBase.pri`; `LibJIT::ModuleCompiler` is the only subclass of `ModuleInstantiator`, and `libjit` the only `WASMJIT_BACKEND`. Nothing in the build would notice if a hook grew a LibJIT-shaped assumption. | `Asmjit/Asmjit.pro`, `Sljit/Sljit.pro`; `Test/TestBackend.cpp`; [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §9–§10 | A |
 | AAS11 | **The scaffolds do not enforce the seam.** Their `.pro` files define no sources and no compile-time assertion; a stray `libSljit.so.*` sits in `Sljit/` (git-ignored, so history is clean) and will confuse the first person who looks. | `Sljit/`, `Asmjit/` | A |
 | AAS7 | **The layering waiver.** Five `WasmBase/` sites cite `docs/NULL_JIT_VALUE_DIAGNOSIS.md`, whose name contains "JIT". A citation is not a dependency, but it is the only reason the §6 check is not empty. | `LAYERING.md` §8 | A |
 
@@ -484,9 +494,9 @@ is already done — this document.
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **AAS-0 — Declare and measure** ✅ | Write this note: the four gates, the frozen set, the classification, the audit and the ledger. No code. | — (the record) | This document is linked from [`README.md`](../README.md) and [`AGENTS.md`](../AGENTS.md). |
-| **AAS-1 — Declare the embedding surface** | An umbrella header, a version/soname policy, a documented include set and an install/`pkg-config` story; extend [`ABI.md`](ABI.md) with the `v128` host ABI and the multi-result aggregate layout; add one "limits an embedder must know" section (`S1`, `S3`, `S4`, `S7`, `S8`). | AAS1, AAS2, AAS5 | A small out-of-tree consumer builds against the installed headers only, and calls an `i32`, an `f64`, a multi-result and a `v128` export using nothing but the docs. |
-| **AAS-2 — Write the backend work order and promote the façade** | A `BACKENDS.md` (or a [`LAYERING.md`](LAYERING.md) §4 extension) enumerating every obligation: the four hooks, the eight contract rows, `ContinuationInvokeFn`, `currentTailCallState()`, `Callable::typeId`, aggregate layout, the `v128` host ABI, the trap slot, the profile gate, the helper entry points. Move the `Session` façade out of `Test/` (or give it a product-side definition the harness consumes). | AAS8, AAS9 | A new backend can be written from the document alone, and the harness compiles against the product façade instead of defining it. |
-| **AAS-3 — Prove the seam with a second implementation** | A null/identity backend implementing `ModuleInstantiator` plus the façade, selectable as `WASMJIT_BACKEND=null`; it must pass ABI/layout/marshalling tests (it need not execute Wasm). Fill or explicitly retire the `Asmjit/`/`Sljit/` scaffolds, and remove the stray `libSljit.so.*`. | AAS10, AAS11 | The seam has two implementations in the build; a LibJIT-shaped assumption in a hook breaks the null backend's tests. |
+| **AAS-1 — Declare the embedding surface** | An umbrella header, a version/soname policy, a documented include set and an install/`pkg-config` story; extend [`ABI.md`](ABI.md) with the `v128` host ABI and the multi-result aggregate layout; add one "limits an embedder must know" section (`S1`, `S3`, `S4`, `S7`, `S8`). The design and the ordered sub-milestones are [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) (`ES-1…ES-6`), which also decides the two empty placeholder headers. | AAS1, AAS2, AAS5 | A small out-of-tree consumer builds against the installed headers only, and calls an `i32`, an `f64`, a multi-result and a `v128` export using nothing but the docs. |
+| **AAS-2 — Write the backend work order and promote the façade** | A `BACKENDS.md` (or a [`LAYERING.md`](LAYERING.md) §4 extension) enumerating every obligation: the four hooks, the eight contract rows, `ContinuationInvokeFn`, `currentTailCallState()`, `Callable::typeId`, aggregate layout, the `v128` host ABI, the trap slot, the profile gate, the helper entry points. Move the `Session` façade out of `Test/` (or give it a product-side definition the harness consumes). The POD signature/layout views this needs are `BP-1` in [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §10. | AAS8, AAS9 | A new backend can be written from the document alone, and the harness compiles against the product façade instead of defining it. |
+| **AAS-3 — Prove the seam with a second implementation** | A null/identity backend implementing `ModuleInstantiator` plus the façade, selectable as `WASMJIT_BACKEND=null`; it must pass ABI/layout/marshalling tests (it need not execute Wasm). Fill or explicitly retire the `Asmjit/`/`Sljit/` scaffolds, and remove the stray `libSljit.so.*`. [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) `BP-2`/`BP-3` is the loader that turns this into a black-box test. | AAS10, AAS11 | The seam has two implementations in the build; a LibJIT-shaped assumption in a hook breaks the null backend's tests. |
 | **AAS-4 — Gate the evidence** | Make the strict validator run (`WASM_SPEC_VALIDATE=1`) part of the documented gate, and document the ASan configuration in [`TESTING.md`](TESTING.md) as a row, not a local habit. | AAS3, AAS4 | `TESTING.md` names both runs as required, and a release check lists them. |
 | **AAS-5 — Bookkeeping pass** | Mark `TYPE_MODEL.md` §7 `TM-0…TM-5` closed (or re-open them honestly); resolve the `NULL_JIT_VALUE_DIAGNOSIS` waiver by renaming and re-pointing, or record it as permanent; keep the `README.md` status rows in step with their notes when the plan changes (§6.6 found no contradiction today). | AAS6, AAS7 | No closed refactor reads as open, and the layering check's expected output is "empty". |
 | **AAS-6 — Merge** | `git merge --ff-only LibjitDispatcher` into `master`, landing all 148 commits and this note atomically; tag the declaration. | G4 (already green) | `master` contains `ea4fb30` and the tag; the suite is green on `master`. |
@@ -525,6 +535,15 @@ honest distinction rather than a green light.
   "Design Philosophy", and the structures in §2.2.
 - [`LAYERING.md`](LAYERING.md) — the rule, the eight contract rows (§4), the
   vocabulary (§5) and the check (§6).
+- [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) — the `WASM::Runtime` design,
+  the header tiers and umbrella, the version/soname policy and the install story;
+  the plan that closes `AAS1`/`AAS2`/`AAS5`.
+- [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) — the loaded-backend
+  descriptor, the boundary rules and the risk register; the source of `AAS10`'s
+  black-box second implementation and of the reserved surface S10.
+- [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) — the demotion study
+  for the one class-E family this note pins out of scope (§5.3), and the
+  per-backend threading findings behind G3.
 - [`SAFETY.md`](SAFETY.md) §2.4/§3.1 — traps vs `abort`, and the deliberate
   limitations AAS-1 must publish.
 - [`THREADSAFETY.md`](THREADSAFETY.md) §8–§10 — the supported embedding model.
