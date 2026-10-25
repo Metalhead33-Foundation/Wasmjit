@@ -1,5 +1,6 @@
 #include "WasmContinuation.hpp"
 #include "WasmAgent.hpp"
+#include "WasmDiagnostics.hpp"
 #include "WasmExn.hpp"
 #include "WasmStack.hpp"
 #include "WasmStore.hpp"
@@ -19,6 +20,7 @@
 #include <string>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 #include <ucontext.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -284,6 +286,89 @@ ContinuationStatus statusForState(WorkerState state)
 	case WorkerState::Trapped:   return ContinuationStatus::Trapped;
 	case WorkerState::Exception: return ContinuationStatus::Exception;
 	default:                     return ContinuationStatus::Invalid;
+	}
+}
+
+const char* workerStateName(WorkerState state) noexcept
+{
+	switch (state) {
+	case WorkerState::New:       return "new";
+	case WorkerState::Running:   return "running";
+	case WorkerState::Suspended: return "suspended";
+	case WorkerState::Completed: return "completed";
+	case WorkerState::Trapped:   return "trapped";
+	case WorkerState::Exception: return "exception";
+	case WorkerState::Cancelled: return "cancelled";
+	}
+	return "unknown";
+}
+
+// The continuation context a record needs (docs/DIAGNOSTICS.md §4.3). The
+// worker already owns every field; `state` is passed by the caller because a
+// provider subclass owns its state and the base cannot see it.
+DiagnosticContinuation continuationContext(const Worker& worker, std::string_view state)
+{
+	DiagnosticContinuation context;
+	context.provider = worker.provider;
+	context.generation = worker.generation.load(std::memory_order_relaxed);
+	context.state = state;
+	// A worker that never suspended has no meaningful tag; generation 0 marks
+	// that (every suspend/bind bumps it).
+	context.tagId = context.generation != 0 ? worker.suspendTag : -1;
+	context.valueCount = static_cast<std::uint32_t>(worker.tagValues.size());
+	context.resultCount = worker.resultCount;
+	context.hasRoots = !worker.roots.empty();
+	return context;
+}
+
+// Records a continuation failure and then reports the trap that the caller is
+// about to return with. `worker` is null when no handle could be resolved (a
+// null/invalid reference); the record then carries no continuation object.
+// `switchPeer` is deliberately not copied: it is developer-only and is never
+// serialized (DG-4/DG-8).
+void failContinuation(const Worker* worker, std::string_view state,
+		std::string_view id, const char* message,
+		TrapKind kind = TrapKind::Internal) noexcept
+{
+	try {
+		DiagnosticContinuation context;
+		if (worker != nullptr)
+			context = continuationContext(*worker, state);
+		emitContinuationDiagnostic(id, DiagnosticSeverity::Error, message,
+				std::move(context));
+	} catch (...) {
+		// A diagnostic never replaces the trap.
+	}
+	reportTrap(kind, message);
+}
+
+// Records a transferred status (Trapped/Exception) with the worker context.
+// Unlike `failContinuation` it does not report a trap: the caller is about to
+// transfer the worker's trap or pending exception to the resumer.
+void noteContinuationStatus(const Worker& worker, ContinuationStatus status,
+		std::string message, std::string_view remediation
+				= "docs/proposals/STACK_SWITCHING.md") noexcept
+{
+	try {
+		emitContinuationDiagnostic(continuationDiagnosticId(status),
+				DiagnosticSeverity::Error, std::move(message),
+				continuationContext(worker, continuationStatusName(status)), remediation);
+	} catch (...) {
+	}
+}
+
+// Records a scheduler-level failure. `submit*` returns false without touching
+// the trap slot, so this helper only emits a record (it never reports a trap).
+void noteSchedulerFailure(std::string_view id, const char* message,
+		const Worker* worker = nullptr, std::string_view state = {}) noexcept
+{
+	try {
+		DiagnosticContinuation context;
+		if (worker != nullptr)
+			context = continuationContext(*worker, state);
+		emitContinuationDiagnostic(id, DiagnosticSeverity::Error, message,
+				std::move(context), "docs/proposals/JS_INTEGRATION.md");
+	} catch (...) {
 	}
 }
 ModuleInstance* instanceFor(VMContext* context)
@@ -557,24 +642,31 @@ ContinuationStatus BWorker::resume(std::uint64_t expectedGeneration,
 		return resumeSwitchPeer(expectedGeneration, args, argCount, injectedException);
 	std::unique_lock<std::mutex> lock(mutex);
 	if (cancelRequested || state == WorkerState::Cancelled) {
+		const char* stateName = workerStateName(state);
 		lock.unlock();
-		reportTrap(TrapKind::Internal, "continuation was cancelled");
+		failContinuation(this, stateName, DiagnosticId::kContinuationCancelled,
+				"continuation was cancelled");
 		return ContinuationStatus::Invalid;
 	}
 	if (generation.load(std::memory_order_relaxed) != expectedGeneration
 			|| consumed.load(std::memory_order_relaxed)) {
+		const char* stateName = workerStateName(state);
 		lock.unlock();
-		reportTrap(TrapKind::Internal, "continuation has already been consumed");
+		failContinuation(this, stateName, DiagnosticId::kContinuationInvalidGeneration,
+				"continuation has already been consumed");
 		return ContinuationStatus::Invalid;
 	}
 	if (state != WorkerState::New && state != WorkerState::Suspended) {
+		const char* stateName = workerStateName(state);
 		lock.unlock();
-		reportTrap(TrapKind::Internal, "continuation is not resumable");
+		failContinuation(this, stateName, DiagnosticId::kContinuationNotResumable,
+				"continuation is not resumable");
 		return ContinuationStatus::Invalid;
 	}
 	if (injectedException != nullptr && state == WorkerState::New) {
 		lock.unlock();
-		reportTrap(TrapKind::Internal, "cannot throw into a fresh continuation");
+		failContinuation(this, "new", DiagnosticId::kContinuationFreshThrow,
+				"cannot throw into a fresh continuation");
 		return ContinuationStatus::Invalid;
 	}
 
@@ -591,7 +683,8 @@ ContinuationStatus BWorker::resume(std::uint64_t expectedGeneration,
 		if (!startThread()) {
 			state = WorkerState::Cancelled;
 			lock.unlock();
-			reportTrap(TrapKind::OutOfMemory, "continuation worker could not start");
+			failContinuation(this, "cancelled", DiagnosticId::kContinuationStartFailed,
+					"continuation worker could not start", TrapKind::OutOfMemory);
 			return ContinuationStatus::Invalid;
 		}
 	} else {
@@ -609,7 +702,10 @@ std::int32_t BWorker::suspend(std::int32_t tag,
 {
 	std::unique_lock<std::mutex> lock(mutex);
 	if (cancelRequested || state == WorkerState::Cancelled) {
-		reportTrap(TrapKind::Internal, "continuation dropped while suspended");
+		const char* stateName = workerStateName(state);
+		lock.unlock();
+		failContinuation(this, stateName, DiagnosticId::kContinuationDroppedSuspended,
+				"continuation dropped while suspended");
 		return 0;
 	}
 	suspendTag = tag;
@@ -627,7 +723,10 @@ std::int32_t BWorker::suspend(std::int32_t tag,
 	cv.notify_all();
 	cv.wait(lock, [this] { return state != WorkerState::Suspended; });
 	if (cancelRequested || state == WorkerState::Cancelled) {
-		reportTrap(TrapKind::Internal, "continuation dropped while suspended");
+		const char* stateName = workerStateName(state);
+		lock.unlock();
+		failContinuation(this, stateName, DiagnosticId::kContinuationDroppedSuspended,
+				"continuation dropped while suspended");
 		return 0;
 	}
 
@@ -649,9 +748,12 @@ std::int32_t BWorker::suspend(std::int32_t tag,
 
 std::uint64_t BWorker::beginSwitch()
 {
-	std::lock_guard<std::mutex> lock(mutex);
+	std::unique_lock<std::mutex> lock(mutex);
 	if (state != WorkerState::Running) {
-		reportTrap(TrapKind::Internal, "switch outside a running continuation");
+		const char* stateName = workerStateName(state);
+		lock.unlock();
+		failContinuation(this, stateName, DiagnosticId::kContinuationSwitchOutside,
+				"switch outside a running continuation");
 		return 0;
 	}
 	state = WorkerState::Suspended;
@@ -665,18 +767,26 @@ ContinuationStatus BWorker::resumeSwitchPeer(std::uint64_t expectedGeneration,
 {
 	BWorker* caller = static_cast<BWorker*>(t_currentWorker);
 	if (caller == nullptr || caller->provider != provider) {
-		reportTrap(TrapKind::Internal, "cross-provider switch is not supported");
+		failContinuation(this, "suspended", DiagnosticId::kContinuationCrossProvider,
+				"cross-provider switch is not supported");
 		return ContinuationStatus::Invalid;
 	}
 	{
-		std::lock_guard<std::mutex> lock(mutex);
+		std::unique_lock<std::mutex> lock(mutex);
 		if (generation.load(std::memory_order_relaxed) != expectedGeneration
 				|| consumed.load(std::memory_order_relaxed)) {
-			reportTrap(TrapKind::Internal, "continuation has already been consumed");
+			const char* stateName = workerStateName(state);
+			lock.unlock();
+			failContinuation(this, stateName,
+					DiagnosticId::kContinuationInvalidGeneration,
+					"continuation has already been consumed");
 			return ContinuationStatus::Invalid;
 		}
 		if (state != WorkerState::Suspended) {
-			reportTrap(TrapKind::Internal, "continuation is not resumable");
+			const char* stateName = workerStateName(state);
+			lock.unlock();
+			failContinuation(this, stateName, DiagnosticId::kContinuationNotResumable,
+					"continuation is not resumable");
 			return ContinuationStatus::Invalid;
 		}
 		consumed.store(true, std::memory_order_relaxed);
@@ -703,7 +813,9 @@ ContinuationStatus BWorker::switchTo(Worker* peer, std::uint64_t peerGeneration,
 		const ContinuationValue* args, std::uint32_t argCount)
 {
 	if (peer == nullptr || peer->provider != provider) {
-		reportTrap(TrapKind::Internal, "cross-provider switch is not supported");
+		failContinuation(this, workerStateName(state),
+				DiagnosticId::kContinuationCrossProvider,
+				"cross-provider switch is not supported");
 		return ContinuationStatus::Invalid;
 	}
 	BWorker* target = static_cast<BWorker*>(peer);
@@ -928,20 +1040,27 @@ ContinuationStatus AWorker::resume(std::uint64_t expectedGeneration,
 		owner = std::this_thread::get_id();
 	}
 	if (!contextReady && !prepareStack()) {
-		reportTrap(TrapKind::OutOfMemory, "continuation stack could not be allocated");
+		failContinuation(this, workerStateName(state),
+				DiagnosticId::kContinuationStackAllocationFailed,
+				"continuation stack could not be allocated", TrapKind::OutOfMemory);
 		return ContinuationStatus::Invalid;
 	}
 	if (generation.load(std::memory_order_relaxed) != expectedGeneration
 			|| consumed.load(std::memory_order_relaxed)) {
-		reportTrap(TrapKind::Internal, "continuation has already been consumed");
+		failContinuation(this, workerStateName(state),
+				DiagnosticId::kContinuationInvalidGeneration,
+				"continuation has already been consumed");
 		return ContinuationStatus::Invalid;
 	}
 	if (state != WorkerState::New && state != WorkerState::Suspended) {
-		reportTrap(TrapKind::Internal, "continuation is not resumable");
+		failContinuation(this, workerStateName(state),
+				DiagnosticId::kContinuationNotResumable,
+				"continuation is not resumable");
 		return ContinuationStatus::Invalid;
 	}
 	if (injectedException != nullptr && state == WorkerState::New) {
-		reportTrap(TrapKind::Internal, "cannot throw into a fresh continuation");
+		failContinuation(this, "new", DiagnosticId::kContinuationFreshThrow,
+				"cannot throw into a fresh continuation");
 		return ContinuationStatus::Invalid;
 	}
 
@@ -1030,7 +1149,8 @@ std::int32_t AWorker::suspend(std::int32_t tag,
 		std::uint32_t* resultCount, const std::uint8_t* resultKinds)
 {
 	if (previousState == nullptr) {
-		reportTrap(TrapKind::Internal, "suspend outside its continuation thread");
+		failContinuation(this, "running", DiagnosticId::kContinuationSuspendOutside,
+				"suspend outside its continuation thread");
 		return 0;
 	}
 	suspendTag = tag;
@@ -1050,7 +1170,8 @@ std::int32_t AWorker::suspend(std::int32_t tag,
 	setCurrentExecutionState(&execution);
 	t_currentWorker = this;
 	if (cancelRequested) {
-		reportTrap(TrapKind::Internal, "continuation dropped while suspended");
+		failContinuation(this, "cancelled", DiagnosticId::kContinuationDroppedSuspended,
+				"continuation dropped while suspended");
 		return 0;
 	}
 
@@ -1073,7 +1194,8 @@ std::int32_t AWorker::suspend(std::int32_t tag,
 std::uint64_t AWorker::beginSwitch()
 {
 	if (state != WorkerState::Running) {
-		reportTrap(TrapKind::Internal, "switch outside a running continuation");
+		failContinuation(this, workerStateName(state), DiagnosticId::kContinuationSwitchOutside,
+				"switch outside a running continuation");
 		return 0;
 	}
 	state = WorkerState::Suspended;
@@ -1085,7 +1207,9 @@ ContinuationStatus AWorker::switchTo(Worker* peer, std::uint64_t peerGeneration,
 		const ContinuationValue* args, std::uint32_t argCount)
 {
 	if (peer == nullptr || peer->provider != provider) {
-		reportTrap(TrapKind::Internal, "cross-provider switch is not supported");
+		failContinuation(this, workerStateName(state),
+				DiagnosticId::kContinuationCrossProvider,
+				"cross-provider switch is not supported");
 		return ContinuationStatus::Invalid;
 	}
 	AWorker* target = static_cast<AWorker*>(peer);
@@ -1283,10 +1407,16 @@ HostContinuationScheduler::~HostContinuationScheduler()
 bool HostContinuationScheduler::submit(void* continuation, std::int32_t arg,
 		bool takeOwnership) noexcept
 {
-	if (!isContinuationRef(continuation))
+	if (!isContinuationRef(continuation)) {
+		noteSchedulerFailure(DiagnosticId::kContinuationSchedulerInvalidHandle,
+				"scheduler rejected an invalid continuation handle");
 		return false;
-	if (!takeOwnership && !continuationRefRetain(continuation))
+	}
+	if (!takeOwnership && !continuationRefRetain(continuation)) {
+		noteSchedulerFailure(DiagnosticId::kContinuationSchedulerInvalidHandle,
+				"scheduler could not retain the continuation handle");
 		return false;
+	}
 	Task task;
 	task.continuation = continuation;
 	task.arg = arg;
@@ -1300,10 +1430,16 @@ bool HostContinuationScheduler::submitEx(void* continuation,
 		std::uint32_t tagCapacity, bool takeOwnership) noexcept
 {
 	Continuation* handle = findContinuation(continuation);
-	if (handle == nullptr)
+	if (handle == nullptr) {
+		noteSchedulerFailure(DiagnosticId::kContinuationSchedulerInvalidHandle,
+				"scheduler rejected an invalid continuation handle");
 		return false;
-	if (!takeOwnership && !continuationRefRetain(continuation))
+	}
+	if (!takeOwnership && !continuationRefRetain(continuation)) {
+		noteSchedulerFailure(DiagnosticId::kContinuationSchedulerInvalidHandle,
+				"scheduler could not retain the continuation handle");
 		return false;
+	}
 	Task task;
 	task.wide = true;
 	task.kind = Task::Kind::Resume;
@@ -1333,10 +1469,18 @@ bool HostContinuationScheduler::submitThrow(void* continuation, void* exception,
 		bool takeOwnership) noexcept
 {
 	Continuation* handle = findContinuation(continuation);
-	if (handle == nullptr || exception == nullptr)
+	if (handle == nullptr || exception == nullptr) {
+		noteSchedulerFailure(DiagnosticId::kContinuationSchedulerInvalidHandle,
+				exception == nullptr
+						? "scheduler rejected a throw task with a null exception"
+						: "scheduler rejected an invalid continuation handle");
 		return false;
-	if (!takeOwnership && !continuationRefRetain(continuation))
+	}
+	if (!takeOwnership && !continuationRefRetain(continuation)) {
+		noteSchedulerFailure(DiagnosticId::kContinuationSchedulerInvalidHandle,
+				"scheduler could not retain the continuation handle");
 		return false;
+	}
 	Task task;
 	task.wide = true;
 	task.kind = Task::Kind::Throw;
@@ -1370,17 +1514,48 @@ bool HostContinuationScheduler::step() noexcept
 	tasks_.pop_front();
 
 	if (!task.wide) {
+		// Keep the worker alive across `resume`: the handle is consumed and the
+		// status may have already retired it, but the record still needs the
+		// provider/generation/state context.
+		std::shared_ptr<Worker> worker;
+		if (Continuation* before = findContinuation(task.continuation))
+			worker = before->worker;
+
 		HostContinuation handle(task.continuation, true);
 		ContinuationResumeResult result;
 		if (!handle.resume(task.arg, &result))
 			return true;
+
+		const Worker* context = worker.get();
+		if (result.status == static_cast<std::int32_t>(ContinuationStatus::Trapped)) {
+			noteSchedulerFailure(DiagnosticId::kContinuationSchedulerTrapped,
+					context != nullptr ? context->trapMessage.c_str()
+									   : "continuation trap",
+					context, "trapped");
+		} else if (result.status ==
+				static_cast<std::int32_t>(ContinuationStatus::Exception)) {
+			noteSchedulerFailure(DiagnosticId::kContinuationSchedulerRejected,
+					"scheduler resume task ended with an uncaught exception",
+					context, "exception");
+		} else if (result.status ==
+				static_cast<std::int32_t>(ContinuationStatus::Invalid)) {
+			noteSchedulerFailure(DiagnosticId::kContinuationSchedulerInvalid,
+					"scheduler task could not resume the continuation",
+					context, "invalid");
+		}
+
 		if (result.status == static_cast<std::int32_t>(ContinuationStatus::Suspended)) {
 			if (result.continuation != nullptr) {
-				if (hooks_.onSuspended != nullptr)
+				if (hooks_.onSuspended != nullptr) {
 					hooks_.onSuspended(hooks_.userData, result.continuation,
 							result.tagId, result.value);
-				else
+				} else {
+					noteSchedulerFailure(
+							DiagnosticId::kContinuationUnhandledSuspension,
+							"scheduler suspended a continuation with no suspended hook",
+							context, "suspended");
 					continuationRefRelease(result.continuation);
+				}
 			}
 		} else if (hooks_.onCompleted != nullptr) {
 			hooks_.onCompleted(hooks_.userData, result.status);
@@ -1390,6 +1565,8 @@ bool HostContinuationScheduler::step() noexcept
 
 	Continuation* handle = findContinuation(task.continuation);
 	if (handle == nullptr) {
+		noteSchedulerFailure(DiagnosticId::kContinuationSchedulerInvalid,
+				"scheduler task's continuation handle is no longer live");
 		continuationRefRelease(task.continuation);
 		return true;
 	}
@@ -1420,6 +1597,27 @@ bool HostContinuationScheduler::step() noexcept
 		tagKinds.assign(result.tagKinds, result.tagKinds + result.tagValueCount);
 	const std::vector<std::uint8_t> resultKinds = handle->worker->resultKinds;
 
+	// Scheduler-level record for a failure the resume wrapper could not name in
+	// scheduler terms. The resume wrapper already recorded `TRAPPED`/`EXCEPTION`
+	// with the continuation context; these ids say which task kind failed and
+	// that the scheduler observed it (DG-4).
+	const Worker* worker = handle->worker.get();
+	if (result.status == static_cast<std::int32_t>(ContinuationStatus::Trapped)) {
+		noteSchedulerFailure(DiagnosticId::kContinuationSchedulerTrapped,
+				handle->worker->trapMessage.c_str(), worker, "trapped");
+	} else if (result.status ==
+			static_cast<std::int32_t>(ContinuationStatus::Exception)) {
+		noteSchedulerFailure(DiagnosticId::kContinuationSchedulerRejected,
+				task.kind == Task::Kind::Throw
+						? "scheduler throw task ended with an uncaught exception"
+						: "scheduler resume task ended with an uncaught exception",
+				worker, "exception");
+	} else if (result.status ==
+			static_cast<std::int32_t>(ContinuationStatus::Invalid)) {
+		noteSchedulerFailure(DiagnosticId::kContinuationSchedulerInvalid,
+				"scheduler task could not resume the continuation", worker, "invalid");
+	}
+
 	if (result.status == static_cast<std::int32_t>(ContinuationStatus::Suspended)) {
 		if (result.continuation != nullptr) {
 			if (hooks_.onSuspendedEx != nullptr) {
@@ -1430,6 +1628,9 @@ bool HostContinuationScheduler::step() noexcept
 				hooks_.onSuspended(hooks_.userData, result.continuation,
 						result.tagId, result.value);
 			} else {
+				noteSchedulerFailure(DiagnosticId::kContinuationUnhandledSuspension,
+						"scheduler suspended a continuation with no suspended hook",
+						worker, "suspended");
 				continuationRefRelease(result.continuation);
 			}
 		}
@@ -1489,11 +1690,13 @@ void* wasm_cont_new_ex(void* callable, void* context, ContinuationInvokeFn invok
 		const std::uint8_t* paramKinds, const std::uint8_t* resultKinds)
 {
 	if (callable == nullptr) {
-		reportTrap(TrapKind::NullFunctionReference, "null continuation target");
+		failContinuation(nullptr, {}, DiagnosticId::kContinuationNullTarget,
+				"null continuation target", TrapKind::NullFunctionReference);
 		return nullptr;
 	}
 	if (!reserveContinuationSlot()) {
-		reportTrap(TrapKind::OutOfMemory, "continuation budget exhausted");
+		failContinuation(nullptr, {}, DiagnosticId::kContinuationBudgetExhausted,
+				"continuation budget exhausted", TrapKind::OutOfMemory);
 		return nullptr;
 	}
 
@@ -1516,14 +1719,16 @@ void* wasm_cont_new_ex(void* callable, void* context, ContinuationInvokeFn invok
 			worker->resultKinds.assign(resultKinds, resultKinds + resultCount);
 	} catch (...) {
 		releaseContinuationSlot();
-		reportTrap(TrapKind::OutOfMemory, "continuation allocation failed");
+		failContinuation(nullptr, {}, DiagnosticId::kContinuationAllocationFailed,
+				"continuation allocation failed", TrapKind::OutOfMemory);
 		return nullptr;
 	}
 	try {
 		return new Continuation(std::move(worker), 0);
 	} catch (...) {
 		// The worker's destructor releases the reserved live slot.
-		reportTrap(TrapKind::OutOfMemory, "continuation allocation failed");
+		failContinuation(nullptr, {}, DiagnosticId::kContinuationAllocationFailed,
+				"continuation allocation failed", TrapKind::OutOfMemory);
 		return nullptr;
 	}
 }
@@ -1541,23 +1746,29 @@ void* wasm_cont_bind_ex(void* continuation, const ContinuationValue* values,
 		std::uint32_t count)
 {
 	if (continuation == nullptr) {
-		reportTrap(TrapKind::NullReference, "null continuation");
+		failContinuation(nullptr, {}, DiagnosticId::kContinuationNullHandle,
+				"null continuation", TrapKind::NullReference);
 		return nullptr;
 	}
 	Continuation* handle = findContinuation(continuation);
 	if (handle == nullptr) {
-		reportTrap(TrapKind::Internal, "invalid continuation reference");
+		failContinuation(nullptr, {}, DiagnosticId::kContinuationInvalidHandle,
+				"invalid continuation reference");
 		return nullptr;
 	}
 	if (!handle->worker->bindArguments(values, count)) {
-		reportTrap(TrapKind::Internal, "continuation cannot bind these arguments");
+		failContinuation(handle->worker.get(), workerStateName(WorkerState::Suspended),
+				DiagnosticId::kContinuationBindFailed,
+				"continuation cannot bind these arguments");
 		return nullptr;
 	}
 	try {
 		return new Continuation(handle->worker,
 				handle->worker->generation.load(std::memory_order_relaxed));
 	} catch (...) {
-		reportTrap(TrapKind::OutOfMemory, "continuation allocation failed");
+		failContinuation(handle->worker.get(), workerStateName(WorkerState::Running),
+				DiagnosticId::kContinuationAllocationFailed,
+				"continuation allocation failed", TrapKind::OutOfMemory);
 		return nullptr;
 	}
 }
@@ -1582,12 +1793,14 @@ void wasm_cont_resume_ex(void* continuation, const ContinuationValue* args,
 		return;
 	*result = ContinuationResumeResult{};
 	if (continuation == nullptr) {
-		reportTrap(TrapKind::NullReference, "null continuation");
+		failContinuation(nullptr, {}, DiagnosticId::kContinuationNullHandle,
+				"null continuation", TrapKind::NullReference);
 		return;
 	}
 	Continuation* handle = findContinuation(continuation);
 	if (handle == nullptr) {
-		reportTrap(TrapKind::Internal, "invalid continuation reference");
+		failContinuation(nullptr, {}, DiagnosticId::kContinuationInvalidHandle,
+				"invalid continuation reference");
 		return;
 	}
 
@@ -1611,7 +1824,9 @@ void wasm_cont_resume_ex(void* continuation, const ContinuationValue* args,
 			result->continuation = new Continuation(handle->worker,
 					handle->worker->generation.load(std::memory_order_relaxed));
 		} catch (...) {
-			reportTrap(TrapKind::OutOfMemory, "continuation allocation failed");
+			failContinuation(handle->worker.get(), "suspended",
+					DiagnosticId::kContinuationAllocationFailed,
+					"continuation allocation failed", TrapKind::OutOfMemory);
 		}
 		break;
 	case ContinuationStatus::Completed:
@@ -1625,9 +1840,12 @@ void wasm_cont_resume_ex(void* continuation, const ContinuationValue* args,
 				: static_cast<std::int32_t>(results[0].words[0]);
 		break;
 	case ContinuationStatus::Trapped:
+		noteContinuationStatus(*handle->worker, status, handle->worker->trapMessage);
 		reportTrap(handle->worker->trapKind, handle->worker->trapMessage.c_str());
 		break;
 	case ContinuationStatus::Exception:
+		noteContinuationStatus(*handle->worker, status,
+				"continuation raised an uncaught exception");
 		wasm_exn_set_pending(handle->worker->pendingException);
 		break;
 	case ContinuationStatus::Invalid:
@@ -1653,16 +1871,20 @@ void wasm_cont_resume_throw_ex(void* continuation, void* exception,
 		return;
 	*result = ContinuationResumeResult{};
 	if (continuation == nullptr) {
-		reportTrap(TrapKind::NullReference, "null continuation");
+		failContinuation(nullptr, {}, DiagnosticId::kContinuationNullHandle,
+				"null continuation", TrapKind::NullReference);
 		return;
 	}
 	Continuation* handle = findContinuation(continuation);
 	if (handle == nullptr) {
-		reportTrap(TrapKind::Internal, "invalid continuation reference");
+		failContinuation(nullptr, {}, DiagnosticId::kContinuationInvalidHandle,
+				"invalid continuation reference");
 		return;
 	}
 	if (exception == nullptr) {
-		reportTrap(TrapKind::NullReference, "null exception");
+		failContinuation(handle->worker.get(), "suspended",
+				DiagnosticId::kContinuationNullException,
+				"null exception", TrapKind::NullReference);
 		return;
 	}
 
@@ -1686,7 +1908,9 @@ void wasm_cont_resume_throw_ex(void* continuation, void* exception,
 			result->continuation = new Continuation(handle->worker,
 					handle->worker->generation.load(std::memory_order_relaxed));
 		} catch (...) {
-			reportTrap(TrapKind::OutOfMemory, "continuation allocation failed");
+			failContinuation(handle->worker.get(), "suspended",
+					DiagnosticId::kContinuationAllocationFailed,
+					"continuation allocation failed", TrapKind::OutOfMemory);
 		}
 		break;
 	case ContinuationStatus::Completed:
@@ -1700,9 +1924,12 @@ void wasm_cont_resume_throw_ex(void* continuation, void* exception,
 				: static_cast<std::int32_t>(results[0].words[0]);
 		break;
 	case ContinuationStatus::Trapped:
+		noteContinuationStatus(*handle->worker, status, handle->worker->trapMessage);
 		reportTrap(handle->worker->trapKind, handle->worker->trapMessage.c_str());
 		break;
 	case ContinuationStatus::Exception:
+		noteContinuationStatus(*handle->worker, status,
+				"continuation raised an uncaught exception");
 		wasm_exn_set_pending(handle->worker->pendingException);
 		break;
 	case ContinuationStatus::Invalid:
@@ -1718,21 +1945,25 @@ void wasm_cont_switch(void* continuation, const ContinuationValue* args,
 		return;
 	*result = ContinuationResumeResult{};
 	if (continuation == nullptr) {
-		reportTrap(TrapKind::NullReference, "null continuation");
+		failContinuation(nullptr, {}, DiagnosticId::kContinuationNullHandle,
+				"null continuation", TrapKind::NullReference);
 		return;
 	}
 	Continuation* handle = findContinuation(continuation);
 	if (handle == nullptr) {
-		reportTrap(TrapKind::Internal, "invalid continuation reference");
+		failContinuation(nullptr, {}, DiagnosticId::kContinuationInvalidHandle,
+				"invalid continuation reference");
 		return;
 	}
 	Worker* current = t_currentWorker;
 	if (current == nullptr) {
-		reportTrap(TrapKind::Internal, "switch outside a continuation");
+		failContinuation(nullptr, {}, DiagnosticId::kContinuationSwitchOutside,
+				"switch outside a continuation");
 		return;
 	}
 	if (current->provider != handle->worker->provider) {
-		reportTrap(TrapKind::Internal, "cross-provider switch is not supported");
+		failContinuation(current, "running", DiagnosticId::kContinuationCrossProvider,
+				"cross-provider switch is not supported");
 		return;
 	}
 
@@ -1743,7 +1974,8 @@ void wasm_cont_switch(void* continuation, const ContinuationValue* args,
 	try {
 		captured = new Continuation(current->shared_from_this(), generation);
 	} catch (...) {
-		reportTrap(TrapKind::OutOfMemory, "continuation allocation failed");
+		failContinuation(current, "running", DiagnosticId::kContinuationAllocationFailed,
+				"continuation allocation failed", TrapKind::OutOfMemory);
 		return;
 	}
 	std::vector<ContinuationValue> callArgs;
@@ -1770,12 +2002,16 @@ void wasm_cont_switch(void* continuation, const ContinuationValue* args,
 	} else if (status == ContinuationStatus::Suspended) {
 		// The target completed without handing control back. The current stack
 		// is still suspended, so there is no value to return to the caller.
-		reportTrap(TrapKind::Internal,
+		failContinuation(current, workerStateName(WorkerState::Suspended),
+				DiagnosticId::kContinuationTargetCompleted,
 				"switch target completed without switching back");
 		result->status = static_cast<std::int32_t>(ContinuationStatus::Invalid);
 	} else if (status == ContinuationStatus::Trapped) {
+		noteContinuationStatus(*handle->worker, status, handle->worker->trapMessage);
 		reportTrap(handle->worker->trapKind, handle->worker->trapMessage.c_str());
 	} else if (status == ContinuationStatus::Exception) {
+		noteContinuationStatus(*handle->worker, status,
+				"continuation raised an uncaught exception");
 		wasm_exn_set_pending(handle->worker->pendingException);
 	}
 }
@@ -1803,7 +2039,8 @@ std::int32_t wasm_cont_suspend_ex(std::int32_t tagId,
 {
 	Worker* worker = t_currentWorker;
 	if (worker == nullptr) {
-		reportTrap(TrapKind::Internal, "suspend outside a continuation");
+		failContinuation(nullptr, {}, DiagnosticId::kContinuationSuspendOutside,
+				"suspend outside a continuation");
 		return 0;
 	}
 	return worker->suspend(tagId, args, argCount, argKinds, results,

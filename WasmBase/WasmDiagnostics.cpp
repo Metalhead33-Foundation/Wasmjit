@@ -49,6 +49,18 @@ const char* continuationProviderName(ContinuationProvider provider) noexcept
 	return "native_stacks";
 }
 
+const char* continuationStatusName(ContinuationStatus status) noexcept
+{
+	switch (status) {
+	case ContinuationStatus::Completed: return "completed";
+	case ContinuationStatus::Suspended: return "suspended";
+	case ContinuationStatus::Trapped:   return "trapped";
+	case ContinuationStatus::Exception: return "exception";
+	case ContinuationStatus::Invalid:   return "invalid";
+	}
+	return "invalid";
+}
+
 // ── Stable id mappings ─────────────────────────────────────────────────────
 //
 // One arm per enumerator: adding a `TrapKind`/`ContinuationStatus` without an
@@ -143,6 +155,16 @@ void DiagnosticState::emit(Diagnostic diagnostic) noexcept
 void setDiagnosticSink(DiagnosticSink sink, void* userData) noexcept
 {
 	currentExecutionState().diagnostics.setSink(sink, userData);
+}
+
+DiagnosticSink diagnosticSink() noexcept
+{
+	return currentExecutionState().diagnostics.sink;
+}
+
+void* diagnosticSinkUserData() noexcept
+{
+	return currentExecutionState().diagnostics.userData;
 }
 
 std::span<const Diagnostic> recentDiagnostics() noexcept
@@ -337,6 +359,24 @@ void emitExceptionDiagnostic(std::int32_t tagId, std::uint32_t payloadBytes) noe
 		emitDiagnostic(std::move(diagnostic));
 	} catch (...) {
 		// Best-effort, as above.
+	}
+}
+
+void emitContinuationDiagnostic(std::string_view id, DiagnosticSeverity severity,
+		std::string message, DiagnosticContinuation continuation,
+		std::string_view remediation) noexcept
+{
+	Diagnostic diagnostic;
+	diagnostic.id = id;
+	diagnostic.severity = severity;
+	diagnostic.phase = DiagnosticPhase::Continuation;
+	diagnostic.remediation = remediation;
+	try {
+		diagnostic.message = std::move(message);
+		diagnostic.continuation = std::move(continuation);
+		emitDiagnostic(std::move(diagnostic));
+	} catch (...) {
+		// A failed allocation must not replace the trap/status being described.
 	}
 }
 

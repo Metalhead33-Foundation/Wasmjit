@@ -1,5 +1,5 @@
 
-#define CATCH_CONFIG_MAIN
+#define CATCH_CONFIG_RUNNER
 #include <catch2/catch_all.hpp>
 #include <nlohmann/json.hpp>
 
@@ -10,7 +10,9 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <iomanip>
 #include <iterator>
@@ -18,6 +20,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -49,6 +52,129 @@
 #include "WastScript.hpp"
 
 Euph::Conf::Configuration GLOBAL_CONFIGURATION;
+
+// ── Harness diagnostics output (docs/DIAGNOSTICS.md DG-6/DG-7) ──────────────
+//
+// The test binary accepts three opt-in flags before Catch2 sees the command
+// line:
+//
+//   --diagnostics=text|json|none   emit collected records at exit
+//   --diagnostics-file=PATH        write them there instead of stdout
+//   --diagnostics-limit=N          cap the accumulator (0 = unlimited)
+//
+// Collection is a sink on the main thread's execution state, so it sees the
+// records of every test that runs there. `--diagnostics=none` (the default)
+// installs nothing and keeps the zero-cost path.
+struct DiagnosticsHarness {
+	enum class Mode { None, Text, Json };
+
+	Mode mode = Mode::None;
+	std::string path;
+	std::uint32_t limit = 1000;
+	bool valid = true;
+	std::vector<WASM::Diagnostic> records;
+
+	static void sink(void* userData, const WASM::Diagnostic& diagnostic) noexcept
+	{
+		auto* self = static_cast<DiagnosticsHarness*>(userData);
+		if (self->limit != 0 && self->records.size() >= self->limit)
+			return;
+		try {
+			self->records.push_back(diagnostic);
+		} catch (...) {
+		}
+	}
+
+	void install()
+	{
+		if (mode != Mode::None)
+			WASM::setDiagnosticSink(&sink, this);
+	}
+
+	void flush() const
+	{
+		if (mode == Mode::None)
+			return;
+		std::string text;
+		if (mode == Mode::Json) {
+			text = WASM::diagnosticsToJson(records);
+			text.push_back('\n');
+		} else {
+			for (std::size_t i = 0; i < records.size(); ++i) {
+				if (i != 0)
+					text.push_back('\n');
+				text += WASM::formatDiagnostic(records[i]);
+			}
+			if (!text.empty())
+				text.push_back('\n');
+		}
+		if (path.empty()) {
+			std::fwrite(text.data(), 1, text.size(), stdout);
+			std::fflush(stdout);
+			return;
+		}
+		std::FILE* file = std::fopen(path.c_str(), "wb");
+		if (file == nullptr) {
+			std::fprintf(stderr, "WasmJit: cannot open --diagnostics-file %s\n",
+					path.c_str());
+			return;
+		}
+		std::fwrite(text.data(), 1, text.size(), file);
+		std::fclose(file);
+	}
+};
+
+// Returns true when `argument` belongs to the diagnostics flags (consumed, even
+// if malformed). A malformed value sets `options.valid = false`.
+bool parseDiagnosticsArgument(std::string_view argument, DiagnosticsHarness& options)
+{
+	constexpr std::string_view kPrefix = "--diagnostics";
+	if (argument.rfind(kPrefix, 0) != 0)
+		return false;
+	if (argument == "--diagnostics=none") {
+		options.mode = DiagnosticsHarness::Mode::None;
+		return true;
+	}
+	if (argument == "--diagnostics=text") {
+		options.mode = DiagnosticsHarness::Mode::Text;
+		return true;
+	}
+	if (argument == "--diagnostics=json") {
+		options.mode = DiagnosticsHarness::Mode::Json;
+		return true;
+	}
+	constexpr std::string_view kFilePrefix = "--diagnostics-file=";
+	if (argument.rfind(kFilePrefix, 0) == 0) {
+		const std::string_view value = argument.substr(kFilePrefix.size());
+		if (value.empty()) {
+			options.valid = false;
+			return true;
+		}
+		options.path = std::string(value);
+		return true;
+	}
+	constexpr std::string_view kLimitPrefix = "--diagnostics-limit=";
+	if (argument.rfind(kLimitPrefix, 0) == 0) {
+		const std::string_view value = argument.substr(kLimitPrefix.size());
+		std::uint32_t parsed = 0;
+		if (value.empty()) {
+			options.valid = false;
+			return true;
+		}
+		for (const char digit : value) {
+			if (digit < '0' || digit > '9' || parsed > 1000000u) {
+				options.valid = false;
+				return true;
+			}
+			parsed = parsed * 10u + static_cast<std::uint32_t>(digit - '0');
+		}
+		options.limit = parsed;
+		return true;
+	}
+	options.valid = false;
+	return true;
+}
+
 
 // The C++ mirror of the JIT's lowered `v128`: 16 bytes, four `i32` lanes. The
 // JIT's type is forced to 16-byte alignment (LibJitTypeTranslation), which
@@ -8040,6 +8166,10 @@ TEST_CASE("diagnostics: a sink sees records without replacing the ring")
 {
 	WASM::clearDiagnostics();
 	std::vector<std::string> seen;
+	// Restore whatever sink was installed before this case (the harness may
+	// have installed `--diagnostics` capture).
+	const WASM::DiagnosticSink previousSink = WASM::diagnosticSink();
+	void* const previousSinkData = WASM::diagnosticSinkUserData();
 	WASM::setDiagnosticSink([](void* userData, const WASM::Diagnostic& diagnostic) noexcept {
 		auto* output = static_cast<std::vector<std::string>*>(userData);
 		try {
@@ -8072,7 +8202,7 @@ TEST_CASE("diagnostics: a sink sees records without replacing the ring")
 	REQUIRE(WASM::recentDiagnostics().empty());
 
 	WASM::setDiagnosticRingCapacity(WASM::DiagnosticState::kDefaultCapacity);
-	WASM::setDiagnosticSink(nullptr, nullptr);
+	WASM::setDiagnosticSink(previousSink, previousSinkData);
 }
 
 TEST_CASE("diagnostics: env.panic records a fatal note and traps")
@@ -10027,6 +10157,191 @@ TEST_CASE("continuation runtime enforces one-shot and the live budget")
 	WASM::clearPendingTrap();
 }
 
+// ── Continuation diagnostics (docs/DIAGNOSTICS.md DG-4) ─────────────────────
+// The runtime already knows the provider, generation, state, tag and root set
+// when a resume or scheduler task fails. These cases pin that the record
+// carries them, that the scheduler names the task kind, and that no developer
+// pointer reaches either form.
+
+TEST_CASE("diagnostics: a continuation failure carries provider and generation")
+{
+	struct ProviderRestore {
+		WASM::ContinuationProvider previous;
+		~ProviderRestore() { WASM::setContinuationProvider(previous); }
+	} restore{WASM::continuationProvider()};
+	WASM::setContinuationProvider(WASM::ContinuationProvider::HostThreads);
+
+	WASM::Callable target{};
+	target.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) {
+		std::int32_t value = 0;
+		WASM::wasm_cont_suspend(11, 1, &value);
+	});
+	target.context = nullptr;
+
+	WASM::clearDiagnostics();
+	WASM::clearPendingTrap();
+	void* first = WASM::wasm_cont_new(&target, nullptr, 0, 0, 0);
+	REQUIRE(first != nullptr);
+	WASM::ContinuationResumeResult result;
+	WASM::wasm_cont_resume(first, 0, &result);
+	REQUIRE(result.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Suspended));
+	REQUIRE(result.continuation != nullptr);
+	void* second = result.continuation;
+	// A suspension is an outcome, not a failure: it records nothing.
+	REQUIRE(WASM::recentDiagnostics().empty());
+
+	// The consumed identity is rejected; the record names the reason and carries
+	// the worker's provider, generation and state.
+	WASM::ContinuationResumeResult again;
+	WASM::wasm_cont_resume(first, 0, &again);
+	REQUIRE(again.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Invalid));
+	const auto records = WASM::recentDiagnostics();
+	REQUIRE(records.size() == 1);
+	const WASM::Diagnostic& diagnostic = records.back();
+	REQUIRE(diagnostic.id == "WASM.CONTINUATION.INVALID_GENERATION");
+	REQUIRE(diagnostic.severity == WASM::DiagnosticSeverity::Error);
+	REQUIRE(diagnostic.phase == WASM::DiagnosticPhase::Continuation);
+	REQUIRE(diagnostic.continuation.present());
+	REQUIRE(diagnostic.continuation.provider
+			== WASM::ContinuationProvider::HostThreads);
+	REQUIRE(diagnostic.continuation.generation >= 1);
+	REQUIRE(diagnostic.continuation.state == "suspended");
+	REQUIRE(diagnostic.continuation.resultCount == 0);
+	REQUIRE_FALSE(diagnostic.continuation.hasRoots);
+
+	const nlohmann::json json = nlohmann::json::parse(
+			WASM::diagnosticToJson(diagnostic));
+	REQUIRE(json.at("phase") == "continuation");
+	REQUIRE(json.at("continuation").at("provider") == "host_threads");
+	REQUIRE(json.at("continuation").at("generation").get<std::uint64_t>() >= 1);
+	REQUIRE(json.at("continuation").at("state") == "suspended");
+	REQUIRE_FALSE(json.at("continuation").contains("switchPeer"));
+	REQUIRE(WASM::formatDiagnostic(diagnostic).find("continuation host_threads")
+			!= std::string::npos);
+
+	WASM::clearPendingTrap();
+	REQUIRE(WASM::continuationRefRelease(first));
+	REQUIRE(WASM::continuationRefRelease(second));
+}
+
+
+TEST_CASE("diagnostics: a transferred trap or exception keeps continuation context")
+{
+	struct ProviderRestore {
+		WASM::ContinuationProvider previous;
+		~ProviderRestore() { WASM::setContinuationProvider(previous); }
+	} restore{WASM::continuationProvider()};
+	WASM::setContinuationProvider(WASM::ContinuationProvider::NativeStacks);
+
+	WASM::Callable trapping{};
+	trapping.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) {
+		WASM::reportTrap(WASM::TrapKind::Unreachable, "worker trap");
+	});
+	trapping.context = nullptr;
+
+	WASM::clearDiagnostics();
+	WASM::clearPendingTrap();
+	void* trapped = WASM::wasm_cont_new(&trapping, nullptr, 0, 0, 0);
+	REQUIRE(trapped != nullptr);
+	WASM::ContinuationResumeResult result;
+	WASM::wasm_cont_resume(trapped, 0, &result);
+	REQUIRE(result.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Trapped));
+	REQUIRE(WASM::trapPending());
+	// The direct resume call is not the host boundary, so the trap record itself
+	// is still pending; the continuation record is emitted here.
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	REQUIRE(WASM::recentDiagnostics()[0].id == "WASM.CONTINUATION.TRAPPED");
+	REQUIRE(WASM::recentDiagnostics()[0].continuation.state == "trapped");
+	REQUIRE(WASM::recentDiagnostics()[0].continuation.provider
+			== WASM::ContinuationProvider::NativeStacks);
+	WASM::clearPendingTrap();
+	REQUIRE(WASM::continuationRefRelease(trapped));
+
+	WASM::Callable throwing{};
+	throwing.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) {
+		::wasm_exn_set_pending(reinterpret_cast<void*>(0x1));
+	});
+	throwing.context = nullptr;
+
+	WASM::clearDiagnostics();
+	::wasm_exn_clear_pending();
+	void* exception = WASM::wasm_cont_new(&throwing, nullptr, 0, 0, 0);
+	REQUIRE(exception != nullptr);
+	WASM::wasm_cont_resume(exception, 0, &result);
+	REQUIRE(result.status == static_cast<std::int32_t>(WASM::ContinuationStatus::Exception));
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	REQUIRE(WASM::recentDiagnostics()[0].id == "WASM.CONTINUATION.EXCEPTION");
+	REQUIRE(WASM::recentDiagnostics()[0].continuation.state == "exception");
+	::wasm_exn_clear_pending();
+	REQUIRE(WASM::continuationRefRelease(exception));
+}
+
+TEST_CASE("diagnostics: the ring is bounded and never serializes developer pointers")
+{
+	WASM::setDiagnosticRingCapacity(4);
+	WASM::clearDiagnostics();
+	for (int i = 0; i < 10; ++i) {
+		WASM::Diagnostic diagnostic;
+		diagnostic.id = WASM::DiagnosticId::kExecuteLogInfo;
+		diagnostic.message = std::to_string(i);
+		WASM::emitDiagnostic(std::move(diagnostic));
+	}
+	const auto records = WASM::recentDiagnostics();
+	REQUIRE(records.size() == 4);
+	REQUIRE(records.front().message == "6");
+	REQUIRE(records.back().message == "9");
+
+	// switchPeer is a developer-only pointer: no form may expose it.
+	WASM::Diagnostic diagnostic;
+	diagnostic.id = WASM::DiagnosticId::kExecuteLogInfo;
+	diagnostic.message = "redaction";
+	diagnostic.continuation.state = "suspended";
+	diagnostic.continuation.switchPeer = reinterpret_cast<const void*>(0x1234);
+	const std::string text = WASM::formatDiagnostic(diagnostic);
+	const std::string json = WASM::diagnosticToJson(diagnostic);
+	REQUIRE(text.find("switchPeer") == std::string::npos);
+	REQUIRE(json.find("switchPeer") == std::string::npos);
+	REQUIRE(json.find("0x1234") == std::string::npos);
+	REQUIRE(json.find("0x") == std::string::npos);
+	REQUIRE(json.find("\"state\":\"suspended\"") != std::string::npos);
+
+	WASM::setDiagnosticRingCapacity(WASM::DiagnosticState::kDefaultCapacity);
+}
+TEST_CASE("diagnostics: the harness parses its documented CLI flags")
+{
+	DiagnosticsHarness options;
+	REQUIRE(parseDiagnosticsArgument("--diagnostics=json", options));
+	REQUIRE(options.mode == DiagnosticsHarness::Mode::Json);
+	REQUIRE(parseDiagnosticsArgument("--diagnostics=text", options));
+	REQUIRE(options.mode == DiagnosticsHarness::Mode::Text);
+	REQUIRE(parseDiagnosticsArgument("--diagnostics=none", options));
+	REQUIRE(options.mode == DiagnosticsHarness::Mode::None);
+	REQUIRE(parseDiagnosticsArgument("--diagnostics-file=/tmp/diagnostics.json",
+			options));
+	REQUIRE(options.path == "/tmp/diagnostics.json");
+	REQUIRE(parseDiagnosticsArgument("--diagnostics-limit=7", options));
+	REQUIRE(options.limit == 7);
+	REQUIRE(options.valid);
+
+	// A non-diagnostics argument belongs to Catch2.
+	REQUIRE_FALSE(parseDiagnosticsArgument("--reporter", options));
+
+	// Malformed values are consumed but rejected, so main can exit with 2
+	// instead of silently ignoring them.
+	DiagnosticsHarness badLimit;
+	REQUIRE(parseDiagnosticsArgument("--diagnostics-limit=lots", badLimit));
+	REQUIRE_FALSE(badLimit.valid);
+	DiagnosticsHarness badFile;
+	REQUIRE(parseDiagnosticsArgument("--diagnostics-file=", badFile));
+	REQUIRE_FALSE(badFile.valid);
+	DiagnosticsHarness badMode;
+	REQUIRE(parseDiagnosticsArgument("--diagnostics=xml", badMode));
+	REQUIRE_FALSE(badMode.valid);
+}
+
+
+
+
 TEST_CASE("stack-switching module runs cont.new and resume")
 {
 	WASM::Module module = loadTestModule("cont_resume");
@@ -10612,6 +10927,83 @@ TEST_CASE("host continuation scheduler carries wide completion and throw")
 	::wasm_exn_clear_pending();
 }
 
+TEST_CASE("diagnostics: scheduler tasks record rejection, traps and invalid handles")
+{
+	WASM::HostContinuationScheduler scheduler;
+	WASM::clearDiagnostics();
+
+	// An invalid handle is rejected without touching the trap slot but is still
+	// a record with its own id.
+	REQUIRE_FALSE(scheduler.submit(nullptr, 0));
+	REQUIRE(!WASM::trapPending());
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	REQUIRE(WASM::recentDiagnostics()[0].id
+			== "WASM.CONTINUATION.SCHEDULER.INVALID_HANDLE");
+	REQUIRE_FALSE(WASM::recentDiagnostics()[0].continuation.present());
+	WASM::clearDiagnostics();
+
+	// A suspension with no hook is dropped on the floor; the record says so and
+	// carries the worker context.
+	WASM::Callable suspending{};
+	suspending.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) {
+		std::int32_t value = 0;
+		WASM::wasm_cont_suspend(21, 3, &value);
+	});
+	suspending.context = nullptr;
+	void* suspended = WASM::wasm_cont_new(&suspending, nullptr, 0, 0, 0);
+	REQUIRE(suspended != nullptr);
+	REQUIRE(scheduler.submit(suspended, 0, true));
+	REQUIRE(scheduler.step());
+	// The scheduler's record is visible on the resumer. The worker's own
+	// dropped-suspended record is emitted inside its execution state and is
+	// released with the worker (see docs/DIAGNOSTICS.md §5.2).
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	REQUIRE(WASM::recentDiagnostics()[0].id
+			== "WASM.CONTINUATION.UNHANDLED_SUSPENSION");
+	REQUIRE(WASM::recentDiagnostics()[0].continuation.state == "suspended");
+	WASM::clearDiagnostics();
+
+	// A task that ends with an uncaught exception fires onRejected and records
+	// both the transfer and the scheduler-level rejection.
+	WASM::Callable throwing{};
+	throwing.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) {
+		::wasm_exn_set_pending(reinterpret_cast<void*>(0x1));
+	});
+	throwing.context = nullptr;
+	::wasm_exn_clear_pending();
+	void* rejected = WASM::wasm_cont_new(&throwing, nullptr, 0, 0, 0);
+	REQUIRE(rejected != nullptr);
+	REQUIRE(scheduler.submit(rejected, 0, true));
+	REQUIRE(scheduler.step());
+	const auto rejection = WASM::recentDiagnostics();
+	REQUIRE(rejection.size() == 2);
+	REQUIRE(rejection[0].id == "WASM.CONTINUATION.EXCEPTION");
+	REQUIRE(rejection[1].id == "WASM.CONTINUATION.SCHEDULER.REJECTED");
+	REQUIRE(rejection[1].continuation.state == "exception");
+	REQUIRE(rejection[1].message.find("resume task") != std::string::npos);
+	::wasm_exn_clear_pending();
+	WASM::clearDiagnostics();
+
+	// A trapped task is recorded in scheduler terms as well.
+	WASM::Callable trapping{};
+	trapping.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) {
+		WASM::reportTrap(WASM::TrapKind::Unreachable, "scheduler trap");
+	});
+	trapping.context = nullptr;
+	WASM::clearPendingTrap();
+	void* trapped = WASM::wasm_cont_new(&trapping, nullptr, 0, 0, 0);
+	REQUIRE(trapped != nullptr);
+	REQUIRE(scheduler.submit(trapped, 0, true));
+	REQUIRE(scheduler.step());
+	const auto trappedRecords = WASM::recentDiagnostics();
+	REQUIRE(trappedRecords.size() == 2);
+	REQUIRE(trappedRecords[0].id == "WASM.CONTINUATION.TRAPPED");
+	REQUIRE(trappedRecords[1].id == "WASM.CONTINUATION.SCHEDULER.TRAPPED");
+	REQUIRE(trappedRecords[1].message == "scheduler trap");
+	WASM::clearPendingTrap();
+}
+
+
 TEST_CASE("stack-switching module drops a suspension with no handler")
 {
 	const std::uint32_t before = WASM::liveContinuationCount();
@@ -10645,4 +11037,30 @@ TEST_CASE("stack-switching module routes a suspension to its handler")
 	auto run = instance->exportedFunction("run");
 	REQUIRE(run.has_value());
 	REQUIRE(WASM::callCallable<std::int32_t>(*run) == 7);
+}
+
+// ── Entry point (CATCH_CONFIG_RUNNER) ───────────────────────────────────────
+// The diagnostics flags are ours, not Catch2's: consume them before the session
+// sees the command line, install the sink, run the tests, then flush the
+// collected records to stdout or `--diagnostics-file`.
+int main(int argc, char* argv[])
+{
+	DiagnosticsHarness diagnostics;
+	int kept = 1;
+	for (int i = 1; i < argc; ++i) {
+		if (parseDiagnosticsArgument(argv[i], diagnostics))
+			continue;
+		argv[kept++] = argv[i];
+	}
+	if (!diagnostics.valid) {
+		std::fprintf(stderr,
+				"WasmJit: invalid diagnostics option; expected "
+				"--diagnostics=text|json|none, --diagnostics-file=PATH or "
+				"--diagnostics-limit=N\n");
+		return 2;
+	}
+	diagnostics.install();
+	const int result = Catch::Session().run(kept, argv);
+	diagnostics.flush();
+	return result;
 }

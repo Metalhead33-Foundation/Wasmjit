@@ -1,15 +1,28 @@
 # Diagnostics and Debugging — Current Surface, Gaps, and Plan
 
-Status: design note / implementation plan. **Revision 2** implements the
-first three milestones — DG-1 (the structured record), DG-2 (traps, exceptions,
-decode and validation boundaries) and DG-3 (the bounded per-agent ring, the
-sink and the text/JSON forms) — plus the four `env.info`/`warn`/`error`/`panic`
-log imports from DG-2/DG-3. DG-0 is incremental: the index rules and the
-trap/continuation/status mappings have ids, the remaining validator rules still
-share the transitional `WASM.VALIDATE.RULE`. DG-4…DG-8 remain open and are
-listed in §6.
+Status: design note / implementation plan. **Revision 3** implements DG-1…DG-4,
+the harness half of DG-6/DG-7 and the privacy/boundedness half of DG-8:
 
-Before this revision, WasmJit had good *local* diagnostics: named validation
+- DG-1 — the structured record and the validator/decode boundaries.
+- DG-2 — runtime traps, uncaught exceptions and the four guest log imports.
+- DG-3 — the bounded per-execution-state ring, the sink and the text/JSON forms.
+- DG-4 — continuation and scheduler records: the reason leaf, provider,
+  generation, state, tag, value/result counts and root presence, plus the
+  scheduler's invalid-handle, unhandled-suspension, rejected and trapped
+  records.
+- DG-6/DG-7 — `--diagnostics=text|json|none`, `--diagnostics-file=PATH` and
+  `--diagnostics-limit=N` on the test binary, so an agent can consume the JSON
+  stream without reading prose.
+- DG-8 — the ring bound and the pointer-redaction gate are tested; the
+  benchmark is still open.
+
+DG-0 is incremental: the index rules, all trap/continuation status mappings, the
+continuation reasons and the log imports have ids; the remaining validator
+rules still share the transitional `WASM.VALIDATE.RULE`. DG-5 is complete for
+validation/decode records (function name + offset) and open for runtime-trap
+locations, which need a backend-preserved decode-to-code map.
+
+Before this work, WasmJit had good *local* diagnostics: named validation
 errors, `TrapKind` + copied trap messages, pending exceptions, provider status
 values, `Module::describeIndex`, and a test harness that fixes the expected
 outcome. It had no structured diagnostic record, no machine-readable stream and
@@ -35,17 +48,18 @@ the repository's documentation conventions but is not constrained by
 | Decode | Named malformed/unsupported errors and bounded LEB/count reads; the load boundary records `WASM.DECODE.*` | `WasmBase/WasmModule.cpp`, `WasmBase/WasmOpcodeDispatcher.cpp`, `WasmBase/WasmSafety.hpp` |
 | Runtime traps | `TrapKind` plus a copied message in the per-agent `ExecutionState` trap slot; the host-boundary conversion records `WASM.EXECUTE.TRAP.*` | `WasmBase/WasmTrap.*`, `WasmBase/WasmAgent.hpp` |
 | Exceptions | Pending exception slot, `TagId`, Store-owned exception payload; taking it records `WASM.EXECUTE.EXCEPTION` | `WasmBase/WasmExn.*` |
-| Continuations | `ContinuationStatus`, trap/exception transfer, provider state, worker generation/roots; the status/id mapping exists, record emission is DG-4 | `WasmBase/WasmContinuation.*` |
+| Continuations | `ContinuationStatus`, trap/exception transfer, provider state, worker generation/roots; resume and scheduler failures record `WASM.CONTINUATION.*` with provider/generation/state/tag/root context | `WasmBase/WasmContinuation.*`, `WasmBase/WasmDiagnostics.*` |
 | Tests | Named Catch2 cases, WAT fixtures, curated spec scripts, expected trap assertions, and the diagnostics cases in §7 | `Test/main.cpp`, `Test/wasm_wat/` |
 | Debug symbols | Native debug build (`-g`), but no Wasm call-chain metadata in a diagnostic API | build configuration |
-| Machine output | Human-readable test output; the JSON form is available to a harness or embedder, but the CLI flags in §5.3 are not wired yet | `Test/main.cpp` |
+| Machine output | `--diagnostics=text\|json\|none`, `--diagnostics-file=PATH` and `--diagnostics-limit=N` on `Test/WasmJit`; the JSON array is the last stdout line or the whole file | `Test/main.cpp` |
 
-What is still missing is **correlation across an entire Wasm call chain**, a
-continuation/scheduler record and a source/CLI workflow. A module author sees a
-trap record with its id and message, but not the function/instruction location
-of a *runtime* trap (the JIT does not yet preserve a decode-to-code map); the
-validator and decode records do carry a location. An embedder can attach a sink
-and query the ring; an agent can resolve an id in §5.1 to a test name.
+What is still missing is **correlation across an entire Wasm call chain**,
+runtime-trap source locations and a standalone module-author CLI. A module
+author sees a trap record with its id and message, but not the
+function/instruction location of a *runtime* trap (the JIT does not yet preserve
+a decode-to-code map); the validator and decode records do carry a location. An
+embedder can attach a sink and query the ring; an agent can run the harness with
+`--diagnostics=json` and resolve an id in §4.2 to a test name.
 
 ### 1.1 What this revision added
 
@@ -53,16 +67,22 @@ and query the ring; an agent can resolve an id in §5.1 to a test name.
   `DiagnosticSeverity`, `DiagnosticPhase` and the stable id constants in
   `WASM::DiagnosticId`.
 - `DiagnosticState` in `ExecutionState`, with `setDiagnosticSink`,
+  `diagnosticSink`/`diagnosticSinkUserData` (for scoped capture),
   `recentDiagnostics`, `clearDiagnostics`, `setDiagnosticRingCapacity` and
   `emitDiagnostic`.
-- Emission at four boundaries: `Validator::fail` (validate), `Module::fromFile`
-  (decode and preamble), `checkTrap`/`trap` (execute) and
-  `wasm_exn_take_pending` (uncaught exception). Also the four log imports.
+- Emission at the boundaries: `Validator::fail` (validate), `Module::fromFile`
+  (decode and preamble), `checkTrap`/`trap` (execute),
+  `wasm_exn_take_pending` (uncaught exception), the continuation resume/switch
+  paths and `HostContinuationScheduler`. Also the four log imports.
+- Continuation records carry the provider, generation, state, tag,
+  value/result counts and root presence; `switchPeer` is never serialized.
 - The text form and a nlohmann_json-backed JSON serializer (schema v1). The
   library is header-only and included only in `WasmDiagnostics.cpp`, so the
   public record header stays lightweight; invalid UTF-8 from a guest message is
   replaced rather than allowed to throw.
-- Nine Catch2 cases (§7) and `Test/wasm_wat/diagnostics_log.wat`.
+- Harness flags `--diagnostics=text|json|none`, `--diagnostics-file=PATH` and
+  `--diagnostics-limit=N` (§5.3).
+- Fourteen Catch2 cases (§7) and `Test/wasm_wat/diagnostics_log.wat`.
 
 
 ## 2. Personas and what they need
@@ -246,7 +266,30 @@ mappings (a unit test asserts uniqueness). The shipped leaves are:
 | `WASM.EXECUTE.EXCEPTION` | `wasm_exn_take_pending` | Error | `diagnostics: an uncaught exception records WASM.EXECUTE.EXCEPTION` |
 | `WASM.EXECUTE.LOG.INFO/WARN/ERROR` | `env.info`/`warn`/`error` | Note/Warning/Error | `diagnostics: env log imports emit structured records` |
 | `WASM.EXECUTE.LOG.PANIC` | `env.panic` (then a trap) | Fatal | `diagnostics: env.panic records a fatal note and traps` |
-| `WASM.CONTINUATION.<NAME>` (5 leaves) | mapping only; emission is DG-4 | — | `diagnostics: trap and continuation ids are stable and distinct` |
+| `WASM.CONTINUATION.COMPLETED/SUSPENDED/TRAPPED/EXCEPTION/INVALID` | `continuationDiagnosticId()`; trapped/exception are emitted when transferred to the resumer | Error | `diagnostics: a transferred trap or exception keeps continuation context`, `diagnostics: scheduler tasks record rejection, traps and invalid handles` |
+| `WASM.CONTINUATION.NULL_HANDLE` | resume/bind/switch with a null handle | Error | — |
+| `WASM.CONTINUATION.INVALID_HANDLE` | handle is not in the registry | Error | — |
+| `WASM.CONTINUATION.NULL_EXCEPTION` | `resume_throw` with a null exception | Error | — |
+| `WASM.CONTINUATION.NULL_TARGET` | `cont.new` with a null callable | Error | — |
+| `WASM.CONTINUATION.CANCELLED` | resume of a cancelled worker | Error | — |
+| `WASM.CONTINUATION.INVALID_GENERATION` | consumed/one-shot identity | Error | `diagnostics: a continuation failure carries provider and generation` |
+| `WASM.CONTINUATION.NOT_RESUMABLE` | worker state is not new/suspended | Error | — |
+| `WASM.CONTINUATION.FRESH_THROW` | throw into a fresh continuation | Error | — |
+| `WASM.CONTINUATION.CROSS_PROVIDER` | mixed-provider switch | Error | — |
+| `WASM.CONTINUATION.DROPPED_SUSPENDED` | a suspended worker is dropped | Error | — |
+| `WASM.CONTINUATION.SWITCH_OUTSIDE` | switch outside a running worker | Error | — |
+| `WASM.CONTINUATION.TARGET_COMPLETED` | switch target never switched back | Error | — |
+| `WASM.CONTINUATION.SUSPEND_OUTSIDE` | suspend with no current worker | Error | — |
+| `WASM.CONTINUATION.BUDGET_EXHAUSTED` | `cont.new` over the live budget | Error | — |
+| `WASM.CONTINUATION.ALLOCATION_FAILED` | worker/handle allocation failed | Error | — |
+| `WASM.CONTINUATION.START_FAILED` | host-thread worker start failed | Error | — |
+| `WASM.CONTINUATION.STACK_ALLOCATION_FAILED` | native continuation stack failed | Error | — |
+| `WASM.CONTINUATION.BIND_FAILED` | `cont.bind` argument mismatch | Error | — |
+| `WASM.CONTINUATION.UNHANDLED_SUSPENSION` | scheduler drops a suspension with no hook | Error | `diagnostics: scheduler tasks record rejection, traps and invalid handles` |
+| `WASM.CONTINUATION.SCHEDULER.INVALID_HANDLE` | `submit*` rejects a handle | Error | same |
+| `WASM.CONTINUATION.SCHEDULER.REJECTED` | task ended with an uncaught exception | Error | same |
+| `WASM.CONTINUATION.SCHEDULER.TRAPPED` | task ended with a trap | Error | same |
+| `WASM.CONTINUATION.SCHEDULER.INVALID` | `step` could not resume the task | Error | — |
 
 DG-0 remains open only because `WASM.VALIDATE.RULE` still covers the many
 rules beyond the index family — the table makes that gap explicit rather than
@@ -254,16 +297,27 @@ hiding it behind prose matching.
 
 ### 4.3 Continuation context
 
-For a continuation failure, include the worker/provider context needed to
-localize it:
+Implemented (`DiagnosticContinuation`): every continuation record carries the
+worker/provider context the runtime already holds.
 
-- provider (`NativeStacks`/`HostThreads`), worker generation and state;
+- provider (`NativeStacks`/`HostThreads`), worker generation and state
+  (`new`, `running`, `suspended`, `completed`, `trapped`, `exception`,
+  `cancelled`, or the five `ContinuationStatus` names when a status is
+  transferred);
 - suspended tag id and value count (not values by default);
-- target result count, root-registry presence, budget stack bytes;
-- switch peer identity only for developer diagnostics;
-- for the scheduler: task kind (resume/throw), whether the failure was a trap,
-  uncaught exception or invalid handle, and whether a replacement handle was
-  transferred.
+- target result count and root-registry presence (`roots`);
+- switch peer identity is *not* copied or serialized (developer-only, DG-8);
+- for the scheduler: a distinct id for an invalid handle, an unhandled
+  suspension, a rejected (uncaught exception) task and a trapped task. The
+  message says whether the task was a resume or a throw.
+
+**Visibility caveat:** diagnostics live in the *current execution state*. A
+failure recorded inside a suspended worker's state (for example the
+`DROPPED_SUSPENDED` record emitted while a worker unwinds) is released with
+that worker and is not merged into the resumer's ring. The scheduler therefore
+records the externally relevant outcome (`UNHANDLED_SUSPENSION`,
+`SCHEDULER.REJECTED`, `SCHEDULER.TRAPPED`) in the resumer's state. A future
+merge-on-resume step could surface worker records too; it is not part of DG-4.
 
 Do **not** dump raw stack memory, guest pointers, reference values or host
 `userData` by default. A developer-only `diagnostics=full` mode may include
@@ -373,28 +427,37 @@ Implemented:
 - `wasm_exn_take_pending()` records `WASM.EXECUTE.EXCEPTION` with the tag id and
   payload size when the host observes the exception. `wasm_exn_clear_pending()`
   (used when a handler consumed it) records nothing.
-- `ContinuationStatus` is unchanged, and `continuationDiagnosticId()` maps its
-  five values. The *reason* leaves (`INVALID_GENERATION`,
-  `UNHANDLED_SUSPENSION`, `TARGET_COMPLETED`, `CROSS_PROVIDER`,
-  `SWITCH_HANDOFF`) and the scheduler rejection reason remain DG-4.
+- `ContinuationStatus` is unchanged and `continuationDiagnosticId()` maps its
+  five values. The reason leaves (`INVALID_GENERATION`, `NOT_RESUMABLE`,
+  `CANCELLED`, `CROSS_PROVIDER`, `DROPPED_SUSPENDED`, `TARGET_COMPLETED`, …) are
+  emitted at the failing site with the worker context; the scheduler adds
+  `SCHEDULER.INVALID_HANDLE`, `UNHANDLED_SUSPENSION`, `SCHEDULER.REJECTED` and
+  `SCHEDULER.TRAPPED`.
 - Location: the validator supplies function index/name/instruction offset; the
   decode boundary supplies phase and id but not yet a byte offset; a runtime
   trap has no location until the JIT preserves a decode-to-code map (DG-5).
 
 ### 5.3 Module-author command line
 
-Still planned; not wired to the harness:
+Implemented on the test binary (`Test/main.cpp`, consumed before Catch2 sees the
+command line):
 
 ```
---diagnostics=text|json|none
---diagnostics-file=PATH
---diagnostics-context=module|continuation|full
---diagnostics-limit=N
+--diagnostics=text|json|none      emit the collected records at exit
+--diagnostics-file=PATH           write them there instead of stdout
+--diagnostics-limit=N             cap the accumulator (default 1000, 0 = unlimited)
 ```
 
-`--diagnostics=json` is a test harness feature; an embedder can consume the
-same records through `DiagnosticSink` or
-`diagnosticsToJson(recentDiagnostics())` today.
+The records are collected by a sink on the main thread's execution state, so
+they cover every test that runs there. With `--diagnostics=json` and no file,
+the JSON array is the **last line of stdout** (Catch2's own report precedes it);
+`--diagnostics-file` is the clean machine-readable path. An embedder can skip
+the harness entirely and use `DiagnosticSink` or
+`diagnosticsToJson(recentDiagnostics())`.
+
+`--diagnostics-context=module|continuation|full` remains open: the record
+already carries the structured fields, so the flag would only choose which ones
+a text renderer prints.
 
 ### 5.4 Host log imports (implemented)
 
@@ -436,11 +499,11 @@ Status: ✅ implemented, ◐ partial, ☐ open.
 | **DG-1 — Structured record** ✅ | Add `Diagnostic`/`DiagnosticLocation` and populate validator and decode paths first. | Validator errors expose id + function/offset; text form is backward-compatible. **Done: `Validator::fail` and the `Module::fromFile` boundaries; thrown messages are unchanged.** | P0 |
 | **DG-2 — Runtime traps and exceptions** ✅ | Populate execute/continuation diagnostics at trap and exception conversion boundaries. | `TrapKind` and pending exception still work; records carry location and continuation context. **Done for traps and uncaught exceptions; continuation context is DG-4.** | P0 |
 | **DG-3 — Bounded sink and JSON** ✅ | Add per-agent sink/ring and harness JSON output. | JSON schema v1 snapshots pass; ring is bounded; no allocation in the trap fast path unless a sink/ring is enabled. **Done: `DiagnosticState`, text/JSON forms, default capacity 32, capacity 0 disables the ring.** | P1 |
-| **DG-4 — Continuation/scheduler context** ☐ | Add provider/generation/state/tag/result/root/switch context and scheduler rejection reason. | The wide/throw scheduler tests assert ids and context; no raw pointers by default. | P1 |
+| **DG-4 — Continuation/scheduler context** ✅ | Add provider/generation/state/tag/result/root/switch context and scheduler rejection reason. | The wide/throw scheduler tests assert ids and context; no raw pointers by default. **Done: reason leaves + context at every resume/switch failure and scheduler outcome; `switchPeer` never serialized; records emitted inside a worker state are not merged into the resumer (documented in §4.3).** | P1 |
 | **DG-5 — Name/source correlation** ◐ | Consume the Wasm name section; expose function names and, where available, WAT/source positions supplied by tooling. | A named WAT fixture reports `$function`; missing names degrade to indices. **Done for validation/decode records; runtime-trap locations need a backend-preserved map.** | P2 |
-| **DG-6 — Module-author tooling** ☐ | A small diagnostic reader/CLI and editor-friendly JSON; document stable ids. | A module author can localize a validation error and a runtime trap without reading engine source. | P2 |
-| **DG-7 — Agent affordances** ◐ | `--diagnostics=json`, stable fixture names and a docs/test map; add `docs/DIAGNOSTICS.md#id` anchors. | An automated agent can go from id → docs → test → source in one pass. **The §4.2 table is that map; the CLI flag is open.** | P2 |
-| **DG-8 — Performance and privacy audit** ☐ | Verify no hot-path regressions when diagnostics are off; redact pointers/values by default; document retention. | Benchmarks unchanged within budget; a redaction test passes. **The trap fast path still returns on `pending == 0` without allocating; a benchmark and a redaction gate are open.** | P3 |
+| **DG-6 — Module-author tooling** ◐ | A small diagnostic reader/CLI and editor-friendly JSON; document stable ids. | A module author can localize a validation error and a runtime trap without reading engine source. **Done: harness text/JSON output plus `--diagnostics-file` and the documented id table; a standalone reader for a `.wasm` is still open.** | P2 |
+| **DG-7 — Agent affordances** ✅ | `--diagnostics=json`, stable fixture names and a docs/test map; add `docs/DIAGNOSTICS.md#id` anchors. | An automated agent can go from id → docs → test → source in one pass. **Done: `--diagnostics=json`, the §4.2 id→test table, and the diagnostic test suite names.** | P2 |
+| **DG-8 — Performance and privacy audit** ◐ | Verify no hot-path regressions when diagnostics are off; redact pointers/values by default; document retention. | Benchmarks unchanged within budget; a redaction test passes. **Done: bounded-ring and pointer-redaction tests, and the trap fast path still returns on `pending == 0`; the benchmark remains open.** | P3 |
 
 ### 6.1 Explicitly out of scope for the first pass
 
@@ -453,7 +516,7 @@ Status: ✅ implemented, ◐ partial, ☐ open.
 
 ## 7. Test plan
 
-Implemented (9 cases, 126 assertions; fixture
+Implemented (14 cases, 215 assertions; fixture
 `Test/wasm_wat/diagnostics_log.wat`):
 
 | Gate | Catch2 case | What it pins |
@@ -467,24 +530,24 @@ Implemented (9 cases, 126 assertions; fixture
 | Decode | `diagnostics: a malformed module records a decode id` | `WASM.DECODE.MALFORMED`, `Decode` phase, `Error` severity |
 | Exception | `diagnostics: an uncaught exception records WASM.EXECUTE.EXCEPTION` | nothing is recorded while pending; taking it records once |
 | Id stability | `diagnostics: trap and continuation ids are stable and distinct` | all 21 trap leaves and 5 status leaves are total, prefixed and unique |
+| Continuation context | `diagnostics: a continuation failure carries provider and generation` | `INVALID_GENERATION` with provider/generation/state in the ring, text and JSON; a suspension records nothing |
+| Transferred status | `diagnostics: a transferred trap or exception keeps continuation context` | `CONTINUATION.TRAPPED`/`CONTINUATION.EXCEPTION` with provider and state on the resumer |
+| Scheduler | `diagnostics: scheduler tasks record rejection, traps and invalid handles` | distinct ids for invalid handle, unhandled suspension, rejected and trapped tasks; messages name the task kind |
+| Bounded/redaction | `diagnostics: the ring is bounded and never serializes developer pointers` | capacity 4 keeps the newest records; `switchPeer` never appears in text/JSON |
+| Harness CLI | `diagnostics: the harness parses its documented CLI flags` | text/json/none, file path and limit parse; malformed values are rejected |
 
 Still open, from the original plan:
 
 1. **Schema snapshots** beyond the inline assertions: a checked-in JSON fixture
    for a validation error, a trap, an uncaught exception, a suspension and a
    rejected scheduler task.
-2. **Continuation**: A and B providers report provider/generation/state; a
-   switch failure reports the handoff reason; roots are counted, not dumped
-   (DG-4).
-3. **Scheduler**: wide resume, throw/reject and invalid-handle tasks produce
-   distinct ids and no leaked replacement handles (DG-4).
-4. **Privacy**: a redaction test asserting that default JSON contains no raw
-   pointer or guest value, and that `full` mode is opt-in and marked unstable
-   (DG-8).
-5. **Performance**: a benchmark showing no hot-path regression when the ring is
+2. **Runtime-trap location**: the JIT must preserve a decode-to-code map before
+   an execute record can carry a function/instruction location (DG-5).
+3. **Standalone module-author reader/CLI**: the harness flags exist; a tool that
+   loads a `.wasm` and prints the same records without the test binary does not
+   (DG-6).
+4. **Performance**: a benchmark showing no hot-path regression when the ring is
    disabled and no sink is installed (DG-8).
-6. **Agent workflow**: a scripted check resolves an id to its §4.2 row and test
-   name; the CLI flag that emits JSON is DG-7.
 
 ## 8. Implementation notes and risks
 
@@ -496,6 +559,10 @@ Still open, from the original plan:
   bounded `std::vector` (32 records by default); capacity 0 plus a null sink is
   the zero-cost configuration. `checkTrap()` returns on `pending == 0` before it
   builds a record, so a successful call allocates nothing.
+- The harness collects through a sink on the **main thread's** execution state.
+  Records emitted on a continuation worker thread or a test-owned `Agent` are
+  intentionally separate; use `--diagnostics-file` for the main-thread stream
+  and an explicit `DiagnosticSink` for a custom execution state.
 - Function/instruction offsets require a stable location in generated code.
   The existing `instructionOffset` at decode time is the seed; the JIT must
   preserve a mapping rather than invent one from a native address. That map is

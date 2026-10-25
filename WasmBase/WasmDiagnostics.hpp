@@ -73,6 +73,8 @@ const char* diagnosticSeverityName(DiagnosticSeverity severity) noexcept;
 const char* diagnosticPhaseName(DiagnosticPhase phase) noexcept;
 // "native_stacks" / "host_threads".
 const char* continuationProviderName(ContinuationProvider provider) noexcept;
+// "completed" / "suspended" / "trapped" / "exception" / "invalid".
+const char* continuationStatusName(ContinuationStatus status) noexcept;
 
 // Absence markers. An all-unknown location is omitted from the text/JSON form
 // rather than serialized as 0 (a real function/offset is a valid 0).
@@ -162,6 +164,34 @@ inline constexpr std::string_view kExecuteLogInfo = "WASM.EXECUTE.LOG.INFO";
 inline constexpr std::string_view kExecuteLogWarn = "WASM.EXECUTE.LOG.WARN";
 inline constexpr std::string_view kExecuteLogError = "WASM.EXECUTE.LOG.ERROR";
 inline constexpr std::string_view kExecuteLogPanic = "WASM.EXECUTE.LOG.PANIC";
+
+// Continuation failures (DG-4). These are reasons, not the five resume
+// statuses: `WASM.CONTINUATION.INVALID` says the resume failed, while
+// `INVALID_GENERATION` says why. `continuationDiagnosticId()` maps the compact
+// status enum; these are the leaves emitted at the failure site.
+inline constexpr std::string_view kContinuationNullHandle = "WASM.CONTINUATION.NULL_HANDLE";
+inline constexpr std::string_view kContinuationInvalidHandle = "WASM.CONTINUATION.INVALID_HANDLE";
+inline constexpr std::string_view kContinuationNullException = "WASM.CONTINUATION.NULL_EXCEPTION";
+inline constexpr std::string_view kContinuationNullTarget = "WASM.CONTINUATION.NULL_TARGET";
+inline constexpr std::string_view kContinuationCancelled = "WASM.CONTINUATION.CANCELLED";
+inline constexpr std::string_view kContinuationInvalidGeneration = "WASM.CONTINUATION.INVALID_GENERATION";
+inline constexpr std::string_view kContinuationNotResumable = "WASM.CONTINUATION.NOT_RESUMABLE";
+inline constexpr std::string_view kContinuationFreshThrow = "WASM.CONTINUATION.FRESH_THROW";
+inline constexpr std::string_view kContinuationCrossProvider = "WASM.CONTINUATION.CROSS_PROVIDER";
+inline constexpr std::string_view kContinuationDroppedSuspended = "WASM.CONTINUATION.DROPPED_SUSPENDED";
+inline constexpr std::string_view kContinuationSwitchOutside = "WASM.CONTINUATION.SWITCH_OUTSIDE";
+inline constexpr std::string_view kContinuationTargetCompleted = "WASM.CONTINUATION.TARGET_COMPLETED";
+inline constexpr std::string_view kContinuationSuspendOutside = "WASM.CONTINUATION.SUSPEND_OUTSIDE";
+inline constexpr std::string_view kContinuationBudgetExhausted = "WASM.CONTINUATION.BUDGET_EXHAUSTED";
+inline constexpr std::string_view kContinuationAllocationFailed = "WASM.CONTINUATION.ALLOCATION_FAILED";
+inline constexpr std::string_view kContinuationStartFailed = "WASM.CONTINUATION.START_FAILED";
+inline constexpr std::string_view kContinuationStackAllocationFailed = "WASM.CONTINUATION.STACK_ALLOCATION_FAILED";
+inline constexpr std::string_view kContinuationBindFailed = "WASM.CONTINUATION.BIND_FAILED";
+inline constexpr std::string_view kContinuationUnhandledSuspension = "WASM.CONTINUATION.UNHANDLED_SUSPENSION";
+inline constexpr std::string_view kContinuationSchedulerInvalidHandle = "WASM.CONTINUATION.SCHEDULER.INVALID_HANDLE";
+inline constexpr std::string_view kContinuationSchedulerRejected = "WASM.CONTINUATION.SCHEDULER.REJECTED";
+inline constexpr std::string_view kContinuationSchedulerTrapped = "WASM.CONTINUATION.SCHEDULER.TRAPPED";
+inline constexpr std::string_view kContinuationSchedulerInvalid = "WASM.CONTINUATION.SCHEDULER.INVALID";
 } // namespace DiagnosticId
 
 // `WASM.EXECUTE.TRAP.<NAME>` for a runtime trap kind; `TrapKind::Internal`
@@ -211,6 +241,10 @@ struct DiagnosticState {
 // Installs the sink on the current execution state. `nullptr` restores the
 // default (no callback).
 void setDiagnosticSink(DiagnosticSink sink, void* userData) noexcept;
+// The currently installed sink/user data, so a temporary sink (a test, a
+// scoped capture) can restore what it replaced.
+DiagnosticSink diagnosticSink() noexcept;
+void* diagnosticSinkUserData() noexcept;
 // The records of the current execution state, oldest first. The span is
 // invalidated by the next emission or by `clearDiagnostics()`.
 std::span<const Diagnostic> recentDiagnostics() noexcept;
@@ -250,6 +284,15 @@ void emitDecodeFailure(std::string_view message) noexcept;
 // Records an uncaught exception at the point the host takes it from the
 // pending slot (`wasm_exn_take_pending`).
 void emitExceptionDiagnostic(std::int32_t tagId, std::uint32_t payloadBytes) noexcept;
+// Records a continuation/scheduler failure with the provider, generation,
+// state, tag, value/result counts and root presence the runtime already has
+// (DG-4). `continuation.state` is the "populated" marker; when it is empty the
+// record has no continuation object (a null or invalid handle, for example).
+// `switchPeer` is never serialized. Allocation failures are swallowed: the
+// original trap/status is the outcome that matters.
+void emitContinuationDiagnostic(std::string_view id, DiagnosticSeverity severity,
+		std::string message, DiagnosticContinuation continuation,
+		std::string_view remediation = "docs/proposals/STACK_SWITCHING.md") noexcept;
 
 // ── Guest log imports (unit-test facility) ─────────────────────────────────
 //
