@@ -1726,6 +1726,8 @@ jit_type_t OpcodeDispatcher::v128Type()
 		WASM::ValueType vt;
 		vt.opcode = WASM::ValueTypeCode::V128;
 		vt.heapType = -1;
+		vt.isExact = false;
+		vt.isShared = false;
 		simdCachedType = jitTypeForValueType(vt);
 	}
 	return simdCachedType;
@@ -2011,6 +2013,8 @@ jit_type_t OpcodeDispatcher::jitRefTypeForHeapType(const WASM::HeapType& ht, boo
 	WASM::ValueType vt;
 	vt.opcode = nullable ? WASM::ValueTypeCode::RefNull : WASM::ValueTypeCode::Ref;
 	vt.heapType = ht.isTypeIndex ? ht.typeIndex : static_cast<int32_t>(ht.abstract);
+	vt.isExact = ht.isExact;
+	vt.isShared = ht.isShared;
 	return jitTypeForValueType(vt);
 }
 

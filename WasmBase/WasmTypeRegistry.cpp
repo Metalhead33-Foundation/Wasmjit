@@ -10,9 +10,10 @@ namespace WASM {
 namespace {
 
 CanonHeapType toCanonHeapType(int32_t heapType, uint32_t groupFirst, uint32_t groupEnd,
-							  const std::vector<TypeId>& localToGlobal)
+							  const std::vector<TypeId>& localToGlobal, bool isExact = false)
 {
 	CanonHeapType out;
+	out.isExact = isExact;
 	if (heapType < 0) {
 		out.kind = CanonHeapType::Kind::Abstract;
 		out.abstract = static_cast<AbstractHeapType>(heapType);
@@ -52,7 +53,8 @@ CanonValueType toCanonValueType(const ValueType& vt, uint32_t groupFirst, uint32
 	out.opcode = vt.opcode;
 	out.nullable = (vt.opcode == ValueTypeCode::RefNull);
 	if (vt.opcode == ValueTypeCode::Ref || vt.opcode == ValueTypeCode::RefNull)
-		out.heap = toCanonHeapType(vt.heapType, groupFirst, groupEnd, localToGlobal);
+		out.heap = toCanonHeapType(vt.heapType, groupFirst, groupEnd, localToGlobal,
+				vt.isExact);
 	return out;
 }
 
@@ -83,6 +85,12 @@ std::vector<CanonicalType> buildGroup(std::span<const Subtype> types, const Type
 		for (uint32_t s : st.supertypeIndices)
 			ct.supertypes.push_back(
 				toCanonHeapType(static_cast<int32_t>(s), groupFirst, groupEnd, localToGlobal));
+		if (st.descriptorIndex)
+			ct.descriptor = toCanonHeapType(static_cast<int32_t>(*st.descriptorIndex),
+					groupFirst, groupEnd, localToGlobal);
+		if (st.describesIndex)
+			ct.describes = toCanonHeapType(static_cast<int32_t>(*st.describesIndex),
+					groupFirst, groupEnd, localToGlobal);
 		if (st.isFunction()) {
 			ct.kind = CanonTypeKind::Func;
 			const FuncType& ft = std::get<FuncType>(st.composite);
@@ -124,6 +132,7 @@ void appendI32(std::string& s, int32_t v) { appendU32(s, static_cast<uint32_t>(v
 
 void serializeHeap(std::string& s, const CanonHeapType& h) {
 	appendU8(s, static_cast<uint8_t>(h.kind));
+	appendU8(s, h.isExact ? 1 : 0);
 	switch (h.kind) {
 	case CanonHeapType::Kind::Abstract: appendI32(s, static_cast<int32_t>(h.abstract)); break;
 	case CanonHeapType::Kind::Global:   appendU32(s, h.id.value); break;
@@ -152,6 +161,10 @@ void serializeType(std::string& s, const CanonicalType& t) {
 	appendU8(s, t.isShared ? 1 : 0);
 	appendU32(s, static_cast<uint32_t>(t.supertypes.size()));
 	for (const CanonHeapType& h : t.supertypes) serializeHeap(s, h);
+	appendU8(s, t.descriptor ? 1 : 0);
+	if (t.descriptor) serializeHeap(s, *t.descriptor);
+	appendU8(s, t.describes ? 1 : 0);
+	if (t.describes) serializeHeap(s, *t.describes);
 	if (t.kind == CanonTypeKind::Func) {
 		appendU32(s, static_cast<uint32_t>(t.funcParams.size()));
 		for (const CanonStorageType& p : t.funcParams) serializeStorage(s, p);
@@ -220,6 +233,8 @@ std::vector<CanonicalType> resolveGroup(const std::vector<CanonicalType>& pendin
 		for (CanonFieldType& f : out[i].structFields) remapStorage(f.storage, base);
 		remapStorage(out[i].arrayElement.storage, base);
 		remapHeap(out[i].contFunc, base);
+		if (out[i].descriptor) remapHeap(*out[i].descriptor, base);
+		if (out[i].describes) remapHeap(*out[i].describes, base);
 	}
 	return out;
 }

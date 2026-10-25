@@ -531,6 +531,8 @@ TypeId TypeStore::appendCore(const CanonicalType& type)
 	case CanonTypeKind::Struct: {
 		CoreStructPayload payload;
 		payload.fields = appendSpan(coreFields_, type.structFields);
+		payload.descriptor = type.descriptor;
+		payload.describes = type.describes;
 		record.payload = static_cast<uint32_t>(coreStructs_.size());
 		coreStructs_.push_back(payload);
 		break;
@@ -1183,6 +1185,26 @@ CanonHeapType CoreTypeView::contFunc() const
 		return pending_->contFunc;
 	const TypeRecord& record = store_->record(id_);
 	return store_->coreConts_[record.payload].func;
+}
+
+std::optional<CanonHeapType> CoreTypeView::descriptor() const
+{
+	if (pending_)
+		return pending_->descriptor;
+	const TypeRecord& record = store_->record(id_);
+	if (record.kind != TypeKind::CoreStruct)
+		return std::nullopt;
+	return store_->coreStructs_[record.payload].descriptor;
+}
+
+std::optional<CanonHeapType> CoreTypeView::describes() const
+{
+	if (pending_)
+		return pending_->describes;
+	const TypeRecord& record = store_->record(id_);
+	if (record.kind != TypeKind::CoreStruct)
+		return std::nullopt;
+	return store_->coreStructs_[record.payload].describes;
 }
 
 CanonHeapType CoreTypeView::importBound() const

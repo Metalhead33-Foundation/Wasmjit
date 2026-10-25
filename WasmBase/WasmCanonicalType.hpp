@@ -3,6 +3,7 @@
 #include "WasmType.hpp"
 #include "WasmTypeIdentity.hpp"
 #include <cstdint>
+#include <optional>
 #include <vector>
 namespace WASM {
 
@@ -18,9 +19,11 @@ struct CanonHeapType {
 	AbstractHeapType abstract = AbstractHeapType::Any; // when Abstract
 	TypeId           id{};                             // when Global
 	uint32_t         memberIndex = 0;                  // when Rec (per-group index)
+	bool             isExact = false;                  // Custom Descriptors: `exact x`
 	bool operator==(const CanonHeapType& o) const {
 		return kind == o.kind && abstract == o.abstract &&
-			   id == o.id && memberIndex == o.memberIndex;
+			   id == o.id && memberIndex == o.memberIndex &&
+			   isExact == o.isExact;
 	}
 };
 
@@ -56,6 +59,10 @@ struct CanonicalType {
 	CanonTypeKind kind = CanonTypeKind::Func;
 	bool          isFinal = true;
 	bool          isShared = false; // SET-1: `sharecomptype`
+	// Custom Descriptors: the optional `descriptor`/`describes` clauses. These
+	// participate in the canonical identity and are part of the rec group.
+	std::optional<CanonHeapType> descriptor;
+	std::optional<CanonHeapType> describes;
 	std::vector<CanonHeapType> supertypes; // stored as Global after interning
 	uint32_t      depth = 0;               // 1 + max(supertype depths); 0 if none
 

@@ -400,7 +400,9 @@ std::vector<ValueType> Validator::blockResults(const BlockType& blockType) const
 			&& static_cast<uint32_t>(blockType.heapType) >= module.typeCount())
 		fail("block type: unknown type "
 			 + module.describeIndex(NameKind::Type, static_cast<uint32_t>(blockType.heapType)));
-	return {ValueType{blockType.valType, blockType.heapType}};
+	ValueType type{blockType.valType, blockType.heapType};
+	type.isExact = blockType.isExact;
+	return {type};
 }
 
 void Validator::pushValue(const ValueType& type)
@@ -440,8 +442,13 @@ void Validator::popExpect(ValueTypeCode code)
 
 bool Validator::assignable(const ValueType& actual, const ValueType& expected) const
 {
-	if (actual.opcode == expected.opcode && actual.heapType == expected.heapType)
+	if (actual.opcode == expected.opcode && actual.heapType == expected.heapType
+			&& actual.isExact == expected.isExact)
 		return true;
+	// An exact source may flow to the same non-exact target, but a non-exact
+	// source may not satisfy an exact target (Custom Descriptors).
+	if (expected.isExact)
+		return false;
 	const auto isRef = [](ValueTypeCode code) {
 		return code == ValueTypeCode::FuncRef || code == ValueTypeCode::ExternRef
 				|| code == ValueTypeCode::AnyRef || code == ValueTypeCode::EqRef
@@ -1140,6 +1147,7 @@ void Validator::validateGlobalInit(const Global& global, std::size_t index)
 			vt.heapType = ht.isTypeIndex
 					? static_cast<int32_t>(ht.typeIndex)
 					: static_cast<int32_t>(ht.abstract);
+			vt.isExact = ht.isExact;
 			stack.push_back(vt);
 			break;
 		}
@@ -1268,6 +1276,7 @@ std::optional<ValueType> Validator::validateConstExpr(const std::vector<uint8_t>
 			type.heapType = ht.isTypeIndex
 					? static_cast<int32_t>(ht.typeIndex)
 					: static_cast<int32_t>(ht.abstract);
+			type.isExact = ht.isExact;
 			push(type);
 			break;
 		}
@@ -1584,6 +1593,7 @@ void Validator::dispatchRefNull(const HeapType& heapType)
 	type.heapType = heapType.isTypeIndex
 			? static_cast<int32_t>(heapType.typeIndex)
 			: static_cast<int32_t>(heapType.abstract);
+	type.isExact = heapType.isExact;
 	pushValue(type);
 }
 
@@ -1866,6 +1876,7 @@ ValueType Validator::refType(bool nullable, const HeapType& heapType) const
 	type.heapType = heapType.isTypeIndex
 			? static_cast<int32_t>(heapType.typeIndex)
 			: static_cast<int32_t>(heapType.abstract);
+	type.isExact = heapType.isExact;
 	return type;
 }
 
@@ -1873,6 +1884,7 @@ ValueType Validator::refTopForHeap(const HeapType& heapType) const
 {
 	ValueType top{};
 	top.heapType = -1;
+	top.isExact = heapType.isExact;
 	if (heapType.isTypeIndex) {
 		const CoreTypeView view = module.typeView(heapType.typeIndex);
 		if (view.kind() == CanonTypeKind::Import) {
@@ -1984,6 +1996,7 @@ void Validator::validateBrOnCast(bool isFail, uint8_t castop, LabelIdx label, He
 		type.opcode = nullable ? ValueTypeCode::RefNull : ValueTypeCode::Ref;
 		type.heapType = ht.isTypeIndex ? static_cast<int32_t>(ht.typeIndex)
 									   : static_cast<int32_t>(ht.abstract);
+		type.isExact = ht.isExact;
 		return type;
 	};
 	// castop bit 0 = the input is nullable; bit 1 = the cast result is nullable.

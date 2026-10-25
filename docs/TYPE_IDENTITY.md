@@ -234,6 +234,14 @@ Notes:
   than the subtype; that ordering is enforced at parse time, not by rejecting
   additional supertypes.
 - A canonical type's identity includes `isFinal` and its supertypes.
+- **Custom Descriptors.** A struct type's optional `descriptor`/`describes`
+  clauses are part of identity, exactly like fields and supertypes. Both name a
+  type in the same `rec` group; the pair must agree, must not be
+  self-referential, and is serialized into the interning key. Exact heap types
+  (`exact $t`) also carry an `isExact` bit distinct from ordinary `$t`, because
+  `(ref exact $t)` and `(ref $t)` are not the same type. Exact function imports
+  (`0x20 typeidx`) record `ImportFunction::isExact`; exports do not repeat the
+  flag.
 - After interning, every `Rec(i)` is rewritten to `Global(TypeId)`, so the stored
   graph is purely id-based. Canonical types never contain a `LocalTypeIdx`.
 

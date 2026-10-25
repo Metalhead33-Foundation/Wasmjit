@@ -81,33 +81,30 @@ void LibJitTypeTranslator::reset()
 	}
 }
 
-union TypeMapEntry {
-	uint64_t u64;
-	WASM::ValueType vt;
-};
+namespace {
+uint64_t typeMapKey(const WASM::ValueType& valueType)
+{
+	uint64_t key = static_cast<uint8_t>(valueType.opcode);
+	key |= static_cast<uint64_t>(static_cast<uint32_t>(valueType.heapType)) << 8;
+	key |= static_cast<uint64_t>(valueType.isExact ? 1u : 0u) << 40;
+	key |= static_cast<uint64_t>(valueType.isShared ? 1u : 0u) << 41;
+	return key;
+}
+} // namespace
 
 LibJitTypeTranslator::TypeMapConstIterator LibJitTypeTranslator::findTranslatedType(const WASM::ValueType& valueType) const
 {
-	TypeMapEntry unt;
-	unt.u64 = 0;
-	unt.vt = valueType;
-	return typemap.find(unt.u64);
+	return typemap.find(typeMapKey(valueType));
 }
 
 LibJitTypeTranslator::TypeMapIterator LibJitTypeTranslator::findTranslatedType(const WASM::ValueType& valueType)
 {
-	TypeMapEntry unt;
-	unt.u64 = 0;
-	unt.vt = valueType;
-	return typemap.find(unt.u64);
+	return typemap.find(typeMapKey(valueType));
 }
 
 LibJitTypeTranslator::TypeMapIterator LibJitTypeTranslator::insertTranslatedType(const WASM::ValueType& valueType, jit_type_t translatedType)
 {
-	TypeMapEntry unt;
-	unt.u64 = 0;
-	unt.vt = valueType;
-	return typemap.insert_or_assign(unt.u64,translatedType).first;
+	return typemap.insert_or_assign(typeMapKey(valueType),translatedType).first;
 }
 
 jit_type_t LibJitTypeTranslator::translatePrimitiveType(WASM::ValueTypeCode primitive) {

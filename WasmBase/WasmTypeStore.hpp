@@ -88,6 +88,10 @@ struct CoreFuncPayload {
 
 struct CoreStructPayload {
 	TypeSpan fields;
+	// Custom Descriptors: optional clauses, retained alongside the struct's
+	// fields so the compact 16-byte TypeRecord does not grow.
+	std::optional<CanonHeapType> descriptor;
+	std::optional<CanonHeapType> describes;
 };
 
 struct CoreArrayPayload {
@@ -302,6 +306,9 @@ public:
 	std::span<const CanonFieldType> structFields() const;
 	const CanonFieldType& arrayElement() const;
 	CanonHeapType contFunc() const;
+	// Custom Descriptors: optional `descriptor`/`describes` clauses.
+	std::optional<CanonHeapType> descriptor() const;
+	std::optional<CanonHeapType> describes() const;
 	// The abstract bound of a `CoreImport` record; `AbstractHeapType::Func` etc.
 	CanonHeapType importBound() const;
 

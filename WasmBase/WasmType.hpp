@@ -199,10 +199,12 @@ inline bool shorthandRefHeapType(ValueTypeCode code, AbstractHeapType& heap)
 struct ValueType {
 	ValueTypeCode opcode;
 	int32_t heapType; // Only used if opcode is 0x6B (ref) or 0x6C (ref null)
+	// Custom Descriptors: `(ref exact $t)` / `(ref null exact $t)`.
+	bool isExact = false;
 	// Shared-everything threads: `(ref null (shared ht))` (SET-1). The shared
 	// prefix is 0x65 in the heap-type position. Aggregate initializers that omit
 	// it value-initialize it to false; decode() always assigns it.
-	bool isShared;
+	bool isShared = false;
 
 	template <Elv::Util::Endian E, Elv::Io::DeviceLike I> void decode(Elv::Io::DataStream<E,I>& stream) {
 		int8_t tmp_opcode;
@@ -217,10 +219,21 @@ struct ValueType {
 	template <Elv::Util::Endian E, Elv::Io::DeviceLike I> void decodeAfterFirstByte(Elv::Io::DataStream<E,I>& stream, int8_t firstByte) {
 		opcode = static_cast<ValueTypeCode>(firstByte);
 		isShared = false;
+		isExact = false;
 		// 0x6B (ref) or 0x6C (ref null)
 		if (opcode == ValueTypeCode::Ref || opcode == ValueTypeCode::RefNull) {
 			int32_t ht;
 			stream >> Elv::Io::Leb(ht);
+			// Custom Descriptors: exact prefix `0x62`, then a u32 type index.
+			// A signed-LEB read turns the raw `0x62` into the reserved
+			// StringViewIter value (-0x1E), so use that sentinel and consume
+			// the following index.
+			if (ht == static_cast<int32_t>(ValueTypeCode::StringViewIter)) {
+				uint32_t exactIndex = 0;
+				stream >> Elv::Io::Leb(exactIndex);
+				ht = static_cast<int32_t>(exactIndex);
+				isExact = true;
+			}
 			// `0x65 ht` is the shared-heap-type prefix (the signed LEB is
 			// -0x1B, which is also the engine's StringViewWtf16 *value-type*
 			// code; in this heap-type position it unambiguously means shared).
@@ -251,22 +264,20 @@ struct StorageType {
 		if (byte == static_cast<int8_t>(ValueTypeCode::I8)) { // i8
 			isPacked = true;
 			val.opcode = ValueTypeCode::I8;
+			val.heapType = -1;
+			val.isExact = false;
+			val.isShared = false;
 		} else if (byte == static_cast<int8_t>(ValueTypeCode::I16) ) { // i16
 			isPacked = true;
 			val.opcode = ValueTypeCode::I16;
+			val.heapType = -1;
+			val.isExact = false;
+			val.isShared = false;
 		} else {
 			isPacked = false;
 			// This was actually the opcode for a ValueType.
 			// We need to 'put it back' or handle the decode manually.
-			val.opcode = static_cast<ValueTypeCode>(byte);
-			val.isShared = false;
-			if (val.opcode == ValueTypeCode::Ref || val.opcode == ValueTypeCode::RefNull) {
-				stream >> Elv::Io::Leb(val.heapType);
-				if (val.heapType == static_cast<int32_t>(ValueTypeCode::StringViewWtf16)) {
-					val.isShared = true;
-					stream >> Elv::Io::Leb(val.heapType);
-				}
-			} else val.heapType = -1;
+			val.decodeAfterFirstByte(stream, byte);
 		}
 	}
 };
@@ -307,6 +318,11 @@ struct Subtype {
 	// Syntax `sharecomptype ::= 0x65 comptype` (SET-1).
 	bool isShared = false;
 	std::vector<uint32_t> supertypeIndices; // Usually 0 or 1 index
+	// Custom Descriptors: `0x4D x:typeidx` (`descriptor $x`) and
+	// `0x4C x:typeidx` (`describes $x`). Both name types in the same rec group;
+	// the clauses must agree. They are part of type identity.
+	std::optional<uint32_t> descriptorIndex;
+	std::optional<uint32_t> describesIndex;
 	CompositeDefinition composite;
 
 	// Helper to identify what we are looking at
@@ -415,6 +431,8 @@ struct Import {
 };
 struct ImportFunction : public Import {
 	uint32_t typeIdx;
+	// Custom Descriptors: `0x20 typeidx` exact function import.
+	bool isExact = false;
 };
 struct ImportTable : public Import {
 	TableType table;
@@ -499,6 +517,40 @@ struct Tag {
 	uint8_t attribute; // Currently always 0x00 (reserved for future use)
 	uint32_t typeIdx;  // Index into the Type Section (must be a FuncType)
 };
+
+// A read-only view of one external declaration for JS Types / metadata
+// consumers. It is deliberately descriptive, not a second type registry:
+// `typeId` is the canonical identity where one exists, while table/memory/global
+// declarations carry their structural type by value. The fields that do not
+// apply to a kind are left at their defaults.
+struct ExternTypeDescriptor {
+	ExternalKind kind = ExternalKind::Function;
+	TypeId typeId{TypeId::kNone};
+	// Custom Descriptors: exact function imports (`0x20`) are flagged here.
+	bool isExact = false;
+	GlobalType globalType{};
+	TableType tableType{};
+	MemoryType memoryType{};
+	uint8_t tagAttribute = 0;
+};
+
+struct ImportDescriptor {
+	std::string moduleName;
+	std::string fieldName;
+	ExternTypeDescriptor type;
+};
+
+struct ExportDescriptor {
+	std::string name;
+	ExternTypeDescriptor type;
+};
+
+// Preserves the import-section order, which the per-kind vectors lose. `index`
+// is the index within the vector for that kind.
+struct ImportOrder {
+	ExternalKind kind = ExternalKind::Function;
+	uint32_t index = 0;
+};
 struct PreparedFunctionStack {
 	// A single, flat vector where index 0 is param 0,
 	// and index N is the first local.
@@ -530,6 +582,8 @@ struct BlockType {
 	// value as ValueType::heapType (negative = AbstractHeapType, >= 0 =
 	// module-local type index).
 	int32_t heapType = -1;
+	// Custom Descriptors: `(ref exact $t)` in a typed-reference block type.
+	bool isExact = false;
 
 	inline bool isVoid()      const { return !isTypeIndex && valType == ValueTypeCode::Void; }
 	inline bool isValueType() const { return !isTypeIndex; }
@@ -545,6 +599,7 @@ Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& stream, BlockType
 	int32_t raw;
 	stream >> Elv::Io::Leb(raw);
 	bt.heapType = -1;
+	bt.isExact = false;
 	if (raw >= 0) {
 		bt.isTypeIndex = true;
 		bt.typeIndex   = raw;
@@ -559,6 +614,14 @@ Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& stream, BlockType
 		// (docs/proposals/GC.md G7).
 		if (bt.valType == ValueTypeCode::Ref || bt.valType == ValueTypeCode::RefNull)
 			stream >> Elv::Io::Leb(bt.heapType);
+		// Exact prefix `0x62` reads as StringViewIter under signed LEB; the
+		// following u32 is the real type index.
+		if (bt.heapType == static_cast<int32_t>(ValueTypeCode::StringViewIter)) {
+			uint32_t exactIndex = 0;
+			stream >> Elv::Io::Leb(exactIndex);
+			bt.heapType = static_cast<int32_t>(exactIndex);
+			bt.isExact = true;
+		}
 	}
 	return stream;
 }
@@ -570,13 +633,15 @@ Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& stream, BlockType
 //   non-negative → type index
 // =============================================================================
 struct HeapType {
-	bool isTypeIndex;
+	bool isTypeIndex = false;
 	union {
 		uint32_t          typeIndex;
 		AbstractHeapType  abstract;
 	};
 	// Shared-everything threads: `0x65 heaptype` (SET-1).
-	bool isShared;
+	bool isShared = false;
+	// Custom Descriptors: exact heap type (`0x62` prefix).
+	bool isExact = false;
 };
 
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I>
@@ -585,6 +650,13 @@ Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& stream, HeapType&
 	int32_t raw;
 	stream >> Elv::Io::Leb(raw);
 	ht.isShared = false;
+	ht.isExact = false;
+	if (raw == static_cast<int32_t>(ValueTypeCode::StringViewIter)) {
+		uint32_t exactIndex = 0;
+		stream >> Elv::Io::Leb(exactIndex);
+		raw = static_cast<int32_t>(exactIndex);
+		ht.isExact = true;
+	}
 	if (raw == static_cast<int32_t>(ValueTypeCode::StringViewWtf16)) {
 		ht.isShared = true;
 		stream >> Elv::Io::Leb(raw);

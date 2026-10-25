@@ -446,6 +446,36 @@ reclamation with `ModuleInstance::gcCollect()` at a safepoint. A reference hande
 out to the embedder is a **borrow** — do not hold it across a `gcCollect()`
 unless you have retained it.
 
+### Module metadata descriptors (`WasmBase/WasmModule.hpp`)
+
+`Module::importDescriptors()` and `Module::exportDescriptors()` return the
+read-only metadata view used by JS Types and other embedders:
+
+```cpp
+struct ExternTypeDescriptor {
+    ExternalKind kind;
+    TypeId typeId;          // function/tag/type where applicable
+    GlobalType globalType;  // Global
+    TableType tableType;    // Table
+    MemoryType memoryType;  // Memory
+    uint8_t tagAttribute;   // Tag
+};
+
+struct ImportDescriptor { std::string moduleName; std::string fieldName;
+                          ExternTypeDescriptor type; };
+struct ExportDescriptor { std::string name; ExternTypeDescriptor type; };
+```
+
+Import descriptors follow **import-section order** (`Module::importOrder`), not
+per-kind grouping. Names are copied; `typeId` is the canonical process-wide
+identity and remains the authority for function/tag/type matching. Globals,
+tables and memories carry their structural declaration by value. The API is a
+view over the decoded module and does not expose parser scratch storage.
+
+This is the **JS Types metadata descriptor API**, not the core Custom
+Descriptors proposal (`descriptor`/`describes`, exact types and RTT), which is
+still not implemented.
+
 ### Exceptions (`WasmBase/WasmExn.hpp`)
 
 An uncaught WebAssembly exception is **not** a trap: the invocation returns

@@ -204,22 +204,31 @@ void Module::processImportSection(Elv::Io::Device& file, const Section& section)
 		wasmStream >> kind;
 
 		// 3. The Type index or Descriptor
-		if (kind == (uint8_t)ExternalKind::Function) {
+		if (kind == (uint8_t)ExternalKind::Function || kind == 0x20) {
 			uint32_t typeIdx;
 			wasmStream >> Elv::Io::Leb(typeIdx);
 			// This index points into the module-local type index space.
-			this->importFunctions.push_back({{moduleName, fieldName}, typeIdx});
+			importOrder.push_back({ExternalKind::Function,
+					static_cast<uint32_t>(importFunctions.size())});
+			ImportFunction imported{{moduleName, fieldName}, typeIdx};
+			// Custom Descriptors: `0x20 typeidx` marks an exact function import.
+			imported.isExact = (kind == 0x20);
+			this->importFunctions.push_back(std::move(imported));
 		}
 		else if (kind == (uint8_t)ExternalKind::Table) {
 			TableType table;
 			table.elementType.decode(wasmStream); // Reusing your RefType logic
 			table.limits.decode(wasmStream);
 			table.isShared = (table.limits.flags & 0x02) != 0;
+			importOrder.push_back({ExternalKind::Table,
+					static_cast<uint32_t>(importTables.size())});
 			this->importTables.push_back({{moduleName, fieldName}, table});
 		}
 		else if (kind == (uint8_t)ExternalKind::Memory) {
 			MemoryType memLimits;
 			memLimits.decode(wasmStream);
+			importOrder.push_back({ExternalKind::Memory,
+					static_cast<uint32_t>(importMemories.size())});
 			this->importMemories.push_back({{moduleName, fieldName}, memLimits});
 		}
 		else if (kind == (uint8_t)ExternalKind::Global) {
@@ -231,6 +240,8 @@ void Module::processImportSection(Elv::Io::Device& file, const Section& section)
 				throw std::runtime_error("malformed global mutability/shared flag");
 			global.isMutable = (mut & 0x01) != 0;
 			global.isShared = (mut & 0x02) != 0;
+			importOrder.push_back({ExternalKind::Global,
+					static_cast<uint32_t>(importGlobals.size())});
 			this->importGlobals.push_back({{moduleName, fieldName}, global});
 		}
 		else if (kind == (uint8_t)ExternalKind::Tag) { // Exception Handling
@@ -238,6 +249,8 @@ void Module::processImportSection(Elv::Io::Device& file, const Section& section)
 			wasmStream >> attribute;
 			uint32_t typeIdx;
 			wasmStream >> Elv::Io::Leb(typeIdx); // Points to a FuncType in Type Section
+			importOrder.push_back({ExternalKind::Tag,
+					static_cast<uint32_t>(importTags.size())});
 			this->importTags.push_back({{moduleName, fieldName}, attribute, typeIdx});
 		}
 		else if (kind == (uint8_t)ExternalKind::Type) {
@@ -284,6 +297,8 @@ void Module::processImportSection(Elv::Io::Device& file, const Section& section)
 			import.bound = bound;
 			import.typeId = Store::global().types().store().internCoreImport(
 					moduleName, fieldName, bound);
+			importOrder.push_back({ExternalKind::Type,
+					static_cast<uint32_t>(importTypes.size())});
 			this->importTypes.push_back(std::move(import));
 		}
 		else {
@@ -964,11 +979,28 @@ void Module::processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t num
 			st.isFinal = true;
 		}
 
-		// 2. Handle Composite Type
+		// Custom Descriptors: `sharecomptype ::= 0x65 describingcomptype`
+		// wraps the optional clauses, so parse it first.
 		if (prefix == 0x65) { // `sharecomptype` (shared-everything threads)
 			st.isShared = true;
 			stream >> prefix;
 		}
+		// `describes` (0x4C) wraps `descriptor` (0x4D) and the composite
+		// type in the binary grammar.
+		if (prefix == 0x4C) {
+			uint32_t describes;
+			stream >> Elv::Io::Leb(describes);
+			st.describesIndex = describes;
+			stream >> prefix;
+		}
+		if (prefix == 0x4D) {
+			uint32_t descriptor;
+			stream >> Elv::Io::Leb(descriptor);
+			st.descriptorIndex = descriptor;
+			stream >> prefix;
+		}
+
+		// 2. Handle Composite Type
 		if (prefix == 0x5D) { // cont $ft (stack switching)
 			// `cont $ft` is a composite type whose payload is a function-type
 			// index. Keep the payload; the runtime is still rejected at the
@@ -1007,6 +1039,40 @@ void Module::processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t num
 		}
 		validateTypeGroupMember(st, groupFirst + i, groupEnd);
 		out.push_back(st);
+	}
+
+	// Custom Descriptors: clauses name a type in the same recursion group, must
+	// be mutual, must not be self-referential, and apply only to structs.
+	for (uint32_t i = 0; i < numSubTypes; ++i) {
+		const Subtype& st = out[groupFirst + i];
+		if (!st.descriptorIndex && !st.describesIndex)
+			continue;
+		if (!st.isStruct())
+			throw std::runtime_error(
+					"custom descriptors: descriptor/describes clauses require a struct type");
+		if (st.descriptorIndex && *st.descriptorIndex == groupFirst + i)
+			throw std::runtime_error("custom descriptors: a type cannot describe itself");
+		if (st.describesIndex && *st.describesIndex == groupFirst + i)
+			throw std::runtime_error("custom descriptors: a type cannot describe itself");
+		const auto checkPartner = [&](uint32_t partner, bool wantsDescriptor) {
+			if (partner < groupFirst || partner >= groupEnd)
+				throw std::runtime_error(
+						"custom descriptors: descriptor/describes target is outside the rec group");
+			const Subtype& other = out[partner];
+			if (!other.isStruct())
+				throw std::runtime_error(
+						"custom descriptors: descriptor/describes target is not a struct");
+			if (wantsDescriptor && other.describesIndex != groupFirst + i)
+				throw std::runtime_error(
+						"custom descriptors: descriptor/describes clauses do not agree");
+			if (!wantsDescriptor && other.descriptorIndex != groupFirst + i)
+				throw std::runtime_error(
+						"custom descriptors: descriptor/describes clauses do not agree");
+		};
+		if (st.descriptorIndex)
+			checkPartner(*st.descriptorIndex, true);
+		if (st.describesIndex)
+			checkPartner(*st.describesIndex, false);
 	}
 }
 
@@ -1393,8 +1459,10 @@ ValueType Module::valueTypeFromCanon(const CanonValueType& type) const
 	ValueType out;
 	out.opcode = type.opcode;
 	out.heapType = -1;
+	out.isExact = false;
 	out.isShared = type.isShared;
 	if (type.opcode == ValueTypeCode::Ref || type.opcode == ValueTypeCode::RefNull) {
+		out.isExact = type.heap.isExact;
 		switch (type.heap.kind) {
 		case CanonHeapType::Kind::Abstract:
 			out.heapType = static_cast<int32_t>(type.heap.abstract);
@@ -1416,6 +1484,8 @@ StorageType Module::storageTypeFromCanon(const CanonStorageType& type) const
 	if (type.isPacked) {
 		out.val.opcode = type.packed;
 		out.val.heapType = -1;
+		out.val.isExact = false;
+		out.val.isShared = false;
 	} else {
 		out.val = valueTypeFromCanon(type.value);
 	}
@@ -1457,6 +1527,140 @@ bool Module::heapTypeMatchesTypeIndex(TypeIdx actual, const HeapType& expected) 
 	if (!expected.isTypeIndex)
 		return false;
 	return isSubtype(actual, expected.typeIndex);
+}
+
+std::vector<ImportDescriptor> Module::importDescriptors() const
+{
+	std::vector<ImportDescriptor> out;
+	out.reserve(importOrder.size());
+	for (const ImportOrder& order : importOrder) {
+		ImportDescriptor descriptor;
+		switch (order.kind) {
+		case ExternalKind::Function: {
+			if (order.index >= importFunctions.size())
+				continue;
+			const ImportFunction& imported = importFunctions[order.index];
+			descriptor.moduleName = imported.moduleName;
+			descriptor.fieldName = imported.fieldName;
+			descriptor.type.kind = ExternalKind::Function;
+			descriptor.type.typeId = typeId(LocalTypeIdx{imported.typeIdx});
+			descriptor.type.isExact = imported.isExact;
+			break;
+		}
+		case ExternalKind::Table: {
+			if (order.index >= importTables.size())
+				continue;
+			const ImportTable& imported = importTables[order.index];
+			descriptor.moduleName = imported.moduleName;
+			descriptor.fieldName = imported.fieldName;
+			descriptor.type.kind = ExternalKind::Table;
+			descriptor.type.tableType = imported.table;
+			break;
+		}
+		case ExternalKind::Memory: {
+			if (order.index >= importMemories.size())
+				continue;
+			const ImportMemory& imported = importMemories[order.index];
+			descriptor.moduleName = imported.moduleName;
+			descriptor.fieldName = imported.fieldName;
+			descriptor.type.kind = ExternalKind::Memory;
+			descriptor.type.memoryType = imported.memory;
+			break;
+		}
+		case ExternalKind::Global: {
+			if (order.index >= importGlobals.size())
+				continue;
+			const ImportGlobal& imported = importGlobals[order.index];
+			descriptor.moduleName = imported.moduleName;
+			descriptor.fieldName = imported.fieldName;
+			descriptor.type.kind = ExternalKind::Global;
+			descriptor.type.globalType = imported.global;
+			break;
+		}
+		case ExternalKind::Tag: {
+			if (order.index >= importTags.size())
+				continue;
+			const ImportTag& imported = importTags[order.index];
+			descriptor.moduleName = imported.moduleName;
+			descriptor.fieldName = imported.fieldName;
+			descriptor.type.kind = ExternalKind::Tag;
+			descriptor.type.typeId = typeId(LocalTypeIdx{imported.typeIdx});
+			descriptor.type.tagAttribute = imported.attribute;
+			break;
+		}
+		case ExternalKind::Type: {
+			if (order.index >= importTypes.size())
+				continue;
+			const ImportType& imported = importTypes[order.index];
+			descriptor.moduleName = imported.moduleName;
+			descriptor.fieldName = imported.fieldName;
+			descriptor.type.kind = ExternalKind::Type;
+			descriptor.type.typeId = imported.typeId;
+			break;
+		}
+		}
+		out.push_back(std::move(descriptor));
+	}
+	return out;
+}
+
+std::vector<ExportDescriptor> Module::exportDescriptors() const
+{
+	std::vector<ExportDescriptor> out;
+	out.reserve(exports.size());
+	for (const Export& exported : exports) {
+		ExportDescriptor descriptor;
+		descriptor.name = exported.name;
+		descriptor.type.kind = exported.kind;
+		switch (exported.kind) {
+		case ExternalKind::Function: {
+			if (exported.index < importFunctions.size())
+				descriptor.type.typeId = typeId(LocalTypeIdx{importFunctions[exported.index].typeIdx});
+			else {
+				const std::size_t internal = exported.index - importFunctions.size();
+				if (internal < internalFunctionTypeIndices.size())
+					descriptor.type.typeId =
+							typeId(LocalTypeIdx{internalFunctionTypeIndices[internal]});
+			}
+			break;
+		}
+		case ExternalKind::Table: {
+			if (exported.index < importTables.size())
+				descriptor.type.tableType = importTables[exported.index].table;
+			else if (exported.index - importTables.size() < tables.size())
+				descriptor.type.tableType = tables[exported.index - importTables.size()];
+			break;
+		}
+		case ExternalKind::Memory: {
+			if (exported.index < importMemories.size())
+				descriptor.type.memoryType = importMemories[exported.index].memory;
+			else if (exported.index - importMemories.size() < memories.size())
+				descriptor.type.memoryType = memories[exported.index - importMemories.size()];
+			break;
+		}
+		case ExternalKind::Global: {
+			if (exported.index < importGlobals.size())
+				descriptor.type.globalType = importGlobals[exported.index].global;
+			else if (exported.index - importGlobals.size() < globals.size())
+				descriptor.type.globalType = globals[exported.index - importGlobals.size()].type;
+			break;
+		}
+		case ExternalKind::Tag: {
+			if (exported.index < importTags.size())
+				descriptor.type.typeId = typeId(LocalTypeIdx{importTags[exported.index].typeIdx});
+			else if (exported.index - importTags.size() < tags.size())
+				descriptor.type.typeId = typeId(LocalTypeIdx{tags[exported.index - importTags.size()].typeIdx});
+			break;
+		}
+		case ExternalKind::Type: {
+			if (exported.index < typeIds.size())
+				descriptor.type.typeId = typeIds[exported.index];
+			break;
+		}
+		}
+		out.push_back(std::move(descriptor));
+	}
+	return out;
 }
 
 std::string Module::readLEB128String(DWasmStream& stream)

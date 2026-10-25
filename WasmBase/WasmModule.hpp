@@ -67,6 +67,8 @@ public:
 	std::vector<ImportGlobal> importGlobals;
 	std::vector<ImportTag> importTags;
 	std::vector<ImportType> importTypes;
+	// Import-section order; see ImportOrder in WasmType.hpp.
+	std::vector<ImportOrder> importOrder;
 	std::vector<uint32_t> internalFunctionTypeIndices;
 	std::vector<TableType> tables;
 	std::vector<MemoryType> memories;
@@ -152,6 +154,11 @@ public:
 	// index is out of range.
 	TypeId typeId(LocalTypeIdx idx) const;
 	std::size_t typeCount() const { return typeIds.size(); }
+	// Stable read-only metadata projection for JS Types: import-section order is
+	// preserved, names are copied, and function/tag typeId values are canonical.
+	// It is a projection over the decoded module, not a second type registry.
+	std::vector<ImportDescriptor> importDescriptors() const;
+	std::vector<ExportDescriptor> exportDescriptors() const;
 	// Store-owned view of one local type. This is the consumer-facing API: it
 	// never exposes a module-owned `Subtype` block.
 	CoreTypeView typeView(uint32_t idx) const;

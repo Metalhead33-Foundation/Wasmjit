@@ -513,7 +513,8 @@ bool limitsEqual(const Limits& left, const Limits& right)
 
 bool coreValueTypeEqual(const ValueType& left, const ValueType& right)
 {
-	return left.opcode == right.opcode && left.heapType == right.heapType;
+	return left.opcode == right.opcode && left.heapType == right.heapType
+			&& left.isExact == right.isExact && left.isShared == right.isShared;
 }
 
 bool coreTableTypeEqual(const TableType& left, const TableType& right)

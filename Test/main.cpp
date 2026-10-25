@@ -764,6 +764,43 @@ TEST_CASE("wasm js string builtin is an ordinary import, not engine support")
 			== &hostObject);
 }
 
+TEST_CASE("module exposes stable import/export descriptors")
+{
+	WASM::Module module = loadTestModule("wasm_js_string_length");
+	const std::vector<WASM::ImportDescriptor> imports = module.importDescriptors();
+	REQUIRE(imports.size() == 1);
+	REQUIRE(imports[0].moduleName == "wasm:js-string");
+	REQUIRE(imports[0].fieldName == "length");
+	REQUIRE(imports[0].type.kind == WASM::ExternalKind::Function);
+	REQUIRE(module.importFunctions.size() == 1);
+	REQUIRE(imports[0].type.typeId
+			== module.typeId(WASM::LocalTypeIdx{module.importFunctions[0].typeIdx}));
+
+	const std::vector<WASM::ExportDescriptor> exports = module.exportDescriptors();
+	REQUIRE(exports.size() == 2);
+	const auto len = std::find_if(exports.begin(), exports.end(),
+			[](const WASM::ExportDescriptor& descriptor) {
+				return descriptor.name == "len";
+			});
+	REQUIRE(len != exports.end());
+	REQUIRE(len->type.kind == WASM::ExternalKind::Function);
+	REQUIRE(!len->type.typeId.isNone());
+	REQUIRE(len->type.typeId == module.typeId(WASM::LocalTypeIdx{module.internalFunctionTypeIndices[0]}));
+
+	WASM::Module globalModule = loadTestModule("externref_global_a");
+	const std::vector<WASM::ExportDescriptor> globalExports =
+			globalModule.exportDescriptors();
+	const auto global = std::find_if(globalExports.begin(), globalExports.end(),
+			[](const WASM::ExportDescriptor& descriptor) {
+				return descriptor.name == "g";
+			});
+	REQUIRE(global != globalExports.end());
+	REQUIRE(global->type.kind == WASM::ExternalKind::Global);
+	REQUIRE(global->type.globalType.isMutable);
+	REQUIRE(global->type.globalType.contentType.opcode
+			== WASM::ValueTypeCode::ExternRef);
+}
+
 TEST_CASE("imported global type and mutability are matched at link time")
 {
 	WASM::Module moduleA = loadTestModule("shared_global_a");
@@ -1136,6 +1173,79 @@ TEST_CASE("call-tag canonical identity is shared per concrete signature")
 	REQUIRE(store.callTag(tagOther + 1) == nullptr);
 }
 
+
+TEST_CASE("custom descriptor clauses round-trip and agree")
+{
+	WASM::Module module = loadTestModule("custom_descriptor");
+	REQUIRE(module.typeCount() == 2);
+	REQUIRE(module.typeGroups.size() == 1);
+	REQUIRE(module.typeGroups[0].count == 2);
+
+	const WASM::CoreTypeView described = module.typeView(0);
+	const WASM::CoreTypeView descriptor = module.typeView(1);
+	REQUIRE(described.kind() == WASM::CanonTypeKind::Struct);
+	REQUIRE(descriptor.kind() == WASM::CanonTypeKind::Struct);
+	REQUIRE(described.descriptor().has_value());
+	REQUIRE(descriptor.describes().has_value());
+	REQUIRE(!described.describes().has_value());
+	REQUIRE(!descriptor.descriptor().has_value());
+
+	const WASM::CanonHeapType toDescriptor = *described.descriptor();
+	const WASM::CanonHeapType toDescribed = *descriptor.describes();
+	REQUIRE(toDescriptor.kind == WASM::CanonHeapType::Kind::Global);
+	REQUIRE(toDescribed.kind == WASM::CanonHeapType::Kind::Global);
+	REQUIRE(toDescriptor.id == module.typeId(WASM::LocalTypeIdx{1}));
+	REQUIRE(toDescribed.id == module.typeId(WASM::LocalTypeIdx{0}));
+
+	// The clauses are part of identity: the same struct shape without a
+	// descriptor clause is a distinct canonical type.
+	WASM::Module plain = loadTestModule("plain_struct");
+	REQUIRE(module.typeId(WASM::LocalTypeIdx{0})
+			!= plain.typeId(WASM::LocalTypeIdx{0}));
+
+	// A type may carry both clauses, making a descriptor chain. The binary
+	// order is `describes` (0x4C) then `descriptor` (0x4D).
+	WASM::Module chain = loadTestModule("descriptor_chain");
+	REQUIRE(chain.typeCount() == 3);
+	const WASM::CoreTypeView middle = chain.typeView(1);
+	REQUIRE(middle.descriptor().has_value());
+	REQUIRE(middle.describes().has_value());
+	REQUIRE(middle.descriptor()->id == chain.typeId(WASM::LocalTypeIdx{2}));
+	REQUIRE(middle.describes()->id == chain.typeId(WASM::LocalTypeIdx{0}));
+	REQUIRE(chain.typeView(2).describes()->id == chain.typeId(WASM::LocalTypeIdx{1}));
+}
+
+TEST_CASE("custom descriptor clauses must agree")
+{
+	REQUIRE_THROWS(loadTestModule("bad_descriptor"));
+}
+
+TEST_CASE("exact heap types preserve exactness")
+{
+	WASM::Module module = loadTestModule("exact_ref");
+	REQUIRE(module.typeCount() == 2); // $foo, then the exported function type
+	const WASM::CoreTypeView function = module.typeView(1);
+	REQUIRE(function.kind() == WASM::CanonTypeKind::Func);
+	REQUIRE(function.funcParams().size() == 1);
+	REQUIRE(function.funcParams()[0].value.opcode == WASM::ValueTypeCode::Ref);
+	REQUIRE(function.funcParams()[0].value.heap.isExact);
+	REQUIRE(function.funcParams()[0].value.heap.kind
+			== WASM::CanonHeapType::Kind::Global);
+
+	// Exact function imports use kind 0x20 rather than the ordinary 0x00.
+	WASM::Module imports = loadTestModule("exact_import");
+	REQUIRE(imports.importFunctions.size() == 1);
+	REQUIRE(imports.importFunctions[0].isExact);
+	REQUIRE(imports.importDescriptors().size() == 1);
+	REQUIRE(imports.importDescriptors()[0].type.kind == WASM::ExternalKind::Function);
+	REQUIRE(imports.importDescriptors()[0].type.isExact);
+
+	// Exactness is part of canonical identity: the same function type with an
+	// ordinary `(ref $foo)` parameter is a different TypeId.
+	WASM::Module plainRef = loadTestModule("plain_ref");
+	REQUIRE(module.typeId(WASM::LocalTypeIdx{1})
+			!= plainRef.typeId(WASM::LocalTypeIdx{1}));
+}
 
 TEST_CASE("rec groups survive parsing")
 {
