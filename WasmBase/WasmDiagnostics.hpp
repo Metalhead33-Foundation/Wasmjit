@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
 #include <span>
 #include <string>
 #include <string_view>
@@ -131,6 +132,10 @@ struct Diagnostic {
 	DiagnosticContinuation continuation;
 	std::string_view remediation; // docs anchor or a short hint
 	std::uint32_t sequence = 0;   // assigned by the emitting execution state
+	// Seconds since the epoch (`std::time(nullptr)`), assigned by `emit()`.
+	// Deliberately *not* converted to a date when serialized: JSON carries the
+	// raw number; only the pretty terminal form renders it via `ctime`.
+	std::time_t timestamp = 0;
 };
 
 // ── Stable identifiers ─────────────────────────────────────────────────────
@@ -219,6 +224,16 @@ struct DiagnosticState {
 	std::uint32_t capacity = kDefaultCapacity;
 	std::uint32_t sequence = 0;
 	std::vector<Diagnostic> records;
+	// When true, `emit()` writes one ANSI/emoji line to stderr for a host-log
+	// record (`WASM.EXECUTE.LOG.*`). Off by default: the core never writes to
+	// the terminal unless an embedder (or the test harness) opts in. This is
+	// deliberately *not* applied to traps/validation records: the spec suite
+	// produces thousands of expected ones.
+	bool prettyPrintLogs = false;
+	// Session start for the JSON envelope. Set once when the execution state is
+	// first used and never changed by `clear()`, so `diagnosticsToJson` always
+	// has a stable "start date" for the collected records.
+	std::time_t startedAt = std::time(nullptr);
 
 	void setSink(DiagnosticSink newSink, void* newUserData) noexcept
 	{
@@ -230,8 +245,9 @@ struct DiagnosticState {
 	// capacity of zero disables the ring (a sink, if installed, still runs).
 	void setCapacity(std::uint32_t newCapacity) noexcept;
 
-	// Copies `diagnostic` into the ring (assigning `sequence`) and then calls
-	// the sink. Never throws: a failed allocation simply loses the record.
+	// Copies `diagnostic` into the ring (assigning `sequence` and `timestamp`),
+	// optionally writes a pretty log line, then calls the sink. Never throws: a
+	// failed allocation simply loses the record.
 	void emit(Diagnostic diagnostic) noexcept;
 
 	std::span<const Diagnostic> recent() noexcept { return records; }
@@ -251,8 +267,14 @@ std::span<const Diagnostic> recentDiagnostics() noexcept;
 void clearDiagnostics() noexcept;
 // 0 disables the ring for the current execution state.
 void setDiagnosticRingCapacity(std::uint32_t capacity) noexcept;
-// The single entry point every boundary uses. Assigning `sequence`, trimming
-// the ring and calling the sink are all `DiagnosticState`'s job.
+// Enables/disables the pretty stderr line for host-log records on the current
+// execution state (default off). The unit-test harness turns it on.
+void setDiagnosticPrettyPrinting(bool enabled) noexcept;
+bool diagnosticPrettyPrinting() noexcept;
+// The current execution state's session start (JSON envelope `startedAt`).
+std::time_t diagnosticsStartedAt() noexcept;
+// The single entry point every boundary uses. Assigning `sequence`/`timestamp`,
+// trimming the ring and calling the sink are all `DiagnosticState`'s job.
 void emitDiagnostic(Diagnostic diagnostic) noexcept;
 
 // ── Forms ──────────────────────────────────────────────────────────────────
@@ -263,14 +285,28 @@ void emitDiagnostic(Diagnostic diagnostic) noexcept;
 //     at function 3 ($decode) instruction 42 (module byte 0x1a3)
 //     hint: docs/VALIDATION.md#unknown-type
 //
-// JSON is schema v1, one object per record, emitted by the harness and by an
-// opt-in embedder sink. The serializer uses the project's JSON library,
-// nlohmann_json, behind this header (the include lives in the .cpp), so a
-// consumer of the record does not pay for it and the output is real JSON
-// rather than a second escape routine.
+// The *pretty* form is the terminal-facing one used by the host-log imports:
+// an emoji, then an ANSI-coloured (white/yellow/red/magenta) line containing
+// the ctime-rendered timestamp and the message, reset at end of line.
+//
+// JSON is schema v1. A single record is one object; a collected run is an
+// envelope `{schema, startedAt, records}`, where `startedAt` is the execution
+// state's session start (seconds since the epoch, not a formatted date).
+// Timestamps on records are numeric too — only the pretty form renders a date.
+// The serializer uses the project's JSON library, nlohmann_json, behind this
+// header (the include lives in the .cpp), so a consumer of the record does not
+// pay for it.
 std::string formatDiagnostic(const Diagnostic& diagnostic);
+// `useColor` selects the ANSI escapes; the emoji and the date stay either way.
+std::string formatDiagnosticPretty(const Diagnostic& diagnostic,
+		bool useColor = true);
 std::string diagnosticToJson(const Diagnostic& diagnostic);
-std::string diagnosticsToJson(std::span<const Diagnostic> diagnostics);
+// `startedAt == 0` derives the envelope start from the first record (or now
+// when the span is empty), so a caller that does not track a session start
+// still gets a usable envelope. Pass `diagnosticsStartedAt()` for the exact
+// execution-state start.
+std::string diagnosticsToJson(std::span<const Diagnostic> diagnostics,
+		std::time_t startedAt = 0);
 
 // The schema string a consumer may key on.
 inline constexpr std::string_view kDiagnosticJsonSchema = "wasmjit.diagnostic.v1";

@@ -71,7 +71,11 @@ struct DiagnosticsHarness {
 	Mode mode = Mode::None;
 	std::string path;
 	std::uint32_t limit = 1000;
+	// Host-log pretty lines are on by default in the harness; an explicit
+	// `--diagnostics=none` turns them off as well (quiet run).
+	bool pretty = true;
 	bool valid = true;
+	std::time_t startedAt = 0;
 	std::vector<WASM::Diagnostic> records;
 
 	static void sink(void* userData, const WASM::Diagnostic& diagnostic) noexcept
@@ -87,6 +91,8 @@ struct DiagnosticsHarness {
 
 	void install()
 	{
+		startedAt = WASM::diagnosticsStartedAt();
+		WASM::setDiagnosticPrettyPrinting(pretty);
 		if (mode != Mode::None)
 			WASM::setDiagnosticSink(&sink, this);
 	}
@@ -97,7 +103,7 @@ struct DiagnosticsHarness {
 			return;
 		std::string text;
 		if (mode == Mode::Json) {
-			text = WASM::diagnosticsToJson(records);
+			text = WASM::diagnosticsToJson(records, startedAt);
 			text.push_back('\n');
 		} else {
 			for (std::size_t i = 0; i < records.size(); ++i) {
@@ -133,14 +139,17 @@ bool parseDiagnosticsArgument(std::string_view argument, DiagnosticsHarness& opt
 		return false;
 	if (argument == "--diagnostics=none") {
 		options.mode = DiagnosticsHarness::Mode::None;
+		options.pretty = false;
 		return true;
 	}
 	if (argument == "--diagnostics=text") {
 		options.mode = DiagnosticsHarness::Mode::Text;
+		options.pretty = true;
 		return true;
 	}
 	if (argument == "--diagnostics=json") {
 		options.mode = DiagnosticsHarness::Mode::Json;
+		options.pretty = true;
 		return true;
 	}
 	constexpr std::string_view kFilePrefix = "--diagnostics-file=";
@@ -8129,9 +8138,13 @@ TEST_CASE("diagnostics: env log imports emit structured records")
 	REQUIRE(records[2].severity == WASM::DiagnosticSeverity::Error);
 	REQUIRE(records[2].message == "error from guest");
 
-	// The sequence is per execution state and strictly increasing.
+	// The sequence is per execution state and strictly increasing, and every
+	// record carries a wall-clock stamp at or after the session start.
 	REQUIRE(records[0].sequence < records[1].sequence);
 	REQUIRE(records[1].sequence < records[2].sequence);
+	REQUIRE(records[0].timestamp > 0);
+	REQUIRE(records[0].timestamp >= WASM::diagnosticsStartedAt());
+	REQUIRE(records[2].timestamp >= records[0].timestamp);
 
 	// Text form: severity, id and message on the first line, hint on the last.
 	const std::string text = WASM::formatDiagnostic(records[0]);
@@ -8150,20 +8163,94 @@ TEST_CASE("diagnostics: env log imports emit structured records")
 	REQUIRE(parsed.at("phase") == "execute");
 	REQUIRE(parsed.at("message") == "error from guest");
 	REQUIRE(parsed.at("sequence").get<std::uint32_t>() == records[2].sequence);
+	// The record keeps the raw epoch; it is not rendered as a date in JSON.
+	REQUIRE(parsed.at("timestamp").get<std::int64_t>()
+			== static_cast<std::int64_t>(records[2].timestamp));
 	REQUIRE_FALSE(parsed.contains("continuation")); // not populated
 	REQUIRE(json.find("0x") == std::string::npos);
 
+	// The collected form is an envelope with the session start and the records.
 	const nlohmann::json stream = nlohmann::json::parse(
-			WASM::diagnosticsToJson(records));
-	REQUIRE(stream.is_array());
-	REQUIRE(stream.size() == 3);
-	REQUIRE(stream.at(0).at("id") == "WASM.EXECUTE.LOG.INFO");
-	REQUIRE(stream.at(2).at("id") == "WASM.EXECUTE.LOG.ERROR");
+			WASM::diagnosticsToJson(records, WASM::diagnosticsStartedAt()));
+	REQUIRE(stream.at("schema") == "wasmjit.diagnostic.v1");
+	REQUIRE(stream.at("startedAt").get<std::int64_t>()
+			== static_cast<std::int64_t>(WASM::diagnosticsStartedAt()));
+	const nlohmann::json& collected = stream.at("records");
+	REQUIRE(collected.is_array());
+	REQUIRE(collected.size() == 3);
+	REQUIRE(collected.at(0).at("id") == "WASM.EXECUTE.LOG.INFO");
+	REQUIRE(collected.at(2).at("id") == "WASM.EXECUTE.LOG.ERROR");
+}
+
+
+TEST_CASE("diagnostics: the pretty form uses the documented emoji and colours")
+{
+	const auto prettyFor = [](WASM::DiagnosticSeverity severity) {
+		WASM::Diagnostic diagnostic;
+		diagnostic.id = WASM::DiagnosticId::kExecuteLogInfo;
+		diagnostic.severity = severity;
+		diagnostic.message = "pretty message";
+		diagnostic.timestamp = 1700000000; // fixed, so the ctime text is stable
+		return WASM::formatDiagnosticPretty(diagnostic);
+	};
+
+	// The emoji is uncoloured; the colour starts right after it and ends with
+	// the reset before the newline.
+	const std::string info = prettyFor(WASM::DiagnosticSeverity::Note);
+	REQUIRE(info.rfind("\xE2\x84\xB9\xEF\xB8\x8F \x1b[37m[", 0) == 0);
+	REQUIRE(info.find("] pretty message\x1b[0m\n") != std::string::npos);
+	REQUIRE(info.back() == '\n');
+
+	const std::string warn = prettyFor(WASM::DiagnosticSeverity::Warning);
+	REQUIRE(warn.rfind("\xE2\x9A\xA0\xEF\xB8\x8F \x1b[33m[", 0) == 0);
+
+	const std::string error = prettyFor(WASM::DiagnosticSeverity::Error);
+	REQUIRE(error.rfind("\xE2\x9B\x94 \x1b[31m[", 0) == 0);
+
+	const std::string fatal = prettyFor(WASM::DiagnosticSeverity::Fatal);
+	REQUIRE(fatal.rfind("\xF0\x9F\x9A\xA8 \x1b[35m[", 0) == 0);
+
+	// No ANSI escapes when colour is off; the emoji and the date stay.
+	WASM::Diagnostic plain;
+	plain.severity = WASM::DiagnosticSeverity::Warning;
+	plain.message = "plain";
+	plain.timestamp = 1700000000;
+	const std::string noColor = WASM::formatDiagnosticPretty(plain, false);
+	REQUIRE(noColor.find("\x1b[") == std::string::npos);
+	REQUIRE(noColor.rfind("\xE2\x9A\xA0\xEF\xB8\x8F [", 0) == 0);
+
+	// Control bytes become spaces and the terminal line is capped; the record
+	// keeps its full message.
+	WASM::Diagnostic noisy;
+	noisy.severity = WASM::DiagnosticSeverity::Note;
+	noisy.message.assign(300, '\0');
+	noisy.message.front() = 'x';
+	noisy.timestamp = 1700000000;
+	const std::string sanitized = WASM::formatDiagnosticPretty(noisy, false);
+	REQUIRE(sanitized.find('\0') == std::string::npos);
+	REQUIRE(sanitized.size() < noisy.message.size());
+	REQUIRE(sanitized.find("...") != std::string::npos);
+
+	// The date is the ctime spelling: `[Www Mmm dd hh:mm:ss yyyy]`. Search after
+	// the ANSI escape (which itself contains a `[`).
+	const std::size_t color = info.find("\x1b[37m");
+	const std::size_t open = info.find('[', color + 5);
+	const std::size_t close = info.find(']', open);
+	REQUIRE(close != std::string::npos);
+	REQUIRE(close - open == 25); // 24 ctime characters plus the opening bracket
+
+	const bool saved = WASM::diagnosticPrettyPrinting();
+	WASM::setDiagnosticPrettyPrinting(false);
+	REQUIRE_FALSE(WASM::diagnosticPrettyPrinting());
+	WASM::setDiagnosticPrettyPrinting(true);
+	REQUIRE(WASM::diagnosticPrettyPrinting());
+	WASM::setDiagnosticPrettyPrinting(saved);
 }
 
 
 TEST_CASE("diagnostics: a sink sees records without replacing the ring")
 {
+
 	WASM::clearDiagnostics();
 	std::vector<std::string> seen;
 	// Restore whatever sink was installed before this case (the harness may
@@ -10278,11 +10365,14 @@ TEST_CASE("diagnostics: a transferred trap or exception keeps continuation conte
 
 TEST_CASE("diagnostics: the ring is bounded and never serializes developer pointers")
 {
+	const bool pretty = WASM::diagnosticPrettyPrinting();
+	WASM::setDiagnosticPrettyPrinting(false); // the 10 synthetic records are not log output
 	WASM::setDiagnosticRingCapacity(4);
 	WASM::clearDiagnostics();
 	for (int i = 0; i < 10; ++i) {
 		WASM::Diagnostic diagnostic;
 		diagnostic.id = WASM::DiagnosticId::kExecuteLogInfo;
+		diagnostic.severity = WASM::DiagnosticSeverity::Note;
 		diagnostic.message = std::to_string(i);
 		WASM::emitDiagnostic(std::move(diagnostic));
 	}
@@ -10306,16 +10396,21 @@ TEST_CASE("diagnostics: the ring is bounded and never serializes developer point
 	REQUIRE(json.find("\"state\":\"suspended\"") != std::string::npos);
 
 	WASM::setDiagnosticRingCapacity(WASM::DiagnosticState::kDefaultCapacity);
+	WASM::setDiagnosticPrettyPrinting(pretty);
 }
 TEST_CASE("diagnostics: the harness parses its documented CLI flags")
 {
 	DiagnosticsHarness options;
+	REQUIRE(options.pretty); // the harness enables pretty host-log lines by default
 	REQUIRE(parseDiagnosticsArgument("--diagnostics=json", options));
 	REQUIRE(options.mode == DiagnosticsHarness::Mode::Json);
+	REQUIRE(options.pretty);
 	REQUIRE(parseDiagnosticsArgument("--diagnostics=text", options));
 	REQUIRE(options.mode == DiagnosticsHarness::Mode::Text);
+	REQUIRE(options.pretty);
 	REQUIRE(parseDiagnosticsArgument("--diagnostics=none", options));
 	REQUIRE(options.mode == DiagnosticsHarness::Mode::None);
+	REQUIRE_FALSE(options.pretty); // `none` is a quiet run
 	REQUIRE(parseDiagnosticsArgument("--diagnostics-file=/tmp/diagnostics.json",
 			options));
 	REQUIRE(options.path == "/tmp/diagnostics.json");

@@ -127,9 +127,25 @@ void DiagnosticState::setCapacity(std::uint32_t newCapacity) noexcept
 
 void DiagnosticState::emit(Diagnostic diagnostic) noexcept
 {
-	// The sequence belongs to the state, not to the caller: a record must be
-	// comparable with one emitted by a different boundary.
+	// The sequence and the wall-clock stamp belong to the state, not to the
+	// caller: a record must be comparable with one emitted by a different
+	// boundary, and JSON keeps the raw number rather than a rendered date.
 	diagnostic.sequence = ++sequence;
+	diagnostic.timestamp = std::time(nullptr);
+
+	// Pretty terminal output is opt-in and restricted to the host-log imports:
+	// the spec suite deliberately produces thousands of traps/validation
+	// failures, and those belong in the ring/sink, not on stderr.
+	if (prettyPrintLogs
+			&& diagnostic.id.rfind("WASM.EXECUTE.LOG.", 0) == 0) {
+		try {
+			const std::string line = formatDiagnosticPretty(diagnostic);
+			std::fwrite(line.data(), 1, line.size(), stderr);
+			std::fflush(stderr);
+		} catch (...) {
+			// A terminal line is best-effort; the record below still lands.
+		}
+	}
 
 	// Notify first, with the local record. A sink that re-enters the engine (or
 	// calls `emitDiagnostic` again) therefore cannot invalidate the object it is
@@ -182,6 +198,21 @@ void setDiagnosticRingCapacity(std::uint32_t capacity) noexcept
 	currentExecutionState().diagnostics.setCapacity(capacity);
 }
 
+void setDiagnosticPrettyPrinting(bool enabled) noexcept
+{
+	currentExecutionState().diagnostics.prettyPrintLogs = enabled;
+}
+
+bool diagnosticPrettyPrinting() noexcept
+{
+	return currentExecutionState().diagnostics.prettyPrintLogs;
+}
+
+std::time_t diagnosticsStartedAt() noexcept
+{
+	return currentExecutionState().diagnostics.startedAt;
+}
+
 void emitDiagnostic(Diagnostic diagnostic) noexcept
 {
 	currentExecutionState().diagnostics.emit(std::move(diagnostic));
@@ -206,6 +237,7 @@ nlohmann::ordered_json diagnosticJson(const Diagnostic& diagnostic)
 	nlohmann::ordered_json json;
 	json["schema"] = std::string(kDiagnosticJsonSchema);
 	json["sequence"] = diagnostic.sequence;
+	json["timestamp"] = static_cast<std::int64_t>(diagnostic.timestamp);
 	json["id"] = std::string(diagnostic.id);
 	json["severity"] = diagnosticSeverityName(diagnostic.severity);
 	json["phase"] = diagnosticPhaseName(diagnostic.phase);
@@ -256,11 +288,23 @@ std::string diagnosticToJson(const Diagnostic& diagnostic)
 	return dumpJson(diagnosticJson(diagnostic));
 }
 
-std::string diagnosticsToJson(std::span<const Diagnostic> diagnostics)
+std::string diagnosticsToJson(std::span<const Diagnostic> diagnostics,
+		std::time_t startedAt)
 {
-	nlohmann::ordered_json json = nlohmann::ordered_json::array();
+	if (startedAt == 0) {
+		if (!diagnostics.empty())
+			startedAt = diagnostics.front().timestamp;
+		if (startedAt == 0)
+			startedAt = std::time(nullptr);
+	}
+
+	nlohmann::ordered_json json;
+	json["schema"] = std::string(kDiagnosticJsonSchema);
+	json["startedAt"] = static_cast<std::int64_t>(startedAt);
+	nlohmann::ordered_json records = nlohmann::ordered_json::array();
 	for (const Diagnostic& diagnostic : diagnostics)
-		json.push_back(diagnosticJson(diagnostic));
+		records.push_back(diagnosticJson(diagnostic));
+	json["records"] = std::move(records);
 	return dumpJson(json);
 }
 
@@ -318,6 +362,97 @@ std::string formatDiagnostic(const Diagnostic& diagnostic)
 		out += "\n  hint: ";
 		out += diagnostic.remediation;
 	}
+	return out;
+}
+
+// ── Pretty terminal form ───────────────────────────────────────────────────
+//
+// One line per host-log record. The emoji is uncoloured; the ANSI colour starts
+// right after it and ends at the line's end (reset before the newline). The
+// timestamp is rendered with `ctime`, which is exactly what the raw JSON number
+// deliberately does not do.
+
+namespace {
+
+const char* severityEmoji(DiagnosticSeverity severity) noexcept
+{
+	switch (severity) {
+	case DiagnosticSeverity::Note:    return "\xE2\x84\xB9\xEF\xB8\x8F"; // ℹ️
+	case DiagnosticSeverity::Warning: return "\xE2\x9A\xA0\xEF\xB8\x8F"; // ⚠️
+	case DiagnosticSeverity::Error:   return "\xE2\x9B\x94";             // ⛔
+	case DiagnosticSeverity::Fatal:   return "\xF0\x9F\x9A\xA8";         // 🚨
+	}
+	return "\xE2\x9B\x94";
+}
+
+const char* severityColor(DiagnosticSeverity severity) noexcept
+{
+	switch (severity) {
+	case DiagnosticSeverity::Note:    return "\x1b[37m"; // white
+	case DiagnosticSeverity::Warning: return "\x1b[33m"; // yellow
+	case DiagnosticSeverity::Error:   return "\x1b[31m"; // red
+	case DiagnosticSeverity::Fatal:   return "\x1b[35m"; // magenta
+	}
+	return "\x1b[31m";
+}
+
+// `ctime` format (`Www Mmm dd hh:mm:ss yyyy`), without its trailing newline.
+// `ctime_r` keeps worker-thread emissions from racing on the shared buffer.
+std::string formatDiagnosticTime(std::time_t value)
+{
+	char buffer[32] = {};
+#if defined(__unix__) || defined(__APPLE__)
+	if (ctime_r(&value, buffer) == nullptr)
+		return "unknown time";
+#else
+	const char* text = std::ctime(&value);
+	if (text == nullptr)
+		return "unknown time";
+	std::snprintf(buffer, sizeof(buffer), "%s", text);
+#endif
+	std::string out(buffer);
+	while (!out.empty() && (out.back() == '\n' || out.back() == '\r'))
+		out.pop_back();
+	return out;
+}
+
+// A terminal line must stay readable even when the guest sent a 4096-byte
+// buffer full of NULs (the truncation test does exactly that). The record keeps
+// the full message; the pretty form is capped and control bytes become spaces.
+constexpr std::size_t kPrettyMessageBytes = 256;
+
+std::string prettyMessage(std::string_view message)
+{
+	const std::size_t bytes = std::min(message.size(), kPrettyMessageBytes);
+	std::string out;
+	out.reserve(bytes + 3);
+	for (std::size_t i = 0; i < bytes; ++i) {
+		const unsigned char byte = static_cast<unsigned char>(message[i]);
+		out.push_back(byte < 0x20 || byte == 0x7F ? ' ' : static_cast<char>(byte));
+	}
+	if (message.size() > kPrettyMessageBytes)
+		out += "...";
+	return out;
+}
+
+} // namespace
+
+std::string formatDiagnosticPretty(const Diagnostic& diagnostic, bool useColor)
+{
+	std::string out;
+	out.reserve(std::min<std::size_t>(diagnostic.message.size(), kPrettyMessageBytes) + 64);
+	out += severityEmoji(diagnostic.severity);
+	out.push_back(' ');
+	if (useColor)
+		out += severityColor(diagnostic.severity);
+	out += '[';
+	out += formatDiagnosticTime(diagnostic.timestamp != 0
+			? diagnostic.timestamp : std::time(nullptr));
+	out += "] ";
+	out += prettyMessage(diagnostic.message);
+	if (useColor)
+		out += "\x1b[0m";
+	out.push_back('\n');
 	return out;
 }
 

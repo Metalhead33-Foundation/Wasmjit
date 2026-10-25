@@ -1,11 +1,14 @@
 # Diagnostics and Debugging — Current Surface, Gaps, and Plan
 
-Status: design note / implementation plan. **Revision 3** implements DG-1…DG-4,
-the harness half of DG-6/DG-7 and the privacy/boundedness half of DG-8:
+Status: design note / implementation plan. **Revision 4** implements DG-1…DG-4,
+the harness half of DG-6/DG-7 and the privacy/boundedness half of DG-8. It also
+adds the terminal-facing extension of DG-3:
 
 - DG-1 — the structured record and the validator/decode boundaries.
 - DG-2 — runtime traps, uncaught exceptions and the four guest log imports.
-- DG-3 — the bounded per-execution-state ring, the sink and the text/JSON forms.
+- DG-3 — the bounded per-execution-state ring, the sink and the text/JSON forms,
+  now with a per-record `std::time_t` and a `{schema, startedAt, records}`
+  JSON envelope for a collected run.
 - DG-4 — continuation and scheduler records: the reason leaf, provider,
   generation, state, tag, value/result counts and root presence, plus the
   scheduler's invalid-handle, unhandled-suspension, rejected and trapped
@@ -15,6 +18,9 @@ the harness half of DG-6/DG-7 and the privacy/boundedness half of DG-8:
   stream without reading prose.
 - DG-8 — the ring bound and the pointer-redaction gate are tested; the
   benchmark is still open.
+- **Pretty terminal form** — an opt-in emoji + ANSI line for host-log records,
+  rendered with `ctime`. The core default is off; the unit-test harness enables
+  it by default (`--diagnostics=none` silences it).
 
 DG-0 is incremental: the index rules, all trap/continuation status mappings, the
 continuation reasons and the log imports have ids; the remaining validator
@@ -42,7 +48,8 @@ the repository's documentation conventions but is not constrained by
 |---|---|---|
 | Structured record | `Diagnostic` with a stable id, severity, phase, module-local location, continuation context and remediation | `WasmBase/WasmDiagnostics.hpp` |
 | Sink and ring | Per-`ExecutionState` bounded ring (32 records by default), `noexcept` sink, zero-capacity/zero-sink zero-cost configuration | `WasmBase/WasmDiagnostics.*`, `WasmBase/WasmAgent.hpp` |
-| Text and JSON | `formatDiagnostic`, `diagnosticToJson`, `diagnosticsToJson`; JSON schema `wasmjit.diagnostic.v1`, serialized with nlohmann_json (included only in the `.cpp`) | `WasmBase/WasmDiagnostics.cpp` |
+| Text and JSON | `formatDiagnostic`, `diagnosticToJson`, `diagnosticsToJson`; JSON schema `wasmjit.diagnostic.v1`, records carry a numeric `timestamp`, a collected run is an `{schema, startedAt, records}` envelope, serialized with nlohmann_json (included only in the `.cpp`) | `WasmBase/WasmDiagnostics.cpp` |
+| Pretty terminal | `formatDiagnosticPretty`: emoji (ℹ️/⚠️/⛔/🚨), ANSI white/yellow/red/magenta, `ctime` timestamp; emitted for `WASM.EXECUTE.LOG.*` records only | `WasmBase/WasmDiagnostics.cpp` |
 | Guest log imports | `env.info`/`warn`/`error`/`panic` read UTF-8 from memory 0; `panic` also traps; opt-in `WASM::registerToEnv(registrar)` | `WasmBase/WasmDiagnostics.*` |
 | Validation | `std::runtime_error` with a named rule and `Module::describeIndex`, plus a record with `WASM.VALIDATE.*` and function/instruction location; strictness is opt-in (`WASM_SPEC_VALIDATE=1`) | `WasmBase/WasmValidator.*`, `docs/VALIDATION.md` |
 | Decode | Named malformed/unsupported errors and bounded LEB/count reads; the load boundary records `WASM.DECODE.*` | `WasmBase/WasmModule.cpp`, `WasmBase/WasmOpcodeDispatcher.cpp`, `WasmBase/WasmSafety.hpp` |
@@ -76,13 +83,20 @@ embedder can attach a sink and query the ring; an agent can run the harness with
   paths and `HostContinuationScheduler`. Also the four log imports.
 - Continuation records carry the provider, generation, state, tag,
   value/result counts and root presence; `switchPeer` is never serialized.
+- Every record gets a `std::time_t timestamp` and a per-state `startedAt`;
+  `diagnosticsToJson` wraps a collected run in `{schema, startedAt, records}`
+  with both times as raw epoch numbers (no date conversion in JSON).
+- The pretty terminal form (`formatDiagnosticPretty`): emoji + ANSI colour +
+  `ctime` timestamp, used by the host-log imports; control bytes are replaced
+  and long guest messages are capped in the terminal line only.
 - The text form and a nlohmann_json-backed JSON serializer (schema v1). The
   library is header-only and included only in `WasmDiagnostics.cpp`, so the
   public record header stays lightweight; invalid UTF-8 from a guest message is
   replaced rather than allowed to throw.
 - Harness flags `--diagnostics=text|json|none`, `--diagnostics-file=PATH` and
-  `--diagnostics-limit=N` (§5.3).
-- Fourteen Catch2 cases (§7) and `Test/wasm_wat/diagnostics_log.wat`.
+  `--diagnostics-limit=N` (§5.3); the harness enables the pretty host-log lines
+  by default.
+- Fifteen Catch2 cases (§7) and `Test/wasm_wat/diagnostics_log.wat`.
 
 
 ## 2. Personas and what they need
@@ -198,6 +212,7 @@ struct Diagnostic {
     DiagnosticContinuation continuation;
     std::string_view remediation; // docs anchor or short hint
     uint32_t sequence = 0;        // assigned by the emitting execution state
+    std::time_t timestamp = 0;    // assigned by emit(); raw in JSON
 };
 ```
 
@@ -219,6 +234,10 @@ Rules:
   The ring therefore never exposes a view into a destroyed module or agent.
 - Severity describes the *record*, not the return value. `env.info` is a
   successful call with a `Note`; `env.panic` emits `Fatal` and then traps.
+- `timestamp` is captured with `std::time(nullptr)` in `emit()`. JSON keeps the
+  raw epoch number (records and the envelope's `startedAt`); only the pretty
+  terminal form renders a `ctime` date. `startedAt` is the execution state's
+  session start and is not reset by `clearDiagnostics()`.
 
 ### 4.2 Identifier taxonomy
 
@@ -323,7 +342,7 @@ Do **not** dump raw stack memory, guest pointers, reference values or host
 `userData` by default. A developer-only `diagnostics=full` mode may include
 addresses, clearly marked unstable.
 
-### 4.4 Text and JSON
+### 4.4 Text, pretty terminal, and JSON
 
 Text form (default) is `formatDiagnostic`: severity, id, message, then an
 optional location line and hint. The validator keeps the location out of the
@@ -342,12 +361,33 @@ A continuation record adds one more line (only when
   continuation native_stacks generation 2 state completed tag 7
 ```
 
-JSON form (`diagnosticToJson`) is compact, one object per record. This is the
-actual schema-v1 shape: numeric fields that are unknown are omitted, and
-`switchPeer` is never present.
+**Pretty terminal form.** `formatDiagnosticPretty` is the line the host-log
+imports use when pretty printing is enabled. It is emoji-first, then an ANSI
+colour that starts after the emoji and is reset at the end of the line; the
+`ctime` date sits inside the coloured text:
+
+```
+ℹ️ [Sun Oct 25 13:47:39 2026] info from guest
+```
+
+| Emoji | Severity | Colour |
+|---|---|---|
+| ℹ️ (`\u2139\ufe0f`) | Note / `env.info` | white (`\x1b[37m`) |
+| ⚠️ (`\u26a0\ufe0f`) | Warning / `env.warn` | yellow (`\x1b[33m`) |
+| ⛔ (`\u26d4`) | Error / `env.error` | red (`\x1b[31m`) |
+| 🚨 (`\ud83d\udea8`) | Fatal / `env.panic` | magenta (`\x1b[35m`) |
+
+`formatDiagnosticPretty(diagnostic, false)` omits the ANSI escapes but keeps the
+emoji and the date. Control bytes in the message become spaces and the printed
+message is capped at 256 bytes (the record itself keeps the full text), so a
+hostile guest cannot flood the terminal with NULs.
+
+**JSON.** `diagnosticToJson` is compact, one object per record. Records carry a
+numeric `timestamp` (raw `time_t`, not a date); unknown numeric fields and
+`switchPeer` are omitted.
 
 ```json
-{"schema":"wasmjit.diagnostic.v1","sequence":4,"id":"WASM.VALIDATE.UNKNOWN_FUNCTION","severity":"error","phase":"validate","message":"unknown function 7","location":{"function":3,"name":"decode","instruction":42},"remediation":"docs/VALIDATION.md"}
+{"schema":"wasmjit.diagnostic.v1","sequence":4,"timestamp":1698321600,"id":"WASM.VALIDATE.UNKNOWN_FUNCTION","severity":"error","phase":"validate","message":"unknown function 7","location":{"function":3,"name":"decode","instruction":42},"remediation":"docs/VALIDATION.md"}
 ```
 
 A continuation record adds:
@@ -356,14 +396,20 @@ A continuation record adds:
 "continuation":{"provider":"native_stacks","generation":2,"state":"completed","tag":7,"values":0,"results":1,"roots":true}
 ```
 
-`diagnosticsToJson(span)` wraps the records in a JSON array. JSON is emitted by
-the test harness and by an opt-in embedder sink. The serializer is
-nlohmann_json (`ordered_json`, so insertion order is stable) and the library is
-included only in `WasmDiagnostics.cpp`; the public record header stays free of
-it. `dump(-1, ' ', false, error_handler_t::replace)` keeps serialization total
-for hostile guest bytes: invalid UTF-8 becomes U+FFFD instead of
-`type_error.316`. A consumer gets compact JSON with no `switchPeer` and no
-unknown numeric fields.
+`diagnosticsToJson(span, startedAt)` wraps a collected run in the schema
+envelope. `startedAt` is the execution state's session start; both times stay
+raw epoch numbers.
+
+```json
+{"schema":"wasmjit.diagnostic.v1","startedAt":1698321600,"records":[ ... ]}
+```
+
+The serializer is nlohmann_json (`ordered_json`, so insertion order is stable)
+and the library is included only in `WasmDiagnostics.cpp`; the public record
+header stays free of it. `dump(-1, ' ', false, error_handler_t::replace)` keeps
+serialization total for hostile guest bytes: invalid UTF-8 becomes U+FFFD
+instead of `type_error.316`. A consumer gets compact JSON with no `switchPeer`
+and no unknown numeric fields.
 
 
 ## 5. API plan
@@ -382,23 +428,30 @@ struct DiagnosticState {                 // a member of ExecutionState
     void* userData = nullptr;
     uint32_t capacity = kDefaultCapacity;
     uint32_t sequence = 0;
+    bool prettyPrintLogs = false;        // host-log lines to stderr
+    std::time_t startedAt = std::time(nullptr);
     std::vector<Diagnostic> records;
     void setSink(DiagnosticSink, void*) noexcept;
     void setCapacity(uint32_t) noexcept;
-    void emit(Diagnostic) noexcept;
+    void emit(Diagnostic) noexcept;      // stamps sequence + timestamp
     std::span<const Diagnostic> recent() noexcept;
-    void clear() noexcept;
+    void clear() noexcept;               // does not reset startedAt
 };
 
 void setDiagnosticSink(DiagnosticSink sink, void* userData) noexcept;
 std::span<const Diagnostic> recentDiagnostics() noexcept; // bounded ring
 void clearDiagnostics() noexcept;
 void setDiagnosticRingCapacity(uint32_t capacity) noexcept;
+void setDiagnosticPrettyPrinting(bool enabled) noexcept;
+bool diagnosticPrettyPrinting() noexcept;
+std::time_t diagnosticsStartedAt() noexcept;
 void emitDiagnostic(Diagnostic diagnostic) noexcept;
 
 std::string formatDiagnostic(const Diagnostic&);
+std::string formatDiagnosticPretty(const Diagnostic&, bool useColor = true);
 std::string diagnosticToJson(const Diagnostic&);
-std::string diagnosticsToJson(std::span<const Diagnostic>);
+std::string diagnosticsToJson(std::span<const Diagnostic> diagnostics,
+        std::time_t startedAt = 0);      // envelope
 ```
 
 The sink is attached to an `ExecutionState` (`Agent::execution()`), not a
@@ -413,6 +466,12 @@ before it is appended to the ring, so a sink that re-enters the engine cannot
 invalidate what it is reading; `recentDiagnostics()` inside a sink does not yet
 include the record being delivered. A sink that throws terminates the process:
 it is `noexcept` and the engine cannot unwind a generated frame to guard it.
+
+`emit()` assigns `sequence` and `timestamp` before anything else. When
+`prettyPrintLogs` is enabled and the id starts with `WASM.EXECUTE.LOG.`, it also
+writes the pretty line to stderr (then flushes) before the sink and the ring.
+The core default is off; `setDiagnosticPrettyPrinting(true)` opts in, and the
+unit-test harness does so at startup.
 
 ### 5.2 Existing trap/exception path
 
@@ -450,14 +509,16 @@ command line):
 
 The records are collected by a sink on the main thread's execution state, so
 they cover every test that runs there. With `--diagnostics=json` and no file,
-the JSON array is the **last line of stdout** (Catch2's own report precedes it);
-`--diagnostics-file` is the clean machine-readable path. An embedder can skip
-the harness entirely and use `DiagnosticSink` or
-`diagnosticsToJson(recentDiagnostics())`.
+the JSON envelope (`{schema, startedAt, records}`) is the **last line of
+stdout** (Catch2's own report precedes it); `--diagnostics-file` is the clean
+machine-readable path. An embedder can skip the harness entirely and use
+`DiagnosticSink` or `diagnosticsToJson(recentDiagnostics(), diagnosticsStartedAt())`.
 
-`--diagnostics-context=module|continuation|full` remains open: the record
-already carries the structured fields, so the flag would only choose which ones
-a text renderer prints.
+The harness enables the pretty host-log lines by default; `--diagnostics=none`
+is a quiet run (no pretty lines and no JSON/text dump), while `text`/`json`
+re-enable them. The standalone `--diagnostics-context=module|continuation|full`
+flag remains open: the record already carries the structured fields, so the flag
+would only choose which ones a text renderer prints.
 
 ### 5.4 Host log imports (implemented)
 
@@ -498,7 +559,7 @@ Status: ✅ implemented, ◐ partial, ☐ open.
 | **DG-0 — Inventory and ids** ◐ | Map every validator/trap/continuation message to a stable id; document the mapping. | No duplicate ids; existing tests keep passing; a test asserts each mapped id. **Done for trap kinds, continuation statuses, decode boundaries, log imports and the index rules; the remaining validator rules share `WASM.VALIDATE.RULE` (§4.2).** | P0 |
 | **DG-1 — Structured record** ✅ | Add `Diagnostic`/`DiagnosticLocation` and populate validator and decode paths first. | Validator errors expose id + function/offset; text form is backward-compatible. **Done: `Validator::fail` and the `Module::fromFile` boundaries; thrown messages are unchanged.** | P0 |
 | **DG-2 — Runtime traps and exceptions** ✅ | Populate execute/continuation diagnostics at trap and exception conversion boundaries. | `TrapKind` and pending exception still work; records carry location and continuation context. **Done for traps and uncaught exceptions; continuation context is DG-4.** | P0 |
-| **DG-3 — Bounded sink and JSON** ✅ | Add per-agent sink/ring and harness JSON output. | JSON schema v1 snapshots pass; ring is bounded; no allocation in the trap fast path unless a sink/ring is enabled. **Done: `DiagnosticState`, text/JSON forms, default capacity 32, capacity 0 disables the ring.** | P1 |
+| **DG-3 — Bounded sink and JSON** ✅ | Add per-agent sink/ring and harness JSON output. | JSON schema v1 snapshots pass; ring is bounded; no allocation in the trap fast path unless a sink/ring is enabled. **Done: `DiagnosticState`, text/JSON forms, numeric timestamps + `{schema, startedAt, records}` envelope, default capacity 32, capacity 0 disables the ring; the opt-in emoji/ANSI pretty host-log form is the terminal extension.** | P1 |
 | **DG-4 — Continuation/scheduler context** ✅ | Add provider/generation/state/tag/result/root/switch context and scheduler rejection reason. | The wide/throw scheduler tests assert ids and context; no raw pointers by default. **Done: reason leaves + context at every resume/switch failure and scheduler outcome; `switchPeer` never serialized; records emitted inside a worker state are not merged into the resumer (documented in §4.3).** | P1 |
 | **DG-5 — Name/source correlation** ◐ | Consume the Wasm name section; expose function names and, where available, WAT/source positions supplied by tooling. | A named WAT fixture reports `$function`; missing names degrade to indices. **Done for validation/decode records; runtime-trap locations need a backend-preserved map.** | P2 |
 | **DG-6 — Module-author tooling** ◐ | A small diagnostic reader/CLI and editor-friendly JSON; document stable ids. | A module author can localize a validation error and a runtime trap without reading engine source. **Done: harness text/JSON output plus `--diagnostics-file` and the documented id table; a standalone reader for a `.wasm` is still open.** | P2 |
@@ -516,12 +577,13 @@ Status: ✅ implemented, ◐ partial, ☐ open.
 
 ## 7. Test plan
 
-Implemented (14 cases, 215 assertions; fixture
+Implemented (15 cases, 240 assertions; fixture
 `Test/wasm_wat/diagnostics_log.wat`):
 
 | Gate | Catch2 case | What it pins |
 |---|---|---|
-| Log imports | `diagnostics: env log imports emit structured records` | three records, ids, severities, phases, messages, monotonic `sequence`, text and JSON v1 parsed back with nlohmann_json |
+| Log imports | `diagnostics: env log imports emit structured records` | three records, ids, severities, phases, messages, monotonic `sequence`, numeric timestamps at/after `startedAt`, text and JSON v1, and the `{schema, startedAt, records}` envelope |
+| Pretty form | `diagnostics: the pretty form uses the documented emoji and colours` | ℹ️/⚠️/⛔/🚨 and white/yellow/red/magenta per severity, colour starts after the emoji and resets at EOL, `ctime` date, no-colour mode, control-byte sanitization + cap |
 | Sink and ring | `diagnostics: a sink sees records without replacing the ring` | the sink observes every emission, the ring still holds them, capacity 0 disables the ring |
 | Panic | `diagnostics: env.panic records a fatal note and traps` | `Fatal` log record + `WASM.EXECUTE.TRAP.INTERNAL`, trap message preserved |
 | Safety | `diagnostics: an unreadable or oversized guest string degrades safely` | out-of-range placeholder, 4096-byte truncation with `...`, invalid UTF-8 replaced with U+FFFD |
@@ -563,6 +625,10 @@ Still open, from the original plan:
   Records emitted on a continuation worker thread or a test-owned `Agent` are
   intentionally separate; use `--diagnostics-file` for the main-thread stream
   and an explicit `DiagnosticSink` for a custom execution state.
+- Pretty printing is a terminal convenience, not a log file: it covers host-log
+  records only, caps the rendered message at 256 bytes and replaces control
+  bytes with spaces. A redirected run should consume the JSON envelope instead
+  (the record itself always keeps the full message).
 - Function/instruction offsets require a stable location in generated code.
   The existing `instructionOffset` at decode time is the seed; the JIT must
   preserve a mapping rather than invent one from a native address. That map is

@@ -70,7 +70,7 @@ per-milestone done markers, is the authoritative per-item status.
 
 | Document | Feature / proposal | Wasm | Completeness | Where it stands |
 |---|---|---|---|---|
-| [`DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) | Diagnostics and debugging (cross-cutting design/plan) | — | `█████████████░░░░░░░` DG-1…DG-4 shipped | Ships the stable diagnostic record/id/schema (`wasmjit.diagnostic.v1`), a bounded per-execution-state ring plus an embedder sink, text/JSON forms (nlohmann_json), the `env.info`/`warn`/`error`/`panic` log imports, continuation/scheduler context, and the `--diagnostics=text\|json\|none`, `--diagnostics-file` and `--diagnostics-limit` harness flags. Validator/decode/trap/exception boundaries emit records; the index-rule and continuation ids are mapped, the remaining validator rules share `WASM.VALIDATE.RULE`. Runtime-trap locations (DG-5), a standalone reader (DG-6) and the perf benchmark (DG-8) remain |
+| [`DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) | Diagnostics and debugging (cross-cutting design/plan) | — | `█████████████░░░░░░░` DG-1…DG-4 shipped | Ships the stable diagnostic record/id/schema (`wasmjit.diagnostic.v1`), a bounded per-execution-state ring plus an embedder sink, per-record `time_t` stamps with a `{schema, startedAt, records}` JSON envelope, text/JSON forms (nlohmann_json), an opt-in emoji+ANSI pretty host-log form (on by default in the unit tests), the `env.info`/`warn`/`error`/`panic` imports, continuation/scheduler context, and the `--diagnostics=text\|json\|none`, `--diagnostics-file` and `--diagnostics-limit` harness flags. Runtime-trap locations (DG-5), a standalone reader (DG-6) and the perf benchmark (DG-8) remain |
 | [`MULTI_VALUE.md`](docs/proposals/MULTI_VALUE.md) | Multi-value | 2.0 | `████████████████████` 100% | Engine complete (block parameters, multi-result calls via a caller-provided result buffer). The harness marshals every path (`assert_return` compares the tuple; bare actions, `assert_trap`, `assert_exception` and `assert_exhaustion` pass a buffer), and embedders get `WASM::callCallableWithResults(callable, buffer, args...)` with the buffer layout documented in `docs/ABI.md` (MV4); the multi-value test exercises it |
 | [`TAILCALLS.md`](docs/proposals/TAILCALLS.md) | Tail calls | 3.0 | `██████████████████░░` 90% | TC-1…TC-4 done: direct, indirect and `ref` tails run in constant stack; the trampoline is signature-restricted |
 | [`SMALL_PROPOSALS.md`](docs/proposals/SMALL_PROPOSALS.md) | Sign-extension, non-trapping `trunc_sat`, branch hinting | 2.0 / 3.0 | `██████████████████░░` 90% | First two implemented + manually tested; the *trapping* `trunc_f*` and integer `div`/`rem` now genuinely trap (they used to silently produce a value); branch hints are parsed and deliberately non-semantic |
@@ -120,7 +120,7 @@ families instead of skipping them, and the validator (`docs/VALIDATION.md`)
 rejects **all 2,211** curated `assert_invalid` cases plus all 127
 `assert_unlinkable` ones and all 27 `assert_uninstantiable` ones — **2,382 of
 2,382** binary negative commands. The strict run is fully green (the default
-suite is **10,939 assertions / 437 test cases**). All 17 curated
+suite is **10,964 assertions / 438 test cases**). All 17 curated
 `assert_malformed` cases are rejected too, including the strict LEB128 cases;
 the remaining malformed cases are *text-format* (946 commands across all kinds)
 and need a text parser, not a validator. See
