@@ -164,6 +164,41 @@ inline constexpr std::string_view kValidateUnknownLocal = "WASM.VALIDATE.UNKNOWN
 inline constexpr std::string_view kValidateUnknownElement = "WASM.VALIDATE.UNKNOWN_ELEMENT_SEGMENT";
 inline constexpr std::string_view kValidateUnknownData = "WASM.VALIDATE.UNKNOWN_DATA_SEGMENT";
 
+// Rule families used by `validationRuleId()` for sites that do not pass an
+// explicit id. The message still names the precise rule; the id names the
+// stable family (docs/DIAGNOSTICS.md §4.2).
+inline constexpr std::string_view kValidateUnknownLabel = "WASM.VALIDATE.UNKNOWN_LABEL";
+inline constexpr std::string_view kValidateOperandStack = "WASM.VALIDATE.OPERAND_STACK";
+inline constexpr std::string_view kValidateTypeMismatch = "WASM.VALIDATE.TYPE_MISMATCH";
+inline constexpr std::string_view kValidateBlockType = "WASM.VALIDATE.BLOCK_TYPE";
+inline constexpr std::string_view kValidateControlFlow = "WASM.VALIDATE.CONTROL_FLOW";
+inline constexpr std::string_view kValidateAlignment = "WASM.VALIDATE.ALIGNMENT";
+inline constexpr std::string_view kValidateOffsetRange = "WASM.VALIDATE.OFFSET_RANGE";
+inline constexpr std::string_view kValidateLimits = "WASM.VALIDATE.LIMITS";
+inline constexpr std::string_view kValidateImmutableTarget = "WASM.VALIDATE.IMMUTABLE_TARGET";
+inline constexpr std::string_view kValidateUninitializedLocal = "WASM.VALIDATE.UNINITIALIZED_LOCAL";
+inline constexpr std::string_view kValidateUndeclaredRef = "WASM.VALIDATE.UNDECLARED_FUNCTION_REF";
+inline constexpr std::string_view kValidateDuplicateExport = "WASM.VALIDATE.DUPLICATE_EXPORT";
+inline constexpr std::string_view kValidateSection = "WASM.VALIDATE.SECTION_CONSISTENCY";
+inline constexpr std::string_view kValidateConstantTime = "WASM.VALIDATE.CONSTANT_TIME";
+inline constexpr std::string_view kValidateProfile = "WASM.VALIDATE.PROFILE";
+inline constexpr std::string_view kValidateDescriptor = "WASM.VALIDATE.DESCRIPTOR";
+inline constexpr std::string_view kValidateCast = "WASM.VALIDATE.CAST";
+inline constexpr std::string_view kValidateAtomicOrdering = "WASM.VALIDATE.ATOMIC_ORDERING";
+inline constexpr std::string_view kValidateAtomic = "WASM.VALIDATE.ATOMIC";
+inline constexpr std::string_view kValidateContinuation = "WASM.VALIDATE.CONTINUATION";
+inline constexpr std::string_view kValidateString = "WASM.VALIDATE.STRING";
+inline constexpr std::string_view kValidateStruct = "WASM.VALIDATE.STRUCT";
+inline constexpr std::string_view kValidateArray = "WASM.VALIDATE.ARRAY";
+inline constexpr std::string_view kValidateTag = "WASM.VALIDATE.TAG";
+inline constexpr std::string_view kValidateTable = "WASM.VALIDATE.TABLE";
+inline constexpr std::string_view kValidateMemory = "WASM.VALIDATE.MEMORY";
+inline constexpr std::string_view kValidateGlobal = "WASM.VALIDATE.GLOBAL";
+inline constexpr std::string_view kValidateLocal = "WASM.VALIDATE.LOCAL";
+inline constexpr std::string_view kValidateSelect = "WASM.VALIDATE.SELECT";
+inline constexpr std::string_view kValidateShuffle = "WASM.VALIDATE.SHUFFLE";
+inline constexpr std::string_view kValidateTypeKind = "WASM.VALIDATE.TYPE_KIND";
+
 inline constexpr std::string_view kExecuteException = "WASM.EXECUTE.EXCEPTION";
 inline constexpr std::string_view kExecuteLogInfo = "WASM.EXECUTE.LOG.INFO";
 inline constexpr std::string_view kExecuteLogWarn = "WASM.EXECUTE.LOG.WARN";
@@ -204,6 +239,11 @@ inline constexpr std::string_view kContinuationSchedulerInvalid = "WASM.CONTINUA
 std::string_view trapDiagnosticId(TrapKind kind) noexcept;
 // `WASM.CONTINUATION.<NAME>` for a resume status.
 std::string_view continuationDiagnosticId(ContinuationStatus status) noexcept;
+// The rule family for a validator message (DG-0). The caller's explicit id
+// always wins; this is the default for the ~250 rule sites that still pass a
+// message only. Matching is ordered (docs/DIAGNOSTICS.md §4.2) and never
+// allocates. `WASM.VALIDATE.RULE` is only for a message no family matches.
+std::string_view validationRuleId(std::string_view message) noexcept;
 
 // ── Sink and bounded ring ──────────────────────────────────────────────────
 
@@ -323,8 +363,13 @@ void emitExceptionDiagnostic(std::int32_t tagId, std::uint32_t payloadBytes) noe
 // Records a trap the host has just observed. The engine's own boundaries
 // (`checkTrap`, `trap`) call this; a harness that reads the pending slot
 // directly — the test backend and the diagnose tool do — must call it at its
-// own boundary so the record exists exactly once.
-void emitTrapDiagnostic(TrapKind kind, const char* message) noexcept;
+// own boundary so the record exists exactly once. The optional site is the
+// compile-time function/instruction the backend reported (DG-5); pass
+// `kNoDiagnosticIndex`/nullptr when unknown.
+void emitTrapDiagnostic(TrapKind kind, const char* message,
+		std::uint32_t functionIndex = kNoDiagnosticIndex,
+		std::uint32_t instructionOffset = kNoDiagnosticIndex,
+		const char* functionName = nullptr) noexcept;
 // Records a continuation/scheduler failure with the provider, generation,
 // state, tag, value/result counts and root presence the runtime already has
 // (DG-4). `continuation.state` is the "populated" marker; when it is empty the

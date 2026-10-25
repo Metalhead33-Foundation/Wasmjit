@@ -48,6 +48,13 @@ extern "C" TrapSlot* wasm_trap_slot() noexcept
 
 void reportTrap(TrapKind kind, const char* detail) noexcept
 {
+	reportTrapAt(kind, detail, kNoTrapIndex, kNoTrapIndex, nullptr);
+}
+
+void reportTrapAt(TrapKind kind, const char* detail,
+		std::uint32_t functionIndex, std::uint32_t instructionOffset,
+		const char* functionName) noexcept
+{
 	ExecutionState& state = currentExecutionState();
 	TrapSlot& slot = state.trapSlot;
 
@@ -56,6 +63,14 @@ void reportTrap(TrapKind kind, const char* detail) noexcept
 	// pending slot); overwriting the original reason would lose the diagnosis.
 	if (slot.pending != 0)
 		return;
+
+	// The compile-time site belongs to the winning report.
+	if (functionIndex != kNoTrapIndex || instructionOffset != kNoTrapIndex
+			|| functionName != nullptr) {
+		slot.functionIndex = functionIndex;
+		slot.instructionOffset = instructionOffset;
+		slot.functionName = functionName;
+	}
 
 	const char* text = (detail != nullptr) ? detail : trapKindName(kind);
 	// Copy: an import may report `std::exception::what()`, which dies with the
@@ -90,6 +105,14 @@ extern "C" void wasm_trap_report(int kind, const char* message)
 	reportTrap(static_cast<TrapKind>(kind), message);
 }
 
+extern "C" void wasm_trap_report_at(int kind, const char* message,
+		std::uint32_t functionIndex, std::uint32_t instructionOffset,
+		const char* functionName)
+{
+	reportTrapAt(static_cast<TrapKind>(kind), message, functionIndex,
+			instructionOffset, functionName);
+}
+
 bool trapPending() noexcept
 {
 	return currentExecutionState().trapSlot.pending != 0;
@@ -114,6 +137,9 @@ void clearPendingTrap() noexcept
 	TrapSlot& slot = currentExecutionState().trapSlot;
 	slot.pending = 0;
 	slot.kind = static_cast<int>(TrapKind::Internal);
+	slot.functionIndex = kNoTrapIndex;
+	slot.instructionOffset = kNoTrapIndex;
+	slot.functionName = nullptr;
 }
 
 TrapInfo takePendingTrap() noexcept
@@ -125,6 +151,9 @@ TrapInfo takePendingTrap() noexcept
 	info.trapped = true;
 	info.kind = static_cast<TrapKind>(slot.kind);
 	info.message = slot.message[0] != '\0' ? slot.message : nullptr;
+	info.functionIndex = slot.functionIndex;
+	info.instructionOffset = slot.instructionOffset;
+	info.functionName = slot.functionName;
 	clearPendingTrap();
 	return info;
 }
@@ -158,7 +187,8 @@ Trap::Trap(TrapKind kind, const char* message) noexcept
 	// This is the point where a pending status becomes a host exception, so it
 	// is the one place a runtime trap is recorded (DG-2). The slot was cleared
 	// by `takePendingTrap()`, but `info.message` still points into its buffer.
-	emitTrapDiagnostic(info.kind, info.message);
+	emitTrapDiagnostic(info.kind, info.message, info.functionIndex,
+			info.instructionOffset, info.functionName);
 	throw Trap(info.kind, info.message);
 }
 
@@ -207,7 +237,8 @@ NativeImportScope::~NativeImportScope()
 		// Recorded before the abort so a sink can still explain the failure. The
 		// id follows the slot's kind, which is the first (winning) report.
 		emitTrapDiagnostic(static_cast<TrapKind>(slot.kind),
-				slot.message[0] != '\0' ? slot.message : trapKindName(kind));
+				slot.message[0] != '\0' ? slot.message : trapKindName(kind),
+				slot.functionIndex, slot.instructionOffset, slot.functionName);
 		std::fprintf(stderr,
 			"WasmJit: WASM::trap() called below generated code (%s); "
 			"report the trap and return, or wrap the import with "
@@ -221,7 +252,8 @@ NativeImportScope::~NativeImportScope()
 	// `checkTrap` records it at the actual host boundary; recording it here as
 	// well would duplicate the record.
 	if (state.wasmCallDepth == 0)
-		emitTrapDiagnostic(info.kind, info.message);
+		emitTrapDiagnostic(info.kind, info.message, info.functionIndex,
+				info.instructionOffset, info.functionName);
 	throw Trap(info.kind, info.message);
 }
 

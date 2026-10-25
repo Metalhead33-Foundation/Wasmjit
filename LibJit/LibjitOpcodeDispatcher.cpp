@@ -142,18 +142,29 @@ static void invokeContinuation(void* target, void* context,
 // scoped enum cannot be passed through a jit_type signature; wasm_trap_report
 // re-assembles them. The kind is what makes the trap checkable
 // (docs/SAFETY.md §2.4), the message is only for the log.
-void emitTrapReportCall(jit_function_t fn, WASM::TrapKind kind, const char* detail)
+void emitTrapReportCall(jit_function_t fn, WASM::TrapKind kind, const char* detail,
+		uint32_t functionIndex, uint32_t instructionOffset, const char* functionName)
 {
-	jit_type_t params[2] = {jit_type_int, jit_type_void_ptr};
-	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 2, 1);
-	jit_value_t args[2] = {
+	// DG-5: the backend knows the function/instruction at compile time, so the
+	// trap site travels as constants. Report sites without one use the 2-arg
+	// `wasm_trap_report` instead.
+	jit_type_t params[5] = {jit_type_int, jit_type_void_ptr, jit_type_uint,
+			jit_type_uint, jit_type_void_ptr};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 5, 1);
+	jit_value_t args[5] = {
 		jit_value_create_nint_constant(fn, jit_type_int,
 			static_cast<jit_nint>(static_cast<int>(kind))),
 		jit_value_create_nint_constant(fn, jit_type_void_ptr,
-			reinterpret_cast<jit_nint>(const_cast<char*>(detail)))
+			reinterpret_cast<jit_nint>(const_cast<char*>(detail))),
+		jit_value_create_nint_constant(fn, jit_type_uint,
+			static_cast<jit_nint>(functionIndex)),
+		jit_value_create_nint_constant(fn, jit_type_uint,
+			static_cast<jit_nint>(instructionOffset)),
+		jit_value_create_nint_constant(fn, jit_type_void_ptr,
+			reinterpret_cast<jit_nint>(const_cast<char*>(functionName)))
 	};
-	jit_insn_call_native(fn, "wasm_trap_report",
-		reinterpret_cast<void*>(&WASM::wasm_trap_report), sig, args, 2, 0);
+	jit_insn_call_native(fn, "wasm_trap_report_at",
+		reinterpret_cast<void*>(&WASM::wasm_trap_report_at), sig, args, 5, 0);
 }
 
 // ── Stringref runtime helpers (docs/proposals/STRINGREF.md STR-3) ───────────
@@ -2559,7 +2570,8 @@ void OpcodeDispatcher::emitReportTrap(WASM::TrapKind kind, const char* detail)
 	// continues (the report returns), so the branch — not a `noreturn` call — is
 	// what keeps the generated signature well-formed.
 	requestTrapEpilogue();
-	emitTrapReportCall(function, kind, detail);
+	emitTrapReportCall(function, kind, detail, functionIndex,
+			static_cast<uint32_t>(instructionOffset), functionName);
 	jit_insn_branch(function, &trapEpilogueLabel);
 }
 
@@ -2992,6 +3004,8 @@ OpcodeDispatcher::OpcodeDispatcher(jit_context_t context, jit_function_t functio
 	  deterministicFloats(profileConfig.deterministic())
 {
 	functionLabel = "function " + module.describeIndex(WASM::NameKind::Function, functionIndex);
+	if (const std::string* name = module.findName(WASM::NameKind::Function, functionIndex))
+		functionName = internals.internTrapMessage(*name);
 }
 
 jit_value_t OpcodeDispatcher::canonicalizeFloat(jit_value_t value, bool isDouble)

@@ -451,6 +451,10 @@ void Worker::executeTarget()
 		std::snprintf(execution.trapSlot.message, sizeof(execution.trapSlot.message),
 				"%s", trapMessage.c_str());
 		execution.trapSlot.kind = static_cast<int>(trapKind);
+		// A worker-side report has no compile-time site (DG-5).
+		execution.trapSlot.functionIndex = kNoTrapIndex;
+		execution.trapSlot.instructionOffset = kNoTrapIndex;
+		execution.trapSlot.functionName = nullptr;
 		execution.trapSlot.pending = 1;
 		return;
 	}
@@ -461,6 +465,10 @@ void Worker::executeTarget()
 		std::snprintf(execution.trapSlot.message, sizeof(execution.trapSlot.message),
 				"%s", trapMessage.c_str());
 		execution.trapSlot.kind = static_cast<int>(trapKind);
+		// A worker-side report has no compile-time site (DG-5).
+		execution.trapSlot.functionIndex = kNoTrapIndex;
+		execution.trapSlot.instructionOffset = kNoTrapIndex;
+		execution.trapSlot.functionName = nullptr;
 		execution.trapSlot.pending = 1;
 		return;
 	}
@@ -479,6 +487,10 @@ void Worker::executeTarget()
 		std::snprintf(execution.trapSlot.message, sizeof(execution.trapSlot.message),
 				"%s", trapMessage.c_str());
 		execution.trapSlot.kind = static_cast<int>(trapKind);
+		// A worker-side report has no compile-time site (DG-5).
+		execution.trapSlot.functionIndex = kNoTrapIndex;
+		execution.trapSlot.instructionOffset = kNoTrapIndex;
+		execution.trapSlot.functionName = nullptr;
 		execution.trapSlot.pending = 1;
 		return;
 	}

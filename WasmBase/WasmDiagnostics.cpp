@@ -107,6 +107,142 @@ std::string_view continuationDiagnosticId(ContinuationStatus status) noexcept
 	return "WASM.CONTINUATION.INVALID";
 }
 
+// ── Validator rule families (DG-0) ─────────────────────────────────────────
+//
+// 247 `fail()` sites exist; most pass only a message. Tagging each one by hand
+// would be churn with no behavioural gain, so this ordered classifier maps the
+// rule's *message* to a stable family. Explicit ids still win at the site (the
+// index rules and `funcTypeAt` use them). Matching is ASCII-case-insensitive
+// and allocation-free; the order below is the contract (docs/DIAGNOSTICS.md
+// §4.2) — the first matching family wins.
+
+namespace {
+
+bool containsLower(std::string_view haystack, std::string_view needle) noexcept
+{
+	if (needle.empty() || needle.size() > haystack.size())
+		return false;
+	for (std::size_t i = 0; i + needle.size() <= haystack.size(); ++i) {
+		bool match = true;
+		for (std::size_t j = 0; j < needle.size(); ++j) {
+			char left = haystack[i + j];
+			char right = needle[j];
+			if (left >= 'A' && left <= 'Z')
+				left = static_cast<char>(left - 'A' + 'a');
+			if (right >= 'A' && right <= 'Z')
+				right = static_cast<char>(right - 'A' + 'a');
+			if (left != right) {
+				match = false;
+				break;
+			}
+		}
+		if (match)
+			return true;
+	}
+	return false;
+}
+
+} // namespace
+
+std::string_view validationRuleId(std::string_view message) noexcept
+{
+	if (containsLower(message, "unknown label"))
+		return DiagnosticId::kValidateUnknownLabel;
+	if (containsLower(message, "unknown type"))
+		return DiagnosticId::kValidateUnknownType;
+	if (containsLower(message, "not a function type"))
+		return DiagnosticId::kValidateTypeNotFunction;
+	if (containsLower(message, "unknown function"))
+		return DiagnosticId::kValidateUnknownFunction;
+	if (containsLower(message, "unknown table"))
+		return DiagnosticId::kValidateUnknownTable;
+	if (containsLower(message, "unknown memory"))
+		return DiagnosticId::kValidateUnknownMemory;
+	if (containsLower(message, "unknown global"))
+		return DiagnosticId::kValidateUnknownGlobal;
+	if (containsLower(message, "unknown tag"))
+		return DiagnosticId::kValidateUnknownTag;
+	if (containsLower(message, "unknown local"))
+		return DiagnosticId::kValidateUnknownLocal;
+	if (containsLower(message, "unknown element segment"))
+		return DiagnosticId::kValidateUnknownElement;
+	if (containsLower(message, "unknown data segment"))
+		return DiagnosticId::kValidateUnknownData;
+
+	// The stack check is a distinct rule even when the message says
+	// "type mismatch: operand stack underflow".
+	if (containsLower(message, "operand stack"))
+		return DiagnosticId::kValidateOperandStack;
+	if (containsLower(message, "type mismatch"))
+		return DiagnosticId::kValidateTypeMismatch;
+	if (containsLower(message, "block type"))
+		return DiagnosticId::kValidateBlockType;
+	if (containsLower(message, "else without")
+			|| containsLower(message, "end without")
+			|| containsLower(message, "if without")
+			|| containsLower(message, "instruction outside"))
+		return DiagnosticId::kValidateControlFlow;
+	if (containsLower(message, "alignment"))
+		return DiagnosticId::kValidateAlignment;
+	if (containsLower(message, "offset out of range"))
+		return DiagnosticId::kValidateOffsetRange;
+	if (containsLower(message, "limits")
+			|| containsLower(message, "size minimum")
+			|| containsLower(message, "size maximum")
+			|| containsLower(message, "declare a maximum"))
+		return DiagnosticId::kValidateLimits;
+	if (containsLower(message, "immutable") || containsLower(message, "mutable"))
+		return DiagnosticId::kValidateImmutableTarget;
+	if (containsLower(message, "uninitialized local"))
+		return DiagnosticId::kValidateUninitializedLocal;
+	if (containsLower(message, "undeclared function reference"))
+		return DiagnosticId::kValidateUndeclaredRef;
+	if (containsLower(message, "duplicate export"))
+		return DiagnosticId::kValidateDuplicateExport;
+	if (containsLower(message, "section") || containsLower(message, "data count"))
+		return DiagnosticId::kValidateSection;
+	if (containsLower(message, "constant-time") || containsLower(message, "secret"))
+		return DiagnosticId::kValidateConstantTime;
+	if (containsLower(message, "profile"))
+		return DiagnosticId::kValidateProfile;
+	if (containsLower(message, "descriptor"))
+		return DiagnosticId::kValidateDescriptor;
+	if (containsLower(message, "cast") || containsLower(message, "ref.test"))
+		return DiagnosticId::kValidateCast;
+	if (containsLower(message, "ordering"))
+		return DiagnosticId::kValidateAtomicOrdering;
+	if (containsLower(message, "atomic"))
+		return DiagnosticId::kValidateAtomic;
+	if (containsLower(message, "continuation") || containsLower(message, "cont.bind")
+			|| containsLower(message, "resume") || containsLower(message, "suspend")
+			|| containsLower(message, "switch") || containsLower(message, "handler"))
+		return DiagnosticId::kValidateContinuation;
+	if (containsLower(message, "string"))
+		return DiagnosticId::kValidateString;
+	if (containsLower(message, "struct"))
+		return DiagnosticId::kValidateStruct;
+	if (containsLower(message, "array"))
+		return DiagnosticId::kValidateArray;
+	if (containsLower(message, "tag"))
+		return DiagnosticId::kValidateTag;
+	if (containsLower(message, "table"))
+		return DiagnosticId::kValidateTable;
+	if (containsLower(message, "memory"))
+		return DiagnosticId::kValidateMemory;
+	if (containsLower(message, "global"))
+		return DiagnosticId::kValidateGlobal;
+	if (containsLower(message, "local"))
+		return DiagnosticId::kValidateLocal;
+	if (containsLower(message, "select"))
+		return DiagnosticId::kValidateSelect;
+	if (containsLower(message, "shuffle"))
+		return DiagnosticId::kValidateShuffle;
+	if (containsLower(message, "is not a") || containsLower(message, "is not an")
+			|| containsLower(message, "has no"))
+		return DiagnosticId::kValidateTypeKind;
+	return DiagnosticId::kValidateRule;
+}
+
 // ── The bounded ring ───────────────────────────────────────────────────────
 
 void DiagnosticState::setCapacity(std::uint32_t newCapacity) noexcept
@@ -497,14 +633,20 @@ void emitExceptionDiagnostic(std::int32_t tagId, std::uint32_t payloadBytes) noe
 	}
 }
 
-void emitTrapDiagnostic(TrapKind kind, const char* message) noexcept
+void emitTrapDiagnostic(TrapKind kind, const char* message,
+		std::uint32_t functionIndex, std::uint32_t instructionOffset,
+		const char* functionName) noexcept
 {
 	Diagnostic diagnostic;
 	diagnostic.id = trapDiagnosticId(kind);
 	diagnostic.severity = DiagnosticSeverity::Error;
 	diagnostic.phase = DiagnosticPhase::Execute;
 	diagnostic.remediation = "docs/ABI.md#native-host-function-imports";
+	diagnostic.location.functionIndex = functionIndex;
+	diagnostic.location.instructionOffset = instructionOffset;
 	try {
+		if (functionName != nullptr)
+			diagnostic.location.functionName = functionName;
 		diagnostic.message = (message != nullptr) ? message : trapKindName(kind);
 		emitDiagnostic(std::move(diagnostic));
 	} catch (...) {

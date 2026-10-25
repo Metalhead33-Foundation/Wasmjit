@@ -8384,7 +8384,7 @@ TEST_CASE("diagnostics: a validation failure carries a stable id and a location"
 	const auto records = WASM::recentDiagnostics();
 	REQUIRE_FALSE(records.empty());
 	const WASM::Diagnostic& diagnostic = records.back();
-	REQUIRE(diagnostic.id == "WASM.VALIDATE.RULE"); // unmapped rule, see DG-0
+	REQUIRE(diagnostic.id == "WASM.VALIDATE.OPERAND_STACK");
 	REQUIRE(diagnostic.severity == WASM::DiagnosticSeverity::Error);
 	REQUIRE(diagnostic.phase == WASM::DiagnosticPhase::Validate);
 	REQUIRE(diagnostic.message.find("operand stack underflow") != std::string::npos);
@@ -8397,7 +8397,7 @@ TEST_CASE("diagnostics: a validation failure carries a stable id and a location"
 	REQUIRE(text.find("at function 0 ($bad)") != std::string::npos);
 	const nlohmann::json parsed = nlohmann::json::parse(
 			WASM::diagnosticToJson(diagnostic));
-	REQUIRE(parsed.at("id") == "WASM.VALIDATE.RULE");
+	REQUIRE(parsed.at("id") == "WASM.VALIDATE.OPERAND_STACK");
 	REQUIRE(parsed.at("location").at("function") == 0);
 	REQUIRE(parsed.at("location").at("name") == "bad");
 	REQUIRE(parsed.at("location").at("instruction").get<std::uint32_t>()
@@ -8425,12 +8425,96 @@ TEST_CASE("diagnostics: a mapped validator rule keeps its own id")
 	REQUIRE(records.back().id == "WASM.VALIDATE.UNKNOWN_FUNCTION");
 	REQUIRE(records.back().phase == WASM::DiagnosticPhase::Validate);
 }
+TEST_CASE("diagnostics: validator messages classify into stable rule families")
+{
+	// The classifier is the DG-0 contract for the ~250 sites that pass only a
+	// message. Explicit ids (the index rules) still win at the site.
+	REQUIRE(WASM::validationRuleId("unknown label 3")
+			== "WASM.VALIDATE.UNKNOWN_LABEL");
+	REQUIRE(WASM::validationRuleId("type mismatch: operand stack underflow")
+			== "WASM.VALIDATE.OPERAND_STACK");
+	REQUIRE(WASM::validationRuleId("type mismatch: expected i32, got f64")
+			== "WASM.VALIDATE.TYPE_MISMATCH");
+	REQUIRE(WASM::validationRuleId("alignment must not be larger than natural")
+			== "WASM.VALIDATE.ALIGNMENT");
+	REQUIRE(WASM::validationRuleId("offset out of range")
+			== "WASM.VALIDATE.OFFSET_RANGE");
+	REQUIRE(WASM::validationRuleId(
+			"size minimum must not be greater than maximum")
+			== "WASM.VALIDATE.LIMITS");
+	REQUIRE(WASM::validationRuleId("global.set of an immutable global 0")
+			== "WASM.VALIDATE.IMMUTABLE_TARGET");
+	REQUIRE(WASM::validationRuleId("uninitialized local 0")
+			== "WASM.VALIDATE.UNINITIALIZED_LOCAL");
+	REQUIRE(WASM::validationRuleId("duplicate export name 'f'")
+			== "WASM.VALIDATE.DUPLICATE_EXPORT");
+	REQUIRE(WASM::validationRuleId("scalar profile forbids v128")
+			== "WASM.VALIDATE.PROFILE");
+	REQUIRE(WASM::validationRuleId("array atomic type is not numeric")
+			== "WASM.VALIDATE.ATOMIC");
+	REQUIRE(WASM::validationRuleId("struct.atomic.get_s requires a field")
+			== "WASM.VALIDATE.ATOMIC");
+	REQUIRE(WASM::validationRuleId("array access: type 3 is not an array")
+			== "WASM.VALIDATE.ARRAY");
+	REQUIRE(WASM::validationRuleId("cont.bind: unknown type 2")
+			== "WASM.VALIDATE.UNKNOWN_TYPE");
+	REQUIRE(WASM::validationRuleId("resume handler label arity")
+			== "WASM.VALIDATE.CONTINUATION");
+	REQUIRE(WASM::validationRuleId("string.const index 9 is out of range")
+			== "WASM.VALIDATE.STRING");
+	// Unclassified prose still lands on the documented fallback.
+	REQUIRE(WASM::validationRuleId("something completely new")
+			== "WASM.VALIDATE.RULE");
+}
+
+
+
+TEST_CASE("diagnostics: a runtime trap carries its function and instruction location")
+{
+	WASM::clearDiagnostics();
+	WASM::Module module = loadTestModule("named_trap");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto boom = instance->exportedFunction("boom");
+	REQUIRE(boom.has_value());
+
+	bool trapped = false;
+	try {
+		WASM::callCallable<void>(*boom);
+	} catch (const WASM::Trap&) {
+		trapped = true;
+	}
+	REQUIRE(trapped);
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	const WASM::Diagnostic& diagnostic = WASM::recentDiagnostics()[0];
+	REQUIRE(diagnostic.id == "WASM.EXECUTE.TRAP.UNREACHABLE");
+	REQUIRE(diagnostic.location.functionIndex == 0);
+	REQUIRE(diagnostic.location.functionName == "boom");
+	// The offset is measured in the function's opcode stream (the locals
+	// declaration is decoded separately); `unreachable` is the first opcode.
+	REQUIRE(diagnostic.location.instructionOffset == 0);
+
+	const nlohmann::json json = nlohmann::json::parse(
+			WASM::diagnosticToJson(diagnostic));
+	REQUIRE(json.at("location").at("function") == 0);
+	REQUIRE(json.at("location").at("name") == "boom");
+	REQUIRE(json.at("location").at("instruction") == 0);
+	REQUIRE(WASM::formatDiagnostic(diagnostic)
+			== "error WASM.EXECUTE.TRAP.UNREACHABLE: unreachable in function 0 ($boom)\n"
+			   "  at function 0 ($boom) instruction 0\n"
+			   "  hint: docs/ABI.md#native-host-function-imports");
+}
+
 
 TEST_CASE("diagnostics: a malformed module records a decode id")
 {
 	WASM::clearDiagnostics();
 	// Preamble plus a section that claims five bytes while the input has three.
 	const std::vector<uint8_t> bytes = {
+
+
 		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
 		0x01,0x05,0x01,0x60,0x00
 	};
@@ -8446,6 +8530,74 @@ TEST_CASE("diagnostics: a malformed module records a decode id")
 	REQUIRE(records.back().severity == WASM::DiagnosticSeverity::Error);
 	REQUIRE(records.back().phase == WASM::DiagnosticPhase::Decode);
 }
+
+TEST_CASE("diagnostics benchmark: a non-emitting hot loop is unchanged when the ring is on",
+		"[.diagbench]")
+{
+	// DG-8. `sum_upto` (Test/wasm_wat/branch_hint_loop.wat) is pure arithmetic:
+	// it emits no log record, no trap and no continuation event, so enabling the
+	// ring or installing a sink must not touch its path at all. Diagnostic-only
+	// (hidden tag); the recorded numbers belong in docs/DIAGNOSTICS.md DG-8.
+	WASM::Module module = loadTestModule("branch_hint_loop");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto sum = instance->exportedFunction("sum_upto");
+	REQUIRE(sum.has_value());
+
+	constexpr uint32_t kCalls = 10000;
+	constexpr uint32_t kN = 100; // loop iterations per call
+	constexpr int32_t kExpected = 5050;
+
+	struct Probe { uint32_t records = 0; };
+	const WASM::DiagnosticSink sinkFn = +[](void* userData, const WASM::Diagnostic&) noexcept {
+		++static_cast<Probe*>(userData)->records;
+	};
+
+	auto runCalls = [&]() -> uint32_t {
+		uint32_t acc = 0;
+		for (uint32_t i = 0; i < kCalls; ++i)
+			acc += static_cast<uint32_t>(WASM::callCallable<int32_t>(*sum, kN));
+		return acc;
+	};
+
+	REQUIRE(WASM::callCallable<int32_t>(*sum, kN) == kExpected);
+
+	struct Scenario { const char* label; uint32_t capacity; bool sink; };
+	const Scenario scenarios[] = {
+		{"ring disabled (capacity 0)", 0, false},
+		{"ring=32", WASM::DiagnosticState::kDefaultCapacity, false},
+		{"ring=32 + sink", WASM::DiagnosticState::kDefaultCapacity, true},
+	};
+
+	double times[3] = {};
+	for (std::size_t s = 0; s < 3; ++s) {
+		Probe probe;
+		WASM::setDiagnosticRingCapacity(scenarios[s].capacity);
+		WASM::setDiagnosticSink(scenarios[s].sink ? sinkFn : nullptr,
+				scenarios[s].sink ? &probe : nullptr);
+		WASM::clearDiagnostics();
+		times[s] = bestNsPerOp(runCalls, kCalls, 1);
+		// Nothing on the hot path may emit, so the cap/sink configuration cannot
+		// matter. This is the actual DG-8 assertion; the timings are diagnostic.
+		REQUIRE(probe.records == 0);
+		REQUIRE(WASM::recentDiagnostics().empty());
+	}
+
+	WASM::setDiagnosticSink(nullptr, nullptr);
+	WASM::setDiagnosticRingCapacity(WASM::DiagnosticState::kDefaultCapacity);
+	WASM::clearDiagnostics();
+
+	std::cout << std::fixed << std::setprecision(3)
+			  << "DG-8 benchmark: " << kCalls << " calls x " << kN
+			  << " loop iterations, no diagnostic emitted\n"
+			  << "  " << scenarios[0].label << "   " << times[0] << " ns/call\n"
+			  << "  " << scenarios[1].label << "                    " << times[1] << " ns/call\n"
+			  << "  " << scenarios[2].label << "            " << times[2] << " ns/call\n"
+			  << "  ring=32 / disabled ratio: " << (times[1] / times[0]) << "\n";
+}
+
 
 TEST_CASE("diagnostics: an uncaught exception records WASM.EXECUTE.EXCEPTION")
 {

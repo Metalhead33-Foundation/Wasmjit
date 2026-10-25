@@ -63,6 +63,10 @@ private:
 	// (docs/proposals/EXTENDED_NAME_SECTION.md ENS-5).
 	uint32_t functionIndex;
 	std::string functionLabel;
+	// The name-section spelling of `functionIndex`, interned in the instance for
+	// the generated code's lifetime; null when the module has no name for it.
+	// Carried as the DG-5 trap site (with `functionIndex`/`instructionOffset`).
+	const char* functionName = nullptr;
 	std::vector<jit_value_t>& locals;
 	std::vector<jit_value_t>& valueStack;
 	std::vector<ControlBlock>& controlStack;

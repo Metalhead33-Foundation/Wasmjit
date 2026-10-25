@@ -86,10 +86,20 @@ const char* trapKindName(TrapKind kind);
 // and the boundary may read the trap much later.
 inline constexpr std::size_t kTrapMessageCapacity = 192;
 
+// Absence marker for the compile-time trap site (generated code, a helper with
+// no site, or a host raise). Shared with `DiagnosticLocation`.
+inline constexpr std::uint32_t kNoTrapIndex = 0xFFFFFFFFu;
+
 struct TrapSlot {
-	int  pending;                          // 0 = no trap, non-zero = pending
-	int  kind;                             // TrapKind as an int (the C ABI)
-	char message[kTrapMessageCapacity];    // NUL-terminated, truncated
+	int  pending = 0;                      // 0 = no trap, non-zero = pending
+	int  kind = static_cast<int>(TrapKind::Internal); // TrapKind as an int (the C ABI)
+	// The trap site the backend knew at compile time (DG-5). Helpers and host
+	// raises leave `kNoTrapIndex`/null. `functionName` is interned by the
+	// instance, so it outlives the generated code that embeds the pointer.
+	std::uint32_t functionIndex = kNoTrapIndex;
+	std::uint32_t instructionOffset = kNoTrapIndex;
+	const char*   functionName = nullptr;
+	char message[kTrapMessageCapacity] = {}; // NUL-terminated, truncated
 };
 
 // The calling thread's slot. Never null; the returned object has static storage.
@@ -102,12 +112,24 @@ extern "C" TrapSlot* wasm_trap_slot() noexcept;
 // tail-call trampoline state and runs any deferred cleanup thunks.
 //
 // `detail` is copied into the slot (truncated to `kTrapMessageCapacity`), so the
-// caller keeps ownership of its own string.
+// caller keeps ownership of its own text.
 void reportTrap(TrapKind kind, const char* detail = nullptr) noexcept;
 
-// C-callable entry point for generated code: the kind travels as an int so the
-// calling convention does not depend on how a scoped enum is passed.
+// The compile-time-site form used by generated code: additionally records the
+// module-local function index, the instruction byte offset in the body and the
+// interned function name (or kNoTrapIndex/nullptr when unknown). The site is
+// only stored when this report wins the first-trap race.
+void reportTrapAt(TrapKind kind, const char* detail,
+		std::uint32_t functionIndex, std::uint32_t instructionOffset,
+		const char* functionName) noexcept;
+
+// C-callable entry points for generated code. The kind travels as an int so the
+// calling convention does not depend on how a scoped enum is passed. The `_at`
+// form carries the compile-time trap site for DG-5.
 extern "C" void wasm_trap_report(int kind, const char* message);
+extern "C" void wasm_trap_report_at(int kind, const char* message,
+		std::uint32_t functionIndex, std::uint32_t instructionOffset,
+		const char* functionName);
 
 // True while a trap is pending on the calling thread. Generated code reads
 // `TrapSlot::pending` directly; C++ code uses this.
@@ -128,6 +150,10 @@ struct TrapInfo {
 	bool        trapped = false;
 	TrapKind    kind = TrapKind::Internal;
 	const char* message = nullptr;
+	// DG-5 site; kNoTrapIndex/null when the reporter had no compile-time site.
+	std::uint32_t functionIndex = kNoTrapIndex;
+	std::uint32_t instructionOffset = kNoTrapIndex;
+	const char*   functionName = nullptr;
 };
 
 // Takes the pending trap and clears the slot. `trapped` is false (and kind/message

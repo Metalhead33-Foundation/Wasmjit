@@ -1,9 +1,10 @@
 # Diagnostics and Debugging — Current Surface, Gaps, and Plan
 
-Status: design note / implementation plan. **Revision 5** implements DG-1…DG-4,
-DG-6 and DG-7, the harness half of DG-8, and the terminal-facing extension of
-DG-3:
+Status: design note / implementation plan. **Revision 6** implements DG-0…DG-8
+and the terminal-facing extension of DG-3:
 
+- DG-0 — every validator message classifies into a documented rule family
+  (`validationRuleId()`); explicit ids still win at the index rules.
 - DG-1 — the structured record and the validator/decode boundaries.
 - DG-2 — runtime traps, uncaught exceptions and the four guest log imports.
   The harness's own trap boundary (`TestBackend::invoke`) now calls
@@ -13,23 +14,31 @@ DG-3:
 - DG-4 — continuation and scheduler records: reason leaf, provider, generation,
   state, tag, value/result counts and root presence, including the scheduler's
   invalid-handle, unhandled-suspension, rejected and trapped records.
+- DG-5 — validation/decode records and directly emitted runtime traps carry the
+  function index/name and opcode-stream offset; helper-raised traps keep the
+  message only (no compile-time site).
 - DG-6 — the harness's `--diagnose=PATH [--invoke=EXPORT] [--args=…]` mode: load,
   print the module shape, optionally call one export, and print the structured
   diagnostics of a failure — no Catch2 case required.
 - DG-7 — `--diagnostics=text|json|none`, `--diagnostics-file` and
   `--diagnostics-limit`, plus spec-suite failures that attach the command's
   structured reason (`line N: … [error WASM.EXECUTE.TRAP.…: …]`).
-- DG-8 — the ring bound and the pointer-redaction gate are tested; the
-  benchmark is still open.
+- DG-8 — the ring bound, the pointer-redaction gate and the hot-path benchmark
+  are tested; `[.diagbench]` shows a non-emitting loop is unchanged with the
+  ring on or a sink installed (Release ratio between 0.94 and 1.02 across runs,
+  0 records emitted).
 - **Pretty terminal form** — an opt-in emoji + ANSI line for host-log records,
   rendered with `ctime`. The core default is off; the unit-test harness enables
   it by default (`--diagnostics=none` silences it).
 
 DG-0 is incremental: the index rules, all trap/continuation status mappings, the
-continuation reasons and the log imports have ids; the remaining validator
-rules still share the transitional `WASM.VALIDATE.RULE`. DG-5 is complete for
-validation/decode records (function name + offset) and open for runtime-trap
-locations, which need a backend-preserved decode-to-code map.
+continuation reasons and the log imports have ids; `validationRuleId()` now
+classifies the remaining validator messages into documented rule families
+(§4.2). DG-5 covers validation/decode records and the traps the backend emits
+directly: the backend carries its compile-time function/instruction site through
+the trap slot. Traps raised inside a runtime helper (division, bulk memory,
+string, GC) keep their message only, because the helper has no compile-time
+site.
 
 Before this work, WasmJit had good *local* diagnostics: named validation
 errors, `TrapKind` + copied trap messages, pending exceptions, provider status
@@ -106,9 +115,19 @@ embedder can attach a sink and query the ring; an agent can run the harness with
   failure (`Test/Diagnose.*`).
 - `emitTrapDiagnostic()` is public so any host boundary that reads the pending
   slot directly (the test backend does) records the trap exactly once.
+- `validationRuleId()` classifies the ~250 validator messages into the rule
+  families in §4.2, so every validation failure has a stable id; an explicit id
+  at the site still wins.
+- The trap slot carries the backend's compile-time `{function index, opcode
+  offset, interned name}` site, so a directly emitted runtime trap has the same
+  location shape as a validation record; helper-raised traps stay site-less.
+- The hidden `[.diagbench]` case measures a non-emitting arithmetic loop with the
+  ring disabled, enabled and enabled plus a sink; it asserts zero emissions on
+  that path and prints the per-call times.
 - Spec-suite failures attach up to three structured reasons emitted by that
   command, so a failed script no longer needs a second run to say why.
-- Seventeen Catch2 cases (§7) and `Test/wasm_wat/diagnostics_log.wat`.
+- Twenty Catch2 cases (§7; nineteen plus the hidden `[.diagbench]`) and
+  `Test/wasm_wat/diagnostics_log.wat`.
 
 
 ## 2. Personas and what they need
@@ -251,6 +270,17 @@ Rules:
   terminal form renders a `ctime` date. `startedAt` is the execution state's
   session start and is not reset by `clearDiagnostics()`.
 
+**Runtime trap sites (DG-5).** `TrapSlot` (WasmTrap.hpp) carries the site the
+backend knows while lowering: module-local `functionIndex`, the
+`instructionOffset` in the function's opcode stream (the locals declaration is
+decoded separately, so both validation and runtime offsets start at the first
+opcode), and the name-section spelling interned in the instance. Generated code
+passes them as constants to `wasm_trap_report_at()`; the first report wins, so a
+later site-less report cannot overwrite them. `reportTrap()` (helpers, host
+raises) leaves them unset. `emitTrapDiagnostic()` copies the site into
+`DiagnosticLocation`, which is why `--diagnose` prints the same `at function …`
+line for a trap as for a validation error.
+
 ### 4.2 Identifier taxonomy
 
 Use a small, searchable namespace:
@@ -268,7 +298,8 @@ WASM.COMPONENT.<NAME>
 
 Existing names translate rather than disappear: `TrapKind::NullReference`
 maps to `WASM.EXECUTE.TRAP.NULL_REFERENCE`, `ContinuationStatus::Invalid` maps
-to `WASM.CONTINUATION.INVALID`, and each validator rule gets its own leaf.
+to `WASM.CONTINUATION.INVALID`, and each validator message gets a stable leaf
+(the index rules explicitly, the rest through `validationRuleId()`; §4.2).
 `TrapKind` remains the compact runtime enum; it is not renumbered.
 
 **As implemented:** `WASM::DiagnosticId` holds the constants and
@@ -282,7 +313,8 @@ mappings (a unit test asserts uniqueness). The shipped leaves are:
 | `WASM.DECODE.MALFORMED` | load boundary, message contains “malformed” | Error | `diagnostics: a malformed module records a decode id` |
 | `WASM.DECODE.UNSUPPORTED` | load boundary, other decode refusal | Error | — |
 | `WASM.DECODE.UNSUPPORTED_VALUE_TYPE` | unmodelled value type at load | Error | — |
-| `WASM.VALIDATE.RULE` | unmapped validator rule (transitional) | Error | `diagnostics: a validation failure carries a stable id and a location` |
+| `WASM.VALIDATE.<FAMILY>` (30 family leaves, plus the 11 explicit index/type leaves below) | `validationRuleId()` classification; §4.2 | Error | `diagnostics: validator messages classify into stable rule families`, `diagnostics: a validation failure carries a stable id and a location` |
+| `WASM.VALIDATE.RULE` | fallback: no rule family matched | Error | same cases (the fallback assertion) |
 | `WASM.VALIDATE.UNKNOWN_TYPE` | type index rule | Error | — |
 | `WASM.VALIDATE.TYPE_NOT_FUNCTION` | type index names a non-func type | Error | — |
 | `WASM.VALIDATE.UNKNOWN_FUNCTION` | function index rule | Error | `diagnostics: a mapped validator rule keeps its own id` |
@@ -322,9 +354,62 @@ mappings (a unit test asserts uniqueness). The shipped leaves are:
 | `WASM.CONTINUATION.SCHEDULER.TRAPPED` | task ended with a trap | Error | same |
 | `WASM.CONTINUATION.SCHEDULER.INVALID` | `step` could not resume the task | Error | — |
 
-DG-0 remains open only because `WASM.VALIDATE.RULE` still covers the many
-rules beyond the index family — the table makes that gap explicit rather than
-hiding it behind prose matching.
+**Validator rule families (DG-0).** 247 `fail()` sites exist and most pass only
+a message, so `Validator::fail` classifies the message with
+`validationRuleId()`: an ordered, ASCII-case-insensitive matcher over the rule
+phrasing. The first match wins; an explicit `DiagnosticId` at the call site
+(the index rules and `funcTypeAt`) overrides it. The message still names the
+precise rule; the id names the stable family. This table *is* the order
+contract:
+
+| Id | First matching phrase |
+|---|---|
+| `WASM.VALIDATE.UNKNOWN_LABEL` | `unknown label` |
+| `WASM.VALIDATE.UNKNOWN_TYPE` | `unknown type` |
+| `WASM.VALIDATE.TYPE_NOT_FUNCTION` | `not a function type` |
+| `WASM.VALIDATE.UNKNOWN_FUNCTION` | `unknown function` |
+| `WASM.VALIDATE.UNKNOWN_TABLE` | `unknown table` |
+| `WASM.VALIDATE.UNKNOWN_MEMORY` | `unknown memory` |
+| `WASM.VALIDATE.UNKNOWN_GLOBAL` | `unknown global` |
+| `WASM.VALIDATE.UNKNOWN_TAG` | `unknown tag` |
+| `WASM.VALIDATE.UNKNOWN_LOCAL` | `unknown local` |
+| `WASM.VALIDATE.UNKNOWN_ELEMENT_SEGMENT` | `unknown element segment` |
+| `WASM.VALIDATE.UNKNOWN_DATA_SEGMENT` | `unknown data segment` |
+| `WASM.VALIDATE.OPERAND_STACK` | `operand stack` (checked before `type mismatch`, so the underflow rule keeps its own id) |
+| `WASM.VALIDATE.TYPE_MISMATCH` | `type mismatch` |
+| `WASM.VALIDATE.BLOCK_TYPE` | `block type` |
+| `WASM.VALIDATE.CONTROL_FLOW` | `else without` / `end without` / `if without` / `instruction outside` |
+| `WASM.VALIDATE.ALIGNMENT` | `alignment` |
+| `WASM.VALIDATE.OFFSET_RANGE` | `offset out of range` |
+| `WASM.VALIDATE.LIMITS` | `limits` / `size minimum` / `size maximum` / `declare a maximum` |
+| `WASM.VALIDATE.IMMUTABLE_TARGET` | `immutable` / `mutable` |
+| `WASM.VALIDATE.UNINITIALIZED_LOCAL` | `uninitialized local` |
+| `WASM.VALIDATE.UNDECLARED_FUNCTION_REF` | `undeclared function reference` |
+| `WASM.VALIDATE.DUPLICATE_EXPORT` | `duplicate export` |
+| `WASM.VALIDATE.SECTION_CONSISTENCY` | `section` / `data count` |
+| `WASM.VALIDATE.CONSTANT_TIME` | `constant-time` / `secret` |
+| `WASM.VALIDATE.PROFILE` | `profile` |
+| `WASM.VALIDATE.DESCRIPTOR` | `descriptor` |
+| `WASM.VALIDATE.CAST` | `cast` / `ref.test` |
+| `WASM.VALIDATE.ATOMIC_ORDERING` | `ordering` |
+| `WASM.VALIDATE.ATOMIC` | `atomic` |
+| `WASM.VALIDATE.CONTINUATION` | `continuation` / `cont.bind` / `resume` / `suspend` / `switch` / `handler` |
+| `WASM.VALIDATE.STRING` | `string` |
+| `WASM.VALIDATE.STRUCT` | `struct` |
+| `WASM.VALIDATE.ARRAY` | `array` |
+| `WASM.VALIDATE.TAG` | `tag` |
+| `WASM.VALIDATE.TABLE` | `table` |
+| `WASM.VALIDATE.MEMORY` | `memory` |
+| `WASM.VALIDATE.GLOBAL` | `global` |
+| `WASM.VALIDATE.LOCAL` | `local` |
+| `WASM.VALIDATE.SELECT` | `select` |
+| `WASM.VALIDATE.SHUFFLE` | `shuffle` |
+| `WASM.VALIDATE.TYPE_KIND` | `is not a` / `is not an` / `has no` |
+| `WASM.VALIDATE.RULE` | fallback: no family matched (new prose must be classified here) |
+
+`validationRuleId()` is public and directly tested, so the mapping cannot drift
+silently. A new rule family is a doc + constant + classifier arm; a message edit
+that keeps its rule phrase keeps its id.
 
 ### 4.3 Continuation context
 
@@ -509,8 +594,10 @@ Implemented:
   `SCHEDULER.INVALID_HANDLE`, `UNHANDLED_SUSPENSION`, `SCHEDULER.REJECTED` and
   `SCHEDULER.TRAPPED`.
 - Location: the validator supplies function index/name/instruction offset; the
-  decode boundary supplies phase and id but not yet a byte offset; a runtime
-  trap has no location until the JIT preserves a decode-to-code map (DG-5).
+  decode boundary supplies phase and id but not yet a byte offset; a trap the
+  backend emits directly carries the same `{function, name, instruction}` site
+  through the trap slot. A trap raised inside a runtime helper has no site (the
+  helper has no compile-time location), so its record falls back to the message.
 
 ### 5.3 Module-author command line
 
@@ -610,15 +697,15 @@ Status: ✅ implemented, ◐ partial, ☐ open.
 
 | Milestone | Work | Definition of done | Priority |
 |---|---|---|---|
-| **DG-0 — Inventory and ids** ◐ | Map every validator/trap/continuation message to a stable id; document the mapping. | No duplicate ids; existing tests keep passing; a test asserts each mapped id. **Done for trap kinds, continuation statuses, decode boundaries, log imports and the index rules; the remaining validator rules share `WASM.VALIDATE.RULE` (§4.2).** | P0 |
+| **DG-0 — Inventory and ids** ✅ | Map every validator/trap/continuation message to a stable id; document the mapping. | No duplicate ids; existing tests keep passing; a test asserts each mapped id. **Done: explicit ids for trap kinds, continuation statuses, decode boundaries, log imports and the index rules; `validationRuleId()` classifies the remaining validator messages into the §4.2 families (a new unclassified message lands on `WASM.VALIDATE.RULE` until it is added there).** | P0 |
 | **DG-1 — Structured record** ✅ | Add `Diagnostic`/`DiagnosticLocation` and populate validator and decode paths first. | Validator errors expose id + function/offset; text form is backward-compatible. **Done: `Validator::fail` and the `Module::fromFile` boundaries; thrown messages are unchanged.** | P0 |
 | **DG-2 — Runtime traps and exceptions** ✅ | Populate execute/continuation diagnostics at trap and exception conversion boundaries. | `TrapKind` and pending exception still work; records carry location and continuation context. **Done for traps and uncaught exceptions; continuation context is DG-4.** | P0 |
 | **DG-3 — Bounded sink and JSON** ✅ | Add per-agent sink/ring and harness JSON output. | JSON schema v1 snapshots pass; ring is bounded; no allocation in the trap fast path unless a sink/ring is enabled. **Done: `DiagnosticState`, text/JSON forms, numeric timestamps + `{schema, startedAt, records}` envelope, default capacity 32, capacity 0 disables the ring; the opt-in emoji/ANSI pretty host-log form is the terminal extension.** | P1 |
 | **DG-4 — Continuation/scheduler context** ✅ | Add provider/generation/state/tag/result/root/switch context and scheduler rejection reason. | The wide/throw scheduler tests assert ids and context; no raw pointers by default. **Done: reason leaves + context at every resume/switch failure and scheduler outcome; `switchPeer` never serialized; records emitted inside a worker state are not merged into the resumer (documented in §4.3).** | P1 |
-| **DG-5 — Name/source correlation** ◐ | Consume the Wasm name section; expose function names and, where available, WAT/source positions supplied by tooling. | A named WAT fixture reports `$function`; missing names degrade to indices. **Done for validation/decode records; runtime-trap locations need a backend-preserved map.** | P2 |
+| **DG-5 — Name/source correlation** ✅ | Consume the Wasm name section; expose function names and, where available, WAT/source positions supplied by tooling. | A named WAT fixture reports `$function`; missing names degrade to indices. **Done: validation/decode records and directly emitted runtime traps carry function index/name and opcode-stream offset (`TrapSlot` site + `wasm_trap_report_at`); helper-raised traps (division, bulk memory, string, GC) have no compile-time site and keep the message only.** | P2 |
 | **DG-6 — Module-author tooling** ✅ | A small diagnostic reader/CLI and editor-friendly JSON; document stable ids. | A module author can localize a validation error and a runtime trap without reading engine source. **Done: `--diagnose=PATH [--invoke=EXPORT] [--args=…]` loads, summarizes, calls and reports the structured failure; `--diagnostics=json`/`--diagnostics-file` provide the machine form.** | P2 |
 | **DG-7 — Agent affordances** ✅ | `--diagnostics=json`, stable fixture names and a docs/test map; add `docs/DIAGNOSTICS.md#id` anchors. | An automated agent can go from id → docs → test → source in one pass. **Done: `--diagnostics=json`, the §4.2 id→test table, the diagnostic test suite names, and spec-suite failures that carry the command's `[error ID: …]` reason.** | P2 |
-| **DG-8 — Performance and privacy audit** ◐ | Verify no hot-path regressions when diagnostics are off; redact pointers/values by default; document retention. | Benchmarks unchanged within budget; a redaction test passes. **Done: bounded-ring and pointer-redaction tests, and the trap fast path still returns on `pending == 0`; the benchmark remains open.** | P3 |
+| **DG-8 — Performance and privacy audit** ✅ | Verify no hot-path regressions when diagnostics are off; redact pointers/values by default; document retention. | Benchmarks unchanged within budget; a redaction test passes. **Done: bounded-ring and pointer-redaction tests; `[.diagbench]` asserts a non-emitting loop emits zero records in all three configurations and prints per-call times (Release runs: ~78–95 ns per 100-iteration call, ring-on/off ratio 0.94–1.02, i.e. noise).** | P3 |
 
 ### 6.1 Explicitly out of scope for the first pass
 
@@ -631,7 +718,8 @@ Status: ✅ implemented, ◐ partial, ☐ open.
 
 ## 7. Test plan
 
-Implemented (17 cases, 258 assertions; fixture
+Implemented (19 non-hidden cases, 287 assertions; 20 / 296 with
+`./WasmJit 'diagnostics*'`, which also selects `[.diagbench]`; fixture
 `Test/wasm_wat/diagnostics_log.wat`):
 
 | Gate | Catch2 case | What it pins |
@@ -641,8 +729,11 @@ Implemented (17 cases, 258 assertions; fixture
 | Sink and ring | `diagnostics: a sink sees records without replacing the ring` | the sink observes every emission, the ring still holds them, capacity 0 disables the ring |
 | Panic | `diagnostics: env.panic records a fatal note and traps` | `Fatal` log record + `WASM.EXECUTE.TRAP.INTERNAL`, trap message preserved |
 | Safety | `diagnostics: an unreadable or oversized guest string degrades safely` | out-of-range placeholder, 4096-byte truncation with `...`, invalid UTF-8 replaced with U+FFFD |
-| Validation id | `diagnostics: a validation failure carries a stable id and a location` | `WASM.VALIDATE.RULE`, function index/name (DG-5), instruction offset, text/JSON location |
+| Validation id | `diagnostics: a validation failure carries a stable id and a location` | `WASM.VALIDATE.OPERAND_STACK`, function index/name (DG-5), instruction offset, text/JSON location |
 | Validation leaf | `diagnostics: a mapped validator rule keeps its own id` | `WASM.VALIDATE.UNKNOWN_FUNCTION` |
+| Rule families | `diagnostics: validator messages classify into stable rule families` | 17 representative messages map to the §4.2 family ids; unclassified prose lands on `WASM.VALIDATE.RULE` |
+| Runtime trap location | `diagnostics: a runtime trap carries its function and instruction location` | `named_trap`'s `unreachable` reports function 0, `$boom`, opcode offset 0 in the record, JSON and the text formatter |
+| Hot-path benchmark (hidden `[.diagbench]`) | `diagnostics benchmark: a non-emitting hot loop is unchanged when the ring is on` | `sum_upto` emits zero records with ring off/on/sink; prints ns/call. Run: `./WasmJit '[.diagbench]'` (Release build for meaningful numbers) |
 | Decode | `diagnostics: a malformed module records a decode id` | `WASM.DECODE.MALFORMED`, `Decode` phase, `Error` severity |
 | Exception | `diagnostics: an uncaught exception records WASM.EXECUTE.EXCEPTION` | nothing is recorded while pending; taking it records once |
 | Id stability | `diagnostics: trap and continuation ids are stable and distinct` | all 21 trap leaves and 5 status leaves are total, prefixed and unique |
@@ -659,13 +750,16 @@ Still open, from the original plan:
 1. **Schema snapshots** beyond the inline assertions: a checked-in JSON fixture
    for a validation error, a trap, an uncaught exception, a suspension and a
    rejected scheduler task.
-2. **Runtime-trap location**: the JIT must preserve a decode-to-code map before
-   an execute record can carry a function/instruction location (DG-5).
+2. **Helper-raised trap sites**: `division`, bulk-memory, string and GC helpers
+   call `reportTrap()` with no compile-time site, so their records omit the
+   structured location; passing the caller's site to the helper (or lowering the
+   check into generated code) is the follow-up. Direct traps already carry it.
 3. **Diagnose breadth**: `--diagnose` currently accepts core modules, the `env`
    log imports, one call per run and i32 arguments only; a component mode,
    general value arguments and resolving other host imports are follow-ups.
-4. **Performance**: a benchmark showing no hot-path regression when the ring is
-   disabled and no sink is installed (DG-8).
+4. **Benchmark coverage**: `[.diagbench]` measures a non-emitting loop; a
+   log-heavy workload (one record per iteration, through a sink and through a
+   bounded ring) is not benchmarked yet.
 
 ## 8. Implementation notes and risks
 

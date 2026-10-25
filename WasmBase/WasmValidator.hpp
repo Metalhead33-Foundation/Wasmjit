@@ -54,10 +54,11 @@ private:
 	std::vector<ValueType> locals;
 
 	// Records a structured diagnostic (`WASM.VALIDATE.<LEAF>`) and throws
-	// `ValidationError` with the same text. `id` defaults to the transitional
-	// `WASM.VALIDATE.RULE` for a rule that DG-0 has not mapped yet.
+	// `ValidationError` with the same text. An empty `id` asks
+	// `validationRuleId()` to classify the message into a stable rule family;
+	// a site that knows its rule better passes an explicit `DiagnosticId::…`.
 	[[noreturn]] void fail(const std::string& message,
-			std::string_view id = DiagnosticId::kValidateRule) const;
+			std::string_view id = {}) const;
 
 	// Diagnostic form of a local index in the body being validated
 	// (`"0 ($name)"`); the name-section outer key is the global function index.

@@ -257,7 +257,8 @@ bool LibJitSession::invoke(const WASM::ModuleInstance& instance,
 		trapMessage = info.message != nullptr ? info.message : "";
 		// This harness reads the slot directly instead of calling `checkTrap`,
 		// so it is the host boundary: record the trap here exactly once.
-		WASM::emitTrapDiagnostic(info.kind, info.message);
+		WASM::emitTrapDiagnostic(info.kind, info.message, info.functionIndex,
+				info.instructionOffset, info.functionName);
 		return true;
 	};
 

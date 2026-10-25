@@ -34,7 +34,7 @@ struct ExecutionState {
 	static constexpr std::uint32_t kDeferCapacity = 32;
 
 	// The pending trap. `TrapSlot` is the C-ABI view generated code reads.
-	TrapSlot trapSlot{0, static_cast<int>(TrapKind::Internal), {0}};
+	TrapSlot trapSlot{};
 
 	// Host→Wasm call depth. Zero means no generated frame is on the stack,
 	// which is the only place `WASM::Trap` may be thrown.

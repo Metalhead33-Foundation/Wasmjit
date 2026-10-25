@@ -20,6 +20,9 @@ Validator::Validator(const Module& module, ValidationOptions validationOptions)
 
 void Validator::fail(const std::string& message, std::string_view id) const
 {
+	if (id.empty())
+		id = validationRuleId(message);
+
 	std::string text = message;
 	Diagnostic diagnostic;
 	diagnostic.id = id;
