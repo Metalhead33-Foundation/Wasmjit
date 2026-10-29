@@ -43,10 +43,11 @@ backend-agnostic.
   short-lived script, and ideally no isolation is needed at all. **Many agents
   may execute that one instance's compiled code**, including GPU-style worker
   launches, thread-per-export, async/await via continuations and intra-Wasm
-  threading — accepted as the multithreading model, opt-in and not built yet.
-  **Concurrent execution** and a **re-entrant invoker**
-  are required; **concurrent compilation** is rejected as a feature (unsafe, and
-  its only consumer would be the instance multiplicity the rule forbids). See
+  threading — implemented as the opt-in `ConcurrencyModel::Agents` (the default
+  remains `Single`, one agent inside a call at a time). **Concurrent execution**
+  and a **re-entrant invoker** are supported; **concurrent compilation** is
+  rejected as a feature (unsafe, and its only consumer would be the instance
+  multiplicity the rule forbids). See
   [`docs/THREADSAFETY.md`](docs/THREADSAFETY.md) §3.1–§3.2 and
   [`docs/MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) §2.3.
 - **Still open** (tracked, not started): a second and third backend
@@ -55,14 +56,41 @@ backend-agnostic.
   qmake → CMake move, and the language-support
   studies defined in [`docs/LANGUAGE_FEASIBILITY.md`](docs/LANGUAGE_FEASIBILITY.md)
   (definitions only — neither study nor the readiness audit has been run). The
-  designs for
-  the first two are written down —
+  embedding and plugin designs are written down and implemented —
   [`docs/EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) and
-  [`docs/BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md) — and the one
-  deferred execution-model question (multi-agent) has its own demotion study in
+  [`docs/BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md) — and the former
+  execution-model question (multi-agent) is implemented and recorded in
   [`docs/MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md).
 
-## Documentation
+## Feature completeness (2026-10-29)
+
+The seven notes this milestone closed are at **100% of their implemented binary
+surface**. A feature is allowed to be below 100% only when the upstream proposal
+has **no binary encoding** for it; that is the sole tolerated gap, and it is
+listed explicitly.
+
+| Feature | Note | Status | How it is evidenced |
+|---|---|---|---|
+| Tail calls (`return_call`, `_indirect`, `_ref`) | [`TAILCALLS.md`](docs/proposals/TAILCALLS.md) | **100%** | TC-1…TC-5: native self-tail-call + a per-type-thunk trampoline for every parameter list and result tuple; only `v128` (no upstream case) falls back semantically |
+| Threads and atomics | [`THREADS.md`](docs/proposals/THREADS.md) | **100%** | All 67 atomic handlers, real wait/notify, `ConcurrencyModel::Agents`, per-agent state, multi-mutator-safe GC; `[multiagent]` |
+| Acquire-release atomics + `pause` | [`ACQUIRE_RELEASE_ATOMICS.md`](docs/proposals/ACQUIRE_RELEASE_ATOMICS.md) | **100%** | Decode, ordering-accurate lowering, a real `pause` hint and the two-agent release→acquire edge |
+| Shared-everything threads | [`SHARED_EVERYTHING_THREADS.md`](docs/proposals/SHARED_EVERYTHING_THREADS.md) | **100% of the encodable surface** | SET-1/2/3/6/7: annotations, all 35 shared atomics, the reference-slot barrier, agents; SET-4/SET-5 have **no encoding** (below) |
+| Embedding surface | [`EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) | **100%** | `ES-1…ES-7`: `WASM::Runtime`, tiers, visibility/soname, install/`pkg-config`, out-of-tree consumer |
+| Backend plugin ABI | [`BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md) | **100%** | `BP-0…BP-5`: a real plugin loads by name; every refusal path is a diagnostic-bearing exception |
+| Multi-agent execution | [`MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) | **100%** | `MF-1…MF-8`: opt-in `Agents`, waiter table, entry discipline, GC guards, `[multiagent]` |
+
+**Tolerated below-100% items — no binary encoding exists, so there is nothing
+honest to decode yet:**
+
+- **SET-4** — the managed `waitqueue` type (`0x68` collides with `cont` here) and
+  `thread_local` globals (no assigned `globaltype` encoding).
+- **SET-5** — the component-model thread spawn/join lifecycle builtins.
+
+Memory `memory.atomic.wait/notify` *is* implemented; it is the managed
+waitqueue *type* that is encoding-blocked. When upstream publishes a binary
+form, these become ordinary additive work.
+
+
 
 `docs/` holds the long-form design notes and process guides; `docs/proposals/`
 holds one note per WebAssembly proposal. Every proposal note follows the same
@@ -103,9 +131,9 @@ per-milestone done markers, is the authoritative per-item status.
 | [`LAYERING.md`](docs/LAYERING.md) | The backend-agnosticism rule for `WasmBase/`: what the core may not name, the contracts it owns that a backend must honour, the vocabulary to use instead, and the check to run | Policy note | `████████████████████` current |
 | [`API_ABI_STABILITY.md`](docs/API_ABI_STABILITY.md) | **The current milestone.** The four gates that declare API/ABI stability, the ten surfaces they freeze, the gap classes (additive / per-backend / upstream-blocked / deferred / heavy-refactor), the "no heavy refactoring" audit, the `LibjitDispatcher` → `master` merge readiness, and the measured verdict per gate | Milestone + proximity study | `████████████████████` **met 2026-10-29** — all four gates pass |
 | [`BACKEND_WORK_ORDER.md`](docs/BACKEND_WORK_ORDER.md) | The checklist a backend works from: the two seams (`ModuleInstantiator`, `BackendSession`), the four hooks, the eight ABI obligations, memory/GC ownership, which helpers to call and which to bring, packaging, and a definition of done | Contract + work order | `████████████████████` current |
-| [`EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) | The plan for the embedder-facing surface: `WASM::Runtime` (what it owns, and the store-scoping migration, now complete), the three header tiers and the umbrella header, the version/soname/symbol-visibility policy, the install layout, and a salvage review of an earlier `JitRuntime`/`JitContext` sketch | Design note + plan | `░░░░░░░░░░░░░░░░░░░░` planned — `ES-1…ES-7`; closes `AAS1`/`AAS2` |
-| [`BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md) | Loading code generators from shared libraries behind a narrow C ABI (the Unreal-renderer analogy): the query/descriptor, what may cross the boundary, the nine plugin rules (including serialized compilation and a re-entrant invoke), the nine hard problems, and why the seam stays C++ for now | Feasibility study + interface sketch | `░░░░░░░░░░░░░░░░░░░░` study only — `BP-0` done, `BP-1…BP-5` planned |
-| [`MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) | Whether the class-E multi-agent blocker can be demoted: the one-instance-per-module rule and the accepted concurrency scenarios (GPU-style, thread-per-export, async/await, intra-Wasm threads; concurrent compilation rejected), the per-agent state already in place, the `MA-1…MA-9` re-classification (E → B + A), multithreading on LibJIT/SLJIT/AsmJit, and the opt-in embedder hooks that would mirror the JS-integration seam | Feasibility study | `░░░░░░░░░░░░░░░░░░░░` study only — `MF-0` done; the direction is accepted, the feature is not built |
+| [`EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) | The embedder-facing surface: `WASM::Runtime` (what it owns, and the store-scoping migration, complete), the three header tiers and the umbrella header, the version/soname/symbol-visibility policy, the install layout, and a salvage review of an earlier `JitRuntime`/`JitContext` sketch | Design note + plan | `████████████████████` 100% — `ES-1…ES-7` all done; closes `AAS1`/`AAS2` |
+| [`BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md) | Loading code generators from shared libraries behind a narrow C ABI (the Unreal-renderer analogy): the query/descriptor, what may cross the boundary, the twelve plugin rules (including serialized compilation and a re-entrant invoke), the nine hard problems, and why the seam stays C++ for now | Interface + implementation | `████████████████████` 100% — `BP-0…BP-5` done; a real plugin loads by name and every refusal path is tested |
+| [`MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) | Whether the class-E multi-agent blocker can be demoted: the one-instance-per-module rule and the concurrency scenarios (GPU-style, thread-per-export, async/await, intra-Wasm threads; concurrent compilation rejected), the per-agent state, the `MA-1…MA-9` re-classification (E → B + A), multithreading on LibJIT/SLJIT/AsmJit, and the opt-in embedder hooks mirroring the JS-integration seam | Study + implementation record | `████████████████████` 100% — `MF-1…MF-8` done; `ConcurrencyModel::Agents` is opt-in, `Single` stays the default |
 | [`LANGUAGE_FEASIBILITY.md`](docs/LANGUAGE_FEASIBILITY.md) | The definitions of the two language-support studies and the entry-gate readiness audit that gates them: the **pre-feasibility / scoping** study (screen the canonical `awesome-wasm-langs` list, triage on three axes, cluster by shared blocker, per-cluster charters and trigger conditions, a don't-study list) and the **full feasibility** study (exports, cross-module and native imports, multi-memory/shared-memory interaction, evidence and PoCs); the colour coding and kill signals, the evaluation criteria, the budgets, the `RG1`–`RG6` audit rows of the entry gate, and `LF-0…LF-3` | Process definition + study charter | `░░░░░░░░░░░░░░░░░░░░` definitions only — neither study nor the readiness audit has been run, and no language is assessed |
 
 ### Proposal notes (`docs/proposals/`)
@@ -114,7 +142,7 @@ per-milestone done markers, is the authoritative per-item status.
 |---|---|---|---|---|
 | [`DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) | Diagnostics and debugging (cross-cutting design/plan) | — | `████████████████████` DG-0…DG-8 shipped | Ships the stable diagnostic record/id/schema (`wasmjit.diagnostic.v1`), a bounded per-execution-state ring plus an embedder sink, per-record `time_t` stamps with a `{schema, startedAt, records}` JSON envelope, text/JSON forms (nlohmann_json), an opt-in emoji+ANSI pretty host-log form (on by default in the unit tests), the `env.info`/`warn`/`error`/`panic` imports, continuation/scheduler context, a documented validator rule-family classifier, runtime-trap sites for directly emitted traps, harness flags (`--diagnostics=text\|json\|none`, `--diagnostics-file`, `--diagnostics-limit`), a one-shot `--diagnose=PATH [--invoke=EXPORT] [--args=…]` module reader, spec failures that carry their structured reason, and the hidden `[.diagbench]` hot-path benchmark |
 | [`MULTI_VALUE.md`](docs/proposals/MULTI_VALUE.md) | Multi-value | 2.0 | `████████████████████` 100% | Engine complete (block parameters, multi-result calls via a caller-provided result buffer). The harness marshals every path (`assert_return` compares the tuple; bare actions, `assert_trap`, `assert_exception` and `assert_exhaustion` pass a buffer), and embedders get `WASM::callCallableWithResults(callable, buffer, args...)` with the buffer layout documented in `docs/ABI.md` (MV4); the multi-value test exercises it |
-| [`TAILCALLS.md`](docs/proposals/TAILCALLS.md) | Tail calls | 3.0 | `██████████████████░░` 90% | TC-1…TC-4 done: direct, indirect and `ref` tails run in constant stack; the trampoline is signature-restricted |
+| [`TAILCALLS.md`](docs/proposals/TAILCALLS.md) | Tail calls | 3.0 | `████████████████████` 100% | TC-1…TC-5 done: direct, indirect and `ref` tails run in constant stack; the trampoline dispatches through a per-type thunk, so differing parameter lists and multi-result tuples are covered. Only a `v128` link (no upstream script has one) uses the semantic fallback |
 | [`SMALL_PROPOSALS.md`](docs/proposals/SMALL_PROPOSALS.md) | Sign-extension, non-trapping `trunc_sat`, branch hinting | 2.0 / 3.0 | `██████████████████░░` 90% | First two implemented + manually tested; the *trapping* `trunc_f*` and integer `div`/`rem` now genuinely trap (they used to silently produce a value); branch hints are parsed and deliberately non-semantic |
 | [`MEMORY64.md`](docs/proposals/MEMORY64.md) | Memory64 | 3.0 | `████████████████████` 100% | M64-1/M64-3 done: 64-bit `size`/`grow`, the unsigned-address overflow-safe bound check, `spectest.table64`, and a manual 64-bit test. M2 is done too: the validator types every memory instruction against the declared index type and the linker matches it (`LinearMemory::is64`), so all 32 curated `assert_unlinkable` cases reject and all 12 curated 64-bit scripts are green |
 | [`MULTI_MEMORY.md`](docs/proposals/MULTI_MEMORY.md) | Multiple memories | 3.0 | `████████████████████` 100% | MM-1…MM-4 done: `memidx` is bounds-checked (compile time + in the helpers), `memory-multi` is curated, a cross-memory `memory.copy` is tested both ways, and two imported memories link through `RegistryImportResolver` with independent address spaces and a cross-copy between them |
@@ -123,9 +151,9 @@ per-milestone done markers, is the authoritative per-item status.
 | [`GC_EXTENSIONS.md`](docs/proposals/GC_EXTENSIONS.md) | Multibyte array access, more array constructors, frozen values | proposal | `████████████████████` 100% | GX-1 done: `MemArg` decodes bit 5 + `typeidx`, and every scalar/SIMD load/store addresses a GC array byte-wise (null check, `len * elementSize` bounds, offset/wrap guards, alignment only a hint). GX-2 done: `array.new_array/new_memory/new_table` copy an array, memory or table slice with the GC-5 trap order; upstream assigns no opcodes, so `0xFB 0x20–0x22` are provisional and must be renumbered when it does. GX-4 done: two hand-built fixtures (19 + 24 assertions) cover width/endianness, unaligned addresses, the three OOB traps and the validation rejections. GX-3 (Frozen Values) is deferred because the upstream proposal has no stable encoding or phase model, not because the engine lacks a hook |
 | [`BULK_MEMORY.md`](docs/proposals/BULK_MEMORY.md) | Bulk memory operations | 2.0 | `████████████████████` 100% | BM-1…BM-6 done: recoverable traps, dropped/empty segment semantics, extended-const offsets, one-time segment evaluation, and the `data count` requirement (`memory.init`/`data.drop` without the section are rejected); `memory_init` 183/0, `elem` 108/0, `table_init` 725/0 |
 | [`FUNCTION_REFERENCES.md`](docs/proposals/FUNCTION_REFERENCES.md) | Typed function references | 3.0 | `████████████████████` 100% | FR-1…FR-8 done: every `Callable` carries its canonical `TypeId` and is identified through the Store's callable-range registry (`GC-1`), so a cross-module `ref.test funcref` needs no per-instance scan (`ref_test` 71/0, `extern` 18/0); `resolveGlobalRefFuncs()` resolves `ref.func` in a global initialiser (`GC.md` G8). FR-7 types `call_ref`, the `br_on_*` branches and the declared-function rule. FR-6/FR-8 now close typed-reference storage: a typed `(ref null $t)` survives a typed table and a mutable global, and `call_ref`/`return_call_ref` call through both (`function_references.wat`, 10 assertions) |
-| [`THREADS.md`](docs/proposals/THREADS.md) | Threads and atomics | separate | `████████████████░░░░` 80% | **Single-agent execution today; multi-agent on the one instance is the accepted direction, opt-in and not built** (`TD9`, TH-5, [`MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md)). At most one instance per module — multiple instances are ruled out ([`THREADSAFETY.md`](docs/THREADSAFETY.md) §3.1). All 67 atomic handlers execute; shared memory rejects a missing maximum; `grow` publishes with a seq-cst fence, `size` acquire-loads shared metadata, and active data init ends with a barrier (TH-3). Trap, exception and tail-call state belong to the `Agent`/`ExecutionState` (TRAP-6 done); `Store`, type interning, GC heap and string store are mutex-guarded for host-side concurrency. The stack-switching A/B continuations are execution contexts, not agents. §4.3.1 lists the concrete TH-5 blockers: scheduler/thread lifecycle, one mutable instance, multi-mutator GC, waiter table, host-side locks, execution-context-only continuations, provider gaps, the adapter-only JSPI seam and missing multi-agent tests |
-| [`ACQUIRE_RELEASE_ATOMICS.md`](docs/proposals/ACQUIRE_RELEASE_ATOMICS.md) | Acquire-release atomics and `pause` | proposal | `█████████████████░░░` 85% | ARA-1/2/3 done in the single-agent build: `MemArg` bit 4 + `u8` ordering (`AtomicMemArg`), `atomic.fence` ordering, `0xFE 0x04` `pause` as a no-op, and distinct acquire/release/acq-rel lowering. Ordinary memargs reject bit 4; malformed flags are decode errors. A raw-binary fixture executes acqrel store/load + pause. Remaining: two-agent observation, deferred with THREADS TH-5 |
-| [`SHARED_EVERYTHING_THREADS.md`](docs/proposals/SHARED_EVERYTHING_THREADS.md) | Shared-everything threads | proposal | `███████████░░░░░░░░░` 55% | SET-1 partial and SET-3 done: shared table/global/segment flags, `sharecomptype` and shared heap refs decode; all 35 working-draft `0xFE 0x4F–0x71` global/table/struct/array atomics plus `ref.i31_shared` validate and execute through the ordered atomic helpers. Host-side hardening (SET-2) covers Store/type/GC/string locks, and trap, exception and tail-call state now belongs to the per-agent `ExecutionState` (TRAP-6 done; true multi-agent execution remains TH-5 / SET-7). The stack-switching A/B continuations are execution contexts, not agents. Missing: multi-mutator GC/agents (THREADS TH-5), waitqueues (0x68 collides with `cont`), `thread_local` globals and thread lifecycle |
+| [`THREADS.md`](docs/proposals/THREADS.md) | Threads and atomics | separate | `████████████████████` 100% | **TH-1…TH-6 done.** `ConcurrencyModel::Agents` is the opt-in multi-agent model (one instance, many host threads; `Single` stays the default), with a real address-keyed waiter table, an atomic entry counter, per-agent trap/tail-call state, a multi-mutator-safe GC path and `[multiagent]` coverage. All 67 atomic handlers execute; shared memory/max checks, `grow`/`size` ordering and the data-init barrier hold. At most one instance per module — multiple instances are ruled out ([`THREADSAFETY.md`](docs/THREADSAFETY.md) §3.1); concurrent compilation is rejected |
+| [`ACQUIRE_RELEASE_ATOMICS.md`](docs/proposals/ACQUIRE_RELEASE_ATOMICS.md) | Acquire-release atomics and `pause` | proposal | `████████████████████` 100% | ARA-1/2/3 done incl. the two-agent observation: `MemArg` bit 4 + `u8` ordering (`AtomicMemArg`), `atomic.fence` ordering, `0xFE 0x04` `pause` as a real hint, and distinct acquire/release/acq-rel lowering. Ordinary memargs reject bit 4; malformed flags are decode errors. `[multiagent]` runs the producer/consumer release→acquire edge |
+| [`SHARED_EVERYTHING_THREADS.md`](docs/proposals/SHARED_EVERYTHING_THREADS.md) | Shared-everything threads | proposal | `████████████████████` 100% of the encodable surface | SET-1/2/3/6/7 done: shared table/global/segment flags, `sharecomptype` and shared heap refs decode; all 35 working-draft `0xFE 0x4F–0x71` global/table/struct/array atomics plus `ref.i31_shared` validate and execute through the ordered helpers; reference-slot atomics run the retain/release barrier. `ConcurrencyModel::Agents` makes the one instance concurrently callable and `[multiagent]` covers it. **SET-4 (managed waitqueue/TLS) and SET-5 (component thread lifecycle) are the only gaps and are encoding-blocked** — the draft assigns no stable binary form (`0x68` collides with `cont`) |
 | [`MUTABLE_GLOBALS.md`](docs/proposals/MUTABLE_GLOBALS.md) | Import/export of mutable globals | 2.0 | `████████████████████` 100% | MG-1…MG-5 done: imported globals are borrowed **cells** (`VMContext::globals` is `Value**`), so a mutable import aliases the exporter instead of copying it; `registerExports` publishes the exporter's cell and the resolver matches the type *and* mutability at link time. `global` is now curated **77/0/47** (was 70/0/54), and the `shared_global_a/b` tests prove a write through either instance is visible through the other |
 | [`EXTENDED_CONST.md`](docs/proposals/EXTENDED_CONST.md) | Extended constant expressions | 3.0 | `████████████████████` 100% | EC-1…EC-5 done: the six `i32`/`i64` `.add`/`.sub`/`.mul` forms evaluate with wrap-around, imported and earlier defined globals resolve (`data` 34/0), `v128.const` initialisers work, and the validator now types every initializer — a supported arithmetic form with the wrong operand type is rejected, and `v128.const`/`ref.*` are typed |
 | [`EXCEPTIONS.md`](docs/proposals/EXCEPTIONS.md) | Exception handling (`exnref`) | 3.0 | `████████████████████` 100% | The runtime and proposal surface are complete. `exn`/`exnref`/`nullexnref` are modelled end-to-end (EX-1); tags get a store-scoped `TagId`, imported tags alias the exporter and their payload type is checked (EX-2); `throw`/`throw_ref` create Store-owned exception objects, dispatch statically to the innermost matching `try_table` catch and otherwise propagate as a pending exception checked at every call site (EX-3); `try_table` routes every catch form including `*_ref` (EX-4); `assert_exception` and manual tests verify it (EX-5); an `exnref` captured by `catch_all_ref` round-trips through `table.set`/`table.get` (EX-6). **`throw` 13/0, `throw_ref` 15/0, `try_table` 65/0, `ref_null` 34/0**, all curated; the default suite is 9,175 assertions / 338 cases |
@@ -304,6 +332,7 @@ cd build/<config>
 ./Test/WasmJit                 # everything
 ./Test/WasmJit '~[spec]'       # hand-written unit tests only
 ./Test/WasmJit '[spec]'        # spec suite (scripts chosen via WASM_SPEC_SCRIPTS)
+./Test/WasmJit '[multiagent]'  # two agents on one instance (TH-5)
 ```
 
 ### WebAssembly spec testsuite
@@ -319,13 +348,18 @@ Script selection, expected output and current limitations are covered in
 
 ## Near-Term Expectations
 
-The codebase is a work in progress. Expect rough edges in a few areas:
+The codebase is the product of an API/ABI-stability milestone, but it is still a
+work in progress:
 
-- API shape is not finalized yet — `WASM::Runtime` is the declared runtime
-  surface, but it is not frozen and the tier/soname policy is still open
-- the shared libraries build, but packaging/installation is not in place yet
-- backend abstraction is still evolving
-- the test harness in `main.cpp` does not represent the intended final embedding interface
+- `WASM::Runtime` is the declared runtime surface and its additive-only policy is
+  enforced by `Test/abi-check.sh`; the tier/soname policy is documented in
+  [`docs/EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) §7
+- the shared libraries install with headers and a `wasmjit.pc`; the only
+  packaging work left is vcpkg/Conan-style recipes, if anyone wants them
+- backend abstraction is stable enough for a second backend (see the
+  [`work order`](docs/BACKEND_WORK_ORDER.md)); Asmjit/SLJIT are not started
+- the Catch2 executable is still a test harness, not the embedding interface;
+  the supported embedding interface is the installed `wasmjit/wasmjit.hpp`
 
 ## Intent
 

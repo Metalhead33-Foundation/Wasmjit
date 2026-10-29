@@ -49,16 +49,18 @@ namespace WASM {
 // Concurrency: compilation is serialized, so `instantiate` must not be called
 // concurrently on one runtime (docs/BACKEND_PLUGIN_ABI.md §6 rule 4); `safe-
 // point()` and `load*` follow the same rule. Execution is different — calls on
-// *different* instances may run on different agents, while one instance refuses a
-// second entrant (docs/MULTI_AGENT_FEASIBILITY.md MF-2).
+// *different* instances may run on different agents, and one instance's entry
+// discipline follows `RuntimeConfig::concurrency`: `Single` refuses a second
+// entrant, `Agents` admits several (docs/MULTI_AGENT_FEASIBILITY.md MF-2/MF-7).
 
 struct RuntimeConfig {
 	// The language subset every load and instantiation is gated by
 	// (docs/proposals/PROFILES.md). The default is the full profile.
 	ProfileConfig     profile{};
 
-	// The execution model (docs/MULTI_AGENT_FEASIBILITY.md §6.2). `Agents` is
-	// accepted as a direction and refused here until it is built.
+	// The execution model (docs/MULTI_AGENT_FEASIBILITY.md §6.2). `Single` is
+	// the default; `Agents` lets several host threads enter the one instance
+	// concurrently (docs/proposals/THREADS.md TH-5).
 	ConcurrencyModel  concurrency = ConcurrencyModel::Single;
 
 	// Borrowed; must outlive the runtime. A per-instance override stays legal.
@@ -163,7 +165,7 @@ Ret Runtime::callExport(ModuleInstance& instance, std::string_view name, Args&&.
 	if (callable->fnPtr == nullptr)
 		throw std::runtime_error("exported function '" + std::string(name)
 				+ "' has no compiled body (this backend does not execute modules)");
-	if (!instance.tryEnterCall())
+	if (!instance.enterCall(config_.concurrency == ConcurrencyModel::Agents))
 		throw std::runtime_error("the instance is already executing a call; concurrent"
 				" execution of one instance is not supported (ConcurrencyModel::Single,"
 				" docs/MULTI_AGENT_FEASIBILITY.md MF-2)");
@@ -186,7 +188,7 @@ void Runtime::callExportWithResults(ModuleInstance& instance, std::string_view n
 	if (callable->fnPtr == nullptr)
 		throw std::runtime_error("exported function '" + std::string(name)
 				+ "' has no compiled body (this backend does not execute modules)");
-	if (!instance.tryEnterCall())
+	if (!instance.enterCall(config_.concurrency == ConcurrencyModel::Agents))
 		throw std::runtime_error("the instance is already executing a call; concurrent"
 				" execution of one instance is not supported (ConcurrencyModel::Single,"
 				" docs/MULTI_AGENT_FEASIBILITY.md MF-2)");

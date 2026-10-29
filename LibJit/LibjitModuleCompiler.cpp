@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <span>
+#include <unordered_map>
 #include <vector>
 namespace LibJIT {
 
@@ -249,13 +250,96 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		internals.internalCallables[i].rawFnPtr = entryPoint;
 	}
 
+	// ── Tail-call thunks (one per function type) ─────────────────────
+	// A thunk hides the callee's real signature behind one uniform entry:
+	//
+	//   void thunk(VMContext*, void* fn, uint64_t* args, uint64_t* results,
+	//              void* resultBuffer)
+	//
+	// The driver can therefore re-dispatch a pending tail call without knowing
+	// which function — or which signature — the chain reaches next. This is
+	// what lifts TC-2's identical-signature restriction: only the *parameters*
+	// vary along a chain, because a tail call's results must match its
+	// caller's. See docs/TAILCALLS.md TC-2/TC-3.
+	jit_type_t thunkSig;
+	{
+		jit_type_t params[5] = {jit_type_void_ptr, jit_type_void_ptr,
+			jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr};
+		thunkSig = jit_type_create_signature(jit_abi_cdecl, jit_type_void, params, 5, 1);
+	}
+
+	std::unordered_map<uint32_t, void*> tailThunks;
+	const auto generateTailThunk = [&](uint32_t typeIdx) -> void* {
+		const auto known = tailThunks.find(typeIdx);
+		if (known != tailThunks.end())
+			return known->second;
+		if (module.typeView(typeIdx).kind() != WASM::CanonTypeKind::Func)
+			return nullptr;
+		const WASM::FuncType ft = module.funcTypeAt(typeIdx);
+		if (!WASM::tailCallSlotsSupported(ft))
+			return nullptr;
+
+		jit_type_t sig = static_cast<jit_type_t>(internals.translatedTypes[typeIdx]);
+		jit_function_t thunk = jit_function_create(context, thunkSig);
+		jit_value_t ctx = jit_value_get_param(thunk, 0);
+		jit_value_t fn = jit_value_get_param(thunk, 1);
+		jit_value_t argSlots = jit_value_get_param(thunk, 2);
+		jit_value_t resultSlots = jit_value_get_param(thunk, 3);
+		jit_value_t resultBuffer = jit_value_get_param(thunk, 4);
+
+		const bool hasResultBuffer = ft.results.size() > 1;
+		std::vector<jit_value_t> callArgs;
+		callArgs.reserve(1 + ft.params.size() + (hasResultBuffer ? 1u : 0u));
+		callArgs.push_back(ctx);
+		for (size_t p = 0; p < ft.params.size(); ++p) {
+			jit_type_t pt = jit_type_get_param(sig, static_cast<unsigned>(p) + 1);
+			callArgs.push_back(jit_insn_load_relative(thunk, argSlots,
+				static_cast<jit_nint>(p * WASM::kTailCallSlotBytes), pt));
+		}
+		if (hasResultBuffer)
+			callArgs.push_back(resultBuffer);
+		jit_value_t ret = jit_insn_call_indirect(thunk, fn, sig, callArgs.data(),
+			static_cast<unsigned>(callArgs.size()), 0);
+		if (ft.results.size() == 1)
+			jit_insn_store_relative(thunk, resultSlots, 0, ret);
+		jit_insn_return(thunk, nullptr);
+
+		if (jit_function_compile(thunk) != JIT_RESULT_OK) {
+			std::fprintf(stderr, "tail thunk compile failed for type %u\n", typeIdx);
+			std::abort();
+		}
+		void* entry = nullptr;
+		if (jit_function_compile_entry(thunk, &entry) != JIT_RESULT_OK || entry == nullptr) {
+			std::fprintf(stderr, "tail thunk entry failed for type %u\n", typeIdx);
+			std::abort();
+		}
+		tailThunks.emplace(typeIdx, entry);
+		return entry;
+	};
+
+	// Every callable a wasm call can reach carries its type's thunk: internal
+	// functions, wasm imports (whose `rawFnPtr` is the exporter's entry) and
+	// native imports (whose `fnPtr` is the host entry). A callable registered
+	// by the embedder outside this module may have no thunk; the indirect/ref
+	// tail-call sites therefore keep a runtime null check and fall back to
+	// `call` + `return` for exactly that case.
+	for (uint32_t i = 0; i < module.internalFunctionTypeIndices.size(); ++i)
+		internals.internalCallables[i].tailEntry =
+			generateTailThunk(module.internalFunctionTypeIndices[i]);
+	for (uint32_t i = 0; i < module.importFunctions.size()
+			&& i < internals.importStorage.size(); ++i) {
+		internals.importStorage[i].tailEntry =
+			generateTailThunk(module.importFunctions[i].typeIdx);
+	}
+
 	// ── Trampoline drivers ──────────────────────────────────────────
 	// Each internal function gets a driver with the same signature. The driver
-	// loops: it calls the current target's *raw* entry point and, when that
-	// returned with a pending tail call in the host-thread-local state, reloads the target
-	// and arguments and iterates. Callables expose the driver as `fnPtr`; the
-	// raw entry lives in `rawFnPtr`. This is what keeps a tail-call chain from
-	// growing the host stack. See docs/TAILCALLS.md (TC-2).
+	// calls the current target's raw entry once, then loops as long as the
+	// callee requested a tail call: it resolves the next target's thunk and
+	// re-enters through the uniform thunk ABI. Callables expose the driver as
+	// `fnPtr`; the raw entry lives in `rawFnPtr`. This keeps a tail-call chain
+	// — including one whose links have different parameter types — from
+	// growing the host stack.
 	for (uint32_t i = 0; i < module.internalFunctionTypeIndices.size(); ++i)
 	{
 		const uint32_t typeIdx = module.internalFunctionTypeIndices[i];
@@ -269,42 +353,67 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		// parameter count comes from the FuncType, not from the signature.
 		const unsigned int paramCount = static_cast<unsigned int>(driverSig.params.size());
 		const bool hasResultBuffer = driverSig.results.size() > 1;
+		const bool singleResult = driverSig.results.size() == 1;
+		// A struct-typed result (`v128`) never enters the trampoline (the call
+		// sites fall back), so it is returned directly instead of through the
+		// untyped result slot.
+		const bool slotResult = singleResult && !jit_type_is_struct(retType);
 
 		WASM::Callable* selfCallable = &internals.internalCallables[i];
 		jit_value_t target = jit_value_create(driver, jit_type_void_ptr);
 		jit_insn_store(driver, target, jit_value_create_nint_constant(
 			driver, jit_type_void_ptr, reinterpret_cast<jit_nint>(selfCallable)));
 
-		std::vector<jit_value_t> slots(paramCount);
-		for (unsigned int p = 0; p < paramCount; ++p) {
-			jit_type_t pt = jit_type_get_param(sig, p + 1);
-			slots[p] = jit_value_create(driver, pt);
-			jit_insn_store(driver, slots[p], jit_value_get_param(driver, p + 1));
+		// The context follows the chain. A wasm callee's own context becomes
+		// current; a native import (context null) must see its *caller's*
+		// context, so it keeps the previous link's value (docs/ABI.md).
+		jit_value_t currentCtx = jit_value_create(driver, jit_type_void_ptr);
+		jit_insn_store(driver, currentCtx, jit_value_get_param(driver, 0));
+
+		// Resolve the trampoline state once. It belongs to the current
+		// execution state (an Agent), so generated code never embeds the
+		// compiling thread's address.
+		jit_type_t stateSig = jit_type_create_signature(jit_abi_cdecl,
+			jit_type_void_ptr, nullptr, 0, 1);
+		jit_value_t state = jit_value_create(driver, jit_type_void_ptr);
+		jit_insn_store(driver, state, jit_insn_call_native(driver, "wasm_tail_call_state",
+			reinterpret_cast<void*>(&WASM::currentTailCallState), stateSig, nullptr, 0, 0));
+		if (hasResultBuffer) {
+			jit_insn_store_relative(driver, state,
+				static_cast<jit_nint>(offsetof(WASM::TailCallState, resultBuffer)),
+				jit_value_get_param(driver, paramCount + 1));
 		}
 
-		jit_label_t loopLabel = jit_label_undefined;
-		jit_label_t doneLabel = jit_label_undefined;
-		// The trap slot is thread-local; resolve it once, before the loop.
+		// The trap slot is per execution state; resolve it once, before the loop.
 		jit_type_t trapSlotSig = jit_type_create_signature(jit_abi_cdecl,
 			jit_type_void_ptr, nullptr, 0, 1);
 		jit_value_t trapSlot = jit_value_create(driver, jit_type_void_ptr);
 		jit_insn_store(driver, trapSlot, jit_insn_call_native(driver, "wasm_trap_slot",
 			reinterpret_cast<void*>(&WASM::wasm_trap_slot), trapSlotSig, nullptr, 0, 0));
-		jit_insn_label(driver, &loopLabel);
 
+		// First link: our own raw entry with the typed parameters.
 		jit_value_t fnPtr = jit_insn_load_relative(driver, target,
-			offsetof(WASM::Callable, rawFnPtr), jit_type_void_ptr);
+			static_cast<jit_nint>(offsetof(WASM::Callable, rawFnPtr)), jit_type_void_ptr);
 		jit_value_t calleeCtx = jit_insn_load_relative(driver, target,
-			offsetof(WASM::Callable, context), jit_type_void_ptr);
+			static_cast<jit_nint>(offsetof(WASM::Callable, context)), jit_type_void_ptr);
 		std::vector<jit_value_t> callArgs(1 + static_cast<size_t>(paramCount)
 				+ (hasResultBuffer ? 1u : 0u));
 		callArgs[0] = calleeCtx;
 		for (unsigned int p = 0; p < paramCount; ++p)
-			callArgs[1 + p] = jit_insn_load(driver, slots[p]);
+			callArgs[1 + p] = jit_value_get_param(driver, p + 1);
 		if (hasResultBuffer)
 			callArgs.back() = jit_value_get_param(driver, paramCount + 1);
 		jit_value_t callRet = jit_insn_call_indirect(driver, fnPtr, sig, callArgs.data(),
 			static_cast<unsigned>(callArgs.size()), 0);
+		if (slotResult) {
+			jit_insn_store_relative(driver, state,
+				static_cast<jit_nint>(offsetof(WASM::TailCallState, results)), callRet);
+		}
+
+		jit_label_t loopLabel = jit_label_undefined;
+		jit_label_t doneLabel = jit_label_undefined;
+		jit_label_t keepCtxLabel = jit_label_undefined;
+		jit_insn_label(driver, &loopLabel);
 
 		// A trap reported by the callee unwinds by returning: stop the driver
 		// instead of re-dispatching.
@@ -314,33 +423,59 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 			jit_value_create_nint_constant(driver, jit_type_int, 0));
 		jit_insn_branch_if_not(driver, noTrap, &doneLabel);
 
-		// The state belongs to the current execution state (an Agent); ask the
-		// runtime for it instead of embedding the compiling thread's TLS address.
-		jit_type_t stateSig = jit_type_create_signature(jit_abi_cdecl,
-			jit_type_void_ptr, nullptr, 0, 1);
-		jit_value_t state = jit_insn_call_native(driver, "wasm_tail_call_state",
-			reinterpret_cast<void*>(&WASM::currentTailCallState), stateSig,
-			nullptr, 0, 0);
 		jit_value_t pending = jit_insn_load_relative(driver, state,
-			offsetof(WASM::TailCallState, pending), jit_type_int);
+			static_cast<jit_nint>(offsetof(WASM::TailCallState, pending)), jit_type_int);
 		jit_insn_branch_if_not(driver, pending, &doneLabel);
 
+		// Next link. A wasm callee's context becomes current; a native import
+		// keeps the caller's, which is the ABI rule for a native call.
 		jit_insn_store(driver, target, jit_insn_load_relative(driver, state,
-			offsetof(WASM::TailCallState, target), jit_type_void_ptr));
-		for (unsigned int p = 0; p < paramCount; ++p) {
-			jit_type_t pt = jit_type_get_param(sig, p + 1);
-			jit_insn_store(driver, slots[p], jit_insn_load_relative(driver, state,
-				static_cast<jit_nint>(offsetof(WASM::TailCallState, args) + p * sizeof(uint64_t)), pt));
-		}
-		jit_insn_store_relative(driver, state, offsetof(WASM::TailCallState, pending),
+			static_cast<jit_nint>(offsetof(WASM::TailCallState, target)), jit_type_void_ptr));
+		jit_value_t nextCtx = jit_insn_load_relative(driver, target,
+			static_cast<jit_nint>(offsetof(WASM::Callable, context)), jit_type_void_ptr);
+		jit_insn_branch_if_not(driver, nextCtx, &keepCtxLabel);
+		jit_insn_store(driver, currentCtx, nextCtx);
+		jit_insn_label(driver, &keepCtxLabel);
+
+		jit_value_t thunk = jit_insn_load_relative(driver, target,
+			static_cast<jit_nint>(offsetof(WASM::Callable, tailEntry)), jit_type_void_ptr);
+		// A compiled function's `fnPtr` is its driver, so the thunk must use
+		// the raw entry; a native import has no raw entry and uses `fnPtr`.
+		jit_value_t dispatchFn = jit_value_create(driver, jit_type_void_ptr);
+		jit_insn_store(driver, dispatchFn, jit_insn_load_relative(driver, target,
+			static_cast<jit_nint>(offsetof(WASM::Callable, rawFnPtr)), jit_type_void_ptr));
+		jit_label_t haveFnLabel = jit_label_undefined;
+		jit_insn_branch_if(driver, dispatchFn, &haveFnLabel);
+		jit_insn_store(driver, dispatchFn, jit_insn_load_relative(driver, target,
+			static_cast<jit_nint>(offsetof(WASM::Callable, fnPtr)), jit_type_void_ptr));
+		jit_insn_label(driver, &haveFnLabel);
+
+		// Clear before entering the next link: that link may set it again.
+		jit_insn_store_relative(driver, state,
+			static_cast<jit_nint>(offsetof(WASM::TailCallState, pending)),
 			jit_value_create_nint_constant(driver, jit_type_int, 0));
+
+		jit_value_t argsAddr = jit_insn_add(driver, state,
+			jit_value_create_nint_constant(driver, jit_type_void_ptr,
+				static_cast<jit_nint>(offsetof(WASM::TailCallState, args))));
+		jit_value_t resultsAddr = jit_insn_add(driver, state,
+			jit_value_create_nint_constant(driver, jit_type_void_ptr,
+				static_cast<jit_nint>(offsetof(WASM::TailCallState, results))));
+		jit_value_t resultBuffer = jit_insn_load_relative(driver, state,
+			static_cast<jit_nint>(offsetof(WASM::TailCallState, resultBuffer)), jit_type_void_ptr);
+		jit_value_t thunkArgs[5] = {currentCtx, dispatchFn, argsAddr, resultsAddr, resultBuffer};
+		jit_insn_call_indirect(driver, thunk, thunkSig, thunkArgs, 5, 0);
 		jit_insn_branch(driver, &loopLabel);
 
 		jit_insn_label(driver, &doneLabel);
-		if (retType == jit_type_void)
+		if (retType == jit_type_void || hasResultBuffer) {
 			jit_insn_return(driver, nullptr);
-		else
+		} else if (slotResult) {
+			jit_insn_return(driver, jit_insn_load_relative(driver, state,
+				static_cast<jit_nint>(offsetof(WASM::TailCallState, results)), retType));
+		} else {
 			jit_insn_return(driver, callRet);
+		}
 
 		int driverResult = jit_function_compile(driver);
 		if (driverResult != JIT_RESULT_OK) {

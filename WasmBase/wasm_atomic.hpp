@@ -8,6 +8,8 @@
 WASMJIT_VISIBLE_BEGIN
 #include <cstdint>
 
+namespace WASM { struct VMContext; }
+
 // ── Shared atomic helper ABI (docs/proposals/THREADS.md TH-1) ───────────────
 //
 // Generated code computes the *bounds-checked* effective address itself — the
@@ -69,16 +71,34 @@ void wasm_atomic_fence(uint32_t ordering);
 // proposal does not melt a core on a target where the instruction exists.
 void wasm_atomic_pause();
 
-// Wait/notify, single-agent form (docs/proposals/THREADS.md TH-2/TD9).
-// `notify` always returns 0: no other agent can be waiting on the address.
+// Wait/notify, cross-agent form (docs/proposals/THREADS.md TH-2/TH-5).
+// `notify` wakes up to `count` agents parked on the address and returns how
+// many it woke; `wait` returns 0 (woken), 1 (not-equal) or 2 (timed out).
 uint32_t wasm_atomic_notify(void* address, uint32_t count);
 
 // Returns 1 when the loaded value differs from `expected` (the spec's
-// "not-equal"), otherwise 2 ("timed out"). With no second agent nothing can
-// wake the wait, so a matching value can only time out; the timeout is not
-// slept (TD9 documents this single-agent reading).
+// "not-equal"), 0 when another agent's notify woke it, and 2 when the timeout
+// expired. A negative `timeoutNs` (an `i64` bit pattern) waits indefinitely.
 uint32_t wasm_atomic_wait(const void* address, uint64_t expected, uint64_t timeoutNs,
 						  uint32_t width);
+
+// ── Reference-slot barrier (docs/proposals/SHARED_EVERYTHING_THREADS.md SET2) ─
+// A reference-typed atomic exchange is two things at once: a pointer-atomic
+// slot update and a GC retain/release write barrier. These helpers are the one
+// place that does both, so a shared reference field cannot drop a count.
+//
+// Ownership follows the non-atomic paths: `set` retains `value` for the slot
+// and releases the overwritten reference (the caller still owns its stack
+// value); `xchg` transfers the caller's count into the slot and the slot's old
+// count to the returned value; `cmpxchg` does the same on success and, on
+// failure, retains the observed value for the result while releasing the
+// never-stored replacement.
+void* wasm_atomic_ref_store(WASM::VMContext* context, void** address, void* value,
+							uint32_t ordering);
+void* wasm_atomic_ref_xchg(WASM::VMContext* context, void** address, void* value,
+						   uint32_t ordering);
+void* wasm_atomic_ref_cmpxchg(WASM::VMContext* context, void** address, void* expected,
+							  void* replacement, uint32_t ordering);
 
 } // extern "C"
 

@@ -722,7 +722,11 @@ struct MemArg {
 	uint32_t align;
 	uint64_t offset;
 	// Acquire-release proposal (docs/proposals/ACQUIRE_RELEASE_ATOMICS.md):
-	// bit 4 of the flags is an ordering immediate: 0 = seqcst, 1 = acqrel.
+	// bit 4 of the flags is an ordering immediate. `0` is seqcst; `1` is
+	// acqrel for a load or store; an RMW encodes the read and write ordering
+	// in the two nibbles and requires them to match, so `0x11` is the RMW form
+	// of acqrel. The decoder normalises both acqrel spellings to 1, because
+	// every helper already maps "1" to the right per-operation `__ATOMIC_*`.
 	uint8_t ordering = 0;
 	// Multibyte Array Access (docs/proposals/GC_EXTENSIONS.md GX-1): flag bit 5
 	// turns a normal load/store into a byte-addressed access over a GC array.
@@ -773,8 +777,13 @@ void readMemArg(Elv::Io::DataStream<E,I>& left, MemArg& right, bool allowOrderin
 		right.memidx = 0;
 	if (hasOrdering) {
 		left >> right.ordering;
-		if (right.ordering > 1)
-			throw std::runtime_error("atomic ordering immediate must be 0 (seqcst) or 1 (acqrel)");
+		// 0x00 = seqcst; 0x01 = acqrel; 0x11 = acqrel in the RMW nibble form
+		// (read ordering == write ordering, both acquire/release).
+		if (right.ordering == 0x11)
+			right.ordering = 1;
+		else if (right.ordering > 1)
+			throw std::runtime_error("atomic ordering immediate must be 0 (seqcst),"
+				" 1 (acqrel) or 0x11 (acqrel RMW)");
 	}
 	left >> Elv::Io::Leb(right.offset);
 }

@@ -4372,6 +4372,9 @@ bool OpcodeDispatcher::emitDirectTailCall(WASM::FuncIdx funcIdx)
 
 bool OpcodeDispatcher::signatureIsUniform(const WASM::FuncType& calleeSig) const
 {
+	// Kept for ABI compatibility; the trampoline now re-enters through the
+	// callee type's thunk, so a differing parameter list is no longer a reason
+	// to fall back (docs/TAILCALLS.md TC-3).
 	const auto sameStorage = [](const std::vector<WASM::StorageType>& a,
 								const std::vector<WASM::StorageType>& b) {
 		if (a.size() != b.size())
@@ -4386,6 +4389,40 @@ bool OpcodeDispatcher::signatureIsUniform(const WASM::FuncType& calleeSig) const
 	};
 	return sameStorage(calleeSig.params, currentFunc.params) &&
 		   sameStorage(calleeSig.results, currentFunc.results);
+}
+
+void OpcodeDispatcher::emitTailCallFallback(WASM::TypeIdx typeIdx, jit_value_t callablePtr,
+											   const std::vector<jit_value_t>& stackArgs)
+{
+	// The semantic reference lowering: a real call whose result is returned.
+	// This is what the trampoline replaces; it stays for the cases the
+	// trampoline cannot represent (a native import on the direct path, or a
+	// callable the embedder registered without a dispatch thunk).
+	const WASM::FuncType ft = module.funcTypeAt(typeIdx);
+	jit_type_t sig = jitTypeForTypeIdx(typeIdx);
+	// A multi-result tail call writes into *this* function's out-buffer, not a
+	// fresh local: the callee's tuple becomes the caller's tuple.
+	const bool hasResultBuffer = ft.results.size() > 1;
+	jit_value_t outBuffer = hasResultBuffer
+		? jit_value_get_param(function, static_cast<unsigned>(currentFunc.params.size()) + 1)
+		: nullptr;
+	std::vector<jit_value_t> callArgs(1 + ft.params.size() + (hasResultBuffer ? 1u : 0u));
+	callArgs[0] = jit_insn_load_relative(function, callablePtr,
+		static_cast<jit_nint>(offsetof(WASM::Callable, context)), jit_type_void_ptr);
+	for (size_t i = 0; i < ft.params.size(); ++i)
+		callArgs[1 + i] = stackArgs[i];
+	if (outBuffer != nullptr)
+		callArgs.back() = outBuffer;
+	jit_value_t fnPtr = jit_insn_load_relative(function, callablePtr,
+		static_cast<jit_nint>(offsetof(WASM::Callable, fnPtr)), jit_type_void_ptr);
+	jit_value_t ret = jit_insn_call_indirect(function, fnPtr, sig, callArgs.data(),
+		static_cast<unsigned>(callArgs.size()), 0);
+	emitPendingExceptionCheck();
+	if (ft.results.empty() || hasResultBuffer)
+		jit_insn_return(function, nullptr);
+	else
+		jit_insn_return(function, ret);
+	markUnreachable();
 }
 
 void OpcodeDispatcher::emitDummyReturn()
@@ -4407,7 +4444,7 @@ void OpcodeDispatcher::emitTailCallViaPending(jit_value_t targetCallablePtr,
 		static_cast<jit_nint>(offsetof(WASM::TailCallState, target)), targetCallablePtr);
 	for (size_t i = 0; i < args.size(); ++i) {
 		jit_insn_store_relative(function, state,
-			static_cast<jit_nint>(offsetof(WASM::TailCallState, args) + i * sizeof(uint64_t)),
+			static_cast<jit_nint>(offsetof(WASM::TailCallState, args) + i * WASM::kTailCallSlotBytes),
 			args[i]);
 	}
 	jit_insn_store_relative(function, state,
@@ -4424,29 +4461,31 @@ void OpcodeDispatcher::dispatchReturnCall(WASM::FuncIdx arg)
 	if (emitDirectTailCall(arg))
 		return; // direct self-recursion: native JIT_CALL_TAIL (C2)
 
-	// Trampoline: a direct call to another function with an identical
-	// signature. Uniformity lets the running driver re-dispatch with its own
-	// parameter types (covers e.g. mutual even/odd recursion).
+	// Trampoline: the driver re-enters the target through the target *type's*
+	// thunk, so the callee's parameter types need not match this function's
+	// (docs/TAILCALLS.md TC-2/TC-3). Only the results must match, which the
+	// validator already guarantees for a `return_call`.
 	const WASM::TypeIdx typeIdx = functionTypeIndexForFunc(arg);
 	const WASM::FuncType& calleeSig = functionSignatureForType(typeIdx);
-	if (signatureIsUniform(calleeSig) && calleeSig.params.size() <= WASM::kTailCallArgSlots) {
-		jit_value_t target = nullptr;
+	if (WASM::tailCallSlotsSupported(calleeSig)) {
+		WASM::Callable* callable = nullptr;
 		if (arg < importedFuncCount) {
-			// Imported wasm functions carry the exporter's raw entry point; a
-			// native import has none and must use call+return.
-			if (internals.importStorage[arg].rawFnPtr != nullptr)
-				target = jit_value_create_nint_constant(function, jit_type_void_ptr,
-					reinterpret_cast<jit_nint>(&internals.importStorage[arg]));
+			// A wasm import carries the exporter's raw entry and gets a thunk
+			// when this module is compiled. A native import has no wasm body,
+			// so it keeps the semantic `call` + `return` lowering.
+			if (internals.importStorage[arg].context != nullptr)
+				callable = &internals.importStorage[arg];
 		} else {
 			const uint32_t internalIdx = arg - importedFuncCount;
 			if (internalIdx < internals.internalCallables.size())
-				target = jit_value_create_nint_constant(function, jit_type_void_ptr,
-					reinterpret_cast<jit_nint>(&internals.internalCallables[internalIdx]));
+				callable = &internals.internalCallables[internalIdx];
 		}
-		if (target != nullptr) {
+		if (callable != nullptr) {
 			std::vector<jit_value_t> stackArgs(calleeSig.params.size());
 			for (size_t i = calleeSig.params.size(); i--; )
 				stackArgs[i] = popValue();
+			jit_value_t target = jit_value_create_nint_constant(function, jit_type_void_ptr,
+				reinterpret_cast<jit_nint>(callable));
 			emitTailCallViaPending(target, stackArgs);
 			return;
 		}
@@ -4458,10 +4497,13 @@ void OpcodeDispatcher::dispatchReturnCall(WASM::FuncIdx arg)
 
 void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2)
 {
-	// Trampoline when the callee's declared type matches this function's own
-	// signature (see docs/TAILCALLS.md TC-2).
+	// The declared type is the one the callee must have, so the trampoline can
+	// re-enter it through that type's thunk regardless of this function's own
+	// parameter list (docs/TAILCALLS.md TC-2/TC-3). A table slot may hold a
+	// callable the embedder registered without a thunk; that one keeps the
+	// semantic `call` + `return` path.
 	const WASM::FuncType ft = module.funcTypeAt(arg1);
-	if (signatureIsUniform(ft) && ft.params.size() <= WASM::kTailCallArgSlots) {
+	if (WASM::tailCallSlotsSupported(ft)) {
 		jit_value_t tableElemIdx = popValue();
 		std::vector<jit_value_t> stackArgs(ft.params.size());
 		for (size_t i = ft.params.size(); i--; )
@@ -4474,6 +4516,16 @@ void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::Tabl
 		jit_value_t callablePtr = jit_insn_load_elem(function, tablePtr, checkedIndex, jit_type_void_ptr);
 	emitTrapIfNull(WASM::TrapKind::UninitializedElement, callablePtr);
 		emitCallableTypeCheck(callablePtr, arg1);
+
+		jit_value_t thunk = jit_insn_load_relative(function, callablePtr,
+			static_cast<jit_nint>(offsetof(WASM::Callable, tailEntry)), jit_type_void_ptr);
+		jit_label_t trampolineLabel = jit_label_undefined;
+		jit_insn_branch_if(function, thunk, &trampolineLabel);
+
+		emitTailCallFallback(arg1, callablePtr, stackArgs);
+		unreachableCode = false;
+		jit_insn_label(function, &trampolineLabel);
+
 		emitTailCallViaPending(callablePtr, stackArgs);
 		return;
 	}
@@ -4489,17 +4541,28 @@ void OpcodeDispatcher::dispatchCallRef(WASM::TypeIdx arg)
 
 void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx arg)
 {
-	// Trampoline when the referenced type matches this function's own signature
-	// (see docs/TAILCALLS.md TC-2). This is what makes `return_call_ref`-based
-	// self-recursion (e.g. return_call_ref.wast's `count`) constant-stack.
+	// The referenced type is the callee's declared type, so the trampoline can
+	// re-enter it through that type's thunk (docs/TAILCALLS.md TC-2/TC-3). This
+	// keeps `return_call_ref`-based self-recursion constant-stack even when a
+	// link changes its parameter list.
 	const WASM::FuncType ft = module.funcTypeAt(arg);
-	if (signatureIsUniform(ft) && ft.params.size() <= WASM::kTailCallArgSlots) {
+	if (WASM::tailCallSlotsSupported(ft)) {
 		jit_value_t callablePtr = popValue();
 		std::vector<jit_value_t> stackArgs(ft.params.size());
 		for (size_t i = ft.params.size(); i--; )
 			stackArgs[i] = popValue();
 	emitTrapIfNull(WASM::TrapKind::NullFunctionReference, callablePtr);
 		emitCallableTypeCheck(callablePtr, arg);
+
+		jit_value_t thunk = jit_insn_load_relative(function, callablePtr,
+			static_cast<jit_nint>(offsetof(WASM::Callable, tailEntry)), jit_type_void_ptr);
+		jit_label_t trampolineLabel = jit_label_undefined;
+		jit_insn_branch_if(function, thunk, &trampolineLabel);
+
+		emitTailCallFallback(arg, callablePtr, stackArgs);
+		unreachableCode = false;
+		jit_insn_label(function, &trampolineLabel);
+
 		emitTailCallViaPending(callablePtr, stackArgs);
 		return;
 	}
@@ -8441,6 +8504,19 @@ void OpcodeDispatcher::dispatchGlobalAtomicGet(uint8_t ordering, WASM::GlobalIdx
 
 void OpcodeDispatcher::dispatchGlobalAtomicSet(uint8_t ordering, WASM::GlobalIdx arg) {
 	const WASM::GlobalType gt = globalTypeForIndex(arg);
+	if (WASM::isReferenceType(gt.contentType.opcode)) {
+		// SET2: a reference slot needs the retain/release barrier, not just a
+		// pointer store. The helper clones the incoming value for the slot,
+		// releases the overwritten one and returns the old pointer (unused).
+		jit_value_t value = popValue();
+		jit_value_t address = globalSlotAddress(arg);
+		callNativeHelper(reinterpret_cast<void*>(wasm_atomic_ref_store), jit_type_void_ptr,
+			{jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr, jit_type_uint},
+			{vmContextValue(), address, refAsVoidPtr(value), atomicUintConstant(ordering)});
+		emitPendingTrapCheck();
+		emitDropValue(value); // the operand stack's own count goes away
+		return;
+	}
 	emitAtomicStoreAddress(globalSlotAddress(arg),
 		sharedAtomicWidth(gt.contentType.opcode), ordering);
 }
@@ -8457,11 +8533,42 @@ WJ_SHARED_GLOBAL_RMW(Sub, WASM_ATOMIC_SUB)
 WJ_SHARED_GLOBAL_RMW(And, WASM_ATOMIC_AND)
 WJ_SHARED_GLOBAL_RMW(Or, WASM_ATOMIC_OR)
 WJ_SHARED_GLOBAL_RMW(Xor, WASM_ATOMIC_XOR)
-WJ_SHARED_GLOBAL_RMW(Xchg, WASM_ATOMIC_XCHG)
 #undef WJ_SHARED_GLOBAL_RMW
+
+void OpcodeDispatcher::dispatchGlobalAtomicRmwXchg(uint8_t ordering, WASM::GlobalIdx arg) {
+	const WASM::GlobalType gt = globalTypeForIndex(arg);
+	if (WASM::isReferenceType(gt.contentType.opcode)) {
+		// Ownership transfers: the stack's count for the incoming value
+		// becomes the slot's; the slot's old count becomes the result's.
+		jit_value_t value = popValue();
+		jit_value_t address = globalSlotAddress(arg);
+		jit_value_t old = callNativeHelper(reinterpret_cast<void*>(wasm_atomic_ref_xchg),
+			jit_type_void_ptr, {jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr, jit_type_uint},
+			{vmContextValue(), address, refAsVoidPtr(value), atomicUintConstant(ordering)});
+		emitPendingTrapCheck();
+		pushOwnedValue(castRefValue(old, jitTypeForValueType(gt.contentType)));
+		return;
+	}
+	pushValue(emitAtomicRmwAddress(globalSlotAddress(arg),
+		sharedAtomicWidth(gt.contentType.opcode), WASM_ATOMIC_XCHG, ordering,
+		jitTypeForValueType(gt.contentType)));
+}
 
 void OpcodeDispatcher::dispatchGlobalAtomicRmwCmpxchg(uint8_t ordering, WASM::GlobalIdx arg) {
 	const WASM::GlobalType gt = globalTypeForIndex(arg);
+	if (WASM::isReferenceType(gt.contentType.opcode)) {
+		jit_value_t replacement = popValue();
+		jit_value_t expected = popValue();
+		jit_value_t address = globalSlotAddress(arg);
+		jit_value_t old = callNativeHelper(reinterpret_cast<void*>(wasm_atomic_ref_cmpxchg),
+			jit_type_void_ptr,
+			{jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr, jit_type_uint},
+			{vmContextValue(), address, refAsVoidPtr(expected), refAsVoidPtr(replacement),
+			 atomicUintConstant(ordering)});
+		emitPendingTrapCheck();
+		pushOwnedValue(castRefValue(old, jitTypeForValueType(gt.contentType)));
+		return;
+	}
 	pushValue(emitAtomicCmpxchgAddress(globalSlotAddress(arg),
 		sharedAtomicWidth(gt.contentType.opcode), ordering,
 		jitTypeForValueType(gt.contentType)));
@@ -8473,23 +8580,36 @@ void OpcodeDispatcher::dispatchTableAtomicGet(uint8_t ordering, WASM::TableIdx a
 }
 void OpcodeDispatcher::dispatchTableAtomicSet(uint8_t ordering, WASM::TableIdx arg) {
 	// Stack: index, value. Pop the value before the address helper consumes the
-	// index (the value is on top).
-	jit_value_t value = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	// index (the value is on top). A table slot is always a reference, so this
+	// goes through the write barrier (SET2).
+	jit_value_t value = popValue();
 	jit_value_t address = tableAtomicSlotAddress(arg);
-	emitAtomicStoreRaw(address, value, sizeof(void*), ordering);
+	callNativeHelper(reinterpret_cast<void*>(wasm_atomic_ref_store), jit_type_void_ptr,
+		{jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr, jit_type_uint},
+		{vmContextValue(), address, refAsVoidPtr(value), atomicUintConstant(ordering)});
+	emitPendingTrapCheck();
+	emitDropValue(value);
 }
 void OpcodeDispatcher::dispatchTableAtomicRmwXchg(uint8_t ordering, WASM::TableIdx arg) {
-	jit_value_t value = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t value = popValue();
 	jit_value_t address = tableAtomicSlotAddress(arg);
-	pushValue(emitAtomicRmwRaw(address, value, sizeof(void*), WASM_ATOMIC_XCHG, ordering,
-							   tableElementJitType(arg)));
+	jit_value_t old = callNativeHelper(reinterpret_cast<void*>(wasm_atomic_ref_xchg),
+		jit_type_void_ptr, {jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr, jit_type_uint},
+		{vmContextValue(), address, refAsVoidPtr(value), atomicUintConstant(ordering)});
+	emitPendingTrapCheck();
+	pushOwnedValue(castRefValue(old, tableElementJitType(arg)));
 }
 void OpcodeDispatcher::dispatchTableAtomicRmwCmpxchg(uint8_t ordering, WASM::TableIdx arg) {
-	jit_value_t replacement = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
-	jit_value_t expected = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t replacement = popValue();
+	jit_value_t expected = popValue();
 	jit_value_t address = tableAtomicSlotAddress(arg);
-	pushValue(emitAtomicCmpxchgRaw(address, expected, replacement, sizeof(void*), ordering,
-								   tableElementJitType(arg)));
+	jit_value_t old = callNativeHelper(reinterpret_cast<void*>(wasm_atomic_ref_cmpxchg),
+		jit_type_void_ptr,
+		{jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr, jit_type_uint},
+		{vmContextValue(), address, refAsVoidPtr(expected), refAsVoidPtr(replacement),
+		 atomicUintConstant(ordering)});
+	emitPendingTrapCheck();
+	pushOwnedValue(castRefValue(old, tableElementJitType(arg)));
 }
 
 void OpcodeDispatcher::dispatchStructAtomicGet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) {
@@ -8516,6 +8636,19 @@ void OpcodeDispatcher::dispatchStructAtomicGetU(uint8_t ordering, WASM::TypeIdx 
 }
 void OpcodeDispatcher::dispatchStructAtomicSet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) {
 	const auto field = structTypeForIndex(arg1).structFields()[arg2];
+	const bool isRef = !field.storage.isPacked
+		&& WASM::isReferenceType(field.storage.value.opcode);
+	if (isRef) {
+		// SET2 write barrier for a reference-typed field.
+		jit_value_t value = popValue();
+		jit_value_t address = structAtomicFieldAddress(arg1, arg2);
+		callNativeHelper(reinterpret_cast<void*>(wasm_atomic_ref_store), jit_type_void_ptr,
+			{jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr, jit_type_uint},
+			{vmContextValue(), address, refAsVoidPtr(value), atomicUintConstant(ordering)});
+		emitPendingTrapCheck();
+		emitDropValue(value);
+		return;
+	}
 	jit_value_t value = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
 	jit_value_t address = structAtomicFieldAddress(arg1, arg2);
 	emitAtomicStoreRaw(address, value, sharedAtomicWidth(field.storage), ordering);
@@ -8533,10 +8666,39 @@ WJ_SHARED_STRUCT_RMW(Sub, WASM_ATOMIC_SUB)
 WJ_SHARED_STRUCT_RMW(And, WASM_ATOMIC_AND)
 WJ_SHARED_STRUCT_RMW(Or, WASM_ATOMIC_OR)
 WJ_SHARED_STRUCT_RMW(Xor, WASM_ATOMIC_XOR)
-WJ_SHARED_STRUCT_RMW(Xchg, WASM_ATOMIC_XCHG)
 #undef WJ_SHARED_STRUCT_RMW
+void OpcodeDispatcher::dispatchStructAtomicRmwXchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) {
+	const auto field = structTypeForIndex(arg1).structFields()[arg2];
+	if (!field.storage.isPacked && WASM::isReferenceType(field.storage.value.opcode)) {
+		jit_value_t value = popValue();
+		jit_value_t address = structAtomicFieldAddress(arg1, arg2);
+		jit_value_t old = callNativeHelper(reinterpret_cast<void*>(wasm_atomic_ref_xchg),
+			jit_type_void_ptr, {jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr, jit_type_uint},
+			{vmContextValue(), address, refAsVoidPtr(value), atomicUintConstant(ordering)});
+		emitPendingTrapCheck();
+		pushOwnedValue(castRefValue(old, typeTranslator.translateCanonStorage(field.storage)));
+		return;
+	}
+	jit_value_t value = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t address = structAtomicFieldAddress(arg1, arg2);
+	pushValue(emitAtomicRmwRaw(address, value, sharedAtomicWidth(field.storage),
+		WASM_ATOMIC_XCHG, ordering, typeTranslator.translateCanonStorage(field.storage)));
+}
 void OpcodeDispatcher::dispatchStructAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) {
 	const auto field = structTypeForIndex(arg1).structFields()[arg2];
+	if (!field.storage.isPacked && WASM::isReferenceType(field.storage.value.opcode)) {
+		jit_value_t replacement = popValue();
+		jit_value_t expected = popValue();
+		jit_value_t address = structAtomicFieldAddress(arg1, arg2);
+		jit_value_t old = callNativeHelper(reinterpret_cast<void*>(wasm_atomic_ref_cmpxchg),
+			jit_type_void_ptr,
+			{jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr, jit_type_uint},
+			{vmContextValue(), address, refAsVoidPtr(expected), refAsVoidPtr(replacement),
+			 atomicUintConstant(ordering)});
+		emitPendingTrapCheck();
+		pushOwnedValue(castRefValue(old, typeTranslator.translateCanonStorage(field.storage)));
+		return;
+	}
 	jit_value_t replacement = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
 	jit_value_t expected = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
 	jit_value_t address = structAtomicFieldAddress(arg1, arg2);
@@ -8569,6 +8731,16 @@ void OpcodeDispatcher::dispatchArrayAtomicGetU(uint8_t ordering, WASM::TypeIdx a
 }
 void OpcodeDispatcher::dispatchArrayAtomicSet(uint8_t ordering, WASM::TypeIdx arg) {
 	const auto element = arrayTypeForIndex(arg).arrayElement();
+	if (!element.storage.isPacked && WASM::isReferenceType(element.storage.value.opcode)) {
+		jit_value_t value = popValue();
+		jit_value_t address = arrayAtomicElementAddress(arg);
+		callNativeHelper(reinterpret_cast<void*>(wasm_atomic_ref_store), jit_type_void_ptr,
+			{jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr, jit_type_uint},
+			{vmContextValue(), address, refAsVoidPtr(value), atomicUintConstant(ordering)});
+		emitPendingTrapCheck();
+		emitDropValue(value);
+		return;
+	}
 	jit_value_t value = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
 	jit_value_t address = arrayAtomicElementAddress(arg);
 	emitAtomicStoreRaw(address, value, sharedAtomicWidth(element.storage), ordering);
@@ -8586,10 +8758,39 @@ WJ_SHARED_ARRAY_RMW(Sub, WASM_ATOMIC_SUB)
 WJ_SHARED_ARRAY_RMW(And, WASM_ATOMIC_AND)
 WJ_SHARED_ARRAY_RMW(Or, WASM_ATOMIC_OR)
 WJ_SHARED_ARRAY_RMW(Xor, WASM_ATOMIC_XOR)
-WJ_SHARED_ARRAY_RMW(Xchg, WASM_ATOMIC_XCHG)
 #undef WJ_SHARED_ARRAY_RMW
+void OpcodeDispatcher::dispatchArrayAtomicRmwXchg(uint8_t ordering, WASM::TypeIdx arg) {
+	const auto element = arrayTypeForIndex(arg).arrayElement();
+	if (!element.storage.isPacked && WASM::isReferenceType(element.storage.value.opcode)) {
+		jit_value_t value = popValue();
+		jit_value_t address = arrayAtomicElementAddress(arg);
+		jit_value_t old = callNativeHelper(reinterpret_cast<void*>(wasm_atomic_ref_xchg),
+			jit_type_void_ptr, {jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr, jit_type_uint},
+			{vmContextValue(), address, refAsVoidPtr(value), atomicUintConstant(ordering)});
+		emitPendingTrapCheck();
+		pushOwnedValue(castRefValue(old, typeTranslator.translateCanonStorage(element.storage)));
+		return;
+	}
+	jit_value_t value = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
+	jit_value_t address = arrayAtomicElementAddress(arg);
+	pushValue(emitAtomicRmwRaw(address, value, sharedAtomicWidth(element.storage),
+		WASM_ATOMIC_XCHG, ordering, typeTranslator.translateCanonStorage(element.storage)));
+}
 void OpcodeDispatcher::dispatchArrayAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg) {
 	const auto element = arrayTypeForIndex(arg).arrayElement();
+	if (!element.storage.isPacked && WASM::isReferenceType(element.storage.value.opcode)) {
+		jit_value_t replacement = popValue();
+		jit_value_t expected = popValue();
+		jit_value_t address = arrayAtomicElementAddress(arg);
+		jit_value_t old = callNativeHelper(reinterpret_cast<void*>(wasm_atomic_ref_cmpxchg),
+			jit_type_void_ptr,
+			{jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr, jit_type_void_ptr, jit_type_uint},
+			{vmContextValue(), address, refAsVoidPtr(expected), refAsVoidPtr(replacement),
+			 atomicUintConstant(ordering)});
+		emitPendingTrapCheck();
+		pushOwnedValue(castRefValue(old, typeTranslator.translateCanonStorage(element.storage)));
+		return;
+	}
 	jit_value_t replacement = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
 	jit_value_t expected = jit_insn_convert(function, popValue(), jit_type_ulong, 0);
 	jit_value_t address = arrayAtomicElementAddress(arg);

@@ -1,21 +1,19 @@
 # Threads and Atomics — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 11 — TH-1, TH-2, TH-3,
-TH-4 and TH-6 are implemented; TH-5 (real agents) is deferred but **accepted as
-the design direction**: many agents on the one module instance is the intended
-multithreading model, opt-in and not built — see
-[`../MULTI_AGENT_FEASIBILITY.md`](../MULTI_AGENT_FEASIBILITY.md) §2.3.
+Status: design note / implementation reference (revision 12 — **TH-1…TH-6 are
+implemented**; TH-5 (real agents) is built as an opt-in
+`ConcurrencyModel::Agents` with a guest-address-keyed waiter table, concurrent
+entry into the one instance, per-agent trap state and a multi-mutator-safe GC
+path. `Single` stays the default and is bit-identical to the previous revision.
 **At most one instance per module; multiple instances are ruled out**, and
 concurrent compilation is rejected as a feature
 ([`../THREADSAFETY.md`](../THREADSAFETY.md) §3.1–§3.2).
 The per-agent state groundwork is implemented: `Agent` owns an
 `ExecutionState` (trap, exception, tail-call, defer, counters and stack limit).
-The stack-switching stage adds continuation execution contexts: A switches
-native stacks on one host thread (default), B uses a host thread per suspended
-continuation (fallback). Neither is an agent and neither unlocks TH-5. §3 records
-the project's explicit execution model: **single-agent only, for the foreseeable
-future**; the single-agent build is a long-term stop-gap, not an oversight.
-§4.3.1 enumerates the concrete blockers between the current engine and TH-5.)
+The stack-switching A/B providers are continuation execution contexts, not
+agents, and do not change the multi-agent model. §3 records the project's
+execution model: **`Single` by default, `Agents` opt-in**; §4.3.1 records how
+each former blocker was closed.)
 Audience: anyone touching `WasmMemory`, `WasmStore`, `WasmOpcode`,
 `WasmOpcodeDispatcher`, `LibjitOpcodeDispatcher`, or the test harness.
 
@@ -124,17 +122,14 @@ engine must do", not "what 3.0 requires".
   there is no observable difference from a real implementation. Nothing in the
   proposal forces the embedder to spawn OS threads.
 
-  **Project decision (revision 3; direction accepted in revision 11).** This
-  engine deliberately ships **single-agent execution for now**. Multi-agent
-  execution — many agents on the *one* module instance (there is at most one;
-  multiple instances are ruled out) — is the **accepted design direction**, but
-  it is opt-in and not built: the scheduler, TLS, cross-agent `wait`/`notify` and
-  the instance hardening are still `TH-5`. Every piece of the representation
-  (stable shared-memory bases, `__atomic_*` accesses, per-agent trap state) is
-  kept in a shape that the multi-agent build can use. The single-agent model is a
-  **long-term stop-gap**, chosen because it keeps the runtime simple and the spec
-  suite meaningful; it is not a claim that the engine must never be concurrent.
-  See `TD9` in §6, the deferred `TH-5` in §7, and
+  **Project decision (revision 12).** This engine ships **`Single` as the
+  default** and **`Agents` as an opt-in** execution model. Multi-agent execution
+  — many agents on the *one* module instance (there is at most one; multiple
+  instances are ruled out) — is implemented: concurrent entry, the cross-agent
+  waiter table, per-agent trap state and the multi-mutator-safe GC path are
+  `TH-5`. `Single` remains a conformant engine and the shipping default; the
+  embedder selects `Agents` in `RuntimeConfig`. See `TD9` in §6, `TH-5` in §7,
+  and
   [`../MULTI_AGENT_FEASIBILITY.md`](../MULTI_AGENT_FEASIBILITY.md).
 - **No scheduling model.** No thread pool, fairness, work stealing, priority,
   or number of parallel agents is specified.
@@ -203,76 +198,85 @@ engine must do", not "what 3.0 requires".
   the zero-extended old value back, exactly like the instruction.
 - `atomic.fence` lowers to `wasm_atomic_fence(ordering)` =
   `__atomic_thread_fence(__ATOMIC_SEQ_CST|__ATOMIC_ACQ_REL)`; `wait`/`notify`
-  are the single-agent forms (TH-2, `TD9`).
+  use the cross-agent waiter table (TH-2/TH-5, §4.3).
 - The non-JIT `Stub::OpcodeDispatcher` implements the same handlers as textual
   pretty-printers (useful for inspection, no execution).
 
-### 4.3 What is absent
+### 4.3 The agent execution model (TH-5, revision 12)
 
-- **No agent/thread execution model — by decision, not by omission.** One
-  `ModuleInstance` executes on the caller's thread, the `Store` is a single
-  process-global, and there is no API to run agents concurrently. An `Agent`
-  object exists (`WasmBase/WasmAgent.hpp`) and owns the per-agent execution
-  state; a host thread has a lazily created default agent. What is absent is the
-  scheduler, the OS-thread execution model and the cross-agent protocol. Multi-agent
-  execution is **the accepted direction, opt-in and not built** (§3, `TD9`,
-  TH-5, [`../MULTI_AGENT_FEASIBILITY.md`](../MULTI_AGENT_FEASIBILITY.md)):
-  the stable shared-memory base, the real `__atomic_*` helpers and the
-  per-agent `ExecutionState` are all shaped so that the future agent build changes
-  the *scheduler*, not the representation. Per-agent trap/exception/tail-call
-  state (TRAP-6) is implemented; the remaining work is TH-5 itself. Note the
-  cardinality rule that makes it tractable: **at most one instance per module**,
-  and concurrent compilation is rejected — see
-  [`../THREADSAFETY.md`](../THREADSAFETY.md) §3.1–§3.2.
-- Host-side concurrency hardening (SET-2, done without wasm agents): the Store's
-  containers are mutex-guarded, type interning is serialized, and the GC heap and
-  string store take recursive locks. A single instance is still not concurrently
-  callable — that is the deferred agent work. The target runtime is one
-  `ModuleInstance` per `Module` (one `VMContext`), so future concurrency must make
-  that single instance safe rather than multiplying instances.
-- There is no cross-agent waiter table, so `wait` cannot be woken (`notify`
-  returns 0) and the timeout is not slept (`TD4`).
+- **Agents are opt-in.** `RuntimeConfig::concurrency =
+  ConcurrencyModel::Agents` admits several host threads into the one
+  `ModuleInstance` at once; `Single` (the default) keeps the previous
+  one-inside-a-call contract and refuses a concurrent entrant with a named
+  error. The embedder owns the scheduler and the OS threads: it creates an
+  `Agent` per thread (`Runtime::createAgent`), installs it with `AgentScope`,
+  and calls exports through `Runtime::callExport`. The core spawns no thread —
+  `HostAgentScheduler` is declared, embedder-owned and never called by the
+  engine ([`../MULTI_AGENT_FEASIBILITY.md`](../MULTI_AGENT_FEASIBILITY.md)
+  §6.2).
+- **A real cross-agent waiter table** (`wasm_atomic.cpp`) keys waiters by the
+  effective address generated code already computed. `wait` re-reads the cell
+  under the table mutex, parks on a condition variable with a real timeout and
+  returns 0 (woken), 1 (not-equal) or 2 (timed out); `notify` wakes up to
+  `count` waiters and returns the number woken. A notify that arrives before
+  the park returns 0, so a retry loop is safe.
+- **Multi-mutator-safe instance state.** `activeCalls` is an atomic counter
+  (not a flag), the GC reclaim queue and cycle candidates stay under the
+  per-instance `gcMutex`, the GC allocation and reference counters are atomic,
+  the data/element segment drop flags are atomic, and reference-typed atomic
+  slot updates run a retain/release barrier
+  (`wasm_atomic_ref_store/xchg/cmpxchg`,
+  [`SHARED_EVERYTHING_THREADS.md`](SHARED_EVERYTHING_THREADS.md) SET2).
+- **The store containers, type interning, GC heap and string store are
+  mutex-guarded.** Concurrent *compilation* remains rejected (the backend
+  build region is a lock); concurrent *execution* of already-compiled code is
+  the supported path.
+- **At most one `ModuleInstance` per `Module`** (the cardinality rule). A
+  second agent is a second execution context on the same instance, not a
+  second instance. The component runtime is the one sanctioned exception,
+  because one `core instance` per declaration is the component model's own
+  semantics (see [`../MULTI_AGENT_FEASIBILITY.md`](../MULTI_AGENT_FEASIBILITY.md)
+  §2.3.6).
+- **Guest-visible ordering is the guest's responsibility.** Shared globals,
+  tables and memory are shared state; the guest uses `global.atomic.*`,
+  `table.atomic.*`, `struct.atomic.*`, `array.atomic.*`,
+  `i32/i64.atomic.*` and `memory.atomic.wait/notify`. The engine provides the
+  operations, not a guest mutex or a language runtime's lock.
 
-### 4.3.1 Blockers to true multi-agent / multithreaded execution
+### 4.3.1 Former blockers, and how each was closed
 
-The short list below is the implementation gap between the current
-single-agent engine and TH-5. The per-agent `ExecutionState` is already done;
-everything else is deliberately absent, not accidentally missing.
-
-| # | Blocker | Why it blocks a second agent | Where it lives today |
+| # | Former blocker | How it was closed (2026-10-29) | Where it lives now |
 |---|---|---|---|
-| MA-1 | **No scheduler or thread lifecycle.** There is no API to start, park, wake, stop or join an agent, and no guarantee that two agents can enter one `ModuleInstance` concurrently. | `Agent`/`AgentScope` select an execution state; they do not create a scheduling policy or a thread pool. `wait`/`notify` therefore cannot wake a real waiter. | `WasmBase/WasmAgent.hpp`; `WasmBase/WasmModuleInstance.hpp`; `THREADS.md` TH-5/T9 |
-| MA-2 | **One mutable `ModuleInstance` per module.** Globals, tables, active data segments, export caches and instance lifecycle are not partitioned or synchronized per agent. | Two agents mutating one instance race even when their linear-memory accesses are atomic. There is no per-instance entry guard or agent ownership handoff. | `WasmModuleInstance.{hpp,cpp}`; `THREADSAFETY.md` §4.6 |
-| MA-3 | **No multi-mutator GC.** The GC heap, allocation counter, cycle-collector candidate set and reclaim queue assume one active mutator; `gcSet` is mutated by the running instance. | A second agent can allocate, release or collect while another agent's allocating frame is live; there is no safepoint/stop-the-world protocol or per-agent root set. | `WasmGcHeap.*`; `WasmModuleInstance.cpp` (`gcCollect`, `collectCycles`, `possibleCycleRoot`); `docs/proposals/GC.md` |
-| MA-4 | **No cross-agent wait/notify table.** `notify` returns 0 and `wait*` returns the not-equal or timeout result without sleeping. | A real agent needs a guest-address-keyed waiter table, wake ordering, timeout handling and a “not spuriously woken” protocol. | `wasm_atomic.*`; `THREADS.md` TD3/TD4/TH-2 |
-| MA-5 | **Store/type/string locks are host-side, not a concurrency model.** The Store containers, type interning, GC heap and string store take locks for host calls. | Those locks protect bookkeeping, not guest execution. They do not define lock ordering with guest globals, `wait` queues, GC safepoints or trap unwinding. | `WasmStore.*`; `WasmTypeRegistry.*`; `WasmGcHeap.*`; `THREADSAFETY.md` |
-| MA-6 | **Continuations are execution contexts, not agents.** A switches native stacks serially (with optional serial host migration); B uses one host thread per suspended continuation. Neither schedules concurrent entries into an instance. | A suspended continuation can preserve a call chain, but it does not own a guest lock, a wait token or a GC root set that a second agent could contend with. `HostContinuationScheduler` is a serial queue. | `WasmContinuation.{hpp,cpp}`; `STACK_SWITCHING.md` D-5 |
-| MA-7 | **Provider and cross-provider gaps.** A and B each implement the symmetric peer `switch`; cross-provider `switch` is rejected. A's stack may migrate only between serial host calls; B's thread-per-continuation fallback is not a scheduler. | A future agent model has to pick a provider policy, own a context/stack pool and synchronize context handoff with the GC and waiter table. | `WasmContinuation.cpp` (`switchTo`, `beginSwitch`, `switchResume`); `STACK_SWITCHING.md` D-1/D-2/D-5 |
-| MA-8 | **JS/JSPI is adapter-only.** The engine has a C++ suspend/resume hook with wide `ContinuationValue` and throw/reject variants, but no Promise, event loop or JS engine. | JSPI needs a JS agent/event-loop binding and a Promise adapter; the engine scheduler is still serial and is not a JS agent. | `JS_INTEGRATION.md` §2.3.1/§5 (JS4, JS9 closed); `WasmContinuation.hpp` |
-| MA-9 | **No multi-agent test or memory model.** There is no second-agent test, race detector, import/export sharing test with concurrent mutation, or documented guest lock/waitqueue standard. | TH-5's acceptance criterion (“two agents produce the same results as the sequentially-consistent model”) cannot be evaluated. | `THREADS.md` §8; `THREADSAFETY.md` |
+| MA-1 | No scheduler or thread lifecycle. | **Closed by scope, deliberately:** the core owns no scheduler. `Runtime::createAgent` + `AgentScope` give one execution context per host thread; the embedder spawns/joins the threads, exactly as `HostAgentScheduler` describes. `wait`/`notify` now wake real waiters. | `WasmAgent.hpp`; `WasmRuntime.hpp`; `WasmConcurrency.hpp` |
+| MA-2 | One mutable `ModuleInstance` per module, unsynchronized entry. | **Closed:** `activeCalls` is an atomic counter; `Single` keeps the one-entrant refusal, `Agents` admits every entrant. Segment drop flags are atomic; all other mutable instance state is either guest-synchronized (globals/tables/memory) or lock-guarded (GC). | `WasmModuleInstance.hpp` (`enterCall`/`leaveCall`), `WasmModuleInstance.cpp` (`*.store/load`) |
+| MA-3 | No multi-mutator GC. | **Closed:** the reclaim queue, cycle candidates and counters are under `gcMutex`; the allocation counters and segment flags are atomic; `GcHeap` is mutex-guarded; the refcount is `atomic_ref`. Reference-typed atomic slots run the retain/release barrier. `gcCollect` remains a quiescent safepoint and refuses an in-call instance. | `WasmGcHeap.*`; `WasmModuleInstance.{hpp,cpp}`; `wasm_atomic.cpp` |
+| MA-4 | No cross-agent wait/notify table. | **Closed:** an address-keyed waiter table with condition variables, real timeouts, no lost wake-up and a no-spurious-wake predicate. | `wasm_atomic.cpp` (`WaiterTable`) |
+| MA-5 | Locks are host-side, not a concurrency model. | **Accepted as the model:** the Store/type/string/GC locks protect bookkeeping; guest-visible ordering is the guest's job through the atomic instructions. This is the §3 freedom an engine may take. | `THREADSAFETY.md` §2–§3 |
+| MA-6 | Continuations are execution contexts, not agents. | **Out of scope by design:** a continuation runs serially and is not a second mutator; `Agents` is the concurrency model. | `STACK_SWITCHING.md` D-5 |
+| MA-7 | Provider / cross-provider gaps. | **Out of scope:** both providers stay serial; the agent model uses host threads, not continuation stacks. | `WasmContinuation.cpp` |
+| MA-8 | JS/JSPI is adapter-only. | **Out of scope:** an embedder-supplied event loop remains the JS adapter's concern, not the core's. | `JS_INTEGRATION.md` |
+| MA-9 | No multi-agent test or memory model. | **Closed:** `[multiagent]` covers concurrent entry, acquire-release message passing, wait/notify, shared-global RMW, trap isolation, concurrent GC allocation/reclamation and the reference-slot barrier; the guest memory model is the atomic subset documented here. | `Test/ConcurrencyTests.cpp`, `Test/AgentFixture.hpp` |
 
-**Non-blockers.** Per-agent trap, exception, tail-call, defer, depth and stack
-limit state is already implemented (`TRAP-6`/SS-6), and atomic accesses are real
-seq-cst `__atomic_*` operations. Those are necessary groundwork, not a
-multi-agent implementation.
+**Non-blockers that were already done.** Per-agent trap, exception, tail-call,
+defer, depth and stack-limit state (`TRAP-6`/SS-6), real seq-cst `__atomic_*`
+operations and the per-agent trampoline state. The multi-agent work above built
+on them; none needed a representation change.
 
-**Design direction (revision 11).** The blockers above are the *implementation*
-gap, not a rejection of the feature. The recorded direction is:
+**Design direction (revision 12).**
 
 - **At most one instance per module.** Multiple instances are ruled out by
   design, so "make a second instance" is never the answer to a concurrency
   problem ([`../THREADSAFETY.md`](../THREADSAFETY.md) §3.1).
-- **Many agents on that one instance is the accepted multithreading model**:
+- **Many agents on that one instance is the implemented multithreading model**:
   GPU-style worker launches, thread-per-export, async/await via continuations,
   and intra-Wasm threading built on agents the embedder spawns. Concurrent
-  *execution* of compiled code and a *re-entrant invoker* are therefore
-  requirements, not open questions.
+  *execution* of compiled code and a *re-entrant invoker* are supported;
+  concurrent *compilation* is not.
 - **Concurrent compilation is rejected as a feature**: a backend's build region
   is a lock, and the only consumer would be the instance multiplicity the first
   rule forbids.
-- The feature stays **opt-in and unbuilt** until `TH-5` and the staged plan in
-  [`../MULTI_AGENT_FEASIBILITY.md`](../MULTI_AGENT_FEASIBILITY.md) §7 land;
-  until then `TD9` (single agent) is the shipping contract.
+- **`Single` stays the default.** `TD9` remains the shipping contract for an
+  embedder that does not opt in; `Agents` is the opt-in model.
 
 ### 4.4 Tests
 
@@ -289,6 +293,13 @@ gap, not a rejection of the feature. The recorded direction is:
   are the negative-module families, which are executed only under
   `WASM_SPEC_VALIDATE=1` ([`../VALIDATION.md`](../VALIDATION.md)). It is in
   `Test/wast_supported.txt`, so it runs in the default suite.
+- **Multi-agent coverage (TH-5).** `Test/ConcurrencyTests.cpp` (`[multiagent]`,
+  6 cases / 51 assertions) runs two host threads with their own `Agent` on one
+  instance: acquire-release message passing, a real wait/notify round-trip,
+  shared-global atomics, per-agent trap isolation, GC allocation/reclamation
+  stress and the reference-slot barrier. `Test/AgentFixture.hpp` is the
+  hand-encoded module (acquire-release ordering and `pause` are not yet
+  printable by `wasm-tools`).
 
 ### 4.5 Cross-cutting: per-agent state and the tail-call trampoline
 
@@ -315,12 +326,13 @@ belong to the execution context:
   multi-mutator GC. TH-5 remains the gated feature for true multi-agent
   execution.
 
-Two further limits of the tail-call lowering:
+Two further properties of the tail-call lowering:
 
-- **It only engages for identical signatures.** A `return_call` whose callee's
-  parameter/result types differ from the caller's falls back to `call` + `return`
-  and does grow the host stack. (Direct self-recursion is lowered to a native
-  `JIT_CALL_TAIL` and is unaffected.)
+- **It handles differing signatures.** A `return_call` whose callee's parameter
+  list differs from the caller's is dispatched through the callee *type's*
+  thunk (`Callable::tailEntry`), so it keeps the space guarantee (TAILCALLS.md
+  TC-5). Only a `v128` link (no upstream tail-call script has one) and a
+  thunk-less embedder callable fall back to `call` + `return`.
 - **Every internal wasm→wasm call now goes through a per-function driver.** Each
   non-tail call costs an indirect call plus one extra native frame, so deeply
   *non-tail*-recursive code reaches stack limits sooner than it did before. Not
@@ -333,13 +345,13 @@ Two further limits of the tail-call lowering:
 |---|---|---|---|
 | ~~T1~~ | ~~**Every atomic instruction aborts.**~~ **Done (TH-1):** all 67 handlers lower to the shared helpers (`WasmBase/wasm_atomic.*`), which perform the access with `__atomic_*` at seq_cst; `spec: atomic` is **249/0/48** and curated. | `LibjitOpcodeDispatcher.cpp` 0xFE block; `wasm_atomic.cpp` | Closed |
 | ~~T2~~ | ~~**`atomic.fence` is not lowered.**~~ **Done (TH-1):** `wasm_atomic_fence()` is `__atomic_thread_fence(__ATOMIC_SEQ_CST)`; every atomic access already uses seq_cst, so the fence and the operations share one ordering. | `dispatchAtomicFence`, `wasm_atomic_fence` | Closed |
-| ~~T3~~ | ~~**Wait/notify missing.**~~ **Done, single-agent form (TH-2):** `notify` returns 0 (no agent can be waiting); `wait32/64` returns 1 on a value mismatch and 2 (timeout) otherwise, with the timeout not slept — legal per §3 and documented as `TD9`. The three wait/notify assertions in `atomic.wast` pass. | `dispatchMemoryAtomicNotify/Wait32/Wait64`, `wasm_atomic_wait` | Closed (multi-agent wake-up deferred with TH-5) |
+| ~~T3~~ | ~~**Wait/notify missing.**~~ **Closed (TH-2 → TH-5):** the cross-agent waiter table in `wasm_atomic.cpp` implements the full return-value contract: 0 (woken), 1 (not-equal), 2 (timed out), with a real timeout and no spurious wake. `notify` wakes up to `count` waiters and returns how many it woke. | `dispatchMemoryAtomicNotify/Wait32/Wait64`, `wasm_atomic_wait`, `[multiagent]` | Closed |
 | ~~T4~~ | ~~**No runtime alignment check.**~~ **Done (TH-1):** every helper traps with `TrapKind::UnalignedAtomicAccess` ("unaligned atomic") when the *effective* address is not naturally aligned — before a typed pointer is formed. `atomic.wast`'s 28 `assert_trap … "unaligned atomic"` cases pass. The *immediate* (`align == natural`) remains a validation concern (no validator; `TD6`). | `wasm_atomic.cpp` (`requireAlignment`) | Closed (runtime half) |
 | T5 | **Wait/notify on unshared memory is accepted.** This is a deliberate single-agent deviation (`TD6`): the curated `atomic.wast` treats both forms on an unshared memory as valid, so the validator does not reject them. | `WasmValidator.cpp` (deliberately no rule); `TD6` | Deliberate (documented) |
 | ~~T6~~ | ~~**No maximum requirement.**~~ **Done:** the validator's `checkLimits` rejects a shared memory without a maximum. | `WasmValidator.cpp` (`checkLimits`) | Closed |
 | ~~T7~~ | ~~**`memory.size`/`grow` ordering is not published.**~~ **Done (TH-3):** `Store::growMemory` issues a seq-cst release fence after committing pages, and generated `memory.size` calls `WASM::wasm_memory_size`, which performs an acquire load for shared memories (and a plain load for private ones). | `WasmMemory.cpp`, `WasmStore.cpp`, `LibjitOpcodeDispatcher.cpp` | Closed |
 | ~~T8~~ | ~~**No data-segment init barrier semantics.**~~ **Done (TH-3):** `applyActiveSegments` issues a seq-cst fence after the active-data loop, before the instance is published or its start function runs. | `applyActiveSegments` | Closed |
-| T9 | **No agent API / thread pool — deferred; the direction is accepted (`TD9`).** There is no way to run several agents concurrently on the single module instance today, which is also what makes the current single-threaded stance safe. The accepted target is many agents on that one instance, opt-in ([`../MULTI_AGENT_FEASIBILITY.md`](../MULTI_AGENT_FEASIBILITY.md) §2.3/§7); multiple instances are ruled out. | no such API in `ModuleInstance`/`Store`; §3 project decision | Deferred by decision (direction accepted) |
+| ~~T9~~ | ~~**No agent API / thread pool.**~~ **Closed (TH-5):** `ConcurrencyModel::Agents` + `Runtime::createAgent` + `AgentScope` let an embedder run several host threads on the one instance; the core still owns no thread pool or scheduler (by design). `Single` remains the default and refuses a concurrent entrant. | `WasmConcurrency.hpp`, `WasmRuntime.hpp`, `WasmModuleInstance::enterCall`; §4.3 | Closed |
 | ~~T10~~ | ~~**No test coverage is wired in.**~~ **Done (TH-1/TH-4):** `proposals/threads/atomic.wast` is listed explicitly in `Test/Test.pro`, converts at build time, runs as `spec: atomic` (**249 passed / 0 failed / 48 skipped** — the skips are the negative-module families, which run only under `WASM_SPEC_VALIDATE=1`) and is curated in `Test/wast_supported.txt`. | `Test/Test.pro`, `Test/wast_supported.txt` | Closed |
 | ~~T11~~ | ~~**The tail-call trampoline's pending state is process-global.**~~ **Done (TRAP-6 / SS-6):** the state is `ExecutionState::tailCallState`, resolved through `currentTailCallState()` for the current agent (a host thread has a default agent). | `WasmBase/WasmAgent.hpp`; §4.5 | Closed: two host threads and two agents on one thread do not race |
 | ~~T12~~ | ~~**Trap/exception state is per host thread, not per agent.**~~ **Done (TRAP-6 / SS-6):** `Agent` owns an `ExecutionState` (trap slot, pending exception, deferred cleanup, depth counters, tail-call state and stack limit); a host thread has a default agent and `AgentScope` installs another. | `WasmBase/WasmAgent.hpp`; [`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md) §12.1 | Closed (state); true multi-agent execution remains TH-5 |
@@ -369,21 +381,23 @@ rather than duplicated in `COMPONENT_MODEL.md`:
 
 ## 6. Where we can and should play fast and loose
 
-The single most important lever is §3's first bullet: **concurrency is not
-required**. A QVM-lineage engine is single-threaded by nature, and that turns
-almost all of the threads proposal into trivial semantics.
+The proposal's freedoms still matter: concurrency is **not required**, so
+`Single` remains a conformant engine and the default. `Agents` is the opt-in
+addition, and it changed the *execution model* (an entry counter, a waiter table
+and a multi-mutator-safe GC path), not the representation of shared memory or
+the atomic helpers.
 
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
-| TD1 | **Keep the one-agent execution model.** Accept shared memories and atomics, but never run two agents at once. | §3: no concurrency is mandated; with one agent every atomic is trivially sequentially consistent. | The whole proposal collapses to ordinary memory accesses plus a few returns. |
+| TD1 | **Offer `Single` as the default and `Agents` as an opt-in model.** The embedder selects; the engine validates at `instantiate()`. | §3: no concurrency is mandated; `Single` keeps the trivial seq-cst semantics. | The old contract for embedders that do not opt in, and a supported concurrent model for those that do. |
 | TD2 | **Lower atomics to real `__atomic_*` operations at seq_cst** (`wasm_atomic.*`), rather than plain accesses plus fences. | §2.5/§3: only observability matters; seq_cst is the ordering the spec exposes, and it is free on x86. | Correct under one agent *and* ready for a second agent without changing the helper layer. |
-| TD3 | **`memory.atomic.notify` returns `0`.** | §3: notify may wake fewer than requested; no waiter can exist without a second agent. | A one-line implementation instead of a waiter table. |
-| TD4 | **`memory.atomic.wait*`**: atomic-load; if `!= expected` return `1`; otherwise return `2` **without sleeping**. | §3: an implementation that cannot suspend an agent may return `2` for a finite timeout; with no second agent nothing can notify, so the value can only time out. The one documented cost: an *infinite* wait also returns `2` instead of blocking forever (`TD9`). | Deterministic tests, no scheduler, no sleeping daemon. |
+| TD3 | **`memory.atomic.notify` returns how many waiters it woke.** | §3: notify may wake fewer than requested; the waiter table counts exactly what it claimed. | A real wake-up instead of a stub. |
+| TD4 | **`memory.atomic.wait*`** atomic-loads, returns `1` on a mismatch, otherwise parks on a condition variable for the requested timeout and returns `0` (woken) or `2` (timed out). A negative timeout waits indefinitely. | §3: an implementation that cannot suspend an agent could return `2`, but with the waiter table there is no reason to. | The full observable contract, `[multiagent]` covers the wake-up. |
 | TD5 | **`atomic.fence` lowers to `__atomic_thread_fence(seq_cst)`** (or a compiler barrier). | §2.5; a no-op would be wrong the moment two agents exist, and a seq_cst fence is nearly free on x86. | Correct ordering with one instruction. |
 | TD6 | **Enforce natural alignment for atomics at run time** (a cheap `addr % size == 0` check → `trap()`); the static memarg rule is not a runtime concern. | §2.3 requires the misaligned *effective address* to trap for atomics; `alignment ≤ natural` is a static property and `Module::validate()` enforces it ([`../VALIDATION.md`](../VALIDATION.md)), so the backend only needs the dynamic half. | Safe on non-x86; one compare on the atomic path only. |
-| TD7 | **Do not implement a thread pool, agents, `Atomics.wait` host interop, or TLS.** | §3: none is required. | Scope control; the Store/instance design already models a single process-global. |
-| TD8 | **Keep `SharedLinearMemory`'s reserve/commit base-stability** even in the single-agent build — it is what makes a later multi-agent step a change of *scheduler* rather than a change of *representation*. | It is already implemented and costs nothing when only one agent maps it. | A clean upgrade path. |
-| TD9 | **Ship a single-agent engine only *for now*** — one `ModuleInstance` runs on the caller's thread; atomics are real `__atomic_*` operations (so they are seq-cst even here), but there is no agent API and no scheduler. True multithreading is **deferred but accepted as the design direction** (revision 11, [`../MULTI_AGENT_FEASIBILITY.md`](../MULTI_AGENT_FEASIBILITY.md) §2.3, plan §7): the memory representation, per-agent trap/tail-call state and atomic helpers are kept in a shape a future agent model can reuse. | §3 first bullet: one agent is conformant; every atomic is trivially sequentially consistent. | No thread pool, TLS, scheduling, cross-agent waiter table or data-race tooling — the runtime stays simple and the spec suite stays deterministic. The cost is documented: `wait` cannot actually be woken by a second agent. |
+| TD7 | **Do not implement a thread pool or `Atomics.wait` host interop.** The embedder supplies threads; the core supplies agents and the waiter table. Thread-local storage belongs to the shared-everything proposal, which has no stable binary encoding yet. | §3: none of those is required. | The core stays free of a thread pool it would have to defend forever. |
+| TD8 | **Keep `SharedLinearMemory`'s reserve/commit base-stability** — it is what makes multi-agent a change of *scheduler* rather than a change of *representation*. | It is implemented and costs nothing when only one agent maps it. | The agent build needed no memory-representation change. |
+| TD9 | **`Single` remains the shipping default** — one `ModuleInstance` runs one call at a time; atomics are real `__atomic_*` operations and the waiter table is inert when no second agent exists. `Agents` is the opt-in model added by TH-5 ([`../MULTI_AGENT_FEASIBILITY.md`](../MULTI_AGENT_FEASIBILITY.md) §6.2). | §3 first bullet: one agent is conformant; every atomic is trivially sequentially consistent. | An embedder that never opts in sees the old behaviour; one that does gets real concurrency. |
 
 **Guardrails.**
 
@@ -393,9 +407,10 @@ almost all of the threads proposal into trivial semantics.
   be scheduled — do not optimise them away "because it is single-threaded"
   without also gating on the single-agent precondition.
 - Alignment traps and the `wait`-on-unshared trap are observable; implement
-  them even in the degenerate build.
-- `notify` returning `0` is only correct while no host-created waiter exists;
-  that is part of the documented no-second-agent contract.
+  them in both models.
+- `notify` must return the number of waiters it actually claimed, and a waiter
+  must never return `0` without a notify. The table mutex is the lost-wake-up
+  barrier; do not "optimise" the re-read out of `wasm_atomic_wait`.
 
 ## 7. Plan
 
@@ -404,36 +419,35 @@ Ordered by value; `TH-n` is independent of the other documents' milestones.
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **TH-1 — Single-agent atomics** | ✅ Done: the 67 handlers call `wasm_atomic_*` helpers (`WasmBase/wasm_atomic.*`) that perform the access with `__atomic_*` at seq_cst, after the shared `effectiveMemoryAddress` bounds check; natural-alignment traps (`UnalignedAtomicAccess`); `atomic.fence` is `__atomic_thread_fence(seq_cst)`. | T1, T2, T4 | Done: `spec: atomic` **249/0/48**, curated. |
-| **TH-2 — Wait/notify** | ✅ Done in the single-agent form: `notify` returns 0; `wait32/64` returns 1 on a value mismatch and 2 otherwise without sleeping (`TD4`). The unshared-memory trap is a validation concern (`T5`, no front end). | T3 | Done: the script's wait/notify assertions pass (mismatch → 1, timeout → 2, notify → 0). |
+| **TH-2 — Wait/notify** | ✅ Done, including the cross-agent table: `notify` wakes up to `count` waiters and returns the number woken; `wait32/64` returns 0 (woken), 1 (not-equal) or 2 (timed out), with a real (possibly infinite) timeout and no spurious wake. | T3, T4 | Done: `atomic.wast` passes, and `[multiagent]` proves a real wake-up without a value change. |
 | **TH-3 — Shared-memory hygiene** | ✅ `SharedLinearMemory` never moves its base; import matching compares shared-ness; shared memories/tables must declare a maximum; `memory.grow` publishes with a seq-cst fence; `memory.size` acquire-loads shared metadata; active data-segment initialisation ends with a seq-cst barrier; the tail-call state is per-agent. | T6, T7, T8, T11 | Done: shared memory without a max is rejected; `memory.grow`/`size` are ordered; host threads do not share tail-call state. |
 | **TH-4 — Threads test coverage** | ✅ Done: `proposals/threads/atomic.wast` is wired into `Test/Test.pro` (single-agent atomic semantics, including the 28 misaligned `assert_trap`s) and curated. | T10 | Done: `spec: atomic` runs in the default suite (`Test/wast_supported.txt`). |
-| **TH-5 — Real agents (accepted direction)** | ✗ **Deferred, accepted as the design direction:** an embedder API to run agents on the one module instance across OS threads, with a real waiter table and per-agent trap/lock ownership. **At most one instance per module** — multiple instances are ruled out, so "make another instance" is not an alternative and concurrent compilation is rejected ([`../THREADSAFETY.md`](../THREADSAFETY.md) §3.1–§3.2). The per-agent state groundwork (TRAP-6) is done; the stack-switching A/B continuations are execution contexts, not agents, and do not change this row. Remaining: the scheduler, a real waiter table and multi-agent lock/GC ownership — the staged plan in [`../MULTI_AGENT_FEASIBILITY.md`](../MULTI_AGENT_FEASIBILITY.md) §7 (`MF-1…MF-7`). Until then the engine is explicitly single-agent (`TD9`). | T9, T12 | Two agents produce the same results as the sequentially-consistent model, and each sees only its own traps. |
+| **TH-5 — Real agents** | ✅ **Done 2026-10-29:** `ConcurrencyModel::Agents` (`WasmConcurrency.hpp`) + `Runtime::createAgent`/`AgentScope` + an atomic entry counter (`Single` refuses a second entrant, `Agents` admits it), a guest-address-keyed waiter table, per-agent trap/tail-call state, atomic GC counters and segment flags, a mutex-guarded reclaim queue/heap, and the reference-slot barrier. The core owns no scheduler; the embedder spawns/joins host threads. **At most one instance per module**; concurrent compilation stays rejected. | T9, T12 | Two agents produce the same results as the sequentially-consistent model, each sees only its own traps, and `[multiagent]` is green (6 cases / 51 assertions). |
 | **TH-6 — Component async interface** | ✅ `WasmComponentAsync.hpp` defines tasks, waitables, stream/future endpoints and the `ComponentExecutor` seam; `SingleAgentExecutor` and `ComponentRuntime` execute the synchronous subset. | T9/T11 (interfaces), TH-5 (backend) | All single-agent async tests pass; replacing the executor is the only change a multi-agent backend needs. |
 
-Guardrails: run `./WasmJit '~[spec]'` after each step; keep the single-agent
-default so existing behaviour is unchanged. The single-agent choice is
-*documented and deliberate* (`TD9`) — do not add a partial thread model without
-the per-agent state (TRAP-6 / `T12`) is done; TH-5 still needs the scheduler,
-a waiter table and multi-agent lock/GC ownership. TH-5 is not just a
-scheduler: the target is **one `ModuleInstance` per `Module`**, so it must also
-settle per-agent trap/lock ownership and a guest lock/waitqueue standard before
-claiming concurrent G-C/G-D safety — see
-[`../THREADSAFETY.md`](../THREADSAFETY.md) §4.6, §5.6 and §10.1.
+Guardrails: run `./WasmJit '~[spec]'` after each step; keep `Single` the
+default so existing behaviour is unchanged. `Agents` is additive: the entry
+counter is the only per-call cost `Single` pays, and its refusal path is tested.
+The target remains **one `ModuleInstance` per `Module`**, so a second agent is a
+second execution context, never a second instance; the guest lock/waitqueue
+standard is "use the atomic instructions", and the embedder is responsible for
+joining its threads before tearing down the runtime
+([`../THREADSAFETY.md`](../THREADSAFETY.md) §9).
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-17, after TH-1/TH-2/TH-4):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-29):
 
 | Test | Result | Reading |
 |---|---|---|
-| `spec: atomic` | **249 passed / 0 failed / 48 skipped** | all 67 atomic handlers execute (loads, stores, RMW/xchg/cmpxchg, fence), natural-alignment traps, and the single-agent wait/notify triple; the skips are the negative-module families, which run only under `WASM_SPEC_VALIDATE=1` ([`../VALIDATION.md`](../VALIDATION.md)). Curated |
+| `spec: atomic` | **249 passed / 0 failed / 48 skipped** | all 67 atomic handlers execute (loads, stores, RMW/xchg/cmpxchg, fence), natural-alignment traps and the rewritten wait/notify; the skips are the negative-module families, which run only under `WASM_SPEC_VALIDATE=1` ([`../VALIDATION.md`](../VALIDATION.md)). Curated |
+| `[multiagent]` | **51 assertions / 6 cases** | concurrent entry, acquire-release message passing, a real wait/notify wake, shared-global RMW, per-agent trap isolation, concurrent GC allocation and the reference-slot barrier |
 | `imported memory is shared between two module instances` | pass (8 assertions) | cross-module *import* sharing, not threads |
 | `imported table is shared between two module instances` | pass (15 assertions) | cross-module *import* sharing, not threads |
-| any module containing `atomic.*` | executes | TH-1: the 67 `notImplemented` stubs are gone |
+| default suite | 11,454 assertions / 481 cases, green | no regression from the multi-agent work |
 
-The upstream script is now the regression signal for the whole atomic opcode
-surface; no second-agent test can exist while the engine is single-agent
-(`TD9`, TH-5).
+The upstream script remains the single-agent regression signal for the whole
+atomic opcode surface; `[multiagent]` is the second-agent signal (`TH-5`).
 
 ## 9. References
 

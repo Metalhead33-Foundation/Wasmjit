@@ -1514,6 +1514,9 @@ wasm_atomic_fence T
 wasm_atomic_load T
 wasm_atomic_notify T
 wasm_atomic_pause T
+wasm_atomic_ref_cmpxchg T
+wasm_atomic_ref_store T
+wasm_atomic_ref_xchg T
 wasm_atomic_rmw T
 wasm_atomic_store T
 wasm_atomic_wait T

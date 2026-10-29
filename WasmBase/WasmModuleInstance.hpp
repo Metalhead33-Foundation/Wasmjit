@@ -63,8 +63,8 @@ struct ModuleInstanceInternals {
 	// (docs/proposals/EXCEPTIONS.md EX-2). Filled before compilation, so the
 	// backend can fold a `throw tagidx` into the constant id.
 	std::vector<TagId> tagIds;
-	std::vector<bool> dataSegmentDropped;
-	std::vector<bool> elementSegmentDropped;
+	std::vector<std::atomic<bool>> dataSegmentDropped;
+	std::vector<std::atomic<bool>> elementSegmentDropped;
 	// Element segments in expression form hold *references*, evaluated once at
 	// instantiation (the spec never re-evaluates a segment per use). Keyed by
 	// segment index; index-form segments leave their entry empty.
@@ -84,8 +84,11 @@ struct ModuleInstanceInternals {
 	// per-instance safepoint lock (docs/MULTI_AGENT_FEASIBILITY.md §7 MF-3). It is
 	// recursive so the collect path can call the queueing helpers it owns.
 	mutable std::recursive_mutex gcMutex;
-	uint64_t gcAllocatedObjects = 0;
-	uint64_t gcReclaimedObjects = 0;
+	// Counters are diagnostics only, but two agents allocate concurrently, so a
+	// plain `uint64_t` would be a data race (docs/MULTI_AGENT_FEASIBILITY.md
+	// §2.3.5). They are read at safepoints and in tests.
+	std::atomic<uint64_t> gcAllocatedObjects{0};
+	std::atomic<uint64_t> gcReclaimedObjects{0};
 	// Objects whose reference count reached zero (RC-1b). They are only
 	// recycled by gcCollect(), at a safepoint where no Wasm frame is live.
 	std::vector<PendingGcObject> gcPending;
@@ -130,8 +133,11 @@ private:
 	const Module* module;
 	// Nuff said.
 	ModuleInstanceInternals internals;
-	// MF-2 guard (see tryEnterCall): clear means no host call is inside.
-	std::atomic_flag callActive{};
+	// MF-2 / TH-5 guard (see enterCall): zero means no host call is inside.
+	// A counter, not a flag: under `ConcurrencyModel::Agents` several agents
+	// execute one instance at the same time, while `inCall()` must still mean
+	// "anyone inside" for the GC safepoint's quiescence rule.
+	std::atomic<std::uint32_t> activeCalls{0};
 	void resolveImports(ImportResolver& importResolver);
 	void resolveTypeImports(ImportResolver& importResolver);
 	std::vector<TypeId> importedTypeIds;
@@ -318,19 +324,27 @@ public:
 	}
 
 	// ── Safepoint reclamation (docs/proposals/GC.md RC-1b) ──────────────
-	// ── MF-2: one agent inside a call at a time ────────────────────────────
-	// The accepted execution model is `ConcurrencyModel::Single`
-	// (docs/MULTI_AGENT_FEASIBILITY.md §6.2/MF-2): several agents may *touch* one
-	// instance, but not inside a call at the same time. Generated code cannot
-	// enforce that — the ABI carries no instance pointer — so the guard lives at
-	// the host boundary the embedder uses (`Runtime::callExport`). A second
-	// entrant is refused instead of racing.
-	bool tryEnterCall() noexcept
+	// ── MF-2 / TH-5: entry discipline ──────────────────────────────────────
+	// Under `ConcurrencyModel::Single` (the default) several agents may *touch*
+	// one instance, but not inside a call at the same time: a second entrant is
+	// refused instead of racing. Under `Agents` concurrent entry is the
+	// contract, and the guest synchronizes shared state with the atomic
+	// instructions (docs/proposals/THREADS.md TH-5). Generated code cannot
+	// enforce either policy — the ABI carries no instance pointer — so the
+	// guard lives at the host boundary the embedder uses (`Runtime::callExport`).
+	bool enterCall(bool allowConcurrent = false) noexcept
 	{
-		return !callActive.test_and_set(std::memory_order_acquire);
+		if (allowConcurrent) {
+			activeCalls.fetch_add(1, std::memory_order_acq_rel);
+			return true;
+		}
+		std::uint32_t expected = 0;
+		return activeCalls.compare_exchange_strong(expected, 1,
+				std::memory_order_acq_rel, std::memory_order_acquire);
 	}
-	void leaveCall() noexcept { callActive.clear(std::memory_order_release); }
-	bool inCall() const noexcept { return callActive.test(std::memory_order_acquire); }
+	bool tryEnterCall() noexcept { return enterCall(false); }
+	void leaveCall() noexcept { activeCalls.fetch_sub(1, std::memory_order_acq_rel); }
+	bool inCall() const noexcept { return activeCalls.load(std::memory_order_acquire) != 0; }
 
 	// Objects whose count reached zero are only *queued*; `gcCollect()` does
 	// the actual recycling. Call it only at a safepoint where no Wasm frame is

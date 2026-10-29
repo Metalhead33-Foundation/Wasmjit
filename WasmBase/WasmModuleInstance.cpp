@@ -185,7 +185,7 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 			seg.data.size());
 
 		// An applied active segment is dropped (see the loop comment above).
-		internals.dataSegmentDropped[dataIdx] = true;
+		internals.dataSegmentDropped[dataIdx].store(true, std::memory_order_release);
 	}
 
 	// THREADS.md TH-3/T8: data-segment initialisation synchronizes with other
@@ -225,7 +225,7 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 		// (mode 3) segments. We only process active ones here.
 		if (!seg.isActive()) {
 			if (seg.isDeclarative())
-				internals.elementSegmentDropped[elemIdx] = true;
+				internals.elementSegmentDropped[elemIdx].store(true, std::memory_order_release);
 			continue;
 		}
 
@@ -297,7 +297,7 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 		}
 
 		// An applied active segment is dropped (see the loop comment above).
-		instance.internals.elementSegmentDropped[elemIdx] = true;
+		instance.internals.elementSegmentDropped[elemIdx].store(true, std::memory_order_release);
 	}
 }
 ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver,
@@ -355,8 +355,8 @@ ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver,
 	// But we size the vector now so the instantiator can index into it
 	// directly without worrying about bounds.
 	internals.compiledFunctions.resize(module.internalFunctionTypeIndices.size(), nullptr);
-	internals.dataSegmentDropped.resize(module.dataSegments.size(), false);
-	internals.elementSegmentDropped.resize(module.elementSegments.size(), false);
+	internals.dataSegmentDropped = std::vector<std::atomic<bool>>(module.dataSegments.size());
+	internals.elementSegmentDropped = std::vector<std::atomic<bool>>(module.elementSegments.size());
 	internals.elementSegmentRefs.resize(module.elementSegments.size());
 
 	// Publish the imported callables only after every step above succeeded, so
@@ -1292,7 +1292,7 @@ void ModuleInstance::memoryInit(uint32_t memIdx, uint32_t dataIdx, uint32_t dstO
 
 	// A dropped segment behaves as if it were empty: a zero-length copy is a
 	// no-op, anything longer traps. See docs/proposals/BULK_MEMORY.md BM-1/BM-3.
-	const uint64_t segmentSize = internals.dataSegmentDropped[dataIdx] ? 0 : seg.data.size();
+	const uint64_t segmentSize = internals.dataSegmentDropped[dataIdx].load(std::memory_order_acquire) ? 0 : seg.data.size();
 	if (static_cast<uint64_t>(srcOffset) + len > segmentSize) {
 		reportTrap(TrapKind::OutOfBoundsMemoryAccess, "out of bounds memory.init source");
 		return;
@@ -1313,7 +1313,7 @@ void ModuleInstance::dataDrop(uint32_t dataIdx)
 		reportTrap(TrapKind::Internal, "data segment index out of range");
 		return;
 	}
-	internals.dataSegmentDropped[dataIdx] = true;
+	internals.dataSegmentDropped[dataIdx].store(true, std::memory_order_release);
 }
 
 void ModuleInstance::tableInit(uint32_t elemIdx, uint32_t tableIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len)
@@ -1329,7 +1329,7 @@ void ModuleInstance::tableInit(uint32_t elemIdx, uint32_t tableIdx, uint32_t dst
 
 	const ElementSegment& seg = module->elementSegments[elemIdx];
 	// Dropped -> empty segment, exactly like memoryInit above.
-	const size_t entryCount = internals.elementSegmentDropped[elemIdx]
+	const size_t entryCount = internals.elementSegmentDropped[elemIdx].load(std::memory_order_acquire)
 		? 0
 		: (seg.initIndices.empty() ? seg.initExprs.size() : seg.initIndices.size());
 	if (static_cast<uint64_t>(srcOffset) + len > entryCount) {
@@ -1371,7 +1371,7 @@ void ModuleInstance::elemDrop(uint32_t elemIdx)
 		reportTrap(TrapKind::Internal, "element segment index out of range");
 		return;
 	}
-	internals.elementSegmentDropped[elemIdx] = true;
+	internals.elementSegmentDropped[elemIdx].store(true, std::memory_order_release);
 }
 
 void ModuleInstance::bufferInitFromData(uint32_t dataIdx, void* dst, uint32_t srcOffset, uint32_t lenBytes)
@@ -1383,7 +1383,7 @@ void ModuleInstance::bufferInitFromData(uint32_t dataIdx, void* dst, uint32_t sr
 
 	const DataSegment& seg = module->dataSegments[dataIdx];
 	// Dropped segment == empty segment (BULK_MEMORY.md BM-1/BM-3).
-	const uint64_t segmentSize = internals.dataSegmentDropped[dataIdx] ? 0 : seg.data.size();
+	const uint64_t segmentSize = internals.dataSegmentDropped[dataIdx].load(std::memory_order_acquire) ? 0 : seg.data.size();
 	if (static_cast<uint64_t>(srcOffset) + lenBytes > segmentSize) {
 		reportTrap(TrapKind::OutOfBoundsMemoryAccess, "out of bounds data segment access");
 		return;
@@ -1402,7 +1402,7 @@ void ModuleInstance::checkDataSegmentRange(uint32_t dataIdx, uint32_t srcByteOff
 
 	const DataSegment& seg = module->dataSegments[dataIdx];
 	// Dropped segment == empty segment (BULK_MEMORY.md BM-1/BM-3).
-	const uint64_t segmentSize = internals.dataSegmentDropped[dataIdx] ? 0 : seg.data.size();
+	const uint64_t segmentSize = internals.dataSegmentDropped[dataIdx].load(std::memory_order_acquire) ? 0 : seg.data.size();
 	// 64-bit, because `lenElems * elemSize` must not wrap: `(i32.const 0x8000_0000)`
 	// elements of 2 bytes would otherwise look like a zero-byte range.
 	const uint64_t byteLen = static_cast<uint64_t>(lenElems) * elemSize;
@@ -1420,7 +1420,7 @@ void ModuleInstance::checkElementSegmentRange(uint32_t elemIdx, uint32_t srcInde
 	}
 
 	const ElementSegment& seg = module->elementSegments[elemIdx];
-	const size_t entryCount = internals.elementSegmentDropped[elemIdx]
+	const size_t entryCount = internals.elementSegmentDropped[elemIdx].load(std::memory_order_acquire)
 		? 0
 		: (seg.initIndices.empty() ? seg.initExprs.size() : seg.initIndices.size());
 	if (static_cast<uint64_t>(srcIndex) + lenElems > entryCount) {
@@ -1438,7 +1438,7 @@ void ModuleInstance::bufferInitFromElems(uint32_t elemIdx, void* dst, uint32_t s
 
 	const ElementSegment& seg = module->elementSegments[elemIdx];
 	// Dropped segment == empty segment (BULK_MEMORY.md BM-1/BM-3).
-	const size_t entryCount = internals.elementSegmentDropped[elemIdx]
+	const size_t entryCount = internals.elementSegmentDropped[elemIdx].load(std::memory_order_acquire)
 		? 0
 		: (seg.initIndices.empty() ? seg.initExprs.size() : seg.initIndices.size());
 	if (static_cast<uint64_t>(srcOffset) + lenElems > entryCount) {

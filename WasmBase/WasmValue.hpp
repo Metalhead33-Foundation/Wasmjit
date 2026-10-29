@@ -64,18 +64,34 @@ struct Callable {
 	// make the real call. Null for native imports (which have no driver).
 	// See docs/TAILCALLS.md (TC-2).
 	void*      rawFnPtr = nullptr;
+	// Tail-call dispatch thunk for this function's *type*:
+	//   void thunk(VMContext* ctx, void* fn, uint64_t* argSlots,
+	//              uint64_t* resultSlots, void* resultBuffer)
+	// The thunk reads the typed arguments out of the uniform slot buffer,
+	// calls `fn` (the raw entry for a compiled function, the native pointer for
+	// an import) and writes the single result into `resultSlots` (a
+	// multi-result tuple is written straight into `resultBuffer`). One thunk is
+	// generated per function type per module, which is what lets the trampoline
+	// chain tail calls whose *parameter* types differ from the caller's
+	// (docs/TAILCALLS.md TC-2/TC-3).
+	void*      tailEntry = nullptr;
 };
 
-// Number of 8-byte argument slots the tail-call trampoline can carry.
+// Number of uniform 16-byte argument slots the tail-call trampoline can carry.
+// A slot is 16 bytes so a `v128` argument fits without a second layout; the
+// generalized trampoline itself falls back to `call` + `return` for `v128`
+// (docs/TAILCALLS.md TC-3), so today every stored value uses the low 8 bytes.
 inline constexpr uint32_t kTailCallArgSlots = 16;
+inline constexpr uint32_t kTailCallSlotBytes = 16;
 
 // Tail-call trampoline state (see docs/TAILCALLS.md §6/§7).
 //
 // A wasm function that performs a tail call it cannot lower to a native
 // `JIT_CALL_TAIL` (i.e. anything but direct self-recursion) writes the callee
 // and its arguments here and *returns*. The per-function driver that wraps the
-// running function observes `pending`, re-dispatches to `target` with `args`,
-// and loops — so the host stack does not grow along the tail-call chain.
+// running function observes `pending`, re-dispatches to `target` through the
+// target type's thunk, and loops — so the host stack does not grow along the
+// tail-call chain, even when the links have different signatures.
 //
 // Single agent *per execution context*. The engine still runs one agent per
 // host thread, but the state belongs to the current execution state
@@ -85,8 +101,39 @@ inline constexpr uint32_t kTailCallArgSlots = 16;
 struct TailCallState {
 	int32_t   pending = 0;
 	Callable* target  = nullptr;
-	uint64_t  args[kTailCallArgSlots] = {};
+	// One 16-byte slot per argument (`kTailCallSlotBytes`), 16-byte aligned so
+	// a `v128` could occupy one slot if the generalized path ever admits it.
+	alignas(16) uint64_t args[kTailCallArgSlots * 2] = {};
+	// Scratch for a single result. The final callee's result type always
+	// matches the first caller's (a tail-call chain is type-checked link by
+	// link), so the driver reloads it with its own result type.
+	alignas(16) uint64_t results[2] = {};
+	// Out-buffer for a multi-result chain. A multi-result function returns via
+	// a trailing `void*` parameter (docs/proposals/MULTI_VALUE.md MV5), and
+	// every link in a tail chain shares the caller's result tuple, so the
+	// driver publishes its own out-buffer pointer here once.
+	void*     resultBuffer = nullptr;
 };
+
+// True when `ft` fits the trampoline's uniform 16-byte slot representation.
+// `v128` is the one value type that does not survive the untyped round trip, so
+// a chain involving it keeps the semantic `call` + `return` lowering (the
+// result is identical, only the stack-space guarantee is not claimed). No
+// upstream tail-call script uses a `v128` parameter or result
+// (docs/TAILCALLS.md TC-3).
+inline bool tailCallSlotsSupported(const FuncType& ft)
+{
+	if (ft.params.size() > kTailCallArgSlots)
+		return false;
+	const auto hasVector = [](const std::vector<StorageType>& types) {
+		for (const StorageType& type : types) {
+			if (!type.isPacked && type.val.opcode == ValueTypeCode::V128)
+				return true;
+		}
+		return false;
+	};
+	return !hasVector(ft.params) && !hasVector(ft.results);
+}
 
 // Address of the current execution state's tail-call state. Generated code
 // calls this helper; it is the only supported way for a backend to reach the

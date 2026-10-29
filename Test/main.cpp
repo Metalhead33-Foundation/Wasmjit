@@ -565,6 +565,27 @@ TEST_CASE("tail calls compute correct results")
 	// return_call_ref.wast): the global's `ref.func` must be resolved to a real
 	// Callable pointer after compilation.
 	REQUIRE(WASM::callCallable<int32_t>(*constViaRef) == 42);
+
+	// TC-3: a mutual tail-call chain whose *parameter lists differ*
+	// ((i64,i64) <-> (i32,i64)). 5·10⁶ links in constant stack; a call+return
+	// lowering would exhaust the host stack long before that. Each `$mixed-b`
+	// increments the accumulator, so the result counts the steps.
+	auto mixedSig = loaded.instance->exportedFunction("mixed_sig");
+	REQUIRE(mixedSig.has_value());
+	REQUIRE(WASM::callCallable<int64_t>(*mixedSig, int64_t(5000000)) == 5000000);
+
+	// TC-3: a multi-result tail chain. The trampoline carries the caller's
+	// result buffer through the thunk, so a tuple callee works unchanged.
+	auto pairViaTail = loaded.instance->exportedFunction("pair_via_tail");
+	REQUIRE(pairViaTail.has_value());
+	alignas(16) unsigned char tuple[16] = {};
+	WASM::callCallableWithResults(*pairViaTail, tuple, int32_t(9));
+	int32_t pairFirst = 0;
+	int32_t pairSecond = 0;
+	std::memcpy(&pairFirst, tuple, sizeof(pairFirst));
+	std::memcpy(&pairSecond, tuple + sizeof(pairFirst), sizeof(pairSecond));
+	REQUIRE(pairFirst == 7);
+	REQUIRE(pairSecond == 9);
 }
 
 TEST_CASE("multi-memory: two linear memories are independent")
@@ -7460,6 +7481,43 @@ TEST_CASE("acquire-release ordering and pause decode, validate, and execute")
 	auto f = instance->exportedFunction("f");
 	REQUIRE(f.has_value());
 	REQUIRE(WASM::callCallable<int32_t>(*f) == 7);
+}
+
+TEST_CASE("an RMW accepts the nibble form of the acqrel ordering")
+{
+	// (module (memory 1 1 shared) (func (export "f") (result i32)
+	//   i32.const 0 i32.const 5 i32.atomic.rmw.add acqrel
+	//   i32.const 0 i32.atomic.load))
+	//
+	// The acquire-release proposal encodes an RMW's ordering as read nibble +
+	// write nibble, and requires them to match: acqrel is 0x11, not 0x01. The
+	// decoder normalises 0x11 to the shared "acqrel" value the helpers use.
+	const std::vector<uint8_t> bytes = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x01,0x05,0x01,0x60,0x00,0x01,0x7f,
+		0x03,0x02,0x01,0x00,
+		0x05,0x04,0x01,0x03,0x01,0x01,
+		0x07,0x05,0x01,0x01,'f',0x00,0x00,
+		0x0a,0x14,0x01,0x12,0x00,
+		0x41,0x00,0x41,0x05,0xfe,0x1e,0x12,0x11,0x00,0x1a,
+		0x41,0x00,0xfe,0x10,0x02,0x00,
+		0x0b
+	};
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device, testStore());
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto f = instance->exportedFunction("f");
+	REQUIRE(f.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*f) == 5);
 }
 
 // ── Shared-everything threads (docs/proposals/SHARED_EVERYTHING_THREADS.md) ─

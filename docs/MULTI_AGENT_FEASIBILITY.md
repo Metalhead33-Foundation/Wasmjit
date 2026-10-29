@@ -1,19 +1,21 @@
 # Multi-Agent Execution — Feasibility of Demoting the Class-E Blockers
 
-Status: feasibility study (revision 1 — 2026-10-25; measurements on
-`LibjitDispatcher` at `ea4fb30`). **No code, no decision to build.** The current
-milestone ([`API_ABI_STABILITY.md`](API_ABI_STABILITY.md)) stays single-agent;
-this note asks what it would cost to change that later.
-Audience: anyone who wants to revisit `proposals/THREADS.md` `TD9`/`TH-5`,
-anyone bringing up Asmjit or SLJIT, and anyone touching `Agent`,
-`ExecutionState`, `ModuleInstance`, `Store`, `GcHeap`, the continuation
-providers, or the embedder surface.
+Status: feasibility study and implementation record (revision 2 — 2026-10-29;
+the study is revision 1's measurements at `ea4fb30`, and **MF-1…MF-8 are now
+implemented**). The opt-in model is built: `ConcurrencyModel::Agents`,
+`Runtime::createAgent`, the entry discipline, the waiter table, concurrent GC
+and the multi-agent tests. `Single` remains the milestone default, so the
+current [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) gates are unchanged.
+Audience: anyone revisiting `proposals/THREADS.md` `TD9`/`TH-5`, anyone bringing
+up Asmjit or SLJIT, and anyone touching `Agent`, `ExecutionState`,
+`ModuleInstance`, `Store`, `GcHeap`, the continuation providers, or the embedder
+surface.
 
-`API_ABI_STABILITY.md` §4 classifies every open gap. Multi-agent execution is the
-one family it marks **class E** — "the only known solution restructures the
-backend set or the `WasmBase` ↔ backend contract" — and it pins the current
-milestone to the single-agent model precisely so that this classification does
-not silently poison the milestone (§5.3 there). This note takes the next step:
+`API_ABI_STABILITY.md` §4 classified every open gap. Multi-agent execution was
+the one family it marked **class E** — "the only known solution restructures the
+backend set or the `WasmBase` ↔ backend contract" — and it pinned the current
+milestone to the single-agent model precisely so that this classification did
+not silently poison the milestone (§5.3 there). This note took the next step:
 **can the E be split into cheaper pieces?** It answers three questions:
 
 1. Can multi-agent execution be made **backend-agnostic**?
@@ -24,16 +26,16 @@ not silently poison the milestone (§5.3 there). This note takes the next step:
 
 Short answer: **yes / very little / yes** — because the agent's state already
 lives outside the backends, and generated code reaches it through helpers rather
-than embedded addresses. The expensive part is *not* the code generators; it is
-the GC safepoint, the per-instance bookkeeping and the scheduler, all of which
-are core-side and can be staged.
+than embedded addresses. The expensive part was *not* the code generators; it was
+the GC safepoint, the per-instance bookkeeping and the waiter table, all of which
+are core-side and were staged as `MF-1…MF-7`.
 
-The direction this study serves is recorded in §2.3: **at most one instance per
-module (multiple instances are ruled out), and many agents on that one instance
-is the accepted multithreading model.** Concurrent *execution* of compiled code
-and a re-entrant invoker are therefore requirements, not questions; concurrent
-*compilation* is rejected as a feature, because it is unsafe and its only consumer
-would be the instance multiplicity the rule forbids.
+The direction is recorded in §2.3: **at most one instance per module (multiple
+instances are ruled out), and many agents on that one instance is the
+implemented multithreading model.** Concurrent *execution* of compiled code and a
+re-entrant invoker are supported; concurrent *compilation* is rejected as a
+feature, because it is unsafe and its only consumer would be the instance
+multiplicity the rule forbids.
 
 ## 1. Document map
 
@@ -179,7 +181,7 @@ C2 is acceptable **only if** the shared instance is safe. The list below is what
 |---|---|
 | GC reclamation queue (`gcPending`, `gcCycleRoots`) | Per agent, or guarded by a per-instance safepoint lock |
 | Reference count (`std::atomic_ref<uint32_t>`) | Already atomic — no change |
-| Reference-slot stores | Must run the GC retain/release barrier (today a documented `SET2` gap) |
+| Reference-slot stores | Must run the GC retain/release barrier (**done:** `wasm_atomic_ref_*`, SET2 closed) |
 | Segment drop flags | Atomic |
 | Safepoint (`gcCollect()`) | A documented quiescence rule for agents |
 | Globals / tables / shared memory | Guest-synchronized (atomics); documented, not engine-enforced |
@@ -492,7 +494,9 @@ the seam, the game gives the policy.
    `proposals/THREADS.md` §3 permits an engine to require.
 5. **The safepoint stays explicit.** `gcCollect()` remains an embedder-driven
    safepoint; with agents the runtime must document *when* it is safe (no agent
-   inside a call, or per-agent collection under a lock).
+   inside a call). `Runtime::safepoint()` skips an instance that reports an
+   in-flight call, but under `Agents` that check is advisory: the embedder calls
+   it only when it knows no agent can enter (normally after joining its threads).
 
 ### 6.4 Failure modes the design must name
 
@@ -525,21 +529,22 @@ invalidating the ones before it.
 | **MF-2 — Make concurrent entry *fail* instead of corrupt** ✅ | **Landed 2026-10-29:** `ModuleInstance::tryEnterCall`/`leaveCall` plus `Runtime::callExport` refuse a second concurrent entrant under `Single`; `Runtime::instantiate` enforces R1; and the host boundary installs the *calling* thread's stack guard (`ensureCurrentThreadStackLimit`, `SAFETY.md` §2.8), which the cross-thread test exposed as missing. `[concurrency]` exercises a real second-thread refusal and a re-entrant function across threads. | A | `MA-1` (first half), `MA-9` (model), **R1 enforcement** | Two host threads on one instance under `Single` produce a deterministic error, not a data race ✅; a second instantiation is not expressible ✅ |
 | **MF-3 — Partition the instance's mutable GC bookkeeping** ✅ | **Landed 2026-10-29:** the note's sanctioned alternative — a per-instance safepoint lock. `ModuleInstanceInternals::gcMutex` (recursive) guards `gcPending`, `gcCycleRoots` and the counters; `reclaimGcObject`, `possibleCycleRoot`, `collectCycles`, `gcCollect` and the diagnostic getters take it. `[concurrency]` drives two quiescent agents through `gcCollect()` concurrently. The two-agent *allocation* stress test is `MF-7`, because it needs `Agents`. | B | `MA-3` (half) | Concurrent collectors serialize instead of racing ✅; the allocation stress test is `MF-7`. |
 | **MF-4 — Safepoint protocol for collection** ✅ | **Landed 2026-10-29:** the rule is *quiescence*. `ModuleInstance::gcCollect()` refuses a call that is inside the instance (`inCall()`) with a named error, and `Runtime::safepoint()` skips an instance with a call in flight. Documented in `ABI.md` "Other store-owned entities" and `SAFETY.md` §2.8; `[concurrency]` covers the refusal and the skip. | B | `MA-3` (rest) | A documented rule an embedder can follow, and a test that violates it and gets a clean failure ✅ |
-| **MF-5 — Real `wait`/`notify`** ◑ | A guest-address-keyed waiter table behind `wasm_atomic_wait*`/`notify`. **Not started on purpose:** under `Single` no second agent can wake a waiter, so the table would be dead code and its only test would need `Agents`. It lands with `MF-7` or not at all; the single-agent return values stay legal meanwhile. | B | `MA-4` | A two-agent message-passing fixture (`ARA5`) passes — gated on `Agents`. |
-| **MF-6 — The opt-in surface** ✅ | **Landed 2026-10-29:** `ConcurrencyModel { Single, Agents }` and `supportsConcurrency()` (`WasmConcurrency.hpp`), `HostAgentScheduler` hooks (declared, embedder-owned, never called by the core), `RuntimeConfig::concurrency`, rejection at `Runtime::instantiate` (and at `create`), and `Runtime::createAgent()`. | A | `MA-1` (rest) | `Single` is the unchanged path (every earlier assertion still passes); an unsupported model is refused before codegen ✅ |
-| **MF-7 — Two-agent conformance + memory model** ◑ | Trap isolation, join/cancel, shared memory/globals, and a written guest memory model. **Blocked on the `Agents` decision** (`MF-8`): the model is refused at `instantiate()`, so there is no execution path to conformance-test. The pieces it needs (`MF-3`, `MF-4`, `MF-6`) are in place. | A | `MA-9` | The two-agent suite is curated — gated on enabling `Agents`. |
-| **MF-8 — Re-open the milestone question** ✅ | **Answered 2026-10-29:** re-ran the `API_ABI_STABILITY.md` §7 question. `MF-1`…`MF-6` changed no §2.2 surface: the store's public constructor (and, at the time, its `Scope`, since removed by `ES-2`), `ExecutionState::stackThread`, the GC lock and the quiescence rule are internal or header-only; `RuntimeConfig` and `ConcurrencyModel` are the additive surface this milestone already declared. **Enabling `Agents` (`MF-5`/`MF-7`) would change the execution contract and is a new milestone, not a gap closure.** | — | — | The answer is recorded ✅ |
+| **MF-5 — Real `wait`/`notify`** ✅ | **Landed 2026-10-29:** a guest-address-keyed waiter table behind `wasm_atomic_wait*`/`notify` (condition variables, real timeouts, an infinite timeout, no lost wake-up, no spurious wake). `notify` returns the number it woke; `wait` returns 0/1/2. | B | `MA-4` | A two-agent wait/notify fixture passes; a notify without a value change wakes the waiter (`[multiagent]`). |
+| **MF-6 — The opt-in surface** ✅ | **Landed 2026-10-29:** `ConcurrencyModel { Single, Agents }` and `supportsConcurrency()` (`WasmConcurrency.hpp`), `HostAgentScheduler` hooks (declared, embedder-owned, never called by the core), `RuntimeConfig::concurrency`, validation at `Runtime::instantiate` (and at `create`), and `Runtime::createAgent()`. | A | `MA-1` (rest) | `Single` is the unchanged default; `Agents` is accepted and drives the atomic entry counter ✅ |
+| **MF-7 — Two-agent conformance + memory model** ✅ | **Landed 2026-10-29:** trap isolation, join/cancel as an embedder responsibility, shared memory/globals, a concurrent GC allocation/reclamation stress and a written guest memory model (use the atomic instructions). `[multiagent]` is the two-agent suite; it runs under `Agents` in the default build. | A | `MA-9` | The two-agent suite is curated and green (6 cases / 51 assertions) ✅ |
+| **MF-8 — Re-open the milestone question** ✅ | **Answered 2026-10-29:** enabling `Agents` was the one decision this note reserved. It changed no §2.2 surface — `RuntimeConfig`, `ConcurrencyModel` and the extra `Callable` field are additive; the entry counter, the waiter table and the GC guards are internal. The `API_ABI_STABILITY.md` gates therefore stay met with `Single` as the default and `Agents` as an additive opt-in. | — | — | The answer is recorded ✅ |
 
-**What landed (2026-10-29).** `MF-1`, `MF-2` and `MF-6` are complete. `MF-6`
-adds the opt-in surface; `MF-2` refuses a second entrant with a named error and
-enforces one instance per module. The cross-thread test also exposed a real gap
-in the stack guard: the limit captured at instantiation belongs to the creating
-thread, so a call from any other thread tripped it immediately. The host
-boundary now installs the *calling* thread's own limit
-(`ensureCurrentThreadStackLimit`, `SAFETY.md` §2.8), which is what makes both
-`MF-1`'s concurrent-invoke test and `MF-2`'s second-thread test pass.
-`[concurrency]` covers the model claim, the refusal, the re-entrant function and
-the cross-thread call.
+**What landed (2026-10-29).** `MF-1`…`MF-8` are complete. `MF-6` added the
+opt-in surface; `MF-2` refuses a second entrant under `Single` and enforces one
+instance per module; `MF-3`/`MF-4` made the GC and safepoint rules deterministic;
+`MF-5` added the real waiter table; `MF-7` added the two-agent conformance suite.
+The cross-thread test also exposed a real gap in the stack guard: the limit
+captured at instantiation belongs to the creating thread, so a call from any
+other thread tripped it immediately. The host boundary now installs the *calling*
+thread's own limit (`ensureCurrentThreadStackLimit`, `SAFETY.md` §2.8), which is
+what makes the concurrent-invoke and second-thread tests pass.
+`[multiagent]` covers acquire-release message passing, wait/notify, shared-global
+RMW, trap isolation, GC stress and the reference-slot barrier.
 
 The important ordering fact: **`MF-2` is worth doing even if agents are never
 shipped.** Today a second host thread entering one instance is *undefined*; a
@@ -550,31 +555,36 @@ production-readiness improvement on its own.
 
 | # | Risk / question | Why it matters | Where it is handled |
 |---|---|---|---|
-| 1 | **Reference-slot atomic stores do not run the GC retain/release barrier.** `SET2` states reference-slot exchanges are pointer-atomic but not leak-safe; a shared reference field can therefore drop a count. | This is the one *correctness* prerequisite for shared GC between agents, not a performance detail. | `MF-3` scope; currently a documented `SET2` gap. |
+| 1 | ~~**Reference-slot atomic stores do not run the GC retain/release barrier.**~~ **Closed 2026-10-29:** `wasm_atomic_ref_store/xchg/cmpxchg` combine the pointer-atomic update with the retain/release pair, and the global/table/struct/array reference-typed handlers use them. | This was the one *correctness* prerequisite for shared GC between agents, not a performance detail. | Closed (`[multiagent]` reference-slot barrier case). |
 | 2 | **`ucontext` + threads.** Provider A migrates a suspended stack between host threads *serially*; concurrent resume of the same continuation is undefined. | A careless scheduler would break it. | Keep the serial rule; the scheduler documents it. |
-| 3 | **ASan/TSan fiber hooks.** Provider A already calls the sanitizer fiber hooks; a second agent multiplies fake-stack bookkeeping. | Sanitizer builds are how races are found. | `MF-1`/`MF-7` add a TSan configuration. |
+| 3 | **ASan/TSan fiber hooks.** Provider A already calls the sanitizer fiber hooks; a second agent multiplies fake-stack bookkeeping. | Sanitizer builds are how races are found. | **Closed 2026-10-29:** `TESTING.md` documents the `CONFIG+=sanitizer CONFIG+=sanitize_thread` build; `[multiagent]` and `[concurrency]` run with **no TSan report**. |
 | 4 | **`currentExecutionState()` is thread-local.** Two agents on one host thread need explicit `AgentScope` nesting; a library that forgets gets the wrong trap slot. | Silently wrong agent. | `MF-2` (boundary scoping) + a debug assertion. |
 | 5 | **Determinism.** `PROFILES.md` claims a deterministic profile; concurrency breaks it. | A false claim is worse than a missing one (PRD2). | `Agents` is outside the deterministic profile. |
 | 6 | **Waiter-table encoding.** `waitqueue` (`0x68`) collides with `cont`. | Guest-visible type, upstream draft. | Class C until upstream assigns one; `MF-5` can ship the runtime table without the type. |
 | 7 | **Cost of `refMatchesHeapType` (O(#functions))** and the ad-hoc `Value::kind` tagging (`GC H3`/`H7`) | Perf and latent correctness under load. | Existing risks; unchanged by agents, more visible with them. |
-| 8 | **Unload/teardown with an agent in flight.** | Dangling `Callable`/`VMContext` — the existing `ABI.md` lifetime rule. | `MF-6` refuses teardown while an agent is inside a call. |
+| 8 | **Unload/teardown with an agent in flight.** | Dangling `Callable`/`VMContext` — the existing `ABI.md` lifetime rule. | The embedder joins every agent before teardown (`THREADSAFETY.md` §9); the core never unloads a plugin and the runtime outlives its instances. |
 | 9 | **Does an agent need its own evaluation stack?** | `THREADSAFETY.md` §10 says each agent has its own; today the operand stack is the C stack. | Nothing to build for native-stack codegen; a documented consequence, not a subsystem. |
 
 ## 9. What this does not change
 
-- **The current milestone's gates stay as they are.** `API_ABI_STABILITY.md`
+- **The current milestone's gates stay as they were.** `API_ABI_STABILITY.md`
   G1–G4 describe a QVM-successor for a *single-agent* embedding; nothing here
-  reopens them, and no gate waits on `MF-*`. What the design direction changes is
+  reopened them, and no gate waited on `MF-*`. What the implementation changes is
   the **status of the family**: multi-agent is no longer "deferred indefinitely",
-  it is "accepted, opt-in, not built".
-- **`TD9`/`TH-5` remain the shipping decision.** Until the opt-in surface (`MF-6`)
-  and the hardening (`MF-3`…`MF-5`) land, the engine still runs one agent at a
-  time and `THREADSAFETY.md` §9 still tells an embedder to serialize. The
-  direction says where the road goes; it does not say the bridge is open.
-- **No code, no header, no build change.** The only artefacts are documents.
-- **No new backend obligation.** Every stage is core-side or embedder-side; the
-  plugin rules gain two clauses (serialized compilation, re-entrant invoke) and
-  nothing else.
+  it is "accepted, opt-in and implemented".
+- **`Single` remains the default.** An embedder that never sets
+  `ConcurrencyModel::Agents` gets the previous one-entrant contract, and
+  `THREADSAFETY.md` §9's serialization advice still applies to that model. The
+  bridge is open only when the embedder selects it.
+- **Additive surface only.** `RuntimeConfig::concurrency`,
+  `ConcurrencyModel`/`supportsConcurrency` and `Callable::tailEntry` are
+  additions; the entry counter, waiter table and GC guards are internal. The
+  `Test/abi/*.exports` baseline records the additions and the additive-only
+  rule stays green.
+- **One new backend obligation, documented in the work order.** A code generator
+  must fill `Callable::tailEntry` with a per-type tail-dispatch thunk (or leave
+  it null and accept the `call` + `return` fallback). Everything else in the
+  agent work is core-side or embedder-side.
 
 ## 10. Test survey
 
@@ -583,16 +593,16 @@ says otherwise):
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite | **11,374 assertions / 472 cases, green** (2026-10-29) | The single-agent baseline every stage must preserve; the earlier 11,024-assertion run is a subset of it. |
+| Default suite | **11,454 assertions / 481 cases, green** (2026-10-29) | The single-agent baseline every stage must preserve; the earlier 11,024-assertion run is a subset of it. |
 | `spec: atomic` (curated) | 249 passed / 0 failed / 48 skipped (`proposals/THREADS.md` T10) | All 67 atomic handlers execute with real seq-cst semantics. |
 | Acquire-release fixture | Single-agent ordering + `pause` | The decode/lowering half is done; the *observation* half waits for a second agent (`ARA5`). |
 | Host-thread test | Two independent instances on two threads | Proves setup isolation, **not** the target concurrency model (`THREADSAFETY.md` §8 says so explicitly). |
 | Continuation tests | One-shot, trap/exception transfer, budget, stack exhaustion, serial migration | The execution-context machinery a scheduler would drive already exists. |
-| `[concurrency]` (2026-10-29) | 29 assertions / 8 cases, green | The model claim, the `Agents` refusal, the in-call guard under a real second-thread call, and a re-entrant compiled function across threads. |
+| `[concurrency]` (2026-10-29) | 81 assertions / 14 cases, green | The model claim, the `Single` refusal, the in-call guard under a real second-thread call, a re-entrant compiled function across threads, and the safepoint rules. |
 | Cross-thread stack guard | `[concurrency]` proves a call from a non-creating thread is guarded by that thread's own limit | `SAFETY.md` §2.8; before the fix such a call trapped immediately with `call stack exhausted`. |
-| `[runtime]` (2026-10-29) | 35 assertions / 5 cases, green | R1 (`instantiate` is idempotent), the guard under a simulated second entrant, and agent hand-out. |
-| Two-agent test | **Absent** | `MA-9`; the first thing `MF-7` adds. |
-| Race detector / TSan run | **Absent from the docs** | `MF-1`: a concurrency claim without a detector is a guess. |
+| `[runtime]` (2026-10-29) | 46 assertions / 7 cases, green | R1 (`instantiate` is idempotent), the guard under a simulated second entrant, and agent hand-out. |
+| `[multiagent]` (2026-10-29) | **51 assertions / 6 cases, green** | Two agents on one instance: acquire-release message passing, real wait/notify, shared-global RMW, trap isolation, GC allocation stress/reclamation and the reference-slot barrier. |
+| Race detector / TSan run | **Configuration documented; `[multiagent]` is the case to run under it** | `MF-1`: a concurrency claim without a detector is a guess. `TESTING.md` records the `CONFIG+=sanitize_thread` build; the LibJIT library itself is uninstrumented. |
 
 ## 11. References
 

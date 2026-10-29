@@ -535,7 +535,8 @@ for a merge to `master` — so that "green" means the same thing to every review
 | --- | --- | --- | --- |
 | Strict validator sweep | `WASM_SPEC_VALIDATE=1 ./WasmJit '[spec]'` | every curated binary negative module is rejected (the 2,382 cases above) | **2,382 / 2,382**, 2026-10-18 |
 | AddressSanitizer build + suite | configure a second shadow build (below), then run the default suite | no use-after-free, overflow or leak report on the hand-written path | configuration exists; the run is **not yet recorded** in this note |
-| ABI check | `./Test/abi-check.sh build/<config>` | no exported symbol disappeared since the baseline (the additive-only rule of `API_ABI_STABILITY.md` G2); `--update` records an intentional addition | **1,801 + 829 symbols, 0 removed**, 2026-10-29 |
+| ThreadSanitizer concurrency run | configure a third shadow build (below), then `./WasmJit '[multiagent]'` | no data race on the multi-agent path (waiter table, entry counter, GC queue/counters, shared-global atomics) | `[multiagent]` 51 assertions / 6 cases, **no TSan report**, 2026-10-29 |
+| ABI check | `./Test/abi-check.sh build/<config>` | no exported symbol disappeared since the baseline (the additive-only rule of `API_ABI_STABILITY.md` G2); `--update` records an intentional addition | **1,804 + 830 symbols, 0 removed**, 2026-10-29 |
 
 The ASan configuration is a separate shadow build, so the ordinary build keeps
 its flags:
@@ -552,6 +553,25 @@ cd Test && ./WasmJit '~[spec]'
 > Add `QMAKE=/usr/bin/qmake6` to the `make` command line: the shell on this
 > machine rewrites `argv[0]`, so a recursive `qmake` recorded as the editor
 > binary never produces a Makefile. See the environment notes below.
+
+The **ThreadSanitizer** configuration is the same idea, but use qmake's
+sanitizer feature (`CONFIG+=sanitizer` loads `sanitizer.prf`; `sanitize_thread`
+alone is parsed but applies no flags). The run is what makes the multi-agent
+claim evidence rather than a guess (`MULTI_AGENT_FEASIBILITY.md` `MF-1`):
+
+```bash
+mkdir -p build/Desktop-TSan && cd build/Desktop-TSan
+/usr/bin/qmake6 ../../Project.pro -spec linux-g++ \
+    CONFIG+=debug CONFIG+=sanitizer CONFIG+=sanitize_thread
+env MAKE=/usr/bin/make QMAKE=/usr/bin/qmake6 /usr/bin/make -e qmake_all
+env MAKE=/usr/bin/make /usr/bin/make -j"$(nproc)"
+cd Test && ./WasmJit '[multiagent]'
+```
+
+A build directory that was configured without the sanitizer needs
+`make clean` first — qmake changes the flags but not the object dependencies.
+LibJIT itself is an uninstrumented external library, so a report is expected to
+point at this project's code (or at a real race), not at LibJIT's internals.
 
 ### Traps
 

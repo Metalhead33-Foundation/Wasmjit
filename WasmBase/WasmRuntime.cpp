@@ -17,10 +17,13 @@ namespace {
 // discovered mid-call (the `ProfileConfig` precedent, docs/proposals/PROFILES.md).
 void rejectUnsupportedConfig(const RuntimeConfig& config)
 {
+	// Both execution models are implemented: `Single` refuses a concurrent
+	// entrant, `Agents` admits it (docs/proposals/THREADS.md TH-5). A model a
+	// future build drops is refused here, before any code is generated.
 	if (!supportsConcurrency(config.concurrency)) {
 		throw std::runtime_error(std::string("concurrency model '")
 				+ concurrencyModelName(config.concurrency)
-				+ "' is not implemented; this build supports 'single' only"
+				+ "' is not implemented; this build supports 'single' and 'agents'"
 				  " (docs/MULTI_AGENT_FEASIBILITY.md MF-6)");
 	}
 	if (config.allocationBudgetBytes != 0
@@ -178,7 +181,10 @@ void Runtime::safepoint()
 	// The frame-end hook (P6): no Wasm frame is live here, so every queued
 	// object can be recycled. See docs/ABI.md "Other store-owned entities".
 	// MF-4: an instance with a call in flight is skipped — a safepoint requires
-	// quiescence, and `ModuleInstance::gcCollect` would refuse it.
+	// quiescence. Under `ConcurrencyModel::Agents` this check is advisory: the
+	// embedder must call safepoint() only when it knows no agent can enter
+	// (normally after joining its threads), because a call can start between
+	// the check and gcCollect().
 	for (auto& entry : instances_) {
 		if (entry.second->inCall())
 			continue;

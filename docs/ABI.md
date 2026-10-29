@@ -752,6 +752,8 @@ Universal function reference stored in tables and import storage.
 | `context`  | `VMContext*`  | `nullptr` → JIT passes caller's ctx; non-null → baked constant |
 | `localTypeIdx` | `uint32_t` | Module-local type index in the defining module        |
 | `typeId`       | `TypeId`   | Canonical process-wide type identity; `kNone` for native imports. Used for cross-module type matching (`call_indirect`, `call_ref`, function imports). |
+| `rawFnPtr`     | `void*`    | For a compiled function: the raw entry point behind the driver that `fnPtr` names. Null for native imports. |
+| `tailEntry`    | `void*`    | Per-function-type tail-dispatch thunk `void(VMContext*, void* fn, uint64_t* args, uint64_t* results, void* resultBuffer)` ([`proposals/TAILCALLS.md`](proposals/TAILCALLS.md) TC-5). Null means "no trampoline; fall back to `call` + `return`". |
 
 ## Relevant Source Files
 

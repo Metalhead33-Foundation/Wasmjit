@@ -179,14 +179,12 @@ There are three guest-side execution shapes for that single instance:
 1. **One agent, serial calls.** The ordinary case. No guest concurrency exists;
    only the host's own threads matter.
 2. **One instance, several host calls serialized by a host/engine lock.** The
-   only thread-safe host model available today is external serialization; the
-   target is an instance-level synchronization mechanism rather than more
-   instances.
-3. **One instance, several concurrent agents or host threads.** This is the
-   multi-agent target. It needs shared instance state to be made safe: shared
-   memory/tables/globals/GC plus atomics and ordering, and/or an engine-owned
-   per-instance concurrency protocol. It is **not implemented today**: there is
-   no scheduler and one instance is not concurrently callable.
+   default `Single` model: `Runtime::callExport` refuses a second entrant, and an
+   embedder that reaches the instance another way must serialize it.
+3. **One instance, several concurrent agents or host threads.** The opt-in
+   `ConcurrencyModel::Agents` model. The engine admits concurrent entry, guards
+   its own bookkeeping and supplies real atomics/wait-notify; the guest must
+   synchronize shared memory/tables/globals/GC with the atomic instructions.
 
 ### 4.2 What “guest-threadsafe” must mean
 
@@ -194,26 +192,25 @@ A Wasm instance/function is guest-threadsafe only relative to a stated
 execution model:
 
 - **G-A — serial instance.** At most one call enters the instance at a time.
-  This is the current engine's model. It makes ordinary non-atomic Wasm code
-  valid; it says nothing about concurrent calls.
+  This is the default (`ConcurrencyModel::Single`). It makes ordinary non-atomic
+  Wasm code valid; it says nothing about concurrent calls.
 - **G-B — single instance with serialized entry.** Several host threads may
-  exist, but every entry into the instance is serialized by an external lock (or
-  by a future engine-owned instance lock). Each call still sees the one
-  instance's unshared memory/globals/GC state. This is the current practical
-  host model; the lock is outside the Wasm code.
+  exist, but every entry into the instance is serialized by an external lock.
+  Each call still sees the one instance's unshared memory/globals/GC state. This
+  remains the practical model for embedders that do not opt into `Agents`.
 - **G-C — shared-memory agents.** Several agents execute concurrently in the
-  one instance and share memory (and, when implemented, shared tables/globals/
-  GC). Every access to shared mutable data must follow the Wasm memory model:
-  atomic instructions for data races, acquire/release or seqcst ordering as
-  required, and no non-atomic access racing with an atomic or another non-atomic
-  access. Private/unshared instance state is not a concurrency primitive.
+  one instance and share memory (and shared tables/globals/GC). Every access to
+  shared mutable data must follow the Wasm memory model: atomic instructions for
+  data races, acquire/release or seqcst ordering as required, and no non-atomic
+  access racing with an atomic or another non-atomic access. Private/unshared
+  instance state is not a concurrency primitive. **Implemented as
+  `ConcurrencyModel::Agents`; `[multiagent]` is the conformance suite.**
 - **G-D — shared GC/table agents.** The Shared-Everything Threads model. The
   static `shared` annotations restrict what may be referred to; the atomics
-  provide tear-free access; the GC/refcount barriers and waitqueues are part of
-  the runtime's future obligation. Current status: annotations and the
-  working-draft atomics decode/execute single-agent, but the GC heap is still
-  single-mutator and reference-slot atomics do not yet run the full RC barrier
-  (`proposals/SHARED_EVERYTHING_THREADS.md` SET-2/SET-3).
+  provide tear-free access; reference-slot atomics run the GC retain/release
+  barrier and the heap is a multi-mutator-safe allocator. **Implemented for the
+  encodable surface**; `waitqueue`/TLS/lifecycle have no stable encoding
+  (`proposals/SHARED_EVERYTHING_THREADS.md` SET-2/SET-4/SET-5).
 
 A module author who claims “guest-threadsafe” should state **which** of
 G-A…G-D applies. “No unsynchronised shared state” under G-C/G-D is a
@@ -339,7 +336,7 @@ touches. It is **not** a statement that generated Wasm code is race-free.
 
 ### 5.2 What the current engine does and does not guarantee
 
-**It does guarantee (within the current single-agent model):**
+**It does guarantee (with `Single` as the default and `Agents` opt-in):**
 
 - per-agent trap and tail-call state;
 - Store/type/GC/string **management** locks, so concurrent creation/lookup of
@@ -350,8 +347,12 @@ touches. It is **not** a statement that generated Wasm code is race-free.
 - a **per-agent** pending-trap slot (`TrapSlot`), pending-exception slot,
   tail-call state, deferred-cleanup stack, depth counters and stack limit:
   `Agent` owns an `ExecutionState` (`WasmBase/WasmAgent.hpp`) and a host
-  thread's default agent is created lazily. True multi-agent execution remains
-  deferred ([`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §12.1);
+  thread's default agent is created lazily;
+- under `ConcurrencyModel::Agents`, **concurrent entry into the one instance**:
+  the entry counter is atomic, the GC reclaim queue/cycle candidates and
+  counters are guarded (or atomic), the data/element drop flags are atomic, and
+  reference-typed atomic slots run the retain/release barrier. `[multiagent]`
+  and the TSan configuration exercise it;
 - a continuation installs a **private** `ExecutionState`
   (`WasmBase/WasmContinuation.hpp`). A switches native stacks on one host
   thread; B runs a suspended continuation on its own host thread. In both cases
@@ -361,8 +362,8 @@ touches. It is **not** a statement that generated Wasm code is race-free.
 
 **It does not guarantee:**
 
-- that two host threads may call the **same** `ModuleInstance` (or the same
-  exported function on it) concurrently;
+- that two agents may execute unprotected **guest** state safely: shared
+  globals/tables/memory need the atomic instructions;
 - that one `ModuleInstantiator`/backend session is safe for concurrent
   compilation;
 - that a `Module` or `ModuleInstance` may be mutated while another thread reads
@@ -373,8 +374,8 @@ touches. It is **not** a statement that generated Wasm code is race-free.
 - that arbitrary concurrent module parsing is a verified immutable-snapshot
   operation for code that reads canonical type metadata (interning is
   serialized; the read path is not a formally snapshotted type store);
-- multi-mutator GC, cross-agent reference counting, waitqueues, or thread
-  lifecycle;
+- `thread_local` globals, a managed waitqueue type, or a component thread
+  lifecycle — no stable binary encoding exists (SET-4/SET-5);
 - that a continuation (A or B) is an agent or that it may enter the instance
   concurrently with its resumer; it is a suspended execution context behind a
   blocking resume, and A use is serial (the stack may migrate between threads,
@@ -428,11 +429,11 @@ The **embedder** owns everything else:
 An export is just a `Callable`; `callCallable`/`callCallableWithResults` invoke
 its raw entry point. There is no hidden per-instance lock. Therefore:
 
-- **Same instance:** the only target model is the module's single instance. The
-  embedder must externally serialize calls today; a future engine may provide
-  per-instance synchronization. Two host threads calling the same export
-  concurrently race on globals, memory and GC state even if the function is
-  “pure” in its own view.
+- **Same instance:** under the default `Single` model the embedder must
+  externally serialize calls; under `Agents` calls may enter concurrently and
+  the engine's bookkeeping is safe, but **guest** state (globals, tables, memory,
+  GC fields) needs the module's atomic discipline. Two agents calling an export
+  that does a plain `global.set` race by definition.
 - **Separate instances:** current API/tests may create them, but they are not
   the intended concurrency architecture. Do not use instance multiplication as
   a substitute for making the one instance's state safe.
@@ -525,8 +526,8 @@ most often mistaken for a claim about the other.
 | I1 | “The engine locks the Store, so Wasm is thread-safe.” | Store locks protect maps/IDs/allocator metadata. They do not protect linear memory, globals, tables, GC object fields, or a call's operand stack. |
 | I2 | “The module uses atomics, so its exports are host-threadsafe.” | The export may still touch unshared globals/GC state, call a non-reentrant native import, or be entered twice on the same instance. Atomics only protect the locations they name. |
 | I3 | “The native import is thread-safe, so the Wasm side is thread-safe.” | The import may read/write shared Wasm memory non-atomically, call back into the same instance, or use `hostData` unsafely. |
-| I4 | “The module is marked `shared`, so it is safe to call concurrently.” | `shared` is a type/validation restriction; it does not prove data-race freedom, and the current runtime has no multi-agent scheduler or shared GC heap. |
-| I5 | “The test suite passes with atomics, so concurrent agents are tested.” | The current suite executes the single-agent forms. There is no second Wasm agent to expose a missing acquire/release edge, a waiter bug, or a GC/refcount race. |
+| I4 | “The module is marked `shared`, so it is safe to call concurrently.” | `shared` is a type/validation restriction; it does not prove data-race freedom. `Agents` makes entry legal, but the guest still has to use the atomic instructions for shared state. |
+| I5 | “The test suite passes with atomics, so concurrent agents are tested.” | The baseline `atomic` script is single-agent. `[multiagent]` is the second-agent signal: it covers acquire-release, wait/notify, traps and GC, but it is a smoke/conformance suite, not a race detector — the TSan configuration in `TESTING.md` is the detector. |
 | I6 | “Two calls are independent because they use different host threads.” | They use the same single `ModuleInstance`, so they share its mutable state. Instance multiplicity is not the target isolation mechanism; serialization or instance-level safety is required. |
 | I7 | “Serialization by a host mutex makes non-atomic Wasm accesses safe.” | Only if **every** path into the data (host and every Wasm agent) honours the same protocol. A host mutex around one entry point does not stop another agent entering a different function. |
 | I8 | “The instance is alive because the host holds a `Module`.” | `Module` and `ModuleInstance` have independent lifetimes, and compiled cross-module calls bake `VMContext*` addresses into code. Lifetime is a separate precondition, not a thread-safety property. |
@@ -593,8 +594,8 @@ is undefined even if a particular run happens to work.
 | Property | Current status | Where |
 |---|---|---|
 | **At most one `ModuleInstance` per `Module`, one `VMContext` per instance** | **Design rule** (§3.1); multiple instances are ruled out, not merely unsupported | `ModuleInstance`, `VMContext` |
-| One agent/call at a time on that instance | **Supported** — the current execution model (`ConcurrencyModel::Single`) | `ModuleInstance`, `callCallable` |
-| Several host threads entering the **same** instance | **Not supported yet**; it is the accepted direction **C2**, gated behind the opt-in surface and the instance hardening ([`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6–§7) | no instance lock; `gcPending`/drop flags |
+| One agent/call at a time on that instance | **Supported and the default** (`ConcurrencyModel::Single`) | `ModuleInstance`, `callCallable` |
+| Several host threads entering the **same** instance | **Supported, opt-in** (`ConcurrencyModel::Agents`); the engine admits concurrent entry and guards its own bookkeeping. The guest must synchronize shared globals/tables/memory with the atomic instructions | `ModuleInstance::enterCall`, `THREADS.md` TH-5 |
 | Concurrent **execution** of compiled code | **Accepted and required** (C1 today; C2 needs the hardening) | native code, `VMContext*` |
 | Re-entrant invoker | **Required**; the harness invoker keeps per-call state on the stack | `callCallable`, `TestBackend` |
 | Several host threads with **separate** instances | Fine for *different modules*; **not** a model for one module (R1) | `Test/main.cpp` host-thread test |
@@ -605,14 +606,14 @@ is undefined even if a particular run happens to work.
 | Host-thread pending Wasm exception | **Per agent** (`ExecutionState::pendingException`) | `WasmAgent.hpp`, `wasm_exn_slot()` |
 | Trap-time host cleanup (locks, roots, arenas) | **RAII works** (a trap unwinds by returning); non-RAII state can use the deferred-cleanup stack, which is per agent | §5.6, [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) |
 | Host-thread tail-call state | **Per agent** (`ExecutionState::tailCallState`); generated code resolves it dynamically | `currentTailCallState()` |
-| Shared-memory atomic loads/stores/RMW/cmpxchg | **Implemented single-agent**, hardware atomics and alignment traps | `wasm_atomic.*`, `THREADS.md` TH-1 |
-| Acquire-release ordering and `pause` | **Implemented single-agent** | `ACQUIRE_RELEASE_ATOMICS.md` |
+| Shared-memory atomic loads/stores/RMW/cmpxchg | **Implemented**, hardware atomics and alignment traps; exercised by two agents | `wasm_atomic.*`, `THREADS.md` TH-1, `[multiagent]` |
+| Acquire-release ordering and `pause` | **Implemented and observed across agents** | `ACQUIRE_RELEASE_ATOMICS.md`, `[multiagent]` |
 | Shared `memory.grow`/`memory.size` and data-init barrier | **Implemented** | `THREADS.md` TH-3 |
-| Shared table/global/segment annotations | **Implemented/partial**; full shared-to-shared restriction checking remains | `SHARED_EVERYTHING_THREADS.md` SET-1 |
-| `global/table/struct/array.atomic.*` (working draft) | **Implemented single-agent**; reference-slot RC/shared GC is not complete | SET-3/SET-2 |
-| `wait`/`notify` | **Single-agent forms only**; no wake-up, timeout not slept | `THREADS.md` TH-2/TD9 |
-| Guest mutex/semaphore standard | **Absent**; only module-authored atomics over current primitives | §4.6 |
-| Multi-agent scheduler, shared GC heap, TLS, waitqueue, lifecycle | **Absent**; the accepted direction (C2/C4), opt-in and not yet built | `THREADS.md` TH-5; SET-4/5 |
+| Shared table/global/segment annotations | **Implemented**; shared tags wait on an encoding | `SHARED_EVERYTHING_THREADS.md` SET-1 |
+| `global/table/struct/array.atomic.*` (working draft) | **Implemented**, including the reference-slot retain/release barrier | SET-3/SET-2 |
+| `wait`/`notify` | **Implemented with a real cross-agent waiter table** (0 woken / 1 not-equal / 2 timed out; a negative timeout blocks) | `THREADS.md` TH-2/TH-5 |
+| Guest mutex/semaphore standard | **Absent by design**; modules build them on the atomic instructions | §4.6 |
+| Multi-agent scheduler, shared GC heap, TLS, waitqueue, lifecycle | **Agents and the shared-GC path are implemented**; TLS/managed-waitqueue/lifecycle have no stable encoding (SET-4/5) | `THREADS.md` TH-5; SET-4/5 |
 
 The host-thread test exists to exercise the **current** API's independent
 session/instance setup; it deliberately does **not** test the target
@@ -654,51 +655,45 @@ The smallest protocol that is valid with the current engine is:
 8. **Do not publish an instance from another thread before `instantiate`
    returns**, and do not destroy objects while calls are in flight.
 
-If an embedder needs concurrent calls into the single instance, the current
-engine cannot provide that contract. The correct options are: add host-side
-serialization today, or wait for the engine's opt-in multi-agent mode (C2). What
-is **not** an option is creating more instances of the module: §3.1 rules it out,
-and the runtime will refuse it.
+If an embedder needs concurrent calls into the single instance, select
+`ConcurrencyModel::Agents` and follow G-C/G-D: the engine admits the entry and
+guards its own bookkeeping, and the module must use the atomic instructions for
+shared state. What is **not** an option is creating more instances of the
+module: §3.1 rules it out, and the runtime will refuse it.
 
-## 10. Multi-agent contract (design direction; not yet implemented)
+## 10. Multi-agent contract (implemented as `ConcurrencyModel::Agents`)
 
-Multi-agent execution is the **accepted design direction** and an opt-in feature
-still to be built (`THREADS.md` TH-5; the plan is
-[`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §7). Until it exists,
-the single-agent rule in §3.2 (C2 not supported) is the contract. The shape any
-implementation must preserve:
+Multi-agent execution is an **opt-in** feature (`THREADS.md` TH-5;
+[`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §7). `Single` remains
+the default; an embedder selects `Agents` in `RuntimeConfig`. The contract the
+implementation preserves:
 
 - **At most one `ModuleInstance` per `Module`** and one `VMContext` per instance —
-  a design rule, not a target (§3.1). Agents must not be modelled as per-thread
-  copies of the instance; per-agent stack/trap/tail state lives outside the
-  instance state.
-- An instance-level concurrency protocol (safepoint lock, per-agent executor, or
-  a documented guest/host protocol) must be designed; “make another instance” is
-  **ruled out**. Candidate directions are a per-instance exclusive lock (simple,
-  no guest parallelism), an embedder-supplied scheduler over agents
-  (`HostAgentScheduler`), or module/toolchain-managed guest locks over shared
-  state; the first two are the shapes sketched in
-  [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6.
-- Each agent has its own evaluation stack, trap target and tail-call state;
-  these must not live in process-global mutable variables. The trap, exception,
-  tail-call, cleanup, depth-counter and stack-limit state now belongs to an
-  `Agent`/`ExecutionState`; the evaluation stack and the scheduler remain
-  future work.
-- A `VMContext` remains the native ABI's arg0, but an agent's current context
-  must not be recovered from a process-global “current instance” slot.
+  a design rule, not a target (§3.1). Agents are not per-thread copies of the
+  instance; per-agent stack/trap/tail state lives outside the instance state.
+- An **instance-level entry protocol**: `ModuleInstance::enterCall` is an atomic
+  counter. `Single` refuses a second entrant; `Agents` admits it. “Make another
+  instance” remains **ruled out**, and concurrent compilation is rejected.
+- Each agent has its own evaluation stack, trap target and tail-call state; the
+  trap, exception, tail-call, cleanup, depth-counter and stack-limit state
+  belongs to an `Agent`/`ExecutionState`.
+- A `VMContext` remains the native ABI's arg0, and the calling context is passed
+  explicitly (never recovered from a process-global “current instance” slot).
 - The Store remains the shared ownership boundary. Shared memory/table/GC
-  objects need a multi-mutator protocol; unshared memories remain single-owner.
-- The GC must either gain a shared-heap/multi-mutator collector or reject a
-  shared-GC module; the current RC heap and reference-slot atomics are not a
-  cross-agent collector.
-- `wait`/`notify` need a real waiter table; the current single-agent return
-  values must not be treated as a multi-agent synchronization primitive.
-- Native imports must be documented as potentially concurrent; the embedder
-  must make them reentrant. The engine may not add a global import lock without
-  documenting it as part of the contract.
-- An export API for agents needs an explicit concurrency mode; “a wasm function
-  pointer” is not a thread-safe handle by itself.
-- Guest locks/semaphores (§4.6) remain an **open design item**; host
+  objects use the atomic instructions and the engine's locked/atomic bookkeeping;
+  unshared memories remain single-owner.
+- The GC path is multi-mutator-safe: the heap and reclaim queue are locked, the
+  counters and segment flags are atomic, and reference-slot atomics run the
+  retain/release barrier. `gcCollect()` is still an explicit **quiescent**
+  safepoint — under `Agents` the embedder calls it only when no agent can enter.
+- `wait`/`notify` use a real address-keyed waiter table; return values 0/1/2 are
+  the observable contract.
+- Native imports are potentially concurrent; the embedder must make them
+  reentrant. The engine adds no global import lock.
+- The export API uses an explicit concurrency mode (`RuntimeConfig::concurrency`);
+  “a wasm function pointer” is not a thread-safe handle by itself.
+- Guest locks/semaphores (§4.6) remain a **module/runtime concern**; the engine
+  supplies the atomics and wait/notify, not a guest mutex. Host
   `std::mutex`/RAII (§5.6) and the trap path are settled — a trap unwinds by
   returning, so host destructors run. §10.1 records what a *guest* lock still
   cannot rely on.

@@ -19,4 +19,17 @@
   ;; Array elements are inline (D13/GC-9), so this must be exactly one heap
   ;; block, and array.len must read the inline header.
   (func (export "make_array") (param $n i32) (result i32)
-    (array.len (array.new_default $arr (local.get $n)))))
+    (array.len (array.new_default $arr (local.get $n))))
+
+  ;; Allocation/drop stress for two agents on one instance (MF-7): each
+  ;; iteration allocates a struct and releases the previous one, which drives
+  ;; `GcHeap::allocate` and the deferred reclamation queue concurrently.
+  (func (export "alloc") (param $n i32) (result i32)
+    (local $a (ref null $pair))
+    (block $done
+      (loop $again
+        (br_if $done (i32.eqz (local.get $n)))
+        (local.set $a (struct.new_default $pair))
+        (local.set $n (i32.sub (local.get $n) (i32.const 1)))
+        (br $again)))
+    (i32.const 0)))

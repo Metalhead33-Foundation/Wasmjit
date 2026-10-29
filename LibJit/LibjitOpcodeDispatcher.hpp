@@ -90,13 +90,21 @@ private:
 	// `call` + `return`.
 	bool emitDirectTailCall(WASM::FuncIdx funcIdx);
 	// True when `calleeSig` has exactly this function's parameter and result
-	// types. Only then can the trampoline driver (built for this function's
-	// signature) re-dispatch to the callee. See docs/TAILCALLS.md TC-2.
+	// types. The trampoline no longer needs it (TC-3 dispatches through the
+	// callee type's thunk), but it is part of the shipped LibJit symbol set, so
+	// it stays for the additive-only ABI rule (docs/API_ABI_STABILITY.md G2).
 	bool signatureIsUniform(const WASM::FuncType& calleeSig) const;
-	// Publishes {target, args, pending} to the global trampoline state and
-	// returns a dummy value; the driver re-dispatches. Callers must have
-	// verified signatureIsUniform() and popped `args` already.
+	// Publishes {target, args, pending} to the current execution state's
+	// trampoline state and returns a dummy value; the driver re-dispatches
+	// through the target type's thunk (docs/TAILCALLS.md TC-2/TC-3). Callers
+	// must have verified WASM::tailCallSlotsSupported() and popped `args`.
 	void emitTailCallViaPending(jit_value_t targetCallablePtr, const std::vector<jit_value_t>& args);
+	// Semantic fallback for a tail call the trampoline cannot take: a
+	// `call` + `return` with the callee's results becoming this function's.
+	// Used for a native import on the direct path and for a callable with no
+	// dispatch thunk on the indirect/ref paths.
+	void emitTailCallFallback(WASM::TypeIdx typeIdx, jit_value_t callablePtr,
+							  const std::vector<jit_value_t>& args);
 	// Emits `return` of a zero value of this function's result type.
 	void emitDummyReturn();
 	// Emits the jump for a branch target; a target past the control stack is

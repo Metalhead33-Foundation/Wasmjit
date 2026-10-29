@@ -231,7 +231,7 @@ The staged history is worth keeping because it is how the change was verified:
 | Stage | What changed | Result |
 |---|---|---|
 | **C** (earlier) | `Runtime` owns a `Store`; `Store::current()` reads a thread-local `Scope`, falling back to the global | Two runtimes already had independent heaps, but a process-wide fallback remained |
-| **B1** | Every parser entry point takes `Store&`; artifacts carry the reference (44 + 21 + 6 call sites) | Behaviour-preserving, 11,345 assertions at the time (11,392 today) |
+| **B1** | Every parser entry point takes `Store&`; artifacts carry the reference (44 + 21 + 6 call sites) | Behaviour-preserving, 11,345 assertions at the time (11,454 today) |
 | **B2** | Instances, components, continuation workers, the GC heap, strings, the resolver and `wasm_exn_create` read the carrier object; the `Runtime` stops installing scopes | The only remaining callers were the backend's string helpers |
 | **B3** | Backend helpers take the `VMContext`; the singleton and the thread-local are deleted | No `Store::current()`/`global()`/`Scope` anywhere in `WasmBase/` or `LibJit/` |
 
@@ -597,7 +597,7 @@ resolver. The shapes are the ones in §4.7 — the runtime is held by
 | Install rules | **None** (`INSTALLS` absent from every `.pro`) | same |
 | pkg-config | Not for this project (only `libffi`, `nlohmann_json` as consumers) | `WasmBase.pro` |
 | Version macro/function | `WASMJIT_VERSION_MAJOR`/`MINOR`/`PATCH`, `WASMJIT_ABI_VERSION`, `WASM::versionString()`, `WASM::abiVersion()` | `WasmBase/WasmVersion.hpp`/`.cpp` (added 2026-10-29) |
-| Exported symbols | **2,541 dynamic symbols** (2026-10-29, `ES-4`): the core is built with `-fvisibility=hidden`; only declarations from the public headers are exported, and the embedder-tier classes carry `WASMJIT_API` | `nm -D --defined-only libWasmBase.so.1.0.0 \| wc -l` |
+| Exported symbols | **2,545 dynamic symbols** (2026-10-29, `ES-4`): the core is built with `-fvisibility=hidden`; only declarations from the public headers are exported, and the embedder-tier classes carry `WASMJIT_API` | `nm -D --defined-only libWasmBase.so.1.0.0 \| wc -l` |
 | Include convention | `INCLUDEPATH += $$PWD/..` so `#include <WasmBase/Header.hpp>` works | `WasmBase/WasmBase.pri` |
 
 The last two rows are the ABI problem in one number: a library that exports 23k
@@ -615,7 +615,7 @@ subset can.
 | Deprecation | `WASMJIT_DEPRECATED("use X")` for one minor cycle before removal, recorded in the ABI note |
 | Backend libraries | Same policy: `libLibJit.so.<major>`, and the plugin descriptor carries its own `abi_version` ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §4) |
 | Vendored libraries | If `Elvavena`/`Euphemy` stay in the public headers (§6.2), their sonames join the embedder's runtime requirements and the `.pc` `Requires:` line |
-| Verification (cheap) | `abidiff` against the previous release in a release check; a compile-only test per public header |
+| Verification (cheap) | **`Test/abi-check.sh`** (`nm -D`, strong symbols only) compares the exported set with `Test/abi/*.exports`: an addition passes, a removal fails (G2's mechanical form); `--update` refreshes the baseline. `abidiff` against the previous release remains an optional extra, and a compile-only test covers every public header |
 
 ### 7.3 Install layout
 
@@ -637,9 +637,9 @@ must name whatever §6.2 decides about `Elvavena`/`Euphemy`.
 | Milestone | Work | Class | Closes | Done when |
 |---|---|---|---|---|
 | **ES-1 — `WASM::Runtime` skeleton** ✅ | **Landed 2026-10-29:** `WasmBase/WasmRuntime.{hpp,cpp}` implements `RuntimeConfig` (profile, concurrency, bridge, sink, budget — §4.6), `create(name)` (registry, then the `dlopen` fallback), `loadFile`/`loadBytes` (no `Elv::Io::Device`), idempotent `instantiate` (one instance per `Module`; a repeat call returns the same instance), `instanceOf`/`hasInstance`, `callExport`/`callExportWithResults` (with the `MF-2` in-call guard), `safepoint`, `version`/`abiVersion`/`backendName`/`profile`/`supports`, `createAgent` and `store()`. `WasmContext.hpp` and `LibJit::Runtime` are deleted. | A | P1, P2, P4, P5, P6; R1 enforcement; AAS1 | `Test/RuntimeTests.cpp` exercises load → instantiate → call against the real backend and the null one; the default suite is unchanged. The installed `wasmjit/wasmjit.hpp` spelling and the out-of-tree consumer stay `ES-5`. |
-| **ES-2 — Store scoping migration** | **Done (option B, 2026-10-29).** `Store::global()`, `Store::current()` and `Store::Scope` are deleted. The store is threaded through every consumer: parser entry points take `Store&` and the artifact keeps it; instances use `module->store()`; components use `component.store()`; continuation workers, `wasm_exn_create` and the backend string/type helpers take the `VMContext`; the resolver is bound by the resolving/exporting instance; `Runtime` owns one. Two runtimes have independent heaps and budgets and reject cross-runtime modules/instances. | A (wide) | Multi-tenancy; §4.4 | No `Store::current()`/`global()`/`Scope` remains in `WasmBase/` or `LibJit/`; the default suite is green (11,392 assertions / 474 cases). |
+| **ES-2 — Store scoping migration** | **Done (option B, 2026-10-29).** `Store::global()`, `Store::current()` and `Store::Scope` are deleted. The store is threaded through every consumer: parser entry points take `Store&` and the artifact keeps it; instances use `module->store()`; components use `component.store()`; continuation workers, `wasm_exn_create` and the backend string/type helpers take the `VMContext`; the resolver is bound by the resolving/exporting instance; `Runtime` owns one. Two runtimes have independent heaps and budgets and reject cross-runtime modules/instances. | A (wide) | Multi-tenancy; §4.4 | No `Store::current()`/`global()`/`Scope` remains in `WasmBase/` or `LibJit/`; the default suite is green (11,454 assertions / 481 cases). |
 | **ES-3 — Header tiers and umbrella** ✅ | **Landed 2026-10-29:** `WasmJit.hpp` covers the embedder tier; §6.1.1 classifies every header into the three tiers; `WasmRegistryImportResolver.hpp` and `WasmSafety.hpp` no longer include the vendored library (the maps are `std::map<std::string, T, std::less<>>`, the bounds helpers are templates); 41 compile-only TUs plus `[tiers]`, which fails when a new header is unclassified, the umbrella includes a non-embedder header, or a public header has no TU. The two hard `Elv` dependencies (`WasmType.hpp`, `WasmAgent.hpp`) are accepted for the first freeze (§6.2). | A | P3, `AAS2` (partly) | Every public header compiles alone ✅; the umbrella covers the embedder tier ✅; the installed include path is verified by §8 `ES-5`. |
-| **ES-4 — Visibility and versioning** ✅ | **Landed 2026-10-29:** `WasmApi.hpp` defines `WASMJIT_API` (the Elvavena `MH_UTIL_API` pattern: `WASMJIT_BUILD` → export, otherwise import) and `WASMJIT_VISIBLE_BEGIN/END` for headers that are entirely public; the core is compiled with `-fvisibility=hidden -fvisibility-inlines-hidden` and every library sets `VERSION = 1.0.0` (soname `lib*.so.1`). The exported set fell from **23,919 to 2,541** symbols and is exactly what the public headers declare. | A | P4; ABI hygiene | The exported set is the header-declared surface ✅; an `abidiff` run is the remaining optional check. |
+| **ES-4 — Visibility and versioning** ✅ | **Landed 2026-10-29:** `WasmApi.hpp` defines `WASMJIT_API` (the Elvavena `MH_UTIL_API` pattern: `WASMJIT_BUILD` → export, otherwise import) and `WASMJIT_VISIBLE_BEGIN/END` for headers that are entirely public; the core is compiled with `-fvisibility=hidden -fvisibility-inlines-hidden` and every library sets `VERSION = 1.0.0` (soname `lib*.so.1`). The exported set fell from **23,919 to 2,545** symbols and is exactly what the public headers declare. | A | P4; ABI hygiene | The exported set is the header-declared surface ✅; `Test/abi-check.sh` is the mandatory additive-only check and an `abidiff` run is the optional extra. |
 | **ES-5 — Install and pkg-config** ✅ | **Landed 2026-10-29:** `INSTALLS` for the 41 public headers (`include/wasmjit/`), the internal closure (`include/wasmjit/internal/`), the eight vendored header directories, the libraries and `wasmjit.pc` (generated from `wasmjit.pc.in`, installed to `lib/pkgconfig`). `Test/install-check.sh` installs into a scratch prefix with `INSTALL_ROOT`, builds `Test/consumer/Consumer.cpp` through `pkg-config --cflags --libs wasmjit` and runs it. | A | Packaging | `make install` into a scratch prefix yields a working out-of-tree consumer ✅ (`install-check: OK`). |
 | **ES-6 — ABI documentation completion** ✅ | **Done 2026-10-29:** `ABI.md` gains "`v128` by Value", "The result tuple layout" (a backend-neutral rule) and "Limits an Embedder Must Know" (`S1`, `S3`, `S4`, `S7`, `S8`). | A | `AAS2` ✅, `AAS5` ✅ | An embedder can implement every signature class from the note alone. |
 | **ES-7 — Re-run `AAS-1`** ✅ | **Landed 2026-10-29:** the out-of-tree consumer (`Test/consumer/Consumer.cpp`) now calls an `i32` export, an `f64` export, a two-`i32` multi-result tuple, a single `v128` result and a mixed `(i32, v128)` tuple, using only the installed headers and the documented ABI spellings; `Test/install-check.sh` assembles `Test/consumer/consumer_abi.wat` with `wat2wasm` and runs it. `AAS1`'s acceptance row is closed. | — | `AAS1` ✅ | G1's embedding half is `✅`. |
@@ -666,21 +666,28 @@ want `ES-3`'s tier list; `ES-6` is pure documentation and can land first.
 | Dynamic backend loading | Implemented (`WasmBackendRegistry` + `Runtime::create(name)`, [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) `BP-3`); a loaded plugin is deliberately never unloaded while code is live (§6 rule 8). |
 | Which thread may run which agent, and when | [`THREADSAFETY.md`](THREADSAFETY.md) §3.1 and [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6. `ES-1` hands the agent out; it does not schedule it. |
 
+**Gap status 2026-10-29: none in scope.** `ES-1…ES-7` are `✅`; the only
+remaining items are the deliberate choices above (vendored MhLib in the public
+SDK, no cross-vendor C++ ABI, embedder-owned scheduling) and the optional
+`abidiff` run, which the `Test/abi/*.exports` baseline replaces as the mandatory
+check. The embedding surface is what the installed `wasmjit/wasmjit.hpp` exposes.
+
 ## 10. Test survey
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (2026-10-29) | **11,392 assertions / 474 cases, green** | The `ES-1`…`ES-5` and `BP-*` additions are additive: every earlier assertion still passes. |
+| Default suite (2026-10-29) | **11,454 assertions / 481 cases, green** | The `ES-1`…`ES-7`, `BP-*` and multi-agent additions are additive: every earlier assertion still passes. |
 | `[docs]` lint | 720 assertions, green | Covers `docs/proposals/` only; this note is not linted. |
 | `[runtime]` | 46 assertions / 7 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents, and the store-scoping proof (two stores, two heaps, an artifact records its store). |
-| `[concurrency]` | 29 assertions / 8 cases, green | The model claim, the refusal under a real second-thread call, re-entrant invocation across threads, the `MF-2` guard and the `MF-3`/`MF-4` safepoint rules. |
+| `[concurrency]` | 81 assertions / 14 cases, green | The model claim, the `Single` refusal, re-entrant invocation across threads, the `MF-2` guard, the `MF-3`/`MF-4` safepoint rules and the multi-agent suite. |
+| `[multiagent]` | 51 assertions / 6 cases, green | Two agents on one instance: acquire-release, wait/notify, shared-global RMW, traps, GC stress, reference barrier. |
 | `[backendabi]` | 36 assertions / 4 cases, green | The POD signature/layout views (`WasmBackendAbi.hpp`) match `ABI.md`'s tuple rule. |
 | `[plugin]` | 17 assertions / 5 cases, green | Load by path and by name, a real example plugin, and every refusal path (missing file, no query symbol, unknown name, descriptor ABI, core ABI, failing `create`). |
 | `[tiers]` | 210 assertions / 3 cases, green | Every header is classified exactly once, the umbrella matches the embedder tier, and every public header has a compile-only TU (`.inc` fragments excepted). |
 | Public-header self-containment test | **Present for the public headers** (2026-10-29) | 40 TUs under `Test/headers/`, enforced by `[tiers]`. |
 | Install / out-of-tree consumer test | **Present** (2026-10-29) | `Test/install-check.sh`: `make install INSTALL_ROOT=...`, then a consumer built through `wasmjit.pc` runs. |
-| Symbol-hygiene check | **2,541 exported symbols** (2026-10-29) | `-fvisibility=hidden` + `WASMJIT_API`; the remaining count is the header-declared surface. `abidiff` is still optional/absent. |
-| ABI diff (`abidiff`) | **Absent** | Optional; the export set is now small enough to police. |
+| Symbol-hygiene check | **2,545 exported symbols** (2026-10-29) | `-fvisibility=hidden` + `WASMJIT_API`; the remaining count is the header-declared surface. `Test/abi-check.sh` freezes the 1,804 strong symbols and fails on a removal. |
+| ABI diff (`abidiff`) | **Optional** | The mandatory check is the `nm -D` symbol baseline (`Test/abi/*.exports`, `Test/abi-check.sh`), which needs no libabigail. `ABI_REFERENCE=<previous .so>` adds `abidiff` when the tool is installed. |
 
 ## 11. References
 

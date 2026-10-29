@@ -32,7 +32,7 @@ four protected hooks and must not re-implement the rest:
 |---|---|---|---|
 | `translateTypes(instance, module, internals)` | first | Translate every type in `module.typeIds`, in order, into the backend's type representation | Allocate heap objects, run Wasm |
 | `declareFunctions(instance, module, internals)` | before any body | Fill `internals.internalCallables` — **one entry per defined function, in index order** — with `Callable{ fnPtr, instance.context(), typeIdx, module.typeId(LocalTypeIdx{typeIdx}) }`, then call `instance.store().registerCallableRange(...)` | Emit code, throw for a module-caused condition |
-| `compileFunctions(instance, module, internals)` | after declare | Emit every body and store the entry pointer in the matching `Callable::fnPtr` | Change `internalCallables`' size or order (the range is registered and must stay stable) |
+| `compileFunctions(instance, module, internals)` | after declare | Emit every body and store the entry pointer in the matching `Callable::fnPtr`; a backend with a driver/trampoline also fills `rawFnPtr` and the per-type `tailEntry` thunk (below) | Change `internalCallables`' size or order (the range is registered and must stay stable) |
 | `callStartFunction(instance, funcIdx, internals)` | only if the module has a start section | Invoke the start function through the compiled ABI | Run any other function |
 
 The four rules that are easy to get wrong:
@@ -75,7 +75,8 @@ today, a plugin's `create` tomorrow). `WasmBase/` must not learn a backend name
 | 4.3 | Result tuple offsets follow the alignment rule (`i32`/`f32` 4, `i64`/`f64` 8, `v128` 16, reference one word) | [`ABI.md`](ABI.md) "The result tuple layout" |
 | 4.4 | A trap is a **pending status**: report through `wasm_trap_slot()` (`reportTrap`/`reportTrapAt`) and return. Never `longjmp`, never `abort`, never throw | [`SAFETY.md`](SAFETY.md) §2.4–§2.6; `WasmTrap.hpp` |
 | 4.5 | A `v128` parameter or result is the 16-byte aggregate of [`ABI.md`](ABI.md) "`v128` by Value" | same |
-| 4.6 | Tail calls: request/return the state through `currentTailCallState()` and honour the callee's `musttail` bookkeeping | [`ABI.md`](ABI.md) "Tail calls"; `WasmValue.hpp` |
+| 4.6 | Tail calls: request/return the state through `currentTailCallState()`; the direct-self-recursion fast path may use a native tail call, everything else must go through the trampoline or the semantic `call` + `return` fallback | [`ABI.md`](ABI.md) "Tail calls"; `WasmValue.hpp`; [`proposals/TAILCALLS.md`](proposals/TAILCALLS.md) TC-5 |
+| 4.9 | If you implement the generalized tail-call trampoline, expose `Callable::rawFnPtr` (the entry behind your `fnPtr` driver) and a per-function-type `Callable::tailEntry` thunk `void(VMContext*, void* fn, uint64_t* args, uint64_t* results, void* resultBuffer)`; a callable with a null `tailEntry` must still be callable through `fnPtr` (the core falls back) | [`proposals/TAILCALLS.md`](proposals/TAILCALLS.md) §4; `LibJit/LibjitModuleCompiler.cpp` |
 | 4.7 | Continuations: provide the `ContinuationInvokeFn` your `wasm_cont_new_ex` calls need, and call a target through its C ABI using the kind arrays | [`ABI.md`](ABI.md) "Continuations"; `WasmContinuation.hpp` |
 | 4.8 | `call_ref`/`call_indirect` type checks compare canonical `TypeId`s and surface `IndirectCallTypeMismatch` | [`ABI.md`](ABI.md); `WasmTypeIdentity.hpp` |
 

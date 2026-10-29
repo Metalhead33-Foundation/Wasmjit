@@ -1,10 +1,11 @@
 # Acquire-Release Atomics — Implementation Notes, Spec Status, and Deliberate Deviations
 
-Status: design note / implementation reference (revision 2 — **ARA-1…ARA-3
-implemented** in the single-agent build: `MemArg` bit 4 + `u8` ordering, the
-`0xFE 0x04` `pause` no-op, and order-accurate lowering to
-`__ATOMIC_SEQ_CST`/`__ATOMIC_ACQUIRE`/`__ATOMIC_RELEASE`/`__ATOMIC_ACQ_REL`.
-Two-agent observation remains deferred with `THREADS.md` TH-5.)
+Status: design note / implementation reference (revision 3 — **ARA-1…ARA-3
+implemented, including the two-agent observation**. `MemArg` bit 4 + `u8`
+ordering, the `0xFE 0x04` `pause` hint, order-accurate lowering to
+`__ATOMIC_SEQ_CST`/`__ATOMIC_ACQUIRE`/`__ATOMIC_RELEASE`/`__ATOMIC_ACQ_REL`, and
+the cross-agent message-passing test all pass. 100% of the proposal's binary
+surface is implemented.)
 
 Audience: anyone touching `WasmType` (`MemArg`), `WasmOpcode` (`AtomicOpcode`),
 `WasmOpcodeDispatcher`, `wasm_atomic.*`, `LibjitOpcodeDispatcher`, or the
@@ -75,7 +76,10 @@ decode error.
 - `WasmBase/WasmType.hpp` has `MemArg` (with `ordering`) and `AtomicMemArg`.
   Ordinary `MemArg` decoding rejects bit 4, so a non-atomic load cannot carry
   an ordering byte. Atomic decoding accepts `0x10`, reads the following `u8`,
-  and rejects values other than 0 (`seqcst`) and 1 (`acqrel`).
+  and normalises both acqrel spellings — `0x01` for a load/store and `0x11` for
+  an RMW (the read and write nibbles, which must match) — to the single
+  "acqrel" value the helpers consume; any other value is a decode error.
+  `Test/main.cpp` covers the `0x11` RMW form.
 - `atomic.fence` consumes its ordering byte and accepts 0 or 1; its reserved
   zero-only rule is gone. `0xFE 0x04` `pause` decodes with no immediate and
   lowers to the target's hint through `wasm_atomic_pause` (`pause` on x86,
@@ -88,17 +92,19 @@ decode error.
   alignment and offset; `requireMemoryAccess` rejects an ordering on a normal
   access. The acquire-release ordering is exercised end-to-end by a raw-binary
   fixture (`acquire-release ordering and pause decode, validate, and execute`).
-- The two-agent message-passing half is still deferred (`THREADS.md` TH-5), so
-  the ordering is not *observable* between wasm threads yet; the encoding and
-  lowering are complete and distinct. The trap/exception/tail-call state
-  is per agent (`Agent`/`ExecutionState`, TRAP-6 done); only the two-agent
-  execution model remains deferred with TH-5.
+- The two-agent message-passing half is **implemented (TH-5/ARA-3)**: a
+  `ConcurrencyModel::Agents` runtime admits two host-thread agents into one
+  instance, one publishes a plain value followed by an `acqrel` flag store and
+  the other spins on an `acqrel` flag load before reading the value
+  (`[multiagent]` "acquire-release message passing", 2026-10-29). The
+  trap/exception/tail-call state is per agent (`Agent`/`ExecutionState`,
+  TRAP-6), so the observing agent sees only its own trap state.
 
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| ARA5 | **No focused multi-agent test.** A single-agent fixture covers decode/lowering, but there is no second agent to observe an acquire/release edge. | `Test/main.cpp` acquire-release case; `THREADS.md` TH-5. | Low (deferred) |
+| ~~ARA5~~ | ~~**No focused multi-agent test.**~~ **Closed 2026-10-29:** `Test/ConcurrencyTests.cpp` (`[multiagent]`) runs the producer/consumer edge on one instance across two host threads under `ConcurrencyModel::Agents`. | `Test/AgentFixture.hpp`; `[multiagent]` (6 cases / 51 assertions) | Closed |
 
 
 ## 6. Where we can and should play fast and loose
@@ -107,7 +113,7 @@ decode error.
 |---|---|---|---|
 | ARAD1 | **Default an omitted ordering to `seqcst`.** | §3: backward compatibility is part of the proposal. | Existing atomics keep their exact meaning. |
 | ARAD2 | **Implement `pause` as a no-op initially**, then add `PAUSE`/`YIELD` per target. **Done 2026-10-29:** `wasm_atomic_pause()` emits `__builtin_ia32_pause()` on x86, `yield` on ARM and a compiler barrier elsewhere, so a spin loop written for the proposal does not melt a core. | §3: it is a hint; semantics are unchanged. | No dependence on host-specific spin-loop tuning for correctness. |
-| ARAD3 | **Keep the single-agent execution model for now.** | §3: ordering is unobservable without multiple agents; `THREADS.md` defers agents by decision. | Decode/lower correctness without a scheduler rewrite. |
+| ARAD3 | **The single-agent model is the default; `Agents` is opt-in.** | §3: ordering is unobservable without multiple agents; the engine offers both models and validates the choice at `instantiate()`. | Decode/lower correctness without forcing a scheduler on an embedder that wants one agent. **Updated 2026-10-29:** `Agents` is implemented (TH-5), so the ordering is observable when the embedder selects it. |
 | ARAD4 | **Do not add separate `acquire`/`release` orderings** until the proposal does. | §3: the current proposal defines only `seqcst` and `acqrel`. | No speculative encoding. |
 | ARAD5 | **Reject bit 4 on non-atomic instructions.** | §2: that is a decode error in the proposal. | A malformed ordinary load cannot be mistaken for an atomic. |
 
@@ -121,25 +127,27 @@ map to `__ATOMIC_ACQ_REL` (not `__ATOMIC_SEQ_CST`, not `__ATOMIC_RELAXED`).
 |---|---|---|---|
 | **ARA-1 — Decode** | ✅ `MemArg` ordering bit/byte, `AtomicMemArg`, `pause`, decode-time rejection on non-atomics. | ARA1, ARA3 | Done: ordering/pause fixture decodes; malformed flags and ordinary bit-4 uses are rejected. |
 | **ARA-2 — Lowering** | ✅ Ordering threaded through every atomic helper and the fence (`__ATOMIC_SEQ_CST` / `__ATOMIC_ACQUIRE` / `__ATOMIC_RELEASE` / `__ATOMIC_ACQ_REL`); `pause` lowers to the target hint (`wasm_atomic_pause`, ARAD2). | ARA2, ARA4 | Done: fence and RMW use the requested ordering, `pause` is a real hint, and the single-agent differential fixture sees the same values. |
-| **ARA-3 — Tests** | ◑ Single-agent ordering/pause fixture done. The two-agent message-passing test waits for `THREADS.md` TH-5. | ARA5 | Done for decode/lowering; multi-agent observation deferred. |
+| **ARA-3 — Tests** | ✅ Single-agent ordering/pause fixture plus the two-agent message-passing fixture (`[multiagent]`, consumer spins with an `acqrel` load until a producer's `acqrel` store publishes a plain value). | ARA5 | Done: both the decode/lowering differential fixture and the cross-agent edge pass. |
 
-ARA-1/ARA-2 are independent of a future multi-agent scheduler; ARA-3's
-two-agent half waits for `THREADS.md` TH-5.
+ARA-1/ARA-2 are independent of the execution model; ARA-3's two-agent half is
+part of the `ConcurrencyModel::Agents` implementation (`THREADS.md` TH-5).
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-10-22):
+`build/Desktop-Debug/Test/WasmJit` (2026-10-29):
 
 | Script / fixture | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
-| `atomic` | 249 | 0 | 48 | single-agent baseline; 48 skips are validation cases |
-| acquire-release + `pause` fixture | 5 assertions | 0 | — | acqrel store/load execute; `pause` is a no-op |
-| full suite, default | 9265 assertions / 352 cases | 0 | — | no regression |
-| full suite, `WASM_SPEC_VALIDATE=1` | 9265 assertions / 352 cases | 0 | — | negative-module validation stays green |
-| `pause` | — | — | — | no script and no opcode |
+| `atomic` | 249 | 0 | 48 | baseline atomics; 48 skips are validation cases |
+| acquire-release + `pause` fixture | 5 assertions | 0 | — | acqrel store/load execute; `pause` is a real hint |
+| RMW nibble-form acqrel fixture | 5 assertions | 0 | — | the `0x11` (read+write) RMW ordering decodes and executes |
+| `[multiagent]` acquire-release message passing | 6 assertions | 0 | — | two agents on one instance observe the release→acquire edge |
+| `[multiagent]` total | 51 assertions / 6 cases | 0 | — | wait/notify, shared-global RMW, trap isolation, GC stress, ref barrier |
+| full suite, default | 11,454 assertions / 481 cases | 0 | — | no regression |
 
-Reading: the baseline atomic surface is green, but it proves seqcst only. The
-new ordering is not exercised by the snapshot.
+Reading: the ordering is now exercised both for decode/lowering and between two
+real agents. The baseline `atomic` script remains the single-agent regression
+signal; the multi-agent half lives in `[multiagent]`.
 
 ## 9. References
 

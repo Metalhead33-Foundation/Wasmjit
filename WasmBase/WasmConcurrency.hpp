@@ -13,13 +13,15 @@ namespace WASM {
 
 // ── The opt-in execution model (docs/MULTI_AGENT_FEASIBILITY.md §6.2/MF-6) ──
 //
-// `Single` is today's contract: one agent inside a call at a time. `Agents`
-// would let several agents execute one instance concurrently; it is *accepted
-// as a design direction and not built*, so the engine refuses it at the
-// instantiation boundary rather than accepting a module it cannot honour.
+// `Single` is the default contract: one agent inside a call at a time. `Agents`
+// lets several agents execute one *instance* concurrently — they share its
+// memory, globals, tables and GC heap, and the guest synchronizes with the
+// atomic instructions (docs/proposals/THREADS.md TH-5).
 //
 // Like a language profile, this is a restriction the embedder selects, never
-// feature detection (docs/proposals/PROFILES.md §2). The core owns no scheduler.
+// feature detection (docs/proposals/PROFILES.md §2). The core owns no
+// scheduler: spawning and joining host threads is the embedder's act, exactly
+// as it supplies the JS event loop in docs/proposals/JS_INTEGRATION.md.
 
 enum class ConcurrencyModel : std::uint8_t {
 	Single = 0, // one agent inside a call at a time
@@ -28,7 +30,7 @@ enum class ConcurrencyModel : std::uint8_t {
 
 inline constexpr bool supportsConcurrency(ConcurrencyModel model) noexcept
 {
-	return model == ConcurrencyModel::Single;
+	return model == ConcurrencyModel::Single || model == ConcurrencyModel::Agents;
 }
 
 inline constexpr const char* concurrencyModelName(ConcurrencyModel model) noexcept

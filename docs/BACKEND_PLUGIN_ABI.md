@@ -190,7 +190,7 @@ read. That makes `BP-1` useful even if `dlopen` never ships.
 | POD structs by value/pointer | the descriptor (including `build_flags`), status, capabilities, layout, trap record, POD signature view | Layout pinned by `static_assert` in the header |
 | Opaque handles | `void*` backend / session / instance / internals | Ownership stated per handle |
 | Function pointers (both ways) | the `wasmjit_host` table; the plugin's vtable | The core's table is `const` and outlives the plugin |
-| `Callable` (POD) | `{ void* fnPtr; VMContext* context; uint32_t localTypeIdx; TypeId typeId; }` | Already the universal handle; `fnPtr`/`context` are the ABI |
+| `Callable` (POD) | `{ void* fnPtr; VMContext* context; uint32_t localTypeIdx; TypeId typeId; void* rawFnPtr; void* tailEntry; }` | Already the universal handle; `fnPtr`/`context` are the ABI. `rawFnPtr` is the compiled entry behind `fnPtr`'s driver, and `tailEntry` is the per-type tail-dispatch thunk (docs/TAILCALLS.md TC-5; `BACKEND_WORK_ORDER.md`). An **additive** field change; a release that removes or reorders one needs a major bump. |
 | `VMContext*` | arg0 of every compiled function | The plugin may read the fields `LAYERING.md` §4 permits |
 
 | Must **not** cross | Why | Escape hatch |
@@ -299,11 +299,16 @@ Ordering: `BP-1` first (useful on its own; unblocks `AAS2`), `BP-2` before `BP-3
 (a name-based factory makes `dlopen` a drop-in), `BP-4`/`BP-5` after the loader
 works.
 
+**Gap status 2026-10-29: none in scope.** `BP-0…BP-5` are `✅`: the C descriptor,
+the name-based selector, the loader with every refusal path, the no-unload
+policy and packaging. The nine hard problems in §7 are answered as engine
+guarantees or explicit embedder responsibilities; none is an open code gap.
+
 ## 11. Test survey
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (2026-10-29) | **11,392 assertions / 474 cases, green** | The compiled-in path is the baseline every `BP-*` stage must preserve. |
+| Default suite (2026-10-29) | **11,454 assertions / 481 cases, green** | The compiled-in path is the baseline every `BP-*` stage must preserve. |
 | Backend selection | `WasmBackendRegistry` names `libjit` and `null`; an unknown name is a named error | The selector is general and the second implementation exists. |
 | Plugin load test | **Present** — `Test/ExampleBackend/libwasmjit-backend-example.so`, loaded by path and by name (`[plugin]`) | `BP-3`; the plugin lives in its own directory and the frontend was not rebuilt for it. |
 | Wrong-ABI / missing-symbol / failing-create tests | **Present** — descriptor ABI, core ABI, no query symbol, missing file, failing `create` (`[plugin]`) | `BP-3`/`BP-4`; every path is an exception with a reason, never an abort. |
@@ -311,7 +316,7 @@ works.
 | Helper export (§7.5) | **Present** — `[plugin]` resolves `wasm_trap_slot`, `wasm_trap_report`, `wasm_stack_check`, `wasm_v128_*`, `wasm_exn_*` in the process image | `ES-4`'s hidden visibility did not swallow the plugin ABI. |
 | Diagnostic reporting (§7.9) | **Present** — a refused load and a successful load are both observed through a sink (`WASM.BACKEND.PLUGIN`, Error and Note) | Failure containment is a report, and the happy path is visible too. |
 | POD layout test | **Present** — `[backendabi]` pins the tuple rule | `BP-1`. |
-| Symbol-hygiene check | **Present** — `ES-4` hid the core's internals (23,919 → 2,541 exported symbols) and deliberately re-exported the helper subset | `ES-4`; the plugin ABI is a declared list, not "everything and hope". |
+| Symbol-hygiene check | **Present** — `ES-4` hid the core's internals (23,919 → 2,545 exported symbols) and deliberately re-exported the helper subset | `ES-4`; the plugin ABI is a declared list, not "everything and hope". |
 | "One core" check (`NEEDED` inspection) | **Present as a symbol-identity probe** — the loader compares the plugin's `wasm_trap_slot` with the host's and refuses a private copy | `BP-3`; a plugin with its own core is refused rather than running two heaps and two allocators. |
 
 ## 12. References
