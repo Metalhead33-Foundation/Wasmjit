@@ -60,6 +60,7 @@ public:
 	struct RegionSet;
 
 	//! One mmap-backed slab: either a segregated size class or a dedicated object.
+	/** \\brief One mapped slab used for a size class or a dedicated allocation. */
 	struct Region {
 		uint8_t*   base      = nullptr; //!< mapped base address
 		size_t     capacity  = 0; //!< usable bytes in the mapping
@@ -74,6 +75,7 @@ public:
 	};
 
 	//! One per ModuleInstance; owns the instance's regions for bulk teardown.
+	/** \\brief Per-module-instance ownership list for all heap regions it uses. */
 	struct RegionSet {
 		GcHeap*  heap = nullptr; //!< back-pointer to the owning heap
 		Region*  list = nullptr; //!< all regions belonging to this set
@@ -82,46 +84,61 @@ public:
 	};
 
 	//! Binds the heap to its owning Store (budget and lifetime).
+	/** \\brief Binds the heap allocator to its owning Store. \\param owner Store supplying the allocation budget; must outlive this heap. */
 	explicit GcHeap(Store& owner) : owner_(owner) {}
+	/** \\brief Returns the Store that owns this heap. \\return Reference to the owner Store. */
 	Store& owner() const { return owner_; } //!< the Store that owns this heap
+	/** \\brief Unmaps all remaining regions owned by this heap. */
 	~GcHeap();
 	GcHeap(const GcHeap&) = delete;
 	GcHeap& operator=(const GcHeap&) = delete;
 
 	//! Allocates an empty RegionSet for one ModuleInstance.
+	/** \\brief Creates a region set for one module instance. \\return Owning heap handle for the new set; pass it to releaseSet(). */
 	RegionSet* createSet();
 	//! Releases every region in `set` and frees the set itself.
+	/** \\brief Releases every region in a set and destroys the set. \\param set Region set returned by createSet(). */
 	void releaseSet(RegionSet* set);
 
 	//! Allocate one object of `size` bytes at kGranularity alignment, or nullptr
 	//! when the Store budget refuses the backing (the caller traps). Zeroed.
+	/** \\brief Allocates a zero-initialized GC object block. \\param set Region set belonging to the allocating module instance. \\param size Requested object size in bytes; allocation is rounded to kGranularity. \\return Aligned block pointer, or nullptr if the Store budget refuses the mapping. */
 	void* allocate(RegionSet& set, size_t size);
 
 	//! Return a block obtained from allocate() to its region's free list, or
 	//! release a dedicated region. `block` must be a live allocation.
+	/** \\brief Returns a live allocation to its size-class free list or unmaps its region. \\param block Pointer previously returned by allocate(); it must still be live. */
 	void recycle(void* block);
 
 	//! True iff `p` lies inside one of this heap's regions (any instance). This
 	//! is the GC-object test that replaces a per-object type map.
+	/** \\brief Tests whether an address lies inside any heap region. \\param p Candidate object pointer. \\return true when p belongs to this heap's mapped regions. */
 	bool owns(const void* p) const;
 
 	//! Diagnostics (tests / leak checks).
+	/** \\brief Returns the number of mapped regions. \\return Current region count. */
 	size_t regionCount() const { return regions.size(); }
+	/** \\brief Returns bytes reserved by live regions. \\return Total reserved region capacity in bytes. */
 	size_t regionBytes() const { return reservedBytes; } //!< total bytes reserved across regions
+	/** \\brief Returns the lifetime number of successful allocations. \\return Allocation count. */
 	size_t totalAllocations() const { return allocationCount; } //!< lifetime allocate() count
+	/** \\brief Returns the lifetime number of recycled allocations. \\return Recycle count. */
 	size_t totalRecycles() const { return recycleCount; } //!< lifetime recycle() count
 	//! Blocks allocated and not yet recycled: the leak metric. Reference counting
 	//! does not reclaim a graph whose counts are wrong, and nothing else in the
 	//! engine can see that — a count stuck above zero shows up here and nowhere
 	//! else. RC-2/RC-3 are "done" when this returns to its pre-test value
 	//! (docs/proposals/GC.md §7, rc_plan).
+	/** \\brief Returns the number of allocations not yet recycled. \\return Allocation count minus recycle count. */
 	size_t liveObjectCount() const { return allocationCount - recycleCount; }
 
 	//! \par Debug: poison on free (docs/proposals/GC.md GC-2/RC-3)
 	//! Overwrite a block with kPoisonByte before it goes back on the free list,
 	//! so a use-after-recycle reads obvious garbage instead of whatever the dead
 	//! object left behind. Off by default (it costs a memset per recycle).
+	/** \\brief Enables or disables debug poisoning of recycled blocks. \\param on true to overwrite blocks with kPoisonByte before recycling. */
 	void setPoisonOnFree(bool on) { poisonOnFreeFlag = on; }
+	/** \\brief Reports whether recycled blocks are poisoned. \\return Current poison-on-free setting. */
 	bool poisonOnFree() const { return poisonOnFreeFlag; } //!< whether recycle() poisons blocks
 	static constexpr uint8_t kPoisonByte = 0xDD; //!< fill byte used when poison-on-free is on
 
@@ -132,10 +149,13 @@ private:
 	//! single-agent build (SET-2).
 	mutable std::recursive_mutex mutex_;
 	//! Maps a new region into `set` and charges the Store budget.
+	/** \\brief Maps a region and charges its capacity to the Store budget. \\param set Owning instance region set. \\param blockSize Size-class block size, or zero for a dedicated region. \\param capacity Requested mapping capacity. \\param classIndex Size-class index for segregated regions. \\return Newly mapped region, or nullptr if allocation is refused. */
 	Region* createRegion(RegionSet& set, size_t blockSize, size_t capacity, uint32_t classIndex);
 	//! Unmaps `r` and credits the Store budget.
+	/** \\brief Unmaps a region and credits its capacity to the Store budget. \\param r Region to release. */
 	void    releaseRegion(Region* r);
 	//! The region containing `p`, or nullptr when it is not a heap block.
+	/** \\brief Finds the region containing an address. \\param p Candidate address. \\return Region pointer, or nullptr when p is outside this heap. */
 	Region* regionFor(const void* p) const;
 
 	//! Sorted by base; the interval search for owns()/recycle().
