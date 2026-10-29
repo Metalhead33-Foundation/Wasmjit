@@ -34,7 +34,7 @@ struct TableInstance;
 //! (`TypeId::kNone` for an abstract one, whose heap type is then carried in
 //! `type->elementType.heapType`) — module-local type indices are not comparable
 //! across modules (docs/proposals/GC.md R1).
-/** \\brief Borrowed table import plus the exported declaration metadata used for matching. */
+/** \brief Borrowed table import plus the exported declaration metadata used for matching. */
 struct ImportedTable {
 	TableInstance*        table = nullptr;
 	std::optional<TableType> type;
@@ -50,38 +50,38 @@ struct ImportedTable {
 //! which causes instantiation to fail with a descriptive error.
 class Store;
 
-/** \\brief Interface for publishing exports into an import resolver. */
+/** \brief Interface for publishing exports into an import resolver. */
 class ImportRegistrar {
 public:
-	/** \\brief Virtual destructor for registrar implementations. */
+	/** \brief Virtual destructor for registrar implementations. */
 	virtual ~ImportRegistrar() = default;
 
-	/** \\brief Publishes a function export for later import resolution. \\param moduleName Module namespace under which the function is exported. \\param fieldName Exported field name. \\param callable Callable descriptor to publish. */
+	/** \brief Publishes a function export for later import resolution. \param moduleName Module namespace under which the function is exported. \param fieldName Exported field name. \param callable Callable descriptor to publish. */
 	virtual void registerFunction(
 		std::string_view moduleName,
 		std::string_view fieldName,
 		const Callable& callable) = 0;
 
-	/** \\brief Publishes a borrowed global cell and its declared type. \\param moduleName Exporting module namespace. \\param fieldName Exported field name. \\param cell Global storage cell; must outlive importing instances. \\param type Global type and mutability metadata. */
+	/** \brief Publishes a borrowed global cell and its declared type. \param moduleName Exporting module namespace. \param fieldName Exported field name. \param cell Global storage cell; must outlive importing instances. \param type Global type and mutability metadata. */
 	virtual void registerGlobal(
 		std::string_view moduleName,
 		std::string_view fieldName,
 		Value* cell,
 		const GlobalType& type) = 0;
 
-	/** \\brief Publishes a borrowed Store-owned linear memory. \\param moduleName Exporting module namespace. \\param fieldName Exported field name. \\param memory Memory descriptor; its Store must outlive all imports. */
+	/** \brief Publishes a borrowed Store-owned linear memory. \param moduleName Exporting module namespace. \param fieldName Exported field name. \param memory Memory descriptor; its Store must outlive all imports. */
 	virtual void registerMemory(
 		std::string_view moduleName,
 		std::string_view fieldName,
 		LinearMemory* memory) = 0;
 
-	/** \\brief Publishes a borrowed Store-owned table and its type metadata. \\param moduleName Exporting module namespace. \\param fieldName Exported field name. \\param table Table view and optional declared type. */
+	/** \brief Publishes a borrowed Store-owned table and its type metadata. \param moduleName Exporting module namespace. \param fieldName Exported field name. \param table Table view and optional declared type. */
 	virtual void registerTable(
 		std::string_view moduleName,
 		std::string_view fieldName,
 		const ImportedTable& table) = 0;
 
-	/** \\brief Publishes an exception tag identity. \\param moduleName Exporting module namespace. \\param fieldName Exported field name. \\param tag Store-owned nominal tag identity. */
+	/** \brief Publishes an exception tag identity. \param moduleName Exporting module namespace. \param fieldName Exported field name. \param tag Store-owned nominal tag identity. */
 	virtual void registerTag(
 		std::string_view moduleName,
 		std::string_view fieldName,
@@ -89,7 +89,7 @@ public:
 
 	//! Publish an exported type (TYPE_IMPORTS.md TI-2). The type namespace is
 	//! separate from the function/global/memory/table/tag namespaces.
-	/** \\brief Publishes a canonical type identity. \\param moduleName Exporting module namespace. \\param fieldName Exported field name. \\param type Store-owned canonical type identity. */
+	/** \brief Publishes a canonical type identity. \param moduleName Exporting module namespace. \param fieldName Exported field name. \param type Store-owned canonical type identity. */
 	virtual void registerType(
 		std::string_view moduleName,
 		std::string_view fieldName,
@@ -98,19 +98,19 @@ public:
 	//! A registrar populated from an instance must match types in that
 	//! instance's store (docs/EMBEDDING_SURFACE.md §4.3 option B). The exporting
 	//! instance binds it before publishing anything.
-	/** \\brief Binds the Store whose canonical type identities this registrar publishes. \\param store Store that owns exported entities and type IDs. */
+	/** \brief Binds the Store whose canonical type identities this registrar publishes. \param store Store that owns exported entities and type IDs. */
 	virtual void bindStore(Store& store) { (void)store; }
 };
 
-/** \\brief Embedder interface for resolving module imports by module and field name. */
+/** \brief Embedder interface for resolving module imports by module and field name. */
 class ImportResolver {
 public:
-	/** \\brief Virtual destructor for resolver implementations. */
+	/** \brief Virtual destructor for resolver implementations. */
 	virtual ~ImportResolver() = default;
 
 	//! Binds the store the resolving instance lives in. The engine binds before
 	//! resolving; a resolver used without a binding is a bug.
-	/** \\brief Binds the Store used to resolve canonical type identities. \\param store Store belonging to the importing instance. */
+	/** \brief Binds the Store used to resolve canonical type identities. \param store Store belonging to the importing instance. */
 	virtual void bindStore(Store& store) { (void)store; }
 
 	//! Resolve a function import. `expectedType` is the canonical (process-wide)
@@ -118,7 +118,7 @@ public:
 	//! must return a callable whose type matches it (TypeRegistry::matches). A
 	//! resolver that cannot know a provided callable's type (e.g. a native import
 	//! registered with `TypeId::kNone`) may skip the check.
-	/** \\brief Resolves a function import by module/field and canonical signature. \\param moduleName Imported module name. \\param fieldName Imported function name. \\param expectedType Canonical expected function TypeId. \\param exact Require exact type identity when true. \\return Callable descriptor, or nullopt when unresolved/incompatible. */
+	/** \brief Resolves a function import by module/field and canonical signature. \param moduleName Imported module name. \param fieldName Imported function name. \param expectedType Canonical expected function TypeId. \param exact Require exact type identity when true. \return Callable descriptor, or nullopt when unresolved/incompatible. */
 	virtual std::optional<Callable> resolveFunction(
 		std::string_view moduleName,
 		std::string_view fieldName,
@@ -131,7 +131,7 @@ public:
 	//! rather than copied (docs/proposals/MUTABLE_GLOBALS.md MG-2/MG-3). The
 	//! resolver must reject a cell whose type or mutability does not match
 	//! `type` (MG-4).
-	/** \\brief Resolves a global import and checks its type/mutability. \\param moduleName Imported module name. \\param fieldName Imported global name. \\param type Required global type. \\return Borrowed pointer to the global cell, or nullopt when unresolved/incompatible. */
+	/** \brief Resolves a global import and checks its type/mutability. \param moduleName Imported module name. \param fieldName Imported global name. \param type Required global type. \return Borrowed pointer to the global cell, or nullopt when unresolved/incompatible. */
 	virtual std::optional<Value*> resolveGlobal(
 		std::string_view moduleName,
 		std::string_view fieldName,
@@ -144,7 +144,7 @@ public:
 	//! The resolver must also reject a memory whose page size differs from the
 	//! declared one: custom page sizes match exactly, with no subtyping
 	//! (docs/proposals/CUSTOM_PAGE_SIZES.md CPS-3).
-	/** \\brief Resolves a Store-owned memory import and checks its limits/page size. \\param moduleName Imported module name. \\param fieldName Imported memory name. \\param type Required memory type. \\return Borrowed memory descriptor, or nullopt when unresolved/incompatible. */
+	/** \brief Resolves a Store-owned memory import and checks its limits/page size. \param moduleName Imported module name. \param fieldName Imported memory name. \param type Required memory type. \return Borrowed memory descriptor, or nullopt when unresolved/incompatible. */
 	virtual std::optional<LinearMemory*> resolveMemory(
 		std::string_view moduleName,
 		std::string_view fieldName,
@@ -157,7 +157,7 @@ public:
 	//! resolver must reject a provided table whose element type is not a subtype
 	//! of the declared one, or whose limits do not match (docs/proposals/GC.md
 	//! R1).
-	/** \\brief Resolves a Store-owned table import and checks element type/limits. \\param moduleName Imported module name. \\param fieldName Imported table name. \\param type Required table type. \\param elementTypeId Canonical concrete element TypeId, or TypeId::kNone for abstract. \\return Borrowed table view and metadata, or nullopt when unresolved/incompatible. */
+	/** \brief Resolves a Store-owned table import and checks element type/limits. \param moduleName Imported module name. \param fieldName Imported table name. \param type Required table type. \param elementTypeId Canonical concrete element TypeId, or TypeId::kNone for abstract. \return Borrowed table view and metadata, or nullopt when unresolved/incompatible. */
 	virtual std::optional<ImportedTable> resolveTable(
 		std::string_view moduleName,
 		std::string_view fieldName,
@@ -169,7 +169,7 @@ public:
 	//! the resolver must return the exporting tag's process-wide `TagId` and
 	//! reject a tag whose payload type does not match
 	//! (docs/proposals/EXCEPTIONS.md EX-2).
-	/** \\brief Resolves an exception tag import by its canonical payload type. \\param moduleName Imported module name. \\param fieldName Imported tag name. \\param expectedType Canonical function TypeId describing the tag payload. \\return Store-owned TagId, or nullopt when unresolved/incompatible. */
+	/** \brief Resolves an exception tag import by its canonical payload type. \param moduleName Imported module name. \param fieldName Imported tag name. \param expectedType Canonical function TypeId describing the tag payload. \return Store-owned TagId, or nullopt when unresolved/incompatible. */
 	virtual std::optional<TagId> resolveTag(
 		std::string_view moduleName,
 		std::string_view fieldName,
@@ -178,7 +178,7 @@ public:
 	//! Resolve a type import. The provided type must be a subtype of the
 	//! declared abstract bound; the resolver enforces that through the canonical
 	//! registry rather than structural guessing (TYPE_IMPORTS.md TI-3).
-	/** \\brief Resolves a nominal type import and checks its abstract heap bound. \\param moduleName Imported module name. \\param fieldName Imported type name. \\param bound Required abstract heap-type bound. \\return Canonical TypeId, or nullopt when unresolved/incompatible. */
+	/** \brief Resolves a nominal type import and checks its abstract heap bound. \param moduleName Imported module name. \param fieldName Imported type name. \param bound Required abstract heap-type bound. \return Canonical TypeId, or nullopt when unresolved/incompatible. */
 	virtual std::optional<TypeId> resolveType(
 		std::string_view moduleName,
 		std::string_view fieldName,
