@@ -34,6 +34,7 @@ struct TableInstance;
 //! (`TypeId::kNone` for an abstract one, whose heap type is then carried in
 //! `type->elementType.heapType`) — module-local type indices are not comparable
 //! across modules (docs/proposals/GC.md R1).
+/** \\brief Borrowed table import plus the exported declaration metadata used for matching. */
 struct ImportedTable {
 	TableInstance*        table = nullptr;
 	std::optional<TableType> type;
@@ -49,8 +50,10 @@ struct ImportedTable {
 //! which causes instantiation to fail with a descriptive error.
 class Store;
 
+/** \\brief Interface for publishing exports into an import resolver. */
 class ImportRegistrar {
 public:
+	/** \\brief Virtual destructor for registrar implementations. */
 	virtual ~ImportRegistrar() = default;
 
 	virtual void registerFunction(
@@ -92,8 +95,10 @@ public:
 	virtual void bindStore(Store&) {}
 };
 
+/** \\brief Embedder interface for resolving module imports by module and field name. */
 class ImportResolver {
 public:
+	/** \\brief Virtual destructor for resolver implementations. */
 	virtual ~ImportResolver() = default;
 
 	//! Binds the store the resolving instance lives in. The engine binds before
