@@ -35,16 +35,18 @@ namespace WASM {
 //! in the type system, so an embedder that only sizes a result buffer uses the
 //! documented rule rather than this header.
 
+/** \\brief ABI-level category used to describe a WebAssembly value. */
 enum class ValueKind : std::uint8_t {
-	Void = 0,
-	I32,
-	I64,
-	F32,
-	F64,
-	V128,
+	Void = 0, //!< No value / zero-byte result.
+	I32, //!< 32-bit integer.
+	I64, //!< 64-bit integer.
+	F32, //!< 32-bit floating-point value.
+	F64, //!< 64-bit floating-point value.
+	V128, //!< 128-bit SIMD vector.
 	Ref, //!< any reference type: one pointer-sized word
 };
 
+/** \\brief Non-owning parameter/result kind view of a function signature. */
 struct SignatureView {
 	const ValueKind* params = nullptr;
 	std::uint32_t    paramCount = 0;
@@ -52,12 +54,14 @@ struct SignatureView {
 	std::uint32_t    resultCount = 0;
 };
 
+/** \\brief Offset, size, and alignment of one field in a lowered aggregate. */
 struct FieldLayout {
 	std::uint32_t offset = 0;
 	std::uint32_t size = 0;
 	std::uint32_t alignment = 0;
 };
 
+/** \\brief Caller-storage-backed layout description of a lowered aggregate. */
 struct AggregateLayout {
 	std::uint32_t size = 0;
 	std::uint32_t alignment = 1;
@@ -67,6 +71,11 @@ struct AggregateLayout {
 
 //! Size of one value of `kind` in the host ABI (docs/ABI.md "`v128` by Value").
 //! Packed and secret types never reach a signature, so they are not modelled.
+/**
+ * \\brief Returns the host-ABI size of a value kind.
+ * \\param kind ABI value category to measure.
+ * \\return Size in bytes; Void has size zero.
+ */
 inline constexpr std::uint32_t valueKindSize(ValueKind kind) noexcept
 {
 	switch (kind) {
@@ -81,6 +90,11 @@ inline constexpr std::uint32_t valueKindSize(ValueKind kind) noexcept
 	return 0;
 }
 
+/**
+ * \\brief Returns the host-ABI alignment of a value kind.
+ * \\param kind ABI value category to measure.
+ * \\return Required alignment in bytes.
+ */
 inline constexpr std::uint32_t valueKindAlignment(ValueKind kind) noexcept
 {
 	switch (kind) {
@@ -97,6 +111,11 @@ inline constexpr std::uint32_t valueKindAlignment(ValueKind kind) noexcept
 
 //! The ABI class of a declared value type. Every reference type is one
 //! pointer-sized word (docs/ABI.md "Reference and Global Representation").
+/**
+ * \\brief Maps a WebAssembly value-type opcode to its ABI value category.
+ * \\param code WebAssembly value type code.
+ * \\return Corresponding ABI kind; reference opcodes map to Ref.
+ */
 inline constexpr ValueKind valueKindOf(ValueTypeCode code) noexcept
 {
 	switch (code) {
@@ -111,6 +130,12 @@ inline constexpr ValueKind valueKindOf(ValueTypeCode code) noexcept
 }
 
 namespace detail {
+/**
+ * \\brief Rounds a byte offset up to the requested alignment.
+ * \\param value Original byte offset.
+ * \\param alignment Alignment boundary (must be non-zero).
+ * \\return Smallest aligned offset not less than value.
+ */
 inline constexpr std::uint32_t alignUp(std::uint32_t value,
 		std::uint32_t alignment) noexcept
 {
@@ -125,6 +150,13 @@ inline constexpr std::uint32_t alignUp(std::uint32_t value,
 //! `fieldStorage` is caller-owned scratch; it must have room for one
 //! `FieldLayout` per kind. Too little storage returns the zero layout rather
 //! than writing out of bounds.
+/**
+ * \\brief Computes the ABI layout for a sequence of result/value kinds.
+ * \\param kinds Field kinds in declaration order.
+ * \\param fieldStorage Caller-owned output storage with at least kinds.size()
+ *        entries; insufficient storage produces a zero layout.
+ * \\return Aggregate size/alignment and a pointer to the populated field layouts.
+ */
 inline AggregateLayout computeAggregateLayout(std::span<const ValueKind> kinds,
 		std::span<FieldLayout> fieldStorage) noexcept
 {
