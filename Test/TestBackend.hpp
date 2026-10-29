@@ -19,20 +19,25 @@
 
 namespace TestBackend {
 
-//! The backend façade is a product type (`WASM::BackendSession`, AAS8); the
-//! harness aliases it so a test body never depends on the harness being the
-//! place where the interface was first written.
+//! Backend field layout descriptor, aliased from the backend-independent API.
 using FieldLayout = WASM::BackendFieldLayout;
-//! The aggregate half of the same product type (`WASM::BackendAggregateLayout`).
+//! Aggregate layout descriptor used by the backend session interface.
 using AggregateLayout = WASM::BackendAggregateLayout;
-//! A vectorised lane-wise operation, as the session seam describes it.
+//! Describes a backend-provided vectorised lane-wise operation.
 using LaneWiseOp = WASM::BackendLaneWiseOp;
-//! The session type itself: what `create()` returns.
+//! Backend session interface returned by create().
 using Session = WASM::BackendSession;
 
-//! Selects the backend named by WASMJIT_BACKEND (empty/`libjit` → the compiled
-//! backend). The selector lives here, not in the core: `WasmBase/` must not know
-//! the name of a code generator (docs/LAYERING.md §2).
+/*!
+ * \brief Creates the backend selected for the test harness.
+ *
+ * The WASMJIT_BACKEND environment variable selects the backend; an empty
+ * value or `libjit` selects the compiled backend. The returned session is
+ * owned by the caller.
+ *
+ * \return A newly created backend session, or nullptr if the selected backend
+ *         cannot be created.
+ */
 std::unique_ptr<Session> create();
 
 } // namespace TestBackend
