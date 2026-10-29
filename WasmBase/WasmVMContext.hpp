@@ -1,5 +1,11 @@
 #ifndef WASMVMCONTEXT_HPP
 #define WASMVMCONTEXT_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
 #include "WasmValue.hpp"
 #include "WasmMemory.hpp"
 #include "WasmTable.hpp"
@@ -67,4 +73,5 @@ static_assert(std::is_standard_layout_v<VMContext>,
 
 }
 
+WASMJIT_VISIBLE_END
 #endif // WASMVMCONTEXT_HPP

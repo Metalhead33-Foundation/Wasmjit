@@ -1,6 +1,12 @@
 #ifndef WASMBACKENDABI_HPP
 #define WASMBACKENDABI_HPP
 
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
+
 #include "WasmType.hpp"
 
 #include <cstddef>
@@ -146,4 +152,5 @@ static_assert(sizeof(FieldLayout) == 12, "the C plugin view pins the layout");
 
 } // namespace WASM
 
+WASMJIT_VISIBLE_END
 #endif // WASMBACKENDABI_HPP

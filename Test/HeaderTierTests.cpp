@@ -34,7 +34,8 @@ std::string readTextFile(const std::filesystem::path& path)
 const std::set<std::string>& embedderHeaders()
 {
 	static const std::set<std::string> headers = {
-		"WasmJit.hpp", "WasmRuntime.hpp", "WasmVersion.hpp", "WasmArtifact.hpp",
+		"WasmApi.hpp", "WasmJit.hpp", "WasmRuntime.hpp", "WasmVersion.hpp",
+		"WasmArtifact.hpp",
 		"WasmModule.hpp", "WasmModuleInstance.hpp", "WasmValue.hpp", "WasmTrap.hpp",
 		"WasmException.hpp", "WasmImport.hpp", "WasmHostBridge.hpp",
 		"WasmNativeImport.hpp", "WasmProfile.hpp", "WasmConcurrency.hpp",
@@ -169,5 +170,5 @@ TEST_CASE("every public header has a compile-only translation unit", "[tiers]")
 			++checked;
 		}
 	}
-	REQUIRE(checked == 39);
+	REQUIRE(checked == 40);
 }

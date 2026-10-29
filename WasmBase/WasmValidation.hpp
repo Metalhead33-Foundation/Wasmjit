@@ -1,5 +1,11 @@
 #ifndef WASMVALIDATION_HPP
 #define WASMVALIDATION_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
 #include "WasmProfile.hpp"
 
 namespace WASM {
@@ -23,4 +29,5 @@ struct ValidationOptions {
 
 } // namespace WASM
 
+WASMJIT_VISIBLE_END
 #endif // WASMVALIDATION_HPP

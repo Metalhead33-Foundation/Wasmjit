@@ -1,6 +1,12 @@
 #ifndef WASMCONCURRENCY_HPP
 #define WASMCONCURRENCY_HPP
 
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
+
 #include <cstdint>
 
 namespace WASM {
@@ -50,4 +56,5 @@ struct HostAgentScheduler {
 
 } // namespace WASM
 
+WASMJIT_VISIBLE_END
 #endif // WASMCONCURRENCY_HPP

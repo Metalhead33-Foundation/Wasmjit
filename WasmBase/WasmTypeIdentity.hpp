@@ -1,5 +1,11 @@
 #ifndef WASMTYPEIDENTITY_HPP
 #define WASMTYPEIDENTITY_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -74,4 +80,5 @@ template <> struct hash<WASM::RecGroupId> {
 };
 } // namespace std
 
+WASMJIT_VISIBLE_END
 #endif // WASMTYPEIDENTITY_HPP

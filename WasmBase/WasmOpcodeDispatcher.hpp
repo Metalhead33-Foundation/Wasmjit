@@ -1,5 +1,13 @@
 #ifndef WASMOPCODEDISPATCHER_HPP
 #define WASMOPCODEDISPATCHER_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
+
+#include "WasmApi.hpp"
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include "WasmType.hpp"
 #include "WasmOpcode.hpp"
@@ -16,7 +24,7 @@ struct ContHandlerClause {
 	bool isSwitch = false;
 };
 
-class OpcodeDispatcher
+class WASMJIT_API OpcodeDispatcher
 {
 protected:
 	// Byte offset of the instruction currently being dispatched, relative to
@@ -766,4 +774,5 @@ public:
 };
 
 }
+WASMJIT_VISIBLE_END
 #endif // WASMOPCODEDISPATCHER_HPP

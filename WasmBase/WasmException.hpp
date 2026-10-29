@@ -1,5 +1,11 @@
 #ifndef WASMEXCEPTION_HPP
 #define WASMEXCEPTION_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
 #include <exception>
 #include <sstream>
 namespace WASM {
@@ -41,4 +47,5 @@ public:
 };
 
 }
+WASMJIT_VISIBLE_END
 #endif // WASMEXCEPTION_HPP

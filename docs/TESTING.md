@@ -989,6 +989,31 @@ made to fail through `WASMJIT_EXAMPLE_BACKEND_MODE` (`descriptor-abi`,
 ./Test/WasmJit '[plugin]'
 ```
 
+## Installing and the out-of-tree consumer
+
+`WasmBase` and `LibJit` install headers, libraries and `wasmjit.pc`
+([`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) `ES-5`). `Test/install-check.sh`
+proves it end to end:
+
+```bash
+./Test/install-check.sh build/Desktop-Debug /tmp/wasmjit-prefix
+```
+
+It runs `make install INSTALL_ROOT=<root> PREFIX=/usr/local`, copies the two
+vendored MhLib libraries into the prefix (they do not install themselves yet),
+then builds `Test/consumer/Consumer.cpp` through
+`pkg-config --cflags --libs wasmjit` and runs it. The consumer includes only
+`<wasmjit/WasmJit.hpp>`, links only through the `.pc`, calls an export and exits
+0.
+
+Two properties of the installed surface are easy to forget:
+
+- The internal headers are installed under `include/wasmjit/internal/` because
+  the public ones include them; they are not part of the API surface.
+- The core is compiled with `-fvisibility=hidden`; only declarations from the
+  public headers are exported (`WASMJIT_API` for the embedder tier). The core
+  library exports ~2,500 symbols, not ~24,000.
+
 ## Picking tests with Catch2 options
 
 > **A name spec needs wildcards.** A spec without `*` or `?` is matched against the *whole* test name.

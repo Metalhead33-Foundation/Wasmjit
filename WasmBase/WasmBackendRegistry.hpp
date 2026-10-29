@@ -1,6 +1,12 @@
 #ifndef WASMBACKENDREGISTRY_HPP
 #define WASMBACKENDREGISTRY_HPP
 
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: this header is entirely part of the public
+// surface, so every declaration in it is exported.
+WASMJIT_VISIBLE_BEGIN
+
 #include "WasmModuleInstance.hpp"
 
 #include <functional>
@@ -59,5 +65,7 @@ BackendInstance loadBackendPlugin(std::string_view name);
 	[[maybe_unused]] const bool WASMJIT_BACKEND_CONCAT(wasmjit_backend_register_,  \
 			__LINE__) = (::WASM::registerBackend((NAME), (FACTORY)), true);        \
 	}
+
+WASMJIT_VISIBLE_END
 
 #endif // WASMBACKENDREGISTRY_HPP

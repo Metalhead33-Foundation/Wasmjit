@@ -1,5 +1,11 @@
 #ifndef WASMOPCODE_HPP
 #define WASMOPCODE_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
 #include <cstdint>
 #include <Elvavena/Io/ElvDataStream.hpp>
 namespace WASM {
@@ -932,4 +938,5 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 }
 
 }
+WASMJIT_VISIBLE_END
 #endif // WASMOPCODE_HPP

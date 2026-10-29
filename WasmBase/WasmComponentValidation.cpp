@@ -916,7 +916,7 @@ void ComponentValidator::run()
 
 void ComponentValidator::validateCanonicalAbi()
 {
-	const TypeStore& store = Store::global().types().store();
+	const TypeStore& store = Store::current().types().store();
 	const auto optionsFor = [](const Canon& canon,
 			WASM::CanonicalAbiOptions& options) {
 		for (const CanonOpt& opt : canon.opts) {
@@ -1101,7 +1101,7 @@ TypePtr ComponentValidator::resolveDefinedValueType(ComponentTypeView type,
 	value->primitive = type.primitive();
 	value->fixedLength = type.fixedLength();
 	for (const StringId label : type.labels())
-		value->labels.emplace_back(Store::global().types().store().string(label));
+		value->labels.emplace_back(Store::current().types().store().string(label));
 
 	switch (type.kind()) {
 	case TypeKind::ComponentPrimitive:
@@ -1115,7 +1115,7 @@ TypePtr ComponentValidator::resolveDefinedValueType(ComponentTypeView type,
 			fail("record type must have at least one field");
 		std::set<std::string> labels;
 		for (const ComponentField& field : fields) {
-			const std::string name(Store::global().types().store().string(field.name));
+			const std::string name(Store::current().types().store().string(field.name));
 			checkLabel(name, "record field", labels);
 			value->fields.emplace_back(name, resolveValue(field.type, scope));
 		}
@@ -1128,7 +1128,7 @@ TypePtr ComponentValidator::resolveDefinedValueType(ComponentTypeView type,
 			fail("variant type must have at least one case");
 		std::set<std::string> labels;
 		for (const ComponentCase& item : cases) {
-			const std::string name(Store::global().types().store().string(item.label));
+			const std::string name(Store::current().types().store().string(item.label));
 			checkLabel(name, "variant case", labels);
 			ResolvedCase resolved;
 			resolved.label = name;
@@ -1166,7 +1166,7 @@ TypePtr ComponentValidator::resolveDefinedValueType(ComponentTypeView type,
 			fail("cannot have more than 32 flags");
 		std::set<std::string> seen;
 		for (const StringId label : labels)
-			checkLabel(std::string(Store::global().types().store().string(label)),
+			checkLabel(std::string(Store::current().types().store().string(label)),
 					"flag", seen);
 		value->kind = ResolvedValueType::Kind::Flags;
 		break;
@@ -1177,7 +1177,7 @@ TypePtr ComponentValidator::resolveDefinedValueType(ComponentTypeView type,
 			fail("enum type must have at least one variant");
 		std::set<std::string> seen;
 		for (const StringId label : labels)
-			checkLabel(std::string(Store::global().types().store().string(label)),
+			checkLabel(std::string(Store::current().types().store().string(label)),
 					"enum tag", seen);
 		value->kind = ResolvedValueType::Kind::Enum;
 		break;
@@ -1248,7 +1248,7 @@ TypePtr ComponentValidator::resolveFuncType(ComponentTypeView type,
 	func->isAsync = (type.flags() & TypeFlagAsync) != 0;
 	std::set<std::string> labels;
 	for (const ComponentFuncParam& param : type.params()) {
-		const std::string name(Store::global().types().store().string(param.name));
+		const std::string name(Store::current().types().store().string(param.name));
 		checkLabel(name, "function parameter", labels);
 		func->params.emplace_back(name, resolveValue(param.type, scope));
 	}
@@ -1295,11 +1295,11 @@ TypePtr ComponentValidator::resolveTypeDef(const ComponentTypeDef& definition,
 	switch (definition.kind) {
 	case ComponentTypeDef::Kind::DefinedValue:
 		type = resolveDefinedValueType(
-				Store::global().types().store().componentType(definition.id), scope);
+				Store::current().types().store().componentType(definition.id), scope);
 		break;
 	case ComponentTypeDef::Kind::Func:
 		type = resolveFuncType(
-				Store::global().types().store().componentType(definition.id), scope);
+				Store::current().types().store().componentType(definition.id), scope);
 		break;
 	case ComponentTypeDef::Kind::Component:
 	case ComponentTypeDef::Kind::Instance:
@@ -1640,7 +1640,7 @@ SchemeId ComponentValidator::internScheme(const TypePtr& type)
 	std::string key;
 	std::map<uint32_t, uint32_t> parameters;
 	appendSchemeType(key, type, parameters);
-	return Store::global().types().store().internScheme(std::move(key),
+	return Store::current().types().store().internScheme(std::move(key),
 			static_cast<uint32_t>(parameters.size()));
 }
 
@@ -1767,7 +1767,7 @@ TypeId ComponentValidator::internValue(const ValuePtr& value)
 	if (found != valueTypeIds_.end())
 		return found->second;
 
-	TypeStore& store = Store::global().types().store();
+	TypeStore& store = Store::current().types().store();
 	const auto canon = [this](const ValuePtr& child) {
 		ComponentValueType out;
 		out.kind = ComponentValueType::Kind::TypeId;
@@ -1870,7 +1870,7 @@ TypeId ComponentValidator::internValue(const ValuePtr& value)
 std::vector<ComponentDeclRecord> ComponentValidator::canonicalDeclarations(
 		const std::vector<ResolvedDecl>& declarations)
 {
-	TypeStore& store = Store::global().types().store();
+	TypeStore& store = Store::current().types().store();
 	std::vector<ComponentDeclRecord> out;
 	out.reserve(declarations.size());
 	for (const ResolvedDecl& declaration : declarations) {
@@ -1909,7 +1909,7 @@ TypeId ComponentValidator::internResolvedType(const TypePtr& type)
 	// recursing forever.
 	resolvedTypeIds_.emplace(type.get(), TypeId{TypeId::kNone});
 
-	TypeStore& store = Store::global().types().store();
+	TypeStore& store = Store::current().types().store();
 	TypeId id{TypeId::kNone};
 	switch (type->kind) {
 	case ResolvedType::Kind::Value:
@@ -2454,7 +2454,7 @@ ResolvedDecl ComponentValidator::resolveExternType(const ExternType& type,
 			payload.rep.opcode = ValueTypeCode::I32;
 			payload.rep.heapType = 0;
 			payload.abstract = true;
-			type->typeId = Store::global().types().store()
+			type->typeId = Store::current().types().store()
 					.addComponentResource(payload);
 			declaration.type = type;
 		}
@@ -3057,7 +3057,7 @@ void ComponentValidator::instantiateComponent(const ComponentInstance& instance,
 			ComponentResourcePayload payload;
 			payload.rep = resource->rep;
 			payload.abstract = false;
-			fresh->typeId = Store::global().types().store()
+			fresh->typeId = Store::current().types().store()
 					.addComponentResource(payload);
 			substitutions.emplace(id, fresh);
 		}
@@ -3545,7 +3545,7 @@ void ComponentValidator::validateCoreExternType(const CoreExternType& type,
 		if (type.typeIndex >= coreTypes.size())
 			fail(std::string(what) + " function type index out of bounds");
 		if (coreTypes[type.typeIndex].isNone()
-				|| Store::global().types().canonicalType(coreTypes[type.typeIndex]).kind()
+				|| Store::current().types().canonicalType(coreTypes[type.typeIndex]).kind()
 						!= CanonTypeKind::Func)
 			fail(std::string(what) + " function type index is not a function type");
 		break;
@@ -3553,7 +3553,7 @@ void ComponentValidator::validateCoreExternType(const CoreExternType& type,
 		if (type.typeIndex >= coreTypes.size())
 			fail(std::string(what) + " tag type index out of bounds");
 		if (coreTypes[type.typeIndex].isNone()
-				|| Store::global().types().canonicalType(coreTypes[type.typeIndex]).kind()
+				|| Store::current().types().canonicalType(coreTypes[type.typeIndex]).kind()
 						!= CanonTypeKind::Func)
 			fail(std::string(what) + " tag type index is not a function type");
 		break;
@@ -3634,7 +3634,7 @@ void ComponentValidator::validateCoreTypeDef(const CoreTypeDef& definition,
 		std::vector<Subtype> scratch(groupFirst);
 		scratch.insert(scratch.end(), rec.subtypes.begin(), rec.subtypes.end());
 		const TypeGroup group{LocalTypeIdx{groupFirst}, count};
-		rec.typeIds = Store::global().types().internGroup(scratch, group, ids);
+		rec.typeIds = Store::current().types().internGroup(scratch, group, ids);
 		for (uint32_t i = 0; i < count; ++i) {
 			slots.push_back(nullptr);
 			ids.push_back(rec.typeIds[i]);

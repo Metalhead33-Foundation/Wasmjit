@@ -1,5 +1,11 @@
 #ifndef WASMSIMDSCALAR_HPP
 #define WASMSIMDSCALAR_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: this header is entirely part of the public
+// surface, so every declaration in it is exported.
+WASMJIT_VISIBLE_BEGIN
 #include <cstdint>
 
 // ── Scalar reference implementation of the v128 helpers ─────────────────────
@@ -296,5 +302,7 @@ void wasm_f64x2_relaxed_nmadd(const void* a, const void* b, const void* c, void*
 void wasm_i16x8_relaxed_dot_i8x16_i7x16_s(const void* a, const void* b, void* out);
 void wasm_i32x4_relaxed_dot_i8x16_i7x16_add_s(const void* a, const void* b, const void* c, void* out);
 }
+
+WASMJIT_VISIBLE_END
 
 #endif // WASMSIMDSCALAR_HPP

@@ -320,7 +320,7 @@ ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver,
 	// Created first, because constant expressions evaluated below
 	// (initializeGlobals) can allocate GC objects. Teardown releases the whole
 	// set in bulk, whether or not the reference counts balanced (GC-2).
-	internals.gcSet = Store::global().gc().createSet();
+	internals.gcSet = Store::current().gc().createSet();
 
 	// ── Step 1: Resolve and store all imports ───────────────────────
 	// Imports must come first because they occupy the low indices in
@@ -364,7 +364,7 @@ ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver,
 	// The range is what lets the Store map a cross-module `funcref` back to its
 	// owning `Callable` (docs/proposals/GC.md G2).
 	if (!internals.importStorage.empty())
-		Store::global().registerCallableRange(
+		Store::current().registerCallableRange(
 				internals.importStorage.data(), internals.importStorage.size());
 
 	// Publish the instance to the optional host boundary. This is deliberately
@@ -391,12 +391,12 @@ ModuleInstance::~ModuleInstance()
 
 	// Withdraw the range before the storage is freed (embedders may destroy
 	// instances while the process-wide Store lives on).
-	Store::global().unregisterCallableRange(internals.importStorage.data());
+	Store::current().unregisterCallableRange(internals.importStorage.data());
 
 	// Bulk reclamation: every region this instance used is unmapped and the
 	// budget credited, independent of the reference counts (the RC leak
 	// backstop, docs/proposals/GC.md §6.1/GC-2).
-	Store::global().gc().releaseSet(internals.gcSet);
+	Store::current().gc().releaseSet(internals.gcSet);
 	internals.gcSet = nullptr;
 }
 
@@ -616,7 +616,7 @@ void ModuleInstance::resolveImports(ImportResolver& resolver)
 	}
 	for (const auto& tag : module->tags) {
 		internals.tagIds.push_back(
-			Store::global().createTag(module->typeId(LocalTypeIdx{tag.typeIdx})));
+			Store::current().createTag(module->typeId(LocalTypeIdx{tag.typeIdx})));
 	}
 
 	// ── Global imports ──────────────────────────────────────────────
@@ -645,7 +645,7 @@ void ModuleInstance::initializeMemories()
 	// multi-memory proposal allows several). Imported memories were already
 	// appended to memoryRefs by resolveImports(), in import order; the
 	// locally-defined ones follow here.
-	Store& store = Store::global();
+	Store& store = Store::current();
 
 	for (const MemoryType& memType : module->memories) {
 		const bool isShared = (memType.limits.flags & 0x02) != 0; // threads proposal
@@ -694,10 +694,10 @@ void ModuleInstance::initializeStringLiterals()
 			throw std::runtime_error(
 				"malformed module: string literal is not valid WTF-8");
 		internals.stringLiterals.push_back(
-			Store::global().strings().create(std::move(codePoints)));
+			Store::current().strings().create(std::move(codePoints)));
 		// A section-14 literal is a root: it must outlive every `string.const`
 		// borrow in globals/segments (STR-2/STR-8).
-		Store::global().strings().retain(internals.stringLiterals.back());
+		Store::current().strings().retain(internals.stringLiterals.back());
 	}
 }
 
@@ -807,7 +807,7 @@ void ModuleInstance::resolveRefFuncsInObject(void* ref, std::vector<void*>& visi
 				*reinterpret_cast<void**>(slot) = child;
 			}
 		}
-		if (child != nullptr && Store::global().gc().owns(child))
+		if (child != nullptr && Store::current().gc().owns(child))
 			resolveRefFuncsInObject(child, visited);
 	};
 
@@ -889,8 +889,8 @@ void ModuleInstance::initializeTable()
 		// entry carried an initialiser expression, in which case every slot starts
 		// as that value (docs/proposals/GC.md G5). A non-defaultable element type
 		// has no null to fall back on, so this is its only correct start state.
-		const Store::TableId id = Store::global().createTable(initialSize, maxSize);
-		TableInstance* view = Store::global().table(id);
+		const Store::TableId id = Store::current().createTable(initialSize, maxSize);
+		TableInstance* view = Store::current().table(id);
 		if (view == nullptr)
 			throw std::runtime_error("failed to allocate table");
 		if (!tableType.initExpr.empty()) {
@@ -1479,7 +1479,7 @@ void* ModuleInstance::allocateStructObject(uint32_t size, uint32_t localTypeIdx,
 	// allocator call happens per object while generated code runs. The region is
 	// charged to the budget when it is backed; a refusal is a Wasm trap, never an
 	// abort (docs/SAFETY.md §2.3, docs/proposals/GC.md GC-2).
-	uint8_t* object = static_cast<uint8_t*>(Store::global().gc().allocate(*internals.gcSet, size));
+	uint8_t* object = static_cast<uint8_t*>(Store::current().gc().allocate(*internals.gcSet, size));
 	if (object == nullptr) {
 		reportTrap(TrapKind::OutOfMemory);
 		return nullptr;
@@ -1557,7 +1557,7 @@ void* ModuleInstance::allocateArrayObject(uint32_t dataOffset, uint32_t elementS
 	}
 
 	uint8_t* object = static_cast<uint8_t*>(
-			Store::global().gc().allocate(*internals.gcSet, static_cast<size_t>(totalBytes)));
+			Store::current().gc().allocate(*internals.gcSet, static_cast<size_t>(totalBytes)));
 	if (object == nullptr) {
 		reportTrap(TrapKind::OutOfMemory);
 		return nullptr;
@@ -1695,7 +1695,7 @@ bool ModuleInstance::tryGetGcTypeId(const void* ref, TypeId& typeId) const
 	// A GC pointer is identified by its region, and its type read straight from
 	// the header (docs/proposals/GC.md D2/GC-1). No per-object side map, and the
 	// identity is canonical, so this works across modules too.
-	if (!Store::global().gc().owns(ref))
+	if (!Store::current().gc().owns(ref))
 		return false;
 	const auto* bytes = static_cast<const uint8_t*>(ref);
 	typeId = TypeId{*reinterpret_cast<const uint32_t*>(bytes + GcHeader::kTypeIdOffset)};
@@ -1708,14 +1708,14 @@ bool ModuleInstance::isInternalReference(const void* ref) const
 		return false;
 	if ((reinterpret_cast<uintptr_t>(ref) & 1u) != 0)
 		return true; // unboxed i31 immediate
-	return Store::global().gc().owns(ref);
+	return Store::current().gc().owns(ref);
 }
 
 bool ModuleInstance::isExternBox(const void* ref) const
 {
 	if (ref == nullptr || (reinterpret_cast<uintptr_t>(ref) & 1u) != 0)
 		return false;
-	if (!Store::global().gc().owns(ref))
+	if (!Store::current().gc().owns(ref))
 		return false;
 	const auto* bytes = static_cast<const uint8_t*>(ref);
 	return *reinterpret_cast<const uint32_t*>(bytes + GcHeader::kTypeIdOffset)
@@ -1729,7 +1729,7 @@ void* ModuleInstance::externBox(void* ref)
 	if (!isInternalReference(ref))
 		return ref;
 	uint8_t* box = static_cast<uint8_t*>(
-			Store::global().gc().allocate(*internals.gcSet,
+			Store::current().gc().allocate(*internals.gcSet,
 					GcHeader::kExternBoxBytes));
 	if (box == nullptr) {
 		reportTrap(TrapKind::OutOfMemory);
@@ -1756,7 +1756,7 @@ void* ModuleInstance::externUnbox(void* ref) const
 
 bool ModuleInstance::refMatchesHeapType(const void* ref, const HeapType& heapType, bool nullable) const
 {
-	const TypeRegistry& registry = Store::global().types();
+	const TypeRegistry& registry = Store::current().types();
 
 	// Canonical form of the expected heap type. A module-local index is resolved
 	// against the module that contains the cast instruction.
@@ -1778,7 +1778,7 @@ bool ModuleInstance::refMatchesHeapType(const void* ref, const HeapType& heapTyp
 		if (!heapType.isTypeIndex)
 			return false;
 		const TypeId target = module->typeId(LocalTypeIdx{heapType.typeIndex});
-		if (const Callable* callable = Store::global().callableAt(ref))
+		if (const Callable* callable = Store::current().callableAt(ref))
 			return !callable->typeId.isNone() && callable->typeId == target;
 		TypeId gcTypeId;
 		if (tryGetGcTypeId(ref, gcTypeId))
@@ -1832,7 +1832,7 @@ bool ModuleInstance::refMatchesHeapType(const void* ref, const HeapType& heapTyp
 	// (docs/proposals/GC.md G2). The old per-instance scan could not see those,
 	// which is what made `ref.test funcref` on a foreign reference wrong (and
 	// O(#functions) on every cast, §5.3 H3).
-	if (const Callable* callable = Store::global().callableAt(ref))
+	if (const Callable* callable = Store::current().callableAt(ref))
 		return matchCallable(*callable);
 
 	// GC objects carry their canonical type id.
@@ -1878,7 +1878,7 @@ uint32_t* ModuleInstance::gcRefcountSlot(const void* ref)
 		return nullptr;
 	// Only a pointer inside a GC heap region is a counted GC object; funcrefs,
 	// externrefs and arbitrary host pointers are not (docs/proposals/GC.md RC12).
-	if (!Store::global().gc().owns(ref))
+	if (!Store::current().gc().owns(ref))
 		return nullptr;
 	return reinterpret_cast<uint32_t*>(
 			static_cast<uint8_t*>(const_cast<void*>(ref)) + GcHeader::kRefcountOffset);
@@ -1887,7 +1887,7 @@ uint32_t* ModuleInstance::gcRefcountSlot(const void* ref)
 uint32_t ModuleInstance::gcRefCount(const void* ref) const
 {
 	if (ref == nullptr || (reinterpret_cast<uintptr_t>(ref) & 1u) != 0
-			|| !Store::global().gc().owns(ref))
+			|| !Store::current().gc().owns(ref))
 		return 0;
 	auto* slot = const_cast<uint32_t*>(reinterpret_cast<const uint32_t*>(
 			static_cast<const uint8_t*>(ref) + GcHeader::kRefcountOffset));
@@ -1911,11 +1911,11 @@ bool ModuleInstance::isHostReference(const void* ref) const
 	// kinds; anything else that survives the checks is an opaque host
 	// `externref`. A host that has further opaque pointer kinds should supply
 	// the predicate rather than rely on this classification.
-	if (Store::global().gc().owns(ref))
+	if (Store::current().gc().owns(ref))
 		return false;
-	if (Store::global().strings().owns(ref))
+	if (Store::current().strings().owns(ref))
 		return false;
-	if (Store::global().callableAt(ref) != nullptr)
+	if (Store::current().callableAt(ref) != nullptr)
 		return false;
 	if (isContinuationRef(ref))
 		return false;
@@ -1959,7 +1959,7 @@ void* ModuleInstance::refClone(void* ref)
 	// uncounted or a host externref.
 	if (continuationRefRetain(ref))
 		return ref;
-	if (Store::global().strings().retain(ref))
+	if (Store::current().strings().retain(ref))
 		return ref;
 	uint32_t* slot = gcRefcountSlot(ref);
 	if (slot == nullptr) {
@@ -1981,7 +1981,7 @@ void ModuleInstance::refDrop(void* ref)
 {
 	if (continuationRefRelease(ref))
 		return;
-	if (Store::global().strings().release(ref))
+	if (Store::current().strings().release(ref))
 		return;
 	uint32_t* slot = gcRefcountSlot(ref);
 	if (slot == nullptr) {
@@ -2019,6 +2019,9 @@ void ModuleInstance::refStore(void** slot, void* newRef)
 
 void ModuleInstance::reclaimGcObject(void* ref)
 {
+	// MF-3: another agent's safepoint may be collecting at the same time; the
+	// queue and the counter are shared instance state.
+	std::lock_guard<std::recursive_mutex> lock(internals.gcMutex);
 	// The count reached zero (RC-1b). Do NOT free here: Wasm locals,
 	// operand-stack temporaries and control-flow slots are *uncounted borrows*,
 	// and a frame is usually still live. Queue the object; gcCollect() releases
@@ -2041,7 +2044,7 @@ CoreTypeView ModuleInstance::subtypeForTypeId(TypeId typeId) const
 	// The canonical id is process-wide: an object created from an identical type
 	// in another module is walked too. Core records are a prefix of the store, so
 	// a non-core or out-of-range id is simply not this walker's type.
-	const TypeRegistry& registry = Store::global().types();
+	const TypeRegistry& registry = Store::current().types();
 	if (!registry.isCoreType(typeId))
 		return {};
 	const CoreTypeView view = registry.canonicalType(typeId);
@@ -2095,7 +2098,7 @@ void ModuleInstance::releaseOutgoingRefs(void* ref, TypeId typeId,
 	childSlotsOf(ref, typeId, slots);
 	for (uint8_t* slot : slots) {
 		void* child = *reinterpret_cast<void* const*>(slot);
-		if (Store::global().strings().release(child))
+		if (Store::current().strings().release(child))
 			continue; // a string/view/iterator holds its own count (STR-8)
 		uint32_t* count = gcRefcountSlot(child);
 		if (count == nullptr) {
@@ -2159,7 +2162,7 @@ void adjustRefcount(void* ref, int delta)
 bool isCountedRef(const void* ref)
 {
 	return (reinterpret_cast<uintptr_t>(ref) & 1u) == 0 &&
-			WASM::Store::global().gc().owns(ref);
+			WASM::Store::current().gc().owns(ref);
 }
 
 WASM::TypeId typeIdOf(const void* ref)
@@ -2204,6 +2207,7 @@ void trialDfs(CycleTrial& trial, void* root, uint8_t mark, EdgeFn&& edge)
 
 void ModuleInstance::possibleCycleRoot(void* ref)
 {
+	std::lock_guard<std::recursive_mutex> lock(internals.gcMutex);
 	if (gcRefcountSlot(ref) == nullptr)
 		return;                              // not a counted GC object
 	const uint32_t tag = *reinterpret_cast<const uint32_t*>(
@@ -2217,6 +2221,7 @@ void ModuleInstance::possibleCycleRoot(void* ref)
 
 void ModuleInstance::collectCycles()
 {
+	std::lock_guard<std::recursive_mutex> lock(internals.gcMutex);
 	std::vector<void*> roots;
 	roots.swap(internals.gcCycleRoots);
 	if (roots.empty())
@@ -2270,7 +2275,7 @@ void ModuleInstance::collectCycles()
 				if (isCountedRef(child) && trial.colours[child] == kWhite)
 					trial.stack.push_back(child);
 			}
-			Store::global().gc().recycle(object);
+			Store::current().gc().recycle(object);
 			++internals.gcReclaimedObjects;
 		}
 	}
@@ -2278,6 +2283,16 @@ void ModuleInstance::collectCycles()
 
 void ModuleInstance::gcCollect()
 {
+	// MF-4: a safepoint requires quiescence — no call may be inside the instance.
+	// With one agent that is automatic; with several it is the embedder's rule,
+	// and this check turns a violation into a named error instead of a recycle of
+	// an object a live frame still borrows (docs/MULTI_AGENT_FEASIBILITY.md §7).
+	if (inCall()) {
+		throw std::logic_error("gcCollect() requires a quiescent instance: a call is"
+				" executing in it (docs/MULTI_AGENT_FEASIBILITY.md MF-4)");
+	}
+	// MF-3: serialize against another agent's release path.
+	std::lock_guard<std::recursive_mutex> lock(internals.gcMutex);
 	std::vector<uint8_t*> slots; // walk scratch, reused across objects
 	if (!internals.gcPending.empty()) {
 		// Iterative, never recursive (RC-3): `work` grows as children reach zero,
@@ -2299,7 +2314,7 @@ void ModuleInstance::gcCollect()
 				continue;
 			}
 			releaseOutgoingRefs(ref, work[i].typeId, work, slots);
-			Store::global().gc().recycle(ref);
+			Store::current().gc().recycle(ref);
 		}
 	}
 	// Cycle collection (RC-2) runs at the same safepoint. It must still run when

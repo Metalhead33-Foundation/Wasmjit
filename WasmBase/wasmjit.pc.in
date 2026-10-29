@@ -1,0 +1,11 @@
+prefix=$${WASMJIT_PREFIX}
+exec_prefix=$${WASMJIT_PREFIX}
+libdir=$${WASMJIT_PREFIX}/lib
+includedir=$${WASMJIT_PREFIX}/include
+
+Name: wasmjit
+Description: Embeddable WebAssembly runtime with a pluggable code generator
+Version: 1.0.0
+Libs: -L${libdir} -lWasmBase -lLibJit -lElvavena -lEuphemy -ljit
+Libs.private: -lhwy -ldl
+Cflags: -I${includedir} -I${includedir}/wasmjit -I${includedir}/wasmjit/internal

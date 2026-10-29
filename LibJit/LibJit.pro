@@ -10,6 +10,11 @@ LIBS += -ljit
 INCLUDEPATH += $$PWD/..
 include(../WasmBase/WasmBase.pri)
 
+# Install the code generator next to the core (docs/EMBEDDING_SURFACE.md ES-5).
+isEmpty(PREFIX): PREFIX = /usr/local
+target.path = $$PREFIX/lib
+INSTALLS += target
+
 # Avoid build errors with no files:
 SOURCES += \
         LibJitContext.cpp \

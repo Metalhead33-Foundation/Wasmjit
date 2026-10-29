@@ -1,5 +1,11 @@
 #ifndef WASMSTRING_HPP
 #define WASMSTRING_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: this header is entirely part of the public
+// surface, so every declaration in it is exported.
+WASMJIT_VISIBLE_BEGIN
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -171,5 +177,7 @@ std::vector<uint32_t> sliceCodePoints(const std::vector<uint32_t>& codePoints,
 									  int32_t start, int32_t count);
 
 } // namespace WASM
+
+WASMJIT_VISIBLE_END
 
 #endif // WASMSTRING_HPP

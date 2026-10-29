@@ -1,5 +1,11 @@
 #ifndef WASMCOMPONENTABI_HPP
 #define WASMCOMPONENTABI_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
 #include "WasmTypeStore.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -96,4 +102,5 @@ private:
 
 } // namespace WASM
 
+WASMJIT_VISIBLE_END
 #endif // WASMCOMPONENTABI_HPP

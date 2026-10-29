@@ -1,5 +1,11 @@
 #ifndef WASMEXN_HPP
 #define WASMEXN_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: this header is entirely part of the public
+// surface, so every declaration in it is exported.
+WASMJIT_VISIBLE_BEGIN
 #include <cstdint>
 
 // ── Shared exception-object and pending-exception ABI ───────────────────────
@@ -44,5 +50,7 @@ void* wasm_exn_take_pending();
 void  wasm_exn_clear_pending();
 
 } // extern "C"
+
+WASMJIT_VISIBLE_END
 
 #endif // WASMEXN_HPP

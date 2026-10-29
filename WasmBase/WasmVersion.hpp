@@ -1,6 +1,12 @@
 #ifndef WASMVERSION_HPP
 #define WASMVERSION_HPP
 
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: this header is entirely part of the public
+// surface, so every declaration in it is exported.
+WASMJIT_VISIBLE_BEGIN
+
 #include <cstdint>
 
 // Compile-time identity of the embedding surface an embedder builds against.
@@ -28,5 +34,7 @@ const char* versionString() noexcept;
 std::uint32_t abiVersion() noexcept;
 
 } // namespace WASM
+
+WASMJIT_VISIBLE_END
 
 #endif // WASMVERSION_HPP

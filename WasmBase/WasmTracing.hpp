@@ -6,6 +6,12 @@
 // so enabling or disabling the callback cannot change a result.
 #ifndef WASMTRACING_HPP
 #define WASMTRACING_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
 #include <cstdint>
 namespace WASM {
 
@@ -29,4 +35,5 @@ inline void traceImmediate(uint32_t immediate)
 }
 
 } // namespace WASM
+WASMJIT_VISIBLE_END
 #endif // WASMTRACING_HPP

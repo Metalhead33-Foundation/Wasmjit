@@ -24,7 +24,7 @@ TEST_CASE("runtime: create, load, instantiate and call", "[runtime]")
 	REQUIRE(runtime->profile().isFull());
 	REQUIRE(runtime->supports(WASM::Profile::Full));
 	REQUIRE(runtime->instanceCount() == 0);
-	REQUIRE(&runtime->store() == &WASM::Store::global());
+	REQUIRE(&runtime->store() != &WASM::Store::global());
 
 	auto module = runtime->loadBytes(TestFixtures::answerModuleBytes());
 	REQUIRE(module != nullptr);
@@ -49,6 +49,32 @@ TEST_CASE("runtime: create, load, instantiate and call", "[runtime]")
 
 	REQUIRE_THROWS_AS(runtime->callExport<std::int32_t>(instance, "missing"),
 			std::runtime_error);
+}
+
+TEST_CASE("runtime: each runtime owns an independent store", "[runtime]")
+{
+	// ES-2 option C: the store is runtime-scoped; `Store::current()` resolves to
+	// it inside the runtime's calls and to the process-wide store outside.
+	auto first = WASM::Runtime::create("libjit");
+	auto second = WASM::Runtime::create("libjit");
+	REQUIRE(&first->store() != &second->store());
+	REQUIRE(&first->store() != &WASM::Store::global());
+
+	auto moduleA = first->loadBytes(TestFixtures::answerModuleBytes());
+	auto moduleB = second->loadBytes(TestFixtures::answerModuleBytes());
+	WASM::RegistryImportResolver importsA;
+	WASM::RegistryImportResolver importsB;
+	WASM::ModuleInstance& instanceA = first->instantiate(*moduleA, importsA);
+	WASM::ModuleInstance& instanceB = second->instantiate(*moduleB, importsB);
+	REQUIRE(first->callExport<std::int32_t>(instanceA, "answer") == 42);
+	REQUIRE(second->callExport<std::int32_t>(instanceB, "answer") == 42);
+
+	// Cross-runtime handles are refused rather than silently compared: type
+	// identities and entities are per runtime (§4.4).
+	REQUIRE_THROWS_WITH(second->instantiate(*moduleA, importsB),
+			Catch::Matchers::ContainsSubstring("not loaded by this runtime"));
+	REQUIRE_THROWS_WITH(second->callExport<std::int32_t>(instanceA, "answer"),
+			Catch::Matchers::ContainsSubstring("not created by this runtime"));
 }
 
 TEST_CASE("runtime: the null backend exercises the seam without executing", "[runtime]")

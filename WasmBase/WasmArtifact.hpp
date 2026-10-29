@@ -1,5 +1,13 @@
 #ifndef WASMARTIFACT_HPP
 #define WASMARTIFACT_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
+
+#include "WasmApi.hpp"
 #include "WasmSection.hpp"
 #include <cstdint>
 #include <memory>
@@ -29,7 +37,7 @@ struct Preamble {
 // `Artifact::parse` is the "parse this file" entry point: it reads the first
 // eight bytes and dispatches on the layer field, so a caller does not need to
 // know in advance which kind it holds.
-struct Artifact {
+struct WASMJIT_API Artifact {
 	ArtifactKind kind;
 	uint32_t version = 0;
 	uint16_t layer = 0;
@@ -63,4 +71,5 @@ protected:
 
 }
 
+WASMJIT_VISIBLE_END
 #endif // WASMARTIFACT_HPP

@@ -41,7 +41,7 @@ extern "C" {
 void* wasm_exn_create(int32_t tagId, uint32_t payloadBytes)
 {
 	const std::size_t total = kHeaderSize + static_cast<std::size_t>(payloadBytes);
-	WASM::Store& store = WASM::Store::global();
+	WASM::Store& store = WASM::Store::current();
 	if (!store.reserveBytes(total)) {
 		WASM::reportTrap(WASM::TrapKind::OutOfMemory);
 		return nullptr;

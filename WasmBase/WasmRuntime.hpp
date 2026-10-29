@@ -1,6 +1,14 @@
 #ifndef WASMRUNTIME_HPP
 #define WASMRUNTIME_HPP
 
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
+
+#include "WasmApi.hpp"
+
 #include "WasmAgent.hpp"
 #include "WasmBackendRegistry.hpp"
 #include "WasmConcurrency.hpp"
@@ -65,7 +73,7 @@ struct RuntimeConfig {
 	std::uint64_t     allocationBudgetBytes = 0;
 };
 
-class Runtime
+class WASMJIT_API Runtime
 {
 public:
 	// Selects a backend by name (docs/BACKEND_PLUGIN_ABI.md BP-2/BP-3). An empty
@@ -130,9 +138,15 @@ public:
 private:
 	Runtime(std::string backendName, BackendInstance backend, RuntimeConfig config);
 
+	bool owns(const ModuleInstance& instance) const noexcept;
+	bool ownsModule(const Module& module) const noexcept;
+
 	std::string backendName_;
 	BackendInstance backend_;
 	RuntimeConfig config_;
+	// The runtime-scoped store (docs/EMBEDDING_SURFACE.md §4.3 option C). Engine
+	// code reaches it through `Store::current()` while a `Scope` is installed.
+	Store store_;
 	std::vector<std::shared_ptr<const Module>> modules_;
 	std::unordered_map<const Module*, std::unique_ptr<ModuleInstance>> instances_;
 };
@@ -140,6 +154,8 @@ private:
 template<typename Ret, typename... Args>
 Ret Runtime::callExport(ModuleInstance& instance, std::string_view name, Args&&... args)
 {
+	if (!owns(instance))
+		throw std::runtime_error("the instance was not created by this runtime");
 	const std::optional<Callable> callable = instance.exportedFunction(name);
 	if (!callable)
 		throw std::runtime_error("no exported function named '" + std::string(name) + "'");
@@ -154,6 +170,9 @@ Ret Runtime::callExport(ModuleInstance& instance, std::string_view name, Args&&.
 		ModuleInstance& instance;
 		~CallGuard() { instance.leaveCall(); }
 	} guard{ instance };
+	// Engine helpers (refClone/refDrop, GC) resolve the store through
+	// `Store::current()`; install this runtime's store for the call.
+	Store::Scope scope(store_);
 	return WASM::callCallable<Ret>(*callable, std::forward<Args>(args)...);
 }
 
@@ -161,6 +180,8 @@ template<typename... Args>
 void Runtime::callExportWithResults(ModuleInstance& instance, std::string_view name,
 		void* results, Args&&... args)
 {
+	if (!owns(instance))
+		throw std::runtime_error("the instance was not created by this runtime");
 	const std::optional<Callable> callable = instance.exportedFunction(name);
 	if (!callable)
 		throw std::runtime_error("no exported function named '" + std::string(name) + "'");
@@ -175,10 +196,12 @@ void Runtime::callExportWithResults(ModuleInstance& instance, std::string_view n
 		ModuleInstance& instance;
 		~CallGuard() { instance.leaveCall(); }
 	} guard{ instance };
+	Store::Scope scope(store_);
 	WASM::callCallableWithResults(*callable, results, std::forward<Args>(args)...);
 }
 
 
 } // namespace WASM
 
+WASMJIT_VISIBLE_END
 #endif // WASMRUNTIME_HPP

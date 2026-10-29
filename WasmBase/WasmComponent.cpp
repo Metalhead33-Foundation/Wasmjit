@@ -125,7 +125,7 @@ void Component::parseSectionPayload(ComponentSection& section,
 
 	switch (section.type) {
 	case ComponentSectionType::Custom: {
-		Reader r(device, Store::global().types().store());
+		Reader r(device, Store::current().types().store());
 		section.name = r.name();
 		section.data = std::move(payload);
 		break;
@@ -141,7 +141,7 @@ void Component::parseSectionPayload(ComponentSection& section,
 				static_cast<uint32_t>(components.size() - 1)});
 		break;
 	default: {
-		Reader r(device, Store::global().types().store());
+		Reader r(device, Store::current().types().store());
 		switch (section.type) {
 		case ComponentSectionType::CoreInstance:
 			r.vec([&] {

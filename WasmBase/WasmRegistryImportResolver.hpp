@@ -1,6 +1,14 @@
 #ifndef WASMREGISTRYIMPORTRESOLVER_HPP
 #define WASMREGISTRYIMPORTRESOLVER_HPP
 
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
+
+#include "WasmApi.hpp"
+
 #include "WasmImport.hpp"
 #include "WasmMemory.hpp"
 #include <functional>
@@ -22,7 +30,7 @@ using NameMap = std::map<std::string, T, std::less<>>;
 // imports by module/field name. This is backend-independent storage; any
 // backend-specific ABI concerns belong in how `Callable::fnPtr` values are
 // produced before registration.
-class RegistryImportResolver final : public ImportResolver, public ImportRegistrar
+class WASMJIT_API RegistryImportResolver final : public ImportResolver, public ImportRegistrar
 {
 public:
 	// A registered global is a borrowed *cell*. A module export publishes its
@@ -118,4 +126,5 @@ private:
 
 } // namespace WASM
 
+WASMJIT_VISIBLE_END
 #endif // WASMREGISTRYIMPORTRESOLVER_HPP

@@ -138,7 +138,7 @@ bool tableSatisfiesImport(const ImportedTable& provided, const TableType& declar
 			tableElementHeap(p.elementType, provided.elementTypeId);
 	const CanonHeapType declaredHeap =
 			tableElementHeap(declared.elementType, declaredElementTypeId);
-	return Store::global().types().matchesHeap(providedHeap, declaredHeap);
+	return Store::current().types().matchesHeap(providedHeap, declaredHeap);
 }
 
 } // namespace
@@ -335,7 +335,7 @@ std::optional<Callable> RegistryImportResolver::ModuleRegistry::resolveFunction(
 				? std::optional<Callable>(callable) : std::nullopt;
 	}
 	if (callable.typeId != TypeId{TypeId::kNone} &&
-		!Store::global().types().matches(callable.typeId, expectedType))
+		!Store::current().types().matches(callable.typeId, expectedType))
 		return std::nullopt;
 	return callable;
 }
@@ -412,10 +412,10 @@ std::optional<TagId> RegistryImportResolver::ModuleRegistry::resolveTag(std::str
 	// importing module's declared type (docs/proposals/EXCEPTIONS.md EX-2).
 	// The identity itself is the Store-assigned `TagId`, so two imports of one
 	// export resolve to the same id.
-	const Store::StoreOwnedTag* tag = Store::global().tag(it->second);
+	const Store::StoreOwnedTag* tag = Store::current().tag(it->second);
 	if (tag == nullptr)
 		return std::nullopt;
-	if (!Store::global().types().matches(tag->typeId, expectedType))
+	if (!Store::current().types().matches(tag->typeId, expectedType))
 		return std::nullopt;
 	return it->second;
 }
@@ -461,7 +461,7 @@ std::optional<TypeId> RegistryImportResolver::ModuleRegistry::resolveType(
 	CanonHeapType expected;
 	expected.kind = CanonHeapType::Kind::Abstract;
 	expected.abstract = bound;
-	if (!Store::global().types().matchesHeap(actual, expected))
+	if (!Store::current().types().matchesHeap(actual, expected))
 		return std::nullopt;
 	return it->second;
 }

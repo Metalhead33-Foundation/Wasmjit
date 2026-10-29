@@ -61,6 +61,28 @@ Store& Store::global()
 	return instance;
 }
 
+namespace {
+
+// The innermost Store::Scope on this host thread, or null for the global store.
+thread_local Store* currentStore = nullptr;
+
+} // namespace
+
+Store& Store::current()
+{
+	return currentStore != nullptr ? *currentStore : global();
+}
+
+Store::Scope::Scope(Store& store) noexcept : previous_(currentStore)
+{
+	currentStore = &store;
+}
+
+Store::Scope::~Scope()
+{
+	currentStore = previous_;
+}
+
 Store::Store() : nextMemoryId(0), nextTableId(0), nextTagId(0)
 {
 }

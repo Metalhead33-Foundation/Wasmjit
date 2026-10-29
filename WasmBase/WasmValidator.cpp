@@ -1201,7 +1201,7 @@ void Validator::validateModule()
 		const CanonValueType& value = storage.value;
 		if ((value.opcode == ValueTypeCode::Ref || value.opcode == ValueTypeCode::RefNull)
 				&& value.heap.kind == CanonHeapType::Kind::Global
-				&& !Store::global().types().isCoreType(value.heap.id))
+				&& !Store::current().types().isCoreType(value.heap.id))
 			fail(std::string(where) + ": unknown type");
 	};
 	for (std::size_t i = 0; i < module.typeCount(); ++i) {

@@ -203,7 +203,7 @@ static const WASM::StringObject* stringObjectOrTrap(void* handle)
 
 static void* makeString(std::vector<uint32_t> codePoints)
 {
-	return WASM::Store::global().strings().create(std::move(codePoints));
+	return WASM::Store::current().strings().create(std::move(codePoints));
 }
 
 static void* wasm_string_new_utf8(WASM::LinearMemory* memory, uint32_t ptr, uint32_t len)
@@ -412,7 +412,7 @@ static void* wasm_string_as_wtf8(void* handle)
 	const WASM::StringObject* string = stringObjectOrTrap(handle);
 	if (string == nullptr)
 		return nullptr;
-	return WASM::Store::global().strings().createView(string);
+	return WASM::Store::current().strings().createView(string);
 }
 
 static void* wasm_string_as_wtf16(void* handle)
@@ -420,7 +420,7 @@ static void* wasm_string_as_wtf16(void* handle)
 	const WASM::StringObject* string = stringObjectOrTrap(handle);
 	if (string == nullptr)
 		return nullptr;
-	return WASM::Store::global().strings().createView(string);
+	return WASM::Store::current().strings().createView(string);
 }
 
 static void* wasm_string_as_iter(void* handle)
@@ -428,7 +428,7 @@ static void* wasm_string_as_iter(void* handle)
 	const WASM::StringObject* string = stringObjectOrTrap(handle);
 	if (string == nullptr)
 		return nullptr;
-	return WASM::Store::global().strings().createIterator(string);
+	return WASM::Store::current().strings().createIterator(string);
 }
 
 static int32_t wasm_stringview_wtf8_advance(void* viewHandle, int32_t pos, int32_t bytes)
@@ -2500,7 +2500,7 @@ static int32_t wasm_callable_type_matches(uint32_t actual, uint32_t expected)
 {
 	if (actual == WASM::TypeId::kNone || actual == expected)
 		return 1;
-	return WASM::Store::global().types().matches(WASM::TypeId{actual}, WASM::TypeId{expected}) ? 1 : 0;
+	return WASM::Store::current().types().matches(WASM::TypeId{actual}, WASM::TypeId{expected}) ? 1 : 0;
 }
 
 void OpcodeDispatcher::emitCallableTypeCheck(jit_value_t callablePtr, WASM::TypeIdx typeIdx)

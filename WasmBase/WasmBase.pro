@@ -6,6 +6,12 @@ TARGET = WasmBase
 VERSION = 1.0.0
 CONFIG += shared c++2a
 CONFIG -= qt
+# docs/EMBEDDING_SURFACE.md ES-4: the library hides its symbols by default; the
+# public tier is marked WASMJIT_API (WasmApi.hpp). Hiding inline instantiations
+# is what removes most of the old 23k-symbol table.
+CONFIG += hide_symbols
+DEFINES += WASMJIT_BUILD
+QMAKE_CXXFLAGS += -fvisibility=hidden -fvisibility-inlines-hidden
 # libffi backs the component runtime's canonical ABI closures. It is a host
 # ABI library, not a wasm code generator; the runtime itself is backend-neutral.
 CONFIG += link_pkgconfig
@@ -118,3 +124,71 @@ HEADERS += \
     wasm_simd_vector.hpp \
     wasm_simd_ops.inc \
     WasmComponentParser.inc
+
+# ── Install (docs/EMBEDDING_SURFACE.md ES-5) ────────────────────────────────
+# Default prefix; override with `qmake PREFIX=/opt/wasmjit`.
+isEmpty(PREFIX): PREFIX = /usr/local
+
+# The public set is "all headers minus the internal tier" (EMBEDDING_SURFACE
+# §6.1.1), so the tier lists stay the single source of truth.
+WASMJIT_INTERNAL_HEADERS = \
+    $$PWD/WasmSection.hpp \
+    $$PWD/WasmTypeStore.hpp \
+    $$PWD/WasmCanonicalType.hpp \
+    $$PWD/WasmTypeRegistry.hpp \
+    $$PWD/WasmGcHeap.hpp \
+    $$PWD/WasmValidator.hpp \
+    $$PWD/WasmValidation.hpp \
+    $$PWD/WasmDeterminism.hpp \
+    $$PWD/WasmComponent.hpp \
+    $$PWD/WasmComponentAbi.hpp \
+    $$PWD/WasmComponentAsync.hpp \
+    $$PWD/WasmComponentModel.hpp \
+    $$PWD/WasmComponentRuntime.hpp \
+    $$PWD/WasmComponentSection.hpp \
+    $$PWD/WasmComponentValidation.hpp \
+    $$PWD/WasmComponentParser.inc
+
+WASMJIT_PUBLIC_HEADERS = $$files($$PWD/*.hpp) $$files($$PWD/*.h) $$files($$PWD/*.inc)
+WASMJIT_PUBLIC_HEADERS -= $$WASMJIT_INTERNAL_HEADERS
+
+headers.files = $$WASMJIT_PUBLIC_HEADERS
+headers.path  = $$PREFIX/include/wasmjit
+# The public headers include the internal ones, so the closure is installed
+# under an explicitly private subdirectory rather than being part of the API
+# surface (EMBEDDING_SURFACE §6.1.1).
+internal_headers.files = $$WASMJIT_INTERNAL_HEADERS
+internal_headers.path  = $$PREFIX/include/wasmjit/internal
+target.path   = $$PREFIX/lib
+
+# The vendored headers the public SDK includes (EMBEDDING_SURFACE §6.2 accepts
+# them for the first freeze, so an install without them is not usable).
+elv_io.files   = $$files($$PWD/../extern/MhLib/Elvavena/Io/*.hpp)
+elv_io.path    = $$PREFIX/include/Elvavena/Io
+elv_util.files = $$files($$PWD/../extern/MhLib/Elvavena/Util/*.hpp)
+elv_util.path  = $$PREFIX/include/Elvavena/Util
+euph_asset.files = $$files($$PWD/../extern/MhLib/Euphemy/Asset/*.hpp)
+euph_asset.path  = $$PREFIX/include/Euphemy/Asset
+euph_config.files = $$files($$PWD/../extern/MhLib/Euphemy/Config/*.hpp)
+euph_config.path  = $$PREFIX/include/Euphemy/Config
+euph_io.files  = $$files($$PWD/../extern/MhLib/Euphemy/Io/*.hpp)
+euph_io.path   = $$PREFIX/include/Euphemy/Io
+euph_audio.files = $$files($$PWD/../extern/MhLib/Euphemy/Media/Audio/*.hpp)
+euph_audio.path  = $$PREFIX/include/Euphemy/Media/Audio
+euph_image.files = $$files($$PWD/../extern/MhLib/Euphemy/Media/Image/*.hpp)
+euph_image.path  = $$PREFIX/include/Euphemy/Media/Image
+euph_memory.files = $$files($$PWD/../extern/MhLib/Euphemy/Memory/*.hpp)
+euph_memory.path  = $$PREFIX/include/Euphemy/Memory
+
+# pkg-config: the file qmake generates is named after TARGET, so it is produced
+# from a template instead and installed under the package name.
+WASMJIT_PREFIX = $$PREFIX
+wasmjit_pc.input  = $$PWD/wasmjit.pc.in
+wasmjit_pc.output = $$OUT_PWD/wasmjit.pc
+QMAKE_SUBSTITUTES += wasmjit_pc
+
+pkgconfig.files = $$OUT_PWD/wasmjit.pc
+pkgconfig.path  = $$PREFIX/lib/pkgconfig
+
+INSTALLS += headers internal_headers elv_io elv_util euph_asset euph_config euph_io \
+            euph_audio euph_image euph_memory target pkgconfig

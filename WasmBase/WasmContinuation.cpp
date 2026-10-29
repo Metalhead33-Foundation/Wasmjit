@@ -643,7 +643,7 @@ BWorker::~BWorker()
 		threadStarted = false;
 	}
 	if (stackReserved)
-		Store::global().releaseBytes(stackBytes);
+		Store::current().releaseBytes(stackBytes);
 }
 
 ContinuationStatus BWorker::resume(std::uint64_t expectedGeneration,
@@ -896,23 +896,23 @@ bool BWorker::startThread()
 {
 	const ContinuationBudget budget = budgetSnapshot();
 	stackBytes = std::max<std::uint32_t>(budget.stackBytes, 64 * 1024);
-	if (!Store::global().reserveBytes(stackBytes))
+	if (!Store::current().reserveBytes(stackBytes))
 		return false;
 
 	pthread_attr_t attributes;
 	if (pthread_attr_init(&attributes) != 0) {
-		Store::global().releaseBytes(stackBytes);
+		Store::current().releaseBytes(stackBytes);
 		return false;
 	}
 	if (pthread_attr_setstacksize(&attributes, stackBytes) != 0) {
 		pthread_attr_destroy(&attributes);
-		Store::global().releaseBytes(stackBytes);
+		Store::current().releaseBytes(stackBytes);
 		return false;
 	}
 	const int created = pthread_create(&thread, &attributes, &bWorkerEntry, this);
 	pthread_attr_destroy(&attributes);
 	if (created != 0) {
-		Store::global().releaseBytes(stackBytes);
+		Store::current().releaseBytes(stackBytes);
 		return false;
 	}
 	stackReserved = true;
@@ -929,7 +929,7 @@ AWorker::~AWorker()
 		munmap(mapping, mappingBytes);
 		mapping = nullptr;
 		if (stackReserved)
-			Store::global().releaseBytes(mappingBytes);
+			Store::current().releaseBytes(mappingBytes);
 	} else if (mapping != nullptr) {
 		// A continuation is thread-affine: a stack suspended on another host
 		// thread cannot be unwound here. Leak the mapping rather than free a
@@ -950,7 +950,7 @@ bool AWorker::prepareStack()
 	std::size_t usable = std::max<std::uint32_t>(budget.stackBytes, 64 * 1024);
 	usable = (usable + page - 1) & ~(page - 1);
 	const std::size_t total = usable + page;
-	if (!Store::global().reserveBytes(total))
+	if (!Store::current().reserveBytes(total))
 		return false;
 
 	int flags = MAP_PRIVATE | MAP_ANONYMOUS;
@@ -959,17 +959,17 @@ bool AWorker::prepareStack()
 #endif
 	void* mapped = mmap(nullptr, total, PROT_READ | PROT_WRITE, flags, -1, 0);
 	if (mapped == MAP_FAILED) {
-		Store::global().releaseBytes(total);
+		Store::current().releaseBytes(total);
 		return false;
 	}
 	if (mprotect(mapped, page, PROT_NONE) != 0) {
 		munmap(mapped, total);
-		Store::global().releaseBytes(total);
+		Store::current().releaseBytes(total);
 		return false;
 	}
 	if (getcontext(&context) != 0) {
 		munmap(mapped, total);
-		Store::global().releaseBytes(total);
+		Store::current().releaseBytes(total);
 		return false;
 	}
 

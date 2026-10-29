@@ -254,6 +254,23 @@ Install the GNU LibJIT development package if `-ljit` does not resolve at link
 time. Building the `Test` target additionally needs `wasm-tools` on `PATH` (for
 the spec-suite conversion) and Node.js (for the AssemblyScript test modules).
 
+### Installing
+
+`WasmBase` and `LibJit` install their headers, libraries and a `wasmjit.pc`
+([`docs/EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) `ES-5`):
+
+```bash
+/usr/bin/qmake6 ../../Project.pro -spec linux-g++ CONFIG+=release PREFIX=/opt/wasmjit
+env MAKE=/usr/bin/make /usr/bin/make -j"$(nproc)" install
+pkg-config --cflags --libs wasmjit
+```
+
+A consumer then includes `<wasmjit/WasmJit.hpp>` and links with the `.pc` flags.
+`Test/install-check.sh` performs that check against a scratch prefix. The MhLib
+libraries (`libElvavena`, `libEuphemy`) are part of the public SDK for the first
+freeze and must be present; the install-check copies them because their
+submodules do not install themselves yet.
+
 ## Testing
 
 The `Test` subproject builds a single Catch2 executable that contains two families of tests:

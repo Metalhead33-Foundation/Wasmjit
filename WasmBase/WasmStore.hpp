@@ -1,5 +1,13 @@
 #ifndef WASMSTORE_HPP
 #define WASMSTORE_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
+
+#include "WasmApi.hpp"
 #include "WasmMemory.hpp"
 #include "WasmString.hpp"
 #include "WasmTable.hpp"
@@ -25,7 +33,7 @@ The Store deliberately is NOT the import/export name registry:
 RegistryImportResolver maps (module, field) names to store-owned entities,
 while the Store owns the storage itself.
 */
-class Store
+class WASMJIT_API Store
 {
 public:
 	// ── Memory ──────────────────────────────────────────────────────────
@@ -45,6 +53,31 @@ public:
 	// The single global Store. Constructed on first use so that it always
 	// outlives the module instances referencing its entities.
 	static Store& global();
+
+	// An independent store. `global()` is the engine default; a `Runtime` owns
+	// one and makes it current for the duration of its calls (docs/EMBEDDING_SURFACE.md
+	// §4.3 option C). Entities never move between stores.
+	Store();
+
+	// The store the current host thread is working with: the innermost `Scope`,
+	// or `global()` when none is installed. Engine code uses this; `global()`
+	// stays the compatibility default for a caller that has not entered a
+	// runtime.
+	static Store& current();
+
+	// Installs `store` as `current()` for the scope's lifetime. Nested scopes
+	// restore the previous store.
+	class Scope
+	{
+	public:
+		explicit Scope(Store& store) noexcept;
+		~Scope();
+		Scope(const Scope&) = delete;
+		Scope& operator=(const Scope&) = delete;
+
+	private:
+		Store* previous_;
+	};
 
 	// ── Runtime type registry ───────────────────────────────────────────
 	// Owns every module's type block; modules hold non-owning span views.
@@ -198,7 +231,6 @@ private:
 		const Callable* end;
 	};
 	std::vector<CallableRange> callableRanges;
-	Store();
 
 	// Guards every member container below. The Store is process-wide because
 	// entities outlive instances, so host threads may create/lookup entities
@@ -235,4 +267,5 @@ private:
 	StringStore stringStore;
 };
 }
+WASMJIT_VISIBLE_END
 #endif // WASMSTORE_HPP

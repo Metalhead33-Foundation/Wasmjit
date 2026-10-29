@@ -179,7 +179,7 @@ void Module::processTypeSection(Elv::Io::Device& file, const Section& section)
 	// Canonicalize and intern the groups; typeIds[i] is the process-wide identity
 	// of parsedTypes[i]. The parser vector is intentionally a local scratch
 	// buffer: after this call the Module owns no Subtype payload (TM-6).
-	typeIds = Store::global().types().internModule(parsedTypes, parsedGroups,
+	typeIds = Store::current().types().internModule(parsedTypes, parsedGroups,
 			importedIds);
 	typeGroups = std::move(parsedGroups);
 	typeSectionProcessed = true;
@@ -297,7 +297,7 @@ void Module::processImportSection(Elv::Io::Device& file, const Section& section)
 			import.fieldName = fieldName;
 			import.boundKind = boundKind;
 			import.bound = bound;
-			import.typeId = Store::global().types().store().internCoreImport(
+			import.typeId = Store::current().types().store().internCoreImport(
 					moduleName, fieldName, bound);
 			importOrder.push_back({ExternalKind::Type,
 					static_cast<uint32_t>(importTypes.size())});
@@ -1515,7 +1515,7 @@ CoreTypeView Module::typeView(uint32_t idx) const
 		throw std::out_of_range("Module::typeView: local type index out of range");
 	if (typeIds[idx].isNone())
 		throw std::runtime_error("Module::typeView: local type has no canonical identity");
-	return Store::global().types().canonicalType(typeIds[idx]);
+	return Store::current().types().canonicalType(typeIds[idx]);
 }
 
 uint32_t Module::localTypeIndex(TypeId id) const
@@ -1599,7 +1599,7 @@ bool Module::isSubtype(TypeIdx actual, TypeIdx expected) const
 	const TypeId expectedId = typeIds[expected];
 	if (actualId.isNone() || expectedId.isNone())
 		return actual == expected;
-	return Store::global().types().matches(actualId, expectedId);
+	return Store::current().types().matches(actualId, expectedId);
 }
 
 bool Module::heapTypeMatchesTypeIndex(TypeIdx actual, const HeapType& expected) const

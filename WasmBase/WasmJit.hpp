@@ -1,6 +1,12 @@
 #ifndef WASMJIT_HPP
 #define WASMJIT_HPP
 
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
+
 // The umbrella header of the embedder tier: one include, no backend header and
 // no internal header. Including exactly the headers you use stays legal, so this
 // is a convenience, never a requirement (docs/EMBEDDING_SURFACE.md §6.3).
@@ -41,4 +47,5 @@
 #include "WasmTrap.hpp"
 #include "WasmValue.hpp"
 
+WASMJIT_VISIBLE_END
 #endif // WASMJIT_HPP

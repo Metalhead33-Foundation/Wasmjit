@@ -1,5 +1,13 @@
 #ifndef WASMGCHEAP_HPP
 #define WASMGCHEAP_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
+
+#include "WasmApi.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -28,7 +36,7 @@ namespace WASM {
 // `owns()` answers "is this pointer a GC heap block?" from the region ranges
 // alone, with no side table — that is what lets the runtime drop the old
 // per-object `gcObjectTypes` map and stay allocation-free per object.
-class GcHeap
+class WASMJIT_API GcHeap
 {
 public:
 	// Keep 16 bytes: i31 tagging needs >= 8 (D4) and v128 fields need 16.
@@ -122,4 +130,5 @@ private:
 };
 
 } // namespace WASM
+WASMJIT_VISIBLE_END
 #endif // WASMGCHEAP_HPP

@@ -1,5 +1,11 @@
 #ifndef WASMVALUE_H
 #define WASMVALUE_H
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
 #include <cstdlib>
 #include <type_traits>
 #include <utility>
@@ -140,4 +146,5 @@ void callCallableWithResults(const Callable& callable, void* results, Args&&... 
 }
 
 }
+WASMJIT_VISIBLE_END
 #endif // WASMVALUE_H

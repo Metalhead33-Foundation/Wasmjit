@@ -1001,7 +1001,7 @@ void storePrimitiveAt(const WASM::ComponentValueType& type,
 {
 	using P = WASM::PrimitiveValueType;
 	const WASM::CanonicalAbiLayout layout = layoutOf(
-			WASM::Store::global().types().store(), type, memory);
+			WASM::Store::current().types().store(), type, memory);
 	switch (type.primitive) {
 	case P::Bool: writeUInt(memory, address, value.u64 != 0 ? 1 : 0, 1); break;
 	case P::S8:
@@ -1500,7 +1500,7 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 		uint32_t scope;
 		~BorrowScopeGuard() { if (runtime) runtime->endBorrowScope(scope); }
 	} borrowGuard{data->memory.runtime, borrowScope};
-	const WASM::TypeStore& store = WASM::Store::global().types().store();
+	const WASM::TypeStore& store = WASM::Store::current().types().store();
 	std::vector<WASM::Value> input;
 	if (!data->function.indirectParams) {
 		input.resize(data->function.params.size());
@@ -1904,7 +1904,7 @@ ComponentRuntime::ComponentRuntime(ModuleInstantiator& instantiator,
 	  imports_(std::move(imports)),
 	  async_([this] { return addHandle(); },
 			  [this](uint32_t handle) { freeHandle(handle); }),
-	  abi_(WASM::Store::global().types().store(),
+	  abi_(WASM::Store::current().types().store(),
 			  nextComponentAbiInstanceId())
 {
 	build();
@@ -1930,7 +1930,7 @@ ComponentRuntime::~ComponentRuntime()
 
 void ComponentRuntime::build()
 {
-	const WASM::TypeStore& store = WASM::Store::global().types().store();
+	const WASM::TypeStore& store = WASM::Store::current().types().store();
 	componentValues_.clear();
 	componentValues_.reserve(component_.values.size());
 	for (const WASM::ValueDecl& value : component_.values) {
@@ -2145,7 +2145,7 @@ void ComponentRuntime::processStreamCanon(const WASM::Canon& canon)
 	uint32_t elementSize = 0;
 	if (const WASM::TypeId typeId = component_.typeId(canon.typeIndex);
 			!typeId.isNone()) {
-		const WASM::TypeStore& store = WASM::Store::global().types().store();
+		const WASM::TypeStore& store = WASM::Store::current().types().store();
 		const WASM::ComponentTypeView view = store.componentType(typeId);
 		const WASM::CanonicalAbiOptions options = canonicalOptions(canon);
 		if (view.hasStreamElement()) {
@@ -2201,7 +2201,7 @@ void ComponentRuntime::processAsyncCanon(const WASM::Canon& canon)
 		uint32_t elementSize = 0;
 		const WASM::TypeId typeId = component_.typeId(canon.typeIndex);
 		if (!typeId.isNone()) {
-			const WASM::TypeStore& store = WASM::Store::global().types().store();
+			const WASM::TypeStore& store = WASM::Store::current().types().store();
 			const WASM::ComponentTypeView view = store.componentType(typeId);
 			if (view.hasStreamElement()) {
 				WASM::CanonicalAbiLayout layout;
@@ -2264,7 +2264,7 @@ void ComponentRuntime::processAsyncCanon(const WASM::Canon& canon)
 		// single-agent runtime records that the task resolved; it does not need
 		// to re-materialise them because the caller's values are already in the
 		// core frame.
-		const WASM::TypeStore& store = WASM::Store::global().types().store();
+		const WASM::TypeStore& store = WASM::Store::current().types().store();
 		for (const WASM::ComponentValueType& value : canon.results) {
 			const WASM::ComponentValueType resolved = resolveValueType(value);
 			std::vector<WASM::AbiCoreType> flat;
@@ -2428,7 +2428,7 @@ void ComponentRuntime::processResourceCanon(const WASM::Canon& canon)
 	if (typeId.isNone())
 		throw std::runtime_error("component runtime: resource type has no identity");
 	const WASM::ComponentTypeView view =
-			WASM::Store::global().types().store().componentType(typeId);
+			WASM::Store::current().types().store().componentType(typeId);
 	if (view.kind() != WASM::TypeKind::ComponentResource)
 		throw std::runtime_error("component runtime: canon resource type is not a resource");
 	const WASM::ValueTypeCode repCode = view.resource().rep.opcode;
@@ -2703,7 +2703,7 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 				"component runtime: canon lift type is outside the flat ABI subset");
 
 	const WASM::ComponentTypeView functionType =
-			WASM::Store::global().types().store().componentType(typeId);
+			WASM::Store::current().types().store().componentType(typeId);
 	ComponentFunction function;
 	function.typeId = typeId;
 	function.params = abi->flatParams;
@@ -2724,7 +2724,7 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 			std::span<const ComponentValue> args,
 			std::span<ComponentValue> results) {
 		const AbiMemory memory = memoryFor(function.options);
-		const WASM::TypeStore& store = WASM::Store::global().types().store();
+		const WASM::TypeStore& store = WASM::Store::current().types().store();
 		const uint32_t borrowScope = beginBorrowScope();
 		const MemView view{memory.memory, memory.realloc, function.options, this,
 				borrowScope};
@@ -2913,7 +2913,7 @@ void ComponentRuntime::processImport(const WASM::ImportDecl& importDecl)
 	function.indirectParams = abi->indirectParams;
 	function.indirectResults = abi->indirectResults;
 	const WASM::ComponentTypeView functionType =
-			WASM::Store::global().types().store().componentType(typeId);
+			WASM::Store::current().types().store().componentType(typeId);
 	function.paramTypes.clear();
 	function.resultTypes.clear();
 	for (const WASM::ComponentFuncParam& param : functionType.params())
@@ -3083,7 +3083,7 @@ void ComponentRuntime::lowerValues(const ComponentFunction& function,
 {
 	if (values.size() != function.paramTypes.size())
 		throw std::runtime_error("component runtime: argument count mismatch");
-	const WASM::TypeStore& store = WASM::Store::global().types().store();
+	const WASM::TypeStore& store = WASM::Store::current().types().store();
 	const MemView view{memory.memory, memory.realloc, function.options, this,
 			currentBorrowScope_};
 	for (std::size_t i = 0; i < values.size(); ++i)
@@ -3096,7 +3096,7 @@ void ComponentRuntime::liftValues(const ComponentFunction& function,
 {
 	if (values.size() != function.resultTypes.size())
 		throw std::runtime_error("component runtime: result count mismatch");
-	const WASM::TypeStore& store = WASM::Store::global().types().store();
+	const WASM::TypeStore& store = WASM::Store::current().types().store();
 	const MemView view{memory.memory, memory.realloc, function.options, this,
 			currentBorrowScope_};
 	std::size_t index = 0;

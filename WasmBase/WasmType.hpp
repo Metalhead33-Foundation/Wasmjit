@@ -1,5 +1,11 @@
 #ifndef WASMTYPE_HPP
 #define WASMTYPE_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
 #include "WasmTypeIdentity.hpp"
 #include <cstdint>
 #include <stdexcept>
@@ -815,4 +821,5 @@ Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, MemArg righ
 
 }
 
+WASMJIT_VISIBLE_END
 #endif // WASMTYPE_HPP

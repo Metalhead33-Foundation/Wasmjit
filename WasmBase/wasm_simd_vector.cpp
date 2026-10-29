@@ -28,6 +28,10 @@
 
 #if HWY_ONCE
 
+// ES-4: the entry points this block defines are the library's public helper
+// ABI (docs/LAYERING.md S6), so they keep default visibility.
+WASMJIT_VISIBLE_BEGIN
+
 namespace WASM {
 HWY_EXPORT(notBits);
 HWY_EXPORT(andBits);
@@ -498,5 +502,7 @@ extern "C" void wasm_v128_store64_lane(void* dst, const void* a, uint32_t lane)
 }
 
 }  // namespace WASM
+
+WASMJIT_VISIBLE_END
 
 #endif  // HWY_ONCE

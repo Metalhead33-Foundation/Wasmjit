@@ -1,5 +1,13 @@
 #ifndef WASMCOMPONENT_HPP
 #define WASMCOMPONENT_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
+
+#include "WasmApi.hpp"
 #include "WasmArtifact.hpp"
 #include "WasmComponentModel.hpp"
 #include "WasmComponentSection.hpp"
@@ -16,7 +24,7 @@ namespace WASM {
 // index spaces, sortidx resolution, type/name/declarator rules and local
 // compatibility. No linking, codegen, execution or Canonical ABI lowering is
 // performed. Embedded core modules keep their normal parser validation.
-struct Component : public Artifact {
+struct WASMJIT_API Component : public Artifact {
 	std::vector<ComponentSection> sections;
 	std::vector<std::unique_ptr<Module>> coreModules;
 	std::vector<CoreInstance> coreInstances;
@@ -94,4 +102,5 @@ private:
 
 }
 
+WASMJIT_VISIBLE_END
 #endif // WASMCOMPONENT_HPP

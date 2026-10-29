@@ -82,12 +82,12 @@ GcHeap::Region* GcHeap::createRegion(RegionSet& set, size_t blockSize, size_t ca
 	// Charge the whole region before backing it, exactly like the memory/table
 	// guardrail: an allocation that would exceed the budget fails without
 	// touching the host (docs/SAFETY.md §2.3).
-	if (!Store::global().reserveBytes(capacity))
+	if (!Store::current().reserveBytes(capacity))
 		return nullptr;
 
 	void* mem = platformMap(capacity);
 	if (mem == nullptr) {
-		Store::global().releaseBytes(capacity);
+		Store::current().releaseBytes(capacity);
 		return nullptr;
 	}
 

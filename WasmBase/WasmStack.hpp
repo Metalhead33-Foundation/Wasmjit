@@ -1,5 +1,11 @@
 #ifndef WASMSTACK_HPP
 #define WASMSTACK_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: this header is entirely part of the public
+// surface, so every declaration in it is exported.
+WASMJIT_VISIBLE_BEGIN
 #include <cstddef>
 #include <cstdint>
 
@@ -76,5 +82,7 @@ struct ExecutionState;
 void ensureCurrentThreadStackLimit(ExecutionState& state) noexcept;
 
 } // namespace WASM
+
+WASMJIT_VISIBLE_END
 
 #endif // WASMSTACK_HPP

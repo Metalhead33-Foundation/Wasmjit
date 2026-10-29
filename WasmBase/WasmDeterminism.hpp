@@ -1,5 +1,11 @@
 #ifndef WASMDETERMINISM_HPP
 #define WASMDETERMINISM_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -34,4 +40,5 @@ inline double deterministicF64(double value) noexcept
 
 } // namespace WASM
 
+WASMJIT_VISIBLE_END
 #endif // WASMDETERMINISM_HPP

@@ -1,6 +1,12 @@
 #ifndef WASMCONTINUATION_HPP
 #define WASMCONTINUATION_HPP
 
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: this header is entirely part of the public
+// surface, so every declaration in it is exported.
+WASMJIT_VISIBLE_BEGIN
+
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -382,5 +388,7 @@ std::int32_t wasm_cont_suspend(std::int32_t tagId, std::int32_t value,
 } // extern "C"
 
 } // namespace WASM
+
+WASMJIT_VISIBLE_END
 
 #endif // WASMCONTINUATION_HPP

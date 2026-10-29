@@ -1,5 +1,11 @@
 #ifndef WASMTRAP_HPP
 #define WASMTRAP_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: this header is entirely part of the public
+// surface, so every declaration in it is exported.
+WASMJIT_VISIBLE_BEGIN
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -276,5 +282,7 @@ std::uint32_t deferredCleanupCount() noexcept;
 void runDeferredCleanup() noexcept;
 
 } // namespace WASM
+
+WASMJIT_VISIBLE_END
 
 #endif // WASMTRAP_HPP

@@ -114,3 +114,47 @@ TEST_CASE("a second host thread is refused while a call is inside the instance",
 	REQUIRE_FALSE(workerFailed.load());
 	REQUIRE_FALSE(instance.inCall());
 }
+
+TEST_CASE("a safepoint requires a quiescent instance", "[concurrency]")
+{
+	// MF-4: gcCollect() is legal only when no call is inside the instance.
+	auto runtime = WASM::Runtime::create("libjit");
+	auto module = runtime->loadFile(spinModulePath());
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+
+	REQUIRE(instance.tryEnterCall());
+	REQUIRE_THROWS_WITH(instance.gcCollect(),
+			Catch::Matchers::ContainsSubstring("quiescent"));
+	// The runtime hook skips an instance that is in a call instead of throwing.
+	REQUIRE_NOTHROW(runtime->safepoint());
+	instance.leaveCall();
+	REQUIRE_NOTHROW(instance.gcCollect());
+}
+
+TEST_CASE("concurrent safepoints serialize on the instance lock", "[concurrency]")
+{
+	// MF-3: the GC queues and counters are shared instance state; two quiescent
+	// agents collecting at once must serialize rather than race.
+	auto runtime = WASM::Runtime::create("libjit");
+	auto module = runtime->loadFile(spinModulePath());
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+
+	std::atomic<int> failures{ 0 };
+	const auto body = [&instance, &failures] {
+		for (int i = 0; i < 500; ++i) {
+			try {
+				instance.gcCollect();
+			} catch (...) {
+				++failures;
+			}
+		}
+	};
+	std::thread first(body);
+	std::thread second(body);
+	first.join();
+	second.join();
+	REQUIRE(failures.load() == 0);
+	REQUIRE(instance.gcPendingCount() == 0);
+}

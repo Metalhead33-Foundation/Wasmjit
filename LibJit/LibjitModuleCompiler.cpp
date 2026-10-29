@@ -141,7 +141,7 @@ void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::
 	// We must do this before declaring any function, because each
 	// function's signature is expressed as a type index, and we need
 	// the jit_type_t for that index to create the jit_function_t.
-	typeTranslator.translateTypes(module.typeIds, WASM::Store::global().types().store());
+	typeTranslator.translateTypes(module.typeIds, WASM::Store::current().types().store());
 	internals.translatedTypes.resize(typeTranslator.getTranslatedTypes().size());
 	for(size_t i = 0; i < typeTranslator.getTranslatedTypes().size();++i)
 	{
@@ -160,7 +160,7 @@ void ModuleCompiler::declareFunctions(WASM::ModuleInstance& instance, const WASM
 	// module (docs/proposals/GC.md G2/GC-1: a funcref's identity must not depend
 	// on the casting instance being able to name it).
 	if (!internals.internalCallables.empty())
-		WASM::Store::global().registerCallableRange(
+		WASM::Store::current().registerCallableRange(
 				internals.internalCallables.data(), internals.internalCallables.size());
 	for (uint32_t i = 0; i < module.internalFunctionTypeIndices.size(); ++i)
 	{

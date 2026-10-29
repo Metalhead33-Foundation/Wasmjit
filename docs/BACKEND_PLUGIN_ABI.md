@@ -279,7 +279,7 @@ until someone proves a need for more.
 | **BP-2 — Generalise the selector** ✅ | **Landed 2026-10-29:** `WasmBackendRegistry.{hpp,cpp}` (name → factory, `WASMJIT_REGISTER_BACKEND`), the null instantiator as the second implementation, the executing backend registered from its own translation unit, and `Runtime::create(name)`. | A | Two backends (`libjit`, `null`) are selectable by name with no frontend rebuild ✅ |
 | **BP-3 — Add `dlopen`** ✅ | **Landed 2026-10-29:** `loadBackendPluginFile` / `loadBackendPlugin` with `RTLD_NOW|RTLD_LOCAL`, the `wasmjit_backend_query` handshake, descriptor- and core-ABI checks before any other call, a host callback table, contained failure, and the one-core guard: the plugin's `wasm_trap_slot` must resolve to the host's address, otherwise it carries its own core and is refused (a symbol-identity probe rather than a `DT_NEEDED` parse — no libelf, the same failure caught). `Test/ExampleBackend` builds a real plugin in its own directory and `[plugin]` loads it by name. | A | A plugin built in a separate directory loads by name ✅; a wrong-ABI plugin is refused ✅; a plugin with its own core is refused ✅ |
 | **BP-4 — Unload policy and containment tests** ✅ | **Landed 2026-10-29:** the loader keeps every plugin handle for the process lifetime (rule 8; there is no unload entry point), and `[plugin]` covers a missing file, a library without the query symbol, an unknown name, a descriptor-ABI mismatch, a core-ABI mismatch and a failing `create` — each a diagnostic-bearing exception, never an abort. | A | Those failure paths are covered by tests and produce diagnostics, never aborts ✅ |
-| **BP-5 — Package backends** | Install the backend `.so` files and their `.pc` `Requires:` entries alongside the core. | A | `make install` yields a runtime that finds `libwasmjit-backend-libjit.so` in the install prefix. |
+| **BP-5 — Package backends** ✅ | **Landed 2026-10-29:** `LibJit.pro` installs `libLibJit.so.<major>` into `$$PREFIX/lib`, and `wasmjit.pc` links it, so an installed embedder gets the executing backend without extra pkg-config entries. A separately shipped plugin follows the same rule (`libwasmjit-backend-<name>.so` + `Libs:`). | A | `make install` yields a runtime that finds its backend in the install prefix ✅ (`Test/install-check.sh`). |
 
 Ordering: `BP-1` first (useful on its own; unblocks `AAS2`), `BP-2` before `BP-3`
 (a name-based factory makes `dlopen` a drop-in), `BP-4`/`BP-5` after the loader
@@ -289,7 +289,7 @@ works.
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (2026-10-29) | **11,328 assertions / 465 cases, green** | The compiled-in path is the baseline every `BP-*` stage must preserve. |
+| Default suite (2026-10-29) | **11,345 assertions / 468 cases, green** | The compiled-in path is the baseline every `BP-*` stage must preserve. |
 | Backend selection | `WasmBackendRegistry` names `libjit` and `null`; an unknown name is a named error | The selector is general and the second implementation exists. |
 | Plugin load test | **Present** — `Test/ExampleBackend/libwasmjit-backend-example.so`, loaded by path and by name (`[plugin]`) | `BP-3`; the plugin lives in its own directory and the frontend was not rebuilt for it. |
 | Wrong-ABI / missing-symbol / failing-create tests | **Present** — descriptor ABI, core ABI, no query symbol, missing file, failing `create` (`[plugin]`) | `BP-3`/`BP-4`; every path is an exception with a reason, never an abort. |

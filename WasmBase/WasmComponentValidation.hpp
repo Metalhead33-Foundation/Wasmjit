@@ -1,5 +1,11 @@
 #ifndef WASMCOMPONENTVALIDATION_HPP
 #define WASMCOMPONENTVALIDATION_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
 #include "WasmComponentModel.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -65,4 +71,5 @@ void validateComponent(const Component& component);
 
 }
 
+WASMJIT_VISIBLE_END
 #endif // WASMCOMPONENTVALIDATION_HPP

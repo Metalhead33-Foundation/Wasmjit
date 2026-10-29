@@ -535,6 +535,12 @@ reclamation with `ModuleInstance::gcCollect()` at a safepoint. A reference hande
 out to the embedder is a **borrow** — do not hold it across a `gcCollect()`
 unless you have retained it.
 
+A safepoint requires a **quiescent** instance: `gcCollect()` refuses a call that
+is inside the instance (`ModuleInstance::inCall()`) with a named error, and
+`Runtime::safepoint()` skips an instance with a call in flight rather than
+collecting under it. With one agent that is automatic; the rule exists for the
+multi-agent direction (`docs/MULTI_AGENT_FEASIBILITY.md` `MF-3`/`MF-4`).
+
 A GC **struct** header is now 16 bytes:
 `[u32 TypeId][u32 refcount][void* descriptor]` (`GcHeader::kHeaderBytes`); the
 descriptor slot is null for an ordinary struct and holds a retained RTT/descriptor

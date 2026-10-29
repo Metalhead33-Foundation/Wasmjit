@@ -1,5 +1,13 @@
 #ifndef WASMCOMPONENTRUNTIME_HPP
 #define WASMCOMPONENTRUNTIME_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
+
+#include "WasmApi.hpp"
 #include "WasmComponent.hpp"
 #include "WasmComponentAbi.hpp"
 #include "WasmComponentAsync.hpp"
@@ -63,7 +71,7 @@ struct ComponentFunction {
 // canonical ABI value lowering/lifting, resource/stream/future handles and the
 // single-agent async surface. Core-module instantiation is delegated to a
 // `ModuleInstantiator`, so this class is independent of the code generator.
-class ComponentRuntime {
+class WASMJIT_API ComponentRuntime {
 public:
 	using ComponentImports = std::unordered_map<std::string, ComponentFunction>;
 
@@ -188,4 +196,5 @@ private:
 };
 
 } // namespace WASM
+WASMJIT_VISIBLE_END
 #endif // WASMCOMPONENTRUNTIME_HPP

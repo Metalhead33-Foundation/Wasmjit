@@ -1,5 +1,13 @@
 #ifndef WASMMODULE_HPP
 #define WASMMODULE_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
+
+#include "WasmApi.hpp"
 #include "WasmArtifact.hpp"
 #include "WasmSection.hpp"
 #include "WasmType.hpp"
@@ -47,7 +55,7 @@ struct CompilationHint {
 	std::vector<uint8_t> payload;
 };
 
-struct Module : public Artifact
+struct WASMJIT_API Module : public Artifact
 {
 public:
 	std::vector<Section> sections;
@@ -220,4 +228,5 @@ public:
 
 }
 
+WASMJIT_VISIBLE_END
 #endif // WASMMODULE_HPP

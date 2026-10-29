@@ -1,5 +1,11 @@
 #ifndef WASMIMPORT_HPP
 #define WASMIMPORT_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
 #include <cstdint>
 #include <optional>
 #include "WasmValue.hpp"
@@ -143,4 +149,5 @@ public:
 		AbstractHeapType bound) = 0;
 };
 }
+WASMJIT_VISIBLE_END
 #endif // WASMIMPORT_HPP

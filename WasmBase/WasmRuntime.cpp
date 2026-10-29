@@ -84,6 +84,9 @@ std::unique_ptr<Runtime> Runtime::create(std::string_view backend, const Runtime
 
 std::shared_ptr<const Module> Runtime::loadBytes(std::span<const std::byte> bytes)
 {
+	// The module interns its types in the runtime's store (option C): the scope
+	// makes `Store::current()` resolve to it while the parser runs.
+	Store::Scope scope(store_);
 	auto module = std::make_shared<Module>();
 	Euph::Io::ConstBufferDevice device(bytes);
 	module->fromFile(device, loadOptions(config_));
@@ -93,6 +96,7 @@ std::shared_ptr<const Module> Runtime::loadBytes(std::span<const std::byte> byte
 
 std::shared_ptr<const Module> Runtime::loadFile(const std::filesystem::path& path)
 {
+	Store::Scope scope(store_);
 	const std::string pathString = path.string();
 	Euph::Io::File file(pathString.c_str(), Elv::Io::Mode::READ);
 	auto module = std::make_shared<Module>();
@@ -108,6 +112,12 @@ ModuleInstance& Runtime::instantiate(const Module& module, ImportResolver& impor
 	// slip through.
 	rejectUnsupportedConfig(config_);
 
+	if (!ownsModule(module)) {
+		throw std::runtime_error("the module was not loaded by this runtime; a runtime"
+				" instantiates only modules it loaded, because their types live in its"
+				" store (docs/EMBEDDING_SURFACE.md §4.3/§4.4)");
+	}
+
 	const auto existing = instances_.find(&module);
 	if (existing != instances_.end())
 		return *existing->second; // idempotent: one instance per Module
@@ -115,6 +125,7 @@ ModuleInstance& Runtime::instantiate(const Module& module, ImportResolver& impor
 	if (!backend_.instantiator)
 		throw std::runtime_error("the runtime has no backend instantiator");
 
+	Store::Scope scope(store_);
 	std::unique_ptr<ModuleInstance> instance = backend_.instantiator->instantiate(
 			module, imports, config_.hostBridge, config_.profile);
 	if (!instance)
@@ -123,6 +134,24 @@ ModuleInstance& Runtime::instantiate(const Module& module, ImportResolver& impor
 	ModuleInstance& reference = *instance;
 	instances_.emplace(&module, std::move(instance));
 	return reference;
+}
+
+bool Runtime::owns(const ModuleInstance& instance) const noexcept
+{
+	for (const auto& entry : instances_) {
+		if (entry.second.get() == &instance)
+			return true;
+	}
+	return false;
+}
+
+bool Runtime::ownsModule(const Module& module) const noexcept
+{
+	for (const std::shared_ptr<const Module>& loaded : modules_) {
+		if (loaded.get() == &module)
+			return true;
+	}
+	return false;
 }
 
 ModuleInstance* Runtime::instanceOf(const Module& module) noexcept
@@ -151,8 +180,14 @@ void Runtime::safepoint()
 {
 	// The frame-end hook (P6): no Wasm frame is live here, so every queued
 	// object can be recycled. See docs/ABI.md "Other store-owned entities".
-	for (auto& entry : instances_)
+	// MF-4: an instance with a call in flight is skipped — a safepoint requires
+	// quiescence, and `ModuleInstance::gcCollect` would refuse it.
+	Store::Scope scope(store_);
+	for (auto& entry : instances_) {
+		if (entry.second->inCall())
+			continue;
 		entry.second->gcCollect();
+	}
 }
 
 std::unique_ptr<Agent> Runtime::createAgent()
@@ -164,7 +199,7 @@ std::unique_ptr<Agent> Runtime::createAgent()
 
 Store& Runtime::store() noexcept
 {
-	return Store::global();
+	return store_;
 }
 
 } // namespace WASM

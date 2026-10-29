@@ -1,5 +1,13 @@
 #ifndef WASMMODULEINSTANCE_HPP
 #define WASMMODULEINSTANCE_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
+
+#include "WasmApi.hpp"
 #include "WasmModule.hpp"
 #include "WasmGcHeader.hpp"
 #include "WasmGcHeap.hpp"
@@ -8,6 +16,7 @@
 #include "WasmVMContext.hpp"
 #include "WasmImport.hpp"
 #include <atomic>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <unordered_map>
@@ -71,6 +80,10 @@ struct ModuleInstanceInternals {
 	bool hostBridgeActive = false;
 	// Reference-counting bookkeeping (docs/proposals/GC.md RC-1). Counts are
 	// for tests/diagnostics; reclamation is deferred, see ModuleInstance.
+	// MF-3: the queues and counters below are guarded by `gcMutex`, the
+	// per-instance safepoint lock (docs/MULTI_AGENT_FEASIBILITY.md §7 MF-3). It is
+	// recursive so the collect path can call the queueing helpers it owns.
+	mutable std::recursive_mutex gcMutex;
 	uint64_t gcAllocatedObjects = 0;
 	uint64_t gcReclaimedObjects = 0;
 	// Objects whose reference count reached zero (RC-1b). They are only
@@ -108,7 +121,7 @@ struct ModuleInstanceInternals {
 // ── The C++ owner of the VMContext and all its allocations. ──
 // This is what your instantiator creates and your embedder holds onto.
 // compiled functions never see this class directly — only VMContext*.
-class ModuleInstance {
+class WASMJIT_API ModuleInstance {
 private:
 	VMContext ctx; // The POD struct; kept first so &instance == &ctx (convenient cast).
 	// Back-reference to the parsed module — needed for type-checking
@@ -291,8 +304,16 @@ public:
 	// Diagnostics for the reference-counting test. `gcRefCount` returns 0 for
 	// a reference that is not counted (or unknown).
 	uint32_t gcRefCount(const void* ref) const;
-	uint64_t gcAllocatedObjects() const { return internals.gcAllocatedObjects; }
-	uint64_t gcReclaimedObjects() const { return internals.gcReclaimedObjects; }
+	uint64_t gcAllocatedObjects() const
+	{
+		std::lock_guard<std::recursive_mutex> lock(internals.gcMutex);
+		return internals.gcAllocatedObjects;
+	}
+	uint64_t gcReclaimedObjects() const
+	{
+		std::lock_guard<std::recursive_mutex> lock(internals.gcMutex);
+		return internals.gcReclaimedObjects;
+	}
 
 	// ── Safepoint reclamation (docs/proposals/GC.md RC-1b) ──────────────
 	// ── MF-2: one agent inside a call at a time ────────────────────────────
@@ -317,7 +338,11 @@ public:
 	// retained again) safe.
 	void gcCollect();
 	// Number of objects queued for the next gcCollect().
-	size_t gcPendingCount() const { return internals.gcPending.size(); }
+	size_t gcPendingCount() const
+	{
+		std::lock_guard<std::recursive_mutex> lock(internals.gcMutex);
+		return internals.gcPending.size();
+	}
 
 	// ── Tag identity (docs/proposals/EXCEPTIONS.md EX-2) ────────────────
 	// The module's tag index space: process-wide `TagId`s, imports first, then
@@ -332,7 +357,7 @@ public:
 };
 // Abstract base. Subclasses provide the backend-specific compilation step.
 // The base class handles everything that doesn't require knowing the backend.
-class ModuleInstantiator {
+class WASMJIT_API ModuleInstantiator {
 public:
 	virtual ~ModuleInstantiator() = default;
 
@@ -375,4 +400,5 @@ private:
 };
 
 }
+WASMJIT_VISIBLE_END
 #endif // WASMMODULEINSTANCE_HPP

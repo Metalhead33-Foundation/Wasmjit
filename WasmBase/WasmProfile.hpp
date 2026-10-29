@@ -1,5 +1,11 @@
 #ifndef WASMPROFILE_HPP
 #define WASMPROFILE_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
 #include <cstdint>
 namespace WASM {
 
@@ -136,4 +142,5 @@ inline constexpr const char* profileName(Profile profile) noexcept
 }
 
 } // namespace WASM
+WASMJIT_VISIBLE_END
 #endif // WASMPROFILE_HPP

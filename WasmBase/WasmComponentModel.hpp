@@ -1,5 +1,11 @@
 #ifndef WASMCOMPONENTMODEL_HPP
 #define WASMCOMPONENTMODEL_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
+// exported surface (the public headers are the declared list).
+WASMJIT_VISIBLE_BEGIN
 #include "WasmType.hpp"
 #include "WasmTypeStore.hpp"
 #include <cstdint>
@@ -347,4 +353,5 @@ struct ValueDecl {
 
 }
 
+WASMJIT_VISIBLE_END
 #endif // WASMCOMPONENTMODEL_HPP

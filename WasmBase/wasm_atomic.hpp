@@ -1,5 +1,11 @@
 #ifndef WASMATOMIC_HPP
 #define WASMATOMIC_HPP
+
+#include "WasmApi.hpp"
+
+// docs/EMBEDDING_SURFACE.md ES-4: this header is entirely part of the public
+// surface, so every declaration in it is exported.
+WASMJIT_VISIBLE_BEGIN
 #include <cstdint>
 
 // ── Shared atomic helper ABI (docs/proposals/THREADS.md TH-1) ───────────────
@@ -69,5 +75,7 @@ uint32_t wasm_atomic_wait(const void* address, uint64_t expected, uint64_t timeo
 						  uint32_t width);
 
 } // extern "C"
+
+WASMJIT_VISIBLE_END
 
 #endif // WASMATOMIC_HPP
