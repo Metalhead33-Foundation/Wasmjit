@@ -43,7 +43,7 @@ class BackendLaneWiseOp;
 
 //! One field of a lowered aggregate, in the same bytes generated code uses, so a
 //! test or an embedder never needs a backend IR type to validate a layout.
-/** \\brief ABI layout of one field in a lowered aggregate. */
+/** \brief ABI layout of one field in a lowered aggregate. */
 struct BackendFieldLayout {
 	std::size_t offset = 0;    //!< Byte offset of this field in the aggregate.
 	std::size_t size = 0;      //!< Size of this field in bytes.
@@ -51,7 +51,7 @@ struct BackendFieldLayout {
 };
 
 //! Lowered layout of a multi-result tuple / aggregate the session can materialise.
-/** \\brief Total layout and per-field offsets for a lowered aggregate. */
+/** \brief Total layout and per-field offsets for a lowered aggregate. */
 struct BackendAggregateLayout {
 	std::size_t size = 0;      //!< Total size of the aggregate, rounded up.
 	std::size_t alignment = 0; //!< Largest field alignment in the aggregate.
@@ -61,41 +61,41 @@ struct BackendAggregateLayout {
 //! A backend-generated lane-by-lane scalar implementation of one i32x4 op, used
 //! only by the diagnostic SIMD benchmark. Keeping it behind an interface means
 //! the benchmark does not need the backend's IR types.
-/** \\brief Polymorphic backend operation used by the diagnostic SIMD benchmark. */
+/** \brief Polymorphic backend operation used by the diagnostic SIMD benchmark. */
 class WASMJIT_API BackendLaneWiseOp
 {
 public:
 	virtual ~BackendLaneWiseOp() = default;
 	//! Runs the op on two 16-byte inputs into `out` (also 16 bytes).
 	/**
-	 * \\brief Executes the lane-wise operation on two 128-bit inputs.
-	 * \\param a Pointer to the first 16-byte input.
-	 * \\param b Pointer to the second 16-byte input.
-	 * \\param out Pointer to the 16-byte output buffer.
+	 * \brief Executes the lane-wise operation on two 128-bit inputs.
+	 * \param a Pointer to the first 16-byte input.
+	 * \param b Pointer to the second 16-byte input.
+	 * \param out Pointer to the 16-byte output buffer.
 	 */
 /**
- * \\brief Performs the run operation.
- * \\param a Input value, resource descriptor, or output destination for this operation.
- * \\param b Input value, resource descriptor, or output destination for this operation.
- * \\param out Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the run operation.
+ * \param a Input value, resource descriptor, or output destination for this operation.
+ * \param b Input value, resource descriptor, or output destination for this operation.
+ * \param out Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 	virtual void run(const void* a, const void* b, void* out) const = 0;
 };
 
 //! The session a backend implements. One per backend instance; the embedder
 //! holds it for as long as it drives that backend.
-/** \\brief Backend-independent interface used to drive one backend instance. */
+/** \brief Backend-independent interface used to drive one backend instance. */
 class WASMJIT_API BackendSession
 {
 public:
 	virtual ~BackendSession() = default;
 
 	//! The backend-agnostic instantiation seam.
-	/** \\brief Returns the compilation/instantiation interface. \\return Reference to this backend's module instantiator. */
+	/** \brief Returns the compilation/instantiation interface. \return Reference to this backend's module instantiator. */
 /**
- * \\brief Performs the instantiator operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the instantiator operation.
+ * \return The requested value, handle, view, or success status.
  */
 	virtual ModuleInstantiator& instantiator() = 0;
 
@@ -103,28 +103,28 @@ public:
 	//! multi-result marshaller and by layout tests). The rule is the one in
 	//! docs/ABI.md "The result tuple layout".
 	/**
-	 * \\brief Computes the backend layout of an aggregate with the given fields.
-	 * \\param fields Field storage types in declaration order.
-	 * \\return Aggregate size, alignment, and per-field layout.
+	 * \brief Computes the backend layout of an aggregate with the given fields.
+	 * \param fields Field storage types in declaration order.
+	 * \return Aggregate size, alignment, and per-field layout.
 	 */
 /**
- * \\brief Performs the aggregateLayout operation.
- * \\param fields Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the aggregateLayout operation.
+ * \param fields Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 	virtual BackendAggregateLayout aggregateLayout(
 			const std::vector<StorageType>& fields) = 0;
 
 	//! Diagnostic SIMD benchmark's scalar-IR lowering.
 	/**
-	 * \\brief Creates a diagnostic lane-wise SIMD operation.
-	 * \\param multiply true to multiply lanes; false selects the other benchmark op.
-	 * \\return Owning pointer to the operation, or nullptr if unsupported.
+	 * \brief Creates a diagnostic lane-wise SIMD operation.
+	 * \param multiply true to multiply lanes; false selects the other benchmark op.
+	 * \return Owning pointer to the operation, or nullptr if unsupported.
 	 */
 /**
- * \\brief Creates or allocates the corresponding runtime object.
- * \\param multiply Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Creates or allocates the corresponding runtime object.
+ * \param multiply Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 	virtual std::unique_ptr<BackendLaneWiseOp> createLaneWiseOp(bool multiply) = 0;
 
@@ -133,21 +133,21 @@ public:
 	//! trap handling. `result` points at a caller-owned buffer large enough for
 	//! one value or a multi-result tuple.
 	/**
-	 * \\brief Invokes a compiled WebAssembly callable through the backend ABI.
+	 * \brief Invokes a compiled WebAssembly callable through the backend ABI.
 	 *
 	 * Arguments and results are already marshalled into caller-owned slots.
 	 * The result buffer must have at least resultCapacity bytes.
-	 * \\param instance Instantiated module owning the callable.
-	 * \\param callable Callable entry to invoke.
-	 * \\param functionType Signature used for ABI marshalling.
-	 * \\param context Optional host context passed to the callable.
-	 * \\param arguments Pointers to marshalled argument slots.
-	 * \\param result Caller-owned result buffer, or null when no result is needed.
-	 * \\param resultCapacity Size in bytes of the result buffer.
-	 * \\param trapped Output flag set when execution traps.
-	 * \\param trapKind Output trap classification when trapped.
-	 * \\param trapMessage Output human-readable trap description.
-	 * \\return true if the invocation was dispatched; false if it could not be invoked.
+	 * \param instance Instantiated module owning the callable.
+	 * \param callable Callable entry to invoke.
+	 * \param functionType Signature used for ABI marshalling.
+	 * \param context Optional host context passed to the callable.
+	 * \param arguments Pointers to marshalled argument slots.
+	 * \param result Caller-owned result buffer, or null when no result is needed.
+	 * \param resultCapacity Size in bytes of the result buffer.
+	 * \param trapped Output flag set when execution traps.
+	 * \param trapKind Output trap classification when trapped.
+	 * \param trapMessage Output human-readable trap description.
+	 * \return true if the invocation was dispatched; false if it could not be invoked.
 	 */
 	virtual bool invoke(const ModuleInstance& instance,
 			const Callable& callable,
