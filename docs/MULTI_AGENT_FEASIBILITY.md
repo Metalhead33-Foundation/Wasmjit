@@ -583,7 +583,7 @@ says otherwise):
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite | **11,345 assertions / 468 cases, green** (2026-10-29) | The single-agent baseline every stage must preserve; the earlier 11,024-assertion run is a subset of it. |
+| Default suite | **11,374 assertions / 472 cases, green** (2026-10-29) | The single-agent baseline every stage must preserve; the earlier 11,024-assertion run is a subset of it. |
 | `spec: atomic` (curated) | 249 passed / 0 failed / 48 skipped (`proposals/THREADS.md` T10) | All 67 atomic handlers execute with real seq-cst semantics. |
 | Acquire-release fixture | Single-agent ordering + `pause` | The decode/lowering half is done; the *observation* half waits for a second agent (`ARA5`). |
 | Host-thread test | Two independent instances on two threads | Proves setup isolation, **not** the target concurrency model (`THREADSAFETY.md` §8 says so explicitly). |

@@ -313,7 +313,7 @@ mappings (a unit test asserts uniqueness). The shipped leaves are:
 | `WASM.DECODE.MALFORMED` | load boundary, message contains “malformed” | Error | `diagnostics: a malformed module records a decode id` |
 | `WASM.DECODE.UNSUPPORTED` | load boundary, other decode refusal | Error | — |
 | `WASM.DECODE.UNSUPPORTED_VALUE_TYPE` | unmodelled value type at load | Error | — |
-| `WASM.BACKEND.PLUGIN` | backend plugin load/ABI refusal, and a plugin's own message through the host table | Error | `[plugin]` |
+| `WASM.BACKEND.PLUGIN` | backend plugin lifecycle: every load refusal (missing file, missing export, descriptor/core ABI, build-kind mismatch, an embedded core, a failing `create`) is an **Error**; a successful load is a **Note** carrying the path and build kind | Error / Note | `[plugin]` |
 | `WASM.VALIDATE.<FAMILY>` (30 family leaves, plus the 11 explicit index/type leaves below) | `validationRuleId()` classification; §4.2 | Error | `diagnostics: validator messages classify into stable rule families`, `diagnostics: a validation failure carries a stable id and a location` |
 | `WASM.VALIDATE.RULE` | fallback: no rule family matched | Error | same cases (the fallback assertion) |
 | `WASM.VALIDATE.UNKNOWN_TYPE` | type index rule | Error | — |

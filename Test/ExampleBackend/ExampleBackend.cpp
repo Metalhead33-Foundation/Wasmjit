@@ -53,6 +53,8 @@ void destroyBackend(void* backend)
 wasmjit_backend_desc g_descriptor = {
 	WASMJIT_BACKEND_ABI_VERSION,
 	WASMJIT_ABI_VERSION,
+	WASMJIT_CURRENT_BUILD_FLAGS,
+	0, /* reserved */
 	"example",
 	"0.1",
 	wasmjit_capabilities{ WASMJIT_CAP_PROFILES, 0, 0, 0, nullptr },
@@ -70,11 +72,17 @@ wasmjit_backend_query(uint32_t host_abi_version)
 	// Restore the honest descriptor, then apply the requested misbehaviour.
 	g_descriptor.abi_version = WASMJIT_BACKEND_ABI_VERSION;
 	g_descriptor.core_abi_version = WASMJIT_ABI_VERSION;
+	g_descriptor.build_flags = WASMJIT_CURRENT_BUILD_FLAGS;
 	g_descriptor.create = &createBackend;
 	if (isMode("descriptor-abi"))
 		g_descriptor.abi_version = WASMJIT_BACKEND_ABI_VERSION + 1;
 	if (isMode("core-abi"))
 		g_descriptor.core_abi_version = WASMJIT_ABI_VERSION + 1;
+	// Report a build that differs from the host's in the bits the loader
+	// compares (debug vs release and the sanitizer kind), so the refusal path is
+	// exercised with a real image.
+	if (isMode("build-flags"))
+		g_descriptor.build_flags = WASMJIT_CURRENT_BUILD_FLAGS ^ WASMJIT_BUILD_DEBUG;
 
 	if (host_abi_version != WASMJIT_BACKEND_ABI_VERSION) {
 		g_lastError = "the host speaks an unsupported backend ABI version";

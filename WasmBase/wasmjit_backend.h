@@ -6,11 +6,16 @@
  * exposes (docs/BACKEND_PLUGIN_ABI.md BP-1…BP-4, Design 1).
  *
  * A plugin exports exactly one required symbol, `wasmjit_backend_query`. The
- * host calls it with its own ABI version, checks `abi_version` and
- * `core_abi_version` *before* touching any other pointer in the descriptor, and
- * only then calls `create`. Nothing C++-shaped crosses this header: the
- * compilation seam stays a C++ `ModuleInstantiator` reached through the opaque
- * void* the plugin hands back (Design 1, §4.3).
+ * host calls it with its own ABI version, checks `abi_version`,
+ * `core_abi_version` and `build_flags` *before* touching any other pointer in
+ * the descriptor, and only then calls `create`. Nothing C++-shaped crosses this
+ * header: the compilation seam stays a C++ `ModuleInstantiator` reached through
+ * the opaque void* the plugin hands back (Design 1, §4.3).
+ *
+ * Toolkit requirement (§7.1): the core, every backend and the embedding
+ * application SHOULD be built with the same compiler toolkit — same compiler,
+ * same version, same standard library. That cannot be probed at load time, so
+ * it is a documented requirement; deviating is at the embedder's own peril.
  *
  * Everything here is plain C and layout-pinned.
  */
@@ -21,7 +26,7 @@
 extern "C" {
 #endif
 
-#define WASMJIT_BACKEND_ABI_VERSION 1u
+#define WASMJIT_BACKEND_ABI_VERSION 2u
 
 /* Capability flags (wasmjit_capabilities.flags). A plugin declares what it can
  * compile; the runtime may refuse a module before codegen. */
@@ -30,6 +35,82 @@ extern "C" {
 #define WASMJIT_CAP_CONTINUATIONS (1u << 2)
 #define WASMJIT_CAP_PROFILES      (1u << 3)
 #define WASMJIT_CAP_EXECUTES      (1u << 4)
+
+/* ── Build flags (wasmjit_backend_desc.build_flags) ────────────────────────
+ * A plugin and its host must agree on the *kind* of build: a sanitizer build
+ * cannot safely drive a plain build (or vice versa), and mixing a debug and a
+ * release runtime changes assertions and container layout. The descriptors
+ * carry the value and the loader refuses a mismatch (§7.7).
+ *
+ * The toolkit itself (compiler, libstdc++, libc++) cannot be probed reliably at
+ * runtime; the note requires the same toolkit for core, every backend and the
+ * embedding application, and anything else is at the embedder's own peril
+ * (§7.1). */
+#define WASMJIT_BUILD_DEBUG   (1u << 0)
+#define WASMJIT_BUILD_ASAN    (1u << 1)
+#define WASMJIT_BUILD_TSAN    (1u << 2)
+#define WASMJIT_BUILD_UBSAN   (1u << 3)
+#define WASMJIT_BUILD_MSAN    (1u << 4)
+#define WASMJIT_BUILD_SANITIZER_MASK \
+	(WASMJIT_BUILD_ASAN | WASMJIT_BUILD_TSAN | WASMJIT_BUILD_UBSAN | WASMJIT_BUILD_MSAN)
+/* The bits a host compares; everything above is reserved and ignored. */
+#define WASMJIT_BUILD_COMPARED_MASK (WASMJIT_BUILD_DEBUG | WASMJIT_BUILD_SANITIZER_MASK)
+
+#if !defined(NDEBUG)
+#  define WASMJIT_DETECTED_DEBUG WASMJIT_BUILD_DEBUG
+#else
+#  define WASMJIT_DETECTED_DEBUG 0u
+#endif
+
+#if defined(__SANITIZE_ADDRESS__)
+#  define WASMJIT_DETECTED_ASAN WASMJIT_BUILD_ASAN
+#elif defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define WASMJIT_DETECTED_ASAN WASMJIT_BUILD_ASAN
+#  else
+#    define WASMJIT_DETECTED_ASAN 0u
+#  endif
+#else
+#  define WASMJIT_DETECTED_ASAN 0u
+#endif
+
+#if defined(__SANITIZE_THREAD__)
+#  define WASMJIT_DETECTED_TSAN WASMJIT_BUILD_TSAN
+#elif defined(__has_feature)
+#  if __has_feature(thread_sanitizer)
+#    define WASMJIT_DETECTED_TSAN WASMJIT_BUILD_TSAN
+#  else
+#    define WASMJIT_DETECTED_TSAN 0u
+#  endif
+#else
+#  define WASMJIT_DETECTED_TSAN 0u
+#endif
+
+#if defined(__has_feature)
+#  if __has_feature(undefined_behavior_sanitizer)
+#    define WASMJIT_DETECTED_UBSAN WASMJIT_BUILD_UBSAN
+#  else
+#    define WASMJIT_DETECTED_UBSAN 0u
+#  endif
+#else
+#  define WASMJIT_DETECTED_UBSAN 0u
+#endif
+
+#if defined(__has_feature)
+#  if __has_feature(memory_sanitizer)
+#    define WASMJIT_DETECTED_MSAN WASMJIT_BUILD_MSAN
+#  else
+#    define WASMJIT_DETECTED_MSAN 0u
+#  endif
+#else
+#  define WASMJIT_DETECTED_MSAN 0u
+#endif
+
+/* The flags this translation unit was built with. A plugin publishes this
+ * value in its descriptor; the host compares its own. */
+#define WASMJIT_CURRENT_BUILD_FLAGS \
+	((uint32_t)(WASMJIT_DETECTED_DEBUG | WASMJIT_DETECTED_ASAN | WASMJIT_DETECTED_TSAN \
+			| WASMJIT_DETECTED_UBSAN | WASMJIT_DETECTED_MSAN))
 
 /* Status codes. Zero is success; a negative code is a failure the host reports.
  * A plugin never calls abort() and never throws across the boundary (§6 rule 6). */
@@ -65,6 +146,8 @@ typedef struct wasmjit_host {
 typedef struct wasmjit_backend_desc {
 	uint32_t              abi_version;      /* == WASMJIT_BACKEND_ABI_VERSION */
 	uint32_t              core_abi_version; /* the core ABI it was built against */
+	uint32_t              build_flags;      /* WASMJIT_CURRENT_BUILD_FLAGS (§7.7) */
+	uint32_t              reserved;         /* must be 0 */
 	const char*           name;             /* the backend's own name, e.g. "null" */
 	const char*           version;          /* the backend's own version */
 	wasmjit_capabilities  capabilities;

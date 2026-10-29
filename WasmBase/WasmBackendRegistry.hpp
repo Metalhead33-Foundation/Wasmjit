@@ -9,6 +9,7 @@ WASMJIT_VISIBLE_BEGIN
 
 #include "WasmModuleInstance.hpp"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -46,8 +47,21 @@ BackendInstance createBackendInstance(std::string_view name);
 
 // The file name the loader looks for: `libwasmjit-backend-<name>.so`.
 std::string backendPluginFileName(std::string_view name);
+
+// ── Build-kind agreement (docs/BACKEND_PLUGIN_ABI.md §7.7) ─────────────────
+// A plugin reports `wasmjit_backend_desc::build_flags`; the loader compares the
+// bits in `WASMJIT_BUILD_COMPARED_MASK` (debug vs release, and the sanitizer
+// kind) and refuses a mismatch. Reserved bits are ignored.
+bool backendBuildFlagsCompatible(std::uint32_t pluginFlags,
+								 std::uint32_t hostFlags) noexcept;
+// Human-readable form for a diagnostic: e.g. "release, asan".
+std::string backendBuildFlagsText(std::uint32_t flags);
+
 // Loads an explicit file (BP-3). Throws with the reason: missing file, missing
-// `wasmjit_backend_query`, ABI mismatch, or a failing `create`.
+// `wasmjit_backend_query`, ABI or build-kind mismatch, or a failing `create`.
+// Every refusal also emits a `WASM.BACKEND.PLUGIN` diagnostic, and a successful
+// load emits a note, so an embedder that only watches its sink still sees the
+// lifecycle (docs/BACKEND_PLUGIN_ABI.md §7.9).
 BackendInstance loadBackendPluginFile(const std::string& path);
 // Searches `WASMJIT_BACKEND_PATH` (colon-separated), the working directory and
 // the executable's directory for `backendPluginFileName(name)`.

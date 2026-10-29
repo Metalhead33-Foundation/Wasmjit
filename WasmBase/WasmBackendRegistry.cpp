@@ -105,6 +105,29 @@ void hostEmit(void*, std::int32_t severity, const char* message)
 	}
 }
 
+void backendDiagnostic(DiagnosticSeverity severity, const std::string& message) noexcept
+{
+	Diagnostic diagnostic;
+	diagnostic.id = DiagnosticId::kBackendPlugin;
+	diagnostic.severity = severity;
+	diagnostic.phase = DiagnosticPhase::Compile;
+	diagnostic.message = message;
+	try {
+		emitDiagnostic(std::move(diagnostic));
+	} catch (...) {
+		// Same rule as hostEmit: reporting never throws.
+	}
+}
+
+// §7.9: a refused load is *reported* before it is thrown, so an embedder that
+// only watches its sink sees the reason too. The loader does not pretend to
+// contain an in-process crash; §8 option D is the only real containment.
+[[noreturn]] void failPlugin(const std::string& message)
+{
+	backendDiagnostic(DiagnosticSeverity::Error, message);
+	throw std::runtime_error(message);
+}
+
 } // namespace
 
 void registerBackend(std::string name, BackendFactory factory)
@@ -158,6 +181,29 @@ std::string backendPluginFileName(std::string_view name)
 	return "libwasmjit-backend-" + std::string(name) + ".so";
 }
 
+bool backendBuildFlagsCompatible(std::uint32_t pluginFlags,
+								 std::uint32_t hostFlags) noexcept
+{
+	// Debug/release and the sanitizer kind must agree; reserved bits are ignored
+	// so a newer plugin can add flags without breaking an older host.
+	return (pluginFlags & WASMJIT_BUILD_COMPARED_MASK)
+			== (hostFlags & WASMJIT_BUILD_COMPARED_MASK);
+}
+
+std::string backendBuildFlagsText(std::uint32_t flags)
+{
+	std::string text = (flags & WASMJIT_BUILD_DEBUG) != 0 ? "debug" : "release";
+	if ((flags & WASMJIT_BUILD_ASAN) != 0)
+		text += ", asan";
+	if ((flags & WASMJIT_BUILD_TSAN) != 0)
+		text += ", tsan";
+	if ((flags & WASMJIT_BUILD_UBSAN) != 0)
+		text += ", ubsan";
+	if ((flags & WASMJIT_BUILD_MSAN) != 0)
+		text += ", msan";
+	return text;
+}
+
 BackendInstance loadBackendPluginFile(const std::string& path)
 {
 #if defined(_WIN32)
@@ -167,7 +213,7 @@ BackendInstance loadBackendPluginFile(const std::string& path)
 	void* handle = ::dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
 	if (handle == nullptr) {
 		const char* reason = ::dlerror();
-		throw std::runtime_error("cannot load backend plugin '" + path + "': "
+		failPlugin("cannot load backend plugin '" + path + "': "
 				+ (reason != nullptr ? reason : "unknown loader error"));
 	}
 
@@ -175,7 +221,7 @@ BackendInstance loadBackendPluginFile(const std::string& path)
 			::dlsym(handle, "wasmjit_backend_query"));
 	if (query == nullptr) {
 		::dlclose(handle);
-		throw std::runtime_error("'" + path
+		failPlugin("'" + path
 				+ "' is not a WasmJit backend plugin: no wasmjit_backend_query export"
 				  " (docs/BACKEND_PLUGIN_ABI.md §4.1)");
 	}
@@ -183,7 +229,7 @@ BackendInstance loadBackendPluginFile(const std::string& path)
 	const wasmjit_backend_desc* desc = query(WASMJIT_BACKEND_ABI_VERSION);
 	if (desc == nullptr) {
 		::dlclose(handle);
-		throw std::runtime_error("backend plugin '" + path + "' refused host ABI version "
+		failPlugin("backend plugin '" + path + "' refused host ABI version "
 				+ std::to_string(WASMJIT_BACKEND_ABI_VERSION));
 	}
 	// Copy every descriptor value needed for a diagnostic *before* closing the
@@ -192,6 +238,7 @@ BackendInstance loadBackendPluginFile(const std::string& path)
 	// happened to leave a second reference mapped).
 	const std::uint32_t descriptorAbi = desc->abi_version;
 	const std::uint32_t coreAbi = desc->core_abi_version;
+	const std::uint32_t buildFlags = desc->build_flags;
 	const auto create = desc->create;
 	const auto destroy = desc->destroy;
 
@@ -199,19 +246,31 @@ BackendInstance loadBackendPluginFile(const std::string& path)
 	// (§4.1/§6 rule 2), so it happens here, before `create`.
 	if (descriptorAbi != WASMJIT_BACKEND_ABI_VERSION) {
 		::dlclose(handle);
-		throw std::runtime_error("backend plugin '" + path + "' speaks descriptor ABI "
+		failPlugin("backend plugin '" + path + "' speaks descriptor ABI "
 				+ std::to_string(descriptorAbi) + ", the host expects "
 				+ std::to_string(WASMJIT_BACKEND_ABI_VERSION));
 	}
 	if (coreAbi != WASMJIT_ABI_VERSION) {
 		::dlclose(handle);
-		throw std::runtime_error("backend plugin '" + path + "' was built against core ABI "
+		failPlugin("backend plugin '" + path + "' was built against core ABI "
 				+ std::to_string(coreAbi) + ", the host is "
 				+ std::to_string(WASMJIT_ABI_VERSION));
 	}
+	// §7.7: a sanitizer build must not drive a plain one (or vice versa), and a
+	// debug/release mismatch changes assertions and container layout. The
+	// toolkit itself cannot be probed at load time (§7.1), but this can.
+	const std::uint32_t hostBuildFlags = WASMJIT_CURRENT_BUILD_FLAGS;
+	if (!backendBuildFlagsCompatible(buildFlags, hostBuildFlags)) {
+		::dlclose(handle);
+		failPlugin("backend plugin '" + path + "' was built as "
+				+ backendBuildFlagsText(buildFlags) + ", but the host is "
+				+ backendBuildFlagsText(hostBuildFlags)
+				+ "; mixing build kinds misbehaves subtly, so the load is refused"
+				  " (docs/BACKEND_PLUGIN_ABI.md §7.7)");
+	}
 	if (create == nullptr) {
 		::dlclose(handle);
-		throw std::runtime_error("backend plugin '" + path + "' has no create()");
+		failPlugin("backend plugin '" + path + "' has no create()");
 	}
 
 	// Rule 1 / §7 risk 2: exactly one core. A plugin that carries its own copy of
@@ -223,18 +282,19 @@ BackendInstance loadBackendPluginFile(const std::string& path)
 	void* pluginCore = ::dlsym(handle, "wasm_trap_slot");
 	if (hostCore == nullptr) {
 		::dlclose(handle);
-		throw std::runtime_error("cannot verify the plugin/core boundary: this host does not"
+		failPlugin("cannot verify the plugin/core boundary: this host does not"
 				" export wasm_trap_slot (docs/BACKEND_PLUGIN_ABI.md §6 rule 1)");
 	}
 	if (pluginCore == nullptr) {
 		::dlclose(handle);
-		throw std::runtime_error("backend plugin '" + path + "' does not link the shared core"
+		failPlugin("backend plugin '" + path + "' does not link the shared core"
 				" (no wasm_trap_slot in its dependency scope; docs/BACKEND_PLUGIN_ABI.md §6 rule 1)");
 	}
 	if (pluginCore != hostCore) {
 		::dlclose(handle);
-		throw std::runtime_error("backend plugin '" + path + "' embeds its own copy of the core:"
-				" two Stores would exist in one process (docs/BACKEND_PLUGIN_ABI.md §6 rule 1)");
+		failPlugin("backend plugin '" + path + "' embeds its own copy of the core:"
+				" two heaps, two type registries and two allocators would exist in one"
+				" process (docs/BACKEND_PLUGIN_ABI.md §6 rule 1)");
 	}
 
 	wasmjit_host host{};
@@ -252,11 +312,16 @@ BackendInstance loadBackendPluginFile(const std::string& path)
 		if (destroy != nullptr && raw != nullptr)
 			destroy(raw);
 		::dlclose(handle);
-		throw std::runtime_error("backend plugin '" + path
+		failPlugin("backend plugin '" + path
 				+ "' refused to create a backend: " + message);
 	}
 
 	keepPluginLoaded(handle);
+	// §7.9: the happy path is visible in the diagnostic stream too, so a host
+	// that records the sink has the load, its path and its build kind.
+	backendDiagnostic(DiagnosticSeverity::Note,
+			"backend plugin '" + path + "' loaded (build: "
+					+ backendBuildFlagsText(buildFlags) + ")");
 	// The deleter and the object come from the same image; the image is never
 	// unloaded, so both stay valid for the process lifetime.
 	std::shared_ptr<ModuleInstantiator> instantiator(
@@ -309,7 +374,7 @@ BackendInstance loadBackendPlugin(std::string_view name)
 		return loadBackendPluginFile(candidate);
 #endif
 	}
-	throw std::runtime_error("no backend named '" + std::string(name)
+	failPlugin("no backend named '" + std::string(name)
 			+ "' is compiled in, and no " + fileName + " was found in [" + searched
 			+ "] (set WASMJIT_BACKEND_PATH to search elsewhere)");
 }

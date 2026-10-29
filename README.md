@@ -11,6 +11,14 @@ development sandbox, not the embeddable API. See
 [`docs/LAYERING.md`](docs/LAYERING.md) for the rule that keeps the core
 backend-agnostic.
 
+> **Just because you technically can does not mean that you should.**
+>
+> The engine makes several things *possible* that are not *advisable* — two
+> runtimes in one process, parsing the same module twice to get isolation, a
+> plugin loaded from a directory you do not control. Each is documented where it
+> appears (for the plugin boundary, [`docs/BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md)
+> §7); none is the recommended path.
+
 ## Direction
 
 - **GNU LibJIT is the only executing backend**, and stays the implementation

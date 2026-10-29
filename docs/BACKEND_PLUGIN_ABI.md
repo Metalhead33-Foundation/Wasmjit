@@ -187,7 +187,7 @@ read. That makes `BP-1` useful even if `dlopen` never ships.
 
 | Crosses | Examples | Notes |
 |---|---|---|
-| POD structs by value/pointer | the descriptor, status, capabilities, layout, trap record, POD signature view | Layout pinned by `static_assert` in the header |
+| POD structs by value/pointer | the descriptor (including `build_flags`), status, capabilities, layout, trap record, POD signature view | Layout pinned by `static_assert` in the header |
 | Opaque handles | `void*` backend / session / instance / internals | Ownership stated per handle |
 | Function pointers (both ways) | the `wasmjit_host` table; the plugin's vtable | The core's table is `const` and outlives the plugin |
 | `Callable` (POD) | `{ void* fnPtr; VMContext* context; uint32_t localTypeIdx; TypeId typeId; }` | Already the universal handle; `fnPtr`/`context` are the ABI |
@@ -227,20 +227,34 @@ read. That makes `BP-1` useful even if `dlopen` never ships.
    any instance from that plugin exists.
 9. **Executable memory is the plugin's**, with a W^X handoff; the core never
    patches code.
+10. **Report every refusal through the diagnostic sink.** The loader emits a
+    `WASM.BACKEND.PLUGIN` diagnostic (Error) and *then* throws; a successful load
+    is a Note. A plugin never reports a failure by crashing (§7.9).
+11. **Same toolkit as the host** (§7.1): same compiler, same version, same
+    standard library. `build_flags` covers only the debug/sanitizer split; the
+    rest is a documented requirement, not a runtime check.
+12. **Modules outlive their importers** (§7.4), and only trusted directories are
+    searched for plugins (§7.8).
 
-## 7. The hard problems
+## 7. The hard problems, and how each is handled
 
-| # | Problem | Why it is real here | Mitigation |
-|---|---|---|---|
-| 1 | **`libstdc++` / `GLIBCXX` skew** between core and plugin | A `std::string` or `std::vector` crossing the boundary is a version bomb | Nothing STL-shaped crosses (§5); plugin and core come from the same tree/release |
-| 2 | **Duplicated core globals** if `libWasmBase` is linked statically into both | `Store::global()` used to exist **twice** — two type registries, two GC heaps, silent corruption. The most dangerous failure mode of the whole idea. | **Solved twice over.** (a) `ES-2` option B removed the singleton: there is no process-wide core state to duplicate — a store belongs to a runtime (or to the caller that parsed the module), and every consumer reaches it through a module/instance/`VMContext` ([`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §4.3). (b) The linkage is still enforced, so a second core image cannot appear: all three library projects refuse a non-shared configuration; `libLibJit` records `NEEDED libWasmBase.so.1` (it previously did **not**, resolving core symbols from whatever the host had loaded); `-Wl,--no-undefined` turns an unsatisfied core symbol into a link error; `Test/install-check.sh` asserts that no `libWasmBase.a` is installed and that the shipped backend records the dependency; the loader's symbol-identity probe refuses a plugin that embeds a copy. |
-| 3 | **`TypeId` / `TagId` values are runtime-scoped** | A cached id from runtime A is meaningless in runtime B | The plugin caches nothing across runtimes; ids travel only with the instance |
-| 4 | **`Callable` lifetime vs `dlclose`** | A code pointer into an unmapped library crashes on the next call | Rule 7; prefer never unloading in-process |
-| 5 | **Helper symbol export** | The plugin calls `wasm_v128_*` / `wasm_trap_*`; `ES-4`'s hidden visibility would hide them | The **helper ABI must be explicitly `WASMJIT_API`-exported**: surface S6 of [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §2.2 becomes a link-time requirement of the plugin ABI |
-| 6 | **W^X and JIT hardening** | The plugin allocates executable memory; a hardened embedder may refuse RWX | Capability flag + documented `mmap`/`mprotect` expectation; the core never writes into code |
-| 7 | **Debug/sanitizer mixing** | A plugin built with ASan into a non-ASan frontend (or vice versa) misbehaves subtly | The plugin reports its build flags; the loader refuses a mismatch |
-| 8 | **Loading is arbitrary code execution** | A `.so` from an untrusted directory is a backdoor | The embedder decides which plugins are trusted; document it, do not pretend to sandbox |
-| 9 | **Failure containment** | A plugin that segfaults takes the game down | `dlopen` failure and version mismatch are *reported*; an in-process crash cannot be contained — that is §8 option D |
+> **Just because you technically can does not mean that you should.**
+>
+> This note describes a boundary that *works*, not a set of operations that are
+> *wise*. Each row below says what the engine guarantees and what it deliberately
+> leaves to the embedder's judgement.
+
+| # | Problem | Why it is real here | What the engine does | What is left to the embedder |
+|---|---|---|---|---|
+| 1 | **`libstdc++` / `GLIBCXX` skew** | A `std::string` or `std::vector` crossing the boundary is a version bomb | Nothing STL-shaped crosses (§5), and the descriptor carries the build kind, so a sanitizer/debug mismatch is refused (§7.7) | **Build the core, every backend and the embedding application with the same compiler toolkit** — same compiler, same version, same standard library. That cannot be probed at load time, so it is a soft requirement stated in `wasmjit_backend.h`; anything else is at your own peril |
+| 2 | **Two copies of the core** | Two heaps, two type registries, two allocators in one process | **This is a dynamic-linking library, never a static one.** The build refuses a static core, `libLibJit` records `NEEDED libWasmBase.so.1`, and the loader refuses a plugin that embeds a copy | Never static-link the core — not into a backend, not into an embedder that also loads one |
+| 3 | **`TypeId` / `TagId` are store-scoped** | A cached id from runtime A uses the wrong registry in runtime B | **By design**: it is the price of the isolation `ES-2` bought — two runtimes cannot reach each other's types or heaps, so a stale id fails loudly instead of silently aliasing an unrelated type | A plugin caches nothing across runtimes; ids travel only with the instance. Running two runtimes in one process is possible *and* discouraged (the rule at the top of this section): one runtime is the normal case, and a second is a deliberate isolation decision. The same goes for parsing one module twice to get two independent copies — it works, and it is usually a mistake |
+| 4 | **`Callable` lifetime vs `dlclose`** | A code pointer into an unmapped library crashes on the next call | The loader never closes a handle: there is no unload entry point (rule 8) | Do not `dlclose` a library whose functions you still call — ordinary C common sense. The same common sense applies to modules: **a module must outlive every module that imports and calls its exports**; the engine does not track that for you |
+| 5 | **Helper symbol export** | The plugin calls `wasm_v128_*` / `wasm_trap_*`; `ES-4`'s hidden visibility would hide them | The exported helper subset is deliberate and tested: `wasm_trap_*`, `wasm_stack_check`, `wasm_v128_*` (31), `wasm_exn_*`; `[plugin]` asserts they resolve in the process image. Surface S6 of [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §2.2 becomes a link-time requirement of this ABI | A plugin links these helpers; it does not re-export them. String, bit-op and GC-allocation helpers are backend-private and stay hidden |
+| 6 | **W^X and JIT hardening** | The plugin allocates executable memory; a hardened embedder may refuse RWX | The core never writes into code, and whether the plugin can allocate at all is a capability question (§4.2, `WASMJIT_CAP_EXECUTES`) | A host that refuses RWX needs a backend that does not require it: LibJIT — the shipped backend — can **interpret instead of compile** (`jit_function_apply` falls back to its interpreter; `JIT_OPTLEVEL_NONE` disables codegen — <https://www.gnu.org/software/libjit/doc/libjit_2.html>). The engine does not pretend to change the host's W^X policy |
+| 7 | **Debug/sanitizer mixing** | A plugin built with ASan into a non-ASan frontend (or vice versa) misbehaves subtly | `wasmjit_backend_desc::build_flags` reports the build kind; the loader compares the debug/release and sanitizer bits and refuses a mismatch, naming both sides. A successful load reports its build kind as a note | Keep the flags honest by building with the same flags — the check catches an accident, not a lie |
+| 8 | **Loading is arbitrary code execution** | A `.so` from an untrusted directory is a backdoor | Nothing. There is no sandbox, no signature check, no path allow-list | **You decide which plugins are trusted.** `WASMJIT_BACKEND_PATH` is yours to set; never point it at a directory an attacker can write. This is a plugin boundary, not a security boundary |
+| 9 | **Failure containment** | A plugin that segfaults takes the game down | Every refusal — missing file, missing export, descriptor or core ABI, build kind, a plugin without its own core, a failing `create` — **emits a `WASM.BACKEND.PLUGIN` diagnostic and then throws**; a successful load emits a note (rule 10). An in-process crash is *not* contained; only §8 option D (a separate process) contains one | Watch the diagnostic sink; treat a crash as a crash. `dlopen` failure and version mismatch are *reported*, never swallowed |
 
 ## 8. Alternatives, and when each wins
 
@@ -266,7 +280,7 @@ until someone proves a need for more.
 |---|---|
 | Does it demote a class-E blocker? | **No.** Orthogonal to [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md): it changes *how* a backend is loaded, not what a backend must do. |
 | Does it strengthen G3? | **Yes.** A loaded plugin is a second implementation of the seam that can be tested as a black box — exactly the `AAS10` evidence G3 lacks. |
-| Does it add a frozen surface? | **Yes**, and that is the price: `wasmjit_backend.h` becomes surface **S10** of `API_ABI_STABILITY.md` §2.2, with its own `abi_version`. |
+| Does it add a frozen surface? | **Yes**, and that is the price: `wasmjit_backend.h` becomes surface **S10** of `API_ABI_STABILITY.md` §2.2, with its own `abi_version` (currently **2**: the build-kind field of §7.7). |
 | Does it conflict with `ES-4` (hidden visibility)? | It *depends* on it: the helper ABI must be exported deliberately. Without `ES-4`, the plugin ABI is "23k symbols and hope". |
 | Does it require `ES-2` (no global `Store`)? | Not strictly, but §6 rule 1 is unenforceable in practice until the core is one shared object and the singleton is gone. |
 
@@ -277,7 +291,7 @@ until someone proves a need for more.
 | **BP-0 — This study** ✅ | The analogy, the descriptor sketch, the boundary rules, the risk register. No code. | — | Linked from `API_ABI_STABILITY.md` and `README.md`. |
 | **BP-1 — Freeze the narrow boundary** ✅ | **Landed 2026-10-29:** `WasmBase/WasmBackendAbi.hpp` defines `ValueKind`, `SignatureView`, `FieldLayout`, `AggregateLayout` and `computeAggregateLayout` — standard-layout, layout-pinned by `static_assert`, and the executable form of [`ABI.md`](ABI.md) "The result tuple layout" / "`v128` by Value". `Test/BackendAbiTests.cpp` (`[backendabi]`) asserts the rule. | A | `ABI.md` describes them ✅; the harness's `TestBackend::AggregateLayout` is expressible in terms of the core POD ✅ |
 | **BP-2 — Generalise the selector** ✅ | **Landed 2026-10-29:** `WasmBackendRegistry.{hpp,cpp}` (name → factory, `WASMJIT_REGISTER_BACKEND`), the null instantiator as the second implementation, the executing backend registered from its own translation unit, and `Runtime::create(name)`. | A | Two backends (`libjit`, `null`) are selectable by name with no frontend rebuild ✅ |
-| **BP-3 — Add `dlopen`** ✅ | **Landed 2026-10-29:** `loadBackendPluginFile` / `loadBackendPlugin` with `RTLD_NOW|RTLD_LOCAL`, the `wasmjit_backend_query` handshake, descriptor- and core-ABI checks before any other call, a host callback table, contained failure, and the one-core guard: the plugin's `wasm_trap_slot` must resolve to the host's address, otherwise it carries its own core and is refused (a symbol-identity probe rather than a `DT_NEEDED` parse — no libelf, the same failure caught). `Test/ExampleBackend` builds a real plugin in its own directory and `[plugin]` loads it by name. | A | A plugin built in a separate directory loads by name ✅; a wrong-ABI plugin is refused ✅; a plugin with its own core is refused ✅ |
+| **BP-3 — Add `dlopen`** ✅ | **Landed 2026-10-29:** `loadBackendPluginFile` / `loadBackendPlugin` with `RTLD_NOW|RTLD_LOCAL`, the `wasmjit_backend_query` handshake, descriptor-, core-ABI and build-kind checks before any other call (§7.7), a host callback table, contained failure **reported through the diagnostic sink** (§7.9), and the one-core guard: the plugin's `wasm_trap_slot` must resolve to the host's address, otherwise it carries its own core and is refused (a symbol-identity probe rather than a `DT_NEEDED` parse — no libelf, the same failure caught). `Test/ExampleBackend` builds a real plugin in its own directory and `[plugin]` loads it by name. | A | A plugin built in a separate directory loads by name ✅; a wrong-ABI or wrong-build plugin is refused ✅; a plugin with its own core is refused ✅; every refusal is a `WASM.BACKEND.PLUGIN` diagnostic ✅ |
 | **BP-4 — Unload policy and containment tests** ✅ | **Landed 2026-10-29:** the loader keeps every plugin handle for the process lifetime (rule 8; there is no unload entry point), and `[plugin]` covers a missing file, a library without the query symbol, an unknown name, a descriptor-ABI mismatch, a core-ABI mismatch and a failing `create` — each a diagnostic-bearing exception, never an abort. | A | Those failure paths are covered by tests and produce diagnostics, never aborts ✅ |
 | **BP-5 — Package backends** ✅ | **Landed 2026-10-29:** `LibJit.pro` installs `libLibJit.so.<major>` into `$$PREFIX/lib`, and `wasmjit.pc` links it, so an installed embedder gets the executing backend without extra pkg-config entries. A separately shipped plugin follows the same rule (`libwasmjit-backend-<name>.so` + `Libs:`). | A | `make install` yields a runtime that finds its backend in the install prefix ✅ (`Test/install-check.sh`). |
 
@@ -289,13 +303,16 @@ works.
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (2026-10-29) | **11,345 assertions / 468 cases, green** | The compiled-in path is the baseline every `BP-*` stage must preserve. |
+| Default suite (2026-10-29) | **11,374 assertions / 472 cases, green** | The compiled-in path is the baseline every `BP-*` stage must preserve. |
 | Backend selection | `WasmBackendRegistry` names `libjit` and `null`; an unknown name is a named error | The selector is general and the second implementation exists. |
 | Plugin load test | **Present** — `Test/ExampleBackend/libwasmjit-backend-example.so`, loaded by path and by name (`[plugin]`) | `BP-3`; the plugin lives in its own directory and the frontend was not rebuilt for it. |
 | Wrong-ABI / missing-symbol / failing-create tests | **Present** — descriptor ABI, core ABI, no query symbol, missing file, failing `create` (`[plugin]`) | `BP-3`/`BP-4`; every path is an exception with a reason, never an abort. |
+| Build-kind refusal (§7.7) | **Present** — the fixture reports a mismatched `build_flags` on request and is refused; the comparison predicate and its text are unit-tested | `build_flags` is real, not aspirational: debug/release and the sanitizer kind must agree. |
+| Helper export (§7.5) | **Present** — `[plugin]` resolves `wasm_trap_slot`, `wasm_trap_report`, `wasm_stack_check`, `wasm_v128_*`, `wasm_exn_*` in the process image | `ES-4`'s hidden visibility did not swallow the plugin ABI. |
+| Diagnostic reporting (§7.9) | **Present** — a refused load and a successful load are both observed through a sink (`WASM.BACKEND.PLUGIN`, Error and Note) | Failure containment is a report, and the happy path is visible too. |
 | POD layout test | **Present** — `[backendabi]` pins the tuple rule | `BP-1`. |
-| Symbol-hygiene check | **Absent**; everything is exported | `ES-4`; without it the plugin ABI is undeclared. |
-| "One core" check (`NEEDED` inspection) | **Present as a symbol-identity probe** — the loader compares the plugin's `wasm_trap_slot` with the host's and refuses a private copy | `BP-3`; a plugin with its own core is refused rather than corrupting two Stores. |
+| Symbol-hygiene check | **Present** — `ES-4` hid the core's internals (23,919 → 2,541 exported symbols) and deliberately re-exported the helper subset | `ES-4`; the plugin ABI is a declared list, not "everything and hope". |
+| "One core" check (`NEEDED` inspection) | **Present as a symbol-identity probe** — the loader compares the plugin's `wasm_trap_slot` with the host's and refuses a private copy | `BP-3`; a plugin with its own core is refused rather than running two heaps and two allocators. |
 
 ## 12. References
 

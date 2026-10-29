@@ -71,10 +71,11 @@ optional hook, (c) a documented deviation recorded in §9 of this note or in the
 owning note. Anything else is a breaking change and needs a new milestone
 decision, not a commit.
 
-**S10 is reserved.** When the backend plugin ABI is adopted
-([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md)), the `wasmjit_backend.h`
-descriptor joins this list with its own `abi_version`; it is not frozen yet, and
-nothing in the current milestone depends on it.
+**S10 is the backend plugin descriptor.** `wasmjit_backend.h` is surface **S10**
+of §2.2 with its own `abi_version` (currently **2**; the build-kind field landed
+with `BACKEND_PLUGIN_ABI.md` §7.7). The descriptor is layout-pinned, versioned
+and checked before any other plugin call; a change to a field's meaning bumps
+`WASMJIT_BACKEND_ABI_VERSION`, not the core's.
 
 ### 2.3 The acceptance rule
 
@@ -555,7 +556,7 @@ working-tree changes), from `build/LowHanging/Test`:
 
 | Command | Result | Reading |
 |---|---|---|
-| `./WasmJit` (default suite) | **11,345 assertions / 468 test cases, all passed** | +334 assertions and 26 cases over the 2026-10-25 row: `Runtime`, the POD layout views, the backend registry/null backend and the plugin loader. |
+| `./WasmJit` (default suite) | **11,374 assertions / 472 test cases, all passed** | +363 assertions and 30 cases over the 2026-10-25 row: `Runtime`, the POD layout views, the backend registry/null backend and the plugin loader (including the build-kind and helper-export checks of `BACKEND_PLUGIN_ABI.md` §7.5/§7.7). |
 | `./WasmJit '~[spec]'` | **10,967 assertions / 279 test cases, all passed** | The hand-written half is green on its own. |
 | `./WasmJit '[docs]'` | **720 assertions / 1 test case, all passed** | Unchanged. |
 | `./WasmJit '[layering]'` | **4 assertions / 1 test case, all passed** | `WasmBase/` and `WasmStub/` name no backend; the §6.5 scan is now a gate, not a grep. |
