@@ -40,6 +40,7 @@ typedef uint32_t MemIdx;
 
 //! Distinguishes between normal types (i32) and packed types (i8, i16)
 //! Values as defined by the Wasm Binary Encoding (signed LEB128 equivalents)
+/** \\brief Built-in abstract heap types used by reference types. */
 enum class AbstractHeapType : int32_t {
 	Func      = -0x10, //!< 0x70
 	Extern    = -0x11, //!< 0x6F
@@ -70,6 +71,7 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 	return left.writeLEB128_enum(right);
 }
 
+/** \\brief Binary opcode values for core scalar, vector, and reference value types. */
 enum class ValueTypeCode : int8_t {
 	Void            = -0x40, //!< Void
 	Func            = -0x20,
@@ -134,6 +136,7 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 //! lowers to a void/absent value, and loading one yields a null backend handle.
 //! Rather than compile such a module into an operand that is silently broken,
 //! `Module::fromFile` rejects it — see docs/UNMODELLED_VALUE_TYPES.md.
+/** \\brief Tests whether the engine models a value-type opcode. \\param code Value type code to inspect. \\return true when the runtime has a representation for the code. */
 inline bool isModeledValueTypeCode(ValueTypeCode code)
 {
 	switch (code) {
@@ -174,6 +177,7 @@ inline bool isModeledValueTypeCode(ValueTypeCode code)
 //! Constant-Time secret numeric types are recognized only so the loader can
 //! reject them with a precise message; they have no representation or lowering
 //! until the proposal assigns an encoding and the CT milestones land.
+/** \\brief Tests whether a value-type opcode is an internal/secret representation. \\param code Value type code to inspect. \\return true when the code is reserved for engine-internal use. */
 inline bool isSecretValueTypeCode(ValueTypeCode code)
 {
 	return code == ValueTypeCode::S32 || code == ValueTypeCode::S64;
@@ -208,6 +212,7 @@ inline bool shorthandRefHeapType(ValueTypeCode code, AbstractHeapType& heap)
 
 
 
+/** \\brief Decoded value type, including reference heap type, exactness, and sharing. */
 struct ValueType {
 	ValueTypeCode opcode;
 	int32_t heapType; //!< Only used if opcode is 0x6B (ref) or 0x6C (ref null)
@@ -218,6 +223,7 @@ struct ValueType {
 	//! it value-initialize it to false; decode() always assigns it.
 	bool isShared = false;
 
+ 	/** \\brief Decodes a value type from a WebAssembly binary stream. \\tparam E Stream byte order. \\tparam I Device type. \\param stream Input stream positioned at the type encoding. */
 	template <Elv::Util::Endian E, Elv::Io::DeviceLike I> void decode(Elv::Io::DataStream<E,I>& stream) {
 		int8_t tmp_opcode;
 		stream >> Elv::Io::Leb(tmp_opcode);
@@ -228,6 +234,7 @@ struct ValueType {
 	//! needs one byte of lookahead: `0x40 0x00` introduces a table *with* an
 	//! initialiser, and 0x40 is `void` — never a valid element type — so the first
 	//! byte alone tells the two apart (docs/proposals/GC.md G5).
+ 	/** \\brief Completes value-type decoding after its first encoded byte was consumed. \\tparam E Stream byte order. \\tparam I Device type. \\param stream Remaining input stream. \\param firstByte Already-read first type byte. */
 	template <Elv::Util::Endian E, Elv::Io::DeviceLike I> void decodeAfterFirstByte(Elv::Io::DataStream<E,I>& stream, int8_t firstByte) {
 		opcode = static_cast<ValueTypeCode>(firstByte);
 		isShared = false;
@@ -265,6 +272,7 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 	return left;
 }
 
+/** \\brief Storage type used by struct fields, array elements, and function signatures. */
 struct StorageType {
 	bool isPacked; //!< i8 or i16
 	ValueType val;
@@ -298,32 +306,39 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 	return left;
 }
 
+/** \\brief Structure field storage type and mutability. */
 struct FieldType {
 	StorageType storageType;
 	bool isMutable;
 };
 
+/** \\brief WebAssembly function parameter and result storage types. */
 struct FuncType {
 	std::vector<StorageType> params;
 	std::vector<StorageType> results;
 };
 
+/** \\brief Ordered field declarations of a WebAssembly structure type. */
 struct StructType {
 	std::vector<FieldType> fields;
 };
 
+/** \\brief Element field declaration of a WebAssembly array type. */
 struct ArrayType {
 	FieldType elementType;
 };
 
 //! Stack-switching proposal: `cont $ft` is a composite type whose payload is a
 //! reference to a function type. It is not a function type itself.
+/** \\brief Continuation type referring to a function type index. */
 struct ContType {
 	uint32_t functionTypeIndex = 0;
 };
 
+/** \\brief Discriminated payload of a core composite type definition. */
 using CompositeDefinition = std::variant<FuncType, StructType, ArrayType, ContType>;
 
+/** \\brief Subtype wrapper with finality, supertypes, sharing, and composite payload. */
 struct Subtype {
 	bool isFinal;
 	//! Shared-everything threads: `(shared (func ...))` / `(shared (struct ...))`.
@@ -338,12 +353,17 @@ struct Subtype {
 	CompositeDefinition composite;
 
 	//! Helper to identify what we are looking at
+	/** \\brief Tests whether the composite payload is a function type. \\return true for FuncType. */
 	inline bool isFunction() const { return std::holds_alternative<FuncType>(composite); }
+	/** \\brief Tests whether the composite payload is a structure type. \\return true for StructType. */
 	inline bool isStruct() const { return std::holds_alternative<StructType>(composite); }
+	/** \\brief Tests whether the composite payload is an array type. \\return true for ArrayType. */
 	inline bool isArray() const { return std::holds_alternative<ArrayType>(composite); }
+	/** \\brief Tests whether the composite payload is a continuation type. \\return true for ContType. */
 	inline bool isCont() const { return std::holds_alternative<ContType>(composite); }
 };
 
+/** \\brief Decoded limits flags, initial size, and optional maximum. */
 struct Limits {
 	uint32_t flags;
 	uint64_t initial;
@@ -365,11 +385,13 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 	right.decode(left);
 	return left;
 }
+/** \\brief Address width used by a memory's index space. */
 enum class MemoryIndexType : uint8_t {
 	I32,
 	I64
 };
 
+/** \\brief Memory declaration including limits, address width, and page size. */
 struct MemoryType {
 	MemoryIndexType indexType;
 	Limits limits;
@@ -403,6 +425,7 @@ struct MemoryType {
 	}
 };
 
+/** \\brief Table declaration including element type, limits, and initializer. */
 struct TableType {
 	ValueType elementType; //!< Must be a RefType (0x6B or 0x6C)
 	Limits limits;
@@ -415,6 +438,7 @@ struct TableType {
 	std::vector<uint8_t> initExpr;
 };
 
+/** \\brief Global value type and mutability/sharing attributes. */
 struct GlobalType {
 	ValueType contentType;
 	bool isMutable;
@@ -422,6 +446,7 @@ struct GlobalType {
 	bool isShared = false;
 };
 
+/** \\brief Kind discriminator for a module import or export. */
 enum class ExternalKind : uint8_t {
 	Function = 0x00,
 	Table    = 0x01,
@@ -437,24 +462,30 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 	return left.write_enum(right);
 }
 
+/** \\brief Common module and field names of an import declaration. */
 struct Import {
 	std::string moduleName;
 	std::string fieldName;
 };
+/** \\brief Function import declaration and its referenced type index. */
 struct ImportFunction : public Import {
 	uint32_t typeIdx;
 	//! Custom Descriptors: `0x20 typeidx` exact function import.
 	bool isExact = false;
 };
+/** \\brief Table import declaration. */
 struct ImportTable : public Import {
 	TableType table;
 };
+/** \\brief Memory import declaration. */
 struct ImportMemory : public Import {
 	MemoryType memory;
 };
+/** \\brief Global import declaration. */
 struct ImportGlobal : public Import {
 	GlobalType global;
 };
+/** \\brief Exception tag import declaration. */
 struct ImportTag : public Import {
 	uint8_t attribute; //!< currently always 0x00
 	uint32_t typeIdx;
@@ -464,20 +495,24 @@ struct ImportTag : public Import {
 //! always `sub <abstract heaptype>`; the imported type enters the local type
 //! index space before every definition. `typeId` is the process-wide nominal
 //! identity derived from (module, field, bound).
+/** \\brief Canonical type import declaration and abstract bound. */
 struct ImportType : public Import {
 	uint8_t boundKind = 0; //!< 0x00 = sub
 	AbstractHeapType bound = AbstractHeapType::Any;
 	TypeId typeId{TypeId::kNone};
 };
+/** \\brief Defined global declaration and raw initializer expression. */
 struct Global {
 	GlobalType type;
 	std::vector<uint8_t> initOpcode; //!< Store the raw bytes for now
 };
+/** \\brief Export name, external kind, and index in the corresponding space. */
 struct Export {
 	std::string name;
 	ExternalKind kind;
 	uint32_t index;
 };
+/** \\brief Element segment, including mode, element type, and initializer expressions. */
 struct ElementSegment {
 	uint32_t mode;      //!< The raw bitmask/type (bit 3 = shared, SET-1)
 	uint32_t tableIdx;  //!< Only for active segments
@@ -495,10 +530,14 @@ struct ElementSegment {
 	std::vector<uint32_t> initIndices;
 	std::vector<std::vector<uint8_t>> initExprs;
 
+	/** \\brief Tests whether the element segment is active. \\return true when the segment initializes a table. */
 	inline bool isActive() const { return (mode & 0x01) == 0; }
+	/** \\brief Tests whether the element segment is declarative. \\return true for declarative mode. */
 	inline bool isDeclarative() const { return mode == 3; }
+	/** \\brief Tests whether the element segment is passive. \\return true for passive modes. */
 	inline bool isPassive() const { return mode == 1 || mode == 5; }
 };
+/** \\brief Data segment declaration and its raw initializer bytes. */
 struct DataSegment {
 	uint32_t mode;
 	uint32_t memoryIdx;
@@ -506,6 +545,7 @@ struct DataSegment {
 	std::vector<uint8_t> offsetExpr; //!< Only for active
 	std::vector<uint8_t> data;       //!< The raw bytes to copy
 };
+/** \\brief Run-length encoded local declaration in a function body. */
 struct LocalEntry {
 	uint32_t count;
 	ValueType type;
@@ -515,16 +555,19 @@ struct LocalEntry {
 //! semantics: 0 = the associated condition is likely false, 1 = likely true.
 //! `offset` is pre-rebased by Module::processCodeSection onto the byte stream
 //! stored in FunctionBody::code (i.e. excluding the locals declaration).
+/** \\brief Branch-likelihood hint associated with a function-body byte offset. */
 struct BranchHint {
 	uint32_t offset;
 	uint8_t hint;
 };
+/** \\brief Decoded function body, declared locals, opcodes, and optional branch hints. */
 struct FunctionBody {
 	std::vector<LocalEntry> locals;
 	std::vector<uint8_t> code;
 	//! Branch hints whose target instruction lies in `code`, ordered by offset.
 	std::vector<BranchHint> branchHints;
 };
+/** \\brief Exception tag declaration referencing its payload function type. */
 struct Tag {
 	uint8_t attribute; //!< Currently always 0x00 (reserved for future use)
 	uint32_t typeIdx;  //!< Index into the Type Section (must be a FuncType)
@@ -535,6 +578,7 @@ struct Tag {
 //! `typeId` is the canonical identity where one exists, while table/memory/global
 //! declarations carry their structural type by value. The fields that do not
 //! apply to a kind are left at their defaults.
+/** \\brief Read-only metadata projection of one external declaration. */
 struct ExternTypeDescriptor {
 	ExternalKind kind = ExternalKind::Function;
 	TypeId typeId{TypeId::kNone};
@@ -546,12 +590,14 @@ struct ExternTypeDescriptor {
 	uint8_t tagAttribute = 0;
 };
 
+/** \\brief Public metadata projection of one module import. */
 struct ImportDescriptor {
 	std::string moduleName;
 	std::string fieldName;
 	ExternTypeDescriptor type;
 };
 
+/** \\brief Public metadata projection of one module export. */
 struct ExportDescriptor {
 	std::string name;
 	ExternTypeDescriptor type;
@@ -559,10 +605,12 @@ struct ExportDescriptor {
 
 //! Preserves the import-section order, which the per-kind vectors lose. `index`
 //! is the index within the vector for that kind.
+/** \\brief Preserves import-section order across the per-kind index spaces. */
 struct ImportOrder {
 	ExternalKind kind = ExternalKind::Function;
 	uint32_t index = 0;
 };
+/** \\brief Flattened parameter/local/result type layout prepared for backend compilation. */
 struct PreparedFunctionStack {
 	//! A single, flat vector where index 0 is param 0,
 	//! and index N is the first local.
@@ -574,6 +622,7 @@ struct PreparedFunctionStack {
 	uint32_t parameterCount;
 	uint32_t localCount;
 
+	/** \\brief Builds flattened local and return type vectors from a signature/body. \\param type Function signature providing parameters/results. \\param body Function body providing declared locals. */
 	void prepare(const FuncType& type, const FunctionBody& body);
 };
 
@@ -583,6 +632,7 @@ struct PreparedFunctionStack {
 //!   negative values → ValueTypeCode (valtype or void/0x40)
 //!   non-negative values → type index into the type section
 //! =============================================================================
+/** \\brief Decoded block signature: either a value type or a module-local type index. */
 struct BlockType {
 	bool isTypeIndex;
 	union {
@@ -597,7 +647,9 @@ struct BlockType {
 	//! Custom Descriptors: `(ref exact $t)` in a typed-reference block type.
 	bool isExact = false;
 
+	/** \\brief Tests whether this block type has no result value. \\return true for the void value-type form. */
 	inline bool isVoid()      const { return !isTypeIndex && valType == ValueTypeCode::Void; }
+	/** \\brief Tests whether this block type is encoded directly as a value type. \\return true when it is not a type index. */
 	inline bool isValueType() const { return !isTypeIndex; }
 };
 
@@ -644,6 +696,7 @@ Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& stream, BlockType
 //!   negative → AbstractHeapType
 //!   non-negative → type index
 //! =============================================================================
+/** \\brief Decoded heap type, represented by an abstract kind or local type index. */
 struct HeapType {
 	bool isTypeIndex = false;
 	union {
@@ -691,6 +744,7 @@ Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& stream, HeapType&
 //!   0x02  catch_all l    – label index only
 //!   0x03  catch_all_ref l– label index only
 //! =============================================================================
+/** \\brief Catch-clause form encoded in a try_table instruction. */
 enum class CatchKind : uint8_t {
 	Catch        = 0x00,
 	CatchRef     = 0x01,
@@ -698,6 +752,7 @@ enum class CatchKind : uint8_t {
 	CatchAllRef  = 0x03,
 };
 
+/** \\brief Decoded try_table catch kind, tag index, and target label. */
 struct CatchClause {
 	CatchKind kind;
 	uint32_t  tagIdx;   //!< valid for Catch / CatchRef
@@ -723,6 +778,7 @@ Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& stream, CatchClau
 	}
 	return stream;
 }
+/** \\brief Decoded memory instruction immediate, including memory/array and ordering metadata. */
 struct MemArg {
 	uint32_t memidx; //!< Defaults to 0 for Wasm 1.0/2.0
 	uint32_t align;
@@ -742,6 +798,7 @@ struct MemArg {
 };
 
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I>
+/** \\brief Decodes a memory immediate with optional ordering and array forms. \\tparam E Stream byte order. \\tparam I Device type. \\param left Input stream. \\param right Receives decoded immediate. \\param allowOrdering Whether atomic ordering flags are accepted. \\param allowArray Whether GC-array memory forms are accepted. \\throws std::runtime_error for reserved or invalid flag combinations. */
 void readMemArg(Elv::Io::DataStream<E,I>& left, MemArg& right, bool allowOrdering,
 		bool allowArray = false) {
 	uint32_t raw_align;
@@ -803,6 +860,7 @@ Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, MemArg& rig
 //! The atomic memarg permits the acquire-release ordering bit; ordinary
 //! loads/stores do not (docs/proposals/ACQUIRE_RELEASE_ATOMICS.md ARA-1). An
 //! array access is never atomic.
+/** \\brief Atomic memory immediate; permits acquire-release ordering and disallows array addressing. */
 struct AtomicMemArg : MemArg {};
 
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I>
