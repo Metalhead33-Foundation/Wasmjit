@@ -1260,7 +1260,7 @@ int64_t ModuleInstance::growMemory(uint32_t memIdx, uint64_t deltaPages) {
 	const uint64_t oldPages = memory->memorySize / memory->pageSize;
 
 	// The Store owns the memory (and therefore its growth policy/limits).
-	if (!Store::growMemory(memory, deltaPages))
+	if (!store().growMemory(memory, deltaPages))
 		return -1; // Caller turns this into a Wasm trap
 
 	return static_cast<int64_t>(oldPages);
@@ -1273,7 +1273,7 @@ bool ModuleInstance::growTable(uint32_t tableIdx, uint64_t deltaEntries) {
 	// The Store owns the table (and therefore its growth policy/limits).
 	// Growth may move the slot array; the TableInstance view is updated in
 	// place, so ctx.tables (which points at the view) needs no re-sync.
-	return Store::growTable(internals.tableRefs[tableIdx], deltaEntries);
+	return store().growTable(internals.tableRefs[tableIdx], deltaEntries);
 }
 
 void ModuleInstance::memoryInit(uint32_t memIdx, uint32_t dataIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len)

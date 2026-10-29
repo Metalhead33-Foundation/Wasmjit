@@ -201,12 +201,12 @@ static const WASM::StringObject* stringObjectOrTrap(void* handle)
 	return static_cast<const WASM::StringObject*>(handle);
 }
 
-static void* makeString(std::vector<uint32_t> codePoints)
+static void* makeString(WASM::VMContext* ctx, std::vector<uint32_t> codePoints)
 {
-	return WASM::Store::current().strings().create(std::move(codePoints));
+	return ctx->module->store().strings().create(std::move(codePoints));
 }
 
-static void* wasm_string_new_utf8(WASM::LinearMemory* memory, uint32_t ptr, uint32_t len)
+static void* wasm_string_new_utf8(WASM::VMContext* ctx, WASM::LinearMemory* memory, uint32_t ptr, uint32_t len)
 {
 	if (len > WASM::kMaxStringBytes) {
 		reportTrap(WASM::TrapKind::OutOfMemory, "string exceeds the implementation limit");
@@ -220,10 +220,10 @@ static void* wasm_string_new_utf8(WASM::LinearMemory* memory, uint32_t ptr, uint
 		reportTrap(WASM::TrapKind::InvalidString, "string.new_utf8: invalid UTF-8");
 		return nullptr;
 	}
-	return makeString(std::move(codePoints));
+	return makeString(ctx, std::move(codePoints));
 }
 
-static void* wasm_string_new_lossy_utf8(WASM::LinearMemory* memory, uint32_t ptr, uint32_t len)
+static void* wasm_string_new_lossy_utf8(WASM::VMContext* ctx, WASM::LinearMemory* memory, uint32_t ptr, uint32_t len)
 {
 	if (len > WASM::kMaxStringBytes) {
 		reportTrap(WASM::TrapKind::OutOfMemory, "string exceeds the implementation limit");
@@ -234,10 +234,10 @@ static void* wasm_string_new_lossy_utf8(WASM::LinearMemory* memory, uint32_t ptr
 		return nullptr;
 	std::vector<uint32_t> codePoints;
 	WASM::decodeUtf8Lossy(bytes, len, codePoints);
-	return makeString(std::move(codePoints));
+	return makeString(ctx, std::move(codePoints));
 }
 
-static void* wasm_string_new_wtf8(WASM::LinearMemory* memory, uint32_t ptr, uint32_t len)
+static void* wasm_string_new_wtf8(WASM::VMContext* ctx, WASM::LinearMemory* memory, uint32_t ptr, uint32_t len)
 {
 	if (len > WASM::kMaxStringBytes) {
 		reportTrap(WASM::TrapKind::OutOfMemory, "string exceeds the implementation limit");
@@ -251,10 +251,10 @@ static void* wasm_string_new_wtf8(WASM::LinearMemory* memory, uint32_t ptr, uint
 		reportTrap(WASM::TrapKind::InvalidString, "string.new_wtf8: invalid WTF-8");
 		return nullptr;
 	}
-	return makeString(std::move(codePoints));
+	return makeString(ctx, std::move(codePoints));
 }
 
-static void* wasm_string_new_wtf16(WASM::LinearMemory* memory, uint32_t ptr, uint32_t codeUnits)
+static void* wasm_string_new_wtf16(WASM::VMContext* ctx, WASM::LinearMemory* memory, uint32_t ptr, uint32_t codeUnits)
 {
 	if (codeUnits > WASM::kMaxStringCodeUnits) {
 		reportTrap(WASM::TrapKind::OutOfMemory, "string exceeds the implementation limit");
@@ -267,7 +267,7 @@ static void* wasm_string_new_wtf16(WASM::LinearMemory* memory, uint32_t ptr, uin
 		return nullptr;
 	std::vector<uint32_t> codePoints;
 	WASM::decodeWtf16(data, codeUnits, codePoints);
-	return makeString(std::move(codePoints));
+	return makeString(ctx, std::move(codePoints));
 }
 
 static int32_t wasm_string_measure_utf8(void* handle)
@@ -357,7 +357,7 @@ static int32_t wasm_string_encode_wtf16(WASM::LinearMemory* memory, void* handle
 	return static_cast<int32_t>(bytes.size() / 2u);
 }
 
-static void* wasm_string_concat(void* leftHandle, void* rightHandle)
+static void* wasm_string_concat(WASM::VMContext* ctx, void* leftHandle, void* rightHandle)
 {
 	const WASM::StringObject* left = stringObjectOrTrap(leftHandle);
 	if (left == nullptr)
@@ -365,7 +365,7 @@ static void* wasm_string_concat(void* leftHandle, void* rightHandle)
 	const WASM::StringObject* right = stringObjectOrTrap(rightHandle);
 	if (right == nullptr)
 		return nullptr;
-	return makeString(WASM::concatCodePoints(left->codePoints, right->codePoints));
+	return makeString(ctx, WASM::concatCodePoints(left->codePoints, right->codePoints));
 }
 
 static int32_t wasm_string_eq(void* leftHandle, void* rightHandle)
@@ -407,28 +407,28 @@ static WASM::StringIteratorObject* iteratorObjectOrTrap(void* handle)
 	return static_cast<WASM::StringIteratorObject*>(handle);
 }
 
-static void* wasm_string_as_wtf8(void* handle)
+static void* wasm_string_as_wtf8(WASM::VMContext* ctx, void* handle)
 {
 	const WASM::StringObject* string = stringObjectOrTrap(handle);
 	if (string == nullptr)
 		return nullptr;
-	return WASM::Store::current().strings().createView(string);
+	return ctx->module->store().strings().createView(string);
 }
 
-static void* wasm_string_as_wtf16(void* handle)
+static void* wasm_string_as_wtf16(WASM::VMContext* ctx, void* handle)
 {
 	const WASM::StringObject* string = stringObjectOrTrap(handle);
 	if (string == nullptr)
 		return nullptr;
-	return WASM::Store::current().strings().createView(string);
+	return ctx->module->store().strings().createView(string);
 }
 
-static void* wasm_string_as_iter(void* handle)
+static void* wasm_string_as_iter(WASM::VMContext* ctx, void* handle)
 {
 	const WASM::StringObject* string = stringObjectOrTrap(handle);
 	if (string == nullptr)
 		return nullptr;
-	return WASM::Store::current().strings().createIterator(string);
+	return ctx->module->store().strings().createIterator(string);
 }
 
 static int32_t wasm_stringview_wtf8_advance(void* viewHandle, int32_t pos, int32_t bytes)
@@ -468,12 +468,12 @@ static uint64_t wasm_stringview_wtf8_encode(WASM::LinearMemory* memory, void* vi
 	return (static_cast<uint64_t>(next) << 32) | static_cast<uint32_t>(encoded.size());
 }
 
-static void* wasm_stringview_wtf8_slice(void* viewHandle, int32_t start, int32_t end)
+static void* wasm_stringview_wtf8_slice(WASM::VMContext* ctx, void* viewHandle, int32_t start, int32_t end)
 {
 	const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
 	if (view == nullptr)
 		return nullptr;
-	return makeString(WASM::sliceWtf8(view->string->codePoints, start, end));
+	return makeString(ctx, WASM::sliceWtf8(view->string->codePoints, start, end));
 }
 
 static int32_t wasm_stringview_wtf16_length(void* viewHandle)
@@ -518,12 +518,12 @@ static int32_t wasm_stringview_wtf16_encode(WASM::LinearMemory* memory, void* vi
 	return static_cast<int32_t>(written);
 }
 
-static void* wasm_stringview_wtf16_slice(void* viewHandle, int32_t start, int32_t end)
+static void* wasm_stringview_wtf16_slice(WASM::VMContext* ctx, void* viewHandle, int32_t start, int32_t end)
 {
 	const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
 	if (view == nullptr)
 		return nullptr;
-	return makeString(WASM::sliceWtf16(view->string->codePoints, start, end));
+	return makeString(ctx, WASM::sliceWtf16(view->string->codePoints, start, end));
 }
 
 static int32_t wasm_stringview_iter_next(void* iteratorHandle)
@@ -556,10 +556,10 @@ static int32_t wasm_stringview_iter_rewind(void* iteratorHandle, int32_t count)
 	return static_cast<int32_t>(take);
 }
 
-static void* wasm_stringview_iter_slice(void* iteratorHandle, int32_t count)
+static void* wasm_stringview_iter_slice(WASM::VMContext* ctx, void* iteratorHandle, int32_t count)
 {
 	WASM::StringIteratorObject* iterator = iteratorObjectOrTrap(iteratorHandle);
-	return makeString(WASM::sliceCodePoints(iterator->string->codePoints,
+	return makeString(ctx, WASM::sliceCodePoints(iterator->string->codePoints,
 										   static_cast<int32_t>(iterator->position),
 										   count));
 }
@@ -582,7 +582,7 @@ static bool stringArrayLength(void* handle, uint32_t& length)
 	return true;
 }
 
-static void* wasm_string_new_array(void* arrayHandle, int32_t start, int32_t end,
+static void* wasm_string_new_array(WASM::VMContext* ctx, void* arrayHandle, int32_t start, int32_t end,
    uint32_t dataOffset, uint32_t elementSize, int mode)
 {
 if ((mode == static_cast<int>(StringArrayMode::Wtf16) && elementSize != 2)
@@ -634,7 +634,7 @@ case StringArrayMode::Wtf16:
 WASM::decodeWtf16(data, static_cast<std::size_t>(count), codePoints);
 break;
 }
-return makeString(std::move(codePoints));
+return makeString(ctx, std::move(codePoints));
 }
 
 static int32_t wasm_string_encode_array(void* stringHandle, void* arrayHandle, int32_t start,
@@ -1617,6 +1617,39 @@ jit_value_t callNativeTernary(jit_function_t fn, void* fptr, jit_type_t ret, jit
 	return jit_insn_call_native(fn, "wasm.ternary", fptr, sig, args, 3, 0);
 }
 
+// ── Helpers that need the executing instance's store ────────────────────────
+// Their first argument is the VMContext: the store is reached through
+// `ctx->module`, never through a process-wide default
+// (docs/EMBEDDING_SURFACE.md §4.3 option B).
+jit_value_t callWithCtxUnary(jit_function_t fn, void* fptr, jit_type_t ret,
+							 jit_type_t argT, jit_value_t a)
+{
+	jit_type_t params[] = {jit_type_void_ptr, argT};
+	jit_value_t args[] = {jit_value_get_param(fn, 0), a};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, ret, params, 2, 1);
+	return jit_insn_call_native(fn, "wasm.ctx.unary", fptr, sig, args, 2, 0);
+}
+
+jit_value_t callWithCtxBinary(jit_function_t fn, void* fptr, jit_type_t ret,
+							  jit_type_t argT1, jit_type_t argT2,
+							  jit_value_t a, jit_value_t b)
+{
+	jit_type_t params[] = {jit_type_void_ptr, argT1, argT2};
+	jit_value_t args[] = {jit_value_get_param(fn, 0), a, b};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, ret, params, 3, 1);
+	return jit_insn_call_native(fn, "wasm.ctx.binary", fptr, sig, args, 3, 0);
+}
+
+jit_value_t callWithCtxTernary(jit_function_t fn, void* fptr, jit_type_t ret,
+							   jit_type_t argT1, jit_type_t argT2, jit_type_t argT3,
+							   jit_value_t a, jit_value_t b, jit_value_t c)
+{
+	jit_type_t params[] = {jit_type_void_ptr, argT1, argT2, argT3};
+	jit_value_t args[] = {jit_value_get_param(fn, 0), a, b, c};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, ret, params, 4, 1);
+	return jit_insn_call_native(fn, "wasm.ctx.ternary", fptr, sig, args, 4, 0);
+}
+
 jit_value_t i32Rotl(jit_function_t fn, jit_value_t n, jit_value_t r)
 {
 	jit_value_t c31 = jit_value_create_nint_constant(fn, jit_type_int, 31);
@@ -2497,11 +2530,11 @@ jit_value_t OpcodeDispatcher::callablePointerForFuncIndex(WASM::FuncIdx funcIdx)
 // Runtime fallback for callable type checks. Exact canonical-id equality is
 // handled inline by the caller; this consults the registry for subtyping.
 // Native imports with no canonical type (kNone) are accepted.
-static int32_t wasm_callable_type_matches(uint32_t actual, uint32_t expected)
+static int32_t wasm_callable_type_matches(WASM::VMContext* ctx, uint32_t actual, uint32_t expected)
 {
 	if (actual == WASM::TypeId::kNone || actual == expected)
 		return 1;
-	return WASM::Store::current().types().matches(WASM::TypeId{actual}, WASM::TypeId{expected}) ? 1 : 0;
+	return ctx->module->store().types().matches(WASM::TypeId{actual}, WASM::TypeId{expected}) ? 1 : 0;
 }
 
 void OpcodeDispatcher::emitCallableTypeCheck(jit_value_t callablePtr, WASM::TypeIdx typeIdx)
@@ -2518,11 +2551,11 @@ void OpcodeDispatcher::emitCallableTypeCheck(jit_value_t callablePtr, WASM::Type
 	jit_insn_branch_if(function, typeOk, &lbCont);
 
 	// Slow path: registry subtyping lookup.
-	jit_type_t params[] = {jit_type_uint, jit_type_uint};
-	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 2, 1);
-	jit_value_t args[] = {gotType, wantType};
+	jit_type_t params[] = {jit_type_void_ptr, jit_type_uint, jit_type_uint};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 3, 1);
+	jit_value_t args[] = {jit_value_get_param(function, 0), gotType, wantType};
 	jit_value_t res = jit_insn_call_native(function, "wasm_callable_type_matches",
-		reinterpret_cast<void*>(wasm_callable_type_matches), sig, args, 2, 0);
+		reinterpret_cast<void*>(wasm_callable_type_matches), sig, args, 3, 0);
 	jit_value_t zero = jit_value_create_nint_constant(function, jit_type_int, 0);
 	jit_value_t ok = jit_insn_ne(function, res, zero);
 	jit_insn_branch_if(function, ok, &lbCont);
@@ -6723,7 +6756,7 @@ void OpcodeDispatcher::dispatchStringNewUtf8(WASM::MemIdx arg)
 	jit_value_t ptr = popValue();
 	if (unreachableCode)
 		return;
-	pushValue(callNativeTernary(function,
+	pushValue(callWithCtxTernary(function,
 			reinterpret_cast<void*>(&wasm_string_new_utf8), jit_type_void_ptr,
 			jit_type_void_ptr, jit_type_uint, jit_type_uint,
 			memoryPointerForIndex(arg),
@@ -6737,7 +6770,7 @@ void OpcodeDispatcher::dispatchStringNewWtf16(WASM::MemIdx arg)
 	jit_value_t ptr = popValue();
 	if (unreachableCode)
 		return;
-	pushValue(callNativeTernary(function,
+	pushValue(callWithCtxTernary(function,
 			reinterpret_cast<void*>(&wasm_string_new_wtf16), jit_type_void_ptr,
 			jit_type_void_ptr, jit_type_uint, jit_type_uint,
 			memoryPointerForIndex(arg),
@@ -6751,7 +6784,7 @@ void OpcodeDispatcher::dispatchStringNewLossyUtf8(WASM::MemIdx arg)
 	jit_value_t ptr = popValue();
 	if (unreachableCode)
 		return;
-	pushValue(callNativeTernary(function,
+	pushValue(callWithCtxTernary(function,
 			reinterpret_cast<void*>(&wasm_string_new_lossy_utf8), jit_type_void_ptr,
 			jit_type_void_ptr, jit_type_uint, jit_type_uint,
 			memoryPointerForIndex(arg),
@@ -6765,7 +6798,7 @@ void OpcodeDispatcher::dispatchStringNewWtf8(WASM::MemIdx arg)
 	jit_value_t ptr = popValue();
 	if (unreachableCode)
 		return;
-	pushValue(callNativeTernary(function,
+	pushValue(callWithCtxTernary(function,
 			reinterpret_cast<void*>(&wasm_string_new_wtf8), jit_type_void_ptr,
 			jit_type_void_ptr, jit_type_uint, jit_type_uint,
 			memoryPointerForIndex(arg),
@@ -6876,7 +6909,7 @@ void OpcodeDispatcher::dispatchStringConcat()
 	jit_value_t left = popValue();
 	if (unreachableCode)
 		return;
-	pushValue(callNativeBinary(function,
+	pushValue(callWithCtxBinary(function,
 			reinterpret_cast<void*>(&wasm_string_concat), jit_type_void_ptr,
 			jit_type_void_ptr, jit_type_void_ptr,
 			refAsVoidPtr(left), refAsVoidPtr(right)));
@@ -6941,7 +6974,7 @@ void OpcodeDispatcher::dispatchStringAsWtf8()
 	jit_value_t string = popValue();
 	if (unreachableCode)
 		return;
-	pushValue(callNativeUnary(function, reinterpret_cast<void*>(&wasm_string_as_wtf8),
+	pushValue(callWithCtxUnary(function, reinterpret_cast<void*>(&wasm_string_as_wtf8),
 			jit_type_void_ptr, jit_type_void_ptr, refAsVoidPtr(string)));
 	emitDropValue(string);
 }
@@ -6951,7 +6984,7 @@ void OpcodeDispatcher::dispatchStringAsWtf16()
 	jit_value_t string = popValue();
 	if (unreachableCode)
 		return;
-	pushValue(callNativeUnary(function, reinterpret_cast<void*>(&wasm_string_as_wtf16),
+	pushValue(callWithCtxUnary(function, reinterpret_cast<void*>(&wasm_string_as_wtf16),
 			jit_type_void_ptr, jit_type_void_ptr, refAsVoidPtr(string)));
 	emitDropValue(string);
 }
@@ -6961,7 +6994,7 @@ void OpcodeDispatcher::dispatchStringAsIter()
 	jit_value_t string = popValue();
 	if (unreachableCode)
 		return;
-	pushValue(callNativeUnary(function, reinterpret_cast<void*>(&wasm_string_as_iter),
+	pushValue(callWithCtxUnary(function, reinterpret_cast<void*>(&wasm_string_as_iter),
 			jit_type_void_ptr, jit_type_void_ptr, refAsVoidPtr(string)));
 	emitDropValue(string);
 }
@@ -7053,7 +7086,7 @@ void OpcodeDispatcher::dispatchStringViewWtf8Slice()
 	jit_value_t view = popValue();
 	if (unreachableCode)
 		return;
-	pushValue(callNativeTernary(function,
+	pushValue(callWithCtxTernary(function,
 			reinterpret_cast<void*>(&wasm_stringview_wtf8_slice), jit_type_void_ptr,
 			jit_type_void_ptr, jit_type_int, jit_type_int,
 			refAsVoidPtr(view), start, end));
@@ -7105,7 +7138,7 @@ void OpcodeDispatcher::dispatchStringViewWtf16Slice()
 	jit_value_t view = popValue();
 	if (unreachableCode)
 		return;
-	pushValue(callNativeTernary(function,
+	pushValue(callWithCtxTernary(function,
 			reinterpret_cast<void*>(&wasm_stringview_wtf16_slice), jit_type_void_ptr,
 			jit_type_void_ptr, jit_type_int, jit_type_int,
 			refAsVoidPtr(view), start, end));
@@ -7153,7 +7186,7 @@ void OpcodeDispatcher::dispatchStringViewIterSlice()
 	jit_value_t iterator = popValue();
 	if (unreachableCode)
 		return;
-	pushValue(callNativeBinary(function,
+	pushValue(callWithCtxBinary(function,
 			reinterpret_cast<void*>(&wasm_stringview_iter_slice), jit_type_void_ptr,
 			jit_type_void_ptr, jit_type_int, refAsVoidPtr(iterator), count));
 	emitDropValue(iterator);
@@ -7166,12 +7199,12 @@ static jit_value_t callStringArrayNew(jit_function_t fn, void* target,
 									  jit_value_t end, jit_value_t dataOffset,
 									  jit_value_t elementSize, int mode)
 {
-	jit_type_t params[6] = {jit_type_void_ptr, jit_type_int, jit_type_int,
-							jit_type_uint, jit_type_uint, jit_type_int};
-	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, params, 6, 1);
-	jit_value_t args[6] = {array, start, end, dataOffset, elementSize,
-			jit_value_create_nint_constant(fn, jit_type_int, mode)};
-	return jit_insn_call_native(fn, "wasm.string.array.new", target, sig, args, 6, 0);
+	jit_type_t params[7] = {jit_type_void_ptr, jit_type_void_ptr, jit_type_int,
+							jit_type_int, jit_type_uint, jit_type_uint, jit_type_int};
+	jit_type_t sig = jit_type_create_signature(jit_abi_cdecl, jit_type_void_ptr, params, 7, 1);
+	jit_value_t args[7] = {jit_value_get_param(fn, 0), array, start, end, dataOffset,
+			elementSize, jit_value_create_nint_constant(fn, jit_type_int, mode)};
+	return jit_insn_call_native(fn, "wasm.string.array.new", target, sig, args, 7, 0);
 }
 
 static jit_value_t callStringArrayEncode(jit_function_t fn, void* target,

@@ -472,7 +472,8 @@ difference itself.
 ### Linear memory ownership (`Store`)
 
 Linear memories are **not** owned by `ModuleInstance`. They are allocated by
-the single global `Store` (`WASM::Store::global()`) and referenced through the
+the instance's `Store` (reached as `instance.store()`, i.e. the store its module
+was parsed into — there is no process-wide store) and referenced through the
 borrowed `LinearMemory*` entries in `VMContext::memories`. Because the Store
 keeps every memory at a stable address, those pointers stay valid even as more
 memories are created by later instantiations.
@@ -591,10 +592,12 @@ pending exception.
 | Entry point | Purpose |
 |---|---|
 | `void** wasm_exn_slot()` | The calling thread's pending-exception slot; generated code resolves it once per function and loads through it. |
+| `void* wasm_exn_create(VMContext*, int32_t tagId, uint32_t payloadBytes)` | Allocate an exception object in **the executing instance's store** (`ES-2` option B: the store arrives as the `VMContext`, never as a global). Generated code passes its own context. |
+| `void* wasm_exn_create_in(Store&, int32_t tagId, uint32_t payloadBytes)` | The store-explicit form, for an embedder or test that is not inside generated code. |
 | `void* wasm_exn_pending()` | The pending exception payload, or `nullptr`. |
 | `void* wasm_exn_take_pending()` | The same value, clearing the slot (what the spec harness uses). |
 | `void wasm_exn_clear_pending()` | Drop it without inspecting. |
-| `int32_t wasm_exn_tag_id(const void* payload)` | The thrown tag's process-wide `TagId` (compare with `ModuleInstance::tagIdForIndex`). |
+| `int32_t wasm_exn_tag_id(const void* payload)` | The thrown tag's `TagId` (compare with `ModuleInstance::tagIdForIndex`); ids are store-scoped. |
 
 An `exnref` is a pointer to a Store-owned object (`{TagId, payload}`); the
 object lives until `Store` teardown, so an exception stored in a global stays
@@ -602,6 +605,19 @@ valid. A caught exception is cleared by the generated catch path before it
 branches, so `wasm_exn_pending()` is non-null only for an exception the embedder
 must handle. `ModuleInstance::tagIds()`/`tagIdForIndex()` expose the module's
 tag index space (imports first).
+
+### String, array and type-check helpers take the context
+
+The same rule applies to every backend helper that touches store-owned state:
+the store is reached through the `VMContext`, so those helpers take it as their
+first argument (`ES-2` option B; `EMBEDDING_SURFACE.md` §4.3):
+
+| Helper family | Store-owned state |
+|---|---|
+| `wasm_string_new_utf8/_lossy_utf8/_wtf8/_wtf16`, `wasm_string_new_array` | allocates in `ctx->module->store().strings()` |
+| `wasm_string_concat`, `wasm_stringview_wtf8_slice`, `wasm_stringview_wtf16_slice`, `wasm_stringview_iter_slice` | same |
+| `wasm_string_as_wtf8`, `wasm_string_as_wtf16`, `wasm_string_as_iter` | creates a view/iterator in the same string store |
+| `wasm_callable_type_matches` | `ctx->module->store().types()` |
 
 ### Continuations (`WasmBase/WasmContinuation.hpp`)
 

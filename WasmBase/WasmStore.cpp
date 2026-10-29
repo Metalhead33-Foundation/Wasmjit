@@ -55,34 +55,6 @@ void Store::releaseBytes(uint64_t bytes)
 	allocatedBytes_.fetch_sub(bytes, std::memory_order_relaxed);
 }
 
-Store& Store::global()
-{
-	static Store instance;
-	return instance;
-}
-
-namespace {
-
-// The innermost Store::Scope on this host thread, or null for the global store.
-thread_local Store* currentStore = nullptr;
-
-} // namespace
-
-Store& Store::current()
-{
-	return currentStore != nullptr ? *currentStore : global();
-}
-
-Store::Scope::Scope(Store& store) noexcept : previous_(currentStore)
-{
-	currentStore = &store;
-}
-
-Store::Scope::~Scope()
-{
-	currentStore = previous_;
-}
-
 Store::Store() : nextMemoryId(0), nextTableId(0), nextTagId(0)
 {
 }
@@ -150,13 +122,12 @@ bool Store::growMemory(LinearMemory* memory, uint64_t deltaPages)
 
 	// Reserve *before* the allocation attempt, so a grow that would exceed the
 	// budget fails as a failed grow (-1) rather than ballooning the host.
-	Store& store = global();
-	if (!store.reserveBytes(deltaBytes))
+	if (!reserveBytes(deltaBytes))
 		return false;
 
 	auto* owned = static_cast<StoreOwnedMemory*>(memory->hostData);
 	if (!owned->growMemory(deltaPages)) {
-		store.releaseBytes(deltaBytes);
+		releaseBytes(deltaBytes);
 		return false;
 	}
 	// THREADS.md TH-3/T7: publish the new size and zeroed pages to other host
@@ -212,13 +183,12 @@ bool Store::growTable(TableInstance* table, uint64_t deltaEntries)
 		return false;
 	const uint64_t deltaBytes = deltaEntries * sizeof(Callable*);
 
-	Store& store = global();
-	if (!store.reserveBytes(deltaBytes))
+	if (!reserveBytes(deltaBytes))
 		return false;
 
 	auto* owned = static_cast<StoreOwnedTable*>(table->hostData);
 	if (!owned->grow(deltaEntries)) {
-		store.releaseBytes(deltaBytes);
+		releaseBytes(deltaBytes);
 		return false;
 	}
 	return true;

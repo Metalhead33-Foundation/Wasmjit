@@ -7,6 +7,8 @@
 #include "WasmBase/WasmRuntime.hpp"
 #include "TestFixtures.hpp"
 
+#include <Euphemy/Io/EuphConstBufferDevice.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -54,8 +56,8 @@ TEST_CASE("runtime: create, load, instantiate and call", "[runtime]")
 
 TEST_CASE("runtime: each runtime owns an independent store", "[runtime]")
 {
-	// ES-2 option C: the store is runtime-scoped; `Store::current()` resolves to
-	// it inside the runtime's calls and to the process-wide store outside.
+	// ES-2 option B: each runtime owns its store, and there is no process-wide
+	// store to fall back to, so the two never share a heap or a type registry.
 	auto first = WASM::Runtime::create("libjit");
 	auto second = WASM::Runtime::create("libjit");
 	REQUIRE(&first->store() != &second->store());
@@ -149,4 +151,26 @@ TEST_CASE("runtime: agents inherit the configured diagnostic sink", "[runtime][c
 	diagnostic.message = "hello";
 	agent->execution().diagnostics.emit(diagnostic);
 	REQUIRE(emitted == 1);
+}
+
+TEST_CASE("ES-2 option B: separate stores own separate heaps and artifacts", "[runtime]")
+{
+	// There is no process-wide store: two stores are two heaps, and an artifact
+	// records the store it was parsed into. This is what makes a duplicated
+	// core image harmless instead of corrupting.
+	WASM::Store first;
+	WASM::Store second;
+
+	auto module = std::make_unique<WASM::Module>();
+	Euph::Io::ConstBufferDevice device(TestFixtures::answerModuleBytes());
+	module->fromFile(device, first);
+	REQUIRE(&module->store() == &first);
+	REQUIRE(&module->store() != &second);
+
+	WASM::GcHeap::RegionSet* set = first.gc().createSet();
+	void* object = first.gc().allocate(*set, 64);
+	REQUIRE(object != nullptr);
+	REQUIRE(first.gc().owns(object));
+	REQUIRE_FALSE(second.gc().owns(object));
+	first.gc().releaseSet(set);
 }

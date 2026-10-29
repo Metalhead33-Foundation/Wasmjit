@@ -144,8 +144,9 @@ private:
 	std::string backendName_;
 	BackendInstance backend_;
 	RuntimeConfig config_;
-	// The runtime-scoped store (docs/EMBEDDING_SURFACE.md §4.3 option C). Engine
-	// code reaches it through `Store::current()` while a `Scope` is installed.
+	// The runtime-scoped store (docs/EMBEDDING_SURFACE.md §4.3 option B). Every
+	// consumer receives it through its own object; there is no process-wide
+	// store and no thread-local fallback.
 	Store store_;
 	std::vector<std::shared_ptr<const Module>> modules_;
 	std::unordered_map<const Module*, std::unique_ptr<ModuleInstance>> instances_;
@@ -170,9 +171,6 @@ Ret Runtime::callExport(ModuleInstance& instance, std::string_view name, Args&&.
 		ModuleInstance& instance;
 		~CallGuard() { instance.leaveCall(); }
 	} guard{ instance };
-	// Engine helpers (refClone/refDrop, GC) resolve the store through
-	// `Store::current()`; install this runtime's store for the call.
-	Store::Scope scope(store_);
 	return WASM::callCallable<Ret>(*callable, std::forward<Args>(args)...);
 }
 
@@ -196,7 +194,6 @@ void Runtime::callExportWithResults(ModuleInstance& instance, std::string_view n
 		ModuleInstance& instance;
 		~CallGuard() { instance.leaveCall(); }
 	} guard{ instance };
-	Store::Scope scope(store_);
 	WASM::callCallableWithResults(*callable, results, std::forward<Args>(args)...);
 }
 

@@ -179,7 +179,7 @@ spec's relations efficiently and safely.
 | Name | Meaning |
 |------|---------|
 | `LocalTypeIdx` | The existing module-local `uint32_t` used by `Subtype`, `ValueType::heapType`, and `Callable::typeIndex` today. Means only "type *n* in *this* module". |
-| `TypeId` | Dense `uint32_t`, assigned by `TypeRegistry`. Identifies one canonical defined type, process-wide. |
+| `TypeId` | Dense `uint32_t`, assigned by the store's `TypeRegistry`. Identifies one canonical defined type **within that store** (runtime-scoped since `ES-2` option B; two stores have independent id spaces). |
 | `RecGroupId` | Identity of an interned group: a contiguous run of `TypeId`s. |
 
 `LocalTypeIdx`, `TypeId` and `RecGroupId` are **distinct struct types, not

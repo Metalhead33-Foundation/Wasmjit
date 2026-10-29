@@ -26,8 +26,10 @@ The Store owns runtime objects that must outlive (and may be shared between)
 module instances: linear memories, tables, and the runtime type registry.
 Heap objects for GC / Wasm 3.0 will live here too eventually.
 
-Important rule: the Store outlives all module instances. There is exactly one
-Store per process, reachable through Store::global().
+Important rule: the Store outlives every artifact parsed into it and every
+instance created from those artifacts. There is **no** process-wide store: a
+`Runtime` owns one, and a caller that drives the parser directly owns one too
+(docs/EMBEDDING_SURFACE.md §4.3 option B).
 
 The Store deliberately is NOT the import/export name registry:
 RegistryImportResolver maps (module, field) names to store-owned entities,
@@ -50,34 +52,12 @@ public:
 	Store& operator=(Store&&) = delete;
 	~Store();
 
-	// The single global Store. Constructed on first use so that it always
-	// outlives the module instances referencing its entities.
-	static Store& global();
-
-	// An independent store. `global()` is the engine default; a `Runtime` owns
-	// one and makes it current for the duration of its calls (docs/EMBEDDING_SURFACE.md
-	// §4.3 option C). Entities never move between stores.
+	// A store owns every runtime entity: types, memories, tables, tags, the GC
+	// heap and strings. There is **no process-wide store** and no thread-local
+	// fallback (docs/EMBEDDING_SURFACE.md §4.3 option B): a `Runtime` owns one,
+	// every artifact is parsed into one, and every consumer receives it through
+	// the object it already has (the module, the component, the VMContext).
 	Store();
-
-	// The store the current host thread is working with: the innermost `Scope`,
-	// or `global()` when none is installed. Engine code uses this; `global()`
-	// stays the compatibility default for a caller that has not entered a
-	// runtime.
-	static Store& current();
-
-	// Installs `store` as `current()` for the scope's lifetime. Nested scopes
-	// restore the previous store.
-	class Scope
-	{
-	public:
-		explicit Scope(Store& store) noexcept;
-		~Scope();
-		Scope(const Scope&) = delete;
-		Scope& operator=(const Scope&) = delete;
-
-	private:
-		Store* previous_;
-	};
 
 	// ── Runtime type registry ───────────────────────────────────────────
 	// Owns every module's type block; modules hold non-owning span views.
@@ -113,7 +93,7 @@ public:
 	// Grow a store-owned memory by deltaPages. Returns false on a trap-worthy
 	// failure (would exceed max). The StoreOwnedMemory back-pointer carried in
 	// LinearMemory::hostData lets this work for any memory created here.
-	static bool growMemory(LinearMemory* memory, uint64_t deltaPages);
+	bool growMemory(LinearMemory* memory, uint64_t deltaPages);
 
 	// ── Tables ──────────────────────────────────────────────────────────
 	// Allocate a fresh table owned by the store. Returns its store id.
@@ -126,7 +106,7 @@ public:
 	// Grow a store-owned table by deltaEntries. Returns false on a trap-worthy
 	// failure (would exceed max). The StoreOwnedTable back-pointer carried in
 	// TableInstance::hostData lets this work for any table created here.
-	static bool growTable(TableInstance* table, uint64_t deltaEntries);
+	bool growTable(TableInstance* table, uint64_t deltaEntries);
 
 	// ── Allocation guardrails ───────────────────────────────────────────
 	// Linear-memory and table bytes are charged against a process-wide budget,

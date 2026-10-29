@@ -189,7 +189,7 @@ contexts that can share data — which is also the WebAssembly threads model's w
 
 | Member | Today | Why the runtime is the right owner |
 |---|---|---|
-| `Store&` (types, GC heap, strings, memories, tables, tags, exceptions) | `Store::global()` — a process-wide singleton | One runtime = one heap, one type namespace, one allocation budget |
+| `Store&` (types, GC heap, strings, memories, tables, tags, exceptions) | the runtime's own `Store` — there is no process-wide store (`ES-2` option B) | One runtime = one heap, one type namespace, one allocation budget |
 | **The instance registry** (one `ModuleInstance` per `Module`, at most) | nowhere — the caller holds it | The runtime is the natural place to *enforce* the cardinality rule ([`THREADSAFETY.md`](THREADSAFETY.md) §3.1): `instantiate()` returns the existing instance or creates the only one, and refuses a second |
 | Loaded `Module`s (`std::shared_ptr<const Module>`) | owned ad hoc by the embedder/harness | An instance refers to its module for its whole life; the runtime can keep the module alive and cache by content hash |
 | Backend session (`ModuleInstantiator&` / plugin handle) | constructed by the harness per test | Compilation belongs to the engine instance, not to a call site |
@@ -208,44 +208,46 @@ contexts that can share data — which is also the WebAssembly threads model's w
 | The scheduler (threads, park/wake) | the embedder | `MULTI_AGENT_FEASIBILITY.md` §6: the engine supplies the seam, not the policy |
 | Generated code and function handles | the backend, reached through `ModuleInstantiator` | Backend-agnostic rule (`LAYERING.md` §2) |
 
-### 4.3 The hard part: `Store::global()`
+### 4.3 The hard part: `Store::global()` — **solved**
 
-The `Store` is a **process-wide singleton** by design ("There is exactly one
-Store per process"), and it is reached directly from **95 call sites in 12
-translation units** (`WasmModuleInstance.cpp` 32, `WasmComponentValidation.cpp`
-18, `WasmComponentRuntime.cpp` 13, `WasmContinuation.cpp` 10,
-`WasmString.cpp` 6, `WasmRegistryImportResolver.cpp` 5, `WasmModule.cpp` 4,
-`WasmGcHeap.cpp` 2, `WasmComponent.cpp` 2, `WasmValidator.cpp`,
-`WasmStore.cpp`, `WasmExn.cpp` 1 each).
+The `Store` used to be a **process-wide singleton** reached directly from 105
+call sites in 12 translation units. **Option B is implemented** (ES-2, 2026-10-29):
+`Store::global()`, `Store::current()` and `Store::Scope` are gone, and every
+consumer receives the store through an object it already has.
 
-| Option | What it means | Cost | Consequence |
-|---|---|---|---|
-| **A. Keep the singleton** | `Runtime` holds a `Store&` that is always the global one | Zero | Two runtimes share a heap and a type namespace; "runtime" is then a façade, not an isolation boundary |
-| **B. Thread a `Store&` through** | Every consumer takes the store (constructor or accessor); `Store::global()` disappears | 95 mechanical edits, compile-checked | Real multi-tenancy; the refactor is *wide but shallow*, and it is class A (no backend, no ABI change — generated code never touches the `Store`) |
-| **C. Runtime owns a `Store`, transitional fallback** | `Runtime` owns one; `Store::current()` returns the runtime's when one is entered, else the legacy global | ~1 indirection + 95 sites migrate lazily | Ships in stages; two mechanisms coexist until B completes |
+| Consumer | How it reaches its store |
+|---|---|
+| `Module` / `Component` (and their parsers) | `Artifact::parse(device, Store&)`, `Module::fromFile(file, …, Store&)`; the artifact keeps `Store* store_` and exposes `store()` |
+| `ModuleInstance` | `module->store()` — a module and its instance always share one store |
+| `ComponentRuntime`, `ComponentValidator` | `component.store()` |
+| Continuation workers, `wasm_exn_create`, the backend's string/type helpers | `ctx->module->store()`: their first argument is the `VMContext` |
+| GC heap and string store | a back-reference to the `Store` that owns them |
+| `RegistryImportResolver` | `bindStore()`, called by the resolving instance (`resolveImports`) and by the exporting instance (`registerExports`) |
+| `Runtime` | owns a `Store` member; `loadBytes`/`loadFile` parse into it |
+| An embedder driving the parser directly | owns a `Store` (see `Test/TestStore.hpp` for the harness's) |
 
-**Recommendation: C then B.** The staged form keeps the suite green at every
-step, and B is a rename-shaped change *inside the core* — but the compiler is
-not the whole checklist: the sites that need the store are not all inside a
-function that already owns a `Module`/`ModuleInstance`.
+The staged history is worth keeping because it is how the change was verified:
 
-**Status.** Option **C is implemented** (all 105 call sites now go through
-`Store::current()`, and `Runtime` installs a `Scope` around load, instantiate,
-safepoint and call). Option **B is not implemented**; the measured cost is:
-
-| Site class | Count | Why it is not a rename |
+| Stage | What changed | Result |
 |---|---|---|
-| `ModuleInstance` / `Module` / `Component` internals | ~60 | Each needs a `store()` accessor first; the object is the carrier |
-| `ComponentValidator` member functions | 18 | The validator needs the store as a constructor parameter |
-| Backend helper `extern "C"` functions called from generated code | 30 | The helper has **no object**; the store must arrive as an extra argument (or through `VMContext`), which changes the emitted call signature at every helper site |
-| `wasm_exn_create` | 1 | Same: its signature is part of the generated-code contract |
-| `Artifact::parse` / `Module::fromFile` / `Component::parseNested` call sites | 44 + 21 + 6 | Every parser entry point gains a `Store&`; the harness needs one shared store |
-| Resolver | 5 | Needs a `bindStore` step at instantiation (registration happens before an instance exists) |
+| **C** (earlier) | `Runtime` owns a `Store`; `Store::current()` reads a thread-local `Scope`, falling back to the global | Two runtimes already had independent heaps, but a process-wide fallback remained |
+| **B1** | Every parser entry point takes `Store&`; artifacts carry the reference (44 + 21 + 6 call sites) | Behaviour-preserving, 11,345 assertions |
+| **B2** | Instances, components, continuation workers, the GC heap, strings, the resolver and `wasm_exn_create` read the carrier object; the `Runtime` stops installing scopes | The only remaining callers were the backend's string helpers |
+| **B3** | Backend helpers take the `VMContext`; the singleton and the thread-local are deleted | No `Store::current()`/`global()`/`Scope` anywhere in `WasmBase/` or `LibJit/` |
 
-That is a multi-pass change, not a single mechanical pass, and it touches the
-helper ABI. Until it is done, the property that actually matters — **one core
-image per process** — is enforced at the linkage level instead; see
-[`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §7 row 2.
+The table that justified the work — "95 mechanical edits" — was wrong in one
+important way: the *backend helpers called from generated code* have no object,
+so their store has to arrive as an argument, which changes the emitted call
+signature. That is the pointer-ABI surface `BACKEND_PLUGIN_ABI.md` §5 permits;
+the affected helpers are `wasm_exn_create`, the string helpers
+(`wasm_string_new_*`, `wasm_string_concat`, `wasm_string_as_*`,
+`wasm_stringview_*_slice`, `wasm_string_new_array`) and
+`wasm_callable_type_matches`. Each now receives the `VMContext` first.
+
+The duplicate-core failure mode that motivated the work is closed twice over:
+there is no process-global core state to duplicate, **and** the linkage is
+enforced (one shared core, `NEEDED` recorded, no static archive —
+[`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §7 row 2).
 
 ### 4.4 The `TypeId` consequence (must be recorded, not discovered)
 
@@ -254,8 +256,8 @@ type"** (`WasmTypeIdentity.hpp`). If a runtime owns its `Store`, then identity
 becomes **runtime-scoped**. Nothing in the ABI breaks — a `TypeId` is an opaque
 32-bit value inside `Callable`, compared by the engine — but three rules change:
 
-1. `TYPE_IDENTITY.md` must say "runtime-scoped" instead of "process-wide" (or the
-   runtime must deliberately share one registry across runtimes; pick one).
+1. `TYPE_IDENTITY.md` must say "store-scoped" instead of "process-wide" (done:
+   `ES-2` option B deleted the shared registry, so ids are per store).
 2. A `Callable` produced by runtime A must be **rejected** by runtime B
    (`typeId` not present in B's registry), not silently compared.
 3. Cross-runtime sharing of memories/tables (a `Store`-owned entity) is not a
@@ -286,7 +288,7 @@ may legitimately choose or a borrowed pointer with a documented lifetime.
 | `profile` | `ProfileConfig` | `fullProfile()` | the load/instantiate gate ([`proposals/PROFILES.md`](proposals/PROFILES.md)) |
 | `hostBridge` | `const HostBridge*` | `nullptr` | borrowed default bridge; a per-instance override stays legal |
 | `sink` / `sinkUserData` | `DiagnosticSink` + `void*` | `nullptr` / `nullptr` | the bounded diagnostic sink a created agent inherits ([`DIAGNOSTICS.md`](DIAGNOSTICS.md), `DiagnosticState` in [`WasmDiagnostics.hpp`](../WasmBase/WasmDiagnostics.hpp)) |
-| `allocationBudgetBytes` | `std::uint64_t` | `0` = engine default | the byte budget `Store::reserveBytes` charges against (`SAFETY.md` §2.3); today it is `Store::allocationBudgetBytes()` (default 2 GiB, `WASMJIT_MAX_TOTAL_BYTES`), process-wide until `ES-2` scopes it to the runtime |
+| `allocationBudgetBytes` | `std::uint64_t` | `0` = engine default | the byte budget `Store::reserveBytes` charges against (`SAFETY.md` §2.3); it is charged against the runtime's own store (`Store::allocationBudgetBytes()`, default 2 GiB, `WASMJIT_MAX_TOTAL_BYTES`), so two runtimes have independent budgets |
 
 There is deliberately **no `ValidationOptions` field**: that type lives in
 `WasmBase/WasmValidation.hpp`, which §6.1 classifies as *internal*, and the only
@@ -388,8 +390,8 @@ public:
     // not become one.
     std::unique_ptr<Agent> createAgent();
 
-    // ES-2: runtime-scoped storage. Today this is Store::global(); after ES-2 it
-    // is the runtime's own Store, and cross-runtime handles are rejected (§4.4).
+    // ES-2 option B: runtime-scoped storage. This is the runtime's own Store;
+    // cross-runtime handles are rejected (§4.4).
     Store& store() noexcept;
 
 private:
@@ -413,7 +415,7 @@ private:
 | No `Result<T>` | The engine's error channels are `WASM::Trap` and standard exceptions; a third would be a frozen-surface decision, not a convenience |
 | `callExport<Ret>` over `callCallable` | The typed path *is* the ABI (§2 step 6); `callExport` is a lookup plus `callCallable`, never a second convention, and the multi-result buffer keeps its explicit form |
 | `createAgent()` on the runtime | Agents are per thread, not per runtime, but the runtime is where an embedder looks; it is the role §3.2 row 4 names |
-| `store()` returning `Store&` | `ES-2` replaces `Store::global()` with this accessor; until then it is §4.3's transitional option C |
+| `store()` returning `Store&` | The runtime's store accessor. `Store::global()` no longer exists (`ES-2` option B), so this is the only way to reach the store an instance lives in |
 
 ## 5. Salvage review of the earlier sketch
 
@@ -635,7 +637,7 @@ must name whatever §6.2 decides about `Elvavena`/`Euphemy`.
 | Milestone | Work | Class | Closes | Done when |
 |---|---|---|---|---|
 | **ES-1 — `WASM::Runtime` skeleton** ✅ | **Landed 2026-10-29:** `WasmBase/WasmRuntime.{hpp,cpp}` implements `RuntimeConfig` (profile, concurrency, bridge, sink, budget — §4.6), `create(name)` (registry, then the `dlopen` fallback), `loadFile`/`loadBytes` (no `Elv::Io::Device`), idempotent `instantiate` (one instance per `Module`; a repeat call returns the same instance), `instanceOf`/`hasInstance`, `callExport`/`callExportWithResults` (with the `MF-2` in-call guard), `safepoint`, `version`/`abiVersion`/`backendName`/`profile`/`supports`, `createAgent` and `store()`. `WasmContext.hpp` and `LibJit::Runtime` are deleted. | A | P1, P2, P4, P5, P6; R1 enforcement; AAS1 | `Test/RuntimeTests.cpp` exercises load → instantiate → call against the real backend and the null one; the default suite is unchanged. The installed `wasmjit/wasmjit.hpp` spelling and the out-of-tree consumer stay `ES-5`. |
-| **ES-2 — Store scoping migration** | Option **C shipped**: `Runtime` owns a `Store`, installs a `Scope` at every entry point, and all 105 engine call sites use `Store::current()`; two runtimes already have independent heaps and reject cross-runtime modules/instances. Option **B** (delete the singleton) is open: §4.3 records the measured cost, which includes the generated-code helper ABI, and the duplicate-core failure mode it would remove is already closed at the linkage level ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §7 row 2). | A (wide) | Multi-tenancy; §4.4 | `Store::global()` has no remaining callers; two runtimes in one process have independent heaps and reject cross-runtime callables. |
+| **ES-2 — Store scoping migration** | **Done (option B, 2026-10-29).** `Store::global()`, `Store::current()` and `Store::Scope` are deleted. The store is threaded through every consumer: parser entry points take `Store&` and the artifact keeps it; instances use `module->store()`; components use `component.store()`; continuation workers, `wasm_exn_create` and the backend string/type helpers take the `VMContext`; the resolver is bound by the resolving/exporting instance; `Runtime` owns one. Two runtimes have independent heaps and budgets and reject cross-runtime modules/instances. | A (wide) | Multi-tenancy; §4.4 | No `Store::current()`/`global()`/`Scope` remains in `WasmBase/` or `LibJit/`; the default suite is green (11,345 assertions / 468 cases). |
 | **ES-3 — Header tiers and umbrella** ✅ | **Landed 2026-10-29:** `WasmJit.hpp` covers the embedder tier; §6.1.1 classifies every header into the three tiers; `WasmRegistryImportResolver.hpp` and `WasmSafety.hpp` no longer include the vendored library (the maps are `std::map<std::string, T, std::less<>>`, the bounds helpers are templates); 40 compile-only TUs plus `[tiers]`, which fails when a new header is unclassified, the umbrella includes a non-embedder header, or a public header has no TU. The two hard `Elv` dependencies (`WasmType.hpp`, `WasmAgent.hpp`) are accepted for the first freeze (§6.2). | A | P3, `AAS2` (partly) | Every public header compiles alone ✅; the umbrella covers the embedder tier ✅; the installed include path is verified by §8 `ES-5`. |
 | **ES-4 — Visibility and versioning** ✅ | **Landed 2026-10-29:** `WasmApi.hpp` defines `WASMJIT_API` (the Elvavena `MH_UTIL_API` pattern: `WASMJIT_BUILD` → export, otherwise import) and `WASMJIT_VISIBLE_BEGIN/END` for headers that are entirely public; the core is compiled with `-fvisibility=hidden -fvisibility-inlines-hidden` and every library sets `VERSION = 1.0.0` (soname `lib*.so.1`). The exported set fell from **23,919 to 2,541** symbols and is exactly what the public headers declare. | A | P4; ABI hygiene | The exported set is the header-declared surface ✅; an `abidiff` run is the remaining optional check. |
 | **ES-5 — Install and pkg-config** ✅ | **Landed 2026-10-29:** `INSTALLS` for the 40 public headers (`include/wasmjit/`), the internal closure (`include/wasmjit/internal/`), the eight vendored header directories, the libraries and `wasmjit.pc` (generated from `wasmjit.pc.in`, installed to `lib/pkgconfig`). `Test/install-check.sh` installs into a scratch prefix with `INSTALL_ROOT`, builds `Test/consumer/Consumer.cpp` through `pkg-config --cflags --libs wasmjit` and runs it. | A | Packaging | `make install` into a scratch prefix yields a working out-of-tree consumer ✅ (`install-check: OK`). |
@@ -658,7 +660,7 @@ want `ES-3`'s tier list; `ES-6` is pure documentation and can land first.
 
 | Stays open | Why |
 |---|---|
-| `Store` as an isolation boundary | Only after `ES-2`; until then "one runtime per process" is the honest statement. |
+| `Store` as an isolation boundary | **Now supported**: each runtime owns a store, and cross-runtime modules/instances are rejected (`ES-2`). |
 | `Elvavena` in the public SDK | Deliberately accepted for the first freeze (§6.2), and the long-term direction is deeper MhLib integration, not removal (§6.2.1). |
 | A stable C++ ABI across compilers | Out of scope without a pimpl firewall; §7.2 promises soname discipline, not cross-vendor binary compatibility. |
 | Dynamic backend loading | Implemented (`WasmBackendRegistry` + `Runtime::create(name)`, [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) `BP-3`); a loaded plugin is deliberately never unloaded while code is live (§6 rule 8). |
@@ -670,7 +672,7 @@ want `ES-3`'s tier list; `ES-6` is pure documentation and can land first.
 |---|---|---|
 | Default suite (2026-10-29) | **11,345 assertions / 468 cases, green** | The `ES-1`…`ES-5` and `BP-*` additions are additive: every earlier assertion still passes. |
 | `[docs]` lint | 720 assertions, green | Covers `docs/proposals/` only; this note is not linted. |
-| `[runtime]` | 41 assertions / 6 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents and two independent stores (`ES-2`). |
+| `[runtime]` | 46 assertions / 7 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents, and the store-scoping proof (two stores, two heaps, an artifact records its store). |
 | `[concurrency]` | 29 assertions / 8 cases, green | The model claim, the refusal under a real second-thread call, re-entrant invocation across threads, the `MF-2` guard and the `MF-3`/`MF-4` safepoint rules. |
 | `[backendabi]` | 36 assertions / 4 cases, green | The POD signature/layout views (`WasmBackendAbi.hpp`) match `ABI.md`'s tuple rule. |
 | `[plugin]` | 17 assertions / 5 cases, green | Load by path and by name, a real example plugin, and every refusal path (missing file, no query symbol, unknown name, descriptor ABI, core ABI, failing `create`). |
@@ -706,7 +708,7 @@ want `ES-3`'s tier list; `ES-6` is pure documentation and can land first.
   that make three of the sketch's config options unshippable (§5).
 - [`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) — why a JS engine
   is not in the core, which is what keeps the "realm" mapping (§3) honest.
-- Source anchors: `WasmBase/WasmStore.hpp` (`Store::global()`),
+- Source anchors: `WasmBase/WasmStore.hpp` (the store, and why there is no global one),
   `WasmBase/WasmRuntime.hpp` (the `ES-1` placeholder), `WasmBase/WasmJit.hpp`
   (the umbrella), `WasmBase/WasmVersion.hpp`, `WasmBase/WasmProfile.hpp`,
   `WasmBase/WasmAgent.hpp` (`Agent`/`ExecutionState`), `WasmBase/WasmModule.hpp`

@@ -71,10 +71,11 @@ something.** Every such size is bounded, in one of two ways:
   index spaces and structural validation add one bounded entry per parsed
   definition; they do not allocate code, link, or mutate the `Store`.
 
-### 2.3 Charge host memory against a process-wide budget
+### 2.3 Charge host memory against the store's budget
 
 `WasmStore` is the single allocator for linear memory, tables and GC objects, and
-it charges every byte against a **process-wide budget** *before* allocating:
+it charges every byte against its **store's budget** *before* allocating (one
+store per runtime, so one budget per runtime — there is no process-wide store):
 
 - `createLinearMemory` / `createTable` (initial size), `growMemory` / `growTable`
   (deltas) and `allocateStructObject` / `allocateArrayObject` (GC heap);
@@ -268,7 +269,7 @@ is `Test/wasm_wat/stack_exhaustion.wat` plus the
 | S1 | **No instruction/step budget.** A trap-free `loop` runs forever. | Out of scope; the harness kills the child after a wall-clock timeout, and an embedder running hostile code should do the same. |
 | S2 | **Negative-module coverage is opt-in, and the validator is conservative.** `assert_invalid` / `assert_unlinkable` / `assert_uninstantiable` are skipped in the default run and only executed with `WASM_SPEC_VALIDATE=1`; an opcode with no rule taints the rest of its body rather than being rejected, and text-format modules are not decoded at all (946 commands). | `Module::validate()` covers all 2,382 binary negative commands ([`VALIDATION.md`](VALIDATION.md)); the remaining holes are coverage, not acceptance. It is why §2.2 is about *resource safety*, not spec conformance. |
 | S3 | **GC reclamation is not a leak-free guarantee.** Reference counting + cycle collection reclaim acyclic and cyclic garbage at safepoints, but an uncounted borrow, a wrong count or a type outside the instance can leak until instance teardown; ordinary recycled blocks also do not refund their region's budget charge. | RC-1/1b/2/3 and the reclamation tests ([`proposals/GC.md`](proposals/GC.md) §6/§7); `GcHeap::releaseSet` at teardown is the backstop, and the allocation budget still bounds total host memory. |
-| S4 | **Budgets are process-wide, not per-instance.** One module can exhaust the budget for every other module in the process. | Simpler, and the failure mode is a clean `-1` / trap. Per-instance accounting belongs in the Store if an embedder needs it. |
+| S4 | **Budgets are per store, not per instance.** Instances sharing a store (they only can if they come from the same runtime) share one budget, so one greedy module can starve its siblings. | The budget lives in the `Store`, and `ES-2` made stores runtime-scoped: two runtimes are isolated. Per-instance accounting remains a possible refinement. |
 | S5 | **Trap messages are not compared.** The harness checks *that* a trap happened, not its text. | Text differs between engines; the spec's strings are hints. |
 | S6 | **An opt-out can unguard everything**: `WASMJIT_MAX_TOTAL_BYTES=unlimited`, or a device that reports no size (`requireAvailable` then cannot bound). | Both are explicit choices. |
 | S7 | **A thread whose stack is not larger than twice the guard reserve runs unguarded** (`stackLimit == 0`), as does a platform that cannot report stack bounds. | A 64 KiB frame cannot be made safe on an arbitrarily small stack; the embedder owns thread stack sizes. §2.8. |
