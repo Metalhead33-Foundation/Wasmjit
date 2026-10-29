@@ -24,6 +24,7 @@ struct HostBridge;
 //! \brief The raw POD context passed as arg0 to every compiled function.
 //! Must remain standard-layout. The backend accesses fields via offsetof().
 //! NEVER add std::vector, virtual functions, or non-trivial members here.
+/** \\brief Standard-layout POD context passed as the first argument to every compiled function. */
 struct VMContext {
 	//! Hot fields first — memory access is the most frequent operation.
 	//! Pointer to the instance's memory index space: an array of `memoryCount`
