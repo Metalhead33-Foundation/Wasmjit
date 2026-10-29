@@ -81,12 +81,32 @@ enum class DiagnosticPhase : std::uint8_t {
 };
 
 //! "note" / "warning" / "error" / "fatal" — the text and JSON spelling.
+/**
+ * \\brief Emits or accesses the corresponding structured diagnostic data.
+ * \\param severity Diagnostic data or output destination used by this operation.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 const char* diagnosticSeverityName(DiagnosticSeverity severity) noexcept;
 //! "decode" / "validate" / … / "component".
+/**
+ * \\brief Emits or accesses the corresponding structured diagnostic data.
+ * \\param phase Diagnostic data or output destination used by this operation.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 const char* diagnosticPhaseName(DiagnosticPhase phase) noexcept;
 //! "native_stacks" / "host_threads".
+/**
+ * \\brief Returns or updates the continuationProviderName diagnostic facility.
+ * \\param provider Diagnostic data or output destination used by this operation.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 const char* continuationProviderName(ContinuationProvider provider) noexcept;
 //! "completed" / "suspended" / "trapped" / "exception" / "invalid".
+/**
+ * \\brief Returns or updates the continuationStatusName diagnostic facility.
+ * \\param status Diagnostic data or output destination used by this operation.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 const char* continuationStatusName(ContinuationStatus status) noexcept;
 
 //! Absence markers. An all-unknown location is omitted from the text/JSON form
@@ -132,6 +152,10 @@ struct DiagnosticContinuation {
 	bool hasRoots = false;
 	const void* switchPeer = nullptr;
 
+/**
+ * \\brief Returns or updates the present diagnostic facility.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 	bool present() const noexcept { return !state.empty(); }
 };
 
@@ -254,17 +278,38 @@ inline constexpr std::string_view kContinuationSchedulerInvalid = "WASM.CONTINUA
 //! The diagnostic id of a runtime trap kind. The ids live under
 //! `WASM.EXECUTE.TRAP`; `TrapKind::Internal` maps to
 //! `WASM.EXECUTE.TRAP.INTERNAL`, and the mapping is total and one-to-one.
+/**
+ * \\brief Returns or updates the trapDiagnosticId diagnostic facility.
+ * \\param kind Diagnostic data or output destination used by this operation.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 std::string_view trapDiagnosticId(TrapKind kind) noexcept;
 //! The diagnostic id of a resume status (under `WASM.CONTINUATION`).
+/**
+ * \\brief Returns or updates the continuationDiagnosticId diagnostic facility.
+ * \\param status Diagnostic data or output destination used by this operation.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 std::string_view continuationDiagnosticId(ContinuationStatus status) noexcept;
 //! The rule family for a validator message (DG-0). The caller's explicit id
 //! always wins; this is the default for the ~250 rule sites that still pass a
 //! message only. Matching is ordered (docs/DIAGNOSTICS.md §4.2) and never
 //! allocates. `WASM.VALIDATE.RULE` is only for a message no family matches.
+/**
+ * \\brief Returns or updates the validationRuleId diagnostic facility.
+ * \\param message Diagnostic data or output destination used by this operation.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 std::string_view validationRuleId(std::string_view message) noexcept;
 
 //! \par Sink and bounded ring
 
+/**
+ * \\brief Returns or updates the void diagnostic facility.
+ * \\param userData Diagnostic data or output destination used by this operation.
+ * \\param diagnostic Diagnostic data or output destination used by this operation.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 using DiagnosticSink = void (*)(void* userData, const Diagnostic& diagnostic) noexcept;
 
 //! The per-execution-state store. It lives in `ExecutionState`
@@ -291,6 +336,11 @@ struct DiagnosticState {
 	//! Session start for the JSON envelope. Set once when the execution state is
 	//! first used and never changed by `clear()`, so `diagnosticsToJson` always
 	//! has a stable "start date" for the collected records.
+/**
+ * \\brief Returns or updates the time diagnostic facility.
+ * \\param nullptr Diagnostic data or output destination used by this operation.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 	std::time_t startedAt = std::time(nullptr);
 
 	void setSink(DiagnosticSink newSink, void* newUserData) noexcept
@@ -301,38 +351,89 @@ struct DiagnosticState {
 
 	//! Changing the capacity keeps the newest records and drops the rest. A
 	//! capacity of zero disables the ring (a sink, if installed, still runs).
+/**
+ * \\brief Returns or updates the setCapacity diagnostic facility.
+ * \\param newCapacity Diagnostic data or output destination used by this operation.
+ */
 	void setCapacity(std::uint32_t newCapacity) noexcept;
 
 	//! Copies `diagnostic` into the ring (assigning `sequence` and `timestamp`),
 	//! optionally writes a pretty log line, then calls the sink. Never throws: a
 	//! failed allocation simply loses the record.
+/**
+ * \\brief Emits or accesses the corresponding structured diagnostic data.
+ * \\param diagnostic Diagnostic data or output destination used by this operation.
+ */
 	void emit(Diagnostic diagnostic) noexcept;
 
 	std::span<const Diagnostic> recent() noexcept { return records; }
+/**
+ * \\brief Returns or updates the clear diagnostic facility.
+ */
 	void clear() noexcept { records.clear(); }
 };
 
 //! Installs the sink on the current execution state. `nullptr` restores the
 //! default (no callback).
+/**
+ * \\brief Returns or updates the setDiagnosticSink diagnostic facility.
+ * \\param sink Diagnostic data or output destination used by this operation.
+ * \\param userData Diagnostic data or output destination used by this operation.
+ */
 void setDiagnosticSink(DiagnosticSink sink, void* userData) noexcept;
 //! The currently installed sink/user data, so a temporary sink (a test, a
 //! scoped capture) can restore what it replaced.
+/**
+ * \\brief Emits or accesses the corresponding structured diagnostic data.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 DiagnosticSink diagnosticSink() noexcept;
+/**
+ * \\brief Emits or accesses the corresponding structured diagnostic data.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 void* diagnosticSinkUserData() noexcept;
 //! The records of the current execution state, oldest first. The span is
 //! invalidated by the next emission or by `clearDiagnostics()`.
+/**
+ * \\brief Returns or updates the recentDiagnostics diagnostic facility.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 std::span<const Diagnostic> recentDiagnostics() noexcept;
+/**
+ * \\brief Returns or updates the clearDiagnostics diagnostic facility.
+ */
 void clearDiagnostics() noexcept;
 //! 0 disables the ring for the current execution state.
+/**
+ * \\brief Returns or updates the setDiagnosticRingCapacity diagnostic facility.
+ * \\param capacity Diagnostic data or output destination used by this operation.
+ */
 void setDiagnosticRingCapacity(std::uint32_t capacity) noexcept;
 //! Enables/disables the pretty stderr line for host-log records on the current
 //! execution state (default off). The unit-test harness turns it on.
+/**
+ * \\brief Returns or updates the setDiagnosticPrettyPrinting diagnostic facility.
+ * \\param enabled Diagnostic data or output destination used by this operation.
+ */
 void setDiagnosticPrettyPrinting(bool enabled) noexcept;
+/**
+ * \\brief Emits or accesses the corresponding structured diagnostic data.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 bool diagnosticPrettyPrinting() noexcept;
 //! The current execution state's session start (JSON envelope `startedAt`).
+/**
+ * \\brief Emits or accesses the corresponding structured diagnostic data.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 std::time_t diagnosticsStartedAt() noexcept;
 //! The single entry point every boundary uses. Assigning `sequence`/`timestamp`,
 //! trimming the ring and calling the sink are all `DiagnosticState`'s job.
+/**
+ * \\brief Emits or accesses the corresponding structured diagnostic data.
+ * \\param diagnostic Diagnostic data or output destination used by this operation.
+ */
 void emitDiagnostic(Diagnostic diagnostic) noexcept;
 
 //! \par Forms
@@ -354,15 +455,37 @@ void emitDiagnostic(Diagnostic diagnostic) noexcept;
 //! The serializer uses the project's JSON library, nlohmann_json, behind this
 //! header (the include lives in the .cpp), so a consumer of the record does not
 //! pay for it.
+/**
+ * \\brief Formats diagnostic data for the requested output representation.
+ * \\param diagnostic Diagnostic data or output destination used by this operation.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 std::string formatDiagnostic(const Diagnostic& diagnostic);
 //! `useColor` selects the ANSI escapes; the emoji and the date stay either way.
+/**
+ * \\brief Formats diagnostic data for the requested output representation.
+ * \\param diagnostic Diagnostic data or output destination used by this operation.
+ * \\param useColor Diagnostic data or output destination used by this operation.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 std::string formatDiagnosticPretty(const Diagnostic& diagnostic,
 		bool useColor = true);
+/**
+ * \\brief Emits or accesses the corresponding structured diagnostic data.
+ * \\param diagnostic Diagnostic data or output destination used by this operation.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 std::string diagnosticToJson(const Diagnostic& diagnostic);
 //! `startedAt == 0` derives the envelope start from the first record (or now
 //! when the span is empty), so a caller that does not track a session start
 //! still gets a usable envelope. Pass `diagnosticsStartedAt()` for the exact
 //! execution-state start.
+/**
+ * \\brief Emits or accesses the corresponding structured diagnostic data.
+ * \\param diagnostics Diagnostic data or output destination used by this operation.
+ * \\param startedAt Diagnostic data or output destination used by this operation.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 std::string diagnosticsToJson(std::span<const Diagnostic> diagnostics,
 		std::time_t startedAt = 0);
 
@@ -374,9 +497,18 @@ inline constexpr std::string_view kDiagnosticJsonSchema = "wasmjit.diagnostic.v1
 //! Classifies and records a load-time failure that crossed `Module::fromFile`.
 //! The id is `WASM.DECODE.MALFORMED` for a "malformed" message and
 //! `WASM.DECODE.UNSUPPORTED` otherwise; per-site ids are DG-0 work.
+/**
+ * \\brief Emits or accesses the corresponding structured diagnostic data.
+ * \\param message Diagnostic data or output destination used by this operation.
+ */
 void emitDecodeFailure(std::string_view message) noexcept;
 //! Records an uncaught exception at the point the host takes it from the
 //! pending slot (`wasm_exn_take_pending`).
+/**
+ * \\brief Emits or accesses the corresponding structured diagnostic data.
+ * \\param tagId Diagnostic data or output destination used by this operation.
+ * \\param payloadBytes Diagnostic data or output destination used by this operation.
+ */
 void emitExceptionDiagnostic(std::int32_t tagId, std::uint32_t payloadBytes) noexcept;
 //! Records a trap the host has just observed. The engine's own boundaries
 //! (`checkTrap`, `trap`) call this; a harness that reads the pending slot
@@ -384,6 +516,14 @@ void emitExceptionDiagnostic(std::int32_t tagId, std::uint32_t payloadBytes) noe
 //! own boundary so the record exists exactly once. The optional site is the
 //! compile-time function/instruction the backend reported (DG-5); pass
 //! `kNoDiagnosticIndex`/nullptr when unknown.
+/**
+ * \\brief Emits or accesses the corresponding structured diagnostic data.
+ * \\param kind Diagnostic data or output destination used by this operation.
+ * \\param message Diagnostic data or output destination used by this operation.
+ * \\param functionIndex Diagnostic data or output destination used by this operation.
+ * \\param instructionOffset Diagnostic data or output destination used by this operation.
+ * \\param functionName Diagnostic data or output destination used by this operation.
+ */
 void emitTrapDiagnostic(TrapKind kind, const char* message,
 		std::uint32_t functionIndex = kNoDiagnosticIndex,
 		std::uint32_t instructionOffset = kNoDiagnosticIndex,
@@ -394,6 +534,14 @@ void emitTrapDiagnostic(TrapKind kind, const char* message,
 //! record has no continuation object (a null or invalid handle, for example).
 //! `switchPeer` is never serialized. Allocation failures are swallowed: the
 //! original trap/status is the outcome that matters.
+/**
+ * \\brief Emits or accesses the corresponding structured diagnostic data.
+ * \\param id Diagnostic data or output destination used by this operation.
+ * \\param severity Diagnostic data or output destination used by this operation.
+ * \\param message Diagnostic data or output destination used by this operation.
+ * \\param continuation Diagnostic data or output destination used by this operation.
+ * \\param remediation Diagnostic data or output destination used by this operation.
+ */
 void emitContinuationDiagnostic(std::string_view id, DiagnosticSeverity severity,
 		std::string message, DiagnosticContinuation continuation,
 		std::string_view remediation = "docs/proposals/STACK_SWITCHING.md") noexcept;
@@ -428,16 +576,55 @@ class ImportRegistrar;
 //! The bodies are ordinary host functions. They must not be `noexcept`:
 //! `panic` reports through `WASM::trap`, which throws to the `nativeImport`
 //! trampoline, and a `noexcept` body would terminate the process instead.
+/**
+ * \\brief Emits or accesses the corresponding structured diagnostic data.
+ * \\param context Diagnostic data or output destination used by this operation.
+ * \\param pointer Diagnostic data or output destination used by this operation.
+ * \\param length Diagnostic data or output destination used by this operation.
+ */
 void diagnosticInfo(VMContext* context, std::int32_t pointer, std::int32_t length);
+/**
+ * \\brief Emits or accesses the corresponding structured diagnostic data.
+ * \\param context Diagnostic data or output destination used by this operation.
+ * \\param pointer Diagnostic data or output destination used by this operation.
+ * \\param length Diagnostic data or output destination used by this operation.
+ */
 void diagnosticWarn(VMContext* context, std::int32_t pointer, std::int32_t length);
+/**
+ * \\brief Emits or accesses the corresponding structured diagnostic data.
+ * \\param context Diagnostic data or output destination used by this operation.
+ * \\param pointer Diagnostic data or output destination used by this operation.
+ * \\param length Diagnostic data or output destination used by this operation.
+ */
 void diagnosticError(VMContext* context, std::int32_t pointer, std::int32_t length);
+/**
+ * \\brief Emits or accesses the corresponding structured diagnostic data.
+ * \\param context Diagnostic data or output destination used by this operation.
+ * \\param pointer Diagnostic data or output destination used by this operation.
+ * \\param length Diagnostic data or output destination used by this operation.
+ */
 void diagnosticPanic(VMContext* context, std::int32_t pointer, std::int32_t length);
 
 //! Registers `info`, `warn`, `error` and `panic` under `moduleName`.
+/**
+ * \\brief Returns or updates the registerDiagnosticImports diagnostic facility.
+ * \\param registrar Diagnostic data or output destination used by this operation.
+ * \\param moduleName Diagnostic data or output destination used by this operation.
+ */
 void registerDiagnosticImports(ImportRegistrar& registrar, std::string_view moduleName);
 //! The opt-in shortcut: registers them under `env`.
+/**
+ * \\brief Returns or updates the registerToEnv diagnostic facility.
+ * \\param registrar Diagnostic data or output destination used by this operation.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 inline void registerToEnv(ImportRegistrar& registrar)
 {
+/**
+ * \\brief Returns or updates the registerDiagnosticImports diagnostic facility.
+ * \\param registrar Diagnostic data or output destination used by this operation.
+ * \\return The requested diagnostic value, formatted text, or success state.
+ */
 	registerDiagnosticImports(registrar, "env");
 }
 
