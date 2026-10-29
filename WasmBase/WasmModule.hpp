@@ -57,11 +57,13 @@ enum class NameKind : uint8_t {
 //! exists yet, so the engine stores them without interpreting them
 //! (PPD1/PPD2). Hints are inert: they never affect decoding, validation,
 //! dispatch or results (PPD4).
+/** \\brief Opaque compilation-hint record retained from a custom section. */
 struct CompilationHint {
 	uint32_t offset;
 	std::vector<uint8_t> payload;
 };
 
+/** \\brief Decoded core module, including declarations, bodies, names, and validation metadata. */
 struct WASMJIT_API Module : public Artifact
 {
 public:
@@ -155,64 +157,85 @@ private:
 	std::vector<uint8_t> parseInitExpr(DWasmStream& stream);
 	void handleComplexElementSegment(DWasmStream& stream, ElementSegment& seg);
 public:
+	/** \\brief Constructs an empty core module artifact. */
 	Module();
 	//! Parses into `store`: every module type is interned there, and the module
 	//! keeps the reference (docs/EMBEDDING_SURFACE.md §4.3 option B).
+	/** \\brief Parses a core module into the supplied canonical type store. \\param file Input device positioned at the module preamble. \\param store Store receiving canonical type identities; must outlive this module. \\throws std::exception on malformed or unsupported input. */
 	void fromFile(Elv::Io::Device& file, Store& store);
 	//! Parse with an explicit validation policy. `relaxedDeadCode` adopts the
 	//! Relaxed Dead-Code Validation rule for this load only
 	//! (docs/proposals/PARSER_PROPOSALS.md PP-2); the default stays conservative.
+	/** \\brief Parses a core module using an explicit validation policy. \\param file Input device positioned at the module preamble. \\param options Validation policy for this load. \\param store Store receiving canonical type identities; must outlive this module. \\throws std::exception on malformed, unsupported, or invalid input. */
 	void fromFile(Elv::Io::Device& file, const ValidationOptions& options, Store& store);
 	//! Parses an embedded core module body (no preamble) between the current
 	//! position and `end`. Used by a component's core:module section.
+	/** \\brief Parses an embedded core module body without a preamble. \\param file Input device positioned at the nested body. \\param end Absolute end offset of the body. \\param store Store receiving canonical type identities. \\return Owning pointer to the parsed nested module. */
 	static std::unique_ptr<Module> parseNested(Elv::Io::Device& file, uint64_t end, Store& store);
+	/** \\brief Views decoded sections in binary order. \\return Non-owning span valid for this module's lifetime. */
 	const std::span<const Section> getSections() const;
 	//! Map a module-local type index to its process-wide identity. Throws if the
 	//! index is out of range.
+	/** \\brief Maps a module-local type index to its Store-owned canonical identity. \\param idx Local type index. \\return Canonical TypeId. \\throws std::out_of_range if idx is outside the module type space. */
 	TypeId typeId(LocalTypeIdx idx) const;
+	/** \\brief Returns the number of module-local type declarations. \\return Type count. */
 	std::size_t typeCount() const { return typeIds.size(); }
 	//! Stable read-only metadata projection for JS Types: import-section order is
 	//! preserved, names are copied, and function/tag typeId values are canonical.
 	//! It is a projection over the decoded module, not a second type registry.
+	/** \\brief Projects imports into stable, name/type metadata descriptors. \\return Import descriptors in original import-section order. */
 	std::vector<ImportDescriptor> importDescriptors() const;
+	/** \\brief Projects exports into stable metadata descriptors. \\return Export descriptors in module export order. */
 	std::vector<ExportDescriptor> exportDescriptors() const;
 	//! Store-owned view of one local type. This is the consumer-facing API: it
 	//! never exposes a module-owned `Subtype` block.
+	/** \\brief Gets a Store-owned view of a module-local type. \\param idx Module-local type index. \\return Non-owning canonical core-type view. */
 	CoreTypeView typeView(uint32_t idx) const;
+	/** \\brief Gets a Store-owned view using a typed local index. \\param idx Module-local type index. \\return Non-owning canonical core-type view. */
 	CoreTypeView typeView(LocalTypeIdx idx) const { return typeView(idx.value); }
 	//! Transitional compatibility signature view for backend compile paths. It
 	//! contains only `StorageType`s derived from the Store; runtime paths use
 	//! typeView() directly (TM-7).
+	/** \\brief Materializes a compatibility function-signature view for backend compilation. \\param idx Module-local type index. \\return Function signature derived from the canonical Store type. */
 	FuncType funcTypeAt(uint32_t idx) const;
 	//! Looks up a name from the well-known `name` custom section. Returns
 	//! nullptr when the subsection or the index is absent. Names are metadata
 	//! only: they never participate in validation, dispatch or identity
 	//! (ENSD3, docs/proposals/EXTENDED_NAME_SECTION.md).
+	/** \\brief Looks up an optional name-section entry. \\param kind Name subsection/index space. \\param index Outer entity index. \\param subIndex Inner index for indirect maps (locals, labels, fields, params). \\return Pointer to the stored name, or nullptr when absent. */
 	const std::string* findName(NameKind kind, uint32_t index, uint32_t subIndex = 0) const;
 	//! Diagnostic form of an index in any name index space: `"3"`, or
 	//! `"3 ($name)"` when the well-known name section carries a name for it.
 	//! The numeric index is always present, so a message stays useful when no
 	//! name exists (ENSD2/ENSD3, docs/proposals/EXTENDED_NAME_SECTION.md).
+	/** \\brief Formats an index with its optional name-section spelling. \\param kind Name subsection/index space. \\param index Outer entity index. \\param subIndex Inner index for indirect maps. \\return Numeric index, optionally followed by the associated name. */
 	std::string describeIndex(NameKind kind, uint32_t index, uint32_t subIndex = 0) const;
 	//! Reject a module that declares a value type this engine cannot model
 	//! (`isModeledValueTypeCode`). Called at the end of fromFile(); throws a
 	//! std::runtime_error naming the offending declaration. See
 	//! docs/UNMODELLED_VALUE_TYPES.md.
+	/** \\brief Rejects value types that this engine cannot model. \\throws std::runtime_error naming the unsupported declaration. */
 	void validateValueTypes() const;
 	//! Structural validation of the decoded module (WasmValidator.cpp): section
 	//! and index consistency, limits, exports, start, tags, global initialisers,
 	//! active segment targets, and the immediate checks in every function body.
 	//! Throws std::runtime_error naming the first failed rule.
+	/** \\brief Performs structural validation using this module's parse policy. \\throws std::runtime_error naming the first failed validation rule. */
 	void validate() const;
+	/** \\brief Performs structural validation using an explicit policy. \\param options Validation policy to apply. \\throws std::runtime_error naming the first failed validation rule. */
 	void validate(const ValidationOptions& options) const;
 	//! The policy this module was parsed with (PARSER_PROPOSALS.md PP-2). A
 	//! profile-aware instantiation reuses `relaxedDeadCode` so a relaxed module
 	//! is not re-validated conservatively.
+	/** \\brief Returns the validation policy used to parse this module. \\return Const reference to the stored options. */
 	const ValidationOptions& validationOptions() const { return parseOptions; }
+	/** \\brief Tests whether one module-local type is a subtype of another. \\param actual Candidate subtype index. \\param expected Required supertype index. \\return true when actual is a subtype of expected. */
 	bool isSubtype(TypeIdx actual, TypeIdx expected) const;
+	/** \\brief Tests a module-local type against a heap-type constraint. \\param actual Candidate type index. \\param expected Expected heap type. \\return true when the canonical type satisfies the constraint. */
 	bool heapTypeMatchesTypeIndex(TypeIdx actual, const HeapType& expected) const;
 	//! Reverse lookup for canonical descriptor/cast metadata: the module-local
 	//! index of a canonical type, or nullopt when this module does not declare it.
+	/** \\brief Finds the module-local index corresponding to a canonical type ID. \\param id Canonical type identity. \\return Local index, or nullopt when this module does not declare the type. */
 	std::optional<uint32_t> typeIndexForId(TypeId id) const;
 private:
 	//! Reverse local-map used only to materialise a compatibility `Subtype` whose
@@ -231,7 +254,9 @@ public:
 	//! Compatibility view of a canonical storage type with module-local type
 	//! indices resolved. Validation gates and the array constructors need the
 	//! `ValueType` form for mutability/subtyping checks.
+	/** \\brief Converts a canonical storage type to a module-local compatibility view. \\param type Canonical storage type. \\return Storage type with local references resolved. */
 	StorageType storageTypeFromCanon(const CanonStorageType& type) const;
+	/** \\brief Reads a length-prefixed LEB128 string from a module stream. \\param stream Decoder positioned at the string length. \\return Decoded byte string. */
 	static std::string readLEB128String(DWasmStream& stream);
 };
 
