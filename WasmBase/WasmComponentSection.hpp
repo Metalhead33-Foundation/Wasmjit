@@ -11,6 +11,8 @@
   is exported (docs/EMBEDDING_SURFACE.md ES-4).
 */
 
+//! Opens the exported-visibility block; every declaration below is exported
+//! (docs/EMBEDDING_SURFACE.md ES-4).
 WASMJIT_VISIBLE_BEGIN
 #include <cstdint>
 #include <string>
@@ -20,23 +22,27 @@ namespace WASM {
 
 //! Section ids from the Component Model binary format (Binary.md).
 enum class ComponentSectionType : uint8_t {
-	Custom = 0,
-	CoreModule = 1,
-	CoreInstance = 2,
-	CoreType = 3,
-	NestedComponent = 4,
-	Instance = 5,
-	Alias = 6,
-	Type = 7,
-	Canon = 8,
-	Start = 9,
-	Import = 10,
-	Export = 11,
-	Value = 12,
-	Invalid = 255
+	Custom = 0, //!< Custom section: a name then opaque producer-defined bytes
+	CoreModule = 1, //!< An embedded core module, as a complete core binary
+	CoreInstance = 2, //!< A core-instance definition: instantiate a core module
+	CoreType = 3, //!< A core type definition (module and function types)
+	NestedComponent = 4, //!< A nested component definition
+	Instance = 5, //!< A component-instance definition
+	Alias = 6, //!< Alias definitions (export/outer aliases into index spaces)
+	Type = 7, //!< A component-level type definition (defvaltype, func, …)
+	Canon = 8, //!< A canonical definition (`canon lift`/`lower`, resources, …)
+	Start = 9, //!< A start definition, run after the instance is built
+	Import = 10, //!< A top-level import declaration
+	Export = 11, //!< A top-level export declaration
+	Value = 12, //!< A value definition, in the component value index space
+	Invalid = 255 //!< No binary id: the placeholder the parser starts a section at
 };
 
-//! The section kind's spelling for a diagnostic ("custom", "core-module", …).
+//! The section kind's spelling for a diagnostic ("Custom", "CoreModule", …).
+//! \param type The section kind to spell; any value other than a real id
+//! (`Invalid` included) spells `"Unknown"`.
+//! \return A pointer to a string literal owned by the library: never null and
+//! valid for the lifetime of the process, so a caller must not free it.
 const char* getComponentSectionTypeName(ComponentSectionType type);
 
 //! One section header from a component's binary: its kind, payload size and
