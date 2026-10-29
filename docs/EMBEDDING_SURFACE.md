@@ -259,6 +259,27 @@ Recommendation: **accept it for the first freeze and record it in the ABI note.*
 Removing it later is additive — a header can stop including something without
 breaking source compatibility.
 
+#### 6.2.1 The long-term direction: `Elvavena` stays, and the ecosystem deepens
+
+Accepting `Elvavena` is **not** a temporary concession to be undone later. The
+long-term plan is to not only accept `Elvavena` as part of the public SDK, but to
+integrate WasmJit deeper into the **MhLib** ecosystem — which consists of
+`Elvavena`, `Euphemy`, `Kaldi`, `Haruka` and `Lotte`. That is an
+**ultra-long-term plan**, on the same footing as the eventual qmake → CMake
+conversion: it is not scheduled, no `ES-*` stage waits on it, no gate in
+[`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) depends on it, and no reader should
+plan an embedder around `Kaldi`/`Haruka`/`Lotte` types today. It may also involve
+**renaming `WasmJit`**.
+
+What that direction does and does not imply:
+
+| Consequence | Reading |
+|---|---|
+| Do not schedule `Elvavena` removal | The pimpl/`std::span` options in the table above are available engineering choices, not a roadmap. A *shared* SDK, not merely a tidier one, is the long-term goal. |
+| Do not over-promise the integration | "Ultra-long-term" means no document may describe an integration that does not exist; this subsection records a direction, not a deliverable. |
+| Keep a rename cheap | The umbrella header (§6.3) and the version macros (§7) give an embedder a single include and a single version query, so a future rename stays a packaging change for the common case rather than an API change. |
+| The current milestone is unaffected | G1–G4 and `ES-1…ES-7` are about the embedder surface, not about the ecosystem; no gate acquires a new dependency. |
+
 ### 6.3 The umbrella header
 
 One header — `WasmBase/WasmJit.hpp` (installed as `wasmjit/wasmjit.hpp`) — that
@@ -364,7 +385,7 @@ want `ES-3`'s tier list; `ES-6` is pure documentation and can land first.
 | Stays open | Why |
 |---|---|
 | `Store` as an isolation boundary | Only after `ES-2`; until then "one runtime per process" is the honest statement. |
-| `Elvavena` in the public SDK | Deliberately accepted for the first freeze (§6.2). |
+| `Elvavena` in the public SDK | Deliberately accepted for the first freeze (§6.2), and the long-term direction is deeper MhLib integration, not removal (§6.2.1). |
 | A stable C++ ABI across compilers | Out of scope without a pimpl firewall; §7.2 promises soname discipline, not cross-vendor binary compatibility. |
 | Dynamic backend loading | [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md). `Runtime::create(name)` is the seam that makes it a build change later, not a redesign. |
 

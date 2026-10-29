@@ -116,6 +116,11 @@ completing WebAssembly. In particular:
 - **No packaging/distro requirement.** A stable surface needs headers, a version
   marker and a documented include set; it does not need a `.deb`, a CMake port
   or a system-wide install (those stay tracked in [`README.md`](../README.md)).
+- **No source-language support requirement.** The language-support studies are
+  only *defined* in [`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md): the
+  pre-feasibility screen (`LF-1`) and the full studies (`LF-2`) have not been
+  run, no language is supported or rejected, and no gate waits on either. A
+  `.wasm` module is the supported input, whoever produced it.
 - **No performance target.** `SIMD-L8`'s measured 4.10 ns per `v128` op and the
   deliberately unbuilt batched path (`D4`) are diagnostics, not gates.
 - **No new code in this note.** The study reads the tree; it does not change it.
@@ -302,7 +307,8 @@ core code, and zero hits in `WasmStub/`. This is the check G3 partly rests on.
 
 ### 6.6 The documentation inventory
 
-14 notes in `docs/`, 34 notes in `docs/proposals/`. The
+14 notes in `docs/` (measured before [`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md)
+was added), 34 notes in `docs/proposals/`. The
 `README.md` proposal table's completeness estimate is **22 of 34 rows at 100%**,
 with the sub-100 rows concentrated exactly where this study expects them: threads
 (80%, 85%, 55%), stack switching (85%), numeric/FP16 (70%), the upstream-blocked
@@ -561,6 +567,10 @@ honest distinction rather than a green light.
 - [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) — the demotion study
   for the one class-E family this note pins out of scope (§5.3), and the
   per-backend threading findings behind G3.
+- [`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md) — the definitions of the
+  pre-feasibility (scoping) and full feasibility studies for source languages
+  compiled to WebAssembly. Definitions only: neither study has been run, no
+  language is assessed, and no gate here waits on `LF-1`/`LF-2`.
 - [`SAFETY.md`](SAFETY.md) §2.4/§3.1 — traps vs `abort`, and the deliberate
   limitations AAS-1 must publish.
 - [`THREADSAFETY.md`](THREADSAFETY.md) §8–§10 — the supported embedding model.

@@ -106,7 +106,18 @@ instances per module is exactly zero or one.*
 | **A baked `VMContext*` stays unambiguous** | `ABI.md` burns `Callable::context` into generated code; with one instance per module there is exactly one context to burn. |
 | **"Make another instance" stops being a workaround** | [`THREADSAFETY.md`](THREADSAFETY.md) §9 already refuses it; the rule makes it a design fact instead of advice. |
 | **It removes the consumer of concurrent compilation** | §2.3.3: the only reason to compile one module twice in parallel is to build two instances of it. |
-| **Isolation is achieved by loading a module twice, not instantiating twice** | Two games, two tenants, two variants: two `Module` loads (two decoded modules, two type blocks in the `Store`) — which is what a runtime boundary already gives you. |
+| **Isolation is achieved by loading a module twice, not instantiating twice** | Two games, two tenants, two variants: two `Module` loads (two decoded modules, two type blocks in the `Store`) — which is what a runtime boundary already gives you. It is an **escape hatch, not the intended usage** (see below). |
+
+**Isolation as a whole is discouraged.** The row above is a statement about what
+the design makes *possible*, not a recommendation. The intended behaviour is to
+treat a **long-lived module as if it were a dynamically linked library** — you
+typically load it once, and it persists for the entire duration of the
+application — and a **short-lived module as a *script***, e.g. a level script
+from a late-1990s or early-2000s first-person shooter: loaded, run, and
+discarded when the level ends. Ideally an embedder should **not require the
+isolation at all**. That is again the "spiritual successor of the QVM" theme of
+this library ([`ABI.md`](ABI.md) "Design Philosophy"): one resident module set
+with a single instance each, not a per-tenant fleet of VMs.
 
 ### 2.3.2 The accepted scenarios
 

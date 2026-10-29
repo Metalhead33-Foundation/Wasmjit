@@ -8,7 +8,9 @@ value of `Callable::context`.
 
 > **Runtime model:** **at most one `ModuleInstance` per `Module`**, with one
 > `VMContext` per instance. Multiple instances of one module are ruled out by
-> design; isolation comes from loading a module twice. Many *agents* (execution
+> design; isolation comes from loading a module twice — a discouraged escape
+> hatch, not the intended usage: a module is normally loaded once and lives like
+> a dynamically linked library, or is a short-lived script. Many *agents* (execution
 > contexts) may run that one instance's compiled code — that is the accepted
 > multithreading direction, opt-in and not built yet. This ABI description covers
 > the calling and context shapes, not a licence to use per-thread instances as a

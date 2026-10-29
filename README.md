@@ -30,17 +30,22 @@ backend-agnostic.
   documentation plus embedding-API work — no heavy refactoring.
 - **One instance per module — at most.** Multiple instances of the same `Module`
   are ruled out by design; isolation comes from loading a module twice, not from
-  instantiating it twice. **Many agents may execute that one instance's compiled
-  code**, including GPU-style worker launches, thread-per-export, async/await via
-  continuations and intra-Wasm threading — accepted as the multithreading model,
-  opt-in and not built yet. **Concurrent execution** and a **re-entrant invoker**
+  instantiating it twice — an escape hatch, not the intended usage: a module is
+  normally loaded once and lives like a dynamically linked library, or is a
+  short-lived script, and ideally no isolation is needed at all. **Many agents
+  may execute that one instance's compiled code**, including GPU-style worker
+  launches, thread-per-export, async/await via continuations and intra-Wasm
+  threading — accepted as the multithreading model, opt-in and not built yet.
+  **Concurrent execution** and a **re-entrant invoker**
   are required; **concurrent compilation** is rejected as a feature (unsafe, and
   its only consumer would be the instance multiplicity the rule forbids). See
   [`docs/THREADSAFETY.md`](docs/THREADSAFETY.md) §3.1–§3.2 and
   [`docs/MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) §2.3.
 - **Still open** (tracked, not started): a second and third backend
   (`Asmjit/`, `Sljit/` are scaffolds), a published embedding API with
-  packaging/installation, and the long-term qmake → CMake move. The designs for
+  packaging/installation, the long-term qmake → CMake move, and the language-support
+  studies defined in [`docs/LANGUAGE_FEASIBILITY.md`](docs/LANGUAGE_FEASIBILITY.md)
+  (definitions only — neither study has been run). The designs for
   the first two are written down —
   [`docs/EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) and
   [`docs/BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md) — and the one
@@ -90,6 +95,7 @@ per-milestone done markers, is the authoritative per-item status.
 | [`EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) | The plan for the embedder-facing surface: `WASM::Runtime` (what it owns, and the `Store::global()` migration), the three header tiers and the umbrella header, the version/soname/symbol-visibility policy, the install layout, and a salvage review of an earlier `JitRuntime`/`JitContext` sketch | Design note + plan | `░░░░░░░░░░░░░░░░░░░░` planned — `ES-1…ES-7`; closes `AAS1`/`AAS2` |
 | [`BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md) | Loading code generators from shared libraries behind a narrow C ABI (the Unreal-renderer analogy): the query/descriptor, what may cross the boundary, the nine plugin rules (including serialized compilation and a re-entrant invoke), the nine hard problems, and why the seam stays C++ for now | Feasibility study + interface sketch | `░░░░░░░░░░░░░░░░░░░░` study only — `BP-0` done, `BP-1…BP-5` planned |
 | [`MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) | Whether the class-E multi-agent blocker can be demoted: the one-instance-per-module rule and the accepted concurrency scenarios (GPU-style, thread-per-export, async/await, intra-Wasm threads; concurrent compilation rejected), the per-agent state already in place, the `MA-1…MA-9` re-classification (E → B + A), multithreading on LibJIT/SLJIT/AsmJit, and the opt-in embedder hooks that would mirror the JS-integration seam | Feasibility study | `░░░░░░░░░░░░░░░░░░░░` study only — `MF-0` done; the direction is accepted, the feature is not built |
+| [`LANGUAGE_FEASIBILITY.md`](docs/LANGUAGE_FEASIBILITY.md) | The definitions of the two language-support studies: the **pre-feasibility / scoping** study (screen the canonical `awesome-wasm-langs` list, triage on three axes, cluster by shared blocker, per-cluster charters and trigger conditions, a don't-study list) and the **full feasibility** study (exports, cross-module and native imports, multi-memory/shared-memory interaction, evidence and PoCs); the colour coding and kill signals, the evaluation criteria, the budgets, and `LF-0…LF-3` | Process definition + study charter | `░░░░░░░░░░░░░░░░░░░░` definitions only — neither study has been run, and no language is assessed |
 
 ### Proposal notes (`docs/proposals/`)
 

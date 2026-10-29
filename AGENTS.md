@@ -36,6 +36,8 @@ the one-line check to run.
   [`EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) (the `WASM::Runtime`, headers, versioning, install),
   [`BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md) (loading a backend behind a C descriptor) and
   [`MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) (demoting the multi-agent blocker).
+  The language-support studies are defined in [`docs/LANGUAGE_FEASIBILITY.md`](docs/LANGUAGE_FEASIBILITY.md):
+  definitions only — neither the pre-feasibility nor the full study has been run.
 
 - **[`docs/PROPOSALS.md`](docs/PROPOSALS.md) — read before adding or editing a note under `docs/proposals/`.**
   It defines the shape of a proposal note (front matter, the nine `§` slots, the `§1` document map, the
