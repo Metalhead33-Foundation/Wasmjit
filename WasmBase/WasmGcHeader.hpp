@@ -69,8 +69,8 @@ constexpr uint32_t kExternBoxTypeId = 0xFFFFFFFEu;
 //! [TypeId][refcount][inner] — an extern box has no descriptor slot.
 constexpr size_t kExternBoxInnerOffset = kTypeHeaderBytes;
 /**
- * \\brief Performs the sizeof operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the sizeof operation.
+ * \return The requested value, handle, view, or success status.
  */
 constexpr size_t kExternBoxBytes = kTypeHeaderBytes + sizeof(void*);
 
@@ -79,28 +79,28 @@ constexpr size_t kExternBoxBytes = kTypeHeaderBytes + sizeof(void*);
 //! \par Storage layout helpers, shared so the runtime and the backend agree (H1)
 
 /**
- * \\brief Performs the alignment operation.
- * \\param value Input value, resource descriptor, or output destination for this operation.
- * \\param alignment Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the alignment operation.
+ * \param value Input value, resource descriptor, or output destination for this operation.
+ * \param alignment Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
-/** \\brief Rounds a byte offset up to an alignment boundary. \\param value Original byte offset. \\param alignment Required alignment (non-zero). \\return Smallest aligned offset not less than value. */
+/** \brief Rounds a byte offset up to an alignment boundary. \param value Original byte offset. \param alignment Required alignment (non-zero). \return Smallest aligned offset not less than value. */
 /**
- * \\brief Performs the gcAlignUp operation.
- * \\param value Input value, resource descriptor, or output destination for this operation.
- * \\param alignment Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the gcAlignUp operation.
+ * \param value Input value, resource descriptor, or output destination for this operation.
+ * \param alignment Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 inline size_t gcAlignUp(size_t value, size_t alignment)
 {
 	return (value + alignment - 1) / alignment * alignment;
 }
 
-/** \\brief Returns the byte size of one core GC storage type. \\param st Storage type to measure. \\return Size in bytes, including pointer-sized reference fields. */
+/** \brief Returns the byte size of one core GC storage type. \param st Storage type to measure. \return Size in bytes, including pointer-sized reference fields. */
 /**
- * \\brief Performs the gcStorageBytes operation.
- * \\param st Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the gcStorageBytes operation.
+ * \param st Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 inline size_t gcStorageBytes(const StorageType& st)
 {
@@ -113,18 +113,18 @@ inline size_t gcStorageBytes(const StorageType& st)
 	case ValueTypeCode::F64: return 8;
 	case ValueTypeCode::V128: return 16;
 /**
- * \\brief Performs the sizeof operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the sizeof operation.
+ * \return The requested value, handle, view, or success status.
  */
 	default: return sizeof(void*); //!< references
 	}
 }
 
-/** \\brief Returns the alignment required by one core GC storage type. \\param st Storage type to measure. \\return Required alignment in bytes. */
+/** \brief Returns the alignment required by one core GC storage type. \param st Storage type to measure. \return Required alignment in bytes. */
 /**
- * \\brief Performs the gcStorageAlign operation.
- * \\param st Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the gcStorageAlign operation.
+ * \param st Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 inline size_t gcStorageAlign(const StorageType& st)
 {
@@ -138,11 +138,11 @@ inline size_t gcStorageAlign(const StorageType& st)
 //! Canonical storage views carry no module-local type index; layout depends only
 //! on opcode/packedness, so this is a lossless conversion for the GC layout and
 //! store paths. Heap references remain opaque pointers in those paths.
-/** \\brief Converts a canonical storage type to the layout-only core storage view. \\param st Canonical storage type. \\return Equivalent storage descriptor with no module-local heap index. */
+/** \brief Converts a canonical storage type to the layout-only core storage view. \param st Canonical storage type. \return Equivalent storage descriptor with no module-local heap index. */
 /**
- * \\brief Performs the gcStorageView operation.
- * \\param st Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the gcStorageView operation.
+ * \param st Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 inline StorageType gcStorageView(const CanonStorageType& st)
 {
@@ -153,22 +153,22 @@ inline StorageType gcStorageView(const CanonStorageType& st)
 	return out;
 }
 
-/** \\brief Returns the byte size of a canonical GC storage type. \\param st Canonical storage type. \\return Storage size in bytes. */
+/** \brief Returns the byte size of a canonical GC storage type. \param st Canonical storage type. \return Storage size in bytes. */
 /**
- * \\brief Performs the gcStorageBytes operation.
- * \\param st Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the gcStorageBytes operation.
+ * \param st Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 inline size_t gcStorageBytes(const CanonStorageType& st)
 {
 	return gcStorageBytes(gcStorageView(st));
 }
 
-/** \\brief Returns the alignment of a canonical GC storage type. \\param st Canonical storage type. \\return Required alignment in bytes. */
+/** \brief Returns the alignment of a canonical GC storage type. \param st Canonical storage type. \return Required alignment in bytes. */
 /**
- * \\brief Performs the gcStorageAlign operation.
- * \\param st Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the gcStorageAlign operation.
+ * \param st Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 inline size_t gcStorageAlign(const CanonStorageType& st)
 {
@@ -178,22 +178,22 @@ inline size_t gcStorageAlign(const CanonStorageType& st)
 //! The byte offset of an array's first element within the array object. It must
 //! be identical in the runtime's allocateArrayObject/evalConstantExpr and in a
 //! backend's array addressing (docs/proposals/GC.md §6.3 / H1).
-/** \\brief Computes the first-element offset for an array with this element type. \\param element Element storage type. \\return Byte offset of the inline element payload. */
+/** \brief Computes the first-element offset for an array with this element type. \param element Element storage type. \return Byte offset of the inline element payload. */
 /**
- * \\brief Performs the gcArrayDataOffset operation.
- * \\param element Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the gcArrayDataOffset operation.
+ * \param element Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 inline size_t gcArrayDataOffset(const StorageType& element)
 {
 	return gcAlignUp(GcHeader::kArrayHeaderBytes, gcStorageAlign(element));
 }
 
-/** \\brief Computes the first-element offset for a canonical element type. \\param element Canonical element storage type. \\return Byte offset of the inline element payload. */
+/** \brief Computes the first-element offset for a canonical element type. \param element Canonical element storage type. \return Byte offset of the inline element payload. */
 /**
- * \\brief Performs the gcArrayDataOffset operation.
- * \\param element Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the gcArrayDataOffset operation.
+ * \param element Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 inline size_t gcArrayDataOffset(const CanonStorageType& element)
 {
@@ -204,11 +204,11 @@ inline size_t gcArrayDataOffset(const CanonStorageType& element)
 //! The string codes are Store-owned references with their own StringStore count
 //! (docs/proposals/STRINGREF.md STR-8); they have no GC header, so the GC
 //! reference-counting paths treat them separately.
-/** \\brief Tests whether a value type may contain a GC/host reference. \\param code WebAssembly value type opcode. \\return true for reference and string-reference forms. */
+/** \brief Tests whether a value type may contain a GC/host reference. \param code WebAssembly value type opcode. \return true for reference and string-reference forms. */
 /**
- * \\brief Performs the isReferenceType operation.
- * \\param code Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the isReferenceType operation.
+ * \param code Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 inline bool isReferenceType(ValueTypeCode code)
 {
