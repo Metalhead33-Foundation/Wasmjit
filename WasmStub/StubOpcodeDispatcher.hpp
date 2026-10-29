@@ -18,10 +18,11 @@
 */
 
 namespace Stub {
+//! Pretty-prints each opcode to a stream instead of compiling or executing it.
 class OpcodeDispatcher : public WASM::OpcodeDispatcher
 {
 private:
-	std::basic_ostream<char>* stream;
+	std::basic_ostream<char>* stream; //!< Destination for the textual listing.
 	//! Optional name context for the listing. `WASM::OpcodeDispatcher` is
 	//! deliberately module-agnostic, so the consumer supplies it. Every named
 	//! index space is printed as `index ($name)`, keeping the raw index when
@@ -29,9 +30,11 @@ private:
 	//! ENS-5/ENSD3). Not called `module`: Doxygen reads a documented member
 	//! with that name as a C++20 module declaration.
 	const WASM::Module* moduleContext = nullptr;
-	uint32_t functionIndex = 0;
+	uint32_t functionIndex = 0; //!< Global function index whose local names apply.
+	//! Format an index (and optional sub-index) with its name-section spelling.
 	std::string describe(WASM::NameKind kind, uint32_t index, uint32_t subIndex = 0) const;
 public:
+	//! Construct a listing dispatcher that writes to \a stream.
 	OpcodeDispatcher(std::basic_ostream<char>* stream);
 
 	//! `globalFunctionIndex` selects the function whose local names apply
@@ -40,662 +43,662 @@ public:
 
 	//! OpcodeDispatcher interface
 protected:
-	void dispatchUnreachable() override;
-	void dispatchNop() override;
-	void dispatchBlock(const WASM::BlockType& arg) override;
-	void dispatchLoop(const WASM::BlockType& arg) override;
-	void dispatchIf(const WASM::BlockType& arg) override;
-	void dispatchElse() override;
-	void dispatchThrow(WASM::TagIdx arg) override;
-	void dispatchThrowRef() override;
-	void dispatchContNew(WASM::TypeIdx arg) override;
-	void dispatchSuspend(WASM::TagIdx arg) override;
-	void dispatchResume(WASM::TypeIdx arg, std::vector<WASM::ContHandlerClause>&& handlers) override;
-	void dispatchEnd() override;
-	void dispatchBr(WASM::LabelIdx arg) override;
-	void dispatchBrIf(WASM::LabelIdx arg) override;
-	void dispatchBrTable(std::vector<WASM::LabelIdx>&& arg1, WASM::LabelIdx arg2) override;
-	void dispatchReturn() override;
-	void dispatchCall(WASM::FuncIdx arg) override;
-	void dispatchCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2) override;
-	void dispatchReturnCall(WASM::FuncIdx arg) override;
-	void dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2) override;
-	void dispatchCallRef(WASM::TypeIdx arg) override;
-	void dispatchReturnCallRef(WASM::TypeIdx arg) override;
-	void dispatchTryTable(const WASM::BlockType& arg1, std::vector<WASM::CatchClause>&& arg2) override;
-	void dispatchDrop() override;
-	void dispatchSelect() override;
-	void dispatchSelectT(std::vector<WASM::ValueType>&& arg) override;
-	void dispatchLocalGet(WASM::LocalIdx arg) override;
-	void dispatchLocalSet(WASM::LocalIdx arg) override;
-	void dispatchLocalTee(WASM::LocalIdx arg) override;
-	void dispatchGlobalGet(WASM::GlobalIdx arg) override;
-	void dispatchGlobalSet(WASM::GlobalIdx arg) override;
-	void dispatchTableGet(WASM::TableIdx arg) override;
-	void dispatchTableSet(WASM::TableIdx arg) override;
-	void dispatchI32Load(WASM::MemArg addr) override;
-	void dispatchI64Load(WASM::MemArg addr) override;
-	void dispatchF32Load(WASM::MemArg addr) override;
-	void dispatchF64Load(WASM::MemArg addr) override;
-	void dispatchI32Load8S(WASM::MemArg addr) override;
-	void dispatchI32Load8U(WASM::MemArg addr) override;
-	void dispatchI32Load16S(WASM::MemArg addr) override;
-	void dispatchI32Load16U(WASM::MemArg addr) override;
-	void dispatchI64Load8S(WASM::MemArg addr) override;
-	void dispatchI64Load8U(WASM::MemArg addr) override;
-	void dispatchI64Load16S(WASM::MemArg addr) override;
-	void dispatchI64Load16U(WASM::MemArg addr) override;
-	void dispatchI64Load32S(WASM::MemArg addr) override;
-	void dispatchI64Load32U(WASM::MemArg addr) override;
-	void dispatchI32Store(WASM::MemArg addr) override;
-	void dispatchI64Store(WASM::MemArg addr) override;
-	void dispatchF32Store(WASM::MemArg addr) override;
-	void dispatchF64Store(WASM::MemArg addr) override;
-	void dispatchI32Store8(WASM::MemArg addr) override;
-	void dispatchI32Store16(WASM::MemArg addr) override;
-	void dispatchI64Store8(WASM::MemArg addr) override;
-	void dispatchI64Store16(WASM::MemArg addr) override;
-	void dispatchI64Store32(WASM::MemArg addr) override;
-	void dispatchMemorySize(WASM::MemIdx arg) override;
-	void dispatchMemoryGrow(WASM::MemIdx arg) override;
-	void dispatchI32Const(int32_t arg) override;
-	void dispatchI64Const(int64_t arg) override;
-	void dispatchF32Const(float arg) override;
-	void dispatchF64Const(double arg) override;
-	void dispatchI32Eqz() override;
-	void dispatchI32Eq() override;
-	void dispatchI32Ne() override;
-	void dispatchI32LtS() override;
-	void dispatchI32LtU() override;
-	void dispatchI32GtS() override;
-	void dispatchI32GtU() override;
-	void dispatchI32LeS() override;
-	void dispatchI32LeU() override;
-	void dispatchI32GeS() override;
-	void dispatchI32GeU() override;
-	void dispatchI64Eqz() override;
-	void dispatchI64Eq() override;
-	void dispatchI64Ne() override;
-	void dispatchI64LtS() override;
-	void dispatchI64LtU() override;
-	void dispatchI64GtS() override;
-	void dispatchI64GtU() override;
-	void dispatchI64LeS() override;
-	void dispatchI64LeU() override;
-	void dispatchI64GeS() override;
-	void dispatchI64GeU() override;
-	void dispatchF32Eq() override;
-	void dispatchF32Ne() override;
-	void dispatchF32Lt() override;
-	void dispatchF32Gt() override;
-	void dispatchF32Le() override;
-	void dispatchF32Ge() override;
-	void dispatchF64Eq() override;
-	void dispatchF64Ne() override;
-	void dispatchF64Lt() override;
-	void dispatchF64Gt() override;
-	void dispatchF64Le() override;
-	void dispatchF64Ge() override;
-	void dispatchI32Clz() override;
-	void dispatchI32Ctz() override;
-	void dispatchI32Popcnt() override;
-	void dispatchI32Add() override;
-	void dispatchI32Sub() override;
-	void dispatchI32Mul() override;
-	void dispatchI32DivS() override;
-	void dispatchI32DivU() override;
-	void dispatchI32RemS() override;
-	void dispatchI32RemU() override;
-	void dispatchI32And() override;
-	void dispatchI32Or() override;
-	void dispatchI32Xor() override;
-	void dispatchI32Shl() override;
-	void dispatchI32ShrS() override;
-	void dispatchI32ShrU() override;
-	void dispatchI32Rotl() override;
-	void dispatchI32Rotr() override;
-	void dispatchI64Clz() override;
-	void dispatchI64Ctz() override;
-	void dispatchI64Popcnt() override;
-	void dispatchI64Add() override;
-	void dispatchI64Sub() override;
-	void dispatchI64Mul() override;
-	void dispatchI64DivS() override;
-	void dispatchI64DivU() override;
-	void dispatchI64RemS() override;
-	void dispatchI64RemU() override;
-	void dispatchI64And() override;
-	void dispatchI64Or() override;
-	void dispatchI64Xor() override;
-	void dispatchI64Shl() override;
-	void dispatchI64ShrS() override;
-	void dispatchI64ShrU() override;
-	void dispatchI64Rotl() override;
-	void dispatchI64Rotr() override;
-	void dispatchF32Abs() override;
-	void dispatchF32Neg() override;
-	void dispatchF32Ceil() override;
-	void dispatchF32Floor() override;
-	void dispatchF32Trunc() override;
-	void dispatchF32Nearest() override;
-	void dispatchF32Sqrt() override;
-	void dispatchF32Add() override;
-	void dispatchF32Sub() override;
-	void dispatchF32Mul() override;
-	void dispatchF32Div() override;
-	void dispatchF32Min() override;
-	void dispatchF32Max() override;
-	void dispatchF32Copysign() override;
-	void dispatchF64Abs() override;
-	void dispatchF64Neg() override;
-	void dispatchF64Ceil() override;
-	void dispatchF64Floor() override;
-	void dispatchF64Trunc() override;
-	void dispatchF64Nearest() override;
-	void dispatchF64Sqrt() override;
-	void dispatchF64Add() override;
-	void dispatchF64Sub() override;
-	void dispatchF64Mul() override;
-	void dispatchF64Div() override;
-	void dispatchF64Min() override;
-	void dispatchF64Max() override;
-	void dispatchF64Copysign() override;
-	void dispatchI32WrapI64() override;
-	void dispatchI32TruncF32S() override;
-	void dispatchI32TruncF32U() override;
-	void dispatchI32TruncF64S() override;
-	void dispatchI32TruncF64U() override;
-	void dispatchI64ExtendI32S() override;
-	void dispatchI64ExtendI32U() override;
-	void dispatchI64TruncF32S() override;
-	void dispatchI64TruncF32U() override;
-	void dispatchI64TruncF64S() override;
-	void dispatchI64TruncF64U() override;
-	void dispatchF32ConvertI32S() override;
-	void dispatchF32ConvertI32U() override;
-	void dispatchF32ConvertI64S() override;
-	void dispatchF32ConvertI64U() override;
-	void dispatchF32DemoteF64() override;
-	void dispatchF64ConvertI32S() override;
-	void dispatchF64ConvertI32U() override;
-	void dispatchF64ConvertI64S() override;
-	void dispatchF64ConvertI64U() override;
-	void dispatchF64PromoteF32() override;
-	void dispatchI32ReinterpretF32() override;
-	void dispatchI64ReinterpretF64() override;
-	void dispatchF32ReinterpretI32() override;
-	void dispatchF64ReinterpretI64() override;
-	void dispatchI32Extend8S() override;
-	void dispatchI32Extend16S() override;
-	void dispatchI64Extend8S() override;
-	void dispatchI64Extend16S() override;
-	void dispatchI64Extend32S() override;
-	void dispatchRefNull(const WASM::HeapType& arg) override;
-	void dispatchRefIsNull() override;
-	void dispatchRefFunc(WASM::FuncIdx arg) override;
-	void dispatchRefEq() override;
-	void dispatchRefAsNonNull() override;
-	void dispatchBrOnNull(WASM::LabelIdx arg) override;
-	void dispatchBrOnNonNull(WASM::LabelIdx arg) override;
-	void dispatchStructNew(WASM::TypeIdx arg) override;
-	void dispatchStructNewDefault(WASM::TypeIdx arg) override;
-	void dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2) override;
-	void dispatchStructGetS(WASM::TypeIdx arg1, uint32_t arg2) override;
-	void dispatchStructGetU(WASM::TypeIdx arg1, uint32_t arg2) override;
-	void dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2) override;
-	void dispatchArrayNew(WASM::TypeIdx arg) override;
-	void dispatchArrayNewDefault(WASM::TypeIdx arg) override;
-	void dispatchArrayNewFixed(WASM::TypeIdx arg1, uint32_t arg2) override;
-	void dispatchArrayNewData(WASM::TypeIdx arg1, uint32_t arg2) override;
-	void dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2) override;
-	void dispatchArrayGet(WASM::TypeIdx arg) override;
-	void dispatchArrayGetS(WASM::TypeIdx arg) override;
-	void dispatchArrayGetU(WASM::TypeIdx arg) override;
-	void dispatchArraySet(WASM::TypeIdx arg) override;
-	void dispatchArrayLen() override;
-	void dispatchArrayFill(WASM::TypeIdx arg) override;
-	void dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2) override;
-	void dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2) override;
-	void dispatchArrayInitElem(WASM::TypeIdx arg1, uint32_t arg2) override;
-	void dispatchRefTest(const WASM::HeapType& arg) override;
-	void dispatchRefTestNull(const WASM::HeapType& arg) override;
-	void dispatchRefCast(const WASM::HeapType& arg) override;
-	void dispatchRefCastNull(const WASM::HeapType& arg) override;
-	void dispatchBrOnCast(uint8_t castop, WASM::LabelIdx l, WASM::HeapType ht1, WASM::HeapType ht2) override;
-	void dispatchBrOnCastFail(uint8_t castop, WASM::LabelIdx l, WASM::HeapType ht1, WASM::HeapType ht2) override;
-	void dispatchAnyConvertExtern() override;
-	void dispatchExternConvertAny() override;
-	void dispatchRefI31() override;
-	void dispatchI31GetS() override;
-	void dispatchI31GetU() override;
+	void dispatchUnreachable() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchNop() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchBlock(const WASM::BlockType& arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchLoop(const WASM::BlockType& arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchIf(const WASM::BlockType& arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchElse() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchThrow(WASM::TagIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchThrowRef() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchContNew(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchSuspend(WASM::TagIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchResume(WASM::TypeIdx arg, std::vector<WASM::ContHandlerClause>&& handlers) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchEnd() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchBr(WASM::LabelIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchBrIf(WASM::LabelIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchBrTable(std::vector<WASM::LabelIdx>&& arg1, WASM::LabelIdx arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchReturn() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchCall(WASM::FuncIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchReturnCall(WASM::FuncIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchCallRef(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchReturnCallRef(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchTryTable(const WASM::BlockType& arg1, std::vector<WASM::CatchClause>&& arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchDrop() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchSelect() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchSelectT(std::vector<WASM::ValueType>&& arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchLocalGet(WASM::LocalIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchLocalSet(WASM::LocalIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchLocalTee(WASM::LocalIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchGlobalGet(WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchGlobalSet(WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchTableGet(WASM::TableIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchTableSet(WASM::TableIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Load(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Load(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Load(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Load(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Load8S(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Load8U(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Load16S(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Load16U(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Load8S(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Load8U(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Load16S(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Load16U(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Load32S(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Load32U(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Store(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Store(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Store(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Store(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Store8(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Store16(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Store8(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Store16(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Store32(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchMemorySize(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchMemoryGrow(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Const(int32_t arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Const(int64_t arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Const(float arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Const(double arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Eqz() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Eq() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Ne() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32LtS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32LtU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32GtS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32GtU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32LeS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32LeU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32GeS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32GeU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Eqz() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Eq() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Ne() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64LtS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64LtU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64GtS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64GtU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64LeS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64LeU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64GeS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64GeU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Eq() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Ne() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Lt() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Gt() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Le() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Ge() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Eq() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Ne() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Lt() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Gt() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Le() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Ge() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Clz() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Ctz() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Popcnt() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Add() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Sub() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Mul() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32DivS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32DivU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32RemS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32RemU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32And() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Or() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Xor() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Shl() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32ShrS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32ShrU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Rotl() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Rotr() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Clz() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Ctz() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Popcnt() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Add() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Sub() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Mul() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64DivS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64DivU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64RemS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64RemU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64And() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Or() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Xor() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Shl() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64ShrS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64ShrU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Rotl() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Rotr() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Abs() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Neg() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Ceil() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Floor() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Trunc() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Nearest() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Sqrt() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Add() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Sub() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Mul() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Div() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Min() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Max() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32Copysign() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Abs() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Neg() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Ceil() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Floor() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Trunc() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Nearest() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Sqrt() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Add() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Sub() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Mul() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Div() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Min() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Max() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64Copysign() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32WrapI64() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32TruncF32S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32TruncF32U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32TruncF64S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32TruncF64U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64ExtendI32S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64ExtendI32U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64TruncF32S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64TruncF32U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64TruncF64S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64TruncF64U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32ConvertI32S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32ConvertI32U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32ConvertI64S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32ConvertI64U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32DemoteF64() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64ConvertI32S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64ConvertI32U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64ConvertI64S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64ConvertI64U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64PromoteF32() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32ReinterpretF32() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64ReinterpretF64() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32ReinterpretI32() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64ReinterpretI64() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Extend8S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Extend16S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Extend8S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Extend16S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Extend32S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchRefNull(const WASM::HeapType& arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchRefIsNull() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchRefFunc(WASM::FuncIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchRefEq() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchRefAsNonNull() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchBrOnNull(WASM::LabelIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchBrOnNonNull(WASM::LabelIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStructNew(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStructNewDefault(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStructGetS(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStructGetU(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayNew(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayNewDefault(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayNewFixed(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayNewData(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayGet(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayGetS(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayGetU(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArraySet(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayLen() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayFill(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayInitElem(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchRefTest(const WASM::HeapType& arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchRefTestNull(const WASM::HeapType& arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchRefCast(const WASM::HeapType& arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchRefCastNull(const WASM::HeapType& arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchBrOnCast(uint8_t castop, WASM::LabelIdx l, WASM::HeapType ht1, WASM::HeapType ht2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchBrOnCastFail(uint8_t castop, WASM::LabelIdx l, WASM::HeapType ht1, WASM::HeapType ht2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchAnyConvertExtern() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchExternConvertAny() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchRefI31() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI31GetS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI31GetU() override; //!< Stub: reject / no-op for this opcode.
 	//! stringref core instructions (docs/proposals/STRINGREF.md STR-3)
 	void dispatchStringNewUtf8(WASM::MemIdx arg) override;
-	void dispatchStringNewWtf16(WASM::MemIdx arg) override;
-	void dispatchStringNewLossyUtf8(WASM::MemIdx arg) override;
-	void dispatchStringNewWtf8(WASM::MemIdx arg) override;
-	void dispatchStringConst(uint32_t idx) override;
-	void dispatchStringMeasureUtf8() override;
-	void dispatchStringMeasureWtf8() override;
-	void dispatchStringMeasureWtf16() override;
-	void dispatchStringEncodeUtf8(WASM::MemIdx arg) override;
-	void dispatchStringEncodeLossyUtf8(WASM::MemIdx arg) override;
-	void dispatchStringEncodeWtf8(WASM::MemIdx arg) override;
-	void dispatchStringEncodeWtf16(WASM::MemIdx arg) override;
-	void dispatchStringConcat() override;
-	void dispatchStringEq() override;
-	void dispatchStringIsUsvSequence() override;
+	void dispatchStringNewWtf16(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringNewLossyUtf8(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringNewWtf8(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringConst(uint32_t idx) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringMeasureUtf8() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringMeasureWtf8() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringMeasureWtf16() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringEncodeUtf8(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringEncodeLossyUtf8(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringEncodeWtf8(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringEncodeWtf16(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringConcat() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringEq() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringIsUsvSequence() override; //!< Stub: reject / no-op for this opcode.
 	//! stringview facility (docs/proposals/STRINGREF.md STR-4)
 	void dispatchStringAsWtf8() override;
-	void dispatchStringViewWtf8Advance() override;
-	void dispatchStringViewWtf8EncodeUtf8(WASM::MemIdx arg) override;
-	void dispatchStringViewWtf8Slice() override;
-	void dispatchStringViewWtf8EncodeLossyUtf8(WASM::MemIdx arg) override;
-	void dispatchStringViewWtf8EncodeWtf8(WASM::MemIdx arg) override;
-	void dispatchStringAsWtf16() override;
-	void dispatchStringViewWtf16Length() override;
-	void dispatchStringViewWtf16GetCodeUnit() override;
-	void dispatchStringViewWtf16Encode(WASM::MemIdx arg) override;
-	void dispatchStringViewWtf16Slice() override;
-	void dispatchStringAsIter() override;
-	void dispatchStringViewIterNext() override;
-	void dispatchStringViewIterAdvance() override;
-	void dispatchStringViewIterRewind() override;
-	void dispatchStringViewIterSlice() override;
+	void dispatchStringViewWtf8Advance() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringViewWtf8EncodeUtf8(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringViewWtf8Slice() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringViewWtf8EncodeLossyUtf8(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringViewWtf8EncodeWtf8(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringAsWtf16() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringViewWtf16Length() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringViewWtf16GetCodeUnit() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringViewWtf16Encode(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringViewWtf16Slice() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringAsIter() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringViewIterNext() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringViewIterAdvance() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringViewIterRewind() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringViewIterSlice() override; //!< Stub: reject / no-op for this opcode.
 	//! GC-array string bridge (docs/proposals/STRINGREF.md STR-6)
 	void dispatchStringNewUtf8Array(WASM::TypeIdx arg) override;
-	void dispatchStringNewWtf16Array(WASM::TypeIdx arg) override;
-	void dispatchStringEncodeUtf8Array(WASM::TypeIdx arg) override;
-	void dispatchStringEncodeWtf16Array(WASM::TypeIdx arg) override;
-	void dispatchStringNewLossyUtf8Array(WASM::TypeIdx arg) override;
-	void dispatchStringNewWtf8Array(WASM::TypeIdx arg) override;
-	void dispatchStringEncodeLossyUtf8Array(WASM::TypeIdx arg) override;
-	void dispatchStringEncodeWtf8Array(WASM::TypeIdx arg) override;
-	void dispatchI32TruncSatF32S() override;
-	void dispatchI32TruncSatF32U() override;
-	void dispatchI32TruncSatF64S() override;
-	void dispatchI32TruncSatF64U() override;
-	void dispatchI64TruncSatF32S() override;
-	void dispatchI64TruncSatF32U() override;
-	void dispatchI64TruncSatF64S() override;
-	void dispatchI64TruncSatF64U() override;
-	void dispatchMemoryInit(uint32_t arg1, WASM::MemIdx arg2) override;
-	void dispatchDataDrop(uint32_t arg) override;
-	void dispatchMemoryCopy(WASM::MemIdx arg1, WASM::MemIdx arg2) override;
-	void dispatchMemoryFill(WASM::MemIdx arg) override;
-	void dispatchMemoryDiscard(WASM::MemIdx arg) override;
-	void dispatchRoundingVariant(uint32_t sub) override;
-	void dispatchI64Add128() override;
-	void dispatchI64Sub128() override;
-	void dispatchI64MulWideS() override;
-	void dispatchI64MulWideU() override;
-	void dispatchI32Itt(uint32_t immediate) override;
-	void dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2) override;
-	void dispatchElemDrop(uint32_t arg) override;
-	void dispatchTableCopy(WASM::TableIdx arg1, WASM::TableIdx arg2) override;
-	void dispatchTableGrow(WASM::TableIdx arg) override;
-	void dispatchTableSize(WASM::TableIdx arg) override;
-	void dispatchTableFill(WASM::TableIdx arg) override;
-	void dispatchV128Load(WASM::MemArg arg) override;
-	void dispatchV128Load8x8S(WASM::MemArg arg) override;
-	void dispatchV128Load8x8U(WASM::MemArg arg) override;
-	void dispatchV128Load16x4S(WASM::MemArg arg) override;
-	void dispatchV128Load16x4U(WASM::MemArg arg) override;
-	void dispatchV128Load32x2S(WASM::MemArg arg) override;
-	void dispatchV128Load32x2U(WASM::MemArg arg) override;
-	void dispatchV128Load8Splat(WASM::MemArg arg) override;
-	void dispatchV128Load16Splat(WASM::MemArg arg) override;
-	void dispatchV128Load32Splat(WASM::MemArg arg) override;
-	void dispatchV128Load64Splat(WASM::MemArg arg) override;
-	void dispatchV128Load32Zero(WASM::MemArg arg) override;
-	void dispatchV128Load64Zero(WASM::MemArg arg) override;
-	void dispatchV128Store(WASM::MemArg arg) override;
-	void dispatchV128Load8Lane(WASM::MemArg arg1, uint8_t arg2) override;
-	void dispatchV128Load16Lane(WASM::MemArg arg1, uint8_t arg2) override;
-	void dispatchV128Load32Lane(WASM::MemArg arg1, uint8_t arg2) override;
-	void dispatchV128Load64Lane(WASM::MemArg arg1, uint8_t arg2) override;
-	void dispatchV128Store8Lane(WASM::MemArg arg1, uint8_t arg2) override;
-	void dispatchV128Store16Lane(WASM::MemArg arg1, uint8_t arg2) override;
-	void dispatchV128Store32Lane(WASM::MemArg arg1, uint8_t arg2) override;
-	void dispatchV128Store64Lane(WASM::MemArg arg1, uint8_t arg2) override;
-	void dispatchV128Const(std::span<uint8_t> arg) override;
-	void dispatchI8x16Shuffle(std::span<uint8_t> arg) override;
-	void dispatchI8x16Swizzle() override;
-	void dispatchI8x16Splat() override;
-	void dispatchI16x8Splat() override;
-	void dispatchI32x4Splat() override;
-	void dispatchI64x2Splat() override;
-	void dispatchF32x4Splat() override;
-	void dispatchF64x2Splat() override;
-	void dispatchI8x16ExtractLaneS(uint8_t arg) override;
-	void dispatchI8x16ExtractLaneU(uint8_t arg) override;
-	void dispatchI8x16ReplaceLane(uint8_t arg) override;
-	void dispatchI16x8ExtractLaneS(uint8_t arg) override;
-	void dispatchI16x8ExtractLaneU(uint8_t arg) override;
-	void dispatchI16x8ReplaceLane(uint8_t arg) override;
-	void dispatchI32x4ExtractLane(uint8_t arg) override;
-	void dispatchI32x4ReplaceLane(uint8_t arg) override;
-	void dispatchI64x2ExtractLane(uint8_t arg) override;
-	void dispatchI64x2ReplaceLane(uint8_t arg) override;
-	void dispatchF32x4ExtractLane(uint8_t arg) override;
-	void dispatchF32x4ReplaceLane(uint8_t arg) override;
-	void dispatchF64x2ExtractLane(uint8_t arg) override;
-	void dispatchF64x2ReplaceLane(uint8_t arg) override;
-	void dispatchI8x16Eq() override;
-	void dispatchI8x16Ne() override;
-	void dispatchI8x16LtS() override;
-	void dispatchI8x16LtU() override;
-	void dispatchI8x16GtS() override;
-	void dispatchI8x16GtU() override;
-	void dispatchI8x16LeS() override;
-	void dispatchI8x16LeU() override;
-	void dispatchI8x16GeS() override;
-	void dispatchI8x16GeU() override;
-	void dispatchI16x8Eq() override;
-	void dispatchI16x8Ne() override;
-	void dispatchI16x8LtS() override;
-	void dispatchI16x8LtU() override;
-	void dispatchI16x8GtS() override;
-	void dispatchI16x8GtU() override;
-	void dispatchI16x8LeS() override;
-	void dispatchI16x8LeU() override;
-	void dispatchI16x8GeS() override;
-	void dispatchI16x8GeU() override;
-	void dispatchI32x4Eq() override;
-	void dispatchI32x4Ne() override;
-	void dispatchI32x4LtS() override;
-	void dispatchI32x4LtU() override;
-	void dispatchI32x4GtS() override;
-	void dispatchI32x4GtU() override;
-	void dispatchI32x4LeS() override;
-	void dispatchI32x4LeU() override;
-	void dispatchI32x4GeS() override;
-	void dispatchI32x4GeU() override;
-	void dispatchF32x4Eq() override;
-	void dispatchF32x4Ne() override;
-	void dispatchF32x4Lt() override;
-	void dispatchF32x4Gt() override;
-	void dispatchF32x4Le() override;
-	void dispatchF32x4Ge() override;
-	void dispatchF64x2Eq() override;
-	void dispatchF64x2Ne() override;
-	void dispatchF64x2Lt() override;
-	void dispatchF64x2Gt() override;
-	void dispatchF64x2Le() override;
-	void dispatchF64x2Ge() override;
-	void dispatchV128Not() override;
-	void dispatchV128And() override;
-	void dispatchV128AndNot() override;
-	void dispatchV128Or() override;
-	void dispatchV128Xor() override;
-	void dispatchV128Bitselect() override;
-	void dispatchV128AnyTrue() override;
-	void dispatchI8x16Abs() override;
-	void dispatchI8x16Neg() override;
-	void dispatchI8x16Popcnt() override;
-	void dispatchI8x16AllTrue() override;
-	void dispatchI8x16Bitmask() override;
-	void dispatchI8x16NarrowI16x8S() override;
-	void dispatchI8x16NarrowI16x8U() override;
-	void dispatchI8x16Shl() override;
-	void dispatchI8x16ShrS() override;
-	void dispatchI8x16ShrU() override;
-	void dispatchI8x16Add() override;
-	void dispatchI8x16AddSatS() override;
-	void dispatchI8x16AddSatU() override;
-	void dispatchI8x16Sub() override;
-	void dispatchI8x16SubSatS() override;
-	void dispatchI8x16SubSatU() override;
-	void dispatchI8x16MinS() override;
-	void dispatchI8x16MinU() override;
-	void dispatchI8x16MaxS() override;
-	void dispatchI8x16MaxU() override;
-	void dispatchI8x16AvgrU() override;
-	void dispatchI16x8ExtAddPairwiseI8x16S() override;
-	void dispatchI16x8ExtAddPairwiseI8x16U() override;
-	void dispatchI16x8Abs() override;
-	void dispatchI16x8Neg() override;
-	void dispatchI16x8Q15MulRSatS() override;
-	void dispatchI16x8AllTrue() override;
-	void dispatchI16x8Bitmask() override;
-	void dispatchI16x8NarrowI32x4S() override;
-	void dispatchI16x8NarrowI32x4U() override;
-	void dispatchI16x8ExtendLowI8x16S() override;
-	void dispatchI16x8ExtendHighI8x16S() override;
-	void dispatchI16x8ExtendLowI8x16U() override;
-	void dispatchI16x8ExtendHighI8x16U() override;
-	void dispatchI16x8Shl() override;
-	void dispatchI16x8ShrS() override;
-	void dispatchI16x8ShrU() override;
-	void dispatchI16x8Add() override;
-	void dispatchI16x8AddSatS() override;
-	void dispatchI16x8AddSatU() override;
-	void dispatchI16x8Sub() override;
-	void dispatchI16x8SubSatS() override;
-	void dispatchI16x8SubSatU() override;
-	void dispatchI16x8Mul() override;
-	void dispatchI16x8MinS() override;
-	void dispatchI16x8MinU() override;
-	void dispatchI16x8MaxS() override;
-	void dispatchI16x8MaxU() override;
-	void dispatchI16x8AvgrU() override;
-	void dispatchI16x8ExtMulLowI8x16S() override;
-	void dispatchI16x8ExtMulHighI8x16S() override;
-	void dispatchI16x8ExtMulLowI8x16U() override;
-	void dispatchI16x8ExtMulHighI8x16U() override;
-	void dispatchI32x4ExtAddPairwiseI16x8S() override;
-	void dispatchI32x4ExtAddPairwiseI16x8U() override;
-	void dispatchI32x4Abs() override;
-	void dispatchI32x4Neg() override;
-	void dispatchI32x4AllTrue() override;
-	void dispatchI32x4Bitmask() override;
-	void dispatchI32x4ExtendLowI16x8S() override;
-	void dispatchI32x4ExtendHighI16x8S() override;
-	void dispatchI32x4ExtendLowI16x8U() override;
-	void dispatchI32x4ExtendHighI16x8U() override;
-	void dispatchI32x4Shl() override;
-	void dispatchI32x4ShrS() override;
-	void dispatchI32x4ShrU() override;
-	void dispatchI32x4Add() override;
-	void dispatchI32x4Sub() override;
-	void dispatchI32x4Mul() override;
-	void dispatchI32x4MinS() override;
-	void dispatchI32x4MinU() override;
-	void dispatchI32x4MaxS() override;
-	void dispatchI32x4MaxU() override;
-	void dispatchI32x4DotI16x8S() override;
-	void dispatchI32x4ExtMulLowI16x8S() override;
-	void dispatchI32x4ExtMulHighI16x8S() override;
-	void dispatchI32x4ExtMulLowI16x8U() override;
-	void dispatchI32x4ExtMulHighI16x8U() override;
-	void dispatchI64x2Abs() override;
-	void dispatchI64x2Neg() override;
-	void dispatchI64x2AllTrue() override;
-	void dispatchI64x2Bitmask() override;
-	void dispatchI64x2ExtendLowI32x4S() override;
-	void dispatchI64x2ExtendHighI32x4S() override;
-	void dispatchI64x2ExtendLowI32x4U() override;
-	void dispatchI64x2ExtendHighI32x4U() override;
-	void dispatchI64x2Shl() override;
-	void dispatchI64x2ShrS() override;
-	void dispatchI64x2ShrU() override;
-	void dispatchI64x2Add() override;
-	void dispatchI64x2Sub() override;
-	void dispatchI64x2Mul() override;
-	void dispatchI64x2Eq() override;
-	void dispatchI64x2Ne() override;
-	void dispatchI64x2LtS() override;
-	void dispatchI64x2GtS() override;
-	void dispatchI64x2LeS() override;
-	void dispatchI64x2GeS() override;
-	void dispatchI64x2ExtMulLowI32x4S() override;
-	void dispatchI64x2ExtMulHighI32x4S() override;
-	void dispatchI64x2ExtMulLowI32x4U() override;
-	void dispatchI64x2ExtMulHighI32x4U() override;
-	void dispatchF32x4Ceil() override;
-	void dispatchF32x4Floor() override;
-	void dispatchF32x4Trunc() override;
-	void dispatchF32x4Nearest() override;
-	void dispatchF32x4Abs() override;
-	void dispatchF32x4Neg() override;
-	void dispatchF32x4Sqrt() override;
-	void dispatchF32x4Add() override;
-	void dispatchF32x4Sub() override;
-	void dispatchF32x4Mul() override;
-	void dispatchF32x4Div() override;
-	void dispatchF32x4Min() override;
-	void dispatchF32x4Max() override;
-	void dispatchF32x4PMin() override;
-	void dispatchF32x4PMax() override;
-	void dispatchF64x2Ceil() override;
-	void dispatchF64x2Floor() override;
-	void dispatchF64x2Trunc() override;
-	void dispatchF64x2Nearest() override;
-	void dispatchF64x2Abs() override;
-	void dispatchF64x2Neg() override;
-	void dispatchF64x2Sqrt() override;
-	void dispatchF64x2Add() override;
-	void dispatchF64x2Sub() override;
-	void dispatchF64x2Mul() override;
-	void dispatchF64x2Div() override;
-	void dispatchF64x2Min() override;
-	void dispatchF64x2Max() override;
-	void dispatchF64x2PMin() override;
-	void dispatchF64x2PMax() override;
-	void dispatchI32x4TruncSatF32x4S() override;
-	void dispatchI32x4TruncSatF32x4U() override;
-	void dispatchF32x4ConvertI32x4S() override;
-	void dispatchF32x4ConvertI32x4U() override;
-	void dispatchI32x4TruncSatF64x2SZero() override;
-	void dispatchI32x4TruncSatF64x2UZero() override;
-	void dispatchF64x2ConvertLowI32x4S() override;
-	void dispatchF64x2ConvertLowI32x4U() override;
-	void dispatchF32x4DemoteF64x2Zero() override;
-	void dispatchF64x2PromoteLowF32x4() override;
+	void dispatchStringNewWtf16Array(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringEncodeUtf8Array(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringEncodeWtf16Array(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringNewLossyUtf8Array(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringNewWtf8Array(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringEncodeLossyUtf8Array(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStringEncodeWtf8Array(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32TruncSatF32S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32TruncSatF32U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32TruncSatF64S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32TruncSatF64U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64TruncSatF32S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64TruncSatF32U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64TruncSatF64S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64TruncSatF64U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchMemoryInit(uint32_t arg1, WASM::MemIdx arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchDataDrop(uint32_t arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchMemoryCopy(WASM::MemIdx arg1, WASM::MemIdx arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchMemoryFill(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchMemoryDiscard(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchRoundingVariant(uint32_t sub) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Add128() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64Sub128() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64MulWideS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64MulWideU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32Itt(uint32_t immediate) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchElemDrop(uint32_t arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchTableCopy(WASM::TableIdx arg1, WASM::TableIdx arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchTableGrow(WASM::TableIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchTableSize(WASM::TableIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchTableFill(WASM::TableIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Load(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Load8x8S(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Load8x8U(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Load16x4S(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Load16x4U(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Load32x2S(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Load32x2U(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Load8Splat(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Load16Splat(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Load32Splat(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Load64Splat(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Load32Zero(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Load64Zero(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Store(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Load8Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Load16Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Load32Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Load64Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Store8Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Store16Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Store32Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Store64Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Const(std::span<uint8_t> arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16Shuffle(std::span<uint8_t> arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16Swizzle() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16Splat() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8Splat() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4Splat() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2Splat() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4Splat() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2Splat() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16ExtractLaneS(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16ExtractLaneU(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16ReplaceLane(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8ExtractLaneS(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8ExtractLaneU(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8ReplaceLane(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4ExtractLane(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4ReplaceLane(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2ExtractLane(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2ReplaceLane(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4ExtractLane(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4ReplaceLane(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2ExtractLane(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2ReplaceLane(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16Eq() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16Ne() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16LtS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16LtU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16GtS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16GtU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16LeS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16LeU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16GeS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16GeU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8Eq() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8Ne() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8LtS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8LtU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8GtS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8GtU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8LeS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8LeU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8GeS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8GeU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4Eq() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4Ne() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4LtS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4LtU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4GtS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4GtU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4LeS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4LeU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4GeS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4GeU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4Eq() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4Ne() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4Lt() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4Gt() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4Le() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4Ge() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2Eq() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2Ne() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2Lt() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2Gt() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2Le() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2Ge() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Not() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128And() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128AndNot() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Or() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Xor() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128Bitselect() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchV128AnyTrue() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16Abs() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16Neg() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16Popcnt() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16AllTrue() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16Bitmask() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16NarrowI16x8S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16NarrowI16x8U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16Shl() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16ShrS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16ShrU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16Add() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16AddSatS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16AddSatU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16Sub() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16SubSatS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16SubSatU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16MinS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16MinU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16MaxS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16MaxU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16AvgrU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8ExtAddPairwiseI8x16S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8ExtAddPairwiseI8x16U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8Abs() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8Neg() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8Q15MulRSatS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8AllTrue() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8Bitmask() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8NarrowI32x4S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8NarrowI32x4U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8ExtendLowI8x16S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8ExtendHighI8x16S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8ExtendLowI8x16U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8ExtendHighI8x16U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8Shl() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8ShrS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8ShrU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8Add() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8AddSatS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8AddSatU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8Sub() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8SubSatS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8SubSatU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8Mul() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8MinS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8MinU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8MaxS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8MaxU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8AvgrU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8ExtMulLowI8x16S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8ExtMulHighI8x16S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8ExtMulLowI8x16U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8ExtMulHighI8x16U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4ExtAddPairwiseI16x8S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4ExtAddPairwiseI16x8U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4Abs() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4Neg() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4AllTrue() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4Bitmask() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4ExtendLowI16x8S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4ExtendHighI16x8S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4ExtendLowI16x8U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4ExtendHighI16x8U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4Shl() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4ShrS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4ShrU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4Add() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4Sub() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4Mul() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4MinS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4MinU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4MaxS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4MaxU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4DotI16x8S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4ExtMulLowI16x8S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4ExtMulHighI16x8S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4ExtMulLowI16x8U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4ExtMulHighI16x8U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2Abs() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2Neg() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2AllTrue() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2Bitmask() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2ExtendLowI32x4S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2ExtendHighI32x4S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2ExtendLowI32x4U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2ExtendHighI32x4U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2Shl() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2ShrS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2ShrU() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2Add() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2Sub() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2Mul() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2Eq() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2Ne() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2LtS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2GtS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2LeS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2GeS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2ExtMulLowI32x4S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2ExtMulHighI32x4S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2ExtMulLowI32x4U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2ExtMulHighI32x4U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4Ceil() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4Floor() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4Trunc() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4Nearest() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4Abs() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4Neg() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4Sqrt() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4Add() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4Sub() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4Mul() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4Div() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4Min() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4Max() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4PMin() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4PMax() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2Ceil() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2Floor() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2Trunc() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2Nearest() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2Abs() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2Neg() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2Sqrt() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2Add() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2Sub() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2Mul() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2Div() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2Min() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2Max() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2PMin() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2PMax() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4TruncSatF32x4S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4TruncSatF32x4U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4ConvertI32x4S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4ConvertI32x4U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4TruncSatF64x2SZero() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4TruncSatF64x2UZero() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2ConvertLowI32x4S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2ConvertLowI32x4U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4DemoteF64x2Zero() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2PromoteLowF32x4() override; //!< Stub: reject / no-op for this opcode.
 
 	//! Relaxed SIMD (0x100-0x113).
 	void dispatchI8x16RelaxedSwizzle() override;
-	void dispatchI32x4RelaxedTruncF32x4S() override;
-	void dispatchI32x4RelaxedTruncF32x4U() override;
-	void dispatchI32x4RelaxedTruncF64x2SZero() override;
-	void dispatchI32x4RelaxedTruncF64x2UZero() override;
-	void dispatchF32x4RelaxedMadd() override;
-	void dispatchF32x4RelaxedNmadd() override;
-	void dispatchF64x2RelaxedMadd() override;
-	void dispatchF64x2RelaxedNmadd() override;
-	void dispatchI8x16RelaxedLaneselect() override;
-	void dispatchI16x8RelaxedLaneselect() override;
-	void dispatchI32x4RelaxedLaneselect() override;
-	void dispatchI64x2RelaxedLaneselect() override;
-	void dispatchF32x4RelaxedMin() override;
-	void dispatchF32x4RelaxedMax() override;
-	void dispatchF64x2RelaxedMin() override;
-	void dispatchF64x2RelaxedMax() override;
-	void dispatchI16x8RelaxedQ15MulRS() override;
-	void dispatchI16x8RelaxedDotI8x16I7x16S() override;
-	void dispatchI32x4RelaxedDotI8x16I7x16AddS() override;
-	void dispatchMemoryAtomicNotify(WASM::MemArg arg) override;
-	void dispatchMemoryAtomicWait32(WASM::MemArg arg) override;
-	void dispatchMemoryAtomicWait64(WASM::MemArg arg) override;
-	void dispatchAtomicFence(uint8_t ordering) override;
-	void dispatchAtomicPause() override;
-	void dispatchGlobalAtomicGet(uint8_t ordering, WASM::GlobalIdx arg) override;
-	void dispatchGlobalAtomicSet(uint8_t ordering, WASM::GlobalIdx arg) override;
-	void dispatchGlobalAtomicRmwAdd(uint8_t ordering, WASM::GlobalIdx arg) override;
-	void dispatchGlobalAtomicRmwSub(uint8_t ordering, WASM::GlobalIdx arg) override;
-	void dispatchGlobalAtomicRmwAnd(uint8_t ordering, WASM::GlobalIdx arg) override;
-	void dispatchGlobalAtomicRmwOr(uint8_t ordering, WASM::GlobalIdx arg) override;
-	void dispatchGlobalAtomicRmwXor(uint8_t ordering, WASM::GlobalIdx arg) override;
-	void dispatchGlobalAtomicRmwXchg(uint8_t ordering, WASM::GlobalIdx arg) override;
-	void dispatchGlobalAtomicRmwCmpxchg(uint8_t ordering, WASM::GlobalIdx arg) override;
-	void dispatchTableAtomicGet(uint8_t ordering, WASM::TableIdx arg) override;
-	void dispatchTableAtomicSet(uint8_t ordering, WASM::TableIdx arg) override;
-	void dispatchTableAtomicRmwXchg(uint8_t ordering, WASM::TableIdx arg) override;
-	void dispatchTableAtomicRmwCmpxchg(uint8_t ordering, WASM::TableIdx arg) override;
-	void dispatchStructAtomicGet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
-	void dispatchStructAtomicGetS(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
-	void dispatchStructAtomicGetU(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
-	void dispatchStructAtomicSet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
-	void dispatchStructAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
-	void dispatchStructAtomicRmwSub(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
-	void dispatchStructAtomicRmwAnd(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
-	void dispatchStructAtomicRmwOr(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
-	void dispatchStructAtomicRmwXor(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
-	void dispatchStructAtomicRmwXchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
-	void dispatchStructAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
-	void dispatchArrayAtomicGet(uint8_t ordering, WASM::TypeIdx arg) override;
-	void dispatchArrayAtomicGetS(uint8_t ordering, WASM::TypeIdx arg) override;
-	void dispatchArrayAtomicGetU(uint8_t ordering, WASM::TypeIdx arg) override;
-	void dispatchArrayAtomicSet(uint8_t ordering, WASM::TypeIdx arg) override;
-	void dispatchArrayAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx arg) override;
-	void dispatchArrayAtomicRmwSub(uint8_t ordering, WASM::TypeIdx arg) override;
-	void dispatchArrayAtomicRmwAnd(uint8_t ordering, WASM::TypeIdx arg) override;
-	void dispatchArrayAtomicRmwOr(uint8_t ordering, WASM::TypeIdx arg) override;
-	void dispatchArrayAtomicRmwXor(uint8_t ordering, WASM::TypeIdx arg) override;
-	void dispatchArrayAtomicRmwXchg(uint8_t ordering, WASM::TypeIdx arg) override;
-	void dispatchArrayAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg) override;
-	void dispatchI32AtomicLoad(WASM::MemArg arg) override;
-	void dispatchI64AtomicLoad(WASM::MemArg arg) override;
-	void dispatchI32AtomicLoad8U(WASM::MemArg arg) override;
-	void dispatchI32AtomicLoad16U(WASM::MemArg arg) override;
-	void dispatchI64AtomicLoad8U(WASM::MemArg arg) override;
-	void dispatchI64AtomicLoad16U(WASM::MemArg arg) override;
-	void dispatchI64AtomicLoad32U(WASM::MemArg arg) override;
-	void dispatchI32AtomicStore(WASM::MemArg arg) override;
-	void dispatchI64AtomicStore(WASM::MemArg arg) override;
-	void dispatchI32AtomicStore8(WASM::MemArg arg) override;
-	void dispatchI32AtomicStore16(WASM::MemArg arg) override;
-	void dispatchI64AtomicStore8(WASM::MemArg arg) override;
-	void dispatchI64AtomicStore16(WASM::MemArg arg) override;
-	void dispatchI64AtomicStore32(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmwAdd(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmwAdd(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmw8AddU(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmw16AddU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw8AddU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw16AddU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw32AddU(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmwSub(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmwSub(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmw8SubU(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmw16SubU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw8SubU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw16SubU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw32SubU(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmwAnd(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmwAnd(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmw8AndU(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmw16AndU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw8AndU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw16AndU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw32AndU(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmwOr(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmwOr(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmw8OrU(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmw16OrU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw8OrU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw16OrU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw32OrU(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmwXor(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmwXor(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmw8XorU(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmw16XorU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw8XorU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw16XorU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw32XorU(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmwXchg(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmwXchg(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmw8XchgU(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmw16XchgU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw8XchgU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw16XchgU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw32XchgU(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmwCmpxchg(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmwCmpxchg(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmw8CmpxchgU(WASM::MemArg arg) override;
-	void dispatchI32AtomicRmw16CmpxchgU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw8CmpxchgU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw16CmpxchgU(WASM::MemArg arg) override;
-	void dispatchI64AtomicRmw32CmpxchgU(WASM::MemArg arg) override;
+	void dispatchI32x4RelaxedTruncF32x4S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4RelaxedTruncF32x4U() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4RelaxedTruncF64x2SZero() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4RelaxedTruncF64x2UZero() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4RelaxedMadd() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4RelaxedNmadd() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2RelaxedMadd() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2RelaxedNmadd() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI8x16RelaxedLaneselect() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8RelaxedLaneselect() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4RelaxedLaneselect() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64x2RelaxedLaneselect() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4RelaxedMin() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF32x4RelaxedMax() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2RelaxedMin() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchF64x2RelaxedMax() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8RelaxedQ15MulRS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI16x8RelaxedDotI8x16I7x16S() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32x4RelaxedDotI8x16I7x16AddS() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchMemoryAtomicNotify(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchMemoryAtomicWait32(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchMemoryAtomicWait64(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchAtomicFence(uint8_t ordering) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchAtomicPause() override; //!< Stub: reject / no-op for this opcode.
+	void dispatchGlobalAtomicGet(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchGlobalAtomicSet(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchGlobalAtomicRmwAdd(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchGlobalAtomicRmwSub(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchGlobalAtomicRmwAnd(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchGlobalAtomicRmwOr(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchGlobalAtomicRmwXor(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchGlobalAtomicRmwXchg(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchGlobalAtomicRmwCmpxchg(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchTableAtomicGet(uint8_t ordering, WASM::TableIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchTableAtomicSet(uint8_t ordering, WASM::TableIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchTableAtomicRmwXchg(uint8_t ordering, WASM::TableIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchTableAtomicRmwCmpxchg(uint8_t ordering, WASM::TableIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStructAtomicGet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStructAtomicGetS(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStructAtomicGetU(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStructAtomicSet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStructAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStructAtomicRmwSub(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStructAtomicRmwAnd(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStructAtomicRmwOr(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStructAtomicRmwXor(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStructAtomicRmwXchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchStructAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayAtomicGet(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayAtomicGetS(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayAtomicGetU(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayAtomicSet(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayAtomicRmwSub(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayAtomicRmwAnd(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayAtomicRmwOr(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayAtomicRmwXor(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayAtomicRmwXchg(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchArrayAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicLoad(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicLoad(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicLoad8U(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicLoad16U(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicLoad8U(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicLoad16U(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicLoad32U(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicStore(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicStore(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicStore8(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicStore16(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicStore8(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicStore16(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicStore32(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmwAdd(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmwAdd(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmw8AddU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmw16AddU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw8AddU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw16AddU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw32AddU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmwSub(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmwSub(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmw8SubU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmw16SubU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw8SubU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw16SubU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw32SubU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmwAnd(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmwAnd(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmw8AndU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmw16AndU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw8AndU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw16AndU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw32AndU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmwOr(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmwOr(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmw8OrU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmw16OrU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw8OrU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw16OrU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw32OrU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmwXor(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmwXor(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmw8XorU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmw16XorU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw8XorU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw16XorU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw32XorU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmwXchg(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmwXchg(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmw8XchgU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmw16XchgU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw8XchgU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw16XchgU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw32XchgU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmwCmpxchg(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmwCmpxchg(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmw8CmpxchgU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI32AtomicRmw16CmpxchgU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw8CmpxchgU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw16CmpxchgU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
+	void dispatchI64AtomicRmw32CmpxchgU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
 };
 }
 #endif // STUBOPCODEDISPATCHER_HPP

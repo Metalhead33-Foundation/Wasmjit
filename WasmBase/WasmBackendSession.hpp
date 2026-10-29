@@ -44,15 +44,16 @@ class BackendLaneWiseOp;
 //! One field of a lowered aggregate, in the same bytes generated code uses, so a
 //! test or an embedder never needs a backend IR type to validate a layout.
 struct BackendFieldLayout {
-	std::size_t offset = 0;
-	std::size_t size = 0;
-	std::size_t alignment = 0;
+	std::size_t offset = 0;    //!< Byte offset of this field in the aggregate.
+	std::size_t size = 0;      //!< Size of this field in bytes.
+	std::size_t alignment = 0; //!< Required alignment of this field in bytes.
 };
 
+//! Lowered layout of a multi-result tuple / aggregate the session can materialise.
 struct BackendAggregateLayout {
-	std::size_t size = 0;
-	std::size_t alignment = 0;
-	std::vector<BackendFieldLayout> fields;
+	std::size_t size = 0;      //!< Total size of the aggregate, rounded up.
+	std::size_t alignment = 0; //!< Largest field alignment in the aggregate.
+	std::vector<BackendFieldLayout> fields; //!< Per-field offset/size/alignment.
 };
 
 //! A backend-generated lane-by-lane scalar implementation of one i32x4 op, used
@@ -62,6 +63,7 @@ class WASMJIT_API BackendLaneWiseOp
 {
 public:
 	virtual ~BackendLaneWiseOp() = default;
+	//! Runs the op on two 16-byte inputs into `out` (also 16 bytes).
 	virtual void run(const void* a, const void* b, void* out) const = 0;
 };
 

@@ -79,7 +79,9 @@ BackendInstance loadBackendPlugin(std::string_view name);
 
 } // namespace WASM
 
+//! Token-paste helper for `WASMJIT_BACKEND_CONCAT`.
 #define WASMJIT_BACKEND_CONCAT_INNER(a, b) a##b
+//! Concatenates two preprocessor tokens; used by `WASMJIT_REGISTER_BACKEND`.
 #define WASMJIT_BACKEND_CONCAT(a, b) WASMJIT_BACKEND_CONCAT_INNER(a, b)
 
 //! Registers a factory at static-initialisation time. `FACTORY` must be callable

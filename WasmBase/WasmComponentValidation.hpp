@@ -25,42 +25,50 @@ struct Component;
 //! A reference to the AST definition that introduced an entity. `owner` is
 //! needed because nested components have their own AST and index spaces.
 struct ComponentDefinitionRef {
-	const Component* owner = nullptr;
-	ComponentDefinitionKind kind = ComponentDefinitionKind::CoreModule;
-	uint32_t index = 0;
+	const Component* owner = nullptr; //!< Component AST that owns the definition
+	ComponentDefinitionKind kind = ComponentDefinitionKind::CoreModule; //!< Kind
+	uint32_t index = 0; //!< Index into that kind's vector on `owner`
 };
 
 //! Per-sort index spaces in definition order. `resolve()` is the binary
 //! `sortidx` resolution step: it only answers "which definition is index N of
 //! this sort"; type correctness is checked by validateComponent().
 struct ComponentIndexSpaces {
-	std::vector<ComponentDefinitionRef> coreFuncs;
-	std::vector<ComponentDefinitionRef> coreTables;
-	std::vector<ComponentDefinitionRef> coreMemories;
-	std::vector<ComponentDefinitionRef> coreGlobals;
-	std::vector<ComponentDefinitionRef> coreTags;
-	std::vector<ComponentDefinitionRef> coreTypes;
-	std::vector<ComponentDefinitionRef> coreModules;
-	std::vector<ComponentDefinitionRef> coreInstances;
-	std::vector<ComponentDefinitionRef> funcs;
-	std::vector<ComponentDefinitionRef> values;
-	std::vector<ComponentDefinitionRef> types;
-	std::vector<ComponentDefinitionRef> components;
-	std::vector<ComponentDefinitionRef> instances;
+	std::vector<ComponentDefinitionRef> coreFuncs; //!< Core function space
+	std::vector<ComponentDefinitionRef> coreTables; //!< Core table space
+	std::vector<ComponentDefinitionRef> coreMemories; //!< Core memory space
+	std::vector<ComponentDefinitionRef> coreGlobals; //!< Core global space
+	std::vector<ComponentDefinitionRef> coreTags; //!< Core tag space
+	std::vector<ComponentDefinitionRef> coreTypes; //!< Core type space
+	std::vector<ComponentDefinitionRef> coreModules; //!< Core module space
+	std::vector<ComponentDefinitionRef> coreInstances; //!< Core instance space
+	std::vector<ComponentDefinitionRef> funcs; //!< Component function space
+	std::vector<ComponentDefinitionRef> values; //!< Component value space
+	std::vector<ComponentDefinitionRef> types; //!< Component type space
+	std::vector<ComponentDefinitionRef> components; //!< Nested component space
+	std::vector<ComponentDefinitionRef> instances; //!< Component instance space
 
+	//! The index space for a component-level sort.
 	const std::vector<ComponentDefinitionRef>& space(ComponentSort sort) const;
+	//! The index space for a core-level sort.
 	const std::vector<ComponentDefinitionRef>& space(CoreSort sort) const;
 
+	//! Resolves a component-level sortidx, or nullopt when out of range.
 	std::optional<ComponentDefinitionRef> resolve(
 			const SortIdx& sortIndex) const;
+	//! Resolves a core-level sortidx, or nullopt when out of range.
 	std::optional<ComponentDefinitionRef> resolve(
 			const CoreSortIdx& sortIndex) const;
+	//! Resolves `(sort, index)` in a component-level space.
 	std::optional<ComponentDefinitionRef> resolve(
 			ComponentSort sort, uint32_t index) const;
+	//! Resolves `(sort, index)` in a core-level space.
 	std::optional<ComponentDefinitionRef> resolve(
 			CoreSort sort, uint32_t index) const;
 
+	//! Length of the component-level space for `sort`.
 	std::size_t size(ComponentSort sort) const;
+	//! Length of the core-level space for `sort`.
 	std::size_t size(CoreSort sort) const;
 };
 

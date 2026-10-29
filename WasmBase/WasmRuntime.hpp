@@ -58,7 +58,7 @@ struct RuntimeConfig {
 
 	//! Borrowed diagnostic channel a created agent inherits (WasmDiagnostics.hpp).
 	DiagnosticSink    sink = nullptr;
-	void*             sinkUserData = nullptr;
+	void*             sinkUserData = nullptr; //!< opaque cookie delivered to `sink`
 
 	//! 0 = the engine's process-wide budget (SAFETY.md §2.3). A different value is
 	//! refused until ES-2 scopes the store to the runtime.
@@ -101,6 +101,7 @@ public:
 	//! A core module from bytes or a path; no `Elv::Io::Device` in this surface.
 	//! A Component artifact is refused by `Module::fromFile` with its own message.
 	std::shared_ptr<const Module> loadBytes(std::span<const std::byte> bytes);
+	//! Loads a core module from a filesystem path (same rules as `loadBytes`).
 	std::shared_ptr<const Module> loadFile(const std::filesystem::path& path);
 
 	//! \par Instantiation (R1)
@@ -108,9 +109,13 @@ public:
 	//! existing instance; a second *instance* is not expressible through this API
 	//! (docs/THREADSAFETY.md §3.1). `imports` is borrowed and must outlive it.
 	ModuleInstance& instantiate(const Module& module, ImportResolver& imports);
+	//! The instance of `module`, or nullptr when it has not been instantiated here.
 	ModuleInstance*       instanceOf(const Module& module) noexcept;
+	//! Const form of `instanceOf`.
 	const ModuleInstance* instanceOf(const Module& module) const noexcept;
+	//! True when `instantiate` has already produced an instance of `module`.
 	bool                  hasInstance(const Module& module) const noexcept;
+	//! Number of live instances owned by this runtime.
 	std::size_t           instanceCount() const noexcept;
 
 	//! \brief Calls
@@ -120,6 +125,8 @@ public:
 	template<typename Ret, typename... Args>
 	Ret callExport(ModuleInstance& instance, std::string_view name, Args&&... args);
 
+	//! Like `callExport`, but writes results into a caller-owned buffer instead of
+	//! returning them (multi-value and void results).
 	template<typename... Args>
 	void callExportWithResults(ModuleInstance& instance, std::string_view name,
 			void* results, Args&&... args);
@@ -129,10 +136,15 @@ public:
 
 	//! \par Identity and capability (P4)
 	std::string_view backendName() const noexcept { return backendName_; }
+	//! Engine version string (docs/API_ABI_STABILITY.md).
 	std::string_view version() const noexcept { return WASM::versionString(); }
+	//! Plugin ABI version the selected backend was loaded against.
 	std::uint32_t    abiVersion() const noexcept { return WASM::abiVersion(); }
+	//! The config this runtime was created with.
 	const RuntimeConfig& config() const noexcept { return config_; }
+	//! The configured language profile.
 	ProfileConfig    profile() const noexcept { return config_.profile; }
+	//! True when the configured profile admits `profile`.
 	bool             supports(Profile profile) const noexcept { return supportsProfile(profile); }
 
 	//! \par Execution half (§3.2)
@@ -145,20 +157,23 @@ public:
 	Store& store() noexcept;
 
 private:
+	//! Constructs an owned runtime around an already-selected backend instance.
 	Runtime(std::string backendName, BackendInstance backend, RuntimeConfig config);
 
+	//! True when `instance` was produced by this runtime's `instantiate`.
 	bool owns(const ModuleInstance& instance) const noexcept;
+	//! True when `module` was loaded (or otherwise registered) by this runtime.
 	bool ownsModule(const Module& module) const noexcept;
 
-	std::string backendName_;
-	BackendInstance backend_;
-	RuntimeConfig config_;
+	std::string backendName_; //!< selected backend name (BP-2)
+	BackendInstance backend_; //!< owned backend session
+	RuntimeConfig config_; //!< creation knobs
 	//! The runtime-scoped store (docs/EMBEDDING_SURFACE.md §4.3 option B). Every
 	//! consumer receives it through its own object; there is no process-wide
 	//! store and no thread-local fallback.
 	Store store_;
-	std::vector<std::shared_ptr<const Module>> modules_;
-	std::unordered_map<const Module*, std::unique_ptr<ModuleInstance>> instances_;
+	std::vector<std::shared_ptr<const Module>> modules_; //!< loaded modules kept alive
+	std::unordered_map<const Module*, std::unique_ptr<ModuleInstance>> instances_; //!< at most one instance per module
 };
 
 template<typename Ret, typename... Args>

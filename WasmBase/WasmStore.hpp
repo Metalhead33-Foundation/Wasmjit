@@ -45,12 +45,12 @@ class WASMJIT_API Store
 {
 public:
 	//! \par Memory
-	using MemoryId  = int32_t;
-	using MemoryMap = std::unordered_map<MemoryId, std::unique_ptr<StoreOwnedMemory>>;
+	using MemoryId  = int32_t; //!< process-wide id of a store-owned linear memory
+	using MemoryMap = std::unordered_map<MemoryId, std::unique_ptr<StoreOwnedMemory>>; //!< id → owned memory
 
 	//! \par Table
-	using TableId  = int32_t;
-	using TableMap = std::unordered_map<TableId, std::unique_ptr<StoreOwnedTable>>;
+	using TableId  = int32_t; //!< process-wide id of a store-owned table
+	using TableMap = std::unordered_map<TableId, std::unique_ptr<StoreOwnedTable>>; //!< id → owned table
 
 	Store(const Store&) = delete;
 	Store& operator=(const Store&) = delete;
@@ -68,12 +68,14 @@ public:
 	//! \par Runtime type registry
 	//! Owns every module's type block; modules hold non-owning span views.
 	TypeRegistry&       types()       { return typeRegistry; }
+	//! Const form of `types()`.
 	const TypeRegistry& types() const { return typeRegistry; }
 
 	//! \par GC heap
 	//! Owns the mmap-backed regions every GC object lives in (docs/proposals/
 	//! GC.md §6.1/GC-2). Instances hold a RegionSet handle and allocate from it.
 	GcHeap&       gc()       { return gcHeap; }
+	//! Const form of `gc()`.
 	const GcHeap& gc() const { return gcHeap; }
 
 	//! \par Strings (docs/proposals/STRINGREF.md)
@@ -81,6 +83,7 @@ public:
 	//! lifetime that ends with the Store. `string.const` literals and every
 	//! `string.new_*`/`string.concat` result live here.
 	StringStore&       strings()       { return stringStore; }
+	//! Const form of `strings()`.
 	const StringStore& strings() const { return stringStore; }
 
 	//! \par Linear memory
@@ -94,6 +97,7 @@ public:
 
 	//! Borrowed views into a store-owned memory. Nullptr for an unknown id.
 	LinearMemory*       memory(MemoryId id);
+	//! Const form of `memory(id)`.
 	const LinearMemory* memory(MemoryId id) const;
 
 	//! Grow a store-owned memory by deltaPages. Returns false on a trap-worthy
@@ -107,6 +111,7 @@ public:
 
 	//! Borrowed views into a store-owned table. Nullptr for an unknown id.
 	StoreOwnedTable* storeOwnedTable(TableId id);
+	//! The TableInstance view of a store-owned table, or nullptr for an unknown id.
 	TableInstance*   table(TableId id);
 
 	//! Grow a store-owned table by deltaEntries. Returns false on a trap-worthy
@@ -122,9 +127,11 @@ public:
 	//! Override with WASMJIT_MAX_TOTAL_BYTES (bytes; "0"/"unlimited" disables the
 	//! cap, at your own risk).
 	static uint64_t allocationBudgetBytes();
+	//! Bytes currently charged against the budget (memories, tables, heap, strings).
 	uint64_t allocatedBytes() const { return allocatedBytes_.load(std::memory_order_relaxed); }
 	//! Charge `bytes` against the budget. Returns false if that would exceed it.
 	bool reserveBytes(uint64_t bytes);
+	//! Credits `bytes` back to the budget after a release or failed grow.
 	void releaseBytes(uint64_t bytes);
 
 	//! \brief Tags (exception handling)
@@ -135,10 +142,11 @@ public:
 	//! (docs/proposals/EXCEPTIONS.md EX-2). `typeId` is the canonical identity
 	//! of the tag's FuncType and is what import matching compares.
 	struct StoreOwnedTag {
-		TagId  id = -1;
-		TypeId typeId {};
+		TagId  id = -1; //!< process-wide tag identity
+		TypeId typeId {}; //!< canonical FuncType of the payload
 	};
 
+	//! Declares a fresh nominal tag whose payload has canonical type `payloadType`.
 	TagId createTag(TypeId payloadType);
 	//! Nullptr for an unknown id.
 	const StoreOwnedTag* tag(TagId id) const;
@@ -150,11 +158,12 @@ public:
 	//! represented independently of it. `canonicalCallTag` is idempotent for a
 	//! given TypeId, so two modules with the same concrete signature get the same
 	//! tag.
-	using CallTagId = int32_t;
+	using CallTagId = int32_t; //!< process-wide call-tag identity
+	//! A call tag keyed by a canonical function-type identity (CTA-2).
 	struct StoreOwnedCallTag {
-		CallTagId id = -1;
-		TypeId     signature {};
-		bool       canonical = true;
+		CallTagId id = -1; //!< process-wide id
+		TypeId     signature {}; //!< the function type this tag names
+		bool       canonical = true; //!< true for a Store-interned canonical tag
 	};
 
 	//! Returns a stable canonical tag id for `signature`. Rejects TypeId::kNone.
@@ -168,8 +177,8 @@ public:
 	//! freeing at invocation end would dangle. Exceptions are rare, and the
 	//! bounded lifetime is documented in the note.
 	struct StoreOwnedException {
-		std::byte* storage;
-		uint64_t   bytes;
+		std::byte* storage; //!< owned payload bytes
+		uint64_t   bytes; //!< size of `storage`
 	};
 	//! Takes ownership of `storage`; false when the bookkeeping allocation
 	//! fails (the caller frees and traps).
@@ -188,9 +197,9 @@ public:
 	struct StoreOwnedDataSegment;     //!< data segments         (TODO)
 	//! GC heap objects live in the Store-owned GcHeap (see gc()).
 
-	using GlobalId   = int32_t;
-	using FunctionId = int32_t;
-	using SegmentId  = int32_t;
+	using GlobalId   = int32_t; //!< reserved: process-wide global id
+	using FunctionId = int32_t; //!< reserved: process-wide function id
+	using SegmentId  = int32_t; //!< reserved: process-wide segment id
 
 	//! TODO: createGlobal/createFunction/... + accessors once the
 	//! corresponding entity kinds are implemented.
@@ -213,10 +222,10 @@ public:
 private:
 	//! Registered callable ranges: stable for each instance's lifetime.
 	struct CallableRange {
-		const Callable* begin;
-		const Callable* end;
+		const Callable* begin; //!< inclusive start of the instance's callable array
+		const Callable* end; //!< exclusive end
 	};
-	std::vector<CallableRange> callableRanges;
+	std::vector<CallableRange> callableRanges; //!< all live instance callable spans
 
 	//! Guards every member container below. The Store is process-wide because
 	//! entities outlive instances, so host threads may create/lookup entities
@@ -225,20 +234,20 @@ private:
 	//! true wasm agents remain deferred — SET-2.)
 	mutable std::mutex storeMutex_;
 
-	MemoryMap            memories;
-	std::atomic<int32_t> nextMemoryId;
+	MemoryMap            memories; //!< store-owned linear memories
+	std::atomic<int32_t> nextMemoryId; //!< next MemoryId to assign
 
-	TypeRegistry         typeRegistry;
+	TypeRegistry         typeRegistry; //!< canonical type store
 
-	TableMap             tables;
-	std::atomic<int32_t> nextTableId;
+	TableMap             tables; //!< store-owned tables
+	std::atomic<int32_t> nextTableId; //!< next TableId to assign
 
 	//! Tags are tiny and never removed: id → canonical payload type.
 	std::unordered_map<TagId, StoreOwnedTag> tags;
-	std::atomic<int32_t>                     nextTagId;
+	std::atomic<int32_t>                     nextTagId; //!< next TagId to assign
 	//! Canonical call tags (CALL_TAGS.md CTA-2), keyed by TypeId.value.
 	std::unordered_map<uint32_t, CallTagId>  canonicalCallTags;
-	std::unordered_map<CallTagId, StoreOwnedCallTag> callTags;
+	std::unordered_map<CallTagId, StoreOwnedCallTag> callTags; //!< id → call-tag record
 
 	//! Exception objects live until Store teardown (see ownException).
 	std::vector<StoreOwnedException> exceptions;
@@ -252,6 +261,6 @@ private:
 	//! Host-owned string objects (STRINGREF.md). Never freed before teardown.
 	StringStore stringStore{ *this };
 };
-}
+} // namespace WASM
 WASMJIT_VISIBLE_END
 #endif // WASMSTORE_HPP

@@ -97,6 +97,7 @@ struct ProfileConfig {
 	}
 };
 
+//! The full profile `{}`: no exclusions.
 inline constexpr ProfileConfig fullProfile() noexcept
 {
 	return ProfileConfig{};
@@ -109,6 +110,7 @@ inline constexpr ProfileConfig deterministicProfile() noexcept
 	return ProfileConfig{ProfileMarker::NonDeterministic | ProfileMarker::Threads};
 }
 
+//! The scalar profile `{V}`: excludes every vector type and SIMD instruction.
 inline constexpr ProfileConfig scalarProfile() noexcept
 {
 	return ProfileConfig{ProfileMarker::Vectors};
@@ -121,11 +123,13 @@ inline constexpr ProfileConfig deterministicScalarProfile() noexcept
 			| ProfileMarker::Vectors};
 }
 
+//! The coarsest profile this engine claims today: the full profile.
 inline constexpr Profile supportedProfile() noexcept
 {
 	return Profile::Full;
 }
 
+//! True when the engine claims the named profile (see `supportsProfileConfig`).
 inline constexpr bool supportsProfile(Profile profile) noexcept
 {
 	switch (profile) {
@@ -148,6 +152,7 @@ inline constexpr bool supportsProfileConfig(const ProfileConfig& config) noexcep
 	return true;
 }
 
+//! Stable short name for diagnostics and embedder logs.
 inline constexpr const char* profileName(Profile profile) noexcept
 {
 	switch (profile) {

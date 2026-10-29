@@ -70,13 +70,14 @@ struct CoreSortIdx {
 	uint32_t index = 0;
 };
 
+//! A component-level sort: which index space a `sortidx` names.
 enum class ComponentSort : uint8_t {
-	Core = 0x00,
-	Func = 0x01,
-	Value = 0x02,
-	Type = 0x03,
-	Component = 0x04,
-	Instance = 0x05
+	Core = 0x00, //!< Nested core sort (see CoreSortIdx)
+	Func = 0x01, //!< Component function
+	Value = 0x02, //!< Component value
+	Type = 0x03, //!< Component type
+	Component = 0x04, //!< Nested component
+	Instance = 0x05 //!< Component instance
 };
 
 //! A component-level sort/index pair; `core` carries the inner core sort when the
@@ -86,18 +87,25 @@ struct SortIdx {
 	ComponentSort sort = ComponentSort::Core;
 	//! Set only when sort == Core.
 	std::optional<CoreSortIdx> core;
-	uint32_t index = 0;
+	uint32_t index = 0; //!< Index into the selected space
 };
 
 //! \brief Core types (the `core:type` section and module-type declarations)
 struct CoreExternType {
-	enum class Kind : uint8_t { Function, Table, Memory, Global, Tag };
-	Kind kind = Kind::Function;
+	//! Which core extern form this declaration carries.
+	enum class Kind : uint8_t {
+		Function, //!< Function type index
+		Table, //!< Table type
+		Memory, //!< Memory type
+		Global, //!< Global type
+		Tag //!< Tag type index plus attribute
+	};
+	Kind kind = Kind::Function; //!< Discriminant for the payload below
 	uint32_t typeIndex = 0; //!< function or tag type index
-	TableType table;
-	MemoryType memory;
-	GlobalType global;
-	uint8_t tagAttribute = 0;
+	TableType table; //!< Valid when kind == Table
+	MemoryType memory; //!< Valid when kind == Memory
+	GlobalType global; //!< Valid when kind == Global
+	uint8_t tagAttribute = 0; //!< Tag attribute byte when kind == Tag
 };
 
 //! One `core:import` declaration: the module/field it names and its core type.
@@ -135,145 +143,194 @@ struct CoreRecType {
 	//! Parser scratch. Validation interns the group and clears this vector, so a
 	//! validated component retains only `typeIds` (TYPE_MODEL TM-6 residue).
 	mutable std::vector<Subtype> subtypes;
-	mutable std::vector<TypeId> typeIds;
+	mutable std::vector<TypeId> typeIds; //!< Interned ids after validation
 };
 
 //! One declaration inside a `core:module` type: an import, a type, an alias or
 //! an export, with the payload the kind selects.
 struct CoreModuleDecl {
-	enum class Kind : uint8_t { Import, Type, Alias, Export };
-	Kind kind = Kind::Import;
-	CoreImport import;
-	CoreRecType type;
-	CoreOuterAlias alias;
-	CoreExportDecl exportDecl;
+	//! Which form this module-type declaration takes.
+	enum class Kind : uint8_t {
+		Import, //!< Core import
+		Type, //!< Nested core type
+		Alias, //!< Outer alias
+		Export //!< Core export
+	};
+	Kind kind = Kind::Import; //!< Discriminant for the payload below
+	CoreImport import; //!< Valid when kind == Import
+	CoreRecType type; //!< Valid when kind == Type
+	CoreOuterAlias alias; //!< Valid when kind == Alias
+	CoreExportDecl exportDecl; //!< Valid when kind == Export
 };
 
 //! A `core:type` definition: either one recursive group or a module type.
 struct CoreTypeDef {
-	enum class Kind : uint8_t { RecType, ModuleType };
-	Kind kind = Kind::RecType;
-	CoreRecType recType;
-	std::vector<CoreModuleDecl> moduleDecls;
+	//! Which form this core type definition takes.
+	enum class Kind : uint8_t {
+		RecType, //!< Recursive group / subtype
+		ModuleType //!< Module type with declarations
+	};
+	Kind kind = Kind::RecType; //!< Discriminant for the payload below
+	CoreRecType recType; //!< Valid when kind == RecType
+	std::vector<CoreModuleDecl> moduleDecls; //!< Valid when kind == ModuleType
 };
 
 //! \brief Names and attributes
 struct Attribute {
-	enum class Kind : uint8_t { Implements, VersionSuffix, ExternalId };
-	Kind kind = Kind::Implements;
-	std::string text;
+	//! Which name attribute this entry is.
+	enum class Kind : uint8_t {
+		Implements, //!< `implements` attribute
+		VersionSuffix, //!< `version-suffix` attribute
+		ExternalId //!< `external-id` attribute
+	};
+	Kind kind = Kind::Implements; //!< Attribute kind
+	std::string text; //!< Attribute text payload
 };
 
 //! A component name's attributes (`implements`, `version-suffix`, `external-id`).
 struct NameAttributes {
 	uint8_t tag = 0; //!< 0x00, 0x01 (plain/interface) or 0x02 (+ attributes)
-	std::string name;
-	std::vector<Attribute> attributes;
+	std::string name; //!< The name string
+	std::vector<Attribute> attributes; //!< Extra attributes when tag == 0x02
 };
 
 //! A resource type declaration: the core representation and an optional
 //! destructor function index.
 struct ResourceType {
 	ValueType rep; //!< core valtype
-	std::optional<uint32_t> destructor;
+	std::optional<uint32_t> destructor; //!< Optional destructor core-func index
 };
 
 //! A bound on a resource type: `eq` (any resource of the type) or an explicit
 //! sub-resource index.
 struct TypeBound {
-	enum class Kind : uint8_t { Eq, SubResource };
-	Kind kind = Kind::Eq;
-	uint32_t typeIndex = 0;
+	//! Which form of resource bound this is.
+	enum class Kind : uint8_t {
+		Eq, //!< Any resource of the named type
+		SubResource //!< Explicit sub-resource index
+	};
+	Kind kind = Kind::Eq; //!< Bound kind
+	uint32_t typeIndex = 0; //!< Resource type index
 };
 
 //! A value type's bound (`eq` or an explicit type).
 struct ValueBound {
-	enum class Kind : uint8_t { Eq, Type };
-	Kind kind = Kind::Eq;
-	uint32_t valueIndex = 0;
-	ComponentValueType type;
+	//! Which form of value bound this is.
+	enum class Kind : uint8_t {
+		Eq, //!< Equality with a prior value index
+		Type //!< Explicit component value type
+	};
+	Kind kind = Kind::Eq; //!< Bound kind
+	uint32_t valueIndex = 0; //!< Prior value index when kind == Eq
+	ComponentValueType type; //!< Explicit type when kind == Type
 };
 
 //! The type an import or export declares: which sort and the payload that sort
 //! uses.
 struct ExternType {
+	//! Which sort this extern type declares.
 	enum class Kind : uint8_t {
-		CoreModule, Func, Value, Type, Component, Instance
+		CoreModule, //!< Core module type index
+		Func, //!< Function type index
+		Value, //!< Value bound
+		Type, //!< Type bound
+		Component, //!< Component type index
+		Instance //!< Instance type index
 	};
-	Kind kind = Kind::Func;
+	Kind kind = Kind::Func; //!< Discriminant for the payload below
 	uint32_t typeIndex = 0; //!< core-module/func/component/instance
-	ValueBound value;
-	TypeBound typeBound;
+	ValueBound value; //!< Valid when kind == Value
+	TypeBound typeBound; //!< Valid when kind == Type
 };
 
 //! One `import` declaration of a component or instance type.
 struct ImportDecl {
-	NameAttributes name;
-	ExternType type;
+	NameAttributes name; //!< Import name and attributes
+	ExternType type; //!< Declared type of the import
 };
 
 //! One type-level `exportdecl`: the name it exports and its ascribed type.
 struct ExportDecl {
-	NameAttributes name;
-	ExternType type;
+	NameAttributes name; //!< Export name and attributes
+	ExternType type; //!< Ascribed type of the export
 };
 
 //! A top-level `export` section entry: unlike a type-level `exportdecl`, it
 //! names a preceding definition by sortidx and carries an optional ascribed type.
 struct ComponentExport {
-	NameAttributes name;
-	SortIdx sortIndex;
-	std::optional<ExternType> type;
+	NameAttributes name; //!< Export name and attributes
+	SortIdx sortIndex; //!< Preceding definition being exported
+	std::optional<ExternType> type; //!< Optional ascribed type
 };
 
 //! One `alias` declaration: which export (of an instance, of a core instance, or
 //! of an outer component) it names.
 struct Alias {
-	enum class Kind : uint8_t { Export, CoreExport, Outer };
-	SortIdx sort;
-	Kind kind = Kind::Export;
-	uint32_t instanceIndex = 0;
-	std::string name;
-	uint32_t outerCount = 0;
-	uint32_t index = 0;
+	//! Which form of alias this is.
+	enum class Kind : uint8_t {
+		Export, //!< Export of a component instance
+		CoreExport, //!< Export of a core instance
+		Outer //!< Outer-component alias
+	};
+	SortIdx sort; //!< Sort of the aliased entity
+	Kind kind = Kind::Export; //!< Alias form
+	uint32_t instanceIndex = 0; //!< Instance being aliased (Export/CoreExport)
+	std::string name; //!< Export name (Export/CoreExport)
+	uint32_t outerCount = 0; //!< Enclosing components to skip (Outer)
+	uint32_t index = 0; //!< Index in the reached space (Outer)
 };
 
 //! One `with` argument of a core-module instantiation: the name it fills and the
 //! core instance it takes.
 struct CoreInstantiateArg {
-	std::string name;
-	uint32_t instanceIndex = 0;
+	std::string name; //!< Import name being satisfied
+	uint32_t instanceIndex = 0; //!< Core instance supplying the import
 };
 
+//! One inline core export of a `core:instance` bag.
 struct CoreInlineExport {
-	std::string name;
-	CoreSortIdx sortIndex;
+	std::string name; //!< Exported field name
+	CoreSortIdx sortIndex; //!< Core entity being exported
 };
 
+//! A `core:instance` definition: instantiate a core module, or an inline bag of
+//! core exports.
 struct CoreInstance {
-	enum class Kind : uint8_t { Instantiate, InlineExports };
-	Kind kind = Kind::Instantiate;
-	uint32_t moduleIndex = 0;
-	std::vector<CoreInstantiateArg> args;
-	std::vector<CoreInlineExport> exports;
+	//! Which form this core instance takes.
+	enum class Kind : uint8_t {
+		Instantiate, //!< Instantiate a core module
+		InlineExports //!< Inline bag of core exports
+	};
+	Kind kind = Kind::Instantiate; //!< Discriminant for the payload below
+	uint32_t moduleIndex = 0; //!< Core module when kind == Instantiate
+	std::vector<CoreInstantiateArg> args; //!< Instantiation arguments
+	std::vector<CoreInlineExport> exports; //!< Inline exports
 };
 
+//! One `with` argument of a component instantiation.
 struct InstantiateArg {
-	std::string name;
-	SortIdx sortIndex;
+	std::string name; //!< Import name being satisfied
+	SortIdx sortIndex; //!< Entity supplying the import
 };
 
+//! One inline export of a component-instance bag.
 struct InlineExport {
-	NameAttributes name;
-	SortIdx sortIndex;
+	NameAttributes name; //!< Exported name and attributes
+	SortIdx sortIndex; //!< Entity being exported
 };
 
+//! A component-instance definition: instantiate a nested component, or an
+//! inline bag of exports.
 struct ComponentInstance {
-	enum class Kind : uint8_t { Instantiate, InlineExports };
-	Kind kind = Kind::Instantiate;
-	uint32_t componentIndex = 0;
-	std::vector<InstantiateArg> args;
-	std::vector<InlineExport> exports;
+	//! Which form this component instance takes.
+	enum class Kind : uint8_t {
+		Instantiate, //!< Instantiate a nested component
+		InlineExports //!< Inline bag of exports
+	};
+	Kind kind = Kind::Instantiate; //!< Discriminant for the payload below
+	uint32_t componentIndex = 0; //!< Nested component when Instantiate
+	std::vector<InstantiateArg> args; //!< Instantiation arguments
+	std::vector<InlineExport> exports; //!< Inline exports
 	//! Filled by Component::validate() after type substitution: the canonical
 	//! identity of the resulting instance type. Exactly one of typeId/schemeId is
 	//! set for a validated instance type.
@@ -281,45 +338,91 @@ struct ComponentInstance {
 	mutable SchemeId schemeId{SchemeId::kNone};
 };
 
+//! A Canonical ABI option tag carried by a `canon` definition.
 enum class CanonOptKind : uint8_t {
-	Utf8, Utf16, Latin1Utf16, Memory, Realloc, PostReturn, Async, Callback
+	Utf8, //!< UTF-8 string encoding
+	Utf16, //!< UTF-16 string encoding
+	Latin1Utf16, //!< latin1+utf16 string encoding
+	Memory, //!< Memory option (index follows)
+	Realloc, //!< Realloc option (index follows)
+	PostReturn, //!< Post-return option (index follows)
+	Async, //!< Async lifting/lowering
+	Callback //!< Callback option (index follows)
 };
 
+//! One Canonical ABI option and its optional index payload.
 struct CanonOpt {
-	CanonOptKind kind = CanonOptKind::Utf8;
+	CanonOptKind kind = CanonOptKind::Utf8; //!< Option kind
 	uint32_t index = 0; //!< memory/realloc/post-return/callback
 };
 
+//! One `canon` definition: lift/lower or a built-in adaptation.
 struct Canon {
+	//! Which Canonical ABI adaptation this definition is.
 	enum class Kind : uint8_t {
-		Lift, Lower, ResourceNew, ResourceDrop, ResourceRep,
-		BackpressureInc, BackpressureDec, TaskReturn, TaskCancel,
-		ContextGet, ContextSet, SubtaskCancel, SubtaskDrop,
-		StreamNew, StreamRead, StreamWrite, StreamCancelRead, StreamCancelWrite,
-		StreamDropReadable, StreamDropWritable, StreamForward,
-		FutureNew, FutureRead, FutureWrite, FutureCancelRead, FutureCancelWrite,
-		FutureDropReadable, FutureDropWritable, FutureForward,
-		ErrorContextNew, ErrorContextDebugMessage, ErrorContextDrop,
-		WaitableSetNew, WaitableSetWait, WaitableSetPoll, WaitableSetDrop,
-		WaitableJoin, ThreadIndex, ThreadNewIndirect, ThreadResumeLater,
-		ThreadSuspend, ThreadYield, ThreadSuspendThenResume,
-		ThreadYieldThenResume, ThreadSuspendThenPromote,
-		ThreadYieldThenPromote, ThreadSpawnRef, ThreadSpawnIndirect,
-		ThreadAvailableParallelism
+		Lift, //!< Lift a core function
+		Lower, //!< Lower a component function
+		ResourceNew, //!< resource.new
+		ResourceDrop, //!< resource.drop
+		ResourceRep, //!< resource.rep
+		BackpressureInc, //!< backpressure.inc
+		BackpressureDec, //!< backpressure.dec
+		TaskReturn, //!< task.return
+		TaskCancel, //!< task.cancel
+		ContextGet, //!< context.get
+		ContextSet, //!< context.set
+		SubtaskCancel, //!< subtask.cancel
+		SubtaskDrop, //!< subtask.drop
+		StreamNew, //!< stream.new
+		StreamRead, //!< stream.read
+		StreamWrite, //!< stream.write
+		StreamCancelRead, //!< stream.cancel-read
+		StreamCancelWrite, //!< stream.cancel-write
+		StreamDropReadable, //!< stream.drop-readable
+		StreamDropWritable, //!< stream.drop-writable
+		StreamForward, //!< stream.forward
+		FutureNew, //!< future.new
+		FutureRead, //!< future.read
+		FutureWrite, //!< future.write
+		FutureCancelRead, //!< future.cancel-read
+		FutureCancelWrite, //!< future.cancel-write
+		FutureDropReadable, //!< future.drop-readable
+		FutureDropWritable, //!< future.drop-writable
+		FutureForward, //!< future.forward
+		ErrorContextNew, //!< error-context.new
+		ErrorContextDebugMessage, //!< error-context.debug-message
+		ErrorContextDrop, //!< error-context.drop
+		WaitableSetNew, //!< waitable-set.new
+		WaitableSetWait, //!< waitable-set.wait
+		WaitableSetPoll, //!< waitable-set.poll
+		WaitableSetDrop, //!< waitable-set.drop
+		WaitableJoin, //!< waitable.join
+		ThreadIndex, //!< thread.index
+		ThreadNewIndirect, //!< thread.new-indirect
+		ThreadResumeLater, //!< thread.resume-later
+		ThreadSuspend, //!< thread.suspend
+		ThreadYield, //!< thread.yield
+		ThreadSuspendThenResume, //!< thread.suspend-then-resume
+		ThreadYieldThenResume, //!< thread.yield-then-resume
+		ThreadSuspendThenPromote, //!< thread.suspend-then-promote
+		ThreadYieldThenPromote, //!< thread.yield-then-promote
+		ThreadSpawnRef, //!< thread.spawn-ref
+		ThreadSpawnIndirect, //!< thread.spawn-indirect
+		ThreadAvailableParallelism //!< thread.available-parallelism
 	};
-	Kind kind = Kind::Lift;
-	uint32_t coreFuncIndex = 0;
-	uint32_t funcIndex = 0;
-	uint32_t typeIndex = 0;
-	uint32_t coreTypeIndex = 0;
-	uint32_t tableIndex = 0;
-	uint32_t memoryIndex = 0;
-	uint32_t contextIndex = 0;
+	Kind kind = Kind::Lift; //!< Adaptation kind
+	uint32_t coreFuncIndex = 0; //!< Core function (lift/lower/built-ins)
+	uint32_t funcIndex = 0; //!< Component function (lower)
+	uint32_t typeIndex = 0; //!< Component type index
+	uint32_t coreTypeIndex = 0; //!< Core type index
+	uint32_t tableIndex = 0; //!< Table index (thread built-ins)
+	uint32_t memoryIndex = 0; //!< Memory index when named directly
+	uint32_t contextIndex = 0; //!< Context slot index
 	ValueType contextType; //!< context.get/set's core valtype
-	std::vector<CanonOpt> opts;
+	std::vector<CanonOpt> opts; //!< Canonical ABI options
 	std::vector<ComponentValueType> results; //!< task.return
-	std::optional<bool> async;
-	std::optional<bool> shared;
+	std::optional<bool> async; //!< Async flag when present
+	std::optional<bool> shared; //!< Shared flag when present
 };
 
 //! \brief Type definitions and declarators

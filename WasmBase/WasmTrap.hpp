@@ -102,6 +102,7 @@ inline constexpr std::size_t kTrapMessageCapacity = 192;
 //! no site, or a host raise). Shared with `DiagnosticLocation`.
 inline constexpr std::uint32_t kNoTrapIndex = 0xFFFFFFFFu;
 
+//! The pending-trap slot: kind, message and the compile-time site (DG-5).
 struct TrapSlot {
 	int  pending = 0;                      //!< 0 = no trap, non-zero = pending
 	int  kind = static_cast<int>(TrapKind::Internal); //!< TrapKind as an int (the C ABI)
@@ -109,8 +110,8 @@ struct TrapSlot {
 	//! raises leave `kNoTrapIndex`/null. `functionName` is interned by the
 	//! instance, so it outlives the generated code that embeds the pointer.
 	std::uint32_t functionIndex = kNoTrapIndex;
-	std::uint32_t instructionOffset = kNoTrapIndex;
-	const char*   functionName = nullptr;
+	std::uint32_t instructionOffset = kNoTrapIndex; //!< byte offset in the function body, or kNoTrapIndex
+	const char*   functionName = nullptr; //!< interned name, or null when unknown
 	char message[kTrapMessageCapacity] = {}; //!< NUL-terminated, truncated
 };
 
@@ -144,13 +145,14 @@ void reportTrapAt(TrapKind kind, const char* detail,
 void annotateTrapSite(std::uint32_t functionIndex,
 		std::uint32_t instructionOffset, const char* functionName) noexcept;
 
-//! C-callable entry points for generated code. The kind travels as an int so the
-//! calling convention does not depend on how a scoped enum is passed. The `_at`
-//! form carries the compile-time trap site for DG-5.
+//! C-callable `reportTrap`: the kind travels as an int so the calling convention
+//! does not depend on how a scoped enum is passed.
 extern "C" void wasm_trap_report(int kind, const char* message);
+//! C-callable `reportTrapAt`: carries the compile-time trap site for DG-5.
 extern "C" void wasm_trap_report_at(int kind, const char* message,
 		std::uint32_t functionIndex, std::uint32_t instructionOffset,
 		const char* functionName);
+//! C-callable `annotateTrapSite` for a pending trap that a helper reported.
 extern "C" void wasm_trap_annotate(std::uint32_t functionIndex,
 		std::uint32_t instructionOffset, const char* functionName) noexcept;
 
@@ -158,10 +160,10 @@ extern "C" void wasm_trap_annotate(std::uint32_t functionIndex,
 //! `TrapSlot::pending` directly; C++ code uses this.
 bool trapPending() noexcept;
 
-//! The pending trap's kind/message, or TrapKind::Internal/nullptr when none is
-//! pending. The returned pointer is the slot's own buffer; it stays valid until
-//! the slot is cleared.
+//! The pending trap's kind, or TrapKind::Internal when none is pending.
 TrapKind pendingTrapKind() noexcept;
+//! The pending trap's message, or nullptr when none is pending. The returned
+//! pointer is the slot's own buffer; it stays valid until the slot is cleared.
 const char* pendingTrapMessage() noexcept;
 
 //! Clears the slot. The host boundary takes the trap before throwing it, so the
@@ -170,13 +172,13 @@ void clearPendingTrap() noexcept;
 
 //! A snapshot taken by the host boundary.
 struct TrapInfo {
-	bool        trapped = false;
-	TrapKind    kind = TrapKind::Internal;
-	const char* message = nullptr;
+	bool        trapped = false; //!< true when a trap was pending
+	TrapKind    kind = TrapKind::Internal; //!< the pending kind, or Internal when none
+	const char* message = nullptr; //!< slot message, or nullptr when none
 	//! DG-5 site; kNoTrapIndex/null when the reporter had no compile-time site.
 	std::uint32_t functionIndex = kNoTrapIndex;
-	std::uint32_t instructionOffset = kNoTrapIndex;
-	const char*   functionName = nullptr;
+	std::uint32_t instructionOffset = kNoTrapIndex; //!< byte offset, or kNoTrapIndex
+	const char*   functionName = nullptr; //!< interned name, or null when unknown
 };
 
 //! Takes the pending trap and clears the slot. `trapped` is false (and kind/message
@@ -192,17 +194,18 @@ TrapInfo takePendingTrap() noexcept;
 class Trap : public std::exception
 {
 public:
-	static constexpr std::size_t kMessageCapacity = 240;
+	static constexpr std::size_t kMessageCapacity = 240; //!< fixed buffer; source may outlive the throw
 
+	//! Copies `message` into the fixed buffer (truncated) and records `kind`.
 	Trap(TrapKind kind, const char* message) noexcept;
 
-	TrapKind kind() const noexcept { return kind_; }
-	const char* message() const noexcept { return message_; }
-	const char* what() const noexcept override { return message_; }
+	TrapKind kind() const noexcept { return kind_; } //!< the trap taxonomy value
+	const char* message() const noexcept { return message_; } //!< NUL-terminated detail text
+	const char* what() const noexcept override { return message_; } //!< std::exception spelling of message()
 
 private:
-	TrapKind kind_;
-	char     message_[kMessageCapacity];
+	TrapKind kind_; //!< stored TrapKind
+	char     message_[kMessageCapacity]; //!< owned copy of the detail text
 };
 
 //! If a trap is pending, takes it and throws `Trap`; otherwise does nothing.
@@ -246,6 +249,9 @@ public:
 //! it a C++ catch frame stands between the import and the generated caller.
 int nativeImportDepth() noexcept;
 
+//! RAII increment/decrement of `nativeImportDepth()`. Held by the native-import
+//! trampoline while the host body runs, so `WASM::trap()` may throw into the
+//! trampoline's catch rather than through a generated frame.
 class NativeImportScope
 {
 public:
@@ -278,8 +284,8 @@ public:
 //! frame returns. A thunk must be `noexcept`, must not trap, and must not enter
 //! Wasm; it may assume the frames that registered it are still alive.
 struct TrapDeferToken {
-	std::uint32_t index = 0xFFFFFFFFu;
-	bool valid() const noexcept { return index != 0xFFFFFFFFu; }
+	std::uint32_t index = 0xFFFFFFFFu; //!< slot index, or all-ones when invalid
+	bool valid() const noexcept { return index != 0xFFFFFFFFu; } //!< true when a live record
 };
 
 //! Registers `fn(arg)`. Returns an invalid token when the fixed-capacity stack is

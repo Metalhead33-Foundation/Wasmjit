@@ -35,10 +35,14 @@ namespace WASM {
 
 class ComponentAbiInstance {
 public:
+	//! \param store Process-wide type metadata this instance caches against
+	//! \param instanceId Opaque host identity for this component instance
 	explicit ComponentAbiInstance(const TypeStore& store, uint64_t instanceId = 0)
 		: store_(store), instanceId_(instanceId) {}
 
+	//! Host-assigned identity of this component instance.
 	uint64_t instanceId() const { return instanceId_; }
+	//! Sets the host-assigned identity of this component instance.
 	void setInstanceId(uint64_t id) { instanceId_ = id; }
 
 	//! Resolve and take ownership of one instance's signature. Returns nullptr
@@ -64,8 +68,11 @@ public:
 		return &inserted.first->second;
 	}
 
+	//! Number of instance-owned signatures currently cached.
 	std::size_t signatureCount() const { return signatures_.size(); }
+	//! Cache hits since construction.
 	std::size_t hits() const { return hits_; }
+	//! Cache misses that caused a Store lookup and insertion.
 	std::size_t misses() const { return misses_; }
 
 	//! Instance-owned signatures are not type identity: two instances with the
@@ -77,10 +84,12 @@ public:
 		return found == signatures_.end() ? nullptr : &found->second;
 	}
 private:
+	//! Map key: a Store type plus the Canonical ABI options that flatten it.
 	struct Key {
-		TypeId type{TypeId::kNone};
-		CanonicalAbiOptions options;
+		TypeId type{TypeId::kNone}; //!< Closed function type being flattened
+		CanonicalAbiOptions options; //!< Encoding/memory/realloc/async choices
 
+		//! Strict weak ordering for `std::map`.
 		bool operator<(const Key& other) const
 		{
 			if (type != other.type)
@@ -99,11 +108,11 @@ private:
 		}
 	};
 
-	const TypeStore& store_;
-	uint64_t instanceId_ = 0;
-	mutable std::map<Key, CanonicalAbiSignature> signatures_;
-	mutable std::size_t hits_ = 0;
-	mutable std::size_t misses_ = 0;
+	const TypeStore& store_; //!< Process-wide type metadata
+	uint64_t instanceId_ = 0; //!< Host-assigned instance identity
+	mutable std::map<Key, CanonicalAbiSignature> signatures_; //!< Owned cache
+	mutable std::size_t hits_ = 0; //!< resolve() hits
+	mutable std::size_t misses_ = 0; //!< resolve() misses
 };
 
 } // namespace WASM

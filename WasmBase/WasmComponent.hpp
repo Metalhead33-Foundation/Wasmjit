@@ -31,21 +31,21 @@ namespace WASM {
 //! compatibility. No linking, codegen, execution or Canonical ABI lowering is
 //! performed. Embedded core modules keep their normal parser validation.
 struct WASMJIT_API Component : public Artifact {
-	std::vector<ComponentSection> sections;
-	std::vector<std::unique_ptr<Module>> coreModules;
-	std::vector<CoreInstance> coreInstances;
+	std::vector<ComponentSection> sections; //!< Binary sections in file order
+	std::vector<std::unique_ptr<Module>> coreModules; //!< Embedded core modules
+	std::vector<CoreInstance> coreInstances; //!< Core-instance definitions
 	//! Mutable so validate() can release the parser AST after the canonical
 	//! Store records are published (TYPE_MODEL TM-10).
 	mutable std::vector<CoreTypeDef> coreTypes;
-	std::vector<std::unique_ptr<Component>> components;
-	std::vector<ComponentInstance> instances;
-	std::vector<Alias> aliases;
-	mutable std::vector<ComponentTypeDef> types;
-	std::vector<Canon> canons;
-	std::vector<Start> starts;
-	std::vector<ImportDecl> imports;
-	std::vector<ComponentExport> exports;
-	std::vector<ValueDecl> values;
+	std::vector<std::unique_ptr<Component>> components; //!< Nested components
+	std::vector<ComponentInstance> instances; //!< Component-instance definitions
+	std::vector<Alias> aliases; //!< Alias definitions
+	mutable std::vector<ComponentTypeDef> types; //!< Component-level type defs
+	std::vector<Canon> canons; //!< Canonical ABI adaptations
+	std::vector<Start> starts; //!< Start definitions
+	std::vector<ImportDecl> imports; //!< Top-level imports
+	std::vector<ComponentExport> exports; //!< Top-level exports
+	std::vector<ValueDecl> values; //!< Value definitions
 	//! Flattened section/definition order. Each entry indexes the corresponding
 	//! vector above; custom sections and section metadata are not entities.
 	std::vector<ComponentDefinition> definitions;
@@ -60,7 +60,7 @@ struct WASMJIT_API Component : public Artifact {
 	//! Validation may run only once now that it releases the parser AST. The
 	//! snapshot keeps buildIndexSpaces() available without re-parsing.
 	mutable bool validated_ = false;
-	mutable std::optional<ComponentIndexSpaces> indexSpaces_;
+	mutable std::optional<ComponentIndexSpaces> indexSpaces_; //!< Cached spaces
 
 	Component();
 
@@ -73,12 +73,14 @@ struct WASMJIT_API Component : public Artifact {
 	static std::unique_ptr<Component> parseNested(
 			Elv::Io::Device& file, uint64_t end, unsigned depth, Store& store);
 
+	//! The binary sections of this component, in file order.
 	std::span<const ComponentSection> getSections() const;
 
 	//! Component-level structural validation (index spaces, sortidx resolution,
 	//! type/declaration checks). Throws std::runtime_error on the first failure.
 	//! No linking, execution or Canonical ABI lowering.
 	void validate() const;
+	//! Builds (or returns the cached) per-sort index spaces for this component.
 	ComponentIndexSpaces buildIndexSpaces() const;
 	//! Process-wide canonical identity of a closed component-local type. Returns
 	//! kNone for an unvalidated component or an open type; use schemeId() for the
@@ -100,9 +102,12 @@ protected:
 	void parseBody(Elv::Io::Device& file, std::optional<uint64_t> end) override;
 
 private:
+	//! Clears parser scratch that validate() has already published into the Store.
 	void releaseParserAst() const;
+	//! Reads every section between the current position and `end`.
 	void parseSections(Elv::Io::Device& file, std::optional<uint64_t> end,
 			unsigned depth);
+	//! Dispatches one section's payload into the corresponding AST vector.
 	void parseSectionPayload(ComponentSection& section,
 			std::vector<uint8_t> payload, unsigned depth);
 };

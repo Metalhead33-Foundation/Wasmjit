@@ -34,11 +34,13 @@ enum class ConcurrencyModel : std::uint8_t {
 	Agents,     //!< several agents may execute one instance concurrently
 };
 
+//! True when the engine can honour the named concurrency model.
 inline constexpr bool supportsConcurrency(ConcurrencyModel model) noexcept
 {
 	return model == ConcurrencyModel::Single || model == ConcurrencyModel::Agents;
 }
 
+//! Stable short name for diagnostics and embedder logs.
 inline constexpr const char* concurrencyModelName(ConcurrencyModel model) noexcept
 {
 	switch (model) {
