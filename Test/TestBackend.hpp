@@ -39,8 +39,8 @@ using Session = WASM::BackendSession;
  *         cannot be created.
  */
 /**
- * \\brief Performs the create operation.
- * \\return The value or status produced by this operation.
+ * \brief Performs the create operation.
+ * \return The value or status produced by this operation.
  */
 std::unique_ptr<Session> create();
 
