@@ -48,7 +48,7 @@ namespace WASM {
 //! A future multi-agent backend replaces ComponentAsyncState's synchronous
 //! operations with real scheduling. The public contracts stay the same.
 
-/** \\brief Event categories emitted by Component Model async waitables. */
+/** \brief Event categories emitted by Component Model async waitables. */
 enum class ComponentEventCode : uint32_t {
 	None = 0,
 	Subtask = 1,
@@ -59,7 +59,7 @@ enum class ComponentEventCode : uint32_t {
 	TaskCancelled = 6
 };
 
-/** \\brief Outcome of a stream/future copy operation. */
+/** \brief Outcome of a stream/future copy operation. */
 enum class ComponentCopyResult : uint32_t {
 	Completed = 0,
 	Dropped = 1,
@@ -73,13 +73,13 @@ static constexpr uint32_t kBlocked = 0xFFFFFFFFu;
 //! value: all ones is `none`; otherwise the result is in the low four bits and
 //! the element count/progress in the remaining high bits. The built-ins are
 //! `{stream,future}.{read,write}`.
-/** \\brief Packs a copy outcome and progress into the Canonical ABI result word. \\param result Copy outcome. \\param progress Number of elements completed. \\return Packed result word. */
+/** \brief Packs a copy outcome and progress into the Canonical ABI result word. \param result Copy outcome. \param progress Number of elements completed. \return Packed result word. */
 constexpr uint32_t packCopyResult(ComponentCopyResult result, uint32_t progress)
 {
 	return (static_cast<uint32_t>(result) & 0xFu) | (progress << 4);
 }
 
-/** \\brief Decodes a packed copy result. \\param packed ABI result word. \\param result Receives the decoded outcome. \\param progress Receives the completed element count. \\return false for kBlocked; true when output parameters were populated. */
+/** \brief Decodes a packed copy result. \param packed ABI result word. \param result Receives the decoded outcome. \param progress Receives the completed element count. \return false for kBlocked; true when output parameters were populated. */
 constexpr bool unpackCopyResult(uint32_t packed, ComponentCopyResult& result,
 		uint32_t& progress)
 {
@@ -90,7 +90,7 @@ constexpr bool unpackCopyResult(uint32_t packed, ComponentCopyResult& result,
 	return true;
 }
 
-/** \\brief Lifecycle states of one async component task. */
+/** \brief Lifecycle states of one async component task. */
 enum class ComponentTaskState : uint8_t {
 	Pending,
 	Running,
@@ -99,14 +99,14 @@ enum class ComponentTaskState : uint8_t {
 };
 
 //! The direction of one end of a stream/future.
-/** \\brief Read/write role of a stream or future endpoint. */
+/** \brief Read/write role of a stream or future endpoint. */
 enum class ComponentEndDirection : uint8_t {
 	Readable,
 	Writable
 };
 
 //! `End.State` in the Canonical ABI explainer.
-/** \\brief Copy/cancellation state of one async endpoint. */
+/** \brief Copy/cancellation state of one async endpoint. */
 enum class ComponentEndState : uint8_t {
 	Idle,
 	Copying,
@@ -116,7 +116,7 @@ enum class ComponentEndState : uint8_t {
 
 //! What a handle denotes. Resources are owned by the runtime's resource table;
 //! this enum only covers the async objects a handle table can also contain.
-/** \\brief Kind of async object that can participate in a waitable set. */
+/** \brief Kind of async object that can participate in a waitable set. */
 enum class ComponentWaitableKind : uint8_t {
 	Subtask,
 	StreamRead,
@@ -126,19 +126,19 @@ enum class ComponentWaitableKind : uint8_t {
 	TaskCancelled
 };
 
-/** \\brief Event code and two Canonical ABI payload words produced by a waitable. */
+/** \brief Event code and two Canonical ABI payload words produced by a waitable. */
 struct ComponentAsyncEvent {
 	ComponentEventCode code = ComponentEventCode::None;
 	uint32_t payload1 = 0;
 	uint32_t payload2 = 0;
 
-	/** \\brief Tests whether this is the no-event sentinel. \\return true when code is None. */
+	/** \brief Tests whether this is the no-event sentinel. \return true when code is None. */
 	bool isNone() const { return code == ComponentEventCode::None; }
 };
 
 //! One context slot value. The Canonical ABI only asks for a value of the
 //! core type named by `canon context.get/set`, so a 64-bit cell is enough.
-/** \\brief Storage for one typed Canonical ABI task context slot. */
+/** \brief Storage for one typed Canonical ABI task context slot. */
 union ComponentContextSlot {
 	int64_t i64 = 0;
 	uint64_t u64;
@@ -150,24 +150,24 @@ union ComponentContextSlot {
 
 //! One activation's state. The single-agent scheduler keeps exactly one of
 //! these current; a future multi-agent backend keeps one per agent.
-/** \\brief State and context slots belonging to one component task activation. */
+/** \brief State and context slots belonging to one component task activation. */
 class ComponentTask {
 public:
-	/** \\brief Creates a task with its runtime handle. \\param id Allocated task identifier. */
+	/** \brief Creates a task with its runtime handle. \param id Allocated task identifier. */
 	explicit ComponentTask(uint32_t id) : id_(id) {}
 
-	/** \\brief Returns the task identifier. \\return Task handle. */
+	/** \brief Returns the task identifier. \return Task handle. */
 	uint32_t id() const { return id_; }
-	/** \\brief Returns the task lifecycle state. \\return Current task state. */
+	/** \brief Returns the task lifecycle state. \return Current task state. */
 	ComponentTaskState state() const { return state_; }
-	/** \\brief Sets the task lifecycle state. \\param state New task state. */
+	/** \brief Sets the task lifecycle state. \param state New task state. */
 	void setState(ComponentTaskState state) { state_ = state; }
 
-	/** \\brief Returns the task's current backpressure count. \\return Backpressure count. */
+	/** \brief Returns the task's current backpressure count. \return Backpressure count. */
 	uint32_t backpressure() const { return backpressure_; }
-	/** \\brief Increments the task's backpressure count. */
+	/** \brief Increments the task's backpressure count. */
 	void incrementBackpressure() { ++backpressure_; }
-	/** \\brief Decrements backpressure; throws if no increment is outstanding. \\throws std::runtime_error when the count is already zero. */
+	/** \brief Decrements backpressure; throws if no increment is outstanding. \throws std::runtime_error when the count is already zero. */
 	void decrementBackpressure()
 	{
 		if (backpressure_ == 0)
@@ -176,26 +176,26 @@ public:
 		--backpressure_;
 	}
 
-	/** \\brief Stores a typed value in a task context slot. \\param index Context slot index. \\param value Slot value to store. */
+	/** \brief Stores a typed value in a task context slot. \param index Context slot index. \param value Slot value to store. */
 	void setContextSlot(uint32_t index, ComponentContextSlot value)
 	{
 		context_[index] = value;
 	}
-	/** \\brief Reads a task context slot. \\param index Context slot index. \\return Stored value, or a zero-initialized slot if absent. */
+	/** \brief Reads a task context slot. \param index Context slot index. \return Stored value, or a zero-initialized slot if absent. */
 	ComponentContextSlot contextSlot(uint32_t index) const
 	{
 		const auto it = context_.find(index);
 		return it == context_.end() ? ComponentContextSlot{} : it->second;
 	}
 
-	/** \\brief Marks cancellation as requested for this task. */
+	/** \brief Marks cancellation as requested for this task. */
 	void requestCancellation() { cancellationRequested_ = true; }
-	/** \\brief Tests whether cancellation was requested. \\return true if cancellation is pending. */
+	/** \brief Tests whether cancellation was requested. \return true if cancellation is pending. */
 	bool cancellationRequested() const { return cancellationRequested_; }
 
-	/** \\brief Marks this task as resolved. */
+	/** \brief Marks this task as resolved. */
 	void resolve() { state_ = ComponentTaskState::Resolved; }
-	/** \\brief Marks this task as cancelled. */
+	/** \brief Marks this task as cancelled. */
 	void cancel() { state_ = ComponentTaskState::Cancelled; }
 private:
 	uint32_t id_ = 0;
@@ -207,7 +207,7 @@ private:
 
 //! A waitable is anything that can produce a ComponentAsyncEvent and join one
 //! waitable set. Stream/future ends and subtasks are the concrete producers.
-/** \\brief Base interface for objects that can emit async events and join waitable sets. */
+/** \brief Base interface for objects that can emit async events and join waitable sets. */
 class ComponentWaitable {
 public:
 	explicit ComponentWaitable(ComponentWaitableKind kind) : kind_(kind) {}
@@ -229,7 +229,7 @@ private:
 //! event is pending: there is no second agent that could make one appear, and
 //! the documented single-agent deviation is that a caller must not spin on an
 //! empty set (docs/proposals/THREADS.md TD9).
-/** \\brief Single-agent collection of waitables that can be polled for events. */
+/** \brief Single-agent collection of waitables that can be polled for events. */
 class ComponentWaitableSet {
 public:
 	ComponentAsyncEvent poll()
@@ -284,7 +284,7 @@ private:
 //! One end of a stream or future. The two ends share a ComponentAsyncChannel.
 class ComponentAsyncChannel;
 
-/** \\brief Readable or writable endpoint for a shared stream/future channel. */
+/** \brief Readable or writable endpoint for a shared stream/future channel. */
 class ComponentAsyncEndpoint : public ComponentWaitable {
 public:
 	ComponentAsyncEndpoint(ComponentWaitableKind kind, uint32_t handle,
@@ -355,7 +355,7 @@ private:
 
 //! The shared queue behind a readable/writable pair. `elementSize == 0` models
 //! the element-less `stream`/`future` forms, for which the buffer is ignored.
-/** \\brief Shared element queue and lifecycle state behind paired endpoints. */
+/** \brief Shared element queue and lifecycle state behind paired endpoints. */
 class ComponentAsyncChannel {
 public:
 	explicit ComponentAsyncChannel(uint32_t elementSize, bool isFuture)
@@ -392,7 +392,7 @@ private:
 //! implementation is intentionally synchronous, single-threaded and reentrant:
 //! `runUntilIdle` drains the queue on the calling thread. There is no OS thread
 //! and no global state beyond the ComponentAsyncState instance.
-/** \\brief Scheduling interface used by component async operations. */
+/** \brief Scheduling interface used by component async operations. */
 class ComponentExecutor {
 public:
 	virtual ~ComponentExecutor() = default;
@@ -411,7 +411,7 @@ public:
 	virtual std::size_t pending() const = 0;
 };
 
-/** \\brief Synchronous executor implementing the documented single-agent mode. */
+/** \brief Synchronous executor implementing the documented single-agent mode. */
 class SingleAgentExecutor final : public ComponentExecutor {
 public:
 	uint32_t threadIndex() const override { return 0; }
@@ -446,7 +446,7 @@ private:
 //! supplies the allocator/releaser so async handles share the component's one
 //! handle index space with resources.
 /**
- * \\brief Owns async handles, channels, tasks, waitable sets, and error contexts.
+ * \brief Owns async handles, channels, tasks, waitable sets, and error contexts.
  *
  * The current implementation is synchronous and single-agent. Allocated handles
  * share the component instance's handle table through the supplied callbacks.
@@ -456,13 +456,13 @@ public:
 	using HandleAllocator = std::function<uint32_t()>;
 	using HandleReleaser = std::function<void(uint32_t)>;
 
-	/** \\brief Creates async state using the component's shared handle allocator. \\param allocate Allocates a handle in the component handle space. \\param release Releases a previously allocated handle. */
+	/** \brief Creates async state using the component's shared handle allocator. \param allocate Allocates a handle in the component handle space. \param release Releases a previously allocated handle. */
 	ComponentAsyncState(HandleAllocator allocate, HandleReleaser release)
 		: allocate_(std::move(allocate)), release_(std::move(release)) {}
 
 	//! A stream/future with an optional element size. Returns the readable and
 	//! writable handle (the low/high i32 of `{stream,future}.new`).
-	/** \\brief Creates paired readable/writable stream or future handles. \\param future true for a single-value future; false for a stream. \\param elementSize Size in bytes of each element (zero for element-less forms). \\return Pair of readable and writable handles, in that order. */
+	/** \brief Creates paired readable/writable stream or future handles. \param future true for a single-value future; false for a stream. \param elementSize Size in bytes of each element (zero for element-less forms). \return Pair of readable and writable handles, in that order. */
 	std::pair<uint32_t, uint32_t> newStreamFuture(bool future, uint32_t elementSize)
 	{
 		const uint32_t readable = allocate_();
@@ -490,7 +490,7 @@ public:
 
 	//! `{stream,future}.read`: copy up to `count` elements from the channel into
 	//! `memory[address]`. Returns `kBlocked` when `async` and no data is ready.
-	/** \\brief Reads queued elements into guest linear memory. \\param handle Readable endpoint handle. \\param memory Guest memory receiving copied bytes. \\param address Destination byte address. \\param count Maximum number of elements to read. \\param async Whether a missing value may leave the copy blocked. \\return Packed copy result, or kBlocked for a pending asynchronous read. \\throws std::runtime_error for invalid state, out-of-bounds memory, or synchronous blocking. */
+	/** \brief Reads queued elements into guest linear memory. \param handle Readable endpoint handle. \param memory Guest memory receiving copied bytes. \param address Destination byte address. \param count Maximum number of elements to read. \param async Whether a missing value may leave the copy blocked. \return Packed copy result, or kBlocked for a pending asynchronous read. \throws std::runtime_error for invalid state, out-of-bounds memory, or synchronous blocking. */
 	uint32_t read(uint32_t handle, LinearMemory& memory, uint64_t address,
 			uint64_t count, bool async)
 	{
@@ -559,7 +559,7 @@ public:
 
 	//! `{stream,future}.write`: copy `count` elements from memory into the
 	//! channel. Returns `kBlocked` when `async` and there is no reader yet.
-	/** \\brief Copies elements from guest linear memory into the channel. \\param handle Writable endpoint handle. \\param memory Guest memory containing source bytes. \\param address Source byte address. \\param count Number of elements to write. \\param async Whether a missing reader may leave the copy blocked. \\return Packed copy result, or kBlocked for a pending asynchronous write. \\throws std::runtime_error for invalid state, out-of-bounds memory, or invalid future writes. */
+	/** \brief Copies elements from guest linear memory into the channel. \param handle Writable endpoint handle. \param memory Guest memory containing source bytes. \param address Source byte address. \param count Number of elements to write. \param async Whether a missing reader may leave the copy blocked. \return Packed copy result, or kBlocked for a pending asynchronous write. \throws std::runtime_error for invalid state, out-of-bounds memory, or invalid future writes. */
 	uint32_t write(uint32_t handle, LinearMemory& memory, uint64_t address,
 			uint64_t count, bool async)
 	{
@@ -614,7 +614,7 @@ public:
 	//! `{stream,future}.cancel-{read,write}`. The single-agent runtime has no
 	//! buffer-owning background copy, so cancellation only succeeds for an end
 	//! whose copy was already blocked (state == Copying).
-	/** \\brief Cancels a copy already blocked on an endpoint. \\param handle Endpoint handle whose pending copy is cancelled. \\param async Reserved async-mode argument (currently unused). \\return Packed Cancelled result. \\throws std::runtime_error if the handle is invalid or no copy is pending. */
+	/** \brief Cancels a copy already blocked on an endpoint. \param handle Endpoint handle whose pending copy is cancelled. \param async Reserved async-mode argument (currently unused). \return Packed Cancelled result. \throws std::runtime_error if the handle is invalid or no copy is pending. */
 	uint32_t cancel(uint32_t handle, bool /*async*/)
 	{
 		auto it = endpoints_.find(handle);
@@ -629,7 +629,7 @@ public:
 		return packCopyResult(ComponentCopyResult::Cancelled, 0);
 	}
 
-	/** \\brief Drops one endpoint and notifies its peer. \\param handle Endpoint handle to release. \\param direction Expected endpoint direction. \\throws std::runtime_error for invalid handles, direction, or lifecycle state. */
+	/** \brief Drops one endpoint and notifies its peer. \param handle Endpoint handle to release. \param direction Expected endpoint direction. \throws std::runtime_error for invalid handles, direction, or lifecycle state. */
 	void drop(uint32_t handle, ComponentEndDirection direction)
 	{
 		auto it = endpoints_.find(handle);
@@ -674,7 +674,7 @@ public:
 
 	//! `{stream,future}.forward`: connect the readable end to the writable end
 	//! and merge any queued elements. Both handles are removed by the caller.
-	/** \\brief Transfers queued data and endpoint linkage from one channel to another. \\param readableHandle Source readable endpoint. \\param writableHandle Destination writable endpoint. \\throws std::runtime_error if endpoint types/sizes differ or either end is busy. */
+	/** \brief Transfers queued data and endpoint linkage from one channel to another. \param readableHandle Source readable endpoint. \param writableHandle Destination writable endpoint. \throws std::runtime_error if endpoint types/sizes differ or either end is busy. */
 	void forward(uint32_t readableHandle, uint32_t writableHandle)
 	{
 		ComponentAsyncEndpoint& readable = endpoint(readableHandle,
@@ -707,7 +707,7 @@ public:
 
 	//! Removes a handle without notifying the peer. Used by `forward`, where the
 	//! endpoints are transferred rather than dropped.
-	/** \\brief Removes an endpoint handle without notifying its peer. \\param handle Endpoint handle to discard; absent handles are ignored. */
+	/** \brief Removes an endpoint handle without notifying its peer. \param handle Endpoint handle to discard; absent handles are ignored. */
 	void discard(uint32_t handle)
 	{
 		const auto it = endpoints_.find(handle);
@@ -724,7 +724,7 @@ public:
 
 
 	//! \par Waitable sets
-	/** \\brief Allocates an empty waitable set. \\return Handle of the new set. */
+	/** \brief Allocates an empty waitable set. \return Handle of the new set. */
 	uint32_t newWaitableSet()
 	{
 		const uint32_t handle = allocate_();
@@ -732,7 +732,7 @@ public:
 		return handle;
 	}
 
-	/** \\brief Resolves a waitable-set handle. \\param handle Waitable-set handle. \\return Mutable reference to the set. \\throws std::runtime_error if the handle is invalid. */
+	/** \brief Resolves a waitable-set handle. \param handle Waitable-set handle. \return Mutable reference to the set. \throws std::runtime_error if the handle is invalid. */
 	ComponentWaitableSet& waitableSet(uint32_t handle)
 	{
 		const auto it = waitableSets_.find(handle);
@@ -741,19 +741,19 @@ public:
 		return it->second;
 	}
 
-	/** \\brief Waits/polls the single-agent set for its next pending event. \\param setHandle Waitable-set handle. \\return Next event, or the None sentinel when no event is pending. */
+	/** \brief Waits/polls the single-agent set for its next pending event. \param setHandle Waitable-set handle. \return Next event, or the None sentinel when no event is pending. */
 	ComponentAsyncEvent wait(uint32_t setHandle)
 	{
 		return waitableSet(setHandle).wait();
 	}
 
-	/** \\brief Polls a waitable set without blocking. \\param setHandle Waitable-set handle. \\return Next event, or the None sentinel when no event is pending. */
+	/** \brief Polls a waitable set without blocking. \param setHandle Waitable-set handle. \return Next event, or the None sentinel when no event is pending. */
 	ComponentAsyncEvent poll(uint32_t setHandle)
 	{
 		return waitableSet(setHandle).poll();
 	}
 
-	/** \\brief Releases an empty waitable set. \\param handle Waitable-set handle. \\throws std::runtime_error for an invalid or non-empty set. */
+	/** \brief Releases an empty waitable set. \param handle Waitable-set handle. \throws std::runtime_error for an invalid or non-empty set. */
 	void dropWaitableSet(uint32_t handle)
 	{
 		const auto it = waitableSets_.find(handle);
@@ -767,7 +767,7 @@ public:
 		release_(handle);
 	}
 
-	/** \\brief Adds a waitable to a set, or detaches it when setHandle is zero. \\param waitableHandle Handle of the waitable object. \\param setHandle Target set handle, or zero to detach. \\throws std::runtime_error if the waitable or set handle is invalid. */
+	/** \brief Adds a waitable to a set, or detaches it when setHandle is zero. \param waitableHandle Handle of the waitable object. \param setHandle Target set handle, or zero to detach. \throws std::runtime_error if the waitable or set handle is invalid. */
 	void join(uint32_t waitableHandle, uint32_t setHandle)
 	{
 		ComponentWaitable* waitable = waitableFor(waitableHandle);
@@ -783,11 +783,11 @@ public:
 	}
 
 	//! \par Tasks, context and backpressure
-	/** \\brief Returns the current task activation. \\return Mutable reference to the current task. */
+	/** \brief Returns the current task activation. \return Mutable reference to the current task. */
 	ComponentTask& currentTask() { return *currentTask_; }
-	/** \\brief Resolves the current task. \\return Canonical ABI success value (zero). */
+	/** \brief Resolves the current task. \return Canonical ABI success value (zero). */
 	uint32_t taskReturn() { currentTask_->resolve(); return 0; }
-	/** \\brief Cancels the current task after a cancellation request. \\return Canonical ABI success value (zero). \\throws std::runtime_error if cancellation was not requested. */
+	/** \brief Cancels the current task after a cancellation request. \return Canonical ABI success value (zero). \throws std::runtime_error if cancellation was not requested. */
 	uint32_t taskCancel()
 	{
 		if (!currentTask_->cancellationRequested())
@@ -797,7 +797,7 @@ public:
 		return 0;
 	}
 
-	/** \\brief Increments or decrements current-task backpressure. \\param increment true to increment; false to decrement. \\throws std::runtime_error if decrementing a zero count. */
+	/** \brief Increments or decrements current-task backpressure. \param increment true to increment; false to decrement. \throws std::runtime_error if decrementing a zero count. */
 	void setBackpressure(bool increment)
 	{
 		if (increment)
@@ -806,12 +806,12 @@ public:
 			currentTask_->decrementBackpressure();
 	}
 
-	/** \\brief Returns current-task backpressure. \\return Current backpressure count. */
+	/** \brief Returns current-task backpressure. \return Current backpressure count. */
 	uint32_t backpressure() const { return currentTask_->backpressure(); }
 
 	//! Error contexts. The single-agent model stores the diagnostic string; a
 	//! multi-agent backend would use the same handle table.
-	/** \\brief Creates an error-context handle containing a diagnostic message. \\param message Message to associate with the new context. \\return Allocated error-context handle. */
+	/** \brief Creates an error-context handle containing a diagnostic message. \param message Message to associate with the new context. \return Allocated error-context handle. */
 	uint32_t newErrorContext(std::string message)
 	{
 		const uint32_t handle = allocate_();
@@ -819,7 +819,7 @@ public:
 		return handle;
 	}
 
-	/** \\brief Retrieves an error-context message. \\param handle Error-context handle. \\return Const reference to the stored message. \\throws std::runtime_error if the handle is invalid. */
+	/** \brief Retrieves an error-context message. \param handle Error-context handle. \return Const reference to the stored message. \throws std::runtime_error if the handle is invalid. */
 	const std::string& errorContext(uint32_t handle) const
 	{
 		const auto it = errorContexts_.find(handle);
@@ -828,7 +828,7 @@ public:
 		return it->second;
 	}
 
-	/** \\brief Releases an error-context handle. \\param handle Error-context handle to release. \\throws std::runtime_error if the handle is invalid. */
+	/** \brief Releases an error-context handle. \param handle Error-context handle to release. \throws std::runtime_error if the handle is invalid. */
 	void dropErrorContext(uint32_t handle)
 	{
 		const auto it = errorContexts_.find(handle);
@@ -840,7 +840,7 @@ public:
 
 	//! Subtasks: in a single-agent executor a synchronous call is already
 	//! resolved when it returns. The handle exists so the built-ins validate.
-	/** \\brief Creates a subtask handle in the synchronous executor. \\return Newly allocated subtask handle. */
+	/** \brief Creates a subtask handle in the synchronous executor. \return Newly allocated subtask handle. */
 	uint32_t newSubtask()
 	{
 		const uint32_t handle = allocate_();
@@ -848,7 +848,7 @@ public:
 		return handle;
 	}
 
-	/** \\brief Cancels and releases a subtask handle. \\param handle Subtask handle. \\return ComponentTaskState::Cancelled. \\throws std::runtime_error if the handle is invalid. */
+	/** \brief Cancels and releases a subtask handle. \param handle Subtask handle. \return ComponentTaskState::Cancelled. \throws std::runtime_error if the handle is invalid. */
 	uint32_t cancelSubtask(uint32_t handle)
 	{
 		const auto it = subtasks_.find(handle);
@@ -859,7 +859,7 @@ public:
 		return static_cast<uint32_t>(ComponentTaskState::Cancelled);
 	}
 
-	/** \\brief Releases a subtask handle. \\param handle Subtask handle. \\throws std::runtime_error if the handle is invalid. */
+	/** \brief Releases a subtask handle. \param handle Subtask handle. \throws std::runtime_error if the handle is invalid. */
 	void dropSubtask(uint32_t handle)
 	{
 		const auto it = subtasks_.find(handle);
@@ -869,17 +869,17 @@ public:
 		release_(handle);
 	}
 
-	/** \\brief Returns the executor used by this async state. \\return Mutable reference to the executor. */
+	/** \brief Returns the executor used by this async state. \return Mutable reference to the executor. */
 	ComponentExecutor& executor() { return executor_; }
 
-	/** \\brief Looks up an endpoint without throwing. \\param handle Endpoint handle. \\return Endpoint pointer, or nullptr when absent. */
+	/** \brief Looks up an endpoint without throwing. \param handle Endpoint handle. \return Endpoint pointer, or nullptr when absent. */
 	ComponentAsyncEndpoint* endpointOrNull(uint32_t handle)
 	{
 		const auto it = endpoints_.find(handle);
 		return it == endpoints_.end() ? nullptr : it->second.get();
 	}
 
-	/** \\brief Finds the paired endpoint for a stream/future handle. \\param handle Endpoint handle. \\return Peer endpoint, or nullptr if unavailable. */
+	/** \brief Finds the paired endpoint for a stream/future handle. \param handle Endpoint handle. \return Peer endpoint, or nullptr if unavailable. */
 	ComponentAsyncEndpoint* peerOf(uint32_t handle)
 	{
 		auto it = writableOf_.find(handle);
