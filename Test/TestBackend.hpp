@@ -23,8 +23,11 @@ namespace TestBackend {
 //! harness aliases it so a test body never depends on the harness being the
 //! place where the interface was first written.
 using FieldLayout = WASM::BackendFieldLayout;
+//! The aggregate half of the same product type (`WASM::BackendAggregateLayout`).
 using AggregateLayout = WASM::BackendAggregateLayout;
+//! A vectorised lane-wise operation, as the session seam describes it.
 using LaneWiseOp = WASM::BackendLaneWiseOp;
+//! The session type itself: what `create()` returns.
 using Session = WASM::BackendSession;
 
 //! Selects the backend named by WASMJIT_BACKEND (empty/`libjit` → the compiled

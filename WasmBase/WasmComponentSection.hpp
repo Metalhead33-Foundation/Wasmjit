@@ -36,11 +36,17 @@ enum class ComponentSectionType : uint8_t {
 	Invalid = 255
 };
 
+//! The section kind's spelling for a diagnostic ("custom", "core-module", …).
 const char* getComponentSectionTypeName(ComponentSectionType type);
 
+//! One section header from a component's binary: its kind, payload size and
+//! byte offset in the file.
 struct ComponentSection {
+	//! The section kind; `Invalid` for the 0xFF placeholder the parser starts at.
 	ComponentSectionType type = ComponentSectionType::Invalid;
+	//! Payload size in bytes, excluding the id/size header.
 	uint32_t size = 0;
+	//! Byte offset of the payload in the artifact.
 	uint64_t offset = 0;
 	//! Custom sections only (the name that starts the payload).
 	std::string name;

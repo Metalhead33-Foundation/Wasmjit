@@ -56,6 +56,7 @@ inline constexpr std::size_t kMaxControlNesting = 10000;
 //! hostile file may contain a very large number of sections; both are capped
 //! independently of the input size (docs/SAFETY.md).
 inline constexpr uint32_t kMaxComponentNesting = 100;
+//! The section-count cap that goes with `kMaxComponentNesting`.
 inline constexpr uint32_t kMaxComponentSections = 100000;
 
 //! Throws unless `requested` bytes can still be read from `device`. Devices

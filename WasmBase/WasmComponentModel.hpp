@@ -41,8 +41,12 @@ enum class ComponentDefinitionKind : uint8_t {
 	Value
 };
 
+//! One entry of a component's ordered definition list: which kind of definition
+//! it is and the index into that kind's own space.
 struct ComponentDefinition {
+	//! The definition kind (core module, function, value, …).
 	ComponentDefinitionKind kind = ComponentDefinitionKind::CoreModule;
+	//! Index into the kind's index space.
 	uint32_t index = 0;
 };
 
@@ -58,8 +62,11 @@ enum class CoreSort : uint8_t {
 	Instance = 0x12
 };
 
+//! A `core:sort`/index pair naming an entity in a core index space.
 struct CoreSortIdx {
+	//! Which core index space the index is in.
 	CoreSort sort = CoreSort::Func;
+	//! Index into that space.
 	uint32_t index = 0;
 };
 
@@ -72,7 +79,10 @@ enum class ComponentSort : uint8_t {
 	Instance = 0x05
 };
 
+//! A component-level sort/index pair; `core` carries the inner core sort when the
+//! outer sort is `core`.
 struct SortIdx {
+	//! Which component index space the index is in.
 	ComponentSort sort = ComponentSort::Core;
 	//! Set only when sort == Core.
 	std::optional<CoreSortIdx> core;
@@ -90,22 +100,34 @@ struct CoreExternType {
 	uint8_t tagAttribute = 0;
 };
 
+//! One `core:import` declaration: the module/field it names and its core type.
 struct CoreImport {
+	//! The importing module's name.
 	std::string module;
+	//! The field name inside that module.
 	std::string name;
+	//! The declared type of the imported entity.
 	CoreExternType type;
 };
 
+//! One `core:export` declaration inside a module type.
 struct CoreExportDecl {
+	//! The exported field name.
 	std::string name;
+	//! The declared type of the exported entity.
 	CoreExternType type;
 };
 
+//! The `outer` alias count/index pair: how many enclosing components to skip and
+//! which export of that component to name.
 struct CoreOuterAlias {
+	//! Number of enclosing components to walk out.
 	uint32_t count = 0;
+	//! Index into the reached component's export space.
 	uint32_t index = 0;
 };
 
+//! A `core:type` recursive group: its parser scratch and the interned ids.
 struct CoreRecType {
 	//! True when the producing `core:rectype` was a `0x4E` recursive group.
 	//! A one-member rec group is otherwise indistinguishable from a bare subtype.
@@ -116,6 +138,8 @@ struct CoreRecType {
 	mutable std::vector<TypeId> typeIds;
 };
 
+//! One declaration inside a `core:module` type: an import, a type, an alias or
+//! an export, with the payload the kind selects.
 struct CoreModuleDecl {
 	enum class Kind : uint8_t { Import, Type, Alias, Export };
 	Kind kind = Kind::Import;
@@ -125,6 +149,7 @@ struct CoreModuleDecl {
 	CoreExportDecl exportDecl;
 };
 
+//! A `core:type` definition: either one recursive group or a module type.
 struct CoreTypeDef {
 	enum class Kind : uint8_t { RecType, ModuleType };
 	Kind kind = Kind::RecType;
@@ -139,23 +164,29 @@ struct Attribute {
 	std::string text;
 };
 
+//! A component name's attributes (`implements`, `version-suffix`, `external-id`).
 struct NameAttributes {
 	uint8_t tag = 0; //!< 0x00, 0x01 (plain/interface) or 0x02 (+ attributes)
 	std::string name;
 	std::vector<Attribute> attributes;
 };
 
+//! A resource type declaration: the core representation and an optional
+//! destructor function index.
 struct ResourceType {
 	ValueType rep; //!< core valtype
 	std::optional<uint32_t> destructor;
 };
 
+//! A bound on a resource type: `eq` (any resource of the type) or an explicit
+//! sub-resource index.
 struct TypeBound {
 	enum class Kind : uint8_t { Eq, SubResource };
 	Kind kind = Kind::Eq;
 	uint32_t typeIndex = 0;
 };
 
+//! A value type's bound (`eq` or an explicit type).
 struct ValueBound {
 	enum class Kind : uint8_t { Eq, Type };
 	Kind kind = Kind::Eq;
@@ -163,6 +194,8 @@ struct ValueBound {
 	ComponentValueType type;
 };
 
+//! The type an import or export declares: which sort and the payload that sort
+//! uses.
 struct ExternType {
 	enum class Kind : uint8_t {
 		CoreModule, Func, Value, Type, Component, Instance
@@ -173,11 +206,13 @@ struct ExternType {
 	TypeBound typeBound;
 };
 
+//! One `import` declaration of a component or instance type.
 struct ImportDecl {
 	NameAttributes name;
 	ExternType type;
 };
 
+//! One type-level `exportdecl`: the name it exports and its ascribed type.
 struct ExportDecl {
 	NameAttributes name;
 	ExternType type;
@@ -191,6 +226,8 @@ struct ComponentExport {
 	std::optional<ExternType> type;
 };
 
+//! One `alias` declaration: which export (of an instance, of a core instance, or
+//! of an outer component) it names.
 struct Alias {
 	enum class Kind : uint8_t { Export, CoreExport, Outer };
 	SortIdx sort;
@@ -201,6 +238,8 @@ struct Alias {
 	uint32_t index = 0;
 };
 
+//! One `with` argument of a core-module instantiation: the name it fills and the
+//! core instance it takes.
 struct CoreInstantiateArg {
 	std::string name;
 	uint32_t instanceIndex = 0;

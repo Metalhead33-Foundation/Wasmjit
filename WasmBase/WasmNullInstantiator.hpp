@@ -34,12 +34,16 @@ public:
 	NullInstantiator() = default;
 
 protected:
+	//! Records the types only; nothing is lowered and no handle is created.
 	void translateTypes(ModuleInstance& instance, const Module& module,
 			ModuleInstanceInternals& internals) override;
+	//! Gives every declared function a `Callable` with a null `fnPtr`.
 	void declareFunctions(ModuleInstance& instance, const Module& module,
 			ModuleInstanceInternals& internals) override;
+	//! No code is generated: this is the hook that would compile the bodies.
 	void compileFunctions(ModuleInstance& instance, const Module& module,
 			ModuleInstanceInternals& internals) override;
+	//! Refused unless the index names an import with a native body.
 	void callStartFunction(ModuleInstance& instance, uint32_t funcIdx,
 			ModuleInstanceInternals& internals) override;
 };

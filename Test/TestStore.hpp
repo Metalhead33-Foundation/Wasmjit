@@ -17,6 +17,8 @@
   This header is internal: it is not part of the embedding surface.
 */
 
+//! The one `WASM::Store` the harness parses and instantiates into. Constructed
+//! on first use and reused for the lifetime of the test binary.
 inline WASM::Store& testStore()
 {
 	static WASM::Store store;

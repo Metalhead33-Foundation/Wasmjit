@@ -404,11 +404,13 @@ public:
 
 protected:
 	Value evalConstantExpr(const std::span<const std::byte>& expr, ModuleInstance& instance);
-	//! Subclasses implement these two. declareFunctions creates a handle
-	//! for each function (so call targets exist before any body is compiled).
-	//! compileFunctions then fills each handle with generated instructions.
+	//! Lower the module's types into the backend's representation, so the
+	//! declared and the compiled functions agree on one ABI.
 	virtual void translateTypes(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals) = 0;
+	//! Create a handle for each function (so call targets exist before any body
+	//! is compiled).
 	virtual void declareFunctions(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals) = 0;
+	//! Fill each handle `declareFunctions` created with generated instructions.
 	virtual void compileFunctions(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals) = 0;
 
 	//! Calling the start function is also backend-specific because you need

@@ -112,10 +112,16 @@ struct NativeImportBody {
 template <class Signature>
 struct NativeImportAdapter;
 
+//! Adapter for a throwing host function: the trampoline is `noexcept` and turns
+//! an escaping exception into a reported trap.
 template <class Ret, class... Args>
 struct NativeImportAdapter<Ret (*)(VMContext*, Args...)> {
+	//! The host function's own pointer type, used as the template argument of
+	//! `trampoline`.
 	using FnPtr = Ret (*)(VMContext*, Args...);
 
+	//! The `Callable::fnPtr` for the function `Fn`: it runs the body and reports a
+	//! trap instead of letting an exception cross into generated code.
 	template <FnPtr Fn>
 	static Ret trampoline(VMContext* ctx, Args... args) noexcept
 	{
@@ -123,10 +129,15 @@ struct NativeImportAdapter<Ret (*)(VMContext*, Args...)> {
 	}
 };
 
+//! Adapter for a `noexcept` host function; it works exactly like the throwing
+//! form (the pointer converts implicitly).
 template <class Ret, class... Args>
 struct NativeImportAdapter<Ret (*)(VMContext*, Args...) noexcept> {
+	//! The host function's own pointer type, used as the template argument of
+	//! `trampoline`.
 	using FnPtr = Ret (*)(VMContext*, Args...) noexcept;
 
+	//! The `Callable::fnPtr` for the function `Fn`.
 	template <FnPtr Fn>
 	static Ret trampoline(VMContext* ctx, Args... args) noexcept
 	{

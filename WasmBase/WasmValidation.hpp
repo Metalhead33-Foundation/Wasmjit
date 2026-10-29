@@ -29,7 +29,11 @@ namespace WASM {
 //! `profile` gates constructs an excluded marker forbids
 //! (docs/proposals/PROFILES.md PR-2/PR-4). The default is the full profile.
 struct ValidationOptions {
+	//! Adopt the Relaxed Dead-Code Validation algorithm described above. Off by
+	//! default; see the block above for why.
 	bool relaxedDeadCode = false;
+	//! The language profile whose exclusions the validator enforces
+	//! (docs/proposals/PROFILES.md PR-2/PR-4). The default is the full profile.
 	ProfileConfig profile{};
 };
 

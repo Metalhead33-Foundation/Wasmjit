@@ -26,9 +26,14 @@ WASMJIT_VISIBLE_BEGIN
 //! The values agree with the shared library's current qmake-default soname
 //! (`libWasmBase.so.1`). An explicit `VERSION`/soname per library is ES-4.
 #define WASMJIT_VERSION_MAJOR 1
+//! The minor component of the release this library was built as.
 #define WASMJIT_VERSION_MINOR 0
+//! The patch component of the release this library was built as.
 #define WASMJIT_VERSION_PATCH 0
+//! The three components above as one `"MAJOR.MINOR.PATCH"` string.
 #define WASMJIT_VERSION_STRING "1.0.0"
+//! The monotonic ABI number: the answer to "may this embedder or plugin load
+//! this library?", bumped independently of the release version.
 #define WASMJIT_ABI_VERSION 1u
 
 namespace WASM {
@@ -36,7 +41,9 @@ namespace WASM {
 //! Runtime counterparts of the macros, for an embedder that only links the
 //! shared library and for a backend plugin's compatibility check. They never
 //! throw and they do not allocate.
+//! Runtime form of `WASMJIT_VERSION_STRING`; never throws, never allocates.
 const char* versionString() noexcept;
+//! Runtime form of `WASMJIT_ABI_VERSION`; never throws, never allocates.
 std::uint32_t abiVersion() noexcept;
 
 } // namespace WASM

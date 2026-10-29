@@ -101,8 +101,11 @@ uint32_t wasm_atomic_wait(const void* address, uint64_t expected, uint64_t timeo
 //! never-stored replacement.
 void* wasm_atomic_ref_store(WASM::VMContext* context, void** address, void* value,
 							uint32_t ordering);
+//! Atomic exchange of a reference slot with the retain/release barrier above.
 void* wasm_atomic_ref_xchg(WASM::VMContext* context, void** address, void* value,
 						   uint32_t ordering);
+//! Atomic compare-exchange of a reference slot with the retain/release barrier
+//! above.
 void* wasm_atomic_ref_cmpxchg(WASM::VMContext* context, void** address, void* expected,
 							  void* replacement, uint32_t ordering);
 

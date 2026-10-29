@@ -35,16 +35,20 @@ namespace WASM {
 //! context). The runtime holds it for as long as the backend lives.
 
 struct BackendInstance {
+	//! The compilation seam itself: what the core instantiates modules with.
 	std::shared_ptr<ModuleInstantiator> instantiator;
+	//! State the instantiator borrows and that must outlive it.
 	std::shared_ptr<void>               keepAlive;
 };
 
+//! How a backend is created on demand: one call yields one instance.
 using BackendFactory = std::function<BackendInstance()>;
 
 //! Registers `factory` under `name`. Registering the same name twice keeps the
 //! first registration: a name is an identity, not a preference.
 void registerBackend(std::string name, BackendFactory factory);
 
+//! True when a backend is registered or loadable under `name`.
 bool hasBackend(std::string_view name);
 //! Sorted; includes the built-in "null" baseline and every linked backend.
 std::vector<std::string> backendNames();

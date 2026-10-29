@@ -72,6 +72,9 @@ struct VMContext;
 //! arena); the engine does not walk a dying instance's whole object graph to
 //! release host pointers. Neither callback may throw, trap or re-enter Wasm.
 struct HostBridge {
+	//! Reference-barrier callbacks for the `externref` payloads this bridge
+	//! owns. Every member is optional; a null callback selects the documented
+	//! fallback next to it.
 	struct ReferenceHooks {
 		//! Returns true when `ref` is a host reference owned by this bridge.
 		//! Optional; when null the engine uses the conservative fallback above.
@@ -89,6 +92,8 @@ struct HostBridge {
 	//! Opaque embedder state passed to every callback. This is independent of
 	//! `VMContext::hostData`; an embedder may use either, or both.
 	void* userData = nullptr;
+	//! The reference-barrier hooks. Default-constructed hooks disable the
+	//! barrier's host callbacks; the engine's fallbacks then apply.
 	ReferenceHooks references{};
 
 	//! Called once after the instance's imports, memories, globals and tables

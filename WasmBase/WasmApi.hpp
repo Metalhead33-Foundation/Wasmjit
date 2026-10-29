@@ -20,6 +20,14 @@
   is exported (docs/EMBEDDING_SURFACE.md ES-4).
 */
 
+//! \def WASMJIT_API
+//! \brief Export (inside the library) or import (in a consumer) attribute for a
+//! public declaration.
+//!
+//! The library defines `WASMJIT_BUILD` while compiling itself and gets the
+//! export attribute; a consumer gets the import attribute. On ELF both resolve
+//! to default visibility, which is what a consumer needs; on PE the distinction
+//! matters.
 #if defined(WASMJIT_BUILD)
 #  if defined(_WIN32)
 #    define WASMJIT_API __declspec(dllexport)
@@ -34,9 +42,15 @@
 #  endif
 #endif
 
-//! For a header that is *entirely* public (a helper layer, not a class): every
-//! declaration in the block gets default visibility. GCC/Clang only; on MSVC the
-//! macros are empty and each declaration uses WASMJIT_API.
+//! \def WASMJIT_VISIBLE_BEGIN
+//! \brief Opens a block in which every declaration gets default visibility.
+//!
+//! For a header that is *entirely* public (a helper layer, not a class). GCC
+//! and Clang only; on MSVC the macros are empty and each declaration uses
+//! `WASMJIT_API`.
+//!
+//! \def WASMJIT_VISIBLE_END
+//! \brief Closes the block opened by `WASMJIT_VISIBLE_BEGIN`.
 #if defined(__GNUC__) || defined(__clang__)
 #  define WASMJIT_VISIBLE_BEGIN _Pragma("GCC visibility push(default)")
 #  define WASMJIT_VISIBLE_END   _Pragma("GCC visibility pop")

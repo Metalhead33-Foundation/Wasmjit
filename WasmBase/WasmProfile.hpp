@@ -49,6 +49,8 @@ enum class ProfileMarker : uint32_t {
 	Vectors = 1u << 2,          //!< V: v128 and every SIMD instruction
 };
 
+//! Union of two markers, so `ProfileMarker::Threads | ProfileMarker::Vectors`
+//! names the exclusion set `{T,V}`.
 inline constexpr ProfileMarker operator|(ProfileMarker lhs, ProfileMarker rhs) noexcept
 {
 	return static_cast<ProfileMarker>(
@@ -58,27 +60,37 @@ inline constexpr ProfileMarker operator|(ProfileMarker lhs, ProfileMarker rhs) n
 //! The markers a configuration excludes, and the predicates the validator and
 //! the backend use. `profileConfigX()` helpers below build the named profiles.
 struct ProfileConfig {
+	//! Bit set of the `ProfileMarker` values this configuration excludes; zero
+	//! means the full profile.
 	uint32_t excludedMarkers = 0;
 
+	//! The full profile `{}`: the engine claims no exclusion.
 	constexpr ProfileConfig() noexcept = default;
+	//! A profile that excludes exactly the subsets `marker` names.
 	explicit constexpr ProfileConfig(ProfileMarker marker) noexcept
 		: excludedMarkers(static_cast<uint32_t>(marker)) {}
+	//! A profile from an already-combined marker bit set.
 	explicit constexpr ProfileConfig(uint32_t markers) noexcept
 		: excludedMarkers(markers) {}
 
+	//! True when this profile excludes the subset `marker` names.
 	inline constexpr bool excludes(ProfileMarker marker) const noexcept
 	{
 		return (excludedMarkers & static_cast<uint32_t>(marker)) != 0;
 	}
+	//! True when nothing is excluded, i.e. the full profile.
 	inline constexpr bool isFull() const noexcept { return excludedMarkers == 0; }
+	//! True when the deterministic profile's exclusions apply.
 	inline constexpr bool deterministic() const noexcept
 	{
 		return excludes(ProfileMarker::NonDeterministic);
 	}
+	//! True when the threads subset is excluded.
 	inline constexpr bool excludesThreads() const noexcept
 	{
 		return excludes(ProfileMarker::Threads);
 	}
+	//! True when the scalar subset is excluded (no vectors).
 	inline constexpr bool scalar() const noexcept
 	{
 		return excludes(ProfileMarker::Vectors);

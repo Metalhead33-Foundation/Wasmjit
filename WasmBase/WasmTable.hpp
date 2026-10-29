@@ -38,12 +38,17 @@ static_assert(std::is_standard_layout_v<TableInstance>,
 class StoreOwnedTable
 {
 protected:
+	//! The backend-visible view module instances borrow.
 	TableInstance table;
+	//! The slot storage `table.base` points at.
 	std::vector<Callable*> slots;
 public:
+	//! Allocates `initialSize` slots, all null, with `maxSize` as the growth cap.
 	explicit StoreOwnedTable(uint64_t initialSize, uint64_t maxSize);
 
+	//! The backend-visible view (non-const: `grow` updates it in place).
 	TableInstance*       getTable()       { return &table; }
+	//! The backend-visible view, read-only.
 	const TableInstance* getTable() const { return &table; }
 
 	//! Returns false on a trap-worthy failure (would exceed max).

@@ -22,20 +22,24 @@ namespace WASM {
 
 //! 16-byte aligned to accommodate V128 (SIMD).
 struct alignas(16) Value {
+	//! The payload, reinterpreted according to `kind`. Only `u32`/`ui64`/`v128`
+	//! are used for a 32/64-bit integer and a vector; the narrow members exist so
+	//! a typed accessor needs no cast.
 	union {
-		int8_t i8;
-		uint8_t u8;
-		int16_t i16;
-		uint16_t u16;
-		int32_t  i32;
-		uint32_t  u32;
-		int64_t  i64;
-		uint64_t  ui64;
-		float    f32;
-		double   f64;
-		uint8_t  v128[16];
-		void* ref;
+		int8_t i8;      //!< signed 8-bit integer
+		uint8_t u8;     //!< unsigned 8-bit integer
+		int16_t i16;    //!< signed 16-bit integer
+		uint16_t u16;   //!< unsigned 16-bit integer
+		int32_t  i32;   //!< signed 32-bit integer (`i32`)
+		uint32_t  u32;  //!< unsigned 32-bit integer
+		int64_t  i64;   //!< signed 64-bit integer (`i64`)
+		uint64_t  ui64; //!< unsigned 64-bit integer
+		float    f32;   //!< 32-bit float (`f32`)
+		double   f64;   //!< 64-bit float (`f64`)
+		uint8_t  v128[16]; //!< 128-bit vector (`v128`), little-endian lane order
+		void* ref;      //!< reference-typed value (`externref` payload or GC object)
 	};
+	//! Which member of the union is meaningful.
 	ValueTypeCode kind;
 };
 
@@ -88,6 +92,7 @@ struct Callable {
 //! generalized trampoline itself falls back to `call` + `return` for `v128`
 //! (docs/TAILCALLS.md TC-3), so today every stored value uses the low 8 bytes.
 inline constexpr uint32_t kTailCallArgSlots = 16;
+//! Bytes per uniform argument slot: two 64-bit words, so a `v128` value fits.
 inline constexpr uint32_t kTailCallSlotBytes = 16;
 
 //! Tail-call trampoline state (see docs/TAILCALLS.md §6/§7).
@@ -105,7 +110,9 @@ inline constexpr uint32_t kTailCallSlotBytes = 16;
 //! through the helper below rather than embedding the TLS address of the
 //! compiling thread (docs/proposals/SHARED_EVERYTHING_THREADS.md SET-2).
 struct TailCallState {
+	//! Non-zero once a tail call has been requested but not yet dispatched.
 	int32_t   pending = 0;
+	//! The callee the driver must dispatch to when `pending` is set.
 	Callable* target  = nullptr;
 	//! One 16-byte slot per argument (`kTailCallSlotBytes`), 16-byte aligned so
 	//! a `v128` could occupy one slot if the generalized path ever admits it.

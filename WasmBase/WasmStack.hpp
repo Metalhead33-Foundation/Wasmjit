@@ -78,13 +78,14 @@ bool installStackLimit(VMContext& ctx, std::size_t reserve = kDefaultStackReserv
 //! Never returns when it traps.
 extern "C" void wasm_stack_check(VMContext* ctx);
 
+struct ExecutionState;
+
 //! \brief Per-thread stack guard installation (WasmStack.cpp)
 //!
 //! The host boundary calls this on the outermost entry: an instance created on
 //! one host thread can be called from another, and each thread's guard must
 //! describe *its own* stack. Cached per execution state and thread, so a normal
 //! call pays one comparison.
-struct ExecutionState;
 void ensureCurrentThreadStackLimit(ExecutionState& state) noexcept;
 
 } // namespace WASM

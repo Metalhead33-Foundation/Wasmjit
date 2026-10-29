@@ -31,6 +31,7 @@ struct VMContext {
 	//! low indices, followed by the module's own memories, exactly as in the
 	//! Wasm memory index space.
 	LinearMemory* const* memories;
+	//! Number of entries in `memories` (the memory index space's size).
 	uint32_t             memoryCount;
 
 	const Module*    module;        //!< Runtime type graph and metadata for GC/reference checks
@@ -47,11 +48,14 @@ struct VMContext {
 	//! module's own tables). Null entries trap. The Callable carries its own
 	//! instance pointer, so cross-module indirect calls need no extra state.
 	TableInstance** tables;
+	//! Number of entries in `tables` (the table index space's size).
 	uint32_t        tableCount;
 
 	//! Imported functions, in Import Section order.
 	//! call 0 (if 0 is an import) = indirect call through importedFunctions[0].
 	Callable*  importedFunctions;
+	//! Number of entries in `importedFunctions` (the import section's function
+	//! count).
 	uint32_t       importedFunctionCount;
 
 	//! Opaque pointer for host/native code that needs wider application state.

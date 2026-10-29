@@ -23,9 +23,14 @@
   This header is internal: it is not part of the embedding surface.
 */
 
+//! What `--diagnose` was asked to do: which module to load and, optionally, one
+//! exported function to invoke with comma-separated `i32` arguments.
 struct DiagnoseOptions {
+	//! True when a diagnose flag was seen at all (even a malformed one).
 	bool specified = false;
+	//! The artifact to diagnose; empty when the flag was malformed.
 	std::string path;
+	//! The export to call after loading; empty means "describe only".
 	std::string invoke;
 	std::string args; //!< comma-separated i32 values; empty means no arguments
 };

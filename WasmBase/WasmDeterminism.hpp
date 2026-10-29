@@ -21,6 +21,7 @@ namespace WASM {
 //! Canonical NaN payloads for the deterministic profile
 //! (docs/proposals/PROFILES.md PR-3): a positive quiet NaN with a zero payload.
 constexpr uint32_t kCanonicalF32Bits = 0x7fc00000u;
+//! The 64-bit half of the canonical-NaN pair above.
 constexpr uint64_t kCanonicalF64Bits = 0x7ff8000000000000ull;
 
 //! Replace a NaN with the canonical NaN of the same width; every other value
@@ -35,6 +36,8 @@ inline float deterministicF32(float value) noexcept
 	return canonical;
 }
 
+//! The 64-bit counterpart of `deterministicF32`: replaces a NaN with
+//! `kCanonicalF64Bits` and passes every other value through bit-exactly.
 inline double deterministicF64(double value) noexcept
 {
 	if (!std::isnan(value))

@@ -54,18 +54,18 @@ protected:
 	virtual void onAtomicOpcode(AtomicOpcode) {}
 
 	//! Concrete opcode dispatches:
-	virtual void dispatchUnreachable() { onUnhandledOpcode("dispatchUnreachable"); }
-	virtual void dispatchNop() { onUnhandledOpcode("dispatchNop"); }
-	virtual void dispatchBlock(const BlockType& arg) { onUnhandledOpcode("dispatchBlock"); }
-	virtual void dispatchLoop(const BlockType& arg) { onUnhandledOpcode("dispatchLoop"); }
-	virtual void dispatchIf(const BlockType& arg) { onUnhandledOpcode("dispatchIf"); }
-	virtual void dispatchElse() { onUnhandledOpcode("dispatchElse"); }
-	virtual void dispatchThrow(TagIdx arg) { onUnhandledOpcode("dispatchThrow"); }
-	virtual void dispatchThrowRef() { onUnhandledOpcode("dispatchThrowRef"); }
+	virtual void dispatchUnreachable() { onUnhandledOpcode("dispatchUnreachable"); } //!< Default: unhandled.
+	virtual void dispatchNop() { onUnhandledOpcode("dispatchNop"); } //!< Default: unhandled.
+	virtual void dispatchBlock(const BlockType& arg) { onUnhandledOpcode("dispatchBlock"); } //!< Default: unhandled.
+	virtual void dispatchLoop(const BlockType& arg) { onUnhandledOpcode("dispatchLoop"); } //!< Default: unhandled.
+	virtual void dispatchIf(const BlockType& arg) { onUnhandledOpcode("dispatchIf"); } //!< Default: unhandled.
+	virtual void dispatchElse() { onUnhandledOpcode("dispatchElse"); } //!< Default: unhandled.
+	virtual void dispatchThrow(TagIdx arg) { onUnhandledOpcode("dispatchThrow"); } //!< Default: unhandled.
+	virtual void dispatchThrowRef() { onUnhandledOpcode("dispatchThrowRef"); } //!< Default: unhandled.
 	//! Stack switching (docs/proposals/STACK_SWITCHING.md). Only the narrow
 	//! stage-2 slice has handlers; the remaining instructions stay rejected at
 	//! decode time.
-	virtual void dispatchContNew(TypeIdx arg) { onUnhandledOpcode("dispatchContNew"); }
+	virtual void dispatchContNew(TypeIdx arg) { onUnhandledOpcode("dispatchContNew"); } //!< Default: unhandled.
 	virtual void dispatchContBind(TypeIdx arg1, TypeIdx arg2)
 	{
 		(void)arg1;

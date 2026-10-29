@@ -25,6 +25,7 @@ inline constexpr std::array<std::uint8_t, 39> kAnswerModule = {
 	0x0a, 0x06, 0x01, 0x04, 0x00, 0x41, 0x2a, 0x0b,
 };
 
+//! The `kAnswerModule` bytes as a byte span, for the loaders that take a span.
 inline std::span<const std::byte> answerModuleBytes()
 {
 	return std::span<const std::byte>(

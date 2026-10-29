@@ -54,11 +54,15 @@ void* wasm_exn_create(WASM::VMContext* ctx, int32_t tagId, uint32_t payloadBytes
 //! The thrown tag's process-wide id (for `throw_ref`'s dynamic dispatch).
 int32_t wasm_exn_tag_id(const void* payload);
 
-//! The pending-exception slot.
+//! The pending-exception slot: stores the exception a `throw`/`throw_ref`
+//! reported (see the header's ABI block for the object layout).
 void  wasm_exn_set_pending(void* payload);
+//! The exception currently pending, or nullptr when there is none. Cheap:
+//! generated code reads the slot directly; helpers use this accessor.
 void* wasm_exn_pending();
 //! Returns the pending exception and clears the slot (the harness uses this).
 void* wasm_exn_take_pending();
+//! Clears the pending-exception slot without returning the exception.
 void  wasm_exn_clear_pending();
 
 } // extern "C"
