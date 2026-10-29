@@ -8,41 +8,55 @@
   \file Diagnose.hpp
   \brief The one-shot module diagnoser behind `--diagnose`.
 
-  ── A one-shot module diagnoser for agents and module authors (DG-6) ────────
+  `--diagnose=module.wasm` loads a core module as the engine does (decode,
+  validate, instantiate with the `env` log imports registered), prints its
+  import/export shape, and reports structured diagnostics for failures.
+  `--invoke=export --args=1,2` additionally invokes a function export.
 
-  `--diagnose=module.wasm` loads a core module exactly as the engine does
-  (decode, validate, instantiate with the `env` log imports registered), prints
-  its import/export shape, and reports the structured diagnostics of any
-  failure. `--invoke=export --args=1,2` additionally calls a function export.
-
-  This deliberately lives in the test binary rather than a second executable:
-  it reuses the same Artifact parser, RegistryImportResolver, TestBackend and
-  diagnostic sink, so a fixture can be diagnosed without writing a Catch2 case
-  (and without a second build target drifting from the harness).
-
+  This deliberately lives in the test binary: it reuses the Artifact parser,
+  RegistryImportResolver, TestBackend and diagnostic sink, avoiding a separate
+  executable and build target.
   This header is internal: it is not part of the embedding surface.
 */
 
-//! What `--diagnose` was asked to do: which module to load and, optionally, one
-//! exported function to invoke with comma-separated `i32` arguments.
+/*!
+ * \brief Parsed command-line options for the test harness diagnose mode.
+ */
 struct DiagnoseOptions {
-	//! True when a diagnose flag was seen at all (even a malformed one).
+	//! True if any diagnose flag was encountered, including malformed flags.
 	bool specified = false;
-	//! The artifact to diagnose; empty when the flag was malformed.
+	//! Path of the artifact to diagnose; empty if the path was malformed.
 	std::string path;
-	//! The export to call after loading; empty means "describe only".
+	//! Export name to invoke after loading; empty requests description only.
 	std::string invoke;
-	std::string args; //!< comma-separated i32 values; empty means no arguments
+	//! Comma-separated i32 invocation arguments; empty means no arguments.
+	std::string args;
 };
 
-//! Returns true when `argument` belongs to the diagnose flags (consumed, even if
-//! malformed). A malformed value sets `options.specified` and leaves `path`
-//! empty, which `runDiagnose` reports.
+/*!
+ * \brief Parses one command-line argument for diagnose-mode options.
+ *
+ * Arguments belonging to the diagnose option family are consumed even when
+ * malformed. A malformed option marks the mode as specified and leaves
+ * \p options.path empty for runDiagnose() to report.
+ *
+ * \param argument Command-line argument to inspect.
+ * \param options Options object updated when the argument is a diagnose flag.
+ * \return true if the argument belongs to the diagnose flags and was consumed;
+ *         false if it is unrelated to diagnose mode.
+ */
 bool parseDiagnoseArgument(std::string_view argument, DiagnoseOptions& options);
 
-//! Runs the diagnose mode. Returns 0 when the module loaded (and the optional
-//! invocation completed without a trap), 1 otherwise. Diagnostics are printed to
-//! stderr; a `--diagnostics=json` sink at the harness level still receives them.
+/*!
+ * \brief Loads, describes, and optionally invokes a module in diagnose mode.
+ *
+ * Diagnostics are written to standard error; a harness-level
+ * `--diagnostics=json` sink continues to receive structured diagnostics.
+ *
+ * \param options Parsed diagnose-mode options.
+ * \return 0 if loading and any requested invocation complete without a trap;
+ *         1 if loading, validation, instantiation, or invocation fails.
+ */
 int runDiagnose(const DiagnoseOptions& options);
 
 #endif // DIAGNOSE_HPP
