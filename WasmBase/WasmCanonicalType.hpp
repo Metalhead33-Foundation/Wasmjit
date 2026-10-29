@@ -23,7 +23,7 @@ namespace WASM {
 //! §6.2). Type references are abstract heap types, process-wide ids, or (only
 //! while a group is being built) positions within that group.
 
-/** \\brief Kind of canonical core type definition. */
+/** \brief Kind of canonical core type definition. */
 enum class CanonTypeKind : uint8_t { Func, //!< Function signature.
  Struct, //!< Structure type.
  Array, //!< Array type.
@@ -31,9 +31,9 @@ enum class CanonTypeKind : uint8_t { Func, //!< Function signature.
  Import //!< Imported type placeholder.
  };
 
-/** \\brief Canonical heap-type reference, including recursive-group-local references. */
+/** \brief Canonical heap-type reference, including recursive-group-local references. */
 struct CanonHeapType {
-	/** \\brief How the heap type is identified. */
+	/** \brief How the heap type is identified. */
 	enum class Kind : uint8_t { Abstract, //!< Built-in abstract heap type.
 	 Global, //!< Process-wide canonical TypeId.
 	 Rec //!< Index within the recursive group being interned.
@@ -50,7 +50,7 @@ struct CanonHeapType {
 	}
 };
 
-/** \\brief Canonical value type with reference nullability and sharing metadata. */
+/** \brief Canonical value type with reference nullability and sharing metadata. */
 struct CanonValueType {
 	ValueTypeCode opcode = ValueTypeCode::Void; //!< numeric/vector, or Ref/RefNull
 	bool          nullable = false;             //!< when Ref/RefNull
@@ -62,7 +62,7 @@ struct CanonValueType {
 	}
 };
 
-/** \\brief Canonical storage type, either packed or a full value type. */
+/** \brief Canonical storage type, either packed or a full value type. */
 struct CanonStorageType {
 	bool           isPacked = false;
 	ValueTypeCode  packed = ValueTypeCode::I8; //!< when isPacked
@@ -72,7 +72,7 @@ struct CanonStorageType {
 	}
 };
 
-/** \\brief Canonical structure field storage type and mutability. */
+/** \brief Canonical structure field storage type and mutability. */
 struct CanonFieldType {
 	CanonStorageType storage;
 	bool             isMutable = false;
@@ -82,7 +82,7 @@ struct CanonFieldType {
 };
 
 /**
- * \\brief Canonical, recursion-free representation of one defined type.
+ * \brief Canonical, recursion-free representation of one defined type.
  *
  * Only the payload corresponding to kind is meaningful. References to other
  * canonical types use process-wide TypeIds; recursive references use group
@@ -108,7 +108,7 @@ struct CanonicalType {
 };
 
 //! A canonical `rec` group: `count` consecutive TypeIds starting at `first`.
-/** \\brief Contiguous recursive type group represented by its first ID and count. */
+/** \brief Contiguous recursive type group represented by its first ID and count. */
 struct CanonRecGroup {
 	TypeId   first{};
 	uint32_t count = 0;
