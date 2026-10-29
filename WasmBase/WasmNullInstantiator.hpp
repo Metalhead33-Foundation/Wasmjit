@@ -28,22 +28,28 @@ namespace WASM {
 //!
 //! It owns no state and names no backend, so it belongs in the backend-agnostic
 //! core (docs/LAYERING.md §2).
+/** \\brief Backend-neutral instantiator that links modules without generating code. */
 class NullInstantiator final : public ModuleInstantiator
 {
 public:
+	/** \\brief Constructs a stateless null instantiator. */
 	NullInstantiator() = default;
 
 protected:
 	//! Records the types only; nothing is lowered and no handle is created.
+	/** \\brief Records module type information without lowering it. \\param instance Instance being instantiated. \\param module Source module. \\param internals Mutable backend-neutral instantiation state. */
 	void translateTypes(ModuleInstance& instance, const Module& module,
 			ModuleInstanceInternals& internals) override;
 	//! Gives every declared function a `Callable` with a null `fnPtr`.
+	/** \\brief Declares null-callable entries for module functions. \\param instance Instance being instantiated. \\param module Source module. \\param internals Mutable instantiation state receiving callable entries. */
 	void declareFunctions(ModuleInstance& instance, const Module& module,
 			ModuleInstanceInternals& internals) override;
 	//! No code is generated: this is the hook that would compile the bodies.
+	/** \\brief Performs the no-op function compilation stage. \\param instance Instance being instantiated. \\param module Source module. \\param internals Instantiation state containing null callable declarations. */
 	void compileFunctions(ModuleInstance& instance, const Module& module,
 			ModuleInstanceInternals& internals) override;
 	//! Refused unless the index names an import with a native body.
+	/** \\brief Handles a module start function; refuses non-native functions. \\param instance Instance being instantiated. \\param funcIdx Module function index of the start function. \\param internals Instantiation state used to resolve the function. \\throws std::runtime_error when the start function cannot be executed. */
 	void callStartFunction(ModuleInstance& instance, uint32_t funcIdx,
 			ModuleInstanceInternals& internals) override;
 };
