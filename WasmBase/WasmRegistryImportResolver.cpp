@@ -98,8 +98,8 @@ bool nullableElementType(const ValueType& t)
 // i64 j}` when a >= c, b <= d (if the import is bounded), s == t, i == j — and
 // the provided element type is a *subtype* of the declared one (a nullable
 // provided type cannot satisfy a non-null declaration).
-bool tableSatisfiesImport(const ImportedTable& provided, const TableType& declared,
-						  TypeId declaredElementTypeId)
+bool tableSatisfiesImport(Store& store, const ImportedTable& provided,
+						  const TableType& declared, TypeId declaredElementTypeId)
 {
 	const TableType& p = *provided.type;
 
@@ -138,10 +138,19 @@ bool tableSatisfiesImport(const ImportedTable& provided, const TableType& declar
 			tableElementHeap(p.elementType, provided.elementTypeId);
 	const CanonHeapType declaredHeap =
 			tableElementHeap(declared.elementType, declaredElementTypeId);
-	return Store::current().types().matchesHeap(providedHeap, declaredHeap);
+	return store.types().matchesHeap(providedHeap, declaredHeap);
 }
 
 } // namespace
+
+Store& RegistryImportResolver::boundStore() const
+{
+	if (store_ == nullptr)
+		throw std::runtime_error(
+				"RegistryImportResolver used before an instance bound its store; "
+				"resolution requires an explicit store (docs/EMBEDDING_SURFACE.md §4.3)");
+	return *store_;
+}
 
 void RegistryImportResolver::registerFunction(std::string_view moduleName, std::string_view fieldName,
 											  const Callable& callable)
@@ -230,7 +239,7 @@ std::optional<Callable> RegistryImportResolver::resolveFunction(
 	auto module = registeredModules.find(moduleName);
 	if (module == std::end(registeredModules))
 		return std::nullopt;
-	return module->second.resolveFunction(fieldName, expectedType, exact);
+	return module->second.resolveFunction(fieldName, expectedType, exact, boundStore());
 }
 
 std::optional<Value*> RegistryImportResolver::resolveGlobal(
@@ -264,7 +273,7 @@ std::optional<ImportedTable> RegistryImportResolver::resolveTable(
 	auto module = registeredModules.find(moduleName);
 	if (module == std::end(registeredModules))
 		return std::nullopt;
-	return module->second.resolveTable(fieldName, type, elementTypeId);
+	return module->second.resolveTable(fieldName, type, elementTypeId, boundStore());
 }
 
 std::optional<TagId> RegistryImportResolver::resolveTag(
@@ -275,7 +284,7 @@ std::optional<TagId> RegistryImportResolver::resolveTag(
 	auto module = registeredModules.find(moduleName);
 	if (module == std::end(registeredModules))
 		return std::nullopt;
-	return module->second.resolveTag(fieldName, expectedType);
+	return module->second.resolveTag(fieldName, expectedType, boundStore());
 }
 
 void RegistryImportResolver::ModuleRegistry::registerFunction(std::string_view fieldName, const Callable& callable)
@@ -318,7 +327,7 @@ void RegistryImportResolver::ModuleRegistry::registerTag(std::string_view fieldN
 	tags.insert_or_assign(std::string(fieldName), tag);
 }
 
-std::optional<Callable> RegistryImportResolver::ModuleRegistry::resolveFunction(std::string_view fieldName, TypeId expectedType, bool exact)
+std::optional<Callable> RegistryImportResolver::ModuleRegistry::resolveFunction(std::string_view fieldName, TypeId expectedType, bool exact, Store& store)
 {
 	auto it = functions.find(fieldName);
 	if (it == functions.end())
@@ -335,7 +344,7 @@ std::optional<Callable> RegistryImportResolver::ModuleRegistry::resolveFunction(
 				? std::optional<Callable>(callable) : std::nullopt;
 	}
 	if (callable.typeId != TypeId{TypeId::kNone} &&
-		!Store::current().types().matches(callable.typeId, expectedType))
+		!store.types().matches(callable.typeId, expectedType))
 		return std::nullopt;
 	return callable;
 }
@@ -388,7 +397,7 @@ std::optional<LinearMemory*> RegistryImportResolver::ModuleRegistry::resolveMemo
 }
 
 std::optional<ImportedTable> RegistryImportResolver::ModuleRegistry::resolveTable(
-	std::string_view fieldName, const TableType& type, TypeId elementTypeId)
+	std::string_view fieldName, const TableType& type, TypeId elementTypeId, Store& store)
 {
 	auto it = tables.find(fieldName);
 	if (it == tables.end() || it->second.table == nullptr)
@@ -397,12 +406,12 @@ std::optional<ImportedTable> RegistryImportResolver::ModuleRegistry::resolveTabl
 	// matched exactly like a function import is (docs/proposals/GC.md R1). A
 	// table handed to the registry directly by an embedder carries no type and
 	// stays unchecked.
-	if (it->second.type.has_value() && !tableSatisfiesImport(it->second, type, elementTypeId))
+	if (it->second.type.has_value() && !tableSatisfiesImport(store, it->second, type, elementTypeId))
 		return std::nullopt;
 	return it->second;
 }
 
-std::optional<TagId> RegistryImportResolver::ModuleRegistry::resolveTag(std::string_view fieldName, TypeId expectedType)
+std::optional<TagId> RegistryImportResolver::ModuleRegistry::resolveTag(std::string_view fieldName, TypeId expectedType, Store& store)
 {
 	auto it = tags.find(fieldName);
 	if (it == tags.end())
@@ -412,10 +421,10 @@ std::optional<TagId> RegistryImportResolver::ModuleRegistry::resolveTag(std::str
 	// importing module's declared type (docs/proposals/EXCEPTIONS.md EX-2).
 	// The identity itself is the Store-assigned `TagId`, so two imports of one
 	// export resolve to the same id.
-	const Store::StoreOwnedTag* tag = Store::current().tag(it->second);
+	const Store::StoreOwnedTag* tag = store.tag(it->second);
 	if (tag == nullptr)
 		return std::nullopt;
-	if (!Store::current().types().matches(tag->typeId, expectedType))
+	if (!store.types().matches(tag->typeId, expectedType))
 		return std::nullopt;
 	return it->second;
 }
@@ -440,7 +449,7 @@ std::optional<TypeId> RegistryImportResolver::resolveType(
 	auto module = registeredModules.find(moduleName);
 	if (module == std::end(registeredModules))
 		return std::nullopt;
-	return module->second.resolveType(fieldName, bound);
+	return module->second.resolveType(fieldName, bound, boundStore());
 }
 
 void RegistryImportResolver::ModuleRegistry::registerType(
@@ -450,7 +459,7 @@ void RegistryImportResolver::ModuleRegistry::registerType(
 }
 
 std::optional<TypeId> RegistryImportResolver::ModuleRegistry::resolveType(
-		std::string_view fieldName, AbstractHeapType bound)
+		std::string_view fieldName, AbstractHeapType bound, Store& store)
 {
 	const auto it = types.find(fieldName);
 	if (it == types.end())
@@ -461,7 +470,7 @@ std::optional<TypeId> RegistryImportResolver::ModuleRegistry::resolveType(
 	CanonHeapType expected;
 	expected.kind = CanonHeapType::Kind::Abstract;
 	expected.abstract = bound;
-	if (!Store::current().types().matchesHeap(actual, expected))
+	if (!store.types().matchesHeap(actual, expected))
 		return std::nullopt;
 	return it->second;
 }

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "helper.hpp"
+#include "TestStore.hpp"
 #include "LibJit/LibJitTypeTranslation.hpp"
 #include "WasmBase/WasmGcHeader.hpp"
 #include "WasmBase/WasmModule.hpp"
@@ -75,12 +76,12 @@ TEST_CASE("JIT type cache is keyed by canonical TypeId")
 
 	LibJIT::LibJitTypeTranslator translator;
 
-	translator.translateTypes(a.typeIds, WASM::Store::global().types().store());
+	translator.translateTypes(a.typeIds, testStore().types().store());
 	const jit_type_t sigA = translator.getTranslatedTypes()[2];
 	REQUIRE(sigA != nullptr);
 	const size_t cacheAfterA = translator.canonicalCacheSize();
 
-	translator.translateTypes(b.typeIds, WASM::Store::global().types().store());
+	translator.translateTypes(b.typeIds, testStore().types().store());
 	const jit_type_t sigB = translator.getTranslatedTypes()[0];
 
 	// Same canonical type -> same lowered jit_type_t, with no new cache entry.

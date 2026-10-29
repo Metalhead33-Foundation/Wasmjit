@@ -206,6 +206,8 @@ public:
 	// outlives every instance of it (docs/ABI.md "Design Philosophy"). Named
 	// `sourceModule` because the member it exposes is `module`.
 	const Module& sourceModule() const { return *module; }
+	// The store every entity of this instance lives in (from its module).
+	Store& store() const { return module->store(); }
 	// The optional host bridge installed for this instance, or nullptr for the
 	// default dependency-free boundary.
 	const HostBridge* hostBridge() const { return ctx.hostBridge; }

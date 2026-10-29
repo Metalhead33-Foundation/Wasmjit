@@ -226,7 +226,15 @@ struct Worker : std::enable_shared_from_this<Worker> {
 			std::uint32_t paramCount, bool takesArg, bool returnsValue)
 		: provider(provider), target(target == nullptr ? Callable{} : *target),
 		  creationContext(creationContext), paramCount(paramCount),
-		  takesArg(takesArg), returnsValue(returnsValue) {}
+		  takesArg(takesArg), returnsValue(returnsValue)
+	{
+		// The stack reservation is charged to the store the continuation was
+		// created in; a synthetic target (no VMContext) charges nothing.
+		store_ = creationContext != nullptr ? &creationContext->module->store() : nullptr;
+	}
+
+	// The store this worker's stack reservation is charged to, or null.
+	Store* store_ = nullptr;
 
 	virtual ~Worker()
 	{
@@ -642,8 +650,8 @@ BWorker::~BWorker()
 		pthread_join(thread, nullptr);
 		threadStarted = false;
 	}
-	if (stackReserved)
-		Store::current().releaseBytes(stackBytes);
+	if (stackReserved && store_ != nullptr)
+		store_->releaseBytes(stackBytes);
 }
 
 ContinuationStatus BWorker::resume(std::uint64_t expectedGeneration,
@@ -896,23 +904,23 @@ bool BWorker::startThread()
 {
 	const ContinuationBudget budget = budgetSnapshot();
 	stackBytes = std::max<std::uint32_t>(budget.stackBytes, 64 * 1024);
-	if (!Store::current().reserveBytes(stackBytes))
+	if (store_ != nullptr && !store_->reserveBytes(stackBytes))
 		return false;
 
 	pthread_attr_t attributes;
 	if (pthread_attr_init(&attributes) != 0) {
-		Store::current().releaseBytes(stackBytes);
+		if (store_ != nullptr) store_->releaseBytes(stackBytes);
 		return false;
 	}
 	if (pthread_attr_setstacksize(&attributes, stackBytes) != 0) {
 		pthread_attr_destroy(&attributes);
-		Store::current().releaseBytes(stackBytes);
+		if (store_ != nullptr) store_->releaseBytes(stackBytes);
 		return false;
 	}
 	const int created = pthread_create(&thread, &attributes, &bWorkerEntry, this);
 	pthread_attr_destroy(&attributes);
 	if (created != 0) {
-		Store::current().releaseBytes(stackBytes);
+		if (store_ != nullptr) store_->releaseBytes(stackBytes);
 		return false;
 	}
 	stackReserved = true;
@@ -928,8 +936,8 @@ AWorker::~AWorker()
 	if (mapping != nullptr && safeToFree) {
 		munmap(mapping, mappingBytes);
 		mapping = nullptr;
-		if (stackReserved)
-			Store::current().releaseBytes(mappingBytes);
+		if (stackReserved && store_ != nullptr)
+			store_->releaseBytes(mappingBytes);
 	} else if (mapping != nullptr) {
 		// A continuation is thread-affine: a stack suspended on another host
 		// thread cannot be unwound here. Leak the mapping rather than free a
@@ -950,7 +958,7 @@ bool AWorker::prepareStack()
 	std::size_t usable = std::max<std::uint32_t>(budget.stackBytes, 64 * 1024);
 	usable = (usable + page - 1) & ~(page - 1);
 	const std::size_t total = usable + page;
-	if (!Store::current().reserveBytes(total))
+	if (store_ != nullptr && !store_->reserveBytes(total))
 		return false;
 
 	int flags = MAP_PRIVATE | MAP_ANONYMOUS;
@@ -959,17 +967,17 @@ bool AWorker::prepareStack()
 #endif
 	void* mapped = mmap(nullptr, total, PROT_READ | PROT_WRITE, flags, -1, 0);
 	if (mapped == MAP_FAILED) {
-		Store::current().releaseBytes(total);
+		if (store_ != nullptr) store_->releaseBytes(total);
 		return false;
 	}
 	if (mprotect(mapped, page, PROT_NONE) != 0) {
 		munmap(mapped, total);
-		Store::current().releaseBytes(total);
+		if (store_ != nullptr) store_->releaseBytes(total);
 		return false;
 	}
 	if (getcontext(&context) != 0) {
 		munmap(mapped, total);
-		Store::current().releaseBytes(total);
+		if (store_ != nullptr) store_->releaseBytes(total);
 		return false;
 	}
 

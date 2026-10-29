@@ -84,9 +84,8 @@ std::unique_ptr<Runtime> Runtime::create(std::string_view backend, const Runtime
 
 std::shared_ptr<const Module> Runtime::loadBytes(std::span<const std::byte> bytes)
 {
-	// The module interns its types in the runtime's store (option C): the scope
-	// makes `Store::current()` resolve to it while the parser runs.
-	Store::Scope scope(store_);
+	// The module interns its types in this runtime's store (option B): the store
+	// is passed explicitly, not reached through a thread-local.
 	auto module = std::make_shared<Module>();
 	Euph::Io::ConstBufferDevice device(bytes);
 	module->fromFile(device, loadOptions(config_), store_);
@@ -96,7 +95,6 @@ std::shared_ptr<const Module> Runtime::loadBytes(std::span<const std::byte> byte
 
 std::shared_ptr<const Module> Runtime::loadFile(const std::filesystem::path& path)
 {
-	Store::Scope scope(store_);
 	const std::string pathString = path.string();
 	Euph::Io::File file(pathString.c_str(), Elv::Io::Mode::READ);
 	auto module = std::make_shared<Module>();
@@ -125,7 +123,6 @@ ModuleInstance& Runtime::instantiate(const Module& module, ImportResolver& impor
 	if (!backend_.instantiator)
 		throw std::runtime_error("the runtime has no backend instantiator");
 
-	Store::Scope scope(store_);
 	std::unique_ptr<ModuleInstance> instance = backend_.instantiator->instantiate(
 			module, imports, config_.hostBridge, config_.profile);
 	if (!instance)
@@ -182,7 +179,6 @@ void Runtime::safepoint()
 	// object can be recycled. See docs/ABI.md "Other store-owned entities".
 	// MF-4: an instance with a call in flight is skipped — a safepoint requires
 	// quiescence, and `ModuleInstance::gcCollect` would refuse it.
-	Store::Scope scope(store_);
 	for (auto& entry : instances_) {
 		if (entry.second->inCall())
 			continue;

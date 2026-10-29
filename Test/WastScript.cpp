@@ -741,7 +741,7 @@ void ScriptRunner::installSpectest()
 	// test scripts import them. Provide the same shapes the reference interpreter
 	// uses (table 10..20 funcref, memory 1..2 pages). Both are owned by the
 	// global Store and created once for the whole process.
-	WASM::Store& store = WASM::Store::global();
+	WASM::Store& store = testStore();
 
 	static WASM::TableInstance* spectestTable = nullptr;
 	if (spectestTable == nullptr)
@@ -1064,7 +1064,7 @@ void ScriptRunner::onRegister(const ScriptCommand& command)
 
 const WASM::TypeStore& componentStore()
 {
-return WASM::Store::global().types().store();
+return testStore().types().store();
 }
 
 bool componentTypeViewFromValue(const WASM::ComponentValueType& type,
@@ -2009,7 +2009,7 @@ bool ScriptRunner::compareReferenceResult(const ScriptValue& expected, WASM::Val
 	// other bare forms only promise a non-null reference, which is all the
 	// harness can check without a host object model.
 	if (code == WASM::ValueTypeCode::FuncRef)
-		return WASM::Store::global().callableAt(got) != nullptr;
+		return testStore().callableAt(got) != nullptr;
 	return true;
 }
 

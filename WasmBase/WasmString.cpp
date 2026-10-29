@@ -105,7 +105,7 @@ StringObject* StringStore::create(std::vector<uint32_t> codePoints)
 	}
 	const uint64_t bytes = sizeof(StringObject)
 			+ static_cast<uint64_t>(codePoints.size()) * sizeof(uint32_t);
-	if (!Store::current().reserveBytes(bytes)) {
+	if (!owner_.reserveBytes(bytes)) {
 		reportTrap(TrapKind::OutOfMemory, "string allocation exceeds the allocation budget");
 		return nullptr;
 	}
@@ -121,7 +121,7 @@ StringViewObject* StringStore::createView(const StringObject* string)
 {
 	std::scoped_lock lock(mutex_);
 	const uint64_t bytes = sizeof(StringViewObject);
-	if (!Store::current().reserveBytes(bytes)) {
+	if (!owner_.reserveBytes(bytes)) {
 		reportTrap(TrapKind::OutOfMemory, "string view allocation exceeds the allocation budget");
 		return nullptr;
 	}
@@ -139,7 +139,7 @@ StringIteratorObject* StringStore::createIterator(const StringObject* string)
 {
 	std::scoped_lock lock(mutex_);
 	const uint64_t bytes = sizeof(StringIteratorObject);
-	if (!Store::current().reserveBytes(bytes)) {
+	if (!owner_.reserveBytes(bytes)) {
 		reportTrap(TrapKind::OutOfMemory, "string iterator allocation exceeds the allocation budget");
 		return nullptr;
 	}
@@ -197,7 +197,7 @@ bool StringStore::releaseView(const StringViewObject* view)
 	const StringObject* inner = entry.object.string;
 	const uint64_t bytes = entry.bytes;
 	views_.erase(it);
-	Store::current().releaseBytes(bytes);
+	owner_.releaseBytes(bytes);
 	if (inner != nullptr)
 		release(inner);
 	return true;
@@ -217,7 +217,7 @@ bool StringStore::releaseIterator(const StringIteratorObject* iterator)
 	const StringObject* inner = entry.object.string;
 	const uint64_t bytes = entry.bytes;
 	iterators_.erase(it);
-	Store::current().releaseBytes(bytes);
+	owner_.releaseBytes(bytes);
 	if (inner != nullptr)
 		release(inner);
 	return true;
@@ -238,7 +238,7 @@ bool StringStore::release(const void* ref)
 			return true;
 		const uint64_t bytes = entry.bytes;
 		objects_.erase(stringIt);
-		Store::current().releaseBytes(bytes);
+		owner_.releaseBytes(bytes);
 		return true;
 	}
 	if (releaseView(static_cast<const StringViewObject*>(ref)))

@@ -1,3 +1,4 @@
+#include "TestStore.hpp"
 #include <catch2/catch_all.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
@@ -24,7 +25,7 @@ TEST_CASE("runtime: create, load, instantiate and call", "[runtime]")
 	REQUIRE(runtime->profile().isFull());
 	REQUIRE(runtime->supports(WASM::Profile::Full));
 	REQUIRE(runtime->instanceCount() == 0);
-	REQUIRE(&runtime->store() != &WASM::Store::global());
+	REQUIRE(&runtime->store() != &testStore());
 
 	auto module = runtime->loadBytes(TestFixtures::answerModuleBytes());
 	REQUIRE(module != nullptr);
@@ -58,7 +59,7 @@ TEST_CASE("runtime: each runtime owns an independent store", "[runtime]")
 	auto first = WASM::Runtime::create("libjit");
 	auto second = WASM::Runtime::create("libjit");
 	REQUIRE(&first->store() != &second->store());
-	REQUIRE(&first->store() != &WASM::Store::global());
+	REQUIRE(&first->store() != &testStore());
 
 	auto moduleA = first->loadBytes(TestFixtures::answerModuleBytes());
 	auto moduleB = second->loadBytes(TestFixtures::answerModuleBytes());

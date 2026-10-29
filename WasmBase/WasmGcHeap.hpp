@@ -36,8 +36,11 @@ namespace WASM {
 // `owns()` answers "is this pointer a GC heap block?" from the region ranges
 // alone, with no side table — that is what lets the runtime drop the old
 // per-object `gcObjectTypes` map and stay allocation-free per object.
+class Store;
+
 class WASMJIT_API GcHeap
 {
+	Store& owner_;
 public:
 	// Keep 16 bytes: i31 tagging needs >= 8 (D4) and v128 fields need 16.
 	static constexpr size_t kGranularity     = 16;
@@ -71,7 +74,8 @@ public:
 		size_t   reservedBytes = 0;
 	};
 
-	GcHeap() = default;
+	explicit GcHeap(Store& owner) : owner_(owner) {}
+	Store& owner() const { return owner_; }
 	~GcHeap();
 	GcHeap(const GcHeap&) = delete;
 	GcHeap& operator=(const GcHeap&) = delete;

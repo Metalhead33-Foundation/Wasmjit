@@ -51,9 +51,14 @@ struct StringIteratorObject {
 // `createView`/`createIterator` return an *unowned* object (count 0), exactly
 // like a fresh GC aggregate; the runtime's `refClone`/`refDrop` barriers call
 // `retain`/`release`, and a zero count frees the object and credits its budget.
+class Store;
+
 class StringStore
 {
 public:
+	explicit StringStore(Store& owner) : owner_(owner) {}
+
+	Store& owner() const { return owner_; }
 	// May trap with TrapKind::OutOfMemory when the allocation budget is
 	// exhausted. The returned pointer is stable until it is released.
 	StringObject* create(std::vector<uint32_t> codePoints);
@@ -118,6 +123,9 @@ private:
 	std::unordered_map<const StringObject*, std::unique_ptr<StringEntry>> objects_;
 	std::unordered_map<const StringViewObject*, std::unique_ptr<ViewEntry>> views_;
 	std::unordered_map<const StringIteratorObject*, std::unique_ptr<IteratorEntry>> iterators_;
+
+private:
+	Store& owner_;
 };
 
 // ── Codecs ──────────────────────────────────────────────────────────────────

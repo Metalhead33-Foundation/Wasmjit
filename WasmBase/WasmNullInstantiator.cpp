@@ -25,7 +25,7 @@ void NullInstantiator::declareFunctions(ModuleInstance& instance, const Module& 
 	// and stays stable, so `Store::callableAt` can recognise these callables
 	// from any instance (docs/proposals/GC.md G2/GC-1).
 	if (!internals.internalCallables.empty()) {
-		Store::current().registerCallableRange(internals.internalCallables.data(),
+		instance.store().registerCallableRange(internals.internalCallables.data(),
 				internals.internalCallables.size());
 	}
 	for (std::size_t i = 0; i < module.internalFunctionTypeIndices.size(); ++i) {

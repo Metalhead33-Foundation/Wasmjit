@@ -82,6 +82,10 @@ public:
 	ComponentRuntime(const ComponentRuntime&) = delete;
 	ComponentRuntime& operator=(const ComponentRuntime&) = delete;
 
+	// The store this component's types and entities live in. Referenced by the
+	// canonical-ABI callbacks, which have no member context of their own.
+	Store& store() const { return component_.store(); }
+
 	std::optional<ComponentFunction> exportedFunction(std::string_view name) const;
 	WASM::Callable coreFunction(std::size_t index) const;
 	WASM::LinearMemory* coreMemory(std::size_t index) const;

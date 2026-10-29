@@ -5,10 +5,11 @@
 
 // The store the harness parses and instantiates into.
 //
-// Pass 1 of ES-2 option B threads an explicit store through the parser; the
-// instantiator still reaches `Store::current()` until pass 2, so for now this
-// returns the same store that fallback yields. Pass 2 replaces the body with a
-// harness-owned store and deletes the fallback.
+// The engine has no process-wide store (docs/EMBEDDING_SURFACE.md §4.3
+// option B): a `Runtime` owns one, and a test that drives the parser and the
+// instantiator directly owns one too. Pass 2 keeps the harness on the legacy
+// global store because the backend's string helpers still read it; pass 3 moves
+// the harness onto its own store and deletes the global.
 inline WASM::Store& testStore()
 {
 	return WASM::Store::global();

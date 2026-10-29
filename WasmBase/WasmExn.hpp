@@ -8,6 +8,11 @@
 WASMJIT_VISIBLE_BEGIN
 #include <cstdint>
 
+namespace WASM {
+struct VMContext;
+class Store;
+}
+
 // ── Shared exception-object and pending-exception ABI ───────────────────────
 //
 // docs/proposals/EXCEPTIONS.md EX-3 / EXD1. An `exnref` is a pointer to a
@@ -35,9 +40,10 @@ extern "C" void** wasm_exn_slot() noexcept;
 extern "C" {
 
 // Allocates an exception object with `payloadBytes` of payload and returns a
-// pointer to the payload area (16-byte aligned). Traps `OutOfMemory` when the
-// Store's allocation budget refuses it.
-void* wasm_exn_create(int32_t tagId, uint32_t payloadBytes);
+// pointer to the payload area (16-byte aligned). The store is the executing
+// instance's, reached through `ctx` (docs/EMBEDDING_SURFACE.md §4.3 option B).
+// Traps `OutOfMemory` when that store's allocation budget refuses it.
+void* wasm_exn_create(WASM::VMContext* ctx, int32_t tagId, uint32_t payloadBytes);
 
 // The thrown tag's process-wide id (for `throw_ref`'s dynamic dispatch).
 int32_t wasm_exn_tag_id(const void* payload);
@@ -50,6 +56,14 @@ void* wasm_exn_take_pending();
 void  wasm_exn_clear_pending();
 
 } // extern "C"
+
+namespace WASM {
+
+// The store-explicit form of `wasm_exn_create`: an embedder (or a test) that is
+// not inside generated code names the store directly.
+void* wasm_exn_create_in(Store& store, int32_t tagId, uint32_t payloadBytes);
+
+} // namespace WASM
 
 WASMJIT_VISIBLE_END
 

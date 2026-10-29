@@ -41,6 +41,8 @@ struct ImportedTable {
 //
 // Returning std::nullopt signals that the import could not be satisfied,
 // which causes instantiation to fail with a descriptive error.
+class Store;
+
 class ImportRegistrar {
 public:
 	virtual ~ImportRegistrar() = default;
@@ -77,11 +79,20 @@ public:
 		std::string_view moduleName,
 		std::string_view fieldName,
 		TypeId           type) = 0;
+
+	// A registrar populated from an instance must match types in that
+	// instance's store (docs/EMBEDDING_SURFACE.md §4.3 option B). The exporting
+	// instance binds it before publishing anything.
+	virtual void bindStore(Store&) {}
 };
 
 class ImportResolver {
 public:
 	virtual ~ImportResolver() = default;
+
+	// Binds the store the resolving instance lives in. The engine binds before
+	// resolving; a resolver used without a binding is a bug.
+	virtual void bindStore(Store&) {}
 
 	// Resolve a function import. `expectedType` is the canonical (process-wide)
 	// identity of the importing module's declared function type; the resolver

@@ -62,13 +62,14 @@ public:
 		void registerType(std::string_view fieldName, TypeId type);
 
 		std::optional<Callable> resolveFunction(std::string_view fieldName, TypeId expectedType,
-				bool exact = false);
+				bool exact, Store& store);
 		std::optional<Value*> resolveGlobal(std::string_view fieldName, const GlobalType& type);
 		std::optional<LinearMemory*> resolveMemory(std::string_view fieldName, const MemoryType& type);
 		std::optional<ImportedTable> resolveTable(std::string_view fieldName, const TableType& type,
-											 TypeId elementTypeId);
-		std::optional<TagId> resolveTag(std::string_view fieldName, TypeId expectedType);
-		std::optional<TypeId> resolveType(std::string_view fieldName, AbstractHeapType bound);
+											 TypeId elementTypeId, Store& store);
+		std::optional<TagId> resolveTag(std::string_view fieldName, TypeId expectedType, Store& store);
+		std::optional<TypeId> resolveType(std::string_view fieldName, AbstractHeapType bound,
+				Store& store);
 	};
 
 	void registerFunction(std::string_view moduleName, std::string_view fieldName,
@@ -120,7 +121,13 @@ public:
 		std::string_view fieldName,
 		AbstractHeapType bound) override;
 
+	// docs/EMBEDDING_SURFACE.md §4.3 option B: type matching reads an explicit
+	// store, bound by the instance being resolved.
+	void bindStore(Store& store) override { store_ = &store; }
+	Store& boundStore() const;
+
 private:
+	Store* store_ = nullptr;
 	NameMap<ModuleRegistry> registeredModules;
 };
 

@@ -2244,8 +2244,9 @@ jit_value_t OpcodeDispatcher::createException(WASM::TagId tagId, const WASM::Fun
 		payloadBytes = static_cast<jit_nint>(
 				jit_type_get_size(typeTranslator.translateStruct(payload.params)));
 	return callNativeHelper(reinterpret_cast<void*>(wasm_exn_create), jit_type_void_ptr,
-			{jit_type_int, jit_type_uint},
-			{jit_value_create_nint_constant(function, jit_type_int, static_cast<jit_nint>(tagId)),
+			{jit_type_void_ptr, jit_type_int, jit_type_uint},
+			{jit_value_get_param(function, 0),
+			 jit_value_create_nint_constant(function, jit_type_int, static_cast<jit_nint>(tagId)),
 			 atomicUintConstant(static_cast<uint32_t>(payloadBytes))});
 }
 

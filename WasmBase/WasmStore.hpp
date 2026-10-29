@@ -261,10 +261,10 @@ private:
 	std::atomic<uint64_t> allocatedBytes_{0};
 
 	// The GC object heap: mmap-backed regions, no per-object libc allocation.
-	GcHeap gcHeap;
+	GcHeap gcHeap{ *this };
 
 	// Host-owned string objects (STRINGREF.md). Never freed before teardown.
-	StringStore stringStore;
+	StringStore stringStore{ *this };
 };
 }
 WASMJIT_VISIBLE_END

@@ -214,7 +214,7 @@ std::unique_ptr<WASM::Artifact> loadTestArtifact(const char* moduleName)
 
 const WASM::TypeStore& typeStore()
 {
-	return WASM::Store::global().types().store();
+	return testStore().types().store();
 }
 
 WASM::ComponentTypeView componentTypeView(const WASM::ComponentTypeDef& definition)
@@ -962,7 +962,7 @@ TEST_CASE("store owns the runtime type registry")
 	REQUIRE(module.typeCount() > 0);
 
 	// The module holds only canonical identities; the Store owns the records.
-	REQUIRE(WASM::Store::global().types().internedTypeCount() >= module.typeCount());
+	REQUIRE(testStore().types().internedTypeCount() >= module.typeCount());
 
 	// The view must survive another module interning its own type section.
 	const bool firstIsFunction = module.typeView(0).kind() == WASM::CanonTypeKind::Func;
@@ -1294,7 +1294,7 @@ TEST_CASE("call-tag canonical identity is shared per concrete signature")
 	REQUIRE(sigA == sigB);
 	REQUIRE(sigA != other.typeId(WASM::LocalTypeIdx{0}));
 
-	WASM::Store& store = WASM::Store::global();
+	WASM::Store& store = testStore();
 	const WASM::Store::CallTagId tagA = store.canonicalCallTag(sigA);
 	const WASM::Store::CallTagId tagB = store.canonicalCallTag(sigB);
 	const WASM::Store::CallTagId tagOther =
@@ -1518,7 +1518,7 @@ TEST_CASE("forward type reference across rec groups is rejected")
 
 TEST_CASE("type interning dedups identical rec groups across modules")
 {
-	WASM::TypeRegistry& registry = WASM::Store::global().types();
+	WASM::TypeRegistry& registry = testStore().types();
 
 	WASM::Module first = loadTestModule("rec_groups");
 	const size_t parsedAfterFirst = registry.parsedTypeCount();
@@ -1547,7 +1547,7 @@ static_assert(!HasTypesMember<WASM::Module>::value,
 
 TEST_CASE("loaded modules retain only canonical type identities")
 {
-	WASM::TypeRegistry& registry = WASM::Store::global().types();
+	WASM::TypeRegistry& registry = testStore().types();
 	WASM::Module first = loadTestModule("rec_groups");
 	const size_t internedBefore = registry.internedTypeCount();
 	WASM::Module second = loadTestModule("rec_groups");
@@ -1571,7 +1571,7 @@ TEST_CASE("singleton rec group interns to the same identity as a plain type")
 
 TEST_CASE("supertypes and finality participate in type identity")
 {
-	WASM::TypeRegistry& registry = WASM::Store::global().types();
+	WASM::TypeRegistry& registry = testStore().types();
 
 	WASM::Module first = loadTestModule("subtypes");
 	REQUIRE(first.typeGroups.size() == 1);
@@ -3680,7 +3680,7 @@ TEST_CASE("the embedder bridge creates and copies stringrefs")
 	REQUIRE(measure.has_value());
 	REQUIRE(get.has_value());
 
-	WASM::StringStore& strings = WASM::Store::global().strings();
+	WASM::StringStore& strings = testStore().strings();
 	bool valid = false;
 	WASM::StringObject* hello = strings.createFromUtf8("h\xc3\xa9llo", &valid);
 	REQUIRE(valid);
@@ -3733,7 +3733,7 @@ TEST_CASE("the embedder bridge creates and copies stringrefs")
 
 TEST_CASE("stringref reference counting releases strings and views")
 {
-	WASM::StringStore& strings = WASM::Store::global().strings();
+	WASM::StringStore& strings = testStore().strings();
 	const std::size_t baseline = strings.count();
 
 	WASM::StringObject* string = strings.create({'A', 'B'});
@@ -3785,7 +3785,7 @@ TEST_CASE("a discarded string concat result is released through the JIT")
 
 	auto discard = instance->exportedFunction("discard");
 	REQUIRE(discard.has_value());
-	WASM::StringStore& strings = WASM::Store::global().strings();
+	WASM::StringStore& strings = testStore().strings();
 	const std::size_t before = strings.count();
 	REQUIRE(WASM::callCallable<int32_t>(*discard) == 7);
 	REQUIRE(strings.count() == before); // the concat result was released by `drop`
@@ -4370,18 +4370,18 @@ TEST_CASE("grow guardrail rejects absurd deltas without allocating")
 	REQUIRE(growMemory.has_value());
 	REQUIRE(growTable.has_value());
 
-	const uint64_t before = WASM::Store::global().allocatedBytes();
+	const uint64_t before = testStore().allocatedBytes();
 
 	// 0xffffffff pages / entries, interpreted as an unsigned index.
 	REQUIRE(WASM::callCallable<int32_t>(*growMemory, int32_t(-1)) == -1);
 	REQUIRE(WASM::callCallable<int32_t>(*growTable,  int32_t(-1)) == -1);
 
 	// A refused grow charged nothing and left nothing behind.
-	REQUIRE(WASM::Store::global().allocatedBytes() == before);
+	REQUIRE(testStore().allocatedBytes() == before);
 
 	// A sane grow still succeeds, and is charged exactly one page.
 	REQUIRE(WASM::callCallable<int32_t>(*growMemory, int32_t(1)) == 1);
-	REQUIRE(WASM::Store::global().allocatedBytes() == before + 65536);
+	REQUIRE(testStore().allocatedBytes() == before + 65536);
 
 	// table.size reflects the table's current extent, before and after a grow.
 	auto tableSize = loaded.instance->exportedFunction("table_size");
@@ -4485,7 +4485,7 @@ TEST_CASE("GC reference counting: clone, drop and store barriers")
 	// old header-plus-buffer pair, and `array.len` reads the inline header.
 	auto makeArray = instance.exportedFunction("make_array");
 	REQUIRE(makeArray.has_value());
-	WASM::GcHeap& heap = WASM::Store::global().gc();
+	WASM::GcHeap& heap = testStore().gc();
 	const size_t blocksBefore = heap.totalAllocations();
 	REQUIRE(WASM::callCallable<int32_t>(*makeArray, int32_t(8)) == 8);
 	REQUIRE(heap.totalAllocations() == blocksBefore + 1);
@@ -4498,7 +4498,7 @@ TEST_CASE("GC heap: region allocation, alignment and recycling")
 	// mmap-backed Store-owned regions, so running JIT-compiled code never
 	// reaches the libc allocator (docs/proposals/GC.md §6.1/GC-2,
 	// docs/SAFETY.md §2.3).
-	WASM::GcHeap& heap = WASM::Store::global().gc();
+	WASM::GcHeap& heap = testStore().gc();
 	WASM::GcHeap::RegionSet* set = heap.createSet();
 	REQUIRE(set != nullptr);
 
@@ -4576,7 +4576,7 @@ TEST_CASE("GC reclamation: the live-object count returns to its baseline")
 	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
-	WASM::GcHeap& heap = WASM::Store::global().gc();
+	WASM::GcHeap& heap = testStore().gc();
 
 	const uint32_t structIdx = firstStructType(*loaded.module);
 	REQUIRE(structIdx != UINT32_MAX);
@@ -4617,7 +4617,7 @@ TEST_CASE("GC reclamation: a dying object releases its reference fields")
 	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
-	WASM::GcHeap& heap = WASM::Store::global().gc();
+	WASM::GcHeap& heap = testStore().gc();
 
 	const uint32_t structIdx = firstStructType(*loaded.module);
 	REQUIRE(structIdx != UINT32_MAX);
@@ -4666,7 +4666,7 @@ TEST_CASE("GC reclamation: a deep chain is released iteratively")
 	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
-	WASM::GcHeap& heap = WASM::Store::global().gc();
+	WASM::GcHeap& heap = testStore().gc();
 
 	const uint32_t structIdx = firstStructType(*loaded.module);
 	REQUIRE(structIdx != UINT32_MAX);
@@ -4701,7 +4701,7 @@ TEST_CASE("GC heap: poison-on-free marks recycled blocks and reuse clears them")
 	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
-	WASM::GcHeap& heap = WASM::Store::global().gc();
+	WASM::GcHeap& heap = testStore().gc();
 
 	const uint32_t structIdx = firstStructType(*loaded.module);
 	REQUIRE(structIdx != UINT32_MAX);
@@ -4745,7 +4745,7 @@ TEST_CASE("GC reclamation: a two-object reference cycle is collected")
 	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
-	WASM::GcHeap& heap = WASM::Store::global().gc();
+	WASM::GcHeap& heap = testStore().gc();
 
 	const uint32_t structIdx = firstStructType(*loaded.module);
 	REQUIRE(structIdx != UINT32_MAX);
@@ -4781,7 +4781,7 @@ TEST_CASE("GC reclamation: a cycle still referenced from outside survives the tr
 	auto loaded = loadAndInstantiateTestModule("gc_refcount", imports, *backend);
 	REQUIRE(loaded.instance.get() != nullptr);
 	WASM::ModuleInstance& instance = *loaded.instance;
-	WASM::GcHeap& heap = WASM::Store::global().gc();
+	WASM::GcHeap& heap = testStore().gc();
 
 	const uint32_t structIdx = firstStructType(*loaded.module);
 	REQUIRE(structIdx != UINT32_MAX);
@@ -8942,7 +8942,7 @@ TEST_CASE("custom page sizes: a page-size mismatch does not satisfy a memory imp
 	REQUIRE(importer->importMemories[0].memory.pageSize == 1);
 
 	auto backend = TestBackend::create();
-	WASM::Store& store = WASM::Store::global();
+	WASM::Store& store = testStore();
 
 	// The same limits at 64 KiB do not match: page sizes compare exactly and
 	// there is no page-size subtyping (CPS-3/CPSD3).
@@ -9001,7 +9001,7 @@ int32_t nativeMeasureString(WASM::VMContext*, void* raw)
 	g_nativeStringPointer = raw;
 	std::string utf8;
 	if (raw == nullptr
-			|| !WASM::Store::global().strings().copyToUtf8(
+			|| !testStore().strings().copyToUtf8(
 					static_cast<const WASM::StringObject*>(raw), utf8))
 		WASM::trap(WASM::TrapKind::InvalidString, "native import got a non-UTF-8 string");
 	g_nativeStringSeen = std::move(utf8);
@@ -9065,7 +9065,7 @@ TEST_CASE("native imports exchange stringrefs with the guest")
 	REQUIRE(literal.has_value());
 
 	// A host-created string passed into the guest and forwarded to C++.
-	WASM::StringStore& strings = WASM::Store::global().strings();
+	WASM::StringStore& strings = testStore().strings();
 	bool valid = false;
 	WASM::StringObject* hostString = strings.createFromUtf8("h\xc3\xb4tel", &valid);
 	REQUIRE(valid);
@@ -11232,7 +11232,7 @@ TEST_CASE("host continuation scheduler carries wide completion and throw")
 	REQUIRE(scheduler.submitEx(throwing, nullptr, 0, nullptr, 0, 8, true));
 	REQUIRE(scheduler.step());
 	REQUIRE(state.suspended != nullptr);
-	void* exception = ::wasm_exn_create(4242, 0);
+	void* exception = WASM::wasm_exn_create_in(testStore(), 4242, 0);
 	REQUIRE(exception != nullptr);
 	REQUIRE(scheduler.submitThrow(state.suspended, exception, true));
 	REQUIRE(scheduler.step());
