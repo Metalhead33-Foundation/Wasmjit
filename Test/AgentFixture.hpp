@@ -13,145 +13,32 @@
   It is authored as bytes because wasm-tools 1.252 cannot print the
   acquire-release ordering immediate or pause. The equivalent text is:
 
-/**
- * \brief Performs the module operation.
- * \param i32 Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
     (module
-/**
- * \brief Performs the c operation.
- * \param i32 Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
       (memory 1 1 shared)
-/**
- * \brief Performs the c operation.
- * \param i32 Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
       (global $c (shared (mut i32)) (i32.const 0))
-/**
- * \brief Performs the func operation.
- * \param i32 Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
       (func (export "produce") (param i32)       ;; [4]=arg; [0]=1 (release)
-/**
- * \brief Performs the store operation.
- * \param i32 Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
         (i32.store (i32.const 4) (local.get 0))
-/**
- * \brief Performs the acqrel operation.
- * \param i32 Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
         (i32.atomic.store acqrel (i32.const 0) (i32.const 1)))
-/**
- * \brief Performs the func operation.
- * \param i32 Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
       (func (export "consume") (result i32)      ;; spin on [0] (acquire), then [4]
         (block $done (loop $spin
-/**
- * \brief Performs the done operation.
- * \return The value or status produced by this operation.
- */
           (br_if $done (i32.atomic.load acqrel (i32.const 0)))
-/**
- * \brief Performs the load operation.
- * \return The value or status produced by this operation.
- */
           (pause) (br $spin)))
-/**
- * \brief Performs the load operation.
- * \return The value or status produced by this operation.
- */
         (i32.load (i32.const 4)))
-/**
- * \brief Performs the func operation.
- * \return The value or status produced by this operation.
- */
       (func (export "wait_flag") (result i32)
-/**
- * \brief Performs the wait32 operation.
- * \return The value or status produced by this operation.
- */
         (memory.atomic.wait32 (i32.const 8) (i32.const 0) (i64.const -1)))
-/**
- * \brief Performs the func operation.
- * \return The value or status produced by this operation.
- */
       (func (export "notify_flag") (result i32)
-/**
- * \brief Performs the acqrel operation.
- * \return The value or status produced by this operation.
- */
         (i32.atomic.store acqrel (i32.const 8) (i32.const 1))
-/**
- * \brief Performs the notify operation.
- * \return The value or status produced by this operation.
- */
         (memory.atomic.notify (i32.const 8) (i32.const 1)))
-/**
- * \brief Performs the func operation.
- * \return The value or status produced by this operation.
- */
       (func (export "reset")                     ;; [0]=0, [8]=0
         ...)
-/**
- * \brief Performs the func operation.
- * \param i32 Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
       (func (export "boom") (unreachable))
-/**
- * \brief Performs the func operation.
- * \param i32 Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
       (func (export "answer") (result i32) (i32.const 42))
-/**
- * \brief Performs the func operation.
- * \param i32 Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
       (func (export "bump") (result i32)         ;; shared global RMW
-/**
- * \brief Performs the seqcst operation.
- * \return The value or status produced by this operation.
- */
         (global.atomic.rmw.add seqcst (i32.const 1)))
-/**
- * \brief Performs the func operation.
- * \return The value or status produced by this operation.
- */
       (func (export "counter") (result i32) (global.atomic.get seqcst))
-/**
- * \brief Performs the func operation.
- * \return The value or status produced by this operation.
- */
       (func (export "mark_ready")                ;; [12]=1 (seqcst)
-/**
- * \brief Performs the seqcst operation.
- * \param i32 Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
         (i32.atomic.store seqcst (i32.const 12) (i32.const 1)))
-/**
- * \brief Performs the func operation.
- * \param i32 Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
       (func (export "ready") (result i32) (i32.atomic.load seqcst (i32.const 12)))
-/**
- * \brief Performs the func operation.
- * \param i32 Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
       (func (export "notify_only") (result i32)    ;; no value change
         (memory.atomic.notify (i32.const 8) (i32.const 1))))
 
@@ -201,17 +88,9 @@ inline constexpr std::array<std::uint8_t, 334> kModule = {
  * \brief Returns the encoded module as a byte span.
  * \return A non-owning span over kModule; its storage has static lifetime.
  */
-/**
- * \brief Performs the moduleBytes operation.
- * \return The value or status produced by this operation.
- */
 inline std::span<const std::byte> moduleBytes()
 {
 	return std::span<const std::byte>(
-/**
- * \brief Performs the data operation.
- * \return The value or status produced by this operation.
- */
 			reinterpret_cast<const std::byte*>(kModule.data()), kModule.size());
 }
 
