@@ -74,11 +74,13 @@ constexpr size_t kExternBoxBytes = kTypeHeaderBytes + sizeof(void*);
 
 //! \par Storage layout helpers, shared so the runtime and the backend agree (H1)
 
+/** \\brief Rounds a byte offset up to an alignment boundary. \\param value Original byte offset. \\param alignment Required alignment (non-zero). \\return Smallest aligned offset not less than value. */
 inline size_t gcAlignUp(size_t value, size_t alignment)
 {
 	return (value + alignment - 1) / alignment * alignment;
 }
 
+/** \\brief Returns the byte size of one core GC storage type. \\param st Storage type to measure. \\return Size in bytes, including pointer-sized reference fields. */
 inline size_t gcStorageBytes(const StorageType& st)
 {
 	if (st.isPacked)
@@ -93,6 +95,7 @@ inline size_t gcStorageBytes(const StorageType& st)
 	}
 }
 
+/** \\brief Returns the alignment required by one core GC storage type. \\param st Storage type to measure. \\return Required alignment in bytes. */
 inline size_t gcStorageAlign(const StorageType& st)
 {
 	//! A `v128` is 16 bytes and 16-byte aligned. A backend must lower the type
@@ -105,6 +108,7 @@ inline size_t gcStorageAlign(const StorageType& st)
 //! Canonical storage views carry no module-local type index; layout depends only
 //! on opcode/packedness, so this is a lossless conversion for the GC layout and
 //! store paths. Heap references remain opaque pointers in those paths.
+/** \\brief Converts a canonical storage type to the layout-only core storage view. \\param st Canonical storage type. \\return Equivalent storage descriptor with no module-local heap index. */
 inline StorageType gcStorageView(const CanonStorageType& st)
 {
 	StorageType out;
@@ -114,11 +118,13 @@ inline StorageType gcStorageView(const CanonStorageType& st)
 	return out;
 }
 
+/** \\brief Returns the byte size of a canonical GC storage type. \\param st Canonical storage type. \\return Storage size in bytes. */
 inline size_t gcStorageBytes(const CanonStorageType& st)
 {
 	return gcStorageBytes(gcStorageView(st));
 }
 
+/** \\brief Returns the alignment of a canonical GC storage type. \\param st Canonical storage type. \\return Required alignment in bytes. */
 inline size_t gcStorageAlign(const CanonStorageType& st)
 {
 	return gcStorageAlign(gcStorageView(st));
@@ -127,11 +133,13 @@ inline size_t gcStorageAlign(const CanonStorageType& st)
 //! The byte offset of an array's first element within the array object. It must
 //! be identical in the runtime's allocateArrayObject/evalConstantExpr and in a
 //! backend's array addressing (docs/proposals/GC.md §6.3 / H1).
+/** \\brief Computes the first-element offset for an array with this element type. \\param element Element storage type. \\return Byte offset of the inline element payload. */
 inline size_t gcArrayDataOffset(const StorageType& element)
 {
 	return gcAlignUp(GcHeader::kArrayHeaderBytes, gcStorageAlign(element));
 }
 
+/** \\brief Computes the first-element offset for a canonical element type. \\param element Canonical element storage type. \\return Byte offset of the inline element payload. */
 inline size_t gcArrayDataOffset(const CanonStorageType& element)
 {
 	return gcArrayDataOffset(gcStorageView(element));
@@ -141,6 +149,7 @@ inline size_t gcArrayDataOffset(const CanonStorageType& element)
 //! The string codes are Store-owned references with their own StringStore count
 //! (docs/proposals/STRINGREF.md STR-8); they have no GC header, so the GC
 //! reference-counting paths treat them separately.
+/** \\brief Tests whether a value type may contain a GC/host reference. \\param code WebAssembly value type opcode. \\return true for reference and string-reference forms. */
 inline bool isReferenceType(ValueTypeCode code)
 {
 	switch (code) {
