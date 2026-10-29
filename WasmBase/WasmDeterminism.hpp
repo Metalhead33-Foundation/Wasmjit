@@ -27,7 +27,7 @@ constexpr uint64_t kCanonicalF64Bits = 0x7ff8000000000000ull;
 //! Replace a NaN with the canonical NaN of the same width; every other value
 //! (including infinity and -0) passes through bit-exactly. Used by the backend
 //! at the points where a float becomes observable to the embedder or to memory.
-/** \\brief Replaces any NaN with the canonical deterministic f32 NaN. \\param value Input floating-point value. \\return Canonical quiet NaN for NaN input; otherwise the original value bit-for-bit. */
+/** \brief Replaces any NaN with the canonical deterministic f32 NaN. \param value Input floating-point value. \return Canonical quiet NaN for NaN input; otherwise the original value bit-for-bit. */
 inline float deterministicF32(float value) noexcept
 {
 	if (!std::isnan(value))
@@ -39,7 +39,7 @@ inline float deterministicF32(float value) noexcept
 
 //! The 64-bit counterpart of `deterministicF32`: replaces a NaN with
 //! `kCanonicalF64Bits` and passes every other value through bit-exactly.
-/** \\brief Replaces any NaN with the canonical deterministic f64 NaN. \\param value Input floating-point value. \\return Canonical quiet NaN for NaN input; otherwise the original value bit-for-bit. */
+/** \brief Replaces any NaN with the canonical deterministic f64 NaN. \param value Input floating-point value. \return Canonical quiet NaN for NaN input; otherwise the original value bit-for-bit. */
 inline double deterministicF64(double value) noexcept
 {
 	if (!std::isnan(value))
