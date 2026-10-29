@@ -29,18 +29,28 @@ namespace WASM {
 //! scheduler: spawning and joining host threads is the embedder's act, exactly
 //! as it supplies the JS event loop in docs/proposals/JS_INTEGRATION.md.
 
+//! The opt-in execution model (docs/MULTI_AGENT_FEASIBILITY.md §6.2/MF-6):
+//! `Single` keeps the default contract, `Agents` lets several agents execute
+//! one instance concurrently. A restriction the embedder selects, never
+//! feature detection; the core owns no scheduler.
 enum class ConcurrencyModel : std::uint8_t {
 	Single = 0, //!< one agent inside a call at a time
 	Agents,     //!< several agents may execute one instance concurrently
 };
 
 //! True when the engine can honour the named concurrency model.
+//! \param model the concurrency model an embedder asks for
+//! \return true when the engine can honour that model, false for a value it
+//! does not implement
 inline constexpr bool supportsConcurrency(ConcurrencyModel model) noexcept
 {
 	return model == ConcurrencyModel::Single || model == ConcurrencyModel::Agents;
 }
 
 //! Stable short name for diagnostics and embedder logs.
+//! \param model the concurrency model to name
+//! \return the stable short name of that model ("single", "agents"), or
+//! "unknown" for a value outside the enum
 inline constexpr const char* concurrencyModelName(ConcurrencyModel model) noexcept
 {
 	switch (model) {
@@ -56,6 +66,7 @@ inline constexpr const char* concurrencyModelName(ConcurrencyModel model) noexce
 //! before a multi-agent build exists; a null table means "the embedder
 //! schedules", which is today's behaviour.
 struct HostAgentScheduler {
+	//! Opaque pointer handed back to every hook unchanged.
 	void* userData = nullptr;
 	void (*spawn)(void* userData, void (*entry)(void*), void* argument) = nullptr;
 	void (*park)(void* userData) = nullptr;

@@ -62,6 +62,10 @@ inline constexpr uint32_t kMaxComponentSections = 100000;
 //! Throws unless `requested` bytes can still be read from `device`. Devices
 //! that do not report a size are treated as unbounded (nothing to compare
 //! against), which keeps exotic embedder devices working.
+//! \param device the input device the count is about to be read from
+//! \param requested the number of bytes the next read claims
+//! \param what what the bytes belong to, used in the error message
+//! \return `requested` as a `std::size_t`, once it is known to fit
 template<typename Device>
 inline std::size_t requireAvailable(Device& device, uint64_t requested, const char* what)
 {
@@ -80,6 +84,10 @@ inline std::size_t requireAvailable(Device& device, uint64_t requested, const ch
 
 //! Convenience for a *count*: each element costs at least one byte on the wire,
 //! so the same remaining-bytes bound applies.
+//! \param device the input device the count is about to be read from
+//! \param count the number of elements the next read claims
+//! \param what what the elements belong to, used in the error message
+//! \return `count` as a `std::size_t`, once it is known to fit
 template<typename Device>
 inline std::size_t requireCountAvailable(Device& device, uint64_t count, const char* what)
 {

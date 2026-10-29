@@ -27,6 +27,8 @@ using TraceCallback = void (*)(uint32_t immediate);
 
 //! The process-wide callback slot `setTraceCallback` writes and a traced
 //! instruction reads. A function-local static, so it is initialised on first use.
+//! \return a reference to the installed callback; assigning through it
+//! replaces the callback for every instruction that is traced afterwards
 inline TraceCallback& traceCallbackSlot()
 {
 	static TraceCallback callback = nullptr;
@@ -35,6 +37,7 @@ inline TraceCallback& traceCallbackSlot()
 
 //! Installs the trace callback (null disables tracing). Not thread-safe against a
 //! concurrent instruction dispatch: install it before the first call.
+//! \param callback the callback to install, or null to disable tracing
 inline void setTraceCallback(TraceCallback callback)
 {
 	traceCallbackSlot() = callback;
@@ -42,6 +45,8 @@ inline void setTraceCallback(TraceCallback callback)
 
 //! Called by a compiled `instr.trace (imm)` with its immediate. A no-op when no
 //! callback is installed, which is why tracing cannot change a result.
+//! \param immediate the immediate operand the traced instruction carries;
+//! the engine never interprets it
 inline void traceImmediate(uint32_t immediate)
 {
 	if (TraceCallback callback = traceCallbackSlot())

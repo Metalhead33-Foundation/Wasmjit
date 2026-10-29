@@ -42,8 +42,12 @@ namespace WASM {
 //! shared library and for a backend plugin's compatibility check. They never
 //! throw and they do not allocate.
 //! Runtime form of `WASMJIT_VERSION_STRING`; never throws, never allocates.
+//! \return the `"MAJOR.MINOR.PATCH"` string of the library that was actually
+//! loaded, which may differ from the headers an embedder compiled against
 const char* versionString() noexcept;
 //! Runtime form of `WASMJIT_ABI_VERSION`; never throws, never allocates.
+//! \return the ABI number of the library that was actually loaded; an
+//! embedder or plugin compares it before using any other entry point
 std::uint32_t abiVersion() noexcept;
 
 } // namespace WASM

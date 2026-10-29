@@ -102,6 +102,8 @@ private:
 	//! Release every reference-typed non-parameter local (function exit).
 	void emitDropRefLocals();
 	//! Pop and return the top of the model operand stack (placeholder when unreachable).
+	//! \return the top of the model operand stack; in unreachable code a
+	//! placeholder value, so that lowering never underflows
 	jit_value_t popValue();
 	//! Emits the function's epilogue (a `return`). Does nothing in unreachable
 	//! code or when the model stack is short (dead tail). With `consume` false
@@ -113,11 +115,17 @@ private:
 	//! very function — the only case this LibJIT build lowers reliably (see
 	//! docs/TAILCALLS.md §6). Returns false when the caller must fall back to
 	//! `call` + `return`.
+	//! \param funcIdx the module-local function index the call targets
+	//! \return true when the native tail call was emitted, false when the caller
+	//! must fall back to `call` plus `return`
 	bool emitDirectTailCall(WASM::FuncIdx funcIdx);
 	//! True when `calleeSig` has exactly this function's parameter and result
 	//! types. The trampoline no longer needs it (TC-3 dispatches through the
 	//! callee type's thunk), but it is part of the shipped LibJit symbol set, so
 	//! it stays for the additive-only ABI rule (docs/API_ABI_STABILITY.md G2).
+	//! \param calleeSig the callee signature to compare with this function
+	//! \return true when `calleeSig` has exactly this function’s parameter and
+	//! result types, false otherwise
 	bool signatureIsUniform(const WASM::FuncType& calleeSig) const;
 	//! Publishes {target, args, pending} to the current execution state's
 	//! trampoline state and returns a dummy value; the driver re-dispatches
@@ -130,6 +138,9 @@ private:
 	//! `call` + `return` with the callee's results becoming this function's.
 	//! Used for a native import on the direct path and for a callable with no
 	//! dispatch thunk on the indirect/ref paths.
+	//! \param typeIdx the module-local type index of the callee signature
+	//! \param callablePtr the callable pointer of the callee
+	//! \param args the argument values, in declaration order
 	void emitTailCallFallback(WASM::TypeIdx typeIdx, jit_value_t callablePtr,
 							  const std::vector<jit_value_t>& args);
 	//! Emits `return` of a zero value of this function's result type.
@@ -153,8 +164,12 @@ private:
 	//! Returns the hint attached to the instruction currently being dispatched,
 	//! or nullptr if there is none. Purely an optimisation input; never changes
 	//! results.
+	//! \return the hint whose offset matches the instruction being dispatched, or
+	//! nullptr when the module carries no hint for it
 	const WASM::BranchHint* currentBranchHint() const;
 	//! A zero (or null) constant of LibJIT type `t`, used as a placeholder or trap return.
+	//! \param t the LibJIT type whose zero value is wanted
+	//! \return a constant zero (a null pointer for a reference type) of type `t`
 	jit_value_t zeroConstantForType(jit_type_t t);
 
 	//! \par SIMD lowering (docs/SIMD_LIBJIT.md §6)
@@ -169,18 +184,33 @@ private:
 	//!     of a `v128` is fine);
 	//!   - `jit_insn_store_relative` does **not** write a `jit_value_create`d
 	//!     aggregate, so `v128.const` must go through a helper, not inline stores.
+	//! \return the memoised LibJIT struct type whose 16 bytes hold a `v128`
 	jit_type_t v128Type();
 	//! A fresh 16-byte slot for a `v128` result.
+	//! \return a fresh frame local that can hold one `v128` operand
 	jit_value_t newV128Slot();
 	//! Address of a global's 16 bytes in the VMContext's `globals` array. The
 	//! `v128` member sits at offset 0 of the `Value` union, so this is also the
 	//! pointer the load/store helpers accept (SIMD-L5).
+	//! \param arg the global index
+	//! \return the address of that global’s 16 bytes inside the VMContext
 	jit_value_t globalSlotAddress(WASM::GlobalIdx arg);
 	//! Calls a helper through a memoised signature (§6.4) and returns its result
 	//! (`void` for the out-slot shapes — the caller then pushes the slot).
+	//! \param fptr the address of the native helper to call
+	//! \param ret the return type of the helper (`jit_type_void` for the
+	//! out-slot shapes)
+	//! \param params the parameter types of the helper, used as the signature key
+	//! \param args the argument values to pass, in declaration order
+	//! \return the helper’s result value, or a null value for a void helper
 	jit_value_t callSimdHelper(void* fptr, jit_type_t ret,
 			std::span<const jit_type_t> params, std::span<const jit_value_t> args);
 	//! The common shape: leading operands, then the result slot's address.
+	//! \param fptr the address of the native helper to call
+	//! \param out the address of the slot the helper writes its result into
+	//! \param leadingTypes the parameter types that precede the out pointer
+	//! \param leadingArgs the argument values that precede the out pointer
+	//! \return the call’s (void) result value; the caller pushes `out`
 	jit_value_t callSimdOutHelper(void* fptr, jit_value_t out,
 			std::span<const jit_type_t> leadingTypes, std::span<const jit_value_t> leadingArgs);
 	//! The `v128.load*` / `v128.store*` shapes. The effective address is computed
@@ -233,8 +263,13 @@ private:
 	//! Memoised LibJIT struct type for `v128` (null until first use).
 	jit_type_t simdCachedType = nullptr;
 	//! Reinterpret / cast a reference-typed value to `targetType` without changing bits.
+	//! \param value the reference-typed value to retype
+	//! \param targetType the LibJIT reference type to view it as
+	//! \return the same bits, typed as `targetType`
 	jit_value_t castRefValue(jit_value_t value, jit_type_t targetType);
 	//! Narrow a reference-typed value to `void*` for helper and store calls.
+	//! \param value the reference-typed value to narrow
+	//! \return the same bits, typed as `void*` for a helper or store call
 	jit_value_t refAsVoidPtr(jit_value_t value);
 	//! Emits the reference-counting write barrier (`wasm_ref_store`): retain
 	//! `newRef`, store it at `slotAddr`, release the value it overwrote. Used
@@ -244,42 +279,81 @@ private:
 	void emitRefStore(jit_value_t slotAddr, jit_value_t newRef);
 	//! `wasm_ref_clone` / `wasm_ref_drop` (retain / release), for slot stores
 	//! that address a LibJIT local rather than memory (RC-5).
+	//! \param ref the reference whose ownership count is raised
+	//! \return `ref` itself, now owning one more count
 	jit_value_t emitRefClone(jit_value_t ref);
 	//! Call `wasm_ref_drop` on `ref` (release one ownership count).
 	//! \param ref the jit_value_t operand
 	void emitRefDrop(jit_value_t ref);
 	//! A typed null reference constant of LibJIT reference type `refType`.
+	//! \param refType the LibJIT reference type of the constant
+	//! \return a null reference constant of that type
 	jit_value_t typedNullRef(jit_type_t refType);
 	//! Emit `ref.test` / nullability check of `ref` against `heapType`.
+	//! \param ref the reference value to test
+	//! \param heapType the heap type the reference is tested against
+	//! \param nullable true for the `ref.test (ref null ht)` form, which also
+	//! accepts a null reference
+	//! \return a 32-bit value that is non-zero when the test succeeds
 	jit_value_t emitRefTypeTest(jit_value_t ref, const WASM::HeapType& heapType, bool nullable);
 	//! LibJIT element type of table `arg`.
+	//! \param arg the table index
+	//! \return the LibJIT type of that table’s elements
 	jit_type_t tableElementJitType(WASM::TableIdx arg) const;
 	//! LibJIT reference type for heap type `ht` (nullable when `nullable`).
+	//! \param ht the heap type to translate
+	//! \param nullable true for a `(ref null ht)` type, false for `(ref ht)`
+	//! \return the LibJIT reference type that corresponds to the pair
 	jit_type_t jitRefTypeForHeapType(const WASM::HeapType& ht, bool nullable);
 	//! LibJIT `(ref [null] $struct)` type for type index `arg`.
+	//! \param arg the module-local type index of the struct type
+	//! \param nullable true for `(ref null $t)`, false for `(ref $t)`
+	//! \return the LibJIT reference type for that struct
 	jit_type_t structRefType(WASM::TypeIdx arg, bool nullable) const;
 	//! LibJIT `(ref [null] $array)` type for type index `arg`.
+	//! \param arg the module-local type index of the array type
+	//! \param nullable true for `(ref null $t)`, false for `(ref $t)`
+	//! \return the LibJIT reference type for that array
 	jit_type_t arrayRefType(WASM::TypeIdx arg, bool nullable) const;
 	//! Canonical struct type view for module type index `arg`.
+	//! \param arg the module-local type index
+	//! \return a view of the canonical struct type behind that index
 	WASM::CoreTypeView structTypeForIndex(WASM::TypeIdx arg) const;
 	//! Canonical array type view for module type index `arg`.
+	//! \param arg the module-local type index
+	//! \return a view of the canonical array type behind that index
 	WASM::CoreTypeView arrayTypeForIndex(WASM::TypeIdx arg) const;
 	//! LibJIT type of the element of array type `arg`.
+	//! \param arg the module-local type index of the array type
+	//! \return the LibJIT type of one element of that array
 	jit_type_t arrayElementJitType(WASM::TypeIdx arg) const;
 	//! Byte offset of field `fieldIndex` inside struct type `arg`.
+	//! \param arg the module-local type index of the struct type
+	//! \param fieldIndex the position of the field in the struct
+	//! \return the byte offset of that field in the lowered layout
 	jit_nint structFieldOffset(WASM::TypeIdx arg, uint32_t fieldIndex) const;
 	//! Byte offset of the length word inside an array of type `arg`.
+	//! \param arg the module-local type index of the array type
+	//! \return the byte offset of the length word in the lowered layout
 	jit_nint arrayLengthOffset(WASM::TypeIdx arg) const;
 	//! Byte offset of the inline element payload inside an array of type `arg`.
+	//! \param arg the module-local type index of the array type
+	//! \return the byte offset at which the inline element payload starts
 	jit_nint arrayDataOffset(WASM::TypeIdx arg) const;
 	//! `ref + dataOffset`, typed as a pointer to the array's element type.
 	//! Arrays store their elements inline (docs/proposals/GC.md D13/GC-9), so
 	//! there is no `data` field to load.
+	//! \param arrayRef the array reference the elements are addressed through
+	//! \param arg the module-local type index of the array type
+	//! \return a pointer to the first element, typed as the element type
 	jit_value_t arrayElementBase(jit_value_t arrayRef, WASM::TypeIdx arg);
 	//! Layout of a multi-result function's result tuple. A multi-result
 	//! signature carries a trailing `void*` result buffer instead of returning
 	//! an aggregate by value (see LibJitTypeTranslation.cpp); this struct type
 	//! describes that buffer.
+	//! \param wasm_func the function signature whose results are packed
+	//! \return the LibJIT struct type that describes the result buffer of that
+	//! signature
 	jit_type_t resultTupleType(const WASM::FuncType& wasm_func);
 	//! Writes the top `resultCount` values into `out`, the caller-provided
 	//! result buffer (a multi-result function's trailing parameter).
@@ -296,10 +370,17 @@ private:
 	void pushCallResults(const WASM::FuncType& calleeSig, jit_value_t ret, jit_value_t outBuffer);
 	//! Allocates the caller-side result tuple in this function's frame and
 	//! returns its address, or null when `calleeSig` has 0/1 results.
+	//! \param calleeSig the callee signature whose results must be stored
+	//! \return the address of the caller-side result tuple, or null when the
+	//! callee has zero or one result
 	jit_value_t newResultBuffer(const WASM::FuncType& calleeSig);
 	//! Parameter storage types implied by block type `bt`.
+	//! \param bt the block type to inspect
+	//! \return the storage types the construct consumes on entry
 	std::vector<WASM::StorageType> parameterTypesForBlockType(const WASM::BlockType& bt) const;
 	//! Allocate one frame local per type in `types` (branch / block parameter slots).
+	//! \param types the storage types that need a frame slot each
+	//! \return one fresh frame local per entry of `types`, in the same order
 	std::vector<jit_value_t> createSlotsForTypes(const std::vector<WASM::StorageType>& types);
 	//! Pop `|slots|` values from the model stack and store them into `slots`.
 	//! \param slots the std::vector<jit_value_t> operand
@@ -311,24 +392,41 @@ private:
 	//! \param newSize the count of entries
 	void resizeValueStack(size_t newSize);
 	//! Control frame targeted by relative label `arg` (must be in range).
+	//! \param arg the relative label depth, zero being the innermost block
+	//! \return the control frame the label names
 	ControlBlock& branchTarget(WASM::LabelIdx arg);
 	//! Result (or loop parameter) types a branch to `target` must leave on the stack.
+	//! \param target the control frame the branch targets
+	//! \return the result types (for a loop: its parameter types) the branch must
+	//! leave on the stack
 	const std::vector<WASM::StorageType>& branchTypesForTarget(const ControlBlock& target) const;
 	//! Frame slots a branch to `target` writes before jumping.
+	//! \param target the control frame the branch targets
+	//! \return the frame slots the branch writes before jumping
 	const std::vector<jit_value_t>& branchSlotsForTarget(const ControlBlock& target) const;
 	//! Store branch values into `target`'s slots and jump to its label.
 	//! \param target the ControlBlock operand
 	void emitBranchToTarget(ControlBlock& target);
 	//! Module-local type index of function `funcIdx` (imports first).
+	//! \param funcIdx the function index, imports first
+	//! \return the module-local type index of that function’s signature
 	WASM::TypeIdx functionTypeIndexForFunc(WASM::FuncIdx funcIdx) const;
 	//! Function signature for module type index `typeIdx`.
+	//! \param typeIdx the module-local type index
+	//! \return the function signature stored at that index
 	WASM::FuncType functionSignatureForType(WASM::TypeIdx typeIdx) const;
 	//! `cont $ft`: resolve the module-local function type index stored in the
 	//! canonical continuation type (STACK_SWITCHING.md SS-1).
+	//! \param contTypeIdx the module-local type index of the continuation type
+	//! \return the module-local function type index that continuation wraps
 	WASM::TypeIdx continuationFuncIndex(WASM::TypeIdx contTypeIdx) const;
 	//! Function signature wrapped by continuation type `contTypeIdx`.
+	//! \param contTypeIdx the module-local type index of the continuation type
+	//! \return the function signature the continuation wraps
 	WASM::FuncType continuationSignature(WASM::TypeIdx contTypeIdx) const;
 	//! Pointer to the callable for function index `funcIdx` (import or local).
+	//! \param funcIdx the function index, imports first
+	//! \return a pointer value to that function’s callable
 	jit_value_t callablePointerForFuncIndex(WASM::FuncIdx funcIdx);
 	//! Lowering hook: call through callable.
 	//! Lower this opcode into the backend IR.
@@ -352,22 +450,39 @@ private:
 	//! \param detail the name of the opcode the base class does not implement
 	void emitTrapIfNull(WASM::TrapKind kind, jit_value_t pointer, const char* detail = nullptr);
 	//! Result storage types implied by block type `bt`.
+	//! \param bt the block type to inspect
+	//! \return the storage types the construct produces on exit
 	std::vector<WASM::StorageType> storageTypesForBlockType(const WASM::BlockType& bt) const;
 
 	//! The `VMContext*` argument of the function being compiled.
+	//! \return the `VMContext*` parameter of the function being compiled, as a
+	//! LibJIT value
 	jit_value_t vmContextValue();
 	//! Bounds-check `index` against `table` and return it (trap with `kind` on failure).
+	//! \param table the table pointer the index is checked against
+	//! \param index the candidate index, the table’s declared index type
+	//! \param opname the instruction name used in the trap message
+	//! \param kind the trap kind reported when the index is out of range
+	//! \return the index as a 32-bit value, once it is known to be in range
 	jit_value_t checkedTableIndex(jit_value_t table, jit_value_t index, const char* opname,
 			WASM::TrapKind kind = WASM::TrapKind::UndefinedElement);
 	//! Emits code yielding the LinearMemory* for a (constant) memory index.
+	//! \param memidx the memory index
+	//! \return a pointer value to that memory’s `LinearMemory`
 	jit_value_t memoryPointerForIndex(WASM::MemIdx memidx);
 	//! The declared index type (i32/i64) of memory `memidx`, for the address
 	//! widening in effectiveMemoryAddress.
+	//! \param memidx the memory index
+	//! \return the declared index type of that memory
 	WASM::MemoryIndexType memoryIndexTypeForIndex(WASM::MemIdx memidx) const;
 	//! True when table `tableidx` declares a 64-bit index (flag bit 2).
+	//! \param tableidx the table index
+	//! \return true when the table declares a 64-bit index type
 	bool tableIs64Bit(WASM::TableIdx tableidx) const;
 
 	//! Emits code yielding the TableInstance* for a (constant) table index.
+	//! \param tableidx the table index
+	//! \return a pointer value to that table’s `TableInstance`
 	jit_value_t tablePointerForIndex(WASM::TableIdx tableidx);
 	//! Emits a runtime check that `callablePtr`'s canonical type id matches the
 	//! module-local type index `typeIdx` (id fast path, registry fallback).
@@ -378,9 +493,14 @@ private:
 	//! type, docs/UNMODELLED_VALUE_TYPES.md). `notImplemented()` throws, which
 	//! surfaces as a clean instantiation failure; the LibJIT build region in
 	//! ModuleCompiler::compileFunctions is RAII-guarded (docs/SAFETY.md).
+	//! \param name the lowering that cannot be performed, used in the exception
+	//! message
 	[[noreturn]] void notImplemented(const char* name);
 
 	//! Effective address for `ma` with access size `accessSize` (bounds-checked).
+	//! \param ma the memarg immediate: the alignment hint and the static byte offset
+	//! \param accessSize the number of bytes the access touches
+	//! \return the effective address, widened to the host pointer width
 	jit_value_t effectiveMemoryAddress(const WASM::MemArg& ma, jit_nint accessSize);
 
 	//! \par 0xFE atomics (docs/proposals/THREADS.md TH-1)
@@ -388,52 +508,116 @@ private:
 	//! `__atomic_*` at seq_cst and trap on a misaligned effective address; these
 	//! emit the call and adapt the value types. `effectiveMemoryAddress` has
 	//! already bounds-checked the address (and trapped on out-of-bounds).
+	//! \param ma the memarg immediate: the alignment hint and the static byte offset
+	//! \param width the access width in bytes (1, 2, 4 or 8)
+	//! \param resultType the LibJIT type the loaded value is widened to
+	//! \return the loaded value
 	jit_value_t emitAtomicLoad(const WASM::MemArg& ma, uint32_t width, jit_type_t resultType);
 	//! Atomic store of the top stack value through `ma` (`width` bytes).
 	//! \param ma the memarg immediate: the alignment hint and the static byte offset
 	//! \param width the 32-bit immediate of the instruction
 	void        emitAtomicStore(const WASM::MemArg& ma, uint32_t width);
 	//! Atomic RMW of the top stack value through `ma`; pushes the previous value.
+	//! \param ma the memarg immediate: the alignment hint and the static byte offset
+	//! \param width the access width in bytes (1, 2, 4 or 8)
+	//! \param op the RMW operation selector passed to the shared helper
+	//! \param resultType the LibJIT type of the previous value the helper returns
+	//! \return the value the slot held before the operation
 	jit_value_t emitAtomicRmw(const WASM::MemArg& ma, uint32_t width, uint32_t op,
 							  jit_type_t resultType);
 	//! Atomic compare-exchange through `ma`; pops expected/replacement, pushes old.
+	//! \param ma the memarg immediate: the alignment hint and the static byte offset
+	//! \param width the access width in bytes (1, 2, 4 or 8)
+	//! \param resultType the LibJIT type of the previous value the helper returns
+	//! \return the value the slot held before the compare-exchange
 	jit_value_t emitAtomicCmpxchg(const WASM::MemArg& ma, uint32_t width,
 							  jit_type_t resultType);
 	//! Atomic load from a precomputed `address` (shared-memory / GC paths).
+	//! \param address the already bounds-checked effective address
+	//! \param width the access width in bytes (1, 2, 4 or 8)
+	//! \param ordering the memory ordering selector of the instruction
+	//! \param resultType the LibJIT type the loaded value is widened to
+	//! \return the loaded value
 	jit_value_t emitAtomicLoadAddress(jit_value_t address, uint32_t width,
 									  uint8_t ordering, jit_type_t resultType);
 	//! Atomic store of `value` to a precomputed `address`.
+	//! \param address the already bounds-checked effective address
+	//! \param value the value that is stored
+	//! \param width the access width in bytes (1, 2, 4 or 8)
+	//! \param ordering the memory ordering selector of the instruction
 	void        emitAtomicStoreRaw(jit_value_t address, jit_value_t value,
 								   uint32_t width, uint8_t ordering);
 	//! Atomic RMW of `value` at a precomputed `address`; returns the previous value.
+	//! \param address the already bounds-checked effective address
+	//! \param value the operand of the read-modify-write
+	//! \param width the access width in bytes (1, 2, 4 or 8)
+	//! \param op the RMW operation selector passed to the shared helper
+	//! \param ordering the memory ordering selector of the instruction
+	//! \param resultType the LibJIT type of the previous value the helper returns
+	//! \return the value the slot held before the operation
 	jit_value_t emitAtomicRmwRaw(jit_value_t address, jit_value_t value,
 								 uint32_t width, uint32_t op, uint8_t ordering,
 								 jit_type_t resultType);
 	//! Atomic compare-exchange at a precomputed `address`.
+	//! \param address the already bounds-checked effective address
+	//! \param expected the value the slot is compared against
+	//! \param replacement the value written when the comparison matches
+	//! \param width the access width in bytes (1, 2, 4 or 8)
+	//! \param ordering the memory ordering selector of the instruction
+	//! \param resultType the LibJIT type of the previous value the helper returns
+	//! \return the value the slot held before the compare-exchange
 	jit_value_t emitAtomicCmpxchgRaw(jit_value_t address, jit_value_t expected,
 									 jit_value_t replacement, uint32_t width,
 									 uint8_t ordering, jit_type_t resultType);
 	//! Atomic store of the top stack value to a precomputed `address`.
+	//! \param address the already bounds-checked effective address
+	//! \param width the access width in bytes (1, 2, 4 or 8)
+	//! \param ordering the memory ordering selector of the instruction
 	void        emitAtomicStoreAddress(jit_value_t address, uint32_t width,
 									   uint8_t ordering);
 	//! Atomic RMW of the top stack value at a precomputed `address`.
+	//! \param address the already bounds-checked effective address
+	//! \param width the access width in bytes (1, 2, 4 or 8)
+	//! \param op the RMW operation selector passed to the shared helper
+	//! \param ordering the memory ordering selector of the instruction
+	//! \param resultType the LibJIT type of the previous value the helper returns
+	//! \return the value the slot held before the operation
 	jit_value_t emitAtomicRmwAddress(jit_value_t address, uint32_t width,
 									 uint32_t op, uint8_t ordering,
 									 jit_type_t resultType);
 	//! Atomic compare-exchange at a precomputed `address` (pops expected/replacement).
+	//! \param address the already bounds-checked effective address
+	//! \param width the access width in bytes (1, 2, 4 or 8)
+	//! \param ordering the memory ordering selector of the instruction
+	//! \param resultType the LibJIT type of the previous value the helper returns
+	//! \return the value the slot held before the compare-exchange
 	jit_value_t emitAtomicCmpxchgAddress(jit_value_t address, uint32_t width,
 										 uint8_t ordering, jit_type_t resultType);
 	//! Address of the atomic slot for an element of table `tableIdx`.
+	//! \param tableIdx the table index
+	//! \return a pointer value to the slot the atomic access targets
 	jit_value_t tableAtomicSlotAddress(WASM::TableIdx tableIdx);
 	//! Address of atomic struct field `fieldIdx` of type `typeIdx`.
+	//! \param typeIdx the module-local type index of the struct type
+	//! \param fieldIdx the position of the field in the struct
+	//! \return a pointer value to that field’s storage
 	jit_value_t structAtomicFieldAddress(WASM::TypeIdx typeIdx, uint32_t fieldIdx);
 	//! Address of an atomic array element of type `typeIdx` (index on the stack).
+	//! \param typeIdx the module-local type index of the array type
+	//! \return a pointer value to the addressed element’s storage
 	jit_value_t arrayAtomicElementAddress(WASM::TypeIdx typeIdx);
 	//! Call native helper `fptr` with the given signature and arguments.
+	//! \param fptr the address of the native helper to call
+	//! \param resultType the LibJIT return type of the helper
+	//! \param paramTypes the parameter types of the helper
+	//! \param args the argument values to pass, in declaration order
+	//! \return the helper’s result value
 	jit_value_t callNativeHelper(void* fptr, jit_type_t resultType,
 								 std::vector<jit_type_t> paramTypes,
 								 std::vector<jit_value_t> args);
 	//! Unsigned 32-bit constant used as an atomic ordering / RMW opcode argument.
+	//! \param value the constant that is materialised
+	//! \return a `uint32_t` constant value carrying `value`
 	jit_value_t atomicUintConstant(uint32_t value);
 
 	//! \par Exceptions (docs/proposals/EXCEPTIONS.md EX-3/EX-4)
@@ -441,15 +625,42 @@ private:
 	//! `throw_ref` emits a comparison chain. With no handler in this function
 	//! the exception becomes *pending* and the function returns zeroes; every
 	//! call site checks the pending slot (EXD1).
+	//! \param kind the construct that opens the frame
+	//! \param arg the block type that declares its parameters and results
+	//! \param catches the decoded catch clauses of a `try_table`, empty otherwise
 	void pushBlockFrame(ControlBlock::Kind kind, const WASM::BlockType& arg,
 						std::vector<WASM::CatchClause>&& catches);
+	//! Backend helper: `tagPayloadType`.
+	//! \param tagIdx the tag index, imports first
+	//! \return the signature of the exception payload that tag carries
 	WASM::FuncType tagPayloadType(WASM::TagIdx tagIdx) const;
+	//! Backend helper: `tagIdForClause`.
+	//! \param clause the decoded catch clause
+	//! \return the canonical identity of the tag the clause catches
 	WASM::TagId tagIdForClause(const WASM::CatchClause& clause) const;
+	//! Backend helper: `createException`.
+	//! \param tagId the canonical identity of the thrown tag
+	//! \param payload the signature of the payload that is attached
+	//! \return a pointer value to the freshly allocated exception object
 	jit_value_t createException(WASM::TagId tagId, const WASM::FuncType& payload);
+	//! Backend helper: `storeExceptionPayload`.
+	//! \param exnPayload the exception object the payload is stored in
+	//! \param payload the signature of that payload
+	//! \param values the payload values, in declaration order
 	void storeExceptionPayload(jit_value_t exnPayload, const WASM::FuncType& payload,
 							   const std::vector<jit_value_t>& values);
+	//! Backend helper: `loadExceptionPayload`.
+	//! \param exnPayload the exception object the payload is read from
+	//! \param payload the signature of that payload
+	//! \return the payload values, in declaration order
 	std::vector<jit_value_t> loadExceptionPayload(jit_value_t exnPayload,
 												  const WASM::FuncType& payload);
+	//! Backend helper: `emitThrowToTarget`.
+	//! \param exn the exception object that is thrown
+	//! \param values the payload values carried by the throw
+	//! \param target the control frame whose handler catches it
+	//! \param carryExn true when the exception object must also be left on the
+	//! model stack for a `catch_ref` handler
 	void emitThrowToTarget(jit_value_t exn, std::vector<jit_value_t> values,
 						   ControlBlock& target, bool carryExn);
 	//! Emits the static dispatch chain for `exn` over the enclosing try_tables;
@@ -457,6 +668,9 @@ private:
 	//! emitted paths leave the current block.
 	//! \param exn the jit_value_t operand
 	void emitExceptionPropagation(jit_value_t exn);
+	//! Backend helper: `emitPendingException`.
+	//! \return the zero value the leaking frame returns; the exception itself is
+	//! left in the pending slot
 	jit_value_t emitPendingException();
 	//! Used after every call: dispatches a pending exception locally or
 	//! propagates it, leaving the continuation reachable when none is pending.
@@ -472,9 +686,21 @@ private:
 	//! No unwind table and no `longjmp` is involved, so a helper may hold a
 	//! `std::string` across the trap point.
 	void emitPendingTrapCheck();
+	//! Backend helper: `emitReportTrap`.
+	//! \param kind the trap kind that is reported to the pending slot
+	//! \param detail the free-text detail stored with it, or null for the kind’s
+	//! spec wording
 	void emitReportTrap(WASM::TrapKind kind, const char* detail);
+	//! Backend helper: `requestTrapEpilogue`.
+	//! Marks that this function needs the shared error epilogue and records the
+	//! current trap site for it.
 	void requestTrapEpilogue();
+	//! Backend helper: `jit_label_undefined;`.
+	//! Label of the shared error epilogue, bound by emitTrapEpilogue() when any
+	//! trap path was emitted.
 	jit_label_t trapEpilogueLabel = jit_label_undefined;
+	//! Backend helper: `false;`.
+	//! True once a trap path branched to the error epilogue.
 	bool trapEpilogueUsed = false;
 	//! The calling thread's trap slot, obtained once per function in the entry
 	//! block (`wasm_trap_slot()`); every check loads `pending` through it.
@@ -490,14 +716,42 @@ private:
 	//! reinterpret, global.set). See docs/proposals/PROFILES.md PR-3.
 	const bool deterministicFloats;
 
+	//! Backend helper: `globalTypeForIndex`.
+	//! \param idx the global index, imports first
+	//! \return the declared type of that global
 	WASM::GlobalType globalTypeForIndex(WASM::GlobalIdx idx) const;
 
 	//! Deterministic-profile float canonicalisation (PROFILES.md PR-3): returns
 	//! `value` unchanged unless `deterministicFloats` is set and the value is a
 	//! NaN, in which case a canonical NaN of the same width is returned.
+	//! \param value the floating-point value produced by the instruction
+	//! \param isDouble true for an f64 value, false for an f32 value
+	//! \return `value` itself unless canonicalisation is active and it is a NaN,
+	//! in which case a canonical NaN of the same width
 	jit_value_t canonicalizeFloat(jit_value_t value, bool isDouble);
 
 public:
+	//! Create the lowering dispatcher for one function body.
+	//! Each argument is borrowed for the lifetime of the dispatcher: the
+	//! compilation context and function it emits into, the translator and
+	//! instance the body may reference, and the model stacks the caller owns.
+	//! \param context the LibJIT compilation context the body is built in
+	//! \param function the LibJIT function being filled with instructions
+	//! \param typeTranslator the Wasm to LibJIT type mapping of this module
+	//! \param instance the instance whose entities the body may touch
+	//! \param internals the backend-private tables that belong to `instance`
+	//! \param module the parsed module the body comes from; not owned
+	//! \param currentFunc the signature of the body being compiled
+	//! \param importedFuncCount the number of imported functions that precede
+	//! the local bodies, so that a global function index can be rebased
+	//! \param functionIndex the global index of the body being compiled
+	//! \param branchHints the branch hints of this body, already rebased onto
+	//! the opcode stream; empty when the module has none
+	//! \param locals the caller-owned local slots of the body
+	//! \param valueStack the caller-owned model operand stack
+	//! \param controlStack the caller-owned stack of open control frames
+	//! \param profileConfig the active profile, which selects the
+	//! deterministic-float lowering
 	OpcodeDispatcher(jit_context_t context, jit_function_t function,
 					 LibJitTypeTranslator& typeTranslator,
 					 WASM::ModuleInstance& instance,
@@ -525,14 +779,36 @@ public:
 	//! OpcodeDispatcher interface
 protected:
 	//! `internals.translatedTypes` is parallel to `module.typeIds` (filled in translateTypes).
+	//! \param idx the module-local type index
+	//! \return the LibJIT type `internals.translatedTypes[idx]` holds
 	jit_type_t jitTypeForTypeIdx(WASM::TypeIdx idx) const;
+	//! Backend helper: `jitTypeForValueType`.
+	//! \param vt the Wasm value type to translate
+	//! \return the LibJIT type that carries that value type
 	jit_type_t jitTypeForValueType(const WASM::ValueType& vt);
+	//! Backend helper: `continuationKindFor`.
+	//! \param vt the value type of a continuation’s payload slot
+	//! \return the one-byte kind tag stored alongside the value in a continuation
+	//! buffer
 	static std::uint8_t continuationKindFor(const WASM::ValueType& vt);
+	//! Backend helper: `allocateContinuationBuffer`.
+	//! \param count the number of values the continuation buffer must hold
+	//! \return a pointer value to a freshly allocated buffer of that many slots
 	jit_value_t allocateContinuationBuffer(std::size_t count);
+	//! Backend helper: `storeContinuationValues`.
+	//! \param values the values to store, in declaration order
+	//! \param types the storage type of each value, in the same order
+	//! \param buffer the continuation buffer they are written into
 	void storeContinuationValues(const std::vector<jit_value_t>& values,
 			const std::vector<WASM::StorageType>& types, jit_value_t buffer);
+	//! Backend helper: `loadContinuationValues`.
+	//! \param buffer the continuation buffer the values are read from
+	//! \param types the storage type of each value, in declaration order
 	void loadContinuationValues(jit_value_t buffer,
 			const std::vector<WASM::StorageType>& types);
+	//! Backend helper: `dropContinuationValues`.
+	//! \param buffer the continuation buffer whose references are released
+	//! \param types the storage type of each value, in declaration order
 	void dropContinuationValues(jit_value_t buffer,
 			const std::vector<WASM::StorageType>& types);
 
@@ -583,9 +859,14 @@ protected:
 	//! \param handlers the decoded `(on ...)` handler clauses of the instruction
 	void dispatchResume(WASM::TypeIdx arg, std::vector<WASM::ContHandlerClause>&& handlers) override;
 	//! Dispatch the `ResumeThrow` instruction. Lower this opcode into the backend IR.
+	//! \param arg1 the type index of the continuation being resumed
+	//! \param arg2 the tag index of the exception thrown into it
+	//! \param handlers the decoded `(on ...)` handler clauses of the instruction
 	void dispatchResumeThrow(WASM::TypeIdx arg1, WASM::TagIdx arg2,
 			std::vector<WASM::ContHandlerClause>&& handlers) override;
 	//! Dispatch the `ResumeThrowRef` instruction. Lower this opcode into the backend IR.
+	//! \param arg the type index of the continuation being resumed
+	//! \param handlers the decoded `(on ...)` handler clauses of the instruction
 	void dispatchResumeThrowRef(WASM::TypeIdx arg,
 			std::vector<WASM::ContHandlerClause>&& handlers) override;
 	//! Lowering hook: switch to another continuation.
@@ -593,6 +874,15 @@ protected:
 	//! \param arg1 the type index of the continuation to switch to
 	//! \param arg2 the tag index of the exception that is switched on
 	void dispatchSwitch(WASM::TypeIdx arg1, WASM::TagIdx arg2) override;
+	//! Resolve a resumed continuation's results: the values the callee left in
+	//! `resultBuffer` are pushed onto the model stack, and a tag that the
+	//! continuation suspended with is turned back into a throw.
+	//! \param func the signature of the resumed continuation
+	//! \param handlers the decoded `(on ...)` handler clauses of the `resume`
+	//! \param resultAddr the address of the result buffer the callee filled
+	//! \param resultBuffer the result tuple the values are copied from
+	//! \param tagBuffer the address that carries the suspending tag, or null
+	//! \param baseDepth the model stack depth the continuation was entered at
 	void emitContinuationResultHandling(const WASM::FuncType& func,
 			const std::vector<WASM::ContHandlerClause>& handlers,
 			jit_value_t resultAddr, jit_value_t resultBuffer,

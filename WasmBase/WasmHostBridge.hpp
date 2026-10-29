@@ -108,6 +108,9 @@ struct HostBridge {
 //! True when the bridge can retain and release host references. Both callbacks
 //! are required for a balanced contract; a one-sided bridge is treated as
 //! disabled rather than risking an unmatched release.
+//! \param bridge the bridge to inspect, which may be null
+//! \return true when `bridge` installs both the retain and the release hook,
+//! false otherwise
 inline bool hostReferenceHooksEnabled(const HostBridge* bridge)
 {
 	return bridge != nullptr

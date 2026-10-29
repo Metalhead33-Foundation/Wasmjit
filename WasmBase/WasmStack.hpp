@@ -65,17 +65,28 @@ inline constexpr std::size_t kDefaultStackReserveBytes = 512 * 1024;
 //! lowest address the thread may use (the guard page sits below it);
 //! `highestAddress` is the top. Returns false when the platform cannot report
 //! them.
+//! \param lowestAddress receives the lowest address the thread may use
+//! \param highestAddress receives the top of the thread’s stack
+//! \return true when the platform could report the bounds, false when it
+//! cannot and both outputs are left alone
 bool currentThreadStackBounds(std::uintptr_t& lowestAddress, std::uintptr_t& highestAddress);
 
 //! Installs `ctx.stackLimit` from the calling thread's stack bounds, keeping
 //! `reserve` bytes between the limit and the guard page. Returns false (and
 //! leaves `stackLimit` at zero) when the bounds are unknown, or when the stack is
 //! too small for the reserve to leave it any usable room.
+//! \param ctx the context whose `stackLimit` is installed
+//! \param reserve the number of bytes to keep free between the limit and the
+//! guard page
+//! \return true when a limit was installed, false when the bounds are unknown
+//! or the stack is too small to leave usable room (the limit stays zero)
 bool installStackLimit(VMContext& ctx, std::size_t reserve = kDefaultStackReserveBytes);
 
 //! C-callable entry point for generated code: probes this frame's address and
 //! raises `TrapKind::CallStackExhausted` when it is below `ctx->stackLimit`.
 //! Never returns when it traps.
+//! \param ctx the context carrying the stack limit this frame is checked
+//! against
 extern "C" void wasm_stack_check(VMContext* ctx);
 
 struct ExecutionState;
@@ -86,6 +97,8 @@ struct ExecutionState;
 //! one host thread can be called from another, and each thread's guard must
 //! describe *its own* stack. Cached per execution state and thread, so a normal
 //! call pays one comparison.
+//! \param state the execution state whose stack limit is installed for the
+//! calling host thread, when it is not installed already
 void ensureCurrentThreadStackLimit(ExecutionState& state) noexcept;
 
 } // namespace WASM

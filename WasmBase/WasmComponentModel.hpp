@@ -11,6 +11,8 @@
   is exported (docs/EMBEDDING_SURFACE.md ES-4).
 */
 
+//! Opens the exported-visibility block; every declaration below is exported
+//! (docs/EMBEDDING_SURFACE.md ES-4).
 WASMJIT_VISIBLE_BEGIN
 #include "WasmType.hpp"
 #include "WasmTypeStore.hpp"
@@ -27,18 +29,18 @@ namespace WASM {
 //! Component definitions are acyclic and order-sensitive, but the binary groups
 //! them by section. This list restores the order in which index spaces grow.
 enum class ComponentDefinitionKind : uint8_t {
-	CoreModule,
-	CoreInstance,
-	CoreType,
-	Component,
-	Instance,
-	Alias,
-	Type,
-	Canon,
-	Start,
-	Import,
-	Export,
-	Value
+	CoreModule, //!< An embedded core module
+	CoreInstance, //!< A `core:instance` definition
+	CoreType, //!< A `core:type` definition
+	Component, //!< A nested component definition
+	Instance, //!< A component-instance definition
+	Alias, //!< An `alias` definition
+	Type, //!< A component-level type definition
+	Canon, //!< A `canon` definition
+	Start, //!< A `start` definition
+	Import, //!< A top-level import declaration
+	Export, //!< A top-level export declaration
+	Value //!< A `value` definition
 };
 
 //! One entry of a component's ordered definition list: which kind of definition
@@ -52,14 +54,14 @@ struct ComponentDefinition {
 
 //! \brief Core sorts and indices
 enum class CoreSort : uint8_t {
-	Func = 0x00,
-	Table = 0x01,
-	Memory = 0x02,
-	Global = 0x03,
-	Tag = 0x04,
-	Type = 0x10,
-	Module = 0x11,
-	Instance = 0x12
+	Func = 0x00, //!< Core function space
+	Table = 0x01, //!< Core table space
+	Memory = 0x02, //!< Core memory space
+	Global = 0x03, //!< Core global space
+	Tag = 0x04, //!< Core tag space
+	Type = 0x10, //!< Core type space
+	Module = 0x11, //!< Core module space
+	Instance = 0x12 //!< Core instance space
 };
 
 //! A `core:sort`/index pair naming an entity in a core index space.
@@ -334,8 +336,8 @@ struct ComponentInstance {
 	//! Filled by Component::validate() after type substitution: the canonical
 	//! identity of the resulting instance type. Exactly one of typeId/schemeId is
 	//! set for a validated instance type.
-	mutable TypeId typeId{TypeId::kNone};
-	mutable SchemeId schemeId{SchemeId::kNone};
+	mutable TypeId typeId{TypeId::kNone}; //!< Closed instance type id
+	mutable SchemeId schemeId{SchemeId::kNone}; //!< Open instance scheme id
 };
 
 //! A Canonical ABI option tag carried by a `canon` definition.
@@ -430,53 +432,107 @@ struct ComponentTypeDef;
 struct ComponentDecl;
 struct InstanceDecl;
 
+//! One declaration inside a component type: an import, a core type, a type, an
+//! alias or an export, tagged by `kind` and carrying the matching payload.
 struct ComponentDecl {
+	//! Which form this declaration takes: Import, CoreType, Type, Alias or
+	//! Export, in that order — the enumerator order is the payload order.
 	enum class Kind : uint8_t { Import, CoreType, Type, Alias, Export };
-	Kind kind = Kind::Import;
+	Kind kind = Kind::Import; //!< Discriminant for the payload below
+	//! Payload selected by `kind`; `monostate` means no payload was decoded.
 	std::variant<std::monostate, std::unique_ptr<ImportDecl>,
 			std::unique_ptr<CoreTypeDef>, std::unique_ptr<ComponentTypeDef>,
 			std::unique_ptr<Alias>, std::unique_ptr<ExportDecl>> payload;
 
+	//! The `importdecl` payload.
+	//! \return The import declaration stored here; the variant must hold an
+	//! ImportDecl (kind == Import), otherwise `std::get` throws
+	//! std::bad_variant_access.
 	const ImportDecl& import() const { return *std::get<std::unique_ptr<ImportDecl>>(payload); }
+	//! The `core:type` payload.
+	//! \return The core type definition stored here; the variant must hold a
+	//! CoreTypeDef (kind == CoreType).
 	const CoreTypeDef& coreType() const { return *std::get<std::unique_ptr<CoreTypeDef>>(payload); }
+	//! The component-type payload.
+	//! \return The nested component type stored here; the variant must hold a
+	//! ComponentTypeDef (kind == Type).
 	const ComponentTypeDef& type() const { return *std::get<std::unique_ptr<ComponentTypeDef>>(payload); }
+	//! The alias payload.
+	//! \return The alias stored here; the variant must hold an Alias
+	//! (kind == Alias).
 	const Alias& alias() const { return *std::get<std::unique_ptr<Alias>>(payload); }
+	//! The `exportdecl` payload.
+	//! \return The export declaration stored here; the variant must hold an
+	//! ExportDecl (kind == Export).
 	const ExportDecl& exportDecl() const { return *std::get<std::unique_ptr<ExportDecl>>(payload); }
 };
 
+//! One declaration inside a component-instance type: a core type, a type, an
+//! alias or an export, tagged by `kind` and carrying the matching payload.
 struct InstanceDecl {
+	//! Which form this declaration takes: CoreType, Type, Alias or Export, in
+	//! that order — the enumerator order is the payload order.
 	enum class Kind : uint8_t { CoreType, Type, Alias, Export };
-	Kind kind = Kind::CoreType;
+	Kind kind = Kind::CoreType; //!< Discriminant for the payload below
+	//! Payload selected by `kind`; `monostate` means no payload was decoded.
 	std::variant<std::monostate, std::unique_ptr<CoreTypeDef>,
 			std::unique_ptr<ComponentTypeDef>, std::unique_ptr<Alias>,
 			std::unique_ptr<ExportDecl>> payload;
 
+	//! The `core:type` payload.
+	//! \return The core type definition stored here; the variant must hold a
+	//! CoreTypeDef (kind == CoreType).
 	const CoreTypeDef& coreType() const { return *std::get<std::unique_ptr<CoreTypeDef>>(payload); }
+	//! The component-type payload.
+	//! \return The nested component type stored here; the variant must hold a
+	//! ComponentTypeDef (kind == Type).
 	const ComponentTypeDef& type() const { return *std::get<std::unique_ptr<ComponentTypeDef>>(payload); }
+	//! The alias payload.
+	//! \return The alias stored here; the variant must hold an Alias
+	//! (kind == Alias).
 	const Alias& alias() const { return *std::get<std::unique_ptr<Alias>>(payload); }
+	//! The `exportdecl` payload.
+	//! \return The export declaration stored here; the variant must hold an
+	//! ExportDecl (kind == Export).
 	const ExportDecl& exportDecl() const { return *std::get<std::unique_ptr<ExportDecl>>(payload); }
 };
 
+//! A component-level type definition: a defined value, a function, a nested
+//! component or instance type, or a resource, tagged by `kind`.
 struct ComponentTypeDef {
+	//! Which form this component type takes: DefinedValue, Func, Component,
+	//! Instance or Resource, in that order.
 	enum class Kind : uint8_t {
+		//! DefinedValue, Func, Component, Instance or Resource, in that order.
 		DefinedValue, Func, Component, Instance, Resource
 	};
-	Kind kind = Kind::DefinedValue;
+	Kind kind = Kind::DefinedValue; //!< Discriminant for the payload below
 	//! Defined-value, function and resource payloads live in the shared store.
 	//! Component/instance declarations are the remaining inline payloads for
 	//! this pass; they keep their order because declaration order is scope.
-	TypeId id{TypeId::kNone};
+	TypeId id{TypeId::kNone}; //!< Interned type id (kNone until validated)
+	//! Payload selected by `kind`: a component's declarations, an instance's
+	//! declarations, or a resource type; `monostate` when nothing was decoded.
 	std::variant<std::monostate, std::vector<ComponentDecl>,
 			std::vector<InstanceDecl>, ResourceType> declarations;
 
+	//! The component-type payload.
+	//! \return The declaration list in declaration order; the variant must hold
+	//! a component declaration vector (kind == Component).
 	const std::vector<ComponentDecl>& componentDecls() const
 	{
 		return std::get<std::vector<ComponentDecl>>(declarations);
 	}
+	//! The instance-type payload.
+	//! \return The declaration list in declaration order; the variant must hold
+	//! an instance declaration vector (kind == Instance).
 	const std::vector<InstanceDecl>& instanceDecls() const
 	{
 		return std::get<std::vector<InstanceDecl>>(declarations);
 	}
+	//! The resource-type payload.
+	//! \return The resource's core representation and optional destructor
+	//! (kind == Resource).
 	const ResourceType& resource() const
 	{
 		return std::get<ResourceType>(declarations);
@@ -485,14 +541,20 @@ struct ComponentTypeDef {
 
 //! \brief Start and value definitions
 struct Start {
-	uint32_t funcIndex = 0;
+	uint32_t funcIndex = 0; //!< Component function index the start calls
+	//! Component-level value indices passed to that function, in argument
+	//! order.
 	std::vector<uint32_t> args;
+	//! How many results the start function yields; they are dropped after the
+	//! call because a start definition exports nothing.
 	uint32_t resultCount = 0;
 };
 
+//! One `value` section entry: the type it was declared with and its encoded
+//! payload.
 struct ValueDecl {
-	ComponentValueType type;
-	uint32_t encodedLength = 0;
+	ComponentValueType type; //!< Declared type of the value
+	uint32_t encodedLength = 0; //!< Payload length in bytes, as encoded
 	//! The value grammar depends on the type index space; the length-delimited
 	//! encoding is retained verbatim, matching how the core parser keeps raw
 	//! initialiser expressions and function bodies.

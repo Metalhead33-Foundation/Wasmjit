@@ -51,6 +51,12 @@ namespace WASM {
 //! compile-time limitation, a bad index that validation should have rejected) is
 //! *not* a trap and must not be reported as one.
 
+//! The *kind* of a trap: the spec’s trap taxonomy. The kind is what an
+//! embedder or a test compares — "did it trap for the right reason?" — while
+//! the free-text message is only for the log. `trapKindName` returns the
+//! spec’s wording for a kind, which is what the spec test suite asserts on, so
+//! an `assert_trap` expectation can be checked against the kind instead of
+//! against the log text.
 enum class TrapKind : uint8_t {
 	Unreachable,                 //!< "unreachable"
 	NullReference,               //!< "null reference"
@@ -79,6 +85,10 @@ enum class TrapKind : uint8_t {
 
 //! The spec's text for a trap kind ("unreachable", "null reference", …). For
 //! TrapKind::Internal it returns "internal error"; use the message for detail.
+//! \param kind the trap kind to name
+//! \return the spec’s wording for `kind` ("unreachable", "null reference", …);
+//! for TrapKind::Internal it returns "internal error", so use the message for
+//! the detail
 const char* trapKindName(TrapKind kind);
 
 //! \par The pending-trap slot
@@ -116,6 +126,8 @@ struct TrapSlot {
 };
 
 //! The calling thread's slot. Never null; the returned object has static storage.
+//! \return the calling thread’s pending-trap slot, which has static storage
+//! and is never null
 extern "C" TrapSlot* wasm_trap_slot() noexcept;
 
 //! Records `kind`/`detail` for the current call chain and returns; the caller
@@ -126,12 +138,22 @@ extern "C" TrapSlot* wasm_trap_slot() noexcept;
 //!
 //! `detail` is copied into the slot (truncated to `kTrapMessageCapacity`), so the
 //! caller keeps ownership of its own text.
+//! \param kind the trap kind that is recorded
+//! \param detail free-text detail copied into the slot, or null when the kind
+//! alone describes the failure (the caller keeps ownership of its text)
 void reportTrap(TrapKind kind, const char* detail = nullptr) noexcept;
 
 //! The compile-time-site form used by generated code: additionally records the
 //! module-local function index, the instruction byte offset in the body and the
 //! interned function name (or kNoTrapIndex/nullptr when unknown). The site is
 //! only stored when this report wins the first-trap race.
+//! \param kind the trap kind that is recorded
+//! \param detail free-text detail copied into the slot, or null
+//! \param functionIndex the module-local function index of the trapping body,
+//! or kNoTrapIndex when unknown
+//! \param instructionOffset the byte offset of the instruction in that body,
+//! or kNoTrapIndex when unknown
+//! \param functionName the interned name of the function, or null
 void reportTrapAt(TrapKind kind, const char* detail,
 		std::uint32_t functionIndex, std::uint32_t instructionOffset,
 		const char* functionName) noexcept;
@@ -142,28 +164,45 @@ void reportTrapAt(TrapKind kind, const char* detail,
 //! helper (docs/proposals/EXTENDED_NAME_SECTION.md ENS7). The first site wins: a
 //! callee that already annotated, or a dispatcher-emitted `reportTrapAt`, is left
 //! untouched.
+//! \param functionIndex the module-local function index to record
+//! \param instructionOffset the byte offset of the instruction to record
+//! \param functionName the interned function name to record, or null
 void annotateTrapSite(std::uint32_t functionIndex,
 		std::uint32_t instructionOffset, const char* functionName) noexcept;
 
 //! C-callable `reportTrap`: the kind travels as an int so the calling convention
 //! does not depend on how a scoped enum is passed.
+//! \param kind the TrapKind value as an int
+//! \param message the detail text, copied into the slot
 extern "C" void wasm_trap_report(int kind, const char* message);
 //! C-callable `reportTrapAt`: carries the compile-time trap site for DG-5.
+//! \param kind the TrapKind value as an int
+//! \param message the detail text, copied into the slot
+//! \param functionIndex the module-local function index of the trapping body
+//! \param instructionOffset the byte offset of the instruction in that body
+//! \param functionName the interned function name, or null
 extern "C" void wasm_trap_report_at(int kind, const char* message,
 		std::uint32_t functionIndex, std::uint32_t instructionOffset,
 		const char* functionName);
 //! C-callable `annotateTrapSite` for a pending trap that a helper reported.
+//! \param functionIndex the module-local function index to record
+//! \param instructionOffset the byte offset of the instruction to record
+//! \param functionName the interned function name to record, or null
 extern "C" void wasm_trap_annotate(std::uint32_t functionIndex,
 		std::uint32_t instructionOffset, const char* functionName) noexcept;
 
 //! True while a trap is pending on the calling thread. Generated code reads
 //! `TrapSlot::pending` directly; C++ code uses this.
+//! \return true while a trap is pending on the calling thread
 bool trapPending() noexcept;
 
 //! The pending trap's kind, or TrapKind::Internal when none is pending.
+//! \return the pending trap’s kind, or TrapKind::Internal when none is pending
 TrapKind pendingTrapKind() noexcept;
 //! The pending trap's message, or nullptr when none is pending. The returned
 //! pointer is the slot's own buffer; it stays valid until the slot is cleared.
+//! \return the pending trap’s message, or null when none is pending; the text
+//! lives in the slot’s own buffer and stays valid until the slot is cleared
 const char* pendingTrapMessage() noexcept;
 
 //! Clears the slot. The host boundary takes the trap before throwing it, so the
@@ -183,6 +222,8 @@ struct TrapInfo {
 
 //! Takes the pending trap and clears the slot. `trapped` is false (and kind/message
 //! are the defaults) when nothing was pending.
+//! \return a snapshot of the trap that was pending; every field keeps its
+//! default (and `trapped` is false) when nothing was pending
 TrapInfo takePendingTrap() noexcept;
 
 //! \brief The host-boundary exception
@@ -197,10 +238,17 @@ public:
 	static constexpr std::size_t kMessageCapacity = 240; //!< fixed buffer; source may outlive the throw
 
 	//! Copies `message` into the fixed buffer (truncated) and records `kind`.
+	//! \param kind the trap taxonomy value the exception reports
+	//! \param message the detail text, copied into the fixed buffer and
+	//! truncated to `kMessageCapacity`
 	Trap(TrapKind kind, const char* message) noexcept;
 
+	//! \return the trap taxonomy value this exception was built from
 	TrapKind kind() const noexcept { return kind_; } //!< the trap taxonomy value
+	//! \return the NUL-terminated detail text, stored in the exception itself
 	const char* message() const noexcept { return message_; } //!< NUL-terminated detail text
+	//! \return the same text as `message()`, for a catch handler that treats the
+	//! exception as a `std::exception`
 	const char* what() const noexcept override { return message_; } //!< std::exception spelling of message()
 
 private:
@@ -225,17 +273,25 @@ private:
 //! Depth of host→Wasm calls in the current execution state. Zero means the
 //! caller is outside the engine's generated frames, which is the only place
 //! `Trap` may be thrown.
+//! \return the host→Wasm call depth of the current execution state
 int wasmCallDepth() noexcept;
 
+//! RAII increment/decrement of `wasmCallDepth()`. Every place that calls into
+//! compiled code from C++ (the `callCallable` helpers, the start-function call,
+//! the test harness) holds one for the duration of the call.
 //! RAII increment/decrement of `wasmCallDepth()`. Every place that calls into
 //! compiled code from C++ (the `callCallable` helpers, the start-function call,
 //! the test harness) holds one for the duration of the call.
 class CallDepthScope
 {
 public:
+	//! Increments the host→Wasm call depth for the lifetime of the scope.
 	CallDepthScope() noexcept;
+	//! Decrements the host→Wasm call depth again.
 	~CallDepthScope();
+	//! Deleted: a depth scope is tied to one call, so it cannot be copied.
 	CallDepthScope(const CallDepthScope&) = delete;
+	//! Deleted: a depth scope is tied to one call, so it cannot be copied.
 	CallDepthScope& operator=(const CallDepthScope&) = delete;
 };
 
@@ -247,17 +303,25 @@ public:
 //! trampoline holds a `NativeImportScope` while the body runs. That is what lets
 //! `WASM::trap()` (and `throw`) be used inside an import: the depth counter tells
 //! it a C++ catch frame stands between the import and the generated caller.
+//! \return the number of native-import bodies that are currently running
 int nativeImportDepth() noexcept;
 
 //! RAII increment/decrement of `nativeImportDepth()`. Held by the native-import
 //! trampoline while the host body runs, so `WASM::trap()` may throw into the
 //! trampoline's catch rather than through a generated frame.
+//! RAII increment/decrement of `nativeImportDepth()`. Held by the
+//! native-import trampoline while the host body runs, so `WASM::trap()` may
+//! throw into the trampoline’s catch rather than through a generated frame.
 class NativeImportScope
 {
 public:
+	//! Increments the native-import depth for the lifetime of the scope.
 	NativeImportScope() noexcept;
+	//! Decrements the native-import depth again.
 	~NativeImportScope();
+	//! Deleted: an import scope is tied to one host call, so it cannot be copied.
 	NativeImportScope(const NativeImportScope&) = delete;
+	//! Deleted: an import scope is tied to one host call, so it cannot be copied.
 	NativeImportScope& operator=(const NativeImportScope&) = delete;
 };
 
@@ -266,6 +330,9 @@ public:
 //! for example). It must *not* be called while generated code is on the stack:
 //! the exception would have to unwind a generated frame. Helpers and native
 //! imports use `reportTrap()` and return instead.
+//! \param kind the trap kind the thrown `Trap` reports
+//! \param detail free-text detail for the message, or null for the kind’s own
+//! wording
 [[noreturn]] void trap(TrapKind kind, const char* detail = nullptr);
 
 //! \brief Deferred cleanup (the optional hybrid)
@@ -285,23 +352,34 @@ public:
 //! Wasm; it may assume the frames that registered it are still alive.
 struct TrapDeferToken {
 	std::uint32_t index = 0xFFFFFFFFu; //!< slot index, or all-ones when invalid
+	//! \return true when the token still names a live deferred record
 	bool valid() const noexcept { return index != 0xFFFFFFFFu; } //!< true when a live record
 };
 
 //! Registers `fn(arg)`. Returns an invalid token when the fixed-capacity stack is
 //! full (the caller may then fall back to RAII or to its own cleanup).
+//! \param fn the cleanup thunk, which must not throw, trap or enter Wasm
+//! \param arg the pointer handed to `fn` when the record is run
+//! \return a token for `dismissDeferred`, or an invalid token when the
+//! fixed-capacity stack is full
 TrapDeferToken defer(void (*fn)(void*) noexcept, void* arg) noexcept;
 
 //! Removes a record. Records are LIFO: dismissing a record that is not the most
 //! recent one is a contract violation (asserted in debug builds) and returns
 //! false; a no-op after a trap has drained the stack.
+//! \param token the record to remove, which must be the most recent one
+//! \return true when the record was removed, false for an invalid or
+//! out-of-order token (and after a trap has already drained the stack)
 bool dismissDeferred(TrapDeferToken token) noexcept;
 
 //! Number of live records (diagnostics/tests).
+//! \return the number of deferred records that are still live
 std::uint32_t deferredCleanupCount() noexcept;
 
 //! Runs every live record in LIFO order and clears the stack. Called by
 //! `reportTrap`; exposed for tests.
+//! Runs every live record in LIFO order and clears the stack; `reportTrap`
+//! calls it before any frame returns.
 void runDeferredCleanup() noexcept;
 
 } // namespace WASM

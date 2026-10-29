@@ -31,19 +31,32 @@ namespace WASM {
 class NullInstantiator final : public ModuleInstantiator
 {
 public:
+	//! Creates the baseline instantiator; it carries no state of its own.
 	NullInstantiator() = default;
 
 protected:
 	//! Records the types only; nothing is lowered and no handle is created.
+	//! \param instance the instance whose type table is filled
+	//! \param module the module being instantiated
+	//! \param internals the backend-private tables that go with `instance`
 	void translateTypes(ModuleInstance& instance, const Module& module,
 			ModuleInstanceInternals& internals) override;
 	//! Gives every declared function a `Callable` with a null `fnPtr`.
+	//! \param instance the instance whose functions are declared
+	//! \param module the module being instantiated
+	//! \param internals the backend-private tables that go with `instance`
 	void declareFunctions(ModuleInstance& instance, const Module& module,
 			ModuleInstanceInternals& internals) override;
 	//! No code is generated: this is the hook that would compile the bodies.
+	//! \param instance the instance whose bodies would be compiled
+	//! \param module the module being instantiated
+	//! \param internals the backend-private tables that go with `instance`
 	void compileFunctions(ModuleInstance& instance, const Module& module,
 			ModuleInstanceInternals& internals) override;
 	//! Refused unless the index names an import with a native body.
+	//! \param instance the instance whose start function would run
+	//! \param funcIdx the function index the start section names
+	//! \param internals the backend-private tables that go with `instance`
 	void callStartFunction(ModuleInstance& instance, uint32_t funcIdx,
 			ModuleInstanceInternals& internals) override;
 };

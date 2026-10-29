@@ -34,6 +34,8 @@ namespace WASM {
 //! `keepAlive` is opaque state the instantiator borrows (for example a codegen
 //! context). The runtime holds it for as long as the backend lives.
 
+//! One created backend: the compilation seam itself plus the opaque state it
+//! borrows. The runtime holds both for as long as the backend lives.
 struct BackendInstance {
 	//! The compilation seam itself: what the core instantiates modules with.
 	std::shared_ptr<ModuleInstantiator> instantiator;
@@ -46,25 +48,43 @@ using BackendFactory = std::function<BackendInstance()>;
 
 //! Registers `factory` under `name`. Registering the same name twice keeps the
 //! first registration: a name is an identity, not a preference.
+//! \param name the name the backend is selected by
+//! \param factory the call that creates one instance of it
 void registerBackend(std::string name, BackendFactory factory);
 
 //! True when a backend is registered or loadable under `name`.
+//! \param name the backend name to look for
+//! \return true when a backend is registered or loadable under that name
 bool hasBackend(std::string_view name);
 //! Sorted; includes the built-in "null" baseline and every linked backend.
+//! \return the registered backend names, sorted; includes the built-in "null"
+//! baseline and every linked backend
 std::vector<std::string> backendNames();
 //! The compiled-in backend named `name`. Throws naming the available backends.
+//! \param name the backend to create an instance of
+//! \return the created instance; throws, naming the available backends, when
+//! no compiled-in backend carries that name
 BackendInstance createBackendInstance(std::string_view name);
 
 //! The file name the loader looks for: `libwasmjit-backend-<name>.so`.
+//! \param name the backend name
+//! \return the file name the loader looks for,
+//! `libwasmjit-backend-<name>.so`
 std::string backendPluginFileName(std::string_view name);
 
 //! \par Build-kind agreement (docs/BACKEND_PLUGIN_ABI.md §7.7)
 //! A plugin reports `wasmjit_backend_desc::build_flags`; the loader compares the
 //! bits in `WASMJIT_BUILD_COMPARED_MASK` (debug vs release, and the sanitizer
 //! kind) and refuses a mismatch. Reserved bits are ignored.
+//! \param pluginFlags the build flags the plugin reports in its descriptor
+//! \param hostFlags the build flags of this host
+//! \return true when the compared bits (debug vs release, sanitizer kind)
+//! agree; reserved bits are ignored
 bool backendBuildFlagsCompatible(std::uint32_t pluginFlags,
 								 std::uint32_t hostFlags) noexcept;
 //! Human-readable form for a diagnostic: e.g. "release, asan".
+//! \param flags the build flags to describe
+//! \return a human-readable form for a diagnostic, e.g. "release, asan"
 std::string backendBuildFlagsText(std::uint32_t flags);
 
 //! Loads an explicit file (BP-3). Throws with the reason: missing file, missing
@@ -72,9 +92,16 @@ std::string backendBuildFlagsText(std::uint32_t flags);
 //! Every refusal also emits a `WASM.BACKEND.PLUGIN` diagnostic, and a successful
 //! load emits a note, so an embedder that only watches its sink still sees the
 //! lifecycle (docs/BACKEND_PLUGIN_ABI.md §7.9).
+//! \param path the shared object to load
+//! \return the created instance; throws with the reason on a missing file, a
+//! missing `wasmjit_backend_query`, an ABI or build-kind mismatch, or a
+//! failing `create`
 BackendInstance loadBackendPluginFile(const std::string& path);
 //! Searches `WASMJIT_BACKEND_PATH` (colon-separated), the working directory and
 //! the executable's directory for `backendPluginFileName(name)`.
+//! \param name the backend name to search for
+//! \return the created instance; throws when the file cannot be found or
+//! refuses to load
 BackendInstance loadBackendPlugin(std::string_view name);
 
 } // namespace WASM

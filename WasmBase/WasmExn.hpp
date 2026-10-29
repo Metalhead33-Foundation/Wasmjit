@@ -49,13 +49,22 @@ extern "C" {
 //! pointer to the payload area (16-byte aligned). The store is the executing
 //! instance's, reached through `ctx` (docs/EMBEDDING_SURFACE.md §4.3 option B).
 //! Traps `OutOfMemory` when that store's allocation budget refuses it.
+//! \param ctx the `VMContext` of the executing instance, which names the store
+//! \param tagId the process-wide id of the thrown tag
+//! \param payloadBytes the size of the payload area to allocate
+//! \return a pointer to the payload area, or null after reporting
+//! `OutOfMemory`
 void* wasm_exn_create(WASM::VMContext* ctx, int32_t tagId, uint32_t payloadBytes);
 
 //! The thrown tag's process-wide id (for `throw_ref`'s dynamic dispatch).
+//! \param payload the exception object whose tag is read
+//! \return the process-wide id of the tag the exception was thrown with
 int32_t wasm_exn_tag_id(const void* payload);
 
 //! The pending-exception slot: stores the exception a `throw`/`throw_ref`
 //! reported (see the header's ABI block for the object layout).
+//! \param payload the exception object to leave pending, or null to clear the
+//! slot
 void  wasm_exn_set_pending(void* payload);
 //! The exception currently pending, or nullptr when there is none. Cheap:
 //! generated code reads the slot directly; helpers use this accessor.
@@ -71,6 +80,11 @@ namespace WASM {
 
 //! The store-explicit form of `wasm_exn_create`: an embedder (or a test) that is
 //! not inside generated code names the store directly.
+//! \param store the store the exception object is allocated from
+//! \param tagId the process-wide id of the thrown tag
+//! \param payloadBytes the size of the payload area to allocate
+//! \return a pointer to the payload area, or null when the allocation budget
+//! refuses it
 void* wasm_exn_create_in(Store& store, int32_t tagId, uint32_t payloadBytes);
 
 } // namespace WASM
