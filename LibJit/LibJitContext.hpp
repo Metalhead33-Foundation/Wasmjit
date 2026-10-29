@@ -38,8 +38,8 @@ public:
 	 * have been released before the Context is destroyed.
 	 */
 /**
- * \\brief Performs the Context operation.
- * \\return The value or status produced by this operation.
+ * \brief Performs the Context operation.
+ * \return The value or status produced by this operation.
  */
 	~Context();
 	/*!
@@ -47,8 +47,8 @@ public:
 	 * \return The non-owning backend context handle.
 	 */
 /**
- * \\brief Performs the rawContext operation.
- * \\return The value or status produced by this operation.
+ * \brief Performs the rawContext operation.
+ * \return The value or status produced by this operation.
  */
 	jit_context_t rawContext() const;
 	/*!
@@ -56,8 +56,8 @@ public:
 	 * \return A reference to the translator owned by this Context.
 	 */
 /**
- * \\brief Performs the getTranslator operation.
- * \\return The value or status produced by this operation.
+ * \brief Performs the getTranslator operation.
+ * \return The value or status produced by this operation.
  */
 	LibJitTypeTranslator& getTranslator();
 	/*!
@@ -65,8 +65,8 @@ public:
 	 * \return A const reference to the translator owned by this Context.
 	 */
 /**
- * \\brief Performs the getTranslator operation.
- * \\return The value or status produced by this operation.
+ * \brief Performs the getTranslator operation.
+ * \return The value or status produced by this operation.
  */
 	const LibJitTypeTranslator& getTranslator() const;
 };
