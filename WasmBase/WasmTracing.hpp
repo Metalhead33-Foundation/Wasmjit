@@ -23,10 +23,12 @@ namespace WASM {
 
 //! The signature of the callback a traced instruction invokes. The engine never
 //! interprets the immediate; the embedder decides what it means.
+/** \\brief Callback invoked for a compiled trace instruction. \\param immediate Opaque immediate encoded by the guest instruction. */
 using TraceCallback = void (*)(uint32_t immediate);
 
 //! The process-wide callback slot `setTraceCallback` writes and a traced
 //! instruction reads. A function-local static, so it is initialised on first use.
+/** \\brief Returns the process-wide callback storage slot. \\return Mutable reference to the callback pointer. */
 inline TraceCallback& traceCallbackSlot()
 {
 	static TraceCallback callback = nullptr;
@@ -35,6 +37,7 @@ inline TraceCallback& traceCallbackSlot()
 
 //! Installs the trace callback (null disables tracing). Not thread-safe against a
 //! concurrent instruction dispatch: install it before the first call.
+/** \\brief Installs or disables instruction tracing. \\param callback Callback to invoke, or nullptr to disable tracing. \\note Configure before instruction dispatch; concurrent updates are not synchronized. */
 inline void setTraceCallback(TraceCallback callback)
 {
 	traceCallbackSlot() = callback;
@@ -42,6 +45,7 @@ inline void setTraceCallback(TraceCallback callback)
 
 //! Called by a compiled `instr.trace (imm)` with its immediate. A no-op when no
 //! callback is installed, which is why tracing cannot change a result.
+/** \\brief Dispatches a trace immediate to the installed callback, if any. \\param immediate Opaque guest instruction immediate. */
 inline void traceImmediate(uint32_t immediate)
 {
 	if (TraceCallback callback = traceCallbackSlot())
