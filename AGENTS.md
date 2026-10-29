@@ -50,3 +50,10 @@ the one-line check to run.
   gap / deviation / plan / test-survey table schemas, and the ID + status-marker conventions) and, at the
   meta level, what it does *not* demand and where the shape may deliberately be relaxed. Keep the note you
   write consistent with it, and keep `PROPOSALS.md`'s §4/§8 survey current when a note is added.
+
+- **[`docs/DOCUMENTATION.md`](docs/DOCUMENTATION.md) — read before adding or editing a `.h`/`.hpp` file.**
+  Every comment in a header is a Doxygen comment in Qt style (`//!`, `//!<`, `/*!`, `\file`, `\brief`,
+  `\par`); the only exceptions are annotations Doxygen never renders (`#endif // GUARD`, `} // namespace`,
+  a name suppressed inside a declaration). `doxygen Doxyfile` must stay warning-free (output goes to
+  `build/doxygen/`) and `./Test/WasmJit '[headerdoc]'` enforces the shape and the per-file block. `extern/`
+  is a submodule and is never reformatted.

@@ -1,0 +1,77 @@
+# Doxygen configuration for WasmJit.
+#
+# The headers are the API and the design reference: every comment in them is
+# written in Qt's Doxygen style (`//!`, `/*!`, `\brief`, `\param`, …), so this
+# file is the one place that renders them. See docs/DOCUMENTATION.md for the
+# rule and for the check that enforces it.
+#
+# Generate into the shadow build tree, never into the source tree:
+#
+#     doxygen Doxyfile
+#     $BROWSER build/doxygen/html/index.html
+
+PROJECT_NAME           = "WasmJit"
+PROJECT_BRIEF          = "A WebAssembly engine with a backend-neutral core"
+OUTPUT_DIRECTORY       = build/doxygen
+OUTPUT_LANGUAGE        = English
+CREATE_SUBDIRS         = NO
+MARKDOWN_SUPPORT       = YES
+AUTOLINK_SUPPORT       = YES
+BUILTIN_STL_SUPPORT    = YES
+CPP_CLI_SUPPORT        = NO
+IDL_PROPERTY_SUPPORT   = YES
+
+# Only the project's own headers. `extern/` is a submodule, and every generated
+# or third-party file is out of scope.
+INPUT                  = WasmBase LibJit WasmStub Test
+FILE_PATTERNS          = *.h *.hpp
+RECURSIVE              = YES
+EXCLUDE                = extern build
+EXCLUDE_PATTERNS       = */build/* */node_modules/* *.inc
+INPUT_ENCODING         = UTF-8
+
+# A header is a documentation artifact here: show every declaration, including
+# the internal ones, so the reference renders the header as it reads.
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = YES
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = YES
+EXTRACT_ANON_NSPACES   = YES
+HIDE_UNDOC_MEMBERS     = NO
+HIDE_UNDOC_CLASSES     = NO
+
+# Qt style: `//!` and `/*!` open a doc block, and its first sentence is the
+# brief. This is what the headers are written in.
+QT_AUTOBRIEF           = YES
+JAVADOC_AUTOBRIEF      = NO
+MULTILINE_CPP_IS_BRIEF = NO
+
+SORT_MEMBER_DOCS       = NO
+SORT_BRIEF_DOCS        = NO
+SORT_BY_SCOPE_NAME     = NO
+TAB_SIZE               = 8
+ALIASES                =
+
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+GENERATE_LATEX         = NO
+GENERATE_MAN           = NO
+GENERATE_RTF           = NO
+GENERATE_XML           = NO
+GENERATE_DOCBOOK       = NO
+GENERATE_AUTOGEN_DEF   = NO
+GENERATE_PERLMOD       = NO
+GENERATE_TREEVIEW      = YES
+DISABLE_INDEX          = NO
+
+# Warnings that matter: a malformed command or a broken block. A public
+# declaration without a doc comment is not a warning here — the tree predates
+# the policy and docs/DOCUMENTATION.md records how that is paid down.
+QUIET                  = YES
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = NO
+WARN_IF_INCOMPLETE_DOC = YES
+WARN_AS_ERROR          = NO
+WARN_FORMAT            = "$file:$line: $text"

@@ -3,8 +3,14 @@
 
 #include "WasmApi.hpp"
 
-// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
-// exported surface (the public headers are the declared list).
+/*!
+  \file WasmComponentAbi.hpp
+  \brief The Component Model Canonical ABI: lifting and lowering values.
+
+  This header is part of the exported surface: every declaration in it
+  is exported (docs/EMBEDDING_SURFACE.md ES-4).
+*/
+
 WASMJIT_VISIBLE_BEGIN
 #include "WasmTypeStore.hpp"
 #include <cstddef>
@@ -13,19 +19,19 @@ WASMJIT_VISIBLE_BEGIN
 
 namespace WASM {
 
-// ── Per-instance Canonical ABI ownership (TYPE_MODEL TM-11/TM-15) ──────────
-//
-// The Store derives and caches CanonicalAbiSignature metadata once per
-// (TypeId, CanonicalAbiOptions). That cache is process-wide and inert. A
-// component instance also needs an *instance-owned* view: the signatures its
-// lifts/lowers actually use, with an identity that belongs to this instance
-// rather than to the Store. Keeping the two apart is what lets two instances
-// of the same definition with different resource substitutions stay distinct
-// while never mutating type identity.
-//
-// The cache is index-keyed by (TypeId, options) and grows only on a miss, so a
-// pointer to an entry is stable for the lifetime of this object. This class is
-// backend-agnostic: it names only Store metadata (docs/LAYERING.md).
+//! \brief Per-instance Canonical ABI ownership (TYPE_MODEL TM-11/TM-15)
+//!
+//! The Store derives and caches CanonicalAbiSignature metadata once per
+//! (TypeId, CanonicalAbiOptions). That cache is process-wide and inert. A
+//! component instance also needs an *instance-owned* view: the signatures its
+//! lifts/lowers actually use, with an identity that belongs to this instance
+//! rather than to the Store. Keeping the two apart is what lets two instances
+//! of the same definition with different resource substitutions stay distinct
+//! while never mutating type identity.
+//!
+//! The cache is index-keyed by (TypeId, options) and grows only on a miss, so a
+//! pointer to an entry is stable for the lifetime of this object. This class is
+//! backend-agnostic: it names only Store metadata (docs/LAYERING.md).
 
 class ComponentAbiInstance {
 public:
@@ -35,9 +41,9 @@ public:
 	uint64_t instanceId() const { return instanceId_; }
 	void setInstanceId(uint64_t id) { instanceId_ = id; }
 
-	// Resolve and take ownership of one instance's signature. Returns nullptr
-	// when the type is not a function or uses a shape this ABI slice cannot
-	// flatten. The returned pointer is stable until this object is destroyed.
+	//! Resolve and take ownership of one instance's signature. Returns nullptr
+	//! when the type is not a function or uses a shape this ABI slice cannot
+	//! flatten. The returned pointer is stable until this object is destroyed.
 	const CanonicalAbiSignature* resolve(TypeId type,
 			const CanonicalAbiOptions& options) const
 	{
@@ -62,8 +68,8 @@ public:
 	std::size_t hits() const { return hits_; }
 	std::size_t misses() const { return misses_; }
 
-	// Instance-owned signatures are not type identity: two instances with the
-	// same TypeId/options both resolve, but their entries are distinct objects.
+	//! Instance-owned signatures are not type identity: two instances with the
+	//! same TypeId/options both resolve, but their entries are distinct objects.
 	const CanonicalAbiSignature* find(TypeId type,
 			const CanonicalAbiOptions& options) const
 	{

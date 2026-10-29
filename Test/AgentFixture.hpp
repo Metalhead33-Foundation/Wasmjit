@@ -6,41 +6,44 @@
 #include <cstdint>
 #include <span>
 
-// A shared-everything threads fixture for the multi-agent tests
-// (docs/proposals/THREADS.md TH-5, docs/proposals/ACQUIRE_RELEASE_ATOMICS.md
-// ARA-3, docs/proposals/SHARED_EVERYTHING_THREADS.md SET-3/SET-6).
-//
-// It is authored as bytes because `wasm-tools 1.252` cannot print the
-// acquire-release ordering immediate or `pause`. The equivalent text is:
-//
-//   (module
-//     (memory 1 1 shared)
-//     (global $c (shared (mut i32)) (i32.const 0))
-//     (func (export "produce") (param i32)       ;; [4]=arg; [0]=1 (release)
-//       (i32.store (i32.const 4) (local.get 0))
-//       (i32.atomic.store acqrel (i32.const 0) (i32.const 1)))
-//     (func (export "consume") (result i32)      ;; spin on [0] (acquire), then [4]
-//       (block $done (loop $spin
-//         (br_if $done (i32.atomic.load acqrel (i32.const 0)))
-//         (pause) (br $spin)))
-//       (i32.load (i32.const 4)))
-//     (func (export "wait_flag") (result i32)
-//       (memory.atomic.wait32 (i32.const 8) (i32.const 0) (i64.const -1)))
-//     (func (export "notify_flag") (result i32)
-//       (i32.atomic.store acqrel (i32.const 8) (i32.const 1))
-//       (memory.atomic.notify (i32.const 8) (i32.const 1)))
-//     (func (export "reset")                     ;; [0]=0, [8]=0
-//       ...)
-//     (func (export "boom") (unreachable))
-//     (func (export "answer") (result i32) (i32.const 42))
-//     (func (export "bump") (result i32)         ;; shared global RMW
-//       (global.atomic.rmw.add seqcst (i32.const 1)))
-//     (func (export "counter") (result i32) (global.atomic.get seqcst))
-//     (func (export "mark_ready")                ;; [12]=1 (seqcst)
-//       (i32.atomic.store seqcst (i32.const 12) (i32.const 1)))
-//     (func (export "ready") (result i32) (i32.atomic.load seqcst (i32.const 12)))
-//     (func (export "notify_only") (result i32)    ;; no value change
-//       (memory.atomic.notify (i32.const 8) (i32.const 1))))
+/*!
+  \file AgentFixture.hpp
+  \brief A shared-everything threads fixture for the multi-agent tests.
+
+  It is authored as bytes because `wasm-tools 1.252` cannot print the
+  acquire-release ordering immediate or `pause`. The equivalent text is:
+
+    (module
+      (memory 1 1 shared)
+      (global $c (shared (mut i32)) (i32.const 0))
+      (func (export "produce") (param i32)       ;; [4]=arg; [0]=1 (release)
+        (i32.store (i32.const 4) (local.get 0))
+        (i32.atomic.store acqrel (i32.const 0) (i32.const 1)))
+      (func (export "consume") (result i32)      ;; spin on [0] (acquire), then [4]
+        (block $done (loop $spin
+          (br_if $done (i32.atomic.load acqrel (i32.const 0)))
+          (pause) (br $spin)))
+        (i32.load (i32.const 4)))
+      (func (export "wait_flag") (result i32)
+        (memory.atomic.wait32 (i32.const 8) (i32.const 0) (i64.const -1)))
+      (func (export "notify_flag") (result i32)
+        (i32.atomic.store acqrel (i32.const 8) (i32.const 1))
+        (memory.atomic.notify (i32.const 8) (i32.const 1)))
+      (func (export "reset")                     ;; [0]=0, [8]=0
+        ...)
+      (func (export "boom") (unreachable))
+      (func (export "answer") (result i32) (i32.const 42))
+      (func (export "bump") (result i32)         ;; shared global RMW
+        (global.atomic.rmw.add seqcst (i32.const 1)))
+      (func (export "counter") (result i32) (global.atomic.get seqcst))
+      (func (export "mark_ready")                ;; [12]=1 (seqcst)
+        (i32.atomic.store seqcst (i32.const 12) (i32.const 1)))
+      (func (export "ready") (result i32) (i32.atomic.load seqcst (i32.const 12)))
+      (func (export "notify_only") (result i32)    ;; no value change
+        (memory.atomic.notify (i32.const 8) (i32.const 1))))
+
+  This header is internal: it is not part of the embedding surface.
+*/
 
 namespace AgentFixture {
 

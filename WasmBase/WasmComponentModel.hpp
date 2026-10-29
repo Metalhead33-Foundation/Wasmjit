@@ -3,8 +3,14 @@
 
 #include "WasmApi.hpp"
 
-// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
-// exported surface (the public headers are the declared list).
+/*!
+  \file WasmComponentModel.hpp
+  \brief The Component Model AST: sections, types and the component graph.
+
+  This header is part of the exported surface: every declaration in it
+  is exported (docs/EMBEDDING_SURFACE.md ES-4).
+*/
+
 WASMJIT_VISIBLE_BEGIN
 #include "WasmType.hpp"
 #include "WasmTypeStore.hpp"
@@ -17,9 +23,9 @@ WASMJIT_VISIBLE_BEGIN
 
 namespace WASM {
 
-// ── Ordered source definitions ─────────────────────────────────────────────
-// Component definitions are acyclic and order-sensitive, but the binary groups
-// them by section. This list restores the order in which index spaces grow.
+//! \brief Ordered source definitions
+//! Component definitions are acyclic and order-sensitive, but the binary groups
+//! them by section. This list restores the order in which index spaces grow.
 enum class ComponentDefinitionKind : uint8_t {
 	CoreModule,
 	CoreInstance,
@@ -40,7 +46,7 @@ struct ComponentDefinition {
 	uint32_t index = 0;
 };
 
-// ── Core sorts and indices ──────────────────────────────────────────────────
+//! \brief Core sorts and indices
 enum class CoreSort : uint8_t {
 	Func = 0x00,
 	Table = 0x01,
@@ -68,16 +74,16 @@ enum class ComponentSort : uint8_t {
 
 struct SortIdx {
 	ComponentSort sort = ComponentSort::Core;
-	// Set only when sort == Core.
+	//! Set only when sort == Core.
 	std::optional<CoreSortIdx> core;
 	uint32_t index = 0;
 };
 
-// ── Core types (the `core:type` section and module-type declarations) ──────
+//! \brief Core types (the `core:type` section and module-type declarations)
 struct CoreExternType {
 	enum class Kind : uint8_t { Function, Table, Memory, Global, Tag };
 	Kind kind = Kind::Function;
-	uint32_t typeIndex = 0; // function or tag type index
+	uint32_t typeIndex = 0; //!< function or tag type index
 	TableType table;
 	MemoryType memory;
 	GlobalType global;
@@ -101,11 +107,11 @@ struct CoreOuterAlias {
 };
 
 struct CoreRecType {
-	// True when the producing `core:rectype` was a `0x4E` recursive group.
-	// A one-member rec group is otherwise indistinguishable from a bare subtype.
+	//! True when the producing `core:rectype` was a `0x4E` recursive group.
+	//! A one-member rec group is otherwise indistinguishable from a bare subtype.
 	bool isRecGroup = false;
-	// Parser scratch. Validation interns the group and clears this vector, so a
-	// validated component retains only `typeIds` (TYPE_MODEL TM-6 residue).
+	//! Parser scratch. Validation interns the group and clears this vector, so a
+	//! validated component retains only `typeIds` (TYPE_MODEL TM-6 residue).
 	mutable std::vector<Subtype> subtypes;
 	mutable std::vector<TypeId> typeIds;
 };
@@ -126,7 +132,7 @@ struct CoreTypeDef {
 	std::vector<CoreModuleDecl> moduleDecls;
 };
 
-// ── Names and attributes ────────────────────────────────────────────────────
+//! \brief Names and attributes
 struct Attribute {
 	enum class Kind : uint8_t { Implements, VersionSuffix, ExternalId };
 	Kind kind = Kind::Implements;
@@ -134,13 +140,13 @@ struct Attribute {
 };
 
 struct NameAttributes {
-	uint8_t tag = 0; // 0x00, 0x01 (plain/interface) or 0x02 (+ attributes)
+	uint8_t tag = 0; //!< 0x00, 0x01 (plain/interface) or 0x02 (+ attributes)
 	std::string name;
 	std::vector<Attribute> attributes;
 };
 
 struct ResourceType {
-	ValueType rep; // core valtype
+	ValueType rep; //!< core valtype
 	std::optional<uint32_t> destructor;
 };
 
@@ -162,7 +168,7 @@ struct ExternType {
 		CoreModule, Func, Value, Type, Component, Instance
 	};
 	Kind kind = Kind::Func;
-	uint32_t typeIndex = 0; // core-module/func/component/instance
+	uint32_t typeIndex = 0; //!< core-module/func/component/instance
 	ValueBound value;
 	TypeBound typeBound;
 };
@@ -177,8 +183,8 @@ struct ExportDecl {
 	ExternType type;
 };
 
-// A top-level `export` section entry: unlike a type-level `exportdecl`, it
-// names a preceding definition by sortidx and carries an optional ascribed type.
+//! A top-level `export` section entry: unlike a type-level `exportdecl`, it
+//! names a preceding definition by sortidx and carries an optional ascribed type.
 struct ComponentExport {
 	NameAttributes name;
 	SortIdx sortIndex;
@@ -229,9 +235,9 @@ struct ComponentInstance {
 	uint32_t componentIndex = 0;
 	std::vector<InstantiateArg> args;
 	std::vector<InlineExport> exports;
-	// Filled by Component::validate() after type substitution: the canonical
-	// identity of the resulting instance type. Exactly one of typeId/schemeId is
-	// set for a validated instance type.
+	//! Filled by Component::validate() after type substitution: the canonical
+	//! identity of the resulting instance type. Exactly one of typeId/schemeId is
+	//! set for a validated instance type.
 	mutable TypeId typeId{TypeId::kNone};
 	mutable SchemeId schemeId{SchemeId::kNone};
 };
@@ -242,7 +248,7 @@ enum class CanonOptKind : uint8_t {
 
 struct CanonOpt {
 	CanonOptKind kind = CanonOptKind::Utf8;
-	uint32_t index = 0; // memory/realloc/post-return/callback
+	uint32_t index = 0; //!< memory/realloc/post-return/callback
 };
 
 struct Canon {
@@ -270,14 +276,14 @@ struct Canon {
 	uint32_t tableIndex = 0;
 	uint32_t memoryIndex = 0;
 	uint32_t contextIndex = 0;
-	ValueType contextType; // context.get/set's core valtype
+	ValueType contextType; //!< context.get/set's core valtype
 	std::vector<CanonOpt> opts;
-	std::vector<ComponentValueType> results; // task.return
+	std::vector<ComponentValueType> results; //!< task.return
 	std::optional<bool> async;
 	std::optional<bool> shared;
 };
 
-// ── Type definitions and declarators ───────────────────────────────────────
+//! \brief Type definitions and declarators
 struct ComponentTypeDef;
 struct ComponentDecl;
 struct InstanceDecl;
@@ -314,9 +320,9 @@ struct ComponentTypeDef {
 		DefinedValue, Func, Component, Instance, Resource
 	};
 	Kind kind = Kind::DefinedValue;
-	// Defined-value, function and resource payloads live in the shared store.
-	// Component/instance declarations are the remaining inline payloads for
-	// this pass; they keep their order because declaration order is scope.
+	//! Defined-value, function and resource payloads live in the shared store.
+	//! Component/instance declarations are the remaining inline payloads for
+	//! this pass; they keep their order because declaration order is scope.
 	TypeId id{TypeId::kNone};
 	std::variant<std::monostate, std::vector<ComponentDecl>,
 			std::vector<InstanceDecl>, ResourceType> declarations;
@@ -335,7 +341,7 @@ struct ComponentTypeDef {
 	}
 };
 
-// ── Start and value definitions ────────────────────────────────────────────
+//! \brief Start and value definitions
 struct Start {
 	uint32_t funcIndex = 0;
 	std::vector<uint32_t> args;
@@ -345,9 +351,9 @@ struct Start {
 struct ValueDecl {
 	ComponentValueType type;
 	uint32_t encodedLength = 0;
-	// The value grammar depends on the type index space; the length-delimited
-	// encoding is retained verbatim, matching how the core parser keeps raw
-	// initialiser expressions and function bodies.
+	//! The value grammar depends on the type index space; the length-delimited
+	//! encoding is retained verbatim, matching how the core parser keeps raw
+	//! initialiser expressions and function bodies.
 	std::vector<uint8_t> encoded;
 };
 

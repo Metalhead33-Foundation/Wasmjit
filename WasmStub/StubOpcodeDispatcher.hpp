@@ -5,32 +5,40 @@
 #include <ostream>
 #include <string>
 
-// `WasmStub` is a textual listing backend: it pretty-prints instructions
-// instead of executing them. It is not an interpreter and is never a fallback
-// execution path. The project does not add a bespoke interpreter
-// (docs/proposals/STACK_SWITCHING.md §10.15 D-3).
+/*!
+  \file StubOpcodeDispatcher.hpp
+  \brief A textual listing backend that pretty-prints instead of executing.
+
+  `WasmStub` is a textual listing backend: it pretty-prints instructions
+  instead of executing them. It is not an interpreter and is never a fallback
+  execution path. The project does not add a bespoke interpreter
+  (docs/proposals/STACK_SWITCHING.md §10.15 D-3).
+
+  This header is internal: it is not part of the embedding surface.
+*/
 
 namespace Stub {
 class OpcodeDispatcher : public WASM::OpcodeDispatcher
 {
 private:
 	std::basic_ostream<char>* stream;
-	// Optional name context for the listing. `WASM::OpcodeDispatcher` is
-	// deliberately module-agnostic, so the consumer supplies it. Every named
-	// index space is printed as `index ($name)`, keeping the raw index when
-	// the name section has none (docs/proposals/EXTENDED_NAME_SECTION.md
-	// ENS-5/ENSD3).
-	const WASM::Module* module = nullptr;
+	//! Optional name context for the listing. `WASM::OpcodeDispatcher` is
+	//! deliberately module-agnostic, so the consumer supplies it. Every named
+	//! index space is printed as `index ($name)`, keeping the raw index when
+	//! the name section has none (docs/proposals/EXTENDED_NAME_SECTION.md
+	//! ENS-5/ENSD3). Not called `module`: Doxygen reads a documented member
+	//! with that name as a C++20 module declaration.
+	const WASM::Module* moduleContext = nullptr;
 	uint32_t functionIndex = 0;
 	std::string describe(WASM::NameKind kind, uint32_t index, uint32_t subIndex = 0) const;
 public:
 	OpcodeDispatcher(std::basic_ostream<char>* stream);
 
-	// `globalFunctionIndex` selects the function whose local names apply
-	// (imports first). Passing nullptr disables name lookup.
+	//! `globalFunctionIndex` selects the function whose local names apply
+	//! (imports first). Passing nullptr disables name lookup.
 	void setNameContext(const WASM::Module* module, uint32_t globalFunctionIndex);
 
-	// OpcodeDispatcher interface
+	//! OpcodeDispatcher interface
 protected:
 	void dispatchUnreachable() override;
 	void dispatchNop() override;
@@ -260,7 +268,7 @@ protected:
 	void dispatchRefI31() override;
 	void dispatchI31GetS() override;
 	void dispatchI31GetU() override;
-	// stringref core instructions (docs/proposals/STRINGREF.md STR-3)
+	//! stringref core instructions (docs/proposals/STRINGREF.md STR-3)
 	void dispatchStringNewUtf8(WASM::MemIdx arg) override;
 	void dispatchStringNewWtf16(WASM::MemIdx arg) override;
 	void dispatchStringNewLossyUtf8(WASM::MemIdx arg) override;
@@ -276,7 +284,7 @@ protected:
 	void dispatchStringConcat() override;
 	void dispatchStringEq() override;
 	void dispatchStringIsUsvSequence() override;
-	// stringview facility (docs/proposals/STRINGREF.md STR-4)
+	//! stringview facility (docs/proposals/STRINGREF.md STR-4)
 	void dispatchStringAsWtf8() override;
 	void dispatchStringViewWtf8Advance() override;
 	void dispatchStringViewWtf8EncodeUtf8(WASM::MemIdx arg) override;
@@ -293,7 +301,7 @@ protected:
 	void dispatchStringViewIterAdvance() override;
 	void dispatchStringViewIterRewind() override;
 	void dispatchStringViewIterSlice() override;
-	// GC-array string bridge (docs/proposals/STRINGREF.md STR-6)
+	//! GC-array string bridge (docs/proposals/STRINGREF.md STR-6)
 	void dispatchStringNewUtf8Array(WASM::TypeIdx arg) override;
 	void dispatchStringNewWtf16Array(WASM::TypeIdx arg) override;
 	void dispatchStringEncodeUtf8Array(WASM::TypeIdx arg) override;
@@ -564,7 +572,7 @@ protected:
 	void dispatchF32x4DemoteF64x2Zero() override;
 	void dispatchF64x2PromoteLowF32x4() override;
 
-	// Relaxed SIMD (0x100-0x113).
+	//! Relaxed SIMD (0x100-0x113).
 	void dispatchI8x16RelaxedSwizzle() override;
 	void dispatchI32x4RelaxedTruncF32x4S() override;
 	void dispatchI32x4RelaxedTruncF32x4U() override;

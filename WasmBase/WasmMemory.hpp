@@ -3,8 +3,14 @@
 
 #include "WasmApi.hpp"
 
-// docs/EMBEDDING_SURFACE.md ES-4: this header is entirely part of the public
-// surface, so every declaration in it is exported.
+/*!
+  \file WasmMemory.hpp
+  \brief Linear memory: the backend-visible view, growth and the shared memory ABI.
+
+  This header is part of the exported surface: every declaration in it
+  is exported (docs/EMBEDDING_SURFACE.md ES-4).
+*/
+
 WASMJIT_VISIBLE_BEGIN
 #include <cstddef>
 #include <cstdint>
@@ -14,27 +20,27 @@ WASMJIT_VISIBLE_BEGIN
 #include <memory>
 namespace WASM {
 
-// Must remain standard-layout. backend accesses fields via offsetof().
-// NEVER add std::vector, virtual functions, or non-trivial members here.
+//! Must remain standard-layout. backend accesses fields via offsetof().
+//! NEVER add std::vector, virtual functions, or non-trivial members here.
 struct LinearMemory {
-	// Hot fields first — memory access is the most frequent operation.
-	uint8_t*  memoryBase;   // Base of linear memory (offset 0 for cheap addressing)
-	uint64_t  memorySize;   // current size in bytes
-	uint64_t  memoryMax;    // max size in bytes
-	bool      isShared;     // true → threads-proposal shared memory (atomics-eligible, grow is synchronized)
-	void*     hostData;     // Opaque pointer for any external user data;
-	// Ownership/backing storage lives OUTSIDE this struct (see below) —
-	// LinearMemory itself is just the backend-visible view.
-	// Appended after the hot fields so every existing offset (including
-	// `hostData`) stays put: the index type of a memory64 declaration. Import
-	// matching compares it against the importing module's declared type
-	// (spec `match_memtype`; docs/proposals/MEMORY64.md M2).
+	//! Hot fields first — memory access is the most frequent operation.
+	uint8_t*  memoryBase;   //!< Base of linear memory (offset 0 for cheap addressing)
+	uint64_t  memorySize;   //!< current size in bytes
+	uint64_t  memoryMax;    //!< max size in bytes
+	bool      isShared;     //!< true → threads-proposal shared memory (atomics-eligible, grow is synchronized)
+	void*     hostData;     //!< Opaque pointer for any external user data;
+	                        //!< Ownership/backing storage lives OUTSIDE this struct (see below) —
+	                        //!< LinearMemory itself is just the backend-visible view.
+	//! Index type of the memory64 declaration, appended after the hot fields so
+	//! every existing offset (including `hostData`) stays put. Import matching
+	//! compares it against the importing module's declared type (spec
+	//! `match_memtype`; docs/proposals/MEMORY64.md M2).
 	bool      is64;
-	// Custom page sizes (docs/proposals/CUSTOM_PAGE_SIZES.md CPS-2): the byte
-	// size of one page (1 or 65536). Appended after `is64` so every existing
-	// field offset, including `hostData`, stays put. `memorySize`/`memoryMax`
-	// remain byte counts; `memory.size`/`memory.grow` speak in pages, so the
-	// generated code and the helpers divide/multiply by this field.
+	//! Custom page sizes (docs/proposals/CUSTOM_PAGE_SIZES.md CPS-2): the byte
+	//! size of one page (1 or 65536). Appended after `is64` so every existing
+	//! field offset, including `hostData`, stays put. `memorySize`/`memoryMax`
+	//! remain byte counts; `memory.size`/`memory.grow` speak in pages, so the
+	//! generated code and the helpers divide/multiply by this field.
 	uint64_t  pageSize;
 };
 static_assert(offsetof(LinearMemory, memoryBase) == 0,
@@ -42,9 +48,9 @@ static_assert(offsetof(LinearMemory, memoryBase) == 0,
 static_assert(std::is_standard_layout_v<LinearMemory>,
 			  "LinearMemory must remain standard-layout for offsetof() access from generated code");
 
-// Sequentially consistent read of a memory's current size. Generated code uses
-// this for `memory.size` instead of a plain field load, so a host thread
-// growing a shared memory is observed atomically (THREADS.md TH-3/T7).
+//! Sequentially consistent read of a memory's current size. Generated code uses
+//! this for `memory.size` instead of a plain field load, so a host thread
+//! growing a shared memory is observed atomically (THREADS.md TH-3/T7).
 uint64_t wasm_memory_size(const LinearMemory* memory);
 
 class StoreOwnedMemory
@@ -57,12 +63,12 @@ public:
 	virtual ~StoreOwnedMemory() = default;
 	const LinearMemory* getMemory() const;
 	LinearMemory* getMemory();
-	// Returns false on trap-worthy failure (exceeds max). Engine translates to a Wasm trap.
+	//! Returns false on trap-worthy failure (exceeds max). Engine translates to a Wasm trap.
 	virtual bool growMemory(uint64_t deltaPages) = 0;
-	// Optional host hint for `memory.discard`: return true when the range was
-	// decommitted and is already zero-filled; false means the caller must
-	// perform the specified zero-fill itself. The default is the portable
-	// zero-fill path (docs/proposals/MEMORY_CONTROL.md MC-3).
+	//! Optional host hint for `memory.discard`: return true when the range was
+	//! decommitted and is already zero-filled; false means the caller must
+	//! perform the specified zero-fill itself. The default is the portable
+	//! zero-fill path (docs/proposals/MEMORY_CONTROL.md MC-3).
 	virtual bool discardHint(uint64_t offset, uint64_t bytes) const
 	{
 		(void)offset;
@@ -71,7 +77,7 @@ public:
 	}
 };
 
-// ── Non-shared: plain growable buffer. Realloc is fine — nobody else holds memoryBase concurrently. ──
+//! \brief Non-shared: plain growable buffer. Realloc is fine — nobody else holds memoryBase concurrently.
 class PrivateLinearMemory final : public StoreOwnedMemory {
 private:
 	std::vector<uint8_t> backing;
@@ -82,7 +88,7 @@ public:
 	bool growMemory(uint64_t deltaPages) override;
 };
 
-// ── Shared: reserve maxPages up front, grow = commit only. Base pointer never moves. ──
+//! \brief Shared: reserve maxPages up front, grow = commit only. Base pointer never moves.
 class SharedLinearMemory final : public StoreOwnedMemory {
 private:
 	void*  reservedRegion;

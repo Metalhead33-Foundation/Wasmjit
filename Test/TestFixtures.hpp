@@ -6,13 +6,17 @@
 #include <cstdint>
 #include <span>
 
-// Shared binary fixtures for the surface tests. Keeping them here means the
-// runtime, plugin and ABI tests instantiate the same bytes.
+/*!
+  \file TestFixtures.hpp
+  \brief Shared binary fixtures for the surface tests.
+
+  This header is internal: it is not part of the embedding surface.
+*/
 
 namespace TestFixtures {
 
-// (module
-//   (func (export "answer") (result i32) i32.const 42))
+//! (module
+//!   (func (export "answer") (result i32) i32.const 42))
 inline constexpr std::array<std::uint8_t, 39> kAnswerModule = {
 	0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
 	0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f,

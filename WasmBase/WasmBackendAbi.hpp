@@ -3,8 +3,14 @@
 
 #include "WasmApi.hpp"
 
-// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
-// exported surface (the public headers are the declared list).
+/*!
+  \file WasmBackendAbi.hpp
+  \brief Backend-neutral POD views of the call ABI (kinds, sizes, alignments, offsets).
+
+  This header is part of the exported surface: every declaration in it
+  is exported (docs/EMBEDDING_SURFACE.md ES-4).
+*/
+
 WASMJIT_VISIBLE_BEGIN
 
 #include "WasmType.hpp"
@@ -16,18 +22,18 @@ WASMJIT_VISIBLE_BEGIN
 
 namespace WASM {
 
-// ── Backend-neutral POD views (docs/BACKEND_PLUGIN_ABI.md BP-1) ─────────────
-//
-// The calling-convention ABI is four numbers wide: a value kind, a size, an
-// alignment and an offset. These are the views a backend, the harness and an
-// embedder can all read without sharing an IR type (docs/ABI.md "The result
-// tuple layout" and "`v128` by Value").
-//
-// Everything here is standard-layout and holds no STL member, so the same
-// numbers can cross the C plugin boundary (docs/BACKEND_PLUGIN_ABI.md §5).
-// This header is *backend SDK* tier (docs/EMBEDDING_SURFACE.md §6.1): it pulls
-// in the type system, so an embedder that only sizes a result buffer uses the
-// documented rule rather than this header.
+//! \brief Backend-neutral POD views (docs/BACKEND_PLUGIN_ABI.md BP-1)
+//!
+//! The calling-convention ABI is four numbers wide: a value kind, a size, an
+//! alignment and an offset. These are the views a backend, the harness and an
+//! embedder can all read without sharing an IR type (docs/ABI.md "The result
+//! tuple layout" and "`v128` by Value").
+//!
+//! Everything here is standard-layout and holds no STL member, so the same
+//! numbers can cross the C plugin boundary (docs/BACKEND_PLUGIN_ABI.md §5).
+//! This header is *backend SDK* tier (docs/EMBEDDING_SURFACE.md §6.1): it pulls
+//! in the type system, so an embedder that only sizes a result buffer uses the
+//! documented rule rather than this header.
 
 enum class ValueKind : std::uint8_t {
 	Void = 0,
@@ -36,7 +42,7 @@ enum class ValueKind : std::uint8_t {
 	F32,
 	F64,
 	V128,
-	Ref, // any reference type: one pointer-sized word
+	Ref, //!< any reference type: one pointer-sized word
 };
 
 struct SignatureView {
@@ -55,12 +61,12 @@ struct FieldLayout {
 struct AggregateLayout {
 	std::uint32_t size = 0;
 	std::uint32_t alignment = 1;
-	FieldLayout*  fields = nullptr; // caller-owned storage, one entry per kind
+	FieldLayout*  fields = nullptr; //!< caller-owned storage, one entry per kind
 	std::uint32_t fieldCount = 0;
 };
 
-// Size of one value of `kind` in the host ABI (docs/ABI.md "`v128` by Value").
-// Packed and secret types never reach a signature, so they are not modelled.
+//! Size of one value of `kind` in the host ABI (docs/ABI.md "`v128` by Value").
+//! Packed and secret types never reach a signature, so they are not modelled.
 inline constexpr std::uint32_t valueKindSize(ValueKind kind) noexcept
 {
 	switch (kind) {
@@ -89,8 +95,8 @@ inline constexpr std::uint32_t valueKindAlignment(ValueKind kind) noexcept
 	return 1;
 }
 
-// The ABI class of a declared value type. Every reference type is one
-// pointer-sized word (docs/ABI.md "Reference and Global Representation").
+//! The ABI class of a declared value type. Every reference type is one
+//! pointer-sized word (docs/ABI.md "Reference and Global Representation").
 inline constexpr ValueKind valueKindOf(ValueTypeCode code) noexcept
 {
 	switch (code) {
@@ -112,13 +118,13 @@ inline constexpr std::uint32_t alignUp(std::uint32_t value,
 }
 } // namespace detail
 
-// The multi-result tuple layout: declaration order, each field at the next
-// offset rounded up to its own alignment, the tuple rounded up to the largest
-// alignment (docs/ABI.md "The result tuple layout").
-//
-// `fieldStorage` is caller-owned scratch; it must have room for one
-// `FieldLayout` per kind. Too little storage returns the zero layout rather
-// than writing out of bounds.
+//! The multi-result tuple layout: declaration order, each field at the next
+//! offset rounded up to its own alignment, the tuple rounded up to the largest
+//! alignment (docs/ABI.md "The result tuple layout").
+//!
+//! `fieldStorage` is caller-owned scratch; it must have room for one
+//! `FieldLayout` per kind. Too little storage returns the zero layout rather
+//! than writing out of bounds.
 inline AggregateLayout computeAggregateLayout(std::span<const ValueKind> kinds,
 		std::span<FieldLayout> fieldStorage) noexcept
 {

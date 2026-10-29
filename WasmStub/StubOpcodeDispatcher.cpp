@@ -82,14 +82,14 @@ OpcodeDispatcher::OpcodeDispatcher(std::basic_ostream<char>* stream)
 
 std::string OpcodeDispatcher::describe(WASM::NameKind kind, uint32_t index, uint32_t subIndex) const
 {
-	if (module == nullptr)
+	if (moduleContext == nullptr)
 		return std::to_string(index);
-	return module->describeIndex(kind, index, subIndex);
+	return moduleContext->describeIndex(kind, index, subIndex);
 }
 
 void OpcodeDispatcher::setNameContext(const WASM::Module* module, uint32_t globalFunctionIndex)
 {
-	this->module = module;
+	this->moduleContext = module;
 	functionIndex = globalFunctionIndex;
 }
 

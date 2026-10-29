@@ -104,6 +104,7 @@ SOURCES += main.cpp \
     SpecSuite.cpp \
     ProposalDocsTests.cpp \
     LayeringTests.cpp \
+    HeaderDocTests.cpp \
     SurfaceTests.cpp \
     BackendAbiTests.cpp \
     RuntimeTests.cpp \

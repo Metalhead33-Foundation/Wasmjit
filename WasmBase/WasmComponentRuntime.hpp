@@ -3,8 +3,14 @@
 
 #include "WasmApi.hpp"
 
-// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
-// exported surface (the public headers are the declared list).
+/*!
+  \file WasmComponentRuntime.hpp
+  \brief The backend-neutral component execution runtime.
+
+  This header is part of the exported surface: every declaration in it
+  is exported (docs/EMBEDDING_SURFACE.md ES-4).
+*/
+
 WASMJIT_VISIBLE_BEGIN
 
 #include "WasmApi.hpp"
@@ -26,9 +32,9 @@ WASMJIT_VISIBLE_BEGIN
 
 namespace WASM {
 
-// A structured host-facing component value. It is intentionally a small
-// discriminated union: the runtime owns conversion to/from the canonical ABI,
-// so callers never see raw pointers into wasm linear memory.
+//! A structured host-facing component value. It is intentionally a small
+//! discriminated union: the runtime owns conversion to/from the canonical ABI,
+//! so callers never see raw pointers into wasm linear memory.
 struct ComponentValue {
 	enum class Kind : uint8_t {
 		Bool, S8, U8, S16, U16, S32, U32, S64, U64, F32, F64, Char,
@@ -41,8 +47,8 @@ struct ComponentValue {
 		uint64_t u64;
 		double   f64;
 	};
-	// Primitive value, discriminant/case/flags, or resource handle, depending
-	// on `kind`.
+	//! Primitive value, discriminant/case/flags, or resource handle, depending
+	//! on `kind`.
 	uint32_t discriminant = 0;
 	std::string string;
 	std::vector<ComponentValue> elements;
@@ -50,9 +56,9 @@ struct ComponentValue {
 	bool hasValue = false;
 };
 
-// A component-level function. `call` is the flat-value entry point retained for
-// scalar-only callers; `callValues` is the structured entry point used when a
-// signature contains strings/lists/records or other memory-backed values.
+//! A component-level function. `call` is the flat-value entry point retained for
+//! scalar-only callers; `callValues` is the structured entry point used when a
+//! signature contains strings/lists/records or other memory-backed values.
 struct ComponentFunction {
 	WASM::TypeId typeId{WASM::TypeId::kNone};
 	std::vector<WASM::AbiCoreType> params;
@@ -66,11 +72,11 @@ struct ComponentFunction {
 	std::function<void(std::span<const ComponentValue>, std::span<ComponentValue>)> callValues;
 };
 
-// Executable component runtime for embedded core modules/instances, nested
-// components and `canon lift`/`lower`. It owns the component graph, the
-// canonical ABI value lowering/lifting, resource/stream/future handles and the
-// single-agent async surface. Core-module instantiation is delegated to a
-// `ModuleInstantiator`, so this class is independent of the code generator.
+//! Executable component runtime for embedded core modules/instances, nested
+//! components and `canon lift`/`lower`. It owns the component graph, the
+//! canonical ABI value lowering/lifting, resource/stream/future handles and the
+//! single-agent async surface. Core-module instantiation is delegated to a
+//! `ModuleInstantiator`, so this class is independent of the code generator.
 class WASMJIT_API ComponentRuntime {
 public:
 	using ComponentImports = std::unordered_map<std::string, ComponentFunction>;
@@ -82,18 +88,18 @@ public:
 	ComponentRuntime(const ComponentRuntime&) = delete;
 	ComponentRuntime& operator=(const ComponentRuntime&) = delete;
 
-	// The store this component's types and entities live in. Referenced by the
-	// canonical-ABI callbacks, which have no member context of their own.
+	//! The store this component's types and entities live in. Referenced by the
+	//! canonical-ABI callbacks, which have no member context of their own.
 	Store& store() const { return component_.store(); }
 
 	std::optional<ComponentFunction> exportedFunction(std::string_view name) const;
 	WASM::Callable coreFunction(std::size_t index) const;
 	WASM::LinearMemory* coreMemory(std::size_t index) const;
-	// Instance-owned Canonical ABI signatures (TYPE_MODEL TM-15). Store metadata
-	// is process-wide; this table is per component instance.
+	//! Instance-owned Canonical ABI signatures (TYPE_MODEL TM-15). Store metadata
+	//! is process-wide; this table is per component instance.
 	const WASM::ComponentAbiInstance& abi() const { return abi_; }
 
-	// Resource-handle validation used by the canonical value walkers.
+	//! Resource-handle validation used by the canonical value walkers.
 	uint32_t useResourceHandle(uint32_t handle, WASM::TypeId expected,
 			bool borrow, uint32_t scope);
 	uint32_t beginBorrowScope();
@@ -116,9 +122,9 @@ private:
 		uint32_t borrowScope = 0;
 	};
 
-	// A core instance in the component graph: either an instantiated core
-	// module or an inline bag of core exports (the form canon built-ins use to
-	// reach a core module's imports).
+	//! A core instance in the component graph: either an instantiated core
+	//! module or an inline bag of core exports (the form canon built-ins use to
+	//! reach a core module's imports).
 	struct CoreInstanceHandle {
 		std::unique_ptr<WASM::ModuleInstance> moduleInstance;
 		std::unordered_map<std::string, WASM::Callable> inlineFunctions;
@@ -150,16 +156,16 @@ private:
 	std::vector<ResourceSlot> resourceSlots_{ResourceSlot{0, WASM::TypeId::kNone,
 			false, true, 0}};
 	std::vector<uint32_t> freeResourceSlots_;
-	// Single-agent async state. The allocator/releaser keep async handles in the
-	// same index space as resources (docs/proposals/THREADS.md TD9).
+	//! Single-agent async state. The allocator/releaser keep async handles in the
+	//! same index space as resources (docs/proposals/THREADS.md TD9).
 	WASM::ComponentAsyncState async_;
-	// Instance-owned Canonical ABI signatures. Declared after `async_` so the
-	// handle table is constructed first; the table itself only references the
-	// process-lifetime Store.
+	//! Instance-owned Canonical ABI signatures. Declared after `async_` so the
+	//! handle table is constructed first; the table itself only references the
+	//! process-lifetime Store.
 	mutable WASM::ComponentAbiInstance abi_;
-	// Decoded component `value` definitions, in the value index space. A start
-	// definition refers to these by index. Values are decoded once, after
-	// validation, before the definition walk reaches `start`.
+	//! Decoded component `value` definitions, in the value index space. A start
+	//! definition refers to these by index. Values are decoded once, after
+	//! validation, before the definition walk reaches `start`.
 	std::vector<ComponentValue> componentValues_;
 	uint32_t borrowScopeSerial_ = 1;
 	uint32_t currentBorrowScope_ = 0;

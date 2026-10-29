@@ -2,6 +2,13 @@
 #define LIBJITCONTEXT_HPP
 #include "LibJitTypeTranslation.hpp"
 
+/*!
+  \file LibJitContext.hpp
+  \brief The compilation context and the type translator it owns.
+
+  This header is internal: it is not part of the embedding surface.
+*/
+
 namespace LibJIT {
 class Context
 {

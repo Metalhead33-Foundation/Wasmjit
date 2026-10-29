@@ -984,6 +984,32 @@ includes exactly one public header and nothing else, so a header that stops bein
 standalone breaks the build instead of an embedder's project. Add one file when a
 new public header is added.
 
+## Header documentation check
+
+`Test/HeaderDocTests.cpp` is a `[headerdoc]` family that enforces
+[`DOCUMENTATION.md`](DOCUMENTATION.md) §3 and §4. It scans every `.h`/`.hpp` under
+`WasmBase/`, `LibJit/`, `WasmStub/` and `Test/` and fails on
+
+- a comment that documents something without a Doxygen marker (`//!`, `//!<`,
+  `/*!`, `/*!<`, `///`, `/**`) — annotations Doxygen never renders are exempt:
+  `#endif // GUARD`, `} // namespace …`, and a name suppressed inside a
+  declaration (`bool /*async*/ flag`);
+- a header with no `\file` block, or one whose block has no `\brief`.
+
+The failure message lists `file:line` for every hit, so the fix is local. The
+matching renderer is [`Doxyfile`](../Doxyfile); generating into
+`build/doxygen/` must produce **no stderr output**:
+
+```bash
+./Test/WasmJit '[headerdoc]'
+
+doxygen Doxyfile   # expected result: silence; then browse build/doxygen/html/
+```
+
+`DOCUMENTATION.md` §5 records the prose that a real Doxygen run rejects (a code
+span ending in `*`, a period inside a span in a brief, a bare `#`, a documented
+member named `module`) and how each is written instead.
+
 ## Runtime, backend-ABI and plugin tests
 
 Four tagged families cover the embedding surface and the backend seam:

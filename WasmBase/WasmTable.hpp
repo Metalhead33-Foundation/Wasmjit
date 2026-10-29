@@ -3,8 +3,14 @@
 
 #include "WasmApi.hpp"
 
-// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
-// exported surface (the public headers are the declared list).
+/*!
+  \file WasmTable.hpp
+  \brief Tables: the backend-visible instance view and element access.
+
+  This header is part of the exported surface: every declaration in it
+  is exported (docs/EMBEDDING_SURFACE.md ES-4).
+*/
+
 WASMJIT_VISIBLE_BEGIN
 #include "WasmValue.hpp"
 #include <cstddef>
@@ -13,22 +19,22 @@ WASMJIT_VISIBLE_BEGIN
 #include <vector>
 namespace WASM {
 
-// backend-visible view of a table. Standard-layout; `base` is first so generated
-// code can address slots cheaply (mirrors LinearMemory).
+//! backend-visible view of a table. Standard-layout; `base` is first so generated
+//! code can address slots cheaply (mirrors LinearMemory).
 struct TableInstance {
-	Callable** base;   // slot array; null entries trap on call_indirect
-	uint64_t   size;   // current number of entries
-	uint64_t   max;    // maximum entries (UINT64_MAX = unbounded)
-	void*      hostData; // back-pointer to the owning StoreOwnedTable
+	Callable** base;   //!< slot array; null entries trap on call_indirect
+	uint64_t   size;   //!< current number of entries
+	uint64_t   max;    //!< maximum entries (UINT64_MAX = unbounded)
+	void*      hostData; //!< back-pointer to the owning StoreOwnedTable
 };
 static_assert(offsetof(TableInstance, base) == 0,
 			  "TableInstance::base must remain the first field for backend ABI compatibility");
 static_assert(std::is_standard_layout_v<TableInstance>,
 			  "TableInstance must remain standard-layout for offsetof() access from generated code");
 
-// A table owned by the (global) Store. The backing slot array lives here; the
-// TableInstance view is what module instances borrow (and what future shared /
-// imported tables will point at).
+//! A table owned by the (global) Store. The backing slot array lives here; the
+//! TableInstance view is what module instances borrow (and what future shared /
+//! imported tables will point at).
 class StoreOwnedTable
 {
 protected:
@@ -40,7 +46,7 @@ public:
 	TableInstance*       getTable()       { return &table; }
 	const TableInstance* getTable() const { return &table; }
 
-	// Returns false on a trap-worthy failure (would exceed max).
+	//! Returns false on a trap-worthy failure (would exceed max).
 	bool grow(uint64_t deltaEntries);
 };
 

@@ -18,6 +18,13 @@
 #define WASM_TEST_DIR ""
 #endif
 
+/*!
+  \file helper.hpp
+  \brief Small helpers the test translation units load and instantiate modules with.
+
+  This header is internal: it is not part of the embedding surface.
+*/
+
 WASM::Module loadTestModule(const char* moduleName);
 
 struct LoadedModule {
@@ -46,7 +53,7 @@ public:
 	std::unique_ptr<WASM::Module> module;
 	std::unique_ptr<WASM::ModuleInstance> instance;
 	std::unique_ptr<WASM::RegistryImportResolver> resolver;
-	//std::unique_ptr<WASM::VMContext> vm_context;
+	//!std::unique_ptr<WASM::VMContext> vm_context;
 	std::unique_ptr<DebugHost> debug_host;
 private:
 	TextFixture(const TextFixture& cpy) = delete;

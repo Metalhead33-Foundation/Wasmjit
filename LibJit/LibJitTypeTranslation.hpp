@@ -8,6 +8,13 @@
 #include <vector>
 #include <unordered_map>
 
+/*!
+  \file LibJitTypeTranslation.hpp
+  \brief Canonical type to lowered ABI type translation and the shared type caches.
+
+  This header is internal: it is not part of the embedding surface.
+*/
+
 namespace LibJIT {
 
 class LibJitTypeTranslator
@@ -21,25 +28,25 @@ private:
 	jit_type_t i31Type;
 	std::vector<jit_type_t> translatedTypes;
 	TypeMap typemap;
-	// Canonical (process-wide) type -> its lowered jit_type_t. Unlike `typemap`
-	// (module-local keys), this survives across modules, so identical types
-	// shared between modules reuse one jit_type_t (M7).
+	//! Canonical (process-wide) type -> its lowered jit_type_t. Unlike `typemap`
+	//! (module-local keys), this survives across modules, so identical types
+	//! shared between modules reuse one jit_type_t (M7).
 	std::unordered_map<WASM::TypeId, jit_type_t> canonicalCache;
-	// The current module's LocalTypeIdx -> TypeId mapping.
+	//! The current module's LocalTypeIdx -> TypeId mapping.
 	std::vector<WASM::TypeId> localTypeIds;
 	static jit_type_t createi31Type();
 public:
 	LibJitTypeTranslator();
 	void reset();
-	// Interacting with the type map
+	//! Interacting with the type map
 	TypeMapIterator findTranslatedType(const WASM::ValueType& valueType);
 	TypeMapConstIterator findTranslatedType(const WASM::ValueType& valueType) const;
 	TypeMapIterator insertTranslatedType(const WASM::ValueType& valueType, jit_type_t translatedType);
-	// Type translations
+	//! Type translations
 	jit_type_t translatePrimitiveType(WASM::ValueTypeCode primitive);
 	jit_type_t translateType(const WASM::ValueType& valueType);
-	// Every compiled Wasm function receives an implicit leading `WASM::VMContext*`.
-	// LibJIT models that ABI parameter as `jit_type_void_ptr`.
+	//! Every compiled Wasm function receives an implicit leading `WASM::VMContext*`.
+	//! LibJIT models that ABI parameter as `jit_type_void_ptr`.
 	jit_type_t translateVMContextPointerType() const;
 	jit_type_t translateFunctionSignature(const WASM::FuncType& wasm_func);
 	jit_type_t translateFunctionSignature(WASM::CoreTypeView wasm_func);
@@ -50,9 +57,9 @@ public:
 	jit_type_t translateArray(WASM::CoreTypeView wasm_array);
 	jit_type_t translateCanonValue(const WASM::CanonValueType& value);
 	jit_type_t translateCanonStorage(const WASM::CanonStorageType& storage);
-	// Store-owned canonical cutover: `typeIds[i]` is module-local i. The old
-	// parser-view overload below remains for the translator's cache regression
-	// test; production callers use this one.
+	//! Store-owned canonical cutover: `typeIds[i]` is module-local i. The old
+	//! parser-view overload below remains for the translator's cache regression
+	//! test; production callers use this one.
 	void translateTypes(std::span<const WASM::TypeId> typeIds,
 						const WASM::TypeStore& store);
 	void translateTypes(const std::span<const WASM::Subtype>& types,

@@ -3,8 +3,14 @@
 
 #include "WasmApi.hpp"
 
-// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
-// exported surface (the public headers are the declared list).
+/*!
+  \file WasmRuntime.hpp
+  \brief The engine instance: load, instantiate, call, agents and configuration.
+
+  This header is part of the exported surface: every declaration in it
+  is exported (docs/EMBEDDING_SURFACE.md ES-4).
+*/
+
 WASMJIT_VISIBLE_BEGIN
 
 #include "WasmApi.hpp"
@@ -36,50 +42,51 @@ WASMJIT_VISIBLE_BEGIN
 
 namespace WASM {
 
-// ── The engine instance (docs/EMBEDDING_SURFACE.md §4, ES-1) ────────────────
-//
-// A `Runtime` is the owner the engine-instance role never had: the `Store`, the
-// loaded modules, their instances and the selected backend. It is *not* a realm
-// (that is `ModuleInstance`) and not an execution context (that is
-// `Agent`/`ExecutionState`) — see §3.2 of the note for the ladder.
-//
-// The shape is the one in §4.7. Deliberately absent: `Result<T>`, a compiled-
-// function table, a context factory and a closed backend enum.
-//
-// Concurrency: compilation is serialized, so `instantiate` must not be called
-// concurrently on one runtime (docs/BACKEND_PLUGIN_ABI.md §6 rule 4); `safe-
-// point()` and `load*` follow the same rule. Execution is different — calls on
-// *different* instances may run on different agents, and one instance's entry
-// discipline follows `RuntimeConfig::concurrency`: `Single` refuses a second
-// entrant, `Agents` admits several (docs/MULTI_AGENT_FEASIBILITY.md MF-2/MF-7).
-
+//! The knobs a runtime is created with (docs/EMBEDDING_SURFACE.md §4.7).
 struct RuntimeConfig {
-	// The language subset every load and instantiation is gated by
-	// (docs/proposals/PROFILES.md). The default is the full profile.
+	//! The language subset every load and instantiation is gated by
+	//! (docs/proposals/PROFILES.md). The default is the full profile.
 	ProfileConfig     profile{};
 
-	// The execution model (docs/MULTI_AGENT_FEASIBILITY.md §6.2). `Single` is
-	// the default; `Agents` lets several host threads enter the one instance
-	// concurrently (docs/proposals/THREADS.md TH-5).
+	//! The execution model (docs/MULTI_AGENT_FEASIBILITY.md §6.2). `Single` is
+	//! the default; `Agents` lets several host threads enter the one instance
+	//! concurrently (docs/proposals/THREADS.md TH-5).
 	ConcurrencyModel  concurrency = ConcurrencyModel::Single;
 
-	// Borrowed; must outlive the runtime. A per-instance override stays legal.
+	//! Borrowed; must outlive the runtime. A per-instance override stays legal.
 	const HostBridge* hostBridge = nullptr;
 
-	// Borrowed diagnostic channel a created agent inherits (WasmDiagnostics.hpp).
+	//! Borrowed diagnostic channel a created agent inherits (WasmDiagnostics.hpp).
 	DiagnosticSink    sink = nullptr;
 	void*             sinkUserData = nullptr;
 
-	// 0 = the engine's process-wide budget (SAFETY.md §2.3). A different value is
-	// refused until ES-2 scopes the store to the runtime.
+	//! 0 = the engine's process-wide budget (SAFETY.md §2.3). A different value is
+	//! refused until ES-2 scopes the store to the runtime.
 	std::uint64_t     allocationBudgetBytes = 0;
 };
 
+//! \brief The engine instance (docs/EMBEDDING_SURFACE.md §4, ES-1)
+//!
+//! A `Runtime` is the owner the engine-instance role never had: the `Store`, the
+//! loaded modules, their instances and the selected backend. It is *not* a realm
+//! (that is `ModuleInstance`) and not an execution context (that is
+//! `Agent`/`ExecutionState`) — see §3.2 of the note for the ladder.
+//!
+//! The shape is the one in §4.7. Deliberately absent: `Result<T>`, a compiled-
+//! function table, a context factory and a closed backend enum.
+//!
+//! Concurrency: compilation is serialized, so `instantiate` must not be called
+//! concurrently on one runtime (docs/BACKEND_PLUGIN_ABI.md §6 rule 4);
+//! `safepoint()` and `load*` follow the same rule. Execution is different —
+//! calls on *different* instances may run on different agents, and one
+//! instance's entry discipline follows `RuntimeConfig::concurrency`: `Single`
+//! refuses a second entrant, `Agents` admits several
+//! (docs/MULTI_AGENT_FEASIBILITY.md MF-2/MF-7).
 class WASMJIT_API Runtime
 {
 public:
-	// Selects a backend by name (docs/BACKEND_PLUGIN_ABI.md BP-2/BP-3). An empty
-	// name is legal only when exactly one backend is registered.
+	//! Selects a backend by name (docs/BACKEND_PLUGIN_ABI.md BP-2/BP-3). An empty
+	//! name is legal only when exactly one backend is registered.
 	static std::unique_ptr<Runtime> create(std::string_view backend,
 			const RuntimeConfig& config = {});
 
@@ -90,26 +97,26 @@ public:
 	Runtime(Runtime&&) = delete;
 	Runtime& operator=(Runtime&&) = delete;
 
-	// ── Loading (P2) ───────────────────────────────────────────────────────
-	// A core module from bytes or a path; no `Elv::Io::Device` in this surface.
-	// A Component artifact is refused by `Module::fromFile` with its own message.
+	//! \par Loading (P2)
+	//! A core module from bytes or a path; no `Elv::Io::Device` in this surface.
+	//! A Component artifact is refused by `Module::fromFile` with its own message.
 	std::shared_ptr<const Module> loadBytes(std::span<const std::byte> bytes);
 	std::shared_ptr<const Module> loadFile(const std::filesystem::path& path);
 
-	// ── Instantiation (R1) ─────────────────────────────────────────────────
-	// Idempotent: at most one instance per `Module`. A second call returns the
-	// existing instance; a second *instance* is not expressible through this API
-	// (docs/THREADSAFETY.md §3.1). `imports` is borrowed and must outlive it.
+	//! \par Instantiation (R1)
+	//! Idempotent: at most one instance per `Module`. A second call returns the
+	//! existing instance; a second *instance* is not expressible through this API
+	//! (docs/THREADSAFETY.md §3.1). `imports` is borrowed and must outlive it.
 	ModuleInstance& instantiate(const Module& module, ImportResolver& imports);
 	ModuleInstance*       instanceOf(const Module& module) noexcept;
 	const ModuleInstance* instanceOf(const Module& module) const noexcept;
 	bool                  hasInstance(const Module& module) const noexcept;
 	std::size_t           instanceCount() const noexcept;
 
-	// ── Calls ──────────────────────────────────────────────────────────────
-	// The lookup happens once; the calling convention does not change
-	// (docs/ABI.md). A missing export, or an export with no compiled body, is a
-	// named error rather than a null call.
+	//! \brief Calls
+	//! The lookup happens once; the calling convention does not change
+	//! (docs/ABI.md). A missing export, or an export with no compiled body, is a
+	//! named error rather than a null call.
 	template<typename Ret, typename... Args>
 	Ret callExport(ModuleInstance& instance, std::string_view name, Args&&... args);
 
@@ -117,10 +124,10 @@ public:
 	void callExportWithResults(ModuleInstance& instance, std::string_view name,
 			void* results, Args&&... args);
 
-	// Frame end (P6): collect on every live instance at a safepoint.
+	//! Frame end (P6): collect on every live instance at a safepoint.
 	void safepoint();
 
-	// ── Identity and capability (P4) ───────────────────────────────────────
+	//! \par Identity and capability (P4)
 	std::string_view backendName() const noexcept { return backendName_; }
 	std::string_view version() const noexcept { return WASM::versionString(); }
 	std::uint32_t    abiVersion() const noexcept { return WASM::abiVersion(); }
@@ -128,13 +135,13 @@ public:
 	ProfileConfig    profile() const noexcept { return config_.profile; }
 	bool             supports(Profile profile) const noexcept { return supportsProfile(profile); }
 
-	// ── Execution half (§3.2) ──────────────────────────────────────────────
-	// An engine instance hands out agents; it does not become one. The created
-	// agent inherits the configured diagnostic sink.
+	//! \par Execution half (§3.2)
+	//! An engine instance hands out agents; it does not become one. The created
+	//! agent inherits the configured diagnostic sink.
 	std::unique_ptr<Agent> createAgent();
 
-	// ES-2: runtime-scoped storage. Until the store is threaded through, this is
-	// the process-wide store (docs/EMBEDDING_SURFACE.md §4.3 option A→C).
+	//! ES-2: runtime-scoped storage. Until the store is threaded through, this is
+	//! the process-wide store (docs/EMBEDDING_SURFACE.md §4.3 option A→C).
 	Store& store() noexcept;
 
 private:
@@ -146,9 +153,9 @@ private:
 	std::string backendName_;
 	BackendInstance backend_;
 	RuntimeConfig config_;
-	// The runtime-scoped store (docs/EMBEDDING_SURFACE.md §4.3 option B). Every
-	// consumer receives it through its own object; there is no process-wide
-	// store and no thread-local fallback.
+	//! The runtime-scoped store (docs/EMBEDDING_SURFACE.md §4.3 option B). Every
+	//! consumer receives it through its own object; there is no process-wide
+	//! store and no thread-local fallback.
 	Store store_;
 	std::vector<std::shared_ptr<const Module>> modules_;
 	std::unordered_map<const Module*, std::unique_ptr<ModuleInstance>> instances_;

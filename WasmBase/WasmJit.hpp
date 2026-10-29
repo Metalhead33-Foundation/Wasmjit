@@ -3,24 +3,30 @@
 
 #include "WasmApi.hpp"
 
-// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
-// exported surface (the public headers are the declared list).
-WASMJIT_VISIBLE_BEGIN
+/*!
+  \file WasmJit.hpp
+  \brief The umbrella header of the embedder tier.
 
-// The umbrella header of the embedder tier: one include, no backend header and
-// no internal header. Including exactly the headers you use stays legal, so this
-// is a convenience, never a requirement (docs/EMBEDDING_SURFACE.md §6.3).
-//
-// It also carries the version identity, so one include answers "which ABI am I
-// building against?" (docs/EMBEDDING_SURFACE.md §7.2).
-//
-// Two headers are included beyond the §6.1 list because the documented
-// load/instantiate recipe (§2) cannot be written without them:
-// `WasmRegistryImportResolver.hpp` (registering host imports) and
-// `WasmStore.hpp` (the store an instance's memories and tables live in).
-//
-// The sources live in `WasmBase/`; the install path `wasmjit/wasmjit.hpp`
-// arrives with ES-5 (install and pkg-config), not here.
+  One include, no backend header and no internal header. Including exactly the
+  headers you use stays legal, so this is a convenience, never a requirement
+  (docs/EMBEDDING_SURFACE.md §6.3).
+
+  It also carries the version identity, so one include answers "which ABI am I
+  building against?" (docs/EMBEDDING_SURFACE.md §7.2).
+
+  Two headers are included beyond the §6.1 list because the documented
+  load/instantiate recipe (§2) cannot be written without them:
+  `WasmRegistryImportResolver.hpp` (registering host imports) and
+  `WasmStore.hpp` (the store an instance's memories and tables live in).
+
+  The sources live in `WasmBase/`; the install path `wasmjit/wasmjit.hpp`
+  arrives with ES-5 (install and pkg-config), not here.
+
+  This header is part of the exported surface: every declaration in it
+  is exported (docs/EMBEDDING_SURFACE.md ES-4).
+*/
+
+WASMJIT_VISIBLE_BEGIN
 
 #include "WasmVersion.hpp"
 

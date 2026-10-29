@@ -3,8 +3,14 @@
 
 #include "WasmApi.hpp"
 
-// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
-// exported surface (the public headers are the declared list).
+/*!
+  \file WasmComponentAsync.hpp
+  \brief Component Model async: futures, streams, tasks and the async built-ins.
+
+  This header is part of the exported surface: every declaration in it
+  is exported (docs/EMBEDDING_SURFACE.md ES-4).
+*/
+
 WASMJIT_VISIBLE_BEGIN
 #include "WasmMemory.hpp"
 #include <cstddef>
@@ -22,25 +28,25 @@ WASMJIT_VISIBLE_BEGIN
 
 namespace WASM {
 
-// ── Component Model concurrency, single-agent flavour ───────────────────────
-//
-// docs/proposals/THREADS.md TD9 defers true multi-agent execution indefinitely.
-// This header is the pre-emptive interface for the Component Model's async
-// surface (docs/proposals/COMPONENT_MODEL.md CM-5/CM-8): the shape a
-// multi-agent implementation will fill in, with a working single-agent backend
-// that executes every operation synchronously.
-//
-// The interface is deliberately backend-agnostic (docs/LAYERING.md): it names
-// no code generator, only the contracts a runtime must honour:
-//
-//   * a Task owns the context slots and backpressure counter of one activation;
-//   * a Waitable is something that can produce an event and join a set;
-//   * a stream/future is a pair of endpoints over one shared element queue;
-//   * a copy either completes synchronously, blocks (`kBlocked`) or cancels;
-//   * an event is `(code, payload1, payload2)` as defined by the Canonical ABI.
-//
-// A future multi-agent backend replaces ComponentAsyncState's synchronous
-// operations with real scheduling. The public contracts stay the same.
+//! \brief Component Model concurrency, single-agent flavour
+//!
+//! docs/proposals/THREADS.md TD9 defers true multi-agent execution indefinitely.
+//! This header is the pre-emptive interface for the Component Model's async
+//! surface (docs/proposals/COMPONENT_MODEL.md CM-5/CM-8): the shape a
+//! multi-agent implementation will fill in, with a working single-agent backend
+//! that executes every operation synchronously.
+//!
+//! The interface is deliberately backend-agnostic (docs/LAYERING.md): it names
+//! no code generator, only the contracts a runtime must honour:
+//!
+//!   * a Task owns the context slots and backpressure counter of one activation;
+//!   * a Waitable is something that can produce an event and join a set;
+//!   * a stream/future is a pair of endpoints over one shared element queue;
+//!   * a copy either completes synchronously, blocks (`kBlocked`) or cancels;
+//!   * an event is `(code, payload1, payload2)` as defined by the Canonical ABI.
+//!
+//! A future multi-agent backend replaces ComponentAsyncState's synchronous
+//! operations with real scheduling. The public contracts stay the same.
 
 enum class ComponentEventCode : uint32_t {
 	None = 0,
@@ -58,12 +64,13 @@ enum class ComponentCopyResult : uint32_t {
 	Cancelled = 2
 };
 
-// The Canonical ABI sentinel for "the operation blocked".
+//! The Canonical ABI sentinel for "the operation blocked".
 static constexpr uint32_t kBlocked = 0xFFFFFFFFu;
 
-// `{stream,future}.{read,write}` returns an optional copy result packed into
-// one address-sized value: all ones is `none`; otherwise the result is in the
-// low four bits and the element count/progress in the remaining high bits.
+//! Packs the optional copy result of the async built-ins into one address-sized
+//! value: all ones is `none`; otherwise the result is in the low four bits and
+//! the element count/progress in the remaining high bits. The built-ins are
+//! `{stream,future}.{read,write}`.
 constexpr uint32_t packCopyResult(ComponentCopyResult result, uint32_t progress)
 {
 	return (static_cast<uint32_t>(result) & 0xFu) | (progress << 4);
@@ -86,13 +93,13 @@ enum class ComponentTaskState : uint8_t {
 	Resolved
 };
 
-// The direction of one end of a stream/future.
+//! The direction of one end of a stream/future.
 enum class ComponentEndDirection : uint8_t {
 	Readable,
 	Writable
 };
 
-// `End.State` in the Canonical ABI explainer.
+//! `End.State` in the Canonical ABI explainer.
 enum class ComponentEndState : uint8_t {
 	Idle,
 	Copying,
@@ -100,8 +107,8 @@ enum class ComponentEndState : uint8_t {
 	Done
 };
 
-// What a handle denotes. Resources are owned by the runtime's resource table;
-// this enum only covers the async objects a handle table can also contain.
+//! What a handle denotes. Resources are owned by the runtime's resource table;
+//! this enum only covers the async objects a handle table can also contain.
 enum class ComponentWaitableKind : uint8_t {
 	Subtask,
 	StreamRead,
@@ -119,8 +126,8 @@ struct ComponentAsyncEvent {
 	bool isNone() const { return code == ComponentEventCode::None; }
 };
 
-// One context slot value. The Canonical ABI only asks for a value of the
-// core type named by `canon context.get/set`, so a 64-bit cell is enough.
+//! One context slot value. The Canonical ABI only asks for a value of the
+//! core type named by `canon context.get/set`, so a 64-bit cell is enough.
 union ComponentContextSlot {
 	int64_t i64 = 0;
 	uint64_t u64;
@@ -130,8 +137,8 @@ union ComponentContextSlot {
 	float f32;
 };
 
-// One activation's state. The single-agent scheduler keeps exactly one of
-// these current; a future multi-agent backend keeps one per agent.
+//! One activation's state. The single-agent scheduler keeps exactly one of
+//! these current; a future multi-agent backend keeps one per agent.
 class ComponentTask {
 public:
 	explicit ComponentTask(uint32_t id) : id_(id) {}
@@ -173,8 +180,8 @@ private:
 	std::unordered_map<uint32_t, ComponentContextSlot> context_;
 };
 
-// A waitable is anything that can produce a ComponentAsyncEvent and join one
-// waitable set. Stream/future ends and subtasks are the concrete producers.
+//! A waitable is anything that can produce a ComponentAsyncEvent and join one
+//! waitable set. Stream/future ends and subtasks are the concrete producers.
 class ComponentWaitable {
 public:
 	explicit ComponentWaitable(ComponentWaitableKind kind) : kind_(kind) {}
@@ -185,17 +192,17 @@ public:
 	void* waitableSet() const { return set_; }
 	void setWaitableSet(void* set) { set_ = set; }
 
-	// Returns true and fills `event` when progress is pending.
+	//! Returns true and fills `event` when progress is pending.
 	virtual bool takeEvent(ComponentAsyncEvent& event) = 0;
 private:
 	ComponentWaitableKind kind_;
 	void* set_ = nullptr;
 };
 
-// A single-agent waitable set. `wait` and `poll` both return `none` when no
-// event is pending: there is no second agent that could make one appear, and
-// the documented single-agent deviation is that a caller must not spin on an
-// empty set (docs/proposals/THREADS.md TD9).
+//! A single-agent waitable set. `wait` and `poll` both return `none` when no
+//! event is pending: there is no second agent that could make one appear, and
+//! the documented single-agent deviation is that a caller must not spin on an
+//! empty set (docs/proposals/THREADS.md TD9).
 class ComponentWaitableSet {
 public:
 	ComponentAsyncEvent poll()
@@ -247,7 +254,7 @@ private:
 };
 
 
-// One end of a stream or future. The two ends share a ComponentAsyncChannel.
+//! One end of a stream or future. The two ends share a ComponentAsyncChannel.
 class ComponentAsyncChannel;
 
 class ComponentAsyncEndpoint : public ComponentWaitable {
@@ -282,9 +289,9 @@ public:
 		hasPendingEvent_ = true;
 	}
 
-	// A blocked async copy keeps the guest buffer here so the other end can
-	// complete it when data arrives. The pointer is into linear memory, which
-	// does not move while the memory is not grown.
+	//! A blocked async copy keeps the guest buffer here so the other end can
+	//! complete it when data arrives. The pointer is into linear memory, which
+	//! does not move while the memory is not grown.
 	void setPendingBuffer(LinearMemory* memory, uint64_t address, uint64_t count,
 			bool isRead)
 	{
@@ -318,8 +325,8 @@ private:
 	bool pendingIsRead_ = false;
 };
 
-// The shared queue behind a readable/writable pair. `elementSize == 0` models
-// the element-less `stream`/`future` forms, for which the buffer is ignored.
+//! The shared queue behind a readable/writable pair. `elementSize == 0` models
+//! the element-less `stream`/`future` forms, for which the buffer is ignored.
 class ComponentAsyncChannel {
 public:
 	explicit ComponentAsyncChannel(uint32_t elementSize, bool isFuture)
@@ -333,8 +340,8 @@ public:
 	void setReadableAlive(bool alive) { readableAlive_ = alive; }
 	void setWritableAlive(bool alive) { writableAlive_ = alive; }
 
-	// Raw byte queue. A stream transfers whole elements; a future transfers at
-	// most one value and then stays `Done`.
+	//! Raw byte queue. A stream transfers whole elements; a future transfers at
+	//! most one value and then stays `Done`.
 	std::deque<std::vector<uint8_t>>& queue() { return queue_; }
 	const std::deque<std::vector<uint8_t>>& queue() const { return queue_; }
 
@@ -350,24 +357,25 @@ private:
 };
 
 
-// ── The single-agent execution interface ───────────────────────────────────
-//
-// This is the seam a future multi-agent backend implements. The default
-// implementation is intentionally synchronous, single-threaded and reentrant:
-// `runUntilIdle` drains the queue on the calling thread. There is no OS thread
-// and no global state beyond the ComponentAsyncState instance.
+//! \brief The single-agent execution interface
+//!
+//! This is the seam a future multi-agent backend implements. The default
+//! implementation is intentionally synchronous, single-threaded and reentrant:
+//! `runUntilIdle` drains the queue on the calling thread. There is no OS thread
+//! and no global state beyond the ComponentAsyncState instance.
 class ComponentExecutor {
 public:
 	virtual ~ComponentExecutor() = default;
 
-	// The `canon thread.*` answers. A single-agent executor always reports 0
-	// and 1; a multi-agent executor may report per-agent values.
+	//! The answers of the `canon` thread built-ins. A single-agent executor
+	//! always reports 0 and 1; a multi-agent executor may report per-agent
+	//! values.
 	virtual uint32_t threadIndex() const = 0;
 	virtual uint32_t availableParallelism() const = 0;
 	virtual bool singleAgent() const = 0;
 
-	// Schedule `work` to run on the cooperative queue. It must not run before
-	// `runUntilIdle()` is called.
+	//! Schedule `work` to run on the cooperative queue. It must not run before
+	//! `runUntilIdle()` is called.
 	virtual void push(std::function<void()> work) = 0;
 	virtual void runUntilIdle() = 0;
 	virtual std::size_t pending() const = 0;
@@ -387,7 +395,7 @@ public:
 
 	void runUntilIdle() override
 	{
-		// Take a snapshot so work that enqueues more work is still drained.
+		//! Take a snapshot so work that enqueues more work is still drained.
 		while (!queue_.empty()) {
 			std::function<void()> work = std::move(queue_.front());
 			queue_.pop_front();
@@ -401,11 +409,11 @@ private:
 };
 
 
-// ── Stream/future and waitable bookkeeping ─────────────────────────────────
-//
-// ComponentAsyncState owns the handles for async objects. The host runtime
-// supplies the allocator/releaser so async handles share the component's one
-// handle index space with resources.
+//! \brief Stream/future and waitable bookkeeping
+//!
+//! ComponentAsyncState owns the handles for async objects. The host runtime
+//! supplies the allocator/releaser so async handles share the component's one
+//! handle index space with resources.
 class ComponentAsyncState {
 public:
 	using HandleAllocator = std::function<uint32_t()>;
@@ -414,8 +422,8 @@ public:
 	ComponentAsyncState(HandleAllocator allocate, HandleReleaser release)
 		: allocate_(std::move(allocate)), release_(std::move(release)) {}
 
-	// A stream/future with an optional element size. Returns the readable and
-	// writable handle (the low/high i32 of `{stream,future}.new`).
+	//! A stream/future with an optional element size. Returns the readable and
+	//! writable handle (the low/high i32 of `{stream,future}.new`).
 	std::pair<uint32_t, uint32_t> newStreamFuture(bool future, uint32_t elementSize)
 	{
 		const uint32_t readable = allocate_();
@@ -441,8 +449,8 @@ public:
 		return {readable, writable};
 	}
 
-	// `{stream,future}.read`: copy up to `count` elements from the channel into
-	// `memory[address]`. Returns `kBlocked` when `async` and no data is ready.
+	//! `{stream,future}.read`: copy up to `count` elements from the channel into
+	//! `memory[address]`. Returns `kBlocked` when `async` and no data is ready.
 	uint32_t read(uint32_t handle, LinearMemory& memory, uint64_t address,
 			uint64_t count, bool async)
 	{
@@ -454,7 +462,7 @@ public:
 		if (count == 0 && !channel.isFuture())
 			return packCopyResult(ComponentCopyResult::Completed, 0);
 
-		// A writer may have already blocked on this read; feed its data in now.
+		//! A writer may have already blocked on this read; feed its data in now.
 		if (ComponentAsyncEndpoint* peer = peerOf(handle);
 				peer != nullptr && peer->hasPendingBuffer() && !peer->pendingIsRead())
 			completePendingWrite(*peer);
@@ -509,8 +517,8 @@ public:
 	}
 
 
-	// `{stream,future}.write`: copy `count` elements from memory into the
-	// channel. Returns `kBlocked` when `async` and there is no reader yet.
+	//! `{stream,future}.write`: copy `count` elements from memory into the
+	//! channel. Returns `kBlocked` when `async` and there is no reader yet.
 	uint32_t write(uint32_t handle, LinearMemory& memory, uint64_t address,
 			uint64_t count, bool async)
 	{
@@ -540,7 +548,7 @@ public:
 			channel.queue().push_back(std::move(value));
 			channel.setFutureWritten(true);
 			end.setState(ComponentEndState::Done);
-			// If the reader already blocked, complete it now.
+			//! If the reader already blocked, complete it now.
 			if (ComponentAsyncEndpoint* peer = peerOf(handle);
 					peer != nullptr && peer->hasPendingBuffer() && peer->pendingIsRead())
 				completePendingRead(*peer);
@@ -562,9 +570,9 @@ public:
 				static_cast<uint32_t>(count));
 	}
 
-	// `{stream,future}.cancel-{read,write}`. The single-agent runtime has no
-	// buffer-owning background copy, so cancellation only succeeds for an end
-	// whose copy was already blocked (state == Copying).
+	//! `{stream,future}.cancel-{read,write}`. The single-agent runtime has no
+	//! buffer-owning background copy, so cancellation only succeeds for an end
+	//! whose copy was already blocked (state == Copying).
 	uint32_t cancel(uint32_t handle, bool /*async*/)
 	{
 		auto it = endpoints_.find(handle);
@@ -621,8 +629,8 @@ public:
 			channels_.erase(handle);
 	}
 
-	// `{stream,future}.forward`: connect the readable end to the writable end
-	// and merge any queued elements. Both handles are removed by the caller.
+	//! `{stream,future}.forward`: connect the readable end to the writable end
+	//! and merge any queued elements. Both handles are removed by the caller.
 	void forward(uint32_t readableHandle, uint32_t writableHandle)
 	{
 		ComponentAsyncEndpoint& readable = endpoint(readableHandle,
@@ -653,8 +661,8 @@ public:
 		writable.setChannel(source);
 	}
 
-	// Removes a handle without notifying the peer. Used by `forward`, where the
-	// endpoints are transferred rather than dropped.
+	//! Removes a handle without notifying the peer. Used by `forward`, where the
+	//! endpoints are transferred rather than dropped.
 	void discard(uint32_t handle)
 	{
 		const auto it = endpoints_.find(handle);
@@ -670,7 +678,7 @@ public:
 
 
 
-	// ── Waitable sets ──────────────────────────────────────────────────────
+	//! \par Waitable sets
 	uint32_t newWaitableSet()
 	{
 		const uint32_t handle = allocate_();
@@ -723,7 +731,7 @@ public:
 		waitableSet(setHandle).add(waitable);
 	}
 
-	// ── Tasks, context and backpressure ────────────────────────────────────
+	//! \par Tasks, context and backpressure
 	ComponentTask& currentTask() { return *currentTask_; }
 	uint32_t taskReturn() { currentTask_->resolve(); return 0; }
 	uint32_t taskCancel()
@@ -745,8 +753,8 @@ public:
 
 	uint32_t backpressure() const { return currentTask_->backpressure(); }
 
-	// Error contexts. The single-agent model stores the diagnostic string; a
-	// multi-agent backend would use the same handle table.
+	//! Error contexts. The single-agent model stores the diagnostic string; a
+	//! multi-agent backend would use the same handle table.
 	uint32_t newErrorContext(std::string message)
 	{
 		const uint32_t handle = allocate_();
@@ -771,8 +779,8 @@ public:
 		release_(handle);
 	}
 
-	// Subtasks: in a single-agent executor a synchronous call is already
-	// resolved when it returns. The handle exists so the built-ins validate.
+	//! Subtasks: in a single-agent executor a synchronous call is already
+	//! resolved when it returns. The handle exists so the built-ins validate.
 	uint32_t newSubtask()
 	{
 		const uint32_t handle = allocate_();
@@ -859,8 +867,8 @@ private:
 					"component async: stream/future end is not idle");
 	}
 
-	// A previously blocked read: move up to its buffer's capacity from the
-	// channel into the guest memory and publish a progress event.
+	//! A previously blocked read: move up to its buffer's capacity from the
+	//! channel into the guest memory and publish a progress event.
 	static void completePendingRead(ComponentAsyncEndpoint& reader)
 	{
 		ComponentAsyncChannel& channel = *reader.channel();
@@ -889,9 +897,9 @@ private:
 						static_cast<uint32_t>(copied))});
 	}
 
-	// A previously blocked write (a future written twice): once the first value
-	// has been consumed, move the stored value into the channel and publish an
-	// event for the writer.
+	//! A previously blocked write (a future written twice): once the first value
+	//! has been consumed, move the stored value into the channel and publish an
+	//! event for the writer.
 	static void completePendingWrite(ComponentAsyncEndpoint& writer)
 	{
 		ComponentAsyncChannel& channel = *writer.channel();
@@ -941,8 +949,8 @@ private:
 	std::unordered_map<uint32_t, std::unique_ptr<ComponentAsyncEndpoint>> endpoints_;
 	std::vector<std::unique_ptr<ComponentAsyncChannel>> channelStorage_;
 	std::unordered_map<uint32_t, ComponentAsyncChannel*> channels_;
-	std::unordered_map<uint32_t, uint32_t> readableOf_; // writable -> readable
-	std::unordered_map<uint32_t, uint32_t> writableOf_; // readable -> writable
+	std::unordered_map<uint32_t, uint32_t> readableOf_; //!< writable -> readable
+	std::unordered_map<uint32_t, uint32_t> writableOf_; //!< readable -> writable
 	std::unordered_map<uint32_t, ComponentWaitableSet> waitableSets_;
 	std::unordered_map<uint32_t, std::string> errorContexts_;
 	std::unordered_set<uint32_t> subtasks_;

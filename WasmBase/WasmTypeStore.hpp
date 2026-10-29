@@ -3,8 +3,14 @@
 
 #include "WasmApi.hpp"
 
-// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
-// exported surface (the public headers are the declared list).
+/*!
+  \file WasmTypeStore.hpp
+  \brief The compact, unified type records every module's types are interned into.
+
+  This header is part of the exported surface: every declaration in it
+  is exported (docs/EMBEDDING_SURFACE.md ES-4).
+*/
+
 WASMJIT_VISIBLE_BEGIN
 #include "WasmCanonicalType.hpp"
 #include "WasmType.hpp"
@@ -21,20 +27,20 @@ WASMJIT_VISIBLE_BEGIN
 
 namespace WASM {
 
-// ── Unified type records (docs/proposals/TYPE_MODEL.md §7) ─────────────────
-// A TypeId names one record in the store. Records are small and refer to
-// shared payload pools by index; no record owns a vector or a string.
+//! \brief Unified type records (docs/proposals/TYPE_MODEL.md §7)
+//! A TypeId names one record in the store. Records are small and refer to
+//! shared payload pools by index; no record owns a vector or a string.
 enum class TypeDomain : uint8_t { Core, Component };
 
 enum class TypeKind : uint16_t {
 	CoreFunc = 1,
 	CoreStruct,
 	CoreArray,
-	// Stack-switching continuation composite type.
+	//! Stack-switching continuation composite type.
 	CoreCont,
-	// A nominal type imported with `(type (sub <heaptype>))` (TYPE_IMPORTS.md).
-	// Its representation is the abstract bound; it is never structurally
-	// interned and never equals a definition with the same shape.
+	//! A nominal type imported with `(type (sub <heaptype>))` (TYPE_IMPORTS.md).
+	//! Its representation is the abstract bound; it is never structurally
+	//! interned and never equals a definition with the same shape.
 	CoreImport,
 	ComponentPrimitive,
 	ComponentRecord,
@@ -63,7 +69,7 @@ enum TypeFlags : uint16_t {
 	TypeFlagMutable = 1u << 2,
 	TypeFlagNullable = 1u << 3,
 	TypeFlagAbstract = 1u << 4,
-	// Shared-everything threads: `sharecomptype` (SET-1).
+	//! Shared-everything threads: `sharecomptype` (SET-1).
 	TypeFlagShared = 1u << 5
 };
 
@@ -73,7 +79,7 @@ struct TypeSpan {
 	constexpr bool empty() const { return count == 0; }
 };
 
-// A compact reference to a store record. Eight bytes on the target ABI.
+//! A compact reference to a store record. Eight bytes on the target ABI.
 struct TypeRef {
 	TypeDomain domain = TypeDomain::Core;
 	TypeKind kind = TypeKind::CoreFunc;
@@ -94,8 +100,8 @@ struct CoreFuncPayload {
 
 struct CoreStructPayload {
 	TypeSpan fields;
-	// Custom Descriptors: optional clauses, retained alongside the struct's
-	// fields so the compact 16-byte TypeRecord does not grow.
+	//! Custom Descriptors: optional clauses, retained alongside the struct's
+	//! fields so the compact 16-byte TypeRecord does not grow.
 	std::optional<CanonHeapType> descriptor;
 	std::optional<CanonHeapType> describes;
 };
@@ -108,14 +114,14 @@ struct CoreContPayload {
 	CanonHeapType func;
 };
 
-// An imported type is nominal; only its abstract representation bound is
-// stored. `bound` is always abstract in the MVP (no concrete type bound).
+//! An imported type is nominal; only its abstract representation bound is
+//! stored. `bound` is always abstract in the MVP (no concrete type bound).
 struct CoreImportPayload {
 	CanonHeapType bound;
 };
 
-// ── Component type records ──────────────────────────────────────────────────
-// Component names are interned; a label is a 4-byte StringId, not a string.
+//! \par Component type records
+//! Component names are interned; a label is a 4-byte StringId, not a string.
 using StringId = uint32_t;
 
 enum class PrimitiveValueType : uint8_t {
@@ -140,7 +146,7 @@ struct ComponentValueType {
 	enum class Kind : uint8_t { TypeIndex, Primitive, TypeId };
 	Kind kind = Kind::Primitive;
 	PrimitiveValueType primitive = PrimitiveValueType::Invalid;
-	// TypeIndex for parser syntax, TypeId.value for canonical records.
+	//! TypeIndex for parser syntax, TypeId.value for canonical records.
 	uint32_t typeIndex = 0;
 };
 
@@ -149,9 +155,9 @@ struct ComponentField {
 	ComponentValueType type;
 };
 
-// ── Canonical ABI metadata (TM-10 first slice) ─────────────────────────────
-// The ABI signature is derived metadata: it is keyed by a canonical TypeId plus
-// the canon options that affect lowering, and never enters the type intern key.
+//! \brief Canonical ABI metadata (TM-10 first slice)
+//! The ABI signature is derived metadata: it is keyed by a canonical TypeId plus
+//! the canon options that affect lowering, and never enters the type intern key.
 enum class AbiCoreType : uint8_t { I32, I64, F32, F64 };
 
 struct CanonicalAbiOptions {
@@ -163,7 +169,7 @@ struct CanonicalAbiOptions {
 	uint32_t realloc = kNoIndex;
 	uint32_t postReturn = kNoIndex;
 	bool async = false;
-	// Canonical ABI pointer/length width: 4 for memory32, 8 for memory64.
+	//! Canonical ABI pointer/length width: 4 for memory32, 8 for memory64.
 	uint8_t pointerSize = 4;
 
 	bool operator==(const CanonicalAbiOptions& other) const
@@ -183,10 +189,10 @@ struct CanonicalAbiSignature {
 	CanonicalAbiOptions options;
 	std::vector<AbiCoreType> flatParams;
 	std::vector<AbiCoreType> flatResults;
-	// Canonical ABI MAX_FLAT_PARAMS (16) / MAX_FLAT_RESULTS (1) spill the
-	// component values through memory. `flatParams`/`flatResults` still describe
-	// the component-level flattening; consumers use these flags for the core
-	// signature.
+	//! Canonical ABI MAX_FLAT_PARAMS (16) / MAX_FLAT_RESULTS (1) spill the
+	//! component values through memory. `flatParams`/`flatResults` still describe
+	//! the component-level flattening; consumers use these flags for the core
+	//! signature.
 	bool indirectParams = false;
 	bool indirectResults = false;
 };
@@ -196,8 +202,8 @@ struct CanonicalAbiLayout {
 	uint32_t align = 1;
 };
 
-// Open component type scheme metadata. The structural key lives in the store's
-// intern table; the closed TypeId space never contains a scheme parameter.
+//! Open component type scheme metadata. The structural key lives in the store's
+//! intern table; the closed TypeId space never contains a scheme parameter.
 struct TypeScheme {
 	uint32_t parameterCount = 0;
 };
@@ -264,19 +270,19 @@ struct ComponentResourcePayload {
 	ValueType rep;
 	uint32_t destructor = 0;
 	bool hasDestructor = false;
-	// An abstract `sub resource` import has no representation or destructor yet;
-	// it still receives a fresh nominal TypeId.
+	//! An abstract `sub resource` import has no representation or destructor yet;
+	//! it still receives a fresh nominal TypeId.
 	bool abstract = false;
 };
 
-// One import/export declaration of a component or instance type. This is a
-// compact identity record, not the parser AST: names are interned, the sort is
-// encoded, and a referenced type is a Store TypeId (kNone when the declaration
-// is not type-bearing or its identity is still validator-only).
+//! One import/export declaration of a component or instance type. This is a
+//! compact identity record, not the parser AST: names are interned, the sort is
+//! encoded, and a referenced type is a Store TypeId (kNone when the declaration
+//! is not type-bearing or its identity is still validator-only).
 struct ComponentDeclRecord {
 	StringId name = 0;
-	uint16_t sort = 0;      // ComponentSort
-	uint16_t coreSort = 0;  // CoreSort when sort == ComponentSort::Core
+	uint16_t sort = 0;      //!< ComponentSort
+	uint16_t coreSort = 0;  //!< CoreSort when sort == ComponentSort::Core
 	TypeId type{TypeId::kNone};
 };
 
@@ -290,9 +296,9 @@ struct ComponentComponentPayload {
 
 class TypeStore;
 
-// A view over a core record in the store, or over a temporary core record
-// while a recursive group is being interned. Both forms expose the same
-// accessors, so matching does not need a second representation.
+//! A view over a core record in the store, or over a temporary core record
+//! while a recursive group is being interned. Both forms expose the same
+//! accessors, so matching does not need a second representation.
 class CoreTypeView
 {
 public:
@@ -312,10 +318,10 @@ public:
 	std::span<const CanonFieldType> structFields() const;
 	const CanonFieldType& arrayElement() const;
 	CanonHeapType contFunc() const;
-	// Custom Descriptors: optional `descriptor`/`describes` clauses.
+	//! Custom Descriptors: optional `descriptor`/`describes` clauses.
 	std::optional<CanonHeapType> descriptor() const;
 	std::optional<CanonHeapType> describes() const;
-	// The abstract bound of a `CoreImport` record; `AbstractHeapType::Func` etc.
+	//! The abstract bound of a `CoreImport` record; `AbstractHeapType::Func` etc.
 	CanonHeapType importBound() const;
 
 private:
@@ -359,23 +365,23 @@ private:
 	TypeId id_{};
 };
 
-// A process-lifetime owner of compact core and component type records.
-// TypeRegistry owns one; modules/components hold TypeIds and views only.
+//! A process-lifetime owner of compact core and component type records.
+//! TypeRegistry owns one; modules/components hold TypeIds and views only.
 class TypeStore
 {
 public:
 	TypeId appendCore(const CanonicalType& type);
 	CoreTypeView coreType(TypeId id) const;
-	// Intern a nominal imported type by (module, field, abstract bound). Two
-	// modules importing the same export share the identity; a different name or
-	// bound is a different nominal type.
+	//! Intern a nominal imported type by (module, field, abstract bound). Two
+	//! modules importing the same export share the identity; a different name or
+	//! bound is a different nominal type.
 	TypeId internCoreImport(std::string_view module, std::string_view field,
 			AbstractHeapType bound);
 
 	TypeId addComponentPrimitive(PrimitiveValueType primitive);
-	// These take the source lists directly so a structural hit does not append
-	// orphaned payload entries. A record whose nested ComponentValueType
-	// contains an unresolved local index is *not* interned; see the note.
+	//! These take the source lists directly so a structural hit does not append
+	//! orphaned payload entries. A record whose nested ComponentValueType
+	//! contains an unresolved local index is *not* interned; see the note.
 	TypeId addComponentRecord(std::span<const ComponentField> fields);
 	TypeId addComponentVariant(std::span<const ComponentCase> cases);
 	TypeId addComponentList(ComponentValueType element);
@@ -386,54 +392,54 @@ public:
 	TypeId addComponentResult(ComponentValueType ok, ComponentValueType error,
 			bool hasOk, bool hasError);
 	TypeId addComponentTypeRef(TypeKind kind, uint32_t typeIndex);
-	// Canonical own/borrow reference: the resource identity is a Store TypeId,
-	// so identical references to the same nominal resource share a record.
+	//! Canonical own/borrow reference: the resource identity is a Store TypeId,
+	//! so identical references to the same nominal resource share a record.
 	TypeId addComponentTypeRefCanonical(TypeKind kind, TypeId resource);
 	TypeId addComponentStream(TypeKind kind, ComponentValueType element, bool hasElement);
 	TypeId addComponentMap(ComponentValueType key, ComponentValueType value);
 	TypeId addComponentFunc(std::span<const ComponentFuncParam> params,
 			std::span<const ComponentValueType> results, bool isAsync);
 	TypeId addComponentResource(const ComponentResourcePayload& resource);
-	// Component/instance declarations are Store-owned compact records. Sets whose
-	// declarations all carry a TypeId intern structurally; a set containing a
-	// memory/global/table declaration stays nominal because the compact record has
-	// no core payload for it.
+	//! Component/instance declarations are Store-owned compact records. Sets whose
+	//! declarations all carry a TypeId intern structurally; a set containing a
+	//! memory/global/table declaration stays nominal because the compact record has
+	//! no core payload for it.
 	TypeId addComponentInstance(std::span<const ComponentDeclRecord> declarations);
 	TypeId addComponentComponent(std::span<const ComponentDeclRecord> declarations);
 	ComponentTypeView componentType(TypeId id) const;
 
-	// Open component/value/func schemes. `key` is the alpha-normalized
-	// structural key produced by the validator; parameters are placeholders.
+	//! Open component/value/func schemes. `key` is the alpha-normalized
+	//! structural key produced by the validator; parameters are placeholders.
 	SchemeId internScheme(std::string key, uint32_t parameterCount);
 	const TypeScheme& scheme(SchemeId id) const { return schemes_[id.value]; }
 	std::size_t schemeCount() const { return schemes_.size(); }
 	std::size_t schemeInternHits() const { return schemeInternHits_; }
 	std::size_t schemeInternMisses() const { return schemeInternMisses_; }
 
-	// Derived Canonical ABI metadata (TM-10 first slice). Returns nullptr when
-	// the type is not a function or uses a value shape this slice cannot
-	// flatten. The result is cached by (TypeId, options) and is inert: it does
-	// not affect structural identity.
+	//! Derived Canonical ABI metadata (TM-10 first slice). Returns nullptr when
+	//! the type is not a function or uses a value shape this slice cannot
+	//! flatten. The result is cached by (TypeId, options) and is inert: it does
+	//! not affect structural identity.
 	const CanonicalAbiSignature* canonicalAbi(TypeId type,
 			const CanonicalAbiOptions& options) const;
-	// Memory layout for a value type (not a component function/instance). Returns
-	// false for shapes whose layout this slice does not derive yet (variants,
-	// options/results/maps/streams/futures).
+	//! Memory layout for a value type (not a component function/instance). Returns
+	//! false for shapes whose layout this slice does not derive yet (variants,
+	//! options/results/maps/streams/futures).
 	bool canonicalAbiLayout(TypeId type, const CanonicalAbiOptions& options,
 			CanonicalAbiLayout& out) const;
-	// Same layout query for a value node that may be a parser-level primitive or
-	// a canonical TypeId. Used by the runtime when walking list elements.
+	//! Same layout query for a value node that may be a parser-level primitive or
+	//! a canonical TypeId. Used by the runtime when walking list elements.
 	bool canonicalAbiLayoutValue(const ComponentValueType& value,
 			const CanonicalAbiOptions& options, CanonicalAbiLayout& out) const;
-	// Flat core signature of one value type, for variant/option payload padding.
+	//! Flat core signature of one value type, for variant/option payload padding.
 	bool canonicalAbiFlatValue(const ComponentValueType& value,
 			std::vector<AbiCoreType>& out) const;
 	std::size_t canonicalAbiCacheSize() const { return canonicalAbi_.size(); }
 	std::size_t canonicalAbiHits() const { return canonicalAbiHits_; }
 	std::size_t canonicalAbiMisses() const { return canonicalAbiMisses_; }
 
-	// Structural component interning diagnostics. Closed records participate;
-	// parser syntax records with a local index and nominal resources do not.
+	//! Structural component interning diagnostics. Closed records participate;
+	//! parser syntax records with a local index and nominal resources do not.
 	std::size_t componentInternedCount() const { return componentIntern_.size(); }
 	std::size_t componentInternHits() const { return componentInternHits_; }
 	std::size_t componentInternMisses() const { return componentInternMisses_; }
@@ -459,8 +465,8 @@ public:
 		return record(id).kind <= TypeKind::CoreImport
 				? TypeDomain::Core : TypeDomain::Component;
 	}
-	// The TypeId space is shared, so core records are *not* a dense prefix:
-	// component records may have been appended between two core definitions.
+	//! The TypeId space is shared, so core records are *not* a dense prefix:
+	//! component records may have been appended between two core definitions.
 	bool isCoreType(TypeId id) const
 	{
 		return id.value < records_.size() && domain(id) == TypeDomain::Core;
@@ -474,8 +480,8 @@ private:
 	friend class ComponentTypeView;
 	TypeId addComponentRecord(TypeKind kind, uint16_t flags, uint32_t payload);
 
-	// Intern `key` to the record created by `create` on a miss. Only closed,
-	// local-index-free records are passed here.
+	//! Intern `key` to the record created by `create` on a miss. Only closed,
+	//! local-index-free records are passed here.
 	template <typename Create>
 	TypeId internComponent(std::string key, Create&& create)
 	{
@@ -493,7 +499,7 @@ private:
 	std::vector<TypeRecord> records_;
 	std::size_t coreCount_ = 0;
 
-	// Core payloads.
+	//! Core payloads.
 	std::vector<CanonHeapType> coreSupertypes_;
 	std::vector<CanonStorageType> coreStorage_;
 	std::vector<CanonFieldType> coreFields_;
@@ -504,7 +510,7 @@ private:
 	std::vector<CoreContPayload> coreConts_;
 	std::vector<uint32_t> depths_;
 
-	// Component payloads.
+	//! Component payloads.
 	std::vector<ComponentField> componentFields_;
 	std::vector<ComponentCase> componentCases_;
 	std::vector<ComponentValueType> componentValues_;
@@ -530,12 +536,12 @@ private:
 	std::vector<std::string> strings_;
 	std::unordered_map<std::string, StringId> stringIds_;
 
-	// Closed component records keyed by a canonical byte key. Records that
-	// contain a component-local type index are deliberately absent: the index
-	// is only meaningful inside one component, so interning them would make
-	// two unrelated components share an identity.
+	//! Closed component records keyed by a canonical byte key. Records that
+	//! contain a component-local type index are deliberately absent: the index
+	//! is only meaningful inside one component, so interning them would make
+	//! two unrelated components share an identity.
 	std::unordered_map<std::string, TypeId> componentIntern_;
-	// Nominal core type imports, keyed by length-prefixed module/field + bound.
+	//! Nominal core type imports, keyed by length-prefixed module/field + bound.
 	std::unordered_map<std::string, TypeId> coreImportIntern_;
 	std::size_t componentInternHits_ = 0;
 	std::size_t componentInternMisses_ = 0;

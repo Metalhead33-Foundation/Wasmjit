@@ -3,8 +3,14 @@
 
 #include "WasmApi.hpp"
 
-// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
-// exported surface (the public headers are the declared list).
+/*!
+  \file WasmOpcodeDispatcher.hpp
+  \brief The opcode-dispatcher interface: one visit per instruction.
+
+  This header is part of the exported surface: every declaration in it
+  is exported (docs/EMBEDDING_SURFACE.md ES-4).
+*/
+
 WASMJIT_VISIBLE_BEGIN
 
 #include "WasmApi.hpp"
@@ -15,9 +21,9 @@ namespace WASM {
 
 typedef WasmStream<Euph::Io::ConstBufferDevice> FastMemReader;
 
-// One `(on $tag $label)` or `(on $tag switch)` clause of `resume`. The switch
-// form is decoded so the stream stays in sync, then rejected by the validator
-// and the backend until the symmetric `switch` instruction exists.
+//! One `(on $tag $label)` or `(on $tag switch)` clause of `resume`. The switch
+//! form is decoded so the stream stays in sync, then rejected by the validator
+//! and the backend until the symmetric `switch` instruction exists.
 struct ContHandlerClause {
 	TagIdx tag = 0;
 	LabelIdx label = 0;
@@ -27,27 +33,27 @@ struct ContHandlerClause {
 class WASMJIT_API OpcodeDispatcher
 {
 protected:
-	// Byte offset of the instruction currently being dispatched, relative to
-	// the start of the function body's opcode stream (i.e. excluding the
-	// locals declaration). Set by readCode() before each dispatchOpcode().
-	// Backends that consult side metadata (e.g. branch hints) use this.
+	//! Byte offset of the instruction currently being dispatched, relative to
+	//! the start of the function body's opcode stream (i.e. excluding the
+	//! locals declaration). Set by readCode() before each dispatchOpcode().
+	//! Backends that consult side metadata (e.g. branch hints) use this.
 	size_t instructionOffset = 0;
 
-	// Default implementation of every dispatch* method. A backend that executes
-	// code must override each opcode it supports; the default reports the gap
-	// loudly instead of silently doing nothing. The validator overrides this to
-	// skip (accept) a function body it does not model yet.
+	//! Default implementation of every dispatch* method. A backend that executes
+	//! code must override each opcode it supports; the default reports the gap
+	//! loudly instead of silently doing nothing. The validator overrides this to
+	//! skip (accept) a function body it does not model yet.
 	virtual void onUnhandledOpcode(const char* name);
 
-	// Profile hooks (docs/proposals/PROFILES.md PR-2/PR-4). Called once per
-	// prefixed instruction before its handler; the validator overrides them to
-	// reject a construct an excluded marker forbids. The default accepts
-	// everything, so a backend that is not validating pays one empty virtual
-	// call per prefixed instruction at compile time.
+	//! Profile hooks (docs/proposals/PROFILES.md PR-2/PR-4). Called once per
+	//! prefixed instruction before its handler; the validator overrides them to
+	//! reject a construct an excluded marker forbids. The default accepts
+	//! everything, so a backend that is not validating pays one empty virtual
+	//! call per prefixed instruction at compile time.
 	virtual void onSimdOpcode(SIMDOpcode) {}
 	virtual void onAtomicOpcode(AtomicOpcode) {}
 
-	// Concrete opcode dispatches:
+	//! Concrete opcode dispatches:
 	virtual void dispatchUnreachable() { onUnhandledOpcode("dispatchUnreachable"); }
 	virtual void dispatchNop() { onUnhandledOpcode("dispatchNop"); }
 	virtual void dispatchBlock(const BlockType& arg) { onUnhandledOpcode("dispatchBlock"); }
@@ -56,9 +62,9 @@ protected:
 	virtual void dispatchElse() { onUnhandledOpcode("dispatchElse"); }
 	virtual void dispatchThrow(TagIdx arg) { onUnhandledOpcode("dispatchThrow"); }
 	virtual void dispatchThrowRef() { onUnhandledOpcode("dispatchThrowRef"); }
-	// Stack switching (docs/proposals/STACK_SWITCHING.md). Only the narrow
-	// stage-2 slice has handlers; the remaining instructions stay rejected at
-	// decode time.
+	//! Stack switching (docs/proposals/STACK_SWITCHING.md). Only the narrow
+	//! stage-2 slice has handlers; the remaining instructions stay rejected at
+	//! decode time.
 	virtual void dispatchContNew(TypeIdx arg) { onUnhandledOpcode("dispatchContNew"); }
 	virtual void dispatchContBind(TypeIdx arg1, TypeIdx arg2)
 	{
@@ -282,7 +288,7 @@ protected:
 	virtual void dispatchBrOnNonNull(LabelIdx arg) { onUnhandledOpcode("dispatchBrOnNonNull"); }
 	virtual void dispatchStructNew(TypeIdx arg) { onUnhandledOpcode("dispatchStructNew"); }
 	virtual void dispatchStructNewDefault(TypeIdx arg) { onUnhandledOpcode("dispatchStructNewDefault"); }
-	// Custom Descriptors (0xFB 32..38).
+	//! Custom Descriptors (0xFB 32..38).
 	virtual void dispatchStructNewDesc(TypeIdx arg) { onUnhandledOpcode("dispatchStructNewDesc"); }
 	virtual void dispatchStructNewDefaultDesc(TypeIdx arg) { onUnhandledOpcode("dispatchStructNewDefaultDesc"); }
 	virtual void dispatchRefGetDesc(TypeIdx arg) { onUnhandledOpcode("dispatchRefGetDesc"); }
@@ -299,7 +305,7 @@ protected:
 	virtual void dispatchArrayNewFixed(TypeIdx arg1, uint32_t arg2) { onUnhandledOpcode("dispatchArrayNewFixed"); }
 	virtual void dispatchArrayNewData(TypeIdx arg1, uint32_t arg2) { onUnhandledOpcode("dispatchArrayNewData"); }
 	virtual void dispatchArrayNewElem(TypeIdx arg1, uint32_t arg2) { onUnhandledOpcode("dispatchArrayNewElem"); }
-	// More Array Constructors (GC_EXTENSIONS.md GX-2).
+	//! More Array Constructors (GC_EXTENSIONS.md GX-2).
 	virtual void dispatchArrayNewArray(TypeIdx dst, TypeIdx src) { onUnhandledOpcode("dispatchArrayNewArray"); }
 	virtual void dispatchArrayNewMemory(TypeIdx dst, MemIdx src) { onUnhandledOpcode("dispatchArrayNewMemory"); }
 	virtual void dispatchArrayNewTable(TypeIdx dst, TableIdx src) { onUnhandledOpcode("dispatchArrayNewTable"); }
@@ -324,9 +330,9 @@ protected:
 	virtual void dispatchI31GetS() { onUnhandledOpcode("dispatchI31GetS"); }
 	virtual void dispatchI31GetU() { onUnhandledOpcode("dispatchI31GetU"); }
 
-	// ── 0xFB >= 0x80: stringref (docs/proposals/STRINGREF.md STR-3) ──────
-	// The core instructions are implemented; the view (STR-4) and GC-array
-	// variants are deliberately left at the default.
+	//! \par 0xFB >= 0x80: stringref (docs/proposals/STRINGREF.md STR-3)
+	//! The core instructions are implemented; the view (STR-4) and GC-array
+	//! variants are deliberately left at the default.
 	virtual void dispatchStringNewUtf8(MemIdx arg) { onUnhandledOpcode("dispatchStringNewUtf8"); }
 	virtual void dispatchStringNewWtf16(MemIdx arg) { onUnhandledOpcode("dispatchStringNewWtf16"); }
 	virtual void dispatchStringNewLossyUtf8(MemIdx arg) { onUnhandledOpcode("dispatchStringNewLossyUtf8"); }
@@ -343,7 +349,7 @@ protected:
 	virtual void dispatchStringEq() { onUnhandledOpcode("dispatchStringEq"); }
 	virtual void dispatchStringIsUsvSequence() { onUnhandledOpcode("dispatchStringIsUsvSequence"); }
 
-	// stringview facility (STR-4)
+	//! stringview facility (STR-4)
 	virtual void dispatchStringAsWtf8() { onUnhandledOpcode("dispatchStringAsWtf8"); }
 	virtual void dispatchStringViewWtf8Advance() { onUnhandledOpcode("dispatchStringViewWtf8Advance"); }
 	virtual void dispatchStringViewWtf8EncodeUtf8(MemIdx arg) { onUnhandledOpcode("dispatchStringViewWtf8EncodeUtf8"); }
@@ -361,7 +367,7 @@ protected:
 	virtual void dispatchStringViewIterRewind() { onUnhandledOpcode("dispatchStringViewIterRewind"); }
 	virtual void dispatchStringViewIterSlice() { onUnhandledOpcode("dispatchStringViewIterSlice"); }
 
-	// GC-array string bridge (STR-6)
+	//! GC-array string bridge (STR-6)
 	virtual void dispatchStringNewUtf8Array(TypeIdx arg) { onUnhandledOpcode("dispatchStringNewUtf8Array"); }
 	virtual void dispatchStringNewWtf16Array(TypeIdx arg) { onUnhandledOpcode("dispatchStringNewWtf16Array"); }
 	virtual void dispatchStringEncodeUtf8Array(TypeIdx arg) { onUnhandledOpcode("dispatchStringEncodeUtf8Array"); }
@@ -383,14 +389,14 @@ protected:
 	virtual void dispatchMemoryCopy(MemIdx arg1, MemIdx arg2) { onUnhandledOpcode("dispatchMemoryCopy"); }
 	virtual void dispatchMemoryFill(MemIdx arg) { onUnhandledOpcode("dispatchMemoryFill"); }
 	virtual void dispatchMemoryDiscard(MemIdx arg) { onUnhandledOpcode("dispatchMemoryDiscard"); }
-	// One hook for the 0xFC 0x80–0xBB rounding-mode-control variants
-	// (docs/proposals/NUMERIC_PROPOSALS.md NUM-2).
+	//! One hook for the 0xFC 0x80–0xBB rounding-mode-control variants
+	//! (docs/proposals/NUMERIC_PROPOSALS.md NUM-2).
 	virtual void dispatchRoundingVariant(uint32_t sub) { onUnhandledOpcode("dispatchRoundingVariant"); }
 	virtual void dispatchI64Add128() { onUnhandledOpcode("dispatchI64Add128"); }
 	virtual void dispatchI64Sub128() { onUnhandledOpcode("dispatchI64Sub128"); }
 	virtual void dispatchI64MulWideS() { onUnhandledOpcode("dispatchI64MulWideS"); }
 	virtual void dispatchI64MulWideU() { onUnhandledOpcode("dispatchI64MulWideU"); }
-	// Instrument/tracing marker: no stack effect, no runtime effect.
+	//! Instrument/tracing marker: no stack effect, no runtime effect.
 	virtual void dispatchI32Itt(uint32_t immediate) { onUnhandledOpcode("dispatchI32Itt"); }
 	virtual void dispatchTableInit(uint32_t arg1, TableIdx arg2) { onUnhandledOpcode("dispatchTableInit"); }
 	virtual void dispatchElemDrop(uint32_t arg) { onUnhandledOpcode("dispatchElemDrop"); }
@@ -660,8 +666,8 @@ protected:
 	virtual void dispatchAtomicFence(uint8_t ordering) { onUnhandledOpcode("dispatchAtomicFence"); }
 	virtual void dispatchAtomicPause() { onUnhandledOpcode("dispatchAtomicPause"); }
 
-	// Shared-everything threads (SET-3): fixed u8 ordering + an index/type
-	// immediate. Named exactly like the instruction so the probe links.
+	//! Shared-everything threads (SET-3): fixed u8 ordering + an index/type
+	//! immediate. Named exactly like the instruction so the probe links.
 	virtual void dispatchGlobalAtomicGet(uint8_t, GlobalIdx arg) { onUnhandledOpcode("dispatchGlobalAtomicGet"); }
 	virtual void dispatchGlobalAtomicSet(uint8_t, GlobalIdx arg) { onUnhandledOpcode("dispatchGlobalAtomicSet"); }
 	virtual void dispatchGlobalAtomicRmwAdd(uint8_t, GlobalIdx arg) { onUnhandledOpcode("dispatchGlobalAtomicRmwAdd"); }
@@ -760,13 +766,13 @@ protected:
 	virtual void dispatchI64AtomicRmw8CmpxchgU(MemArg arg) { onUnhandledOpcode("dispatchI64AtomicRmw8CmpxchgU"); }
 	virtual void dispatchI64AtomicRmw16CmpxchgU(MemArg arg) { onUnhandledOpcode("dispatchI64AtomicRmw16CmpxchgU"); }
 	virtual void dispatchI64AtomicRmw32CmpxchgU(MemArg arg) { onUnhandledOpcode("dispatchI64AtomicRmw32CmpxchgU"); }
-	// Prefix dispatches
+	//! Prefix dispatches
 	void dispatchPrefixGC(FastMemReader& stream, GCOpcode opcode);
 	void dispatchPrefixString(FastMemReader& stream, StringOpcode opcode);
 	void dispatchPrefixMisc(FastMemReader& stream, MiscOpcode opcode);
 	void dispatchPrefixSIMD(FastMemReader& stream, SIMDOpcode opcode);
 	void dispatchPrefixAtomic(FastMemReader& stream, AtomicOpcode opcode);
-	// Helper for dispatching code
+	//! Helper for dispatching code
 	void dispatchOpcode(FastMemReader& stream, Opcode opcode);
 public:
 	~OpcodeDispatcher() = default;

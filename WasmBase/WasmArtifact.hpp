@@ -3,8 +3,14 @@
 
 #include "WasmApi.hpp"
 
-// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
-// exported surface (the public headers are the declared list).
+/*!
+  \file WasmArtifact.hpp
+  \brief Artifact kind detection, the preamble and the parse entry point.
+
+  This header is part of the exported surface: every declaration in it
+  is exported (docs/EMBEDDING_SURFACE.md ES-4).
+*/
+
 WASMJIT_VISIBLE_BEGIN
 
 #include "WasmApi.hpp"
@@ -19,13 +25,13 @@ class Module;
 class Component;
 class Store;
 
-// The two kinds of artifact that share the `\0asm` magic.
+//! The two kinds of artifact that share the `\0asm` magic.
 enum class ArtifactKind : uint8_t {
 	CoreModule,
 	Component
 };
 
-// Component Model preamble values (the core module version is not checked).
+//! Component Model preamble values (the core module version is not checked).
 inline constexpr uint16_t kComponentVersion = 0x000D;
 inline constexpr uint16_t kComponentLayer = 0x0001;
 
@@ -34,10 +40,10 @@ struct Preamble {
 	uint16_t layer = 0;
 };
 
-// Common base for a parsed core module and a parsed Component Model component.
-// `Artifact::parse` is the "parse this file" entry point: it reads the first
-// eight bytes and dispatches on the layer field, so a caller does not need to
-// know in advance which kind it holds.
+//! Common base for a parsed core module and a parsed Component Model component.
+//! `Artifact::parse` is the "parse this file" entry point: it reads the first
+//! eight bytes and dispatches on the layer field, so a caller does not need to
+//! know in advance which kind it holds.
 struct WASMJIT_API Artifact {
 	ArtifactKind kind;
 	uint32_t version = 0;
@@ -52,26 +58,26 @@ struct WASMJIT_API Artifact {
 	bool isCoreModule() const { return kind == ArtifactKind::CoreModule; }
 	bool isComponent() const { return kind == ArtifactKind::Component; }
 
-	// Downcasts; null when the artifact is the other kind.
+	//! Downcasts; null when the artifact is the other kind.
 	Module* asCoreModule();
 	const Module* asCoreModule() const;
 	Component* asComponent();
 	const Component* asComponent() const;
 
-	// Reads magic (4) + version (2) + layer (2) and validates the magic.
+	//! Reads magic (4) + version (2) + layer (2) and validates the magic.
 	static Preamble readPreamble(Elv::Io::Device& file);
 
-	// Reads the preamble and returns a Module or a Component, interning every
-	// type in `store`. An artifact belongs to exactly one store; there is no
-	// process-wide default (docs/EMBEDDING_SURFACE.md §4.3 option B).
+	//! Reads the preamble and returns a Module or a Component, interning every
+	//! type in `store`. An artifact belongs to exactly one store; there is no
+	//! process-wide default (docs/EMBEDDING_SURFACE.md §4.3 option B).
 	static std::unique_ptr<Artifact> parse(Elv::Io::Device& file, Store& store);
 
-	// The store this artifact was parsed into. Valid after `parse`/`fromFile`.
+	//! The store this artifact was parsed into. Valid after `parse`/`fromFile`.
 	Store& store() const { return *store_; }
 
 protected:
-	// Decodes the body after the preamble. `end` bounds a nested body inside
-	// a component; `std::nullopt` means "read to the device's end".
+	//! Decodes the body after the preamble. `end` bounds a nested body inside
+	//! a component; `std::nullopt` means "read to the device's end".
 	virtual void parseBody(Elv::Io::Device& file, std::optional<uint64_t> end) = 0;
 
 	Store* store_ = nullptr;

@@ -3,8 +3,14 @@
 
 #include "WasmApi.hpp"
 
-// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
-// exported surface (the public headers are the declared list).
+/*!
+  \file WasmComponentSection.hpp
+  \brief Component Model section identifiers and section headers.
+
+  This header is part of the exported surface: every declaration in it
+  is exported (docs/EMBEDDING_SURFACE.md ES-4).
+*/
+
 WASMJIT_VISIBLE_BEGIN
 #include <cstdint>
 #include <string>
@@ -12,7 +18,7 @@ WASMJIT_VISIBLE_BEGIN
 
 namespace WASM {
 
-// Section ids from the Component Model binary format (Binary.md).
+//! Section ids from the Component Model binary format (Binary.md).
 enum class ComponentSectionType : uint8_t {
 	Custom = 0,
 	CoreModule = 1,
@@ -36,10 +42,10 @@ struct ComponentSection {
 	ComponentSectionType type = ComponentSectionType::Invalid;
 	uint32_t size = 0;
 	uint64_t offset = 0;
-	// Custom sections only (the name that starts the payload).
+	//! Custom sections only (the name that starts the payload).
 	std::string name;
-	// Custom payload bytes. Opaque by definition; kept so no bytes are lost
-	// from the parser's view of the file.
+	//! Custom payload bytes. Opaque by definition; kept so no bytes are lost
+	//! from the parser's view of the file.
 	std::vector<uint8_t> data;
 };
 

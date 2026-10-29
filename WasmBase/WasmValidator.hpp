@@ -3,8 +3,14 @@
 
 #include "WasmApi.hpp"
 
-// docs/EMBEDDING_SURFACE.md ES-4: this header is entirely part of the public
-// surface, so every declaration in it is exported.
+/*!
+  \file WasmValidator.hpp
+  \brief The validating front end for a decoded core module.
+
+  This header is part of the exported surface: every declaration in it
+  is exported (docs/EMBEDDING_SURFACE.md ES-4).
+*/
+
 WASMJIT_VISIBLE_BEGIN
 #include "WasmModule.hpp"
 #include "WasmDiagnostics.hpp"
@@ -20,25 +26,25 @@ WASMJIT_VISIBLE_BEGIN
 
 namespace WASM {
 
-// Structural validator for a decoded module.
-//
-// Scope (first milestone): every rule that does not need the operand type
-// stack — section/index consistency, limits, exports, start, tags, global
-// initialisers, active segment targets, and the *immediate* checks inside
-// function bodies (memory/table/global/local/function/type/tag indices,
-// alignment, lane indices). A body containing an opcode this validator does not
-// model yet is conservatively accepted: the strictness lost there is measured
-// by `WASM_SPEC_VALIDATE=1`, and the engine must never reject a valid module.
-//
-// The dispatcher supplies the immediate decoding, so a new opcode needs no
-// validator-side byte parsing — only its rule. `onUnhandledOpcode` is how the
-// base class reports an opcode the backend/validator does not implement.
+//! Structural validator for a decoded module.
+//!
+//! Scope (first milestone): every rule that does not need the operand type
+//! stack — section/index consistency, limits, exports, start, tags, global
+//! initialisers, active segment targets, and the *immediate* checks inside
+//! function bodies (memory/table/global/local/function/type/tag indices,
+//! alignment, lane indices). A body containing an opcode this validator does not
+//! model yet is conservatively accepted: the strictness lost there is measured
+//! by `WASM_SPEC_VALIDATE=1`, and the engine must never reject a valid module.
+//!
+//! The dispatcher supplies the immediate decoding, so a new opcode needs no
+//! validator-side byte parsing — only its rule. `onUnhandledOpcode` is how the
+//! base class reports an opcode the backend/validator does not implement.
 class Validator final : public OpcodeDispatcher
 {
 public:
 	explicit Validator(const Module& module, ValidationOptions options = {});
 
-	// Throws std::runtime_error naming the first rule that failed.
+	//! Throws std::runtime_error naming the first rule that failed.
 	void validate();
 
 private:
@@ -54,36 +60,37 @@ private:
 	std::size_t totalGlobals = 0;
 	std::size_t totalTags = 0;
 
-	// Current function body (npos while validating module-level structure).
+	//! Current function body (npos while validating module-level structure).
 	static constexpr std::size_t kNoBody = static_cast<std::size_t>(-1);
 	std::size_t currentBody = kNoBody;
 	std::vector<ValueType> locals;
 
-	// Records a structured diagnostic (`WASM.VALIDATE.<LEAF>`) and throws
-	// `ValidationError` with the same text. An empty `id` asks
-	// `validationRuleId()` to classify the message into a stable rule family;
-	// a site that knows its rule better passes an explicit `DiagnosticId::…`.
+	//! Records a structured validation diagnostic and throws `ValidationError`
+	//! with the same text. The id is `WASM.VALIDATE.<LEAF>`. An empty `id` asks
+	//! `validationRuleId()` to classify the message into a stable rule family;
+	//! a site that knows its rule better passes an explicit `DiagnosticId::…`.
 	[[noreturn]] void fail(const std::string& message,
 			std::string_view id = {}) const;
 
-	// Diagnostic form of a local index in the body being validated
-	// (`"0 ($name)"`); the name-section outer key is the global function index.
+	//! Diagnostic form of a local index in the body being validated
+	//! (`"0 ($name)"`); the name-section outer key is the global function index.
 	std::string describeLocal(uint32_t idx) const;
 
 	FuncType funcTypeAt(uint32_t typeIdx) const;
-	// Resolve `cont $ft` to the module-local function type index it names. The
-	// canonical view stores a process-wide TypeId, so the module-local index is
-	// recovered from `typeIds` (STACK_SWITCHING.md SS-1).
+	//! Resolve `cont $ft` to the module-local function type index it names. The
+	//! canonical view stores a process-wide TypeId, so the module-local index is
+	//! recovered from `typeIds` (STACK_SWITCHING.md SS-1).
 	uint32_t continuationFuncIndex(TypeIdx contTypeIdx, const char* who) const;
 	FuncType continuationFuncType(TypeIdx contTypeIdx, const char* who) const;
-	// The stage-2 provider carries at most one i32 parameter and one i32 result
-	// for a continuation function, a control tag and a handler payload.
+	//! The stage-2 provider carries at most one i32 parameter and one i32 result
+	//! for a continuation function, a control tag and a handler payload.
 	void requireMvpContinuationSignature(const FuncType& type, const char* who) const;
 	void requireFunctionIndex(uint32_t idx) const;
 	void requireTableIndex(uint32_t idx) const;
 	void requireMemoryIndex(uint32_t idx) const;
-	// `string.*_array` type checks: the type index must be an array of the
-	// required packed element type; encode variants require a mutable array.
+	//! Type checks for the `string` array instructions: the type index must be
+	//! an array of the required packed element type; encode variants require a
+	//! mutable array.
 	void requireStringArrayType(TypeIdx idx, ValueTypeCode packed, bool requireMutable) const;
 	void requireGlobalIndex(uint32_t idx) const;
 	void requireTagIndex(uint32_t idx) const;
@@ -95,34 +102,34 @@ private:
 	bool memoryIs64(uint32_t idx) const;
 	bool memoryIsShared(uint32_t idx) const;
 
-	// Reference subtyping (nullability + the func/extern/exn/any hierarchies).
+	//! Reference subtyping (nullability + the func/extern/exn/any hierarchies).
 	bool refSubtype(const ValueType& actual, const ValueType& expected) const;
-	// True when a local of this type has an implicit default value, so reading it
-	// before any store is valid. Non-nullable references do not.
+	//! True when a local of this type has an implicit default value, so reading it
+	//! before any store is valid. Non-nullable references do not.
 	bool isDefaultable(const ValueType& type) const;
-	// `ref.func x` may only name a function that the module also mentions
-	// outside its function bodies or start function (the spec's `C.refs`).
+	//! `ref.func x` may only name a function that the module also mentions
+	//! outside its function bodies or start function (the spec's `C.refs`).
 	std::unordered_set<uint32_t> declaredFunctions;
 	std::optional<ValueType> validateConstExpr(const std::vector<uint8_t>& bytes,
 			const std::string& label, std::size_t globalLimit);
 	bool isEqRef(const ValueType& type) const {
 		return refSubtype(type, ValueType{ValueTypeCode::EqRef, -1});
 	}
-	// A typed reference's concrete heap type must name a declared type.
+	//! A typed reference's concrete heap type must name a declared type.
 	void requireWellFormedType(const ValueType& type, const std::string& where) const;
 
-	// `ref.test`/`ref.cast` target construction and the top of the target's
-	// heap hierarchy (used for the operand's same-hierarchy rule).
+	//! `ref.test`/`ref.cast` target construction and the top of the target's
+	//! heap hierarchy (used for the operand's same-hierarchy rule).
 	ValueType refType(bool nullable, const HeapType& heapType) const;
 	ValueType refTopForHeap(const HeapType& heapType) const;
 	void validateRefTest(bool nullable, const HeapType& heapType);
 	void validateRefCast(bool nullable, const HeapType& heapType);
 
-	// Profile gates (docs/proposals/PROFILES.md PR-2/PR-4): reject constructs an
-	// excluded marker forbids before any structural rule reports on them.
+	//! Profile gates (docs/proposals/PROFILES.md PR-2/PR-4): reject constructs an
+	//! excluded marker forbids before any structural rule reports on them.
 	void checkProfile() const;
 	void checkProfileValueType(const ValueType& type, const std::string& where) const;
-	// Prefixed-instruction gates (shared with the base dispatcher's hooks).
+	//! Prefixed-instruction gates (shared with the base dispatcher's hooks).
 	void onSimdOpcode(SIMDOpcode opcode) override;
 	void onAtomicOpcode(AtomicOpcode opcode) override;
 
@@ -130,20 +137,20 @@ private:
 					 const char* what, std::size_t index,
 					 uint64_t pageSize = 0x10000) const;
 	void requireMemoryAccess(const MemArg& arg, uint32_t naturalLog2) const;
-	// Multibyte Array Access (GC_EXTENSIONS.md GX-1): a load/store whose memarg
-	// sets bit 5 operates on a GC array. These helpers validate the type index
-	// and element shape, enforce mutability for stores, and pop `[ref, address]`
-	// instead of the linear-memory address.
+	//! Multibyte Array Access (GC_EXTENSIONS.md GX-1): a load/store whose memarg
+	//! sets bit 5 operates on a GC array. These helpers validate the type index
+	//! and element shape, enforce mutability for stores, and pop `[ref, address]`
+	//! instead of the linear-memory address.
 	void requireArrayAccess(const MemArg& arg, uint32_t naturalLog2) const;
 	void requireArrayMutable(const MemArg& arg) const;
 	void popMemoryAddress(const MemArg& arg);
-	// Atomic accesses have extra rules: the alignment immediate must equal the
-	// natural alignment, and the acquire-release ordering byte is 0 or 1.
+	//! Atomic accesses have extra rules: the alignment immediate must equal the
+	//! natural alignment, and the acquire-release ordering byte is 0 or 1.
 	void requireAtomicMemoryAccess(const MemArg& arg, uint32_t naturalLog2) const;
 	const CanonFieldType& requireStructField(TypeIdx type, uint32_t fieldIndex) const;
 	void requireLane(uint8_t lane, uint32_t laneCount, const char* what) const;
 
-	// Operand/control typing (core instructions only in this milestone).
+	//! Operand/control typing (core instructions only in this milestone).
 	struct ControlFrame {
 		std::vector<ValueType> startTypes;
 		std::vector<ValueType> endTypes;
@@ -152,16 +159,16 @@ private:
 		bool isIf = false;
 		bool elseSeen = false;
 		bool unreachable = false;
-		// Definite assignment of non-defaultable locals. A frame inherits its
-		// parent's set on entry; stores made inside the frame do not escape it,
-		// and `else` restarts from the entry set (the spec's local-init rule).
+		//! Definite assignment of non-defaultable locals. A frame inherits its
+		//! parent's set on entry; stores made inside the frame do not escape it,
+		//! and `else` restarts from the entry set (the spec's local-init rule).
 		std::vector<uint8_t> initialized;
 		std::vector<uint8_t> entryInitialized;
 	};
 	std::vector<ValueType> typeStack;
 	std::vector<ControlFrame> controlStack;
-	// Set when an opcode without a typing rule is seen: the rest of the body is
-	// still scanned for immediate checks, but the operand stack is not trusted.
+	//! Set when an opcode without a typing rule is seen: the rest of the body is
+	//! still scanned for immediate checks, but the operand stack is not trusted.
 	bool typeTainted = false;
 
 	ControlFrame& frame();
@@ -175,10 +182,10 @@ private:
 	void popTypes(const std::vector<ValueType>& types);
 	void checkTailCallResults(const FuncType& callee);
 	bool assignable(const ValueType& actual, const ValueType& expected) const;
-	// True for `cont`, `nocont` and a concrete `cont $ft` type index. The
-	// stack-switching proposal forbids casting to any continuation type.
+	//! True for `cont`, `nocont` and a concrete `cont $ft` type index. The
+	//! stack-switching proposal forbids casting to any continuation type.
 	bool isContinuationHeap(const HeapType& type) const;
-	// More Array Constructors (GC_EXTENSIONS.md GX-2) helpers.
+	//! More Array Constructors (GC_EXTENSIONS.md GX-2) helpers.
 	CoreTypeView requireArrayType(TypeIdx idx, const char* who) const;
 	bool storageAssignable(const CanonStorageType& actual,
 			const CanonStorageType& expected) const;
@@ -196,7 +203,7 @@ private:
 	std::vector<ValueType> paramTypes(const FuncType& types) const;
 	std::vector<ValueType> resultTypes(const FuncType& types) const;
 
-	// Control and parametric instructions.
+	//! Control and parametric instructions.
 	void dispatchUnreachable() override;
 	void dispatchNop() override;
 	void dispatchBlock(const BlockType& arg) override;
@@ -218,11 +225,11 @@ private:
 	void dispatchRefEq() override;
 	void dispatchRefAsNonNull() override;
 
-	// More Array Constructors (docs/proposals/GC_EXTENSIONS.md GX-2).
+	//! More Array Constructors (docs/proposals/GC_EXTENSIONS.md GX-2).
 	void dispatchArrayNewArray(TypeIdx dst, TypeIdx src) override;
 	void dispatchArrayNewMemory(TypeIdx dst, MemIdx src) override;
 	void dispatchArrayNewTable(TypeIdx dst, TableIdx src) override;
-	// Custom Descriptors (0xFB 32..38).
+	//! Custom Descriptors (0xFB 32..38).
 	void dispatchStructNew(TypeIdx arg) override;
 	void dispatchStructNewDefault(TypeIdx arg) override;
 	void dispatchStructNewDesc(TypeIdx arg) override;
@@ -258,7 +265,7 @@ private:
 	void dispatchStringEq() override;
 	void dispatchStringIsUsvSequence() override;
 
-	// stringview facility (docs/proposals/STRINGREF.md STR-4)
+	//! stringview facility (docs/proposals/STRINGREF.md STR-4)
 	void dispatchStringAsWtf8() override;
 	void dispatchStringViewWtf8Advance() override;
 	void dispatchStringViewWtf8EncodeUtf8(MemIdx arg) override;
@@ -276,7 +283,7 @@ private:
 	void dispatchStringViewIterRewind() override;
 	void dispatchStringViewIterSlice() override;
 
-	// GC-array string bridge (docs/proposals/STRINGREF.md STR-6)
+	//! GC-array string bridge (docs/proposals/STRINGREF.md STR-6)
 	void dispatchStringNewUtf8Array(TypeIdx arg) override;
 	void dispatchStringNewWtf16Array(TypeIdx arg) override;
 	void dispatchStringEncodeUtf8Array(TypeIdx arg) override;
@@ -287,7 +294,7 @@ private:
 	void dispatchStringEncodeWtf8Array(TypeIdx arg) override;
 	void onUnhandledOpcode(const char* name) override;
 
-	// Immediate-only checks (no operand stack yet).
+	//! Immediate-only checks (no operand stack yet).
 	void dispatchLocalGet(LocalIdx arg) override;
 	void dispatchLocalSet(LocalIdx arg) override;
 	void dispatchLocalTee(LocalIdx arg) override;
@@ -310,7 +317,7 @@ private:
 	void dispatchContNew(TypeIdx arg) override;
 	void dispatchContBind(TypeIdx arg1, TypeIdx arg2) override;
 	void dispatchSuspend(TagIdx arg) override;
-	// Shared validation for `resume`/`resume_throw*` handler clauses.
+	//! Shared validation for `resume`/`resume_throw*` handler clauses.
 	void validateContHandlers(const std::vector<ContHandlerClause>& handlers);
 	void dispatchResume(TypeIdx arg, std::vector<ContHandlerClause>&& handlers) override;
 	void dispatchResumeThrow(TypeIdx arg1, TagIdx arg2,
@@ -349,7 +356,7 @@ private:
 	void dispatchI64MulWideU() override;
 	void dispatchI32Itt(uint32_t immediate) override;
 
-	// Core memory accesses.
+	//! Core memory accesses.
 	void dispatchI32Load(MemArg arg) override;
 	void dispatchI64Load(MemArg arg) override;
 	void dispatchF32Load(MemArg arg) override;
@@ -375,7 +382,7 @@ private:
 	void dispatchI64Store32(MemArg arg) override;
 
 
-	// Core numeric instructions (operand/result typing).
+	//! Core numeric instructions (operand/result typing).
 	void dispatchI32Eqz() override;
 	void dispatchI64Eqz() override;
 	void dispatchF32Abs() override;
@@ -514,7 +521,7 @@ private:
 	void dispatchI64TruncSatF64U() override;
 
 
-	// SIMD arithmetic/comparison/conversion typing (from wasm_simd_ops.inc).
+	//! SIMD arithmetic/comparison/conversion typing (from wasm_simd_ops.inc).
 	void dispatchI8x16Add() override;
 	void dispatchI8x16Sub() override;
 	void dispatchI8x16MinS() override;
@@ -717,7 +724,7 @@ private:
 	void dispatchI32x4RelaxedDotI8x16I7x16AddS() override;
 
 
-	// Atomic memory accesses (operand/result typing).
+	//! Atomic memory accesses (operand/result typing).
 	void dispatchMemoryAtomicNotify(MemArg arg) override;
 	void dispatchMemoryAtomicWait32(MemArg arg) override;
 	void dispatchMemoryAtomicWait64(MemArg arg) override;
@@ -823,7 +830,7 @@ private:
 	void dispatchI64AtomicStore8(MemArg arg) override;
 
 
-	// SIMD bitwise, const, bitmask and splat typing.
+	//! SIMD bitwise, const, bitmask and splat typing.
 	void dispatchV128Const(std::span<uint8_t> arg) override;
 	void dispatchV128Not() override;
 	void dispatchV128And() override;
@@ -838,7 +845,7 @@ private:
 	void dispatchF32x4Splat() override;
 	void dispatchF64x2Splat() override;
 
-	// Bitmask reductions are part of the wasm_simd_ops.inc shape list.
+	//! Bitmask reductions are part of the wasm_simd_ops.inc shape list.
 	void dispatchI8x16Bitmask() override;
 	void dispatchI16x8Bitmask() override;
 	void dispatchI32x4Bitmask() override;
@@ -847,7 +854,7 @@ private:
 	void dispatchI8x16Swizzle() override;
 	void dispatchI8x16RelaxedSwizzle() override;
 
-	// SIMD memory accesses and lanes.
+	//! SIMD memory accesses and lanes.
 	void dispatchV128Load(MemArg arg) override;
 	void dispatchV128Load8x8S(MemArg arg) override;
 	void dispatchV128Load8x8U(MemArg arg) override;

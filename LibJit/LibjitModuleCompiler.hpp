@@ -3,6 +3,13 @@
 #include "../WasmBase/WasmModuleInstance.hpp"
 #include "LibJitTypeTranslation.hpp"
 
+/*!
+  \file LibjitModuleCompiler.hpp
+  \brief The module compiler: the ModuleInstantiator hooks, lowered to this backend.
+
+  This header is internal: it is not part of the embedding surface.
+*/
+
 namespace LibJIT {
 
 class ModuleCompiler : public WASM::ModuleInstantiator
@@ -17,7 +24,7 @@ private:
 public:
 	ModuleCompiler(jit_context_t context);
 
-	// ModuleInstantiator interface
+	//! ModuleInstantiator interface
 protected:
 	void translateTypes(WASM::ModuleInstance& instance, const WASM::Module& module, WASM::ModuleInstanceInternals& internals) override;
 	void declareFunctions(WASM::ModuleInstance& instance, const WASM::Module& module, WASM::ModuleInstanceInternals& internals) override;

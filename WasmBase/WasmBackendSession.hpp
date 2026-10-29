@@ -3,8 +3,14 @@
 
 #include "WasmApi.hpp"
 
-// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
-// exported surface.
+/*!
+  \file WasmBackendSession.hpp
+  \brief The backend session facade an embedder drives a backend through.
+
+  This header is part of the exported surface: every declaration in it
+  is exported (docs/EMBEDDING_SURFACE.md ES-4).
+*/
+
 WASMJIT_VISIBLE_BEGIN
 
 #include "WasmTrap.hpp"
@@ -23,20 +29,20 @@ struct FuncType;
 struct StorageType;
 class BackendLaneWiseOp;
 
-// ── The backend façade (docs/BACKEND_PLUGIN_ABI.md §7.3, AAS8) ──────────────
-//
-// `ModuleInstantiator` is the *compilation* seam: four hooks the core calls and
-// the backend implements. This is the *session* seam: the object a backend
-// hands the embedder so it can drive a backend without including a backend
-// header. It used to live in `Test/`; it lives in the product now, because it
-// is the interface a second backend actually implements.
-//
-// Nothing here names a backend. The selector (`WASMJIT_BACKEND` and the
-// "create a session" factory) stays with whoever ships the backend: the core
-// must not acquire a vocabulary of code generators (docs/LAYERING.md §2).
+//! \par The backend façade (docs/BACKEND_PLUGIN_ABI.md §7.3, AAS8)
+//!
+//! `ModuleInstantiator` is the *compilation* seam: four hooks the core calls and
+//! the backend implements. This is the *session* seam: the object a backend
+//! hands the embedder so it can drive a backend without including a backend
+//! header. It used to live in `Test/`; it lives in the product now, because it
+//! is the interface a second backend actually implements.
+//!
+//! Nothing here names a backend. The selector (`WASMJIT_BACKEND` and the
+//! "create a session" factory) stays with whoever ships the backend: the core
+//! must not acquire a vocabulary of code generators (docs/LAYERING.md §2).
 
-// One field of a lowered aggregate, in the same bytes generated code uses, so a
-// test or an embedder never needs a backend IR type to validate a layout.
+//! One field of a lowered aggregate, in the same bytes generated code uses, so a
+//! test or an embedder never needs a backend IR type to validate a layout.
 struct BackendFieldLayout {
 	std::size_t offset = 0;
 	std::size_t size = 0;
@@ -49,9 +55,9 @@ struct BackendAggregateLayout {
 	std::vector<BackendFieldLayout> fields;
 };
 
-// A backend-generated lane-by-lane scalar implementation of one i32x4 op, used
-// only by the diagnostic SIMD benchmark. Keeping it behind an interface means
-// the benchmark does not need the backend's IR types.
+//! A backend-generated lane-by-lane scalar implementation of one i32x4 op, used
+//! only by the diagnostic SIMD benchmark. Keeping it behind an interface means
+//! the benchmark does not need the backend's IR types.
 class WASMJIT_API BackendLaneWiseOp
 {
 public:
@@ -59,29 +65,29 @@ public:
 	virtual void run(const void* a, const void* b, void* out) const = 0;
 };
 
-// The session a backend implements. One per backend instance; the embedder
-// holds it for as long as it drives that backend.
+//! The session a backend implements. One per backend instance; the embedder
+//! holds it for as long as it drives that backend.
 class WASMJIT_API BackendSession
 {
 public:
 	virtual ~BackendSession() = default;
 
-	// The backend-agnostic instantiation seam.
+	//! The backend-agnostic instantiation seam.
 	virtual ModuleInstantiator& instantiator() = 0;
 
-	// Layout of an arbitrary lowered tuple/aggregate (used by the WAST
-	// multi-result marshaller and by layout tests). The rule is the one in
-	// docs/ABI.md "The result tuple layout".
+	//! Layout of an arbitrary lowered tuple/aggregate (used by the WAST
+	//! multi-result marshaller and by layout tests). The rule is the one in
+	//! docs/ABI.md "The result tuple layout".
 	virtual BackendAggregateLayout aggregateLayout(
 			const std::vector<StorageType>& fields) = 0;
 
-	// Diagnostic SIMD benchmark's scalar-IR lowering.
+	//! Diagnostic SIMD benchmark's scalar-IR lowering.
 	virtual std::unique_ptr<BackendLaneWiseOp> createLaneWiseOp(bool multiply) = 0;
 
-	// Calls a compiled function with already-marshalled argument slots. This
-	// owns every backend calling-convention detail, including the `v128` ABI and
-	// trap handling. `result` points at a caller-owned buffer large enough for
-	// one value or a multi-result tuple.
+	//! Calls a compiled function with already-marshalled argument slots. This
+	//! owns every backend calling-convention detail, including the `v128` ABI and
+	//! trap handling. `result` points at a caller-owned buffer large enough for
+	//! one value or a multi-result tuple.
 	virtual bool invoke(const ModuleInstance& instance,
 			const Callable& callable,
 			const FuncType& functionType,

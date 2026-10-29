@@ -3,8 +3,14 @@
 
 #include "WasmApi.hpp"
 
-// docs/EMBEDDING_SURFACE.md ES-4: declarations in this header are part of the
-// exported surface (the public headers are the declared list).
+/*!
+  \file WasmSection.hpp
+  \brief Core-module section identifiers and section headers.
+
+  This header is part of the exported surface: every declaration in it
+  is exported (docs/EMBEDDING_SURFACE.md ES-4).
+*/
+
 WASMJIT_VISIBLE_BEGIN
 #include <cstdint>
 #include <Elvavena/Io/ElvDataStream.hpp>
@@ -47,7 +53,7 @@ struct Section {
 	uint32_t size;
 	uint32_t offset;
 };
-// Read only.
+//! Read only.
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, Section& right) {
 	left >> right.type >> Elv::Io::Leb(right.size);
 	right.offset = left.device.tell();
