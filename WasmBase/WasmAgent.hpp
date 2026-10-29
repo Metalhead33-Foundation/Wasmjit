@@ -46,7 +46,7 @@ class Agent;
 //! at the inline `deferRecords` array, and generated frames may hold a
 //! `TrapSlot*` for the duration of a call.
 /**
- * \\brief Mutable per-agent execution state shared with continuations.
+ * \brief Mutable per-agent execution state shared with continuations.
  *
  * Owns trap/exception state, tail-call state, stack metadata, deferred cleanup,
  * and diagnostics. It is neither copyable nor movable because internal helpers
@@ -97,7 +97,7 @@ struct ExecutionState {
 	//! continuation context installed without an Agent wrapper).
 	Agent* owner = nullptr;
 
-	/** \\brief Initializes the inline deferred-cleanup stack. */
+	/** \brief Initializes the inline deferred-cleanup stack. */
 	ExecutionState() noexcept : deferStack(deferRecords, kDeferCapacity) {}
 	ExecutionState(const ExecutionState&) = delete;
 	ExecutionState& operator=(const ExecutionState&) = delete;
@@ -109,15 +109,15 @@ struct ExecutionState {
 //! created lazily on first use; explicit agents are created by an embedder (or
 //! a test) and installed with `AgentScope`.
 /**
- * \\brief Owns one WebAssembly execution state and a stable agent identifier.
+ * \brief Owns one WebAssembly execution state and a stable agent identifier.
  *
  * An Agent is non-copyable and non-movable; install its state with AgentScope.
  */
 class Agent {
 public:
-	/** \\brief Creates an agent with a fresh execution state and unique ID. */
+	/** \brief Creates an agent with a fresh execution state and unique ID. */
 	Agent() noexcept;
-	/** \\brief Destroys the agent and its execution state. */
+	/** \brief Destroys the agent and its execution state. */
 	~Agent();
 
 	Agent(const Agent&) = delete;
@@ -125,11 +125,11 @@ public:
 	Agent(Agent&&) = delete;
 	Agent& operator=(Agent&&) = delete;
 
-	/** \\brief Returns this agent's stable identifier. \\return Unique agent ID. */
+	/** \brief Returns this agent's stable identifier. \return Unique agent ID. */
 	std::uint64_t id() const noexcept { return id_; }
-	/** \\brief Returns mutable access to the owned execution state. \\return Reference to this agent's state. */
+	/** \brief Returns mutable access to the owned execution state. \return Reference to this agent's state. */
 	ExecutionState& execution() noexcept { return state_; }
-	/** \\brief Returns read-only access to the owned execution state. \\return Const reference to this agent's state. */
+	/** \brief Returns read-only access to the owned execution state. \return Const reference to this agent's state. */
 	const ExecutionState& execution() const noexcept { return state_; }
 
 private:
@@ -140,8 +140,8 @@ private:
 //! The execution state the calling host thread is currently running. Never null:
 //! a host thread that has not installed an agent gets its default agent lazily.
 /**
- * \\brief Gets the execution state currently installed on this host thread.
- * \\return Reference to the current state; lazily creates the thread's default
+ * \brief Gets the execution state currently installed on this host thread.
+ * \return Reference to the current state; lazily creates the thread's default
  *         agent state if none has been installed.
  */
 ExecutionState& currentExecutionState() noexcept;
@@ -150,41 +150,41 @@ ExecutionState& currentExecutionState() noexcept;
 //! one yet. Used by a context switch that must save and restore the pointer
 //! around a stack switch; prefer `currentExecutionState()` for ordinary code.
 /**
- * \\brief Gets the raw pointer to the currently installed execution state.
- * \\return Current state pointer, or nullptr if this thread has not installed
+ * \brief Gets the raw pointer to the currently installed execution state.
+ * \return Current state pointer, or nullptr if this thread has not installed
  *         an explicit state. Unlike currentExecutionState(), this does not
  *         create a default agent.
  */
 ExecutionState* currentExecutionStatePointer() noexcept;
 /**
- * \\brief Installs a raw execution-state pointer for the calling thread.
- * \\param state State to install; nullptr clears the installed pointer.
+ * \brief Installs a raw execution-state pointer for the calling thread.
+ * \param state State to install; nullptr clears the installed pointer.
  */
 void setCurrentExecutionState(ExecutionState* state) noexcept;
 
 //! The agent that owns the current execution state, or null when the current
 //! state was installed directly (a future continuation context).
 /**
- * \\brief Returns the Agent owning the currently installed execution state.
- * \\return Owning agent, or nullptr when a bare execution state is installed.
+ * \brief Returns the Agent owning the currently installed execution state.
+ * \return Owning agent, or nullptr when a bare execution state is installed.
  */
 Agent* currentAgent() noexcept;
 
 //! Installs an execution state for the duration of the scope. Nested scopes
 //! save and restore the previous state.
 /**
- * \\brief RAII scope that installs an execution state on the current thread.
+ * \brief RAII scope that installs an execution state on the current thread.
  *
  * Nested scopes restore the state that was active before construction.
  */
 class ExecutionStateScope {
 public:
 	/**
-	 * \\brief Installs \p state and remembers the previously active state.
-	 * \\param state Execution state to install for this scope's lifetime.
+	 * \brief Installs \p state and remembers the previously active state.
+	 * \param state Execution state to install for this scope's lifetime.
 	 */
 	explicit ExecutionStateScope(ExecutionState& state) noexcept;
-	/** \\brief Restores the execution state that was active at construction. */
+	/** \brief Restores the execution state that was active at construction. */
 	~ExecutionStateScope();
 
 	ExecutionStateScope(const ExecutionStateScope&) = delete;
@@ -196,15 +196,15 @@ private:
 
 //! Installs an agent's execution state for the duration of the scope.
 /**
- * \\brief RAII scope that installs an Agent's execution state.
+ * \brief RAII scope that installs an Agent's execution state.
  *
  * The Agent must outlive the scope.
  */
 class AgentScope {
 public:
 	/**
-	 * \\brief Installs the supplied agent as the current agent.
-	 * \\param agent Agent whose execution state is installed; it must outlive
+	 * \brief Installs the supplied agent as the current agent.
+	 * \param agent Agent whose execution state is installed; it must outlive
 	 *        this AgentScope.
 	 */
 	explicit AgentScope(Agent& agent) noexcept : scope_(agent.execution()) {}
