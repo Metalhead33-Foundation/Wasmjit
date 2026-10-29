@@ -54,20 +54,44 @@ using BackendFactory = std::function<BackendInstance()>;
  * \\param factory Factory returning an instantiator and its keep-alive state.
  * Duplicate names preserve the first registration.
  */
+/**
+ * \\brief Registers the supplied backend/runtime entity.
+ * \\param name Input value, resource descriptor, or output destination for this operation.
+ * \\param factory Input value, resource descriptor, or output destination for this operation.
+ */
 void registerBackend(std::string name, BackendFactory factory);
 
 //! True when a backend is registered or loadable under `name`.
 /** \\brief Tests whether a backend is registered or loadable. \\param name Backend identifier. \\return true if the backend can be selected. */
+/**
+ * \\brief Performs the hasBackend operation.
+ * \\param name Input value, resource descriptor, or output destination for this operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 bool hasBackend(std::string_view name);
 //! Sorted; includes the built-in "null" baseline and every linked backend.
 /** \\brief Lists registered and built-in backend names in sorted order. \\return Sorted backend-name list. */
+/**
+ * \\brief Performs the backendNames operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 std::vector<std::string> backendNames();
 //! The compiled-in backend named `name`. Throws naming the available backends.
 /** \\brief Creates a registered in-process backend. \\param name Registered backend identifier. \\return New backend instance. \\throws std::exception if the name is unavailable or creation fails. */
+/**
+ * \\brief Creates or allocates the corresponding runtime object.
+ * \\param name Input value, resource descriptor, or output destination for this operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 BackendInstance createBackendInstance(std::string_view name);
 
 //! The file name the loader looks for: `libwasmjit-backend-<name>.so`.
 /** \\brief Builds the platform plugin filename for a backend. \\param name Backend identifier. \\return Expected shared-library filename. */
+/**
+ * \\brief Performs the backendPluginFileName operation.
+ * \\param name Input value, resource descriptor, or output destination for this operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 std::string backendPluginFileName(std::string_view name);
 
 //! \par Build-kind agreement (docs/BACKEND_PLUGIN_ABI.md §7.7)
@@ -80,10 +104,21 @@ std::string backendPluginFileName(std::string_view name);
  * \\param hostFlags Flags for the current host build.
  * \\return true when all compared build-kind bits match.
  */
+/**
+ * \\brief Performs the backendBuildFlagsCompatible operation.
+ * \\param pluginFlags Input value, resource descriptor, or output destination for this operation.
+ * \\param hostFlags Input value, resource descriptor, or output destination for this operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 bool backendBuildFlagsCompatible(std::uint32_t pluginFlags,
 								 std::uint32_t hostFlags) noexcept;
 //! Human-readable form for a diagnostic: e.g. "release, asan".
 /** \\brief Formats backend build flags for diagnostics. \\param flags Encoded build flags. \\return Human-readable build configuration description. */
+/**
+ * \\brief Performs the backendBuildFlagsText operation.
+ * \\param flags Input value, resource descriptor, or output destination for this operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 std::string backendBuildFlagsText(std::uint32_t flags);
 
 //! Loads an explicit file (BP-3). Throws with the reason: missing file, missing
@@ -97,6 +132,11 @@ std::string backendBuildFlagsText(std::uint32_t flags);
  * \\return Created backend instance.
  * \\throws std::exception if loading, ABI/build validation, or plugin creation fails.
  */
+/**
+ * \\brief Loads the requested backend/runtime resource.
+ * \\param path Input value, resource descriptor, or output destination for this operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 BackendInstance loadBackendPluginFile(const std::string& path);
 //! Searches `WASMJIT_BACKEND_PATH` (colon-separated), the working directory and
 //! the executable's directory for `backendPluginFileName(name)`.
@@ -105,6 +145,11 @@ BackendInstance loadBackendPluginFile(const std::string& path);
  * \\param name Backend identifier used to form the plugin filename.
  * \\return Created backend instance.
  * \\throws std::exception if no compatible plugin can be loaded.
+ */
+/**
+ * \\brief Loads the requested backend/runtime resource.
+ * \\param name Input value, resource descriptor, or output destination for this operation.
+ * \\return The requested value, handle, view, or success status.
  */
 BackendInstance loadBackendPlugin(std::string_view name);
 
@@ -119,7 +164,18 @@ BackendInstance loadBackendPlugin(std::string_view name);
 //! as `WASM::BackendInstance()`.
 #define WASMJIT_REGISTER_BACKEND(NAME, FACTORY)                                    \
 	namespace {                                                                    \
+/**
+ * \\brief Performs the WASMJIT_BACKEND_CONCAT operation.
+ * \\param wasmjit_backend_register_ Input value, resource descriptor, or output destination for this operation.
+ * \\param true Input value, resource descriptor, or output destination for this operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 	[[maybe_unused]] const bool WASMJIT_BACKEND_CONCAT(wasmjit_backend_register_,  \
+/**
+ * \\brief Registers the supplied backend/runtime entity.
+ * \\param true Input value, resource descriptor, or output destination for this operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 			__LINE__) = (::WASM::registerBackend((NAME), (FACTORY)), true);        \
 	}
 
