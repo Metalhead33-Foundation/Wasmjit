@@ -35,14 +35,14 @@ enum class ConcurrencyModel : std::uint8_t {
 };
 
 //! True when the engine can honour the named concurrency model.
-/** \\brief Tests whether the runtime supports a concurrency model. \\param model Requested execution model. \\return true when the model is supported. */
+/** \brief Tests whether the runtime supports a concurrency model. \param model Requested execution model. \return true when the model is supported. */
 inline constexpr bool supportsConcurrency(ConcurrencyModel model) noexcept
 {
 	return model == ConcurrencyModel::Single || model == ConcurrencyModel::Agents;
 }
 
 //! Stable short name for diagnostics and embedder logs.
-/** \\brief Returns the stable diagnostic name for a concurrency model. \\param model Execution model. \\return Static null-terminated model name. */
+/** \brief Returns the stable diagnostic name for a concurrency model. \param model Execution model. \return Static null-terminated model name. */
 inline constexpr const char* concurrencyModelName(ConcurrencyModel model) noexcept
 {
 	switch (model) {
@@ -57,7 +57,7 @@ inline constexpr const char* concurrencyModelName(ConcurrencyModel model) noexce
 //! (docs/proposals/JS_INTEGRATION.md). They are declared so the seam has a shape
 //! before a multi-agent build exists; a null table means "the embedder
 //! schedules", which is today's behaviour.
-/** \\brief Optional embedder-provided hooks for scheduling and coordinating agents. */
+/** \brief Optional embedder-provided hooks for scheduling and coordinating agents. */
 struct HostAgentScheduler {
 	void* userData = nullptr;
 	void (*spawn)(void* userData, void (*entry)(void*), void* argument) = nullptr;
