@@ -1,9 +1,12 @@
 # API/ABI Stability — The Milestone, and How Close We Are
 
-Status: milestone declaration + proximity study (revision 2 — 2026-10-29: the
-pre-`LF-0a` batch closes AAS2–AAS7, partly closes AAS1 and re-measures §11;
-revision 1 declared the milestone on 2026-10-25, with all measurements taken on
-`LibjitDispatcher` at `ea4fb30` and `master` at `8fb955d`).
+Status: **milestone met 2026-10-29** (revision 3; revision 2 on 2026-10-29 closed
+AAS2–AAS7 and re-measured §11; revision 1 declared the milestone on 2026-10-25,
+with all measurements taken on `LibjitDispatcher` at `ea4fb30` and `master` at
+`8fb955d`). Revision 3 closes `AAS1` (`ES-7` consumer coverage), `AAS8`
+(`BackendSession` in the product), `AAS9` (`BACKEND_WORK_ORDER.md`) and `AAS11`
+(the planned scaffolds documented, kept in the build), and flips G1 and G3 to
+`✅`.
 Audience: anyone planning work that changes an embedder-facing surface or the
 backend seam, anyone evaluating the `LibjitDispatcher` → `master` merge, and
 anyone who needs a defensible answer to "is it production ready yet?".
@@ -60,7 +63,7 @@ without a deliberate version bump**. For this milestone the frozen set is:
 | S4 | The trap entry point and its kind/message convention (a pending status, not `longjmp`) | [`SAFETY.md`](SAFETY.md) §2.6; [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §12 |
 | S5 | The continuation provider ABI (`wasm_cont_*`, status codes, one-shot, wide 16-byte slots) | [`ABI.md`](ABI.md) "Continuations"; [`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md) §10.6 |
 | S6 | The SIMD helper ABI (`const void*` / `void* out`, immediates as scalars) | [`wasm_simd_scalar.hpp`](../WasmBase/wasm_simd_scalar.hpp); [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §5–§6 |
-| S7 | `ModuleInstantiator`: the four hooks a code generator implements | [`WasmModuleInstance.hpp`](../WasmBase/WasmModuleInstance.hpp) |
+| S7 | The backend seam: `ModuleInstantiator` (the four hooks a code generator implements) and `BackendSession` (the façade an embedder drives without a backend header) | [`WasmModuleInstance.hpp`](../WasmBase/WasmModuleInstance.hpp); [`WasmBackendSession.hpp`](../WasmBase/WasmBackendSession.hpp); [`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md) |
 | S8 | The embedder's invocation path: `WASM::callCallable` / `callCallableWithResults`, `HostBridge`, `nativeImport<&fn>()` | [`ABI.md`](ABI.md) "Embedder Guide"; [`WasmValue.hpp`](../WasmBase/WasmValue.hpp) |
 | S9 | The diagnostic record/id/schema contract (`wasmjit.diagnostic.v1`) | [`DIAGNOSTICS.md`](DIAGNOSTICS.md) §1 |
 
@@ -83,6 +86,14 @@ The milestone is met when G1–G4 are all `✅`. A gate may be `◑` (partially
 satisfied) while work continues; the milestone itself has no partial state. The
 authoritative per-gate status is §7.5; the authoritative per-item status remains
 each note's own §7 plan (this document does not become a second copy of it).
+
+**Status 2026-10-29: met.** All four gates are `✅` (§7.5). The last two gaps
+closed in the final pass were `ES-7` (the out-of-tree consumer now calls `f64`,
+a multi-result tuple and `v128`, not just `i32`) and `AAS8`/`AAS9`/`AAS11` (the
+`BackendSession` façade moved into the product, the backend work order exists as
+[`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md), and the planned `Asmjit/`/`Sljit/`
+scaffolds are documented placeholders: kept in the build because those backends
+are intended, each stating that it emits nothing today and installs nothing).
 
 ## 3. What the milestone does not demand
 
@@ -258,13 +269,14 @@ verdicts can be re-checked without re-deriving them.
 
 ### 6.2 Build and suite
 
-Built out-of-source in `build/Desktop-Debug` with
-`env MAKE=/usr/bin/make /usr/bin/make -j16` → **exit 0**. Suite (§11 for the
-full table): default run **11,011 assertions / 442 test cases, all passing**;
-non-spec subset 10,633 / 253; the proposal-documentation lint `[docs]`
-720 assertions. The documented negative-module measurement is **2,382 / 2,382**
-binary commands handled ([`VALIDATION.md`](VALIDATION.md) "Measured coverage",
-2026-10-18; opt-in via `WASM_SPEC_VALIDATE=1`).
+Built out-of-source (`build/AasFinal` for the current numbers) with
+`env MAKE=/usr/bin/make /usr/bin/make -j16 QMAKE=/usr/bin/qmake6` → **exit 0**.
+Suite (§11 for the full table): default run **11,377 assertions / 472 test
+cases, all passing**; non-spec subset 10,999 / 283; the proposal-documentation
+lint `[docs]` 720 assertions. The documented negative-module measurement is
+**2,382 / 2,382** binary commands handled
+([`VALIDATION.md`](VALIDATION.md) "Measured coverage", 2026-10-18; opt-in via
+`WASM_SPEC_VALIDATE=1`).
 
 ### 6.3 The backend inventory
 
@@ -272,8 +284,8 @@ binary commands handled ([`VALIDATION.md`](VALIDATION.md) "Measured coverage",
 |---|---|---|
 | GNU LibJIT (`LibJit/`) | The only executing backend: context, type translation, module compiler, opcode dispatcher, runtime; SIMD through the shared helper layer | G1's subject. |
 | `WasmStub/` | Non-compiling pretty-printer over the shared `OpcodeDispatcher` | Proves the *decoder* is backend-neutral; proves nothing about the *instantiator* seam. |
-| AsmJit (`Asmjit/`) | **Only `Asmjit.pro` is tracked**; no sources | G3's first job. |
-| SLJIT (`Sljit/`) | **Only `Sljit.pro` is tracked**; no sources (a stray `libSljit.so.*` exists in the directory and is ignored by `.gitignore`, so it is not in history) | G3's second job. |
+| AsmJit (`Asmjit/`) | **Planned, no code yet** (`AAS11` documented 2026-10-29): the directory is reserved and the subproject stays in the build, but its `.pro` declares no sources, so it emits an empty `libAsmjit.so` that is never installed and never selectable by name. `Asmjit/README.md` states the status and the work order | Planned work, not distance to G3: starting it is a directory-local change. |
+| SLJIT (`Sljit/`) | **Planned, no code yet** (`AAS11`), same treatment; the stray `libSljit.so.*` was deleted in 2026-10-29 | Same. |
 
 ### 6.4 The seam, as it exists
 
@@ -281,17 +293,21 @@ binary commands handled ([`VALIDATION.md`](VALIDATION.md) "Measured coverage",
   four pure virtuals — `translateTypes`, `declareFunctions`, `compileFunctions`,
   `callStartFunction` — wrapped by a concrete, shared `instantiate()` that does
   imports, memory/global/table setup, active segments, the start call and the
-  profile gate. `LibJIT::ModuleCompiler` is its **only** implementation.
+  profile gate. Three implementations exist: `LibJIT::ModuleCompiler`, the
+  core's `NullInstantiator` and the loadable `Test/ExampleBackend` plugin.
+- **Session seam:** `WASM::BackendSession` (`WasmBackendSession.hpp`) is the
+  product-side façade an embedder drives without including a backend header —
+  `instantiator()`, `aggregateLayout()`, `createLaneWiseOp()`, `invoke(...)`,
+  with `BackendAggregateLayout`/`BackendFieldLayout`/`BackendLaneWiseOp`
+  alongside it. It used to be `TestBackend::Session`; `TestBackend` now aliases
+  the product type and only owns the selector (`WASMJIT_BACKEND`).
 - **Calling into compiled code:** `WASM::callCallable<Ret>` is a raw
   `Callable::fnPtr` cast to the §2.2 S1 signature with a `CallDepthScope` and a
   `checkTrap()`; `callCallableWithResults` adds the trailing result buffer. Both
   are core code and mention no backend.
-- **Harness seam:** `TestBackend::Session` (`Test/TestBackend.hpp`) is the
-  backend-agnostic façade the suite actually uses — `instantiator()`,
-  `aggregateLayout()`, `createLaneWiseOp()`, `invoke(...)` — selected by
-  `WASMJIT_BACKEND`, with `libjit` the only implementation
-  (`Test/TestBackend.cpp`). `Test/LibJitBackendTests.cpp` is the one deliberate
-  exception and says so in its header comment.
+- **Backend checklist:** [`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md)
+  enumerates what an implementation must provide; `LAYERING.md` §4 is what it
+  must not violate.
 - **Continuations:** the core owns the provider and the wide slot ABI; a backend
   supplies `ContinuationInvokeFn` and emits the calls (`ABI.md`
   "Wide value ABI"; [`LAYERING.md`](LAYERING.md) §4).
@@ -312,8 +328,15 @@ on every suite run. This is the check G3 partly rests on.
 
 ### 6.6 The documentation inventory
 
-14 notes in `docs/` (measured before [`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md)
-was added), 34 notes in `docs/proposals/`. The
+**19 notes in `docs/`** today: the 14 that existed when this study was first
+measured, plus the feasibility/embedding notes written since
+([`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md),
+[`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md),
+[`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md),
+[`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md)) and
+[`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md); `UNMODELLED_VALUE_TYPES.md` is
+the renamed `NULL_JIT_VALUE_DIAGNOSIS.md`. There are also **34 notes in
+`docs/proposals/`**. The
 `README.md` proposal table's completeness estimate is **22 of 34 rows at 100%**,
 with the sub-100 rows concentrated exactly where this study expects them: threads
 (80%, 85%, 55%), stack switching (85%), numeric/FP16 (70%), the upstream-blocked
@@ -322,7 +345,7 @@ the authoritative per-item status.
 
 ## 7. How close are we, gate by gate
 
-### 7.1 G1 — a production-grade LibJIT backend: `◑`
+### 7.1 G1 — a production-grade LibJIT backend: `✅`
 
 **What passes.** The executing surface is broad and evidenced:
 
@@ -341,7 +364,7 @@ the authoritative per-item status.
 
 | # | Finding | Evidence | Class |
 |---|---|---|---|
-| AAS1 | **The embedder's API is the test harness.** `README.md` says the executable is "a development sandbox, not the embeddable API", the API shape is "not finalized", and packaging/installation is not in place. There is no umbrella header, no version/soname policy, no documented include set. **Partly closed 2026-10-29:** `WasmBase/WasmJit.hpp` is the umbrella over the embedder tier and carries the version macros/functions (`WasmVersion.hpp`: `WASMJIT_VERSION_*`, `WASMJIT_ABI_VERSION`, `WASM::versionString()`/`abiVersion()`). **Closed 2026-10-29:** `ES-3` (tiering + 40 compile-only TUs + `[tiers]`), `ES-4` (`WASMJIT_API`, `-fvisibility=hidden`, 2,541 exported symbols, explicit soname) and `ES-5` (install + `wasmjit.pc` + an out-of-tree consumer). What remains for the acceptance row is consumer *coverage*: it calls an `i32` export, and `f64`, multi-result and `v128` calls through the installed headers are `ES-7`. | `README.md` "Current Status" / "Near-Term Expectations"; `WasmBase/WasmJit.hpp`; the plan is [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §8 | A |
+| AAS1 | **The embedder's API is the test harness.** `README.md` says the executable is "a development sandbox, not the embeddable API", the API shape is "not finalized", and packaging/installation is not in place. There is no umbrella header, no version/soname policy, no documented include set. **Partly closed 2026-10-29:** `WasmBase/WasmJit.hpp` is the umbrella over the embedder tier and carries the version macros/functions (`WasmVersion.hpp`: `WASMJIT_VERSION_*`, `WASMJIT_ABI_VERSION`, `WASM::versionString()`/`abiVersion()`). **Closed 2026-10-29:** `ES-3` (tiering + 40 compile-only TUs + `[tiers]`), `ES-4` (`WASMJIT_API`, `-fvisibility=hidden`, 2,541 exported symbols, explicit soname) and `ES-5` (install + `wasmjit.pc` + an out-of-tree consumer). **Closed 2026-10-29 (`ES-7`):** the same out-of-tree consumer now also calls an `f64` export, a two-`i32` multi-result tuple, a single `v128` result and a mixed `(i32, v128)` tuple through the installed headers only (`Test/install-check.sh` assembles `Test/consumer/consumer_abi.wat` with `wat2wasm`), so the acceptance row is met. | `README.md` "Current Status" / "Near-Term Expectations"; `WasmBase/WasmJit.hpp`; the plan is [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §8 | A |
 | AAS2 | **The ABI note does not cover every signature the backend compiles.** `v128` by value (`(param v128)(result v128)`) is implemented and tested, but the only spelling of its host ABI is `Test/TestBackend.cpp`'s `AbiV128`; [`ABI.md`](ABI.md) mentions `v128` only in the continuation section. Aggregate layout for multi-result returns is likewise reachable only through the harness's `aggregateLayout`. **Closed 2026-10-29:** `ABI.md` has "`v128` by Value" (16/16 aggregate, register and stack cases exercised by `Test/wasm_wat/simd_abi.wat`'s `four` export) and "The result tuple layout" (the backend-neutral offset/alignment/size rule). | `ABI.md`; `Test/TestBackend.cpp`; `SIMD.md` S9 | A |
 | AAS3 | **The strict negative-module run is not part of the default gate.** It is documented as fully green, but it needs `WASM_SPEC_VALIDATE=1`, so "green by default" and "validator complete" are two different claims. **Closed 2026-10-29:** `TESTING.md` "Required runs: the release / merge gate" names the strict sweep as required and records its 2,382 / 2,382 measurement. | [`VALIDATION.md`](VALIDATION.md) "Measured coverage"; `SAFETY.md` `S2` | A |
 | AAS4 | **Memory-safety evidence is manual.** An ASan shadow build exists on the development machine (`build/Desktop-ASan`) but no note documents it as a gate, and no sanitizer row appears in `TESTING.md`. **Closed as documentation 2026-10-29:** `TESTING.md` names the ASan configuration and its suite as a required run (the first *recorded* run is still outstanding, and the table says so). | `build/Desktop-ASan`; `TESTING.md` | A |
@@ -376,7 +399,7 @@ own §5 and §7.11 already asserted, so a reader could mistake a closed refactor
 an open one. **Closed 2026-10-29:** the six rows are marked `✅` with a sentence
 recording that TM-6…TM-11 completed them.
 
-### 7.3 G3 — work on the non-LibJIT backends can begin: `◑`
+### 7.3 G3 — work on the non-LibJIT backends can begin: `✅`
 
 **What passes.**
 
@@ -399,17 +422,18 @@ recording that TM-6…TM-11 completed them.
 
 | # | Finding | Evidence | Class |
 |---|---|---|---|
-| AAS8 | **The backend façade is test-local.** `TestBackend::Session` is the interface a backend author would actually implement, and it lives in `Test/`. The product exposes only `ModuleInstantiator` plus conventions, so a second backend either writes product code inside the harness or re-derives the façade. | `Test/TestBackend.hpp`; `WasmModuleInstance.hpp` | A |
-| AAS9 | **There is no backend work order.** [`LAYERING.md`](LAYERING.md) §4 says what a backend *may not* violate; it does not enumerate what a backend *must provide*: `ContinuationInvokeFn`, the `currentTailCallState()` access path, `Callable::typeId` maintenance, aggregate layout for multi-result returns, the `v128` host ABI, the trap-slot protocol, the profile gate, the helper entry points it is expected to call. | `LAYERING.md` §4; `ABI.md`; `WasmValue.hpp` | A |
+| AAS8 | **The backend façade is test-local.** `TestBackend::Session` is the interface a backend author would actually implement, and it lives in `Test/`. The product exposes only `ModuleInstantiator` plus conventions, so a second backend either writes product code inside the harness or re-derives the façade. **Closed 2026-10-29:** `WASM::BackendSession` (with `BackendAggregateLayout`, `BackendFieldLayout`, `BackendLaneWiseOp`) is a product type in [`WasmBackendSession.hpp`](../WasmBase/WasmBackendSession.hpp), classified in the backend tier, installed, and compiled standalone by its own TU; `TestBackend` now aliases it. The *selector* stays with the backend (`Test/TestBackend.cpp`), so the core still names no code generator. | `WasmBackendSession.hpp`; `Test/TestBackend.hpp` | A |
+| AAS9 | **There is no backend work order.** [`LAYERING.md`](LAYERING.md) §4 says what a backend *may not* violate; it does not enumerate what a backend *must provide*: `ContinuationInvokeFn`, the `currentTailCallState()` access path, `Callable::typeId` maintenance, aggregate layout for multi-result returns, the `v128` host ABI, the trap-slot protocol, the profile gate, the helper entry points it is expected to call. **Closed 2026-10-29:** [`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md) is that checklist — the two seams, the four hooks with what each must and must not do, the eight ABI obligations, memory/GC ownership, the call-versus-bring helper split, packaging, and a definition of done naming the test tags that evidence it. | `BACKEND_WORK_ORDER.md`; `LAYERING.md` §4 | A |
 | AAS10 | **The seam has never had a second implementation.** `Asmjit/` and `Sljit/` contain only a `.pro` that includes `WasmBase.pri`; `LibJIT::ModuleCompiler` is the only subclass of `ModuleInstantiator`, and `libjit` the only `WASMJIT_BACKEND`. Nothing in the build would notice if a hook grew a LibJIT-shaped assumption. **Closed 2026-10-29:** the seam has three implementations — the executing backend, the core's `NullInstantiator`, and `Test/ExampleBackend`, a loadable plugin built in its own directory — and `Runtime::create(name)` selects any of them (the plugin through `dlopen`). | `Asmjit/Asmjit.pro`, `Sljit/Sljit.pro`; `WasmBase/WasmNullInstantiator.*`; `Test/ExampleBackend/`; [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §10 | A |
-| AAS11 | **The scaffolds do not enforce the seam.** Their `.pro` files define no sources and no compile-time assertion; a stray `libSljit.so.*` sits in `Sljit/` (git-ignored, so history is clean) and will confuse the first person who looks. **Partly closed 2026-10-29:** the stray `libSljit.so*` files were removed, so `Sljit/` contains only its `.pro`; the empty-scaffold assertions are `AAS-3` work. | `Sljit/`, `Asmjit/` | A |
+| AAS11 | **The scaffolds do not enforce the seam.** Their `.pro` files define no sources and no compile-time assertion; a stray `libSljit.so.*` sits in `Sljit/` (git-ignored, so history is clean) and will confuse the first person who looks. **Closed 2026-10-29 (documented, deliberately kept):** the stray `libSljit.so*` files are gone; both directories stay reserved **because those backends are planned**, and each now carries a `README.md` that says what it is (a placeholder that emits nothing and installs nothing), what it is not, and how to start through [`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md). `Project.pro` comments the two subprojects as planned so the next reader does not mistake them for dead scaffolding. | `Sljit/`, `Asmjit/`, `Project.pro` | A |
 | AAS7 | **The layering waiver.** Five `WasmBase/` sites cite `docs/UNMODELLED_VALUE_TYPES.md`, whose name contains "JIT". A citation is not a dependency, but it is the only reason the §6 check is not empty. **Closed 2026-10-29:** the note is renamed and the five sites re-pointed; §6 returns empty and the `[layering]` test enforces it. | `LAYERING.md` §8 | A |
 
-**Verdict.** Work *can* begin — the seam, the contract and the harness façade
-are real, and nothing in `WasmBase/` blocks a new code generator. It should not
-begin *blind*: the façade must be promoted (AAS8), the work order written
-(AAS9), and the contract exercised by a null/identity backend that compiles
-without LibJIT (AAS10). That is §10's AAS-2/AAS-3.
+**Verdict.** Work can begin, and now it can begin *from the document alone*: the
+façade is a product type, the work order enumerates every obligation, the seam
+has three implementations (the executing backend, the core's null instantiator
+and a loadable plugin), and the two empty scaffolds that pretended to be
+backends are documented placeholders rather than a silent trap.
+`AAS8`, `AAS9`, `AAS10` and `AAS11` are all closed.
 
 ### 7.4 G4 — `LibjitDispatcher` can be merged into `master`: `✅`
 
@@ -433,14 +457,15 @@ travels with the merge — the milestone declaration and its study become part o
 
 | Gate | Verdict | Distance |
 |---|---|---|
-| G1 — production-grade LibJIT backend | `◑` | Engine: there. Embedding surface: AAS1–AAS5, all additive (headers, one ABI section, a gate switch, a sanitizer row, one "limits" section). |
-| G2 — additive-only evolution | `✅` | No in-scope Class E gap. Two bookkeeping items (AAS6, AAS7) and one out-of-scope boundary that must stay recorded (§5.3). |
-| G3 — non-LibJIT work can begin | `◑` | Three additive items remain: promote the façade (AAS8), write the backend work order (AAS9), tidy the scaffolds (AAS11). AAS10 is **closed**: the seam has three implementations, one of them a loadable plugin. |
+| G1 — production-grade LibJIT backend | `✅` | Engine: there. Embedding surface: AAS1–AAS5 closed — umbrella, tiers, visibility, soname and install (`ES-3…ES-5`) plus consumer coverage for `i32`, `f64`, multi-result and `v128` (`ES-7`). |
+| G2 — additive-only evolution | `✅` | No in-scope Class E gap. AAS6 and AAS7 closed; the one out-of-scope boundary stays recorded (§5.3). |
+| G3 — non-LibJIT work can begin | `✅` | AAS8 (façade promoted), AAS9 (work order written), AAS10 (three implementations), AAS11 (planned scaffolds documented). |
 | G4 — branch mergeable | `✅` | Fast-forward today; merge with `--ff-only`. |
 
-**Overall: the milestone is declared and not yet met — two gates pass, two are
-one documentation-plus-API pass away.** No blocker requires a heavy refactor,
-which is precisely what G2 exists to guarantee.
+**Overall: the milestone is met (2026-10-29).** All four gates pass, and none of
+the distance that was closed required a heavy refactor — which is precisely what
+G2 exists to guarantee. What remains open is deliberately outside the milestone
+(§3) or gated on an upstream encoding.
 
 ## 8. Gap ledger
 
@@ -450,8 +475,8 @@ are omitted; this is deliberately not a second copy of those tables.
 
 | Source (ID) | What it is | Class | Gate | Effect on the milestone |
 |---|---|---|---|---|
-| `README.md` "Near-Term Expectations"; AAS1 | API shape not finalized; harness is not the embeddable API; no packaging | A | G1 | The main distance to G1. |
-| AAS2 | `v128`-by-value and multi-result aggregate layout absent from the embedder ABI note | A | G1 | An embedder cannot implement one signature class from the docs alone. |
+| `README.md` "Near-Term Expectations"; AAS1 | API shape not finalized; harness is not the embeddable API; no packaging | A | G1 | **Closed 2026-10-29:** umbrella + tiers + `ES-4` visibility + `ES-5` install + `ES-7` consumer coverage (`i32`, `f64`, multi-result, `v128`). |
+| AAS2 | `v128`-by-value and multi-result aggregate layout absent from the embedder ABI note | A | G1 | **Closed:** `ABI.md` states both, and `ES-7` exercises them from an out-of-tree consumer. |
 | `SAFETY.md` `S1`, `S3`, `S4`, `S7`, `S8` | No step budget; RC not a leak guarantee; per-store budgets; small-stack guard; serial continuation use | D | G1 | Legitimate QVM-style choices — but they must be *stated as the embedding contract*. |
 | `SAFETY.md` `S2`; AAS3 | Negative-module coverage is opt-in | A | G1 | Evidence, not behaviour. |
 | `SAFETY.md` (abort guards) | `std::abort()` remains for an unframed trap report, a completed-continuation resume and a null `Callable::fnPtr` | A | G1 | Invariant guards; document them as "programmer error", not runtime failure. |
@@ -480,7 +505,7 @@ are omitted; this is deliberately not a second copy of those tables.
 | `SIMD_BACKENDS.md` §7 | Per-layer laxness budget for SIMD conformance | D | G2 | Documented. |
 | `THREADSAFETY.md` §8 | One agent at a time; no instance lock; no concurrent compilation | D | G1 | The supported embedding model. |
 | `docs/LAYERING.md` §8; AAS7 | Five core citations of a note whose name contains "JIT" | A | G3 | Cosmetic; keeps the layering check honest. |
-| AAS8–AAS11 | Test-local façade; no backend work order; no second implementation; empty scaffolds | A | G3 | The whole of G3's remaining distance. |
+| AAS8–AAS11 | Test-local façade; no backend work order; no second implementation; empty scaffolds | A | G3 | **All closed 2026-10-29:** `BackendSession` is a product type, `BACKEND_WORK_ORDER.md` exists, the seam has three implementations, and the two planned scaffolds are documented (kept, because those backends are intended). |
 
 Reading: **no Class E row is in scope.** The C rows cannot be closed by this
 project at all; the D rows are decisions with an owner; the A/B rows are the work
@@ -523,13 +548,13 @@ is already done — this document.
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **AAS-0 — Declare and measure** ✅ | Write this note: the four gates, the frozen set, the classification, the audit and the ledger. No code. | — (the record) | This document is linked from [`README.md`](../README.md) and [`AGENTS.md`](../AGENTS.md). |
-| **AAS-1 — Declare the embedding surface** | ◑ **2026-10-29: the umbrella, the version identity and `WASM::Runtime` landed** — `WasmBase/WasmJit.hpp` includes the embedder tier, `WasmBase/WasmRuntime.{hpp,cpp}` provides the load/instantiate/call surface (`ES-1`), `WasmBase/WasmVersion.hpp`/`.cpp` provide `WASMJIT_VERSION_MAJOR/MINOR/PATCH`, `WASMJIT_ABI_VERSION`, `WASM::versionString()` and `WASM::abiVersion()`. The tier classification (with the two feasible `Elv` removals) and the explicit `VERSION`/soname also landed. `ES-3`/`ES-4`/`ES-5` then landed: tiering, `WASMJIT_API` + hidden default visibility, and the install/`pkg-config` path. The remaining acceptance evidence is consumer coverage (`f64`, multi-result, `v128`) plus the optional `abidiff` run. An umbrella header, a version/soname policy, a documented include set and an install/`pkg-config` story; extend [`ABI.md`](ABI.md) with the `v128` host ABI and the multi-result aggregate layout (✅ done); add one "limits an embedder must know" section (✅ done). The design and the ordered sub-milestones are [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) (`ES-1…ES-6`). | AAS1, AAS2 ✅, AAS5 ✅ | A small out-of-tree consumer builds against the installed headers only, and calls an `i32`, an `f64`, a multi-result and a `v128` export using nothing but the docs. |
-| **AAS-2 — Write the backend work order and promote the façade** | A `BACKENDS.md` (or a [`LAYERING.md`](LAYERING.md) §4 extension) enumerating every obligation: the four hooks, the eight contract rows, `ContinuationInvokeFn`, `currentTailCallState()`, `Callable::typeId`, aggregate layout, the `v128` host ABI, the trap slot, the profile gate, the helper entry points. Move the `Session` façade out of `Test/` (or give it a product-side definition the harness consumes). The POD signature/layout views this needs are `BP-1` in [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §10. | AAS8, AAS9 | A new backend can be written from the document alone, and the harness compiles against the product façade instead of defining it. |
-| **AAS-3 — Prove the seam with a second implementation** | A null/identity backend implementing `ModuleInstantiator` plus the façade, selectable as `WASMJIT_BACKEND=null`; it must pass ABI/layout/marshalling tests (it need not execute Wasm). Fill or explicitly retire the `Asmjit/`/`Sljit/` scaffolds, and remove the stray `libSljit.so.*`. [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) `BP-2`/`BP-3` is the loader that turns this into a black-box test. | AAS10, AAS11 | The seam has two implementations in the build; a LibJIT-shaped assumption in a hook breaks the null backend's tests. |
+| **AAS-1 — Declare the embedding surface** ✅ | **Done 2026-10-29.** `WasmBase/WasmJit.hpp` (umbrella), `WASM::Runtime` (`ES-1`), the version/soname identity (`ES-4`), the header tiers and 41 compile-only TUs (`ES-3`), the install/`pkg-config` path (`ES-5`) and the ABI note's missing sections (`ES-6`). The acceptance evidence is `ES-7`: an out-of-tree consumer builds against the installed headers only and calls an `i32`, an `f64`, a multi-result and a `v128` export using nothing but the docs (`Test/install-check.sh`). The optional `abidiff` run remains optional, not a gate. | AAS1 ✅, AAS2 ✅, AAS5 ✅ | Met ✅ |
+| **AAS-2 — Write the backend work order and promote the façade** ✅ | **Done 2026-10-29:** [`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md) is the checklist (two seams, four hooks, eight ABI obligations, memory/GC ownership, helper split, packaging, definition of done), and `WASM::BackendSession` lives in [`WasmBackendSession.hpp`](../WasmBase/WasmBackendSession.hpp) with `TestBackend` aliasing it. The POD views it builds on are `BP-1` ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §10). | AAS8 ✅, AAS9 ✅ | Met ✅ |
+| **AAS-3 — Prove the seam with a second implementation** ✅ | **Done 2026-10-29:** `NullInstantiator` is registered as `null`, selectable through `Runtime::create("null")` and the harness's `WASMJIT_BACKEND`; `Test/ExampleBackend` adds a loadable third implementation, so the seam is exercised by something the frontend was not compiled with. The scaffolds are **kept and documented, not removed** — those backends are planned: both subprojects stay in `Project.pro`, each directory has a `README.md` that states it emits and installs nothing today and points at the work order, and the stray libraries are gone. | AAS10 ✅, AAS11 ✅ | Met ✅ |
 | **AAS-4 — Gate the evidence** ✅ | Make the strict validator run (`WASM_SPEC_VALIDATE=1`) part of the documented gate, and document the ASan configuration in [`TESTING.md`](TESTING.md) as a row, not a local habit. **Done 2026-10-29:** `TESTING.md` "Required runs: the release / merge gate" names both, with the exact ASan `qmake` line and the `QMAKE=/usr/bin/qmake6` recursion note. | AAS3 ✅, AAS4 ✅ | `TESTING.md` names both runs as required, and a release check lists them. |
 | **AAS-5 — Bookkeeping pass** ✅ | Mark `TYPE_MODEL.md` §7 `TM-0…TM-5` closed (or re-open them honestly); resolve the `NULL_JIT_VALUE_DIAGNOSIS` waiver by renaming and re-pointing, or record it as permanent; keep the `README.md` status rows in step with their notes when the plan changes (§6.6 found no contradiction today). **Done 2026-10-29:** the six rows are `✅`, the note is `docs/UNMODELLED_VALUE_TYPES.md` with all sites re-pointed, and `Test/LayeringTests.cpp` enforces the empty check. | AAS6 ✅, AAS7 ✅ | No closed refactor reads as open, and the layering check's expected output is "empty". |
 | **AAS-6 — Merge** | `git merge --ff-only LibjitDispatcher` into `master`, landing all 148 commits and this note atomically; tag the declaration. | G4 (already green) | `master` contains `ea4fb30` and the tag; the suite is green on `master`. |
-| **AAS-7 — Re-run this study** | Re-measure §6 and flip G1/G3 to `✅` (or record what still blocks them). | G1, G3 | §7.5 reads four `✅`. |
+| **AAS-7 — Re-run this study** ✅ | **Done 2026-10-29:** §6 and §11 were re-measured on the final tree (11,377 assertions / 472 cases; 41 per-header TUs; the `[plugin]` build-kind and helper-export checks) and G1/G3 flipped to `✅`. | G1 ✅, G3 ✅ | §7.5 reads four `✅`. |
 
 Ordering note: AAS-1 and AAS-2 are independent and can run in parallel; AAS-3
 wants AAS-2's work order; AAS-6 can happen at any point (it is a fast-forward
@@ -556,17 +581,17 @@ working-tree changes), from `build/LowHanging/Test`:
 
 | Command | Result | Reading |
 |---|---|---|
-| `./WasmJit` (default suite) | **11,374 assertions / 472 test cases, all passed** | +363 assertions and 30 cases over the 2026-10-25 row: `Runtime`, the POD layout views, the backend registry/null backend and the plugin loader (including the build-kind and helper-export checks of `BACKEND_PLUGIN_ABI.md` §7.5/§7.7). |
-| `./WasmJit '~[spec]'` | **10,967 assertions / 279 test cases, all passed** | The hand-written half is green on its own. |
+| `./WasmJit` (default suite) | **11,377 assertions / 472 test cases, all passed** | +366 assertions and 30 cases over the 2026-10-25 row: `Runtime`, the POD layout views, the backend registry/null backend, the plugin loader (build-kind and helper-export checks of `BACKEND_PLUGIN_ABI.md` §7.5/§7.7) and the promoted `BackendSession` façade (`AAS8`). |
+| `./WasmJit '~[spec]'` | **10,999 assertions / 283 test cases, all passed** | The hand-written half is green on its own. |
 | `./WasmJit '[docs]'` | **720 assertions / 1 test case, all passed** | Unchanged. |
 | `./WasmJit '[layering]'` | **4 assertions / 1 test case, all passed** | `WasmBase/` and `WasmStub/` name no backend; the §6.5 scan is now a gate, not a grep. |
 | `./WasmJit '[surface]'` | **4 assertions / 1 test case, all passed** | The version macros, `WASM::versionString()` and `WASM::abiVersion()` agree. |
-| `./WasmJit '[runtime]'` | **41 assertions / 6 test cases, all passed** | Load → instantiate → call, idempotence, the named errors and the `MF-2` guard. |
+| `./WasmJit '[runtime]'` | **46 assertions / 7 test cases, all passed** | Load → instantiate → call, idempotence, the named errors, the `MF-2` guard and the two-store isolation proof (`ES-2`). |
 | `./WasmJit '[backendabi]'` | **36 assertions / 4 test cases, all passed** | The POD signature/layout views match `ABI.md`'s tuple rule. |
-| `./WasmJit '[plugin]'` | **17 assertions / 5 test cases, all passed** | A real plugin loads by name; every refusal path is a named error. |
+| `./WasmJit '[plugin]'` | **41 assertions / 8 test cases, all passed** | A real plugin loads by name; every refusal path is a named error *and* a diagnostic; the exported helper set resolves; a build-kind mismatch is refused. |
 | `./WasmJit '[concurrency]'` | **29 assertions / 8 test cases, all passed** | The model claim, the guard under a real second-thread call, and a re-entrant compiled function across threads. |
-| `./WasmJit '[tiers]'` | **207 assertions / 3 test cases, all passed** | Every header classified once; the umbrella matches the embedder tier; every public header has a TU. |
-| 40 per-header compile TUs (`Test/headers/*.cpp`) | compiled and linked in the same build | Every public header, and `WasmJit.hpp`, compiles standalone. |
+| `./WasmJit '[tiers]'` | **210 assertions / 3 test cases, all passed** | Every header classified once (25 embedder / 17 backend / 16 internal); the umbrella matches the embedder tier; every public header has a TU. |
+| 41 per-header compile TUs (`Test/headers/*.cpp`) | compiled and linked in the same build | Every public header, and `WasmJit.hpp`, compiles standalone. |
 
 Reading: the milestone's *behavioural* half is as green as the documentation
 claims. The strict validator sweep and the ASan configuration are now documented

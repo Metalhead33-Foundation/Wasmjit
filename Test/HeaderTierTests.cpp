@@ -52,7 +52,8 @@ const std::set<std::string>& backendHeaders()
 		"WasmVMContext.hpp", "WasmGcHeader.hpp", "WasmType.hpp",
 		"WasmTypeIdentity.hpp", "WasmOpcode.hpp", "WasmOpcodeDispatcher.hpp",
 		"WasmStack.hpp", "WasmSafety.hpp", "WasmBackendAbi.hpp",
-		"WasmBackendRegistry.hpp", "WasmNullInstantiator.hpp",
+		"WasmBackendRegistry.hpp", "WasmBackendSession.hpp",
+		"WasmNullInstantiator.hpp",
 		"wasmjit_backend.h", "wasm_atomic.hpp", "wasm_simd_scalar.hpp",
 		"wasm_simd_vector.hpp", "wasm_simd_ops.inc",
 	};
@@ -170,5 +171,5 @@ TEST_CASE("every public header has a compile-only translation unit", "[tiers]")
 			++checked;
 		}
 	}
-	REQUIRE(checked == 40);
+	REQUIRE(checked == 41);
 }

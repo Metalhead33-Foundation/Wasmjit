@@ -322,6 +322,9 @@ works.
 - [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §2.2/§7.3 — the frozen surfaces
   (S6 and the new S10) and `AAS10`.
 - [`LAYERING.md`](LAYERING.md) §4 — the contract rows a plugin must honour.
+- [`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md) — the implementer's checklist
+  (the two seams, the ABI obligations, the helper split, the definition of done);
+  a plugin is one way to ship what it describes.
 - [`ABI.md`](ABI.md) "Wide value ABI", "Callable" — the C-shaped pieces the plugin
   already exchanges, and the helper entry points it calls.
 - [`SAFETY.md`](SAFETY.md) §2.4 — no exceptions/`abort` on the trap path, which is

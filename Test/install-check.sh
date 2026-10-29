@@ -56,5 +56,16 @@ PKG_CONFIG_SYSROOT_DIR="$root" \
         pkg-config --cflags --libs wasmjit) \
     -Wl,-rpath,"$installed/lib"
 
-"$root/consumer"
+# ES-7: the same consumer also exercises the signatures AAS1's acceptance row
+# names — f64, a multi-result tuple, a single v128 result and a mixed
+# (i32, v128) tuple — through the installed headers. The module is assembled
+# with wat2wasm from the source tree; the consumer itself sees no source path.
+abi_module="$root/consumer_abi.wasm"
+if command -v wat2wasm >/dev/null 2>&1; then
+    wat2wasm "$source_dir/Test/consumer/consumer_abi.wat" -o "$abi_module"
+    "$root/consumer" "$abi_module"
+else
+    echo "install-check: wat2wasm not found; the ES-7 coverage is skipped" >&2
+    "$root/consumer"
+fi
 echo "install-check: OK (out-of-tree consumer linked through wasmjit.pc and ran)"

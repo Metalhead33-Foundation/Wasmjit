@@ -74,6 +74,10 @@ whatever they like.
 
 ## 4. What the core owns, and what a backend must agree with
 
+What a backend **must provide** (the four hooks, the ABI it emits, the helpers it calls, the packaging) is enumerated in
+[`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md): this section is the contract it
+must not violate, that note is the work order it implements.
+
 The core is not merely "allowed" to define these — it is the only place they can
 live, because every backend and the runtime both depend on them:
 

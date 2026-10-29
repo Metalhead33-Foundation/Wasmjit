@@ -4,9 +4,9 @@
 
 The library split is in place: `WasmBase/` is the backend-agnostic core
 (`libWasmBase`), every code generator is its own library (`LibJit/` is the one
-that executes; `Asmjit/` and `Sljit/` build against the core but contain no
-code generator yet), and `Test/` is a Catch2 harness over the libraries rather
-than the product. The `build/<config>/Test/WasmJit` executable is still a
+that executes; `Asmjit/` and `Sljit/` are the planned ones, reserved and empty
+today, each with a README), and `Test/` is a Catch2 harness over the libraries
+rather than the product. The `build/<config>/Test/WasmJit` executable is still a
 development sandbox, not the embeddable API. See
 [`docs/LAYERING.md`](docs/LAYERING.md) for the rule that keeps the core
 backend-agnostic.
@@ -34,8 +34,8 @@ backend-agnostic.
   [`docs/API_ABI_STABILITY.md`](docs/API_ABI_STABILITY.md): four gates (a
   production-grade LibJIT backend, additive-only evolution, a backend set that
   can grow, a mergeable branch), the nine surfaces they freeze, and the per-gate
-  distance. It is met when all four pass; today two do, and the rest is
-  documentation plus embedding-API work — no heavy refactoring.
+  distance. **All four pass as of 2026-10-29** — the last distance was
+  documentation plus embedding-API work, never a heavy refactoring.
 - **One instance per module — at most.** Multiple instances of the same `Module`
   are ruled out by design; isolation comes from loading a module twice, not from
   instantiating it twice — an escape hatch, not the intended usage: a module is
@@ -50,8 +50,9 @@ backend-agnostic.
   [`docs/THREADSAFETY.md`](docs/THREADSAFETY.md) §3.1–§3.2 and
   [`docs/MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) §2.3.
 - **Still open** (tracked, not started): a second and third backend
-  (`Asmjit/`, `Sljit/` are scaffolds), a published embedding API with
-  packaging/installation, the long-term qmake → CMake move, and the language-support
+  (`Asmjit/` and `Sljit/` are reserved, empty, and intended — see their READMEs
+  and the [`work order`](docs/BACKEND_WORK_ORDER.md)), the long-term
+  qmake → CMake move, and the language-support
   studies defined in [`docs/LANGUAGE_FEASIBILITY.md`](docs/LANGUAGE_FEASIBILITY.md)
   (definitions only — neither study nor the readiness audit has been run). The
   designs for
@@ -100,7 +101,8 @@ per-milestone done markers, is the authoritative per-item status.
 | [`SIMD_BACKENDS.md`](docs/SIMD_BACKENDS.md) | Whether LibJIT / SLJIT / AsmJit support SIMD, the workarounds when they do not, the recommended helper-based lowering for LibJIT — with the native path a backend that has vector registers takes instead (§4, SIMD-8) — and a per-layer laxness budget for conforming loosely | Research note | `████████████████████` survey current |
 | [`SIMD_LIBJIT.md`](docs/SIMD_LIBJIT.md) | The LibJIT-only SIMD decision: `v128` in 16-byte-aligned frame slots, pointer-arg native helpers, Highway 1.4.0 (with the GLM/SLEEF/xsimd/psimd/SIMDe verdicts), the wasm semantics hazards, the four test layers and `SIMD-L0…SIMD-L8` | Design decision | `████████████████████` decided |
 | [`LAYERING.md`](docs/LAYERING.md) | The backend-agnosticism rule for `WasmBase/`: what the core may not name, the contracts it owns that a backend must honour, the vocabulary to use instead, and the check to run | Policy note | `████████████████████` current |
-| [`API_ABI_STABILITY.md`](docs/API_ABI_STABILITY.md) | **The current milestone.** The four gates that declare API/ABI stability, the nine surfaces they freeze, the gap classes (additive / per-backend / upstream-blocked / deferred / heavy-refactor), the "no heavy refactoring" audit, the `LibjitDispatcher` → `master` merge readiness, and the measured verdict per gate | Milestone + proximity study | `██████████░░░░░░░░░░` 2 of 4 gates — G2 (additive-only evolution) and G4 (mergeable branch) pass; G1/G3 are one documentation-plus-API pass away |
+| [`API_ABI_STABILITY.md`](docs/API_ABI_STABILITY.md) | **The current milestone.** The four gates that declare API/ABI stability, the ten surfaces they freeze, the gap classes (additive / per-backend / upstream-blocked / deferred / heavy-refactor), the "no heavy refactoring" audit, the `LibjitDispatcher` → `master` merge readiness, and the measured verdict per gate | Milestone + proximity study | `████████████████████` **met 2026-10-29** — all four gates pass |
+| [`BACKEND_WORK_ORDER.md`](docs/BACKEND_WORK_ORDER.md) | The checklist a backend works from: the two seams (`ModuleInstantiator`, `BackendSession`), the four hooks, the eight ABI obligations, memory/GC ownership, which helpers to call and which to bring, packaging, and a definition of done | Contract + work order | `████████████████████` current |
 | [`EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) | The plan for the embedder-facing surface: `WASM::Runtime` (what it owns, and the store-scoping migration, now complete), the three header tiers and the umbrella header, the version/soname/symbol-visibility policy, the install layout, and a salvage review of an earlier `JitRuntime`/`JitContext` sketch | Design note + plan | `░░░░░░░░░░░░░░░░░░░░` planned — `ES-1…ES-7`; closes `AAS1`/`AAS2` |
 | [`BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md) | Loading code generators from shared libraries behind a narrow C ABI (the Unreal-renderer analogy): the query/descriptor, what may cross the boundary, the nine plugin rules (including serialized compilation and a re-entrant invoke), the nine hard problems, and why the seam stays C++ for now | Feasibility study + interface sketch | `░░░░░░░░░░░░░░░░░░░░` study only — `BP-0` done, `BP-1…BP-5` planned |
 | [`MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) | Whether the class-E multi-agent blocker can be demoted: the one-instance-per-module rule and the accepted concurrency scenarios (GPU-style, thread-per-export, async/await, intra-Wasm threads; concurrent compilation rejected), the per-agent state already in place, the `MA-1…MA-9` re-classification (E → B + A), multithreading on LibJIT/SLJIT/AsmJit, and the opt-in embedder hooks that would mirror the JS-integration seam | Feasibility study | `░░░░░░░░░░░░░░░░░░░░` study only — `MF-0` done; the direction is accepted, the feature is not built |
@@ -187,8 +189,8 @@ library per backend plus the test executable.
 | `WasmBase/` | The core library (`libWasmBase`): binary decoding, the module/instance model, `Store`/`TypeRegistry`/`Value`, the opcode decoder, the shared SIMD helper ABI, and the backend-neutral component runtime (`WasmComponentRuntime`). **Backend-agnostic by rule** — see [`docs/LAYERING.md`](docs/LAYERING.md) |
 | `WasmStub/` | `libWasmStub`: a non-JIT opcode dispatcher that pretty-prints instead of executing (inspection/debug) |
 | `LibJit/` | `libLibJit`: the GNU LibJIT backend (context, type translation, module compiler, dispatch) — the current implementation path, and the only backend that executes |
-| `Asmjit/` | Scaffold for the planned AsmJit backend (**empty today, no code**). Its MMX/SSE…AVX-512 instruction coverage and vector-aware register allocator are a planned SIMD-performance lever |
-| `Sljit/` | Scaffold for the planned SLJIT backend (**empty today, no code**). `sljit_emit_simd_*` / `SLJIT_SIMD_REG_*` are the other planned SIMD lever; both are documented, not built |
+| `Asmjit/` | **Planned backend, no code yet**: reserved and kept in the build, emits an empty `libAsmjit.so` that is never installed and never selectable by name. Its MMX/SSE…AVX-512 coverage and vector-aware register allocator are a planned SIMD lever; see [`Asmjit/README.md`](Asmjit/README.md) and [`docs/BACKEND_WORK_ORDER.md`](docs/BACKEND_WORK_ORDER.md) |
+| `Sljit/` | **Planned backend, no code yet**: same treatment. `sljit_emit_simd_*` / `SLJIT_SIMD_REG_*` are the other planned SIMD lever; see [`Sljit/README.md`](Sljit/README.md) |
 | `Test/` | The Catch2 executable (`WasmJit`) and the spec-suite harness; see [`docs/TESTING.md`](docs/TESTING.md) |
 | `docs/` | Design notes and process guides; per-proposal notes live in `docs/proposals/` (see [Documentation](#documentation)) |
 | `extern/` | Submodules: `MhLib` (`Elvavena` I/O + `Euphemy`) and the upstream `WasmTestsuite` |
@@ -200,8 +202,8 @@ The repository builds a set of shared libraries plus a console test executable
 through qmake:
 
 - [`Project.pro`](Project.pro) is the top-level `subdirs` project
-  (`WasmBase` + `WasmStub` + `LibJit` + `Test`, with the `Asmjit`/`Sljit`
-  scaffolds);
+  (`WasmBase` + `WasmStub` + `LibJit` + the planned `Asmjit`/`Sljit` placeholders
+  + `ExampleBackend` + `Test`);
 - the test target links against `libjit`, Catch2 and the project libraries;
 - `libWasmBase` links `libffi` (the flat component-runtime closure path) and
   the header-only `utf8cpp` package for Canonical ABI string transcoding;
@@ -229,8 +231,8 @@ through qmake:
 | Backend | State |
 |---|---|
 | GNU LibJIT (`LibJit/`) | **The only executing backend** — loads, validates, compiles and runs modules, including SIMD via the shared helper layer |
-| SlJIT (`Sljit/`) | Scaffold: builds against the core, emits nothing |
-| AsmJit (`Asmjit/`) | Scaffold: builds against the core, emits nothing |
+| SlJIT (`Sljit/`) | **Planned**, not started: builds an empty library, installs nothing; the [`work order`](docs/BACKEND_WORK_ORDER.md) says what it must provide |
+| AsmJit (`Asmjit/`) | **Planned**, not started: same |
 
 There is no interpreter backend. `WasmStub/` is a non-compiling pretty-printer;
 GNU LibJIT already provides a compile/interpret configuration and is the only
