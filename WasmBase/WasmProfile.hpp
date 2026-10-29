@@ -51,6 +51,7 @@ enum class ProfileMarker : uint32_t {
 
 //! Union of two markers, so `ProfileMarker::Threads | ProfileMarker::Vectors`
 //! names the exclusion set `{T,V}`.
+/** \\brief Combines two profile-exclusion marker sets. \\param lhs Left marker set. \\param rhs Right marker set. \\return Bitwise union of both marker sets. */
 inline constexpr ProfileMarker operator|(ProfileMarker lhs, ProfileMarker rhs) noexcept
 {
 	return static_cast<ProfileMarker>(
@@ -59,6 +60,7 @@ inline constexpr ProfileMarker operator|(ProfileMarker lhs, ProfileMarker rhs) n
 
 //! The markers a configuration excludes, and the predicates the validator and
 //! the backend use. `profileConfigX()` helpers below build the named profiles.
+/** \\brief Set of language-subset exclusions requested by an embedder. */
 struct ProfileConfig {
 	//! Bit set of the `ProfileMarker` values this configuration excludes; zero
 	//! means the full profile.
@@ -67,30 +69,37 @@ struct ProfileConfig {
 	//! The full profile `{}`: the engine claims no exclusion.
 	constexpr ProfileConfig() noexcept = default;
 	//! A profile that excludes exactly the subsets `marker` names.
+	/** \\brief Constructs a profile excluding one marker. \\param marker Subset marker to exclude. */
 	explicit constexpr ProfileConfig(ProfileMarker marker) noexcept
 		: excludedMarkers(static_cast<uint32_t>(marker)) {}
 	//! A profile from an already-combined marker bit set.
+	/** \\brief Constructs a profile from a combined exclusion bitmask. \\param markers Combined ProfileMarker bits. */
 	explicit constexpr ProfileConfig(uint32_t markers) noexcept
 		: excludedMarkers(markers) {}
 
 	//! True when this profile excludes the subset `marker` names.
+	/** \\brief Tests whether a subset is excluded. \\param marker Marker to test. \\return true when the marker's bit is set. */
 	inline constexpr bool excludes(ProfileMarker marker) const noexcept
 	{
 		return (excludedMarkers & static_cast<uint32_t>(marker)) != 0;
 	}
 	//! True when nothing is excluded, i.e. the full profile.
+	/** \\brief Tests whether this configuration excludes no features. \\return true for the full profile. */
 	inline constexpr bool isFull() const noexcept { return excludedMarkers == 0; }
 	//! True when the deterministic profile's exclusions apply.
+	/** \\brief Tests whether nondeterministic profile features are excluded. \\return true when the deterministic marker is set. */
 	inline constexpr bool deterministic() const noexcept
 	{
 		return excludes(ProfileMarker::NonDeterministic);
 	}
 	//! True when the threads subset is excluded.
+	/** \\brief Tests whether the threads subset is excluded. \\return true when the Threads marker is set. */
 	inline constexpr bool excludesThreads() const noexcept
 	{
 		return excludes(ProfileMarker::Threads);
 	}
 	//! True when the scalar subset is excluded (no vectors).
+	/** \\brief Tests whether vector types/instructions are excluded. \\return true for the scalar profile. */
 	inline constexpr bool scalar() const noexcept
 	{
 		return excludes(ProfileMarker::Vectors);
@@ -98,6 +107,7 @@ struct ProfileConfig {
 };
 
 //! The full profile `{}`: no exclusions.
+/** \\brief Returns the profile with no exclusions. \\return Full profile configuration. */
 inline constexpr ProfileConfig fullProfile() noexcept
 {
 	return ProfileConfig{};
@@ -105,18 +115,21 @@ inline constexpr ProfileConfig fullProfile() noexcept
 
 //! The spec's deterministic profile `{N,T}`. This engine does not support it
 //! alone (see supportsProfileConfig); it is exposed so a caller can ask.
+/** \\brief Returns the spec's deterministic exclusion configuration. \\return Configuration excluding nondeterminism and threads. */
 inline constexpr ProfileConfig deterministicProfile() noexcept
 {
 	return ProfileConfig{ProfileMarker::NonDeterministic | ProfileMarker::Threads};
 }
 
 //! The scalar profile `{V}`: excludes every vector type and SIMD instruction.
+/** \\brief Returns the scalar-only profile configuration. \\return Configuration excluding vector types and SIMD. */
 inline constexpr ProfileConfig scalarProfile() noexcept
 {
 	return ProfileConfig{ProfileMarker::Vectors};
 }
 
 //! The `{N,T,V}` intersection this engine actually supports.
+/** \\brief Returns the deterministic-plus-scalar profile configuration. \\return Configuration excluding nondeterminism, threads, and vectors. */
 inline constexpr ProfileConfig deterministicScalarProfile() noexcept
 {
 	return ProfileConfig{ProfileMarker::NonDeterministic | ProfileMarker::Threads
@@ -124,12 +137,14 @@ inline constexpr ProfileConfig deterministicScalarProfile() noexcept
 }
 
 //! The coarsest profile this engine claims today: the full profile.
+/** \\brief Returns the broadest named profile claimed by this engine. \\return Profile::Full. */
 inline constexpr Profile supportedProfile() noexcept
 {
 	return Profile::Full;
 }
 
 //! True when the engine claims the named profile (see `supportsProfileConfig`).
+/** \\brief Tests whether the engine claims support for a named profile. \\param profile Profile to query. \\return true when the named profile is supported. */
 inline constexpr bool supportsProfile(Profile profile) noexcept
 {
 	switch (profile) {
@@ -144,6 +159,7 @@ inline constexpr bool supportsProfile(Profile profile) noexcept
 //! True when the engine can honour every exclusion in `config`. The only
 //! unsupported shape is a deterministic configuration that still admits
 //! vectors: `{N,T}` and any variant without V.
+/** \\brief Tests whether the engine can honour every exclusion in a configuration. \\param config Requested exclusion set. \\return true when the configuration is supported. */
 inline constexpr bool supportsProfileConfig(const ProfileConfig& config) noexcept
 {
 	if (config.excludes(ProfileMarker::NonDeterministic)
@@ -153,6 +169,7 @@ inline constexpr bool supportsProfileConfig(const ProfileConfig& config) noexcep
 }
 
 //! Stable short name for diagnostics and embedder logs.
+/** \\brief Returns the stable diagnostic spelling of a profile. \\param profile Profile to format. \\return Static null-terminated profile name. */
 inline constexpr const char* profileName(Profile profile) noexcept
 {
 	switch (profile) {
