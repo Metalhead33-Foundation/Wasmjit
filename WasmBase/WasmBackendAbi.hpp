@@ -76,6 +76,11 @@ struct AggregateLayout {
  * \\param kind ABI value category to measure.
  * \\return Size in bytes; Void has size zero.
  */
+/**
+ * \\brief Performs the valueKindSize operation.
+ * \\param kind Input value, resource descriptor, or output destination for this operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 inline constexpr std::uint32_t valueKindSize(ValueKind kind) noexcept
 {
 	switch (kind) {
@@ -84,6 +89,10 @@ inline constexpr std::uint32_t valueKindSize(ValueKind kind) noexcept
 	case ValueKind::F32:  return 4;
 	case ValueKind::F64:  return 8;
 	case ValueKind::V128: return 16;
+/**
+ * \\brief Performs the sizeof operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 	case ValueKind::Ref:  return static_cast<std::uint32_t>(sizeof(void*));
 	case ValueKind::Void: return 0;
 	}
@@ -95,6 +104,11 @@ inline constexpr std::uint32_t valueKindSize(ValueKind kind) noexcept
  * \\param kind ABI value category to measure.
  * \\return Required alignment in bytes.
  */
+/**
+ * \\brief Performs the valueKindAlignment operation.
+ * \\param kind Input value, resource descriptor, or output destination for this operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 inline constexpr std::uint32_t valueKindAlignment(ValueKind kind) noexcept
 {
 	switch (kind) {
@@ -103,6 +117,10 @@ inline constexpr std::uint32_t valueKindAlignment(ValueKind kind) noexcept
 	case ValueKind::F32:  return 4;
 	case ValueKind::F64:  return 8;
 	case ValueKind::V128: return 16;
+/**
+ * \\brief Performs the alignof operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 	case ValueKind::Ref:  return static_cast<std::uint32_t>(alignof(void*));
 	case ValueKind::Void: return 1;
 	}
@@ -115,6 +133,11 @@ inline constexpr std::uint32_t valueKindAlignment(ValueKind kind) noexcept
  * \\brief Maps a WebAssembly value-type opcode to its ABI value category.
  * \\param code WebAssembly value type code.
  * \\return Corresponding ABI kind; reference opcodes map to Ref.
+ */
+/**
+ * \\brief Performs the valueKindOf operation.
+ * \\param code Input value, resource descriptor, or output destination for this operation.
+ * \\return The requested value, handle, view, or success status.
  */
 inline constexpr ValueKind valueKindOf(ValueTypeCode code) noexcept
 {
@@ -135,6 +158,12 @@ namespace detail {
  * \\param value Original byte offset.
  * \\param alignment Alignment boundary (must be non-zero).
  * \\return Smallest aligned offset not less than value.
+ */
+/**
+ * \\brief Performs the alignUp operation.
+ * \\param value Input value, resource descriptor, or output destination for this operation.
+ * \\param alignment Input value, resource descriptor, or output destination for this operation.
+ * \\return The requested value, handle, view, or success status.
  */
 inline constexpr std::uint32_t alignUp(std::uint32_t value,
 		std::uint32_t alignment) noexcept
@@ -157,6 +186,12 @@ inline constexpr std::uint32_t alignUp(std::uint32_t value,
  *        entries; insufficient storage produces a zero layout.
  * \\return Aggregate size/alignment and a pointer to the populated field layouts.
  */
+/**
+ * \\brief Performs the computeAggregateLayout operation.
+ * \\param kinds Input value, resource descriptor, or output destination for this operation.
+ * \\param fieldStorage Input value, resource descriptor, or output destination for this operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 inline AggregateLayout computeAggregateLayout(std::span<const ValueKind> kinds,
 		std::span<FieldLayout> fieldStorage) noexcept
 {
@@ -164,28 +199,72 @@ inline AggregateLayout computeAggregateLayout(std::span<const ValueKind> kinds,
 	if (kinds.size() > fieldStorage.size())
 		return layout;
 
+/**
+ * \\brief Performs the data operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 	layout.fields = fieldStorage.data();
+/**
+ * \\brief Performs the size operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 	layout.fieldCount = static_cast<std::uint32_t>(kinds.size());
 
 	std::uint32_t offset = 0;
 	std::uint32_t alignment = 1;
 	for (std::size_t i = 0; i < kinds.size(); ++i) {
+/**
+ * \\brief Performs the valueKindSize operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 		const std::uint32_t size = valueKindSize(kinds[i]);
+/**
+ * \\brief Performs the valueKindAlignment operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 		const std::uint32_t fieldAlignment = valueKindAlignment(kinds[i]);
+/**
+ * \\brief Performs the alignUp operation.
+ * \\param offset Input value, resource descriptor, or output destination for this operation.
+ * \\param fieldAlignment Input value, resource descriptor, or output destination for this operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 		offset = detail::alignUp(offset, fieldAlignment);
 		fieldStorage[i] = FieldLayout{ offset, size, fieldAlignment };
 		offset += size;
 		if (fieldAlignment > alignment)
 			alignment = fieldAlignment;
 	}
+/**
+ * \\brief Performs the alignUp operation.
+ * \\param offset Input value, resource descriptor, or output destination for this operation.
+ * \\param alignment Input value, resource descriptor, or output destination for this operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 	layout.size = detail::alignUp(offset, alignment);
 	layout.alignment = alignment;
 	return layout;
 }
 
+/**
+ * \\brief Performs the static_assert operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 static_assert(std::is_standard_layout_v<SignatureView>);
+/**
+ * \\brief Performs the static_assert operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 static_assert(std::is_standard_layout_v<FieldLayout>);
+/**
+ * \\brief Performs the static_assert operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 static_assert(std::is_standard_layout_v<AggregateLayout>);
+/**
+ * \\brief Performs the static_assert operation.
+ * \\return The requested value, handle, view, or success status.
+ */
 static_assert(sizeof(FieldLayout) == 12, "the C plugin view pins the layout");
 
 } // namespace WASM
