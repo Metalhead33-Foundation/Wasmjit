@@ -77,6 +77,7 @@ namespace Detail {
 //! The shared body of every trampoline: guard, try, convert, return a benign
 //! value. `Fn` is the embedder's function with the exact import signature.
 template <class Ret, class... Args>
+/** \\brief Implements exception-to-trap conversion for one native import signature. \\tparam Ret Native import return type. \\tparam Args Native import argument types, excluding VMContext*. */
 struct NativeImportBody {
 	template <Ret (*Fn)(VMContext*, Args...)>
 	static Ret invoke(VMContext* ctx, Args... args) noexcept
@@ -110,11 +111,13 @@ struct NativeImportBody {
 //! Maps `Ret (*)(VMContext*, Args...)` (with or without `noexcept`) to a
 //! trampoline instantiated on the function pointer itself.
 template <class Signature>
+/** \\brief Maps a native function-pointer signature to its generated-code trampoline. \\tparam Signature Host function-pointer type, optionally noexcept. */
 struct NativeImportAdapter;
 
 //! Adapter for a throwing host function: the trampoline is `noexcept` and turns
 //! an escaping exception into a reported trap.
 template <class Ret, class... Args>
+/** \\brief Adapter for a potentially-throwing native import function. \\tparam Ret Return type. \\tparam Args Argument types excluding VMContext*. */
 struct NativeImportAdapter<Ret (*)(VMContext*, Args...)> {
 	//! The host function's own pointer type, used as the template argument of
 	//! `trampoline`.
@@ -123,6 +126,8 @@ struct NativeImportAdapter<Ret (*)(VMContext*, Args...)> {
 	//! The `Callable::fnPtr` for the function `Fn`: it runs the body and reports a
 	//! trap instead of letting an exception cross into generated code.
 	template <FnPtr Fn>
+	/** \\brief Calls the host function and converts escaping exceptions into traps. \\tparam Fn Native function to invoke. \\param ctx Calling instance VM context. \\param args Arguments matching the Wasm import signature. \\return Host function result, or a zero-initialized result after reporting a trap. */
+	/** \\brief Calls the noexcept host function through the common import trampoline. \\tparam Fn Native function to invoke. \\param ctx Calling instance VM context. \\param args Arguments matching the Wasm import signature. \\return Host function result. */
 	static Ret trampoline(VMContext* ctx, Args... args) noexcept
 	{
 		return Detail::NativeImportBody<Ret, Args...>::template invoke<Fn>(ctx, args...);
@@ -132,6 +137,7 @@ struct NativeImportAdapter<Ret (*)(VMContext*, Args...)> {
 //! Adapter for a `noexcept` host function; it works exactly like the throwing
 //! form (the pointer converts implicitly).
 template <class Ret, class... Args>
+/** \\brief Adapter for a noexcept native import function. \\tparam Ret Return type. \\tparam Args Argument types excluding VMContext*. */
 struct NativeImportAdapter<Ret (*)(VMContext*, Args...) noexcept> {
 	//! The host function's own pointer type, used as the template argument of
 	//! `trampoline`.
@@ -150,7 +156,8 @@ struct NativeImportAdapter<Ret (*)(VMContext*, Args...) noexcept> {
 //! Builds the `Callable` for a native import body. `Fn` must be a function
 //! pointer with the signature `Ret(VMContext*, Args...)`.
 template <auto Fn>
-[[nodiscard]] Callable nativeImport() noexcept
+[[nodiscard]] /** \\brief Builds a Callable for a compile-time native host function. \\tparam Fn Function pointer with signature Ret(VMContext*, Args...). \\return Callable whose entry point catches host exceptions and reports traps. */
+Callable nativeImport() noexcept
 {
 	using Adapter = NativeImportAdapter<decltype(Fn)>;
 	Callable callable{};
