@@ -1255,7 +1255,7 @@ namespace {
 
 // Reject a value type the engine cannot model. This is deliberate: a type with
 // no representation degenerates to a void/absent value whose loads yield a null
-// backend handle (docs/NULL_JIT_VALUE_DIAGNOSIS.md), so such a module is refused
+// backend handle (docs/UNMODELLED_VALUE_TYPES.md), so such a module is refused
 // at load instead of being compiled into a silently broken function.
 [[noreturn]] void rejectSecretValueType(const char* where, size_t index, WASM::ValueTypeCode code)
 {
@@ -1286,7 +1286,7 @@ namespace {
 	char buffer[256];
 	std::snprintf(buffer, sizeof(buffer),
 			"malformed module: unsupported value type 0x%02X (%d) in %s #%zu — this "
-			"engine does not model it (docs/NULL_JIT_VALUE_DIAGNOSIS.md)",
+			"engine does not model it (docs/UNMODELLED_VALUE_TYPES.md)",
 			wireByte, value, where, index);
 	WASM::Diagnostic diagnostic;
 	diagnostic.id = WASM::DiagnosticId::kDecodeUnsupportedValueType;
@@ -1474,7 +1474,7 @@ void Module::parseBody(Elv::Io::Device& file, std::optional<uint64_t> end)
 	}
 
 	// Reject a module that declares a value type this engine cannot lower, rather
-	// than compiling a null operand into a function (docs/NULL_JIT_VALUE_DIAGNOSIS.md).
+	// than compiling a null operand into a function (docs/UNMODELLED_VALUE_TYPES.md).
 	validateValueTypes();
 	validate(parseOptions);
 }

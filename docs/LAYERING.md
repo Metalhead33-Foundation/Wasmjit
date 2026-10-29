@@ -1,8 +1,9 @@
 # Backend Layering — What `WasmBase/` May Know, and What Only a Backend May
 
-Status: policy note (revision 1 — records the rule that `WasmBase/` is
-backend-agnostic, the vocabulary for talking about a backend in core code, and
-the state of the tree after the first pass).
+Status: policy note (revision 2 — 2026-10-29: the last non-empty citation was
+renamed away and the check became an automated test; revision 1 recorded the rule
+that `WasmBase/` is backend-agnostic, the vocabulary for talking about a backend
+in core code, and the state of the tree after the first pass).
 Audience: anyone editing `WasmBase/`, adding or filling in a backend, or writing
 a comment anywhere on the loader / instantiator / codegen path.
 
@@ -114,14 +115,17 @@ Name the **obligation**, not the implementer.
 ## 6. How to check
 
 ```bash
-grep -rn -i 'libjit\|jit_type\|jit_insn\|jit_function\|jit_value\|jit_context\|\bJIT\b' WasmBase/
+grep -rn -iE '\b(libjit|asmjit|sljit|jit_type|jit_insn|jit_function|jit_value|jit_context)\b|jit/jit\.h|\bJIT\b' WasmBase/ WasmStub/
 ```
 
-Expected result: **only the five `docs/NULL_JIT_VALUE_DIAGNOSIS.md` citations**
-covered by the §8 waiver — no backend name, no backend type, no "the JIT" used as
-a synonym for a backend. The same check on `WasmStub/` must be completely empty:
-it is a non-compiling backend and must not acquire a code generator's vocabulary
-by accident.
+Expected result: **empty** — no backend name, no backend type, no "the JIT" used
+as a synonym for a backend. The word boundaries matter: without them `asmjit`
+matches the project's own `WASMJIT_*` macros, because the comparison is
+case-insensitive.
+
+The check is enforced by the `[layering]` test (`Test/LayeringTests.cpp`), which
+scans `WasmBase/` for the same vocabulary on every suite run, so drift fails the
+default run instead of waiting for a reviewer's grep.
 
 That grep cannot catch the one rule that is not about names: the core must not
 implement an interpreter (§4). A decode-and-execute loop in `WasmBase/` is a
@@ -151,17 +155,23 @@ to every backend that implements the instantiator hooks. The runtime still owns
 the component graph, canonical ABI and async state; only core-module
 instantiation crosses the backend seam.
 
+Layering follow-up, 2026-10-29: the last non-empty result of the §6 check was the
+five citations of a backend-named diagnosis note. The note is now
+`docs/UNMODELLED_VALUE_TYPES.md`, the five core sites were re-pointed, and the
+check is **empty**; `Test/LayeringTests.cpp` (`[layering]`) enforces it on every
+suite run. The same pass removed the stray `libSljit.so*` files that had been
+sitting in `Sljit/`, outside `build/`.
+
 ## 8. Deliberate tensions and waivers
 
-- **`docs/NULL_JIT_VALUE_DIAGNOSIS.md` is cited from five core sites and its
-  name contains "JIT".** The note itself is legitimately backend-specific — it
-  diagnoses a null backend value handle — and it is the recorded rationale for a
-  *core* rule ("reject unmodelled value types at load"), so the core needs to be
-  able to point at it. A citation is not a dependency, so this is left as-is and
-  flagged here: renaming the note to something backend-neutral (e.g.
-  `UNMODELED_VALUE_TYPES.md`) and re-pointing the five sites plus `README.md`
-  would close it, if the naming inconsistency is judged to matter more than the
-  churn. This is the *only* remaining hit of the §6 check.
+- **`docs/UNMODELLED_VALUE_TYPES.md` was the last non-empty result — resolved.**
+  Its former name contained "JIT", so five core sites cited a backend-named file
+  and the §6 check was non-empty by exactly those five lines. The note was
+  renamed and the sites re-pointed (2026-10-29); a citation is not a dependency,
+  and the note itself stays legitimately backend-specific (it diagnoses a null
+  backend value handle and is the recorded rationale for the *core* rule "reject
+  unmodelled value types at load"). The §6 check is now empty, and the
+  `[layering]` test keeps it that way.
 - **"JIT" as the project's own domain term** (this is a JIT library; `WasmStub/`
   is its non-compiling sibling) is fine in prose that is describing the *project*.
   It is not fine in core code, because in this tree "the JIT" has historically

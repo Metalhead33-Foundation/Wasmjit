@@ -9,7 +9,9 @@ validated, the parser type AST is released after validation, and each component
 runtime owns a `ComponentAbiInstance` signature table. Core Type imports/exports
 link through the Store by abstract bound. Only true multi-agent async
 scheduling remains deferred, by the explicit THREADS decision; the single-agent
-semantics are implemented.)
+semantics are implemented. Revision 14 marks the TM-0…TM-5 plan rows closed — the
+TM-6…TM-11 sequence completed them — so a finished refactor no longer reads as an
+open one.)
 Audience: anyone touching `WasmBase/WasmType.hpp`, `WasmBase/WasmCanonicalType.hpp`,
 `WasmBase/WasmTypeRegistry.{hpp,cpp}`, `WasmBase/WasmComponentModel.hpp`,
 `WasmBase/WasmComponentParser.inc`, `WasmBase/WasmComponentValidation.cpp`, or the
@@ -654,17 +656,20 @@ consumes the core layout and needs a compatibility view.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **TM-0 — Baseline and ownership** | Measure `sizeof`/allocation counts for `Subtype`, `CanonicalType`, `DefinedValueType`, `ComponentTypeDef`, `ComponentDecl`, `ResolvedValueType`, `ResolvedType`; state the store owner and budget. No behaviour change. | TM8, TM9 (partly) | The measurements and the owner/budget decision are recorded; the existing suite is unchanged and green. |
-| **TM-1 — Core compact store** | Introduce the store skeleton, `TypeRecord`/`TypeSpan`, core payload pools and `SubtypeView`/`CanonicalTypeView`; convert `TypeRegistry` interning to store compact records; keep `Subtype` as the parser-facing input. | TM2 (core side), TM4 (core), TM5 (core), TM9 | Core parsing/interning/JIT tests stay green; one function type no longer allocates its parameter/result vectors separately; `canonicalType` is a view, not a copied payload. |
-| **TM-2 — Component compact records** | Replace `DefinedValueType` and `ComponentTypeDef` alternatives with tagged records/payloads; add the `StringTable`; make the parser write compact component nodes while retaining diagnostic source data. | TM3, TM4 (component), TM5 (component), TM9 | Component fixtures and invalid cases stay green; the compact store is the source of truth; labels/names are `StringId`s. Any temporary resolved graph is a named scaffold for TM-4, not a second long-lived representation. |
-| **TM-3 — Unified component identity** | Add `TypeDomain::Component`, component interning, scope-local → `TypeId` mapping, nominal resource IDs, and explicit type schemes for `sub resource`. | TM1, TM6, TM7 | Equal component types from different components share a `TypeId`; resources stay distinct; a type-import scheme can be substituted without confusing a parameter with a resource ID. |
-| **TM-4 — Remove duplicate storage** | Delete the second long-lived core copy and the validator-only resolved graph; keep only diagnostics/location data and views. | TM2 (remainder), TM3 (remainder), TM5 (remainder) | The only stored type structure is the store's; footprint counters show the expected drop; all suites green. |
-| **TM-5 — API and documentation cleanup** | Decide whether `Subtype` remains a view or is removed; retain `TypeRegistry` aliases where useful; update `TYPE_IDENTITY.md`, `COMPONENT_MODEL.md` and this note. | — (cleanup; no open gap) | Public consumers have one documented way to inspect a type; no compatibility shim is undocumented. |
+| **TM-0 — Baseline and ownership** ✅ | Measure `sizeof`/allocation counts for `Subtype`, `CanonicalType`, `DefinedValueType`, `ComponentTypeDef`, `ComponentDecl`, `ResolvedValueType`, `ResolvedType`; state the store owner and budget. No behaviour change. | TM8, TM9 (partly) | The measurements and the owner/budget decision are recorded; the existing suite is unchanged and green. |
+| **TM-1 — Core compact store** ✅ | Introduce the store skeleton, `TypeRecord`/`TypeSpan`, core payload pools and `SubtypeView`/`CanonicalTypeView`; convert `TypeRegistry` interning to store compact records; keep `Subtype` as the parser-facing input. | TM2 (core side), TM4 (core), TM5 (core), TM9 | Core parsing/interning/JIT tests stay green; one function type no longer allocates its parameter/result vectors separately; `canonicalType` is a view, not a copied payload. |
+| **TM-2 — Component compact records** ✅ | Replace `DefinedValueType` and `ComponentTypeDef` alternatives with tagged records/payloads; add the `StringTable`; make the parser write compact component nodes while retaining diagnostic source data. | TM3, TM4 (component), TM5 (component), TM9 | Component fixtures and invalid cases stay green; the compact store is the source of truth; labels/names are `StringId`s. Any temporary resolved graph is a named scaffold for TM-4, not a second long-lived representation. |
+| **TM-3 — Unified component identity** ✅ | Add `TypeDomain::Component`, component interning, scope-local → `TypeId` mapping, nominal resource IDs, and explicit type schemes for `sub resource`. | TM1, TM6, TM7 | Equal component types from different components share a `TypeId`; resources stay distinct; a type-import scheme can be substituted without confusing a parameter with a resource ID. |
+| **TM-4 — Remove duplicate storage** ✅ | Delete the second long-lived core copy and the validator-only resolved graph; keep only diagnostics/location data and views. | TM2 (remainder), TM3 (remainder), TM5 (remainder) | The only stored type structure is the store's; footprint counters show the expected drop; all suites green. |
+| **TM-5 — API and documentation cleanup** ✅ | Decide whether `Subtype` remains a view or is removed; retain `TypeRegistry` aliases where useful; update `TYPE_IDENTITY.md`, `COMPONENT_MODEL.md` and this note. | — (cleanup; no open gap) | Public consumers have one documented way to inspect a type; no compatibility shim is undocumented. |
 
-TM-3/TM-4/TM-5 are the original broad milestones. §7.10.6 splits their remaining
-work into the concrete TM-6…TM-11 sequence: TM-8/TM-9 complete the component
-identity work of TM-3, TM-6/TM-7 complete the duplicate-storage removal of TM-4,
-and TM-11 supplies the ownership/dedup gates that TM-5 previously left implicit.
+All six are closed (`✅`). TM-0…TM-2 shipped the compact store; TM-3/TM-4/TM-5
+were the original broad milestones, and §7.10.6 splits their remaining work into
+the concrete TM-6…TM-11 sequence: TM-8/TM-9 complete the component identity work
+of TM-3, TM-6/TM-7 complete the duplicate-storage removal of TM-4, and TM-11
+supplies the ownership/dedup gates that TM-5 previously left implicit. The `✅`
+here records that closure, so a reader cannot mistake a finished refactor for an
+open one.
 
 ### 7.8 Open decisions
 

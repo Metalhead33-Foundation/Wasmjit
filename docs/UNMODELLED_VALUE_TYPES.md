@@ -1,7 +1,9 @@
-# Null `jit_value_t` from Unsupported Value Types — Diagnosis
+# Unmodelled Value Types — Rejected at Load
 
-Status: investigation note (revision 2 — root cause confirmed empirically; **fix
-D implemented** — unmodelled value types are rejected at load).
+Status: investigation note (revision 3 — root cause confirmed empirically; **fix
+D implemented** — unmodelled value types are rejected at load. Renamed from
+`NULL_JIT_VALUE_DIAGNOSIS.md` so that the core's citations no longer carry a
+backend name; the diagnosis itself is unchanged).
 Audience: anyone touching LibJIT codegen, the reference-counting ownership work
 ([`proposals/GC.md`](proposals/GC.md) RC-1/RC-1b), or adding a new value type.
 
@@ -194,7 +196,7 @@ Effect on `ref_null.wast`: instead of segfaulting it now fails with
 
 ```
 malformed module: unsupported value type 0x69 (-23) in function type result #3
-— this engine does not model it (docs/NULL_JIT_VALUE_DIAGNOSIS.md)
+— this engine does not model it (docs/UNMODELLED_VALUE_TYPES.md)
 ```
 
 (The formatter printed the enum's two's-complement byte at the time; it now
@@ -229,6 +231,6 @@ particular type that triggered it was `exnref`/`nullexnref`, and those are
   (The harness now compares `(ref.null …)` *results* against a null pointer,
   which is what turned its 32 skips into real assertions.)
 
-The `NULL_JIT_VALUE_DIAGNOSIS` failure mode itself — an unmodelled code lowering
-to `jit_type_void` and pushing a null backend handle — is unchanged and still
-guarded; a future unmodelled type will be rejected exactly as described above.
+The failure mode itself — an unmodelled code lowering to `jit_type_void` and
+pushing a null backend handle — is unchanged and still guarded; a future
+unmodelled type will be rejected exactly as described above.

@@ -42,4 +42,12 @@
   ;; on the model stack).
   (func (export "through_block") (param $v v128) (result v128)
     (block (result v128)
-      (local.get $v))))
+      (local.get $v)))
+
+  ;; Four `v128` parameters force the calling convention past the register file:
+  ;; with the implicit `VMContext*` plus two words per vector, at least one
+  ;; argument is stack-passed. Returning the fourth proves that the deepest
+  ;; stack slot is addressed correctly (docs/ABI.md "`v128` by Value").
+  (func (export "four") (param $a v128) (param $b v128) (param $c v128)
+        (param $d v128) (result v128)
+    (local.get $d)))

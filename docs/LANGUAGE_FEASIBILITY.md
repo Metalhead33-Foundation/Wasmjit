@@ -707,6 +707,7 @@ nothing here may be read as their result.**
 | Automated test for either study or the audit | **Absent by design** | The outputs are documents, PoC artefacts and a readiness report, not assertions in the suite. |
 | Entry-gate audit (`LF-0a`) | **Not run** | Its evidence is the readiness report; no audit exists yet, so no `RG` row has a state. |
 | `[docs]` structural lint | Covers `docs/proposals/` only | This note is not linted (like the other top-level notes); its structure is kept by review. |
+| `[layering]` / `[surface]` gates | **Exist** (`Test/LayeringTests.cpp`, `Test/SurfaceTests.cpp`) | `RG1`/`RG3`/`RG6` evidence: the core ↔ backend vocabulary is machine-checked, and the version identity an embedder compiles against is exercised at run time. |
 | Language-feasibility PoC tests | **None exist** under this note's definition | `LF-2` produces them under a charter; promotion to the default suite is a separate decision. |
 | AssemblyScript test modules | **Exist** (`Test/wasm/*.ts`, built at test time) | Harness evidence for strings, arrays and native-import interop — input to a future `LF-2`, not a study. |
 | Canonical candidate list | **Linked, not fetched** | `LF-1` is the first milestone that opens it. |

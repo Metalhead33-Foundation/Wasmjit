@@ -102,12 +102,19 @@ SOURCES += main.cpp \
     LibJitBackendTests.cpp \
     WastScript.cpp \
     SpecSuite.cpp \
-    ProposalDocsTests.cpp
+    ProposalDocsTests.cpp \
+    LayeringTests.cpp \
+    SurfaceTests.cpp
 HEADERS +=  \
     helper.hpp \
     Diagnose.hpp \
     TestBackend.hpp \
     WastScript.hpp
+
+# One translation unit per embedder-tier header. Each file includes exactly one
+# header, so a header that stops compiling standalone fails the build instead of
+# an embedder's project (docs/EMBEDDING_SURFACE.md §6.1, `ES-3`).
+SOURCES += $$files($$PWD/headers/*.cpp)
 
 DISTFILES += \
     package-lock.json \

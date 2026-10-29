@@ -525,6 +525,33 @@ models: the `print*` stubs, a shared table (`10..20 funcref`), a shared memory
 and re-registered into each script's `RegistryImportResolver`, so scripts that
 import `(import "spectest" "table" ...)` / `"memory"` instantiate correctly.
 
+### Required runs: the release / merge gate
+
+Two runs are **required** in addition to the default suite — for a release and
+for a merge to `master` — so that "green" means the same thing to every reviewer
+([`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) `AAS3`/`AAS4`):
+
+| Run | Command | Evidence it produces | Last measured |
+| --- | --- | --- | --- |
+| Strict validator sweep | `WASM_SPEC_VALIDATE=1 ./WasmJit '[spec]'` | every curated binary negative module is rejected (the 2,382 cases above) | **2,382 / 2,382**, 2026-10-18 |
+| AddressSanitizer build + suite | configure a second shadow build (below), then run the default suite | no use-after-free, overflow or leak report on the hand-written path | configuration exists; the run is **not yet recorded** in this note |
+
+The ASan configuration is a separate shadow build, so the ordinary build keeps
+its flags:
+
+```bash
+mkdir -p build/Desktop-ASan && cd build/Desktop-ASan
+/usr/bin/qmake6 ../../Project.pro -spec linux-g++ CONFIG+=debug \
+    'QMAKE_CXXFLAGS+=-fsanitize=address -fno-omit-frame-pointer -g' \
+    QMAKE_LFLAGS+=-fsanitize=address QMAKE_LFLAGS_SHLIB+=-fsanitize=address
+env MAKE=/usr/bin/make /usr/bin/make -j"$(nproc)" QMAKE=/usr/bin/qmake6
+cd Test && ./WasmJit '~[spec]'
+```
+
+> Add `QMAKE=/usr/bin/qmake6` to the `make` command line: the shell on this
+> machine rewrites `argv[0]`, so a recursive `qmake` recorded as the editor
+> binary never produces a Makefile. See the environment notes below.
+
 ### Traps
 
 A Wasm trap is a non-local exit from the current invocation. The JIT-generated
@@ -916,6 +943,25 @@ It is part of the default suite, so drift fails the normal run. `GC.md` §10,
 `COMPONENT_MODEL.md` §9 and `SMALL_PROPOSALS.md`'s grouped §1–§8 shape all pass,
 because the rule is map ↔ headings rather than a fixed section count
 (`PROPOSALS.md` §3).
+
+## Layering check
+
+`Test/LayeringTests.cpp` is a `[layering]` test that enforces
+[`LAYERING.md`](LAYERING.md) §2/§6 without relying on a reviewer's grep: it scans
+every `.hpp`/`.cpp`/`.inc` under `WasmBase/` and `WasmStub/` for a backend name,
+header, type or API (`libjit`, `asmjit`, `sljit`, `jit_type`, `jit_value`,
+`\bJIT\b`, …) and fails on the first hit. The expected result is **empty**;
+`LAYERING.md` §8 records the exemption that used to exist and why the note behind
+it was renamed away.
+
+```bash
+./Test/WasmJit '[layering]'
+```
+
+The embedder tier is also compiled header by header: every `Test/headers/*.cpp`
+includes exactly one public header and nothing else, so a header that stops being
+standalone breaks the build instead of an embedder's project. Add one file when a
+new embedder-tier header is added.
 
 ## Picking tests with Catch2 options
 

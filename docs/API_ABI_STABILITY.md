@@ -1,8 +1,9 @@
 # API/ABI Stability — The Milestone, and How Close We Are
 
-Status: milestone declaration + proximity study (revision 1 — declared
-2026-10-25; all measurements taken on `LibjitDispatcher` at `ea4fb30`, with
-`master` at `8fb955d`).
+Status: milestone declaration + proximity study (revision 2 — 2026-10-29: the
+pre-`LF-0a` batch closes AAS2–AAS7, partly closes AAS1 and re-measures §11;
+revision 1 declared the milestone on 2026-10-25, with all measurements taken on
+`LibjitDispatcher` at `ea4fb30` and `master` at `8fb955d`).
 Audience: anyone planning work that changes an embedder-facing surface or the
 backend seam, anyone evaluating the `LibjitDispatcher` → `master` merge, and
 anyone who needs a defensible answer to "is it production ready yet?".
@@ -299,12 +300,14 @@ binary commands handled ([`VALIDATION.md`](VALIDATION.md) "Measured coverage",
 ### 6.5 The layering check
 
 ```bash
-grep -rn -i 'libjit\|jit_type\|jit_insn\|jit_function\|jit_value\|jit_context\|\bJIT\b' WasmBase/
+grep -rn -iE '\b(libjit|asmjit|sljit|jit_type|jit_insn|jit_function|jit_value|jit_context)\b|jit/jit\.h|\bJIT\b' WasmBase/ WasmStub/
 ```
 
-returns **5 hits, all of them citations of `docs/NULL_JIT_VALUE_DIAGNOSIS.md`**
-(the §8 waiver in [`LAYERING.md`](LAYERING.md)) — no backend name, type or API in
-core code, and zero hits in `WasmStub/`. This is the check G3 partly rests on.
+returns **empty** — no backend name, type or API in core code, and zero hits in
+`WasmStub/`. The check used to return five citations of a backend-named note; that
+note was renamed to `docs/UNMODELLED_VALUE_TYPES.md` and the sites re-pointed on
+2026-10-29, and `Test/LayeringTests.cpp` (`[layering]`) now enforces the same scan
+on every suite run. This is the check G3 partly rests on.
 
 ### 6.6 The documentation inventory
 
@@ -337,15 +340,16 @@ the authoritative per-item status.
 
 | # | Finding | Evidence | Class |
 |---|---|---|---|
-| AAS1 | **The embedder's API is the test harness.** `README.md` says the executable is "a development sandbox, not the embeddable API", the API shape is "not finalized", and packaging/installation is not in place. `WasmRuntime.hpp` is an empty `namespace WASM {}`. There is no umbrella header, no version/soname policy, no documented include set. | `README.md` "Current Status" / "Near-Term Expectations"; `WasmBase/WasmRuntime.hpp`; the plan is [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §8 | A |
-| AAS2 | **The ABI note does not cover every signature the backend compiles.** `v128` by value (`(param v128)(result v128)`) is implemented and tested, but the only spelling of its host ABI is `Test/TestBackend.cpp`'s `AbiV128`; [`ABI.md`](ABI.md) mentions `v128` only in the continuation section. Aggregate layout for multi-result returns is likewise reachable only through the harness's `aggregateLayout`. | `ABI.md`; `Test/TestBackend.cpp`; `SIMD.md` S9 | A |
-| AAS3 | **The strict negative-module run is not part of the default gate.** It is documented as fully green, but it needs `WASM_SPEC_VALIDATE=1`, so "green by default" and "validator complete" are two different claims. | [`VALIDATION.md`](VALIDATION.md) "Measured coverage"; `SAFETY.md` `S2` | A |
-| AAS4 | **Memory-safety evidence is manual.** An ASan shadow build exists on the development machine (`build/Desktop-ASan`) but no note documents it as a gate, and no sanitizer row appears in `TESTING.md`. | `build/Desktop-ASan`; `TESTING.md` | A |
-| AAS5 | **Embedder-visible limits are scattered.** No step/instruction budget (`S1`), process-wide rather than per-instance budgets (`S4`), RC-based reclamation not a leak-free guarantee (`S3`), a thread with a small stack runs unguarded (`S7`), continuation use is serial (`S8`). Each is a legitimate QVM-style choice, but a game embedder needs them in one place. | `SAFETY.md` §3.1 | D → A (documentation) |
+| AAS1 | **The embedder's API is the test harness.** `README.md` says the executable is "a development sandbox, not the embeddable API", the API shape is "not finalized", and packaging/installation is not in place. There is no umbrella header, no version/soname policy, no documented include set. **Partly closed 2026-10-29:** `WasmBase/WasmJit.hpp` is the umbrella over the embedder tier and carries the version macros/functions (`WasmVersion.hpp`: `WASMJIT_VERSION_*`, `WASMJIT_ABI_VERSION`, `WASM::versionString()`/`abiVersion()`). Still open: the tier classification (`ES-3`), the explicit `VERSION`/soname and visibility policy (`ES-4`), and install/`pkg-config` (`ES-5`). | `README.md` "Current Status" / "Near-Term Expectations"; `WasmBase/WasmJit.hpp`; the plan is [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §8 | A |
+| AAS2 | **The ABI note does not cover every signature the backend compiles.** `v128` by value (`(param v128)(result v128)`) is implemented and tested, but the only spelling of its host ABI is `Test/TestBackend.cpp`'s `AbiV128`; [`ABI.md`](ABI.md) mentions `v128` only in the continuation section. Aggregate layout for multi-result returns is likewise reachable only through the harness's `aggregateLayout`. **Closed 2026-10-29:** `ABI.md` has "`v128` by Value" (16/16 aggregate, register and stack cases exercised by `Test/wasm_wat/simd_abi.wat`'s `four` export) and "The result tuple layout" (the backend-neutral offset/alignment/size rule). | `ABI.md`; `Test/TestBackend.cpp`; `SIMD.md` S9 | A |
+| AAS3 | **The strict negative-module run is not part of the default gate.** It is documented as fully green, but it needs `WASM_SPEC_VALIDATE=1`, so "green by default" and "validator complete" are two different claims. **Closed 2026-10-29:** `TESTING.md` "Required runs: the release / merge gate" names the strict sweep as required and records its 2,382 / 2,382 measurement. | [`VALIDATION.md`](VALIDATION.md) "Measured coverage"; `SAFETY.md` `S2` | A |
+| AAS4 | **Memory-safety evidence is manual.** An ASan shadow build exists on the development machine (`build/Desktop-ASan`) but no note documents it as a gate, and no sanitizer row appears in `TESTING.md`. **Closed as documentation 2026-10-29:** `TESTING.md` names the ASan configuration and its suite as a required run (the first *recorded* run is still outstanding, and the table says so). | `build/Desktop-ASan`; `TESTING.md` | A |
+| AAS5 | **Embedder-visible limits are scattered.** No step/instruction budget (`S1`), process-wide rather than per-instance budgets (`S4`), RC-based reclamation not a leak-free guarantee (`S3`), a thread with a small stack runs unguarded (`S7`), continuation use is serial (`S8`). Each is a legitimate QVM-style choice, but a game embedder needs them in one place. **Closed 2026-10-29:** [`ABI.md`](ABI.md) "Limits an Embedder Must Know" lists them with the owning `SAFETY.md` item. | `SAFETY.md` §3.1 | D → A (documentation) |
 
-**Verdict.** The *engine* is production-shaped for the declared use case; the
-*embedding surface* has not been declared. G1 is `◑` on AAS1–AAS2 and `✅` on the
-rest, and AAS1/AAS2 are §10's first two milestones.
+**Verdict.** The *engine* is production-shaped for the declared use case. After
+the 2026-10-29 batch, AAS2–AAS5 are closed and AAS1 is partly closed (umbrella
+and version landed; tiering, soname/visibility and install remain `ES-3…ES-5`).
+G1 is still `◑` on the embedding half, which is what AAS-1 tracks.
 
 ### 7.2 G2 — additive-only evolution: `✅`
 
@@ -365,11 +369,11 @@ The audit in §5 finds **no in-scope Class E gap**. Concretely:
 - The §10 plan adds headers, docs and one harness move; it asks no backend to
   change a contract row.
 
-One bookkeeping condition attaches to the `✅`, and it is not a code gap:
-**AAS6** — `TYPE_MODEL.md` §7's `TM-0…TM-5` rows still lack the `✅` markers that
-its own §5 and §7.11 already assert, so a reader can mistake a closed refactor
-for an open one. That is exactly the kind of "documented gap" the milestone
-clause polices, which is why §10 closes it.
+One bookkeeping condition attached to the `✅`, and it is not a code gap:
+**AAS6** — `TYPE_MODEL.md` §7's `TM-0…TM-5` rows lacked the `✅` markers that its
+own §5 and §7.11 already asserted, so a reader could mistake a closed refactor for
+an open one. **Closed 2026-10-29:** the six rows are marked `✅` with a sentence
+recording that TM-6…TM-11 completed them.
 
 ### 7.3 G3 — work on the non-LibJIT backends can begin: `◑`
 
@@ -397,8 +401,8 @@ clause polices, which is why §10 closes it.
 | AAS8 | **The backend façade is test-local.** `TestBackend::Session` is the interface a backend author would actually implement, and it lives in `Test/`. The product exposes only `ModuleInstantiator` plus conventions, so a second backend either writes product code inside the harness or re-derives the façade. | `Test/TestBackend.hpp`; `WasmModuleInstance.hpp` | A |
 | AAS9 | **There is no backend work order.** [`LAYERING.md`](LAYERING.md) §4 says what a backend *may not* violate; it does not enumerate what a backend *must provide*: `ContinuationInvokeFn`, the `currentTailCallState()` access path, `Callable::typeId` maintenance, aggregate layout for multi-result returns, the `v128` host ABI, the trap-slot protocol, the profile gate, the helper entry points it is expected to call. | `LAYERING.md` §4; `ABI.md`; `WasmValue.hpp` | A |
 | AAS10 | **The seam has never had a second implementation.** `Asmjit/` and `Sljit/` contain only a `.pro` that includes `WasmBase.pri`; `LibJIT::ModuleCompiler` is the only subclass of `ModuleInstantiator`, and `libjit` the only `WASMJIT_BACKEND`. Nothing in the build would notice if a hook grew a LibJIT-shaped assumption. | `Asmjit/Asmjit.pro`, `Sljit/Sljit.pro`; `Test/TestBackend.cpp`; [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §9–§10 | A |
-| AAS11 | **The scaffolds do not enforce the seam.** Their `.pro` files define no sources and no compile-time assertion; a stray `libSljit.so.*` sits in `Sljit/` (git-ignored, so history is clean) and will confuse the first person who looks. | `Sljit/`, `Asmjit/` | A |
-| AAS7 | **The layering waiver.** Five `WasmBase/` sites cite `docs/NULL_JIT_VALUE_DIAGNOSIS.md`, whose name contains "JIT". A citation is not a dependency, but it is the only reason the §6 check is not empty. | `LAYERING.md` §8 | A |
+| AAS11 | **The scaffolds do not enforce the seam.** Their `.pro` files define no sources and no compile-time assertion; a stray `libSljit.so.*` sits in `Sljit/` (git-ignored, so history is clean) and will confuse the first person who looks. **Partly closed 2026-10-29:** the stray `libSljit.so*` files were removed, so `Sljit/` contains only its `.pro`; the empty-scaffold assertions are `AAS-3` work. | `Sljit/`, `Asmjit/` | A |
+| AAS7 | **The layering waiver.** Five `WasmBase/` sites cite `docs/UNMODELLED_VALUE_TYPES.md`, whose name contains "JIT". A citation is not a dependency, but it is the only reason the §6 check is not empty. **Closed 2026-10-29:** the note is renamed and the five sites re-pointed; §6 returns empty and the `[layering]` test enforces it. | `LAYERING.md` §8 | A |
 
 **Verdict.** Work *can* begin — the seam, the contract and the harness façade
 are real, and nothing in `WasmBase/` blocks a new code generator. It should not
@@ -518,11 +522,11 @@ is already done — this document.
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **AAS-0 — Declare and measure** ✅ | Write this note: the four gates, the frozen set, the classification, the audit and the ledger. No code. | — (the record) | This document is linked from [`README.md`](../README.md) and [`AGENTS.md`](../AGENTS.md). |
-| **AAS-1 — Declare the embedding surface** | An umbrella header, a version/soname policy, a documented include set and an install/`pkg-config` story; extend [`ABI.md`](ABI.md) with the `v128` host ABI and the multi-result aggregate layout; add one "limits an embedder must know" section (`S1`, `S3`, `S4`, `S7`, `S8`). The design and the ordered sub-milestones are [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) (`ES-1…ES-6`), which also decides the two empty placeholder headers. | AAS1, AAS2, AAS5 | A small out-of-tree consumer builds against the installed headers only, and calls an `i32`, an `f64`, a multi-result and a `v128` export using nothing but the docs. |
+| **AAS-1 — Declare the embedding surface** | ◑ **2026-10-29: the umbrella and the version identity landed** — `WasmBase/WasmJit.hpp` includes the embedder tier, `WasmBase/WasmVersion.hpp`/`.cpp` provide `WASMJIT_VERSION_MAJOR/MINOR/PATCH`, `WASMJIT_ABI_VERSION`, `WASM::versionString()` and `WASM::abiVersion()`. Still open: the tier classification and the `Elv`-in-signature decision (`ES-3`), `-fvisibility`/soname (`ES-4`), install/`pkg-config` (`ES-5`). An umbrella header, a version/soname policy, a documented include set and an install/`pkg-config` story; extend [`ABI.md`](ABI.md) with the `v128` host ABI and the multi-result aggregate layout (✅ done); add one "limits an embedder must know" section (✅ done). The design and the ordered sub-milestones are [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) (`ES-1…ES-6`). | AAS1, AAS2 ✅, AAS5 ✅ | A small out-of-tree consumer builds against the installed headers only, and calls an `i32`, an `f64`, a multi-result and a `v128` export using nothing but the docs. |
 | **AAS-2 — Write the backend work order and promote the façade** | A `BACKENDS.md` (or a [`LAYERING.md`](LAYERING.md) §4 extension) enumerating every obligation: the four hooks, the eight contract rows, `ContinuationInvokeFn`, `currentTailCallState()`, `Callable::typeId`, aggregate layout, the `v128` host ABI, the trap slot, the profile gate, the helper entry points. Move the `Session` façade out of `Test/` (or give it a product-side definition the harness consumes). The POD signature/layout views this needs are `BP-1` in [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §10. | AAS8, AAS9 | A new backend can be written from the document alone, and the harness compiles against the product façade instead of defining it. |
 | **AAS-3 — Prove the seam with a second implementation** | A null/identity backend implementing `ModuleInstantiator` plus the façade, selectable as `WASMJIT_BACKEND=null`; it must pass ABI/layout/marshalling tests (it need not execute Wasm). Fill or explicitly retire the `Asmjit/`/`Sljit/` scaffolds, and remove the stray `libSljit.so.*`. [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) `BP-2`/`BP-3` is the loader that turns this into a black-box test. | AAS10, AAS11 | The seam has two implementations in the build; a LibJIT-shaped assumption in a hook breaks the null backend's tests. |
-| **AAS-4 — Gate the evidence** | Make the strict validator run (`WASM_SPEC_VALIDATE=1`) part of the documented gate, and document the ASan configuration in [`TESTING.md`](TESTING.md) as a row, not a local habit. | AAS3, AAS4 | `TESTING.md` names both runs as required, and a release check lists them. |
-| **AAS-5 — Bookkeeping pass** | Mark `TYPE_MODEL.md` §7 `TM-0…TM-5` closed (or re-open them honestly); resolve the `NULL_JIT_VALUE_DIAGNOSIS` waiver by renaming and re-pointing, or record it as permanent; keep the `README.md` status rows in step with their notes when the plan changes (§6.6 found no contradiction today). | AAS6, AAS7 | No closed refactor reads as open, and the layering check's expected output is "empty". |
+| **AAS-4 — Gate the evidence** ✅ | Make the strict validator run (`WASM_SPEC_VALIDATE=1`) part of the documented gate, and document the ASan configuration in [`TESTING.md`](TESTING.md) as a row, not a local habit. **Done 2026-10-29:** `TESTING.md` "Required runs: the release / merge gate" names both, with the exact ASan `qmake` line and the `QMAKE=/usr/bin/qmake6` recursion note. | AAS3 ✅, AAS4 ✅ | `TESTING.md` names both runs as required, and a release check lists them. |
+| **AAS-5 — Bookkeeping pass** ✅ | Mark `TYPE_MODEL.md` §7 `TM-0…TM-5` closed (or re-open them honestly); resolve the `NULL_JIT_VALUE_DIAGNOSIS` waiver by renaming and re-pointing, or record it as permanent; keep the `README.md` status rows in step with their notes when the plan changes (§6.6 found no contradiction today). **Done 2026-10-29:** the six rows are `✅`, the note is `docs/UNMODELLED_VALUE_TYPES.md` with all sites re-pointed, and `Test/LayeringTests.cpp` enforces the empty check. | AAS6 ✅, AAS7 ✅ | No closed refactor reads as open, and the layering check's expected output is "empty". |
 | **AAS-6 — Merge** | `git merge --ff-only LibjitDispatcher` into `master`, landing all 148 commits and this note atomically; tag the declaration. | G4 (already green) | `master` contains `ea4fb30` and the tag; the suite is green on `master`. |
 | **AAS-7 — Re-run this study** | Re-measure §6 and flip G1/G3 to `✅` (or record what still blocks them). | G1, G3 | §7.5 reads four `✅`. |
 
@@ -546,10 +550,22 @@ documented build (`env MAKE=/usr/bin/make /usr/bin/make -j16`, exit 0):
 | ASan configuration (not run today) | built at `build/Desktop-ASan`, undocumented | The memory-safety evidence G1 does *not* yet lean on; AAS-4. |
 | `[.simdbench]`, `[.diagbench]` | not run today | Hidden diagnostics by design (`TESTING.md` T4 / `DIAGNOSTICS.md` DG-8). |
 
+Re-measured on 2026-10-29 for the pre-`LF-0a` batch (tree at `4e5cb1d` plus the
+working-tree changes), from `build/LowHanging/Test`:
+
+| Command | Result | Reading |
+|---|---|---|
+| `./WasmJit` (default suite) | **11,024 assertions / 444 test cases, all passed** | +13 assertions and two cases over the 2026-10-25 row: the `[layering]` gate, the `[surface]` version check and the four-`v128` stack-passing assertions. |
+| `./WasmJit '~[spec]'` | **10,646 assertions / 255 test cases, all passed** | The hand-written half is green on its own. |
+| `./WasmJit '[docs]'` | **720 assertions / 1 test case, all passed** | Unchanged. |
+| `./WasmJit '[layering]'` | **4 assertions / 1 test case, all passed** | `WasmBase/` and `WasmStub/` name no backend; the §6.5 scan is now a gate, not a grep. |
+| `./WasmJit '[surface]'` | **4 assertions / 1 test case, all passed** | The version macros, `WASM::versionString()` and `WASM::abiVersion()` agree. |
+| 21 per-header compile TUs (`Test/headers/*.cpp`) | compiled and linked in the same build | Every embedder-tier header, and `WasmJit.hpp`, compiles standalone. |
+
 Reading: the milestone's *behavioural* half is as green as the documentation
-claims. What is not yet measured by a gate is the strict validator sweep and the
-sanitizer run — both are recorded here as existing-but-ungated, which is an
-honest distinction rather than a green light.
+claims. The strict validator sweep and the ASan configuration are now documented
+required runs (§10 `AAS-4`), but neither was re-run for this batch, so the table
+above does not present them as green.
 
 ## 12. References
 

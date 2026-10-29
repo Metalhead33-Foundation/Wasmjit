@@ -1,7 +1,9 @@
 # The Embedding Surface — `WASM::Runtime`, the Umbrella Header, Versioning, and the Include Set
 
-Status: design note + plan (revision 1 — 2026-10-25; measurements on
-`LibjitDispatcher` at `ea4fb30`). **No code.** This note answers `AAS1`/`AAS2` of
+Status: design note + plan (revision 2 — 2026-10-29: the umbrella, the version
+identity and the per-header compile units landed, so `ES-6` is done and `ES-3`/
+`ES-4` are partly done; revision 1, 2026-10-25, measured `LibjitDispatcher` at
+`ea4fb30`). This note answers `AAS1`/`AAS2` of
 [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) and decides the fate of two empty
 placeholder headers.
 Audience: anyone who will freeze the public surface, package the library, write
@@ -64,7 +66,7 @@ Six problems fall out of that table, and they are the reason this note exists:
 | P2 | **The load API speaks an I/O library.** `Module::fromFile(Elv::Io::Device&)` and `Artifact::parse(Elv::Io::Device&)`; there is no `loadFile(path)` / `loadBytes(span)`. | `WasmModule.hpp`, `WasmArtifact.hpp` |
 | P3 | **The public headers pull in `Elvavena`/`Euphemy`.** Seven headers do, transitively including `WasmType.hpp`, which `WasmValue.hpp` needs. | `grep -l 'Elvavena\|Euphemy' WasmBase/*.hpp` |
 | P4 | **There is no version or capability surface.** No macro, no function, no capability query. | no `VERSION` in any `.pro` |
-| P5 | **`WasmRuntime.hpp` and `WasmContext.hpp` are 6-line empty namespaces**, and `LibJIT::Runtime` is an empty stub. | `WasmBase/WasmRuntime.hpp`, `WasmBase/WasmContext.hpp`, `LibJit/LibJitRuntime.cpp` |
+| P5 | **`WasmRuntime.hpp` and `WasmContext.hpp` were 6-line empty namespaces**, and `LibJIT::Runtime` was an empty stub. **`WasmContext.hpp` and `LibJIT::Runtime` are deleted (2026-10-29); `WasmRuntime.hpp` is still the `ES-1` placeholder.** | `WasmBase/WasmRuntime.hpp` |
 | P6 | **The GC safepoint is the embedder's job** and nothing reminds them. | `ABI.md` "Other store-owned entities" |
 
 P1–P4 are `AAS1`/`AAS2`; P5 is the question this note was asked to settle; P6 is
@@ -293,6 +295,16 @@ includes the embedder tier and nothing else. Rules:
 4. It must not be *required*: including exactly the headers you use stays legal,
    so a pimpl-heavy embedder pays nothing for it.
 
+**Status (2026-10-29).** The source-tree header exists — `WasmBase/WasmJit.hpp` —
+and includes the embedder tier plus `WasmVersion.hpp`. It is compiled on its own
+by `Test/headers/WasmJit.cpp` and scanned by the `[layering]` test, so neither a
+missing include nor a backend header can creep in unnoticed. Two headers are
+included beyond §6.1's list, `WasmRegistryImportResolver.hpp` and
+`WasmStore.hpp`, because the §2 recipe cannot be written without them. Still
+open: the installed name `wasmjit/wasmjit.hpp` (with `ES-5`) and the three-tier
+classification (`ES-3`), so the list below is the *current* embedder tier, not a
+frozen one.
+
 ### 6.4 Load and call ergonomics belong in the same milestone
 
 Because P2/P6 are about the *first five minutes* of an embedding, the umbrella is
@@ -321,7 +333,7 @@ That is the acceptance example for `ES-1`: five lines, no backend header, no
 | Where the version comes from | **qmake's default `VERSION = 1.0.0`** — no `.pro` sets it | `grep -rn 'VERSION' *.pro */*.pro` → nothing |
 | Install rules | **None** (`INSTALLS` absent from every `.pro`) | same |
 | pkg-config | Not for this project (only `libffi`, `nlohmann_json` as consumers) | `WasmBase.pro` |
-| Version macro/function | **None** | no `WASMJIT_VERSION` anywhere |
+| Version macro/function | `WASMJIT_VERSION_MAJOR`/`MINOR`/`PATCH`, `WASMJIT_ABI_VERSION`, `WASM::versionString()`, `WASM::abiVersion()` | `WasmBase/WasmVersion.hpp`/`.cpp` (added 2026-10-29) |
 | Exported symbols | **23,284 dynamic symbols, 1,764 of them functions** — everything is exported, no visibility flag is set | `nm -D --defined-only libWasmBase.so.1.0.0` |
 | Include convention | `INCLUDEPATH += $$PWD/..` so `#include <WasmBase/Header.hpp>` works | `WasmBase/WasmBase.pri` |
 
@@ -363,10 +375,10 @@ must name whatever §6.2 decides about `Elvavena`/`Euphemy`.
 |---|---|---|---|---|
 | **ES-1 — `WASM::Runtime` skeleton** | Fill `WasmRuntime.hpp`: `create(name)`, `loadFile`/`loadBytes`, `instantiate` (idempotent — one instance per `Module`, a second attempt refused), `callExport`, `safepoint`, `version`/`capabilities`, owning a `Store` via option C (§4.3). Delete `WasmContext.hpp`; retire `LibJit::Runtime`. | A | P1, P2, P4, P5, P6; R1 enforcement | The five-line example in §6.4 compiles and runs against the real library; the default suite is unchanged. |
 | **ES-2 — Store scoping migration** | Finish §4.3 option B: thread `Store&` through the 12 TUs; update `TYPE_IDENTITY.md` to "runtime-scoped" (or record the deliberate shared-registry exception) and add the cross-runtime `Callable` rejection rule. | A (wide) | Multi-tenancy; §4.4 | `Store::global()` has no remaining callers; two runtimes in one process have independent heaps and reject cross-runtime callables. |
-| **ES-3 — Header tiers and umbrella** | Classify every header into the three tiers; add `WasmJit.hpp`; move `Elv` out of the public *signatures* where §6.2 says it is feasible; add a compile-only test per public header. | A | P3, `AAS2` (partly) | Every public header compiles alone; the umbrella compiles with only the public include path; no public header includes a backend header. |
-| **ES-4 — Visibility and versioning** | `-fvisibility=hidden` + `WASMJIT_API`; version macros/functions; explicit `VERSION`/soname per library; a documented bump rule. | A | P4; ABI hygiene | The exported symbol set is a declared list; `abidiff` runs clean between two builds of the same headers. |
+| **ES-3 — Header tiers and umbrella** | ◑ **2026-10-29: `WasmJit.hpp` and the per-header compile tests landed.** Classify every header into the three tiers; add `WasmJit.hpp`; move `Elv` out of the public *signatures* where §6.2 says it is feasible; add a compile-only test per public header. Still open: the classification and the `Elv`-signature work. | A | P3, `AAS2` (partly) | Every public header compiles alone; the umbrella compiles with only the public include path; no public header includes a backend header. |
+| **ES-4 — Visibility and versioning** | ◑ **2026-10-29: `WasmVersion.hpp`/`.cpp` landed** (`WASMJIT_VERSION_*`, `WASMJIT_ABI_VERSION`, `WASM::versionString()`/`abiVersion()`). Still open: `-fvisibility=hidden` + `WASMJIT_API`; explicit `VERSION`/soname per library; a documented bump rule. | A | P4; ABI hygiene | The exported symbol set is a declared list; `abidiff` runs clean between two builds of the same headers. |
 | **ES-5 — Install and pkg-config** | `headers`/`target`/`pkgconfig` install blocks; `wasmjit.pc`; a `DESTDIR` install test. | A | Packaging | `make install` into a scratch prefix yields a working out-of-tree consumer. |
-| **ES-6 — ABI documentation completion** | `ABI.md` gains the `v128` host ABI, the multi-result aggregate layout, and the "limits an embedder must know" section (`S1`, `S3`, `S4`, `S7`, `S8`). | A | `AAS2`, `AAS5` | An embedder can implement every signature class from the note alone. |
+| **ES-6 — ABI documentation completion** ✅ | **Done 2026-10-29:** `ABI.md` gains "`v128` by Value", "The result tuple layout" (a backend-neutral rule) and "Limits an Embedder Must Know" (`S1`, `S3`, `S4`, `S7`, `S8`). | A | `AAS2` ✅, `AAS5` ✅ | An embedder can implement every signature class from the note alone. |
 | **ES-7 — Re-run `AAS-1`** | Re-check the `API_ABI_STABILITY.md` §10 acceptance row. | — | `AAS1` | G1's embedding half flips to `✅`. |
 
 Ordering: `ES-1` and `ES-3` can run in parallel (different files); `ES-2` is
@@ -379,7 +391,7 @@ want `ES-3`'s tier list; `ES-6` is pure documentation and can land first.
 |---|---|
 | `AAS1` — "the embedder's API is the test harness" | `ES-1`, `ES-3`, `ES-5` |
 | `AAS2` — the ABI note does not cover every signature | `ES-6` |
-| P5 — two empty headers | `WasmRuntime.hpp` filled, `WasmContext.hpp` deleted |
+| P5 — two empty headers | ◑ `WasmContext.hpp` deleted (2026-10-29); `WasmRuntime.hpp` stays the `ES-1` placeholder until `WASM::Runtime` is filled |
 | "Is there room for a `Runtime`?" | Yes: the role is real (§3) and the owner was missing (§4) |
 
 | Stays open | Why |
@@ -395,7 +407,7 @@ want `ES-3`'s tier list; `ES-6` is pure documentation and can land first.
 |---|---|---|
 | Default suite (2026-10-25) | 11,011 assertions / 442 cases, green | Any `ES-*` stage must keep this number. |
 | `[docs]` lint | 720 assertions, green | Covers `docs/proposals/` only; this note is not linted. |
-| Public-header self-containment test | **Absent** | `ES-3` adds it; today no header is compiled in isolation. |
+| Public-header self-containment test | **Present for the embedder tier** (2026-10-29) | `Test/headers/*.cpp`: one TU per header, plus the umbrella; `ES-3` extends it to the backend-SDK tier. |
 | Install / out-of-tree consumer test | **Absent** (`INSTALLS` does not exist) | `ES-5`. |
 | Symbol-hygiene check | **Absent**; 23,284 symbols exported | `ES-4`. |
 | ABI diff (`abidiff`) | **Absent** | `ES-4`, optional. |

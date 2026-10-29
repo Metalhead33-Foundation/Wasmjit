@@ -180,7 +180,7 @@ public:
 	// Reject a module that declares a value type this engine cannot model
 	// (`isModeledValueTypeCode`). Called at the end of fromFile(); throws a
 	// std::runtime_error naming the offending declaration. See
-	// docs/NULL_JIT_VALUE_DIAGNOSIS.md.
+	// docs/UNMODELLED_VALUE_TYPES.md.
 	void validateValueTypes() const;
 	// Structural validation of the decoded module (WasmValidator.cpp): section
 	// and index consistency, limits, exports, start, tags, global initialisers,

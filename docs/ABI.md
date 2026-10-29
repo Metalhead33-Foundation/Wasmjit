@@ -65,16 +65,73 @@ passes a caller-owned buffer on the result-discarding paths (bare `action`,
 with
 
 ```cpp
-alignas(16) unsigned char results[16] = {};   // translateStruct's size
+alignas(16) unsigned char results[24] = {};   // (result i32 i64 f64)
 WASM::callCallableWithResults(callable, results, arg0, arg1);
 ```
 
 — the helper appends the buffer to the native call. `callCallable<Ret>` remains
-the API for void/single-result signatures. The buffer must be at least as large
-as the lowered result tuple (`jit_type_get_size(translateStruct(results))`);
-fields sit at the offsets `translateStruct` assigns, in declaration order.
-Within a module, and across modules, direct/indirect calls and the tail-call
-driver all use the buffer convention.
+the API for void/single-result signatures. Within a module, and across modules,
+direct/indirect calls and the tail-call driver all use the buffer convention.
+
+### The result tuple layout
+
+The layout is the C-struct layout every backend has to produce, so an embedder
+sizes and reads its buffer without a backend header or a backend query:
+
+| Step | Rule |
+|---|---|
+| Field order | declaration order of the Wasm results |
+| Field alignment | `i32`/`f32` → 4; `i64`/`f64` → 8; `v128` → 16; a reference or `i31ref` → one pointer word |
+| Field offset | the running offset rounded **up** to the field's alignment |
+| Tuple alignment | the largest field alignment (at least 1) |
+| Tuple size | the last field's end rounded **up** to the tuple alignment |
+
+Worked example — `(result i32 i64 f64)`:
+
+| Field | Offset | Size |
+|---|---:|---:|
+| `i32` | 0 | 4 (4 bytes of padding follow) |
+| `i64` | 8 | 8 |
+| `f64` | 16 | 8 |
+| **tuple** | — | **24**, alignment 8 |
+
+A buffer may be over-aligned; it may never be smaller than the tuple size or
+less aligned than the tuple alignment. The `v128` field rule is the reason the
+example above is not the only shape: `(result i32 v128)` puts the vector at
+offset **16**, not 4, and the tuple size is 32.
+
+## `v128` by Value
+
+A `v128` is a **16-byte value with 16-byte alignment** and appears in a compiled
+signature exactly like any other value type:
+
+```
+v128 f(VMContext*, v128 a, v128 b);      // (param v128 v128) (result v128)
+```
+
+On the host side that is one aggregate argument — and, for a `v128` result, one
+aggregate return — not four `int32_t` parameters:
+
+| Property | Value |
+|---|---|
+| size | 16 bytes |
+| alignment | 16 bytes |
+| payload | 4 × 32-bit lanes, lane 0 at the lowest address |
+| passing | by value in parameter/result position; the platform rules decide registers versus stack |
+| in a multi-result tuple | the field is aligned to 16 and the tuple size is rounded up to it (see "The result tuple layout") |
+
+```cpp
+struct alignas(16) V128 { uint32_t lane[4]; };
+using Exported = V128 (*)(WASM::VMContext*, V128, V128);
+```
+
+`alignas(16)` is the safe form, not an optimisation: the lowered type declares
+16-byte alignment, and over-aligned host mirrors are always valid while a
+lower-aligned one is not guaranteed. The fixture `Test/wasm_wat/simd_abi.wat`
+exercises both halves — `identity`/`via_local` for the register-passing case and
+`four` (four `v128` parameters, which forces a stack slot) for the stack-passing
+case; both pass with the harness's naturally-aligned mirror, so the stack layout
+happens to agree on this ABI, and an embedder must still not rely on it.
 
 ## Reference and Global Representation
 
@@ -338,6 +395,22 @@ resolver.registerFunction("B", "some_func", *exported);
 of `instanceB->context()` is baked into module A's compiled functions as an
 immediate constant.  If instance B is destroyed first, module A will pass a
 dangling pointer on its next cross-module call.
+
+## Limits an Embedder Must Know
+
+These are deliberate choices, not defects ([`SAFETY.md`](SAFETY.md) §3.1). A game
+embedder has to plan around them, and a language runtime's host shim has to fit
+inside them:
+
+| Limit | What it means for the embedder | Decided in |
+|---|---|---|
+| **No step or instruction budget** (`S1`) | A module can loop forever. Time limits belong to the embedder — kill the thread or the process — exactly as in the QVM model. | [`SAFETY.md`](SAFETY.md) `S1` |
+| **Budgets are process-wide** (`S4`) | The allocation budget is not per instance, so one greedy module can starve another. Isolation is a process boundary, not an instance boundary. | [`SAFETY.md`](SAFETY.md) `S4` |
+| **Reclamation is reference counting, not a leak-free guarantee** (`S3`) | A reference the embedder never drops keeps its object alive; `gcCollect()` collects cycles at a safepoint, so call it where no Wasm frame is live and hold no un-counted references. | [`SAFETY.md`](SAFETY.md) `S3` |
+| **A small-stack thread runs unguarded** (`S7`) | The stack guard needs headroom to be installed. Give every thread that executes Wasm a normal stack; a small one faults instead of trapping. | [`SAFETY.md`](SAFETY.md) `S7` |
+| **Continuation use is serial** (`S8`) | One resumption at a time per continuation: no concurrent resume, no migration between agents. | [`SAFETY.md`](SAFETY.md) `S8` |
+| **One instance per `Module`** | A second instantiation is refused; isolation comes from loading the module twice. Many agents may run one instance's compiled code. | [`THREADSAFETY.md`](THREADSAFETY.md) §3.1 |
+| **Trap text is not stable** | The trap *kind* and the diagnostic *id* are stable; the message is a hint. | [`SAFETY.md`](SAFETY.md) `S5` |
 
 ## Data Structure Reference
 

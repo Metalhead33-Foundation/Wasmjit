@@ -121,7 +121,7 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 // anything else (a future proposal code) has no representation: the type
 // lowers to a void/absent value, and loading one yields a null backend handle.
 // Rather than compile such a module into an operand that is silently broken,
-// `Module::fromFile` rejects it — see docs/NULL_JIT_VALUE_DIAGNOSIS.md.
+// `Module::fromFile` rejects it — see docs/UNMODELLED_VALUE_TYPES.md.
 inline bool isModeledValueTypeCode(ValueTypeCode code)
 {
 	switch (code) {

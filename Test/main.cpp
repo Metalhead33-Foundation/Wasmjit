@@ -3214,7 +3214,7 @@ TEST_CASE("an unmodelled value type is still rejected at load")
 {
 	// 0x7A is not assigned by any proposal this engine knows; the load-time
 	// type walk must still reject it rather than compile a null operand
-	// (docs/NULL_JIT_VALUE_DIAGNOSIS.md). (0x68 is now the stack-switching
+	// (docs/UNMODELLED_VALUE_TYPES.md). (0x68 is now the stack-switching
 	// `(ref null cont)` shorthand, so it is no longer a negative example.)
 	const std::vector<uint8_t> bytes = {
 		0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
@@ -5005,6 +5005,7 @@ TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 	auto i64Lane1 = instance.exportedFunction("i64_lane1");
 	auto zeroLane0 = instance.exportedFunction("local_zero_lane0");
 	auto zeroLane3 = instance.exportedFunction("local_zero_lane3");
+	auto four = instance.exportedFunction("four");
 	REQUIRE(identity.has_value());
 	REQUIRE(viaLocal.has_value());
 	REQUIRE(throughBlock.has_value());
@@ -5015,6 +5016,7 @@ TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 	REQUIRE(i64Lane1.has_value());
 	REQUIRE(zeroLane0.has_value());
 	REQUIRE(zeroLane3.has_value());
+	REQUIRE(four.has_value());
 
 	const V128 in{0x04030201u, 0x08070605u, 0x0C0B0A09u, 0x100F0E0Du};
 
@@ -5044,6 +5046,19 @@ TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 	// (this is zeroValueForType's 16-byte path).
 	REQUIRE(WASM::callCallable<int32_t>(*zeroLane0) == 0);
 	REQUIRE(WASM::callCallable<int32_t>(*zeroLane3) == 0);
+
+	// Four `v128` parameters force the convention past the register file, so the
+	// fourth argument is stack-passed: this is the half of the ABI the
+	// register-passing cases above cannot see (docs/ABI.md "`v128` by Value").
+	const V128 v1{1u, 2u, 3u, 4u};
+	const V128 v2{5u, 6u, 7u, 8u};
+	const V128 v3{9u, 10u, 11u, 12u};
+	const V128 v4{0xA1B2C3D4u, 0x11223344u, 0x55667788u, 0x99AABBCCu};
+	const V128 deepest = WASM::callCallable<V128>(*four, v1, v2, v3, v4);
+	REQUIRE(deepest.a == v4.a);
+	REQUIRE(deepest.b == v4.b);
+	REQUIRE(deepest.c == v4.c);
+	REQUIRE(deepest.d == v4.d);
 }
 
 TEST_CASE("simd helpers: bitwise ops agree with the scalar reference")

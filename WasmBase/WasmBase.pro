@@ -47,6 +47,7 @@ SOURCES += \
         WasmTypeStore.cpp \
         WasmTypeRegistry.cpp \
         WasmValidator.cpp \
+        WasmVersion.cpp \
         wasm_atomic.cpp \
         wasm_simd_scalar.cpp \
         wasm_simd_vector.cpp
@@ -59,7 +60,6 @@ HEADERS += \
     WasmComponentRuntime.hpp \
     WasmComponentSection.hpp \
     WasmComponentValidation.hpp \
-    WasmContext.hpp \
     WasmContinuation.hpp \
     WasmDeterminism.hpp \
     WasmDiagnostics.hpp \
@@ -70,6 +70,7 @@ HEADERS += \
     WasmCanonicalType.hpp \
     WasmHostBridge.hpp \
     WasmImport.hpp \
+    WasmJit.hpp \
     WasmMemory.hpp \
     WasmModule.hpp \
     WasmModuleInstance.hpp \
@@ -93,6 +94,7 @@ HEADERS += \
     WasmTypeRegistry.hpp \
     WasmValidator.hpp \
     WasmValidation.hpp \
+    WasmVersion.hpp \
     WasmVMContext.hpp \
     WasmValue.hpp \
     wasm_atomic.hpp \

@@ -88,7 +88,7 @@ per-milestone done markers, is the authoritative per-item status.
 | [`SAFETY.md`](docs/SAFETY.md) | The safety policies: artifact detection, input-derived allocation bounds, the allocation budget, traps vs `abort`, RAII for locks, and the pitfalls that produced them | Policy + pitfalls | `████████████████████` current |
 | [`THREADSAFETY.md`](docs/THREADSAFETY.md) | Guest-side vs host-side thread safety, the one-instance-per-module target, import/export overlap, C++ mutex/trap caveats, and the responsibilities of the engine, module author and embedder | Policy + reference | `████████████████████` current |
 | [`TRAP_CLEANUP.md`](docs/TRAP_CLEANUP.md) | Why the trap path is a pending status instead of `longjmp`: helpers report and return, the host boundary throws `WASM::Trap`, the POD-only rule is gone, and the optional `WASM::defer` stack covers external state — plus the option set and the per-backend feasibility study that chose it | Design note / implementation reference | `████████████████████` 100% — TRAP-1…TRAP-7 shipped: the trap path is a per-agent pending status; `Agent`/`ExecutionState` own the trap, exception, tail-call, defer, counter and stack-limit state (TRAP-6). True multi-agent execution remains deferred with THREADS TH-5 |
-| [`NULL_JIT_VALUE_DIAGNOSIS.md`](docs/NULL_JIT_VALUE_DIAGNOSIS.md) | Why an unmodelled value type (`exnref`) lowers to `jit_type_void` and pushes a null `jit_value_t`, and the fix (reject such a module at load) that unblocked operand-stack ownership | Investigation note | `████████████████████` resolved |
+| [`UNMODELLED_VALUE_TYPES.md`](docs/UNMODELLED_VALUE_TYPES.md) | Why an unmodelled value type (`exnref`) lowers to `jit_type_void` and pushes a null `jit_value_t`, and the fix (reject such a module at load) that unblocked operand-stack ownership | Investigation note | `████████████████████` resolved |
 | [`SIMD_BACKENDS.md`](docs/SIMD_BACKENDS.md) | Whether LibJIT / SLJIT / AsmJit support SIMD, the workarounds when they do not, the recommended helper-based lowering for LibJIT — with the native path a backend that has vector registers takes instead (§4, SIMD-8) — and a per-layer laxness budget for conforming loosely | Research note | `████████████████████` survey current |
 | [`SIMD_LIBJIT.md`](docs/SIMD_LIBJIT.md) | The LibJIT-only SIMD decision: `v128` in 16-byte-aligned frame slots, pointer-arg native helpers, Highway 1.4.0 (with the GLM/SLEEF/xsimd/psimd/SIMDe verdicts), the wasm semantics hazards, the four test layers and `SIMD-L0…SIMD-L8` | Design decision | `████████████████████` decided |
 | [`LAYERING.md`](docs/LAYERING.md) | The backend-agnosticism rule for `WasmBase/`: what the core may not name, the contracts it owns that a backend must honour, the vocabulary to use instead, and the check to run | Policy note | `████████████████████` current |
@@ -201,6 +201,13 @@ through qmake:
   header-only `nlohmann_json` package (declared through pkg-config in
   `WasmBase.pro`/`Test.pro`, included only in the translation units that need
   it);
+- [`WasmBase/WasmJit.hpp`](WasmBase/WasmJit.hpp) is the umbrella header over the
+  embedder tier, and [`WasmBase/WasmVersion.hpp`](WasmBase/WasmVersion.hpp)
+  carries `WASMJIT_VERSION_*`, `WASMJIT_ABI_VERSION` and the
+  `WASM::versionString()` / `WASM::abiVersion()` runtime queries. The installed
+  layout and `wasmjit.pc` are still to come
+  ([`docs/EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) `ES-4`/`ES-5`), so
+  today the include path is the project root;
 - the executable under `build/<config>/Test/WasmJit` is a development sandbox and
   test harness, not the final embeddable API.
 

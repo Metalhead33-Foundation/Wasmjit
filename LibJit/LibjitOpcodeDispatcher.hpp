@@ -254,7 +254,7 @@ private:
 	// module-local type index `typeIdx` (id fast path, registry fallback).
 	void emitCallableTypeCheck(jit_value_t callablePtr, WASM::TypeIdx typeIdx);
 	// A lowering the backend cannot perform (in practice: an unmodelled value
-	// type, docs/NULL_JIT_VALUE_DIAGNOSIS.md). `notImplemented()` throws, which
+	// type, docs/UNMODELLED_VALUE_TYPES.md). `notImplemented()` throws, which
 	// surfaces as a clean instantiation failure; the LibJIT build region in
 	// ModuleCompiler::compileFunctions is RAII-guarded (docs/SAFETY.md).
 	[[noreturn]] void notImplemented(const char* name);

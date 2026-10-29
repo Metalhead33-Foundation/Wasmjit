@@ -1585,7 +1585,7 @@ jit_value_t callNativeUnary(jit_function_t fn, void* fptr, jit_type_t ret, jit_t
 // unmodelled value type such as `exnref` lowered to `jit_type_void`); such a
 // module is now rejected at load — Module::validateValueTypes and the
 // jitTypeForValueType guard — so no null value can reach the stack. See
-// docs/NULL_JIT_VALUE_DIAGNOSIS.md.
+// docs/UNMODELLED_VALUE_TYPES.md.
 constexpr bool kStackOwnsRefs = true;
 
 // True when a JIT value is a reference (a pointer-typed value). A null JIT type
@@ -2615,7 +2615,7 @@ void OpcodeDispatcher::notImplemented(const char* name)
 {
 	// The backend cannot lower `name` — in practice only a value type the engine
 	// does not model reaches this now that SIMD and the atomics have handlers
-	// (docs/NULL_JIT_VALUE_DIAGNOSIS.md). It is a compile-time limitation rather
+	// (docs/UNMODELLED_VALUE_TYPES.md). It is a compile-time limitation rather
 	// than a Wasm trap, so it is reported as a clean instantiation failure. The
 	// LibJIT context's build region is guarded by RAII in compileFunctions(), so
 	// unwinding from here cannot wedge it (docs/SAFETY.md).
@@ -3046,9 +3046,9 @@ jit_type_t OpcodeDispatcher::jitTypeForValueType(const WASM::ValueType& vt)
 {
 	// A body-inline value type the engine does not model (e.g. a block type of
 	// `exnref`) cannot be lowered. Fail the instantiation instead of emitting a
-	// null jit_value_t later (docs/NULL_JIT_VALUE_DIAGNOSIS.md).
+	// null jit_value_t later (docs/UNMODELLED_VALUE_TYPES.md).
 	if (!WASM::isModeledValueTypeCode(vt.opcode))
-		notImplemented("value type is not modelled (docs/NULL_JIT_VALUE_DIAGNOSIS.md)");
+		notImplemented("value type is not modelled (docs/UNMODELLED_VALUE_TYPES.md)");
 	return typeTranslator.translateType(vt);
 }
 
