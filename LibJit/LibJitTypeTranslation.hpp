@@ -53,8 +53,8 @@ private:
 	 * \return The LibJIT type handle representing i31.
 	 */
 /**
- * \\brief Performs the createi31Type operation.
- * \\return The value or status produced by this operation.
+ * \brief Performs the createi31Type operation.
+ * \return The value or status produced by this operation.
  */
 	static jit_type_t createi31Type();
 public:
@@ -69,7 +69,7 @@ public:
 	 * can continue to reuse their lowered representations.
 	 */
 /**
- * \\brief Performs the reset operation.
+ * \brief Performs the reset operation.
  */
 	void reset();
 	/*!
@@ -108,8 +108,8 @@ public:
 	 * \return LibJIT's void-pointer type handle.
 	 */
 /**
- * \\brief Performs the translateVMContextPointerType operation.
- * \\return The value or status produced by this operation.
+ * \brief Performs the translateVMContextPointerType operation.
+ * \return The value or status produced by this operation.
  */
 	jit_type_t translateVMContextPointerType() const;
 	/*!
@@ -186,8 +186,8 @@ public:
 	 * \return Number of entries in the canonical type cache.
 	 */
 /**
- * \\brief Performs the canonicalCacheSize operation.
- * \\return The value or status produced by this operation.
+ * \brief Performs the canonicalCacheSize operation.
+ * \return The value or status produced by this operation.
  */
 	size_t canonicalCacheSize() const { return canonicalCache.size(); }
 	/*!
@@ -195,8 +195,8 @@ public:
 	 * \return Const reference to the translated type vector.
 	 */
 /**
- * \\brief Performs the getTranslatedTypes operation.
- * \\return The value or status produced by this operation.
+ * \brief Performs the getTranslatedTypes operation.
+ * \return The value or status produced by this operation.
  */
 	const std::vector<jit_type_t>& getTranslatedTypes() const;
 	/*!
@@ -204,8 +204,8 @@ public:
 	 * \return Reference to the translated type vector.
 	 */
 /**
- * \\brief Performs the getTranslatedTypes operation.
- * \\return The value or status produced by this operation.
+ * \brief Performs the getTranslatedTypes operation.
+ * \return The value or status produced by this operation.
  */
 	std::vector<jit_type_t>& getTranslatedTypes();
 	/*!
@@ -213,8 +213,8 @@ public:
 	 * \return Const reference to the type map.
 	 */
 /**
- * \\brief Performs the getTypemap operation.
- * \\return The value or status produced by this operation.
+ * \brief Performs the getTypemap operation.
+ * \return The value or status produced by this operation.
  */
 	const TypeMap& getTypemap() const;
 	/*!
@@ -222,8 +222,8 @@ public:
 	 * \return Reference to the type map.
 	 */
 /**
- * \\brief Performs the getTypemap operation.
- * \\return The value or status produced by this operation.
+ * \brief Performs the getTypemap operation.
+ * \return The value or status produced by this operation.
  */
 	TypeMap& getTypemap();
 };
