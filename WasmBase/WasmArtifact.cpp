@@ -18,7 +18,7 @@ Preamble Artifact::readPreamble(Elv::Io::Device& file)
 	return Preamble{versionLow, layer};
 }
 
-std::unique_ptr<Artifact> Artifact::parse(Elv::Io::Device& file)
+std::unique_ptr<Artifact> Artifact::parse(Elv::Io::Device& file, Store& store)
 {
 	const Preamble preamble = readPreamble(file);
 
@@ -26,6 +26,7 @@ std::unique_ptr<Artifact> Artifact::parse(Elv::Io::Device& file)
 		auto module = std::make_unique<Module>();
 		module->version = preamble.version;
 		module->layer = 0;
+		module->store_ = &store;
 		// Force the protected virtual to dispatch through the base type.
 		Artifact* artifact = module.get();
 		artifact->parseBody(file, std::nullopt);
@@ -40,6 +41,7 @@ std::unique_ptr<Artifact> Artifact::parse(Elv::Io::Device& file)
 		auto component = std::make_unique<Component>();
 		component->version = preamble.version;
 		component->layer = preamble.layer;
+		component->store_ = &store;
 		Artifact* artifact = component.get();
 		artifact->parseBody(file, std::nullopt);
 		return component;

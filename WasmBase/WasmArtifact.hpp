@@ -17,6 +17,7 @@ namespace WASM {
 
 class Module;
 class Component;
+class Store;
 
 // The two kinds of artifact that share the `\0asm` magic.
 enum class ArtifactKind : uint8_t {
@@ -60,13 +61,20 @@ struct WASMJIT_API Artifact {
 	// Reads magic (4) + version (2) + layer (2) and validates the magic.
 	static Preamble readPreamble(Elv::Io::Device& file);
 
-	// Reads the preamble and returns a Module or a Component.
-	static std::unique_ptr<Artifact> parse(Elv::Io::Device& file);
+	// Reads the preamble and returns a Module or a Component, interning every
+	// type in `store`. An artifact belongs to exactly one store; there is no
+	// process-wide default (docs/EMBEDDING_SURFACE.md §4.3 option B).
+	static std::unique_ptr<Artifact> parse(Elv::Io::Device& file, Store& store);
+
+	// The store this artifact was parsed into. Valid after `parse`/`fromFile`.
+	Store& store() const { return *store_; }
 
 protected:
 	// Decodes the body after the preamble. `end` bounds a nested body inside
 	// a component; `std::nullopt` means "read to the device's end".
 	virtual void parseBody(Elv::Io::Device& file, std::optional<uint64_t> end) = 0;
+
+	Store* store_ = nullptr;
 };
 
 }

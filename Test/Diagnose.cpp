@@ -1,3 +1,4 @@
+#include "TestStore.hpp"
 #include "Diagnose.hpp"
 #include "TestBackend.hpp"
 
@@ -309,7 +310,7 @@ int runDiagnose(const DiagnoseOptions& options)
 	WASM::Module module;
 	try {
 		Euph::Io::File file(options.path.c_str(), Elv::Io::Mode::READ);
-		module.fromFile(file);
+		module.fromFile(file, testStore());
 	} catch (const std::exception& error) {
 		return failWith("cannot load " + options.path, error);
 	}

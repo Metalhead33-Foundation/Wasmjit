@@ -1,3 +1,4 @@
+#include "TestStore.hpp"
 #include "WastScript.hpp"
 
 #include <algorithm>
@@ -984,7 +985,7 @@ void ScriptRunner::onModule(const ScriptCommand& command)
 		auto component = std::make_unique<WASM::Component>();
 		try {
 			Euph::Io::File file(path.c_str(), Elv::Io::Mode::READ);
-			component->fromFile(file);
+			component->fromFile(file, testStore());
 		} catch (const std::exception& error) {
 			fail(command.line, "could not load component '" + command.filename
 					+ "': " + error.what());
@@ -1011,7 +1012,7 @@ void ScriptRunner::onModule(const ScriptCommand& command)
 	auto module = std::make_unique<WASM::Module>();
 	try {
 		Euph::Io::File file(path.c_str(), Elv::Io::Mode::READ);
-		module->fromFile(file);
+		module->fromFile(file, testStore());
 	} catch (const std::exception& error) {
 		fail(command.line, "could not load '" + command.filename + "': " + error.what());
 		return;
@@ -1639,7 +1640,7 @@ ScriptRunner::ModuleAttempt ScriptRunner::attemptModule(const ScriptCommand& com
 	auto module = std::make_unique<WASM::Module>();
 	try {
 		Euph::Io::File file(path.c_str(), Elv::Io::Mode::READ);
-		module->fromFile(file);
+		module->fromFile(file, testStore());
 	} catch (const std::exception& error) {
 		if (std::getenv("WJ_TRACE") != nullptr)
 			std::fprintf(stderr, "[wj]   rejected %s: %s\n", command.filename.c_str(), error.what());

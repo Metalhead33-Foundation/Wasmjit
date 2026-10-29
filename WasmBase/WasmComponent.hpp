@@ -58,13 +58,14 @@ struct WASMJIT_API Component : public Artifact {
 
 	Component();
 
-	// Reads a component preamble and body (layer must be 1).
-	void fromFile(Elv::Io::Device& file);
+	// Reads a component preamble and body (layer must be 1), interning types in
+	// `store` (docs/EMBEDDING_SURFACE.md §4.3 option B: no process-wide store).
+	void fromFile(Elv::Io::Device& file, Store& store);
 
 	// Parses a nested component body (no preamble) between the current
 	// position and `end`.
 	static std::unique_ptr<Component> parseNested(
-			Elv::Io::Device& file, uint64_t end, unsigned depth = 0);
+			Elv::Io::Device& file, uint64_t end, unsigned depth, Store& store);
 
 	std::span<const ComponentSection> getSections() const;
 

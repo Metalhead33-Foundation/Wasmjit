@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "helper.hpp"
+#include "TestStore.hpp"
 #include "Diagnose.hpp"
 #include "WasmBase/WasmAgent.hpp"
 #include "WasmBase/WasmContinuation.hpp"
@@ -208,7 +209,7 @@ std::unique_ptr<WASM::Artifact> loadTestArtifact(const char* moduleName)
 {
 	const std::string path = std::string(WASM_TEST_DIR) + moduleName + ".wasm";
 	Euph::Io::File file(path.c_str(), Elv::Io::Mode::READ);
-	return WASM::Artifact::parse(file);
+	return WASM::Artifact::parse(file, testStore());
 }
 
 const WASM::TypeStore& typeStore()
@@ -2022,7 +2023,7 @@ TEST_CASE("component start executes a decoded value definition")
 	const std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	REQUIRE(artifact->isComponent());
 	auto* component = artifact->asComponent();
@@ -3058,7 +3059,7 @@ TEST_CASE("core non-final and recursive type encodings are parsed")
 	std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	REQUIRE(artifact->isComponent());
 	auto* component = artifact->asComponent();
@@ -3096,7 +3097,7 @@ TEST_CASE("component start and value sections are parsed")
 	std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	REQUIRE(artifact->isComponent());
 	auto* component = artifact->asComponent();
@@ -3136,7 +3137,7 @@ TEST_CASE("core type imports link by their abstract bound")
 		const std::span<const std::byte> span(
 				reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 		Euph::Io::ConstBufferDevice device(span);
-		auto artifact = WASM::Artifact::parse(device);
+		auto artifact = WASM::Artifact::parse(device, testStore());
 		REQUIRE(artifact != nullptr);
 		REQUIRE(artifact->isCoreModule());
 		return artifact;
@@ -3193,7 +3194,7 @@ TEST_CASE("stringref types and the string section are parsed (STR-1/STR-2)")
 	std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	REQUIRE(artifact->isCoreModule());
 	WASM::Module* module = artifact->asCoreModule();
@@ -3225,7 +3226,7 @@ TEST_CASE("an unmodelled value type is still rejected at load")
 	Euph::Io::ConstBufferDevice device(span);
 	std::string message;
 	try {
-		(void)WASM::Artifact::parse(device);
+		(void)WASM::Artifact::parse(device, testStore());
 	} catch (const std::exception& error) {
 		message = error.what();
 	}
@@ -3247,7 +3248,7 @@ TEST_CASE("string.const initializes a stringref global")
 	std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* module = artifact->asCoreModule();
 	REQUIRE(module != nullptr);
@@ -3347,7 +3348,7 @@ TEST_CASE("string.const, measure, eq and concat run through the JIT")
 	std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(module.data()), module.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -3484,7 +3485,7 @@ TEST_CASE("string.new_utf8/wtf16 and encode round-trip through memory")
 	std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -3538,7 +3539,7 @@ TEST_CASE("string.new_utf8 is strict while new_lossy_utf8 replaces bad bytes")
 	std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -3615,7 +3616,7 @@ TEST_CASE("stringview WTF-8, WTF-16 and iterator positions run through the JIT")
 	std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -3663,7 +3664,7 @@ TEST_CASE("the embedder bridge creates and copies stringrefs")
 	std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -3771,7 +3772,7 @@ TEST_CASE("a discarded string concat result is released through the JIT")
 	std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -3829,7 +3830,7 @@ TEST_CASE("string array constructors and encoders bridge to GC arrays")
 	std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -3918,7 +3919,7 @@ TEST_CASE("string array variants enforce bounds, strictness and lossy encoding")
 	std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -3974,7 +3975,7 @@ TEST_CASE("string array validation checks element type and mutability")
 		std::span<const std::byte> span(
 				reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
 		Euph::Io::ConstBufferDevice device(span);
-		auto artifact = WASM::Artifact::parse(device);
+		auto artifact = WASM::Artifact::parse(device, testStore());
 		REQUIRE(artifact != nullptr);
 		WASM::Module* parsed = artifact->asCoreModule();
 		REQUIRE(parsed != nullptr);
@@ -4053,7 +4054,7 @@ TEST_CASE("stringview encode returns the next position and bytes written")
 	std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -4234,7 +4235,7 @@ TEST_CASE("a Component Model component is rejected instead of misparsed")
 	Euph::Io::File file(path.c_str(), Elv::Io::Mode::READ);
 
 	try {
-		component.fromFile(file);
+		component.fromFile(file, testStore());
 		FAIL("a Component Model component must not load as a core module");
 	} catch (const std::exception& error) {
 		REQUIRE(std::string(error.what()).find("Component Model") != std::string::npos);
@@ -6755,7 +6756,7 @@ TEST_CASE("name section: indirect maps and unknown subsections are bounded and s
 	std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	REQUIRE(artifact->isCoreModule());
 	WASM::Module* module = artifact->asCoreModule();
@@ -6779,7 +6780,7 @@ TEST_CASE("name section: a subsection size past the section end is rejected")
 	std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	REQUIRE_THROWS_AS(WASM::Artifact::parse(device), std::runtime_error);
+	REQUIRE_THROWS_AS(WASM::Artifact::parse(device, testStore()), std::runtime_error);
 }
 
 TEST_CASE("stub listing consumes the name section")
@@ -7048,7 +7049,7 @@ TEST_CASE("rounding variants: ceil/floor/trunc are selected by the sub-opcode")
 	std::span<const std::byte> span(
 		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -7078,7 +7079,7 @@ TEST_CASE("stack-switching continuation types decode and opcodes fail clearly")
 		std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 		Euph::Io::ConstBufferDevice device(span);
-		return WASM::Artifact::parse(device);
+		return WASM::Artifact::parse(device, testStore());
 	};
 
 	// type 0: [] -> []; type 1: cont $ft (type 0). The type section must remain
@@ -7150,7 +7151,7 @@ TEST_CASE("stack-switching control tags carry a result signature")
 			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 		Euph::Io::ConstBufferDevice device(span);
 		auto module = std::make_unique<WASM::Module>();
-		module->fromFile(device); // parse + validate
+		module->fromFile(device, testStore()); // parse + validate
 		return module;
 	};
 	const auto loadError = [](const std::vector<uint8_t>& bytes) -> std::string {
@@ -7159,7 +7160,7 @@ TEST_CASE("stack-switching control tags carry a result signature")
 		Euph::Io::ConstBufferDevice device(span);
 		try {
 			WASM::Module module;
-			module.fromFile(device);
+			module.fromFile(device, testStore());
 		} catch (const std::exception& error) {
 			return error.what();
 		}
@@ -7265,7 +7266,7 @@ TEST_CASE("i32.itt is a run-time NOP and reports its immediate at compile time")
 	std::span<const std::byte> span(
 		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -7292,7 +7293,7 @@ TEST_CASE("constant-time secret value types are rejected with a named error")
 			std::span<const std::byte> span(
 				reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 			Euph::Io::ConstBufferDevice device(span);
-			(void)WASM::Artifact::parse(device);
+			(void)WASM::Artifact::parse(device, testStore());
 		} catch (const std::exception& error) {
 			threw = true;
 			REQUIRE(std::string(error.what()).find(needle) != std::string::npos);
@@ -7404,7 +7405,7 @@ TEST_CASE("acquire-release ordering and pause decode, validate, and execute")
 	std::span<const std::byte> span(
 		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -7438,7 +7439,7 @@ TEST_CASE("shared global annotation and shared atomic opcodes execute")
 	std::span<const std::byte> span(
 		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -7468,7 +7469,7 @@ TEST_CASE("align.109 regression: non-atomic memarg rejects the ordering bit")
 	std::span<const std::byte> span(
 		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	REQUIRE_THROWS(WASM::Artifact::parse(device));
+	REQUIRE_THROWS(WASM::Artifact::parse(device, testStore()));
 }
 
 TEST_CASE("shared type annotations decode as shared canonical types")
@@ -7481,7 +7482,7 @@ TEST_CASE("shared type annotations decode as shared canonical types")
 	std::span<const std::byte> span(
 		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -7509,7 +7510,7 @@ TEST_CASE("shared table annotations and table atomics execute")
 	std::span<const std::byte> span(
 		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -7536,7 +7537,7 @@ TEST_CASE("shared heap-type references decode with the shared bit")
 	std::span<const std::byte> span(
 		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -7567,7 +7568,7 @@ TEST_CASE("struct atomic get/set execute")
 	std::span<const std::byte> span(
 		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -7601,7 +7602,7 @@ TEST_CASE("array atomic get/set execute")
 	std::span<const std::byte> span(
 		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -7732,7 +7733,7 @@ TEST_CASE("a trapping start function unwinds and destroys the partial instance")
 	const std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -8433,7 +8434,7 @@ TEST_CASE("diagnostics: a mapped validator rule keeps its own id")
 			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
 	WASM::Module module;
-	REQUIRE_THROWS_AS(module.fromFile(device), std::runtime_error);
+	REQUIRE_THROWS_AS(module.fromFile(device, testStore()), std::runtime_error);
 
 	const auto records = WASM::recentDiagnostics();
 	REQUIRE_FALSE(records.empty());
@@ -8537,7 +8538,7 @@ TEST_CASE("diagnostics: a malformed module records a decode id")
 			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
 	WASM::Module module;
-	REQUIRE_THROWS_AS(module.fromFile(device), std::runtime_error);
+	REQUIRE_THROWS_AS(module.fromFile(device, testStore()), std::runtime_error);
 
 	const auto records = WASM::recentDiagnostics();
 	REQUIRE_FALSE(records.empty());
@@ -8741,7 +8742,7 @@ TEST_CASE("compilation hints parse as inert metadata and change no results")
 		std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 		Euph::Io::ConstBufferDevice device(span);
-		auto artifact = WASM::Artifact::parse(device);
+		auto artifact = WASM::Artifact::parse(device, testStore());
 		REQUIRE(artifact != nullptr);
 		WASM::Module* module = artifact->asCoreModule();
 		REQUIRE(module != nullptr);
@@ -8824,7 +8825,7 @@ TEST_CASE("a compilation hint cannot claim bytes beyond its section")
 	std::span<const std::byte> span(
 		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	REQUIRE_THROWS_WITH(WASM::Artifact::parse(device),
+	REQUIRE_THROWS_WITH(WASM::Artifact::parse(device, testStore()),
 		Catch::Matchers::ContainsSubstring("claims more bytes than the section has left"));
 }
 
@@ -8861,7 +8862,7 @@ TEST_CASE("custom page sizes: one-byte pages size and grow are byte-exact")
 	std::span<const std::byte> span(
 		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -8933,7 +8934,7 @@ TEST_CASE("custom page sizes: a page-size mismatch does not satisfy a memory imp
 	std::span<const std::byte> span(
 		reinterpret_cast<const std::byte*>(importerBytes.data()), importerBytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* importer = artifact->asCoreModule();
 	REQUIRE(importer != nullptr);
@@ -8972,7 +8973,7 @@ TEST_CASE("custom page sizes: an unsupported page-size exponent is rejected at l
 	std::span<const std::byte> span(
 		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	REQUIRE_THROWS_WITH(WASM::Artifact::parse(device),
+	REQUIRE_THROWS_WITH(WASM::Artifact::parse(device, testStore()),
 		Catch::Matchers::ContainsSubstring("unsupported page-size exponent 8"));
 }
 
@@ -9043,7 +9044,7 @@ TEST_CASE("native imports exchange stringrefs with the guest")
 	std::span<const std::byte> span(
 		reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -9728,7 +9729,7 @@ TEST_CASE("relaxed dead-code validation skips type-stack checks but keeps syntax
 		Euph::Io::File file(path.c_str(), Elv::Io::Mode::READ);
 		WASM::ValidationOptions relaxed;
 		relaxed.relaxedDeadCode = true;
-		module.fromFile(file, relaxed);
+		module.fromFile(file, relaxed, testStore());
 	}
 	WASM::RegistryImportResolver imports;
 	auto backend = TestBackend::create();
@@ -9780,7 +9781,7 @@ TEST_CASE("relaxed dead-code validation skips type-stack checks but keeps syntax
 			WASM::Module relaxed;
 			WASM::ValidationOptions options;
 			options.relaxedDeadCode = true;
-			relaxed.fromFile(device, options);
+			relaxed.fromFile(device, options, testStore());
 		} catch (const std::exception& error) {
 			threw = true;
 			message = error.what();
@@ -9814,7 +9815,7 @@ std::string gcValidationError(const StringFixtureBuilder& fixture)
 	Euph::Io::ConstBufferDevice device(span);
 	try {
 		WASM::Module module; // fromFile parses and validates; validate() is the gate
-		module.fromFile(device);
+		module.fromFile(device, testStore());
 		module.validate();
 	} catch (const std::exception& error) {
 		return error.what();
@@ -9868,7 +9869,7 @@ TEST_CASE("multibyte array access reads and writes byte-addressed arrays")
 		reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
 
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -10002,7 +10003,7 @@ TEST_CASE("more array constructors copy from arrays, memory and tables")
 	std::span<const std::byte> span(
 		reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
 	Euph::Io::ConstBufferDevice device(span);
-	auto artifact = WASM::Artifact::parse(device);
+	auto artifact = WASM::Artifact::parse(device, testStore());
 	REQUIRE(artifact != nullptr);
 	WASM::Module* parsed = artifact->asCoreModule();
 	REQUIRE(parsed != nullptr);
@@ -10105,7 +10106,7 @@ WASM::Module loadModuleWithProfile(const char* name, const WASM::ProfileConfig& 
 	WASM::ValidationOptions options;
 	options.profile = profile;
 	WASM::Module module;
-	module.fromFile(file, options);
+	module.fromFile(file, options, testStore());
 	return module;
 }
 

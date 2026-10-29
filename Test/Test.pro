@@ -114,6 +114,7 @@ HEADERS +=  \
     helper.hpp \
     Diagnose.hpp \
     TestBackend.hpp \
+    TestStore.hpp \
     WastScript.hpp
 
 # One translation unit per embedder-tier header. Each file includes exactly one

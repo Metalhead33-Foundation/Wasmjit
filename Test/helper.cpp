@@ -1,11 +1,12 @@
 #include "helper.hpp"
+#include "TestStore.hpp"
 
 WASM::Module loadTestModule(const char* moduleName)
 {
 	WASM::Module module;
 	const std::string path = std::string(WASM_TEST_DIR) + moduleName + ".wasm";
 	Euph::Io::File file(path.c_str(), Elv::Io::Mode::READ);
-	module.fromFile(file);
+	module.fromFile(file, testStore());
 	return module;
 }
 

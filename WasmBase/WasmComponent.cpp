@@ -21,8 +21,9 @@ Component::Component()
 {
 }
 
-void Component::fromFile(Elv::Io::Device& file)
+void Component::fromFile(Elv::Io::Device& file, Store& store)
 {
+	store_ = &store;
 	const Preamble preamble = Artifact::readPreamble(file);
 	if (preamble.layer != kComponentLayer)
 		throw std::runtime_error("Unsupported WebAssembly artifact: expected a "
@@ -36,7 +37,7 @@ void Component::fromFile(Elv::Io::Device& file)
 }
 
 std::unique_ptr<Component> Component::parseNested(
-		Elv::Io::Device& file, uint64_t end, unsigned depth)
+		Elv::Io::Device& file, uint64_t end, unsigned depth, Store& store)
 {
 	const long position = file.tell();
 	if (position < 0 || static_cast<uint64_t>(position) > end
@@ -53,6 +54,7 @@ std::unique_ptr<Component> Component::parseNested(
 	auto component = std::make_unique<Component>();
 	component->version = preamble.version;
 	component->layer = preamble.layer;
+	component->store_ = &store;
 	component->parseSections(file, end, depth);
 	return component;
 }
@@ -125,23 +127,23 @@ void Component::parseSectionPayload(ComponentSection& section,
 
 	switch (section.type) {
 	case ComponentSectionType::Custom: {
-		Reader r(device, Store::current().types().store());
+		Reader r(device, store().types().store());
 		section.name = r.name();
 		section.data = std::move(payload);
 		break;
 	}
 	case ComponentSectionType::CoreModule:
-		coreModules.push_back(Module::parseNested(device, payload.size()));
+		coreModules.push_back(Module::parseNested(device, payload.size(), store()));
 		definitions.push_back({ComponentDefinitionKind::CoreModule,
 				static_cast<uint32_t>(coreModules.size() - 1)});
 		break;
 	case ComponentSectionType::NestedComponent:
-		components.push_back(Component::parseNested(device, payload.size(), depth + 1));
+		components.push_back(Component::parseNested(device, payload.size(), depth + 1, store()));
 		definitions.push_back({ComponentDefinitionKind::Component,
 				static_cast<uint32_t>(components.size() - 1)});
 		break;
 	default: {
-		Reader r(device, Store::current().types().store());
+		Reader r(device, store().types().store());
 		switch (section.type) {
 		case ComponentSectionType::CoreInstance:
 			r.vec([&] {

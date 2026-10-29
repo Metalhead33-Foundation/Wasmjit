@@ -149,14 +149,16 @@ private:
 	void handleComplexElementSegment(DWasmStream& stream, ElementSegment& seg);
 public:
 	Module();
-	void fromFile(Elv::Io::Device& file);
+	// Parses into `store`: every module type is interned there, and the module
+	// keeps the reference (docs/EMBEDDING_SURFACE.md §4.3 option B).
+	void fromFile(Elv::Io::Device& file, Store& store);
 	// Parse with an explicit validation policy. `relaxedDeadCode` adopts the
 	// Relaxed Dead-Code Validation rule for this load only
 	// (docs/proposals/PARSER_PROPOSALS.md PP-2); the default stays conservative.
-	void fromFile(Elv::Io::Device& file, const ValidationOptions& options);
+	void fromFile(Elv::Io::Device& file, const ValidationOptions& options, Store& store);
 	// Parses an embedded core module body (no preamble) between the current
 	// position and `end`. Used by a component's core:module section.
-	static std::unique_ptr<Module> parseNested(Elv::Io::Device& file, uint64_t end);
+	static std::unique_ptr<Module> parseNested(Elv::Io::Device& file, uint64_t end, Store& store);
 	const std::span<const Section> getSections() const;
 	// Map a module-local type index to its process-wide identity. Throws if the
 	// index is out of range.

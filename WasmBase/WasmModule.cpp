@@ -179,7 +179,7 @@ void Module::processTypeSection(Elv::Io::Device& file, const Section& section)
 	// Canonicalize and intern the groups; typeIds[i] is the process-wide identity
 	// of parsedTypes[i]. The parser vector is intentionally a local scratch
 	// buffer: after this call the Module owns no Subtype payload (TM-6).
-	typeIds = Store::current().types().internModule(parsedTypes, parsedGroups,
+	typeIds = store().types().internModule(parsedTypes, parsedGroups,
 			importedIds);
 	typeGroups = std::move(parsedGroups);
 	typeSectionProcessed = true;
@@ -297,7 +297,7 @@ void Module::processImportSection(Elv::Io::Device& file, const Section& section)
 			import.fieldName = fieldName;
 			import.boundKind = boundKind;
 			import.bound = bound;
-			import.typeId = Store::current().types().store().internCoreImport(
+			import.typeId = store().types().store().internCoreImport(
 					moduleName, fieldName, bound);
 			importOrder.push_back({ExternalKind::Type,
 					static_cast<uint32_t>(importTypes.size())});
@@ -1365,13 +1365,15 @@ void Module::validate(const ValidationOptions& options) const
 	validator.validate();
 }
 
-void Module::fromFile(Elv::Io::Device& file)
+void Module::fromFile(Elv::Io::Device& file, Store& store)
 {
-	fromFile(file, ValidationOptions{});
+	store_ = &store;
+	fromFile(file, ValidationOptions{}, store);
 }
 
-void Module::fromFile(Elv::Io::Device& file, const ValidationOptions& options)
+void Module::fromFile(Elv::Io::Device& file, const ValidationOptions& options, Store& store)
 {
+	store_ = &store;
 	parseOptions = options;
 
 	// Preamble problems are the earliest decode boundary (docs/SAFETY.md §2.1:
@@ -1479,7 +1481,7 @@ void Module::parseBody(Elv::Io::Device& file, std::optional<uint64_t> end)
 	validate(parseOptions);
 }
 
-std::unique_ptr<Module> Module::parseNested(Elv::Io::Device& file, uint64_t end)
+std::unique_ptr<Module> Module::parseNested(Elv::Io::Device& file, uint64_t end, Store& store)
 {
 	const long position = file.tell();
 	if (position < 0 || static_cast<uint64_t>(position) > end
@@ -1493,6 +1495,7 @@ std::unique_ptr<Module> Module::parseNested(Elv::Io::Device& file, uint64_t end)
 	auto module = std::make_unique<Module>();
 	module->version = preamble.version;
 	module->layer = 0;
+	module->store_ = &store;
 	module->parseBody(file, end);
 	return module;
 }
@@ -1515,7 +1518,7 @@ CoreTypeView Module::typeView(uint32_t idx) const
 		throw std::out_of_range("Module::typeView: local type index out of range");
 	if (typeIds[idx].isNone())
 		throw std::runtime_error("Module::typeView: local type has no canonical identity");
-	return Store::current().types().canonicalType(typeIds[idx]);
+	return store().types().canonicalType(typeIds[idx]);
 }
 
 uint32_t Module::localTypeIndex(TypeId id) const
@@ -1599,7 +1602,7 @@ bool Module::isSubtype(TypeIdx actual, TypeIdx expected) const
 	const TypeId expectedId = typeIds[expected];
 	if (actualId.isNone() || expectedId.isNone())
 		return actual == expected;
-	return Store::current().types().matches(actualId, expectedId);
+	return store().types().matches(actualId, expectedId);
 }
 
 bool Module::heapTypeMatchesTypeIndex(TypeIdx actual, const HeapType& expected) const

@@ -89,7 +89,7 @@ std::shared_ptr<const Module> Runtime::loadBytes(std::span<const std::byte> byte
 	Store::Scope scope(store_);
 	auto module = std::make_shared<Module>();
 	Euph::Io::ConstBufferDevice device(bytes);
-	module->fromFile(device, loadOptions(config_));
+	module->fromFile(device, loadOptions(config_), store_);
 	modules_.push_back(module);
 	return module;
 }
@@ -100,7 +100,7 @@ std::shared_ptr<const Module> Runtime::loadFile(const std::filesystem::path& pat
 	const std::string pathString = path.string();
 	Euph::Io::File file(pathString.c_str(), Elv::Io::Mode::READ);
 	auto module = std::make_shared<Module>();
-	module->fromFile(file, loadOptions(config_));
+	module->fromFile(file, loadOptions(config_), store_);
 	modules_.push_back(module);
 	return module;
 }
