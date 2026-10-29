@@ -522,13 +522,20 @@ invalidating the ones before it.
 |---|---|---|---|---|
 | **MF-0 — This study** ✅ | The demotion analysis, the per-backend matrix, the opt-in shape. No code. | — | — | This note is linked from `API_ABI_STABILITY.md` and `README.md`. |
 | **MF-1 — Verify, do not assume** | A concurrent-***invoke*** test per backend (the same compiled function called from two host threads) and an interleaved two-agent call; write "one context/emitter/allocator per session" and "compilation is serialized" down as backend rules; record the AsmJit allocator answer. | B | Question 2 | LibJIT's test runs green in the default suite; SLJIT/AsmJit inherit the test at bring-up. |
-| **MF-2 — Make concurrent entry *fail* instead of corrupt** | An explicit `AgentScope` at every host boundary; a per-instance "in call" guard that refuses or traps a second concurrent entry under `Single`; `callCallable` always acts on the current agent; `Runtime::instantiate` refuses a second instance of one `Module` (R1). | A | `MA-1` (first half), `MA-9` (model), **R1 enforcement** | Two host threads calling one instance under `Single` produce a deterministic error, not a data race; a second instantiation is refused with a named error. |
+| **MF-2 — Make concurrent entry *fail* instead of corrupt** ◑ | An explicit `AgentScope` at every host boundary; a per-instance "in call" guard that refuses or traps a second concurrent entry under `Single`; `callCallable` always acts on the current agent; `Runtime::instantiate` refuses a second instance of one `Module` (R1). | A | `MA-1` (first half), `MA-9` (model), **R1 enforcement** | Two host threads calling one instance under `Single` produce a deterministic error, not a data race; a second instantiation is refused with a named error. |
 | **MF-3 — Partition the instance's mutable GC bookkeeping** | `gcPending` / `gcCycleRoots` / counters per agent (or guarded by a per-instance safepoint lock); keep the frozen fields frozen. | B | `MA-3` (half) | A stress test with two agents allocating and releasing shows no lost queue entry and no double recycle. |
 | **MF-4 — Safepoint protocol for collection** | Define and document when `gcCollect()` is legal with agents (quiescence or per-agent collect); enforce it. | B | `MA-3` (rest) | A documented rule an embedder can follow, and a test that violates it and gets a clean failure. |
 | **MF-5 — Real `wait`/`notify`** | A guest-address-keyed waiter table behind the existing `wasm_atomic_wait*`/`notify`; keep the single-agent return values legal. | B | `MA-4` | A two-agent message-passing fixture (`ARA5`) passes without relying on the degenerate path. |
-| **MF-6 — The opt-in surface** | `ConcurrencyModel`, `supportsConcurrency()`, `HostAgentScheduler` hooks, rejection at `instantiate()`. | A | `MA-1` (rest) | `Single` is bit-identical (same suite, same numbers); an unsupported model is refused before codegen. |
+| **MF-6 — The opt-in surface** ✅ | **Landed 2026-10-29:** `ConcurrencyModel { Single, Agents }` and `supportsConcurrency()` (`WasmConcurrency.hpp`), `HostAgentScheduler` hooks (declared, embedder-owned, never called by the core), `RuntimeConfig::concurrency`, rejection at `Runtime::instantiate` (and at `create`), and `Runtime::createAgent()`. | A | `MA-1` (rest) | `Single` is the unchanged path (every earlier assertion still passes); an unsupported model is refused before codegen ✅ |
 | **MF-7 — Two-agent conformance + memory model** | Trap isolation, join/cancel, shared memory/globals, and a written guest memory model. | A | `MA-9` | The two-agent suite is curated; the memory model is a note an embedder can implement against. |
 | **MF-8 — Re-open the milestone question** | Re-run `API_ABI_STABILITY.md` §7: did any §2.2 surface change? If yes, this is a **new milestone**, not a gap closure. | — | — | The answer is recorded, whichever it is. |
+
+**What landed (2026-10-29).** `MF-6` is complete, and the core of `MF-2` is in:
+`ModuleInstance::tryEnterCall`/`leaveCall` plus `Runtime::callExport` turn a
+second concurrent entry into a named error, and `Runtime::instantiate` enforces
+one instance per module. Still open from `MF-2`: the runtime does not install an
+`AgentScope` at the boundary, and the two-host-thread stress test does not exist —
+the guard is tested by simulating a held guard (`Test/RuntimeTests.cpp`).
 
 The important ordering fact: **`MF-2` is worth doing even if agents are never
 shipped.** Today a second host thread entering one instance is *undefined*; a
@@ -572,11 +579,13 @@ says otherwise):
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite | 11,011 assertions / 442 cases, green | The single-agent baseline every stage must preserve. |
+| Default suite | **11,120 assertions / 460 cases, green** (2026-10-29) | The single-agent baseline every stage must preserve; the earlier 11,024-assertion run is a subset of it. |
 | `spec: atomic` (curated) | 249 passed / 0 failed / 48 skipped (`proposals/THREADS.md` T10) | All 67 atomic handlers execute with real seq-cst semantics. |
 | Acquire-release fixture | Single-agent ordering + `pause` | The decode/lowering half is done; the *observation* half waits for a second agent (`ARA5`). |
 | Host-thread test | Two independent instances on two threads | Proves setup isolation, **not** the target concurrency model (`THREADSAFETY.md` §8 says so explicitly). |
 | Continuation tests | One-shot, trap/exception transfer, budget, stack exhaustion, serial migration | The execution-context machinery a scheduler would drive already exists. |
+| `[concurrency]` (2026-10-29) | 17 assertions / 4 cases, green | The model claim, the `Agents` refusal at `instantiate`, and the `MF-2` in-call guard. |
+| `[runtime]` (2026-10-29) | 35 assertions / 5 cases, green | R1 (`instantiate` is idempotent), the guard under a simulated second entrant, and agent hand-out. |
 | Two-agent test | **Absent** | `MA-9`; the first thing `MF-7` adds. |
 | Race detector / TSan run | **Absent from the docs** | `MF-1`: a concurrency claim without a detector is a guess. |
 

@@ -104,7 +104,11 @@ SOURCES += main.cpp \
     SpecSuite.cpp \
     ProposalDocsTests.cpp \
     LayeringTests.cpp \
-    SurfaceTests.cpp
+    SurfaceTests.cpp \
+    BackendAbiTests.cpp \
+    RuntimeTests.cpp \
+    ConcurrencyTests.cpp \
+    PluginTests.cpp
 HEADERS +=  \
     helper.hpp \
     Diagnose.hpp \

@@ -18,12 +18,17 @@ include(WasmBase.pri)
 # from the pragmas Highway pushes around each target's namespace, *not* from
 # global -m flags, so the rest of the library stays baseline code.
 LIBS += -lhwy
+
+# Dynamic backend loading (docs/BACKEND_PLUGIN_ABI.md BP-3). glibc >= 2.34 keeps
+# dlopen in libc; the explicit -ldl keeps older sysroots working.
+LIBS += -ldl
 DEFINES += HWY_SHARED_DEFINE
 
 # Avoid build errors with no files:
 SOURCES += \
         WasmArtifact.cpp \
         WasmAgent.cpp \
+        WasmBackendRegistry.cpp \
         WasmComponent.cpp \
         WasmComponentRuntime.cpp \
         WasmComponentValidation.cpp \
@@ -35,8 +40,10 @@ SOURCES += \
         WasmMemory.cpp \
         WasmModule.cpp \
         WasmModuleInstance.cpp \
+        WasmNullInstantiator.cpp \
         WasmOpcodeDispatcher.cpp \
         WasmRegistryImportResolver.cpp \
+        WasmRuntime.cpp \
         WasmSection.cpp \
         WasmStack.cpp \
         WasmStore.cpp \
@@ -54,12 +61,15 @@ SOURCES += \
 
 HEADERS += \
     WasmAgent.hpp \
+    WasmBackendAbi.hpp \
+    WasmBackendRegistry.hpp \
     WasmArtifact.hpp \
     WasmComponent.hpp \
     WasmComponentModel.hpp \
     WasmComponentRuntime.hpp \
     WasmComponentSection.hpp \
     WasmComponentValidation.hpp \
+    WasmConcurrency.hpp \
     WasmContinuation.hpp \
     WasmDeterminism.hpp \
     WasmDiagnostics.hpp \
@@ -75,6 +85,7 @@ HEADERS += \
     WasmModule.hpp \
     WasmModuleInstance.hpp \
     WasmNativeImport.hpp \
+    WasmNullInstantiator.hpp \
     WasmOpcode.hpp \
     WasmOpcodeDispatcher.hpp \
     WasmProfile.hpp \
@@ -97,6 +108,7 @@ HEADERS += \
     WasmVersion.hpp \
     WasmVMContext.hpp \
     WasmValue.hpp \
+    wasmjit_backend.h \
     wasm_atomic.hpp \
     wasm_simd_scalar.hpp \
     wasm_simd_vector.hpp \

@@ -100,6 +100,16 @@ less aligned than the tuple alignment. The `v128` field rule is the reason the
 example above is not the only shape: `(result i32 v128)` puts the vector at
 offset **16**, not 4, and the tuple size is 32.
 
+### The POD views
+
+[`WasmBackendAbi.hpp`](../WasmBase/WasmBackendAbi.hpp) is the executable form of
+this section, shared by the runtime, the harness and a backend plugin: `ValueKind`
+(the ABI class of a declared value type), `SignatureView` (parameter/result
+kinds), `FieldLayout` and `AggregateLayout` (size, alignment, per-field offset),
+and `computeAggregateLayout()` (the rule above). They are standard-layout and
+layout-pinned by `static_assert`, so the same numbers cross the C plugin
+boundary ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) `BP-1`).
+
 ## `v128` by Value
 
 A `v128` is a **16-byte value with 16-byte alignment** and appears in a compiled

@@ -7,6 +7,7 @@
 #include "WasmString.hpp"
 #include "WasmVMContext.hpp"
 #include "WasmImport.hpp"
+#include <atomic>
 #include <optional>
 #include <set>
 #include <unordered_map>
@@ -116,6 +117,8 @@ private:
 	const Module* module;
 	// Nuff said.
 	ModuleInstanceInternals internals;
+	// MF-2 guard (see tryEnterCall): clear means no host call is inside.
+	std::atomic_flag callActive{};
 	void resolveImports(ImportResolver& importResolver);
 	void resolveTypeImports(ImportResolver& importResolver);
 	std::vector<TypeId> importedTypeIds;
@@ -186,6 +189,10 @@ public:
 
 	VMContext* context() { return &ctx; }
 	const VMContext* context() const { return &ctx; }
+	// The parsed module this instance was created from. Not owned; a module
+	// outlives every instance of it (docs/ABI.md "Design Philosophy"). Named
+	// `sourceModule` because the member it exposes is `module`.
+	const Module& sourceModule() const { return *module; }
 	// The optional host bridge installed for this instance, or nullptr for the
 	// default dependency-free boundary.
 	const HostBridge* hostBridge() const { return ctx.hostBridge; }
@@ -288,6 +295,20 @@ public:
 	uint64_t gcReclaimedObjects() const { return internals.gcReclaimedObjects; }
 
 	// ── Safepoint reclamation (docs/proposals/GC.md RC-1b) ──────────────
+	// ── MF-2: one agent inside a call at a time ────────────────────────────
+	// The accepted execution model is `ConcurrencyModel::Single`
+	// (docs/MULTI_AGENT_FEASIBILITY.md §6.2/MF-2): several agents may *touch* one
+	// instance, but not inside a call at the same time. Generated code cannot
+	// enforce that — the ABI carries no instance pointer — so the guard lives at
+	// the host boundary the embedder uses (`Runtime::callExport`). A second
+	// entrant is refused instead of racing.
+	bool tryEnterCall() noexcept
+	{
+		return !callActive.test_and_set(std::memory_order_acquire);
+	}
+	void leaveCall() noexcept { callActive.clear(std::memory_order_release); }
+	bool inCall() const noexcept { return callActive.test(std::memory_order_acquire); }
+
 	// Objects whose count reached zero are only *queued*; `gcCollect()` does
 	// the actual recycling. Call it only at a safepoint where no Wasm frame is
 	// live and the embedder holds no un-counted references — then any queued

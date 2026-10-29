@@ -958,10 +958,35 @@ it was renamed away.
 ./Test/WasmJit '[layering]'
 ```
 
-The embedder tier is also compiled header by header: every `Test/headers/*.cpp`
+The public headers are also compiled header by header: every `Test/headers/*.cpp`
 includes exactly one public header and nothing else, so a header that stops being
 standalone breaks the build instead of an embedder's project. Add one file when a
-new embedder-tier header is added.
+new public header is added.
+
+## Runtime, backend-ABI and plugin tests
+
+Four tagged families cover the embedding surface and the backend seam:
+
+| Tag | File | What it pins |
+| --- | --- | --- |
+| `[runtime]` | `Test/RuntimeTests.cpp` | `WASM::Runtime`: load → instantiate → call against the real backend, idempotent instantiation, named errors, the `MF-2` in-call guard, agent hand-out |
+| `[backendabi]` | `Test/BackendAbiTests.cpp` | The POD signature/layout views (`WasmBase/WasmBackendAbi.hpp`) against `ABI.md`'s tuple rule |
+| `[concurrency]` | `Test/ConcurrencyTests.cpp` | `ConcurrencyModel` claims, the `Agents` refusal, and the per-runtime budget refusal |
+| `[plugin]` | `Test/PluginTests.cpp` | The `dlopen` loader: a real plugin loads by path and by name; every refusal path is a named error |
+
+The plugin fixture is `Test/ExampleBackend/ExampleBackend.pro`, a shared library
+built in its own directory (`libwasmjit-backend-example.so`) so the test proves the
+C descriptor handshake against an image the frontend was not compiled with
+([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) `BP-3`). Its behaviour can be
+made to fail through `WASMJIT_EXAMPLE_BACKEND_MODE` (`descriptor-abi`,
+`core-abi`, `create-error`) so the loader's refusals are exercised with real code.
+
+```bash
+./Test/WasmJit '[runtime]'
+./Test/WasmJit '[backendabi]'
+./Test/WasmJit '[concurrency]'
+./Test/WasmJit '[plugin]'
+```
 
 ## Picking tests with Catch2 options
 

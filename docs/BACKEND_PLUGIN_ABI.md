@@ -1,10 +1,11 @@
 # Backend Plugin ABI — Dynamically Loaded Code Generators Behind a Minimal C ABI
 
-Status: feasibility study + interface sketch (revision 1 — 2026-10-25;
-measurements on `LibjitDispatcher` at `ea4fb30`). **No code, no decision to
-implement.** It closes nothing; it prepares the design so that the decision, when
-taken, is a build change rather than a redesign.
-Audience: anyone who will implement Asmjit or SLJIT, freeze the public ABI
+Status: feasibility study + implemented narrow boundary (revision 2 —
+2026-10-29: `BP-1`…`BP-4` landed — the POD views, the name-based registry, the
+`dlopen` loader and its refusal tests. The **full C compilation seam is still
+deliberately not taken** (Design 1, §4.3). Revision 1, 2026-10-25, measured
+`LibjitDispatcher` at `ea4fb30`).
+Audience: anyone who will implement a second code generator, freeze the public ABI
 ([`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md)), or package the library.
 
 The idea, as originally conceived: **load code generators at run time from shared
@@ -257,6 +258,8 @@ is why this note recommends freezing a **narrow** boundary — discovery, lifecy
 metadata, POD signature/layout/invoke — and leaving the compilation seam in C++
 until someone proves a need for more.
 
+**Verdict:** C. C all the way.
+
 ## 9. Effect on the milestone and the frozen surfaces
 
 | Question | Answer |
@@ -272,10 +275,10 @@ until someone proves a need for more.
 | Milestone | Work | Class | Done when |
 |---|---|---|---|
 | **BP-0 — This study** ✅ | The analogy, the descriptor sketch, the boundary rules, the risk register. No code. | — | Linked from `API_ABI_STABILITY.md` and `README.md`. |
-| **BP-1 — Freeze the narrow boundary** | Define the POD `signature` / `layout` / `status` / `capabilities` views **in the core** and document them (they are `AAS2` deliverables too). No loading. | A | `ABI.md` describes them; the harness's `TestBackend::AggregateLayout` is expressible in terms of the core POD. |
-| **BP-2 — Generalise the selector** | A name-based backend factory (`Runtime::create("libjit")`) behind the existing `WASMJIT_BACKEND` idea; a null backend as the second implementation (`AAS10`). Still statically linked. | A | Two backends are selectable at startup without recompiling the frontend. |
-| **BP-3 — Add `dlopen`** | Loader with the `abi_version` check, the `NEEDED` check (exactly one core), and contained failure. Opt-in; the compiled-in path stays the default. | A | A plugin built in a separate directory loads by name; a wrong-ABI plugin is refused with a message, not a crash. |
-| **BP-4 — Unload policy and containment tests** | Refuse unload while code is live; tests for a plugin that fails to load, one with a wrong ABI, one whose `create` returns an error. | A | The three failure paths are covered by tests and produce diagnostics, never aborts. |
+| **BP-1 — Freeze the narrow boundary** ✅ | **Landed 2026-10-29:** `WasmBase/WasmBackendAbi.hpp` defines `ValueKind`, `SignatureView`, `FieldLayout`, `AggregateLayout` and `computeAggregateLayout` — standard-layout, layout-pinned by `static_assert`, and the executable form of [`ABI.md`](ABI.md) "The result tuple layout" / "`v128` by Value". `Test/BackendAbiTests.cpp` (`[backendabi]`) asserts the rule. | A | `ABI.md` describes them ✅; the harness's `TestBackend::AggregateLayout` is expressible in terms of the core POD ✅ |
+| **BP-2 — Generalise the selector** ✅ | **Landed 2026-10-29:** `WasmBackendRegistry.{hpp,cpp}` (name → factory, `WASMJIT_REGISTER_BACKEND`), the null instantiator as the second implementation, the executing backend registered from its own translation unit, and `Runtime::create(name)`. | A | Two backends (`libjit`, `null`) are selectable by name with no frontend rebuild ✅ |
+| **BP-3 — Add `dlopen`** ◑ | **Landed 2026-10-29:** `loadBackendPluginFile` / `loadBackendPlugin` with `RTLD_NOW|RTLD_LOCAL`, the `wasmjit_backend_query` handshake, descriptor- and core-ABI checks before any other call, host callback table and contained failure. `Test/ExampleBackend` builds a real plugin in its own directory and `[plugin]` loads it by name. **Still open:** the `NEEDED` inspection that refuses a plugin carrying its own core (risk 2). | A | A plugin built in a separate directory loads by name ✅; a wrong-ABI plugin is refused with a message ✅; the "exactly one core" check is not implemented yet ◑ |
+| **BP-4 — Unload policy and containment tests** ✅ | **Landed 2026-10-29:** the loader keeps every plugin handle for the process lifetime (rule 8; there is no unload entry point), and `[plugin]` covers a missing file, a library without the query symbol, an unknown name, a descriptor-ABI mismatch, a core-ABI mismatch and a failing `create` — each a diagnostic-bearing exception, never an abort. | A | Those failure paths are covered by tests and produce diagnostics, never aborts ✅ |
 | **BP-5 — Package backends** | Install the backend `.so` files and their `.pc` `Requires:` entries alongside the core. | A | `make install` yields a runtime that finds `libwasmjit-backend-libjit.so` in the install prefix. |
 
 Ordering: `BP-1` first (useful on its own; unblocks `AAS2`), `BP-2` before `BP-3`
@@ -286,12 +289,13 @@ works.
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (2026-10-25) | 11,011 assertions / 442 cases, green | The compiled-in path is the baseline every `BP-*` stage must preserve. |
-| `WASMJIT_BACKEND` selection | Implemented; `libjit` is the only value; unknown names throw | The selector exists, the second implementation does not. |
-| Plugin load test | **Absent** | `BP-3`. |
-| Wrong-ABI / missing-symbol test | **Absent** | `BP-3`/`BP-4`. |
-| Symbol-hygiene check | **Absent**; 23,284 exported symbols | `ES-4`; without it the plugin ABI is undeclared. |
-| "One core" check (`NEEDED` inspection) | **Absent** | `BP-3`; it guards risk 2, the most dangerous one. |
+| Default suite (2026-10-29) | **11,120 assertions / 460 cases, green** | The compiled-in path is the baseline every `BP-*` stage must preserve. |
+| Backend selection | `WasmBackendRegistry` names `libjit` and `null`; an unknown name is a named error | The selector is general and the second implementation exists. |
+| Plugin load test | **Present** — `Test/ExampleBackend/libwasmjit-backend-example.so`, loaded by path and by name (`[plugin]`) | `BP-3`; the plugin lives in its own directory and the frontend was not rebuilt for it. |
+| Wrong-ABI / missing-symbol / failing-create tests | **Present** — descriptor ABI, core ABI, no query symbol, missing file, failing `create` (`[plugin]`) | `BP-3`/`BP-4`; every path is an exception with a reason, never an abort. |
+| POD layout test | **Present** — `[backendabi]` pins the tuple rule | `BP-1`. |
+| Symbol-hygiene check | **Absent**; everything is exported | `ES-4`; without it the plugin ABI is undeclared. |
+| "One core" check (`NEEDED` inspection) | **Absent** | `BP-3` remainder; it guards risk 2, the most dangerous one. |
 
 ## 12. References
 

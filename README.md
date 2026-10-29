@@ -202,10 +202,15 @@ through qmake:
   `WasmBase.pro`/`Test.pro`, included only in the translation units that need
   it);
 - [`WasmBase/WasmJit.hpp`](WasmBase/WasmJit.hpp) is the umbrella header over the
-  embedder tier, and [`WasmBase/WasmVersion.hpp`](WasmBase/WasmVersion.hpp)
-  carries `WASMJIT_VERSION_*`, `WASMJIT_ABI_VERSION` and the
-  `WASM::versionString()` / `WASM::abiVersion()` runtime queries. The installed
-  layout and `wasmjit.pc` are still to come
+  embedder tier, [`WasmBase/WasmRuntime.hpp`](WasmBase/WasmRuntime.hpp) is the
+  engine instance (`WASM::Runtime`: load, instantiate, call, safepoint, agents,
+  profile), and [`WasmBase/WasmVersion.hpp`](WasmBase/WasmVersion.hpp) carries
+  `WASMJIT_VERSION_*`, `WASMJIT_ABI_VERSION` and the `WASM::versionString()` /
+  `WASM::abiVersion()` runtime queries. Backends are selected by name
+  (`Runtime::create("libjit")`) through `WasmBase/WasmBackendRegistry.hpp`; a
+  backend can also be a separate shared library behind the C descriptor in
+  `WasmBase/wasmjit_backend.h` ([`docs/BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md)).
+  The installed layout and `wasmjit.pc` are still to come
   ([`docs/EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) `ES-4`/`ES-5`), so
   today the include path is the project root;
 - the executable under `build/<config>/Test/WasmJit` is a development sandbox and
@@ -285,7 +290,8 @@ Script selection, expected output and current limitations are covered in
 
 The codebase is a work in progress. Expect rough edges in a few areas:
 
-- API shape is not finalized yet
+- API shape is not finalized yet — `WASM::Runtime` is the declared runtime
+  surface, but it is not frozen and the tier/soname policy is still open
 - the shared libraries build, but packaging/installation is not in place yet
 - backend abstraction is still evolving
 - the test harness in `main.cpp` does not represent the intended final embedding interface

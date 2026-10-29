@@ -9,6 +9,7 @@ include(../WasmBase/WasmBase.pri)
 # Avoid build errors with no files:
 SOURCES += \
         LibJitContext.cpp \
+        LibJitBackend.cpp \
         LibJitTypeTranslation.cpp \
         LibjitModuleCompiler.cpp \
         LibjitOpcodeDispatcher.cpp

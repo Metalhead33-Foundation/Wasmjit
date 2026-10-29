@@ -39,8 +39,10 @@ std::vector<std::string> findMatches(const std::filesystem::path& directory,
 		if (!entry.is_regular_file())
 			continue;
 		const std::string extension = entry.path().extension().string();
-		if (extension != ".cpp" && extension != ".hpp" && extension != ".inc")
+		if (extension != ".cpp" && extension != ".hpp" && extension != ".h"
+				&& extension != ".inc") {
 			continue;
+		}
 		files.push_back(entry.path());
 	}
 	std::sort(files.begin(), files.end());

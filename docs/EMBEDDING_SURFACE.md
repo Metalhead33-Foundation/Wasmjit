@@ -254,7 +254,7 @@ two, it is the difference between isolation and corruption.
 | **Call ergonomics** | `exportedFunction()` + `callCallable` by hand | `callExport<int32_t>(instance, "name", args...)`, which is the same path with the lookup done once |
 | **Capability/version query** | none (P4) | `runtime.version()`, `runtime.abiVersion()`, `runtime.profile()`, `runtime.supports()`, `runtime.backendName()` — also what the plugin loader needs ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md)) |
 | **Lifetime rule** | "do not destroy the instance before its callers" in prose | The runtime owns instances and modules, so the rule becomes structural |
-| **Instance cardinality** | Nothing stops a caller instantiating twice; the rule lives only in prose | `instantiate()` is idempotent (same `Module` → same instance) and a second attempt is refused with a named error ([`THREADSAFETY.md`](THREADSAFETY.md) §3.1) |
+| **Instance cardinality** | Nothing stops a caller instantiating twice; the rule lives only in prose | `instantiate()` is idempotent (same `Module` → the same instance) and a second *instance* is not expressible through the API ([`THREADSAFETY.md`](THREADSAFETY.md) §3.1) |
 
 ### 4.6 Profiles, diagnostics and the other defaults the runtime owns
 
@@ -336,15 +336,15 @@ public:
     Runtime(const Runtime&) = delete;
     Runtime& operator=(const Runtime&) = delete;
 
-    // Load (P2): bytes or a path. No Elv::Io::Device on this surface; the Elv
-    // overloads stay on Module/Artifact for compatibility.
     std::shared_ptr<const Module> loadBytes(std::span<const std::byte> bytes);
+    std::shared_ptr<const Module> loadFile(Elv::Io::Device& io);
+    // Shorthand for Euph::Io::File opened with the given path.
     std::shared_ptr<const Module> loadFile(const std::filesystem::path& path);
 
-    // Instantiate (idempotent): one instance per Module, a second attempt is
-    // refused with a named error (THREADSAFETY.md §3.1). The instance is owned
-    // by the runtime, so the handle is a reference; `imports` and the config's
-    // bridge are borrowed and must outlive it.
+    // Instantiate (idempotent): one instance per Module. A repeat call returns
+    // the same instance (a second instance is not expressible). The instance is
+    // owned by the runtime, so the handle is a reference; `imports` and the
+    // config's bridge are borrowed and must outlive it.
     ModuleInstance& instantiate(const Module& module, ImportResolver& imports);
     ModuleInstance* instanceOf(const Module& module) noexcept;   // null before instantiate
 
@@ -445,7 +445,7 @@ tier load-bearing, so name it now:
 | Tier | Purpose | Examples (current path) |
 |---|---|---|
 | **Embedder API** | What a game includes. Self-contained, no backend header, and ideally no `Elvavena`/`Euphemy` type in a signature. | `WasmRuntime.hpp` (new), `WasmArtifact.hpp`, `WasmModule.hpp`, `WasmModuleInstance.hpp`, `WasmValue.hpp`, `WasmTrap.hpp`, `WasmImport.hpp`, `WasmHostBridge.hpp`, `WasmNativeImport.hpp`, `WasmProfile.hpp`, `WasmDiagnostics.hpp`, `WasmAgent.hpp`, `WasmContinuation.hpp`, `WasmMemory.hpp`, `WasmTable.hpp`, `WasmExn.hpp`, `WasmString.hpp` (stringref bridge), `WasmTracing.hpp` |
-| **Backend SDK** | What a code generator includes in addition: the contract rows of [`LAYERING.md`](LAYERING.md) §4 plus the helper entry points it may call. | `WasmVMContext.hpp`, `WasmGcHeader.hpp`, `WasmType.hpp`, `WasmTypeIdentity.hpp`, `WasmOpcode.hpp`, `WasmOpcodeDispatcher.hpp`, `WasmStack.hpp`, `WasmSafety.hpp`, `wasm_atomic.hpp`, `wasm_simd_scalar.hpp` (+ `wasm_simd_vector.hpp`, `wasm_simd_ops.inc`) |
+| **Backend SDK** | What a code generator includes in addition: the contract rows of [`LAYERING.md`](LAYERING.md) §4 plus the helper entry points it may call. | `WasmVMContext.hpp`, `WasmGcHeader.hpp`, `WasmType.hpp`, `WasmTypeIdentity.hpp`, `WasmOpcode.hpp`, `WasmOpcodeDispatcher.hpp`, `WasmStack.hpp`, `WasmSafety.hpp`, `wasm_atomic.hpp`, `wasm_simd_scalar.hpp` (+ `wasm_simd_vector.hpp`, `wasm_simd_ops.inc`), `WasmBackendAbi.hpp` (the POD views), `WasmBackendRegistry.hpp`, `WasmNullInstantiator.hpp`, `wasmjit_backend.h` (the plugin descriptor) |
 | **Internal** | Not installed; may change at will. | `WasmSection.hpp`, `WasmTypeStore.hpp`, `WasmCanonicalType.hpp`, `WasmTypeRegistry.hpp`, `WasmGcHeap.hpp`, `WasmValidator.hpp`, `WasmComponent*.hpp`/`.inc`, `WasmDeterminism.hpp`, `WasmValidation.hpp` |
 
 Two headers are in the wrong place for *any* tier:
@@ -595,7 +595,7 @@ must name whatever §6.2 decides about `Elvavena`/`Euphemy`.
 
 | Milestone | Work | Class | Closes | Done when |
 |---|---|---|---|---|
-| **ES-1 — `WASM::Runtime` skeleton** | Fill `WasmRuntime.hpp` to the shape in §4.7: `RuntimeConfig` (profile, bridge, sink, budget — §4.6), `create(name)`, `loadFile`/`loadBytes`, `instantiate` (idempotent — one instance per `Module`, a second attempt refused, instance owned by the runtime), `instanceOf`, `callExport`/`callExportWithResults`, `safepoint`, `version`/`abiVersion`/`backendName`/`supports`, `createAgent`, and `store()` replacing `Store::global()` via option C (§4.3). `WasmContext.hpp` and `LibJit::Runtime` are already deleted (2026-10-29). | A | P1, P2, P4, P5, P6; R1 enforcement; AAS1 | The example in §6.4 compiles and runs against the real library; the default suite is unchanged. |
+| **ES-1 — `WASM::Runtime` skeleton** ✅ | **Landed 2026-10-29:** `WasmBase/WasmRuntime.{hpp,cpp}` implements `RuntimeConfig` (profile, concurrency, bridge, sink, budget — §4.6), `create(name)` (registry, then the `dlopen` fallback), `loadFile`/`loadBytes` (no `Elv::Io::Device`), idempotent `instantiate` (one instance per `Module`; a repeat call returns the same instance), `instanceOf`/`hasInstance`, `callExport`/`callExportWithResults` (with the `MF-2` in-call guard), `safepoint`, `version`/`abiVersion`/`backendName`/`profile`/`supports`, `createAgent` and `store()`. `WasmContext.hpp` and `LibJit::Runtime` are deleted. | A | P1, P2, P4, P5, P6; R1 enforcement; AAS1 | `Test/RuntimeTests.cpp` exercises load → instantiate → call against the real backend and the null one; the default suite is unchanged. The installed `wasmjit/wasmjit.hpp` spelling and the out-of-tree consumer stay `ES-5`. |
 | **ES-2 — Store scoping migration** | Finish §4.3 option B: thread `Store&` through the 12 TUs; update `TYPE_IDENTITY.md` to "runtime-scoped" (or record the deliberate shared-registry exception) and add the cross-runtime `Callable` rejection rule. | A (wide) | Multi-tenancy; §4.4 | `Store::global()` has no remaining callers; two runtimes in one process have independent heaps and reject cross-runtime callables. |
 | **ES-3 — Header tiers and umbrella** | ◑ **2026-10-29: `WasmJit.hpp` and the per-header compile tests landed.** Classify every header into the three tiers; add `WasmJit.hpp`; move `Elv` out of the public *signatures* where §6.2 says it is feasible; add a compile-only test per public header. Still open: the classification and the `Elv`-signature work. | A | P3, `AAS2` (partly) | Every public header compiles alone; the umbrella compiles with only the public include path; no public header includes a backend header. |
 | **ES-4 — Visibility and versioning** | ◑ **2026-10-29: `WasmVersion.hpp`/`.cpp` landed** (`WASMJIT_VERSION_*`, `WASMJIT_ABI_VERSION`, `WASM::versionString()`/`abiVersion()`). Still open: `-fvisibility=hidden` + `WASMJIT_API`; explicit `VERSION`/soname per library; a documented bump rule. | A | P4; ABI hygiene | The exported symbol set is a declared list; `abidiff` runs clean between two builds of the same headers. |
@@ -613,27 +613,30 @@ want `ES-3`'s tier list; `ES-6` is pure documentation and can land first.
 |---|---|
 | `AAS1` — "the embedder's API is the test harness" | `ES-1`, `ES-3`, `ES-5` |
 | `AAS2` — the ABI note does not cover every signature | `ES-6` |
-| P5 — two empty headers | ◑ `WasmContext.hpp` deleted (2026-10-29); `WasmRuntime.hpp` stays the `ES-1` placeholder until `WASM::Runtime` is filled |
+| P5 — two empty headers | ✅ `WasmContext.hpp` deleted and `WasmRuntime.hpp` filled with `WASM::Runtime` (2026-10-29) |
 | "What is the execution context?" | §3.1–§3.2 name it: `Agent` owns one `ExecutionState`; `ES-1` exposes `createAgent()` and §2 step 11 documents the worker-thread rule |
-| "Is there room for a `Runtime`?" | Yes: the role is real (§3) and the owner was missing (§4) |
+| "Is there room for a `Runtime`?" | Yes — and it exists now: `Runtime` owns the store handle, modules, instances and the backend (`ES-1`) |
 
 | Stays open | Why |
 |---|---|
 | `Store` as an isolation boundary | Only after `ES-2`; until then "one runtime per process" is the honest statement. |
 | `Elvavena` in the public SDK | Deliberately accepted for the first freeze (§6.2), and the long-term direction is deeper MhLib integration, not removal (§6.2.1). |
 | A stable C++ ABI across compilers | Out of scope without a pimpl firewall; §7.2 promises soname discipline, not cross-vendor binary compatibility. |
-| Dynamic backend loading | [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md). `Runtime::create(name)` is the seam that makes it a build change later, not a redesign. |
+| Dynamic backend loading | Implemented (`WasmBackendRegistry` + `Runtime::create(name)`, [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) `BP-3`); a loaded plugin is deliberately never unloaded while code is live (§6 rule 8). |
 | Which thread may run which agent, and when | [`THREADSAFETY.md`](THREADSAFETY.md) §3.1 and [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6. `ES-1` hands the agent out; it does not schedule it. |
 
 ## 10. Test survey
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (2026-10-25) | 11,011 assertions / 442 cases, green | Any `ES-*` stage must keep this number. |
+| Default suite (2026-10-29) | **11,120 assertions / 460 cases, green** | The `ES-1` and `BP-*` additions are additive: every earlier assertion still passes. |
 | `[docs]` lint | 720 assertions, green | Covers `docs/proposals/` only; this note is not linted. |
-| Public-header self-containment test | **Present for the embedder tier** (2026-10-29) | `Test/headers/*.cpp`: one TU per header, plus the umbrella; `ES-3` extends it to the backend-SDK tier. |
+| `[runtime]` | 35 assertions / 5 cases, green | `Runtime` load → instantiate → call against the real backend, the null backend, idempotence, the named-error paths and the `MF-2` guard. |
+| `[backendabi]` | 36 assertions / 4 cases, green | The POD signature/layout views (`WasmBackendAbi.hpp`) match `ABI.md`'s tuple rule. |
+| `[plugin]` | 13 assertions / 4 cases, green | Load by path and by name, a real example plugin, and the missing-file / missing-symbol refusals. |
+| Public-header self-containment test | **Present for the public headers** (2026-10-29) | `Test/headers/*.cpp`: one TU per header, plus the umbrella; `ES-3` extends it to the backend-SDK tier. |
 | Install / out-of-tree consumer test | **Absent** (`INSTALLS` does not exist) | `ES-5`. |
-| Symbol-hygiene check | **Absent**; 23,284 symbols exported | `ES-4`. |
+| Symbol-hygiene check | **Absent**; everything is exported | `ES-4`. |
 | ABI diff (`abidiff`) | **Absent** | `ES-4`, optional. |
 
 ## 11. References

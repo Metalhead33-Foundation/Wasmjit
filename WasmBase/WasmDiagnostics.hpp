@@ -152,6 +152,11 @@ inline constexpr std::string_view kDecodeMalformed = "WASM.DECODE.MALFORMED";
 inline constexpr std::string_view kDecodeUnsupported = "WASM.DECODE.UNSUPPORTED";
 inline constexpr std::string_view kDecodeUnsupportedValueType = "WASM.DECODE.UNSUPPORTED_VALUE_TYPE";
 
+// Backend plugin boundary (docs/BACKEND_PLUGIN_ABI.md BP-3/BP-4): failure to
+// load, an ABI mismatch, or a plugin's own diagnostic routed through the host
+// table.
+inline constexpr std::string_view kBackendPlugin = "WASM.BACKEND.PLUGIN";
+
 inline constexpr std::string_view kValidateRule = "WASM.VALIDATE.RULE";
 inline constexpr std::string_view kValidateUnknownType = "WASM.VALIDATE.UNKNOWN_TYPE";
 inline constexpr std::string_view kValidateTypeNotFunction = "WASM.VALIDATE.TYPE_NOT_FUNCTION";
