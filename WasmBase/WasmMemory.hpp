@@ -44,91 +44,91 @@ struct LinearMemory {
 	uint64_t  pageSize;
 };
 /**
- * \\brief Performs the static_assert operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the static_assert operation.
+ * \return The requested value, handle, view, or success status.
  */
 static_assert(offsetof(LinearMemory, memoryBase) == 0,
 			  "LinearMemory::memoryBase must remain first field for backend ABI compatibility");
 /**
- * \\brief Performs the static_assert operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the static_assert operation.
+ * \return The requested value, handle, view, or success status.
  */
 static_assert(std::is_standard_layout_v<LinearMemory>,
 /**
- * \\brief Performs the offsetof operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the offsetof operation.
+ * \return The requested value, handle, view, or success status.
  */
 			  "LinearMemory must remain standard-layout for offsetof() access from generated code");
 
 //! Sequentially consistent read of a memory's current size. Generated code uses
 //! this for `memory.size` instead of a plain field load, so a host thread
 //! growing a shared memory is observed atomically (THREADS.md TH-3/T7).
-/** \\brief Reads the current memory size with sequential consistency. \\param memory Backend-visible linear-memory descriptor. \\return Current memory size in bytes. */
+/** \brief Reads the current memory size with sequential consistency. \param memory Backend-visible linear-memory descriptor. \return Current memory size in bytes. */
 /**
- * \\brief Performs the wasm_memory_size operation.
- * \\param memory Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the wasm_memory_size operation.
+ * \param memory Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 uint64_t wasm_memory_size(const LinearMemory* memory);
 
-/** \\brief Store-owned backing allocation for a backend-visible LinearMemory view. */
+/** \brief Store-owned backing allocation for a backend-visible LinearMemory view. */
 class StoreOwnedMemory
 {
 protected:
 	LinearMemory memory;
 public:
 /**
- * \\brief Performs the bytes operation.
- * \\param initialPages Input value, resource descriptor, or output destination for this operation.
- * \\param maxPages Input value, resource descriptor, or output destination for this operation.
- * \\param isShared Input value, resource descriptor, or output destination for this operation.
- * \\param is64 Input value, resource descriptor, or output destination for this operation.
- * \\param pageSize Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the bytes operation.
+ * \param initialPages Input value, resource descriptor, or output destination for this operation.
+ * \param maxPages Input value, resource descriptor, or output destination for this operation.
+ * \param isShared Input value, resource descriptor, or output destination for this operation.
+ * \param is64 Input value, resource descriptor, or output destination for this operation.
+ * \param pageSize Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
-	/** \\brief Creates backing storage with the declared limits and page size. \\param initialPages Initial page count. \\param maxPages Maximum page count. \\param isShared Whether the memory is shared. \\param is64 Whether the declaration uses memory64 indices. \\param pageSize Page size in bytes (defaults to 64 KiB). */
+	/** \brief Creates backing storage with the declared limits and page size. \param initialPages Initial page count. \param maxPages Maximum page count. \param isShared Whether the memory is shared. \param is64 Whether the declaration uses memory64 indices. \param pageSize Page size in bytes (defaults to 64 KiB). */
 /**
- * \\brief Performs the StoreOwnedMemory operation.
- * \\param initialPages Input value, resource descriptor, or output destination for this operation.
- * \\param maxPages Input value, resource descriptor, or output destination for this operation.
- * \\param isShared Input value, resource descriptor, or output destination for this operation.
- * \\param is64 Input value, resource descriptor, or output destination for this operation.
- * \\param pageSize Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the StoreOwnedMemory operation.
+ * \param initialPages Input value, resource descriptor, or output destination for this operation.
+ * \param maxPages Input value, resource descriptor, or output destination for this operation.
+ * \param isShared Input value, resource descriptor, or output destination for this operation.
+ * \param is64 Input value, resource descriptor, or output destination for this operation.
+ * \param pageSize Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 	explicit StoreOwnedMemory(uint64_t initialPages, uint64_t maxPages, bool isShared,
 			bool is64 = false, uint64_t pageSize = 0x10000);
 	virtual ~StoreOwnedMemory() = default;
-	/** \\brief Returns read-only access to the backend-visible memory descriptor. \\return Pointer to the owned descriptor. */
+	/** \brief Returns read-only access to the backend-visible memory descriptor. \return Pointer to the owned descriptor. */
 /**
- * \\brief Returns the requested backend/runtime property or view.
- * \\return The requested value, handle, view, or success status.
+ * \brief Returns the requested backend/runtime property or view.
+ * \return The requested value, handle, view, or success status.
  */
 	const LinearMemory* getMemory() const;
-	/** \\brief Returns mutable access to the backend-visible memory descriptor. \\return Pointer to the owned descriptor. */
+	/** \brief Returns mutable access to the backend-visible memory descriptor. \return Pointer to the owned descriptor. */
 /**
- * \\brief Returns the requested backend/runtime property or view.
- * \\return The requested value, handle, view, or success status.
+ * \brief Returns the requested backend/runtime property or view.
+ * \return The requested value, handle, view, or success status.
  */
 	LinearMemory* getMemory();
 	//! Returns false on trap-worthy failure (exceeds max). Engine translates to a Wasm trap.
-	/** \\brief Grows memory by a page count. \\param deltaPages Number of pages to add. \\return false when growth exceeds the declared maximum or cannot be committed. */
+	/** \brief Grows memory by a page count. \param deltaPages Number of pages to add. \return false when growth exceeds the declared maximum or cannot be committed. */
 /**
- * \\brief Attempts to grow the corresponding runtime allocation.
- * \\param deltaPages Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Attempts to grow the corresponding runtime allocation.
+ * \param deltaPages Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 	virtual bool growMemory(uint64_t deltaPages) = 0;
 	//! Optional host hint for `memory.discard`: return true when the range was
 	//! decommitted and is already zero-filled; false means the caller must
 	//! perform the specified zero-fill itself. The default is the portable
 	//! zero-fill path (docs/proposals/MEMORY_CONTROL.md MC-3).
-	/** \\brief Offers the host an opportunity to decommit a memory range. \\param offset Starting byte offset. \\param bytes Range length in bytes. \\return true if the range was decommitted and is already zero-filled; false requests explicit zero-fill. */
+	/** \brief Offers the host an opportunity to decommit a memory range. \param offset Starting byte offset. \param bytes Range length in bytes. \return true if the range was decommitted and is already zero-filled; false requests explicit zero-fill. */
 /**
- * \\brief Performs the discardHint operation.
- * \\param offset Input value, resource descriptor, or output destination for this operation.
- * \\param bytes Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the discardHint operation.
+ * \param offset Input value, resource descriptor, or output destination for this operation.
+ * \param bytes Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 	virtual bool discardHint(uint64_t offset, uint64_t bytes) const
 	{
@@ -139,85 +139,85 @@ public:
 };
 
 //! \brief Non-shared: plain growable buffer. Realloc is fine — nobody else holds memoryBase concurrently.
-/** \\brief Non-shared growable memory backed by a relocatable byte vector. */
+/** \brief Non-shared growable memory backed by a relocatable byte vector. */
 class PrivateLinearMemory final : public StoreOwnedMemory {
 private:
 	std::vector<uint8_t> backing;
 public:
 /**
- * \\brief Performs the PrivateLinearMemory operation.
- * \\param initialPages Input value, resource descriptor, or output destination for this operation.
- * \\param maxPages Input value, resource descriptor, or output destination for this operation.
- * \\param is64 Input value, resource descriptor, or output destination for this operation.
- * \\param pageSize Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the PrivateLinearMemory operation.
+ * \param initialPages Input value, resource descriptor, or output destination for this operation.
+ * \param maxPages Input value, resource descriptor, or output destination for this operation.
+ * \param is64 Input value, resource descriptor, or output destination for this operation.
+ * \param pageSize Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 	explicit PrivateLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64 = false,
 			uint64_t pageSize = 0x10000);
-	/** \\brief Releases the private memory backing storage. */
+	/** \brief Releases the private memory backing storage. */
 	~PrivateLinearMemory() override = default;
-	/** \\brief Grows the private buffer by the requested page count. \\param deltaPages Number of pages to add. \\return false if growth exceeds the declared maximum or allocation fails. */
-	/** \\brief Commits additional pages without moving the reserved base pointer. \\param deltaPages Number of pages to add. \\return false if growth exceeds the maximum or commit fails. */
+	/** \brief Grows the private buffer by the requested page count. \param deltaPages Number of pages to add. \return false if growth exceeds the declared maximum or allocation fails. */
+	/** \brief Commits additional pages without moving the reserved base pointer. \param deltaPages Number of pages to add. \return false if growth exceeds the maximum or commit fails. */
 /**
- * \\brief Attempts to grow the corresponding runtime allocation.
- * \\param deltaPages Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Attempts to grow the corresponding runtime allocation.
+ * \param deltaPages Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 	bool growMemory(uint64_t deltaPages) override;
 };
 
 //! \brief Shared: reserve maxPages up front, grow = commit only. Base pointer never moves.
-/** \\brief Shared memory with a reserved address range and stable base pointer. */
+/** \brief Shared memory with a reserved address range and stable base pointer. */
 class SharedLinearMemory final : public StoreOwnedMemory {
 private:
 	void*  reservedRegion;
 	size_t reservedBytes;
 	mutable std::mutex mutex;
 /**
- * \\brief Performs the platformReservedMemory operation.
- * \\param bytes Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the platformReservedMemory operation.
+ * \param bytes Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 	bool platformReservedMemory(size_t bytes);
 /**
- * \\brief Performs the platformCommitMemory operation.
- * \\param newBytes Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the platformCommitMemory operation.
+ * \param newBytes Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 	bool platformCommitMemory(size_t newBytes);
 /**
- * \\brief Performs the platformDealloc operation.
+ * \brief Performs the platformDealloc operation.
  */
 	void platformDealloc();
 public:
 /**
- * \\brief Performs the SharedLinearMemory operation.
- * \\param initialPages Input value, resource descriptor, or output destination for this operation.
- * \\param maxPages Input value, resource descriptor, or output destination for this operation.
- * \\param is64 Input value, resource descriptor, or output destination for this operation.
- * \\param pageSize Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the SharedLinearMemory operation.
+ * \param initialPages Input value, resource descriptor, or output destination for this operation.
+ * \param maxPages Input value, resource descriptor, or output destination for this operation.
+ * \param is64 Input value, resource descriptor, or output destination for this operation.
+ * \param pageSize Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 	explicit SharedLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64 = false,
 			uint64_t pageSize = 0x10000);
-	/** \\brief Releases the reserved shared-memory address range. */
+	/** \brief Releases the reserved shared-memory address range. */
 /**
- * \\brief Performs the SharedLinearMemory operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the SharedLinearMemory operation.
+ * \return The requested value, handle, view, or success status.
  */
 	~SharedLinearMemory() override;
 /**
- * \\brief Attempts to grow the corresponding runtime allocation.
- * \\param deltaPages Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Attempts to grow the corresponding runtime allocation.
+ * \param deltaPages Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 	bool growMemory(uint64_t deltaPages) override;
-	/** \\brief Decommits a shared-memory range when the platform supports it. \\param offset Starting byte offset. \\param bytes Range length. \\return true if decommitted and zero-filled; false if caller must zero-fill. */
+	/** \brief Decommits a shared-memory range when the platform supports it. \param offset Starting byte offset. \param bytes Range length. \return true if decommitted and zero-filled; false if caller must zero-fill. */
 /**
- * \\brief Performs the discardHint operation.
- * \\param offset Input value, resource descriptor, or output destination for this operation.
- * \\param bytes Input value, resource descriptor, or output destination for this operation.
- * \\return The requested value, handle, view, or success status.
+ * \brief Performs the discardHint operation.
+ * \param offset Input value, resource descriptor, or output destination for this operation.
+ * \param bytes Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
  */
 	bool discardHint(uint64_t offset, uint64_t bytes) const override;
 };
