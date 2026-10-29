@@ -7,18 +7,20 @@
   \file TestStore.hpp
   \brief The single store the harness parses and instantiates into.
 
-  The store the harness parses and instantiates into.
-
-  The engine has no process-wide store (docs/EMBEDDING_SURFACE.md §4.3
-  option B): a `Runtime` owns one, and a test that drives the parser and the
-  instantiator directly owns one too. One inline function gives the whole test
-  binary a single store.
-
+  The engine has no process-wide store: a Runtime owns one, and a test that
+  drives the parser and instantiator directly owns one too. This inline accessor
+  gives the test binary one shared store.
   This header is internal: it is not part of the embedding surface.
 */
 
-//! The one `WASM::Store` the harness parses and instantiates into. Constructed
-//! on first use and reused for the lifetime of the test binary.
+/*!
+ * \brief Returns the shared WebAssembly store used by the test harness.
+ *
+ * The store is constructed on first use and reused for the lifetime of the
+ * test binary. Tests using it therefore share store-owned state.
+ *
+ * \return Reference to the process-wide test store.
+ */
 inline WASM::Store& testStore()
 {
 	static WASM::Store store;
