@@ -25,7 +25,7 @@ namespace WASM {
 
 //! "type #n in *this* module": a binary-format `typeidx`. Only meaningful
 //! together with the `Module` it came from.
-/** \\brief Module-local type index; meaningful only with its source Module. */
+/** \brief Module-local type index; meaningful only with its source Module. */
 struct LocalTypeIdx {
 	uint32_t value = 0;
 	constexpr bool operator==(const LocalTypeIdx& o) const { return value == o.value; }
@@ -34,7 +34,7 @@ struct LocalTypeIdx {
 };
 
 //! Process-wide identity of one canonical defined type, assigned by TypeRegistry.
-/** \\brief Process-wide identity of one canonical defined or imported type. */
+/** \brief Process-wide identity of one canonical defined or imported type. */
 struct TypeId {
 	//! Sentinel for "no canonical identity": used for natively-registered imports
 	//! whose type the embedder did not pin to a TypeRegistry entry. Never a real
@@ -50,7 +50,7 @@ struct TypeId {
 //! Process-wide identity of an open component type scheme. A scheme is
 //! alpha-equivalent by construction: its abstract resource parameters are
 //! serialized as placeholders, not nominal resource TypeIds.
-/** \\brief Process-wide identity of one alpha-normalized open component type scheme. */
+/** \brief Process-wide identity of one alpha-normalized open component type scheme. */
 struct SchemeId {
 	static constexpr uint32_t kNone = 0xFFFFFFFFu;
 	uint32_t value = 0;
@@ -61,7 +61,7 @@ struct SchemeId {
 };
 
 //! Identity of an interned `rec` group: a contiguous run of TypeIds.
-/** \\brief Process-wide identity of one interned recursive type group. */
+/** \brief Process-wide identity of one interned recursive type group. */
 struct RecGroupId {
 	uint32_t value = 0;
 	constexpr bool operator==(const RecGroupId& o) const { return value == o.value; }
@@ -71,7 +71,7 @@ struct RecGroupId {
 
 //! One recursive type group: `count` consecutive types starting at `first`.
 //! A bare type definition is a group of one member.
-/** \\brief Local-index range occupied by one recursive type group. */
+/** \brief Local-index range occupied by one recursive type group. */
 struct TypeGroup {
 	LocalTypeIdx first;
 	uint32_t     count = 0;
