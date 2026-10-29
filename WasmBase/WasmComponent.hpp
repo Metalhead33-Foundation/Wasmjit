@@ -31,7 +31,7 @@ namespace WASM {
 //! compatibility. No linking, codegen, execution or Canonical ABI lowering is
 //! performed. Embedded core modules keep their normal parser validation.
 /**
- * \\brief Parsed Component Model component and its structural-validation state.
+ * \brief Parsed Component Model component and its structural-validation state.
  *
  * Owns nested components and core modules. validate() publishes canonical type
  * identities into the associated Store and may release parser-only AST data;
@@ -69,50 +69,50 @@ struct WASMJIT_API Component : public Artifact {
 	mutable bool validated_ = false;
 	mutable std::optional<ComponentIndexSpaces> indexSpaces_; //!< Cached spaces
 
-	/** \\brief Constructs an empty component artifact. */
+	/** \brief Constructs an empty component artifact. */
 	Component();
 
 	//! Reads a component preamble and body (layer must be 1), interning types in
 	//! `store` (docs/EMBEDDING_SURFACE.md §4.3 option B: no process-wide store).
 	/**
-	 * \\brief Reads a component preamble and body, interning types in store.
-	 * \\param file Input device positioned at the component preamble.
-	 * \\param store Store that owns canonical types; it must outlive this component.
+	 * \brief Reads a component preamble and body, interning types in store.
+	 * \param file Input device positioned at the component preamble.
+	 * \param store Store that owns canonical types; it must outlive this component.
 	 */
 	void fromFile(Elv::Io::Device& file, Store& store);
 
 	//! Parses a nested component body (no preamble) between the current
 	//! position and `end`.
 	/**
-	 * \\brief Parses a nested component body without reading a preamble.
-	 * \\param file Input device positioned at the nested body.
-	 * \\param end Absolute end offset of this nested body.
-	 * \\param depth Current nesting depth, used to enforce parser limits.
-	 * \\param store Store receiving canonical type identities.
-	 * \\return Owning pointer to the parsed nested component.
+	 * \brief Parses a nested component body without reading a preamble.
+	 * \param file Input device positioned at the nested body.
+	 * \param end Absolute end offset of this nested body.
+	 * \param depth Current nesting depth, used to enforce parser limits.
+	 * \param store Store receiving canonical type identities.
+	 * \return Owning pointer to the parsed nested component.
 	 */
 	static std::unique_ptr<Component> parseNested(
 			Elv::Io::Device& file, uint64_t end, unsigned depth, Store& store);
 
 	//! The binary sections of this component, in file order.
-	/** \\brief Views the binary sections in original file order. \\return Non-owning span valid for this component's lifetime. */
+	/** \brief Views the binary sections in original file order. \return Non-owning span valid for this component's lifetime. */
 	std::span<const ComponentSection> getSections() const;
 
 	//! Component-level structural validation (index spaces, sortidx resolution,
 	//! type/declaration checks). Throws std::runtime_error on the first failure.
 	//! No linking, execution or Canonical ABI lowering.
 	/**
-	 * \\brief Validates component structure and publishes canonical type identities.
-	 * \\throws std::runtime_error on the first structural or index-space failure.
+	 * \brief Validates component structure and publishes canonical type identities.
+	 * \throws std::runtime_error on the first structural or index-space failure.
 	 */
 	void validate() const;
 	//! Builds (or returns the cached) per-sort index spaces for this component.
-	/** \\brief Builds or retrieves the cached per-sort index spaces. \\return Component index-space snapshot. */
+	/** \brief Builds or retrieves the cached per-sort index spaces. \return Component index-space snapshot. */
 	ComponentIndexSpaces buildIndexSpaces() const;
 	//! Process-wide canonical identity of a closed component-local type. Returns
 	//! kNone for an unvalidated component or an open type; use schemeId() for the
 	//! latter.
-	/** \\brief Resolves a validated local type index to its canonical identity. \\param localIndex Component-local type index. \\return Canonical TypeId, or TypeId::kNone when unavailable. */
+	/** \brief Resolves a validated local type index to its canonical identity. \param localIndex Component-local type index. \return Canonical TypeId, or TypeId::kNone when unavailable. */
 	TypeId typeId(uint32_t localIndex) const
 	{
 		return localIndex < localTypeIds.size()
@@ -120,7 +120,7 @@ struct WASMJIT_API Component : public Artifact {
 	}
 	//! Process-wide scheme identity of an open component-local type. Returns
 	//! kNone for a closed type or an unvalidated component.
-	/** \\brief Resolves a validated open type index to its scheme identity. \\param localIndex Component-local type index. \\return SchemeId, or SchemeId::kNone when unavailable. */
+	/** \brief Resolves a validated open type index to its scheme identity. \param localIndex Component-local type index. \return SchemeId, or SchemeId::kNone when unavailable. */
 	SchemeId schemeId(uint32_t localIndex) const
 	{
 		return localIndex < localSchemeIds.size()
@@ -128,19 +128,19 @@ struct WASMJIT_API Component : public Artifact {
 	}
 
 protected:
-	/** \\brief Parses the body after Artifact has consumed the preamble. \\param file Input device containing the body. \\param end Optional enclosing boundary; nullopt means end of device. */
+	/** \brief Parses the body after Artifact has consumed the preamble. \param file Input device containing the body. \param end Optional enclosing boundary; nullopt means end of device. */
 	void parseBody(Elv::Io::Device& file, std::optional<uint64_t> end) override;
 
 private:
 	//! Clears parser scratch that validate() has already published into the Store.
-	/** \\brief Releases parser scratch after its data has been published to the Store. */
+	/** \brief Releases parser scratch after its data has been published to the Store. */
 	void releaseParserAst() const;
 	//! Reads every section between the current position and `end`.
-	/** \\brief Parses all sections up to the supplied body boundary. \\param file Input device. \\param end Optional absolute end offset. \\param depth Current nested-component depth. */
+	/** \brief Parses all sections up to the supplied body boundary. \param file Input device. \param end Optional absolute end offset. \param depth Current nested-component depth. */
 	void parseSections(Elv::Io::Device& file, std::optional<uint64_t> end,
 			unsigned depth);
 	//! Dispatches one section's payload into the corresponding AST vector.
-	/** \\brief Decodes one section payload into the component AST. \\param section Section metadata and kind. \\param payload Owned section payload bytes. \\param depth Current nested-component depth. */
+	/** \brief Decodes one section payload into the component AST. \param section Section metadata and kind. \param payload Owned section payload bytes. \param depth Current nested-component depth. */
 	void parseSectionPayload(ComponentSection& section,
 			std::vector<uint8_t> payload, unsigned depth);
 };
