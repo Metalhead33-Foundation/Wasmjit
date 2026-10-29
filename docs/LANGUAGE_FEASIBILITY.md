@@ -1,9 +1,10 @@
-# Wasm Language Support — Pre-Feasibility and Full Feasibility Study Definitions
+# Wasm Language Support — Pre-Feasibility, Full Feasibility, and the Entry-Gate Readiness Audit
 
-Status: process definition / study charter (revision 1 — 2026-10-29). **This note
-defines two studies; it runs neither.** No language is evaluated here, no
-candidate is screened, and there are no verdicts. It contains **no code** and
-changes no build.
+Status: process definition / study charter (revision 2 — 2026-10-29; adds the
+entry-gate readiness audit and the engine/embedder distinction). **This note
+defines two studies and the audit that gates them; it runs none.** No language is
+evaluated here, no candidate is screened, no audit is performed, and there are no
+verdicts. It contains **no code** and changes no build.
 
 Audience: anyone asking "can I write this in language X?", anyone commissioning
 or reviewing a language-support study, and anyone tempted to add a toolchain to
@@ -14,30 +15,32 @@ question, and answering it ad hoc produces folklore: a claim from a blog post
 becomes a support promise, a successful hello-world becomes "supported", and a
 language nobody examined quietly becomes "unsupported". The fix is to define two
 **different** studies with different inputs, different costs and different
-permitted conclusions — and to keep them apart. §2 defines them; §6 and §7 are
-their protocols; §5 and §9 are the limits on what either may claim.
+permitted conclusions — and to keep them apart. §2 defines them; §6 is the
+readiness gate that must pass before either starts; §7 and §8 are their
+protocols; §5 and §10 are the limits on what either may claim.
 
 ## 1. Document map
 
 | Section | Question it answers |
 |---|---|
-| §2 | What are the two studies, and how do they differ? |
+| §2 | What are the two studies and the gate, and how do they differ? |
 | §3 | Which languages are candidates? |
 | §4 | What does any study have to evaluate? |
 | §5 | What do the colours and the kill signals mean? |
-| §6 | What exactly is a pre-feasibility / scoping study? |
-| §7 | What exactly is a full feasibility study? |
-| §8 | What does a study cost, and what is its budget? |
-| §9 | What may a study *not* claim? |
-| §10 | Plan (`LF-0…LF-3`) |
-| §11 | Evidence and test survey |
-| §12 | References |
+| §6 | What must be pinned before the scoping study can mean anything? |
+| §7 | What exactly is a pre-feasibility / scoping study? |
+| §8 | What exactly is a full feasibility study? |
+| §9 | What does a study cost, and what is its budget? |
+| §10 | What may a study *not* claim? |
+| §11 | Plan (`LF-0`, `LF-0a`, `LF-1…LF-3`) |
+| §12 | Evidence and test survey |
+| §13 | References |
 
-## 2. The two studies
+## 2. The studies and the gate
 
-A language-support question is answered in two stages, never one. The stage
-names are used consistently here and should be used by any study that cites this
-note.
+A language-support question is answered by two studies, preceded by a readiness
+gate — never in one step. The stage names are used consistently here and should
+be used by any study that cites this note.
 
 ### 2.1 Pre-feasibility / scoping study
 
@@ -47,21 +50,26 @@ candidates for deeper investigation. The study exists to **minimise future
 work**: its job is to decide what *not* to study, and to group what remains so
 that one study answers several languages at once.
 
-**Inputs.** The canonical candidate list (§3), existing knowledge of WasmJit's
-contracts (the host ABI, the import/export surface, multi-memory, shared memory,
-GC, exceptions, the safety budget), and lightweight research: toolchain
-documentation, release notes, announcement posts, issue trackers. No toolchain
-has to be installed, no module has to be compiled, and no proof of concept is
-required.
+The scoping study does not start until the **entry-gate audit** (§6, `LF-0a`)
+has pinned the engine-owned surfaces it depends on. The audit is not a language
+study and produces no verdict; it is the statement that the screen's inputs are
+stable enough to be measured against.
+
+**Inputs.** The canonical candidate list (§3), a pinned readiness snapshot (§6),
+existing knowledge of WasmJit's contracts (the host ABI, the import/export
+surface, multi-memory, shared memory, GC, exceptions, the safety budget), and
+lightweight research: toolchain documentation, release notes, announcement
+posts, issue trackers. No toolchain has to be installed, no module has to be
+compiled, and no proof of concept is required.
 
 **Required discipline.**
 
 - It must **explain its exclusions**. Every candidate that is not shortlisted
-  gets a row and a reason (§6.5).
+  gets a row and a reason (§7.5).
 - It must **avoid pretending that unverified technical assumptions are
-  established facts**. Each row carries an evidence tier (§6.4).
+  established facts**. Each row carries an evidence tier (§7.4).
 - It must **not attempt verdicts**. Green/yellow/red is a full-study output
-  (§7.5); the scoping study reports three quick-triage axes (§6.1) and, where a
+  (§8.5); the scoping study reports three quick-triage axes (§7.1) and, where a
   kill signal is already visible, a black early exit (§5.2).
 
 **Acceptance sentence.** The pre-feasibility study is done when it can say, for
@@ -79,9 +87,10 @@ language, when compiled into WebAssembly, is supported by WasmJit — and what i
 would cost to make it so.
 
 **Inputs.** Only candidates shortlisted by the pre-feasibility study, and only
-under a cluster charter (§6.8) with a token and human-hour cap (§8). The study
-does not re-open the shortlist; if it finds the cluster was misconceived, it says
-so and returns to `LF-1`.
+under a cluster charter (§7.8) with a token and human-hour cap (§9); the
+moving-target list from §6 is carried into the report as a stated limitation.
+The study does not re-open the shortlist; if it finds the cluster was
+misconceived, it says so and returns to `LF-1`.
 
 **Scope.** The full study includes, but is not limited to:
 
@@ -109,10 +118,14 @@ conversion). Develop small proof-of-concept tests that run through the
 documented embedding recipe, not through a bespoke harness.
 
 **Output.** One report per cluster: a colour verdict per
-(language, toolchain, version) (§7.5), a filled criteria table (§4), the engine
-work named and classified, and reproducible artefacts (§7.4).
+(language, toolchain, version) (§8.5), a filled criteria table (§4), the engine
+work named and classified, and reproducible artefacts (§8.4).
 
 ### 2.3 The relationship between them
+
+Both studies sit behind a readiness gate. §6's entry-gate audit pins the
+engine-owned surfaces the screen depends on; `LF-1` starts only after it reports.
+The audit is not a third column below — it is a precondition on both columns.
 
 | | Pre-feasibility / scoping | Full feasibility |
 |---|---|---|
@@ -124,11 +137,11 @@ work named and classified, and reproducible artefacts (§7.4).
 | **May conclude** | "Worth studying", "not worth studying now", "blocked" | Green / yellow / red, with the engine work named |
 | **May not conclude** | Supported/unsupported, green/yellow/red | A support promise beyond the tested versions |
 
-### 2.4 What neither study is
+### 2.4 What none of them is
 
 - **Not a support commitment.** A green verdict means "a PoC works at this
   version"; support is a project decision (`LF-3`), not a study result.
-- **Not a port.** Neither study writes product code, adds a toolchain to the
+- **Not a port.** None of them writes product code, adds a toolchain to the
   build, or changes `WasmBase/` or a backend. If an engine gap blocks a
   candidate, the study **reports** it and classifies it with
   [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §4.1; it does not fix it.
@@ -137,6 +150,9 @@ work named and classified, and reproducible artefacts (§7.4).
   language study consumes those notes, it does not restate them.
 - **Not a benchmark.** Nothing here measures performance; a supported language
   that is slow is still supported.
+- **Neither study is the entry-gate audit.** §6 audits WasmJit's own surfaces,
+  not a language. It produces the pinned snapshot the studies consume and no
+  colour verdict at all.
 
 ## 3. The candidate set
 
@@ -148,7 +164,7 @@ study, it does not start it. `LF-1` is the milestone that opens the list.
 Rules for using the list:
 
 1. **Start from the whole list, not from memory.** Every excluded entry must be
-   accounted for (§6.5).
+   accounted for (§7.5).
 2. **The unit of study is the (language, toolchain) pair.** One language may
    have several toolchains with different output (C/C++ through Emscripten vs.
    through LLVM is the textbook case), and two entries may collapse into one
@@ -156,13 +172,13 @@ Rules for using the list:
 3. **The list is a candidate set, not a support list.** An entry's presence
    implies nothing about WasmJit.
 4. **Maturity of the list entry is not evidence of the backend's maturity.** The
-   scoping study rates the latter explicitly (§6.1).
+   scoping study rates the latter explicitly (§7.1).
 
 ## 4. Evaluation criteria
 
 Every study — scoping and full — answers the same seven questions. The full
 study answers them with evidence; the scoping study approximates them on its
-three axes (§6.1) and records what it does not know.
+three axes (§7.1) and records what it does not know.
 
 | Criterion | Question to answer |
 |---|---|
@@ -178,9 +194,10 @@ How the rows are used:
 
 - **An unanswered criterion is a result, not a gap.** Write "not determined"
   and why. A guessed answer is worse than an admitted unknown.
-- **Runtime dependencies are a host-API cost, not an automatic failure.** WASI is
-  host-provided by the embedder; the engine ships no WASI implementation (a
-  recorded decision, `AASD6` in [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md)).
+- **Runtime dependencies are an embedder-side shim cost, not an automatic
+  failure.** WASI is host-provided by the embedder; the engine ships no WASI
+  implementation (a recorded decision, `AASD6` in
+  [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md)).
   A language that needs WASI therefore needs an embedder-side import surface; the
   study must name the imports and say whether they are implementable over the
   documented host boundary.
@@ -203,7 +220,7 @@ How the rows are used:
 
 | Colour | Meaning |
 |---|---|
-| **Green** | Likely to work with our existing runtime and a relatively small host API. |
+| **Green** | Likely to work with our existing runtime and a relatively small **embedder-side shim**. |
 | **Yellow** | Viable, but requires substantial runtime support, ABI work, or toolchain configuration. |
 | **Red** | Incompatible with our current goals or disproportionately expensive to support. |
 | **Black** | Meets a kill criterion / early exit: a clear signal that a full study of this language would waste tokens. |
@@ -211,7 +228,7 @@ How the rows are used:
 Rules:
 
 - A colour is a **verdict**, and only a full feasibility study may assign
-  green/yellow/red (§7.5). A scoping row must not carry one.
+  green/yellow/red (§8.5). A scoping row must not carry one.
 - **Black is the exception.** A kill signal can be observed during scoping, and
   observing one is exactly what stops a wasted study. A black row names its
   signal (`K1`…`K5`) and its evidence tier.
@@ -220,6 +237,13 @@ Rules:
   materially.
 - Every colour needs the §4 table behind it. No colour by vibe, and no colour
   from a single blog post.
+
+**Why "shim" rather than "host API".** The engine owns the hook/dispatch
+mechanism; a language's per-module glue — import names and marshalling,
+host-function registration, JS integration, a threading adapter — lives on the
+embedder's side of that seam. Green therefore means the shim is small and the
+engine needs no new surface; it does not mean the language needs no host work.
+§6.3 fixes which side owns what.
 
 ### 5.2 Kill criteria (black / early exit)
 
@@ -234,13 +258,149 @@ being bad. Any one of these is enough to stop before commissioning a full study:
 | **K4** | The toolchain cannot be obtained or used for the study (unavailable, abandoned without a usable release, licence-blocked), or its output is not inspectable | No PoC, no evidence, no verdict. |
 | **K5** | The Wasm target is not a general-purpose module at all (it only emits for a specific embedded runtime, with no import/export surface this engine can link) | It is not a candidate for this engine, regardless of the language's quality. |
 
-A kill must name the signal, the evidence tier (§6.4), the date it was checked,
+A kill must name the signal, the evidence tier (§7.4), the date it was checked,
 and **what would reverse it** (e.g. "K3 until the proposal gets an encoding").
 A kill is a **deferral with a reason**, not a judgement of the language.
 
-## 6. The pre-feasibility (scoping) study
+## 6. The entry-gate audit (the pre-pre-feasibility readiness check)
 
-### 6.1 The three quick-triage axes
+The scoping study's most consequential column is **"likely friction with
+WasmJit's design"**. That column only means something if "WasmJit's design" is
+pinned. If the calling convention, the memory model, the supported proposal set,
+the hook mechanism or the embedding API are in flux, every triage row measures a
+moving target, and the screen has to be redone when the target moves. The
+entry-gate audit exists to keep that from happening: it checks that the
+**engine-owned surfaces the screen depends on** are stable enough — documented,
+exercised and change-detectable — for the screening to mean anything.
+
+It is a readiness check, not a language study: it evaluates WasmJit, never a
+language. It is the "pre-pre-feasibility" step, and it is deliberately cheaper
+than either study.
+
+> **TL;DR.** Audit scope is limited to engine-owned surfaces: the hook/dispatch
+> mechanism, calling convention, memory model, and core proposal support. Host
+> imports/exports, JS-integration proposals, and (planned) threading are
+> embedder responsibilities via opt-in hooks and are explicitly excluded from
+> this audit.
+
+### 6.1 What "stable enough" means
+
+"Stable" here does not mean frozen forever. This is explicitly **required**
+stability, not full API/ABI stability: the audit does not ask whether every
+embedder-facing surface is final, only whether the subset the screen cites is
+pinned well enough to cite. The API/ABI milestone
+([`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §2) remains the authority on the
+full freeze; the audit consumes its status, and does not replace it.
+
+A surface is stable enough for the scoping study when three things hold:
+
+| Criterion | Meaning |
+|---|---|
+| **Documented** | A named note states the surface and the contract it imposes. |
+| **Exercised** | A test, fixture or PoC uses it, so a change is observable rather than theoretical. |
+| **Change-detectable** | The API/ABI milestone, a changelog, a self-containment/install test or an ABI diff would tell us that it moved. |
+
+A documented surface with no exercise is a claim; an exercised surface with no
+document is folklore. Neither passes. The audit turns the judgement into a
+state:
+
+| State | Meaning | Effect on `LF-1` |
+|---|---|---|
+| **Pinned** | Documented, exercised and change-detectable at a named commit. | May start. |
+| **Documented, moving** | Documented and exercised, but a change is known or planned. | May start; affected triage rows are marked **provisional**, and the audit is repeated after the change. |
+| **Unpinned** | Undocumented, unexercised, or no way to detect a change. | Blocks `LF-1` until resolved, or until a dated decision explicitly waives the row. |
+
+"Pinned" is a statement about the audit date, not a promise about the future.
+That is why §6.5 defines when the audit must be repeated.
+
+### 6.2 The audit rows (`RG1`–`RG6`)
+
+| ID | Surface | What must be pinned | Why the screening depends on it | Evidence to cite |
+|---|---|---|---|---|
+| **RG1** | **Calling convention and ABI** | The `VMContext*` arg0 convention, `Callable`, the multi-result buffer, `v128`/reference passing, and the trap/exception boundary. | "Friction with our ABI" is a per-language question only if the target ABI is fixed. | [`ABI.md`](ABI.md), the host-ABI tests |
+| **RG2** | **Core proposal support** | GC, exceptions, threads (**shared memory + atomics under the current single-agent contract**), SIMD, reference types, multi-memory and memory64: implemented / partial / upstream-blocked, each with its owning note and status. | Each one flips languages between colour bands — a GC language is red if GC is not pinned; a threading runtime is yellow if only single-agent threads are. | The proposal notes, the table in [`README.md`](../README.md) "Proposal notes" |
+| **RG3** | **Hook/dispatch mechanism** | How the opt-in hooks are registered (`HostBridge`, the JS-integration seam), and whether the `ImportResolver` → dispatcher → native-import path and its shape are settled. | A language's imports and exports are routed through this. If its shape moves, the answer to "how does it call a host function?" moves with it. | [`ABI.md`](ABI.md) "External host adapter", [`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md), the host-import tests |
+| **RG4** | **Memory model** | How multi-memory and shared memory are exposed to the embedder, and how much layout control the embedder gets: memory indices, heap base, stack, GC heap, thread-local storage. | The full study's ideal outcome is some layout decision power. The scoping study can judge friction only if the current engine/embedder split is pinned. | [`proposals/MULTI_MEMORY.md`](proposals/MULTI_MEMORY.md), [`proposals/THREADS.md`](proposals/THREADS.md), [`SAFETY.md`](SAFETY.md) §2.3 |
+| **RG5** | **Embedding API** | Registering host functions, instantiating, reading and writing linear memory, and calling exports. Is it versioned, and what is stable versus explicitly planned? | The PoC bar and the "small embedder-side shim" are measured against this API. | [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §2/§4/§7, [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §2.2 |
+| **RG6** | **Breaking-change detection** | A changelog or tests that cover the embedding API: public-header self-containment, an out-of-tree consumer, an ABI diff, and the default suite green. | Without detection, "stable" is an assertion, not a property. | [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §10, [`TESTING.md`](TESTING.md) |
+
+**This note does not run the audit.** The existing measurements are inputs to
+`LF-0a`, not its result: [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §7.5
+reports two of four gates passed; `EMBEDDING_SURFACE.md` `ES-1…ES-7` are
+planned; and its §10 records the public-header self-containment, install and
+ABI-diff tests as absent. A reader must not infer that an `RG` row is `Pinned`
+merely because a document exists. **A row with no evidence is `Unpinned`, not
+"assumed fine".**
+
+### 6.3 Explicitly out of scope
+
+The audit is deliberately narrower than the question "is the whole host-import
+surface frozen?". Explicitly outside it are:
+
+> **Out of scope:** the actual set of host imports a given module binds to,
+> JS-integration specifics, and — for now — multithreading.
+
+| Excluded | Why | Where it is handled instead |
+|---|---|---|
+| The actual host imports a module binds to | The screen needs the **hook/dispatch mechanism** pinned, not a frozen catalogue of `env.*` names. A module's import list is a per-language/per-toolchain finding. | `LF-1` triage, `LF-2` PoC |
+| Host exports and their contents | Same reason on the export side. | `LF-2` |
+| JS-integration specifics | An embedder responsibility on the far side of `ImportResolver`/`Callable`/`HostBridge`; the engine deliberately does not implement a JS engine. | [`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) |
+| (Planned) multithreading | Not purely settled yet: it is a candidate for the same opt-in-hook treatment, and the current contract is single-agent. The audit pins the *single-agent* proposal support; a future multi-agent hook has its own shape. | [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6, [`THREADSAFETY.md`](THREADSAFETY.md) §3.1 |
+| Language features, toolchains, colour verdicts | Not engine-owned surfaces. | `LF-1`/`LF-2` |
+| Performance | Not a readiness question. | — |
+
+**Engine-owned** means the dispatcher, the hook-registration mechanism, the
+calling convention, the memory model and core proposal support. **Embedder-owned**
+means the actual imports and exports a module binds to, the JS integration and
+the threading adapter. The audit checks the first; `LF-1`/`LF-2` study the second
+as it applies to one language.
+
+The distinction is the point: **host imports/exports are embedder
+responsibilities via opt-in hooks, and they are explicitly excluded.** "The
+mechanism is pinned" is the audit; "this module's import list is available" is a
+study result.
+
+### 6.4 What the audit produces
+
+| Output | Content |
+|---|---|
+| **Readiness report** | One row per `RG1`–`RG6`: state, evidence path/command, commit, date. |
+| **Pinned snapshot** | The commit/branch, the gate status from [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §7.5, and the proposal-status table `LF-1` will cite. |
+| **Moving-targets list** | Every `Documented, moving` row, what is expected to change, and what settles it. |
+| **Not-audited list** | The §6.3 exclusions, repeated so no reader mistakes them for checked. |
+
+It contains no code, no build change and **no language assessment**. A passing
+audit does not mean WasmJit supports any language; it means the screen's inputs
+are stable enough to begin.
+
+### 6.5 When the audit must be repeated
+
+The audit expires when an engine-owned surface moves:
+
+- a frozen surface in [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §2.2 changes;
+- a core proposal's status flips (e.g. threads move beyond single-agent, or a
+  class-C encoding lands);
+- an `ES-*` embedding stage lands, or the umbrella-header/version policy changes;
+- the hook registration shape changes (`HostBridge`, `ImportResolver`, the
+  dispatch path);
+- a backend is added, or the core ↔ backend contract in
+  [`LAYERING.md`](LAYERING.md) §4 changes.
+
+Re-running is `C0`/`C1` work (§9), which is the reason it can afford to be
+honest instead of aspirational.
+
+### 6.6 Why this is not part of the scoping study
+
+The scoping study consumes the readiness statement; the audit produces it.
+Merging them would let a moving ABI hide inside a triage row — the row would say
+"medium friction" without saying "as of a contract that may change next week".
+The audit also has no candidate list and no language vocabulary: its subject is
+the engine, and its gate is `LF-0a`, not `LF-1`. Passing it is necessary for
+`LF-1`; it is not sufficient for any language verdict.
+
+## 7. The pre-feasibility (scoping) study
+
+### 7.1 The three quick-triage axes
 
 For each language/toolchain, give a short verdict **on three axes only**:
 
@@ -252,39 +412,39 @@ For each language/toolchain, give a short verdict **on three axes only**:
 
 The axes are deliberately **not** combined into a score. "Production-ready but
 high friction" and "experimental but low friction" are different risks, and the
-clustering decision (§6.6) needs both signals, not their average.
+clustering decision (§7.6) needs both signals, not their average.
 
-### 6.2 Required outputs
+### 7.2 Required outputs
 
 The study must produce all five, in this order:
 
 1. **A triage table** — per language: the likely bottleneck, the evidence tier,
-   and the estimated study cost (tokens + human hours). Schema in §6.3.
+   and the estimated study cost (tokens + human hours). Schema in §7.3.
 2. **A dependency/abstraction map** — which languages collapse into the same
-   study. Rules in §6.6.
-3. **Trigger conditions** — when a full study is worth running. §6.7.
+   study. Rules in §7.6.
+3. **Trigger conditions** — when a full study is worth running. §7.7.
 4. **A study charter per cluster** — scope, questions to answer, what
-   "feasible" means for the engine, and a token budget cap. Schema in §6.8.
+   "feasible" means for the engine, and a token budget cap. Schema in §7.8.
 5. **An explicit "don't study" list** — with a reason and a reversal trigger.
-   §6.9.
+   §7.9.
 
-### 6.3 Triage-table schema
+### 7.3 Triage-table schema
 
 | Column | Required content |
 |---|---|
 | **Language** | The language. |
 | **Toolchain** | The Wasm toolchain, because the pair is the unit of study. |
 | **Likely bottleneck** | The single most likely architectural blocker given our dispatcher, e.g. Go's goroutine scheduler + GC; C#/Java's GC + JIT assumptions; Kotlin/Java's class-library surface; Ada/Cobol's runtime libs. One sentence, evidence-tiered. |
-| **Axis 1/2/3** | The quick triage of §6.1. |
-| **Evidence tier** | `E1`/`E2`/`E3` per §6.4. |
-| **Study cost** | A cost tier (§8) plus the estimate in tokens and human hours. |
-| **Cluster** | The cluster ID it belongs to (§6.6), or "own cluster". |
-| **Trigger** | The condition from §6.7 that would start the full study. |
+| **Axis 1/2/3** | The quick triage of §7.1. |
+| **Evidence tier** | `E1`/`E2`/`E3` per §7.4. |
+| **Study cost** | A cost tier (§9) plus the estimate in tokens and human hours. |
+| **Cluster** | The cluster ID it belongs to (§7.6), or "own cluster". |
+| **Trigger** | The condition from §7.7 that would start the full study. |
 
 **No colour column.** Colour is a full-study output; the only allowed marker is
 a black kill with its `K` id (§5.2).
 
-### 6.4 Evidence tiers
+### 7.4 Evidence tiers
 
 | Tier | Name | What it is | May it be the sole basis for a decision? |
 |---|---|---|---|
@@ -296,7 +456,7 @@ Every triage row carries a tier. A sentence that rests on `E3` must be phrased
 as a hypothesis ("likely", "expected to", "unconfirmed"), and an exclusion that
 rests on `E3` must say so and name its reversal trigger.
 
-### 6.5 Exclusions must be explained
+### 7.5 Exclusions must be explained
 
 - The triage table must cover the **whole** canonical list, including the
   entries that are excluded.
@@ -307,7 +467,7 @@ rests on `E3` must say so and name its reversal trigger.
 - Silent drops are the failure mode this rule exists to prevent: a language that
   vanishes from the list reads as "examined and rejected" to the next reader.
 
-### 6.6 Clustering: one study per *blocker*, not per language
+### 7.6 Clustering: one study per *blocker*, not per language
 
 The map groups languages whose full study would answer the same questions. The
 cluster is the study unit; the languages inside it are candidates. The table
@@ -341,7 +501,7 @@ Rules:
   study — `LF-2` must consume it, cite it, and spend its budget on what it does
   not answer.
 
-### 6.7 Trigger conditions
+### 7.7 Trigger conditions
 
 A full study on a cluster is worth running only when **all three** hold:
 
@@ -355,7 +515,7 @@ All three are necessary; none is sufficient on its own. A trigger is recorded
 with its date and its requester, so a deferred study can be revisited without
 redoing the triage.
 
-### 6.8 Per-cluster study charter
+### 7.8 Per-cluster study charter
 
 Every cluster recommended for a full study gets a charter with exactly these
 fields:
@@ -366,7 +526,7 @@ fields:
 | **Candidates** | The languages/toolchains and pinned versions. |
 | **Questions to answer** | At minimum the §2.2 list, specialised to the cluster. |
 | **What "feasible" means** | The concrete PoC bar below, not an adjective. |
-| **Budget cap** | Token cap and human-hour cap (§8), plus the stop rule. |
+| **Budget cap** | Token cap and human-hour cap (§9), plus the stop rule. |
 | **Deliverable** | One report, the criteria table, the PoCs and their build commands. |
 | **Kill/stop conditions** | What ends the study early, and what it reports then. |
 | **Owner and date** | Who runs it, when it is reviewed. |
@@ -386,7 +546,7 @@ The **minimum bar for "feasible"** (a charter may raise it, never lower it):
    it per [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §4.1, and does not
    implement it.
 
-### 6.9 The "don't study" list
+### 7.9 The "don't study" list
 
 The fifth output is an explicit list of languages the project will **not** study
 now. An entry has the same shape as a kill:
@@ -399,18 +559,18 @@ The row shows the **shape** of an entry, not a result of this note. Like a kill,
 a "don't study" is a **deferral with a reversal trigger**, not a statement that
 the language is bad.
 
-## 7. The full feasibility study
+## 8. The full feasibility study
 
-### 7.1 Entry conditions
+### 8.1 Entry conditions
 
 - The candidate (or cluster) is on the `LF-1` shortlist.
-- Its charter (§6.8) is approved, including the caps.
+- Its charter (§7.8) is approved, including the caps.
 - A requester exists (`T3`).
 
 If any of the three is missing, the work is scoping that leaked, not a full
 study. Do not start it.
 
-### 7.2 Questions it must answer
+### 8.2 Questions it must answer
 
 The §2.2 scope, expanded into the concrete questions a report must answer:
 
@@ -422,10 +582,10 @@ The §2.2 scope, expanded into the concrete questions a report must answer:
 | **Multi-memory** | Does the runtime assume one memory? Can it address a second one? Which memory index holds the stack, the heap, static data and the GC heap? Can the embedder influence any of that, or does the runtime bake it in? The ideal outcome is **some level of decision power over the memory layout**, and the report must say how much. |
 | **Shared memory** | Does the runtime require a shared memory, and with what maximum? Does it require atomics that only make sense with multiple agents? Does it need thread-local storage or a waiter table? If it does, the candidate meets the current single-agent contract ([`proposals/THREADS.md`](proposals/THREADS.md), [`THREADSAFETY.md`](THREADSAFETY.md) §3.1) only if it also runs without them. |
 | **Initialisation** | What runs before the first export — constructors, `__wasm_call_ctors`, a `_start`, runtime init that allocates or spawns? Does the module need a host-provided environment before it can be instantiated? |
-| **Runtime services** | Which runtime services must the host supply: a GC, an allocator, exception machinery, a scheduler, clocks, randomness, filesystem or WASI? Each is a host-API cost, and each must be matched to an existing hook or an explicitly missing one. |
+| **Runtime services** | Which runtime services must the host supply: a GC, an allocator, exception machinery, a scheduler, clocks, randomness, filesystem or WASI? Each is an embedder-side shim cost, and each must be matched to an existing hook or an explicitly missing one. |
 | **Build and output** | Which compiler/flags produce the module, which target features are enabled, and what does the emitted module actually import and export? |
 
-### 7.3 Method and artefacts
+### 8.3 Method and artefacts
 
 1. **Consult compiler documentation and runtime specifications.** Pin the
    version, the target triple and the spec revision/date.
@@ -434,7 +594,7 @@ The §2.2 scope, expanded into the concrete questions a report must answer:
    already requires) and record the command. A report that only cites docs is
    `E2`, not `E1`.
 3. **Develop small proof-of-concept tests.** Build the smallest module that
-   passes the §6.8 bar, plus one that fails in the most interesting way, and run
+   passes the §7.8 bar, plus one that fails in the most interesting way, and run
    both through the documented embedding recipe
    ([`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §2/§6.4, [`ABI.md`](ABI.md)),
    not a bespoke harness.
@@ -442,7 +602,7 @@ The §2.2 scope, expanded into the concrete questions a report must answer:
    command, run transcript, runtime-spec revision. A finding without a
    reproducible artefact is an opinion.
 
-### 7.4 Evidence a verdict must carry
+### 8.4 Evidence a verdict must carry
 
 | Evidence | Requirement |
 |---|---|
@@ -453,10 +613,11 @@ The §2.2 scope, expanded into the concrete questions a report must answer:
 | **Criteria** | A filled §4 table; "unknown" is allowed only with a reason. |
 | **Work** | For yellow/red, the engine work named and classed per [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §4.1. |
 
-### 7.5 Verdict rules
+### 8.5 Verdict rules
 
-- **Green**: the §6.8 bar passes, the host API needed is small, and the §4 table
-  has no conflict with the intended use.
+- **Green**: the §7.8 bar passes, the embedder-side shim needed is small and the
+  engine needs no new surface, and the §4 table has no conflict with the intended
+  use.
 - **Yellow**: the bar passes only with specified engine work, ABI work or
   toolchain configuration; the report names that work, its class (A–E), and what
   closing it would buy.
@@ -470,14 +631,14 @@ The §2.2 scope, expanded into the concrete questions a report must answer:
 - **"It compiles" is not feasible.** "It links and runs through the host ABI" is
   the bar.
 
-### 7.6 Budget and stop rule
+### 8.6 Budget and stop rule
 
-- The charter's token and human-hour caps are **hard caps** (§8).
+- The charter's token and human-hour caps are **hard caps** (§9).
 - When a cap is hit, the study stops and reports **"unknown — cap hit"**, with
   what remains. It does not extrapolate.
 - Overrunning the cap requires a new charter decision, not a longer report.
 
-### 7.7 What a study may change in the tree
+### 8.7 What a study may change in the tree
 
 - **Nothing, by default.** No `WasmBase/` or backend change, no build change, no
   new dependency in the product.
@@ -487,7 +648,7 @@ The §2.2 scope, expanded into the concrete questions a report must answer:
 - If the study finds a genuine engine gap, it writes it down and classifies it
   (`API_ABI_STABILITY.md` §4.1). Fixing it is `LF-3` work, not feasibility work.
 
-## 8. Cost model and budgets
+## 9. Cost model and budgets
 
 Two currencies, always reported together: **tokens** (the AI-assisted research
 and writing budget) and **human hours** (review, toolchain wrangling, PoC
@@ -511,7 +672,7 @@ compete with the current milestone's work
 ([`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §2). That is why `LF-2` is gated
 on `LF-1` and on a named requester (`T3`).
 
-## 9. What a study may not claim
+## 10. What a study may not claim
 
 | Forbidden claim | Why |
 |---|---|
@@ -519,38 +680,41 @@ on `LF-1` and on a named requester (`T3`).
 | **"Language X does not work."** from scoping evidence | `E2`/`E3` evidence cannot establish a negative; only a full study with a failed PoC, or a named kill signal (`K1`–`K5`), can. |
 | **A support status derived from a blog post, a README badge, or a demo.** | The demo proves someone shipped *a* module; it does not prove our ABI, our memory model or our import surface. |
 | **A toolchain recommendation to embedders.** | The project has no supported language list yet; a study is internal evidence, not an endorsement. |
-| **A silent exclusion.** | Every exclusion needs a row and a reason (§6.5). |
+| **A silent exclusion.** | Every exclusion needs a row and a reason (§7.5). |
 | **A verdict without a pinned version.** | Both the toolchain and the engine move; an unpinned verdict expires before it is written. |
-| **"It compiles, therefore it is feasible."** | Compiling is not linking, and linking is not running under the host ABI (§7.5). |
-| **An engine change made to help the study pass.** | That is `LF-3` work under the milestone rules, not feasibility work (§7.7). |
+| **"It compiles, therefore it is feasible."** | Compiling is not linking, and linking is not running under the host ABI (§8.5). |
+| **An engine change made to help the study pass.** | That is `LF-3` work under the milestone rules, not feasibility work (§8.7). |
 
-## 10. Plan
+## 11. Plan
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **`LF-0` — Define the studies** | `✅` This note: the vocabulary, the two protocols, the colour/kill codes, the outputs, the budgets. | — | This note is reviewed and linked from `README.md`, `API_ABI_STABILITY.md` §12 and `AGENTS.md`. |
-| **`LF-1` — Pre-feasibility / scoping study** | Screen the canonical list; triage, cluster, trigger, charter, and list what is not studied. **Not started.** | `LF-0` | A triage table over the whole list (every row evidence-tiered), a dependency/abstraction map, trigger conditions, one charter per recommended cluster, and a don't-study list. **No green/yellow/red verdicts**, black kills only. |
-| **`LF-2` — Full feasibility studies** | One study per chartered cluster, using the §7 protocol. **Not started.** | `LF-1` | One report per cluster: filled §4 table, colour verdict per pinned version, reproducible PoCs, budget respected, engine work named and classed. |
+| **`LF-0` — Define the studies and the gate** | `✅` This note: the vocabulary, the two protocols, the entry-gate audit, the colour/kill codes, the outputs, the budgets. | — | This note is reviewed and linked from `README.md`, `API_ABI_STABILITY.md` §12 and `AGENTS.md`. |
+| **`LF-0a` — Entry-gate readiness audit** | Audit `RG1`–`RG6` (§6): state each engine-owned surface `Pinned` / `Documented, moving` / `Unpinned`, with evidence and a commit. **Not started.** | `LF-0` | Every row has a state, evidence and a date; the moving-targets list exists; no row is `Unpinned` (or a dated waiver says why). |
+| **`LF-1` — Pre-feasibility / scoping study** | Screen the canonical list; triage, cluster, trigger, charter, and list what is not studied. **Not started.** | `LF-0a` | A triage table over the whole list (every row evidence-tiered), a dependency/abstraction map, trigger conditions, one charter per recommended cluster, and a don't-study list. **No green/yellow/red verdicts**, black kills only. |
+| **`LF-2` — Full feasibility studies** | One study per chartered cluster, using the §8 protocol. **Not started.** | `LF-1` | One report per cluster: filled §4 table, colour verdict per pinned version, reproducible PoCs, budget respected, engine work named and classed. |
 | **`LF-3` — The support decision** | Decide which, if any, language/toolchain receives engine work; classify that work. **Not a study.** | `LF-2` | A milestone decision, not a commit: each follow-up item has a class per [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §4.1 and a gate it touches. |
 
-Ordering: `LF-1` is a prerequisite for every `LF-2` charter; `LF-3` may reject
-all of them, and that is a successful outcome. **`LF-0` is this note. `LF-1` and
-`LF-2` have not been started, and nothing here may be read as their result.**
+Ordering: `LF-0a` gates `LF-1`, and `LF-1` is a prerequisite for every `LF-2`
+charter; `LF-3` may reject all of them, and that is a successful outcome.
+**`LF-0` is this note. `LF-0a`, `LF-1` and `LF-2` have not been started, and
+nothing here may be read as their result.**
 
-## 11. Evidence and test survey
+## 12. Evidence and test survey
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Automated test for either study | **Absent by design** | The outputs are documents and PoC artefacts, not assertions in the suite. |
+| Automated test for either study or the audit | **Absent by design** | The outputs are documents, PoC artefacts and a readiness report, not assertions in the suite. |
+| Entry-gate audit (`LF-0a`) | **Not run** | Its evidence is the readiness report; no audit exists yet, so no `RG` row has a state. |
 | `[docs]` structural lint | Covers `docs/proposals/` only | This note is not linted (like the other top-level notes); its structure is kept by review. |
 | Language-feasibility PoC tests | **None exist** under this note's definition | `LF-2` produces them under a charter; promotion to the default suite is a separate decision. |
 | AssemblyScript test modules | **Exist** (`Test/wasm/*.ts`, built at test time) | Harness evidence for strings, arrays and native-import interop — input to a future `LF-2`, not a study. |
 | Canonical candidate list | **Linked, not fetched** | `LF-1` is the first milestone that opens it. |
 
 Reading: nothing in the default suite changes when a study is commissioned. The
-reviewable artefact is the study report itself, and its evidence rules are §7.4.
+reviewable artefact is the study report itself, and its evidence rules are §8.4.
 
-## 12. References
+## 13. References
 
 - [`appcypher/awesome-wasm-langs`](https://github.com/appcypher/awesome-wasm-langs) —
   the official / canonical candidate list for the scoping study. **Linked, not
@@ -559,6 +723,10 @@ reviewable artefact is the study report itself, and its evidence rules are §7.4
   milestone, the gap classes that a "yellow" verdict must use, and the recorded
   non-goals (`AASD6`: no text format, no interpreter, no JS engine, no WASI
   implementation) that feed the kill criteria.
+- [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §2.2/§7.5 and
+  [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §6–§7/§10 — the frozen surfaces,
+  the per-gate status, the header/version surface and the test gaps that
+  `RG1`–`RG6` audit (§6.2).
 - [`ABI.md`](ABI.md) — the `VMContext*` calling convention, the native-import
   surface, cross-module imports, and the QVM "Design Philosophy" behind
   "intended use".
@@ -569,9 +737,15 @@ reviewable artefact is the study report itself, and its evidence rules are §7.4
   [`THREADSAFETY.md`](THREADSAFETY.md) §3.1 — one instance per module, many
   agents as the accepted direction, and the single-agent contract a language
   runtime is evaluated against.
+- [`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) and
+  [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6 — why JS
+  integration and planned multithreading are embedder-side opt-in hooks, and
+  therefore out of scope for the audit (§6.3).
+- [`LAYERING.md`](LAYERING.md) §4 — the core ↔ backend contract whose change
+  re-opens the audit (§6.5).
 - [`proposals/MULTI_MEMORY.md`](proposals/MULTI_MEMORY.md) — multiple memories
   are implemented (`MM-1…MM-4`), which is what makes the memory-layout questions
-  in §7.2 answerable at all.
+  in §8.2 answerable at all.
 - [`proposals/THREADS.md`](proposals/THREADS.md) — shared memory and atomics are
   implemented; multi-agent execution is not (`TD9`/TH-5).
 - [`proposals/GC.md`](proposals/GC.md) and

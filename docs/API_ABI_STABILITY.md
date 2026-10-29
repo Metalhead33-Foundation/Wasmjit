@@ -118,9 +118,10 @@ completing WebAssembly. In particular:
   or a system-wide install (those stay tracked in [`README.md`](../README.md)).
 - **No source-language support requirement.** The language-support studies are
   only *defined* in [`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md): the
-  pre-feasibility screen (`LF-1`) and the full studies (`LF-2`) have not been
-  run, no language is supported or rejected, and no gate waits on either. A
-  `.wasm` module is the supported input, whoever produced it.
+  entry-gate readiness audit (`LF-0a`), the pre-feasibility screen (`LF-1`) and
+  the full studies (`LF-2`) have not been run, no language is supported or
+  rejected, and no gate waits on any of them. A `.wasm` module is the supported
+  input, whoever produced it.
 - **No performance target.** `SIMD-L8`'s measured 4.10 ns per `v128` op and the
   deliberately unbuilt batched path (`D4`) are diagnostics, not gates.
 - **No new code in this note.** The study reads the tree; it does not change it.
@@ -568,9 +569,10 @@ honest distinction rather than a green light.
   for the one class-E family this note pins out of scope (§5.3), and the
   per-backend threading findings behind G3.
 - [`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md) — the definitions of the
-  pre-feasibility (scoping) and full feasibility studies for source languages
-  compiled to WebAssembly. Definitions only: neither study has been run, no
-  language is assessed, and no gate here waits on `LF-1`/`LF-2`.
+  entry-gate readiness audit and the pre-feasibility (scoping) and full
+  feasibility studies for source languages compiled to WebAssembly. Definitions
+  only: none of them has been run, no language is assessed, and no gate here
+  waits on `LF-0a`/`LF-1`/`LF-2`.
 - [`SAFETY.md`](SAFETY.md) §2.4/§3.1 — traps vs `abort`, and the deliberate
   limitations AAS-1 must publish.
 - [`THREADSAFETY.md`](THREADSAFETY.md) §8–§10 — the supported embedding model.
