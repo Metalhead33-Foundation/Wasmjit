@@ -99,14 +99,16 @@ form, instruction set and component builtins are not a stable target.
   spawn/join are absent.
 - **Tests.** Raw-binary fixtures cover a shared global with
   `global.atomic.rmw.add`/`global.atomic.get`, a shared table with
-  `table.atomic.set`/`get`, `sharecomptype`, and `(ref null (shared any))`.
-  The 35 opcodes decode and execute in the single-agent model.
+  `table.atomic.get`, `sharecomptype`, `(ref null (shared any))`, and the
+  sharedness validation rule (a shared struct field, global and table must name a
+  shared reference; a shared numeric global is still accepted). The 35 opcodes
+  decode and execute in the single-agent model.
 
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| SET1 | **Shared annotations are not fully validated.** Table/global/segment/shared-comptype/shared-ref flags decode, but shared-to-shared restrictions on every referenced item (and shared tags) are not enforced. | `WasmValidator.cpp`; `WasmType.hpp`. | Medium |
+| ~~SET1~~ | ~~**Shared annotations are not fully validated.**~~ **Done (SET-1, 2026-10-29):** `Validator::validateModule` enforces "a shared item may refer only to shared items" for shared function/struct/array types, shared globals and shared tables — the reference must carry the shared prefix (a bare shorthand such as `externref`/`funcref` never does), numeric values are trivially shareable. *Shared tags* remain: the tag attribute byte has no shared flag in the encoding this engine implements, so there is nothing to validate yet (and guessing one is exactly what SETD1 refuses). | `WasmBase/WasmValidator.cpp`; `Test/main.cpp` (`shared annotations are validated against every referenced type`) | Closed (tags conditional on an encoding) |
 | SET2 | **No shared GC heap / multi-mutator collection.** Atomically accessed numeric fields are tear-free; reference-slot exchanges are pointer-atomic but do not yet run the GC retain/release write barrier, so reference-typed atomic fields are not advertised as leak-safe. The heap remains single-mutator. | `WasmGcHeap.*`; `LibjitOpcodeDispatcher.cpp` (`*Atomic*`); `THREADS.md` TH-5. | High (deferred) |
 | SET3 | **No managed waitqueue.** `0x68` is currently `AbstractHeapType::Cont`; the working draft's `waitqueue` type needs a collision-free assignment. | `WasmType.hpp`; `THREADS.md`. | High |
 | SET4 | **No thread-local globals.** `GlobalType` has `isShared` but no `thread_local` storage. | `WasmType.hpp`; `WasmModuleInstance` globals. | High |
@@ -138,7 +140,7 @@ has a usable stopping point.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **SET-1 — Shared annotations** | ◑ Table/global/element/data flags, `sharecomptype`, shared heap refs and sharedness-aware matching/validation are in. Full shared-to-shared restriction checking and shared tags remain. | SET1 | Shared table/global/GC type decodes; shared/unshared refs do not subtype. Still open: every referenced-item restriction. |
+| **SET-1 — Shared annotations** | ✅ **Done 2026-10-29.** Table/global/element/data flags, `sharecomptype`, shared heap refs, sharedness-aware matching, and the shared-to-shared restriction on every referenced item (type fields/params/results, globals, tables). Shared *tags* stay open only because the encoding has no shared flag to read. | SET1 | Done: shared/unshared refs do not subtype, and a shared type/global/table that names an unshared reference is rejected at the load boundary (`shared annotations are validated against every referenced type`). |
 | **SET-2 — Multi-agent substrate** | ◑ Host-side: Store/type-intern/GC/string locks and per-agent trap/exception/tail-call state (TRAP-6 done). Missing: multi-mutator GC and a public agent API. The stack-switching A/B continuations are execution contexts, not agents, and do not close this row. **Direction (2026-10-25):** many agents on the *one* module instance is the accepted target; multiple instances are ruled out, and concurrent compilation is rejected — see [`../MULTI_AGENT_FEASIBILITY.md`](../MULTI_AGENT_FEASIBILITY.md) §2.3 and [`../THREADSAFETY.md`](../THREADSAFETY.md) §3.1–§3.2. | SET6 | Host threads do not corrupt the Store; two wasm agents still wait for TH-5. |
 | **SET-3 — Shared GC atomics** | ✅ 35 opcodes `0x4F–0x71` plus `ref.i31_shared`, with ordering and natural-alignment checks, all lowered through `wasm_atomic_*`. | SET2 | Done for the single-agent model: global/table/struct/array atomic get/set/RMW/cmpxchg execute. |
 | **SET-4 — TLS and waitqueues** | Add `thread_local` globals and the `waitqueue`/wait/notify family (needs a collision-free `0x68` assignment). | SET3, SET4 | A thread-local counter and a managed wait/notify round-trip pass. |
@@ -158,6 +160,7 @@ has a usable stopping point.
 | `struct.atomic.*` / `array.atomic.*` | 5 + 5 assertions | 0 | — | GC field/element atomic get/set |
 | host threads (4×8 parses/instantiates) | 1 assertion | 0 | — | concurrent Store/type/GC use does not corrupt |
 | `sharecomptype` / shared heap ref | 5 + 6 assertions | 0 | — | shared type and `(ref null (shared any))` |
+| sharedness validation (SET-1) | 9 assertions | 0 | — | a shared struct field, global and table must name a shared reference; a shared numeric global is accepted |
 | full suite, default / strict | 9265 assertions / 352 cases | 0 | — | no regression |
 
 Reading: annotation decoding and the working-draft atomics are green in the

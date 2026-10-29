@@ -271,8 +271,8 @@ verdicts can be re-checked without re-deriving them.
 
 Built out-of-source (`build/AasFinal` for the current numbers) with
 `env MAKE=/usr/bin/make /usr/bin/make -j16 QMAKE=/usr/bin/qmake6` → **exit 0**.
-Suite (§11 for the full table): default run **11,377 assertions / 472 test
-cases, all passing**; non-spec subset 10,999 / 283; the proposal-documentation
+Suite (§11 for the full table): default run **11,392 assertions / 474 test
+cases, all passing**; non-spec subset 11,014 / 285; the proposal-documentation
 lint `[docs]` 720 assertions. The documented negative-module measurement is
 **2,382 / 2,382** binary commands handled
 ([`VALIDATION.md`](VALIDATION.md) "Measured coverage", 2026-10-18; opt-in via
@@ -340,7 +340,9 @@ the renamed `NULL_JIT_VALUE_DIAGNOSIS.md`. There are also **34 notes in
 `README.md` proposal table's completeness estimate is **22 of 34 rows at 100%**,
 with the sub-100 rows concentrated exactly where this study expects them: threads
 (80%, 85%, 55%), stack switching (85%), numeric/FP16 (70%), the upstream-blocked
-proposals (0–10%), and JS integration (0% by design). Each note's §7 plan remains
+proposals (0–10%), and JS integration (whose row now reads "engine seam 100% ·
+JS engine external" — the engine-side obligations are complete and the JS engine
+is the embedder's, by decision). Each note's §7 plan remains
 the authoritative per-item status.
 
 ## 7. How close are we, gate by gate
@@ -485,7 +487,7 @@ are omitted; this is deliberately not a second copy of those tables.
 | `proposals/GC.md` `C7`, `H3`, `H4`, `H7` | Budget refusal, O(n) cast matching, `i31` reinterpretation, ad-hoc `Value::kind` | A/B | G2 | Contained follow-ups. |
 | `proposals/NUMERIC_PROPOSALS.md` `NUM3`, `NUM4`, `NUM7` | No `f16` type, opcodes or fixtures | A (+B for the lane shape) | G2 | The textbook "new type + new opcodes" addition G2 permits. |
 | `proposals/SHARED_EVERYTHING_THREADS.md` `SET3`, `SET4`, `SET5` | No waitqueue (`0x68` collides with `cont`), no thread-local globals, no lifecycle builtins | C/A/D | G2 | A waitqueue needs an encoding; TLS is additive but single-agent; lifecycle is deferred. |
-| `proposals/SHARED_EVERYTHING_THREADS.md` `SET1` | Shared-to-shared restriction checks incomplete | A | G2 | Validation rules only. |
+| `proposals/SHARED_EVERYTHING_THREADS.md` `SET1` | Shared-to-shared restriction checks incomplete | A | G2 | **Closed 2026-10-29:** a shared type/global/table must name a shared reference (`shared annotations are validated against every referenced type`); shared tags wait on an encoding. |
 | `proposals/SHARED_EVERYTHING_THREADS.md` `SET2`, `SET6`; `THREADS.md` `T9`; `ARA5` | Multi-mutator GC, agent API, two-agent tests | **D (E if in scope)** | G2 | The §5.3 boundary. Out of the milestone by decision. |
 | `proposals/THREADS.md` `T5` | `wait`/`notify` on unshared memory accepted | D | G2 | Documented deviation matching the curated suite. |
 | `proposals/STACK_SWITCHING.md` `SS4`, `SSD3` | Cross-provider switch rejected; wide A/B implementation | B | G2/G3 | A backend emits the documented calls; it never implements a provider. |
@@ -498,7 +500,7 @@ are omitted; this is deliberately not a second copy of those tables.
 | `proposals/MEMORY_CONTROL.md` `MC4`, `MC5` | Protection/mappable/virtual; BYOB window | D | G2 | Design space / web API surface. |
 | `proposals/JS_INTEGRATION.md` `JS1`, `JS3`, `JS4`, `JS6`, `JS8` | No host identity contract, `wasm:` policy, JS binding, loader, JS tests | D | G2 | The embedder's side of the boundary. |
 | `proposals/JS_INTEGRATION.md` `JS7` | No type-erased host `invoke(args, results)` | A (E if it replaces `fnPtr`) | G2 | Optional addition; §5.4. |
-| `proposals/EXTENDED_NAME_SECTION.md` `ENS7` | Helper-raised traps lack the function label | A | G1 | Message quality. |
+| `proposals/EXTENDED_NAME_SECTION.md` `ENS7` | Helper-raised traps lack the function label | A | G1 | **Closed 2026-10-29:** generated code annotates the pending trap with its own function/instruction on the way out (`wasm_trap_annotate`); the first (innermost) site wins. |
 | `proposals/MULTI_VALUE.md` `MV2` | No dedicated `multi-value.wast` in the snapshot | C | G1 | Upstream suite gap, covered indirectly. |
 | `TYPE_IDENTITY.md` §8 `M8` | Type-store footprint not measured | A | G2 | Measurement only. |
 | `SIMD_LIBJIT.md` `SIMD-L8`/`D4`; `proposals/SIMD.md` `SIMD-8` | Batched SIMD path deliberately unbuilt; native lowering is per backend | B | G2 | Performance, not a gate. |
@@ -506,6 +508,7 @@ are omitted; this is deliberately not a second copy of those tables.
 | `THREADSAFETY.md` §8 | One agent at a time; no instance lock; no concurrent compilation | D | G1 | The supported embedding model. |
 | `docs/LAYERING.md` §8; AAS7 | Five core citations of a note whose name contains "JIT" | A | G3 | Cosmetic; keeps the layering check honest. |
 | AAS8–AAS11 | Test-local façade; no backend work order; no second implementation; empty scaffolds | A | G3 | **All closed 2026-10-29:** `BackendSession` is a product type, `BACKEND_WORK_ORDER.md` exists, the seam has three implementations, and the two planned scaffolds are documented (kept, because those backends are intended). |
+| AAS12 | **The exported set is a superset of the frozen surface.** `nm -D` shows 1,801 strong exports in `libWasmBase`, including `[tiers]`-internal types (the component model, the validator) plus `GcHeap`/`Section`, which are reachable from embedder-tier declarations. `WASMJIT_VISIBLE_BEGIN` wraps each public header's *includes*, so an internal header pulled in from there inherits default visibility. Pinning the internals to hidden was attempted and reverted: the in-tree tests and `libLibJit` link against those types, and the type-translation surface (`WasmTypeStore`/`WasmCanonicalType`/`WasmTypeRegistry`) is genuinely needed by a plugin backend — so the fix is a tier decision, not a pragma. | `WasmBase/WasmApi.hpp`; `Test/abi/libWasmBase.exports`; `Test/abi/README.md` | A | G2 | `Test/abi-check.sh` baselines the whole linker-visible set, so additive-only is enforced over the superset (strictly safer). Tightening it needs one of: pin the internals and promote the type-translation headers to the backend tier, or accept the superset explicitly. |
 
 Reading: **no Class E row is in scope.** The C rows cannot be closed by this
 project at all; the D rows are decisions with an owner; the A/B rows are the work
@@ -554,7 +557,7 @@ is already done — this document.
 | **AAS-4 — Gate the evidence** ✅ | Make the strict validator run (`WASM_SPEC_VALIDATE=1`) part of the documented gate, and document the ASan configuration in [`TESTING.md`](TESTING.md) as a row, not a local habit. **Done 2026-10-29:** `TESTING.md` "Required runs: the release / merge gate" names both, with the exact ASan `qmake` line and the `QMAKE=/usr/bin/qmake6` recursion note. | AAS3 ✅, AAS4 ✅ | `TESTING.md` names both runs as required, and a release check lists them. |
 | **AAS-5 — Bookkeeping pass** ✅ | Mark `TYPE_MODEL.md` §7 `TM-0…TM-5` closed (or re-open them honestly); resolve the `NULL_JIT_VALUE_DIAGNOSIS` waiver by renaming and re-pointing, or record it as permanent; keep the `README.md` status rows in step with their notes when the plan changes (§6.6 found no contradiction today). **Done 2026-10-29:** the six rows are `✅`, the note is `docs/UNMODELLED_VALUE_TYPES.md` with all sites re-pointed, and `Test/LayeringTests.cpp` enforces the empty check. | AAS6 ✅, AAS7 ✅ | No closed refactor reads as open, and the layering check's expected output is "empty". |
 | **AAS-6 — Merge** | `git merge --ff-only LibjitDispatcher` into `master`, landing all 148 commits and this note atomically; tag the declaration. | G4 (already green) | `master` contains `ea4fb30` and the tag; the suite is green on `master`. |
-| **AAS-7 — Re-run this study** ✅ | **Done 2026-10-29:** §6 and §11 were re-measured on the final tree (11,377 assertions / 472 cases; 41 per-header TUs; the `[plugin]` build-kind and helper-export checks) and G1/G3 flipped to `✅`. | G1 ✅, G3 ✅ | §7.5 reads four `✅`. |
+| **AAS-7 — Re-run this study** ✅ | **Done 2026-10-29:** §6 and §11 were re-measured on the final tree (11,392 assertions / 474 cases; 41 per-header TUs; the `[plugin]` build-kind and helper-export checks) and G1/G3 flipped to `✅`. | G1 ✅, G3 ✅ | §7.5 reads four `✅`. |
 
 Ordering note: AAS-1 and AAS-2 are independent and can run in parallel; AAS-3
 wants AAS-2's work order; AAS-6 can happen at any point (it is a fast-forward
@@ -581,8 +584,8 @@ working-tree changes), from `build/LowHanging/Test`:
 
 | Command | Result | Reading |
 |---|---|---|
-| `./WasmJit` (default suite) | **11,377 assertions / 472 test cases, all passed** | +366 assertions and 30 cases over the 2026-10-25 row: `Runtime`, the POD layout views, the backend registry/null backend, the plugin loader (build-kind and helper-export checks of `BACKEND_PLUGIN_ABI.md` §7.5/§7.7) and the promoted `BackendSession` façade (`AAS8`). |
-| `./WasmJit '~[spec]'` | **10,999 assertions / 283 test cases, all passed** | The hand-written half is green on its own. |
+| `./WasmJit` (default suite) | **11,392 assertions / 474 test cases, all passed** | +381 assertions and 32 cases over the 2026-10-25 row: `Runtime`, the POD layout views, the backend registry/null backend, the plugin loader (build-kind and helper-export checks of `BACKEND_PLUGIN_ABI.md` §7.5/§7.7) and the promoted `BackendSession` façade (`AAS8`), the helper-trap site (`ENS7`) and sharedness validation (`SET1`). |
+| `./WasmJit '~[spec]'` | **11,014 assertions / 285 test cases, all passed** | The hand-written half is green on its own. |
 | `./WasmJit '[docs]'` | **720 assertions / 1 test case, all passed** | Unchanged. |
 | `./WasmJit '[layering]'` | **4 assertions / 1 test case, all passed** | `WasmBase/` and `WasmStub/` name no backend; the §6.5 scan is now a gate, not a grep. |
 | `./WasmJit '[surface]'` | **4 assertions / 1 test case, all passed** | The version macros, `WASM::versionString()` and `WASM::abiVersion()` agree. |
@@ -592,6 +595,8 @@ working-tree changes), from `build/LowHanging/Test`:
 | `./WasmJit '[concurrency]'` | **29 assertions / 8 test cases, all passed** | The model claim, the guard under a real second-thread call, and a re-entrant compiled function across threads. |
 | `./WasmJit '[tiers]'` | **210 assertions / 3 test cases, all passed** | Every header classified once (25 embedder / 17 backend / 16 internal); the umbrella matches the embedder tier; every public header has a TU. |
 | 41 per-header compile TUs (`Test/headers/*.cpp`) | compiled and linked in the same build | Every public header, and `WasmJit.hpp`, compiles standalone. |
+| `./Test/abi-check.sh build/<config>` | **OK** — 1,801 + 829 exported symbols, 0 removed | The additive-only ABI rule (`G2`) is a command now; `Test/abi/README.md` holds the baseline and the `AAS12` superset caveat. |
+| `./Test/install-check.sh build/<config>` | **OK** — the out-of-tree consumer calls `i32`, `f64`, a multi-result tuple and `v128`; the installed backend records `NEEDED libWasmBase.so.1` | `ES-5`/`ES-7`. |
 
 Reading: the milestone's *behavioural* half is as green as the documentation
 claims. The strict validator sweep and the ASan configuration are now documented

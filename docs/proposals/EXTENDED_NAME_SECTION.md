@@ -104,7 +104,7 @@ attached wherever an identifier binds. The proposal does not change execution.
 | ~~ENS4~~ | ~~**`names.wast` does not assert names.**~~ **Done (ENS-4):** `Test/wasm_wat/name_section.wat` + `extended name section: parsed names are exposed by kind and index` assert every subsection's strings; `name section: indirect maps and unknown subsections are bounded and skipped` covers 12/13 and unknown-id skipping. | `Test/main.cpp`, `Test/wasm_wat/name_section.wat` | Closed |
 | ENS5 | **No text-format annotation support.** The engine has no `.wat` parser and will never have one; `@name` handling belongs to the toolchain that produces the binary. | `Test/Test.pro` uses `wasm-tools` | Informational |
 | ~~ENS6~~ | ~~**No diagnostic consumer uses the names outside `Validator::fail`.**~~ **Done (ENS-5):** traps emitted by generated code report the function's index and `$name`; the validator names every index space that appears in an error; the `WasmStub` listing prints `index ($name)`. Tests: `named_trap`, `named_invalid_{global,table,local}`, and the stub listing test. | `LibJit/LibjitOpcodeDispatcher.cpp` (`emitTrap`), `WasmBase/WasmValidator.cpp`, `WasmStub/StubOpcodeDispatcher.cpp`, `Test/main.cpp` | Closed |
-| ENS7 | **Helper-raised traps do not carry the function label.** Integer division/`trunc`, the atomic helpers and the bulk-memory helpers call `WASM::trap` directly, so their message is the precise kind text without `in function …`. | `WasmBase/wasm_atomic.cpp`, `LibJit/LibjitOpcodeDispatcher.cpp` helpers | Low (informational) |
+| ~~ENS7~~ | ~~**Helper-raised traps do not carry the function label.**~~ **Done (ENS-6):** a helper has no compile-time function, but its caller does. Generated code takes the pending-trap path through `wasm_trap_annotate(functionIndex, instructionOffset, functionName)`, which fills the slot only when it has no site yet (the first, innermost label wins, so a precise `reportTrapAt` or an inner frame is never overwritten). `trap site: a helper-raised trap is annotated with the calling function` asserts the emitted `WASM.EXECUTE.TRAP.*` diagnostic carries function `0` and a real instruction offset for an unaligned atomic access. The *message* text stays the helper's precise kind text; the label lives in the trap record. | `WasmBase/WasmTrap.{hpp,cpp}` (`annotateTrapSite`/`wasm_trap_annotate`), `LibJit/LibjitOpcodeDispatcher.cpp` (`emitPendingTrapCheck`), `Test/main.cpp` | Closed |
 
 ## 6. Where we can and should play fast and loose
 
@@ -128,11 +128,14 @@ not know.
 | **ENS-3 — Expose lookup** | ✅ `Module::findName(NameKind, index, subIndex)` is public and tested; `Validator::fail` appends the function name to validation errors. | ENS3 | Done: `named_invalid.wat` asserts `function 0 ($bad)`. |
 | **ENS-4 — Assert names** | ✅ `Test/wasm_wat/name_section.wat` + two manual tests check the stored strings and the 12/13/unknown-id paths. | ENS4 | Done: the tests fail if a subsection is dropped or desynchronised. |
 | **ENS-5 — Diagnostic consumers** | ✅ `Module::describeIndex`; generated-code traps carry `in function <index> ($name)`; the validator names types/tables/memories/globals/tags/segments/locals; `Stub::OpcodeDispatcher::setNameContext` makes the listing name-aware. | ENS6 | Done: `trap messages name the trapping function…`, `validation errors name other index spaces…` and `stub listing consumes the name section` pass. |
+| **ENS-6 — Helper-raised trap sites** | ✅ `wasm_trap_annotate(functionIndex, instructionOffset, functionName)` fills the compile-time site of a trap a native helper reported without one; emitted on the generated pending-trap path, first (innermost) site wins. | ENS7 | Done: `trap site: a helper-raised trap is annotated with the calling function` sees function `0` and a real instruction offset in the trap diagnostic. |
 
 ENS5 is explicitly triaged as not-worth-closing: the engine has no text
-parser, and `@name` handling belongs to `wasm-tools`. ENS7 records the one
-remaining diagnostic asymmetry: traps raised inside shared native helpers keep
-their precise kind text, without the function label.
+parser, and `@name` handling belongs to `wasm-tools`.
+
+ENS7 is closed by **ENS-6** (2026-10-29): helper-raised traps keep their precise
+kind text *and* get the calling function's site, because the annotation happens on
+the generated pending-trap path where the function is a compile-time constant.
 
 ## 8. Indicative test survey
 
@@ -147,6 +150,7 @@ their precise kind text, without the function label.
 | `named_invalid` | 2 assertions | 0 | 0 | a validation error includes `function 0 ($bad)` from the name section |
 | `named_invalid_{global,table,local}` | 3 assertions | 0 | 0 | errors name the global, table and local indices they describe |
 | `named_trap` manual test | 7 assertions | 0 | 0 | a trap says `unreachable in function 0 ($boom)`; an unnamed function keeps the index |
+| helper-raised trap site (ENS-6) | 6 assertions | 0 | 0 | an unaligned atomic access traps inside `wasm_atomic.cpp`; the generated annotation puts function `0` and a real instruction offset into the `WASM.EXECUTE.TRAP.*` diagnostic |
 | stub listing | 3 assertions | 0 | 0 | the inspection listing prints `LocalGet (0 ($p))` from the local name map |
 
 Reading: `names.wast` still means "the custom section does not break decoding";

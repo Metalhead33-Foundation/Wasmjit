@@ -2628,6 +2628,26 @@ void OpcodeDispatcher::emitPendingTrapCheck()
 			jit_value_create_nint_constant(function, jit_type_int, 0));
 	jit_label_t continuation = jit_label_undefined;
 	jit_insn_branch_if(function, none, &continuation);
+	// ENS7: a native helper reported this trap, so it carries no site — a helper
+	// has no compile-time function. The caller does: record this function and the
+	// trapping instruction before unwinding. `wasm_trap_annotate` keeps the first
+	// (innermost) site, so a callee that already annotated the trap, or a precise
+	// generated `reportTrapAt`, is left untouched.
+	{
+		jit_type_t params[3] = {jit_type_uint, jit_type_uint, jit_type_void_ptr};
+		jit_type_t signature = jit_type_create_signature(jit_abi_cdecl, jit_type_void,
+				params, 3, 1);
+		jit_value_t args[3] = {
+			jit_value_create_nint_constant(function, jit_type_uint,
+					static_cast<jit_nint>(functionIndex)),
+			jit_value_create_nint_constant(function, jit_type_uint,
+					static_cast<jit_nint>(instructionOffset)),
+			jit_value_create_nint_constant(function, jit_type_void_ptr,
+					reinterpret_cast<jit_nint>(const_cast<char*>(functionName))),
+		};
+		jit_insn_call_native(function, "wasm_trap_annotate",
+				reinterpret_cast<void*>(&WASM::wasm_trap_annotate), signature, args, 3, 0);
+	}
 	requestTrapEpilogue();
 	jit_insn_branch(function, &trapEpilogueLabel);
 	jit_insn_label(function, &continuation);
@@ -8382,7 +8402,10 @@ void OpcodeDispatcher::dispatchAtomicFence(uint8_t ordering) {
 
 void OpcodeDispatcher::dispatchAtomicPause() {
 	// Acquire-release proposal: a spin-loop hint with no architectural effect.
-	// Lowering it to nothing is explicitly permitted (ARAD2).
+	// ARAD2 said "lower it to nothing initially, then add PAUSE/YIELD per
+	// target"; this is that second step — the helper picks the target's hint
+	// (`pause` on x86, `yield` on ARM) and falls back to a compiler barrier.
+	callNativeHelper(reinterpret_cast<void*>(wasm_atomic_pause), jit_type_void, {}, {});
 }
 
 // ── Shared-everything threads (SET-3): global/table/GC atomics ──────────────

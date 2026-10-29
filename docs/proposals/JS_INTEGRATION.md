@@ -14,6 +14,14 @@ adds the `descriptorPrototype` accessor, while the JS `js-prototypes` half
 remains an external adapter concern. No language engine, Promise type or event
 loop is part of WasmJit.)
 
+**Status of the seam: complete (`JS-0`…`JS-5` ✅).** Everything the engine owes a
+JavaScript host exists and is tested — the host-reference bridge, the wide
+continuation/scheduler hooks, the descriptor metadata views, the `wasm:`-as-an-
+ordinary-import proof and the Custom Descriptors core. What remains is named
+"JS" (a JS engine, a Promise/event loop, an ESM loader, the `js-prototypes`
+configuration) and belongs to the embedder by decision, not by omission. The
+README's meter reads the engine side for that reason.
+
 Audience: anyone touching `ImportResolver`, `Callable`, `VMContext`,
 `HostBridge`, `externref`, `Module` metadata, or considering a
 QuickJS/MuJS/other adapter.

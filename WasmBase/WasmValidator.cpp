@@ -1297,6 +1297,77 @@ void Validator::validateModule()
 		validateTableInit(tt, i);
 	}
 
+	// ── Sharedness (docs/proposals/SHARED_EVERYTHING_THREADS.md SET-1) ──────
+	// The decoder accepts the `shared` annotation; these are the well-formedness
+	// rules it implies. A shared type may only *reference* shared things, and a
+	// shared global or table must hold a shared reference. Numeric and vector
+	// values are trivially shareable, so only a reference can violate the rule.
+	const auto requireSharedReference = [this](const CanonValueType& value,
+			const std::string& where) {
+		if (value.opcode != ValueTypeCode::Ref && value.opcode != ValueTypeCode::RefNull)
+			return;
+		if (!value.isShared)
+			fail("shared " + where + " must use a shared reference");
+	};
+	for (std::size_t i = 0; i < module.typeCount(); ++i) {
+		const CoreTypeView view = module.typeView(static_cast<uint32_t>(i));
+		if (!view.isShared())
+			continue;
+		const std::string where = "type "
+				+ module.describeIndex(NameKind::Type, static_cast<uint32_t>(i));
+		switch (view.kind()) {
+		case CanonTypeKind::Func:
+			for (const CanonStorageType& p : view.funcParams())
+				if (!p.isPacked)
+					requireSharedReference(p.value, where + " parameter");
+			for (const CanonStorageType& r : view.funcResults())
+				if (!r.isPacked)
+					requireSharedReference(r.value, where + " result");
+			break;
+		case CanonTypeKind::Struct:
+			for (const CanonFieldType& field : view.structFields())
+				if (!field.storage.isPacked)
+					requireSharedReference(field.storage.value, where + " field");
+			break;
+		case CanonTypeKind::Array:
+			if (!view.arrayElement().storage.isPacked)
+				requireSharedReference(view.arrayElement().storage.value,
+						where + " element");
+			break;
+		case CanonTypeKind::Cont:
+		case CanonTypeKind::Import:
+			break;
+		}
+	}
+
+	const auto requireSharedValue = [this](const ValueType& value,
+			const std::string& where) {
+		// A reference can be spelled two ways: `(ref null ht)` (opcode 0x6C plus a
+		// heap type) or a single-byte shorthand (`externref`, `funcref`, …). Both
+		// are references; only the long form can carry the shared prefix, so the
+		// shorthand is always unshared.
+		if (!isReferenceType(value.opcode))
+			return;
+		if (!value.isShared)
+			fail("shared " + where + " must hold a shared reference");
+	};
+	for (std::size_t i = 0; i < module.importGlobals.size(); ++i)
+		if (module.importGlobals[i].global.isShared)
+			requireSharedValue(module.importGlobals[i].global.contentType,
+					"imported global " + std::to_string(i));
+	for (std::size_t i = 0; i < module.globals.size(); ++i)
+		if (module.globals[i].type.isShared)
+			requireSharedValue(module.globals[i].type.contentType,
+					"global " + std::to_string(i));
+	for (std::size_t i = 0; i < module.importTables.size(); ++i)
+		if (module.importTables[i].table.isShared)
+			requireSharedValue(module.importTables[i].table.elementType,
+					"imported table " + std::to_string(i));
+	for (std::size_t i = 0; i < module.tables.size(); ++i)
+		if (module.tables[i].isShared)
+			requireSharedValue(module.tables[i].elementType,
+					"table " + std::to_string(i));
+
 	for (std::size_t i = 0; i < module.globals.size(); ++i)
 		validateGlobalInit(module.globals[i], i);
 	for (std::size_t i = 0; i < module.elementSegments.size(); ++i)

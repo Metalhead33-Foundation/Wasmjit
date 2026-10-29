@@ -78,7 +78,8 @@ decode error.
   and rejects values other than 0 (`seqcst`) and 1 (`acqrel`).
 - `atomic.fence` consumes its ordering byte and accepts 0 or 1; its reserved
   zero-only rule is gone. `0xFE 0x04` `pause` decodes with no immediate and
-  lowers to nothing (ARAD2).
+  lowers to the target's hint through `wasm_atomic_pause` (`pause` on x86,
+  `yield` on ARM, a compiler barrier elsewhere — ARAD2).
 - `WasmBase/wasm_atomic.*` takes the ordering on every load/store/RMW/cmpxchg:
   loads map `acqrel` to `__ATOMIC_ACQUIRE`, stores to `__ATOMIC_RELEASE`,
   RMW/cmpxchg to `__ATOMIC_ACQ_REL`, and omission stays `__ATOMIC_SEQ_CST`.
@@ -105,7 +106,7 @@ decode error.
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
 | ARAD1 | **Default an omitted ordering to `seqcst`.** | §3: backward compatibility is part of the proposal. | Existing atomics keep their exact meaning. |
-| ARAD2 | **Implement `pause` as a no-op initially**, then add `PAUSE`/`YIELD` per target. | §3: it is a hint; semantics are unchanged. | No dependence on host-specific spin-loop tuning for correctness. |
+| ARAD2 | **Implement `pause` as a no-op initially**, then add `PAUSE`/`YIELD` per target. **Done 2026-10-29:** `wasm_atomic_pause()` emits `__builtin_ia32_pause()` on x86, `yield` on ARM and a compiler barrier elsewhere, so a spin loop written for the proposal does not melt a core. | §3: it is a hint; semantics are unchanged. | No dependence on host-specific spin-loop tuning for correctness. |
 | ARAD3 | **Keep the single-agent execution model for now.** | §3: ordering is unobservable without multiple agents; `THREADS.md` defers agents by decision. | Decode/lower correctness without a scheduler rewrite. |
 | ARAD4 | **Do not add separate `acquire`/`release` orderings** until the proposal does. | §3: the current proposal defines only `seqcst` and `acqrel`. | No speculative encoding. |
 | ARAD5 | **Reject bit 4 on non-atomic instructions.** | §2: that is a decode error in the proposal. | A malformed ordinary load cannot be mistaken for an atomic. |
@@ -119,7 +120,7 @@ map to `__ATOMIC_ACQ_REL` (not `__ATOMIC_SEQ_CST`, not `__ATOMIC_RELAXED`).
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **ARA-1 — Decode** | ✅ `MemArg` ordering bit/byte, `AtomicMemArg`, `pause`, decode-time rejection on non-atomics. | ARA1, ARA3 | Done: ordering/pause fixture decodes; malformed flags and ordinary bit-4 uses are rejected. |
-| **ARA-2 — Lowering** | ✅ Ordering threaded through every atomic helper and the fence (`__ATOMIC_SEQ_CST` / `__ATOMIC_ACQUIRE` / `__ATOMIC_RELEASE` / `__ATOMIC_ACQ_REL`). | ARA2, ARA4 | Done: fence and RMW use the requested ordering; the single-agent differential fixture sees the same values. |
+| **ARA-2 — Lowering** | ✅ Ordering threaded through every atomic helper and the fence (`__ATOMIC_SEQ_CST` / `__ATOMIC_ACQUIRE` / `__ATOMIC_RELEASE` / `__ATOMIC_ACQ_REL`); `pause` lowers to the target hint (`wasm_atomic_pause`, ARAD2). | ARA2, ARA4 | Done: fence and RMW use the requested ordering, `pause` is a real hint, and the single-agent differential fixture sees the same values. |
 | **ARA-3 — Tests** | ◑ Single-agent ordering/pause fixture done. The two-agent message-passing test waits for `THREADS.md` TH-5. | ARA5 | Done for decode/lowering; multi-agent observation deferred. |
 
 ARA-1/ARA-2 are independent of a future multi-agent scheduler; ARA-3's

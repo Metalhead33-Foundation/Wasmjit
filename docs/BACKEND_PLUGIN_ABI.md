@@ -303,7 +303,7 @@ works.
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (2026-10-29) | **11,374 assertions / 472 cases, green** | The compiled-in path is the baseline every `BP-*` stage must preserve. |
+| Default suite (2026-10-29) | **11,392 assertions / 474 cases, green** | The compiled-in path is the baseline every `BP-*` stage must preserve. |
 | Backend selection | `WasmBackendRegistry` names `libjit` and `null`; an unknown name is a named error | The selector is general and the second implementation exists. |
 | Plugin load test | **Present** — `Test/ExampleBackend/libwasmjit-backend-example.so`, loaded by path and by name (`[plugin]`) | `BP-3`; the plugin lives in its own directory and the frontend was not rebuilt for it. |
 | Wrong-ABI / missing-symbol / failing-create tests | **Present** — descriptor ABI, core ABI, no query symbol, missing file, failing `create` (`[plugin]`) | `BP-3`/`BP-4`; every path is an exception with a reason, never an abort. |

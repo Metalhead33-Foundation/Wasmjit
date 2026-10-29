@@ -129,6 +129,15 @@ void reportTrapAt(TrapKind kind, const char* detail,
 		std::uint32_t functionIndex, std::uint32_t instructionOffset,
 		const char* functionName) noexcept;
 
+// Fills the compile-time site of a trap that a *native helper* reported without
+// one. Generated code calls this on its pending-trap path, so the diagnostic and
+// the host exception name the function even when the failure happened inside a
+// helper (docs/proposals/EXTENDED_NAME_SECTION.md ENS7). The first site wins: a
+// callee that already annotated, or a dispatcher-emitted `reportTrapAt`, is left
+// untouched.
+void annotateTrapSite(std::uint32_t functionIndex,
+		std::uint32_t instructionOffset, const char* functionName) noexcept;
+
 // C-callable entry points for generated code. The kind travels as an int so the
 // calling convention does not depend on how a scoped enum is passed. The `_at`
 // form carries the compile-time trap site for DG-5.
@@ -136,6 +145,8 @@ extern "C" void wasm_trap_report(int kind, const char* message);
 extern "C" void wasm_trap_report_at(int kind, const char* message,
 		std::uint32_t functionIndex, std::uint32_t instructionOffset,
 		const char* functionName);
+extern "C" void wasm_trap_annotate(std::uint32_t functionIndex,
+		std::uint32_t instructionOffset, const char* functionName) noexcept;
 
 // True while a trap is pending on the calling thread. Generated code reads
 // `TrapSlot::pending` directly; C++ code uses this.

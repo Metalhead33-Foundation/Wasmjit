@@ -126,6 +126,21 @@ void wasm_atomic_fence(uint32_t ordering) {
 														 : __ATOMIC_SEQ_CST);
 }
 
+void wasm_atomic_pause() {
+	// ARAD2: start as a hint and add the target's instruction. A spin loop in a
+	// Wasm module asked for exactly this; without it the loop is a tight
+	// `branch` and a hyperthread sibling starves.
+#if defined(__i386__) || defined(__x86_64__)
+	__builtin_ia32_pause();
+#elif defined(__aarch64__) || defined(__arm__)
+	__asm__ __volatile__("yield" ::: "memory");
+#else
+	// No architectural hint: keep the compiler from optimising the loop away
+	// and from reordering memory operations across it.
+	__atomic_signal_fence(__ATOMIC_SEQ_CST);
+#endif
+}
+
 uint32_t wasm_atomic_notify(void* address, uint32_t count) {
 	// The address is still validated: notify has a 4-byte access size in the
 	// proposal, so a misaligned or out-of-bounds address traps like any other

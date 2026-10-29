@@ -114,6 +114,26 @@ extern "C" void wasm_trap_report_at(int kind, const char* message,
 			instructionOffset, functionName);
 }
 
+void annotateTrapSite(std::uint32_t functionIndex,
+		std::uint32_t instructionOffset, const char* functionName) noexcept
+{
+	// Only an already-pending trap that has no site is annotated: the first
+	// (innermost) label wins, and a trap that a generated `reportTrapAt` placed
+	// precisely is never rewritten by an outer frame.
+	TrapSlot& slot = currentExecutionState().trapSlot;
+	if (slot.pending == 0 || slot.functionIndex != kNoTrapIndex)
+		return;
+	slot.functionIndex = functionIndex;
+	slot.instructionOffset = instructionOffset;
+	slot.functionName = functionName;
+}
+
+extern "C" void wasm_trap_annotate(std::uint32_t functionIndex,
+		std::uint32_t instructionOffset, const char* functionName) noexcept
+{
+	annotateTrapSite(functionIndex, instructionOffset, functionName);
+}
+
 bool trapPending() noexcept
 {
 	return currentExecutionState().trapSlot.pending != 0;

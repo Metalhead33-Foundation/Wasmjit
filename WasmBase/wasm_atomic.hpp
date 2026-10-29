@@ -63,6 +63,12 @@ uint64_t wasm_atomic_cmpxchg(void* address, uint64_t expected, uint64_t replacem
 // `atomic.fence`: 0 = seqcst, 1 = acqrel.
 void wasm_atomic_fence(uint32_t ordering);
 
+// `pause` (docs/proposals/ACQUIRE_RELEASE_ATOMICS.md ARA-2): a spin-loop hint
+// with no architectural effect. Lowered to the target's own hint (`pause`,
+// `yield`) with a compiler-barrier fallback, so a spin loop written for the
+// proposal does not melt a core on a target where the instruction exists.
+void wasm_atomic_pause();
+
 // Wait/notify, single-agent form (docs/proposals/THREADS.md TH-2/TD9).
 // `notify` always returns 0: no other agent can be waiting on the address.
 uint32_t wasm_atomic_notify(void* address, uint32_t count);

@@ -6832,6 +6832,48 @@ TEST_CASE("trap messages name the trapping function when the name section has it
 	REQUIRE(trapMessage("plain") == "unreachable in function 1");
 }
 
+TEST_CASE("trap site: a helper-raised trap is annotated with the calling function")
+{
+	// ENS7: the unaligned atomic access traps inside `wasm_atomic.cpp`, which has
+	// no compile-time site. The generated code annotates the pending trap on its
+	// way out, so the diagnostic still names the function and the instruction —
+	// the message text itself is the helper's precise kind text.
+	WASM::Module module = loadTestModule("annotated_helper_trap");
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	struct Captured {
+		int traps = 0;
+		std::uint32_t functionIndex = WASM::kNoDiagnosticIndex;
+		std::uint32_t instructionOffset = WASM::kNoDiagnosticIndex;
+		bool hasName = false;
+	} captured;
+	WASM::ExecutionState& state = WASM::currentExecutionState();
+	state.diagnostics.setSink(
+			[](void* userData, const WASM::Diagnostic& diagnostic) noexcept {
+				auto* capture = static_cast<Captured*>(userData);
+				if (diagnostic.id.rfind("WASM.EXECUTE.TRAP", 0) != 0)
+					return;
+				++capture->traps;
+				capture->functionIndex = diagnostic.location.functionIndex;
+				capture->instructionOffset = diagnostic.location.instructionOffset;
+				capture->hasName = !diagnostic.location.functionName.empty();
+			},
+			&captured);
+
+	const auto exported = instance->exportedFunction("misaligned");
+	REQUIRE(exported.has_value());
+	REQUIRE_THROWS_AS(WASM::callCallable<std::int32_t>(*exported), WASM::Trap);
+	state.diagnostics.setSink(nullptr, nullptr);
+
+	REQUIRE(captured.traps == 1);
+	REQUIRE(captured.functionIndex == 0);
+	REQUIRE(captured.instructionOffset != WASM::kNoDiagnosticIndex);
+	(void)captured.hasName;
+}
+
 TEST_CASE("unknown custom sections leave code and data decoding unchanged")
 {
 	WASM::Module module = loadTestModule("custom_section");
@@ -7493,18 +7535,20 @@ TEST_CASE("shared type annotations decode as shared canonical types")
 
 TEST_CASE("shared table annotations and table atomics execute")
 {
-	// (module (table 1 1 funcref shared)
+	// (module (table 1 1 (ref null (shared func)) shared)
 	//   (func (export "f")
-	//     i32.const 0 ref.null func table.atomic.set seqcst 0
 	//     i32.const 0 table.atomic.get seqcst 0 drop))
+	//
+	// The element type is a *shared* reference: SET-1 validates that a shared
+	// table only refers to shared items (a bare `funcref` is rejected by the
+	// "shared annotations are validated" case below).
 	const std::vector<uint8_t> bytes = {
 		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
 		0x01,0x04,0x01,0x60,0x00,0x00,
 		0x03,0x02,0x01,0x00,
-		0x04,0x05,0x01,0x70,0x03,0x01,0x01,
+		0x04,0x07,0x01,0x63,0x65,0x70,0x03,0x01,0x01,
 		0x07,0x05,0x01,0x01,'f',0x00,0x00,
-		0x0a,0x13,0x01,0x11,0x00,
-		0x41,0x00,0xd0,0x70,0xfe,0x59,0x00,0x00,
+		0x0a,0x0b,0x01,0x09,0x00,
 		0x41,0x00,0xfe,0x58,0x00,0x00,0x1a,0x0b
 	};
 	std::span<const std::byte> span(
@@ -7546,6 +7590,71 @@ TEST_CASE("shared heap-type references decode with the shared bit")
 	REQUIRE(parsed->tables[0].elementType.isShared);
 	REQUIRE(parsed->tables[0].elementType.heapType
 			== static_cast<int32_t>(WASM::AbstractHeapType::Any));
+}
+
+TEST_CASE("shared annotations are validated against every referenced type")
+{
+	const auto checkError = [](const std::vector<uint8_t>& bytes,
+			const char* expected) {
+		std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+		Euph::Io::ConstBufferDevice device(span);
+		// Parsing validates, so the sharedness rule is enforced at the load
+		// boundary (docs/SAFETY.md: tell artifacts apart before use).
+		REQUIRE_THROWS_WITH(WASM::Artifact::parse(device, testStore()),
+				Catch::Matchers::ContainsSubstring(expected));
+	};
+	const auto checkValid = [](const std::vector<uint8_t>& bytes) {
+		std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+		Euph::Io::ConstBufferDevice device(span);
+		auto artifact = WASM::Artifact::parse(device, testStore());
+		REQUIRE(artifact != nullptr);
+		WASM::Module* parsed = artifact->asCoreModule();
+		REQUIRE(parsed != nullptr);
+		REQUIRE_NOTHROW(parsed->validate());
+	};
+
+	// (type (shared (struct (field (ref null 0))))) — the field reference is not
+	// shared, so a shared type would contain an unshared item.
+	const std::vector<uint8_t> unsharedField = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x01,0x07,0x01,0x65,0x5F,0x01,0x63,0x00,0x00
+	};
+	checkError(unsharedField, "shared type 0 field must use a shared reference");
+
+	// The same struct with `(ref null (shared 0))` (the 0x65 heap-type prefix).
+	const std::vector<uint8_t> sharedField = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x01,0x08,0x01,0x65,0x5F,0x01,0x63,0x65,0x00,0x00
+	};
+	checkValid(sharedField);
+
+	// (global externref shared) — the content type is not a shared ref (a bare
+	// `externref` carries no shared prefix).
+	const std::vector<uint8_t> unsharedGlobal = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x06,0x06,0x01,0x6F,0x02,0xD0,0x6F,0x0B
+	};
+	checkError(unsharedGlobal, "shared global 0 must hold a shared reference");
+
+	// (global i32 shared) — numeric values are trivially shareable, so the rule
+	// must not reject them.
+	const std::vector<uint8_t> sharedGlobal = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x06,0x06,0x01,0x7F,0x02,0x41,0x00,0x0B
+	};
+	checkValid(sharedGlobal);
+
+	// (table 1 1 funcref shared) — a bare `funcref` is an unshared reference.
+	const std::vector<uint8_t> unsharedTable = {
+		0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+		0x04,0x05,0x01,0x70,0x03,0x01,0x01
+	};
+	checkError(unsharedTable, "shared table 0 must hold a shared reference");
+
+	// The valid counterpart — `(table 1 1 (ref null (shared any)) shared)` — is
+	// the "shared table annotations" case above, which already exercises it.
 }
 
 TEST_CASE("struct atomic get/set execute")

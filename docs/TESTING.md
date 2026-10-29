@@ -529,12 +529,13 @@ import `(import "spectest" "table" ...)` / `"memory"` instantiate correctly.
 
 Two runs are **required** in addition to the default suite — for a release and
 for a merge to `master` — so that "green" means the same thing to every reviewer
-([`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) `AAS3`/`AAS4`):
+([`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) `AAS3`/`AAS4`), plus one ABI check:
 
 | Run | Command | Evidence it produces | Last measured |
 | --- | --- | --- | --- |
 | Strict validator sweep | `WASM_SPEC_VALIDATE=1 ./WasmJit '[spec]'` | every curated binary negative module is rejected (the 2,382 cases above) | **2,382 / 2,382**, 2026-10-18 |
 | AddressSanitizer build + suite | configure a second shadow build (below), then run the default suite | no use-after-free, overflow or leak report on the hand-written path | configuration exists; the run is **not yet recorded** in this note |
+| ABI check | `./Test/abi-check.sh build/<config>` | no exported symbol disappeared since the baseline (the additive-only rule of `API_ABI_STABILITY.md` G2); `--update` records an intentional addition | **1,801 + 829 symbols, 0 removed**, 2026-10-29 |
 
 The ASan configuration is a separate shadow build, so the ordinary build keeps
 its flags:
