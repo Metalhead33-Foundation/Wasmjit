@@ -65,20 +65,20 @@ inline constexpr std::size_t kDefaultStackReserveBytes = 512 * 1024;
 //! lowest address the thread may use (the guard page sits below it);
 //! `highestAddress` is the top. Returns false when the platform cannot report
 //! them.
-/** \\brief Queries the calling thread's usable stack address range. \\param lowestAddress Receives the lowest usable stack address. \\param highestAddress Receives the highest stack address. \\return true when the platform reports valid bounds. */
+/** \brief Queries the calling thread's usable stack address range. \param lowestAddress Receives the lowest usable stack address. \param highestAddress Receives the highest stack address. \return true when the platform reports valid bounds. */
 bool currentThreadStackBounds(std::uintptr_t& lowestAddress, std::uintptr_t& highestAddress);
 
 //! Installs `ctx.stackLimit` from the calling thread's stack bounds, keeping
 //! `reserve` bytes between the limit and the guard page. Returns false (and
 //! leaves `stackLimit` at zero) when the bounds are unknown, or when the stack is
 //! too small for the reserve to leave it any usable room.
-/** \\brief Installs a per-thread stack limit in a VM context. \\param ctx Context whose stackLimit field is updated. \\param reserve Bytes reserved above the stack guard for prologues/helpers. \\return true when a usable limit was installed; false when bounds are unavailable or too small. */
+/** \brief Installs a per-thread stack limit in a VM context. \param ctx Context whose stackLimit field is updated. \param reserve Bytes reserved above the stack guard for prologues/helpers. \return true when a usable limit was installed; false when bounds are unavailable or too small. */
 bool installStackLimit(VMContext& ctx, std::size_t reserve = kDefaultStackReserveBytes);
 
 //! C-callable entry point for generated code: probes this frame's address and
 //! raises `TrapKind::CallStackExhausted` when it is below `ctx->stackLimit`.
 //! Never returns when it traps.
-/** \\brief C ABI stack probe emitted in every generated function prologue. \\param ctx Current VM context containing the stack limit. \\throws/traps CallStackExhausted when the current frame crossed the limit. */
+/** \brief C ABI stack probe emitted in every generated function prologue. \param ctx Current VM context containing the stack limit. \throws/traps CallStackExhausted when the current frame crossed the limit. */
 extern "C" void wasm_stack_check(VMContext* ctx);
 
 struct ExecutionState;
@@ -89,7 +89,7 @@ struct ExecutionState;
 //! one host thread can be called from another, and each thread's guard must
 //! describe *its own* stack. Cached per execution state and thread, so a normal
 //! call pays one comparison.
-/** \\brief Ensures the current host thread's stack limit is installed in an execution state. \\param state Execution state whose per-thread stack metadata is updated. */
+/** \brief Ensures the current host thread's stack limit is installed in an execution state. \param state Execution state whose per-thread stack metadata is updated. */
 void ensureCurrentThreadStackLimit(ExecutionState& state) noexcept;
 
 } // namespace WASM
