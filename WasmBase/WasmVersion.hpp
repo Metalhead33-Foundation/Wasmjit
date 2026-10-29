@@ -42,8 +42,10 @@ namespace WASM {
 //! shared library and for a backend plugin's compatibility check. They never
 //! throw and they do not allocate.
 //! Runtime form of `WASMJIT_VERSION_STRING`; never throws, never allocates.
+/** \\brief Returns the semantic version string of the loaded library. \\return Static null-terminated MAJOR.MINOR.PATCH string. */
 const char* versionString() noexcept;
 //! Runtime form of `WASMJIT_ABI_VERSION`; never throws, never allocates.
+/** \\brief Returns the monotonic embedding/plugin ABI compatibility number. \\return ABI version integer. */
 std::uint32_t abiVersion() noexcept;
 
 } // namespace WASM
