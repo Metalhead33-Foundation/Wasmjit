@@ -1,38 +1,46 @@
 # The Embedding Surface — `WASM::Runtime`, the Umbrella Header, Versioning, and the Include Set
 
-Status: design note + plan (revision 2 — 2026-10-29: the umbrella, the version
-identity and the per-header compile units landed, so `ES-6` is done and `ES-3`/
-`ES-4` are partly done; revision 1, 2026-10-25, measured `LibjitDispatcher` at
-`ea4fb30`). This note answers `AAS1`/`AAS2` of
+Status: design note + plan (revision 3 — 2026-10-29: disambiguates the five roles
+called "context" or "runtime" (§3.1–§3.2), adds the profile/config layer (§4.6) and
+the header skeleton `ES-1` fills (§4.7). Revision 2 landed the umbrella, the
+version identity and the per-header compile units; revision 1, 2026-10-25, measured
+`LibjitDispatcher` at `ea4fb30`). This note answers `AAS1`/`AAS2` of
 [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) and decides the fate of two empty
 placeholder headers.
 Audience: anyone who will freeze the public surface, package the library, write
 an embedder, or implement a backend.
 
-Three deliverables, in the order the questions were asked:
+Four deliverables, in the order the questions were asked:
 
 1. **Is there room for a `WASM::Runtime`?** (the `JSRuntime` / `JSContext` split)
    — and therefore should `WasmRuntime.hpp` be filled or deleted? **Verdict:
    fill it.** The role is real, the file is the right home, and it fixes more
-   than it costs. `WasmContext.hpp`, by contrast, is redundant and should be
-   deleted — the "context/realm" role is already `ModuleInstance`.
-2. **The umbrella header and the documented include set** — with the awkward
+   than it costs. A **`WASM::Context`** has no role left: the realm is
+   `ModuleInstance`, the execution context is `Agent`/`ExecutionState`, the
+   config is `RuntimeConfig` — so `WasmContext.hpp` is **deleted**, and
+   §3.1–§3.2 record why each candidate meaning lost the name.
+2. **What should the runtime's surface actually be?** — the ownership table, the
+   profile and diagnostic defaults (with
+   [`proposals/PROFILES.md`](proposals/PROFILES.md)), and a C++-style skeleton of
+   `WasmRuntime.hpp` (§4.6–§4.7).
+3. **The umbrella header and the documented include set** — with the awkward
    facts: the public load API currently requires an `Elv::Io::Device`, and seven
    `WasmBase/` headers pull in the vendored `Elvavena`/`Euphemy` headers.
-3. **Versioning, soname and install** — what exists (qmake defaults only), what
+4. **Versioning, soname and install** — what exists (qmake defaults only), what
    the policy should be, and how it ties to the frozen surfaces of
    `API_ABI_STABILITY.md` §2.2.
 
 The earlier `JitRuntime`/`JitContext`/`ModuleInstance` sketch from a different
-repository is reviewed in §5 as a **salvage list**, not a template.
+repository is reviewed in §5 as a **salvage list**, not a template; its
+provenance and the reason its two names do not survive here are in §3.
 
 ## 1. Document map
 
 | Section | Question it answers |
 |---|---|
 | §2 | What does an embedder have to include and call today? |
-| §3 | Does the `JSRuntime` / `JSContext` distinction map onto this engine? |
-| §4 | What would `WASM::Runtime` own, and what must it not own? |
+| §3 | Which JS-engine role maps onto which WasmJit object — and what "context" means each time? |
+| §4 | What would `WASM::Runtime` own, what must it not own, and what should its header look like? |
 | §5 | What is worth salvaging from the earlier sketch, and what is not? |
 | §6 | Which headers are public, which are backend-only, and what is the umbrella? |
 | §7 | What is the version, soname, symbol-visibility and install policy? |
@@ -57,6 +65,7 @@ The smallest working recipe, read off `Test/helper.cpp` and `Test/main.cpp`:
 | 8. Reclaim | `instance->gcCollect()` at a safepoint | same as 4 |
 | 9. Diagnostics (optional) | a `DiagnosticSink` / a `HostBridge` | `WasmBase/WasmDiagnostics.hpp`, `WasmHostBridge.hpp` |
 | 10. Suspend/resume (optional) | `HostContinuation`, `HostContinuationScheduler` | `WasmBase/WasmContinuation.hpp` |
+| 11. Run on a worker thread (optional) | `WASM::Agent agent; WASM::AgentScope scope(agent);` before the first call | `WasmBase/WasmAgent.hpp` |
 
 Six problems fall out of that table, and they are the reason this note exists:
 
@@ -66,13 +75,23 @@ Six problems fall out of that table, and they are the reason this note exists:
 | P2 | **The load API speaks an I/O library.** `Module::fromFile(Elv::Io::Device&)` and `Artifact::parse(Elv::Io::Device&)`; there is no `loadFile(path)` / `loadBytes(span)`. | `WasmModule.hpp`, `WasmArtifact.hpp` |
 | P3 | **The public headers pull in `Elvavena`/`Euphemy`.** Seven headers do, transitively including `WasmType.hpp`, which `WasmValue.hpp` needs. | `grep -l 'Elvavena\|Euphemy' WasmBase/*.hpp` |
 | P4 | **There is no version or capability surface.** No macro, no function, no capability query. | no `VERSION` in any `.pro` |
-| P5 | **`WasmRuntime.hpp` and `WasmContext.hpp` were 6-line empty namespaces**, and `LibJIT::Runtime` was an empty stub. **`WasmContext.hpp` and `LibJIT::Runtime` are deleted (2026-10-29); `WasmRuntime.hpp` is still the `ES-1` placeholder.** | `WasmBase/WasmRuntime.hpp` |
+| P5 | **`WasmRuntime.hpp` and `WasmContext.hpp` were 6-line empty namespaces**, and `LibJIT::Runtime` was an empty stub — leftover shells of an earlier sketch whose `JitRuntime`/`JitContext` pair copied the `JSRuntime`/`JSContext` split (§3 intro). **`WasmContext.hpp` and `LibJIT::Runtime` are deleted (2026-10-29); `WasmRuntime.hpp` is still the `ES-1` placeholder.** The deletion stands after the reconsideration in §3.1; the role it was reaching for is named in §3.2. | `WasmBase/WasmRuntime.hpp` |
 | P6 | **The GC safepoint is the embedder's job** and nothing reminds them. | `ABI.md` "Other store-owned entities" |
 
 P1–P4 are `AAS1`/`AAS2`; P5 is the question this note was asked to settle; P6 is
 answered by giving the runtime a `safepoint()` entry point (§4.5).
 
 ## 3. Does the JS-engine split map onto this engine?
+
+**Provenance.** `WasmBase/WasmRuntime.hpp` and the now-deleted
+`WasmBase/WasmContext.hpp` are shells of an earlier repository's
+`Abstract/WasmJitRuntime.hpp` + `Abstract/WasmJitContext.hpp`, whose trio
+`JitRuntime` / `JitContext` / `ModuleInstance` copied the JavaScript engine split
+almost one-to-one (`JitRuntime::createContext()`, `JitContext::instantiate()`,
+`JitContext::call()`, `JitRuntime::createGCContext()`). Nothing was ever
+implemented behind the two headers here, so they survived as empty namespaces:
+the names looked right, and nobody asked which role each one owned. The sketch is
+kept as §5's salvage list, not as a template.
 
 The claim behind the question: in SpiderMonkey/QuickJS/JavaScriptCore,
 `JSRuntime` is the process/heap/engine instance and `JSContext` is an isolated
@@ -93,19 +112,76 @@ which a `Runtime`/`Instance` split is worth having: it names the owner of a role
 that already exists (heap + modules + backend), not a role invented to match
 another engine.
 
-### 3.1 Why `WasmContext.hpp` should go
+### 3.1 `WasmContext`: the reconsideration, and why the name stays retired
 
-A `JSContext` is *not* per-thread state and *not* the heap; it is the realm.
-WasmJit's realm is `ModuleInstance`. Introducing `WASM::Context` would give one
-concept two names, and a second way to say "the thing that owns the globals". The
-ABI-level name `VMContext` already exists for the POD that generated code takes
-as arg0 — which is *not* the realm, it is the realm's address. So:
+The header is deleted (2026-10-29). The question worth re-opening is not "should
+the file exist" but "which role was it trying to name, and is that role still
+unowned?". Four different things have been called a "context" in this design, and
+they are not the same role:
 
-| Header | Decision | Reason |
+| Candidate meaning | What it would own | Owner today | Verdict |
+|---|---|---|---|
+| **ECMAScript execution context** — the environment one call runs in (variable environment, lexical environment, `this` binding); ephemeral, one per call | the running frame: pending trap and exception, tail-call target, defer stack, host-boundary depths, stack limit, diagnostics ring | `WASM::ExecutionState`, owned by `WASM::Agent` (`WasmAgent.hpp`; `THREADSAFETY.md` §2) | **Real role, already named.** A `WASM::Context` class would be a synonym for `ExecutionState` and would blur the agent/context split the trap and continuation work depends on |
+| **`JSContext` / realm** — the isolated global environment | index spaces, exports, element/data segments, `hostData` | `WASM::ModuleInstance` (+ its `VMContext` POD) | **Real role, already named.** One instance per `Module` (`THREADSAFETY.md` §3.1) |
+| **ABI frame base** — arg0 of every compiled function | memory/table/global pointers, `hostData`, `stackLimit` fallback | `WASM::VMContext` POD (`WasmVMContext.hpp`) | **Not a class.** It is the realm's *address*, and it is frozen in the ABI (`ABI.md`) |
+| **Runtime configuration bundle** — limits and policy | profile, bridge, sink, budget | `RuntimeConfig` (§4.6) | **Belongs to `WASM::Runtime`.** A separate object would give policy two homes |
+
+The deletion is therefore not a judgement that the role is fake. It is that
+**every candidate meaning already has a type, and none of them wants to be called
+`Context`.** If a header is ever added here it will be `WasmExecutionContext.hpp`,
+and only if `Agent`/`ExecutionState` stop being enough — today they are not: an
+agent owns exactly one execution state, and a continuation may install a bare
+state without an agent wrapper (`ExecutionState::owner` is nullable for exactly
+that case).
+
+| File | Decision | Reason |
 |---|---|---|
-| `WasmBase/WasmContext.hpp` | **Delete.** | Redundant. The realm is `ModuleInstance`; the ABI POD is `VMContext` (`WasmVMContext.hpp`). |
-| `WasmBase/WasmRuntime.hpp` | **Fill it** with `WASM::Runtime` (§4). | The role exists and has no owner. |
-| `LibJit/LibJitRuntime.{hpp,cpp}` | **Delete or fill**, but not leave as a fake. | A backend must not own a "runtime"; if a per-backend session object is wanted, name it `Session` (as the harness already does). |
+| `WasmBase/WasmContext.hpp` | **Deleted (2026-10-29).** | Every meaning in the table above has an owner under another name; a fifth name would be a synonym, not a role. |
+| `WasmBase/WasmRuntime.hpp` | **Fill it** with `WASM::Runtime` (§4, shape in §4.7). | The engine-instance role exists and has no owner. |
+| `LibJit/LibJitRuntime.{hpp,cpp}` | **Deleted (2026-10-29).** | A backend must not own a "runtime"; the per-backend object is the session the harness already calls `Session`. |
+
+**The one gap the reconsideration exposed.** The execution role is *named* but
+the embedder surface does not mention it: §2's recipe never tells a game that a
+worker thread calling into Wasm carries an agent, or that two independent agents
+on one thread need `AgentScope`. Today a thread that never installs one gets a
+lazily created default agent, which works but is invisible policy. `ES-1`
+therefore adds `Runtime::createAgent()` (§4.7) and this note records the rule.
+
+### 3.2 Five levels: the terminology ladder
+
+The table above tests the name `Context`. This one is the same information as a
+ladder, because the words are reused down a stack of responsibilities, and two
+different communities call two different levels "the runtime".
+
+| Level | ECMAScript / JS-engine name | WasmJit type | Lifetime | Owns |
+|---|---|---|---|---|
+| **Hosting environment** | "runtime" in the browser/Node sense — Chrome, Safari, Node.js, Bun, Deno: engine + platform APIs + event loop + callback queue | the embedder's process/loop; no WasmJit type | process | threads/event loop, I/O, scheduling policy, time limits |
+| **Engine instance** | `JSRuntime` (SpiderMonkey), `Isolate` (V8) | `WASM::Runtime` (**`ES-1`**) | runtime | `Store`, loaded `Module`s, instances, backend session, profile and policy defaults |
+| **Realm** | `JSContext` (SpiderMonkey/QuickJS), `Context` (V8) | `WASM::ModuleInstance` | instance | index spaces, exports, data/element segments, `hostData` |
+| **Execution context** | ECMAScript *execution context* — global or function; variable environment, lexical environment, `this` binding; one per call | `WASM::ExecutionState`, owned by `WASM::Agent` | one call stack | trap, exception, tail-call target, defer stack, depths, stack limit, diagnostics |
+| **Frame base** | — (JS exposes no equivalent) | `WASM::VMContext` POD | instance | memory/table/global pointers, `hostData`, `stackLimit` fallback |
+
+Three consequences that resolve the ambiguity:
+
+1. **`JSRuntime : JSContext` ≈ `WASM::Runtime : ModuleInstance`.** The earlier
+   sketch mapped that faithfully, then let `JitContext::call()` do the calling —
+   which bundled the realm with the call entry point. Here the call entry point is
+   `callCallable` on a `Callable`; the runtime only performs the *lookup*
+   (`callExport`, §4.7). Keeping those two apart is the whole of `ES-1`.
+2. **"Execution context" belongs to the agent, not the realm.** The ECMAScript
+   definition (variable/lexical environment, `this`, ephemeral, one per call)
+   matches `ExecutionState` almost field for field, and `ExecutionState` is
+   already per call stack. That is why `WasmContext.hpp` cannot be made to mean
+   "the thing a call runs in" without colliding with `Agent`.
+3. **The "runtime" in the browsing sense is the embedder.** Rows 1 and 2 are both
+   called a runtime in ordinary speech; only row 2 is a WasmJit type. So
+   `WASM::Runtime` must never grow an event loop, a scheduler or a time limit —
+   those stay in row 1 (`SAFETY.md` `S1`,
+   [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6).
+
+`WASM::Agent` is the ECMAScript *agent* — the spec term for a set of execution
+contexts that can share data — which is also the WebAssembly threads model's word
+(`THREADSAFETY.md` §2). That is why `Agent`, not `Runtime`, owns the row-4 state.
 
 ## 4. `WASM::Runtime` — what it would own
 
@@ -117,7 +193,7 @@ as arg0 — which is *not* the realm, it is the realm's address. So:
 | **The instance registry** (one `ModuleInstance` per `Module`, at most) | nowhere — the caller holds it | The runtime is the natural place to *enforce* the cardinality rule ([`THREADSAFETY.md`](THREADSAFETY.md) §3.1): `instantiate()` returns the existing instance or creates the only one, and refuses a second |
 | Loaded `Module`s (`std::shared_ptr<const Module>`) | owned ad hoc by the embedder/harness | An instance refers to its module for its whole life; the runtime can keep the module alive and cache by content hash |
 | Backend session (`ModuleInstantiator&` / plugin handle) | constructed by the harness per test | Compilation belongs to the engine instance, not to a call site |
-| Default `HostBridge`, `DiagnosticSink`, `ProfileConfig`, `ValidationOptions` | passed per call / per instantiation | Policy belongs to the runtime; per-call overrides remain |
+| Default `HostBridge`, `DiagnosticSink`, `ProfileConfig` | passed per call / per instantiation | Policy belongs to the runtime; per-call overrides remain. `ValidationOptions` is derived from the profile and stays internal (§4.6). |
 | Limits: byte budget, stack limit policy, page cap | process-wide statics / `Store` | A game may want two runtimes with different budgets |
 | Concurrency model (`Single` today, see [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6) | — | Same reason |
 | Name/version/capabilities | nowhere | The embedder and the plugin loader both need to ask |
@@ -176,18 +252,160 @@ two, it is the difference between isolation and corruption.
 | **Safepoint policy** | The embedder must remember `instance->gcCollect()` (P6) | `Runtime::safepoint()` collects on every live instance at a frame boundary; documented as the frame-end hook |
 | **Load ergonomics** | `Elv::Io::Device` required (P2) | `loadFile(path)` / `loadBytes(span)` on the runtime; the Elv overload stays for compatibility |
 | **Call ergonomics** | `exportedFunction()` + `callCallable` by hand | `callExport<int32_t>(instance, "name", args...)`, which is the same path with the lookup done once |
-| **Capability/version query** | none (P4) | `runtime.version()`, `runtime.capabilities()`, `runtime.backendName()` — also what the plugin loader needs ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md)) |
+| **Capability/version query** | none (P4) | `runtime.version()`, `runtime.abiVersion()`, `runtime.profile()`, `runtime.supports()`, `runtime.backendName()` — also what the plugin loader needs ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md)) |
 | **Lifetime rule** | "do not destroy the instance before its callers" in prose | The runtime owns instances and modules, so the rule becomes structural |
 | **Instance cardinality** | Nothing stops a caller instantiating twice; the rule lives only in prose | `instantiate()` is idempotent (same `Module` → same instance) and a second attempt is refused with a named error ([`THREADSAFETY.md`](THREADSAFETY.md) §3.1) |
 
+### 4.6 Profiles, diagnostics and the other defaults the runtime owns
+
+`RuntimeConfig` collects the policy the runtime applies to every load and
+instantiation. It is small on purpose: each field is either a value the embedder
+may legitimately choose or a borrowed pointer with a documented lifetime.
+
+| Field | Type | Default | What it does |
+|---|---|---|---|
+| `profile` | `ProfileConfig` | `fullProfile()` | the load/instantiate gate ([`proposals/PROFILES.md`](proposals/PROFILES.md)) |
+| `hostBridge` | `const HostBridge*` | `nullptr` | borrowed default bridge; a per-instance override stays legal |
+| `sink` / `sinkUserData` | `DiagnosticSink` + `void*` | `nullptr` / `nullptr` | the bounded diagnostic sink a created agent inherits ([`DIAGNOSTICS.md`](DIAGNOSTICS.md), `DiagnosticState` in [`WasmDiagnostics.hpp`](../WasmBase/WasmDiagnostics.hpp)) |
+| `allocationBudgetBytes` | `std::uint64_t` | `0` = engine default | the byte budget `Store::reserveBytes` charges against (`SAFETY.md` §2.3); today it is `Store::allocationBudgetBytes()` (default 2 GiB, `WASMJIT_MAX_TOTAL_BYTES`), process-wide until `ES-2` scopes it to the runtime |
+
+There is deliberately **no `ValidationOptions` field**: that type lives in
+`WasmBase/WasmValidation.hpp`, which §6.1 classifies as *internal*, and the only
+part of it an embedder needs to choose is the profile. The runtime builds the
+validation options from the profile it was given, so the internal header does not
+leak into the public tier.
+
+**What a profile is, and is not.** [`proposals/PROFILES.md`](proposals/PROFILES.md)
+defines a profile as a coarse language subset that may only *restrict* the
+engine: a marker names what is excluded, and a profile is the intersection of its
+markers' exclusions (§2). It is **not** feature detection and **not** versioning —
+those are `profile()`/`supports()`/`version()` (§4.7). Three rules follow:
+
+1. **The engine declares, the runtime selects.** `supportedProfile()` and
+   `supportsProfileConfig()` (`WasmBase/WasmProfile.hpp`) are the engine's
+   statement; `RuntimeConfig::profile` is the embedder's choice. The engine claims
+   `Full`, `Scalar` and `{N,T,V}`; it refuses `{N,T}` alone, because a
+   deterministic profile that still admits vectors would need per-lane NaN
+   normalisation it does not implement (`PROFILES.md` `PR-3`, `PRD6`).
+2. **The gate runs twice, and a caching runtime is why it must.** `Module::fromFile`
+   gates at load; `ModuleInstantiator::instantiate` re-validates before allocating
+   or compiling (`PROFILES.md` §4). A runtime that caches modules may not let a
+   module loaded under `Full` be instantiated under `{T}` just because it is
+   already in the cache.
+3. **A profile is not the concurrency decision.** `T` excludes shared memory and
+   atomics; that is a different statement from "multi-agent execution is deferred"
+   ([`THREADSAFETY.md`](THREADSAFETY.md) §3.1). Likewise `V` is the scalar gate,
+   and `{N,T,V}` is the only deterministic shape this engine claims: a
+   deterministic build that still wants vectors is refused by
+   `supportsProfileConfig`, not silently downgraded.
+   `profile()` and `supports()` are where an embedder finds out which claims this
+   build makes.
+
+The sketch's `JitContextCreationArguments` bundled limits this engine rejects
+(`maxCallStackDepth`, a page cap, a bounds-check toggle, §5). The fields that
+survive keep their reason: the profile is a *language subset*, not a knob; the
+budget is a *byte* budget; and the bridge and sink are borrowed, because the
+runtime must not outlive its embedder's hooks or callbacks.
+
+### 4.7 What `WasmRuntime.hpp` should look like
+
+This is the shape `ES-1` fills — C++-style pseudocode, not a frozen header. It
+contains the *adopted* half of the earlier sketch (§5), so it deliberately has no
+`Result<T>`, no `CompiledFunc`, no `createContext()` and no `JitBackend` enum.
+
+```cpp
+// WasmBase/WasmRuntime.hpp — ES-1 fills this; the umbrella already includes it.
+namespace WASM {
+
+struct RuntimeConfig {
+    ProfileConfig  profile{};                  // fullProfile() by default (PROFILES.md)
+    const HostBridge* hostBridge = nullptr;    // borrowed; must outlive the runtime
+    DiagnosticSink sink          = nullptr;    // borrowed; null = no callback
+    void*          sinkUserData  = nullptr;
+    std::uint64_t  allocationBudgetBytes = 0;  // 0 = the SAFETY.md default
+};
+
+class Runtime {
+public:
+    // A name, not an enum: a plugin-loaded backend must not need a frontend
+    // rebuild (BACKEND_PLUGIN_ABI.md).
+    static std::unique_ptr<Runtime> create(std::string_view backend,
+                                           const RuntimeConfig& config = {});
+    ~Runtime();
+
+    Runtime(const Runtime&) = delete;
+    Runtime& operator=(const Runtime&) = delete;
+
+    // Load (P2): bytes or a path. No Elv::Io::Device on this surface; the Elv
+    // overloads stay on Module/Artifact for compatibility.
+    std::shared_ptr<const Module> loadBytes(std::span<const std::byte> bytes);
+    std::shared_ptr<const Module> loadFile(const std::filesystem::path& path);
+
+    // Instantiate (idempotent): one instance per Module, a second attempt is
+    // refused with a named error (THREADSAFETY.md §3.1). The instance is owned
+    // by the runtime, so the handle is a reference; `imports` and the config's
+    // bridge are borrowed and must outlive it.
+    ModuleInstance& instantiate(const Module& module, ImportResolver& imports);
+    ModuleInstance* instanceOf(const Module& module) noexcept;   // null before instantiate
+
+    // Calls: the lookup happens once; the ABI does not change.
+    template <typename Ret, typename... Args>
+    Ret callExport(ModuleInstance& instance, std::string_view name, Args&&... args);
+    template <typename... Args>
+    void callExportWithResults(ModuleInstance& instance, std::string_view name,
+                               void* results, Args&&... args);
+
+    // Frame end (P6): collect on every live instance at a safepoint.
+    void safepoint();
+
+    // Identity and capability (P4), also what the plugin loader compares.
+    std::string_view backendName() const noexcept;
+    std::string_view version()     const noexcept;   // WasmVersion.hpp
+    std::uint32_t    abiVersion()  const noexcept;
+    ProfileConfig    profile()     const noexcept;   // what instantiate() will apply
+    bool             supports(Profile profile) const noexcept;
+
+    // The execution half (§3.2): an engine instance hands out agents; it does
+    // not become one.
+    std::unique_ptr<Agent> createAgent();
+
+    // ES-2: runtime-scoped storage. Today this is Store::global(); after ES-2 it
+    // is the runtime's own Store, and cross-runtime handles are rejected (§4.4).
+    Store& store() noexcept;
+
+private:
+    Store*                              store_;
+    std::unique_ptr<ModuleInstantiator> backend_;
+    RuntimeConfig                       config_;
+    // + loaded modules, instances, the instanceOf() index, the backend session
+};
+
+} // namespace WASM
+```
+
+**What the signatures encode**, and why none of it is cosmetic:
+
+| Choice | Why |
+|---|---|
+| `create(backendName)` rather than `create(JitBackend)` | A plugin-loaded backend cannot be added to a frontend enum without recompiling the frontend ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §4) |
+| `std::unique_ptr<Runtime>` | The runtime owns the store and every instance; sharing it by value would make ownership ambiguous, and there are no cross-runtime handles to share (§4.4) |
+| `ModuleInstance&`, not `unique_ptr<ModuleInstance>` or `ModuleInstance*` | The runtime owns the instance (§4.1), so an owning pointer would contradict the ownership table; a reference states the borrow |
+| `std::shared_ptr<const Module>` | An instance refers to its module for its whole life; the runtime keeps it alive and may cache by content hash. `const` because a validated module is immutable |
+| No `Result<T>` | The engine's error channels are `WASM::Trap` and standard exceptions; a third would be a frozen-surface decision, not a convenience |
+| `callExport<Ret>` over `callCallable` | The typed path *is* the ABI (§2 step 6); `callExport` is a lookup plus `callCallable`, never a second convention, and the multi-result buffer keeps its explicit form |
+| `createAgent()` on the runtime | Agents are per thread, not per runtime, but the runtime is where an embedder looks; it is the role §3.2 row 4 names |
+| `store()` returning `Store&` | `ES-2` replaces `Store::global()` with this accessor; until then it is §4.3's transitional option C |
+
 ## 5. Salvage review of the earlier sketch
 
-The sketch (a `JitRuntime` / `JitContext` / `ModuleInstance` trio from a different
-repository) is *influential*, not a template. Element by element:
+The sketch (the `JitRuntime` / `JitContext` / `ModuleInstance` trio from the
+earlier repository described in §3) is *influential*, not a template. Element by
+element:
 
 | Sketch element | Verdict | Why |
 |---|---|---|
-| `JitContextCreationArguments` | **Adopt the idea, rename `RuntimeConfig`** | One aggregate for limits and policy is right. |
+| The names `JitRuntime` / `JitContext` | **Reject the names, keep the roles** | "JIT" names a backend in this tree ([`LAYERING.md`](LAYERING.md) §2), and "context" has four meanings (§3.1–§3.2). The engine instance is `WASM::Runtime`; the execution role is `Agent`/`ExecutionState`, not a second `Context`. |
+| `JitContextCreationArguments` | **Adopt the idea, rename `RuntimeConfig`** | One aggregate for limits and policy is right; the fields that survive are in §4.6. |
 | ↳ `maxCallStackDepth = 1000` | **Reject** | The engine guards the stack with a byte limit per execution state (`wasm_stack_check`, `SAFETY.md` §2.8), not a frame count. A frame count would be a second, unenforceable budget. |
 | ↳ `maxMemoryPages` (0 = module limits) | **Reject the unit, adopt the budget** | `SAFETY.md` §2.2 bounds allocation *by bytes* from the module's own limits and a process budget. A page cap on top would be a third limit that disagrees with the other two. |
 | ↳ `enableBoundsChecking = false` | **Reject outright** | Bounds checks are a safety policy, not a performance knob (`SAFETY.md` §2.2). An embedder may choose a *budget*, never "no checks". |
@@ -196,11 +414,12 @@ repository) is *influential*, not a template. Element by element:
 | `CompiledFunc { code, funcIndex, codeSize }` exposed publicly | **Reject** | Handing out raw code pointers invites bypassing `callCallable` (and therefore the trap check) and bakes a backend's layout into the API. Handles stay `void*` in `ModuleInstanceInternals`; the public handle is `Callable`. |
 | `ModuleInstance` owning `unique_ptr<Memory/Table/Global>` | **Reject** | Store ownership is semantic, not incidental: an imported mutable global must **alias** the exporter (`RT-4`, `MG-2`/`MG-3`), and two modules share one memory. Per-instance ownership cannot express either. |
 | `bindHostFunc(funcIndex → binding)` | **Reject** | Imports must resolve by `(module, field)` and be matched against the declared `TypeId` (`ImportResolver`). An index-keyed map cannot check a signature and breaks as soon as a module is re-imported. |
-| `JitContext::instantiate() → Result<ModuleInstance*>` | **Adopt the shape, not the details** | `Runtime::instantiate(module, resolver)` returning `std::unique_ptr<ModuleInstance>`; no raw-pointer return, and no `Result<T>` — the engine's error channels are `WASM::Trap` and standard exceptions. |
+| `JitContext::instantiate() → Result<ModuleInstance*>` | **Adopt the shape, not the details** | `Runtime::instantiate(module, resolver)` returns `ModuleInstance&` — the runtime owns the instance (§4.1/§4.7). No raw-pointer return and no `Result<T>`: the engine's error channels are `WASM::Trap` and standard exceptions. |
 | `call(instance, funcIndex, span<Value>) → vector<Value>` | **Adopt as a convenience only** | The typed `callCallable` / `callCallableWithResults` path is the frozen ABI; a `Value`-vector wrapper is sugar on top and must not become the primary calling convention (it would hide the multi-result buffer rule). |
 | `callByName` | **Adopt** | The lookup is a one-liner over `exportedFunction`; embedders should not write it twice. |
 | `compileFunction(instance, funcIndex)` (lazy, per function) | **Reject** | The seam is module-granular (`declareFunctions` + `compileFunctions`); per-function lazy compilation would change the backend contract — a class-E change to satisfy a convenience. |
-| `JitRuntime::createContext()` / `createGCContext()` | **Reject** | There is no context object (the realm is `ModuleInstance`) and no separate GC realm (the heap is a `Store` member). `createContext()` would also read as "make another realm", which the one-instance-per-module rule forbids ([`THREADSAFETY.md`](THREADSAFETY.md) §3.1). |
+| `JitRuntime::createContext()` / `createGCContext()` | **Reject** | There is no context object (the realm is `ModuleInstance`) and no separate GC realm (the heap is a `Store` member). `createContext()` would also read as "make another realm", which the one-instance-per-module rule forbids ([`THREADSAFETY.md`](THREADSAFETY.md) §3.1). The role it was reaching for is `Agent` (§3.1), and the runtime hands those out with `createAgent()` (§4.7). |
+| `ModuleLoader` as a public class | **Internalise** | Loading is `Artifact::parse` + `Module::fromFile`; a loader object is an implementation detail of `Runtime::loadFile`/`loadBytes`, not a frozen surface, and exposing it would freeze a file-format seam the engine wants to keep private. |
 | `createRuntime(JitBackend)` factory | **Adopt the factory, reject the closed enum** | A plugin-loaded backend cannot be added to a frontend enum without recompiling the frontend. Use a name/query (`createRuntime("libjit")`), which is also what a plugin descriptor gives you. |
 | `getName()` / `getVersion()` | **Adopt** | Needed by the embedder *and* by the plugin loader. |
 | `loadModule` / `loadModuleFromFile` | **Adopt, without the `Elv::Io::Device`** | `loadBytes(span)` / `loadFile(path)` are the two entry points an embedder expects. |
@@ -233,7 +452,7 @@ Two headers are in the wrong place for *any* tier:
 
 | Header | Problem | Fix |
 |---|---|---|
-| `WasmContext.hpp` | Empty placeholder; the role is already `ModuleInstance` | Delete (§3.1) |
+| `WasmContext.hpp` | Empty placeholder; the realm is `ModuleInstance` and the execution context is `Agent`/`ExecutionState` | **Deleted (2026-10-29)**; §3.1–§3.2 record the verdict |
 | `WasmRuntime.hpp` | Empty placeholder; the role exists and has no owner | Fill with `WASM::Runtime` (§4) |
 
 ### 6.2 The `Elvavena`/`Euphemy` leak
@@ -313,15 +532,18 @@ only useful if the runtime makes the recipe short:
 ```cpp
 #include <wasmjit/wasmjit.hpp>
 
-WASM::Runtime runtime = WASM::Runtime::create("libjit");    // or a plugin
-auto module   = runtime.loadFile("game.wasm");              // no Elv::Io::Device
-auto instance = runtime.instantiate(*module, resolver);     // the Store is the runtime's
-int32_t r = runtime.callExport<int32_t>(*instance, "tick", 16);
-runtime.safepoint();                                        // frame end
+WASM::RegistryImportResolver imports;                       // register host functions
+auto runtime   = WASM::Runtime::create("libjit");           // or a plugin name
+auto module    = runtime->loadFile("game.wasm");            // no Elv::Io::Device
+auto& instance = runtime->instantiate(*module, imports);    // the Store is the runtime's
+int32_t r = runtime->callExport<int32_t>(instance, "tick", 16);
+runtime->safepoint();                                       // frame end
 ```
 
-That is the acceptance example for `ES-1`: five lines, no backend header, no
-`Elv` type, no manual `Store`.
+That is the acceptance example for `ES-1`: no backend header, no `Elv` type, no
+manual `Store`, and the only object the embedder has to keep alive is the import
+resolver. The shapes are the ones in §4.7 — the runtime is held by
+`std::unique_ptr` and the instance is borrowed from it.
 
 ## 7. Version, soname, symbol visibility and install
 
@@ -373,7 +595,7 @@ must name whatever §6.2 decides about `Elvavena`/`Euphemy`.
 
 | Milestone | Work | Class | Closes | Done when |
 |---|---|---|---|---|
-| **ES-1 — `WASM::Runtime` skeleton** | Fill `WasmRuntime.hpp`: `create(name)`, `loadFile`/`loadBytes`, `instantiate` (idempotent — one instance per `Module`, a second attempt refused), `callExport`, `safepoint`, `version`/`capabilities`, owning a `Store` via option C (§4.3). Delete `WasmContext.hpp`; retire `LibJit::Runtime`. | A | P1, P2, P4, P5, P6; R1 enforcement | The five-line example in §6.4 compiles and runs against the real library; the default suite is unchanged. |
+| **ES-1 — `WASM::Runtime` skeleton** | Fill `WasmRuntime.hpp` to the shape in §4.7: `RuntimeConfig` (profile, bridge, sink, budget — §4.6), `create(name)`, `loadFile`/`loadBytes`, `instantiate` (idempotent — one instance per `Module`, a second attempt refused, instance owned by the runtime), `instanceOf`, `callExport`/`callExportWithResults`, `safepoint`, `version`/`abiVersion`/`backendName`/`supports`, `createAgent`, and `store()` replacing `Store::global()` via option C (§4.3). `WasmContext.hpp` and `LibJit::Runtime` are already deleted (2026-10-29). | A | P1, P2, P4, P5, P6; R1 enforcement; AAS1 | The example in §6.4 compiles and runs against the real library; the default suite is unchanged. |
 | **ES-2 — Store scoping migration** | Finish §4.3 option B: thread `Store&` through the 12 TUs; update `TYPE_IDENTITY.md` to "runtime-scoped" (or record the deliberate shared-registry exception) and add the cross-runtime `Callable` rejection rule. | A (wide) | Multi-tenancy; §4.4 | `Store::global()` has no remaining callers; two runtimes in one process have independent heaps and reject cross-runtime callables. |
 | **ES-3 — Header tiers and umbrella** | ◑ **2026-10-29: `WasmJit.hpp` and the per-header compile tests landed.** Classify every header into the three tiers; add `WasmJit.hpp`; move `Elv` out of the public *signatures* where §6.2 says it is feasible; add a compile-only test per public header. Still open: the classification and the `Elv`-signature work. | A | P3, `AAS2` (partly) | Every public header compiles alone; the umbrella compiles with only the public include path; no public header includes a backend header. |
 | **ES-4 — Visibility and versioning** | ◑ **2026-10-29: `WasmVersion.hpp`/`.cpp` landed** (`WASMJIT_VERSION_*`, `WASMJIT_ABI_VERSION`, `WASM::versionString()`/`abiVersion()`). Still open: `-fvisibility=hidden` + `WASMJIT_API`; explicit `VERSION`/soname per library; a documented bump rule. | A | P4; ABI hygiene | The exported symbol set is a declared list; `abidiff` runs clean between two builds of the same headers. |
@@ -392,6 +614,7 @@ want `ES-3`'s tier list; `ES-6` is pure documentation and can land first.
 | `AAS1` — "the embedder's API is the test harness" | `ES-1`, `ES-3`, `ES-5` |
 | `AAS2` — the ABI note does not cover every signature | `ES-6` |
 | P5 — two empty headers | ◑ `WasmContext.hpp` deleted (2026-10-29); `WasmRuntime.hpp` stays the `ES-1` placeholder until `WASM::Runtime` is filled |
+| "What is the execution context?" | §3.1–§3.2 name it: `Agent` owns one `ExecutionState`; `ES-1` exposes `createAgent()` and §2 step 11 documents the worker-thread rule |
 | "Is there room for a `Runtime`?" | Yes: the role is real (§3) and the owner was missing (§4) |
 
 | Stays open | Why |
@@ -400,6 +623,7 @@ want `ES-3`'s tier list; `ES-6` is pure documentation and can land first.
 | `Elvavena` in the public SDK | Deliberately accepted for the first freeze (§6.2), and the long-term direction is deeper MhLib integration, not removal (§6.2.1). |
 | A stable C++ ABI across compilers | Out of scope without a pimpl firewall; §7.2 promises soname discipline, not cross-vendor binary compatibility. |
 | Dynamic backend loading | [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md). `Runtime::create(name)` is the seam that makes it a build change later, not a redesign. |
+| Which thread may run which agent, and when | [`THREADSAFETY.md`](THREADSAFETY.md) §3.1 and [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6. `ES-1` hands the agent out; it does not schedule it. |
 
 ## 10. Test survey
 
@@ -422,8 +646,14 @@ want `ES-3`'s tier list; `ES-6` is pure documentation and can land first.
   `Runtime::create(name)` is designed to make possible.
 - [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6 — the concurrency
   mode a `RuntimeConfig` would eventually carry.
-- [`THREADSAFETY.md`](THREADSAFETY.md) §3.1–§3.2 — the instance-cardinality rule
-  and the accepted concurrency scenarios the runtime has to enforce.
+- [`THREADSAFETY.md`](THREADSAFETY.md) §2 and §3.1–§3.2 — the agent/instance/
+  host vocabulary behind the ladder in §3.2, and the instance-cardinality rule
+  the runtime has to enforce.
+- [`proposals/PROFILES.md`](proposals/PROFILES.md) — the profile markers, the
+  double gate at load and instantiation, and why `{N,T}` alone is refused (§4.6,
+  `PR-3`/`PRD6`).
+- [`DIAGNOSTICS.md`](DIAGNOSTICS.md) — the bounded sink and the per-execution-state
+  `DiagnosticState` that `RuntimeConfig` seeds.
 - [`TYPE_IDENTITY.md`](TYPE_IDENTITY.md) — the "process-wide" `TypeId` statement
   §4.4 would revise.
 - [`LAYERING.md`](LAYERING.md) §2/§4/§6 — the rule the public headers must keep,
@@ -432,7 +662,10 @@ want `ES-3`'s tier list; `ES-6` is pure documentation and can land first.
   that make three of the sketch's config options unshippable (§5).
 - [`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) — why a JS engine
   is not in the core, which is what keeps the "realm" mapping (§3) honest.
-- Source anchors: `WasmBase/WasmStore.hpp` (`Store::global()`), `WasmBase/WasmRuntime.hpp`,
-  `WasmBase/WasmContext.hpp`, `WasmBase/WasmModule.hpp` (`fromFile`),
+- Source anchors: `WasmBase/WasmStore.hpp` (`Store::global()`),
+  `WasmBase/WasmRuntime.hpp` (the `ES-1` placeholder), `WasmBase/WasmJit.hpp`
+  (the umbrella), `WasmBase/WasmVersion.hpp`, `WasmBase/WasmProfile.hpp`,
+  `WasmBase/WasmAgent.hpp` (`Agent`/`ExecutionState`), `WasmBase/WasmModule.hpp`
+  (`fromFile`), `WasmBase/WasmValidation.hpp` (internal, §4.6),
   `WasmBase/WasmBase.pri`, `Test/helper.cpp` (the current recipe).
 
