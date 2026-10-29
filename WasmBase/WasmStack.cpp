@@ -51,6 +51,7 @@ bool installStackLimit(VMContext& ctx, std::size_t reserve)
 	ExecutionState& state = currentExecutionState();
 	ctx.stackLimit = 0;
 	state.stackLimit = 0;
+	state.stackThread = std::this_thread::get_id();
 
 	std::uintptr_t lowestAddress = 0;
 	std::uintptr_t highestAddress = 0;
@@ -69,6 +70,28 @@ bool installStackLimit(VMContext& ctx, std::size_t reserve)
 	state.stackLimit = lowestAddress + reserve;
 	ctx.stackLimit = state.stackLimit;
 	return true;
+}
+
+void ensureCurrentThreadStackLimit(ExecutionState& state) noexcept
+{
+	// One comparison on the normal path. The thread's stack does not move, so a
+	// state that already ran on this thread keeps its limit.
+	const std::thread::id current = std::this_thread::get_id();
+	if (state.stackThread == current)
+		return;
+
+	state.stackThread = current;
+	state.stackLimit = 0;
+
+	std::uintptr_t lowestAddress = 0;
+	std::uintptr_t highestAddress = 0;
+	if (!currentThreadStackBounds(lowestAddress, highestAddress))
+		return;
+
+	const std::uintptr_t size = highestAddress - lowestAddress;
+	if (size <= kDefaultStackReserveBytes * 2)
+		return;
+	state.stackLimit = lowestAddress + kDefaultStackReserveBytes;
 }
 
 extern "C" void wasm_stack_check(VMContext* ctx)

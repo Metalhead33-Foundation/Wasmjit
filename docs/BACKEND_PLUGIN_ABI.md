@@ -277,7 +277,7 @@ until someone proves a need for more.
 | **BP-0 — This study** ✅ | The analogy, the descriptor sketch, the boundary rules, the risk register. No code. | — | Linked from `API_ABI_STABILITY.md` and `README.md`. |
 | **BP-1 — Freeze the narrow boundary** ✅ | **Landed 2026-10-29:** `WasmBase/WasmBackendAbi.hpp` defines `ValueKind`, `SignatureView`, `FieldLayout`, `AggregateLayout` and `computeAggregateLayout` — standard-layout, layout-pinned by `static_assert`, and the executable form of [`ABI.md`](ABI.md) "The result tuple layout" / "`v128` by Value". `Test/BackendAbiTests.cpp` (`[backendabi]`) asserts the rule. | A | `ABI.md` describes them ✅; the harness's `TestBackend::AggregateLayout` is expressible in terms of the core POD ✅ |
 | **BP-2 — Generalise the selector** ✅ | **Landed 2026-10-29:** `WasmBackendRegistry.{hpp,cpp}` (name → factory, `WASMJIT_REGISTER_BACKEND`), the null instantiator as the second implementation, the executing backend registered from its own translation unit, and `Runtime::create(name)`. | A | Two backends (`libjit`, `null`) are selectable by name with no frontend rebuild ✅ |
-| **BP-3 — Add `dlopen`** ◑ | **Landed 2026-10-29:** `loadBackendPluginFile` / `loadBackendPlugin` with `RTLD_NOW|RTLD_LOCAL`, the `wasmjit_backend_query` handshake, descriptor- and core-ABI checks before any other call, host callback table and contained failure. `Test/ExampleBackend` builds a real plugin in its own directory and `[plugin]` loads it by name. **Still open:** the `NEEDED` inspection that refuses a plugin carrying its own core (risk 2). | A | A plugin built in a separate directory loads by name ✅; a wrong-ABI plugin is refused with a message ✅; the "exactly one core" check is not implemented yet ◑ |
+| **BP-3 — Add `dlopen`** ✅ | **Landed 2026-10-29:** `loadBackendPluginFile` / `loadBackendPlugin` with `RTLD_NOW|RTLD_LOCAL`, the `wasmjit_backend_query` handshake, descriptor- and core-ABI checks before any other call, a host callback table, contained failure, and the one-core guard: the plugin's `wasm_trap_slot` must resolve to the host's address, otherwise it carries its own core and is refused (a symbol-identity probe rather than a `DT_NEEDED` parse — no libelf, the same failure caught). `Test/ExampleBackend` builds a real plugin in its own directory and `[plugin]` loads it by name. | A | A plugin built in a separate directory loads by name ✅; a wrong-ABI plugin is refused ✅; a plugin with its own core is refused ✅ |
 | **BP-4 — Unload policy and containment tests** ✅ | **Landed 2026-10-29:** the loader keeps every plugin handle for the process lifetime (rule 8; there is no unload entry point), and `[plugin]` covers a missing file, a library without the query symbol, an unknown name, a descriptor-ABI mismatch, a core-ABI mismatch and a failing `create` — each a diagnostic-bearing exception, never an abort. | A | Those failure paths are covered by tests and produce diagnostics, never aborts ✅ |
 | **BP-5 — Package backends** | Install the backend `.so` files and their `.pc` `Requires:` entries alongside the core. | A | `make install` yields a runtime that finds `libwasmjit-backend-libjit.so` in the install prefix. |
 
@@ -289,13 +289,13 @@ works.
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (2026-10-29) | **11,120 assertions / 460 cases, green** | The compiled-in path is the baseline every `BP-*` stage must preserve. |
+| Default suite (2026-10-29) | **11,328 assertions / 465 cases, green** | The compiled-in path is the baseline every `BP-*` stage must preserve. |
 | Backend selection | `WasmBackendRegistry` names `libjit` and `null`; an unknown name is a named error | The selector is general and the second implementation exists. |
 | Plugin load test | **Present** — `Test/ExampleBackend/libwasmjit-backend-example.so`, loaded by path and by name (`[plugin]`) | `BP-3`; the plugin lives in its own directory and the frontend was not rebuilt for it. |
 | Wrong-ABI / missing-symbol / failing-create tests | **Present** — descriptor ABI, core ABI, no query symbol, missing file, failing `create` (`[plugin]`) | `BP-3`/`BP-4`; every path is an exception with a reason, never an abort. |
 | POD layout test | **Present** — `[backendabi]` pins the tuple rule | `BP-1`. |
 | Symbol-hygiene check | **Absent**; everything is exported | `ES-4`; without it the plugin ABI is undeclared. |
-| "One core" check (`NEEDED` inspection) | **Absent** | `BP-3` remainder; it guards risk 2, the most dangerous one. |
+| "One core" check (`NEEDED` inspection) | **Present as a symbol-identity probe** — the loader compares the plugin's `wasm_trap_slot` with the host's and refuses a private copy | `BP-3`; a plugin with its own core is refused rather than corrupting two Stores. |
 
 ## 12. References
 

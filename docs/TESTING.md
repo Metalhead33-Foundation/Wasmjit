@@ -971,7 +971,8 @@ Four tagged families cover the embedding surface and the backend seam:
 | --- | --- | --- |
 | `[runtime]` | `Test/RuntimeTests.cpp` | `WASM::Runtime`: load → instantiate → call against the real backend, idempotent instantiation, named errors, the `MF-2` in-call guard, agent hand-out |
 | `[backendabi]` | `Test/BackendAbiTests.cpp` | The POD signature/layout views (`WasmBase/WasmBackendAbi.hpp`) against `ABI.md`'s tuple rule |
-| `[concurrency]` | `Test/ConcurrencyTests.cpp` | `ConcurrencyModel` claims, the `Agents` refusal, and the per-runtime budget refusal |
+| `[concurrency]` | `Test/ConcurrencyTests.cpp` | `ConcurrencyModel` claims, the `Agents` refusal, the per-runtime budget refusal, a re-entrant compiled function across threads, and the `MF-2` refusal under a real second-thread call |
+| `[tiers]` | `Test/HeaderTierTests.cpp` | Every `WasmBase/` header is classified exactly once; the umbrella includes exactly the embedder tier; every public header has a compile-only TU |
 | `[plugin]` | `Test/PluginTests.cpp` | The `dlopen` loader: a real plugin loads by path and by name; every refusal path is a named error |
 
 The plugin fixture is `Test/ExampleBackend/ExampleBackend.pro`, a shared library

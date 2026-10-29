@@ -108,7 +108,8 @@ SOURCES += main.cpp \
     BackendAbiTests.cpp \
     RuntimeTests.cpp \
     ConcurrencyTests.cpp \
-    PluginTests.cpp
+    PluginTests.cpp \
+    HeaderTierTests.cpp
 HEADERS +=  \
     helper.hpp \
     Diagnose.hpp \

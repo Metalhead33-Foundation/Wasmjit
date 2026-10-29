@@ -3,10 +3,20 @@
 
 #include "WasmImport.hpp"
 #include "WasmMemory.hpp"
-#include <Elvavena/Util/ElvStringhashMap.hpp>
+#include <functional>
+#include <map>
 #include <memory>
+#include <string>
+#include <string_view>
 
 namespace WASM {
+
+// A name → object map with heterogeneous lookup, so a `std::string_view` lookup
+// does not allocate and does not need the vendored container that used to be
+// included here (docs/EMBEDDING_SURFACE.md §6.2: the resolver is embedder tier,
+// and an embedder header should not pull in the utility library for a map).
+template<typename T>
+using NameMap = std::map<std::string, T, std::less<>>;
 
 // Generic registry-backed resolver for embedders that want to pre-register
 // imports by module/field name. This is backend-independent storage; any
@@ -26,14 +36,14 @@ public:
 	};
 
 	struct ModuleRegistry {
-		Elv::Util::UnorderedStrMap<Callable> functions;
-		Elv::Util::UnorderedStrMap<GlobalEntry> globals;
+		NameMap<Callable> functions;
+		NameMap<GlobalEntry> globals;
 		// Borrowed views into memories owned by the (global) Store. Registering
 		// the same pointer under two names is how memory sharing happens.
-		Elv::Util::UnorderedStrMap<LinearMemory*> memories;
-		Elv::Util::UnorderedStrMap<ImportedTable> tables;
-		Elv::Util::UnorderedStrMap<TagId> tags;
-		Elv::Util::UnorderedStrMap<TypeId> types;
+		NameMap<LinearMemory*> memories;
+		NameMap<ImportedTable> tables;
+		NameMap<TagId> tags;
+		NameMap<TypeId> types;
 
 		void registerFunction(std::string_view fieldName, const Callable& callable);
 		void registerGlobal(std::string_view fieldName, const Value& value);
@@ -103,7 +113,7 @@ public:
 		AbstractHeapType bound) override;
 
 private:
-	Elv::Util::UnorderedStrMap<ModuleRegistry> registeredModules;
+	NameMap<ModuleRegistry> registeredModules;
 };
 
 } // namespace WASM

@@ -7,6 +7,7 @@
 #include <Elvavena/Util/ElvDeferStack.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <thread>
 
 namespace WASM {
 
@@ -54,6 +55,12 @@ struct ExecutionState {
 	// value when it becomes current; `VMContext::stackLimit` remains a fallback
 	// for callers that have not installed a per-context limit yet.
 	std::uintptr_t stackLimit = 0;
+
+	// The host thread `stackLimit` describes. The state is created on first use
+	// by a thread; if it is later installed on another thread (agent migration,
+	// a continuation becoming current), the host boundary re-installs the limit
+	// for that thread (WasmStack.hpp, `ensureCurrentThreadStackLimit`).
+	std::thread::id stackThread{};
 
 	// Fixed-capacity cleanup stack, inline so registering cannot allocate.
 	Elv::Util::DeferStack::Record deferRecords[kDeferCapacity];

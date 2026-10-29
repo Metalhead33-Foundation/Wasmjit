@@ -20,8 +20,10 @@
 
 #include "WasmAgent.hpp"
 #include "WasmArtifact.hpp"
+#include "WasmConcurrency.hpp"
 #include "WasmContinuation.hpp"
 #include "WasmDiagnostics.hpp"
+#include "WasmException.hpp"
 #include "WasmExn.hpp"
 #include "WasmHostBridge.hpp"
 #include "WasmImport.hpp"

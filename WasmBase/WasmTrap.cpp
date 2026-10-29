@@ -1,6 +1,7 @@
 #include "WasmTrap.hpp"
 #include "WasmAgent.hpp"
 #include "WasmDiagnostics.hpp"
+#include "WasmStack.hpp"
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -199,7 +200,14 @@ int wasmCallDepth() noexcept
 
 CallDepthScope::CallDepthScope() noexcept
 {
-	++currentExecutionState().wasmCallDepth;
+	ExecutionState& state = currentExecutionState();
+	// Outermost entry: make sure this thread's stack guard is installed. An
+	// instance may be created on one thread and called from another, and the
+	// limit captured at creation describes the creating thread's stack
+	// (docs/SAFETY.md §2.8, WasmStack.hpp).
+	if (state.wasmCallDepth == 0)
+		ensureCurrentThreadStackLimit(state);
+	++state.wasmCallDepth;
 }
 
 CallDepthScope::~CallDepthScope()

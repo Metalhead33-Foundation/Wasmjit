@@ -521,8 +521,8 @@ invalidating the ones before it.
 | Milestone | Work | Class | Closes | Done when |
 |---|---|---|---|---|
 | **MF-0 — This study** ✅ | The demotion analysis, the per-backend matrix, the opt-in shape. No code. | — | — | This note is linked from `API_ABI_STABILITY.md` and `README.md`. |
-| **MF-1 — Verify, do not assume** | A concurrent-***invoke*** test per backend (the same compiled function called from two host threads) and an interleaved two-agent call; write "one context/emitter/allocator per session" and "compilation is serialized" down as backend rules; record the AsmJit allocator answer. | B | Question 2 | LibJIT's test runs green in the default suite; SLJIT/AsmJit inherit the test at bring-up. |
-| **MF-2 — Make concurrent entry *fail* instead of corrupt** ◑ | An explicit `AgentScope` at every host boundary; a per-instance "in call" guard that refuses or traps a second concurrent entry under `Single`; `callCallable` always acts on the current agent; `Runtime::instantiate` refuses a second instance of one `Module` (R1). | A | `MA-1` (first half), `MA-9` (model), **R1 enforcement** | Two host threads calling one instance under `Single` produce a deterministic error, not a data race; a second instantiation is refused with a named error. |
+| **MF-1 — Verify, do not assume** ✅ | **Landed 2026-10-29:** `[concurrency]` calls the *same* compiled function from two host threads (2000 calls each, all correct) and, in the process, exposed a real gap: a call from a thread that did not create the instance tripped the instantiating thread's stack guard. The host boundary now installs the calling thread's limit (`ensureCurrentThreadStackLimit`, `SAFETY.md` §2.8), so cross-thread calls work. SLJIT/AsmJit inherit the test at bring-up. | B | Question 2 | LibJIT's concurrent-invoke test runs green in the default suite ✅ |
+| **MF-2 — Make concurrent entry *fail* instead of corrupt** ✅ | **Landed 2026-10-29:** `ModuleInstance::tryEnterCall`/`leaveCall` plus `Runtime::callExport` refuse a second concurrent entrant under `Single`; `Runtime::instantiate` enforces R1; and the host boundary installs the *calling* thread's stack guard (`ensureCurrentThreadStackLimit`, `SAFETY.md` §2.8), which the cross-thread test exposed as missing. `[concurrency]` exercises a real second-thread refusal and a re-entrant function across threads. | A | `MA-1` (first half), `MA-9` (model), **R1 enforcement** | Two host threads on one instance under `Single` produce a deterministic error, not a data race ✅; a second instantiation is not expressible ✅ |
 | **MF-3 — Partition the instance's mutable GC bookkeeping** | `gcPending` / `gcCycleRoots` / counters per agent (or guarded by a per-instance safepoint lock); keep the frozen fields frozen. | B | `MA-3` (half) | A stress test with two agents allocating and releasing shows no lost queue entry and no double recycle. |
 | **MF-4 — Safepoint protocol for collection** | Define and document when `gcCollect()` is legal with agents (quiescence or per-agent collect); enforce it. | B | `MA-3` (rest) | A documented rule an embedder can follow, and a test that violates it and gets a clean failure. |
 | **MF-5 — Real `wait`/`notify`** | A guest-address-keyed waiter table behind the existing `wasm_atomic_wait*`/`notify`; keep the single-agent return values legal. | B | `MA-4` | A two-agent message-passing fixture (`ARA5`) passes without relying on the degenerate path. |
@@ -530,12 +530,16 @@ invalidating the ones before it.
 | **MF-7 — Two-agent conformance + memory model** | Trap isolation, join/cancel, shared memory/globals, and a written guest memory model. | A | `MA-9` | The two-agent suite is curated; the memory model is a note an embedder can implement against. |
 | **MF-8 — Re-open the milestone question** | Re-run `API_ABI_STABILITY.md` §7: did any §2.2 surface change? If yes, this is a **new milestone**, not a gap closure. | — | — | The answer is recorded, whichever it is. |
 
-**What landed (2026-10-29).** `MF-6` is complete, and the core of `MF-2` is in:
-`ModuleInstance::tryEnterCall`/`leaveCall` plus `Runtime::callExport` turn a
-second concurrent entry into a named error, and `Runtime::instantiate` enforces
-one instance per module. Still open from `MF-2`: the runtime does not install an
-`AgentScope` at the boundary, and the two-host-thread stress test does not exist —
-the guard is tested by simulating a held guard (`Test/RuntimeTests.cpp`).
+**What landed (2026-10-29).** `MF-1`, `MF-2` and `MF-6` are complete. `MF-6`
+adds the opt-in surface; `MF-2` refuses a second entrant with a named error and
+enforces one instance per module. The cross-thread test also exposed a real gap
+in the stack guard: the limit captured at instantiation belongs to the creating
+thread, so a call from any other thread tripped it immediately. The host
+boundary now installs the *calling* thread's own limit
+(`ensureCurrentThreadStackLimit`, `SAFETY.md` §2.8), which is what makes both
+`MF-1`'s concurrent-invoke test and `MF-2`'s second-thread test pass.
+`[concurrency]` covers the model claim, the refusal, the re-entrant function and
+the cross-thread call.
 
 The important ordering fact: **`MF-2` is worth doing even if agents are never
 shipped.** Today a second host thread entering one instance is *undefined*; a
@@ -579,12 +583,13 @@ says otherwise):
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite | **11,120 assertions / 460 cases, green** (2026-10-29) | The single-agent baseline every stage must preserve; the earlier 11,024-assertion run is a subset of it. |
+| Default suite | **11,328 assertions / 465 cases, green** (2026-10-29) | The single-agent baseline every stage must preserve; the earlier 11,024-assertion run is a subset of it. |
 | `spec: atomic` (curated) | 249 passed / 0 failed / 48 skipped (`proposals/THREADS.md` T10) | All 67 atomic handlers execute with real seq-cst semantics. |
 | Acquire-release fixture | Single-agent ordering + `pause` | The decode/lowering half is done; the *observation* half waits for a second agent (`ARA5`). |
 | Host-thread test | Two independent instances on two threads | Proves setup isolation, **not** the target concurrency model (`THREADSAFETY.md` §8 says so explicitly). |
 | Continuation tests | One-shot, trap/exception transfer, budget, stack exhaustion, serial migration | The execution-context machinery a scheduler would drive already exists. |
-| `[concurrency]` (2026-10-29) | 17 assertions / 4 cases, green | The model claim, the `Agents` refusal at `instantiate`, and the `MF-2` in-call guard. |
+| `[concurrency]` (2026-10-29) | 23 assertions / 6 cases, green | The model claim, the `Agents` refusal, the in-call guard under a real second-thread call, and a re-entrant compiled function across threads. |
+| Cross-thread stack guard | `[concurrency]` proves a call from a non-creating thread is guarded by that thread's own limit | `SAFETY.md` §2.8; before the fix such a call trapped immediately with `call stack exhausted`. |
 | `[runtime]` (2026-10-29) | 35 assertions / 5 cases, green | R1 (`instantiate` is idempotent), the guard under a simulated second entrant, and agent hand-out. |
 | Two-agent test | **Absent** | `MA-9`; the first thing `MF-7` adds. |
 | Race detector / TSan run | **Absent from the docs** | `MF-1`: a concurrency claim without a detector is a guess. |

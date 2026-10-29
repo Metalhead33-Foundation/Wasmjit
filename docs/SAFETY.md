@@ -220,6 +220,14 @@ down. The engine therefore checks explicitly:
   thread's real stack bounds, keeping `kDefaultStackReserveBytes` (512 KiB) back
   from the guard page (`WasmBase/WasmStack.hpp`, `installStackLimit`), on the
   thread that creates the instance (§2.7).
+- The limit that governs a call belongs to the **execution state**
+  (`ExecutionState::stackLimit`), not to the instance: the host boundary
+  (`CallDepthScope`) installs the *calling* thread's limit on the outermost entry
+  if that state has not run on this thread before
+  (`ensureCurrentThreadStackLimit`). An instance created on one host thread can
+  therefore be called from another without tripping the creating thread's
+  guard; `VMContext::stackLimit` remains the compatibility fallback for a
+  caller that bypasses the boundary.
 - `PreparedFunctionStack::prepare` refuses a function whose parameters and
   declared locals would need more than `kMaxFunctionLocalBytes` (64 KiB) of
   stack storage. This is not cosmetic: a backend allocates the frame in its

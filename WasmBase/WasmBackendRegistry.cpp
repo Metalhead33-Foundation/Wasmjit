@@ -214,6 +214,29 @@ BackendInstance loadBackendPluginFile(const std::string& path)
 		throw std::runtime_error("backend plugin '" + path + "' has no create()");
 	}
 
+	// Rule 1 / §7 risk 2: exactly one core. A plugin that carries its own copy of
+	// the core would resolve `wasm_trap_slot` inside its own scope, and the
+	// process would end up with two Stores. This is a symbol-identity probe
+	// rather than a DT_NEEDED parse: it needs no libelf and catches the same
+	// failure. The probe symbol is a core helper every generated module uses.
+	void* hostCore = ::dlsym(RTLD_DEFAULT, "wasm_trap_slot");
+	void* pluginCore = ::dlsym(handle, "wasm_trap_slot");
+	if (hostCore == nullptr) {
+		::dlclose(handle);
+		throw std::runtime_error("cannot verify the plugin/core boundary: this host does not"
+				" export wasm_trap_slot (docs/BACKEND_PLUGIN_ABI.md §6 rule 1)");
+	}
+	if (pluginCore == nullptr) {
+		::dlclose(handle);
+		throw std::runtime_error("backend plugin '" + path + "' does not link the shared core"
+				" (no wasm_trap_slot in its dependency scope; docs/BACKEND_PLUGIN_ABI.md §6 rule 1)");
+	}
+	if (pluginCore != hostCore) {
+		::dlclose(handle);
+		throw std::runtime_error("backend plugin '" + path + "' embeds its own copy of the core:"
+				" two Stores would exist in one process (docs/BACKEND_PLUGIN_ABI.md §6 rule 1)");
+	}
+
 	wasmjit_host host{};
 	host.abi_version = WASMJIT_BACKEND_ABI_VERSION;
 	host.core_abi_version = WASMJIT_ABI_VERSION;

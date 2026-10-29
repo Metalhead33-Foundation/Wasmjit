@@ -448,26 +448,46 @@ tier load-bearing, so name it now:
 | **Backend SDK** | What a code generator includes in addition: the contract rows of [`LAYERING.md`](LAYERING.md) §4 plus the helper entry points it may call. | `WasmVMContext.hpp`, `WasmGcHeader.hpp`, `WasmType.hpp`, `WasmTypeIdentity.hpp`, `WasmOpcode.hpp`, `WasmOpcodeDispatcher.hpp`, `WasmStack.hpp`, `WasmSafety.hpp`, `wasm_atomic.hpp`, `wasm_simd_scalar.hpp` (+ `wasm_simd_vector.hpp`, `wasm_simd_ops.inc`), `WasmBackendAbi.hpp` (the POD views), `WasmBackendRegistry.hpp`, `WasmNullInstantiator.hpp`, `wasmjit_backend.h` (the plugin descriptor) |
 | **Internal** | Not installed; may change at will. | `WasmSection.hpp`, `WasmTypeStore.hpp`, `WasmCanonicalType.hpp`, `WasmTypeRegistry.hpp`, `WasmGcHeap.hpp`, `WasmValidator.hpp`, `WasmComponent*.hpp`/`.inc`, `WasmDeterminism.hpp`, `WasmValidation.hpp` |
 
+#### 6.1.1 The complete classification (2026-10-29)
+
+Every header under `WasmBase/` now has a tier. The three lists are exhaustive; a
+new header must be added to one of them in the same change, and every header in
+the first two lists has a compile-only translation unit under `Test/headers/`
+(39 TUs, including the C plugin header).
+
+| Tier | Count | Headers |
+|---|---|---|
+| **Embedder API** (installed, in `WasmJit.hpp`) | 24 | `WasmJit.hpp`, `WasmRuntime.hpp`, `WasmVersion.hpp`, `WasmArtifact.hpp`, `WasmModule.hpp`, `WasmModuleInstance.hpp`, `WasmValue.hpp`, `WasmTrap.hpp`, `WasmException.hpp`, `WasmImport.hpp`, `WasmHostBridge.hpp`, `WasmNativeImport.hpp`, `WasmProfile.hpp`, `WasmConcurrency.hpp`, `WasmDiagnostics.hpp`, `WasmAgent.hpp`, `WasmContinuation.hpp`, `WasmMemory.hpp`, `WasmTable.hpp`, `WasmExn.hpp`, `WasmString.hpp`, `WasmTracing.hpp`, `WasmRegistryImportResolver.hpp`, `WasmStore.hpp` |
+| **Backend SDK** (installed, not in the umbrella) | 16 | `WasmVMContext.hpp`, `WasmGcHeader.hpp`, `WasmType.hpp`, `WasmTypeIdentity.hpp`, `WasmOpcode.hpp`, `WasmOpcodeDispatcher.hpp`, `WasmStack.hpp`, `WasmSafety.hpp`, `WasmBackendAbi.hpp`, `WasmBackendRegistry.hpp`, `WasmNullInstantiator.hpp`, `wasmjit_backend.h`, `wasm_atomic.hpp`, `wasm_simd_scalar.hpp`, `wasm_simd_vector.hpp`, `wasm_simd_ops.inc` |
+| **Internal** (not installed) | 16 | `WasmSection.hpp`, `WasmTypeStore.hpp`, `WasmCanonicalType.hpp`, `WasmTypeRegistry.hpp`, `WasmGcHeap.hpp`, `WasmValidator.hpp`, `WasmValidation.hpp`, `WasmDeterminism.hpp`, `WasmComponent.hpp`, `WasmComponentAbi.hpp`, `WasmComponentAsync.hpp`, `WasmComponentModel.hpp`, `WasmComponentRuntime.hpp`, `WasmComponentSection.hpp`, `WasmComponentValidation.hpp`, `WasmComponentParser.inc` |
+
+Two classifications are deliberate and worth stating: `WasmValidation.hpp` stays
+**internal** even though `Module::fromFile(file, options)` takes its
+`ValidationOptions` — the runtime hides that transitional path behind
+`RuntimeConfig::profile` (§4.6); and `WasmDeterminism.hpp` stays internal because
+its NaN canonicalisation is a backend obligation, not an embedder knob.
+
 Two headers are in the wrong place for *any* tier:
 
 | Header | Problem | Fix |
 |---|---|---|
 | `WasmContext.hpp` | Empty placeholder; the realm is `ModuleInstance` and the execution context is `Agent`/`ExecutionState` | **Deleted (2026-10-29)**; §3.1–§3.2 record the verdict |
-| `WasmRuntime.hpp` | Empty placeholder; the role exists and has no owner | Fill with `WASM::Runtime` (§4) |
+| `WasmRuntime.hpp` | Empty placeholder; the role exists and has no owner | **Filled with `WASM::Runtime` (2026-10-29, `ES-1`)** |
 
 ### 6.2 The `Elvavena`/`Euphemy` leak
 
-Seven headers include the vendored libraries:
+Five headers still include the vendored libraries; two of the original seven
+stopped on 2026-10-29 (`ES-3`):
 
-| Header | Includes | Can it leave the public path? |
+| Header | Includes | Status |
 |---|---|---|
-| `WasmType.hpp` | `Elvavena/...` (string hash containers) | Hard: `WasmValue.hpp` → `WasmType.hpp`, so every embedder sees it. Candidate for a *frozen* third-party dependency, or for pimpl-ing the containers. |
-| `WasmSection.hpp` | `Elvavena` | Yes — internal; `WasmModule.hpp` is the public face. |
-| `WasmOpcode.hpp` | `Elvavena` | Yes — backend/internal tier. |
-| `WasmRegistryImportResolver.hpp` | `Elvavena/Util/ElvStringhashMap.hpp` | Yes — hide the map behind a pimpl, or use `std::unordered_map` in the header. |
-| `WasmSafety.hpp` | `Elvavena/Io/ElvIoDevice.hpp` | Yes — the artifact reader can take `std::span<const std::byte>`. |
-| `WasmAgent.hpp` | `Elvavena/Util/ElvDeferStack.hpp` | Hard: the defer stack is an inline array in `ExecutionState` (a deliberate no-allocation design). Freeze it, or move the stack out of line. |
-| `WasmOpcodeDispatcher.hpp` | `Elvavena` | Internal/backend only — fine. |
+| `WasmType.hpp` | `Elvavena/...` (string hash containers) | **Hard.** `WasmValue.hpp` → `WasmType.hpp`, so every embedder sees it. Accepted for the first freeze as a *frozen* third-party dependency (§6.2.1), or pimpl the containers later. |
+| `WasmAgent.hpp` | `Elvavena/Util/ElvDeferStack.hpp` | **Hard.** The defer stack is an inline array in `ExecutionState` (a deliberate no-allocation design). Accepted for the first freeze; moving it out of line would add an allocation to the trap path. |
+| `WasmSection.hpp` | `Elvavena` | Internal tier — fine; `WasmModule.hpp` is the public face. |
+| `WasmOpcode.hpp` | `Elvavena` | Backend-SDK tier — fine. |
+| `WasmOpcodeDispatcher.hpp` | `Elvavena` (and `Euphemy`) | Backend-SDK tier — fine. |
+| `WasmRegistryImportResolver.hpp` | ~~`Elvavena/Util/ElvStringhashMap.hpp`~~ | **Removed 2026-10-29:** the maps are `std::map<std::string, T, std::less<>>` (`NameMap`), so a `string_view` lookup still does not allocate. |
+| `WasmSafety.hpp` | ~~`Elvavena/Io/ElvIoDevice.hpp`~~ | **Removed 2026-10-29:** the two bounds helpers are templates on the device, so the header names no device type. |
 
 The decision this forces is honest either way:
 
@@ -552,7 +572,7 @@ resolver. The shapes are the ones in §4.7 — the runtime is held by
 | Fact | Value | Evidence |
 |---|---|---|
 | Soname today | `libWasmBase.so.1`, `libLibJit.so.1` (files `.so.1.0.0`) | `readelf -d build/Desktop-Debug/Test/WasmJit`; `ls build/Desktop-Debug/LibJit` |
-| Where the version comes from | **qmake's default `VERSION = 1.0.0`** — no `.pro` sets it | `grep -rn 'VERSION' *.pro */*.pro` → nothing |
+| Where the version comes from | Explicit `VERSION = 1.0.0` in every library `.pro` (2026-10-29, `ES-4`); soname = `lib*.so.1` | `grep -rn 'VERSION' */*.pro` |
 | Install rules | **None** (`INSTALLS` absent from every `.pro`) | same |
 | pkg-config | Not for this project (only `libffi`, `nlohmann_json` as consumers) | `WasmBase.pro` |
 | Version macro/function | `WASMJIT_VERSION_MAJOR`/`MINOR`/`PATCH`, `WASMJIT_ABI_VERSION`, `WASM::versionString()`, `WASM::abiVersion()` | `WasmBase/WasmVersion.hpp`/`.cpp` (added 2026-10-29) |
@@ -597,8 +617,8 @@ must name whatever §6.2 decides about `Elvavena`/`Euphemy`.
 |---|---|---|---|---|
 | **ES-1 — `WASM::Runtime` skeleton** ✅ | **Landed 2026-10-29:** `WasmBase/WasmRuntime.{hpp,cpp}` implements `RuntimeConfig` (profile, concurrency, bridge, sink, budget — §4.6), `create(name)` (registry, then the `dlopen` fallback), `loadFile`/`loadBytes` (no `Elv::Io::Device`), idempotent `instantiate` (one instance per `Module`; a repeat call returns the same instance), `instanceOf`/`hasInstance`, `callExport`/`callExportWithResults` (with the `MF-2` in-call guard), `safepoint`, `version`/`abiVersion`/`backendName`/`profile`/`supports`, `createAgent` and `store()`. `WasmContext.hpp` and `LibJit::Runtime` are deleted. | A | P1, P2, P4, P5, P6; R1 enforcement; AAS1 | `Test/RuntimeTests.cpp` exercises load → instantiate → call against the real backend and the null one; the default suite is unchanged. The installed `wasmjit/wasmjit.hpp` spelling and the out-of-tree consumer stay `ES-5`. |
 | **ES-2 — Store scoping migration** | Finish §4.3 option B: thread `Store&` through the 12 TUs; update `TYPE_IDENTITY.md` to "runtime-scoped" (or record the deliberate shared-registry exception) and add the cross-runtime `Callable` rejection rule. | A (wide) | Multi-tenancy; §4.4 | `Store::global()` has no remaining callers; two runtimes in one process have independent heaps and reject cross-runtime callables. |
-| **ES-3 — Header tiers and umbrella** | ◑ **2026-10-29: `WasmJit.hpp` and the per-header compile tests landed.** Classify every header into the three tiers; add `WasmJit.hpp`; move `Elv` out of the public *signatures* where §6.2 says it is feasible; add a compile-only test per public header. Still open: the classification and the `Elv`-signature work. | A | P3, `AAS2` (partly) | Every public header compiles alone; the umbrella compiles with only the public include path; no public header includes a backend header. |
-| **ES-4 — Visibility and versioning** | ◑ **2026-10-29: `WasmVersion.hpp`/`.cpp` landed** (`WASMJIT_VERSION_*`, `WASMJIT_ABI_VERSION`, `WASM::versionString()`/`abiVersion()`). Still open: `-fvisibility=hidden` + `WASMJIT_API`; explicit `VERSION`/soname per library; a documented bump rule. | A | P4; ABI hygiene | The exported symbol set is a declared list; `abidiff` runs clean between two builds of the same headers. |
+| **ES-3 — Header tiers and umbrella** ✅ | **Landed 2026-10-29:** `WasmJit.hpp` covers the embedder tier; §6.1.1 classifies every header into the three tiers; `WasmRegistryImportResolver.hpp` and `WasmSafety.hpp` no longer include the vendored library (the maps are `std::map<std::string, T, std::less<>>`, the bounds helpers are templates); 39 compile-only TUs plus `[tiers]`, which fails when a new header is unclassified, the umbrella includes a non-embedder header, or a public header has no TU. The two hard `Elv` dependencies (`WasmType.hpp`, `WasmAgent.hpp`) are accepted for the first freeze (§6.2). | A | P3, `AAS2` (partly) | Every public header compiles alone ✅; the umbrella covers the embedder tier ✅; the installed include path is `ES-5`. |
+| **ES-4 — Visibility and versioning** ◑ | **2026-10-29: the version identity, the explicit `VERSION` and the soname landed** — `WasmVersion.hpp/.cpp` (macros + runtime queries) and `VERSION = 1.0.0` in every library `.pro`, so the soname is `lib*.so.1` by policy rather than by qmake default. **Still open:** `-fvisibility=hidden` + `WASMJIT_API` on the public tier, a declared export list, and an `abidiff` run. | A | P4; ABI hygiene | Version and soname: ✅. Symbol hygiene: still the 23k-symbol problem. |
 | **ES-5 — Install and pkg-config** | `headers`/`target`/`pkgconfig` install blocks; `wasmjit.pc`; a `DESTDIR` install test. | A | Packaging | `make install` into a scratch prefix yields a working out-of-tree consumer. |
 | **ES-6 — ABI documentation completion** ✅ | **Done 2026-10-29:** `ABI.md` gains "`v128` by Value", "The result tuple layout" (a backend-neutral rule) and "Limits an Embedder Must Know" (`S1`, `S3`, `S4`, `S7`, `S8`). | A | `AAS2` ✅, `AAS5` ✅ | An embedder can implement every signature class from the note alone. |
 | **ES-7 — Re-run `AAS-1`** | Re-check the `API_ABI_STABILITY.md` §10 acceptance row. | — | `AAS1` | G1's embedding half flips to `✅`. |
@@ -629,11 +649,12 @@ want `ES-3`'s tier list; `ES-6` is pure documentation and can land first.
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (2026-10-29) | **11,120 assertions / 460 cases, green** | The `ES-1` and `BP-*` additions are additive: every earlier assertion still passes. |
+| Default suite (2026-10-29) | **11,328 assertions / 465 cases, green** | The `ES-1` and `BP-*` additions are additive: every earlier assertion still passes. |
 | `[docs]` lint | 720 assertions, green | Covers `docs/proposals/` only; this note is not linted. |
 | `[runtime]` | 35 assertions / 5 cases, green | `Runtime` load → instantiate → call against the real backend, the null backend, idempotence, the named-error paths and the `MF-2` guard. |
 | `[backendabi]` | 36 assertions / 4 cases, green | The POD signature/layout views (`WasmBackendAbi.hpp`) match `ABI.md`'s tuple rule. |
-| `[plugin]` | 13 assertions / 4 cases, green | Load by path and by name, a real example plugin, and the missing-file / missing-symbol refusals. |
+| `[plugin]` | 17 assertions / 5 cases, green | Load by path and by name, a real example plugin, and every refusal path (missing file, no query symbol, unknown name, descriptor ABI, core ABI, failing `create`). |
+| `[tiers]` | 202 assertions / 3 cases, green | Every header is classified exactly once, the umbrella matches the embedder tier, and every public header has a compile-only TU (`.inc` fragments excepted). |
 | Public-header self-containment test | **Present for the public headers** (2026-10-29) | `Test/headers/*.cpp`: one TU per header, plus the umbrella; `ES-3` extends it to the backend-SDK tier. |
 | Install / out-of-tree consumer test | **Absent** (`INSTALLS` does not exist) | `ES-5`. |
 | Symbol-hygiene check | **Absent**; everything is exported | `ES-4`. |

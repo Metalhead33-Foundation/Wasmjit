@@ -1,6 +1,5 @@
 #ifndef WASMSAFETY_HPP
 #define WASMSAFETY_HPP
-#include <Elvavena/Io/ElvIoDevice.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -50,7 +49,8 @@ inline constexpr uint32_t kMaxComponentSections = 100000;
 // Throws unless `requested` bytes can still be read from `device`. Devices
 // that do not report a size are treated as unbounded (nothing to compare
 // against), which keeps exotic embedder devices working.
-inline std::size_t requireAvailable(Elv::Io::Device& device, uint64_t requested, const char* what)
+template<typename Device>
+inline std::size_t requireAvailable(Device& device, uint64_t requested, const char* what)
 {
 	const long position = device.tell();
 	const std::size_t total = device.size();
@@ -67,7 +67,8 @@ inline std::size_t requireAvailable(Elv::Io::Device& device, uint64_t requested,
 
 // Convenience for a *count*: each element costs at least one byte on the wire,
 // so the same remaining-bytes bound applies.
-inline std::size_t requireCountAvailable(Elv::Io::Device& device, uint64_t count, const char* what)
+template<typename Device>
+inline std::size_t requireCountAvailable(Device& device, uint64_t count, const char* what)
 {
 	return requireAvailable(device, count, what);
 }
