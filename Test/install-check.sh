@@ -26,6 +26,25 @@ test -f "$installed/include/wasmjit/WasmJit.hpp"
 test -f "$installed/include/Elvavena/Io/ElvIoDevice.hpp"
 test -f "$installed/lib/pkgconfig/wasmjit.pc"
 
+# ── Exactly one core image (docs/BACKEND_PLUGIN_ABI.md §7) ─────────────────
+# A static archive of the core would let a backend or plugin embed a second
+# store / type registry; the install must not ship one.
+if ls "$installed"/lib/libWasmBase.a >/dev/null 2>&1; then
+    echo "install-check: FAILED: a static libWasmBase.a was installed" >&2
+    exit 1
+fi
+# Every shipped backend must *depend on* the shared core, so the dynamic linker
+# guarantees a single copy in the process.
+if command -v readelf >/dev/null 2>&1; then
+    for lib in "$installed"/lib/libLibJit.so.1; do
+        if [ -e "$lib" ] && ! readelf -d "$lib" | grep -q 'NEEDED.*libWasmBase\.so'; then
+            echo "install-check: FAILED: $(basename "$lib") does not record a" \
+                 "dependency on the shared libWasmBase" >&2
+            exit 1
+        fi
+    done
+fi
+
 cp -a "$build"/extern/MhLib/Elvavena/libElvavena.so* "$installed/lib/"
 cp -a "$build"/extern/MhLib/Euphemy/libEuphemy.so* "$installed/lib/"
 

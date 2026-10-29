@@ -225,8 +225,27 @@ translation units** (`WasmModuleInstance.cpp` 32, `WasmComponentValidation.cpp`
 | **C. Runtime owns a `Store`, transitional fallback** | `Runtime` owns one; `Store::current()` returns the runtime's when one is entered, else the legacy global | ~1 indirection + 95 sites migrate lazily | Ships in stages; two mechanisms coexist until B completes |
 
 **Recommendation: C then B.** The staged form keeps the suite green at every
-step, and B is a rename-shaped change with the compiler as the checklist. This is
-the one place where the `Runtime` costs real work rather than adding a header.
+step, and B is a rename-shaped change *inside the core* — but the compiler is
+not the whole checklist: the sites that need the store are not all inside a
+function that already owns a `Module`/`ModuleInstance`.
+
+**Status.** Option **C is implemented** (all 105 call sites now go through
+`Store::current()`, and `Runtime` installs a `Scope` around load, instantiate,
+safepoint and call). Option **B is not implemented**; the measured cost is:
+
+| Site class | Count | Why it is not a rename |
+|---|---|---|
+| `ModuleInstance` / `Module` / `Component` internals | ~60 | Each needs a `store()` accessor first; the object is the carrier |
+| `ComponentValidator` member functions | 18 | The validator needs the store as a constructor parameter |
+| Backend helper `extern "C"` functions called from generated code | 30 | The helper has **no object**; the store must arrive as an extra argument (or through `VMContext`), which changes the emitted call signature at every helper site |
+| `wasm_exn_create` | 1 | Same: its signature is part of the generated-code contract |
+| `Artifact::parse` / `Module::fromFile` / `Component::parseNested` call sites | 44 + 21 + 6 | Every parser entry point gains a `Store&`; the harness needs one shared store |
+| Resolver | 5 | Needs a `bindStore` step at instantiation (registration happens before an instance exists) |
+
+That is a multi-pass change, not a single mechanical pass, and it touches the
+helper ABI. Until it is done, the property that actually matters — **one core
+image per process** — is enforced at the linkage level instead; see
+[`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §7 row 2.
 
 ### 4.4 The `TypeId` consequence (must be recorded, not discovered)
 
@@ -616,7 +635,7 @@ must name whatever §6.2 decides about `Elvavena`/`Euphemy`.
 | Milestone | Work | Class | Closes | Done when |
 |---|---|---|---|---|
 | **ES-1 — `WASM::Runtime` skeleton** ✅ | **Landed 2026-10-29:** `WasmBase/WasmRuntime.{hpp,cpp}` implements `RuntimeConfig` (profile, concurrency, bridge, sink, budget — §4.6), `create(name)` (registry, then the `dlopen` fallback), `loadFile`/`loadBytes` (no `Elv::Io::Device`), idempotent `instantiate` (one instance per `Module`; a repeat call returns the same instance), `instanceOf`/`hasInstance`, `callExport`/`callExportWithResults` (with the `MF-2` in-call guard), `safepoint`, `version`/`abiVersion`/`backendName`/`profile`/`supports`, `createAgent` and `store()`. `WasmContext.hpp` and `LibJit::Runtime` are deleted. | A | P1, P2, P4, P5, P6; R1 enforcement; AAS1 | `Test/RuntimeTests.cpp` exercises load → instantiate → call against the real backend and the null one; the default suite is unchanged. The installed `wasmjit/wasmjit.hpp` spelling and the out-of-tree consumer stay `ES-5`. |
-| **ES-2 — Store scoping migration** | Finish §4.3 option B: thread `Store&` through the 12 TUs; update `TYPE_IDENTITY.md` to "runtime-scoped" (or record the deliberate shared-registry exception) and add the cross-runtime `Callable` rejection rule. | A (wide) | Multi-tenancy; §4.4 | `Store::global()` has no remaining callers; two runtimes in one process have independent heaps and reject cross-runtime callables. |
+| **ES-2 — Store scoping migration** | Option **C shipped**: `Runtime` owns a `Store`, installs a `Scope` at every entry point, and all 105 engine call sites use `Store::current()`; two runtimes already have independent heaps and reject cross-runtime modules/instances. Option **B** (delete the singleton) is open: §4.3 records the measured cost, which includes the generated-code helper ABI, and the duplicate-core failure mode it would remove is already closed at the linkage level ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §7 row 2). | A (wide) | Multi-tenancy; §4.4 | `Store::global()` has no remaining callers; two runtimes in one process have independent heaps and reject cross-runtime callables. |
 | **ES-3 — Header tiers and umbrella** ✅ | **Landed 2026-10-29:** `WasmJit.hpp` covers the embedder tier; §6.1.1 classifies every header into the three tiers; `WasmRegistryImportResolver.hpp` and `WasmSafety.hpp` no longer include the vendored library (the maps are `std::map<std::string, T, std::less<>>`, the bounds helpers are templates); 40 compile-only TUs plus `[tiers]`, which fails when a new header is unclassified, the umbrella includes a non-embedder header, or a public header has no TU. The two hard `Elv` dependencies (`WasmType.hpp`, `WasmAgent.hpp`) are accepted for the first freeze (§6.2). | A | P3, `AAS2` (partly) | Every public header compiles alone ✅; the umbrella covers the embedder tier ✅; the installed include path is verified by §8 `ES-5`. |
 | **ES-4 — Visibility and versioning** ✅ | **Landed 2026-10-29:** `WasmApi.hpp` defines `WASMJIT_API` (the Elvavena `MH_UTIL_API` pattern: `WASMJIT_BUILD` → export, otherwise import) and `WASMJIT_VISIBLE_BEGIN/END` for headers that are entirely public; the core is compiled with `-fvisibility=hidden -fvisibility-inlines-hidden` and every library sets `VERSION = 1.0.0` (soname `lib*.so.1`). The exported set fell from **23,919 to 2,541** symbols and is exactly what the public headers declare. | A | P4; ABI hygiene | The exported set is the header-declared surface ✅; an `abidiff` run is the remaining optional check. |
 | **ES-5 — Install and pkg-config** ✅ | **Landed 2026-10-29:** `INSTALLS` for the 40 public headers (`include/wasmjit/`), the internal closure (`include/wasmjit/internal/`), the eight vendored header directories, the libraries and `wasmjit.pc` (generated from `wasmjit.pc.in`, installed to `lib/pkgconfig`). `Test/install-check.sh` installs into a scratch prefix with `INSTALL_ROOT`, builds `Test/consumer/Consumer.cpp` through `pkg-config --cflags --libs wasmjit` and runs it. | A | Packaging | `make install` into a scratch prefix yields a working out-of-tree consumer ✅ (`install-check: OK`). |

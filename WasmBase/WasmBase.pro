@@ -6,6 +6,11 @@ TARGET = WasmBase
 VERSION = 1.0.0
 CONFIG += shared c++2a
 CONFIG -= qt
+# docs/BACKEND_PLUGIN_ABI.md §7 (blocker 2): a static archive of the core would
+# let a backend or plugin embed a second store/type registry. Only the shared
+# library is a supported configuration.
+contains(CONFIG, staticlib)|contains(CONFIG, static)|!contains(CONFIG, shared): error("libWasmBase must be built shared: a static core lets a backend embed a second store and type registry (docs/BACKEND_PLUGIN_ABI.md §7).")
+
 # docs/EMBEDDING_SURFACE.md ES-4: the library hides its symbols by default; the
 # public tier is marked WASMJIT_API (WasmApi.hpp). Hiding inline instantiations
 # is what removes most of the old 23k-symbol table.
