@@ -19,6 +19,7 @@ WASMJIT_VISIBLE_BEGIN
 namespace WASM {
 
 //! Section ids from the Component Model binary format (Binary.md).
+/** \\brief Binary section identifiers in the Component Model format. */
 enum class ComponentSectionType : uint8_t {
 	Custom = 0,
 	CoreModule = 1,
@@ -37,10 +38,12 @@ enum class ComponentSectionType : uint8_t {
 };
 
 //! The section kind's spelling for a diagnostic ("custom", "core-module", …).
+/** \\brief Returns the diagnostic spelling of a component section kind. \\param type Section identifier. \\return Static null-terminated section name. */
 const char* getComponentSectionTypeName(ComponentSectionType type);
 
 //! One section header from a component's binary: its kind, payload size and
 //! byte offset in the file.
+/** \\brief Parsed component section header and retained payload metadata. */
 struct ComponentSection {
 	//! The section kind; `Invalid` for the 0xFF placeholder the parser starts at.
 	ComponentSectionType type = ComponentSectionType::Invalid;
