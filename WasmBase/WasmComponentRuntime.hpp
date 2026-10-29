@@ -35,7 +35,7 @@ namespace WASM {
 //! A structured host-facing component value. It is intentionally a small
 //! discriminated union: the runtime owns conversion to/from the canonical ABI,
 //! so callers never see raw pointers into wasm linear memory.
-/** \\brief Host-facing structured value used by the Component Model runtime. */
+/** \brief Host-facing structured value used by the Component Model runtime. */
 struct ComponentValue {
 	enum class Kind : uint8_t {
 		Bool, S8, U8, S16, U16, S32, U32, S64, U64, F32, F64, Char,
@@ -60,7 +60,7 @@ struct ComponentValue {
 //! A component-level function. `call` is the flat-value entry point retained for
 //! scalar-only callers; `callValues` is the structured entry point used when a
 //! signature contains strings/lists/records or other memory-backed values.
-/** \\brief Callable component function with flat and structured invocation forms. */
+/** \brief Callable component function with flat and structured invocation forms. */
 struct ComponentFunction {
 	WASM::TypeId typeId{WASM::TypeId::kNone};
 	std::vector<WASM::AbiCoreType> params;
@@ -80,7 +80,7 @@ struct ComponentFunction {
 //! single-agent async surface. Core-module instantiation is delegated to a
 //! `ModuleInstantiator`, so this class is independent of the code generator.
 /**
- * \\brief Executes a validated component graph and its Canonical ABI adaptations.
+ * \brief Executes a validated component graph and its Canonical ABI adaptations.
  *
  * Owns instantiated core modules, nested component runtimes, resource handles,
  * async state, and per-instance ABI metadata. The referenced component and
@@ -91,14 +91,14 @@ public:
 	using ComponentImports = std::unordered_map<std::string, ComponentFunction>;
 
 	/**
-	 * \\brief Builds an executable runtime for a component definition.
-	 * \\param instantiator Backend-neutral core module instantiator; must outlive this runtime.
-	 * \\param component Validated component definition; must outlive this runtime.
-	 * \\param imports Host implementations for component-level imports.
+	 * \brief Builds an executable runtime for a component definition.
+	 * \param instantiator Backend-neutral core module instantiator; must outlive this runtime.
+	 * \param component Validated component definition; must outlive this runtime.
+	 * \param imports Host implementations for component-level imports.
 	 */
 	ComponentRuntime(ModuleInstantiator& instantiator,
 			const Component& component, ComponentImports imports = {});
-	/** \\brief Destroys the runtime and its owned component/core instances. */
+	/** \brief Destroys the runtime and its owned component/core instances. */
 	~ComponentRuntime();
 
 	ComponentRuntime(const ComponentRuntime&) = delete;
@@ -106,33 +106,33 @@ public:
 
 	//! The store this component's types and entities live in. Referenced by the
 	//! canonical-ABI callbacks, which have no member context of their own.
-	/** \\brief Returns the Store associated with the component definition. \\return Reference to the component's Store. */
+	/** \brief Returns the Store associated with the component definition. \return Reference to the component's Store. */
 	Store& store() const { return component_.store(); }
 
-	/** \\brief Looks up an exported component function by name. \\param name Export name. \\return Function descriptor when the export exists and is callable; otherwise nullopt. */
+	/** \brief Looks up an exported component function by name. \param name Export name. \return Function descriptor when the export exists and is callable; otherwise nullopt. */
 	std::optional<ComponentFunction> exportedFunction(std::string_view name) const;
-	/** \\brief Retrieves an instantiated core function by flattened index. \\param index Core function index. \\return Callable descriptor for that core function. */
+	/** \brief Retrieves an instantiated core function by flattened index. \param index Core function index. \return Callable descriptor for that core function. */
 	WASM::Callable coreFunction(std::size_t index) const;
-	/** \\brief Retrieves a core linear memory by flattened index. \\param index Core memory index. \\return Non-owning memory pointer, or nullptr if unavailable. */
+	/** \brief Retrieves a core linear memory by flattened index. \param index Core memory index. \return Non-owning memory pointer, or nullptr if unavailable. */
 	WASM::LinearMemory* coreMemory(std::size_t index) const;
 	//! Instance-owned Canonical ABI signatures (TYPE_MODEL TM-15). Store metadata
 	//! is process-wide; this table is per component instance.
-	/** \\brief Provides read-only access to this instance's Canonical ABI cache. \\return Const reference to instance-owned ABI metadata. */
+	/** \brief Provides read-only access to this instance's Canonical ABI cache. \return Const reference to instance-owned ABI metadata. */
 	const WASM::ComponentAbiInstance& abi() const { return abi_; }
 
 	//! Resource-handle validation used by the canonical value walkers.
-	/** \\brief Validates and resolves a component resource handle for use. \\param handle Runtime resource handle. \\param expected Expected canonical resource type. \\param borrow true to validate a borrow rather than ownership. \\param scope Borrow scope that governs borrowed-handle lifetime. \\return Resource representation value for the core ABI. \\throws std::runtime_error for stale, mistyped, or out-of-scope handles. */
+	/** \brief Validates and resolves a component resource handle for use. \param handle Runtime resource handle. \param expected Expected canonical resource type. \param borrow true to validate a borrow rather than ownership. \param scope Borrow scope that governs borrowed-handle lifetime. \return Resource representation value for the core ABI. \throws std::runtime_error for stale, mistyped, or out-of-scope handles. */
 	uint32_t useResourceHandle(uint32_t handle, WASM::TypeId expected,
 			bool borrow, uint32_t scope);
-	/** \\brief Starts a resource-borrow scope. \\return New scope identifier. */
+	/** \brief Starts a resource-borrow scope. \return New scope identifier. */
 	uint32_t beginBorrowScope();
-	/** \\brief Ends a borrow scope and invalidates its borrowed handles. \\param scope Scope identifier returned by beginBorrowScope(). */
+	/** \brief Ends a borrow scope and invalidates its borrowed handles. \param scope Scope identifier returned by beginBorrowScope(). */
 	void endBorrowScope(uint32_t scope);
-	/** \\brief Checks that a resource handle is live and has the expected type. \\param handle Resource handle. \\param expected Expected canonical resource type. \\throws std::runtime_error when the handle is invalid or has the wrong type. */
+	/** \brief Checks that a resource handle is live and has the expected type. \param handle Resource handle. \param expected Expected canonical resource type. \throws std::runtime_error when the handle is invalid or has the wrong type. */
 	void validateResourceHandle(uint32_t handle, WASM::TypeId expected) const;
 
 private:
-	/** \\brief Memory and helper callables selected by Canonical ABI options. */
+	/** \brief Memory and helper callables selected by Canonical ABI options. */
 	struct AbiMemory {
 		WASM::LinearMemory* memory = nullptr;
 		WASM::Callable realloc;
@@ -140,7 +140,7 @@ private:
 		uint8_t pointerSize = 4;
 	};
 
-	/** \\brief Runtime bookkeeping for one allocated component resource handle. */
+	/** \brief Runtime bookkeeping for one allocated component resource handle. */
 	struct ResourceSlot {
 		uint64_t representation = 0;
 		WASM::TypeId typeId{WASM::TypeId::kNone};
@@ -152,7 +152,7 @@ private:
 	//! A core instance in the component graph: either an instantiated core
 	//! module or an inline bag of core exports (the form canon built-ins use to
 	//! reach a core module's imports).
-	/** \\brief Core instance or inline export bag referenced by component definitions. */
+	/** \brief Core instance or inline export bag referenced by component definitions. */
 	struct CoreInstanceHandle {
 		std::unique_ptr<WASM::ModuleInstance> moduleInstance;
 		std::unordered_map<std::string, WASM::Callable> inlineFunctions;
