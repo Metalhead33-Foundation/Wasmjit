@@ -33,21 +33,41 @@ namespace WASM {
 //! pointer to an entry is stable for the lifetime of this object. This class is
 //! backend-agnostic: it names only Store metadata (docs/LAYERING.md).
 
+/**
+ * \\brief Owns per-component-instance Canonical ABI signature metadata.
+ *
+ * Store-level signatures remain inert and shared; this cache gives each
+ * component instance stable, separately owned signature objects.
+ */
 class ComponentAbiInstance {
 public:
 	//! \param store Process-wide type metadata this instance caches against
 	//! \param instanceId Opaque host identity for this component instance
+	/**
+	 * \\brief Creates an instance cache associated with a canonical type store.
+	 * \\param store Store whose canonical ABI metadata is queried; must outlive this object.
+	 * \\param instanceId Opaque host identity assigned to this component instance.
+	 */
 	explicit ComponentAbiInstance(const TypeStore& store, uint64_t instanceId = 0)
 		: store_(store), instanceId_(instanceId) {}
 
 	//! Host-assigned identity of this component instance.
+	/** \\brief Returns the host-assigned component instance identity. \\return Instance ID. */
 	uint64_t instanceId() const { return instanceId_; }
 	//! Sets the host-assigned identity of this component instance.
+	/** \\brief Updates the host-assigned component instance identity. \\param id New instance ID. */
 	void setInstanceId(uint64_t id) { instanceId_ = id; }
 
 	//! Resolve and take ownership of one instance's signature. Returns nullptr
 	//! when the type is not a function or uses a shape this ABI slice cannot
 	//! flatten. The returned pointer is stable until this object is destroyed.
+	/**
+	 * \\brief Resolves and caches the Canonical ABI signature for a type/options pair.
+	 * \\param type Canonical type identity to resolve.
+	 * \\param options Canonical ABI flattening options.
+	 * \\return Stable pointer to this instance's cached signature, or nullptr if
+	 *         the type is not a supported function signature.
+	 */
 	const CanonicalAbiSignature* resolve(TypeId type,
 			const CanonicalAbiOptions& options) const
 	{
@@ -69,14 +89,23 @@ public:
 	}
 
 	//! Number of instance-owned signatures currently cached.
+	/** \\brief Returns the number of instance-owned signatures. \\return Cache entry count. */
 	std::size_t signatureCount() const { return signatures_.size(); }
 	//! Cache hits since construction.
+	/** \\brief Returns the number of successful cache hits. \\return Hit count. */
 	std::size_t hits() const { return hits_; }
 	//! Cache misses that caused a Store lookup and insertion.
+	/** \\brief Returns the number of cache misses that required Store lookup. \\return Miss count. */
 	std::size_t misses() const { return misses_; }
 
 	//! Instance-owned signatures are not type identity: two instances with the
 	//! same TypeId/options both resolve, but their entries are distinct objects.
+	/**
+	 * \\brief Looks up an already-cached signature without consulting the Store.
+	 * \\param type Canonical type identity.
+	 * \\param options Canonical ABI flattening options.
+	 * \\return Pointer to the instance-owned signature, or nullptr if absent.
+	 */
 	const CanonicalAbiSignature* find(TypeId type,
 			const CanonicalAbiOptions& options) const
 	{
@@ -85,6 +114,7 @@ public:
 	}
 private:
 	//! Map key: a Store type plus the Canonical ABI options that flatten it.
+	/** \\brief Ordered key for the per-instance signature cache. */
 	struct Key {
 		TypeId type{TypeId::kNone}; //!< Closed function type being flattened
 		CanonicalAbiOptions options; //!< Encoding/memory/realloc/async choices
