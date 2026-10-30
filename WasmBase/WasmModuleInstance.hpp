@@ -123,6 +123,11 @@ struct ModuleInstanceInternals {
 	//! trap interns the finished message here (docs/SAFETY.md §2.4,
 	//! docs/proposals/EXTENDED_NAME_SECTION.md ENS-5).
 	std::set<std::string> trapMessages;
+/**
+ * \brief Performs the internTrapMessage operation.
+ * \param message Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	const char* internTrapMessage(std::string message)
 	{
 		return trapMessages.insert(std::move(message)).first->c_str();
@@ -153,29 +158,74 @@ private:
 	//! execute one instance at the same time, while `inCall()` must still mean
 	//! "anyone inside" for the GC safepoint's quiescence rule.
 	std::atomic<std::uint32_t> activeCalls{0};
+/**
+ * \brief Performs the resolveImports operation.
+ * \param importResolver Input value or output destination for this operation.
+ */
 	void resolveImports(ImportResolver& importResolver);
+/**
+ * \brief Performs the resolveTypeImports operation.
+ * \param importResolver Input value or output destination for this operation.
+ */
 	void resolveTypeImports(ImportResolver& importResolver);
 	std::vector<TypeId> importedTypeIds;
+/**
+ * \brief Performs the initializeMemories operation.
+ */
 	void initializeMemories();
+/**
+ * \brief Performs the initializeGlobals operation.
+ */
 	void initializeGlobals();
+/**
+ * \brief Performs the initializeStringLiterals operation.
+ */
 	void initializeStringLiterals();
+/**
+ * \brief Performs the initializeTable operation.
+ */
 	void initializeTable();
 	//! Rewrites `ref.func` sentinels left in globalsStorage by evalConstantExpr
 	//! into real Callable pointers. Must run after declareFunctions() /
 	//! compileFunctions(), because those callable tables do not exist yet when
 	//! initializeGlobals() runs (i.e. in the constructor).
+/**
+ * \brief Performs the resolveGlobalRefFuncs operation.
+ */
 	void resolveGlobalRefFuncs();
+/**
+ * \brief Performs the resolveRefFuncsInObject operation.
+ * \param ref Input value or output destination for this operation.
+ * \param visited Input value or output destination for this operation.
+ */
 	void resolveRefFuncsInObject(void* ref, std::vector<void*>& visited);
 	//! The same rewrite for table initialiser expressions: `initializeTable()` runs
 	//! in the constructor, so a `(ref.func …)` initialiser is stored as null there
 	//! and every slot of that table is filled in here, once the callables exist
 	//! (docs/proposals/GC.md G5). Must run before element segments are applied.
+/**
+ * \brief Performs the resolveTableRefFuncs operation.
+ */
 	void resolveTableRefFuncs();
+/**
+ * \brief Performs the evalConstantExpr operation.
+ * \param expr Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	Value evalConstantExpr(const std::span<const std::byte>& expr);
 	//! Reference-counting internals (docs/proposals/GC.md §6, RC-1/RC-3).
 	//! `gcRefcountSlot` returns the object's count word, or nullptr when `ref`
 	//! is not a GC object (null, an i31 immediate, an externref or a funcref).
+/**
+ * \brief Performs the gcRefcountSlot operation.
+ * \param ref Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	uint32_t* gcRefcountSlot(const void* ref);
+/**
+ * \brief Performs the reclaimGcObject operation.
+ * \param ref Input value or output destination for this operation.
+ */
 	void reclaimGcObject(void* ref);
 
 	//! \par Safepoint walker (docs/proposals/GC.md RC-3)
@@ -186,11 +236,23 @@ private:
 	//! mirror is `structFieldOffsets`; both derive offsets from the shared
 	//! gcAlignUp/gcStorageAlign/gcStorageBytes helpers (docs/proposals/GC.md
 	//! §6.3 / H1).
+/**
+ * \brief Performs the subtypeForTypeId operation.
+ * \param typeId Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	CoreTypeView subtypeForTypeId(TypeId typeId) const;
 	//! Release every reference `ref` holds, appending children that reach zero to
 	//! `work` (the caller's iterative worklist — no recursion, so a 10⁶-deep
 	//! chain costs O(1) C stack). `slots` is caller-owned scratch, reused across
 	//! objects so the walk allocates nothing per dead object.
+/**
+ * \brief Performs the releaseOutgoingRefs operation.
+ * \param ref Input value or output destination for this operation.
+ * \param typeId Input value or output destination for this operation.
+ * \param work Input value or output destination for this operation.
+ * \param slots Input value or output destination for this operation.
+ */
 	void releaseOutgoingRefs(void* ref, TypeId typeId,
 			std::vector<PendingGcObject>& work, std::vector<uint8_t*>& slots);
 
@@ -204,7 +266,14 @@ private:
 	//! not fit is merely not trialled now, which can delay a collection but never
 	//! free something live.
 	static constexpr size_t kMaxCycleCandidates = 4096;
+/**
+ * \brief Performs the possibleCycleRoot operation.
+ * \param ref Input value or output destination for this operation.
+ */
 	void possibleCycleRoot(void* ref);
+/**
+ * \brief Performs the collectCycles operation.
+ */
 	void collectCycles();
 public:
 	friend class ModuleInstantiator;
@@ -445,6 +514,14 @@ public:
 	//! (docs/proposals/PROFILES.md PR-2…PR-4). A non-full profile re-validates
 	//! the module with its exclusions before any allocation or code emission, so
 	//! a module loaded under the full profile cannot bypass them.
+/**
+ * \brief Performs the instantiate operation.
+ * \param module Input value or output destination for this operation.
+ * \param resolver Input value or output destination for this operation.
+ * \param hostBridge Input value or output destination for this operation.
+ * \param profile Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	std::unique_ptr<ModuleInstance> instantiate(
 			const Module& module, ImportResolver& resolver,
 			const HostBridge* hostBridge = nullptr,
@@ -452,25 +529,69 @@ public:
 
 	//! The profile this instantiator is currently operating under (set by the
 	//! most recent `instantiate` call; read by a backend's compile step).
+/**
+ * \brief Performs the profile operation.
+ * \return The value or status produced by this operation.
+ */
 	const ProfileConfig& profile() const { return activeProfile; }
 
 protected:
+/**
+ * \brief Performs the evalConstantExpr operation.
+ * \param expr Input value or output destination for this operation.
+ * \param instance Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	Value evalConstantExpr(const std::span<const std::byte>& expr, ModuleInstance& instance);
 	//! Lower the module's types into the backend's representation, so the
 	//! declared and the compiled functions agree on one ABI.
+/**
+ * \brief Performs the translateTypes operation.
+ * \param instance Input value or output destination for this operation.
+ * \param module Input value or output destination for this operation.
+ * \param internals Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	virtual void translateTypes(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals) = 0;
 	//! Create a handle for each function (so call targets exist before any body
 	//! is compiled).
+/**
+ * \brief Performs the declareFunctions operation.
+ * \param instance Input value or output destination for this operation.
+ * \param module Input value or output destination for this operation.
+ * \param internals Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	virtual void declareFunctions(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals) = 0;
 	//! Fill each handle `declareFunctions` created with generated instructions.
+/**
+ * \brief Performs the compileFunctions operation.
+ * \param instance Input value or output destination for this operation.
+ * \param module Input value or output destination for this operation.
+ * \param internals Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	virtual void compileFunctions(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals) = 0;
 
 	//! Calling the start function is also backend-specific because you need
 	//! to know how to invoke a compiled function pointer with no arguments.
+/**
+ * \brief Performs the callStartFunction operation.
+ * \param instance Input value or output destination for this operation.
+ * \param funcIdx Input value or output destination for this operation.
+ * \param internals Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	virtual void callStartFunction(ModuleInstance& instance, uint32_t funcIdx, ModuleInstanceInternals& internals) = 0;
 
 private:
 	//! These are concrete and shared across all backends.
+/**
+ * \brief Performs the applyActiveSegments operation.
+ * \param instance Input value or output destination for this operation.
+ * \param module Input value or output destination for this operation.
+ * \param internals Input value or output destination for this operation.
+ */
 	void applyActiveSegments(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals);
 	ProfileConfig activeProfile{};
 };
