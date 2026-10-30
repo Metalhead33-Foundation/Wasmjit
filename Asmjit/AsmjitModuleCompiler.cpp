@@ -86,6 +86,39 @@ uint32_t asmjitI32RemU(uint32_t lhs, uint32_t rhs) noexcept
 	return lhs % rhs;
 }
 
+WASM::Callable* asmjitResolveIndirectCallable(WASM::VMContext* vm, uint32_t tableIndex,
+		uint32_t elementIndex, uint32_t expectedTypeValue) noexcept
+{
+	if (vm == nullptr || vm->tables == nullptr || tableIndex >= vm->tableCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit call_indirect table index is invalid");
+		return nullptr;
+	}
+	WASM::TableInstance* table = vm->tables[tableIndex];
+	if (table == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit call_indirect table is null");
+		return nullptr;
+	}
+	if (elementIndex >= table->size) {
+		WASM::reportTrap(WASM::TrapKind::OutOfBoundsTableAccess);
+		return nullptr;
+	}
+	WASM::Callable* callable = table->base[elementIndex];
+	if (callable == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::UninitializedElement);
+		return nullptr;
+	}
+	const WASM::TypeId expected{expectedTypeValue};
+	const WASM::TypeId none{WASM::TypeId::kNone};
+	if (callable->typeId != none && callable->typeId != expected) {
+		if (vm->module == nullptr
+				|| !vm->module->store().types().matches(callable->typeId, expected)) {
+			WASM::reportTrap(WASM::TrapKind::IndirectCallTypeMismatch);
+			return nullptr;
+		}
+	}
+	return callable;
+}
+
 uint32_t asmjitMemorySize(WASM::VMContext* vm, uint32_t memoryIndex) noexcept
 {
 	if (vm == nullptr || vm->memories == nullptr || memoryIndex >= vm->memoryCount) {
@@ -390,6 +423,81 @@ protected:
 			throw std::runtime_error("AsmJit br currently supports only void label signatures");
 		const asmjit::Label label = target.kind == ControlKind::Loop ? target.begin : target.end;
 		checkError(compiler.jmp(label), "AsmJit br emission failed");
+	}
+
+	void dispatchCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx tableIndex) override
+	{
+		if (tableIndex >= module.importTables.size() + module.tables.size())
+			throw std::runtime_error("AsmJit call_indirect references an unknown table");
+		if (typeIndex >= signatures.size() || !signatures[typeIndex])
+			throw std::runtime_error("AsmJit call_indirect references an unavailable function type");
+		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
+		if (calledType.results.size() > 1)
+			throw std::runtime_error("AsmJit call_indirect currently supports at most one result");
+		for (const auto& parameter : calledType.params)
+			requireI32(parameter.val, "indirect-call parameters");
+		for (const auto& result : calledType.results)
+			requireI32(result.val, "indirect-call results");
+		if (values.size() < calledType.params.size() + 1)
+			throw std::runtime_error("AsmJit call_indirect operand stack underflow");
+
+		auto elementIndex = values.back();
+		values.pop_back();
+		std::vector<asmjit::x86::Gp> arguments(calledType.params.size());
+		for (size_t i = calledType.params.size(); i > 0; --i) {
+			arguments[i - 1] = values.back();
+			values.pop_back();
+		}
+
+		asmjit::FuncSignature resolverSignature(asmjit::CallConvId::kCDecl);
+		resolverSignature.set_ret(asmjit::TypeId::kUIntPtr);
+		resolverSignature.add_arg(asmjit::TypeId::kUIntPtr);
+		resolverSignature.add_arg(asmjit::TypeId::kUInt32);
+		resolverSignature.add_arg(asmjit::TypeId::kUInt32);
+		resolverSignature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* resolver = nullptr;
+		checkError(compiler.invoke(&resolver,
+				reinterpret_cast<uint64_t>(&asmjitResolveIndirectCallable), resolverSignature),
+				"AsmJit indirect-call resolver emission failed");
+		resolver->set_arg(0, vmContext);
+		auto table = compiler.new_gp32("indirectTableIndex");
+		checkError(compiler.mov(table, static_cast<uint32_t>(tableIndex)), "AsmJit indirect table index materialisation failed");
+		resolver->set_arg(1, table);
+		resolver->set_arg(2, elementIndex);
+		auto expected = compiler.new_gp32("indirectExpectedType");
+		checkError(compiler.mov(expected, module.typeId(WASM::LocalTypeIdx{typeIndex}).value),
+				"AsmJit indirect-call type id materialisation failed");
+		resolver->set_arg(3, expected);
+		auto callable = compiler.new_gp_ptr("indirectCallable");
+		resolver->set_ret(0, callable);
+		emitPendingTrapReturn();
+
+		auto target = compiler.new_gp_ptr("indirectFunction");
+		checkError(compiler.mov(target, asmjit::x86::ptr(callable,
+				static_cast<int32_t>(offsetof(WASM::Callable, fnPtr)))),
+				"AsmJit indirect function pointer load failed");
+		auto calleeContext = compiler.new_gp_ptr("indirectContext");
+		checkError(compiler.mov(calleeContext, asmjit::x86::ptr(callable,
+				static_cast<int32_t>(offsetof(WASM::Callable, context)))),
+				"AsmJit indirect VMContext load failed");
+		auto callerContext = compiler.new_label();
+		checkError(compiler.test(calleeContext, calleeContext), "AsmJit indirect context test failed");
+		checkError(compiler.jnz(callerContext), "AsmJit indirect context branch failed");
+		checkError(compiler.mov(calleeContext, vmContext), "AsmJit native indirect context selection failed");
+		checkError(compiler.bind(callerContext), "AsmJit indirect context label binding failed");
+
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(&invoke, target, *signatures[typeIndex]),
+				"AsmJit indirect function invocation emission failed");
+		invoke->set_arg(0, calleeContext);
+		for (size_t i = 0; i < arguments.size(); ++i)
+			invoke->set_arg(i + 1, arguments[i]);
+		if (!calledType.results.empty()) {
+			auto result = compiler.new_gp32("indirectCallResult");
+			invoke->set_ret(0, result);
+			values.push_back(result);
+		}
+		emitPendingTrapReturn();
 	}
 
 	void dispatchCall(WASM::FuncIdx index) override
