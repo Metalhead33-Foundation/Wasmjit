@@ -32,7 +32,8 @@ using Session = WASM::BackendSession;
  * \brief Creates the backend selected for the test harness.
  *
  * The WASMJIT_BACKEND environment variable selects the backend; an empty
- * value or `libjit` selects the compiled backend. The returned session is
+ * value or `libjit` selects the full-featured backend, while `asmjit` selects
+ * the experimental straight-line i32 backend. The returned session is
  * owned by the caller.
  *
  * \return A newly created backend session, or nullptr if the selected backend
