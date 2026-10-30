@@ -35,6 +35,10 @@ public:
 	//! Native entry point for a V128 bitwise operation.
 	using V128BitwiseEntry = void (*)(const std::uint8_t*,
 			const std::uint8_t*, std::uint8_t*);
+	//! Native entry point that extends one packed i8 storage value to i32.
+	using PackedI8ExtendEntry = std::uint32_t (*)(const std::uint8_t*);
+	//! Native entry point that extends one packed i16 storage value to i32.
+	using PackedI16ExtendEntry = std::uint32_t (*)(const std::uint16_t*);
 
 	//! Bitwise operation emitted by compileV128Bitwise().
 	enum class V128BitwiseOp {
@@ -112,6 +116,24 @@ public:
 	V128BitwiseEntry compileV128Bitwise(V128BitwiseOp operation);
 
 	/*!
+	 * \brief Emits sign- or zero-extension of one packed i8 storage value.
+	 * \param signExtend True for sign-extension; false for zero-extension.
+	 * \return A function that returns the extended 32-bit bit pattern.
+	 * \throws std::runtime_error if code generation or executable-memory
+	 *         allocation fails.
+	 */
+	PackedI8ExtendEntry compilePackedI8Extend(bool signExtend);
+
+	/*!
+	 * \brief Emits sign- or zero-extension of one packed i16 storage value.
+	 * \param signExtend True for sign-extension; false for zero-extension.
+	 * \return A function that returns the extended 32-bit bit pattern.
+	 * \throws std::runtime_error if code generation or executable-memory
+	 *         allocation fails.
+	 */
+	PackedI16ExtendEntry compilePackedI16Extend(bool signExtend);
+
+	/*!
 	 * \brief Returns the host execution environment used by this runtime.
 	 * \return The AsmJit environment.
 	 */
@@ -123,6 +145,8 @@ private:
 	std::vector<LaneWiseI32x4Entry> laneWiseAllocations;
 	std::vector<V128I32x4AddEntry> v128AddAllocations;
 	std::vector<V128BitwiseEntry> v128BitwiseAllocations;
+	std::vector<PackedI8ExtendEntry> packedI8Allocations;
+	std::vector<PackedI16ExtendEntry> packedI16Allocations;
 };
 
 } // namespace AsmJitBackend
