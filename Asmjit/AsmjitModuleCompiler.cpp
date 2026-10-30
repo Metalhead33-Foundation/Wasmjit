@@ -3,6 +3,7 @@
 #include "../WasmBase/WasmOpcodeDispatcher.hpp"
 #include "../WasmBase/WasmStack.hpp"
 #include "../WasmBase/WasmTrap.hpp"
+#include "../WasmBase/WasmVMContext.hpp"
 #include "../WasmBase/WasmType.hpp"
 
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
@@ -31,6 +32,27 @@ void requireI32(const WASM::ValueType& type, const char* role)
 	if (type.opcode != WASM::ValueTypeCode::I32)
 		throw std::runtime_error(std::string("AsmJit initial compiler supports only i32 ")
 				+ role);
+}
+
+void* asmjitMemoryAddress(WASM::VMContext* vm, uint32_t memoryIndex,
+		uint32_t address, uint32_t offset, uint32_t width) noexcept
+{
+	if (vm == nullptr || memoryIndex >= vm->memoryCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory index is invalid");
+		return nullptr;
+	}
+	WASM::LinearMemory* memory = vm->memories[memoryIndex];
+	if (memory == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit linear memory is null");
+		return nullptr;
+	}
+	const uint64_t effective = static_cast<uint64_t>(address) + offset;
+	const uint64_t size = WASM::wasm_memory_size(memory);
+	if (effective > size || width > size - effective) {
+		WASM::reportTrap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+		return nullptr;
+	}
+	return memory->memoryBase + effective;
 }
 
 asmjit::FuncSignature stackCheckSignature()
@@ -363,6 +385,15 @@ protected:
 		checkError(compiler.bind(noTrap), "AsmJit post-call continuation binding failed");
 	}
 
+	void dispatchI32Load(WASM::MemArg arg) override { emitMemoryLoad(arg, 4, LoadKind::I32); }
+	void dispatchI32Load8S(WASM::MemArg arg) override { emitMemoryLoad(arg, 1, LoadKind::I8Signed); }
+	void dispatchI32Load8U(WASM::MemArg arg) override { emitMemoryLoad(arg, 1, LoadKind::I8Unsigned); }
+	void dispatchI32Load16S(WASM::MemArg arg) override { emitMemoryLoad(arg, 2, LoadKind::I16Signed); }
+	void dispatchI32Load16U(WASM::MemArg arg) override { emitMemoryLoad(arg, 2, LoadKind::I16Unsigned); }
+	void dispatchI32Store(WASM::MemArg arg) override { emitMemoryStore(arg, 4); }
+	void dispatchI32Store8(WASM::MemArg arg) override { emitMemoryStore(arg, 1); }
+	void dispatchI32Store16(WASM::MemArg arg) override { emitMemoryStore(arg, 2); }
+
 	void dispatchNop() override {}
 
 	void dispatchI32Eqz() override
@@ -415,6 +446,8 @@ protected:
 	}
 
 private:
+	enum class LoadKind { I32, I8Signed, I8Unsigned, I16Signed, I16Unsigned };
+
 	enum class ControlKind { Block, Loop, If };
 	struct ControlFrame {
 		ControlKind kind = ControlKind::Block;
@@ -457,6 +490,98 @@ private:
 			break;
 		}
 		values.push_back(lhs);
+	}
+
+	void validateMemoryArg(const WASM::MemArg& arg, uint32_t width) const
+	{
+		if (arg.isArray)
+			throw std::runtime_error("AsmJit scalar loads/stores do not support GC-array memargs");
+		if (arg.memidx >= module.importMemories.size() + module.memories.size())
+			throw std::runtime_error("AsmJit memory instruction references an unknown memory");
+		const WASM::MemoryType& type = arg.memidx < module.importMemories.size()
+				? module.importMemories[arg.memidx].memory
+				: module.memories[arg.memidx - module.importMemories.size()];
+		if (type.indexType != WASM::MemoryIndexType::I32)
+			throw std::runtime_error("AsmJit initial memory lowering supports memory32 only");
+		if (arg.offset > UINT32_MAX)
+			throw std::runtime_error("AsmJit memory32 offset exceeds the encoded u32 range");
+		(void)width;
+	}
+
+	asmjit::x86::Gp emitMemoryAddress(const WASM::MemArg& arg, uint32_t width,
+			const asmjit::x86::Gp& wasmAddress)
+	{
+		validateMemoryArg(arg, width);
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(&invoke,
+				reinterpret_cast<uint64_t>(&asmjitMemoryAddress), signature),
+				"AsmJit memory-address helper call emission failed");
+		invoke->set_arg(0, vmContext);
+		auto memoryIndex = compiler.new_gp32("memoryIndex");
+		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(arg.memidx)),
+				"AsmJit memory-index materialisation failed");
+		invoke->set_arg(1, memoryIndex);
+		invoke->set_arg(2, wasmAddress);
+		auto offset = compiler.new_gp32("memoryOffset");
+		checkError(compiler.mov(offset, static_cast<uint32_t>(arg.offset)),
+				"AsmJit memory-offset materialisation failed");
+		invoke->set_arg(3, offset);
+		auto accessWidth = compiler.new_gp32("memoryWidth");
+		checkError(compiler.mov(accessWidth, width), "AsmJit memory-width materialisation failed");
+		invoke->set_arg(4, accessWidth);
+		auto pointer = compiler.new_gp_ptr("memoryAddress");
+		invoke->set_ret(0, pointer);
+		emitPendingTrapReturn();
+		return pointer;
+	}
+
+	void emitMemoryLoad(const WASM::MemArg& arg, uint32_t width, LoadKind kind)
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit memory.load operand stack underflow");
+		auto wasmAddress = values.back();
+		values.pop_back();
+		auto pointer = emitMemoryAddress(arg, width, wasmAddress);
+		auto result = compiler.new_gp32("memoryLoad");
+		switch (kind) {
+		case LoadKind::I32:
+			checkError(compiler.mov(result, asmjit::x86::dword_ptr(pointer)), "AsmJit i32.load emission failed"); break;
+		case LoadKind::I8Signed:
+			checkError(compiler.movsx(result, asmjit::x86::byte_ptr(pointer)), "AsmJit i32.load8_s emission failed"); break;
+		case LoadKind::I8Unsigned:
+			checkError(compiler.movzx(result, asmjit::x86::byte_ptr(pointer)), "AsmJit i32.load8_u emission failed"); break;
+		case LoadKind::I16Signed:
+			checkError(compiler.movsx(result, asmjit::x86::word_ptr(pointer)), "AsmJit i32.load16_s emission failed"); break;
+		case LoadKind::I16Unsigned:
+			checkError(compiler.movzx(result, asmjit::x86::word_ptr(pointer)), "AsmJit i32.load16_u emission failed"); break;
+		}
+		values.push_back(result);
+	}
+
+	void emitMemoryStore(const WASM::MemArg& arg, uint32_t width)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit memory.store operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto wasmAddress = values.back(); values.pop_back();
+		auto pointer = emitMemoryAddress(arg, width, wasmAddress);
+		switch (width) {
+		case 1:
+			checkError(compiler.mov(asmjit::x86::byte_ptr(pointer), value.r8()), "AsmJit i32.store8 emission failed"); break;
+		case 2:
+			checkError(compiler.mov(asmjit::x86::word_ptr(pointer), value.r16()), "AsmJit i32.store16 emission failed"); break;
+		case 4:
+			checkError(compiler.mov(asmjit::x86::dword_ptr(pointer), value), "AsmJit i32.store emission failed"); break;
+		default:
+			throw std::runtime_error("AsmJit internal error: unsupported memory-store width");
+		}
 	}
 
 	void emitCompare(asmjit::x86::CondCode condition)
