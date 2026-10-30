@@ -30,8 +30,8 @@ direct calls. Each generated function emits the required
   operations, shifts and rotations; void and single-i32-result `block`/`loop`/`if`/`else`, `br`/`br_if`/`br_table`,
   branches to the implicit function label, and explicit/implicit returns; direct calls
   (native imports, forward calls and mutual recursion), typed `call_indirect`,
-  and direct/indirect tail-call instructions (currently emitted as call+return,
-  without machine-level tail-call elimination);
+  and direct/indirect tail-call opcodes (currently lowered to call+return;
+  true tail-call stack semantics and machine-level elimination remain outstanding);
   and memory32 i32 loads/stores, including signed/unsigned 8/16-bit extensions,
   plus `memory.size`/`memory.grow`.
   Memory accesses use a checked helper that observes the shared-memory size
