@@ -810,9 +810,9 @@ protected:
 		if (calledType.results.size() > 1)
 			throw std::runtime_error("AsmJit call_indirect currently supports at most one result");
 		for (const auto& parameter : calledType.params)
-			requireI32(parameter.val, "indirect-call parameters");
+			requireInteger(parameter.val, "indirect-call parameters");
 		for (const auto& result : calledType.results)
-			requireI32(result.val, "indirect-call results");
+			requireInteger(result.val, "indirect-call results");
 		if (values.size() < calledType.params.size() + 1)
 			throw std::runtime_error("AsmJit call_indirect operand stack underflow");
 
@@ -868,7 +868,8 @@ protected:
 		for (size_t i = 0; i < arguments.size(); ++i)
 			invoke->set_arg(i + 1, arguments[i]);
 		if (!calledType.results.empty()) {
-			auto result = compiler.new_gp32("indirectCallResult");
+			auto result = newIntegerRegister(compiler, calledType.results.front().val,
+					"indirectCallResult");
 			invoke->set_ret(0, result);
 			values.push_back(result);
 		}
@@ -904,9 +905,9 @@ protected:
 		if (calledType.results.size() > 1)
 			throw std::runtime_error("AsmJit calls currently support at most one result");
 		for (const auto& parameter : calledType.params)
-			requireI32(parameter.val, "call parameters");
+			requireInteger(parameter.val, "call parameters");
 		for (const auto& result : calledType.results)
-			requireI32(result.val, "call results");
+			requireInteger(result.val, "call results");
 		if (values.size() < calledType.params.size())
 			throw std::runtime_error("AsmJit call operand stack underflow");
 
@@ -940,7 +941,7 @@ protected:
 		for (size_t i = 0; i < arguments.size(); ++i)
 			invoke->set_arg(i + 1, arguments[i]);
 		if (!calledType.results.empty()) {
-			auto result = compiler.new_gp32("callResult");
+			auto result = newIntegerRegister(compiler, calledType.results.front().val, "callResult");
 			invoke->set_ret(0, result);
 			values.push_back(result);
 		}
