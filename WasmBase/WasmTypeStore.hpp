@@ -92,15 +92,15 @@ struct TypeSpan {
 struct TypeRef {
 	TypeDomain domain = TypeDomain::Core;
 	TypeKind kind = TypeKind::CoreFunc;
-	uint32_t index = 0;
+	uint32_t index = 0; //!< Field `index` of TypeRef.
 };
 
 /** \brief Fixed-size canonical type record referencing compact payload pools. */
 struct TypeRecord {
 	TypeKind kind = TypeKind::CoreFunc;
 	uint16_t flags = 0;
-	uint32_t payload = 0;
-	TypeSpan supertypes;
+	uint32_t payload = 0; //!< Field `payload` of TypeRecord.
+	TypeSpan supertypes; //!< Field `supertypes` of TypeRecord.
 };
 
 /** \brief Parameter and result spans for a core function type. */
@@ -198,11 +198,11 @@ enum class StringEncoding : uint8_t {
 };
 	static constexpr uint32_t kNoIndex = ~uint32_t{0};
 
-	StringEncoding stringEncoding = StringEncoding::Utf8;
-	uint32_t memory = kNoIndex;
-	uint32_t realloc = kNoIndex;
-	uint32_t postReturn = kNoIndex;
-	bool async = false;
+	StringEncoding stringEncoding = StringEncoding::Utf8; //!< Field `stringEncoding` of CanonicalAbiOptions.
+	uint32_t memory = kNoIndex; //!< Field `memory` of CanonicalAbiOptions.
+	uint32_t realloc = kNoIndex; //!< Field `realloc` of CanonicalAbiOptions.
+	uint32_t postReturn = kNoIndex; //!< Field `postReturn` of CanonicalAbiOptions.
+	bool async = false; //!< Field `async` of CanonicalAbiOptions.
 	//! Canonical ABI pointer/length width: 4 for memory32, 8 for memory64.
 	uint8_t pointerSize = 4;
 
@@ -222,8 +222,8 @@ enum class StringEncoding : uint8_t {
 struct CanonicalAbiSignature {
 	TypeId type{TypeId::kNone};
 	CanonicalAbiOptions options;
-	std::vector<AbiCoreType> flatParams;
-	std::vector<AbiCoreType> flatResults;
+	std::vector<AbiCoreType> flatParams; //!< Field `flatParams` of CanonicalAbiSignature.
+	std::vector<AbiCoreType> flatResults; //!< Field `flatResults` of CanonicalAbiSignature.
 	//! Canonical ABI MAX_FLAT_PARAMS (16) / MAX_FLAT_RESULTS (1) spill the
 	//! component values through memory. `flatParams`/`flatResults` still describe
 	//! the component-level flattening; consumers use these flags for the core
@@ -249,7 +249,7 @@ struct TypeScheme {
 struct ComponentCase {
 	StringId label = 0;
 	ComponentValueType type;
-	bool hasType = false;
+	bool hasType = false; //!< Field `hasType` of ComponentCase.
 };
 
 /** \brief Named parameter in a component function type. */
@@ -293,8 +293,8 @@ struct ComponentOptionPayload {
 struct ComponentResultPayload {
 	ComponentValueType ok;
 	ComponentValueType error;
-	bool hasOk = false;
-	bool hasError = false;
+	bool hasOk = false; //!< Field `hasOk` of ComponentResultPayload.
+	bool hasError = false; //!< Field `hasError` of ComponentResultPayload.
 };
 
 /** \brief Key and value types of a component map. */
@@ -319,7 +319,7 @@ struct ComponentFuncPayload {
 struct ComponentResourcePayload {
 	ValueType rep;
 	uint32_t destructor = 0;
-	bool hasDestructor = false;
+	bool hasDestructor = false; //!< Field `hasDestructor` of ComponentResourcePayload.
 	//! An abstract `sub resource` import has no representation or destructor yet;
 	//! it still receives a fresh nominal TypeId.
 	bool abstract = false;
@@ -393,9 +393,9 @@ public:
 	CanonHeapType importBound() const;
 
 private:
-	const TypeStore* store_ = nullptr;
-	TypeId id_{};
-	const CanonicalType* pending_ = nullptr;
+	const TypeStore* store_ = nullptr; //!< Field `store_` of type.
+	TypeId id_{}; //!< Field `id_` of type.
+	const CanonicalType* pending_ = nullptr; //!< Field `pending_` of type.
 };
 
 /** \brief Read-only accessor view over one canonical Component Model type record. */
@@ -502,8 +502,8 @@ public:
 	uint32_t typeRef() const;
 
 private:
-	const TypeStore* store_ = nullptr;
-	TypeId id_{};
+	const TypeStore* store_ = nullptr; //!< Field `store_` of type.
+	TypeId id_{}; //!< Field `id_` of type.
 };
 
 //! A process-lifetime owner of compact core and component type records.
@@ -680,45 +680,45 @@ private:
 		return id;
 	}
 
-	std::vector<TypeRecord> records_;
-	std::size_t coreCount_ = 0;
+	std::vector<TypeRecord> records_; //!< Field `records_` of type.
+	std::size_t coreCount_ = 0; //!< Field `coreCount_` of type.
 
 	//! Core payloads.
 	std::vector<CanonHeapType> coreSupertypes_;
 	std::vector<CanonStorageType> coreStorage_;
 	std::vector<CanonFieldType> coreFields_;
-	std::vector<CoreImportPayload> coreImports_;
-	std::vector<CoreFuncPayload> coreFuncs_;
-	std::vector<CoreStructPayload> coreStructs_;
-	std::vector<CoreArrayPayload> coreArrays_;
-	std::vector<CoreContPayload> coreConts_;
-	std::vector<uint32_t> depths_;
+	std::vector<CoreImportPayload> coreImports_; //!< Field `coreImports_` of type.
+	std::vector<CoreFuncPayload> coreFuncs_; //!< Field `coreFuncs_` of type.
+	std::vector<CoreStructPayload> coreStructs_; //!< Field `coreStructs_` of type.
+	std::vector<CoreArrayPayload> coreArrays_; //!< Field `coreArrays_` of type.
+	std::vector<CoreContPayload> coreConts_; //!< Field `coreConts_` of type.
+	std::vector<uint32_t> depths_; //!< Field `depths_` of type.
 
 	//! Component payloads.
 	std::vector<ComponentField> componentFields_;
 	std::vector<ComponentCase> componentCases_;
 	std::vector<ComponentValueType> componentValues_;
-	std::vector<StringId> componentLabels_;
-	std::vector<ComponentFuncParam> componentParams_;
-	std::vector<ComponentValueType> componentResults_;
-	std::vector<ComponentRecordPayload> componentRecords_;
-	std::vector<ComponentVariantPayload> componentVariants_;
-	std::vector<ComponentListPayload> componentLists_;
-	std::vector<ComponentTuplePayload> componentTuples_;
-	std::vector<ComponentLabelPayload> componentLabelLists_;
-	std::vector<ComponentOptionPayload> componentOptions_;
-	std::vector<ComponentResultPayload> componentResultPayloads_;
-	std::vector<ComponentMapPayload> componentMaps_;
-	std::vector<ComponentStreamPayload> componentStreams_;
-	std::vector<ComponentFuncPayload> componentFuncs_;
-	std::vector<ComponentResourcePayload> componentResources_;
-	std::vector<uint32_t> componentTypeRefs_;
-	std::vector<ComponentDeclRecord> componentDeclRecords_;
-	std::vector<ComponentInstancePayload> componentInstancePayloads_;
-	std::vector<ComponentComponentPayload> componentComponentPayloads_;
+	std::vector<StringId> componentLabels_; //!< Field `componentLabels_` of type.
+	std::vector<ComponentFuncParam> componentParams_; //!< Field `componentParams_` of type.
+	std::vector<ComponentValueType> componentResults_; //!< Field `componentResults_` of type.
+	std::vector<ComponentRecordPayload> componentRecords_; //!< Field `componentRecords_` of type.
+	std::vector<ComponentVariantPayload> componentVariants_; //!< Field `componentVariants_` of type.
+	std::vector<ComponentListPayload> componentLists_; //!< Field `componentLists_` of type.
+	std::vector<ComponentTuplePayload> componentTuples_; //!< Field `componentTuples_` of type.
+	std::vector<ComponentLabelPayload> componentLabelLists_; //!< Field `componentLabelLists_` of type.
+	std::vector<ComponentOptionPayload> componentOptions_; //!< Field `componentOptions_` of type.
+	std::vector<ComponentResultPayload> componentResultPayloads_; //!< Field `componentResultPayloads_` of type.
+	std::vector<ComponentMapPayload> componentMaps_; //!< Field `componentMaps_` of type.
+	std::vector<ComponentStreamPayload> componentStreams_; //!< Field `componentStreams_` of type.
+	std::vector<ComponentFuncPayload> componentFuncs_; //!< Field `componentFuncs_` of type.
+	std::vector<ComponentResourcePayload> componentResources_; //!< Field `componentResources_` of type.
+	std::vector<uint32_t> componentTypeRefs_; //!< Field `componentTypeRefs_` of type.
+	std::vector<ComponentDeclRecord> componentDeclRecords_; //!< Field `componentDeclRecords_` of type.
+	std::vector<ComponentInstancePayload> componentInstancePayloads_; //!< Field `componentInstancePayloads_` of type.
+	std::vector<ComponentComponentPayload> componentComponentPayloads_; //!< Field `componentComponentPayloads_` of type.
 
-	std::vector<std::string> strings_;
-	std::unordered_map<std::string, StringId> stringIds_;
+	std::vector<std::string> strings_; //!< Field `strings_` of type.
+	std::unordered_map<std::string, StringId> stringIds_; //!< Field `stringIds_` of type.
 
 	//! Closed component records keyed by a canonical byte key. Records that
 	//! contain a component-local type index are deliberately absent: the index
@@ -730,14 +730,14 @@ private:
 	std::size_t componentInternHits_ = 0;
 	std::size_t componentInternMisses_ = 0;
 
-	mutable std::map<std::string, CanonicalAbiSignature> canonicalAbi_;
-	mutable std::size_t canonicalAbiHits_ = 0;
-	mutable std::size_t canonicalAbiMisses_ = 0;
+	mutable std::map<std::string, CanonicalAbiSignature> canonicalAbi_; //!< Field `canonicalAbi_` of type.
+	mutable std::size_t canonicalAbiHits_ = 0; //!< Field `canonicalAbiHits_` of type.
+	mutable std::size_t canonicalAbiMisses_ = 0; //!< Field `canonicalAbiMisses_` of type.
 
-	std::vector<TypeScheme> schemes_;
-	std::unordered_map<std::string, SchemeId> schemeIntern_;
-	std::size_t schemeInternHits_ = 0;
-	std::size_t schemeInternMisses_ = 0;
+	std::vector<TypeScheme> schemes_; //!< Field `schemes_` of type.
+	std::unordered_map<std::string, SchemeId> schemeIntern_; //!< Field `schemeIntern_` of type.
+	std::size_t schemeInternHits_ = 0; //!< Field `schemeInternHits_` of type.
+	std::size_t schemeInternMisses_ = 0; //!< Field `schemeInternMisses_` of type.
 };
 
 } // namespace WASM
