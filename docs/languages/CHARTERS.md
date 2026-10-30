@@ -148,7 +148,7 @@ cited by the charters:
 
 | Investigation | Serves | What it produces | Where it is decided |
 |---|---|---|---|
-| **EH encoding probe** — build the smallest module with a `try`/`catch` in each candidate toolchain and run `wasm-tools validate` on it | `S1`, `S2`, `S4` | A per-toolchain flag table: which flag emits the final encoding, and which toolchains cannot | `Q-1` (`TRIAGE.md` §6.8) — engine work if a legacy decoder is ever wanted |
+| **EH encoding probe** — build the smallest module with a `try`/`catch` in each candidate toolchain and run `wasm-tools validate` on it | `S1`, `S2`, `S4` | A per-toolchain flag table: which flag emits the final encoding, and which toolchains cannot | Already analysed: `Q-1` is answered in [`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) (§4.5 `P6`–`P8`: LLVM 23 still defaults to the legacy encoding, one flag switches it; Kotlin/Wasm cannot) |
 | **Heap-ownership probe** — ask each runtime whether it can run inside a memory whose base it did not choose (`RA4`) | `S1`, `S2`, `S4`, `S5` | One paragraph per runtime; the basis for a future `Q-3` decision | `Q-3` — a provider seam would be additive (`RA-2`) |
 | **WASI surface census** — collect the imports of a minimal "hello, world" build per toolchain | `S1`, `S2`, `S4`, `S5` (and every `L6`–`L9` row later) | One table that says how big a WASI shim has to be, and which imports are avoidable | `Q-2` — embedder tooling |
 

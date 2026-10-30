@@ -174,9 +174,9 @@ TEST_CASE("proposal notes keep the documented structure", "[docs]")
 		REQUIRE(text.find("References") != std::string::npos);
 	}
 
-	// The folder holds thirty-four notes today; a new note must appear here
+	// The folder holds thirty-five notes today; a new note must appear here
 	// without the check silently grading an empty directory.
-	REQUIRE(checked >= 34);
+	REQUIRE(checked >= 35);
 }
 
 // Enforces docs/DOCUMENTATION.md §9: the generated site nests the notes instead
@@ -241,7 +241,7 @@ TEST_CASE("the documentation tree is hierarchical", "[docs]")
 	REQUIRE(missing.empty());
 	// A new note must be counted, so the check cannot pass by grading nothing.
 	REQUIRE(docsNotes >= 21);
-	REQUIRE(proposalNotes >= 34);
+	REQUIRE(proposalNotes >= 35);
 	REQUIRE(languageNotes >= 4);
 
 	// Every `\subpage` must resolve: a mistyped id silently drops the note from

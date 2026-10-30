@@ -479,7 +479,7 @@ recur, and all three are `LF-3`-class, to be classed per
 
 | # | Question | Raised by | Class, if it were done |
 |---|---|---|---|
-| **Q-1** | Accept the **legacy EH encoding** as well as final `exnref`, or keep requiring final EH from toolchains? | `T04`, `T39`, `T53`, `T72` | Additive decode/validation work (class A/B), *not* a study result |
+| **Q-1** | Accept the **legacy EH encoding** as well as final `exnref`, or keep requiring final EH from toolchains? | `T04`, `T39`, `T53`, `T72` | Additive decode/validation work (class A/B), *not* a study result. **Analysed in [`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md)**: no encoding conflict, a front-end desugaring rather than a rewrite, and a measured Binaryen workaround; the recommendation is `LE-1`+`LE-2` now and `LE-3`…`LE-6` on a requester |
 | **Q-2** | Ship a **reference WASI shim**? (Embedder-side today, by decision `AASD6`.) | `T03`, `T05`, `T07`, `T09`, `T60`, `T67`, `T83` | Embedder tooling; lives outside `WasmBase/` |
 | **Q-3** | Give the embedder a **memory-provider seam** (`RA4`'s recorded limitation)? | `T01`, `T14`, `T39`, `T83` | Additive (class A) per `RA-2` — and the one item here that touches a frozen surface |
 

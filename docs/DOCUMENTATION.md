@@ -281,7 +281,7 @@ a flat tree is. The hierarchy is therefore built by three index pages:
 | Index page | Id | Children |
 |---|---|---|
 | [`index.md`](index.md) | `docs_index` | the 21 notes in `docs/`, `proposals` **and** `languages` |
-| [`proposals/index.md`](proposals/index.md) | `proposals_index` | the 34 proposal notes |
+| [`proposals/index.md`](proposals/index.md) | `proposals_index` | the 35 proposal notes |
 | [`languages/index.md`](languages/index.md) | `languages_index` | the 4 language-study notes of `LF-1` |
 
 A note declares its own id on the title line, and its folder's index lists that
@@ -302,7 +302,7 @@ WasmJit            (README.md, the main page)
     ├── languages                        (docs/languages/index.md)
     │   └── Triage, Clustering, Charters, Evidence   (4 study notes)
     └── proposals                        (docs/proposals/index.md)
-        └── GC, SIMD, THREADS, …         (34 notes)
+        └── GC, SIMD, THREADS, …         (35 notes)
 ```
 
 **Adding a note** takes three steps: create the file; append `{#doc_what_it_is}`

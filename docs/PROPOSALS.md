@@ -92,7 +92,7 @@ gaps → where we deliberately deviate → plan → test survey → references.
 
 ## 4. What the folder holds today
 
-`docs/proposals/` holds **thirty-four** notes, plus an `index.md` that is
+`docs/proposals/` holds **thirty-five** notes, plus an `index.md` that is
 navigation rather than a note (it is what nests them in the generated site, and
 it is the one file exempt from the shape check below). Every note carries the
 §2.1 front
@@ -118,6 +118,7 @@ throughout; the prefixes actually in the tree are:
 | `GC_EXTENSIONS.md` | `GX<n>` | `GXD<n>` | `GX-<n>` |
 | `INSTRUMENT_TRACING.md` | `IT<n>` | `ITD<n>` | `IT-<n>` |
 | `JS_INTEGRATION.md` | `JS<n>` | `JSD<n>` | `JS-<n>` |
+| `LEGACY_EXCEPTIONS.md` | `LE<n>` | `LED<n>` | `LE-<n>` |
 | `MEMORY64.md` | `M<n>` | `M64D<n>` | `M64-<n>` |
 | `MEMORY_CONTROL.md` | `MC<n>` | `MCD<n>` | `MC-<n>` |
 | `MULTI_MEMORY.md` | `MM<n>` | `MMD<n>` | `MM-<n>` |
@@ -184,7 +185,7 @@ Guardrails (things that must stay true):
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **PM-0 — Re-cut this document** | ✅ Rewrite `PROPOSALS.md` into the §2 shape: front matter, §1 map, §2–§9, IDs. | PG1, PG2, PG3, PG4 | Done: this file's §1 map matches its own §2–§9, and §4/§8 match the folder. |
-| **PM-1 — Record the aliases** | ✅ List the sanctioned heading and section-count variants in §3/§6/§8. | PG5, PG6, PG7 | Done: §8 classifies every note (all thirty-four). |
+| **PM-1 — Record the aliases** | ✅ List the sanctioned heading and section-count variants in §3/§6/§8. | PG5, PG6, PG7 | Done: §8 classifies every note (all thirty-five). |
 | **PM-2 — Keep the survey current** | Update §4's prefix table and §8's matrix whenever a note is added or a section appears. | PG5, PG9 | A new note appears in both tables in the same change that adds it. |
 | **PM-3 — Optional structural lint** | ✅ `Test/ProposalDocsTests.cpp` (`[docs]`) checks front matter, §1 map ↔ headings and References; documented in `TESTING.md`. The map-based rule admits every §3 exception without a hard-coded list. | PG8 | Done: `./Test/WasmJit '[docs]'` runs and passes. |
 
@@ -212,6 +213,7 @@ authoritative per-item status is each note's §7 plan.
 | `GC_EXTENSIONS.md` | 9 | canonical | none | — | conforms exactly |
 | `INSTRUMENT_TRACING.md` | 9 | canonical | none | — | conforms exactly |
 | `JS_INTEGRATION.md` | 9 | canonical | none | — | conforms (seven-proposal survey; external-boundary study; generic `HostBridge` shipped, no JS semantics) |
+| `LEGACY_EXCEPTIONS.md` | 10 | canonical + appendix | none | §10 "The six commissioned questions" after §9 | conforms (appendix; a compatibility study of a superseded proposal, not a proposal we implement) |
 | `MEMORY64.md` | 9 | canonical | none | — | conforms exactly |
 | `MEMORY_CONTROL.md` | 9 | canonical | none | — | conforms exactly |
 | `MULTI_MEMORY.md` | 9 | canonical | none | — | conforms exactly |
@@ -233,8 +235,8 @@ authoritative per-item status is each note's §7 plan.
 | `COMPONENT_MODEL.md` | 10 | canonical + interleave | §2/§3 subject-named; §4 "What is in the tree today"; §7 "Staged plan" | §9 "How this relates…" before §10 References | conforms (parser + structural validation) |
 | `SMALL_PROPOSALS.md` | 8 | grouped (3-in-1) | §2–§4 are proposals; demands/non-demands/implemented/gaps embedded | §5 fast/loose, §6 plan, §7 survey, §8 refs | conforms (grouped variant, PD1) |
 
-Reading: twenty-nine notes match §2 exactly; two reword §2/§3 and keep the nine
-slots; two append a section; one uses the grouped variant. No note is missing a
+Reading: thirty notes match §2 exactly; two reword §2/§3 and keep the nine
+slots; three append a section; one uses the grouped variant. No note is missing a
 slot, and none is missing its front matter. `TYPE_MODEL.md` conforms to the nine
 slots but is an internal type-store design note, not a WebAssembly feature
 proposal.
