@@ -61,13 +61,13 @@ private:
 		using std::runtime_error::runtime_error;
 	};
 
-	const Module& module;
-	ValidationOptions options;
-	std::size_t totalFunctions = 0;
-	std::size_t totalTables = 0;
-	std::size_t totalMemories = 0;
-	std::size_t totalGlobals = 0;
-	std::size_t totalTags = 0;
+	const Module& module; //!< Field `module` of type.
+	ValidationOptions options; //!< Field `options` of type.
+	std::size_t totalFunctions = 0; //!< Field `totalFunctions` of type.
+	std::size_t totalTables = 0; //!< Field `totalTables` of type.
+	std::size_t totalMemories = 0; //!< Field `totalMemories` of type.
+	std::size_t totalGlobals = 0; //!< Field `totalGlobals` of type.
+	std::size_t totalTags = 0; //!< Field `totalTags` of type.
 
 	//! Current function body (npos while validating module-level structure).
 	static constexpr std::size_t kNoBody = static_cast<std::size_t>(-1);
@@ -299,7 +299,7 @@ private:
  */
 	void checkLimits(const Limits& limits, bool is64, bool isMemory,
 					 const char* what, std::size_t index,
-					 uint64_t pageSize = 0x10000) const;
+					 uint64_t pageSize = 0x10000) const; //!< Field `pageSize` of type.
 /**
  * \brief Checks the MemoryAccess validation precondition and reports a validation error when it is not met.
  * \param arg Operand or context value used by this validator operation.
@@ -359,19 +359,19 @@ private:
 	struct ControlFrame {
 		std::vector<ValueType> startTypes;
 		std::vector<ValueType> endTypes;
-		std::size_t height = 0;
-		bool isLoop = false;
-		bool isIf = false;
-		bool elseSeen = false;
-		bool unreachable = false;
+		std::size_t height = 0; //!< Field `height` of ControlFrame.
+		bool isLoop = false; //!< Field `isLoop` of ControlFrame.
+		bool isIf = false; //!< Field `isIf` of ControlFrame.
+		bool elseSeen = false; //!< Field `elseSeen` of ControlFrame.
+		bool unreachable = false; //!< Field `unreachable` of ControlFrame.
 		//! Definite assignment of non-defaultable locals. A frame inherits its
 		//! parent's set on entry; stores made inside the frame do not escape it,
 		//! and `else` restarts from the entry set (the spec's local-init rule).
 		std::vector<uint8_t> initialized;
 		std::vector<uint8_t> entryInitialized;
 	};
-	std::vector<ValueType> typeStack;
-	std::vector<ControlFrame> controlStack;
+	std::vector<ValueType> typeStack; //!< Field `typeStack` of type.
+	std::vector<ControlFrame> controlStack; //!< Field `controlStack` of type.
 	//! Set when an opcode without a typing rule is seen: the rest of the body is
 	//! still scanned for immediate checks, but the operand stack is not trusted.
 	bool typeTainted = false;
@@ -459,7 +459,7 @@ private:
  * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	bool storageAssignable(const CanonStorageType& actual,
-			const CanonStorageType& expected) const;
+			const CanonStorageType& expected) const; //!< Field `const` of type.
 /**
  * \brief Performs the validator's setUnreachable operation.
  */
@@ -516,7 +516,7 @@ private:
  * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	ValueType tableElementType(TableIdx idx) const;
-	const FuncType* currentFuncType = nullptr;
+	const FuncType* currentFuncType = nullptr; //!< Field `currentFuncType` of type.
 /**
  * \brief Resolves paramTypes from the current function and module type context.
  * \param types Operand or context value used by this validator operation.
@@ -820,7 +820,7 @@ private:
  * \param handlers Operand or context value used by this validator operation.
  */
 	void dispatchResumeThrow(TypeIdx arg1, TagIdx arg2,
-			std::vector<ContHandlerClause>&& handlers) override;
+			std::vector<ContHandlerClause>&& handlers) override; //!< Field `override` of type.
 	//! Dispatch the `ResumeThrowRef` instruction. Validate the stack effect of this opcode.
 /**
  * \brief Validates the ResumeThrowRef instruction's immediates and operand-stack effect.
@@ -828,7 +828,7 @@ private:
  * \param handlers Operand or context value used by this validator operation.
  */
 	void dispatchResumeThrowRef(TypeIdx arg,
-			std::vector<ContHandlerClause>&& handlers) override;
+			std::vector<ContHandlerClause>&& handlers) override; //!< Field `override` of type.
 	void dispatchSwitch(TypeIdx arg1, TagIdx arg2) override; //!< Validate the stack effect of this opcode.
 	void dispatchTryTable(const BlockType& arg1, std::vector<CatchClause>&& arg2) override; //!< Validate the stack effect of this opcode.
 	void dispatchSelectT(std::vector<ValueType>&& arg) override; //!< Validate the stack effect of this opcode.
