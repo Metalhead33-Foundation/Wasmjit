@@ -1,5 +1,5 @@
 (module
-  (memory 1)
+  (memory 1 2)
   (type $binary (func (param i32 i32) (result i32)))
   (func (export "add") (type $binary)
     local.get 0
@@ -161,6 +161,11 @@
     i32.store16
     local.get 0
     i32.load16_u)
+  (func (export "memory_size") (result i32)
+    memory.size)
+  (func (export "memory_grow") (param i32) (result i32)
+    local.get 0
+    memory.grow)
   (func (export "local_roundtrip") (param i32) (result i32) (local i32)
     local.get 0
     local.set 1
