@@ -1,5 +1,5 @@
 (module
-  (data $blob passive "ABCD")
+  (data $blob "ABCD")
   (memory 1 2)
   (global $g (export "g") (mut i32) (i32.const 7))
   (type $unary (func (param i32) (result i32)))
@@ -134,7 +134,7 @@
     local.get 0
     local.get 1
     local.get 2
-    memory.init $blob 0)
+    memory.init 0 $blob)
   (func (export "data_drop")
     data.drop $blob)
   (func (export "memory_copy") (param i32 i32 i32)

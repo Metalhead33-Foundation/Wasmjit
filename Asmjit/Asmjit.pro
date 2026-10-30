@@ -6,8 +6,11 @@ TARGET = Asmjit
 VERSION = 1.0.0
 CONFIG += shared c++2a
 CONFIG -= qt
-CONFIG += link_pkgconfig
-PKGCONFIG += asmjit
+# AsmJit's install (equery f asmjit) ships the headers, `libasmjit.so` and a
+# CMake config, but *no* `asmjit.pc`, so a pkg-config dependency would fail
+# configure. The include directory and the library live in the platform
+# defaults; link the library directly instead.
+LIBS += -lasmjit
 INCLUDEPATH += $$PWD/..
 include(../WasmBase/WasmBase.pri)
 

@@ -1,7 +1,9 @@
 #include "AsmjitModuleCompiler.hpp"
 
 #include "../WasmBase/WasmOpcodeDispatcher.hpp"
+#include "../WasmBase/WasmSafety.hpp"
 #include "../WasmBase/WasmStack.hpp"
+#include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmTrap.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
 #include "../WasmBase/WasmType.hpp"
@@ -454,7 +456,7 @@ public:
 
 		const asmjit::FuncSignature checkSignature = stackCheckSignature();
 		asmjit::InvokeNode* checkCall = nullptr;
-		checkError(compiler.invoke(&checkCall,
+		checkError(compiler.invoke(asmjit::Out(checkCall),
 				reinterpret_cast<uint64_t>(&WASM::wasm_stack_check), checkSignature),
 				"AsmJit failed to emit the guest stack guard call");
 		checkCall->set_arg(0, vmContext);
@@ -466,7 +468,7 @@ public:
 		asmjit::FuncSignature trapSlotSignature(asmjit::CallConvId::kCDecl);
 		trapSlotSignature.set_ret(asmjit::TypeId::kUIntPtr);
 		asmjit::InvokeNode* trapSlotCall = nullptr;
-		checkError(compiler.invoke(&trapSlotCall,
+		checkError(compiler.invoke(asmjit::Out(trapSlotCall),
 				reinterpret_cast<uint64_t>(&WASM::wasm_trap_slot), trapSlotSignature),
 				"AsmJit failed to emit pending-trap slot lookup");
 		asmjit::x86::Gp trapSlot = compiler.new_gp_ptr("trapSlot");
@@ -838,17 +840,17 @@ protected:
 		resolverSignature.add_arg(asmjit::TypeId::kUInt32);
 		resolverSignature.add_arg(asmjit::TypeId::kUInt32);
 		asmjit::InvokeNode* resolver = nullptr;
-		checkError(compiler.invoke(&resolver,
-				reinterpret_cast<uint64_t>(&asmjitResolveIndirectCallable), resolverSignature),
-				"AsmJit indirect-call resolver emission failed");
-		resolver->set_arg(0, vmContext);
 		auto table = compiler.new_gp32("indirectTableIndex");
 		checkError(compiler.mov(table, static_cast<uint32_t>(tableIndex)), "AsmJit indirect table index materialisation failed");
-		resolver->set_arg(1, table);
-		resolver->set_arg(2, elementIndex);
 		auto expected = compiler.new_gp32("indirectExpectedType");
 		checkError(compiler.mov(expected, module.typeId(WASM::LocalTypeIdx{typeIndex}).value),
 				"AsmJit indirect-call type id materialisation failed");
+		checkError(compiler.invoke(asmjit::Out(resolver),
+				reinterpret_cast<uint64_t>(&asmjitResolveIndirectCallable), resolverSignature),
+				"AsmJit indirect-call resolver emission failed");
+		resolver->set_arg(0, vmContext);
+		resolver->set_arg(1, table);
+		resolver->set_arg(2, elementIndex);
 		resolver->set_arg(3, expected);
 		auto callable = compiler.new_gp_ptr("indirectCallable");
 		resolver->set_ret(0, callable);
@@ -869,7 +871,7 @@ protected:
 		checkError(compiler.bind(callerContext), "AsmJit indirect context label binding failed");
 
 		asmjit::InvokeNode* invoke = nullptr;
-		checkError(compiler.invoke(&invoke, target, *signatures[typeIndex]),
+		checkError(compiler.invoke(asmjit::Out(invoke), target, *signatures[typeIndex]),
 				"AsmJit indirect function invocation emission failed");
 		invoke->set_arg(0, calleeContext);
 		for (size_t i = 0; i < arguments.size(); ++i)
@@ -924,27 +926,29 @@ protected:
 			values.pop_back();
 		}
 
+		// Wasm-to-Wasm imports execute in the exporting instance's context;
+		// native imports (null context) execute against the caller's context.
+		// The context operand must be ready at the call site, so it is
+		// materialised before the invoke node is appended.
+		WASM::VMContext* importedCallee = isInternal ? nullptr
+				: internals.importStorage[index].context;
+		asmjit::x86::Gp importedContext;
+		if (importedCallee != nullptr) {
+			importedContext = compiler.new_gp_ptr("importedVmContext");
+			checkError(compiler.mov(importedContext,
+					reinterpret_cast<uint64_t>(importedCallee)),
+					"AsmJit imported VMContext materialisation failed");
+		}
+
 		asmjit::InvokeNode* invoke = nullptr;
 		const asmjit::Error error = isInternal
-				? compiler.invoke(&invoke, targetLabel, *signatures[typeIndex])
-				: compiler.invoke(&invoke, target, *signatures[typeIndex]);
+				? compiler.invoke(asmjit::Out(invoke), targetLabel, *signatures[typeIndex])
+				: compiler.invoke(asmjit::Out(invoke), target, *signatures[typeIndex]);
 		checkError(error, "AsmJit function-call emission failed");
-		if (isInternal) {
+		if (importedCallee == nullptr)
 			invoke->set_arg(0, vmContext);
-		} else {
-			// Wasm-to-Wasm imports execute in the exporting instance's context;
-			// native imports (null context) execute against the caller's context.
-			WASM::VMContext* calleeContext = internals.importStorage[index].context;
-			if (calleeContext == nullptr) {
-				invoke->set_arg(0, vmContext);
-			} else {
-				auto importedContext = compiler.new_gp_ptr("importedVmContext");
-				checkError(compiler.mov(importedContext,
-						reinterpret_cast<uint64_t>(calleeContext)),
-						"AsmJit imported VMContext materialisation failed");
-				invoke->set_arg(0, importedContext);
-			}
-		}
+		else
+			invoke->set_arg(0, importedContext);
 		for (size_t i = 0; i < arguments.size(); ++i)
 			invoke->set_arg(i + 1, arguments[i]);
 		if (!calledType.results.empty()) {
@@ -960,7 +964,7 @@ protected:
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kUIntPtr);
 		asmjit::InvokeNode* slotCall = nullptr;
-		checkError(compiler.invoke(&slotCall,
+		checkError(compiler.invoke(asmjit::Out(slotCall),
 				reinterpret_cast<uint64_t>(&WASM::wasm_trap_slot), signature),
 				"AsmJit failed to emit post-call trap-slot lookup");
 		auto slot = compiler.new_gp_ptr("postCallTrapSlot");
@@ -1010,12 +1014,12 @@ protected:
         signature.set_ret(asmjit::TypeId::kVoid);
         signature.add_arg(asmjit::TypeId::kUIntPtr);
         signature.add_arg(asmjit::TypeId::kUInt32);
-        asmjit::InvokeNode* invoke = nullptr;
-        checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitDataDrop), signature),
-                "AsmJit data.drop helper call emission failed");
-        invoke->set_arg(0, vmContext);
         auto index = compiler.new_gp32("dataDropIndex");
         checkError(compiler.mov(index, dataIndex), "AsmJit data.drop index materialisation failed");
+        asmjit::InvokeNode* invoke = nullptr;
+        checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitDataDrop), signature),
+                "AsmJit data.drop helper call emission failed");
+        invoke->set_arg(0, vmContext);
         invoke->set_arg(1, index);
         emitPendingTrapReturn();
     }
@@ -1037,13 +1041,13 @@ protected:
         for (int i = 0; i < 6; ++i)
             signature.add_arg(i == 0 ? asmjit::TypeId::kUIntPtr : asmjit::TypeId::kUInt32);
         asmjit::InvokeNode* invoke = nullptr;
-        checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitTableInit), signature),
-                "AsmJit table.init helper call emission failed");
-        invoke->set_arg(0, vmContext);
         auto element = compiler.new_gp32("tableInitElementIndex");
         auto table = compiler.new_gp32("tableInitTableIndex");
         checkError(compiler.mov(element, elementIndex), "AsmJit table.init element index failed");
         checkError(compiler.mov(table, static_cast<uint32_t>(tableIndex)), "AsmJit table.init table index failed");
+        checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitTableInit), signature),
+                "AsmJit table.init helper call emission failed");
+        invoke->set_arg(0, vmContext);
         invoke->set_arg(1, element);
         invoke->set_arg(2, table);
         invoke->set_arg(3, destination);
@@ -1059,11 +1063,11 @@ protected:
         signature.add_arg(asmjit::TypeId::kUIntPtr);
         signature.add_arg(asmjit::TypeId::kUInt32);
         asmjit::InvokeNode* invoke = nullptr;
-        checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitElemDrop), signature),
-                "AsmJit elem.drop helper call emission failed");
-        invoke->set_arg(0, vmContext);
         auto element = compiler.new_gp32("elementDropIndex");
         checkError(compiler.mov(element, elementIndex), "AsmJit elem.drop index failed");
+        checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitElemDrop), signature),
+                "AsmJit elem.drop helper call emission failed");
+        invoke->set_arg(0, vmContext);
         invoke->set_arg(1, element);
         emitPendingTrapReturn();
     }
@@ -1086,13 +1090,13 @@ protected:
         for (int i = 0; i < 6; ++i)
             signature.add_arg(i == 0 ? asmjit::TypeId::kUIntPtr : asmjit::TypeId::kUInt32);
         asmjit::InvokeNode* invoke = nullptr;
-        checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitTableCopy), signature),
-                "AsmJit table.copy helper call emission failed");
-        invoke->set_arg(0, vmContext);
         auto dstTable = compiler.new_gp32("tableCopyDestinationTable");
         auto srcTable = compiler.new_gp32("tableCopySourceTable");
         checkError(compiler.mov(dstTable, static_cast<uint32_t>(destinationTable)), "AsmJit table.copy destination table index failed");
         checkError(compiler.mov(srcTable, static_cast<uint32_t>(sourceTable)), "AsmJit table.copy source table index failed");
+        checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitTableCopy), signature),
+                "AsmJit table.copy helper call emission failed");
+        invoke->set_arg(0, vmContext);
         invoke->set_arg(1, dstTable);
         invoke->set_arg(2, srcTable);
         invoke->set_arg(3, destination);
@@ -1110,11 +1114,11 @@ protected:
         signature.add_arg(asmjit::TypeId::kUIntPtr);
         signature.add_arg(asmjit::TypeId::kUInt32);
         asmjit::InvokeNode* invoke = nullptr;
-        checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitTableSize), signature),
-                "AsmJit table.size helper call emission failed");
-        invoke->set_arg(0, vmContext);
         auto index = compiler.new_gp32("tableSizeIndex");
         checkError(compiler.mov(index, static_cast<uint32_t>(tableIndex)), "AsmJit table.size index materialisation failed");
+        checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitTableSize), signature),
+                "AsmJit table.size helper call emission failed");
+        invoke->set_arg(0, vmContext);
         invoke->set_arg(1, index);
         auto size = compiler.new_gp32("tableSizeResult");
         invoke->set_ret(0, size);
@@ -1148,7 +1152,7 @@ protected:
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kVoid);
 		asmjit::InvokeNode* invoke = nullptr;
-		checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitReportUnreachable), signature),
+		checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitReportUnreachable), signature),
 				"AsmJit unreachable trap helper emission failed");
 		const size_t stackHeight = controls.empty() ? 0 : controls.back().stackHeight;
 		const size_t placeholderCount = controls.empty() ? resultCount : controls.back().resultCount;
@@ -1350,13 +1354,13 @@ private:
         for (int i = 0; i < 6; ++i)
             signature.add_arg(i == 0 ? asmjit::TypeId::kUIntPtr : asmjit::TypeId::kUInt32);
         asmjit::InvokeNode* invoke = nullptr;
-        checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitMemoryCopy), signature),
-                "AsmJit memory.copy helper call emission failed");
-        invoke->set_arg(0, vmContext);
         auto dstMemory = compiler.new_gp32("copyDestinationMemory");
         auto srcMemory = compiler.new_gp32("copySourceMemory");
         checkError(compiler.mov(dstMemory, static_cast<uint32_t>(destination)), "AsmJit memory.copy destination index failed");
         checkError(compiler.mov(srcMemory, static_cast<uint32_t>(source)), "AsmJit memory.copy source index failed");
+        checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitMemoryCopy), signature),
+                "AsmJit memory.copy helper call emission failed");
+        invoke->set_arg(0, vmContext);
         invoke->set_arg(1, dstMemory);
         invoke->set_arg(2, srcMemory);
         invoke->set_arg(3, destinationAddress);
@@ -1380,13 +1384,13 @@ private:
         for (int i = 0; i < 5; ++i)
             signature.add_arg(asmjit::TypeId::kUInt32);
         asmjit::InvokeNode* invoke = nullptr;
-        checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitMemoryInit), signature),
-                "AsmJit memory.init helper call emission failed");
-        invoke->set_arg(0, vmContext);
         auto data = compiler.new_gp32("memoryInitDataIndex");
         auto memory = compiler.new_gp32("memoryInitMemoryIndex");
         checkError(compiler.mov(data, dataIndex), "AsmJit memory.init data index materialisation failed");
         checkError(compiler.mov(memory, static_cast<uint32_t>(memoryIndex)), "AsmJit memory.init memory index materialisation failed");
+        checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitMemoryInit), signature),
+                "AsmJit memory.init helper call emission failed");
+        invoke->set_arg(0, vmContext);
         invoke->set_arg(1, data);
         invoke->set_arg(2, memory);
         invoke->set_arg(3, destination);
@@ -1406,15 +1410,16 @@ private:
         asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
         signature.set_ret(asmjit::TypeId::kVoid);
         signature.add_arg(asmjit::TypeId::kUIntPtr);
-        signature.add_arg(asmjit::TypeId::kUInt32);
-        signature.add_arg(asmjit::TypeId::kUInt32);
-        signature.add_arg(asmjit::TypeId::kUInt32);
+        // vmContext + (memory index, destination, value, length) — the arity of
+        // `asmjitMemoryFill` above, which every `set_arg` below must match.
+        for (int i = 0; i < 4; ++i)
+            signature.add_arg(asmjit::TypeId::kUInt32);
         asmjit::InvokeNode* invoke = nullptr;
-        checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitMemoryFill), signature),
-                "AsmJit memory.fill helper call emission failed");
-        invoke->set_arg(0, vmContext);
         auto memoryIndex = compiler.new_gp32("fillMemoryIndex");
         checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(index)), "AsmJit memory.fill index failed");
+        checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitMemoryFill), signature),
+                "AsmJit memory.fill helper call emission failed");
+        invoke->set_arg(0, vmContext);
         invoke->set_arg(1, memoryIndex);
         invoke->set_arg(2, destination);
         invoke->set_arg(3, value);
@@ -1587,11 +1592,11 @@ private:
 		signature.add_arg(asmjit::TypeId::kUIntPtr);
 		signature.add_arg(asmjit::TypeId::kUInt32);
 		asmjit::InvokeNode* invoke = nullptr;
-		checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitMemorySize), signature),
-				"AsmJit memory.size helper call emission failed");
-		invoke->set_arg(0, vmContext);
 		auto memoryIndex = compiler.new_gp32("memorySizeIndex");
 		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(index)), "AsmJit memory.size index materialisation failed");
+		checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitMemorySize), signature),
+				"AsmJit memory.size helper call emission failed");
+		invoke->set_arg(0, vmContext);
 		invoke->set_arg(1, memoryIndex);
 		auto result = compiler.new_gp32("memorySize");
 		invoke->set_ret(0, result);
@@ -1611,11 +1616,11 @@ private:
 		signature.add_arg(asmjit::TypeId::kUInt32);
 		signature.add_arg(asmjit::TypeId::kUInt32);
 		asmjit::InvokeNode* invoke = nullptr;
-		checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitMemoryGrow), signature),
-				"AsmJit memory.grow helper call emission failed");
-		invoke->set_arg(0, vmContext);
 		auto memoryIndex = compiler.new_gp32("memoryGrowIndex");
 		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(index)), "AsmJit memory.grow index materialisation failed");
+		checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitMemoryGrow), signature),
+				"AsmJit memory.grow helper call emission failed");
+		invoke->set_arg(0, vmContext);
 		invoke->set_arg(1, memoryIndex);
 		invoke->set_arg(2, delta);
 		auto result = compiler.new_gp32("memoryGrowResult");
@@ -1645,22 +1650,25 @@ private:
 		signature.add_arg(asmjit::TypeId::kUInt32);
 		signature.add_arg(asmjit::TypeId::kUInt32);
 		signature.add_arg(asmjit::TypeId::kUInt32);
-		asmjit::InvokeNode* invoke = nullptr;
-		checkError(compiler.invoke(&invoke,
-				reinterpret_cast<uint64_t>(&asmjitMemoryAddress), signature),
-				"AsmJit memory-address helper call emission failed");
-		invoke->set_arg(0, vmContext);
+		// Materialise every argument *before* appending the invoke node: an
+		// operand must be defined at the call site, not after it, or the
+		// register allocator hands the callee whatever the register held.
 		auto memoryIndex = compiler.new_gp32("memoryIndex");
 		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(arg.memidx)),
 				"AsmJit memory-index materialisation failed");
-		invoke->set_arg(1, memoryIndex);
-		invoke->set_arg(2, wasmAddress);
 		auto offset = compiler.new_gp32("memoryOffset");
 		checkError(compiler.mov(offset, static_cast<uint32_t>(arg.offset)),
 				"AsmJit memory-offset materialisation failed");
-		invoke->set_arg(3, offset);
 		auto accessWidth = compiler.new_gp32("memoryWidth");
 		checkError(compiler.mov(accessWidth, width), "AsmJit memory-width materialisation failed");
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&asmjitMemoryAddress), signature),
+				"AsmJit memory-address helper call emission failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, memoryIndex);
+		invoke->set_arg(2, wasmAddress);
+		invoke->set_arg(3, offset);
 		invoke->set_arg(4, accessWidth);
 		auto pointer = compiler.new_gp_ptr("memoryAddress");
 		invoke->set_ret(0, pointer);
@@ -1753,7 +1761,6 @@ private:
 		values.push_back(result);
 	}
 
-	template <typename Function>
 	void emitUnaryCall(uint32_t (*function)(uint32_t), const char* operation)
 	{
 		if (values.empty())
@@ -1763,7 +1770,7 @@ private:
 		signature.set_ret(asmjit::TypeId::kUInt32);
 		signature.add_arg(asmjit::TypeId::kUInt32);
 		asmjit::InvokeNode* invoke = nullptr;
-		checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(function), signature),
+		checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(function), signature),
 				"AsmJit unary arithmetic helper call emission failed");
 		invoke->set_arg(0, argument);
 		auto result = compiler.new_gp32("unaryArithmeticResult");
@@ -1771,6 +1778,7 @@ private:
 		values.push_back(result);
 	}
 
+	template <typename Function>
 	void emitCheckedBinaryCall(Function function, const char* operation)
 	{
 		if (values.size() < 2)
@@ -1782,7 +1790,7 @@ private:
 		signature.add_arg(asmjit::TypeId::kInt32);
 		signature.add_arg(asmjit::TypeId::kInt32);
 		asmjit::InvokeNode* invoke = nullptr;
-		checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(function), signature),
+		checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(function), signature),
 				"AsmJit checked arithmetic helper call emission failed");
 		invoke->set_arg(0, lhs);
 		invoke->set_arg(1, rhs);
@@ -1913,7 +1921,7 @@ private:
 		signature.add_arg(asmjit::TypeId::kInt64);
 		signature.add_arg(asmjit::TypeId::kInt64);
 		asmjit::InvokeNode* invoke = nullptr;
-		checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(function), signature),
+		checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(function), signature),
 				"AsmJit checked i64 arithmetic helper emission failed");
 		invoke->set_arg(0, lhs);
 		invoke->set_arg(1, rhs);
@@ -1976,6 +1984,8 @@ ModuleCompiler::ModuleCompiler(Context& context)
 	: context(context)
 {
 }
+
+ModuleCompiler::~ModuleCompiler() = default;
 
 void ModuleCompiler::translateTypes(WASM::ModuleInstance&, const WASM::Module& module,
 		WASM::ModuleInstanceInternals& internals)

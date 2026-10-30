@@ -34,4 +34,5 @@ this table builds as a *sibling* of this page rather than a child, and the
 | \subpage doc_type_identity | Module-local type indices to store-scoped `TypeId`: canonicalisation, interning, `rec` groups, matching |
 | \subpage doc_unmodelled_value_types | Why an unmodelled value type is rejected at load |
 | \subpage doc_validation | The validating front end: what validation checks, the taint policy, and the measured coverage |
+| \subpage doc_writing_a_backend | The walkthrough: the four hooks, the decoder, the emitted ABI, the session, packaging, and the SLJIT scaffold as the worked example |
 | \subpage proposals_index | The per-proposal notes (this node's own child) |

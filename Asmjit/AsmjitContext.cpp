@@ -3,7 +3,10 @@
 #include <stdexcept>
 #include <string>
 
-#if ASMJIT_TARGET_ARCH_X86 == 0
+// AsmJit 1.21 spells the target-architecture switch `ASMJIT_ARCH_X86`; the
+// older `ASMJIT_TARGET_ARCH_X86` name is no longer defined, so an undefined
+// identifier here would silently evaluate to 0 and trip the #error.
+#if ASMJIT_ARCH_X86 == 0
 #error "The provisional AsmJit code-emission probe currently supports x86/x64 hosts only"
 #endif
 

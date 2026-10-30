@@ -4,3 +4,6 @@
 [submodule "extern/WasmTestsuite"]
 	path = extern/WasmTestsuite
 	url = https://github.com/WebAssembly/testsuite.git
+[submodule "extern/sljit"]
+	path = extern/sljit
+	url = https://github.com/zherczeg/sljit.git

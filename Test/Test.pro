@@ -4,7 +4,7 @@ CONFIG -= qt
 # The spec-script reader and the diagnostics JSON assertions use nlohmann_json
 # (header-only; the same dependency WasmBase declares).
 CONFIG += link_pkgconfig
-PKGCONFIG += nlohmann_json asmjit
+PKGCONFIG += nlohmann_json
 
 TARGET = WasmJit
 
@@ -20,6 +20,7 @@ QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../WasmBase\'
 QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../WasmStub\'
 QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../LibJit\'
 QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../Asmjit\'
+QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../Sljit\'
 QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../extern/MhLib/Elvavena\'
 QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../extern/MhLib/Euphemy\'
 
@@ -28,6 +29,13 @@ LIBS += -L$$OUT_PWD/../WasmBase -lWasmBase
 LIBS += -L$$OUT_PWD/../WasmStub -lWasmStub
 LIBS += -L$$OUT_PWD/../LibJit -lLibJit
 LIBS += -L$$OUT_PWD/../Asmjit -lAsmjit
+LIBS += -L$$OUT_PWD/../Sljit -lSljit
+# AsmJit's install (equery f asmjit) ships headers, `libasmjit.so` and a CMake
+# config, but no `asmjit.pc` — a pkg-config dependency would fail configure.
+# The include directory and library live in the platform defaults, so link the
+# library directly. The test TUs include `<asmjit/...>` themselves
+# (TestBackend.cpp), hence the direct dependency on top of `-lAsmjit`.
+LIBS += -lasmjit
 LIBS += -ljit
 LIBS += -lCatch2 -lCatch2Main
 include(../WasmBase/WasmBase.pri)
@@ -102,6 +110,7 @@ SOURCES += main.cpp \
     Diagnose.cpp \
     TestBackend.cpp \
     LibJitBackendTests.cpp \
+    SljitBackendTests.cpp \
     WastScript.cpp \
     SpecSuite.cpp \
     ProposalDocsTests.cpp \
@@ -115,7 +124,7 @@ SOURCES += main.cpp \
     HeaderTierTests.cpp \
     AsmjitBackendTests.cpp \
     AsmjitTypeTranslatorTests.cpp \
-    AsmjitModuleCompilerTests.cpp
+    AsmjitModuleCompilerTests.cpp \
     LegacyEhTests.cpp \
     MemoryProviderTests.cpp
 HEADERS +=  \

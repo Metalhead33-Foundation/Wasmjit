@@ -284,7 +284,7 @@ lint `[docs]` 839 assertions (two cases: the note shape and the note tree). The 
 | GNU LibJIT (`LibJit/`) | The only executing backend: context, type translation, module compiler, opcode dispatcher, runtime; SIMD through the shared helper layer | G1's subject. |
 | `WasmStub/` | Non-compiling pretty-printer over the shared `OpcodeDispatcher` | Proves the *decoder* is backend-neutral; proves nothing about the *instantiator* seam. |
 | AsmJit (`Asmjit/`) | **Planned, no code yet** (`AAS11` documented 2026-10-29): the directory is reserved and the subproject stays in the build, but its `.pro` declares no sources, so it emits an empty `libAsmjit.so` that is never installed and never selectable by name. `Asmjit/README.md` states the status and the work order | Planned work, not distance to G3: starting it is a directory-local change. |
-| SLJIT (`Sljit/`) | **Planned, no code yet** (`AAS11`), same treatment; the stray `libSljit.so.*` was deleted in 2026-10-29 | Same. |
+| SLJIT (`Sljit/`) | **Provisional executable backend since 2026-10-30**: the directory links the shared core, registers `sljit`, and runs a straight-line `i32`/`i64` subset, refusing everything else with a null `Callable::fnPtr` ([`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) §9). At the time of the milestone (`AAS11`, 2026-10-29) it was a documented, empty scaffold | The seam now has a second real implementation inside the tree — directory-local, `WasmBase/` unchanged. |
 
 ### 6.4 The seam, as it exists
 

@@ -12,8 +12,8 @@ TEST_CASE("AsmJit emits and executes a native function", "[asmjit]")
 
 	REQUIRE(entry != nullptr);
 	CHECK(entry() == 42);
-	CHECK(context.environment().arch() == asmjit::Arch::kX64
-			|| context.environment().arch() == asmjit::Arch::kX86);
+	CHECK((context.environment().arch() == asmjit::Arch::kX64
+			|| context.environment().arch() == asmjit::Arch::kX86));
 }
 
 TEST_CASE("AsmJit emits lane-wise i32x4 arithmetic", "[asmjit]")

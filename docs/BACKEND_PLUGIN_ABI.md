@@ -75,7 +75,7 @@ same reason: the dangerous boundary (code ↔ runtime) is already C.
 | They already have versioned sonames | `libLibJit.so.1.0.0`, `libLibJit.so.1` → `.so` | `ls build/Desktop-Debug/LibJit` |
 | The executable already resolves them by soname | `NEEDED libLibJit.so.1`, `libWasmBase.so.1` | `readelf -d build/Desktop-Debug/Test/WasmJit` |
 | …through hard-coded rpath entries | `-Wl,-rpath,$ORIGIN/../LibJit`, etc. | `Test/Test.pro` |
-| A backend selector already exists | `WASMJIT_BACKEND` env var; only `libjit` is built | `Test/TestBackend.cpp` |
+| A backend selector already exists | `WASMJIT_BACKEND` env var; `libjit` (complete) and `sljit` (provisional) are built | `Test/TestBackend.cpp` |
 | A backend-neutral façade already exists | `TestBackend::Session` (`instantiator`, `aggregateLayout`, `createLaneWiseOp`, `invoke`) | `Test/TestBackend.hpp` |
 | The product seam exists | `ModuleInstantiator`: 4 pure virtuals + a shared `instantiate()` | `WasmBase/WasmModuleInstance.hpp` |
 | A code↔runtime C ABI already exists | `wasm_trap_slot`, `wasm_trap_report`, `wasm_stack_check`, `wasm_exn_slot`, `wasm_cont_*`, `wasm_atomic_*`, `wasm_v128_*` | `WasmBase/*.hpp` (`extern "C"` blocks) |

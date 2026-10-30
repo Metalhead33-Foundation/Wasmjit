@@ -38,6 +38,13 @@ public:
 	 */
 	explicit ModuleCompiler(Context& context);
 
+	/*!
+	 * \brief Destroys the compiler and the per-function records it owns.
+	 *
+	 * Defined out of line so `FunctionRecord` can stay incomplete here.
+	 */
+	~ModuleCompiler() override;
+
 protected:
 	/*!
 	 * \brief Translates module-local function types into AsmJit signatures.

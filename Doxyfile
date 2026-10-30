@@ -30,7 +30,7 @@ USE_MDFILE_AS_MAINPAGE = README.md
 # README -> docs -> proposals instead of a flat list of 55 pages:
 # `docs/index.md` is the `docs` node, `docs/proposals/index.md` the `proposals`
 # one (docs/DOCUMENTATION.md §9; `./Test/WasmJit '[docs]'` keeps them complete).
-INPUT                  = WasmBase LibJit WasmStub Test README.md docs docs/proposals
+INPUT                  = WasmBase LibJit Sljit WasmStub Test README.md docs docs/proposals
 FILE_PATTERNS          = *.h *.hpp *.md
 RECURSIVE              = YES
 EXCLUDE                = extern build

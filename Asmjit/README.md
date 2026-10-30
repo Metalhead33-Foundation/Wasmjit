@@ -85,14 +85,17 @@ instructions or packed GC field operations.
 
 ## Build dependency
 
-The qmake target consumes the `asmjit` pkg-config package:
+AsmJit is consumed straight from the system installation: the sources include
+`<asmjit/asmjit.h>` and `Asmjit.pro` links `-lasmjit`. On Gentoo, `equery f
+asmjit` lists what that install provides — the headers under
+`/usr/include/asmjit`, `libasmjit.so` under `/usr/lib64`, and CMake package
+files under `/usr/lib64/cmake/asmjit`. It ships **no** `asmjit.pc`, so the
+subproject does not use pkg-config: a `PKGCONFIG += asmjit` line fails
+configure on such a host.
 
-```bash
-pkg-config --modversion asmjit
-```
-
-Install a current AsmJit development package or build/install AsmJit from its
-upstream repository so that `asmjit.pc` is visible through `PKG_CONFIG_PATH`.
+The sources target the installed AsmJit 1.21 API (`asmjit::Out<>` for output
+parameters such as `invoke`'s `InvokeNode*`, and `ASMJIT_ARCH_X86` for the
+target-architecture check).
 
 ## Next implementation stages
 
@@ -105,4 +108,4 @@ upstream repository so that `asmjit.pc` is visible through `PKG_CONFIG_PATH`.
    the backend complete.
 
 GNU LibJIT remains the only full-featured WebAssembly backend; AsmJit is an experimental partial execution backend.
-`Sljit/` is unchanged.
+`Sljit/` is the separate, provisional SLJIT backend and is not affected by this one.
