@@ -75,6 +75,13 @@
     local.get 0
     i32.const 2
     i32.mul)
+  (func (export "call_tail") (param i32) (result i32)
+    local.get 0
+    return_call $double)
+  (func (export "call_tail_indirect") (param i32 i32) (result i32)
+    local.get 0
+    local.get 1
+    return_call_indirect (type $unary))
   (func (export "store_load") (param i32 i32) (result i32)
     local.get 0
     local.get 1
@@ -208,13 +215,15 @@
       i32.const 42
       local.get 0
       br_if 0
+      drop
+      i32.const 7
     end)
   (func (export "loop_result") (result i32)
     loop (result i32)
       i32.const 42
     end)
   (func (export "typed_block_result") (param i32) (result i32)
-    block (type $unary)
+    block (type $result_only)
       local.get 0
       i32.const 2
       i32.mul
