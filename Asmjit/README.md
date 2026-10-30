@@ -1,9 +1,9 @@
 # `Asmjit/` — provisional AsmJit integration
 
-This directory now contains the first executable-code-generation foundation for
-an eventual AsmJit backend. It is deliberately **not yet a WebAssembly backend**:
-it does not implement `ModuleInstantiator`, does not register a backend name,
-and must not be selected to execute Wasm modules.
+This directory now contains an initial, deliberately limited WebAssembly backend.
+It implements the four `ModuleInstantiator` hooks and can compile a small
+straight-line i32 subset. It is not feature-complete and must not be treated as
+a drop-in replacement for the existing backend.
 
 ## What exists
 
@@ -17,9 +17,24 @@ and must not be selected to execute Wasm modules.
   not assume a particular host argument-register convention.
 - `TypeTranslator` maps Wasm integer, floating-point, reference, and V128
   values to AsmJit `TypeId`s and builds C-declaration function signatures. It
-  prepends `VMContext*`, maps V128 to AsmJit's 128-bit vector type (so the
-  platform's native vector-by-value calling convention is used), and uses a
+  prepends `VMContext*`, maps V128 to AsmJit's 128-bit vector type, and uses a
   trailing caller-owned result buffer for multi-value results.
+- `ModuleCompiler` implements `translateTypes`, `declareFunctions`,
+  `compileFunctions`, and `callStartFunction`. It declares all internal
+  function records before compiling bodies, preserving the two-pass
+  instantiation contract. Each generated function emits the required
+  `wasm_stack_check(VMContext*)` prologue call.
+- The first body compiler supports i32 parameters/results/locals, `i32.const`,
+  `local.get`, `local.set`, `local.tee`, `drop`, `i32.add`, `i32.sub`, `i32.mul`,
+  explicit `return`, and implicit function return. Unsupported instructions
+  fail explicitly through the base dispatcher; they are never silently
+  ignored. Structured control flow, calls, memory, traps beyond the stack
+  guard, and non-i32 function values are not implemented yet.
+- `Test/TestBackend.cpp` exposes an `AsmJitSession` through
+  `WASMJIT_BACKEND=asmjit`, including i32 invocation marshalling, aggregate
+  layout calculation, and the existing lane-wise SIMD diagnostic interface.
+- `Test/AsmjitModuleCompilerTests.cpp` instantiates a WAT fixture and executes
+  exported add/sub/mul/local functions, all expected to return 42.
 - Packed `i8`/`i16` storage retains its narrow 8-/16-bit representation.
   Arithmetic lowering must explicitly extend those values to `i32` before
   applying Wasm integer operations; the storage translator does not silently
@@ -44,11 +59,10 @@ and must not be selected to execute Wasm modules.
 - The dependency is confined to this subproject. `WasmBase/` remains
   backend-agnostic and does not include or link AsmJit.
 
-These are native code-generation probes and an initial ABI type mapping, not
-evidence of Wasm instruction lowering, full Wasm ABI compatibility, trap
-handling, GC integration, or Wasm SIMD instruction lowering. In particular,
-the lane-wise function is a diagnostic primitive; it does not yet implement
-`WASM::BackendLaneWiseOp`.
+The module compiler is an initial execution slice, not full Wasm ABI or semantic
+coverage. In particular, the SIMD and packed-storage probes are still native
+code-generation diagnostics; the module compiler does not yet lower Wasm SIMD
+instructions or packed GC field operations.
 
 ## Build dependency
 
@@ -63,12 +77,10 @@ upstream repository so that `asmjit.pc` is visible through `PKG_CONFIG_PATH`.
 
 ## Next implementation stages
 
-1. Add an AsmJit-owned module compiler and translate the core type/aggregate ABI.
-2. Implement function declaration and a minimal scalar instruction subset.
-3. Add a session façade, invocation marshalling, trap propagation, and backend
-   selection in the test harness.
-4. Expand instruction coverage incrementally, with tests for control flow,
-   calls, memory, references, exceptions, continuations, and SIMD.
+1. Add scalar comparisons, bitwise operations, shifts, conversions, and numeric edge cases.
+2. Add structured control flow and direct/indirect calls while preserving two-pass declarations.
+3. Add linear-memory access, globals, imports, and complete trap propagation.
+4. Add reference/GC operations, exceptions, continuations, and Wasm SIMD lowering.
 5. Meet every applicable item in
    [`docs/BACKEND_WORK_ORDER.md`](../docs/BACKEND_WORK_ORDER.md) before calling
    the backend complete.
