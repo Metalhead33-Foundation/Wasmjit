@@ -92,12 +92,12 @@ struct ContinuationResumeResult {
 //! and v128 equally addressable. Scalar values live at offset 0.
 /** \brief Scalar/vector/reference payload kind stored in a continuation value slot. */
 enum class ContinuationValueKind : std::uint8_t {
-	I32 = 0,
-	I64 = 1,
-	F32 = 2,
-	F64 = 3,
-	Ref = 4,
-	V128 = 5,
+	I32 = 0, //!< ContinuationValueKind enumerator `I32`.
+	I64 = 1, //!< ContinuationValueKind enumerator `I64`.
+	F32 = 2, //!< ContinuationValueKind enumerator `F32`.
+	F64 = 3, //!< ContinuationValueKind enumerator `F64`.
+	Ref = 4, //!< ContinuationValueKind enumerator `Ref`.
+	V128 = 5, //!< ContinuationValueKind enumerator `V128`.
 };
 inline constexpr std::size_t kContinuationValueStride = 16;
 /** \brief Fixed-width 16-byte storage slot for a continuation argument/result. */
@@ -336,7 +336,10 @@ public:
 
 private:
 	struct Task {
-		enum class Kind { Resume, Throw };
+enum class Kind {
+			Resume, //!< Enum member `Resume`.
+			Throw //!< Enum member `Throw`.
+};
 		Kind kind = Kind::Resume;
 		void* continuation = nullptr;
 		std::int32_t arg = 0;
