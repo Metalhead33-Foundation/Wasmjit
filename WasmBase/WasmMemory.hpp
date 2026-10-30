@@ -75,7 +75,7 @@ uint64_t wasm_memory_size(const LinearMemory* memory);
 class StoreOwnedMemory
 {
 protected:
-	LinearMemory memory;
+	LinearMemory memory; //!< Field `memory` of type.
 public:
 /**
  * \brief Performs the bytes operation.
@@ -97,7 +97,7 @@ public:
  * \return The requested value, handle, view, or success status.
  */
 	explicit StoreOwnedMemory(uint64_t initialPages, uint64_t maxPages, bool isShared,
-			bool is64 = false, uint64_t pageSize = 0x10000);
+			bool is64 = false, uint64_t pageSize = 0x10000); //!< Field `is64` of type.
 	virtual ~StoreOwnedMemory() = default;
 	/** \brief Returns read-only access to the backend-visible memory descriptor. \return Pointer to the owned descriptor. */
 /**
@@ -153,7 +153,7 @@ public:
  * \return The requested value, handle, view, or success status.
  */
 	explicit PrivateLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64 = false,
-			uint64_t pageSize = 0x10000);
+			uint64_t pageSize = 0x10000); //!< Field `pageSize` of PrivateLinearMemory.
 	/** \brief Releases the private memory backing storage. */
 	~PrivateLinearMemory() override = default;
 	/** \brief Grows the private buffer by the requested page count. \param deltaPages Number of pages to add. \return false if growth exceeds the declared maximum or allocation fails. */
@@ -171,8 +171,8 @@ public:
 class SharedLinearMemory final : public StoreOwnedMemory {
 private:
 	void*  reservedRegion;
-	size_t reservedBytes;
-	mutable std::mutex mutex;
+	size_t reservedBytes; //!< Field `reservedBytes` of SharedLinearMemory.
+	mutable std::mutex mutex; //!< Field `mutex` of SharedLinearMemory.
 /**
  * \brief Performs the platformReservedMemory operation.
  * \param bytes Input value, resource descriptor, or output destination for this operation.
@@ -199,7 +199,7 @@ public:
  * \return The requested value, handle, view, or success status.
  */
 	explicit SharedLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64 = false,
-			uint64_t pageSize = 0x10000);
+			uint64_t pageSize = 0x10000); //!< Field `pageSize` of SharedLinearMemory.
 	/** \brief Releases the reserved shared-memory address range. */
 /**
  * \brief Performs the SharedLinearMemory operation.
