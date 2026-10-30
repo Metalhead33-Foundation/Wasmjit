@@ -107,6 +107,13 @@ TEST_CASE("AsmJit ModuleInstantiator compiles supported i32 functions", "[asmjit
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("load_at"), 128) == 0xABABABAB);
 	WASM::callCallable<void>(*instance->exportedFunction("memory_copy"), 140, 128, 4);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("load_at"), 140) == 0xABABABAB);
+	WASM::callCallable<void>(*instance->exportedFunction("memory_init"), 256, 1, 2);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("load_at"), 256) == 0x00004342);
+	WASM::callCallable<void>(*instance->exportedFunction("data_drop"));
+	WASM::callCallable<void>(*instance->exportedFunction("memory_init"), 260, 0, 0);
+	CHECK_THROWS(WASM::callCallable<void>(*instance->exportedFunction("memory_init"), 260, 0, 1));
+	CHECK_THROWS(WASM::callCallable<void>(*instance->exportedFunction("memory_init"), 65535, 0, 2));
+
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("store_load"), 200, 0x04030201) == 0x04030201);
 	WASM::callCallable<void>(*instance->exportedFunction("memory_copy"), 201, 200, 3);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("load_at"), 201) == 0x00030201);
