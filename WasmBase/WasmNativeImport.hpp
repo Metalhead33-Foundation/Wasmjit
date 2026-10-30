@@ -150,10 +150,6 @@ template <class Ret, class... Args>
 struct NativeImportAdapter<Ret (*)(VMContext*, Args...)> {
 	//! The host function's own pointer type, used as the template argument of
 	//! `trampoline`.
-/**
- * \brief Performs the Ret operation.
- * \return The value or status produced by this operation.
- */
 	using FnPtr = Ret (*)(VMContext*, Args...);
 
 	//! The `Callable::fnPtr` for the function `Fn`: it runs the body and reports a
