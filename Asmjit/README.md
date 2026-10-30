@@ -52,7 +52,9 @@ a drop-in replacement for the existing backend.
   are invalid Wasm).
 - The context releases all generated entry points at destruction. If tracking
   an allocation fails after executable memory is allocated, it releases that
-  allocation before propagating the host-side exception.
+  allocation before propagating the host-side exception. Module compilation
+  also checkpoints executable allocations and rolls back every function body
+  installed by a module whose later body fails to compile.
 - `Test/AsmjitBackendTests.cpp` checks that emitted machine code executes,
   returns the expected scalar value, and performs lane-wise, vector, and
   packed-storage operations.
