@@ -113,7 +113,8 @@ SOURCES += main.cpp \
     ConcurrencyTests.cpp \
     PluginTests.cpp \
     HeaderTierTests.cpp \
-    AsmjitBackendTests.cpp
+    AsmjitBackendTests.cpp \
+    AsmjitTypeTranslatorTests.cpp
 HEADERS +=  \
     helper.hpp \
     Diagnose.hpp \
