@@ -725,7 +725,7 @@ protected:
 				expectedBranchValues = branchValues;
 				first = false;
 			} else if (stackHeight != expectedStackHeight || branchValues != expectedBranchValues) {
-				throw std::runtime_error("AsmJit br_table targets require identical stack heights and i32 label signatures");
+				throw std::runtime_error("AsmJit br_table targets require identical stack heights and label signatures");
 			}
 		};
 		for (WASM::LabelIdx depth : depths)
@@ -1284,6 +1284,7 @@ private:
 		ControlKind kind = ControlKind::Block;
 		size_t stackHeight = 0;
 		size_t resultCount = 0;
+		WASM::ValueTypeCode resultType = WASM::ValueTypeCode::Void;
 		asmjit::x86::Gp result;
 		asmjit::Label begin;
 		asmjit::Label alternate;
@@ -1411,9 +1412,12 @@ private:
 		ControlFrame frame;
 		frame.kind = kind;
 		frame.stackHeight = values.size();
-		frame.resultCount = blockResultCount(type);
-		if (frame.resultCount != 0)
-			frame.result = compiler.new_gp32("blockResult");
+		frame.resultType = blockResultType(type);
+		frame.resultCount = frame.resultType == WASM::ValueTypeCode::Void ? 0 : 1;
+		if (frame.resultCount != 0) {
+			const WASM::ValueType resultType{frame.resultType};
+			frame.result = newIntegerRegister(compiler, resultType, "blockResult");
+		}
 		if (kind == ControlKind::Loop) {
 			frame.begin = compiler.new_label();
 			frame.end = compiler.new_label();
@@ -1423,10 +1427,10 @@ private:
 		controls.push_back(frame);
 	}
 
-	size_t blockResultCount(const WASM::BlockType& type) const
+	WASM::ValueTypeCode blockResultType(const WASM::BlockType& type) const
 	{
 		if (type.isVoid())
-			return 0;
+			return WASM::ValueTypeCode::Void;
 		if (type.isTypeIndex) {
 			if (type.typeIndex < 0 || static_cast<uint32_t>(type.typeIndex) >= module.typeCount())
 				throw std::runtime_error("AsmJit block type index is out of range");
@@ -1435,13 +1439,13 @@ private:
 				throw std::runtime_error("AsmJit block parameters are not supported yet");
 			if (blockType.results.size() > 1)
 				throw std::runtime_error("AsmJit block multi-value results are not supported yet");
-			if (!blockType.results.empty())
-				requireI32(blockType.results.front().val, "block results");
-			return blockType.results.size();
+			if (blockType.results.empty())
+				return WASM::ValueTypeCode::Void;
+			requireInteger(blockType.results.front().val, "block results");
+			return blockType.results.front().val.opcode;
 		}
-		if (type.valType != WASM::ValueTypeCode::I32)
-			throw std::runtime_error("AsmJit structured control flow supports only i32 block results");
-		return 1;
+		requireInteger(WASM::ValueType{type.valType}, "block results");
+		return type.valType;
 	}
 
 	void storeBlockResult(const ControlFrame& frame, const char* description)
@@ -1491,8 +1495,7 @@ private:
 		if (index >= module.globals.size())
 			throw std::runtime_error("AsmJit global instruction references an unknown global");
 		const WASM::GlobalType& type = module.globals[index].type;
-		if (type.contentType.opcode != WASM::ValueTypeCode::I32)
-			throw std::runtime_error("AsmJit initial global lowering supports i32 globals only");
+		requireInteger(type.contentType, "globals");
 		return type;
 	}
 
@@ -1513,10 +1516,17 @@ private:
 	void emitGlobalGet(WASM::GlobalIdx index)
 	{
 		auto cell = emitGlobalCell(index);
-		auto value = compiler.new_gp32("globalValue");
-		checkError(compiler.mov(value, asmjit::x86::dword_ptr(cell,
-				static_cast<int32_t>(offsetof(WASM::Value, i32)))),
-				"AsmJit global.get load failed");
+		const auto& type = validateGlobalIndex(index);
+		auto value = newIntegerRegister(compiler, type.contentType, "globalValue");
+		if (type.contentType.opcode == WASM::ValueTypeCode::I64) {
+			checkError(compiler.mov(value, asmjit::x86::qword_ptr(cell,
+					static_cast<int32_t>(offsetof(WASM::Value, i64)))),
+					"AsmJit i64 global.get load failed");
+		} else {
+			checkError(compiler.mov(value, asmjit::x86::dword_ptr(cell,
+					static_cast<int32_t>(offsetof(WASM::Value, i32)))),
+					"AsmJit i32 global.get load failed");
+		}
 		values.push_back(value);
 	}
 
@@ -1529,9 +1539,15 @@ private:
 			throw std::runtime_error("AsmJit global.set operand stack underflow");
 		auto value = values.back(); values.pop_back();
 		auto cell = emitGlobalCell(index);
-		checkError(compiler.mov(asmjit::x86::dword_ptr(cell,
-				static_cast<int32_t>(offsetof(WASM::Value, i32))), value),
-				"AsmJit global.set store failed");
+		if (type.contentType.opcode == WASM::ValueTypeCode::I64) {
+			checkError(compiler.mov(asmjit::x86::qword_ptr(cell,
+					static_cast<int32_t>(offsetof(WASM::Value, i64))), value),
+					"AsmJit i64 global.set store failed");
+		} else {
+			checkError(compiler.mov(asmjit::x86::dword_ptr(cell,
+					static_cast<int32_t>(offsetof(WASM::Value, i32))), value),
+					"AsmJit i32 global.set store failed");
+		}
 	}
 
 	void validateMemoryIndex(WASM::MemIdx index) const
