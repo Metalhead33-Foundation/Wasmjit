@@ -296,8 +296,6 @@ public:
 	}
 
 protected:
-	void dispatchEnd() override {}
-
 	void dispatchI32Const(int32_t value) override
 	{
 		asmjit::x86::Gp reg = compiler.new_gp32("constant");
