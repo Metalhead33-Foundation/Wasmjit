@@ -106,6 +106,12 @@
       i32.sub
       call $even
     end)
+  (func (export "extend8_s") (param i32) (result i32)
+    local.get 0
+    i32.extend8_s)
+  (func (export "extend16_s") (param i32) (result i32)
+    local.get 0
+    i32.extend16_s)
   (func (export "local_roundtrip") (param i32) (result i32) (local i32)
     local.get 0
     local.set 1
