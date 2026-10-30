@@ -94,7 +94,10 @@ class AsmJitLaneWiseOp final : public LaneWiseOp
 public:
 	explicit AsmJitLaneWiseOp(bool multiply)
 		: entry_(context_.compileLaneWiseI32x4(multiply)) {}
-	void run(const void* a, const void* b, void* out) const override { entry_(a, b, out); }
+	void run(const void* a, const void* b, void* out) const override {
+		entry_(static_cast<const std::uint32_t*>(a), static_cast<const std::uint32_t*>(b),
+				static_cast<std::uint32_t*>(out));
+	}
 private:
 	AsmJitBackend::Context context_;
 	AsmJitBackend::Context::LaneWiseI32x4Entry entry_ = nullptr;
