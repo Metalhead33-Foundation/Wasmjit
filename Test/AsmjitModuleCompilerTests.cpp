@@ -150,6 +150,63 @@ TEST_CASE("AsmJit ModuleInstantiator compiles supported i32 functions", "[asmjit
 	CHECK_THROWS(WASM::callCallable<std::int32_t>(*instance->exportedFunction("load_oob"), -1));
 }
 
+TEST_CASE("AsmJit compiles i64 integer functions", "[asmjit][module][i64]")
+{
+	WASM::Module module = loadTestModule("asmjit_i64_basic");
+	WASM::RegistryImportResolver imports;
+	AsmJitBackend::Context context;
+	AsmJitBackend::ModuleCompiler compiler(context);
+	auto instance = compiler.instantiate(module, imports);
+
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_add"),
+			INT64_C(0x100000000), INT64_C(0x200000000)) == INT64_C(0x300000000));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_sub"),
+			INT64_C(0x300000000), INT64_C(0x100000000)) == INT64_C(0x200000000));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_mul"),
+			INT64_C(0x100000000), 7) == INT64_C(0x700000000));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_const")) == INT64_C(0x100000000));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_local"),
+			INT64_C(0x100000000)) == INT64_C(0x300000000));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_wrap"))
+			== INT64_MIN);
+
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_and"),
+			INT64_C(0xF00000000), INT64_C(0x3C0000000)) == INT64_C(0x30000000));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_or"),
+			INT64_C(0xF00000000), INT64_C(0x0F0000000)) == INT64_C(0xFF0000000));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_xor"),
+			INT64_C(0xFF0000000), INT64_C(0x0F0000000)) == INT64_C(0xF00000000));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_shl"), 3, 34) == 12);
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_shr_s"), -16, 2) == -4);
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_shr_u"), -16, 2)
+			== static_cast<std::int64_t>(UINT64_C(0x3FFFFFFFFFFFFFFC)));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_rotl"), 1, 4) == 16);
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_rotr"), 16, 4) == 1);
+
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("i64_eqz"), 0) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("i64_eqz"), 1) == 0);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("i64_eq"),
+			INT64_C(0x100000000), INT64_C(0x100000000)) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("i64_ne"), 1, 2) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("i64_lt_s"), -1, 1) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("i64_lt_u"), 1, -1) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("i64_gt_s"), 1, -1) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("i64_gt_u"), -1, 1) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("i64_le_s"), -1, -1) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("i64_le_u"), 1, 2) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("i64_ge_s"), 1, -1) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("i64_ge_u"), -1, 1) == 1);
+
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_div_s"), -42, 2) == -21);
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_div_u"), -1, 2)
+			== INT64_MAX);
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_rem_s"), -5, 2) == -1);
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_rem_u"), -1, 2) == 1);
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_rem_s"), INT64_MIN, -1) == 0);
+	CHECK_THROWS(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_div_s"), INT64_MIN, -1));
+	CHECK_THROWS(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_div_u"), 1, 0));
+}
+
 TEST_CASE("AsmJit rolls back code allocations when a later function is unsupported", "[asmjit][module][safety]")
 {
 	WASM::Module module = loadTestModule("asmjit_i32_unsupported");
