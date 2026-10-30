@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <string>
 
-#if !defined(ASMJIT_ARCH_X86) && !defined(ASMJIT_ARCH_X64)
+#if ASMJIT_TARGET_ARCH_X86 == 0
 #error "The provisional AsmJit code-emission probe currently supports x86/x64 hosts only"
 #endif
 
