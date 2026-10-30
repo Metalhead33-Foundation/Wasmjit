@@ -1156,7 +1156,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 		checkError(compiler.finalize(), "AsmJit compiler finalisation failed");
 		void* codeBase = context.install(code);
 		for (uint32_t i = 0; i < functionRecords.size(); ++i) {
-			const uint64_t offset = code.label_offset(functions[i]->label());
+			const uint64_t offset = code.label_offset_from_base(functions[i]->label());
 			functionRecords[i]->entry = static_cast<uint8_t*>(codeBase) + offset;
 			internals.internalCallables[i].rawFnPtr = functionRecords[i]->entry;
 			internals.internalCallables[i].fnPtr = functionRecords[i]->entry;
