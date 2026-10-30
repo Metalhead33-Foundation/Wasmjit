@@ -632,11 +632,11 @@ private:
 	{
 		(void)validateGlobalIndex(index);
 		auto globals = compiler.new_gp_ptr("globals");
-		checkError(compiler.mov(globals, asmjit::x86::qword_ptr(vmContext,
+		checkError(compiler.mov(globals, asmjit::x86::ptr(vmContext,
 				static_cast<int32_t>(offsetof(WASM::VMContext, globals)))),
 				"AsmJit VMContext globals load failed");
 		auto cell = compiler.new_gp_ptr("globalCell");
-		checkError(compiler.mov(cell, asmjit::x86::qword_ptr(globals,
+		checkError(compiler.mov(cell, asmjit::x86::ptr(globals,
 				static_cast<int32_t>(index * sizeof(WASM::Value*)))),
 				"AsmJit global cell lookup failed");
 		return cell;
