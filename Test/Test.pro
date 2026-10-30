@@ -19,13 +19,14 @@ DEFINES += WASM_TEST_DIR=\\\"$$WASM_BUILD_OUTPUT_DIR/\\\"
 QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../WasmBase\'
 QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../WasmStub\'
 QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../LibJit\'
+QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../Asmjit\'
 QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../extern/MhLib/Elvavena\'
 QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../extern/MhLib/Euphemy\'
 
 # Link to our local libraries
 LIBS += -L$$OUT_PWD/../WasmBase -lWasmBase
 LIBS += -L$$OUT_PWD/../WasmStub -lWasmStub
-LIBS += -L$OUT_PWD/../LibJit -lLibJit
+LIBS += -L$$OUT_PWD/../LibJit -lLibJit
 LIBS += -L$OUT_PWD/../Asmjit -lAsmjit
 LIBS += -ljit
 LIBS += -lCatch2 -lCatch2Main
