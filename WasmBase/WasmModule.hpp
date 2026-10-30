@@ -33,20 +33,20 @@ namespace WASM {
 //! `Local`, `Label`, `Field`, `Param` and `TagParam` are indirect maps: their
 //! `index` is the function/type/tag index and `subIndex` is the inner index.
 enum class NameKind : uint8_t {
-	Module,
-	Function,
-	Local,
-	Label,
-	Type,
-	Table,
-	Memory,
-	Global,
-	Element,
-	Data,
-	Field,
-	Tag,
-	Param,
-	TagParam
+	Module, //!< NameKind enumerator `Module`.
+	Function, //!< NameKind enumerator `Function`.
+	Local, //!< NameKind enumerator `Local`.
+	Label, //!< NameKind enumerator `Label`.
+	Type, //!< NameKind enumerator `Type`.
+	Table, //!< NameKind enumerator `Table`.
+	Memory, //!< NameKind enumerator `Memory`.
+	Global, //!< NameKind enumerator `Global`.
+	Element, //!< NameKind enumerator `Element`.
+	Data, //!< NameKind enumerator `Data`.
+	Field, //!< NameKind enumerator `Field`.
+	Tag, //!< NameKind enumerator `Tag`.
+	Param, //!< NameKind enumerator `Param`.
+	TagParam, //!< NameKind enumerator `TagParam`.
 };
 
 //! One record from a compilation-hint custom section. The family is
