@@ -20,6 +20,7 @@ WASMJIT_VISIBLE_BEGIN
 
 namespace WASM {
 
+/** \\brief Forward declaration of the parsed component AST. */
 struct Component;
 
 //! A reference to the AST definition that introduced an entity. `owner` is
