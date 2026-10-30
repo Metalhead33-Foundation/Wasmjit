@@ -27,7 +27,7 @@ QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../extern/MhLib/Euphemy\'
 LIBS += -L$$OUT_PWD/../WasmBase -lWasmBase
 LIBS += -L$$OUT_PWD/../WasmStub -lWasmStub
 LIBS += -L$$OUT_PWD/../LibJit -lLibJit
-LIBS += -L$OUT_PWD/../Asmjit -lAsmjit
+LIBS += -L$$OUT_PWD/../Asmjit -lAsmjit
 LIBS += -ljit
 LIBS += -lCatch2 -lCatch2Main
 include(../WasmBase/WasmBase.pri)
