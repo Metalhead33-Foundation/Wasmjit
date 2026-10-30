@@ -13,6 +13,8 @@ include(../WasmBase/WasmBase.pri)
 
 # AsmJit is external and remains confined to this backend.
 SOURCES += AsmjitContext.cpp \
-    AsmjitTypeTranslator.cpp
+    AsmjitTypeTranslator.cpp \
+    AsmjitModuleCompiler.cpp
 HEADERS += AsmjitContext.hpp \
-    AsmjitTypeTranslator.hpp
+    AsmjitTypeTranslator.hpp \
+    AsmjitModuleCompiler.hpp
