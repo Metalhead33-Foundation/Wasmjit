@@ -1,9 +1,11 @@
 # The `LF-1` Triage — Screening the Whole Candidate List {#lf_triage}
 
-Status: pre-feasibility / scoping study (revision 2 — 2026-10-30: **re-screened**
-after the engine learned to accept the superseded Phase-3 exception form behind a
-parser policy, which retired the screen's most-cited blocker; §6.9 records what
-changed and what did not; revision 1 was the first pass). This note is
+Status: pre-feasibility / scoping study (revision 3 — 2026-10-30: **re-screened
+twice more** after the engine moved — `LE-9` closed the mixed exception-form
+refusal (§6.10), then `MP-1` gave a non-shared memory a reservation policy
+(§6.11–§6.12). Revision 2 recorded the first re-screen after the legacy-EH
+policy landed; revision 1 was the first pass. Each re-screen records what moved
+and what did not.) This note is
 the **screen** `LANGUAGE_FEASIBILITY.md` §7 defines: every entry of the canonical
 candidate list, one row per *(language, toolchain)* pair, three quick-triage
 axes, an evidence tier, a study cost, a cluster and a trigger. It attempts **no
@@ -66,8 +68,9 @@ The engine is **not** re-derived. The screen cites the pinned snapshot:
 
 The three frictions the audit says should not be rediscovered per candidate
 ([`READINESS_AUDIT.md`](../READINESS_AUDIT.md) §7 item 3) are therefore
-first-class rows in this screen: the concurrency model, the core-chosen memory
-provider, and the missing step budget.
+first-class rows in this screen: the concurrency model, the memory allocation
+policy, and the missing step budget. (The middle one stopped being an engine
+limitation on 2026-10-30 — `MP-1`, §3.1, §6.12.)
 
 ### 2.3 The bottleneck vocabulary
 
@@ -79,12 +82,12 @@ clustering map can group by them:
 |---|---|---|
 | **F1** | JS glue required (`env.*`/`gojs`/`wasm_exec.js`): the module cannot be instantiated without a JS host | The engine implements no JS engine and no JS-facing import objects ([`READINESS_AUDIT.md`](../READINESS_AUDIT.md) §5.3) |
 | **F2** | WASI host surface required | WASI is embedder-provided by decision; the engine ships none (`AASD6`), but the imports are ordinary host imports, so it is *implementable* |
-| **F3** | Runtime-owned heap/allocator in linear memory | Works, but the **provider** is core-chosen (`RA4`): a runtime cannot supply its own backing allocator or move its heap |
+| **F3** | Runtime-owned heap/allocator in linear memory | Works: the guest owns its whole memory, and since `MP-1` a non-shared memory can **reserve its maximum and keep its base** (`MemoryAllocationPolicy::Reserved`, [`../proposals/MEMORY_PROVIDER.md`](../proposals/MEMORY_PROVIDER.md)). The engine still will not accept an embedder-supplied *backing* (`MP-2`), and nothing in `docs/languages/` asks it to |
 | **F4** | WasmGC + type identity (+ JS-string builtins) | GC is 100% and type identity is store-scoped ([`TYPE_IDENTITY.md`](../TYPE_IDENTITY.md)), but a runtime may also expect `wasm:js-string` and a host-side layout contract |
 | **F5** | Legacy EH instructions (`try`/`catch`/`delegate`) | **Mitigated (2026-10-30):** the final `exnref` shape is what the engine executes, and a legacy-encoded module no longer has to be refused — `ParseOptions::legacyExceptionHandling` rewrites it at load ([`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md)). Off by default, and one construct is still refused by name (`LE-8`, a `delegate` past a catch; `LE-9`, mixed forms, closed on 2026-10-30), so it stays a *switch a toolchain may force* rather than a free pass |
 | **F6** | OS-thread spawning, real parallelism, TLS | `Agents` exists but is opt-in; the guest cannot spawn a host thread |
 | **F7** | Start-up that blocks, loops, or spawns | There is no step budget (`S1`); an init that never returns hangs the embedder |
-| **F8** | Large runtime / heap reservation vs the 2 GiB budget | [`SAFETY.md`](../SAFETY.md) §2.3: an oversized initial size fails instantiation. Priced by [`proposals/MEMORY_PROVIDER.md`](../proposals/MEMORY_PROVIDER.md): the budget charges *commits*, not reservations, so the gap was never budget headroom but a non-shared memory's inability to reserve at all (`MP2`) — **closed** by `MP-1`: `MemoryAllocationPolicy::Reserved` reserves the declared maximum and keeps the base, so `F8` is now 'does the runtime need it', not 'can the engine do it' |
+| **F8** | A large *committed* heap against the 2 GiB budget | Reservation stopped being the issue on 2026-10-30: `MemoryAllocationPolicy::Reserved` reserves the declared maximum and keeps the base, so a runtime that wants 4 GiB of address space needs no engine change (`MP-1`, [`../proposals/MEMORY_PROVIDER.md`](../proposals/MEMORY_PROVIDER.md)). What remains is the committed footprint against `WASMJIT_MAX_TOTAL_BYTES` — an embedder's dial, not an engine gap ([`SAFETY.md`](../SAFETY.md) §2.3) |
 | **F9** | Multiple instances of one module | One instance per `Module`; isolation is "load it twice" |
 | **F10** | Guest-side dynamic code generation / self-hosting | Legal guest code, but a self-hosting JIT usually assumes `mmap`-like memory (`F2`) |
 | **F11** | Signature/value mapping is the deciding issue | Rare: the ABI covers `i32/i64/f32/f64/v128/ref`, multi-value is a caller buffer |
@@ -143,6 +146,29 @@ shim, no JS host — because that is what an embedder gets without opting in. A
 row that would move down a band under `ConcurrencyModel::Agents` or a WASI shim
 says so in its bottleneck text.
 
+### 3.1 What A3 grades: the engine's half, and the gold standard
+
+The **gold standard** for a row is *Kotlin/Wasm with its `wasm:js-string`-class
+imports supplied by the embedder*: a module that loads, instantiates and runs
+against the host import/export set it declares. Supplying that set is the
+**embedder's** job, by decision ([`GC.md`](../proposals/GC.md) §10.5,
+[`JS_INTEGRATION.md`](../proposals/JS_INTEGRATION.md) JS3), and a row is not
+worse for needing it.
+
+So A3 grades **the engine's half only**: does the module decode, does it
+validate, does it instantiate, does it execute, does start-up terminate, and is
+the host boundary expressible at all ([`ABI.md`](../ABI.md) "Native (host)
+function imports"). It does *not* grade who writes the shim, how large the
+runtime is, or how unfamiliar the language is — those live in the **cost** column
+and in `LF-2`.
+
+The consequence is the strict meaning `high` has always had: *a §2.2 question is
+expected to fail without engine work*. A row whose only remaining obstacle is
+"the embedder must implement `wasi_snapshot_preview1`" or "the embedder must
+supply `wasm:js-string`" is not `high`; it is `medium` at most, and its
+bottleneck text names the imports.
+
+
 ## 4. The evidence tiers, as the rows actually split
 
 A row's tier is the tier of its **weakest load-bearing claim**: a row that says
@@ -196,7 +222,7 @@ what a cluster *is*.
 
 | # | Language | Toolchain | Likely bottleneck | A1 | A2 | A3 | Evid. | Cost | Cluster | Trigger |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **T01** | C | Emscripten `emcc`, native `.wasm` output | `F7`+`F3` — standalone output still needs a JS-free runtime path (`_start`, memory-growth notification), and the malloc'd heap base is not the embedder's to move (`RA4`) | prod | partly | low | E1 | C3 · 4–6 s · 1–2 w | `L1` | `T3` |
+| **T01** | C | Emscripten `emcc`, native `.wasm` output | `F7` — the standalone runtime path (`_start`, the memory-growth notification the embedder calls) is the remaining engine-side edge. The heap base is no longer fixed: `MemoryAllocationPolicy::Reserved` reserves the maximum and keeps `memoryBase` stable (`MP-1`) | prod | partly | low | E1 | C3 · 4–6 s · 1–2 w | `L1` | `T3` |
 | **T02** | C | clang + wasm-ld, `--target=wasm32-unknown-unknown` | `F3` — no libc by default, so `malloc`/`free` come from the guest or a linked libc; a pure-computation module links as-is | prod | standard | low | E1 | C2 · 2–3 s · ~1 w | `L1` | `T3` |
 | **T03** | C | wasi-sdk, `wasm32-wasi` | `F2` — every libc call that leaves the sandbox is a WASI import the embedder must supply; otherwise as `T02` | prod | standard | low | E1 | C3 · 3–5 s · 1–2 w | `L1` | `T2+T3` |
 | **T04** | C++ | Emscripten `em++` | `F3`+`F7` — libc++'s heap, `__cxa_*` and the static-ctor path must run, and the standalone runtime still wants its `_start`/memory-growth edges. **EH is no longer the blocker:** the legacy encoding clang emits by default (measured, `R-9`) loads under the parser policy, and `-mllvm -wasm-use-legacy-eh=false` removes the need for it | prod | partly | low | E1 (E-7/E-8; default now measured) | C3 · 4–6 s · 1–2 w | `L1` | `T3` |
@@ -204,17 +230,17 @@ what a cluster *is*.
 | **T06** | Rust | rustc, `wasm32-unknown-unknown` | `F3` only — no host imports from `std`, `core`+`alloc` and `dlmalloc` in the guest, `panic=abort` by default; unwinding needs nightly plus a non-legacy EH flag *or* the parser policy | prod | standard | low | E1 | C3 · 3–5 s · 1–2 w | `L2` | `T3` (the most likely modern-mod requester) |
 | **T07** | Rust | rustc, `wasm32-wasip1` | `F2` — the same module shape plus a WASI surface for `std::fs`/`std::io` | prod | standard | low | E1 | C3 · 4–6 s · 1–2 w | `L2` | `T2+T3` |
 | **T08** | Go | `GOOS=js GOARCH=wasm` | `F1` — the port is a fixed JS+Wasm hybrid: the module's imports are implemented by `wasm_exec.js`, so it cannot be instantiated here | prod | non-standard | high | E1 | — | `L8` | `K2` (E1) — reversal: a documented standalone port |
-| **T09** | Go | `GOOS=wasip1` | `F2`+`F7`+`F8` — goroutine scheduler and runtime init behind `_start`, a large heap reservation (the budget charges commits, so the friction is that a non-shared memory cannot reserve at all — [`MEMORY_PROVIDER.md`](../proposals/MEMORY_PROVIDER.md) `MP2`), and a WASI surface | prod | standard | high | E1 | C3 · 6–8 s · 2–3 w | `L8` | `T2+T3` |
+| **T09** | Go | `GOOS=wasip1` | `F2`+`F7` — a WASI surface for the embedder to implement, and a scheduler/runtime init behind `_start`. The old `F8` is gone: a heap reservation is expressible since `MP-1` (`Reserved` reserves the declared maximum, commits on use, keeps the base), and the budget only sees committed pages. What is left is unmeasured start-up behaviour (`E1`) | prod | standard | medium | E1 | C3 · 5–7 s · 2 w | `L8` | `T2+T3` |
 | **T10** | TinyGo | TinyGo (`wasm` and `wasi` targets) | `F3` — an LLVM-backed Go subset with a small collector and scheduler and no goroutine preemption unless asked; the closest thing to "Go without the runtime" | stable | partly | low | E2 | C3 · 3–5 s · 1–2 w | `L2` | `T3` (the pragmatic Go answer if `T09` fails) |
 
 ### 5.2 Stable for production usage (22 entries → 23 rows)
 
 | # | Language | Toolchain | Likely bottleneck | A1 | A2 | A3 | Evid. | Cost | Cluster | Trigger |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **T11** | .NET | Blazor / `browser-wasm` (Mono) | `F1`+`F8` — the runtime is JS-hosted by construction (`dotnet.js`) and carries a GC plus a full class library | prod | non-standard | high | E2 | — | `L7` | `K2` (E2) — reversal: `T14` ships |
+| **T11** | .NET | Blazor / `browser-wasm` (Mono) | `F1` — the runtime is JS-hosted by construction (`dotnet.js`), which is a *contract with a JS engine*, not a set of host functions an embedder can register; it also carries a GC and a full class library. `F8`'s engine half is closed by `MP-1`, but the row does not move: `F1` is the blocker | prod | non-standard | high | E2 | — | `L7` | `K2` (E2) — reversal: `T14` ships |
 | **T12** | C# | Blazor / `browser-wasm` | the same runtime as `T11`; the language is not separable from it | prod | non-standard | high | E2 | — | `L7` | `K2` (via `T11`) |
 | **T13** | F# | Blazor + Bolero | the same as `T11`, with a functional runtime on top | prod | non-standard | high | E2 | — | `L7` | `K2` (via `T11`) |
-| **T14** | .NET | NativeAOT-LLVM (`runtimelab`, experimental) | `F3`+`F8` — an AOT'd runtime, GC and class library; init and heap behaviour undocumented in what was read | exp | partly | high | E3 | C3 · 6–8 s · 2–3 w | `L7` | `T1+T3` |
+| **T14** | .NET | NativeAOT-LLVM (`runtimelab`, experimental) | `F3` — an AOT'd runtime, GC and class library, with init and heap behaviour still unmeasured (`E3`). Both halves of the old `F8` are answered: a reservation is expressible (`MP-1`), and the committed footprint is the embedder's budget dial. Nothing here is expected to fail for engine reasons | exp | partly | medium | E3 | C3 · 6–8 s · 2–3 w | `L7` | `T1+T3` |
 | **T15** | AssemblyScript | `asc` | `F3` — own TLSF + incremental GC in linear memory, `env.abort`, UTF-16 strings passed as pointers; no other host service | prod | standard | low | E1 | C2 · 2–3 s · 3–5 d | `L3` | `T3` (harness evidence already exists) |
 | **T16** | Brainfuck | brainfuck2wasm, brainwebfuckassembly | `F`-none — an emitter exists; the blocker is value for this engine's intended use | exp | standard | low | E2 | C0 | `L12` | none |
 | **T17** | Clean | ABC interpreter built with Emscripten | `F`-none technically (the module would be an interpreter); there is no Clean→Wasm compiler, so the language is interpreted, not compiled | exp | partly | medium | E3 | C0 | `L12` | none |
@@ -247,7 +273,7 @@ what a cluster *is*.
 | **T39** | D | LDC (LLVM; Wasm since 1.11) | `F3`+`F6` — druntime and Phobos, a GC and TLS. The EH encoding is mitigated: LDC's LLVM default is the legacy form, which loads under the parser policy | stable | partly | medium | E2 | C3 · 5–7 s · 2 w | `L2` | `T3` (second wave) |
 | **T40** | Eclair | own compiler (LLVM/Wasm) | a Datalog engine; intended-use mismatch | exp | standard | low | E3 | C0 | `L11` | none |
 | **T41** | Eel | eel-wasm (browser compiler) | `F1` — compiles in the browser, for the browser | exp | non-standard | high | E3 | C0 | `L12` | none |
-| **T42** | Elixir | Firefly, ElixirWasm | `F8` — a BEAM-shaped runtime; both projects are marked unmaintained | abandoned | partly | high | E2 | — | `L12` | defer (`K4` suspected) |
+| **T42** | Elixir | Firefly, ElixirWasm | `F6` — a BEAM-shaped runtime whose schedulers want host threads; both projects are marked unmaintained. (`F8` is closed by `MP-1`; it does not rescue an abandoned row) | abandoned | partly | high | E2 | — | `L12` | defer (`K4` suspected) |
 | **T43** | Janet | janet, built with Emscripten or standalone | `F3` — a small VM whose C interop is the natural boundary; its PEG engine and GC live in the VM | stable | partly | low | E3 | C2 · 2–3 s · 1 w | `L5` | `T3` (second wave) |
 | **T44** | Java | TeaVM (Wasm / WasmGC backend) | `F4`+`F8` — a class-library subset plus a collector; a WasmGC backend exists | stable | partly | medium | E3 | C3 · 5–7 s · 2 w | `L7` | `T3` (second wave) |
 | **T45** | Java | JWebAssembly | `F3` — its own GC and runtime in linear memory, standalone output | exp | partly | medium | E3 | C3 | `L7` | `T3` (second wave) |
@@ -258,26 +284,26 @@ what a cluster *is*.
 | **T50** | JavaScript | Duktape, quickjs-emscripten, SpiderMonkey, Hermes, goja, jint | `F1`/`F2` — most builds are Emscripten/JS-hosted; Hermes documents both an Emscripten and a WASI path | exp | partly | medium | E2 | C3 | `L6` | folds into `T49` |
 | **T51** | JavaScript | Porffor, jz (AOT JS → Wasm) | a JS subset AOT'd to Wasm; experimental | exp | standard | medium | E3 | C2 | `L10` | `T3` (watch) |
 | **T52** | KCL | KCLVM (LLVM) | a configuration language; intended-use mismatch | exp | standard | low | E3 | C0 | `L11` | none |
-| **T53** | Kotlin | Kotlin/Wasm (`wasm-wasi` target) | `F4` — WasmGC plus JS-string-style imports and a stdlib of real size. The **legacy exception handling its docs require is mitigated**, and it is the one consumer that cannot re-flag its own toolchain, so the parser policy is the only path — provided the output does not delegate past a catch (`LE-8`, the one shape the rewrite still refuses; mixed legacy/`try_table` bodies load) | exp (beta) | partly | medium | E1 | C3 · 5–7 s · 2 w | `L4` | `T3` |
+| **T53** | Kotlin | Kotlin/Wasm (`wasm-wasi` target) | `F4` — WasmGC plus `wasm:js-string`-class imports and a stdlib of real size. **This is the gold-standard row** (§3.1): GC is 100%, and the imports are exactly what an embedder supplies, so what the engine owes the row is the loader. That half is done — the legacy exception handling Kotlin cannot re-flag is translated at load, provided the output does not delegate past a catch (`LE-8`, the one shape the rewrite still refuses; mixed legacy/`try_table` bodies load since `LE-9`) | exp (beta) | partly | medium | E1 | C3 · 5–7 s · 2 w | `L4` | `T3` |
 | **T54** | Lisp | wasCm, Wisp | a small VM or compiler; low value here | exp | partly | medium | E3 | C2 | `L6` | `T3` (second wave) |
 | **T55** | Lys | own compiler | a tiny functional language | exp | standard | low | E3 | C2 · 1–2 s · 2–3 d | `L10` | `T3` |
 | **T56** | Pascal | Free Pascal `wasm32-wasi` | `F2`+`F3` — the FPC RTL plus WASI; threads off by default | stable | partly | medium | E2 | C3 · 4–6 s · 1–2 w | `L2` | `T3` |
 | **T57** | Perl | WebPerl (Emscripten) | `F1`+`F3` — a Perl VM in the browser, with a large runtime | exp | partly | high | E2 | — | `L6` | none |
-| **T58** | PHP | PIB, php-wasm, WLR (WASI) | `F2` — a PHP VM; WASI builds exist; intended-use mismatch | exp | partly | high | E2 | — | `L6` | none |
+| **T58** | PHP | php-wasm / wasm32-wasi builds | `F2` — a PHP VM with WASI builds and an intended-use mismatch; nothing is expected to fail for engine reasons (§3.1), so the grade is the cost band, not `high` | stable | partly | medium | E2 | — | `L6` | none |
 | **T59** | Poetry | own compiler (explicit import/export control) | `F`-none — a tiny language that maps onto Wasm deliberately; cheap, low value | stable | standard | low | E2 | C2 · 1–2 s · 2–3 d | `L10` | `T3` (cheap) |
 | **T60** | Python | MicroPython `ports/webassembly` | `F2`+`F3` — a small VM with its own GC and a C-API-shaped boundary | stable | partly | low | E2 | C3 · 4–6 s · 1–2 w | `L5` | `T3` |
-| **T61** | Python | CPython via Pyodide or WLR (WASI) | `F2`+`F8` — full CPython and its standard library | stable | partly | high | E2 | — | `L6` | none now |
+| **T61** | Python | CPython via Pyodide or WLR (WASI) | `F2`+`F8` — full CPython and its standard library: a WASI surface for the embedder to implement and a large *committed* footprint against its `WASMJIT_MAX_TOTAL_BYTES`. Neither is an engine gap (§3.1) | stable | partly | medium | E2 | — | `L6` | none now |
 | **T62** | Python | RustPython | `F1`/`F2` — a Rust VM compiled to Wasm (see `T49`) | stable | partly | medium | E3 | C2 | `L6` | `T3` (second wave) |
-| **T63** | Prolog | SWI-Prolog Wasm, Ciao | `F2`+`F8` — a Prolog engine with its own stacks; intended-use mismatch | exp | partly | high | E2 | — | `L11` | none |
+| **T63** | Prolog | SWI-Prolog Wasm, Ciao | `F2`+`F8` — a Prolog engine with its own (guest-side) stacks, a WASI surface, and an intended-use mismatch. The engine has no objection; the mismatch is a fit question for `LF-2` | exp | partly | medium | E2 | — | `L11` | none |
 | **T64** | R | WebR (Emscripten) | `F1`+`F8` — a large VM behind a JS-facing API | stable | non-standard | high | E2 | — | `L6` | none |
 | **T65** | Rebol | Ren-C, Rye | `F2`+`F3` — a small VM; Ren-C's replpad is JS-facing | exp | partly | medium | E3 | C2 | `L6` | none now |
 | **T66** | Ring | Ring (Qt/WebAssembly) | `F3` — the language's own VM, with a Qt-flavoured web story | stable | partly | medium | E3 | C2 | `L6` | none now |
 | **T67** | Ruby | mruby, Wruby | `F3` — a small VM; the C API is the boundary | stable | partly | low | E2 | C3 · 4–6 s · 1–2 w | `L5` | `T3` (second wave) |
-| **T68** | Ruby | ruby.wasm (CRuby, WASI) | `F2`+`F8` — full CRuby | stable | partly | high | E2 | — | `L6` | none now |
+| **T68** | Ruby | ruby.wasm (CRuby, WASI) | `F2`+`F8` — full CRuby: a WASI surface and a large committed footprint, both embedder-side. Emitted as `high` in revision 2 on cost, which §3.1 does not allow | stable | partly | medium | E2 | — | `L6` | none now |
 | **T69** | Ruby | Artichoke, run.rb, cry-wasm, rlang | mixed — Artichoke is a Rust VM (`F1`/`F2`); cry-wasm recompiles Ruby through Crystal | exp | partly | medium | E3 | C2 | `L6` | folds into `T67`/`T68` |
 | **T70** | Scheme | Guile Hoot (WasmGC) | `F4` — Scheme→WasmGC; Hoot carries its own runtime, and a JS glue path for the browser | stable | partly | medium | E2 | C3 · 4–6 s · 1–2 w | `L4` | `T3` (second wave) |
 | **T71** | Scheme | Schism, scheme.wasm | `F10`/`F3` — a self-hosting compiler and an R7RS VM in Wasm | exp | standard | low | E2 | C2 | `L6` | none now |
-| **T72** | Swift | SwiftWasm (`wasm32` + WASI) | `F2`+`F8` — the Swift runtime plus Foundation/ICU; large. Its EH (LLVM's legacy default) is mitigated by the parser policy, so it no longer decides the row | stable | partly | high | E2 | C3 · 6–8 s · 2–3 w | `L2` | `T3` (second wave) |
+| **T72** | Swift | SwiftWasm (`wasm32` + WASI) | `F2` — the Swift runtime plus Foundation/ICU is large, and its footprint counts against the embedder's `WASMJIT_MAX_TOTAL_BYTES`; the WASI surface is the embedder's. `F8`'s engine half is closed (`MP-1`), as is its EH: the legacy encoding LLVM defaults to loads under the parser policy | stable | partly | medium | E2 | C3 · 5–7 s · 2 w | `L2` | `T3` (second wave) |
 | **T73** | Tcl | Wacl (Emscripten, JS/DOM bindings) | `F1` — a Tcl VM with JS/DOM bindings | exp | non-standard | high | E2 | — | `L6` | none |
 | **T74** | V | V (own compiler, Wasm target) | `F3` — a tiny runtime and a self-hosting compiler | exp | partly | medium | E3 | C2 | `L10` | `T3` (cheap) |
 | **T75** | Virgil | own compiler, standalone Wasm, own GC | `F3` — designed for Wasm (the Wizard engine), GC in the guest, very small | stable | standard | low | E2 | C2 · 2–3 s · 1 w | `L10` | `T3` (cheap) |
@@ -293,7 +319,7 @@ what a cluster *is*.
 | **T80** | Co | Co (rsms) | own compiler, WIP | exp | standard | low | E3 | C2 | `L10` | none now |
 | **T81** | Faust | Faust → Wasm | `F12` — DSP with its own architecture model; intended-use mismatch | stable | partly | high | E2 | C0 | `L11` | none |
 | **T82** | Forest | ForestLang | a WIP functional language | exp | standard | low | E3 | C2 | `L10` | none now |
-| **T83** | Haskell | GHC Wasm backend (`ghc-wasm-meta`) | `F2`+`F6`+`F8` — an RTS with green threads, its own heap, and WASI | exp | partly | high | E2 | C3 · 6–8 s · 2–3 w | `L9` | `T3` (second wave) |
+| **T83** | Haskell | GHC Wasm backend (`ghc-wasm-meta`) | `F2`+`F6` — an RTS with green threads that wants real host threads/TLS (`Agents` is opt-in, so this is engine work), plus a WASI surface for the embedder. The heap reservation is no longer an item (`MP-1`); `F6` is why the row stays `high` | exp | partly | high | E2 | C3 · 6–8 s · 2–3 w | `L9` | `T3` (second wave) |
 | **T84** | Julia | julia-wasm (Emscripten), WebAssemblyCompiler.jl (WasmGC) | `F1`/`F4`+`F8` — a Julia runtime over two very different paths | exp | partly | high | E2 | — | `L9` | none now |
 | **T85** | Kou | own compiler | a minimal language | exp | standard | low | E3 | C2 | `L10` | none |
 | **T86** | MoonBit | own toolchain (`wasm-gc`, `wasm`) | `F4` — WasmGC output plus host imports and a real class library | exp | partly | medium | E2 | C3 · 4–6 s · 1–2 w | `L4` | `T3` |
@@ -414,10 +440,15 @@ is now a convenience, not a gate (§7).
 
 The reflexive worry about managed languages is the collector. The engine has one
 (GC, `exnref`, reference types and typed function references are all 100%), and
-a WasmGC module is just a module. The real friction is `RA4`: the **memory
-provider is core-chosen**, so a runtime that wants to own its allocator, relocate
-its heap, or interpose on `memory.grow` has no seam today (`T01`, `T14`, `T39`,
-`T83`).
+a WasmGC module is just a module. That is why `T53` is this note's gold-standard
+row: its requirements are features the engine has, plus a host import set an
+embedder supplies. The friction that was written up as `RA4` — *the memory
+provider is core-chosen, so a runtime that wants to own its allocator, relocate
+its heap, or interpose on `memory.grow` has no seam* — was split into five
+demands and priced; the one with a requester (`D3`, the reservation) now has a
+policy (`MP-1`, §6.11–§6.12), and the one with no requester (`D4`, an
+embedder-supplied backing) stays unbuilt. Neither is a reason to defer a
+WasmGC row any more.
 
 That separates `L4` (WasmGC) from `L7`–`L9` (linear-memory runtimes) cleanly:
 for the first, the collector is the engine's and the question is *host imports*;
@@ -567,6 +598,61 @@ was always a footprint/behaviour question a PoC has to answer, not something the
 loader was refusing. That is the same rule as §6.9/§6.10: a re-screen follows an
 engine change, and usually the honest outcome is that the *cost* moves and the
 grade does not.
+### 6.12 The re-screen proper: what the two engine moves changed (2026-10-30, revision 3)
+
+§6.10 and §6.11 recorded the moves. This is the screen re-run against them, row
+by row, with the rubric of §3.1 applied for the first time: **A3 grades the
+engine's half**.
+
+Two groups came out of it, and they should be judged separately.
+
+**Group 1 — moved because the engine moved.** These rows cited the reservation
+as an engine limitation; it is a policy now (`MP-1`).
+
+| Row | A3 before | after | Cost before | after | Why |
+|---|---|---|---|---|---|
+| `T09` Go | high | **medium** | `C3 · 6–8 s · 2–3 w` | `C3 · 5–7 s · 2 w` | `F8`'s engine half is closed; what remains is a WASI shim (the embedder's) and unmeasured `_start` behaviour — a risk, not an expected engine failure |
+| `T14` .NET NativeAOT | high | **medium** | `C3 · 6–8 s · 2–3 w` | unchanged | `F3` narrowed and `F8` closed; the row is experimental and `E3`, which is cost, not an engine gap |
+| `T72` Swift | high | **medium** | `C3 · 6–8 s · 2–3 w` | `C3 · 5–7 s · 2 w` | a large *committed* footprint is the embedder's budget dial; the WASI surface is the embedder's; its EH was already mitigated |
+
+**Group 2 — moved because the rubric was not applied uniformly before.** These
+rows cite only `F2` and/or `F8`: a WASI surface and a large footprint, both
+embedder-side. `high` was defined as "a §2.2 question is expected to fail without
+engine work", and for these rows nothing was. This is a **correction**, not an
+engine effect — a reader may disagree with it without disagreeing with `MP-1`.
+
+| Row | A3 before | after | Why |
+|---|---|---|---|
+| `T61` CPython | high | **medium** | `F2`+`F8`: WASI plus a full-CPython footprint, both the embedder's |
+| `T63` Prolog | high | **medium** | `F2`+`F8`: WASI, guest-side stacks, and an intended-use mismatch — a fit question, not an engine one |
+| `T68` CRuby | high | **medium** | `F2`+`F8`: WASI plus a full-CRuby footprint |
+| `T58` PHP | high | **medium** | `F2` alone: WASI builds exist and the engine has no objection; the grade had been the cost band |
+
+**Checked and unchanged.** `T01` (low, `F7` is a real engine edge), `T11`/`T12`/`T13`
+(`F1`: a JS-engine contract, not registerable host functions), `T39` (medium),
+`T42`/`T83` (high, `F6`: host threads), `T44` (medium already), `T64`/`T84`
+(`F1`), `T53` (medium, proviso narrowed to `LE-8`, now the gold-standard row).
+
+**Distribution:** 20 `high` / 34 `medium` / 48 `low` (was 27 / 27 / 48). Seven
+rows moved: three by the engine, four by the rubric.
+
+**What did not change, and why that is again the point.** No row moved *up*; no
+tier changed; no kill changed; no cluster changed; and the shortlist order
+(`L1`, `L5`, `L3`, `L2`, `L4`) is untouched. The moved rows sit in `L8`, `L7`,
+`L2`, `L6` (`T58`, `T61`, `T68`) and `L11`; of those only `L2` is shortlisted, and
+the shortlist's reason for `L2` is Rust's `E1` row, not Swift's. The clusters that
+are shortlisted gained no member and lost none.
+
+**What the re-screen adds that the moves do not.** A written rule (§3.1) for
+what the engine owes a language — the Kotlin shape: *load, instantiate,
+execute; the host import set is the embedder's*. That rule, not the seven
+grades, is this revision's durable output: it lets a future row be graded
+without re-arguing who writes the WASI shim.
+
+**What it still does not do.** No verdict, again. `T09`, `T14` and `T72` did not
+become *likely to work* — they stopped being *engine* problems and became
+*measurement* problems, which is what `LF-2` and `T3` exist for.
+
 
 ## 7. What the screen leaves to `LF-2`
 

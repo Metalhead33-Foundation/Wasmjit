@@ -407,7 +407,8 @@ rather than silent gaps.
   backend must implement.
 - [`../languages/TRIAGE.md`](../languages/TRIAGE.md) §6.8 — `Q-1`, the
   engine question this note answers — and §6.9, the **re-screen** the shipped
-  mitigation triggered (two rows re-graded, no cluster or verdict moved), plus
+  mitigation triggered (two rows re-graded then, seven by the later `LE-9`/`MP-1`
+  re-screen, no cluster or verdict moved), plus
   [`../languages/CHARTERS.md`](../languages/CHARTERS.md) `S1`/`S2`/`S4`, whose EH
   questions are now about the residue (`LE-8`) rather than the encoding.  engine question this note answers, and [`../languages/CHARTERS.md`](../languages/CHARTERS.md)
   `S1`/`S2`/`S4`, the three charters that would consume the answer.
