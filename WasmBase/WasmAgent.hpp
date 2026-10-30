@@ -23,6 +23,7 @@ WASMJIT_VISIBLE_BEGIN
 
 namespace WASM {
 
+/** \\brief Forward declaration of the owning per-execution agent. */
 class Agent;
 
 //! \brief Per-execution-context state
