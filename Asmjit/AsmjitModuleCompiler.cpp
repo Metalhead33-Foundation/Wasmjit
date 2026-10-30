@@ -89,7 +89,7 @@ uint32_t asmjitI32RemU(uint32_t lhs, uint32_t rhs) noexcept
 void* asmjitMemoryAddress(WASM::VMContext* vm, uint32_t memoryIndex,
 		uint32_t address, uint32_t offset, uint32_t width) noexcept
 {
-	if (vm == nullptr || memoryIndex >= vm->memoryCount) {
+	if (vm == nullptr || vm->memories == nullptr || memoryIndex >= vm->memoryCount) {
 		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory index is invalid");
 		return nullptr;
 	}
@@ -102,6 +102,10 @@ void* asmjitMemoryAddress(WASM::VMContext* vm, uint32_t memoryIndex,
 	const uint64_t size = WASM::wasm_memory_size(memory);
 	if (effective > size || width > size - effective) {
 		WASM::reportTrap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+		return nullptr;
+	}
+	if (memory->memoryBase == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit linear-memory base is null");
 		return nullptr;
 	}
 	return memory->memoryBase + effective;
