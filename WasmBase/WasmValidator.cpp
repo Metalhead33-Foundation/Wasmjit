@@ -363,6 +363,18 @@ void Validator::dispatchArrayNewTable(TypeIdx dst, TableIdx src)
 	pushValue(ValueType{ValueTypeCode::Ref, static_cast<int32_t>(dst)});
 }
 
+namespace {
+//! The operand a field takes on the stack: `i32` for a packed `i8`/`i16` field
+//! (GC §3.3.4 — `struct.new` and `struct.new_desc` read i32, not the packed
+//! code), the field's own value type otherwise.
+ValueType fieldOperandType(const Module& module, const CanonStorageType& storage)
+{
+	if (storage.isPacked)
+		return ValueType{ValueTypeCode::I32, -1};
+	return module.storageTypeFromCanon(storage).val;
+}
+} // namespace
+
 void Validator::dispatchStructNew(TypeIdx arg)
 {
 	if (arg >= module.typeCount() || module.typeView(arg).kind() != CanonTypeKind::Struct)
@@ -372,7 +384,7 @@ void Validator::dispatchStructNew(TypeIdx arg)
 		fail("struct.new: a type with a descriptor requires struct.new_desc");
 	std::vector<ValueType> fields;
 	for (const CanonFieldType& field : view.structFields())
-		fields.push_back(module.storageTypeFromCanon(field.storage).val);
+		fields.push_back(fieldOperandType(module, field.storage));
 	popTypes(fields);
 	ValueType result{ValueTypeCode::Ref, static_cast<int32_t>(arg)};
 	result.isExact = true;
@@ -387,7 +399,7 @@ void Validator::dispatchStructNewDefault(TypeIdx arg)
 	if (view.descriptor())
 		fail("struct.new_default: a type with a descriptor requires struct.new_default_desc");
 	for (const CanonFieldType& field : view.structFields())
-		if (!isDefaultable(module.storageTypeFromCanon(field.storage).val))
+		if (!isDefaultable(fieldOperandType(module, field.storage)))
 			fail("struct.new_default: a field is not defaultable");
 	ValueType result{ValueTypeCode::Ref, static_cast<int32_t>(arg)};
 	result.isExact = true;
@@ -408,7 +420,7 @@ void Validator::dispatchStructNewDesc(TypeIdx arg)
 			static_cast<int32_t>(*descriptorIndex), true});
 	std::vector<ValueType> fields;
 	for (const CanonFieldType& field : view.structFields())
-		fields.push_back(module.storageTypeFromCanon(field.storage).val);
+		fields.push_back(fieldOperandType(module, field.storage));
 	popTypes(fields);
 	ValueType result{ValueTypeCode::Ref, static_cast<int32_t>(arg)};
 	result.isExact = true;
@@ -428,7 +440,7 @@ void Validator::dispatchStructNewDefaultDesc(TypeIdx arg)
 	popExpect(ValueType{ValueTypeCode::RefNull,
 			static_cast<int32_t>(*descriptorIndex), true});
 	for (const CanonFieldType& field : view.structFields())
-		if (!isDefaultable(module.storageTypeFromCanon(field.storage).val))
+		if (!isDefaultable(fieldOperandType(module, field.storage)))
 			fail("struct.new_default_desc: a field is not defaultable");
 	ValueType result{ValueTypeCode::Ref, static_cast<int32_t>(arg)};
 	result.isExact = true;

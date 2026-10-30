@@ -29,18 +29,16 @@ namespace WASM {
 //! Keeping them apart means an embedder cannot widen the decoder by accident
 //! while choosing a validation profile.
 //!
-//! **Precedence is always: explicit argument > environment > strict default.**
-//! Every `Module::fromFile` and `Component::fromFile` overload that does not take
-//! a `ParseOptions` seeds one from `ParseOptions::fromEnvironment()`, so a
+//! **Precedence is always: explicit argument > environment > default.** Every
+//! `Module::fromFile` and `Component::fromFile` overload that does not take a
+//! `ParseOptions` seeds one from `ParseOptions::fromEnvironment()`, so a
 //! process-wide setting keeps working for callers that do not care; passing a
 //! `ParseOptions` overrides the environment for that load and nothing else. A
 //! component hands its policy to its embedded core modules and nested components,
-//! so a component is never stricter inside than at its own entry point. The
-//! default struct is strict: every switch is off.
+//! so a component is never stricter inside than at its own entry point.
 //!
 //! The struct is small on purpose, like `RuntimeConfig`: a new parser-side
-//! switch lands here as one documented field with a strict default, never as a
-//! second parsing path.
+//! switch lands here as one documented field, never as a second parsing path.
 /** \brief Policy switches controlling what the module parser accepts. */
 struct ParseOptions {
 	//! Translate the superseded Phase-3 exception form (`try`/`catch`/
@@ -50,17 +48,39 @@ struct ParseOptions {
 	//!
 	//! The rewrite is a load-time, front-end-only translation: the validator and
 	//! every backend see the final form, and the deprecated form is never
-	//! executed. Off by default, because the proposal deprecates itself and a
-	//! silent acceptance would make the decoder more permissive than the spec
-	//! (`docs/SAFETY.md` §2.1). Two constructs inside the form are still refused
-	//! by name even when this is on: a `delegate` whose target skips an
-	//! intervening catch (`LE-8`) and a body that mixes the two forms (`LE-9`).
+	//! executed. Setting this is the **permissive** opt-in: a module that uses
+	//! the form is accepted without asking, which makes the decoder more
+	//! permissive than the spec (`docs/SAFETY.md` §2.1). Every construct of the
+	//! form is translated, including a `delegate` that skips an intervening
+	//! catch (`LE-8`) and a body that mixes the two encodings (`LE-9`).
 	bool legacyExceptionHandling = false;
 
-	//! The options a process-wide environment implies: `WASMJIT_LEGACY_EH` set to
-	//! `1`, `true`, `yes` or `on` (case-insensitive, surrounding whitespace
-	//! ignored) turns `legacyExceptionHandling` on; anything else, or an unset
-	//! variable, leaves every switch off.
+	//! Recover a module that uses the superseded exception form instead of
+	//! refusing it: rewrite only the bodies that need it and report the recovery
+	//! as a `WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN` note
+	//! (docs/proposals/LEGACY_EXCEPTIONS.md `LE-6`).
+	//!
+	//! **On by default**, because the alternative is a load failure for a form
+	//! the engine can translate correctly, and the report keeps the decision
+	//! visible instead of silent. It is not a widening of what *validates*: a
+	//! body that does not use the form is never touched. Set this to false for
+	//! **strict** parsing (the pre-`LE-6` behaviour), and
+	//! `legacyExceptionHandling` to true for **unconditional** rewriting; the
+	//! two are independent, and `legacyExceptionHandling` wins when both are set.
+	//!
+	//! Only the bodies that actually use the superseded opcodes are rewritten,
+	//! which is why this is a *recovery* rather than a blanket acceptance: a
+	//! final-form module parses byte-identically with or without it.
+	bool legacyExceptionRecovery = true;
+
+	//! The options a process-wide environment implies:
+	//!
+	//! * `WASMJIT_LEGACY_EH=1` (also `true`, `yes`, `on`, case-insensitive,
+	//!   surrounding whitespace ignored) turns `legacyExceptionHandling` on —
+	//!   the permissive opt-in.
+	//! * `WASMJIT_LEGACY_EH=0` (also `false`, `no`, `off`) turns
+	//!   `legacyExceptionRecovery` off — the strict opt-in.
+	//! * unset, or any other value, leaves the default: recovery on.
 	//!
 	//! This is what the argument-less `fromFile` overloads of `Module` and
 	//! `Component` use, which is why the environment variable exists at all. An
@@ -92,8 +112,14 @@ inline ParseOptions ParseOptions::fromEnvironment()
 		if (c >= 'A' && c <= 'Z')
 			c = static_cast<char>(c - 'A' + 'a');
 	}
-	options.legacyExceptionHandling = value == "1" || value == "true"
-			|| value == "yes" || value == "on";
+	if (value == "1" || value == "true" || value == "yes" || value == "on") {
+		//! The permissive opt-in: rewrite unconditionally.
+		options.legacyExceptionHandling = true;
+		return options;
+	}
+	if (value == "0" || value == "false" || value == "no" || value == "off")
+		//! The strict opt-in: refuse with the named message.
+		options.legacyExceptionRecovery = false;
 	return options;
 }
 

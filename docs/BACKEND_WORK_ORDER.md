@@ -48,6 +48,13 @@ The four rules that are easy to get wrong:
 4. **Nothing throws on a module-caused failure.** Report through the trap slot
    (§4.4) and return; the core decides. A C++ exception below generated code
    cannot unwind through it.
+5. **A compile failure is a diagnostic, never an `abort`.** Lowering or code
+   generation runs *before* any Wasm frame exists, so it may throw — but the
+   module is untrusted input, and `std::abort()`, a bare `assert`, or a silent
+   null entry point lets it take the host down. Emit
+   `WASM.COMPILE.FUNCTION_FAILED` with the module-local function index, then
+   throw; if the backend's library cannot be torn down after the failure, leak
+   it rather than crash ([`languages/LF2_DEEP_F1_BACKEND.md`](languages/LF2_DEEP_F1_BACKEND.md) §5).
 
 ## 3. The session seam
 
@@ -91,9 +98,18 @@ today, a plugin's `create` tomorrow). `WasmBase/` must not learn a backend name
    generated code must agree byte for byte; a drift is silent corruption.
 3. **Use the ref barriers** (`refClone`/`refDrop` through the instance) whenever a
    reference moves into or out of a store-owned slot.
-4. **Stay inside the store's byte budget.** Nothing bypasses
+4. **A reference parameter is borrowed; a reference local owns a count.** Retain
+   every reference parameter into its own slot in the prologue, then `local.set`
+   always clones into the slot and drops the old value, and the epilogue drops
+   every reference local. Do not track ownership per instruction: a loop
+   re-executes the same `local.set`, so a compile-time flag releases the old
+   value once and leaks afterwards. The failure this prevents — an object freed
+   inside the callee that allocated it, header overwritten with
+   `TypeId::kNone`, the caller's `ref.cast` then failing — is
+   [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) §6 “Reference ownership”.
+5. **Stay inside the store's byte budget.** Nothing bypasses
    `Store::reserveBytes` ([`SAFETY.md`](SAFETY.md) §2.3).
-5. **Executable memory is yours**, with a W^X handoff; the core never patches
+6. **Executable memory is yours**, with a W^X handoff; the core never patches
    code. If your toolkit can interpret instead, expose that as a capability and a
    configuration, not as a core fallback ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §7.6).
 
@@ -146,6 +162,7 @@ A backend is done when all of the following are true:
 | `[backendabi]` passes | the POD/layout rule is honoured |
 | The generic fixtures instantiate and call | `loadAndInstantiateTestModule` + `TestBackend::Session::invoke` |
 | Trap, GC and exception fixtures pass | a trap unwinds by returning, not by throwing |
+| Reference ownership matches the model | the GC reclaim test (`two agents allocate and release GC objects on one instance`) and a function that returns a fresh object stored in a reference **parameter**; see [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) §6 “Reference ownership” |
 | The installed-header consumer works with you | `Test/install-check.sh` with your backend selected |
 | A plugin build loads and refuses mismatches | `[plugin]` against your `.so` |
 

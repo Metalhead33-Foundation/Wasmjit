@@ -17,6 +17,10 @@
 namespace WASM {
 namespace {
 
+//! "No frame": the sentinel a span index or a resolved escape target uses when
+//! it names nothing. Distinct from a frame id, which is always >= 0.
+constexpr std::size_t kNoFrame = static_cast<std::size_t>(-1);
+
 bool isLegacyOpcode(Opcode opcode)
 {
 	switch (opcode) {
@@ -163,6 +167,11 @@ struct LegacyTry {
 	std::size_t terminator = 0;
 	bool isDelegate = false;
 	std::uint32_t delegateDepth = 0;
+	//! The span of the outermost catch frame this `delegate` has to skip, or
+	//! `kNoFrame` when it skips none (docs/proposals/LEGACY_EXCEPTIONS.md
+	//! `LE-8`). Branching to that frame's escape block unwinds every
+	//! `try_table` inside it, so one branch reaches the delegate's target.
+	std::size_t escapeTarget = kNoFrame;
 };
 
 } // namespace
@@ -204,6 +213,10 @@ private:
 	static constexpr std::size_t kNoTry = static_cast<std::size_t>(-1);
 
 	void build();
+	//! Resolves every `delegate` against the *binary* label stack, after all
+	//! arms are known, and marks the catch frames a delegate has to skip
+	//! (`LE-8`). Also decides each delegated try's `escapeTarget`.
+	void resolveDelegates();
 	void allocateExnLocals();
 	void emitRange(std::size_t first, std::size_t last);
 	void emitLegacyTry(const LegacyTry& legacyTry);
@@ -218,6 +231,21 @@ private:
 	//! legacy try that declares arms, or a final-form `try_table` with at least
 	//! one clause. A frame that catches nothing is transparent to `delegate`.
 	bool          isCatchFrame(std::size_t token) const;
+	//! True when the frame at `token` can catch an exception raised at span
+	//! `span`. A legacy `try` cannot catch what its *own* arms raise — the arms
+	//! run outside its protected region, and the legacy form relies on that —
+	//! so a `delegate` inside an arm never has to skip the try that owns it.
+	bool          catchesSpan(std::size_t token, std::size_t span) const;
+	//! True when span `token` opens a `try` in either encoding: the one kind of
+	//! label a `delegate` immediate may name as its target (`LE-8`).
+	bool          isTryFrame(std::size_t token) const;
+	//! True when some `delegate` has to skip past the frame at `token`, so its
+	//! emission needs an escape block around its `try_table`.
+	bool          frameNeedsEscape(std::size_t token) const;
+	//! Emits the escape block's exit: the reference kept in `escapeLocal_`,
+	//! rethrown *outside* this frame's `try_table` but still inside every frame
+	//! the delegate did not skip, which is exactly the legacy delivery point.
+	void          emitEscapeRethrow();
 	int           emitBranchTo(int frameId);
 	int           openFrame();
 	void          closeFrame();
@@ -240,6 +268,14 @@ private:
 	std::vector<std::size_t>               tryByToken_;
 	std::vector<std::uint32_t>             rethrowArmLocal_; // per span; 0 = not a rethrow
 	std::vector<std::uint32_t>             rethrowArmTry_;   // per span
+	//! Per span: 1 when an escaping `delegate` passes this catch frame.
+	std::vector<char>                      escapeFrame_;
+	//! Per span: the emit-time id of that frame's escape block, or -1.
+	std::vector<int>                       escapeBlock_;
+	//! The `exnref` local an escape keeps its exception in while it branches out
+	//! of the frames it skips. One per function: an escape never nests.
+	std::uint32_t                          escapeLocal_ = 0;
+	bool                                   needsEscapeLocal_ = false;
 	std::vector<int>                       binStack_;
 	std::vector<std::size_t>               binToken_;   // opener span index per binary frame
 	std::vector<int>                       emitStack_;
@@ -260,6 +296,7 @@ FuncType BodyRewriter::tagPayload(std::uint32_t tagIdx) const
 std::vector<std::uint8_t> BodyRewriter::run()
 {
 	build();
+	resolveDelegates();
 	allocateExnLocals();
 	emitRange(0, spans_.size());
 	return std::move(out_);
@@ -354,6 +391,9 @@ void BodyRewriter::build()
 				legacyTry.bodyLast = i;
 				legacyTry.isDelegate = true;
 				legacyTry.terminator = i;
+				// The delegate span names the try it closes, so a later pass can
+				// resolve the depth without re-deriving which try this is.
+				tryByToken_[i] = frame.tryIndex;
 				std::size_t at = spans_[i].begin + 1;
 				legacyTry.delegateDepth = readUnsignedLeb(code_, at, spans_[i].end);
 				break;
@@ -382,7 +422,8 @@ void BodyRewriter::build()
 	}
 }
 
-//! Appends one `exnref` local per rethrowing arm and records its index.
+//! Appends one `exnref` local per rethrowing arm and one for the escape path of
+//! a `delegate`, recording their indices.
 void BodyRewriter::allocateExnLocals()
 {
 	// Local indices start after the function's parameters, then follow the
@@ -400,6 +441,86 @@ void BodyRewriter::allocateExnLocals()
 			entry.type.heapType = -1;
 			body_.locals.push_back(entry);
 			arm.exnLocal = localCursor_++;
+		}
+	}
+	if (needsEscapeLocal_) {
+		LocalEntry entry;
+		entry.count = 1;
+		entry.type.opcode = ValueTypeCode::ExnRef;
+		entry.type.heapType = -1;
+		body_.locals.push_back(entry);
+		escapeLocal_ = localCursor_++;
+	}
+}
+
+//! Resolves every `delegate` against the *binary* label stack.
+//!
+//! The legacy form delivers the exception to the catch clauses of the `try` the
+//! immediate names, and to the caller if that label is not a `try` (or is out of
+//! range) — in both directions *skipping* every catch frame in between. The
+//! final encoding has no equivalent instruction, so the rewrite reproduces the
+//! skip with a branch: the delegated body's exceptions are caught by a
+//! `catch_all_ref`, the reference is kept in a local, and a branch to the
+//! outermost skipped frame's *escape block* unwinds every `try_table` inside it
+//! (a branch never triggers a handler). That block's exit rethrows the
+//! reference, which is then delivered exactly where the legacy delegate put it
+//! (docs/proposals/LEGACY_EXCEPTIONS.md `LE-8`).
+//!
+//! This pass runs after `build()` because a frame's arms are only known once the
+//! whole body has been walked: an *enclosing* `try` declares its `catch` after
+//! the delegate that skips it.
+void BodyRewriter::resolveDelegates()
+{
+	escapeFrame_.assign(spans_.size(), 0);
+	escapeBlock_.assign(spans_.size(), -1);
+
+	// One entry per binary label, the space a `delegate` immediate counts
+	// against. A `delegate` closes its own `try`, which is why it pops.
+	std::vector<std::size_t> stack;
+	for (std::size_t i = 0; i < spans_.size(); ++i) {
+		switch (spans_[i].opcode) {
+			case Opcode::Block:
+			case Opcode::Loop:
+			case Opcode::If:
+			case Opcode::TryTable:
+			case Opcode::TryLegacy:
+				stack.push_back(i);
+				break;
+			case Opcode::Delegate: {
+				if (stack.empty())
+					refuseRewrite("delegate outside a legacy try");
+				stack.pop_back(); // the delegating try ends here, without an `end`
+				const std::size_t tryIndex = tryByToken_[i];
+				if (tryIndex == kNoTry)
+					refuseRewrite("a delegate this rewrite did not record");
+				LegacyTry& legacyTry = tries_[tryIndex];
+				const std::size_t depth = legacyTry.delegateDepth;
+				// A label that is not a `try`, or one that is out of range,
+				// delegates to the caller: every catch frame in the function is
+				// skipped, not just those up to the label.
+				const bool toCaller = depth > stack.size()
+						|| (depth != 0 && !isTryFrame(stack[stack.size() - depth]));
+				const std::size_t skipped = depth == 0 ? 0
+						: (toCaller ? stack.size() : depth - 1);
+				for (std::size_t k = 0; k < skipped; ++k) {
+					const std::size_t token = stack[stack.size() - 1 - k];
+					if (!catchesSpan(token, i))
+						continue;
+					escapeFrame_[token] = 1;
+					// `k` grows outward, so the last hit is the outermost frame
+					// to skip — the one whose escape block unwinds the rest.
+					legacyTry.escapeTarget = token;
+				}
+				if (legacyTry.escapeTarget != kNoFrame)
+					needsEscapeLocal_ = true;
+				break;
+			}
+			case Opcode::End:
+				if (!stack.empty())
+					stack.pop_back();
+				break;
+			default:
+				break;
 		}
 	}
 }
@@ -532,6 +653,42 @@ bool BodyRewriter::isCatchFrame(std::size_t token) const
 	return spans_[token].opcode == Opcode::TryTable && spans_[token].catchCount != 0;
 }
 
+bool BodyRewriter::catchesSpan(std::size_t token, std::size_t span) const
+{
+	const std::size_t tryIndex = tryByToken_[token];
+	if (tryIndex == kNoTry)
+		return isCatchFrame(token); // a `try_table`'s clauses cover its body only
+	const LegacyTry& legacyTry = tries_[tryIndex];
+	for (const LegacyArm& arm : legacyTry.arms) {
+		if (span >= arm.bodyFirst && span < arm.bodyLast)
+			return false; // raised inside a handler: this try cannot catch it
+	}
+	return !legacyTry.arms.empty();
+}
+
+bool BodyRewriter::isTryFrame(std::size_t token) const
+{
+	if (tryByToken_[token] != kNoTry)
+		return true;
+	return spans_[token].opcode == Opcode::TryTable;
+}
+
+bool BodyRewriter::frameNeedsEscape(std::size_t token) const
+{
+	return token < escapeFrame_.size() && escapeFrame_[token] != 0;
+}
+
+//! The escape block's exit: the exception the delegate sent past this frame,
+//! rethrown from *outside* its `try_table`. Everything the delegate did not skip
+//! still encloses this point, so the throw is delivered exactly where the legacy
+//! `delegate` meant it to go — the target try's clauses, or the caller.
+void BodyRewriter::emitEscapeRethrow()
+{
+	emitOpcode(Opcode::LocalGet);
+	emitUnsignedLeb(escapeLocal_);
+	emitOpcode(Opcode::ThrowRef);
+}
+
 // ---- the walk itself -----------------------------------------------------
 
 void BodyRewriter::copySpan(std::size_t index)
@@ -627,6 +784,16 @@ void BodyRewriter::emitTryTable(std::size_t index)
 	if (stream.device.tell() != static_cast<std::ptrdiff_t>(end - begin))
 		refuseRewrite("a try_table whose immediate this rewrite cannot measure");
 
+	// Same escape treatment as a legacy try with arms: a `delegate` that must
+	// get past this final-form frame branches to the block around it, and the
+	// rethrow outside it is delivered to the frame the delegate named (`LE-8`).
+	const bool escapes = frameNeedsEscape(index);
+	if (escapes) {
+		escapeBlock_[index] = openFrame();
+		emitOpcode(Opcode::Block);
+		emitByte(0x40);
+	}
+
 	emitOpcode(Opcode::TryTable);
 	emitBlockType(begin, blockTypeEnd);
 	emitUnsignedLeb(count);
@@ -659,11 +826,19 @@ void BodyRewriter::emitOne(std::size_t index)
 		case Opcode::End: {
 			copySpan(index);
 			if (!binStack_.empty()) {
+				const std::size_t token = binToken_.back();
 				binStack_.pop_back();
 				binToken_.pop_back();
 				if (emitStack_.empty())
 					refuseRewrite("unbalanced end");
 				emitStack_.pop_back();
+				if (token < escapeBlock_.size() && escapeBlock_[token] >= 0) {
+					if (emitStack_.empty())
+						refuseRewrite("unbalanced escape block");
+					emitOpcode(Opcode::End);
+					emitStack_.pop_back();
+					emitEscapeRethrow();
+				}
 			}
 			break;
 		}
@@ -729,18 +904,38 @@ void BodyRewriter::emitLegacyTry(const LegacyTry& legacyTry)
 
 	if (legacyTry.arms.empty()) {
 		// A `delegate` (or a try that catches nothing): the body's exceptions
-		// must reach the frame at `delegateDepth`. A plain block is correct
-		// unless a legacy try with arms sits in between — then the target would
-		// be skipped and the intervening arms would wrongly catch.
-		const std::size_t depth = legacyTry.delegateDepth;
-		if (depth >= binStack_.size())
-			refuseRewrite("delegate depth out of range");
-		for (std::size_t k = 1; k < depth; ++k) {
-			const std::size_t token = binToken_[binStack_.size() - 1 - k];
-			if (isCatchFrame(token))
-				refuseRewrite("delegate that skips an intervening catch");
+		// must reach the frame at `delegateDepth`. When no catch frame sits in
+		// between, a plain block is correct — the exception propagates to the
+		// target on its own. When one does, the delegated body is wrapped so its
+		// exceptions are caught here, kept in the escape local, and branched out
+		// to the outermost skipped frame's escape block (`LE-8`).
+		if (legacyTry.escapeTarget == kNoFrame) {
+			emitRange(legacyTry.bodyFirst, legacyTry.bodyLast);
+		} else {
+			const int escape = escapeBlock_[legacyTry.escapeTarget];
+			if (escape < 0)
+				refuseRewrite("an escape target whose block is not open");
+			const int exnFrame = openFrame();
+			emitOpcode(Opcode::Block);
+			FuncType landing;
+			landing.results.push_back(StorageType{false, ValueType{ValueTypeCode::ExnRef, -1}});
+			emitBlockTypeForResults(landing);
+			emitOpcode(Opcode::TryTable);
+			emitBlockType(legacyTry.blockTypeBegin, legacyTry.blockTypeEnd);
+			emitUnsignedLeb(1);
+			emitByte(0x03); // catch_all_ref: every exception from the body
+			emitUnsignedLeb(static_cast<std::uint32_t>(emitBranchTo(exnFrame)));
+			openFrame(); // the try_table's own label, placed after its clauses
+			emitRange(legacyTry.bodyFirst, legacyTry.bodyLast);
+			closeFrame(); // try_table
+			emitOpcode(Opcode::Br);
+			emitUnsignedLeb(static_cast<std::uint32_t>(emitBranchTo(mergeFrame)));
+			closeFrame(); // exnFrame: the reference is on the stack
+			emitOpcode(Opcode::LocalSet);
+			emitUnsignedLeb(escapeLocal_);
+			emitOpcode(Opcode::Br);
+			emitUnsignedLeb(static_cast<std::uint32_t>(emitBranchTo(escape)));
 		}
-		emitRange(legacyTry.bodyFirst, legacyTry.bodyLast);
 		closeFrame();
 		binStack_.pop_back();
 		binToken_.pop_back();
@@ -762,6 +957,16 @@ void BodyRewriter::emitLegacyTry(const LegacyTry& legacyTry)
 		emitBlockTypeForResults(landing);
 	}
 
+	// A `delegate` inside this try has to send its exception past this try's
+	// clauses (`LE-8`): it branches here, and the rethrow below happens outside
+	// the `try_table`, so those clauses never see it.
+	const bool escapes = frameNeedsEscape(legacyTry.tokenIndex);
+	if (escapes) {
+		escapeBlock_[legacyTry.tokenIndex] = openFrame();
+		emitOpcode(Opcode::Block);
+		emitByte(0x40); // void: the payload travels in the escape local
+	}
+
 	emitOpcode(Opcode::TryTable);
 	emitBlockType(legacyTry.blockTypeBegin, legacyTry.blockTypeEnd);
 	emitUnsignedLeb(legacyTry.arms.size());
@@ -781,6 +986,10 @@ void BodyRewriter::emitLegacyTry(const LegacyTry& legacyTry)
 	closeFrame(); // try_table
 	emitOpcode(Opcode::Br);
 	emitUnsignedLeb(static_cast<std::uint32_t>(emitBranchTo(mergeFrame)));
+	if (escapes) {
+		closeFrame(); // the escape block
+		emitEscapeRethrow();
+	}
 
 	for (std::size_t k = 0; k < legacyTry.arms.size(); ++k) {
 		closeFrame(); // payloadFrames[k]: the landing point of arm k
@@ -801,6 +1010,23 @@ void BodyRewriter::emitLegacyTry(const LegacyTry& legacyTry)
 }
 
 } // namespace
+
+bool mayUseLegacyExceptionHandling(std::span<const std::uint8_t> code) noexcept
+{
+	for (const std::uint8_t byte : code) {
+		switch (byte) {
+		case 0x06: // try
+		case 0x07: // catch
+		case 0x09: // rethrow
+		case 0x18: // delegate
+		case 0x19: // catch_all
+			return true;
+		default:
+			break;
+		}
+	}
+	return false;
+}
 
 std::string legacyExceptionHandlingMessage(std::string_view construct)
 {

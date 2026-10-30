@@ -3,6 +3,7 @@
 #include "../WasmBase/WasmStack.hpp"
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmTrap.hpp"
+#include "../WasmBase/WasmDiagnostics.hpp"
 #include "../WasmBase/wasm_simd_scalar.hpp"
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <cassert>
@@ -15,6 +16,32 @@
 namespace LibJIT {
 
 namespace {
+
+//! The libjit optimization level every compiled function gets.
+//!
+//! Level 0 is the default: libjit's level-1 optimizer rejects a valid block
+//! graph (a dead-end loop reached through a runtime-conditioned branch) with
+//! `JIT_RESULT_OVERFLOW`, and a failed compile cannot be retried on the same
+//! function (docs/languages/LF2_DEEP_F1_BACKEND.md §3.5). `WASMJIT_LIBJIT_OPT=1`
+//! restores the optimizer for an embedder that has measured its modules.
+unsigned int libjitOptimizationLevel()
+{
+	static const unsigned int level = [] {
+		const char* value = std::getenv("WASMJIT_LIBJIT_OPT");
+		if (value == nullptr || *value == '\0')
+			return 0u;
+		const int parsed = std::atoi(value);
+		return parsed < 0 ? 0u : static_cast<unsigned int>(parsed);
+	}();
+	return level;
+}
+
+//! Applies the backend's optimization level; call before compiling a function.
+void applyOptimizationLevel(jit_function_t fn)
+{
+	jit_function_set_optimization_level(fn, libjitOptimizationLevel());
+}
+
 
 jit_value_t zeroValueForType(jit_function_t fn, jit_type_t t);
 
@@ -64,6 +91,31 @@ jit_value_t zeroValueForType(jit_function_t fn, jit_type_t t)
 }
 
 } // namespace
+
+//! Reports a compile failure as a structured diagnostic and throws.
+//!
+//! The module is untrusted input; `std::abort()` here would let it take the
+//! host down (docs/SAFETY.md §2.4). The id and the function index are the
+//! contract, the libjit result code is the backend's own reason.
+[[noreturn]] void ModuleCompiler::failCompilation(const char* stage, std::uint32_t functionIndex, int result)
+{
+	std::string message = std::string("backend compile failure (") + stage
+			+ "): libjit result " + std::to_string(result);
+	if (functionIndex != WASM::kNoDiagnosticIndex)
+		message += " for function " + std::to_string(functionIndex);
+
+	WASM::Diagnostic diagnostic;
+	diagnostic.id = WASM::DiagnosticId::kCompileFunctionFailed;
+	diagnostic.severity = WASM::DiagnosticSeverity::Error;
+	diagnostic.phase = WASM::DiagnosticPhase::Compile;
+	diagnostic.location.functionIndex = functionIndex;
+	diagnostic.message = message;
+	diagnostic.remediation = "docs/languages/LF2_DEEP_F1_BACKEND.md";
+	WASM::emitDiagnostic(std::move(diagnostic));
+	if (contextOwner != nullptr)
+		contextOwner->abandon();
+	throw std::runtime_error(message);
+}
 
 // LibJIT's build region is a lock: jit_context_build_start() must be paired with
 // jit_context_build_end(), and an exception unwinding between them skips the
@@ -125,14 +177,15 @@ void ModuleCompiler::compileFunction(jit_function_t fn, uint32_t funcTypeIdx, co
 							  locals, valueStack, controlStack, profile());
 	// Prologue: guest stack guard + a pending check, then the body.
 	dispatcher.emitFunctionEntry();
+	dispatcher.emitReferenceParameterRetains();
 	dispatcher.readCode(stream);
 	dispatcher.emitImplicitFunctionReturn();
 	// Trap paths branch here; the epilogue returns zeroes of the result types.
 	dispatcher.emitTrapEpilogue();
 }
 
-ModuleCompiler::ModuleCompiler(jit_context_t context)
-	: context(context)
+ModuleCompiler::ModuleCompiler(jit_context_t context, Context* owner)
+	: context(context), contextOwner(owner)
 {
 }
 
@@ -226,12 +279,14 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		// generated code.
 		const bool dumpFunctions = std::getenv("WASMJIT_JIT_DUMP") != nullptr;
 
+		applyOptimizationLevel(fn);
 		int compileResult = jit_function_compile(fn);
 		if (compileResult != JIT_RESULT_OK) {
-			std::fprintf(stderr, "jit_function_compile failed %d for func %u\n", compileResult, i);
-			std::fprintf(stderr, "-- Dumping function before abort --\n");
-			jit_dump_function(stderr, fn, nullptr);
-			std::abort();
+			if (dumpFunctions) {
+				std::fprintf(stderr, "-- Function that failed to compile (func %u) --\n", i);
+				jit_dump_function(stderr, fn, nullptr);
+			}
+			failCompilation("jit_function_compile", importedFuncCount + i, compileResult);
 		}
 		if (dumpFunctions) {
 			std::fprintf(stderr, "-- Compiled function %u --\n", i);
@@ -243,10 +298,8 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		if (dumpFunctions)
 			std::fprintf(stderr, "func %u entry=%p closure=%p\n", i, entryPoint, closure);
 		(void)closure;
-		if (entryResult != JIT_RESULT_OK || entryPoint == nullptr) {
-			std::fprintf(stderr, "jit_function_compile_entry failed %d for func %u\n", entryResult, i);
-			std::abort();
-		}
+		if (entryResult != JIT_RESULT_OK || entryPoint == nullptr)
+			failCompilation("jit_function_compile_entry", importedFuncCount + i, entryResult);
 		internals.internalCallables[i].rawFnPtr = entryPoint;
 	}
 
@@ -304,15 +357,14 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 			jit_insn_store_relative(thunk, resultSlots, 0, ret);
 		jit_insn_return(thunk, nullptr);
 
-		if (jit_function_compile(thunk) != JIT_RESULT_OK) {
-			std::fprintf(stderr, "tail thunk compile failed for type %u\n", typeIdx);
-			std::abort();
-		}
+		applyOptimizationLevel(thunk);
+		const int thunkResult = jit_function_compile(thunk);
+		if (thunkResult != JIT_RESULT_OK)
+			failCompilation("tail-call thunk compile", WASM::kNoDiagnosticIndex, thunkResult);
 		void* entry = nullptr;
-		if (jit_function_compile_entry(thunk, &entry) != JIT_RESULT_OK || entry == nullptr) {
-			std::fprintf(stderr, "tail thunk entry failed for type %u\n", typeIdx);
-			std::abort();
-		}
+		const int thunkEntryResult = jit_function_compile_entry(thunk, &entry);
+		if (thunkEntryResult != JIT_RESULT_OK || entry == nullptr)
+			failCompilation("tail-call thunk entry", WASM::kNoDiagnosticIndex, thunkEntryResult);
 		tailThunks.emplace(typeIdx, entry);
 		return entry;
 	};
@@ -477,17 +529,14 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 			jit_insn_return(driver, callRet);
 		}
 
+		applyOptimizationLevel(driver);
 		int driverResult = jit_function_compile(driver);
-		if (driverResult != JIT_RESULT_OK) {
-			std::fprintf(stderr, "trampoline driver compile failed %d for func %u\n", driverResult, i);
-			std::abort();
-		}
+		if (driverResult != JIT_RESULT_OK)
+			failCompilation("trampoline driver compile", importedFuncCount + i, driverResult);
 		void* driverEntry = nullptr;
 		int driverEntryResult = jit_function_compile_entry(driver, &driverEntry);
-		if (driverEntryResult != JIT_RESULT_OK || driverEntry == nullptr) {
-			std::fprintf(stderr, "trampoline driver entry failed %d for func %u\n", driverEntryResult, i);
-			std::abort();
-		}
+		if (driverEntryResult != JIT_RESULT_OK || driverEntry == nullptr)
+			failCompilation("trampoline driver entry", importedFuncCount + i, driverEntryResult);
 		internals.internalCallables[i].fnPtr = driverEntry;
 	}
 }

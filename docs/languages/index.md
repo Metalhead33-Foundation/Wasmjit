@@ -47,13 +47,17 @@ the next person who is tempted to answer the question from a blog post.
 | \subpage lf_charters | **The commissionable units.** One charter per shortlisted cluster: scope, pinned candidates, questions, the bar for "feasible", the budget cap, the deliverable, the stop conditions, owner and date. |
 | \subpage lf_evidence | **The receipts.** Every external source with its retrieval date and tier, the in-repo evidence it leans on, and — explicitly — what was *not* verified. |
 | \subpage lf2_index | **The `LF-2` set.** The commissioned full studies: the verdict table, the three engine findings, the budget, and the reading order for the reports below. |
-| \subpage lf2_s1 | `S1` — C/C++ toolchain and ABI: five arms, two green and three yellow. |
+| \subpage lf2_s1 | `S1` — C/C++ toolchain and ABI: five arms, all green (the last one after the `LE-8` translation). |
 | \subpage lf2_s2 | `S2` — the LLVM-family languages: Rust (two targets), TinyGo and Zig, all green. |
 | \subpage lf2_s3 | `S3` — AssemblyScript (and TypeScript by inheritance): green, building on the harness evidence. |
-| \subpage lf2_s4 | `S4` — the WasmGC languages: Kotlin/Wasm in two target forms and Dart; the `F3` engine finding. |
+| \subpage lf2_s4 | `S4` — the WasmGC languages: Kotlin/Wasm in two target forms, Dart and MoonBit; the `F3` engine finding and its fix. |
 | \subpage lf2_s5 | `S5` — a guest scripting VM: Lua 5.4.8 built with wasi-sdk, green. |
 | \subpage lf2_l6_l12 | The coverage note: every untested non-killed row, with the reason and the condition that would start it (and the `T09` Go arm). |
+| \subpage lf2_toolchains | The acquisition map: for each of those rows, the producer that emits a module and the site it is obtained from — with the three module shapes (`wasip1`, `bare`, `js-host`) that decide whether an install can pass the bar at all. |
 | \subpage lf2_evidence | The `LF-2` evidence log: toolchains, module hashes, transcripts, and `F1`–`F3` with their reproductions. |
+| \subpage lf2_deep_f1 | `F1` deep study: the libjit optimizer bug, the minimal repro, and the backend fix (`WASM.COMPILE.FUNCTION_FAILED`, level-0 default, context poisoning). |
+| \subpage lf2_deep_f2 | `F2` deep study: the `delegate`-skips-a-catch shape, the verified `wasm-opt --translate-to-exnref` workaround, and the escape-block translation that made the workaround optional. |
+| \subpage lf2_deep_f3 | `F3` deep study and fix: the bottom-type rule, the three defects it exposed, and the one still open (`F3d`). |
 
 Reading order for a decision: `TRIAGE.md` §5 (is my language on the list, and
 what is its blocker?) → `CLUSTERING.md` §3/§6 (which study would answer it?) →
@@ -83,7 +87,7 @@ The screen's inputs are pinned, and it does not re-derive the engine:
 | **Candidate set** | `appcypher/awesome-wasm-langs`, README at commit `98da486` (2026-05-22), fetched 2026-10-30: **84 language entries** in five maturity bands | [`TRIAGE.md`](TRIAGE.md) §2.1, [`EVIDENCE.md`](EVIDENCE.md) `E-1` |
 | **Pinned engine snapshot** | `RG1`–`RG6` all `Pinned`; the one recorded limitation (`RA4`, the memory provider) is now a *priced, partly closed* item rather than an open gap (`MP-1` shipped, `MP-2` has no requester) | [`READINESS_AUDIT.md`](../READINESS_AUDIT.md) §5.4, §8 `RA-2` |
 | **The ABI the screen measures against** | `VMContext*` as arg0, `Callable`, the multi-result buffer, `v128`/reference passing, the trap boundary, and the named limits (no step budget, process-wide allocation budget, one instance per module) | [`ABI.md`](../ABI.md) |
-| **Parser policy** | `ParseOptions::legacyExceptionHandling` translates the superseded Phase-3 exception form at load, including bodies that mix it with `try_table` (`LE-9`); one shape is still refused by name (`LE-8`) | [`proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) §4.6 |
+| **Parser policy** | `ParseOptions` translates the superseded Phase-3 exception form at load — `try`/`catch`, `rethrow`, `delegate` including a skip past an intervening catch (`LE-8`), and bodies that mix it with `try_table` (`LE-9`); recovery is the default and reports itself, with strict and unconditional rewriting as opt-ins | [`proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) §4.6 |
 | **Memory policy** | `MemoryAllocationPolicy::Reserved` reserves a memory's declared maximum and keeps `memoryBase` stable, so 'the runtime wants its own heap' is a policy an embedder selects, not an engine limitation (`MP-1`) | [`proposals/MEMORY_PROVIDER.md`](../proposals/MEMORY_PROVIDER.md) §4.7 |
 | **Feature surface** | GC, exceptions (`exnref`), SIMD, reference types, function references, multi-memory, memory64, tail calls: 100%; threads: 100% of the encodable surface with `ConcurrencyModel::Single` as the default and `Agents` opt-in and implemented | [`READINESS_AUDIT.md`](../READINESS_AUDIT.md) §5.2, [`MULTI_AGENT_FEASIBILITY.md`](../MULTI_AGENT_FEASIBILITY.md) |
 

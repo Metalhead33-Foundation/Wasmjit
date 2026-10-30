@@ -7,11 +7,16 @@
 ;; it to the enclosing legacy try, so the `try_table` must not catch. Since LE-9
 ;; mixed bodies load, this is the case that could otherwise slip through: the
 ;; rewrite has to treat a final-form `try_table` with clauses as an intervening
-;; catch too (docs/proposals/LEGACY_EXCEPTIONS.md LE8). Depth 2, not 1: label 1
+;; catch too (docs/proposals/LEGACY_EXCEPTIONS.md LE-8). Depth 2, not 1: label 1
 ;; *is* the try_table, and delegating to a frame is not skipping it.
+;;
+;; `$mark` makes the routing observable: 1 means the legacy `catch $e` took the
+;; exception (correct), 0 means the `try_table` caught what the delegate sent
+;; past it.
 (module
   (tag $e (param i32))
-  (func $skip_table
+  (global $mark (mut i32) (i32.const 0))
+  (func $skip_table (result i32)
     (block $h
       (try
         (do
@@ -20,5 +25,7 @@
               (do (i32.const 9) (throw $e))
               (delegate 2))))
         (catch $e
-          drop))))
+          (drop)
+          (global.set $mark (i32.const 1)))))
+    (global.get $mark))
   (export "skip_table" (func $skip_table)))

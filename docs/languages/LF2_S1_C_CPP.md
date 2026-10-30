@@ -10,9 +10,9 @@ built and run through the documented recipe. Verdicts, with the engine at
 |---|---|---|
 | `T02` | C, clang 23.1.4, `--target=wasm32`, `-nostdlib` | **Green** |
 | `T03` | C, wasi-sdk 34.0, `-mexec-model=reactor` | **Green** |
-| `T01` | C, Emscripten 6.0.13, `-sSTANDALONE_WASM=1` | **Yellow** (`F1` at `-O2`; green at `-O0`/`-O1`) |
-| `T04` | C++, Emscripten 6.0.13, reactor, `-O1` | **Yellow** (`F1` at `-O2`) |
-| `T05` | C++, wasi-sdk 34.0 with libc++ | **Yellow** (`F2`: default legacy EH trips `LE-8`; one flag clears it) |
+| `T01` | C, Emscripten 6.0.13, `-sSTANDALONE_WASM=1`, `-O2` | **Green** (after `F1`; it was yellow at `-O1`) |
+| `T04` | C++, Emscripten 6.0.13, reactor, `-O2` | **Green** (after `F1`) |
+| `T05` | C++, wasi-sdk 34.0 with libc++ | **Green** (after `F2`/`LE-8`: the default legacy encoding loads and its exceptions work) |
 
 Audience: an embedder choosing a C/C++ toolchain today, and whoever sequences
 `LF-3`.
@@ -110,11 +110,15 @@ call _start/void()hello from Emscripten standalone
 wasi_exit=0
 ```
 
-So the module shape is fine and the failure is a backend lowering problem in one
-optimised function (`F1`, class **B**). The workaround an embedder can use today
-is `-O1`; the fix is `LF-3` work in `LibJit/`.
+So the module shape was fine and the failure was a backend lowering problem in
+one optimised function. `F1` was studied in depth and fixed: libjit's level-1
+optimizer rejects the block graph, level 0 compiles it, and the backend now
+defaults to level 0 with `WASMJIT_LIBJIT_OPT` as the opt-in
+([`LF2_DEEP_F1_BACKEND.md`](LF2_DEEP_F1_BACKEND.md)). At this engine commit the
+`-O2` module loads, runs and exits 0; the transcript above is the `-O1` one that
+proved the module shape before the fix.
 
-### 3.4 `T04` — C++, Emscripten standalone (Yellow)
+### 3.4 `T04` — C++, Emscripten standalone (Green after `F1`)
 
 ```
 em++ em_main.cpp -O1 -sSTANDALONE_WASM=1 --no-entry \
@@ -133,23 +137,39 @@ memory memory: 16908288 bytes (258 pages) max=16908288 shared=0
 
 `--no-entry` produces the reactor shape (`_initialize`, no `_start`), which is
 what an embedder wants: constructors run once, then the exports are callable.
-At `-O2` the same `F1` failure occurs; at `-O1` the arm passes every bar item.
-**Yellow, green once `F1` is fixed.**
+At `-O2` the same `F1` failure occurred before the fix; it is now fixed in the
+backend. **Green at this engine commit.**
 
-### 3.5 `T05` — C++, wasi-sdk with libc++ (Yellow)
+### 3.5 `T05` — C++, wasi-sdk with libc++ (Green after `F2`/`LE-8`)
 
 Two builds of the same source. The default one — `clang++ -fwasm-exceptions`,
 which is what a user gets without knowing about LLVM's wasm flag — contains a
-legacy `try` (0x06) that the rewrite cannot translate:
-
-```
-status=error: legacy exception handling: this module uses a construct the
-built-in rewrite does not translate (delegate that skips an intervening catch)
-```
-
-That is `LE-8`, the open row of
+legacy `try` (0x06) whose cleanup pads `delegate` to the caller past an
+intervening `catch`. That was `LE-8`, the last open row of
 [`proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) §4.6, and
-it is what `F2` records. With the documented flag the module is green:
+it is what `F2` recorded; both are now closed by the escape-block translation
+(§4.6, *how the landing trick works*), so **the default build is green** —
+no flag and no `wasm-opt` pass:
+
+```
+clang++ --target=wasm32-wasip1 -O2 -fwasm-exceptions -mexec-model=reactor \
+        hello.cpp -lc++ -lc++abi -lunwind -lsetjmp
+```
+
+```
+call _initialize/void() -> void
+call ctor_value/i32() -> i32=40
+call via_host/i32(20,22) -> i32=42
+call sum_vector/i32(4) -> i32=10
+call throw_catch/i32(5) -> i32=10     # try/catch inside the guest
+call throw_catch/i32(-3) -> i32=-1    # exception caught in the guest
+```
+
+The load reports the translation as `WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN`
+(the default recovery policy), and `WASMJIT_LEGACY_EH=1` gives the same module
+the unconditional rewrite without the note. The flag below still works and still
+produces a smaller, final-form module — it is now a *preference*, not a
+requirement:
 
 ```
 clang++ --target=wasm32-wasip1 -O2 -fwasm-exceptions \
@@ -178,7 +198,7 @@ The C++ runtime (libc++, libc++abi, libunwind, the `setjmp` emulation) costs
 | Native host import | `env.host_add` | `env.host_add` | `env.host_add` | — (not declared) | `env.host_add` |
 | Second module's export | yes (`dep.add`) | not run | not run | not run | not run |
 | Single-agent contract | yes | yes | yes (`-O1`) | yes (`-O1`) | yes |
-| Engine patch required | no | no | **yes** (`F1`) | **yes** (`F1`) | **yes** for default output (`F2`); no with the flag |
+| Engine patch required | no | no | no (fixed in the backend) | no (fixed in the backend) | no (fixed in `WasmBase`, `F2`/`LE-8`) |
 | Start-up that must run first | none | `_initialize` | `_start` (runs `main`) | `_initialize` | `_initialize` |
 | WASI imports | 0 | 3 | 2 | 2 | 6 |
 | Guest heap owner | guest (`static char[]`) | wasi-libc `malloc` | Emscripten `dlmalloc` | libc++ over dlmalloc | wasi-libc `malloc` |
@@ -229,10 +249,10 @@ not repeated because the mechanism is the engine's and already proven.
 
 ## 7. Engine work
 
-| Finding | Class | What it blocks | What closing it buys |
+| Finding | Class | What it blocked | Status |
 |---|---|---|---|
-| `F1` — LibJIT aborts compiling an `-O2` Emscripten `_start` | **B** (per-backend) | `T01`, `T04` at `-O2` | the default optimisation level of the most common C/C++ WebAssembly toolchain; the workaround is `-O1` |
-| `F2` — the legacy-EH rewrite refuses `LE-8` | **A** (core parser) | `T05` at default flags, and every toolchain that cannot re-flag | a C++ module that loads without a build-flag change; `wasm-opt --translate-to-exnref` is the current workaround |
+| `F1` — LibJIT aborts compiling an `-O2` Emscripten `_start` | **B** (per-backend) | `T01`, `T04` at `-O2` | **fixed**: level-0 default, `WASMJIT_LIBJIT_OPT` opt-in, `WASM.COMPILE.FUNCTION_FAILED` instead of `abort()` ([`LF2_DEEP_F1_BACKEND.md`](LF2_DEEP_F1_BACKEND.md)) |
+| `F2` — the legacy-EH rewrite could not translate a skipping `delegate` (`LE-8`) | **A** (core parser) | `T05` at default flags, and every toolchain that cannot re-flag | **fixed**: `LE-8` translates the skip with an escape block and one `exnref` local, so the default `clang++ -fwasm-exceptions` output loads and its exceptions work; the flag and `wasm-opt --translate-to-exnref` remain documented preferences ([`LF2_DEEP_F2_EH.md`](LF2_DEEP_F2_EH.md)) |
 
 Both are `LF-3` items. Neither changes the ABI, the embedding surface or the
 backend contract, which is why `S1` does not disturb the frozen surfaces of

@@ -8,10 +8,11 @@ run.
 
 | Row | Arm | Verdict |
 |---|---|---|
-| `T53` | Kotlin/Wasm 2.4.21, `wasmWasi` (`wasm-wasi` target) | **Yellow** — module valid, engine refuses the type section (`F3`) |
+| `T53` | Kotlin/Wasm 2.4.21, `wasmWasi` (`wasm-wasi` target) | **Green at this engine commit** — exports, a guest `try`/`catch` and `_start` all run |
 | `T53` | Kotlin/Wasm 2.4.21, `wasmJs` | **Red** — a JS-host contract by construction (696 imports) |
-| `T20` | Dart 3.13.7, `dart compile wasm --standalone` | **Yellow** — same `F3`, plus 10 `dart:` JS-glue imports |
-| `T86` | MoonBit | **Not run** — no toolchain in the study environment |
+| `T20` | Dart 3.13.7, `dart compile wasm --standalone` | **Yellow** — type section accepted; now blocked by its legacy EH (`F2`) |
+| `T86` | MoonBit 0.1.20261028, `moon build --target wasm-gc --release` | **Green at this commit** — loads, instantiates, `_start` prints through `spectest.print_char` |
+| `T86` | MoonBit | **Green at this commit** — 359-byte `wasm-gc` module, one import, `_start` runs |
 | `T70` | Guile Hoot | **Not run** — no toolchain in the study environment |
 
 This is the cluster `LF-1` called the gold standard
@@ -79,16 +80,29 @@ smaller than the triage's `F4` predicted, because Kotlin's runtime (GC, strings,
 collections) is guest-side and only `println` reaches the host. `add`, `answer`
 and `throwCatch` are ordinary exports; `@WasmExport` produces them directly.
 
-The module is **valid**: `wasm-tools validate --features all` exits 0. WasmJit
-refuses it at load:
+The module is **valid**: `wasm-tools validate --features all` exits 0. Before the
+fix, WasmJit refused it at load:
 
 ```
 status=error: type section: invalid `sub` annotation (comptype does not match its supertype)
 ```
 
-That is `F3`. Nothing about Kotlin's ABI, marshalling or memory layout could be
-measured past that point, which is why the verdict is *"bar unproven"* rather
-than *"bar failed"*.
+That was `F3`. It is now fixed — `F3a` (bottom types), `F3b` (a dormant
+`memberIndex` in heap-type equality), `F3c` (`struct.new`'s operand type for a
+packed field) and `F3d` (reference ownership of a parameter slot) — and the
+module **runs**:
+
+```
+call add/i32(19,23)        -> i32=42
+call answer/i32()          -> i32=42
+call throwCatch/i32(21)    -> i32=42      # guest try/catch
+call throwCatch/i32(-1)    -> i32=-1
+call _start/void()hello from Kotlin/Wasm on WASI: add(19, 23) = 42
+```
+
+The full analysis of `F3d` (a hardware watchpoint on the object header, the
+ownership bug it exposed, and the static fix) is in
+[`LF2_DEEP_F3_GC.md`](LF2_DEEP_F3_GC.md) §7.1.
 
 ### 2.3 The `wasmJs` module
 
@@ -108,7 +122,9 @@ suspected for the *JavaScript-hosted* rows, and for the `wasmJs` target it is no
 measured. **Red for direct embedding**; the supported Kotlin target for this
 engine is `wasmWasi`.
 
-## 3. Dart
+## 3. Dart, and MoonBit beside it
+
+### 3.1 Dart
 
 ```
 dart compile wasm --standalone -o t20_dart.wasm main.dart
@@ -122,9 +138,20 @@ point is the only callable surface. The imports are the JS glue:
 `dart.stringBufferCreate/WriteString/ToString`, `dart.stringLength`,
 `dart.stackTraceGetCurrent/ToString`, `dart.jsonEncodeString`.
 
-The module is valid (`wasm-tools validate --features all` exits 0) and WasmJit
-refuses it with the same `F3` message. Two separate conclusions follow, and they
-must not be merged:
+The module is valid (`wasm-tools validate --features all` exits 0). Before the
+fix WasmJit refused it with the same `F3` message; now it gets past the type
+section and fails on its **legacy exception encoding** — the same `F2` wall as
+the C++ arm:
+
+```
+legacy exception handling (the superseded Phase-3 proposal) is not supported: try (0x06)
+```
+
+With `WASMJIT_LEGACY_EH=1` — or the default recovery policy, which is how this
+was re-measured — the rewrite accepts the encoding but then reports
+`canonical type reference is not declared by this module`, a third, separate
+issue (documented in [`LF2_DEEP_F3_GC.md`](LF2_DEEP_F3_GC.md) §8). The two
+conclusions that stand are:
 
 1. **The engine refuses a valid module** — `F3`, class A.
 2. **Dart's standalone imports are a JS contract** — `dart:*` functions are
@@ -132,6 +159,35 @@ must not be merged:
    An embedder can register native imports (the engine's reference ABI supports
    GC refs), but implementing Dart's string interop natively is a *substantial*
    shim, not a small one. **Yellow**, and it stays yellow after `F3`.
+
+### 3.2 MoonBit — the arm that runs
+
+```
+moon new moonbit --user moonbit_demo
+moon build --target wasm-gc --release
+```
+
+MoonBit 0.1.20261028 emits a `wasm-gc` module: **359 bytes**, **1** import
+(`spectest.print_char`, its print host hook), 1 export (`_start`), one memory.
+It is a WasmGC module in the same class as Kotlin's, and — after the `F3`
+fixes — the first one that runs end to end:
+
+```
+call _start/void()Hello
+ -> void
+memoryCount=1
+status=ok
+```
+
+`Hello` reaches the host through `spectest.print_char`, i.e. the bar's item 2
+works with a two-line embedder stub. There is no second memory, no thread and no
+start-up allocation before the first call. Cross-module linking (item 3) was not
+exercised; the mechanism is the engine's and is proven on `T02`.
+
+**Verdict: Green at this engine commit**, with the same caveat as `T01`/`T04`:
+it depends on the `F3` fixes, so it would have failed before them. The module is
+`t86_moonbit.wasm` (SHA-256 `0dd87c96…`), and the arm was built with the
+toolchain from `~/.moon/bin` that the owner installed for this study.
 
 ## 4. `F3` — the finding
 
@@ -196,7 +252,7 @@ guess; reporting the *observations* as they are is the charter's rule.
 | Native host import | `println` via `fd_write`; no `env` import | JS bridge, not a native import | `dart.print` etc., JS glue |
 | Second module's export | not applicable | not applicable | not applicable |
 | Single-agent contract | unproven | unproven | unproven |
-| Engine patch | **yes** (`F3`) | none can help: the contract is a JS engine | **yes** (`F3`) |
+| Engine patch | no (fixed in the engine) | none can help: the contract is a JS engine | **yes** for the EH encoding (`F2`); no with the flag or one `wasm-opt` pass |
 | WASI imports | 3 | 0 | 0 |
 | Heap owner | Kotlin's GC (guest-side, engine GC data structures) | same | Dart's GC |
 | Declared memory max | none (0-page initial, grows) | none | none |
@@ -219,14 +275,14 @@ imports can be satisfied.
 
 ## 7. Engine work, and what closes the cluster
 
-| Finding | Class | What closes the cluster |
+| Finding | Class | Status |
 |---|---|---|
-| `F3` — bottom heap types are not modelled as subtypes of a concrete type | **A** (core type registry) | a matcher that treats `none`/`nofunc`/`noextern` references as subtypes of every compatible concrete type, plus a test using `gc_bottom_subtype.wasm` **and** the Kotlin module |
+| `F3` (`F3a`–`F3d`) — bottom heap types, heap-type equality, packed `struct.new` operands, reference ownership of a parameter slot | **A** for the first three, **B** for `F3d` (backend lowering) | **fixed**, with the minimal repro as a fixture, three unit tests and the GC/concurrency suite green ([`LF2_DEEP_F3_GC.md`](LF2_DEEP_F3_GC.md) §5–§7) |
 
-`F3` is small, local and backend-neutral: no ABI change, no new surface, no
-backend obligation. Once it lands, `T53` becomes a `C2`-sized arm (a
-three-import module with a start function and a GC runtime) and `T20` remains
-yellow because of its JS-glue imports.
+`F3` was small, local and backend-neutral for its first three parts; `F3d` lived
+in the backend's lowering. Both are fixed, and `T53` moved from "refused at
+load" to a module that loads, validates, runs its exports and runs its own
+start-up.
 
 **What would make `wasmJs` green is not an engine change**: it would need a JS
 engine on the host side, which is an explicit non-goal

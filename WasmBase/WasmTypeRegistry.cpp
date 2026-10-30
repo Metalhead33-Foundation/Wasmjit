@@ -322,8 +322,40 @@ bool concreteMatches(const CanonView& v, TypeId a, TypeId b) {
 }
 
 bool heapMatches(const CanonView& v, const CanonHeapType& a, const CanonHeapType& b) {
-	if (a.kind == CanonHeapType::Kind::Abstract)
-		return b.kind == CanonHeapType::Kind::Abstract && abstractMatches(a.abstract, b.abstract);
+	// A `none` TypeId means "no canonical type recorded"; it is not a subtype of
+	// anything and nothing is a subtype of it. This guards a GC object whose
+	// header never had a type id stamped (LF-2 `F3c`).
+	if ((a.kind == CanonHeapType::Kind::Global && a.id.isNone())
+			|| (b.kind == CanonHeapType::Kind::Global && b.id.isNone()))
+		return false;
+	if (a.kind == CanonHeapType::Kind::Abstract) {
+		if (b.kind == CanonHeapType::Kind::Abstract)
+			return abstractMatches(a.abstract, b.abstract);
+		if (b.kind != CanonHeapType::Kind::Global)
+			return false;
+		// A bottom heap type is a subtype of every compatible concrete type, and
+		// that is the only legal abstract-to-concrete edge in the GC lattice:
+		// `none` <: any struct/array, `nofunc` <: any func type, `nocont` <: any
+		// cont type. A *non-bottom* abstract type is a supertype of concrete
+		// types, never a subtype (docs/TYPE_IDENTITY.md §6.5, F3).
+		const CoreTypeView expected = v.type(b.id);
+		if (expected.kind() == CanonTypeKind::Import)
+			return abstractMatches(a.abstract, expected.importBound().abstract);
+		switch (a.abstract) {
+		case AbstractHeapType::None:
+			return expected.kind() == CanonTypeKind::Struct
+					|| expected.kind() == CanonTypeKind::Array;
+		case AbstractHeapType::NoFunc:
+			return expected.kind() == CanonTypeKind::Func;
+		case AbstractHeapType::NoCont:
+			return expected.kind() == CanonTypeKind::Cont;
+		default:
+			// `NoExtern`/`NoExn` have no concrete supertype (extern and exn are
+			// abstract-only hierarchies), and any other abstract type is above,
+			// not below, a concrete type.
+			return false;
+		}
+	}
 	if (a.kind == CanonHeapType::Kind::Global) {
 		if (b.kind == CanonHeapType::Kind::Abstract) return concreteMatchesAbstract(v, a.id, b.abstract);
 		if (b.kind == CanonHeapType::Kind::Global)   return concreteMatches(v, a.id, b.id);

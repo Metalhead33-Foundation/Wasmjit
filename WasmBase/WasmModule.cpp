@@ -1488,12 +1488,47 @@ void Module::parseBody(Elv::Io::Device& file, std::optional<uint64_t> end)
 	}
 
 	// The superseded Phase-3 exception form is never decoded as a distinct
-	// execution model: when the embedder opts in (WASMJIT_LEGACY_EH), every
-	// body that uses it is rewritten into the final try_table form first, so
-	// the validator and the backends only ever see the final encoding
-	// (docs/proposals/LEGACY_EXCEPTIONS.md LE-3..LE-6).
-	if (parserOptions_.legacyExceptionHandling)
-		rewriteLegacyExceptionHandling(*this);
+	// execution model: every body that uses it is rewritten into the final
+	// try_table form first, so the validator and the backends only ever see the
+	// final encoding (docs/proposals/LEGACY_EXCEPTIONS.md LE-3..LE-6).
+	//
+	// Two policies reach the rewrite. `legacyExceptionHandling` is the
+	// permissive opt-in: rewrite unconditionally and say nothing.
+	// `legacyExceptionRecovery` is the default: rewrite only the bodies that
+	// actually use the form and report the recovery, so a final-form module
+	// parses byte-identically and a legacy one loads instead of failing. A
+	// strict embedder sets both off (LE-6).
+	if (parserOptions_.legacyExceptionHandling || parserOptions_.legacyExceptionRecovery) {
+		// The permissive policy rewrites unconditionally; the recovery policy
+		// pays one cheap pass over body bytes first, so a final-form module never
+		// reaches the instruction scanner (LE-6).
+		bool candidate = parserOptions_.legacyExceptionHandling;
+		if (!candidate) {
+			for (const FunctionBody& body : functionBodies) {
+				if (mayUseLegacyExceptionHandling(body.code)) {
+					candidate = true;
+					break;
+				}
+			}
+		}
+		const std::size_t rewritten = candidate ? rewriteLegacyExceptionHandling(*this) : 0;
+		if (rewritten > 0 && parserOptions_.legacyExceptionRecovery
+				&& !parserOptions_.legacyExceptionHandling) {
+			Diagnostic diagnostic;
+			diagnostic.id = DiagnosticId::kDecodeLegacyExceptionsRewritten;
+			diagnostic.severity = DiagnosticSeverity::Note;
+			diagnostic.phase = DiagnosticPhase::Decode;
+			diagnostic.message = "rewrote the superseded Phase-3 exception form in "
+					+ std::to_string(rewritten)
+					+ (rewritten == 1 ? " function body" : " function bodies")
+					+ " into try_table";
+			diagnostic.remediation = "docs/proposals/LEGACY_EXCEPTIONS.md";
+			try {
+				emitDiagnostic(std::move(diagnostic));
+			} catch (...) {
+			}
+		}
+	}
 
 	// Reject a module that declares a value type this engine cannot lower, rather
 	// than compiling a null operand into a function (docs/UNMODELLED_VALUE_TYPES.md).

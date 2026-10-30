@@ -79,7 +79,7 @@ first PoC, which is always the slowest. They are hard caps.
 
 | Field | Content |
 |---|---|
-| **Scope** | In: exports, host imports, cross-module imports, memory/ABI layout, start-up, and the EH *policy* question (does the toolchain's encoding need it, and does the module trip `LE-8`), for two toolchain arms (Emscripten; clang/wasm-ld) × two languages (C; C++). Out: threads beyond `Single`, performance, dynamic linking, debugging tooling |
+| **Scope** | In: exports, host imports, cross-module imports, memory/ABI layout, start-up, and the EH *policy* question (does the toolchain's encoding need it, and which constructs does the rewrite translate), for two toolchain arms (Emscripten; clang/wasm-ld) × two languages (C; C++). Out: threads beyond `Single`, performance, dynamic linking, debugging tooling |
 | **Candidates** | `T01` C/Emscripten, `T02` C/clang-freestanding, `T03` C/wasi-sdk, `T04` C++/Emscripten, `T05` C++/clang+wasi-libc. **Versions are pinned at approval and recorded in the report** — the screen installed nothing ([`EVIDENCE.md`](EVIDENCE.md) §5); the report must state the exact release, the flags and the module hash |
 | **Questions** | The six of `TRIAGE.md` §7, plus: does `-sSTANDALONE_WASM` output instantiate without any JS object; what does `_start`/`__wasm_call_ctors` require; does the C++ arm's default encoding load with the parser policy on (and is `-mllvm -wasm-use-legacy-eh=false` worth requiring instead); which `env.*`/`wasi_snapshot_preview1` imports appear; does a native import see the caller's memory and `hostData`; does a cross-module import work without a trampoline (`ABI.md` "Cross-module") |
 | **"Feasible"** | The shared bar (§2.1) for **both** languages, with the C++ arm additionally proving that a caught exception stays inside the module and a trap crosses as a pending trap, not a throw |
@@ -120,11 +120,11 @@ first PoC, which is always the slowest. They are hard caps.
 |---|---|
 | **Scope** | In: one or two arms from Dart (`T20`, `--standalone`) and Kotlin/Wasm (`T53`, `wasm-wasi`), plus a documentation-only pass on Hoot (`T70`) and MoonBit (`T86`). Out: the class libraries as a whole; `wasm-js` targets; multi-module deferred loading beyond noting it |
 | **Candidates** | `T20` Dart (`E-6`), `T53` Kotlin/Wasm (`E-4`), `T86` MoonBit (`E-10`), `T70` Guile Hoot. Versions pinned at approval; the Dart page declared 3.13.3 and Kotlin/Wasm was beta at the fetch date |
-| **Questions** | Do `ref`-typed parameters and results cross `Callable`, and how does the host hold a reference `SAFETY.md` §2.3's accounting can see; can `wasm:js-string`-class imports be implemented over the host boundary; what is the *actual* "Dart-specific host import" list; does Kotlin/Wasm's output survive the rewrite — i.e. stay inside `LE-8`/`LE-9` — since Kotlin cannot re-flag its own toolchain; how many modules does a release build emit; does the engine's GC heap satisfy a foreign compiler's assumptions about growth and collection |
+| **Questions** | Do `ref`-typed parameters and results cross `Callable`, and how does the host hold a reference `SAFETY.md` §2.3's accounting can see; can `wasm:js-string`-class imports be implemented over the host boundary; what is the *actual* "Dart-specific host import" list; does Kotlin/Wasm's output survive the rewrite — it cannot re-flag its own toolchain, so its legacy EH is the test case (`LE-8`/`LE-9`); how many modules does a release build emit; does the engine's GC heap satisfy a foreign compiler's assumptions about growth and collection |
 | **"Feasible"** | The shared bar, **plus** that a reference of a GC type held by the host survives a collection — the one assertion `L4` exists to make |
 | **Budget cap** | **9 sessions / 60 human hours** |
 | **Deliverable** | One report, at most two PoCs, the import catalogue per arm, the reference-lifetime transcript, and the classed gap list |
-| **Kill / stop** | Stop after the first arm if it proves the reference round-trip; stop early if an arm's output trips `LE-8`, which the policy cannot translate and a charter cannot fix |
+| **Kill / stop** | Stop after the first arm if it proves the reference round-trip; stop early only if an arm's output uses a construct the parser policy cannot translate, which a charter cannot fix |
 | **Owner and date** | *Unassigned.* Last in the shortlist order; review at approval + 45 days |
 
 ### 3.5 `S5` — Guest scripting VMs (`L5`)
@@ -151,10 +151,11 @@ cited by the charters:
 | **EH residue probe** — load each candidate toolchain's smallest `try`/`catch` module
 with `ParseOptions::legacyExceptionHandling` on, and record which encoding it emits
 and whether the rewrite accepts it | `S1`, `S2`, `S4` | One line per toolchain: the
-flag that avoids the policy (a convenience) and whether the output trips `LE-8`
-(a `delegate` that skips a catch) or `LE-9` (a body mixing the two forms). The
+flag that avoids the policy (a convenience) and whether the output uses a
+construct the rewrite has to translate — `LE-8` (`delegate` past a catch) or
+`LE-9` (a body mixing the two forms). The
 encoding question itself is settled: [`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md)
-§4.6, `LE-1`…`LE-9`; `LE-8` is the open row |
+§4.6, `LE-1`…`LE-9`, with `LE-8` closed |
 | **Heap-ownership probe** — ask each runtime how much it grows its heap at start-up, whether it relies on those pages being committed lazily, and whether it declares a `max` at all (`RA4` → [`proposals/MEMORY_PROVIDER.md`](../proposals/MEMORY_PROVIDER.md) `D3`; `MP-1` shipped, so the reservation is available and the question is whether the runtime needs it) | `S1`, `S2`, `S4`, `S5` | One number per runtime (bytes grown before `main`) and one yes/no (does it declare a max, i.e. can `Reserved` be used at all); nothing else about the heap is an engine question |
 | **WASI surface census** — collect the imports of a minimal "hello, world" build per toolchain | `S1`, `S2`, `S4`, `S5` (and every `L6`–`L9` row later) | One table that says how big a WASI shim has to be, and which imports are avoidable | `Q-2` — embedder tooling |
 
@@ -165,10 +166,10 @@ each is a first-week item inside whichever charter runs first.
 
 | Charter | Cluster | `T1` | `T2` | `T3` | Status |
 |---|---|---|---|---|---|
-| `S1` | `L1` | ✅ | ⚠ | ✅ | **Run** — 5 arms; 2 green, 3 yellow ([`LF2_S1_C_CPP.md`](LF2_S1_C_CPP.md)) |
+| `S1` | `L1` | ✅ | ⚠ | ✅ | **Run** — 5 arms, all green ([`LF2_S1_C_CPP.md`](LF2_S1_C_CPP.md)) |
 | `S2` | `L2` | ✅ | ⚠ | ✅ | **Run** — 4 arms, all green ([`LF2_S2_LLVM.md`](LF2_S2_LLVM.md)) |
 | `S3` | `L3` | ✅ | ✅ | ✅ | **Run** — 1 arm, green ([`LF2_S3_AS.md`](LF2_S3_AS.md)) |
-| `S4` | `L4` | ⚠ | ⚠ | ✅ | **Run** — 3 arms; 2 yellow, 1 red ([`LF2_S4_WASMGC.md`](LF2_S4_WASMGC.md)) |
+| `S4` | `L4` | ⚠ | ⚠ | ✅ | **Run** — 4 arms; 2 green, 1 yellow, 1 red ([`LF2_S4_WASMGC.md`](LF2_S4_WASMGC.md)) |
 | `S5` | `L5` | ✅ | ⚠ | ✅ | **Run** — 1 arm, green ([`LF2_S5_GUEST_VMS.md`](LF2_S5_GUEST_VMS.md)) |
 
 **How `T3` was met.** The requester is the repository owner, who commissioned

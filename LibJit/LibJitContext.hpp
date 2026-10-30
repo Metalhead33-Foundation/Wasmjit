@@ -22,6 +22,8 @@ class Context
 private:
 	//! Backend compilation context; released when this object is destroyed.
 	jit_context_t context;
+	//! Set by `abandon()`: a failed compile leaves libjit unable to tear down.
+	bool abandoned = false;
 	//! Canonical-Wasm-type to LibJIT-type translation state for this context.
 	LibJitTypeTranslator typeTranslator;
 public:
@@ -53,6 +55,16 @@ public:
 	 * \return A const reference to the translator owned by this Context.
 	 */
 	const LibJitTypeTranslator& getTranslator() const;
+	/*!
+	 * \brief Marks the context as unusable so the destructor does not release it.
+	 *
+	 * A failed `jit_function_compile` leaves libjit's builder in a state where
+	 * `jit_context_destroy` segfaults, so a backend that reports the failure and
+	 * unwinds must leak the context instead of tearing it down
+	 * (docs/languages/LF2_DEEP_F1_BACKEND.md §3.5). The leak is one context per
+	 * failed module, and it keeps a hostile module from taking the host down.
+	 */
+	void abandon() noexcept;
 };
 }
 

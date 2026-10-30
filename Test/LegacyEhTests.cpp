@@ -1,4 +1,5 @@
 #include <catch2/catch_all.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <cstdlib>
 #include <memory>
@@ -9,6 +10,7 @@
 #include "TestBackend.hpp"
 #include "TestStore.hpp"
 #include "WasmBase/WasmExn.hpp"
+#include "WasmBase/WasmDiagnostics.hpp"
 #include "WasmBase/WasmModule.hpp"
 #include "WasmBase/WasmParseOptions.hpp"
 #include "WasmBase/WasmRegistryImportResolver.hpp"
@@ -36,12 +38,21 @@ namespace {
 class LegacyEhSwitch
 {
 public:
-	explicit LegacyEhSwitch(bool enable)
+	//! The three documented environment states (`LE-6`).
+	enum class Mode { Unset, Rewrite, Strict };
+
+	explicit LegacyEhSwitch(Mode mode)
 	{
-		if (enable)
-			::setenv("WASMJIT_LEGACY_EH", "1", 1);
-		else
-			::unsetenv("WASMJIT_LEGACY_EH");
+		switch (mode) {
+		case Mode::Rewrite: ::setenv("WASMJIT_LEGACY_EH", "1", 1); break;
+		case Mode::Strict:  ::setenv("WASMJIT_LEGACY_EH", "0", 1); break;
+		case Mode::Unset:   ::unsetenv("WASMJIT_LEGACY_EH"); break;
+		}
+	}
+
+	explicit LegacyEhSwitch(bool enable)
+		: LegacyEhSwitch(enable ? Mode::Rewrite : Mode::Unset)
+	{
 	}
 
 	~LegacyEhSwitch()
@@ -52,6 +63,15 @@ public:
 	LegacyEhSwitch(const LegacyEhSwitch&) = delete;
 	LegacyEhSwitch& operator=(const LegacyEhSwitch&) = delete;
 };
+
+//! The strict opt-in: neither recovery nor unconditional rewriting (`LE-6`).
+WASM::ParseOptions strictPolicy()
+{
+	WASM::ParseOptions options;
+	options.legacyExceptionHandling = false;
+	options.legacyExceptionRecovery = false;
+	return options;
+}
 
 std::string legacyFixturePath(const char* name)
 {
@@ -107,12 +127,12 @@ std::int32_t callExport(const LoadedLegacyFixture& loaded, const char* name,
 
 } // namespace
 
-TEST_CASE("the superseded exception form is refused by name", "[legacy-eh]")
+TEST_CASE("the superseded exception form is refused under a strict policy", "[legacy-eh]")
 {
 	LegacyEhSwitch guard(false);
 	try {
-		loadLegacyFixture("try_catch", WASM::ParseOptions{});
-		FAIL("a module using the superseded exception form must not load by default");
+		loadLegacyFixture("try_catch", strictPolicy());
+		FAIL("a strict policy must refuse a module using the superseded exception form");
 	} catch (const std::exception& error) {
 		const std::string message = error.what();
 		INFO(message);
@@ -123,6 +143,47 @@ TEST_CASE("the superseded exception form is refused by name", "[legacy-eh]")
 		REQUIRE(message.find("--translate-to-exnref") != std::string::npos);
 		REQUIRE(message.find("WASMJIT_LEGACY_EH") != std::string::npos);
 	}
+}
+
+TEST_CASE("the default recovers the superseded exception form and reports it", "[legacy-eh]")
+{
+	LegacyEhSwitch guard(false); // no environment override: the default policy
+	WASM::clearDiagnostics();
+	const LoadedLegacyFixture loaded = instantiateFixture("try_catch", WASM::ParseOptions{});
+	REQUIRE(loaded.instance.get() != nullptr);
+
+	// The recovered bodies execute exactly like the explicit rewrite's.
+	REQUIRE(callExport(loaded, "pick", 1) == 101);
+	REQUIRE(callExport(loaded, "pick", 3) == 103);
+	REQUIRE(callExport(loaded, "pick", 2) == 1000);
+	REQUIRE(callExport(loaded, "void_try", 1) == 42);
+
+	// Recovery is the default policy, not the permissive one: the module records
+	// that it recovered, and the load reported it rather than doing it silently.
+	REQUIRE(loaded.module->parserOptions().legacyExceptionRecovery);
+	REQUIRE_FALSE(loaded.module->parserOptions().legacyExceptionHandling);
+	bool reported = false;
+	for (const WASM::Diagnostic& diagnostic : WASM::recentDiagnostics())
+		if (diagnostic.id == WASM::DiagnosticId::kDecodeLegacyExceptionsRewritten)
+			reported = true;
+	REQUIRE(reported);
+}
+
+TEST_CASE("a final-form module is untouched by the recovery policy", "[legacy-eh]")
+{
+	// `try_catch.exnref` is Binaryen's final-form twin: the recovery policy must
+	// leave it byte-identical (one cheap body pass, no rewrite) and emit no note.
+	LegacyEhSwitch guard(false);
+	WASM::clearDiagnostics();
+	const LoadedLegacyFixture loaded = instantiateFixture("try_catch.exnref", WASM::ParseOptions{});
+	REQUIRE(loaded.instance.get() != nullptr);
+	REQUIRE(callExport(loaded, "pick", 1) == 101);
+	REQUIRE(callExport(loaded, "pick", 2) == 1000);
+	bool reported = false;
+	for (const WASM::Diagnostic& diagnostic : WASM::recentDiagnostics())
+		if (diagnostic.id == WASM::DiagnosticId::kDecodeLegacyExceptionsRewritten)
+			reported = true;
+	REQUIRE_FALSE(reported);
 }
 
 TEST_CASE("the opt-in rewrite runs the superseded exception form", "[legacy-eh]")
@@ -192,27 +253,54 @@ TEST_CASE("the rewrite remaps branches and delegate depths", "[legacy-eh]")
 	REQUIRE(callExport(loaded, "d2", 0, false) == 9); // delegate past a block
 }
 
-TEST_CASE("a delegate that would skip an intervening catch is refused", "[legacy-eh]")
+TEST_CASE("a delegate that skips an intervening catch reaches its target", "[legacy-eh]")
 {
+	// LE-8: the legacy `delegate` delivers to the try it names, *skipping* every
+	// catch frame in between — and to the caller when the label is not a try.
+	// The rewrite reproduces the skip with a branch out of the skipped frames.
 	const WASM::ParseOptions accepting = WASM::ParseOptions{}.acceptingLegacyExceptionHandling();
-	try {
-		loadLegacyFixture("delegate_skip", accepting);
-		FAIL("the rewrite must refuse a delegate whose target skips a catch");
-	} catch (const std::exception& error) {
-		INFO(error.what());
-		REQUIRE(std::string(error.what()).find("delegate that skips") != std::string::npos);
-	}
+	const LoadedLegacyFixture loaded = instantiateFixture("delegate_skip", accepting);
+	REQUIRE(loaded.instance.get() != nullptr);
 
+	// The middle try's `catch_all` must not see the exception: the outer
+	// `catch $e` receives the payload 9, not the middle arm's 1.
+	REQUIRE(callExport(loaded, "skip", 0, false) == 9);
+
+	// A delegate whose label is not a `try` sends the exception to the caller:
+	// its enclosing `catch $e` must not catch it, so the call returns with the
+	// exception still pending.
+	::wasm_exn_clear_pending();
+	REQUIRE(callExport(loaded, "to_caller", 0) == 0);
+	REQUIRE(::wasm_exn_take_pending() != nullptr);
+
+	// A delegate *inside* a handler: the try that owns the arm cannot catch what
+	// the arm raises, so nothing is skipped and the exception leaves the
+	// function instead of re-entering the arm it came from.
+	::wasm_exn_clear_pending();
+	REQUIRE(callExport(loaded, "from_arm", 0) == 0);
+	REQUIRE(::wasm_exn_take_pending() != nullptr);
+}
+
+TEST_CASE("a delegate skips a final-form try_table too", "[legacy-eh]")
+{
 	// Since LE-9 a mixed body loads, so the intervening handler can also be a
 	// final-form `try_table`. It counts as a catch too, or the rewriting would
-	// silently let it catch what the delegate sent past it.
-	try {
-		loadLegacyFixture("delegate_skip_table", accepting);
-		FAIL("a final-form try_table must count as an intervening catch");
-	} catch (const std::exception& error) {
-		INFO(error.what());
-		REQUIRE(std::string(error.what()).find("delegate that skips") != std::string::npos);
-	}
+	// silently let it catch what the delegate sent past it. The fixture records
+	// which handler ran in a global: 1 is the legacy `catch $e` (correct), 0
+	// would be the `try_table`.
+	const WASM::ParseOptions accepting = WASM::ParseOptions{}.acceptingLegacyExceptionHandling();
+	const LoadedLegacyFixture loaded = instantiateFixture("delegate_skip_table", accepting);
+	REQUIRE(loaded.instance.get() != nullptr);
+	REQUIRE(callExport(loaded, "skip_table", 0, false) == 1);
+}
+
+TEST_CASE("the recovery policy also handles a skipping delegate", "[legacy-eh]")
+{
+	// The default policy is the one an embedder gets without asking, so the new
+	// translation must not depend on the unconditional switch.
+	LegacyEhSwitch guard(false);
+	const LoadedLegacyFixture loaded = instantiateFixture("delegate_skip", WASM::ParseOptions{});
+	REQUIRE(callExport(loaded, "skip", 0, false) == 9);
 }
 
 TEST_CASE("a body may mix the superseded form with try_table", "[legacy-eh]")
@@ -231,21 +319,37 @@ TEST_CASE("a body may mix the superseded form with try_table", "[legacy-eh]")
 	REQUIRE(callExport(loaded, "arm", 0, false) == 9);    // clause inside a legacy arm
 }
 
-TEST_CASE("the environment seeds the default policy, an explicit one overrides it", "[legacy-eh]")
+TEST_CASE("the environment selects strict, recovery or rewrite", "[legacy-eh]")
 {
 	// `WASMJIT_LEGACY_EH` reaches every load that does not carry a policy of its
 	// own, which is what `ParseOptions::fromEnvironment()` is for.
-	LegacyEhSwitch guard(true);
+
+	// 1: the permissive opt-in — rewrite unconditionally.
 	{
+		LegacyEhSwitch guard(LegacyEhSwitch::Mode::Rewrite);
 		WASM::Module module = loadLegacyFixtureWithDefaults("try_catch");
 		REQUIRE(module.parserOptions().legacyExceptionHandling);
+		REQUIRE(module.parserOptions().legacyExceptionRecovery); // untouched default
 	}
 
-	// An explicit strict policy wins over the environment for that load only.
-	try {
-		loadLegacyFixture("try_catch", WASM::ParseOptions{});
-		FAIL("an explicit strict policy must override WASMJIT_LEGACY_EH");
-	} catch (const std::exception& error) {
-		REQUIRE(std::string(error.what()).find("legacy exception handling") != std::string::npos);
+	// 0: the strict opt-in — the named refusal.
+	{
+		LegacyEhSwitch guard(LegacyEhSwitch::Mode::Strict);
+		REQUIRE_THROWS_WITH(loadLegacyFixtureWithDefaults("try_catch"),
+				Catch::Matchers::ContainsSubstring("legacy exception handling"));
+	}
+
+	// unset: the default — recovery on, permissive rewrite off.
+	{
+		LegacyEhSwitch guard(LegacyEhSwitch::Mode::Unset);
+		WASM::Module module = loadLegacyFixtureWithDefaults("try_catch");
+		REQUIRE_FALSE(module.parserOptions().legacyExceptionHandling);
+		REQUIRE(module.parserOptions().legacyExceptionRecovery);
+	}
+
+	// An explicit strict policy wins over a permissive environment for that load.
+	{
+		LegacyEhSwitch guard(LegacyEhSwitch::Mode::Rewrite);
+		REQUIRE_THROWS(loadLegacyFixture("try_catch", strictPolicy()));
 	}
 }

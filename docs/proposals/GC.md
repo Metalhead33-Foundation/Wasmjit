@@ -867,6 +867,19 @@ default — every pushed reference is *owned* and balanced by an explicit drop �
 is implemented (`kStackOwnsRefs`), so only its optional variant is outstanding.
 See §7.1 for the numeric-order roll-up.
 
+**The parameter slot is the one place `RC3`'s default needs an extra step.** A
+parameter arrives as the *caller's* borrow, so a backend that applies "every
+reference local owns a count" literally would drop a count it never held on the
+first store into it. The implementation rule — and the reason it is not a
+per-instruction special case — is in
+[`WRITING_A_BACKEND.md`](../WRITING_A_BACKEND.md) §6 "Reference ownership":
+retain each reference parameter into its slot in the prologue, release it in the
+epilogue, and keep the `local.set` and epilogue rules static. A compile-time
+ownership flag does not implement this, because a loop re-executes the same
+emitted `local.set` (the LibJIT backend tried it: the GC reclaim test dropped
+from 40,000 objects to 2). The failure it prevents is recorded as `F3d` in
+[`languages/LF2_DEEP_F3_GC.md`](../languages/LF2_DEEP_F3_GC.md) §7.1.
+
 **On a "backup tracing pass".** A full tracing pass needs a root set, which is
 exactly what we cannot cheaply build (§6.1). Two trace-shaped fallbacks stay
 honest: (a) at **region teardown** the whole region is dead by definition, so a
