@@ -130,31 +130,149 @@ public:
 	bool hasStartFunction;
 	bool hasDataCount;
 private:
+/**
+ * \brief Performs the parseBody operation.
+ * \param file Input value or output destination for this operation.
+ * \param end Input value or output destination for this operation.
+ */
 	void parseBody(Elv::Io::Device& file, std::optional<uint64_t> end) override;
+/**
+ * \brief Performs the processSecetions operation.
+ * \param file Input value or output destination for this operation.
+ */
 	void processSecetions(Elv::Io::Device& file);
 	//! Section processors
+/**
+ * \brief Performs the processTypeSection operation.
+ * \param file Input value or output destination for this operation.
+ * \param section Input value or output destination for this operation.
+ */
 	void processTypeSection(Elv::Io::Device& file, const Section& section);
+/**
+ * \brief Performs the processImportSection operation.
+ * \param file Input value or output destination for this operation.
+ * \param section Input value or output destination for this operation.
+ */
 	void processImportSection(Elv::Io::Device& file, const Section& section);
+/**
+ * \brief Performs the processFunctionSection operation.
+ * \param file Input value or output destination for this operation.
+ * \param section Input value or output destination for this operation.
+ */
 	void processFunctionSection(Elv::Io::Device& file, const Section& section);
+/**
+ * \brief Performs the processTableSection operation.
+ * \param file Input value or output destination for this operation.
+ * \param section Input value or output destination for this operation.
+ */
 	void processTableSection(Elv::Io::Device& file, const Section& section);
+/**
+ * \brief Performs the processMemorySection operation.
+ * \param file Input value or output destination for this operation.
+ * \param section Input value or output destination for this operation.
+ */
 	void processMemorySection(Elv::Io::Device& file, const Section& section);
+/**
+ * \brief Performs the processGlobalSection operation.
+ * \param file Input value or output destination for this operation.
+ * \param section Input value or output destination for this operation.
+ */
 	void processGlobalSection(Elv::Io::Device& file, const Section& section);
+/**
+ * \brief Performs the processExportSection operation.
+ * \param file Input value or output destination for this operation.
+ * \param section Input value or output destination for this operation.
+ */
 	void processExportSection(Elv::Io::Device& file, const Section& section);
+/**
+ * \brief Performs the processStartSection operation.
+ * \param file Input value or output destination for this operation.
+ * \param section Input value or output destination for this operation.
+ */
 	void processStartSection(Elv::Io::Device& file, const Section& section);
+/**
+ * \brief Performs the processElementSection operation.
+ * \param file Input value or output destination for this operation.
+ * \param section Input value or output destination for this operation.
+ */
 	void processElementSection(Elv::Io::Device& file, const Section& section);
+/**
+ * \brief Performs the processCodeSection operation.
+ * \param file Input value or output destination for this operation.
+ * \param section Input value or output destination for this operation.
+ */
 	void processCodeSection(Elv::Io::Device& file, const Section& section);
+/**
+ * \brief Performs the processDataSection operation.
+ * \param file Input value or output destination for this operation.
+ * \param section Input value or output destination for this operation.
+ */
 	void processDataSection(Elv::Io::Device& file, const Section& section);
+/**
+ * \brief Performs the processDataCountSection operation.
+ * \param file Input value or output destination for this operation.
+ * \param section Input value or output destination for this operation.
+ */
 	void processDataCountSection(Elv::Io::Device& file, const Section& section);
+/**
+ * \brief Performs the processTagSection operation.
+ * \param file Input value or output destination for this operation.
+ * \param section Input value or output destination for this operation.
+ */
 	void processTagSection(Elv::Io::Device& file, const Section& section);
+/**
+ * \brief Performs the processStringSection operation.
+ * \param file Input value or output destination for this operation.
+ * \param section Input value or output destination for this operation.
+ */
 	void processStringSection(Elv::Io::Device& file, const Section& section);
+/**
+ * \brief Performs the processCustomSection operation.
+ * \param file Input value or output destination for this operation.
+ * \param section Input value or output destination for this operation.
+ */
 	void processCustomSection(Elv::Io::Device& file, const Section& section);
+/**
+ * \brief Performs the processNameSection operation.
+ * \param file Input value or output destination for this operation.
+ * \param section Input value or output destination for this operation.
+ */
 	void processNameSection(Elv::Io::Device& file, const Section& section);
+/**
+ * \brief Performs the processBranchHintSection operation.
+ * \param file Input value or output destination for this operation.
+ * \param section Input value or output destination for this operation.
+ */
 	void processBranchHintSection(Elv::Io::Device& file, const Section& section);
+/**
+ * \brief Performs the processCompilationHintSection operation.
+ * \param file Input value or output destination for this operation.
+ * \param section Input value or output destination for this operation.
+ * \param out Input value or output destination for this operation.
+ */
 	void processCompilationHintSection(Elv::Io::Device& file, const Section& section,
 			std::map<uint32_t, std::vector<CompilationHint>>& out);
 	//! Type processors
+/**
+ * \brief Performs the processSubtypes operation.
+ * \param stream Input value or output destination for this operation.
+ * \param typeNum Input value or output destination for this operation.
+ * \param numSubTypes Input value or output destination for this operation.
+ * \param out Input value or output destination for this operation.
+ * \param groupFirst Input value or output destination for this operation.
+ */
 	void processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t numSubTypes, std::vector<Subtype>& out, uint32_t groupFirst);
+/**
+ * \brief Performs the parseInitExpr operation.
+ * \param stream Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	std::vector<uint8_t> parseInitExpr(DWasmStream& stream);
+/**
+ * \brief Performs the handleComplexElementSegment operation.
+ * \param stream Input value or output destination for this operation.
+ * \param seg Input value or output destination for this operation.
+ */
 	void handleComplexElementSegment(DWasmStream& stream, ElementSegment& seg);
 public:
 	/** \brief Constructs an empty core module artifact. */
