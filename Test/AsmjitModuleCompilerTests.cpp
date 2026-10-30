@@ -176,6 +176,18 @@ TEST_CASE("AsmJit compiles i64 integer functions", "[asmjit][module][i64]")
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_const")) == INT64_C(0x100000000));
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_local"),
 			INT64_C(0x100000000)) == INT64_C(0x300000000));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_store_load"),
+			64, INT64_C(0x123456789ABCDEF0)) == INT64_C(0x123456789ABCDEF0));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_store8_load_s"), 80, 0xFF) == -1);
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_store8_load_u"), 80, 0x1FF) == 255);
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_store16_load_s"), 82, 0x8001) == -32767);
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_store16_load_u"), 82, 0x18001) == 32769);
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_store32_load_s"), 84, INT64_C(0x80000001)) == INT64_C(-2147483647));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_store32_load_u"), 84, INT64_C(0x180000001)) == INT64_C(0x80000001));
+	CHECK_THROWS(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_store_load"), 65532,
+			INT64_C(0x123456789ABCDEF0)));
+	CHECK_THROWS(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_store_load"), -1,
+			INT64_C(0x123456789ABCDEF0)));
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_tee"),
 			INT64_C(0x123456789)) == INT64_C(0x123456789));
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_mixed"),
