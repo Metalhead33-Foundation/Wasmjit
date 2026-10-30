@@ -759,13 +759,20 @@ protected:
 		asmjit::InvokeNode* invoke = nullptr;
 		checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitReportUnreachable), signature),
 				"AsmJit unreachable trap helper emission failed");
+		const size_t stackHeight = controls.empty() ? 0 : controls.back().stackHeight;
+		const size_t placeholderCount = controls.empty() ? resultCount : controls.back().resultCount;
+		values.resize(stackHeight);
 		if (resultCount == 0) {
 			checkError(compiler.ret(), "AsmJit unreachable void return emission failed");
 		} else {
 			auto zero = compiler.new_gp32("unreachableResult");
 			checkError(compiler.xor_(zero, zero), "AsmJit unreachable result initialisation failed");
 			checkError(compiler.ret(zero), "AsmJit unreachable result return emission failed");
-			values.push_back(zero);
+		}
+		if (placeholderCount != 0) {
+			auto placeholder = compiler.new_gp32("unreachableStackPlaceholder");
+			checkError(compiler.xor_(placeholder, placeholder), "AsmJit unreachable placeholder initialisation failed");
+			values.push_back(placeholder);
 		}
 	}
 
