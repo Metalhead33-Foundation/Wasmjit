@@ -132,6 +132,20 @@
       end
     end
     local.get 1)
+  (func (export "clz") (param i32) (result i32)
+    local.get 0
+    i32.clz)
+  (func (export "ctz") (param i32) (result i32)
+    local.get 0
+    i32.ctz)
+  (func (export "div_s") (param i32 i32) (result i32)
+    local.get 0 local.get 1 i32.div_s)
+  (func (export "div_u") (param i32 i32) (result i32)
+    local.get 0 local.get 1 i32.div_u)
+  (func (export "rem_s") (param i32 i32) (result i32)
+    local.get 0 local.get 1 i32.rem_s)
+  (func (export "rem_u") (param i32 i32) (result i32)
+    local.get 0 local.get 1 i32.rem_u)
   (func (export "local_roundtrip") (param i32) (result i32) (local i32)
     local.get 0
     local.set 1
