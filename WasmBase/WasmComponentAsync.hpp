@@ -130,7 +130,7 @@ enum class ComponentWaitableKind : uint8_t {
 struct ComponentAsyncEvent {
 	ComponentEventCode code = ComponentEventCode::None;
 	uint32_t payload1 = 0;
-	uint32_t payload2 = 0;
+	uint32_t payload2 = 0; //!< Field `payload2` of ComponentAsyncEvent.
 
 	/** \brief Tests whether this is the no-event sentinel. \return true when code is None. */
 	bool isNone() const { return code == ComponentEventCode::None; }
@@ -199,10 +199,10 @@ public:
 	void cancel() { state_ = ComponentTaskState::Cancelled; }
 private:
 	uint32_t id_ = 0;
-	ComponentTaskState state_ = ComponentTaskState::Pending;
-	uint32_t backpressure_ = 0;
-	bool cancellationRequested_ = false;
-	std::unordered_map<uint32_t, ComponentContextSlot> context_;
+	ComponentTaskState state_ = ComponentTaskState::Pending; //!< Field `state_` of ComponentTask.
+	uint32_t backpressure_ = 0; //!< Field `backpressure_` of ComponentTask.
+	bool cancellationRequested_ = false; //!< Field `cancellationRequested_` of ComponentTask.
+	std::unordered_map<uint32_t, ComponentContextSlot> context_; //!< Field `context_` of ComponentTask.
 };
 
 //! A waitable is anything that can produce a ComponentAsyncEvent and join one
@@ -237,7 +237,7 @@ public:
 	virtual bool takeEvent(ComponentAsyncEvent& event) = 0;
 private:
 	ComponentWaitableKind kind_;
-	void* set_ = nullptr;
+	void* set_ = nullptr; //!< Field `set_` of ComponentWaitable.
 };
 
 //! A single-agent waitable set. `wait` and `poll` both return `none` when no
@@ -352,7 +352,7 @@ public:
  */
 	const std::vector<ComponentWaitable*>& waitables() const { return waitables_; }
 private:
-	std::vector<ComponentWaitable*> waitables_;
+	std::vector<ComponentWaitable*> waitables_; //!< Field `waitables_` of ComponentWaitableSet.
 };
 
 
@@ -481,16 +481,16 @@ public:
  */
 	bool pendingIsRead() const { return pendingIsRead_; }
 private:
-	uint32_t handle_ = 0;
-	ComponentEndDirection direction_;
-	ComponentAsyncChannel* channel_ = nullptr;
-	ComponentEndState state_ = ComponentEndState::Idle;
-	bool hasPendingEvent_ = false;
-	ComponentAsyncEvent pendingEvent_{};
-	LinearMemory* pendingMemory_ = nullptr;
-	uint64_t pendingAddress_ = 0;
-	uint64_t pendingCount_ = 0;
-	bool pendingIsRead_ = false;
+	uint32_t handle_ = 0; //!< Field `handle_` of ComponentAsyncEndpoint.
+	ComponentEndDirection direction_; //!< Field `direction_` of ComponentAsyncEndpoint.
+	ComponentAsyncChannel* channel_ = nullptr; //!< Field `channel_` of ComponentAsyncEndpoint.
+	ComponentEndState state_ = ComponentEndState::Idle; //!< Field `state_` of ComponentAsyncEndpoint.
+	bool hasPendingEvent_ = false; //!< Field `hasPendingEvent_` of ComponentAsyncEndpoint.
+	ComponentAsyncEvent pendingEvent_{}; //!< Field `pendingEvent_` of ComponentAsyncEndpoint.
+	LinearMemory* pendingMemory_ = nullptr; //!< Field `pendingMemory_` of ComponentAsyncEndpoint.
+	uint64_t pendingAddress_ = 0; //!< Field `pendingAddress_` of ComponentAsyncEndpoint.
+	uint64_t pendingCount_ = 0; //!< Field `pendingCount_` of ComponentAsyncEndpoint.
+	bool pendingIsRead_ = false; //!< Field `pendingIsRead_` of ComponentAsyncEndpoint.
 };
 
 //! The shared queue behind a readable/writable pair. `elementSize == 0` models
@@ -564,12 +564,12 @@ public:
  */
 	void setFutureWritten(bool written) { futureWritten_ = written; }
 private:
-	uint32_t elementSize_ = 0;
-	bool isFuture_ = false;
-	bool readableAlive_ = true;
-	bool writableAlive_ = true;
-	bool futureWritten_ = false;
-	std::deque<std::vector<uint8_t>> queue_;
+	uint32_t elementSize_ = 0; //!< Field `elementSize_` of ComponentAsyncChannel.
+	bool isFuture_ = false; //!< Field `isFuture_` of ComponentAsyncChannel.
+	bool readableAlive_ = true; //!< Field `readableAlive_` of ComponentAsyncChannel.
+	bool writableAlive_ = true; //!< Field `writableAlive_` of ComponentAsyncChannel.
+	bool futureWritten_ = false; //!< Field `futureWritten_` of ComponentAsyncChannel.
+	std::deque<std::vector<uint8_t>> queue_; //!< Field `queue_` of ComponentAsyncChannel.
 };
 
 
@@ -1584,13 +1584,13 @@ private:
 			std::memcpy(out, memory.memoryBase + address, size);
 	}
 
-	HandleAllocator allocate_;
-	HandleReleaser release_;
-	SingleAgentExecutor executor_;
+	HandleAllocator allocate_; //!< Field `allocate_` of ComponentAsyncState.
+	HandleReleaser release_; //!< Field `release_` of ComponentAsyncState.
+	SingleAgentExecutor executor_; //!< Field `executor_` of ComponentAsyncState.
 	std::unique_ptr<ComponentTask> currentTask_ = std::make_unique<ComponentTask>(0);
-	std::unordered_map<uint32_t, std::unique_ptr<ComponentAsyncEndpoint>> endpoints_;
-	std::vector<std::unique_ptr<ComponentAsyncChannel>> channelStorage_;
-	std::unordered_map<uint32_t, ComponentAsyncChannel*> channels_;
+	std::unordered_map<uint32_t, std::unique_ptr<ComponentAsyncEndpoint>> endpoints_; //!< Field `endpoints_` of ComponentAsyncState.
+	std::vector<std::unique_ptr<ComponentAsyncChannel>> channelStorage_; //!< Field `channelStorage_` of ComponentAsyncState.
+	std::unordered_map<uint32_t, ComponentAsyncChannel*> channels_; //!< Field `channels_` of ComponentAsyncState.
 	std::unordered_map<uint32_t, uint32_t> readableOf_; //!< writable -> readable
 	std::unordered_map<uint32_t, uint32_t> writableOf_; //!< readable -> writable
 	std::unordered_map<uint32_t, ComponentWaitableSet> waitableSets_;
