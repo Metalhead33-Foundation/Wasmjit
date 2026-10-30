@@ -709,22 +709,28 @@ protected:
 		values.pop_back();
 		size_t expectedStackHeight = 0;
 		size_t expectedBranchValues = 0;
+		WASM::ValueTypeCode expectedBranchType = WASM::ValueTypeCode::Void;
 		bool first = true;
 		auto validateTarget = [&](WASM::LabelIdx depth) {
 			if (depth > controls.size())
 				throw std::runtime_error("AsmJit br_table label depth is out of range");
 			size_t stackHeight = 0;
 			size_t branchValues = resultCount;
+			WASM::ValueTypeCode branchType = resultType;
 			if (depth < controls.size()) {
 				const ControlFrame& target = controls[controls.size() - 1 - depth];
 				stackHeight = target.stackHeight;
 				branchValues = target.kind == ControlKind::Loop ? 0 : target.resultCount;
+				branchType = target.kind == ControlKind::Loop
+						? WASM::ValueTypeCode::Void : target.resultType;
 			}
 			if (first) {
 				expectedStackHeight = stackHeight;
 				expectedBranchValues = branchValues;
+				expectedBranchType = branchType;
 				first = false;
-			} else if (stackHeight != expectedStackHeight || branchValues != expectedBranchValues) {
+			} else if (stackHeight != expectedStackHeight || branchValues != expectedBranchValues
+					|| branchType != expectedBranchType) {
 				throw std::runtime_error("AsmJit br_table targets require identical stack heights and label signatures");
 			}
 		};
@@ -1415,8 +1421,8 @@ private:
 		frame.resultType = blockResultType(type);
 		frame.resultCount = frame.resultType == WASM::ValueTypeCode::Void ? 0 : 1;
 		if (frame.resultCount != 0) {
-			const WASM::ValueType resultType{frame.resultType};
-			frame.result = newIntegerRegister(compiler, resultType, "blockResult");
+			frame.result = frame.resultType == WASM::ValueTypeCode::I64
+					? compiler.new_gp64("blockResult") : compiler.new_gp32("blockResult");
 		}
 		if (kind == ControlKind::Loop) {
 			frame.begin = compiler.new_label();
@@ -1444,7 +1450,9 @@ private:
 			requireInteger(blockType.results.front().val, "block results");
 			return blockType.results.front().val.opcode;
 		}
-		requireInteger(WASM::ValueType{type.valType}, "block results");
+		if (type.valType != WASM::ValueTypeCode::I32
+				&& type.valType != WASM::ValueTypeCode::I64)
+			throw std::runtime_error("AsmJit structured control flow supports only i32/i64 block results");
 		return type.valType;
 	}
 
