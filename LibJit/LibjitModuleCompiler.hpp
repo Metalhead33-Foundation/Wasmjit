@@ -22,8 +22,8 @@ namespace LibJit {
 class ModuleCompiler : public WASM::ModuleInstantiator
 {
 private:
-	jit_context_t context;
-	LibJitTypeTranslator typeTranslator;
+	jit_context_t context; //!< Field `context` of type.
+	LibJitTypeTranslator typeTranslator; //!< Field `typeTranslator` of type.
 	/*!
 	 * \brief Compiles one defined WebAssembly function.
 	 * \param fn LibJIT function being populated.
