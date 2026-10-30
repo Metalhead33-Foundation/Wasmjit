@@ -322,12 +322,6 @@ struct StorageType {
 			isPacked = false;
 			//! This was actually the opcode for a ValueType.
 			//! We need to 'put it back' or handle the decode manually.
-/**
- * \brief Performs the decodeAfterFirstByte operation.
- * \param stream Input value or output destination for this operation.
- * \param byte Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 			val.decodeAfterFirstByte(stream, byte);
 		}
 	}
