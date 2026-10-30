@@ -23,7 +23,9 @@ and must not be selected to execute Wasm modules.
 - Packed `i8`/`i16` storage retains its narrow 8-/16-bit representation.
   Arithmetic lowering must explicitly extend those values to `i32` before
   applying Wasm integer operations; the storage translator does not silently
-  widen their in-memory layout.
+  widen their in-memory layout. `compilePackedI8Extend()` and
+  `compilePackedI16Extend()` emit signed and unsigned extension probes using
+  `movsx`/`movzx`, with tests for high-bit-set inputs.
 - `compileV128I32x4Add()` emits a real XMM-backed packed addition using
   `movdqu` and `paddd`, with a test covering lane wraparound.
 - `compileV128Bitwise()` emits XMM-backed V128 AND, OR, and XOR operations
@@ -37,8 +39,8 @@ and must not be selected to execute Wasm modules.
   an allocation fails after executable memory is allocated, it releases that
   allocation before propagating the host-side exception.
 - `Test/AsmjitBackendTests.cpp` checks that emitted machine code executes,
-  returns the expected scalar value, and performs lane-wise and vector
-  operations.
+  returns the expected scalar value, and performs lane-wise, vector, and
+  packed-storage operations.
 - The dependency is confined to this subproject. `WasmBase/` remains
   backend-agnostic and does not include or link AsmJit.
 
