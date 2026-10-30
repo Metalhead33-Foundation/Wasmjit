@@ -4,8 +4,8 @@
 
 The library split is in place: `WasmBase/` is the backend-agnostic core
 (`libWasmBase`), every code generator is its own library (`LibJit/` is the one
-that executes; `Asmjit/` and `Sljit/` are the planned ones, reserved and empty
-today, each with a README), and `Test/` is a Catch2 harness over the libraries
+that executes; `Asmjit/` has a provisional native code-emission probe while `Sljit/`
+remains a placeholder, and `Test/` is a Catch2 harness over the libraries
 rather than the product. The `build/<config>/Test/WasmJit` executable is still a
 development sandbox, not the embeddable API. See
 [`docs/LAYERING.md`](docs/LAYERING.md) for the rule that keeps the core
@@ -50,9 +50,9 @@ backend-agnostic.
   multiplicity the rule forbids). See
   [`docs/THREADSAFETY.md`](docs/THREADSAFETY.md) §3.1–§3.2 and
   [`docs/MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) §2.3.
-- **Still open** (tracked, not started): a second and third backend
-  (`Asmjit/` and `Sljit/` are reserved, empty, and intended — see their READMEs
-  and the [`work order`](docs/BACKEND_WORK_ORDER.md); the readiness audit says
+- **Still open** (tracked, not complete): a second and third backend
+  (`Asmjit/` has only a native code-emission probe; `Sljit/` remains reserved —
+  see their READMEs and the [`work order`](docs/BACKEND_WORK_ORDER.md); the readiness audit says
   work may begin and recommends SLJIT first), the long-term
   qmake → CMake move, and the language-support
   studies defined in [`docs/LANGUAGE_FEASIBILITY.md`](docs/LANGUAGE_FEASIBILITY.md)
@@ -367,7 +367,7 @@ work in progress:
 - the shared libraries install with headers and a `wasmjit.pc`; the only
   packaging work left is vcpkg/Conan-style recipes, if anyone wants them
 - backend abstraction is stable enough for a second backend (see the
-  [`work order`](docs/BACKEND_WORK_ORDER.md)); Asmjit/SLJIT are not started
+  [`work order`](docs/BACKEND_WORK_ORDER.md)); Asmjit has only its probe, and SLJIT is not started
 - the Catch2 executable is still a test harness, not the embedding interface;
   the supported embedding interface is the installed `wasmjit/wasmjit.hpp`
 
