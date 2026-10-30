@@ -6,7 +6,7 @@
 
 /*!
   \file AsmjitTypeTranslator.hpp
-  \brief Maps the currently supported Wasm scalar ABI types to AsmJit types.
+  \brief Maps Wasm value and storage types to AsmJit types.
 
   This is an internal backend component, not an embedder-facing API.
 */
@@ -14,26 +14,35 @@
 namespace AsmJitBackend {
 
 /*!
- * \brief Builds AsmJit host-ABI signatures for the supported Wasm value subset.
+ * \brief Builds AsmJit host-ABI signatures for Wasm function types.
  *
  * The engine's native function ABI prepends VMContext* to every function.
  * Multi-value results use a trailing void* result-buffer argument and a void
  * return, matching docs/proposals/MULTI_VALUE.md MV5. References are opaque
- * pointers at this ABI boundary.
+ * pointers at this ABI boundary. V128 uses AsmJit's 128-bit vector TypeId.
  *
- * V128, packed storage parameters/results, and unsupported value encodings
- * are rejected explicitly rather than silently lowered incorrectly.
+ * Packed i8/i16 are supported as storage types. They retain their 8-/16-bit
+ * representation in storage; generated arithmetic must explicitly extend
+ * them to i32 before performing Wasm integer operations.
  */
 class TypeTranslator
 {
 public:
 	/*!
-	 * \brief Maps one ordinary Wasm value type to an AsmJit scalar TypeId.
+	 * \brief Maps one Wasm value type to an AsmJit TypeId.
 	 * \param type Wasm value type.
 	 * \return Native AsmJit type identifier.
-	 * \throws std::runtime_error when the type is not yet supported.
+	 * \throws std::runtime_error for unsupported value encodings.
 	 */
 	static asmjit::TypeId translateValueType(const WASM::ValueType& type);
+
+	/*!
+	 * \brief Maps a Wasm storage type, including packed i8/i16.
+	 * \param type Wasm storage type.
+	 * \return Native AsmJit type identifier preserving the storage width.
+	 * \throws std::runtime_error for unsupported storage encodings.
+	 */
+	static asmjit::TypeId translateStorageType(const WASM::StorageType& type);
 
 	/*!
 	 * \brief Builds the native function signature used by generated code.
