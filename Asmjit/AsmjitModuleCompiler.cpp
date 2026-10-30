@@ -1106,7 +1106,7 @@ void ModuleCompiler::declareFunctions(WASM::ModuleInstance& instance,
 			throw std::runtime_error("AsmJit function references a non-function or unavailable type");
 		auto record = std::make_unique<FunctionRecord>();
 		record->signature = signatures[typeIndex].get();
-		internals.compiledFunctions[i] = record.get();
+		internals.compiledFunctions[i] = nullptr;
 		internals.internalCallables[i] = WASM::Callable {
 			.fnPtr = nullptr,
 			.context = instance.context(),
@@ -1160,6 +1160,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 			functionRecords[i]->entry = static_cast<uint8_t*>(codeBase) + offset;
 			internals.internalCallables[i].rawFnPtr = functionRecords[i]->entry;
 			internals.internalCallables[i].fnPtr = functionRecords[i]->entry;
+			internals.compiledFunctions[i] = functionRecords[i]->entry;
 		}
 	} catch (...) {
 		// Instantiation is transactional with respect to executable memory:
@@ -1169,6 +1170,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 			functionRecords[i]->entry = nullptr;
 			internals.internalCallables[i].rawFnPtr = nullptr;
 			internals.internalCallables[i].fnPtr = nullptr;
+			internals.compiledFunctions[i] = nullptr;
 		}
 		throw;
 	}
