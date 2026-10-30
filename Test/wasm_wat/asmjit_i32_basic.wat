@@ -184,6 +184,40 @@
     local.get 0
     local.get 1
     call_indirect (type $unary))
+  (func (export "block_result") (param i32) (result i32)
+    block (result i32)
+      local.get 0
+      i32.const 1
+      i32.add
+    end)
+  (func (export "if_result") (param i32) (result i32)
+    local.get 0
+    if (result i32)
+      i32.const 42
+    else
+      i32.const 7
+    end)
+  (func (export "br_result") (result i32)
+    block (result i32)
+      i32.const 42
+      br 0
+    end)
+  (func (export "br_if_result") (param i32) (result i32)
+    block (result i32)
+      i32.const 42
+      local.get 0
+      br_if 0
+    end)
+  (func (export "loop_result") (result i32)
+    loop (result i32)
+      i32.const 42
+    end)
+  (func (export "typed_block_result") (param i32) (result i32)
+    block (type $unary)
+      local.get 0
+      i32.const 2
+      i32.mul
+    end)
   (func (export "local_roundtrip") (param i32) (result i32) (local i32)
     local.get 0
     local.set 1
