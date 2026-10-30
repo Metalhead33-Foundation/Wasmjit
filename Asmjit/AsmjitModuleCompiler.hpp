@@ -18,7 +18,7 @@
 namespace AsmJitBackend {
 
 /*!
- * \brief Compiles an initial i32/i64 integer WebAssembly subset with AsmJit, including i32 globals, typed i32/i64 direct and indirect calls, and checked memory32 access for i32/i64 values.
+ * \brief Compiles an initial i32/i64 integer WebAssembly subset with AsmJit, including i32/i64 globals, typed i32/i64 direct and indirect calls, and checked memory32 access for i32/i64 values.
  *
  * The initial subset is deliberately narrow: i32/i64 parameters/results/locals,
  * i32/i64 constants and local access; i32/i64 arithmetic, comparisons, bitwise operations,
