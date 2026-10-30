@@ -24,6 +24,10 @@ Context::Context() = default;
 
 Context::~Context()
 {
+	for (auto allocation : packedI16Allocations)
+		runtime.release(allocation);
+	for (auto allocation : packedI8Allocations)
+		runtime.release(allocation);
 	for (auto allocation : v128BitwiseAllocations)
 		runtime.release(allocation);
 	for (auto allocation : v128AddAllocations)
@@ -205,6 +209,76 @@ Context::V128BitwiseEntry Context::compileV128Bitwise(V128BitwiseOp operation)
 			"AsmJit V128 bitwise executable-memory allocation failed");
 	try {
 		v128BitwiseAllocations.push_back(entry);
+	} catch (...) {
+		runtime.release(entry);
+		throw;
+	}
+	return entry;
+}
+
+Context::PackedI8ExtendEntry Context::compilePackedI8Extend(bool signExtend)
+{
+	asmjit::CodeHolder code;
+	checkError(code.init(runtime.environment(), runtime.cpu_features()),
+			"AsmJit CodeHolder initialisation failed");
+
+	asmjit::x86::Compiler compiler(&code);
+	asmjit::FuncNode* function = compiler.add_func(
+			asmjit::FuncSignature::build<std::uint32_t, const std::uint8_t*>());
+	if (function == nullptr)
+		throw std::runtime_error("AsmJit failed to create the packed i8 extension function");
+
+	asmjit::x86::Gp input = compiler.new_gp_ptr("input");
+	asmjit::x86::Gp result = compiler.new_gp32("result");
+	function->set_arg(0, input);
+	checkError(signExtend
+			? compiler.movsx(result, asmjit::x86::byte_ptr(input))
+			: compiler.movzx(result, asmjit::x86::byte_ptr(input)),
+			"AsmJit packed i8 extension emission failed");
+	checkError(compiler.ret(result), "AsmJit packed i8 return emission failed");
+	checkError(compiler.end_func(), "AsmJit packed i8 function finalisation failed");
+	checkError(compiler.finalize(), "AsmJit packed i8 compiler finalisation failed");
+
+	PackedI8ExtendEntry entry = nullptr;
+	checkError(runtime.add(&entry, &code),
+			"AsmJit packed i8 executable-memory allocation failed");
+	try {
+		packedI8Allocations.push_back(entry);
+	} catch (...) {
+		runtime.release(entry);
+		throw;
+	}
+	return entry;
+}
+
+Context::PackedI16ExtendEntry Context::compilePackedI16Extend(bool signExtend)
+{
+	asmjit::CodeHolder code;
+	checkError(code.init(runtime.environment(), runtime.cpu_features()),
+			"AsmJit CodeHolder initialisation failed");
+
+	asmjit::x86::Compiler compiler(&code);
+	asmjit::FuncNode* function = compiler.add_func(
+			asmjit::FuncSignature::build<std::uint32_t, const std::uint16_t*>());
+	if (function == nullptr)
+		throw std::runtime_error("AsmJit failed to create the packed i16 extension function");
+
+	asmjit::x86::Gp input = compiler.new_gp_ptr("input");
+	asmjit::x86::Gp result = compiler.new_gp32("result");
+	function->set_arg(0, input);
+	checkError(signExtend
+			? compiler.movsx(result, asmjit::x86::word_ptr(input))
+			: compiler.movzx(result, asmjit::x86::word_ptr(input)),
+			"AsmJit packed i16 extension emission failed");
+	checkError(compiler.ret(result), "AsmJit packed i16 return emission failed");
+	checkError(compiler.end_func(), "AsmJit packed i16 function finalisation failed");
+	checkError(compiler.finalize(), "AsmJit packed i16 compiler finalisation failed");
+
+	PackedI16ExtendEntry entry = nullptr;
+	checkError(runtime.add(&entry, &code),
+			"AsmJit packed i16 executable-memory allocation failed");
+	try {
+		packedI16Allocations.push_back(entry);
 	} catch (...) {
 		runtime.release(entry);
 		throw;
