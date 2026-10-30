@@ -83,8 +83,8 @@ struct ContinuationResumeResult {
 	std::uint32_t resultCount = 0;
 	std::uint32_t tagValueCount = 0;
 	void*        resultValues = nullptr;
-	void*        tagValues = nullptr;
-	const std::uint8_t* tagKinds = nullptr;
+	void*        tagValues = nullptr; //!< Field `tagValues` of ContinuationResumeResult.
+	const std::uint8_t* tagKinds = nullptr; //!< Field `tagKinds` of ContinuationResumeResult.
 };
 
 //! One continuation value slot. The runtime never interprets the payload; the
@@ -225,7 +225,7 @@ public:
 			std::int32_t* resumedValue) noexcept;
 
 private:
-	void* ref_ = nullptr;
+	void* ref_ = nullptr; //!< Field `ref_` of HostContinuation.
 };
 
 //! \brief Embedder-owned scheduling / JSPI-style promise seam
@@ -278,7 +278,7 @@ public:
 				std::uint32_t valueCount, const std::uint8_t* kinds) noexcept = nullptr;
 		void (*onCompletedEx)(void* userData, std::int32_t status,
 				const ContinuationValue* results, std::uint32_t resultCount,
-				const std::uint8_t* kinds) noexcept = nullptr;
+				const std::uint8_t* kinds) noexcept = nullptr; //!< Field `noexcept` of Hooks.
 		//! Called instead of the completion hooks when a task ends with an
 		//! uncaught exception. `exception` is the engine's pending exception
 		//! payload and is borrowed for the call.
@@ -314,7 +314,7 @@ public:
 	bool submitEx(void* continuation, const ContinuationValue* args,
 			std::uint32_t argCount, const std::uint8_t* argKinds,
 			std::uint32_t resultCapacity = 0, std::uint32_t tagCapacity = 0,
-			bool takeOwnership = true) noexcept;
+			bool takeOwnership = true) noexcept; //!< Field `takeOwnership` of HostContinuationScheduler.
 
 	//! Throw/reject task: resumes through `wasm_cont_resume_throw_ex`. The
 	//! exception is borrowed until `step` runs; ownership is not transferred.
@@ -342,17 +342,17 @@ enum class Kind {
 };
 		Kind kind = Kind::Resume;
 		void* continuation = nullptr;
-		std::int32_t arg = 0;
-		std::vector<ContinuationValue> args;
-		std::vector<std::uint8_t> argKinds;
-		void* exception = nullptr;
-		void* creationContext = nullptr;
-		std::uint32_t resultCapacity = 0;
-		std::uint32_t tagCapacity = 0;
-		bool wide = false;
+		std::int32_t arg = 0; //!< Field `arg` of Task.
+		std::vector<ContinuationValue> args; //!< Field `args` of Task.
+		std::vector<std::uint8_t> argKinds; //!< Field `argKinds` of Task.
+		void* exception = nullptr; //!< Field `exception` of Task.
+		void* creationContext = nullptr; //!< Field `creationContext` of Task.
+		std::uint32_t resultCapacity = 0; //!< Field `resultCapacity` of Task.
+		std::uint32_t tagCapacity = 0; //!< Field `tagCapacity` of Task.
+		bool wide = false; //!< Field `wide` of Task.
 	};
-	Hooks hooks_{};
-	std::deque<Task> tasks_{};
+	Hooks hooks_{}; //!< Field `hooks_` of HostContinuationScheduler.
+	std::deque<Task> tasks_{}; //!< Field `tasks_` of HostContinuationScheduler.
 };
 
 //! \par Generated-code entry points (C ABI)
