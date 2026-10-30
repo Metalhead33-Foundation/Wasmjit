@@ -76,11 +76,6 @@ struct AggregateLayout {
  * \param kind ABI value category to measure.
  * \return Size in bytes; Void has size zero.
  */
-/**
- * \brief Performs the valueKindSize operation.
- * \param kind Input value, resource descriptor, or output destination for this operation.
- * \return The requested value, handle, view, or success status.
- */
 inline constexpr std::uint32_t valueKindSize(ValueKind kind) noexcept
 {
 	switch (kind) {
@@ -103,11 +98,6 @@ inline constexpr std::uint32_t valueKindSize(ValueKind kind) noexcept
  * \brief Returns the host-ABI alignment of a value kind.
  * \param kind ABI value category to measure.
  * \return Required alignment in bytes.
- */
-/**
- * \brief Performs the valueKindAlignment operation.
- * \param kind Input value, resource descriptor, or output destination for this operation.
- * \return The requested value, handle, view, or success status.
  */
 inline constexpr std::uint32_t valueKindAlignment(ValueKind kind) noexcept
 {
@@ -134,11 +124,6 @@ inline constexpr std::uint32_t valueKindAlignment(ValueKind kind) noexcept
  * \param code WebAssembly value type code.
  * \return Corresponding ABI kind; reference opcodes map to Ref.
  */
-/**
- * \brief Performs the valueKindOf operation.
- * \param code Input value, resource descriptor, or output destination for this operation.
- * \return The requested value, handle, view, or success status.
- */
 inline constexpr ValueKind valueKindOf(ValueTypeCode code) noexcept
 {
 	switch (code) {
@@ -158,12 +143,6 @@ namespace detail {
  * \param value Original byte offset.
  * \param alignment Alignment boundary (must be non-zero).
  * \return Smallest aligned offset not less than value.
- */
-/**
- * \brief Performs the alignUp operation.
- * \param value Input value, resource descriptor, or output destination for this operation.
- * \param alignment Input value, resource descriptor, or output destination for this operation.
- * \return The requested value, handle, view, or success status.
  */
 inline constexpr std::uint32_t alignUp(std::uint32_t value,
 		std::uint32_t alignment) noexcept
@@ -185,12 +164,6 @@ inline constexpr std::uint32_t alignUp(std::uint32_t value,
  * \param fieldStorage Caller-owned output storage with at least kinds.size()
  *        entries; insufficient storage produces a zero layout.
  * \return Aggregate size/alignment and a pointer to the populated field layouts.
- */
-/**
- * \brief Performs the computeAggregateLayout operation.
- * \param kinds Input value, resource descriptor, or output destination for this operation.
- * \param fieldStorage Input value, resource descriptor, or output destination for this operation.
- * \return The requested value, handle, view, or success status.
  */
 inline AggregateLayout computeAggregateLayout(std::span<const ValueKind> kinds,
 		std::span<FieldLayout> fieldStorage) noexcept
