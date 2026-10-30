@@ -86,6 +86,31 @@ uint32_t asmjitI32RemU(uint32_t lhs, uint32_t rhs) noexcept
 	return lhs % rhs;
 }
 
+uint32_t asmjitMemorySize(WASM::VMContext* vm, uint32_t memoryIndex) noexcept
+{
+	if (vm == nullptr || vm->memories == nullptr || memoryIndex >= vm->memoryCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.size index is invalid");
+		return 0;
+	}
+	const WASM::LinearMemory* memory = vm->memories[memoryIndex];
+	if (memory == nullptr || memory->pageSize == 0) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.size memory is invalid");
+		return 0;
+	}
+	return static_cast<uint32_t>(WASM::wasm_memory_size(memory) / memory->pageSize);
+}
+
+uint32_t asmjitMemoryGrow(WASM::VMContext* vm, uint32_t memoryIndex, uint32_t delta) noexcept
+{
+	if (vm == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.grow VMContext is null");
+		return UINT32_MAX;
+	}
+	auto* instance = reinterpret_cast<WASM::ModuleInstance*>(vm);
+	const int64_t previous = instance->growMemory(memoryIndex, delta);
+	return previous < 0 ? UINT32_MAX : static_cast<uint32_t>(previous);
+}
+
 void* asmjitMemoryAddress(WASM::VMContext* vm, uint32_t memoryIndex,
 		uint32_t address, uint32_t offset, uint32_t width) noexcept
 {
@@ -456,6 +481,9 @@ protected:
 		checkError(compiler.bind(noTrap), "AsmJit post-call continuation binding failed");
 	}
 
+	void dispatchMemorySize(WASM::MemIdx index) override { emitMemorySize(index); }
+	void dispatchMemoryGrow(WASM::MemIdx index) override { emitMemoryGrow(index); }
+
 	void dispatchI32Load(WASM::MemArg arg) override { emitMemoryLoad(arg, 4, LoadKind::I32); }
 	void dispatchI32Load8S(WASM::MemArg arg) override { emitMemoryLoad(arg, 1, LoadKind::I8Signed); }
 	void dispatchI32Load8U(WASM::MemArg arg) override { emitMemoryLoad(arg, 1, LoadKind::I8Unsigned); }
@@ -575,17 +603,67 @@ private:
 		values.push_back(lhs);
 	}
 
+	void validateMemoryIndex(WASM::MemIdx index) const
+	{
+		if (index >= module.importMemories.size() + module.memories.size())
+			throw std::runtime_error("AsmJit memory instruction references an unknown memory");
+		const WASM::MemoryType& type = index < module.importMemories.size()
+				? module.importMemories[index].memory
+				: module.memories[index - module.importMemories.size()];
+		if (type.indexType != WASM::MemoryIndexType::I32)
+			throw std::runtime_error("AsmJit initial memory lowering supports memory32 only");
+	}
+
+	void emitMemorySize(WASM::MemIdx index)
+	{
+		validateMemoryIndex(index);
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitMemorySize), signature),
+				"AsmJit memory.size helper call emission failed");
+		invoke->set_arg(0, vmContext);
+		auto memoryIndex = compiler.new_gp32("memorySizeIndex");
+		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(index)), "AsmJit memory.size index materialisation failed");
+		invoke->set_arg(1, memoryIndex);
+		auto result = compiler.new_gp32("memorySize");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void emitMemoryGrow(WASM::MemIdx index)
+	{
+		validateMemoryIndex(index);
+		if (values.empty())
+			throw std::runtime_error("AsmJit memory.grow operand stack underflow");
+		auto delta = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitMemoryGrow), signature),
+				"AsmJit memory.grow helper call emission failed");
+		invoke->set_arg(0, vmContext);
+		auto memoryIndex = compiler.new_gp32("memoryGrowIndex");
+		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(index)), "AsmJit memory.grow index materialisation failed");
+		invoke->set_arg(1, memoryIndex);
+		invoke->set_arg(2, delta);
+		auto result = compiler.new_gp32("memoryGrowResult");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
 	void validateMemoryArg(const WASM::MemArg& arg, uint32_t width) const
 	{
 		if (arg.isArray)
 			throw std::runtime_error("AsmJit scalar loads/stores do not support GC-array memargs");
-		if (arg.memidx >= module.importMemories.size() + module.memories.size())
-			throw std::runtime_error("AsmJit memory instruction references an unknown memory");
-		const WASM::MemoryType& type = arg.memidx < module.importMemories.size()
-				? module.importMemories[arg.memidx].memory
-				: module.memories[arg.memidx - module.importMemories.size()];
-		if (type.indexType != WASM::MemoryIndexType::I32)
-			throw std::runtime_error("AsmJit initial memory lowering supports memory32 only");
+		validateMemoryIndex(arg.memidx);
 		if (arg.offset > UINT32_MAX)
 			throw std::runtime_error("AsmJit memory32 offset exceeds the encoded u32 range");
 		(void)width;
