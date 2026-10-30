@@ -49,7 +49,7 @@ most remaining instructions are still unsupported and fail explicitly.
   `WASMJIT_BACKEND=asmjit`, including i32 invocation marshalling, aggregate
   layout calculation, and the existing lane-wise SIMD diagnostic interface.
 - `Test/AsmjitModuleCompilerTests.cpp` instantiates WAT fixtures and executes i32/i64 arithmetic, comparison, bitwise and memory operations,
-  control-flow, direct/indirect-call (including i32/i64 native and cross-instance Wasm imports, mutual recursion, and i32 tail-call opcodes), result-bearing control flow, `br_table`, unreachable traps, i32/i64-global, and memory32
+  control-flow, direct/indirect-call (including i32/i64 native and cross-instance Wasm imports, mutual recursion, and i32 tail-call opcodes), result-bearing control flow, `br_table`, unreachable traps, i32/i64 globals, and memory32
   cases, including signed/unsigned i32/i64 narrow loads, `select`, overlap-safe bulk copies,
   fills, passive data/element segment initialization/drop semantics, table sizing/copying, zero-length boundary operations, and out-of-bounds traps.
 - Packed `i8`/`i16` storage retains its narrow 8-/16-bit representation.
@@ -99,7 +99,7 @@ upstream repository so that `asmjit.pc` is visible through `PKG_CONFIG_PATH`.
 1. Extend structured control flow to block parameters, multi-value results, full branch-stack semantics, and general unreachable-stack polymorphism.
 2. Implement true tail-call ABI/stack semantics for i32/i64 signatures.
 3. Expand linear memory to memory64 and finish remaining bulk-memory/table operations.
-4. Add floating-point arithmetic and conversions, non-i32 globals, references/GC, exceptions, continuations, and Wasm SIMD lowering.
+4. Add floating-point arithmetic and conversions, floating-point and reference globals, references/GC, exceptions, continuations, and Wasm SIMD lowering.
 5. Meet every applicable item in
    [`docs/BACKEND_WORK_ORDER.md`](../docs/BACKEND_WORK_ORDER.md) before calling
    the backend complete.
