@@ -51,10 +51,10 @@ struct ScriptValue {
 	std::vector<std::pair<std::string, ScriptValue>> fields;
 	std::vector<ScriptValue> elements;
 	std::vector<std::pair<ScriptValue, ScriptValue>> entries;
-	std::vector<std::string> flags;
-	std::string caseLabel;
-	std::unique_ptr<ScriptValue> payload;
-	bool hasPayload = false;
+	std::vector<std::string> flags; //!< Field `flags` of ScriptValue.
+	std::string caseLabel; //!< Field `caseLabel` of ScriptValue.
+	std::unique_ptr<ScriptValue> payload; //!< Field `payload` of ScriptValue.
+	bool hasPayload = false; //!< Field `hasPayload` of ScriptValue.
 	bool some = false;                //!< option
 	bool ok = true;                   //!< result
 };
@@ -107,7 +107,7 @@ struct Script {
 struct WitFunction {
 	std::string name;
 	std::vector<std::pair<std::string, std::string>> params;
-	std::optional<std::string> result;
+	std::optional<std::string> result; //!< Field `result` of WitFunction.
 };
 
 /** \brief WIT interface name and its named function declarations. */
@@ -128,7 +128,7 @@ struct WitWorld {
 struct WitPackage {
 	std::string name;
 	std::vector<WitWorld> worlds;
-	std::vector<WitInterface> interfaces;
+	std::vector<WitInterface> interfaces; //!< Field `interfaces` of WitPackage.
 
 	/**
 	 * \brief Parses the JSON representation produced by wasm-tools component wit.
@@ -145,7 +145,7 @@ struct WitPackage {
 struct ScriptReport {
 	std::size_t passed = 0;
 	std::size_t failed = 0;
-	std::size_t skipped = 0;
+	std::size_t skipped = 0; //!< Field `skipped` of ScriptReport.
 	std::vector<std::string> failures;    //!< "line N: <detail>"
 	std::vector<std::string> skipReasons; //!< human-readable, possibly repeated
 };
