@@ -78,22 +78,11 @@ private:
 	//! with the same text. The id is `WASM.VALIDATE.<LEAF>`. An empty `id` asks
 	//! `validationRuleId()` to classify the message into a stable rule family;
 	//! a site that knows its rule better passes an explicit `DiagnosticId::…`.
-/**
- * \brief Performs the fail operation.
- * \param message Input value or output destination for this operation.
- * \param id Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 	[[noreturn]] void fail(const std::string& message,
 			std::string_view id = {}) const;
 
 	//! Diagnostic form of a local index in the body being validated
 	//! (`"0 ($name)"`); the name-section outer key is the global function index.
-/**
- * \brief Performs the validator's describeLocal operation.
- * \param idx Operand or context value used by this validator operation.
- * \return The resolved value, predicate result, or validation data described by the function name.
- */
 	std::string describeLocal(uint32_t idx) const;
 
 /**
@@ -105,12 +94,6 @@ private:
 	//! Resolve `cont $ft` to the module-local function type index it names. The
 	//! canonical view stores a process-wide TypeId, so the module-local index is
 	//! recovered from `typeIds` (STACK_SWITCHING.md SS-1).
-/**
- * \brief Performs the validator's continuationFuncIndex operation.
- * \param contTypeIdx Operand or context value used by this validator operation.
- * \param who Operand or context value used by this validator operation.
- * \return The resolved value, predicate result, or validation data described by the function name.
- */
 	uint32_t continuationFuncIndex(TypeIdx contTypeIdx, const char* who) const;
 /**
  * \brief Performs the validator's continuationFuncType operation.
@@ -302,10 +285,6 @@ private:
  */
 	void checkProfileValueType(const ValueType& type, const std::string& where) const;
 	//! Prefixed-instruction gates (shared with the base dispatcher's hooks).
-/**
- * \brief Performs the validator's onSimdOpcode operation.
- * \param opcode Operand or context value used by this validator operation.
- */
 	void onSimdOpcode(SIMDOpcode opcode) override;
 	void onAtomicOpcode(AtomicOpcode opcode) override; //!< Validate the stack effect of this opcode.
 
@@ -704,9 +683,6 @@ private:
 /**
  * \brief Validates the StringAsWtf8 instruction's immediates and operand-stack effect.
  */
-/**
- * \brief Performs the dispatchStringAsWtf8 operation.
- */
 	void dispatchStringAsWtf8() override;
 /**
  * \brief Performs the dispatchStringViewWtf8Advance operation.
@@ -963,9 +939,6 @@ private:
 	//! Core numeric instructions (operand/result typing).
 /**
  * \brief Validates the I32Eqz instruction's immediates and operand-stack effect.
- */
-/**
- * \brief Performs the dispatchI32Eqz operation.
  */
 	void dispatchI32Eqz() override;
 /**
@@ -1513,9 +1486,6 @@ private:
 	//! SIMD arithmetic/comparison/conversion typing (from wasm_simd_ops.inc).
 /**
  * \brief Validates the I8x16Add instruction's immediates and operand-stack effect.
- */
-/**
- * \brief Performs the dispatchI8x16Add operation.
  */
 	void dispatchI8x16Add() override;
 /**
