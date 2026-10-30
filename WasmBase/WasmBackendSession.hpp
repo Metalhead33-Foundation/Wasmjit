@@ -22,11 +22,17 @@ WASMJIT_VISIBLE_BEGIN
 
 namespace WASM {
 
+/** \\brief Forward declaration of the backend-neutral module instantiation interface. */
 class ModuleInstantiator;
+/** \\brief Forward declaration of an instantiated core module. */
 class ModuleInstance;
+/** \\brief Forward declaration of a compiled WebAssembly callable descriptor. */
 struct Callable;
+/** \\brief Forward declaration of a WebAssembly function signature. */
 struct FuncType;
+/** \\brief Forward declaration of a WebAssembly field/element storage type. */
 struct StorageType;
+/** \\brief Forward declaration of the diagnostic backend SIMD operation interface. */
 class BackendLaneWiseOp;
 
 //! \par The backend façade (docs/BACKEND_PLUGIN_ABI.md §7.3, AAS8)
