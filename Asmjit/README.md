@@ -10,17 +10,23 @@ and must not be selected to execute Wasm modules.
 - `AsmjitContext` owns an `asmjit::JitRuntime` and the executable allocations
   created through it.
 - `compileReturn42()` emits a tiny x86/x64 function, installs it into executable
-  memory, and returns its entry point. The context releases all such entry points
-  at destruction.
-- `Test/AsmjitBackendTests.cpp` checks that emitted machine code executes and
-  returns the expected value.
+  memory, and returns its entry point.
+- `compileLaneWiseI32x4()` uses AsmJit's function compiler and register
+  allocator to emit a host-ABI function that adds or multiplies four 32-bit
+  lanes. The inputs and output are ordinary pointers; the implementation does
+  not assume a particular host argument-register convention.
+- The context releases all generated entry points at destruction. If tracking
+  an allocation fails after executable memory is allocated, it releases that
+  allocation before propagating the host-side exception.
+- `Test/AsmjitBackendTests.cpp` checks that emitted machine code executes,
+  returns the expected scalar value, and performs both lane-wise operations.
 - The dependency is confined to this subproject. `WasmBase/` remains
   backend-agnostic and does not include or link AsmJit.
 
-This is an integration probe: it verifies that the project can compile against
-AsmJit, emit host machine code, allocate executable memory, call it, and release
-it. It is not evidence of Wasm instruction coverage, ABI compatibility, trap
-handling, GC integration, or SIMD lowering.
+These are native code-generation probes, not evidence of Wasm instruction
+coverage, Wasm ABI compatibility, trap handling, GC integration, or Wasm SIMD
+lowering. In particular, the lane-wise function is a diagnostic primitive; it
+does not yet implement `WASM::BackendLaneWiseOp`.
 
 ## Build dependency
 
@@ -32,8 +38,6 @@ pkg-config --modversion asmjit
 
 Install a current AsmJit development package or build/install AsmJit from its
 upstream repository so that `asmjit.pc` is visible through `PKG_CONFIG_PATH`.
-The upstream project recommends consuming its current source or package-manager
-build rather than relying on old distribution snapshots.
 
 ## Next implementation stages
 
