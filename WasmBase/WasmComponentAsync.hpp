@@ -692,7 +692,9 @@ private:
  */
 class ComponentAsyncState {
 public:
+//! Type alias `HandleAllocator` names the corresponding implementation/API type.
 	using HandleAllocator = std::function<uint32_t()>;
+//! Type alias `HandleReleaser` names the corresponding implementation/API type.
 	using HandleReleaser = std::function<void(uint32_t)>;
 
 	/** \brief Creates async state using the component's shared handle allocator. \param allocate Allocates a handle in the component handle space. \param release Releases a previously allocated handle. */
