@@ -568,7 +568,7 @@ struct Global {
 struct Export {
 	std::string name;
 	ExternalKind kind;
-	uint32_t index;
+	uint32_t index; //!< Field `index` of Export.
 };
 /** \brief Element segment, including mode, element type, and initializer expressions. */
 struct ElementSegment {
@@ -644,15 +644,15 @@ struct ExternTypeDescriptor {
 	bool isExact = false;
 	GlobalType globalType{};
 	TableType tableType{};
-	MemoryType memoryType{};
-	uint8_t tagAttribute = 0;
+	MemoryType memoryType{}; //!< Field `memoryType` of ExternTypeDescriptor.
+	uint8_t tagAttribute = 0; //!< Field `tagAttribute` of ExternTypeDescriptor.
 };
 
 /** \brief Public metadata projection of one module import. */
 struct ImportDescriptor {
 	std::string moduleName;
 	std::string fieldName;
-	ExternTypeDescriptor type;
+	ExternTypeDescriptor type; //!< Field `type` of ImportDescriptor.
 };
 
 /** \brief Public metadata projection of one module export. */
