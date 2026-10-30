@@ -219,7 +219,11 @@ bool wtf8Advance(const std::vector<uint32_t>& codePoints, int32_t pos,
 				 int32_t bytes, uint32_t& nextPos);
 
 /** \brief Encoding policy used by wtf8Encode(). */
-enum class Wtf8Encoding { Utf8, LossyUtf8, Wtf8 };
+enum class Wtf8Encoding {
+	Utf8, //!< Enum member `Utf8`.
+	LossyUtf8, //!< Enum member `LossyUtf8`.
+	Wtf8 //!< Enum member `Wtf8`.
+};
 /** \brief Encodes a WTF-8-positioned slice using the selected encoding policy. \param codePoints Source sequence. \param pos Starting byte position. \param bytes Number of bytes to encode; negative means to the end. \param encoding UTF-8/WTF-8 conversion policy. \param nextPos Receives the next position after the encoded slice. \param out Receives encoded bytes. \return false when strict UTF-8 cannot represent the slice or a limit is exceeded. */
 bool wtf8Encode(const std::vector<uint32_t>& codePoints, int32_t pos, int32_t bytes,
 				Wtf8Encoding encoding, uint32_t& nextPos, std::vector<uint8_t>& out);
