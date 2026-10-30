@@ -102,17 +102,30 @@ WASM::Callable* asmjitResolveIndirectCallable(WASM::VMContext* vm, uint32_t tabl
 		WASM::reportTrap(WASM::TrapKind::OutOfBoundsTableAccess);
 		return nullptr;
 	}
+	if (table->base == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit call_indirect table storage is null");
+		return nullptr;
+	}
 	WASM::Callable* callable = table->base[elementIndex];
 	if (callable == nullptr) {
 		WASM::reportTrap(WASM::TrapKind::UninitializedElement);
 		return nullptr;
 	}
+	if (callable->fnPtr == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit call_indirect target has no entry point");
+		return nullptr;
+	}
 	const WASM::TypeId expected{expectedTypeValue};
 	const WASM::TypeId none{WASM::TypeId::kNone};
 	if (callable->typeId != none && callable->typeId != expected) {
-		if (vm->module == nullptr
-				|| !vm->module->store().types().matches(callable->typeId, expected)) {
-			WASM::reportTrap(WASM::TrapKind::IndirectCallTypeMismatch);
+		try {
+			if (vm->module == nullptr
+					|| !vm->module->store().types().matches(callable->typeId, expected)) {
+				WASM::reportTrap(WASM::TrapKind::IndirectCallTypeMismatch);
+				return nullptr;
+			}
+		} catch (...) {
+			WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit call_indirect type check failed");
 			return nullptr;
 		}
 	}
