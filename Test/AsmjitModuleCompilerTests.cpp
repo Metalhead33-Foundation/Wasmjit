@@ -69,6 +69,14 @@ TEST_CASE("AsmJit ModuleInstantiator compiles supported i32 functions", "[asmjit
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("rotr"), 16, 4) == 1);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("choose"), 1, 42, 7) == 42);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("choose"), 0, 42, 7) == 7);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("block_result"), 41) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("if_result"), 1) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("if_result"), 0) == 7);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("br_result")) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("br_if_result"), 1) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("br_if_result"), 0) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("loop_result")) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("typed_block_result"), 21) == 42);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("branch_if"), 1) == 10);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("branch_if"), 0) == 20);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("branch")) == 10);
