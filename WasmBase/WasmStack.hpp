@@ -17,6 +17,7 @@ WASMJIT_VISIBLE_BEGIN
 
 namespace WASM {
 
+/** \\brief Forward declaration of the VM context whose stack limit is installed. */
 struct VMContext;
 
 //! \par The guest call-stack guard
