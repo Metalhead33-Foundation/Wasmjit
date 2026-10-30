@@ -53,6 +53,7 @@ the next person who is tempted to answer the question from a blog post.
 | \subpage lf2_s4 | `S4` — the WasmGC languages: Kotlin/Wasm in two target forms, Dart and MoonBit; the `F3` engine finding and its fix. |
 | \subpage lf2_s5 | `S5` — a guest scripting VM: Lua 5.4.8 built with wasi-sdk, green. |
 | \subpage lf2_l6_l12 | The coverage note: every untested non-killed row, with the reason and the condition that would start it (and the `T09` Go arm). |
+| \subpage lf2_toolchains | The acquisition map: for each of those rows, the producer that emits a module and the site it is obtained from — with the three module shapes (`wasip1`, `bare`, `js-host`) that decide whether an install can pass the bar at all. |
 | \subpage lf2_evidence | The `LF-2` evidence log: toolchains, module hashes, transcripts, and `F1`–`F3` with their reproductions. |
 | \subpage lf2_deep_f1 | `F1` deep study: the libjit optimizer bug, the minimal repro, and the backend fix (`WASM.COMPILE.FUNCTION_FAILED`, level-0 default, context poisoning). |
 | \subpage lf2_deep_f2 | `F2` deep study: the `delegate`-skips-a-catch shape, the verified `wasm-opt --translate-to-exnref` workaround, and the escape-block translation that made the workaround optional. |

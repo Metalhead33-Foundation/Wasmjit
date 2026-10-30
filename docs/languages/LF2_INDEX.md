@@ -51,6 +51,7 @@ honest.
 | \subpage lf2_s4 | `L4` — WasmGC languages | 4 (`T20`, `T53` in two target forms, `T86`) | 2 green, 1 yellow, 1 red arm |
 | \subpage lf2_s5 | `L5` — guest scripting VMs | 1 (`T26`) | 1 green |
 | \subpage lf2_l6_l12 | `L6`–`L12` — everything else | 1 (`T09`, `L8`) | 1 green |
+| \subpage lf2_toolchains | **Acquisition map** — for every row that was not run: the producer, its site, and the module shape it emits | — | 81 rows mapped (`T30` inherited) |
 | \subpage lf2_evidence | — | — | toolchains, hashes, commands, transcripts |
 | \subpage lf2_deep_f1 | **Deep study** — `F1`: why libjit refused the module, and the backend fix | — | `T01`/`T04` unblocked |
 | \subpage lf2_deep_f2 | **Deep study** — `F2` (`LE-8`): the workarounds, and the escape-block translation that made them optional | — | `T05` green |
