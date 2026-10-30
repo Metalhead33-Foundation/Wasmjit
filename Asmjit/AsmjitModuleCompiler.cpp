@@ -402,10 +402,23 @@ protected:
 	{
 		if (values.empty())
 			throw std::runtime_error("AsmJit br_if condition stack underflow");
-		if (depth >= controls.size())
+		if (depth > controls.size())
 			throw std::runtime_error("AsmJit br_if label depth is out of range");
 		const auto condition = values.back();
 		values.pop_back();
+		if (depth == controls.size()) {
+			if (values.size() != resultCount)
+				throw std::runtime_error("AsmJit conditional function branch has the wrong result arity");
+			auto skip = compiler.new_label();
+			checkError(compiler.test(condition, condition), "AsmJit conditional function branch test failed");
+			checkError(compiler.jz(skip), "AsmJit conditional function branch skip failed");
+			if (resultCount == 0)
+				checkError(compiler.ret(), "AsmJit conditional function branch return failed");
+			else
+				checkError(compiler.ret(values.back()), "AsmJit conditional function branch return failed");
+			checkError(compiler.bind(skip), "AsmJit conditional function branch label binding failed");
+			return;
+		}
 		ControlFrame& target = controls[controls.size() - 1 - depth];
 		const size_t branchValues = target.kind == ControlKind::Loop ? 0 : target.resultCount;
 		if (values.size() != target.stackHeight + branchValues)
@@ -426,8 +439,17 @@ protected:
 
 	void dispatchBr(WASM::LabelIdx depth) override
 	{
-		if (depth >= controls.size())
+		if (depth > controls.size())
 			throw std::runtime_error("AsmJit br label depth is out of range");
+		if (depth == controls.size()) {
+			if (values.size() != resultCount)
+				throw std::runtime_error("AsmJit function branch has the wrong result arity");
+			if (resultCount == 0)
+				checkError(compiler.ret(), "AsmJit function branch return failed");
+			else
+				checkError(compiler.ret(values.back()), "AsmJit function branch return failed");
+			return;
+		}
 		ControlFrame& target = controls[controls.size() - 1 - depth];
 		const size_t branchValues = target.kind == ControlKind::Loop ? 0 : target.resultCount;
 		if (values.size() != target.stackHeight + branchValues)
