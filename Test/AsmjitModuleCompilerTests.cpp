@@ -188,6 +188,9 @@ TEST_CASE("AsmJit compiles i64 integer functions", "[asmjit][module][i64]")
 			INT64_C(0x123456789ABCDEF0)));
 	CHECK_THROWS(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_store_load"), -1,
 			INT64_C(0x123456789ABCDEF0)));
+	CHECK_THROWS(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_load_at"), 65532));
+	CHECK_THROWS(WASM::callCallable<void>(*instance->exportedFunction("i64_store_at"), 65532,
+			INT64_C(0x123456789ABCDEF0)));
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_tee"),
 			INT64_C(0x123456789)) == INT64_C(0x123456789));
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_mixed"),
