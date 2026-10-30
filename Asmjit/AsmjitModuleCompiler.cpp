@@ -472,7 +472,7 @@ protected:
 		auto result = compiler.new_gp32("eqz");
 		checkError(compiler.xor_(result, result), "AsmJit i32.eqz result initialisation failed");
 		checkError(compiler.test(value, value), "AsmJit i32.eqz test emission failed");
-		checkError(compiler.setcc(result.r8(), asmjit::x86::CondCode::kE),
+		checkError(compiler.set(asmjit::x86::CondCode::kE, result.r8()),
 				"AsmJit i32.eqz condition emission failed");
 		values.push_back(result);
 	}
@@ -722,7 +722,7 @@ private:
 		auto result = compiler.new_gp32("comparison");
 		checkError(compiler.xor_(result, result), "AsmJit comparison result initialisation failed");
 		checkError(compiler.cmp(lhs, rhs), "AsmJit comparison emission failed");
-		checkError(compiler.setcc(result.r8(), condition), "AsmJit comparison condition emission failed");
+		checkError(compiler.set(condition, result.r8()), "AsmJit comparison condition emission failed");
 		values.push_back(result);
 	}
 
