@@ -58,6 +58,7 @@ inline void notBits(const uint8_t* a, uint8_t* out)
 	hn::StoreU(hn::Not(hn::LoadU(d, a)), d, out);
 }
 
+//! Writes `a & b`.
 inline void andBits(const uint8_t* a, const uint8_t* b, uint8_t* out)
 {
 	const V128 d;
@@ -72,12 +73,14 @@ inline void andNotBits(const uint8_t* a, const uint8_t* b, uint8_t* out)
 	hn::StoreU(hn::AndNot(hn::LoadU(d, b), hn::LoadU(d, a)), d, out);
 }
 
+//! Writes `a | b`.
 inline void orBits(const uint8_t* a, const uint8_t* b, uint8_t* out)
 {
 	const V128 d;
 	hn::StoreU(hn::Or(hn::LoadU(d, a), hn::LoadU(d, b)), d, out);
 }
 
+//! Writes `a ^ b`.
 inline void xorBits(const uint8_t* a, const uint8_t* b, uint8_t* out)
 {
 	const V128 d;
@@ -105,17 +108,20 @@ inline uint16_t readLE16(const uint8_t* p)
 	return static_cast<uint16_t>(static_cast<uint16_t>(p[0]) | static_cast<uint16_t>(static_cast<uint16_t>(p[1]) << 8));
 }
 
+//! Reads 4 bytes as a little-endian `uint32_t`.
 inline uint32_t readLE32(const uint8_t* p)
 {
 	return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8)
 		 | (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
 }
 
+//! Reads 8 bytes as a little-endian `uint64_t`.
 inline uint64_t readLE64(const uint8_t* p)
 {
 	return static_cast<uint64_t>(readLE32(p)) | (static_cast<uint64_t>(readLE32(p + 4)) << 32);
 }
 
+//! Writes `v` to 8 bytes in little-endian order.
 inline void writeLE64(uint8_t* p, uint64_t v)
 {
 	for (unsigned i = 0; i < 8; ++i)
@@ -131,30 +137,35 @@ inline void splat8(int32_t x, uint8_t* out)
 	hn::StoreU(hn::Set(d, static_cast<uint8_t>(x)), d, out);
 }
 
+//! Broadcasts the low 16 bits of `x` to all 8 lanes.
 inline void splat16(int32_t x, uint8_t* out)
 {
 	const hn::CappedTag<uint16_t, 8> d;
 	hn::StoreU(hn::Set(d, static_cast<uint16_t>(x)), d, reinterpret_cast<uint16_t*>(out));
 }
 
+//! Broadcasts `x` to all 4 lanes.
 inline void splat32(int32_t x, uint8_t* out)
 {
 	const hn::CappedTag<uint32_t, 4> d;
 	hn::StoreU(hn::Set(d, static_cast<uint32_t>(x)), d, reinterpret_cast<uint32_t*>(out));
 }
 
+//! Broadcasts `x` to both 64-bit lanes.
 inline void splat64(int64_t x, uint8_t* out)
 {
 	const hn::CappedTag<uint64_t, 2> d;
 	hn::StoreU(hn::Set(d, static_cast<uint64_t>(x)), d, reinterpret_cast<uint64_t*>(out));
 }
 
+//! Broadcasts `x` to all 4 float lanes.
 inline void splatF32(float x, uint8_t* out)
 {
 	const hn::CappedTag<float, 4> d;
 	hn::StoreU(hn::Set(d, x), d, reinterpret_cast<float*>(out));
 }
 
+//! Broadcasts `x` to both double lanes.
 inline void splatF64(double x, uint8_t* out)
 {
 	const hn::CappedTag<double, 2> d;
@@ -171,30 +182,35 @@ inline void loadV128(const uint8_t* src, uint8_t* out)
 	hn::StoreU(hn::LoadU(d, src), d, out);
 }
 
+//! Copies 16 bytes to the caller-checked address (`v128.store`).
 inline void storeV128(uint8_t* dst, const uint8_t* value)
 {
 	const V128 d;
 	hn::StoreU(hn::LoadU(d, value), d, dst);
 }
 
+//! Reads one byte and broadcasts it to all 16 lanes.
 inline void load8Splat(const uint8_t* src, uint8_t* out)
 {
 	const V128 d;
 	hn::StoreU(hn::Set(d, src[0]), d, out);
 }
 
+//! Reads a little-endian 16-bit value and broadcasts it to all 8 lanes.
 inline void load16Splat(const uint8_t* src, uint8_t* out)
 {
 	const hn::CappedTag<uint16_t, 8> d;
 	hn::StoreU(hn::Set(d, readLE16(src)), d, reinterpret_cast<uint16_t*>(out));
 }
 
+//! Reads a little-endian 32-bit value and broadcasts it to all 4 lanes.
 inline void load32Splat(const uint8_t* src, uint8_t* out)
 {
 	const hn::CappedTag<uint32_t, 4> d;
 	hn::StoreU(hn::Set(d, readLE32(src)), d, reinterpret_cast<uint32_t*>(out));
 }
 
+//! Reads a little-endian 64-bit value and broadcasts it to both lanes.
 inline void load64Splat(const uint8_t* src, uint8_t* out)
 {
 	const hn::CappedTag<uint64_t, 2> d;
@@ -362,6 +378,8 @@ HWY_INLINE V wasmPMin(V a, V b)
 	return hn::IfThenElse(hn::Lt(b, a), b, a);
 }
 
+//! `pmax`: the spec's plain compare-and-select, returning `a` when either
+//! operand is NaN.
 template <class V>
 HWY_INLINE V wasmPMax(V a, V b)
 {
@@ -407,6 +425,7 @@ inline void relaxedDotI8x16I7x16S(const uint8_t* a, const uint8_t* b, uint8_t* o
 			   d16, reinterpret_cast<int16_t*>(out));
 }
 
+//! `i32x4.relaxed_dot_i8x16_i7x16_add_s`: the pairwise dot product plus `c`.
 inline void relaxedDotI8x16I7x16AddS(const uint8_t* a, const uint8_t* b, const uint8_t* c,
 									 uint8_t* out)
 {
@@ -438,6 +457,7 @@ inline void relaxedDotI8x16I7x16AddS(const uint8_t* a, const uint8_t* b, const u
 					   hn::LoadU(d, reinterpret_cast<const T*>(b))), \
 				   d, reinterpret_cast<T*>(out)); \
 	}
+//! \brief Emits the comparison body: the library's mask becomes a lane vector.
 #define WASM_SIMD_OP_CMP(name, entry, T, expr, hwy) \
 	inline void name(const uint8_t* a, const uint8_t* b, uint8_t* out) { \
 		const hn::CappedTag<T, 16 / sizeof(T)> d; \
@@ -445,6 +465,7 @@ inline void relaxedDotI8x16I7x16AddS(const uint8_t* a, const uint8_t* b, const u
 										  hn::LoadU(d, reinterpret_cast<const T*>(b)))), \
 				   d, reinterpret_cast<T*>(out)); \
 	}
+//! \brief Emits the inline `name(a, out)` body of a one-vector op.
 #define WASM_SIMD_OP_UNARY(name, entry, T, expr, hwy) \
 	inline void name(const uint8_t* a, uint8_t* out) { \
 		const hn::CappedTag<T, 16 / sizeof(T)> d; \
@@ -477,8 +498,10 @@ inline void relaxedDotI8x16I7x16AddS(const uint8_t* a, const uint8_t* b, const u
 		const auto v = hn::LoadU(d, reinterpret_cast<const T*>(a)); \
 		return static_cast<int32_t>(hwy); \
 	}
+//! \brief Emits the and-reduction body (same shape as `REDUCE_OR`).
 #define WASM_SIMD_OP_REDUCE_AND(name, entry, T, expr, hwy) WASM_SIMD_OP_REDUCE_OR(name, entry, T, expr, hwy)
 
+//! \brief Emits the one-vector widening body (`din` in, `dout` out).
 #define WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy) \
 	inline void name(const uint8_t* a, uint8_t* out) { \
 		const hn::CappedTag<TIn, 16 / sizeof(TIn)> din; \
@@ -486,8 +509,10 @@ inline void relaxedDotI8x16I7x16AddS(const uint8_t* a, const uint8_t* b, const u
 		const auto v = hn::LoadU(din, reinterpret_cast<const TIn*>(a)); \
 		hn::StoreU(hn::hwy, dout, reinterpret_cast<TOut*>(out)); \
 	}
+//! \brief The pairwise one-vector form: same body as `WIDEN1`.
 #define WASM_SIMD_OP_PAIRWISE(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
 
+//! \brief Emits the two-vector widening body (`din` operands, `dout` result).
 #define WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy) \
 	inline void name(const uint8_t* a, const uint8_t* b, uint8_t* out) { \
 		const hn::CappedTag<TIn, 16 / sizeof(TIn)> din; \
@@ -496,12 +521,16 @@ inline void relaxedDotI8x16I7x16AddS(const uint8_t* a, const uint8_t* b, const u
 		const auto vb = hn::LoadU(din, reinterpret_cast<const TIn*>(b)); \
 		hn::StoreU(hn::hwy, dout, reinterpret_cast<TOut*>(out)); \
 	}
+//! \brief The pairwise two-vector form: same body as `WIDEN2`.
 #define WASM_SIMD_OP_PAIRWISE2(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy)
+//! \brief The narrowing form: same body as `WIDEN2`.
 #define WASM_SIMD_OP_NARROW(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy)
 
 //! The `.high` variants differ only in the *reference*, which reads the upper half
 //! of the operand lanes, so every other layer treats them as the plain form.
+//! \brief The `_high` one-vector widening form: same body as `WIDEN1`.
 #define WASM_SIMD_OP_WIDEN1H(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
+//! \brief The `_high` two-vector widening form: same body as `WIDEN2`.
 #define WASM_SIMD_OP_WIDEN2H(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy)
 //! The conversion shapes: one vector in, one out, with the library expression
 //! written *completely* (not `hn::`-prefixed) because the saturating conversions
@@ -521,6 +550,7 @@ inline void relaxedDotI8x16I7x16AddS(const uint8_t* a, const uint8_t* b, const u
 //! `FORWARD` has no per-target body: the vector TU defines its entry point to
 //! call the reference, so there is nothing for a target to compile (§6.5).
 #define WASM_SIMD_OP_FORWARD(name, entry, TIn, TOut, expr, hwy)
+//! \brief Emits the expand body: converts into the low lanes and zeroes the rest.
 #define WASM_SIMD_OP_EXPAND(name, entry, TIn, TOut, expr, hwy) \
 	inline void name(const uint8_t* a, uint8_t* out) { \
 		const hn::CappedTag<TIn, 16 / sizeof(TIn)> din; \

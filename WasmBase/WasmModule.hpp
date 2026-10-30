@@ -59,7 +59,9 @@ enum class NameKind : uint8_t {
 //! dispatch or results (PPD4).
 /** \brief Opaque compilation-hint record retained from a custom section. */
 struct CompilationHint {
+	//! Offset of the hinted instruction in the function body.
 	uint32_t offset;
+	//! The hint's raw value bytes (meaning depends on the family).
 	std::vector<uint8_t> payload;
 };
 
@@ -78,7 +80,9 @@ public:
 	//! discarded after interning; this vector is the module's only type state
 	//! (docs/proposals/TYPE_MODEL.md TM-6). typeIds[i] names local type i.
 	std::vector<TypeId> typeIds;
+	//! Imported functions, in import-section order within the kind.
 	std::vector<ImportFunction> importFunctions;
+	//! Imported tables.
 	std::vector<ImportTable> importTables;
 	std::vector<ImportMemory> importMemories; //!< Field `importMemories` of type.
 	std::vector<ImportGlobal> importGlobals; //!< Field `importGlobals` of type.
@@ -86,7 +90,9 @@ public:
 	std::vector<ImportType> importTypes; //!< Field `importTypes` of type.
 	//! Import-section order; see ImportOrder in WasmType.hpp.
 	std::vector<ImportOrder> importOrder;
+	//! Type index of each *defined* function (imports first, then these).
 	std::vector<uint32_t> internalFunctionTypeIndices;
+	//! Defined tables.
 	std::vector<TableType> tables;
 	std::vector<MemoryType> memories; //!< Field `memories` of type.
 	std::vector<Global> globals; //!< Field `globals` of type.
@@ -105,7 +111,9 @@ public:
 	//! consulted (PARSER_PROPOSALS.md PP-1/PPD4); the families are
 	//! `metadata.code.{compilation_priority,instr_freq,call_targets}`.
 	std::map<uint32_t, std::vector<CompilationHint>> compilationPriorityHints;
+	//! `metadata.code.instr_freq` records, keyed by global function index (inert).
 	std::map<uint32_t, std::vector<CompilationHint>> instructionFrequencyHints;
+	//! `metadata.code.call_targets` records, keyed by global function index (inert).
 	std::map<uint32_t, std::vector<CompilationHint>> callTargetHints;
 	std::map<uint32_t,std::string> funcNames; //!< Field `funcNames` of type.
 	std::string debugName; //!< Field `debugName` of type.
@@ -114,7 +122,9 @@ public:
 	//! (`localNames`, `labelNames`, `fieldNames`, `paramNames`,
 	//! `tagParamNames`) are keyed by an outer index first.
 	std::map<uint32_t,std::string> typeNames;
+	//! Table names, keyed by table index.
 	std::map<uint32_t,std::string> tableNames;
+	//! Memory names, keyed by memory index.
 	std::map<uint32_t,std::string> memoryNames;
 	std::map<uint32_t,std::string> globalNames; //!< Field `globalNames` of type.
 	std::map<uint32_t,std::string> elementNames; //!< Field `elementNames` of type.
@@ -132,29 +142,49 @@ public:
 private:
 	void parseBody(Elv::Io::Device& file, std::optional<uint64_t> end) override;
 	void processSecetions(Elv::Io::Device& file);
-	//! Section processors
+	//! Section processors: one per section kind, in the order they may appear.
+	//! Parses the type section and interns its recursive groups.
 	void processTypeSection(Elv::Io::Device& file, const Section& section);
+	//! Parses the import section into the per-kind import vectors.
 	void processImportSection(Elv::Io::Device& file, const Section& section);
+	//! Parses the function section (the type index of each defined function).
 	void processFunctionSection(Elv::Io::Device& file, const Section& section);
+	//! Parses the table section.
 	void processTableSection(Elv::Io::Device& file, const Section& section);
+	//! Parses the memory section.
 	void processMemorySection(Elv::Io::Device& file, const Section& section);
+	//! Parses the global section.
 	void processGlobalSection(Elv::Io::Device& file, const Section& section);
+	//! Parses the export section.
 	void processExportSection(Elv::Io::Device& file, const Section& section);
+	//! Parses the start section (the start function index).
 	void processStartSection(Elv::Io::Device& file, const Section& section);
+	//! Parses the element section.
 	void processElementSection(Elv::Io::Device& file, const Section& section);
+	//! Parses the code section and rebases the branch hints onto each body.
 	void processCodeSection(Elv::Io::Device& file, const Section& section);
+	//! Parses the data section.
 	void processDataSection(Elv::Io::Device& file, const Section& section);
+	//! Parses the data-count section.
 	void processDataCountSection(Elv::Io::Device& file, const Section& section);
+	//! Parses the tag section.
 	void processTagSection(Elv::Io::Device& file, const Section& section);
+	//! Parses the stringref literal section.
 	void processStringSection(Elv::Io::Device& file, const Section& section);
+	//! Dispatches a custom section to its named sub-parser, keeping any payload.
 	void processCustomSection(Elv::Io::Device& file, const Section& section);
+	//! Parses the `name` custom section into the name maps.
 	void processNameSection(Elv::Io::Device& file, const Section& section);
+	//! Parses `metadata.code.branch_hint` into `branchHintsByFuncIndex`.
 	void processBranchHintSection(Elv::Io::Device& file, const Section& section);
+	//! Parses one compilation-hint family into `out`.
 	void processCompilationHintSection(Elv::Io::Device& file, const Section& section,
 			std::map<uint32_t, std::vector<CompilationHint>>& out);
 	//! Type processors
 	void processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t numSubTypes, std::vector<Subtype>& out, uint32_t groupFirst);
+	//! Parses a constant-expression initialiser, returning its raw bytes.
 	std::vector<uint8_t> parseInitExpr(DWasmStream& stream);
+	//! Parses the expression-list form of an element segment.
 	void handleComplexElementSegment(DWasmStream& stream, ElementSegment& seg);
 public:
 	/** \brief Constructs an empty core module artifact. */
@@ -247,8 +277,11 @@ private:
 	//! The policy the module was parsed with; `parseBody` reuses it for the
 	//! validation pass at the end of decoding (PARSER_PROPOSALS.md PP-2).
 	ValidationOptions parseOptions{};
+	//! The module-local type index a store `TypeId` was interned from.
 	uint32_t localTypeIndex(TypeId id) const;
+	//! The decoded value type for a canonical value type.
 	ValueType valueTypeFromCanon(const CanonValueType& type) const;
+	//! The decoded `FuncType` for a core type view (must be a function type).
 	FuncType funcTypeFromView(CoreTypeView view) const;
 public:
 	//! Compatibility view of a canonical storage type with module-local type

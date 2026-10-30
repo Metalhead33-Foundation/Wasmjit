@@ -39,7 +39,9 @@ class StoreOwnedTable;
 //! resurrection must put the tag back (docs/proposals/GC.md RC-1b/RC-3).
 /** \brief Deferred-reclamation record for a GC object whose reference count reached zero. */
 struct PendingGcObject {
+	//! The object awaiting reclamation at the next safepoint.
 	void*  ref;
+	//! The type tag the queue stamped over the object's header.
 	TypeId typeId;
 };
 
@@ -58,12 +60,14 @@ struct ModuleInstanceInternals {
 	//! exporter's (or resolver's) storage, defined ones into `globalsStorage`.
 	//! A mutable import therefore aliases the exporter (MG-2/MG-3).
 	std::vector<Value>     globalsStorage;
+	//! The global index space `ctx.globals` points at (imports first).
 	std::vector<Value*>    globalRefs;
 	//! Tables are owned by the Store as well; `tableRefs` is the table index
 	//! space that ctx.tables points at (imports first, then own tables). It is
 	//! borrowed, not owned, and never resized after instantiation. Each
 	//! TableInstance view is updated in place when the Store grows it.
 	std::vector<TableInstance*> tableRefs;
+	//! One `Callable` per defined function, indexed by defined-function order.
 	std::vector<Callable> internalCallables;
 	std::vector<Callable>  importStorage; //!< Owns the WasmCallable objects for imports
 	//! Tags are process-wide identities owned by the Store (`TagId`); this is the
@@ -71,7 +75,9 @@ struct ModuleInstanceInternals {
 	//! (docs/proposals/EXCEPTIONS.md EX-2). Filled before compilation, so the
 	//! backend can fold a `throw tagidx` into the constant id.
 	std::vector<TagId> tagIds;
+	//! True once the data segment has been dropped (`data.drop`), per segment.
 	std::vector<std::atomic<bool>> dataSegmentDropped;
+	//! True once the element segment has been dropped, per segment.
 	std::vector<std::atomic<bool>> elementSegmentDropped;
 	//! Element segments in expression form hold *references*, evaluated once at
 	//! instantiation (the spec never re-evaluates a segment per use). Keyed by
@@ -96,6 +102,7 @@ struct ModuleInstanceInternals {
 	//! plain `uint64_t` would be a data race (docs/MULTI_AGENT_FEASIBILITY.md
 	//! §2.3.5). They are read at safepoints and in tests.
 	std::atomic<uint64_t> gcAllocatedObjects{0};
+	//! Count of objects handed back for reuse (diagnostics only; atomic).
 	std::atomic<uint64_t> gcReclaimedObjects{0};
 	//! Objects whose reference count reached zero (RC-1b). They are only
 	//! recycled by gcCollect(), at a safepoint where no Wasm frame is live.
@@ -108,6 +115,7 @@ struct ModuleInstanceInternals {
 	//! Stored as void* to keep this header backend-agnostic.
 	//! Parallel to module->internalFunctionTypeIndices.
 	std::vector<void*> compiledFunctions;
+	//! Per-local-type backend translation handles, filled by `translateTypes`.
 	std::vector<void*> translatedTypes;
 
 	//! Materialized string literals from section 14 (STRINGREF.md STR-2),
@@ -123,6 +131,8 @@ struct ModuleInstanceInternals {
 	//! trap interns the finished message here (docs/SAFETY.md §2.4,
 	//! docs/proposals/EXTENDED_NAME_SECTION.md ENS-5).
 	std::set<std::string> trapMessages;
+	//! Interns a trap message, returning a pointer that stays valid for the
+	//! instance's lifetime (the `TrapSlot` may outlive the module).
 	const char* internTrapMessage(std::string message)
 	{
 		return trapMessages.insert(std::move(message)).first->c_str();
@@ -153,29 +163,38 @@ private:
 	//! execute one instance at the same time, while `inCall()` must still mean
 	//! "anyone inside" for the GC safepoint's quiescence rule.
 	std::atomic<std::uint32_t> activeCalls{0};
+	//! Resolves the module's value/function/table/global/tag imports.
 	void resolveImports(ImportResolver& importResolver);
+	//! Resolves the module's type imports into `importedTypeIds`.
 	void resolveTypeImports(ImportResolver& importResolver);
 	std::vector<TypeId> importedTypeIds; //!< Field `importedTypeIds` of WASMJIT_API.
+	//! Creates the instance's memories and points `ctx.memories` at them.
 	void initializeMemories();
+	//! Creates the globals' `Value` cells and evaluates their initialisers.
 	void initializeGlobals();
+	//! Materialises the stringref literals into Store-owned string objects.
 	void initializeStringLiterals();
+	//! Creates the tables' `Callable*` slot arrays.
 	void initializeTable();
 	//! Rewrites `ref.func` sentinels left in globalsStorage by evalConstantExpr
 	//! into real Callable pointers. Must run after declareFunctions() /
 	//! compileFunctions(), because those callable tables do not exist yet when
 	//! initializeGlobals() runs (i.e. in the constructor).
 	void resolveGlobalRefFuncs();
+	//! The same rewrite, walking one GC object's reference-typed slots.
 	void resolveRefFuncsInObject(void* ref, std::vector<void*>& visited);
 	//! The same rewrite for table initialiser expressions: `initializeTable()` runs
 	//! in the constructor, so a `(ref.func …)` initialiser is stored as null there
 	//! and every slot of that table is filled in here, once the callables exist
 	//! (docs/proposals/GC.md G5). Must run before element segments are applied.
 	void resolveTableRefFuncs();
+	//! Evaluates a constant initialiser expression to a value.
 	Value evalConstantExpr(const std::span<const std::byte>& expr);
 	//! Reference-counting internals (docs/proposals/GC.md §6, RC-1/RC-3).
 	//! `gcRefcountSlot` returns the object's count word, or nullptr when `ref`
 	//! is not a GC object (null, an i31 immediate, an externref or a funcref).
 	uint32_t* gcRefcountSlot(const void* ref);
+	//! Drops one object's count to zero and queues it for safepoint reclamation.
 	void reclaimGcObject(void* ref);
 
 	//! \par Safepoint walker (docs/proposals/GC.md RC-3)
@@ -204,7 +223,9 @@ private:
 	//! not fit is merely not trialled now, which can delay a collection but never
 	//! free something live.
 	static constexpr size_t kMaxCycleCandidates = 4096;
+	//! Records `ref` as a possible root of a garbage cycle.
 	void possibleCycleRoot(void* ref);
+	//! Runs the bounded trial deletion (RC-2) at a safepoint.
 	void collectCycles();
 public:
 	friend class ModuleInstantiator;
@@ -277,8 +298,10 @@ public:
 	//! on failure; the generated caller checks the pending slot.
 	void* arrayNewArray(uint32_t dstTypeIdx, uint32_t srcTypeIdx, void* src,
 			uint32_t start, uint32_t length);
+	//! `array.new_data`-style construction from a memory range.
 	void* arrayNewMemory(uint32_t dstTypeIdx, uint32_t memIdx,
 			uint32_t start, uint32_t length);
+	//! `array.new_elem`-style construction from a table range.
 	void* arrayNewTable(uint32_t dstTypeIdx, uint32_t tableIdx,
 			uint32_t start, uint32_t length);
 	//! Range validation without copying. `array.new_data` / `array.new_elem` must
@@ -286,8 +309,11 @@ public:
 	//! length the allocation fails first and reports "out of memory" instead
 	//! (docs/proposals/GC.md GC-5 / §5.1). 64-bit arithmetic, no overflow.
 	void checkDataSegmentRange(uint32_t dataIdx, uint32_t srcByteOffset, uint32_t lenElems, uint32_t elemSize);
+	//! The element-segment form of `checkDataSegmentRange`.
 	void checkElementSegmentRange(uint32_t elemIdx, uint32_t srcIndex, uint32_t lenElems);
+	//! Allocates a GC struct of `size` bytes with the given local type.
 	void* allocateStructObject(uint32_t size, uint32_t localTypeIdx, void* descriptor = nullptr);
+	//! Allocates a GC array of `length` elements.
 	void* allocateArrayObject(uint32_t dataOffset, uint32_t elementSize, uint32_t length, uint32_t localTypeIdx);
 	//! Custom Descriptors: the RTT/descriptor reference stored in a struct's
 	//! header, or nullptr for a null/non-struct reference. `ref.get_desc` traps
@@ -363,11 +389,13 @@ public:
 	//! a reference that is not counted (or unknown).
 	/** \brief Reads a GC object's reference count for diagnostics. \param ref Candidate reference. \return Reference count, or zero when ref is not a counted GC object. */
 	uint32_t gcRefCount(const void* ref) const;
+	//! Total GC objects allocated on this instance (diagnostics, lock-guarded).
 	uint64_t gcAllocatedObjects() const
 	{
 		std::lock_guard<std::recursive_mutex> lock(internals.gcMutex);
 		return internals.gcAllocatedObjects;
 	}
+	//! Total GC objects reclaimed on this instance (diagnostics, lock-guarded).
 	uint64_t gcReclaimedObjects() const
 	{
 		std::lock_guard<std::recursive_mutex> lock(internals.gcMutex);
@@ -455,6 +483,7 @@ public:
 	const ProfileConfig& profile() const { return activeProfile; }
 
 protected:
+	//! Evaluates a constant expression against this instance's state.
 	Value evalConstantExpr(const std::span<const std::byte>& expr, ModuleInstance& instance);
 	//! Lower the module's types into the backend's representation, so the
 	//! declared and the compiled functions agree on one ABI.
@@ -472,6 +501,7 @@ protected:
 private:
 	//! These are concrete and shared across all backends.
 	void applyActiveSegments(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals);
+	//! The profile the module was instantiated with (docs/proposals/PROFILES.md).
 	ProfileConfig activeProfile{};
 };
 

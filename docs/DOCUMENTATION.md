@@ -226,12 +226,17 @@ The strict pass is a *work list*, not a gate: today it reports the gap counted i
 - **Not every declaration is documented *yet*.** The rule above is about the
   shape and the completeness of a block that exists; a declaration with no block
   at all remains a gap. Measured on 2026-10-30 with the strict pass (§6):
-  **474 declarations** (270 functions, 162 fields and constants, 30 macros,
-  5 enums, 1 typedef, 6 compounds). That is down from **4,591** before the
-  sweep, and it is a list to work through, not a decision to stop: a new or
-  edited declaration is expected to arrive documented, and the count must not
-  grow. `wasm_simd_scalar.hpp`, `WasmDiagnostics.hpp`, `WasmTypeStore.hpp` and
-  `WasmType.hpp` are the big headers that have reached zero.
+  **358 declarations** (193 functions, 136 fields and constants, 20 macros,
+  5 enums, 1 typedef, 3 compounds), concentrated as: `WasmComponentAsync.hpp`
+  67, `WasmValidator.hpp` 59, `WasmComponentRuntime.hpp` 38,
+  `wasmjit_backend.h` 24, `WasmComponentModel.hpp` 23, `Test/WastScript.hpp` 18,
+  `LibjitOpcodeDispatcher.hpp` 17, `WasmContinuation.hpp` 16, and 30 smaller
+  headers. That is down from **4,591** before the sweep, and it is a list to
+  work through, not a decision to stop: a new or edited declaration is expected
+  to arrive documented, and the count must not grow.
+  `wasm_simd_scalar.hpp`, `WasmDiagnostics.hpp`, `WasmTypeStore.hpp`,
+  `WasmType.hpp`, `WasmTypeIdentity.hpp`, `wasm_simd_vector.hpp`, `WasmModule.hpp`
+  and `WasmModuleInstance.hpp` are the headers that have reached zero.
 - **A doc block must say something.** A block of the form
   "`\brief Performs the <name> operation. \param x Input value or output
   destination for this operation.`" is *worse than no block*: it renders, it is
