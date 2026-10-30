@@ -739,11 +739,12 @@ private:
 
 	const WASM::GlobalType& validateGlobalIndex(WASM::GlobalIdx index) const
 	{
-		if (index >= module.importGlobals.size() + module.globals.size())
+		// Module::globals is already the complete global index space:
+		// imported globals precede defined globals. importGlobals is only the
+		// import-section metadata and must not be counted a second time.
+		if (index >= module.globals.size())
 			throw std::runtime_error("AsmJit global instruction references an unknown global");
-		const WASM::GlobalType& type = index < module.importGlobals.size()
-				? module.importGlobals[index].global
-				: module.globals[index - module.importGlobals.size()].type;
+		const WASM::GlobalType& type = module.globals[index].type;
 		if (type.contentType.opcode != WASM::ValueTypeCode::I32)
 			throw std::runtime_error("AsmJit initial global lowering supports i32 globals only");
 		return type;
@@ -789,11 +790,10 @@ private:
 
 	void validateMemoryIndex(WASM::MemIdx index) const
 	{
-		if (index >= module.importMemories.size() + module.memories.size())
+		// Module::memories is the complete memory index space, imports first.
+		if (index >= module.memories.size())
 			throw std::runtime_error("AsmJit memory instruction references an unknown memory");
-		const WASM::MemoryType& type = index < module.importMemories.size()
-				? module.importMemories[index].memory
-				: module.memories[index - module.importMemories.size()];
+		const WASM::MemoryType& type = module.memories[index];
 		if (type.indexType != WASM::MemoryIndexType::I32)
 			throw std::runtime_error("AsmJit initial memory lowering supports memory32 only");
 	}
