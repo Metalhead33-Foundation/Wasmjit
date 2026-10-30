@@ -22,6 +22,8 @@
 */
 
 #include <cstddef>
+#include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -32,6 +34,19 @@ struct Module;
 //! the rewriter's own refusals for a construct it cannot translate.
 /** \brief Builds the named refusal for a superseded construct. \param construct The instruction spelling and opcode. \return The operator-facing message, including every remedy. */
 std::string legacyExceptionHandlingMessage(std::string_view construct);
+
+//! Cheap pre-check for the recovery policy: does any byte of a decoded body
+//! look like a superseded exception opcode?
+//!
+//! The superseded opcodes are single primary bytes that appear literally in the
+//! body, so this cannot miss a body that uses one; a byte inside an immediate
+//! can only cause a harmless extra scan by the rewrite, which then finds no
+//! legacy construct and leaves the body byte-identical. It exists so the
+//! default recovery policy costs one pass over body bytes, not a full
+//! instruction scan of every function on every load
+//! (docs/proposals/LEGACY_EXCEPTIONS.md `LE-6`).
+/** \brief Tests whether a body may contain the superseded exception form. \param code The decoded function body. \return true when a superseded opcode byte occurs in the body. */
+bool mayUseLegacyExceptionHandling(std::span<const std::uint8_t> code) noexcept;
 
 //! Rewrites every function body of `module` that uses the superseded form into
 //! the final `try_table` encoding, appending a local where a `rethrow` needs

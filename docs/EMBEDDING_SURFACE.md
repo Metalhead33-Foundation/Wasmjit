@@ -314,21 +314,27 @@ question from what the validator may *reject*, so it has its own struct:
 to `ValidationOptions` rather than inside `RuntimeConfig`. Today it carries one
 switch — `legacyExceptionHandling`, which translates the **superseded Phase-3
 exception form** into the final `try_table` encoding instead of refusing it
-([`proposals/LEGACY_EXCEPTIONS.md`](proposals/LEGACY_EXCEPTIONS.md) §4.6) — and it
-is where any future parser-side strictness knob lands.
+([`proposals/LEGACY_EXCEPTIONS.md`](proposals/LEGACY_EXCEPTIONS.md) §4.6) — and
+`legacyExceptionRecovery`, which is **on by default** and does the same only for
+the bodies that need it, reporting the recovery as
+`WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN`. This is also where any future
+parser-side strictness knob lands.
 
-**Precedence: explicit argument > environment > strict default.** Every
+**Precedence: explicit argument > environment > default.** Every
 `Module::fromFile` overload that does not take a `ParseOptions` seeds one from
-`ParseOptions::fromEnvironment()`, which reads `WASMJIT_LEGACY_EH`; passing a
+`ParseOptions::fromEnvironment()`, which reads `WASMJIT_LEGACY_EH` (`1` =
+unconditional rewriting, `0` = strict, unset = recovery); passing a
 `ParseOptions` overrides the environment for that load and nothing else. The same holds for
 `Component::fromFile`, and a component's embedded core modules and nested
 components inherit the component's policy rather than re-reading the
 environment — a component must not hand its cores a stricter decoder than it
 used itself. The
-default struct is strict, so the argument-less path only accepts the deprecated
-form when the process asked for it. `module.parserOptions()` reports the policy an
+default struct recovers, so the argument-less path loads a module that uses the
+deprecated form, translates only the bodies that use it, and records the
+decision; strictness is one field away (`legacyExceptionRecovery = false`).
+`module.parserOptions()` reports the policy an
 artifact was actually loaded with, which is otherwise unobservable: the
-translation leaves no marker in the module.
+translation leaves no marker in the module beyond the diagnostic.
 
 Three settings stay process-wide environment variables on purpose, because they
 are deployment decisions rather than per-load policy: `WASMJIT_MAX_TOTAL_BYTES`

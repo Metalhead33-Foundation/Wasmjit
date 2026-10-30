@@ -1,15 +1,18 @@
 # Legacy Exception Handling (`try`/`catch`) — Compatibility Notes, Encodings, and the Cost of Admission {#prop_legacy_exceptions}
 
-Status: design note / compatibility study (revision 3 — 2026-10-30: `LE-1`…`LE-6`
-and now `LE-9` are **implemented** behind the opt-in switch, and `LE-8` records
-the one shape the rewrite still refuses; revision 1 was the study, revision 2 the
-shipped adapter). It analyses the **superseded Phase-3
+Status: design note / compatibility study (revision 4 — 2026-10-30: `LE-6` now has
+three policies — **recovery is the default**, with strict and unconditional
+rewriting as opt-ins — and the recovery is reported as
+`WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN`; revision 3 shipped `LE-1`…`LE-6` and
+`LE-9` behind a strict default, and `LE-8` records the one shape the rewrite
+still refuses; revision 1 was the study, revision 2 the shipped adapter). It
+analyses the **superseded Phase-3
 ("legacy") exception-handling binary form**, what it cost to accept, and how it
 was accepted — and it answers the six questions it was commissioned with in §10.
 **Accepting the form is not a support claim**: it is a load-time compatibility
-adapter, off by default, and the engine still executes only the final encoding.
-It ships no interpreter, no second exception runtime and no engine change to the
-backend contract.
+adapter, the engine still executes only the final encoding, and a recovery is
+reported rather than silent. It ships no interpreter, no second exception
+runtime and no engine change to the backend contract.
 
 Audience: anyone touching the exception front end
 (`WasmBase/WasmOpcode.hpp`, `WasmOpcodeDispatcher`, `WasmLegacyEh`,
@@ -225,7 +228,7 @@ every function with a destructor needs a cleanup pad that rethrows.
 | Piece | Where | What it does |
 |---|---|---|
 | **Named refusal** (`LE-1`) | `WasmOpcodeDispatcher.cpp`, `legacyExceptionHandlingMessage()` | The five opcodes decode their immediates and throw a message naming the proposal, the instruction (`try (0x06)`…), the three remedies and this note. `WASM.VALIDATE.RULE` carries it, so `--diagnose` prints it |
-| **Opt-in switch** (`LE-6`) | `ParseOptions::legacyExceptionHandling` ([`WasmParseOptions.hpp`](../../WasmBase/WasmParseOptions.hpp)), passed through `Module::fromFile` and consulted in `Module::parseBody` | A parser-side policy, not an environment variable: `module.fromFile(device, WASM::ParseOptions{}.acceptingLegacyExceptionHandling(), store)`. The argument-less overload seeds it from `WASMJIT_LEGACY_EH`, and `module.parserOptions()` reports what an artifact was loaded with. A `Component` carries the same policy into its embedded core modules. Off by default |
+| **Opt-in switch** (`LE-6`) | `ParseOptions::legacyExceptionHandling` and `ParseOptions::legacyExceptionRecovery` ([`WasmParseOptions.hpp`](../../WasmBase/WasmParseOptions.hpp)), passed through `Module::fromFile` and consulted in `Module::parseBody` | A parser-side policy, not an environment variable. Three states: **recovery** (default) rewrites only the bodies that use the form and emits `WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN` (a cheap byte pre-check keeps a final-form module off the rewrite path); **strict** (`legacyExceptionRecovery = false`) refuses with `LE-1`'s message; **unconditional** (`acceptingLegacyExceptionHandling()`) rewrites and stays silent. The argument-less overload seeds it from `WASMJIT_LEGACY_EH` (`1` = unconditional, `0` = strict, unset = recovery), and `module.parserOptions()` reports what an artifact was loaded with. A `Component` carries the same policy into its embedded core modules |
 | **The rewrite** (`LE-3`, `LE-4`) | `WasmBase/WasmLegacyEh.cpp`, `BodyRewriter` | Runs once, before `validateValueTypes()`/`validate()`. Decodes each body into instruction spans (reusing the engine's own immediate parsing, so operand lengths cannot drift), then emits the §10.3 shape: `block` merge point, payload landing blocks, `try_table` with the same clauses, `br` to the merge, then the arms in binary order. Bodies that do not use the form are left byte-identical |
 | **`rethrow`** (`LE-4`) | same | The rethrowing arm's clause becomes `catch_ref`/`catch_all_ref`, the exception reference lands in a synthetic `exnref` local appended to the body's locals, and `rethrow n` becomes `local.get n-th arm; throw_ref`. Payload identity is preserved, and `rethrow 1`+ resolves against the enclosing arms, not against labels |
 | **`delegate`** (`LE-5`) | same | A try with no arms becomes a plain `block`: its exceptions propagate. The *skip* case is refused by name (`LE8`) rather than approximated |
@@ -256,7 +259,7 @@ was closed by *refusing* the construct says so.
 | ~~**LE4**~~ | ~~**There is no label-depth remap and no module rewriter.**~~ **Done (LE-3):** `BodyRewriter` scans a body into instruction spans, `remapDepth()` renumbers every branch, and `Module::parseBody` runs it once before validation. **Class A.** | `WasmBase/WasmLegacyEh.{hpp,cpp}`; `[legacy-eh]` `b1`–`b4` | Closed |
 | ~~**LE5**~~ | ~~**A body rewrite invalidates branch-hint offsets.**~~ **Done (LE-3):** a rewritten body drops its `branchHints`; an untouched body keeps them. | `rewriteLegacyExceptionHandling()` | Closed |
 | ~~**LE6**~~ | ~~**No legacy fixtures, and no upstream suite to borrow.**~~ **Done (LE-2):** `Test/wasm_wat/legacy/` holds six `.wat` sources, their committed `.wasm`, and Binaryen's translated twin; `Test/legacy-eh-probe.sh` regenerates them and records `P1`–`P9`. **Class A** (tests only). | `Test/wasm_wat/legacy/`, `Test/legacy-eh-probe.sh`, `[legacy-eh]` | Closed |
-| ~~**LE7**~~ | ~~**The default configuration must not accept deprecated input silently.**~~ **Done (LE-6):** `WASMJIT_LEGACY_EH` is the only way in, it is read once per load, and the default path still refuses with `LE-1`'s message. **Class A.** | `ParseOptions::legacyExceptionHandling`, `Module::parseBody`; `[legacy-eh]` first and last tests | Closed |
+| ~~**LE7**~~ | ~~**The default configuration must not accept deprecated input silently.**~~ **Done (LE-6):** the default configuration **reports** every acceptance (`WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN`), only the bodies that use the form are touched, and the strict policy (`legacyExceptionRecovery = false`, `WASMJIT_LEGACY_EH=0`) still refuses with `LE-1`'s message. **Class A.** | `ParseOptions::legacyExceptionRecovery`, `Module::parseBody`; `[legacy-eh]` covers recovery, strict, unconditional and the final-form byte-identity case | Closed |
 | **LE8** | **A `delegate` whose target skips an intervening catch is refused.** Honouring the skip needs the *enclosing* try's clauses to be split per region (its arms must not catch this try's throws), which means duplicating arm bodies per region and splitting the body into separately-protected spans. **The obvious workaround does not work** (§10.6 records why): catching the exception at the delegating try and branching out past the intervening handler looks like a local trick, but a branch that leaves a frame carrying a result type has to supply that frame's results, and an unwind has none to give. So the refusal stands, and it now also covers a *final-form* `try_table` in between (`isCatchFrame`, `catchCount`) — the guard matters because `LE-9` removed the mixed-body refusal that used to hide that case, so without it the rewrite would accept and miscompile. **Class A.** | `emitLegacyTry`, `isCatchFrame`; `[legacy-eh]` "a delegate that would skip an intervening catch is refused" | Medium (fidelity), Low (frequency) |
 | ~~**LE9**~~ | ~~**A body that mixes the superseded form with `try_table` is refused.**~~ **Done (LE-9):** a `try_table` is an ordinary frame for depth bookkeeping, and `emitTryTable` re-parses its immediate and renumbers every clause label exactly like a branch (a clause's label is resolved *outside* the `try_table`, so it is remapped before that frame opens). A `try_table` nested in a legacy try and one nested in a legacy *arm* both round-trip. **Class A.** | `emitTryTable`, `build()`; `Test/wasm_wat/legacy/mixed.wat`; `[legacy-eh]` "a body may mix the superseded form with try_table" | Closed |
 
@@ -280,7 +283,7 @@ that keeps it honest.
 
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
-| **LED1** | **Accept the legacy form only behind an opt-in switch; the default stays strict.** ✅ *Adopted as `LE-6`.* | §3 leaves scope to the implementation, and the proposal deprecates itself, so "off unless asked" is the honest default. It also keeps [`../SAFETY.md`](../SAFETY.md)'s "tell artifacts apart before decoding" true: the *default* decoder still refuses a form the spec has retired. | A future embedder can load old modules without making every other embedder accept deprecated input, and no policy has to be reversed later. |
+| **LED1** | **Accept the legacy form by default, but only by *recovering* — rewriting the bodies that use it and reporting it; strict and unconditional acceptance are opt-ins.** ✅ *Adopted as `LE-6` (revision 4).* | The proposal deprecates itself, so silence would be dishonest; a *reported* recovery is not silence. Strictness is preserved for an embedder that wants it (`legacyExceptionRecovery = false`), and "tell artifacts apart before decoding" ([`../SAFETY.md`](../SAFETY.md)) stays true because a final-form module is never touched and a legacy one is named in the diagnostics. | A legacy module loads without a per-toolchain flag, the decision is visible in the record stream, and no policy has to be reversed later. |
 | **LED2** | **Desugar in the front end; never let a backend see a legacy opcode.** ✅ *Adopted as `LE-3`.* | §3 imposes no unwinding mechanism, only observable control flow, and every legacy construct reduces to `try_table` + branches, which the engine already executes (`EX-1`…`EX-7`). | Zero duplication across LibJit/SLJIT/AsmJit, one place to test, and the gap stays **Class A** instead of "Class A in the interface plus Class B in every backend". The alternative — native handler arms — restructures the control-flow model and is **Class E** (§10.3). |
 | **LED3** | **Validate the legacy form with the same operand-stack taint the final form already uses.** ✅ *Adopted: the rewrite runs before `validate()`, so the validator sees only final-form code and the taint it already applies.* | The catch payload's stack effect is *already* unmodelled for `try_table` (`typeTainted`); tag indices, label ranges, arm result arity and branch depths are still checked. | No second, better validator has to be built for a deprecated form. |
 | **LED4** | **Refuse `delegate` when its target skips an intervening catch (`LE8`); implement the non-skipping case (`LE-5`).** | **Measured:** clang 23 emits `catch_all` + `rethrow` for cleanup pads, not `delegate` (§4.5 `P9`), so the skipped case is rare in current output — and a construct whose skipping semantics is not implemented must not be approximated. `rethrow` is **not** in this bucket: it is on the hot path (`LE2`) and shipped with `LE-3`. | The common case works end-to-end (`d1`, `d2`); the remaining case gets its own milestone, fixture and review. |
@@ -305,7 +308,8 @@ that keeps it honest.
 
 `LE-0`…`LE-7` and `LE-9` are done; `LE-8` is the one open row. The order was: name the
 refusal and build the fixtures first (they pay off without committing to
-anything), then the rewrite, then the switch that makes it opt-in.
+anything), then the rewrite, then the policy that decides when it runs — strict,
+recovery (the default since revision 4) or unconditional.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
@@ -316,7 +320,7 @@ anything), then the rewrite, then the switch that makes it opt-in.
 | **`LE-4` — `rethrow` with payload identity** | `✅` `catch_ref`/`catch_all_ref` on the rethrowing arm, a synthetic `exnref` local, `local.set` at the landing, `throw_ref` at the site. **Class A.** | `LE2` | Same-function, cross-function and void-payload rethrows land in the right arm (`same` = 6, `outer` = 49, `voidpath` = 3). |
 | **`LE-5` — `delegate`** | `◑` The non-skipping case ships (a try with no arms becomes a block); the skipping case is refused by name. **Class A.** | `LE3` | `d1`/`d2` pass; `delegate_skip` is refused with a message naming the construct. **`LE8` remains open.** |
 | **`LE-9` — Mixed bodies** | `✅` A `try_table` opens and closes like any other frame, and its clause labels are renumbered by the same `remapDepth` a branch uses. **Class A.** | `LE9` | `mixed.wat` loads and returns 42/11/42/9; the strict policy still refuses it, because the legacy half is still the legacy half. |
-| **`LE-6` — The opt-in switch** | `✅` `ParseOptions::legacyExceptionHandling` (parser policy, `WasmParseOptions.hpp`), consulted in `Module::parseBody`; `WASMJIT_LEGACY_EH` only seeds the default overloads. | `LE7` | The default refuses; the policy accepts; `[legacy-eh]` covers both directions and the precedence rule. |
+| **`LE-6` — The switch** | `✅` `ParseOptions::legacyExceptionRecovery` (default), `legacyExceptionHandling` (unconditional) and a strict setting (`WasmParseOptions.hpp`), consulted in `Module::parseBody`; `WASMJIT_LEGACY_EH` only seeds the default overloads. | `LE7` | The default recovers *and reports*; strict refuses; unconditional rewrites; `[legacy-eh]` covers all three and the final-form byte-identity case. |
 | **`LE-8` — `delegate` that skips a catch** | **Not started.** Needs per-region clause splitting of the enclosing try, i.e. duplicated arm bodies. | `LE8` | A fixture whose delegate target skips an intervening catch runs with the intermediate arm *not* catching. Until then the refusal stays. |
 
 **Where the switch lives, and why not in `RuntimeConfig`.** It is a parser-side
@@ -442,8 +446,9 @@ rather than silent gaps.
 - [`../TESTING.md`](../TESTING.md) — where the `[legacy-eh]` tag and the probe
   script are listed next to the other gates.
 - [`../SAFETY.md`](../SAFETY.md) §2.1 — the "tell artifacts apart before
-  decoding" rule the switch keeps true: the default decoder still refuses the
-  retired form.
+  decoding" rule the policy keeps true: a final-form module is never touched, a
+  legacy body is named in `WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN`, and the
+  strict policy still refuses the retired form outright.
 - **`M-1`** (measurement, not a document) — clang 23.1.4, 2026-10-30: the default
   of `-fwasm-exceptions` is the legacy encoding; `-mllvm -wasm-use-legacy-eh=false`
   switches it. Recorded in §4.5 `P6`/`P7`/`P8` as a local observation, scoped to
@@ -479,11 +484,12 @@ What the answer does **not** say is that the bytes are free *forever*:
   and a decoder that has already taught itself the legacy meaning then has two
   readings of the same byte, which is the one place a real conflict could appear
   later.
-- **Mitigation is the opt-in switch (`LED1`), not good intentions.** With the
-  switch off the default decoder remains exactly as spec-faithful as it is now;
-  with it on, the embedder has asked for the deprecated reading and the engine
-  can say so in a diagnostic. `LED1` turns "no conflict today" into "no conflict
-  by construction".
+- **Mitigation is the parser policy (`LED1`), not good intentions.** A strict
+  policy (`legacyExceptionRecovery = false`) keeps the decoder exactly as
+  spec-faithful as it was before `LE-6`; the default *recovers* and therefore
+  says so in a diagnostic, and the unconditional policy exists for an embedder
+  that has asked for the deprecated reading and does not want to be told.
+  `LED1` turns "no conflict today" into "no conflict by construction".
 
 ### 10.2 Can it be safely included, in spite of being deprecated?
 
@@ -492,7 +498,7 @@ conditions are the deviations of §6, stated as gates:
 
 | # | Condition | Why it is the condition |
 |---|---|---|
-| **C1** | **Default off, opt-in on (`LED1`).** | The spec discouraged the form; an engine that accepts it silently is more permissive than the spec and gives an embedder no way to say "final only". |
+| **C1** | **A strict mode and a reported default (`LED1`).** | The spec discouraged the form; an engine that accepts it *silently* is more permissive than the spec and gives an embedder no way to say "final only". Recovery rewrites only the bodies that need it and records `WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN`, and `legacyExceptionRecovery = false` restores the refusal for an embedder that wants it. |
 | **C2** | **A front-end desugaring, not a second exception runtime (`LED2`).** | A second runtime means a second set of semantics to keep in step with `EXD2`, a second obligation for every backend, and a second source of GC/reference bugs. The desugaring produces the *same* `try_table`/`throw_ref` the tree already tests. |
 | **C3** | **Validation parity, not validation theatre (`LED3`).** | The legacy arms must go through the same tag-index, label-range, arity and depth checks, and inherit the same documented operand-stack taint. Decoding without them would be a new hole in `SAFETY.md`'s "tell artifacts apart before decoding". |
 | **C4** | **A named refusal for whatever is not right yet (`LED4`).** | `delegate`'s depth-skipping is the one construct where a plausible translation is silently wrong. Refusing it by name, with `LE-5` as the fix, is what keeps "deprecated" from becoming "approximate". |
@@ -632,7 +638,7 @@ model inside `WasmBase/` is not a scheduling question.
 2. Kotlin migrating to the final encoding — then `O3` drops to "not worth it" and
    `O1`+`O5` are the whole answer.
 3. A future proposal claiming `0x06`/`0x07`/`0x09`/`0x18`/`0x19` — then the
-   opt-in switch (`LED1`) becomes mandatory rather than prudent, and §10.1's last
+   strict policy (`LED1`) becomes mandatory rather than prudent, and §10.1's last
    paragraph becomes the reason it exists.
 
 **How this connects to the language studies.** [`../languages/TRIAGE.md`](../languages/TRIAGE.md)

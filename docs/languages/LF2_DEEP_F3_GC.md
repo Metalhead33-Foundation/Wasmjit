@@ -240,8 +240,9 @@ does not rediscover it: [`WRITING_A_BACKEND.md`](../WRITING_A_BACKEND.md) §6
 ### 7.2 What changed for the report set
 
 - **`T20` (Dart)** gets past the type section and now fails on its **legacy
-  EH** encoding (`F2`), exactly as `S4` predicted, and with
-  `WASMJIT_LEGACY_EH=1` it hits
+  EH** encoding (`F2`), exactly as `S4` predicted; under the recovery policy
+  (or `WASMJIT_LEGACY_EH=1`, which is what was measured before recovery became
+  the default) it hits
   `canonical type reference is not declared by this module` in the rewrite — a
   third, separate issue.
 - **`T53` (Kotlin/Wasm `wasmWasi`)** **runs**: exports, a guest `try`/`catch`,

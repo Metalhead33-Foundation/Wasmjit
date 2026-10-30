@@ -147,7 +147,8 @@ the C++ arm:
 legacy exception handling (the superseded Phase-3 proposal) is not supported: try (0x06)
 ```
 
-With `WASMJIT_LEGACY_EH=1` the rewrite accepts the encoding but then reports
+With `WASMJIT_LEGACY_EH=1` — or the default recovery policy, which is how this
+was re-measured — the rewrite accepts the encoding but then reports
 `canonical type reference is not declared by this module`, a third, separate
 issue (documented in [`LF2_DEEP_F3_GC.md`](LF2_DEEP_F3_GC.md) §8). The two
 conclusions that stand are:

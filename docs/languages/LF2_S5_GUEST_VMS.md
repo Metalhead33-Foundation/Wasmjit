@@ -47,13 +47,15 @@ Three build facts matter:
 
 1. **`setjmp`/`longjmp` is Lua's error mechanism**, and wasi-libc refuses it
    without `-mllvm -wasm-enable-sjlj`, which lowers it through the exception
-   proposal. The resulting module uses the **legacy** `try` encoding, so it does
-   not load with default parse options:
-   `legacy exception handling … try (0x06)`.
-2. **The legacy-EH rewrite accepts it.** `WASMJIT_LEGACY_EH=1` (or
-   `ParseOptions::acceptingLegacyExceptionHandling()`) loads and runs the module.
-   This is the contrast with `F2`: clang's C++ output hits `LE-8` and is refused,
-   while Lua's `setjmp`-shaped output is inside what the rewrite handles.
+   proposal. The resulting module uses the **legacy** `try` encoding, so a
+   **strict** parse refuses it: `legacy exception handling … try (0x06)`.
+2. **The default recovery policy accepts it.** No environment variable and no
+   `ParseOptions` change: the load rewrites the bodies that use the form and
+   records `WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN`.
+   `ParseOptions::acceptingLegacyExceptionHandling()` (or `WASMJIT_LEGACY_EH=1`)
+   still forces the unconditional rewrite and stays quiet. This is the contrast
+   with `F2`: clang's C++ output hits `LE-8` and is refused *with the rewrite
+   on*, while Lua's `setjmp`-shaped output is inside what the rewrite handles.
 3. **Two libc gaps are the embedder's**: `tmpfile` and `system` do not exist on
    WASI, and Lua references them, so the shim defines both (returning `NULL` and
    `-1`). That is the kind of thing a VM port always carries; it is shim work,

@@ -159,9 +159,11 @@ level 0 and turns any remaining failure into a
 `WASM.COMPILE.FUNCTION_FAILED` exception instead of `std::abort()`
 ([`LF2_DEEP_F1_BACKEND.md`](LF2_DEEP_F1_BACKEND.md)).
 
-**A second, unproven failure.** `t05_final_eh.wasm` loads and runs, but
-`WASMJIT_LEGACY_EH=1` on the *default* C++ module is refused by `LE-8` even
-though the rewrite is supposed to accept most legacy output. That is the known
+**A second, unproven failure.** `t05_final_eh.wasm` loads and runs, but the
+default C++ module is refused by `LE-8` even though the rewrite is supposed to
+accept most legacy output — that holds with the recovery policy too, which is
+why the refusal now names `LE-8` rather than asking for a switch. That is the
+known
 open row, not a new finding, and [`CHARTERS.md`](CHARTERS.md) §4 already assigns
 it to the `EH residue probe`. The verified `wasm-opt --translate-to-exnref`
 workaround and the long-term options are in

@@ -313,6 +313,7 @@ mappings (a unit test asserts uniqueness). The shipped leaves are:
 | `WASM.DECODE.MALFORMED` | load boundary, message contains “malformed” | Error | `diagnostics: a malformed module records a decode id` |
 | `WASM.DECODE.UNSUPPORTED` | load boundary, other decode refusal | Error | — |
 | `WASM.DECODE.UNSUPPORTED_VALUE_TYPE` | unmodelled value type at load | Error | — |
+| `WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN` | a load under the default `ParseOptions` recovery policy translated a function body that used the superseded Phase-3 exception form into `try_table`; the message carries the body count. Recovered, not silent: the strict policy refuses instead, and the unconditional policy stays quiet because it was asked for ([`proposals/LEGACY_EXCEPTIONS.md`](proposals/LEGACY_EXCEPTIONS.md) §4.6) | Note | `[legacy-eh]` |
 | `WASM.BACKEND.PLUGIN` | backend plugin lifecycle: every load refusal (missing file, missing export, descriptor/core ABI, build-kind mismatch, an embedded core, a failing `create`) is an **Error**; a successful load is a **Note** carrying the path and build kind | Error / Note | `[plugin]` |
 | `WASM.COMPILE.FUNCTION_FAILED` | a backend cannot lower or code-generate a function; emitted before the backend throws, carries the module-local function index and the backend's own reason. Never an `abort` ([`languages/LF2_DEEP_F1_BACKEND.md`](languages/LF2_DEEP_F1_BACKEND.md)) | Error | `[runtime]` (instantiate path) |
 | `WASM.VALIDATE.<FAMILY>` (30 family leaves, plus the 11 explicit index/type leaves below) | `validationRuleId()` classification; §4.2 | Error | `diagnostics: validator messages classify into stable rule families`, `diagnostics: a validation failure carries a stable id and a location` |
@@ -630,7 +631,7 @@ documented where their subsystem lives:
 
 | Variable | Effect | Owner |
 |---|---|---|
-| `WASMJIT_LEGACY_EH=1` | load a superseded Phase-3 exception encoding through the built-in rewrite | [`proposals/LEGACY_EXCEPTIONS.md`](proposals/LEGACY_EXCEPTIONS.md) §4.6 |
+| `WASMJIT_LEGACY_EH=1` | load a superseded Phase-3 exception encoding by rewriting unconditionally; `0` selects the strict policy (the named refusal), and unset is the default recovery policy, which rewrites only the bodies that need it and reports `WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN` | [`proposals/LEGACY_EXCEPTIONS.md`](proposals/LEGACY_EXCEPTIONS.md) §4.6 |
 | `WASMJIT_JIT_DUMP=1` | dump each compiled function's libjit IR | [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §6 |
 | `WASMJIT_LIBJIT_OPT=N` | libjit optimization level; default **0**, because level 1 rejects a valid block graph and a failed compile cannot be retried ([`languages/LF2_DEEP_F1_BACKEND.md`](languages/LF2_DEEP_F1_BACKEND.md)) | backend |
 
@@ -651,7 +652,19 @@ index-space counts, instantiates it with the `env` log imports registered, and
 only; any other parameter type is reported with the signature. A load,
 validation, link or instantiation failure prints the exception text followed by
 every record in the ring (`formatDiagnostic`); a trap prints `trap: <kind>: …`
-followed by the `WASM.EXECUTE.TRAP.*` record. Exit status is 0 for a clean load
+followed by the `WASM.EXECUTE.TRAP.*` record. A successful run that *recovered*
+something says so in the same stream, because a recovery is a structural load
+decision rather than a detail of the success (`--diagnostics=text`):
+
+```
+module try_catch.wasm
+  …
+  instantiated
+note WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN: rewrote the superseded Phase-3 exception form in 2 function bodies into try_table
+  hint: docs/proposals/LEGACY_EXCEPTIONS.md
+```
+
+Exit status is 0 for a clean load
 and call, 1 for a module/call failure, 2 for a malformed invocation of the tool.
 `--diagnostics=json` still emits the envelope at exit.
 

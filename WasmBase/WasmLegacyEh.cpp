@@ -802,6 +802,23 @@ void BodyRewriter::emitLegacyTry(const LegacyTry& legacyTry)
 
 } // namespace
 
+bool mayUseLegacyExceptionHandling(std::span<const std::uint8_t> code) noexcept
+{
+	for (const std::uint8_t byte : code) {
+		switch (byte) {
+		case 0x06: // try
+		case 0x07: // catch
+		case 0x09: // rethrow
+		case 0x18: // delegate
+		case 0x19: // catch_all
+			return true;
+		default:
+			break;
+		}
+	}
+	return false;
+}
+
 std::string legacyExceptionHandlingMessage(std::string_view construct)
 {
 	return std::string("legacy exception handling (the superseded Phase-3 proposal) is not "

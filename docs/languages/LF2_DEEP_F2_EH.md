@@ -202,20 +202,51 @@ should default to **on** — "one boolean". The answer from the `LF-2` data is
 | C++ 20 / clang default | yes, **and** the `delegate`-skip shape | no — `LE-8` is refused with the rewrite on *or* off |
 | Dart 3.13.7 | yes | no — the rewrite accepts the encoding and then reports `canonical type reference is not declared by this module` |
 
-So the flip is a **friction** change, not a support change: it would spare Lua
-users a `WASMJIT_LEGACY_EH=1`, and it would make the decoder silently accept a
-form the spec has retired — the exact permissiveness
-[`SAFETY.md`](../SAFETY.md) §2.1 warns about, and the reason the option is
+So the flip alone is a **friction** change, not a support change: it would spare
+Lua users a `WASMJIT_LEGACY_EH=1`, and it would make the decoder silently accept
+a form the spec has retired — the exact permissiveness
+[`SAFETY.md`](../SAFETY.md) §2.1 warns about, and the reason the option was
 strict-by-default in the first place.
 
-**What would be worth doing instead** (not done here): keep the strict default
-and add a *recovery retry* — attempt the strict parse, and if (and only if) the
-module fails **specifically** because of the superseded form, retry once with the
-rewrite and emit a `WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN` Note. That keeps
-the "never silently more permissive" rule, removes the knob for the modules the
-rewrite *can* handle, and leaves the `LE-8`/Dart cases failing with their own,
-accurate errors. It is a small parser-boundary change and a documented
-diagnostic; it is not a change to the colour of any arm.
+**What was implemented instead** (`LE-6`, revision 4): a **recovery policy**,
+not a blanket flip. `ParseOptions::legacyExceptionRecovery` is **on by
+default**; it rewrites *only* the bodies that use the superseded form and emits
+a `WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN` Note. Strictness
+(`legacyExceptionRecovery = false`, `WASMJIT_LEGACY_EH=0`) still refuses with the
+named message, and unconditional rewriting
+(`acceptingLegacyExceptionHandling()`, `WASMJIT_LEGACY_EH=1`) still accepts
+quietly. That keeps "never silently more permissive" — the recovery is a
+recorded event, not a silence — removes the knob for the modules the rewrite
+*can* handle, and leaves the `LE-8`/Dart cases failing with their own, accurate
+errors.
+
+The implementation is the recovery *outcome* without a second parse: a decoded
+body is checked for the five superseded opcode bytes first
+(`mayUseLegacyExceptionHandling()`), and only a body that carries one — the
+superseded opcodes are single primary bytes that appear literally — reaches
+`rewriteLegacyExceptionHandling()`. A final-form module therefore scans its body
+bytes and stops; a legacy module is rewritten once, before `validate()`, exactly
+as the explicit switch always did. Re-parsing the artifact was rejected because
+it needs a seekable device and doubles the load's I/O for no semantic gain.
+
+Measured cost of the extra pass (the `--call`-free load of three real modules,
+best of five, forcing the scan with `WASMJIT_LEGACY_EH=1` against the default
+policy, which is its upper bound because candidate bytes are common):
+
+| Module | Size | Default (byte pre-check) | Forced scan | Delta |
+|---|---|---|---|---|
+| Go 1.27.3 `wasip1` | 2.42 MB | 193.6 ms | 195.8 ms | 2.2 ms (~1 %) |
+| Kotlin/Wasm `wasmWasi` | 615 KB | 63.6 ms | 64.2 ms | 0.6 ms (~1 %) |
+| C++ default flags (`t05_eh`) | 36 KB | 14.6 ms | 14.5 ms | unmeasurable |
+
+Measured after the change (2026-10-30):
+
+| Arm | Result |
+|---|---|
+| `T26` Lua (`setjmp`) | green **with no environment variable**; the Note names the body count |
+| `T05` C++ default flags | unchanged yellow — now fails with `LE-8`'s message (the rewrite is on, so the remedy it prints is the rebuild/`wasm-opt` one, not `WASMJIT_LEGACY_EH`) |
+| `T20` Dart | unchanged yellow — the recovery accepts the encoding, then the `canonical type reference is not declared by this module` failure (`F3`-adjacent, still unreproduced) |
+| Final-form modules (Kotlin, Go, Rust, Zig, C, MoonBit) | byte-identical; `[legacy-eh]` asserts no Note is emitted for Binaryen's `try_catch.exnref` twin |
 
 ## 6. What changed in the report set
 

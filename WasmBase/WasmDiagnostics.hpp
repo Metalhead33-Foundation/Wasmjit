@@ -187,6 +187,7 @@ inline constexpr std::string_view kDecodeUnsupportedArtifact = "WASM.DECODE.UNSU
 inline constexpr std::string_view kDecodeMalformed = "WASM.DECODE.MALFORMED"; //!< The byte stream does not decode.
 inline constexpr std::string_view kDecodeUnsupported = "WASM.DECODE.UNSUPPORTED"; //!< A construct the decoder does not implement.
 inline constexpr std::string_view kDecodeUnsupportedValueType = "WASM.DECODE.UNSUPPORTED_VALUE_TYPE"; //!< A value type the engine does not model.
+inline constexpr std::string_view kDecodeLegacyExceptionsRewritten = "WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN"; //!< A body used the superseded Phase-3 exception form and was translated at load.
 
 //! Backend plugin boundary (docs/BACKEND_PLUGIN_ABI.md BP-3/BP-4): failure to
 //! load, an ABI mismatch, or a plugin's own diagnostic routed through the host

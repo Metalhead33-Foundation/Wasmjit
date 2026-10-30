@@ -113,6 +113,12 @@ supported: try (0x06). … or set WASMJIT_LEGACY_EH=1 to load it through the
 built-in rewrite.
 ```
 
+> Recorded under the pre-`LE-6` strict default. The default is now the recovery
+> policy, so the same module reports
+> `legacy exception handling: this module uses a construct the built-in rewrite
+> does not translate (delegate that skips an intervening catch)` — the transcript
+> below — and the named refusal above is what `WASMJIT_LEGACY_EH=0` still prints.
+
 ```
 # F2 — the same module with the rewrite enabled
 status=error: legacy exception handling: this module uses a construct the
@@ -150,8 +156,9 @@ cause is `LF-3` work; this study does not diagnose it.
 ### 5.2 `F2` — `LE-8` survives into default C++ output (class A)
 
 **Observe.** `clang++ -fwasm-exceptions` (LLVM 23.1.x, wasi-sdk 34.0) still
-emits the legacy encoding by default. The rewrite refuses the module *even with*
-`WASMJIT_LEGACY_EH=1`, with the `LE-8` message. Adding
+emits the legacy encoding by default. The rewrite refuses the module *with the
+rewrite on* (`WASMJIT_LEGACY_EH=1`, and equally under the default recovery
+policy), with the `LE-8` message. Adding
 `-mllvm -wasm-use-legacy-eh=false` produces a `try_table` module that loads and
 runs, guest exceptions included.
 
@@ -243,7 +250,7 @@ screen; it is the `LF-2` set's own delta.
 | `t04_empp_reactor.wasm` (unchanged hash) | `-O2` loads; ctors and `std::vector` work |
 | `t53_kotlin_wasi.wasm` (unchanged hash) | runs: `add`/`answer`/`throwCatch` and `_start`; the `F3d` ownership fix is what unblocked it |
 | `t09_go_lib.wasm` (rebuilt) | `_initialize`, `env.host_add` = 42 and a cross-module `dep.add` = 43 through `//go:wasmimport` |
-| `t20_dart.wasm` (unchanged hash) | gets past the type section; fails on legacy EH (`F2`), and with `WASMJIT_LEGACY_EH=1` on `canonical type reference is not declared by this module` |
+| `t20_dart.wasm` (unchanged hash) | gets past the type section; fails on legacy EH (`F2`), and under the recovery policy (or `WASMJIT_LEGACY_EH=1`) on `canonical type reference is not declared by this module` |
 | `WASMJIT_LIBJIT_OPT=1` | reproduces `F1` as a reported failure (`backend compile failure … result 0 for function 7`), with no `SIGABRT`/`SIGSEGV` |
 
 The module hashes are unchanged: the fixes are in the engine, not in the
