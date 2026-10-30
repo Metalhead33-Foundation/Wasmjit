@@ -84,12 +84,12 @@ TEST_CASE("AsmJit preserves packed i8 and i16 storage widths", "[asmjit][abi][st
 	CHECK(AsmJitBackend::TypeTranslator::translateStorageType(
 			packed(WASM::ValueTypeCode::I16)) == asmjit::TypeId::kInt16);
 
-	// Non-packed i8/i16 value encodings also retain their narrow type. The
-	// instruction lowerer is responsible for extending to i32 before arithmetic.
-	CHECK(AsmJitBackend::TypeTranslator::translateValueType(
-			WASM::ValueType{WASM::ValueTypeCode::I8, -1}) == asmjit::TypeId::kInt8);
-	CHECK(AsmJitBackend::TypeTranslator::translateValueType(
-			WASM::ValueType{WASM::ValueTypeCode::I16, -1}) == asmjit::TypeId::kInt16);
+	// Narrow values are not ordinary Wasm value types. An instruction
+	// lowerer must extend packed storage to i32 before arithmetic.
+	CHECK_THROWS_AS(AsmJitBackend::TypeTranslator::translateValueType(
+			WASM::ValueType{WASM::ValueTypeCode::I8, -1}), std::runtime_error);
+	CHECK_THROWS_AS(AsmJitBackend::TypeTranslator::translateValueType(
+			WASM::ValueType{WASM::ValueTypeCode::I16, -1}), std::runtime_error);
 }
 
 TEST_CASE("AsmJit uses a trailing pointer for multi-value results", "[asmjit][abi]")
