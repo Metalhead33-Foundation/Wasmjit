@@ -1,6 +1,8 @@
 (module
   (memory 1 2)
   (global $g (export "g") (mut i32) (i32.const 7))
+  (type $unary (func (param i32) (result i32)))
+  (table 1 funcref)
   (type $binary (func (param i32 i32) (result i32)))
   (func (export "add") (type $binary)
     local.get 0
@@ -173,6 +175,15 @@
     local.get 0
     global.set 0
     global.get 0)
+  (func $table_double (type $unary)
+    local.get 0
+    i32.const 2
+    i32.mul)
+  (elem (i32.const 0) $table_double)
+  (func (export "call_indirect") (param i32 i32) (result i32)
+    local.get 0
+    local.get 1
+    call_indirect (type $unary))
   (func (export "local_roundtrip") (param i32) (result i32) (local i32)
     local.get 0
     local.set 1
