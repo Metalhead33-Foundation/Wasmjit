@@ -18,7 +18,9 @@ WASMJIT_VISIBLE_BEGIN
 #include <cstddef>
 namespace WASM {
 
+/** \\brief Forward declaration of the parsed source module referenced by the VM context. */
 struct Module;
+/** \\brief Forward declaration of the embedder callback table borrowed by a VM context. */
 struct HostBridge;
 
 //! \brief The raw POD context passed as arg0 to every compiled function.
