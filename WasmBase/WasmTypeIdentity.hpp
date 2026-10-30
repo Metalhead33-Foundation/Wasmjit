@@ -41,9 +41,25 @@ struct TypeId {
 	//! canonical id (the table cannot reach 2^32 entries).
 	static constexpr uint32_t kNone = 0xFFFFFFFFu;
 	uint32_t value = 0;
+/**
+ * \brief Performs the isNone operation.
+ * \return The value or status produced by this operation.
+ */
 	constexpr bool operator==(const TypeId& o) const { return value == o.value; }
+/**
+ * \brief Performs the isNone operation.
+ * \return The value or status produced by this operation.
+ */
 	constexpr bool operator!=(const TypeId& o) const { return value != o.value; }
+/**
+ * \brief Performs the isNone operation.
+ * \return The value or status produced by this operation.
+ */
 	constexpr bool operator<(const TypeId& o) const { return value < o.value; }
+/**
+ * \brief Performs the isNone operation.
+ * \return The value or status produced by this operation.
+ */
 	constexpr bool isNone() const { return value == kNone; }
 };
 
@@ -54,9 +70,25 @@ struct TypeId {
 struct SchemeId {
 	static constexpr uint32_t kNone = 0xFFFFFFFFu;
 	uint32_t value = 0;
+/**
+ * \brief Performs the isNone operation.
+ * \return The value or status produced by this operation.
+ */
 	constexpr bool operator==(const SchemeId& o) const { return value == o.value; }
+/**
+ * \brief Performs the isNone operation.
+ * \return The value or status produced by this operation.
+ */
 	constexpr bool operator!=(const SchemeId& o) const { return value != o.value; }
+/**
+ * \brief Performs the isNone operation.
+ * \return The value or status produced by this operation.
+ */
 	constexpr bool operator<(const SchemeId& o) const { return value < o.value; }
+/**
+ * \brief Performs the isNone operation.
+ * \return The value or status produced by this operation.
+ */
 	constexpr bool isNone() const { return value == kNone; }
 };
 
@@ -81,12 +113,27 @@ struct TypeGroup {
 
 namespace std {
 template <> struct hash<WASM::LocalTypeIdx> {
+/**
+ * \brief Performs the operator operation.
+ * \param v Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	size_t operator()(const WASM::LocalTypeIdx& v) const noexcept { return std::hash<uint32_t>{}(v.value); }
 };
 template <> struct hash<WASM::TypeId> {
+/**
+ * \brief Performs the operator operation.
+ * \param v Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	size_t operator()(const WASM::TypeId& v) const noexcept { return std::hash<uint32_t>{}(v.value); }
 };
 template <> struct hash<WASM::RecGroupId> {
+/**
+ * \brief Performs the operator operation.
+ * \param v Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	size_t operator()(const WASM::RecGroupId& v) const noexcept { return std::hash<uint32_t>{}(v.value); }
 };
 } // namespace std
