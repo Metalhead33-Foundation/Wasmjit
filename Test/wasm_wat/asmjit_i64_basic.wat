@@ -57,6 +57,16 @@
       i64.const 2
       i64.mul
     end)
+  (func (export "i64_br_table") (param i32) (result i64)
+    block (result i64)
+      block (result i64)
+        i64.const 42
+        local.get 0
+        br_table 0 1 1
+      end
+      i64.const 1
+      i64.add
+    end)
   (func (export "i64_load_at") (param i32) (result i64)
     local.get 0
     i64.load)
