@@ -43,16 +43,16 @@ class Validator final : public OpcodeDispatcher
 {
 public:
 /**
- * \\brief Performs the validator's Validator operation.
- * \\param module Operand or context value used by this validator operation.
- * \\param options Operand or context value used by this validator operation.
+ * \brief Performs the validator's Validator operation.
+ * \param module Operand or context value used by this validator operation.
+ * \param options Operand or context value used by this validator operation.
  */
 	explicit Validator(const Module& module, ValidationOptions options = {});
 
 	//! Throws std::runtime_error naming the first rule that failed.
 /**
- * \\brief Validates the decoded module and throws on the first structural or instruction-validation failure.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Validates the decoded module and throws on the first structural or instruction-validation failure.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void validate();
 
@@ -84,242 +84,242 @@ private:
 	//! Diagnostic form of a local index in the body being validated
 	//! (`"0 ($name)"`); the name-section outer key is the global function index.
 /**
- * \\brief Performs the validator's describeLocal operation.
- * \\param idx Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Performs the validator's describeLocal operation.
+ * \param idx Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	std::string describeLocal(uint32_t idx) const;
 
 /**
- * \\brief Performs the validator's funcTypeAt operation.
- * \\param typeIdx Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Performs the validator's funcTypeAt operation.
+ * \param typeIdx Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	FuncType funcTypeAt(uint32_t typeIdx) const;
 	//! Resolve `cont $ft` to the module-local function type index it names. The
 	//! canonical view stores a process-wide TypeId, so the module-local index is
 	//! recovered from `typeIds` (STACK_SWITCHING.md SS-1).
 /**
- * \\brief Performs the validator's continuationFuncIndex operation.
- * \\param contTypeIdx Operand or context value used by this validator operation.
- * \\param who Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Performs the validator's continuationFuncIndex operation.
+ * \param contTypeIdx Operand or context value used by this validator operation.
+ * \param who Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	uint32_t continuationFuncIndex(TypeIdx contTypeIdx, const char* who) const;
 /**
- * \\brief Performs the validator's continuationFuncType operation.
- * \\param contTypeIdx Operand or context value used by this validator operation.
- * \\param who Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Performs the validator's continuationFuncType operation.
+ * \param contTypeIdx Operand or context value used by this validator operation.
+ * \param who Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	FuncType continuationFuncType(TypeIdx contTypeIdx, const char* who) const;
 	//! The stage-2 provider carries at most one i32 parameter and one i32 result
 	//! for a continuation function, a control tag and a handler payload.
 /**
- * \\brief Checks the MvpContinuationSignature validation precondition and reports a validation error when it is not met.
- * \\param type Operand or context value used by this validator operation.
- * \\param who Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Checks the MvpContinuationSignature validation precondition and reports a validation error when it is not met.
+ * \param type Operand or context value used by this validator operation.
+ * \param who Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void requireMvpContinuationSignature(const FuncType& type, const char* who) const;
 /**
- * \\brief Checks the FunctionIndex validation precondition and reports a validation error when it is not met.
- * \\param idx Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Checks the FunctionIndex validation precondition and reports a validation error when it is not met.
+ * \param idx Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void requireFunctionIndex(uint32_t idx) const;
 /**
- * \\brief Checks the TableIndex validation precondition and reports a validation error when it is not met.
- * \\param idx Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Checks the TableIndex validation precondition and reports a validation error when it is not met.
+ * \param idx Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void requireTableIndex(uint32_t idx) const;
 /**
- * \\brief Checks the MemoryIndex validation precondition and reports a validation error when it is not met.
- * \\param idx Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Checks the MemoryIndex validation precondition and reports a validation error when it is not met.
+ * \param idx Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void requireMemoryIndex(uint32_t idx) const;
 	//! Type checks for the `string` array instructions: the type index must be
 	//! an array of the required packed element type; encode variants require a
 	//! mutable array.
 /**
- * \\brief Checks the StringArrayType validation precondition and reports a validation error when it is not met.
- * \\param idx Operand or context value used by this validator operation.
- * \\param packed Operand or context value used by this validator operation.
- * \\param requireMutable Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Checks the StringArrayType validation precondition and reports a validation error when it is not met.
+ * \param idx Operand or context value used by this validator operation.
+ * \param packed Operand or context value used by this validator operation.
+ * \param requireMutable Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void requireStringArrayType(TypeIdx idx, ValueTypeCode packed, bool requireMutable) const;
 /**
- * \\brief Checks the GlobalIndex validation precondition and reports a validation error when it is not met.
- * \\param idx Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Checks the GlobalIndex validation precondition and reports a validation error when it is not met.
+ * \param idx Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void requireGlobalIndex(uint32_t idx) const;
 /**
- * \\brief Checks the TagIndex validation precondition and reports a validation error when it is not met.
- * \\param idx Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Checks the TagIndex validation precondition and reports a validation error when it is not met.
+ * \param idx Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void requireTagIndex(uint32_t idx) const;
 /**
- * \\brief Checks the LocalIndex validation precondition and reports a validation error when it is not met.
- * \\param idx Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Checks the LocalIndex validation precondition and reports a validation error when it is not met.
+ * \param idx Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void requireLocalIndex(uint32_t idx) const;
 /**
- * \\brief Checks the ElementIndex validation precondition and reports a validation error when it is not met.
- * \\param idx Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Checks the ElementIndex validation precondition and reports a validation error when it is not met.
+ * \param idx Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void requireElementIndex(uint32_t idx) const;
 /**
- * \\brief Checks the DataIndex validation precondition and reports a validation error when it is not met.
- * \\param idx Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Checks the DataIndex validation precondition and reports a validation error when it is not met.
+ * \param idx Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void requireDataIndex(uint32_t idx) const;
 /**
- * \\brief Returns the globalIsMutable property for the current module.
- * \\param idx Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Returns the globalIsMutable property for the current module.
+ * \param idx Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	bool globalIsMutable(uint32_t idx) const;
 /**
- * \\brief Returns the tableIsFuncRef property for the current module.
- * \\param idx Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Returns the tableIsFuncRef property for the current module.
+ * \param idx Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	bool tableIsFuncRef(uint32_t idx) const;
 /**
- * \\brief Returns the memoryIs64 property for the current module.
- * \\param idx Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Returns the memoryIs64 property for the current module.
+ * \param idx Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	bool memoryIs64(uint32_t idx) const;
 /**
- * \\brief Returns the memoryIsShared property for the current module.
- * \\param idx Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Returns the memoryIsShared property for the current module.
+ * \param idx Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	bool memoryIsShared(uint32_t idx) const;
 
 	//! Reference subtyping (nullability + the func/extern/exn/any hierarchies).
 /**
- * \\brief Checks or constructs the reference-type relation required by refSubtype.
- * \\param actual Operand or context value used by this validator operation.
- * \\param expected Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Checks or constructs the reference-type relation required by refSubtype.
+ * \param actual Operand or context value used by this validator operation.
+ * \param expected Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	bool refSubtype(const ValueType& actual, const ValueType& expected) const;
 	//! True when a local of this type has an implicit default value, so reading it
 	//! before any store is valid. Non-nullable references do not.
 /**
- * \\brief Returns the isDefaultable property for the current module.
- * \\param type Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Returns the isDefaultable property for the current module.
+ * \param type Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	bool isDefaultable(const ValueType& type) const;
 	//! `ref.func x` may only name a function that the module also mentions
 	//! outside its function bodies or start function (the spec's `C.refs`).
 	std::unordered_set<uint32_t> declaredFunctions;
 /**
- * \\brief Validates ConstExpr according to the WebAssembly validation rules.
- * \\param bytes Operand or context value used by this validator operation.
- * \\param label Operand or context value used by this validator operation.
- * \\param globalLimit Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Validates ConstExpr according to the WebAssembly validation rules.
+ * \param bytes Operand or context value used by this validator operation.
+ * \param label Operand or context value used by this validator operation.
+ * \param globalLimit Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	std::optional<ValueType> validateConstExpr(const std::vector<uint8_t>& bytes,
 			const std::string& label, std::size_t globalLimit);
 /**
- * \\brief Returns the isEqRef property for the current module.
- * \\param type Operand or context value used by this validator operation.
- * \\param EqRef Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Returns the isEqRef property for the current module.
+ * \param type Operand or context value used by this validator operation.
+ * \param EqRef Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	bool isEqRef(const ValueType& type) const {
 		return refSubtype(type, ValueType{ValueTypeCode::EqRef, -1});
 	}
 	//! A typed reference's concrete heap type must name a declared type.
 /**
- * \\brief Checks the WellFormedType validation precondition and reports a validation error when it is not met.
- * \\param type Operand or context value used by this validator operation.
- * \\param where Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Checks the WellFormedType validation precondition and reports a validation error when it is not met.
+ * \param type Operand or context value used by this validator operation.
+ * \param where Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void requireWellFormedType(const ValueType& type, const std::string& where) const;
 
 	//! `ref.test`/`ref.cast` target construction and the top of the target's
 	//! heap hierarchy (used for the operand's same-hierarchy rule).
 /**
- * \\brief Checks or constructs the reference-type relation required by refType.
- * \\param nullable Operand or context value used by this validator operation.
- * \\param heapType Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Checks or constructs the reference-type relation required by refType.
+ * \param nullable Operand or context value used by this validator operation.
+ * \param heapType Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	ValueType refType(bool nullable, const HeapType& heapType) const;
 /**
- * \\brief Checks or constructs the reference-type relation required by refTopForHeap.
- * \\param heapType Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Checks or constructs the reference-type relation required by refTopForHeap.
+ * \param heapType Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	ValueType refTopForHeap(const HeapType& heapType) const;
 /**
- * \\brief Validates RefTest according to the WebAssembly validation rules.
- * \\param nullable Operand or context value used by this validator operation.
- * \\param heapType Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Validates RefTest according to the WebAssembly validation rules.
+ * \param nullable Operand or context value used by this validator operation.
+ * \param heapType Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void validateRefTest(bool nullable, const HeapType& heapType);
 /**
- * \\brief Validates RefCast according to the WebAssembly validation rules.
- * \\param nullable Operand or context value used by this validator operation.
- * \\param heapType Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Validates RefCast according to the WebAssembly validation rules.
+ * \param nullable Operand or context value used by this validator operation.
+ * \param heapType Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void validateRefCast(bool nullable, const HeapType& heapType);
 
 	//! Profile gates (docs/proposals/PROFILES.md PR-2/PR-4): reject constructs an
 	//! excluded marker forbids before any structural rule reports on them.
 /**
- * \\brief Checks the Profile constraint for the current module.
+ * \brief Checks the Profile constraint for the current module.
  */
 	void checkProfile() const;
 /**
- * \\brief Checks the ProfileValueType constraint for the current module.
- * \\param type Operand or context value used by this validator operation.
- * \\param where Operand or context value used by this validator operation.
+ * \brief Checks the ProfileValueType constraint for the current module.
+ * \param type Operand or context value used by this validator operation.
+ * \param where Operand or context value used by this validator operation.
  */
 	void checkProfileValueType(const ValueType& type, const std::string& where) const;
 	//! Prefixed-instruction gates (shared with the base dispatcher's hooks).
 /**
- * \\brief Performs the validator's onSimdOpcode operation.
- * \\param opcode Operand or context value used by this validator operation.
+ * \brief Performs the validator's onSimdOpcode operation.
+ * \param opcode Operand or context value used by this validator operation.
  */
 	void onSimdOpcode(SIMDOpcode opcode) override;
 	void onAtomicOpcode(AtomicOpcode opcode) override; //!< Validate the stack effect of this opcode.
 
 /**
- * \\brief Checks the Limits constraint for the current module.
- * \\param limits Operand or context value used by this validator operation.
- * \\param is64 Operand or context value used by this validator operation.
- * \\param isMemory Operand or context value used by this validator operation.
- * \\param what Operand or context value used by this validator operation.
- * \\param index Operand or context value used by this validator operation.
- * \\param pageSize Operand or context value used by this validator operation.
+ * \brief Checks the Limits constraint for the current module.
+ * \param limits Operand or context value used by this validator operation.
+ * \param is64 Operand or context value used by this validator operation.
+ * \param isMemory Operand or context value used by this validator operation.
+ * \param what Operand or context value used by this validator operation.
+ * \param index Operand or context value used by this validator operation.
+ * \param pageSize Operand or context value used by this validator operation.
  */
 	void checkLimits(const Limits& limits, bool is64, bool isMemory,
 					 const char* what, std::size_t index,
 					 uint64_t pageSize = 0x10000) const;
 /**
- * \\brief Checks the MemoryAccess validation precondition and reports a validation error when it is not met.
- * \\param arg Operand or context value used by this validator operation.
- * \\param naturalLog2 Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Checks the MemoryAccess validation precondition and reports a validation error when it is not met.
+ * \param arg Operand or context value used by this validator operation.
+ * \param naturalLog2 Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void requireMemoryAccess(const MemArg& arg, uint32_t naturalLog2) const;
 	//! Multibyte Array Access (GC_EXTENSIONS.md GX-1): a load/store whose memarg
@@ -327,46 +327,46 @@ private:
 	//! and element shape, enforce mutability for stores, and pop `[ref, address]`
 	//! instead of the linear-memory address.
 /**
- * \\brief Checks the ArrayAccess validation precondition and reports a validation error when it is not met.
- * \\param arg Operand or context value used by this validator operation.
- * \\param naturalLog2 Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Checks the ArrayAccess validation precondition and reports a validation error when it is not met.
+ * \param arg Operand or context value used by this validator operation.
+ * \param naturalLog2 Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void requireArrayAccess(const MemArg& arg, uint32_t naturalLog2) const;
 /**
- * \\brief Checks the ArrayMutable validation precondition and reports a validation error when it is not met.
- * \\param arg Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Checks the ArrayMutable validation precondition and reports a validation error when it is not met.
+ * \param arg Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void requireArrayMutable(const MemArg& arg) const;
 /**
- * \\brief Consumes the expected operand-stack value or sequence, validating its type.
- * \\param arg Operand or context value used by this validator operation.
+ * \brief Consumes the expected operand-stack value or sequence, validating its type.
+ * \param arg Operand or context value used by this validator operation.
  */
 	void popMemoryAddress(const MemArg& arg);
 	//! Atomic accesses have extra rules: the alignment immediate must equal the
 	//! natural alignment, and the acquire-release ordering byte is 0 or 1.
 /**
- * \\brief Checks the AtomicMemoryAccess validation precondition and reports a validation error when it is not met.
- * \\param arg Operand or context value used by this validator operation.
- * \\param naturalLog2 Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Checks the AtomicMemoryAccess validation precondition and reports a validation error when it is not met.
+ * \param arg Operand or context value used by this validator operation.
+ * \param naturalLog2 Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void requireAtomicMemoryAccess(const MemArg& arg, uint32_t naturalLog2) const;
 /**
- * \\brief Checks the StructField validation precondition and reports a validation error when it is not met.
- * \\param type Operand or context value used by this validator operation.
- * \\param fieldIndex Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Checks the StructField validation precondition and reports a validation error when it is not met.
+ * \param type Operand or context value used by this validator operation.
+ * \param fieldIndex Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	const CanonFieldType& requireStructField(TypeIdx type, uint32_t fieldIndex) const;
 /**
- * \\brief Checks the Lane validation precondition and reports a validation error when it is not met.
- * \\param lane Operand or context value used by this validator operation.
- * \\param laneCount Operand or context value used by this validator operation.
- * \\param what Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Checks the Lane validation precondition and reports a validation error when it is not met.
+ * \param lane Operand or context value used by this validator operation.
+ * \param laneCount Operand or context value used by this validator operation.
+ * \param what Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void requireLane(uint8_t lane, uint32_t laneCount, const char* what) const;
 
@@ -392,162 +392,162 @@ private:
 	bool typeTainted = false;
 
 /**
- * \\brief Resolves frame from the current function and module type context.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Resolves frame from the current function and module type context.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	ControlFrame& frame();
 /**
- * \\brief Resolves blockParams from the current function and module type context.
- * \\param blockType Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Resolves blockParams from the current function and module type context.
+ * \param blockType Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	std::vector<ValueType> blockParams(const BlockType& blockType) const;
 /**
- * \\brief Resolves blockResults from the current function and module type context.
- * \\param blockType Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Resolves blockResults from the current function and module type context.
+ * \param blockType Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	std::vector<ValueType> blockResults(const BlockType& blockType) const;
 /**
- * \\brief Adds the specified value type or type sequence to the validation operand stack.
- * \\param type Operand or context value used by this validator operation.
+ * \brief Adds the specified value type or type sequence to the validation operand stack.
+ * \param type Operand or context value used by this validator operation.
  */
 	void pushValue(const ValueType& type);
 /**
- * \\brief Consumes the expected operand-stack value or sequence, validating its type.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Consumes the expected operand-stack value or sequence, validating its type.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	std::optional<ValueType> popAny();
 /**
- * \\brief Consumes the expected operand-stack value or sequence, validating its type.
- * \\param code Operand or context value used by this validator operation.
+ * \brief Consumes the expected operand-stack value or sequence, validating its type.
+ * \param code Operand or context value used by this validator operation.
  */
 	void popExpect(ValueTypeCode code);
 /**
- * \\brief Consumes the expected operand-stack value or sequence, validating its type.
- * \\param type Operand or context value used by this validator operation.
+ * \brief Consumes the expected operand-stack value or sequence, validating its type.
+ * \param type Operand or context value used by this validator operation.
  */
 	void popExpect(const ValueType& type);
 /**
- * \\brief Adds the specified value type or type sequence to the validation operand stack.
- * \\param types Operand or context value used by this validator operation.
+ * \brief Adds the specified value type or type sequence to the validation operand stack.
+ * \param types Operand or context value used by this validator operation.
  */
 	void pushTypes(const std::vector<ValueType>& types);
 /**
- * \\brief Consumes the expected operand-stack value or sequence, validating its type.
- * \\param types Operand or context value used by this validator operation.
+ * \brief Consumes the expected operand-stack value or sequence, validating its type.
+ * \param types Operand or context value used by this validator operation.
  */
 	void popTypes(const std::vector<ValueType>& types);
 /**
- * \\brief Checks the TailCallResults constraint for the current module.
- * \\param callee Operand or context value used by this validator operation.
+ * \brief Checks the TailCallResults constraint for the current module.
+ * \param callee Operand or context value used by this validator operation.
  */
 	void checkTailCallResults(const FuncType& callee);
 /**
- * \\brief Performs the validator's assignable operation.
- * \\param actual Operand or context value used by this validator operation.
- * \\param expected Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Performs the validator's assignable operation.
+ * \param actual Operand or context value used by this validator operation.
+ * \param expected Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	bool assignable(const ValueType& actual, const ValueType& expected) const;
 	//! True for `cont`, `nocont` and a concrete `cont $ft` type index. The
 	//! stack-switching proposal forbids casting to any continuation type.
 /**
- * \\brief Returns the isContinuationHeap property for the current module.
- * \\param type Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Returns the isContinuationHeap property for the current module.
+ * \param type Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	bool isContinuationHeap(const HeapType& type) const;
 	//! More Array Constructors (GC_EXTENSIONS.md GX-2) helpers.
 /**
- * \\brief Checks the ArrayType validation precondition and reports a validation error when it is not met.
- * \\param idx Operand or context value used by this validator operation.
- * \\param who Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Checks the ArrayType validation precondition and reports a validation error when it is not met.
+ * \param idx Operand or context value used by this validator operation.
+ * \param who Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	CoreTypeView requireArrayType(TypeIdx idx, const char* who) const;
 /**
- * \\brief Performs the validator's storageAssignable operation.
- * \\param actual Operand or context value used by this validator operation.
- * \\param expected Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Performs the validator's storageAssignable operation.
+ * \param actual Operand or context value used by this validator operation.
+ * \param expected Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	bool storageAssignable(const CanonStorageType& actual,
 			const CanonStorageType& expected) const;
 /**
- * \\brief Performs the validator's setUnreachable operation.
+ * \brief Performs the validator's setUnreachable operation.
  */
 	void setUnreachable();
 /**
- * \\brief Performs the validator's beginBlock operation.
- * \\param blockType Operand or context value used by this validator operation.
- * \\param isLoop Operand or context value used by this validator operation.
- * \\param isIf Operand or context value used by this validator operation.
+ * \brief Performs the validator's beginBlock operation.
+ * \param blockType Operand or context value used by this validator operation.
+ * \param isLoop Operand or context value used by this validator operation.
+ * \param isIf Operand or context value used by this validator operation.
  */
 	void beginBlock(const BlockType& blockType, bool isLoop, bool isIf);
 /**
- * \\brief Performs the validator's endBlock operation.
- * \\param isElse Operand or context value used by this validator operation.
+ * \brief Performs the validator's endBlock operation.
+ * \param isElse Operand or context value used by this validator operation.
  */
 	void endBlock(bool isElse);
 /**
- * \\brief Performs the validator's branch operation.
- * \\param label Operand or context value used by this validator operation.
+ * \brief Performs the validator's branch operation.
+ * \param label Operand or context value used by this validator operation.
  */
 	void branch(LabelIdx label);
 /**
- * \\brief Performs the validator's branchIf operation.
- * \\param label Operand or context value used by this validator operation.
+ * \brief Performs the validator's branchIf operation.
+ * \param label Operand or context value used by this validator operation.
  */
 	void branchIf(LabelIdx label);
 /**
- * \\brief Returns the memoryAddressType property for the current module.
- * \\param memIdx Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Returns the memoryAddressType property for the current module.
+ * \param memIdx Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	ValueTypeCode memoryAddressType(MemIdx memIdx) const;
 /**
- * \\brief Returns the tableIndexType property for the current module.
- * \\param tableIdx Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Returns the tableIndexType property for the current module.
+ * \param tableIdx Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	ValueTypeCode tableIndexType(TableIdx tableIdx) const;
 /**
- * \\brief Resolves functionType from the current function and module type context.
- * \\param idx Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Resolves functionType from the current function and module type context.
+ * \param idx Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	FuncType functionType(FuncIdx idx) const;
 /**
- * \\brief Returns the globalType property for the current module.
- * \\param idx Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Returns the globalType property for the current module.
+ * \param idx Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	ValueType globalType(GlobalIdx idx) const;
 /**
- * \\brief Returns the tableElementType property for the current module.
- * \\param idx Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Returns the tableElementType property for the current module.
+ * \param idx Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	ValueType tableElementType(TableIdx idx) const;
 	const FuncType* currentFuncType = nullptr;
 /**
- * \\brief Resolves paramTypes from the current function and module type context.
- * \\param types Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Resolves paramTypes from the current function and module type context.
+ * \param types Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	std::vector<ValueType> paramTypes(const FuncType& types) const;
 /**
- * \\brief Resolves resultTypes from the current function and module type context.
- * \\param types Operand or context value used by this validator operation.
- * \\return The resolved value, predicate result, or validation data described by the function name.
+ * \brief Resolves resultTypes from the current function and module type context.
+ * \param types Operand or context value used by this validator operation.
+ * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	std::vector<ValueType> resultTypes(const FuncType& types) const;
 
 	//! Control and parametric instructions.
 /**
- * \\brief Validates the Unreachable instruction's immediates and operand-stack effect.
+ * \brief Validates the Unreachable instruction's immediates and operand-stack effect.
  */
 	void dispatchUnreachable() override;
 	void dispatchNop() override; //!< Validate the stack effect of this opcode.
@@ -572,17 +572,17 @@ private:
 
 	//! More Array Constructors (docs/proposals/GC_EXTENSIONS.md GX-2).
 /**
- * \\brief Validates the ArrayNewArray instruction's immediates and operand-stack effect.
- * \\param dst Operand or context value used by this validator operation.
- * \\param src Operand or context value used by this validator operation.
+ * \brief Validates the ArrayNewArray instruction's immediates and operand-stack effect.
+ * \param dst Operand or context value used by this validator operation.
+ * \param src Operand or context value used by this validator operation.
  */
 	void dispatchArrayNewArray(TypeIdx dst, TypeIdx src) override;
 	void dispatchArrayNewMemory(TypeIdx dst, MemIdx src) override; //!< Validate the stack effect of this opcode.
 	void dispatchArrayNewTable(TypeIdx dst, TableIdx src) override; //!< Validate the stack effect of this opcode.
 	//! Custom Descriptors (0xFB 32..38).
 /**
- * \\brief Validates the StructNew instruction's immediates and operand-stack effect.
- * \\param arg Operand or context value used by this validator operation.
+ * \brief Validates the StructNew instruction's immediates and operand-stack effect.
+ * \param arg Operand or context value used by this validator operation.
  */
 	void dispatchStructNew(TypeIdx arg) override;
 	void dispatchStructNewDefault(TypeIdx arg) override; //!< Validate the stack effect of this opcode.
@@ -594,62 +594,62 @@ private:
 	void dispatchBrOnCastDescEq(uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2) override; //!< Validate the stack effect of this opcode.
 	void dispatchBrOnCastDescEqFail(uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2) override; //!< Validate the stack effect of this opcode.
 /**
- * \\brief Validates CastDescEq according to the WebAssembly validation rules.
- * \\param nullableTarget Operand or context value used by this validator operation.
- * \\param target Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Validates CastDescEq according to the WebAssembly validation rules.
+ * \param nullableTarget Operand or context value used by this validator operation.
+ * \param target Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void validateCastDescEq(bool nullableTarget, const HeapType& target);
 /**
- * \\brief Validates BrOnCastDescEq according to the WebAssembly validation rules.
- * \\param isFail Operand or context value used by this validator operation.
- * \\param castop Operand or context value used by this validator operation.
- * \\param label Operand or context value used by this validator operation.
- * \\param ht1 Operand or context value used by this validator operation.
- * \\param ht2 Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Validates BrOnCastDescEq according to the WebAssembly validation rules.
+ * \param isFail Operand or context value used by this validator operation.
+ * \param castop Operand or context value used by this validator operation.
+ * \param label Operand or context value used by this validator operation.
+ * \param ht1 Operand or context value used by this validator operation.
+ * \param ht2 Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void validateBrOnCastDescEq(bool isFail, uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2);
 
 /**
- * \\brief Validates Module according to the WebAssembly validation rules.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Validates Module according to the WebAssembly validation rules.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void validateModule();
 /**
- * \\brief Validates GlobalInit according to the WebAssembly validation rules.
- * \\param global Operand or context value used by this validator operation.
- * \\param index Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Validates GlobalInit according to the WebAssembly validation rules.
+ * \param global Operand or context value used by this validator operation.
+ * \param index Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void validateGlobalInit(const Global& global, std::size_t index);
 /**
- * \\brief Validates ElementSegment according to the WebAssembly validation rules.
- * \\param segment Operand or context value used by this validator operation.
- * \\param index Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Validates ElementSegment according to the WebAssembly validation rules.
+ * \param segment Operand or context value used by this validator operation.
+ * \param index Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void validateElementSegment(const ElementSegment& segment, std::size_t index);
 /**
- * \\brief Validates DataSegment according to the WebAssembly validation rules.
- * \\param segment Operand or context value used by this validator operation.
- * \\param index Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Validates DataSegment according to the WebAssembly validation rules.
+ * \param segment Operand or context value used by this validator operation.
+ * \param index Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void validateDataSegment(const DataSegment& segment, std::size_t index);
 /**
- * \\brief Validates TableInit according to the WebAssembly validation rules.
- * \\param table Operand or context value used by this validator operation.
- * \\param index Operand or context value used by this validator operation.
- * \\param isImport Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Validates TableInit according to the WebAssembly validation rules.
+ * \param table Operand or context value used by this validator operation.
+ * \param index Operand or context value used by this validator operation.
+ * \param isImport Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void validateTableInit(const TableType& table, std::size_t index, bool isImport = false);
 /**
- * \\brief Validates FunctionBody according to the WebAssembly validation rules.
- * \\param body Operand or context value used by this validator operation.
- * \\param index Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Validates FunctionBody according to the WebAssembly validation rules.
+ * \param body Operand or context value used by this validator operation.
+ * \param index Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void validateFunctionBody(const FunctionBody& body, std::size_t index);
 
@@ -671,7 +671,7 @@ private:
 
 	//! stringview facility (docs/proposals/STRINGREF.md STR-4)
 /**
- * \\brief Validates the StringAsWtf8 instruction's immediates and operand-stack effect.
+ * \brief Validates the StringAsWtf8 instruction's immediates and operand-stack effect.
  */
 	void dispatchStringAsWtf8() override;
 	void dispatchStringViewWtf8Advance() override; //!< Validate the stack effect of this opcode.
@@ -692,8 +692,8 @@ private:
 
 	//! GC-array string bridge (docs/proposals/STRINGREF.md STR-6)
 /**
- * \\brief Validates the StringNewUtf8Array instruction's immediates and operand-stack effect.
- * \\param arg Operand or context value used by this validator operation.
+ * \brief Validates the StringNewUtf8Array instruction's immediates and operand-stack effect.
+ * \param arg Operand or context value used by this validator operation.
  */
 	void dispatchStringNewUtf8Array(TypeIdx arg) override;
 	void dispatchStringNewWtf16Array(TypeIdx arg) override; //!< Validate the stack effect of this opcode.
@@ -707,8 +707,8 @@ private:
 
 	//! Immediate-only checks (no operand stack yet).
 /**
- * \\brief Validates the LocalGet instruction's immediates and operand-stack effect.
- * \\param arg Operand or context value used by this validator operation.
+ * \brief Validates the LocalGet instruction's immediates and operand-stack effect.
+ * \param arg Operand or context value used by this validator operation.
  */
 	void dispatchLocalGet(LocalIdx arg) override;
 	void dispatchLocalSet(LocalIdx arg) override; //!< Validate the stack effect of this opcode.
@@ -734,26 +734,26 @@ private:
 	void dispatchSuspend(TagIdx arg) override; //!< Validate the stack effect of this opcode.
 	//! Shared validation for `resume`/`resume_throw*` handler clauses.
 /**
- * \\brief Validates ContHandlers according to the WebAssembly validation rules.
- * \\param handlers Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Validates ContHandlers according to the WebAssembly validation rules.
+ * \param handlers Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void validateContHandlers(const std::vector<ContHandlerClause>& handlers);
 	void dispatchResume(TypeIdx arg, std::vector<ContHandlerClause>&& handlers) override; //!< Validate the stack effect of this opcode.
 	//! Dispatch the `ResumeThrow` instruction. Validate the stack effect of this opcode.
 /**
- * \\brief Validates the ResumeThrow instruction's immediates and operand-stack effect.
- * \\param arg1 Operand or context value used by this validator operation.
- * \\param arg2 Operand or context value used by this validator operation.
- * \\param handlers Operand or context value used by this validator operation.
+ * \brief Validates the ResumeThrow instruction's immediates and operand-stack effect.
+ * \param arg1 Operand or context value used by this validator operation.
+ * \param arg2 Operand or context value used by this validator operation.
+ * \param handlers Operand or context value used by this validator operation.
  */
 	void dispatchResumeThrow(TypeIdx arg1, TagIdx arg2,
 			std::vector<ContHandlerClause>&& handlers) override;
 	//! Dispatch the `ResumeThrowRef` instruction. Validate the stack effect of this opcode.
 /**
- * \\brief Validates the ResumeThrowRef instruction's immediates and operand-stack effect.
- * \\param arg Operand or context value used by this validator operation.
- * \\param handlers Operand or context value used by this validator operation.
+ * \brief Validates the ResumeThrowRef instruction's immediates and operand-stack effect.
+ * \param arg Operand or context value used by this validator operation.
+ * \param handlers Operand or context value used by this validator operation.
  */
 	void dispatchResumeThrowRef(TypeIdx arg,
 			std::vector<ContHandlerClause>&& handlers) override;
@@ -765,13 +765,13 @@ private:
 	void dispatchBrOnCast(uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2) override; //!< Validate the stack effect of this opcode.
 	void dispatchBrOnCastFail(uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2) override; //!< Validate the stack effect of this opcode.
 /**
- * \\brief Validates BrOnCast according to the WebAssembly validation rules.
- * \\param isFail Operand or context value used by this validator operation.
- * \\param castop Operand or context value used by this validator operation.
- * \\param label Operand or context value used by this validator operation.
- * \\param ht1 Operand or context value used by this validator operation.
- * \\param ht2 Operand or context value used by this validator operation.
- * \\throws ValidationError when the requested validation rule is violated.
+ * \brief Validates BrOnCast according to the WebAssembly validation rules.
+ * \param isFail Operand or context value used by this validator operation.
+ * \param castop Operand or context value used by this validator operation.
+ * \param label Operand or context value used by this validator operation.
+ * \param ht1 Operand or context value used by this validator operation.
+ * \param ht2 Operand or context value used by this validator operation.
+ * \throws ValidationError when the requested validation rule is violated.
  */
 	void validateBrOnCast(bool isFail, uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2);
 
@@ -800,8 +800,8 @@ private:
 
 	//! Core memory accesses.
 /**
- * \\brief Validates the I32Load instruction's immediates and operand-stack effect.
- * \\param arg Operand or context value used by this validator operation.
+ * \brief Validates the I32Load instruction's immediates and operand-stack effect.
+ * \param arg Operand or context value used by this validator operation.
  */
 	void dispatchI32Load(MemArg arg) override;
 	void dispatchI64Load(MemArg arg) override; //!< Validate the stack effect of this opcode.
@@ -830,7 +830,7 @@ private:
 
 	//! Core numeric instructions (operand/result typing).
 /**
- * \\brief Validates the I32Eqz instruction's immediates and operand-stack effect.
+ * \brief Validates the I32Eqz instruction's immediates and operand-stack effect.
  */
 	void dispatchI32Eqz() override;
 	void dispatchI64Eqz() override; //!< Validate the stack effect of this opcode.
@@ -972,7 +972,7 @@ private:
 
 	//! SIMD arithmetic/comparison/conversion typing (from wasm_simd_ops.inc).
 /**
- * \\brief Validates the I8x16Add instruction's immediates and operand-stack effect.
+ * \brief Validates the I8x16Add instruction's immediates and operand-stack effect.
  */
 	void dispatchI8x16Add() override;
 	void dispatchI8x16Sub() override; //!< Validate the stack effect of this opcode.
@@ -1178,8 +1178,8 @@ private:
 
 	//! Atomic memory accesses (operand/result typing).
 /**
- * \\brief Validates the MemoryAtomicNotify instruction's immediates and operand-stack effect.
- * \\param arg Operand or context value used by this validator operation.
+ * \brief Validates the MemoryAtomicNotify instruction's immediates and operand-stack effect.
+ * \param arg Operand or context value used by this validator operation.
  */
 	void dispatchMemoryAtomicNotify(MemArg arg) override;
 	void dispatchMemoryAtomicWait32(MemArg arg) override; //!< Validate the stack effect of this opcode.
@@ -1288,8 +1288,8 @@ private:
 
 	//! SIMD bitwise, const, bitmask and splat typing.
 /**
- * \\brief Validates the V128Const instruction's immediates and operand-stack effect.
- * \\param arg Operand or context value used by this validator operation.
+ * \brief Validates the V128Const instruction's immediates and operand-stack effect.
+ * \param arg Operand or context value used by this validator operation.
  */
 	void dispatchV128Const(std::span<uint8_t> arg) override;
 	void dispatchV128Not() override; //!< Validate the stack effect of this opcode.
@@ -1307,7 +1307,7 @@ private:
 
 	//! Bitmask reductions are part of the wasm_simd_ops.inc shape list.
 /**
- * \\brief Validates the I8x16Bitmask instruction's immediates and operand-stack effect.
+ * \brief Validates the I8x16Bitmask instruction's immediates and operand-stack effect.
  */
 	void dispatchI8x16Bitmask() override;
 	void dispatchI16x8Bitmask() override; //!< Validate the stack effect of this opcode.
@@ -1319,8 +1319,8 @@ private:
 
 	//! SIMD memory accesses and lanes.
 /**
- * \\brief Validates the V128Load instruction's immediates and operand-stack effect.
- * \\param arg Operand or context value used by this validator operation.
+ * \brief Validates the V128Load instruction's immediates and operand-stack effect.
+ * \param arg Operand or context value used by this validator operation.
  */
 	void dispatchV128Load(MemArg arg) override;
 	void dispatchV128Load8x8S(MemArg arg) override; //!< Validate the stack effect of this opcode.
