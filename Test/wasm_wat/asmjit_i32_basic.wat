@@ -2,6 +2,7 @@
   (memory 1 2)
   (global $g (export "g") (mut i32) (i32.const 7))
   (type $unary (func (param i32) (result i32)))
+  (type $result_only (func (result i32)))
   (table 1 funcref)
   (type $binary (func (param i32 i32) (result i32)))
   (func (export "add") (type $binary)
