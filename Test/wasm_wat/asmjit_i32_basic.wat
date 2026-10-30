@@ -255,7 +255,19 @@
     local.get 0
     i32.const 2
     i32.mul)
+  (func $table_triple (type $unary)
+    local.get 0
+    i32.const 3
+    i32.mul)
   (elem (i32.const 0) $table_double)
+  (elem $passive_funcs func $table_triple)
+  (func (export "table_init") (param i32 i32 i32)
+    local.get 0
+    local.get 1
+    local.get 2
+    table.init $passive_funcs)
+  (func (export "elem_drop")
+    elem.drop $passive_funcs)
   (func (export "call_indirect") (param i32 i32) (result i32)
     local.get 0
     local.get 1
