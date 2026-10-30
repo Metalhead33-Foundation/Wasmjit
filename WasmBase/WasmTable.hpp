@@ -23,9 +23,9 @@ namespace WASM {
 //! code can address slots cheaply (mirrors LinearMemory).
 /** \brief Standard-layout backend-visible view of a Store-owned table. */
 struct TableInstance {
-	Callable** base;   //!< slot array; null entries trap on call_indirect
-	uint64_t   size;   //!< current number of entries
-	uint64_t   max;    //!< maximum entries (UINT64_MAX = unbounded)
+	Callable** base; //!< slot array; null entries trap on call_indirect
+	uint64_t   size; //!< current number of entries
+	uint64_t   max; //!< maximum entries (UINT64_MAX = unbounded)
 	void*      hostData; //!< back-pointer to the owning StoreOwnedTable
 };
 static_assert(offsetof(TableInstance, base) == 0,

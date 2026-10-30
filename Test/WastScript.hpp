@@ -38,12 +38,12 @@ namespace Spec {
  * values use the corresponding structured members below.
  */
 struct ScriptValue {
-	std::string type;                 //!< "i32", "i64", "f32", "f64", "v128", "funcref", "either", ...
-	bool hasValue = false;            //!< True when `value` is populated.
+	std::string type; //!< "i32", "i64", "f32", "f64", "v128", "funcref", "either", ...
+	bool hasValue = false; //!< True when `value` is populated.
 	//! True when `value` carries a scalar (rather than a structured shape).
-	std::string value;                //!< scalar text, "null", "nan:canonical", ...
-	std::string laneType;             //!< v128 only
-	std::vector<std::string> lanes;   //!< v128 only
+	std::string value; //!< scalar text, "null", "nan:canonical", ...
+	std::string laneType; //!< v128 only
+	std::vector<std::string> lanes; //!< v128 only
 	std::vector<ScriptValue> alternatives; //!< "either" only
 
 	//! Structured component values. The JSON shape is documented in
@@ -54,20 +54,20 @@ struct ScriptValue {
 	std::vector<ScriptValue> elements;
 	//! Map entries, as (key, value) pairs.
 	std::vector<std::pair<ScriptValue, ScriptValue>> entries;
-	std::vector<std::string> flags;  //!< Set bit names of a `flags` value.
-	std::string caseLabel;  //!< The selected case of a `variant` value.
-	std::unique_ptr<ScriptValue> payload;  //!< The payload of the selected `variant` case.
-	bool hasPayload = false;  //!< True when the selected case carries a payload.
-	bool some = false;                //!< option
-	bool ok = true;                   //!< result
+	std::vector<std::string> flags; //!< Set bit names of a `flags` value.
+	std::string caseLabel; //!< The selected case of a `variant` value.
+	std::unique_ptr<ScriptValue> payload; //!< The payload of the selected `variant` case.
+	bool hasPayload = false; //!< True when the selected case carries a payload.
+	bool some = false; //!< option
+	bool ok = true; //!< result
 };
 
 //! An `(invoke ...)` or `(get ...)` directive.
 /** \brief One WAST action, either an exported function invocation or global get. */
 struct ScriptAction {
-	std::string type;                 //!< "invoke" or "get"
-	std::string module;               //!< optional named module, empty for "last"
-	std::string field;                //!< export name
+	std::string type; //!< "invoke" or "get"
+	std::string module; //!< optional named module, empty for "last"
+	std::string field; //!< export name
 	//! The arguments the action passes (empty for a `get`).
 	std::vector<ScriptValue> args;
 };
@@ -75,13 +75,13 @@ struct ScriptAction {
 //! A single top-level command in a script.
 /** \brief One top-level command from a parsed WAST script. */
 struct ScriptCommand {
-	std::string type;                 //!< "module", "assert_return", "register", ...
-	int line = 0;                     //!< line in the original .wast file
-	std::string name;                 //!< module name, for `module`/`register`
-	std::string filename;             //!< e.g. "const.0.wasm", relative to the JSON
-	std::string moduleType;           //!< "binary" or "text"
-	std::string text;                 //!< expected failure text
-	std::string as;                   //!< registry name for `register`
+	std::string type; //!< "module", "assert_return", "register", ...
+	int line = 0; //!< line in the original .wast file
+	std::string name; //!< module name, for `module`/`register`
+	std::string filename; //!< e.g. "const.0.wasm", relative to the JSON
+	std::string moduleType; //!< "binary" or "text"
+	std::string text; //!< expected failure text
+	std::string as; //!< registry name for `register`
 	//! The action an `action`/`assert_*` command carries.
 	ScriptAction action;
 	//! The expected values or trap text a `assert_*` command carries.
@@ -117,7 +117,7 @@ struct WitFunction {
 	std::string name;
 	//! The parameter names and type spellings, in order.
 	std::vector<std::pair<std::string, std::string>> params;
-	std::optional<std::string> result;  //!< The declared result type, if the function returns one.
+	std::optional<std::string> result; //!< The declared result type, if the function returns one.
 };
 
 /** \brief WIT interface name and its named function declarations. */
@@ -144,7 +144,7 @@ struct WitPackage {
 	std::string name;
 	//! The package's worlds.
 	std::vector<WitWorld> worlds;
-	std::vector<WitInterface> interfaces;  //!< The package's interfaces.
+	std::vector<WitInterface> interfaces; //!< The package's interfaces.
 
 	/**
 	 * \brief Parses the JSON representation produced by wasm-tools component wit.
@@ -163,8 +163,8 @@ struct ScriptReport {
 	std::size_t passed = 0;
 	//! Assertions that failed.
 	std::size_t failed = 0;
-	std::size_t skipped = 0;  //!< Assertions skipped because the harness cannot run them.
-	std::vector<std::string> failures;    //!< "line N: <detail>"
+	std::size_t skipped = 0; //!< Assertions skipped because the harness cannot run them.
+	std::vector<std::string> failures; //!< "line N: <detail>"
 	std::vector<std::string> skipReasons; //!< human-readable, possibly repeated
 };
 

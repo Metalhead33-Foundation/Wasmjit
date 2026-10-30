@@ -59,7 +59,7 @@ struct Section {
 	SectionType type;
 	//! Payload size in bytes.
 	uint32_t size;
-	uint32_t offset;  //!< Byte offset of the payload inside the file.
+	uint32_t offset; //!< Byte offset of the payload inside the file.
 };
 //! Read only.
 /** \brief Reads a section identifier and LEB128 payload size. \tparam E Stream byte order. \tparam I Device type. \param left Stream positioned at the section header. \param right Receives type, size, and payload offset. \return Reference to the input stream. */

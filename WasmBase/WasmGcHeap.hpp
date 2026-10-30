@@ -66,7 +66,7 @@ public:
 		uint8_t*   base      = nullptr; //!< mapped base address
 		size_t     capacity  = 0; //!< usable bytes in the mapping
 		size_t     used      = 0; //!< bump-pointer high-water mark
-		size_t     blockSize = 0;   //!< 0 => dedicated single-object region
+		size_t     blockSize = 0; //!< 0 => dedicated single-object region
 		void*      freeList  = nullptr; //!< recycled blocks of `blockSize`
 		uint32_t   live      = 0; //!< allocations not yet recycled
 		uint32_t   classIndex = 0; //!< size-class index, or unused for dedicated regions

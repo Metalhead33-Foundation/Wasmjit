@@ -24,12 +24,11 @@ namespace WASM {
 //! NEVER add std::vector, virtual functions, or non-trivial members here.
 struct LinearMemory {
 	//! Hot fields first — memory access is the most frequent operation.
-	uint8_t*  memoryBase;   //!< Base of linear memory (offset 0 for cheap addressing)
-	uint64_t  memorySize;   //!< current size in bytes
-	uint64_t  memoryMax;    //!< max size in bytes
-	bool      isShared;     //!< true → threads-proposal shared memory (atomics-eligible, grow is synchronized)
-	void*     hostData;     //!< Opaque pointer for any external user data;
-	                        //!< Ownership/backing storage lives OUTSIDE this struct (see below) —
+	uint8_t*  memoryBase; //!< Base of linear memory (offset 0 for cheap addressing)
+	uint64_t  memorySize; //!< current size in bytes
+	uint64_t  memoryMax; //!< max size in bytes
+	bool      isShared; //!< true → threads-proposal shared memory (atomics-eligible, grow is synchronized)
+	void*     hostData; //!< Opaque pointer for any external user data; //!< Ownership/backing storage lives OUTSIDE this struct (see below) —
 	                        //!< LinearMemory itself is just the backend-visible view.
 	//! Index type of the memory64 declaration, appended after the hot fields so
 	//! every existing offset (including `hostData`) stays put. Import matching
@@ -58,11 +57,11 @@ uint64_t wasm_memory_size(const LinearMemory* memory);
 class StoreOwnedMemory
 {
 protected:
-	LinearMemory memory;  //!< The bytes backing the exported memory.
+	LinearMemory memory; //!< The bytes backing the exported memory.
 public:
 	/** \brief Creates backing storage with the declared limits and page size. \param initialPages Initial page count. \param maxPages Maximum page count. \param isShared Whether the memory is shared. \param is64 Whether the declaration uses memory64 indices. \param pageSize Page size in bytes (defaults to 64 KiB). */
 	explicit StoreOwnedMemory(uint64_t initialPages, uint64_t maxPages, bool isShared,
-			bool is64 = false, uint64_t pageSize = 0x10000);  //!< True for a 64-bit (wasm64) memory.
+			bool is64 = false, uint64_t pageSize = 0x10000); //!< True for a 64-bit (wasm64) memory.
 	virtual ~StoreOwnedMemory() = default;
 	/** \brief Returns read-only access to the backend-visible memory descriptor. \return Pointer to the owned descriptor. */
 	const LinearMemory* getMemory() const;
@@ -92,7 +91,7 @@ private:
 	std::vector<uint8_t> backing;
 public:
 	explicit PrivateLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64 = false,
-			uint64_t pageSize = 0x10000);  //!< Page size in bytes (`0x10000` unless overridden).
+			uint64_t pageSize = 0x10000); //!< Page size in bytes (`0x10000` unless overridden).
 	/** \brief Releases the private memory backing storage. */
 	~PrivateLinearMemory() override = default;
 	/** \brief Grows the private buffer by the requested page count. \param deltaPages Number of pages to add. \return false if growth exceeds the declared maximum or allocation fails. */
@@ -105,8 +104,8 @@ class SharedLinearMemory final : public StoreOwnedMemory {
 private:
 	//! Base of the reserved address range; never moves.
 	void*  reservedRegion;
-	size_t reservedBytes;  //!< Size of the reservation, in bytes.
-	mutable std::mutex mutex;  //!< Serialises growth against concurrent access.
+	size_t reservedBytes; //!< Size of the reservation, in bytes.
+	mutable std::mutex mutex; //!< Serialises growth against concurrent access.
 	//! Reserves `bytes` of address space for the memory.
 	bool platformReservedMemory(size_t bytes);
 	//! Commits the first `newBytes` of the reservation.
@@ -115,7 +114,7 @@ private:
 	void platformDealloc();
 public:
 	explicit SharedLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64 = false,
-			uint64_t pageSize = 0x10000);  //!< Page size in bytes (`0x10000` unless overridden).
+			uint64_t pageSize = 0x10000); //!< Page size in bytes (`0x10000` unless overridden).
 	/** \brief Releases the reserved shared-memory address range. */
 	~SharedLinearMemory() override;
 	bool growMemory(uint64_t deltaPages) override;

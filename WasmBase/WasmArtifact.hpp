@@ -43,7 +43,7 @@ inline constexpr uint16_t kComponentLayer = 0x0001;
 /** \brief Version and layer fields read from an artifact's eight-byte preamble. */
 struct Preamble {
 	uint32_t version = 0; //!< Encoded format version.
-	uint16_t layer = 0;   //!< Encoded layer discriminator.
+	uint16_t layer = 0; //!< Encoded layer discriminator.
 };
 
 //! Common base for a parsed core module and a parsed Component Model component.
@@ -58,9 +58,9 @@ struct Preamble {
  * store must outlive the artifact.
  */
 struct WASMJIT_API Artifact {
-	ArtifactKind kind;  //!< Whether this artifact is a core module or a component.
-	uint32_t version = 0;  //!< The version field of the preamble.
-	uint16_t layer = 0;  //!< The layer field of the preamble.
+	ArtifactKind kind; //!< Whether this artifact is a core module or a component.
+	uint32_t version = 0; //!< The version field of the preamble.
+	uint16_t layer = 0; //!< The layer field of the preamble.
 
 	/** \brief Constructs an artifact with its parsed kind. \param artifactKind Core-module or component kind. */
 	explicit Artifact(ArtifactKind artifactKind) : kind(artifactKind) {}
@@ -124,7 +124,7 @@ protected:
 	 */
 	virtual void parseBody(Elv::Io::Device& file, std::optional<uint64_t> end) = 0;
 
-	Store* store_ = nullptr;  //!< The store the artifact's types are interned in.
+	Store* store_ = nullptr; //!< The store the artifact's types are interned in.
 };
 
 }

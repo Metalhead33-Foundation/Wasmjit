@@ -37,7 +37,7 @@ struct VMContext {
 	//! Number of entries in `memories` (the memory index space's size).
 	uint32_t             memoryCount;
 
-	const Module*    module;        //!< Runtime type graph and metadata for GC/reference checks
+	const Module*    module; //!< Runtime type graph and metadata for GC/reference checks
 
 	//! Globals: one cell per global index (imports first, then locals). A
 	//! defined global's cell is owned by the instance; an imported global's cell

@@ -58,13 +58,13 @@ private:
 		using std::runtime_error::runtime_error;
 	};
 
-	const Module& module;  //!< The module under validation.
-	ValidationOptions options;  //!< The options the validator was started with.
-	std::size_t totalFunctions = 0;  //!< Declared function count, for the allocation budget.
-	std::size_t totalTables = 0;  //!< Declared table count, for the allocation budget.
-	std::size_t totalMemories = 0;  //!< Declared memory count, for the allocation budget.
-	std::size_t totalGlobals = 0;  //!< Declared global count, for the allocation budget.
-	std::size_t totalTags = 0;  //!< Declared tag count, for the allocation budget.
+	const Module& module; //!< The module under validation.
+	ValidationOptions options; //!< The options the validator was started with.
+	std::size_t totalFunctions = 0; //!< Declared function count, for the allocation budget.
+	std::size_t totalTables = 0; //!< Declared table count, for the allocation budget.
+	std::size_t totalMemories = 0; //!< Declared memory count, for the allocation budget.
+	std::size_t totalGlobals = 0; //!< Declared global count, for the allocation budget.
+	std::size_t totalTags = 0; //!< Declared tag count, for the allocation budget.
 
 	//! Current function body (npos while validating module-level structure).
 	static constexpr std::size_t kNoBody = static_cast<std::size_t>(-1);
@@ -194,11 +194,11 @@ private:
 		std::vector<ValueType> startTypes;
 		//! The operand types the frame must produce on exit.
 		std::vector<ValueType> endTypes;
-		std::size_t height = 0;  //!< Operand-stack height when the frame was pushed.
-		bool isLoop = false;  //!< True when the frame is a `loop` label.
-		bool isIf = false;  //!< True when the frame is an `if` label.
-		bool elseSeen = false;  //!< True once the frame's `else` was seen.
-		bool unreachable = false;  //!< True while the frame is in unreachable code.
+		std::size_t height = 0; //!< Operand-stack height when the frame was pushed.
+		bool isLoop = false; //!< True when the frame is a `loop` label.
+		bool isIf = false; //!< True when the frame is an `if` label.
+		bool elseSeen = false; //!< True once the frame's `else` was seen.
+		bool unreachable = false; //!< True while the frame is in unreachable code.
 		//! Definite assignment of non-defaultable locals. A frame inherits its
 		//! parent's set on entry; stores made inside the frame do not escape it,
 		//! and `else` restarts from the entry set (the spec's local-init rule).
@@ -206,8 +206,8 @@ private:
 		//! The `initialized` set as it was on frame entry (restored by `else`).
 		std::vector<uint8_t> entryInitialized;
 	};
-	std::vector<ValueType> typeStack;  //!< The polymorphic operand stack.
-	std::vector<ControlFrame> controlStack;  //!< The active control frames, innermost last.
+	std::vector<ValueType> typeStack; //!< The polymorphic operand stack.
+	std::vector<ControlFrame> controlStack; //!< The active control frames, innermost last.
 	//! Set when an opcode without a typing rule is seen: the rest of the body is
 	//! still scanned for immediate checks, but the operand stack is not trusted.
 	bool typeTainted = false;
@@ -268,7 +268,7 @@ private:
 	ValueType globalType(GlobalIdx idx) const;
 	//! The element type of table `idx`.
 	ValueType tableElementType(TableIdx idx) const;
-	const FuncType* currentFuncType = nullptr;  //!< The signature of the body being validated, if any.
+	const FuncType* currentFuncType = nullptr; //!< The signature of the body being validated, if any.
 	//! The parameter types of `types`, as stack operand types.
 	std::vector<ValueType> paramTypes(const FuncType& types) const;
 	//! The result types of `types`, as stack operand types.

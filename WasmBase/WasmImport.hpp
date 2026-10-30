@@ -126,7 +126,7 @@ public:
 		std::string_view moduleName,
 		std::string_view fieldName,
 		TypeId           expectedType,
-		bool             exact = false) = 0;  //!< `exact` forbids a subtype match.
+		bool             exact = false) = 0; //!< `exact` forbids a subtype match.
 
 	//! Resolve a global import. Returns a borrowed *cell* owned by the exporter
 	//! (or by the resolver, for a host-provided global). The importing instance

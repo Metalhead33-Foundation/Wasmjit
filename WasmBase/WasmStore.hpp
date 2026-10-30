@@ -217,10 +217,10 @@ public:
 	//! declared here so the ownership model is explicit and the migration is
 	//! mechanical once they gain runtime behaviour. GC-dependent kinds are
 	//! deferred entirely (see GcHeap).
-	struct StoreOwnedGlobal;          //!< globals               (TODO)
-	struct StoreOwnedFunction;        //!< callables / functions (TODO)
-	struct StoreOwnedElementSegment;  //!< element segments      (TODO)
-	struct StoreOwnedDataSegment;     //!< data segments         (TODO)
+	struct StoreOwnedGlobal; //!< globals               (TODO)
+	struct StoreOwnedFunction; //!< callables / functions (TODO)
+	struct StoreOwnedElementSegment; //!< element segments      (TODO)
+	struct StoreOwnedDataSegment; //!< data segments         (TODO)
 	//! GC heap objects live in the Store-owned GcHeap (see gc()).
 
 	using GlobalId   = int32_t; //!< reserved: process-wide global id

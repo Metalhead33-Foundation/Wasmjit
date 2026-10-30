@@ -397,9 +397,9 @@ struct ComponentDeclRecord {
 	//! The declared field name, interned in the string store.
 	StringId name = 0;
 	//! The encoded `ComponentSort`.
-	uint16_t sort = 0;      //!< ComponentSort
+	uint16_t sort = 0; //!< ComponentSort
 	//! The core sort when `sort` is `ComponentSort::Core`.
-	uint16_t coreSort = 0;  //!< CoreSort when sort == ComponentSort::Core
+	uint16_t coreSort = 0; //!< CoreSort when sort == ComponentSort::Core
 	//! The referenced type, or `kNone` when the declaration carries no type.
 	TypeId type{TypeId::kNone};
 };

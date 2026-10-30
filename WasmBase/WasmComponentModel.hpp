@@ -477,7 +477,7 @@ enum class Kind : uint8_t {
 	Kind kind = Kind::Import;
 	std::variant<std::monostate, std::unique_ptr<ImportDecl>,
 			std::unique_ptr<CoreTypeDef>, std::unique_ptr<ComponentTypeDef>,
-			std::unique_ptr<Alias>, std::unique_ptr<ExportDecl>> payload;  //!< The payload `kind` selects.
+			std::unique_ptr<Alias>, std::unique_ptr<ExportDecl>> payload; //!< The payload `kind` selects.
 
 	//! The payload `kind` selects.
 	const ImportDecl& import() const { return *std::get<std::unique_ptr<ImportDecl>>(payload); }
@@ -504,7 +504,7 @@ enum class Kind : uint8_t {
 	Kind kind = Kind::CoreType;
 	std::variant<std::monostate, std::unique_ptr<CoreTypeDef>,
 			std::unique_ptr<ComponentTypeDef>, std::unique_ptr<Alias>,
-			std::unique_ptr<ExportDecl>> payload;  //!< The payload `kind` selects.
+			std::unique_ptr<ExportDecl>> payload; //!< The payload `kind` selects.
 
 	//! The payload of a `core type` declaration.
 	const CoreTypeDef& coreType() const { return *std::get<std::unique_ptr<CoreTypeDef>>(payload); }
@@ -522,7 +522,7 @@ struct ComponentTypeDef {
 	enum class Kind : uint8_t {
 		DefinedValue, Func, Component, Instance, Resource
 	};
-	Kind kind = Kind::DefinedValue;  //!< Which kind of type definition this is.
+	Kind kind = Kind::DefinedValue; //!< Which kind of type definition this is.
 	//! Defined-value, function and resource payloads live in the shared store.
 	//! Component/instance declarations are the remaining inline payloads for
 	//! this pass; they keep their order because declaration order is scope.
@@ -555,7 +555,7 @@ struct Start {
 	uint32_t funcIndex = 0;
 	//! The `i32` arguments the start function receives.
 	std::vector<uint32_t> args;
-	uint32_t resultCount = 0;  //!< Number of results the start function returns.
+	uint32_t resultCount = 0; //!< Number of results the start function returns.
 };
 
 /** \brief Component value declaration with its encoded initializer payload. */

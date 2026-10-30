@@ -51,7 +51,7 @@ public:
 		Value* cell = nullptr;
 		//! The declared type and mutability matched against the import.
 		GlobalType type{};
-		std::unique_ptr<Value> owned;  //!< Registry-owned storage when the value was copied in.
+		std::unique_ptr<Value> owned; //!< Registry-owned storage when the value was copied in.
 	};
 
 	/** \brief Set of registered importable entities under one module name. */
@@ -67,7 +67,7 @@ public:
 		NameMap<ImportedTable> tables;
 		//! The module's exception tag identities.
 		NameMap<TagId> tags;
-		NameMap<TypeId> types;  //!< The module's published type identities.
+		NameMap<TypeId> types; //!< The module's published type identities.
 
 		/** \brief Registers a callable in this module namespace. \param fieldName Import/export field name. \param callable Callable descriptor to publish. */
 	void registerFunction(std::string_view fieldName, const Callable& callable);
@@ -158,8 +158,8 @@ public:
 	Store& boundStore() const;
 
 private:
-	Store* store_ = nullptr;  //!< The store identities are interned in.
-	NameMap<ModuleRegistry> registeredModules;  //!< The registered modules, keyed by module name.
+	Store* store_ = nullptr; //!< The store identities are interned in.
+	NameMap<ModuleRegistry> registeredModules; //!< The registered modules, keyed by module name.
 };
 
 } // namespace WASM

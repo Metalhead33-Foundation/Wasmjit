@@ -29,9 +29,9 @@ namespace WASM {
 //! exactly what this constexpr header is. It names no backend, so it belongs in
 //! the backend-agnostic core (docs/LAYERING.md).
 enum class Profile : uint8_t {
-	Full,          //!< `{}` — supports everything the engine implements
+	Full, //!< `{}` — supports everything the engine implements
 	Deterministic, //!< the spec's `{N,T}`; not claimed alone (see below)
-	Scalar,        //!< `{V}` — excludes vector types and instructions
+	Scalar, //!< `{V}` — excludes vector types and instructions
 	//! The deterministic∩scalar intersection `{N,T,V}`. The proposal allows an
 	//! implementation to declare an intersection, and this engine does: SIMD
 	//! float NaN payloads can be observed byte-wise (`v128.store`), so a
@@ -45,8 +45,8 @@ enum class Profile : uint8_t {
 enum class ProfileMarker : uint32_t {
 	None = 0, //!< No exclusion requested.
 	NonDeterministic = 1u << 0, //!< N: relaxed SIMD / non-deterministic rules
-	Threads = 1u << 1,          //!< T: shared memory, atomics, shared types
-	Vectors = 1u << 2,          //!< V: v128 and every SIMD instruction
+	Threads = 1u << 1, //!< T: shared memory, atomics, shared types
+	Vectors = 1u << 2, //!< V: v128 and every SIMD instruction
 };
 
 //! Union of two markers, so `ProfileMarker::Threads | ProfileMarker::Vectors`

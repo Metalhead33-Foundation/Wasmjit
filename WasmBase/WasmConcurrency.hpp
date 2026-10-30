@@ -31,7 +31,7 @@ namespace WASM {
 
 enum class ConcurrencyModel : std::uint8_t {
 	Single = 0, //!< one agent inside a call at a time
-	Agents,     //!< several agents may execute one instance concurrently
+	Agents, //!< several agents may execute one instance concurrently
 };
 
 //! True when the engine can honour the named concurrency model.

@@ -65,9 +65,9 @@ namespace WASM {
 enum class ContinuationStatus : std::int32_t {
 	Completed = 0, //!< the resumed context returned; `value` is its result
 	Suspended = 1, //!< it suspended; `tagId`, `value` and `continuation` are valid
-	Trapped = 2,   //!< a trap was transferred to the resumer's execution state
+	Trapped = 2, //!< a trap was transferred to the resumer's execution state
 	Exception = 3, //!< an uncaught exception was transferred to the resumer
-	Invalid = 4,   //!< the helper already reported a trap on the resumer
+	Invalid = 4, //!< the helper already reported a trap on the resumer
 };
 
 /** \brief ABI result record returned when a continuation is resumed. */
@@ -89,8 +89,8 @@ struct ContinuationResumeResult {
 	std::uint32_t tagValueCount = 0;
 	//! Caller-owned buffer receiving the result slots.
 	void*        resultValues = nullptr;
-	void*        tagValues = nullptr;  //!< Caller-owned buffer receiving the tag payload slots.
-	const std::uint8_t* tagKinds = nullptr;  //!< Optional kind array describing the tag payload.
+	void*        tagValues = nullptr; //!< Caller-owned buffer receiving the tag payload slots.
+	const std::uint8_t* tagKinds = nullptr; //!< Optional kind array describing the tag payload.
 };
 
 //! One continuation value slot. The runtime never interprets the payload; the
@@ -132,7 +132,7 @@ using ContinuationInvokeFn = void (*)(void* target, void* context,
 //! threads may use one continuation at the same time.
 enum class ContinuationProvider : std::int32_t {
 	NativeStacks = 0, //!< A — mmap'd stack + ucontext switch (default)
-	HostThreads = 1,  //!< B — one host thread per suspended continuation
+	HostThreads = 1, //!< B — one host thread per suspended continuation
 };
 
 /** \brief Returns the provider selected for newly created continuations. \return Current provider selection. */
@@ -226,7 +226,7 @@ public:
 			std::int32_t* resumedValue) noexcept;
 
 private:
-	void* ref_ = nullptr;  //!< The owned continuation reference, or null.
+	void* ref_ = nullptr; //!< The owned continuation reference, or null.
 };
 
 //! \brief Embedder-owned scheduling / JSPI-style promise seam
@@ -349,17 +349,17 @@ enum class Kind {
 		Kind kind = Kind::Resume;
 		//! The continuation reference the task owns.
 		void* continuation = nullptr;
-		std::int32_t arg = 0;  //!< The scalar resume value of a narrow task.
-		std::vector<ContinuationValue> args;  //!< The argument slots of a wide task.
-		std::vector<std::uint8_t> argKinds;  //!< The kind array of `args`, for reference retention.
-		void* exception = nullptr;  //!< The borrowed exception of a throw task.
-		void* creationContext = nullptr;  //!< The context captured when the task was queued.
-		std::uint32_t resultCapacity = 0;  //!< Result buffer capacity requested by the caller.
-		std::uint32_t tagCapacity = 0;  //!< Tag buffer capacity requested by the caller.
-		bool wide = false;  //!< True for a wide (typed-slot) task.
+		std::int32_t arg = 0; //!< The scalar resume value of a narrow task.
+		std::vector<ContinuationValue> args; //!< The argument slots of a wide task.
+		std::vector<std::uint8_t> argKinds; //!< The kind array of `args`, for reference retention.
+		void* exception = nullptr; //!< The borrowed exception of a throw task.
+		void* creationContext = nullptr; //!< The context captured when the task was queued.
+		std::uint32_t resultCapacity = 0; //!< Result buffer capacity requested by the caller.
+		std::uint32_t tagCapacity = 0; //!< Tag buffer capacity requested by the caller.
+		bool wide = false; //!< True for a wide (typed-slot) task.
 	};
-	Hooks hooks_{};  //!< The embedder callbacks invoked as tasks progress.
-	std::deque<Task> tasks_{};  //!< The queued tasks, in submission order.
+	Hooks hooks_{}; //!< The embedder callbacks invoked as tasks progress.
+	std::deque<Task> tasks_{}; //!< The queued tasks, in submission order.
 };
 
 //! \par Generated-code entry points (C ABI)

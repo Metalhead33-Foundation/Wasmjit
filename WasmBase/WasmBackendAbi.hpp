@@ -52,8 +52,8 @@ struct SignatureView {
 	const ValueKind* params = nullptr;
 	//! Number of entries in `params`.
 	std::uint32_t    paramCount = 0;
-	const ValueKind* results = nullptr;  //!< Result kinds.
-	std::uint32_t    resultCount = 0;  //!< Number of entries in `results`.
+	const ValueKind* results = nullptr; //!< Result kinds.
+	std::uint32_t    resultCount = 0; //!< Number of entries in `results`.
 };
 
 /** \brief Offset, size, and alignment of one field in a lowered aggregate. */
@@ -62,7 +62,7 @@ struct FieldLayout {
 	std::uint32_t offset = 0;
 	//! Byte size of the field.
 	std::uint32_t size = 0;
-	std::uint32_t alignment = 0;  //!< Required alignment of the field, in bytes.
+	std::uint32_t alignment = 0; //!< Required alignment of the field, in bytes.
 };
 
 /** \brief Caller-storage-backed layout description of a lowered aggregate. */

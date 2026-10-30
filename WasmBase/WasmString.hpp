@@ -28,7 +28,7 @@ namespace WASM {
 //! more restrictive than its 2^31-1 byte maximum; keeping one decoded string
 //! well below the allocation budget means the code-point vector cannot be the
 //! allocation that takes the host down (docs/SAFETY.md).
-constexpr uint32_t kMaxStringBytes = 16u << 20;             //!< 16 MiB
+constexpr uint32_t kMaxStringBytes = 16u << 20; //!< 16 MiB
 constexpr uint32_t kMaxStringCodeUnits = kMaxStringBytes / 2; //!< 8 M code points
 
 //! A Store-owned string: the proposal's sequence of Unicode scalar values and
@@ -149,7 +149,7 @@ private:
 		StringIteratorObject object;
 		//! Outstanding references.
 		uint32_t refcount = 0;
-		uint64_t bytes = 0;  //!< Accounted bytes (object + record).
+		uint64_t bytes = 0; //!< Accounted bytes (object + record).
 	};
 
 	//! Releases one reference to a view; true when the entry was destroyed.
@@ -157,12 +157,12 @@ private:
 	//! Releases one reference to an iterator; true when the entry was destroyed.
 	bool releaseIterator(const StringIteratorObject* iterator);
 
-	std::unordered_map<const StringObject*, std::unique_ptr<StringEntry>> objects_;  //!< Strings, keyed by their stable handle.
-	std::unordered_map<const StringViewObject*, std::unique_ptr<ViewEntry>> views_;  //!< Views, keyed by their stable handle.
-	std::unordered_map<const StringIteratorObject*, std::unique_ptr<IteratorEntry>> iterators_;  //!< Iterators, keyed by their stable handle.
+	std::unordered_map<const StringObject*, std::unique_ptr<StringEntry>> objects_; //!< Strings, keyed by their stable handle.
+	std::unordered_map<const StringViewObject*, std::unique_ptr<ViewEntry>> views_; //!< Views, keyed by their stable handle.
+	std::unordered_map<const StringIteratorObject*, std::unique_ptr<IteratorEntry>> iterators_; //!< Iterators, keyed by their stable handle.
 
 private:
-	Store& owner_;  //!< The store whose allocation budget the arena charges.
+	Store& owner_; //!< The store whose allocation budget the arena charges.
 };
 
 //! \par Codecs

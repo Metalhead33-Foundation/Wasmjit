@@ -27,18 +27,18 @@ struct alignas(16) Value {
 	//! are used for a 32/64-bit integer and a vector; the narrow members exist so
 	//! a typed accessor needs no cast.
 	union {
-		int8_t i8;      //!< signed 8-bit integer
-		uint8_t u8;     //!< unsigned 8-bit integer
-		int16_t i16;    //!< signed 16-bit integer
-		uint16_t u16;   //!< unsigned 16-bit integer
-		int32_t  i32;   //!< signed 32-bit integer (`i32`)
-		uint32_t  u32;  //!< unsigned 32-bit integer
-		int64_t  i64;   //!< signed 64-bit integer (`i64`)
+		int8_t i8; //!< signed 8-bit integer
+		uint8_t u8; //!< unsigned 8-bit integer
+		int16_t i16; //!< signed 16-bit integer
+		uint16_t u16; //!< unsigned 16-bit integer
+		int32_t  i32; //!< signed 32-bit integer (`i32`)
+		uint32_t  u32; //!< unsigned 32-bit integer
+		int64_t  i64; //!< signed 64-bit integer (`i64`)
 		uint64_t  ui64; //!< unsigned 64-bit integer
-		float    f32;   //!< 32-bit float (`f32`)
-		double   f64;   //!< 64-bit float (`f64`)
+		float    f32; //!< 32-bit float (`f32`)
+		double   f64; //!< 64-bit float (`f64`)
 		uint8_t  v128[16]; //!< 128-bit vector (`v128`), little-endian lane order
-		void* ref;      //!< reference-typed value (`externref` payload or GC object)
+		void* ref; //!< reference-typed value (`externref` payload or GC object)
 	};
 	//! Which member of the union is meaningful.
 	ValueTypeCode kind;
@@ -62,8 +62,8 @@ struct VMContext;
 //!     hostData on the instance after instantiation.
 /** \brief Backend-neutral function reference and its calling-convention metadata. */
 struct Callable {
-	void* fnPtr;          //!< Signature: ret f(VMContext* ctx, params...)
-	VMContext* context;   //!< nullptr → the backend passes caller's VMContext (native import)
+	void* fnPtr; //!< Signature: ret f(VMContext* ctx, params...)
+	VMContext* context; //!< nullptr → the backend passes caller's VMContext (native import)
 	                      //!< non-null → the backend burns this address into code (Wasm import)
 	uint32_t   localTypeIdx; //!< Module-local type index in the *defining* module.
 	//! Canonical (process-wide) identity of this function's type. Set when the

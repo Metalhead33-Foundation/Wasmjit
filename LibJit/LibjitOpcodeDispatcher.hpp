@@ -23,9 +23,9 @@ namespace LibJIT {
 struct ControlBlock {
 	//! Which structured-control construct opened this frame.
 	enum Kind {
-		Block,    //!< Plain `block` … `end`.
-		Loop,     //!< `loop` … `end` (a branch targets the loop head).
-		If,       //!< `if` … [`else` …] `end`.
+		Block, //!< Plain `block` … `end`.
+		Loop, //!< `loop` … `end` (a branch targets the loop head).
+		If, //!< `if` … [`else` …] `end`.
 		TryTable  //!< `try_table` … `end` with static catch clauses.
 	};
 	Kind kind; //!< The construct that opened this frame.
@@ -446,8 +446,8 @@ private:
  * \brief Routes a trap to the shared epilogue, which returns zeroes.
  */
 	void requestTrapEpilogue();
-	jit_label_t trapEpilogueLabel = jit_label_undefined;  //!< Label of the shared trap epilogue, if one was emitted.
-	bool trapEpilogueUsed = false;  //!< True once a trap path needed the epilogue.
+	jit_label_t trapEpilogueLabel = jit_label_undefined; //!< Label of the shared trap epilogue, if one was emitted.
+	bool trapEpilogueUsed = false; //!< True once a trap path needed the epilogue.
 	//! The calling thread's trap slot, obtained once per function in the entry
 	//! block (`wasm_trap_slot()`); every check loads `pending` through it.
 	jit_value_t trapSlot = nullptr;

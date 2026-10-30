@@ -54,7 +54,7 @@ class Agent;
  * retain pointers into its inline storage.
  */
 struct ExecutionState {
-	static constexpr std::uint32_t kDeferCapacity = 32;  //!< Inline capacity of the defer stack.
+	static constexpr std::uint32_t kDeferCapacity = 32; //!< Inline capacity of the defer stack.
 
 	//! The pending trap. `TrapSlot` is the C-ABI view generated code reads.
 	TrapSlot trapSlot{};
@@ -135,8 +135,8 @@ public:
 	const ExecutionState& execution() const noexcept { return state_; }
 
 private:
-	ExecutionState state_;  //!< The agent's execution state.
-	std::uint64_t id_;  //!< The agent's numeric identity.
+	ExecutionState state_; //!< The agent's execution state.
+	std::uint64_t id_; //!< The agent's numeric identity.
 };
 
 //! The execution state the calling host thread is currently running. Never null:
@@ -193,7 +193,7 @@ public:
 	ExecutionStateScope& operator=(const ExecutionStateScope&) = delete;
 
 private:
-	ExecutionState* previous_;  //!< The state to restore when the scope ends.
+	ExecutionState* previous_; //!< The state to restore when the scope ends.
 };
 
 //! Installs an agent's execution state for the duration of the scope.
@@ -215,7 +215,7 @@ public:
 	AgentScope& operator=(const AgentScope&) = delete;
 
 private:
-	ExecutionStateScope scope_;  //!< The scope that installs this agent's state.
+	ExecutionStateScope scope_; //!< The scope that installs this agent's state.
 };
 
 } // namespace WASM

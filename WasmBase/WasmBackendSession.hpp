@@ -51,15 +51,15 @@ class BackendLaneWiseOp;
 //! test or an embedder never needs a backend IR type to validate a layout.
 /** \brief ABI layout of one field in a lowered aggregate. */
 struct BackendFieldLayout {
-	std::size_t offset = 0;    //!< Byte offset of this field in the aggregate.
-	std::size_t size = 0;      //!< Size of this field in bytes.
+	std::size_t offset = 0; //!< Byte offset of this field in the aggregate.
+	std::size_t size = 0; //!< Size of this field in bytes.
 	std::size_t alignment = 0; //!< Required alignment of this field in bytes.
 };
 
 //! Lowered layout of a multi-result tuple / aggregate the session can materialise.
 /** \brief Total layout and per-field offsets for a lowered aggregate. */
 struct BackendAggregateLayout {
-	std::size_t size = 0;      //!< Total size of the aggregate, rounded up.
+	std::size_t size = 0; //!< Total size of the aggregate, rounded up.
 	std::size_t alignment = 0; //!< Largest field alignment in the aggregate.
 	std::vector<BackendFieldLayout> fields; //!< Per-field offset/size/alignment.
 };

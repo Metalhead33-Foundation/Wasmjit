@@ -83,9 +83,9 @@ struct DebugHost {
  */
 struct TextFixture {
 public:
-	std::unique_ptr<WASM::Module> module;  //!< The parsed module; outlives `instance`.
-	std::unique_ptr<WASM::ModuleInstance> instance;  //!< The instantiated fixture.
-	std::unique_ptr<WASM::RegistryImportResolver> resolver;  //!< The resolver the fixture registered its imports with.
+	std::unique_ptr<WASM::Module> module; //!< The parsed module; outlives `instance`.
+	std::unique_ptr<WASM::ModuleInstance> instance; //!< The instantiated fixture.
+	std::unique_ptr<WASM::RegistryImportResolver> resolver; //!< The resolver the fixture registered its imports with.
 	//!std::unique_ptr<WASM::VMContext> vm_context;
 	std::unique_ptr<DebugHost> debug_host;
 private:

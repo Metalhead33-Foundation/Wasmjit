@@ -40,9 +40,9 @@ struct CanonHeapType {
 	 };
 	Kind             kind = Kind::Abstract; //!< Selects which member below applies.
 	AbstractHeapType abstract = AbstractHeapType::Any; //!< when Abstract
-	TypeId           id{};                             //!< when Global
-	uint32_t         memberIndex = 0;                  //!< when Rec (per-group index)
-	bool             isExact = false;                  //!< Custom Descriptors: `exact x`
+	TypeId           id{}; //!< when Global
+	uint32_t         memberIndex = 0; //!< when Rec (per-group index)
+	bool             isExact = false; //!< Custom Descriptors: `exact x`
 	//! Compares every component of the heap type.
 	bool operator==(const CanonHeapType& o) const {
 		return kind == o.kind && abstract == o.abstract &&
@@ -54,9 +54,9 @@ struct CanonHeapType {
 /** \brief Canonical value type with reference nullability and sharing metadata. */
 struct CanonValueType {
 	ValueTypeCode opcode = ValueTypeCode::Void; //!< numeric/vector, or Ref/RefNull
-	bool          nullable = false;             //!< when Ref/RefNull
-	CanonHeapType heap{};                       //!< when Ref/RefNull
-	bool          isShared = false;             //!< when Ref/RefNull, SET-1
+	bool          nullable = false; //!< when Ref/RefNull
+	CanonHeapType heap{}; //!< when Ref/RefNull
+	bool          isShared = false; //!< when Ref/RefNull, SET-1
 	//! Compares opcode, nullability, heap type and sharing.
 	bool operator==(const CanonValueType& o) const {
 		return opcode == o.opcode && nullable == o.nullable && heap == o.heap &&
@@ -69,7 +69,7 @@ struct CanonStorageType {
 	//! Whether the storage type is a packed `i8`/`i16` rather than a value type.
 	bool           isPacked = false;
 	ValueTypeCode  packed = ValueTypeCode::I8; //!< when isPacked
-	CanonValueType value{};                    //!< when !isPacked
+	CanonValueType value{}; //!< when !isPacked
 	//! Compares the packed flag, the packed code and the value type.
 	bool operator==(const CanonStorageType& o) const {
 		return isPacked == o.isPacked && packed == o.packed && value == o.value;
@@ -96,8 +96,8 @@ struct CanonFieldType {
  * member indices until the group is interned.
  */
 struct CanonicalType {
-	CanonTypeKind kind = CanonTypeKind::Func;  //!< The shape this type describes.
-	bool          isFinal = true;  //!< Whether the type is declared `final` (no subtypes).
+	CanonTypeKind kind = CanonTypeKind::Func; //!< The shape this type describes.
+	bool          isFinal = true; //!< Whether the type is declared `final` (no subtypes).
 	bool          isShared = false; //!< SET-1: `sharecomptype`
 	//! Custom Descriptors: the optional `descriptor`/`describes` clauses. These
 	//! participate in the canonical identity and are part of the rec group.
@@ -105,7 +105,7 @@ struct CanonicalType {
 	//! The optional `describes` clause (Custom Descriptors).
 	std::optional<CanonHeapType> describes;
 	std::vector<CanonHeapType> supertypes; //!< stored as Global after interning
-	uint32_t      depth = 0;               //!< 1 + max(supertype depths); 0 if none
+	uint32_t      depth = 0; //!< 1 + max(supertype depths); 0 if none
 
 	//! Kind-specific payload (exactly one is used).
 	std::vector<CanonStorageType> funcParams;
@@ -113,7 +113,7 @@ struct CanonicalType {
 	std::vector<CanonStorageType> funcResults;
 	//! Fields of a struct type.
 	std::vector<CanonFieldType>   structFields;
-	CanonFieldType                arrayElement;  //!< Element field type of an array type.
+	CanonFieldType                arrayElement; //!< Element field type of an array type.
 	CanonHeapType                 contFunc; //!< stack switching: `cont $ft`
 };
 

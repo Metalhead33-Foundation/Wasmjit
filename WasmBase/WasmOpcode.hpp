@@ -31,7 +31,7 @@ enum class Opcode : uint8_t {
 	Throw = 0x08, //!< Binary opcode mnemonic `Throw`.
 	//! 0x09 reserved
 	ThrowRef = 0x0A, //!< Binary opcode mnemonic `ThrowRef`.
-	End                 = 0x0B,  //!< terminates block/loop/if/try_table
+	End                 = 0x0B, //!< terminates block/loop/if/try_table
 	Br = 0x0C, //!< Binary opcode mnemonic `Br`.
 	BrIf = 0x0D, //!< Binary opcode mnemonic `BrIf`.
 	BrTable = 0x0E, //!< Binary opcode mnemonic `BrTable`.
@@ -50,7 +50,7 @@ enum class Opcode : uint8_t {
 	//! --- Parametric ---
 	Drop = 0x1A, //!< Binary opcode mnemonic `Drop`.
 	Select = 0x1B, //!< Binary opcode mnemonic `Select`.
-	SelectT             = 0x1C,  //!< select with explicit type list
+	SelectT             = 0x1C, //!< select with explicit type list
 	//! 0x1D-0x1E reserved
 
 	//! --- Variable ---
@@ -254,13 +254,13 @@ enum class Opcode : uint8_t {
 	//! 0xC5-0xCF reserved
 
 	//! --- Reference instructions (0xD0-0xD6) ---
-	RefNull             = 0xD0,  //!< followed by heaptype
+	RefNull             = 0xD0, //!< followed by heaptype
 	RefIsNull = 0xD1, //!< Binary opcode mnemonic `RefIsNull`.
-	RefFunc             = 0xD2,  //!< followed by funcidx
+	RefFunc             = 0xD2, //!< followed by funcidx
 	RefEq = 0xD3, //!< Binary opcode mnemonic `RefEq`.
 	RefAsNonNull = 0xD4, //!< Binary opcode mnemonic `RefAsNonNull`.
-	BrOnNull            = 0xD5,  //!< followed by labelidx
-	BrOnNonNull         = 0xD6,  //!< followed by labelidx
+	BrOnNull            = 0xD5, //!< followed by labelidx
+	BrOnNonNull         = 0xD6, //!< followed by labelidx
 	//! 0xD7-0xDF reserved
 
 	//! Stack switching (docs/proposals/STACK_SWITCHING.md SS-0). The proposal
@@ -278,10 +278,10 @@ enum class Opcode : uint8_t {
 	//! --- Prefix bytes (not instructions themselves) ---
 	//! When the decoder reads one of these bytes it must read a further
 	//! LEB128 u32 to determine which instruction is encoded.
-	PrefixGC            = 0xFB,  //!< GC / aggregate / extended-ref instructions
-	PrefixMisc          = 0xFC,  //!< Miscellaneous (sat-trunc, bulk-mem, table)
-	PrefixSIMD          = 0xFD,  //!< 128-bit SIMD / vector instructions
-	PrefixAtomic        = 0xFE,  //!< Atomic / threads instructions (reserved)
+	PrefixGC            = 0xFB, //!< GC / aggregate / extended-ref instructions
+	PrefixMisc          = 0xFC, //!< Miscellaneous (sat-trunc, bulk-mem, table)
+	PrefixSIMD          = 0xFD, //!< 128-bit SIMD / vector instructions
+	PrefixAtomic        = 0xFE, //!< Atomic / threads instructions (reserved)
 };
 //! Reads a `Opcode` from a `DataStream` using the stream encoding.
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, Opcode& right) {
@@ -298,35 +298,35 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 //! ---------------------------------------------------------------------------
 enum class GCOpcode : uint32_t {
 	//! Struct instructions
-	StructNew           =  0,  //!< struct.new typeidx
-	StructNewDefault    =  1,  //!< struct.new_default typeidx
-	StructGet           =  2,  //!< struct.get typeidx fieldidx
-	StructGetS          =  3,  //!< struct.get_s typeidx fieldidx
-	StructGetU          =  4,  //!< struct.get_u typeidx fieldidx
-	StructSet           =  5,  //!< struct.set typeidx fieldidx
+	StructNew           =  0, //!< struct.new typeidx
+	StructNewDefault    =  1, //!< struct.new_default typeidx
+	StructGet           =  2, //!< struct.get typeidx fieldidx
+	StructGetS          =  3, //!< struct.get_s typeidx fieldidx
+	StructGetU          =  4, //!< struct.get_u typeidx fieldidx
+	StructSet           =  5, //!< struct.set typeidx fieldidx
 
 	//! Array instructions
-	ArrayNew            =  6,  //!< array.new typeidx
-	ArrayNewDefault     =  7,  //!< array.new_default typeidx
-	ArrayNewFixed       =  8,  //!< array.new_fixed typeidx n
-	ArrayNewData        =  9,  //!< array.new_data typeidx dataidx
-	ArrayNewElem        = 10,  //!< array.new_elem typeidx elemidx
-	ArrayGet            = 11,  //!< array.get typeidx
-	ArrayGetS           = 12,  //!< array.get_s typeidx
-	ArrayGetU           = 13,  //!< array.get_u typeidx
-	ArraySet            = 14,  //!< array.set typeidx
-	ArrayLen            = 15,  //!< array.len
-	ArrayFill           = 16,  //!< array.fill typeidx
-	ArrayCopy           = 17,  //!< array.copy typeidx typeidx
-	ArrayInitData       = 18,  //!< array.init_data typeidx dataidx
-	ArrayInitElem       = 19,  //!< array.init_elem typeidx elemidx
+	ArrayNew            =  6, //!< array.new typeidx
+	ArrayNewDefault     =  7, //!< array.new_default typeidx
+	ArrayNewFixed       =  8, //!< array.new_fixed typeidx n
+	ArrayNewData        =  9, //!< array.new_data typeidx dataidx
+	ArrayNewElem        = 10, //!< array.new_elem typeidx elemidx
+	ArrayGet            = 11, //!< array.get typeidx
+	ArrayGetS           = 12, //!< array.get_s typeidx
+	ArrayGetU           = 13, //!< array.get_u typeidx
+	ArraySet            = 14, //!< array.set typeidx
+	ArrayLen            = 15, //!< array.len
+	ArrayFill           = 16, //!< array.fill typeidx
+	ArrayCopy           = 17, //!< array.copy typeidx typeidx
+	ArrayInitData       = 18, //!< array.init_data typeidx dataidx
+	ArrayInitElem       = 19, //!< array.init_elem typeidx elemidx
 	//! More Array Constructors (docs/proposals/GC_EXTENSIONS.md GX-2). The
 	//! upstream overview assigns no opcodes yet, so these are engine-provisional
 	//! values in the GC range below 0x80 (the note's GXD3). They are deliberately
 	//! above the standard Custom Descriptors range 0x20-0x26.
-	ArrayNewArray       = 64,  //!< array.new_array dsttypeidx srctypeidx
-	ArrayNewMemory      = 65,  //!< array.new_memory dsttypeidx memidx
-	ArrayNewTable       = 66,  //!< array.new_table dsttypeidx tableidx
+	ArrayNewArray       = 64, //!< array.new_array dsttypeidx srctypeidx
+	ArrayNewMemory      = 65, //!< array.new_memory dsttypeidx memidx
+	ArrayNewTable       = 66, //!< array.new_table dsttypeidx tableidx
 
 	//! Custom Descriptors (0xFB 32..38). The clauses and exact heap types are
 	//! decoded elsewhere; these are the GC instruction forms.
@@ -339,22 +339,22 @@ enum class GCOpcode : uint32_t {
 	BrOnCastDescEqFail     = 38, //!< br_on_cast_desc_eq_fail
 
 	//! Extended reference instructions
-	RefTest             = 20,  //!< ref.test (ref ht)
-	RefTestNull         = 21,  //!< ref.test (ref null ht)
-	RefCast             = 22,  //!< ref.cast (ref ht)
-	RefCastNull         = 23,  //!< ref.cast (ref null ht)
-	BrOnCast            = 24,  //!< br_on_cast labelidx castop ht ht
-	BrOnCastFail        = 25,  //!< br_on_cast_fail labelidx castop ht ht
+	RefTest             = 20, //!< ref.test (ref ht)
+	RefTestNull         = 21, //!< ref.test (ref null ht)
+	RefCast             = 22, //!< ref.cast (ref ht)
+	RefCastNull         = 23, //!< ref.cast (ref null ht)
+	BrOnCast            = 24, //!< br_on_cast labelidx castop ht ht
+	BrOnCastFail        = 25, //!< br_on_cast_fail labelidx castop ht ht
 
 	//! Extern conversion
-	AnyConvertExtern    = 26,  //!< any.convert_extern
-	ExternConvertAny    = 27,  //!< extern.convert_any
+	AnyConvertExtern    = 26, //!< any.convert_extern
+	ExternConvertAny    = 27, //!< extern.convert_any
 
 	//! i31 instructions
-	RefI31              = 28,  //!< ref.i31
-	I31GetS             = 29,  //!< i31.get_s
-	I31GetU             = 30,  //!< i31.get_u
-	RefI31Shared        = 31,  //!< ref.i31_shared (SET-3)
+	RefI31              = 28, //!< ref.i31
+	I31GetS             = 29, //!< i31.get_s
+	I31GetU             = 30, //!< i31.get_u
+	RefI31Shared        = 31, //!< ref.i31_shared (SET-3)
 };
 //! Writes a `GCOpcode` to a `DataStream` using the stream encoding.
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, GCOpcode right) {
@@ -433,37 +433,37 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 //! ---------------------------------------------------------------------------
 enum class MiscOpcode : uint32_t {
 	//! Saturating integer truncation (non-trapping)
-	I32TruncSatF32S     =  0,  //!< i32.trunc_sat_f32_s
-	I32TruncSatF32U     =  1,  //!< i32.trunc_sat_f32_u
-	I32TruncSatF64S     =  2,  //!< i32.trunc_sat_f64_s
-	I32TruncSatF64U     =  3,  //!< i32.trunc_sat_f64_u
-	I64TruncSatF32S     =  4,  //!< i64.trunc_sat_f32_s
-	I64TruncSatF32U     =  5,  //!< i64.trunc_sat_f32_u
-	I64TruncSatF64S     =  6,  //!< i64.trunc_sat_f64_s
-	I64TruncSatF64U     =  7,  //!< i64.trunc_sat_f64_u
+	I32TruncSatF32S     =  0, //!< i32.trunc_sat_f32_s
+	I32TruncSatF32U     =  1, //!< i32.trunc_sat_f32_u
+	I32TruncSatF64S     =  2, //!< i32.trunc_sat_f64_s
+	I32TruncSatF64U     =  3, //!< i32.trunc_sat_f64_u
+	I64TruncSatF32S     =  4, //!< i64.trunc_sat_f32_s
+	I64TruncSatF32U     =  5, //!< i64.trunc_sat_f32_u
+	I64TruncSatF64S     =  6, //!< i64.trunc_sat_f64_s
+	I64TruncSatF64U     =  7, //!< i64.trunc_sat_f64_u
 
 	//! Bulk memory operations
-	MemoryInit          =  8,  //!< memory.init dataidx memidx
-	DataDrop            =  9,  //!< data.drop dataidx
-	MemoryCopy          = 10,  //!< memory.copy memidx memidx
-	MemoryFill          = 11,  //!< memory.fill memidx
+	MemoryInit          =  8, //!< memory.init dataidx memidx
+	DataDrop            =  9, //!< data.drop dataidx
+	MemoryCopy          = 10, //!< memory.copy memidx memidx
+	MemoryFill          = 11, //!< memory.fill memidx
 
 	//! Bulk table operations
-	TableInit           = 12,  //!< table.init elemidx tableidx
-	ElemDrop            = 13,  //!< elem.drop elemidx
-	TableCopy           = 14,  //!< table.copy tableidx tableidx
-	TableGrow           = 15,  //!< table.grow tableidx
-	TableSize           = 16,  //!< table.size tableidx
-	TableFill           = 17,  //!< table.fill tableidx
+	TableInit           = 12, //!< table.init elemidx tableidx
+	ElemDrop            = 13, //!< elem.drop elemidx
+	TableCopy           = 14, //!< table.copy tableidx tableidx
+	TableGrow           = 15, //!< table.grow tableidx
+	TableSize           = 16, //!< table.size tableidx
+	TableFill           = 17, //!< table.fill tableidx
 
 	//! Memory control (prototype encoding; docs/proposals/MEMORY_CONTROL.md MC1)
-	MemoryDiscard       = 18,  //!< memory.discard memidx
+	MemoryDiscard       = 18, //!< memory.discard memidx
 
 	//! Wide arithmetic (docs/proposals/NUMERIC_PROPOSALS.md NUM-1)
-	I64Add128           = 19,  //!< [i64 i64 i64 i64] -> [i64 i64]
-	I64Sub128           = 20,  //!< [i64 i64 i64 i64] -> [i64 i64]
-	I64MulWideS         = 21,  //!< [i64 i64] -> [i64 i64]
-	I64MulWideU         = 22,  //!< [i64 i64] -> [i64 i64]
+	I64Add128           = 19, //!< [i64 i64 i64 i64] -> [i64 i64]
+	I64Sub128           = 20, //!< [i64 i64 i64 i64] -> [i64 i64]
+	I64MulWideS         = 21, //!< [i64 i64] -> [i64 i64]
+	I64MulWideU         = 22, //!< [i64 i64] -> [i64 i64]
 
 	//! Rounding-mode-control variants occupy 0x80–0xBB (NUM-2). They are
 	//! dispatched through one generic hook so the 60 entries do not need 60
@@ -493,35 +493,35 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 //! ---------------------------------------------------------------------------
 enum class SIMDOpcode : uint32_t {
 	//! Memory loads
-	V128Load                    =   0,  //!< v128.load memarg
-	V128Load8x8S                =   1,  //!< v128.load8x8_s memarg
-	V128Load8x8U                =   2,  //!< v128.load8x8_u memarg
-	V128Load16x4S               =   3,  //!< v128.load16x4_s memarg
-	V128Load16x4U               =   4,  //!< v128.load16x4_u memarg
-	V128Load32x2S               =   5,  //!< v128.load32x2_s memarg
-	V128Load32x2U               =   6,  //!< v128.load32x2_u memarg
-	V128Load8Splat              =   7,  //!< v128.load8_splat memarg
-	V128Load16Splat             =   8,  //!< v128.load16_splat memarg
-	V128Load32Splat             =   9,  //!< v128.load32_splat memarg
-	V128Load64Splat             =  10,  //!< v128.load64_splat memarg
-	V128Load32Zero              =  92,  //!< v128.load32_zero memarg
-	V128Load64Zero              =  93,  //!< v128.load64_zero memarg
-	V128Store                   =  11,  //!< v128.store memarg
-	V128Load8Lane               =  84,  //!< v128.load8_lane memarg laneidx
-	V128Load16Lane              =  85,  //!< v128.load16_lane memarg laneidx
-	V128Load32Lane              =  86,  //!< v128.load32_lane memarg laneidx
-	V128Load64Lane              =  87,  //!< v128.load64_lane memarg laneidx
-	V128Store8Lane              =  88,  //!< v128.store8_lane memarg laneidx
-	V128Store16Lane             =  89,  //!< v128.store16_lane memarg laneidx
-	V128Store32Lane             =  90,  //!< v128.store32_lane memarg laneidx
-	V128Store64Lane             =  91,  //!< v128.store64_lane memarg laneidx
+	V128Load                    =   0, //!< v128.load memarg
+	V128Load8x8S                =   1, //!< v128.load8x8_s memarg
+	V128Load8x8U                =   2, //!< v128.load8x8_u memarg
+	V128Load16x4S               =   3, //!< v128.load16x4_s memarg
+	V128Load16x4U               =   4, //!< v128.load16x4_u memarg
+	V128Load32x2S               =   5, //!< v128.load32x2_s memarg
+	V128Load32x2U               =   6, //!< v128.load32x2_u memarg
+	V128Load8Splat              =   7, //!< v128.load8_splat memarg
+	V128Load16Splat             =   8, //!< v128.load16_splat memarg
+	V128Load32Splat             =   9, //!< v128.load32_splat memarg
+	V128Load64Splat             =  10, //!< v128.load64_splat memarg
+	V128Load32Zero              =  92, //!< v128.load32_zero memarg
+	V128Load64Zero              =  93, //!< v128.load64_zero memarg
+	V128Store                   =  11, //!< v128.store memarg
+	V128Load8Lane               =  84, //!< v128.load8_lane memarg laneidx
+	V128Load16Lane              =  85, //!< v128.load16_lane memarg laneidx
+	V128Load32Lane              =  86, //!< v128.load32_lane memarg laneidx
+	V128Load64Lane              =  87, //!< v128.load64_lane memarg laneidx
+	V128Store8Lane              =  88, //!< v128.store8_lane memarg laneidx
+	V128Store16Lane             =  89, //!< v128.store16_lane memarg laneidx
+	V128Store32Lane             =  90, //!< v128.store32_lane memarg laneidx
+	V128Store64Lane             =  91, //!< v128.store64_lane memarg laneidx
 
 	//! Const
-	V128Const                   =  12,  //!< v128.const (16 immediate bytes)
+	V128Const                   =  12, //!< v128.const (16 immediate bytes)
 
 	//! Shuffle / swizzle
-	I8x16Shuffle                =  13,  //!< i8x16.shuffle (16 lane indices)
-	I8x16Swizzle                =  14,  //!< i8x16.swizzle
+	I8x16Shuffle                =  13, //!< i8x16.shuffle (16 lane indices)
+	I8x16Swizzle                =  14, //!< i8x16.swizzle
 
 	//! Splat (broadcast scalar to all lanes)
 	I8x16Splat = 15, //!< Binary opcode mnemonic `I8x16Splat`.
@@ -532,7 +532,7 @@ enum class SIMDOpcode : uint32_t {
 	F64x2Splat = 20, //!< Binary opcode mnemonic `F64x2Splat`.
 
 	//! Extract / replace lane
-	I8x16ExtractLaneS           =  21,  //!< followed by laneidx
+	I8x16ExtractLaneS           =  21, //!< followed by laneidx
 	I8x16ExtractLaneU = 22, //!< Binary opcode mnemonic `I8x16ExtractLaneU`.
 	I8x16ReplaceLane = 23, //!< Binary opcode mnemonic `I8x16ReplaceLane`.
 	I16x8ExtractLaneS = 24, //!< Binary opcode mnemonic `I16x8ExtractLaneS`.
@@ -817,95 +817,95 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 //! ---------------------------------------------------------------------------
 enum class AtomicOpcode : uint8_t {
 	//! --- Wait / notify ---
-	MemoryAtomicNotify      = 0x00,  //!< memory.atomic.notify   memarg32
-	MemoryAtomicWait32      = 0x01,  //!< memory.atomic.wait32   memarg32
-	MemoryAtomicWait64      = 0x02,  //!< memory.atomic.wait64   memarg64
+	MemoryAtomicNotify      = 0x00, //!< memory.atomic.notify   memarg32
+	MemoryAtomicWait32      = 0x01, //!< memory.atomic.wait32   memarg32
+	MemoryAtomicWait64      = 0x02, //!< memory.atomic.wait64   memarg64
 
 	//! --- Fence (immediate is the acquire-release ordering byte) ---
-	AtomicFence             = 0x03,  //!< atomic.fence
+	AtomicFence             = 0x03, //!< atomic.fence
 	//! Acquire-release proposal: a spin-loop hint, semantically a no-op.
-	AtomicPause             = 0x04,  //!< pause
+	AtomicPause             = 0x04, //!< pause
 
 	//! --- Atomic loads ---
-	I32AtomicLoad           = 0x10,  //!< i32.atomic.load        memarg32
-	I64AtomicLoad           = 0x11,  //!< i64.atomic.load        memarg64
-	I32AtomicLoad8U         = 0x12,  //!< i32.atomic.load8_u     memarg8
-	I32AtomicLoad16U        = 0x13,  //!< i32.atomic.load16_u    memarg16
-	I64AtomicLoad8U         = 0x14,  //!< i64.atomic.load8_u     memarg8
-	I64AtomicLoad16U        = 0x15,  //!< i64.atomic.load16_u    memarg16
-	I64AtomicLoad32U        = 0x16,  //!< i64.atomic.load32_u    memarg32
+	I32AtomicLoad           = 0x10, //!< i32.atomic.load        memarg32
+	I64AtomicLoad           = 0x11, //!< i64.atomic.load        memarg64
+	I32AtomicLoad8U         = 0x12, //!< i32.atomic.load8_u     memarg8
+	I32AtomicLoad16U        = 0x13, //!< i32.atomic.load16_u    memarg16
+	I64AtomicLoad8U         = 0x14, //!< i64.atomic.load8_u     memarg8
+	I64AtomicLoad16U        = 0x15, //!< i64.atomic.load16_u    memarg16
+	I64AtomicLoad32U        = 0x16, //!< i64.atomic.load32_u    memarg32
 
 	//! --- Atomic stores ---
-	I32AtomicStore          = 0x17,  //!< i32.atomic.store       memarg32
-	I64AtomicStore          = 0x18,  //!< i64.atomic.store       memarg64
-	I32AtomicStore8         = 0x19,  //!< i32.atomic.store8      memarg8
-	I32AtomicStore16        = 0x1A,  //!< i32.atomic.store16     memarg16
-	I64AtomicStore8         = 0x1B,  //!< i64.atomic.store8      memarg8
-	I64AtomicStore16        = 0x1C,  //!< i64.atomic.store16     memarg16
-	I64AtomicStore32        = 0x1D,  //!< i64.atomic.store32     memarg32
+	I32AtomicStore          = 0x17, //!< i32.atomic.store       memarg32
+	I64AtomicStore          = 0x18, //!< i64.atomic.store       memarg64
+	I32AtomicStore8         = 0x19, //!< i32.atomic.store8      memarg8
+	I32AtomicStore16        = 0x1A, //!< i32.atomic.store16     memarg16
+	I64AtomicStore8         = 0x1B, //!< i64.atomic.store8      memarg8
+	I64AtomicStore16        = 0x1C, //!< i64.atomic.store16     memarg16
+	I64AtomicStore32        = 0x1D, //!< i64.atomic.store32     memarg32
 
 	//! --- RMW add ---
-	I32AtomicRmwAdd         = 0x1E,  //!< i32.atomic.rmw.add     memarg32
-	I64AtomicRmwAdd         = 0x1F,  //!< i64.atomic.rmw.add     memarg64
-	I32AtomicRmw8AddU       = 0x20,  //!< i32.atomic.rmw8.add_u  memarg8
-	I32AtomicRmw16AddU      = 0x21,  //!< i32.atomic.rmw16.add_u memarg16
-	I64AtomicRmw8AddU       = 0x22,  //!< i64.atomic.rmw8.add_u  memarg8
-	I64AtomicRmw16AddU      = 0x23,  //!< i64.atomic.rmw16.add_u memarg16
-	I64AtomicRmw32AddU      = 0x24,  //!< i64.atomic.rmw32.add_u memarg32
+	I32AtomicRmwAdd         = 0x1E, //!< i32.atomic.rmw.add     memarg32
+	I64AtomicRmwAdd         = 0x1F, //!< i64.atomic.rmw.add     memarg64
+	I32AtomicRmw8AddU       = 0x20, //!< i32.atomic.rmw8.add_u  memarg8
+	I32AtomicRmw16AddU      = 0x21, //!< i32.atomic.rmw16.add_u memarg16
+	I64AtomicRmw8AddU       = 0x22, //!< i64.atomic.rmw8.add_u  memarg8
+	I64AtomicRmw16AddU      = 0x23, //!< i64.atomic.rmw16.add_u memarg16
+	I64AtomicRmw32AddU      = 0x24, //!< i64.atomic.rmw32.add_u memarg32
 
 	//! --- RMW sub ---
-	I32AtomicRmwSub         = 0x25,  //!< i32.atomic.rmw.sub     memarg32
-	I64AtomicRmwSub         = 0x26,  //!< i64.atomic.rmw.sub     memarg64
-	I32AtomicRmw8SubU       = 0x27,  //!< i32.atomic.rmw8.sub_u  memarg8
-	I32AtomicRmw16SubU      = 0x28,  //!< i32.atomic.rmw16.sub_u memarg16
-	I64AtomicRmw8SubU       = 0x29,  //!< i64.atomic.rmw8.sub_u  memarg8
-	I64AtomicRmw16SubU      = 0x2A,  //!< i64.atomic.rmw16.sub_u memarg16
-	I64AtomicRmw32SubU      = 0x2B,  //!< i64.atomic.rmw32.sub_u memarg32
+	I32AtomicRmwSub         = 0x25, //!< i32.atomic.rmw.sub     memarg32
+	I64AtomicRmwSub         = 0x26, //!< i64.atomic.rmw.sub     memarg64
+	I32AtomicRmw8SubU       = 0x27, //!< i32.atomic.rmw8.sub_u  memarg8
+	I32AtomicRmw16SubU      = 0x28, //!< i32.atomic.rmw16.sub_u memarg16
+	I64AtomicRmw8SubU       = 0x29, //!< i64.atomic.rmw8.sub_u  memarg8
+	I64AtomicRmw16SubU      = 0x2A, //!< i64.atomic.rmw16.sub_u memarg16
+	I64AtomicRmw32SubU      = 0x2B, //!< i64.atomic.rmw32.sub_u memarg32
 
 	//! --- RMW and ---
-	I32AtomicRmwAnd         = 0x2C,  //!< i32.atomic.rmw.and     memarg32
-	I64AtomicRmwAnd         = 0x2D,  //!< i64.atomic.rmw.and     memarg64
-	I32AtomicRmw8AndU       = 0x2E,  //!< i32.atomic.rmw8.and_u  memarg8
-	I32AtomicRmw16AndU      = 0x2F,  //!< i32.atomic.rmw16.and_u memarg16
-	I64AtomicRmw8AndU       = 0x30,  //!< i64.atomic.rmw8.and_u  memarg8
-	I64AtomicRmw16AndU      = 0x31,  //!< i64.atomic.rmw16.and_u memarg16
-	I64AtomicRmw32AndU      = 0x32,  //!< i64.atomic.rmw32.and_u memarg32
+	I32AtomicRmwAnd         = 0x2C, //!< i32.atomic.rmw.and     memarg32
+	I64AtomicRmwAnd         = 0x2D, //!< i64.atomic.rmw.and     memarg64
+	I32AtomicRmw8AndU       = 0x2E, //!< i32.atomic.rmw8.and_u  memarg8
+	I32AtomicRmw16AndU      = 0x2F, //!< i32.atomic.rmw16.and_u memarg16
+	I64AtomicRmw8AndU       = 0x30, //!< i64.atomic.rmw8.and_u  memarg8
+	I64AtomicRmw16AndU      = 0x31, //!< i64.atomic.rmw16.and_u memarg16
+	I64AtomicRmw32AndU      = 0x32, //!< i64.atomic.rmw32.and_u memarg32
 
 	//! --- RMW or ---
-	I32AtomicRmwOr          = 0x33,  //!< i32.atomic.rmw.or      memarg32
-	I64AtomicRmwOr          = 0x34,  //!< i64.atomic.rmw.or      memarg64
-	I32AtomicRmw8OrU        = 0x35,  //!< i32.atomic.rmw8.or_u   memarg8
-	I32AtomicRmw16OrU       = 0x36,  //!< i32.atomic.rmw16.or_u  memarg16
-	I64AtomicRmw8OrU        = 0x37,  //!< i64.atomic.rmw8.or_u   memarg8
-	I64AtomicRmw16OrU       = 0x38,  //!< i64.atomic.rmw16.or_u  memarg16
-	I64AtomicRmw32OrU       = 0x39,  //!< i64.atomic.rmw32.or_u  memarg32
+	I32AtomicRmwOr          = 0x33, //!< i32.atomic.rmw.or      memarg32
+	I64AtomicRmwOr          = 0x34, //!< i64.atomic.rmw.or      memarg64
+	I32AtomicRmw8OrU        = 0x35, //!< i32.atomic.rmw8.or_u   memarg8
+	I32AtomicRmw16OrU       = 0x36, //!< i32.atomic.rmw16.or_u  memarg16
+	I64AtomicRmw8OrU        = 0x37, //!< i64.atomic.rmw8.or_u   memarg8
+	I64AtomicRmw16OrU       = 0x38, //!< i64.atomic.rmw16.or_u  memarg16
+	I64AtomicRmw32OrU       = 0x39, //!< i64.atomic.rmw32.or_u  memarg32
 
 	//! --- RMW xor ---
-	I32AtomicRmwXor         = 0x3A,  //!< i32.atomic.rmw.xor     memarg32
-	I64AtomicRmwXor         = 0x3B,  //!< i64.atomic.rmw.xor     memarg64
-	I32AtomicRmw8XorU       = 0x3C,  //!< i32.atomic.rmw8.xor_u  memarg8
-	I32AtomicRmw16XorU      = 0x3D,  //!< i32.atomic.rmw16.xor_u memarg16
-	I64AtomicRmw8XorU       = 0x3E,  //!< i64.atomic.rmw8.xor_u  memarg8
-	I64AtomicRmw16XorU      = 0x3F,  //!< i64.atomic.rmw16.xor_u memarg16
-	I64AtomicRmw32XorU      = 0x40,  //!< i64.atomic.rmw32.xor_u memarg32
+	I32AtomicRmwXor         = 0x3A, //!< i32.atomic.rmw.xor     memarg32
+	I64AtomicRmwXor         = 0x3B, //!< i64.atomic.rmw.xor     memarg64
+	I32AtomicRmw8XorU       = 0x3C, //!< i32.atomic.rmw8.xor_u  memarg8
+	I32AtomicRmw16XorU      = 0x3D, //!< i32.atomic.rmw16.xor_u memarg16
+	I64AtomicRmw8XorU       = 0x3E, //!< i64.atomic.rmw8.xor_u  memarg8
+	I64AtomicRmw16XorU      = 0x3F, //!< i64.atomic.rmw16.xor_u memarg16
+	I64AtomicRmw32XorU      = 0x40, //!< i64.atomic.rmw32.xor_u memarg32
 
 	//! --- RMW xchg (exchange) ---
-	I32AtomicRmwXchg        = 0x41,  //!< i32.atomic.rmw.xchg     memarg32
-	I64AtomicRmwXchg        = 0x42,  //!< i64.atomic.rmw.xchg     memarg64
-	I32AtomicRmw8XchgU      = 0x43,  //!< i32.atomic.rmw8.xchg_u  memarg8
-	I32AtomicRmw16XchgU     = 0x44,  //!< i32.atomic.rmw16.xchg_u memarg16
-	I64AtomicRmw8XchgU      = 0x45,  //!< i64.atomic.rmw8.xchg_u  memarg8
-	I64AtomicRmw16XchgU     = 0x46,  //!< i64.atomic.rmw16.xchg_u memarg16
-	I64AtomicRmw32XchgU     = 0x47,  //!< i64.atomic.rmw32.xchg_u memarg32
+	I32AtomicRmwXchg        = 0x41, //!< i32.atomic.rmw.xchg     memarg32
+	I64AtomicRmwXchg        = 0x42, //!< i64.atomic.rmw.xchg     memarg64
+	I32AtomicRmw8XchgU      = 0x43, //!< i32.atomic.rmw8.xchg_u  memarg8
+	I32AtomicRmw16XchgU     = 0x44, //!< i32.atomic.rmw16.xchg_u memarg16
+	I64AtomicRmw8XchgU      = 0x45, //!< i64.atomic.rmw8.xchg_u  memarg8
+	I64AtomicRmw16XchgU     = 0x46, //!< i64.atomic.rmw16.xchg_u memarg16
+	I64AtomicRmw32XchgU     = 0x47, //!< i64.atomic.rmw32.xchg_u memarg32
 
 	//! --- RMW cmpxchg (compare-exchange) ---
-	I32AtomicRmwCmpxchg     = 0x48,  //!< i32.atomic.rmw.cmpxchg     memarg32
-	I64AtomicRmwCmpxchg     = 0x49,  //!< i64.atomic.rmw.cmpxchg     memarg64
-	I32AtomicRmw8CmpxchgU   = 0x4A,  //!< i32.atomic.rmw8.cmpxchg_u  memarg8
-	I32AtomicRmw16CmpxchgU  = 0x4B,  //!< i32.atomic.rmw16.cmpxchg_u memarg16
-	I64AtomicRmw8CmpxchgU   = 0x4C,  //!< i64.atomic.rmw8.cmpxchg_u  memarg8
-	I64AtomicRmw16CmpxchgU  = 0x4D,  //!< i64.atomic.rmw16.cmpxchg_u memarg16
-	I64AtomicRmw32CmpxchgU  = 0x4E,  //!< i64.atomic.rmw32.cmpxchg_u memarg32
+	I32AtomicRmwCmpxchg     = 0x48, //!< i32.atomic.rmw.cmpxchg     memarg32
+	I64AtomicRmwCmpxchg     = 0x49, //!< i64.atomic.rmw.cmpxchg     memarg64
+	I32AtomicRmw8CmpxchgU   = 0x4A, //!< i32.atomic.rmw8.cmpxchg_u  memarg8
+	I32AtomicRmw16CmpxchgU  = 0x4B, //!< i32.atomic.rmw16.cmpxchg_u memarg16
+	I64AtomicRmw8CmpxchgU   = 0x4C, //!< i64.atomic.rmw8.cmpxchg_u  memarg8
+	I64AtomicRmw16CmpxchgU  = 0x4D, //!< i64.atomic.rmw16.cmpxchg_u memarg16
+	I64AtomicRmw32CmpxchgU  = 0x4E, //!< i64.atomic.rmw32.cmpxchg_u memarg32
 
 	//! --- Shared-everything threads (SHARED_EVERYTHING_THREADS.md SET-3) ---
 	//! These do not use a memarg: they name a global/table/struct/array and

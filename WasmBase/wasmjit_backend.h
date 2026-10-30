@@ -171,8 +171,10 @@ typedef struct wasmjit_backend_desc {
 	void           (*destroy)(void* instantiator);
 } wasmjit_backend_desc;
 
-/*! The one required export. Returns NULL when the host ABI is unacceptable. */
-/*! Plugin query entry-point type. \param host_abi_version ABI version supported by the loading host. \return Plugin descriptor when compatible, or NULL when the host is rejected. */
+/*! Plugin query entry-point type: the one required export. Returns NULL when
+ *  the host ABI is unacceptable. \param host_abi_version ABI version supported
+ *  by the loading host. \return Plugin descriptor when compatible, or NULL when
+ *  the host is rejected. */
 typedef const wasmjit_backend_desc* (*wasmjit_backend_query_fn)(uint32_t host_abi_version);
 
 /*! Marks a backend's required export as visible in the shared library. */

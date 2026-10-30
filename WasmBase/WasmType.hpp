@@ -567,8 +567,8 @@ struct Export {
 };
 /** \brief Element segment, including mode, element type, and initializer expressions. */
 struct ElementSegment {
-	uint32_t mode;      //!< The raw bitmask/type (bit 3 = shared, SET-1)
-	uint32_t tableIdx;  //!< Only for active segments
+	uint32_t mode; //!< The raw bitmask/type (bit 3 = shared, SET-1)
+	uint32_t tableIdx; //!< Only for active segments
 	//! True when the segment's table is shared (SET-1).
 	bool isShared = false;
 
@@ -599,7 +599,7 @@ struct DataSegment {
 	uint32_t memoryIdx;
 	bool isShared = false; //!< bit 3 of the segment flags (SET-1)
 	std::vector<uint8_t> offsetExpr; //!< Only for active
-	std::vector<uint8_t> data;       //!< The raw bytes to copy
+	std::vector<uint8_t> data; //!< The raw bytes to copy
 };
 /** \brief Run-length encoded local declaration in a function body. */
 struct LocalEntry {
@@ -632,7 +632,7 @@ struct FunctionBody {
 /** \brief Exception tag declaration referencing its payload function type. */
 struct Tag {
 	uint8_t attribute; //!< Currently always 0x00 (reserved for future use)
-	uint32_t typeIdx;  //!< Index into the Type Section (must be a FuncType)
+	uint32_t typeIdx; //!< Index into the Type Section (must be a FuncType)
 };
 
 //! A read-only view of one external declaration for JS Types / metadata
@@ -652,8 +652,8 @@ struct ExternTypeDescriptor {
 	GlobalType globalType{};
 	//! The table's type, for a table declaration.
 	TableType tableType{};
-	MemoryType memoryType{};  //!< The memory's type, for a memory declaration.
-	uint8_t tagAttribute = 0;  //!< The tag's attribute byte (exception tags only).
+	MemoryType memoryType{}; //!< The memory's type, for a memory declaration.
+	uint8_t tagAttribute = 0; //!< The tag's attribute byte (exception tags only).
 };
 
 /** \brief Public metadata projection of one module import. */
@@ -662,7 +662,7 @@ struct ImportDescriptor {
 	std::string moduleName;
 	//! The field name inside that module.
 	std::string fieldName;
-	ExternTypeDescriptor type;  //!< The imported entity's declared type.
+	ExternTypeDescriptor type; //!< The imported entity's declared type.
 };
 
 /** \brief Public metadata projection of one module export. */
@@ -711,8 +711,8 @@ struct BlockType {
 	//! True when `typeIndex` is valid; false when `valType` is.
 	bool isTypeIndex;
 	union {
-		int32_t       typeIndex;  //!< if isTypeIndex == true
-		ValueTypeCode valType;  //!< if isTypeIndex == false (incl. Void = 0x40)
+		int32_t       typeIndex; //!< if isTypeIndex == true
+		ValueTypeCode valType; //!< if isTypeIndex == false (incl. Void = 0x40)
 	};
 	//! The heap-type immediate of a typed-reference block type (`0x63 ht` /
 	//! `0x64 ht`), or -1 for every other block type. It has the same encoding
@@ -836,7 +836,7 @@ enum class CatchKind : uint8_t {
 struct CatchClause {
 	//! Which `catch` spelling the clause uses.
 	CatchKind kind;
-	uint32_t  tagIdx;   //!< valid for Catch / CatchRef
+	uint32_t  tagIdx; //!< valid for Catch / CatchRef
 	//! The label the clause branches to.
 	uint32_t  labelIdx;
 };

@@ -138,7 +138,7 @@ struct DiagnosticContinuation {
 	ContinuationProvider provider = ContinuationProvider::NativeStacks;
 	//! The handle's generation; a stale value means the slot was reused.
 	std::uint64_t generation = 0;
-	std::string_view state;   //!< "running", "suspended", "completed", "trapped", "exception"
+	std::string_view state; //!< "running", "suspended", "completed", "trapped", "exception"
 	//! The thrown tag's id for an exception-carrying record, or -1.
 	std::int32_t tagId = -1;
 	//! Number of values the suspension carried.
@@ -156,18 +156,18 @@ struct DiagnosticContinuation {
 //! `message`), where (`location`), in which execution context (`continuation`),
 //! and when relative to the rest of the session (`sequence`, `timestamp`).
 struct Diagnostic {
-	std::string_view id;          //!< stable contract, e.g. "WASM.VALIDATE.UNKNOWN_TYPE"
+	std::string_view id; //!< stable contract, e.g. "WASM.VALIDATE.UNKNOWN_TYPE"
 	//! How serious the record is; a `Fatal` record is followed by a trap.
 	DiagnosticSeverity severity = DiagnosticSeverity::Error;
 	//! The phase that produced it (decode, validate, link, execute, …).
 	DiagnosticPhase phase = DiagnosticPhase::Execute;
-	std::string message;          //!< human-readable; not an assertion key
+	std::string message; //!< human-readable; not an assertion key
 	//! Where in the module the failure happened; all-unknown when not known.
 	DiagnosticLocation location;
 	//! Execution-context detail for a trap, exception or scheduler failure.
 	DiagnosticContinuation continuation;
 	std::string_view remediation; //!< docs anchor or a short hint
-	std::uint32_t sequence = 0;   //!< assigned by the emitting execution state
+	std::uint32_t sequence = 0; //!< assigned by the emitting execution state
 	//! Seconds since the epoch (`std::time(nullptr)`), assigned by `emit()`.
 	//! Deliberately *not* converted to a date when serialized: JSON carries the
 	//! raw number; only the pretty terminal form renders it via `ctime`.

@@ -26,8 +26,8 @@ typedef WasmStream<Euph::Io::ConstBufferDevice> FastMemReader;
 //! form is decoded so the stream stays in sync, then rejected by the validator
 //! and the backend until the symmetric `switch` instruction exists.
 struct ContHandlerClause {
-	TagIdx tag = 0;       //!< Tag this handler matches.
-	LabelIdx label = 0;   //!< Label to branch to on a match (`on $tag $label`).
+	TagIdx tag = 0; //!< Tag this handler matches.
+	LabelIdx label = 0; //!< Label to branch to on a match (`on $tag $label`).
 	bool isSwitch = false; //!< True for the `(on $tag switch)` form (decoded, then rejected).
 };
 

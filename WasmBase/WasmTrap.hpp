@@ -52,26 +52,26 @@ namespace WASM {
 //! *not* a trap and must not be reported as one.
 
 enum class TrapKind : uint8_t {
-	Unreachable,                 //!< "unreachable"
-	NullReference,               //!< "null reference"
-	NullFunctionReference,       //!< "null function reference"
-	NullStructureReference,      //!< "null structure reference"
-	NullArrayReference,          //!< "null array reference"
-	NullI31Reference,            //!< "null i31 reference"
-	IntegerDivideByZero,         //!< "integer divide by zero"
-	IntegerOverflow,             //!< "integer overflow"
-	InvalidConversionToInteger,  //!< "invalid conversion to integer"
-	InvalidString,               //!< "invalid string" (stringref encoding failure)
-	OutOfBoundsMemoryAccess,     //!< "out of bounds memory access"
-	OutOfBoundsTableAccess,      //!< "out of bounds table access"
-	OutOfBoundsArrayAccess,      //!< "out of bounds array access"
-	UnalignedAtomicAccess,       //!< "unaligned atomic"
-	UninitializedElement,        //!< "uninitialized element"
-	UndefinedElement,            //!< "undefined element"
-	IndirectCallTypeMismatch,    //!< "indirect call type mismatch"
-	CastFailure,                 //!< "cast failure"
-	OutOfMemory,                 //!< "out of memory"
-	CallStackExhausted,          //!< "call stack exhausted"
+	Unreachable, //!< "unreachable"
+	NullReference, //!< "null reference"
+	NullFunctionReference, //!< "null function reference"
+	NullStructureReference, //!< "null structure reference"
+	NullArrayReference, //!< "null array reference"
+	NullI31Reference, //!< "null i31 reference"
+	IntegerDivideByZero, //!< "integer divide by zero"
+	IntegerOverflow, //!< "integer overflow"
+	InvalidConversionToInteger, //!< "invalid conversion to integer"
+	InvalidString, //!< "invalid string" (stringref encoding failure)
+	OutOfBoundsMemoryAccess, //!< "out of bounds memory access"
+	OutOfBoundsTableAccess, //!< "out of bounds table access"
+	OutOfBoundsArrayAccess, //!< "out of bounds array access"
+	UnalignedAtomicAccess, //!< "unaligned atomic"
+	UninitializedElement, //!< "uninitialized element"
+	UndefinedElement, //!< "undefined element"
+	IndirectCallTypeMismatch, //!< "indirect call type mismatch"
+	CastFailure, //!< "cast failure"
+	OutOfMemory, //!< "out of memory"
+	CallStackExhausted, //!< "call stack exhausted"
 	//! Not a spec trap: a defensive check inside the engine, or a lowering that
 	//! cannot run. The detail text is the only description.
 	Internal, //!< An engine-internal trap; the detail text describes it.
@@ -105,7 +105,7 @@ inline constexpr std::uint32_t kNoTrapIndex = 0xFFFFFFFFu;
 
 //! The pending-trap slot: kind, message and the compile-time site (DG-5).
 struct TrapSlot {
-	int  pending = 0;                      //!< 0 = no trap, non-zero = pending
+	int  pending = 0; //!< 0 = no trap, non-zero = pending
 	int  kind = static_cast<int>(TrapKind::Internal); //!< TrapKind as an int (the C ABI)
 	//! The trap site the backend knew at compile time (DG-5). Helpers and host
 	//! raises leave `kNoTrapIndex`/null. `functionName` is interned by the

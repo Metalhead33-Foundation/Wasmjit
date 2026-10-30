@@ -97,12 +97,12 @@ private:
 									   const TypeGroup& group,
 									   std::vector<TypeId>& localToGlobal);
 
-	size_t parsedTypes = 0;  //!< How many types the last parse interned.
+	size_t parsedTypes = 0; //!< How many types the last parse interned.
 
 	//! Compact canonical records, indexed by TypeId.value; entries are appended
 	//! in group order, so a group's members are contiguous: ids [first, first + count).
 	TypeStore store_;
-	std::vector<CanonRecGroup> recGroups;   //!< indexed by RecGroupId.value
+	std::vector<CanonRecGroup> recGroups; //!< indexed by RecGroupId.value
 
 	//! Group identity: canonical serialization -> group id.
 	std::unordered_map<std::string, RecGroupId> internTable;
