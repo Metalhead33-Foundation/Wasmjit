@@ -92,5 +92,5 @@ upstream repository so that `asmjit.pc` is visible through `PKG_CONFIG_PATH`.
    [`docs/BACKEND_WORK_ORDER.md`](../docs/BACKEND_WORK_ORDER.md) before calling
    the backend complete.
 
-The existing GNU LibJIT backend remains the only executing WebAssembly backend.
+GNU LibJIT remains the only full-featured WebAssembly backend; AsmJit is an experimental partial execution backend.
 `Sljit/` is unchanged.
