@@ -174,6 +174,26 @@ TEST_CASE("AsmJit compiles i64 integer functions", "[asmjit][module][i64]")
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_mul"),
 			INT64_C(0x100000000), 7) == INT64_C(0x700000000));
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_const")) == INT64_C(0x100000000));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_get_global"))
+			== INT64_C(0x100000000));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_set_global"),
+			INT64_C(0x123456789ABCDEF0)) == INT64_C(0x123456789ABCDEF0));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_get_global"))
+			== INT64_C(0x123456789ABCDEF0));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_if_result"), 1)
+			== INT64_C(0x100000000));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_if_result"), 0) == 7);
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_block_result"),
+			INT64_C(0x100000000)) == INT64_C(0x100000001));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_br_result"))
+			== INT64_C(0x100000000));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_br_if_result"), 1)
+			== INT64_C(0x100000000));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_br_if_result"), 0) == 7);
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_typed_block_result"),
+			INT64_C(0x100000000)) == INT64_C(0x200000000));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("const64"))
+			== INT64_C(0x1122334455667788));
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_local"),
 			INT64_C(0x100000000)) == INT64_C(0x300000000));
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_store_load"),
