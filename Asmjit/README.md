@@ -28,7 +28,7 @@ direct calls. Each generated function emits the required
   i32/i64 constants and local access; i64 arithmetic (`add/sub/mul/div/rem`),
   bitwise operations, shifts, rotations, comparisons, and `eqz`; i32 arithmetic,
   bit counts, sign extension, comparisons, bitwise operations, shifts, and rotations;
-  `drop`, untyped and i32-typed `select`; i32 globals; void and single-i32/i64-result `block`/`loop`/`if`/`else`, `br`/`br_if`/`br_table`,
+  `drop`, untyped and i32-typed `select`; i32/i64 globals; void and single-i32/i64-result `block`/`loop`/`if`/`else`, `br`/`br_if`/`br_table`,
   branches to the implicit function label, and explicit/implicit returns; direct calls
   (native imports, forward calls and mutual recursion), typed `call_indirect`,
   with i32/i64 signatures including native and cross-instance Wasm imports;
