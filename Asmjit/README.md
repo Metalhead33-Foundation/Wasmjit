@@ -31,7 +31,8 @@ direct calls. Each generated function emits the required
   `drop`, untyped and i32-typed `select`; i32 globals; void and single-i32-result `block`/`loop`/`if`/`else`, `br`/`br_if`/`br_table`,
   branches to the implicit function label, and explicit/implicit returns; direct calls
   (native imports, forward calls and mutual recursion), typed `call_indirect`,
-  and direct/indirect tail-call opcodes (currently lowered to call+return;
+  with i32/i64 signatures including native and cross-instance Wasm imports;
+  i32-only direct/indirect tail-call opcodes (currently lowered to call+return;
   true tail-call stack semantics and machine-level elimination remain outstanding);
   and memory32 i32 loads/stores, including signed/unsigned 8/16-bit extensions,
   plus `memory.size`/`memory.grow`, checked memory32 `memory.copy` (with overlap-safe `memmove` semantics), `memory.fill`, `memory.init`, `data.drop`, `table.init`, `elem.drop`, `table.size`, and checked overlap-safe `table.copy`.
@@ -42,14 +43,14 @@ direct calls. Each generated function emits the required
   currently support only one i32 result and no block parameters; `br_table`
   requires identical target stack heights/signatures. The `unreachable`
   instruction reports a trap and supplies a limited single-result placeholder,
-  but general unreachable-stack polymorphism remains unsupported. Cross-instance Wasm imports are covered by tests. I64 calls, globals, and memory
+  but general unreachable-stack polymorphism remains unsupported. Cross-instance i32/i64 Wasm imports are covered by tests. I64 globals and memory
 operations are not yet lowered; Memory64, floating-point values, references, and
 most remaining instructions are still unsupported and fail explicitly.
 - `Test/TestBackend.cpp` exposes an `AsmJitSession` through
   `WASMJIT_BACKEND=asmjit`, including i32 invocation marshalling, aggregate
   layout calculation, and the existing lane-wise SIMD diagnostic interface.
 - `Test/AsmjitModuleCompilerTests.cpp` instantiates WAT fixtures and executes i32/i64 arithmetic, comparison, bitwise,
-  control-flow, direct/indirect-call (including native and cross-instance Wasm imports, mutual recursion, and tail-call opcodes), result-bearing control flow, `br_table`, unreachable traps, i32-global, and memory32
+  control-flow, direct/indirect-call (including i32/i64 native and cross-instance Wasm imports, mutual recursion, and i32 tail-call opcodes), result-bearing control flow, `br_table`, unreachable traps, i32-global, and memory32
   cases, including signed/unsigned narrow loads, `select`, overlap-safe bulk copies,
   fills, passive data/element segment initialization/drop semantics, table sizing/copying, zero-length boundary operations, and out-of-bounds traps.
 - Packed `i8`/`i16` storage retains its narrow 8-/16-bit representation.
@@ -97,7 +98,7 @@ upstream repository so that `asmjit.pc` is visible through `PKG_CONFIG_PATH`.
 ## Next implementation stages
 
 1. Extend structured control flow to block parameters, multi-value results, full branch-stack semantics, and general unreachable-stack polymorphism.
-2. Implement i64 direct/indirect call lowering, then true tail-call ABI/stack semantics.
+2. Implement true tail-call ABI/stack semantics for i32/i64 signatures.
 3. Expand linear memory to the remaining load/store widths, memory64, and the remaining bulk-memory/table operations.
 4. Add floating-point arithmetic and conversions, non-i32 globals, references/GC, exceptions, continuations, and Wasm SIMD lowering.
 5. Meet every applicable item in
