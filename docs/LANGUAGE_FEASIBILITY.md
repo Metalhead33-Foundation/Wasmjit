@@ -1,7 +1,9 @@
 # Wasm Language Support — Pre-Feasibility, Full Feasibility, and the Entry-Gate Readiness Audit {#doc_language_feasibility}
 
-Status: process definition / study charter (revision 3 — 2026-10-30: the
-entry-gate audit `LF-0a` has been **run**, and its result lives in
+Status: process definition / study charter (revision 4 — 2026-10-30: the
+pre-feasibility study `LF-1` has been **run**, and its output is the
+[`languages/`](languages/index.md) set; revision 3 — 2026-10-30: the entry-gate
+audit `LF-0a` has been **run**, and its result lives in
 [`READINESS_AUDIT.md`](READINESS_AUDIT.md); revision 2 — 2026-10-29 — added the
 entry-gate readiness audit and the engine/embedder distinction). **This note
 defines two studies and the audit that gates them; it runs none of them.** No
@@ -59,7 +61,9 @@ has pinned the engine-owned surfaces it depends on. That audit was run on
 2026-10-30; its report is [`READINESS_AUDIT.md`](READINESS_AUDIT.md), all six
 rows are `Pinned`, and `LF-1` is therefore unblocked. The audit is not a language
 study and produces no verdict; it is the statement that the screen's inputs are
-stable enough to be measured against.
+stable enough to be measured against. **`LF-1` was then run on 2026-10-30 and its
+output is the [`languages/`](languages/index.md) set** — still no verdicts, and
+`LF-2` still needs a named requester.
 
 **Inputs.** The canonical candidate list (§3), a pinned readiness snapshot (§6),
 existing knowledge of WasmJit's contracts (the host ABI, the import/export
@@ -164,8 +168,10 @@ The audit is not a third column below — it is a precondition on both columns.
 
 The official / canonical list for the screen is
 [`appcypher/awesome-wasm-langs`](https://github.com/appcypher/awesome-wasm-langs).
-**It is linked here and deliberately not consulted yet**: this note defines the
-study, it does not start it. `LF-1` is the milestone that opens the list.
+**It is linked here and was opened by `LF-1`, not by this note**: the screen read
+the list at commit `98da486` (2026-05-22) on 2026-10-30 and accounted for all 84
+entries in [`languages/TRIAGE.md`](languages/TRIAGE.md) §5. This note still
+defines the study rather than running it.
 
 Rules for using the list:
 
@@ -717,15 +723,15 @@ on `LF-1` and on a named requester (`T3`).
 |---|---|---|---|
 | **`LF-0` — Define the studies and the gate** | `✅` This note: the vocabulary, the two protocols, the entry-gate audit, the colour/kill codes, the outputs, the budgets. | — | This note is reviewed and linked from `README.md`, `API_ABI_STABILITY.md` §12 and `AGENTS.md`. |
 | **`LF-0a` — Entry-gate readiness audit** | `✅` **Run 2026-10-30** at `5c3d194`: [`READINESS_AUDIT.md`](READINESS_AUDIT.md) states `RG1`–`RG6` with evidence, and re-checks `G3` in the same sweep. All six rows `Pinned`; one limitation recorded against `RG4` (`RA4`); no dated waiver needed. **Not a language study.** | `LF-0` | Every row has a state, evidence and a date; the moving-targets list exists; no row is `Unpinned` (or a dated waiver says why). |
-| **`LF-1` — Pre-feasibility / scoping study** | Screen the canonical list; triage, cluster, trigger, charter, and list what is not studied. **Not started — unblocked by `LF-0a`.** | `LF-0a` | A triage table over the whole list (every row evidence-tiered), a dependency/abstraction map, trigger conditions, one charter per recommended cluster, and a don't-study list. **No green/yellow/red verdicts**, black kills only. |
-| **`LF-2` — Full feasibility studies** | One study per chartered cluster, using the §8 protocol. **Not started.** | `LF-1` | One report per cluster: filled §4 table, colour verdict per pinned version, reproducible PoCs, budget respected, engine work named and classed. |
+| **`LF-1` — Pre-feasibility / scoping study** | `✅` **Run 2026-10-30**: the output is the [`languages/`](languages/index.md) set — [`TRIAGE.md`](languages/TRIAGE.md) (102 rows over all 84 entries), [`CLUSTERING.md`](languages/CLUSTERING.md) (`L1`–`L12`, 5 charters, the don't-study list), [`CHARTERS.md`](languages/CHARTERS.md) (`S1`–`S5`, all proposed) and [`EVIDENCE.md`](languages/EVIDENCE.md). | `LF-0a` | A triage table over the whole list (every row evidence-tiered), a dependency/abstraction map, trigger conditions, one charter per recommended cluster, and a don't-study list. **No green/yellow/red verdicts**, black kills only. |
+| **`LF-2` — Full feasibility studies** | One study per chartered cluster, using the §8 protocol. **Not started** — five charters are proposed and none has a named requester (`T3`). | `LF-1` | One report per cluster: filled §4 table, colour verdict per pinned version, reproducible PoCs, budget respected, engine work named and classed. |
 | **`LF-3` — The support decision** | Decide which, if any, language/toolchain receives engine work; classify that work. **Not a study.** | `LF-2` | A milestone decision, not a commit: each follow-up item has a class per [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §4.1 and a gate it touches. |
 
 Ordering: `LF-0a` gates `LF-1`, and `LF-1` is a prerequisite for every `LF-2`
 charter; `LF-3` may reject all of them, and that is a successful outcome.
-**`LF-0` is this note and `LF-0a` is [`READINESS_AUDIT.md`](READINESS_AUDIT.md).
-`LF-1` and `LF-2` have not been started, and nothing here may be read as their
-result.**
+**`LF-0` is this note, `LF-0a` is [`READINESS_AUDIT.md`](READINESS_AUDIT.md) and
+`LF-1` is the [`languages/`](languages/index.md) set. `LF-2` has not been
+started, and nothing in this folder may be read as its result.**
 
 ## 12. Evidence and test survey
 
@@ -734,12 +740,13 @@ result.**
 | Automated test for either study or the audit | **Absent by design** | The outputs are documents, PoC artefacts and a readiness report, not assertions in the suite. |
 | Entry-gate audit (`LF-0a`) | **Run 2026-10-30** — [`READINESS_AUDIT.md`](READINESS_AUDIT.md): `RG1`–`RG6` all `Pinned` at `5c3d194` | The readiness report, the pinned snapshot, the moving-targets list and the not-audited list all exist; the audit's §9 records the runs behind them (11,460 assertions / 484 cases, `abi-check.sh` 0 removed / 0 added, `install-check.sh` OK, the layering grep at 0 hits). |
 | `G3` re-check (second code generator) | **`✅`** — same note §4 | Work on a non-LibJIT backend may begin; `RA1`/`RA2` (harness wiring, and the absence of a second *executing* generator) are named rather than hidden, and `RA-1` closes them. |
-| `[docs]` structural lint | Covers `docs/proposals/` (the note shape) **and** the note tree (`docs/index.md`, `docs/proposals/index.md`: ids and rows) | This note is not linted for *shape* (like the other top-level notes), but it is linted for *placement*: it must declare a page id and appear in `docs/index.md`, or the tree silently flattens ([`DOCUMENTATION.md`](DOCUMENTATION.md) §9). |
+| `[docs]` structural lint | Covers `docs/proposals/` (the note shape) **and** the note tree (`docs/index.md`, `docs/proposals/index.md`, `docs/languages/index.md`: ids and rows) | This note is not linted for *shape* (like the other top-level notes), but it is linted for *placement*: it must declare a page id and appear in `docs/index.md`, or the tree silently flattens ([`DOCUMENTATION.md`](DOCUMENTATION.md) §9). `LF-1` added the third index page, and the check counts its four notes (`languageNotes >= 4`). |
 | `[layering]` / `[surface]` gates | **Exist** (`Test/LayeringTests.cpp`, `Test/SurfaceTests.cpp`, `Test/HeaderTierTests.cpp`) | `RG1`/`RG3`/`RG6` evidence: the core ↔ backend vocabulary is machine-checked, the version identity an embedder compiles against is exercised at run time, and every header has a declared tier. |
 | `[runtime]` / `[plugin]` gates | **Exist** (`Test/RuntimeTests.cpp`, `Test/PluginTests.cpp`) | `RG5`/`RG6` evidence: the load → instantiate → call recipe runs against a declared runtime, and a backend loads from a separate shared library through the C descriptor. |
 | Language-feasibility PoC tests | **None exist** under this note's definition | `LF-2` produces them under a charter; promotion to the default suite is a separate decision. |
-| AssemblyScript test modules | **Exist** (`Test/wasm/*.ts`, built at test time) | Harness evidence for strings, arrays and native-import interop — input to a future `LF-2`, not a study. |
-| Canonical candidate list | **Linked, not fetched** | `LF-1` is the first milestone that opens it. |
+| AssemblyScript test modules | **Exist** (`Test/wasm/*.ts`, built at test time) | Harness evidence for strings, arrays and native-import interop — input to a future `LF-2`, not a study; `LF-1` named it as an input rather than re-buying it ([`languages/CLUSTERING.md`](languages/CLUSTERING.md) §3.1). |
+| Canonical candidate list | **Read by `LF-1`** — 84 entries at commit `98da486`, fetched 2026-10-30 | All 84 are accounted for across 102 triage rows; the coverage statement is [`languages/TRIAGE.md`](languages/TRIAGE.md) §5.6. |
+| `LF-1` output | **Exists** — the [`languages/`](languages/index.md) set: the triage, the clustering map, five proposed charters and the evidence log | Documents only: no toolchain installed, no module compiled, no PoC run, no engine change ([`languages/EVIDENCE.md`](languages/EVIDENCE.md) §5). This note is still the authority for what a study *is*. |
 
 Reading: nothing in the default suite changes when a study is commissioned. The
 reviewable artefact is the study report itself, and its evidence rules are §8.4.
@@ -750,9 +757,15 @@ reviewable artefact is the study report itself, and its evidence rules are §8.4
   with states and evidence, the pinned snapshot, the moving-targets list, the
   not-audited list, and the `G3` re-check of the second code generator that was
   performed in the same sweep.
+- [`languages/index.md`](languages/index.md) — **the `LF-1` result**: the triage
+  over all 84 entries ([`TRIAGE.md`](languages/TRIAGE.md)), the clustering map and
+  the don't-study list ([`CLUSTERING.md`](languages/CLUSTERING.md)), the five
+  proposed charters ([`CHARTERS.md`](languages/CHARTERS.md)) and the evidence log
+  ([`EVIDENCE.md`](languages/EVIDENCE.md)). **It assigns no colour and starts no
+  study.**
 - [`appcypher/awesome-wasm-langs`](https://github.com/appcypher/awesome-wasm-langs) —
-  the official / canonical candidate list for the scoping study. **Linked, not
-  consulted yet.**
+  the official / canonical candidate list for the scoping study, read by `LF-1`
+  at commit `98da486` (2026-05-22) on 2026-10-30.
 - [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §2, §4.1, §9 — the current
   milestone, the gap classes that a "yellow" verdict must use, and the recorded
   non-goals (`AASD6`: no text format, no interpreter, no JS engine, no WASI
