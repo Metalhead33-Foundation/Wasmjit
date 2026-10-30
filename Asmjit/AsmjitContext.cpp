@@ -45,7 +45,7 @@ int (*Context::compileReturn42())()
 		throw std::runtime_error("AsmJit executable-memory allocation failed: "
 				+ std::string(asmjit::DebugUtils::errorAsString(error)));
 
-	allocations.push_back(reinterpret_cast<void*>(entry));
+	allocations.push_back(entry);
 	return entry;
 }
 
