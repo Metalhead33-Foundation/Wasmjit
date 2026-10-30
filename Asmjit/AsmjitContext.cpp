@@ -24,7 +24,9 @@ Context::Context() = default;
 
 Context::~Context()
 {
-	for (auto allocation : v128Allocations)
+	for (auto allocation : v128BitwiseAllocations)
+		runtime.release(allocation);
+	for (auto allocation : v128AddAllocations)
 		runtime.release(allocation);
 	for (auto allocation : laneWiseAllocations)
 		runtime.release(allocation);
@@ -109,7 +111,6 @@ Context::LaneWiseI32x4Entry Context::compileLaneWiseI32x4(bool multiply)
 	return entry;
 }
 
-
 Context::V128I32x4AddEntry Context::compileV128I32x4Add()
 {
 	asmjit::CodeHolder code;
@@ -145,7 +146,65 @@ Context::V128I32x4AddEntry Context::compileV128I32x4Add()
 	checkError(runtime.add(&entry, &code),
 			"AsmJit V128 executable-memory allocation failed");
 	try {
-		v128Allocations.push_back(entry);
+		v128AddAllocations.push_back(entry);
+	} catch (...) {
+		runtime.release(entry);
+		throw;
+	}
+	return entry;
+}
+
+Context::V128BitwiseEntry Context::compileV128Bitwise(V128BitwiseOp operation)
+{
+	asmjit::CodeHolder code;
+	checkError(code.init(runtime.environment(), runtime.cpu_features()),
+			"AsmJit CodeHolder initialisation failed");
+
+	asmjit::x86::Compiler compiler(&code);
+	asmjit::FuncNode* function = compiler.add_func(
+			asmjit::FuncSignature::build<void, const std::uint8_t*,
+					const std::uint8_t*, std::uint8_t*>());
+	if (function == nullptr)
+		throw std::runtime_error("AsmJit failed to create the V128 bitwise function");
+
+	asmjit::x86::Gp a = compiler.new_gp_ptr("a");
+	asmjit::x86::Gp b = compiler.new_gp_ptr("b");
+	asmjit::x86::Gp out = compiler.new_gp_ptr("out");
+	function->set_arg(0, a);
+	function->set_arg(1, b);
+	function->set_arg(2, out);
+
+	asmjit::x86::Vec value = compiler.new_vec128("value");
+	checkError(compiler.movdqu(value, asmjit::x86::ptr(a)),
+			"AsmJit V128 bitwise first load emission failed");
+
+	switch (operation) {
+	case V128BitwiseOp::And:
+		checkError(compiler.pand(value, asmjit::x86::ptr(b)),
+				"AsmJit V128 AND emission failed");
+		break;
+	case V128BitwiseOp::Or:
+		checkError(compiler.por(value, asmjit::x86::ptr(b)),
+				"AsmJit V128 OR emission failed");
+		break;
+	case V128BitwiseOp::Xor:
+		checkError(compiler.pxor(value, asmjit::x86::ptr(b)),
+				"AsmJit V128 XOR emission failed");
+		break;
+	default:
+		throw std::invalid_argument("Unknown AsmJit V128 bitwise operation");
+	}
+
+	checkError(compiler.movdqu(asmjit::x86::ptr(out), value),
+			"AsmJit V128 bitwise result store emission failed");
+	checkError(compiler.end_func(), "AsmJit V128 bitwise function finalisation failed");
+	checkError(compiler.finalize(), "AsmJit V128 bitwise compiler finalisation failed");
+
+	V128BitwiseEntry entry = nullptr;
+	checkError(runtime.add(&entry, &code),
+			"AsmJit V128 bitwise executable-memory allocation failed");
+	try {
+		v128BitwiseAllocations.push_back(entry);
 	} catch (...) {
 		runtime.release(entry);
 		throw;
