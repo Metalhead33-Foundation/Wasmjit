@@ -42,7 +42,7 @@ struct ComponentValue {
 		String, List, FixedList, Record, Tuple, Variant, Enum, Flags,
 		Option, Result, Own, Borrow, Stream, Future, Map
 	};
-	Kind kind = Kind::Bool;
+	Kind kind = Kind::Bool; //!< Field `kind` of ComponentValue.
 	union {
 		int64_t  s64 = 0;
 		uint64_t u64;
@@ -53,8 +53,8 @@ struct ComponentValue {
 	uint32_t discriminant = 0;
 	std::string string;
 	std::vector<ComponentValue> elements;
-	std::vector<bool> flags;
-	bool hasValue = false;
+	std::vector<bool> flags; //!< Field `flags` of ComponentValue.
+	bool hasValue = false; //!< Field `hasValue` of ComponentValue.
 };
 
 //! A component-level function. `call` is the flat-value entry point retained for
@@ -64,12 +64,12 @@ struct ComponentValue {
 struct ComponentFunction {
 	WASM::TypeId typeId{WASM::TypeId::kNone};
 	std::vector<WASM::AbiCoreType> params;
-	std::vector<WASM::AbiCoreType> results;
-	std::vector<WASM::ComponentValueType> paramTypes;
-	std::vector<WASM::ComponentValueType> resultTypes;
-	WASM::CanonicalAbiOptions options;
-	bool indirectParams = false;
-	bool indirectResults = false;
+	std::vector<WASM::AbiCoreType> results; //!< Field `results` of ComponentFunction.
+	std::vector<WASM::ComponentValueType> paramTypes; //!< Field `paramTypes` of ComponentFunction.
+	std::vector<WASM::ComponentValueType> resultTypes; //!< Field `resultTypes` of ComponentFunction.
+	WASM::CanonicalAbiOptions options; //!< Field `options` of ComponentFunction.
+	bool indirectParams = false; //!< Field `indirectParams` of ComponentFunction.
+	bool indirectResults = false; //!< Field `indirectResults` of ComponentFunction.
 	std::function<void(std::span<const WASM::Value>, std::span<WASM::Value>)> call;
 	std::function<void(std::span<const ComponentValue>, std::span<ComponentValue>)> callValues;
 };
@@ -97,7 +97,7 @@ public:
 	 * \param imports Host implementations for component-level imports.
 	 */
 	ComponentRuntime(ModuleInstantiator& instantiator,
-			const Component& component, ComponentImports imports = {});
+			const Component& component, ComponentImports imports = {}); //!< Field `imports` of WASMJIT_API.
 	/** \brief Destroys the runtime and its owned component/core instances. */
 	~ComponentRuntime();
 
@@ -136,17 +136,17 @@ private:
 	struct AbiMemory {
 		WASM::LinearMemory* memory = nullptr;
 		WASM::Callable realloc;
-		WASM::Callable postReturn;
-		uint8_t pointerSize = 4;
+		WASM::Callable postReturn; //!< Field `postReturn` of AbiMemory.
+		uint8_t pointerSize = 4; //!< Field `pointerSize` of AbiMemory.
 	};
 
 	/** \brief Runtime bookkeeping for one allocated component resource handle. */
 	struct ResourceSlot {
 		uint64_t representation = 0;
 		WASM::TypeId typeId{WASM::TypeId::kNone};
-		bool live = false;
-		bool own = true;
-		uint32_t borrowScope = 0;
+		bool live = false; //!< Field `live` of ResourceSlot.
+		bool own = true; //!< Field `own` of ResourceSlot.
+		uint32_t borrowScope = 0; //!< Field `borrowScope` of ResourceSlot.
 	};
 
 	//! A core instance in the component graph: either an instantiated core
@@ -156,7 +156,7 @@ private:
 	struct CoreInstanceHandle {
 		std::unique_ptr<WASM::ModuleInstance> moduleInstance;
 		std::unordered_map<std::string, WASM::Callable> inlineFunctions;
-		std::unordered_map<std::string, WASM::LinearMemory*> inlineMemories;
+		std::unordered_map<std::string, WASM::LinearMemory*> inlineMemories; //!< Field `inlineMemories` of CoreInstanceHandle.
 
 /**
  * \brief Performs the exportedFunction operation.
@@ -164,41 +164,41 @@ private:
  * \return The value or status produced by this operation.
  */
 		std::optional<WASM::Callable> exportedFunction(
-				std::string_view name) const;
+				std::string_view name) const; //!< Field `const` of CoreInstanceHandle.
 /**
  * \brief Performs the exportedMemory operation.
  * \param name Input value or output destination for this operation.
  * \return The value or status produced by this operation.
  */
 		std::optional<WASM::LinearMemory*> exportedMemory(
-				std::string_view name) const;
+				std::string_view name) const; //!< Field `const` of CoreInstanceHandle.
 /**
  * \brief Performs the registerExports operation.
  * \param registrar Input value or output destination for this operation.
  * \param moduleName Input value or output destination for this operation.
  */
 		void registerExports(WASM::ImportRegistrar& registrar,
-				std::string_view moduleName) const;
+				std::string_view moduleName) const; //!< Field `const` of CoreInstanceHandle.
 	};
 
-	ModuleInstantiator& instantiator_;
-	const WASM::Component& component_;
-	std::vector<std::unique_ptr<CoreInstanceHandle>> coreInstances_;
-	ComponentImports imports_;
-	std::vector<const WASM::Component*> nestedComponents_;
-	std::vector<std::unique_ptr<ComponentRuntime>> nestedRuntimes_;
-	std::vector<WASM::Callable> coreFuncs_;
-	std::vector<WASM::LinearMemory*> coreMemories_;
-	std::vector<ComponentFunction> componentFuncs_;
-	std::vector<void*> lowerClosures_;
-	std::vector<void*> lowerCifs_;
-	std::vector<void*> lowerData_;
-	std::vector<void*> resourceClosures_;
-	std::vector<void*> resourceCifs_;
-	std::vector<void*> resourceData_;
+	ModuleInstantiator& instantiator_; //!< Field `instantiator_` of WASMJIT_API.
+	const WASM::Component& component_; //!< Field `component_` of WASMJIT_API.
+	std::vector<std::unique_ptr<CoreInstanceHandle>> coreInstances_; //!< Field `coreInstances_` of WASMJIT_API.
+	ComponentImports imports_; //!< Field `imports_` of WASMJIT_API.
+	std::vector<const WASM::Component*> nestedComponents_; //!< Field `nestedComponents_` of WASMJIT_API.
+	std::vector<std::unique_ptr<ComponentRuntime>> nestedRuntimes_; //!< Field `nestedRuntimes_` of WASMJIT_API.
+	std::vector<WASM::Callable> coreFuncs_; //!< Field `coreFuncs_` of WASMJIT_API.
+	std::vector<WASM::LinearMemory*> coreMemories_; //!< Field `coreMemories_` of WASMJIT_API.
+	std::vector<ComponentFunction> componentFuncs_; //!< Field `componentFuncs_` of WASMJIT_API.
+	std::vector<void*> lowerClosures_; //!< Field `lowerClosures_` of WASMJIT_API.
+	std::vector<void*> lowerCifs_; //!< Field `lowerCifs_` of WASMJIT_API.
+	std::vector<void*> lowerData_; //!< Field `lowerData_` of WASMJIT_API.
+	std::vector<void*> resourceClosures_; //!< Field `resourceClosures_` of WASMJIT_API.
+	std::vector<void*> resourceCifs_; //!< Field `resourceCifs_` of WASMJIT_API.
+	std::vector<void*> resourceData_; //!< Field `resourceData_` of WASMJIT_API.
 	std::vector<ResourceSlot> resourceSlots_{ResourceSlot{0, WASM::TypeId::kNone,
 			false, true, 0}};
-	std::vector<uint32_t> freeResourceSlots_;
+	std::vector<uint32_t> freeResourceSlots_; //!< Field `freeResourceSlots_` of WASMJIT_API.
 	//! Single-agent async state. The allocator/releaser keep async handles in the
 	//! same index space as resources (docs/proposals/THREADS.md TD9).
 	WASM::ComponentAsyncState async_;
@@ -212,7 +212,7 @@ private:
 	std::vector<ComponentValue> componentValues_;
 	uint32_t borrowScopeSerial_ = 1;
 	uint32_t currentBorrowScope_ = 0;
-	std::unordered_map<std::string, size_t> exportedFuncs_;
+	std::unordered_map<std::string, size_t> exportedFuncs_; //!< Field `exportedFuncs_` of WASMJIT_API.
 
 /**
  * \brief Performs the build operation.
@@ -289,7 +289,7 @@ private:
  * \return The value or status produced by this operation.
  */
 	WASM::ComponentValueType resolveValueType(
-			const WASM::ComponentValueType& type) const;
+			const WASM::ComponentValueType& type) const; //!< Field `const` of WASMJIT_API.
 /**
  * \brief Performs the addHandle operation.
  * \return The value or status produced by this operation.
@@ -339,7 +339,7 @@ private:
 	void invokeCore(const WASM::Callable& callable,
 			const ComponentFunction& function,
 			std::span<const WASM::Value> args,
-			std::span<WASM::Value> results) const;
+			std::span<WASM::Value> results) const; //!< Field `const` of WASMJIT_API.
 };
 
 } // namespace WASM
