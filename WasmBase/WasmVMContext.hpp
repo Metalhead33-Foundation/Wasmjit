@@ -80,6 +80,10 @@ struct VMContext {
 static_assert(offsetof(VMContext, memories) == 0,
 			  "VMContext::memories must remain the first field for backend ABI compatibility");
 static_assert(std::is_standard_layout_v<VMContext>,
+/**
+ * \brief Performs the offsetof operation.
+ * \return The value or status produced by this operation.
+ */
 			  "VMContext must remain standard-layout for offsetof() access from generated code");
 
 }
