@@ -110,7 +110,8 @@ SOURCES += main.cpp \
     RuntimeTests.cpp \
     ConcurrencyTests.cpp \
     PluginTests.cpp \
-    HeaderTierTests.cpp
+    HeaderTierTests.cpp \
+    LegacyEhTests.cpp
 HEADERS +=  \
     helper.hpp \
     Diagnose.hpp \

@@ -30,7 +30,10 @@ Follows the same split as [`GC.md`](GC.md) / [`SIMD.md`](SIMD.md) /
 "Exception Handling with `exnref`" (`exceptionsFinal`) is a **Phase 5**
 proposal, integrated into WebAssembly **3.0**. It is the *final* shape of the
 proposal: the legacy `try`/`catch`/`catch_all`/`rethrow`/`delegate`
-instructions were **removed**.
+instructions were **removed**. (The deprecated Phase-3 form, and what accepting
+it would cost, is analysed separately in
+[`LEGACY_EXCEPTIONS.md`](LEGACY_EXCEPTIONS.md) — this note implements the final
+shape only.)
 
 - **Tags.** A tag section (and tag imports/exports) declares tags, each an
   attribute byte (`0x00`) plus a **function type**. A tag identifies an

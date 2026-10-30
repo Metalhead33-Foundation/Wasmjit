@@ -276,12 +276,13 @@ The strict pass is a *work list*, not a gate: today it reports the gap counted i
 The site renders the Markdown notes as pages, and `GENERATE_TREEVIEW = YES` shows
 them in the sidebar. Doxygen nests a page only when another page names it with
 `\subpage`; without that every note is a *sibling* at the top level, which is what
-a flat tree is. The hierarchy is therefore built by two index pages:
+a flat tree is. The hierarchy is therefore built by three index pages:
 
 | Index page | Id | Children |
 |---|---|---|
-| [`index.md`](index.md) | `docs_index` | the 21 notes in `docs/` **and** `proposals` |
-| [`proposals/index.md`](proposals/index.md) | `proposals_index` | the 34 proposal notes |
+| [`index.md`](index.md) | `docs_index` | the 21 notes in `docs/`, `proposals` **and** `languages` |
+| [`proposals/index.md`](proposals/index.md) | `proposals_index` | the 35 proposal notes |
+| [`languages/index.md`](languages/index.md) | `languages_index` | the 4 language-study notes of `LF-1` |
 
 A note declares its own id on the title line, and its folder's index lists that
 id in a table row:
@@ -298,14 +299,21 @@ WasmJit            (README.md, the main page)
 ├── Direction, Feature completeness, …   (the README's own sections)
 └── docs                                 (docs/index.md)
     ├── ABI, API/ABI stability, …        (21 notes, each with its own sections)
+    ├── languages                        (docs/languages/index.md)
+    │   └── Triage, Clustering, Charters, Evidence   (4 study notes)
     └── proposals                        (docs/proposals/index.md)
-        └── GC, SIMD, THREADS, …         (34 notes)
+        └── GC, SIMD, THREADS, …         (35 notes)
 ```
 
 **Adding a note** takes three steps: create the file; append `{#doc_what_it_is}`
-(or `{#prop_what_it_is}`) to its `# Title` line; add one row to its folder's
-index. Moving a note between the folders means changing both the id prefix and
-the row.
+(or `{#prop_what_it_is}`, or `{#lf_what_it_is}` for the study folder) to its
+`# Title` line; add one row to its folder's index. Moving a note between the
+folders means changing both the id prefix and the row.
+
+**A new folder** takes one more: a folder without an index page is not part of
+the tree, so it gets `<folder>/index.md` with its own id, a `\subpage` row in
+`docs/index.md`, and an entry in the `[docs]` check below. `docs/languages/` was
+added that way, which is why the check now knows three index pages.
 
 **Why the ids are explicit.** Doxygen derives an id from the path when it has to
 (`md_docs_2TESTING`): it changes when the file moves and reads like a hash. An
@@ -315,7 +323,8 @@ style links keep working because the file links resolve to the page).
 
 **Enforced, not remembered.** `./Test/WasmJit '[docs]'` fails when
 
-- a note in `docs/` or `docs/proposals/` has no `{#id}` on its title line;
+- a note in `docs/`, `docs/proposals/` or `docs/languages/` has no `{#id}` on its
+  title line;
 - a note is missing from its folder's index — which is the silent failure: it
   would still build, as a sibling of the whole sub-tree;
 - an index names an id that no note declares (a typo Doxygen would drop without
@@ -324,9 +333,9 @@ style links keep working because the file links resolve to the page).
 `[headerdoc]` keeps the Doxyfile's settings honest (`QT_AUTOBRIEF`,
 `WARN_NO_PARAMDOC`, the output directory); the note tree adds no setting of its
 own beyond the ones that turn Markdown on: `FILE_PATTERNS = … *.md` with
-`README.md`, `docs` and `docs/proposals` in `INPUT`, and
-`USE_MDFILE_AS_MAINPAGE = README.md`, which is what makes the README the root
-page rather than another sibling.
+`README.md` and `docs` in `INPUT` (`RECURSIVE = YES`, so `docs/proposals` and
+`docs/languages` are both reached), and `USE_MDFILE_AS_MAINPAGE = README.md`,
+which is what makes the README the root page rather than another sibling.
 
 ## 10. References
 

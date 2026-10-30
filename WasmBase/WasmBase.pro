@@ -52,6 +52,7 @@ SOURCES += \
         WasmException.cpp \
         WasmExn.cpp \
         WasmGcHeap.cpp \
+        WasmLegacyEh.cpp \
         WasmMemory.cpp \
         WasmModule.cpp \
         WasmModuleInstance.cpp \
@@ -118,6 +119,8 @@ HEADERS += \
     WasmType.hpp \
     WasmTypeIdentity.hpp \
     WasmTypeRegistry.hpp \
+    WasmLegacyEh.hpp \
+    WasmParseOptions.hpp \
     WasmValidator.hpp \
     WasmValidation.hpp \
     WasmVersion.hpp \
@@ -138,6 +141,7 @@ isEmpty(PREFIX): PREFIX = /usr/local
 # §6.1.1), so the tier lists stay the single source of truth.
 WASMJIT_INTERNAL_HEADERS = \
     $$PWD/WasmSection.hpp \
+    $$PWD/WasmLegacyEh.hpp \
     $$PWD/WasmTypeStore.hpp \
     $$PWD/WasmCanonicalType.hpp \
     $$PWD/WasmTypeRegistry.hpp \
