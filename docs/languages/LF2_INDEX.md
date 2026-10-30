@@ -45,15 +45,15 @@ honest.
 
 | Report | Cluster | Arms run | Verdicts |
 |---|---|---|---|
-| \subpage lf2_s1 | `L1` — C/C++ toolchain and ABI | 5 (`T01`–`T05`) | 4 green, 1 yellow |
+| \subpage lf2_s1 | `L1` — C/C++ toolchain and ABI | 5 (`T01`–`T05`) | 5 green |
 | \subpage lf2_s2 | `L2` — LLVM-family languages | 4 (`T06`, `T07`, `T10`, `T33`) | 4 green |
 | \subpage lf2_s3 | `L3` — AssemblyScript / TypeScript | 1 (`T15`, and `T30` by inheritance) | 1 green |
 | \subpage lf2_s4 | `L4` — WasmGC languages | 4 (`T20`, `T53` in two target forms, `T86`) | 2 green, 1 yellow, 1 red arm |
 | \subpage lf2_s5 | `L5` — guest scripting VMs | 1 (`T26`) | 1 green |
-| \subpage lf2_l6_l12 | `L6`–`L12` — everything else | 1 (`T09`, `L8`) | 1 yellow |
+| \subpage lf2_l6_l12 | `L6`–`L12` — everything else | 1 (`T09`, `L8`) | 1 green |
 | \subpage lf2_evidence | — | — | toolchains, hashes, commands, transcripts |
 | \subpage lf2_deep_f1 | **Deep study** — `F1`: why libjit refused the module, and the backend fix | — | `T01`/`T04` unblocked |
-| \subpage lf2_deep_f2 | **Deep study** — `F2` (`LE-8`): the verified `wasm-opt` workaround and the long-term options | — | `T05` scoped |
+| \subpage lf2_deep_f2 | **Deep study** — `F2` (`LE-8`): the workarounds, and the escape-block translation that made them optional | — | `T05` green |
 | \subpage lf2_deep_f3 | **Deep study + fix** — `F3`: the GC subtyping gap, its four sub-findings and what is still open | — | `T20`/`T53` unblocked to validation |
 
 Reading order for a decision: this page's §4 → the report for the cluster → the
@@ -111,7 +111,7 @@ disproportionately expensive ([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILIT
 | `T03` | C / wasi-sdk 34.0 reactor | all five | **Green** | + `fd_write`/`fd_seek`/`fd_fdstat_get` shim; `printf` works |
 | `T01` | C / Emscripten 6.0.13 `-O2` | all five | **Green** (after `F1`; was yellow at `-O1`) | `_start` compiles at level 0 and runs to `wasi_exit=0` |
 | `T04` | C++ / Emscripten 6.0.13 `-O2` reactor | all five | **Green** (after `F1`) | ctors, `std::vector`, `string`; `-O2` loads |
-| `T05` | C++ / wasi-sdk 34.0, default flags | 1–4 yes, 5 no | **Yellow** | default legacy EH hits `LE-8`; `-mllvm -wasm-use-legacy-eh=false` green (`F2`) |
+| `T05` | C++ / wasi-sdk 34.0, default flags | all five | **Green at this commit** | default legacy EH loads: `F2`/`LE-8` translates the skipping `delegate`; ctors, `std::vector`, `std::string` and a guest `try`/`catch` all work |
 | `T06` | Rust / rustc 1.99.1 `wasm32-unknown-unknown` | all five | **Green** | no WASI, one `env` import, `Vec`/`String` over `dlmalloc` |
 | `T07` | Rust / rustc 1.99.1 `wasm32-wasip1` | all five | **Green** | 4 WASI imports; `println!` through the shim |
 | `T09` | Go / 1.27.3 `wasip1`, `-buildmode=c-shared` | all five | **Green at this engine commit** | `_initialize`, `env.host_add` = 42, `dep.add` cross-module = 43; 16 WASI imports are the embedder's shim |
@@ -120,7 +120,7 @@ disproportionately expensive ([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILIT
 | `T15` | AssemblyScript 0.28.19 (`--runtime stub`) | all five | **Green** | + the existing `Test/wasm` harness evidence |
 | `T53` | Kotlin/Wasm 2.4.21 `wasmWasi` | all five | **Green at this commit** | exports, guest `try`/`catch`, `_start`; 3 WASI imports are the embedder's shim |
 | `T53` | Kotlin/Wasm 2.4.21 `wasmJs` | none | **Red** | 696 imports incl. externref globals: a JS-host contract by construction |
-| `T20` | Dart 3.13.7 `dart compile wasm --standalone` | 1–4 unproven, 5 no | **Yellow** | type section accepted after `F3a`; now blocked by its legacy EH (`F2`) |
+| `T20` | Dart 3.13.7 `dart compile wasm --standalone` | 1–4 unproven, 5 no | **Yellow** | type section accepted after `F3a`, legacy EH translated after `F2`; now blocked by `canonical type reference is not declared by this module` (a third, unreproduced issue) |
 | `T86` | MoonBit 0.1.20261028, `wasm-gc`, release | all five except cross-module | **Green at this commit** | 359-byte module; `_start` prints `Hello` via `spectest.print_char` |
 
 `T30` (TypeScript) has no separate arm: its only documented path is
@@ -137,7 +137,7 @@ forbids an `LF-2` study from patching the engine.
 | ID | Finding | Evidence | Class ([`API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §4.1) | Who it blocks |
 |---|---|---|---|---|
 | **F1** | A LibJIT `-O2` Emscripten module aborts at instantiation: `jit_function_compile failed 0 for func 2`, then `std::abort()` in the compile loop. `-O0`/`-O1` of the same source load and run. | `t01_emcc.wasm` (O2) vs `t01_emcc_o1.wasm` | **B** — per-backend, inside the eight contract rows; the core, the ABI and the type model are untouched | `T01`, `T04` at `-O2` |
-| **F2** | clang's default C++ exception encoding still trips the one shape the legacy-EH rewrite refuses (`LE-8`: a `delegate` that skips an intervening `catch`), so a default `clang++ -O2` C++ module does not load at all. | `t05_eh.wasm`, refused; `t05_final_eh.wasm`, loads | **A** — backend-neutral `WasmBase` parser work; it is the open `LE-8` row of [`proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) | `T05`, and any toolchain that cannot re-flag |
+| **F2** | clang's default C++ exception encoding tripped the one shape the legacy-EH rewrite refused (`LE-8`: a `delegate` that skips an intervening `catch`), so a default `clang++ -O2` C++ module did not load at all. Fixed (see below). | `t05_eh.wasm`, refused before the fix, runs now; `t05_final_eh.wasm`, loads | **A** — backend-neutral `WasmBase` parser work; it was the open `LE-8` row of [`proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) | `T05` — closed |
 | **F3** | A valid GC subtype annotation was rejected: a field narrowing `(ref null $t)` to `nullref` is a legal covariant field, and `heapMatches` did not model the bottom heap types as subtypes of a concrete type. Fixed (see `F3a`–`F3d` below). | `gc_bottom_subtype.wasm`, refused before the fix; `wasm-tools validate --features all` passes | **A** — backend-neutral type-registry rule | `T53`, `T20` — both got past the type section |
 | **F3a** | the missing bottom-type edge in `heapMatches` | fixed in [`LF2_DEEP_F3_GC.md`](LF2_DEEP_F3_GC.md) §5 | **A** | closed |
 | **F3b** | `CanonHeapType::operator==` compared the dormant `memberIndex`, so equal global references compared unequal and a mutable field failed its invariance check | fixed; `heap-type equality ignores the dormant payload` | **A** | closed |
@@ -159,15 +159,18 @@ level 0 and turns any remaining failure into a
 `WASM.COMPILE.FUNCTION_FAILED` exception instead of `std::abort()`
 ([`LF2_DEEP_F1_BACKEND.md`](LF2_DEEP_F1_BACKEND.md)).
 
-**A second, unproven failure.** `t05_final_eh.wasm` loads and runs, but the
-default C++ module is refused by `LE-8` even though the rewrite is supposed to
-accept most legacy output — that holds with the recovery policy too, which is
-why the refusal now names `LE-8` rather than asking for a switch. That is the
-known
-open row, not a new finding, and [`CHARTERS.md`](CHARTERS.md) §4 already assigns
-it to the `EH residue probe`. The verified `wasm-opt --translate-to-exnref`
-workaround and the long-term options are in
-[`LF2_DEEP_F2_EH.md`](LF2_DEEP_F2_EH.md).
+**F2 is fixed too, and it was the last one.** `LE-8` translates the skipping
+`delegate`: every catch frame the delegate has to pass is wrapped in a void
+escape block, the delegated body's exceptions are caught with `catch_all_ref` and
+carried past those frames in one `exnref` local, and the rethrow after the block
+lands exactly on the delegate's target (or in the caller). A *branch* never
+triggers a handler, so nothing the delegate skips can catch. `t05_eh.wasm` — C++
+with libc++ at default flags — now loads and runs its own exceptions
+(`throw_catch(-3)` = −1), with no flag and no `wasm-opt` pass; the load reports
+`WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN`. The design, the reason the earlier
+analysis thought it impossible, and the measurements are in
+[`LF2_DEEP_F2_EH.md`](LF2_DEEP_F2_EH.md) and
+[`proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) §10.3.
 
 ## 6. What this set is not
 

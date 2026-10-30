@@ -54,8 +54,9 @@ Three build facts matter:
    records `WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN`.
    `ParseOptions::acceptingLegacyExceptionHandling()` (or `WASMJIT_LEGACY_EH=1`)
    still forces the unconditional rewrite and stays quiet. This is the contrast
-   with `F2`: clang's C++ output hits `LE-8` and is refused *with the rewrite
-   on*, while Lua's `setjmp`-shaped output is inside what the rewrite handles.
+   with `F2`: clang's C++ output needed the escape-block translation for its
+   `delegate` past a catch (it was refused before `LE-8` closed), while Lua's
+   `setjmp`-shaped output was already inside what the rewrite handles.
 3. **Two libc gaps are the embedder's**: `tmpfile` and `system` do not exist on
    WASI, and Lua references them, so the shim defines both (returning `NULL` and
    `-1`). That is the kind of thing a VM port always carries; it is shim work,

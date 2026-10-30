@@ -84,7 +84,7 @@ clustering map can group by them:
 | **F2** | WASI host surface required | WASI is embedder-provided by decision; the engine ships none (`AASD6`), but the imports are ordinary host imports, so it is *implementable* |
 | **F3** | Runtime-owned heap/allocator in linear memory | Works: the guest owns its whole memory, and since `MP-1` a non-shared memory can **reserve its maximum and keep its base** (`MemoryAllocationPolicy::Reserved`, [`../proposals/MEMORY_PROVIDER.md`](../proposals/MEMORY_PROVIDER.md)). The engine still will not accept an embedder-supplied *backing* (`MP-2`), and nothing in `docs/languages/` asks it to |
 | **F4** | WasmGC + type identity (+ JS-string builtins) | GC is 100% and type identity is store-scoped ([`TYPE_IDENTITY.md`](../TYPE_IDENTITY.md)), but a runtime may also expect `wasm:js-string` and a host-side layout contract |
-| **F5** | Legacy EH instructions (`try`/`catch`/`delegate`) | **Mitigated (2026-10-30):** the final `exnref` shape is what the engine executes, and a legacy-encoded module no longer has to be refused — `ParseOptions::legacyExceptionHandling` rewrites it at load ([`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md)). Off by default, and one construct is still refused by name (`LE-8`, a `delegate` past a catch; `LE-9`, mixed forms, closed on 2026-10-30), so it stays a *switch a toolchain may force* rather than a free pass |
+| **F5** | Legacy EH instructions (`try`/`catch`/`delegate`) | **Mitigated (2026-10-30):** the final `exnref` shape is what the engine executes, and a legacy-encoded module is no longer refused — the default `ParseOptions` policy rewrites it at load and reports the recovery ([`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md)). Every construct is translated, including `LE-8` (`delegate` past a catch) and `LE-9` (mixed forms), so this is a convenience for the toolchain rather than a switch it must force; a strict policy is one field away |
 | **F6** | OS-thread spawning, real parallelism, TLS | `Agents` exists but is opt-in; the guest cannot spawn a host thread |
 | **F7** | Start-up that blocks, loops, or spawns | There is no step budget (`S1`); an init that never returns hangs the embedder |
 | **F8** | A large *committed* heap against the 2 GiB budget | Reservation stopped being the issue on 2026-10-30: `MemoryAllocationPolicy::Reserved` reserves the declared maximum and keeps the base, so a runtime that wants 4 GiB of address space needs no engine change (`MP-1`, [`../proposals/MEMORY_PROVIDER.md`](../proposals/MEMORY_PROVIDER.md)). What remains is the committed footprint against `WASMJIT_MAX_TOTAL_BYTES` — an embedder's dial, not an engine gap ([`SAFETY.md`](../SAFETY.md) §2.3) |
@@ -284,7 +284,7 @@ what a cluster *is*.
 | **T50** | JavaScript | Duktape, quickjs-emscripten, SpiderMonkey, Hermes, goja, jint | `F1`/`F2` — most builds are Emscripten/JS-hosted; Hermes documents both an Emscripten and a WASI path | exp | partly | medium | E2 | C3 | `L6` | folds into `T49` |
 | **T51** | JavaScript | Porffor, jz (AOT JS → Wasm) | a JS subset AOT'd to Wasm; experimental | exp | standard | medium | E3 | C2 | `L10` | `T3` (watch) |
 | **T52** | KCL | KCLVM (LLVM) | a configuration language; intended-use mismatch | exp | standard | low | E3 | C0 | `L11` | none |
-| **T53** | Kotlin | Kotlin/Wasm (`wasm-wasi` target) | `F4` — WasmGC plus `wasm:js-string`-class imports and a stdlib of real size. **This is the gold-standard row** (§3.1): GC is 100%, and the imports are exactly what an embedder supplies, so what the engine owes the row is the loader. That half is done — the legacy exception handling Kotlin cannot re-flag is translated at load, provided the output does not delegate past a catch (`LE-8`, the one shape the rewrite still refuses; mixed legacy/`try_table` bodies load since `LE-9`) | exp (beta) | partly | medium | E1 | C3 · 5–7 s · 2 w | `L4` | `T3` |
+| **T53** | Kotlin | Kotlin/Wasm (`wasm-wasi` target) | `F4` — WasmGC plus `wasm:js-string`-class imports and a stdlib of real size. **This is the gold-standard row** (§3.1): GC is 100%, and the imports are exactly what an embedder supplies, so what the engine owes the row is the loader. That half is done — the legacy exception handling Kotlin cannot re-flag is translated at load, including `delegate` past a catch (`LE-8`) and mixed legacy/`try_table` bodies (`LE-9`) | exp (beta) | partly | medium | E1 | C3 · 5–7 s · 2 w | `L4` | `T3` |
 | **T54** | Lisp | wasCm, Wisp | a small VM or compiler; low value here | exp | partly | medium | E3 | C2 | `L6` | `T3` (second wave) |
 | **T55** | Lys | own compiler | a tiny functional language | exp | standard | low | E3 | C2 · 1–2 s · 2–3 d | `L10` | `T3` |
 | **T56** | Pascal | Free Pascal `wasm32-wasi` | `F2`+`F3` — the FPC RTL plus WASI; threads off by default | stable | partly | medium | E2 | C3 · 4–6 s · 1–2 w | `L2` | `T3` |
@@ -422,8 +422,8 @@ loads ([`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md)
 §4.6; measured end to end, `R-8`). Three consequences for this screen:
 
 1. **The blocker moved from the language to the embedder.** A row now asks
-   "does the output stay inside the two constructs the rewrite refuses
-   (`LE-8`) *and* is the embedder willing to switch the policy on?", not
+   "does the output stay inside what the rewrite translates *and* is the embedder
+   willing to switch the policy on?", not
    "does the toolchain have a final-EH flag?".
 2. **Kotlin's position improved and stayed awkward.** It is the one consumer that
    cannot re-flag its own toolchain, so the policy is its only path — which makes
@@ -526,7 +526,7 @@ recur, and all three are `LF-3`-class, to be classed per
 
 | # | Question | Raised by | Class, if it were done |
 |---|---|---|---|
-| **Q-1** | Accept the **legacy EH encoding** as well as final `exnref`, or keep requiring final EH from toolchains? | `T04`, `T39`, `T53`, `T72` | Additive decode/validation work (class A), *not* a study result. **Answered and shipped (2026-10-30)**: [`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) — no encoding conflict, a front-end desugaring rather than a rewrite, and `ParseOptions::legacyExceptionHandling` now translates the superseded form into `try_table` at load. The default still refuses it, two constructs are still refused by name (`LE-8`, `LE-9`), and the toolchain flags remain the cheaper fix; §6.9 is the re-screen that followed |
+| **Q-1** | Accept the **legacy EH encoding** as well as final `exnref`, or keep requiring final EH from toolchains? | `T04`, `T39`, `T53`, `T72` | Additive decode/validation work (class A), *not* a study result. **Answered and shipped (2026-10-30)**: [`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) — no encoding conflict, a front-end desugaring rather than a rewrite, and `ParseOptions` now translates the superseded form into `try_table` at load under a recovery-by-default policy (`LE-6`). Every construct is translated, `LE-8` (a `delegate` past a catch) and `LE-9` (mixed forms) included, so the toolchain flags are a size preference rather than a requirement; §6.9 is the re-screen that followed |
 | **Q-2** | Ship a **reference WASI shim**? (Embedder-side today, by decision `AASD6`.) | `T03`, `T05`, `T07`, `T09`, `T60`, `T67`, `T83` | Embedder tooling; lives outside `WasmBase/` |
 | **Q-3** | Give the embedder a **memory-provider seam** (`RA4`'s recorded limitation)? | `T01`, `T14`, `T39`, `T83` | Additive (class A) per `RA-2` — and the one item here that touches a frozen surface |
 
@@ -579,11 +579,11 @@ superseded form with a final `try_table`; it now renumbers that `try_table`'s
 clause labels exactly like a branch and accepts the body
 ([`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) `LE-9`,
 `Test/wasm_wat/legacy/mixed.wat`). Effect on this screen: exactly one cell —
-`T53`'s proviso narrows from "stays inside `LE-8`/`LE-9`" to "does not delegate
-past a catch (`LE-8`)". No grade, tier, cluster or kill moves, and `F5` stays a
-mitigated friction rather than a free pass. `LE-8` is *not* a gap that a re-screen
-is waiting on: the cheap rewrite of it is unsound and the sound one is a
-control-flow split, so it stays refused by name until a real module trips it.
+`T53`'s proviso narrows from "stays inside `LE-8`/`LE-9`" to "does not use a
+construct the rewrite cannot translate". No grade, tier, cluster or kill moves,
+and `F5` stays a mitigated friction rather than a free pass. `LE-8` closed later
+the same day (escape block; `delegate_skip`/`delegate_skip_table` and clang's own
+`t05_eh.wasm`), so no row's proviso names it any more.
 
 
 ### 6.11 The third expiry: `MP-1` shipped (2026-10-30, revision 2)
@@ -631,7 +631,7 @@ engine effect — a reader may disagree with it without disagreeing with `MP-1`.
 **Checked and unchanged.** `T01` (low, `F7` is a real engine edge), `T11`/`T12`/`T13`
 (`F1`: a JS-engine contract, not registerable host functions), `T39` (medium),
 `T42`/`T83` (high, `F6`: host threads), `T44` (medium already), `T64`/`T84`
-(`F1`), `T53` (medium, proviso narrowed to `LE-8`, now the gold-standard row).
+(`F1`), `T53` (medium, proviso narrowed to the constructs the rewrite translates, now the gold-standard row).
 
 **Distribution:** 20 `high` / 34 `medium` / 48 `low` (was 27 / 27 / 48). Seven
 rows moved: three by the engine, four by the rubric.
@@ -664,12 +664,13 @@ Six questions no documentation-only screen can answer. Every charter in
    scope ([`READINESS_AUDIT.md`](../READINESS_AUDIT.md) §6.4).
 2. **Does start-up terminate?** There is no step budget (`S1`); an init that
    waits or loops hangs the embedder.
-3. **Does the output load, with the parser policy on?** The encoding itself is
-   no longer the question — `ParseOptions::legacyExceptionHandling` translates
-   the superseded form — so the question is whether the module stays inside what
-   the rewrite refuses (`LE-8`) and whether the embedder is willing to
-   switch it on. `wasm-tools print`/`--features legacy-exceptions` answers the
-   first half; the second is a policy decision, not a finding.
+3. **Does the output load?** The encoding itself is
+   no longer a question — `ParseOptions`'s recovery policy translates the
+   superseded form, every construct included (`LE-8`, `LE-9`) — so the question
+   is only whether the module uses a construct the rewriter cannot *measure*,
+   which `wasm-tools print`/`--features legacy-exceptions` answers, and whether
+   the embedder wants the strict policy instead. Both are policy decisions, not
+   findings.
 4. **Does the runtime survive `Single`?** Its own single-threaded mode, or none.
 5. **Does its heap fit the budget?** Default 2 GiB, charged per store
    ([`SAFETY.md`](../SAFETY.md) §2.3); an oversized initial size fails

@@ -30,8 +30,9 @@
 namespace WASM {
 struct Module;
 
-//! The one message both refusals use: the decoder's named refusal (`LE-1`) and
-//! the rewriter's own refusals for a construct it cannot translate.
+//! The one message every named refusal uses: the decoder's (`LE-1`, when no
+//! policy translates the form) and the rewriter's own for a body it cannot
+//! measure (a malformed LEB128, a `try_table` immediate it cannot re-emit).
 /** \brief Builds the named refusal for a superseded construct. \param construct The instruction spelling and opcode. \return The operator-facing message, including every remedy. */
 std::string legacyExceptionHandlingMessage(std::string_view construct);
 

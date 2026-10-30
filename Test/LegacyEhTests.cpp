@@ -253,27 +253,54 @@ TEST_CASE("the rewrite remaps branches and delegate depths", "[legacy-eh]")
 	REQUIRE(callExport(loaded, "d2", 0, false) == 9); // delegate past a block
 }
 
-TEST_CASE("a delegate that would skip an intervening catch is refused", "[legacy-eh]")
+TEST_CASE("a delegate that skips an intervening catch reaches its target", "[legacy-eh]")
 {
+	// LE-8: the legacy `delegate` delivers to the try it names, *skipping* every
+	// catch frame in between — and to the caller when the label is not a try.
+	// The rewrite reproduces the skip with a branch out of the skipped frames.
 	const WASM::ParseOptions accepting = WASM::ParseOptions{}.acceptingLegacyExceptionHandling();
-	try {
-		loadLegacyFixture("delegate_skip", accepting);
-		FAIL("the rewrite must refuse a delegate whose target skips a catch");
-	} catch (const std::exception& error) {
-		INFO(error.what());
-		REQUIRE(std::string(error.what()).find("delegate that skips") != std::string::npos);
-	}
+	const LoadedLegacyFixture loaded = instantiateFixture("delegate_skip", accepting);
+	REQUIRE(loaded.instance.get() != nullptr);
 
+	// The middle try's `catch_all` must not see the exception: the outer
+	// `catch $e` receives the payload 9, not the middle arm's 1.
+	REQUIRE(callExport(loaded, "skip", 0, false) == 9);
+
+	// A delegate whose label is not a `try` sends the exception to the caller:
+	// its enclosing `catch $e` must not catch it, so the call returns with the
+	// exception still pending.
+	::wasm_exn_clear_pending();
+	REQUIRE(callExport(loaded, "to_caller", 0) == 0);
+	REQUIRE(::wasm_exn_take_pending() != nullptr);
+
+	// A delegate *inside* a handler: the try that owns the arm cannot catch what
+	// the arm raises, so nothing is skipped and the exception leaves the
+	// function instead of re-entering the arm it came from.
+	::wasm_exn_clear_pending();
+	REQUIRE(callExport(loaded, "from_arm", 0) == 0);
+	REQUIRE(::wasm_exn_take_pending() != nullptr);
+}
+
+TEST_CASE("a delegate skips a final-form try_table too", "[legacy-eh]")
+{
 	// Since LE-9 a mixed body loads, so the intervening handler can also be a
 	// final-form `try_table`. It counts as a catch too, or the rewriting would
-	// silently let it catch what the delegate sent past it.
-	try {
-		loadLegacyFixture("delegate_skip_table", accepting);
-		FAIL("a final-form try_table must count as an intervening catch");
-	} catch (const std::exception& error) {
-		INFO(error.what());
-		REQUIRE(std::string(error.what()).find("delegate that skips") != std::string::npos);
-	}
+	// silently let it catch what the delegate sent past it. The fixture records
+	// which handler ran in a global: 1 is the legacy `catch $e` (correct), 0
+	// would be the `try_table`.
+	const WASM::ParseOptions accepting = WASM::ParseOptions{}.acceptingLegacyExceptionHandling();
+	const LoadedLegacyFixture loaded = instantiateFixture("delegate_skip_table", accepting);
+	REQUIRE(loaded.instance.get() != nullptr);
+	REQUIRE(callExport(loaded, "skip_table", 0, false) == 1);
+}
+
+TEST_CASE("the recovery policy also handles a skipping delegate", "[legacy-eh]")
+{
+	// The default policy is the one an embedder gets without asking, so the new
+	// translation must not depend on the unconditional switch.
+	LegacyEhSwitch guard(false);
+	const LoadedLegacyFixture loaded = instantiateFixture("delegate_skip", WASM::ParseOptions{});
+	REQUIRE(callExport(loaded, "skip", 0, false) == 9);
 }
 
 TEST_CASE("a body may mix the superseded form with try_table", "[legacy-eh]")

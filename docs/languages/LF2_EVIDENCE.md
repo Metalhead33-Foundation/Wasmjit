@@ -63,7 +63,7 @@ All under `build/lf2/poc/modules/`; hashes are SHA-256.
 | `t01_emcc.wasm` (O2) | `T01` | 1,742 | 3 | 9 | refused (`F1`) |
 | `t04_empp_reactor.wasm` | `T04` | 11,613 | 2 | 9 | `3ff1feea0e8150dd88a6c8a688a33011f5ce70cab6306c298f0b196d47921953` |
 | `t05_final_eh.wasm` | `T05` | 336,339 | 7 | 7 | `dad7365286cba0af63c4ccb1a3b3bbc47dfa5978510033fded6568146635c919` |
-| `t05_eh.wasm` (default) | `T05` | 336,269 | 7 | 7 | `31f99abb3201f0fecc9331376be094c83416aaf0b2cac6e10e3dbf281e1eee95` (refused, `F2`) |
+| `t05_eh.wasm` (default) | `T05` | 336,269 | 7 | 7 | `31f99abb3201f0fecc9331376be094c83416aaf0b2cac6e10e3dbf281e1eee95` (was refused, `F2`; runs now) |
 | `t06_rust.wasm` | `T06` | 1,653,586 | 1 | 6 | `1d6f359b36a9b04bb1e1639961fb2d3d40a5de101b62ac8b87437acb230364ae` |
 | `t07_rust.wasm` | `T07` | 2,167,021 | 5 | 4 | `3878f95acaeba22d371501346226a40a9eee2cad770e634f40b617c211b99878` |
 | `t09_go_lib.wasm` | `T09` | 2,479,821 | 18 | 5 | `98af3f7b4ae0d92eee1cb04eec215ff54dd6e64789037862e4ac8e3211d42c30` |
@@ -153,23 +153,39 @@ compile optimised code" (`T06`, `T07`, `T10`, `T33` are all optimised builds
 that pass). It is one function in one optimisation configuration. The internal
 cause is `LF-3` work; this study does not diagnose it.
 
-### 5.2 `F2` — `LE-8` survives into default C++ output (class A)
+### 5.2 `F2` — `LE-8` in default C++ output (class A, **fixed**)
 
 **Observe.** `clang++ -fwasm-exceptions` (LLVM 23.1.x, wasi-sdk 34.0) still
-emits the legacy encoding by default. The rewrite refuses the module *with the
-rewrite on* (`WASMJIT_LEGACY_EH=1`, and equally under the default recovery
-policy), with the `LE-8` message. Adding
-`-mllvm -wasm-use-legacy-eh=false` produces a `try_table` module that loads and
-runs, guest exceptions included.
+emits the legacy encoding by default. Before the fix the rewrite refused the
+module *with the rewrite on* (`WASMJIT_LEGACY_EH=1`, and equally under the
+default recovery policy), with the `LE-8` message; adding
+`-mllvm -wasm-use-legacy-eh=false` produced a `try_table` module that loaded and
+ran, guest exceptions included.
 
 **Reproduce.** `poc/src/cpp/hello.cpp`, two builds as in
 [`LF2_S1_C_CPP.md`](LF2_S1_C_CPP.md) §3.5.
 
-**Bound the claim.** `LE-8` is already the open row of
-[`proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) §4.6; this
-study supplies a real consumer (libc++'s `__cxa_throw` path) rather than a new
-failure mode. The workaround is a flag, which is why `T05` is yellow and not
-red.
+**After the fix** (`LE-8`, escape block; same binary, same hash):
+
+```
+call _initialize/void() -> void
+call ctor_value/i32() -> i32=40
+call via_host/i32(20,22) -> i32=42
+call sum_vector/i32(4) -> i32=10
+call throw_catch/i32(5) -> i32=10
+call throw_catch/i32(-3) -> i32=-1
+status=ok
+```
+
+The load reports `WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN` under the default
+policy; `WASMJIT_LEGACY_EH=1` gives the same result without the note.
+
+**Bound the claim.** This study supplied a real consumer (libc++'s `__cxa_throw`
+path) for a row of
+[`proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) §4.6 that
+had only hand-written fixtures. The translation is exercised by four fixtures
+(`delegate_skip` ×2, `delegate_skip_table`, `d1`/`d2`) and by this module's own
+cleanup pads; it is not a proof for every producer's output.
 
 ### 5.3 `F3` — bottom heap types are not subtypes (class A)
 

@@ -50,10 +50,9 @@ struct ParseOptions {
 	//! every backend see the final form, and the deprecated form is never
 	//! executed. Setting this is the **permissive** opt-in: a module that uses
 	//! the form is accepted without asking, which makes the decoder more
-	//! permissive than the spec (`docs/SAFETY.md` §2.1). Two constructs inside
-	//! the form are still refused by name even when this is on: a `delegate`
-	//! whose target skips an intervening catch (`LE-8`) and a body that mixes the
-	//! two forms (`LE-9`).
+	//! permissive than the spec (`docs/SAFETY.md` §2.1). Every construct of the
+	//! form is translated, including a `delegate` that skips an intervening
+	//! catch (`LE-8`) and a body that mixes the two encodings (`LE-9`).
 	bool legacyExceptionHandling = false;
 
 	//! Recover a module that uses the superseded exception form instead of
@@ -64,11 +63,10 @@ struct ParseOptions {
 	//! **On by default**, because the alternative is a load failure for a form
 	//! the engine can translate correctly, and the report keeps the decision
 	//! visible instead of silent. It is not a widening of what *validates*: a
-	//! body that does not use the form is never touched, and `LE-8`/`LE-9` still
-	//! refuse by name. Set this to false for **strict** parsing (the pre-`LE-6`
-	//! behaviour), and `legacyExceptionHandling` to true for **unconditional**
-	//! rewriting; the two are independent, and `legacyExceptionHandling` wins
-	//! when both are set.
+	//! body that does not use the form is never touched. Set this to false for
+	//! **strict** parsing (the pre-`LE-6` behaviour), and
+	//! `legacyExceptionHandling` to true for **unconditional** rewriting; the
+	//! two are independent, and `legacyExceptionHandling` wins when both are set.
 	//!
 	//! Only the bodies that actually use the superseded opcodes are rewritten,
 	//! which is why this is a *recovery* rather than a blanket acceptance: a

@@ -57,14 +57,24 @@ fi
 # ── P3/P5/P8: what this engine does with each form ────────────────────────
 if [ -x "$harness" ]; then
     if "$harness" --diagnose="$fixtures/try_catch.wasm" >/tmp/legacy-eh-p3.out 2>&1; then
-        say "  P3  default               unexpectedly loaded the legacy form"
+        say "  P3  default               recovered it (LE-6 recovery policy)"
     else
-        say "  P3  default               refused it: $(head -1 /tmp/legacy-eh-p3.out | cut -c1-80)..."
+        say "  P3  default               FAILED: $(head -1 /tmp/legacy-eh-p3.out | cut -c1-80)..."
+    fi
+    if WASMJIT_LEGACY_EH=0 "$harness" --diagnose="$fixtures/try_catch.wasm" >/tmp/legacy-eh-p3b.out 2>&1; then
+        say "  P3b WASMJIT_LEGACY_EH=0   unexpectedly loaded the legacy form"
+    else
+        say "  P3b WASMJIT_LEGACY_EH=0   strict, refused it: $(head -1 /tmp/legacy-eh-p3b.out | cut -c1-80)..."
     fi
     if WASMJIT_LEGACY_EH=1 "$harness" --diagnose="$fixtures/try_catch.wasm" --invoke=pick --args=1 >/tmp/legacy-eh-p5.out 2>&1; then
         say "  P5  WASMJIT_LEGACY_EH=1   rewrite ran it: $(tail -1 /tmp/legacy-eh-p5.out)"
     else
         say "  P5  WASMJIT_LEGACY_EH=1   FAILED to run the rewrite"
+    fi
+    if "$harness" --diagnose="$fixtures/delegate_skip.wasm" --invoke=skip >/tmp/legacy-eh-p10.out 2>&1; then
+        say "  P10 delegate_skip         skip = $(tail -1 /tmp/legacy-eh-p10.out) (the middle catch_all must not take it)"
+    else
+        say "  P10 delegate_skip         FAILED to run the skip"
     fi
     say "  P8  twin                  $("$harness" --diagnose="$fixtures/try_catch.exnref.wasm" --invoke=pick --args=1 2>&1 | tail -1)"
 else
