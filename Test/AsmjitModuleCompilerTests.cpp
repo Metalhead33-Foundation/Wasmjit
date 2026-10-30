@@ -158,6 +158,10 @@ TEST_CASE("AsmJit compiles i64 integer functions", "[asmjit][module][i64]")
 	AsmJitBackend::ModuleCompiler compiler(context);
 	auto instance = compiler.instantiate(module, imports);
 
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_call_direct"),
+			INT64_C(0x100000000)) == INT64_C(0x200000000));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_call_indirect"),
+			INT64_C(0x100000000)) == INT64_C(0x200000000));
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_add"),
 			INT64_C(0x100000000), INT64_C(0x200000000)) == INT64_C(0x300000000));
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_sub"),
