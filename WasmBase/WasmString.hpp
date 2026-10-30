@@ -73,7 +73,7 @@ public:
 	Store& owner() const { return owner_; }
 	//! May trap with TrapKind::OutOfMemory when the allocation budget is
 	//! exhausted. The returned pointer is stable until it is released.
-	/** \brief Creates a string object from Unicode code points. \param codePoints Code-point sequence to store. \return Stable pointer to a new unowned string object. \throws/traps OutOfMemory if the Store budget is exhausted. */
+	/** \brief Creates a string object from Unicode code points. \param codePoints Code-point sequence to store. \return Stable pointer to a new unowned string object. \throws OutOfMemory if the Store budget is exhausted. */
 	StringObject* create(std::vector<uint32_t> codePoints);
 	/** \brief Creates a WTF-8/WTF-16 view over a string. \param string Store-owned source string. \return Stable pointer to a new unowned view. */
 	StringViewObject* createView(const StringObject* string);
@@ -98,11 +98,11 @@ public:
 	//! changing the store. Allocation failure still traps with
 	//! TrapKind::OutOfMemory. The result is owned (count 1); the host must call
 	//! `release` when it no longer needs it.
-	/** \brief Decodes strict UTF-8 into a Store-owned string. \param utf8 Input UTF-8 bytes. \param valid Optional output validity flag. \return Owned string, or nullptr for malformed/oversized input. \throws/traps OutOfMemory when allocation fails. */
+	/** \brief Decodes strict UTF-8 into a Store-owned string. \param utf8 Input UTF-8 bytes. \param valid Optional output validity flag. \return Owned string, or nullptr for malformed/oversized input. \throws OutOfMemory when allocation fails. */
 	StringObject* createFromUtf8(std::string_view utf8, bool* valid = nullptr);
-	/** \brief Decodes WTF-8, preserving isolated surrogates. \param wtf8 Input WTF-8 bytes. \param valid Optional output validity flag. \return Owned string, or nullptr for malformed/oversized input. \throws/traps OutOfMemory when allocation fails. */
+	/** \brief Decodes WTF-8, preserving isolated surrogates. \param wtf8 Input WTF-8 bytes. \param valid Optional output validity flag. \return Owned string, or nullptr for malformed/oversized input. \throws OutOfMemory when allocation fails. */
 	StringObject* createFromWtf8(std::string_view wtf8, bool* valid = nullptr);
-	/** \brief Decodes UTF-16 code units into a Store-owned string. \param units Input 16-bit code units. \param valid Optional output validity flag. \return Owned string, or nullptr for oversized input. \throws/traps OutOfMemory when allocation fails. */
+	/** \brief Decodes UTF-16 code units into a Store-owned string. \param units Input 16-bit code units. \param valid Optional output validity flag. \return Owned string, or nullptr for oversized input. \throws OutOfMemory when allocation fails. */
 	StringObject* createFromWtf16(std::span<const uint16_t> units,
 								  bool* valid = nullptr);
 
