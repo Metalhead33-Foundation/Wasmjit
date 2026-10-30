@@ -11,6 +11,8 @@
 
 #include <jit/jit.h>
 
+#include "Asmjit/AsmjitContext.hpp"
+#include "Asmjit/AsmjitModuleCompiler.hpp"
 #include "LibJit/LibJitContext.hpp"
 #include "LibJit/LibjitModuleCompiler.hpp"
 #include "WasmBase/WasmDiagnostics.hpp"
@@ -56,6 +58,71 @@ void callWithV128ParamsVoid(void* fnPtr, void* context, const AbiV128* args, siz
 	}
 }
 
+template <typename Ret>
+Ret callI32Function(void* function, void* vm, const std::vector<const void*>& args)
+{
+	auto value = [&](std::size_t i) { return *static_cast<const std::int32_t*>(args[i]); };
+	switch (args.size()) {
+	case 0: return reinterpret_cast<Ret (*)(void*)>(function)(vm);
+	case 1: return reinterpret_cast<Ret (*)(void*, std::int32_t)>(function)(vm, value(0));
+	case 2: return reinterpret_cast<Ret (*)(void*, std::int32_t, std::int32_t)>(function)(vm, value(0), value(1));
+	case 3: return reinterpret_cast<Ret (*)(void*, std::int32_t, std::int32_t, std::int32_t)>(function)(vm, value(0), value(1), value(2));
+	case 4: return reinterpret_cast<Ret (*)(void*, std::int32_t, std::int32_t, std::int32_t, std::int32_t)>(function)(vm, value(0), value(1), value(2), value(3));
+	case 5: return reinterpret_cast<Ret (*)(void*, std::int32_t, std::int32_t, std::int32_t, std::int32_t, std::int32_t)>(function)(vm, value(0), value(1), value(2), value(3), value(4));
+	default: throw std::runtime_error("AsmJit test session supports at most five i32 parameters");
+	}
+}
+
+void callI32VoidFunction(void* function, void* vm, const std::vector<const void*>& args)
+{
+	auto value = [&](std::size_t i) { return *static_cast<const std::int32_t*>(args[i]); };
+	switch (args.size()) {
+	case 0: reinterpret_cast<void (*)(void*)>(function)(vm); return;
+	case 1: reinterpret_cast<void (*)(void*, std::int32_t)>(function)(vm, value(0)); return;
+	case 2: reinterpret_cast<void (*)(void*, std::int32_t, std::int32_t)>(function)(vm, value(0), value(1)); return;
+	case 3: reinterpret_cast<void (*)(void*, std::int32_t, std::int32_t, std::int32_t)>(function)(vm, value(0), value(1), value(2)); return;
+	case 4: reinterpret_cast<void (*)(void*, std::int32_t, std::int32_t, std::int32_t, std::int32_t)>(function)(vm, value(0), value(1), value(2), value(3)); return;
+	case 5: reinterpret_cast<void (*)(void*, std::int32_t, std::int32_t, std::int32_t, std::int32_t, std::int32_t)>(function)(vm, value(0), value(1), value(2), value(3), value(4)); return;
+	default: throw std::runtime_error("AsmJit test session supports at most five i32 parameters");
+	}
+}
+
+class AsmJitSession final : public Session
+{
+public:
+	AsmJitSession() : compiler_(context_) {}
+	WASM::ModuleInstantiator& instantiator() override { return compiler_; }
+	std::unique_ptr<LaneWiseOp> createLaneWiseOp(bool) override {
+		throw std::runtime_error("AsmJit lane-wise operation is not exposed by the module compiler");
+	}
+	AggregateLayout aggregateLayout(const std::vector<WASM::StorageType>&) override { return {}; }
+	bool invoke(const WASM::ModuleInstance& instance, const WASM::Callable& callable,
+			const WASM::FuncType& type, void* vmContext, const std::vector<const void*>& args,
+			void* result, std::size_t capacity, bool& trapped, WASM::TrapKind& trapKind,
+			std::string& trapMessage) override
+	{
+		(void)instance; trapped = false;
+		if (callable.fnPtr == nullptr || args.size() != type.params.size() || type.results.size() > 1) return false;
+		for (const auto& p : type.params) if (p.val.opcode != WASM::ValueTypeCode::I32) return false;
+		if (!type.results.empty() && type.results.front().val.opcode != WASM::ValueTypeCode::I32) return false;
+		if (type.results.empty()) { if (result != nullptr) return false; }
+		else if (result == nullptr || capacity < sizeof(std::int32_t)) return false;
+		{
+			WASM::CallDepthScope depth;
+			if (type.results.empty()) callI32VoidFunction(callable.fnPtr, vmContext, args);
+			else { const std::int32_t value = callI32Function<std::int32_t>(callable.fnPtr, vmContext, args); std::memcpy(result, &value, sizeof(value)); }
+		}
+		const WASM::TrapInfo info = WASM::takePendingTrap();
+		if (info.trapped) {
+			trapped = true; trapKind = info.kind; trapMessage = info.message != nullptr ? info.message : "";
+			WASM::emitTrapDiagnostic(info.kind, info.message, info.functionIndex, info.instructionOffset, info.functionName);
+		}
+		return true;
+	}
+private:
+	AsmJitBackend::Context context_;
+	AsmJitBackend::ModuleCompiler compiler_;
+};
 class LibJitLaneWiseOp final : public LaneWiseOp
 {
 public:
@@ -287,8 +354,10 @@ std::unique_ptr<Session> create()
 	const std::string name = requested == nullptr ? "libjit" : requested;
 	if (name.empty() || name == "libjit")
 		return std::make_unique<LibJitSession>();
+	if (name == "asmjit")
+		return std::make_unique<AsmJitSession>();
 	throw std::runtime_error("unknown WASMJIT_BACKEND '" + name
-			+ "' (only 'libjit' is built; see Test/TestBackend.cpp)");
+			+ "' (available test backends: 'libjit', 'asmjit')");
 }
 
 } // namespace TestBackend
