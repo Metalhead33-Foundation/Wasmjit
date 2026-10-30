@@ -80,6 +80,7 @@ TEST_CASE("AsmJit ModuleInstantiator compiles supported i32 functions", "[asmjit
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("memory_size")) == 2);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("memory_grow"), 1) == -1);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("memory_grow"), 0) == 2);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("store_load"), 65536, 0x13579BDF) == 0x13579BDF);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("store8_load8"), 80, 0x1AB) == 0xAB);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("store16_load16_s"), 96, 0x8001) == -32767);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("store16_load16_u"), 104, 0x1AB) == 0x1AB);
