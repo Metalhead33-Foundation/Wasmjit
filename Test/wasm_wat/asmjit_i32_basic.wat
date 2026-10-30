@@ -1,4 +1,5 @@
 (module
+  (memory 1)
   (type $binary (func (param i32 i32) (result i32)))
   (func (export "add") (type $binary)
     local.get 0
@@ -70,6 +71,21 @@
     local.get 0
     i32.const 2
     i32.mul)
+  (func (export "store_load") (param i32 i32) (result i32)
+    local.get 0
+    local.get 1
+    i32.store
+    local.get 0
+    i32.load)
+  (func (export "store8_load8") (param i32 i32) (result i32)
+    local.get 0
+    local.get 1
+    i32.store8
+    local.get 0
+    i32.load8_u)
+  (func (export "load_oob") (param i32) (result i32)
+    local.get 0
+    i32.load)
   (func (export "local_roundtrip") (param i32) (result i32) (local i32)
     local.get 0
     local.set 1
