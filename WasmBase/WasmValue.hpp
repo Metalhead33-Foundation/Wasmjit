@@ -21,7 +21,7 @@ WASMJIT_VISIBLE_BEGIN
 namespace WASM {
 
 //! 16-byte aligned to accommodate V128 (SIMD).
-/** \\brief 16-byte-aligned payload for a WebAssembly scalar, vector, or reference value. */
+/** \brief 16-byte-aligned payload for a WebAssembly scalar, vector, or reference value. */
 struct alignas(16) Value {
 	//! The payload, reinterpreted according to `kind`. Only `u32`/`ui64`/`v128`
 	//! are used for a 32/64-bit integer and a vector; the narrow members exist so
@@ -60,7 +60,7 @@ struct VMContext;
 //!     at runtime and passes it as arg0 (callee's own context).
 //!   - Embedders: register native imports with context=nullptr and set
 //!     hostData on the instance after instantiation.
-/** \\brief Backend-neutral function reference and its calling-convention metadata. */
+/** \brief Backend-neutral function reference and its calling-convention metadata. */
 struct Callable {
 	void* fnPtr;          //!< Signature: ret f(VMContext* ctx, params...)
 	VMContext* context;   //!< nullptr → the backend passes caller's VMContext (native import)
@@ -111,7 +111,7 @@ inline constexpr uint32_t kTailCallSlotBytes = 16;
 //! (`WasmAgent.hpp`), not to the thread; generated code obtains its address
 //! through the helper below rather than embedding the TLS address of the
 //! compiling thread (docs/proposals/SHARED_EVERYTHING_THREADS.md SET-2).
-/** \\brief Per-execution-state target/argument/result buffer for trampoline tail calls. */
+/** \brief Per-execution-state target/argument/result buffer for trampoline tail calls. */
 struct TailCallState {
 	//! Non-zero once a tail call has been requested but not yet dispatched.
 	int32_t   pending = 0;
@@ -137,7 +137,7 @@ struct TailCallState {
 //! result is identical, only the stack-space guarantee is not claimed). No
 //! upstream tail-call script uses a `v128` parameter or result
 //! (docs/TAILCALLS.md TC-3).
-/** \\brief Tests whether a function signature fits the uniform tail-call slot representation. \\param ft Function signature to inspect. \\return false when parameters exceed the slot limit or any parameter/result is v128. */
+/** \brief Tests whether a function signature fits the uniform tail-call slot representation. \param ft Function signature to inspect. \return false when parameters exceed the slot limit or any parameter/result is v128. */
 inline bool tailCallSlotsSupported(const FuncType& ft)
 {
 	if (ft.params.size() > kTailCallArgSlots)
@@ -155,11 +155,11 @@ inline bool tailCallSlotsSupported(const FuncType& ft)
 //! Address of the current execution state's tail-call state. Generated code
 //! calls this helper; it is the only supported way for a backend to reach the
 //! state, because a context's address is not portable across host threads.
-/** \\brief Returns the current execution state's tail-call trampoline storage. \\return Pointer to the current TailCallState. */
+/** \brief Returns the current execution state's tail-call trampoline storage. \return Pointer to the current TailCallState. */
 TailCallState* currentTailCallState() noexcept;
 
 template<typename Ret, typename... Args>
-/** \\brief Invokes a callable using the single-result native ABI and checks pending traps. \\tparam Ret Expected return type. \\tparam Args Argument types forwarded to the function. \\param callable Callable descriptor to invoke. \\param args Arguments matching the callable's lowered signature. \\return Function result as Ret. \\throws WASM::Trap when the call reports a pending trap at the host boundary. */
+/** \brief Invokes a callable using the single-result native ABI and checks pending traps. \tparam Ret Expected return type. \tparam Args Argument types forwarded to the function. \param callable Callable descriptor to invoke. \param args Arguments matching the callable's lowered signature. \return Function result as Ret. \throws WASM::Trap when the call reports a pending trap at the host boundary. */
 Ret callCallable(const Callable& callable, Args&&... args)
 {
 	if (callable.fnPtr == nullptr)
@@ -197,7 +197,7 @@ Ret callCallable(const Callable& callable, Args&&... args)
 //! (docs/proposals/MULTI_VALUE.md MV4). `callCallable<Ret>` remains the API for
 //! void/single-result signatures.
 template<typename... Args>
-/** \\brief Invokes a multi-result callable into a caller-owned result buffer. \\tparam Args Argument types forwarded to the function. \\param callable Callable descriptor to invoke. \\param results Caller-owned buffer large enough for the lowered result tuple. \\param args Arguments matching the callable's lowered signature. \\throws WASM::Trap when the call reports a pending trap at the host boundary. */
+/** \brief Invokes a multi-result callable into a caller-owned result buffer. \tparam Args Argument types forwarded to the function. \param callable Callable descriptor to invoke. \param results Caller-owned buffer large enough for the lowered result tuple. \param args Arguments matching the callable's lowered signature. \throws WASM::Trap when the call reports a pending trap at the host boundary. */
 void callCallableWithResults(const Callable& callable, void* results, Args&&... args)
 {
 	if (callable.fnPtr == nullptr)
