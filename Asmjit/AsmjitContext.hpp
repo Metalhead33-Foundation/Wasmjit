@@ -150,6 +150,16 @@ public:
 	 * \throws std::runtime_error if installation or allocation tracking fails.
 	 */
 	void* install(asmjit::CodeHolder& code);
+	/*!
+	 * \brief Returns the number of module-owned executable allocations.
+	 * \return Allocation count suitable for a later rollback checkpoint.
+	 */
+	std::size_t allocationCheckpoint() const noexcept;
+	/*!
+	 * \brief Releases module allocations created after a checkpoint.
+	 * \param checkpoint Allocation count previously returned by allocationCheckpoint().
+	 */
+	void releaseAllocationsSince(std::size_t checkpoint) noexcept;
 
 private:
 	asmjit::JitRuntime runtime;
