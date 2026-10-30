@@ -21,10 +21,10 @@ backend-agnostic.
 
 ## Direction
 
-- **GNU LibJIT remains the only full-featured backend.** AsmJit now executes a
-  deliberately narrow straight-line i32 subset (constants, locals, add/sub/mul,
-  and returns); it is an experimental second execution path, not yet a general
-  replacement for LibJIT.
+- **GNU LibJIT remains the only full-featured backend.** AsmJit now executes an experimental i32 subset including arithmetic,
+  comparisons, bit operations, void structured control flow, direct calls,
+  and checked memory32 loads/stores; it is not yet a general replacement for
+  LibJIT.
 - **No bespoke interpreter fallback, ever.** WasmJit will not grow a Wasm
   interpreter — not for continuations, unsupported opcodes or portability. If
   interpretation is ever required it must come from GNU LibJIT's own
