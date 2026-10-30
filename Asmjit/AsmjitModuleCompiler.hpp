@@ -21,7 +21,7 @@ namespace AsmJitBackend {
  * \brief Compiles an initial i32 WebAssembly subset with AsmJit, including direct calls and checked memory32 access.
  *
  * The initial subset is deliberately narrow: i32 parameters/results/locals,
- * integer comparisons and bit operations, void structured control flow,
+ * i32 arithmetic, comparisons, bit counts, sign extension and bit operations, void structured control flow,
  * direct calls, and checked memory32 i32 loads/stores. Unsupported instructions
  * and block signatures fail compilation rather than being ignored. The compiler borrows Context, which must outlive every
  * instance and entry point it creates.
