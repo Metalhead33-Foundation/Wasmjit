@@ -33,7 +33,7 @@ direct calls. Each generated function emits the required
   and direct/indirect tail-call opcodes (currently lowered to call+return;
   true tail-call stack semantics and machine-level elimination remain outstanding);
   and memory32 i32 loads/stores, including signed/unsigned 8/16-bit extensions,
-  plus `memory.size`/`memory.grow`, checked memory32 `memory.copy` (with overlap-safe `memmove` semantics), `memory.fill`, `memory.init`, `data.drop`, `table.init`, `elem.drop`, and `table.size`.
+  plus `memory.size`/`memory.grow`, checked memory32 `memory.copy` (with overlap-safe `memmove` semantics), `memory.fill`, `memory.init`, `data.drop`, `table.init`, `elem.drop`, `table.size`, and checked overlap-safe `table.copy`.
   Memory accesses use a checked helper that observes the shared-memory size
   accessor and reports out-of-bounds traps through the pending-trap protocol.
   Function nodes are declared in one CodeHolder before any bodies are emitted,
@@ -50,7 +50,7 @@ direct calls. Each generated function emits the required
 - `Test/AsmjitModuleCompilerTests.cpp` instantiates WAT fixtures and executes arithmetic, comparison, bitwise,
   control-flow, direct/indirect-call (including native and cross-instance Wasm imports, mutual recursion, and tail-call opcodes), result-bearing control flow, `br_table`, unreachable traps, i32-global, and memory32
   cases, including signed/unsigned narrow loads, `select`, overlap-safe bulk copies,
-  fills, passive data/element segment initialization/drop semantics, table sizing, zero-length boundary operations, and out-of-bounds traps.
+  fills, passive data/element segment initialization/drop semantics, table sizing/copying, zero-length boundary operations, and out-of-bounds traps.
 - Packed `i8`/`i16` storage retains its narrow 8-/16-bit representation.
   Arithmetic lowering must explicitly extend those values to `i32` before
   applying Wasm integer operations; the storage translator does not silently
