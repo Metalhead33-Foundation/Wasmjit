@@ -24,6 +24,8 @@ Context::Context() = default;
 
 Context::~Context()
 {
+	for (auto allocation : v128Allocations)
+		runtime.release(allocation);
 	for (auto allocation : laneWiseAllocations)
 		runtime.release(allocation);
 	for (auto allocation : return42Allocations)
@@ -100,6 +102,50 @@ Context::LaneWiseI32x4Entry Context::compileLaneWiseI32x4(bool multiply)
 			"AsmJit executable-memory allocation failed");
 	try {
 		laneWiseAllocations.push_back(entry);
+	} catch (...) {
+		runtime.release(entry);
+		throw;
+	}
+	return entry;
+}
+
+
+Context::V128I32x4AddEntry Context::compileV128I32x4Add()
+{
+	asmjit::CodeHolder code;
+	checkError(code.init(runtime.environment(), runtime.cpu_features()),
+			"AsmJit CodeHolder initialisation failed");
+
+	asmjit::x86::Compiler compiler(&code);
+	asmjit::FuncNode* function = compiler.add_func(
+			asmjit::FuncSignature::build<void, const std::uint32_t*,
+					const std::uint32_t*, std::uint32_t*>());
+	if (function == nullptr)
+		throw std::runtime_error("AsmJit failed to create the V128 function");
+
+	asmjit::x86::Gp a = compiler.new_gp_ptr("a");
+	asmjit::x86::Gp b = compiler.new_gp_ptr("b");
+	asmjit::x86::Gp out = compiler.new_gp_ptr("out");
+	function->set_arg(0, a);
+	function->set_arg(1, b);
+	function->set_arg(2, out);
+
+	asmjit::x86::Vec lhs = compiler.new_vec128("lhs");
+	checkError(compiler.movdqu(lhs, asmjit::x86::ptr(a)),
+			"AsmJit V128 first load emission failed");
+	checkError(compiler.paddd(lhs, asmjit::x86::ptr(b)),
+			"AsmJit V128 packed addition emission failed");
+	checkError(compiler.movdqu(asmjit::x86::ptr(out), lhs),
+			"AsmJit V128 result store emission failed");
+
+	checkError(compiler.end_func(), "AsmJit V128 function finalisation failed");
+	checkError(compiler.finalize(), "AsmJit V128 compiler finalisation failed");
+
+	V128I32x4AddEntry entry = nullptr;
+	checkError(runtime.add(&entry, &code),
+			"AsmJit V128 executable-memory allocation failed");
+	try {
+		v128Allocations.push_back(entry);
 	} catch (...) {
 		runtime.release(entry);
 		throw;
