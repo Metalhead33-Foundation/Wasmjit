@@ -41,6 +41,11 @@ TEST_CASE("AsmJit ModuleInstantiator compiles straight-line i32 functions", "[as
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("shr_u"), -16, 2) == 0x3FFFFFFC);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("rotl"), 1, 4) == 16);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("rotr"), 16, 4) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("choose"), 1, 42, 7) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("choose"), 0, 42, 7) == 7);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("branch_if"), 1) == 10);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("branch_if"), 0) == 20);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("branch")) == 10);
 }
 
 #include <catch2/catch_all.hpp>
