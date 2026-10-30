@@ -516,7 +516,7 @@ public:
 			checkError(compiler.ret(), "AsmJit void function return emission failed");
 		} else {
 			if (values.size() != 1)
-				throw std::runtime_error("AsmJit i32 function must end with exactly one result");
+				throw std::runtime_error("AsmJit integer function must end with exactly one result");
 			checkError(compiler.ret(values.back()), "AsmJit i32 function return emission failed");
 		}
 		(void)type;
@@ -1183,16 +1183,16 @@ protected:
 		values.push_back(result);
 	}
 
-	void dispatchI64Eq() override { emitCompare(asmjit::x86::CondCode::kE, true); }
-	void dispatchI64Ne() override { emitCompare(asmjit::x86::CondCode::kNE, true); }
-	void dispatchI64LtS() override { emitCompare(asmjit::x86::CondCode::kL, true); }
-	void dispatchI64LtU() override { emitCompare(asmjit::x86::CondCode::kB, true); }
-	void dispatchI64GtS() override { emitCompare(asmjit::x86::CondCode::kG, true); }
-	void dispatchI64GtU() override { emitCompare(asmjit::x86::CondCode::kA, true); }
-	void dispatchI64LeS() override { emitCompare(asmjit::x86::CondCode::kLE, true); }
-	void dispatchI64LeU() override { emitCompare(asmjit::x86::CondCode::kBE, true); }
-	void dispatchI64GeS() override { emitCompare(asmjit::x86::CondCode::kGE, true); }
-	void dispatchI64GeU() override { emitCompare(asmjit::x86::CondCode::kAE, true); }
+	void dispatchI64Eq() override { emitCompare(asmjit::x86::CondCode::kE); }
+	void dispatchI64Ne() override { emitCompare(asmjit::x86::CondCode::kNE); }
+	void dispatchI64LtS() override { emitCompare(asmjit::x86::CondCode::kL); }
+	void dispatchI64LtU() override { emitCompare(asmjit::x86::CondCode::kB); }
+	void dispatchI64GtS() override { emitCompare(asmjit::x86::CondCode::kG); }
+	void dispatchI64GtU() override { emitCompare(asmjit::x86::CondCode::kA); }
+	void dispatchI64LeS() override { emitCompare(asmjit::x86::CondCode::kLE); }
+	void dispatchI64LeU() override { emitCompare(asmjit::x86::CondCode::kBE); }
+	void dispatchI64GeS() override { emitCompare(asmjit::x86::CondCode::kGE); }
+	void dispatchI64GeU() override { emitCompare(asmjit::x86::CondCode::kAE); }
 
 	void dispatchI64Add() override { emitIntegerBinary(BinaryOp::Add); }
 	void dispatchI64Sub() override { emitIntegerBinary(BinaryOp::Sub); }
@@ -1737,13 +1737,12 @@ private:
 		values.push_back(result);
 	}
 
-	void emitCompare(asmjit::x86::CondCode condition, bool wide = false)
+	void emitCompare(asmjit::x86::CondCode condition)
 	{
 		if (values.size() < 2)
-			throw std::runtime_error("AsmJit i32 comparison operand stack underflow");
+			throw std::runtime_error("AsmJit integer comparison operand stack underflow");
 		auto rhs = values.back(); values.pop_back();
 		auto lhs = values.back(); values.pop_back();
-		(void)wide;
 		auto result = compiler.new_gp32("comparison");
 		checkError(compiler.xor_(result, result), "AsmJit comparison result initialisation failed");
 		checkError(compiler.cmp(lhs, rhs), "AsmJit comparison emission failed");
@@ -1848,7 +1847,7 @@ private:
 	std::vector<asmjit::x86::Gp> values;
 	std::vector<ControlFrame> controls;
 	uint32_t resultCount = 0;
-	WASM::ValueTypeCode resultType = WASM::ValueTypeCode::None;
+	WASM::ValueTypeCode resultType = WASM::ValueTypeCode::Void;
 };
 
 } // namespace
