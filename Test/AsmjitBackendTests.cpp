@@ -81,3 +81,24 @@ TEST_CASE("AsmJit emits V128 bitwise operations", "[asmjit][simd]")
 	for (std::size_t i = 0; i < result.size(); ++i)
 		CHECK(result[i] == static_cast<std::uint8_t>(a[i] ^ b[i]));
 }
+
+TEST_CASE("AsmJit extends packed i8 and i16 storage to i32", "[asmjit][storage]")
+{
+	AsmJitBackend::Context context;
+	const auto i8Signed = context.compilePackedI8Extend(true);
+	const auto i8Unsigned = context.compilePackedI8Extend(false);
+	const auto i16Signed = context.compilePackedI16Extend(true);
+	const auto i16Unsigned = context.compilePackedI16Extend(false);
+	REQUIRE(i8Signed != nullptr);
+	REQUIRE(i8Unsigned != nullptr);
+	REQUIRE(i16Signed != nullptr);
+	REQUIRE(i16Unsigned != nullptr);
+
+	const std::uint8_t i8 = 0x80;
+	CHECK(i8Signed(&i8) == 0xFFFFFF80u);
+	CHECK(i8Unsigned(&i8) == 0x00000080u);
+
+	const std::uint16_t i16 = 0x8001;
+	CHECK(i16Signed(&i16) == 0xFFFF8001u);
+	CHECK(i16Unsigned(&i16) == 0x00008001u);
+}
