@@ -1,4 +1,18 @@
 (module
+  (type $unary64 (func (param i64) (result i64)))
+  (table 1 funcref)
+  (func $i64_double (type $unary64)
+    local.get 0
+    i64.const 2
+    i64.mul)
+  (elem (i32.const 0) $i64_double)
+  (func (export "i64_call_direct") (param i64) (result i64)
+    local.get 0
+    call $i64_double)
+  (func (export "i64_call_indirect") (param i64) (result i64)
+    local.get 0
+    i32.const 0
+    call_indirect (type $unary64))
   (func (export "i64_add") (param i64 i64) (result i64)
     local.get 0
     local.get 1
