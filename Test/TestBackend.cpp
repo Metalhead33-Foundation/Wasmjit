@@ -1,5 +1,6 @@
 #include "TestBackend.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdlib>
@@ -16,6 +17,7 @@
 #include "LibJit/LibJitContext.hpp"
 #include "LibJit/LibjitModuleCompiler.hpp"
 #include "WasmBase/WasmDiagnostics.hpp"
+#include "WasmBase/WasmGcHeader.hpp"
 
 namespace TestBackend {
 
@@ -87,15 +89,39 @@ void callI32VoidFunction(void* function, void* vm, const std::vector<const void*
 	}
 }
 
+class AsmJitLaneWiseOp final : public LaneWiseOp
+{
+public:
+	explicit AsmJitLaneWiseOp(bool multiply)
+		: entry_(context_.compileLaneWiseI32x4(multiply)) {}
+	void run(const void* a, const void* b, void* out) const override { entry_(a, b, out); }
+private:
+	AsmJitBackend::Context context_;
+	AsmJitBackend::Context::LaneWiseI32x4Entry entry_ = nullptr;
+};
+
 class AsmJitSession final : public Session
 {
 public:
 	AsmJitSession() : compiler_(context_) {}
 	WASM::ModuleInstantiator& instantiator() override { return compiler_; }
-	std::unique_ptr<LaneWiseOp> createLaneWiseOp(bool) override {
-		throw std::runtime_error("AsmJit lane-wise operation is not exposed by the module compiler");
+	std::unique_ptr<LaneWiseOp> createLaneWiseOp(bool multiply) override {
+		return std::make_unique<AsmJitLaneWiseOp>(multiply);
 	}
-	AggregateLayout aggregateLayout(const std::vector<WASM::StorageType>&) override { return {}; }
+	AggregateLayout aggregateLayout(const std::vector<WASM::StorageType>& fields) override
+	{
+		AggregateLayout layout;
+		std::size_t offset = 0;
+		for (const auto& field : fields) {
+			const std::size_t alignment = WASM::gcStorageAlign(field);
+			offset = WASM::gcAlignUp(offset, alignment);
+			layout.fields.push_back({offset, WASM::gcStorageBytes(field), alignment});
+			offset += WASM::gcStorageBytes(field);
+			layout.alignment = std::max(layout.alignment, alignment);
+		}
+		layout.size = fields.empty() ? 0 : WASM::gcAlignUp(offset, layout.alignment);
+		return layout;
+	}
 	bool invoke(const WASM::ModuleInstance& instance, const WASM::Callable& callable,
 			const WASM::FuncType& type, void* vmContext, const std::vector<const void*>& args,
 			void* result, std::size_t capacity, bool& trapped, WASM::TrapKind& trapKind,
