@@ -96,7 +96,7 @@ private:
 									   const TypeGroup& group,
 									   std::vector<TypeId>& localToGlobal);
 
-	size_t parsedTypes = 0;
+	size_t parsedTypes = 0; //!< Field `parsedTypes` of type.
 
 	//! Compact canonical records, indexed by TypeId.value; entries are appended
 	//! in group order, so a group's members are contiguous: ids [first, first + count).
