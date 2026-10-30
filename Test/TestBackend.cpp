@@ -138,8 +138,8 @@ public:
 			if (p.isPacked || p.val.opcode != WASM::ValueTypeCode::I32)
 				return false;
 		if (!type.results.empty() && type.results.front().val.opcode != WASM::ValueTypeCode::I32) return false;
-		if (type.results.empty()) { if (result != nullptr) return false; }
-		else if (result == nullptr || capacity < sizeof(std::int32_t)) return false;
+		if (!type.results.empty() && (result == nullptr || capacity < sizeof(std::int32_t)))
+			return false;
 		{
 			WASM::CallDepthScope depth;
 			if (type.results.empty()) callI32VoidFunction(callable.fnPtr, vmContext, args);
