@@ -1,6 +1,7 @@
 (module
   (type $unary64 (func (param i64) (result i64)))
   (table 1 funcref)
+  (memory 1)
   (func $i64_double (type $unary64)
     local.get 0
     i64.const 2
