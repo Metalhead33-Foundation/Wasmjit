@@ -63,6 +63,13 @@
       local.set 0
     end
     local.get 0)
+  (func (export "call_forward") (param i32) (result i32)
+    local.get 0
+    call $double)
+  (func $double (param i32) (result i32)
+    local.get 0
+    i32.const 2
+    i32.mul)
   (func (export "local_roundtrip") (param i32) (result i32) (local i32)
     local.get 0
     local.set 1
