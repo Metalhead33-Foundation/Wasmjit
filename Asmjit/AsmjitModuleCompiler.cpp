@@ -347,7 +347,22 @@ protected:
 				? compiler.invoke(&invoke, targetLabel, *signatures[typeIndex])
 				: compiler.invoke(&invoke, target, *signatures[typeIndex]);
 		checkError(error, "AsmJit function-call emission failed");
-		invoke->set_arg(0, vmContext);
+		if (isInternal) {
+			invoke->set_arg(0, vmContext);
+		} else {
+			// Wasm-to-Wasm imports execute in the exporting instance's context;
+			// native imports (null context) execute against the caller's context.
+			WASM::VMContext* calleeContext = internals.importStorage[index].context;
+			if (calleeContext == nullptr) {
+				invoke->set_arg(0, vmContext);
+			} else {
+				auto importedContext = compiler.new_gp_ptr("importedVmContext");
+				checkError(compiler.mov(importedContext,
+						reinterpret_cast<uint64_t>(calleeContext)),
+						"AsmJit imported VMContext materialisation failed");
+				invoke->set_arg(0, importedContext);
+			}
+		}
 		for (size_t i = 0; i < arguments.size(); ++i)
 			invoke->set_arg(i + 1, arguments[i]);
 		if (!calledType.results.empty()) {
