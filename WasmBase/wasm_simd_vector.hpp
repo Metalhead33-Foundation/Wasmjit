@@ -190,12 +190,6 @@ inline void writeLE64(uint8_t* p, uint64_t v)
 //! \par splat: broadcast one scalar to every lane
 //! A real win over the reference's lane loop: one broadcast + one store.
 
-/**
- * \brief Performs the splat8 operation.
- * \param x Input value or output destination for this operation.
- * \param out Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 inline void splat8(int32_t x, uint8_t* out)
 {
 	const V128 d;
@@ -673,13 +667,6 @@ HWY_INLINE VF wasmNoNaN(DF df, VF v)
 //! unsigned reading and the saturating sum on both sides of the boundary, which is
 //! exactly `maddubs` with the operands swapped — so the vector form is literally
 //! the hardware instruction, and the reference had to be written to match it.
-/**
- * \brief Performs the relaxedDotI8x16I7x16S operation.
- * \param a Input value or output destination for this operation.
- * \param b Input value or output destination for this operation.
- * \param out Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 inline void relaxedDotI8x16I7x16S(const uint8_t* a, const uint8_t* b, uint8_t* out)
 {
 	const hn::CappedTag<int16_t, 8> d16;
