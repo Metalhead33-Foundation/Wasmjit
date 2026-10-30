@@ -491,6 +491,9 @@ protected:
 		checkError(compiler.bind(noTrap), "AsmJit post-call continuation binding failed");
 	}
 
+	void dispatchGlobalGet(WASM::GlobalIdx index) override { emitGlobalGet(index); }
+	void dispatchGlobalSet(WASM::GlobalIdx index) override { emitGlobalSet(index); }
+
 	void dispatchMemorySize(WASM::MemIdx index) override { emitMemorySize(index); }
 	void dispatchMemoryGrow(WASM::MemIdx index) override { emitMemoryGrow(index); }
 
@@ -611,6 +614,56 @@ private:
 			break;
 		}
 		values.push_back(lhs);
+	}
+
+	const WASM::GlobalType& validateGlobalIndex(WASM::GlobalIdx index) const
+	{
+		if (index >= module.importGlobals.size() + module.globals.size())
+			throw std::runtime_error("AsmJit global instruction references an unknown global");
+		const WASM::GlobalType& type = index < module.importGlobals.size()
+				? module.importGlobals[index].global
+				: module.globals[index - module.importGlobals.size()].type;
+		if (type.contentType.opcode != WASM::ValueTypeCode::I32)
+			throw std::runtime_error("AsmJit initial global lowering supports i32 globals only");
+		return type;
+	}
+
+	asmjit::x86::Gp emitGlobalCell(WASM::GlobalIdx index)
+	{
+		(void)validateGlobalIndex(index);
+		auto globals = compiler.new_gp_ptr("globals");
+		checkError(compiler.mov(globals, asmjit::x86::qword_ptr(vmContext,
+				static_cast<int32_t>(offsetof(WASM::VMContext, globals)))),
+				"AsmJit VMContext globals load failed");
+		auto cell = compiler.new_gp_ptr("globalCell");
+		checkError(compiler.mov(cell, asmjit::x86::qword_ptr(globals,
+				static_cast<int32_t>(index * sizeof(WASM::Value*)))),
+				"AsmJit global cell lookup failed");
+		return cell;
+	}
+
+	void emitGlobalGet(WASM::GlobalIdx index)
+	{
+		auto cell = emitGlobalCell(index);
+		auto value = compiler.new_gp32("globalValue");
+		checkError(compiler.mov(value, asmjit::x86::dword_ptr(cell,
+				static_cast<int32_t>(offsetof(WASM::Value, i32)))),
+				"AsmJit global.get load failed");
+		values.push_back(value);
+	}
+
+	void emitGlobalSet(WASM::GlobalIdx index)
+	{
+		const WASM::GlobalType& type = validateGlobalIndex(index);
+		if (!type.isMutable)
+			throw std::runtime_error("AsmJit global.set references an immutable global");
+		if (values.empty())
+			throw std::runtime_error("AsmJit global.set operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto cell = emitGlobalCell(index);
+		checkError(compiler.mov(asmjit::x86::dword_ptr(cell,
+				static_cast<int32_t>(offsetof(WASM::Value, i32))), value),
+				"AsmJit global.set store failed");
 	}
 
 	void validateMemoryIndex(WASM::MemIdx index) const
