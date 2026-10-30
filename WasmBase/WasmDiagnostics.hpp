@@ -319,6 +319,7 @@ std::string_view validationRuleId(std::string_view message) noexcept;
  * \param diagnostic Diagnostic data or output destination used by this operation.
  * \return The requested diagnostic value, formatted text, or success state.
  */
+//! Type alias `DiagnosticSink` names the corresponding implementation/API type.
 using DiagnosticSink = void (*)(void* userData, const Diagnostic& diagnostic) noexcept;
 
 //! The per-execution-state store. It lives in `ExecutionState`
