@@ -26,6 +26,9 @@ and must not be selected to execute Wasm modules.
   widen their in-memory layout.
 - `compileV128I32x4Add()` emits a real XMM-backed packed addition using
   `movdqu` and `paddd`, with a test covering lane wraparound.
+- `compileV128Bitwise()` emits XMM-backed V128 AND, OR, and XOR operations
+  using `pand`, `por`, and `pxor`. Tests compare all 16 output bytes against
+  the corresponding scalar bitwise operation.
 - `Test/AsmjitTypeTranslatorTests.cpp` covers scalar signatures, opaque
   references, V128-by-value signatures, packed storage widths, multi-value
   result-buffer placement, and rejection of packed function signatures (which
@@ -34,7 +37,8 @@ and must not be selected to execute Wasm modules.
   an allocation fails after executable memory is allocated, it releases that
   allocation before propagating the host-side exception.
 - `Test/AsmjitBackendTests.cpp` checks that emitted machine code executes,
-  returns the expected scalar value, and performs both lane-wise operations.
+  returns the expected scalar value, and performs lane-wise and vector
+  operations.
 - The dependency is confined to this subproject. `WasmBase/` remains
   backend-agnostic and does not include or link AsmJit.
 
