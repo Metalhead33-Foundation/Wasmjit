@@ -110,6 +110,18 @@ struct alignas(16) ContinuationValue {
 //! using the kind arrays. It is implemented by the executing backend so
 //! WasmBase does not depend on a particular backend library.
 /** \brief Backend callback that invokes a continuation's target using typed slots. */
+/**
+ * \brief Performs the void operation.
+ * \param target Input value or output destination for this operation.
+ * \param context Input value or output destination for this operation.
+ * \param args Input value or output destination for this operation.
+ * \param argCount Input value or output destination for this operation.
+ * \param results Input value or output destination for this operation.
+ * \param resultCount Input value or output destination for this operation.
+ * \param paramKinds Input value or output destination for this operation.
+ * \param resultKinds Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 using ContinuationInvokeFn = void (*)(void* target, void* context,
 		const ContinuationValue* args, std::uint32_t argCount,
 		ContinuationValue* results, std::uint32_t resultCount,
