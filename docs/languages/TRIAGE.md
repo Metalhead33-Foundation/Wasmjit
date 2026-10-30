@@ -1,6 +1,9 @@
 # The `LF-1` Triage — Screening the Whole Candidate List {#lf_triage}
 
-Status: pre-feasibility / scoping study (revision 1 — 2026-10-30). This note is
+Status: pre-feasibility / scoping study (revision 2 — 2026-10-30: **re-screened**
+after the engine learned to accept the superseded Phase-3 exception form behind a
+parser policy, which retired the screen's most-cited blocker; §6.9 records what
+changed and what did not; revision 1 was the first pass). This note is
 the **screen** `LANGUAGE_FEASIBILITY.md` §7 defines: every entry of the canonical
 candidate list, one row per *(language, toolchain)* pair, three quick-triage
 axes, an evidence tier, a study cost, a cluster and a trigger. It attempts **no
@@ -78,7 +81,7 @@ clustering map can group by them:
 | **F2** | WASI host surface required | WASI is embedder-provided by decision; the engine ships none (`AASD6`), but the imports are ordinary host imports, so it is *implementable* |
 | **F3** | Runtime-owned heap/allocator in linear memory | Works, but the **provider** is core-chosen (`RA4`): a runtime cannot supply its own backing allocator or move its heap |
 | **F4** | WasmGC + type identity (+ JS-string builtins) | GC is 100% and type identity is store-scoped ([`TYPE_IDENTITY.md`](../TYPE_IDENTITY.md)), but a runtime may also expect `wasm:js-string` and a host-side layout contract |
-| **F5** | Legacy EH instructions (`try`/`catch`/`delegate`) | Only the final `exnref` shape is implemented; a legacy-encoded module does not decode |
+| **F5** | Legacy EH instructions (`try`/`catch`/`delegate`) | **Mitigated (2026-10-30):** the final `exnref` shape is what the engine executes, and a legacy-encoded module no longer has to be refused — `ParseOptions::legacyExceptionHandling` rewrites it at load ([`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md)). Off by default, and two constructs are still refused by name (`LE-8`, `LE-9`), so it stays a *switch a toolchain may force* rather than a free pass |
 | **F6** | OS-thread spawning, real parallelism, TLS | `Agents` exists but is opt-in; the guest cannot spawn a host thread |
 | **F7** | Start-up that blocks, loops, or spawns | There is no step budget (`S1`); an init that never returns hangs the embedder |
 | **F8** | Large runtime / heap reservation vs the 2 GiB budget | [`SAFETY.md`](../SAFETY.md) §2.3: an oversized initial size fails instantiation |
@@ -196,9 +199,9 @@ what a cluster *is*.
 | **T01** | C | Emscripten `emcc`, native `.wasm` output | `F7`+`F3` — standalone output still needs a JS-free runtime path (`_start`, memory-growth notification), and the malloc'd heap base is not the embedder's to move (`RA4`) | prod | partly | low | E1 | C3 · 4–6 s · 1–2 w | `L1` | `T3` |
 | **T02** | C | clang + wasm-ld, `--target=wasm32-unknown-unknown` | `F3` — no libc by default, so `malloc`/`free` come from the guest or a linked libc; a pure-computation module links as-is | prod | standard | low | E1 | C2 · 2–3 s · ~1 w | `L1` | `T3` |
 | **T03** | C | wasi-sdk, `wasm32-wasi` | `F2` — every libc call that leaves the sandbox is a WASI import the embedder must supply; otherwise as `T02` | prod | standard | low | E1 | C3 · 3–5 s · 1–2 w | `L1` | `T2+T3` |
-| **T04** | C++ | Emscripten `em++` | `F5`+`F3` — C++ EH must be emitted as the final `exnref` shape (a legacy encoding does not decode), and libc++'s heap, `__cxa_*` and static ctors must run | prod | partly | medium | E1 (E-7/E-8) + E3 (default) | C3 · 5–7 s · 2 w | `L1` | `T3` |
-| **T05** | C++ | clang `wasm32` + wasi-libc/libc++ | `F2`+`F5` — the same without the Emscripten runtime: a WASI surface, libc++ EH lowering, and ctors | prod | standard | medium | E2 | C3 · 5–7 s · 2 w | `L1` | `T2+T3` |
-| **T06** | Rust | rustc, `wasm32-unknown-unknown` | `F3` only — no host imports from `std`, `core`+`alloc` and `dlmalloc` in the guest, `panic=abort` by default; unwinding needs nightly plus a non-legacy EH flag | prod | standard | low | E1 | C3 · 3–5 s · 1–2 w | `L2` | `T3` (the most likely modern-mod requester) |
+| **T04** | C++ | Emscripten `em++` | `F3`+`F7` — libc++'s heap, `__cxa_*` and the static-ctor path must run, and the standalone runtime still wants its `_start`/memory-growth edges. **EH is no longer the blocker:** the legacy encoding clang emits by default (measured, `R-9`) loads under the parser policy, and `-mllvm -wasm-use-legacy-eh=false` removes the need for it | prod | partly | low | E1 (E-7/E-8; default now measured) | C3 · 4–6 s · 1–2 w | `L1` | `T3` |
+| **T05** | C++ | clang `wasm32` + wasi-libc/libc++ | `F2`+`F3` — the same without the Emscripten runtime: a WASI surface and libc++/ctors over a guest heap. The EH encoding is handled (`R-9`: legacy by default, one flag or the parser policy) | prod | standard | low | E2 | C3 · 4–6 s · 1–2 w | `L1` | `T2+T3` |
+| **T06** | Rust | rustc, `wasm32-unknown-unknown` | `F3` only — no host imports from `std`, `core`+`alloc` and `dlmalloc` in the guest, `panic=abort` by default; unwinding needs nightly plus a non-legacy EH flag *or* the parser policy | prod | standard | low | E1 | C3 · 3–5 s · 1–2 w | `L2` | `T3` (the most likely modern-mod requester) |
 | **T07** | Rust | rustc, `wasm32-wasip1` | `F2` — the same module shape plus a WASI surface for `std::fs`/`std::io` | prod | standard | low | E1 | C3 · 4–6 s · 1–2 w | `L2` | `T2+T3` |
 | **T08** | Go | `GOOS=js GOARCH=wasm` | `F1` — the port is a fixed JS+Wasm hybrid: the module's imports are implemented by `wasm_exec.js`, so it cannot be instantiated here | prod | non-standard | high | E1 | — | `L8` | `K2` (E1) — reversal: a documented standalone port |
 | **T09** | Go | `GOOS=wasip1` | `F2`+`F7`+`F8` — goroutine scheduler and runtime init behind `_start`, a large heap reservation against the 2 GiB budget, and a WASI surface | prod | standard | high | E1 | C3 · 6–8 s · 2–3 w | `L8` | `T2+T3` |
@@ -241,7 +244,7 @@ what a cluster *is*.
 | **T36** | c4wa | c4wa | `F3` — a C subset with no libc by design; variadic stdio arrives through explicit imports | exp | standard | low | E2 | C2 · 2 s · 3 d | `L1` | folds into `S1`'s fixture set |
 | **T37** | Coi | own compiler | `F1`+`F12` — DOM/browser-oriented output by construction | exp | non-standard | high | E3 | C0 | `L11` | none |
 | **T38** | Crystal | LLVM (POC PR, no release) | `F6`+`F3` — Boehm GC/libgc and threads, and no shipped Wasm target | abandoned (for Wasm) | standard | medium | E2 | — | `L2` | `K4` suspected (E3) — defer |
-| **T39** | D | LDC (LLVM; Wasm since 1.11) | `F3`+`F5`+`F6` — druntime and Phobos, a GC, TLS, and an EH encoding | stable | partly | medium | E2 | C3 · 5–7 s · 2 w | `L2` | `T3` (second wave) |
+| **T39** | D | LDC (LLVM; Wasm since 1.11) | `F3`+`F6` — druntime and Phobos, a GC and TLS. The EH encoding is mitigated: LDC's LLVM default is the legacy form, which loads under the parser policy | stable | partly | medium | E2 | C3 · 5–7 s · 2 w | `L2` | `T3` (second wave) |
 | **T40** | Eclair | own compiler (LLVM/Wasm) | a Datalog engine; intended-use mismatch | exp | standard | low | E3 | C0 | `L11` | none |
 | **T41** | Eel | eel-wasm (browser compiler) | `F1` — compiles in the browser, for the browser | exp | non-standard | high | E3 | C0 | `L12` | none |
 | **T42** | Elixir | Firefly, ElixirWasm | `F8` — a BEAM-shaped runtime; both projects are marked unmaintained | abandoned | partly | high | E2 | — | `L12` | defer (`K4` suspected) |
@@ -255,7 +258,7 @@ what a cluster *is*.
 | **T50** | JavaScript | Duktape, quickjs-emscripten, SpiderMonkey, Hermes, goja, jint | `F1`/`F2` — most builds are Emscripten/JS-hosted; Hermes documents both an Emscripten and a WASI path | exp | partly | medium | E2 | C3 | `L6` | folds into `T49` |
 | **T51** | JavaScript | Porffor, jz (AOT JS → Wasm) | a JS subset AOT'd to Wasm; experimental | exp | standard | medium | E3 | C2 | `L10` | `T3` (watch) |
 | **T52** | KCL | KCLVM (LLVM) | a configuration language; intended-use mismatch | exp | standard | low | E3 | C0 | `L11` | none |
-| **T53** | Kotlin | Kotlin/Wasm (`wasm-wasi` target) | `F4`+`F5` — **WasmGC and legacy exception handling** per the current docs, plus JS-string-style imports and a stdlib of real size | exp (beta) | partly | medium | E1 | C3 · 5–7 s · 2 w | `L4` | `T3` + a standard-EH decision |
+| **T53** | Kotlin | Kotlin/Wasm (`wasm-wasi` target) | `F4` — WasmGC plus JS-string-style imports and a stdlib of real size. The **legacy exception handling its docs require is mitigated**, and it is the one consumer that cannot re-flag its own toolchain, so the parser policy is the only path — provided the output stays inside `LE-8`/`LE-9` | exp (beta) | partly | medium | E1 | C3 · 5–7 s · 2 w | `L4` | `T3` |
 | **T54** | Lisp | wasCm, Wisp | a small VM or compiler; low value here | exp | partly | medium | E3 | C2 | `L6` | `T3` (second wave) |
 | **T55** | Lys | own compiler | a tiny functional language | exp | standard | low | E3 | C2 · 1–2 s · 2–3 d | `L10` | `T3` |
 | **T56** | Pascal | Free Pascal `wasm32-wasi` | `F2`+`F3` — the FPC RTL plus WASI; threads off by default | stable | partly | medium | E2 | C3 · 4–6 s · 1–2 w | `L2` | `T3` |
@@ -274,7 +277,7 @@ what a cluster *is*.
 | **T69** | Ruby | Artichoke, run.rb, cry-wasm, rlang | mixed — Artichoke is a Rust VM (`F1`/`F2`); cry-wasm recompiles Ruby through Crystal | exp | partly | medium | E3 | C2 | `L6` | folds into `T67`/`T68` |
 | **T70** | Scheme | Guile Hoot (WasmGC) | `F4` — Scheme→WasmGC; Hoot carries its own runtime, and a JS glue path for the browser | stable | partly | medium | E2 | C3 · 4–6 s · 1–2 w | `L4` | `T3` (second wave) |
 | **T71** | Scheme | Schism, scheme.wasm | `F10`/`F3` — a self-hosting compiler and an R7RS VM in Wasm | exp | standard | low | E2 | C2 | `L6` | none now |
-| **T72** | Swift | SwiftWasm (`wasm32` + WASI) | `F2`+`F8` — the Swift runtime plus Foundation/ICU; large | stable | partly | high | E2 | C3 · 6–8 s · 2–3 w | `L2` | `T3` (second wave) |
+| **T72** | Swift | SwiftWasm (`wasm32` + WASI) | `F2`+`F8` — the Swift runtime plus Foundation/ICU; large. Its EH (LLVM's legacy default) is mitigated by the parser policy, so it no longer decides the row | stable | partly | high | E2 | C3 · 6–8 s · 2–3 w | `L2` | `T3` (second wave) |
 | **T73** | Tcl | Wacl (Emscripten, JS/DOM bindings) | `F1` — a Tcl VM with JS/DOM bindings | exp | non-standard | high | E2 | — | `L6` | none |
 | **T74** | V | V (own compiler, Wasm target) | `F3` — a tiny runtime and a self-hosting compiler | exp | partly | medium | E3 | C2 | `L10` | `T3` (cheap) |
 | **T75** | Virgil | own compiler, standalone Wasm, own GC | `F3` — designed for Wasm (the Wizard engine), GC in the guest, very small | stable | standard | low | E2 | C2 · 2–3 s · 1 w | `L10` | `T3` (cheap) |
@@ -374,25 +377,38 @@ exists, and the engine ships neither by decision (`AASD6`), so no cluster starts
 green — but that cost is paid once, by the embedder, instead of once per
 language.
 
-### 6.2 Exception lowering is the sharpest toolchain-level edge
+### 6.2 Exception lowering was the sharpest toolchain-level edge — and it is now a switch
 
-The engine decodes **only** the final `exnref` shape
-([`proposals/EXCEPTIONS.md`](../proposals/EXCEPTIONS.md) §2: the legacy
-`try`/`catch`/`catch_all`/`rethrow`/`delegate` instructions were removed from the
-proposal and are not in the tree). Two documented facts turn that into a
-cross-cutting finding:
+**Revision 1's headline finding, re-graded after the engine grew the mitigation.**
+The engine executes **only** the final `exnref` shape
+([`proposals/EXCEPTIONS.md`](../proposals/EXCEPTIONS.md) §2), and two documented
+facts made that a cross-cutting blocker: LLVM **still defaulted to the legacy
+instructions** on 2025-10-03 ([`EVIDENCE.md`](EVIDENCE.md) `E-2`), and
+Kotlin/Wasm's overview requires "garbage collection **and** legacy exception
+handling" (`E-4`). C++ (`T04`), Swift (`T72`), D (`T39`), Rust with unwinding
+(`T06`) and Kotlin (`T53`) all reduced to one question: *can this toolchain emit
+final-EH?* — a flag for some, nothing for others.
 
-- LLVM **still defaulted to the legacy instructions** on 2025-10-03, with an
-  opt-out flag ([`EVIDENCE.md`](EVIDENCE.md) `E-2`, quoting the rustc book);
-- Kotlin/Wasm's own overview says a browser needs "garbage collection **and
-  legacy exception handling**" ([`EVIDENCE.md`](EVIDENCE.md) `E-4`).
+**What changed on 2026-10-30.** The question was taken to `LF-3`-class work and
+answered: `ParseOptions::legacyExceptionHandling` rewrites the superseded form
+into `try_table` at load, so the encoding no longer decides whether a module
+loads ([`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md)
+§4.6; measured end to end, `R-8`). Three consequences for this screen:
 
-So C++ (`T04`), Swift (`T72`), D (`T39`), Rust with unwinding (`T06`'s caveat)
-and Kotlin (`T53`) all reduce to one question — *can this toolchain emit
-final-EH?* — with a flag for some and no documented flag for others. **One**
-investigation answers it for five clusters, which is the kind of collapse `LF-1`
-exists to find. Whether the engine should *also* decode legacy EH is engine
-work, not feasibility work (§6.8, `Q-1`).
+1. **The blocker moved from the language to the embedder.** A row now asks
+   "does the output stay inside the two constructs the rewrite refuses
+   (`LE-8`, `LE-9`) *and* is the embedder willing to switch the policy on?", not
+   "does the toolchain have a final-EH flag?".
+2. **Kotlin's position improved and stayed awkward.** It is the one consumer that
+   cannot re-flag its own toolchain, so the policy is its only path — which makes
+   `T53` the row most dependent on the mitigation and the most likely requester.
+3. **`F5` stops being a blocker code.** It survives as "a switch a toolchain may
+   force", and no row estimates its cost as if it were an unknown any more.
+
+The collapse `LF-1` exists to find did happen — one investigation answered the
+question for five clusters — but its output was an engine capability and a
+policy, not a per-toolchain flag table. The flag table is still worth having; it
+is now a convenience, not a gate (§7).
 
 ### 6.3 GC is not the blocker people expect; heap *ownership* is
 
@@ -479,12 +495,52 @@ recur, and all three are `LF-3`-class, to be classed per
 
 | # | Question | Raised by | Class, if it were done |
 |---|---|---|---|
-| **Q-1** | Accept the **legacy EH encoding** as well as final `exnref`, or keep requiring final EH from toolchains? | `T04`, `T39`, `T53`, `T72` | Additive decode/validation work (class A), *not* a study result. **Answered and implemented (2026-10-30) in [`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md)**: no encoding conflict, a front-end desugaring rather than a rewrite, and the `WASMJIT_LEGACY_EH` switch now rewrites the superseded form into `try_table` at load. The default still refuses it, and the toolchain flags remain the preferred fix |
+| **Q-1** | Accept the **legacy EH encoding** as well as final `exnref`, or keep requiring final EH from toolchains? | `T04`, `T39`, `T53`, `T72` | Additive decode/validation work (class A), *not* a study result. **Answered and shipped (2026-10-30)**: [`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) — no encoding conflict, a front-end desugaring rather than a rewrite, and `ParseOptions::legacyExceptionHandling` now translates the superseded form into `try_table` at load. The default still refuses it, two constructs are still refused by name (`LE-8`, `LE-9`), and the toolchain flags remain the cheaper fix; §6.9 is the re-screen that followed |
 | **Q-2** | Ship a **reference WASI shim**? (Embedder-side today, by decision `AASD6`.) | `T03`, `T05`, `T07`, `T09`, `T60`, `T67`, `T83` | Embedder tooling; lives outside `WasmBase/` |
 | **Q-3** | Give the embedder a **memory-provider seam** (`RA4`'s recorded limitation)? | `T01`, `T14`, `T39`, `T83` | Additive (class A) per `RA-2` — and the one item here that touches a frozen surface |
 
 None is a language verdict, and none changes this folder's "no engine change"
 rule: they are written down for `LF-3`.
+
+### 6.9 What the re-screen changed (2026-10-30, revision 2)
+
+The screen expires when an engine-owned surface moves
+([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §6.5, and this note's own
+`Q-1`). It moved: `LE-1`…`LE-6` shipped, so a legacy-encoded module is translated
+rather than refused, behind a parser policy
+([`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) §4.6).
+The re-screen was therefore scoped to the rows the old blocker touched — every
+row that named `F5`, plus the two Rust rows whose caveat mentioned the LLVM flag:
+
+| Row | Axis 3 before | after | Cost before | after | Why |
+|---|---|---|---|---|---|
+| `T04` C++/Emscripten | medium | **low** | `C3 · 5–7 s · 2 w` | `C3 · 4–6 s · 1–2 w` | EH was the whole of the medium grade; what remains is the runtime path (`F7`) and the heap base (`F3`, `RA4`) |
+| `T05` C++/clang+wasi-libc | medium | **low** | `C3 · 5–7 s · 2 w` | `C3 · 4–6 s · 1–2 w` | same, minus the Emscripten runtime |
+
+**Why `low` is the consistent grade, not a convenient one.** The two C++ rows moved to the grade the C rows (`T01`–`T03`) already had: the same standalone runtime path and the same WASI shim sit on both, and the C++ rows had been one grade higher *only* because of the exception encoding. With the encoding handled, the rubric (`§3`: `low` = an embedder-side shim and no engine change) puts them together. The heap base (`F3`, `RA4`) is unchanged and stays a friction every linear-memory runtime shares — it is named in the rows, not hidden by the re-grade.
+| `T06`/`T07` Rust | low | low | unchanged | unchanged | the caveat is now "a flag *or* the policy", which is not a grade change |
+| `T39` D | medium | medium | unchanged | unchanged | druntime, GC and TLS dominate; only the bottleneck text changed |
+| `T53` Kotlin | medium | medium | unchanged | unchanged | WasmGC, `wasm:js-string` and the stdlib dominate; the flag it cannot pass is now mitigated, which makes it the row most dependent on the mitigation |
+| `T72` Swift | high | high | unchanged | unchanged | runtime size (`F8`) dominates; EH removed from the text |
+
+**What did not change, and why that is the point.** The other 96 rows do not name
+`F5`; no cluster moved; no tier changed; no kill changed; the shortlist order
+(`L1`, `L5`, `L3`, `L2`, `L4`) is unchanged. A re-screen that had reordered the
+shortlist would have been a sign that the first screen had graded the EH question
+too heavily — it had not: two rows moved one grade, and the screen's headline
+blocker simply passes to the next one, **heap ownership (`RA4`) and the host
+import surface**, which is where §6.1 and §6.3 already put the weight.
+
+**What the re-screen adds to the evidence.** The clang measurement (`R-9`: the
+default is the legacy encoding, one flag switches it) had been a cited document
+(`E-2`); it is now a first-hand observation, and the translation is exercised by
+`[legacy-eh]`. That raises `T04`'s tier note from "E3 for the default" to a
+measured default, without changing its tier class.
+
+**What it still does not do.** No verdict. `T53` is not "likely to work"; it is a
+row whose hard blocker became a policy flag. `LF-2` still has to run the PoC, and
+`T3` still decides whether it runs at all.
+
 
 ## 7. What the screen leaves to `LF-2`
 
@@ -496,8 +552,12 @@ Six questions no documentation-only screen can answer. Every charter in
    scope ([`READINESS_AUDIT.md`](../READINESS_AUDIT.md) §6.4).
 2. **Does start-up terminate?** There is no step budget (`S1`); an init that
    waits or loops hangs the embedder.
-3. **Is the EH encoding the final one?** `wasm-tools validate` (or a decode)
-   answers it; a legacy encoding is a recompile, not a bug report.
+3. **Does the output load, with the parser policy on?** The encoding itself is
+   no longer the question — `ParseOptions::legacyExceptionHandling` translates
+   the superseded form — so the question is whether the module stays inside what
+   the rewrite refuses (`LE-8`, `LE-9`) and whether the embedder is willing to
+   switch it on. `wasm-tools print`/`--features legacy-exceptions` answers the
+   first half; the second is a policy decision, not a finding.
 4. **Does the runtime survive `Single`?** Its own single-threaded mode, or none.
 5. **Does its heap fit the budget?** Default 2 GiB, charged per store
    ([`SAFETY.md`](../SAFETY.md) §2.3); an oversized initial size fails

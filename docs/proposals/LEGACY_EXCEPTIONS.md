@@ -403,7 +403,10 @@ rather than silent gaps.
   `LED2` desugars in the front end instead of adding a dispatch method every
   backend must implement.
 - [`../languages/TRIAGE.md`](../languages/TRIAGE.md) §6.8 — `Q-1`, the
-  engine question this note answers, and [`../languages/CHARTERS.md`](../languages/CHARTERS.md)
+  engine question this note answers — and §6.9, the **re-screen** the shipped
+  mitigation triggered (two rows re-graded, no cluster or verdict moved), plus
+  [`../languages/CHARTERS.md`](../languages/CHARTERS.md) `S1`/`S2`/`S4`, whose EH
+  questions are now about the residue (`LE-8`/`LE-9`) rather than the encoding.  engine question this note answers, and [`../languages/CHARTERS.md`](../languages/CHARTERS.md)
   `S1`/`S2`/`S4`, the three charters that would consume the answer.
 - [`../languages/EVIDENCE.md`](../languages/EVIDENCE.md) `E-2` (the rustc book
   on LLVM's legacy-EH default), `E-4` (Kotlin/Wasm's documented requirement) and

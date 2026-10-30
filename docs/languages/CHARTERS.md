@@ -79,9 +79,9 @@ first PoC, which is always the slowest. They are hard caps.
 
 | Field | Content |
 |---|---|
-| **Scope** | In: exports, host imports, cross-module imports, memory/ABI layout, start-up, EH encoding, two toolchain arms (Emscripten; clang/wasm-ld) × two languages (C; C++). Out: threads beyond `Single`, performance, dynamic linking, debugging tooling |
+| **Scope** | In: exports, host imports, cross-module imports, memory/ABI layout, start-up, and the EH *policy* question (does the toolchain's encoding need it, and does the module trip `LE-8`/`LE-9`), for two toolchain arms (Emscripten; clang/wasm-ld) × two languages (C; C++). Out: threads beyond `Single`, performance, dynamic linking, debugging tooling |
 | **Candidates** | `T01` C/Emscripten, `T02` C/clang-freestanding, `T03` C/wasi-sdk, `T04` C++/Emscripten, `T05` C++/clang+wasi-libc. **Versions are pinned at approval and recorded in the report** — the screen installed nothing ([`EVIDENCE.md`](EVIDENCE.md) §5); the report must state the exact release, the flags and the module hash |
-| **Questions** | The six of `TRIAGE.md` §7, plus: does `-sSTANDALONE_WASM` output instantiate without any JS object; what does `_start`/`__wasm_call_ctors` require; is `WASM_LEGACY_EXCEPTIONS` off in the C++ arm and does the engine accept the resulting encoding; which `env.*`/`wasi_snapshot_preview1` imports appear; does a native import see the caller's memory and `hostData`; does a cross-module import work without a trampoline (`ABI.md` "Cross-module") |
+| **Questions** | The six of `TRIAGE.md` §7, plus: does `-sSTANDALONE_WASM` output instantiate without any JS object; what does `_start`/`__wasm_call_ctors` require; does the C++ arm's default encoding load with the parser policy on (and is `-mllvm -wasm-use-legacy-eh=false` worth requiring instead); which `env.*`/`wasi_snapshot_preview1` imports appear; does a native import see the caller's memory and `hostData`; does a cross-module import work without a trampoline (`ABI.md` "Cross-module") |
 | **"Feasible"** | The shared bar (§2.1) for **both** languages, with the C++ arm additionally proving that a caught exception stays inside the module and a trap crosses as a pending trap, not a throw |
 | **Budget cap** | **9 sessions / 60 human hours**; stop rule per §2.2 |
 | **Deliverable** | One report: the §4 criteria table, two reproducible PoCs (C and C++) with build commands and hashes, the inspection excerpts, the import catalogue, and the gap list classed per `API_ABI_STABILITY.md` §4.1 |
@@ -94,7 +94,7 @@ first PoC, which is always the slowest. They are hard caps.
 |---|---|
 | **Scope** | In: two anchor arms (Rust `wasm32-unknown-unknown`, Zig `wasm32-freestanding`) and one comparison arm (TinyGo, `T10`) — exports, host imports, cross-module, memory, start-up, EH flags, allocator ownership. Out: the runtime-heavy second wave (Swift `T72`, D `T39`, Ada `T34`, Nim `T88`, Pascal `T56`), which is a follow-up only if the anchors expose a difference; Crystal (`T38`) is `K4`-suspected and excluded |
 | **Candidates** | `T06` Rust/freestanding, `T07` Rust/wasip1, `T10` TinyGo, `T33` Zig. Versions pinned at approval; the Rust target's own docs already fix the relevant facts (`E-2`) and must be re-cited at the tested version |
-| **Questions** | `no_mangle`/`export_name` mapping onto `Callable`; `panic=abort` vs unwinding and the `-wasm-use-legacy-eh` flag; the allocator (`dlmalloc`, `wasm_allocator`) and who owns the heap under `RA4`; the `env.*` import list of a `no_std` module (ideally empty); does a Rust `extern "C"` import resolve to a native import with the right `VMContext*` arg0; TinyGo's collector and scheduler under `Single` |
+| **Questions** | `no_mangle`/`export_name` mapping onto `Callable`; `panic=abort` vs unwinding, and for the unwinding arm whether the policy or the `-wasm-use-legacy-eh` flag is the better requirement; the allocator (`dlmalloc`, `wasm_allocator`) and who owns the heap under `RA4`; the `env.*` import list of a `no_std` module (ideally empty); does a Rust `extern "C"` import resolve to a native import with the right `VMContext*` arg0; TinyGo's collector and scheduler under `Single` |
 | **"Feasible"** | The shared bar for **Rust** and **Zig**, with the report explicitly stating whether an empty import list is achievable (the freestanding ideal) and what the heap looks like when it is not |
 | **Budget cap** | **12 sessions / 80 human hours** (the widest cap in the set, because it covers three arms) |
 | **Deliverable** | One report, three PoCs, the EH-flag table per toolchain, the import catalogue per arm, a heap-ownership statement, and the classed gap list |
@@ -120,11 +120,11 @@ first PoC, which is always the slowest. They are hard caps.
 |---|---|
 | **Scope** | In: one or two arms from Dart (`T20`, `--standalone`) and Kotlin/Wasm (`T53`, `wasm-wasi`), plus a documentation-only pass on Hoot (`T70`) and MoonBit (`T86`). Out: the class libraries as a whole; `wasm-js` targets; multi-module deferred loading beyond noting it |
 | **Candidates** | `T20` Dart (`E-6`), `T53` Kotlin/Wasm (`E-4`), `T86` MoonBit (`E-10`), `T70` Guile Hoot. Versions pinned at approval; the Dart page declared 3.13.3 and Kotlin/Wasm was beta at the fetch date |
-| **Questions** | Do `ref`-typed parameters and results cross `Callable`, and how does the host hold a reference `SAFETY.md` §2.3's accounting can see; can `wasm:js-string`-class imports be implemented over the host boundary; what is the *actual* "Dart-specific host import" list; does Kotlin/Wasm emit legacy EH in the tested release (`Q-1`); how many modules does a release build emit; does the engine's GC heap satisfy a foreign compiler's assumptions about growth and collection |
+| **Questions** | Do `ref`-typed parameters and results cross `Callable`, and how does the host hold a reference `SAFETY.md` §2.3's accounting can see; can `wasm:js-string`-class imports be implemented over the host boundary; what is the *actual* "Dart-specific host import" list; does Kotlin/Wasm's output survive the rewrite — i.e. stay inside `LE-8`/`LE-9` — since Kotlin cannot re-flag its own toolchain; how many modules does a release build emit; does the engine's GC heap satisfy a foreign compiler's assumptions about growth and collection |
 | **"Feasible"** | The shared bar, **plus** that a reference of a GC type held by the host survives a collection — the one assertion `L4` exists to make |
 | **Budget cap** | **9 sessions / 60 human hours** |
 | **Deliverable** | One report, at most two PoCs, the import catalogue per arm, the reference-lifetime transcript, and the classed gap list |
-| **Kill / stop** | Stop after the first arm if it proves the reference round-trip; stop early if legacy EH is the only encoding either arm can emit |
+| **Kill / stop** | Stop after the first arm if it proves the reference round-trip; stop early if an arm's output trips `LE-8`/`LE-9`, which the policy cannot translate and a charter cannot fix |
 | **Owner and date** | *Unassigned.* Last in the shortlist order; review at approval + 45 days |
 
 ### 3.5 `S5` — Guest scripting VMs (`L5`)
@@ -148,7 +148,13 @@ cited by the charters:
 
 | Investigation | Serves | What it produces | Where it is decided |
 |---|---|---|---|
-| **EH encoding probe** — build the smallest module with a `try`/`catch` in each candidate toolchain and run `wasm-tools validate` on it | `S1`, `S2`, `S4` | A per-toolchain flag table: which flag emits the final encoding, and which toolchains cannot | Answered **and built**: [`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) (§4.5 `P6`–`P9`: LLVM 23 still defaults to the legacy encoding, one flag switches it; Kotlin/Wasm cannot) and the engine now accepts the superseded form behind `WASMJIT_LEGACY_EH` (§4.6). The remaining value of this probe is the per-toolchain flag table, not the blocker itself |
+| **EH residue probe** — load each candidate toolchain's smallest `try`/`catch` module
+with `ParseOptions::legacyExceptionHandling` on, and record which encoding it emits
+and whether the rewrite accepts it | `S1`, `S2`, `S4` | One line per toolchain: the
+flag that avoids the policy (a convenience) and whether the output trips `LE-8`
+(a `delegate` that skips a catch) or `LE-9` (a body mixing the two forms). The
+encoding question itself is settled: [`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md)
+§4.6, `LE-1`…`LE-6`; `LE-8`/`LE-9` are the open rows |
 | **Heap-ownership probe** — ask each runtime whether it can run inside a memory whose base it did not choose (`RA4`) | `S1`, `S2`, `S4`, `S5` | One paragraph per runtime; the basis for a future `Q-3` decision | `Q-3` — a provider seam would be additive (`RA-2`) |
 | **WASI surface census** — collect the imports of a minimal "hello, world" build per toolchain | `S1`, `S2`, `S4`, `S5` (and every `L6`–`L9` row later) | One table that says how big a WASI shim has to be, and which imports are avoidable | `Q-2` — embedder tooling |
 
