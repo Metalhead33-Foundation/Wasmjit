@@ -182,7 +182,7 @@ TEST_CASE("AsmJit compiles i64 integer functions", "[asmjit][module][i64]")
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_store8_load_u"), 80, 0x1FF) == 255);
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_store16_load_s"), 82, 0x8001) == -32767);
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_store16_load_u"), 82, 0x18001) == 32769);
-	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_store32_load_s"), 84, INT64_C(0x80000001)) == INT64_C(-2147483647));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_store32_load_s"), 84, INT64_C(0x80000001)) == -INT64_C(2147483647));
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_store32_load_u"), 84, INT64_C(0x180000001)) == INT64_C(0x80000001));
 	CHECK_THROWS(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_store_load"), 65532,
 			INT64_C(0x123456789ABCDEF0)));
