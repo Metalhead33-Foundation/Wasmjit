@@ -63,6 +63,21 @@ void* Context::install(asmjit::CodeHolder& code)
 	return entry;
 }
 
+std::size_t Context::allocationCheckpoint() const noexcept
+{
+	return moduleAllocations.size();
+}
+
+void Context::releaseAllocationsSince(std::size_t checkpoint) noexcept
+{
+	if (checkpoint > moduleAllocations.size())
+		return;
+	while (moduleAllocations.size() > checkpoint) {
+		runtime.release(moduleAllocations.back());
+		moduleAllocations.pop_back();
+	}
+}
+
 Context::Return42Entry Context::compileReturn42()
 {
 	asmjit::CodeHolder code;
