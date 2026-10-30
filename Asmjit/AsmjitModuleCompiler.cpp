@@ -36,6 +36,12 @@ void requireInteger(const WASM::ValueType& type, const char* role)
 				+ role);
 }
 
+void requireI32(const WASM::ValueType& type, const char* role)
+{
+	if (type.opcode != WASM::ValueTypeCode::I32)
+		throw std::runtime_error(std::string("AsmJit currently supports only i32 ") + role);
+}
+
 asmjit::x86::Gp newIntegerRegister(asmjit::x86::Compiler& compiler,
 		const WASM::ValueType& type, const char* name)
 {
