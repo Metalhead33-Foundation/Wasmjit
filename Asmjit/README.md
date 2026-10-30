@@ -25,7 +25,7 @@ the two-pass instantiation contract and enabling forward and mutually recursive
 direct calls. Each generated function emits the required
   `wasm_stack_check(VMContext*)` prologue call.
 - The body compiler currently supports i32/i64 parameters, results, and locals;
-  i32/i64 constants and local access; i64 arithmetic (`add/sub/mul/div/rem`),
+  i32/i64 constants and local access; i32.wrap_i64, i64.extend_i32_s/u and i64.extend8/16/32_s; i64 arithmetic (`add/sub/mul/div/rem`),
   bitwise operations, shifts, rotations, comparisons, and `eqz`; i32 arithmetic,
   bit counts, sign extension, comparisons, bitwise operations, shifts, and rotations;
   `drop`, untyped and typed i32/i64 `select`; i32/i64 globals; void and single-i32/i64-result `block`/`loop`/`if`/`else`, `br`/`br_if`/`br_table`,
