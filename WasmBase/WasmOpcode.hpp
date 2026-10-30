@@ -782,6 +782,11 @@ enum class SIMDOpcode : uint32_t {
 
 //! The relaxed-SIMD sub-opcodes occupy one contiguous tail range (0x100–0x113).
 //! A profile that excludes the `N` marker (non-determinism) must reject them.
+/**
+ * \brief Performs the isRelaxedSimdOpcode operation.
+ * \param opcode Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 inline constexpr bool isRelaxedSimdOpcode(SIMDOpcode opcode) noexcept
 {
 	return static_cast<uint32_t>(opcode) >= 256;
