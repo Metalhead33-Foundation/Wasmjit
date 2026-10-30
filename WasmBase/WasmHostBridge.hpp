@@ -16,6 +16,7 @@ WASMJIT_VISIBLE_BEGIN
 
 namespace WASM {
 
+/** \\brief Forward declaration of the per-instance VM context passed to host hooks. */
 struct VMContext;
 
 //! \brief Optional, embedder-owned host boundary
