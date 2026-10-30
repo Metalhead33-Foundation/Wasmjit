@@ -226,11 +226,12 @@ The strict pass is a *work list*, not a gate: today it reports the gap counted i
 - **Not every declaration is documented *yet*.** The rule above is about the
   shape and the completeness of a block that exists; a declaration with no block
   at all remains a gap. Measured on 2026-10-30 with the strict pass (§6):
-  **747 declarations** (333 functions, 365 fields and constants, 30 macros,
-  7 enums, 4 typedefs, 8 compounds). That is down from **4,591** before the
-  sweep (and from 896 before `WasmBase/wasm_simd_scalar.hpp` was finished), and
-  it is a list to work through, not a decision to stop: a new or edited
-  declaration is expected to arrive documented, and the count must not grow.
+  **555 declarations** (285 functions, 224 fields and constants, 30 macros,
+  5 enums, 4 typedefs, 6 compounds). That is down from **4,591** before the
+  sweep, and it is a list to work through, not a decision to stop: a new or
+  edited declaration is expected to arrive documented, and the count must not
+  grow. `WasmDiagnostics.hpp` and `WasmTypeStore.hpp` are the first two big
+  headers to reach zero.
 - **A doc block must say something.** A block of the form
   "`\brief Performs the <name> operation. \param x Input value or output
   destination for this operation.`" is *worse than no block*: it renders, it is

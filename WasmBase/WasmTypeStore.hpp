@@ -81,7 +81,9 @@ enum TypeFlags : uint16_t {
 
 /** \brief Range into one of the TypeStore's compact payload pools. */
 struct TypeSpan {
+	//! Index of the first entry in the pool.
 	uint32_t first = 0;
+	//! Number of entries the span covers.
 	uint32_t count = 0;
 	/** \brief Tests whether this span contains no entries. \return true when count is zero. */
 	constexpr bool empty() const { return count == 0; }
@@ -90,41 +92,54 @@ struct TypeSpan {
 //! A compact reference to a store record. Eight bytes on the target ABI.
 /** \brief Compact reference to a type record in a domain-specific index space. */
 struct TypeRef {
+	//! Which index space `index` belongs to (core or component).
 	TypeDomain domain = TypeDomain::Core;
+	//! The record's kind, for a cheap check before a full lookup.
 	TypeKind kind = TypeKind::CoreFunc;
-	uint32_t index = 0; //!< Field `index` of TypeRef.
+	//! The record's index in its domain's space.
+	uint32_t index = 0;
 };
 
 /** \brief Fixed-size canonical type record referencing compact payload pools. */
 struct TypeRecord {
+	//! The composite kind this record describes.
 	TypeKind kind = TypeKind::CoreFunc;
+	//! Encoded `TypeFlags` bits (final, shared, …).
 	uint16_t flags = 0;
-	uint32_t payload = 0; //!< Field `payload` of TypeRecord.
-	TypeSpan supertypes; //!< Field `supertypes` of TypeRecord.
+	//! Index of the kind-specific payload in its pool.
+	uint32_t payload = 0;
+	//! The declared supertypes, indexed into the heap-type pool.
+	TypeSpan supertypes;
 };
 
 /** \brief Parameter and result spans for a core function type. */
 struct CoreFuncPayload {
+	//! The function's parameter storage types.
 	TypeSpan params;
+	//! The function's result storage types.
 	TypeSpan results;
 };
 
 /** \brief Field span and optional descriptor clauses for a core structure type. */
 struct CoreStructPayload {
+	//! The struct's fields, as `CanonFieldType` records.
 	TypeSpan fields;
 	//! Custom Descriptors: optional clauses, retained alongside the struct's
 	//! fields so the compact 16-byte TypeRecord does not grow.
 	std::optional<CanonHeapType> descriptor;
+	//! The type this struct describes (`describes` clause), when present.
 	std::optional<CanonHeapType> describes;
 };
 
 /** \brief Element field description for a core array type. */
 struct CoreArrayPayload {
+	//! The array's element field (storage type, mutability, …).
 	CanonFieldType element;
 };
 
 /** \brief Function heap type referenced by a continuation type. */
 struct CoreContPayload {
+	//! The function type a `cont $ft` refers to.
 	CanonHeapType func;
 };
 
@@ -132,6 +147,7 @@ struct CoreContPayload {
 //! stored. `bound` is always abstract in the MVP (no concrete type bound).
 /** \brief Abstract heap-type bound of a nominal imported core type. */
 struct CoreImportPayload {
+	//! The abstract representation bound of the import.
 	CanonHeapType bound;
 };
 
@@ -142,31 +158,34 @@ using StringId = uint32_t;
 
 /** \brief Primitive value-type codes used by the Component Model type store. */
 enum class PrimitiveValueType : uint8_t {
-	Bool = 0x7F, //!< PrimitiveValueType enumerator `Bool`.
-	S8 = 0x7E, //!< PrimitiveValueType enumerator `S8`.
-	U8 = 0x7D, //!< PrimitiveValueType enumerator `U8`.
-	S16 = 0x7C, //!< PrimitiveValueType enumerator `S16`.
-	U16 = 0x7B, //!< PrimitiveValueType enumerator `U16`.
-	S32 = 0x7A, //!< PrimitiveValueType enumerator `S32`.
-	U32 = 0x79, //!< PrimitiveValueType enumerator `U32`.
-	S64 = 0x78, //!< PrimitiveValueType enumerator `S64`.
-	U64 = 0x77, //!< PrimitiveValueType enumerator `U64`.
-	F32 = 0x76, //!< PrimitiveValueType enumerator `F32`.
-	F64 = 0x75, //!< PrimitiveValueType enumerator `F64`.
-	Char = 0x74, //!< PrimitiveValueType enumerator `Char`.
-	String = 0x73, //!< PrimitiveValueType enumerator `String`.
-	ErrorContext = 0x64, //!< PrimitiveValueType enumerator `ErrorContext`.
-	Invalid = 0xFF, //!< PrimitiveValueType enumerator `Invalid`.
+	Bool = 0x7F, //!< `bool`.
+	S8 = 0x7E, //!< `s8`.
+	U8 = 0x7D, //!< `u8`.
+	S16 = 0x7C, //!< `s16`.
+	U16 = 0x7B, //!< `u16`.
+	S32 = 0x7A, //!< `s32`.
+	U32 = 0x79, //!< `u32`.
+	S64 = 0x78, //!< `s64`.
+	U64 = 0x77, //!< `u64`.
+	F32 = 0x76, //!< `float32`.
+	F64 = 0x75, //!< `float64`.
+	Char = 0x74, //!< `char`.
+	String = 0x73, //!< `string`.
+	ErrorContext = 0x64, //!< `error-context`.
+	Invalid = 0xFF, //!< The "not a primitive" marker.
 };
 
 /** \brief Component value type as parser-local index, primitive, or canonical TypeId. */
 struct ComponentValueType {
-enum class Kind : uint8_t {
-		TypeIndex, //!< Enum member `TypeIndex`.
-		Primitive, //!< Enum member `Primitive`.
-		TypeId //!< Enum member `TypeId`.
-};
+	//! Which member of the union-ish triple below is meaningful.
+	enum class Kind : uint8_t {
+		TypeIndex, //!< A parser-local index into the component type index space.
+		Primitive, //!< A `PrimitiveValueType`.
+		TypeId //!< A canonical `TypeId`.
+	};
+	//! Which member of the triple is meaningful.
 	Kind kind = Kind::Primitive;
+	//! The primitive value type, when `kind` is `Primitive`.
 	PrimitiveValueType primitive = PrimitiveValueType::Invalid;
 	//! TypeIndex for parser syntax, TypeId.value for canonical records.
 	uint32_t typeIndex = 0;
@@ -174,44 +193,55 @@ enum class Kind : uint8_t {
 
 /** \brief Named field in a canonical component record. */
 struct ComponentField {
+	//! The field's name, interned in the string store.
 	StringId name = 0;
+	//! The field's value type.
 	ComponentValueType type;
 };
 
 //! \brief Canonical ABI metadata (TM-10 first slice)
 //! The ABI signature is derived metadata: it is keyed by a canonical TypeId plus
 //! the canon options that affect lowering, and never enters the type intern key.
-/** \brief Core scalar type used by the flattened Canonical ABI signature. */
+//! \brief Core scalar type used by the flattened Canonical ABI signature.
 enum class AbiCoreType : uint8_t {
-	I32, //!< Enum member `I32`.
-	I64, //!< Enum member `I64`.
-	F32, //!< Enum member `F32`.
-	F64 //!< Enum member `F64`.
+	I32, //!< A 32-bit integer cell.
+	I64, //!< A 64-bit integer cell.
+	F32, //!< A 32-bit float cell.
+	F64 //!< A 64-bit float cell.
 };
 
 /** \brief Canonical ABI choices that affect flattening and memory layout. */
 struct CanonicalAbiOptions {
-enum class StringEncoding : uint8_t {
-		Utf8, //!< Enum member `Utf8`.
-		Utf16, //!< Enum member `Utf16`.
-		Latin1Utf16 //!< Enum member `Latin1Utf16`.
-};
+	//! The encoding `string.lower`/`string.lift` use.
+	enum class StringEncoding : uint8_t {
+		Utf8, //!< `utf8`.
+		Utf16, //!< `utf16`.
+		Latin1Utf16 //!< `latin1+utf16`.
+	};
+	//! The "no index" marker for an option the function does not name.
 	static constexpr uint32_t kNoIndex = ~uint32_t{0};
 
-	StringEncoding stringEncoding = StringEncoding::Utf8; //!< Field `stringEncoding` of CanonicalAbiOptions.
-	uint32_t memory = kNoIndex; //!< Field `memory` of CanonicalAbiOptions.
-	uint32_t realloc = kNoIndex; //!< Field `realloc` of CanonicalAbiOptions.
-	uint32_t postReturn = kNoIndex; //!< Field `postReturn` of CanonicalAbiOptions.
-	bool async = false; //!< Field `async` of CanonicalAbiOptions.
+	//! The string encoding the lowering uses.
+	StringEncoding stringEncoding = StringEncoding::Utf8;
+	//! The memory index the canonical options name, or `kNoIndex`.
+	uint32_t memory = kNoIndex;
+	//! The `realloc` function index, or `kNoIndex`.
+	uint32_t realloc = kNoIndex;
+	//! The `post-return` function index, or `kNoIndex`.
+	uint32_t postReturn = kNoIndex;
+	//! True when the function takes part in the async ABI.
+	bool async = false;
 	//! Canonical ABI pointer/length width: 4 for memory32, 8 for memory64.
 	uint8_t pointerSize = 4;
 
+	//! True when every lowering-relevant option matches.
 	bool operator==(const CanonicalAbiOptions& other) const
 	{
 		return stringEncoding == other.stringEncoding && memory == other.memory
 				&& realloc == other.realloc && postReturn == other.postReturn
 				&& async == other.async && pointerSize == other.pointerSize;
 	}
+	//! True when any lowering-relevant option differs.
 	bool operator!=(const CanonicalAbiOptions& other) const
 	{
 		return !(*this == other);
@@ -220,21 +250,28 @@ enum class StringEncoding : uint8_t {
 
 /** \brief Derived flat core signature for one component function type. */
 struct CanonicalAbiSignature {
+	//! The component function type this signature was derived from.
 	TypeId type{TypeId::kNone};
+	//! The canonical options the derivation used; part of the cache key.
 	CanonicalAbiOptions options;
-	std::vector<AbiCoreType> flatParams; //!< Field `flatParams` of CanonicalAbiSignature.
-	std::vector<AbiCoreType> flatResults; //!< Field `flatResults` of CanonicalAbiSignature.
+	//! The flattened core parameter types.
+	std::vector<AbiCoreType> flatParams;
+	//! The flattened core result types.
+	std::vector<AbiCoreType> flatResults;
 	//! Canonical ABI MAX_FLAT_PARAMS (16) / MAX_FLAT_RESULTS (1) spill the
 	//! component values through memory. `flatParams`/`flatResults` still describe
 	//! the component-level flattening; consumers use these flags for the core
 	//! signature.
 	bool indirectParams = false;
+	//! True when results are returned through a caller-provided buffer.
 	bool indirectResults = false;
 };
 
 /** \brief Size and alignment of a Canonical ABI memory representation. */
 struct CanonicalAbiLayout {
+	//! Size in bytes.
 	uint32_t size = 0;
+	//! Alignment in bytes (at least 1).
 	uint32_t align = 1;
 };
 
@@ -242,84 +279,110 @@ struct CanonicalAbiLayout {
 //! intern table; the closed TypeId space never contains a scheme parameter.
 /** \brief Metadata for an open component type scheme with abstract parameters. */
 struct TypeScheme {
+	//! How many abstract type parameters the scheme declares.
 	uint32_t parameterCount = 0;
 };
 
 /** \brief Named case and optional payload type in a component variant. */
 struct ComponentCase {
+	//! The case label, interned in the string store.
 	StringId label = 0;
+	//! The payload type, meaningful only when `hasType` is set.
 	ComponentValueType type;
-	bool hasType = false; //!< Field `hasType` of ComponentCase.
+	//! True when the case carries a payload.
+	bool hasType = false;
 };
 
 /** \brief Named parameter in a component function type. */
 struct ComponentFuncParam {
+	//! The parameter name, interned in the string store.
 	StringId name = 0;
+	//! The parameter's value type.
 	ComponentValueType type;
 };
 
 /** \brief Field span for a component record type. */
 struct ComponentRecordPayload {
+	//! The record's fields, as `ComponentField` records in the type store.
 	TypeSpan fields;
 };
 
 /** \brief Case span for a component variant type. */
 struct ComponentVariantPayload {
+	//! The variants' cases, as `ComponentCase` records in the type store.
 	TypeSpan cases;
 };
 
 /** \brief Element type and optional fixed length for a list type. */
 struct ComponentListPayload {
+	//! The element type.
 	ComponentValueType element;
+	//! The fixed length for `list<T, N>`, or 0 for an unbounded list.
 	uint32_t fixedLength = 0;
 };
 
 /** \brief Element span for a component tuple type. */
 struct ComponentTuplePayload {
+	//! The tuple's element types, in order.
 	TypeSpan elements;
 };
 
 /** \brief Interned label span for component flags/enums. */
 struct ComponentLabelPayload {
+	//! The labels, interned in the string store, in declaration order.
 	TypeSpan labels;
 };
 
 /** \brief Payload type of a component option. */
 struct ComponentOptionPayload {
+	//! The type of the `some` payload.
 	ComponentValueType element;
 };
 
 /** \brief Ok/error payload types and presence flags for a component result. */
 struct ComponentResultPayload {
+	//! The `ok` payload type (meaningful when `hasOk`).
 	ComponentValueType ok;
+	//! The `error` payload type (meaningful when `hasError`).
 	ComponentValueType error;
-	bool hasOk = false; //!< Field `hasOk` of ComponentResultPayload.
-	bool hasError = false; //!< Field `hasError` of ComponentResultPayload.
+	//! True when the result has an `ok` payload.
+	bool hasOk = false;
+	//! True when the result has an `error` payload.
+	bool hasError = false;
 };
 
 /** \brief Key and value types of a component map. */
 struct ComponentMapPayload {
+	//! The map's key type.
 	ComponentValueType key;
+	//! The map's value type.
 	ComponentValueType value;
 };
 
 /** \brief Optional element type of a component stream/future. */
 struct ComponentStreamPayload {
+	//! The element type, meaningful when `hasElement` is set.
 	ComponentValueType element;
+	//! True when the stream/future declares an element type.
 	bool hasElement = false;
 };
 
 /** \brief Parameter and result spans of a component function type. */
 struct ComponentFuncPayload {
+	//! The parameter types, as `ComponentFuncParam` records.
 	TypeSpan params;
+	//! The result types, as `ComponentFuncParam` records.
 	TypeSpan results;
 };
 
 /** \brief Core representation and optional destructor of a component resource. */
 struct ComponentResourcePayload {
+	//! The core value type the resource is represented by.
 	ValueType rep;
+	//! The destructor function index, meaningful when `hasDestructor`.
 	uint32_t destructor = 0;
-	bool hasDestructor = false; //!< Field `hasDestructor` of ComponentResourcePayload.
+	//! True when the resource declares a destructor.
+	bool hasDestructor = false;
 	//! An abstract `sub resource` import has no representation or destructor yet;
 	//! it still receives a fresh nominal TypeId.
 	bool abstract = false;
@@ -331,19 +394,25 @@ struct ComponentResourcePayload {
 //! is not type-bearing or its identity is still validator-only).
 /** \brief Compact component/instance import or export declaration identity. */
 struct ComponentDeclRecord {
+	//! The declared field name, interned in the string store.
 	StringId name = 0;
+	//! The encoded `ComponentSort`.
 	uint16_t sort = 0;      //!< ComponentSort
+	//! The core sort when `sort` is `ComponentSort::Core`.
 	uint16_t coreSort = 0;  //!< CoreSort when sort == ComponentSort::Core
+	//! The referenced type, or `kNone` when the declaration carries no type.
 	TypeId type{TypeId::kNone};
 };
 
 /** \brief Declaration span for a component instance type. */
 struct ComponentInstancePayload {
+	//! The instance type's declaration records.
 	TypeSpan declarations;
 };
 
 /** \brief Declaration span for a component type. */
 struct ComponentComponentPayload {
+	//! The component type's declaration records.
 	TypeSpan declarations;
 };
 
@@ -356,9 +425,13 @@ class TypeStore;
 class CoreTypeView
 {
 public:
+	//! An empty view; `valid()` is false until one is assigned.
 	CoreTypeView() = default;
+	//! Views the record `id` in `store`.
 	CoreTypeView(const TypeStore* store, TypeId id) : store_(store), id_(id) {}
+	//! Views a record that is still being interned (a recursive group member).
 	CoreTypeView(const CanonicalType* pending) : pending_(pending) {}
+	//! Views a record that is still being interned, by reference.
 	CoreTypeView(const CanonicalType& pending) : pending_(&pending) {}
 
 	/** \brief Tests whether the view refers to a record. \return true when backed by a store or pending canonical type. */
@@ -402,36 +475,62 @@ private:
 class ComponentTypeView
 {
 public:
+	//! An empty view: every accessor is invalid until one is assigned.
 	ComponentTypeView() = default;
+	//! Views the record `id` in `store`.
 	ComponentTypeView(const TypeStore* store, TypeId id) : store_(store), id_(id) {}
 
+	//! The record's type kind.
 	TypeKind kind() const;
+	//! The record's flag bits, as the parser encoded them.
 	uint16_t flags() const;
+	//! The primitive value type, for a primitive record.
 	PrimitiveValueType primitive() const;
 
+	//! The record's fields (`record`).
 	std::span<const ComponentField> fields() const;
+	//! The variant's cases.
 	std::span<const ComponentCase> cases() const;
+	//! The tuple's element types.
 	std::span<const ComponentValueType> tuple() const;
+	//! The labels of a `flags` or `enum`.
 	std::span<const StringId> labels() const;
+	//! The list/option/stream element type.
 	const ComponentValueType& element() const;
+	//! The fixed list length, or 0 for an unbounded list.
 	uint32_t fixedLength() const;
+	//! The result's `ok` payload type.
 	const ComponentValueType& resultOk() const;
+	//! The result's `error` payload type.
 	const ComponentValueType& resultError() const;
+	//! True when the result declares an `ok` payload.
 	bool hasResultOk() const;
+	//! True when the result declares an `error` payload.
 	bool hasResultError() const;
+	//! The map's key type.
 	const ComponentValueType& mapKey() const;
+	//! The map's value type.
 	const ComponentValueType& mapValue() const;
+	//! The stream/future element type.
 	const ComponentValueType& streamElement() const;
+	//! True when the stream/future declares an element type.
 	bool hasStreamElement() const;
+	//! The function's parameter types.
 	std::span<const ComponentFuncParam> params() const;
+	//! The function's result types.
 	std::span<const ComponentValueType> results() const;
+	//! The instance/component declaration records.
 	std::span<const ComponentDeclRecord> declarations() const;
+	//! The resource payload.
 	const ComponentResourcePayload& resource() const;
+	//! The type index a `type` record refers to.
 	uint32_t typeRef() const;
 
 private:
-	const TypeStore* store_ = nullptr; //!< Field `store_` of type.
-	TypeId id_{}; //!< Field `id_` of type.
+	//! The store the view reads from; null for an empty view.
+	const TypeStore* store_ = nullptr;
+	//! The record the view names.
+	TypeId id_{};
 };
 
 //! A process-lifetime owner of compact core and component type records.
@@ -505,8 +604,11 @@ public:
 	SchemeId internScheme(std::string key, uint32_t parameterCount);
 	/** \brief Retrieves metadata for an open type scheme. \param id Scheme identity. \return Const reference to the scheme record. */
 	const TypeScheme& scheme(SchemeId id) const { return schemes_[id.value]; }
+	//! Number of interned open type schemes.
 	std::size_t schemeCount() const { return schemes_.size(); }
+	//! How many `internScheme` calls hit an existing scheme.
 	std::size_t schemeInternHits() const { return schemeInternHits_; }
+	//! How many `internScheme` calls had to create a scheme.
 	std::size_t schemeInternMisses() const { return schemeInternMisses_; }
 
 	//! Derived Canonical ABI metadata (TM-10 first slice). Returns nullptr when
@@ -531,14 +633,19 @@ public:
 	/** \brief Flattens one component value type to core ABI scalar types. \param value Value type to flatten. \param out Receives flattened core types. \return false when the type cannot be flattened by this ABI slice. */
 	bool canonicalAbiFlatValue(const ComponentValueType& value,
 			std::vector<AbiCoreType>& out) const;
+	//! Number of cached `(TypeId, options)` ABI signature derivations.
 	std::size_t canonicalAbiCacheSize() const { return canonicalAbi_.size(); }
+	//! How many `canonicalAbi` calls hit the cache.
 	std::size_t canonicalAbiHits() const { return canonicalAbiHits_; }
+	//! How many `canonicalAbi` calls had to derive a signature.
 	std::size_t canonicalAbiMisses() const { return canonicalAbiMisses_; }
 
 	//! Structural component interning diagnostics. Closed records participate;
 	//! parser syntax records with a local index and nominal resources do not.
 	std::size_t componentInternedCount() const { return componentIntern_.size(); }
+	//! How many structural component internings hit an existing record.
 	std::size_t componentInternHits() const { return componentInternHits_; }
+	//! How many structural component internings created a record.
 	std::size_t componentInternMisses() const { return componentInternMisses_; }
 
 	/** \brief Appends fields to the compact field pool. \param fields Field records to append. \return Span identifying the appended range. */
@@ -570,6 +677,7 @@ public:
 
 	/** \brief Retrieves the compact record for a canonical TypeId. \param id Canonical type identity. \return Const reference to the record. */
 	const TypeRecord& record(TypeId id) const { return records_[id.value]; }
+	//! Which index space a record belongs to (core or component).
 	TypeDomain domain(TypeId id) const
 	{
 		return record(id).kind <= TypeKind::CoreImport
@@ -590,6 +698,7 @@ public:
 private:
 	friend class CoreTypeView;
 	friend class ComponentTypeView;
+	//! Appends one component record and returns its fresh `TypeId`.
 	TypeId addComponentRecord(TypeKind kind, uint16_t flags, uint32_t payload);
 
 	//! Intern `key` to the record created by `create` on a miss. Only closed,
@@ -613,7 +722,9 @@ private:
 
 	//! Core payloads.
 	std::vector<CanonHeapType> coreSupertypes_;
+	//! Core function parameter/result storage-type pool.
 	std::vector<CanonStorageType> coreStorage_;
+	//! Core struct/array field pool.
 	std::vector<CanonFieldType> coreFields_;
 	std::vector<CoreImportPayload> coreImports_; //!< Field `coreImports_` of type.
 	std::vector<CoreFuncPayload> coreFuncs_; //!< Field `coreFuncs_` of type.
@@ -624,7 +735,9 @@ private:
 
 	//! Component payloads.
 	std::vector<ComponentField> componentFields_;
+	//! Variant-case pool.
 	std::vector<ComponentCase> componentCases_;
+	//! Value-type pool (list elements, map keys/values, …).
 	std::vector<ComponentValueType> componentValues_;
 	std::vector<StringId> componentLabels_; //!< Field `componentLabels_` of type.
 	std::vector<ComponentFuncParam> componentParams_; //!< Field `componentParams_` of type.
@@ -655,7 +768,9 @@ private:
 	std::unordered_map<std::string, TypeId> componentIntern_;
 	//! Nominal core type imports, keyed by length-prefixed module/field + bound.
 	std::unordered_map<std::string, TypeId> coreImportIntern_;
+	//! Counter behind `componentInternHits()`.
 	std::size_t componentInternHits_ = 0;
+	//! Counter behind `componentInternMisses()`.
 	std::size_t componentInternMisses_ = 0;
 
 	mutable std::map<std::string, CanonicalAbiSignature> canonicalAbi_; //!< Field `canonicalAbi_` of type.

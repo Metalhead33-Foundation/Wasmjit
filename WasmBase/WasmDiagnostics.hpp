@@ -97,6 +97,7 @@ const char* continuationStatusName(ContinuationStatus status) noexcept;
 //! Absence markers. An all-unknown location is omitted from the text/JSON form
 //! rather than serialized as 0 (a real function/offset is a valid 0).
 inline constexpr std::uint32_t kNoDiagnosticIndex = 0xFFFFFFFFu;
+//! The "no offset" marker that pairs with `kNoDiagnosticIndex`.
 inline constexpr std::uint64_t kNoDiagnosticOffset = ~std::uint64_t{0};
 
 //! Where the failure happened, in module terms. `functionIndex` is module-local
@@ -106,11 +107,16 @@ inline constexpr std::uint64_t kNoDiagnosticOffset = ~std::uint64_t{0};
 //! spelling without `$`; it is *owned* (not borrowed), so a record copied into
 //! the ring or a sink stays valid after the module is destroyed.
 struct DiagnosticLocation {
+	//! The module-local function index, or `kNoDiagnosticIndex`.
 	std::uint32_t functionIndex = kNoDiagnosticIndex;
+	//! The instruction's byte offset in the body, or `kNoDiagnosticIndex`.
 	std::uint32_t instructionOffset = kNoDiagnosticIndex;
-	std::uint64_t moduleOffset = kNoDiagnosticOffset; //!< Field `moduleOffset` of DiagnosticLocation.
-	std::string functionName; //!< Field `functionName` of DiagnosticLocation.
+	//! Byte offset in the artifact, or `kNoDiagnosticOffset`.
+	std::uint64_t moduleOffset = kNoDiagnosticOffset;
+	//! Name-section spelling without `$`; owned, so it outlives the module.
+	std::string functionName;
 
+	//! True when at least one part of the location is known.
 	bool known() const noexcept
 	{
 		return functionIndex != kNoDiagnosticIndex
@@ -128,24 +134,37 @@ struct DiagnosticLocation {
 //! the text form. Default JSON contains no host pointers, guest values or
 //! `userData`.
 struct DiagnosticContinuation {
+	//! Which provider the continuation belongs to.
 	ContinuationProvider provider = ContinuationProvider::NativeStacks;
+	//! The handle's generation; a stale value means the slot was reused.
 	std::uint64_t generation = 0;
 	std::string_view state;   //!< "running", "suspended", "completed", "trapped", "exception"
+	//! The thrown tag's id for an exception-carrying record, or -1.
 	std::int32_t tagId = -1;
+	//! Number of values the suspension carried.
 	std::uint32_t valueCount = 0;
+	//! Number of results the resume expects.
 	std::uint32_t resultCount = 0;
-	bool hasRoots = false; //!< Field `hasRoots` of DiagnosticContinuation.
-	const void* switchPeer = nullptr; //!< Field `switchPeer` of DiagnosticContinuation.
+	bool hasRoots = false; //!< True when the suspended frame holds GC roots to scan.
+	const void* switchPeer = nullptr; //!< Developer-only peer state; never serialized.
 
+	//! True when `state` is non-empty, i.e. this context is present at all.
 	bool present() const noexcept { return !state.empty(); }
 };
 
+//! One correlated failure record: what happened (`id`, `severity`, `phase`,
+//! `message`), where (`location`), in which execution context (`continuation`),
+//! and when relative to the rest of the session (`sequence`, `timestamp`).
 struct Diagnostic {
 	std::string_view id;          //!< stable contract, e.g. "WASM.VALIDATE.UNKNOWN_TYPE"
+	//! How serious the record is; a `Fatal` record is followed by a trap.
 	DiagnosticSeverity severity = DiagnosticSeverity::Error;
+	//! The phase that produced it (decode, validate, link, execute, …).
 	DiagnosticPhase phase = DiagnosticPhase::Execute;
 	std::string message;          //!< human-readable; not an assertion key
+	//! Where in the module the failure happened; all-unknown when not known.
 	DiagnosticLocation location;
+	//! Execution-context detail for a trap, exception or scheduler failure.
 	DiagnosticContinuation continuation;
 	std::string_view remediation; //!< docs anchor or a short hint
 	std::uint32_t sequence = 0;   //!< assigned by the emitting execution state
@@ -163,97 +182,97 @@ struct Diagnostic {
 //! that has not been mapped yet (DG-0 is incremental); it is the only id that
 //! may describe more than one rule.
 namespace DiagnosticId {
-inline constexpr std::string_view kDecodePreamble = "WASM.DECODE.PREAMBLE";
-inline constexpr std::string_view kDecodeUnsupportedArtifact = "WASM.DECODE.UNSUPPORTED_ARTIFACT";
-inline constexpr std::string_view kDecodeMalformed = "WASM.DECODE.MALFORMED";
-inline constexpr std::string_view kDecodeUnsupported = "WASM.DECODE.UNSUPPORTED";
-inline constexpr std::string_view kDecodeUnsupportedValueType = "WASM.DECODE.UNSUPPORTED_VALUE_TYPE";
+inline constexpr std::string_view kDecodePreamble = "WASM.DECODE.PREAMBLE"; //!< The `\0asm`/version/layer preamble is wrong.
+inline constexpr std::string_view kDecodeUnsupportedArtifact = "WASM.DECODE.UNSUPPORTED_ARTIFACT"; //!< A recognised artifact kind this engine does not load.
+inline constexpr std::string_view kDecodeMalformed = "WASM.DECODE.MALFORMED"; //!< The byte stream does not decode.
+inline constexpr std::string_view kDecodeUnsupported = "WASM.DECODE.UNSUPPORTED"; //!< A construct the decoder does not implement.
+inline constexpr std::string_view kDecodeUnsupportedValueType = "WASM.DECODE.UNSUPPORTED_VALUE_TYPE"; //!< A value type the engine does not model.
 
 //! Backend plugin boundary (docs/BACKEND_PLUGIN_ABI.md BP-3/BP-4): failure to
 //! load, an ABI mismatch, or a plugin's own diagnostic routed through the host
 //! table.
 inline constexpr std::string_view kBackendPlugin = "WASM.BACKEND.PLUGIN";
 
-inline constexpr std::string_view kValidateRule = "WASM.VALIDATE.RULE";
-inline constexpr std::string_view kValidateUnknownType = "WASM.VALIDATE.UNKNOWN_TYPE";
-inline constexpr std::string_view kValidateTypeNotFunction = "WASM.VALIDATE.TYPE_NOT_FUNCTION";
-inline constexpr std::string_view kValidateUnknownFunction = "WASM.VALIDATE.UNKNOWN_FUNCTION";
-inline constexpr std::string_view kValidateUnknownTable = "WASM.VALIDATE.UNKNOWN_TABLE";
-inline constexpr std::string_view kValidateUnknownMemory = "WASM.VALIDATE.UNKNOWN_MEMORY";
-inline constexpr std::string_view kValidateUnknownGlobal = "WASM.VALIDATE.UNKNOWN_GLOBAL";
-inline constexpr std::string_view kValidateUnknownTag = "WASM.VALIDATE.UNKNOWN_TAG";
-inline constexpr std::string_view kValidateUnknownLocal = "WASM.VALIDATE.UNKNOWN_LOCAL";
-inline constexpr std::string_view kValidateUnknownElement = "WASM.VALIDATE.UNKNOWN_ELEMENT_SEGMENT";
-inline constexpr std::string_view kValidateUnknownData = "WASM.VALIDATE.UNKNOWN_DATA_SEGMENT";
+inline constexpr std::string_view kValidateRule = "WASM.VALIDATE.RULE"; //!< The transitional family for a rule not mapped to its own id yet.
+inline constexpr std::string_view kValidateUnknownType = "WASM.VALIDATE.UNKNOWN_TYPE"; //!< A type index out of range.
+inline constexpr std::string_view kValidateTypeNotFunction = "WASM.VALIDATE.TYPE_NOT_FUNCTION"; //!< An indirect call whose type is not a function type.
+inline constexpr std::string_view kValidateUnknownFunction = "WASM.VALIDATE.UNKNOWN_FUNCTION"; //!< A function index out of range.
+inline constexpr std::string_view kValidateUnknownTable = "WASM.VALIDATE.UNKNOWN_TABLE"; //!< A table index out of range.
+inline constexpr std::string_view kValidateUnknownMemory = "WASM.VALIDATE.UNKNOWN_MEMORY"; //!< A memory index out of range.
+inline constexpr std::string_view kValidateUnknownGlobal = "WASM.VALIDATE.UNKNOWN_GLOBAL"; //!< A global index out of range.
+inline constexpr std::string_view kValidateUnknownTag = "WASM.VALIDATE.UNKNOWN_TAG"; //!< A tag index out of range.
+inline constexpr std::string_view kValidateUnknownLocal = "WASM.VALIDATE.UNKNOWN_LOCAL"; //!< A local index out of range.
+inline constexpr std::string_view kValidateUnknownElement = "WASM.VALIDATE.UNKNOWN_ELEMENT_SEGMENT"; //!< An element-segment index out of range.
+inline constexpr std::string_view kValidateUnknownData = "WASM.VALIDATE.UNKNOWN_DATA_SEGMENT"; //!< A data-segment index out of range.
 
 //! Rule families used by `validationRuleId()` for sites that do not pass an
 //! explicit id. The message still names the precise rule; the id names the
 //! stable family (docs/DIAGNOSTICS.md §4.2).
-inline constexpr std::string_view kValidateUnknownLabel = "WASM.VALIDATE.UNKNOWN_LABEL";
-inline constexpr std::string_view kValidateOperandStack = "WASM.VALIDATE.OPERAND_STACK";
-inline constexpr std::string_view kValidateTypeMismatch = "WASM.VALIDATE.TYPE_MISMATCH";
-inline constexpr std::string_view kValidateBlockType = "WASM.VALIDATE.BLOCK_TYPE";
-inline constexpr std::string_view kValidateControlFlow = "WASM.VALIDATE.CONTROL_FLOW";
-inline constexpr std::string_view kValidateAlignment = "WASM.VALIDATE.ALIGNMENT";
-inline constexpr std::string_view kValidateOffsetRange = "WASM.VALIDATE.OFFSET_RANGE";
-inline constexpr std::string_view kValidateLimits = "WASM.VALIDATE.LIMITS";
-inline constexpr std::string_view kValidateImmutableTarget = "WASM.VALIDATE.IMMUTABLE_TARGET";
-inline constexpr std::string_view kValidateUninitializedLocal = "WASM.VALIDATE.UNINITIALIZED_LOCAL";
-inline constexpr std::string_view kValidateUndeclaredRef = "WASM.VALIDATE.UNDECLARED_FUNCTION_REF";
-inline constexpr std::string_view kValidateDuplicateExport = "WASM.VALIDATE.DUPLICATE_EXPORT";
-inline constexpr std::string_view kValidateSection = "WASM.VALIDATE.SECTION_CONSISTENCY";
-inline constexpr std::string_view kValidateConstantTime = "WASM.VALIDATE.CONSTANT_TIME";
-inline constexpr std::string_view kValidateProfile = "WASM.VALIDATE.PROFILE";
-inline constexpr std::string_view kValidateDescriptor = "WASM.VALIDATE.DESCRIPTOR";
-inline constexpr std::string_view kValidateCast = "WASM.VALIDATE.CAST";
-inline constexpr std::string_view kValidateAtomicOrdering = "WASM.VALIDATE.ATOMIC_ORDERING";
-inline constexpr std::string_view kValidateAtomic = "WASM.VALIDATE.ATOMIC";
-inline constexpr std::string_view kValidateContinuation = "WASM.VALIDATE.CONTINUATION";
-inline constexpr std::string_view kValidateString = "WASM.VALIDATE.STRING";
-inline constexpr std::string_view kValidateStruct = "WASM.VALIDATE.STRUCT";
-inline constexpr std::string_view kValidateArray = "WASM.VALIDATE.ARRAY";
-inline constexpr std::string_view kValidateTag = "WASM.VALIDATE.TAG";
-inline constexpr std::string_view kValidateTable = "WASM.VALIDATE.TABLE";
-inline constexpr std::string_view kValidateMemory = "WASM.VALIDATE.MEMORY";
-inline constexpr std::string_view kValidateGlobal = "WASM.VALIDATE.GLOBAL";
-inline constexpr std::string_view kValidateLocal = "WASM.VALIDATE.LOCAL";
-inline constexpr std::string_view kValidateSelect = "WASM.VALIDATE.SELECT";
-inline constexpr std::string_view kValidateShuffle = "WASM.VALIDATE.SHUFFLE";
-inline constexpr std::string_view kValidateTypeKind = "WASM.VALIDATE.TYPE_KIND";
+inline constexpr std::string_view kValidateUnknownLabel = "WASM.VALIDATE.UNKNOWN_LABEL"; //!< A label index deeper than the enclosing blocks.
+inline constexpr std::string_view kValidateOperandStack = "WASM.VALIDATE.OPERAND_STACK"; //!< An operand-stack underflow or leftover values.
+inline constexpr std::string_view kValidateTypeMismatch = "WASM.VALIDATE.TYPE_MISMATCH"; //!< An operand type the instruction does not accept.
+inline constexpr std::string_view kValidateBlockType = "WASM.VALIDATE.BLOCK_TYPE"; //!< A block type that is neither a value type nor a type index.
+inline constexpr std::string_view kValidateControlFlow = "WASM.VALIDATE.CONTROL_FLOW"; //!< A branch target outside the enclosing constructs.
+inline constexpr std::string_view kValidateAlignment = "WASM.VALIDATE.ALIGNMENT"; //!< A `memarg` alignment wider than the access.
+inline constexpr std::string_view kValidateOffsetRange = "WASM.VALIDATE.OFFSET_RANGE"; //!< A constant offset that overflows the address space.
+inline constexpr std::string_view kValidateLimits = "WASM.VALIDATE.LIMITS"; //!< Limits out of order or over the engine's cap.
+inline constexpr std::string_view kValidateImmutableTarget = "WASM.VALIDATE.IMMUTABLE_TARGET"; //!< A write to an immutable global.
+inline constexpr std::string_view kValidateUninitializedLocal = "WASM.VALIDATE.UNINITIALIZED_LOCAL"; //!< A read of a local before it is set.
+inline constexpr std::string_view kValidateUndeclaredRef = "WASM.VALIDATE.UNDECLARED_FUNCTION_REF"; //!< A `ref.func` naming a function the module never mentions.
+inline constexpr std::string_view kValidateDuplicateExport = "WASM.VALIDATE.DUPLICATE_EXPORT"; //!< Two exports with the same name.
+inline constexpr std::string_view kValidateSection = "WASM.VALIDATE.SECTION_CONSISTENCY"; //!< Section order, size or uniqueness violation.
+inline constexpr std::string_view kValidateConstantTime = "WASM.VALIDATE.CONSTANT_TIME"; //!< A constant-time-profile violation.
+inline constexpr std::string_view kValidateProfile = "WASM.VALIDATE.PROFILE"; //!< A construct the active profile excludes.
+inline constexpr std::string_view kValidateDescriptor = "WASM.VALIDATE.DESCRIPTOR"; //!< A custom-descriptor clause mismatch.
+inline constexpr std::string_view kValidateCast = "WASM.VALIDATE.CAST"; //!< A `ref.cast`/`ref.test` target mismatch.
+inline constexpr std::string_view kValidateAtomicOrdering = "WASM.VALIDATE.ATOMIC_ORDERING"; //!< An invalid atomic-ordering immediate.
+inline constexpr std::string_view kValidateAtomic = "WASM.VALIDATE.ATOMIC"; //!< An atomic access to a non-shared memory.
+inline constexpr std::string_view kValidateContinuation = "WASM.VALIDATE.CONTINUATION"; //!< A continuation instruction/type mismatch.
+inline constexpr std::string_view kValidateString = "WASM.VALIDATE.STRING"; //!< A stringref instruction/type mismatch.
+inline constexpr std::string_view kValidateStruct = "WASM.VALIDATE.STRUCT"; //!< A struct field access that does not match the type.
+inline constexpr std::string_view kValidateArray = "WASM.VALIDATE.ARRAY"; //!< An array instruction/type mismatch.
+inline constexpr std::string_view kValidateTag = "WASM.VALIDATE.TAG"; //!< A tag signature mismatch.
+inline constexpr std::string_view kValidateTable = "WASM.VALIDATE.TABLE"; //!< A table instruction/type mismatch.
+inline constexpr std::string_view kValidateMemory = "WASM.VALIDATE.MEMORY"; //!< A memory instruction/type mismatch.
+inline constexpr std::string_view kValidateGlobal = "WASM.VALIDATE.GLOBAL"; //!< A global instruction/type mismatch.
+inline constexpr std::string_view kValidateLocal = "WASM.VALIDATE.LOCAL"; //!< A local instruction whose operand does not match the local.
+inline constexpr std::string_view kValidateSelect = "WASM.VALIDATE.SELECT"; //!< A `select` whose arms disagree.
+inline constexpr std::string_view kValidateShuffle = "WASM.VALIDATE.SHUFFLE"; //!< An `i8x16.shuffle` lane index above 31.
+inline constexpr std::string_view kValidateTypeKind = "WASM.VALIDATE.TYPE_KIND"; //!< A type used with the wrong kind.
 
-inline constexpr std::string_view kExecuteException = "WASM.EXECUTE.EXCEPTION";
-inline constexpr std::string_view kExecuteLogInfo = "WASM.EXECUTE.LOG.INFO";
-inline constexpr std::string_view kExecuteLogWarn = "WASM.EXECUTE.LOG.WARN";
-inline constexpr std::string_view kExecuteLogError = "WASM.EXECUTE.LOG.ERROR";
-inline constexpr std::string_view kExecuteLogPanic = "WASM.EXECUTE.LOG.PANIC";
+inline constexpr std::string_view kExecuteException = "WASM.EXECUTE.EXCEPTION"; //!< An uncaught Wasm exception reached the host boundary.
+inline constexpr std::string_view kExecuteLogInfo = "WASM.EXECUTE.LOG.INFO"; //!< An `env.info` host-log record.
+inline constexpr std::string_view kExecuteLogWarn = "WASM.EXECUTE.LOG.WARN"; //!< An `env.warn` host-log record.
+inline constexpr std::string_view kExecuteLogError = "WASM.EXECUTE.LOG.ERROR"; //!< An `env.error` host-log record.
+inline constexpr std::string_view kExecuteLogPanic = "WASM.EXECUTE.LOG.PANIC"; //!< An `env.panic` host-log record.
 
 //! Continuation failures (DG-4). These are reasons, not the five resume
 //! statuses: `WASM.CONTINUATION.INVALID` says the resume failed, while
 //! `INVALID_GENERATION` says why. `continuationDiagnosticId()` maps the compact
 //! status enum; these are the leaves emitted at the failure site.
 inline constexpr std::string_view kContinuationNullHandle = "WASM.CONTINUATION.NULL_HANDLE";
-inline constexpr std::string_view kContinuationInvalidHandle = "WASM.CONTINUATION.INVALID_HANDLE";
-inline constexpr std::string_view kContinuationNullException = "WASM.CONTINUATION.NULL_EXCEPTION";
-inline constexpr std::string_view kContinuationNullTarget = "WASM.CONTINUATION.NULL_TARGET";
-inline constexpr std::string_view kContinuationCancelled = "WASM.CONTINUATION.CANCELLED";
-inline constexpr std::string_view kContinuationInvalidGeneration = "WASM.CONTINUATION.INVALID_GENERATION";
-inline constexpr std::string_view kContinuationNotResumable = "WASM.CONTINUATION.NOT_RESUMABLE";
-inline constexpr std::string_view kContinuationFreshThrow = "WASM.CONTINUATION.FRESH_THROW";
-inline constexpr std::string_view kContinuationCrossProvider = "WASM.CONTINUATION.CROSS_PROVIDER";
-inline constexpr std::string_view kContinuationDroppedSuspended = "WASM.CONTINUATION.DROPPED_SUSPENDED";
-inline constexpr std::string_view kContinuationSwitchOutside = "WASM.CONTINUATION.SWITCH_OUTSIDE";
-inline constexpr std::string_view kContinuationTargetCompleted = "WASM.CONTINUATION.TARGET_COMPLETED";
-inline constexpr std::string_view kContinuationSuspendOutside = "WASM.CONTINUATION.SUSPEND_OUTSIDE";
-inline constexpr std::string_view kContinuationBudgetExhausted = "WASM.CONTINUATION.BUDGET_EXHAUSTED";
-inline constexpr std::string_view kContinuationAllocationFailed = "WASM.CONTINUATION.ALLOCATION_FAILED";
-inline constexpr std::string_view kContinuationStartFailed = "WASM.CONTINUATION.START_FAILED";
-inline constexpr std::string_view kContinuationStackAllocationFailed = "WASM.CONTINUATION.STACK_ALLOCATION_FAILED";
-inline constexpr std::string_view kContinuationBindFailed = "WASM.CONTINUATION.BIND_FAILED";
-inline constexpr std::string_view kContinuationUnhandledSuspension = "WASM.CONTINUATION.UNHANDLED_SUSPENSION";
-inline constexpr std::string_view kContinuationSchedulerInvalidHandle = "WASM.CONTINUATION.SCHEDULER.INVALID_HANDLE";
-inline constexpr std::string_view kContinuationSchedulerRejected = "WASM.CONTINUATION.SCHEDULER.REJECTED";
-inline constexpr std::string_view kContinuationSchedulerTrapped = "WASM.CONTINUATION.SCHEDULER.TRAPPED";
-inline constexpr std::string_view kContinuationSchedulerInvalid = "WASM.CONTINUATION.SCHEDULER.INVALID";
+inline constexpr std::string_view kContinuationInvalidHandle = "WASM.CONTINUATION.INVALID_HANDLE"; //!< The handle is not one this provider issued.
+inline constexpr std::string_view kContinuationNullException = "WASM.CONTINUATION.NULL_EXCEPTION"; //!< A `resume_throw` carried no exception.
+inline constexpr std::string_view kContinuationNullTarget = "WASM.CONTINUATION.NULL_TARGET"; //!< A call through a null continuation target.
+inline constexpr std::string_view kContinuationCancelled = "WASM.CONTINUATION.CANCELLED"; //!< The continuation was cancelled before it resumed.
+inline constexpr std::string_view kContinuationInvalidGeneration = "WASM.CONTINUATION.INVALID_GENERATION"; //!< The handle's generation is stale (the slot was reused).
+inline constexpr std::string_view kContinuationNotResumable = "WASM.CONTINUATION.NOT_RESUMABLE"; //!< The continuation is completed or already running.
+inline constexpr std::string_view kContinuationFreshThrow = "WASM.CONTINUATION.FRESH_THROW"; //!< A fresh `resume_throw` matched no handler clause.
+inline constexpr std::string_view kContinuationCrossProvider = "WASM.CONTINUATION.CROSS_PROVIDER"; //!< The handle belongs to a different provider.
+inline constexpr std::string_view kContinuationDroppedSuspended = "WASM.CONTINUATION.DROPPED_SUSPENDED"; //!< A suspended continuation was dropped.
+inline constexpr std::string_view kContinuationSwitchOutside = "WASM.CONTINUATION.SWITCH_OUTSIDE"; //!< A `switch` outside a continuation body.
+inline constexpr std::string_view kContinuationTargetCompleted = "WASM.CONTINUATION.TARGET_COMPLETED"; //!< The resume target had already completed.
+inline constexpr std::string_view kContinuationSuspendOutside = "WASM.CONTINUATION.SUSPEND_OUTSIDE"; //!< A `suspend` outside a continuation body.
+inline constexpr std::string_view kContinuationBudgetExhausted = "WASM.CONTINUATION.BUDGET_EXHAUSTED"; //!< The provider's budget refused the operation.
+inline constexpr std::string_view kContinuationAllocationFailed = "WASM.CONTINUATION.ALLOCATION_FAILED"; //!< Allocating the continuation failed.
+inline constexpr std::string_view kContinuationStartFailed = "WASM.CONTINUATION.START_FAILED"; //!< The continuation's start function failed.
+inline constexpr std::string_view kContinuationStackAllocationFailed = "WASM.CONTINUATION.STACK_ALLOCATION_FAILED"; //!< Allocating the continuation's stack failed.
+inline constexpr std::string_view kContinuationBindFailed = "WASM.CONTINUATION.BIND_FAILED"; //!< `cont.bind` could not bind the requested prefix.
+inline constexpr std::string_view kContinuationUnhandledSuspension = "WASM.CONTINUATION.UNHANDLED_SUSPENSION"; //!< A suspension reached a boundary that cannot carry it.
+inline constexpr std::string_view kContinuationSchedulerInvalidHandle = "WASM.CONTINUATION.SCHEDULER.INVALID_HANDLE"; //!< The scheduler was handed a task it does not own.
+inline constexpr std::string_view kContinuationSchedulerRejected = "WASM.CONTINUATION.SCHEDULER.REJECTED"; //!< The scheduler refused to enqueue the task.
+inline constexpr std::string_view kContinuationSchedulerTrapped = "WASM.CONTINUATION.SCHEDULER.TRAPPED"; //!< A scheduled task trapped.
+inline constexpr std::string_view kContinuationSchedulerInvalid = "WASM.CONTINUATION.SCHEDULER.INVALID"; //!< The scheduler is in an unusable state.
 } // namespace DiagnosticId
 
 //! The diagnostic id of a runtime trap kind. The ids live under
@@ -283,11 +302,16 @@ struct DiagnosticState {
 	//! Small on purpose: this is a debugging history, not a log.
 	static constexpr std::uint32_t kDefaultCapacity = 32;
 
+	//! The installed sink, or null for none.
 	DiagnosticSink sink = nullptr;
-	void* userData = nullptr; //!< Field `userData` of DiagnosticState.
-	std::uint32_t capacity = kDefaultCapacity; //!< Field `capacity` of DiagnosticState.
-	std::uint32_t sequence = 0; //!< Field `sequence` of DiagnosticState.
-	std::vector<Diagnostic> records; //!< Field `records` of DiagnosticState.
+	//! The opaque pointer the sink receives alongside each record.
+	void* userData = nullptr;
+	//! Records the ring keeps; `0` disables the ring (a sink still runs).
+	std::uint32_t capacity = kDefaultCapacity;
+	//! Monotonic counter stamped onto each emitted record.
+	std::uint32_t sequence = 0;
+	//! The ring's records, oldest first.
+	std::vector<Diagnostic> records;
 	//! When true, one ANSI/emoji line is written to stderr per host-log record.
 	//! The record id family is `WASM.EXECUTE.LOG.*`. Off by default: the core
 	//! never writes to the terminal unless an embedder (or the test harness)
@@ -299,6 +323,7 @@ struct DiagnosticState {
 	//! has a stable "start date" for the collected records.
 	std::time_t startedAt = std::time(nullptr);
 
+	//! Installs `newSink`/`newUserData`; a null sink disables the callback.
 	void setSink(DiagnosticSink newSink, void* newUserData) noexcept
 	{
 		sink = newSink;
@@ -314,10 +339,9 @@ struct DiagnosticState {
 	//! failed allocation simply loses the record.
 	void emit(Diagnostic diagnostic) noexcept;
 
+	//! The ring's records, oldest first; invalidated by the next emission.
 	std::span<const Diagnostic> recent() noexcept { return records; }
-/**
- * \brief Returns or updates the clear diagnostic facility.
- */
+	//! Drops every record of this ring.
 	void clear() noexcept { records.clear(); }
 };
 
@@ -327,19 +351,19 @@ void setDiagnosticSink(DiagnosticSink sink, void* userData) noexcept;
 //! The currently installed sink/user data, so a temporary sink (a test, a
 //! scoped capture) can restore what it replaced.
 DiagnosticSink diagnosticSink() noexcept;
+//! The opaque `userData` pointer installed alongside the sink.
 void* diagnosticSinkUserData() noexcept;
 //! The records of the current execution state, oldest first. The span is
 //! invalidated by the next emission or by `clearDiagnostics()`.
 std::span<const Diagnostic> recentDiagnostics() noexcept;
-/**
- * \brief Returns or updates the clearDiagnostics diagnostic facility.
- */
+//! Drops every record of the current execution state.
 void clearDiagnostics() noexcept;
 //! 0 disables the ring for the current execution state.
 void setDiagnosticRingCapacity(std::uint32_t capacity) noexcept;
 //! Enables/disables the pretty stderr line for host-log records on the current
 //! execution state (default off). The unit-test harness turns it on.
 void setDiagnosticPrettyPrinting(bool enabled) noexcept;
+//! True when the pretty host-log line is enabled on the current execution state.
 bool diagnosticPrettyPrinting() noexcept;
 //! The current execution state's session start (JSON envelope `startedAt`).
 std::time_t diagnosticsStartedAt() noexcept;
@@ -370,6 +394,7 @@ std::string formatDiagnostic(const Diagnostic& diagnostic);
 //! `useColor` selects the ANSI escapes; the emoji and the date stay either way.
 std::string formatDiagnosticPretty(const Diagnostic& diagnostic,
 		bool useColor = true);
+//! One record as a schema-v1 JSON object (nlohmann_json lives in the .cpp).
 std::string diagnosticToJson(const Diagnostic& diagnostic);
 //! `startedAt == 0` derives the envelope start from the first record (or now
 //! when the span is empty), so a caller that does not track a session start
@@ -441,8 +466,11 @@ class ImportRegistrar;
 //! `panic` reports through `WASM::trap`, which throws to the `nativeImport`
 //! trampoline, and a `noexcept` body would terminate the process instead.
 void diagnosticInfo(VMContext* context, std::int32_t pointer, std::int32_t length);
+//! `env.warn`: records a `Warning` (`WASM.EXECUTE.LOG.WARN`).
 void diagnosticWarn(VMContext* context, std::int32_t pointer, std::int32_t length);
+//! `env.error`: records an `Error` (`WASM.EXECUTE.LOG.ERROR`).
 void diagnosticError(VMContext* context, std::int32_t pointer, std::int32_t length);
+//! `env.panic`: records a `Fatal` and then traps with the same text.
 void diagnosticPanic(VMContext* context, std::int32_t pointer, std::int32_t length);
 
 //! Registers `info`, `warn`, `error` and `panic` under `moduleName`.
