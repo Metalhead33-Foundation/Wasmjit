@@ -49,7 +49,7 @@ public:
 	 * \throws std::runtime_error if code generation or executable-memory
 	 *         allocation fails.
 	 */
-	int (*compileReturn42)();
+	int (*compileReturn42())();
 
 	/*!
 	 * \brief Returns the host execution environment used by this runtime.
