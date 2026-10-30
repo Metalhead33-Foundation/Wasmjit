@@ -31,49 +31,52 @@ namespace WASM {
 //! A TypeId names one record in the store. Records are small and refer to
 //! shared payload pools by index; no record owns a vector or a string.
 /** \brief Domain containing a canonical type record. */
-enum class TypeDomain : uint8_t { Core, Component };
+enum class TypeDomain : uint8_t {
+	Core, //!< Enum member `Core`.
+	Component //!< Enum member `Component`.
+};
 
 /** \brief Discriminator for core and Component Model canonical type records. */
 enum class TypeKind : uint16_t {
-	CoreFunc = 1,
-	CoreStruct,
-	CoreArray,
+	CoreFunc = 1, //!< TypeKind enumerator `CoreFunc`.
+	CoreStruct, //!< TypeKind enumerator `CoreStruct`.
+	CoreArray, //!< TypeKind enumerator `CoreArray`.
 	//! Stack-switching continuation composite type.
-	CoreCont,
+	CoreCont, //!< TypeKind enumerator `CoreCont`.
 	//! A nominal type imported with `(type (sub <heaptype>))` (TYPE_IMPORTS.md).
 	//! Its representation is the abstract bound; it is never structurally
 	//! interned and never equals a definition with the same shape.
-	CoreImport,
-	ComponentPrimitive,
-	ComponentRecord,
-	ComponentVariant,
-	ComponentList,
-	ComponentFixedList,
-	ComponentTuple,
-	ComponentFlags,
-	ComponentEnum,
-	ComponentOption,
-	ComponentResult,
-	ComponentOwn,
-	ComponentBorrow,
-	ComponentStream,
-	ComponentFuture,
-	ComponentMap,
-	ComponentFunc,
-	ComponentComponent,
-	ComponentInstance,
-	ComponentResource
+	CoreImport, //!< TypeKind enumerator `CoreImport`.
+	ComponentPrimitive, //!< TypeKind enumerator `ComponentPrimitive`.
+	ComponentRecord, //!< TypeKind enumerator `ComponentRecord`.
+	ComponentVariant, //!< TypeKind enumerator `ComponentVariant`.
+	ComponentList, //!< TypeKind enumerator `ComponentList`.
+	ComponentFixedList, //!< TypeKind enumerator `ComponentFixedList`.
+	ComponentTuple, //!< TypeKind enumerator `ComponentTuple`.
+	ComponentFlags, //!< TypeKind enumerator `ComponentFlags`.
+	ComponentEnum, //!< TypeKind enumerator `ComponentEnum`.
+	ComponentOption, //!< TypeKind enumerator `ComponentOption`.
+	ComponentResult, //!< TypeKind enumerator `ComponentResult`.
+	ComponentOwn, //!< TypeKind enumerator `ComponentOwn`.
+	ComponentBorrow, //!< TypeKind enumerator `ComponentBorrow`.
+	ComponentStream, //!< TypeKind enumerator `ComponentStream`.
+	ComponentFuture, //!< TypeKind enumerator `ComponentFuture`.
+	ComponentMap, //!< TypeKind enumerator `ComponentMap`.
+	ComponentFunc, //!< TypeKind enumerator `ComponentFunc`.
+	ComponentComponent, //!< TypeKind enumerator `ComponentComponent`.
+	ComponentInstance, //!< TypeKind enumerator `ComponentInstance`.
+	ComponentResource, //!< TypeKind enumerator `ComponentResource`.
 };
 
 /** \brief Bit flags describing finality, async, mutability, nullability, and sharing. */
 enum TypeFlags : uint16_t {
-	TypeFlagFinal = 1u << 0,
-	TypeFlagAsync = 1u << 1,
-	TypeFlagMutable = 1u << 2,
-	TypeFlagNullable = 1u << 3,
-	TypeFlagAbstract = 1u << 4,
+	TypeFlagFinal = 1u << 0, //!< TypeFlags enumerator `TypeFlagFinal`.
+	TypeFlagAsync = 1u << 1, //!< TypeFlags enumerator `TypeFlagAsync`.
+	TypeFlagMutable = 1u << 2, //!< TypeFlags enumerator `TypeFlagMutable`.
+	TypeFlagNullable = 1u << 3, //!< TypeFlags enumerator `TypeFlagNullable`.
+	TypeFlagAbstract = 1u << 4, //!< TypeFlags enumerator `TypeFlagAbstract`.
 	//! Shared-everything threads: `sharecomptype` (SET-1).
-	TypeFlagShared = 1u << 5
+	TypeFlagShared = 1u << 5, //!< TypeFlags enumerator `TypeFlagShared`.
 };
 
 /** \brief Range into one of the TypeStore's compact payload pools. */
@@ -139,26 +142,30 @@ using StringId = uint32_t;
 
 /** \brief Primitive value-type codes used by the Component Model type store. */
 enum class PrimitiveValueType : uint8_t {
-	Bool = 0x7F,
-	S8 = 0x7E,
-	U8 = 0x7D,
-	S16 = 0x7C,
-	U16 = 0x7B,
-	S32 = 0x7A,
-	U32 = 0x79,
-	S64 = 0x78,
-	U64 = 0x77,
-	F32 = 0x76,
-	F64 = 0x75,
-	Char = 0x74,
-	String = 0x73,
-	ErrorContext = 0x64,
-	Invalid = 0xFF
+	Bool = 0x7F, //!< PrimitiveValueType enumerator `Bool`.
+	S8 = 0x7E, //!< PrimitiveValueType enumerator `S8`.
+	U8 = 0x7D, //!< PrimitiveValueType enumerator `U8`.
+	S16 = 0x7C, //!< PrimitiveValueType enumerator `S16`.
+	U16 = 0x7B, //!< PrimitiveValueType enumerator `U16`.
+	S32 = 0x7A, //!< PrimitiveValueType enumerator `S32`.
+	U32 = 0x79, //!< PrimitiveValueType enumerator `U32`.
+	S64 = 0x78, //!< PrimitiveValueType enumerator `S64`.
+	U64 = 0x77, //!< PrimitiveValueType enumerator `U64`.
+	F32 = 0x76, //!< PrimitiveValueType enumerator `F32`.
+	F64 = 0x75, //!< PrimitiveValueType enumerator `F64`.
+	Char = 0x74, //!< PrimitiveValueType enumerator `Char`.
+	String = 0x73, //!< PrimitiveValueType enumerator `String`.
+	ErrorContext = 0x64, //!< PrimitiveValueType enumerator `ErrorContext`.
+	Invalid = 0xFF, //!< PrimitiveValueType enumerator `Invalid`.
 };
 
 /** \brief Component value type as parser-local index, primitive, or canonical TypeId. */
 struct ComponentValueType {
-	enum class Kind : uint8_t { TypeIndex, Primitive, TypeId };
+enum class Kind : uint8_t {
+		TypeIndex, //!< Enum member `TypeIndex`.
+		Primitive, //!< Enum member `Primitive`.
+		TypeId //!< Enum member `TypeId`.
+};
 	Kind kind = Kind::Primitive;
 	PrimitiveValueType primitive = PrimitiveValueType::Invalid;
 	//! TypeIndex for parser syntax, TypeId.value for canonical records.
@@ -175,11 +182,20 @@ struct ComponentField {
 //! The ABI signature is derived metadata: it is keyed by a canonical TypeId plus
 //! the canon options that affect lowering, and never enters the type intern key.
 /** \brief Core scalar type used by the flattened Canonical ABI signature. */
-enum class AbiCoreType : uint8_t { I32, I64, F32, F64 };
+enum class AbiCoreType : uint8_t {
+	I32, //!< Enum member `I32`.
+	I64, //!< Enum member `I64`.
+	F32, //!< Enum member `F32`.
+	F64 //!< Enum member `F64`.
+};
 
 /** \brief Canonical ABI choices that affect flattening and memory layout. */
 struct CanonicalAbiOptions {
-	enum class StringEncoding : uint8_t { Utf8, Utf16, Latin1Utf16 };
+enum class StringEncoding : uint8_t {
+		Utf8, //!< Enum member `Utf8`.
+		Utf16, //!< Enum member `Utf16`.
+		Latin1Utf16 //!< Enum member `Latin1Utf16`.
+};
 	static constexpr uint32_t kNoIndex = ~uint32_t{0};
 
 	StringEncoding stringEncoding = StringEncoding::Utf8;
