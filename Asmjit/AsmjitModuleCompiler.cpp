@@ -180,6 +180,42 @@ protected:
 		values.pop_back();
 	}
 
+	void dispatchNop() override {}
+
+	void dispatchI32Eqz() override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit i32.eqz operand stack underflow");
+		auto value = values.back();
+		values.pop_back();
+		auto result = compiler.new_gp32("eqz");
+		checkError(compiler.xor_(result, result), "AsmJit i32.eqz result initialisation failed");
+		checkError(compiler.test(value, value), "AsmJit i32.eqz test emission failed");
+		checkError(compiler.setcc(result.r8(), asmjit::x86::CondCode::kE),
+				"AsmJit i32.eqz condition emission failed");
+		values.push_back(result);
+	}
+
+	void dispatchI32Eq() override { emitCompare(asmjit::x86::CondCode::kE); }
+	void dispatchI32Ne() override { emitCompare(asmjit::x86::CondCode::kNE); }
+	void dispatchI32LtS() override { emitCompare(asmjit::x86::CondCode::kL); }
+	void dispatchI32LtU() override { emitCompare(asmjit::x86::CondCode::kB); }
+	void dispatchI32GtS() override { emitCompare(asmjit::x86::CondCode::kG); }
+	void dispatchI32GtU() override { emitCompare(asmjit::x86::CondCode::kA); }
+	void dispatchI32LeS() override { emitCompare(asmjit::x86::CondCode::kLE); }
+	void dispatchI32LeU() override { emitCompare(asmjit::x86::CondCode::kBE); }
+	void dispatchI32GeS() override { emitCompare(asmjit::x86::CondCode::kGE); }
+	void dispatchI32GeU() override { emitCompare(asmjit::x86::CondCode::kAE); }
+
+	void dispatchI32And() override { emitBinary(BinaryOp::And); }
+	void dispatchI32Or() override { emitBinary(BinaryOp::Or); }
+	void dispatchI32Xor() override { emitBinary(BinaryOp::Xor); }
+	void dispatchI32Shl() override { emitShift(ShiftOp::Left); }
+	void dispatchI32ShrS() override { emitShift(ShiftOp::ArithmeticRight); }
+	void dispatchI32ShrU() override { emitShift(ShiftOp::LogicalRight); }
+	void dispatchI32Rotl() override { emitShift(ShiftOp::RotateLeft); }
+	void dispatchI32Rotr() override { emitShift(ShiftOp::RotateRight); }
+
 	void dispatchI32Add() override { emitBinary(BinaryOp::Add); }
 	void dispatchI32Sub() override { emitBinary(BinaryOp::Sub); }
 	void dispatchI32Mul() override { emitBinary(BinaryOp::Mul); }
@@ -196,7 +232,8 @@ protected:
 	}
 
 private:
-	enum class BinaryOp { Add, Sub, Mul };
+	enum class BinaryOp { Add, Sub, Mul, And, Or, Xor };
+	enum class ShiftOp { Left, ArithmeticRight, LogicalRight, RotateLeft, RotateRight };
 
 	void emitBinary(BinaryOp operation)
 	{
@@ -216,8 +253,58 @@ private:
 		case BinaryOp::Mul:
 			checkError(compiler.imul(lhs, rhs), "AsmJit i32.mul emission failed");
 			break;
+		case BinaryOp::And:
+			checkError(compiler.and_(lhs, rhs), "AsmJit i32.and emission failed");
+			break;
+		case BinaryOp::Or:
+			checkError(compiler.or_(lhs, rhs), "AsmJit i32.or emission failed");
+			break;
+		case BinaryOp::Xor:
+			checkError(compiler.xor_(lhs, rhs), "AsmJit i32.xor emission failed");
+			break;
 		}
 		values.push_back(lhs);
+	}
+
+	void emitCompare(asmjit::x86::CondCode condition)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit i32 comparison operand stack underflow");
+		auto rhs = values.back(); values.pop_back();
+		auto lhs = values.back(); values.pop_back();
+		auto result = compiler.new_gp32("comparison");
+		checkError(compiler.xor_(result, result), "AsmJit comparison result initialisation failed");
+		checkError(compiler.cmp(lhs, rhs), "AsmJit comparison emission failed");
+		checkError(compiler.setcc(result.r8(), condition), "AsmJit comparison condition emission failed");
+		values.push_back(result);
+	}
+
+	void emitShift(ShiftOp operation)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit i32 shift operand stack underflow");
+		auto count = values.back(); values.pop_back();
+		auto value = values.back(); values.pop_back();
+		// x86 variable shifts/rotates take their count from CL. The low five
+		// bits are used by WebAssembly; masking explicitly also documents the
+		// semantic rule for the generated instruction sequence.
+		auto maskedCount = compiler.new_gp32("shiftCount");
+		checkError(compiler.mov(maskedCount, count), "AsmJit shift-count copy failed");
+		checkError(compiler.and_(maskedCount, 31), "AsmJit shift-count mask failed");
+		checkError(compiler.mov(asmjit::x86::ecx, maskedCount), "AsmJit shift-count setup failed");
+		switch (operation) {
+		case ShiftOp::Left:
+			checkError(compiler.shl(value, asmjit::x86::cl), "AsmJit i32.shl emission failed"); break;
+		case ShiftOp::ArithmeticRight:
+			checkError(compiler.sar(value, asmjit::x86::cl), "AsmJit i32.shr_s emission failed"); break;
+		case ShiftOp::LogicalRight:
+			checkError(compiler.shr(value, asmjit::x86::cl), "AsmJit i32.shr_u emission failed"); break;
+		case ShiftOp::RotateLeft:
+			checkError(compiler.rol(value, asmjit::x86::cl), "AsmJit i32.rotl emission failed"); break;
+		case ShiftOp::RotateRight:
+			checkError(compiler.ror(value, asmjit::x86::cl), "AsmJit i32.rotr emission failed"); break;
+		}
+		values.push_back(value);
 	}
 
 	asmjit::x86::Compiler& compiler;
