@@ -9,10 +9,6 @@ asmjit::TypeId TypeTranslator::translateValueType(const WASM::ValueType& type)
 {
 	using WASM::ValueTypeCode;
 	switch (type.opcode) {
-	case ValueTypeCode::I8:
-		return asmjit::TypeId::kInt8;
-	case ValueTypeCode::I16:
-		return asmjit::TypeId::kInt16;
 	case ValueTypeCode::I32:
 		return asmjit::TypeId::kInt32;
 	case ValueTypeCode::I64:
@@ -47,6 +43,10 @@ asmjit::TypeId TypeTranslator::translateValueType(const WASM::ValueType& type)
 	case ValueTypeCode::RefNull:
 	case ValueTypeCode::Ref:
 		return asmjit::TypeId::kUIntPtr;
+
+	case ValueTypeCode::I8:
+	case ValueTypeCode::I16:
+		throw std::runtime_error("AsmJit value translation: i8/i16 are packed storage types, not value types");
 	default:
 		throw std::runtime_error("AsmJit ABI translation: unsupported Wasm value type "
 				+ std::to_string(static_cast<int>(type.opcode)));
