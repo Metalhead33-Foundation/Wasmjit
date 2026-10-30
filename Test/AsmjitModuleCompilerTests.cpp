@@ -192,6 +192,9 @@ TEST_CASE("AsmJit compiles i64 integer functions", "[asmjit][module][i64]")
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_br_if_result"), 0) == 7);
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_typed_block_result"),
 			INT64_C(0x100000000)) == INT64_C(0x200000000));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_br_table"), 0) == 43);
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_br_table"), 1) == 42);
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_br_table"), 9) == 42);
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_get_const"))
 			== INT64_C(0x1122334455667788));
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_local"),
