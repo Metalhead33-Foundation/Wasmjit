@@ -82,7 +82,7 @@ enum class ComponentSort : uint8_t {
 	Value = 0x02, //!< Component value
 	Type = 0x03, //!< Component type
 	Component = 0x04, //!< Nested component
-	Instance = 0x05 //!< Component instance, //!< ComponentSort enumerator `Instance`.
+	Instance = 0x05 //!< Component instance index space.
 };
 
 //! A component-level sort/index pair; `core` carries the inner core sort when the
