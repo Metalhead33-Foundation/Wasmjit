@@ -35,6 +35,9 @@ TEST_CASE("AsmJit ModuleInstantiator compiles supported i32 functions", "[asmjit
 	REQUIRE(local.has_value());
 
 	CHECK(WASM::callCallable<std::int32_t>(*add, 19, 23) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("get_global")) == 7);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("set_global"), 42) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("get_global")) == 42);
 	CHECK(WASM::callCallable<std::int32_t>(*sub, 50, 8) == 42);
 	CHECK(WASM::callCallable<std::int32_t>(*mul, 6, 7) == 42);
 	CHECK(WASM::callCallable<std::int32_t>(*local, 14) == 42);
