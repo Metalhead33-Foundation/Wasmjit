@@ -19,7 +19,8 @@ namespace AsmJitBackend {
  * The engine's native function ABI prepends VMContext* to every function.
  * Multi-value results use a trailing void* result-buffer argument and a void
  * return, matching docs/proposals/MULTI_VALUE.md MV5. References are opaque
- * pointers at this ABI boundary. V128 uses AsmJit's 128-bit vector TypeId.
+ * pointers at this ABI boundary. V128 maps to AsmJit's 128-bit vector TypeId,
+ * allowing FuncDetail to apply the host's native by-value vector convention.
  *
  * Packed i8/i16 are supported as storage types. They retain their 8-/16-bit
  * representation in storage; generated arithmetic must explicitly extend
