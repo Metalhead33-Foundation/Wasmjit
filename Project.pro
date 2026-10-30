@@ -11,10 +11,9 @@ SUBDIRS = Elvavena Euphemy WasmBase WasmStub LibJit Asmjit Sljit ExampleBackend 
 WasmBase.depends = Elvavena Euphemy
 WasmStub.depends = WasmBase
 LibJit.depends   = WasmBase
-# Planned backends: the directories are reserved and kept in the build so the
-# seam stays exercised by a real subproject, but they emit no code yet. Each has
-# a README pointing at docs/BACKEND_WORK_ORDER.md, and neither installs anything
-# (an empty lib<name>.so must not reach the install tree).
+# AsmJit currently builds native code-generation probes but is not a Wasm
+# backend and is not installed. SLJIT remains an empty placeholder; neither
+# target is registered as an executing backend.
 Asmjit.depends   = WasmBase
 Sljit.depends    = WasmBase
 # A loadable example backend, built in its own directory so `Test` proves the
