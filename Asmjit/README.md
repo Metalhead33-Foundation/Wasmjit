@@ -1,27 +1,51 @@
-# `Asmjit/` — planned backend, no code yet
+# `Asmjit/` — provisional AsmJit integration
 
-This directory is **reserved** for an AsmJit-backed code generator. It is not a
-mistake and it is not dead: an AsmJit backend is a planned SIMD-performance lever
-(MMX/SSE…AVX-512 coverage and a vector-aware register allocator), and the
-subproject stays in `Project.pro` so the seam keeps a real placeholder next to the
-executing backend.
+This directory now contains the first executable-code-generation foundation for
+an eventual AsmJit backend. It is deliberately **not yet a WebAssembly backend**:
+it does not implement `ModuleInstantiator`, does not register a backend name,
+and must not be selected to execute Wasm modules.
 
-What it is **not**: a working backend. `Asmjit.pro` declares no sources, so the
-build produces an empty `libAsmjit.so` that is never installed and never
-selectable by name. Do not ship it, and do not treat its presence as a claim that
-anything executes.
+## What exists
 
-## When the work starts
+- `AsmjitContext` owns an `asmjit::JitRuntime` and the executable allocations
+  created through it.
+- `compileReturn42()` emits a tiny x86/x64 function, installs it into executable
+  memory, and returns its entry point. The context releases all such entry points
+  at destruction.
+- `Test/AsmjitBackendTests.cpp` checks that emitted machine code executes and
+  returns the expected value.
+- The dependency is confined to this subproject. `WasmBase/` remains
+  backend-agnostic and does not include or link AsmJit.
 
-1. Read [`docs/BACKEND_WORK_ORDER.md`](../docs/BACKEND_WORK_ORDER.md) — the
-   checklist of what a backend must provide — and [`docs/LAYERING.md`](../docs/LAYERING.md)
-   §4, the contract it must not violate.
-2. Copy `LibJit/LibJit.pro` as the starting point (it links the shared core,
-   records `NEEDED libWasmBase.so.1` and refuses a static configuration).
-3. Implement `WASM::ModuleInstantiator`'s four hooks and a
-   `WASM::BackendSession`; register a name with `WASMJIT_REGISTER_BACKEND`.
-4. Add sources to this `.pro`, add the name to the registry, and follow §8 of the
-   work order (the definition of done).
+This is an integration probe: it verifies that the project can compile against
+AsmJit, emit host machine code, allocate executable memory, call it, and release
+it. It is not evidence of Wasm instruction coverage, ABI compatibility, trap
+handling, GC integration, or SIMD lowering.
 
-Nothing in `WasmBase/` has to change to make room for it. That is the point of
-the seam.
+## Build dependency
+
+The qmake target consumes the `asmjit` pkg-config package:
+
+```bash
+pkg-config --modversion asmjit
+```
+
+Install a current AsmJit development package or build/install AsmJit from its
+upstream repository so that `asmjit.pc` is visible through `PKG_CONFIG_PATH`.
+The upstream project recommends consuming its current source or package-manager
+build rather than relying on old distribution snapshots.
+
+## Next implementation stages
+
+1. Add an AsmJit-owned module compiler and translate the core type/aggregate ABI.
+2. Implement function declaration and a minimal scalar instruction subset.
+3. Add a session façade, invocation marshalling, trap propagation, and backend
+   selection in the test harness.
+4. Expand instruction coverage incrementally, with tests for control flow,
+   calls, memory, references, exceptions, continuations, and SIMD.
+5. Meet every applicable item in
+   [`docs/BACKEND_WORK_ORDER.md`](../docs/BACKEND_WORK_ORDER.md) before calling
+   the backend complete.
+
+The existing GNU LibJIT backend remains the only executing WebAssembly backend.
+`Sljit/` is unchanged.
