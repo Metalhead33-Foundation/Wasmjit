@@ -127,20 +127,20 @@ private:
 	mutable std::recursive_mutex mutex_;
 
 	struct StringEntry {
-		StringObject object;
-		uint32_t refcount = 0;
-		uint64_t bytes = 0;
+		StringObject object; //!< Field `object` of StringEntry.
+		uint32_t refcount = 0; //!< Field `refcount` of StringEntry.
+		uint64_t bytes = 0; //!< Field `bytes` of StringEntry.
 	};
 	struct ViewEntry {
-		StringViewObject object;
-		uint32_t refcount = 0;
-		uint64_t bytes = 0;
+		StringViewObject object; //!< Field `object` of ViewEntry.
+		uint32_t refcount = 0; //!< Field `refcount` of ViewEntry.
+		uint64_t bytes = 0; //!< Field `bytes` of ViewEntry.
 	};
 	/** \\brief Internal lookup entry associating a stable iterator handle with its object. */
 struct IteratorEntry {
 		StringIteratorObject object;
 		uint32_t refcount = 0;
-		uint64_t bytes = 0;
+		uint64_t bytes = 0; //!< Field `bytes` of IteratorEntry.
 	};
 
 /**
@@ -156,12 +156,12 @@ struct IteratorEntry {
  */
 	bool releaseIterator(const StringIteratorObject* iterator);
 
-	std::unordered_map<const StringObject*, std::unique_ptr<StringEntry>> objects_;
-	std::unordered_map<const StringViewObject*, std::unique_ptr<ViewEntry>> views_;
-	std::unordered_map<const StringIteratorObject*, std::unique_ptr<IteratorEntry>> iterators_;
+	std::unordered_map<const StringObject*, std::unique_ptr<StringEntry>> objects_; //!< Field `objects_` of type.
+	std::unordered_map<const StringViewObject*, std::unique_ptr<ViewEntry>> views_; //!< Field `views_` of type.
+	std::unordered_map<const StringIteratorObject*, std::unique_ptr<IteratorEntry>> iterators_; //!< Field `iterators_` of type.
 
 private:
-	Store& owner_;
+	Store& owner_; //!< Field `owner_` of type.
 };
 
 //! \par Codecs
