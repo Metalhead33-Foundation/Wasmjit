@@ -474,7 +474,7 @@ enum class Kind : uint8_t {
 	Kind kind = Kind::Import;
 	std::variant<std::monostate, std::unique_ptr<ImportDecl>,
 			std::unique_ptr<CoreTypeDef>, std::unique_ptr<ComponentTypeDef>,
-			std::unique_ptr<Alias>, std::unique_ptr<ExportDecl>> payload;
+			std::unique_ptr<Alias>, std::unique_ptr<ExportDecl>> payload; //!< Field `payload` of ComponentDecl.
 
 /**
  * \brief Performs the import operation.
@@ -514,7 +514,7 @@ enum class Kind : uint8_t {
 	Kind kind = Kind::CoreType;
 	std::variant<std::monostate, std::unique_ptr<CoreTypeDef>,
 			std::unique_ptr<ComponentTypeDef>, std::unique_ptr<Alias>,
-			std::unique_ptr<ExportDecl>> payload;
+			std::unique_ptr<ExportDecl>> payload; //!< Field `payload` of InstanceDecl.
 
 /**
  * \brief Performs the coreType operation.
@@ -543,7 +543,7 @@ struct ComponentTypeDef {
 	enum class Kind : uint8_t {
 		DefinedValue, Func, Component, Instance, Resource
 	};
-	Kind kind = Kind::DefinedValue;
+	Kind kind = Kind::DefinedValue; //!< Field `kind` of ComponentTypeDef.
 	//! Defined-value, function and resource payloads live in the shared store.
 	//! Component/instance declarations are the remaining inline payloads for
 	//! this pass; they keep their order because declaration order is scope.
@@ -582,7 +582,7 @@ struct ComponentTypeDef {
 struct Start {
 	uint32_t funcIndex = 0;
 	std::vector<uint32_t> args;
-	uint32_t resultCount = 0;
+	uint32_t resultCount = 0; //!< Field `resultCount` of Start.
 };
 
 /** \brief Component value declaration with its encoded initializer payload. */
