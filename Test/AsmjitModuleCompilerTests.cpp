@@ -15,6 +15,11 @@ std::int32_t asmjitHostDouble(WASM::VMContext*, std::int32_t value)
 {
 	return value * 2;
 }
+
+std::int64_t asmjitHostDouble64(WASM::VMContext*, std::int64_t value)
+{
+	return value * 2;
+}
 }
 
 TEST_CASE("AsmJit ModuleInstantiator compiles supported i32 functions", "[asmjit][module]")
@@ -214,6 +219,34 @@ TEST_CASE("AsmJit compiles i64 integer functions", "[asmjit][module][i64]")
 	CHECK_THROWS(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_div_s"), INT64_MIN, -1));
 	CHECK_THROWS(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_div_u"), 1, 0));
 	CHECK_THROWS(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_rem_s"), 1, 0));
+}
+
+TEST_CASE("AsmJit i64 calls preserve native and Wasm import contexts", "[asmjit][module][i64][imports]")
+{
+	WASM::RegistryImportResolver imports;
+	AsmJitBackend::Context context;
+	AsmJitBackend::ModuleCompiler compiler(context);
+
+	WASM::Callable nativeDouble64 {
+		.fnPtr = reinterpret_cast<void*>(&asmjitHostDouble64),
+		.context = nullptr,
+		.localTypeIdx = 0
+	};
+	imports.registerFunction("host", "double64", nativeDouble64);
+	WASM::Module nativeImporter = loadTestModule("asmjit_i64_native_import");
+	auto nativeInstance = compiler.instantiate(nativeImporter, imports);
+	CHECK(WASM::callCallable<std::int64_t>(
+			*nativeInstance->exportedFunction("call_host64"), INT64_C(0x100000000))
+			== INT64_C(0x200000000));
+
+	WASM::Module providerModule = loadTestModule("asmjit_i64_provider");
+	WASM::Module importerModule = loadTestModule("asmjit_i64_wasm_import");
+	auto provider = compiler.instantiate(providerModule, imports);
+	provider->registerExports(imports, "provider");
+	auto importer = compiler.instantiate(importerModule, imports);
+	CHECK(WASM::callCallable<std::int64_t>(
+			*importer->exportedFunction("call_provider64"), INT64_C(0x100000000))
+			== INT64_C(0x200000000));
 }
 
 TEST_CASE("AsmJit rolls back code allocations when a later function is unsupported", "[asmjit][module][safety]")
