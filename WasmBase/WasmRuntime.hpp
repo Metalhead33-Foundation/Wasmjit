@@ -208,41 +208,113 @@ Ret Runtime::callExport(ModuleInstance& instance, std::string_view name, Args&&.
 		throw std::runtime_error("the instance was not created by this runtime");
 	const std::optional<Callable> callable = instance.exportedFunction(name);
 	if (!callable)
+/**
+ * \brief Performs the runtime_error operation.
+ * \return The value or status produced by this operation.
+ */
 		throw std::runtime_error("no exported function named '" + std::string(name) + "'");
 	if (callable->fnPtr == nullptr)
+/**
+ * \brief Performs the runtime_error operation.
+ * \return The value or status produced by this operation.
+ */
 		throw std::runtime_error("exported function '" + std::string(name)
+/**
+ * \brief Performs the body operation.
+ * \return The value or status produced by this operation.
+ */
 				+ "' has no compiled body (this backend does not execute modules)");
 	if (!instance.enterCall(config_.concurrency == ConcurrencyModel::Agents))
+/**
+ * \brief Performs the runtime_error operation.
+ * \return The value or status produced by this operation.
+ */
 		throw std::runtime_error("the instance is already executing a call; concurrent"
+/**
+ * \brief Performs the supported operation.
+ * \param Single Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 				" execution of one instance is not supported (ConcurrencyModel::Single,"
 				" docs/MULTI_AGENT_FEASIBILITY.md MF-2)");
 	struct CallGuard {
 		ModuleInstance& instance;
+/**
+ * \brief Performs the CallGuard operation.
+ * \return The value or status produced by this operation.
+ */
 		~CallGuard() { instance.leaveCall(); }
 	} guard{ instance };
 	return WASM::callCallable<Ret>(*callable, std::forward<Args>(args)...);
 }
 
 template<typename... Args>
+/**
+ * \brief Performs the callExportWithResults operation.
+ * \param instance Input value or output destination for this operation.
+ * \param name Input value or output destination for this operation.
+ * \param results Input value or output destination for this operation.
+ * \param args Input value or output destination for this operation.
+ */
 void Runtime::callExportWithResults(ModuleInstance& instance, std::string_view name,
 		void* results, Args&&... args)
 {
 	if (!owns(instance))
+/**
+ * \brief Performs the runtime_error operation.
+ * \return The value or status produced by this operation.
+ */
 		throw std::runtime_error("the instance was not created by this runtime");
+/**
+ * \brief Performs the exportedFunction operation.
+ * \param name Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	const std::optional<Callable> callable = instance.exportedFunction(name);
 	if (!callable)
+/**
+ * \brief Performs the runtime_error operation.
+ * \return The value or status produced by this operation.
+ */
 		throw std::runtime_error("no exported function named '" + std::string(name) + "'");
 	if (callable->fnPtr == nullptr)
+/**
+ * \brief Performs the runtime_error operation.
+ * \return The value or status produced by this operation.
+ */
 		throw std::runtime_error("exported function '" + std::string(name)
+/**
+ * \brief Performs the body operation.
+ * \return The value or status produced by this operation.
+ */
 				+ "' has no compiled body (this backend does not execute modules)");
 	if (!instance.enterCall(config_.concurrency == ConcurrencyModel::Agents))
+/**
+ * \brief Performs the runtime_error operation.
+ * \return The value or status produced by this operation.
+ */
 		throw std::runtime_error("the instance is already executing a call; concurrent"
+/**
+ * \brief Performs the supported operation.
+ * \param Single Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 				" execution of one instance is not supported (ConcurrencyModel::Single,"
 				" docs/MULTI_AGENT_FEASIBILITY.md MF-2)");
 	struct CallGuard {
 		ModuleInstance& instance;
+/**
+ * \brief Performs the CallGuard operation.
+ * \return The value or status produced by this operation.
+ */
 		~CallGuard() { instance.leaveCall(); }
 	} guard{ instance };
+/**
+ * \brief Performs the callCallableWithResults operation.
+ * \param callable Input value or output destination for this operation.
+ * \param results Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	WASM::callCallableWithResults(*callable, results, std::forward<Args>(args)...);
 }
 
