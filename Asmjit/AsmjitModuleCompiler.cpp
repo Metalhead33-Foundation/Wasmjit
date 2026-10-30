@@ -71,6 +71,34 @@ public:
 				"AsmJit failed to emit the guest stack guard call");
 		checkCall->set_arg(0, vmContext);
 
+		// wasm_stack_check reports into the current execution state's pending
+		// slot and returns. Generated frames must observe that slot and return
+		// before executing guest instructions; C++ exceptions cannot unwind
+		// through this frame (docs/SAFETY.md §2.4).
+		asmjit::FuncSignature trapSlotSignature(asmjit::CallConvId::kCDecl);
+		trapSlotSignature.set_ret(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* trapSlotCall = nullptr;
+		checkError(compiler.invoke(&trapSlotCall,
+				reinterpret_cast<uint64_t>(&WASM::wasm_trap_slot), trapSlotSignature),
+				"AsmJit failed to emit pending-trap slot lookup");
+		asmjit::x86::Gp trapSlot = compiler.new_gp_ptr("trapSlot");
+		trapSlotCall->set_ret(0, trapSlot);
+		asmjit::x86::Gp pending = compiler.new_gp32("pendingTrap");
+		checkError(compiler.mov(pending, asmjit::x86::dword_ptr(trapSlot,
+				static_cast<int32_t>(offsetof(WASM::TrapSlot, pending)))),
+				"AsmJit failed to load pending-trap state");
+		asmjit::Label bodyLabel = compiler.new_label();
+		checkError(compiler.test(pending, pending), "AsmJit pending-trap test emission failed");
+		checkError(compiler.jz(bodyLabel), "AsmJit pending-trap branch emission failed");
+		if (type.results.empty()) {
+			checkError(compiler.ret(), "AsmJit trap-path void return emission failed");
+		} else {
+			asmjit::x86::Gp zero = compiler.new_gp32("trapResult");
+			checkError(compiler.xor_(zero, zero), "AsmJit trap-result zeroing failed");
+			checkError(compiler.ret(zero), "AsmJit trap-path result return emission failed");
+		}
+		checkError(compiler.bind(bodyLabel), "AsmJit body label binding failed");
+
 		for (uint32_t i = 0; i < stack.parameterCount; ++i) {
 			asmjit::x86::Gp parameter = compiler.new_gp32("parameter");
 			function.set_arg(i + 1, parameter);
