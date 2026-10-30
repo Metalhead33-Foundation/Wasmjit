@@ -59,7 +59,7 @@ public:
 
 private:
 	asmjit::JitRuntime runtime;
-	std::vector<void*> allocations;
+	std::vector<int (*)()> allocations;
 };
 
 } // namespace AsmJitBackend
