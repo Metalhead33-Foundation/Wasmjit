@@ -24,6 +24,8 @@ Context::Context() = default;
 
 Context::~Context()
 {
+	for (auto allocation : moduleAllocations)
+		runtime.release(allocation);
 	for (auto allocation : packedI16Allocations)
 		runtime.release(allocation);
 	for (auto allocation : packedI8Allocations)
@@ -41,6 +43,24 @@ Context::~Context()
 const asmjit::Environment& Context::environment() const noexcept
 {
 	return runtime.environment();
+}
+
+const asmjit::CpuFeatures& Context::cpuFeatures() const noexcept
+{
+	return runtime.cpu_features();
+}
+
+void* Context::install(const asmjit::CodeHolder& code)
+{
+	void* entry = nullptr;
+	checkError(runtime.add(&entry, &code), "AsmJit executable-memory allocation failed");
+	try {
+		moduleAllocations.push_back(entry);
+	} catch (...) {
+		runtime.release(entry);
+		throw;
+	}
+	return entry;
 }
 
 Context::Return42Entry Context::compileReturn42()
