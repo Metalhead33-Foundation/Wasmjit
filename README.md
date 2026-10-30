@@ -271,7 +271,7 @@ through qmake:
 |---|---|
 | GNU LibJIT (`LibJit/`) | **The full-featured execution backend** — loads, validates, compiles and runs modules, including SIMD via the shared helper layer |
 | SlJIT (`Sljit/`) | **Planned**, not started: builds an empty library, installs nothing; the [`work order`](docs/BACKEND_WORK_ORDER.md) says what it must provide |
-| AsmJit (`Asmjit/`) | **Experimental execution backend** — compiles an i32 subset (arithmetic, comparisons, bitwise operations, void structured control flow, direct calls, sign extension, and checked memory32 loads/stores); native SIMD/ABI probes also exist. Not yet a full replacement for LibJIT |
+| AsmJit (`Asmjit/`) | **Experimental execution backend** — compiles an i32 subset (arithmetic, comparisons, bitwise operations, void structured control flow, direct/indirect calls, i32 globals, sign extension, and checked memory32 loads/stores plus size/grow); native SIMD/ABI probes also exist. Not yet a full replacement for LibJIT |
 
 There is no interpreter backend. `WasmStub/` is a non-compiling pretty-printer;
 GNU LibJIT already provides a compile/interpret configuration and is the only
