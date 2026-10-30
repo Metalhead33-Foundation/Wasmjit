@@ -28,18 +28,18 @@ namespace WASM {
 //! them by section. This list restores the order in which index spaces grow.
 /** \brief Kind of ordered component definition that contributes to an index space. */
 enum class ComponentDefinitionKind : uint8_t {
-	CoreModule,
-	CoreInstance,
-	CoreType,
-	Component,
-	Instance,
-	Alias,
-	Type,
-	Canon,
-	Start,
-	Import,
-	Export,
-	Value
+	CoreModule, //!< ComponentDefinitionKind enumerator `CoreModule`.
+	CoreInstance, //!< ComponentDefinitionKind enumerator `CoreInstance`.
+	CoreType, //!< ComponentDefinitionKind enumerator `CoreType`.
+	Component, //!< ComponentDefinitionKind enumerator `Component`.
+	Instance, //!< ComponentDefinitionKind enumerator `Instance`.
+	Alias, //!< ComponentDefinitionKind enumerator `Alias`.
+	Type, //!< ComponentDefinitionKind enumerator `Type`.
+	Canon, //!< ComponentDefinitionKind enumerator `Canon`.
+	Start, //!< ComponentDefinitionKind enumerator `Start`.
+	Import, //!< ComponentDefinitionKind enumerator `Import`.
+	Export, //!< ComponentDefinitionKind enumerator `Export`.
+	Value, //!< ComponentDefinitionKind enumerator `Value`.
 };
 
 //! One entry of a component's ordered definition list: which kind of definition
@@ -55,14 +55,14 @@ struct ComponentDefinition {
 //! \brief Core sorts and indices
 /** \brief Core entity index spaces addressable from a component. */
 enum class CoreSort : uint8_t {
-	Func = 0x00,
-	Table = 0x01,
-	Memory = 0x02,
-	Global = 0x03,
-	Tag = 0x04,
-	Type = 0x10,
-	Module = 0x11,
-	Instance = 0x12
+	Func = 0x00, //!< CoreSort enumerator `Func`.
+	Table = 0x01, //!< CoreSort enumerator `Table`.
+	Memory = 0x02, //!< CoreSort enumerator `Memory`.
+	Global = 0x03, //!< CoreSort enumerator `Global`.
+	Tag = 0x04, //!< CoreSort enumerator `Tag`.
+	Type = 0x10, //!< CoreSort enumerator `Type`.
+	Module = 0x11, //!< CoreSort enumerator `Module`.
+	Instance = 0x12, //!< CoreSort enumerator `Instance`.
 };
 
 //! A `core:sort`/index pair naming an entity in a core index space.
@@ -82,7 +82,7 @@ enum class ComponentSort : uint8_t {
 	Value = 0x02, //!< Component value
 	Type = 0x03, //!< Component type
 	Component = 0x04, //!< Nested component
-	Instance = 0x05 //!< Component instance
+	Instance = 0x05 //!< Component instance, //!< ComponentSort enumerator `Instance`.
 };
 
 //! A component-level sort/index pair; `core` carries the inner core sort when the
@@ -464,7 +464,13 @@ struct InstanceDecl;
 
 /** \brief Tagged declaration in a component type, with owned variant payload. */
 struct ComponentDecl {
-	enum class Kind : uint8_t { Import, CoreType, Type, Alias, Export };
+enum class Kind : uint8_t {
+		Import, //!< Enum member `Import`.
+		CoreType, //!< Enum member `CoreType`.
+		Type, //!< Enum member `Type`.
+		Alias, //!< Enum member `Alias`.
+		Export //!< Enum member `Export`.
+};
 	Kind kind = Kind::Import;
 	std::variant<std::monostate, std::unique_ptr<ImportDecl>,
 			std::unique_ptr<CoreTypeDef>, std::unique_ptr<ComponentTypeDef>,
@@ -499,7 +505,12 @@ struct ComponentDecl {
 
 /** \brief Tagged declaration in an instance type, with owned variant payload. */
 struct InstanceDecl {
-	enum class Kind : uint8_t { CoreType, Type, Alias, Export };
+enum class Kind : uint8_t {
+		CoreType, //!< Enum member `CoreType`.
+		Type, //!< Enum member `Type`.
+		Alias, //!< Enum member `Alias`.
+		Export //!< Enum member `Export`.
+};
 	Kind kind = Kind::CoreType;
 	std::variant<std::monostate, std::unique_ptr<CoreTypeDef>,
 			std::unique_ptr<ComponentTypeDef>, std::unique_ptr<Alias>,
