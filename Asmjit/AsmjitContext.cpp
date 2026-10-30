@@ -13,7 +13,7 @@ Context::Context() = default;
 
 Context::~Context()
 {
-	for (void* allocation : allocations)
+	for (auto allocation : allocations)
 		runtime.release(allocation);
 }
 
@@ -36,14 +36,14 @@ int (*Context::compileReturn42())()
 		error = assembler.ret();
 	if (error != asmjit::Error::kOk)
 		throw std::runtime_error("AsmJit instruction emission failed: "
-				+ std::string(asmjit::DebugUtils::errorAsString(error)));
+				+ std::to_string(static_cast<unsigned>(error)));
 
 	using Entry = int (*)();
 	Entry entry = nullptr;
 	error = runtime.add(&entry, &code);
 	if (error != asmjit::Error::kOk)
 		throw std::runtime_error("AsmJit executable-memory allocation failed: "
-				+ std::string(asmjit::DebugUtils::errorAsString(error)));
+				+ std::to_string(static_cast<unsigned>(error)));
 
 	allocations.push_back(entry);
 	return entry;
