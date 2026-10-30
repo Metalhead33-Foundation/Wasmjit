@@ -78,12 +78,6 @@ constexpr size_t kExternBoxBytes = kTypeHeaderBytes + sizeof(void*);
 
 //! \par Storage layout helpers, shared so the runtime and the backend agree (H1)
 
-/**
- * \brief Performs the alignment operation.
- * \param value Input value, resource descriptor, or output destination for this operation.
- * \param alignment Input value, resource descriptor, or output destination for this operation.
- * \return The requested value, handle, view, or success status.
- */
 /** \brief Rounds a byte offset up to an alignment boundary. \param value Original byte offset. \param alignment Required alignment (non-zero). \return Smallest aligned offset not less than value. */
 /**
  * \brief Performs the gcAlignUp operation.
