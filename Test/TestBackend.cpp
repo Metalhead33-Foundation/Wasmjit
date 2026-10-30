@@ -128,8 +128,15 @@ public:
 			std::string& trapMessage) override
 	{
 		(void)instance; trapped = false;
-		if (callable.fnPtr == nullptr || args.size() != type.params.size() || type.results.size() > 1) return false;
-		for (const auto& p : type.params) if (p.val.opcode != WASM::ValueTypeCode::I32) return false;
+		if (callable.fnPtr == nullptr || args.size() != type.params.size()
+				|| args.size() > 5 || type.results.size() > 1)
+			return false;
+		for (const void* argument : args)
+			if (argument == nullptr)
+				return false;
+		for (const auto& p : type.params)
+			if (p.isPacked || p.val.opcode != WASM::ValueTypeCode::I32)
+				return false;
 		if (!type.results.empty() && type.results.front().val.opcode != WASM::ValueTypeCode::I32) return false;
 		if (type.results.empty()) { if (result != nullptr) return false; }
 		else if (result == nullptr || capacity < sizeof(std::int32_t)) return false;
