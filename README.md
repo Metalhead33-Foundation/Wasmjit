@@ -4,7 +4,7 @@
 
 The library split is in place: `WasmBase/` is the backend-agnostic core
 (`libWasmBase`), every code generator is its own library (`LibJit/` is the one
-that executes; `Asmjit/` has a provisional native code-emission probe while `Sljit/`
+that executes; `Asmjit/` has provisional native code-generation probes while `Sljit/`
 remains a placeholder, and `Test/` is a Catch2 harness over the libraries
 rather than the product. The `build/<config>/Test/WasmJit` executable is still a
 development sandbox, not the embeddable API. See
@@ -51,7 +51,7 @@ backend-agnostic.
   [`docs/THREADSAFETY.md`](docs/THREADSAFETY.md) §3.1–§3.2 and
   [`docs/MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) §2.3.
 - **Still open** (tracked, not complete): a second and third backend
-  (`Asmjit/` has only a native code-emission probe; `Sljit/` remains reserved —
+  (`Asmjit/` has native code-generation probes but no Wasm compiler; `Sljit/` remains reserved —
   see their READMEs and the [`work order`](docs/BACKEND_WORK_ORDER.md); the readiness audit says
   work may begin and recommends SLJIT first), the long-term
   qmake → CMake move, and the language-support
@@ -226,7 +226,7 @@ library per backend plus the test executable.
 | `WasmBase/` | The core library (`libWasmBase`): binary decoding, the module/instance model, `Store`/`TypeRegistry`/`Value`, the opcode decoder, the shared SIMD helper ABI, and the backend-neutral component runtime (`WasmComponentRuntime`). **Backend-agnostic by rule** — see [`docs/LAYERING.md`](docs/LAYERING.md) |
 | `WasmStub/` | `libWasmStub`: a non-JIT opcode dispatcher that pretty-prints instead of executing (inspection/debug) |
 | `LibJit/` | `libLibJit`: the GNU LibJIT backend (context, type translation, module compiler, dispatch) — the current implementation path, and the only backend that executes |
-| `Asmjit/` | **Provisional AsmJit integration**: owns an AsmJit `JitRuntime`, emits and executes a native x86/x64 smoke-test function, and has a Catch2 test. Not yet a WebAssembly backend, not registered/selectable, and not installed; see [`Asmjit/README.md`](Asmjit/README.md) |
+| `Asmjit/` | **Provisional AsmJit integration**: owns an AsmJit `JitRuntime`, emits a scalar smoke-test function and lane-wise i32x4 add/multiply functions, and tests their execution. Not yet a WebAssembly backend, not registered/selectable, and not installed; see [`Asmjit/README.md`](Asmjit/README.md) |
 | `Sljit/` | **Planned backend, no code yet**: same treatment. `sljit_emit_simd_*` / `SLJIT_SIMD_REG_*` are the other planned SIMD lever; see `Sljit/README.md` |
 | `Test/` | The Catch2 executable (`WasmJit`) and the spec-suite harness; see [`docs/TESTING.md`](docs/TESTING.md) |
 | `docs/` | Design notes and process guides; per-proposal notes live in `docs/proposals/` (see the [`docs`](docs/index.md) node) |
@@ -239,7 +239,7 @@ The repository builds a set of shared libraries plus a console test executable
 through qmake:
 
 - [`Project.pro`](Project.pro) is the top-level `subdirs` project
-  (`WasmBase` + `WasmStub` + `LibJit` + the provisional `Asmjit` probe + the
+  (`WasmBase` + `WasmStub` + `LibJit` + the provisional `Asmjit` code-generation probes + the
   planned `Sljit` placeholder + `ExampleBackend` + `Test`);
 - the test target links against `libjit`, the provisional AsmJit library, Catch2 and the project libraries;
 - `libWasmBase` links `libffi` (the flat component-runtime closure path) and
@@ -269,7 +269,7 @@ through qmake:
 |---|---|
 | GNU LibJIT (`LibJit/`) | **The only executing backend** — loads, validates, compiles and runs modules, including SIMD via the shared helper layer |
 | SlJIT (`Sljit/`) | **Planned**, not started: builds an empty library, installs nothing; the [`work order`](docs/BACKEND_WORK_ORDER.md) says what it must provide |
-| AsmJit (`Asmjit/`) | **Provisional code-emission foundation only**: native smoke test passes when built; no Wasm compilation or execution yet |
+| AsmJit (`Asmjit/`) | **Provisional native code-generation foundation only**: scalar and lane-wise probes are covered by Catch2 tests; no Wasm compilation or execution yet |
 
 There is no interpreter backend. `WasmStub/` is a non-compiling pretty-printer;
 GNU LibJIT already provides a compile/interpret configuration and is the only
