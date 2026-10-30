@@ -175,22 +175,67 @@ sub-findings so a reader can tell which are closed.
 | **F3a** | `WasmTypeRegistry.cpp`, `heapMatches` | the abstract-bottom → concrete edge was missing (§5) | **fixed** |
 | **F3b** | `WasmCanonicalType.hpp`, `CanonHeapType::operator==` | compared `memberIndex` even when `kind == Global`, so two identical global references compared unequal and a **mutable** struct field failed its invariance check (the Kotlin module's `(mut (ref null …))` field: ids equal, `memberIndex` 0 vs 2) | **fixed**; `heap-type equality ignores the dormant payload` |
 | **F3c** | `WasmValidator.cpp`, `dispatchStructNew`/`…NewDesc` | a packed `i8`/`i16` field's *operand* was typed as the packed code instead of `i32`, so `struct.new` with an `i8` field rejected a legal `i32` operand (Kotlin's `SharedVariableBoxBoolean`) | **fixed** (a `fieldOperandType()` helper; `struct.new_default` uses it too) |
-| **F3d** | runtime `ref.cast` on a Kotlin GC object | after F3a–F3c the module **loads and validates**, then start-up fails: `cast failure in function 305 ($kotlin.collections.Companion.<init>)`. A reference reached the matcher with `TypeId::kNone`; a defensive guard in `heapMatches` turns that into a failed cast instead of a `SIGSEGV` | **open** |
+| **F3d** | runtime `ref.cast` on a Kotlin GC object | after F3a–F3c the module loads and validates, then start-up failed with `cast failure in function 305`; the object's header had been turned into `kNone` by `reclaimGcObject`, i.e. it was **freed while a live reference existed** | **fixed** (§7.1) |
 
-### 7.1 What F3d is, and what it is not
+### 7.1 `F3d` — the reference-ownership bug
 
-The guard is not a fix, it is a crash barrier: `heapMatches` now returns `false`
-for a `kNone` `TypeId` (`a` and `b` alike), where it used to dereference an
-out-of-range record. The observable result is a clean trap instead of a segfault.
+The crash barrier described in the earlier revision (a `kNone` guard in
+`heapMatches`) made the failure observable instead of fatal; it did not explain
+it. The explanation came from a hardware watchpoint on the object's header:
 
-The cause is **not** in the two allocation helpers this study instrumented:
-`allocateStructObject` and `allocateArrayObject` both stamp
-`module->typeId(localTypeIdx)` and never produced a `kNone` in the runs. Where
-the `kNone` reference comes from is therefore still open — a candidate is a
-reference that `GcHeap::owns` classifies as an object without it being one (a
-callable or an extern box), or a bulk allocation path that bypasses the two
-helpers. It needs its own study with an instrumented `refMatchesHeapType`; this
-note stops at the barrier because the alternative was a host crash.
+```
+Hardware watchpoint 3: *(unsigned int*)$obj
+Old value = 121
+New value = 4294967295          # TypeId::kNone
+0x… in WASM::ModuleInstance::reclaimGcObject(void*)
+```
+
+So the object was **reclaimed while the Wasm code still held it**. The chain:
+`struct.new` → 1 stack count → `local.set` on a **parameter** → the parameter
+branch of `local.set` assumed "a parameter is the caller's borrow, so it owns
+nothing" and therefore skipped the retain, then dropped the stack's count → the
+fresh object's refcount hit zero in the callee, and the caller's later
+`ref.cast` saw a dead object.
+
+Why a naive flag fix was wrong: ownership was tracked per *instruction*, so a
+`local.set` inside a loop emitted its old-value release only for the first
+iteration — enough to leak the loop's objects and fail the existing
+`two agents allocate and release GC objects` test (40,000 reclaims became 2).
+The model has to be **static**.
+
+**The fix** (`LibJit/LibjitOpcodeDispatcher.{hpp,cpp}`,
+`LibjitModuleCompiler.cpp`):
+
+- `emitReferenceParameterRetains()` runs in the prologue and gives every
+  reference-typed parameter its own count in its local slot, releasing it at the
+  epilogue. Net zero for a parameter that is only read; correct for one that is
+  overwritten.
+- With that, every reference local owns exactly one count, so
+  `local.set`/`local.tee` always clone into the slot and release the old value,
+  and `emitDropRefLocals()` drops every reference local — static rules, valid on
+  every loop iteration.
+- The `kNone` guard stays as a barrier: a type id that was never stamped is a
+  failed cast, not a dereference of an out-of-range record.
+
+Kotlin/Wasm after the fix:
+
+```
+call add/i32(19,23) -> i32=42
+call answer/i32() -> i32=42
+call throwCatch/i32(21) -> i32=42
+call throwCatch/i32(-1) -> i32=-1
+call _start/void()hello from Kotlin/Wasm on WASI: add(19, 23) = 42
+```
+
+and the GC regression suite is green again (the concurrency reclaim test, the
+refcount fixtures and `[legacy-eh]` all pass).
+
+The rule is now part of the backend instructions, so the next code generator
+does not rediscover it: [`WRITING_A_BACKEND.md`](../WRITING_A_BACKEND.md) §6
+"Reference ownership", the corresponding row in
+[`BACKEND_WORK_ORDER.md`](../BACKEND_WORK_ORDER.md) §5/§8, the contract row in
+[`LAYERING.md`](../LAYERING.md) §4, and the RC3 note in
+[`proposals/GC.md`](../proposals/GC.md) §7.
 
 ### 7.2 What changed for the report set
 
@@ -199,9 +244,8 @@ note stops at the barrier because the alternative was a host crash.
   `WASMJIT_LEGACY_EH=1` it hits
   `canonical type reference is not declared by this module` in the rewrite — a
   third, separate issue.
-- **`T53` (Kotlin/Wasm `wasmWasi`)** loads and validates. Its verdict is still
-  yellow, but the blocker moved from "the engine refuses a valid module" to
-  "start-up hits `F3d`".
+- **`T53` (Kotlin/Wasm `wasmWasi`)** **runs**: exports, a guest `try`/`catch`,
+  and its own `_start` all behave (§7.1). Verdict: green at this engine commit.
 - The minimal repro and the new unit tests are green, and the pre-existing
   negative tests stayed red-as-expected.
 
@@ -209,6 +253,6 @@ note stops at the barrier because the alternative was a host crash.
 
 | Item | Why it matters | Next step |
 |---|---|---|
-| **`F3d`** — a `kNone` `TypeId` reaches `refMatchesHeapType` | it blocks Kotlin's start-up and would block any WasmGC runtime that allocates the same way | instrument the matcher, identify the source, fix the allocation or the ownership classification |
-| The `wasm-opt`-less Dart path | the rewrite rejects Dart's legacy EH with "canonical type reference is not declared" | reproduce on a reduced module; likely the same class as `F3b` (a stale index in a copied type reference) |
+| The `wasm-opt`-less Dart path | the rewrite rejects Dart's legacy EH with "canonical type reference is not declared" | reproduce on a reduced module; likely a stale index in a copied type reference |
 | A conformance sweep of the bottom-type rule | the spec suite already exercises `ref.null none` casts; a targeted set of `sub`-with-bottom-field modules would pin the rule | add them to `Test/wasm_wat/` |
+| A GC ownership review of the other backends | `F3d` was a LibJIT lowering bug; Sljit/Asmjit do not execute references yet, but the same "who owns a parameter slot" question will arrive with them | fold into [`BACKEND_WORK_ORDER.md`](../BACKEND_WORK_ORDER.md) when they gain references |

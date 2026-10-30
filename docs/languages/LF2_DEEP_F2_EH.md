@@ -146,6 +146,25 @@ rewrite is a convenience for shapes that *can* be lowered in place — Lua's
 `setjmp` output is one, and it is accepted
 ([`LF2_S5_GUEST_VMS.md`](LF2_S5_GUEST_VMS.md) §2).
 
+### 4.1 A cross-check, and why the refusal stays
+
+A minimal `try (try (throw) delegate 1) catch $t` module was run two ways: through
+our rewrite (`WASMJIT_LEGACY_EH=1`) and through `wasm-opt --all-features
+--translate-to-exnref`. The rewrite **accepted** the shape and returned 99 (the
+outer catch handled it); the Binaryen translation produced a
+"caller-target" `exnref` block whose execution through the engine returned 0.
+The two disagree, and the Binaryen output is not obviously executable as a plain
+module here, so the cross-check is **inconclusive** — it neither confirms nor
+refutes the frame accounting.
+
+What it does establish is that the refusal is **narrow**: it fires only when the
+rewrite's own frame stack says a catch-bearing legacy `try` sits between the
+delegated body and its target. Clang's `-O2` module has exactly that nesting
+(§2), and the engine keeps refusing it by name. Turning an unverified
+reconstruction into accepted semantics would be worse than a yellow verdict, so
+`T05` keeps yellow and the flag/`wasm-opt` path stays the supported one until
+someone builds the translation pass.
+
 ## 5. The long-term options
 
 | Option | Shape of the work | Class | Verdict |
@@ -167,6 +186,36 @@ EH implementation to maintain, for a format the ecosystem is leaving.
 (the flag and the `wasm-opt` command) — it does — and the C/C++ embedding
 recipe must stop presenting "no flag" as a normal build. That is a docs change,
 and `S1` carries it.
+
+### 5.1 Should the rewrite be opt-out instead of opt-in?
+
+The natural follow-up question is whether `ParseOptions::legacyExceptionHandling`
+should default to **on** — "one boolean". The answer from the `LF-2` data is
+**no**, because it changes no verdict:
+
+| Arm | Emits legacy EH? | Would a default-on rewrite help? |
+|---|---|---|
+| Kotlin/Wasm 2.4.21 (`wasmWasi`) | **no** — `try_table` (10 occurrences, zero legacy `try`) | no; it is green without the rewrite |
+| Go 1.27.3 (`wasip1`) | no | no |
+| Rust 1.99.1, Zig, C (freestanding / wasi-sdk) | no (C++ only through libc++) | no |
+| Lua 5.4.8 (`setjmp`) | yes | it already runs **with** the rewrite; defaulting it on removes an env var, not a colour |
+| C++ 20 / clang default | yes, **and** the `delegate`-skip shape | no — `LE-8` is refused with the rewrite on *or* off |
+| Dart 3.13.7 | yes | no — the rewrite accepts the encoding and then reports `canonical type reference is not declared by this module` |
+
+So the flip is a **friction** change, not a support change: it would spare Lua
+users a `WASMJIT_LEGACY_EH=1`, and it would make the decoder silently accept a
+form the spec has retired — the exact permissiveness
+[`SAFETY.md`](../SAFETY.md) §2.1 warns about, and the reason the option is
+strict-by-default in the first place.
+
+**What would be worth doing instead** (not done here): keep the strict default
+and add a *recovery retry* — attempt the strict parse, and if (and only if) the
+module fails **specifically** because of the superseded form, retry once with the
+rewrite and emit a `WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN` Note. That keeps
+the "never silently more permissive" rule, removes the knob for the modules the
+rewrite *can* handle, and leaves the `LE-8`/Dart cases failing with their own,
+accurate errors. It is a small parser-boundary change and a documented
+diagnostic; it is not a change to the colour of any arm.
 
 ## 6. What changed in the report set
 

@@ -151,13 +151,67 @@ the core already agreed on.
 | 6.4 | A trap is a **pending status**: report through `wasm_trap_report`/`reportTrap` and return. Never `longjmp`, never `abort`, never throw |
 | 6.5 | The prologue calls `wasm_stack_check(VMContext*)` before the body runs, and checks the pending slot afterwards |
 | 6.6 | A `v128` parameter or result is the 16-byte aggregate of [`ABI.md`](ABI.md) "`v128` by Value" |
-| 6.7 | References are one pointer-sized word and move through `refClone`/`refDrop` when they enter or leave a store-owned slot |
+| 6.7 | References are one pointer-sized word and move through `refClone`/`refDrop` when they enter or leave a store-owned slot — and the ownership model below is part of the ABI, not an implementation detail |
 | 6.8 | Executable memory is yours, with a W^X handoff. The core never patches code |
 
 The C ABI of a compiled function is therefore
 `Ret fn(VMContext* ctx, Params…)` — which is exactly the shape
 `WASM::callCallable<Ret>` invokes, so an embedder's call needs no backend
 knowledge.
+
+### Reference ownership: parameters, locals and the stack
+
+A reference is a counted pointer and *who holds a count* is part of the ABI your
+generated code must honour. The model is three sentences:
+
+- **The operand stack owns one count per reference it holds.** Pushing clones;
+  every pop that discards a reference drops it.
+- **Every reference local owns one count.** `local.set`/`local.tee` clone into
+  the slot and drop the value it replaces; the epilogue drops every reference
+  local.
+- **A parameter arrives as the caller's borrow.** The caller still owns its
+  argument; the callee may not drop it.
+
+The third sentence is the one that bites, because it makes `local.set` a
+special case: the *first* store into a parameter slot would be dropping a count
+the callee never held, while every later store must drop the count the slot now
+owns. Do **not** resolve that per instruction. Retain once, at entry: clone each
+reference parameter into its own slot in the prologue, release it in the
+epilogue, and then the two local rules above are static and correct for every
+instruction — including an instruction that re-executes in a loop. LibJIT's
+version is `emitReferenceParameterRetains()`
+([`LibjitOpcodeDispatcher.cpp`](../LibJit/LibjitOpcodeDispatcher.cpp)); copy the
+shape, not the code.
+
+**The failure mode this prevents.** A function that allocates an object, stores
+it into a **parameter** (the `this`-in-an-initialiser shape every OO language
+emits) and returns it will free the object inside the callee if the parameter
+branch skips the retain and then drops the stack's count:
+
+```
+Old value = 121            # the object's TypeId
+New value = 4294967295     # TypeId::kNone, written by reclaimGcObject
+```
+
+The caller's next `ref.cast` then either traps (`cast failure in function N`) or,
+before the `kNone` guard in `heapMatches`, crashed in `CoreTypeView::kind()`. The
+Kotlin/Wasm `wasm-wasi` module hit this in `$kotlin.collections.ArrayList.<init>`
+and it is recorded as `F3d` in
+[`languages/LF2_DEEP_F3_GC.md`](languages/LF2_DEEP_F3_GC.md) §7.1.
+
+**Do not track ownership per instruction.** A loop re-executes the same *emitted*
+`local.set`, so a compile-time "the slot owns a count now" flag releases the old
+value only on its first iteration. That version leaked instead of crashing: the
+existing `two agents allocate and release GC objects on one instance` reclaim
+count went from 40,000 to 2. Static rules plus the entry-time retain are the only
+shape that survives both cases.
+
+**How to test it.** `Test/wasm_wat/gc_refcount.wat` covers the allocate-and-release
+loop; add the initialiser shape — a function that `struct.new`s inside an `if`,
+stores the object into its reference parameter and returns it, and a caller that
+stores and casts it — and assert the object is still alive at the cast. If you do
+not lower references yet (`Asmjit`, `Sljit` today), refuse them explicitly and
+keep `Callable::fnPtr` null; add this rule to your checklist *before* you do.
 
 ## 7. The session seam: `BackendSession`
 
@@ -253,6 +307,7 @@ nothing is interpreted, and no half-emitted code is ever installed.
 | no control flow | `block`/`loop`/`if`/`br` need labels and a merge model; a half-implemented branch is worse than none | later |
 | no `call`/`call_indirect` | needs the call ABI plus type checks; direct calls are the next step | later |
 | no memory/globals/SIMD/exceptions | the helper layer and the GC layout are whole projects of their own | LibJIT |
+| references are refused, not half-owned | neither this scaffold nor Asmjit lowers `ref.*`/`struct.*`/`array.*`; a reference it moves without counting is worse than one it refuses. When either adds them, [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) §6 “Reference ownership” is the rule to implement, not an optional refinement | LibJIT (`emitReferenceParameterRetains`) |
 | generated code is never freed | `ModuleInstantiator` has no instance-teardown hook, so there is nowhere safe to `sljit_free_code` | documented leak; LibJIT keeps its context alive the same way |
 | one executable mapping per function | the W^X allocator maps each block separately | acceptable for a provisional backend; the default pooled allocator trades W^X for density |
 
@@ -277,6 +332,11 @@ Start with the smallest possible module and grow:
    partially emitted function.
 5. **The session.** `aggregateLayout` matches the tuple rule;
    `createLaneWiseOp(true/false)` computes the expected four lanes.
+6. **Reference ownership.** Once you lower references, add the initialiser shape
+   of [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) §6 “Reference ownership”: a
+   function that allocates inside an `if`, stores the object into its reference
+   **parameter**, returns it, and a caller that stores and casts it — plus the
+   `[gc]` reclaim test. The object must still be alive at the cast.
 
 `[sljit]` in [`Test/SljitBackendTests.cpp`](../Test/SljitBackendTests.cpp) is
 exactly those five steps. The broader "definition of done" — the generic

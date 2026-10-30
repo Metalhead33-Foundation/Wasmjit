@@ -498,6 +498,16 @@ public:
  */
 	void emitFunctionEntry();
 
+	//! Retains each reference-typed parameter into its own local slot.
+	//!
+	//! A parameter arrives as the caller's *borrow*, but the backend's model is
+	//! that every reference local owns one count: `local.set` clones into the
+	//! slot and releases the old value, and the epilogue releases every
+	//! reference local. Making the parameter own a clone at entry is what lets
+	//! that rule stay static — no per-instruction ownership bookkeeping, which
+	//! a loop would defeat (docs/proposals/GC.md RC-5; LF-2 `F3d`).
+	void emitReferenceParameterRetains();
+
 	//! Emits the shared error epilogue (return zeroes) when any trap path was
 	//! emitted. Call after emitImplicitFunctionReturn().
 /**

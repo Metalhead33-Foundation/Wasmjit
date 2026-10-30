@@ -165,10 +165,10 @@ each is a first-week item inside whichever charter runs first.
 
 | Charter | Cluster | `T1` | `T2` | `T3` | Status |
 |---|---|---|---|---|---|
-| `S1` | `L1` | ✅ | ⚠ | ✅ | **Run** — 5 arms; 2 green, 3 yellow ([`LF2_S1_C_CPP.md`](LF2_S1_C_CPP.md)) |
+| `S1` | `L1` | ✅ | ⚠ | ✅ | **Run** — 5 arms; 4 green, 1 yellow ([`LF2_S1_C_CPP.md`](LF2_S1_C_CPP.md)) |
 | `S2` | `L2` | ✅ | ⚠ | ✅ | **Run** — 4 arms, all green ([`LF2_S2_LLVM.md`](LF2_S2_LLVM.md)) |
 | `S3` | `L3` | ✅ | ✅ | ✅ | **Run** — 1 arm, green ([`LF2_S3_AS.md`](LF2_S3_AS.md)) |
-| `S4` | `L4` | ⚠ | ⚠ | ✅ | **Run** — 3 arms; 2 yellow, 1 red ([`LF2_S4_WASMGC.md`](LF2_S4_WASMGC.md)) |
+| `S4` | `L4` | ⚠ | ⚠ | ✅ | **Run** — 4 arms; 2 green, 1 yellow, 1 red ([`LF2_S4_WASMGC.md`](LF2_S4_WASMGC.md)) |
 | `S5` | `L5` | ✅ | ⚠ | ✅ | **Run** — 1 arm, green ([`LF2_S5_GUEST_VMS.md`](LF2_S5_GUEST_VMS.md)) |
 
 **How `T3` was met.** The requester is the repository owner, who commissioned

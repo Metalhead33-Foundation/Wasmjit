@@ -177,6 +177,7 @@ void ModuleCompiler::compileFunction(jit_function_t fn, uint32_t funcTypeIdx, co
 							  locals, valueStack, controlStack, profile());
 	// Prologue: guest stack guard + a pending check, then the body.
 	dispatcher.emitFunctionEntry();
+	dispatcher.emitReferenceParameterRetains();
 	dispatcher.readCode(stream);
 	dispatcher.emitImplicitFunctionReturn();
 	// Trap paths branch here; the epilogue returns zeroes of the result types.

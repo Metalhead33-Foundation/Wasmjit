@@ -48,7 +48,7 @@ honest.
 | \subpage lf2_s1 | `L1` — C/C++ toolchain and ABI | 5 (`T01`–`T05`) | 4 green, 1 yellow |
 | \subpage lf2_s2 | `L2` — LLVM-family languages | 4 (`T06`, `T07`, `T10`, `T33`) | 4 green |
 | \subpage lf2_s3 | `L3` — AssemblyScript / TypeScript | 1 (`T15`, and `T30` by inheritance) | 1 green |
-| \subpage lf2_s4 | `L4` — WasmGC languages | 4 (`T20`, `T53` in two target forms, `T86`) | 1 green, 2 yellow, 1 red arm |
+| \subpage lf2_s4 | `L4` — WasmGC languages | 4 (`T20`, `T53` in two target forms, `T86`) | 2 green, 1 yellow, 1 red arm |
 | \subpage lf2_s5 | `L5` — guest scripting VMs | 1 (`T26`) | 1 green |
 | \subpage lf2_l6_l12 | `L6`–`L12` — everything else | 1 (`T09`, `L8`) | 1 yellow |
 | \subpage lf2_evidence | — | — | toolchains, hashes, commands, transcripts |
@@ -114,11 +114,11 @@ disproportionately expensive ([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILIT
 | `T05` | C++ / wasi-sdk 34.0, default flags | 1–4 yes, 5 no | **Yellow** | default legacy EH hits `LE-8`; `-mllvm -wasm-use-legacy-eh=false` green (`F2`) |
 | `T06` | Rust / rustc 1.99.1 `wasm32-unknown-unknown` | all five | **Green** | no WASI, one `env` import, `Vec`/`String` over `dlmalloc` |
 | `T07` | Rust / rustc 1.99.1 `wasm32-wasip1` | all five | **Green** | 4 WASI imports; `println!` through the shim |
-| `T09` | Go / 1.27.3 `wasip1`, `-buildmode=c-shared` | all five | **Yellow** | 16 WASI imports, `_initialize` then the export; 2.9 MB grown at init |
+| `T09` | Go / 1.27.3 `wasip1`, `-buildmode=c-shared` | all five | **Green at this engine commit** | `_initialize`, `env.host_add` = 42, `dep.add` cross-module = 43; 16 WASI imports are the embedder's shim |
 | `T10` | TinyGo 0.40.1 `-target=wasi` | all five | **Green** | exports before `_start`; 7 WASI imports |
 | `T33` | Zig 0.15.2 `wasm32-freestanding` | all five | **Green** | 108-byte module, zero imports |
 | `T15` | AssemblyScript 0.28.19 (`--runtime stub`) | all five | **Green** | + the existing `Test/wasm` harness evidence |
-| `T53` | Kotlin/Wasm 2.4.21 `wasmWasi` | 1–4 unproven, 5 no | **Yellow** | loads and validates after `F3a`–`F3c`; start-up hits `F3d` |
+| `T53` | Kotlin/Wasm 2.4.21 `wasmWasi` | all five | **Green at this commit** | exports, guest `try`/`catch`, `_start`; 3 WASI imports are the embedder's shim |
 | `T53` | Kotlin/Wasm 2.4.21 `wasmJs` | none | **Red** | 696 imports incl. externref globals: a JS-host contract by construction |
 | `T20` | Dart 3.13.7 `dart compile wasm --standalone` | 1–4 unproven, 5 no | **Yellow** | type section accepted after `F3a`; now blocked by its legacy EH (`F2`) |
 | `T86` | MoonBit 0.1.20261028, `wasm-gc`, release | all five except cross-module | **Green at this commit** | 359-byte module; `_start` prints `Hello` via `spectest.print_char` |
@@ -142,7 +142,7 @@ forbids an `LF-2` study from patching the engine.
 | **F3a** | the missing bottom-type edge in `heapMatches` | fixed in [`LF2_DEEP_F3_GC.md`](LF2_DEEP_F3_GC.md) §5 | **A** | closed |
 | **F3b** | `CanonHeapType::operator==` compared the dormant `memberIndex`, so equal global references compared unequal and a mutable field failed its invariance check | fixed; `heap-type equality ignores the dormant payload` | **A** | closed |
 | **F3c** | `struct.new` typed a packed field's operand as the packed code instead of `i32` | fixed; `fieldOperandType()` | **A** | closed |
-| **F3d** | a `ref.cast` on a Kotlin GC object reaches the matcher with `TypeId::kNone`; now a failed cast (guarded) instead of a `SIGSEGV` | open | **A** (root cause unknown) | `T53` start-up |
+| **F3d** | a `ref.cast` on a Kotlin GC object found a reclaimed object: `local.set` on a reference **parameter** stored the value but dropped the only count, so a freshly created object was freed inside the callee | fixed; `emitReferenceParameterRetains()` and static local ownership | **B** | closed |
 
 **`F3` is the one that changed a shortlist.** The `LF-1` screen called Kotlin the
 gold-standard row because its requirements were features the engine already had
@@ -190,7 +190,7 @@ workaround and the long-term options are in
 | `LF-2` — full feasibility studies | `✅` for `S1`–`S5`, 2026-10-30, this set; **not exhaustive** — the untested rows are listed, not graded |
 | `LF-2` — deep studies and the fixes they led to | `F1` **fixed** in the backend (level-0 default + diagnostics), `F3`/`F3a`–`F3c` **fixed** in the type registry and validator; `F2` scoped with a verified workaround; `F3d` open |
 | `LF-2` — `L6`–`L12` | `⛔` no charter, no toolchain installed — dispositions only |
-| `LF-3` — the support decision | **Open.** `F2` and `F3d` are its input; it may reject every verdict |
+| `LF-3` — the support decision | **Open.** `F2` (and Dart's rewrite error) are its input; it may reject every verdict |
 
 **Budget.** Charter caps were `C3` per cluster (multi-session, > 1 week of human
 time). This run spent one AI session per cluster plus the toolchain install time

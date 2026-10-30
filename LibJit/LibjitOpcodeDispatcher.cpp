@@ -1734,11 +1734,13 @@ void OpcodeDispatcher::emitDropValue(jit_value_t v)
 
 void OpcodeDispatcher::emitDropRefLocals()
 {
-	// At function exit, every reference-typed *local* (params are borrows, so
-	// they are skipped) releases the count it owns (docs/proposals/GC.md RC-5).
+	// At function exit, every reference-typed local releases the count it owns.
+	// Parameters own one from `emitReferenceParameterRetains`, so the rule is
+	// static and a loop cannot defeat it (docs/proposals/GC.md RC-5; LF-2
+	// `F3d`).
 	if (!kStackOwnsRefs)
 		return;
-	for (size_t i = currentFunc.params.size(); i < locals.size(); ++i) {
+	for (size_t i = 0; i < locals.size(); ++i) {
 		jit_value_t lv = jit_insn_load(function, locals[i]);
 		if (isRefJitValue(lv))
 			emitRefDrop(lv);
@@ -2395,6 +2397,25 @@ void OpcodeDispatcher::emitFunctionEntry()
 	jit_insn_store(function, exceptionSlot, exnSlot);
 
 	emitPendingTrapCheck();
+}
+
+void OpcodeDispatcher::emitReferenceParameterRetains()
+{
+	// Every reference local owns one count in this backend's model (RC-5), so a
+	// parameter — which arrives as the caller's borrow — takes its own count
+	// here. Without this, `local.set` on a parameter either skips the
+	// old-value release (leaking a fresh object into a dead slot, LF-2 `F3d`)
+	// or drops a borrow it never owned.
+	if (!kStackOwnsRefs)
+		return;
+	const size_t n = std::min(currentFunc.params.size(), locals.size());
+	for (size_t i = 0; i < n; ++i) {
+		jit_value_t lv = jit_insn_load(function, locals[i]);
+		if (!isRefJitValue(lv))
+			continue;
+		jit_value_t kept = emitRefClone(lv);
+		jit_insn_store(function, locals[i], castRefValue(kept, jit_value_get_type(locals[i])));
+	}
 }
 
 void OpcodeDispatcher::emitTrapEpilogue()
@@ -4624,11 +4645,11 @@ void OpcodeDispatcher::dispatchLocalSet(WASM::LocalIdx arg)
 	assert(arg < locals.size());
 	jit_value_t v = popValue();
 	const bool refLocal = isRefJitValue(locals[arg]);
-	// Parameters hold a *borrow* (the caller's value is not owned by us); only
-	// non-parameter locals own a reference (docs/proposals/GC.md RC-5).
-	if (refLocal && arg >= currentFunc.params.size()) {
-		// Retain the new value, release the old, then store (so a
-		// self-assignment is safe).
+	if (refLocal) {
+		// Every reference local owns a count (parameters took theirs at entry,
+		// `emitReferenceParameterRetains`), so the slot is cloned into and the
+		// old value released — also when the same instruction runs again in a
+		// loop (LF-2 `F3d`).
 		jit_value_t old = jit_insn_load(function, locals[arg]);
 		jit_value_t kept = emitRefClone(v);
 		jit_insn_store(function, locals[arg], castRefValue(kept, jit_value_get_type(locals[arg])));
@@ -4645,7 +4666,7 @@ void OpcodeDispatcher::dispatchLocalTee(WASM::LocalIdx arg)
 	assert(arg < locals.size());
 	jit_value_t v = popValue();
 	const bool refLocal = isRefJitValue(locals[arg]);
-	if (refLocal && arg >= currentFunc.params.size()) {
+	if (refLocal) {
 		jit_value_t old = jit_insn_load(function, locals[arg]);
 		jit_value_t kept = emitRefClone(v);
 		jit_insn_store(function, locals[arg], castRefValue(kept, jit_value_get_type(locals[arg])));

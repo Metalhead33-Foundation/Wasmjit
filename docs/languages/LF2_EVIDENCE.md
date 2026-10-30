@@ -66,7 +66,7 @@ All under `build/lf2/poc/modules/`; hashes are SHA-256.
 | `t05_eh.wasm` (default) | `T05` | 336,269 | 7 | 7 | `31f99abb3201f0fecc9331376be094c83416aaf0b2cac6e10e3dbf281e1eee95` (refused, `F2`) |
 | `t06_rust.wasm` | `T06` | 1,653,586 | 1 | 6 | `1d6f359b36a9b04bb1e1639961fb2d3d40a5de101b62ac8b87437acb230364ae` |
 | `t07_rust.wasm` | `T07` | 2,167,021 | 5 | 4 | `3878f95acaeba22d371501346226a40a9eee2cad770e634f40b617c211b99878` |
-| `t09_go_lib.wasm` | `T09` | 2,477,564 | 16 | 3 | `e96832044055e9e0d5a35eab5ab8424a66bbb6b6995b1536f56e9ec4dd353ffb` |
+| `t09_go_lib.wasm` | `T09` | 2,479,821 | 18 | 5 | `98af3f7b4ae0d92eee1cb04eec215ff54dd6e64789037862e4ac8e3211d42c30` |
 | `t09_go.wasm` | `T09` | 2,477,280 | 16 | 2 | `7310ddb57bcd3b3108a4fc98502479c455dddb721e888ba1060fd77717c30690` |
 | `t10_tinygo.wasm` | `T10` | 1,571,287 | 7 | 13 | `2218150763fa0a711f713533c8e26dc7ca22da16cffb4b5e7c46ac5b17257646` |
 | `t33_zig.wasm` | `T33` | 108 | 0 | 4 | `1d14fd418c10f3d576279fe6f12ce4cd155a62f17c98badf45dbd6f38427462f` |
@@ -241,7 +241,8 @@ screen; it is the `LF-2` set's own delta.
 | `Test/wasm_wat/bottom_subtype.wat` | the `F3` repro, now a permanent fixture |
 | `t01_emcc.wasm` (unchanged hash) | instantiates and runs at `-O2`; `answer`/`add`/`via_host` = 42, `_start` → `wasi_exit=0` |
 | `t04_empp_reactor.wasm` (unchanged hash) | `-O2` loads; ctors and `std::vector` work |
-| `t53_kotlin_wasi.wasm` (unchanged hash) | loads and validates; start-up fails at `F3d` (`cast failure in function 305`) |
+| `t53_kotlin_wasi.wasm` (unchanged hash) | runs: `add`/`answer`/`throwCatch` and `_start`; the `F3d` ownership fix is what unblocked it |
+| `t09_go_lib.wasm` (rebuilt) | `_initialize`, `env.host_add` = 42 and a cross-module `dep.add` = 43 through `//go:wasmimport` |
 | `t20_dart.wasm` (unchanged hash) | gets past the type section; fails on legacy EH (`F2`), and with `WASMJIT_LEGACY_EH=1` on `canonical type reference is not declared by this module` |
 | `WASMJIT_LIBJIT_OPT=1` | reproduces `F1` as a reported failure (`backend compile failure … result 0 for function 7`), with no `SIGABRT`/`SIGSEGV` |
 

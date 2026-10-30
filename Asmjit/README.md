@@ -103,6 +103,15 @@ target-architecture check).
 2. Implement true tail-call ABI/stack semantics for i32/i64 signatures.
 3. Expand linear memory to memory64 and finish remaining bulk-memory/table operations.
 4. Add floating-point arithmetic and conversions, floating-point and reference globals, references/GC, exceptions, continuations, and Wasm SIMD lowering.
+   When references/GC arrive, implement the ownership rule in
+   [`docs/WRITING_A_BACKEND.md`](../docs/WRITING_A_BACKEND.md) §6
+   “Reference ownership”: a reference parameter is the caller's borrow, a
+   reference local owns one count, and retaining a parameter at entry is what
+   keeps the `local.set`/epilogue rules static (a per-instruction flag does not
+   survive a loop). LibJIT's `emitReferenceParameterRetains()` is the worked
+   example, and `F3d` in
+   [`docs/languages/LF2_DEEP_F3_GC.md`](../docs/languages/LF2_DEEP_F3_GC.md)
+   §7.1 is what skipping it costs.
 5. Meet every applicable item in
    [`docs/BACKEND_WORK_ORDER.md`](../docs/BACKEND_WORK_ORDER.md) before calling
    the backend complete.

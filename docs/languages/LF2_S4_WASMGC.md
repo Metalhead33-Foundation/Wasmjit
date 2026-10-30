@@ -8,7 +8,7 @@ run.
 
 | Row | Arm | Verdict |
 |---|---|---|
-| `T53` | Kotlin/Wasm 2.4.21, `wasmWasi` (`wasm-wasi` target) | **Yellow** — loads and validates after the `F3` fixes; start-up hits `F3d` |
+| `T53` | Kotlin/Wasm 2.4.21, `wasmWasi` (`wasm-wasi` target) | **Green at this engine commit** — exports, a guest `try`/`catch` and `_start` all run |
 | `T53` | Kotlin/Wasm 2.4.21, `wasmJs` | **Red** — a JS-host contract by construction (696 imports) |
 | `T20` | Dart 3.13.7, `dart compile wasm --standalone` | **Yellow** — type section accepted; now blocked by its legacy EH (`F2`) |
 | `T86` | MoonBit 0.1.20261028, `moon build --target wasm-gc --release` | **Green at this commit** — loads, instantiates, `_start` prints through `spectest.print_char` |
@@ -87,17 +87,22 @@ fix, WasmJit refused it at load:
 status=error: type section: invalid `sub` annotation (comptype does not match its supertype)
 ```
 
-That was `F3`. It is now fixed — together with `F3b` (a dormant `memberIndex`
-in heap-type equality) and `F3c` (`struct.new`'s operand type for a packed
-field) — and the module **loads and validates**. Start-up then fails:
+That was `F3`. It is now fixed — `F3a` (bottom types), `F3b` (a dormant
+`memberIndex` in heap-type equality), `F3c` (`struct.new`'s operand type for a
+packed field) and `F3d` (reference ownership of a parameter slot) — and the
+module **runs**:
 
 ```
-status=error: cast failure in function 305 ($kotlin.collections.Companion.<init>)
+call add/i32(19,23)        -> i32=42
+call answer/i32()          -> i32=42
+call throwCatch/i32(21)    -> i32=42      # guest try/catch
+call throwCatch/i32(-1)    -> i32=-1
+call _start/void()hello from Kotlin/Wasm on WASI: add(19, 23) = 42
 ```
 
-That is `F3d`, the open runtime gap: a reference reaches the cast matcher with
-`TypeId::kNone`, and a new guard turns what used to be a `SIGSEGV` into a failed
-cast. The full analysis is in [`LF2_DEEP_F3_GC.md`](LF2_DEEP_F3_GC.md) §7.
+The full analysis of `F3d` (a hardware watchpoint on the object header, the
+ownership bug it exposed, and the static fix) is in
+[`LF2_DEEP_F3_GC.md`](LF2_DEEP_F3_GC.md) §7.1.
 
 ### 2.3 The `wasmJs` module
 
@@ -246,7 +251,7 @@ guess; reporting the *observations* as they are is the charter's rule.
 | Native host import | `println` via `fd_write`; no `env` import | JS bridge, not a native import | `dart.print` etc., JS glue |
 | Second module's export | not applicable | not applicable | not applicable |
 | Single-agent contract | unproven | unproven | unproven |
-| Engine patch | **yes** (`F3`) | none can help: the contract is a JS engine | **yes** (`F3`) |
+| Engine patch | no (fixed in the engine) | none can help: the contract is a JS engine | **yes** for the EH encoding (`F2`); no with the flag or one `wasm-opt` pass |
 | WASI imports | 3 | 0 | 0 |
 | Heap owner | Kotlin's GC (guest-side, engine GC data structures) | same | Dart's GC |
 | Declared memory max | none (0-page initial, grows) | none | none |
@@ -271,12 +276,12 @@ imports can be satisfied.
 
 | Finding | Class | Status |
 |---|---|---|
-| `F3` (`F3a`–`F3c`) — bottom heap types, heap-type equality, packed `struct.new` operands | **A** (core type registry + validator) | **fixed**, with the minimal repro as a fixture and three new unit tests ([`LF2_DEEP_F3_GC.md`](LF2_DEEP_F3_GC.md) §5–§7) |
-| `F3d` — a `ref.cast` on a Kotlin GC object sees `TypeId::kNone` | **A** (root cause unknown) | **open**; guarded so it is a failed cast, not a `SIGSEGV` |
+| `F3` (`F3a`–`F3d`) — bottom heap types, heap-type equality, packed `struct.new` operands, reference ownership of a parameter slot | **A** for the first three, **B** for `F3d` (backend lowering) | **fixed**, with the minimal repro as a fixture, three unit tests and the GC/concurrency suite green ([`LF2_DEEP_F3_GC.md`](LF2_DEEP_F3_GC.md) §5–§7) |
 
-`F3` was small, local and backend-neutral: no ABI change, no new surface, no
-backend obligation. It is fixed, and `T53` moved from "refused at load" to a
-three-import module that validates and then hits `F3d` at start-up.
+`F3` was small, local and backend-neutral for its first three parts; `F3d` lived
+in the backend's lowering. Both are fixed, and `T53` moved from "refused at
+load" to a module that loads, validates, runs its exports and runs its own
+start-up.
 
 **What would make `wasmJs` green is not an engine change**: it would need a JS
 engine on the host side, which is an explicit non-goal
