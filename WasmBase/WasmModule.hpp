@@ -67,7 +67,7 @@ struct CompilationHint {
 struct WASMJIT_API Module : public Artifact
 {
 public:
-	std::vector<Section> sections;
+	std::vector<Section> sections; //!< Field `sections` of type.
 	//! String literals from section 14 (docs/proposals/STRINGREF.md STR-2), in
 	//! source order. `string.const idx` addresses this vector; they are decoded
 	//! to code points and materialised in the Store at instantiation.
@@ -80,21 +80,21 @@ public:
 	std::vector<TypeId> typeIds;
 	std::vector<ImportFunction> importFunctions;
 	std::vector<ImportTable> importTables;
-	std::vector<ImportMemory> importMemories;
-	std::vector<ImportGlobal> importGlobals;
-	std::vector<ImportTag> importTags;
-	std::vector<ImportType> importTypes;
+	std::vector<ImportMemory> importMemories; //!< Field `importMemories` of type.
+	std::vector<ImportGlobal> importGlobals; //!< Field `importGlobals` of type.
+	std::vector<ImportTag> importTags; //!< Field `importTags` of type.
+	std::vector<ImportType> importTypes; //!< Field `importTypes` of type.
 	//! Import-section order; see ImportOrder in WasmType.hpp.
 	std::vector<ImportOrder> importOrder;
 	std::vector<uint32_t> internalFunctionTypeIndices;
 	std::vector<TableType> tables;
-	std::vector<MemoryType> memories;
-	std::vector<Global> globals;
-	std::vector<Export> exports;
-	std::vector<ElementSegment> elementSegments;
-	std::vector<DataSegment> dataSegments;
-	std::vector<FunctionBody> functionBodies;
-	std::vector<Tag> tags;
+	std::vector<MemoryType> memories; //!< Field `memories` of type.
+	std::vector<Global> globals; //!< Field `globals` of type.
+	std::vector<Export> exports; //!< Field `exports` of type.
+	std::vector<ElementSegment> elementSegments; //!< Field `elementSegments` of type.
+	std::vector<DataSegment> dataSegments; //!< Field `dataSegments` of type.
+	std::vector<FunctionBody> functionBodies; //!< Field `functionBodies` of type.
+	std::vector<Tag> tags; //!< Field `tags` of type.
 	//! Raw `metadata.code.branch_hint` entries, keyed by the *global* function
 	//! index (imports first). Offsets are still relative to the start of each
 	//! function's locals declaration; processCodeSection rebases them onto the
@@ -107,8 +107,8 @@ public:
 	std::map<uint32_t, std::vector<CompilationHint>> compilationPriorityHints;
 	std::map<uint32_t, std::vector<CompilationHint>> instructionFrequencyHints;
 	std::map<uint32_t, std::vector<CompilationHint>> callTargetHints;
-	std::map<uint32_t,std::string> funcNames;
-	std::string debugName;
+	std::map<uint32_t,std::string> funcNames; //!< Field `funcNames` of type.
+	std::string debugName; //!< Field `debugName` of type.
 	//! Extended name subsections (docs/proposals/EXTENDED_NAME_SECTION.md).
 	//! Direct maps use the index space of the named thing; the indirect maps
 	//! (`localNames`, `labelNames`, `fieldNames`, `paramNames`,
@@ -116,19 +116,19 @@ public:
 	std::map<uint32_t,std::string> typeNames;
 	std::map<uint32_t,std::string> tableNames;
 	std::map<uint32_t,std::string> memoryNames;
-	std::map<uint32_t,std::string> globalNames;
-	std::map<uint32_t,std::string> elementNames;
-	std::map<uint32_t,std::string> dataNames;
-	std::map<uint32_t,std::string> tagNames;
-	std::map<uint32_t,std::map<uint32_t,std::string>> localNames;
-	std::map<uint32_t,std::map<uint32_t,std::string>> labelNames;
-	std::map<uint32_t,std::map<uint32_t,std::string>> fieldNames;
-	std::map<uint32_t,std::map<uint32_t,std::string>> paramNames;
-	std::map<uint32_t,std::map<uint32_t,std::string>> tagParamNames;
-	uint32_t startFunctionIndex;
-	uint32_t dataSegmentCount;
-	bool hasStartFunction;
-	bool hasDataCount;
+	std::map<uint32_t,std::string> globalNames; //!< Field `globalNames` of type.
+	std::map<uint32_t,std::string> elementNames; //!< Field `elementNames` of type.
+	std::map<uint32_t,std::string> dataNames; //!< Field `dataNames` of type.
+	std::map<uint32_t,std::string> tagNames; //!< Field `tagNames` of type.
+	std::map<uint32_t,std::map<uint32_t,std::string>> localNames; //!< Field `localNames` of type.
+	std::map<uint32_t,std::map<uint32_t,std::string>> labelNames; //!< Field `labelNames` of type.
+	std::map<uint32_t,std::map<uint32_t,std::string>> fieldNames; //!< Field `fieldNames` of type.
+	std::map<uint32_t,std::map<uint32_t,std::string>> paramNames; //!< Field `paramNames` of type.
+	std::map<uint32_t,std::map<uint32_t,std::string>> tagParamNames; //!< Field `tagParamNames` of type.
+	uint32_t startFunctionIndex; //!< Field `startFunctionIndex` of type.
+	uint32_t dataSegmentCount; //!< Field `dataSegmentCount` of type.
+	bool hasStartFunction; //!< Field `hasStartFunction` of type.
+	bool hasDataCount; //!< Field `hasDataCount` of type.
 private:
 /**
  * \brief Performs the parseBody operation.
