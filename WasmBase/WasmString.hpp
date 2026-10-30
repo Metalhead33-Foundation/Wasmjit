@@ -136,7 +136,8 @@ private:
 		uint32_t refcount = 0;
 		uint64_t bytes = 0;
 	};
-	struct IteratorEntry {
+	/** \\brief Internal lookup entry associating a stable iterator handle with its object. */
+struct IteratorEntry {
 		StringIteratorObject object;
 		uint32_t refcount = 0;
 		uint64_t bytes = 0;
