@@ -82,6 +82,8 @@ TEST_CASE("AsmJit ModuleInstantiator compiles supported i32 functions", "[asmjit
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("branch")) == 10);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("loop_sum"), 5) == 15);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("call_forward"), 21) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("call_tail"), 21) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("call_tail_indirect"), 21, 0) == 42);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("call_indirect"), 21, 0) == 42);
 	CHECK_THROWS(WASM::callCallable<std::int32_t>(*instance->exportedFunction("call_indirect"), 21, 1));
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("mutual_recursion"), 20) == 42);
