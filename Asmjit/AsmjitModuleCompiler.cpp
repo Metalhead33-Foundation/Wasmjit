@@ -34,6 +34,16 @@ void requireI32(const WASM::ValueType& type, const char* role)
 				+ role);
 }
 
+uint32_t asmjitI32Popcnt(uint32_t value) noexcept
+{
+	value -= (value >> 1) & 0x55555555u;
+	value = (value & 0x33333333u) + ((value >> 2) & 0x33333333u);
+	value = (value + (value >> 4)) & 0x0F0F0F0Fu;
+	value += value >> 8;
+	value += value >> 16;
+	return value & 0x3Fu;
+}
+
 int32_t asmjitI32DivS(int32_t lhs, int32_t rhs) noexcept
 {
 	if (rhs == 0) {
@@ -458,6 +468,7 @@ protected:
 
 	void dispatchI32Clz() override { emitBitCount(BitCountOp::LeadingZeros); }
 	void dispatchI32Ctz() override { emitBitCount(BitCountOp::TrailingZeros); }
+	void dispatchI32Popcnt() override { emitUnaryCall(&asmjitI32Popcnt, "i32.popcnt"); }
 	void dispatchI32DivS() override { emitCheckedBinaryCall(&asmjitI32DivS, "i32.div_s"); }
 	void dispatchI32DivU() override { emitCheckedBinaryCall(&asmjitI32DivU, "i32.div_u"); }
 	void dispatchI32RemS() override { emitCheckedBinaryCall(&asmjitI32RemS, "i32.rem_s"); }
@@ -676,6 +687,23 @@ private:
 	}
 
 	template <typename Function>
+	void emitUnaryCall(uint32_t (*function)(uint32_t), const char* operation)
+	{
+		if (values.empty())
+			throw std::runtime_error(std::string("AsmJit ") + operation + " operand stack underflow");
+		auto argument = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(function), signature),
+				"AsmJit unary arithmetic helper call emission failed");
+		invoke->set_arg(0, argument);
+		auto result = compiler.new_gp32("unaryArithmeticResult");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+	}
+
 	void emitCheckedBinaryCall(Function function, const char* operation)
 	{
 		if (values.size() < 2)
