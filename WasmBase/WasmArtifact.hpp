@@ -21,8 +21,11 @@ WASMJIT_VISIBLE_BEGIN
 
 namespace WASM {
 
+/** \\brief Forward declaration of the parsed core-module artifact. */
 class Module;
+/** \\brief Forward declaration of the parsed Component Model artifact. */
 class Component;
+/** \\brief Forward declaration of the Store that owns canonical artifact types. */
 class Store;
 
 //! The two kinds of artifact that share the `\0asm` magic.
