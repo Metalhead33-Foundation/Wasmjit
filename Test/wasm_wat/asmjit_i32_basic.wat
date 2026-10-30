@@ -86,6 +86,26 @@
   (func (export "load_oob") (param i32) (result i32)
     local.get 0
     i32.load)
+  (func (export "mutual_recursion") (param i32) (result i32)
+    local.get 0
+    call $even
+    i32.const 42)
+  (func $even (param i32)
+    local.get 0
+    if
+      local.get 0
+      i32.const 1
+      i32.sub
+      call $odd
+    end)
+  (func $odd (param i32)
+    local.get 0
+    if
+      local.get 0
+      i32.const 1
+      i32.sub
+      call $even
+    end)
   (func (export "local_roundtrip") (param i32) (result i32) (local i32)
     local.get 0
     local.set 1
