@@ -3,8 +3,8 @@
 `WasmJit` is an experimental WebAssembly runtime/JIT written in C++.
 
 The library split is in place: `WasmBase/` is the backend-agnostic core
-(`libWasmBase`), every code generator is its own library (`LibJit/` is the one
-that executes; `Asmjit/` has provisional native code-generation probes while `Sljit/`
+(`libWasmBase`), every code generator is its own library (`LibJit/` is the full-featured execution backend; `Asmjit/` now has an initial
+straight-line i32 module compiler alongside native code-generation probes, while `Sljit/`
 remains a placeholder, and `Test/` is a Catch2 harness over the libraries
 rather than the product. The `build/<config>/Test/WasmJit` executable is still a
 development sandbox, not the embeddable API. See
@@ -21,8 +21,10 @@ backend-agnostic.
 
 ## Direction
 
-- **GNU LibJIT is the only executing backend**, and stays the implementation
-  path until a second code generator can run a module.
+- **GNU LibJIT remains the only full-featured backend.** AsmJit now executes a
+  deliberately narrow straight-line i32 subset (constants, locals, add/sub/mul,
+  and returns); it is an experimental second execution path, not yet a general
+  replacement for LibJIT.
 - **No bespoke interpreter fallback, ever.** WasmJit will not grow a Wasm
   interpreter — not for continuations, unsupported opcodes or portability. If
   interpretation is ever required it must come from GNU LibJIT's own
