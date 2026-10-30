@@ -108,9 +108,7 @@ TEST_CASE("AsmJit ModuleInstantiator compiles supported i32 functions", "[asmjit
 	WASM::callCallable<void>(*instance->exportedFunction("memory_copy"), 140, 128, 4);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("load_at"), 140) == 0xABABABAB);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("store_load"), 200, 0x04030201) == 0x04030201);
-	instance->exportedFunction("memory_copy").has_value()
-			? WASM::callCallable<void>(*instance->exportedFunction("memory_copy"), 201, 200, 3)
-			: throw std::runtime_error("missing memory_copy export");
+	WASM::callCallable<void>(*instance->exportedFunction("memory_copy"), 201, 200, 3);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("load_at"), 201) == 0x00030201);
 	WASM::callCallable<void>(*instance->exportedFunction("memory_fill"), 131072, 0xFF, 0);
 	WASM::callCallable<void>(*instance->exportedFunction("memory_copy"), 131072, 0, 0);
