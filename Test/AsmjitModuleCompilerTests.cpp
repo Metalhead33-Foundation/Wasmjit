@@ -52,13 +52,6 @@ TEST_CASE("AsmJit ModuleInstantiator compiles straight-line i32 functions", "[as
 	CHECK_THROWS(WASM::callCallable<std::int32_t>(*instance->exportedFunction("load_oob"), -1));
 }
 
-#include <catch2/catch_all.hpp>
-
-#include "helper.hpp"
-#include "Asmjit/AsmjitContext.hpp"
-#include "Asmjit/AsmjitModuleCompiler.hpp"
-#include "WasmBase/WasmRegistryImportResolver.hpp"
-
 TEST_CASE("AsmJit rolls back code allocations when a later function is unsupported", "[asmjit][module][safety]")
 {
 	WASM::Module module = loadTestModule("asmjit_i32_unsupported");
