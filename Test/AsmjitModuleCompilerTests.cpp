@@ -129,3 +129,18 @@ TEST_CASE("AsmJit direct calls pass native import context correctly", "[asmjit][
 	REQUIRE(callHost.has_value());
 	CHECK(WASM::callCallable<std::int32_t>(*callHost, 21) == 42);
 }
+
+TEST_CASE("AsmJit Wasm imports execute with the exporting instance context", "[asmjit][module][imports]")
+{
+	WASM::Module providerModule = loadTestModule("asmjit_i32_provider");
+	WASM::Module importerModule = loadTestModule("asmjit_i32_wasm_import");
+	WASM::RegistryImportResolver imports;
+	AsmJitBackend::Context context;
+	AsmJitBackend::ModuleCompiler compiler(context);
+	auto provider = compiler.instantiate(providerModule, imports);
+	provider->registerExports(imports, "provider");
+	auto importer = compiler.instantiate(importerModule, imports);
+	const auto callProvider = importer->exportedFunction("call_provider");
+	REQUIRE(callProvider.has_value());
+	CHECK(WASM::callCallable<std::int32_t>(*callProvider, 21) == 42);
+}
