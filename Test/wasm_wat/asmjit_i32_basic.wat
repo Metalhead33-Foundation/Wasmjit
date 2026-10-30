@@ -91,6 +91,17 @@
       i32.const 1
       i32.add
     end)
+  (func $unreachable_func (export "unreachable_trap") (result i32)
+    unreachable)
+  (func (export "call_unreachable") (result i32)
+    call $unreachable_func)
+  (func (export "unreachable_if") (param i32) (result i32)
+    local.get 0
+    if (result i32)
+      unreachable
+    else
+      i32.const 7
+    end)
   (func (export "call_forward") (param i32) (result i32)
     local.get 0
     call $double)
