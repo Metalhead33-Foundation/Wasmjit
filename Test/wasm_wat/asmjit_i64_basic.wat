@@ -1,5 +1,8 @@
 (module
   (type $unary64 (func (param i64) (result i64)))
+  (type $result_only64 (func (result i64)))
+  (global $g64 (export "g64") (mut i64) (i64.const 4294967296))
+  (global $const64 (export "const64") i64 (i64.const 1234605616436508552))
   (table 1 funcref)
   (memory 1)
   (func $i64_double (type $unary64)
@@ -14,6 +17,44 @@
     local.get 0
     i32.const 0
     call_indirect (type $unary64))
+  (func (export "i64_get_global") (result i64)
+    global.get $g64)
+  (func (export "i64_set_global") (param i64) (result i64)
+    local.get 0
+    global.set $g64
+    global.get $g64)
+  (func (export "i64_block_result") (param i64) (result i64)
+    block (result i64)
+      local.get 0
+      i64.const 1
+      i64.add
+    end)
+  (func (export "i64_if_result") (param i32) (result i64)
+    local.get 0
+    if (result i64)
+      i64.const 4294967296
+    else
+      i64.const 7
+    end)
+  (func (export "i64_br_result") (result i64)
+    block (result i64)
+      i64.const 4294967296
+      br 0
+    end)
+  (func (export "i64_br_if_result") (param i32) (result i64)
+    block (result i64)
+      i64.const 4294967296
+      local.get 0
+      br_if 0
+      drop
+      i64.const 7
+    end)
+  (func (export "i64_typed_block_result") (param i64) (result i64)
+    block (type $result_only64)
+      local.get 0
+      i64.const 2
+      i64.mul
+    end)
   (func (export "i64_load_at") (param i32) (result i64)
     local.get 0
     i64.load)
