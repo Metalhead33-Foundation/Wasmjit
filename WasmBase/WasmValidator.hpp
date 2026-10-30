@@ -42,6 +42,8 @@ namespace WASM {
 class Validator final : public OpcodeDispatcher
 {
 public:
+	//! Validates `module` with `options`; throws `ValidationError` on the first
+	//! rule that fails.
 	explicit Validator(const Module& module, ValidationOptions options = {});
 
 	//! Throws std::runtime_error naming the first rule that failed.
@@ -66,7 +68,9 @@ private:
 
 	//! Current function body (npos while validating module-level structure).
 	static constexpr std::size_t kNoBody = static_cast<std::size_t>(-1);
+	//! The body being validated, or `kNoBody` at module level.
 	std::size_t currentBody = kNoBody;
+	//! The function's local types, parameters first.
 	std::vector<ValueType> locals;
 
 	//! Records a structured validation diagnostic and throws `ValidationError`
@@ -80,30 +84,44 @@ private:
 	//! (`"0 ($name)"`); the name-section outer key is the global function index.
 	std::string describeLocal(uint32_t idx) const;
 
+	//! The decoded function type at module-local type index `typeIdx`.
 	FuncType funcTypeAt(uint32_t typeIdx) const;
 	//! Resolve `cont $ft` to the module-local function type index it names. The
 	//! canonical view stores a process-wide TypeId, so the module-local index is
 	//! recovered from `typeIds` (STACK_SWITCHING.md SS-1).
 	uint32_t continuationFuncIndex(TypeIdx contTypeIdx, const char* who) const;
+	//! The decoded function type a `cont $ft` names.
 	FuncType continuationFuncType(TypeIdx contTypeIdx, const char* who) const;
 	//! The stage-2 provider carries at most one i32 parameter and one i32 result
 	//! for a continuation function, a control tag and a handler payload.
 	void requireMvpContinuationSignature(const FuncType& type, const char* who) const;
+	//! Requires a valid module-local function index.
 	void requireFunctionIndex(uint32_t idx) const;
+	//! Requires a valid table index.
 	void requireTableIndex(uint32_t idx) const;
+	//! Requires a valid memory index.
 	void requireMemoryIndex(uint32_t idx) const;
 	//! Type checks for the `string` array instructions: the type index must be
 	//! an array of the required packed element type; encode variants require a
 	//! mutable array.
 	void requireStringArrayType(TypeIdx idx, ValueTypeCode packed, bool requireMutable) const;
+	//! Requires a valid global index.
 	void requireGlobalIndex(uint32_t idx) const;
+	//! Requires a valid tag index.
 	void requireTagIndex(uint32_t idx) const;
+	//! Requires a valid local index for the function being validated.
 	void requireLocalIndex(uint32_t idx) const;
+	//! Requires a valid element-segment index.
 	void requireElementIndex(uint32_t idx) const;
+	//! Requires a valid data-segment index.
 	void requireDataIndex(uint32_t idx) const;
+	//! True when global `idx` is declared `mut`.
 	bool globalIsMutable(uint32_t idx) const;
+	//! True when table `idx`'s element type is a function reference.
 	bool tableIsFuncRef(uint32_t idx) const;
+	//! True when memory `idx` uses 64-bit addresses.
 	bool memoryIs64(uint32_t idx) const;
+	//! True when memory `idx` is a shared (threads-proposal) memory.
 	bool memoryIsShared(uint32_t idx) const;
 
 	//! Reference subtyping (nullability + the func/extern/exn/any hierarchies).
@@ -114,8 +132,11 @@ private:
 	//! `ref.func x` may only name a function that the module also mentions
 	//! outside its function bodies or start function (the spec's `C.refs`).
 	std::unordered_set<uint32_t> declaredFunctions;
+	//! Validates a constant initialiser, returning its value (or nullopt when
+	//! the expression is not constant).
 	std::optional<ValueType> validateConstExpr(const std::vector<uint8_t>& bytes,
 			const std::string& label, std::size_t globalLimit);
+	//! True when `type` is `eqref` or a subtype of it.
 	bool isEqRef(const ValueType& type) const {
 		return refSubtype(type, ValueType{ValueTypeCode::EqRef, -1});
 	}
@@ -125,8 +146,11 @@ private:
 	//! `ref.test`/`ref.cast` target construction and the top of the target's
 	//! heap hierarchy (used for the operand's same-hierarchy rule).
 	ValueType refType(bool nullable, const HeapType& heapType) const;
+	//! The top of the heap hierarchy `heapType` belongs to.
 	ValueType refTopForHeap(const HeapType& heapType) const;
+	//! Validates a `ref.test`'s operands against the target heap type.
 	void validateRefTest(bool nullable, const HeapType& heapType);
+	//! Validates a `ref.cast`'s operands against the target heap type.
 	void validateRefCast(bool nullable, const HeapType& heapType);
 
 	//! Profile gates (docs/proposals/PROFILES.md PR-2/PR-4): reject constructs an
@@ -135,6 +159,7 @@ private:
  * \brief Checks the Profile constraint for the current module.
  */
 	void checkProfile() const;
+	//! Rejects a value type an excluded profile marker forbids.
 	void checkProfileValueType(const ValueType& type, const std::string& where) const;
 	//! Prefixed-instruction gates (shared with the base dispatcher's hooks).
 	void onSimdOpcode(SIMDOpcode opcode) override;
@@ -143,23 +168,30 @@ private:
 	void checkLimits(const Limits& limits, bool is64, bool isMemory,
 					 const char* what, std::size_t index,
 					 uint64_t pageSize = 0x10000) const; //!< Field `pageSize` of type.
+	//! Checks a memory access's alignment and memory index.
 	void requireMemoryAccess(const MemArg& arg, uint32_t naturalLog2) const;
 	//! Multibyte Array Access (GC_EXTENSIONS.md GX-1): a load/store whose memarg
 	//! sets bit 5 operates on a GC array. These helpers validate the type index
 	//! and element shape, enforce mutability for stores, and pop `[ref, address]`
 	//! instead of the linear-memory address.
 	void requireArrayAccess(const MemArg& arg, uint32_t naturalLog2) const;
+	//! Requires the array the memarg names to be mutable (for a store).
 	void requireArrayMutable(const MemArg& arg) const;
+	//! Pops the `[ref, address]` pair an array access takes.
 	void popMemoryAddress(const MemArg& arg);
 	//! Atomic accesses have extra rules: the alignment immediate must equal the
 	//! natural alignment, and the acquire-release ordering byte is 0 or 1.
 	void requireAtomicMemoryAccess(const MemArg& arg, uint32_t naturalLog2) const;
+	//! The field type at `fieldIndex` of struct type `type`.
 	const CanonFieldType& requireStructField(TypeIdx type, uint32_t fieldIndex) const;
+	//! Requires `lane` to be a valid index for `laneCount` lanes.
 	void requireLane(uint8_t lane, uint32_t laneCount, const char* what) const;
 
 	//! Operand/control typing (core instructions only in this milestone).
 	struct ControlFrame {
+		//! The operand types the frame requires on entry (block parameters).
 		std::vector<ValueType> startTypes;
+		//! The operand types the frame must produce on exit.
 		std::vector<ValueType> endTypes;
 		std::size_t height = 0; //!< Field `height` of ControlFrame.
 		bool isLoop = false; //!< Field `isLoop` of ControlFrame.
@@ -170,6 +202,7 @@ private:
 		//! parent's set on entry; stores made inside the frame do not escape it,
 		//! and `else` restarts from the entry set (the spec's local-init rule).
 		std::vector<uint8_t> initialized;
+		//! The `initialized` set as it was on frame entry (restored by `else`).
 		std::vector<uint8_t> entryInitialized;
 	};
 	std::vector<ValueType> typeStack; //!< Field `typeStack` of type.
@@ -183,19 +216,28 @@ private:
  * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	ControlFrame& frame();
+	//! The parameter types a block type introduces.
 	std::vector<ValueType> blockParams(const BlockType& blockType) const;
+	//! The result types a block type produces.
 	std::vector<ValueType> blockResults(const BlockType& blockType) const;
+	//! Pushes one operand type onto the type stack.
 	void pushValue(const ValueType& type);
 /**
  * \brief Consumes the expected operand-stack value or sequence, validating its type.
  * \return The resolved value, predicate result, or validation data described by the function name.
  */
 	std::optional<ValueType> popAny();
+	//! Pops one operand and requires it to be `code`.
 	void popExpect(ValueTypeCode code);
+	//! Pops one operand and requires it to match `type`.
 	void popExpect(const ValueType& type);
+	//! Pushes several operand types, in order.
 	void pushTypes(const std::vector<ValueType>& types);
+	//! Pops several operand types, in reverse order.
 	void popTypes(const std::vector<ValueType>& types);
+	//! Requires the operand stack to match a tail call's callee results.
 	void checkTailCallResults(const FuncType& callee);
+	//! True when `actual` is assignable to `expected` (subtyping + defaults).
 	bool assignable(const ValueType& actual, const ValueType& expected) const;
 	//! True for `cont`, `nocont` and a concrete `cont $ft` type index. The
 	//! stack-switching proposal forbids casting to any continuation type.
@@ -204,21 +246,30 @@ private:
 	CoreTypeView requireArrayType(TypeIdx idx, const char* who) const;
 	bool storageAssignable(const CanonStorageType& actual,
 			const CanonStorageType& expected) const; //!< Field `const` of type.
-/**
- * \brief Performs the validator's setUnreachable operation.
- */
+	//! Marks the rest of the current block unreachable (the polymorphic stack).
 	void setUnreachable();
+	//! Opens a block/loop/if frame.
 	void beginBlock(const BlockType& blockType, bool isLoop, bool isIf);
+	//! Closes a frame (the `else` arm is `isElse`).
 	void endBlock(bool isElse);
+	//! Type-checks a `br` to `label`.
 	void branch(LabelIdx label);
+	//! Type-checks a `br_if` to `label`.
 	void branchIf(LabelIdx label);
+	//! The address value type a memory access uses (memory32 vs memory64).
 	ValueTypeCode memoryAddressType(MemIdx memIdx) const;
+	//! The value type a table index is expressed in.
 	ValueTypeCode tableIndexType(TableIdx tableIdx) const;
+	//! The function type at function index `idx`.
 	FuncType functionType(FuncIdx idx) const;
+	//! The value type of global `idx`.
 	ValueType globalType(GlobalIdx idx) const;
+	//! The element type of table `idx`.
 	ValueType tableElementType(TableIdx idx) const;
 	const FuncType* currentFuncType = nullptr; //!< Field `currentFuncType` of type.
+	//! The parameter types of `types`, as stack operand types.
 	std::vector<ValueType> paramTypes(const FuncType& types) const;
+	//! The result types of `types`, as stack operand types.
 	std::vector<ValueType> resultTypes(const FuncType& types) const;
 
 	//! Control and parametric instructions.
@@ -260,7 +311,9 @@ private:
 	void dispatchRefCastDescEqNull(const HeapType& arg) override; //!< Validate the stack effect of this opcode.
 	void dispatchBrOnCastDescEq(uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2) override; //!< Validate the stack effect of this opcode.
 	void dispatchBrOnCastDescEqFail(uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2) override; //!< Validate the stack effect of this opcode.
+	//! Validates a `ref.cast_desc_eq` against its target descriptor type.
 	void validateCastDescEq(bool nullableTarget, const HeapType& target);
+	//! Validates a `br_on_cast_desc_eq` (and its `_fail` form).
 	void validateBrOnCastDescEq(bool isFail, uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2);
 
 /**
@@ -268,10 +321,15 @@ private:
  * \throws ValidationError when the requested validation rule is violated.
  */
 	void validateModule();
+	//! Validates one global's initialiser against its declared type.
 	void validateGlobalInit(const Global& global, std::size_t index);
+	//! Validates one element segment's type, mode and initialiser.
 	void validateElementSegment(const ElementSegment& segment, std::size_t index);
+	//! Validates one data segment's mode and bounds.
 	void validateDataSegment(const DataSegment& segment, std::size_t index);
+	//! Validates a table declaration (or import) and its initialiser.
 	void validateTableInit(const TableType& table, std::size_t index, bool isImport = false);
+	//! Validates one function body's instructions and stack discipline.
 	void validateFunctionBody(const FunctionBody& body, std::size_t index);
 
 	void dispatchStringNewUtf8(MemIdx arg) override; //!< Validate the stack effect of this opcode.
@@ -361,6 +419,7 @@ private:
 	void dispatchBrOnNonNull(LabelIdx arg) override; //!< Validate the stack effect of this opcode.
 	void dispatchBrOnCast(uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2) override; //!< Validate the stack effect of this opcode.
 	void dispatchBrOnCastFail(uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2) override; //!< Validate the stack effect of this opcode.
+	//! Validates a `br_on_cast` (or `_fail`) against its two heap types.
 	void validateBrOnCast(bool isFail, uint8_t castop, LabelIdx label, HeapType ht1, HeapType ht2);
 
 	void dispatchTableGet(TableIdx arg) override; //!< Validate the stack effect of this opcode.
