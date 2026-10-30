@@ -909,7 +909,7 @@ protected:
 
     void dispatchTableInit(uint32_t elementIndex, WASM::TableIdx tableIndex) override
     {
-        if (static_cast<size_t>(tableIndex) >= module.tableCount())
+        if (static_cast<size_t>(tableIndex) >= module.importTables.size() + module.tables.size())
             throw std::runtime_error("AsmJit table.init table index is out of range");
         if (values.size() < 3)
             throw std::runtime_error("AsmJit table.init operand stack underflow");
