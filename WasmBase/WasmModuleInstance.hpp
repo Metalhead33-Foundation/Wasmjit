@@ -168,7 +168,7 @@ private:
  * \param importResolver Input value or output destination for this operation.
  */
 	void resolveTypeImports(ImportResolver& importResolver);
-	std::vector<TypeId> importedTypeIds;
+	std::vector<TypeId> importedTypeIds; //!< Field `importedTypeIds` of WASMJIT_API.
 /**
  * \brief Performs the initializeMemories operation.
  */
@@ -494,7 +494,7 @@ public:
 	std::unique_ptr<ModuleInstance> instantiate(
 			const Module& module, ImportResolver& resolver,
 			const HostBridge* hostBridge = nullptr,
-			const ProfileConfig& profile = {});
+			const ProfileConfig& profile = {}); //!< Field `profile` of WASMJIT_API.
 
 	//! The profile this instantiator is currently operating under (set by the
 	//! most recent `instantiate` call; read by a backend's compile step).
