@@ -24,7 +24,7 @@ backend-agnostic.
 - **GNU LibJIT remains the only full-featured backend.** AsmJit now executes an
   experimental i32 subset: arithmetic, bit counts, comparisons, bit operations,
   sign extension, void and single-i32-result structured control flow, `br_table`, unreachable traps,
-  i32 globals, typed direct/indirect calls, `select`, checked memory32 `memory.copy`/`memory.fill`/`memory.init` and `data.drop`, preliminary tail-call opcode lowering,
+  i32 globals, typed direct/indirect calls, `select`, checked memory32 `memory.copy`/`memory.fill`/`memory.init` and `data.drop`, `table.init`/`elem.drop`/`table.size`, preliminary tail-call opcode lowering,
   and checked memory32 loads/stores plus size/grow. True tail-call stack semantics
   remain outstanding. It is not yet a general
   replacement for LibJIT.
