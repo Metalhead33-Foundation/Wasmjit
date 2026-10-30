@@ -52,7 +52,7 @@ extern "C" {
 //! pointer to the payload area (16-byte aligned). The store is the executing
 //! instance's, reached through `ctx` (docs/EMBEDDING_SURFACE.md §4.3 option B).
 //! Traps `OutOfMemory` when that store's allocation budget refuses it.
-/** \brief Allocates a Store-owned exception object. \param ctx Executing instance's VM context, used to locate its Store. \param tagId Canonical exception tag identity. \param payloadBytes Size of the tag payload in bytes. \return Pointer to the 16-byte-aligned payload area. \throws/traps OutOfMemory when the Store allocation budget is exhausted. */
+/** \brief Allocates a Store-owned exception object. \param ctx Executing instance's VM context, used to locate its Store. \param tagId Canonical exception tag identity. \param payloadBytes Size of the tag payload in bytes. \return Pointer to the 16-byte-aligned payload area. \throws OutOfMemory when the Store allocation budget is exhausted. */
 void* wasm_exn_create(WASM::VMContext* ctx, int32_t tagId, uint32_t payloadBytes);
 
 //! The thrown tag's process-wide id (for `throw_ref`'s dynamic dispatch).
@@ -80,7 +80,7 @@ namespace WASM {
 
 //! The store-explicit form of `wasm_exn_create`: an embedder (or a test) that is
 //! not inside generated code names the store directly.
-/** \brief Allocates an exception object in an explicitly supplied Store. \param store Store that owns the new exception object. \param tagId Canonical exception tag identity. \param payloadBytes Size of the tag payload in bytes. \return Pointer to the aligned payload area. \throws/traps OutOfMemory when the Store allocation budget is exhausted. */
+/** \brief Allocates an exception object in an explicitly supplied Store. \param store Store that owns the new exception object. \param tagId Canonical exception tag identity. \param payloadBytes Size of the tag payload in bytes. \return Pointer to the aligned payload area. \throws OutOfMemory when the Store allocation budget is exhausted. */
 void* wasm_exn_create_in(Store& store, int32_t tagId, uint32_t payloadBytes);
 
 } // namespace WASM
