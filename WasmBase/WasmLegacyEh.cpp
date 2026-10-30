@@ -45,6 +45,11 @@ struct InstructionSpan {
 	std::size_t begin = 0;
 	std::size_t end = 0;
 	Opcode opcode = Opcode::Unreachable;
+	//! Number of clauses a final-form `try_table` names; zero for everything
+	//! else. Used to tell a catching frame from a `try_table` that catches
+	//! nothing when a legacy `delegate` is checked for a skipped handler
+	//! (`LE8`).
+	std::uint32_t catchCount = 0;
 };
 
 //! Decodes a body into `InstructionSpan`s. It parses every immediate by
@@ -70,12 +75,22 @@ public:
 				consumeLegacy(stream, opcode);
 			else
 				dispatchOpcode(stream, opcode);
-			spans.push_back(InstructionSpan{begin, static_cast<std::size_t>(stream.device.tell()), opcode});
+			spans.push_back(InstructionSpan{begin, static_cast<std::size_t>(stream.device.tell()),
+					opcode, pendingCatchCount_});
+			pendingCatchCount_ = 0;
 		}
 	}
 
 protected:
 	void onUnhandledOpcode(const char*) override {}
+
+	//! Records how many clauses a `try_table` names, so `build()` can tell a
+	//! catching frame from one that catches nothing without re-parsing the
+	//! immediate (docs/proposals/LEGACY_EXCEPTIONS.md LE8/LE9).
+	void dispatchTryTable(const BlockType&, std::vector<CatchClause>&& clauses) override
+	{
+		pendingCatchCount_ = static_cast<std::uint32_t>(clauses.size());
+	}
 
 private:
 	void consumeLegacy(FastMemReader& stream, Opcode opcode)
@@ -103,6 +118,10 @@ private:
 				break;
 		}
 	}
+
+	//! Clauses the last dispatched `try_table` named; zero for every other
+	//! opcode, and reset after each span is recorded.
+	std::uint32_t pendingCatchCount_ = 0;
 };
 
 //! An unsigned LEB128 read straight from the body bytes.
@@ -191,9 +210,14 @@ private:
 	void emitOne(std::size_t index);
 	void emitCopiedBranch(std::size_t index);
 	void emitRethrow(std::size_t index);
+	void emitTryTable(std::size_t index);
 	void copySpan(std::size_t index);
 
 	std::uint32_t remapDepth(std::uint32_t depth) const;
+	//! True when the frame opened by span `token` can catch an exception: a
+	//! legacy try that declares arms, or a final-form `try_table` with at least
+	//! one clause. A frame that catches nothing is transparent to `delegate`.
+	bool          isCatchFrame(std::size_t token) const;
 	int           emitBranchTo(int frameId);
 	int           openFrame();
 	void          closeFrame();
@@ -346,7 +370,12 @@ void BodyRewriter::build()
 				break;
 			}
 			case Opcode::TryTable:
-				refuseRewrite("try_table mixed with the legacy form");
+				// A final-form try is an ordinary frame as far as branch depths
+				// are concerned: its own label opens after its clauses, exactly
+				// like a block. Its clause labels are renumbered at emission
+				// (docs/proposals/LEGACY_EXCEPTIONS.md LE-9).
+				frames.push_back(OpenFrame{});
+				break;
 			default:
 				break;
 		}
@@ -495,6 +524,14 @@ std::uint32_t BodyRewriter::remapDepth(std::uint32_t depth) const
 	return 0;
 }
 
+bool BodyRewriter::isCatchFrame(std::size_t token) const
+{
+	const std::size_t tryIndex = tryByToken_[token];
+	if (tryIndex != kNoTry)
+		return !tries_[tryIndex].arms.empty();
+	return spans_[token].opcode == Opcode::TryTable && spans_[token].catchCount != 0;
+}
+
 // ---- the walk itself -----------------------------------------------------
 
 void BodyRewriter::copySpan(std::size_t index)
@@ -561,6 +598,49 @@ void BodyRewriter::emitRethrow(std::size_t index)
 	emitOpcode(Opcode::ThrowRef);
 }
 
+//! Re-emits a final-form `try_table`, renumbering every clause label
+//! (docs/proposals/LEGACY_EXCEPTIONS.md LE-9). A clause's label is resolved in
+//! the *enclosing* context — the `try_table`'s own label opens only after its
+//! clauses — so the remap happens before this frame is pushed, exactly as for a
+//! `br`.
+void BodyRewriter::emitTryTable(std::size_t index)
+{
+	const std::size_t begin = spans_[index].begin + 1;
+	const std::size_t end = spans_[index].end;
+	if (end <= begin)
+		refuseRewrite("an empty try_table immediate");
+	std::span<const std::byte> bytes(reinterpret_cast<const std::byte*>(code_.data() + begin),
+			end - begin);
+	Euph::Io::ConstBufferDevice device(bytes);
+	FastMemReader stream(device);
+	BlockType blockType;
+	stream >> blockType;
+	const std::size_t blockTypeEnd = begin + static_cast<std::size_t>(stream.device.tell());
+	const std::uint32_t count = stream.readLEB128<std::uint32_t>();
+	std::vector<CatchClause> clauses;
+	clauses.reserve(count);
+	for (std::uint32_t i = 0; i < count; ++i) {
+		CatchClause clause{};
+		stream >> clause;
+		clauses.push_back(clause);
+	}
+	if (stream.device.tell() != static_cast<std::ptrdiff_t>(end - begin))
+		refuseRewrite("a try_table whose immediate this rewrite cannot measure");
+
+	emitOpcode(Opcode::TryTable);
+	emitBlockType(begin, blockTypeEnd);
+	emitUnsignedLeb(count);
+	for (const CatchClause& clause : clauses) {
+		emitByte(static_cast<std::uint8_t>(clause.kind));
+		if (clause.kind == CatchKind::Catch || clause.kind == CatchKind::CatchRef)
+			emitUnsignedLeb(clause.tagIdx);
+		emitUnsignedLeb(remapDepth(clause.labelIdx));
+	}
+	const int id = openFrame();
+	binStack_.push_back(id);
+	binToken_.push_back(index);
+}
+
 void BodyRewriter::emitOne(std::size_t index)
 {
 	switch (spans_[index].opcode) {
@@ -596,6 +676,9 @@ void BodyRewriter::emitOne(std::size_t index)
 			break;
 		case Opcode::Rethrow:
 			emitRethrow(index);
+			break;
+		case Opcode::TryTable:
+			emitTryTable(index);
 			break;
 		case Opcode::TryLegacy: {
 			const std::size_t tryIndex = tryByToken_[index];
@@ -654,7 +737,7 @@ void BodyRewriter::emitLegacyTry(const LegacyTry& legacyTry)
 			refuseRewrite("delegate depth out of range");
 		for (std::size_t k = 1; k < depth; ++k) {
 			const std::size_t token = binToken_[binStack_.size() - 1 - k];
-			if (tryByToken_[token] != kNoTry)
+			if (isCatchFrame(token))
 				refuseRewrite("delegate that skips an intervening catch");
 		}
 		emitRange(legacyTry.bodyFirst, legacyTry.bodyLast);

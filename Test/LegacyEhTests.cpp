@@ -202,6 +202,33 @@ TEST_CASE("a delegate that would skip an intervening catch is refused", "[legacy
 		INFO(error.what());
 		REQUIRE(std::string(error.what()).find("delegate that skips") != std::string::npos);
 	}
+
+	// Since LE-9 a mixed body loads, so the intervening handler can also be a
+	// final-form `try_table`. It counts as a catch too, or the rewriting would
+	// silently let it catch what the delegate sent past it.
+	try {
+		loadLegacyFixture("delegate_skip_table", accepting);
+		FAIL("a final-form try_table must count as an intervening catch");
+	} catch (const std::exception& error) {
+		INFO(error.what());
+		REQUIRE(std::string(error.what()).find("delegate that skips") != std::string::npos);
+	}
+}
+
+TEST_CASE("a body may mix the superseded form with try_table", "[legacy-eh]")
+{
+	// LE-9: a final-form `try_table` keeps its clauses, but their labels are
+	// renumbered exactly like a branch, because the rewrite inserts frames for
+	// every legacy try. Each value below separates a correct renumbering (42,
+	// 11, 9) from a lost one, which lands on a legacy arm landing (7).
+	const WASM::ParseOptions accepting = WASM::ParseOptions{}.acceptingLegacyExceptionHandling();
+	const LoadedLegacyFixture loaded = instantiateFixture("mixed", accepting);
+	REQUIRE(loaded.instance.get() != nullptr);
+
+	REQUIRE(callExport(loaded, "mixed", 0, false) == 42); // clause out of a legacy try
+	REQUIRE(callExport(loaded, "branch", 1) == 11);       // br out of the try_table's body
+	REQUIRE(callExport(loaded, "branch", 0) == 42);       // ... and the clause itself
+	REQUIRE(callExport(loaded, "arm", 0, false) == 9);    // clause inside a legacy arm
 }
 
 TEST_CASE("the environment seeds the default policy, an explicit one overrides it", "[legacy-eh]")

@@ -1045,7 +1045,7 @@ Four tagged families cover the embedding surface and the backend seam:
 | `[concurrency]` | `Test/ConcurrencyTests.cpp` | `ConcurrencyModel` claims, the `Agents` refusal, the per-runtime budget refusal, a re-entrant compiled function across threads, and the `MF-2` refusal under a real second-thread call |
 | `[tiers]` | `Test/HeaderTierTests.cpp` | Every `WasmBase/` header is classified exactly once; the umbrella includes exactly the embedder tier; every public header has a compile-only TU |
 | `[plugin]` | `Test/PluginTests.cpp` | The `dlopen` loader: a real plugin loads by path and by name; every refusal path is a named error |
-| `[legacy-eh]` | `Test/LegacyEhTests.cpp` | The superseded Phase-3 exception form: the named refusal by default, the opt-in rewrite (`WASMJIT_LEGACY_EH`), `rethrow` payload identity, branch/delegate remapping, agreement with Binaryen's translation, and the two refusals (`LE-8`/`LE-9`) |
+| `[legacy-eh]` | `Test/LegacyEhTests.cpp` | The superseded Phase-3 exception form: the named refusal by default, the opt-in rewrite (`WASMJIT_LEGACY_EH`), `rethrow` payload identity, branch/delegate remapping, agreement with Binaryen's translation, a body that mixes the two encodings (`LE-9`), and the one remaining refusal (`LE-8`) |
 
 The plugin fixture is `Test/ExampleBackend/ExampleBackend.pro`, a shared library
 built in its own directory (`libwasmjit-backend-example.so`) so the test proves the
@@ -1069,7 +1069,7 @@ names the compiler flags, the Binaryen pass and `WASMJIT_LEGACY_EH`
 ([`proposals/LEGACY_EXCEPTIONS.md`](proposals/LEGACY_EXCEPTIONS.md) `LE-1`). With
 `ParseOptions::legacyExceptionHandling` (`WasmBase/WasmParseOptions.hpp`, passed
 through `Module::fromFile`) the loader rewrites every affected body into the final
-`try_table` encoding before validation (`LE-3`…`LE-6`), so the validator and every
+`try_table` encoding before validation (`LE-3`…`LE-6`, `LE-9`), so the validator and every
 backend see only the final form. The argument-less overloads seed that policy
 from `WASMJIT_LEGACY_EH`, so the script below can drive the whole matrix from a
 shell; an explicit `ParseOptions` overrides the environment.

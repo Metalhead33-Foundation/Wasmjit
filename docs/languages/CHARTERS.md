@@ -79,7 +79,7 @@ first PoC, which is always the slowest. They are hard caps.
 
 | Field | Content |
 |---|---|
-| **Scope** | In: exports, host imports, cross-module imports, memory/ABI layout, start-up, and the EH *policy* question (does the toolchain's encoding need it, and does the module trip `LE-8`/`LE-9`), for two toolchain arms (Emscripten; clang/wasm-ld) × two languages (C; C++). Out: threads beyond `Single`, performance, dynamic linking, debugging tooling |
+| **Scope** | In: exports, host imports, cross-module imports, memory/ABI layout, start-up, and the EH *policy* question (does the toolchain's encoding need it, and does the module trip `LE-8`), for two toolchain arms (Emscripten; clang/wasm-ld) × two languages (C; C++). Out: threads beyond `Single`, performance, dynamic linking, debugging tooling |
 | **Candidates** | `T01` C/Emscripten, `T02` C/clang-freestanding, `T03` C/wasi-sdk, `T04` C++/Emscripten, `T05` C++/clang+wasi-libc. **Versions are pinned at approval and recorded in the report** — the screen installed nothing ([`EVIDENCE.md`](EVIDENCE.md) §5); the report must state the exact release, the flags and the module hash |
 | **Questions** | The six of `TRIAGE.md` §7, plus: does `-sSTANDALONE_WASM` output instantiate without any JS object; what does `_start`/`__wasm_call_ctors` require; does the C++ arm's default encoding load with the parser policy on (and is `-mllvm -wasm-use-legacy-eh=false` worth requiring instead); which `env.*`/`wasi_snapshot_preview1` imports appear; does a native import see the caller's memory and `hostData`; does a cross-module import work without a trampoline (`ABI.md` "Cross-module") |
 | **"Feasible"** | The shared bar (§2.1) for **both** languages, with the C++ arm additionally proving that a caught exception stays inside the module and a trap crosses as a pending trap, not a throw |
@@ -124,7 +124,7 @@ first PoC, which is always the slowest. They are hard caps.
 | **"Feasible"** | The shared bar, **plus** that a reference of a GC type held by the host survives a collection — the one assertion `L4` exists to make |
 | **Budget cap** | **9 sessions / 60 human hours** |
 | **Deliverable** | One report, at most two PoCs, the import catalogue per arm, the reference-lifetime transcript, and the classed gap list |
-| **Kill / stop** | Stop after the first arm if it proves the reference round-trip; stop early if an arm's output trips `LE-8`/`LE-9`, which the policy cannot translate and a charter cannot fix |
+| **Kill / stop** | Stop after the first arm if it proves the reference round-trip; stop early if an arm's output trips `LE-8`, which the policy cannot translate and a charter cannot fix |
 | **Owner and date** | *Unassigned.* Last in the shortlist order; review at approval + 45 days |
 
 ### 3.5 `S5` — Guest scripting VMs (`L5`)
@@ -154,7 +154,7 @@ and whether the rewrite accepts it | `S1`, `S2`, `S4` | One line per toolchain: 
 flag that avoids the policy (a convenience) and whether the output trips `LE-8`
 (a `delegate` that skips a catch) or `LE-9` (a body mixing the two forms). The
 encoding question itself is settled: [`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md)
-§4.6, `LE-1`…`LE-6`; `LE-8`/`LE-9` are the open rows |
+§4.6, `LE-1`…`LE-9`; `LE-8` is the open row |
 | **Heap-ownership probe** — ask each runtime how much it grows its heap at start-up and whether it relies on the new pages being committed lazily (`RA4` → [`proposals/MEMORY_PROVIDER.md`](../proposals/MEMORY_PROVIDER.md) `D3`, `MP-1`) | `S1`, `S2`, `S4`, `S5` | One number per runtime (bytes grown before `main`); it decides whether the reservation overload is necessary, and it is the only part of "heap ownership" that is an engine question |
 | **WASI surface census** — collect the imports of a minimal "hello, world" build per toolchain | `S1`, `S2`, `S4`, `S5` (and every `L6`–`L9` row later) | One table that says how big a WASI shim has to be, and which imports are avoidable | `Q-2` — embedder tooling |
 

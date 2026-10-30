@@ -1,8 +1,9 @@
 # Legacy Exception Handling (`try`/`catch`) — Compatibility Notes, Encodings, and the Cost of Admission {#prop_legacy_exceptions}
 
-Status: design note / compatibility study (revision 2 — 2026-10-30: `LE-1`…`LE-6`
-are **implemented** behind the opt-in switch, and `LE-8` records the one shape the
-rewrite refuses; revision 1 was the study). It analyses the **superseded Phase-3
+Status: design note / compatibility study (revision 3 — 2026-10-30: `LE-1`…`LE-6`
+and now `LE-9` are **implemented** behind the opt-in switch, and `LE-8` records
+the one shape the rewrite still refuses; revision 1 was the study, revision 2 the
+shipped adapter). It analyses the **superseded Phase-3
 ("legacy") exception-handling binary form**, what it cost to accept, and how it
 was accepted — and it answers the six questions it was commissioned with in §10.
 **Accepting the form is not a support claim**: it is a load-time compatibility
@@ -33,7 +34,7 @@ specific questions rather than as a proposal to implement.
 | §4 | What is in the tree today, and what does it do with a legacy module? |
 | §5 | Where do we fall short (`LE1`–`LE9`)? |
 | §6 | Where may we play fast and loose (`LED1`–`LED5`)? |
-| §7 | Plan (`LE-0`…`LE-6`, plus the open `LE-8`) |
+| §7 | Plan (`LE-0`…`LE-9`, plus the open `LE-8`) |
 | §8 | Test survey — the fixtures, the `[legacy-eh]` tag and the probe matrix |
 | §9 | References |
 | §10 | The six commissioned questions: conflicts, safety, rewrite size, usefulness, workarounds, least resistance |
@@ -228,6 +229,7 @@ every function with a destructor needs a cleanup pad that rethrows.
 | **The rewrite** (`LE-3`, `LE-4`) | `WasmBase/WasmLegacyEh.cpp`, `BodyRewriter` | Runs once, before `validateValueTypes()`/`validate()`. Decodes each body into instruction spans (reusing the engine's own immediate parsing, so operand lengths cannot drift), then emits the §10.3 shape: `block` merge point, payload landing blocks, `try_table` with the same clauses, `br` to the merge, then the arms in binary order. Bodies that do not use the form are left byte-identical |
 | **`rethrow`** (`LE-4`) | same | The rethrowing arm's clause becomes `catch_ref`/`catch_all_ref`, the exception reference lands in a synthetic `exnref` local appended to the body's locals, and `rethrow n` becomes `local.get n-th arm; throw_ref`. Payload identity is preserved, and `rethrow 1`+ resolves against the enclosing arms, not against labels |
 | **`delegate`** (`LE-5`) | same | A try with no arms becomes a plain `block`: its exceptions propagate. The *skip* case is refused by name (`LE8`) rather than approximated |
+| **`try_table`** (`LE-9`) | absent | Copied, with every clause label renumbered the way a branch is |
 | **Branch remap** (`LE-4`, `LE-5`) | `remapDepth()` | `br`, `br_if`, `br_table`, `br_on_null`/`br_on_non_null` and the GC `br_on_cast*` family carry labels that are renumbered, because the rewrite inserts frames between the binary frame and its target |
 | **Block types** | `emitBlockTypeForResults()` | One-byte forms where they fit; otherwise a `(param) -> (result…)` type is appended to the module and its index used, which is the only way to spell a multi-value landing block (`(i32, exnref)`) |
 | **Fixtures and tests** (`LE-2`) | `Test/wasm_wat/legacy/`, `Test/LegacyEhTests.cpp` (`[legacy-eh]`), `Test/legacy-eh-probe.sh` | Four fixtures (basic shapes, rethrow, branch/delegate shapes, the refusal) plus Binaryen's translated twin, and six test cases |
@@ -253,10 +255,10 @@ was closed by *refusing* the construct says so.
 | ~~**LE3**~~ | ~~**`delegate`'s relative depth can skip intermediate catch frames, and the obvious translation is wrong.**~~ **Done for the non-skipping case, refused for the skipping one (LE-5 / `LE8`):** a try with no arms becomes a plain block, and the rewrite checks each frame between the try and its target for an intervening legacy try before accepting it. **Class A.** | `emitLegacyTry`; `[legacy-eh]` "remaps branches and delegate depths" (`d1`, `d2`) and "refused" (`delegate_skip`) | Closed (with `LE8`) |
 | ~~**LE4**~~ | ~~**There is no label-depth remap and no module rewriter.**~~ **Done (LE-3):** `BodyRewriter` scans a body into instruction spans, `remapDepth()` renumbers every branch, and `Module::parseBody` runs it once before validation. **Class A.** | `WasmBase/WasmLegacyEh.{hpp,cpp}`; `[legacy-eh]` `b1`–`b4` | Closed |
 | ~~**LE5**~~ | ~~**A body rewrite invalidates branch-hint offsets.**~~ **Done (LE-3):** a rewritten body drops its `branchHints`; an untouched body keeps them. | `rewriteLegacyExceptionHandling()` | Closed |
-| ~~**LE6**~~ | ~~**No legacy fixtures, and no upstream suite to borrow.**~~ **Done (LE-2):** `Test/wasm_wat/legacy/` holds four `.wat` sources, their committed `.wasm`, and Binaryen's translated twin; `Test/legacy-eh-probe.sh` regenerates them and records `P1`–`P9`. **Class A** (tests only). | `Test/wasm_wat/legacy/`, `Test/legacy-eh-probe.sh`, `[legacy-eh]` | Closed |
+| ~~**LE6**~~ | ~~**No legacy fixtures, and no upstream suite to borrow.**~~ **Done (LE-2):** `Test/wasm_wat/legacy/` holds six `.wat` sources, their committed `.wasm`, and Binaryen's translated twin; `Test/legacy-eh-probe.sh` regenerates them and records `P1`–`P9`. **Class A** (tests only). | `Test/wasm_wat/legacy/`, `Test/legacy-eh-probe.sh`, `[legacy-eh]` | Closed |
 | ~~**LE7**~~ | ~~**The default configuration must not accept deprecated input silently.**~~ **Done (LE-6):** `WASMJIT_LEGACY_EH` is the only way in, it is read once per load, and the default path still refuses with `LE-1`'s message. **Class A.** | `ParseOptions::legacyExceptionHandling`, `Module::parseBody`; `[legacy-eh]` first and last tests | Closed |
-| **LE8** | **A `delegate` whose target skips an intervening legacy catch is refused.** Honouring the skip needs the *enclosing* try's clauses to be split per region (its arms must not catch this try's throws), which means duplicating arm bodies per region. The rewrite refuses by name instead of miscompiling. Current clang output does not use `delegate` at all (`P9`), so the cost is deferred rather than hidden. **Class A.** | `emitLegacyTry`; `[legacy-eh]` "a delegate that would skip an intervening catch is refused" | Medium (fidelity), Low (frequency) |
-| **LE9** | **A body that mixes the superseded form with `try_table` is refused.** The remap would also have to renumber a `try_table`'s catch labels, which the rewrite does not parse. A module that already emits final-form exception code does not need the adapter, so the refusal costs nothing today. **Class A.** | `build()`, `Opcode::TryTable` arm | Low |
+| **LE8** | **A `delegate` whose target skips an intervening catch is refused.** Honouring the skip needs the *enclosing* try's clauses to be split per region (its arms must not catch this try's throws), which means duplicating arm bodies per region and splitting the body into separately-protected spans. **The obvious workaround does not work** (§10.6 records why): catching the exception at the delegating try and branching out past the intervening handler looks like a local trick, but a branch that leaves a frame carrying a result type has to supply that frame's results, and an unwind has none to give. So the refusal stands, and it now also covers a *final-form* `try_table` in between (`isCatchFrame`, `catchCount`) — the guard matters because `LE-9` removed the mixed-body refusal that used to hide that case, so without it the rewrite would accept and miscompile. **Class A.** | `emitLegacyTry`, `isCatchFrame`; `[legacy-eh]` "a delegate that would skip an intervening catch is refused" | Medium (fidelity), Low (frequency) |
+| ~~**LE9**~~ | ~~**A body that mixes the superseded form with `try_table` is refused.**~~ **Done (LE-9):** a `try_table` is an ordinary frame for depth bookkeeping, and `emitTryTable` re-parses its immediate and renumbers every clause label exactly like a branch (a clause's label is resolved *outside* the `try_table`, so it is remapped before that frame opens). A `try_table` nested in a legacy try and one nested in a legacy *arm* both round-trip. **Class A.** | `emitTryTable`, `build()`; `Test/wasm_wat/legacy/mixed.wat`; `[legacy-eh]` "a body may mix the superseded form with try_table" | Closed |
 
 
 Two things that are *not* gaps, recorded so they are not re-opened:
@@ -301,7 +303,7 @@ that keeps it honest.
 
 ## 7. Plan
 
-`LE-0`…`LE-6` are done; `LE-8` is the one open row. The order was: name the
+`LE-0`…`LE-7` and `LE-9` are done; `LE-8` is the one open row. The order was: name the
 refusal and build the fixtures first (they pay off without committing to
 anything), then the rewrite, then the switch that makes it opt-in.
 
@@ -309,10 +311,11 @@ anything), then the rewrite, then the switch that makes it opt-in.
 |---|---|---|---|
 | **`LE-0` — Record the analysis** | `✅` This note: the encodings, the gap list, the deviations, and the measured probes. | — | Reviewed, linked from [`EXCEPTIONS.md`](EXCEPTIONS.md) §2 and from the language-study set (`S1`/`S2`/`S4`, `Q-1`). |
 | **`LE-1` — Name the refusal** | `✅` `dispatchOpcode` decodes the five opcodes and `legacyExceptionHandlingMessage()` composes the message: the proposal, the instruction, both compiler flags, the Binaryen pass, `WASMJIT_LEGACY_EH`, and this note. **Class A.** | `LE1` | `--diagnose` prints it; `[legacy-eh]` "refused by name" asserts each remedy. |
-| **`LE-2` — Fixtures and a repeatable probe** | `✅` Four `.wat` sources plus their committed `.wasm` in `Test/wasm_wat/legacy/`, Binaryen's translated twin, and `Test/legacy-eh-probe.sh` (regenerates the fixtures and prints the `P1`–`P9` matrix, skipping absent tools). | `LE6` | The script runs from a clean tree, and the committed `.wasm` are exactly what the tests load. |
+| **`LE-2` — Fixtures and a repeatable probe** | `✅` Six `.wat` sources plus their committed `.wasm` in `Test/wasm_wat/legacy/`, Binaryen's translated twin, and `Test/legacy-eh-probe.sh` (regenerates the fixtures and prints the `P1`–`P9` matrix, skipping absent tools). | `LE6` | The script runs from a clean tree, and the committed `.wasm` are exactly what the tests load. |
 | **`LE-3` — Desugar `try`/`catch`/`catch_all`** | `✅` `BodyRewriter`: instruction spans, the merge block, payload landing blocks, the `try_table`, the arm bodies, the branch remap, branch-hint invalidation. **Class A.** | `LE4`, `LE5` | A legacy module loads and runs with the same results as its `wasm-opt --translate-to-exnref` twin (`[legacy-eh]` "agrees with Binaryen's translation"). |
 | **`LE-4` — `rethrow` with payload identity** | `✅` `catch_ref`/`catch_all_ref` on the rethrowing arm, a synthetic `exnref` local, `local.set` at the landing, `throw_ref` at the site. **Class A.** | `LE2` | Same-function, cross-function and void-payload rethrows land in the right arm (`same` = 6, `outer` = 49, `voidpath` = 3). |
 | **`LE-5` — `delegate`** | `◑` The non-skipping case ships (a try with no arms becomes a block); the skipping case is refused by name. **Class A.** | `LE3` | `d1`/`d2` pass; `delegate_skip` is refused with a message naming the construct. **`LE8` remains open.** |
+| **`LE-9` — Mixed bodies** | `✅` A `try_table` opens and closes like any other frame, and its clause labels are renumbered by the same `remapDepth` a branch uses. **Class A.** | `LE9` | `mixed.wat` loads and returns 42/11/42/9; the strict policy still refuses it, because the legacy half is still the legacy half. |
 | **`LE-6` — The opt-in switch** | `✅` `ParseOptions::legacyExceptionHandling` (parser policy, `WasmParseOptions.hpp`), consulted in `Module::parseBody`; `WASMJIT_LEGACY_EH` only seeds the default overloads. | `LE7` | The default refuses; the policy accepts; `[legacy-eh]` covers both directions and the precedence rule. |
 | **`LE-8` — `delegate` that skips a catch** | **Not started.** Needs per-region clause splitting of the enclosing try, i.e. duplicated arm bodies. | `LE8` | A fixture whose delegate target skips an intervening catch runs with the intermediate arm *not* catching. Until then the refusal stays. |
 
@@ -364,7 +367,7 @@ probe matrix that `Test/legacy-eh-probe.sh` reprints on demand.
 | `P9` clang cleanup pad | 1 `catch_all` | destructor paths use `catch_all`+`rethrow`, not `delegate` |
 | `P7` clang `-wasm-use-legacy-eh=false` | 2 `try_table`s | one flag moves a module to the form we already execute |
 
-Default suite: `./Test/WasmJit '[legacy-eh]'` runs seven cases / 60 assertions —
+Default suite: `./Test/WasmJit '[legacy-eh]'` runs eight cases / 71 assertions —
 the last one pins the documented precedence (the environment seeds the policy, an
 explicit `ParseOptions` overrides it) — and nothing else in the suite changes: no
 spec script uses the form, and the exported-symbol baseline gained only the five
@@ -374,7 +377,7 @@ policy-carrying overloads
 Reading: the adapter is tested where it can be — against wabt's own legacy
 encoder, against Binaryen's independent translation, and against a hand-written
 refusal — and it is not tested where it cannot be: there is no upstream spec
-suite for a retired proposal, so `LE-8` and `LE-9` are refusals with fixtures
+suite for a retired proposal, so `LE-8` is a refusal with a fixture
 rather than silent gaps.
 
 ## 9. References
@@ -406,7 +409,7 @@ rather than silent gaps.
   engine question this note answers — and §6.9, the **re-screen** the shipped
   mitigation triggered (two rows re-graded, no cluster or verdict moved), plus
   [`../languages/CHARTERS.md`](../languages/CHARTERS.md) `S1`/`S2`/`S4`, whose EH
-  questions are now about the residue (`LE-8`/`LE-9`) rather than the encoding.  engine question this note answers, and [`../languages/CHARTERS.md`](../languages/CHARTERS.md)
+  questions are now about the residue (`LE-8`) rather than the encoding.  engine question this note answers, and [`../languages/CHARTERS.md`](../languages/CHARTERS.md)
   `S1`/`S2`/`S4`, the three charters that would consume the answer.
 - [`../languages/EVIDENCE.md`](../languages/EVIDENCE.md) `E-2` (the rustc book
   on LLVM's legacy-EH default), `E-4` (Kotlin/Wasm's documented requirement) and
@@ -432,7 +435,7 @@ rather than silent gaps.
   and the hook is one call in `Module::parseBody`
   ([`WasmBase/WasmModule.cpp`](../../WasmBase/WasmModule.cpp)).
 - **The fixtures and the probe**: [`Test/wasm_wat/legacy/`](../../Test/wasm_wat/legacy)
-  (four `.wat`, four `.wasm`, Binaryen's twin),
+  (six `.wat`, six `.wasm`, Binaryen's twin),
   [`Test/LegacyEhTests.cpp`](../../Test/LegacyEhTests.cpp) (`[legacy-eh]`, six
   cases) and [`Test/legacy-eh-probe.sh`](../../Test/legacy-eh-probe.sh).
 - [`../TESTING.md`](../TESTING.md) — where the `[legacy-eh]` tag and the probe
@@ -587,17 +590,33 @@ Six options, ordered by what they cost and who pays:
 |---|---|---|---|---|---|
 | **O0** | Do nothing | none | — | Every C++/Kotlin user, with a message that explains nothing | Rejected: the status quo already fails, and fails unhelpfully |
 | **O1** | **Name the refusal** (`LE-1`): a diagnostic that says "legacy exception handling", names both remedies, links this note | done | **A** | The project, once | **✅ Shipped** |
-| **O2** | **Fixtures + a repeatable probe** (`LE-2`): the four sources, their `.wasm`, Binaryen's twin, and `Test/legacy-eh-probe.sh` | done | **A** | The project, once | **✅ Shipped** |
-| **O3** | **Front-end desugaring, opt-in** (`LE-3`…`LE-6`, Route A) | done | **A** | The project, once | **✅ Shipped**, minus the two structures `LE-8`/`LE-9` name and refuse |
+| **O2** | **Fixtures + a repeatable probe** (`LE-2`): the six sources, their `.wasm`, Binaryen's twin, and `Test/legacy-eh-probe.sh` | done | **A** | The project, once | **✅ Shipped** |
+| **O3** | **Front-end desugaring, opt-in** (`LE-3`…`LE-9`, Route A) | done | **A** | The project, once | **✅ Shipped**, minus the one structure `LE-8` names and refuses |
 | **O4** | **Native handler arms in every backend** (Route C) | a control-flow-model rewrite | **E** | The project, per backend | **Rejected outright** — not deferred, not "later": it restructures the control-flow model to buy what `O3` already delivers, and it fails `G2` on its own. `WasmBase/` will not grow a second exception model |
 | **O5** | **Embedder pre-pass with `wasm-opt`** (W3) | none | — | The embedder | **Documented fallback**, already proven |
 
 **Outcome.** `O1`, `O2` and `O3` are shipped; `O4` is rejected outright. The
 order was deliberate: `O1`/`O2` first (a message that names the remedy, and a
 fixture set that makes the rest reviewable), then `O3` behind the switch. The
-residual work is `LE-8` (a `delegate` whose target skips a catch) and `LE-9`
-(a body that mixes the two forms), both refused by name today; neither justifies
-a change until a real module hits one.
+residual work is `LE-8` (a `delegate` whose target skips a catch), still refused
+by name; it does not justify a change until a real module hits one, because the
+cheap rewrite of it is unsound (§10.6, *why the landing trick fails*) and the
+sound one is a control-flow split. `LE-9` (a body that mixes the two forms) was
+the cheap one, so it is done.
+
+**Why the landing trick fails (`LE8`).** The tempting local fix is to catch the
+exception at the delegating try (`catch_all_ref`), stash the `exnref` in a
+synthetic local, and `br` out of the intervening handler to a landing that
+`throw_ref`s from inside the target's protected region. It does not work, and
+the reason is worth recording so it is not re-tried: a branch that leaves a
+frame carrying a result type has to supply that frame's results, and an unwind
+has none to give. A landing *past* the intervening handler is also past
+that handler's `end`, so the branch must carry its block type; a landing
+*inside* the handler is exactly what the delegated exception is supposed to
+escape. The only way out is to stop protecting the delegating region with the intervening handler at all — splitting that handler's body into
+separately-protected spans with its arms duplicated per region — which is a
+control-flow rewrite, not a local trick. That is why `LE-8` stays refused
+while `LE-9` (pure bookkeeping) shipped.
 
 **Why `O4` is not "deferred".** Deferring it would leave the door open for a
 future "let us do it properly" pass that duplicates the exception model. The
