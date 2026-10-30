@@ -96,6 +96,12 @@ TEST_CASE("AsmJit ModuleInstantiator compiles supported i32 functions", "[asmjit
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("call_tail"), 21) == 42);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("call_tail_indirect"), 21, 0) == 42);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("call_indirect"), 21, 0) == 42);
+	WASM::callCallable<void>(*instance->exportedFunction("table_init"), 1, 0, 1);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("call_indirect"), 14, 1) == 42);
+	WASM::callCallable<void>(*instance->exportedFunction("elem_drop"));
+	WASM::callCallable<void>(*instance->exportedFunction("table_init"), 1, 0, 0);
+	CHECK_THROWS(WASM::callCallable<void>(*instance->exportedFunction("table_init"), 1, 0, 1));
+	CHECK_THROWS(WASM::callCallable<void>(*instance->exportedFunction("table_init"), 2, 0, 0));
 	CHECK_THROWS(WASM::callCallable<std::int32_t>(*instance->exportedFunction("call_indirect"), 21, 1));
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("mutual_recursion"), 20) == 42);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("store_load"), 64, 0x12345678) == 0x12345678);
