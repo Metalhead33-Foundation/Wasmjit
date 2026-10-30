@@ -42,7 +42,7 @@ direct calls. Each generated function emits the required
   `WASMJIT_BACKEND=asmjit`, including i32 invocation marshalling, aggregate
   layout calculation, and the existing lane-wise SIMD diagnostic interface.
 - `Test/AsmjitModuleCompilerTests.cpp` instantiates WAT fixtures and executes arithmetic, comparison, bitwise,
-  control-flow, direct-call (including native imports and mutual recursion), and memory32
+  control-flow, direct/indirect-call (including native imports and mutual recursion), i32-global, and memory32
   cases, including signed/unsigned narrow loads and out-of-bounds traps.
 - Packed `i8`/`i16` storage retains its narrow 8-/16-bit representation.
   Arithmetic lowering must explicitly extend those values to `i32` before
