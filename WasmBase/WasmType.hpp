@@ -258,6 +258,11 @@ struct ValueType {
 			//! code; in this heap-type position it unambiguously means shared).
 			if (ht == static_cast<int32_t>(ValueTypeCode::StringViewWtf16)) {
 				isShared = true;
+/**
+ * \brief Performs the Leb operation.
+ * \param ht Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 				stream >> Elv::Io::Leb(ht);
 			}
 			this->heapType = ht; //!< If ht >= 0, it's a TypeIndex
@@ -268,6 +273,11 @@ struct ValueType {
 	}
 };
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, ValueType& right) {
+/**
+ * \brief Performs the decode operation.
+ * \param left Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	right.decode(left);
 	return left;
 }
@@ -277,8 +287,18 @@ struct StorageType {
 	bool isPacked; //!< i8 or i16
 	ValueType val;
 
+/**
+ * \brief Performs the decode operation.
+ * \param stream Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	template <Elv::Util::Endian E, Elv::Io::DeviceLike I> void decode(Elv::Io::DataStream<E,I>& stream) {
 		int8_t byte;
+/**
+ * \brief Performs the Leb operation.
+ * \param byte Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		stream >> Elv::Io::Leb(byte);
 
 		if (byte == static_cast<int8_t>(ValueTypeCode::I8)) { //!< i8
@@ -287,6 +307,11 @@ struct StorageType {
 			val.heapType = -1;
 			val.isExact = false;
 			val.isShared = false;
+/**
+ * \brief Performs the if operation.
+ * \param byte Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		} else if (byte == static_cast<int8_t>(ValueTypeCode::I16) ) { //!< i16
 			isPacked = true;
 			val.opcode = ValueTypeCode::I16;
@@ -297,11 +322,22 @@ struct StorageType {
 			isPacked = false;
 			//! This was actually the opcode for a ValueType.
 			//! We need to 'put it back' or handle the decode manually.
+/**
+ * \brief Performs the decodeAfterFirstByte operation.
+ * \param stream Input value or output destination for this operation.
+ * \param byte Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			val.decodeAfterFirstByte(stream, byte);
 		}
 	}
 };
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, StorageType& right) {
+/**
+ * \brief Performs the decode operation.
+ * \param left Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	right.decode(left);
 	return left;
 }
@@ -382,6 +418,11 @@ struct Limits {
 	}
 };
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, Limits& right) {
+/**
+ * \brief Performs the decode operation.
+ * \param left Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	right.decode(left);
 	return left;
 }
@@ -399,8 +440,18 @@ struct MemoryType {
 	//! proposal permits exactly 1 byte (`p = 0`) and 64 KiB (`p = 16`); the
 	//! default keeps every memory that omits the flag at the historical 64 KiB.
 	uint64_t pageSize = 0x10000;
+/**
+ * \brief Performs the decode operation.
+ * \param stream Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	template <Elv::Util::Endian E, Elv::Io::DeviceLike I> void decode(Elv::Io::DataStream<E,I>& stream)
 	{
+/**
+ * \brief Performs the decode operation.
+ * \param stream Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		limits.decode(stream);
 		if (limits.flags & 0x04)
 			indexType = MemoryIndexType::I64;
@@ -413,13 +464,26 @@ struct MemoryType {
 		//! (CPS-1, CPSD1).
 		if (limits.flags & 0x08) {
 			uint32_t exponent;
+/**
+ * \brief Performs the Leb operation.
+ * \param exponent Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			stream >> Elv::Io::Leb(exponent);
 			if (exponent == 0)
 				pageSize = 1;
 			else if (exponent == 16)
 				pageSize = 0x10000;
 			else
+/**
+ * \brief Performs the runtime_error operation.
+ * \return The value or status produced by this operation.
+ */
 				throw std::runtime_error("custom page sizes: unsupported page-size exponent "
+/**
+ * \brief Performs the to_string operation.
+ * \return The value or status produced by this operation.
+ */
 						+ std::to_string(exponent) + " (only 0 and 16 are defined)");
 		}
 	}
@@ -677,11 +741,21 @@ Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& stream, BlockType
 		//! stray 0x6C (i32.mul) desynchronised the whole function body
 		//! (docs/proposals/GC.md G7).
 		if (bt.valType == ValueTypeCode::Ref || bt.valType == ValueTypeCode::RefNull)
+/**
+ * \brief Performs the Leb operation.
+ * \param heapType Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			stream >> Elv::Io::Leb(bt.heapType);
 		//! Exact prefix `0x62` reads as StringViewIter under signed LEB; the
 		//! following u32 is the real type index.
 		if (bt.heapType == static_cast<int32_t>(ValueTypeCode::StringViewIter)) {
 			uint32_t exactIndex = 0;
+/**
+ * \brief Performs the Leb operation.
+ * \param exactIndex Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			stream >> Elv::Io::Leb(exactIndex);
 			bt.heapType = static_cast<int32_t>(exactIndex);
 			bt.isExact = true;
@@ -713,17 +787,32 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I>
 Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& stream, HeapType& ht)
 {
 	int32_t raw;
+/**
+ * \brief Performs the Leb operation.
+ * \param raw Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	stream >> Elv::Io::Leb(raw);
 	ht.isShared = false;
 	ht.isExact = false;
 	if (raw == static_cast<int32_t>(ValueTypeCode::StringViewIter)) {
 		uint32_t exactIndex = 0;
+/**
+ * \brief Performs the Leb operation.
+ * \param exactIndex Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		stream >> Elv::Io::Leb(exactIndex);
 		raw = static_cast<int32_t>(exactIndex);
 		ht.isExact = true;
 	}
 	if (raw == static_cast<int32_t>(ValueTypeCode::StringViewWtf16)) {
 		ht.isShared = true;
+/**
+ * \brief Performs the Leb operation.
+ * \param raw Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		stream >> Elv::Io::Leb(raw);
 	}
 	if (raw >= 0) {
@@ -769,10 +858,20 @@ Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& stream, CatchClau
 	switch (cc.kind) {
 		case CatchKind::Catch:
 		case CatchKind::CatchRef:
+/**
+ * \brief Performs the Leb operation.
+ * \param tagIdx Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			stream >> Elv::Io::Leb(cc.tagIdx);
 			[[fallthrough]];
 		case CatchKind::CatchAll:
 		case CatchKind::CatchAllRef:
+/**
+ * \brief Performs the Leb operation.
+ * \param labelIdx Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			stream >> Elv::Io::Leb(cc.labelIdx);
 			break;
 	}
@@ -819,12 +918,30 @@ void readMemArg(Elv::Io::DataStream<E,I>& left, MemArg& right, bool allowOrderin
 		if (!allowArray)
 			throw std::runtime_error("array access is not valid for this instruction");
 		if (hasMemIdx)
+/**
+ * \brief Performs the runtime_error operation.
+ * \return The value or status produced by this operation.
+ */
 			throw std::runtime_error("array access cannot name a memory index");
 		if (hasOrdering)
+/**
+ * \brief Performs the runtime_error operation.
+ * \return The value or status produced by this operation.
+ */
 			throw std::runtime_error("array access has a reserved memarg flag bit");
 		right.isArray = true;
 		right.align = raw_align & 0x0Fu; //!< bits 0-3 are the alignment exponent
+/**
+ * \brief Performs the Leb operation.
+ * \param arrayTypeIdx Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		left >> Elv::Io::Leb(right.arrayTypeIdx);
+/**
+ * \brief Performs the Leb operation.
+ * \param offset Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		left >> Elv::Io::Leb(right.offset);
 		return;
 	}
@@ -832,9 +949,18 @@ void readMemArg(Elv::Io::DataStream<E,I>& left, MemArg& right, bool allowOrderin
 	if (hasOrdering)
 		right.align &= ~0x10u; //!< bit 4 is the ordering flag, not alignment
 	if (hasOrdering && !allowOrdering)
+/**
+ * \brief Performs the runtime_error operation.
+ * \return The value or status produced by this operation.
+ */
 		throw std::runtime_error(
 			"ordering immediate is only valid on atomic memory accesses");
 	if (hasMemIdx)
+/**
+ * \brief Performs the Leb operation.
+ * \param memidx Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		left >> Elv::Io::Leb(right.memidx);
 	else
 		right.memidx = 0;
@@ -844,10 +970,27 @@ void readMemArg(Elv::Io::DataStream<E,I>& left, MemArg& right, bool allowOrderin
 		//! (read ordering == write ordering, both acquire/release).
 		if (right.ordering == 0x11)
 			right.ordering = 1;
+/**
+ * \brief Performs the if operation.
+ * \return The value or status produced by this operation.
+ */
 		else if (right.ordering > 1)
+/**
+ * \brief Performs the runtime_error operation.
+ * \return The value or status produced by this operation.
+ */
 			throw std::runtime_error("atomic ordering immediate must be 0 (seqcst),"
+/**
+ * \brief Performs the x11 operation.
+ * \return The value or status produced by this operation.
+ */
 				" 1 (acqrel) or 0x11 (acqrel RMW)");
 	}
+/**
+ * \brief Performs the Leb operation.
+ * \param offset Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	left >> Elv::Io::Leb(right.offset);
 }
 
@@ -880,11 +1023,26 @@ Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, MemArg righ
 		if (right.ordering != 0)
 			flags |= 0x10u;
 	}
+/**
+ * \brief Performs the Leb operation.
+ * \param flags Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	left << Elv::Io::Leb(flags);
 	if (right.isArray) {
+/**
+ * \brief Performs the Leb operation.
+ * \param arrayTypeIdx Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		left << Elv::Io::Leb(right.arrayTypeIdx);
 	} else {
 		if (right.memidx != 0)
+/**
+ * \brief Performs the Leb operation.
+ * \param memidx Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			left << Elv::Io::Leb(right.memidx);
 		if (right.ordering != 0)
 			left << right.ordering;
