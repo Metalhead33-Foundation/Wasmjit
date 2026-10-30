@@ -79,13 +79,6 @@ public:
 	 * \param b Pointer to the second 16-byte input.
 	 * \param out Pointer to the 16-byte output buffer.
 	 */
-/**
- * \brief Performs the run operation.
- * \param a Input value, resource descriptor, or output destination for this operation.
- * \param b Input value, resource descriptor, or output destination for this operation.
- * \param out Input value, resource descriptor, or output destination for this operation.
- * \return The requested value, handle, view, or success status.
- */
 	virtual void run(const void* a, const void* b, void* out) const = 0;
 };
 
@@ -113,11 +106,6 @@ public:
 	 * \param fields Field storage types in declaration order.
 	 * \return Aggregate size, alignment, and per-field layout.
 	 */
-/**
- * \brief Performs the aggregateLayout operation.
- * \param fields Input value, resource descriptor, or output destination for this operation.
- * \return The requested value, handle, view, or success status.
- */
 	virtual BackendAggregateLayout aggregateLayout(
 			const std::vector<StorageType>& fields) = 0;
 
