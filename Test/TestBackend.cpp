@@ -13,6 +13,7 @@
 
 #include "LibJit/LibJitContext.hpp"
 #include "LibJit/LibjitModuleCompiler.hpp"
+#include "Sljit/SljitBackend.hpp"
 #include "WasmBase/WasmDiagnostics.hpp"
 
 namespace TestBackend {
@@ -287,8 +288,14 @@ std::unique_ptr<Session> create()
 	const std::string name = requested == nullptr ? "libjit" : requested;
 	if (name.empty() || name == "libjit")
 		return std::make_unique<LibJitSession>();
+	// The session factory lives with the backend, never in the core
+	// (docs/WRITING_A_BACKEND.md §8). SLJIT is provisional: it executes a small
+	// integer subset and refuses the rest, so most generic fixtures are expected
+	// to fail under it (docs/WRITING_A_BACKEND.md §9).
+	if (name == "sljit")
+		return Sljit::createSession();
 	throw std::runtime_error("unknown WASMJIT_BACKEND '" + name
-			+ "' (only 'libjit' is built; see Test/TestBackend.cpp)");
+			+ "' (the harness can build 'libjit' and 'sljit'; see Test/TestBackend.cpp)");
 }
 
 } // namespace TestBackend
