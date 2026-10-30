@@ -45,8 +45,12 @@ class I32FunctionEmitter final : public WASM::OpcodeDispatcher
 {
 public:
 	I32FunctionEmitter(asmjit::x86::Compiler& compiler, asmjit::FuncNode& function,
-			const WASM::FuncType& type, const WASM::FunctionBody& body)
-		: compiler(compiler)
+			const WASM::FuncType& type, const WASM::FunctionBody& body,
+			const WASM::Module& module, WASM::ModuleInstanceInternals& internals,
+			const std::vector<asmjit::FuncNode*>& functions,
+			const std::vector<std::unique_ptr<asmjit::FuncSignature>>& signatures)
+		: compiler(compiler), module(module), internals(internals),
+		  functions(functions), signatures(signatures)
 	{
 		WASM::PreparedFunctionStack stack;
 		stack.prepare(type, body);
@@ -61,7 +65,7 @@ public:
 			requireI32(local, "locals");
 
 		locals.reserve(stack.allLocals.size());
-		asmjit::x86::Gp vmContext = compiler.new_gp_ptr("vmContext");
+		vmContext = compiler.new_gp_ptr("vmContext");
 		function.set_arg(0, vmContext);
 
 		const asmjit::FuncSignature checkSignature = stackCheckSignature();
@@ -275,6 +279,62 @@ protected:
 		checkError(compiler.jmp(label), "AsmJit br emission failed");
 	}
 
+	void dispatchCall(WASM::FuncIdx index) override
+	{
+		const size_t importedCount = module.importFunctions.size();
+		const size_t totalCount = importedCount + module.internalFunctionTypeIndices.size();
+		if (index >= totalCount)
+			throw std::runtime_error("AsmJit call function index is out of range");
+
+		uint32_t typeIndex = 0;
+		uint64_t target = 0;
+		asmjit::Label targetLabel;
+		bool isInternal = index >= importedCount;
+		if (isInternal) {
+			const size_t internalIndex = static_cast<size_t>(index) - importedCount;
+			typeIndex = module.internalFunctionTypeIndices[internalIndex];
+			targetLabel = functions[internalIndex]->label();
+		} else {
+			typeIndex = module.importFunctions[index].typeIdx;
+			if (index >= internals.importStorage.size()
+					|| internals.importStorage[index].fnPtr == nullptr)
+				throw std::runtime_error("AsmJit call references an unresolved function import");
+			target = reinterpret_cast<uint64_t>(internals.importStorage[index].fnPtr);
+		}
+
+		if (typeIndex >= signatures.size() || !signatures[typeIndex])
+			throw std::runtime_error("AsmJit call references an unavailable function signature");
+		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
+		if (calledType.results.size() > 1)
+			throw std::runtime_error("AsmJit calls currently support at most one result");
+		for (const auto& parameter : calledType.params)
+			requireI32(parameter.val, "call parameters");
+		for (const auto& result : calledType.results)
+			requireI32(result.val, "call results");
+		if (values.size() < calledType.params.size())
+			throw std::runtime_error("AsmJit call operand stack underflow");
+
+		std::vector<asmjit::x86::Gp> arguments(calledType.params.size());
+		for (size_t i = calledType.params.size(); i > 0; --i) {
+			arguments[i - 1] = values.back();
+			values.pop_back();
+		}
+
+		asmjit::InvokeNode* invoke = nullptr;
+		const asmjit::Error error = isInternal
+				? compiler.invoke(&invoke, targetLabel, *signatures[typeIndex])
+				: compiler.invoke(&invoke, target, *signatures[typeIndex]);
+		checkError(error, "AsmJit function-call emission failed");
+		invoke->set_arg(0, vmContext);
+		for (size_t i = 0; i < arguments.size(); ++i)
+			invoke->set_arg(i + 1, arguments[i]);
+		if (!calledType.results.empty()) {
+			auto result = compiler.new_gp32("callResult");
+			invoke->set_ret(0, result);
+			values.push_back(result);
+		}
+	}
+
 	void dispatchNop() override {}
 
 	void dispatchI32Eqz() override
@@ -413,6 +473,11 @@ private:
 	}
 
 	asmjit::x86::Compiler& compiler;
+	const WASM::Module& module;
+	WASM::ModuleInstanceInternals& internals;
+	const std::vector<asmjit::FuncNode*>& functions;
+	const std::vector<std::unique_ptr<asmjit::FuncSignature>>& signatures;
+	asmjit::x86::Gp vmContext;
 	std::vector<asmjit::x86::Gp> locals;
 	std::vector<asmjit::x86::Gp> values;
 	std::vector<ControlFrame> controls;
@@ -423,6 +488,7 @@ private:
 
 struct ModuleCompiler::FunctionRecord {
 	const asmjit::FuncSignature* signature = nullptr;
+	asmjit::FuncNode* node = nullptr;
 	void* entry = nullptr;
 };
 
@@ -485,32 +551,45 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 
 	const std::size_t allocationCheckpoint = context.allocationCheckpoint();
 	try {
+		asmjit::CodeHolder code;
+		checkError(code.init(context.environment(), context.cpuFeatures()),
+				"AsmJit CodeHolder initialisation failed");
+		asmjit::x86::Compiler compiler(&code);
+
+		// Create every function node before emitting any body. Labels therefore
+		// exist for forward calls and mutual recursion as well as backward calls.
+		std::vector<asmjit::FuncNode*> functions;
+		functions.reserve(functionRecords.size());
+		for (auto& record : functionRecords) {
+			record->node = compiler.new_func(*record->signature);
+			if (record->node == nullptr)
+				throw std::runtime_error("AsmJit failed to declare an internal function node");
+			functions.push_back(record->node);
+		}
+
 		for (uint32_t i = 0; i < module.functionBodies.size(); ++i) {
+			auto* function = compiler.add_func(functions[i]);
+			if (function == nullptr)
+				throw std::runtime_error("AsmJit failed to begin an internal function body");
 			const uint32_t typeIndex = module.internalFunctionTypeIndices[i];
 			const WASM::FuncType type = module.funcTypeAt(typeIndex);
-			if (type.results.size() > 1)
-				throw std::runtime_error("AsmJit initial compiler does not support multi-value results");
-
-			asmjit::CodeHolder code;
-			checkError(code.init(context.environment(), context.cpuFeatures()),
-					"AsmJit CodeHolder initialisation failed");
-			asmjit::x86::Compiler compiler(&code);
-			auto* function = compiler.add_func(*functionRecords[i]->signature);
-			if (function == nullptr)
-				throw std::runtime_error("AsmJit failed to declare a function body");
-
-			I32FunctionEmitter emitter(compiler, *function, type, module.functionBodies[i]);
+			I32FunctionEmitter emitter(compiler, *function, type, module.functionBodies[i],
+					module, internals, functions, signatures);
 			emitter.compile(module.functionBodies[i], type);
 			checkError(compiler.end_func(), "AsmJit function finalisation failed");
-			checkError(compiler.finalize(), "AsmJit compiler finalisation failed");
+		}
 
-			functionRecords[i]->entry = context.install(code);
+		checkError(compiler.finalize(), "AsmJit compiler finalisation failed");
+		void* codeBase = context.install(code);
+		for (uint32_t i = 0; i < functionRecords.size(); ++i) {
+			const uint64_t offset = code.label_offset(functions[i]->label());
+			functionRecords[i]->entry = static_cast<uint8_t*>(codeBase) + offset;
 			internals.internalCallables[i].rawFnPtr = functionRecords[i]->entry;
 			internals.internalCallables[i].fnPtr = functionRecords[i]->entry;
 		}
 	} catch (...) {
 		// Instantiation is transactional with respect to executable memory:
-		// failed modules must not pin earlier function bodies in the session.
+		// a failed module must not pin partially generated code in the session.
 		context.releaseAllocationsSince(allocationCheckpoint);
 		for (uint32_t i = 0; i < functionRecords.size(); ++i) {
 			functionRecords[i]->entry = nullptr;
