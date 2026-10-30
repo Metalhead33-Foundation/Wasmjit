@@ -57,9 +57,9 @@ struct Preamble {
  * store must outlive the artifact.
  */
 struct WASMJIT_API Artifact {
-	ArtifactKind kind;
-	uint32_t version = 0;
-	uint16_t layer = 0;
+	ArtifactKind kind; //!< Field `kind` of WASMJIT_API.
+	uint32_t version = 0; //!< Field `version` of WASMJIT_API.
+	uint16_t layer = 0; //!< Field `layer` of WASMJIT_API.
 
 	/** \brief Constructs an artifact with its parsed kind. \param artifactKind Core-module or component kind. */
 	explicit Artifact(ArtifactKind artifactKind) : kind(artifactKind) {}
@@ -121,7 +121,7 @@ protected:
 	 */
 	virtual void parseBody(Elv::Io::Device& file, std::optional<uint64_t> end) = 0;
 
-	Store* store_ = nullptr;
+	Store* store_ = nullptr; //!< Field `store_` of WASMJIT_API.
 };
 
 }
