@@ -112,6 +112,26 @@
   (func (export "extend16_s") (param i32) (result i32)
     local.get 0
     i32.extend16_s)
+  (func (export "loop_sum") (param i32) (result i32) (local i32)
+    i32.const 0
+    local.set 1
+    block
+      loop
+        local.get 0
+        i32.eqz
+        br_if 1
+        local.get 1
+        local.get 0
+        i32.add
+        local.set 1
+        local.get 0
+        i32.const 1
+        i32.sub
+        local.set 0
+        br 0
+      end
+    end
+    local.get 1)
   (func (export "local_roundtrip") (param i32) (result i32) (local i32)
     local.get 0
     local.set 1
