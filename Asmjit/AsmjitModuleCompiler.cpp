@@ -1124,6 +1124,17 @@ protected:
 	void dispatchI32Store(WASM::MemArg arg) override { emitMemoryStore(arg, 4); }
 	void dispatchI32Store8(WASM::MemArg arg) override { emitMemoryStore(arg, 1); }
 	void dispatchI32Store16(WASM::MemArg arg) override { emitMemoryStore(arg, 2); }
+	void dispatchI64Load(WASM::MemArg arg) override { emitMemoryLoad(arg, 8, LoadKind::I64); }
+	void dispatchI64Load8S(WASM::MemArg arg) override { emitMemoryLoad(arg, 1, LoadKind::I64I8Signed); }
+	void dispatchI64Load8U(WASM::MemArg arg) override { emitMemoryLoad(arg, 1, LoadKind::I64I8Unsigned); }
+	void dispatchI64Load16S(WASM::MemArg arg) override { emitMemoryLoad(arg, 2, LoadKind::I64I16Signed); }
+	void dispatchI64Load16U(WASM::MemArg arg) override { emitMemoryLoad(arg, 2, LoadKind::I64I16Unsigned); }
+	void dispatchI64Load32S(WASM::MemArg arg) override { emitMemoryLoad(arg, 4, LoadKind::I64I32Signed); }
+	void dispatchI64Load32U(WASM::MemArg arg) override { emitMemoryLoad(arg, 4, LoadKind::I64I32Unsigned); }
+	void dispatchI64Store(WASM::MemArg arg) override { emitMemoryStore(arg, 8); }
+	void dispatchI64Store8(WASM::MemArg arg) override { emitMemoryStore(arg, 1); }
+	void dispatchI64Store16(WASM::MemArg arg) override { emitMemoryStore(arg, 2); }
+	void dispatchI64Store32(WASM::MemArg arg) override { emitMemoryStore(arg, 4); }
 
 	void dispatchUnreachable() override
 	{
@@ -1262,7 +1273,11 @@ protected:
 
 private:
 	enum class BitCountOp { LeadingZeros, TrailingZeros };
-	enum class LoadKind { I32, I8Signed, I8Unsigned, I16Signed, I16Unsigned };
+	enum class LoadKind {
+		I32, I8Signed, I8Unsigned, I16Signed, I16Unsigned,
+		I64, I64I8Signed, I64I8Unsigned, I64I16Signed, I64I16Unsigned,
+		I64I32Signed, I64I32Unsigned
+	};
 
 	enum class ControlKind { Block, Loop, If };
 	struct ControlFrame {
@@ -1625,7 +1640,11 @@ private:
 		auto wasmAddress = values.back();
 		values.pop_back();
 		auto pointer = emitMemoryAddress(arg, width, wasmAddress);
-		auto result = compiler.new_gp32("memoryLoad");
+		const bool wide = kind == LoadKind::I64 || kind == LoadKind::I64I8Signed
+				|| kind == LoadKind::I64I8Unsigned || kind == LoadKind::I64I16Signed
+				|| kind == LoadKind::I64I16Unsigned || kind == LoadKind::I64I32Signed
+				|| kind == LoadKind::I64I32Unsigned;
+		auto result = wide ? compiler.new_gp64("memoryLoad64") : compiler.new_gp32("memoryLoad32");
 		switch (kind) {
 		case LoadKind::I32:
 			checkError(compiler.mov(result, asmjit::x86::dword_ptr(pointer)), "AsmJit i32.load emission failed"); break;
@@ -1637,6 +1656,20 @@ private:
 			checkError(compiler.movsx(result, asmjit::x86::word_ptr(pointer)), "AsmJit i32.load16_s emission failed"); break;
 		case LoadKind::I16Unsigned:
 			checkError(compiler.movzx(result, asmjit::x86::word_ptr(pointer)), "AsmJit i32.load16_u emission failed"); break;
+		case LoadKind::I64:
+			checkError(compiler.mov(result, asmjit::x86::qword_ptr(pointer)), "AsmJit i64.load emission failed"); break;
+		case LoadKind::I64I8Signed:
+			checkError(compiler.movsx(result, asmjit::x86::byte_ptr(pointer)), "AsmJit i64.load8_s emission failed"); break;
+		case LoadKind::I64I8Unsigned:
+			checkError(compiler.movzx(result, asmjit::x86::byte_ptr(pointer)), "AsmJit i64.load8_u emission failed"); break;
+		case LoadKind::I64I16Signed:
+			checkError(compiler.movsx(result, asmjit::x86::word_ptr(pointer)), "AsmJit i64.load16_s emission failed"); break;
+		case LoadKind::I64I16Unsigned:
+			checkError(compiler.movzx(result, asmjit::x86::word_ptr(pointer)), "AsmJit i64.load16_u emission failed"); break;
+		case LoadKind::I64I32Signed:
+			checkError(compiler.movsx(result, asmjit::x86::dword_ptr(pointer)), "AsmJit i64.load32_s emission failed"); break;
+		case LoadKind::I64I32Unsigned:
+			checkError(compiler.mov(result.r32(), asmjit::x86::dword_ptr(pointer)), "AsmJit i64.load32_u emission failed"); break;
 		}
 		values.push_back(result);
 	}
@@ -1650,11 +1683,13 @@ private:
 		auto pointer = emitMemoryAddress(arg, width, wasmAddress);
 		switch (width) {
 		case 1:
-			checkError(compiler.mov(asmjit::x86::byte_ptr(pointer), value.r8()), "AsmJit i32.store8 emission failed"); break;
+			checkError(compiler.mov(asmjit::x86::byte_ptr(pointer), value.r8()), "AsmJit store8 emission failed"); break;
 		case 2:
-			checkError(compiler.mov(asmjit::x86::word_ptr(pointer), value.r16()), "AsmJit i32.store16 emission failed"); break;
+			checkError(compiler.mov(asmjit::x86::word_ptr(pointer), value.r16()), "AsmJit store16 emission failed"); break;
 		case 4:
-			checkError(compiler.mov(asmjit::x86::dword_ptr(pointer), value), "AsmJit i32.store emission failed"); break;
+			checkError(compiler.mov(asmjit::x86::dword_ptr(pointer), value.r32()), "AsmJit store32 emission failed"); break;
+		case 8:
+			checkError(compiler.mov(asmjit::x86::qword_ptr(pointer), value), "AsmJit i64.store emission failed"); break;
 		default:
 			throw std::runtime_error("AsmJit internal error: unsupported memory-store width");
 		}
