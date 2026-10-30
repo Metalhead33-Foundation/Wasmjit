@@ -43,6 +43,8 @@ TEST_CASE("AsmJit ModuleInstantiator compiles supported i32 functions", "[asmjit
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("lt_u"), 1, -1) == 1);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("extend8_s"), 0x80) == -128);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("extend16_s"), 0x8001) == -32767);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("popcnt"), -1) == 32);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("popcnt"), 0xF0F) == 8);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("clz"), 1) == 31);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("clz"), 0) == 32);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("ctz"), 8) == 3);
