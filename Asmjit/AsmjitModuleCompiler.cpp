@@ -571,8 +571,9 @@ protected:
 
     void dispatchSelectT(std::vector<WASM::ValueType>&& types) override
     {
-        if (types.size() != 1 || types.front().opcode != WASM::ValueTypeCode::I32)
-            throw std::runtime_error("AsmJit select_t currently supports exactly one i32 value type");
+        if (types.size() != 1)
+            throw std::runtime_error("AsmJit select_t currently supports exactly one integer value type");
+        requireInteger(types.front(), "select_t values");
         emitSelect();
     }
 
@@ -1312,7 +1313,11 @@ private:
         values.pop_back();
         const auto first = values.back();
         values.pop_back();
-        auto result = compiler.new_gp32("selectResult");
+        if (condition.size() != 4 || first.size() != second.size()
+                || (first.size() != 4 && first.size() != 8))
+            throw std::runtime_error("AsmJit select requires an i32 condition and matching i32/i64 values");
+        auto result = first.size() == 8
+                ? compiler.new_gp64("selectResult") : compiler.new_gp32("selectResult");
         auto chooseSecond = compiler.new_label();
         auto done = compiler.new_label();
         checkError(compiler.mov(result, first), "AsmJit select first-value copy failed");
