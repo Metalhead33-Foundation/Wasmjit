@@ -11,10 +11,10 @@ SUBDIRS = Elvavena Euphemy WasmBase WasmStub LibJit Asmjit Sljit ExampleBackend 
 WasmBase.depends = Elvavena Euphemy
 WasmStub.depends = WasmBase
 LibJit.depends   = WasmBase
-# Planned backends: the directories are reserved and kept in the build so the
-# seam stays exercised by a real subproject, but they emit no code yet. Each has
-# a README pointing at docs/BACKEND_WORK_ORDER.md, and neither installs anything
-# (an empty lib<name>.so must not reach the install tree).
+# `Sljit/` is a provisional, executing backend: it links the shared core the
+# same way LibJit does and refuses what it does not lower
+# (docs/WRITING_A_BACKEND.md §9). `Asmjit/` remains a reserved, empty subproject
+# that emits no code yet and installs nothing.
 Asmjit.depends   = WasmBase
 Sljit.depends    = WasmBase
 # A loadable example backend, built in its own directory so `Test` proves the
@@ -22,4 +22,4 @@ Sljit.depends    = WasmBase
 # (docs/BACKEND_PLUGIN_ABI.md BP-3).
 ExampleBackend.subdir = Test/ExampleBackend
 ExampleBackend.depends = WasmBase
-Test.depends     = Elvavena Euphemy WasmBase WasmStub LibJit ExampleBackend
+Test.depends     = Elvavena Euphemy WasmBase WasmStub LibJit Sljit ExampleBackend

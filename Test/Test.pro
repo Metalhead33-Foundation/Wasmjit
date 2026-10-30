@@ -19,6 +19,7 @@ DEFINES += WASM_TEST_DIR=\\\"$$WASM_BUILD_OUTPUT_DIR/\\\"
 QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../WasmBase\'
 QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../WasmStub\'
 QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../LibJit\'
+QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../Sljit\'
 QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../extern/MhLib/Elvavena\'
 QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../extern/MhLib/Euphemy\'
 
@@ -26,6 +27,7 @@ QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../extern/MhLib/Euphemy\'
 LIBS += -L$$OUT_PWD/../WasmBase -lWasmBase
 LIBS += -L$$OUT_PWD/../WasmStub -lWasmStub
 LIBS += -L$$OUT_PWD/../LibJit -lLibJit
+LIBS += -L$$OUT_PWD/../Sljit -lSljit
 LIBS += -ljit
 LIBS += -lCatch2 -lCatch2Main
 include(../WasmBase/WasmBase.pri)
@@ -100,6 +102,7 @@ SOURCES += main.cpp \
     Diagnose.cpp \
     TestBackend.cpp \
     LibJitBackendTests.cpp \
+    SljitBackendTests.cpp \
     WastScript.cpp \
     SpecSuite.cpp \
     ProposalDocsTests.cpp \

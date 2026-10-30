@@ -137,13 +137,22 @@ with values. There is no type system, no automatic allocation for vector values,
 no struct-by-value call ABI, and no portable "opaque 16-byte value". Adopting it
 means writing a whole new operand model, calling convention and register
 allocator at our layer (the same work the current LibJIT backend does for
-scalars, redone for vectors). And **SLJIT is not present in this repo**:
+scalars, redone for vectors).
+
+**State of `Sljit/` (2026-10-30):** the toolkit is now vendored as
+`extern/sljit` and a **provisional** backend compiles it into `libSljit.so`
+(registered as `sljit`, with `[sljit]` coverage). That backend lowers a
+straight-line integer subset only — no `v128`, no calls, no control flow, no
+memory access — so this note's SIMD conclusions are unchanged: the shared helper
+layer is still the portable baseline, and a *native* `v128` lowering on SLJIT
+remains future work ([`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) §9 lists the
+exact subset).
 
 | Fact | Evidence |
 |---|---|
-| `Sljit/` contains only `Sljit.pro` (`TEMPLATE = lib`, no `SOURCES`, **no `LIBS += -lsljit`**) | `Sljit/Sljit.pro` |
-| The built artefact is an empty stub | `build/Desktop-Debug/Sljit/libSljit.so.1.0.0` is 14 528 bytes with no exported API |
-| No SLJIT headers or library are installed | no `sljitLir.h` / `libsljit*` under `/usr/include`, `/usr/local/include`, `/usr/local/lib` |
+| `Sljit/` contains four source units and `Sljit.pro` compiles `extern/sljit/sljit_src/sljitLir.c` into the library (no external `-lsljit`) | `Sljit/Sljit.pro` |
+| The backend is selectable: `Runtime::create("sljit")` and `WASMJIT_BACKEND=sljit` | `Test/SljitBackendTests.cpp` (`[sljit]`) |
+| It executes `i32`/`i64` straight-line bodies and refuses everything else with a null `Callable::fnPtr` | `Sljit/SljitOpcodeDispatcher.cpp`, `Sljit/README.md` |
 
 ### 3.3 AsmJit — real SIMD, complete instruction coverage, no backend yet
 
@@ -167,8 +176,7 @@ AsmJit is "a library for low-latency machine code generation" and is explicitly
 Same caveats as SLJIT, more strongly: AsmJit is an *assembler and IR allocator*
 with no `v128` analogue, no wasm-aware calling convention, and no
 `OpcodeDispatcher`. Adopting it means a new backend of the same size as the
-LibJIT one, plus whatever the vector lowering needs. And `Asmjit/` today is the
-same empty shell as `Sljit/`:
+LibJIT one, plus whatever the vector lowering needs. And `Asmjit/` is still the same empty shell:
 
 | Fact | Evidence |
 |---|---|

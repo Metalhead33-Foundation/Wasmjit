@@ -4,12 +4,15 @@
 
 The library split is in place: `WasmBase/` is the backend-agnostic core
 (`libWasmBase`), every code generator is its own library (`LibJit/` is the one
-that executes; `Asmjit/` and `Sljit/` are the planned ones, reserved and empty
-today, each with a README), and `Test/` is a Catch2 harness over the libraries
-rather than the product. The `build/<config>/Test/WasmJit` executable is still a
-development sandbox, not the embeddable API. See
-[`docs/LAYERING.md`](docs/LAYERING.md) for the rule that keeps the core
-backend-agnostic.
+that executes a module completely; `Sljit/` now holds a **provisional** second
+backend that executes a small integer subset and refuses the rest, and
+`Asmjit/` is still the reserved, empty scaffold — each has a README), and
+`Test/` is a Catch2 harness over the libraries rather than the product. The
+`build/<config>/Test/WasmJit` executable is still a development sandbox, not the
+embeddable API. See [`docs/LAYERING.md`](docs/LAYERING.md) for the rule that
+keeps the core backend-agnostic and
+[`docs/WRITING_A_BACKEND.md`](docs/WRITING_A_BACKEND.md) for how a code
+generator is built.
 
 > **Just because you technically can does not mean that you should.**
 >
@@ -21,8 +24,13 @@ backend-agnostic.
 
 ## Direction
 
-- **GNU LibJIT is the only executing backend**, and stays the implementation
-  path until a second code generator can run a module.
+- **GNU LibJIT is the only complete backend**, and stays the implementation
+  path until another code generator can run the whole generic fixture set.
+  `Sljit/` carries a deliberately provisional second backend (straight-line
+  integer bodies; everything else left uncallable — see
+  [`docs/WRITING_A_BACKEND.md`](docs/WRITING_A_BACKEND.md) §9), which exists to
+  make the seam concrete and to seed the vector work, not to replace LibJIT.
+  `Asmjit/` remains a reserved, empty scaffold.
 - **No bespoke interpreter fallback, ever.** WasmJit will not grow a Wasm
   interpreter — not for continuations, unsupported opcodes or portability. If
   interpretation is ever required it must come from GNU LibJIT's own
@@ -50,10 +58,11 @@ backend-agnostic.
   multiplicity the rule forbids). See
   [`docs/THREADSAFETY.md`](docs/THREADSAFETY.md) §3.1–§3.2 and
   [`docs/MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) §2.3.
-- **Still open** (tracked, not started): a second and third backend
-  (`Asmjit/` and `Sljit/` are reserved, empty, and intended — see their READMEs
-  and the [`work order`](docs/BACKEND_WORK_ORDER.md); the readiness audit says
-  work may begin and recommends SLJIT first), the long-term
+- **Still open** (tracked, not started): a *complete* second backend
+  (`Sljit/` has begun — provisional, integer-only, with `[sljit]` coverage —
+  while `Asmjit/` is still reserved and empty; see
+  [`docs/WRITING_A_BACKEND.md`](docs/WRITING_A_BACKEND.md) and the
+  [`work order`](docs/BACKEND_WORK_ORDER.md)), the long-term
   qmake → CMake move, and the language-support
   studies defined in [`docs/LANGUAGE_FEASIBILITY.md`](docs/LANGUAGE_FEASIBILITY.md)
   (their definitions, plus the entry-gate audit now run — see
@@ -126,6 +135,7 @@ per-milestone done markers, is the authoritative per-item status.
 | [`TESTING.md`](docs/TESTING.md) | Building/running the Catch2 suite, the `wasm-tools` spec-suite conversion, the curated `wast_supported.txt` workflow, reading the output | Guide (process) | `████████████████████` current |
 | [`DOCUMENTATION.md`](docs/DOCUMENTATION.md) | Why every header comment is a Doxygen comment, the Qt-style forms (`//!`, `/*!`, `\file`, `\brief`, `\par`), the prose that breaks a Doxygen run, and how the Markdown notes are nested into a tree (`docs/index.md` → `docs/proposals/index.md`, `docs/languages/index.md`) rather than flattened | Policy + guide (process) | `████████████████████` current — all 69 headers converted, 60 notes in the tree, `doxygen Doxyfile` warning-free |
 | [`VALIDATION.md`](docs/VALIDATION.md) | The validating front end: what `Module::validate()` checks, the conservative taint policy, measured `assert_invalid` coverage, and the remaining rules | Design + status | `████████████████████` 100 % of negative modules |
+| [`WRITING_A_BACKEND.md`](docs/WRITING_A_BACKEND.md) | The walkthrough for a new code generator: the four `ModuleInstantiator` hooks, decoding a body through `OpcodeDispatcher`, the ABI the generated code must emit, the `BackendSession` façade, packaging/registration/selection, and the SLJIT scaffold as the worked example with its documented limits | Guide (how-to) | `████████████████████` current — `Sljit/` is the worked example |
 | [`SAFETY.md`](docs/SAFETY.md) | The safety policies: artifact detection, input-derived allocation bounds, the allocation budget, traps vs `abort`, RAII for locks, and the pitfalls that produced them | Policy + pitfalls | `████████████████████` current |
 | [`THREADSAFETY.md`](docs/THREADSAFETY.md) | Guest-side vs host-side thread safety, the one-instance-per-module target, import/export overlap, C++ mutex/trap caveats, and the responsibilities of the engine, module author and embedder | Policy + reference | `████████████████████` current |
 | [`TRAP_CLEANUP.md`](docs/TRAP_CLEANUP.md) | Why the trap path is a pending status instead of `longjmp`: helpers report and return, the host boundary throws `WASM::Trap`, the POD-only rule is gone, and the optional `WASM::defer` stack covers external state — plus the option set and the per-backend feasibility study that chose it | Design note / implementation reference | `████████████████████` 100% — TRAP-1…TRAP-7 shipped: the trap path is a per-agent pending status; `Agent`/`ExecutionState` own the trap, exception, tail-call, defer, counter and stack-limit state (TRAP-6). True multi-agent execution remains deferred with THREADS TH-5 |
@@ -230,7 +240,7 @@ library per backend plus the test executable.
 | `WasmStub/` | `libWasmStub`: a non-JIT opcode dispatcher that pretty-prints instead of executing (inspection/debug) |
 | `LibJit/` | `libLibJit`: the GNU LibJIT backend (context, type translation, module compiler, dispatch) — the current implementation path, and the only backend that executes |
 | `Asmjit/` | **Planned backend, no code yet**: reserved and kept in the build, emits an empty `libAsmjit.so` that is never installed and never selectable by name. Its MMX/SSE…AVX-512 coverage and vector-aware register allocator are a planned SIMD lever; see `Asmjit/README.md` and [`docs/BACKEND_WORK_ORDER.md`](docs/BACKEND_WORK_ORDER.md) |
-| `Sljit/` | **Planned backend, no code yet**: same treatment. `sljit_emit_simd_*` / `SLJIT_SIMD_REG_*` are the other planned SIMD lever; see `Sljit/README.md` |
+| `Sljit/` | `libSljit`: the **provisional** SLJIT backend (2026-10-30) — compiles the vendored `extern/sljit` into the library, registers as `sljit`, executes straight-line `i32`/`i64` bodies, and leaves every unsupported opcode uncallable rather than miscompiling it. `sljit_emit_simd_*` / `SLJIT_SIMD_REG_*` remain the planned native vector lever; see `Sljit/README.md` and [`docs/WRITING_A_BACKEND.md`](docs/WRITING_A_BACKEND.md) §9 |
 | `Test/` | The Catch2 executable (`WasmJit`) and the spec-suite harness; see [`docs/TESTING.md`](docs/TESTING.md) |
 | `docs/` | Design notes and process guides; per-proposal notes live in `docs/proposals/` (see the [`docs`](docs/index.md) node) |
 | `extern/` | Submodules: `MhLib` (`Elvavena` I/O + `Euphemy`) and the upstream `WasmTestsuite` |
@@ -242,8 +252,8 @@ The repository builds a set of shared libraries plus a console test executable
 through qmake:
 
 - [`Project.pro`](Project.pro) is the top-level `subdirs` project
-  (`WasmBase` + `WasmStub` + `LibJit` + the planned `Asmjit`/`Sljit` placeholders
-  + `ExampleBackend` + `Test`);
+  (`WasmBase` + `WasmStub` + `LibJit` + `Sljit` + the planned `Asmjit`
+  placeholder + `ExampleBackend` + `Test`);
 - the test target links against `libjit`, Catch2 and the project libraries;
 - `libWasmBase` links `libffi` (the flat component-runtime closure path) and
   the header-only `utf8cpp` package for Canonical ABI string transcoding;
@@ -271,7 +281,7 @@ through qmake:
 | Backend | State |
 |---|---|
 | GNU LibJIT (`LibJit/`) | **The only executing backend** — loads, validates, compiles and runs modules, including SIMD via the shared helper layer |
-| SlJIT (`Sljit/`) | **Planned**, not started: builds an empty library, installs nothing; the [`work order`](docs/BACKEND_WORK_ORDER.md) says what it must provide |
+| SlJIT (`Sljit/`) | **Provisional** (2026-10-30): links the shared core, registers as `sljit`, and executes a straight-line `i32`/`i64` subset; every other opcode leaves the function uncallable, so the core refuses it at the call boundary. `[sljit]` covers it. Not a LibJIT replacement; see [`docs/WRITING_A_BACKEND.md`](docs/WRITING_A_BACKEND.md) §9 |
 | AsmJit (`Asmjit/`) | **Planned**, not started: same |
 
 There is no interpreter backend. `WasmStub/` is a non-compiling pretty-printer;

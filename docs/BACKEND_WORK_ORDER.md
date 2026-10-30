@@ -165,6 +165,8 @@ those has likely found a gap in this document — write it down.
 
 ## 10. References
 
+- [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) — the step-by-step walkthrough
+  through the same requirements (this note is the checklist it follows).
 - [`LAYERING.md`](LAYERING.md) §4 — the contract rows this checklist elaborates.
 - [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §7.3 — `AAS8`/`AAS9`/`AAS11`,
   the gaps this note closes.
