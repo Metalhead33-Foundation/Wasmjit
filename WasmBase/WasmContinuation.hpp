@@ -122,6 +122,7 @@ struct alignas(16) ContinuationValue {
  * \param resultKinds Input value or output destination for this operation.
  * \return The value or status produced by this operation.
  */
+//! Type alias `ContinuationInvokeFn` names the corresponding implementation/API type.
 using ContinuationInvokeFn = void (*)(void* target, void* context,
 		const ContinuationValue* args, std::uint32_t argCount,
 		ContinuationValue* results, std::uint32_t resultCount,
