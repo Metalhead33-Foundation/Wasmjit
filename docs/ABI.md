@@ -490,6 +490,12 @@ ordinary memories use a growable buffer (`PrivateLinearMemory`). Multi-memory
 is fully wired: memory instructions carry a `MemIdx`, and the JIT indexes
 `VMContext::memories` at compile time.
 
+Two embedder-visible consequences of that split, both measured and both priced
+in [`proposals/MEMORY_PROVIDER.md`](proposals/MEMORY_PROVIDER.md): an ordinary
+memory may **relocate on growth**, so a `memoryBase` held across a guest call
+can dangle; and only a *shared* memory reserves its declared maximum, so the
+allocation policy is not selectable by the embedder (`RA4`).
+
 ### Other store-owned entities
 
 The same pattern extends to every runtime entity. The Store now also owns:

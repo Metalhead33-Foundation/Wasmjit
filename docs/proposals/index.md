@@ -30,6 +30,7 @@ and the `[docs]` check fails ([`DOCUMENTATION.md`](../DOCUMENTATION.md) §9).
 | \subpage prop_legacy_exceptions | Legacy (Phase-3) exception handling: encodings, conflict analysis, cost of admission, and the six questions |
 | \subpage prop_memory64 | Memory64 |
 | \subpage prop_memory_control | Memory control: protection, mapping, virtual memory |
+| \subpage prop_memory_provider | The memory provider: what runtimes demand of the host, what the engine offers, and whether to open the seam |
 | \subpage prop_multi_memory | Multiple memories |
 | \subpage prop_multi_value | Multi-value blocks and returns |
 | \subpage prop_mutable_globals | Import/export of mutable globals |

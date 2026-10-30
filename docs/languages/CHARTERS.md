@@ -155,7 +155,7 @@ flag that avoids the policy (a convenience) and whether the output trips `LE-8`
 (a `delegate` that skips a catch) or `LE-9` (a body mixing the two forms). The
 encoding question itself is settled: [`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md)
 §4.6, `LE-1`…`LE-6`; `LE-8`/`LE-9` are the open rows |
-| **Heap-ownership probe** — ask each runtime whether it can run inside a memory whose base it did not choose (`RA4`) | `S1`, `S2`, `S4`, `S5` | One paragraph per runtime; the basis for a future `Q-3` decision | `Q-3` — a provider seam would be additive (`RA-2`) |
+| **Heap-ownership probe** — ask each runtime how much it grows its heap at start-up and whether it relies on the new pages being committed lazily (`RA4` → [`proposals/MEMORY_PROVIDER.md`](../proposals/MEMORY_PROVIDER.md) `D3`, `MP-1`) | `S1`, `S2`, `S4`, `S5` | One number per runtime (bytes grown before `main`); it decides whether the reservation overload is necessary, and it is the only part of "heap ownership" that is an engine question |
 | **WASI surface census** — collect the imports of a minimal "hello, world" build per toolchain | `S1`, `S2`, `S4`, `S5` (and every `L6`–`L9` row later) | One table that says how big a WASI shim has to be, and which imports are avoidable | `Q-2` — embedder tooling |
 
 None of the three is a language verdict; all three are reusable evidence, and

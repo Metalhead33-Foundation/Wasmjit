@@ -174,9 +174,9 @@ TEST_CASE("proposal notes keep the documented structure", "[docs]")
 		REQUIRE(text.find("References") != std::string::npos);
 	}
 
-	// The folder holds thirty-five notes today; a new note must appear here
+	// The folder holds thirty-six notes today; a new note must appear here
 	// without the check silently grading an empty directory.
-	REQUIRE(checked >= 35);
+	REQUIRE(checked >= 36);
 }
 
 // Enforces docs/DOCUMENTATION.md §9: the generated site nests the notes instead

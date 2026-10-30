@@ -84,7 +84,7 @@ clustering map can group by them:
 | **F5** | Legacy EH instructions (`try`/`catch`/`delegate`) | **Mitigated (2026-10-30):** the final `exnref` shape is what the engine executes, and a legacy-encoded module no longer has to be refused — `ParseOptions::legacyExceptionHandling` rewrites it at load ([`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md)). Off by default, and two constructs are still refused by name (`LE-8`, `LE-9`), so it stays a *switch a toolchain may force* rather than a free pass |
 | **F6** | OS-thread spawning, real parallelism, TLS | `Agents` exists but is opt-in; the guest cannot spawn a host thread |
 | **F7** | Start-up that blocks, loops, or spawns | There is no step budget (`S1`); an init that never returns hangs the embedder |
-| **F8** | Large runtime / heap reservation vs the 2 GiB budget | [`SAFETY.md`](../SAFETY.md) §2.3: an oversized initial size fails instantiation |
+| **F8** | Large runtime / heap reservation vs the 2 GiB budget | [`SAFETY.md`](../SAFETY.md) §2.3: an oversized initial size fails instantiation. Priced by [`proposals/MEMORY_PROVIDER.md`](../proposals/MEMORY_PROVIDER.md): the budget charges *commits*, not reservations, so what is missing is the ability of a non-shared memory to reserve at all (`MP2`), not budget headroom |
 | **F9** | Multiple instances of one module | One instance per `Module`; isolation is "load it twice" |
 | **F10** | Guest-side dynamic code generation / self-hosting | Legal guest code, but a self-hosting JIT usually assumes `mmap`-like memory (`F2`) |
 | **F11** | Signature/value mapping is the deciding issue | Rare: the ABI covers `i32/i64/f32/f64/v128/ref`, multi-value is a caller buffer |
@@ -204,7 +204,7 @@ what a cluster *is*.
 | **T06** | Rust | rustc, `wasm32-unknown-unknown` | `F3` only — no host imports from `std`, `core`+`alloc` and `dlmalloc` in the guest, `panic=abort` by default; unwinding needs nightly plus a non-legacy EH flag *or* the parser policy | prod | standard | low | E1 | C3 · 3–5 s · 1–2 w | `L2` | `T3` (the most likely modern-mod requester) |
 | **T07** | Rust | rustc, `wasm32-wasip1` | `F2` — the same module shape plus a WASI surface for `std::fs`/`std::io` | prod | standard | low | E1 | C3 · 4–6 s · 1–2 w | `L2` | `T2+T3` |
 | **T08** | Go | `GOOS=js GOARCH=wasm` | `F1` — the port is a fixed JS+Wasm hybrid: the module's imports are implemented by `wasm_exec.js`, so it cannot be instantiated here | prod | non-standard | high | E1 | — | `L8` | `K2` (E1) — reversal: a documented standalone port |
-| **T09** | Go | `GOOS=wasip1` | `F2`+`F7`+`F8` — goroutine scheduler and runtime init behind `_start`, a large heap reservation against the 2 GiB budget, and a WASI surface | prod | standard | high | E1 | C3 · 6–8 s · 2–3 w | `L8` | `T2+T3` |
+| **T09** | Go | `GOOS=wasip1` | `F2`+`F7`+`F8` — goroutine scheduler and runtime init behind `_start`, a large heap reservation (the budget charges commits, so the friction is that a non-shared memory cannot reserve at all — [`MEMORY_PROVIDER.md`](../proposals/MEMORY_PROVIDER.md) `MP2`), and a WASI surface | prod | standard | high | E1 | C3 · 6–8 s · 2–3 w | `L8` | `T2+T3` |
 | **T10** | TinyGo | TinyGo (`wasm` and `wasi` targets) | `F3` — an LLVM-backed Go subset with a small collector and scheduler and no goroutine preemption unless asked; the closest thing to "Go without the runtime" | stable | partly | low | E2 | C3 · 3–5 s · 1–2 w | `L2` | `T3` (the pragmatic Go answer if `T09` fails) |
 
 ### 5.2 Stable for production usage (22 entries → 23 rows)
