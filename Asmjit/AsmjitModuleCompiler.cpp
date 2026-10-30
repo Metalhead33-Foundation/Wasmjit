@@ -1,0 +1,2125 @@
+#include "AsmjitModuleCompiler.hpp"
+
+#include "../WasmBase/WasmOpcodeDispatcher.hpp"
+#include "../WasmBase/WasmSafety.hpp"
+#include "../WasmBase/WasmStack.hpp"
+#include "../WasmBase/WasmStore.hpp"
+#include "../WasmBase/WasmTrap.hpp"
+#include "../WasmBase/WasmVMContext.hpp"
+#include "../WasmBase/WasmType.hpp"
+
+#include <Euphemy/Io/EuphConstBufferDevice.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace AsmJitBackend {
+
+namespace {
+
+void checkError(asmjit::Error error, const char* operation)
+{
+	if (error != asmjit::Error::kOk)
+		throw std::runtime_error(std::string(operation) + ": "
+				+ std::to_string(static_cast<unsigned>(error)));
+}
+
+void requireInteger(const WASM::ValueType& type, const char* role)
+{
+	if (type.opcode != WASM::ValueTypeCode::I32
+			&& type.opcode != WASM::ValueTypeCode::I64)
+		throw std::runtime_error(std::string("AsmJit compiler supports only i32/i64 ")
+				+ role);
+}
+
+void requireI32(const WASM::ValueType& type, const char* role)
+{
+	if (type.opcode != WASM::ValueTypeCode::I32)
+		throw std::runtime_error(std::string("AsmJit currently supports only i32 ") + role);
+}
+
+asmjit::x86::Gp newIntegerRegister(asmjit::x86::Compiler& compiler,
+		const WASM::ValueType& type, const char* name)
+{
+	return type.opcode == WASM::ValueTypeCode::I64
+			? compiler.new_gp64(name) : compiler.new_gp32(name);
+}
+
+int64_t asmjitI64DivS(int64_t lhs, int64_t rhs) noexcept
+{
+	if (rhs == 0) {
+		WASM::reportTrap(WASM::TrapKind::IntegerDivideByZero);
+		return 0;
+	}
+	if (lhs == INT64_MIN && rhs == -1) {
+		WASM::reportTrap(WASM::TrapKind::IntegerOverflow);
+		return 0;
+	}
+	return lhs / rhs;
+}
+
+uint64_t asmjitI64DivU(uint64_t lhs, uint64_t rhs) noexcept
+{
+	if (rhs == 0) {
+		WASM::reportTrap(WASM::TrapKind::IntegerDivideByZero);
+		return 0;
+	}
+	return lhs / rhs;
+}
+
+int64_t asmjitI64RemS(int64_t lhs, int64_t rhs) noexcept
+{
+	if (rhs == 0) {
+		WASM::reportTrap(WASM::TrapKind::IntegerDivideByZero);
+		return 0;
+	}
+	if (lhs == INT64_MIN && rhs == -1)
+		return 0;
+	return lhs % rhs;
+}
+
+uint64_t asmjitI64RemU(uint64_t lhs, uint64_t rhs) noexcept
+{
+	if (rhs == 0) {
+		WASM::reportTrap(WASM::TrapKind::IntegerDivideByZero);
+		return 0;
+	}
+	return lhs % rhs;
+}
+
+uint32_t asmjitI32Popcnt(uint32_t value) noexcept
+{
+	value -= (value >> 1) & 0x55555555u;
+	value = (value & 0x33333333u) + ((value >> 2) & 0x33333333u);
+	value = (value + (value >> 4)) & 0x0F0F0F0Fu;
+	value += value >> 8;
+	value += value >> 16;
+	return value & 0x3Fu;
+}
+
+int32_t asmjitI32DivS(int32_t lhs, int32_t rhs) noexcept
+{
+	if (rhs == 0) {
+		WASM::reportTrap(WASM::TrapKind::IntegerDivideByZero);
+		return 0;
+	}
+	if (lhs == INT32_MIN && rhs == -1) {
+		WASM::reportTrap(WASM::TrapKind::IntegerOverflow);
+		return 0;
+	}
+	return lhs / rhs;
+}
+
+uint32_t asmjitI32DivU(uint32_t lhs, uint32_t rhs) noexcept
+{
+	if (rhs == 0) {
+		WASM::reportTrap(WASM::TrapKind::IntegerDivideByZero);
+		return 0;
+	}
+	return lhs / rhs;
+}
+
+int32_t asmjitI32RemS(int32_t lhs, int32_t rhs) noexcept
+{
+	if (rhs == 0) {
+		WASM::reportTrap(WASM::TrapKind::IntegerDivideByZero);
+		return 0;
+	}
+	if (lhs == INT32_MIN && rhs == -1)
+		return 0;
+	return lhs % rhs;
+}
+
+uint32_t asmjitI32RemU(uint32_t lhs, uint32_t rhs) noexcept
+{
+	if (rhs == 0) {
+		WASM::reportTrap(WASM::TrapKind::IntegerDivideByZero);
+		return 0;
+	}
+	return lhs % rhs;
+}
+
+WASM::Callable* asmjitResolveIndirectCallable(WASM::VMContext* vm, uint32_t tableIndex,
+		uint32_t elementIndex, uint32_t expectedTypeValue) noexcept
+{
+	if (vm == nullptr || vm->tables == nullptr || tableIndex >= vm->tableCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit call_indirect table index is invalid");
+		return nullptr;
+	}
+	WASM::TableInstance* table = vm->tables[tableIndex];
+	if (table == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit call_indirect table is null");
+		return nullptr;
+	}
+	if (elementIndex >= table->size) {
+		WASM::reportTrap(WASM::TrapKind::OutOfBoundsTableAccess);
+		return nullptr;
+	}
+	if (table->base == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit call_indirect table storage is null");
+		return nullptr;
+	}
+	WASM::Callable* callable = table->base[elementIndex];
+	if (callable == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::UninitializedElement);
+		return nullptr;
+	}
+	if (callable->fnPtr == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit call_indirect target has no entry point");
+		return nullptr;
+	}
+	const WASM::TypeId expected{expectedTypeValue};
+	const WASM::TypeId none{WASM::TypeId::kNone};
+	if (callable->typeId != none && callable->typeId != expected) {
+		try {
+			if (vm->module == nullptr
+					|| !vm->module->store().types().matches(callable->typeId, expected)) {
+				WASM::reportTrap(WASM::TrapKind::IndirectCallTypeMismatch);
+				return nullptr;
+			}
+		} catch (...) {
+			WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit call_indirect type check failed");
+			return nullptr;
+		}
+	}
+	return callable;
+}
+
+void asmjitReportUnreachable() noexcept
+{
+	WASM::reportTrap(WASM::TrapKind::Unreachable);
+}
+
+uint32_t asmjitMemorySize(WASM::VMContext* vm, uint32_t memoryIndex) noexcept
+{
+	if (vm == nullptr || vm->memories == nullptr || memoryIndex >= vm->memoryCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.size index is invalid");
+		return 0;
+	}
+	const WASM::LinearMemory* memory = vm->memories[memoryIndex];
+	if (memory == nullptr || memory->pageSize == 0) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.size memory is invalid");
+		return 0;
+	}
+	return static_cast<uint32_t>(WASM::wasm_memory_size(memory) / memory->pageSize);
+}
+
+uint32_t asmjitMemoryGrow(WASM::VMContext* vm, uint32_t memoryIndex, uint32_t delta) noexcept
+{
+	if (vm == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.grow VMContext is null");
+		return UINT32_MAX;
+	}
+	if (vm->memories == nullptr || memoryIndex >= vm->memoryCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.grow index is invalid");
+		return UINT32_MAX;
+	}
+	auto* instance = reinterpret_cast<WASM::ModuleInstance*>(vm);
+	try {
+		const int64_t previous = instance->growMemory(memoryIndex, delta);
+		return previous < 0 ? UINT32_MAX : static_cast<uint32_t>(previous);
+	} catch (...) {
+		// memory.grow is specified to return -1 when growth cannot be fulfilled.
+		// Never allow a host allocation exception to unwind through JIT frames.
+		return UINT32_MAX;
+	}
+}
+
+void* asmjitMemoryAddress(WASM::VMContext* vm, uint32_t memoryIndex,
+		uint32_t address, uint32_t offset, uint32_t width) noexcept
+{
+	if (vm == nullptr || vm->memories == nullptr || memoryIndex >= vm->memoryCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory index is invalid");
+		return nullptr;
+	}
+	WASM::LinearMemory* memory = vm->memories[memoryIndex];
+	if (memory == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit linear memory is null");
+		return nullptr;
+	}
+	const uint64_t effective = static_cast<uint64_t>(address) + offset;
+	const uint64_t size = WASM::wasm_memory_size(memory);
+	if (effective > size || width > size - effective) {
+		WASM::reportTrap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+		return nullptr;
+	}
+	if (memory->memoryBase == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit linear-memory base is null");
+		return nullptr;
+	}
+	return memory->memoryBase + effective;
+}
+
+
+void asmjitMemoryCopy(WASM::VMContext* vm, uint32_t destinationMemory,
+        uint32_t sourceMemory, uint32_t destination, uint32_t source,
+        uint32_t length) noexcept
+{
+    if (vm == nullptr || vm->memories == nullptr
+            || destinationMemory >= vm->memoryCount || sourceMemory >= vm->memoryCount) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.copy index is invalid");
+        return;
+    }
+    WASM::LinearMemory* dst = vm->memories[destinationMemory];
+    WASM::LinearMemory* src = vm->memories[sourceMemory];
+    if (dst == nullptr || src == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.copy memory is null");
+        return;
+    }
+    const uint64_t dstSize = WASM::wasm_memory_size(dst);
+    const uint64_t srcSize = WASM::wasm_memory_size(src);
+    if (destination > dstSize || length > dstSize - destination
+            || source > srcSize || length > srcSize - source) {
+        WASM::reportTrap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+        return;
+    }
+    if (length == 0)
+        return;
+    if (dst->memoryBase == nullptr || src->memoryBase == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.copy base is null");
+        return;
+    }
+    std::memmove(dst->memoryBase + destination, src->memoryBase + source, length);
+}
+
+void asmjitMemoryFill(WASM::VMContext* vm, uint32_t memoryIndex,
+        uint32_t destination, uint32_t value, uint32_t length) noexcept
+{
+    if (vm == nullptr || vm->memories == nullptr || memoryIndex >= vm->memoryCount) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.fill index is invalid");
+        return;
+    }
+    WASM::LinearMemory* memory = vm->memories[memoryIndex];
+    if (memory == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.fill memory is null");
+        return;
+    }
+    const uint64_t size = WASM::wasm_memory_size(memory);
+    if (destination > size || length > size - destination) {
+        WASM::reportTrap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+        return;
+    }
+    if (length == 0)
+        return;
+    if (memory->memoryBase == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.fill base is null");
+        return;
+    }
+    std::memset(memory->memoryBase + destination, static_cast<unsigned char>(value), length);
+}
+
+
+void asmjitMemoryInit(WASM::VMContext* vm, uint32_t dataIndex, uint32_t memoryIndex,
+        uint32_t destination, uint32_t source, uint32_t length) noexcept
+{
+    if (vm == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.init VMContext is null");
+        return;
+    }
+    try {
+        reinterpret_cast<WASM::ModuleInstance*>(vm)->memoryInit(
+                memoryIndex, dataIndex, destination, source, length);
+    } catch (...) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.init helper failed");
+    }
+}
+
+void asmjitDataDrop(WASM::VMContext* vm, uint32_t dataIndex) noexcept
+{
+    if (vm == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit data.drop VMContext is null");
+        return;
+    }
+    try {
+        reinterpret_cast<WASM::ModuleInstance*>(vm)->dataDrop(dataIndex);
+    } catch (...) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit data.drop helper failed");
+    }
+}
+
+
+void asmjitTableInit(WASM::VMContext* vm, uint32_t elementIndex, uint32_t tableIndex,
+        uint32_t destination, uint32_t source, uint32_t length) noexcept
+{
+    if (vm == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit table.init VMContext is null");
+        return;
+    }
+    try {
+        reinterpret_cast<WASM::ModuleInstance*>(vm)->tableInit(
+                elementIndex, tableIndex, destination, source, length);
+    } catch (...) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit table.init helper failed");
+    }
+}
+
+void asmjitElemDrop(WASM::VMContext* vm, uint32_t elementIndex) noexcept
+{
+    if (vm == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit elem.drop VMContext is null");
+        return;
+    }
+    try {
+        reinterpret_cast<WASM::ModuleInstance*>(vm)->elemDrop(elementIndex);
+    } catch (...) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit elem.drop helper failed");
+    }
+}
+
+
+
+void asmjitTableCopy(WASM::VMContext* vm, uint32_t destinationTable, uint32_t sourceTable,
+        uint32_t destination, uint32_t source, uint32_t length) noexcept
+{
+    if (vm == nullptr || vm->tables == nullptr
+            || destinationTable >= vm->tableCount || sourceTable >= vm->tableCount) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit table.copy index is invalid");
+        return;
+    }
+    WASM::TableInstance* dst = vm->tables[destinationTable];
+    WASM::TableInstance* src = vm->tables[sourceTable];
+    if (dst == nullptr || src == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit table.copy table is null");
+        return;
+    }
+    if (destination > dst->size || length > dst->size - destination
+            || source > src->size || length > src->size - source) {
+        WASM::reportTrap(WASM::TrapKind::OutOfBoundsTableAccess);
+        return;
+    }
+    if (length == 0)
+        return;
+    if (dst->base == nullptr || src->base == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit table.copy storage is null");
+        return;
+    }
+    std::memmove(dst->base + destination, src->base + source,
+            static_cast<size_t>(length) * sizeof(WASM::Callable*));
+}
+
+uint32_t asmjitTableSize(WASM::VMContext* vm, uint32_t tableIndex) noexcept
+{
+    if (vm == nullptr || vm->tables == nullptr || tableIndex >= vm->tableCount) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit table.size index is invalid");
+        return 0;
+    }
+    const WASM::TableInstance* table = vm->tables[tableIndex];
+    if (table == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit table.size table is null");
+        return 0;
+    }
+    return static_cast<uint32_t>(table->size);
+}
+
+asmjit::FuncSignature stackCheckSignature()
+{
+	asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+	signature.set_ret(asmjit::TypeId::kVoid);
+	signature.add_arg(asmjit::TypeId::kUIntPtr);
+	return signature;
+}
+
+class IntegerFunctionEmitter final : public WASM::OpcodeDispatcher
+{
+public:
+	IntegerFunctionEmitter(asmjit::x86::Compiler& compiler, asmjit::FuncNode& function,
+			const WASM::FuncType& type, const WASM::FunctionBody& body,
+			const WASM::Module& module, WASM::ModuleInstanceInternals& internals,
+			const std::vector<asmjit::FuncNode*>& functions,
+			const std::vector<std::unique_ptr<asmjit::FuncSignature>>& signatures)
+		: compiler(compiler), module(module), internals(internals),
+		  functions(functions), signatures(signatures)
+	{
+		WASM::PreparedFunctionStack stack;
+		stack.prepare(type, body);
+
+		if (type.results.size() > 1)
+			throw std::runtime_error("AsmJit initial compiler does not support multi-value results");
+		for (const auto& parameter : type.params)
+			requireInteger(parameter.val, "parameters");
+		for (const auto& result : type.results)
+			requireInteger(result.val, "results");
+		for (const auto& local : stack.allLocals)
+			requireInteger(local, "locals");
+		resultType = type.results.empty()
+				? WASM::ValueTypeCode::Void : type.results.front().val.opcode;
+
+		locals.reserve(stack.allLocals.size());
+		vmContext = compiler.new_gp_ptr("vmContext");
+		function.set_arg(0, vmContext);
+
+		const asmjit::FuncSignature checkSignature = stackCheckSignature();
+		asmjit::InvokeNode* checkCall = nullptr;
+		checkError(compiler.invoke(asmjit::Out(checkCall),
+				reinterpret_cast<uint64_t>(&WASM::wasm_stack_check), checkSignature),
+				"AsmJit failed to emit the guest stack guard call");
+		checkCall->set_arg(0, vmContext);
+
+		// wasm_stack_check reports into the current execution state's pending
+		// slot and returns. Generated frames must observe that slot and return
+		// before executing guest instructions; C++ exceptions cannot unwind
+		// through this frame (docs/SAFETY.md §2.4).
+		asmjit::FuncSignature trapSlotSignature(asmjit::CallConvId::kCDecl);
+		trapSlotSignature.set_ret(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* trapSlotCall = nullptr;
+		checkError(compiler.invoke(asmjit::Out(trapSlotCall),
+				reinterpret_cast<uint64_t>(&WASM::wasm_trap_slot), trapSlotSignature),
+				"AsmJit failed to emit pending-trap slot lookup");
+		asmjit::x86::Gp trapSlot = compiler.new_gp_ptr("trapSlot");
+		trapSlotCall->set_ret(0, trapSlot);
+		asmjit::x86::Gp pending = compiler.new_gp32("pendingTrap");
+		checkError(compiler.mov(pending, asmjit::x86::dword_ptr(trapSlot,
+				static_cast<int32_t>(offsetof(WASM::TrapSlot, pending)))),
+				"AsmJit failed to load pending-trap state");
+		asmjit::Label bodyLabel = compiler.new_label();
+		checkError(compiler.test(pending, pending), "AsmJit pending-trap test emission failed");
+		checkError(compiler.jz(bodyLabel), "AsmJit pending-trap branch emission failed");
+		if (type.results.empty()) {
+			checkError(compiler.ret(), "AsmJit trap-path void return emission failed");
+		} else {
+			asmjit::x86::Gp zero = resultType == WASM::ValueTypeCode::I64
+					? compiler.new_gp64("trapResult") : compiler.new_gp32("trapResult");
+			checkError(compiler.xor_(zero, zero), "AsmJit trap-result zeroing failed");
+			checkError(compiler.ret(zero), "AsmJit trap-path result return emission failed");
+		}
+		checkError(compiler.bind(bodyLabel), "AsmJit body label binding failed");
+
+		for (uint32_t i = 0; i < stack.parameterCount; ++i) {
+			asmjit::x86::Gp parameter = newIntegerRegister(compiler, stack.allLocals[i], "parameter");
+			function.set_arg(i + 1, parameter);
+			locals.push_back(parameter);
+		}
+		for (uint32_t i = 0; i < stack.localCount; ++i) {
+			asmjit::x86::Gp local = newIntegerRegister(compiler,
+					stack.allLocals[stack.parameterCount + i], "local");
+			checkError(compiler.xor_(local, local), "AsmJit local zero-initialisation failed");
+			locals.push_back(local);
+		}
+		resultCount = static_cast<uint32_t>(type.results.size());
+	}
+
+	void compile(const WASM::FunctionBody& body, const WASM::FuncType& type)
+	{
+		const std::span<const std::byte> code(
+				reinterpret_cast<const std::byte*>(body.code.data()), body.code.size());
+		Euph::Io::ConstBufferDevice device(code);
+		WASM::WasmStream<Euph::Io::ConstBufferDevice> stream(device);
+		readCode(stream);
+
+		if (resultCount == 0) {
+			if (!values.empty())
+				throw std::runtime_error("AsmJit function ended with an unexpected operand stack value");
+			checkError(compiler.ret(), "AsmJit void function return emission failed");
+		} else {
+			if (values.size() != 1)
+				throw std::runtime_error("AsmJit integer function must end with exactly one result");
+			checkError(compiler.ret(values.back()), "AsmJit i32 function return emission failed");
+		}
+		(void)type;
+	}
+
+protected:
+	void dispatchI32Const(int32_t value) override
+	{
+		asmjit::x86::Gp reg = compiler.new_gp32("constant");
+		checkError(compiler.mov(reg, value), "AsmJit i32.const emission failed");
+		values.push_back(reg);
+	}
+
+	void dispatchLocalGet(WASM::LocalIdx index) override
+	{
+		const size_t i = static_cast<size_t>(index);
+		if (i >= locals.size())
+			throw std::runtime_error("AsmJit local.get index is out of range");
+		asmjit::x86::Gp copy = locals[i].size() == 8
+				? compiler.new_gp64("localCopy") : compiler.new_gp32("localCopy");
+		checkError(compiler.mov(copy, locals[i]), "AsmJit local.get emission failed");
+		values.push_back(copy);
+	}
+
+	void dispatchLocalSet(WASM::LocalIdx index) override
+	{
+		const size_t i = static_cast<size_t>(index);
+		if (i >= locals.size() || values.empty())
+			throw std::runtime_error("AsmJit local.set stack/index underflow");
+		const asmjit::x86::Gp value = values.back();
+		values.pop_back();
+		checkError(compiler.mov(locals[i], value), "AsmJit local.set emission failed");
+	}
+
+	void dispatchLocalTee(WASM::LocalIdx index) override
+	{
+		const size_t i = static_cast<size_t>(index);
+		if (i >= locals.size() || values.empty())
+			throw std::runtime_error("AsmJit local.tee stack/index underflow");
+		asmjit::x86::Gp copy = locals[i].size() == 8
+				? compiler.new_gp64("teeCopy") : compiler.new_gp32("teeCopy");
+		checkError(compiler.mov(copy, values.back()), "AsmJit local.tee emission failed");
+		checkError(compiler.mov(locals[i], copy), "AsmJit local.tee store emission failed");
+		values.back() = copy;
+	}
+
+
+    void dispatchSelect() override
+    {
+        emitSelect();
+    }
+
+    void dispatchSelectT(std::vector<WASM::ValueType>&& types) override
+    {
+        if (types.size() != 1)
+            throw std::runtime_error("AsmJit select_t currently supports exactly one integer value type");
+        requireInteger(types.front(), "select_t values");
+        emitSelect();
+    }
+
+	void dispatchDrop() override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit drop operand stack underflow");
+		values.pop_back();
+	}
+
+	void dispatchBlock(const WASM::BlockType& type) override
+	{
+		pushControlFrame(ControlKind::Block, type);
+	}
+
+	void dispatchLoop(const WASM::BlockType& type) override
+	{
+		pushControlFrame(ControlKind::Loop, type);
+		checkError(compiler.bind(controls.back().begin), "AsmJit loop label binding failed");
+	}
+
+	void dispatchIf(const WASM::BlockType& type) override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit if condition stack underflow");
+		auto condition = values.back();
+		values.pop_back();
+		pushControlFrame(ControlKind::If, type);
+		auto& frame = controls.back();
+		frame.alternate = compiler.new_label();
+		checkError(compiler.test(condition, condition), "AsmJit if condition test failed");
+		checkError(compiler.jz(frame.alternate), "AsmJit if condition branch failed");
+	}
+
+	void dispatchElse() override
+	{
+		if (controls.empty() || controls.back().kind != ControlKind::If || controls.back().hasElse)
+			throw std::runtime_error("AsmJit encountered an unmatched or duplicate else");
+		ControlFrame& frame = controls.back();
+		storeBlockResult(frame, "if then");
+		checkError(compiler.jmp(frame.end), "AsmJit if/else end jump failed");
+		checkError(compiler.bind(frame.alternate), "AsmJit else label binding failed");
+		values.resize(frame.stackHeight);
+		frame.hasElse = true;
+	}
+
+	void dispatchEnd() override
+	{
+		if (controls.empty())
+			return;
+		ControlFrame frame = controls.back();
+		controls.pop_back();
+		if (frame.kind == ControlKind::If && !frame.hasElse) {
+			if (frame.resultCount != 0)
+				throw std::runtime_error("AsmJit if-without-else cannot produce a result");
+			if (values.size() != frame.stackHeight)
+				throw std::runtime_error("AsmJit if arm leaves an unexpected operand stack shape");
+			checkError(compiler.bind(frame.alternate), "AsmJit implicit else label binding failed");
+		} else {
+			storeBlockResult(frame, "structured block");
+		}
+		checkError(compiler.bind(frame.end), "AsmJit structured block end binding failed");
+		values.resize(frame.stackHeight);
+		if (frame.resultCount != 0)
+			values.push_back(frame.result);
+	}
+
+	void dispatchBrIf(WASM::LabelIdx depth) override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit br_if condition stack underflow");
+		if (depth > controls.size())
+			throw std::runtime_error("AsmJit br_if label depth is out of range");
+		const auto condition = values.back();
+		values.pop_back();
+		if (depth == controls.size()) {
+			if (values.size() != resultCount)
+				throw std::runtime_error("AsmJit conditional function branch has the wrong result arity");
+			auto skip = compiler.new_label();
+			checkError(compiler.test(condition, condition), "AsmJit conditional function branch test failed");
+			checkError(compiler.jz(skip), "AsmJit conditional function branch skip failed");
+			if (resultCount == 0)
+				checkError(compiler.ret(), "AsmJit conditional function branch return failed");
+			else
+				checkError(compiler.ret(values.back()), "AsmJit conditional function branch return failed");
+			checkError(compiler.bind(skip), "AsmJit conditional function branch label binding failed");
+			return;
+		}
+		ControlFrame& target = controls[controls.size() - 1 - depth];
+		const size_t branchValues = target.kind == ControlKind::Loop ? 0 : target.resultCount;
+		if (values.size() != target.stackHeight + branchValues)
+			throw std::runtime_error("AsmJit br_if operand stack does not match target label signature");
+		const asmjit::Label label = target.kind == ControlKind::Loop ? target.begin : target.end;
+		if (branchValues != 0) {
+			auto skip = compiler.new_label();
+			checkError(compiler.test(condition, condition), "AsmJit br_if condition test failed");
+			checkError(compiler.jz(skip), "AsmJit br_if conditional skip emission failed");
+			checkError(compiler.mov(target.result, values.back()), "AsmJit br_if result transfer failed");
+			checkError(compiler.jmp(label), "AsmJit br_if branch emission failed");
+			checkError(compiler.bind(skip), "AsmJit br_if skip label binding failed");
+		} else {
+			checkError(compiler.test(condition, condition), "AsmJit br_if condition test failed");
+			checkError(compiler.jnz(label), "AsmJit br_if branch emission failed");
+		}
+	}
+
+	void dispatchBr(WASM::LabelIdx depth) override
+	{
+		if (depth > controls.size())
+			throw std::runtime_error("AsmJit br label depth is out of range");
+		if (depth == controls.size()) {
+			if (values.size() != resultCount)
+				throw std::runtime_error("AsmJit function branch has the wrong result arity");
+			if (resultCount == 0)
+				checkError(compiler.ret(), "AsmJit function branch return failed");
+			else
+				checkError(compiler.ret(values.back()), "AsmJit function branch return failed");
+			return;
+		}
+		ControlFrame& target = controls[controls.size() - 1 - depth];
+		const size_t branchValues = target.kind == ControlKind::Loop ? 0 : target.resultCount;
+		if (values.size() != target.stackHeight + branchValues)
+			throw std::runtime_error("AsmJit br operand stack does not match target label signature");
+		if (branchValues != 0)
+			checkError(compiler.mov(target.result, values.back()), "AsmJit br result transfer failed");
+		const asmjit::Label label = target.kind == ControlKind::Loop ? target.begin : target.end;
+		checkError(compiler.jmp(label), "AsmJit br emission failed");
+	}
+	void dispatchBrTable(std::vector<WASM::LabelIdx>&& depths, WASM::LabelIdx defaultDepth) override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit br_table selector stack underflow");
+		const auto selector = values.back();
+		values.pop_back();
+		size_t expectedStackHeight = 0;
+		size_t expectedBranchValues = 0;
+		WASM::ValueTypeCode expectedBranchType = WASM::ValueTypeCode::Void;
+		bool first = true;
+		auto validateTarget = [&](WASM::LabelIdx depth) {
+			if (depth > controls.size())
+				throw std::runtime_error("AsmJit br_table label depth is out of range");
+			size_t stackHeight = 0;
+			size_t branchValues = resultCount;
+			WASM::ValueTypeCode branchType = resultType;
+			if (depth < controls.size()) {
+				const ControlFrame& target = controls[controls.size() - 1 - depth];
+				stackHeight = target.stackHeight;
+				branchValues = target.kind == ControlKind::Loop ? 0 : target.resultCount;
+				branchType = target.kind == ControlKind::Loop
+						? WASM::ValueTypeCode::Void : target.resultType;
+			}
+			if (first) {
+				expectedStackHeight = stackHeight;
+				expectedBranchValues = branchValues;
+				expectedBranchType = branchType;
+				first = false;
+			} else if (stackHeight != expectedStackHeight || branchValues != expectedBranchValues
+					|| branchType != expectedBranchType) {
+				throw std::runtime_error("AsmJit br_table targets require identical stack heights and label signatures");
+			}
+		};
+		for (WASM::LabelIdx depth : depths)
+			validateTarget(depth);
+		validateTarget(defaultDepth);
+		if (values.size() != expectedStackHeight + expectedBranchValues)
+			throw std::runtime_error("AsmJit br_table operand stack does not match its target labels");
+		auto emitTarget = [&](WASM::LabelIdx depth) {
+			if (depth == controls.size()) {
+				if (resultCount == 0)
+					checkError(compiler.ret(), "AsmJit br_table function return failed");
+				else
+					checkError(compiler.ret(values.back()), "AsmJit br_table function return failed");
+				return;
+			}
+			ControlFrame& target = controls[controls.size() - 1 - depth];
+			if (target.kind != ControlKind::Loop && target.resultCount != 0)
+				checkError(compiler.mov(target.result, values.back()), "AsmJit br_table result transfer failed");
+			const asmjit::Label label = target.kind == ControlKind::Loop ? target.begin : target.end;
+			checkError(compiler.jmp(label), "AsmJit br_table branch emission failed");
+		};
+		for (size_t i = 0; i < depths.size(); ++i) {
+			auto matched = compiler.new_label();
+			auto next = compiler.new_label();
+			checkError(compiler.cmp(selector, static_cast<uint32_t>(i)), "AsmJit br_table selector comparison failed");
+			checkError(compiler.jz(matched), "AsmJit br_table match branch failed");
+			checkError(compiler.jmp(next), "AsmJit br_table next-case branch failed");
+			checkError(compiler.bind(matched), "AsmJit br_table match label binding failed");
+			emitTarget(depths[i]);
+			checkError(compiler.bind(next), "AsmJit br_table next-case label binding failed");
+		}
+		emitTarget(defaultDepth);
+	}
+
+	void dispatchReturnCall(WASM::FuncIdx index) override
+	{
+		const size_t importedCount = module.importFunctions.size();
+		const size_t totalCount = importedCount + module.internalFunctionTypeIndices.size();
+		if (index >= totalCount)
+			throw std::runtime_error("AsmJit return_call function index is out of range");
+		const uint32_t typeIndex = index < importedCount
+				? module.importFunctions[index].typeIdx
+				: module.internalFunctionTypeIndices[index - importedCount];
+		validateTailCallType(typeIndex);
+		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
+		if (values.size() != calledType.params.size())
+			throw std::runtime_error("AsmJit return_call has unexpected values below its arguments");
+		dispatchCall(index);
+		dispatchReturn();
+	}
+
+	void dispatchReturnCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx tableIndex) override
+	{
+		validateTailCallType(typeIndex);
+		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
+		if (values.size() != calledType.params.size() + 1)
+			throw std::runtime_error("AsmJit return_call_indirect has unexpected values below its arguments");
+		dispatchCallIndirect(typeIndex, tableIndex);
+		dispatchReturn();
+	}
+
+	void validateTailCallType(uint32_t typeIndex) const
+	{
+		if (typeIndex >= signatures.size() || !signatures[typeIndex])
+			throw std::runtime_error("AsmJit tail call references an unavailable function signature");
+		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
+		if (calledType.results.size() != resultCount)
+			throw std::runtime_error("AsmJit tail-call result arity differs from the caller");
+		for (const auto& parameter : calledType.params)
+			requireI32(parameter.val, "tail-call parameters");
+		for (const auto& result : calledType.results)
+			requireI32(result.val, "tail-call results");
+	}
+
+	void dispatchCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx tableIndex) override
+	{
+		if (tableIndex >= module.importTables.size() + module.tables.size())
+			throw std::runtime_error("AsmJit call_indirect references an unknown table");
+		if (typeIndex >= signatures.size() || !signatures[typeIndex])
+			throw std::runtime_error("AsmJit call_indirect references an unavailable function type");
+		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
+		if (calledType.results.size() > 1)
+			throw std::runtime_error("AsmJit call_indirect currently supports at most one result");
+		for (const auto& parameter : calledType.params)
+			requireInteger(parameter.val, "indirect-call parameters");
+		for (const auto& result : calledType.results)
+			requireInteger(result.val, "indirect-call results");
+		if (values.size() < calledType.params.size() + 1)
+			throw std::runtime_error("AsmJit call_indirect operand stack underflow");
+
+		auto elementIndex = values.back();
+		values.pop_back();
+		std::vector<asmjit::x86::Gp> arguments(calledType.params.size());
+		for (size_t i = calledType.params.size(); i > 0; --i) {
+			arguments[i - 1] = values.back();
+			values.pop_back();
+		}
+
+		asmjit::FuncSignature resolverSignature(asmjit::CallConvId::kCDecl);
+		resolverSignature.set_ret(asmjit::TypeId::kUIntPtr);
+		resolverSignature.add_arg(asmjit::TypeId::kUIntPtr);
+		resolverSignature.add_arg(asmjit::TypeId::kUInt32);
+		resolverSignature.add_arg(asmjit::TypeId::kUInt32);
+		resolverSignature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* resolver = nullptr;
+		auto table = compiler.new_gp32("indirectTableIndex");
+		checkError(compiler.mov(table, static_cast<uint32_t>(tableIndex)), "AsmJit indirect table index materialisation failed");
+		auto expected = compiler.new_gp32("indirectExpectedType");
+		checkError(compiler.mov(expected, module.typeId(WASM::LocalTypeIdx{typeIndex}).value),
+				"AsmJit indirect-call type id materialisation failed");
+		checkError(compiler.invoke(asmjit::Out(resolver),
+				reinterpret_cast<uint64_t>(&asmjitResolveIndirectCallable), resolverSignature),
+				"AsmJit indirect-call resolver emission failed");
+		resolver->set_arg(0, vmContext);
+		resolver->set_arg(1, table);
+		resolver->set_arg(2, elementIndex);
+		resolver->set_arg(3, expected);
+		auto callable = compiler.new_gp_ptr("indirectCallable");
+		resolver->set_ret(0, callable);
+		emitPendingTrapReturn();
+
+		auto target = compiler.new_gp_ptr("indirectFunction");
+		checkError(compiler.mov(target, asmjit::x86::ptr(callable,
+				static_cast<int32_t>(offsetof(WASM::Callable, fnPtr)))),
+				"AsmJit indirect function pointer load failed");
+		auto calleeContext = compiler.new_gp_ptr("indirectContext");
+		checkError(compiler.mov(calleeContext, asmjit::x86::ptr(callable,
+				static_cast<int32_t>(offsetof(WASM::Callable, context)))),
+				"AsmJit indirect VMContext load failed");
+		auto callerContext = compiler.new_label();
+		checkError(compiler.test(calleeContext, calleeContext), "AsmJit indirect context test failed");
+		checkError(compiler.jnz(callerContext), "AsmJit indirect context branch failed");
+		checkError(compiler.mov(calleeContext, vmContext), "AsmJit native indirect context selection failed");
+		checkError(compiler.bind(callerContext), "AsmJit indirect context label binding failed");
+
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), target, *signatures[typeIndex]),
+				"AsmJit indirect function invocation emission failed");
+		invoke->set_arg(0, calleeContext);
+		for (size_t i = 0; i < arguments.size(); ++i)
+			invoke->set_arg(i + 1, arguments[i]);
+		if (!calledType.results.empty()) {
+			auto result = newIntegerRegister(compiler, calledType.results.front().val,
+					"indirectCallResult");
+			invoke->set_ret(0, result);
+			values.push_back(result);
+		}
+		emitPendingTrapReturn();
+	}
+
+	void dispatchCall(WASM::FuncIdx index) override
+	{
+		const size_t importedCount = module.importFunctions.size();
+		const size_t totalCount = importedCount + module.internalFunctionTypeIndices.size();
+		if (index >= totalCount)
+			throw std::runtime_error("AsmJit call function index is out of range");
+
+		uint32_t typeIndex = 0;
+		uint64_t target = 0;
+		asmjit::Label targetLabel;
+		bool isInternal = index >= importedCount;
+		if (isInternal) {
+			const size_t internalIndex = static_cast<size_t>(index) - importedCount;
+			typeIndex = module.internalFunctionTypeIndices[internalIndex];
+			targetLabel = functions[internalIndex]->label();
+		} else {
+			typeIndex = module.importFunctions[index].typeIdx;
+			if (index >= internals.importStorage.size()
+					|| internals.importStorage[index].fnPtr == nullptr)
+				throw std::runtime_error("AsmJit call references an unresolved function import");
+			target = reinterpret_cast<uint64_t>(internals.importStorage[index].fnPtr);
+		}
+
+		if (typeIndex >= signatures.size() || !signatures[typeIndex])
+			throw std::runtime_error("AsmJit call references an unavailable function signature");
+		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
+		if (calledType.results.size() > 1)
+			throw std::runtime_error("AsmJit calls currently support at most one result");
+		for (const auto& parameter : calledType.params)
+			requireInteger(parameter.val, "call parameters");
+		for (const auto& result : calledType.results)
+			requireInteger(result.val, "call results");
+		if (values.size() < calledType.params.size())
+			throw std::runtime_error("AsmJit call operand stack underflow");
+
+		std::vector<asmjit::x86::Gp> arguments(calledType.params.size());
+		for (size_t i = calledType.params.size(); i > 0; --i) {
+			arguments[i - 1] = values.back();
+			values.pop_back();
+		}
+
+		// Wasm-to-Wasm imports execute in the exporting instance's context;
+		// native imports (null context) execute against the caller's context.
+		// The context operand must be ready at the call site, so it is
+		// materialised before the invoke node is appended.
+		WASM::VMContext* importedCallee = isInternal ? nullptr
+				: internals.importStorage[index].context;
+		asmjit::x86::Gp importedContext;
+		if (importedCallee != nullptr) {
+			importedContext = compiler.new_gp_ptr("importedVmContext");
+			checkError(compiler.mov(importedContext,
+					reinterpret_cast<uint64_t>(importedCallee)),
+					"AsmJit imported VMContext materialisation failed");
+		}
+
+		asmjit::InvokeNode* invoke = nullptr;
+		const asmjit::Error error = isInternal
+				? compiler.invoke(asmjit::Out(invoke), targetLabel, *signatures[typeIndex])
+				: compiler.invoke(asmjit::Out(invoke), target, *signatures[typeIndex]);
+		checkError(error, "AsmJit function-call emission failed");
+		if (importedCallee == nullptr)
+			invoke->set_arg(0, vmContext);
+		else
+			invoke->set_arg(0, importedContext);
+		for (size_t i = 0; i < arguments.size(); ++i)
+			invoke->set_arg(i + 1, arguments[i]);
+		if (!calledType.results.empty()) {
+			auto result = newIntegerRegister(compiler, calledType.results.front().val, "callResult");
+			invoke->set_ret(0, result);
+			values.push_back(result);
+		}
+		emitPendingTrapReturn();
+	}
+
+	void emitPendingTrapReturn()
+	{
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* slotCall = nullptr;
+		checkError(compiler.invoke(asmjit::Out(slotCall),
+				reinterpret_cast<uint64_t>(&WASM::wasm_trap_slot), signature),
+				"AsmJit failed to emit post-call trap-slot lookup");
+		auto slot = compiler.new_gp_ptr("postCallTrapSlot");
+		slotCall->set_ret(0, slot);
+		auto pending = compiler.new_gp32("postCallPending");
+		checkError(compiler.mov(pending, asmjit::x86::dword_ptr(slot,
+				static_cast<int32_t>(offsetof(WASM::TrapSlot, pending)))),
+				"AsmJit failed to load post-call pending-trap state");
+		auto noTrap = compiler.new_label();
+		checkError(compiler.test(pending, pending), "AsmJit post-call trap test failed");
+		checkError(compiler.jz(noTrap), "AsmJit post-call trap branch failed");
+		if (resultCount == 0) {
+			checkError(compiler.ret(), "AsmJit post-call void trap return failed");
+		} else {
+			auto zero = resultType == WASM::ValueTypeCode::I64
+					? compiler.new_gp64("postCallTrapResult") : compiler.new_gp32("postCallTrapResult");
+			checkError(compiler.xor_(zero, zero), "AsmJit post-call trap result initialisation failed");
+			checkError(compiler.ret(zero), "AsmJit post-call trap result return failed");
+		}
+		checkError(compiler.bind(noTrap), "AsmJit post-call continuation binding failed");
+	}
+
+	void dispatchGlobalGet(WASM::GlobalIdx index) override { emitGlobalGet(index); }
+	void dispatchGlobalSet(WASM::GlobalIdx index) override { emitGlobalSet(index); }
+
+	void dispatchMemorySize(WASM::MemIdx index) override { emitMemorySize(index); }
+	void dispatchMemoryGrow(WASM::MemIdx index) override { emitMemoryGrow(index); }
+
+    void dispatchMemoryCopy(WASM::MemIdx destination, WASM::MemIdx source) override
+    {
+        emitMemoryCopy(destination, source);
+    }
+
+    void dispatchMemoryFill(WASM::MemIdx index) override
+    {
+        emitMemoryFill(index);
+    }
+
+    void dispatchMemoryInit(uint32_t dataIndex, WASM::MemIdx memoryIndex) override
+    {
+        emitMemoryInit(dataIndex, memoryIndex);
+    }
+
+    void dispatchDataDrop(uint32_t dataIndex) override
+    {
+        asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+        signature.set_ret(asmjit::TypeId::kVoid);
+        signature.add_arg(asmjit::TypeId::kUIntPtr);
+        signature.add_arg(asmjit::TypeId::kUInt32);
+        auto index = compiler.new_gp32("dataDropIndex");
+        checkError(compiler.mov(index, dataIndex), "AsmJit data.drop index materialisation failed");
+        asmjit::InvokeNode* invoke = nullptr;
+        checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitDataDrop), signature),
+                "AsmJit data.drop helper call emission failed");
+        invoke->set_arg(0, vmContext);
+        invoke->set_arg(1, index);
+        emitPendingTrapReturn();
+    }
+
+
+
+
+    void dispatchTableInit(uint32_t elementIndex, WASM::TableIdx tableIndex) override
+    {
+        if (static_cast<size_t>(tableIndex) >= module.importTables.size() + module.tables.size())
+            throw std::runtime_error("AsmJit table.init table index is out of range");
+        if (values.size() < 3)
+            throw std::runtime_error("AsmJit table.init operand stack underflow");
+        const auto length = values.back(); values.pop_back();
+        const auto source = values.back(); values.pop_back();
+        const auto destination = values.back(); values.pop_back();
+        asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+        signature.set_ret(asmjit::TypeId::kVoid);
+        for (int i = 0; i < 6; ++i)
+            signature.add_arg(i == 0 ? asmjit::TypeId::kUIntPtr : asmjit::TypeId::kUInt32);
+        asmjit::InvokeNode* invoke = nullptr;
+        auto element = compiler.new_gp32("tableInitElementIndex");
+        auto table = compiler.new_gp32("tableInitTableIndex");
+        checkError(compiler.mov(element, elementIndex), "AsmJit table.init element index failed");
+        checkError(compiler.mov(table, static_cast<uint32_t>(tableIndex)), "AsmJit table.init table index failed");
+        checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitTableInit), signature),
+                "AsmJit table.init helper call emission failed");
+        invoke->set_arg(0, vmContext);
+        invoke->set_arg(1, element);
+        invoke->set_arg(2, table);
+        invoke->set_arg(3, destination);
+        invoke->set_arg(4, source);
+        invoke->set_arg(5, length);
+        emitPendingTrapReturn();
+    }
+
+    void dispatchElemDrop(uint32_t elementIndex) override
+    {
+        asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+        signature.set_ret(asmjit::TypeId::kVoid);
+        signature.add_arg(asmjit::TypeId::kUIntPtr);
+        signature.add_arg(asmjit::TypeId::kUInt32);
+        asmjit::InvokeNode* invoke = nullptr;
+        auto element = compiler.new_gp32("elementDropIndex");
+        checkError(compiler.mov(element, elementIndex), "AsmJit elem.drop index failed");
+        checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitElemDrop), signature),
+                "AsmJit elem.drop helper call emission failed");
+        invoke->set_arg(0, vmContext);
+        invoke->set_arg(1, element);
+        emitPendingTrapReturn();
+    }
+
+
+
+
+    void dispatchTableCopy(WASM::TableIdx destinationTable, WASM::TableIdx sourceTable) override
+    {
+        if (static_cast<size_t>(destinationTable) >= module.importTables.size() + module.tables.size()
+                || static_cast<size_t>(sourceTable) >= module.importTables.size() + module.tables.size())
+            throw std::runtime_error("AsmJit table.copy table index is out of range");
+        if (values.size() < 3)
+            throw std::runtime_error("AsmJit table.copy operand stack underflow");
+        const auto length = values.back(); values.pop_back();
+        const auto source = values.back(); values.pop_back();
+        const auto destination = values.back(); values.pop_back();
+        asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+        signature.set_ret(asmjit::TypeId::kVoid);
+        for (int i = 0; i < 6; ++i)
+            signature.add_arg(i == 0 ? asmjit::TypeId::kUIntPtr : asmjit::TypeId::kUInt32);
+        asmjit::InvokeNode* invoke = nullptr;
+        auto dstTable = compiler.new_gp32("tableCopyDestinationTable");
+        auto srcTable = compiler.new_gp32("tableCopySourceTable");
+        checkError(compiler.mov(dstTable, static_cast<uint32_t>(destinationTable)), "AsmJit table.copy destination table index failed");
+        checkError(compiler.mov(srcTable, static_cast<uint32_t>(sourceTable)), "AsmJit table.copy source table index failed");
+        checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitTableCopy), signature),
+                "AsmJit table.copy helper call emission failed");
+        invoke->set_arg(0, vmContext);
+        invoke->set_arg(1, dstTable);
+        invoke->set_arg(2, srcTable);
+        invoke->set_arg(3, destination);
+        invoke->set_arg(4, source);
+        invoke->set_arg(5, length);
+        emitPendingTrapReturn();
+    }
+
+    void dispatchTableSize(WASM::TableIdx tableIndex) override
+    {
+        if (static_cast<size_t>(tableIndex) >= module.importTables.size() + module.tables.size())
+            throw std::runtime_error("AsmJit table.size table index is out of range");
+        asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+        signature.set_ret(asmjit::TypeId::kUInt32);
+        signature.add_arg(asmjit::TypeId::kUIntPtr);
+        signature.add_arg(asmjit::TypeId::kUInt32);
+        asmjit::InvokeNode* invoke = nullptr;
+        auto index = compiler.new_gp32("tableSizeIndex");
+        checkError(compiler.mov(index, static_cast<uint32_t>(tableIndex)), "AsmJit table.size index materialisation failed");
+        checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitTableSize), signature),
+                "AsmJit table.size helper call emission failed");
+        invoke->set_arg(0, vmContext);
+        invoke->set_arg(1, index);
+        auto size = compiler.new_gp32("tableSizeResult");
+        invoke->set_ret(0, size);
+        values.push_back(size);
+        emitPendingTrapReturn();
+    }
+
+
+	void dispatchI32Load(WASM::MemArg arg) override { emitMemoryLoad(arg, 4, LoadKind::I32); }
+	void dispatchI32Load8S(WASM::MemArg arg) override { emitMemoryLoad(arg, 1, LoadKind::I8Signed); }
+	void dispatchI32Load8U(WASM::MemArg arg) override { emitMemoryLoad(arg, 1, LoadKind::I8Unsigned); }
+	void dispatchI32Load16S(WASM::MemArg arg) override { emitMemoryLoad(arg, 2, LoadKind::I16Signed); }
+	void dispatchI32Load16U(WASM::MemArg arg) override { emitMemoryLoad(arg, 2, LoadKind::I16Unsigned); }
+	void dispatchI32Store(WASM::MemArg arg) override { emitMemoryStore(arg, 4); }
+	void dispatchI32Store8(WASM::MemArg arg) override { emitMemoryStore(arg, 1); }
+	void dispatchI32Store16(WASM::MemArg arg) override { emitMemoryStore(arg, 2); }
+	void dispatchI64Load(WASM::MemArg arg) override { emitMemoryLoad(arg, 8, LoadKind::I64); }
+	void dispatchI64Load8S(WASM::MemArg arg) override { emitMemoryLoad(arg, 1, LoadKind::I64I8Signed); }
+	void dispatchI64Load8U(WASM::MemArg arg) override { emitMemoryLoad(arg, 1, LoadKind::I64I8Unsigned); }
+	void dispatchI64Load16S(WASM::MemArg arg) override { emitMemoryLoad(arg, 2, LoadKind::I64I16Signed); }
+	void dispatchI64Load16U(WASM::MemArg arg) override { emitMemoryLoad(arg, 2, LoadKind::I64I16Unsigned); }
+	void dispatchI64Load32S(WASM::MemArg arg) override { emitMemoryLoad(arg, 4, LoadKind::I64I32Signed); }
+	void dispatchI64Load32U(WASM::MemArg arg) override { emitMemoryLoad(arg, 4, LoadKind::I64I32Unsigned); }
+	void dispatchI64Store(WASM::MemArg arg) override { emitMemoryStore(arg, 8); }
+	void dispatchI64Store8(WASM::MemArg arg) override { emitMemoryStore(arg, 1); }
+	void dispatchI64Store16(WASM::MemArg arg) override { emitMemoryStore(arg, 2); }
+	void dispatchI64Store32(WASM::MemArg arg) override { emitMemoryStore(arg, 4); }
+
+	void dispatchUnreachable() override
+	{
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitReportUnreachable), signature),
+				"AsmJit unreachable trap helper emission failed");
+		const size_t stackHeight = controls.empty() ? 0 : controls.back().stackHeight;
+		const size_t placeholderCount = controls.empty() ? resultCount : controls.back().resultCount;
+		values.resize(stackHeight);
+		if (resultCount == 0) {
+			checkError(compiler.ret(), "AsmJit unreachable void return emission failed");
+		} else {
+			auto zero = resultType == WASM::ValueTypeCode::I64
+					? compiler.new_gp64("unreachableResult") : compiler.new_gp32("unreachableResult");
+			checkError(compiler.xor_(zero, zero), "AsmJit unreachable result initialisation failed");
+			checkError(compiler.ret(zero), "AsmJit unreachable result return emission failed");
+		}
+		if (placeholderCount != 0) {
+			auto placeholder = compiler.new_gp32("unreachableStackPlaceholder");
+			checkError(compiler.xor_(placeholder, placeholder), "AsmJit unreachable placeholder initialisation failed");
+			values.push_back(placeholder);
+		}
+	}
+
+	void dispatchNop() override {}
+
+	void dispatchI32Extend8S() override { emitSignExtend(8); }
+	void dispatchI32Extend16S() override { emitSignExtend(16); }
+	void dispatchI32WrapI64() override { emitI32WrapI64(); }
+	void dispatchI64ExtendI32S() override { emitI64ExtendI32(true); }
+	void dispatchI64ExtendI32U() override { emitI64ExtendI32(false); }
+	void dispatchI64Extend8S() override { emitI64SignExtend(8); }
+	void dispatchI64Extend16S() override { emitI64SignExtend(16); }
+	void dispatchI64Extend32S() override { emitI64SignExtend(32); }
+
+	void dispatchI32Clz() override { emitBitCount(BitCountOp::LeadingZeros); }
+	void dispatchI32Ctz() override { emitBitCount(BitCountOp::TrailingZeros); }
+	void dispatchI32Popcnt() override { emitUnaryCall(&asmjitI32Popcnt, "i32.popcnt"); }
+	void dispatchI32DivS() override { emitCheckedBinaryCall(&asmjitI32DivS, "i32.div_s"); }
+	void dispatchI32DivU() override { emitCheckedBinaryCall(&asmjitI32DivU, "i32.div_u"); }
+	void dispatchI32RemS() override { emitCheckedBinaryCall(&asmjitI32RemS, "i32.rem_s"); }
+	void dispatchI32RemU() override { emitCheckedBinaryCall(&asmjitI32RemU, "i32.rem_u"); }
+
+	void dispatchI64Const(int64_t value) override
+	{
+		auto reg = compiler.new_gp64("i64Constant");
+		checkError(compiler.mov(reg, value), "AsmJit i64.const emission failed");
+		values.push_back(reg);
+	}
+
+	void dispatchI64Eqz() override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit i64.eqz operand stack underflow");
+		auto value = values.back();
+		values.pop_back();
+		auto result = compiler.new_gp32("i64Eqz");
+		checkError(compiler.xor_(result, result), "AsmJit i64.eqz result initialisation failed");
+		checkError(compiler.test(value, value), "AsmJit i64.eqz test emission failed");
+		checkError(compiler.set(asmjit::x86::CondCode::kE, result.r8()),
+				"AsmJit i64.eqz condition emission failed");
+		values.push_back(result);
+	}
+
+	void dispatchI64Eq() override { emitCompare(asmjit::x86::CondCode::kE); }
+	void dispatchI64Ne() override { emitCompare(asmjit::x86::CondCode::kNE); }
+	void dispatchI64LtS() override { emitCompare(asmjit::x86::CondCode::kL); }
+	void dispatchI64LtU() override { emitCompare(asmjit::x86::CondCode::kB); }
+	void dispatchI64GtS() override { emitCompare(asmjit::x86::CondCode::kG); }
+	void dispatchI64GtU() override { emitCompare(asmjit::x86::CondCode::kA); }
+	void dispatchI64LeS() override { emitCompare(asmjit::x86::CondCode::kLE); }
+	void dispatchI64LeU() override { emitCompare(asmjit::x86::CondCode::kBE); }
+	void dispatchI64GeS() override { emitCompare(asmjit::x86::CondCode::kGE); }
+	void dispatchI64GeU() override { emitCompare(asmjit::x86::CondCode::kAE); }
+
+	void dispatchI64Add() override { emitIntegerBinary(BinaryOp::Add); }
+	void dispatchI64Sub() override { emitIntegerBinary(BinaryOp::Sub); }
+	void dispatchI64Mul() override { emitIntegerBinary(BinaryOp::Mul); }
+	void dispatchI64And() override { emitIntegerBinary(BinaryOp::And); }
+	void dispatchI64Or() override { emitIntegerBinary(BinaryOp::Or); }
+	void dispatchI64Xor() override { emitIntegerBinary(BinaryOp::Xor); }
+	void dispatchI64Shl() override { emitIntegerShift(ShiftOp::Left); }
+	void dispatchI64ShrS() override { emitIntegerShift(ShiftOp::ArithmeticRight); }
+	void dispatchI64ShrU() override { emitIntegerShift(ShiftOp::LogicalRight); }
+	void dispatchI64Rotl() override { emitIntegerShift(ShiftOp::RotateLeft); }
+	void dispatchI64Rotr() override { emitIntegerShift(ShiftOp::RotateRight); }
+	void dispatchI64DivS() override { emitCheckedI64Call(&asmjitI64DivS, "i64.div_s"); }
+	void dispatchI64DivU() override { emitCheckedI64Call(&asmjitI64DivU, "i64.div_u"); }
+	void dispatchI64RemS() override { emitCheckedI64Call(&asmjitI64RemS, "i64.rem_s"); }
+	void dispatchI64RemU() override { emitCheckedI64Call(&asmjitI64RemU, "i64.rem_u"); }
+
+	void dispatchI32Eqz() override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit i32.eqz operand stack underflow");
+		auto value = values.back();
+		values.pop_back();
+		auto result = compiler.new_gp32("eqz");
+		checkError(compiler.xor_(result, result), "AsmJit i32.eqz result initialisation failed");
+		checkError(compiler.test(value, value), "AsmJit i32.eqz test emission failed");
+		checkError(compiler.set(asmjit::x86::CondCode::kE, result.r8()),
+				"AsmJit i32.eqz condition emission failed");
+		values.push_back(result);
+	}
+
+	void dispatchI32Eq() override { emitCompare(asmjit::x86::CondCode::kE); }
+	void dispatchI32Ne() override { emitCompare(asmjit::x86::CondCode::kNE); }
+	void dispatchI32LtS() override { emitCompare(asmjit::x86::CondCode::kL); }
+	void dispatchI32LtU() override { emitCompare(asmjit::x86::CondCode::kB); }
+	void dispatchI32GtS() override { emitCompare(asmjit::x86::CondCode::kG); }
+	void dispatchI32GtU() override { emitCompare(asmjit::x86::CondCode::kA); }
+	void dispatchI32LeS() override { emitCompare(asmjit::x86::CondCode::kLE); }
+	void dispatchI32LeU() override { emitCompare(asmjit::x86::CondCode::kBE); }
+	void dispatchI32GeS() override { emitCompare(asmjit::x86::CondCode::kGE); }
+	void dispatchI32GeU() override { emitCompare(asmjit::x86::CondCode::kAE); }
+
+	void dispatchI32And() override { emitBinary(BinaryOp::And); }
+	void dispatchI32Or() override { emitBinary(BinaryOp::Or); }
+	void dispatchI32Xor() override { emitBinary(BinaryOp::Xor); }
+	void dispatchI32Shl() override { emitShift(ShiftOp::Left); }
+	void dispatchI32ShrS() override { emitShift(ShiftOp::ArithmeticRight); }
+	void dispatchI32ShrU() override { emitShift(ShiftOp::LogicalRight); }
+	void dispatchI32Rotl() override { emitShift(ShiftOp::RotateLeft); }
+	void dispatchI32Rotr() override { emitShift(ShiftOp::RotateRight); }
+
+	void dispatchI32Add() override { emitBinary(BinaryOp::Add); }
+	void dispatchI32Sub() override { emitBinary(BinaryOp::Sub); }
+	void dispatchI32Mul() override { emitBinary(BinaryOp::Mul); }
+
+	void dispatchReturn() override
+	{
+		if (resultCount == 0) {
+			checkError(compiler.ret(), "AsmJit return emission failed");
+			return;
+		}
+		if (values.empty())
+			throw std::runtime_error("AsmJit return operand stack underflow");
+		checkError(compiler.ret(values.back()), "AsmJit return emission failed");
+	}
+
+private:
+	enum class BitCountOp { LeadingZeros, TrailingZeros };
+	enum class LoadKind {
+		I32, I8Signed, I8Unsigned, I16Signed, I16Unsigned,
+		I64, I64I8Signed, I64I8Unsigned, I64I16Signed, I64I16Unsigned,
+		I64I32Signed, I64I32Unsigned
+	};
+
+	enum class ControlKind { Block, Loop, If };
+	struct ControlFrame {
+		ControlKind kind = ControlKind::Block;
+		size_t stackHeight = 0;
+		size_t resultCount = 0;
+		WASM::ValueTypeCode resultType = WASM::ValueTypeCode::Void;
+		asmjit::x86::Gp result;
+		asmjit::Label begin;
+		asmjit::Label alternate;
+		asmjit::Label end;
+		bool hasElse = false;
+	};
+
+	enum class BinaryOp { Add, Sub, Mul, And, Or, Xor };
+	enum class ShiftOp { Left, ArithmeticRight, LogicalRight, RotateLeft, RotateRight };
+
+
+    void emitSelect()
+    {
+        if (values.size() < 3)
+            throw std::runtime_error("AsmJit select operand stack underflow");
+        const auto condition = values.back();
+        values.pop_back();
+        const auto second = values.back();
+        values.pop_back();
+        const auto first = values.back();
+        values.pop_back();
+        if (condition.size() != 4 || first.size() != second.size()
+                || (first.size() != 4 && first.size() != 8))
+            throw std::runtime_error("AsmJit select requires an i32 condition and matching i32/i64 values");
+        auto result = first.size() == 8
+                ? compiler.new_gp64("selectResult") : compiler.new_gp32("selectResult");
+        auto chooseSecond = compiler.new_label();
+        auto done = compiler.new_label();
+        checkError(compiler.mov(result, first), "AsmJit select first-value copy failed");
+        checkError(compiler.test(condition, condition), "AsmJit select condition test failed");
+        checkError(compiler.jz(chooseSecond), "AsmJit select condition branch failed");
+        checkError(compiler.jmp(done), "AsmJit select completion jump failed");
+        checkError(compiler.bind(chooseSecond), "AsmJit select second-value label failed");
+        checkError(compiler.mov(result, second), "AsmJit select second-value copy failed");
+        checkError(compiler.bind(done), "AsmJit select completion label failed");
+        values.push_back(result);
+    }
+
+    void emitMemoryCopy(WASM::MemIdx destination, WASM::MemIdx source)
+    {
+        validateMemoryIndex(destination);
+        validateMemoryIndex(source);
+        if (values.size() < 3)
+            throw std::runtime_error("AsmJit memory.copy operand stack underflow");
+        const auto length = values.back(); values.pop_back();
+        const auto sourceAddress = values.back(); values.pop_back();
+        const auto destinationAddress = values.back(); values.pop_back();
+        asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+        signature.set_ret(asmjit::TypeId::kVoid);
+        for (int i = 0; i < 6; ++i)
+            signature.add_arg(i == 0 ? asmjit::TypeId::kUIntPtr : asmjit::TypeId::kUInt32);
+        asmjit::InvokeNode* invoke = nullptr;
+        auto dstMemory = compiler.new_gp32("copyDestinationMemory");
+        auto srcMemory = compiler.new_gp32("copySourceMemory");
+        checkError(compiler.mov(dstMemory, static_cast<uint32_t>(destination)), "AsmJit memory.copy destination index failed");
+        checkError(compiler.mov(srcMemory, static_cast<uint32_t>(source)), "AsmJit memory.copy source index failed");
+        checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitMemoryCopy), signature),
+                "AsmJit memory.copy helper call emission failed");
+        invoke->set_arg(0, vmContext);
+        invoke->set_arg(1, dstMemory);
+        invoke->set_arg(2, srcMemory);
+        invoke->set_arg(3, destinationAddress);
+        invoke->set_arg(4, sourceAddress);
+        invoke->set_arg(5, length);
+        emitPendingTrapReturn();
+    }
+
+
+    void emitMemoryInit(uint32_t dataIndex, WASM::MemIdx memoryIndex)
+    {
+        validateMemoryIndex(memoryIndex);
+        if (values.size() < 3)
+            throw std::runtime_error("AsmJit memory.init operand stack underflow");
+        const auto length = values.back(); values.pop_back();
+        const auto source = values.back(); values.pop_back();
+        const auto destination = values.back(); values.pop_back();
+        asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+        signature.set_ret(asmjit::TypeId::kVoid);
+        signature.add_arg(asmjit::TypeId::kUIntPtr);
+        for (int i = 0; i < 5; ++i)
+            signature.add_arg(asmjit::TypeId::kUInt32);
+        asmjit::InvokeNode* invoke = nullptr;
+        auto data = compiler.new_gp32("memoryInitDataIndex");
+        auto memory = compiler.new_gp32("memoryInitMemoryIndex");
+        checkError(compiler.mov(data, dataIndex), "AsmJit memory.init data index materialisation failed");
+        checkError(compiler.mov(memory, static_cast<uint32_t>(memoryIndex)), "AsmJit memory.init memory index materialisation failed");
+        checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitMemoryInit), signature),
+                "AsmJit memory.init helper call emission failed");
+        invoke->set_arg(0, vmContext);
+        invoke->set_arg(1, data);
+        invoke->set_arg(2, memory);
+        invoke->set_arg(3, destination);
+        invoke->set_arg(4, source);
+        invoke->set_arg(5, length);
+        emitPendingTrapReturn();
+    }
+
+    void emitMemoryFill(WASM::MemIdx index)
+    {
+        validateMemoryIndex(index);
+        if (values.size() < 3)
+            throw std::runtime_error("AsmJit memory.fill operand stack underflow");
+        const auto length = values.back(); values.pop_back();
+        const auto value = values.back(); values.pop_back();
+        const auto destination = values.back(); values.pop_back();
+        asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+        signature.set_ret(asmjit::TypeId::kVoid);
+        signature.add_arg(asmjit::TypeId::kUIntPtr);
+        // vmContext + (memory index, destination, value, length) — the arity of
+        // `asmjitMemoryFill` above, which every `set_arg` below must match.
+        for (int i = 0; i < 4; ++i)
+            signature.add_arg(asmjit::TypeId::kUInt32);
+        asmjit::InvokeNode* invoke = nullptr;
+        auto memoryIndex = compiler.new_gp32("fillMemoryIndex");
+        checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(index)), "AsmJit memory.fill index failed");
+        checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitMemoryFill), signature),
+                "AsmJit memory.fill helper call emission failed");
+        invoke->set_arg(0, vmContext);
+        invoke->set_arg(1, memoryIndex);
+        invoke->set_arg(2, destination);
+        invoke->set_arg(3, value);
+        invoke->set_arg(4, length);
+        emitPendingTrapReturn();
+    }
+
+	void pushControlFrame(ControlKind kind, const WASM::BlockType& type)
+	{
+		if (controls.size() >= WASM::kMaxControlNesting)
+			throw std::runtime_error("AsmJit control nesting is too deep");
+		ControlFrame frame;
+		frame.kind = kind;
+		frame.stackHeight = values.size();
+		frame.resultType = blockResultType(type);
+		frame.resultCount = frame.resultType == WASM::ValueTypeCode::Void ? 0 : 1;
+		if (frame.resultCount != 0) {
+			frame.result = frame.resultType == WASM::ValueTypeCode::I64
+					? compiler.new_gp64("blockResult") : compiler.new_gp32("blockResult");
+		}
+		if (kind == ControlKind::Loop) {
+			frame.begin = compiler.new_label();
+			frame.end = compiler.new_label();
+		} else {
+			frame.end = compiler.new_label();
+		}
+		controls.push_back(frame);
+	}
+
+	WASM::ValueTypeCode blockResultType(const WASM::BlockType& type) const
+	{
+		if (type.isVoid())
+			return WASM::ValueTypeCode::Void;
+		if (type.isTypeIndex) {
+			if (type.typeIndex < 0 || static_cast<uint32_t>(type.typeIndex) >= module.typeCount())
+				throw std::runtime_error("AsmJit block type index is out of range");
+			const WASM::FuncType blockType = module.funcTypeAt(static_cast<uint32_t>(type.typeIndex));
+			if (!blockType.params.empty())
+				throw std::runtime_error("AsmJit block parameters are not supported yet");
+			if (blockType.results.size() > 1)
+				throw std::runtime_error("AsmJit block multi-value results are not supported yet");
+			if (blockType.results.empty())
+				return WASM::ValueTypeCode::Void;
+			requireInteger(blockType.results.front().val, "block results");
+			return blockType.results.front().val.opcode;
+		}
+		if (type.valType != WASM::ValueTypeCode::I32
+				&& type.valType != WASM::ValueTypeCode::I64)
+			throw std::runtime_error("AsmJit structured control flow supports only i32/i64 block results");
+		return type.valType;
+	}
+
+	void storeBlockResult(const ControlFrame& frame, const char* description)
+	{
+		if (values.size() != frame.stackHeight + frame.resultCount)
+			throw std::runtime_error(std::string("AsmJit ") + description
+					+ " leaves an unexpected operand stack shape");
+		if (frame.resultCount != 0)
+			checkError(compiler.mov(frame.result, values.back()), "AsmJit structured result transfer failed");
+	}
+	void emitBinary(BinaryOp operation)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit i32 binary operation stack underflow");
+		asmjit::x86::Gp rhs = values.back();
+		values.pop_back();
+		asmjit::x86::Gp lhs = values.back();
+		values.pop_back();
+		switch (operation) {
+		case BinaryOp::Add:
+			checkError(compiler.add(lhs, rhs), "AsmJit i32.add emission failed");
+			break;
+		case BinaryOp::Sub:
+			checkError(compiler.sub(lhs, rhs), "AsmJit i32.sub emission failed");
+			break;
+		case BinaryOp::Mul:
+			checkError(compiler.imul(lhs, rhs), "AsmJit i32.mul emission failed");
+			break;
+		case BinaryOp::And:
+			checkError(compiler.and_(lhs, rhs), "AsmJit i32.and emission failed");
+			break;
+		case BinaryOp::Or:
+			checkError(compiler.or_(lhs, rhs), "AsmJit i32.or emission failed");
+			break;
+		case BinaryOp::Xor:
+			checkError(compiler.xor_(lhs, rhs), "AsmJit i32.xor emission failed");
+			break;
+		}
+		values.push_back(lhs);
+	}
+
+	const WASM::GlobalType& validateGlobalIndex(WASM::GlobalIdx index) const
+	{
+		// Module::globals is already the complete global index space:
+		// imported globals precede defined globals. importGlobals is only the
+		// import-section metadata and must not be counted a second time.
+		if (index >= module.globals.size())
+			throw std::runtime_error("AsmJit global instruction references an unknown global");
+		const WASM::GlobalType& type = module.globals[index].type;
+		requireInteger(type.contentType, "globals");
+		return type;
+	}
+
+	asmjit::x86::Gp emitGlobalCell(WASM::GlobalIdx index)
+	{
+		(void)validateGlobalIndex(index);
+		auto globals = compiler.new_gp_ptr("globals");
+		checkError(compiler.mov(globals, asmjit::x86::ptr(vmContext,
+				static_cast<int32_t>(offsetof(WASM::VMContext, globals)))),
+				"AsmJit VMContext globals load failed");
+		auto cell = compiler.new_gp_ptr("globalCell");
+		checkError(compiler.mov(cell, asmjit::x86::ptr(globals,
+				static_cast<int32_t>(index * sizeof(WASM::Value*)))),
+				"AsmJit global cell lookup failed");
+		return cell;
+	}
+
+	void emitGlobalGet(WASM::GlobalIdx index)
+	{
+		auto cell = emitGlobalCell(index);
+		const auto& type = validateGlobalIndex(index);
+		auto value = newIntegerRegister(compiler, type.contentType, "globalValue");
+		if (type.contentType.opcode == WASM::ValueTypeCode::I64) {
+			checkError(compiler.mov(value, asmjit::x86::qword_ptr(cell,
+					static_cast<int32_t>(offsetof(WASM::Value, i64)))),
+					"AsmJit i64 global.get load failed");
+		} else {
+			checkError(compiler.mov(value, asmjit::x86::dword_ptr(cell,
+					static_cast<int32_t>(offsetof(WASM::Value, i32)))),
+					"AsmJit i32 global.get load failed");
+		}
+		values.push_back(value);
+	}
+
+	void emitGlobalSet(WASM::GlobalIdx index)
+	{
+		const WASM::GlobalType& type = validateGlobalIndex(index);
+		if (!type.isMutable)
+			throw std::runtime_error("AsmJit global.set references an immutable global");
+		if (values.empty())
+			throw std::runtime_error("AsmJit global.set operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto cell = emitGlobalCell(index);
+		if (type.contentType.opcode == WASM::ValueTypeCode::I64) {
+			checkError(compiler.mov(asmjit::x86::qword_ptr(cell,
+					static_cast<int32_t>(offsetof(WASM::Value, i64))), value),
+					"AsmJit i64 global.set store failed");
+		} else {
+			checkError(compiler.mov(asmjit::x86::dword_ptr(cell,
+					static_cast<int32_t>(offsetof(WASM::Value, i32))), value),
+					"AsmJit i32 global.set store failed");
+		}
+	}
+
+	void validateMemoryIndex(WASM::MemIdx index) const
+	{
+		// Module::memories is the complete memory index space, imports first.
+		if (index >= module.memories.size())
+			throw std::runtime_error("AsmJit memory instruction references an unknown memory");
+		const WASM::MemoryType& type = module.memories[index];
+		if (type.indexType != WASM::MemoryIndexType::I32)
+			throw std::runtime_error("AsmJit initial memory lowering supports memory32 only");
+	}
+
+	void emitMemorySize(WASM::MemIdx index)
+	{
+		validateMemoryIndex(index);
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		auto memoryIndex = compiler.new_gp32("memorySizeIndex");
+		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(index)), "AsmJit memory.size index materialisation failed");
+		checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitMemorySize), signature),
+				"AsmJit memory.size helper call emission failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, memoryIndex);
+		auto result = compiler.new_gp32("memorySize");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void emitMemoryGrow(WASM::MemIdx index)
+	{
+		validateMemoryIndex(index);
+		if (values.empty())
+			throw std::runtime_error("AsmJit memory.grow operand stack underflow");
+		auto delta = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		auto memoryIndex = compiler.new_gp32("memoryGrowIndex");
+		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(index)), "AsmJit memory.grow index materialisation failed");
+		checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitMemoryGrow), signature),
+				"AsmJit memory.grow helper call emission failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, memoryIndex);
+		invoke->set_arg(2, delta);
+		auto result = compiler.new_gp32("memoryGrowResult");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void validateMemoryArg(const WASM::MemArg& arg, uint32_t width) const
+	{
+		if (arg.isArray)
+			throw std::runtime_error("AsmJit scalar loads/stores do not support GC-array memargs");
+		validateMemoryIndex(arg.memidx);
+		if (arg.offset > UINT32_MAX)
+			throw std::runtime_error("AsmJit memory32 offset exceeds the encoded u32 range");
+		(void)width;
+	}
+
+	asmjit::x86::Gp emitMemoryAddress(const WASM::MemArg& arg, uint32_t width,
+			const asmjit::x86::Gp& wasmAddress)
+	{
+		validateMemoryArg(arg, width);
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		// Materialise every argument *before* appending the invoke node: an
+		// operand must be defined at the call site, not after it, or the
+		// register allocator hands the callee whatever the register held.
+		auto memoryIndex = compiler.new_gp32("memoryIndex");
+		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(arg.memidx)),
+				"AsmJit memory-index materialisation failed");
+		auto offset = compiler.new_gp32("memoryOffset");
+		checkError(compiler.mov(offset, static_cast<uint32_t>(arg.offset)),
+				"AsmJit memory-offset materialisation failed");
+		auto accessWidth = compiler.new_gp32("memoryWidth");
+		checkError(compiler.mov(accessWidth, width), "AsmJit memory-width materialisation failed");
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&asmjitMemoryAddress), signature),
+				"AsmJit memory-address helper call emission failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, memoryIndex);
+		invoke->set_arg(2, wasmAddress);
+		invoke->set_arg(3, offset);
+		invoke->set_arg(4, accessWidth);
+		auto pointer = compiler.new_gp_ptr("memoryAddress");
+		invoke->set_ret(0, pointer);
+		emitPendingTrapReturn();
+		return pointer;
+	}
+
+	void emitMemoryLoad(const WASM::MemArg& arg, uint32_t width, LoadKind kind)
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit memory.load operand stack underflow");
+		auto wasmAddress = values.back();
+		values.pop_back();
+		auto pointer = emitMemoryAddress(arg, width, wasmAddress);
+		const bool wide = kind == LoadKind::I64 || kind == LoadKind::I64I8Signed
+				|| kind == LoadKind::I64I8Unsigned || kind == LoadKind::I64I16Signed
+				|| kind == LoadKind::I64I16Unsigned || kind == LoadKind::I64I32Signed
+				|| kind == LoadKind::I64I32Unsigned;
+		auto result = wide ? compiler.new_gp64("memoryLoad64") : compiler.new_gp32("memoryLoad32");
+		switch (kind) {
+		case LoadKind::I32:
+			checkError(compiler.mov(result, asmjit::x86::dword_ptr(pointer)), "AsmJit i32.load emission failed"); break;
+		case LoadKind::I8Signed:
+			checkError(compiler.movsx(result, asmjit::x86::byte_ptr(pointer)), "AsmJit i32.load8_s emission failed"); break;
+		case LoadKind::I8Unsigned:
+			checkError(compiler.movzx(result, asmjit::x86::byte_ptr(pointer)), "AsmJit i32.load8_u emission failed"); break;
+		case LoadKind::I16Signed:
+			checkError(compiler.movsx(result, asmjit::x86::word_ptr(pointer)), "AsmJit i32.load16_s emission failed"); break;
+		case LoadKind::I16Unsigned:
+			checkError(compiler.movzx(result, asmjit::x86::word_ptr(pointer)), "AsmJit i32.load16_u emission failed"); break;
+		case LoadKind::I64:
+			checkError(compiler.mov(result, asmjit::x86::qword_ptr(pointer)), "AsmJit i64.load emission failed"); break;
+		case LoadKind::I64I8Signed:
+			checkError(compiler.movsx(result, asmjit::x86::byte_ptr(pointer)), "AsmJit i64.load8_s emission failed"); break;
+		case LoadKind::I64I8Unsigned:
+			checkError(compiler.movzx(result, asmjit::x86::byte_ptr(pointer)), "AsmJit i64.load8_u emission failed"); break;
+		case LoadKind::I64I16Signed:
+			checkError(compiler.movsx(result, asmjit::x86::word_ptr(pointer)), "AsmJit i64.load16_s emission failed"); break;
+		case LoadKind::I64I16Unsigned:
+			checkError(compiler.movzx(result, asmjit::x86::word_ptr(pointer)), "AsmJit i64.load16_u emission failed"); break;
+		case LoadKind::I64I32Signed:
+			checkError(compiler.movsxd(result, asmjit::x86::dword_ptr(pointer)), "AsmJit i64.load32_s emission failed"); break;
+		case LoadKind::I64I32Unsigned:
+			checkError(compiler.mov(result.r32(), asmjit::x86::dword_ptr(pointer)), "AsmJit i64.load32_u emission failed"); break;
+		}
+		values.push_back(result);
+	}
+
+	void emitMemoryStore(const WASM::MemArg& arg, uint32_t width)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit memory.store operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto wasmAddress = values.back(); values.pop_back();
+		auto pointer = emitMemoryAddress(arg, width, wasmAddress);
+		switch (width) {
+		case 1:
+			checkError(compiler.mov(asmjit::x86::byte_ptr(pointer), value.r8()), "AsmJit store8 emission failed"); break;
+		case 2:
+			checkError(compiler.mov(asmjit::x86::word_ptr(pointer), value.r16()), "AsmJit store16 emission failed"); break;
+		case 4:
+			checkError(compiler.mov(asmjit::x86::dword_ptr(pointer), value.r32()), "AsmJit store32 emission failed"); break;
+		case 8:
+			checkError(compiler.mov(asmjit::x86::qword_ptr(pointer), value), "AsmJit i64.store emission failed"); break;
+		default:
+			throw std::runtime_error("AsmJit internal error: unsupported memory-store width");
+		}
+	}
+
+	void emitBitCount(BitCountOp operation)
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit i32 bit-count operand stack underflow");
+		auto source = values.back(); values.pop_back();
+		auto result = compiler.new_gp32("bitCount");
+		auto nonZero = compiler.new_label();
+		auto done = compiler.new_label();
+		checkError(compiler.test(source, source), "AsmJit bit-count zero test failed");
+		checkError(compiler.jnz(nonZero), "AsmJit bit-count nonzero branch failed");
+		checkError(compiler.mov(result, 32), "AsmJit bit-count zero result failed");
+		checkError(compiler.jmp(done), "AsmJit bit-count completion jump failed");
+		checkError(compiler.bind(nonZero), "AsmJit bit-count nonzero label failed");
+		if (operation == BitCountOp::LeadingZeros) {
+			checkError(compiler.bsr(result, source), "AsmJit i32.clz scan failed");
+			checkError(compiler.xor_(result, 31), "AsmJit i32.clz adjustment failed");
+		} else {
+			checkError(compiler.bsf(result, source), "AsmJit i32.ctz scan failed");
+		}
+		checkError(compiler.bind(done), "AsmJit bit-count result label failed");
+		values.push_back(result);
+	}
+
+	void emitUnaryCall(uint32_t (*function)(uint32_t), const char* operation)
+	{
+		if (values.empty())
+			throw std::runtime_error(std::string("AsmJit ") + operation + " operand stack underflow");
+		auto argument = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(function), signature),
+				"AsmJit unary arithmetic helper call emission failed");
+		invoke->set_arg(0, argument);
+		auto result = compiler.new_gp32("unaryArithmeticResult");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+	}
+
+	template <typename Function>
+	void emitCheckedBinaryCall(Function function, const char* operation)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error(std::string("AsmJit ") + operation + " operand stack underflow");
+		auto rhs = values.back(); values.pop_back();
+		auto lhs = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kInt32);
+		signature.add_arg(asmjit::TypeId::kInt32);
+		signature.add_arg(asmjit::TypeId::kInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(function), signature),
+				"AsmJit checked arithmetic helper call emission failed");
+		invoke->set_arg(0, lhs);
+		invoke->set_arg(1, rhs);
+		auto result = compiler.new_gp32("checkedArithmeticResult");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void emitSignExtend(uint32_t width)
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit sign-extension operand stack underflow");
+		auto source = values.back();
+		values.pop_back();
+		auto result = compiler.new_gp32("signExtended");
+		if (width == 8)
+			checkError(compiler.movsx(result, source.r8()), "AsmJit i32.extend8_s emission failed");
+		else if (width == 16)
+			checkError(compiler.movsx(result, source.r16()), "AsmJit i32.extend16_s emission failed");
+		else
+			throw std::runtime_error("AsmJit internal error: invalid sign-extension width");
+		values.push_back(result);
+	}
+
+	void emitI32WrapI64()
+	{
+		if (values.empty() || values.back().size() != 8)
+			throw std::runtime_error("AsmJit i32.wrap_i64 requires an i64 operand");
+		const auto source = values.back();
+		values.pop_back();
+		auto result = compiler.new_gp32("wrappedI32");
+		checkError(compiler.mov(result, source.r32()), "AsmJit i32.wrap_i64 emission failed");
+		values.push_back(result);
+	}
+
+	void emitI64ExtendI32(bool isSigned)
+	{
+		if (values.empty() || values.back().size() != 4)
+			throw std::runtime_error("AsmJit i64.extend_i32 requires an i32 operand");
+		const auto source = values.back();
+		values.pop_back();
+		auto result = compiler.new_gp64("extendedI64");
+		if (isSigned)
+			checkError(compiler.movsxd(result, source), "AsmJit i64.extend_i32_s emission failed");
+		else
+			checkError(compiler.mov(result.r32(), source), "AsmJit i64.extend_i32_u emission failed");
+		values.push_back(result);
+	}
+
+	void emitI64SignExtend(uint32_t width)
+	{
+		if (values.empty() || values.back().size() != 8)
+			throw std::runtime_error("AsmJit i64 sign-extension requires an i64 operand");
+		const auto source = values.back();
+		values.pop_back();
+		auto result = compiler.new_gp64("signExtendedI64");
+		if (width == 8)
+			checkError(compiler.movsx(result, source.r8()), "AsmJit i64.extend8_s emission failed");
+		else if (width == 16)
+			checkError(compiler.movsx(result, source.r16()), "AsmJit i64.extend16_s emission failed");
+		else if (width == 32)
+			checkError(compiler.movsxd(result, source.r32()), "AsmJit i64.extend32_s emission failed");
+		else
+			throw std::runtime_error("AsmJit internal error: invalid i64 sign-extension width");
+		values.push_back(result);
+	}
+
+	void emitCompare(asmjit::x86::CondCode condition)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit integer comparison operand stack underflow");
+		auto rhs = values.back(); values.pop_back();
+		auto lhs = values.back(); values.pop_back();
+		auto result = compiler.new_gp32("comparison");
+		checkError(compiler.xor_(result, result), "AsmJit comparison result initialisation failed");
+		checkError(compiler.cmp(lhs, rhs), "AsmJit comparison emission failed");
+		checkError(compiler.set(condition, result.r8()), "AsmJit comparison condition emission failed");
+		values.push_back(result);
+	}
+
+	void emitIntegerBinary(BinaryOp operation)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit i64 binary operation stack underflow");
+		auto rhs = values.back(); values.pop_back();
+		auto lhs = values.back(); values.pop_back();
+		switch (operation) {
+		case BinaryOp::Add: checkError(compiler.add(lhs, rhs), "AsmJit i64.add emission failed"); break;
+		case BinaryOp::Sub: checkError(compiler.sub(lhs, rhs), "AsmJit i64.sub emission failed"); break;
+		case BinaryOp::Mul: checkError(compiler.imul(lhs, rhs), "AsmJit i64.mul emission failed"); break;
+		case BinaryOp::And: checkError(compiler.and_(lhs, rhs), "AsmJit i64.and emission failed"); break;
+		case BinaryOp::Or: checkError(compiler.or_(lhs, rhs), "AsmJit i64.or emission failed"); break;
+		case BinaryOp::Xor: checkError(compiler.xor_(lhs, rhs), "AsmJit i64.xor emission failed"); break;
+		}
+		values.push_back(lhs);
+	}
+
+	void emitIntegerShift(ShiftOp operation)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit i64 shift operand stack underflow");
+		auto count = values.back(); values.pop_back();
+		auto value = values.back(); values.pop_back();
+		auto maskedCount = compiler.new_gp32("i64ShiftCount");
+		checkError(compiler.mov(maskedCount, count.r32()), "AsmJit i64 shift-count copy failed");
+		checkError(compiler.and_(maskedCount, 63), "AsmJit i64 shift-count mask failed");
+		checkError(compiler.mov(asmjit::x86::ecx, maskedCount), "AsmJit i64 shift-count setup failed");
+		switch (operation) {
+		case ShiftOp::Left: checkError(compiler.shl(value, asmjit::x86::cl), "AsmJit i64.shl emission failed"); break;
+		case ShiftOp::ArithmeticRight: checkError(compiler.sar(value, asmjit::x86::cl), "AsmJit i64.shr_s emission failed"); break;
+		case ShiftOp::LogicalRight: checkError(compiler.shr(value, asmjit::x86::cl), "AsmJit i64.shr_u emission failed"); break;
+		case ShiftOp::RotateLeft: checkError(compiler.rol(value, asmjit::x86::cl), "AsmJit i64.rotl emission failed"); break;
+		case ShiftOp::RotateRight: checkError(compiler.ror(value, asmjit::x86::cl), "AsmJit i64.rotr emission failed"); break;
+		}
+		values.push_back(value);
+	}
+
+	template <typename Function>
+	void emitCheckedI64Call(Function function, const char* operation)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error(std::string("AsmJit ") + operation + " operand stack underflow");
+		auto rhs = values.back(); values.pop_back();
+		auto lhs = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kInt64);
+		signature.add_arg(asmjit::TypeId::kInt64);
+		signature.add_arg(asmjit::TypeId::kInt64);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(function), signature),
+				"AsmJit checked i64 arithmetic helper emission failed");
+		invoke->set_arg(0, lhs);
+		invoke->set_arg(1, rhs);
+		auto result = compiler.new_gp64("checkedI64Result");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void emitShift(ShiftOp operation)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit i32 shift operand stack underflow");
+		auto count = values.back(); values.pop_back();
+		auto value = values.back(); values.pop_back();
+		// x86 variable shifts/rotates take their count from CL. The low five
+		// bits are used by WebAssembly; masking explicitly also documents the
+		// semantic rule for the generated instruction sequence.
+		auto maskedCount = compiler.new_gp32("shiftCount");
+		checkError(compiler.mov(maskedCount, count), "AsmJit shift-count copy failed");
+		checkError(compiler.and_(maskedCount, 31), "AsmJit shift-count mask failed");
+		checkError(compiler.mov(asmjit::x86::ecx, maskedCount), "AsmJit shift-count setup failed");
+		switch (operation) {
+		case ShiftOp::Left:
+			checkError(compiler.shl(value, asmjit::x86::cl), "AsmJit i32.shl emission failed"); break;
+		case ShiftOp::ArithmeticRight:
+			checkError(compiler.sar(value, asmjit::x86::cl), "AsmJit i32.shr_s emission failed"); break;
+		case ShiftOp::LogicalRight:
+			checkError(compiler.shr(value, asmjit::x86::cl), "AsmJit i32.shr_u emission failed"); break;
+		case ShiftOp::RotateLeft:
+			checkError(compiler.rol(value, asmjit::x86::cl), "AsmJit i32.rotl emission failed"); break;
+		case ShiftOp::RotateRight:
+			checkError(compiler.ror(value, asmjit::x86::cl), "AsmJit i32.rotr emission failed"); break;
+		}
+		values.push_back(value);
+	}
+
+	asmjit::x86::Compiler& compiler;
+	const WASM::Module& module;
+	WASM::ModuleInstanceInternals& internals;
+	const std::vector<asmjit::FuncNode*>& functions;
+	const std::vector<std::unique_ptr<asmjit::FuncSignature>>& signatures;
+	asmjit::x86::Gp vmContext;
+	std::vector<asmjit::x86::Gp> locals;
+	std::vector<asmjit::x86::Gp> values;
+	std::vector<ControlFrame> controls;
+	uint32_t resultCount = 0;
+	WASM::ValueTypeCode resultType = WASM::ValueTypeCode::Void;
+};
+
+} // namespace
+
+struct ModuleCompiler::FunctionRecord {
+	const asmjit::FuncSignature* signature = nullptr;
+	asmjit::FuncNode* node = nullptr;
+	void* entry = nullptr;
+};
+
+ModuleCompiler::ModuleCompiler(Context& context)
+	: context(context)
+{
+}
+
+ModuleCompiler::~ModuleCompiler() = default;
+
+void ModuleCompiler::translateTypes(WASM::ModuleInstance&, const WASM::Module& module,
+		WASM::ModuleInstanceInternals& internals)
+{
+	signatures.clear();
+	signatures.resize(module.typeIds.size());
+	internals.translatedTypes.assign(module.typeIds.size(), nullptr);
+
+	for (uint32_t i = 0; i < module.typeIds.size(); ++i) {
+		if (module.typeView(i).kind() != WASM::CanonTypeKind::Func)
+			continue;
+		const WASM::FuncType type = module.funcTypeAt(i);
+		signatures[i] = std::make_unique<asmjit::FuncSignature>(
+				TypeTranslator::translateFunctionType(type));
+		internals.translatedTypes[i] = signatures[i].get();
+	}
+}
+
+void ModuleCompiler::declareFunctions(WASM::ModuleInstance& instance,
+		const WASM::Module& module, WASM::ModuleInstanceInternals& internals)
+{
+	internals.compiledFunctions.resize(module.internalFunctionTypeIndices.size());
+	internals.internalCallables.resize(module.internalFunctionTypeIndices.size());
+	functionRecords.clear();
+	functionRecords.reserve(module.internalFunctionTypeIndices.size());
+
+	if (!internals.internalCallables.empty())
+		instance.store().registerCallableRange(
+				internals.internalCallables.data(), internals.internalCallables.size());
+
+	for (uint32_t i = 0; i < module.internalFunctionTypeIndices.size(); ++i) {
+		const uint32_t typeIndex = module.internalFunctionTypeIndices[i];
+		if (typeIndex >= signatures.size() || !signatures[typeIndex])
+			throw std::runtime_error("AsmJit function references a non-function or unavailable type");
+		auto record = std::make_unique<FunctionRecord>();
+		record->signature = signatures[typeIndex].get();
+		internals.compiledFunctions[i] = nullptr;
+		internals.internalCallables[i] = WASM::Callable {
+			.fnPtr = nullptr,
+			.context = instance.context(),
+			.localTypeIdx = typeIndex,
+			.typeId = module.typeId(WASM::LocalTypeIdx{typeIndex})
+		};
+		functionRecords.push_back(std::move(record));
+	}
+}
+
+void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
+		const WASM::Module& module, WASM::ModuleInstanceInternals& internals)
+{
+	if (module.functionBodies.size() != functionRecords.size())
+		throw std::runtime_error("AsmJit function declaration/body count mismatch");
+
+	const std::size_t allocationCheckpoint = context.allocationCheckpoint();
+	try {
+		asmjit::CodeHolder code;
+		checkError(code.init(context.environment(), context.cpuFeatures()),
+				"AsmJit CodeHolder initialisation failed");
+		asmjit::x86::Compiler compiler(&code);
+
+		// Create every function node before emitting any body. Labels therefore
+		// exist for forward calls and mutual recursion as well as backward calls.
+		std::vector<asmjit::FuncNode*> functions;
+		functions.reserve(functionRecords.size());
+		for (auto& record : functionRecords) {
+			record->node = compiler.new_func(*record->signature);
+			if (record->node == nullptr)
+				throw std::runtime_error("AsmJit failed to declare an internal function node");
+			functions.push_back(record->node);
+		}
+
+		for (uint32_t i = 0; i < module.functionBodies.size(); ++i) {
+			auto* function = compiler.add_func(functions[i]);
+			if (function == nullptr)
+				throw std::runtime_error("AsmJit failed to begin an internal function body");
+			const uint32_t typeIndex = module.internalFunctionTypeIndices[i];
+			const WASM::FuncType type = module.funcTypeAt(typeIndex);
+			IntegerFunctionEmitter emitter(compiler, *function, type, module.functionBodies[i],
+					module, internals, functions, signatures);
+			emitter.compile(module.functionBodies[i], type);
+			checkError(compiler.end_func(), "AsmJit function finalisation failed");
+		}
+
+		checkError(compiler.finalize(), "AsmJit compiler finalisation failed");
+		void* codeBase = context.install(code);
+		for (uint32_t i = 0; i < functionRecords.size(); ++i) {
+			const uint64_t offset = code.label_offset_from_base(functions[i]->label());
+			functionRecords[i]->entry = static_cast<uint8_t*>(codeBase) + offset;
+			internals.internalCallables[i].rawFnPtr = functionRecords[i]->entry;
+			internals.internalCallables[i].fnPtr = functionRecords[i]->entry;
+			internals.compiledFunctions[i] = functionRecords[i]->entry;
+		}
+		// FuncNodes belong to the temporary CodeHolder. Runtime handles are the
+		// installed entry pointers above, so discard all compiler-side records.
+		functionRecords.clear();
+	} catch (...) {
+		// Instantiation is transactional with respect to executable memory:
+		// a failed module must not pin partially generated code in the session.
+		context.releaseAllocationsSince(allocationCheckpoint);
+		for (uint32_t i = 0; i < functionRecords.size(); ++i) {
+			functionRecords[i]->entry = nullptr;
+			internals.internalCallables[i].rawFnPtr = nullptr;
+			internals.internalCallables[i].fnPtr = nullptr;
+			internals.compiledFunctions[i] = nullptr;
+		}
+		functionRecords.clear();
+		throw;
+	}
+}
+
+void ModuleCompiler::callStartFunction(WASM::ModuleInstance& instance, uint32_t funcIdx,
+		WASM::ModuleInstanceInternals& internals)
+{
+	WASM::Callable* callable = nullptr;
+	const uint32_t importedCount = instance.context()->importedFunctionCount;
+	if (funcIdx < importedCount) {
+		if (funcIdx >= internals.importStorage.size())
+			throw std::runtime_error("AsmJit start function index is outside the function index space");
+		callable = &internals.importStorage[funcIdx];
+	} else {
+		const uint32_t localIndex = funcIdx - importedCount;
+		if (localIndex >= internals.internalCallables.size())
+			throw std::runtime_error("AsmJit start function index is outside the function index space");
+		callable = &internals.internalCallables[localIndex];
+	}
+	if (callable->fnPtr == nullptr)
+		throw std::runtime_error("AsmJit start function has no compiled entry point");
+
+	using StartFunction = void (*)(WASM::VMContext*);
+	{
+		WASM::CallDepthScope depth;
+		reinterpret_cast<StartFunction>(callable->fnPtr)(callable->context);
+	}
+	WASM::checkTrap();
+}
+
+} // namespace AsmJitBackend
