@@ -226,7 +226,7 @@ library per backend plus the test executable.
 | `WasmBase/` | The core library (`libWasmBase`): binary decoding, the module/instance model, `Store`/`TypeRegistry`/`Value`, the opcode decoder, the shared SIMD helper ABI, and the backend-neutral component runtime (`WasmComponentRuntime`). **Backend-agnostic by rule** — see [`docs/LAYERING.md`](docs/LAYERING.md) |
 | `WasmStub/` | `libWasmStub`: a non-JIT opcode dispatcher that pretty-prints instead of executing (inspection/debug) |
 | `LibJit/` | `libLibJit`: the GNU LibJIT backend (context, type translation, module compiler, dispatch) — the current implementation path, and the only backend that executes |
-| `Asmjit/` | **Planned backend, no code yet**: reserved and kept in the build, emits an empty `libAsmjit.so` that is never installed and never selectable by name. Its MMX/SSE…AVX-512 coverage and vector-aware register allocator are a planned SIMD lever; see `Asmjit/README.md` and [`docs/BACKEND_WORK_ORDER.md`](docs/BACKEND_WORK_ORDER.md) |
+| `Asmjit/` | **Provisional AsmJit integration**: owns an AsmJit `JitRuntime`, emits and executes a native x86/x64 smoke-test function, and has a Catch2 test. Not yet a WebAssembly backend, not registered/selectable, and not installed; see [`Asmjit/README.md`](Asmjit/README.md) |
 | `Sljit/` | **Planned backend, no code yet**: same treatment. `sljit_emit_simd_*` / `SLJIT_SIMD_REG_*` are the other planned SIMD lever; see `Sljit/README.md` |
 | `Test/` | The Catch2 executable (`WasmJit`) and the spec-suite harness; see [`docs/TESTING.md`](docs/TESTING.md) |
 | `docs/` | Design notes and process guides; per-proposal notes live in `docs/proposals/` (see the [`docs`](docs/index.md) node) |
@@ -269,7 +269,7 @@ through qmake:
 |---|---|
 | GNU LibJIT (`LibJit/`) | **The only executing backend** — loads, validates, compiles and runs modules, including SIMD via the shared helper layer |
 | SlJIT (`Sljit/`) | **Planned**, not started: builds an empty library, installs nothing; the [`work order`](docs/BACKEND_WORK_ORDER.md) says what it must provide |
-| AsmJit (`Asmjit/`) | **Planned**, not started: same |
+| AsmJit (`Asmjit/`) | **Provisional code-emission foundation only**: native smoke test passes when built; no Wasm compilation or execution yet |
 
 There is no interpreter backend. `WasmStub/` is a non-compiling pretty-printer;
 GNU LibJIT already provides a compile/interpret configuration and is the only
