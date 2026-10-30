@@ -25,16 +25,18 @@ the two-pass instantiation contract and enabling forward and mutually recursive
 direct calls. Each generated function emits the required
   `wasm_stack_check(VMContext*)` prologue call.
 - The body compiler currently supports i32 parameters/results/locals; constants,
-  local access, `drop`; arithmetic (`add/sub/mul/div/rem`), `clz`/`ctz`/`popcnt`, sign
-  extension; signed/unsigned comparisons; bitwise operations, shifts and rotations; void `block`/`loop`/`if`/`else`,
-  `br`/`br_if`; explicit/implicit returns; direct calls (native imports, forward
-  calls and mutual recursion);
-  and memory32 i32 loads/stores, including signed/unsigned 8/16-bit extensions.
+  local access, `drop`; i32 globals; arithmetic (`add/sub/mul/div/rem`),
+  `clz`/`ctz`/`popcnt`, sign extension; signed/unsigned comparisons; bitwise
+  operations, shifts and rotations; void `block`/`loop`/`if`/`else`, `br`/`br_if`;
+  explicit/implicit returns; direct calls (native imports, forward calls and
+  mutual recursion) and typed `call_indirect`;
+  and memory32 i32 loads/stores, including signed/unsigned 8/16-bit extensions,
+  plus `memory.size`/`memory.grow`.
   Memory accesses use a checked helper that observes the shared-memory size
   accessor and reports out-of-bounds traps through the pending-trap protocol.
   Function nodes are declared in one CodeHolder before any bodies are emitted,
-  so direct-call labels resolve across the entire module. Block result types,
-  unreachable-stack polymorphism, indirect calls, memory64, other value types,
+  so direct-call labels resolve across the entire module. Block result types, unreachable-stack polymorphism, tail-call integration,
+  memory64, other value types,
   and most remaining instructions are still unsupported and fail explicitly.
 - `Test/TestBackend.cpp` exposes an `AsmJitSession` through
   `WASMJIT_BACKEND=asmjit`, including i32 invocation marshalling, aggregate
@@ -87,8 +89,8 @@ upstream repository so that `asmjit.pc` is visible through `PKG_CONFIG_PATH`.
 ## Next implementation stages
 
 1. Extend structured control flow to result-bearing blocks, full branch-stack semantics, and unreachable-stack polymorphism.
-2. Add indirect calls, cross-instance Wasm-import tests, tail-call integration, and broader call ABI support.
-3. Expand linear memory to the remaining load/store widths, memory64, memory.size/grow, and bulk-memory operations.
+2. Add tail-call integration, cross-instance Wasm-import tests, and broader call ABI support.
+3. Expand linear memory to the remaining load/store widths, memory64, and bulk-memory operations.
 4. Add i64 arithmetic, conversions, globals, references/GC, exceptions, continuations, and Wasm SIMD lowering.
 5. Meet every applicable item in
    [`docs/BACKEND_WORK_ORDER.md`](../docs/BACKEND_WORK_ORDER.md) before calling
