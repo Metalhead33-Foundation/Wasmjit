@@ -6,9 +6,11 @@ TARGET = Asmjit
 VERSION = 1.0.0
 CONFIG += shared c++2a
 CONFIG -= qt
+CONFIG += link_pkgconfig
+PKGCONFIG += asmjit
 INCLUDEPATH += $$PWD/..
 include(../WasmBase/WasmBase.pri)
 
-# Avoid build errors with no files:
-SOURCES += 
-HEADERS +=
+# AsmJit is external and remains confined to this backend.
+SOURCES += AsmjitContext.cpp
+HEADERS += AsmjitContext.hpp
