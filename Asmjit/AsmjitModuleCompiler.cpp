@@ -180,6 +180,101 @@ protected:
 		values.pop_back();
 	}
 
+	void dispatchBlock(const WASM::BlockType& type) override
+	{
+		if (!type.isVoid())
+			throw std::runtime_error("AsmJit structured control flow currently requires void block types");
+		ControlFrame frame;
+		frame.kind = ControlKind::Block;
+		frame.stackHeight = values.size();
+		frame.end = compiler.new_label();
+		controls.push_back(frame);
+	}
+
+	void dispatchLoop(const WASM::BlockType& type) override
+	{
+		if (!type.isVoid())
+			throw std::runtime_error("AsmJit structured control flow currently requires void loop types");
+		ControlFrame frame;
+		frame.kind = ControlKind::Loop;
+		frame.stackHeight = values.size();
+		frame.begin = compiler.new_label();
+		frame.end = compiler.new_label();
+		checkError(compiler.bind(frame.begin), "AsmJit loop label binding failed");
+		controls.push_back(frame);
+	}
+
+	void dispatchIf(const WASM::BlockType& type) override
+	{
+		if (!type.isVoid())
+			throw std::runtime_error("AsmJit structured control flow currently requires void if types");
+		if (values.empty())
+			throw std::runtime_error("AsmJit if condition stack underflow");
+		auto condition = values.back();
+		values.pop_back();
+		ControlFrame frame;
+		frame.kind = ControlKind::If;
+		frame.stackHeight = values.size();
+		frame.alternate = compiler.new_label();
+		frame.end = compiler.new_label();
+		checkError(compiler.test(condition, condition), "AsmJit if condition test failed");
+		checkError(compiler.jz(frame.alternate), "AsmJit if condition branch failed");
+		controls.push_back(frame);
+	}
+
+	void dispatchElse() override
+	{
+		if (controls.empty() || controls.back().kind != ControlKind::If || controls.back().hasElse)
+			throw std::runtime_error("AsmJit encountered an unmatched or duplicate else");
+		ControlFrame& frame = controls.back();
+		if (values.size() != frame.stackHeight)
+			throw std::runtime_error("AsmJit if arm leaves an unexpected operand stack shape");
+		checkError(compiler.jmp(frame.end), "AsmJit if/else end jump failed");
+		checkError(compiler.bind(frame.alternate), "AsmJit else label binding failed");
+		frame.hasElse = true;
+	}
+
+	void dispatchEnd() override
+	{
+		// The outermost end closes the function body, not a nested control frame.
+		if (controls.empty())
+			return;
+		ControlFrame frame = controls.back();
+		controls.pop_back();
+		if (values.size() != frame.stackHeight)
+			throw std::runtime_error("AsmJit structured block leaves an unexpected operand stack shape");
+		if (frame.kind == ControlKind::If && !frame.hasElse)
+			checkError(compiler.bind(frame.alternate), "AsmJit implicit else label binding failed");
+		checkError(compiler.bind(frame.end), "AsmJit structured block end binding failed");
+	}
+
+	void dispatchBrIf(WASM::LabelIdx depth) override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit br_if condition stack underflow");
+		if (depth >= controls.size())
+			throw std::runtime_error("AsmJit br_if label depth is out of range");
+		const auto condition = values.back();
+		values.pop_back();
+		const ControlFrame& target = controls[controls.size() - 1 - depth];
+		if (values.size() != target.stackHeight)
+			throw std::runtime_error("AsmJit br_if currently supports only void label signatures");
+		const asmjit::Label label = target.kind == ControlKind::Loop ? target.begin : target.end;
+		checkError(compiler.test(condition, condition), "AsmJit br_if condition test failed");
+		checkError(compiler.jnz(label), "AsmJit br_if branch emission failed");
+	}
+
+	void dispatchBr(WASM::LabelIdx depth) override
+	{
+		if (depth >= controls.size())
+			throw std::runtime_error("AsmJit br label depth is out of range");
+		const ControlFrame& target = controls[controls.size() - 1 - depth];
+		if (values.size() != target.stackHeight)
+			throw std::runtime_error("AsmJit br currently supports only void label signatures");
+		const asmjit::Label label = target.kind == ControlKind::Loop ? target.begin : target.end;
+		checkError(compiler.jmp(label), "AsmJit br emission failed");
+	}
+
 	void dispatchNop() override {}
 
 	void dispatchI32Eqz() override
@@ -232,6 +327,16 @@ protected:
 	}
 
 private:
+	enum class ControlKind { Block, Loop, If };
+	struct ControlFrame {
+		ControlKind kind = ControlKind::Block;
+		size_t stackHeight = 0;
+		asmjit::Label begin;
+		asmjit::Label alternate;
+		asmjit::Label end;
+		bool hasElse = false;
+	};
+
 	enum class BinaryOp { Add, Sub, Mul, And, Or, Xor };
 	enum class ShiftOp { Left, ArithmeticRight, LogicalRight, RotateLeft, RotateRight };
 
@@ -310,6 +415,7 @@ private:
 	asmjit::x86::Compiler& compiler;
 	std::vector<asmjit::x86::Gp> locals;
 	std::vector<asmjit::x86::Gp> values;
+	std::vector<ControlFrame> controls;
 	uint32_t resultCount = 0;
 };
 
