@@ -108,10 +108,6 @@ public:
 	GcHeap& operator=(const GcHeap&) = delete;
 
 	//! Allocates an empty RegionSet for one ModuleInstance.
-/**
- * \brief Performs the releaseSet operation.
- * \return The requested value, handle, view, or success status.
- */
 	/** \brief Creates a region set for one module instance. \return Owning heap handle for the new set; pass it to releaseSet(). */
 /**
  * \brief Creates or allocates the corresponding runtime object.
@@ -144,10 +140,6 @@ public:
 
 	//! Return a block obtained from allocate() to its region's free list, or
 	//! release a dedicated region. `block` must be a live allocation.
-/**
- * \brief Performs the allocate operation.
- * \return The requested value, handle, view, or success status.
- */
 	/** \brief Returns a live allocation to its size-class free list or unmaps its region. \param block Pointer previously returned by allocate(); it must still be live. */
 /**
  * \brief Performs the recycle operation.
