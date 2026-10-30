@@ -142,11 +142,6 @@ private:
  */
 	void processSecetions(Elv::Io::Device& file);
 	//! Section processors
-/**
- * \brief Performs the processTypeSection operation.
- * \param file Input value or output destination for this operation.
- * \param section Input value or output destination for this operation.
- */
 	void processTypeSection(Elv::Io::Device& file, const Section& section);
 /**
  * \brief Performs the processImportSection operation.
@@ -253,14 +248,6 @@ private:
 	void processCompilationHintSection(Elv::Io::Device& file, const Section& section,
 			std::map<uint32_t, std::vector<CompilationHint>>& out);
 	//! Type processors
-/**
- * \brief Performs the processSubtypes operation.
- * \param stream Input value or output destination for this operation.
- * \param typeNum Input value or output destination for this operation.
- * \param numSubTypes Input value or output destination for this operation.
- * \param out Input value or output destination for this operation.
- * \param groupFirst Input value or output destination for this operation.
- */
 	void processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t numSubTypes, std::vector<Subtype>& out, uint32_t groupFirst);
 /**
  * \brief Performs the parseInitExpr operation.
