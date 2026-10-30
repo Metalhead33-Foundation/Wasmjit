@@ -66,18 +66,23 @@ namespace WASM {
 //! by a trap. `Error` is a recoverable-as-a-trap failure (validation, a Wasm
 //! trap, an uncaught exception). `Fatal` means the host facility itself declared
 //! the run unusable.
-enum class DiagnosticSeverity : std::uint8_t { Note, Warning, Error, Fatal };
+enum class DiagnosticSeverity : std::uint8_t {
+	Note, //!< Enum member `Note`.
+	Warning, //!< Enum member `Warning`.
+	Error, //!< Enum member `Error`.
+	Fatal //!< Enum member `Fatal`.
+};
 
 //! The pipeline stage that produced the record. It is intentionally coarse: a
 //! consumer switches on it, and a new stage is a deliberate addition.
 enum class DiagnosticPhase : std::uint8_t {
-	Decode,
-	Validate,
-	Compile,
-	Instantiate,
-	Execute,
-	Continuation,
-	Component,
+	Decode, //!< DiagnosticPhase enumerator `Decode`.
+	Validate, //!< DiagnosticPhase enumerator `Validate`.
+	Compile, //!< DiagnosticPhase enumerator `Compile`.
+	Instantiate, //!< DiagnosticPhase enumerator `Instantiate`.
+	Execute, //!< DiagnosticPhase enumerator `Execute`.
+	Continuation, //!< DiagnosticPhase enumerator `Continuation`.
+	Component, //!< DiagnosticPhase enumerator `Component`.
 };
 
 //! "note" / "warning" / "error" / "fatal" — the text and JSON spelling.
