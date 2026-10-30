@@ -138,6 +138,10 @@ public:
 	 * \return The AsmJit environment.
 	 */
 	const asmjit::Environment& environment() const noexcept;
+	//! Returns the host CPU features used to initialise generated code.
+	const asmjit::CpuFeatures& cpuFeatures() const noexcept;
+	//! Installs code and retains its executable allocation until context destruction.
+	void* install(const asmjit::CodeHolder& code);
 
 private:
 	asmjit::JitRuntime runtime;
@@ -147,6 +151,7 @@ private:
 	std::vector<V128BitwiseEntry> v128BitwiseAllocations;
 	std::vector<PackedI8ExtendEntry> packedI8Allocations;
 	std::vector<PackedI16ExtendEntry> packedI16Allocations;
+	std::vector<void*> moduleAllocations;
 };
 
 } // namespace AsmJitBackend
