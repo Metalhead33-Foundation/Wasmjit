@@ -146,6 +146,18 @@
     local.get 0 local.get 1 i32.rem_s)
   (func (export "rem_u") (param i32 i32) (result i32)
     local.get 0 local.get 1 i32.rem_u)
+  (func (export "store16_load16_s") (param i32 i32) (result i32)
+    local.get 0
+    local.get 1
+    i32.store16 offset=2
+    local.get 0
+    i32.load16_s offset=2)
+  (func (export "store16_load16_u") (param i32 i32) (result i32)
+    local.get 0
+    local.get 1
+    i32.store16
+    local.get 0
+    i32.load16_u)
   (func (export "local_roundtrip") (param i32) (result i32) (local i32)
     local.get 0
     local.set 1
