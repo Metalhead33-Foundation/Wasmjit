@@ -180,6 +180,11 @@ Ret callCallable(const Callable& callable, Args&&... args)
 		Ret result;
 		{
 			CallDepthScope depth;
+/**
+ * \brief Performs the fn operation.
+ * \param context Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			result = fn(callable.context, std::forward<Args>(args)...);
 		}
 		checkTrap();
