@@ -18,7 +18,10 @@ asmjit::TypeId TypeTranslator::translateValueType(const WASM::ValueType& type)
 	case ValueTypeCode::F64:
 		return asmjit::TypeId::kFloat64;
 	case ValueTypeCode::V128:
-		return asmjit::TypeId::kInt8x16;
+		// FuncSignature has no 128-bit vector TypeId. The AsmJit backend's
+		// initial ABI therefore passes V128 values indirectly as pointers to
+		// 16-byte storage; XMM registers are used inside generated code.
+		return asmjit::TypeId::kUIntPtr;
 
 	// Every reference kind has the same machine representation in the
 	// function ABI. Heap/type identity remains a Wasm-level runtime concern.
@@ -90,7 +93,15 @@ asmjit::FuncSignature TypeTranslator::translateFunctionType(const WASM::FuncType
 		const WASM::StorageType& result = function.results.front();
 		if (result.isPacked)
 			throw std::runtime_error("AsmJit ABI translation: packed function result is invalid Wasm");
-		signature.set_ret(translateStorageType(result));
+		if (result.val.opcode == WASM::ValueTypeCode::V128) {
+			// A vector result is written to caller-owned 16-byte storage because
+			// FuncSignature cannot describe a vector return register.
+			if (!signature.can_add_arg())
+				throw std::runtime_error("AsmJit ABI translation: no room for V128 result buffer");
+			signature.add_arg(asmjit::TypeId::kUIntPtr);
+		} else {
+			signature.set_ret(translateStorageType(result));
+		}
 	} else if (function.results.size() > 1) {
 		// Multi-value tuples are written through the caller-provided trailing
 		// result buffer. Do not rely on a platform's aggregate-return ABI.
