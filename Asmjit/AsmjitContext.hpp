@@ -29,9 +29,19 @@ public:
 	//! Native entry point for the diagnostic four-lane i32 operation.
 	using LaneWiseI32x4Entry = void (*)(const std::uint32_t*,
 			const std::uint32_t*, std::uint32_t*);
-	//! Native entry point for a real XMM-backed i32x4 SIMD addition.
+	//! Native entry point for an XMM-backed i32x4 addition.
 	using V128I32x4AddEntry = void (*)(const std::uint32_t*,
 			const std::uint32_t*, std::uint32_t*);
+	//! Native entry point for a V128 bitwise operation.
+	using V128BitwiseEntry = void (*)(const std::uint8_t*,
+			const std::uint8_t*, std::uint8_t*);
+
+	//! Bitwise operation emitted by compileV128Bitwise().
+	enum class V128BitwiseOp {
+		And, //!< Bitwise AND.
+		Or, //!< Bitwise OR.
+		Xor //!< Bitwise XOR.
+	};
 
 	/*!
 	 * \brief Creates an executable-code runtime for the current host.
@@ -89,6 +99,19 @@ public:
 	V128I32x4AddEntry compileV128I32x4Add();
 
 	/*!
+	 * \brief Emits a V128 bitwise AND, OR, or XOR function.
+	 *
+	 * The generated function operates on exactly 16 bytes and uses an XMM
+	 * register. The pointers may be unaligned.
+	 *
+	 * \param operation Bitwise operation to emit.
+	 * \return A callable entry point owned by this context.
+	 * \throws std::runtime_error if code generation or executable-memory
+	 *         allocation fails.
+	 */
+	V128BitwiseEntry compileV128Bitwise(V128BitwiseOp operation);
+
+	/*!
 	 * \brief Returns the host execution environment used by this runtime.
 	 * \return The AsmJit environment.
 	 */
@@ -98,7 +121,8 @@ private:
 	asmjit::JitRuntime runtime;
 	std::vector<Return42Entry> return42Allocations;
 	std::vector<LaneWiseI32x4Entry> laneWiseAllocations;
-	std::vector<V128I32x4AddEntry> v128Allocations;
+	std::vector<V128I32x4AddEntry> v128AddAllocations;
+	std::vector<V128BitwiseEntry> v128BitwiseAllocations;
 };
 
 } // namespace AsmJitBackend
