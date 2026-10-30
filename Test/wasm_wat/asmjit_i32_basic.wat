@@ -68,6 +68,19 @@
       local.set 0
     end
     local.get 0)
+  (func (export "branch_to_function") (param i32) (result i32)
+    local.get 0
+    if
+      i32.const 42
+      br 1
+    end
+    i32.const 7)
+  (func (export "branch_if_function") (param i32) (result i32)
+    i32.const 42
+    local.get 0
+    br_if 0
+    drop
+    i32.const 7)
   (func (export "call_forward") (param i32) (result i32)
     local.get 0
     call $double)
