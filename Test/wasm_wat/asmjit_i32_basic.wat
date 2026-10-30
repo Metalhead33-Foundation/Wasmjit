@@ -81,6 +81,16 @@
     br_if 0
     drop
     i32.const 7)
+  (func (export "branch_table") (param i32) (result i32)
+    block (result i32)
+      block (result i32)
+        i32.const 42
+        local.get 0
+        br_table 0 1 1
+      end
+      i32.const 1
+      i32.add
+    end)
   (func (export "call_forward") (param i32) (result i32)
     local.get 0
     call $double)
