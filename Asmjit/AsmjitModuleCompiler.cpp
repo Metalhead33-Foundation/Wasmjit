@@ -256,6 +256,35 @@ void asmjitMemoryFill(WASM::VMContext* vm, uint32_t memoryIndex,
     std::memset(memory->memoryBase + destination, static_cast<unsigned char>(value), length);
 }
 
+
+void asmjitMemoryInit(WASM::VMContext* vm, uint32_t dataIndex, uint32_t memoryIndex,
+        uint32_t destination, uint32_t source, uint32_t length) noexcept
+{
+    if (vm == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.init VMContext is null");
+        return;
+    }
+    try {
+        reinterpret_cast<WASM::ModuleInstance*>(vm)->memoryInit(
+                memoryIndex, dataIndex, destination, source, length);
+    } catch (...) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.init helper failed");
+    }
+}
+
+void asmjitDataDrop(WASM::VMContext* vm, uint32_t dataIndex) noexcept
+{
+    if (vm == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit data.drop VMContext is null");
+        return;
+    }
+    try {
+        reinterpret_cast<WASM::ModuleInstance*>(vm)->dataDrop(dataIndex);
+    } catch (...) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit data.drop helper failed");
+    }
+}
+
 asmjit::FuncSignature stackCheckSignature()
 {
 	asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
@@ -825,6 +854,28 @@ protected:
         emitMemoryFill(index);
     }
 
+    void dispatchMemoryInit(uint32_t dataIndex, WASM::MemIdx memoryIndex) override
+    {
+        emitMemoryInit(dataIndex, memoryIndex);
+    }
+
+    void dispatchDataDrop(uint32_t dataIndex) override
+    {
+        asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+        signature.set_ret(asmjit::TypeId::kVoid);
+        signature.add_arg(asmjit::TypeId::kUIntPtr);
+        signature.add_arg(asmjit::TypeId::kUInt32);
+        asmjit::InvokeNode* invoke = nullptr;
+        checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitDataDrop), signature),
+                "AsmJit data.drop helper call emission failed");
+        invoke->set_arg(0, vmContext);
+        auto index = compiler.new_gp32("dataDropIndex");
+        checkError(compiler.mov(index, dataIndex), "AsmJit data.drop index materialisation failed");
+        invoke->set_arg(1, index);
+        emitPendingTrapReturn();
+    }
+
+
 
 	void dispatchI32Load(WASM::MemArg arg) override { emitMemoryLoad(arg, 4, LoadKind::I32); }
 	void dispatchI32Load8S(WASM::MemArg arg) override { emitMemoryLoad(arg, 1, LoadKind::I8Signed); }
@@ -989,6 +1040,36 @@ private:
         invoke->set_arg(2, srcMemory);
         invoke->set_arg(3, destinationAddress);
         invoke->set_arg(4, sourceAddress);
+        invoke->set_arg(5, length);
+        emitPendingTrapReturn();
+    }
+
+
+    void emitMemoryInit(uint32_t dataIndex, WASM::MemIdx memoryIndex)
+    {
+        validateMemoryIndex(memoryIndex);
+        if (values.size() < 3)
+            throw std::runtime_error("AsmJit memory.init operand stack underflow");
+        const auto length = values.back(); values.pop_back();
+        const auto source = values.back(); values.pop_back();
+        const auto destination = values.back(); values.pop_back();
+        asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+        signature.set_ret(asmjit::TypeId::kVoid);
+        signature.add_arg(asmjit::TypeId::kUIntPtr);
+        for (int i = 0; i < 5; ++i)
+            signature.add_arg(asmjit::TypeId::kUInt32);
+        asmjit::InvokeNode* invoke = nullptr;
+        checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitMemoryInit), signature),
+                "AsmJit memory.init helper call emission failed");
+        invoke->set_arg(0, vmContext);
+        auto data = compiler.new_gp32("memoryInitDataIndex");
+        auto memory = compiler.new_gp32("memoryInitMemoryIndex");
+        checkError(compiler.mov(data, dataIndex), "AsmJit memory.init data index materialisation failed");
+        checkError(compiler.mov(memory, static_cast<uint32_t>(memoryIndex)), "AsmJit memory.init memory index materialisation failed");
+        invoke->set_arg(1, data);
+        invoke->set_arg(2, memory);
+        invoke->set_arg(3, destination);
+        invoke->set_arg(4, source);
         invoke->set_arg(5, length);
         emitPendingTrapReturn();
     }
