@@ -132,6 +132,9 @@
       end
     end
     local.get 1)
+  (func (export "popcnt") (param i32) (result i32)
+    local.get 0
+    i32.popcnt)
   (func (export "clz") (param i32) (result i32)
     local.get 0
     i32.clz)
