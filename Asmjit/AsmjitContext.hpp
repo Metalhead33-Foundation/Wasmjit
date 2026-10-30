@@ -138,10 +138,18 @@ public:
 	 * \return The AsmJit environment.
 	 */
 	const asmjit::Environment& environment() const noexcept;
-	//! Returns the host CPU features used to initialise generated code.
+	/*!
+	 * \brief Returns the host CPU features used to initialise generated code.
+	 * \return The detected host CPU features.
+	 */
 	const asmjit::CpuFeatures& cpuFeatures() const noexcept;
-	//! Installs code and retains its executable allocation until context destruction.
-	void* install(const asmjit::CodeHolder& code);
+	/*!
+	 * \brief Installs code and retains its executable allocation.
+	 * \param code Finalized code holder to install.
+	 * \return Entry point of the installed code.
+	 * \throws std::runtime_error if installation or allocation tracking fails.
+	 */
+	void* install(asmjit::CodeHolder& code);
 
 private:
 	asmjit::JitRuntime runtime;
