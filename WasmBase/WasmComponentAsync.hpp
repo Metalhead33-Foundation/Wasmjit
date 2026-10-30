@@ -213,12 +213,32 @@ public:
 	explicit ComponentWaitable(ComponentWaitableKind kind) : kind_(kind) {}
 	virtual ~ComponentWaitable() = default;
 
+/**
+ * \brief Performs the kind operation.
+ * \return The value or status produced by this operation.
+ */
 	ComponentWaitableKind kind() const { return kind_; }
+/**
+ * \brief Performs the inWaitableSet operation.
+ * \return The value or status produced by this operation.
+ */
 	bool inWaitableSet() const { return set_ != nullptr; }
+/**
+ * \brief Performs the waitableSet operation.
+ */
 	void* waitableSet() const { return set_; }
+/**
+ * \brief Performs the setWaitableSet operation.
+ * \param set Input value or output destination for this operation.
+ */
 	void setWaitableSet(void* set) { set_ = set; }
 
 	//! Returns true and fills `event` when progress is pending.
+/**
+ * \brief Performs the takeEvent operation.
+ * \param event Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	virtual bool takeEvent(ComponentAsyncEvent& event) = 0;
 private:
 	ComponentWaitableKind kind_;
@@ -232,6 +252,10 @@ private:
 /** \brief Single-agent collection of waitables that can be polled for events. */
 class ComponentWaitableSet {
 public:
+/**
+ * \brief Performs the poll operation.
+ * \return The value or status produced by this operation.
+ */
 	ComponentAsyncEvent poll()
 	{
 		for (ComponentWaitable* waitable : waitables_) {
@@ -242,39 +266,95 @@ public:
 		return ComponentAsyncEvent{};
 	}
 
+/**
+ * \brief Performs the wait operation.
+ * \return The value or status produced by this operation.
+ */
 	ComponentAsyncEvent wait() { return poll(); }
 
+/**
+ * \brief Performs the add operation.
+ * \param waitable Input value or output destination for this operation.
+ */
 	void add(ComponentWaitable* waitable)
 	{
 		if (waitable == nullptr || waitable->waitableSet() == this)
 			return;
 		remove(waitable);
+/**
+ * \brief Performs the push_back operation.
+ * \param waitable Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		waitables_.push_back(waitable);
+/**
+ * \brief Performs the setWaitableSet operation.
+ * \param this Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		waitable->setWaitableSet(this);
 	}
 
+/**
+ * \brief Performs the remove operation.
+ * \param waitable Input value or output destination for this operation.
+ */
 	void remove(ComponentWaitable* waitable)
 	{
 		if (waitable == nullptr)
 			return;
 		for (auto it = waitables_.begin(); it != waitables_.end(); ++it) {
 			if (*it == waitable) {
+/**
+ * \brief Performs the erase operation.
+ * \param it Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 				waitables_.erase(it);
+/**
+ * \brief Performs the setWaitableSet operation.
+ * \param nullptr Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 				waitable->setWaitableSet(nullptr);
 				return;
 			}
 		}
 	}
 
+/**
+ * \brief Performs the removeAll operation.
+ */
 	void removeAll()
 	{
 		for (ComponentWaitable* waitable : waitables_)
+/**
+ * \brief Performs the setWaitableSet operation.
+ * \param nullptr Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			waitable->setWaitableSet(nullptr);
+/**
+ * \brief Performs the clear operation.
+ * \return The value or status produced by this operation.
+ */
 		waitables_.clear();
 	}
 
+/**
+ * \brief Performs the empty operation.
+ * \return The value or status produced by this operation.
+ */
 	bool empty() const { return waitables_.empty(); }
+/**
+ * \brief Performs the size operation.
+ * \return The value or status produced by this operation.
+ */
 	std::size_t size() const { return waitables_.size(); }
+/**
+ * \brief Performs the waitables operation.
+ * \return The value or status produced by this operation.
+ */
 	const std::vector<ComponentWaitable*>& waitables() const { return waitables_; }
 private:
 	std::vector<ComponentWaitable*> waitables_;
@@ -289,17 +369,51 @@ class ComponentAsyncEndpoint : public ComponentWaitable {
 public:
 	ComponentAsyncEndpoint(ComponentWaitableKind kind, uint32_t handle,
 			ComponentEndDirection direction, ComponentAsyncChannel* channel)
+/**
+ * \brief Performs the ComponentWaitable operation.
+ * \param channel Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		: ComponentWaitable(kind), handle_(handle), direction_(direction),
 		  channel_(channel) {}
 
+/**
+ * \brief Performs the handle operation.
+ * \return The value or status produced by this operation.
+ */
 	uint32_t handle() const { return handle_; }
+/**
+ * \brief Performs the direction operation.
+ * \return The value or status produced by this operation.
+ */
 	ComponentEndDirection direction() const { return direction_; }
+/**
+ * \brief Performs the state operation.
+ * \return The value or status produced by this operation.
+ */
 	ComponentEndState state() const { return state_; }
+/**
+ * \brief Performs the setState operation.
+ * \param state Input value or output destination for this operation.
+ */
 	void setState(ComponentEndState state) { state_ = state; }
 
+/**
+ * \brief Performs the channel operation.
+ * \return The value or status produced by this operation.
+ */
 	ComponentAsyncChannel* channel() const { return channel_; }
+/**
+ * \brief Performs the setChannel operation.
+ * \param channel Input value or output destination for this operation.
+ */
 	void setChannel(ComponentAsyncChannel* channel) { channel_ = channel; }
 
+/**
+ * \brief Performs the takeEvent operation.
+ * \param event Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	bool takeEvent(ComponentAsyncEvent& event) override
 	{
 		if (!hasPendingEvent_)
@@ -310,7 +424,15 @@ public:
 		return true;
 	}
 
+/**
+ * \brief Performs the hasPendingEvent operation.
+ * \return The value or status produced by this operation.
+ */
 	bool hasPendingEvent() const { return hasPendingEvent_; }
+/**
+ * \brief Performs the setPending operation.
+ * \param event Input value or output destination for this operation.
+ */
 	void setPending(ComponentAsyncEvent event)
 	{
 		pendingEvent_ = event;
@@ -320,6 +442,13 @@ public:
 	//! A blocked async copy keeps the guest buffer here so the other end can
 	//! complete it when data arrives. The pointer is into linear memory, which
 	//! does not move while the memory is not grown.
+/**
+ * \brief Performs the setPendingBuffer operation.
+ * \param memory Input value or output destination for this operation.
+ * \param address Input value or output destination for this operation.
+ * \param count Input value or output destination for this operation.
+ * \param isRead Input value or output destination for this operation.
+ */
 	void setPendingBuffer(LinearMemory* memory, uint64_t address, uint64_t count,
 			bool isRead)
 	{
@@ -328,6 +457,9 @@ public:
 		pendingCount_ = count;
 		pendingIsRead_ = isRead;
 	}
+/**
+ * \brief Performs the clearPendingBuffer operation.
+ */
 	void clearPendingBuffer()
 	{
 		pendingMemory_ = nullptr;
@@ -335,10 +467,30 @@ public:
 		pendingCount_ = 0;
 		pendingIsRead_ = false;
 	}
+/**
+ * \brief Performs the hasPendingBuffer operation.
+ * \return The value or status produced by this operation.
+ */
 	bool hasPendingBuffer() const { return pendingMemory_ != nullptr; }
+/**
+ * \brief Performs the pendingMemory operation.
+ * \return The value or status produced by this operation.
+ */
 	LinearMemory* pendingMemory() const { return pendingMemory_; }
+/**
+ * \brief Performs the pendingAddress operation.
+ * \return The value or status produced by this operation.
+ */
 	uint64_t pendingAddress() const { return pendingAddress_; }
+/**
+ * \brief Performs the pendingCount operation.
+ * \return The value or status produced by this operation.
+ */
 	uint64_t pendingCount() const { return pendingCount_; }
+/**
+ * \brief Performs the pendingIsRead operation.
+ * \return The value or status produced by this operation.
+ */
 	bool pendingIsRead() const { return pendingIsRead_; }
 private:
 	uint32_t handle_ = 0;
@@ -358,23 +510,74 @@ private:
 /** \brief Shared element queue and lifecycle state behind paired endpoints. */
 class ComponentAsyncChannel {
 public:
+/**
+ * \brief Performs the ComponentAsyncChannel operation.
+ * \param elementSize Input value or output destination for this operation.
+ * \param isFuture Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	explicit ComponentAsyncChannel(uint32_t elementSize, bool isFuture)
+/**
+ * \brief Performs the elementSize_ operation.
+ * \param isFuture Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		: elementSize_(elementSize), isFuture_(isFuture) {}
 
+/**
+ * \brief Performs the elementSize operation.
+ * \return The value or status produced by this operation.
+ */
 	uint32_t elementSize() const { return elementSize_; }
+/**
+ * \brief Performs the isFuture operation.
+ * \return The value or status produced by this operation.
+ */
 	bool isFuture() const { return isFuture_; }
 
+/**
+ * \brief Performs the readableAlive operation.
+ * \return The value or status produced by this operation.
+ */
 	bool readableAlive() const { return readableAlive_; }
+/**
+ * \brief Performs the writableAlive operation.
+ * \return The value or status produced by this operation.
+ */
 	bool writableAlive() const { return writableAlive_; }
+/**
+ * \brief Performs the setReadableAlive operation.
+ * \param alive Input value or output destination for this operation.
+ */
 	void setReadableAlive(bool alive) { readableAlive_ = alive; }
+/**
+ * \brief Performs the setWritableAlive operation.
+ * \param alive Input value or output destination for this operation.
+ */
 	void setWritableAlive(bool alive) { writableAlive_ = alive; }
 
 	//! Raw byte queue. A stream transfers whole elements; a future transfers at
 	//! most one value and then stays `Done`.
+/**
+ * \brief Performs the queue operation.
+ * \return The value or status produced by this operation.
+ */
 	std::deque<std::vector<uint8_t>>& queue() { return queue_; }
+/**
+ * \brief Performs the queue operation.
+ * \return The value or status produced by this operation.
+ */
 	const std::deque<std::vector<uint8_t>>& queue() const { return queue_; }
 
+/**
+ * \brief Performs the futureWritten operation.
+ * \return The value or status produced by this operation.
+ */
 	bool futureWritten() const { return futureWritten_; }
+/**
+ * \brief Performs the setFutureWritten operation.
+ * \param written Input value or output destination for this operation.
+ */
 	void setFutureWritten(bool written) { futureWritten_ = written; }
 private:
 	uint32_t elementSize_ = 0;
@@ -400,40 +603,101 @@ public:
 	//! The answers of the `canon` thread built-ins. A single-agent executor
 	//! always reports 0 and 1; a multi-agent executor may report per-agent
 	//! values.
+/**
+ * \brief Performs the threadIndex operation.
+ * \return The value or status produced by this operation.
+ */
 	virtual uint32_t threadIndex() const = 0;
+/**
+ * \brief Performs the availableParallelism operation.
+ * \return The value or status produced by this operation.
+ */
 	virtual uint32_t availableParallelism() const = 0;
+/**
+ * \brief Performs the singleAgent operation.
+ * \return The value or status produced by this operation.
+ */
 	virtual bool singleAgent() const = 0;
 
 	//! Schedule `work` to run on the cooperative queue. It must not run before
 	//! `runUntilIdle()` is called.
+/**
+ * \brief Performs the push operation.
+ * \param work Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	virtual void push(std::function<void()> work) = 0;
+/**
+ * \brief Performs the runUntilIdle operation.
+ * \return The value or status produced by this operation.
+ */
 	virtual void runUntilIdle() = 0;
+/**
+ * \brief Performs the pending operation.
+ * \return The value or status produced by this operation.
+ */
 	virtual std::size_t pending() const = 0;
 };
 
 /** \brief Synchronous executor implementing the documented single-agent mode. */
 class SingleAgentExecutor final : public ComponentExecutor {
 public:
+/**
+ * \brief Performs the threadIndex operation.
+ * \return The value or status produced by this operation.
+ */
 	uint32_t threadIndex() const override { return 0; }
+/**
+ * \brief Performs the availableParallelism operation.
+ * \return The value or status produced by this operation.
+ */
 	uint32_t availableParallelism() const override { return 1; }
+/**
+ * \brief Performs the singleAgent operation.
+ * \return The value or status produced by this operation.
+ */
 	bool singleAgent() const override { return true; }
 
+/**
+ * \brief Performs the push operation.
+ * \param work Input value or output destination for this operation.
+ */
 	void push(std::function<void()> work) override
 	{
 		if (work)
+/**
+ * \brief Performs the push_back operation.
+ * \return The value or status produced by this operation.
+ */
 			queue_.push_back(std::move(work));
 	}
 
+/**
+ * \brief Performs the runUntilIdle operation.
+ */
 	void runUntilIdle() override
 	{
 		//! Take a snapshot so work that enqueues more work is still drained.
 		while (!queue_.empty()) {
+/**
+ * \brief Performs the void operation.
+ * \param work Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			std::function<void()> work = std::move(queue_.front());
+/**
+ * \brief Performs the pop_front operation.
+ * \return The value or status produced by this operation.
+ */
 			queue_.pop_front();
 			work();
 		}
 	}
 
+/**
+ * \brief Performs the pending operation.
+ * \return The value or status produced by this operation.
+ */
 	std::size_t pending() const override { return queue_.size(); }
 private:
 	std::deque<std::function<void()>> queue_;
@@ -514,43 +778,113 @@ public:
 		if (channel.isFuture()) {
 			if (channel.queue().empty()) {
 				if (async) {
+/**
+ * \brief Performs the setState operation.
+ * \param Copying Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 					end.setState(ComponentEndState::Copying);
+/**
+ * \brief Performs the setPendingBuffer operation.
+ * \param memory Input value or output destination for this operation.
+ * \param address Input value or output destination for this operation.
+ * \param true Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 					end.setPendingBuffer(&memory, address, 1, true);
 					return kBlocked;
 				}
+/**
+ * \brief Performs the runtime_error operation.
+ * \return The value or status produced by this operation.
+ */
 				throw std::runtime_error(
 						"component async: a synchronous future.read would block "
 						"(single-agent runtime)");
 			}
+/**
+ * \brief Performs the queue operation.
+ * \return The value or status produced by this operation.
+ */
 			const std::vector<uint8_t>& value = channel.queue().front();
 			if (!value.empty())
 				copyToMemory(memory, address, value.data(), value.size());
+/**
+ * \brief Performs the queue operation.
+ * \return The value or status produced by this operation.
+ */
 			channel.queue().pop_front();
+/**
+ * \brief Performs the setState operation.
+ * \param Done Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			end.setState(ComponentEndState::Done);
+/**
+ * \brief Performs the clearPendingBuffer operation.
+ * \return The value or status produced by this operation.
+ */
 			end.clearPendingBuffer();
 			return packCopyResult(ComponentCopyResult::Completed, 1);
 		}
 
+/**
+ * \brief Performs the elementSize operation.
+ * \return The value or status produced by this operation.
+ */
 		const std::size_t elementSize = channel.elementSize();
 		uint64_t copied = 0;
 		while (copied < count && !channel.queue().empty()) {
+/**
+ * \brief Performs the queue operation.
+ * \return The value or status produced by this operation.
+ */
 			const std::vector<uint8_t>& value = channel.queue().front();
 			if (elementSize != 0 && !value.empty())
 				copyToMemory(memory, address + copied * elementSize,
+/**
+ * \brief Performs the data operation.
+ * \return The value or status produced by this operation.
+ */
 						value.data(), value.size());
+/**
+ * \brief Performs the queue operation.
+ * \return The value or status produced by this operation.
+ */
 			channel.queue().pop_front();
 			++copied;
 		}
 		if (copied != 0 || count == 0) {
+/**
+ * \brief Performs the clearPendingBuffer operation.
+ * \return The value or status produced by this operation.
+ */
 			end.clearPendingBuffer();
 			return packCopyResult(ComponentCopyResult::Completed,
 					static_cast<uint32_t>(copied));
 		}
 		if (async) {
+/**
+ * \brief Performs the setState operation.
+ * \param Copying Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			end.setState(ComponentEndState::Copying);
+/**
+ * \brief Performs the setPendingBuffer operation.
+ * \param memory Input value or output destination for this operation.
+ * \param address Input value or output destination for this operation.
+ * \param count Input value or output destination for this operation.
+ * \param true Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			end.setPendingBuffer(&memory, address, count, true);
 			return kBlocked;
 		}
+/**
+ * \brief Performs the runtime_error operation.
+ * \return The value or status produced by this operation.
+ */
 		throw std::runtime_error(
 				"component async: a synchronous stream.read would block "
 				"(single-agent runtime)");
@@ -580,31 +914,76 @@ public:
 					end.setPendingBuffer(&memory, address, 1, false);
 					return kBlocked;
 				}
+/**
+ * \brief Performs the runtime_error operation.
+ * \return The value or status produced by this operation.
+ */
 				throw std::runtime_error(
 						"component async: future.write called twice");
 			}
+/**
+ * \brief Performs the value operation.
+ * \return The value or status produced by this operation.
+ */
 			std::vector<uint8_t> value(channel.elementSize());
 			if (!value.empty())
 				copyFromMemory(value.data(), memory, address, value.size());
+/**
+ * \brief Performs the queue operation.
+ * \return The value or status produced by this operation.
+ */
 			channel.queue().push_back(std::move(value));
+/**
+ * \brief Performs the setFutureWritten operation.
+ * \param true Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			channel.setFutureWritten(true);
+/**
+ * \brief Performs the setState operation.
+ * \param Done Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			end.setState(ComponentEndState::Done);
 			//! If the reader already blocked, complete it now.
 			if (ComponentAsyncEndpoint* peer = peerOf(handle);
+/**
+ * \brief Performs the hasPendingBuffer operation.
+ * \param peer Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 					peer != nullptr && peer->hasPendingBuffer() && peer->pendingIsRead())
 				completePendingRead(*peer);
 			return packCopyResult(ComponentCopyResult::Completed, 1);
 		}
 
+/**
+ * \brief Performs the elementSize operation.
+ * \return The value or status produced by this operation.
+ */
 		const std::size_t elementSize = channel.elementSize();
 		for (uint64_t i = 0; i < count; ++i) {
+/**
+ * \brief Performs the value operation.
+ * \param elementSize Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			std::vector<uint8_t> value(elementSize);
 			if (elementSize != 0)
 				copyFromMemory(value.data(), memory, address + i * elementSize,
 						elementSize);
+/**
+ * \brief Performs the queue operation.
+ * \return The value or status produced by this operation.
+ */
 			channel.queue().push_back(std::move(value));
 		}
 		if (ComponentAsyncEndpoint* peer = peerOf(handle);
+/**
+ * \brief Performs the hasPendingBuffer operation.
+ * \param peer Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 				peer != nullptr && peer->hasPendingBuffer() && peer->pendingIsRead())
 			completePendingRead(*peer);
 		return packCopyResult(ComponentCopyResult::Completed,
@@ -614,6 +993,11 @@ public:
 	//! `{stream,future}.cancel-{read,write}`. The single-agent runtime has no
 	//! buffer-owning background copy, so cancellation only succeeds for an end
 	//! whose copy was already blocked (state == Copying).
+/**
+ * \brief Performs the argument operation.
+ * \param handle Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	/** \brief Cancels a copy already blocked on an endpoint. \param handle Endpoint handle whose pending copy is cancelled. \param async Reserved async-mode argument (currently unused). \return Packed Cancelled result. \throws std::runtime_error if the handle is invalid or no copy is pending. */
 	uint32_t cancel(uint32_t handle, bool /*async*/)
 	{
@@ -651,24 +1035,71 @@ public:
 					"component async: dropping a future writable end before a "
 					"value was written");
 
+/**
+ * \brief Performs the channel operation.
+ * \return The value or status produced by this operation.
+ */
 		ComponentAsyncChannel* channel = end.channel();
+/**
+ * \brief Performs the clearPendingBuffer operation.
+ * \return The value or status produced by this operation.
+ */
 		end.clearPendingBuffer();
 		if (direction == ComponentEndDirection::Readable)
+/**
+ * \brief Performs the setReadableAlive operation.
+ * \param false Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			channel->setReadableAlive(false);
 		else
+/**
+ * \brief Performs the setWritableAlive operation.
+ * \param false Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			channel->setWritableAlive(false);
 
 		if (ComponentAsyncEndpoint* peer = peerOf(handle); peer != nullptr) {
+/**
+ * \brief Performs the setChannel operation.
+ * \param channel Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			peer->setChannel(channel);
+/**
+ * \brief Performs the setPending operation.
+ * \return The value or status produced by this operation.
+ */
 			peer->setPending(ComponentAsyncEvent{eventCode(peer->kind()),
+/**
+ * \brief Performs the handle operation.
+ * \param Dropped Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 					peer->handle(),
 					packCopyResult(ComponentCopyResult::Dropped, 0)});
 		}
 		if (end.waitableSet() != nullptr)
+/**
+ * \brief Performs the waitableSet operation.
+ * \param end Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			static_cast<ComponentWaitableSet*>(end.waitableSet())->remove(&end);
 		release_(handle);
+/**
+ * \brief Performs the erase operation.
+ * \param it Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		endpoints_.erase(it);
 		if (channels_.count(handle) != 0)
+/**
+ * \brief Performs the erase operation.
+ * \param handle Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			channels_.erase(handle);
 	}
 
@@ -696,12 +1127,30 @@ public:
 		ComponentAsyncChannel* source = readable.channel();
 		ComponentAsyncChannel* destination = writable.channel();
 		while (!source->queue().empty()) {
+/**
+ * \brief Performs the queue operation.
+ * \return The value or status produced by this operation.
+ */
 			destination->queue().push_back(std::move(source->queue().front()));
+/**
+ * \brief Performs the queue operation.
+ * \return The value or status produced by this operation.
+ */
 			source->queue().pop_front();
 		}
 		if (ComponentAsyncEndpoint* sourceWriter = peerOf(readableHandle);
 				sourceWriter != nullptr)
+/**
+ * \brief Performs the setChannel operation.
+ * \param destination Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			sourceWriter->setChannel(destination);
+/**
+ * \brief Performs the setChannel operation.
+ * \param source Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		writable.setChannel(source);
 	}
 
@@ -906,18 +1355,42 @@ private:
 		return ComponentEventCode::None;
 	}
 
+/**
+ * \brief Performs the endpoint operation.
+ * \param handle Input value or output destination for this operation.
+ * \param direction Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	ComponentAsyncEndpoint& endpoint(uint32_t handle,
 			ComponentEndDirection direction)
 	{
+/**
+ * \brief Performs the find operation.
+ * \param handle Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		auto it = endpoints_.find(handle);
 		if (it == endpoints_.end())
+/**
+ * \brief Performs the runtime_error operation.
+ * \return The value or status produced by this operation.
+ */
 			throw std::runtime_error("component async: invalid stream/future handle");
 		if (it->second->direction() != direction)
+/**
+ * \brief Performs the runtime_error operation.
+ * \return The value or status produced by this operation.
+ */
 			throw std::runtime_error(
 					"component async: wrong end of a stream/future");
 		return *it->second;
 	}
 
+/**
+ * \brief Performs the waitableFor operation.
+ * \param handle Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	ComponentWaitable* waitableFor(uint32_t handle)
 	{
 		if (ComponentAsyncEndpoint* end = endpointOrNull(handle); end != nullptr)
@@ -925,35 +1398,90 @@ private:
 		return nullptr;
 	}
 
+/**
+ * \brief Performs the requireIdle operation.
+ * \param end Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	static void requireIdle(ComponentAsyncEndpoint& end)
 	{
 		if (end.state() != ComponentEndState::Idle)
+/**
+ * \brief Performs the runtime_error operation.
+ * \return The value or status produced by this operation.
+ */
 			throw std::runtime_error(
 					"component async: stream/future end is not idle");
 	}
 
 	//! A previously blocked read: move up to its buffer's capacity from the
 	//! channel into the guest memory and publish a progress event.
+/**
+ * \brief Performs the completePendingRead operation.
+ * \param reader Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	static void completePendingRead(ComponentAsyncEndpoint& reader)
 	{
+/**
+ * \brief Performs the channel operation.
+ * \return The value or status produced by this operation.
+ */
 		ComponentAsyncChannel& channel = *reader.channel();
+/**
+ * \brief Performs the pendingMemory operation.
+ * \return The value or status produced by this operation.
+ */
 		LinearMemory* memory = reader.pendingMemory();
 		if (memory == nullptr)
 			return;
+/**
+ * \brief Performs the pendingAddress operation.
+ * \return The value or status produced by this operation.
+ */
 		const uint64_t address = reader.pendingAddress();
+/**
+ * \brief Performs the pendingCount operation.
+ * \return The value or status produced by this operation.
+ */
 		const uint64_t count = reader.pendingCount();
+/**
+ * \brief Performs the elementSize operation.
+ * \return The value or status produced by this operation.
+ */
 		const std::size_t elementSize = channel.elementSize();
 
 		uint64_t copied = 0;
 		while (copied < count && !channel.queue().empty()) {
+/**
+ * \brief Performs the queue operation.
+ * \return The value or status produced by this operation.
+ */
 			const std::vector<uint8_t>& value = channel.queue().front();
 			if (elementSize != 0 && !value.empty())
 				copyToMemory(*memory, address + copied * elementSize, value.data(),
+/**
+ * \brief Performs the size operation.
+ * \return The value or status produced by this operation.
+ */
 						value.size());
+/**
+ * \brief Performs the queue operation.
+ * \return The value or status produced by this operation.
+ */
 			channel.queue().pop_front();
 			++copied;
 		}
+/**
+ * \brief Performs the clearPendingBuffer operation.
+ * \return The value or status produced by this operation.
+ */
 		reader.clearPendingBuffer();
+/**
+ * \brief Performs the setState operation.
+ * \param Idle Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		reader.setState(channel.isFuture() ? ComponentEndState::Done
 				: ComponentEndState::Idle);
 		reader.setPending(ComponentAsyncEvent{
@@ -965,45 +1493,134 @@ private:
 	//! A previously blocked write (a future written twice): once the first value
 	//! has been consumed, move the stored value into the channel and publish an
 	//! event for the writer.
+/**
+ * \brief Performs the completePendingWrite operation.
+ * \param writer Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	static void completePendingWrite(ComponentAsyncEndpoint& writer)
 	{
+/**
+ * \brief Performs the channel operation.
+ * \return The value or status produced by this operation.
+ */
 		ComponentAsyncChannel& channel = *writer.channel();
+/**
+ * \brief Performs the pendingMemory operation.
+ * \return The value or status produced by this operation.
+ */
 		LinearMemory* memory = writer.pendingMemory();
 		if (memory == nullptr)
 			return;
+/**
+ * \brief Performs the pendingAddress operation.
+ * \return The value or status produced by this operation.
+ */
 		const uint64_t address = writer.pendingAddress();
+/**
+ * \brief Performs the elementSize operation.
+ * \return The value or status produced by this operation.
+ */
 		const std::size_t elementSize = channel.elementSize();
+/**
+ * \brief Performs the value operation.
+ * \param elementSize Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		std::vector<uint8_t> value(elementSize);
 		if (elementSize != 0)
 			copyFromMemory(value.data(), *memory, address, elementSize);
+/**
+ * \brief Performs the queue operation.
+ * \return The value or status produced by this operation.
+ */
 		channel.queue().push_back(std::move(value));
+/**
+ * \brief Performs the clearPendingBuffer operation.
+ * \return The value or status produced by this operation.
+ */
 		writer.clearPendingBuffer();
+/**
+ * \brief Performs the setState operation.
+ * \param Done Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		writer.setState(ComponentEndState::Done);
+/**
+ * \brief Performs the setPending operation.
+ * \return The value or status produced by this operation.
+ */
 		writer.setPending(ComponentAsyncEvent{eventCode(writer.kind()),
+/**
+ * \brief Performs the handle operation.
+ * \param Completed Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 				writer.handle(),
 				packCopyResult(ComponentCopyResult::Completed, 1)});
 	}
 
 
 
+/**
+ * \brief Performs the checkBuffer operation.
+ * \param memory Input value or output destination for this operation.
+ * \param address Input value or output destination for this operation.
+ * \param size Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	static void checkBuffer(LinearMemory& memory, uint64_t address, uint64_t size)
 	{
 		if (address > memory.memorySize || size > memory.memorySize - address)
+/**
+ * \brief Performs the runtime_error operation.
+ * \return The value or status produced by this operation.
+ */
 			throw std::runtime_error(
 					"component async: stream/future buffer is out of bounds");
 	}
 
+/**
+ * \brief Performs the copyToMemory operation.
+ * \param memory Input value or output destination for this operation.
+ * \param address Input value or output destination for this operation.
+ * \param data Input value or output destination for this operation.
+ * \param size Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	static void copyToMemory(LinearMemory& memory, uint64_t address,
 			const uint8_t* data, std::size_t size)
 	{
 		if (size != 0)
+/**
+ * \brief Performs the memcpy operation.
+ * \param address Input value or output destination for this operation.
+ * \param data Input value or output destination for this operation.
+ * \param size Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			std::memcpy(memory.memoryBase + address, data, size);
 	}
 
+/**
+ * \brief Performs the copyFromMemory operation.
+ * \param out Input value or output destination for this operation.
+ * \param memory Input value or output destination for this operation.
+ * \param address Input value or output destination for this operation.
+ * \param size Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	static void copyFromMemory(uint8_t* out, LinearMemory& memory,
 			uint64_t address, std::size_t size)
 	{
 		if (size != 0)
+/**
+ * \brief Performs the memcpy operation.
+ * \param out Input value or output destination for this operation.
+ * \param address Input value or output destination for this operation.
+ * \param size Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 			std::memcpy(out, memory.memoryBase + address, size);
 	}
 
