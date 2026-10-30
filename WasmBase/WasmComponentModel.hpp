@@ -470,10 +470,30 @@ struct ComponentDecl {
 			std::unique_ptr<CoreTypeDef>, std::unique_ptr<ComponentTypeDef>,
 			std::unique_ptr<Alias>, std::unique_ptr<ExportDecl>> payload;
 
+/**
+ * \brief Performs the import operation.
+ * \return The value or status produced by this operation.
+ */
 	const ImportDecl& import() const { return *std::get<std::unique_ptr<ImportDecl>>(payload); }
+/**
+ * \brief Performs the coreType operation.
+ * \return The value or status produced by this operation.
+ */
 	const CoreTypeDef& coreType() const { return *std::get<std::unique_ptr<CoreTypeDef>>(payload); }
+/**
+ * \brief Performs the type operation.
+ * \return The value or status produced by this operation.
+ */
 	const ComponentTypeDef& type() const { return *std::get<std::unique_ptr<ComponentTypeDef>>(payload); }
+/**
+ * \brief Performs the alias operation.
+ * \return The value or status produced by this operation.
+ */
 	const Alias& alias() const { return *std::get<std::unique_ptr<Alias>>(payload); }
+/**
+ * \brief Performs the exportDecl operation.
+ * \return The value or status produced by this operation.
+ */
 	const ExportDecl& exportDecl() const { return *std::get<std::unique_ptr<ExportDecl>>(payload); }
 };
 
@@ -485,9 +505,25 @@ struct InstanceDecl {
 			std::unique_ptr<ComponentTypeDef>, std::unique_ptr<Alias>,
 			std::unique_ptr<ExportDecl>> payload;
 
+/**
+ * \brief Performs the coreType operation.
+ * \return The value or status produced by this operation.
+ */
 	const CoreTypeDef& coreType() const { return *std::get<std::unique_ptr<CoreTypeDef>>(payload); }
+/**
+ * \brief Performs the type operation.
+ * \return The value or status produced by this operation.
+ */
 	const ComponentTypeDef& type() const { return *std::get<std::unique_ptr<ComponentTypeDef>>(payload); }
+/**
+ * \brief Performs the alias operation.
+ * \return The value or status produced by this operation.
+ */
 	const Alias& alias() const { return *std::get<std::unique_ptr<Alias>>(payload); }
+/**
+ * \brief Performs the exportDecl operation.
+ * \return The value or status produced by this operation.
+ */
 	const ExportDecl& exportDecl() const { return *std::get<std::unique_ptr<ExportDecl>>(payload); }
 };
 
@@ -504,14 +540,26 @@ struct ComponentTypeDef {
 	std::variant<std::monostate, std::vector<ComponentDecl>,
 			std::vector<InstanceDecl>, ResourceType> declarations;
 
+/**
+ * \brief Performs the componentDecls operation.
+ * \return The value or status produced by this operation.
+ */
 	const std::vector<ComponentDecl>& componentDecls() const
 	{
 		return std::get<std::vector<ComponentDecl>>(declarations);
 	}
+/**
+ * \brief Performs the instanceDecls operation.
+ * \return The value or status produced by this operation.
+ */
 	const std::vector<InstanceDecl>& instanceDecls() const
 	{
 		return std::get<std::vector<InstanceDecl>>(declarations);
 	}
+/**
+ * \brief Performs the resource operation.
+ * \return The value or status produced by this operation.
+ */
 	const ResourceType& resource() const
 	{
 		return std::get<ResourceType>(declarations);
