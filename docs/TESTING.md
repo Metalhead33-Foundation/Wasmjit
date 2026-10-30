@@ -1010,16 +1010,21 @@ doxygen Doxyfile   # expected result: silence; then browse build/doxygen/html/
 span ending in `*`, a period inside a span in a brief, a bare `#`, a documented
 member named `module`) and how each is written instead.
 
-§3.1 of the same note is enforced by the renderer rather than by the test:
-function documentation uses `\brief`, `\param`, `\return` and `\tparam`, with one
-`\param` per declared parameter (exact spelling), no `\return` on a `void`
-function, constructor or destructor, and a `\tparam` for every template
-parameter of a function, class, alias or variable template. The
-`Doxyfile` sets `WARN_NO_PARAMDOC = YES`, so a documented function that omits a
-parameter makes `doxygen Doxyfile` warn:
+§3.1 of the same note is enforced by the *strict* renderer pass rather than by
+the test: function documentation uses `\brief`, `\param`, `\return` and
+`\tparam`, with one `\param` per declared parameter (exact spelling), no
+`\return` on a `void` function, constructor or destructor, and a `\tparam` for
+every template parameter of a function, class, alias or variable template. The
+`Doxyfile` sets `WARN_NO_PARAMDOC = YES`, but the default build keeps
+`EXTRACT_ALL = YES`, which switches that warning off — flip both for the strict
+pass:
 
 ```bash
-doxygen Doxyfile   # silence is the pass condition; \param/-tparam gaps are warnings
+# the pass that measures \param/\tparam completeness and missing blocks
+sed -e 's/^EXTRACT_ALL .*/EXTRACT_ALL = NO/' \
+    -e 's/^WARN_IF_UNDOCUMENTED .*/WARN_IF_UNDOCUMENTED = YES/' \
+    -e 's|^OUTPUT_DIRECTORY .*|OUTPUT_DIRECTORY = build/doxygen-strict|' \
+    Doxyfile | doxygen -
 ```
 
 ## Runtime, backend-ABI and plugin tests

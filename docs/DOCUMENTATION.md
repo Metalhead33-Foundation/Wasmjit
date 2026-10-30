@@ -117,11 +117,14 @@ generated or copy-pasted block tends to do:
 - a doc block inserted **inside** a macro body or a multi-line expression, which
   documents a token-paste helper instead of the declaration it was meant for.
 
-`WARN_NO_PARAMDOC = YES` in the [`Doxyfile`](../Doxyfile) is what enforces the
-`\param`/`\tparam` half: a documented function that omits one of its parameters
-makes `doxygen Doxyfile` warn, and §6 requires it to be silent. `\return` on a
-void function and a `\param` that names no parameter are reported by
-`WARN_IF_DOC_ERROR`, which is on for the same reason.
+`WARN_NO_PARAMDOC = YES` in the [`Doxyfile`](../Doxyfile) states the intent, but it
+is **not** what a default run measures: the reference is built with
+`EXTRACT_ALL = YES` (so the HTML shows every declaration), and Doxygen switches
+the undocumented-parameter warnings off in that mode. The check that actually
+enforces §3.1 is the *strict pass* in §6, which flips `EXTRACT_ALL` off and
+`WARN_IF_UNDOCUMENTED` on. `\return` on a void function and a `\param` that names
+no parameter are reported by `WARN_IF_DOC_ERROR` in both modes, so those two are
+caught by the ordinary build.
 
 A function with no doc comment at all is a *different* gap: it is not a
 renderer error, and the count is tracked in §8.
@@ -169,7 +172,7 @@ comment can go.
 
 ## 6. How to check
 
-Three commands, all cheap:
+Four commands, all cheap:
 
 ```bash
 # 1. Render the reference. Any output on stderr is a doc bug: the tree is clean.
@@ -179,12 +182,22 @@ $BROWSER build/doxygen/html/index.html
 # 2. Enforce the shape and the file blocks (part of the default suite).
 ./Test/WasmJit '[headerdoc]'
 
-# 3. Read a header the way a newcomer will: the top of the file, then the
+# 3. The strict pass: measures the two things the default render cannot, because
+#    EXTRACT_ALL switches them off — a declaration with no block at all, and a
+#    documented function whose parameters are not all documented (§3.1).
+sed -e 's/^EXTRACT_ALL .*/EXTRACT_ALL = NO/' \
+    -e 's/^WARN_IF_UNDOCUMENTED .*/WARN_IF_UNDOCUMENTED = YES/' \
+    -e 's|^OUTPUT_DIRECTORY .*|OUTPUT_DIRECTORY = build/doxygen-strict|' \
+    Doxyfile | doxygen -
+
+# 4. Read a header the way a newcomer will: the top of the file, then the
 #    brief of its first declaration.
 ```
 
-The output goes to `build/doxygen/` — never into the source tree, like every
-other artefact (`AGENTS.md`).
+The output goes to `build/doxygen/` (and `build/doxygen-strict/` for the strict
+pass) — never into the source tree, like every other artefact (`AGENTS.md`).
+The strict pass is a *work list*, not a gate: today it reports the gap counted in
+§8 plus the parameter gaps that come with it.
 
 ## 7. Why this is necessary
 
@@ -212,12 +225,12 @@ other artefact (`AGENTS.md`).
 
 - **Not every declaration is documented *yet*.** The rule above is about the
   shape and the completeness of a block that exists; a declaration with no block
-  at all remains a gap. Measured on 2026-10-30 with `EXTRACT_ALL=NO` +
-  `WARN_IF_UNDOCUMENTED=YES`: **896 declarations** (458 functions, 365 fields and
-  constants, 54 macros, 7 enums, 4 typedefs, 7 compounds). That is down from
-  **4,591** before the sweep, and it is a list to work through, not a decision to
-  stop: a new or edited declaration is expected to arrive documented, and the
-  count must not grow.
+  at all remains a gap. Measured on 2026-10-30 with the strict pass (§6):
+  **747 declarations** (333 functions, 365 fields and constants, 30 macros,
+  7 enums, 4 typedefs, 8 compounds). That is down from **4,591** before the
+  sweep (and from 896 before `WasmBase/wasm_simd_scalar.hpp` was finished), and
+  it is a list to work through, not a decision to stop: a new or edited
+  declaration is expected to arrive documented, and the count must not grow.
 - **A doc block must say something.** A block of the form
   "`\brief Performs the <name> operation. \param x Input value or output
   destination for this operation.`" is *worse than no block*: it renders, it is
