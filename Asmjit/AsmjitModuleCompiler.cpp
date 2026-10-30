@@ -423,10 +423,10 @@ asmjit::FuncSignature stackCheckSignature()
 	return signature;
 }
 
-class I32FunctionEmitter final : public WASM::OpcodeDispatcher
+class IntegerFunctionEmitter final : public WASM::OpcodeDispatcher
 {
 public:
-	I32FunctionEmitter(asmjit::x86::Compiler& compiler, asmjit::FuncNode& function,
+	IntegerFunctionEmitter(asmjit::x86::Compiler& compiler, asmjit::FuncNode& function,
 			const WASM::FuncType& type, const WASM::FunctionBody& body,
 			const WASM::Module& module, WASM::ModuleInstanceInternals& internals,
 			const std::vector<asmjit::FuncNode*>& functions,
@@ -1939,7 +1939,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 				throw std::runtime_error("AsmJit failed to begin an internal function body");
 			const uint32_t typeIndex = module.internalFunctionTypeIndices[i];
 			const WASM::FuncType type = module.funcTypeAt(typeIndex);
-			I32FunctionEmitter emitter(compiler, *function, type, module.functionBodies[i],
+			IntegerFunctionEmitter emitter(compiler, *function, type, module.functionBodies[i],
 					module, internals, functions, signatures);
 			emitter.compile(module.functionBodies[i], type);
 			checkError(compiler.end_func(), "AsmJit function finalisation failed");
