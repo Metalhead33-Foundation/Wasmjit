@@ -446,7 +446,7 @@ public:
 		for (const auto& local : stack.allLocals)
 			requireInteger(local, "locals");
 		resultType = type.results.empty()
-				? WASM::ValueTypeCode::None : type.results.front().val.opcode;
+				? WASM::ValueTypeCode::Void : type.results.front().val.opcode;
 
 		locals.reserve(stack.allLocals.size());
 		vmContext = compiler.new_gp_ptr("vmContext");
@@ -1775,7 +1775,7 @@ private:
 		auto count = values.back(); values.pop_back();
 		auto value = values.back(); values.pop_back();
 		auto maskedCount = compiler.new_gp32("i64ShiftCount");
-		checkError(compiler.mov(maskedCount, count), "AsmJit i64 shift-count copy failed");
+		checkError(compiler.mov(maskedCount, count.r32()), "AsmJit i64 shift-count copy failed");
 		checkError(compiler.and_(maskedCount, 63), "AsmJit i64 shift-count mask failed");
 		checkError(compiler.mov(asmjit::x86::ecx, maskedCount), "AsmJit i64 shift-count setup failed");
 		switch (operation) {
