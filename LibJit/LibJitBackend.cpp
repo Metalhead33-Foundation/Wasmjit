@@ -17,7 +17,7 @@ namespace {
 WASM::BackendInstance makeBackend()
 {
 	auto context = std::make_shared<LibJIT::Context>();
-	auto compiler = std::make_shared<LibJIT::ModuleCompiler>(context->rawContext());
+	auto compiler = std::make_shared<LibJIT::ModuleCompiler>(context->rawContext(), context.get());
 	return WASM::BackendInstance{ std::move(compiler), std::move(context) };
 }
 

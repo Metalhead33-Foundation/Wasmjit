@@ -77,6 +77,7 @@ All under `build/lf2/poc/modules/`; hashes are SHA-256.
 | `t20_dart.wasm` | `T20` | 15,768 | 10 | 1 | `b57d7da6c748f952b08c69ab7fccc9b666ecedc24cad148bc51a8ae65cfad3ff` (refused, `F3`) |
 | `gc_bottom_subtype.wasm` | `F3` | 118 | 0 | 1 | `9303e6b01d3dbb22b9f9313b0c09eb4345340693d445a6e61a41d52e55fb81cf` |
 | `backend_ops.wasm` | control | 175 | 0 | 3 | `47b28619ed8d1f5ea4d94a3283fc16dec9a823ae142e1aafd088cad7c26219e7` |
+| `t86_moonbit.wasm` | `T86` | 359 | 1 | 1 | `0dd87c96e040d04bdd1c245ebe60028490a1fc948130d7f78f14b2ad85976114` |
 
 `backend_ops.wasm` is the negative control for `F1`: it exercises `call_indirect`,
 `memory.copy` and `memory.fill` in isolation and **all three run**, so the
@@ -227,14 +228,39 @@ rewrites `argv[0]`, so compilers and `qmake` had to be started with `exec -a`
 | The 83 rows listed in [`LF2_L6_L12.md`](LF2_L6_L12.md) | no toolchain was installed for them; their `LF-1` dispositions stand. |
 | Any product change | none was made: no `WasmBase/`, backend, header or build file changed, and `git status` shows only `docs/` (plus the ignored `build/` workspace). |
 
-## 8. References
+## 8. After the fixes: re-run evidence
+
+The three deep notes end in code, so this log records what the engine does
+**after** the fixes and what a re-run sees. Nothing here changes the `LF-1`
+screen; it is the `LF-2` set's own delta.
+
+| Artefact | What it shows |
+|---|---|
+| `build/lf2/poc/f1_libjit_probe.c` | libjit compiles the failing CFG at `opt_level=0` (`compile=1`) and fails at level 1 (`compile=0`); a retry after failure segfaults |
+| `build/lf2/poc/modules/f1_reduced.wat` | the exact `_start` shape of an `emcc -O2` module, reduced |
+| `Test/wasm_wat/bottom_subtype.wat` | the `F3` repro, now a permanent fixture |
+| `t01_emcc.wasm` (unchanged hash) | instantiates and runs at `-O2`; `answer`/`add`/`via_host` = 42, `_start` → `wasi_exit=0` |
+| `t04_empp_reactor.wasm` (unchanged hash) | `-O2` loads; ctors and `std::vector` work |
+| `t53_kotlin_wasi.wasm` (unchanged hash) | loads and validates; start-up fails at `F3d` (`cast failure in function 305`) |
+| `t20_dart.wasm` (unchanged hash) | gets past the type section; fails on legacy EH (`F2`), and with `WASMJIT_LEGACY_EH=1` on `canonical type reference is not declared by this module` |
+| `WASMJIT_LIBJIT_OPT=1` | reproduces `F1` as a reported failure (`backend compile failure … result 0 for function 7`), with no `SIGABRT`/`SIGSEGV` |
+
+The module hashes are unchanged: the fixes are in the engine, not in the
+toolchains, so a re-run compares like with like.
+
+## 9. References
 
 - [`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §8.4/§8.5 — the
   evidence a verdict must carry, and the verdict rules.
 - [`LF2_INDEX.md`](LF2_INDEX.md) — the verdict table these rows feed.
+- [`LF2_DEEP_F1_BACKEND.md`](LF2_DEEP_F1_BACKEND.md),
+  [`LF2_DEEP_F2_EH.md`](LF2_DEEP_F2_EH.md),
+  [`LF2_DEEP_F3_GC.md`](LF2_DEEP_F3_GC.md) — the deep studies.
 - [`ABI.md`](../ABI.md), [`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) — the
   ABI and the recipe the runner implements.
 - [`proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) §4.6 —
   the `LE-1`…`LE-9` rows `F2` lands in.
+- [`DIAGNOSTICS.md`](../DIAGNOSTICS.md) §5.1/§5.3 — the new id and the host
+  knobs.
 - [`API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §4.1 — the classes `F1`–`F3`
   are assigned.

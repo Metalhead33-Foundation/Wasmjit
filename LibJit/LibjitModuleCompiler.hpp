@@ -1,6 +1,7 @@
 #ifndef LIBJITMODULECOMPILER_HPP
 #define LIBJITMODULECOMPILER_HPP
 #include "../WasmBase/WasmModuleInstance.hpp"
+#include "LibJitContext.hpp"
 #include "LibJitTypeTranslation.hpp"
 
 /*!
@@ -23,6 +24,8 @@ class ModuleCompiler : public WASM::ModuleInstantiator
 {
 private:
 	jit_context_t context; //!< The LibJIT context the module is compiled in.
+	//! Owner of `context`; told to leak it when a compile fails (LF-2 `F1`).
+	LibJIT::Context* contextOwner = nullptr;
 	LibJitTypeTranslator typeTranslator; //!< The Wasm-to-LibJIT type translator.
 	/*!
 	 * \brief Compiles one defined WebAssembly function.
@@ -46,11 +49,24 @@ public:
 	/*!
 	 * \brief Creates a module compiler using an existing LibJIT context.
 	 * \param context Backend context in which generated functions are created.
+	 * \param owner Context object that owns `context`, or null when the caller
+	 *        does not want it leaked on a compile failure. A failed compile
+	 *        poisons libjit's builder, so the owning context must skip its
+	 *        destructor (docs/languages/LF2_DEEP_F1_BACKEND.md §3.5).
 	 *
 	 * The caller retains responsibility for keeping the context alive for the
 	 * lifetime of this compiler and all functions it produces.
 	 */
-	ModuleCompiler(jit_context_t context);
+	ModuleCompiler(jit_context_t context, Context* owner = nullptr);
+
+	/*!
+	 * \brief Reports a backend compile failure and throws.
+	 * \param stage Short stage name ("jit_function_compile", …).
+	 * \param functionIndex Module-local function index, or `kNoDiagnosticIndex`.
+	 * \param result The libjit result code.
+	 * \throws std::runtime_error Always; the module cannot be instantiated.
+	 */
+	[[noreturn]] void failCompilation(const char* stage, std::uint32_t functionIndex, int result);
 
 	//! Hooks implementing the generic ModuleInstantiator contract.
 protected:

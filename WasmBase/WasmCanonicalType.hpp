@@ -43,11 +43,23 @@ struct CanonHeapType {
 	TypeId           id{}; //!< when Global
 	uint32_t         memberIndex = 0; //!< when Rec (per-group index)
 	bool             isExact = false; //!< Custom Descriptors: `exact x`
-	//! Compares every component of the heap type.
+	//! Compares the components the active `kind` selects, plus `isExact`.
+	//!
+	//! The dormant payload is deliberately ignored: a `Global` reference is a
+	//! process-wide `TypeId` and carries no per-group index, so a stale
+	//! `memberIndex` left over from resolution must not make two identical
+	//! references compare unequal — that made a mutable struct field fail its
+	//! invariance check in the Kotlin/Wasm module (LF-2 `F3b`,
+	//! docs/TYPE_IDENTITY.md §6.5).
 	bool operator==(const CanonHeapType& o) const {
-		return kind == o.kind && abstract == o.abstract &&
-			   id == o.id && memberIndex == o.memberIndex &&
-			   isExact == o.isExact;
+		if (kind != o.kind || isExact != o.isExact)
+			return false;
+		switch (kind) {
+		case Kind::Abstract: return abstract == o.abstract;
+		case Kind::Global:   return id == o.id;
+		case Kind::Rec:      return memberIndex == o.memberIndex;
+		}
+		return false;
 	}
 };
 

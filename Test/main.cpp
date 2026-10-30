@@ -1636,6 +1636,74 @@ TEST_CASE("declared-subtype validation rejects malformed sub annotations")
 	REQUIRE(ok.typeCount() > 0);
 }
 
+TEST_CASE("declared-subtype validation accepts bottom-type narrowing")
+{
+	// `nullref` is `(ref null none)`, and `none` is the bottom of the internal
+	// hierarchy, so narrowing a `(ref null $struct)` field to `nullref` is a
+	// legal covariant field (LF-2 `F3`). Before the fix the loader refused it.
+	WASM::Module module = loadTestModule("bottom_subtype");
+	REQUIRE(module.typeCount() >= 3);
+
+	WASM::TypeRegistry& registry = testStore().types();
+	const WASM::TypeId structId = module.typeId(WASM::LocalTypeIdx{0});
+	const WASM::TypeId derivedId = module.typeId(WASM::LocalTypeIdx{2});
+	REQUIRE(structId != derivedId);
+	const WASM::TypeId funcId = loadTestModule("rec_groups").typeId(WASM::LocalTypeIdx{2});
+
+	const auto abstractHeap = [](WASM::AbstractHeapType type) {
+		WASM::CanonHeapType heap;
+		heap.kind = WASM::CanonHeapType::Kind::Abstract;
+		heap.abstract = type;
+		return heap;
+	};
+	const auto concreteHeap = [](WASM::TypeId id) {
+		WASM::CanonHeapType heap;
+		heap.kind = WASM::CanonHeapType::Kind::Global;
+		heap.id = id;
+		return heap;
+	};
+
+	const WASM::CanonHeapType none = abstractHeap(WASM::AbstractHeapType::None);
+	const WASM::CanonHeapType noFunc = abstractHeap(WASM::AbstractHeapType::NoFunc);
+	const WASM::CanonHeapType any = abstractHeap(WASM::AbstractHeapType::Any);
+
+	// Bottom types match a concrete type of their hierarchy ...
+	REQUIRE(registry.matchesHeap(none, concreteHeap(structId)));
+	REQUIRE(registry.matchesHeap(noFunc, concreteHeap(funcId)));
+	// ... but not one of another hierarchy, and never in the other direction.
+	REQUIRE_FALSE(registry.matchesHeap(noFunc, concreteHeap(structId)));
+	REQUIRE_FALSE(registry.matchesHeap(none, concreteHeap(funcId)));
+	REQUIRE_FALSE(registry.matchesHeap(any, concreteHeap(structId)));
+}
+
+TEST_CASE("heap-type equality ignores the dormant payload")
+{
+	// A resolved `Global` reference carries no per-group index; a stale
+	// `memberIndex` must not make two identical references unequal (LF-2 `F3b`).
+	WASM::CanonHeapType first;
+	first.kind = WASM::CanonHeapType::Kind::Global;
+	first.id = WASM::TypeId{29};
+	first.memberIndex = 0;
+
+	WASM::CanonHeapType second = first;
+	second.memberIndex = 2;
+
+	REQUIRE(first == second);
+
+	// The active payload still decides: a different TypeId is a different type.
+	second.id = WASM::TypeId{30};
+	REQUIRE_FALSE(first == second);
+
+	// `Rec` references compare by their in-group index.
+	WASM::CanonHeapType recA;
+	recA.kind = WASM::CanonHeapType::Kind::Rec;
+	recA.memberIndex = 1;
+	WASM::CanonHeapType recB = recA;
+	REQUIRE(recA == recB);
+	recB.memberIndex = 2;
+	REQUIRE_FALSE(recA == recB);
+}
+
 TEST_CASE("function import type matching across modules")
 {
 	WASM::RegistryImportResolver registry;

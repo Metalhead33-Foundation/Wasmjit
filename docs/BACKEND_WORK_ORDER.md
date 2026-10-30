@@ -48,6 +48,13 @@ The four rules that are easy to get wrong:
 4. **Nothing throws on a module-caused failure.** Report through the trap slot
    (§4.4) and return; the core decides. A C++ exception below generated code
    cannot unwind through it.
+5. **A compile failure is a diagnostic, never an `abort`.** Lowering or code
+   generation runs *before* any Wasm frame exists, so it may throw — but the
+   module is untrusted input, and `std::abort()`, a bare `assert`, or a silent
+   null entry point lets it take the host down. Emit
+   `WASM.COMPILE.FUNCTION_FAILED` with the module-local function index, then
+   throw; if the backend's library cannot be torn down after the failure, leak
+   it rather than crash ([`languages/LF2_DEEP_F1_BACKEND.md`](languages/LF2_DEEP_F1_BACKEND.md) §5).
 
 ## 3. The session seam
 

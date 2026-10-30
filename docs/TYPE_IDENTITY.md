@@ -311,6 +311,24 @@ module *claim* a subtype relation it does not satisfy, which can lead to type
 confusion in compiled code. **Cross-module matching and runtime cast migration
 must not be enabled until declared-subtype validation is in place.**
 
+Two rules in that comparator are worth stating explicitly, because both were
+wrong in the first implementation and a real toolchain module hit each
+([`languages/LF2_DEEP_F3_GC.md`](languages/LF2_DEEP_F3_GC.md)):
+
+- **Bottom heap types are subtypes of concrete types.** `none` is the bottom of
+  the internal hierarchy, so `(ref null none)` (`nullref`) is a subtype of
+  `(ref null $struct)` and of `(ref null $array)`; `nofunc` is a subtype of any
+  concrete function type, `nocont` of any concrete continuation type. Those are
+  the only legal abstract → concrete edges; a *non-bottom* abstract type (`any`,
+  `eq`, `struct`, `array`, `func`, …) is a supertype of concrete types and must
+  not match one. `noextern`/`noexn` have no concrete supertype.
+- **A resolved heap type compares only its active payload.** `CanonHeapType`
+  carries `abstract`, `id` and `memberIndex`, and exactly one applies for a given
+  `kind`. Equality must therefore compare the active member (plus `isExact`) and
+  ignore the dormant ones: a stale `memberIndex` on a `Global` reference is not a
+  different type, and treating it as one makes a *mutable* field fail its
+  invariance check even when both sides name the same `TypeId`.
+
 ### 6.6 Threading and lifetime
 
 - **Single-threaded instantiation.** Instantiation and all initialization work,

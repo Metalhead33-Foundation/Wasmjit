@@ -314,6 +314,7 @@ mappings (a unit test asserts uniqueness). The shipped leaves are:
 | `WASM.DECODE.UNSUPPORTED` | load boundary, other decode refusal | Error | — |
 | `WASM.DECODE.UNSUPPORTED_VALUE_TYPE` | unmodelled value type at load | Error | — |
 | `WASM.BACKEND.PLUGIN` | backend plugin lifecycle: every load refusal (missing file, missing export, descriptor/core ABI, build-kind mismatch, an embedded core, a failing `create`) is an **Error**; a successful load is a **Note** carrying the path and build kind | Error / Note | `[plugin]` |
+| `WASM.COMPILE.FUNCTION_FAILED` | a backend cannot lower or code-generate a function; emitted before the backend throws, carries the module-local function index and the backend's own reason. Never an `abort` ([`languages/LF2_DEEP_F1_BACKEND.md`](languages/LF2_DEEP_F1_BACKEND.md)) | Error | `[runtime]` (instantiate path) |
 | `WASM.VALIDATE.<FAMILY>` (30 family leaves, plus the 11 explicit index/type leaves below) | `validationRuleId()` classification; §4.2 | Error | `diagnostics: validator messages classify into stable rule families`, `diagnostics: a validation failure carries a stable id and a location` |
 | `WASM.VALIDATE.RULE` | fallback: no rule family matched | Error | same cases (the fallback assertion) |
 | `WASM.VALIDATE.UNKNOWN_TYPE` | type index rule | Error | — |
@@ -623,6 +624,15 @@ is a quiet run (no pretty lines and no JSON/text dump), while `text`/`json`
 re-enable them. The standalone `--diagnostics-context=module|continuation|full`
 flag remains open: the record already carries the structured fields, so the flag
 would only choose which ones a text renderer prints.
+
+**Environment knobs.** The engine reads three at load/compile time, all
+documented where their subsystem lives:
+
+| Variable | Effect | Owner |
+|---|---|---|
+| `WASMJIT_LEGACY_EH=1` | load a superseded Phase-3 exception encoding through the built-in rewrite | [`proposals/LEGACY_EXCEPTIONS.md`](proposals/LEGACY_EXCEPTIONS.md) §4.6 |
+| `WASMJIT_JIT_DUMP=1` | dump each compiled function's libjit IR | [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §6 |
+| `WASMJIT_LIBJIT_OPT=N` | libjit optimization level; default **0**, because level 1 rejects a valid block graph and a failed compile cannot be retried ([`languages/LF2_DEEP_F1_BACKEND.md`](languages/LF2_DEEP_F1_BACKEND.md)) | backend |
 
 #### One-shot module diagnose (DG-6)
 

@@ -15,14 +15,15 @@ studies for the non-killed languages, including Kotlin"* on 2026-10-30, which is
 the recorded requester for `S1`–`S5`; the caps are the charter caps, rounded as
 [`CHARTERS.md`](CHARTERS.md) §2.3 states; and the owner is the study's reviewer.
 
-**Scope actually run.** Fifteen *(language, toolchain)* arms were built,
+**Scope actually run.** Sixteen *(language, toolchain)* arms were built,
 inspected and executed through the documented embedding recipe: C and C++ through
 four toolchains, Rust through two targets, Go, TinyGo, Zig, AssemblyScript, Lua,
-Kotlin/Wasm in two target forms, and Dart. Every non-killed triage row has a
-disposition in this set: a verdict where an arm was run, and a named *"not run —
-condition to run it"* row otherwise ([`LF2_L6_L12.md`](LF2_L6_L12.md) §5 is the
-roll-up). **No engine change was made**; the three engine findings are written
-down and classified, which is `LF-3` work.
+Kotlin/Wasm in two target forms, Dart, and MoonBit. Every non-killed triage row
+has a disposition in this set: a verdict where an arm was run, and a named *"not
+run — condition to run it"* row otherwise ([`LF2_L6_L12.md`](LF2_L6_L12.md) §5 is
+the roll-up). **The three deep studies led to three engine fixes** (`F1`,
+`F3a`–`F3c`); the rest of the findings are written down and classified, which is
+`LF-3` work.
 
 Audience: whoever approves a support decision (`LF-3`), whoever picks a
 toolchain for an embedder today, and whoever reviews whether a verdict was
@@ -44,13 +45,16 @@ honest.
 
 | Report | Cluster | Arms run | Verdicts |
 |---|---|---|---|
-| \subpage lf2_s1 | `L1` — C/C++ toolchain and ABI | 5 (`T01`–`T05`) | 2 green, 3 yellow |
+| \subpage lf2_s1 | `L1` — C/C++ toolchain and ABI | 5 (`T01`–`T05`) | 4 green, 1 yellow |
 | \subpage lf2_s2 | `L2` — LLVM-family languages | 4 (`T06`, `T07`, `T10`, `T33`) | 4 green |
 | \subpage lf2_s3 | `L3` — AssemblyScript / TypeScript | 1 (`T15`, and `T30` by inheritance) | 1 green |
-| \subpage lf2_s4 | `L4` — WasmGC languages | 3 (`T20`, `T53` in two target forms) | 2 yellow, 1 red arm |
+| \subpage lf2_s4 | `L4` — WasmGC languages | 4 (`T20`, `T53` in two target forms, `T86`) | 1 green, 2 yellow, 1 red arm |
 | \subpage lf2_s5 | `L5` — guest scripting VMs | 1 (`T26`) | 1 green |
 | \subpage lf2_l6_l12 | `L6`–`L12` — everything else | 1 (`T09`, `L8`) | 1 yellow |
 | \subpage lf2_evidence | — | — | toolchains, hashes, commands, transcripts |
+| \subpage lf2_deep_f1 | **Deep study** — `F1`: why libjit refused the module, and the backend fix | — | `T01`/`T04` unblocked |
+| \subpage lf2_deep_f2 | **Deep study** — `F2` (`LE-8`): the verified `wasm-opt` workaround and the long-term options | — | `T05` scoped |
+| \subpage lf2_deep_f3 | **Deep study + fix** — `F3`: the GC subtyping gap, its four sub-findings and what is still open | — | `T20`/`T53` unblocked to validation |
 
 Reading order for a decision: this page's §4 → the report for the cluster → the
 evidence row for the module hash you intend to rely on. The verdict expires when
@@ -105,8 +109,8 @@ disproportionately expensive ([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILIT
 |---|---|---|---|---|
 | `T02` | C / clang 23.1.4, `--target=wasm32`, `-nostdlib` | all five | **Green** | exports, `env.host_add`, cross-module `dep.add`, one memory |
 | `T03` | C / wasi-sdk 34.0 reactor | all five | **Green** | + `fd_write`/`fd_seek`/`fd_fdstat_get` shim; `printf` works |
-| `T01` | C / Emscripten 6.0.13 `-O2` | 1–4 yes, 5 no | **Yellow** | `_start` fails to compile in LibJIT; `-O0`/`-O1` green (`F1`) |
-| `T04` | C++ / Emscripten 6.0.13 `-O1` reactor | all five | **Yellow** | same `F1` at `-O2`; ctors, `std::vector` work at `-O1` |
+| `T01` | C / Emscripten 6.0.13 `-O2` | all five | **Green** (after `F1`; was yellow at `-O1`) | `_start` compiles at level 0 and runs to `wasi_exit=0` |
+| `T04` | C++ / Emscripten 6.0.13 `-O2` reactor | all five | **Green** (after `F1`) | ctors, `std::vector`, `string`; `-O2` loads |
 | `T05` | C++ / wasi-sdk 34.0, default flags | 1–4 yes, 5 no | **Yellow** | default legacy EH hits `LE-8`; `-mllvm -wasm-use-legacy-eh=false` green (`F2`) |
 | `T06` | Rust / rustc 1.99.1 `wasm32-unknown-unknown` | all five | **Green** | no WASI, one `env` import, `Vec`/`String` over `dlmalloc` |
 | `T07` | Rust / rustc 1.99.1 `wasm32-wasip1` | all five | **Green** | 4 WASI imports; `println!` through the shim |
@@ -114,9 +118,10 @@ disproportionately expensive ([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILIT
 | `T10` | TinyGo 0.40.1 `-target=wasi` | all five | **Green** | exports before `_start`; 7 WASI imports |
 | `T33` | Zig 0.15.2 `wasm32-freestanding` | all five | **Green** | 108-byte module, zero imports |
 | `T15` | AssemblyScript 0.28.19 (`--runtime stub`) | all five | **Green** | + the existing `Test/wasm` harness evidence |
-| `T53` | Kotlin/Wasm 2.4.21 `wasmWasi` | 1–4 unproven, 5 no | **Yellow** | module valid (`wasm-tools validate`), engine refuses the type section (`F3`) |
+| `T53` | Kotlin/Wasm 2.4.21 `wasmWasi` | 1–4 unproven, 5 no | **Yellow** | loads and validates after `F3a`–`F3c`; start-up hits `F3d` |
 | `T53` | Kotlin/Wasm 2.4.21 `wasmJs` | none | **Red** | 696 imports incl. externref globals: a JS-host contract by construction |
-| `T20` | Dart 3.13.7 `dart compile wasm --standalone` | 1–4 unproven, 5 no | **Yellow** | same `F3`, plus 10 `dart:` imports implemented by JS glue |
+| `T20` | Dart 3.13.7 `dart compile wasm --standalone` | 1–4 unproven, 5 no | **Yellow** | type section accepted after `F3a`; now blocked by its legacy EH (`F2`) |
+| `T86` | MoonBit 0.1.20261028, `wasm-gc`, release | all five except cross-module | **Green at this commit** | 359-byte module; `_start` prints `Hello` via `spectest.print_char` |
 
 `T30` (TypeScript) has no separate arm: its only documented path is
 AssemblyScript, whose row `T15` is green. `T36` (c4wa) and `T94` (xcc) are
@@ -133,20 +138,34 @@ forbids an `LF-2` study from patching the engine.
 |---|---|---|---|---|
 | **F1** | A LibJIT `-O2` Emscripten module aborts at instantiation: `jit_function_compile failed 0 for func 2`, then `std::abort()` in the compile loop. `-O0`/`-O1` of the same source load and run. | `t01_emcc.wasm` (O2) vs `t01_emcc_o1.wasm` | **B** — per-backend, inside the eight contract rows; the core, the ABI and the type model are untouched | `T01`, `T04` at `-O2` |
 | **F2** | clang's default C++ exception encoding still trips the one shape the legacy-EH rewrite refuses (`LE-8`: a `delegate` that skips an intervening `catch`), so a default `clang++ -O2` C++ module does not load at all. | `t05_eh.wasm`, refused; `t05_final_eh.wasm`, loads | **A** — backend-neutral `WasmBase` parser work; it is the open `LE-8` row of [`proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) | `T05`, and any toolchain that cannot re-flag |
-| **F3** | A valid GC subtype annotation is rejected: a field narrowing `(ref null $t)` to `nullref` is a legal covariant field, and `heapMatches` does not model the bottom heap types as subtypes of a concrete type. A five-line module reproduces it; both Kotlin/Wasm and Dart emit the shape. | `gc_bottom_subtype.wasm`, refused; `wasm-tools validate --features all` passes | **A** — backend-neutral type-registry rule | `T53`, `T20`, and every WasmGC toolchain with `none`-typed fields |
+| **F3** | A valid GC subtype annotation was rejected: a field narrowing `(ref null $t)` to `nullref` is a legal covariant field, and `heapMatches` did not model the bottom heap types as subtypes of a concrete type. Fixed (see `F3a`–`F3d` below). | `gc_bottom_subtype.wasm`, refused before the fix; `wasm-tools validate --features all` passes | **A** — backend-neutral type-registry rule | `T53`, `T20` — both got past the type section |
+| **F3a** | the missing bottom-type edge in `heapMatches` | fixed in [`LF2_DEEP_F3_GC.md`](LF2_DEEP_F3_GC.md) §5 | **A** | closed |
+| **F3b** | `CanonHeapType::operator==` compared the dormant `memberIndex`, so equal global references compared unequal and a mutable field failed its invariance check | fixed; `heap-type equality ignores the dormant payload` | **A** | closed |
+| **F3c** | `struct.new` typed a packed field's operand as the packed code instead of `i32` | fixed; `fieldOperandType()` | **A** | closed |
+| **F3d** | a `ref.cast` on a Kotlin GC object reaches the matcher with `TypeId::kNone`; now a failed cast (guarded) instead of a `SIGSEGV` | open | **A** (root cause unknown) | `T53` start-up |
 
-**`F3` is the one that changes a shortlist.** The `LF-1` screen called Kotlin the
+**`F3` is the one that changed a shortlist.** The `LF-1` screen called Kotlin the
 gold-standard row because its requirements were features the engine already had
 ([`TRIAGE.md`](TRIAGE.md) §3.1). That is still true at the proposal level; what
-the study found is that the *subtyping rule* those proposals rest on is
+the study found is that the *subtyping rule* those proposals rest on was
 incomplete. Two independent toolchains hit it on their first module, which is why
-it is reported as an engine defect rather than a toolchain quirk.
+it is reported as an engine defect rather than a toolchain quirk. It is now
+fixed, together with the two further defects the fix exposed (`F3b`, `F3c`), and
+the row moved from "the engine refuses a valid module" to a runtime gap (`F3d`).
+
+**F1 is fixed too.** The `-O2` Emscripten abort turned out to be libjit's
+optimizer (level 1) refusing a valid block graph; the backend now compiles at
+level 0 and turns any remaining failure into a
+`WASM.COMPILE.FUNCTION_FAILED` exception instead of `std::abort()`
+([`LF2_DEEP_F1_BACKEND.md`](LF2_DEEP_F1_BACKEND.md)).
 
 **A second, unproven failure.** `t05_final_eh.wasm` loads and runs, but
 `WASMJIT_LEGACY_EH=1` on the *default* C++ module is refused by `LE-8` even
 though the rewrite is supposed to accept most legacy output. That is the known
 open row, not a new finding, and [`CHARTERS.md`](CHARTERS.md) §4 already assigns
-it to the `EH residue probe`.
+it to the `EH residue probe`. The verified `wasm-opt --translate-to-exnref`
+workaround and the long-term options are in
+[`LF2_DEEP_F2_EH.md`](LF2_DEEP_F2_EH.md).
 
 ## 6. What this set is not
 
@@ -169,8 +188,9 @@ it to the `EH residue probe`.
 |---|---|
 | `LF-1` — pre-feasibility screen | `✅` 2026-10-30, [`TRIAGE.md`](TRIAGE.md) |
 | `LF-2` — full feasibility studies | `✅` for `S1`–`S5`, 2026-10-30, this set; **not exhaustive** — the untested rows are listed, not graded |
+| `LF-2` — deep studies and the fixes they led to | `F1` **fixed** in the backend (level-0 default + diagnostics), `F3`/`F3a`–`F3c` **fixed** in the type registry and validator; `F2` scoped with a verified workaround; `F3d` open |
 | `LF-2` — `L6`–`L12` | `⛔` no charter, no toolchain installed — dispositions only |
-| `LF-3` — the support decision | **Open.** `F1`–`F3` are its input; the question it must answer is whether any language work is commissioned, and in what order |
+| `LF-3` — the support decision | **Open.** `F2` and `F3d` are its input; it may reject every verdict |
 
 **Budget.** Charter caps were `C3` per cluster (multi-session, > 1 week of human
 time). This run spent one AI session per cluster plus the toolchain install time

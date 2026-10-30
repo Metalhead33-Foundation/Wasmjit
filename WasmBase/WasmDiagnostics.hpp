@@ -193,6 +193,11 @@ inline constexpr std::string_view kDecodeUnsupportedValueType = "WASM.DECODE.UNS
 //! table.
 inline constexpr std::string_view kBackendPlugin = "WASM.BACKEND.PLUGIN";
 
+//! A backend refused to compile a function (docs/DIAGNOSTICS.md §5.1,
+//! docs/languages/LF2_DEEP_F1_BACKEND.md §5). The module is untrusted input and
+//! the host must survive: the backend reports this id, then throws.
+inline constexpr std::string_view kCompileFunctionFailed = "WASM.COMPILE.FUNCTION_FAILED";
+
 inline constexpr std::string_view kValidateRule = "WASM.VALIDATE.RULE"; //!< The transitional family for a rule not mapped to its own id yet.
 inline constexpr std::string_view kValidateUnknownType = "WASM.VALIDATE.UNKNOWN_TYPE"; //!< A type index out of range.
 inline constexpr std::string_view kValidateTypeNotFunction = "WASM.VALIDATE.TYPE_NOT_FUNCTION"; //!< An indirect call whose type is not a function type.

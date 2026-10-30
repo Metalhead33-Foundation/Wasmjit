@@ -9,7 +9,15 @@ Context::Context()
 
 Context::~Context()
 {
-	jit_context_destroy(context);
+	// A failed compile poisons libjit's builder; `jit_context_destroy` then
+	// segfaults, so the context is deliberately leaked (LF-2 `F1`).
+	if (!abandoned)
+		jit_context_destroy(context);
+}
+
+void Context::abandon() noexcept
+{
+	abandoned = true;
 }
 
 jit_context_t Context::rawContext() const
