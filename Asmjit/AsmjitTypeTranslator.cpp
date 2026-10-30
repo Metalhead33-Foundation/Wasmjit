@@ -9,6 +9,10 @@ asmjit::TypeId TypeTranslator::translateValueType(const WASM::ValueType& type)
 {
 	using WASM::ValueTypeCode;
 	switch (type.opcode) {
+	case ValueTypeCode::I8:
+		return asmjit::TypeId::kInt8;
+	case ValueTypeCode::I16:
+		return asmjit::TypeId::kInt16;
 	case ValueTypeCode::I32:
 		return asmjit::TypeId::kInt32;
 	case ValueTypeCode::I64:
@@ -17,6 +21,8 @@ asmjit::TypeId TypeTranslator::translateValueType(const WASM::ValueType& type)
 		return asmjit::TypeId::kFloat32;
 	case ValueTypeCode::F64:
 		return asmjit::TypeId::kFloat64;
+	case ValueTypeCode::V128:
+		return asmjit::TypeId::kInt8x16;
 
 	// Every reference kind has the same machine representation in the
 	// function ABI. Heap/type identity remains a Wasm-level runtime concern.
@@ -41,15 +47,24 @@ asmjit::TypeId TypeTranslator::translateValueType(const WASM::ValueType& type)
 	case ValueTypeCode::RefNull:
 	case ValueTypeCode::Ref:
 		return asmjit::TypeId::kUIntPtr;
-
-	case ValueTypeCode::V128:
-		throw std::runtime_error("AsmJit ABI translation: v128 is not implemented yet");
-	case ValueTypeCode::I8:
-	case ValueTypeCode::I16:
-		throw std::runtime_error("AsmJit ABI translation: packed i8/i16 is not a function value type");
 	default:
 		throw std::runtime_error("AsmJit ABI translation: unsupported Wasm value type "
 				+ std::to_string(static_cast<int>(type.opcode)));
+	}
+}
+
+asmjit::TypeId TypeTranslator::translateStorageType(const WASM::StorageType& type)
+{
+	if (!type.isPacked)
+		return translateValueType(type.val);
+
+	switch (type.val.opcode) {
+	case WASM::ValueTypeCode::I8:
+		return asmjit::TypeId::kInt8;
+	case WASM::ValueTypeCode::I16:
+		return asmjit::TypeId::kInt16;
+	default:
+		throw std::runtime_error("AsmJit storage translation: packed storage must be i8 or i16");
 	}
 }
 
@@ -65,17 +80,17 @@ asmjit::FuncSignature TypeTranslator::translateFunctionType(const WASM::FuncType
 
 	for (const WASM::StorageType& parameter : function.params) {
 		if (parameter.isPacked)
-			throw std::runtime_error("AsmJit ABI translation: packed function parameter");
+			throw std::runtime_error("AsmJit ABI translation: packed function parameter is invalid Wasm");
 		if (!signature.can_add_arg())
 			throw std::runtime_error("AsmJit ABI translation: function has too many arguments");
-		signature.add_arg(translateValueType(parameter.val));
+		signature.add_arg(translateStorageType(parameter));
 	}
 
 	if (function.results.size() == 1) {
 		const WASM::StorageType& result = function.results.front();
 		if (result.isPacked)
-			throw std::runtime_error("AsmJit ABI translation: packed function result");
-		signature.set_ret(translateValueType(result.val));
+			throw std::runtime_error("AsmJit ABI translation: packed function result is invalid Wasm");
+		signature.set_ret(translateStorageType(result));
 	} else if (function.results.size() > 1) {
 		// Multi-value tuples are written through the caller-provided trailing
 		// result buffer. Do not rely on a platform's aggregate-return ABI.
