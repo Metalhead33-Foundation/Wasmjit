@@ -88,6 +88,7 @@ struct ComponentFunction {
  */
 class WASMJIT_API ComponentRuntime {
 public:
+//! Type alias `ComponentImports` names the corresponding implementation/API type.
 	using ComponentImports = std::unordered_map<std::string, ComponentFunction>;
 
 	/**
