@@ -1,4 +1,4 @@
-# Garbage Collection (Wasm 3.0) — Implementation Notes, Spec Conformance, and Deliberate Deviations
+# Garbage Collection (Wasm 3.0) — Implementation Notes, Spec Conformance, and Deliberate Deviations {#prop_gc}
 
 Status: design note / implementation reference (revision 13 — GC's own
 conformance surface is **complete**, including GC reference validation and the
@@ -689,7 +689,7 @@ effort.
 |---|---|
 | H1 | **Dual layout logic.** `structFieldOffsets`/`structSize`/`arraySize` in `WasmModuleInstance.cpp` must stay byte-for-byte in sync with `translateStruct`/`translateArray` in `LibJitTypeTranslation.cpp`. Packed `i8`/`i16` fields and `v128` (lowered as four `i32` with 4-byte alignment) are the risky spots. Nothing enforces the invariant. |
 | ~~H2~~ | ~~`gcObjectTypes` is never pruned.~~ **Done (GC-2a):** the map is gone; the type tag is read from the object header and `GcHeap::owns` uses region ranges. |
-| H3 | **`refMatchesHeapType` is O(#functions)** for function references (two linear scans) and is called for every cast/test. |
+| H3 | **`refMatchesHeapType` is `O(#functions)`** for function references (two linear scans) and is called for every cast/test. |
 | H4 | **`i31` uses a tagged LibJIT type** while `i31.get_s/u` take `void_ptr`; correctness depends on `castRefValue`/`jit_insn_convert` being a bit-preserving reinterpretation. Worth a focused test. |
 | H5 | **`stringref`/`stringview_*` are implemented** (not in 3.0): types, section 14, `string.const`, the core instructions, the full `stringview_*` facility, the GC-array variants, the embedder bridge and reference-counted lifetime are in `STRINGREF.md` STR-1/STR-2/STR-3/STR-4/STR-6/STR-7/STR-8; `wasm:js-string` imports remain a separate host-import proposal. The engine keeps its reserved encodings because the proposal's current `0x64`/`0x63` collide with `ref`/`ref null` (STR1). |
 | ~~H6~~ | ~~**`ref.eq` is raw pointer equality with no type check**; unboxed `i31` compares by value only because the representation is canonical. `ref.eq` on non-`eq` operands is not rejected.~~ **Done (GC-10):** `dispatchRefEq` now rejects non-`eq` operands; runtime equality stays pointer equality, which is exact for the `eq` hierarchy (D5). |
@@ -922,7 +922,7 @@ Guardrails for every milestone:
   through `wasm_ref_store` (D15); review for a bare `jit_insn_store` into a ref
   slot.
 - Keep the struct-header offsets (`TypeId@0`, `rc@4`, descriptor pointer@8) and
-  the array header (`TypeId@0`, `rc@4`, length@8`) identical in the runtime
+  the array header (`TypeId@0`, `rc@4`, length@8) identical in the runtime
   helpers and the JIT, and add them to the H1 offset test.
 
 ### 7.1 Consolidated status — one row per number
@@ -936,7 +936,7 @@ defaults, not just the first one to be fixed.
 | Number | Status | Evidence (current) | Notes |
 |---|---|---|---|
 | `G1` | ✅ Closed | `GcHeap::owns` + header `TypeId` (`ref_func` 14/0) | — |
-| **`G2`** | ✅ **Closed** | `ref_test` **38/32 → 71/0**, `ref_cast` **33/11 → 45/0** | Cross-module `funcref` identity. The Store now owns a registry of callable ranges (`registerCallableRange`/`callableAt`), so a `funcref` is identified — and its canonical `TypeId` read — from *any* module, in O(#instances) instead of the old per-instance O(#functions) scan; and the "unknown reference" fallback now lists `Func`. **The evidence only moved once `R5` was fixed**: these cases were gated behind a skipped `(invoke "init" (ref.extern 0))`. The range is published only after construction succeeds and is withdrawn in `~ModuleInstance`, so a failed instantiation or a destroyed instance cannot leave a dangling range. |
+| **`G2`** | ✅ **Closed** | `ref_test` **38/32 → 71/0**, `ref_cast` **33/11 → 45/0** | Cross-module `funcref` identity. The Store now owns a registry of callable ranges (`registerCallableRange`/`callableAt`), so a `funcref` is identified — and its canonical `TypeId` read — from *any* module, in `O(#instances)` instead of the old per-instance `O(#functions)` scan; and the "unknown reference" fallback now lists `Func`. **The evidence only moved once `R5` was fixed**: these cases were gated behind a skipped `(invoke "init" (ref.extern 0))`. The range is published only after construction succeeds and is withdrawn in `~ModuleInstance`, so a failed instantiation or a destroyed instance cannot leave a dangling range. |
 | `G3` | ✅ **Closed (GC-8/RT-1)** | `ref_test` 71/0, `extern` 18/0 | `extern.convert_any` boxes internal references in a reserved GC object; `any.convert_extern` unwraps; `ref.test (ref extern)` distinguishes the hierarchies. Host pointers remain opaque and preserve identity. |
 | `G4` | ✅ Closed | `array_new_elem` 14/0, `table_init` 725/0 | — |
 | `G5` | ✅ Closed | `i31` 68/0, `table` 18/0 | Table initialisers: decode (`0x40 0x00`), apply every slot, defer `ref.func`. |
@@ -947,7 +947,7 @@ defaults, not just the first one to be fixed.
 | `C1`–`C7` | ✅ Closed | `array_init_data` 44/0, `array` 40/0, `ref_cast`/`call_ref` running | Crash triage complete; the aborts that remain are deliberate (`docs/SAFETY.md` §2.4). |
 | `H1` | ✅ Guarded | `GC layout: the JIT's struct field offsets match the shared layout helpers` | The dual layout logic is now *checked*: the test asserts the JIT's LibJIT field offsets equal `gcAlignUp`/`gcStorageAlign`/`gcStorageBytes` (the shared source of truth the runtime's `structFieldOffsets` uses) for packed i8/i16, i32, i64, f64 and v128 — and it passes, so the two implementations agree today. The reclaimer and the cycle trial additionally share one traversal (`childSlotsOf`). |
 | `H2`, `H8` | ✅ Closed | — | — |
-| `H3` | ✅ Closed | `Store::callableAt` | The per-cast O(#functions) scan is gone with `G2`: identification is now a range test over registered callable ranges (one per instance). |
+| `H3` | ✅ Closed | `Store::callableAt` | The per-cast `O(#functions)` scan is gone with `G2`: identification is now a range test over registered callable ranges (one per instance). |
 | `H4` | ✅ Closed | `i31` 68/0 | The tagged-LibJIT-type / `void_ptr` round-trip that `i31.get_s/u` depend on is exercised by the spec script across every interesting pattern (0, ±1, `0x3fff_ffff`, `-0x4000_0000`, `0x7fff_ffff`, `0xaaaa_aaaa`, `0xcaaa_aaaa`) and all pass. |
 | `H5` | ✅ Closed (own proposal) | `STRINGREF.md` STR-5/STR-6/STR-7/STR-8 tests | `stringref`/`stringview_*`: out of the 3.0 MVP, its own proposal (§7.2, §10). Types, section 14, `string.const`, the core instructions, the full view facility, the GC-array variants, the embedder bridge and reference-counted lifetime are implemented; `wasm:js-string` remains a separate host-import surface. |
 | **`H6`** | ✅ **Closed** | `dispatchRefEq` | The validator rejects non-`eq` operands; runtime equality remains pointer equality, exact for the `eq` hierarchy (D5). |
@@ -964,7 +964,7 @@ defaults, not just the first one to be fixed.
 | `GC-4` | ✅ Closed | `br_on_cast*`, `br_on_null`, `br_on_non_null` | Same work as `G7`; both closed by the block-type decode fix plus the label-value model. |
 | `GC-5` | ✅ Closed | `array` 40/0, `array_init_data` 44/0 | — |
 | `GC-6` | ✅ Closed | `WasmTrap.hpp` | — |
-| `GC-7` | ✅ Substantively closed | `Store::callableAt` | The expensive part landed with `H3`: a cast/test is now O(#instances) instead of O(#functions). What remains of the row is *inline caching* at a hot call site — an optimisation that the plan explicitly says to measure first (D3/D12), with no measurement yet showing casts dominating. |
+| `GC-7` | ✅ Substantively closed | `Store::callableAt` | The expensive part landed with `H3`: a cast/test is now `O(#instances)` instead of `O(#functions)`. What remains of the row is *inline caching* at a hot call site — an optimisation that the plan explicitly says to measure first (D3/D12), with no measurement yet showing casts dominating. |
 | `GC-8` | ✅ Closed | `ref_test` 71/0, `extern` 18/0 | Extern boxes distinguish the hierarchies (RT-1). |
 | `GC-9` | ✅ Closed | `array` 40/0 | — |
 | `RC-1`, `RC-1b` | ✅ Closed | `GC reference counting` test | — |
@@ -1082,14 +1082,15 @@ from actions the harness silently skips: `table_get.wast:23` is
 runtime bugs.
 
 Reference counting and reclamation are covered by the `GC reference counting`,
-`GC heap` and `GC reclamation:` tests. `GC reference counting: clone, drop and
-store barriers` (`Test/wasm_wat/gc_refcount.wat`) covers the header count,
-`refClone`/`refDrop`/`refStore`, the underflow trap, the safepoint `gcCollect` +
-block reuse (RC-1b), runs the JIT `struct.set` barrier end to end, and asserts
-`array.new_default` is a **single** heap block (inline arrays, GC-9). `GC heap:
-region allocation, alignment and recycling` covers 16-byte alignment, mmap
-zero-fill, region batching (1000 objects → at most one extra region), free-list
-reuse, dedicated large regions, `owns()` classification and bulk `releaseSet`.
+`GC heap` and `GC reclamation:` tests. The `GC reference counting: clone, drop
+and store barriers` test (`Test/wasm_wat/gc_refcount.wat`) covers the header
+count, `refClone`/`refDrop`/`refStore`, the underflow trap, the safepoint
+`gcCollect` + block reuse (RC-1b), runs the JIT `struct.set` barrier end to end,
+and asserts `array.new_default` is a **single** heap block (inline arrays,
+GC-9). The `GC heap: region allocation, alignment and recycling` test covers
+16-byte alignment, mmap zero-fill, region batching (1000 objects → at most one
+extra region), free-list reuse, dedicated large regions, `owns()` classification
+and bulk `releaseSet`.
 The reclamation tests assert `GcHeap::liveObjectCount()` returns to its baseline
 (RC-1b), that a dying object releases its reference fields (RC-3), that a deep
 chain is released iteratively, that a two-object cycle is collected (RC-2), and

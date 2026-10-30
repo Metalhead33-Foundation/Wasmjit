@@ -1,4 +1,4 @@
-# Type Imports and Exports — Implementation Notes, Spec Status, and Deliberate Deviations
+# Type Imports and Exports — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_type_imports}
 
 Status: design note / implementation reference (revision 4 — TI-0…TI-4 are
 done: type imports decode `sub <abstract heaptype>`, enter the local type index

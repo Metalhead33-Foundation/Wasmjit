@@ -1,4 +1,4 @@
-# Compilation Hints and Relaxed Dead-Code Validation — Implementation Notes, Spec Status, and Deliberate Deviations
+# Compilation Hints and Relaxed Dead-Code Validation — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_parser_proposals}
 
 Status: design note / implementation reference (revision 3 — PP-1…PP-3 are
 implemented: the three compilation-hint sections parse as inert metadata, and

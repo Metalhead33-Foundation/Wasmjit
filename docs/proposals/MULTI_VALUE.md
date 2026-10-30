@@ -1,4 +1,4 @@
-# Multi-value — Implementation Notes, Spec Status, and Deliberate Deviations
+# Multi-value — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_multi_value}
 
 Status: design note / implementation reference (revision 3 — the packed-struct
 return lowering was replaced by a caller-provided result buffer (MV5), and the

@@ -1,4 +1,4 @@
-# API/ABI Stability — The Milestone, and How Close We Are
+# API/ABI Stability — The Milestone, and How Close We Are {#doc_api_abi_stability}
 
 Status: **milestone met 2026-10-29** (revision 4 — 2026-10-30 — re-measures the
 suite at `5c3d194` and records the `G3` re-check performed by the combined
@@ -272,7 +272,7 @@ Built out-of-source (`build/AasFinal` for the current numbers) with
 `env MAKE=/usr/bin/make /usr/bin/make -j16 QMAKE=/usr/bin/qmake6` → **exit 0**.
 Suite (§11 for the full table): default run **11,454 assertions / 481 test
 cases, all passing**; non-spec subset 11,014 / 285; the proposal-documentation
-lint `[docs]` 720 assertions. The documented negative-module measurement is
+lint `[docs]` 839 assertions (two cases: the note shape and the note tree). The documented negative-module measurement is
 **2,382 / 2,382** binary commands handled
 ([`VALIDATION.md`](VALIDATION.md) "Measured coverage", 2026-10-18; opt-in via
 `WASM_SPEC_VALIDATE=1`).
@@ -547,7 +547,7 @@ These deviations are what make the frozen set small enough to keep.
 | AASD3 | **`ModuleInstantiator` is the product seam, and the richer façade lives in the harness for now.** | [`LAYERING.md`](LAYERING.md) §2: the core states the contract; the harness may name the backend. `Test/LibJitBackendTests.cpp` is the one permitted leak and says so. | The core stays four hooks; a backend author gets a working façade before the product API is frozen. AAS8 is the debt this creates. |
 | AASD4 | **SIMD through a pointer-based `extern "C"` helper layer** instead of a `v128` value ABI in the core. | [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) D3: no aggregate-ABI risk; every backend can call the same entry points. | Portability plus a reference implementation; a vector-capable backend can still lower natively (§5.4). |
 | AASD5 | **Provisional encodings** where upstream has none (`stringref` reserved codes, `array.new_array` `0xFB 0x20–0x22`, `i32.itt` `0xFC 0x100`). | Each is recorded in its note with the reason, and each is engine-reserved rather than colliding with a final opcode. | Working features today without guessing at a spec. Guardrail: renumbering is one deliberate change with its tests, announced in the owning note. |
-| AASD6 | **No text format, no interpreter, no JS engine, no WASI implementation.** | `ANN-0`, [`AGENTS.md`](../AGENTS.md) "No bespoke interpreter fallback", `JS_INTEGRATION.md`, `COMPONENT_MODEL.md` `CM9` — all recorded decisions. | A small core and one execution path. |
+| AASD6 | **No text format, no interpreter, no JS engine, no WASI implementation.** | `ANN-0`, `AGENTS.md` "No bespoke interpreter fallback", `JS_INTEGRATION.md`, `COMPONENT_MODEL.md` `CM9` — all recorded decisions. | A small core and one execution path. |
 | AASD7 | **Process-wide allocation budgets, no instruction/step budget.** | `SAFETY.md` `S1`/`S4`: the embedder owns time limits and process isolation, which is the QVM model. | Simple, clean failure (`-1`/trap) instead of a scheduler in the core. |
 | AASD8 | **Trap *text* is not stable; the *kind* and the diagnostic *id* are.** | `SAFETY.md` `S5`: the spec treats messages as hints; `DIAGNOSTICS.md` puts the stable identity in the record. | Wording can improve without breaking an embedder. |
 
@@ -571,7 +571,7 @@ is already done — this document.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **AAS-0 — Declare and measure** ✅ | Write this note: the four gates, the frozen set, the classification, the audit and the ledger. No code. | — (the record) | This document is linked from [`README.md`](../README.md) and [`AGENTS.md`](../AGENTS.md). |
+| **AAS-0 — Declare and measure** ✅ | Write this note: the four gates, the frozen set, the classification, the audit and the ledger. No code. | — (the record) | This document is linked from [`README.md`](../README.md) and `AGENTS.md`. |
 | **AAS-1 — Declare the embedding surface** ✅ | **Done 2026-10-29.** `WasmBase/WasmJit.hpp` (umbrella), `WASM::Runtime` (`ES-1`), the version/soname identity (`ES-4`), the header tiers and 41 compile-only TUs (`ES-3`), the install/`pkg-config` path (`ES-5`) and the ABI note's missing sections (`ES-6`). The acceptance evidence is `ES-7`: an out-of-tree consumer builds against the installed headers only and calls an `i32`, an `f64`, a multi-result and a `v128` export using nothing but the docs (`Test/install-check.sh`). The optional `abidiff` run remains optional, not a gate. | AAS1 ✅, AAS2 ✅, AAS5 ✅ | Met ✅ |
 | **AAS-2 — Write the backend work order and promote the façade** ✅ | **Done 2026-10-29:** [`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md) is the checklist (two seams, four hooks, eight ABI obligations, memory/GC ownership, helper split, packaging, definition of done), and `WASM::BackendSession` lives in [`WasmBackendSession.hpp`](../WasmBase/WasmBackendSession.hpp) with `TestBackend` aliasing it. The POD views it builds on are `BP-1` ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §10). | AAS8 ✅, AAS9 ✅ | Met ✅ |
 | **AAS-3 — Prove the seam with a second implementation** ✅ | **Done 2026-10-29:** `NullInstantiator` is registered as `null`, selectable through `Runtime::create("null")` and the harness's `WASMJIT_BACKEND`; `Test/ExampleBackend` adds a loadable third implementation, so the seam is exercised by something the frontend was not compiled with. The scaffolds are **kept and documented, not removed** — those backends are planned: both subprojects stay in `Project.pro`, each directory has a `README.md` that states it emits and installs nothing today and points at the work order, and the stray libraries are gone. | AAS10 ✅, AAS11 ✅ | Met ✅ |
@@ -631,8 +631,8 @@ from `build/Desktop-Debug`, for the combined readiness audit
 | Command | Result | Reading |
 |---|---|---|
 | `env MAKE=/usr/bin/make /usr/bin/make -j16` | **exit 0** | The tree builds at this commit. |
-| `./Test/WasmJit` | **11,460 assertions / 484 test cases, all passed** | +6 assertions and 3 cases over the 2026-10-29 row: the header-documentation check (`[headerdoc]`, 6 assertions / 3 cases) added with [`DOCUMENTATION.md`](DOCUMENTATION.md). |
-| `./WasmJit '[docs]'` | **720 assertions / 1 test case, all passed** | Unchanged: 34 proposal notes. |
+| `./Test/WasmJit` | **11,579 assertions / 485 test cases, all passed** | +125 assertions and 4 cases over the 2026-10-29 row: the header-documentation check (`[headerdoc]`, 6 assertions / 3 cases) and the note-tree case (`[docs]`, 119 assertions / 1 case), both added with [`DOCUMENTATION.md`](DOCUMENTATION.md). |
+| `./WasmJit '[docs]'` | **839 assertions / 2 test cases, all passed** | The 34 proposal notes keep their shape, and the 55 notes keep their place in the tree (§9 of the same note). |
 | `./WasmJit '[headerdoc]'` | **6 assertions / 3 test cases, all passed** | The header-comment policy is a gate now, not a convention. |
 | `./WasmJit '[multiagent]'` | **51 assertions / 6 test cases, all passed** | The demoted class-E family (§5.3) stays green. |
 | `./Test/abi-check.sh build/Desktop-Debug` | **OK** — `libWasmBase` 0 removed / 0 added, `libLibJit` 0 removed / 0 added | The additive-only rule (`G2`) still holds, now over a 1,804-symbol baseline. |
@@ -682,4 +682,4 @@ from `build/Desktop-Debug`, for the combined readiness audit
   gap and the benchmark tags.
 - [`PROPOSALS.md`](PROPOSALS.md) — the shape every note above follows, and the ID
   conventions this note borrows (`AAS<n>`, `AASD<n>`, `AAS-<n>`).
-- [`AGENTS.md`](../AGENTS.md) — the one-line rules a contributor reads first.
+- `AGENTS.md` — the one-line rules a contributor reads first.

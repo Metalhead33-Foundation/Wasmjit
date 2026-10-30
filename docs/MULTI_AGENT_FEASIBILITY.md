@@ -1,4 +1,4 @@
-# Multi-Agent Execution — Feasibility of Demoting the Class-E Blockers
+# Multi-Agent Execution — Feasibility of Demoting the Class-E Blockers {#doc_multi_agent_feasibility}
 
 Status: feasibility study and implementation record (revision 2 — 2026-10-29;
 the study is revision 1's measurements at `ea4fb30`, and **MF-1…MF-8 are now
@@ -561,7 +561,7 @@ production-readiness improvement on its own.
 | 4 | **`currentExecutionState()` is thread-local.** Two agents on one host thread need explicit `AgentScope` nesting; a library that forgets gets the wrong trap slot. | Silently wrong agent. | `MF-2` (boundary scoping) + a debug assertion. |
 | 5 | **Determinism.** `PROFILES.md` claims a deterministic profile; concurrency breaks it. | A false claim is worse than a missing one (PRD2). | `Agents` is outside the deterministic profile. |
 | 6 | **Waiter-table encoding.** `waitqueue` (`0x68`) collides with `cont`. | Guest-visible type, upstream draft. | Class C until upstream assigns one; `MF-5` can ship the runtime table without the type. |
-| 7 | **Cost of `refMatchesHeapType` (O(#functions))** and the ad-hoc `Value::kind` tagging (`GC H3`/`H7`) | Perf and latent correctness under load. | Existing risks; unchanged by agents, more visible with them. |
+| 7 | **Cost of `refMatchesHeapType` (`O(#functions)`)** and the ad-hoc `Value::kind` tagging (`GC H3`/`H7`) | Perf and latent correctness under load. | Existing risks; unchanged by agents, more visible with them. |
 | 8 | **Unload/teardown with an agent in flight.** | Dangling `Callable`/`VMContext` — the existing `ABI.md` lifetime rule. | The embedder joins every agent before teardown (`THREADSAFETY.md` §9); the core never unloads a plugin and the runtime outlives its instances. |
 | 9 | **Does an agent need its own evaluation stack?** | `THREADSAFETY.md` §10 says each agent has its own; today the operand stack is the C stack. | Nothing to build for native-stack codegen; a documented consequence, not a subsystem. |
 

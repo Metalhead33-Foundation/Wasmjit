@@ -1,4 +1,4 @@
-# SIMD (Fixed-width and Relaxed) — Implementation Notes, Spec Status, and Deliberate Deviations
+# SIMD (Fixed-width and Relaxed) — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_simd}
 
 Status: design note / implementation reference (revision 5 — fixed-width and
 relaxed SIMD are implemented and validated; S6's relaxed ternary rules are

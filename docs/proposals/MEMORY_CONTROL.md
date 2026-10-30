@@ -1,4 +1,4 @@
-# Memory Control — Implementation Notes, Spec Status, and Deliberate Deviations
+# Memory Control — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_memory_control}
 
 Status: design note / implementation reference (revision 3 — the umbrella's one
 concrete instruction, `memory.discard`, decodes, validates, zero-fills and uses

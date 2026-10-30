@@ -81,6 +81,43 @@ std::set<unsigned> mappedSections(const std::string& text)
 	return numbers;
 }
 
+// The page id a note declares on its `# Title` line (`# Title {#doc_layering}`),
+// or an empty string when the line carries none.
+std::string declaredPageId(const std::string& text)
+{
+	const std::size_t title = text.find("# ");
+	if (title == std::string::npos)
+		return {};
+	const std::size_t lineEnd = text.find('\n', title);
+	const std::string first = text.substr(title, lineEnd == std::string::npos
+			? std::string::npos : lineEnd - title);
+	const std::size_t open = first.find("{#");
+	if (open == std::string::npos)
+		return {};
+	const std::size_t close = first.find('}', open + 2);
+	if (close == std::string::npos)
+		return {};
+	return first.substr(open + 2, close - open - 2);
+}
+
+// The targets of every `\subpage` command in an index page.
+std::set<std::string> subpageTargets(const std::string& text)
+{
+	std::set<std::string> ids;
+	const std::string command = "\\subpage ";
+	for (std::size_t at = 0; (at = text.find(command, at)) != std::string::npos; ) {
+		at += command.size();
+		std::size_t end = at;
+		while (end < text.size() && (std::isalnum(static_cast<unsigned char>(text[end]))
+				|| text[end] == '_'))
+			++end;
+		if (end != at)
+			ids.insert(text.substr(at, end - at));
+		at = end;
+	}
+	return ids;
+}
+
 } // namespace
 
 // Enforces the guardrail in docs/PROPOSALS.md §6 without hard-coding the
@@ -99,6 +136,8 @@ TEST_CASE("proposal notes keep the documented structure", "[docs]")
 			std::filesystem::directory_iterator(directory)) {
 		if (!entry.is_regular_file() || entry.path().extension() != ".md")
 			continue;
+		if (entry.path().filename().string() == "index.md")
+			continue; // the folder index is navigation, not a note
 		++checked;
 
 		INFO("proposal note: " << entry.path().filename().string());
@@ -138,4 +177,71 @@ TEST_CASE("proposal notes keep the documented structure", "[docs]")
 	// The folder holds thirty-four notes today; a new note must appear here
 	// without the check silently grading an empty directory.
 	REQUIRE(checked >= 34);
+}
+
+// Enforces docs/DOCUMENTATION.md §9: the generated site nests the notes instead
+// of flattening them, and it does so through two index pages. A note that is
+// missing from its folder's index builds as a *sibling* of the whole sub-tree,
+// which is exactly the failure a reader would not notice -- so a missing row is
+// a test failure, not a review comment.
+TEST_CASE("the documentation tree is hierarchical", "[docs]")
+{
+	const std::filesystem::path root = std::filesystem::path(WASM_TESTSUITE_SOURCE_DIR)
+			/ "..";
+	const std::filesystem::path docs = root / "docs";
+	const std::filesystem::path proposals = docs / "proposals";
+
+	const std::string docsIndexText = readTextFile(docs / "index.md");
+	const std::string proposalsIndexText = readTextFile(proposals / "index.md");
+	const std::set<std::string> docsChildren = subpageTargets(docsIndexText);
+	const std::set<std::string> proposalChildren = subpageTargets(proposalsIndexText);
+
+	// `proposals` is a child of `docs`, and each index page is the parent of the
+	// notes beside it.
+	REQUIRE(declaredPageId(docsIndexText) == "docs_index");
+	REQUIRE(declaredPageId(proposalsIndexText) == "proposals_index");
+	REQUIRE(docsChildren.count("proposals_index") == 1);
+
+	std::set<std::string> declared;
+	std::vector<std::string> missing;
+	const auto collect = [&declared, &missing](const std::filesystem::path& directory,
+			const std::set<std::string>& children, std::size_t& notes) {
+		for (const std::filesystem::directory_entry& entry :
+				std::filesystem::directory_iterator(directory)) {
+			if (!entry.is_regular_file() || entry.path().extension() != ".md")
+				continue;
+			const std::string id = declaredPageId(readTextFile(entry.path()));
+			INFO("note: " << entry.path().string());
+			REQUIRE_FALSE(id.empty());
+			declared.insert(id);
+			if (entry.path().filename().string() == "index.md")
+				continue; // an index page declares its own id and needs no row
+			++notes;
+			if (children.count(id) != 1)
+				missing.push_back(entry.path().filename().string() + " (" + id + ")");
+		}
+	};
+
+	std::size_t docsNotes = 0;
+	std::size_t proposalNotes = 0;
+	collect(docs, docsChildren, docsNotes);
+	collect(proposals, proposalChildren, proposalNotes);
+
+	std::string missingText;
+	for (const std::string& line : missing)
+		missingText += line + "\n";
+	INFO("notes missing from their folder index:\n" << missingText);
+	REQUIRE(missing.empty());
+	// A new note must be counted, so the check cannot pass by grading nothing.
+	REQUIRE(docsNotes >= 21);
+	REQUIRE(proposalNotes >= 34);
+
+	// Every `\subpage` must resolve: a mistyped id silently drops the note from
+	// the tree instead of failing the Doxygen run.
+	for (const std::set<std::string>* children : { &docsChildren, &proposalChildren }) {
+		for (const std::string& id : *children) {
+			INFO("\\subpage target: " << id);
+			REQUIRE(declared.count(id) == 1);
+		}
+	}
 }

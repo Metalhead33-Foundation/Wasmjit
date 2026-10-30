@@ -1,4 +1,4 @@
-# Proposal Notes — Meta-Document: the Shape of `docs/proposals/*.md`
+# Proposal Notes — Meta-Document: the Shape of `docs/proposals/*.md` {#doc_proposals}
 
 Status: process guide / structural specification (revision 2 — re-cut to match the
 notes as they actually are, and rewritten in the shape it prescribes).
@@ -92,7 +92,10 @@ gaps → where we deliberately deviate → plan → test survey → references.
 
 ## 4. What the folder holds today
 
-`docs/proposals/` holds **thirty-four** notes. Every one carries the §2.1 front
+`docs/proposals/` holds **thirty-four** notes, plus an `index.md` that is
+navigation rather than a note (it is what nests them in the generated site, and
+it is the one file exempt from the shape check below). Every note carries the
+§2.1 front
 matter and the nine slots of §2.2 in order (or the grouped variant of §3); the
 wording drifts only as §3 permits. The ID conventions of §2.3 are used
 throughout; the prefixes actually in the tree are:

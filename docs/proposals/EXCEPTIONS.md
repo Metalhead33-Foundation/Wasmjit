@@ -1,4 +1,4 @@
-# Exception Handling (with `exnref`) — Implementation Notes, Spec Status, and Deliberate Deviations
+# Exception Handling (with `exnref`) — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_exceptions}
 
 Status: design note / implementation reference (revision 4 — the runtime and the
 full proposal surface are **complete**: EX-1 `exnref`, EX-2 tags, EX-3

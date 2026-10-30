@@ -1,8 +1,9 @@
-# Readiness Audit — a Second Code Generator, and the Language-Study Entry Gate
+# Readiness Audit — a Second Code Generator, and the Language-Study Entry Gate {#doc_readiness_audit}
 
 Status: **audit performed 2026-10-30** (revision 1) on branch `LibjitDispatcher`
-at `5c3d194`; `master` (`8fb955d`) is an ancestor, the tree is clean, and every
-measurement in §9 was taken on that commit. This note is the result of two
+at `5c3d194`; `master` (`8fb955d`) was an ancestor at the time, and the rows in
+§9 were measured on that commit — the suite rows carry a later re-run, marked as
+such. This note is the result of two
 checks that were defined separately — `G3` of
 [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §7.3 ("can work on the non-LibJIT
 backends begin?") and `LF-0a` / `RG1`–`RG6` of
@@ -369,7 +370,7 @@ subsections that follow it are the evidence behind each state. Summary:
 | API/ABI gate status | `API_ABI_STABILITY.md` §7.5: **G1 `✅`, G2 `✅`, G3 `✅`, G4 `✅`** (milestone met 2026-10-29; `G3` re-checked here) |
 | Version identity | `WASMJIT_VERSION 1.0.0`, `WASMJIT_ABI_VERSION 1`, backend-plugin ABI `2`, soname `libWasmBase.so.1` |
 | Build | `make -j16` in `build/Desktop-Debug` → exit 0 |
-| Suite | **11,460 assertions / 484 cases**, all green (§9) |
+| Suite | **11,579 assertions / 485 cases**, all green (§9); the audit's own run at `5c3d194` was 11,460 / 484 |
 | Documentation inventory | **21 notes** in `docs/` (this one included) and **34** under `docs/proposals/` |
 | Layering | §6 check of `LAYERING.md`: **0 hits** in `WasmBase/` + `WasmStub/`; `[layering]` enforces it |
 | Backends | `"libjit"` (executes), `"null"` (structural), `"example"` (loadable plugin); `Asmjit/`, `Sljit/` are documented placeholders with no sources |
@@ -474,12 +475,15 @@ work is ≈10 kLOC of uniform, per-opcode emission.
 
 ## 9. Test survey
 
-Everything below was run on 2026-10-30 at `5c3d194`, in `build/Desktop-Debug`.
+Everything below was run on 2026-10-30 in `build/Desktop-Debug`. The tree and
+gate rows are measured at `5c3d194` (branch `LibjitDispatcher`, since merged);
+the two suite rows were re-run after the `[docs]` note-tree case landed, so they
+are larger than the audit's own run (11,460 assertions / 484 cases).
 
 | Run | Command | Result | What it evidences |
 |---|---|---|---|
 | Build | `env MAKE=/usr/bin/make /usr/bin/make -j16` | exit **0** | the tree at this commit builds; `Asmjit/`/`Sljit/` still build as empty subprojects |
-| Full suite | `./Test/WasmJit` | **11,460 assertions / 484 cases**, all passed | the default gate is green |
+| Full suite | `./Test/WasmJit` | **11,579 assertions / 485 cases**, all passed | the default gate is green |
 | ABI baseline | `./Test/abi-check.sh build/Desktop-Debug` | `libWasmBase: 0 removed, 0 added`; `libLibJit: 0 removed, 0 added`; **OK** | `RG6`: no exported symbol moved, in either library |
 | Install + consumer | `./Test/install-check.sh build/Desktop-Debug` | `consumer: i32, f64, i32+i32, v128, i32+v128 OK`; **OK** | `RG5`/`RG6`: the installed headers and `wasmjit.pc` carry the frozen ABI |
 | Layering | `grep -rn -iE '\b(libjit\|asmjit\|sljit\|jit_type\|jit_insn\|jit_function\|jit_value\|jit_context)\b\|jit/jit\.h\|\bJIT\b' WasmBase/ WasmStub/` | **0 hits** | `G3` condition 4; enforced by `[layering]` |
@@ -489,7 +493,7 @@ Everything below was run on 2026-10-30 at `5c3d194`, in `build/Desktop-Debug`.
 | `[surface]` | `./Test/WasmJit '[surface]'` | **4 assertions / 1 case** | the version identity an embedder compiles against agrees with the runtime |
 | `[tiers]` | `./Test/WasmJit '[tiers]'` | **210 assertions / 3 cases** | every public header has one tier and one compile-only TU (25 embedder / 17 backend / 16 internal) |
 | `[layering]` | `./Test/WasmJit '[layering]'` | **4 assertions / 1 case** | the vocabulary check runs in the default suite |
-| `[docs]` | `./Test/WasmJit '[docs]'` | **720 assertions / 1 case** | the 34 proposal notes keep the documented structure |
+| `[docs]` | `./Test/WasmJit '[docs]'` | **839 assertions / 2 cases** | the 34 proposal notes keep the documented structure, and the 55 notes keep their place in the note tree |
 | `[headerdoc]` | `./Test/WasmJit '[headerdoc]'` | **6 assertions / 3 cases** | the header-comment policy |
 | `[multiagent]` | `./Test/WasmJit '[multiagent]'` | **51 assertions / 6 cases** | the opt-in `Agents` model behind `RG2`'s thread row |
 | `[concurrency]` | `./Test/WasmJit '[concurrency]'` | **81 assertions / 14 cases** | the single-agent contract and its guards |

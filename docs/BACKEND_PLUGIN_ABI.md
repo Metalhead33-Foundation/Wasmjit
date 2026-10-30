@@ -1,4 +1,4 @@
-# Backend Plugin ABI — Dynamically Loaded Code Generators Behind a Minimal C ABI
+# Backend Plugin ABI — Dynamically Loaded Code Generators Behind a Minimal C ABI {#doc_backend_plugin_abi}
 
 Status: feasibility study + implemented narrow boundary (revision 2 —
 2026-10-29: `BP-1`…`BP-4` landed — the POD views, the name-based registry, the

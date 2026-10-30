@@ -1,4 +1,4 @@
-# The Embedding Surface — `WASM::Runtime`, the Umbrella Header, Versioning, and the Include Set
+# The Embedding Surface — `WASM::Runtime`, the Umbrella Header, Versioning, and the Include Set {#doc_embedding_surface}
 
 Status: design note + plan (revision 3 — 2026-10-29: disambiguates the five roles
 called "context" or "runtime" (§3.1–§3.2), adds the profile/config layer (§4.6) and

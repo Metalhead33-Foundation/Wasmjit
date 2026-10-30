@@ -1,4 +1,4 @@
-# Backend Layering — What `WasmBase/` May Know, and What Only a Backend May
+# Backend Layering — What `WasmBase/` May Know, and What Only a Backend May {#doc_layering}
 
 Status: policy note (revision 2 — 2026-10-29: the last non-empty citation was
 renamed away and the check became an automated test; revision 1 recorded the rule
@@ -144,7 +144,7 @@ First pass, 2026-10-16 (the change that added this note):
 | 10 explicit `LibJIT` mentions (4 in the new SIMD helper layer, 6 pre-existing) | 0 |
 | 3 of those named backend *types* (`jit_function_t`, `jit_type_void`, `jit_value_t`) in comments | 0 |
 | ~38 comments using "JIT" where they meant "the one backend that exists" | 0 — reworded to the §5 vocabulary |
-| No rule anywhere, so nothing to check against | this note, + a rule line in [`AGENTS.md`](../AGENTS.md), + a [`README.md`](../README.md) pointer |
+| No rule anywhere, so nothing to check against | this note, + a rule line in `AGENTS.md`, + a [`README.md`](../README.md) pointer |
 
 No code changed behaviour: every edit was a comment (verified — no `WasmBase/`
 file includes a backend header or names a backend type in code, then or now),
@@ -190,6 +190,6 @@ sitting in `Sljit/`, outside `build/`.
 - [`SIMD_BACKENDS.md`](SIMD_BACKENDS.md), [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) —
   what each backend can do for SIMD, and why the shared helper layer lives in
   the core.
-- [`../AGENTS.md`](../AGENTS.md) — the rule in one line, for anyone (or any
+- `AGENTS.md` — the rule in one line, for anyone (or any
   agent) starting work here.
 

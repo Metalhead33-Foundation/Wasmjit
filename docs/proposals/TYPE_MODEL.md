@@ -1,4 +1,4 @@
-# Unified Type Store and Component Type Identity — Implementation Notes, Spec Status, and Deliberate Deviations
+# Unified Type Store and Component Type Identity — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_type_model}
 
 Status: design note / implementation reference (revision 13 — the type model is
 complete. Core modules, component core types and validated component

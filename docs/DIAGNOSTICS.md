@@ -1,4 +1,4 @@
-# Diagnostics and Debugging — Current Surface, Gaps, and Plan
+# Diagnostics and Debugging — Current Surface, Gaps, and Plan {#doc_diagnostics}
 
 Status: design note / implementation plan. **Revision 6** implements DG-0…DG-8
 and the terminal-facing extension of DG-3:

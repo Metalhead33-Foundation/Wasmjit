@@ -1,4 +1,4 @@
-# JavaScript-Related Proposals — Implementation Notes, Spec Status, and Deliberate Non-Integration
+# JavaScript-Related Proposals — Implementation Notes, Spec Status, and Deliberate Non-Integration {#prop_js_integration}
 
 Status: design note / implementation reference (revision 10 — consolidated survey
 of JS-BigInt integration, JS String Builtins, JSPI, custom descriptors, ESM

@@ -1,4 +1,4 @@
-# Bulk Memory Operations — Implementation Notes, Spec Status, and Deliberate Deviations
+# Bulk Memory Operations — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_bulk_memory}
 
 Status: design note / implementation reference (revision 3 — BM-1…BM-6
 implemented: recoverable traps, dropped/empty semantics, the `data`/`elem`

@@ -1,4 +1,4 @@
-# Small Phase 5 Proposals: Sign-extension, Non-trapping Float→Int, Branch Hinting
+# Small Phase 5 Proposals: Sign-extension, Non-trapping Float→Int, Branch Hinting {#prop_small_proposals}
 
 Status: design note / implementation reference (revision 3 — the trapping
 `div`/`rem`/`trunc_f*` forms now actually trap; see the note in §5).

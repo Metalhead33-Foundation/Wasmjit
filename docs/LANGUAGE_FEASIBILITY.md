@@ -1,4 +1,4 @@
-# Wasm Language Support — Pre-Feasibility, Full Feasibility, and the Entry-Gate Readiness Audit
+# Wasm Language Support — Pre-Feasibility, Full Feasibility, and the Entry-Gate Readiness Audit {#doc_language_feasibility}
 
 Status: process definition / study charter (revision 3 — 2026-10-30: the
 entry-gate audit `LF-0a` has been **run**, and its result lives in
@@ -734,7 +734,7 @@ result.**
 | Automated test for either study or the audit | **Absent by design** | The outputs are documents, PoC artefacts and a readiness report, not assertions in the suite. |
 | Entry-gate audit (`LF-0a`) | **Run 2026-10-30** — [`READINESS_AUDIT.md`](READINESS_AUDIT.md): `RG1`–`RG6` all `Pinned` at `5c3d194` | The readiness report, the pinned snapshot, the moving-targets list and the not-audited list all exist; the audit's §9 records the runs behind them (11,460 assertions / 484 cases, `abi-check.sh` 0 removed / 0 added, `install-check.sh` OK, the layering grep at 0 hits). |
 | `G3` re-check (second code generator) | **`✅`** — same note §4 | Work on a non-LibJIT backend may begin; `RA1`/`RA2` (harness wiring, and the absence of a second *executing* generator) are named rather than hidden, and `RA-1` closes them. |
-| `[docs]` structural lint | Covers `docs/proposals/` only | This note is not linted (like the other top-level notes); its structure is kept by review. |
+| `[docs]` structural lint | Covers `docs/proposals/` (the note shape) **and** the note tree (`docs/index.md`, `docs/proposals/index.md`: ids and rows) | This note is not linted for *shape* (like the other top-level notes), but it is linted for *placement*: it must declare a page id and appear in `docs/index.md`, or the tree silently flattens ([`DOCUMENTATION.md`](DOCUMENTATION.md) §9). |
 | `[layering]` / `[surface]` gates | **Exist** (`Test/LayeringTests.cpp`, `Test/SurfaceTests.cpp`, `Test/HeaderTierTests.cpp`) | `RG1`/`RG3`/`RG6` evidence: the core ↔ backend vocabulary is machine-checked, the version identity an embedder compiles against is exercised at run time, and every header has a declared tier. |
 | `[runtime]` / `[plugin]` gates | **Exist** (`Test/RuntimeTests.cpp`, `Test/PluginTests.cpp`) | `RG5`/`RG6` evidence: the load → instantiate → call recipe runs against a declared runtime, and a backend loads from a separate shared library through the C descriptor. |
 | Language-feasibility PoC tests | **None exist** under this note's definition | `LF-2` produces them under a charter; promotion to the default suite is a separate decision. |

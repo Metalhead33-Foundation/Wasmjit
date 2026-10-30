@@ -1,4 +1,4 @@
-# Extended Constant Expressions — Implementation Notes, Spec Status, and Deliberate Deviations
+# Extended Constant Expressions — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_extended_const}
 
 Status: design note / implementation reference (revision 3 — EC-1…EC-5
 implemented: the six integer arithmetic forms, imported/earlier-defined global

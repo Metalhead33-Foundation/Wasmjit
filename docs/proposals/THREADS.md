@@ -1,4 +1,4 @@
-# Threads and Atomics — Implementation Notes, Spec Status, and Deliberate Deviations
+# Threads and Atomics — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_threads}
 
 Status: design note / implementation reference (revision 12 — **TH-1…TH-6 are
 implemented**; TH-5 (real agents) is built as an opt-in

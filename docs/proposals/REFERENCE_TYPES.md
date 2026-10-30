@@ -1,4 +1,4 @@
-# Reference Types — Implementation Notes, Spec Status, and Deliberate Deviations
+# Reference Types — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_reference_types}
 
 Status: design note / implementation reference (revision 2 — reference types is
 shipped as the substrate GC and typed function references build on; RT-1…RT-5

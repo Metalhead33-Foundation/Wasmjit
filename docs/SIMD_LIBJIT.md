@@ -1,4 +1,4 @@
-# LibJIT-Only SIMD Lowering — Design Decision: Frame-Slot `v128`, Pointer-Arg Helpers, Highway
+# LibJIT-Only SIMD Lowering — Design Decision: Frame-Slot `v128`, Pointer-Arg Helpers, Highway {#doc_simd_libjit}
 
 Status: design note / decision record (revision 1 — records the LibJIT-only
 direction, the `v128` layout, the helper ABI, the helper library, the wasm

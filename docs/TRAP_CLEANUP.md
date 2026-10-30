@@ -1,4 +1,4 @@
-# Trap Cleanup — Escaping the POD-Only Trap Path
+# Trap Cleanup — Escaping the POD-Only Trap Path {#doc_trap_cleanup}
 
 Status: design note / implementation reference (revision 4 — **implemented**).
 The trap path is a per-agent pending status that unwinds by *returning*:
@@ -1338,7 +1338,7 @@ host-side; only the last three need codegen-level assertions.
 | `a trap leaves the instance usable for the next call` (shipped) | repeated traps do not poison the thread; a fresh instance still runs |
 | `Elv scope guards cover exit, success and failure` (shipped) | the generic `ELV_SCOPE_*` utilities used by the model behave as documented |
 | `a wrapped native import converts exceptions into a trap` (shipped) | `nativeImport<&fn>()` turns a thrown `std::exception` into `TrapKind::Internal` with its `what()` message, and the import’s own RAII locals are destroyed (TRAP-5) |
-| `WASM::trap` inside a wrapped native import keeps its kind` (shipped) | the wrapper catches `WASM::Trap` and re-reports kind + message instead of unwinding generated code |
+| `WASM::trap` inside a wrapped native import keeps its kind (shipped) | the wrapper catches `WASM::Trap` and re-reports kind + message instead of unwinding generated code |
 | `a wrapped native import still receives the caller’s VMContext` (shipped) | the wrapped form is byte-for-byte the raw import ABI (`ctx->hostData` still reaches the body) |
 | `agent execution state isolates traps, exceptions, tail calls and deferred cleanup` (shipped) | two agents on one host thread own independent trap/exception/tail/defer/depth state; `AgentScope` restores the previous state (TRAP-6 / SS-6) |
 | `each host thread gets its own default agent and execution state` (shipped) | a host thread's default agent is per thread, and a worker's trap does not leak to the main agent (TRAP-6) |

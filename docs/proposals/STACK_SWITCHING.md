@@ -1,4 +1,4 @@
-# Stack Switching (Continuations) — Implementation Notes, Spec Status, and Deliberate Deviations
+# Stack Switching (Continuations) — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_stack_switching}
 
 Status: design note / implementation reference (revision 13 — SS-0/SS-1/SS-2,
 the per-execution-context Agent/ExecutionState refactor (SS-6), the A

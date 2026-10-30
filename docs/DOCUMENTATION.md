@@ -1,12 +1,13 @@
-# Header Documentation — Doxygen Style, and Why It Is Not Optional
+# Documentation — Doxygen Style in the Headers, and the Note Tree {#doc_documentation}
 
-Status: policy note (revision 1 — 2026-10-29: every comment in the project's
-`.h`/`.hpp` files was converted to Qt-style Doxygen comments, `Doxyfile` was
-added, and `Test/HeaderDocTests.cpp` now enforces the rule; this note records the
-forms, the escaping pitfalls that a real Doxygen 1.18 run exposed, and the
-check).
-Audience: anyone adding or editing a header, or reviewing a change that touches
-one.
+Status: policy note (revision 2 — 2026-10-30: the Markdown notes are now part of
+the generated site, so the 55 notes gain stable page ids and two index pages put
+them into a hierarchy; the escaping list in §5 gains the Markdown rows a real
+run exposed, and §9 is new. Revision 1 — 2026-10-29: every comment in the
+project's `.h`/`.hpp` files was converted to Qt-style Doxygen comments,
+`Doxyfile` was added, and `Test/HeaderDocTests.cpp` now enforces the rule).
+Audience: anyone adding or editing a header or a note, or reviewing a change
+that touches one.
 
 The headers are not a private implementation detail that happens to be visible.
 `WasmBase/` is the embedder-facing API ([`API_ABI_STABILITY.md`](API_ABI_STABILITY.md)
@@ -29,7 +30,8 @@ markup has to look like. It contains no engine behaviour.
 | §6 | How do I check? |
 | §7 | Why is this necessary rather than nice to have? |
 | §8 | What is deliberately left undone? |
-| §9 | References |
+| §9 | How are the notes arranged into a tree instead of a flat list? |
+| §10 | References |
 
 ## 2. The rule
 
@@ -170,9 +172,25 @@ The `module` row is a Doxygen bug, not a naming rule; `WasmStub/` hit it and the
 member carries a comment saying so. If a future Doxygen stops doing this, the
 comment can go.
 
+The next five rows only bite once Markdown files are rendered (they were found
+when the notes joined the site), and each one is silent in a Markdown preview —
+which is why they are listed rather than left to intuition:
+
+| Written | What Doxygen does | Written instead |
+|---|---|---|
+| a **code span split across two lines**, or any line with an odd number of backticks (a test name broken over a line boundary) | opens a verbatim block and searches for a closing backtick to the end of the file ("Reached end of file while still searching closing backtick of a verbatim block"), swallowing the rest of the page | keep each span on one line, and keep the backtick count on a line even; `GC.md` and `TRAP_CLEANUP.md` each had one such split |
+| a member-style name in plain prose, e.g. `O(#functions)` | the `#` starts a link request, exactly as in a header comment ("explicit link request to 'functions' could not be resolved") | keep it inside a code span (as here), or escape the hash with a backslash when it sits in prose |
+| a bare angle-bracket placeholder in prose, even inside a code span, e.g. a quoted boilerplate block | "Unsupported xml/html tag \<name> found" | escape the angle bracket by writing a backslash immediately before it |
+| a **relative link to a file outside the `Doxyfile`'s `INPUT`**, e.g. `[AGENTS.md](../AGENTS.md)` or a link to `Sljit/README.md` | "unable to resolve reference to … for \ref command": the target is not a page, so the link cannot be made | name it as inline code (`AGENTS.md`) instead of linking it |
+| an anchor link whose heading carries no explicit label, e.g. `[note](#environment-notes)` | the anchor is not a Doxygen label, so the reference cannot be resolved | put a label on the heading (`{#environment-notes}`) and link to that |
+
+**Rule of thumb:** the generated site is the arbiter, not the Markdown preview.
+`doxygen Doxyfile` must report nothing; a warning is a doc bug with a rewrite,
+which is why the check in §6 is the first of the four commands.
+
 ## 6. How to check
 
-Four commands, all cheap:
+Five commands, all cheap:
 
 ```bash
 # 1. Render the reference. Any output on stderr is a doc bug: the tree is clean.
@@ -182,7 +200,10 @@ $BROWSER build/doxygen/html/index.html
 # 2. Enforce the shape and the file blocks (part of the default suite).
 ./Test/WasmJit '[headerdoc]'
 
-# 3. The strict pass: measures the two things the default render cannot, because
+# 3. Enforce the note tree: every note has an id and a row in its folder index.
+./Test/WasmJit '[docs]'
+
+# 4. The strict pass: measures the two things the default render cannot, because
 #    EXTRACT_ALL switches them off — a declaration with no block at all, and a
 #    documented function whose parameters are not all documented (§3.1).
 sed -e 's/^EXTRACT_ALL .*/EXTRACT_ALL = NO/' \
@@ -190,7 +211,7 @@ sed -e 's/^EXTRACT_ALL .*/EXTRACT_ALL = NO/' \
     -e 's|^OUTPUT_DIRECTORY .*|OUTPUT_DIRECTORY = build/doxygen-strict|' \
     Doxyfile | doxygen -
 
-# 4. Read a header the way a newcomer will: the top of the file, then the
+# 5. Read a header the way a newcomer will: the top of the file, then the
 #    brief of its first declaration.
 ```
 
@@ -229,8 +250,8 @@ The strict pass is a *work list*, not a gate: today it reports the gap counted i
   declaration is expected to arrive documented, and the strict pass is the check
   that catches one that does not.
 - **A doc block must say something.** A block of the form
-  "`\brief Performs the <name> operation. \param x Input value or output
-  destination for this operation.`" is *worse than no block*: it renders, it is
+  "`\brief Performs the \<name> operation. \param x Input value or output destination for this operation.`"
+  is *worse than no block*: it renders, it is
   counted as documented, and it states nothing (or, on a `void` handler, states
   something false). Such blocks were removed from the tree in the same pass that
   fixed the renderer warnings, and the trailing placeholders that survived that
@@ -250,7 +271,64 @@ The strict pass is a *work list*, not a gate: today it reports the gap counted i
   handed, which is the headers. Implementation comments keep their `//` style
   (they are also where `Test/LayeringTests.cpp`-style checks look for prose).
 
-## 9. References
+## 9. The note tree
+
+The site renders the Markdown notes as pages, and `GENERATE_TREEVIEW = YES` shows
+them in the sidebar. Doxygen nests a page only when another page names it with
+`\subpage`; without that every note is a *sibling* at the top level, which is what
+a flat tree is. The hierarchy is therefore built by two index pages:
+
+| Index page | Id | Children |
+|---|---|---|
+| [`index.md`](index.md) | `docs_index` | the 21 notes in `docs/` **and** `proposals` |
+| [`proposals/index.md`](proposals/index.md) | `proposals_index` | the 34 proposal notes |
+
+A note declares its own id on the title line, and its folder's index lists that
+id in a table row:
+
+```md
+# Running the unit tests {#doc_testing}                          ← docs/TESTING.md
+| \subpage doc_testing | Building and running the suite, … |    ← docs/index.md
+```
+
+which produces:
+
+```
+WasmJit            (README.md, the main page)
+├── Direction, Feature completeness, …   (the README's own sections)
+└── docs                                 (docs/index.md)
+    ├── ABI, API/ABI stability, …        (21 notes, each with its own sections)
+    └── proposals                        (docs/proposals/index.md)
+        └── GC, SIMD, THREADS, …         (34 notes)
+```
+
+**Adding a note** takes three steps: create the file; append `{#doc_what_it_is}`
+(or `{#prop_what_it_is}`) to its `# Title` line; add one row to its folder's
+index. Moving a note between the folders means changing both the id prefix and
+the row.
+
+**Why the ids are explicit.** Doxygen derives an id from the path when it has to
+(`md_docs_2TESTING`): it changes when the file moves and reads like a hash. An
+explicit `{#doc_testing}` is stable, greppable, and is what a cross-note link can
+target (`[the tree](DOCUMENTATION.md#doc_documentation)`, `[GC](../proposals/GC.md)`
+style links keep working because the file links resolve to the page).
+
+**Enforced, not remembered.** `./Test/WasmJit '[docs]'` fails when
+
+- a note in `docs/` or `docs/proposals/` has no `{#id}` on its title line;
+- a note is missing from its folder's index — which is the silent failure: it
+  would still build, as a sibling of the whole sub-tree;
+- an index names an id that no note declares (a typo Doxygen would drop without
+  complaint).
+
+`[headerdoc]` keeps the Doxyfile's settings honest (`QT_AUTOBRIEF`,
+`WARN_NO_PARAMDOC`, the output directory); the note tree adds no setting of its
+own beyond the ones that turn Markdown on: `FILE_PATTERNS = … *.md` with
+`README.md`, `docs` and `docs/proposals` in `INPUT`, and
+`USE_MDFILE_AS_MAINPAGE = README.md`, which is what makes the README the root
+page rather than another sibling.
+
+## 10. References
 
 - [`Doxyfile`](../Doxyfile) — the renderer's configuration; `QT_AUTOBRIEF`,
   `WARN_NO_PARAMDOC` and the `build/doxygen` output directory are asserted by the

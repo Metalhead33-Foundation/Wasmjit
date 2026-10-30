@@ -1,4 +1,4 @@
-# Running the unit tests
+# Running the unit tests {#doc_testing}
 
 `Test/` builds a single Catch2 executable, `WasmJit`, that contains two families of tests:
 
@@ -946,11 +946,18 @@ into `docs/SIMD_LIBJIT.md` §8.4.
 [`PROPOSALS.md`](PROPOSALS.md) demands of every note, without hard-coding the
 sanctioned variants:
 
-- each `docs/proposals/*.md` has `Status:` and `Audience:` front matter before
-  its §1 map;
+- each `docs/proposals/*.md` (except the folder `index.md`, which is navigation)
+  has `Status:` and `Audience:` front matter before its §1 map;
 - the §1 map exists and is the contract: every `## N.` heading (N ≥ 2) appears
   in the map, and every `§N` the map names has a heading;
 - a References section exists.
+
+The second case in the same file enforces the **note tree**
+([`DOCUMENTATION.md`](DOCUMENTATION.md) §9): every note in `docs/` and
+`docs/proposals/` declares a page id (`# Title {#doc_testing}`) and appears as a
+`\subpage` row in its folder's `index.md`; a note that is missing from the index
+would build as a sibling of the whole sub-tree instead of a child, so the check
+fails rather than the tree silently flattening.
 
 The check reads the notes from the source tree through
 `WASM_TESTSUITE_SOURCE_DIR`, so it works from any working directory. Run it on
@@ -1119,7 +1126,7 @@ WASM_SPEC_SCRIPTS=all ./WasmJit --list-tests       # what a full default run wou
 
 ---
 
-## Environment notes for this machine
+## Environment notes for this machine {#environment-notes-for-this-machine}
 
 These are quirks of the development box, not requirements of the project.
 

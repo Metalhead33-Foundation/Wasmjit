@@ -1,4 +1,4 @@
-# Safety, Guardrails, and Known Pitfalls
+# Safety, Guardrails, and Known Pitfalls {#doc_safety}
 
 Status: policy / implementation reference (revision 3 — adds the trap-cleanup
 design pointer and records that a Go-style defer stack is a candidate, not

@@ -1,4 +1,4 @@
-# Extended Name Section — Implementation Notes, Spec Status, and Deliberate Deviations
+# Extended Name Section — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_extended_name_section}
 
 Status: design note / implementation reference (revision 3 — every core and
 extended name subsection is parsed and exposed through `Module::findName`, and

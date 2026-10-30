@@ -1,4 +1,4 @@
-# Instruction Tracing (`i32.itt`) — Implementation Notes, Spec Status, and Deliberate Deviations
+# Instruction Tracing (`i32.itt`) — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_instrument_tracing}
 
 Status: design note / implementation reference (revision 2 — engine-reserved
 encoding, NOP lowering and optional compile-time callback implemented; the

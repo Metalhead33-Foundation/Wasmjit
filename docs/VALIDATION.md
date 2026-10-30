@@ -1,4 +1,4 @@
-# Validation
+# Validation {#doc_validation}
 
 `WasmBase/WasmValidator.cpp` is the validating front end. `Module::fromFile`
 calls `validate()` after decoding, so a module is checked once and every

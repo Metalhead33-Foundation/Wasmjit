@@ -1,4 +1,4 @@
-# Shared-Everything Threads — Implementation Notes, Spec Status, and Deliberate Deviations
+# Shared-Everything Threads — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_shared_everything_threads}
 
 Status: design note / implementation reference (revision 5 — **SET-1, SET-2,
 SET-3, SET-6 and SET-7 implemented**. The engine has `shared`

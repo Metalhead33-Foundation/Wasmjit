@@ -1,4 +1,4 @@
-# Unmodelled Value Types — Rejected at Load
+# Unmodelled Value Types — Rejected at Load {#doc_unmodelled_value_types}
 
 Status: investigation note (revision 3 — root cause confirmed empirically; **fix
 D implemented** — unmodelled value types are rejected at load. Renamed from

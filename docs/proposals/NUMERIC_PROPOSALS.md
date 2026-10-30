@@ -1,4 +1,4 @@
-# Wide Arithmetic, Half Precision, and Rounding-Mode Control — Implementation Notes, Spec Status, and Deliberate Deviations
+# Wide Arithmetic, Half Precision, and Rounding-Mode Control — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_numeric_proposals}
 
 Status: design note / implementation reference (revision 3 — Wide Arithmetic
 and Rounding-Mode Control are implemented; Half Precision remains
