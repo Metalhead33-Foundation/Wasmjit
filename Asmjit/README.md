@@ -25,9 +25,10 @@ the two-pass instantiation contract and enabling forward and mutually recursive
 direct calls. Each generated function emits the required
   `wasm_stack_check(VMContext*)` prologue call.
 - The body compiler currently supports i32 parameters/results/locals; constants,
-  local access, `drop`; arithmetic (`add/sub/mul/div/rem`), `clz`/`ctz`, sign
+  local access, `drop`; arithmetic (`add/sub/mul/div/rem`), `clz`/`ctz`/`popcnt`, sign
   extension; signed/unsigned comparisons; bitwise operations, shifts and rotations; void `block`/`loop`/`if`/`else`,
-  `br`/`br_if`; direct calls (including forward calls and mutual recursion);
+  `br`/`br_if`; explicit/implicit returns; direct calls (native imports, forward
+  calls and mutual recursion);
   and memory32 i32 loads/stores, including signed/unsigned 8/16-bit extensions.
   Memory accesses use a checked helper that observes the shared-memory size
   accessor and reports out-of-bounds traps through the pending-trap protocol.
@@ -86,7 +87,7 @@ upstream repository so that `asmjit.pc` is visible through `PKG_CONFIG_PATH`.
 ## Next implementation stages
 
 1. Extend structured control flow to result-bearing blocks, full branch-stack semantics, and unreachable-stack polymorphism.
-2. Add indirect calls, imported-call coverage, and broader call ABI support.
+2. Add indirect calls, cross-instance Wasm-import tests, tail-call integration, and broader call ABI support.
 3. Expand linear memory to the remaining load/store widths, memory64, memory.size/grow, and bulk-memory operations.
 4. Add i64 arithmetic, conversions, globals, references/GC, exceptions, continuations, and Wasm SIMD lowering.
 5. Meet every applicable item in
