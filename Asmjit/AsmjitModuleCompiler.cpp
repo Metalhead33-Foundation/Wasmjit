@@ -343,44 +343,26 @@ protected:
 
 	void dispatchBlock(const WASM::BlockType& type) override
 	{
-		if (!type.isVoid())
-			throw std::runtime_error("AsmJit structured control flow currently requires void block types");
-		ControlFrame frame;
-		frame.kind = ControlKind::Block;
-		frame.stackHeight = values.size();
-		frame.end = compiler.new_label();
-		controls.push_back(frame);
+		pushControlFrame(ControlKind::Block, type);
 	}
 
 	void dispatchLoop(const WASM::BlockType& type) override
 	{
-		if (!type.isVoid())
-			throw std::runtime_error("AsmJit structured control flow currently requires void loop types");
-		ControlFrame frame;
-		frame.kind = ControlKind::Loop;
-		frame.stackHeight = values.size();
-		frame.begin = compiler.new_label();
-		frame.end = compiler.new_label();
-		checkError(compiler.bind(frame.begin), "AsmJit loop label binding failed");
-		controls.push_back(frame);
+		pushControlFrame(ControlKind::Loop, type);
+		checkError(compiler.bind(controls.back().begin), "AsmJit loop label binding failed");
 	}
 
 	void dispatchIf(const WASM::BlockType& type) override
 	{
-		if (!type.isVoid())
-			throw std::runtime_error("AsmJit structured control flow currently requires void if types");
 		if (values.empty())
 			throw std::runtime_error("AsmJit if condition stack underflow");
 		auto condition = values.back();
 		values.pop_back();
-		ControlFrame frame;
-		frame.kind = ControlKind::If;
-		frame.stackHeight = values.size();
+		pushControlFrame(ControlKind::If, type);
+		auto& frame = controls.back();
 		frame.alternate = compiler.new_label();
-		frame.end = compiler.new_label();
 		checkError(compiler.test(condition, condition), "AsmJit if condition test failed");
 		checkError(compiler.jz(frame.alternate), "AsmJit if condition branch failed");
-		controls.push_back(frame);
 	}
 
 	void dispatchElse() override
@@ -388,25 +370,32 @@ protected:
 		if (controls.empty() || controls.back().kind != ControlKind::If || controls.back().hasElse)
 			throw std::runtime_error("AsmJit encountered an unmatched or duplicate else");
 		ControlFrame& frame = controls.back();
-		if (values.size() != frame.stackHeight)
-			throw std::runtime_error("AsmJit if arm leaves an unexpected operand stack shape");
+		storeBlockResult(frame, "if then");
 		checkError(compiler.jmp(frame.end), "AsmJit if/else end jump failed");
 		checkError(compiler.bind(frame.alternate), "AsmJit else label binding failed");
+		values.resize(frame.stackHeight);
 		frame.hasElse = true;
 	}
 
 	void dispatchEnd() override
 	{
-		// The outermost end closes the function body, not a nested control frame.
 		if (controls.empty())
 			return;
 		ControlFrame frame = controls.back();
 		controls.pop_back();
-		if (values.size() != frame.stackHeight)
-			throw std::runtime_error("AsmJit structured block leaves an unexpected operand stack shape");
-		if (frame.kind == ControlKind::If && !frame.hasElse)
+		if (frame.kind == ControlKind::If && !frame.hasElse) {
+			if (frame.resultCount != 0)
+				throw std::runtime_error("AsmJit if-without-else cannot produce a result");
+			if (values.size() != frame.stackHeight)
+				throw std::runtime_error("AsmJit if arm leaves an unexpected operand stack shape");
 			checkError(compiler.bind(frame.alternate), "AsmJit implicit else label binding failed");
+		} else {
+			storeBlockResult(frame, "structured block");
+		}
 		checkError(compiler.bind(frame.end), "AsmJit structured block end binding failed");
+		values.resize(frame.stackHeight);
+		if (frame.resultCount != 0)
+			values.push_back(frame.result);
 	}
 
 	void dispatchBrIf(WASM::LabelIdx depth) override
@@ -417,25 +406,37 @@ protected:
 			throw std::runtime_error("AsmJit br_if label depth is out of range");
 		const auto condition = values.back();
 		values.pop_back();
-		const ControlFrame& target = controls[controls.size() - 1 - depth];
-		if (values.size() != target.stackHeight)
-			throw std::runtime_error("AsmJit br_if currently supports only void label signatures");
+		ControlFrame& target = controls[controls.size() - 1 - depth];
+		const size_t branchValues = target.kind == ControlKind::Loop ? 0 : target.resultCount;
+		if (values.size() != target.stackHeight + branchValues)
+			throw std::runtime_error("AsmJit br_if operand stack does not match target label signature");
 		const asmjit::Label label = target.kind == ControlKind::Loop ? target.begin : target.end;
-		checkError(compiler.test(condition, condition), "AsmJit br_if condition test failed");
-		checkError(compiler.jnz(label), "AsmJit br_if branch emission failed");
+		if (branchValues != 0) {
+			auto skip = compiler.new_label();
+			checkError(compiler.test(condition, condition), "AsmJit br_if condition test failed");
+			checkError(compiler.jz(skip), "AsmJit br_if conditional skip emission failed");
+			checkError(compiler.mov(target.result, values.back()), "AsmJit br_if result transfer failed");
+			checkError(compiler.jmp(label), "AsmJit br_if branch emission failed");
+			checkError(compiler.bind(skip), "AsmJit br_if skip label binding failed");
+		} else {
+			checkError(compiler.test(condition, condition), "AsmJit br_if condition test failed");
+			checkError(compiler.jnz(label), "AsmJit br_if branch emission failed");
+		}
 	}
 
 	void dispatchBr(WASM::LabelIdx depth) override
 	{
 		if (depth >= controls.size())
 			throw std::runtime_error("AsmJit br label depth is out of range");
-		const ControlFrame& target = controls[controls.size() - 1 - depth];
-		if (values.size() != target.stackHeight)
-			throw std::runtime_error("AsmJit br currently supports only void label signatures");
+		ControlFrame& target = controls[controls.size() - 1 - depth];
+		const size_t branchValues = target.kind == ControlKind::Loop ? 0 : target.resultCount;
+		if (values.size() != target.stackHeight + branchValues)
+			throw std::runtime_error("AsmJit br operand stack does not match target label signature");
+		if (branchValues != 0)
+			checkError(compiler.mov(target.result, values.back()), "AsmJit br result transfer failed");
 		const asmjit::Label label = target.kind == ControlKind::Loop ? target.begin : target.end;
 		checkError(compiler.jmp(label), "AsmJit br emission failed");
 	}
-
 	void dispatchCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx tableIndex) override
 	{
 		if (tableIndex >= module.importTables.size() + module.tables.size())
@@ -695,6 +696,8 @@ private:
 	struct ControlFrame {
 		ControlKind kind = ControlKind::Block;
 		size_t stackHeight = 0;
+		size_t resultCount = 0;
+		asmjit::x86::Gp result;
 		asmjit::Label begin;
 		asmjit::Label alternate;
 		asmjit::Label end;
@@ -704,6 +707,54 @@ private:
 	enum class BinaryOp { Add, Sub, Mul, And, Or, Xor };
 	enum class ShiftOp { Left, ArithmeticRight, LogicalRight, RotateLeft, RotateRight };
 
+	void pushControlFrame(ControlKind kind, const WASM::BlockType& type)
+	{
+		if (controls.size() >= WASM::kMaxControlNesting)
+			throw std::runtime_error("AsmJit control nesting is too deep");
+		ControlFrame frame;
+		frame.kind = kind;
+		frame.stackHeight = values.size();
+		frame.resultCount = blockResultCount(type);
+		if (frame.resultCount != 0)
+			frame.result = compiler.new_gp32("blockResult");
+		if (kind == ControlKind::Loop) {
+			frame.begin = compiler.new_label();
+			frame.end = compiler.new_label();
+		} else {
+			frame.end = compiler.new_label();
+		}
+		controls.push_back(frame);
+	}
+
+	size_t blockResultCount(const WASM::BlockType& type) const
+	{
+		if (type.isVoid())
+			return 0;
+		if (type.isTypeIndex) {
+			if (type.typeIndex < 0 || static_cast<uint32_t>(type.typeIndex) >= module.typeCount())
+				throw std::runtime_error("AsmJit block type index is out of range");
+			const WASM::FuncType blockType = module.funcTypeAt(static_cast<uint32_t>(type.typeIndex));
+			if (!blockType.params.empty())
+				throw std::runtime_error("AsmJit block parameters are not supported yet");
+			if (blockType.results.size() > 1)
+				throw std::runtime_error("AsmJit block multi-value results are not supported yet");
+			if (!blockType.results.empty())
+				requireI32(blockType.results.front().val, "block results");
+			return blockType.results.size();
+		}
+		if (type.valType != WASM::ValueTypeCode::I32)
+			throw std::runtime_error("AsmJit structured control flow supports only i32 block results");
+		return 1;
+	}
+
+	void storeBlockResult(const ControlFrame& frame, const char* description)
+	{
+		if (values.size() != frame.stackHeight + frame.resultCount)
+			throw std::runtime_error(std::string("AsmJit ") + description
+					+ " leaves an unexpected operand stack shape");
+		if (frame.resultCount != 0)
+			checkError(compiler.mov(frame.result, values.back()), "AsmJit structured result transfer failed");
+	}
 	void emitBinary(BinaryOp operation)
 	{
 		if (values.size() < 2)
