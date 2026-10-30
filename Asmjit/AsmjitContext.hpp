@@ -3,6 +3,7 @@
 
 #include <asmjit/x86.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
