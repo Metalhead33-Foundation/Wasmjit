@@ -50,7 +50,7 @@ const asmjit::CpuFeatures& Context::cpuFeatures() const noexcept
 	return runtime.cpu_features();
 }
 
-void* Context::install(const asmjit::CodeHolder& code)
+void* Context::install(asmjit::CodeHolder& code)
 {
 	void* entry = nullptr;
 	checkError(runtime.add(&entry, &code), "AsmJit executable-memory allocation failed");
