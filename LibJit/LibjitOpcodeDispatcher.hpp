@@ -115,6 +115,9 @@ private:
 /**
  * \brief Performs the emitDropRefLocals operation.
  */
+/**
+ * \brief Performs the emitDropRefLocals operation.
+ */
 	void emitDropRefLocals();
 	//! Pop and return the top of the model operand stack (placeholder when unreachable).
 /**
@@ -184,6 +187,9 @@ private:
 /**
  * \brief Performs the emitDummyReturn operation.
  */
+/**
+ * \brief Performs the emitDummyReturn operation.
+ */
 	void emitDummyReturn();
 	//! Emits the jump for a branch target; a target past the control stack is
 	//! the function's implicit block (i.e. a return).
@@ -197,6 +203,9 @@ private:
 	//! popValue() yields placeholders instead of underflowing.
 /**
  * \brief Performs the markUnreachable operation required by the opcode dispatcher.
+ */
+/**
+ * \brief Performs the markUnreachable operation.
  */
 /**
  * \brief Performs the markUnreachable operation.
@@ -1004,11 +1013,17 @@ private:
 /**
  * \brief Performs the emitPendingExceptionCheck operation.
  */
+/**
+ * \brief Performs the emitPendingExceptionCheck operation.
+ */
 	void emitPendingExceptionCheck();
 	//! Returns zeroes of the current function's result types (the ABI still
 	//! requires a well-formed return when an exception propagates).
 /**
  * \brief Emits LibJIT IR for ReturnZeroes.
+ */
+/**
+ * \brief Performs the emitReturnZeroes operation.
  */
 /**
  * \brief Performs the emitReturnZeroes operation.
@@ -1023,6 +1038,9 @@ private:
 	//! `std::string` across the trap point.
 /**
  * \brief Emits LibJIT IR for PendingTrapCheck.
+ */
+/**
+ * \brief Performs the emitPendingTrapCheck operation.
  */
 /**
  * \brief Performs the emitPendingTrapCheck operation.
@@ -1111,6 +1129,9 @@ public:
 /**
  * \brief Performs the emitImplicitFunctionReturn operation.
  */
+/**
+ * \brief Performs the emitImplicitFunctionReturn operation.
+ */
 	void emitImplicitFunctionReturn();
 
 	//! Emits the function prologue: the guest call-stack guard and the pending
@@ -1121,12 +1142,18 @@ public:
 /**
  * \brief Performs the emitFunctionEntry operation.
  */
+/**
+ * \brief Performs the emitFunctionEntry operation.
+ */
 	void emitFunctionEntry();
 
 	//! Emits the shared error epilogue (return zeroes) when any trap path was
 	//! emitted. Call after emitImplicitFunctionReturn().
 /**
  * \brief Emits LibJIT IR for TrapEpilogue.
+ */
+/**
+ * \brief Performs the emitTrapEpilogue operation.
  */
 /**
  * \brief Performs the emitTrapEpilogue operation.
@@ -1189,9 +1216,15 @@ protected:
 /**
  * \brief Performs the dispatchUnreachable operation.
  */
+/**
+ * \brief Performs the dispatchUnreachable operation.
+ */
 	void dispatchUnreachable() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the Nop WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchNop operation.
  */
 /**
  * \brief Performs the dispatchNop operation.
@@ -1289,6 +1322,9 @@ protected:
 /**
  * \brief Performs the dispatchEnd operation.
  */
+/**
+ * \brief Performs the dispatchEnd operation.
+ */
 	void dispatchEnd() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the Br WebAssembly instruction to this LibJIT implementation.
@@ -1354,6 +1390,9 @@ protected:
 	void dispatchDrop() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the Select WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchSelect operation.
  */
 /**
  * \brief Performs the dispatchSelect operation.
@@ -1554,9 +1593,15 @@ protected:
 /**
  * \brief Performs the dispatchI32Eq operation.
  */
+/**
+ * \brief Performs the dispatchI32Eq operation.
+ */
 	void dispatchI32Eq() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32Ne WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32Ne operation.
  */
 /**
  * \brief Performs the dispatchI32Ne operation.
@@ -1568,9 +1613,15 @@ protected:
 /**
  * \brief Performs the dispatchI32LtS operation.
  */
+/**
+ * \brief Performs the dispatchI32LtS operation.
+ */
 	void dispatchI32LtS() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32LtU WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32LtU operation.
  */
 /**
  * \brief Performs the dispatchI32LtU operation.
@@ -1582,9 +1633,15 @@ protected:
 /**
  * \brief Performs the dispatchI32GtS operation.
  */
+/**
+ * \brief Performs the dispatchI32GtS operation.
+ */
 	void dispatchI32GtS() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32GtU WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32GtU operation.
  */
 /**
  * \brief Performs the dispatchI32GtU operation.
@@ -1596,9 +1653,15 @@ protected:
 /**
  * \brief Performs the dispatchI32LeS operation.
  */
+/**
+ * \brief Performs the dispatchI32LeS operation.
+ */
 	void dispatchI32LeS() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32LeU WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32LeU operation.
  */
 /**
  * \brief Performs the dispatchI32LeU operation.
@@ -1610,9 +1673,15 @@ protected:
 /**
  * \brief Performs the dispatchI32GeS operation.
  */
+/**
+ * \brief Performs the dispatchI32GeS operation.
+ */
 	void dispatchI32GeS() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32GeU WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32GeU operation.
  */
 /**
  * \brief Performs the dispatchI32GeU operation.
@@ -1624,9 +1693,15 @@ protected:
 /**
  * \brief Performs the dispatchI64Eqz operation.
  */
+/**
+ * \brief Performs the dispatchI64Eqz operation.
+ */
 	void dispatchI64Eqz() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64Eq WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64Eq operation.
  */
 /**
  * \brief Performs the dispatchI64Eq operation.
@@ -1638,9 +1713,15 @@ protected:
 /**
  * \brief Performs the dispatchI64Ne operation.
  */
+/**
+ * \brief Performs the dispatchI64Ne operation.
+ */
 	void dispatchI64Ne() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64LtS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64LtS operation.
  */
 /**
  * \brief Performs the dispatchI64LtS operation.
@@ -1652,9 +1733,15 @@ protected:
 /**
  * \brief Performs the dispatchI64LtU operation.
  */
+/**
+ * \brief Performs the dispatchI64LtU operation.
+ */
 	void dispatchI64LtU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64GtS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64GtS operation.
  */
 /**
  * \brief Performs the dispatchI64GtS operation.
@@ -1666,9 +1753,15 @@ protected:
 /**
  * \brief Performs the dispatchI64GtU operation.
  */
+/**
+ * \brief Performs the dispatchI64GtU operation.
+ */
 	void dispatchI64GtU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64LeS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64LeS operation.
  */
 /**
  * \brief Performs the dispatchI64LeS operation.
@@ -1680,9 +1773,15 @@ protected:
 /**
  * \brief Performs the dispatchI64LeU operation.
  */
+/**
+ * \brief Performs the dispatchI64LeU operation.
+ */
 	void dispatchI64LeU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64GeS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64GeS operation.
  */
 /**
  * \brief Performs the dispatchI64GeS operation.
@@ -1694,9 +1793,15 @@ protected:
 /**
  * \brief Performs the dispatchI64GeU operation.
  */
+/**
+ * \brief Performs the dispatchI64GeU operation.
+ */
 	void dispatchI64GeU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32Eq WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32Eq operation.
  */
 /**
  * \brief Performs the dispatchF32Eq operation.
@@ -1708,9 +1813,15 @@ protected:
 /**
  * \brief Performs the dispatchF32Ne operation.
  */
+/**
+ * \brief Performs the dispatchF32Ne operation.
+ */
 	void dispatchF32Ne() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32Lt WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32Lt operation.
  */
 /**
  * \brief Performs the dispatchF32Lt operation.
@@ -1722,9 +1833,15 @@ protected:
 /**
  * \brief Performs the dispatchF32Gt operation.
  */
+/**
+ * \brief Performs the dispatchF32Gt operation.
+ */
 	void dispatchF32Gt() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32Le WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32Le operation.
  */
 /**
  * \brief Performs the dispatchF32Le operation.
@@ -1736,9 +1853,15 @@ protected:
 /**
  * \brief Performs the dispatchF32Ge operation.
  */
+/**
+ * \brief Performs the dispatchF32Ge operation.
+ */
 	void dispatchF32Ge() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64Eq WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64Eq operation.
  */
 /**
  * \brief Performs the dispatchF64Eq operation.
@@ -1750,9 +1873,15 @@ protected:
 /**
  * \brief Performs the dispatchF64Ne operation.
  */
+/**
+ * \brief Performs the dispatchF64Ne operation.
+ */
 	void dispatchF64Ne() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64Lt WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64Lt operation.
  */
 /**
  * \brief Performs the dispatchF64Lt operation.
@@ -1764,9 +1893,15 @@ protected:
 /**
  * \brief Performs the dispatchF64Gt operation.
  */
+/**
+ * \brief Performs the dispatchF64Gt operation.
+ */
 	void dispatchF64Gt() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64Le WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64Le operation.
  */
 /**
  * \brief Performs the dispatchF64Le operation.
@@ -1778,9 +1913,15 @@ protected:
 /**
  * \brief Performs the dispatchF64Ge operation.
  */
+/**
+ * \brief Performs the dispatchF64Ge operation.
+ */
 	void dispatchF64Ge() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32Clz WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32Clz operation.
  */
 /**
  * \brief Performs the dispatchI32Clz operation.
@@ -1792,9 +1933,15 @@ protected:
 /**
  * \brief Performs the dispatchI32Ctz operation.
  */
+/**
+ * \brief Performs the dispatchI32Ctz operation.
+ */
 	void dispatchI32Ctz() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32Popcnt WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32Popcnt operation.
  */
 /**
  * \brief Performs the dispatchI32Popcnt operation.
@@ -1806,9 +1953,15 @@ protected:
 /**
  * \brief Performs the dispatchI32Add operation.
  */
+/**
+ * \brief Performs the dispatchI32Add operation.
+ */
 	void dispatchI32Add() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32Sub WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32Sub operation.
  */
 /**
  * \brief Performs the dispatchI32Sub operation.
@@ -1820,9 +1973,15 @@ protected:
 /**
  * \brief Performs the dispatchI32Mul operation.
  */
+/**
+ * \brief Performs the dispatchI32Mul operation.
+ */
 	void dispatchI32Mul() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32DivS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32DivS operation.
  */
 /**
  * \brief Performs the dispatchI32DivS operation.
@@ -1834,9 +1993,15 @@ protected:
 /**
  * \brief Performs the dispatchI32DivU operation.
  */
+/**
+ * \brief Performs the dispatchI32DivU operation.
+ */
 	void dispatchI32DivU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32RemS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32RemS operation.
  */
 /**
  * \brief Performs the dispatchI32RemS operation.
@@ -1848,9 +2013,15 @@ protected:
 /**
  * \brief Performs the dispatchI32RemU operation.
  */
+/**
+ * \brief Performs the dispatchI32RemU operation.
+ */
 	void dispatchI32RemU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32And WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32And operation.
  */
 /**
  * \brief Performs the dispatchI32And operation.
@@ -1862,9 +2033,15 @@ protected:
 /**
  * \brief Performs the dispatchI32Or operation.
  */
+/**
+ * \brief Performs the dispatchI32Or operation.
+ */
 	void dispatchI32Or() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32Xor WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32Xor operation.
  */
 /**
  * \brief Performs the dispatchI32Xor operation.
@@ -1876,9 +2053,15 @@ protected:
 /**
  * \brief Performs the dispatchI32Shl operation.
  */
+/**
+ * \brief Performs the dispatchI32Shl operation.
+ */
 	void dispatchI32Shl() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32ShrS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32ShrS operation.
  */
 /**
  * \brief Performs the dispatchI32ShrS operation.
@@ -1890,9 +2073,15 @@ protected:
 /**
  * \brief Performs the dispatchI32ShrU operation.
  */
+/**
+ * \brief Performs the dispatchI32ShrU operation.
+ */
 	void dispatchI32ShrU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32Rotl WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32Rotl operation.
  */
 /**
  * \brief Performs the dispatchI32Rotl operation.
@@ -1904,9 +2093,15 @@ protected:
 /**
  * \brief Performs the dispatchI32Rotr operation.
  */
+/**
+ * \brief Performs the dispatchI32Rotr operation.
+ */
 	void dispatchI32Rotr() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64Clz WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64Clz operation.
  */
 /**
  * \brief Performs the dispatchI64Clz operation.
@@ -1918,9 +2113,15 @@ protected:
 /**
  * \brief Performs the dispatchI64Ctz operation.
  */
+/**
+ * \brief Performs the dispatchI64Ctz operation.
+ */
 	void dispatchI64Ctz() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64Popcnt WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64Popcnt operation.
  */
 /**
  * \brief Performs the dispatchI64Popcnt operation.
@@ -1932,9 +2133,15 @@ protected:
 /**
  * \brief Performs the dispatchI64Add operation.
  */
+/**
+ * \brief Performs the dispatchI64Add operation.
+ */
 	void dispatchI64Add() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64Sub WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64Sub operation.
  */
 /**
  * \brief Performs the dispatchI64Sub operation.
@@ -1946,9 +2153,15 @@ protected:
 /**
  * \brief Performs the dispatchI64Mul operation.
  */
+/**
+ * \brief Performs the dispatchI64Mul operation.
+ */
 	void dispatchI64Mul() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64DivS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64DivS operation.
  */
 /**
  * \brief Performs the dispatchI64DivS operation.
@@ -1960,9 +2173,15 @@ protected:
 /**
  * \brief Performs the dispatchI64DivU operation.
  */
+/**
+ * \brief Performs the dispatchI64DivU operation.
+ */
 	void dispatchI64DivU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64RemS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64RemS operation.
  */
 /**
  * \brief Performs the dispatchI64RemS operation.
@@ -1974,9 +2193,15 @@ protected:
 /**
  * \brief Performs the dispatchI64RemU operation.
  */
+/**
+ * \brief Performs the dispatchI64RemU operation.
+ */
 	void dispatchI64RemU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64And WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64And operation.
  */
 /**
  * \brief Performs the dispatchI64And operation.
@@ -1988,9 +2213,15 @@ protected:
 /**
  * \brief Performs the dispatchI64Or operation.
  */
+/**
+ * \brief Performs the dispatchI64Or operation.
+ */
 	void dispatchI64Or() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64Xor WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64Xor operation.
  */
 /**
  * \brief Performs the dispatchI64Xor operation.
@@ -2002,9 +2233,15 @@ protected:
 /**
  * \brief Performs the dispatchI64Shl operation.
  */
+/**
+ * \brief Performs the dispatchI64Shl operation.
+ */
 	void dispatchI64Shl() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64ShrS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64ShrS operation.
  */
 /**
  * \brief Performs the dispatchI64ShrS operation.
@@ -2016,9 +2253,15 @@ protected:
 /**
  * \brief Performs the dispatchI64ShrU operation.
  */
+/**
+ * \brief Performs the dispatchI64ShrU operation.
+ */
 	void dispatchI64ShrU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64Rotl WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64Rotl operation.
  */
 /**
  * \brief Performs the dispatchI64Rotl operation.
@@ -2030,9 +2273,15 @@ protected:
 /**
  * \brief Performs the dispatchI64Rotr operation.
  */
+/**
+ * \brief Performs the dispatchI64Rotr operation.
+ */
 	void dispatchI64Rotr() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32Abs WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32Abs operation.
  */
 /**
  * \brief Performs the dispatchF32Abs operation.
@@ -2044,9 +2293,15 @@ protected:
 /**
  * \brief Performs the dispatchF32Neg operation.
  */
+/**
+ * \brief Performs the dispatchF32Neg operation.
+ */
 	void dispatchF32Neg() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32Ceil WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32Ceil operation.
  */
 /**
  * \brief Performs the dispatchF32Ceil operation.
@@ -2058,9 +2313,15 @@ protected:
 /**
  * \brief Performs the dispatchF32Floor operation.
  */
+/**
+ * \brief Performs the dispatchF32Floor operation.
+ */
 	void dispatchF32Floor() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32Trunc WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32Trunc operation.
  */
 /**
  * \brief Performs the dispatchF32Trunc operation.
@@ -2072,9 +2333,15 @@ protected:
 /**
  * \brief Performs the dispatchF32Nearest operation.
  */
+/**
+ * \brief Performs the dispatchF32Nearest operation.
+ */
 	void dispatchF32Nearest() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32Sqrt WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32Sqrt operation.
  */
 /**
  * \brief Performs the dispatchF32Sqrt operation.
@@ -2086,9 +2353,15 @@ protected:
 /**
  * \brief Performs the dispatchF32Add operation.
  */
+/**
+ * \brief Performs the dispatchF32Add operation.
+ */
 	void dispatchF32Add() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32Sub WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32Sub operation.
  */
 /**
  * \brief Performs the dispatchF32Sub operation.
@@ -2100,9 +2373,15 @@ protected:
 /**
  * \brief Performs the dispatchF32Mul operation.
  */
+/**
+ * \brief Performs the dispatchF32Mul operation.
+ */
 	void dispatchF32Mul() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32Div WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32Div operation.
  */
 /**
  * \brief Performs the dispatchF32Div operation.
@@ -2114,9 +2393,15 @@ protected:
 /**
  * \brief Performs the dispatchF32Min operation.
  */
+/**
+ * \brief Performs the dispatchF32Min operation.
+ */
 	void dispatchF32Min() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32Max WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32Max operation.
  */
 /**
  * \brief Performs the dispatchF32Max operation.
@@ -2128,9 +2413,15 @@ protected:
 /**
  * \brief Performs the dispatchF32Copysign operation.
  */
+/**
+ * \brief Performs the dispatchF32Copysign operation.
+ */
 	void dispatchF32Copysign() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64Abs WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64Abs operation.
  */
 /**
  * \brief Performs the dispatchF64Abs operation.
@@ -2142,9 +2433,15 @@ protected:
 /**
  * \brief Performs the dispatchF64Neg operation.
  */
+/**
+ * \brief Performs the dispatchF64Neg operation.
+ */
 	void dispatchF64Neg() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64Ceil WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64Ceil operation.
  */
 /**
  * \brief Performs the dispatchF64Ceil operation.
@@ -2156,9 +2453,15 @@ protected:
 /**
  * \brief Performs the dispatchF64Floor operation.
  */
+/**
+ * \brief Performs the dispatchF64Floor operation.
+ */
 	void dispatchF64Floor() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64Trunc WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64Trunc operation.
  */
 /**
  * \brief Performs the dispatchF64Trunc operation.
@@ -2170,9 +2473,15 @@ protected:
 /**
  * \brief Performs the dispatchF64Nearest operation.
  */
+/**
+ * \brief Performs the dispatchF64Nearest operation.
+ */
 	void dispatchF64Nearest() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64Sqrt WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64Sqrt operation.
  */
 /**
  * \brief Performs the dispatchF64Sqrt operation.
@@ -2184,9 +2493,15 @@ protected:
 /**
  * \brief Performs the dispatchF64Add operation.
  */
+/**
+ * \brief Performs the dispatchF64Add operation.
+ */
 	void dispatchF64Add() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64Sub WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64Sub operation.
  */
 /**
  * \brief Performs the dispatchF64Sub operation.
@@ -2198,9 +2513,15 @@ protected:
 /**
  * \brief Performs the dispatchF64Mul operation.
  */
+/**
+ * \brief Performs the dispatchF64Mul operation.
+ */
 	void dispatchF64Mul() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64Div WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64Div operation.
  */
 /**
  * \brief Performs the dispatchF64Div operation.
@@ -2212,9 +2533,15 @@ protected:
 /**
  * \brief Performs the dispatchF64Min operation.
  */
+/**
+ * \brief Performs the dispatchF64Min operation.
+ */
 	void dispatchF64Min() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64Max WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64Max operation.
  */
 /**
  * \brief Performs the dispatchF64Max operation.
@@ -2226,9 +2553,15 @@ protected:
 /**
  * \brief Performs the dispatchF64Copysign operation.
  */
+/**
+ * \brief Performs the dispatchF64Copysign operation.
+ */
 	void dispatchF64Copysign() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32WrapI64 WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32WrapI64 operation.
  */
 /**
  * \brief Performs the dispatchI32WrapI64 operation.
@@ -2240,9 +2573,15 @@ protected:
 /**
  * \brief Performs the dispatchI32TruncF32S operation.
  */
+/**
+ * \brief Performs the dispatchI32TruncF32S operation.
+ */
 	void dispatchI32TruncF32S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32TruncF32U WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32TruncF32U operation.
  */
 /**
  * \brief Performs the dispatchI32TruncF32U operation.
@@ -2254,9 +2593,15 @@ protected:
 /**
  * \brief Performs the dispatchI32TruncF64S operation.
  */
+/**
+ * \brief Performs the dispatchI32TruncF64S operation.
+ */
 	void dispatchI32TruncF64S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32TruncF64U WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32TruncF64U operation.
  */
 /**
  * \brief Performs the dispatchI32TruncF64U operation.
@@ -2268,9 +2613,15 @@ protected:
 /**
  * \brief Performs the dispatchI64ExtendI32S operation.
  */
+/**
+ * \brief Performs the dispatchI64ExtendI32S operation.
+ */
 	void dispatchI64ExtendI32S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64ExtendI32U WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64ExtendI32U operation.
  */
 /**
  * \brief Performs the dispatchI64ExtendI32U operation.
@@ -2282,9 +2633,15 @@ protected:
 /**
  * \brief Performs the dispatchI64TruncF32S operation.
  */
+/**
+ * \brief Performs the dispatchI64TruncF32S operation.
+ */
 	void dispatchI64TruncF32S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64TruncF32U WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64TruncF32U operation.
  */
 /**
  * \brief Performs the dispatchI64TruncF32U operation.
@@ -2296,9 +2653,15 @@ protected:
 /**
  * \brief Performs the dispatchI64TruncF64S operation.
  */
+/**
+ * \brief Performs the dispatchI64TruncF64S operation.
+ */
 	void dispatchI64TruncF64S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64TruncF64U WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64TruncF64U operation.
  */
 /**
  * \brief Performs the dispatchI64TruncF64U operation.
@@ -2310,9 +2673,15 @@ protected:
 /**
  * \brief Performs the dispatchF32ConvertI32S operation.
  */
+/**
+ * \brief Performs the dispatchF32ConvertI32S operation.
+ */
 	void dispatchF32ConvertI32S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32ConvertI32U WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32ConvertI32U operation.
  */
 /**
  * \brief Performs the dispatchF32ConvertI32U operation.
@@ -2324,9 +2693,15 @@ protected:
 /**
  * \brief Performs the dispatchF32ConvertI64S operation.
  */
+/**
+ * \brief Performs the dispatchF32ConvertI64S operation.
+ */
 	void dispatchF32ConvertI64S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32ConvertI64U WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32ConvertI64U operation.
  */
 /**
  * \brief Performs the dispatchF32ConvertI64U operation.
@@ -2338,9 +2713,15 @@ protected:
 /**
  * \brief Performs the dispatchF32DemoteF64 operation.
  */
+/**
+ * \brief Performs the dispatchF32DemoteF64 operation.
+ */
 	void dispatchF32DemoteF64() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64ConvertI32S WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64ConvertI32S operation.
  */
 /**
  * \brief Performs the dispatchF64ConvertI32S operation.
@@ -2352,9 +2733,15 @@ protected:
 /**
  * \brief Performs the dispatchF64ConvertI32U operation.
  */
+/**
+ * \brief Performs the dispatchF64ConvertI32U operation.
+ */
 	void dispatchF64ConvertI32U() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64ConvertI64S WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64ConvertI64S operation.
  */
 /**
  * \brief Performs the dispatchF64ConvertI64S operation.
@@ -2366,9 +2753,15 @@ protected:
 /**
  * \brief Performs the dispatchF64ConvertI64U operation.
  */
+/**
+ * \brief Performs the dispatchF64ConvertI64U operation.
+ */
 	void dispatchF64ConvertI64U() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64PromoteF32 WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64PromoteF32 operation.
  */
 /**
  * \brief Performs the dispatchF64PromoteF32 operation.
@@ -2380,9 +2773,15 @@ protected:
 /**
  * \brief Performs the dispatchI32ReinterpretF32 operation.
  */
+/**
+ * \brief Performs the dispatchI32ReinterpretF32 operation.
+ */
 	void dispatchI32ReinterpretF32() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64ReinterpretF64 WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64ReinterpretF64 operation.
  */
 /**
  * \brief Performs the dispatchI64ReinterpretF64 operation.
@@ -2394,9 +2793,15 @@ protected:
 /**
  * \brief Performs the dispatchF32ReinterpretI32 operation.
  */
+/**
+ * \brief Performs the dispatchF32ReinterpretI32 operation.
+ */
 	void dispatchF32ReinterpretI32() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64ReinterpretI64 WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64ReinterpretI64 operation.
  */
 /**
  * \brief Performs the dispatchF64ReinterpretI64 operation.
@@ -2408,9 +2813,15 @@ protected:
 /**
  * \brief Performs the dispatchI32Extend8S operation.
  */
+/**
+ * \brief Performs the dispatchI32Extend8S operation.
+ */
 	void dispatchI32Extend8S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32Extend16S WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32Extend16S operation.
  */
 /**
  * \brief Performs the dispatchI32Extend16S operation.
@@ -2422,6 +2833,9 @@ protected:
 /**
  * \brief Performs the dispatchI64Extend8S operation.
  */
+/**
+ * \brief Performs the dispatchI64Extend8S operation.
+ */
 	void dispatchI64Extend8S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64Extend16S WebAssembly instruction to this LibJIT implementation.
@@ -2429,9 +2843,15 @@ protected:
 /**
  * \brief Performs the dispatchI64Extend16S operation.
  */
+/**
+ * \brief Performs the dispatchI64Extend16S operation.
+ */
 	void dispatchI64Extend16S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64Extend32S WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64Extend32S operation.
  */
 /**
  * \brief Performs the dispatchI64Extend32S operation.
@@ -2457,6 +2877,9 @@ protected:
 	void dispatchRefEq() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the RefAsNonNull WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchRefAsNonNull operation.
  */
 /**
  * \brief Performs the dispatchRefAsNonNull operation.
@@ -2688,9 +3111,15 @@ protected:
 /**
  * \brief Performs the dispatchExternConvertAny operation.
  */
+/**
+ * \brief Performs the dispatchExternConvertAny operation.
+ */
 	void dispatchExternConvertAny() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the RefI31 WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchRefI31 operation.
  */
 /**
  * \brief Performs the dispatchRefI31 operation.
@@ -2702,9 +3131,15 @@ protected:
 /**
  * \brief Performs the dispatchI31GetS operation.
  */
+/**
+ * \brief Performs the dispatchI31GetS operation.
+ */
 	void dispatchI31GetS() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I31GetU WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI31GetU operation.
  */
 /**
  * \brief Performs the dispatchI31GetU operation.
@@ -2747,9 +3182,15 @@ protected:
 /**
  * \brief Performs the dispatchStringMeasureWtf8 operation.
  */
+/**
+ * \brief Performs the dispatchStringMeasureWtf8 operation.
+ */
 	void dispatchStringMeasureWtf8() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the StringMeasureWtf16 WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchStringMeasureWtf16 operation.
  */
 /**
  * \brief Performs the dispatchStringMeasureWtf16 operation.
@@ -2785,9 +3226,15 @@ protected:
 /**
  * \brief Performs the dispatchStringEq operation.
  */
+/**
+ * \brief Performs the dispatchStringEq operation.
+ */
 	void dispatchStringEq() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the StringIsUsvSequence WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchStringIsUsvSequence operation.
  */
 /**
  * \brief Performs the dispatchStringIsUsvSequence operation.
@@ -2801,9 +3248,15 @@ protected:
 /**
  * \brief Performs the dispatchStringAsWtf8 operation.
  */
+/**
+ * \brief Performs the dispatchStringAsWtf8 operation.
+ */
 	void dispatchStringAsWtf8() override;
 /**
  * \brief Dispatches the StringViewWtf8Advance WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchStringViewWtf8Advance operation.
  */
 /**
  * \brief Performs the dispatchStringViewWtf8Advance operation.
@@ -2838,9 +3291,15 @@ protected:
 /**
  * \brief Performs the dispatchStringViewWtf16Length operation.
  */
+/**
+ * \brief Performs the dispatchStringViewWtf16Length operation.
+ */
 	void dispatchStringViewWtf16Length() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the StringViewWtf16GetCodeUnit WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchStringViewWtf16GetCodeUnit operation.
  */
 /**
  * \brief Performs the dispatchStringViewWtf16GetCodeUnit operation.
@@ -2861,9 +3320,15 @@ protected:
 /**
  * \brief Performs the dispatchStringAsIter operation.
  */
+/**
+ * \brief Performs the dispatchStringAsIter operation.
+ */
 	void dispatchStringAsIter() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the StringViewIterNext WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchStringViewIterNext operation.
  */
 /**
  * \brief Performs the dispatchStringViewIterNext operation.
@@ -2875,6 +3340,9 @@ protected:
 /**
  * \brief Performs the dispatchStringViewIterAdvance operation.
  */
+/**
+ * \brief Performs the dispatchStringViewIterAdvance operation.
+ */
 	void dispatchStringViewIterAdvance() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the StringViewIterRewind WebAssembly instruction to this LibJIT implementation.
@@ -2882,9 +3350,15 @@ protected:
 /**
  * \brief Performs the dispatchStringViewIterRewind operation.
  */
+/**
+ * \brief Performs the dispatchStringViewIterRewind operation.
+ */
 	void dispatchStringViewIterRewind() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the StringViewIterSlice WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchStringViewIterSlice operation.
  */
 /**
  * \brief Performs the dispatchStringViewIterSlice operation.
@@ -2956,9 +3430,15 @@ protected:
 /**
  * \brief Performs the dispatchI32TruncSatF32U operation.
  */
+/**
+ * \brief Performs the dispatchI32TruncSatF32U operation.
+ */
 	void dispatchI32TruncSatF32U() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32TruncSatF64S WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32TruncSatF64S operation.
  */
 /**
  * \brief Performs the dispatchI32TruncSatF64S operation.
@@ -2970,9 +3450,15 @@ protected:
 /**
  * \brief Performs the dispatchI32TruncSatF64U operation.
  */
+/**
+ * \brief Performs the dispatchI32TruncSatF64U operation.
+ */
 	void dispatchI32TruncSatF64U() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64TruncSatF32S WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64TruncSatF32S operation.
  */
 /**
  * \brief Performs the dispatchI64TruncSatF32S operation.
@@ -2984,6 +3470,9 @@ protected:
 /**
  * \brief Performs the dispatchI64TruncSatF32U operation.
  */
+/**
+ * \brief Performs the dispatchI64TruncSatF32U operation.
+ */
 	void dispatchI64TruncSatF32U() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64TruncSatF64S WebAssembly instruction to this LibJIT implementation.
@@ -2991,9 +3480,15 @@ protected:
 /**
  * \brief Performs the dispatchI64TruncSatF64S operation.
  */
+/**
+ * \brief Performs the dispatchI64TruncSatF64S operation.
+ */
 	void dispatchI64TruncSatF64S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64TruncSatF64U WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64TruncSatF64U operation.
  */
 /**
  * \brief Performs the dispatchI64TruncSatF64U operation.
@@ -3041,6 +3536,9 @@ protected:
 /**
  * \brief Performs the dispatchI64Sub128 operation.
  */
+/**
+ * \brief Performs the dispatchI64Sub128 operation.
+ */
 	void dispatchI64Sub128() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64MulWideS WebAssembly instruction to this LibJIT implementation.
@@ -3048,9 +3546,15 @@ protected:
 /**
  * \brief Performs the dispatchI64MulWideS operation.
  */
+/**
+ * \brief Performs the dispatchI64MulWideS operation.
+ */
 	void dispatchI64MulWideS() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64MulWideU WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64MulWideU operation.
  */
 /**
  * \brief Performs the dispatchI64MulWideU operation.
@@ -3231,9 +3735,15 @@ protected:
 /**
  * \brief Performs the dispatchI8x16Splat operation.
  */
+/**
+ * \brief Performs the dispatchI8x16Splat operation.
+ */
 	void dispatchI8x16Splat() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8Splat WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8Splat operation.
  */
 /**
  * \brief Performs the dispatchI16x8Splat operation.
@@ -3245,9 +3755,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4Splat operation.
  */
+/**
+ * \brief Performs the dispatchI32x4Splat operation.
+ */
 	void dispatchI32x4Splat() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64x2Splat WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64x2Splat operation.
  */
 /**
  * \brief Performs the dispatchI64x2Splat operation.
@@ -3259,9 +3775,15 @@ protected:
 /**
  * \brief Performs the dispatchF32x4Splat operation.
  */
+/**
+ * \brief Performs the dispatchF32x4Splat operation.
+ */
 	void dispatchF32x4Splat() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64x2Splat WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64x2Splat operation.
  */
 /**
  * \brief Performs the dispatchF64x2Splat operation.
@@ -3347,9 +3869,15 @@ protected:
 /**
  * \brief Performs the dispatchI8x16Ne operation.
  */
+/**
+ * \brief Performs the dispatchI8x16Ne operation.
+ */
 	void dispatchI8x16Ne() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I8x16LtS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI8x16LtS operation.
  */
 /**
  * \brief Performs the dispatchI8x16LtS operation.
@@ -3361,9 +3889,15 @@ protected:
 /**
  * \brief Performs the dispatchI8x16LtU operation.
  */
+/**
+ * \brief Performs the dispatchI8x16LtU operation.
+ */
 	void dispatchI8x16LtU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I8x16GtS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI8x16GtS operation.
  */
 /**
  * \brief Performs the dispatchI8x16GtS operation.
@@ -3375,9 +3909,15 @@ protected:
 /**
  * \brief Performs the dispatchI8x16GtU operation.
  */
+/**
+ * \brief Performs the dispatchI8x16GtU operation.
+ */
 	void dispatchI8x16GtU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I8x16LeS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI8x16LeS operation.
  */
 /**
  * \brief Performs the dispatchI8x16LeS operation.
@@ -3389,9 +3929,15 @@ protected:
 /**
  * \brief Performs the dispatchI8x16LeU operation.
  */
+/**
+ * \brief Performs the dispatchI8x16LeU operation.
+ */
 	void dispatchI8x16LeU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I8x16GeS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI8x16GeS operation.
  */
 /**
  * \brief Performs the dispatchI8x16GeS operation.
@@ -3403,9 +3949,15 @@ protected:
 /**
  * \brief Performs the dispatchI8x16GeU operation.
  */
+/**
+ * \brief Performs the dispatchI8x16GeU operation.
+ */
 	void dispatchI8x16GeU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8Eq WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8Eq operation.
  */
 /**
  * \brief Performs the dispatchI16x8Eq operation.
@@ -3417,9 +3969,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8Ne operation.
  */
+/**
+ * \brief Performs the dispatchI16x8Ne operation.
+ */
 	void dispatchI16x8Ne() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8LtS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8LtS operation.
  */
 /**
  * \brief Performs the dispatchI16x8LtS operation.
@@ -3431,9 +3989,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8LtU operation.
  */
+/**
+ * \brief Performs the dispatchI16x8LtU operation.
+ */
 	void dispatchI16x8LtU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8GtS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8GtS operation.
  */
 /**
  * \brief Performs the dispatchI16x8GtS operation.
@@ -3445,9 +4009,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8GtU operation.
  */
+/**
+ * \brief Performs the dispatchI16x8GtU operation.
+ */
 	void dispatchI16x8GtU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8LeS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8LeS operation.
  */
 /**
  * \brief Performs the dispatchI16x8LeS operation.
@@ -3459,9 +4029,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8LeU operation.
  */
+/**
+ * \brief Performs the dispatchI16x8LeU operation.
+ */
 	void dispatchI16x8LeU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8GeS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8GeS operation.
  */
 /**
  * \brief Performs the dispatchI16x8GeS operation.
@@ -3473,9 +4049,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8GeU operation.
  */
+/**
+ * \brief Performs the dispatchI16x8GeU operation.
+ */
 	void dispatchI16x8GeU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4Eq WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4Eq operation.
  */
 /**
  * \brief Performs the dispatchI32x4Eq operation.
@@ -3487,9 +4069,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4Ne operation.
  */
+/**
+ * \brief Performs the dispatchI32x4Ne operation.
+ */
 	void dispatchI32x4Ne() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4LtS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4LtS operation.
  */
 /**
  * \brief Performs the dispatchI32x4LtS operation.
@@ -3501,9 +4089,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4LtU operation.
  */
+/**
+ * \brief Performs the dispatchI32x4LtU operation.
+ */
 	void dispatchI32x4LtU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4GtS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4GtS operation.
  */
 /**
  * \brief Performs the dispatchI32x4GtS operation.
@@ -3515,9 +4109,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4GtU operation.
  */
+/**
+ * \brief Performs the dispatchI32x4GtU operation.
+ */
 	void dispatchI32x4GtU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4LeS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4LeS operation.
  */
 /**
  * \brief Performs the dispatchI32x4LeS operation.
@@ -3529,9 +4129,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4LeU operation.
  */
+/**
+ * \brief Performs the dispatchI32x4LeU operation.
+ */
 	void dispatchI32x4LeU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4GeS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4GeS operation.
  */
 /**
  * \brief Performs the dispatchI32x4GeS operation.
@@ -3543,9 +4149,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4GeU operation.
  */
+/**
+ * \brief Performs the dispatchI32x4GeU operation.
+ */
 	void dispatchI32x4GeU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32x4Eq WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32x4Eq operation.
  */
 /**
  * \brief Performs the dispatchF32x4Eq operation.
@@ -3557,9 +4169,15 @@ protected:
 /**
  * \brief Performs the dispatchF32x4Ne operation.
  */
+/**
+ * \brief Performs the dispatchF32x4Ne operation.
+ */
 	void dispatchF32x4Ne() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32x4Lt WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32x4Lt operation.
  */
 /**
  * \brief Performs the dispatchF32x4Lt operation.
@@ -3571,9 +4189,15 @@ protected:
 /**
  * \brief Performs the dispatchF32x4Gt operation.
  */
+/**
+ * \brief Performs the dispatchF32x4Gt operation.
+ */
 	void dispatchF32x4Gt() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32x4Le WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32x4Le operation.
  */
 /**
  * \brief Performs the dispatchF32x4Le operation.
@@ -3585,9 +4209,15 @@ protected:
 /**
  * \brief Performs the dispatchF32x4Ge operation.
  */
+/**
+ * \brief Performs the dispatchF32x4Ge operation.
+ */
 	void dispatchF32x4Ge() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64x2Eq WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64x2Eq operation.
  */
 /**
  * \brief Performs the dispatchF64x2Eq operation.
@@ -3599,9 +4229,15 @@ protected:
 /**
  * \brief Performs the dispatchF64x2Ne operation.
  */
+/**
+ * \brief Performs the dispatchF64x2Ne operation.
+ */
 	void dispatchF64x2Ne() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64x2Lt WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64x2Lt operation.
  */
 /**
  * \brief Performs the dispatchF64x2Lt operation.
@@ -3613,9 +4249,15 @@ protected:
 /**
  * \brief Performs the dispatchF64x2Gt operation.
  */
+/**
+ * \brief Performs the dispatchF64x2Gt operation.
+ */
 	void dispatchF64x2Gt() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64x2Le WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64x2Le operation.
  */
 /**
  * \brief Performs the dispatchF64x2Le operation.
@@ -3627,9 +4269,15 @@ protected:
 /**
  * \brief Performs the dispatchF64x2Ge operation.
  */
+/**
+ * \brief Performs the dispatchF64x2Ge operation.
+ */
 	void dispatchF64x2Ge() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the V128Not WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchV128Not operation.
  */
 /**
  * \brief Performs the dispatchV128Not operation.
@@ -3641,9 +4289,15 @@ protected:
 /**
  * \brief Performs the dispatchV128And operation.
  */
+/**
+ * \brief Performs the dispatchV128And operation.
+ */
 	void dispatchV128And() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the V128AndNot WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchV128AndNot operation.
  */
 /**
  * \brief Performs the dispatchV128AndNot operation.
@@ -3655,9 +4309,15 @@ protected:
 /**
  * \brief Performs the dispatchV128Or operation.
  */
+/**
+ * \brief Performs the dispatchV128Or operation.
+ */
 	void dispatchV128Or() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the V128Xor WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchV128Xor operation.
  */
 /**
  * \brief Performs the dispatchV128Xor operation.
@@ -3669,9 +4329,15 @@ protected:
 /**
  * \brief Performs the dispatchV128Bitselect operation.
  */
+/**
+ * \brief Performs the dispatchV128Bitselect operation.
+ */
 	void dispatchV128Bitselect() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the V128AnyTrue WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchV128AnyTrue operation.
  */
 /**
  * \brief Performs the dispatchV128AnyTrue operation.
@@ -3683,9 +4349,15 @@ protected:
 /**
  * \brief Performs the dispatchI8x16Abs operation.
  */
+/**
+ * \brief Performs the dispatchI8x16Abs operation.
+ */
 	void dispatchI8x16Abs() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I8x16Neg WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI8x16Neg operation.
  */
 /**
  * \brief Performs the dispatchI8x16Neg operation.
@@ -3697,9 +4369,15 @@ protected:
 /**
  * \brief Performs the dispatchI8x16Popcnt operation.
  */
+/**
+ * \brief Performs the dispatchI8x16Popcnt operation.
+ */
 	void dispatchI8x16Popcnt() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I8x16AllTrue WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI8x16AllTrue operation.
  */
 /**
  * \brief Performs the dispatchI8x16AllTrue operation.
@@ -3711,9 +4389,15 @@ protected:
 /**
  * \brief Performs the dispatchI8x16Bitmask operation.
  */
+/**
+ * \brief Performs the dispatchI8x16Bitmask operation.
+ */
 	void dispatchI8x16Bitmask() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I8x16NarrowI16x8S WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI8x16NarrowI16x8S operation.
  */
 /**
  * \brief Performs the dispatchI8x16NarrowI16x8S operation.
@@ -3725,9 +4409,15 @@ protected:
 /**
  * \brief Performs the dispatchI8x16NarrowI16x8U operation.
  */
+/**
+ * \brief Performs the dispatchI8x16NarrowI16x8U operation.
+ */
 	void dispatchI8x16NarrowI16x8U() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I8x16Shl WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI8x16Shl operation.
  */
 /**
  * \brief Performs the dispatchI8x16Shl operation.
@@ -3739,9 +4429,15 @@ protected:
 /**
  * \brief Performs the dispatchI8x16ShrS operation.
  */
+/**
+ * \brief Performs the dispatchI8x16ShrS operation.
+ */
 	void dispatchI8x16ShrS() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I8x16ShrU WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI8x16ShrU operation.
  */
 /**
  * \brief Performs the dispatchI8x16ShrU operation.
@@ -3753,9 +4449,15 @@ protected:
 /**
  * \brief Performs the dispatchI8x16Add operation.
  */
+/**
+ * \brief Performs the dispatchI8x16Add operation.
+ */
 	void dispatchI8x16Add() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I8x16AddSatS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI8x16AddSatS operation.
  */
 /**
  * \brief Performs the dispatchI8x16AddSatS operation.
@@ -3767,9 +4469,15 @@ protected:
 /**
  * \brief Performs the dispatchI8x16AddSatU operation.
  */
+/**
+ * \brief Performs the dispatchI8x16AddSatU operation.
+ */
 	void dispatchI8x16AddSatU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I8x16Sub WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI8x16Sub operation.
  */
 /**
  * \brief Performs the dispatchI8x16Sub operation.
@@ -3781,9 +4489,15 @@ protected:
 /**
  * \brief Performs the dispatchI8x16SubSatS operation.
  */
+/**
+ * \brief Performs the dispatchI8x16SubSatS operation.
+ */
 	void dispatchI8x16SubSatS() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I8x16SubSatU WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI8x16SubSatU operation.
  */
 /**
  * \brief Performs the dispatchI8x16SubSatU operation.
@@ -3795,9 +4509,15 @@ protected:
 /**
  * \brief Performs the dispatchI8x16MinS operation.
  */
+/**
+ * \brief Performs the dispatchI8x16MinS operation.
+ */
 	void dispatchI8x16MinS() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I8x16MinU WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI8x16MinU operation.
  */
 /**
  * \brief Performs the dispatchI8x16MinU operation.
@@ -3809,9 +4529,15 @@ protected:
 /**
  * \brief Performs the dispatchI8x16MaxS operation.
  */
+/**
+ * \brief Performs the dispatchI8x16MaxS operation.
+ */
 	void dispatchI8x16MaxS() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I8x16MaxU WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI8x16MaxU operation.
  */
 /**
  * \brief Performs the dispatchI8x16MaxU operation.
@@ -3823,9 +4549,15 @@ protected:
 /**
  * \brief Performs the dispatchI8x16AvgrU operation.
  */
+/**
+ * \brief Performs the dispatchI8x16AvgrU operation.
+ */
 	void dispatchI8x16AvgrU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8ExtAddPairwiseI8x16S WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8ExtAddPairwiseI8x16S operation.
  */
 /**
  * \brief Performs the dispatchI16x8ExtAddPairwiseI8x16S operation.
@@ -3837,9 +4569,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8ExtAddPairwiseI8x16U operation.
  */
+/**
+ * \brief Performs the dispatchI16x8ExtAddPairwiseI8x16U operation.
+ */
 	void dispatchI16x8ExtAddPairwiseI8x16U() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8Abs WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8Abs operation.
  */
 /**
  * \brief Performs the dispatchI16x8Abs operation.
@@ -3851,9 +4589,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8Neg operation.
  */
+/**
+ * \brief Performs the dispatchI16x8Neg operation.
+ */
 	void dispatchI16x8Neg() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8Q15MulRSatS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8Q15MulRSatS operation.
  */
 /**
  * \brief Performs the dispatchI16x8Q15MulRSatS operation.
@@ -3865,9 +4609,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8AllTrue operation.
  */
+/**
+ * \brief Performs the dispatchI16x8AllTrue operation.
+ */
 	void dispatchI16x8AllTrue() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8Bitmask WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8Bitmask operation.
  */
 /**
  * \brief Performs the dispatchI16x8Bitmask operation.
@@ -3879,9 +4629,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8NarrowI32x4S operation.
  */
+/**
+ * \brief Performs the dispatchI16x8NarrowI32x4S operation.
+ */
 	void dispatchI16x8NarrowI32x4S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8NarrowI32x4U WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8NarrowI32x4U operation.
  */
 /**
  * \brief Performs the dispatchI16x8NarrowI32x4U operation.
@@ -3893,9 +4649,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8ExtendLowI8x16S operation.
  */
+/**
+ * \brief Performs the dispatchI16x8ExtendLowI8x16S operation.
+ */
 	void dispatchI16x8ExtendLowI8x16S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8ExtendHighI8x16S WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8ExtendHighI8x16S operation.
  */
 /**
  * \brief Performs the dispatchI16x8ExtendHighI8x16S operation.
@@ -3907,9 +4669,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8ExtendLowI8x16U operation.
  */
+/**
+ * \brief Performs the dispatchI16x8ExtendLowI8x16U operation.
+ */
 	void dispatchI16x8ExtendLowI8x16U() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8ExtendHighI8x16U WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8ExtendHighI8x16U operation.
  */
 /**
  * \brief Performs the dispatchI16x8ExtendHighI8x16U operation.
@@ -3921,9 +4689,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8Shl operation.
  */
+/**
+ * \brief Performs the dispatchI16x8Shl operation.
+ */
 	void dispatchI16x8Shl() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8ShrS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8ShrS operation.
  */
 /**
  * \brief Performs the dispatchI16x8ShrS operation.
@@ -3935,9 +4709,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8ShrU operation.
  */
+/**
+ * \brief Performs the dispatchI16x8ShrU operation.
+ */
 	void dispatchI16x8ShrU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8Add WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8Add operation.
  */
 /**
  * \brief Performs the dispatchI16x8Add operation.
@@ -3949,9 +4729,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8AddSatS operation.
  */
+/**
+ * \brief Performs the dispatchI16x8AddSatS operation.
+ */
 	void dispatchI16x8AddSatS() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8AddSatU WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8AddSatU operation.
  */
 /**
  * \brief Performs the dispatchI16x8AddSatU operation.
@@ -3963,9 +4749,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8Sub operation.
  */
+/**
+ * \brief Performs the dispatchI16x8Sub operation.
+ */
 	void dispatchI16x8Sub() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8SubSatS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8SubSatS operation.
  */
 /**
  * \brief Performs the dispatchI16x8SubSatS operation.
@@ -3977,9 +4769,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8SubSatU operation.
  */
+/**
+ * \brief Performs the dispatchI16x8SubSatU operation.
+ */
 	void dispatchI16x8SubSatU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8Mul WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8Mul operation.
  */
 /**
  * \brief Performs the dispatchI16x8Mul operation.
@@ -3991,9 +4789,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8MinS operation.
  */
+/**
+ * \brief Performs the dispatchI16x8MinS operation.
+ */
 	void dispatchI16x8MinS() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8MinU WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8MinU operation.
  */
 /**
  * \brief Performs the dispatchI16x8MinU operation.
@@ -4005,9 +4809,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8MaxS operation.
  */
+/**
+ * \brief Performs the dispatchI16x8MaxS operation.
+ */
 	void dispatchI16x8MaxS() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8MaxU WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8MaxU operation.
  */
 /**
  * \brief Performs the dispatchI16x8MaxU operation.
@@ -4019,9 +4829,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8AvgrU operation.
  */
+/**
+ * \brief Performs the dispatchI16x8AvgrU operation.
+ */
 	void dispatchI16x8AvgrU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8ExtMulLowI8x16S WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8ExtMulLowI8x16S operation.
  */
 /**
  * \brief Performs the dispatchI16x8ExtMulLowI8x16S operation.
@@ -4033,9 +4849,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8ExtMulHighI8x16S operation.
  */
+/**
+ * \brief Performs the dispatchI16x8ExtMulHighI8x16S operation.
+ */
 	void dispatchI16x8ExtMulHighI8x16S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8ExtMulLowI8x16U WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8ExtMulLowI8x16U operation.
  */
 /**
  * \brief Performs the dispatchI16x8ExtMulLowI8x16U operation.
@@ -4047,9 +4869,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8ExtMulHighI8x16U operation.
  */
+/**
+ * \brief Performs the dispatchI16x8ExtMulHighI8x16U operation.
+ */
 	void dispatchI16x8ExtMulHighI8x16U() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4ExtAddPairwiseI16x8S WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4ExtAddPairwiseI16x8S operation.
  */
 /**
  * \brief Performs the dispatchI32x4ExtAddPairwiseI16x8S operation.
@@ -4061,9 +4889,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4ExtAddPairwiseI16x8U operation.
  */
+/**
+ * \brief Performs the dispatchI32x4ExtAddPairwiseI16x8U operation.
+ */
 	void dispatchI32x4ExtAddPairwiseI16x8U() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4Abs WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4Abs operation.
  */
 /**
  * \brief Performs the dispatchI32x4Abs operation.
@@ -4075,9 +4909,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4Neg operation.
  */
+/**
+ * \brief Performs the dispatchI32x4Neg operation.
+ */
 	void dispatchI32x4Neg() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4AllTrue WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4AllTrue operation.
  */
 /**
  * \brief Performs the dispatchI32x4AllTrue operation.
@@ -4089,9 +4929,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4Bitmask operation.
  */
+/**
+ * \brief Performs the dispatchI32x4Bitmask operation.
+ */
 	void dispatchI32x4Bitmask() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4ExtendLowI16x8S WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4ExtendLowI16x8S operation.
  */
 /**
  * \brief Performs the dispatchI32x4ExtendLowI16x8S operation.
@@ -4103,9 +4949,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4ExtendHighI16x8S operation.
  */
+/**
+ * \brief Performs the dispatchI32x4ExtendHighI16x8S operation.
+ */
 	void dispatchI32x4ExtendHighI16x8S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4ExtendLowI16x8U WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4ExtendLowI16x8U operation.
  */
 /**
  * \brief Performs the dispatchI32x4ExtendLowI16x8U operation.
@@ -4117,9 +4969,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4ExtendHighI16x8U operation.
  */
+/**
+ * \brief Performs the dispatchI32x4ExtendHighI16x8U operation.
+ */
 	void dispatchI32x4ExtendHighI16x8U() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4Shl WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4Shl operation.
  */
 /**
  * \brief Performs the dispatchI32x4Shl operation.
@@ -4131,9 +4989,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4ShrS operation.
  */
+/**
+ * \brief Performs the dispatchI32x4ShrS operation.
+ */
 	void dispatchI32x4ShrS() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4ShrU WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4ShrU operation.
  */
 /**
  * \brief Performs the dispatchI32x4ShrU operation.
@@ -4145,9 +5009,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4Add operation.
  */
+/**
+ * \brief Performs the dispatchI32x4Add operation.
+ */
 	void dispatchI32x4Add() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4Sub WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4Sub operation.
  */
 /**
  * \brief Performs the dispatchI32x4Sub operation.
@@ -4159,9 +5029,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4Mul operation.
  */
+/**
+ * \brief Performs the dispatchI32x4Mul operation.
+ */
 	void dispatchI32x4Mul() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4MinS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4MinS operation.
  */
 /**
  * \brief Performs the dispatchI32x4MinS operation.
@@ -4173,9 +5049,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4MinU operation.
  */
+/**
+ * \brief Performs the dispatchI32x4MinU operation.
+ */
 	void dispatchI32x4MinU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4MaxS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4MaxS operation.
  */
 /**
  * \brief Performs the dispatchI32x4MaxS operation.
@@ -4187,9 +5069,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4MaxU operation.
  */
+/**
+ * \brief Performs the dispatchI32x4MaxU operation.
+ */
 	void dispatchI32x4MaxU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4DotI16x8S WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4DotI16x8S operation.
  */
 /**
  * \brief Performs the dispatchI32x4DotI16x8S operation.
@@ -4201,9 +5089,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4ExtMulLowI16x8S operation.
  */
+/**
+ * \brief Performs the dispatchI32x4ExtMulLowI16x8S operation.
+ */
 	void dispatchI32x4ExtMulLowI16x8S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4ExtMulHighI16x8S WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4ExtMulHighI16x8S operation.
  */
 /**
  * \brief Performs the dispatchI32x4ExtMulHighI16x8S operation.
@@ -4215,9 +5109,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4ExtMulLowI16x8U operation.
  */
+/**
+ * \brief Performs the dispatchI32x4ExtMulLowI16x8U operation.
+ */
 	void dispatchI32x4ExtMulLowI16x8U() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4ExtMulHighI16x8U WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4ExtMulHighI16x8U operation.
  */
 /**
  * \brief Performs the dispatchI32x4ExtMulHighI16x8U operation.
@@ -4229,9 +5129,15 @@ protected:
 /**
  * \brief Performs the dispatchI64x2Abs operation.
  */
+/**
+ * \brief Performs the dispatchI64x2Abs operation.
+ */
 	void dispatchI64x2Abs() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64x2Neg WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64x2Neg operation.
  */
 /**
  * \brief Performs the dispatchI64x2Neg operation.
@@ -4243,9 +5149,15 @@ protected:
 /**
  * \brief Performs the dispatchI64x2AllTrue operation.
  */
+/**
+ * \brief Performs the dispatchI64x2AllTrue operation.
+ */
 	void dispatchI64x2AllTrue() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64x2Bitmask WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64x2Bitmask operation.
  */
 /**
  * \brief Performs the dispatchI64x2Bitmask operation.
@@ -4257,9 +5169,15 @@ protected:
 /**
  * \brief Performs the dispatchI64x2ExtendLowI32x4S operation.
  */
+/**
+ * \brief Performs the dispatchI64x2ExtendLowI32x4S operation.
+ */
 	void dispatchI64x2ExtendLowI32x4S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64x2ExtendHighI32x4S WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64x2ExtendHighI32x4S operation.
  */
 /**
  * \brief Performs the dispatchI64x2ExtendHighI32x4S operation.
@@ -4271,9 +5189,15 @@ protected:
 /**
  * \brief Performs the dispatchI64x2ExtendLowI32x4U operation.
  */
+/**
+ * \brief Performs the dispatchI64x2ExtendLowI32x4U operation.
+ */
 	void dispatchI64x2ExtendLowI32x4U() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64x2ExtendHighI32x4U WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64x2ExtendHighI32x4U operation.
  */
 /**
  * \brief Performs the dispatchI64x2ExtendHighI32x4U operation.
@@ -4285,9 +5209,15 @@ protected:
 /**
  * \brief Performs the dispatchI64x2Shl operation.
  */
+/**
+ * \brief Performs the dispatchI64x2Shl operation.
+ */
 	void dispatchI64x2Shl() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64x2ShrS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64x2ShrS operation.
  */
 /**
  * \brief Performs the dispatchI64x2ShrS operation.
@@ -4299,9 +5229,15 @@ protected:
 /**
  * \brief Performs the dispatchI64x2ShrU operation.
  */
+/**
+ * \brief Performs the dispatchI64x2ShrU operation.
+ */
 	void dispatchI64x2ShrU() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64x2Add WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64x2Add operation.
  */
 /**
  * \brief Performs the dispatchI64x2Add operation.
@@ -4313,9 +5249,15 @@ protected:
 /**
  * \brief Performs the dispatchI64x2Sub operation.
  */
+/**
+ * \brief Performs the dispatchI64x2Sub operation.
+ */
 	void dispatchI64x2Sub() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64x2Mul WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64x2Mul operation.
  */
 /**
  * \brief Performs the dispatchI64x2Mul operation.
@@ -4327,9 +5269,15 @@ protected:
 /**
  * \brief Performs the dispatchI64x2Eq operation.
  */
+/**
+ * \brief Performs the dispatchI64x2Eq operation.
+ */
 	void dispatchI64x2Eq() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64x2Ne WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64x2Ne operation.
  */
 /**
  * \brief Performs the dispatchI64x2Ne operation.
@@ -4341,9 +5289,15 @@ protected:
 /**
  * \brief Performs the dispatchI64x2LtS operation.
  */
+/**
+ * \brief Performs the dispatchI64x2LtS operation.
+ */
 	void dispatchI64x2LtS() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64x2GtS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64x2GtS operation.
  */
 /**
  * \brief Performs the dispatchI64x2GtS operation.
@@ -4355,9 +5309,15 @@ protected:
 /**
  * \brief Performs the dispatchI64x2LeS operation.
  */
+/**
+ * \brief Performs the dispatchI64x2LeS operation.
+ */
 	void dispatchI64x2LeS() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64x2GeS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64x2GeS operation.
  */
 /**
  * \brief Performs the dispatchI64x2GeS operation.
@@ -4369,9 +5329,15 @@ protected:
 /**
  * \brief Performs the dispatchI64x2ExtMulLowI32x4S operation.
  */
+/**
+ * \brief Performs the dispatchI64x2ExtMulLowI32x4S operation.
+ */
 	void dispatchI64x2ExtMulLowI32x4S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64x2ExtMulHighI32x4S WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64x2ExtMulHighI32x4S operation.
  */
 /**
  * \brief Performs the dispatchI64x2ExtMulHighI32x4S operation.
@@ -4383,9 +5349,15 @@ protected:
 /**
  * \brief Performs the dispatchI64x2ExtMulLowI32x4U operation.
  */
+/**
+ * \brief Performs the dispatchI64x2ExtMulLowI32x4U operation.
+ */
 	void dispatchI64x2ExtMulLowI32x4U() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64x2ExtMulHighI32x4U WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI64x2ExtMulHighI32x4U operation.
  */
 /**
  * \brief Performs the dispatchI64x2ExtMulHighI32x4U operation.
@@ -4397,9 +5369,15 @@ protected:
 /**
  * \brief Performs the dispatchF32x4Ceil operation.
  */
+/**
+ * \brief Performs the dispatchF32x4Ceil operation.
+ */
 	void dispatchF32x4Ceil() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32x4Floor WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32x4Floor operation.
  */
 /**
  * \brief Performs the dispatchF32x4Floor operation.
@@ -4411,9 +5389,15 @@ protected:
 /**
  * \brief Performs the dispatchF32x4Trunc operation.
  */
+/**
+ * \brief Performs the dispatchF32x4Trunc operation.
+ */
 	void dispatchF32x4Trunc() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32x4Nearest WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32x4Nearest operation.
  */
 /**
  * \brief Performs the dispatchF32x4Nearest operation.
@@ -4425,9 +5409,15 @@ protected:
 /**
  * \brief Performs the dispatchF32x4Abs operation.
  */
+/**
+ * \brief Performs the dispatchF32x4Abs operation.
+ */
 	void dispatchF32x4Abs() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32x4Neg WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32x4Neg operation.
  */
 /**
  * \brief Performs the dispatchF32x4Neg operation.
@@ -4439,9 +5429,15 @@ protected:
 /**
  * \brief Performs the dispatchF32x4Sqrt operation.
  */
+/**
+ * \brief Performs the dispatchF32x4Sqrt operation.
+ */
 	void dispatchF32x4Sqrt() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32x4Add WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32x4Add operation.
  */
 /**
  * \brief Performs the dispatchF32x4Add operation.
@@ -4453,9 +5449,15 @@ protected:
 /**
  * \brief Performs the dispatchF32x4Sub operation.
  */
+/**
+ * \brief Performs the dispatchF32x4Sub operation.
+ */
 	void dispatchF32x4Sub() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32x4Mul WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32x4Mul operation.
  */
 /**
  * \brief Performs the dispatchF32x4Mul operation.
@@ -4467,9 +5469,15 @@ protected:
 /**
  * \brief Performs the dispatchF32x4Div operation.
  */
+/**
+ * \brief Performs the dispatchF32x4Div operation.
+ */
 	void dispatchF32x4Div() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32x4Min WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32x4Min operation.
  */
 /**
  * \brief Performs the dispatchF32x4Min operation.
@@ -4481,9 +5489,15 @@ protected:
 /**
  * \brief Performs the dispatchF32x4Max operation.
  */
+/**
+ * \brief Performs the dispatchF32x4Max operation.
+ */
 	void dispatchF32x4Max() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32x4PMin WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32x4PMin operation.
  */
 /**
  * \brief Performs the dispatchF32x4PMin operation.
@@ -4495,9 +5509,15 @@ protected:
 /**
  * \brief Performs the dispatchF32x4PMax operation.
  */
+/**
+ * \brief Performs the dispatchF32x4PMax operation.
+ */
 	void dispatchF32x4PMax() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64x2Ceil WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64x2Ceil operation.
  */
 /**
  * \brief Performs the dispatchF64x2Ceil operation.
@@ -4509,9 +5529,15 @@ protected:
 /**
  * \brief Performs the dispatchF64x2Floor operation.
  */
+/**
+ * \brief Performs the dispatchF64x2Floor operation.
+ */
 	void dispatchF64x2Floor() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64x2Trunc WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64x2Trunc operation.
  */
 /**
  * \brief Performs the dispatchF64x2Trunc operation.
@@ -4523,9 +5549,15 @@ protected:
 /**
  * \brief Performs the dispatchF64x2Nearest operation.
  */
+/**
+ * \brief Performs the dispatchF64x2Nearest operation.
+ */
 	void dispatchF64x2Nearest() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64x2Abs WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64x2Abs operation.
  */
 /**
  * \brief Performs the dispatchF64x2Abs operation.
@@ -4537,9 +5569,15 @@ protected:
 /**
  * \brief Performs the dispatchF64x2Neg operation.
  */
+/**
+ * \brief Performs the dispatchF64x2Neg operation.
+ */
 	void dispatchF64x2Neg() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64x2Sqrt WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64x2Sqrt operation.
  */
 /**
  * \brief Performs the dispatchF64x2Sqrt operation.
@@ -4551,9 +5589,15 @@ protected:
 /**
  * \brief Performs the dispatchF64x2Add operation.
  */
+/**
+ * \brief Performs the dispatchF64x2Add operation.
+ */
 	void dispatchF64x2Add() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64x2Sub WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64x2Sub operation.
  */
 /**
  * \brief Performs the dispatchF64x2Sub operation.
@@ -4565,9 +5609,15 @@ protected:
 /**
  * \brief Performs the dispatchF64x2Mul operation.
  */
+/**
+ * \brief Performs the dispatchF64x2Mul operation.
+ */
 	void dispatchF64x2Mul() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64x2Div WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64x2Div operation.
  */
 /**
  * \brief Performs the dispatchF64x2Div operation.
@@ -4579,9 +5629,15 @@ protected:
 /**
  * \brief Performs the dispatchF64x2Min operation.
  */
+/**
+ * \brief Performs the dispatchF64x2Min operation.
+ */
 	void dispatchF64x2Min() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64x2Max WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64x2Max operation.
  */
 /**
  * \brief Performs the dispatchF64x2Max operation.
@@ -4593,9 +5649,15 @@ protected:
 /**
  * \brief Performs the dispatchF64x2PMin operation.
  */
+/**
+ * \brief Performs the dispatchF64x2PMin operation.
+ */
 	void dispatchF64x2PMin() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64x2PMax WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64x2PMax operation.
  */
 /**
  * \brief Performs the dispatchF64x2PMax operation.
@@ -4607,9 +5669,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4TruncSatF32x4S operation.
  */
+/**
+ * \brief Performs the dispatchI32x4TruncSatF32x4S operation.
+ */
 	void dispatchI32x4TruncSatF32x4S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4TruncSatF32x4U WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4TruncSatF32x4U operation.
  */
 /**
  * \brief Performs the dispatchI32x4TruncSatF32x4U operation.
@@ -4621,9 +5689,15 @@ protected:
 /**
  * \brief Performs the dispatchF32x4ConvertI32x4S operation.
  */
+/**
+ * \brief Performs the dispatchF32x4ConvertI32x4S operation.
+ */
 	void dispatchF32x4ConvertI32x4S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32x4ConvertI32x4U WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32x4ConvertI32x4U operation.
  */
 /**
  * \brief Performs the dispatchF32x4ConvertI32x4U operation.
@@ -4635,9 +5709,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4TruncSatF64x2SZero operation.
  */
+/**
+ * \brief Performs the dispatchI32x4TruncSatF64x2SZero operation.
+ */
 	void dispatchI32x4TruncSatF64x2SZero() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4TruncSatF64x2UZero WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4TruncSatF64x2UZero operation.
  */
 /**
  * \brief Performs the dispatchI32x4TruncSatF64x2UZero operation.
@@ -4649,9 +5729,15 @@ protected:
 /**
  * \brief Performs the dispatchF64x2ConvertLowI32x4S operation.
  */
+/**
+ * \brief Performs the dispatchF64x2ConvertLowI32x4S operation.
+ */
 	void dispatchF64x2ConvertLowI32x4S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64x2ConvertLowI32x4U WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64x2ConvertLowI32x4U operation.
  */
 /**
  * \brief Performs the dispatchF64x2ConvertLowI32x4U operation.
@@ -4663,9 +5749,15 @@ protected:
 /**
  * \brief Performs the dispatchF32x4DemoteF64x2Zero operation.
  */
+/**
+ * \brief Performs the dispatchF32x4DemoteF64x2Zero operation.
+ */
 	void dispatchF32x4DemoteF64x2Zero() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64x2PromoteLowF32x4 WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64x2PromoteLowF32x4 operation.
  */
 /**
  * \brief Performs the dispatchF64x2PromoteLowF32x4 operation.
@@ -4679,9 +5771,15 @@ protected:
 /**
  * \brief Performs the dispatchI8x16RelaxedSwizzle operation.
  */
+/**
+ * \brief Performs the dispatchI8x16RelaxedSwizzle operation.
+ */
 	void dispatchI8x16RelaxedSwizzle() override;
 /**
  * \brief Dispatches the I32x4RelaxedTruncF32x4S WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4RelaxedTruncF32x4S operation.
  */
 /**
  * \brief Performs the dispatchI32x4RelaxedTruncF32x4S operation.
@@ -4693,9 +5791,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4RelaxedTruncF32x4U operation.
  */
+/**
+ * \brief Performs the dispatchI32x4RelaxedTruncF32x4U operation.
+ */
 	void dispatchI32x4RelaxedTruncF32x4U() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4RelaxedTruncF64x2SZero WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4RelaxedTruncF64x2SZero operation.
  */
 /**
  * \brief Performs the dispatchI32x4RelaxedTruncF64x2SZero operation.
@@ -4707,9 +5811,15 @@ protected:
 /**
  * \brief Performs the dispatchI32x4RelaxedTruncF64x2UZero operation.
  */
+/**
+ * \brief Performs the dispatchI32x4RelaxedTruncF64x2UZero operation.
+ */
 	void dispatchI32x4RelaxedTruncF64x2UZero() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32x4RelaxedMadd WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32x4RelaxedMadd operation.
  */
 /**
  * \brief Performs the dispatchF32x4RelaxedMadd operation.
@@ -4721,9 +5831,15 @@ protected:
 /**
  * \brief Performs the dispatchF32x4RelaxedNmadd operation.
  */
+/**
+ * \brief Performs the dispatchF32x4RelaxedNmadd operation.
+ */
 	void dispatchF32x4RelaxedNmadd() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64x2RelaxedMadd WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64x2RelaxedMadd operation.
  */
 /**
  * \brief Performs the dispatchF64x2RelaxedMadd operation.
@@ -4735,9 +5851,15 @@ protected:
 /**
  * \brief Performs the dispatchF64x2RelaxedNmadd operation.
  */
+/**
+ * \brief Performs the dispatchF64x2RelaxedNmadd operation.
+ */
 	void dispatchF64x2RelaxedNmadd() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I8x16RelaxedLaneselect WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI8x16RelaxedLaneselect operation.
  */
 /**
  * \brief Performs the dispatchI8x16RelaxedLaneselect operation.
@@ -4749,9 +5871,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8RelaxedLaneselect operation.
  */
+/**
+ * \brief Performs the dispatchI16x8RelaxedLaneselect operation.
+ */
 	void dispatchI16x8RelaxedLaneselect() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4RelaxedLaneselect WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4RelaxedLaneselect operation.
  */
 /**
  * \brief Performs the dispatchI32x4RelaxedLaneselect operation.
@@ -4763,9 +5891,15 @@ protected:
 /**
  * \brief Performs the dispatchI64x2RelaxedLaneselect operation.
  */
+/**
+ * \brief Performs the dispatchI64x2RelaxedLaneselect operation.
+ */
 	void dispatchI64x2RelaxedLaneselect() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F32x4RelaxedMin WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF32x4RelaxedMin operation.
  */
 /**
  * \brief Performs the dispatchF32x4RelaxedMin operation.
@@ -4777,9 +5911,15 @@ protected:
 /**
  * \brief Performs the dispatchF32x4RelaxedMax operation.
  */
+/**
+ * \brief Performs the dispatchF32x4RelaxedMax operation.
+ */
 	void dispatchF32x4RelaxedMax() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the F64x2RelaxedMin WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchF64x2RelaxedMin operation.
  */
 /**
  * \brief Performs the dispatchF64x2RelaxedMin operation.
@@ -4791,9 +5931,15 @@ protected:
 /**
  * \brief Performs the dispatchF64x2RelaxedMax operation.
  */
+/**
+ * \brief Performs the dispatchF64x2RelaxedMax operation.
+ */
 	void dispatchF64x2RelaxedMax() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I16x8RelaxedQ15MulRS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI16x8RelaxedQ15MulRS operation.
  */
 /**
  * \brief Performs the dispatchI16x8RelaxedQ15MulRS operation.
@@ -4805,9 +5951,15 @@ protected:
 /**
  * \brief Performs the dispatchI16x8RelaxedDotI8x16I7x16S operation.
  */
+/**
+ * \brief Performs the dispatchI16x8RelaxedDotI8x16I7x16S operation.
+ */
 	void dispatchI16x8RelaxedDotI8x16I7x16S() override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32x4RelaxedDotI8x16I7x16AddS WebAssembly instruction to this LibJIT implementation.
+ */
+/**
+ * \brief Performs the dispatchI32x4RelaxedDotI8x16I7x16AddS operation.
  */
 /**
  * \brief Performs the dispatchI32x4RelaxedDotI8x16I7x16AddS operation.
