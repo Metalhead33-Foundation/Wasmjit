@@ -62,7 +62,7 @@ TEST_CASE("AsmJit lowers references as opaque native pointers", "[asmjit][abi]")
 			== asmjit::TypeId::kUIntPtr);
 }
 
-TEST_CASE("AsmJit translates V128 as a 128-bit vector type", "[asmjit][abi][simd]")
+TEST_CASE("AsmJit lowers V128 through its indirect function ABI", "[asmjit][abi][simd]")
 {
 	const WASM::ValueType vector{WASM::ValueTypeCode::V128, -1};
 	CHECK(AsmJitBackend::TypeTranslator::translateValueType(vector)
