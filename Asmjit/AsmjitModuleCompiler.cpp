@@ -459,6 +459,65 @@ protected:
 		const asmjit::Label label = target.kind == ControlKind::Loop ? target.begin : target.end;
 		checkError(compiler.jmp(label), "AsmJit br emission failed");
 	}
+	void dispatchBrTable(std::vector<WASM::LabelIdx>&& depths, WASM::LabelIdx defaultDepth) override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit br_table selector stack underflow");
+		const auto selector = values.back();
+		values.pop_back();
+		size_t expectedStackHeight = 0;
+		size_t expectedBranchValues = 0;
+		bool first = true;
+		auto validateTarget = [&](WASM::LabelIdx depth) {
+			if (depth > controls.size())
+				throw std::runtime_error("AsmJit br_table label depth is out of range");
+			size_t stackHeight = 0;
+			size_t branchValues = resultCount;
+			if (depth < controls.size()) {
+				const ControlFrame& target = controls[controls.size() - 1 - depth];
+				stackHeight = target.stackHeight;
+				branchValues = target.kind == ControlKind::Loop ? 0 : target.resultCount;
+			}
+			if (first) {
+				expectedStackHeight = stackHeight;
+				expectedBranchValues = branchValues;
+				first = false;
+			} else if (stackHeight != expectedStackHeight || branchValues != expectedBranchValues) {
+				throw std::runtime_error("AsmJit br_table targets require identical stack heights and i32 label signatures");
+			}
+		};
+		for (WASM::LabelIdx depth : depths)
+			validateTarget(depth);
+		validateTarget(defaultDepth);
+		if (values.size() != expectedStackHeight + expectedBranchValues)
+			throw std::runtime_error("AsmJit br_table operand stack does not match its target labels");
+		auto emitTarget = [&](WASM::LabelIdx depth) {
+			if (depth == controls.size()) {
+				if (resultCount == 0)
+					checkError(compiler.ret(), "AsmJit br_table function return failed");
+				else
+					checkError(compiler.ret(values.back()), "AsmJit br_table function return failed");
+				return;
+			}
+			ControlFrame& target = controls[controls.size() - 1 - depth];
+			if (target.kind != ControlKind::Loop && target.resultCount != 0)
+				checkError(compiler.mov(target.result, values.back()), "AsmJit br_table result transfer failed");
+			const asmjit::Label label = target.kind == ControlKind::Loop ? target.begin : target.end;
+			checkError(compiler.jmp(label), "AsmJit br_table branch emission failed");
+		};
+		for (size_t i = 0; i < depths.size(); ++i) {
+			auto matched = compiler.new_label();
+			auto next = compiler.new_label();
+			checkError(compiler.cmp(selector, static_cast<uint32_t>(i)), "AsmJit br_table selector comparison failed");
+			checkError(compiler.jz(matched), "AsmJit br_table match branch failed");
+			checkError(compiler.jmp(next), "AsmJit br_table next-case branch failed");
+			checkError(compiler.bind(matched), "AsmJit br_table match label binding failed");
+			emitTarget(depths[i]);
+			checkError(compiler.bind(next), "AsmJit br_table next-case label binding failed");
+		}
+		emitTarget(defaultDepth);
+	}
+
 	void dispatchReturnCall(WASM::FuncIdx index) override
 	{
 		const size_t importedCount = module.importFunctions.size();
