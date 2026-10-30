@@ -44,7 +44,8 @@ ValidationOptions loadOptions(const RuntimeConfig& config)
 } // namespace
 
 Runtime::Runtime(std::string backendName, BackendInstance backend, RuntimeConfig config)
-	: backendName_(std::move(backendName)), backend_(std::move(backend)), config_(config)
+	: backendName_(std::move(backendName)), backend_(std::move(backend)),
+	  config_(std::move(config))
 {
 	rejectUnsupportedConfig(config_);
 }

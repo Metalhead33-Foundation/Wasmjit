@@ -20,6 +20,7 @@ WASMJIT_VISIBLE_BEGIN
 #include "WasmTypeIdentity.hpp"
 #include "WasmTypeStore.hpp"
 #include "WasmValidation.hpp"
+#include "WasmParseOptions.hpp"
 #include <memory>
 #include <optional>
 #include <string>
@@ -199,10 +200,28 @@ public:
 	//! (docs/proposals/PARSER_PROPOSALS.md PP-2); the default stays conservative.
 	/** \brief Parses a core module using an explicit validation policy. \param file Input device positioned at the module preamble. \param options Validation policy for this load. \param store Store receiving canonical type identities; must outlive this module. \throws std::exception on malformed, unsupported, or invalid input. */
 	void fromFile(Elv::Io::Device& file, const ValidationOptions& options, Store& store);
+	//! Parse with an explicit *parser* policy (docs/proposals/LEGACY_EXCEPTIONS.md
+	//! `LE-6`). This is the switch that decides whether a form the spec has
+	//! retired is translated instead of refused; the validation policy keeps its
+	//! default. Precedence: this argument, not the environment.
+	/** \brief Parses a core module using an explicit parser policy. \param file Input device positioned at the module preamble. \param options Parser policy for this load; overrides `WASMJIT_LEGACY_EH`. \param store Store receiving canonical type identities; must outlive this module. \throws std::exception on malformed, unsupported, refused, or invalid input. */
+	void fromFile(Elv::Io::Device& file, const ParseOptions& options, Store& store);
+	//! Parse with both policies at once, which is what `Runtime` and the tests
+	//! use: the parser policy decides what may be translated, the validation
+	//! policy what the translated module must satisfy.
+	/** \brief Parses a core module using explicit parser and validation policies. \param file Input device positioned at the module preamble. \param parserOptions Parser policy for this load. \param validationOptions Validation policy for this load. \param store Store receiving canonical type identities; must outlive this module. \throws std::exception on malformed, unsupported, refused, or invalid input. */
+	void fromFile(Elv::Io::Device& file, const ParseOptions& parserOptions,
+			const ValidationOptions& validationOptions, Store& store);
 	//! Parses an embedded core module body (no preamble) between the current
 	//! position and `end`. Used by a component's core:module section.
 	/** \brief Parses an embedded core module body without a preamble. \param file Input device positioned at the nested body. \param end Absolute end offset of the body. \param store Store receiving canonical type identities. \return Owning pointer to the parsed nested module. */
 	static std::unique_ptr<Module> parseNested(Elv::Io::Device& file, uint64_t end, Store& store);
+	//! The same, with an explicit parser policy inherited from the enclosing
+	//! component: a component loaded with the adapter on must not hand its core
+	//! modules a stricter decoder than it used itself.
+	/** \brief Parses an embedded core module body with an explicit parser policy. \param file Input device positioned at the nested body. \param end Absolute end offset of the body. \param options Parser policy inherited from the enclosing artifact. \param store Store receiving canonical type identities. \return Owning pointer to the parsed nested module. */
+	static std::unique_ptr<Module> parseNested(Elv::Io::Device& file, uint64_t end,
+			const ParseOptions& options, Store& store);
 	/** \brief Views decoded sections in binary order. \return Non-owning span valid for this module's lifetime. */
 	const std::span<const Section> getSections() const;
 	//! Map a module-local type index to its process-wide identity. Throws if the
@@ -259,7 +278,13 @@ public:
 	//! profile-aware instantiation reuses `relaxedDeadCode` so a relaxed module
 	//! is not re-validated conservatively.
 	/** \brief Returns the validation policy used to parse this module. \return Const reference to the stored options. */
-	const ValidationOptions& validationOptions() const { return parseOptions; }
+	const ValidationOptions& validationOptions() const { return validationOptions_; }
+	//! The parser policy this module was parsed with (docs/proposals/LEGACY_EXCEPTIONS.md
+	//! `LE-6`). Kept so a caller can tell whether the superseded exception form was
+	//! accepted for this artifact, which is not otherwise observable from the module
+	//! itself — the translation leaves no marker behind.
+	/** \brief Returns the parser policy used to load this module. \return Const reference to the stored parser options. */
+	const ParseOptions& parserOptions() const { return parserOptions_; }
 	/** \brief Tests whether one module-local type is a subtype of another. \param actual Candidate subtype index. \param expected Required supertype index. \return true when actual is a subtype of expected. */
 	bool isSubtype(TypeIdx actual, TypeIdx expected) const;
 	/** \brief Tests a module-local type against a heap-type constraint. \param actual Candidate type index. \param expected Expected heap type. \return true when the canonical type satisfies the constraint. */
@@ -277,7 +302,10 @@ private:
 	bool typeSectionProcessed = false;
 	//! The policy the module was parsed with; `parseBody` reuses it for the
 	//! validation pass at the end of decoding (PARSER_PROPOSALS.md PP-2).
-	ValidationOptions parseOptions{};
+	ValidationOptions validationOptions_{};
+	//! The parser policy this module was loaded with; `parseBody` consults it
+	//! before the first byte of code is decoded.
+	ParseOptions parserOptions_{};
 	//! The module-local type index a store `TypeId` was interned from.
 	uint32_t localTypeIndex(TypeId id) const;
 	//! The decoded value type for a canonical value type.

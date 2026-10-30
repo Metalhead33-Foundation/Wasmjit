@@ -290,11 +290,52 @@ may legitimately choose or a borrowed pointer with a documented lifetime.
 | `sink` / `sinkUserData` | `DiagnosticSink` + `void*` | `nullptr` / `nullptr` | the bounded diagnostic sink a created agent inherits ([`DIAGNOSTICS.md`](DIAGNOSTICS.md), `DiagnosticState` in [`WasmDiagnostics.hpp`](../WasmBase/WasmDiagnostics.hpp)) |
 | `allocationBudgetBytes` | `std::uint64_t` | `0` = engine default | the byte budget `Store::reserveBytes` charges against (`SAFETY.md` §2.3); it is charged against the runtime's own store (`Store::allocationBudgetBytes()`, default 2 GiB, `WASMJIT_MAX_TOTAL_BYTES`), so two runtimes have independent budgets |
 
+**Growing this struct is an ABI decision, and passing it by reference does not
+avoid it.** `Runtime::create` already takes a `const RuntimeConfig&`, but the
+*embedder* allocates the object, in its own translation unit, against the header it
+compiled with: a new field makes that object smaller and the library reads past
+its end. Taking the parameter by reference only removes a copy, which for this
+trivially copyable struct is a single small `memcpy` either way. A new field
+therefore needs one of three things first — a size/version word inside the struct
+that the callee checks, a reserved tail, or an opaque builder — and until one of
+them is a milestone decision, a per-runtime knob arrives as a *separate* type the
+embedder passes where it is used (`ParseOptions` on `Module::fromFile`, below)
+rather than as a new field here.
+
 There is deliberately **no `ValidationOptions` field**: that type lives in
 `WasmBase/WasmValidation.hpp`, which §6.1 classifies as *internal*, and the only
 part of it an embedder needs to choose is the profile. The runtime builds the
 validation options from the profile it was given, so the internal header does not
 leak into the public tier.
+
+**Parser policy is its own type.** What the decoder may *accept* is a separate
+question from what the validator may *reject*, so it has its own struct:
+`ParseOptions` ([`WasmParseOptions.hpp`](../WasmBase/WasmParseOptions.hpp)), next
+to `ValidationOptions` rather than inside `RuntimeConfig`. Today it carries one
+switch — `legacyExceptionHandling`, which translates the **superseded Phase-3
+exception form** into the final `try_table` encoding instead of refusing it
+([`proposals/LEGACY_EXCEPTIONS.md`](proposals/LEGACY_EXCEPTIONS.md) §4.6) — and it
+is where any future parser-side strictness knob lands.
+
+**Precedence: explicit argument > environment > strict default.** Every
+`Module::fromFile` overload that does not take a `ParseOptions` seeds one from
+`ParseOptions::fromEnvironment()`, which reads `WASMJIT_LEGACY_EH`; passing a
+`ParseOptions` overrides the environment for that load and nothing else. The same holds for
+`Component::fromFile`, and a component's embedded core modules and nested
+components inherit the component's policy rather than re-reading the
+environment — a component must not hand its cores a stricter decoder than it
+used itself. The
+default struct is strict, so the argument-less path only accepts the deprecated
+form when the process asked for it. `module.parserOptions()` reports the policy an
+artifact was actually loaded with, which is otherwise unobservable: the
+translation leaves no marker in the module.
+
+Three settings stay process-wide environment variables on purpose, because they
+are deployment decisions rather than per-load policy: `WASMJIT_MAX_TOTAL_BYTES`
+(the store budget, [`SAFETY.md`](SAFETY.md) §2.3), `WASMJIT_CONT_STACK_BYTES` and
+`WASMJIT_MAX_CONTINUATIONS` (the continuation limits). `WASMJIT_LEGACY_EH` is not
+in that list any more: it survives as the *seed* for the parser policy, not as
+the only way to set it.
 
 **What a profile is, and is not.** [`proposals/PROFILES.md`](proposals/PROFILES.md)
 defines a profile as a coarse language subset that may only *restrict* the
@@ -478,7 +519,7 @@ the first two lists has a compile-only translation unit under `Test/headers/`
 
 | Tier | Count | Headers |
 |---|---|---|
-| **Embedder API** (installed, in `WasmJit.hpp`) | 25 | `WasmApi.hpp`, `WasmJit.hpp`, `WasmRuntime.hpp`, `WasmVersion.hpp`, `WasmArtifact.hpp`, `WasmModule.hpp`, `WasmModuleInstance.hpp`, `WasmValue.hpp`, `WasmTrap.hpp`, `WasmException.hpp`, `WasmImport.hpp`, `WasmHostBridge.hpp`, `WasmNativeImport.hpp`, `WasmProfile.hpp`, `WasmConcurrency.hpp`, `WasmDiagnostics.hpp`, `WasmAgent.hpp`, `WasmContinuation.hpp`, `WasmMemory.hpp`, `WasmTable.hpp`, `WasmExn.hpp`, `WasmString.hpp`, `WasmTracing.hpp`, `WasmRegistryImportResolver.hpp`, `WasmStore.hpp` |
+| **Embedder API** (installed, in `WasmJit.hpp`) | 26 | `WasmApi.hpp`, `WasmJit.hpp`, `WasmRuntime.hpp`, `WasmVersion.hpp`, `WasmArtifact.hpp`, `WasmModule.hpp`, `WasmModuleInstance.hpp`, `WasmValue.hpp`, `WasmTrap.hpp`, `WasmException.hpp`, `WasmImport.hpp`, `WasmHostBridge.hpp`, `WasmNativeImport.hpp`, `WasmProfile.hpp`, `WasmConcurrency.hpp`, `WasmDiagnostics.hpp`, `WasmAgent.hpp`, `WasmContinuation.hpp`, `WasmMemory.hpp`, `WasmTable.hpp`, `WasmExn.hpp`, `WasmString.hpp`, `WasmTracing.hpp`, `WasmRegistryImportResolver.hpp`, `WasmStore.hpp`, `WasmParseOptions.hpp` |
 | **Backend SDK** (installed, not in the umbrella) | 17 | `WasmVMContext.hpp`, `WasmGcHeader.hpp`, `WasmType.hpp`, `WasmTypeIdentity.hpp`, `WasmOpcode.hpp`, `WasmOpcodeDispatcher.hpp`, `WasmStack.hpp`, `WasmSafety.hpp`, `WasmBackendAbi.hpp`, `WasmBackendRegistry.hpp`, `WasmBackendSession.hpp`, `WasmNullInstantiator.hpp`, `wasmjit_backend.h`, `wasm_atomic.hpp`, `wasm_simd_scalar.hpp`, `wasm_simd_vector.hpp`, `wasm_simd_ops.inc` |
 | **Internal** (not installed) | 16 | `WasmSection.hpp`, `WasmTypeStore.hpp`, `WasmCanonicalType.hpp`, `WasmTypeRegistry.hpp`, `WasmGcHeap.hpp`, `WasmValidator.hpp`, `WasmValidation.hpp`, `WasmDeterminism.hpp`, `WasmComponent.hpp`, `WasmComponentAbi.hpp`, `WasmComponentAsync.hpp`, `WasmComponentModel.hpp`, `WasmComponentRuntime.hpp`, `WasmComponentSection.hpp`, `WasmComponentValidation.hpp`, `WasmComponentParser.inc` |
 

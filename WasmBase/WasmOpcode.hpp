@@ -27,9 +27,10 @@ enum class Opcode : uint8_t {
 	Loop = 0x03, //!< Binary opcode mnemonic `Loop`.
 	If = 0x04, //!< Binary opcode mnemonic `If`.
 	Else = 0x05, //!< Binary opcode mnemonic `Else`.
-	//! 0x06-0x07 reserved
+	TryLegacy = 0x06, //!< Superseded Phase-3 `try` (docs/proposals/LEGACY_EXCEPTIONS.md).
+	Catch = 0x07, //!< Superseded Phase-3 `catch <tagidx>`.
 	Throw = 0x08, //!< Binary opcode mnemonic `Throw`.
-	//! 0x09 reserved
+	Rethrow = 0x09, //!< Superseded Phase-3 `rethrow <reldepth>`.
 	ThrowRef = 0x0A, //!< Binary opcode mnemonic `ThrowRef`.
 	End                 = 0x0B, //!< terminates block/loop/if/try_table
 	Br = 0x0C, //!< Binary opcode mnemonic `Br`.
@@ -44,7 +45,9 @@ enum class Opcode : uint8_t {
 	ReturnCallIndirect = 0x13, //!< Binary opcode mnemonic `ReturnCallIndirect`.
 	CallRef = 0x14, //!< Binary opcode mnemonic `CallRef`.
 	ReturnCallRef = 0x15, //!< Binary opcode mnemonic `ReturnCallRef`.
-	//! 0x16-0x18 reserved
+	//! 0x16-0x17 reserved
+	Delegate = 0x18, //!< Superseded Phase-3 `delegate <reldepth>`.
+	CatchAll = 0x19, //!< Superseded Phase-3 `catch_all`.
 	TryTable = 0x1F, //!< Binary opcode mnemonic `TryTable`.
 
 	//! --- Parametric ---
