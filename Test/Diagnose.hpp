@@ -22,6 +22,7 @@
 /*!
  * \brief Parsed command-line options for the test harness diagnose mode.
  */
+/** \\brief Parsed command-line state for the test harness's diagnose mode. */
 struct DiagnoseOptions {
 	//! True if any diagnose flag was encountered, including malformed flags.
 	bool specified = false;
