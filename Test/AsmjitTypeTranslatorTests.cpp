@@ -66,15 +66,16 @@ TEST_CASE("AsmJit translates V128 as a 128-bit vector type", "[asmjit][abi][simd
 {
 	const WASM::ValueType vector{WASM::ValueTypeCode::V128, -1};
 	CHECK(AsmJitBackend::TypeTranslator::translateValueType(vector)
-			== asmjit::TypeId::kInt8x16);
+			== asmjit::TypeId::kUIntPtr);
 
 	const auto type = functionType({scalar(WASM::ValueTypeCode::V128)},
 			{scalar(WASM::ValueTypeCode::V128)});
 	const asmjit::FuncSignature signature =
 			AsmJitBackend::TypeTranslator::translateFunctionType(type);
-	CHECK(signature.ret() == asmjit::TypeId::kInt8x16);
-	REQUIRE(signature.arg_count() == 2);
-	CHECK(signature.arg(1) == asmjit::TypeId::kInt8x16);
+	CHECK(signature.ret() == asmjit::TypeId::kVoid);
+	REQUIRE(signature.arg_count() == 3);
+	CHECK(signature.arg(1) == asmjit::TypeId::kUIntPtr); // V128 input storage
+	CHECK(signature.arg(2) == asmjit::TypeId::kUIntPtr); // V128 result buffer
 }
 
 TEST_CASE("AsmJit preserves packed i8 and i16 storage widths", "[asmjit][abi][storage]")
