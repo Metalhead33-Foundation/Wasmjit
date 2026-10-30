@@ -72,6 +72,8 @@ TEST_CASE("AsmJit ModuleInstantiator compiles supported i32 functions", "[asmjit
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("mutual_recursion"), 20) == 42);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("store_load"), 64, 0x12345678) == 0x12345678);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("store8_load8"), 80, 0x1AB) == 0xAB);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("store16_load16_s"), 96, 0x8001) == -32767);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("store16_load16_u"), 104, 0x1AB) == 0x1AB);
 	CHECK_THROWS(WASM::callCallable<std::int32_t>(*instance->exportedFunction("load_oob"), -1));
 }
 
