@@ -24,7 +24,9 @@ WASMJIT_VISIBLE_BEGIN
 namespace WASM {
 
 template <Elv::Io::DeviceLike I> using WasmStream = Elv::Io::DataStream<Elv::Util::Endian::Little,I>;
+//! Type alias `DWasmStream` names the corresponding implementation/API type.
 using DWasmStream = WasmStream<Elv::Io::Device>;
+//! Type alias `TagIdx` names the corresponding implementation/API type.
 typedef uint32_t TagIdx;
 //! A *process-wide* tag identity (docs/proposals/EXCEPTIONS.md EX-2). Every tag
 //! declaration is a distinct tag, even when two declare the same payload type;
@@ -33,9 +35,13 @@ using TagId = int32_t;
 typedef uint32_t LabelIdx;
 typedef uint32_t TypeIdx;
 typedef uint32_t LocalIdx;
+//! Type alias `GlobalIdx` names the corresponding implementation/API type.
 typedef uint32_t GlobalIdx;
+//! Type alias `TableIdx` names the corresponding implementation/API type.
 typedef uint32_t TableIdx;
+//! Type alias `FuncIdx` names the corresponding implementation/API type.
 typedef uint32_t FuncIdx;
+//! Type alias `MemIdx` names the corresponding implementation/API type.
 typedef uint32_t MemIdx;
 
 //! Distinguishes between normal types (i32) and packed types (i8, i16)
