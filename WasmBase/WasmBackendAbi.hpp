@@ -1,0 +1,201 @@
+#ifndef WASMBACKENDABI_HPP
+#define WASMBACKENDABI_HPP
+
+#include "WasmApi.hpp"
+
+/*!
+  \file WasmBackendAbi.hpp
+  \brief Backend-neutral POD views of the call ABI (kinds, sizes, alignments, offsets).
+
+  This header is part of the exported surface: every declaration in it
+  is exported (docs/EMBEDDING_SURFACE.md ES-4).
+*/
+
+WASMJIT_VISIBLE_BEGIN
+
+#include "WasmType.hpp"
+
+#include <cstddef>
+#include <cstdint>
+#include <span>
+#include <type_traits>
+
+namespace WASM {
+
+//! \brief Backend-neutral POD views (docs/BACKEND_PLUGIN_ABI.md BP-1)
+//!
+//! The calling-convention ABI is four numbers wide: a value kind, a size, an
+//! alignment and an offset. These are the views a backend, the harness and an
+//! embedder can all read without sharing an IR type (docs/ABI.md "The result
+//! tuple layout" and "`v128` by Value").
+//!
+//! Everything here is standard-layout and holds no STL member, so the same
+//! numbers can cross the C plugin boundary (docs/BACKEND_PLUGIN_ABI.md §5).
+//! This header is *backend SDK* tier (docs/EMBEDDING_SURFACE.md §6.1): it pulls
+//! in the type system, so an embedder that only sizes a result buffer uses the
+//! documented rule rather than this header.
+
+/** \brief ABI-level category used to describe a WebAssembly value. */
+enum class ValueKind : std::uint8_t {
+	Void = 0, //!< No value / zero-byte result.
+	I32, //!< 32-bit integer.
+	I64, //!< 64-bit integer.
+	F32, //!< 32-bit floating-point value.
+	F64, //!< 64-bit floating-point value.
+	V128, //!< 128-bit SIMD vector.
+	Ref, //!< any reference type: one pointer-sized word
+};
+
+/** \brief Non-owning parameter/result kind view of a function signature. */
+struct SignatureView {
+	//! Parameter kinds, or null when there are none.
+	const ValueKind* params = nullptr;
+	//! Number of entries in `params`.
+	std::uint32_t    paramCount = 0;
+	const ValueKind* results = nullptr; //!< Result kinds.
+	std::uint32_t    resultCount = 0; //!< Number of entries in `results`.
+};
+
+/** \brief Offset, size, and alignment of one field in a lowered aggregate. */
+struct FieldLayout {
+	//! Byte offset of the field inside the aggregate.
+	std::uint32_t offset = 0;
+	//! Byte size of the field.
+	std::uint32_t size = 0;
+	std::uint32_t alignment = 0; //!< Required alignment of the field, in bytes.
+};
+
+/** \brief Caller-storage-backed layout description of a lowered aggregate. */
+struct AggregateLayout {
+	//! Total byte size of the aggregate.
+	std::uint32_t size = 0;
+	//! Required alignment of the aggregate, in bytes.
+	std::uint32_t alignment = 1;
+	FieldLayout*  fields = nullptr; //!< caller-owned storage, one entry per kind
+	//! Number of entries in `fields`.
+	std::uint32_t fieldCount = 0;
+};
+
+//! Size of one value of `kind` in the host ABI (docs/ABI.md "`v128` by Value").
+//! Packed and secret types never reach a signature, so they are not modelled.
+/**
+ * \brief Returns the host-ABI size of a value kind.
+ * \param kind ABI value category to measure.
+ * \return Size in bytes; Void has size zero.
+ */
+inline constexpr std::uint32_t valueKindSize(ValueKind kind) noexcept
+{
+	switch (kind) {
+	case ValueKind::I32:  return 4;
+	case ValueKind::I64:  return 8;
+	case ValueKind::F32:  return 4;
+	case ValueKind::F64:  return 8;
+	case ValueKind::V128: return 16;
+	case ValueKind::Ref:  return static_cast<std::uint32_t>(sizeof(void*));
+	case ValueKind::Void: return 0;
+	}
+	return 0;
+}
+
+/**
+ * \brief Returns the host-ABI alignment of a value kind.
+ * \param kind ABI value category to measure.
+ * \return Required alignment in bytes.
+ */
+inline constexpr std::uint32_t valueKindAlignment(ValueKind kind) noexcept
+{
+	switch (kind) {
+	case ValueKind::I32:  return 4;
+	case ValueKind::I64:  return 8;
+	case ValueKind::F32:  return 4;
+	case ValueKind::F64:  return 8;
+	case ValueKind::V128: return 16;
+	case ValueKind::Ref:  return static_cast<std::uint32_t>(alignof(void*));
+	case ValueKind::Void: return 1;
+	}
+	return 1;
+}
+
+//! The ABI class of a declared value type. Every reference type is one
+//! pointer-sized word (docs/ABI.md "Reference and Global Representation").
+/**
+ * \brief Maps a WebAssembly value-type opcode to its ABI value category.
+ * \param code WebAssembly value type code.
+ * \return Corresponding ABI kind; reference opcodes map to Ref.
+ */
+inline constexpr ValueKind valueKindOf(ValueTypeCode code) noexcept
+{
+	switch (code) {
+	case ValueTypeCode::Void: return ValueKind::Void;
+	case ValueTypeCode::I32:  return ValueKind::I32;
+	case ValueTypeCode::I64:  return ValueKind::I64;
+	case ValueTypeCode::F32:  return ValueKind::F32;
+	case ValueTypeCode::F64:  return ValueKind::F64;
+	case ValueTypeCode::V128: return ValueKind::V128;
+	default:                  return ValueKind::Ref;
+	}
+}
+
+namespace detail {
+/**
+ * \brief Rounds a byte offset up to the requested alignment.
+ * \param value Original byte offset.
+ * \param alignment Alignment boundary (must be non-zero).
+ * \return Smallest aligned offset not less than value.
+ */
+inline constexpr std::uint32_t alignUp(std::uint32_t value,
+		std::uint32_t alignment) noexcept
+{
+	return (value + alignment - 1u) / alignment * alignment;
+}
+} // namespace detail
+
+//! The multi-result tuple layout: declaration order, each field at the next
+//! offset rounded up to its own alignment, the tuple rounded up to the largest
+//! alignment (docs/ABI.md "The result tuple layout").
+//!
+//! `fieldStorage` is caller-owned scratch; it must have room for one
+//! `FieldLayout` per kind. Too little storage returns the zero layout rather
+//! than writing out of bounds.
+/**
+ * \brief Computes the ABI layout for a sequence of result/value kinds.
+ * \param kinds Field kinds in declaration order.
+ * \param fieldStorage Caller-owned output storage with at least kinds.size()
+ *        entries; insufficient storage produces a zero layout.
+ * \return Aggregate size/alignment and a pointer to the populated field layouts.
+ */
+inline AggregateLayout computeAggregateLayout(std::span<const ValueKind> kinds,
+		std::span<FieldLayout> fieldStorage) noexcept
+{
+	AggregateLayout layout;
+	if (kinds.size() > fieldStorage.size())
+		return layout;
+
+	layout.fields = fieldStorage.data();
+	layout.fieldCount = static_cast<std::uint32_t>(kinds.size());
+
+	std::uint32_t offset = 0;
+	std::uint32_t alignment = 1;
+	for (std::size_t i = 0; i < kinds.size(); ++i) {
+		const std::uint32_t size = valueKindSize(kinds[i]);
+		const std::uint32_t fieldAlignment = valueKindAlignment(kinds[i]);
+		offset = detail::alignUp(offset, fieldAlignment);
+		fieldStorage[i] = FieldLayout{ offset, size, fieldAlignment };
+		offset += size;
+		if (fieldAlignment > alignment)
+			alignment = fieldAlignment;
+	}
+	layout.size = detail::alignUp(offset, alignment);
+	layout.alignment = alignment;
+	return layout;
+}
+
+static_assert(std::is_standard_layout_v<SignatureView>);
+static_assert(std::is_standard_layout_v<FieldLayout>);
+static_assert(std::is_standard_layout_v<AggregateLayout>);
+static_assert(sizeof(FieldLayout) == 12, "the C plugin view pins the layout");
+
+} // namespace WASM
+
+WASMJIT_VISIBLE_END
+#endif // WASMBACKENDABI_HPP
