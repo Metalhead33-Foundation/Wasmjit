@@ -71,6 +71,9 @@ public:
 /**
  * \brief Performs the reset operation.
  */
+/**
+ * \brief Performs the reset operation.
+ */
 	void reset();
 	/*!
 	 * \brief Finds the lowered type associated with a WebAssembly value type.
