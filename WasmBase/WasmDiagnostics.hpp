@@ -128,8 +128,8 @@ inline constexpr std::uint64_t kNoDiagnosticOffset = ~std::uint64_t{0};
 struct DiagnosticLocation {
 	std::uint32_t functionIndex = kNoDiagnosticIndex;
 	std::uint32_t instructionOffset = kNoDiagnosticIndex;
-	std::uint64_t moduleOffset = kNoDiagnosticOffset;
-	std::string functionName;
+	std::uint64_t moduleOffset = kNoDiagnosticOffset; //!< Field `moduleOffset` of DiagnosticLocation.
+	std::string functionName; //!< Field `functionName` of DiagnosticLocation.
 
 /**
  * \brief Performs the known operation.
@@ -158,8 +158,8 @@ struct DiagnosticContinuation {
 	std::int32_t tagId = -1;
 	std::uint32_t valueCount = 0;
 	std::uint32_t resultCount = 0;
-	bool hasRoots = false;
-	const void* switchPeer = nullptr;
+	bool hasRoots = false; //!< Field `hasRoots` of DiagnosticContinuation.
+	const void* switchPeer = nullptr; //!< Field `switchPeer` of DiagnosticContinuation.
 
 /**
  * \brief Returns or updates the present diagnostic facility.
@@ -332,10 +332,10 @@ struct DiagnosticState {
 	static constexpr std::uint32_t kDefaultCapacity = 32;
 
 	DiagnosticSink sink = nullptr;
-	void* userData = nullptr;
-	std::uint32_t capacity = kDefaultCapacity;
-	std::uint32_t sequence = 0;
-	std::vector<Diagnostic> records;
+	void* userData = nullptr; //!< Field `userData` of DiagnosticState.
+	std::uint32_t capacity = kDefaultCapacity; //!< Field `capacity` of DiagnosticState.
+	std::uint32_t sequence = 0; //!< Field `sequence` of DiagnosticState.
+	std::vector<Diagnostic> records; //!< Field `records` of DiagnosticState.
 	//! When true, one ANSI/emoji line is written to stderr per host-log record.
 	//! The record id family is `WASM.EXECUTE.LOG.*`. Off by default: the core
 	//! never writes to the terminal unless an embedder (or the test harness)
