@@ -23,6 +23,17 @@
     i64.const 9223372036854775807
     i64.const 1
     i64.add)
+  (func (export "i64_tee") (param i64) (result i64) (local i64)
+    local.get 0
+    local.tee 1
+    drop
+    local.get 1)
+  (func (export "i64_mixed") (param i32 i64) (result i64)
+    local.get 1
+    local.get 0
+    drop
+    i64.const 1
+    i64.add)
   (func (export "i64_and") (param i64 i64) (result i64)
     local.get 0 local.get 1 i64.and)
   (func (export "i64_or") (param i64 i64) (result i64)
