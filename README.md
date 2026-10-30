@@ -231,7 +231,7 @@ library per backend plus the test executable.
 | `WasmBase/` | The core library (`libWasmBase`): binary decoding, the module/instance model, `Store`/`TypeRegistry`/`Value`, the opcode decoder, the shared SIMD helper ABI, and the backend-neutral component runtime (`WasmComponentRuntime`). **Backend-agnostic by rule** — see [`docs/LAYERING.md`](docs/LAYERING.md) |
 | `WasmStub/` | `libWasmStub`: a non-JIT opcode dispatcher that pretty-prints instead of executing (inspection/debug) |
 | `LibJit/` | `libLibJit`: the GNU LibJIT backend (context, type translation, module compiler, dispatch) — the current full-featured implementation path |
-| `Asmjit/` | **Experimental AsmJit backend**: owns a `JitRuntime`, implements `ModuleInstantiator`, and executes a limited i32 subset with globals, typed direct/indirect calls, and checked memory32 access including size/grow. Native SIMD and ABI probes are also present. Not full-featured or selectable through the public runtime registry; see [`Asmjit/README.md`](Asmjit/README.md) |
+| `Asmjit/` | **Experimental AsmJit backend**: owns a `JitRuntime`, implements `ModuleInstantiator`, and executes a limited i32/i64 subset with globals, typed direct/indirect calls, and checked memory32 access including size/grow. Native SIMD and ABI probes are also present. Not full-featured or selectable through the public runtime registry; see [`Asmjit/README.md`](Asmjit/README.md) |
 | `Sljit/` | **Planned backend, no code yet**: same treatment. `sljit_emit_simd_*` / `SLJIT_SIMD_REG_*` are the other planned SIMD lever; see `Sljit/README.md` |
 | `Test/` | The Catch2 executable (`WasmJit`) and the spec-suite harness; see [`docs/TESTING.md`](docs/TESTING.md) |
 | `docs/` | Design notes and process guides; per-proposal notes live in `docs/proposals/` (see the [`docs`](docs/index.md) node) |
@@ -274,7 +274,7 @@ through qmake:
 |---|---|
 | GNU LibJIT (`LibJit/`) | **The full-featured execution backend** — loads, validates, compiles and runs modules, including SIMD via the shared helper layer |
 | SlJIT (`Sljit/`) | **Planned**, not started: builds an empty library, installs nothing; the [`work order`](docs/BACKEND_WORK_ORDER.md) says what it must provide |
-| AsmJit (`Asmjit/`) | **Experimental execution backend** — compiles an i32 subset (arithmetic, comparisons, bitwise operations, void structured control flow, direct/indirect calls, i32 globals, sign extension, and checked memory32 loads/stores plus size/grow); native SIMD/ABI probes also exist. Not yet a full replacement for LibJIT |
+| AsmJit (`Asmjit/`) | **Experimental execution backend** — compiles an i32/i64 subset (arithmetic, comparisons, bitwise operations, void and single-result i32/i64 structured control flow, direct/indirect calls, i32/i64 globals, sign extension, and checked memory32 loads/stores plus size/grow); native SIMD/ABI probes also exist. Not yet a full replacement for LibJIT |
 
 There is no interpreter backend. `WasmStub/` is a non-compiling pretty-printer;
 GNU LibJIT already provides a compile/interpret configuration and is the only
