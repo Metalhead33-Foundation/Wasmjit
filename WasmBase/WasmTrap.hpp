@@ -239,6 +239,10 @@ private:
 //! the re-entering C++ code can observe `trapPending()` and return a benign
 //! value; the generated caller then sees the pending slot.
 /** \brief Throws a Trap at a safe host boundary when one is pending. \throws WASM::Trap when a pending trap can be transferred out of generated code. */
+/**
+ * \brief Performs the checkTrap operation.
+ * \return The value or status produced by this operation.
+ */
 [[gnu::noinline]] void checkTrap();
 
 //! Depth of host→Wasm calls in the current execution state. Zero means the
@@ -312,6 +316,10 @@ public:
 /** \brief Token identifying one registered deferred-cleanup record. */
 struct TrapDeferToken {
 	std::uint32_t index = 0xFFFFFFFFu; //!< slot index, or all-ones when invalid
+/**
+ * \brief Performs the valid operation.
+ * \return The value or status produced by this operation.
+ */
 	bool valid() const noexcept { return index != 0xFFFFFFFFu; } //!< true when a live record
 };
 
