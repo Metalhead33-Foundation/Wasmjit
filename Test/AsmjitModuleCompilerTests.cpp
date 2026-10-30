@@ -171,12 +171,12 @@ TEST_CASE("AsmJit compiles i64 integer functions", "[asmjit][module][i64]")
 			== INT64_MIN);
 
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_and"),
-			INT64_C(0xF00000000), INT64_C(0x3C0000000)) == INT64_C(0x30000000));
+			INT64_C(0xF00000000), INT64_C(0x3C0000000)) == INT64_C(0x300000000));
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_or"),
 			INT64_C(0xF00000000), INT64_C(0x0F0000000)) == INT64_C(0xFF0000000));
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_xor"),
 			INT64_C(0xFF0000000), INT64_C(0x0F0000000)) == INT64_C(0xF00000000));
-	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_shl"), 3, 34) == 12);
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_shl"), 3, 66) == 12);
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_shr_s"), -16, 2) == -4);
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_shr_u"), -16, 2)
 			== static_cast<std::int64_t>(UINT64_C(0x3FFFFFFFFFFFFFFC)));
