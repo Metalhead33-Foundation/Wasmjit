@@ -1667,7 +1667,7 @@ private:
 		case LoadKind::I64I16Unsigned:
 			checkError(compiler.movzx(result, asmjit::x86::word_ptr(pointer)), "AsmJit i64.load16_u emission failed"); break;
 		case LoadKind::I64I32Signed:
-			checkError(compiler.movsx(result, asmjit::x86::dword_ptr(pointer)), "AsmJit i64.load32_s emission failed"); break;
+			checkError(compiler.movsxd(result, asmjit::x86::dword_ptr(pointer)), "AsmJit i64.load32_s emission failed"); break;
 		case LoadKind::I64I32Unsigned:
 			checkError(compiler.mov(result.r32(), asmjit::x86::dword_ptr(pointer)), "AsmJit i64.load32_u emission failed"); break;
 		}
