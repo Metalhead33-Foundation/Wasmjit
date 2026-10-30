@@ -314,6 +314,21 @@ void asmjitElemDrop(WASM::VMContext* vm, uint32_t elementIndex) noexcept
     }
 }
 
+
+uint32_t asmjitTableSize(WASM::VMContext* vm, uint32_t tableIndex) noexcept
+{
+    if (vm == nullptr || vm->tables == nullptr || tableIndex >= vm->tableCount) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit table.size index is invalid");
+        return 0;
+    }
+    const WASM::TableInstance* table = vm->tables[tableIndex];
+    if (table == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit table.size table is null");
+        return 0;
+    }
+    return static_cast<uint32_t>(table->size);
+}
+
 asmjit::FuncSignature stackCheckSignature()
 {
 	asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
@@ -949,6 +964,29 @@ protected:
         auto element = compiler.new_gp32("elementDropIndex");
         checkError(compiler.mov(element, elementIndex), "AsmJit elem.drop index failed");
         invoke->set_arg(1, element);
+        emitPendingTrapReturn();
+    }
+
+
+
+    void dispatchTableSize(WASM::TableIdx tableIndex) override
+    {
+        if (static_cast<size_t>(tableIndex) >= module.importTables.size() + module.tables.size())
+            throw std::runtime_error("AsmJit table.size table index is out of range");
+        asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+        signature.set_ret(asmjit::TypeId::kUInt32);
+        signature.add_arg(asmjit::TypeId::kUIntPtr);
+        signature.add_arg(asmjit::TypeId::kUInt32);
+        asmjit::InvokeNode* invoke = nullptr;
+        checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitTableSize), signature),
+                "AsmJit table.size helper call emission failed");
+        invoke->set_arg(0, vmContext);
+        auto index = compiler.new_gp32("tableSizeIndex");
+        checkError(compiler.mov(index, static_cast<uint32_t>(tableIndex)), "AsmJit table.size index materialisation failed");
+        invoke->set_arg(1, index);
+        auto size = compiler.new_gp32("tableSizeResult");
+        invoke->set_ret(0, size);
+        values.push_back(size);
         emitPendingTrapReturn();
     }
 
