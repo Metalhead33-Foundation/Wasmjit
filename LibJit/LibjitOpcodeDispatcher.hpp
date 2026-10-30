@@ -695,8 +695,8 @@ private:
  * \brief Performs the requestTrapEpilogue operation required by the opcode dispatcher.
  */
 	void requestTrapEpilogue();
-	jit_label_t trapEpilogueLabel = jit_label_undefined;
-	bool trapEpilogueUsed = false;
+	jit_label_t trapEpilogueLabel = jit_label_undefined; //!< Field `trapEpilogueLabel` of type.
+	bool trapEpilogueUsed = false; //!< Field `trapEpilogueUsed` of type.
 	//! The calling thread's trap slot, obtained once per function in the entry
 	//! block (`wasm_trap_slot()`); every check loads `pending` through it.
 	jit_value_t trapSlot = nullptr;
@@ -886,7 +886,7 @@ protected:
  * \param handlers Instruction operand, backend value, or output destination.
  */
 	void dispatchResumeThrow(WASM::TypeIdx arg1, WASM::TagIdx arg2,
-			std::vector<WASM::ContHandlerClause>&& handlers) override;
+			std::vector<WASM::ContHandlerClause>&& handlers) override; //!< Field `override` of type.
 	//! Dispatch the `ResumeThrowRef` instruction. Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the ResumeThrowRef WebAssembly instruction to this LibJIT implementation.
@@ -894,7 +894,7 @@ protected:
  * \param handlers Instruction operand, backend value, or output destination.
  */
 	void dispatchResumeThrowRef(WASM::TypeIdx arg,
-			std::vector<WASM::ContHandlerClause>&& handlers) override;
+			std::vector<WASM::ContHandlerClause>&& handlers) override; //!< Field `override` of type.
 /**
  * \brief Dispatches the Switch WebAssembly instruction to this LibJIT implementation.
  * \param arg1 Instruction operand, backend value, or output destination.
