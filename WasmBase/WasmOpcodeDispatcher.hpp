@@ -59,11 +59,6 @@ protected:
 	//! reject a construct an excluded marker forbids. The default accepts
 	//! everything, so a backend that is not validating pays one empty virtual
 	//! call per prefixed instruction at compile time.
-/**
- * \brief Performs the onSimdOpcode operation required by the opcode dispatcher.
- * \param SIMDOpcode Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	virtual void onSimdOpcode(SIMDOpcode) {}
 /**
  * \brief Performs the onAtomicOpcode operation required by the opcode dispatcher.
@@ -3876,10 +3871,6 @@ protected:
 public:
 	~OpcodeDispatcher() = default;
 	//! Walk an entire function body, dispatching every instruction in order.
-/**
- * \brief Performs the readCode operation required by the opcode dispatcher.
- * \param stream Instruction operand, backend value, or output destination.
- */
 	void readCode(FastMemReader& stream);
 };
 
