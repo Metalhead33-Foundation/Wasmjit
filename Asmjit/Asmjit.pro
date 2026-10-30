@@ -12,5 +12,7 @@ INCLUDEPATH += $$PWD/..
 include(../WasmBase/WasmBase.pri)
 
 # AsmJit is external and remains confined to this backend.
-SOURCES += AsmjitContext.cpp
-HEADERS += AsmjitContext.hpp
+SOURCES += AsmjitContext.cpp \
+    AsmjitTypeTranslator.cpp
+HEADERS += AsmjitContext.hpp \
+    AsmjitTypeTranslator.hpp
