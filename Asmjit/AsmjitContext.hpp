@@ -1,7 +1,7 @@
 #ifndef WASMJIT_ASMJIT_CONTEXT_HPP
 #define WASMJIT_ASMJIT_CONTEXT_HPP
 
-#include <asmjit/asmjit.h>
+#include <asmjit/host.h>
 
 #include <vector>
 
