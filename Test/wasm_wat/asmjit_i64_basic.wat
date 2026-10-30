@@ -14,6 +14,24 @@
     local.get 0
     i32.const 0
     call_indirect (type $unary64))
+  (func (export "i64_store_load") (param i32 i64) (result i64)
+    local.get 0
+    local.get 1
+    i64.store
+    local.get 0
+    i64.load)
+  (func (export "i64_store8_load_s") (param i32 i64) (result i64)
+    local.get 0
+    local.get 1
+    i64.store8
+    local.get 0
+    i64.load8_s)
+  (func (export "i64_store8_load_u") (param i32 i64) (result i64)
+    local.get 0
+    local.get 1
+    i64.store8
+    local.get 0
+    i64.load8_u)
   (func (export "i64_add") (param i64 i64) (result i64)
     local.get 0
     local.get 1
