@@ -57,7 +57,7 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 struct Section {
 	SectionType type;
 	uint32_t size;
-	uint32_t offset;
+	uint32_t offset; //!< Field `offset` of Section.
 };
 //! Read only.
 /** \brief Reads a section identifier and LEB128 payload size. \tparam E Stream byte order. \tparam I Device type. \param left Stream positioned at the section header. \param right Receives type, size, and payload offset. \return Reference to the input stream. */
