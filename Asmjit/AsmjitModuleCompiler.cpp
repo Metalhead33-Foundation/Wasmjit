@@ -315,6 +315,36 @@ void asmjitElemDrop(WASM::VMContext* vm, uint32_t elementIndex) noexcept
 }
 
 
+
+void asmjitTableCopy(WASM::VMContext* vm, uint32_t destinationTable, uint32_t sourceTable,
+        uint32_t destination, uint32_t source, uint32_t length) noexcept
+{
+    if (vm == nullptr || vm->tables == nullptr
+            || destinationTable >= vm->tableCount || sourceTable >= vm->tableCount) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit table.copy index is invalid");
+        return;
+    }
+    WASM::TableInstance* dst = vm->tables[destinationTable];
+    WASM::TableInstance* src = vm->tables[sourceTable];
+    if (dst == nullptr || src == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit table.copy table is null");
+        return;
+    }
+    if (destination > dst->size || length > dst->size - destination
+            || source > src->size || length > src->size - source) {
+        WASM::reportTrap(WASM::TrapKind::OutOfBoundsTableAccess);
+        return;
+    }
+    if (length == 0)
+        return;
+    if (dst->base == nullptr || src->base == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit table.copy storage is null");
+        return;
+    }
+    std::memmove(dst->base + destination, src->base + source,
+            static_cast<size_t>(length) * sizeof(WASM::Callable*));
+}
+
 uint32_t asmjitTableSize(WASM::VMContext* vm, uint32_t tableIndex) noexcept
 {
     if (vm == nullptr || vm->tables == nullptr || tableIndex >= vm->tableCount) {
@@ -968,6 +998,37 @@ protected:
     }
 
 
+
+
+    void dispatchTableCopy(WASM::TableIdx destinationTable, WASM::TableIdx sourceTable) override
+    {
+        if (static_cast<size_t>(destinationTable) >= module.importTables.size() + module.tables.size()
+                || static_cast<size_t>(sourceTable) >= module.importTables.size() + module.tables.size())
+            throw std::runtime_error("AsmJit table.copy table index is out of range");
+        if (values.size() < 3)
+            throw std::runtime_error("AsmJit table.copy operand stack underflow");
+        const auto length = values.back(); values.pop_back();
+        const auto source = values.back(); values.pop_back();
+        const auto destination = values.back(); values.pop_back();
+        asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+        signature.set_ret(asmjit::TypeId::kVoid);
+        for (int i = 0; i < 6; ++i)
+            signature.add_arg(i == 0 ? asmjit::TypeId::kUIntPtr : asmjit::TypeId::kUInt32);
+        asmjit::InvokeNode* invoke = nullptr;
+        checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitTableCopy), signature),
+                "AsmJit table.copy helper call emission failed");
+        invoke->set_arg(0, vmContext);
+        auto dstTable = compiler.new_gp32("tableCopyDestinationTable");
+        auto srcTable = compiler.new_gp32("tableCopySourceTable");
+        checkError(compiler.mov(dstTable, static_cast<uint32_t>(destinationTable)), "AsmJit table.copy destination table index failed");
+        checkError(compiler.mov(srcTable, static_cast<uint32_t>(sourceTable)), "AsmJit table.copy source table index failed");
+        invoke->set_arg(1, dstTable);
+        invoke->set_arg(2, srcTable);
+        invoke->set_arg(3, destination);
+        invoke->set_arg(4, source);
+        invoke->set_arg(5, length);
+        emitPendingTrapReturn();
+    }
 
     void dispatchTableSize(WASM::TableIdx tableIndex) override
     {
