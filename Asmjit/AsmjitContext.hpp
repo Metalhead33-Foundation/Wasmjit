@@ -27,7 +27,7 @@ public:
 	//! Native entry point used by the executable-code smoke test.
 	using Return42Entry = int (*)();
 	//! Native entry point for the diagnostic four-lane i32 operation.
-		using LaneWiseI32x4Entry = void (*)(const std::uint32_t*,
+	using LaneWiseI32x4Entry = void (*)(const std::uint32_t*,
 			const std::uint32_t*, std::uint32_t*);
 	//! Native entry point for a real XMM-backed i32x4 SIMD addition.
 	using V128I32x4AddEntry = void (*)(const std::uint32_t*,
@@ -97,7 +97,7 @@ public:
 private:
 	asmjit::JitRuntime runtime;
 	std::vector<Return42Entry> return42Allocations;
-		std::vector<LaneWiseI32x4Entry> laneWiseAllocations;
+	std::vector<LaneWiseI32x4Entry> laneWiseAllocations;
 	std::vector<V128I32x4AddEntry> v128Allocations;
 };
 
