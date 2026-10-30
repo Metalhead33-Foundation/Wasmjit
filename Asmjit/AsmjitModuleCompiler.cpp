@@ -396,6 +396,9 @@ protected:
 
 	void dispatchNop() override {}
 
+	void dispatchI32Extend8S() override { emitSignExtend(8); }
+	void dispatchI32Extend16S() override { emitSignExtend(16); }
+
 	void dispatchI32Eqz() override
 	{
 		if (values.empty())
@@ -582,6 +585,22 @@ private:
 		default:
 			throw std::runtime_error("AsmJit internal error: unsupported memory-store width");
 		}
+	}
+
+	void emitSignExtend(uint32_t width)
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit sign-extension operand stack underflow");
+		auto source = values.back();
+		values.pop_back();
+		auto result = compiler.new_gp32("signExtended");
+		if (width == 8)
+			checkError(compiler.movsx(result, source.r8()), "AsmJit i32.extend8_s emission failed");
+		else if (width == 16)
+			checkError(compiler.movsx(result, source.r16()), "AsmJit i32.extend16_s emission failed");
+		else
+			throw std::runtime_error("AsmJit internal error: invalid sign-extension width");
+		values.push_back(result);
 	}
 
 	void emitCompare(asmjit::x86::CondCode condition)
