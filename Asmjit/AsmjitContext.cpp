@@ -136,11 +136,14 @@ Context::V128I32x4AddEntry Context::compileV128I32x4Add()
 	function->set_arg(2, out);
 
 	asmjit::x86::Vec lhs = compiler.new_vec128("lhs");
-	checkError(compiler.movdqu(lhs, asmjit::x86::ptr(a)),
+	asmjit::x86::Vec rhs = compiler.new_vec128("rhs");
+	checkError(compiler.emit(asmjit::x86::Inst::kIdMovdqu, lhs, asmjit::x86::ptr(a)),
 			"AsmJit V128 first load emission failed");
-	checkError(compiler.paddd(lhs, asmjit::x86::ptr(b)),
+	checkError(compiler.emit(asmjit::x86::Inst::kIdMovdqu, rhs, asmjit::x86::ptr(b)),
+			"AsmJit V128 second load emission failed");
+	checkError(compiler.emit(asmjit::x86::Inst::kIdPaddd, lhs, rhs),
 			"AsmJit V128 packed addition emission failed");
-	checkError(compiler.movdqu(asmjit::x86::ptr(out), lhs),
+	checkError(compiler.emit(asmjit::x86::Inst::kIdMovdqu, asmjit::x86::ptr(out), lhs),
 			"AsmJit V128 result store emission failed");
 
 	checkError(compiler.end_func(), "AsmJit V128 function finalisation failed");
@@ -178,28 +181,31 @@ Context::V128BitwiseEntry Context::compileV128Bitwise(V128BitwiseOp operation)
 	function->set_arg(1, b);
 	function->set_arg(2, out);
 
-	asmjit::x86::Vec value = compiler.new_vec128("value");
-	checkError(compiler.movdqu(value, asmjit::x86::ptr(a)),
+	asmjit::x86::Vec lhs = compiler.new_vec128("lhs");
+	asmjit::x86::Vec rhs = compiler.new_vec128("rhs");
+	checkError(compiler.emit(asmjit::x86::Inst::kIdMovdqu, lhs, asmjit::x86::ptr(a)),
 			"AsmJit V128 bitwise first load emission failed");
+	checkError(compiler.emit(asmjit::x86::Inst::kIdMovdqu, rhs, asmjit::x86::ptr(b)),
+			"AsmJit V128 bitwise second load emission failed");
 
 	switch (operation) {
 	case V128BitwiseOp::And:
-		checkError(compiler.pand(value, asmjit::x86::ptr(b)),
+		checkError(compiler.emit(asmjit::x86::Inst::kIdPand, lhs, rhs),
 				"AsmJit V128 AND emission failed");
 		break;
 	case V128BitwiseOp::Or:
-		checkError(compiler.por(value, asmjit::x86::ptr(b)),
+		checkError(compiler.emit(asmjit::x86::Inst::kIdPor, lhs, rhs),
 				"AsmJit V128 OR emission failed");
 		break;
 	case V128BitwiseOp::Xor:
-		checkError(compiler.pxor(value, asmjit::x86::ptr(b)),
+		checkError(compiler.emit(asmjit::x86::Inst::kIdPxor, lhs, rhs),
 				"AsmJit V128 XOR emission failed");
 		break;
 	default:
 		throw std::invalid_argument("Unknown AsmJit V128 bitwise operation");
 	}
 
-	checkError(compiler.movdqu(asmjit::x86::ptr(out), value),
+	checkError(compiler.emit(asmjit::x86::Inst::kIdMovdqu, asmjit::x86::ptr(out), lhs),
 			"AsmJit V128 bitwise result store emission failed");
 	checkError(compiler.end_func(), "AsmJit V128 bitwise function finalisation failed");
 	checkError(compiler.finalize(), "AsmJit V128 bitwise compiler finalisation failed");
@@ -229,11 +235,12 @@ Context::PackedI8ExtendEntry Context::compilePackedI8Extend(bool signExtend)
 		throw std::runtime_error("AsmJit failed to create the packed i8 extension function");
 
 	asmjit::x86::Gp input = compiler.new_gp_ptr("input");
+	asmjit::x86::Gp narrow = compiler.new_gp8("narrow");
 	asmjit::x86::Gp result = compiler.new_gp32("result");
 	function->set_arg(0, input);
-	checkError(signExtend
-			? compiler.movsx(result, asmjit::x86::byte_ptr(input))
-			: compiler.movzx(result, asmjit::x86::byte_ptr(input)),
+	checkError(compiler.mov(narrow, asmjit::x86::byte_ptr(input)),
+			"AsmJit packed i8 load emission failed");
+	checkError(signExtend ? compiler.movsx(result, narrow) : compiler.movzx(result, narrow),
 			"AsmJit packed i8 extension emission failed");
 	checkError(compiler.ret(result), "AsmJit packed i8 return emission failed");
 	checkError(compiler.end_func(), "AsmJit packed i8 function finalisation failed");
@@ -264,11 +271,12 @@ Context::PackedI16ExtendEntry Context::compilePackedI16Extend(bool signExtend)
 		throw std::runtime_error("AsmJit failed to create the packed i16 extension function");
 
 	asmjit::x86::Gp input = compiler.new_gp_ptr("input");
+	asmjit::x86::Gp narrow = compiler.new_gp16("narrow");
 	asmjit::x86::Gp result = compiler.new_gp32("result");
 	function->set_arg(0, input);
-	checkError(signExtend
-			? compiler.movsx(result, asmjit::x86::word_ptr(input))
-			: compiler.movzx(result, asmjit::x86::word_ptr(input)),
+	checkError(compiler.mov(narrow, asmjit::x86::word_ptr(input)),
+			"AsmJit packed i16 load emission failed");
+	checkError(signExtend ? compiler.movsx(result, narrow) : compiler.movzx(result, narrow),
 			"AsmJit packed i16 extension emission failed");
 	checkError(compiler.ret(result), "AsmJit packed i16 return emission failed");
 	checkError(compiler.end_func(), "AsmJit packed i16 function finalisation failed");
