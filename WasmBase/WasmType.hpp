@@ -74,7 +74,7 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 /** \brief Binary opcode values for core scalar, vector, and reference value types. */
 enum class ValueTypeCode : int8_t {
 	Void            = -0x40, //!< Void
-	Func            = -0x20,
+	Func            = -0x20, //!< ValueTypeCode enumerator `Func`.
 	//! Number Types
 	I32             = -0x01, //!< 0x7F
 	I64             = -0x02, //!< 0x7E
@@ -120,7 +120,7 @@ enum class ValueTypeCode : int8_t {
 
 	//! Generic Reference Opcodes
 	RefNull         = -0x1D, //!< 0x63
-	Ref             = -0x1C  //!< 0x64
+	Ref             = -0x1C  //!< 0x64, //!< ValueTypeCode enumerator `Ref`.
 };
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, ValueTypeCode& right) {
 	return left.readLEB128_enum(right);
@@ -428,8 +428,8 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 }
 /** \brief Address width used by a memory's index space. */
 enum class MemoryIndexType : uint8_t {
-	I32,
-	I64
+	I32, //!< MemoryIndexType enumerator `I32`.
+	I64, //!< MemoryIndexType enumerator `I64`.
 };
 
 /** \brief Memory declaration including limits, address width, and page size. */
@@ -512,10 +512,10 @@ struct GlobalType {
 
 /** \brief Kind discriminator for a module import or export. */
 enum class ExternalKind : uint8_t {
-	Function = 0x00,
-	Table    = 0x01,
-	Memory   = 0x02,
-	Global   = 0x03,
+	Function = 0x00, //!< ExternalKind enumerator `Function`.
+	Table    = 0x01, //!< ExternalKind enumerator `Table`.
+	Memory   = 0x02, //!< ExternalKind enumerator `Memory`.
+	Global   = 0x03, //!< ExternalKind enumerator `Global`.
 	Tag      = 0x04, //!< Exception Handling proposal
 	Type     = 0x05  //!< Type Imports/Exports proposal (decoded and linked, TI-1…TI-4)
 };
@@ -835,10 +835,10 @@ Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& stream, HeapType&
 //! =============================================================================
 /** \brief Catch-clause form encoded in a try_table instruction. */
 enum class CatchKind : uint8_t {
-	Catch        = 0x00,
-	CatchRef     = 0x01,
-	CatchAll     = 0x02,
-	CatchAllRef  = 0x03,
+	Catch        = 0x00, //!< CatchKind enumerator `Catch`.
+	CatchRef     = 0x01, //!< CatchKind enumerator `CatchRef`.
+	CatchAll     = 0x02, //!< CatchKind enumerator `CatchAll`.
+	CatchAllRef  = 0x03, //!< CatchKind enumerator `CatchAllRef`.
 };
 
 /** \brief Decoded try_table catch kind, tag index, and target label. */
