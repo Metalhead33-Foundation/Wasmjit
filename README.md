@@ -239,8 +239,8 @@ The repository builds a set of shared libraries plus a console test executable
 through qmake:
 
 - [`Project.pro`](Project.pro) is the top-level `subdirs` project
-  (`WasmBase` + `WasmStub` + `LibJit` + the planned `Asmjit`/`Sljit` placeholders
-  + `ExampleBackend` + `Test`);
+  (`WasmBase` + `WasmStub` + `LibJit` + the provisional `Asmjit` probe + the
+  planned `Sljit` placeholder + `ExampleBackend` + `Test`);
 - the test target links against `libjit`, Catch2 and the project libraries;
 - `libWasmBase` links `libffi` (the flat component-runtime closure path) and
   the header-only `utf8cpp` package for Canonical ABI string transcoding;
