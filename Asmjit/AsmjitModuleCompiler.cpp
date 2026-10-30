@@ -1162,6 +1162,9 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 			internals.internalCallables[i].fnPtr = functionRecords[i]->entry;
 			internals.compiledFunctions[i] = functionRecords[i]->entry;
 		}
+		// FuncNodes belong to the temporary CodeHolder. Runtime handles are the
+		// installed entry pointers above, so discard all compiler-side records.
+		functionRecords.clear();
 	} catch (...) {
 		// Instantiation is transactional with respect to executable memory:
 		// a failed module must not pin partially generated code in the session.
@@ -1172,6 +1175,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 			internals.internalCallables[i].fnPtr = nullptr;
 			internals.compiledFunctions[i] = nullptr;
 		}
+		functionRecords.clear();
 		throw;
 	}
 }
