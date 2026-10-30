@@ -1,8 +1,9 @@
 #ifndef WASMJIT_ASMJIT_CONTEXT_HPP
 #define WASMJIT_ASMJIT_CONTEXT_HPP
 
-#include <asmjit/host.h>
+#include <asmjit/x86.h>
 
+#include <cstdint>
 #include <vector>
 
 /*!
@@ -23,6 +24,12 @@ namespace AsmJitBackend {
 class Context
 {
 public:
+	//! Native entry point used by the executable-code smoke test.
+	using Return42Entry = int (*)();
+	//! Native entry point for the diagnostic four-lane i32 operation.
+	using LaneWiseI32x4Entry = void (*)(const std::uint32_t*,
+			const std::uint32_t*, std::uint32_t*);
+
 	/*!
 	 * \brief Creates an executable-code runtime for the current host.
 	 */
@@ -49,7 +56,21 @@ public:
 	 * \throws std::runtime_error if code generation or executable-memory
 	 *         allocation fails.
 	 */
-	int (*compileReturn42())();
+	Return42Entry compileReturn42();
+
+	/*!
+	 * \brief Emits a lane-wise i32x4 addition or multiplication function.
+	 *
+	 * The generated function uses the host C ABI and operates on four
+	 * unaligned 32-bit lanes. It is intended for the backend diagnostic
+	 * interface, not as a WebAssembly SIMD lowering implementation.
+	 *
+	 * \param multiply True to multiply lanes; false to add them.
+	 * \return A callable entry point owned by this context.
+	 * \throws std::runtime_error if code generation or executable-memory
+	 *         allocation fails.
+	 */
+	LaneWiseI32x4Entry compileLaneWiseI32x4(bool multiply);
 
 	/*!
 	 * \brief Returns the host execution environment used by this runtime.
@@ -59,7 +80,8 @@ public:
 
 private:
 	asmjit::JitRuntime runtime;
-	std::vector<int (*)()> allocations;
+	std::vector<Return42Entry> return42Allocations;
+	std::vector<LaneWiseI32x4Entry> laneWiseAllocations;
 };
 
 } // namespace AsmJitBackend
