@@ -3,8 +3,8 @@
 `WasmJit` is an experimental WebAssembly runtime/JIT written in C++.
 
 The library split is in place: `WasmBase/` is the backend-agnostic core
-(`libWasmBase`), every code generator is its own library (`LibJit/` is the full-featured execution backend; `Asmjit/` now has an initial
-straight-line i32 module compiler alongside native code-generation probes, while `Sljit/`
+(`libWasmBase`), every code generator is its own library (`LibJit/` is the full-featured execution backend; `Asmjit/` now has an experimental
+i32 module compiler alongside native code-generation probes, while `Sljit/`
 remains a placeholder, and `Test/` is a Catch2 harness over the libraries
 rather than the product. The `build/<config>/Test/WasmJit` executable is still a
 development sandbox, not the embeddable API. See
@@ -228,7 +228,7 @@ library per backend plus the test executable.
 | `WasmBase/` | The core library (`libWasmBase`): binary decoding, the module/instance model, `Store`/`TypeRegistry`/`Value`, the opcode decoder, the shared SIMD helper ABI, and the backend-neutral component runtime (`WasmComponentRuntime`). **Backend-agnostic by rule** — see [`docs/LAYERING.md`](docs/LAYERING.md) |
 | `WasmStub/` | `libWasmStub`: a non-JIT opcode dispatcher that pretty-prints instead of executing (inspection/debug) |
 | `LibJit/` | `libLibJit`: the GNU LibJIT backend (context, type translation, module compiler, dispatch) — the current implementation path, and the only backend that executes |
-| `Asmjit/` | **Provisional AsmJit integration**: owns an AsmJit `JitRuntime`, emits a scalar smoke-test function and lane-wise i32x4 add/multiply functions, tests their execution, includes scalar/reference/V128 ABI translation with indirect V128 parameters and result buffers, preserves packed i8/i16 storage widths, and emits/tests an XMM-backed i32x4 SIMD addition. Not yet a WebAssembly backend, not registered/selectable, and not installed; see [`Asmjit/README.md`](Asmjit/README.md) |
+| `Asmjit/` | **Experimental AsmJit backend**: owns a `JitRuntime`, implements `ModuleInstantiator`, and executes a limited i32 subset with direct calls and checked memory32 access. Native SIMD and ABI probes are also present. Not full-featured or selectable through the public runtime registry; see [`Asmjit/README.md`](Asmjit/README.md) |
 | `Sljit/` | **Planned backend, no code yet**: same treatment. `sljit_emit_simd_*` / `SLJIT_SIMD_REG_*` are the other planned SIMD lever; see `Sljit/README.md` |
 | `Test/` | The Catch2 executable (`WasmJit`) and the spec-suite harness; see [`docs/TESTING.md`](docs/TESTING.md) |
 | `docs/` | Design notes and process guides; per-proposal notes live in `docs/proposals/` (see the [`docs`](docs/index.md) node) |
@@ -241,9 +241,9 @@ The repository builds a set of shared libraries plus a console test executable
 through qmake:
 
 - [`Project.pro`](Project.pro) is the top-level `subdirs` project
-  (`WasmBase` + `WasmStub` + `LibJit` + the provisional `Asmjit` code-generation probes + the
+  (`WasmBase` + `WasmStub` + `LibJit` + the experimental `Asmjit` backend + the
   planned `Sljit` placeholder + `ExampleBackend` + `Test`);
-- the test target links against `libjit`, the provisional AsmJit library, Catch2 and the project libraries;
+- the test target links against `libjit`, the experimental AsmJit library, Catch2 and the project libraries;
 - `libWasmBase` links `libffi` (the flat component-runtime closure path) and
   the header-only `utf8cpp` package for Canonical ABI string transcoding;
 - JSON — the spec-script reader and the diagnostics serializer — uses the
@@ -269,9 +269,9 @@ through qmake:
 
 | Backend | State |
 |---|---|
-| GNU LibJIT (`LibJit/`) | **The only executing backend** — loads, validates, compiles and runs modules, including SIMD via the shared helper layer |
+| GNU LibJIT (`LibJit/`) | **The full-featured execution backend** — loads, validates, compiles and runs modules, including SIMD via the shared helper layer |
 | SlJIT (`Sljit/`) | **Planned**, not started: builds an empty library, installs nothing; the [`work order`](docs/BACKEND_WORK_ORDER.md) says what it must provide |
-| AsmJit (`Asmjit/`) | **Provisional native code-generation foundation only**: scalar, lane-wise, and XMM-backed V128 probes are covered by Catch2 tests; ABI type translation includes scalar, reference, V128, and packed-storage cases; no Wasm module compilation or execution yet |
+| AsmJit (`Asmjit/`) | **Experimental execution backend** — compiles an i32 subset (comparisons, bitwise operations, void structured control flow, direct calls, and checked memory32 loads/stores); native SIMD/ABI probes also exist. Not yet a full replacement for LibJIT |
 
 There is no interpreter backend. `WasmStub/` is a non-compiling pretty-printer;
 GNU LibJIT already provides a compile/interpret configuration and is the only
@@ -369,7 +369,7 @@ work in progress:
 - the shared libraries install with headers and a `wasmjit.pc`; the only
   packaging work left is vcpkg/Conan-style recipes, if anyone wants them
 - backend abstraction is stable enough for a second backend (see the
-  [`work order`](docs/BACKEND_WORK_ORDER.md)); Asmjit has only its probe, and SLJIT is not started
+  [`work order`](docs/BACKEND_WORK_ORDER.md)); Asmjit has an initial i32 execution slice, and SLJIT is not started
 - the Catch2 executable is still a test harness, not the embedding interface;
   the supported embedding interface is the installed `wasmjit/wasmjit.hpp`
 
