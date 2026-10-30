@@ -15,7 +15,9 @@ WASMJIT_VISIBLE_BEGIN
 #include <cstdint>
 
 namespace WASM {
+/** \\brief Forward declaration of the per-instance compiled-code context. */
 struct VMContext;
+/** \\brief Forward declaration of the owner of exception objects and allocations. */
 class Store;
 }
 
