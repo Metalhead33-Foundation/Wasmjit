@@ -25,8 +25,8 @@ the two-pass instantiation contract and enabling forward and mutually recursive
 direct calls. Each generated function emits the required
   `wasm_stack_check(VMContext*)` prologue call.
 - The body compiler currently supports i32 parameters/results/locals; constants,
-  local access, `drop`; arithmetic (`add/sub/mul`); signed/unsigned comparisons;
-  bitwise operations, shifts and rotations; void `block`/`loop`/`if`/`else`,
+  local access, `drop`; arithmetic (`add/sub/mul/div/rem`), `clz`/`ctz`, sign
+  extension; signed/unsigned comparisons; bitwise operations, shifts and rotations; void `block`/`loop`/`if`/`else`,
   `br`/`br_if`; direct calls (including forward calls and mutual recursion);
   and memory32 i32 loads/stores, including signed/unsigned 8/16-bit extensions.
   Memory accesses use a checked helper that observes the shared-memory size
@@ -39,7 +39,8 @@ direct calls. Each generated function emits the required
   `WASMJIT_BACKEND=asmjit`, including i32 invocation marshalling, aggregate
   layout calculation, and the existing lane-wise SIMD diagnostic interface.
 - `Test/AsmjitModuleCompilerTests.cpp` instantiates WAT fixtures and executes arithmetic, comparison, bitwise,
-  control-flow, direct-call, and memory32 cases, including an out-of-bounds trap.
+  control-flow, direct-call (including native imports and mutual recursion), and memory32
+  cases, including signed/unsigned narrow loads and out-of-bounds traps.
 - Packed `i8`/`i16` storage retains its narrow 8-/16-bit representation.
   Arithmetic lowering must explicitly extend those values to `i32` before
   applying Wasm integer operations; the storage translator does not silently
