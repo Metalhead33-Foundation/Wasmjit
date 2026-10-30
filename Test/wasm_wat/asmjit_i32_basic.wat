@@ -102,6 +102,11 @@
     else
       i32.const 7
     end)
+  (func (export "unreachable_block")
+    block (result i32)
+      unreachable
+    end
+    drop)
   (func (export "call_forward") (param i32) (result i32)
     local.get 0
     call $double)
