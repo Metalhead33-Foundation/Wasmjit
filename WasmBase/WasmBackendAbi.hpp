@@ -50,15 +50,15 @@ enum class ValueKind : std::uint8_t {
 struct SignatureView {
 	const ValueKind* params = nullptr;
 	std::uint32_t    paramCount = 0;
-	const ValueKind* results = nullptr;
-	std::uint32_t    resultCount = 0;
+	const ValueKind* results = nullptr; //!< Field `results` of SignatureView.
+	std::uint32_t    resultCount = 0; //!< Field `resultCount` of SignatureView.
 };
 
 /** \brief Offset, size, and alignment of one field in a lowered aggregate. */
 struct FieldLayout {
 	std::uint32_t offset = 0;
 	std::uint32_t size = 0;
-	std::uint32_t alignment = 0;
+	std::uint32_t alignment = 0; //!< Field `alignment` of FieldLayout.
 };
 
 /** \brief Caller-storage-backed layout description of a lowered aggregate. */
