@@ -89,8 +89,8 @@ struct CanonFieldType {
  * member indices until the group is interned.
  */
 struct CanonicalType {
-	CanonTypeKind kind = CanonTypeKind::Func;
-	bool          isFinal = true;
+	CanonTypeKind kind = CanonTypeKind::Func; //!< Field `kind` of CanonicalType.
+	bool          isFinal = true; //!< Field `isFinal` of CanonicalType.
 	bool          isShared = false; //!< SET-1: `sharecomptype`
 	//! Custom Descriptors: the optional `descriptor`/`describes` clauses. These
 	//! participate in the canonical identity and are part of the rec group.
@@ -108,7 +108,7 @@ struct CanonicalType {
 	std::vector<CanonStorageType> funcParams;
 	std::vector<CanonStorageType> funcResults;
 	std::vector<CanonFieldType>   structFields;
-	CanonFieldType                arrayElement;
+	CanonFieldType                arrayElement; //!< Field `arrayElement` of CanonicalType.
 	CanonHeapType                 contFunc; //!< stack switching: `cont $ft`
 };
 
