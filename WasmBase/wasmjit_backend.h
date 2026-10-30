@@ -163,7 +163,7 @@ typedef struct wasmjit_backend_desc {
 } wasmjit_backend_desc;
 
 /*! The one required export. Returns NULL when the host ABI is unacceptable. */
-/*! Plugin query entry-point type. \\param host_abi_version ABI version supported by the loading host. \\return Plugin descriptor when compatible, or NULL when the host is rejected. */
+/*! Plugin query entry-point type. \param host_abi_version ABI version supported by the loading host. \return Plugin descriptor when compatible, or NULL when the host is rejected. */
 typedef const wasmjit_backend_desc* (*wasmjit_backend_query_fn)(uint32_t host_abi_version);
 
 #if defined(_WIN32)
@@ -173,7 +173,7 @@ typedef const wasmjit_backend_desc* (*wasmjit_backend_query_fn)(uint32_t host_ab
 #endif
 
 /*! Optional: a human-readable reason the last query failed. */
-/*! Returns the most recent query failure reason. \\return Borrowed null-terminated diagnostic string, or NULL when unavailable. */
+/*! Returns the most recent query failure reason. \return Borrowed null-terminated diagnostic string, or NULL when unavailable. */
 WASMJIT_BACKEND_EXPORT const char* wasmjit_backend_last_error(void);
 
 #ifdef __cplusplus
