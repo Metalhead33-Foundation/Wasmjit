@@ -234,11 +234,6 @@ public:
 	void setWaitableSet(void* set) { set_ = set; }
 
 	//! Returns true and fills `event` when progress is pending.
-/**
- * \brief Performs the takeEvent operation.
- * \param event Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 	virtual bool takeEvent(ComponentAsyncEvent& event) = 0;
 private:
 	ComponentWaitableKind kind_;
@@ -442,13 +437,6 @@ public:
 	//! A blocked async copy keeps the guest buffer here so the other end can
 	//! complete it when data arrives. The pointer is into linear memory, which
 	//! does not move while the memory is not grown.
-/**
- * \brief Performs the setPendingBuffer operation.
- * \param memory Input value or output destination for this operation.
- * \param address Input value or output destination for this operation.
- * \param count Input value or output destination for this operation.
- * \param isRead Input value or output destination for this operation.
- */
 	void setPendingBuffer(LinearMemory* memory, uint64_t address, uint64_t count,
 			bool isRead)
 	{
@@ -558,10 +546,6 @@ public:
 
 	//! Raw byte queue. A stream transfers whole elements; a future transfers at
 	//! most one value and then stays `Done`.
-/**
- * \brief Performs the queue operation.
- * \return The value or status produced by this operation.
- */
 	std::deque<std::vector<uint8_t>>& queue() { return queue_; }
 /**
  * \brief Performs the queue operation.
@@ -603,10 +587,6 @@ public:
 	//! The answers of the `canon` thread built-ins. A single-agent executor
 	//! always reports 0 and 1; a multi-agent executor may report per-agent
 	//! values.
-/**
- * \brief Performs the threadIndex operation.
- * \return The value or status produced by this operation.
- */
 	virtual uint32_t threadIndex() const = 0;
 /**
  * \brief Performs the availableParallelism operation.
@@ -621,11 +601,6 @@ public:
 
 	//! Schedule `work` to run on the cooperative queue. It must not run before
 	//! `runUntilIdle()` is called.
-/**
- * \brief Performs the push operation.
- * \param work Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 	virtual void push(std::function<void()> work) = 0;
 /**
  * \brief Performs the runUntilIdle operation.
@@ -993,11 +968,6 @@ public:
 	//! `{stream,future}.cancel-{read,write}`. The single-agent runtime has no
 	//! buffer-owning background copy, so cancellation only succeeds for an end
 	//! whose copy was already blocked (state == Copying).
-/**
- * \brief Performs the argument operation.
- * \param handle Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 	/** \brief Cancels a copy already blocked on an endpoint. \param handle Endpoint handle whose pending copy is cancelled. \param async Reserved async-mode argument (currently unused). \return Packed Cancelled result. \throws std::runtime_error if the handle is invalid or no copy is pending. */
 	uint32_t cancel(uint32_t handle, bool /*async*/)
 	{
@@ -1416,11 +1386,6 @@ private:
 
 	//! A previously blocked read: move up to its buffer's capacity from the
 	//! channel into the guest memory and publish a progress event.
-/**
- * \brief Performs the completePendingRead operation.
- * \param reader Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 	static void completePendingRead(ComponentAsyncEndpoint& reader)
 	{
 /**
@@ -1493,11 +1458,6 @@ private:
 	//! A previously blocked write (a future written twice): once the first value
 	//! has been consumed, move the stored value into the channel and publish an
 	//! event for the writer.
-/**
- * \brief Performs the completePendingWrite operation.
- * \param writer Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 	static void completePendingWrite(ComponentAsyncEndpoint& writer)
 	{
 /**
