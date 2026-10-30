@@ -27,8 +27,8 @@ direct calls. Each generated function emits the required
 - The body compiler currently supports i32 parameters/results/locals; constants,
   local access, `drop`; i32 globals; arithmetic (`add/sub/mul/div/rem`),
   `clz`/`ctz`/`popcnt`, sign extension; signed/unsigned comparisons; bitwise
-  operations, shifts and rotations; void and single-i32-result `block`/`loop`/`if`/`else`, `br`/`br_if`, branches
-  to the implicit function label, and explicit/implicit returns; direct calls
+  operations, shifts and rotations; void and single-i32-result `block`/`loop`/`if`/`else`, `br`/`br_if`/`br_table`,
+  branches to the implicit function label, and explicit/implicit returns; direct calls
   (native imports, forward calls and mutual recursion), typed `call_indirect`,
   and direct/indirect tail-call instructions (currently emitted as call+return,
   without machine-level tail-call elimination);
@@ -38,15 +38,17 @@ direct calls. Each generated function emits the required
   accessor and reports out-of-bounds traps through the pending-trap protocol.
   Function nodes are declared in one CodeHolder before any bodies are emitted,
   so direct-call labels resolve across the entire module. Result-bearing blocks
-  currently support only one i32 result and no block parameters; multi-value
-  blocks and unreachable-stack polymorphism remain unsupported. Cross-instance
+  currently support only one i32 result and no block parameters; `br_table`
+  requires identical target stack heights/signatures. The `unreachable`
+  instruction reports a trap and supplies a limited single-result placeholder,
+  but general unreachable-stack polymorphism remains unsupported. Cross-instance
   Wasm imports are covered by tests. Memory64, other value types,
   and most remaining instructions are still unsupported and fail explicitly.
 - `Test/TestBackend.cpp` exposes an `AsmJitSession` through
   `WASMJIT_BACKEND=asmjit`, including i32 invocation marshalling, aggregate
   layout calculation, and the existing lane-wise SIMD diagnostic interface.
 - `Test/AsmjitModuleCompilerTests.cpp` instantiates WAT fixtures and executes arithmetic, comparison, bitwise,
-  control-flow, direct/indirect-call (including native and cross-instance Wasm imports, mutual recursion, and tail-call opcodes), result-bearing control flow, i32-global, and memory32
+  control-flow, direct/indirect-call (including native and cross-instance Wasm imports, mutual recursion, and tail-call opcodes), result-bearing control flow, `br_table`, unreachable traps, i32-global, and memory32
   cases, including signed/unsigned narrow loads and out-of-bounds traps.
 - Packed `i8`/`i16` storage retains its narrow 8-/16-bit representation.
   Arithmetic lowering must explicitly extend those values to `i32` before
