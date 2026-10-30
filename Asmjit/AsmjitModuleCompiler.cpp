@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -197,6 +198,64 @@ void* asmjitMemoryAddress(WASM::VMContext* vm, uint32_t memoryIndex,
 	return memory->memoryBase + effective;
 }
 
+
+void asmjitMemoryCopy(WASM::VMContext* vm, uint32_t destinationMemory,
+        uint32_t sourceMemory, uint32_t destination, uint32_t source,
+        uint32_t length) noexcept
+{
+    if (vm == nullptr || vm->memories == nullptr
+            || destinationMemory >= vm->memoryCount || sourceMemory >= vm->memoryCount) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.copy index is invalid");
+        return;
+    }
+    WASM::LinearMemory* dst = vm->memories[destinationMemory];
+    WASM::LinearMemory* src = vm->memories[sourceMemory];
+    if (dst == nullptr || src == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.copy memory is null");
+        return;
+    }
+    const uint64_t dstSize = WASM::wasm_memory_size(dst);
+    const uint64_t srcSize = WASM::wasm_memory_size(src);
+    if (destination > dstSize || length > dstSize - destination
+            || source > srcSize || length > srcSize - source) {
+        WASM::reportTrap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+        return;
+    }
+    if (length == 0)
+        return;
+    if (dst->memoryBase == nullptr || src->memoryBase == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.copy base is null");
+        return;
+    }
+    std::memmove(dst->memoryBase + destination, src->memoryBase + source, length);
+}
+
+void asmjitMemoryFill(WASM::VMContext* vm, uint32_t memoryIndex,
+        uint32_t destination, uint32_t value, uint32_t length) noexcept
+{
+    if (vm == nullptr || vm->memories == nullptr || memoryIndex >= vm->memoryCount) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.fill index is invalid");
+        return;
+    }
+    WASM::LinearMemory* memory = vm->memories[memoryIndex];
+    if (memory == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.fill memory is null");
+        return;
+    }
+    const uint64_t size = WASM::wasm_memory_size(memory);
+    if (destination > size || length > size - destination) {
+        WASM::reportTrap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+        return;
+    }
+    if (length == 0)
+        return;
+    if (memory->memoryBase == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.fill base is null");
+        return;
+    }
+    std::memset(memory->memoryBase + destination, static_cast<unsigned char>(value), length);
+}
+
 asmjit::FuncSignature stackCheckSignature()
 {
 	asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
@@ -338,6 +397,19 @@ protected:
 		checkError(compiler.mov(locals[i], copy), "AsmJit local.tee store emission failed");
 		values.back() = copy;
 	}
+
+
+    void dispatchSelect() override
+    {
+        emitSelect();
+    }
+
+    void dispatchSelectT(std::vector<WASM::ValueType>&& types) override
+    {
+        if (types.size() != 1 || types.front().opcode != WASM::ValueTypeCode::I32)
+            throw std::runtime_error("AsmJit select_t currently supports exactly one i32 value type");
+        emitSelect();
+    }
 
 	void dispatchDrop() override
 	{
@@ -743,6 +815,17 @@ protected:
 	void dispatchMemorySize(WASM::MemIdx index) override { emitMemorySize(index); }
 	void dispatchMemoryGrow(WASM::MemIdx index) override { emitMemoryGrow(index); }
 
+    void dispatchMemoryCopy(WASM::MemIdx destination, WASM::MemIdx source) override
+    {
+        emitMemoryCopy(destination, source);
+    }
+
+    void dispatchMemoryFill(WASM::MemIdx index) override
+    {
+        emitMemoryFill(index);
+    }
+
+
 	void dispatchI32Load(WASM::MemArg arg) override { emitMemoryLoad(arg, 4, LoadKind::I32); }
 	void dispatchI32Load8S(WASM::MemArg arg) override { emitMemoryLoad(arg, 1, LoadKind::I8Signed); }
 	void dispatchI32Load8U(WASM::MemArg arg) override { emitMemoryLoad(arg, 1, LoadKind::I8Unsigned); }
@@ -856,6 +939,86 @@ private:
 
 	enum class BinaryOp { Add, Sub, Mul, And, Or, Xor };
 	enum class ShiftOp { Left, ArithmeticRight, LogicalRight, RotateLeft, RotateRight };
+
+
+    void emitSelect()
+    {
+        if (values.size() < 3)
+            throw std::runtime_error("AsmJit select operand stack underflow");
+        const auto condition = values.back();
+        values.pop_back();
+        const auto second = values.back();
+        values.pop_back();
+        const auto first = values.back();
+        values.pop_back();
+        auto result = compiler.new_gp32("selectResult");
+        auto chooseSecond = compiler.new_label();
+        auto done = compiler.new_label();
+        checkError(compiler.mov(result, first), "AsmJit select first-value copy failed");
+        checkError(compiler.test(condition, condition), "AsmJit select condition test failed");
+        checkError(compiler.jz(chooseSecond), "AsmJit select condition branch failed");
+        checkError(compiler.jmp(done), "AsmJit select completion jump failed");
+        checkError(compiler.bind(chooseSecond), "AsmJit select second-value label failed");
+        checkError(compiler.mov(result, second), "AsmJit select second-value copy failed");
+        checkError(compiler.bind(done), "AsmJit select completion label failed");
+        values.push_back(result);
+    }
+
+    void emitMemoryCopy(WASM::MemIdx destination, WASM::MemIdx source)
+    {
+        validateMemoryIndex(destination);
+        validateMemoryIndex(source);
+        if (values.size() < 3)
+            throw std::runtime_error("AsmJit memory.copy operand stack underflow");
+        const auto length = values.back(); values.pop_back();
+        const auto sourceAddress = values.back(); values.pop_back();
+        const auto destinationAddress = values.back(); values.pop_back();
+        asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+        signature.set_ret(asmjit::TypeId::kVoid);
+        for (int i = 0; i < 6; ++i)
+            signature.add_arg(i == 0 ? asmjit::TypeId::kUIntPtr : asmjit::TypeId::kUInt32);
+        asmjit::InvokeNode* invoke = nullptr;
+        checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitMemoryCopy), signature),
+                "AsmJit memory.copy helper call emission failed");
+        invoke->set_arg(0, vmContext);
+        auto dstMemory = compiler.new_gp32("copyDestinationMemory");
+        auto srcMemory = compiler.new_gp32("copySourceMemory");
+        checkError(compiler.mov(dstMemory, static_cast<uint32_t>(destination)), "AsmJit memory.copy destination index failed");
+        checkError(compiler.mov(srcMemory, static_cast<uint32_t>(source)), "AsmJit memory.copy source index failed");
+        invoke->set_arg(1, dstMemory);
+        invoke->set_arg(2, srcMemory);
+        invoke->set_arg(3, destinationAddress);
+        invoke->set_arg(4, sourceAddress);
+        invoke->set_arg(5, length);
+        emitPendingTrapReturn();
+    }
+
+    void emitMemoryFill(WASM::MemIdx index)
+    {
+        validateMemoryIndex(index);
+        if (values.size() < 3)
+            throw std::runtime_error("AsmJit memory.fill operand stack underflow");
+        const auto length = values.back(); values.pop_back();
+        const auto value = values.back(); values.pop_back();
+        const auto destination = values.back(); values.pop_back();
+        asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+        signature.set_ret(asmjit::TypeId::kVoid);
+        signature.add_arg(asmjit::TypeId::kUIntPtr);
+        signature.add_arg(asmjit::TypeId::kUInt32);
+        signature.add_arg(asmjit::TypeId::kUInt32);
+        signature.add_arg(asmjit::TypeId::kUInt32);
+        asmjit::InvokeNode* invoke = nullptr;
+        checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitMemoryFill), signature),
+                "AsmJit memory.fill helper call emission failed");
+        invoke->set_arg(0, vmContext);
+        auto memoryIndex = compiler.new_gp32("fillMemoryIndex");
+        checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(index)), "AsmJit memory.fill index failed");
+        invoke->set_arg(1, memoryIndex);
+        invoke->set_arg(2, destination);
+        invoke->set_arg(3, value);
+        invoke->set_arg(4, length);
+        emitPendingTrapReturn();
+    }
 
 	void pushControlFrame(ControlKind kind, const WASM::BlockType& type)
 	{
