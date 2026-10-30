@@ -437,6 +437,46 @@ protected:
 		const asmjit::Label label = target.kind == ControlKind::Loop ? target.begin : target.end;
 		checkError(compiler.jmp(label), "AsmJit br emission failed");
 	}
+	void dispatchReturnCall(WASM::FuncIdx index) override
+	{
+		const size_t importedCount = module.importFunctions.size();
+		const size_t totalCount = importedCount + module.internalFunctionTypeIndices.size();
+		if (index >= totalCount)
+			throw std::runtime_error("AsmJit return_call function index is out of range");
+		const uint32_t typeIndex = index < importedCount
+				? module.importFunctions[index].typeIdx
+				: module.internalFunctionTypeIndices[index - importedCount];
+		validateTailCallType(typeIndex);
+		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
+		if (values.size() != calledType.params.size())
+			throw std::runtime_error("AsmJit return_call has unexpected values below its arguments");
+		dispatchCall(index);
+		dispatchReturn();
+	}
+
+	void dispatchReturnCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx tableIndex) override
+	{
+		validateTailCallType(typeIndex);
+		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
+		if (values.size() != calledType.params.size() + 1)
+			throw std::runtime_error("AsmJit return_call_indirect has unexpected values below its arguments");
+		dispatchCallIndirect(typeIndex, tableIndex);
+		dispatchReturn();
+	}
+
+	void validateTailCallType(uint32_t typeIndex) const
+	{
+		if (typeIndex >= signatures.size() || !signatures[typeIndex])
+			throw std::runtime_error("AsmJit tail call references an unavailable function signature");
+		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
+		if (calledType.results.size() != resultCount)
+			throw std::runtime_error("AsmJit tail-call result arity differs from the caller");
+		for (const auto& parameter : calledType.params)
+			requireI32(parameter.val, "tail-call parameters");
+		for (const auto& result : calledType.results)
+			requireI32(result.val, "tail-call results");
+	}
+
 	void dispatchCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx tableIndex) override
 	{
 		if (tableIndex >= module.importTables.size() + module.tables.size())
