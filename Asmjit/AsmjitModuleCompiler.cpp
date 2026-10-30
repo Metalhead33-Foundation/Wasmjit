@@ -132,6 +132,11 @@ WASM::Callable* asmjitResolveIndirectCallable(WASM::VMContext* vm, uint32_t tabl
 	return callable;
 }
 
+void asmjitReportUnreachable() noexcept
+{
+	WASM::reportTrap(WASM::TrapKind::Unreachable);
+}
+
 uint32_t asmjitMemorySize(WASM::VMContext* vm, uint32_t memoryIndex) noexcept
 {
 	if (vm == nullptr || vm->memories == nullptr || memoryIndex >= vm->memoryCount) {
@@ -746,6 +751,22 @@ protected:
 	void dispatchI32Store(WASM::MemArg arg) override { emitMemoryStore(arg, 4); }
 	void dispatchI32Store8(WASM::MemArg arg) override { emitMemoryStore(arg, 1); }
 	void dispatchI32Store16(WASM::MemArg arg) override { emitMemoryStore(arg, 2); }
+
+	void dispatchUnreachable() override
+	{
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitReportUnreachable), signature),
+				"AsmJit unreachable trap helper emission failed");
+		if (resultCount == 0) {
+			checkError(compiler.ret(), "AsmJit unreachable void return emission failed");
+		} else {
+			auto zero = compiler.new_gp32("unreachableResult");
+			checkError(compiler.xor_(zero, zero), "AsmJit unreachable result initialisation failed");
+			checkError(compiler.ret(zero), "AsmJit unreachable result return emission failed");
+		}
+	}
 
 	void dispatchNop() override {}
 
