@@ -41,6 +41,7 @@ The Store deliberately is NOT the import/export name registry:
 RegistryImportResolver maps (module, field) names to store-owned entities,
 while the Store owns the storage itself.
 */
+/** \brief Owns canonical types, memories, tables, GC regions, strings, tags, and exceptions. \\note The Store must outlive every artifact and instance that refers to it. */
 class WASMJIT_API Store
 {
 public:
@@ -56,6 +57,11 @@ public:
 	Store& operator=(const Store&) = delete;
 	Store(Store&&) = delete;
 	Store& operator=(Store&&) = delete;
+	/** \brief Releases all entities and storage owned by this Store. */
+/**
+ * \brief Performs the Store operation.
+ * \return The value or status produced by this operation.
+ */
 	~Store();
 
 	//! A store owns every runtime entity: types, memories, tables, tags, the GC
@@ -63,27 +69,34 @@ public:
 	//! fallback (docs/EMBEDDING_SURFACE.md §4.3 option B): a `Runtime` owns one,
 	//! every artifact is parsed into one, and every consumer receives it through
 	//! the object it already has (the module, the component, the VMContext).
+	/** \brief Constructs an empty Store with its own type registry and allocators. */
 	Store();
 
 	//! \par Runtime type registry
 	//! Owns every module's type block; modules hold non-owning span views.
+	/** \brief Returns mutable access to the canonical type registry. \return Reference to this Store's registry. */
 	TypeRegistry&       types()       { return typeRegistry; }
 	//! Const form of `types()`.
+	/** \brief Returns read-only access to the canonical type registry. \return Const reference to this Store's registry. */
 	const TypeRegistry& types() const { return typeRegistry; }
 
 	//! \par GC heap
 	//! Owns the mmap-backed regions every GC object lives in (docs/proposals/
 	//! GC.md §6.1/GC-2). Instances hold a RegionSet handle and allocate from it.
+	/** \brief Returns mutable access to the Store-owned GC heap. \return Reference to the GC heap. */
 	GcHeap&       gc()       { return gcHeap; }
 	//! Const form of `gc()`.
+	/** \brief Returns read-only access to the Store-owned GC heap. \return Const reference to the GC heap. */
 	const GcHeap& gc() const { return gcHeap; }
 
 	//! \par Strings (docs/proposals/STRINGREF.md)
 	//! Host-owned string objects: stable pointers, no reference counting, and a
 	//! lifetime that ends with the Store. `string.const` literals and every
 	//! `string.new_*`/`string.concat` result live here.
+	/** \brief Returns mutable access to the Store-owned string arena. \return Reference to the StringStore. */
 	StringStore&       strings()       { return stringStore; }
 	//! Const form of `strings()`.
+	/** \brief Returns read-only access to the Store-owned string arena. \return Const reference to the StringStore. */
 	const StringStore& strings() const { return stringStore; }
 
 	//! \par Linear memory
@@ -92,31 +105,39 @@ public:
 	//! `pageSize` is the custom-page-size field (1 or 65536; CUSTOM_PAGE_SIZES.md
 	//! CPS-2). Allocation, growth and the allocation budget are byte-based, so
 	//! the same page count means a different byte size for a one-byte page.
+	/** \brief Creates a Store-owned linear memory. \param initialPages Initial page count. \param maxPages Maximum page count. \param isShared Whether the memory is shared. \param is64 Whether the memory uses 64-bit indices. \param pageSize Page size in bytes. \return Store-local memory identifier. */
 	MemoryId createLinearMemory(uint64_t initialPages, uint64_t maxPages, bool isShared,
 								bool is64 = false, uint64_t pageSize = 0x10000);
 
 	//! Borrowed views into a store-owned memory. Nullptr for an unknown id.
+	/** \brief Looks up a Store-owned memory. \param id Memory identifier. \return Borrowed memory descriptor, or nullptr when unknown. */
 	LinearMemory*       memory(MemoryId id);
 	//! Const form of `memory(id)`.
+	/** \brief Read-only lookup of a Store-owned memory. \param id Memory identifier. \return Const borrowed descriptor, or nullptr when unknown. */
 	const LinearMemory* memory(MemoryId id) const;
 
 	//! Grow a store-owned memory by deltaPages. Returns false on a trap-worthy
 	//! failure (would exceed max). The StoreOwnedMemory back-pointer carried in
 	//! LinearMemory::hostData lets this work for any memory created here.
+	/** \brief Grows a Store-owned memory. \param memory Memory descriptor previously obtained from this Store. \param deltaPages Number of pages to add. \return true on success; false when limits or allocation prevent growth. */
 	bool growMemory(LinearMemory* memory, uint64_t deltaPages);
 
 	//! \par Tables
 	//! Allocate a fresh table owned by the store. Returns its store id.
+	/** \brief Creates a Store-owned table. \param initialSize Initial element count. \param maxSize Maximum element count. \return Store-local table identifier. */
 	TableId createTable(uint64_t initialSize, uint64_t maxSize);
 
 	//! Borrowed views into a store-owned table. Nullptr for an unknown id.
+	/** \brief Looks up the owning table allocation. \param id Table identifier. \return Borrowed owner pointer, or nullptr when unknown. */
 	StoreOwnedTable* storeOwnedTable(TableId id);
 	//! The TableInstance view of a store-owned table, or nullptr for an unknown id.
+	/** \brief Looks up the backend-visible table instance view. \param id Table identifier. \return Borrowed table view, or nullptr when unknown. */
 	TableInstance*   table(TableId id);
 
 	//! Grow a store-owned table by deltaEntries. Returns false on a trap-worthy
 	//! failure (would exceed max). The StoreOwnedTable back-pointer carried in
 	//! TableInstance::hostData lets this work for any table created here.
+	/** \brief Grows a Store-owned table. \param table Table view obtained from this Store. \param deltaEntries Number of entries to add. \return true on success; false when limits or allocation prevent growth. */
 	bool growTable(TableInstance* table, uint64_t deltaEntries);
 
 	//! \par Allocation guardrails
@@ -126,12 +147,16 @@ public:
 	//! instead of trying to allocate and take the host down. Default: 2 GiB.
 	//! Override with WASMJIT_MAX_TOTAL_BYTES (bytes; "0"/"unlimited" disables the
 	//! cap, at your own risk).
+	/** \brief Returns the process-wide allocation budget. \return Maximum charged bytes, or the configured unlimited sentinel. */
 	static uint64_t allocationBudgetBytes();
 	//! Bytes currently charged against the budget (memories, tables, heap, strings).
+	/** \brief Returns bytes currently charged to the allocation budget. \return Allocated byte count. */
 	uint64_t allocatedBytes() const { return allocatedBytes_.load(std::memory_order_relaxed); }
 	//! Charge `bytes` against the budget. Returns false if that would exceed it.
+	/** \brief Charges bytes against the global allocation budget. \param bytes Number of bytes to reserve. \return true when the reservation is accepted. */
 	bool reserveBytes(uint64_t bytes);
 	//! Credits `bytes` back to the budget after a release or failed grow.
+	/** \brief Credits a previous reservation back to the allocation budget. \param bytes Number of bytes to release. */
 	void releaseBytes(uint64_t bytes);
 
 	//! \brief Tags (exception handling)
@@ -147,8 +172,10 @@ public:
 	};
 
 	//! Declares a fresh nominal tag whose payload has canonical type `payloadType`.
+	/** \brief Creates a fresh nominal exception tag. \param payloadType Canonical function type describing the tag payload. \return New Store-wide TagId. */
 	TagId createTag(TypeId payloadType);
 	//! Nullptr for an unknown id.
+	/** \brief Looks up a Store-owned exception tag. \param id Tag identifier. \return Borrowed tag record, or nullptr when unknown. */
 	const StoreOwnedTag* tag(TagId id) const;
 
 	//! \par Call tags (docs/proposals/CALL_TAGS.md CTA-2)
@@ -167,8 +194,10 @@ public:
 	};
 
 	//! Returns a stable canonical tag id for `signature`. Rejects TypeId::kNone.
+	/** \brief Interns a canonical call tag for a function signature. \param signature Canonical function TypeId; must not be TypeId::kNone. \return Stable Store-wide call-tag identity. */
 	CallTagId canonicalCallTag(TypeId signature);
 	//! Nullptr for an unknown id.
+	/** \brief Looks up a Store-owned call tag. \param id Call-tag identifier. \return Borrowed record, or nullptr when unknown. */
 	const StoreOwnedCallTag* callTag(CallTagId id) const;
 
 	//! \brief Exception objects (docs/proposals/EXCEPTIONS.md EX-3)
@@ -182,6 +211,7 @@ public:
 	};
 	//! Takes ownership of `storage`; false when the bookkeeping allocation
 	//! fails (the caller frees and traps).
+	/** \brief Transfers exception storage ownership to this Store. \param storage Allocated exception object storage. \param bytes Allocation size. \return true when bookkeeping succeeded and the Store accepted ownership. */
 	bool ownException(std::byte* storage, uint64_t bytes);
 
 	//! \brief Reserved: store-owned runtime entities (pre-declared)
@@ -211,12 +241,15 @@ public:
 	//! registers the range of its callable arrays once they are sized and stable;
 	//! the lookup is then O(live instances) instead of O(functions), and works
 	//! across modules (which the old per-instance scan did not).
+	/** \brief Registers an instance's stable callable-array address range. \param begin First callable in the array. \param count Number of callable entries. */
 	void registerCallableRange(const Callable* begin, size_t count);
 	//! Withdraw a range registered above. No-op when `begin` was not registered
 	//! (e.g. a constructor that threw before publishing it).
+	/** \brief Withdraws a previously registered callable range. \param begin First callable pointer used when registering the range. */
 	void unregisterCallableRange(const Callable* begin);
 	//! The Callable `ref` points at, or nullptr when `ref` is not a function
 	//! reference at all (a GC object, an i31 immediate, a host externref).
+	/** \brief Resolves a function-reference pointer against registered callable ranges. \param ref Candidate function reference. \return Callable pointer, or nullptr when ref is not a registered function. */
 	const Callable* callableAt(const void* ref) const;
 
 private:

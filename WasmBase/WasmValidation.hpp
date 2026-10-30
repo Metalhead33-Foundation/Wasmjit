@@ -28,6 +28,7 @@ namespace WASM {
 //!
 //! `profile` gates constructs an excluded marker forbids
 //! (docs/proposals/PROFILES.md PR-2/PR-4). The default is the full profile.
+/** \brief Policy switches controlling structural validation and profile enforcement. */
 struct ValidationOptions {
 	//! Adopt the Relaxed Dead-Code Validation algorithm described above. Off by
 	//! default; see the block above for why.

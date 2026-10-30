@@ -10,8 +10,8 @@
   \file AgentFixture.hpp
   \brief A shared-everything threads fixture for the multi-agent tests.
 
-  It is authored as bytes because `wasm-tools 1.252` cannot print the
-  acquire-release ordering immediate or `pause`. The equivalent text is:
+  It is authored as bytes because wasm-tools 1.252 cannot print the
+  acquire-release ordering immediate or pause. The equivalent text is:
 
     (module
       (memory 1 1 shared)
@@ -47,7 +47,12 @@
 
 namespace AgentFixture {
 
-//! The shared-everything threads test module, as bytes (see the file block).
+/*!
+ * \brief Encoded shared-everything threads test module.
+ *
+ * The byte sequence defines the module described in the file-level
+ * documentation, including atomic memory/global operations and wait/notify.
+ */
 inline constexpr std::array<std::uint8_t, 334> kModule = {
 	0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0c, 0x03, 0x60,
 	0x01, 0x7f, 0x00, 0x60, 0x00, 0x01, 0x7f, 0x60, 0x00, 0x00, 0x03, 0x0d,
@@ -79,7 +84,10 @@ inline constexpr std::array<std::uint8_t, 334> kModule = {
 	0x00, 0x41, 0x08, 0x41, 0x01, 0xfe, 0x00, 0x02, 0x00, 0x0b,
 };
 
-//! The `kModule` bytes as a byte span, for the loaders that take a span.
+/*!
+ * \brief Returns the encoded module as a byte span.
+ * \return A non-owning span over kModule; its storage has static lifetime.
+ */
 inline std::span<const std::byte> moduleBytes()
 {
 	return std::span<const std::byte>(

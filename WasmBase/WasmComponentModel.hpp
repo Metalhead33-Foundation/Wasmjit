@@ -26,23 +26,25 @@ namespace WASM {
 //! \brief Ordered source definitions
 //! Component definitions are acyclic and order-sensitive, but the binary groups
 //! them by section. This list restores the order in which index spaces grow.
+/** \brief Kind of ordered component definition that contributes to an index space. */
 enum class ComponentDefinitionKind : uint8_t {
-	CoreModule,
-	CoreInstance,
-	CoreType,
-	Component,
-	Instance,
-	Alias,
-	Type,
-	Canon,
-	Start,
-	Import,
-	Export,
-	Value
+	CoreModule, //!< ComponentDefinitionKind enumerator `CoreModule`.
+	CoreInstance, //!< ComponentDefinitionKind enumerator `CoreInstance`.
+	CoreType, //!< ComponentDefinitionKind enumerator `CoreType`.
+	Component, //!< ComponentDefinitionKind enumerator `Component`.
+	Instance, //!< ComponentDefinitionKind enumerator `Instance`.
+	Alias, //!< ComponentDefinitionKind enumerator `Alias`.
+	Type, //!< ComponentDefinitionKind enumerator `Type`.
+	Canon, //!< ComponentDefinitionKind enumerator `Canon`.
+	Start, //!< ComponentDefinitionKind enumerator `Start`.
+	Import, //!< ComponentDefinitionKind enumerator `Import`.
+	Export, //!< ComponentDefinitionKind enumerator `Export`.
+	Value, //!< ComponentDefinitionKind enumerator `Value`.
 };
 
 //! One entry of a component's ordered definition list: which kind of definition
 //! it is and the index into that kind's own space.
+/** \brief One ordered component definition and its per-kind index. */
 struct ComponentDefinition {
 	//! The definition kind (core module, function, value, …).
 	ComponentDefinitionKind kind = ComponentDefinitionKind::CoreModule;
@@ -51,18 +53,20 @@ struct ComponentDefinition {
 };
 
 //! \brief Core sorts and indices
+/** \brief Core entity index spaces addressable from a component. */
 enum class CoreSort : uint8_t {
-	Func = 0x00,
-	Table = 0x01,
-	Memory = 0x02,
-	Global = 0x03,
-	Tag = 0x04,
-	Type = 0x10,
-	Module = 0x11,
-	Instance = 0x12
+	Func = 0x00, //!< CoreSort enumerator `Func`.
+	Table = 0x01, //!< CoreSort enumerator `Table`.
+	Memory = 0x02, //!< CoreSort enumerator `Memory`.
+	Global = 0x03, //!< CoreSort enumerator `Global`.
+	Tag = 0x04, //!< CoreSort enumerator `Tag`.
+	Type = 0x10, //!< CoreSort enumerator `Type`.
+	Module = 0x11, //!< CoreSort enumerator `Module`.
+	Instance = 0x12, //!< CoreSort enumerator `Instance`.
 };
 
 //! A `core:sort`/index pair naming an entity in a core index space.
+/** \brief Core sort and index pair. */
 struct CoreSortIdx {
 	//! Which core index space the index is in.
 	CoreSort sort = CoreSort::Func;
@@ -71,17 +75,19 @@ struct CoreSortIdx {
 };
 
 //! A component-level sort: which index space a `sortidx` names.
+/** \brief Component-level entity index spaces. */
 enum class ComponentSort : uint8_t {
 	Core = 0x00, //!< Nested core sort (see CoreSortIdx)
 	Func = 0x01, //!< Component function
 	Value = 0x02, //!< Component value
 	Type = 0x03, //!< Component type
 	Component = 0x04, //!< Nested component
-	Instance = 0x05 //!< Component instance
+	Instance = 0x05 //!< Component instance index space.
 };
 
 //! A component-level sort/index pair; `core` carries the inner core sort when the
 //! outer sort is `core`.
+/** \brief Component sort/index pair, optionally including a nested core sort. */
 struct SortIdx {
 	//! Which component index space the index is in.
 	ComponentSort sort = ComponentSort::Core;
@@ -91,6 +97,7 @@ struct SortIdx {
 };
 
 //! \brief Core types (the `core:type` section and module-type declarations)
+/** \brief Structural declaration of a core module external type. */
 struct CoreExternType {
 	//! Which core extern form this declaration carries.
 	enum class Kind : uint8_t {
@@ -109,6 +116,7 @@ struct CoreExternType {
 };
 
 //! One `core:import` declaration: the module/field it names and its core type.
+/** \brief Named import declaration inside a core module type. */
 struct CoreImport {
 	//! The importing module's name.
 	std::string module;
@@ -119,6 +127,7 @@ struct CoreImport {
 };
 
 //! One `core:export` declaration inside a module type.
+/** \brief Named export declaration inside a core module type. */
 struct CoreExportDecl {
 	//! The exported field name.
 	std::string name;
@@ -128,6 +137,7 @@ struct CoreExportDecl {
 
 //! The `outer` alias count/index pair: how many enclosing components to skip and
 //! which export of that component to name.
+/** \brief Alias into an enclosing component's core export index space. */
 struct CoreOuterAlias {
 	//! Number of enclosing components to walk out.
 	uint32_t count = 0;
@@ -136,6 +146,7 @@ struct CoreOuterAlias {
 };
 
 //! A `core:type` recursive group: its parser scratch and the interned ids.
+/** \brief Core recursive type group and its parser/canonical type records. */
 struct CoreRecType {
 	//! True when the producing `core:rectype` was a `0x4E` recursive group.
 	//! A one-member rec group is otherwise indistinguishable from a bare subtype.
@@ -148,6 +159,7 @@ struct CoreRecType {
 
 //! One declaration inside a `core:module` type: an import, a type, an alias or
 //! an export, with the payload the kind selects.
+/** \brief One declaration in a core module type. */
 struct CoreModuleDecl {
 	//! Which form this module-type declaration takes.
 	enum class Kind : uint8_t {
@@ -164,6 +176,7 @@ struct CoreModuleDecl {
 };
 
 //! A `core:type` definition: either one recursive group or a module type.
+/** \brief Core type definition: recursive group or module type. */
 struct CoreTypeDef {
 	//! Which form this core type definition takes.
 	enum class Kind : uint8_t {
@@ -176,6 +189,7 @@ struct CoreTypeDef {
 };
 
 //! \brief Names and attributes
+/** \brief One named component import/export attribute. */
 struct Attribute {
 	//! Which name attribute this entry is.
 	enum class Kind : uint8_t {
@@ -188,6 +202,7 @@ struct Attribute {
 };
 
 //! A component name's attributes (`implements`, `version-suffix`, `external-id`).
+/** \brief Component name plus its optional attributes. */
 struct NameAttributes {
 	uint8_t tag = 0; //!< 0x00, 0x01 (plain/interface) or 0x02 (+ attributes)
 	std::string name; //!< The name string
@@ -196,6 +211,7 @@ struct NameAttributes {
 
 //! A resource type declaration: the core representation and an optional
 //! destructor function index.
+/** \brief Resource representation type and optional core destructor index. */
 struct ResourceType {
 	ValueType rep; //!< core valtype
 	std::optional<uint32_t> destructor; //!< Optional destructor core-func index
@@ -203,6 +219,7 @@ struct ResourceType {
 
 //! A bound on a resource type: `eq` (any resource of the type) or an explicit
 //! sub-resource index.
+/** \brief Resource type bound used by component type declarations. */
 struct TypeBound {
 	//! Which form of resource bound this is.
 	enum class Kind : uint8_t {
@@ -214,6 +231,7 @@ struct TypeBound {
 };
 
 //! A value type's bound (`eq` or an explicit type).
+/** \brief Value-type bound used by component declarations. */
 struct ValueBound {
 	//! Which form of value bound this is.
 	enum class Kind : uint8_t {
@@ -227,6 +245,7 @@ struct ValueBound {
 
 //! The type an import or export declares: which sort and the payload that sort
 //! uses.
+/** \brief Declared type of a component import or export. */
 struct ExternType {
 	//! Which sort this extern type declares.
 	enum class Kind : uint8_t {
@@ -244,12 +263,14 @@ struct ExternType {
 };
 
 //! One `import` declaration of a component or instance type.
+/** \brief Named import declaration of a component or instance type. */
 struct ImportDecl {
 	NameAttributes name; //!< Import name and attributes
 	ExternType type; //!< Declared type of the import
 };
 
 //! One type-level `exportdecl`: the name it exports and its ascribed type.
+/** \brief Named export declaration inside a component/instance type. */
 struct ExportDecl {
 	NameAttributes name; //!< Export name and attributes
 	ExternType type; //!< Ascribed type of the export
@@ -257,6 +278,7 @@ struct ExportDecl {
 
 //! A top-level `export` section entry: unlike a type-level `exportdecl`, it
 //! names a preceding definition by sortidx and carries an optional ascribed type.
+/** \brief Top-level export entry referencing a preceding component definition. */
 struct ComponentExport {
 	NameAttributes name; //!< Export name and attributes
 	SortIdx sortIndex; //!< Preceding definition being exported
@@ -265,6 +287,7 @@ struct ComponentExport {
 
 //! One `alias` declaration: which export (of an instance, of a core instance, or
 //! of an outer component) it names.
+/** \brief Alias declaration naming an instance/core export or outer definition. */
 struct Alias {
 	//! Which form of alias this is.
 	enum class Kind : uint8_t {
@@ -282,12 +305,14 @@ struct Alias {
 
 //! One `with` argument of a core-module instantiation: the name it fills and the
 //! core instance it takes.
+/** \brief One import binding argument for core module instantiation. */
 struct CoreInstantiateArg {
 	std::string name; //!< Import name being satisfied
 	uint32_t instanceIndex = 0; //!< Core instance supplying the import
 };
 
 //! One inline core export of a `core:instance` bag.
+/** \brief One named core entity exported by an inline core instance. */
 struct CoreInlineExport {
 	std::string name; //!< Exported field name
 	CoreSortIdx sortIndex; //!< Core entity being exported
@@ -295,6 +320,7 @@ struct CoreInlineExport {
 
 //! A `core:instance` definition: instantiate a core module, or an inline bag of
 //! core exports.
+/** \brief Core instance definition, either module instantiation or inline exports. */
 struct CoreInstance {
 	//! Which form this core instance takes.
 	enum class Kind : uint8_t {
@@ -308,12 +334,14 @@ struct CoreInstance {
 };
 
 //! One `with` argument of a component instantiation.
+/** \brief One import binding argument for component instantiation. */
 struct InstantiateArg {
 	std::string name; //!< Import name being satisfied
 	SortIdx sortIndex; //!< Entity supplying the import
 };
 
 //! One inline export of a component-instance bag.
+/** \brief One named component entity exported by an inline instance. */
 struct InlineExport {
 	NameAttributes name; //!< Exported name and attributes
 	SortIdx sortIndex; //!< Entity being exported
@@ -321,6 +349,7 @@ struct InlineExport {
 
 //! A component-instance definition: instantiate a nested component, or an
 //! inline bag of exports.
+/** \brief Component instance definition and its validated canonical identity. */
 struct ComponentInstance {
 	//! Which form this component instance takes.
 	enum class Kind : uint8_t {
@@ -339,6 +368,7 @@ struct ComponentInstance {
 };
 
 //! A Canonical ABI option tag carried by a `canon` definition.
+/** \brief Canonical ABI option tags accepted by component canon definitions. */
 enum class CanonOptKind : uint8_t {
 	Utf8, //!< UTF-8 string encoding
 	Utf16, //!< UTF-16 string encoding
@@ -351,12 +381,14 @@ enum class CanonOptKind : uint8_t {
 };
 
 //! One Canonical ABI option and its optional index payload.
+/** \brief One Canonical ABI option and optional index operand. */
 struct CanonOpt {
 	CanonOptKind kind = CanonOptKind::Utf8; //!< Option kind
 	uint32_t index = 0; //!< memory/realloc/post-return/callback
 };
 
 //! One `canon` definition: lift/lower or a built-in adaptation.
+/** \brief Canonical ABI lift/lower or built-in adaptation declaration. */
 struct Canon {
 	//! Which Canonical ABI adaptation this definition is.
 	enum class Kind : uint8_t {
@@ -430,38 +462,88 @@ struct ComponentTypeDef;
 struct ComponentDecl;
 struct InstanceDecl;
 
+/** \brief Tagged declaration in a component type, with owned variant payload. */
 struct ComponentDecl {
-	enum class Kind : uint8_t { Import, CoreType, Type, Alias, Export };
+enum class Kind : uint8_t {
+		Import, //!< Enum member `Import`.
+		CoreType, //!< Enum member `CoreType`.
+		Type, //!< Enum member `Type`.
+		Alias, //!< Enum member `Alias`.
+		Export //!< Enum member `Export`.
+};
 	Kind kind = Kind::Import;
 	std::variant<std::monostate, std::unique_ptr<ImportDecl>,
 			std::unique_ptr<CoreTypeDef>, std::unique_ptr<ComponentTypeDef>,
-			std::unique_ptr<Alias>, std::unique_ptr<ExportDecl>> payload;
+			std::unique_ptr<Alias>, std::unique_ptr<ExportDecl>> payload; //!< Field `payload` of ComponentDecl.
 
+/**
+ * \brief Performs the import operation.
+ * \return The value or status produced by this operation.
+ */
 	const ImportDecl& import() const { return *std::get<std::unique_ptr<ImportDecl>>(payload); }
+/**
+ * \brief Performs the coreType operation.
+ * \return The value or status produced by this operation.
+ */
 	const CoreTypeDef& coreType() const { return *std::get<std::unique_ptr<CoreTypeDef>>(payload); }
+/**
+ * \brief Performs the type operation.
+ * \return The value or status produced by this operation.
+ */
 	const ComponentTypeDef& type() const { return *std::get<std::unique_ptr<ComponentTypeDef>>(payload); }
+/**
+ * \brief Performs the alias operation.
+ * \return The value or status produced by this operation.
+ */
 	const Alias& alias() const { return *std::get<std::unique_ptr<Alias>>(payload); }
+/**
+ * \brief Performs the exportDecl operation.
+ * \return The value or status produced by this operation.
+ */
 	const ExportDecl& exportDecl() const { return *std::get<std::unique_ptr<ExportDecl>>(payload); }
 };
 
+/** \brief Tagged declaration in an instance type, with owned variant payload. */
 struct InstanceDecl {
-	enum class Kind : uint8_t { CoreType, Type, Alias, Export };
+enum class Kind : uint8_t {
+		CoreType, //!< Enum member `CoreType`.
+		Type, //!< Enum member `Type`.
+		Alias, //!< Enum member `Alias`.
+		Export //!< Enum member `Export`.
+};
 	Kind kind = Kind::CoreType;
 	std::variant<std::monostate, std::unique_ptr<CoreTypeDef>,
 			std::unique_ptr<ComponentTypeDef>, std::unique_ptr<Alias>,
-			std::unique_ptr<ExportDecl>> payload;
+			std::unique_ptr<ExportDecl>> payload; //!< Field `payload` of InstanceDecl.
 
+/**
+ * \brief Performs the coreType operation.
+ * \return The value or status produced by this operation.
+ */
 	const CoreTypeDef& coreType() const { return *std::get<std::unique_ptr<CoreTypeDef>>(payload); }
+/**
+ * \brief Performs the type operation.
+ * \return The value or status produced by this operation.
+ */
 	const ComponentTypeDef& type() const { return *std::get<std::unique_ptr<ComponentTypeDef>>(payload); }
+/**
+ * \brief Performs the alias operation.
+ * \return The value or status produced by this operation.
+ */
 	const Alias& alias() const { return *std::get<std::unique_ptr<Alias>>(payload); }
+/**
+ * \brief Performs the exportDecl operation.
+ * \return The value or status produced by this operation.
+ */
 	const ExportDecl& exportDecl() const { return *std::get<std::unique_ptr<ExportDecl>>(payload); }
 };
 
+/** \brief Component type definition and its canonical type identity. */
 struct ComponentTypeDef {
 	enum class Kind : uint8_t {
 		DefinedValue, Func, Component, Instance, Resource
 	};
-	Kind kind = Kind::DefinedValue;
+	Kind kind = Kind::DefinedValue; //!< Field `kind` of ComponentTypeDef.
 	//! Defined-value, function and resource payloads live in the shared store.
 	//! Component/instance declarations are the remaining inline payloads for
 	//! this pass; they keep their order because declaration order is scope.
@@ -469,14 +551,26 @@ struct ComponentTypeDef {
 	std::variant<std::monostate, std::vector<ComponentDecl>,
 			std::vector<InstanceDecl>, ResourceType> declarations;
 
+/**
+ * \brief Performs the componentDecls operation.
+ * \return The value or status produced by this operation.
+ */
 	const std::vector<ComponentDecl>& componentDecls() const
 	{
 		return std::get<std::vector<ComponentDecl>>(declarations);
 	}
+/**
+ * \brief Performs the instanceDecls operation.
+ * \return The value or status produced by this operation.
+ */
 	const std::vector<InstanceDecl>& instanceDecls() const
 	{
 		return std::get<std::vector<InstanceDecl>>(declarations);
 	}
+/**
+ * \brief Performs the resource operation.
+ * \return The value or status produced by this operation.
+ */
 	const ResourceType& resource() const
 	{
 		return std::get<ResourceType>(declarations);
@@ -484,12 +578,14 @@ struct ComponentTypeDef {
 };
 
 //! \brief Start and value definitions
+/** \brief Component start function index, arguments, and expected result count. */
 struct Start {
 	uint32_t funcIndex = 0;
 	std::vector<uint32_t> args;
-	uint32_t resultCount = 0;
+	uint32_t resultCount = 0; //!< Field `resultCount` of Start.
 };
 
+/** \brief Component value declaration with its encoded initializer payload. */
 struct ValueDecl {
 	ComponentValueType type;
 	uint32_t encodedLength = 0;

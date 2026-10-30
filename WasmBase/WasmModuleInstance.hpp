@@ -37,11 +37,13 @@ class StoreOwnedTable;
 //! with the type tag the queue stamps over. The tag is kept for two reasons: the
 //! walker needs the layout to release the object's own references, and a
 //! resurrection must put the tag back (docs/proposals/GC.md RC-1b/RC-3).
+/** \brief Deferred-reclamation record for a GC object whose reference count reached zero. */
 struct PendingGcObject {
 	void*  ref;
 	TypeId typeId;
 };
 
+/** \brief Storage and backend-independent bookkeeping owned by one module instance. */
 struct ModuleInstanceInternals {
 	//! These own the storage that ctx's pointers point into.
 	//! After any reallocation, the corresponding ctx field MUST be updated.
@@ -121,6 +123,11 @@ struct ModuleInstanceInternals {
 	//! trap interns the finished message here (docs/SAFETY.md §2.4,
 	//! docs/proposals/EXTENDED_NAME_SECTION.md ENS-5).
 	std::set<std::string> trapMessages;
+/**
+ * \brief Performs the internTrapMessage operation.
+ * \param message Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	const char* internTrapMessage(std::string message)
 	{
 		return trapMessages.insert(std::move(message)).first->c_str();
@@ -130,6 +137,13 @@ struct ModuleInstanceInternals {
 //! \brief The C++ owner of the VMContext and all its allocations.
 //! This is what your instantiator creates and your embedder holds onto.
 //! compiled functions never see this class directly — only VMContext*.
+/**
+ * \brief Owns one instantiated module's VMContext and runtime allocations.
+ *
+ * The parsed Module is borrowed and must outlive this instance. Store-owned
+ * memories/tables and host bridge state are likewise borrowed according to
+ * their respective contracts.
+ */
 class WASMJIT_API ModuleInstance {
 private:
 	VMContext ctx; //!< The POD struct; kept first so &instance == &ctx (convenient cast).
@@ -144,29 +158,63 @@ private:
 	//! execute one instance at the same time, while `inCall()` must still mean
 	//! "anyone inside" for the GC safepoint's quiescence rule.
 	std::atomic<std::uint32_t> activeCalls{0};
+/**
+ * \brief Performs the resolveImports operation.
+ * \param importResolver Input value or output destination for this operation.
+ */
 	void resolveImports(ImportResolver& importResolver);
+/**
+ * \brief Performs the resolveTypeImports operation.
+ * \param importResolver Input value or output destination for this operation.
+ */
 	void resolveTypeImports(ImportResolver& importResolver);
-	std::vector<TypeId> importedTypeIds;
+	std::vector<TypeId> importedTypeIds; //!< Field `importedTypeIds` of WASMJIT_API.
+/**
+ * \brief Performs the initializeMemories operation.
+ */
 	void initializeMemories();
+/**
+ * \brief Performs the initializeGlobals operation.
+ */
 	void initializeGlobals();
+/**
+ * \brief Performs the initializeStringLiterals operation.
+ */
 	void initializeStringLiterals();
+/**
+ * \brief Performs the initializeTable operation.
+ */
 	void initializeTable();
 	//! Rewrites `ref.func` sentinels left in globalsStorage by evalConstantExpr
 	//! into real Callable pointers. Must run after declareFunctions() /
 	//! compileFunctions(), because those callable tables do not exist yet when
 	//! initializeGlobals() runs (i.e. in the constructor).
 	void resolveGlobalRefFuncs();
+/**
+ * \brief Performs the resolveRefFuncsInObject operation.
+ * \param ref Input value or output destination for this operation.
+ * \param visited Input value or output destination for this operation.
+ */
 	void resolveRefFuncsInObject(void* ref, std::vector<void*>& visited);
 	//! The same rewrite for table initialiser expressions: `initializeTable()` runs
 	//! in the constructor, so a `(ref.func …)` initialiser is stored as null there
 	//! and every slot of that table is filled in here, once the callables exist
 	//! (docs/proposals/GC.md G5). Must run before element segments are applied.
 	void resolveTableRefFuncs();
+/**
+ * \brief Performs the evalConstantExpr operation.
+ * \param expr Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	Value evalConstantExpr(const std::span<const std::byte>& expr);
 	//! Reference-counting internals (docs/proposals/GC.md §6, RC-1/RC-3).
 	//! `gcRefcountSlot` returns the object's count word, or nullptr when `ref`
 	//! is not a GC object (null, an i31 immediate, an externref or a funcref).
 	uint32_t* gcRefcountSlot(const void* ref);
+/**
+ * \brief Performs the reclaimGcObject operation.
+ * \param ref Input value or output destination for this operation.
+ */
 	void reclaimGcObject(void* ref);
 
 	//! \par Safepoint walker (docs/proposals/GC.md RC-3)
@@ -195,7 +243,14 @@ private:
 	//! not fit is merely not trialled now, which can delay a collection but never
 	//! free something live.
 	static constexpr size_t kMaxCycleCandidates = 4096;
+/**
+ * \brief Performs the possibleCycleRoot operation.
+ * \param ref Input value or output destination for this operation.
+ */
 	void possibleCycleRoot(void* ref);
+/**
+ * \brief Performs the collectCycles operation.
+ */
 	void collectCycles();
 public:
 	friend class ModuleInstantiator;
@@ -203,45 +258,65 @@ public:
 	//! The address of every reference-typed slot `ref` holds — the single layout
 	//! traversal, shared by the reclaimer and the trial-deletion DFS so the two
 	//! cannot drift (docs/proposals/GC.md §6.3 / H1).
+	/** \brief Enumerates addresses of all reference-typed child slots in an object. \param ref GC object reference. \param typeId Canonical type identity describing its layout. \param slots Output vector receiving addresses of reference slots. */
 	void childSlotsOf(void* ref, TypeId typeId, std::vector<uint8_t*>& slots);
 	//! `hostBridge` is optional and borrowed. Install it here, before
 	//! instantiation, so initialisers and the start function see it; pass
 	//! nullptr for the dependency-free default.
+	/** \brief Instantiates a module using the supplied import resolver and optional host bridge. \param module Parsed source module; must outlive the instance. \param importResolver Resolver used to bind imports. \param hostBridge Optional borrowed host bridge; must outlive the instance. */
 	ModuleInstance(const Module& module, ImportResolver& importResolver,
 			const HostBridge* hostBridge = nullptr);
 	//! Releases the instance's GC region set (bulk reclamation, GC-2).
+	/** \brief Releases instance-owned state and its GC region set. */
 	~ModuleInstance();
 
+	/** \brief Returns mutable access to the backend-visible VM context. \return Pointer to this instance's embedded VMContext. */
 	VMContext* context() { return &ctx; }
+	/** \brief Returns read-only access to the backend-visible VM context. \return Const pointer to this instance's embedded VMContext. */
 	const VMContext* context() const { return &ctx; }
 	//! The parsed module this instance was created from. Not owned; a module
 	//! outlives every instance of it (docs/ABI.md "Design Philosophy"). Named
 	//! `sourceModule` because the member it exposes is `module`.
+	/** \brief Returns the parsed module borrowed by this instance. \return Const reference to the source module. */
 	const Module& sourceModule() const { return *module; }
 	//! The store every entity of this instance lives in (from its module).
+	/** \brief Returns the Store that owns this instance's shared entities. \return Reference to the source module's Store. */
 	Store& store() const { return module->store(); }
 	//! The optional host bridge installed for this instance, or nullptr for the
 	//! default dependency-free boundary.
+	/** \brief Returns the optional borrowed host bridge. \return Installed bridge, or nullptr when none was supplied. */
 	const HostBridge* hostBridge() const { return ctx.hostBridge; }
+	/** \brief Looks up an exported function by name. \param name Export field name. \return Callable descriptor, or nullopt when no function export has that name. */
 	std::optional<Callable> exportedFunction(std::string_view name) const;
+	/** \brief Looks up an exported linear memory by name. \param name Export field name. \return Borrowed memory pointer, or nullopt when no memory export has that name. */
 	std::optional<LinearMemory*> exportedMemory(std::string_view name) const;
+	/** \brief Publishes this instance's exports to an import registrar. \param registrar Destination registrar. \param moduleName Module name under which exports are registered. */
 	void registerExports(ImportRegistrar& registrar, std::string_view moduleName) const;
 	//! Process-wide identities of the module's type imports, in import order
 	//! (TYPE_IMPORTS.md TI-3). The module's local type records stay nominal
 	//! imports; this vector records what the linker supplied.
+	/** \brief Returns canonical identities supplied for this module's type imports. \return Const reference to imported type IDs in import order. */
 	const std::vector<TypeId>& typeImports() const { return importedTypeIds; }
 
 	//! Called when memory.grow executes. Delegates to the owning Store and
 	//! returns the previous page count, or -1 on a trap-worthy failure.
+	/** \brief Grows a memory and returns its previous page count. \param memIdx Module memory index. \param deltaPages Number of pages requested. \return Previous page count, or -1 when growth fails and a trap is pending. */
 	int64_t growMemory(uint32_t memIdx, uint64_t deltaPages);
 
 	//! Called when table.grow executes.
+	/** \brief Grows a table by the requested number of entries. \param tableIdx Module table index. \param deltaEntries Number of entries requested. \return true if growth succeeds; false when limits/allocation prevent growth. */
 	bool growTable(uint32_t tableIdx, uint64_t deltaEntries);
+	/** \brief Copies a data-segment range into linear memory. \param memIdx Destination memory index. \param dataIdx Data-segment index. \param dstOffset Destination byte offset. \param srcOffset Source byte offset within the segment. \param len Number of bytes to copy. */
 	void memoryInit(uint32_t memIdx, uint32_t dataIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len);
+	/** \brief Marks a data segment dropped so later memory.init sees an empty segment. \param dataIdx Data-segment index. */
 	void dataDrop(uint32_t dataIdx);
+	/** \brief Copies element-segment references into a table. \param elemIdx Source element-segment index. \param tableIdx Destination table index. \param dstOffset Destination element offset. \param srcOffset Source element offset. \param len Number of elements to copy. */
 	void tableInit(uint32_t elemIdx, uint32_t tableIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len);
+	/** \brief Marks an element segment dropped. \param elemIdx Element-segment index. */
 	void elemDrop(uint32_t elemIdx);
+	/** \brief Copies bytes from a data segment into a host/backend buffer. \param dataIdx Data-segment index. \param dst Destination buffer. \param srcOffset Source byte offset. \param lenBytes Number of bytes to copy. */
 	void bufferInitFromData(uint32_t dataIdx, void* dst, uint32_t srcOffset, uint32_t lenBytes);
+	/** \brief Copies element references from a segment into a host/backend buffer. \param elemIdx Element-segment index. \param dst Destination buffer. \param srcOffset Source element offset. \param lenElems Number of elements to copy. */
 	void bufferInitFromElems(uint32_t elemIdx, void* dst, uint32_t srcOffset, uint32_t lenElems);
 	//! More Array Constructors (docs/proposals/GC_EXTENSIONS.md GX-2). Each does
 	//! the GC-5 range check *before* allocating, reports a trap and returns null
@@ -263,13 +338,17 @@ public:
 	//! Custom Descriptors: the RTT/descriptor reference stored in a struct's
 	//! header, or nullptr for a null/non-struct reference. `ref.get_desc` traps
 	//! when this returns nullptr.
+	/** \brief Retrieves the descriptor stored in a struct object's header. \param ref Candidate struct reference. \return Descriptor reference, or nullptr for null/non-struct references. */
 	void* structDescriptor(const void* ref) const;
 	//! The custom descriptor's first field when it is an immutable
 	//! `externref`/`(ref extern)`, otherwise nullptr. This is the engine-side
 	//! lookup an adapter uses for the JS `[[GetPrototypeOf]]` rule; the core
 	//! deliberately does not create JS objects or prototype chains.
+	/** \brief Retrieves the prototype reference from a custom descriptor. \param ref Candidate struct reference. \return First immutable externref descriptor field, or nullptr when unavailable. */
 	void* descriptorPrototype(const void* ref) const;
+	/** \brief Attempts to read the canonical type ID of a GC object. \param ref Candidate reference. \param typeId Receives the object's type ID on success. \return true if ref is a GC object with a readable type ID. */
 	bool tryGetGcTypeId(const void* ref, TypeId& typeId) const;
+	/** \brief Tests a reference against a heap-type constraint. \param ref Candidate reference. \param heapType Required heap type. \param nullable Whether null is accepted. \return true when the reference satisfies the constraint. */
 	bool refMatchesHeapType(const void* ref, const HeapType& heapType, bool nullable) const;
 
 	//! \par Extern hierarchy bridge (docs/proposals/GC.md GC-8, RT-1)
@@ -280,11 +359,15 @@ public:
 	//! pointers (unknown to the GC heap and not i31 immediates) pass through
 	//! unchanged, so their identity is preserved. `externUnbox` is the inverse:
 	//! box -> inner, anything else -> itself.
+	/** \brief Wraps an internal reference as an external reference. \param ref Reference to box; host references pass through unchanged. \return Externref representation. */
 	void* externBox(void* ref);
+	/** \brief Unwraps an internal reference from an extern box when present. \param ref Externref representation. \return Inner reference for a box, otherwise ref unchanged. */
 	void* externUnbox(void* ref) const;
+	/** \brief Tests whether a reference is the engine's special extern box. \param ref Candidate reference. \return true for an extern box. */
 	bool isExternBox(const void* ref) const;
 	//! True for an i31 immediate or a GC-heap object; false for null and for an
 	//! opaque host reference.
+	/** \brief Tests whether a reference is an i31 immediate or GC heap object. \param ref Candidate reference. \return true for an engine-internal reference. */
 	bool isInternalReference(const void* ref) const;
 
 	//! \par Reference counting (docs/proposals/GC.md §6, RC-1/RC-3)
@@ -296,8 +379,11 @@ public:
 	//! externrefs, funcrefs) pass through clone/store; when an optional
 	//! `HostBridge` is installed, a host `externref` additionally goes through
 	//! its retain/release callbacks (see `WasmHostBridge.hpp`).
+	/** \brief Retains a reference and returns the same reference value. \param ref Reference to clone. \return The retained reference. */
 	void* refClone(void* ref);
+	/** \brief Releases one ownership count on a reference. \param ref Reference to release. */
 	void  refDrop(void* ref);
+	/** \brief Performs the reference write barrier for a reference-typed slot. \param slot Address of the destination reference slot. \param newRef New reference value; retained before the old value is released. */
 	void  refStore(void** slot, void* newRef);
 
 	//! \par Optional host boundary
@@ -305,18 +391,23 @@ public:
 	//! bridge's `isHostReference` predicate wins when supplied; otherwise the
 	//! fallback is "not null, not an i31 immediate, and not owned by the GC
 	//! heap, the StringStore or a registered Callable".
+	/** \brief Tests whether a reference belongs to the installed host bridge. \param ref Candidate reference. \return true when classified as a host reference. */
 	bool isHostReference(const void* ref) const;
+	/** \brief Invokes the host bridge retain callback for a host reference. \param ref Host reference to retain. */
 	void retainHostReference(void* ref);
+	/** \brief Invokes the host bridge release callback for a host reference. \param ref Host reference to release. */
 	void releaseHostReference(void* ref);
 
 	//! Host identity for two opaque references. Returns true for pointer
 	//! equality, then delegates to `HostBridge::references.equals` when
 	//! installed. This is an embedder utility, not Wasm `ref.eq` (which is
 	//! defined only for `eqref`, never `externref`).
+	/** \brief Compares opaque host references using bridge identity semantics. \param lhs First reference. \param rhs Second reference. \return true for pointer equality or bridge-defined equality. */
 	bool hostReferenceEquals(const void* lhs, const void* rhs) const;
 
 	//! Diagnostics for the reference-counting test. `gcRefCount` returns 0 for
 	//! a reference that is not counted (or unknown).
+	/** \brief Reads a GC object's reference count for diagnostics. \param ref Candidate reference. \return Reference count, or zero when ref is not a counted GC object. */
 	uint32_t gcRefCount(const void* ref) const;
 	uint64_t gcAllocatedObjects() const
 	{
@@ -338,6 +429,7 @@ public:
 	//! instructions (docs/proposals/THREADS.md TH-5). Generated code cannot
 	//! enforce either policy — the ABI carries no instance pointer — so the
 	//! guard lives at the host boundary the embedder uses (`Runtime::callExport`).
+	/** \brief Enters the instance's host-call critical section. \param allowConcurrent true when the selected concurrency model permits concurrent agents. \return true if entry was accepted; false when single-agent entry is already active. */
 	bool enterCall(bool allowConcurrent = false) noexcept
 	{
 		if (allowConcurrent) {
@@ -348,8 +440,11 @@ public:
 		return activeCalls.compare_exchange_strong(expected, 1,
 				std::memory_order_acq_rel, std::memory_order_acquire);
 	}
+	/** \brief Attempts single-agent entry without waiting. \return true if no other call is active. */
 	bool tryEnterCall() noexcept { return enterCall(false); }
+	/** \brief Leaves a host-call critical section previously entered successfully. */
 	void leaveCall() noexcept { activeCalls.fetch_sub(1, std::memory_order_acq_rel); }
+	/** \brief Tests whether any agent is currently inside this instance. \return true when active call count is non-zero. */
 	bool inCall() const noexcept { return activeCalls.load(std::memory_order_acquire) != 0; }
 
 	//! Objects whose count reached zero are only *queued*; `gcCollect()` does
@@ -358,6 +453,7 @@ public:
 	//! object still at count zero is unreachable by construction. Re-checking
 	//! the count at collect time makes resurrection (a queued object that was
 	//! retained again) safe.
+	/** \brief Reclaims queued zero-reference objects at a safepoint. Call only when no Wasm frame is live. */
 	void gcCollect();
 	//! Number of objects queued for the next gcCollect().
 	size_t gcPendingCount() const
@@ -370,7 +466,9 @@ public:
 	//! The module's tag index space: process-wide `TagId`s, imports first, then
 	//! the module's own tags. Two imports of one export share an id; two tag
 	//! declarations with the same payload type do not.
+	/** \brief Maps a module-local tag index to its Store-owned identity. \param idx Module-local tag index. \return Canonical TagId. \throws std::out_of_range when idx is invalid. */
 	TagId tagIdForIndex(TagIdx idx) const { return internals.tagIds.at(idx); }
+	/** \brief Returns all tag identities in module tag-index order. \return Const reference to the tag ID vector. */
 	const std::vector<TagId>& tagIds() const { return internals.tagIds; }
 	//! Resolve an element-segment reference (as produced by evalConstantExpr and
 	//! cached in elementSegmentRefs) to the Callable* a table slot stores. A
@@ -396,13 +494,19 @@ public:
 	std::unique_ptr<ModuleInstance> instantiate(
 			const Module& module, ImportResolver& resolver,
 			const HostBridge* hostBridge = nullptr,
-			const ProfileConfig& profile = {});
+			const ProfileConfig& profile = {}); //!< Field `profile` of WASMJIT_API.
 
 	//! The profile this instantiator is currently operating under (set by the
 	//! most recent `instantiate` call; read by a backend's compile step).
 	const ProfileConfig& profile() const { return activeProfile; }
 
 protected:
+/**
+ * \brief Performs the evalConstantExpr operation.
+ * \param expr Input value or output destination for this operation.
+ * \param instance Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	Value evalConstantExpr(const std::span<const std::byte>& expr, ModuleInstance& instance);
 	//! Lower the module's types into the backend's representation, so the
 	//! declared and the compiled functions agree on one ABI.

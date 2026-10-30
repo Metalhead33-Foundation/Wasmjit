@@ -26,6 +26,7 @@
   is exported (docs/EMBEDDING_SURFACE.md ES-4).
 */
 
+//! Umbrella include for the supported embedder-facing API; does not expose backend internals.
 WASMJIT_VISIBLE_BEGIN
 
 #include "WasmVersion.hpp"

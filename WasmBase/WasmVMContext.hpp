@@ -18,12 +18,15 @@ WASMJIT_VISIBLE_BEGIN
 #include <cstddef>
 namespace WASM {
 
+/** \\brief Forward declaration of the parsed source module referenced by the VM context. */
 struct Module;
+/** \\brief Forward declaration of the embedder callback table borrowed by a VM context. */
 struct HostBridge;
 
 //! \brief The raw POD context passed as arg0 to every compiled function.
 //! Must remain standard-layout. The backend accesses fields via offsetof().
 //! NEVER add std::vector, virtual functions, or non-trivial members here.
+/** \brief Standard-layout POD context passed as the first argument to every compiled function. */
 struct VMContext {
 	//! Hot fields first — memory access is the most frequent operation.
 	//! Pointer to the instance's memory index space: an array of `memoryCount`
@@ -79,6 +82,10 @@ struct VMContext {
 static_assert(offsetof(VMContext, memories) == 0,
 			  "VMContext::memories must remain the first field for backend ABI compatibility");
 static_assert(std::is_standard_layout_v<VMContext>,
+/**
+ * \brief Performs the offsetof operation.
+ * \return The value or status produced by this operation.
+ */
 			  "VMContext must remain standard-layout for offsetof() access from generated code");
 
 }

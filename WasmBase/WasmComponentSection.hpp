@@ -19,28 +19,31 @@ WASMJIT_VISIBLE_BEGIN
 namespace WASM {
 
 //! Section ids from the Component Model binary format (Binary.md).
+/** \brief Binary section identifiers in the Component Model format. */
 enum class ComponentSectionType : uint8_t {
-	Custom = 0,
-	CoreModule = 1,
-	CoreInstance = 2,
-	CoreType = 3,
-	NestedComponent = 4,
-	Instance = 5,
-	Alias = 6,
-	Type = 7,
-	Canon = 8,
-	Start = 9,
-	Import = 10,
-	Export = 11,
-	Value = 12,
-	Invalid = 255
+	Custom = 0, //!< ComponentSectionType enumerator `Custom`.
+	CoreModule = 1, //!< ComponentSectionType enumerator `CoreModule`.
+	CoreInstance = 2, //!< ComponentSectionType enumerator `CoreInstance`.
+	CoreType = 3, //!< ComponentSectionType enumerator `CoreType`.
+	NestedComponent = 4, //!< ComponentSectionType enumerator `NestedComponent`.
+	Instance = 5, //!< ComponentSectionType enumerator `Instance`.
+	Alias = 6, //!< ComponentSectionType enumerator `Alias`.
+	Type = 7, //!< ComponentSectionType enumerator `Type`.
+	Canon = 8, //!< ComponentSectionType enumerator `Canon`.
+	Start = 9, //!< ComponentSectionType enumerator `Start`.
+	Import = 10, //!< ComponentSectionType enumerator `Import`.
+	Export = 11, //!< ComponentSectionType enumerator `Export`.
+	Value = 12, //!< ComponentSectionType enumerator `Value`.
+	Invalid = 255, //!< ComponentSectionType enumerator `Invalid`.
 };
 
 //! The section kind's spelling for a diagnostic ("custom", "core-module", …).
+/** \brief Returns the diagnostic spelling of a component section kind. \param type Section identifier. \return Static null-terminated section name. */
 const char* getComponentSectionTypeName(ComponentSectionType type);
 
 //! One section header from a component's binary: its kind, payload size and
 //! byte offset in the file.
+/** \brief Parsed component section header and retained payload metadata. */
 struct ComponentSection {
 	//! The section kind; `Invalid` for the 0xFF placeholder the parser starts at.
 	ComponentSectionType type = ComponentSectionType::Invalid;

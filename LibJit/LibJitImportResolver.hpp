@@ -11,10 +11,13 @@
 
 namespace LibJIT {
 
-//! Thin alias for callers that want to stay in the LibJIT namespace.
-//! The registry itself is backend-independent; the LibJIT-specific part is
-//! simply that registered imported function pointers must obey the LibJIT/Wasm
-//! callable ABI.
+/*!
+ * \brief Import resolver exposed in the LibJIT namespace.
+ *
+ * This is an alias, not a backend-specific implementation. Registered
+ * function pointers must obey the LibJIT/WebAssembly callable ABI.
+ */
+//! Type alias `ImportResolver` names the corresponding implementation/API type.
 using ImportResolver = WASM::RegistryImportResolver;
 
 } // namespace LibJIT

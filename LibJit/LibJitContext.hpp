@@ -10,27 +10,64 @@
 */
 
 namespace LibJIT {
-//! Owns the backend's compilation context and the one type translator that goes
-//! with it. Neither is copyable: the translator caches handles that belong to the
-//! context, so the two lifetimes are the same lifetime.
+/*!
+ * \brief Owns a LibJIT compilation context and its associated type translator.
+ *
+ * The translator caches backend handles that are valid only for the lifetime
+ * of the context. Consequently, the context and translator are deliberately
+ * owned together and must not be copied.
+ */
 class Context
 {
 private:
-	//! The backend's own context handle; destroyed with this object.
+	//! Backend compilation context; released when this object is destroyed.
 	jit_context_t context;
-	//! Canonical-type to lowered-type translation, shared by everything compiled
-	//! in this context.
+	//! Canonical-Wasm-type to LibJIT-type translation state for this context.
 	LibJitTypeTranslator typeTranslator;
 public:
-	//! Creates a fresh context and its translator.
+	/*!
+	 * \brief Creates a backend context and its type translator.
+	 *
+	 * \post rawContext() refers to the newly created context.
+	 */
 	Context();
-	//! Releases the context; every function built from it must already be gone.
+	/*!
+	 * \brief Releases the backend context.
+	 *
+	 * All functions and other backend objects created from this context must
+	 * have been released before the Context is destroyed.
+	 */
+/**
+ * \brief Performs the Context operation.
+ * \return The value or status produced by this operation.
+ */
 	~Context();
-	//! The raw context handle, for the backend's own entry points.
+	/*!
+	 * \brief Returns the underlying LibJIT context handle.
+	 * \return The non-owning backend context handle.
+	 */
+/**
+ * \brief Performs the rawContext operation.
+ * \return The value or status produced by this operation.
+ */
 	jit_context_t rawContext() const;
-	//! The translator owned by this context.
+	/*!
+	 * \brief Provides mutable access to this context's type translator.
+	 * \return A reference to the translator owned by this Context.
+	 */
+/**
+ * \brief Performs the getTranslator operation.
+ * \return The value or status produced by this operation.
+ */
 	LibJitTypeTranslator& getTranslator();
-	//! The translator owned by this context, read-only.
+	/*!
+	 * \brief Provides read-only access to this context's type translator.
+	 * \return A const reference to the translator owned by this Context.
+	 */
+/**
+ * \brief Performs the getTranslator operation.
+ * \return The value or status produced by this operation.
+ */
 	const LibJitTypeTranslator& getTranslator() const;
 };
 }

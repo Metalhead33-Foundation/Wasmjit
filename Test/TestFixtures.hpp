@@ -15,8 +15,7 @@
 
 namespace TestFixtures {
 
-//! (module
-//!   (func (export "answer") (result i32) i32.const 42))
+//! Minimal core module exporting an `answer` function that returns i32.const 42.
 inline constexpr std::array<std::uint8_t, 39> kAnswerModule = {
 	0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
 	0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f,
@@ -25,7 +24,10 @@ inline constexpr std::array<std::uint8_t, 39> kAnswerModule = {
 	0x0a, 0x06, 0x01, 0x04, 0x00, 0x41, 0x2a, 0x0b,
 };
 
-//! The `kAnswerModule` bytes as a byte span, for the loaders that take a span.
+/*!
+ * \brief Returns the answer-module fixture as a byte span.
+ * \return Non-owning view of kAnswerModule; the backing array has static lifetime.
+ */
 inline std::span<const std::byte> answerModuleBytes()
 {
 	return std::span<const std::byte>(

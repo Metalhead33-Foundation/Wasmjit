@@ -120,11 +120,13 @@ extern "C" {
 #define WASMJIT_STATUS_INVALID     (-2)
 #define WASMJIT_STATUS_INTERNAL    (-3)
 
+/*! Result code and optional plugin-owned diagnostic message. */
 typedef struct wasmjit_status {
 	int32_t     code;    /*!< WASMJIT_STATUS_* */
 	const char* message; /*!< borrowed; valid until the next plugin call, may be NULL */
 } wasmjit_status;
 
+/*! Capability flags and signature limits advertised by a backend plugin. */
 typedef struct wasmjit_capabilities {
 	uint32_t           flags;        /*!< WASMJIT_CAP_* */
 	uint32_t           max_params;   /*!< the plugin's own signature limit, 0 = none */
@@ -136,6 +138,7 @@ typedef struct wasmjit_capabilities {
 /*!  The callback table the host lends to the plugin. Versioned with the same
  * abi_version; the plugin must not retain it past `create` unless it keeps the
  * runtime alive, which the host guarantees for the runtime's lifetime. */
+/*! Versioned host callback table lent to a backend plugin. */
 typedef struct wasmjit_host {
 	uint32_t     abi_version;       /*!< == WASMJIT_BACKEND_ABI_VERSION */
 	uint32_t     core_abi_version;  /*!< the host core's ABI version */
@@ -144,6 +147,7 @@ typedef struct wasmjit_host {
 	void       (*emit)(void* user_data, int32_t severity, const char* message);
 } wasmjit_host;
 
+/*! Versioned backend descriptor returned by wasmjit_backend_query. */
 typedef struct wasmjit_backend_desc {
 	uint32_t              abi_version;      /*!< == WASMJIT_BACKEND_ABI_VERSION */
 	uint32_t              core_abi_version; /*!< the core ABI it was built against */
@@ -159,6 +163,7 @@ typedef struct wasmjit_backend_desc {
 } wasmjit_backend_desc;
 
 /*! The one required export. Returns NULL when the host ABI is unacceptable. */
+/*! Plugin query entry-point type. \param host_abi_version ABI version supported by the loading host. \return Plugin descriptor when compatible, or NULL when the host is rejected. */
 typedef const wasmjit_backend_desc* (*wasmjit_backend_query_fn)(uint32_t host_abi_version);
 
 #if defined(_WIN32)
@@ -168,6 +173,7 @@ typedef const wasmjit_backend_desc* (*wasmjit_backend_query_fn)(uint32_t host_ab
 #endif
 
 /*! Optional: a human-readable reason the last query failed. */
+/*! Returns the most recent query failure reason. \return Borrowed null-terminated diagnostic string, or NULL when unavailable. */
 WASMJIT_BACKEND_EXPORT const char* wasmjit_backend_last_error(void);
 
 #ifdef __cplusplus

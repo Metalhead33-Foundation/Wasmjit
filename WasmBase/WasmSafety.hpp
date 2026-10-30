@@ -63,6 +63,14 @@ inline constexpr uint32_t kMaxComponentSections = 100000;
 //! that do not report a size are treated as unbounded (nothing to compare
 //! against), which keeps exotic embedder devices working.
 template<typename Device>
+/**
+ * \brief Performs the tell operation.
+ * \param device Input value or output destination for this operation.
+ * \param requested Input value or output destination for this operation.
+ * \param what Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
+/** \brief Checks that an input-derived byte count fits within the remaining device data. \tparam Device Readable device type providing tell() and size(). \param device Input device whose remaining bytes are checked. \param requested Requested byte count. \param what Description of the input field used in an error message. \return Requested count when it is available (or the device is unsized). \throws std::runtime_error when the request exceeds the remaining input. */
 inline std::size_t requireAvailable(Device& device, uint64_t requested, const char* what)
 {
 	const long position = device.tell();
@@ -81,6 +89,7 @@ inline std::size_t requireAvailable(Device& device, uint64_t requested, const ch
 //! Convenience for a *count*: each element costs at least one byte on the wire,
 //! so the same remaining-bytes bound applies.
 template<typename Device>
+/** \brief Bounds an input-derived element count by the remaining encoded bytes. \tparam Device Readable device type providing tell() and size(). \param device Input device to inspect. \param count Number of elements claimed by the input. \param what Description of the input field used in an error message. \return Count when it is available. \throws std::runtime_error when count exceeds the remaining input bytes. */
 inline std::size_t requireCountAvailable(Device& device, uint64_t count, const char* what)
 {
 	return requireAvailable(device, count, what);

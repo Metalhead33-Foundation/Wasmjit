@@ -16,6 +16,7 @@ WASMJIT_VISIBLE_BEGIN
 
 namespace WASM {
 
+/** \\brief Forward declaration of the per-instance VM context passed to host hooks. */
 struct VMContext;
 
 //! \brief Optional, embedder-owned host boundary
@@ -71,10 +72,12 @@ struct VMContext;
 //! the embedder handed to that instance (for example by dropping a per-instance
 //! arena); the engine does not walk a dying instance's whole object graph to
 //! release host pointers. Neither callback may throw, trap or re-enter Wasm.
+/** \brief Embedder-owned callbacks for host references and instance lifecycle. \\note The runtime borrows this object; it must outlive every instance using it. */
 struct HostBridge {
 	//! Reference-barrier callbacks for the `externref` payloads this bridge
 	//! owns. Every member is optional; a null callback selects the documented
 	//! fallback next to it.
+	/** \brief Optional callbacks for identifying, retaining, releasing, and comparing host references. */
 	struct ReferenceHooks {
 		//! Returns true when `ref` is a host reference owned by this bridge.
 		//! Optional; when null the engine uses the conservative fallback above.
@@ -108,6 +111,12 @@ struct HostBridge {
 //! True when the bridge can retain and release host references. Both callbacks
 //! are required for a balanced contract; a one-sided bridge is treated as
 //! disabled rather than risking an unmatched release.
+/** \brief Tests whether a bridge supplies a balanced retain/release pair. \param bridge Optional bridge to inspect. \return true only when both retain and release callbacks are installed. */
+/**
+ * \brief Performs the hostReferenceHooksEnabled operation.
+ * \param bridge Input value, resource descriptor, or output destination for this operation.
+ * \return The requested value, handle, view, or success status.
+ */
 inline bool hostReferenceHooksEnabled(const HostBridge* bridge)
 {
 	return bridge != nullptr
