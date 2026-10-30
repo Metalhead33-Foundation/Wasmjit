@@ -142,7 +142,17 @@ private:
 		uint64_t bytes = 0;
 	};
 
+/**
+ * \brief Performs the releaseView operation.
+ * \param view Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	bool releaseView(const StringViewObject* view);
+/**
+ * \brief Performs the releaseIterator operation.
+ * \param iterator Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	bool releaseIterator(const StringIteratorObject* iterator);
 
 	std::unordered_map<const StringObject*, std::unique_ptr<StringEntry>> objects_;
