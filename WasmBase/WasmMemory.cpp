@@ -248,4 +248,139 @@ bool SharedLinearMemory::discardHint(uint64_t offset, uint64_t bytes) const
 #endif
 }
 
+// ── Reserved (non-shared) Linear Memory Implementation ──
+
+ReservedLinearMemory::ReservedLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64,
+		uint64_t pageSize)
+	: StoreOwnedMemory(initialPages, maxPages, false, is64, pageSize), reservedRegion(nullptr), reservedBytes(0)
+{
+	// `StoreOwnedMemory` normalises the declared maximum to bytes, keeping
+	// UINT64_MAX as "unbounded". A reservation has to know its size, so an
+	// unbounded memory is refused by name rather than silently capped
+	// (MEMORY_PROVIDER.md MP-1, §6.2 MPD3).
+	if (memory.memoryMax == UINT64_MAX) {
+		throw std::invalid_argument("a reserved linear memory needs a declared maximum: the "
+				"policy reserves `max` bytes of address space up front. Declare a max, or use "
+				"MemoryAllocationPolicy::Growable (docs/proposals/MEMORY_PROVIDER.md MP-1).");
+	}
+	if (memory.memoryMax > std::numeric_limits<size_t>::max()) {
+		throw std::bad_alloc();
+	}
+
+	const uint64_t initialBytes = initialPages * pageSize;
+	reservedBytes = static_cast<size_t>(memory.memoryMax);
+
+	if (reservedBytes == 0) {
+		// A `(memory 0 0)` declaration reserves nothing and stays empty.
+		memory.memorySize = 0;
+		return;
+	}
+
+	if (!platformReservedMemory(reservedBytes)) {
+		throw std::bad_alloc();
+	}
+	memory.memoryBase = static_cast<uint8_t*>(reservedRegion);
+	memory.memorySize = 0;
+
+	if (initialBytes > 0 && !platformCommitMemory(static_cast<size_t>(initialBytes))) {
+		platformDealloc();
+		throw std::bad_alloc();
+	}
+}
+
+ReservedLinearMemory::~ReservedLinearMemory()
+{
+	platformDealloc();
+}
+
+bool ReservedLinearMemory::platformReservedMemory(size_t bytes)
+{
+	reservedBytes = bytes;
+
+#if defined(PLATFORM_WINDOWS)
+	reservedRegion = VirtualAlloc(NULL, bytes, MEM_RESERVE, PAGE_NOACCESS);
+#elif defined(PLATFORM_POSIX)
+	reservedRegion = mmap(NULL, bytes, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (reservedRegion == MAP_FAILED) {
+		reservedRegion = nullptr;
+	}
+#endif
+	return reservedRegion != nullptr;
+}
+
+void ReservedLinearMemory::platformDealloc()
+{
+	if (!reservedRegion) return;
+
+#if defined(PLATFORM_WINDOWS)
+	VirtualFree(reservedRegion, 0, MEM_RELEASE);
+#elif defined(PLATFORM_POSIX)
+	munmap(reservedRegion, reservedBytes);
+#endif
+
+	reservedRegion = nullptr;
+	reservedBytes = 0;
+}
+
+bool ReservedLinearMemory::platformCommitMemory(size_t newBytes)
+{
+	if (!reservedRegion || newBytes > reservedBytes || newBytes <= memory.memorySize) {
+		return false;
+	}
+
+	size_t delta = newBytes - static_cast<size_t>(memory.memorySize);
+	uint8_t* commitStart = static_cast<uint8_t*>(reservedRegion) + memory.memorySize;
+
+#if defined(PLATFORM_WINDOWS)
+	if (VirtualAlloc(commitStart, delta, MEM_COMMIT, PAGE_READWRITE) == NULL) {
+		return false;
+	}
+#elif defined(PLATFORM_POSIX)
+	// The pages were reserved PROT_NONE, so the commit is a permission change;
+	// the kernel hands back zero-filled pages, exactly as for a fresh mapping.
+	if (mprotect(commitStart, delta, PROT_READ | PROT_WRITE) == -1) {
+		return false;
+	}
+#endif
+
+	memory.memorySize = newBytes;
+	return true;
+}
+
+bool ReservedLinearMemory::growMemory(uint64_t deltaPages)
+{
+	if (deltaPages == 0) return true; // Conformance: zero growth always succeeds
+
+	const uint64_t pageSize = memory.pageSize;
+	if (pageSize == 0 || deltaPages > (UINT64_MAX / pageSize)) return false;
+
+	const uint64_t deltaBytes = deltaPages * pageSize;
+	if (UINT64_MAX - memory.memorySize < deltaBytes) return false;
+
+	const uint64_t newSize = memory.memorySize + deltaBytes;
+	if (newSize > memory.memoryMax || newSize > reservedBytes) return false;
+	if (newSize > std::numeric_limits<size_t>::max()) return false;
+
+	return platformCommitMemory(static_cast<size_t>(newSize));
+}
+
+bool ReservedLinearMemory::discardHint(uint64_t offset, uint64_t bytes) const
+{
+	// Same mechanism as the shared provider: the address space stays valid and
+	// `madvise(MADV_DONTNEED)` makes subsequent reads zero-filled. Other hosts
+	// take the caller's zero-fill.
+#if defined(PLATFORM_POSIX)
+	if (!reservedRegion || bytes == 0)
+		return false;
+	if (offset > memory.memorySize || bytes > memory.memorySize - offset)
+		return false;
+	void* start = static_cast<uint8_t*>(reservedRegion) + offset;
+	return ::madvise(start, static_cast<size_t>(bytes), MADV_DONTNEED) == 0;
+#else
+	(void)offset;
+	(void)bytes;
+	return false;
+#endif
+}
+
 }

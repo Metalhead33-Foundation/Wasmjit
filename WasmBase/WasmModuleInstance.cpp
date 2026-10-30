@@ -670,7 +670,8 @@ void ModuleInstance::initializeMemories()
 		}
 
 		const Store::MemoryId id = store.createLinearMemory(initialPages, maxPages, isShared,
-				memType.indexType == MemoryIndexType::I64, memType.pageSize);
+				memType.indexType == MemoryIndexType::I64, memType.pageSize,
+				store.memoryAllocationPolicy());
 		LinearMemory* memory = store.memory(id);
 		if (memory == nullptr)
 			throw std::runtime_error("failed to allocate linear memory");

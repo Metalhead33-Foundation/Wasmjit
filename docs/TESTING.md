@@ -1046,6 +1046,7 @@ Four tagged families cover the embedding surface and the backend seam:
 | `[tiers]` | `Test/HeaderTierTests.cpp` | Every `WasmBase/` header is classified exactly once; the umbrella includes exactly the embedder tier; every public header has a compile-only TU |
 | `[plugin]` | `Test/PluginTests.cpp` | The `dlopen` loader: a real plugin loads by path and by name; every refusal path is a named error |
 | `[legacy-eh]` | `Test/LegacyEhTests.cpp` | The superseded Phase-3 exception form: the named refusal by default, the opt-in rewrite (`WASMJIT_LEGACY_EH`), `rethrow` payload identity, branch/delegate remapping, agreement with Binaryen's translation, a body that mixes the two encodings (`LE-9`), and the one remaining refusal (`LE-8`) |
+| `[mem-provider]` | `Test/MemoryProviderTests.cpp` | The host-chosen allocation policy for linear memory (`MEMORY_PROVIDER.md` MP-1): the default policy's growth and budget behaviour, a reserved memory's stable base and verbatim maximum, its named refusal of an unbounded memory, a shared memory ignoring the policy, and the store policy reaching the memories a module declares |
 
 The plugin fixture is `Test/ExampleBackend/ExampleBackend.pro`, a shared library
 built in its own directory (`libwasmjit-backend-example.so`) so the test proves the

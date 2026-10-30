@@ -84,7 +84,7 @@ clustering map can group by them:
 | **F5** | Legacy EH instructions (`try`/`catch`/`delegate`) | **Mitigated (2026-10-30):** the final `exnref` shape is what the engine executes, and a legacy-encoded module no longer has to be refused — `ParseOptions::legacyExceptionHandling` rewrites it at load ([`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md)). Off by default, and one construct is still refused by name (`LE-8`, a `delegate` past a catch; `LE-9`, mixed forms, closed on 2026-10-30), so it stays a *switch a toolchain may force* rather than a free pass |
 | **F6** | OS-thread spawning, real parallelism, TLS | `Agents` exists but is opt-in; the guest cannot spawn a host thread |
 | **F7** | Start-up that blocks, loops, or spawns | There is no step budget (`S1`); an init that never returns hangs the embedder |
-| **F8** | Large runtime / heap reservation vs the 2 GiB budget | [`SAFETY.md`](../SAFETY.md) §2.3: an oversized initial size fails instantiation. Priced by [`proposals/MEMORY_PROVIDER.md`](../proposals/MEMORY_PROVIDER.md): the budget charges *commits*, not reservations, so what is missing is the ability of a non-shared memory to reserve at all (`MP2`), not budget headroom |
+| **F8** | Large runtime / heap reservation vs the 2 GiB budget | [`SAFETY.md`](../SAFETY.md) §2.3: an oversized initial size fails instantiation. Priced by [`proposals/MEMORY_PROVIDER.md`](../proposals/MEMORY_PROVIDER.md): the budget charges *commits*, not reservations, so the gap was never budget headroom but a non-shared memory's inability to reserve at all (`MP2`) — **closed** by `MP-1`: `MemoryAllocationPolicy::Reserved` reserves the declared maximum and keeps the base, so `F8` is now 'does the runtime need it', not 'can the engine do it' |
 | **F9** | Multiple instances of one module | One instance per `Module`; isolation is "load it twice" |
 | **F10** | Guest-side dynamic code generation / self-hosting | Legal guest code, but a self-hosting JIT usually assumes `mmap`-like memory (`F2`) |
 | **F11** | Signature/value mapping is the deciding issue | Rare: the ABI covers `i32/i64/f32/f64/v128/ref`, multi-value is a caller buffer |
@@ -554,6 +554,19 @@ mitigated friction rather than a free pass. `LE-8` is *not* a gap that a re-scre
 is waiting on: the cheap rewrite of it is unsound and the sound one is a
 control-flow split, so it stays refused by name until a real module trips it.
 
+
+### 6.11 The third expiry: `MP-1` shipped (2026-10-30, revision 2)
+
+The memory study's one recommended engine change is in: a host-chosen
+`MemoryAllocationPolicy` with a `Reserved` backing
+([`../proposals/MEMORY_PROVIDER.md`](../proposals/MEMORY_PROVIDER.md) `MP-1`).
+Effect on this screen: `F8` changes from "an engine limitation" to "a policy the
+embedder selects", and the rows that cite it (`T09`, `T14`, `T83`) lose their
+one engine-side dependency — **their grades do not move**, because the demand
+was always a footprint/behaviour question a PoC has to answer, not something the
+loader was refusing. That is the same rule as §6.9/§6.10: a re-screen follows an
+engine change, and usually the honest outcome is that the *cost* moves and the
+grade does not.
 
 ## 7. What the screen leaves to `LF-2`
 
