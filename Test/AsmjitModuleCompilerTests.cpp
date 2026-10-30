@@ -34,3 +34,21 @@ TEST_CASE("AsmJit ModuleInstantiator compiles straight-line i32 functions", "[as
 	using Unary = std::int32_t (*)(WASM::VMContext*, std::int32_t);
 	CHECK(reinterpret_cast<Unary>(local->fnPtr)(instance->context(), 14) == 42);
 }
+
+#include <catch2/catch_all.hpp>
+
+#include "helper.hpp"
+#include "Asmjit/AsmjitContext.hpp"
+#include "Asmjit/AsmjitModuleCompiler.hpp"
+#include "WasmBase/WasmRegistryImportResolver.hpp"
+
+TEST_CASE("AsmJit rolls back code allocations when a later function is unsupported", "[asmjit][module][safety]")
+{
+	WASM::Module module = loadTestModule("asmjit_i32_unsupported");
+	WASM::RegistryImportResolver imports;
+	AsmJitBackend::Context context;
+	AsmJitBackend::ModuleCompiler compiler(context);
+
+	CHECK_THROWS(compiler.instantiate(module, imports));
+	CHECK(context.allocationCheckpoint() == 0);
+}
