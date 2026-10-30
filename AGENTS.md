@@ -38,7 +38,11 @@ the one-line check to run.
   [`BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md) (loading a backend behind a C descriptor) and
   [`MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) (demoting the multi-agent blocker).
   The language-support studies are defined in [`docs/LANGUAGE_FEASIBILITY.md`](docs/LANGUAGE_FEASIBILITY.md):
-  definitions only — neither the pre-feasibility study, the full study nor the readiness audit has been run.
+  the two studies have not been started, and no language is assessed. Its entry-gate
+  readiness audit (`LF-0a`) **has** been run: [`docs/READINESS_AUDIT.md`](docs/READINESS_AUDIT.md)
+  reports `RG1`–`RG6` as `Pinned` and, in the same sweep, re-checks `G3` of the
+  milestone (whether a second code generator may begin — it may; SLJIT is the
+  recommendation, and the `RA1`/`RA2` proof gaps are named there).
 
 - **[`docs/BACKEND_WORK_ORDER.md`](docs/BACKEND_WORK_ORDER.md) — read before starting, or changing, a backend.**
   It is the checklist of what a code generator must provide (`ModuleInstantiator`'s four hooks, the

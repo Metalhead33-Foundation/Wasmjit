@@ -1,10 +1,14 @@
 # Wasm Language Support — Pre-Feasibility, Full Feasibility, and the Entry-Gate Readiness Audit
 
-Status: process definition / study charter (revision 2 — 2026-10-29; adds the
+Status: process definition / study charter (revision 3 — 2026-10-30: the
+entry-gate audit `LF-0a` has been **run**, and its result lives in
+[`READINESS_AUDIT.md`](READINESS_AUDIT.md); revision 2 — 2026-10-29 — added the
 entry-gate readiness audit and the engine/embedder distinction). **This note
-defines two studies and the audit that gates them; it runs none.** No language is
-evaluated here, no candidate is screened, no audit is performed, and there are no
-verdicts. It contains **no code** and changes no build.
+defines two studies and the audit that gates them; it runs none of them.** No
+language is evaluated here, no candidate is screened, and there are no verdicts.
+`LF-0a` is the one exception, and it is not a language study: it audited the
+engine and its report is a separate document. This note contains **no code** and
+changes no build.
 
 Audience: anyone asking "can I write this in language X?", anyone commissioning
 or reviewing a language-support study, and anyone tempted to add a toolchain to
@@ -51,7 +55,9 @@ work**: its job is to decide what *not* to study, and to group what remains so
 that one study answers several languages at once.
 
 The scoping study does not start until the **entry-gate audit** (§6, `LF-0a`)
-has pinned the engine-owned surfaces it depends on. The audit is not a language
+has pinned the engine-owned surfaces it depends on. That audit was run on
+2026-10-30; its report is [`READINESS_AUDIT.md`](READINESS_AUDIT.md), all six
+rows are `Pinned`, and `LF-1` is therefore unblocked. The audit is not a language
 study and produces no verdict; it is the statement that the screen's inputs are
 stable enough to be measured against.
 
@@ -324,13 +330,20 @@ That is why §6.5 defines when the audit must be repeated.
 | **RG5** | **Embedding API** | Registering host functions, instantiating, reading and writing linear memory, and calling exports. Is it versioned, and what is stable versus explicitly planned? | The PoC bar and the "small embedder-side shim" are measured against this API. | [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §2/§4/§7, [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §2.2 |
 | **RG6** | **Breaking-change detection** | A changelog or tests that cover the embedding API: public-header self-containment, an out-of-tree consumer, an ABI diff, and the default suite green. | Without detection, "stable" is an assertion, not a property. | [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §10, [`TESTING.md`](TESTING.md) |
 
-**This note does not run the audit.** The existing measurements are inputs to
-`LF-0a`, not its result: [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §7.5
-reports two of four gates passed; `EMBEDDING_SURFACE.md` `ES-1…ES-7` are
-planned; and its §10 records the public-header self-containment, install and
-ABI-diff tests as absent. A reader must not infer that an `RG` row is `Pinned`
-merely because a document exists. **A row with no evidence is `Unpinned`, not
-"assumed fine".**
+**This note does not run the audit; it has been run elsewhere.** `LF-0a` was
+performed on 2026-10-30 and is written up in
+[`READINESS_AUDIT.md`](READINESS_AUDIT.md) — which also re-checks `G3` of
+[`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) in the same sweep, because the two
+measure the same surfaces. Its §5 is the readiness report: all six rows
+`Pinned`, no row `Documented, moving`, one recorded limitation against `RG4`
+(the memory provider is chosen by the core). The measurements that made that
+possible were `API_ABI_STABILITY.md` §7.5 (four of four gates passed),
+`EMBEDDING_SURFACE.md` `ES-1…ES-7` (all done) and its §10 detectors — all of
+which were *inputs* to the audit, not its result.
+
+The principle stands regardless: a reader must not infer that an `RG` row is
+`Pinned` merely because a document exists. **A row with no evidence is
+`Unpinned`, not "assumed fine".**
 
 ### 6.3 Explicitly out of scope
 
@@ -373,6 +386,11 @@ It contains no code, no build change and **no language assessment**. A passing
 audit does not mean WasmJit supports any language; it means the screen's inputs
 are stable enough to begin.
 
+**The four outputs exist** as of 2026-10-30:
+[`READINESS_AUDIT.md`](READINESS_AUDIT.md) §5 is the readiness report, §6.2 the
+pinned snapshot, §6.3 the moving-targets list (empty of `Documented, moving`
+rows, with six watch items instead), and §6.4 the not-audited list.
+
 ### 6.5 When the audit must be repeated
 
 The audit expires when an engine-owned surface moves:
@@ -387,7 +405,10 @@ The audit expires when an engine-owned surface moves:
   [`LAYERING.md`](LAYERING.md) §4 changes.
 
 Re-running is `C0`/`C1` work (§9), which is the reason it can afford to be
-honest instead of aspirational.
+honest instead of aspirational. [`READINESS_AUDIT.md`](READINESS_AUDIT.md) §6.5
+carries the same list plus its own two additions (a new backend-tier header
+appearing, and a change to the exported-symbol baseline) and the plan row that
+owns each re-run (`RA-3`).
 
 ### 6.6 Why this is not part of the scoping study
 
@@ -397,6 +418,11 @@ Merging them would let a moving ABI hide inside a triage row — the row would s
 The audit also has no candidate list and no language vocabulary: its subject is
 the engine, and its gate is `LF-0a`, not `LF-1`. Passing it is necessary for
 `LF-1`; it is not sufficient for any language verdict.
+
+That separation is about *subject*, not about *packaging*: the audit is performed
+in one sweep with the `G3` re-check of [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md),
+and both are written up in [`READINESS_AUDIT.md`](READINESS_AUDIT.md), because
+they measure the same engine-owned surfaces with the same evidence.
 
 ## 7. The pre-feasibility (scoping) study
 
@@ -690,22 +716,24 @@ on `LF-1` and on a named requester (`T3`).
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **`LF-0` — Define the studies and the gate** | `✅` This note: the vocabulary, the two protocols, the entry-gate audit, the colour/kill codes, the outputs, the budgets. | — | This note is reviewed and linked from `README.md`, `API_ABI_STABILITY.md` §12 and `AGENTS.md`. |
-| **`LF-0a` — Entry-gate readiness audit** | Audit `RG1`–`RG6` (§6): state each engine-owned surface `Pinned` / `Documented, moving` / `Unpinned`, with evidence and a commit. **Not started.** | `LF-0` | Every row has a state, evidence and a date; the moving-targets list exists; no row is `Unpinned` (or a dated waiver says why). |
-| **`LF-1` — Pre-feasibility / scoping study** | Screen the canonical list; triage, cluster, trigger, charter, and list what is not studied. **Not started.** | `LF-0a` | A triage table over the whole list (every row evidence-tiered), a dependency/abstraction map, trigger conditions, one charter per recommended cluster, and a don't-study list. **No green/yellow/red verdicts**, black kills only. |
+| **`LF-0a` — Entry-gate readiness audit** | `✅` **Run 2026-10-30** at `5c3d194`: [`READINESS_AUDIT.md`](READINESS_AUDIT.md) states `RG1`–`RG6` with evidence, and re-checks `G3` in the same sweep. All six rows `Pinned`; one limitation recorded against `RG4` (`RA4`); no dated waiver needed. **Not a language study.** | `LF-0` | Every row has a state, evidence and a date; the moving-targets list exists; no row is `Unpinned` (or a dated waiver says why). |
+| **`LF-1` — Pre-feasibility / scoping study** | Screen the canonical list; triage, cluster, trigger, charter, and list what is not studied. **Not started — unblocked by `LF-0a`.** | `LF-0a` | A triage table over the whole list (every row evidence-tiered), a dependency/abstraction map, trigger conditions, one charter per recommended cluster, and a don't-study list. **No green/yellow/red verdicts**, black kills only. |
 | **`LF-2` — Full feasibility studies** | One study per chartered cluster, using the §8 protocol. **Not started.** | `LF-1` | One report per cluster: filled §4 table, colour verdict per pinned version, reproducible PoCs, budget respected, engine work named and classed. |
 | **`LF-3` — The support decision** | Decide which, if any, language/toolchain receives engine work; classify that work. **Not a study.** | `LF-2` | A milestone decision, not a commit: each follow-up item has a class per [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §4.1 and a gate it touches. |
 
 Ordering: `LF-0a` gates `LF-1`, and `LF-1` is a prerequisite for every `LF-2`
 charter; `LF-3` may reject all of them, and that is a successful outcome.
-**`LF-0` is this note. `LF-0a`, `LF-1` and `LF-2` have not been started, and
-nothing here may be read as their result.**
+**`LF-0` is this note and `LF-0a` is [`READINESS_AUDIT.md`](READINESS_AUDIT.md).
+`LF-1` and `LF-2` have not been started, and nothing here may be read as their
+result.**
 
 ## 12. Evidence and test survey
 
 | Evidence | Result | Reading |
 |---|---|---|
 | Automated test for either study or the audit | **Absent by design** | The outputs are documents, PoC artefacts and a readiness report, not assertions in the suite. |
-| Entry-gate audit (`LF-0a`) | **Not run** | Its evidence is the readiness report; no audit exists yet, so no `RG` row has a state. |
+| Entry-gate audit (`LF-0a`) | **Run 2026-10-30** — [`READINESS_AUDIT.md`](READINESS_AUDIT.md): `RG1`–`RG6` all `Pinned` at `5c3d194` | The readiness report, the pinned snapshot, the moving-targets list and the not-audited list all exist; the audit's §9 records the runs behind them (11,460 assertions / 484 cases, `abi-check.sh` 0 removed / 0 added, `install-check.sh` OK, the layering grep at 0 hits). |
+| `G3` re-check (second code generator) | **`✅`** — same note §4 | Work on a non-LibJIT backend may begin; `RA1`/`RA2` (harness wiring, and the absence of a second *executing* generator) are named rather than hidden, and `RA-1` closes them. |
 | `[docs]` structural lint | Covers `docs/proposals/` only | This note is not linted (like the other top-level notes); its structure is kept by review. |
 | `[layering]` / `[surface]` gates | **Exist** (`Test/LayeringTests.cpp`, `Test/SurfaceTests.cpp`, `Test/HeaderTierTests.cpp`) | `RG1`/`RG3`/`RG6` evidence: the core ↔ backend vocabulary is machine-checked, the version identity an embedder compiles against is exercised at run time, and every header has a declared tier. |
 | `[runtime]` / `[plugin]` gates | **Exist** (`Test/RuntimeTests.cpp`, `Test/PluginTests.cpp`) | `RG5`/`RG6` evidence: the load → instantiate → call recipe runs against a declared runtime, and a backend loads from a separate shared library through the C descriptor. |
@@ -718,6 +746,10 @@ reviewable artefact is the study report itself, and its evidence rules are §8.4
 
 ## 13. References
 
+- [`READINESS_AUDIT.md`](READINESS_AUDIT.md) — **the `LF-0a` result**: `RG1`–`RG6`
+  with states and evidence, the pinned snapshot, the moving-targets list, the
+  not-audited list, and the `G3` re-check of the second code generator that was
+  performed in the same sweep.
 - [`appcypher/awesome-wasm-langs`](https://github.com/appcypher/awesome-wasm-langs) —
   the official / canonical candidate list for the scoping study. **Linked, not
   consulted yet.**

@@ -1,12 +1,11 @@
 # API/ABI Stability — The Milestone, and How Close We Are
 
-Status: **milestone met 2026-10-29** (revision 3; revision 2 on 2026-10-29 closed
-AAS2–AAS7 and re-measured §11; revision 1 declared the milestone on 2026-10-25,
-with all measurements taken on `LibjitDispatcher` at `ea4fb30` and `master` at
-`8fb955d`). Revision 3 closes `AAS1` (`ES-7` consumer coverage), `AAS8`
-(`BackendSession` in the product), `AAS9` (`BACKEND_WORK_ORDER.md`) and `AAS11`
-(the planned scaffolds documented, kept in the build), and flips G1 and G3 to
-`✅`.
+Status: **milestone met 2026-10-29** (revision 4 — 2026-10-30 — re-measures the
+suite at `5c3d194` and records the `G3` re-check performed by the combined
+readiness audit, [`READINESS_AUDIT.md`](READINESS_AUDIT.md); revision 3 closed
+`AAS1`, `AAS8`, `AAS9` and `AAS11` and flipped G1 and G3 to `✅`; revision 1
+declared the milestone on 2026-10-25, with all measurements taken on
+`LibjitDispatcher` at `ea4fb30` and `master` at `8fb955d`).
 Audience: anyone planning work that changes an embedder-facing surface or the
 backend seam, anyone evaluating the `LibjitDispatcher` → `master` merge, and
 anyone who needs a defensible answer to "is it production ready yet?".
@@ -328,15 +327,17 @@ on every suite run. This is the check G3 partly rests on.
 
 ### 6.6 The documentation inventory
 
-**19 notes in `docs/`** today: the 14 that existed when this study was first
+**21 notes in `docs/`** today: the 14 that existed when this study was first
 measured, plus the feasibility/embedding notes written since
 ([`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md),
 [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md),
 [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md),
-[`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md)) and
-[`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md); `UNMODELLED_VALUE_TYPES.md` is
-the renamed `NULL_JIT_VALUE_DIAGNOSIS.md`. There are also **34 notes in
-`docs/proposals/`**. The
+[`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md)),
+[`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md), the header-comment policy
+[`DOCUMENTATION.md`](DOCUMENTATION.md), and its consumer
+[`READINESS_AUDIT.md`](READINESS_AUDIT.md);
+`UNMODELLED_VALUE_TYPES.md` is the renamed `NULL_JIT_VALUE_DIAGNOSIS.md`. There
+are also **34 notes in `docs/proposals/`**. The
 `README.md` proposal table's completeness estimate is **22 of 34 rows at 100%**,
 with the sub-100 rows concentrated exactly where this study expects them: threads
 (80%, 85%, 55%), stack switching (85%), numeric/FP16 (70%), the upstream-blocked
@@ -437,6 +438,26 @@ and a loadable plugin), and the two empty scaffolds that pretended to be
 backends are documented placeholders rather than a silent trap.
 `AAS8`, `AAS9`, `AAS10` and `AAS11` are all closed.
 
+**Re-checked 2026-10-30 at `5c3d194`** by the combined readiness audit
+([`READINESS_AUDIT.md`](READINESS_AUDIT.md)), which re-ran the five `G3`
+conditions against the tree and added the evidence this table lacked:
+
+| Condition | Re-measured |
+|---|---|
+| The seam is a product type | `ModuleInstantiator` + `BackendSession`, both product and tier-classified; three implementations, one of them loaded through `wasm_backend_query` |
+| The obligations are written down | `BACKEND_WORK_ORDER.md` §2–§8, cross-checked against `[tiers]`, `[backendabi]` and `[plugin]` |
+| Something other than the executing backend exercises it | `"null"` (in-tree) and `"example"` (plugin) do; `Runtime::create` resolves both by name |
+| The core names no backend | the §6.5 scan returns **0** hits; `[layering]` enforces it |
+| No product code outside the backend's directory | work order §7; `Project.pro` needs one `SUBDIRS` line and one `depends` line |
+
+Two findings were added, neither Class E and neither blocking: `RA1` (the
+*harness* selector still knows only `libjit`, so a second backend reaches the
+generic fixtures through `Runtime::create` or a one-line test change) and `RA2`
+(no second **executing** generator has ever been built — the plugin reuses
+`NullInstantiator` — so the seam is proven structurally, not at opcode scale).
+The audit's recommendation is to start with SLJIT; `RA-1` is the milestone that
+closes `RA1`/`RA2`.
+
 ### 7.4 G4 — `LibjitDispatcher` can be merged into `master`: `✅`
 
 | Check | Result |
@@ -461,7 +482,7 @@ travels with the merge — the milestone declaration and its study become part o
 |---|---|---|
 | G1 — production-grade LibJIT backend | `✅` | Engine: there. Embedding surface: AAS1–AAS5 closed — umbrella, tiers, visibility, soname and install (`ES-3…ES-5`) plus consumer coverage for `i32`, `f64`, multi-result and `v128` (`ES-7`). |
 | G2 — additive-only evolution | `✅` | No in-scope Class E gap. AAS6 and AAS7 closed; the one out-of-scope boundary stays recorded (§5.3). |
-| G3 — non-LibJIT work can begin | `✅` | AAS8 (façade promoted), AAS9 (work order written), AAS10 (three implementations), AAS11 (planned scaffolds documented). |
+| G3 — non-LibJIT work can begin | `✅` | AAS8 (façade promoted), AAS9 (work order written), AAS10 (three implementations), AAS11 (planned scaffolds documented); re-checked 2026-10-30 in [`READINESS_AUDIT.md`](READINESS_AUDIT.md) §4, which adds `RA1`/`RA2` and recommends SLJIT first. |
 | G4 — branch mergeable | `✅` | Fast-forward today; merge with `--ff-only`. |
 
 **Overall: the milestone is met (2026-10-29).** All four gates pass, and none of
@@ -603,6 +624,23 @@ claims. The strict validator sweep and the ASan configuration are now documented
 required runs (§10 `AAS-4`), but neither was re-run for this batch, so the table
 above does not present them as green.
 
+Re-measured on 2026-10-30 at `5c3d194` (branch `LibjitDispatcher`, clean tree),
+from `build/Desktop-Debug`, for the combined readiness audit
+([`READINESS_AUDIT.md`](READINESS_AUDIT.md)):
+
+| Command | Result | Reading |
+|---|---|---|
+| `env MAKE=/usr/bin/make /usr/bin/make -j16` | **exit 0** | The tree builds at this commit. |
+| `./Test/WasmJit` | **11,460 assertions / 484 test cases, all passed** | +6 assertions and 3 cases over the 2026-10-29 row: the header-documentation check (`[headerdoc]`, 6 assertions / 3 cases) added with [`DOCUMENTATION.md`](DOCUMENTATION.md). |
+| `./WasmJit '[docs]'` | **720 assertions / 1 test case, all passed** | Unchanged: 34 proposal notes. |
+| `./WasmJit '[headerdoc]'` | **6 assertions / 3 test cases, all passed** | The header-comment policy is a gate now, not a convention. |
+| `./WasmJit '[multiagent]'` | **51 assertions / 6 test cases, all passed** | The demoted class-E family (§5.3) stays green. |
+| `./Test/abi-check.sh build/Desktop-Debug` | **OK** — `libWasmBase` 0 removed / 0 added, `libLibJit` 0 removed / 0 added | The additive-only rule (`G2`) still holds, now over a 1,804-symbol baseline. |
+| `./Test/install-check.sh build/Desktop-Debug` | **OK** — `i32`, `f64`, `i32+i32`, `v128`, `i32+v128` | `ES-5`/`ES-7` still hold after the documentation sweep. |
+| `doxygen Doxyfile` | **0 warnings**; the strict pass reports **0 undocumented declarations** | The `DOCUMENTATION.md` milestone: every one of the 69 headers is documented. |
+| `WASM_SPEC_VALIDATE=1`, ASan/TSan (not run today) | documented required runs | Unchanged from the note above; the readiness audit states the same and does not present them as green. |
+
+
 ## 12. References
 
 - [`README.md`](../README.md) — the layout, the backend table, the status rows
@@ -622,9 +660,13 @@ above does not present them as green.
   per-backend threading findings behind G3.
 - [`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md) — the definitions of the
   entry-gate readiness audit and the pre-feasibility (scoping) and full
-  feasibility studies for source languages compiled to WebAssembly. Definitions
-  only: none of them has been run, no language is assessed, and no gate here
-  waits on `LF-0a`/`LF-1`/`LF-2`.
+  feasibility studies for source languages compiled to WebAssembly. The audit
+  (`LF-0a`) has since been run and its report is
+  [`READINESS_AUDIT.md`](READINESS_AUDIT.md); the two language studies have not
+  been started, no language is assessed, and no gate here waits on `LF-1`/`LF-2`.
+- [`READINESS_AUDIT.md`](READINESS_AUDIT.md) — the combined audit: `G3`
+  re-checked (§4), the `RG1`–`RG6` readiness report (§5), the pinned snapshot,
+  the moving-targets and not-audited lists (§6), and the runs behind them (§9).
 - [`SAFETY.md`](SAFETY.md) §2.4/§3.1 — traps vs `abort`, and the deliberate
   limitations AAS-1 must publish.
 - [`THREADSAFETY.md`](THREADSAFETY.md) §8–§10 — the supported embedding model.
