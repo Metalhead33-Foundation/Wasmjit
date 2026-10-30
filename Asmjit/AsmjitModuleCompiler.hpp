@@ -22,8 +22,8 @@ namespace AsmJitBackend {
  *
  * The initial subset is deliberately narrow: i32/i64 parameters/results/locals,
  * i32/i64 constants and local access; i32/i64 arithmetic, comparisons, bitwise operations,
- * shifts and rotations; i32 bit counts, sign extension, `select`, and i32 globals,
- * void and single-i32-result structured control flow, `br_table`, unreachable traps, i32/i64 typed direct/indirect calls,
+ * shifts and rotations; i32 bit counts, sign extension, `select`, and i32/i64 globals,
+ * void and single-i32/i64-result structured control flow, `br_table`, unreachable traps, i32/i64 typed direct/indirect calls,
  * i32-only tail-call opcodes (currently call+return), checked memory32 i32/i64 loads/stores,
  * memory size/growth, and checked memory32 `memory.copy`/`memory.fill`/`memory.init` plus `data.drop`, and `table.init`/`elem.drop`/`table.size`/`table.copy`. Unsupported instructions
  * and block signatures fail compilation rather than being ignored. The compiler borrows Context, which must outlive every
