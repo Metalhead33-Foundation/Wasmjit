@@ -765,6 +765,7 @@ protected:
 			auto zero = compiler.new_gp32("unreachableResult");
 			checkError(compiler.xor_(zero, zero), "AsmJit unreachable result initialisation failed");
 			checkError(compiler.ret(zero), "AsmJit unreachable result return emission failed");
+			values.push_back(zero);
 		}
 	}
 
