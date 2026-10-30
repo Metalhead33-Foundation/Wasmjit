@@ -26,13 +26,10 @@ TEST_CASE("AsmJit ModuleInstantiator compiles straight-line i32 functions", "[as
 	REQUIRE(mul.has_value());
 	REQUIRE(local.has_value());
 
-	using Binary = std::int32_t (*)(WASM::VMContext*, std::int32_t, std::int32_t);
-	CHECK(reinterpret_cast<Binary>(add->fnPtr)(instance->context(), 19, 23) == 42);
-	CHECK(reinterpret_cast<Binary>(sub->fnPtr)(instance->context(), 50, 8) == 42);
-	CHECK(reinterpret_cast<Binary>(mul->fnPtr)(instance->context(), 6, 7) == 42);
-
-	using Unary = std::int32_t (*)(WASM::VMContext*, std::int32_t);
-	CHECK(reinterpret_cast<Unary>(local->fnPtr)(instance->context(), 14) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(*add, 19, 23) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(*sub, 50, 8) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(*mul, 6, 7) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(*local, 14) == 42);
 }
 
 #include <catch2/catch_all.hpp>
