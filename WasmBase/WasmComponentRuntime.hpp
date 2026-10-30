@@ -159,25 +159,10 @@ private:
 		std::unordered_map<std::string, WASM::Callable> inlineFunctions;
 		std::unordered_map<std::string, WASM::LinearMemory*> inlineMemories; //!< Field `inlineMemories` of CoreInstanceHandle.
 
-/**
- * \brief Performs the exportedFunction operation.
- * \param name Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 		std::optional<WASM::Callable> exportedFunction(
 				std::string_view name) const; //!< Field `const` of CoreInstanceHandle.
-/**
- * \brief Performs the exportedMemory operation.
- * \param name Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 		std::optional<WASM::LinearMemory*> exportedMemory(
 				std::string_view name) const; //!< Field `const` of CoreInstanceHandle.
-/**
- * \brief Performs the registerExports operation.
- * \param registrar Input value or output destination for this operation.
- * \param moduleName Input value or output destination for this operation.
- */
 		void registerExports(WASM::ImportRegistrar& registrar,
 				std::string_view moduleName) const; //!< Field `const` of CoreInstanceHandle.
 	};
@@ -215,128 +200,34 @@ private:
 	uint32_t currentBorrowScope_ = 0;
 	std::unordered_map<std::string, size_t> exportedFuncs_; //!< Field `exportedFuncs_` of WASMJIT_API.
 
-/**
- * \brief Performs the build operation.
- */
 	void build();
-/**
- * \brief Performs the processCoreInstance operation.
- * \param instance Input value or output destination for this operation.
- */
 	void processCoreInstance(const WASM::CoreInstance& instance);
-/**
- * \brief Performs the processComponent operation.
- * \param index Input value or output destination for this operation.
- */
 	void processComponent(uint32_t index);
-/**
- * \brief Performs the processComponentInstance operation.
- * \param instance Input value or output destination for this operation.
- */
 	void processComponentInstance(const WASM::ComponentInstance& instance);
-/**
- * \brief Performs the processAlias operation.
- * \param alias Input value or output destination for this operation.
- */
 	void processAlias(const WASM::Alias& alias);
-/**
- * \brief Performs the processCanon operation.
- * \param canon Input value or output destination for this operation.
- */
 	void processCanon(const WASM::Canon& canon);
-/**
- * \brief Performs the processResourceCanon operation.
- * \param canon Input value or output destination for this operation.
- */
 	void processResourceCanon(const WASM::Canon& canon);
-/**
- * \brief Performs the processStreamCanon operation.
- * \param canon Input value or output destination for this operation.
- */
 	void processStreamCanon(const WASM::Canon& canon);
-/**
- * \brief Performs the processAsyncCanon operation.
- * \param canon Input value or output destination for this operation.
- */
 	void processAsyncCanon(const WASM::Canon& canon);
-/**
- * \brief Performs the processErrorContextCanon operation.
- * \param canon Input value or output destination for this operation.
- */
 	void processErrorContextCanon(const WASM::Canon& canon);
-/**
- * \brief Performs the processThreadCanon operation.
- * \param canon Input value or output destination for this operation.
- */
 	void processThreadCanon(const WASM::Canon& canon);
-/**
- * \brief Performs the processImport operation.
- * \param importDecl Input value or output destination for this operation.
- */
 	void processImport(const WASM::ImportDecl& importDecl);
-/**
- * \brief Performs the processExport operation.
- * \param exportDecl Input value or output destination for this operation.
- */
 	void processExport(const WASM::ComponentExport& exportDecl);
-/**
- * \brief Performs the processStart operation.
- * \param start Input value or output destination for this operation.
- */
 	void processStart(const WASM::Start& start);
-/**
- * \brief Performs the resolveValueType operation.
- * \param type Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 	WASM::ComponentValueType resolveValueType(
 			const WASM::ComponentValueType& type) const; //!< Field `const` of WASMJIT_API.
-/**
- * \brief Performs the addHandle operation.
- * \return The value or status produced by this operation.
- */
 	uint32_t addHandle();
-/**
- * \brief Performs the freeHandle operation.
- * \param handle Input value or output destination for this operation.
- */
 	void freeHandle(uint32_t handle);
 
-/**
- * \brief Performs the memoryFor operation.
- * \param options Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 	AbiMemory memoryFor(const WASM::CanonicalAbiOptions& options) const;
-/**
- * \brief Performs the lowerValues operation.
- * \param function Input value or output destination for this operation.
- * \param values Input value or output destination for this operation.
- * \param memory Input value or output destination for this operation.
- * \param flat Input value or output destination for this operation.
- */
 	void lowerValues(const ComponentFunction& function,
 			std::span<const ComponentValue> values,
 			const AbiMemory& memory,
 			std::vector<WASM::Value>& flat);
-/**
- * \brief Performs the liftValues operation.
- * \param function Input value or output destination for this operation.
- * \param flat Input value or output destination for this operation.
- * \param memory Input value or output destination for this operation.
- * \param values Input value or output destination for this operation.
- */
 	void liftValues(const ComponentFunction& function,
 			std::span<const WASM::Value> flat,
 			const AbiMemory& memory,
 			std::span<ComponentValue> values);
-/**
- * \brief Performs the invokeCore operation.
- * \param callable Input value or output destination for this operation.
- * \param function Input value or output destination for this operation.
- * \param args Input value or output destination for this operation.
- * \param results Input value or output destination for this operation.
- */
 	void invokeCore(const WASM::Callable& callable,
 			const ComponentFunction& function,
 			std::span<const WASM::Value> args,

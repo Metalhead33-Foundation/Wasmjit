@@ -410,95 +410,23 @@ public:
 	PrimitiveValueType primitive() const;
 
 	std::span<const ComponentField> fields() const;
-/**
- * \brief Performs the cases operation.
- * \return The value or status produced by this operation.
- */
 	std::span<const ComponentCase> cases() const;
-/**
- * \brief Performs the tuple operation.
- * \return The value or status produced by this operation.
- */
 	std::span<const ComponentValueType> tuple() const;
-/**
- * \brief Performs the labels operation.
- * \return The value or status produced by this operation.
- */
 	std::span<const StringId> labels() const;
-/**
- * \brief Performs the element operation.
- * \return The value or status produced by this operation.
- */
 	const ComponentValueType& element() const;
-/**
- * \brief Performs the fixedLength operation.
- * \return The value or status produced by this operation.
- */
 	uint32_t fixedLength() const;
-/**
- * \brief Performs the resultOk operation.
- * \return The value or status produced by this operation.
- */
 	const ComponentValueType& resultOk() const;
-/**
- * \brief Performs the resultError operation.
- * \return The value or status produced by this operation.
- */
 	const ComponentValueType& resultError() const;
-/**
- * \brief Performs the hasResultOk operation.
- * \return The value or status produced by this operation.
- */
 	bool hasResultOk() const;
-/**
- * \brief Performs the hasResultError operation.
- * \return The value or status produced by this operation.
- */
 	bool hasResultError() const;
-/**
- * \brief Performs the mapKey operation.
- * \return The value or status produced by this operation.
- */
 	const ComponentValueType& mapKey() const;
-/**
- * \brief Performs the mapValue operation.
- * \return The value or status produced by this operation.
- */
 	const ComponentValueType& mapValue() const;
-/**
- * \brief Performs the streamElement operation.
- * \return The value or status produced by this operation.
- */
 	const ComponentValueType& streamElement() const;
-/**
- * \brief Performs the hasStreamElement operation.
- * \return The value or status produced by this operation.
- */
 	bool hasStreamElement() const;
-/**
- * \brief Performs the params operation.
- * \return The value or status produced by this operation.
- */
 	std::span<const ComponentFuncParam> params() const;
-/**
- * \brief Performs the results operation.
- * \return The value or status produced by this operation.
- */
 	std::span<const ComponentValueType> results() const;
-/**
- * \brief Performs the declarations operation.
- * \return The value or status produced by this operation.
- */
 	std::span<const ComponentDeclRecord> declarations() const;
-/**
- * \brief Performs the resource operation.
- * \return The value or status produced by this operation.
- */
 	const ComponentResourcePayload& resource() const;
-/**
- * \brief Performs the typeRef operation.
- * \return The value or status produced by this operation.
- */
 	uint32_t typeRef() const;
 
 private:

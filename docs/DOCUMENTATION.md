@@ -23,7 +23,7 @@ markup has to look like. It contains no engine behaviour.
 | Section | Question it answers |
 |---|---|
 | §2 | What is the rule? |
-| §3 | Which comment forms are documentation, and which are not? |
+| §3 | Which comment forms are documentation, and which are not? (function and template blocks: §3.1) |
 | §4 | What does every header start with? |
 | §5 | Which prose breaks a Doxygen run, and how is it written instead? |
 | §6 | How do I check? |
@@ -58,7 +58,7 @@ ecosystem reads it) uses these forms:
 | `/*! … */` | a multi-line doc block before a declaration |
 | `/*!< … */` | a multi-line doc block after a declaration |
 | `\file`, `\brief` | the file header block (§4) |
-| `\brief`, `\param`, `\return`, `\note`, `\sa`, `\par` | inside a block |
+| `\brief`, `\param`, `\return`, `\tparam`, `\note`, `\sa`, `\throws`, `\par` | inside a block |
 | `\par Title` | a heading inside one declaration's block (a former ASCII banner) |
 
 Three kinds of comment are **not** documentation. Doxygen never renders them,
@@ -73,6 +73,58 @@ text to whatever was documented last:
 
 This is exactly the exemption `Test/HeaderDocTests.cpp` implements; anything
 else in a header without a marker fails the `[headerdoc]` test.
+
+### 3.1 Function and template documentation
+
+**Function documentation makes use of `\brief`, `\param`, `\return` and
+`\tparam`.** The same rule applies to *anything* templated — a class template,
+an alias template, a variable template, a template member — every template
+parameter gets a `\tparam`.
+
+```cpp
+/*!
+  \brief Loads an artifact and instantiates it into `store`.
+  \tparam Artifact the parsed artifact type (`Module` or `Component`)
+  \param path the file to load
+  \param store the store the instance's entities are owned by
+  \return the instance, owned by the caller
+  \throws std::runtime_error when the file does not parse
+*/
+template <class Artifact>
+std::unique_ptr<ModuleInstance> instantiateFrom(const std::filesystem::path& path,
+		Store& store);
+```
+
+The commands have rules, and each of them is a warning Doxygen emits rather
+than a matter of taste:
+
+| Command | Rule |
+|---|---|
+| `\brief` | one sentence, on the first line of the block; it is what every index shows |
+| `\param name` | **exactly one per declared parameter, spelled exactly as declared**, in declaration order. Never document a parameter that does not exist, and never write two `\param` sections for one name |
+| `\return` | only when the function returns a value. Never on `void`, a constructor, a destructor or an overloaded operator that returns nothing |
+| `\tparam name` | exactly one per template parameter, spelled exactly as declared — for functions, classes, aliases and variable templates alike |
+| `\throws` | the exception types the function can propagate; needs whitespace after the command (`\throws std::runtime_error …`) |
+
+Three failure modes were found in the tree when this rule was written down, and
+all three are now fixed; they are listed here because they are what a
+generated or copy-pasted block tends to do:
+
+- `\return The result.` on a `void` handler, a constructor or a destructor
+  (§"found documented return type … that does not return anything");
+- `\param` names guessed from the prose (`\param async` for a parameter that is
+  commented out of the signature, `\param true`, `\param store` twice);
+- a doc block inserted **inside** a macro body or a multi-line expression, which
+  documents a token-paste helper instead of the declaration it was meant for.
+
+`WARN_NO_PARAMDOC = YES` in the [`Doxyfile`](../Doxyfile) is what enforces the
+`\param`/`\tparam` half: a documented function that omits one of its parameters
+makes `doxygen Doxyfile` warn, and §6 requires it to be silent. `\return` on a
+void function and a `\param` that names no parameter are reported by
+`WARN_IF_DOC_ERROR`, which is on for the same reason.
+
+A function with no doc comment at all is a *different* gap: it is not a
+renderer error, and the count is tracked in §8.
 
 ## 4. Every header starts with a file block
 
@@ -158,13 +210,20 @@ other artefact (`AGENTS.md`).
 
 ## 8. What is deliberately not done
 
-- **No `\param` on every parameter, yet.** Many declarations now carry a prose
-  block that describes what the parameters mean in sentences; adding
-  `\param name …` mechanically ("the name") would produce a second, worse
-  description. The rule is: when a function has a doc block and a parameter
-  whose role is not obvious from its name, use `\param`; when the prose already
-  covers it, do not restate it. `WARN_NO_PARAMDOC` is therefore off in the
-  `Doxyfile`, on purpose.
+- **Not every declaration is documented *yet*.** The rule above is about the
+  shape and the completeness of a block that exists; a declaration with no block
+  at all remains a gap. Measured on 2026-10-30 with `EXTRACT_ALL=NO` +
+  `WARN_IF_UNDOCUMENTED=YES`: **896 declarations** (458 functions, 365 fields and
+  constants, 54 macros, 7 enums, 4 typedefs, 7 compounds). That is down from
+  **4,591** before the sweep, and it is a list to work through, not a decision to
+  stop: a new or edited declaration is expected to arrive documented, and the
+  count must not grow.
+- **A doc block must say something.** A block of the form
+  "`\brief Performs the <name> operation. \param x Input value or output
+  destination for this operation.`" is *worse than no block*: it renders, it is
+  counted as documented, and it states nothing (or, on a `void` handler, states
+  something false). Such blocks were removed from the tree in the same pass that
+  fixed the renderer warnings; do not reintroduce them.
 - **`extern/` is untouched.** It is a submodule; reformatting it would make the
   next submodule update a merge.
 - **`.cpp` files are untouched.** The rule is about the surface a reader is
@@ -173,8 +232,9 @@ other artefact (`AGENTS.md`).
 
 ## 9. References
 
-- [`Doxyfile`](../Doxyfile) — the renderer's configuration; `QT_AUTOBRIEF` and
-  the `build/doxygen` output directory are asserted by the `[headerdoc]` test.
+- [`Doxyfile`](../Doxyfile) — the renderer's configuration; `QT_AUTOBRIEF`,
+  `WARN_NO_PARAMDOC` and the `build/doxygen` output directory are asserted by the
+  `[headerdoc]` test.
 - [`Test/HeaderDocTests.cpp`](../Test/HeaderDocTests.cpp) — the check.
 - [`LAYERING.md`](LAYERING.md) §6 — the sibling rule: enforce the invariant,
   do not rely on review.

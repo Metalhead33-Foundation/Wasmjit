@@ -95,10 +95,6 @@ private:
 	//! Push a reference whose ownership the stack takes over (no clone).
 	void pushOwnedValue(jit_value_t v);
 	//! Release the operand stack's ownership of a popped reference.
-/**
- * \brief Emits LibJIT IR for DropValue.
- * \param v Instruction operand, backend value, or output destination.
- */
 	void emitDropValue(jit_value_t v);
 	//! Release every reference-typed non-parameter local (function exit).
 /**
@@ -111,20 +107,11 @@ private:
 	//! code or when the model stack is short (dead tail). With `consume` false
 	//! the return operands are left on the model stack (for a conditional
 	//! branch to the function's implicit block, whose fallthrough needs them).
-/**
- * \brief Emits LibJIT IR for FunctionReturn.
- * \param consume Instruction operand, backend value, or output destination.
- */
 	void emitFunctionReturn(bool consume = true);
 	//! Emits a native tail call (LibJIT `JIT_CALL_TAIL`) when the target is this
 	//! very function — the only case this LibJIT build lowers reliably (see
 	//! docs/TAILCALLS.md §6). Returns false when the caller must fall back to
 	//! `call` + `return`.
-/**
- * \brief Emits LibJIT IR for DirectTailCall.
- * \param funcIdx Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	bool emitDirectTailCall(WASM::FuncIdx funcIdx);
 	//! True when `calleeSig` has exactly this function's parameter and result
 	//! types. The trampoline no longer needs it (TC-3 dispatches through the
@@ -135,22 +122,11 @@ private:
 	//! trampoline state and returns a dummy value; the driver re-dispatches
 	//! through the target type's thunk (docs/TAILCALLS.md TC-2/TC-3). Callers
 	//! must have verified WASM::tailCallSlotsSupported() and popped `args`.
-/**
- * \brief Emits LibJIT IR for TailCallViaPending.
- * \param targetCallablePtr Instruction operand, backend value, or output destination.
- * \param args Instruction operand, backend value, or output destination.
- */
 	void emitTailCallViaPending(jit_value_t targetCallablePtr, const std::vector<jit_value_t>& args);
 	//! Semantic fallback for a tail call the trampoline cannot take: a
 	//! `call` + `return` with the callee's results becoming this function's.
 	//! Used for a native import on the direct path and for a callable with no
 	//! dispatch thunk on the indirect/ref paths.
-/**
- * \brief Emits LibJIT IR for TailCallFallback.
- * \param typeIdx Instruction operand, backend value, or output destination.
- * \param callablePtr Instruction operand, backend value, or output destination.
- * \param args Instruction operand, backend value, or output destination.
- */
 	void emitTailCallFallback(WASM::TypeIdx typeIdx, jit_value_t callablePtr,
 							  const std::vector<jit_value_t>& args);
 	//! Emits `return` of a zero value of this function's result type.
@@ -160,10 +136,6 @@ private:
 	void emitDummyReturn();
 	//! Emits the jump for a branch target; a target past the control stack is
 	//! the function's implicit block (i.e. a return).
-/**
- * \brief Emits LibJIT IR for BranchToLabel.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void emitBranchToLabel(WASM::LabelIdx arg);
 	//! Marks the rest of the current block unreachable (after an unconditional
 	//! transfer). In unreachable code the Wasm operand stack is polymorphic, so
@@ -215,71 +187,25 @@ private:
 	//! loads take, trap included — so the helpers themselves never trap and need
 	//! no context (docs/SIMD_LIBJIT.md §6.3). Operand order is wasm's: for a lane
 	//! or store form the vector is on top, the address below it.
-/**
- * \brief Emits LibJIT IR for SimdLoad.
- * \param ma Instruction operand, backend value, or output destination.
- * \param width Instruction operand, backend value, or output destination.
- * \param helper Instruction operand, backend value, or output destination.
- */
 	void emitSimdLoad(const WASM::MemArg& ma, jit_nint width, void* helper);
 	//! `v128.load*_lane`: load `width` bytes into lane `lane` of the vector on top.
-/**
- * \brief Emits LibJIT IR for SimdLoadLane.
- * \param ma Instruction operand, backend value, or output destination.
- * \param width Instruction operand, backend value, or output destination.
- * \param lane Instruction operand, backend value, or output destination.
- * \param helper Instruction operand, backend value, or output destination.
- */
 	void emitSimdLoadLane(const WASM::MemArg& ma, jit_nint width, uint8_t lane, void* helper);
 	//! `v128.store*`: store the top vector's low `width` bytes to memory.
-/**
- * \brief Emits LibJIT IR for SimdStore.
- * \param ma Instruction operand, backend value, or output destination.
- * \param width Instruction operand, backend value, or output destination.
- * \param helper Instruction operand, backend value, or output destination.
- */
 	void emitSimdStore(const WASM::MemArg& ma, jit_nint width, void* helper);
 	//! `v128.store*_lane`: store one lane of the top vector to memory.
-/**
- * \brief Emits LibJIT IR for SimdStoreLane.
- * \param ma Instruction operand, backend value, or output destination.
- * \param width Instruction operand, backend value, or output destination.
- * \param lane Instruction operand, backend value, or output destination.
- * \param helper Instruction operand, backend value, or output destination.
- */
 	void emitSimdStoreLane(const WASM::MemArg& ma, jit_nint width, uint8_t lane, void* helper);
 	//! The per-lane shapes: two vectors in and one out (used for the arithmetic
 	//! *and* for the mask-producing comparisons — the difference is entirely in
 	//! the helper), one vector in and one out, and the three-operand bitselect.
-/**
- * \brief Emits LibJIT IR for SimdBinaryHelper.
- * \param helper Instruction operand, backend value, or output destination.
- */
 	void emitSimdBinaryHelper(void* helper);
 	//! Unary SIMD helper: one vector in, one vector out.
-/**
- * \brief Emits LibJIT IR for SimdUnaryHelper.
- * \param helper Instruction operand, backend value, or output destination.
- */
 	void emitSimdUnaryHelper(void* helper);
 	//! Ternary SIMD helper (e.g. `v128.bitselect`): three vectors in, one out.
-/**
- * \brief Emits LibJIT IR for SimdTernaryHelper.
- * \param helper Instruction operand, backend value, or output destination.
- */
 	void emitSimdTernaryHelper(void* helper);
 	//! A shift takes the vector plus a scalar count; a reduction yields a wasm i32
 	//! rather than a vector, so it has no out slot at all.
-/**
- * \brief Emits LibJIT IR for SimdShiftHelper.
- * \param helper Instruction operand, backend value, or output destination.
- */
 	void emitSimdShiftHelper(void* helper);
 	//! SIMD reduction to i32 (no out-slot): pop a vector, push the helper's i32.
-/**
- * \brief Emits LibJIT IR for SimdReduceI32Helper.
- * \param helper Instruction operand, backend value, or output destination.
- */
 	void emitSimdReduceI32Helper(void* helper);
 	//! Signature cache: the SIMD ops share a handful of shapes, so memoise them
 	//! instead of creating (and leaking) one signature per instruction (§6.4).
@@ -293,36 +219,15 @@ private:
 	//! Emits the reference-counting write barrier (`wasm_ref_store`): retain
 	//! `newRef`, store it at `slotAddr`, release the value it overwrote. Used
 	//! for every reference-typed slot store (docs/proposals/GC.md D15/RC-1).
-/**
- * \brief Emits LibJIT IR for RefStore.
- * \param slotAddr Instruction operand, backend value, or output destination.
- * \param newRef Instruction operand, backend value, or output destination.
- */
 	void emitRefStore(jit_value_t slotAddr, jit_value_t newRef);
 	//! `wasm_ref_clone` / `wasm_ref_drop` (retain / release), for slot stores
 	//! that address a LibJIT local rather than memory (RC-5).
-/**
- * \brief Emits LibJIT IR for RefClone.
- * \param ref Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	jit_value_t emitRefClone(jit_value_t ref);
 	//! Call `wasm_ref_drop` on `ref` (release one ownership count).
-/**
- * \brief Emits LibJIT IR for RefDrop.
- * \param ref Instruction operand, backend value, or output destination.
- */
 	void emitRefDrop(jit_value_t ref);
 	//! A typed null reference constant of LibJIT reference type `refType`.
 	jit_value_t typedNullRef(jit_type_t refType);
 	//! Emit `ref.test` / nullability check of `ref` against `heapType`.
-/**
- * \brief Emits LibJIT IR for RefTypeTest.
- * \param ref Instruction operand, backend value, or output destination.
- * \param heapType Instruction operand, backend value, or output destination.
- * \param nullable Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	jit_value_t emitRefTypeTest(jit_value_t ref, const WASM::HeapType& heapType, bool nullable);
 	//! LibJIT element type of table `arg`.
 	jit_type_t tableElementJitType(WASM::TableIdx arg) const;
@@ -380,10 +285,6 @@ private:
 	//! Frame slots a branch to `target` writes before jumping.
 	const std::vector<jit_value_t>& branchSlotsForTarget(const ControlBlock& target) const;
 	//! Store branch values into `target`'s slots and jump to its label.
-/**
- * \brief Emits LibJIT IR for BranchToTarget.
- * \param target Instruction operand, backend value, or output destination.
- */
 	void emitBranchToTarget(ControlBlock& target);
 	//! Module-local type index of function `funcIdx` (imports first).
 	WASM::TypeIdx functionTypeIndexForFunc(WASM::FuncIdx funcIdx) const;
@@ -396,36 +297,16 @@ private:
 	WASM::FuncType continuationSignature(WASM::TypeIdx contTypeIdx) const;
 	//! Pointer to the callable for function index `funcIdx` (import or local).
 	jit_value_t callablePointerForFuncIndex(WASM::FuncIdx funcIdx);
-/**
- * \brief Dispatches the CallThroughCallable WebAssembly instruction to this LibJIT implementation.
- * \param callablePtr Instruction operand, backend value, or output destination.
- * \param typeIdx Instruction operand, backend value, or output destination.
- */
 	void dispatchCallThroughCallable(jit_value_t callablePtr, WASM::TypeIdx typeIdx); //!< Lower this opcode into the backend IR.
 	//! Emit a trap of `kind` (docs/SAFETY.md §2.4).
-/**
- * \brief Emits LibJIT IR for Trap.
- * \param kind Instruction operand, backend value, or output destination.
- */
 	void emitTrap(WASM::TrapKind kind);
 	//! Emit a trap of `kind`; `detail` overrides the log message when the kind's
 	//! spec name is too coarse for the situation.
-/**
- * \brief Emits LibJIT IR for Trap.
- * \param kind Instruction operand, backend value, or output destination.
- * \param detail Instruction operand, backend value, or output destination.
- */
 	void emitTrap(WASM::TrapKind kind, const char* detail);
 	//! Emit a trap of `kind` when `pointer` is null (a null reference reached an
 	//! instruction that dereferences it). The kind names *what* was dereferenced:
 	//! NullReference, NullFunctionReference, NullStructureReference,
 	//! NullArrayReference.
-/**
- * \brief Emits LibJIT IR for TrapIfNull.
- * \param kind Instruction operand, backend value, or output destination.
- * \param pointer Instruction operand, backend value, or output destination.
- * \param detail Instruction operand, backend value, or output destination.
- */
 	void emitTrapIfNull(WASM::TrapKind kind, jit_value_t pointer, const char* detail = nullptr);
 	//! Result storage types implied by block type `bt`.
 	std::vector<WASM::StorageType> storageTypesForBlockType(const WASM::BlockType& bt) const;
@@ -447,11 +328,6 @@ private:
 	jit_value_t tablePointerForIndex(WASM::TableIdx tableidx);
 	//! Emits a runtime check that `callablePtr`'s canonical type id matches the
 	//! module-local type index `typeIdx` (id fast path, registry fallback).
-/**
- * \brief Emits LibJIT IR for CallableTypeCheck.
- * \param callablePtr Instruction operand, backend value, or output destination.
- * \param typeIdx Instruction operand, backend value, or output destination.
- */
 	void emitCallableTypeCheck(jit_value_t callablePtr, WASM::TypeIdx typeIdx);
 	//! A lowering the backend cannot perform (in practice: an unmodelled value
 	//! type, docs/UNMODELLED_VALUE_TYPES.md). `notImplemented()` throws, which
@@ -467,122 +343,37 @@ private:
 	//! `__atomic_*` at seq_cst and trap on a misaligned effective address; these
 	//! emit the call and adapt the value types. `effectiveMemoryAddress` has
 	//! already bounds-checked the address (and trapped on out-of-bounds).
-/**
- * \brief Emits LibJIT IR for AtomicLoad.
- * \param ma Instruction operand, backend value, or output destination.
- * \param width Instruction operand, backend value, or output destination.
- * \param resultType Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	jit_value_t emitAtomicLoad(const WASM::MemArg& ma, uint32_t width, jit_type_t resultType);
 	//! Atomic store of the top stack value through `ma` (`width` bytes).
-/**
- * \brief Emits LibJIT IR for AtomicStore.
- * \param ma Instruction operand, backend value, or output destination.
- * \param width Instruction operand, backend value, or output destination.
- */
 	void        emitAtomicStore(const WASM::MemArg& ma, uint32_t width);
 	//! Atomic RMW of the top stack value through `ma`; pushes the previous value.
-/**
- * \brief Emits LibJIT IR for AtomicRmw.
- * \param ma Instruction operand, backend value, or output destination.
- * \param width Instruction operand, backend value, or output destination.
- * \param op Instruction operand, backend value, or output destination.
- * \param resultType Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	jit_value_t emitAtomicRmw(const WASM::MemArg& ma, uint32_t width, uint32_t op,
 							  jit_type_t resultType);
 	//! Atomic compare-exchange through `ma`; pops expected/replacement, pushes old.
-/**
- * \brief Emits LibJIT IR for AtomicCmpxchg.
- * \param ma Instruction operand, backend value, or output destination.
- * \param width Instruction operand, backend value, or output destination.
- * \param resultType Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	jit_value_t emitAtomicCmpxchg(const WASM::MemArg& ma, uint32_t width,
 							  jit_type_t resultType);
 	//! Atomic load from a precomputed `address` (shared-memory / GC paths).
-/**
- * \brief Emits LibJIT IR for AtomicLoadAddress.
- * \param address Instruction operand, backend value, or output destination.
- * \param width Instruction operand, backend value, or output destination.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param resultType Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	jit_value_t emitAtomicLoadAddress(jit_value_t address, uint32_t width,
 									  uint8_t ordering, jit_type_t resultType);
 	//! Atomic store of `value` to a precomputed `address`.
-/**
- * \brief Emits LibJIT IR for AtomicStoreRaw.
- * \param address Instruction operand, backend value, or output destination.
- * \param value Instruction operand, backend value, or output destination.
- * \param width Instruction operand, backend value, or output destination.
- * \param ordering Instruction operand, backend value, or output destination.
- */
 	void        emitAtomicStoreRaw(jit_value_t address, jit_value_t value,
 								   uint32_t width, uint8_t ordering);
 	//! Atomic RMW of `value` at a precomputed `address`; returns the previous value.
-/**
- * \brief Emits LibJIT IR for AtomicRmwRaw.
- * \param address Instruction operand, backend value, or output destination.
- * \param value Instruction operand, backend value, or output destination.
- * \param width Instruction operand, backend value, or output destination.
- * \param op Instruction operand, backend value, or output destination.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param resultType Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	jit_value_t emitAtomicRmwRaw(jit_value_t address, jit_value_t value,
 								 uint32_t width, uint32_t op, uint8_t ordering,
 								 jit_type_t resultType);
 	//! Atomic compare-exchange at a precomputed `address`.
-/**
- * \brief Emits LibJIT IR for AtomicCmpxchgRaw.
- * \param address Instruction operand, backend value, or output destination.
- * \param expected Instruction operand, backend value, or output destination.
- * \param replacement Instruction operand, backend value, or output destination.
- * \param width Instruction operand, backend value, or output destination.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param resultType Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	jit_value_t emitAtomicCmpxchgRaw(jit_value_t address, jit_value_t expected,
 									 jit_value_t replacement, uint32_t width,
 									 uint8_t ordering, jit_type_t resultType);
 	//! Atomic store of the top stack value to a precomputed `address`.
-/**
- * \brief Emits LibJIT IR for AtomicStoreAddress.
- * \param address Instruction operand, backend value, or output destination.
- * \param width Instruction operand, backend value, or output destination.
- * \param ordering Instruction operand, backend value, or output destination.
- */
 	void        emitAtomicStoreAddress(jit_value_t address, uint32_t width,
 									   uint8_t ordering);
 	//! Atomic RMW of the top stack value at a precomputed `address`.
-/**
- * \brief Emits LibJIT IR for AtomicRmwAddress.
- * \param address Instruction operand, backend value, or output destination.
- * \param width Instruction operand, backend value, or output destination.
- * \param op Instruction operand, backend value, or output destination.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param resultType Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	jit_value_t emitAtomicRmwAddress(jit_value_t address, uint32_t width,
 									 uint32_t op, uint8_t ordering,
 									 jit_type_t resultType);
 	//! Atomic compare-exchange at a precomputed `address` (pops expected/replacement).
-/**
- * \brief Emits LibJIT IR for AtomicCmpxchgAddress.
- * \param address Instruction operand, backend value, or output destination.
- * \param width Instruction operand, backend value, or output destination.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param resultType Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	jit_value_t emitAtomicCmpxchgAddress(jit_value_t address, uint32_t width,
 										 uint8_t ordering, jit_type_t resultType);
 	//! Address of the atomic slot for an element of table `tableIdx`.
@@ -605,62 +396,19 @@ private:
 	//! call site checks the pending slot (EXD1).
 	void pushBlockFrame(ControlBlock::Kind kind, const WASM::BlockType& arg,
 						std::vector<WASM::CatchClause>&& catches);
-/**
- * \brief Performs the tagPayloadType operation required by the opcode dispatcher.
- * \param tagIdx Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	WASM::FuncType tagPayloadType(WASM::TagIdx tagIdx) const;
-/**
- * \brief Performs the tagIdForClause operation required by the opcode dispatcher.
- * \param clause Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	WASM::TagId tagIdForClause(const WASM::CatchClause& clause) const;
-/**
- * \brief Performs the createException operation required by the opcode dispatcher.
- * \param tagId Instruction operand, backend value, or output destination.
- * \param payload Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	jit_value_t createException(WASM::TagId tagId, const WASM::FuncType& payload);
-/**
- * \brief Performs the storeExceptionPayload operation required by the opcode dispatcher.
- * \param exnPayload Instruction operand, backend value, or output destination.
- * \param payload Instruction operand, backend value, or output destination.
- * \param values Instruction operand, backend value, or output destination.
- */
 	void storeExceptionPayload(jit_value_t exnPayload, const WASM::FuncType& payload,
 							   const std::vector<jit_value_t>& values);
-/**
- * \brief Performs the loadExceptionPayload operation required by the opcode dispatcher.
- * \param exnPayload Instruction operand, backend value, or output destination.
- * \param payload Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	std::vector<jit_value_t> loadExceptionPayload(jit_value_t exnPayload,
 												  const WASM::FuncType& payload);
-/**
- * \brief Emits LibJIT IR for ThrowToTarget.
- * \param exn Instruction operand, backend value, or output destination.
- * \param values Instruction operand, backend value, or output destination.
- * \param target Instruction operand, backend value, or output destination.
- * \param carryExn Instruction operand, backend value, or output destination.
- */
 	void emitThrowToTarget(jit_value_t exn, std::vector<jit_value_t> values,
 						   ControlBlock& target, bool carryExn);
 	//! Emits the static dispatch chain for `exn` over the enclosing try_tables;
 	//! when no clause matches, sets the pending slot and returns zeroes. All
 	//! emitted paths leave the current block.
-/**
- * \brief Emits LibJIT IR for ExceptionPropagation.
- * \param exn Instruction operand, backend value, or output destination.
- */
 	void emitExceptionPropagation(jit_value_t exn);
-/**
- * \brief Emits LibJIT IR for PendingException.
- * \return The operation result, generated value, or dispatch status.
- */
 	jit_value_t emitPendingException();
 	//! Used after every call: dispatches a pending exception locally or
 	//! propagates it, leaving the continuation reachable when none is pending.
@@ -685,11 +433,6 @@ private:
  * \brief Emits LibJIT IR for PendingTrapCheck.
  */
 	void emitPendingTrapCheck();
-/**
- * \brief Emits LibJIT IR for ReportTrap.
- * \param kind Instruction operand, backend value, or output destination.
- * \param detail Instruction operand, backend value, or output destination.
- */
 	void emitReportTrap(WASM::TrapKind kind, const char* detail);
 /**
  * \brief Performs the requestTrapEpilogue operation required by the opcode dispatcher.
@@ -711,11 +454,6 @@ private:
 	//! reinterpret, global.set). See docs/proposals/PROFILES.md PR-3.
 	const bool deterministicFloats;
 
-/**
- * \brief Performs the globalTypeForIndex operation required by the opcode dispatcher.
- * \param idx Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	WASM::GlobalType globalTypeForIndex(WASM::GlobalIdx idx) const;
 
 	//! Deterministic-profile float canonicalisation (PROFILES.md PR-3): returns
@@ -724,24 +462,6 @@ private:
 	jit_value_t canonicalizeFloat(jit_value_t value, bool isDouble);
 
 public:
-/**
- * \brief Performs the OpcodeDispatcher operation required by the opcode dispatcher.
- * \param context Instruction operand, backend value, or output destination.
- * \param function Instruction operand, backend value, or output destination.
- * \param typeTranslator Instruction operand, backend value, or output destination.
- * \param instance Instruction operand, backend value, or output destination.
- * \param internals Instruction operand, backend value, or output destination.
- * \param module Instruction operand, backend value, or output destination.
- * \param currentFunc Instruction operand, backend value, or output destination.
- * \param importedFuncCount Instruction operand, backend value, or output destination.
- * \param functionIndex Instruction operand, backend value, or output destination.
- * \param branchHints Instruction operand, backend value, or output destination.
- * \param locals Instruction operand, backend value, or output destination.
- * \param valueStack Instruction operand, backend value, or output destination.
- * \param controlStack Instruction operand, backend value, or output destination.
- * \param profileConfig Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	OpcodeDispatcher(jit_context_t context, jit_function_t function,
 					 LibJitTypeTranslator& typeTranslator,
 					 WASM::ModuleInstance& instance,
@@ -779,44 +499,13 @@ public:
 protected:
 	//! `internals.translatedTypes` is parallel to `module.typeIds` (filled in translateTypes).
 	jit_type_t jitTypeForTypeIdx(WASM::TypeIdx idx) const;
-/**
- * \brief Performs the jitTypeForValueType operation required by the opcode dispatcher.
- * \param vt Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	jit_type_t jitTypeForValueType(const WASM::ValueType& vt);
-/**
- * \brief Performs the continuationKindFor operation required by the opcode dispatcher.
- * \param vt Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	static std::uint8_t continuationKindFor(const WASM::ValueType& vt);
-/**
- * \brief Performs the allocateContinuationBuffer operation required by the opcode dispatcher.
- * \param count Instruction operand, backend value, or output destination.
- * \return The operation result, generated value, or dispatch status.
- */
 	jit_value_t allocateContinuationBuffer(std::size_t count);
-/**
- * \brief Performs the storeContinuationValues operation required by the opcode dispatcher.
- * \param values Instruction operand, backend value, or output destination.
- * \param types Instruction operand, backend value, or output destination.
- * \param buffer Instruction operand, backend value, or output destination.
- */
 	void storeContinuationValues(const std::vector<jit_value_t>& values,
 			const std::vector<WASM::StorageType>& types, jit_value_t buffer);
-/**
- * \brief Performs the loadContinuationValues operation required by the opcode dispatcher.
- * \param buffer Instruction operand, backend value, or output destination.
- * \param types Instruction operand, backend value, or output destination.
- */
 	void loadContinuationValues(jit_value_t buffer,
 			const std::vector<WASM::StorageType>& types);
-/**
- * \brief Performs the dropContinuationValues operation required by the opcode dispatcher.
- * \param buffer Instruction operand, backend value, or output destination.
- * \param types Instruction operand, backend value, or output destination.
- */
 	void dropContinuationValues(jit_value_t buffer,
 			const std::vector<WASM::StorageType>& types);
 
@@ -828,88 +517,29 @@ protected:
  * \brief Dispatches the Nop WebAssembly instruction to this LibJIT implementation.
  */
 	void dispatchNop() override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the Block WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchBlock(const WASM::BlockType& arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the Loop WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchLoop(const WASM::BlockType& arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the If WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchIf(const WASM::BlockType& arg) override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the Else WebAssembly instruction to this LibJIT implementation.
  */
 	void dispatchElse() override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the Throw WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchThrow(WASM::TagIdx arg) override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the ThrowRef WebAssembly instruction to this LibJIT implementation.
  */
 	void dispatchThrowRef() override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ContNew WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchContNew(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ContBind WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchContBind(WASM::TypeIdx arg1, WASM::TypeIdx arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the Suspend WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchSuspend(WASM::TagIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the Resume WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- * \param handlers Instruction operand, backend value, or output destination.
- */
 	void dispatchResume(WASM::TypeIdx arg, std::vector<WASM::ContHandlerClause>&& handlers) override; //!< Lower this opcode into the backend IR.
 	//! Dispatch the `ResumeThrow` instruction. Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ResumeThrow WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- * \param handlers Instruction operand, backend value, or output destination.
- */
 	void dispatchResumeThrow(WASM::TypeIdx arg1, WASM::TagIdx arg2,
 			std::vector<WASM::ContHandlerClause>&& handlers) override; //!< Field `override` of type.
 	//! Dispatch the `ResumeThrowRef` instruction. Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ResumeThrowRef WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- * \param handlers Instruction operand, backend value, or output destination.
- */
 	void dispatchResumeThrowRef(WASM::TypeIdx arg,
 			std::vector<WASM::ContHandlerClause>&& handlers) override; //!< Field `override` of type.
-/**
- * \brief Dispatches the Switch WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchSwitch(WASM::TypeIdx arg1, WASM::TagIdx arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Emits LibJIT IR for ContinuationResultHandling.
- * \param func Instruction operand, backend value, or output destination.
- * \param handlers Instruction operand, backend value, or output destination.
- * \param resultAddr Instruction operand, backend value, or output destination.
- * \param resultBuffer Instruction operand, backend value, or output destination.
- * \param tagBuffer Instruction operand, backend value, or output destination.
- * \param baseDepth Instruction operand, backend value, or output destination.
- */
 	void emitContinuationResultHandling(const WASM::FuncType& func,
 			const std::vector<WASM::ContHandlerClause>& handlers,
 			jit_value_t resultAddr, jit_value_t resultBuffer,
@@ -918,63 +548,19 @@ protected:
  * \brief Dispatches the End WebAssembly instruction to this LibJIT implementation.
  */
 	void dispatchEnd() override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the Br WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchBr(WASM::LabelIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the BrIf WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchBrIf(WASM::LabelIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the BrTable WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchBrTable(std::vector<WASM::LabelIdx>&& arg1, WASM::LabelIdx arg2) override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the Return WebAssembly instruction to this LibJIT implementation.
  */
 	void dispatchReturn() override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the Call WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchCall(WASM::FuncIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the CallIndirect WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ReturnCall WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchReturnCall(WASM::FuncIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ReturnCallIndirect WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the CallRef WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchCallRef(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ReturnCallRef WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchReturnCallRef(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the TryTable WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchTryTable(const WASM::BlockType& arg1, std::vector<WASM::CatchClause>&& arg2) override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the Drop WebAssembly instruction to this LibJIT implementation.
@@ -984,190 +570,42 @@ protected:
  * \brief Dispatches the Select WebAssembly instruction to this LibJIT implementation.
  */
 	void dispatchSelect() override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the SelectT WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchSelectT(std::vector<WASM::ValueType>&& arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the LocalGet WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchLocalGet(WASM::LocalIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the LocalSet WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchLocalSet(WASM::LocalIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the LocalTee WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchLocalTee(WASM::LocalIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the GlobalGet WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalGet(WASM::GlobalIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the GlobalSet WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalSet(WASM::GlobalIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the TableGet WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchTableGet(WASM::TableIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the TableSet WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchTableSet(WASM::TableIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32Load WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI32Load(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64Load WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Load(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the F32Load WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchF32Load(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the F64Load WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchF64Load(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32Load8S WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI32Load8S(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32Load8U WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI32Load8U(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32Load16S WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI32Load16S(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32Load16U WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI32Load16U(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64Load8S WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Load8S(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64Load8U WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Load8U(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64Load16S WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Load16S(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64Load16U WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Load16U(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64Load32S WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Load32S(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64Load32U WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Load32U(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32Store WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI32Store(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64Store WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Store(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the F32Store WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchF32Store(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the F64Store WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchF64Store(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32Store8 WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI32Store8(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32Store16 WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI32Store16(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64Store8 WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Store8(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64Store16 WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Store16(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64Store32 WebAssembly instruction to this LibJIT implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Store32(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the MemorySize WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchMemorySize(WASM::MemIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the MemoryGrow WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchMemoryGrow(WASM::MemIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32Const WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32Const(int32_t arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64Const WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Const(int64_t arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the F32Const WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchF32Const(float arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the F64Const WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchF64Const(double arg) override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32Eqz WebAssembly instruction to this LibJIT implementation.
@@ -1681,19 +1119,11 @@ protected:
  * \brief Dispatches the I64Extend32S WebAssembly instruction to this LibJIT implementation.
  */
 	void dispatchI64Extend32S() override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the RefNull WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchRefNull(const WASM::HeapType& arg) override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the RefIsNull WebAssembly instruction to this LibJIT implementation.
  */
 	void dispatchRefIsNull() override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the RefFunc WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchRefFunc(WASM::FuncIdx arg) override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the RefEq WebAssembly instruction to this LibJIT implementation.
@@ -1703,221 +1133,48 @@ protected:
  * \brief Dispatches the RefAsNonNull WebAssembly instruction to this LibJIT implementation.
  */
 	void dispatchRefAsNonNull() override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the BrOnNull WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchBrOnNull(WASM::LabelIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the BrOnNonNull WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchBrOnNonNull(WASM::LabelIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StructNew WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStructNew(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StructNewDefault WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStructNewDefault(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
 	//! Custom Descriptors (0xFB 32..38).
-/**
- * \brief Dispatches the StructNewDesc WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStructNewDesc(WASM::TypeIdx arg) override;
-/**
- * \brief Dispatches the StructNewDefaultDesc WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStructNewDefaultDesc(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the RefGetDesc WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchRefGetDesc(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the RefCastDescEq WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchRefCastDescEq(const WASM::HeapType& arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the RefCastDescEqNull WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchRefCastDescEqNull(const WASM::HeapType& arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the BrOnCastDescEq WebAssembly instruction to this LibJIT implementation.
- * \param castop Instruction operand, backend value, or output destination.
- * \param l Instruction operand, backend value, or output destination.
- * \param ht1 Instruction operand, backend value, or output destination.
- * \param ht2 Instruction operand, backend value, or output destination.
- */
 	void dispatchBrOnCastDescEq(uint8_t castop, WASM::LabelIdx l, WASM::HeapType ht1, WASM::HeapType ht2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the BrOnCastDescEqFail WebAssembly instruction to this LibJIT implementation.
- * \param castop Instruction operand, backend value, or output destination.
- * \param l Instruction operand, backend value, or output destination.
- * \param ht1 Instruction operand, backend value, or output destination.
- * \param ht2 Instruction operand, backend value, or output destination.
- */
 	void dispatchBrOnCastDescEqFail(uint8_t castop, WASM::LabelIdx l, WASM::HeapType ht1, WASM::HeapType ht2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StructGet WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StructGetS WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructGetS(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StructGetU WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructGetU(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StructSet WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayNew WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayNew(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayNewDefault WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayNewDefault(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayNewFixed WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayNewFixed(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayNewData WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayNewData(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayNewElem WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Lower this opcode into the backend IR.
 	//! More Array Constructors (docs/proposals/GC_EXTENSIONS.md GX-2).
-/**
- * \brief Dispatches the ArrayNewArray WebAssembly instruction to this LibJIT implementation.
- * \param dst Instruction operand, backend value, or output destination.
- * \param src Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayNewArray(WASM::TypeIdx dst, WASM::TypeIdx src) override;
-/**
- * \brief Dispatches the ArrayNewMemory WebAssembly instruction to this LibJIT implementation.
- * \param dst Instruction operand, backend value, or output destination.
- * \param src Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayNewMemory(WASM::TypeIdx dst, uint32_t src) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayNewTable WebAssembly instruction to this LibJIT implementation.
- * \param dst Instruction operand, backend value, or output destination.
- * \param src Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayNewTable(WASM::TypeIdx dst, uint32_t src) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayGet WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayGet(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayGetS WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayGetS(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayGetU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayGetU(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArraySet WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArraySet(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the ArrayLen WebAssembly instruction to this LibJIT implementation.
  */
 	void dispatchArrayLen() override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayFill WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayFill(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayCopy WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayInitData WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayInitElem WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayInitElem(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the RefTest WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchRefTest(const WASM::HeapType& arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the RefTestNull WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchRefTestNull(const WASM::HeapType& arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the RefCast WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchRefCast(const WASM::HeapType& arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the RefCastNull WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchRefCastNull(const WASM::HeapType& arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the BrOnCast WebAssembly instruction to this LibJIT implementation.
- * \param castop Instruction operand, backend value, or output destination.
- * \param l Instruction operand, backend value, or output destination.
- * \param ht1 Instruction operand, backend value, or output destination.
- * \param ht2 Instruction operand, backend value, or output destination.
- */
 	void dispatchBrOnCast(uint8_t castop, WASM::LabelIdx l, WASM::HeapType ht1, WASM::HeapType ht2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the BrOnCastFail WebAssembly instruction to this LibJIT implementation.
- * \param castop Instruction operand, backend value, or output destination.
- * \param l Instruction operand, backend value, or output destination.
- * \param ht1 Instruction operand, backend value, or output destination.
- * \param ht2 Instruction operand, backend value, or output destination.
- */
 	void dispatchBrOnCastFail(uint8_t castop, WASM::LabelIdx l, WASM::HeapType ht1, WASM::HeapType ht2) override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the AnyConvertExtern WebAssembly instruction to this LibJIT implementation.
@@ -1941,30 +1198,10 @@ protected:
 	void dispatchI31GetU() override; //!< Lower this opcode into the backend IR.
 
 	//! Stringref core instructions (docs/proposals/STRINGREF.md STR-3).
-/**
- * \brief Dispatches the StringNewUtf8 WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringNewUtf8(WASM::MemIdx arg) override;
-/**
- * \brief Dispatches the StringNewWtf16 WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringNewWtf16(WASM::MemIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StringNewLossyUtf8 WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringNewLossyUtf8(WASM::MemIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StringNewWtf8 WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringNewWtf8(WASM::MemIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StringConst WebAssembly instruction to this LibJIT implementation.
- * \param idx Instruction operand, backend value, or output destination.
- */
 	void dispatchStringConst(uint32_t idx) override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the StringMeasureUtf8 WebAssembly instruction to this LibJIT implementation.
@@ -1978,25 +1215,9 @@ protected:
  * \brief Dispatches the StringMeasureWtf16 WebAssembly instruction to this LibJIT implementation.
  */
 	void dispatchStringMeasureWtf16() override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StringEncodeUtf8 WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringEncodeUtf8(WASM::MemIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StringEncodeLossyUtf8 WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringEncodeLossyUtf8(WASM::MemIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StringEncodeWtf8 WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringEncodeWtf8(WASM::MemIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StringEncodeWtf16 WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringEncodeWtf16(WASM::MemIdx arg) override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the StringConcat WebAssembly instruction to this LibJIT implementation.
@@ -2020,24 +1241,12 @@ protected:
  * \brief Dispatches the StringViewWtf8Advance WebAssembly instruction to this LibJIT implementation.
  */
 	void dispatchStringViewWtf8Advance() override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StringViewWtf8EncodeUtf8 WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringViewWtf8EncodeUtf8(WASM::MemIdx arg) override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the StringViewWtf8Slice WebAssembly instruction to this LibJIT implementation.
  */
 	void dispatchStringViewWtf8Slice() override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StringViewWtf8EncodeLossyUtf8 WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringViewWtf8EncodeLossyUtf8(WASM::MemIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StringViewWtf8EncodeWtf8 WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringViewWtf8EncodeWtf8(WASM::MemIdx arg) override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the StringAsWtf16 WebAssembly instruction to this LibJIT implementation.
@@ -2051,10 +1260,6 @@ protected:
  * \brief Dispatches the StringViewWtf16GetCodeUnit WebAssembly instruction to this LibJIT implementation.
  */
 	void dispatchStringViewWtf16GetCodeUnit() override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StringViewWtf16Encode WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringViewWtf16Encode(WASM::MemIdx arg) override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the StringViewWtf16Slice WebAssembly instruction to this LibJIT implementation.
@@ -2082,59 +1287,15 @@ protected:
 	void dispatchStringViewIterSlice() override; //!< Lower this opcode into the backend IR.
 
 	//! GC-array string bridge (docs/proposals/STRINGREF.md STR-6)
-/**
- * \brief Dispatches the StringNewUtf8Array WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringNewUtf8Array(WASM::TypeIdx arg) override;
-/**
- * \brief Dispatches the StringNewWtf16Array WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringNewWtf16Array(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StringEncodeUtf8Array WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringEncodeUtf8Array(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StringEncodeWtf16Array WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringEncodeWtf16Array(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StringNewLossyUtf8Array WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringNewLossyUtf8Array(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StringNewWtf8Array WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringNewWtf8Array(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StringEncodeLossyUtf8Array WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringEncodeLossyUtf8Array(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StringEncodeWtf8Array WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringEncodeWtf8Array(WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StringNewArrayImpl WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- * \param helper Instruction operand, backend value, or output destination.
- * \param mode Instruction operand, backend value, or output destination.
- */
 	void dispatchStringNewArrayImpl(WASM::TypeIdx arg, void* helper, int mode); //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StringEncodeArrayImpl WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- * \param helper Instruction operand, backend value, or output destination.
- * \param mode Instruction operand, backend value, or output destination.
- */
 	void dispatchStringEncodeArrayImpl(WASM::TypeIdx arg, void* helper, int mode); //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I32TruncSatF32S WebAssembly instruction to this LibJIT implementation.
@@ -2168,37 +1329,11 @@ protected:
  * \brief Dispatches the I64TruncSatF64U WebAssembly instruction to this LibJIT implementation.
  */
 	void dispatchI64TruncSatF64U() override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the MemoryInit WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchMemoryInit(uint32_t arg1, WASM::MemIdx arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the DataDrop WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchDataDrop(uint32_t arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the MemoryCopy WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchMemoryCopy(WASM::MemIdx arg1, WASM::MemIdx arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the MemoryFill WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchMemoryFill(WASM::MemIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the MemoryDiscard WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchMemoryDiscard(WASM::MemIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the RoundingVariant WebAssembly instruction to this LibJIT implementation.
- * \param sub Instruction operand, backend value, or output destination.
- */
 	void dispatchRoundingVariant(uint32_t sub) override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I64Add128 WebAssembly instruction to this LibJIT implementation.
@@ -2216,170 +1351,36 @@ protected:
  * \brief Dispatches the I64MulWideU WebAssembly instruction to this LibJIT implementation.
  */
 	void dispatchI64MulWideU() override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32Itt WebAssembly instruction to this LibJIT implementation.
- * \param immediate Instruction operand, backend value, or output destination.
- */
 	void dispatchI32Itt(uint32_t immediate) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the TableInit WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ElemDrop WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchElemDrop(uint32_t arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the TableCopy WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchTableCopy(WASM::TableIdx arg1, WASM::TableIdx arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the TableGrow WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchTableGrow(WASM::TableIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the TableSize WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchTableSize(WASM::TableIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the TableFill WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchTableFill(WASM::TableIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Load WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Load8x8S WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load8x8S(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Load8x8U WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load8x8U(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Load16x4S WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load16x4S(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Load16x4U WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load16x4U(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Load32x2S WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load32x2S(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Load32x2U WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load32x2U(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Load8Splat WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load8Splat(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Load16Splat WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load16Splat(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Load32Splat WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load32Splat(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Load64Splat WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load64Splat(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Load32Zero WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load32Zero(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Load64Zero WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load64Zero(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Store WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Store(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Load8Lane WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load8Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Load16Lane WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load16Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Load32Lane WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load32Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Load64Lane WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load64Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Store8Lane WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Store8Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Store16Lane WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Store16Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Store32Lane WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Store32Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Store64Lane WebAssembly instruction to this LibJIT implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Store64Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the V128Const WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Const(std::span<uint8_t> arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I8x16Shuffle WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI8x16Shuffle(std::span<uint8_t> arg) override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I8x16Swizzle WebAssembly instruction to this LibJIT implementation.
@@ -2409,75 +1410,19 @@ protected:
  * \brief Dispatches the F64x2Splat WebAssembly instruction to this LibJIT implementation.
  */
 	void dispatchF64x2Splat() override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I8x16ExtractLaneS WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI8x16ExtractLaneS(uint8_t arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I8x16ExtractLaneU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI8x16ExtractLaneU(uint8_t arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I8x16ReplaceLane WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI8x16ReplaceLane(uint8_t arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I16x8ExtractLaneS WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI16x8ExtractLaneS(uint8_t arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I16x8ExtractLaneU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI16x8ExtractLaneU(uint8_t arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I16x8ReplaceLane WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI16x8ReplaceLane(uint8_t arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32x4ExtractLane WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32x4ExtractLane(uint8_t arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32x4ReplaceLane WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32x4ReplaceLane(uint8_t arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64x2ExtractLane WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64x2ExtractLane(uint8_t arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64x2ReplaceLane WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64x2ReplaceLane(uint8_t arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the F32x4ExtractLane WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchF32x4ExtractLane(uint8_t arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the F32x4ReplaceLane WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchF32x4ReplaceLane(uint8_t arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the F64x2ExtractLane WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchF64x2ExtractLane(uint8_t arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the F64x2ReplaceLane WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchF64x2ReplaceLane(uint8_t arg) override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the I8x16Eq WebAssembly instruction to this LibJIT implementation.
@@ -3325,565 +2270,111 @@ protected:
  * \brief Dispatches the I32x4RelaxedDotI8x16I7x16AddS WebAssembly instruction to this LibJIT implementation.
  */
 	void dispatchI32x4RelaxedDotI8x16I7x16AddS() override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the MemoryAtomicNotify WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchMemoryAtomicNotify(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the MemoryAtomicWait32 WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchMemoryAtomicWait32(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the MemoryAtomicWait64 WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchMemoryAtomicWait64(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the AtomicFence WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- */
 	void dispatchAtomicFence(uint8_t ordering) override; //!< Lower this opcode into the backend IR.
 /**
  * \brief Dispatches the AtomicPause WebAssembly instruction to this LibJIT implementation.
  */
 	void dispatchAtomicPause() override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the GlobalAtomicGet WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalAtomicGet(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the GlobalAtomicSet WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalAtomicSet(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the GlobalAtomicRmwAdd WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalAtomicRmwAdd(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the GlobalAtomicRmwSub WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalAtomicRmwSub(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the GlobalAtomicRmwAnd WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalAtomicRmwAnd(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the GlobalAtomicRmwOr WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalAtomicRmwOr(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the GlobalAtomicRmwXor WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalAtomicRmwXor(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the GlobalAtomicRmwXchg WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalAtomicRmwXchg(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the GlobalAtomicRmwCmpxchg WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalAtomicRmwCmpxchg(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the TableAtomicGet WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchTableAtomicGet(uint8_t ordering, WASM::TableIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the TableAtomicSet WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchTableAtomicSet(uint8_t ordering, WASM::TableIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the TableAtomicRmwXchg WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchTableAtomicRmwXchg(uint8_t ordering, WASM::TableIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the TableAtomicRmwCmpxchg WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchTableAtomicRmwCmpxchg(uint8_t ordering, WASM::TableIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StructAtomicGet WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicGet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StructAtomicGetS WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicGetS(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StructAtomicGetU WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicGetU(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StructAtomicSet WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicSet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StructAtomicRmwAdd WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StructAtomicRmwSub WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicRmwSub(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StructAtomicRmwAnd WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicRmwAnd(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StructAtomicRmwOr WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicRmwOr(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StructAtomicRmwXor WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicRmwXor(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StructAtomicRmwXchg WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicRmwXchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the StructAtomicRmwCmpxchg WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayAtomicGet WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicGet(uint8_t ordering, WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayAtomicGetS WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicGetS(uint8_t ordering, WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayAtomicGetU WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicGetU(uint8_t ordering, WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayAtomicSet WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicSet(uint8_t ordering, WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayAtomicRmwAdd WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayAtomicRmwSub WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicRmwSub(uint8_t ordering, WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayAtomicRmwAnd WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicRmwAnd(uint8_t ordering, WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayAtomicRmwOr WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicRmwOr(uint8_t ordering, WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayAtomicRmwXor WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicRmwXor(uint8_t ordering, WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayAtomicRmwXchg WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicRmwXchg(uint8_t ordering, WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the ArrayAtomicRmwCmpxchg WebAssembly instruction to this LibJIT implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicLoad WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicLoad(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicLoad WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicLoad(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicLoad8U WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicLoad8U(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicLoad16U WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicLoad16U(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicLoad8U WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicLoad8U(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicLoad16U WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicLoad16U(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicLoad32U WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicLoad32U(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicStore WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicStore(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicStore WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicStore(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicStore8 WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicStore8(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicStore16 WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicStore16(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicStore8 WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicStore8(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicStore16 WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicStore16(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicStore32 WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicStore32(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmwAdd WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmwAdd(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmwAdd WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmwAdd(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmw8AddU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw8AddU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmw16AddU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw16AddU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw8AddU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw8AddU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw16AddU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw16AddU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw32AddU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw32AddU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmwSub WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmwSub(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmwSub WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmwSub(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmw8SubU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw8SubU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmw16SubU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw16SubU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw8SubU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw8SubU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw16SubU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw16SubU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw32SubU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw32SubU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmwAnd WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmwAnd(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmwAnd WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmwAnd(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmw8AndU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw8AndU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmw16AndU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw16AndU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw8AndU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw8AndU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw16AndU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw16AndU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw32AndU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw32AndU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmwOr WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmwOr(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmwOr WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmwOr(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmw8OrU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw8OrU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmw16OrU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw16OrU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw8OrU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw8OrU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw16OrU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw16OrU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw32OrU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw32OrU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmwXor WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmwXor(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmwXor WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmwXor(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmw8XorU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw8XorU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmw16XorU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw16XorU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw8XorU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw8XorU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw16XorU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw16XorU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw32XorU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw32XorU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmwXchg WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmwXchg(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmwXchg WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmwXchg(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmw8XchgU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw8XchgU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmw16XchgU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw16XchgU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw8XchgU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw8XchgU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw16XchgU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw16XchgU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw32XchgU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw32XchgU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmwCmpxchg WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmwCmpxchg(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmwCmpxchg WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmwCmpxchg(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmw8CmpxchgU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw8CmpxchgU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I32AtomicRmw16CmpxchgU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw16CmpxchgU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw8CmpxchgU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw8CmpxchgU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw16CmpxchgU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw16CmpxchgU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
-/**
- * \brief Dispatches the I64AtomicRmw32CmpxchgU WebAssembly instruction to this LibJIT implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw32CmpxchgU(WASM::MemArg arg) override; //!< Lower this opcode into the backend IR.
 };
 

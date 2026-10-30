@@ -97,110 +97,42 @@ public:
 	//! Exporter override: publishes the module's cell (non-owning).
 	void registerGlobal(std::string_view moduleName, std::string_view fieldName,
 						Value* cell, const GlobalType& type) override;
-/**
- * \brief Performs the registerMemory operation.
- * \param moduleName Input value or output destination for this operation.
- * \param fieldName Input value or output destination for this operation.
- * \param memory Input value or output destination for this operation.
- */
 	void registerMemory(std::string_view moduleName, std::string_view fieldName,
 						LinearMemory* memory) override; //!< Field `override` of type.
-/**
- * \brief Performs the registerTable operation.
- * \param moduleName Input value or output destination for this operation.
- * \param fieldName Input value or output destination for this operation.
- * \param table Input value or output destination for this operation.
- */
 	void registerTable(std::string_view moduleName, std::string_view fieldName,
 					   const ImportedTable& table) override; //!< Field `override` of type.
-/**
- * \brief Performs the registerTag operation.
- * \param moduleName Input value or output destination for this operation.
- * \param fieldName Input value or output destination for this operation.
- * \param tag Input value or output destination for this operation.
- */
 	void registerTag(std::string_view moduleName, std::string_view fieldName,
 					 TagId tag) override; //!< Field `override` of type.
-/**
- * \brief Performs the registerType operation.
- * \param moduleName Input value or output destination for this operation.
- * \param fieldName Input value or output destination for this operation.
- * \param type Input value or output destination for this operation.
- */
 	void registerType(std::string_view moduleName, std::string_view fieldName,
 					  TypeId type) override; //!< Field `override` of type.
 
-/**
- * \brief Performs the resolveFunction operation.
- * \param moduleName Input value or output destination for this operation.
- * \param fieldName Input value or output destination for this operation.
- * \param expectedType Input value or output destination for this operation.
- * \param exact Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 	std::optional<Callable> resolveFunction(
 		std::string_view moduleName,
 		std::string_view fieldName,
 		TypeId expectedType,
 		bool exact = false) override; //!< Field `exact` of type.
 
-/**
- * \brief Performs the resolveGlobal operation.
- * \param moduleName Input value or output destination for this operation.
- * \param fieldName Input value or output destination for this operation.
- * \param type Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 	std::optional<Value*> resolveGlobal(
 		std::string_view moduleName,
 		std::string_view fieldName,
 		const GlobalType& type) override; //!< Field `override` of type.
 
-/**
- * \brief Performs the resolveMemory operation.
- * \param moduleName Input value or output destination for this operation.
- * \param fieldName Input value or output destination for this operation.
- * \param type Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 	std::optional<LinearMemory*> resolveMemory(
 		std::string_view moduleName,
 		std::string_view fieldName,
 		const MemoryType& type) override; //!< Field `override` of type.
 
-/**
- * \brief Performs the resolveTable operation.
- * \param moduleName Input value or output destination for this operation.
- * \param fieldName Input value or output destination for this operation.
- * \param type Input value or output destination for this operation.
- * \param elementTypeId Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 	std::optional<ImportedTable> resolveTable(
 		std::string_view moduleName,
 		std::string_view fieldName,
 		const TableType& type,
 		TypeId           elementTypeId) override; //!< Field `override` of type.
 
-/**
- * \brief Performs the resolveTag operation.
- * \param moduleName Input value or output destination for this operation.
- * \param fieldName Input value or output destination for this operation.
- * \param expectedType Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 	std::optional<TagId> resolveTag(
 		std::string_view moduleName,
 		std::string_view fieldName,
 		TypeId           expectedType) override; //!< Field `override` of type.
 
-/**
- * \brief Performs the resolveType operation.
- * \param moduleName Input value or output destination for this operation.
- * \param fieldName Input value or output destination for this operation.
- * \param bound Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 	std::optional<TypeId> resolveType(
 		std::string_view moduleName,
 		std::string_view fieldName,

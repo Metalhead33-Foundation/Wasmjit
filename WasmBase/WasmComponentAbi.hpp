@@ -41,8 +41,6 @@ namespace WASM {
  */
 class ComponentAbiInstance {
 public:
-	//! \param store Process-wide type metadata this instance caches against
-	//! \param instanceId Opaque host identity for this component instance
 	/**
 	 * \brief Creates an instance cache associated with a canonical type store.
 	 * \param store Store whose canonical ABI metadata is queried; must outlive this object.

@@ -64,14 +64,19 @@ GENERATE_PERLMOD       = NO
 GENERATE_TREEVIEW      = YES
 DISABLE_INDEX          = NO
 
-# Warnings that matter: a malformed command or a broken block. A public
-# declaration without a doc comment is not a warning here — the tree predates
-# the policy and docs/DOCUMENTATION.md records how that is paid down.
+# Warnings that matter: a malformed command, a broken block, or a documented
+# function whose \param list does not match its signature. A declaration without
+# any doc comment is not a warning here — the tree predates the policy and
+# docs/DOCUMENTATION.md §3.1 records how that is paid down.
+#
+# \param completeness is enforced: every parameter of a *documented* function has
+# a \param (and \tparam for every template parameter), so a new doc block that
+# omits one fails a Doxygen run.
 QUIET                  = YES
 WARNINGS               = YES
 WARN_IF_UNDOCUMENTED   = NO
 WARN_IF_DOC_ERROR      = YES
-WARN_NO_PARAMDOC       = NO
+WARN_NO_PARAMDOC       = YES
 WARN_IF_INCOMPLETE_DOC = YES
 WARN_AS_ERROR          = NO
 WARN_FORMAT            = "$file:$line: $text"

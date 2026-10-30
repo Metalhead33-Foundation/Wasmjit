@@ -119,10 +119,6 @@ public:
 	/** \brief Creates an agent with a fresh execution state and unique ID. */
 	Agent() noexcept;
 	/** \brief Destroys the agent and its execution state. */
-/**
- * \brief Performs the Agent operation.
- * \return The value or status produced by this operation.
- */
 	~Agent();
 
 	Agent(const Agent&) = delete;

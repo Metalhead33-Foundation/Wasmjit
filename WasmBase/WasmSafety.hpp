@@ -63,13 +63,6 @@ inline constexpr uint32_t kMaxComponentSections = 100000;
 //! that do not report a size are treated as unbounded (nothing to compare
 //! against), which keeps exotic embedder devices working.
 template<typename Device>
-/**
- * \brief Performs the tell operation.
- * \param device Input value or output destination for this operation.
- * \param requested Input value or output destination for this operation.
- * \param what Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 /** \brief Checks that an input-derived byte count fits within the remaining device data. \tparam Device Readable device type providing tell() and size(). \param device Input device whose remaining bytes are checked. \param requested Requested byte count. \param what Description of the input field used in an error message. \return Requested count when it is available (or the device is unsized). \throws std::runtime_error when the request exceeds the remaining input. */
 inline std::size_t requireAvailable(Device& device, uint64_t requested, const char* what)
 {

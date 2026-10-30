@@ -112,11 +112,6 @@ struct HostBridge {
 //! are required for a balanced contract; a one-sided bridge is treated as
 //! disabled rather than risking an unmatched release.
 /** \brief Tests whether a bridge supplies a balanced retain/release pair. \param bridge Optional bridge to inspect. \return true only when both retain and release callbacks are installed. */
-/**
- * \brief Performs the hostReferenceHooksEnabled operation.
- * \param bridge Input value, resource descriptor, or output destination for this operation.
- * \return The requested value, handle, view, or success status.
- */
 inline bool hostReferenceHooksEnabled(const HostBridge* bridge)
 {
 	return bridge != nullptr

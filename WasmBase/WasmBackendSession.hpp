@@ -92,10 +92,6 @@ public:
 
 	//! The backend-agnostic instantiation seam.
 	/** \brief Returns the compilation/instantiation interface. \return Reference to this backend's module instantiator. */
-/**
- * \brief Performs the instantiator operation.
- * \return The requested value, handle, view, or success status.
- */
 	virtual ModuleInstantiator& instantiator() = 0;
 
 	//! Layout of an arbitrary lowered tuple/aggregate (used by the WAST
@@ -115,11 +111,6 @@ public:
 	 * \param multiply true to multiply lanes; false selects the other benchmark op.
 	 * \return Owning pointer to the operation, or nullptr if unsupported.
 	 */
-/**
- * \brief Creates or allocates the corresponding runtime object.
- * \param multiply Input value, resource descriptor, or output destination for this operation.
- * \return The requested value, handle, view, or success status.
- */
 	virtual std::unique_ptr<BackendLaneWiseOp> createLaneWiseOp(bool multiply) = 0;
 
 	//! Calls a compiled function with already-marshalled argument slots. This

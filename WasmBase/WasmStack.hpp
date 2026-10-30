@@ -79,7 +79,7 @@ bool installStackLimit(VMContext& ctx, std::size_t reserve = kDefaultStackReserv
 //! C-callable entry point for generated code: probes this frame's address and
 //! raises `TrapKind::CallStackExhausted` when it is below `ctx->stackLimit`.
 //! Never returns when it traps.
-/** \brief C ABI stack probe emitted in every generated function prologue. \param ctx Current VM context containing the stack limit. \throws/traps CallStackExhausted when the current frame crossed the limit. */
+/** \brief C ABI stack probe emitted in every generated function prologue. \param ctx Current VM context containing the stack limit. Traps `CallStackExhausted` when the current frame crossed the limit. */
 extern "C" void wasm_stack_check(VMContext* ctx);
 
 struct ExecutionState;

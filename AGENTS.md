@@ -54,6 +54,9 @@ the one-line check to run.
 - **[`docs/DOCUMENTATION.md`](docs/DOCUMENTATION.md) — read before adding or editing a `.h`/`.hpp` file.**
   Every comment in a header is a Doxygen comment in Qt style (`//!`, `//!<`, `/*!`, `\file`, `\brief`,
   `\par`); the only exceptions are annotations Doxygen never renders (`#endif // GUARD`, `} // namespace`,
-  a name suppressed inside a declaration). `doxygen Doxyfile` must stay warning-free (output goes to
-  `build/doxygen/`) and `./Test/WasmJit '[headerdoc]'` enforces the shape and the per-file block. `extern/`
-  is a submodule and is never reformatted.
+  a name suppressed inside a declaration). **Function documentation uses `\brief`, `\param`, `\return` and
+  `\tparam`** — one `\param` per parameter with the declared spelling, `\return` only for a value return,
+  and `\tparam` for every template parameter of a function, class, alias or variable template (§3.1).
+  `doxygen Doxyfile` must stay warning-free (output goes to `build/doxygen/`, `WARN_NO_PARAMDOC` is on) and
+  `./Test/WasmJit '[headerdoc]'` enforces the shape and the per-file block. `extern/` is a submodule and is
+  never reformatted.

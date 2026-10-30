@@ -51,111 +51,38 @@ protected:
  * \brief Dispatches the Nop WebAssembly instruction to this stub implementation.
  */
 	void dispatchNop() override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the Block WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchBlock(const WASM::BlockType& arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the Loop WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchLoop(const WASM::BlockType& arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the If WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchIf(const WASM::BlockType& arg) override; //!< Stub: reject / no-op for this opcode.
 /**
  * \brief Dispatches the Else WebAssembly instruction to this stub implementation.
  */
 	void dispatchElse() override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the Throw WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchThrow(WASM::TagIdx arg) override; //!< Stub: reject / no-op for this opcode.
 /**
  * \brief Dispatches the ThrowRef WebAssembly instruction to this stub implementation.
  */
 	void dispatchThrowRef() override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ContNew WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchContNew(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the Suspend WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchSuspend(WASM::TagIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the Resume WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- * \param handlers Instruction operand, backend value, or output destination.
- */
 	void dispatchResume(WASM::TypeIdx arg, std::vector<WASM::ContHandlerClause>&& handlers) override; //!< Stub: reject / no-op for this opcode.
 /**
  * \brief Dispatches the End WebAssembly instruction to this stub implementation.
  */
 	void dispatchEnd() override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the Br WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchBr(WASM::LabelIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the BrIf WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchBrIf(WASM::LabelIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the BrTable WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchBrTable(std::vector<WASM::LabelIdx>&& arg1, WASM::LabelIdx arg2) override; //!< Stub: reject / no-op for this opcode.
 /**
  * \brief Dispatches the Return WebAssembly instruction to this stub implementation.
  */
 	void dispatchReturn() override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the Call WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchCall(WASM::FuncIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the CallIndirect WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ReturnCall WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchReturnCall(WASM::FuncIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ReturnCallIndirect WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the CallRef WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchCallRef(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ReturnCallRef WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchReturnCallRef(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the TryTable WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchTryTable(const WASM::BlockType& arg1, std::vector<WASM::CatchClause>&& arg2) override; //!< Stub: reject / no-op for this opcode.
 /**
  * \brief Dispatches the Drop WebAssembly instruction to this stub implementation.
@@ -165,190 +92,42 @@ protected:
  * \brief Dispatches the Select WebAssembly instruction to this stub implementation.
  */
 	void dispatchSelect() override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the SelectT WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchSelectT(std::vector<WASM::ValueType>&& arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the LocalGet WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchLocalGet(WASM::LocalIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the LocalSet WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchLocalSet(WASM::LocalIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the LocalTee WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchLocalTee(WASM::LocalIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the GlobalGet WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalGet(WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the GlobalSet WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalSet(WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the TableGet WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchTableGet(WASM::TableIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the TableSet WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchTableSet(WASM::TableIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32Load WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI32Load(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64Load WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Load(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the F32Load WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchF32Load(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the F64Load WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchF64Load(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32Load8S WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI32Load8S(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32Load8U WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI32Load8U(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32Load16S WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI32Load16S(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32Load16U WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI32Load16U(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64Load8S WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Load8S(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64Load8U WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Load8U(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64Load16S WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Load16S(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64Load16U WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Load16U(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64Load32S WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Load32S(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64Load32U WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Load32U(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32Store WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI32Store(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64Store WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Store(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the F32Store WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchF32Store(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the F64Store WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchF64Store(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32Store8 WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI32Store8(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32Store16 WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI32Store16(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64Store8 WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Store8(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64Store16 WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Store16(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64Store32 WebAssembly instruction to this stub implementation.
- * \param addr Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Store32(WASM::MemArg addr) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the MemorySize WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchMemorySize(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the MemoryGrow WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchMemoryGrow(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32Const WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32Const(int32_t arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64Const WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64Const(int64_t arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the F32Const WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchF32Const(float arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the F64Const WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchF64Const(double arg) override; //!< Stub: reject / no-op for this opcode.
 /**
  * \brief Dispatches the I32Eqz WebAssembly instruction to this stub implementation.
@@ -862,19 +641,11 @@ protected:
  * \brief Dispatches the I64Extend32S WebAssembly instruction to this stub implementation.
  */
 	void dispatchI64Extend32S() override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the RefNull WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchRefNull(const WASM::HeapType& arg) override; //!< Stub: reject / no-op for this opcode.
 /**
  * \brief Dispatches the RefIsNull WebAssembly instruction to this stub implementation.
  */
 	void dispatchRefIsNull() override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the RefFunc WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchRefFunc(WASM::FuncIdx arg) override; //!< Stub: reject / no-op for this opcode.
 /**
  * \brief Dispatches the RefEq WebAssembly instruction to this stub implementation.
@@ -884,160 +655,36 @@ protected:
  * \brief Dispatches the RefAsNonNull WebAssembly instruction to this stub implementation.
  */
 	void dispatchRefAsNonNull() override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the BrOnNull WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchBrOnNull(WASM::LabelIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the BrOnNonNull WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchBrOnNonNull(WASM::LabelIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StructNew WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStructNew(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StructNewDefault WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStructNewDefault(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StructGet WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StructGetS WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructGetS(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StructGetU WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructGetU(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StructSet WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayNew WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayNew(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayNewDefault WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayNewDefault(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayNewFixed WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayNewFixed(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayNewData WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayNewData(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayNewElem WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayGet WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayGet(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayGetS WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayGetS(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayGetU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayGetU(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArraySet WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArraySet(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
 /**
  * \brief Dispatches the ArrayLen WebAssembly instruction to this stub implementation.
  */
 	void dispatchArrayLen() override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayFill WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayFill(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayCopy WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayInitData WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayInitElem WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayInitElem(WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the RefTest WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchRefTest(const WASM::HeapType& arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the RefTestNull WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchRefTestNull(const WASM::HeapType& arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the RefCast WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchRefCast(const WASM::HeapType& arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the RefCastNull WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchRefCastNull(const WASM::HeapType& arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the BrOnCast WebAssembly instruction to this stub implementation.
- * \param castop Instruction operand, backend value, or output destination.
- * \param l Instruction operand, backend value, or output destination.
- * \param ht1 Instruction operand, backend value, or output destination.
- * \param ht2 Instruction operand, backend value, or output destination.
- */
 	void dispatchBrOnCast(uint8_t castop, WASM::LabelIdx l, WASM::HeapType ht1, WASM::HeapType ht2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the BrOnCastFail WebAssembly instruction to this stub implementation.
- * \param castop Instruction operand, backend value, or output destination.
- * \param l Instruction operand, backend value, or output destination.
- * \param ht1 Instruction operand, backend value, or output destination.
- * \param ht2 Instruction operand, backend value, or output destination.
- */
 	void dispatchBrOnCastFail(uint8_t castop, WASM::LabelIdx l, WASM::HeapType ht1, WASM::HeapType ht2) override; //!< Stub: reject / no-op for this opcode.
 /**
  * \brief Dispatches the AnyConvertExtern WebAssembly instruction to this stub implementation.
@@ -1060,30 +707,10 @@ protected:
  */
 	void dispatchI31GetU() override; //!< Stub: reject / no-op for this opcode.
 	//! stringref core instructions (docs/proposals/STRINGREF.md STR-3)
-/**
- * \brief Dispatches the StringNewUtf8 WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringNewUtf8(WASM::MemIdx arg) override;
-/**
- * \brief Dispatches the StringNewWtf16 WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringNewWtf16(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StringNewLossyUtf8 WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringNewLossyUtf8(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StringNewWtf8 WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringNewWtf8(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StringConst WebAssembly instruction to this stub implementation.
- * \param idx Instruction operand, backend value, or output destination.
- */
 	void dispatchStringConst(uint32_t idx) override; //!< Stub: reject / no-op for this opcode.
 /**
  * \brief Dispatches the StringMeasureUtf8 WebAssembly instruction to this stub implementation.
@@ -1097,25 +724,9 @@ protected:
  * \brief Dispatches the StringMeasureWtf16 WebAssembly instruction to this stub implementation.
  */
 	void dispatchStringMeasureWtf16() override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StringEncodeUtf8 WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringEncodeUtf8(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StringEncodeLossyUtf8 WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringEncodeLossyUtf8(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StringEncodeWtf8 WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringEncodeWtf8(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StringEncodeWtf16 WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringEncodeWtf16(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
 /**
  * \brief Dispatches the StringConcat WebAssembly instruction to this stub implementation.
@@ -1138,24 +749,12 @@ protected:
  * \brief Dispatches the StringViewWtf8Advance WebAssembly instruction to this stub implementation.
  */
 	void dispatchStringViewWtf8Advance() override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StringViewWtf8EncodeUtf8 WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringViewWtf8EncodeUtf8(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
 /**
  * \brief Dispatches the StringViewWtf8Slice WebAssembly instruction to this stub implementation.
  */
 	void dispatchStringViewWtf8Slice() override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StringViewWtf8EncodeLossyUtf8 WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringViewWtf8EncodeLossyUtf8(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StringViewWtf8EncodeWtf8 WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringViewWtf8EncodeWtf8(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
 /**
  * \brief Dispatches the StringAsWtf16 WebAssembly instruction to this stub implementation.
@@ -1169,10 +768,6 @@ protected:
  * \brief Dispatches the StringViewWtf16GetCodeUnit WebAssembly instruction to this stub implementation.
  */
 	void dispatchStringViewWtf16GetCodeUnit() override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StringViewWtf16Encode WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringViewWtf16Encode(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
 /**
  * \brief Dispatches the StringViewWtf16Slice WebAssembly instruction to this stub implementation.
@@ -1199,45 +794,13 @@ protected:
  */
 	void dispatchStringViewIterSlice() override; //!< Stub: reject / no-op for this opcode.
 	//! GC-array string bridge (docs/proposals/STRINGREF.md STR-6)
-/**
- * \brief Dispatches the StringNewUtf8Array WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringNewUtf8Array(WASM::TypeIdx arg) override;
-/**
- * \brief Dispatches the StringNewWtf16Array WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringNewWtf16Array(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StringEncodeUtf8Array WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringEncodeUtf8Array(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StringEncodeWtf16Array WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringEncodeWtf16Array(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StringNewLossyUtf8Array WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringNewLossyUtf8Array(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StringNewWtf8Array WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringNewWtf8Array(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StringEncodeLossyUtf8Array WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringEncodeLossyUtf8Array(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StringEncodeWtf8Array WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchStringEncodeWtf8Array(WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
 /**
  * \brief Dispatches the I32TruncSatF32S WebAssembly instruction to this stub implementation.
@@ -1271,37 +834,11 @@ protected:
  * \brief Dispatches the I64TruncSatF64U WebAssembly instruction to this stub implementation.
  */
 	void dispatchI64TruncSatF64U() override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the MemoryInit WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchMemoryInit(uint32_t arg1, WASM::MemIdx arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the DataDrop WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchDataDrop(uint32_t arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the MemoryCopy WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchMemoryCopy(WASM::MemIdx arg1, WASM::MemIdx arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the MemoryFill WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchMemoryFill(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the MemoryDiscard WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchMemoryDiscard(WASM::MemIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the RoundingVariant WebAssembly instruction to this stub implementation.
- * \param sub Instruction operand, backend value, or output destination.
- */
 	void dispatchRoundingVariant(uint32_t sub) override; //!< Stub: reject / no-op for this opcode.
 /**
  * \brief Dispatches the I64Add128 WebAssembly instruction to this stub implementation.
@@ -1319,170 +856,36 @@ protected:
  * \brief Dispatches the I64MulWideU WebAssembly instruction to this stub implementation.
  */
 	void dispatchI64MulWideU() override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32Itt WebAssembly instruction to this stub implementation.
- * \param immediate Instruction operand, backend value, or output destination.
- */
 	void dispatchI32Itt(uint32_t immediate) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the TableInit WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ElemDrop WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchElemDrop(uint32_t arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the TableCopy WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchTableCopy(WASM::TableIdx arg1, WASM::TableIdx arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the TableGrow WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchTableGrow(WASM::TableIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the TableSize WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchTableSize(WASM::TableIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the TableFill WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchTableFill(WASM::TableIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Load WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Load8x8S WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load8x8S(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Load8x8U WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load8x8U(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Load16x4S WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load16x4S(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Load16x4U WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load16x4U(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Load32x2S WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load32x2S(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Load32x2U WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load32x2U(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Load8Splat WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load8Splat(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Load16Splat WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load16Splat(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Load32Splat WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load32Splat(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Load64Splat WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load64Splat(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Load32Zero WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load32Zero(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Load64Zero WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load64Zero(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Store WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Store(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Load8Lane WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load8Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Load16Lane WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load16Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Load32Lane WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load32Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Load64Lane WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Load64Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Store8Lane WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Store8Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Store16Lane WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Store16Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Store32Lane WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Store32Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Store64Lane WebAssembly instruction to this stub implementation.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Store64Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the V128Const WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchV128Const(std::span<uint8_t> arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I8x16Shuffle WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI8x16Shuffle(std::span<uint8_t> arg) override; //!< Stub: reject / no-op for this opcode.
 /**
  * \brief Dispatches the I8x16Swizzle WebAssembly instruction to this stub implementation.
@@ -1512,75 +915,19 @@ protected:
  * \brief Dispatches the F64x2Splat WebAssembly instruction to this stub implementation.
  */
 	void dispatchF64x2Splat() override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I8x16ExtractLaneS WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI8x16ExtractLaneS(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I8x16ExtractLaneU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI8x16ExtractLaneU(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I8x16ReplaceLane WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI8x16ReplaceLane(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I16x8ExtractLaneS WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI16x8ExtractLaneS(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I16x8ExtractLaneU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI16x8ExtractLaneU(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I16x8ReplaceLane WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI16x8ReplaceLane(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32x4ExtractLane WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32x4ExtractLane(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32x4ReplaceLane WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32x4ReplaceLane(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64x2ExtractLane WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64x2ExtractLane(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64x2ReplaceLane WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64x2ReplaceLane(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the F32x4ExtractLane WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchF32x4ExtractLane(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the F32x4ReplaceLane WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchF32x4ReplaceLane(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the F64x2ExtractLane WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchF64x2ExtractLane(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the F64x2ReplaceLane WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchF64x2ReplaceLane(uint8_t arg) override; //!< Stub: reject / no-op for this opcode.
 /**
  * \brief Dispatches the I8x16Eq WebAssembly instruction to this stub implementation.
@@ -2428,565 +1775,111 @@ protected:
  * \brief Dispatches the I32x4RelaxedDotI8x16I7x16AddS WebAssembly instruction to this stub implementation.
  */
 	void dispatchI32x4RelaxedDotI8x16I7x16AddS() override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the MemoryAtomicNotify WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchMemoryAtomicNotify(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the MemoryAtomicWait32 WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchMemoryAtomicWait32(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the MemoryAtomicWait64 WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchMemoryAtomicWait64(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the AtomicFence WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- */
 	void dispatchAtomicFence(uint8_t ordering) override; //!< Stub: reject / no-op for this opcode.
 /**
  * \brief Dispatches the AtomicPause WebAssembly instruction to this stub implementation.
  */
 	void dispatchAtomicPause() override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the GlobalAtomicGet WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalAtomicGet(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the GlobalAtomicSet WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalAtomicSet(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the GlobalAtomicRmwAdd WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalAtomicRmwAdd(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the GlobalAtomicRmwSub WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalAtomicRmwSub(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the GlobalAtomicRmwAnd WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalAtomicRmwAnd(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the GlobalAtomicRmwOr WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalAtomicRmwOr(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the GlobalAtomicRmwXor WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalAtomicRmwXor(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the GlobalAtomicRmwXchg WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalAtomicRmwXchg(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the GlobalAtomicRmwCmpxchg WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchGlobalAtomicRmwCmpxchg(uint8_t ordering, WASM::GlobalIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the TableAtomicGet WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchTableAtomicGet(uint8_t ordering, WASM::TableIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the TableAtomicSet WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchTableAtomicSet(uint8_t ordering, WASM::TableIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the TableAtomicRmwXchg WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchTableAtomicRmwXchg(uint8_t ordering, WASM::TableIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the TableAtomicRmwCmpxchg WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchTableAtomicRmwCmpxchg(uint8_t ordering, WASM::TableIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StructAtomicGet WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicGet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StructAtomicGetS WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicGetS(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StructAtomicGetU WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicGetU(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StructAtomicSet WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicSet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StructAtomicRmwAdd WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StructAtomicRmwSub WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicRmwSub(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StructAtomicRmwAnd WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicRmwAnd(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StructAtomicRmwOr WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicRmwOr(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StructAtomicRmwXor WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicRmwXor(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StructAtomicRmwXchg WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicRmwXchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the StructAtomicRmwCmpxchg WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg1 Instruction operand, backend value, or output destination.
- * \param arg2 Instruction operand, backend value, or output destination.
- */
 	void dispatchStructAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayAtomicGet WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicGet(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayAtomicGetS WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicGetS(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayAtomicGetU WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicGetU(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayAtomicSet WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicSet(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayAtomicRmwAdd WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayAtomicRmwSub WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicRmwSub(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayAtomicRmwAnd WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicRmwAnd(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayAtomicRmwOr WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicRmwOr(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayAtomicRmwXor WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicRmwXor(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayAtomicRmwXchg WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicRmwXchg(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the ArrayAtomicRmwCmpxchg WebAssembly instruction to this stub implementation.
- * \param ordering Instruction operand, backend value, or output destination.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchArrayAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicLoad WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicLoad(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicLoad WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicLoad(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicLoad8U WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicLoad8U(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicLoad16U WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicLoad16U(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicLoad8U WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicLoad8U(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicLoad16U WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicLoad16U(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicLoad32U WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicLoad32U(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicStore WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicStore(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicStore WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicStore(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicStore8 WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicStore8(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicStore16 WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicStore16(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicStore8 WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicStore8(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicStore16 WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicStore16(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicStore32 WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicStore32(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmwAdd WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmwAdd(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmwAdd WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmwAdd(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmw8AddU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw8AddU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmw16AddU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw16AddU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw8AddU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw8AddU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw16AddU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw16AddU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw32AddU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw32AddU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmwSub WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmwSub(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmwSub WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmwSub(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmw8SubU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw8SubU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmw16SubU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw16SubU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw8SubU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw8SubU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw16SubU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw16SubU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw32SubU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw32SubU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmwAnd WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmwAnd(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmwAnd WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmwAnd(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmw8AndU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw8AndU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmw16AndU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw16AndU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw8AndU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw8AndU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw16AndU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw16AndU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw32AndU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw32AndU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmwOr WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmwOr(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmwOr WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmwOr(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmw8OrU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw8OrU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmw16OrU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw16OrU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw8OrU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw8OrU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw16OrU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw16OrU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw32OrU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw32OrU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmwXor WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmwXor(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmwXor WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmwXor(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmw8XorU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw8XorU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmw16XorU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw16XorU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw8XorU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw8XorU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw16XorU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw16XorU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw32XorU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw32XorU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmwXchg WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmwXchg(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmwXchg WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmwXchg(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmw8XchgU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw8XchgU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmw16XchgU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw16XchgU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw8XchgU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw8XchgU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw16XchgU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw16XchgU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw32XchgU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw32XchgU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmwCmpxchg WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmwCmpxchg(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmwCmpxchg WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmwCmpxchg(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmw8CmpxchgU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw8CmpxchgU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I32AtomicRmw16CmpxchgU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI32AtomicRmw16CmpxchgU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw8CmpxchgU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw8CmpxchgU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw16CmpxchgU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw16CmpxchgU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
-/**
- * \brief Dispatches the I64AtomicRmw32CmpxchgU WebAssembly instruction to this stub implementation.
- * \param arg Instruction operand, backend value, or output destination.
- */
 	void dispatchI64AtomicRmw32CmpxchgU(WASM::MemArg arg) override; //!< Stub: reject / no-op for this opcode.
 };
 }

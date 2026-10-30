@@ -58,10 +58,6 @@ public:
 	Store(Store&&) = delete;
 	Store& operator=(Store&&) = delete;
 	/** \brief Releases all entities and storage owned by this Store. */
-/**
- * \brief Performs the Store operation.
- * \return The value or status produced by this operation.
- */
 	~Store();
 
 	//! A store owns every runtime entity: types, memories, tables, tags, the GC

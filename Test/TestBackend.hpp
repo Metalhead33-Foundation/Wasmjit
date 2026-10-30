@@ -38,10 +38,6 @@ using Session = WASM::BackendSession;
  * \return A newly created backend session, or nullptr if the selected backend
  *         cannot be created.
  */
-/**
- * \brief Performs the create operation.
- * \return The value or status produced by this operation.
- */
 std::unique_ptr<Session> create();
 
 } // namespace TestBackend

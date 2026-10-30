@@ -97,11 +97,6 @@ struct CanonicalType {
 	std::optional<CanonHeapType> descriptor;
 	std::optional<CanonHeapType> describes;
 	std::vector<CanonHeapType> supertypes; //!< stored as Global after interning
-/**
- * \brief Performs the max operation.
- * \param depths Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 	uint32_t      depth = 0;               //!< 1 + max(supertype depths); 0 if none
 
 	//! Kind-specific payload (exactly one is used).

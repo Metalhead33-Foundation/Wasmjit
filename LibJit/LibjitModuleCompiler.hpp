@@ -10,7 +10,7 @@
   This header is internal: it is not part of the embedding surface.
 */
 
-namespace LibJit {
+namespace LibJIT {
 
 /*!
  * \brief Implements module-instantiation compilation hooks using LibJIT.

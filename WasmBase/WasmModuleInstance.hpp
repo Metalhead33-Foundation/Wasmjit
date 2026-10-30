@@ -123,11 +123,6 @@ struct ModuleInstanceInternals {
 	//! trap interns the finished message here (docs/SAFETY.md §2.4,
 	//! docs/proposals/EXTENDED_NAME_SECTION.md ENS-5).
 	std::set<std::string> trapMessages;
-/**
- * \brief Performs the internTrapMessage operation.
- * \param message Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 	const char* internTrapMessage(std::string message)
 	{
 		return trapMessages.insert(std::move(message)).first->c_str();
@@ -158,63 +153,29 @@ private:
 	//! execute one instance at the same time, while `inCall()` must still mean
 	//! "anyone inside" for the GC safepoint's quiescence rule.
 	std::atomic<std::uint32_t> activeCalls{0};
-/**
- * \brief Performs the resolveImports operation.
- * \param importResolver Input value or output destination for this operation.
- */
 	void resolveImports(ImportResolver& importResolver);
-/**
- * \brief Performs the resolveTypeImports operation.
- * \param importResolver Input value or output destination for this operation.
- */
 	void resolveTypeImports(ImportResolver& importResolver);
 	std::vector<TypeId> importedTypeIds; //!< Field `importedTypeIds` of WASMJIT_API.
-/**
- * \brief Performs the initializeMemories operation.
- */
 	void initializeMemories();
-/**
- * \brief Performs the initializeGlobals operation.
- */
 	void initializeGlobals();
-/**
- * \brief Performs the initializeStringLiterals operation.
- */
 	void initializeStringLiterals();
-/**
- * \brief Performs the initializeTable operation.
- */
 	void initializeTable();
 	//! Rewrites `ref.func` sentinels left in globalsStorage by evalConstantExpr
 	//! into real Callable pointers. Must run after declareFunctions() /
 	//! compileFunctions(), because those callable tables do not exist yet when
 	//! initializeGlobals() runs (i.e. in the constructor).
 	void resolveGlobalRefFuncs();
-/**
- * \brief Performs the resolveRefFuncsInObject operation.
- * \param ref Input value or output destination for this operation.
- * \param visited Input value or output destination for this operation.
- */
 	void resolveRefFuncsInObject(void* ref, std::vector<void*>& visited);
 	//! The same rewrite for table initialiser expressions: `initializeTable()` runs
 	//! in the constructor, so a `(ref.func …)` initialiser is stored as null there
 	//! and every slot of that table is filled in here, once the callables exist
 	//! (docs/proposals/GC.md G5). Must run before element segments are applied.
 	void resolveTableRefFuncs();
-/**
- * \brief Performs the evalConstantExpr operation.
- * \param expr Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 	Value evalConstantExpr(const std::span<const std::byte>& expr);
 	//! Reference-counting internals (docs/proposals/GC.md §6, RC-1/RC-3).
 	//! `gcRefcountSlot` returns the object's count word, or nullptr when `ref`
 	//! is not a GC object (null, an i31 immediate, an externref or a funcref).
 	uint32_t* gcRefcountSlot(const void* ref);
-/**
- * \brief Performs the reclaimGcObject operation.
- * \param ref Input value or output destination for this operation.
- */
 	void reclaimGcObject(void* ref);
 
 	//! \par Safepoint walker (docs/proposals/GC.md RC-3)
@@ -243,14 +204,7 @@ private:
 	//! not fit is merely not trialled now, which can delay a collection but never
 	//! free something live.
 	static constexpr size_t kMaxCycleCandidates = 4096;
-/**
- * \brief Performs the possibleCycleRoot operation.
- * \param ref Input value or output destination for this operation.
- */
 	void possibleCycleRoot(void* ref);
-/**
- * \brief Performs the collectCycles operation.
- */
 	void collectCycles();
 public:
 	friend class ModuleInstantiator;
@@ -501,12 +455,6 @@ public:
 	const ProfileConfig& profile() const { return activeProfile; }
 
 protected:
-/**
- * \brief Performs the evalConstantExpr operation.
- * \param expr Input value or output destination for this operation.
- * \param instance Input value or output destination for this operation.
- * \return The value or status produced by this operation.
- */
 	Value evalConstantExpr(const std::span<const std::byte>& expr, ModuleInstance& instance);
 	//! Lower the module's types into the backend's representation, so the
 	//! declared and the compiled functions agree on one ABI.

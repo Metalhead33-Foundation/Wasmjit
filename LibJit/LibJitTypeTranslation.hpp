@@ -52,10 +52,6 @@ private:
 	 * \brief Creates the LibJIT type used for an i31 reference.
 	 * \return The LibJIT type handle representing i31.
 	 */
-/**
- * \brief Performs the createi31Type operation.
- * \return The value or status produced by this operation.
- */
 	static jit_type_t createi31Type();
 public:
 	/*!
@@ -68,9 +64,6 @@ public:
 	 * The canonical cache is retained so types shared by subsequent modules
 	 * can continue to reuse their lowered representations.
 	 */
-/**
- * \brief Performs the reset operation.
- */
 	void reset();
 	/*!
 	 * \brief Finds the lowered type associated with a WebAssembly value type.
@@ -107,10 +100,6 @@ public:
 	 * \brief Returns the LibJIT pointer type used for the implicit VM context ABI argument.
 	 * \return LibJIT's void-pointer type handle.
 	 */
-/**
- * \brief Performs the translateVMContextPointerType operation.
- * \return The value or status produced by this operation.
- */
 	jit_type_t translateVMContextPointerType() const;
 	/*!
 	 * \brief Lowers a parsed WebAssembly function signature.
@@ -185,46 +174,26 @@ public:
 	 * \brief Reports the number of canonical types cached across modules.
 	 * \return Number of entries in the canonical type cache.
 	 */
-/**
- * \brief Performs the canonicalCacheSize operation.
- * \return The value or status produced by this operation.
- */
 	size_t canonicalCacheSize() const { return canonicalCache.size(); }
 	/*!
 	 * \brief Provides read-only access to translated types in module-local order.
 	 * \return Const reference to the translated type vector.
 	 */
-/**
- * \brief Performs the getTranslatedTypes operation.
- * \return The value or status produced by this operation.
- */
 	const std::vector<jit_type_t>& getTranslatedTypes() const;
 	/*!
 	 * \brief Provides mutable access to translated types in module-local order.
 	 * \return Reference to the translated type vector.
 	 */
-/**
- * \brief Performs the getTranslatedTypes operation.
- * \return The value or status produced by this operation.
- */
 	std::vector<jit_type_t>& getTranslatedTypes();
 	/*!
 	 * \brief Provides read-only access to the module-local type cache.
 	 * \return Const reference to the type map.
 	 */
-/**
- * \brief Performs the getTypemap operation.
- * \return The value or status produced by this operation.
- */
 	const TypeMap& getTypemap() const;
 	/*!
 	 * \brief Provides mutable access to the module-local type cache.
 	 * \return Reference to the type map.
 	 */
-/**
- * \brief Performs the getTypemap operation.
- * \return The value or status produced by this operation.
- */
 	TypeMap& getTypemap();
 };
 

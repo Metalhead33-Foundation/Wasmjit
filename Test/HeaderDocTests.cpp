@@ -208,7 +208,9 @@ TEST_CASE("Every header has a Doxygen file block", "[headerdoc]")
 
 // The renderer has to agree with the style the headers are written in: Qt-style
 // doc comments and `QT_AUTOBRIEF` are what turn `//! First sentence.` into a
-// brief, and the output belongs in the shadow build tree.
+// brief, the output belongs in the shadow build tree, and `WARN_NO_PARAMDOC`
+// is what makes a documented function with an undocumented parameter fail
+// (docs/DOCUMENTATION.md §3.1).
 TEST_CASE("The Doxyfile keeps the Qt-style settings", "[headerdoc]")
 {
 	const std::filesystem::path doxyfile = std::filesystem::path(WASM_TESTSUITE_SOURCE_DIR)
@@ -218,4 +220,5 @@ TEST_CASE("The Doxyfile keeps the Qt-style settings", "[headerdoc]")
 	const std::string text = readTextFile(doxyfile);
 	CHECK(text.find("QT_AUTOBRIEF           = YES") != std::string::npos);
 	CHECK(text.find("OUTPUT_DIRECTORY       = build/doxygen") != std::string::npos);
+	CHECK(text.find("WARN_NO_PARAMDOC       = YES") != std::string::npos);
 }

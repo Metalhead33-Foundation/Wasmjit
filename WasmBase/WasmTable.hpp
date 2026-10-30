@@ -31,10 +31,6 @@ struct TableInstance {
 static_assert(offsetof(TableInstance, base) == 0,
 			  "TableInstance::base must remain the first field for backend ABI compatibility");
 static_assert(std::is_standard_layout_v<TableInstance>,
-/**
- * \brief Performs the offsetof operation.
- * \return The value or status produced by this operation.
- */
 			  "TableInstance must remain standard-layout for offsetof() access from generated code");
 
 //! A table owned by the (global) Store. The backing slot array lives here; the
