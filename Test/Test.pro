@@ -114,7 +114,8 @@ SOURCES += main.cpp \
     PluginTests.cpp \
     HeaderTierTests.cpp \
     AsmjitBackendTests.cpp \
-    AsmjitTypeTranslatorTests.cpp
+    AsmjitTypeTranslatorTests.cpp \
+    AsmjitModuleCompilerTests.cpp
 HEADERS +=  \
     helper.hpp \
     Diagnose.hpp \
