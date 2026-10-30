@@ -34,20 +34,20 @@ namespace WASM { struct VMContext; }
 //! passes them as a constant), so they must not be renumbered casually.
 /** \brief Operation selector passed to the atomic RMW helper ABI. */
 enum WasmAtomicOp : uint32_t {
-	WASM_ATOMIC_ADD  = 0,
-	WASM_ATOMIC_SUB  = 1,
-	WASM_ATOMIC_AND  = 2,
-	WASM_ATOMIC_OR   = 3,
-	WASM_ATOMIC_XOR  = 4,
-	WASM_ATOMIC_XCHG = 5,
+	WASM_ATOMIC_ADD  = 0, //!< WasmAtomicOp enumerator `WASM_ATOMIC_ADD`.
+	WASM_ATOMIC_SUB  = 1, //!< WasmAtomicOp enumerator `WASM_ATOMIC_SUB`.
+	WASM_ATOMIC_AND  = 2, //!< WasmAtomicOp enumerator `WASM_ATOMIC_AND`.
+	WASM_ATOMIC_OR   = 3, //!< WasmAtomicOp enumerator `WASM_ATOMIC_OR`.
+	WASM_ATOMIC_XOR  = 4, //!< WasmAtomicOp enumerator `WASM_ATOMIC_XOR`.
+	WASM_ATOMIC_XCHG = 5, //!< WasmAtomicOp enumerator `WASM_ATOMIC_XCHG`.
 };
 
 //! The acquire-release ordering immediate (docs/proposals/ACQUIRE_RELEASE_ATOMICS.md).
 //! Kept explicit in the helper ABI so generated code can pass it as a constant.
 /** \brief Memory-order selector passed to atomic helper entry points. */
 enum WasmAtomicOrdering : uint32_t {
-	WASM_ATOMIC_SEQCST = 0,
-	WASM_ATOMIC_ACQREL = 1,
+	WASM_ATOMIC_SEQCST = 0, //!< WasmAtomicOrdering enumerator `WASM_ATOMIC_SEQCST`.
+	WASM_ATOMIC_ACQREL = 1, //!< WasmAtomicOrdering enumerator `WASM_ATOMIC_ACQREL`.
 };
 
 extern "C" {
