@@ -2,7 +2,7 @@
 
 This directory contains an experimental, deliberately limited WebAssembly
 backend. It implements the four `ModuleInstantiator` hooks and executes an
-initial i32 subset. It is not feature-complete and must not be treated as a
+initial i32/i64 integer subset. It is not feature-complete and must not be treated as a
 drop-in replacement for GNU LibJIT.
 
 ## What exists
@@ -24,8 +24,11 @@ drop-in replacement for GNU LibJIT.
 the two-pass instantiation contract and enabling forward and mutually recursive
 direct calls. Each generated function emits the required
   `wasm_stack_check(VMContext*)` prologue call.
-- The body compiler currently supports i32 parameters/results/locals; constants,
-  local access, `drop`, untyped and i32-typed `select`; i32 globals; arithmetic (`add/sub/mul/div/rem`),
+- The body compiler currently supports i32/i64 parameters, results, and locals;
+  i32/i64 constants and local access; i64 arithmetic (`add/sub/mul/div/rem`),
+  bitwise operations, shifts, rotations, comparisons, and `eqz`; i32 arithmetic,
+  bit counts, sign extension, comparisons, bitwise operations, shifts, and rotations;
+  `drop`, untyped and i32-typed `select`; i32 globals; arithmetic (`add/sub/mul/div/rem`),
   `clz`/`ctz`/`popcnt`, sign extension; signed/unsigned comparisons; bitwise
   operations, shifts and rotations; void and single-i32-result `block`/`loop`/`if`/`else`, `br`/`br_if`/`br_table`,
   branches to the implicit function label, and explicit/implicit returns; direct calls
@@ -96,9 +99,9 @@ upstream repository so that `asmjit.pc` is visible through `PKG_CONFIG_PATH`.
 ## Next implementation stages
 
 1. Extend structured control flow to block parameters, multi-value results, full branch-stack semantics, and general unreachable-stack polymorphism.
-2. Implement true tail-call ABI/stack semantics and broaden the call ABI beyond i32.
+2. Implement true tail-call ABI/stack semantics and broaden call lowering to i64 arguments/results.
 3. Expand linear memory to the remaining load/store widths, memory64, and the remaining bulk-memory/table operations.
-4. Add i64/floating-point arithmetic and conversions, non-i32 globals, references/GC, exceptions, continuations, and Wasm SIMD lowering.
+4. Add floating-point arithmetic and conversions, non-i32 globals, references/GC, exceptions, continuations, and Wasm SIMD lowering.
 5. Meet every applicable item in
    [`docs/BACKEND_WORK_ORDER.md`](../docs/BACKEND_WORK_ORDER.md) before calling
    the backend complete.
