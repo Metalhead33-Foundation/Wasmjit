@@ -13,7 +13,10 @@ when a toolchain or the canonical list moves.
 **No language was assessed by running anything.** This log's external entries
 are documents; its in-repo entries are documents and tests. The screen's
 strongest claim is `E1` — "a published toolchain document says so" — which is
-exactly why every triage row still routes its verdict to `LF-2`.
+exactly why every triage row still routes its verdict to `LF-2`. The `LF-2`
+studies have since been run under their charters, and **their** evidence — real
+toolchain versions, module hashes and transcripts — is a separate log,
+[`LF2_EVIDENCE.md`](LF2_EVIDENCE.md); nothing in *this* log was retro-fitted.
 
 ## 1. Document map
 

@@ -10,7 +10,8 @@ conditions, names the five clusters worth a full study, and writes the explicit
 "don't study" list.
 
 It assigns no colour and approves no study: the charters that follow from it live
-in [`CHARTERS.md`](CHARTERS.md), and every one of them is still missing `T3`.
+in [`CHARTERS.md`](CHARTERS.md), and they were approved and run on 2026-10-30 —
+the reports are the `LF2_*` notes.
 Audience: anyone deciding what to commission next, and anyone who wants to know
 why their language is not in the shortlist.
 

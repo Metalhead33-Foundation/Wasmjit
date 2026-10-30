@@ -460,8 +460,11 @@ work is ≈10 kLOC of uniform, per-opcode emission.
    rediscovered per candidate: the single-agent thread contract (`RG2`), the
    memory allocation policy (`RG4`, `RA4` — a *policy* since `MP-1`, no longer an
    engine limitation), and the absence of a step budget (`RG1` limits).
-4. **Nothing else changes.** No language is assessed, no candidate is screened,
-   no support claim is made, and `LF-2` still needs `LF-1` plus a named requester.
+4. **Nothing else changes.** No language is assessed *for support*, no candidate is
+   promoted, no support claim is made, and `LF-3` is where a verdict would turn
+   into one. The `LF-2` studies have since been run
+   ([`languages/LF2_INDEX.md`](languages/LF2_INDEX.md)) and their three engine
+   findings (`F1`–`F3`) are `LF-3` input, not part of this audit.
 
 ## 8. Plan
 

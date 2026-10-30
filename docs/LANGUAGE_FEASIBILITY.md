@@ -1,9 +1,10 @@
 # Wasm Language Support — Pre-Feasibility, Full Feasibility, and the Entry-Gate Readiness Audit {#doc_language_feasibility}
 
-Status: process definition / study charter (revision 4 — 2026-10-30: the
-pre-feasibility study `LF-1` has been **run**, and its output is the
-[`languages/`](languages/index.md) set; revision 3 — 2026-10-30: the entry-gate
-audit `LF-0a` has been **run**, and its result lives in
+Status: process definition / study charter (revision 5 — 2026-10-30: `LF-2` has
+been **run** and its reports are the `LF2_*` notes in
+[`languages/`](languages/index.md); revision 4 — 2026-10-30: `LF-1` has been
+run, and its output is the [`languages/`](languages/index.md) set; revision 3 —
+2026-10-30: the entry-gate audit `LF-0a` has been **run**, and its result lives in
 [`READINESS_AUDIT.md`](READINESS_AUDIT.md); revision 2 — 2026-10-29 — added the
 entry-gate readiness audit and the engine/embedder distinction). **This note
 defines two studies and the audit that gates them; it runs none of them.** No
@@ -63,7 +64,8 @@ rows are `Pinned`, and `LF-1` is therefore unblocked. The audit is not a languag
 study and produces no verdict; it is the statement that the screen's inputs are
 stable enough to be measured against. **`LF-1` was then run on 2026-10-30 and its
 output is the [`languages/`](languages/index.md) set** — still no verdicts, and
-`LF-2` still needs a named requester.
+`LF-2` was later commissioned by the repository owner and run on the same day
+([`languages/LF2_INDEX.md`](languages/LF2_INDEX.md) "Commissioning").
 
 **Inputs.** The canonical candidate list (§3), a pinned readiness snapshot (§6),
 existing knowledge of WasmJit's contracts (the host ABI, the import/export
@@ -724,14 +726,15 @@ on `LF-1` and on a named requester (`T3`).
 | **`LF-0` — Define the studies and the gate** | `✅` This note: the vocabulary, the two protocols, the entry-gate audit, the colour/kill codes, the outputs, the budgets. | — | This note is reviewed and linked from `README.md`, `API_ABI_STABILITY.md` §12 and `AGENTS.md`. |
 | **`LF-0a` — Entry-gate readiness audit** | `✅` **Run 2026-10-30** at `5c3d194`: [`READINESS_AUDIT.md`](READINESS_AUDIT.md) states `RG1`–`RG6` with evidence, and re-checks `G3` in the same sweep. All six rows `Pinned`; one limitation recorded against `RG4` (`RA4`); no dated waiver needed. **Not a language study.** | `LF-0` | Every row has a state, evidence and a date; the moving-targets list exists; no row is `Unpinned` (or a dated waiver says why). |
 | **`LF-1` — Pre-feasibility / scoping study** | `✅` **Run 2026-10-30**: the output is the [`languages/`](languages/index.md) set — [`TRIAGE.md`](languages/TRIAGE.md) (102 rows over all 84 entries), [`CLUSTERING.md`](languages/CLUSTERING.md) (`L1`–`L12`, 5 charters, the don't-study list), [`CHARTERS.md`](languages/CHARTERS.md) (`S1`–`S5`, all proposed) and [`EVIDENCE.md`](languages/EVIDENCE.md). **Re-screened three times the same day** as engine-owned surfaces moved (§6.5): the legacy-EH policy, then `LE-9`, then `MP-1` (a memory reservation policy) — seven rows re-graded in total, no cluster, tier, kill or shortlist position moved ([`languages/TRIAGE.md`](languages/TRIAGE.md) §6.9–§6.12). That sequence also produced the screen's working rule for what the engine owes a language (§3.1 there: *load, instantiate, execute; the host import set is the embedder's*). | `LF-0a` | A triage table over the whole list (every row evidence-tiered), a dependency/abstraction map, trigger conditions, one charter per recommended cluster, and a don't-study list. **No green/yellow/red verdicts**, black kills only. |
-| **`LF-2` — Full feasibility studies** | One study per chartered cluster, using the §8 protocol. **Not started** — five charters are proposed and none has a named requester (`T3`). | `LF-1` | One report per cluster: filled §4 table, colour verdict per pinned version, reproducible PoCs, budget respected, engine work named and classed. |
-| **`LF-3` — The support decision** | Decide which, if any, language/toolchain receives engine work; classify that work. **Not a study.** | `LF-2` | A milestone decision, not a commit: each follow-up item has a class per [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §4.1 and a gate it touches. |
+| **`LF-2` — Full feasibility studies** | One study per chartered cluster, using the §8 protocol. **Run 2026-10-30**: fifteen arms across `S1`–`S5`, reports in [`languages/LF2_INDEX.md`](languages/LF2_INDEX.md). Three engine findings (`F1`–`F3`), each classed and reproduced; 83 non-killed rows were not run and are listed with a condition ([`languages/LF2_L6_L12.md`](languages/LF2_L6_L12.md) §5). | `LF-1` | One report per cluster: filled §4 table, colour verdict per pinned version, reproducible PoCs, budget respected, engine work named and classed. |
+| **`LF-3` — The support decision** | Decide which, if any, language/toolchain receives engine work; classify that work. **Not a study, not started.** | `LF-2` | A milestone decision, not a commit: each follow-up item has a class per [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §4.1 and a gate it touches. |
 
 Ordering: `LF-0a` gates `LF-1`, and `LF-1` is a prerequisite for every `LF-2`
 charter; `LF-3` may reject all of them, and that is a successful outcome.
-**`LF-0` is this note, `LF-0a` is [`READINESS_AUDIT.md`](READINESS_AUDIT.md) and
-`LF-1` is the [`languages/`](languages/index.md) set. `LF-2` has not been
-started, and nothing in this folder may be read as its result.**
+**`LF-0` is this note, `LF-0a` is [`READINESS_AUDIT.md`](READINESS_AUDIT.md),
+`LF-1` and `LF-2` are the [`languages/`](languages/index.md) set (`TRIAGE.md`
+and the `LF2_*` reports respectively), and `LF-3` has not started.** No verdict
+in `LF-2` is a support promise, and nothing in the reports may be read as one.
 
 ## 12. Evidence and test survey
 
@@ -743,10 +746,11 @@ started, and nothing in this folder may be read as its result.**
 | `[docs]` structural lint | Covers `docs/proposals/` (the note shape) **and** the note tree (`docs/index.md`, `docs/proposals/index.md`, `docs/languages/index.md`: ids and rows) | This note is not linted for *shape* (like the other top-level notes), but it is linted for *placement*: it must declare a page id and appear in `docs/index.md`, or the tree silently flattens ([`DOCUMENTATION.md`](DOCUMENTATION.md) §9). `LF-1` added the third index page, and the check counts its four notes (`languageNotes >= 4`). |
 | `[layering]` / `[surface]` gates | **Exist** (`Test/LayeringTests.cpp`, `Test/SurfaceTests.cpp`, `Test/HeaderTierTests.cpp`) | `RG1`/`RG3`/`RG6` evidence: the core ↔ backend vocabulary is machine-checked, the version identity an embedder compiles against is exercised at run time, and every header has a declared tier. |
 | `[runtime]` / `[plugin]` gates | **Exist** (`Test/RuntimeTests.cpp`, `Test/PluginTests.cpp`) | `RG5`/`RG6` evidence: the load → instantiate → call recipe runs against a declared runtime, and a backend loads from a separate shared library through the C descriptor. |
-| Language-feasibility PoC tests | **None exist** under this note's definition | `LF-2` produces them under a charter; promotion to the default suite is a separate decision. |
-| AssemblyScript test modules | **Exist** (`Test/wasm/*.ts`, built at test time) | Harness evidence for strings, arrays and native-import interop — input to a future `LF-2`, not a study; `LF-1` named it as an input rather than re-buying it ([`languages/CLUSTERING.md`](languages/CLUSTERING.md) §3.1). |
+| Language-feasibility PoC tests | **Exist as study artefacts** (under `build/lf2/`, not in the suite) | `LF-2` produced them under the charters; promotion to the default suite is a separate decision. |
+| AssemblyScript test modules | **Exist** (`Test/wasm/*.ts`, built at test time) | Harness evidence for strings, arrays and native-import interop — consumed by `S3` rather than re-bought ([`languages/LF2_S3_AS.md`](languages/LF2_S3_AS.md) §1). |
 | Canonical candidate list | **Read by `LF-1`** — 84 entries at commit `98da486`, fetched 2026-10-30 | All 84 are accounted for across 102 triage rows; the coverage statement is [`languages/TRIAGE.md`](languages/TRIAGE.md) §5.6. |
-| `LF-1` output | **Exists** — the [`languages/`](languages/index.md) set: the triage, the clustering map, five proposed charters and the evidence log | Documents only: no toolchain installed, no module compiled, no PoC run, no engine change ([`languages/EVIDENCE.md`](languages/EVIDENCE.md) §5). This note is still the authority for what a study *is*. |
+| `LF-1` output | **Exists** — the [`languages/`](languages/index.md) set: the triage, the clustering map, five charters and the evidence log | Documents only: no toolchain installed, no module compiled, no PoC run, no engine change ([`languages/EVIDENCE.md`](languages/EVIDENCE.md) §5). This note is still the authority for what a study *is*. |
+| `LF-2` output | **Exists** — [`languages/LF2_INDEX.md`](languages/LF2_INDEX.md) and eight notes | 15 arms built and run, 3 engine findings classed, module hashes and transcripts in [`languages/LF2_EVIDENCE.md`](languages/LF2_EVIDENCE.md); no engine change and no test-suite change. |
 
 Reading: nothing in the default suite changes when a study is commissioned. The
 reviewable artefact is the study report itself, and its evidence rules are §8.4.

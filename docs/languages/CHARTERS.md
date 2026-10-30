@@ -1,11 +1,11 @@
 # The `LF-2` Charters — Five Proposed Commissions {#lf_charters}
 
-Status: proposed charters (revision 1 — 2026-10-30). Each is a **proposal**, not
-an approval: `LF-2` requires a charter *and* a named requester
-([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §8.1), and **no
-requester exists**, so `T3` is missing for all five
-([`CLUSTERING.md`](CLUSTERING.md) §5). Approving one is a milestone decision, not
-a commit.
+Status: charters and their reports (revision 2 — 2026-10-30: all five were
+**approved in one batch** by the repository owner's commission, which is the
+recorded requester (`T3`), and were **run**; the reports are
+[`LF2_INDEX.md`](LF2_INDEX.md) and its cluster reports. Revision 1 proposed the
+five commissions and recorded that no requester existed). Approving one is a
+milestone decision, not a commit, and `LF-3` may still reject every verdict.
 
 Each charter carries the eight fields of
 [`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §7.8 and the shared
@@ -165,16 +165,31 @@ each is a first-week item inside whichever charter runs first.
 
 | Charter | Cluster | `T1` | `T2` | `T3` | Status |
 |---|---|---|---|---|---|
-| `S1` | `L1` | ✅ | ⚠ | ❌ | **Proposed** — not approvable until a requester exists |
-| `S2` | `L2` | ✅ | ⚠ | ❌ | **Proposed** |
-| `S3` | `L3` | ✅ | ✅ | ❌ | **Proposed** — the only one whose `T1`+`T2` are met |
-| `S4` | `L4` | ⚠ | ⚠ | ❌ | **Proposed** |
-| `S5` | `L5` | ✅ | ⚠ | ❌ | **Proposed** |
+| `S1` | `L1` | ✅ | ⚠ | ✅ | **Run** — 5 arms; 2 green, 3 yellow ([`LF2_S1_C_CPP.md`](LF2_S1_C_CPP.md)) |
+| `S2` | `L2` | ✅ | ⚠ | ✅ | **Run** — 4 arms, all green ([`LF2_S2_LLVM.md`](LF2_S2_LLVM.md)) |
+| `S3` | `L3` | ✅ | ✅ | ✅ | **Run** — 1 arm, green ([`LF2_S3_AS.md`](LF2_S3_AS.md)) |
+| `S4` | `L4` | ⚠ | ⚠ | ✅ | **Run** — 3 arms; 2 yellow, 1 red ([`LF2_S4_WASMGC.md`](LF2_S4_WASMGC.md)) |
+| `S5` | `L5` | ✅ | ⚠ | ✅ | **Run** — 1 arm, green ([`LF2_S5_GUEST_VMS.md`](LF2_S5_GUEST_VMS.md)) |
 
-**What approving one would require.** A milestone decision that names the
-requester, copies the cap into a hard cap, assigns an owner, and fixes the
-versions ([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §8.1). Until
-then, `LF-2` has not started, and this folder must not be read as if it had.
+**How `T3` was met.** The requester is the repository owner, who commissioned
+"all the language feasibility studies for the non-killed languages, including
+Kotlin" on 2026-10-30; the date, the exact scope and the fact that the owner is
+also the reviewer are recorded in [`LF2_INDEX.md`](LF2_INDEX.md) "Commissioning".
+Pending `T1`/`T2` markers were carried into the study as scope limits, not as
+reasons to skip a cluster — `S4` is the case where `T2` was the open question
+and the answer was an engine defect (`F3`).
+
+**What is still open.** `LF-3` has not started: no verdict in the reports is a
+support promise, and `F1`–`F3` are the engine work it has to sequence (or
+reject). The 83 non-killed rows with no arm are listed in
+[`LF2_L6_L12.md`](LF2_L6_L12.md) §5 with the condition that would start each.
+
+**What approving one required.** A milestone decision that named the requester,
+copied the cap into a hard cap, assigned an owner, and fixed the versions
+([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §8.1). That decision
+was taken on 2026-10-30 (the owner's commission), and the reports it produced
+are the `LF2_*` notes. `LF-3` remains the step that turns a verdict into engine
+work or a support statement.
 
 **Exit.** A charter ends in one of three ways: a report with a colour verdict
 (`LF-2` done), a kill with its signal (§5.2 there), or "unknown — cap hit". Any

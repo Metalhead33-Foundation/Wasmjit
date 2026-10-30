@@ -131,8 +131,11 @@ completing WebAssembly. In particular:
 - **No source-language support requirement.** The language-support studies are
   only *defined* in [`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md): the
   entry-gate readiness audit (`LF-0a`), the pre-feasibility screen (`LF-1`) and
-  the full studies (`LF-2`) have not been run, no language is supported or
-  rejected, and no gate waits on any of them. A `.wasm` module is the supported
+  the full studies (`LF-2`) have since been **run**, and their reports are
+  [`READINESS_AUDIT.md`](READINESS_AUDIT.md) and the `LF2_*` notes in
+  [`languages/`](languages/index.md). They produced colour verdicts and three
+  engine findings, but no language is **supported** or rejected — that is `LF-3`
+  — and no gate here waits on any of them. A `.wasm` module is the supported
   input, whoever produced it.
 - **No performance target.** `SIMD-L8`'s measured 4.10 ns per `v128` op and the
   deliberately unbuilt batched path (`D4`) are diagnostics, not gates.
@@ -662,8 +665,10 @@ from `build/Desktop-Debug`, for the combined readiness audit
   entry-gate readiness audit and the pre-feasibility (scoping) and full
   feasibility studies for source languages compiled to WebAssembly. The audit
   (`LF-0a`) has since been run and its report is
-  [`READINESS_AUDIT.md`](READINESS_AUDIT.md); the two language studies have not
-  been started, no language is assessed, and no gate here waits on `LF-1`/`LF-2`.
+  [`READINESS_AUDIT.md`](READINESS_AUDIT.md); the two language studies were run
+  on 2026-10-30 and their reports are the `LF2_*` notes under
+  [`languages/`](languages/index.md). No language is assessed for *support* and
+  no gate here waits on `LF-1`/`LF-2`/`LF-3`.
 - [`READINESS_AUDIT.md`](READINESS_AUDIT.md) — the combined audit: `G3`
   re-checked (§4), the `RG1`–`RG6` readiness report (§5), the pinned snapshot,
   the moving-targets and not-audited lists (§6), and the runs behind them (§9).

@@ -1,24 +1,27 @@
-# Language Support — the `LF-1` Pre-Feasibility Screen {#languages_index}
+# Language Support — the `LF-1` Screen and the `LF-2` Studies {#languages_index}
 
-Status: study report set (revision 3 — 2026-10-30: the screen was **re-run twice**
-the engine moved: `LE-9` closed the mixed exception-form refusal (`TRIAGE.md` §6.10) and
-`MP-1` gave a non-shared memory a reservation policy (§6.11–§6.12, which also writes down
-what A3 grades — the Kotlin shape: *load, instantiate, execute; the host import set is the
-embedder's*). Revision 2 was the first re-screen, after the legacy-EH parser policy landed
-(§6.9). This folder is the **output
-of `LF-1`**, the pre-feasibility / scoping study defined in
-[`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §7: it screens the whole
-canonical candidate list on three axes, clusters the candidates by shared
-blocker, records trigger conditions, writes one charter per recommended
-cluster, and lists what is deliberately **not** studied.
+Status: study report set (revision 4 — 2026-10-30: the `LF-2` studies were
+**run**, and this folder now holds their reports beside the `LF-1` screen; see
+[`LF2_INDEX.md`](LF2_INDEX.md). Revision 3 was the third re-screen after `MP-1`
+gave a non-shared memory a reservation policy, which also wrote down what A3
+grades — the Kotlin shape: *load, instantiate, execute; the host import set is
+the embedder's*; revision 2 was the re-screen after the legacy-EH parser policy
+landed). The notes without an `LF2_` prefix are the **output of `LF-1`**, the
+pre-feasibility / scoping study defined in
+[`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §7: they screen the whole
+canonical candidate list on three axes, cluster the candidates by shared
+blocker, record trigger conditions, write one charter per recommended
+cluster, and list what is deliberately **not** studied. The `LF2_*` notes are
+the commissioned full studies of [`CHARTERS.md`](CHARTERS.md).
 
-**It carries no verdict.** No row here is green, yellow or red, no language is
-declared supported or unsupported, and nothing in this folder is a promise to an
-embedder. Colour is a full-study (`LF-2`) output; support is a milestone
-decision (`LF-3`). What this folder does say, per candidate, is which
-architectural friction is most likely to bite, which other languages share it,
-what a full study would have to answer, what it would cost, and what would make
-it worth running — which is `LF-1`'s acceptance sentence
+**The `LF-1` notes carry no verdict.** No `LF-1` row is green, yellow or red, no
+language is declared supported or unsupported, and nothing in the screen is a
+promise to an embedder. Colour is a full-study (`LF-2`) output, and it lives in
+the `LF2_*` notes now in this folder; support is a milestone decision (`LF-3`).
+What the screen does say, per candidate, is which architectural friction is most
+likely to bite, which other languages share it, what a full study would have to
+answer, what it would cost, and what would make it worth running — which is
+`LF-1`'s acceptance sentence
 ([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §2.1).
 
 Audience: anyone asking "can I write this in language X?" and wanting the honest
@@ -43,11 +46,21 @@ the next person who is tempted to answer the question from a blog post.
 | \subpage lf_clustering | **The map.** `L1`–`L12`: why each group collapses into one study (or does not), how the commissioning examples map onto them, the trigger conditions (`T1`–`T3`) per cluster, the five-cluster shortlist, and the explicit "don't study" list. |
 | \subpage lf_charters | **The commissionable units.** One charter per shortlisted cluster: scope, pinned candidates, questions, the bar for "feasible", the budget cap, the deliverable, the stop conditions, owner and date. |
 | \subpage lf_evidence | **The receipts.** Every external source with its retrieval date and tier, the in-repo evidence it leans on, and — explicitly — what was *not* verified. |
+| \subpage lf2_index | **The `LF-2` set.** The commissioned full studies: the verdict table, the three engine findings, the budget, and the reading order for the reports below. |
+| \subpage lf2_s1 | `S1` — C/C++ toolchain and ABI: five arms, two green and three yellow. |
+| \subpage lf2_s2 | `S2` — the LLVM-family languages: Rust (two targets), TinyGo and Zig, all green. |
+| \subpage lf2_s3 | `S3` — AssemblyScript (and TypeScript by inheritance): green, building on the harness evidence. |
+| \subpage lf2_s4 | `S4` — the WasmGC languages: Kotlin/Wasm in two target forms and Dart; the `F3` engine finding. |
+| \subpage lf2_s5 | `S5` — a guest scripting VM: Lua 5.4.8 built with wasi-sdk, green. |
+| \subpage lf2_l6_l12 | The coverage note: every untested non-killed row, with the reason and the condition that would start it (and the `T09` Go arm). |
+| \subpage lf2_evidence | The `LF-2` evidence log: toolchains, module hashes, transcripts, and `F1`–`F3` with their reproductions. |
 
 Reading order for a decision: `TRIAGE.md` §5 (is my language on the list, and
 what is its blocker?) → `CLUSTERING.md` §3/§6 (which study would answer it?) →
-`CHARTERS.md` (what would that study cost and prove?). `EVIDENCE.md` is read
-whenever a claim in the other three is about to be relied on.
+`CHARTERS.md` (what would that study cost and prove?) → `LF2_INDEX.md` §4 (was
+it run, and what was the verdict?) → the cluster report. `EVIDENCE.md` and
+`LF2_EVIDENCE.md` are read whenever a claim in the others is about to be relied
+on.
 
 The charter's five required outputs
 ([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §7.2) are all here, in
@@ -82,15 +95,17 @@ changes materially.
 
 ## 4. What this folder is not
 
-- **Not a support list.** An entry's presence, and a cluster's charter, imply
-  nothing about WasmJit. `LF-3` may reject every charter, and that is a
-  successful outcome.
-- **Not a study of any language.** No toolchain was installed, no module was
-  compiled, and no PoC was run. The evidence is documentation plus the pinned
-  engine; `TRIAGE.md` §2.4 states exactly what that buys and what it does not.
+- **Not a support list.** An entry's presence, a cluster's charter, and even a
+  green `LF-2` verdict imply nothing about *support*. `LF-3` may reject every
+  verdict, and that is a successful outcome.
+- **The `LF-1` notes are not a study of any language.** No toolchain was
+  installed, no module was compiled, and no PoC was run *for the screen*. Its
+  evidence is documentation plus the pinned engine; `TRIAGE.md` §2.4 states
+  exactly what that buys and what it does not. (The `LF2_*` notes **are** the
+  study: 15 arms built and run, [`LF2_INDEX.md`](LF2_INDEX.md).)
 - **Not an engine change.** Nothing under `WasmBase/`, `LibJit/` or the build
-  moved. If the screen found an engine gap it wrote it down; fixing it would be
-  `LF-3` work.
+  moved. The screen's gaps and the studies' three findings were written down;
+  fixing any of them is `LF-3` work.
 - **Not the entry-gate audit.** [`READINESS_AUDIT.md`](../READINESS_AUDIT.md)
   audits *WasmJit*; this folder screens *languages* against it.
 
@@ -101,8 +116,8 @@ changes materially.
 | `LF-0` — define the studies and the gate | `✅` [`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) |
 | `LF-0a` — entry-gate readiness audit | `✅` 2026-10-30, [`READINESS_AUDIT.md`](../READINESS_AUDIT.md) |
 | `LF-1` — pre-feasibility / scoping study | `✅` **this folder**, 2026-10-30, and **re-screened** the same day after `LE-1`…`LE-6` landed ([`TRIAGE.md`](TRIAGE.md) §6.9) |
-| `LF-2` — full feasibility studies | **Not started.** Five charters are proposed; **none is approved**, and every one of them is still missing `T3` (a named requester). |
-| `LF-3` — the support decision | Not started; it may reject all five. |
+| `LF-2` — full feasibility studies | `✅` **run** 2026-10-30 by the repository owner's commission (`T3` recorded in [`LF2_INDEX.md`](LF2_INDEX.md)): five chartered clusters, **15 arms** built and run, three engine findings (`F1`–`F3`); **not exhaustive** — 83 non-killed rows remain untested with a named condition ([`LF2_L6_L12.md`](LF2_L6_L12.md) §5) |
+| `LF-3` — the support decision | **Not started.** `F1`–`F3` are its input; it may reject every verdict. |
 
 ## 6. References
 
