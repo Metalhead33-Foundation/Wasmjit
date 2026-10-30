@@ -167,6 +167,10 @@ TEST_CASE("AsmJit compiles i64 integer functions", "[asmjit][module][i64]")
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_const")) == INT64_C(0x100000000));
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_local"),
 			INT64_C(0x100000000)) == INT64_C(0x300000000));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_tee"),
+			INT64_C(0x123456789)) == INT64_C(0x123456789));
+	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_mixed"),
+			17, INT64_C(0x100000000)) == INT64_C(0x100000001));
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_wrap"))
 			== INT64_MIN);
 
@@ -205,6 +209,7 @@ TEST_CASE("AsmJit compiles i64 integer functions", "[asmjit][module][i64]")
 	CHECK(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_rem_s"), INT64_MIN, -1) == 0);
 	CHECK_THROWS(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_div_s"), INT64_MIN, -1));
 	CHECK_THROWS(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_div_u"), 1, 0));
+	CHECK_THROWS(WASM::callCallable<std::int64_t>(*instance->exportedFunction("i64_rem_s"), 1, 0));
 }
 
 TEST_CASE("AsmJit rolls back code allocations when a later function is unsupported", "[asmjit][module][safety]")
