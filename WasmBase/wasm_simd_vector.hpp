@@ -35,8 +35,8 @@
 #include <hwy/highway.h>
 
 /**
- * \\brief Implements the HWY_BEFORE_NAMESPACE SIMD reference operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the HWY_BEFORE_NAMESPACE SIMD reference operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 HWY_BEFORE_NAMESPACE();
 namespace WASM {
@@ -56,10 +56,10 @@ inline void notBits(const uint8_t* a, uint8_t* out)
 {
 	const V128 d;
 /**
- * \\brief Implements the StoreU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\param out Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the StoreU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \param out Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	hn::StoreU(hn::Not(hn::LoadU(d, a)), d, out);
 }
@@ -68,10 +68,10 @@ inline void andBits(const uint8_t* a, const uint8_t* b, uint8_t* out)
 {
 	const V128 d;
 /**
- * \\brief Implements the StoreU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\param out Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the StoreU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \param out Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	hn::StoreU(hn::And(hn::LoadU(d, a), hn::LoadU(d, b)), d, out);
 }
@@ -82,10 +82,10 @@ inline void andNotBits(const uint8_t* a, const uint8_t* b, uint8_t* out)
 {
 	const V128 d;
 /**
- * \\brief Implements the StoreU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\param out Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the StoreU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \param out Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	hn::StoreU(hn::AndNot(hn::LoadU(d, b), hn::LoadU(d, a)), d, out);
 }
@@ -94,10 +94,10 @@ inline void orBits(const uint8_t* a, const uint8_t* b, uint8_t* out)
 {
 	const V128 d;
 /**
- * \\brief Implements the StoreU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\param out Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the StoreU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \param out Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	hn::StoreU(hn::Or(hn::LoadU(d, a), hn::LoadU(d, b)), d, out);
 }
@@ -106,10 +106,10 @@ inline void xorBits(const uint8_t* a, const uint8_t* b, uint8_t* out)
 {
 	const V128 d;
 /**
- * \\brief Implements the StoreU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\param out Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the StoreU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \param out Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	hn::StoreU(hn::Xor(hn::LoadU(d, a), hn::LoadU(d, b)), d, out);
 }
@@ -120,31 +120,31 @@ inline void bitselectBits(const uint8_t* a, const uint8_t* b, const uint8_t* c, 
 {
 	const V128 d;
 /**
- * \\brief Implements the LoadU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\param a Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the LoadU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \param a Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const auto va = hn::LoadU(d, a);
 /**
- * \\brief Implements the LoadU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\param b Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the LoadU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \param b Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const auto vb = hn::LoadU(d, b);
 /**
- * \\brief Implements the LoadU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\param c Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the LoadU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \param c Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const auto vc = hn::LoadU(d, c);
 /**
- * \\brief Implements the StoreU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\param out Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the StoreU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \param out Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	hn::StoreU(hn::Or(hn::And(va, vc), hn::AndNot(vc, vb)), d, out);
 }
@@ -183,10 +183,10 @@ inline void splat8(int32_t x, uint8_t* out)
 {
 	const V128 d;
 /**
- * \\brief Implements the StoreU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\param out Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the StoreU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \param out Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	hn::StoreU(hn::Set(d, static_cast<uint8_t>(x)), d, out);
 }
@@ -195,9 +195,9 @@ inline void splat16(int32_t x, uint8_t* out)
 {
 	const hn::CappedTag<uint16_t, 8> d;
 /**
- * \\brief Implements the StoreU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the StoreU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	hn::StoreU(hn::Set(d, static_cast<uint16_t>(x)), d, reinterpret_cast<uint16_t*>(out));
 }
@@ -206,9 +206,9 @@ inline void splat32(int32_t x, uint8_t* out)
 {
 	const hn::CappedTag<uint32_t, 4> d;
 /**
- * \\brief Implements the StoreU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the StoreU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	hn::StoreU(hn::Set(d, static_cast<uint32_t>(x)), d, reinterpret_cast<uint32_t*>(out));
 }
@@ -217,9 +217,9 @@ inline void splat64(int64_t x, uint8_t* out)
 {
 	const hn::CappedTag<uint64_t, 2> d;
 /**
- * \\brief Implements the StoreU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the StoreU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	hn::StoreU(hn::Set(d, static_cast<uint64_t>(x)), d, reinterpret_cast<uint64_t*>(out));
 }
@@ -228,9 +228,9 @@ inline void splatF32(float x, uint8_t* out)
 {
 	const hn::CappedTag<float, 4> d;
 /**
- * \\brief Implements the StoreU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the StoreU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	hn::StoreU(hn::Set(d, x), d, reinterpret_cast<float*>(out));
 }
@@ -239,9 +239,9 @@ inline void splatF64(double x, uint8_t* out)
 {
 	const hn::CappedTag<double, 2> d;
 /**
- * \\brief Implements the StoreU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the StoreU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	hn::StoreU(hn::Set(d, x), d, reinterpret_cast<double*>(out));
 }
@@ -254,10 +254,10 @@ inline void loadV128(const uint8_t* src, uint8_t* out)
 {
 	const V128 d;
 /**
- * \\brief Implements the StoreU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\param out Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the StoreU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \param out Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	hn::StoreU(hn::LoadU(d, src), d, out);
 }
@@ -266,10 +266,10 @@ inline void storeV128(uint8_t* dst, const uint8_t* value)
 {
 	const V128 d;
 /**
- * \\brief Implements the StoreU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\param dst Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the StoreU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \param dst Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	hn::StoreU(hn::LoadU(d, value), d, dst);
 }
@@ -278,10 +278,10 @@ inline void load8Splat(const uint8_t* src, uint8_t* out)
 {
 	const V128 d;
 /**
- * \\brief Implements the StoreU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\param out Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the StoreU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \param out Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	hn::StoreU(hn::Set(d, src[0]), d, out);
 }
@@ -290,9 +290,9 @@ inline void load16Splat(const uint8_t* src, uint8_t* out)
 {
 	const hn::CappedTag<uint16_t, 8> d;
 /**
- * \\brief Implements the StoreU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the StoreU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	hn::StoreU(hn::Set(d, readLE16(src)), d, reinterpret_cast<uint16_t*>(out));
 }
@@ -301,9 +301,9 @@ inline void load32Splat(const uint8_t* src, uint8_t* out)
 {
 	const hn::CappedTag<uint32_t, 4> d;
 /**
- * \\brief Implements the StoreU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the StoreU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	hn::StoreU(hn::Set(d, readLE32(src)), d, reinterpret_cast<uint32_t*>(out));
 }
@@ -312,9 +312,9 @@ inline void load64Splat(const uint8_t* src, uint8_t* out)
 {
 	const hn::CappedTag<uint64_t, 2> d;
 /**
- * \\brief Implements the StoreU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the StoreU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	hn::StoreU(hn::Set(d, readLE64(src)), d, reinterpret_cast<uint64_t*>(out));
 }
@@ -328,56 +328,56 @@ inline void shuffleBytes(const uint8_t* a, const uint8_t* b, uint64_t selLo, uin
 	const V128 d;
 	uint8_t selBytes[16];
 /**
- * \\brief Reads or writes a lane/value using the scalar SIMD reference representation.
- * \\param selBytes Operand, lane index, immediate, or output buffer for this operation.
- * \\param selLo Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Reads or writes a lane/value using the scalar SIMD reference representation.
+ * \param selBytes Operand, lane index, immediate, or output buffer for this operation.
+ * \param selLo Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	writeLE64(selBytes, selLo);
 /**
- * \\brief Reads or writes a lane/value using the scalar SIMD reference representation.
- * \\param selHi Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Reads or writes a lane/value using the scalar SIMD reference representation.
+ * \param selHi Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	writeLE64(selBytes + 8, selHi);
 /**
- * \\brief Implements the LoadU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\param selBytes Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the LoadU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \param selBytes Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const auto sel = hn::LoadU(d, selBytes);
 
 	//! `TableLookupBytes(table, indices)` is pshufb: index i takes table[i & 15].
 /**
- * \\brief Implements the TableLookupBytes SIMD reference operation.
- * \\param sel Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the TableLookupBytes SIMD reference operation.
+ * \param sel Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const auto lo = hn::TableLookupBytes(hn::LoadU(d, a), sel);
 	//! Indices 16..31 address `b`, so subtract 16 first. The lanes that wrap
 	//! (index < 16) produce garbage and are discarded by the select below.
 	const auto hi = hn::TableLookupBytes(hn::LoadU(d, b),
 /**
- * \\brief Implements the Sub SIMD reference operation.
- * \\param sel Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the Sub SIMD reference operation.
+ * \param sel Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 										 hn::Sub(sel, hn::Set(d, static_cast<uint8_t>(16))));
 
 	//! Whatever the target's TableLookupBytes does with a high bit, `lo` and `hi`
 	//! are only read where they are defined: `sel <= 15` picks the low table.
 /**
- * \\brief Implements the Eq SIMD reference operation.
- * \\param sel Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the Eq SIMD reference operation.
+ * \param sel Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const auto isLow = hn::Eq(hn::Min(sel, hn::Set(d, static_cast<uint8_t>(15))), sel);
 /**
- * \\brief Implements the StoreU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\param out Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the StoreU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \param out Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	hn::StoreU(hn::IfThenElse(isLow, lo, hi), d, out);
 }
@@ -386,26 +386,26 @@ inline void swizzleBytes(const uint8_t* a, const uint8_t* b, uint8_t* out)
 {
 	const V128 d;
 /**
- * \\brief Implements the LoadU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\param a Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the LoadU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \param a Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const auto table = hn::LoadU(d, a);
 /**
- * \\brief Implements the LoadU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\param b Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the LoadU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \param b Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const auto idx = hn::LoadU(d, b);
 
 	//! `TableLookupBytes(table, indices)` is pshufb: index i takes table[i & 15].
 /**
- * \\brief Implements the TableLookupBytes SIMD reference operation.
- * \\param table Operand, lane index, immediate, or output buffer for this operation.
- * \\param idx Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the TableLookupBytes SIMD reference operation.
+ * \param table Operand, lane index, immediate, or output buffer for this operation.
+ * \param idx Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const auto looked = hn::TableLookupBytes(table, idx);
 
@@ -418,16 +418,16 @@ inline void swizzleBytes(const uint8_t* a, const uint8_t* b, uint8_t* out)
 	//! are zeroed here whatever the target's TableLookupBytes does with them.
 	//! `Min` on uint8 is the unsigned minimum, so this is an unsigned `<= 15`.
 /**
- * \\brief Implements the Eq SIMD reference operation.
- * \\param idx Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the Eq SIMD reference operation.
+ * \param idx Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const auto valid = hn::Eq(hn::Min(idx, hn::Set(d, static_cast<uint8_t>(15))), idx);
 /**
- * \\brief Implements the StoreU SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\param out Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the StoreU SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \param out Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	hn::StoreU(hn::IfThenElse(valid, looked, hn::Zero(d)), d, out);
 }
@@ -462,21 +462,21 @@ HWY_INLINE V satQ15(V a, V b)
 {
 	const hn::DFromV<V> d;
 /**
- * \\brief Implements the Set SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the Set SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const V min16 = hn::Set(d, static_cast<int16_t>(-32768));
 /**
- * \\brief Implements the And SIMD reference operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the And SIMD reference operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const auto both = hn::And(hn::Eq(a, min16), hn::Eq(b, min16));
 	return hn::IfThenElse(both, hn::Set(d, static_cast<int16_t>(32767)),
 /**
- * \\brief Implements the MulFixedPoint15 SIMD reference operation.
- * \\param a Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the MulFixedPoint15 SIMD reference operation.
+ * \param a Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 						  hn::MulFixedPoint15(a, b));
 }
@@ -519,36 +519,36 @@ HWY_INLINE V wasmMin(V a, V b)
 	const hn::DFromV<V> d;
 	const hn::RebindToUnsigned<decltype(d)> du;
 /**
- * \\brief Implements the Lt SIMD reference operation.
- * \\param a Operand, lane index, immediate, or output buffer for this operation.
- * \\param b Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the Lt SIMD reference operation.
+ * \param a Operand, lane index, immediate, or output buffer for this operation.
+ * \param b Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const auto lt = hn::Lt(a, b);
 /**
- * \\brief Implements the Lt SIMD reference operation.
- * \\param b Operand, lane index, immediate, or output buffer for this operation.
- * \\param a Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the Lt SIMD reference operation.
+ * \param b Operand, lane index, immediate, or output buffer for this operation.
+ * \param a Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const auto gt = hn::Lt(b, a);
 /**
- * \\brief Implements the Or SIMD reference operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the Or SIMD reference operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const auto anyNan = hn::Or(wasmFNe(a, a), wasmFNe(b, b));
 /**
- * \\brief Implements the BitCast SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the BitCast SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const V eq = hn::BitCast(d, hn::Or(hn::BitCast(du, a), hn::BitCast(du, b)));
 	return hn::IfThenElse(anyNan, hn::Add(a, b),
 /**
- * \\brief Implements the IfThenElse SIMD reference operation.
- * \\param lt Operand, lane index, immediate, or output buffer for this operation.
- * \\param a Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the IfThenElse SIMD reference operation.
+ * \param lt Operand, lane index, immediate, or output buffer for this operation.
+ * \param a Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 						  hn::IfThenElse(lt, a, hn::IfThenElse(gt, b, eq)));
 }
@@ -559,36 +559,36 @@ HWY_INLINE V wasmMax(V a, V b)
 	const hn::DFromV<V> d;
 	const hn::RebindToUnsigned<decltype(d)> du;
 /**
- * \\brief Implements the Lt SIMD reference operation.
- * \\param a Operand, lane index, immediate, or output buffer for this operation.
- * \\param b Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the Lt SIMD reference operation.
+ * \param a Operand, lane index, immediate, or output buffer for this operation.
+ * \param b Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const auto lt = hn::Lt(a, b);
 /**
- * \\brief Implements the Lt SIMD reference operation.
- * \\param b Operand, lane index, immediate, or output buffer for this operation.
- * \\param a Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the Lt SIMD reference operation.
+ * \param b Operand, lane index, immediate, or output buffer for this operation.
+ * \param a Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const auto gt = hn::Lt(b, a);
 /**
- * \\brief Implements the Or SIMD reference operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the Or SIMD reference operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const auto anyNan = hn::Or(wasmFNe(a, a), wasmFNe(b, b));
 /**
- * \\brief Implements the BitCast SIMD reference operation.
- * \\param d Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the BitCast SIMD reference operation.
+ * \param d Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const V eq = hn::BitCast(d, hn::And(hn::BitCast(du, a), hn::BitCast(du, b)));
 	return hn::IfThenElse(anyNan, hn::Add(a, b),
 /**
- * \\brief Implements the IfThenElse SIMD reference operation.
- * \\param gt Operand, lane index, immediate, or output buffer for this operation.
- * \\param a Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the IfThenElse SIMD reference operation.
+ * \param gt Operand, lane index, immediate, or output buffer for this operation.
+ * \param a Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 						  hn::IfThenElse(gt, a, hn::IfThenElse(lt, b, eq)));
 }
@@ -657,14 +657,14 @@ inline void relaxedDotI8x16I7x16AddS(const uint8_t* a, const uint8_t* b, const u
 	const hn::CappedTag<int8_t, 16> di8;
 	const auto pairs = hn::SatWidenMulPairwiseAdd(d16, hn::LoadU(du8, reinterpret_cast<const uint8_t*>(b)),
 /**
- * \\brief Implements the LoadU SIMD reference operation.
- * \\param di8 Operand, lane index, immediate, or output buffer for this operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the LoadU SIMD reference operation.
+ * \param di8 Operand, lane index, immediate, or output buffer for this operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 												  hn::LoadU(di8, reinterpret_cast<const int8_t*>(a)));
 /**
- * \\brief Implements the Add SIMD reference operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the Add SIMD reference operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 	const auto sums = hn::Add(hn::PromoteEvenTo(d32, pairs), hn::PromoteOddTo(d32, pairs));
 	hn::StoreU(hn::Add(sums, hn::LoadU(d32, reinterpret_cast<const int32_t*>(c))),
@@ -801,8 +801,8 @@ inline void relaxedDotI8x16I7x16AddS(const uint8_t* a, const uint8_t* b, const u
 }  // namespace HWY_NAMESPACE
 }  // namespace WASM
 /**
- * \\brief Implements the HWY_AFTER_NAMESPACE SIMD reference operation.
- * \\return The scalar lane value, predicate result, or helper result.
+ * \brief Implements the HWY_AFTER_NAMESPACE SIMD reference operation.
+ * \return The scalar lane value, predicate result, or helper result.
  */
 HWY_AFTER_NAMESPACE();
 
