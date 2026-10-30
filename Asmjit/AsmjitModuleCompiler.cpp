@@ -106,9 +106,19 @@ uint32_t asmjitMemoryGrow(WASM::VMContext* vm, uint32_t memoryIndex, uint32_t de
 		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.grow VMContext is null");
 		return UINT32_MAX;
 	}
+	if (vm->memories == nullptr || memoryIndex >= vm->memoryCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory.grow index is invalid");
+		return UINT32_MAX;
+	}
 	auto* instance = reinterpret_cast<WASM::ModuleInstance*>(vm);
-	const int64_t previous = instance->growMemory(memoryIndex, delta);
-	return previous < 0 ? UINT32_MAX : static_cast<uint32_t>(previous);
+	try {
+		const int64_t previous = instance->growMemory(memoryIndex, delta);
+		return previous < 0 ? UINT32_MAX : static_cast<uint32_t>(previous);
+	} catch (...) {
+		// memory.grow is specified to return -1 when growth cannot be fulfilled.
+		// Never allow a host allocation exception to unwind through JIT frames.
+		return UINT32_MAX;
+	}
 }
 
 void* asmjitMemoryAddress(WASM::VMContext* vm, uint32_t memoryIndex,
