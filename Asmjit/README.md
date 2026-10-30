@@ -15,12 +15,11 @@ and must not be selected to execute Wasm modules.
   allocator to emit a host-ABI function that adds or multiplies four 32-bit
   lanes. The inputs and output are ordinary pointers; the implementation does
   not assume a particular host argument-register convention.
-- `TypeTranslator` maps Wasm integer, floating-point, and reference values to
-  AsmJit `TypeId`s and builds C-declaration function signatures. It prepends
-  `VMContext*`, uses indirect pointers for V128 parameters, and uses a trailing
-  caller-owned result buffer for V128 results (AsmJit's documented
-  `FuncSignature::TypeId` has no 128-bit vector entry). Multi-value results
-  use the project's trailing result-buffer pointer ABI.
+- `TypeTranslator` maps Wasm integer, floating-point, reference, and V128
+  values to AsmJit `TypeId`s and builds C-declaration function signatures. It
+  prepends `VMContext*`, maps V128 to AsmJit's 128-bit vector type (so the
+  platform's native vector-by-value calling convention is used), and uses a
+  trailing caller-owned result buffer for multi-value results.
 - Packed `i8`/`i16` storage retains its narrow 8-/16-bit representation.
   Arithmetic lowering must explicitly extend those values to `i32` before
   applying Wasm integer operations; the storage translator does not silently
@@ -28,7 +27,7 @@ and must not be selected to execute Wasm modules.
 - `compileV128I32x4Add()` emits a real XMM-backed packed addition using
   `movdqu` and `paddd`, with a test covering lane wraparound.
 - `Test/AsmjitTypeTranslatorTests.cpp` covers scalar signatures, opaque
-  references, V128 arguments/results, packed storage widths, multi-value
+  references, V128-by-value signatures, packed storage widths, multi-value
   result-buffer placement, and rejection of packed function signatures (which
   are invalid Wasm).
 - The context releases all generated entry points at destruction. If tracking
