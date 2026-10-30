@@ -117,6 +117,30 @@
     local.get 0
     local.get 1
     return_call_indirect (type $unary))
+
+  (func (export "select") (param i32 i32 i32) (result i32)
+    local.get 0
+    local.get 1
+    local.get 2
+    select)
+  (func (export "select_t") (param i32 i32 i32) (result i32)
+    local.get 0
+    local.get 1
+    local.get 2
+    select (result i32))
+  (func (export "memory_copy") (param i32 i32 i32)
+    local.get 0
+    local.get 1
+    local.get 2
+    memory.copy)
+  (func (export "memory_fill") (param i32 i32 i32)
+    local.get 0
+    local.get 1
+    local.get 2
+    memory.fill)
+  (func (export "load_at") (param i32) (result i32)
+    local.get 0
+    i32.load)
   (func (export "store_load") (param i32 i32) (result i32)
     local.get 0
     local.get 1
