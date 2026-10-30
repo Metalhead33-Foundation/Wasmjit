@@ -290,28 +290,41 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 	if (module.functionBodies.size() != functionRecords.size())
 		throw std::runtime_error("AsmJit function declaration/body count mismatch");
 
-	for (uint32_t i = 0; i < module.functionBodies.size(); ++i) {
-		const uint32_t typeIndex = module.internalFunctionTypeIndices[i];
-		const WASM::FuncType type = module.funcTypeAt(typeIndex);
-		if (type.results.size() > 1)
-			throw std::runtime_error("AsmJit initial compiler does not support multi-value results");
+	const std::size_t allocationCheckpoint = context.allocationCheckpoint();
+	try {
+		for (uint32_t i = 0; i < module.functionBodies.size(); ++i) {
+			const uint32_t typeIndex = module.internalFunctionTypeIndices[i];
+			const WASM::FuncType type = module.funcTypeAt(typeIndex);
+			if (type.results.size() > 1)
+				throw std::runtime_error("AsmJit initial compiler does not support multi-value results");
 
-		asmjit::CodeHolder code;
-		checkError(code.init(context.environment(), context.cpuFeatures()),
-				"AsmJit CodeHolder initialisation failed");
-		asmjit::x86::Compiler compiler(&code);
-		auto* function = compiler.add_func(*functionRecords[i]->signature);
-		if (function == nullptr)
-			throw std::runtime_error("AsmJit failed to declare a function body");
+			asmjit::CodeHolder code;
+			checkError(code.init(context.environment(), context.cpuFeatures()),
+					"AsmJit CodeHolder initialisation failed");
+			asmjit::x86::Compiler compiler(&code);
+			auto* function = compiler.add_func(*functionRecords[i]->signature);
+			if (function == nullptr)
+				throw std::runtime_error("AsmJit failed to declare a function body");
 
-		I32FunctionEmitter emitter(compiler, *function, type, module.functionBodies[i]);
-		emitter.compile(module.functionBodies[i], type);
-		checkError(compiler.end_func(), "AsmJit function finalisation failed");
-		checkError(compiler.finalize(), "AsmJit compiler finalisation failed");
+			I32FunctionEmitter emitter(compiler, *function, type, module.functionBodies[i]);
+			emitter.compile(module.functionBodies[i], type);
+			checkError(compiler.end_func(), "AsmJit function finalisation failed");
+			checkError(compiler.finalize(), "AsmJit compiler finalisation failed");
 
-		functionRecords[i]->entry = context.install(code);
-		internals.internalCallables[i].rawFnPtr = functionRecords[i]->entry;
-		internals.internalCallables[i].fnPtr = functionRecords[i]->entry;
+			functionRecords[i]->entry = context.install(code);
+			internals.internalCallables[i].rawFnPtr = functionRecords[i]->entry;
+			internals.internalCallables[i].fnPtr = functionRecords[i]->entry;
+		}
+	} catch (...) {
+		// Instantiation is transactional with respect to executable memory:
+		// failed modules must not pin earlier function bodies in the session.
+		context.releaseAllocationsSince(allocationCheckpoint);
+		for (uint32_t i = 0; i < functionRecords.size(); ++i) {
+			functionRecords[i]->entry = nullptr;
+			internals.internalCallables[i].rawFnPtr = nullptr;
+			internals.internalCallables[i].fnPtr = nullptr;
+		}
+		throw;
 	}
 }
 
