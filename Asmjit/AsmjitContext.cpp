@@ -22,13 +22,13 @@ const asmjit::Environment& Context::environment() const noexcept
 	return runtime.environment();
 }
 
-int (*Context::compileReturn42)()
+int (*Context::compileReturn42())()
 {
 	asmjit::CodeHolder code;
 	asmjit::Error error = code.init(runtime.environment());
 	if (error != asmjit::Error::kOk)
 		throw std::runtime_error("AsmJit CodeHolder initialisation failed: "
-				+ std::string(asmjit::DebugUtils::errorAsString(error)));
+				+ std::to_string(static_cast<unsigned>(error)));
 
 	asmjit::x86::Assembler assembler(&code);
 	error = assembler.mov(asmjit::x86::eax, 42);
