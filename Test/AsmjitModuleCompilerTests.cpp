@@ -30,6 +30,17 @@ TEST_CASE("AsmJit ModuleInstantiator compiles straight-line i32 functions", "[as
 	CHECK(WASM::callCallable<std::int32_t>(*sub, 50, 8) == 42);
 	CHECK(WASM::callCallable<std::int32_t>(*mul, 6, 7) == 42);
 	CHECK(WASM::callCallable<std::int32_t>(*local, 14) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("eq"), 7, 7) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("lt_s"), -1, 1) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("lt_u"), 1, -1) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("and"), 0xF0, 0x3C) == 0x30);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("or"), 0xF0, 0x0F) == 0xFF);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("xor"), 0xFF, 0x0F) == 0xF0);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("shl"), 3, 2) == 12);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("shr_s"), -16, 2) == -4);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("shr_u"), -16, 2) == 0x3FFFFFFC);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("rotl"), 1, 4) == 16);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("rotr"), 16, 4) == 1);
 }
 
 #include <catch2/catch_all.hpp>
