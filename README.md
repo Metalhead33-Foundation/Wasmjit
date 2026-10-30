@@ -4,7 +4,7 @@
 
 The library split is in place: `WasmBase/` is the backend-agnostic core
 (`libWasmBase`), every code generator is its own library (`LibJit/` is the full-featured execution backend; `Asmjit/` now has an experimental
-i32 module compiler alongside native code-generation probes, while `Sljit/`
+i32/i64 integer module compiler alongside native code-generation probes, while `Sljit/`
 remains a placeholder, and `Test/` is a Catch2 harness over the libraries
 rather than the product. The `build/<config>/Test/WasmJit` executable is still a
 development sandbox, not the embeddable API. See
@@ -22,7 +22,7 @@ backend-agnostic.
 ## Direction
 
 - **GNU LibJIT remains the only full-featured backend.** AsmJit now executes an
-  experimental i32 subset: arithmetic, bit counts, comparisons, bit operations,
+  experimental i32/i64 integer subset: i32 arithmetic and bit counts; i64 arithmetic, bitwise operations, shifts, rotations and comparisons; i32 comparisons and bit operations,
   sign extension, void and single-i32-result structured control flow, `br_table`, unreachable traps,
   i32 globals, typed direct/indirect calls, `select`, checked memory32 `memory.copy`/`memory.fill`/`memory.init` and `data.drop`, `table.init`/`elem.drop`/`table.size`/`table.copy`, preliminary tail-call opcode lowering,
   and checked memory32 loads/stores plus size/grow. True tail-call stack semantics
