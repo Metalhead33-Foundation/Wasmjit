@@ -74,7 +74,7 @@ enum class TrapKind : uint8_t {
 	CallStackExhausted,          //!< "call stack exhausted"
 	//! Not a spec trap: a defensive check inside the engine, or a lowering that
 	//! cannot run. The detail text is the only description.
-	Internal,
+	Internal, //!< TrapKind enumerator `Internal`.
 };
 
 //! The spec's text for a trap kind ("unreachable", "null reference", …). For
