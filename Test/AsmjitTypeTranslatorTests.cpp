@@ -62,20 +62,21 @@ TEST_CASE("AsmJit lowers references as opaque native pointers", "[asmjit][abi]")
 			== asmjit::TypeId::kUIntPtr);
 }
 
-TEST_CASE("AsmJit lowers V128 through its indirect function ABI", "[asmjit][abi][simd]")
+TEST_CASE("AsmJit lowers V128 as a native 128-bit vector ABI value", "[asmjit][abi][simd]")
 {
 	const WASM::ValueType vector{WASM::ValueTypeCode::V128, -1};
 	CHECK(AsmJitBackend::TypeTranslator::translateValueType(vector)
-			== asmjit::TypeId::kUIntPtr);
+			== asmjit::TypeId::kInt32x4);
+	CHECK(asmjit::TypeUtils::size_of(asmjit::TypeId::kInt32x4) == 16);
 
 	const auto type = functionType({scalar(WASM::ValueTypeCode::V128)},
 			{scalar(WASM::ValueTypeCode::V128)});
 	const asmjit::FuncSignature signature =
 			AsmJitBackend::TypeTranslator::translateFunctionType(type);
-	CHECK(signature.ret() == asmjit::TypeId::kVoid);
-	REQUIRE(signature.arg_count() == 3);
-	CHECK(signature.arg(1) == asmjit::TypeId::kUIntPtr); // V128 input storage
-	CHECK(signature.arg(2) == asmjit::TypeId::kUIntPtr); // V128 result buffer
+	CHECK(signature.ret() == asmjit::TypeId::kInt32x4);
+	REQUIRE(signature.arg_count() == 2);
+	CHECK(signature.arg(0) == asmjit::TypeId::kUIntPtr); // VMContext*
+	CHECK(signature.arg(1) == asmjit::TypeId::kInt32x4); // V128 by value
 }
 
 TEST_CASE("AsmJit preserves packed i8 and i16 storage widths", "[asmjit][abi][storage]")
@@ -86,7 +87,7 @@ TEST_CASE("AsmJit preserves packed i8 and i16 storage widths", "[asmjit][abi][st
 			packed(WASM::ValueTypeCode::I16)) == asmjit::TypeId::kInt16);
 
 	// Narrow values are not ordinary Wasm value types. An instruction
-	// lowerer must extend packed storage to i32 before arithmetic.
+	// lowerer must extend packed storage to i32 before applying Wasm arithmetic.
 	CHECK_THROWS_AS(AsmJitBackend::TypeTranslator::translateValueType(
 			WASM::ValueType{WASM::ValueTypeCode::I8, -1}), std::runtime_error);
 	CHECK_THROWS_AS(AsmJitBackend::TypeTranslator::translateValueType(
@@ -115,4 +116,3 @@ TEST_CASE("AsmJit rejects packed types in function signatures", "[asmjit][abi]")
 	CHECK_THROWS_AS(AsmJitBackend::TypeTranslator::translateFunctionType(
 			functionType({}, {packed(WASM::ValueTypeCode::I16)})), std::runtime_error);
 }
-
