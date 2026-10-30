@@ -92,11 +92,12 @@ private:
 	//! intern tables themselves are not concurrent containers (SET-2).
 	mutable std::recursive_mutex internMutex_;
 
+	//! Interns one recursive group, filling `localToGlobal` with its identities.
 	std::vector<TypeId> internGroupImpl(std::span<const Subtype> types,
 									   const TypeGroup& group,
 									   std::vector<TypeId>& localToGlobal);
 
-	size_t parsedTypes = 0; //!< Field `parsedTypes` of type.
+	size_t parsedTypes = 0;  //!< How many types the last parse interned.
 
 	//! Compact canonical records, indexed by TypeId.value; entries are appended
 	//! in group order, so a group's members are contiguous: ids [first, first + count).

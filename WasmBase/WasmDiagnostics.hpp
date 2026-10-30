@@ -67,22 +67,22 @@ namespace WASM {
 //! trap, an uncaught exception). `Fatal` means the host facility itself declared
 //! the run unusable.
 enum class DiagnosticSeverity : std::uint8_t {
-	Note, //!< Enum member `Note`.
-	Warning, //!< Enum member `Warning`.
-	Error, //!< Enum member `Error`.
-	Fatal //!< Enum member `Fatal`.
+	Note, //!< Informational message.
+	Warning, //!< Warning; execution may continue.
+	Error, //!< Error; the current operation failed.
+	Fatal //!< Fatal error; the instance is unusable.
 };
 
 //! The pipeline stage that produced the record. It is intentionally coarse: a
 //! consumer switches on it, and a new stage is a deliberate addition.
 enum class DiagnosticPhase : std::uint8_t {
-	Decode, //!< DiagnosticPhase enumerator `Decode`.
-	Validate, //!< DiagnosticPhase enumerator `Validate`.
-	Compile, //!< DiagnosticPhase enumerator `Compile`.
-	Instantiate, //!< DiagnosticPhase enumerator `Instantiate`.
-	Execute, //!< DiagnosticPhase enumerator `Execute`.
-	Continuation, //!< DiagnosticPhase enumerator `Continuation`.
-	Component, //!< DiagnosticPhase enumerator `Component`.
+	Decode, //!< Decoding the binary.
+	Validate, //!< Validating the module.
+	Compile, //!< Compiling to native code.
+	Instantiate, //!< Instantiating the module.
+	Execute, //!< Executing wasm code.
+	Continuation, //!< Suspending or resuming a continuation.
+	Component, //!< Executing component-level definitions.
 };
 
 //! "note" / "warning" / "error" / "fatal" — the text and JSON spelling.
@@ -289,7 +289,7 @@ std::string_view validationRuleId(std::string_view message) noexcept;
 
 //! \par Sink and bounded ring
 
-//! Type alias `DiagnosticSink` names the corresponding implementation/API type.
+//! Callback that receives one diagnostic; must not throw.
 using DiagnosticSink = void (*)(void* userData, const Diagnostic& diagnostic) noexcept;
 
 //! The per-execution-state store. It lives in `ExecutionState`

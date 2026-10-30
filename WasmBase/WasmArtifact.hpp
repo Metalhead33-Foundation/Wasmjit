@@ -37,6 +37,7 @@ enum class ArtifactKind : uint8_t {
 
 //! Component Model preamble values (the core module version is not checked).
 inline constexpr uint16_t kComponentVersion = 0x000D;
+//! Component-layer version; identifies a component preamble, not a module one.
 inline constexpr uint16_t kComponentLayer = 0x0001;
 
 /** \brief Version and layer fields read from an artifact's eight-byte preamble. */
@@ -57,15 +58,17 @@ struct Preamble {
  * store must outlive the artifact.
  */
 struct WASMJIT_API Artifact {
-	ArtifactKind kind; //!< Field `kind` of WASMJIT_API.
-	uint32_t version = 0; //!< Field `version` of WASMJIT_API.
-	uint16_t layer = 0; //!< Field `layer` of WASMJIT_API.
+	ArtifactKind kind;  //!< Whether this artifact is a core module or a component.
+	uint32_t version = 0;  //!< The version field of the preamble.
+	uint16_t layer = 0;  //!< The layer field of the preamble.
 
 	/** \brief Constructs an artifact with its parsed kind. \param artifactKind Core-module or component kind. */
 	explicit Artifact(ArtifactKind artifactKind) : kind(artifactKind) {}
 	virtual ~Artifact() = default;
 
+	//! Copies the kind and the owned bytes (the parsed module is not copied).
 	Artifact(const Artifact&) = default;
+	//! Copies the kind and the owned bytes (the parsed module is not copied).
 	Artifact& operator=(const Artifact&) = default;
 
 	/** \brief Tests whether this artifact is a core module. \return true for CoreModule. */
@@ -121,7 +124,7 @@ protected:
 	 */
 	virtual void parseBody(Elv::Io::Device& file, std::optional<uint64_t> end) = 0;
 
-	Store* store_ = nullptr; //!< Field `store_` of WASMJIT_API.
+	Store* store_ = nullptr;  //!< The store the artifact's types are interned in.
 };
 
 }

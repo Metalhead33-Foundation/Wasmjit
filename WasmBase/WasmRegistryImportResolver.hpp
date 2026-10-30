@@ -47,21 +47,27 @@ public:
 	//! is published so an import can be matched (mutability included, MG-4).
 	/** \brief Registry representation of a global cell and its declared type. */
 	struct GlobalEntry {
+		//! The cell an import reads and writes.
 		Value* cell = nullptr;
+		//! The declared type and mutability matched against the import.
 		GlobalType type{};
-		std::unique_ptr<Value> owned; //!< Field `owned` of GlobalEntry.
+		std::unique_ptr<Value> owned;  //!< Registry-owned storage when the value was copied in.
 	};
 
 	/** \brief Set of registered importable entities under one module name. */
 	struct ModuleRegistry {
+		//! The module's exported/registered functions.
 		NameMap<Callable> functions;
+		//! The module's exported/registered globals.
 		NameMap<GlobalEntry> globals;
 		//! Borrowed views into memories owned by the (global) Store. Registering
 		//! the same pointer under two names is how memory sharing happens.
 		NameMap<LinearMemory*> memories;
+		//! The module's tables.
 		NameMap<ImportedTable> tables;
+		//! The module's exception tag identities.
 		NameMap<TagId> tags;
-		NameMap<TypeId> types; //!< Field `types` of ModuleRegistry.
+		NameMap<TypeId> types;  //!< The module's published type identities.
 
 		/** \brief Registers a callable in this module namespace. \param fieldName Import/export field name. \param callable Callable descriptor to publish. */
 	void registerFunction(std::string_view fieldName, const Callable& callable);
@@ -78,19 +84,25 @@ public:
 		/** \brief Registers a canonical type identity. \param fieldName Field name. \param type Store-owned canonical type ID. */
 	void registerType(std::string_view fieldName, TypeId type);
 
+		//! Looks up a function whose signature matches `expectedType`.
 		std::optional<Callable> resolveFunction(std::string_view fieldName, TypeId expectedType,
 				bool exact, Store& store);
+		//! Looks up a global and matches its declared type and mutability.
 		std::optional<Value*> resolveGlobal(std::string_view fieldName, const GlobalType& type);
+		//! Looks up a memory whose limits fit `type`.
 		std::optional<LinearMemory*> resolveMemory(std::string_view fieldName, const MemoryType& type);
+		//! Looks up a table and matches its limits and element type.
 		std::optional<ImportedTable> resolveTable(std::string_view fieldName, const TableType& type,
 											 TypeId elementTypeId, Store& store);
+		//! Looks up an exception tag whose signature matches `expectedType`.
 		std::optional<TagId> resolveTag(std::string_view fieldName, TypeId expectedType, Store& store);
+		//! Looks up a type whose heap type is a subtype of `bound`.
 		std::optional<TypeId> resolveType(std::string_view fieldName, AbstractHeapType bound,
 				Store& store);
 	};
 
 	void registerFunction(std::string_view moduleName, std::string_view fieldName,
-						  const Callable& callable) override; //!< Field `override` of type.
+						  const Callable& callable) override;
 	//! Host overload: copies `value` into a registry-owned cell.
 	void registerGlobal(std::string_view moduleName, std::string_view fieldName,
 						const Value& value);
@@ -98,45 +110,45 @@ public:
 	void registerGlobal(std::string_view moduleName, std::string_view fieldName,
 						Value* cell, const GlobalType& type) override;
 	void registerMemory(std::string_view moduleName, std::string_view fieldName,
-						LinearMemory* memory) override; //!< Field `override` of type.
+						LinearMemory* memory) override;
 	void registerTable(std::string_view moduleName, std::string_view fieldName,
-					   const ImportedTable& table) override; //!< Field `override` of type.
+					   const ImportedTable& table) override;
 	void registerTag(std::string_view moduleName, std::string_view fieldName,
-					 TagId tag) override; //!< Field `override` of type.
+					 TagId tag) override;
 	void registerType(std::string_view moduleName, std::string_view fieldName,
-					  TypeId type) override; //!< Field `override` of type.
+					  TypeId type) override;
 
 	std::optional<Callable> resolveFunction(
 		std::string_view moduleName,
 		std::string_view fieldName,
 		TypeId expectedType,
-		bool exact = false) override; //!< Field `exact` of type.
+		bool exact = false) override;
 
 	std::optional<Value*> resolveGlobal(
 		std::string_view moduleName,
 		std::string_view fieldName,
-		const GlobalType& type) override; //!< Field `override` of type.
+		const GlobalType& type) override;
 
 	std::optional<LinearMemory*> resolveMemory(
 		std::string_view moduleName,
 		std::string_view fieldName,
-		const MemoryType& type) override; //!< Field `override` of type.
+		const MemoryType& type) override;
 
 	std::optional<ImportedTable> resolveTable(
 		std::string_view moduleName,
 		std::string_view fieldName,
 		const TableType& type,
-		TypeId           elementTypeId) override; //!< Field `override` of type.
+		TypeId           elementTypeId) override;
 
 	std::optional<TagId> resolveTag(
 		std::string_view moduleName,
 		std::string_view fieldName,
-		TypeId           expectedType) override; //!< Field `override` of type.
+		TypeId           expectedType) override;
 
 	std::optional<TypeId> resolveType(
 		std::string_view moduleName,
 		std::string_view fieldName,
-		AbstractHeapType bound) override; //!< Field `override` of type.
+		AbstractHeapType bound) override;
 
 	//! docs/EMBEDDING_SURFACE.md §4.3 option B: type matching reads an explicit
 	//! store, bound by the instance being resolved.
@@ -146,8 +158,8 @@ public:
 	Store& boundStore() const;
 
 private:
-	Store* store_ = nullptr; //!< Field `store_` of type.
-	NameMap<ModuleRegistry> registeredModules; //!< Field `registeredModules` of type.
+	Store* store_ = nullptr;  //!< The store identities are interned in.
+	NameMap<ModuleRegistry> registeredModules;  //!< The registered modules, keyed by module name.
 };
 
 } // namespace WASM

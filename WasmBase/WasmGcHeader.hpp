@@ -37,7 +37,9 @@ namespace WASM {
 //! (docs/proposals/GC.md D13/GC-9), and each element access is one indirection.
 namespace GcHeader {
 
+//! Byte offset of the object's `TypeId` word.
 constexpr uint32_t kTypeIdOffset   = 0;
+//! Byte offset of the object's reference count.
 constexpr uint32_t kRefcountOffset = 4;
 //! Common TypeId+refcount prefix, used by extern boxes and as the base of the
 //! array header.
@@ -49,11 +51,14 @@ constexpr uint32_t kHeaderBytes    = 16;
 //! Struct *lowered fields*: two uint words plus one pointer. A Wasm field `i`
 //! sits at lowered field index `i + kHeaderFields`.
 constexpr uint32_t kHeaderFields = 3;
+//! Lowered field index holding the struct's descriptor reference.
 constexpr uint32_t kDescriptorField = 2;
 
 //! Array header: [TypeId][refcount][length], then inline elements at dataOffset.
 constexpr uint32_t kArrayLengthOffset = 8;
+//! Lowered field index holding an array's length.
 constexpr uint32_t kArrayLengthField  = 2;
+//! Bytes occupied by the array header, before the inline elements.
 constexpr uint32_t kArrayHeaderBytes  = 12;
 
 //! Stamped into an object's TypeId slot when its count reaches zero and it is
@@ -68,6 +73,7 @@ constexpr uint32_t kReclaimedTypeId = 0xFFFFFFFFu;
 constexpr uint32_t kExternBoxTypeId = 0xFFFFFFFEu;
 //! [TypeId][refcount][inner] — an extern box has no descriptor slot.
 constexpr size_t kExternBoxInnerOffset = kTypeHeaderBytes;
+//! Total bytes of an extern box: the shared header plus the inner pointer.
 constexpr size_t kExternBoxBytes = kTypeHeaderBytes + sizeof(void*);
 
 } // namespace GcHeader

@@ -54,7 +54,7 @@ class Agent;
  * retain pointers into its inline storage.
  */
 struct ExecutionState {
-	static constexpr std::uint32_t kDeferCapacity = 32; //!< Field `kDeferCapacity` of ExecutionState.
+	static constexpr std::uint32_t kDeferCapacity = 32;  //!< Inline capacity of the defer stack.
 
 	//! The pending trap. `TrapSlot` is the C-ABI view generated code reads.
 	TrapSlot trapSlot{};
@@ -86,6 +86,7 @@ struct ExecutionState {
 
 	//! Fixed-capacity cleanup stack, inline so registering cannot allocate.
 	Elv::Util::DeferStack::Record deferRecords[kDeferCapacity];
+	//! The bounded defer stack built on `deferRecords`.
 	Elv::Util::DeferStack deferStack;
 
 	//! Structured diagnostics for this execution context (docs/DIAGNOSTICS.md).
@@ -134,8 +135,8 @@ public:
 	const ExecutionState& execution() const noexcept { return state_; }
 
 private:
-	ExecutionState state_; //!< Field `state_` of Agent.
-	std::uint64_t id_; //!< Field `id_` of Agent.
+	ExecutionState state_;  //!< The agent's execution state.
+	std::uint64_t id_;  //!< The agent's numeric identity.
 };
 
 //! The execution state the calling host thread is currently running. Never null:
@@ -192,7 +193,7 @@ public:
 	ExecutionStateScope& operator=(const ExecutionStateScope&) = delete;
 
 private:
-	ExecutionState* previous_; //!< Field `previous_` of ExecutionStateScope.
+	ExecutionState* previous_;  //!< The state to restore when the scope ends.
 };
 
 //! Installs an agent's execution state for the duration of the scope.
@@ -214,7 +215,7 @@ public:
 	AgentScope& operator=(const AgentScope&) = delete;
 
 private:
-	ExecutionStateScope scope_; //!< Field `scope_` of AgentScope.
+	ExecutionStateScope scope_;  //!< The scope that installs this agent's state.
 };
 
 } // namespace WASM

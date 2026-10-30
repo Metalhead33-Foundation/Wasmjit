@@ -72,19 +72,25 @@ enum class ContinuationStatus : std::int32_t {
 
 /** \brief ABI result record returned when a continuation is resumed. */
 struct ContinuationResumeResult {
+	//! A `ContinuationStatus` value, as an `i32`.
 	std::int32_t status = static_cast<std::int32_t>(ContinuationStatus::Invalid);
+	//! The suspension tag id for `status == Suspended`, else 0.
 	std::int32_t tagId = 0;
 	std::int32_t value = 0; //!< first i32 result/tag payload, for the narrow ABI
 	std::int32_t reserved = 0; //!< keeps `continuation` 8-byte aligned
+	//! The continuation handle a suspension returns (null when completed).
 	void*        continuation = nullptr;
 	//! Wide result/tag buffers. The caller owns the storage; the runtime moves
 	//! values into it and sets the matching count. `tagKinds` describes the tag
 	//! payload for an unhandled suspension so the caller can drop it correctly.
+	//! Number of slots written to `resultValues`.
 	std::uint32_t resultCount = 0;
+	//! Number of slots written to `tagValues` for an unhandled suspension.
 	std::uint32_t tagValueCount = 0;
+	//! Caller-owned buffer receiving the result slots.
 	void*        resultValues = nullptr;
-	void*        tagValues = nullptr; //!< Field `tagValues` of ContinuationResumeResult.
-	const std::uint8_t* tagKinds = nullptr; //!< Field `tagKinds` of ContinuationResumeResult.
+	void*        tagValues = nullptr;  //!< Caller-owned buffer receiving the tag payload slots.
+	const std::uint8_t* tagKinds = nullptr;  //!< Optional kind array describing the tag payload.
 };
 
 //! One continuation value slot. The runtime never interprets the payload; the
@@ -92,16 +98,18 @@ struct ContinuationResumeResult {
 //! and v128 equally addressable. Scalar values live at offset 0.
 /** \brief Scalar/vector/reference payload kind stored in a continuation value slot. */
 enum class ContinuationValueKind : std::uint8_t {
-	I32 = 0, //!< ContinuationValueKind enumerator `I32`.
-	I64 = 1, //!< ContinuationValueKind enumerator `I64`.
-	F32 = 2, //!< ContinuationValueKind enumerator `F32`.
-	F64 = 3, //!< ContinuationValueKind enumerator `F64`.
-	Ref = 4, //!< ContinuationValueKind enumerator `Ref`.
-	V128 = 5, //!< ContinuationValueKind enumerator `V128`.
+	I32 = 0, //!< A 32-bit integer slot.
+	I64 = 1, //!< A 64-bit integer slot.
+	F32 = 2, //!< A 32-bit float slot.
+	F64 = 3, //!< A 64-bit float slot.
+	Ref = 4, //!< A reference slot (null is `0`).
+	V128 = 5, //!< A 128-bit vector slot.
 };
+//! Size of one `ContinuationValue` slot, in bytes.
 inline constexpr std::size_t kContinuationValueStride = 16;
 /** \brief Fixed-width 16-byte storage slot for a continuation argument/result. */
 struct alignas(16) ContinuationValue {
+	//! The raw slot contents; interpretation is the backend thunk's job.
 	std::uint64_t words[2] = {0, 0};
 };
 
@@ -110,7 +118,7 @@ struct alignas(16) ContinuationValue {
 //! using the kind arrays. It is implemented by the executing backend so
 //! WasmBase does not depend on a particular backend library.
 /** \brief Backend callback that invokes a continuation's target using typed slots. */
-//! Type alias `ContinuationInvokeFn` names the corresponding implementation/API type.
+//! Invokes a continuation's target with typed slots; supplied by the backend.
 using ContinuationInvokeFn = void (*)(void* target, void* context,
 		const ContinuationValue* args, std::uint32_t argCount,
 		ContinuationValue* results, std::uint32_t resultCount,
@@ -141,7 +149,9 @@ void setContinuationProvider(ContinuationProvider provider) noexcept;
 //! generated code turns into a trap.
 /** \brief Limits on live continuation count and per-continuation stack size. */
 struct ContinuationBudget {
+	//! Upper bound on live continuation objects.
 	std::uint32_t maxLive = 64;
+	//! Stack request per live continuation, in bytes.
 	std::uint32_t stackBytes = 512 * 1024;
 };
 
@@ -191,7 +201,9 @@ public:
 	/** \brief Releases the owned continuation reference, if any. */
 	~HostContinuation();
 
+	//! Moves the owned reference out of `other`, leaving it empty.
 	HostContinuation(HostContinuation&& other) noexcept;
+	//! Releases the held reference and adopts `other`'s.
 	HostContinuation& operator=(HostContinuation&& other) noexcept;
 	HostContinuation(const HostContinuation&) = delete;
 	HostContinuation& operator=(const HostContinuation&) = delete;
@@ -214,7 +226,7 @@ public:
 			std::int32_t* resumedValue) noexcept;
 
 private:
-	void* ref_ = nullptr; //!< Field `ref_` of HostContinuation.
+	void* ref_ = nullptr;  //!< The owned continuation reference, or null.
 };
 
 //! \brief Embedder-owned scheduling / JSPI-style promise seam
@@ -250,6 +262,7 @@ public:
 
 	/** \brief Optional callbacks invoked synchronously as queued continuations progress. */
 	struct Hooks {
+		//! Opaque pointer handed back to every callback.
 		void* userData = nullptr;
 		//! Legacy scalar hooks. Ownership of `continuation` is transferred to
 		//! the callback. The callback must release it (or keep it alive with
@@ -265,9 +278,10 @@ public:
 		void (*onSuspendedEx)(void* userData, void* continuation,
 				std::int32_t tagId, const ContinuationValue* values,
 				std::uint32_t valueCount, const std::uint8_t* kinds) noexcept = nullptr;
+		//! Wide completion hook: results are borrowed for the call.
 		void (*onCompletedEx)(void* userData, std::int32_t status,
 				const ContinuationValue* results, std::uint32_t resultCount,
-				const std::uint8_t* kinds) noexcept = nullptr; //!< Field `noexcept` of Hooks.
+				const std::uint8_t* kinds) noexcept = nullptr;
 		//! Called instead of the completion hooks when a task ends with an
 		//! uncaught exception. `exception` is the engine's pending exception
 		//! payload and is borrowed for the call.
@@ -303,7 +317,7 @@ public:
 	bool submitEx(void* continuation, const ContinuationValue* args,
 			std::uint32_t argCount, const std::uint8_t* argKinds,
 			std::uint32_t resultCapacity = 0, std::uint32_t tagCapacity = 0,
-			bool takeOwnership = true) noexcept; //!< Field `takeOwnership` of HostContinuationScheduler.
+			bool takeOwnership = true) noexcept;
 
 	//! Throw/reject task: resumes through `wasm_cont_resume_throw_ex`. The
 	//! exception is borrowed until `step` runs; ownership is not transferred.
@@ -324,24 +338,28 @@ public:
 	std::size_t run() noexcept;
 
 private:
+	//! One queued resume, in either the scalar or the wide form.
 	struct Task {
+//! Whether the task resumes or throws.
 enum class Kind {
-			Resume, //!< Enum member `Resume`.
-			Throw //!< Enum member `Throw`.
+			Resume, //!< Resume the continuation normally.
+			Throw //!< Inject an exception into the continuation.
 };
+		//! Which of `Resume`/`Throw` this task performs.
 		Kind kind = Kind::Resume;
+		//! The continuation reference the task owns.
 		void* continuation = nullptr;
-		std::int32_t arg = 0; //!< Field `arg` of Task.
-		std::vector<ContinuationValue> args; //!< Field `args` of Task.
-		std::vector<std::uint8_t> argKinds; //!< Field `argKinds` of Task.
-		void* exception = nullptr; //!< Field `exception` of Task.
-		void* creationContext = nullptr; //!< Field `creationContext` of Task.
-		std::uint32_t resultCapacity = 0; //!< Field `resultCapacity` of Task.
-		std::uint32_t tagCapacity = 0; //!< Field `tagCapacity` of Task.
-		bool wide = false; //!< Field `wide` of Task.
+		std::int32_t arg = 0;  //!< The scalar resume value of a narrow task.
+		std::vector<ContinuationValue> args;  //!< The argument slots of a wide task.
+		std::vector<std::uint8_t> argKinds;  //!< The kind array of `args`, for reference retention.
+		void* exception = nullptr;  //!< The borrowed exception of a throw task.
+		void* creationContext = nullptr;  //!< The context captured when the task was queued.
+		std::uint32_t resultCapacity = 0;  //!< Result buffer capacity requested by the caller.
+		std::uint32_t tagCapacity = 0;  //!< Tag buffer capacity requested by the caller.
+		bool wide = false;  //!< True for a wide (typed-slot) task.
 	};
-	Hooks hooks_{}; //!< Field `hooks_` of HostContinuationScheduler.
-	std::deque<Task> tasks_{}; //!< Field `tasks_` of HostContinuationScheduler.
+	Hooks hooks_{};  //!< The embedder callbacks invoked as tasks progress.
+	std::deque<Task> tasks_{};  //!< The queued tasks, in submission order.
 };
 
 //! \par Generated-code entry points (C ABI)

@@ -167,7 +167,7 @@ private:
 	void resolveImports(ImportResolver& importResolver);
 	//! Resolves the module's type imports into `importedTypeIds`.
 	void resolveTypeImports(ImportResolver& importResolver);
-	std::vector<TypeId> importedTypeIds; //!< Field `importedTypeIds` of WASMJIT_API.
+	std::vector<TypeId> importedTypeIds;  //!< The type identities the imports resolved to.
 	//! Creates the instance's memories and points `ctx.memories` at them.
 	void initializeMemories();
 	//! Creates the globals' `Value` cells and evaluates their initialisers.
@@ -476,7 +476,7 @@ public:
 	std::unique_ptr<ModuleInstance> instantiate(
 			const Module& module, ImportResolver& resolver,
 			const HostBridge* hostBridge = nullptr,
-			const ProfileConfig& profile = {}); //!< Field `profile` of WASMJIT_API.
+			const ProfileConfig& profile = {});  //!< `profile` selects the feature subset to honour.
 
 	//! The profile this instantiator is currently operating under (set by the
 	//! most recent `instantiate` call; read by a backend's compile step).

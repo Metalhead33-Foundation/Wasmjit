@@ -39,7 +39,8 @@ namespace Spec {
  */
 struct ScriptValue {
 	std::string type;                 //!< "i32", "i64", "f32", "f64", "v128", "funcref", "either", ...
-	bool hasValue = false;
+	bool hasValue = false;            //!< True when `value` is populated.
+	//! True when `value` carries a scalar (rather than a structured shape).
 	std::string value;                //!< scalar text, "null", "nan:canonical", ...
 	std::string laneType;             //!< v128 only
 	std::vector<std::string> lanes;   //!< v128 only
@@ -49,12 +50,14 @@ struct ScriptValue {
 	//! docs/TESTING.md: `fields` for records, `elements` for lists/tuples,
 	//! `case`+`value` for variants, `flags` for flags, and `entries` for maps.
 	std::vector<std::pair<std::string, ScriptValue>> fields;
+	//! List/tuple elements.
 	std::vector<ScriptValue> elements;
+	//! Map entries, as (key, value) pairs.
 	std::vector<std::pair<ScriptValue, ScriptValue>> entries;
-	std::vector<std::string> flags; //!< Field `flags` of ScriptValue.
-	std::string caseLabel; //!< Field `caseLabel` of ScriptValue.
-	std::unique_ptr<ScriptValue> payload; //!< Field `payload` of ScriptValue.
-	bool hasPayload = false; //!< Field `hasPayload` of ScriptValue.
+	std::vector<std::string> flags;  //!< Set bit names of a `flags` value.
+	std::string caseLabel;  //!< The selected case of a `variant` value.
+	std::unique_ptr<ScriptValue> payload;  //!< The payload of the selected `variant` case.
+	bool hasPayload = false;  //!< True when the selected case carries a payload.
 	bool some = false;                //!< option
 	bool ok = true;                   //!< result
 };
@@ -65,6 +68,7 @@ struct ScriptAction {
 	std::string type;                 //!< "invoke" or "get"
 	std::string module;               //!< optional named module, empty for "last"
 	std::string field;                //!< export name
+	//! The arguments the action passes (empty for a `get`).
 	std::vector<ScriptValue> args;
 };
 
@@ -78,14 +82,18 @@ struct ScriptCommand {
 	std::string moduleType;           //!< "binary" or "text"
 	std::string text;                 //!< expected failure text
 	std::string as;                   //!< registry name for `register`
+	//! The action an `action`/`assert_*` command carries.
 	ScriptAction action;
+	//! The expected values or trap text a `assert_*` command carries.
 	std::vector<ScriptValue> expected;
 };
 
 //! A parsed `*.json` file produced by `wasm-tools json-from-wast`.
 /** \brief Parsed command sequence and source identity for one WAST JSON file. */
 struct Script {
+	//! The `.json` file this script was parsed from.
 	std::string sourceFilename;
+	//! The commands, in source order.
 	std::vector<ScriptCommand> commands;
 
 	//! Throws nlohmann::json::exception (or std::exception) on malformed input.
@@ -105,30 +113,38 @@ struct Script {
 //! world/import/export shape against its `.wit` source.
 /** \brief Tooling-side representation of one WIT function signature. */
 struct WitFunction {
+	//! The function's WIT name.
 	std::string name;
+	//! The parameter names and type spellings, in order.
 	std::vector<std::pair<std::string, std::string>> params;
-	std::optional<std::string> result; //!< Field `result` of WitFunction.
+	std::optional<std::string> result;  //!< The declared result type, if the function returns one.
 };
 
 /** \brief WIT interface name and its named function declarations. */
 struct WitInterface {
+	//! The interface's WIT name.
 	std::string name;
+	//! The interface's functions, keyed by name.
 	std::map<std::string, WitFunction> functions;
 };
 
 /** \brief WIT world imports and exports as consumed by the test harness. */
 struct WitWorld {
+	//! The world's WIT name.
 	std::string name;
 	//! name -> interface name, or "<function>" for a freestanding function.
 	std::map<std::string, std::string> imports;
+	//! The world's exported functions, keyed by name.
 	std::map<std::string, WitFunction> exports;
 };
 
 /** \brief Parsed package-level WIT model containing worlds and interfaces. */
 struct WitPackage {
+	//! The package's WIT name.
 	std::string name;
+	//! The package's worlds.
 	std::vector<WitWorld> worlds;
-	std::vector<WitInterface> interfaces; //!< Field `interfaces` of WitPackage.
+	std::vector<WitInterface> interfaces;  //!< The package's interfaces.
 
 	/**
 	 * \brief Parses the JSON representation produced by wasm-tools component wit.
@@ -143,9 +159,11 @@ struct WitPackage {
 //! Per-script execution summary.
 /** \brief Aggregate pass, failure, and skip counts for one script run. */
 struct ScriptReport {
+	//! Assertions that passed.
 	std::size_t passed = 0;
+	//! Assertions that failed.
 	std::size_t failed = 0;
-	std::size_t skipped = 0; //!< Field `skipped` of ScriptReport.
+	std::size_t skipped = 0;  //!< Assertions skipped because the harness cannot run them.
 	std::vector<std::string> failures;    //!< "line N: <detail>"
 	std::vector<std::string> skipReasons; //!< human-readable, possibly repeated
 };

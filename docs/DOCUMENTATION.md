@@ -223,27 +223,27 @@ The strict pass is a *work list*, not a gate: today it reports the gap counted i
 
 ## 8. What is deliberately not done
 
-- **Not every declaration is documented *yet*.** The rule above is about the
-  shape and the completeness of a block that exists; a declaration with no block
-  at all remains a gap. Measured on 2026-10-30 with the strict pass (§6):
-  **232 declarations**, concentrated as: `WasmComponentRuntime.hpp` 38,
-  `wasmjit_backend.h` 24, `WasmComponentModel.hpp` 23, `Test/WastScript.hpp` 18,
-  `LibjitOpcodeDispatcher.hpp` 17, `WasmContinuation.hpp` 16,
-  `WasmCanonicalType.hpp` 13, `WasmRegistryImportResolver.hpp` 12,
-  `WasmOpcode.hpp` 12, `WasmString.hpp` 10, and 15 smaller headers. That is down
-  from **4,591** before the sweep, and it is a list to work through, not a
-  decision to stop: a new or edited declaration is expected to arrive
-  documented, and the count must not grow.
-  `wasm_simd_scalar.hpp`, `wasm_simd_vector.hpp`, `WasmDiagnostics.hpp`,
-  `WasmTypeStore.hpp`, `WasmType.hpp`, `WasmTypeIdentity.hpp`, `WasmModule.hpp`,
-  `WasmModuleInstance.hpp`, `WasmComponentAsync.hpp` and `WasmValidator.hpp`
-  are the headers that have reached zero.
+- **Every declaration is now documented.** Measured on 2026-10-30 with the strict
+  pass (§6): **0 undocumented declarations** across all 69 headers, down from
+  **4,591** before the sweep. The count must stay at zero: a new or edited
+  declaration is expected to arrive documented, and the strict pass is the check
+  that catches one that does not.
 - **A doc block must say something.** A block of the form
   "`\brief Performs the <name> operation. \param x Input value or output
   destination for this operation.`" is *worse than no block*: it renders, it is
   counted as documented, and it states nothing (or, on a `void` handler, states
   something false). Such blocks were removed from the tree in the same pass that
-  fixed the renderer warnings; do not reintroduce them.
+  fixed the renderer warnings, and the trailing placeholders that survived that
+  pass — ``//!< Field `x` of y``, ``//!< Enum member `x` ``,
+  ``//!< Type alias `x` names the corresponding implementation/API type`` — were
+  replaced with what the declaration actually is (or deleted where a `\brief`
+  block directly above already said it). Do not reintroduce any of them: the
+  strict pass counts such a block as documentation, so nothing fails.
+- **Uniform per-opcode tails are acceptable.** The `dispatch<Op>` declarations of
+  a backend carry ``//!< Lower this opcode into the backend IR.`` (a base class
+  says what its default does instead). It is one sentence repeated across the
+  opcode surface rather than per-opcode prose: the opcode is already named by
+  the declaration, and the sentence is true of every one of them.
 - **`extern/` is untouched.** It is a submodule; reformatting it would make the
   next submodule update a merge.
 - **`.cpp` files are untouched.** The rule is about the surface a reader is

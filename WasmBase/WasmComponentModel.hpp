@@ -28,18 +28,18 @@ namespace WASM {
 //! them by section. This list restores the order in which index spaces grow.
 /** \brief Kind of ordered component definition that contributes to an index space. */
 enum class ComponentDefinitionKind : uint8_t {
-	CoreModule, //!< ComponentDefinitionKind enumerator `CoreModule`.
-	CoreInstance, //!< ComponentDefinitionKind enumerator `CoreInstance`.
-	CoreType, //!< ComponentDefinitionKind enumerator `CoreType`.
-	Component, //!< ComponentDefinitionKind enumerator `Component`.
-	Instance, //!< ComponentDefinitionKind enumerator `Instance`.
-	Alias, //!< ComponentDefinitionKind enumerator `Alias`.
-	Type, //!< ComponentDefinitionKind enumerator `Type`.
-	Canon, //!< ComponentDefinitionKind enumerator `Canon`.
-	Start, //!< ComponentDefinitionKind enumerator `Start`.
-	Import, //!< ComponentDefinitionKind enumerator `Import`.
-	Export, //!< ComponentDefinitionKind enumerator `Export`.
-	Value, //!< ComponentDefinitionKind enumerator `Value`.
+	CoreModule, //!< A `core module` definition.
+	CoreInstance, //!< A `core instance` definition.
+	CoreType, //!< A `core type` definition.
+	Component, //!< A nested `component` definition.
+	Instance, //!< A `component instance` definition.
+	Alias, //!< An `alias` definition.
+	Type, //!< A `type` definition.
+	Canon, //!< A `canon` built-in definition.
+	Start, //!< The `start` definition.
+	Import, //!< An `import` definition.
+	Export, //!< An `export` definition.
+	Value, //!< A `value` definition.
 };
 
 //! One entry of a component's ordered definition list: which kind of definition
@@ -55,14 +55,14 @@ struct ComponentDefinition {
 //! \brief Core sorts and indices
 /** \brief Core entity index spaces addressable from a component. */
 enum class CoreSort : uint8_t {
-	Func = 0x00, //!< CoreSort enumerator `Func`.
-	Table = 0x01, //!< CoreSort enumerator `Table`.
-	Memory = 0x02, //!< CoreSort enumerator `Memory`.
-	Global = 0x03, //!< CoreSort enumerator `Global`.
-	Tag = 0x04, //!< CoreSort enumerator `Tag`.
-	Type = 0x10, //!< CoreSort enumerator `Type`.
-	Module = 0x11, //!< CoreSort enumerator `Module`.
-	Instance = 0x12, //!< CoreSort enumerator `Instance`.
+	Func = 0x00, //!< A core function.
+	Table = 0x01, //!< A core table.
+	Memory = 0x02, //!< A core memory.
+	Global = 0x03, //!< A core global.
+	Tag = 0x04, //!< A core exception tag.
+	Type = 0x10, //!< A core type definition.
+	Module = 0x11, //!< A core module.
+	Instance = 0x12, //!< A core instance.
 };
 
 //! A `core:sort`/index pair naming an entity in a core index space.
@@ -364,6 +364,7 @@ struct ComponentInstance {
 	//! identity of the resulting instance type. Exactly one of typeId/schemeId is
 	//! set for a validated instance type.
 	mutable TypeId typeId{TypeId::kNone};
+	//! The scheme identity of the resulting instance type, when it is open.
 	mutable SchemeId schemeId{SchemeId::kNone};
 };
 
@@ -464,65 +465,83 @@ struct InstanceDecl;
 
 /** \brief Tagged declaration in a component type, with owned variant payload. */
 struct ComponentDecl {
+//! Which declaration this is.
 enum class Kind : uint8_t {
-		Import, //!< Enum member `Import`.
-		CoreType, //!< Enum member `CoreType`.
-		Type, //!< Enum member `Type`.
-		Alias, //!< Enum member `Alias`.
-		Export //!< Enum member `Export`.
+		Import, //!< An `import` declaration.
+		CoreType, //!< A `core type` declaration.
+		Type, //!< A component `type` declaration.
+		Alias, //!< An `alias` declaration.
+		Export //!< An `export` declaration.
 };
+	//! Which declaration this is.
 	Kind kind = Kind::Import;
 	std::variant<std::monostate, std::unique_ptr<ImportDecl>,
 			std::unique_ptr<CoreTypeDef>, std::unique_ptr<ComponentTypeDef>,
-			std::unique_ptr<Alias>, std::unique_ptr<ExportDecl>> payload; //!< Field `payload` of ComponentDecl.
+			std::unique_ptr<Alias>, std::unique_ptr<ExportDecl>> payload;  //!< The payload `kind` selects.
 
+	//! The payload `kind` selects.
 	const ImportDecl& import() const { return *std::get<std::unique_ptr<ImportDecl>>(payload); }
+	//! The payload of a `core type` declaration.
 	const CoreTypeDef& coreType() const { return *std::get<std::unique_ptr<CoreTypeDef>>(payload); }
+	//! The payload of a component `type` declaration.
 	const ComponentTypeDef& type() const { return *std::get<std::unique_ptr<ComponentTypeDef>>(payload); }
+	//! The payload of an `alias` declaration.
 	const Alias& alias() const { return *std::get<std::unique_ptr<Alias>>(payload); }
+	//! The payload of an `export` declaration.
 	const ExportDecl& exportDecl() const { return *std::get<std::unique_ptr<ExportDecl>>(payload); }
 };
 
 /** \brief Tagged declaration in an instance type, with owned variant payload. */
 struct InstanceDecl {
+//! Which declaration this is.
 enum class Kind : uint8_t {
-		CoreType, //!< Enum member `CoreType`.
-		Type, //!< Enum member `Type`.
-		Alias, //!< Enum member `Alias`.
-		Export //!< Enum member `Export`.
+		CoreType, //!< A `core type` declaration.
+		Type, //!< A component `type` declaration.
+		Alias, //!< An `alias` declaration.
+		Export //!< An `export` declaration.
 };
+	//! Which declaration this is.
 	Kind kind = Kind::CoreType;
 	std::variant<std::monostate, std::unique_ptr<CoreTypeDef>,
 			std::unique_ptr<ComponentTypeDef>, std::unique_ptr<Alias>,
-			std::unique_ptr<ExportDecl>> payload; //!< Field `payload` of InstanceDecl.
+			std::unique_ptr<ExportDecl>> payload;  //!< The payload `kind` selects.
 
+	//! The payload of a `core type` declaration.
 	const CoreTypeDef& coreType() const { return *std::get<std::unique_ptr<CoreTypeDef>>(payload); }
+	//! The payload of a component `type` declaration.
 	const ComponentTypeDef& type() const { return *std::get<std::unique_ptr<ComponentTypeDef>>(payload); }
+	//! The payload of an `alias` declaration.
 	const Alias& alias() const { return *std::get<std::unique_ptr<Alias>>(payload); }
+	//! The payload of an `export` declaration.
 	const ExportDecl& exportDecl() const { return *std::get<std::unique_ptr<ExportDecl>>(payload); }
 };
 
 /** \brief Component type definition and its canonical type identity. */
 struct ComponentTypeDef {
+	//! Which kind of type definition this is.
 	enum class Kind : uint8_t {
 		DefinedValue, Func, Component, Instance, Resource
 	};
-	Kind kind = Kind::DefinedValue; //!< Field `kind` of ComponentTypeDef.
+	Kind kind = Kind::DefinedValue;  //!< Which kind of type definition this is.
 	//! Defined-value, function and resource payloads live in the shared store.
 	//! Component/instance declarations are the remaining inline payloads for
 	//! this pass; they keep their order because declaration order is scope.
 	TypeId id{TypeId::kNone};
+	//! The inline declarations for a component/instance type (nullopt otherwise).
 	std::variant<std::monostate, std::vector<ComponentDecl>,
 			std::vector<InstanceDecl>, ResourceType> declarations;
 
+	//! The component type's declarations.
 	const std::vector<ComponentDecl>& componentDecls() const
 	{
 		return std::get<std::vector<ComponentDecl>>(declarations);
 	}
+	//! The instance type's declarations.
 	const std::vector<InstanceDecl>& instanceDecls() const
 	{
 		return std::get<std::vector<InstanceDecl>>(declarations);
 	}
+	//! The resource payload of a `resource` type definition.
 	const ResourceType& resource() const
 	{
 		return std::get<ResourceType>(declarations);
@@ -532,14 +551,18 @@ struct ComponentTypeDef {
 //! \brief Start and value definitions
 /** \brief Component start function index, arguments, and expected result count. */
 struct Start {
+	//! The component function to start.
 	uint32_t funcIndex = 0;
+	//! The `i32` arguments the start function receives.
 	std::vector<uint32_t> args;
-	uint32_t resultCount = 0; //!< Field `resultCount` of Start.
+	uint32_t resultCount = 0;  //!< Number of results the start function returns.
 };
 
 /** \brief Component value declaration with its encoded initializer payload. */
 struct ValueDecl {
+	//! The value's component value type.
 	ComponentValueType type;
+	//! Length of the encoded initialiser that follows.
 	uint32_t encodedLength = 0;
 	//! The value grammar depends on the type index space; the length-delimited
 	//! encoding is retained verbatim, matching how the core parser keeps raw

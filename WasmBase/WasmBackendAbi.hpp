@@ -48,24 +48,31 @@ enum class ValueKind : std::uint8_t {
 
 /** \brief Non-owning parameter/result kind view of a function signature. */
 struct SignatureView {
+	//! Parameter kinds, or null when there are none.
 	const ValueKind* params = nullptr;
+	//! Number of entries in `params`.
 	std::uint32_t    paramCount = 0;
-	const ValueKind* results = nullptr; //!< Field `results` of SignatureView.
-	std::uint32_t    resultCount = 0; //!< Field `resultCount` of SignatureView.
+	const ValueKind* results = nullptr;  //!< Result kinds.
+	std::uint32_t    resultCount = 0;  //!< Number of entries in `results`.
 };
 
 /** \brief Offset, size, and alignment of one field in a lowered aggregate. */
 struct FieldLayout {
+	//! Byte offset of the field inside the aggregate.
 	std::uint32_t offset = 0;
+	//! Byte size of the field.
 	std::uint32_t size = 0;
-	std::uint32_t alignment = 0; //!< Field `alignment` of FieldLayout.
+	std::uint32_t alignment = 0;  //!< Required alignment of the field, in bytes.
 };
 
 /** \brief Caller-storage-backed layout description of a lowered aggregate. */
 struct AggregateLayout {
+	//! Total byte size of the aggregate.
 	std::uint32_t size = 0;
+	//! Required alignment of the aggregate, in bytes.
 	std::uint32_t alignment = 1;
 	FieldLayout*  fields = nullptr; //!< caller-owned storage, one entry per kind
+	//! Number of entries in `fields`.
 	std::uint32_t fieldCount = 0;
 };
 

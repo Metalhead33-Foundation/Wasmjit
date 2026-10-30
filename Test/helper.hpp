@@ -15,6 +15,7 @@
 #include <memory>
 
 #ifndef WASM_TEST_DIR
+//! Directory holding built test fixtures; empty means "next to the binary".
 #define WASM_TEST_DIR ""
 #endif
 
@@ -35,7 +36,9 @@ WASM::Module loadTestModule(const char* moduleName);
 
 /** \brief Owns a parsed module together with its instantiated runtime instance. */
 struct LoadedModule {
+	//! The parsed module; outlives `instance`.
 	std::unique_ptr<WASM::Module> module;
+	//! The instantiated runtime instance.
 	std::unique_ptr<WASM::ModuleInstance> instance;
 };
 
@@ -69,6 +72,7 @@ void registerHostFunction(WASM::RegistryImportResolver& resolver, const char* mo
 
 /** \brief Minimal host-side state used by debug-import tests. */
 struct DebugHost {
+	//! How many times a debug import was called.
 	int callCount = 0;
 };
 
@@ -79,16 +83,18 @@ struct DebugHost {
  */
 struct TextFixture {
 public:
-	std::unique_ptr<WASM::Module> module; //!< Field `module` of TextFixture.
-	std::unique_ptr<WASM::ModuleInstance> instance; //!< Field `instance` of TextFixture.
-	std::unique_ptr<WASM::RegistryImportResolver> resolver; //!< Field `resolver` of TextFixture.
+	std::unique_ptr<WASM::Module> module;  //!< The parsed module; outlives `instance`.
+	std::unique_ptr<WASM::ModuleInstance> instance;  //!< The instantiated fixture.
+	std::unique_ptr<WASM::RegistryImportResolver> resolver;  //!< The resolver the fixture registered its imports with.
 	//!std::unique_ptr<WASM::VMContext> vm_context;
 	std::unique_ptr<DebugHost> debug_host;
 private:
 	TextFixture(const TextFixture& cpy) = delete;
 	TextFixture& operator=(const TextFixture& cpy) = delete;
 public:
+	//! Moves the owned fixtures out of `mov`.
 	TextFixture(TextFixture&& mov) = default;
+	//! Releases the current fixtures and adopts `mov`'s.
 	TextFixture& operator=(TextFixture&& mov) = default;
 	/**
 	 * \brief Loads and instantiates the named fixture with the supplied dependencies.

@@ -29,7 +29,7 @@ namespace WASM {
 //! well below the allocation budget means the code-point vector cannot be the
 //! allocation that takes the host down (docs/SAFETY.md).
 constexpr uint32_t kMaxStringBytes = 16u << 20;             //!< 16 MiB
-constexpr uint32_t kMaxStringCodeUnits = kMaxStringBytes / 2;
+constexpr uint32_t kMaxStringCodeUnits = kMaxStringBytes / 2; //!< 8 M code points
 
 //! A Store-owned string: the proposal's sequence of Unicode scalar values and
 //! isolated surrogates. Code points are stored directly (not bytes), so WTF-8,
@@ -37,6 +37,7 @@ constexpr uint32_t kMaxStringCodeUnits = kMaxStringBytes / 2;
 //! (docs/proposals/STRINGREF.md STRD3).
 /** \brief Store-owned Unicode code-point sequence, preserving isolated surrogates. */
 struct StringObject {
+	//! The code points, in order (isolated surrogates included).
 	std::vector<uint32_t> codePoints;
 };
 
@@ -44,12 +45,14 @@ struct StringObject {
 //! stateless: every operation takes an explicit byte/code-unit position.
 /** \brief Opaque immutable view of a Store-owned string for stringview operations. */
 struct StringViewObject {
+	//! The viewed string; owned and kept alive by the arena.
 	const StringObject* string;
 };
 
 //! `string.as_iter` produces a mutable iterator; `next` advances its position.
 /** \brief Mutable code-point iterator over a Store-owned string. */
 struct StringIteratorObject {
+	//! The iterated string; owned and kept alive by the arena.
 	const StringObject* string;
 	uint32_t position = 0; //!< code-point index
 };
@@ -126,32 +129,40 @@ private:
 	//! immutable after creation, so readers only need the map lock.
 	mutable std::recursive_mutex mutex_;
 
+	//! Arena record owning one string object and its reference count.
 	struct StringEntry {
-		StringObject object; //!< Field `object` of StringEntry.
-		uint32_t refcount = 0; //!< Field `refcount` of StringEntry.
-		uint64_t bytes = 0; //!< Field `bytes` of StringEntry.
+		//! The owned string.
+		StringObject object;
+		uint32_t refcount = 0; //!< Outstanding references.
+		uint64_t bytes = 0; //!< Accounted bytes (object + code points).
 	};
+	//! Arena record owning one view object and its reference count.
 	struct ViewEntry {
-		StringViewObject object; //!< Field `object` of ViewEntry.
-		uint32_t refcount = 0; //!< Field `refcount` of ViewEntry.
-		uint64_t bytes = 0; //!< Field `bytes` of ViewEntry.
+		//! The owned view record.
+		StringViewObject object;
+		uint32_t refcount = 0; //!< Outstanding references.
+		uint64_t bytes = 0; //!< Accounted bytes (object + record).
 	};
-	/** \\brief Internal lookup entry associating a stable iterator handle with its object. */
-struct IteratorEntry {
+	//! Internal lookup entry associating a stable iterator handle with its object.
+	struct IteratorEntry {
+		//! The owned iterator state.
 		StringIteratorObject object;
+		//! Outstanding references.
 		uint32_t refcount = 0;
-		uint64_t bytes = 0; //!< Field `bytes` of IteratorEntry.
+		uint64_t bytes = 0;  //!< Accounted bytes (object + record).
 	};
 
+	//! Releases one reference to a view; true when the entry was destroyed.
 	bool releaseView(const StringViewObject* view);
+	//! Releases one reference to an iterator; true when the entry was destroyed.
 	bool releaseIterator(const StringIteratorObject* iterator);
 
-	std::unordered_map<const StringObject*, std::unique_ptr<StringEntry>> objects_; //!< Field `objects_` of type.
-	std::unordered_map<const StringViewObject*, std::unique_ptr<ViewEntry>> views_; //!< Field `views_` of type.
-	std::unordered_map<const StringIteratorObject*, std::unique_ptr<IteratorEntry>> iterators_; //!< Field `iterators_` of type.
+	std::unordered_map<const StringObject*, std::unique_ptr<StringEntry>> objects_;  //!< Strings, keyed by their stable handle.
+	std::unordered_map<const StringViewObject*, std::unique_ptr<ViewEntry>> views_;  //!< Views, keyed by their stable handle.
+	std::unordered_map<const StringIteratorObject*, std::unique_ptr<IteratorEntry>> iterators_;  //!< Iterators, keyed by their stable handle.
 
 private:
-	Store& owner_; //!< Field `owner_` of type.
+	Store& owner_;  //!< The store whose allocation budget the arena charges.
 };
 
 //! \par Codecs
@@ -210,9 +221,9 @@ bool wtf8Advance(const std::vector<uint32_t>& codePoints, int32_t pos,
 
 /** \brief Encoding policy used by wtf8Encode(). */
 enum class Wtf8Encoding {
-	Utf8, //!< Enum member `Utf8`.
-	LossyUtf8, //!< Enum member `LossyUtf8`.
-	Wtf8 //!< Enum member `Wtf8`.
+	Utf8, //!< Strict UTF-8; lone surrogates are an error.
+	LossyUtf8, //!< UTF-8 with U+FFFD replacing lone surrogates.
+	Wtf8 //!< WTF-8, which preserves lone surrogates.
 };
 /** \brief Encodes a WTF-8-positioned slice using the selected encoding policy. \param codePoints Source sequence. \param pos Starting byte position. \param bytes Number of bytes to encode; negative means to the end. \param encoding UTF-8/WTF-8 conversion policy. \param nextPos Receives the next position after the encoded slice. \param out Receives encoded bytes. \return false when strict UTF-8 cannot represent the slice or a limit is exceeded. */
 bool wtf8Encode(const std::vector<uint32_t>& codePoints, int32_t pos, int32_t bytes,

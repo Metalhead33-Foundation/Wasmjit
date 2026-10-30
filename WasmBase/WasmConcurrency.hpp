@@ -59,11 +59,17 @@ inline constexpr const char* concurrencyModelName(ConcurrencyModel model) noexce
 //! schedules", which is today's behaviour.
 /** \brief Optional embedder-provided hooks for scheduling and coordinating agents. */
 struct HostAgentScheduler {
+	//! Opaque pointer handed back to every hook.
 	void* userData = nullptr;
+	//! Starts `entry(argument)` on a host thread; may be null.
 	void (*spawn)(void* userData, void (*entry)(void*), void* argument) = nullptr;
+	//! Blocks the calling agent until another one wakes it; may be null.
 	void (*park)(void* userData) = nullptr;
+	//! Makes an agent runnable again; may be null.
 	void (*wake)(void* userData, std::uint64_t agentId) = nullptr;
+	//! Waits for an agent to finish; may be null.
 	void (*join)(void* userData, std::uint64_t agentId) = nullptr;
+	//! Runs one scheduling step; may be null.
 	void (*step)(void* userData) = nullptr;
 };
 

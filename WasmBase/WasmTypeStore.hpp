@@ -32,51 +32,51 @@ namespace WASM {
 //! shared payload pools by index; no record owns a vector or a string.
 /** \brief Domain containing a canonical type record. */
 enum class TypeDomain : uint8_t {
-	Core, //!< Enum member `Core`.
-	Component //!< Enum member `Component`.
+	Core, //!< A type from a core module.
+	Component //!< A type from the Component Model.
 };
 
 /** \brief Discriminator for core and Component Model canonical type records. */
 enum class TypeKind : uint16_t {
-	CoreFunc = 1, //!< TypeKind enumerator `CoreFunc`.
-	CoreStruct, //!< TypeKind enumerator `CoreStruct`.
-	CoreArray, //!< TypeKind enumerator `CoreArray`.
+	CoreFunc = 1, //!< A core function type.
+	CoreStruct, //!< A core struct type.
+	CoreArray, //!< A core array type.
 	//! Stack-switching continuation composite type.
-	CoreCont, //!< TypeKind enumerator `CoreCont`.
+	CoreCont, //!< A core continuation type.
 	//! A nominal type imported with `(type (sub <heaptype>))` (TYPE_IMPORTS.md).
 	//! Its representation is the abstract bound; it is never structurally
 	//! interned and never equals a definition with the same shape.
-	CoreImport, //!< TypeKind enumerator `CoreImport`.
-	ComponentPrimitive, //!< TypeKind enumerator `ComponentPrimitive`.
-	ComponentRecord, //!< TypeKind enumerator `ComponentRecord`.
-	ComponentVariant, //!< TypeKind enumerator `ComponentVariant`.
-	ComponentList, //!< TypeKind enumerator `ComponentList`.
-	ComponentFixedList, //!< TypeKind enumerator `ComponentFixedList`.
-	ComponentTuple, //!< TypeKind enumerator `ComponentTuple`.
-	ComponentFlags, //!< TypeKind enumerator `ComponentFlags`.
-	ComponentEnum, //!< TypeKind enumerator `ComponentEnum`.
-	ComponentOption, //!< TypeKind enumerator `ComponentOption`.
-	ComponentResult, //!< TypeKind enumerator `ComponentResult`.
-	ComponentOwn, //!< TypeKind enumerator `ComponentOwn`.
-	ComponentBorrow, //!< TypeKind enumerator `ComponentBorrow`.
-	ComponentStream, //!< TypeKind enumerator `ComponentStream`.
-	ComponentFuture, //!< TypeKind enumerator `ComponentFuture`.
-	ComponentMap, //!< TypeKind enumerator `ComponentMap`.
-	ComponentFunc, //!< TypeKind enumerator `ComponentFunc`.
-	ComponentComponent, //!< TypeKind enumerator `ComponentComponent`.
-	ComponentInstance, //!< TypeKind enumerator `ComponentInstance`.
-	ComponentResource, //!< TypeKind enumerator `ComponentResource`.
+	CoreImport, //!< An imported core type.
+	ComponentPrimitive, //!< A component primitive (`bool`, `s32`, `string`, ...).
+	ComponentRecord, //!< A component `record` type.
+	ComponentVariant, //!< A component `variant` type.
+	ComponentList, //!< A component `list` type.
+	ComponentFixedList, //!< A component `list<T, N>` type.
+	ComponentTuple, //!< A component `tuple` type.
+	ComponentFlags, //!< A component `flags` type.
+	ComponentEnum, //!< A component `enum` type.
+	ComponentOption, //!< A component `option` type.
+	ComponentResult, //!< A component `result` type.
+	ComponentOwn, //!< An `own<R>` handle type.
+	ComponentBorrow, //!< A `borrow<R>` handle type.
+	ComponentStream, //!< A component `stream` type.
+	ComponentFuture, //!< A component `future` type.
+	ComponentMap, //!< A component `map` type.
+	ComponentFunc, //!< A component `func` type.
+	ComponentComponent, //!< A component `component` type.
+	ComponentInstance, //!< A component `instance` type.
+	ComponentResource, //!< A component `resource` type.
 };
 
 /** \brief Bit flags describing finality, async, mutability, nullability, and sharing. */
 enum TypeFlags : uint16_t {
-	TypeFlagFinal = 1u << 0, //!< TypeFlags enumerator `TypeFlagFinal`.
-	TypeFlagAsync = 1u << 1, //!< TypeFlags enumerator `TypeFlagAsync`.
-	TypeFlagMutable = 1u << 2, //!< TypeFlags enumerator `TypeFlagMutable`.
-	TypeFlagNullable = 1u << 3, //!< TypeFlags enumerator `TypeFlagNullable`.
-	TypeFlagAbstract = 1u << 4, //!< TypeFlags enumerator `TypeFlagAbstract`.
+	TypeFlagFinal = 1u << 0, //!< The type is declared `final`.
+	TypeFlagAsync = 1u << 1, //!< The type is declared `async`.
+	TypeFlagMutable = 1u << 2, //!< The field/element is declared `mut`.
+	TypeFlagNullable = 1u << 3, //!< The reference may be null.
+	TypeFlagAbstract = 1u << 4, //!< The heap type is abstract, not defined here.
 	//! Shared-everything threads: `sharecomptype` (SET-1).
-	TypeFlagShared = 1u << 5, //!< TypeFlags enumerator `TypeFlagShared`.
+	TypeFlagShared = 1u << 5, //!< The type is declared `shared`.
 };
 
 /** \brief Range into one of the TypeStore's compact payload pools. */
@@ -466,9 +466,9 @@ public:
 	CanonHeapType importBound() const;
 
 private:
-	const TypeStore* store_ = nullptr; //!< Field `store_` of type.
-	TypeId id_{}; //!< Field `id_` of type.
-	const CanonicalType* pending_ = nullptr; //!< Field `pending_` of type.
+	const TypeStore* store_ = nullptr; //!< The store the record resolves through.
+	TypeId id_{}; //!< The identity being described.
+	const CanonicalType* pending_ = nullptr; //!< The not-yet-interned type, when resolving.
 };
 
 /** \brief Read-only accessor view over one canonical Component Model type record. */
@@ -717,8 +717,8 @@ private:
 		return id;
 	}
 
-	std::vector<TypeRecord> records_; //!< Field `records_` of type.
-	std::size_t coreCount_ = 0; //!< Field `coreCount_` of type.
+	std::vector<TypeRecord> records_; //!< One record per interned type, indexed by `TypeId`.
+	std::size_t coreCount_ = 0; //!< How many of `records_` are core-module types.
 
 	//! Core payloads.
 	std::vector<CanonHeapType> coreSupertypes_;
@@ -726,12 +726,12 @@ private:
 	std::vector<CanonStorageType> coreStorage_;
 	//! Core struct/array field pool.
 	std::vector<CanonFieldType> coreFields_;
-	std::vector<CoreImportPayload> coreImports_; //!< Field `coreImports_` of type.
-	std::vector<CoreFuncPayload> coreFuncs_; //!< Field `coreFuncs_` of type.
-	std::vector<CoreStructPayload> coreStructs_; //!< Field `coreStructs_` of type.
-	std::vector<CoreArrayPayload> coreArrays_; //!< Field `coreArrays_` of type.
-	std::vector<CoreContPayload> coreConts_; //!< Field `coreConts_` of type.
-	std::vector<uint32_t> depths_; //!< Field `depths_` of type.
+	std::vector<CoreImportPayload> coreImports_; //!< Payloads of imported core types.
+	std::vector<CoreFuncPayload> coreFuncs_; //!< Payloads of core function types.
+	std::vector<CoreStructPayload> coreStructs_; //!< Payloads of core struct types.
+	std::vector<CoreArrayPayload> coreArrays_; //!< Payloads of core array types.
+	std::vector<CoreContPayload> coreConts_; //!< Payloads of core continuation types.
+	std::vector<uint32_t> depths_; //!< Subtype depth of each record (1 + deepest supertype).
 
 	//! Component payloads.
 	std::vector<ComponentField> componentFields_;
@@ -739,27 +739,27 @@ private:
 	std::vector<ComponentCase> componentCases_;
 	//! Value-type pool (list elements, map keys/values, …).
 	std::vector<ComponentValueType> componentValues_;
-	std::vector<StringId> componentLabels_; //!< Field `componentLabels_` of type.
-	std::vector<ComponentFuncParam> componentParams_; //!< Field `componentParams_` of type.
-	std::vector<ComponentValueType> componentResults_; //!< Field `componentResults_` of type.
-	std::vector<ComponentRecordPayload> componentRecords_; //!< Field `componentRecords_` of type.
-	std::vector<ComponentVariantPayload> componentVariants_; //!< Field `componentVariants_` of type.
-	std::vector<ComponentListPayload> componentLists_; //!< Field `componentLists_` of type.
-	std::vector<ComponentTuplePayload> componentTuples_; //!< Field `componentTuples_` of type.
-	std::vector<ComponentLabelPayload> componentLabelLists_; //!< Field `componentLabelLists_` of type.
-	std::vector<ComponentOptionPayload> componentOptions_; //!< Field `componentOptions_` of type.
-	std::vector<ComponentResultPayload> componentResultPayloads_; //!< Field `componentResultPayloads_` of type.
-	std::vector<ComponentMapPayload> componentMaps_; //!< Field `componentMaps_` of type.
-	std::vector<ComponentStreamPayload> componentStreams_; //!< Field `componentStreams_` of type.
-	std::vector<ComponentFuncPayload> componentFuncs_; //!< Field `componentFuncs_` of type.
-	std::vector<ComponentResourcePayload> componentResources_; //!< Field `componentResources_` of type.
-	std::vector<uint32_t> componentTypeRefs_; //!< Field `componentTypeRefs_` of type.
-	std::vector<ComponentDeclRecord> componentDeclRecords_; //!< Field `componentDeclRecords_` of type.
-	std::vector<ComponentInstancePayload> componentInstancePayloads_; //!< Field `componentInstancePayloads_` of type.
-	std::vector<ComponentComponentPayload> componentComponentPayloads_; //!< Field `componentComponentPayloads_` of type.
+	std::vector<StringId> componentLabels_; //!< Label names interned for component types.
+	std::vector<ComponentFuncParam> componentParams_; //!< Parameter entries of component function types.
+	std::vector<ComponentValueType> componentResults_; //!< Result entries of component function types.
+	std::vector<ComponentRecordPayload> componentRecords_; //!< Payloads of `record` types.
+	std::vector<ComponentVariantPayload> componentVariants_; //!< Payloads of `variant` types.
+	std::vector<ComponentListPayload> componentLists_; //!< Payloads of `list` types.
+	std::vector<ComponentTuplePayload> componentTuples_; //!< Payloads of `tuple` types.
+	std::vector<ComponentLabelPayload> componentLabelLists_; //!< Label lists of `variant`/`enum` types.
+	std::vector<ComponentOptionPayload> componentOptions_; //!< Payloads of `option` types.
+	std::vector<ComponentResultPayload> componentResultPayloads_; //!< Payloads of component `result` types.
+	std::vector<ComponentMapPayload> componentMaps_; //!< Payloads of `map` types.
+	std::vector<ComponentStreamPayload> componentStreams_; //!< Payloads of `stream` types.
+	std::vector<ComponentFuncPayload> componentFuncs_; //!< Payloads of component function types.
+	std::vector<ComponentResourcePayload> componentResources_; //!< Payloads of `resource` types.
+	std::vector<uint32_t> componentTypeRefs_; //!< Type references shared by component payloads.
+	std::vector<ComponentDeclRecord> componentDeclRecords_; //!< Declaration records of component/instance types.
+	std::vector<ComponentInstancePayload> componentInstancePayloads_; //!< Payloads of component instance types.
+	std::vector<ComponentComponentPayload> componentComponentPayloads_; //!< Payloads of component component types.
 
-	std::vector<std::string> strings_; //!< Field `strings_` of type.
-	std::unordered_map<std::string, StringId> stringIds_; //!< Field `stringIds_` of type.
+	std::vector<std::string> strings_; //!< The string arena, indexed by `StringId`.
+	std::unordered_map<std::string, StringId> stringIds_; //!< Deduplication map for `strings_`.
 
 	//! Closed component records keyed by a canonical byte key. Records that
 	//! contain a component-local type index are deliberately absent: the index
@@ -773,14 +773,14 @@ private:
 	//! Counter behind `componentInternMisses()`.
 	std::size_t componentInternMisses_ = 0;
 
-	mutable std::map<std::string, CanonicalAbiSignature> canonicalAbi_; //!< Field `canonicalAbi_` of type.
-	mutable std::size_t canonicalAbiHits_ = 0; //!< Field `canonicalAbiHits_` of type.
-	mutable std::size_t canonicalAbiMisses_ = 0; //!< Field `canonicalAbiMisses_` of type.
+	mutable std::map<std::string, CanonicalAbiSignature> canonicalAbi_; //!< Cache of computed Canonical ABI signatures.
+	mutable std::size_t canonicalAbiHits_ = 0; //!< Cache hits, kept for tests and diagnostics.
+	mutable std::size_t canonicalAbiMisses_ = 0; //!< Cache misses, kept for tests and diagnostics.
 
-	std::vector<TypeScheme> schemes_; //!< Field `schemes_` of type.
-	std::unordered_map<std::string, SchemeId> schemeIntern_; //!< Field `schemeIntern_` of type.
-	std::size_t schemeInternHits_ = 0; //!< Field `schemeInternHits_` of type.
-	std::size_t schemeInternMisses_ = 0; //!< Field `schemeInternMisses_` of type.
+	std::vector<TypeScheme> schemes_; //!< Interned type schemes, indexed by `SchemeId`.
+	std::unordered_map<std::string, SchemeId> schemeIntern_; //!< Deduplication map for `schemes_`.
+	std::size_t schemeInternHits_ = 0; //!< Scheme interning hits, kept for tests and diagnostics.
+	std::size_t schemeInternMisses_ = 0; //!< Scheme interning misses, kept for tests and diagnostics.
 };
 
 } // namespace WASM

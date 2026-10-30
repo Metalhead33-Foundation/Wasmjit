@@ -50,20 +50,20 @@ namespace WASM {
 
 /** \brief Event categories emitted by Component Model async waitables. */
 enum class ComponentEventCode : uint32_t {
-	None = 0, //!< ComponentEventCode enumerator `None`.
-	Subtask = 1, //!< ComponentEventCode enumerator `Subtask`.
-	StreamRead = 2, //!< ComponentEventCode enumerator `StreamRead`.
-	StreamWrite = 3, //!< ComponentEventCode enumerator `StreamWrite`.
-	FutureRead = 4, //!< ComponentEventCode enumerator `FutureRead`.
-	FutureWrite = 5, //!< ComponentEventCode enumerator `FutureWrite`.
-	TaskCancelled = 6, //!< ComponentEventCode enumerator `TaskCancelled`.
+	None = 0, //!< No event is pending.
+	Subtask = 1, //!< A subtask completed.
+	StreamRead = 2, //!< A stream became readable.
+	StreamWrite = 3, //!< A stream became writable.
+	FutureRead = 4, //!< A future became readable.
+	FutureWrite = 5, //!< A future became writable.
+	TaskCancelled = 6, //!< The task was cancelled.
 };
 
 /** \brief Outcome of a stream/future copy operation. */
 enum class ComponentCopyResult : uint32_t {
-	Completed = 0, //!< ComponentCopyResult enumerator `Completed`.
-	Dropped = 1, //!< ComponentCopyResult enumerator `Dropped`.
-	Cancelled = 2, //!< ComponentCopyResult enumerator `Cancelled`.
+	Completed = 0, //!< The copy finished.
+	Dropped = 1, //!< An end was dropped before the copy finished.
+	Cancelled = 2, //!< The copy was cancelled.
 };
 
 //! The Canonical ABI sentinel for "the operation blocked".
@@ -92,38 +92,38 @@ constexpr bool unpackCopyResult(uint32_t packed, ComponentCopyResult& result,
 
 /** \brief Lifecycle states of one async component task. */
 enum class ComponentTaskState : uint8_t {
-	Pending, //!< ComponentTaskState enumerator `Pending`.
-	Running, //!< ComponentTaskState enumerator `Running`.
-	Cancelled, //!< ComponentTaskState enumerator `Cancelled`.
-	Resolved, //!< ComponentTaskState enumerator `Resolved`.
+	Pending, //!< Created but not yet running.
+	Running, //!< The task body is executing.
+	Cancelled, //!< Cancellation completed; the task will not resume.
+	Resolved, //!< The task finished successfully.
 };
 
 //! The direction of one end of a stream/future.
 /** \brief Read/write role of a stream or future endpoint. */
 enum class ComponentEndDirection : uint8_t {
-	Readable, //!< ComponentEndDirection enumerator `Readable`.
-	Writable, //!< ComponentEndDirection enumerator `Writable`.
+	Readable, //!< This end reads from the channel.
+	Writable, //!< This end writes to the channel.
 };
 
 //! `End.State` in the Canonical ABI explainer.
 /** \brief Copy/cancellation state of one async endpoint. */
 enum class ComponentEndState : uint8_t {
-	Idle, //!< ComponentEndState enumerator `Idle`.
-	Copying, //!< ComponentEndState enumerator `Copying`.
-	CancellingCopy, //!< ComponentEndState enumerator `CancellingCopy`.
-	Done, //!< ComponentEndState enumerator `Done`.
+	Idle, //!< No transfer is in progress.
+	Copying, //!< A transfer is blocked on the guest buffer.
+	CancellingCopy, //!< A blocked transfer is being cancelled.
+	Done, //!< The transfer completed.
 };
 
 //! What a handle denotes. Resources are owned by the runtime's resource table;
 //! this enum only covers the async objects a handle table can also contain.
 /** \brief Kind of async object that can participate in a waitable set. */
 enum class ComponentWaitableKind : uint8_t {
-	Subtask, //!< ComponentWaitableKind enumerator `Subtask`.
-	StreamRead, //!< ComponentWaitableKind enumerator `StreamRead`.
-	StreamWrite, //!< ComponentWaitableKind enumerator `StreamWrite`.
-	FutureRead, //!< ComponentWaitableKind enumerator `FutureRead`.
-	FutureWrite, //!< ComponentWaitableKind enumerator `FutureWrite`.
-	TaskCancelled, //!< ComponentWaitableKind enumerator `TaskCancelled`.
+	Subtask, //!< Waits on a subtask.
+	StreamRead, //!< Waits for a readable stream end.
+	StreamWrite, //!< Waits for a writable stream end.
+	FutureRead, //!< Waits for a readable future end.
+	FutureWrite, //!< Waits for a writable future end.
+	TaskCancelled, //!< Waits on a task cancellation.
 };
 
 /** \brief Event code and two Canonical ABI payload words produced by a waitable. */
@@ -132,7 +132,7 @@ struct ComponentAsyncEvent {
 	ComponentEventCode code = ComponentEventCode::None;
 	//! First event-specific payload word (a handle in most events).
 	uint32_t payload1 = 0;
-	uint32_t payload2 = 0; //!< Field `payload2` of ComponentAsyncEvent.
+	uint32_t payload2 = 0; //!< Second event-specific payload word.
 
 	/** \brief Tests whether this is the no-event sentinel. \return true when code is None. */
 	bool isNone() const { return code == ComponentEventCode::None; }
@@ -208,10 +208,10 @@ public:
 private:
 	//! The task's runtime handle.
 	uint32_t id_ = 0;
-	ComponentTaskState state_ = ComponentTaskState::Pending; //!< Field `state_` of ComponentTask.
-	uint32_t backpressure_ = 0; //!< Field `backpressure_` of ComponentTask.
-	bool cancellationRequested_ = false; //!< Field `cancellationRequested_` of ComponentTask.
-	std::unordered_map<uint32_t, ComponentContextSlot> context_; //!< Field `context_` of ComponentTask.
+	ComponentTaskState state_ = ComponentTaskState::Pending; //!< The lifecycle state of the task.
+	uint32_t backpressure_ = 0; //!< Caller-declared limit on outstanding work.
+	bool cancellationRequested_ = false; //!< Set by `task.cancel`, read by the task body.
+	std::unordered_map<uint32_t, ComponentContextSlot> context_; //!< Context slots this task can reach.
 };
 
 //! A waitable is anything that can produce a ComponentAsyncEvent and join one
@@ -237,7 +237,7 @@ public:
 private:
 	//! The waitable's kind, fixed at construction.
 	ComponentWaitableKind kind_;
-	void* set_ = nullptr; //!< Field `set_` of ComponentWaitable.
+	void* set_ = nullptr; //!< The waitable set holding this member, or null.
 };
 
 //! A single-agent waitable set. `wait` and `poll` both return `none` when no
@@ -301,7 +301,7 @@ public:
 	const std::vector<ComponentWaitable*>& waitables() const { return waitables_; }
 private:
 	//! The set's members, in insertion order.
-	std::vector<ComponentWaitable*> waitables_; //!< Field `waitables_` of ComponentWaitableSet.
+	std::vector<ComponentWaitable*> waitables_; //!< The members, in insertion order.
 };
 
 
@@ -380,16 +380,16 @@ public:
 	//! True when the blocked copy is a read (guest buffer is a destination).
 	bool pendingIsRead() const { return pendingIsRead_; }
 private:
-	uint32_t handle_ = 0; //!< Field `handle_` of ComponentAsyncEndpoint.
-	ComponentEndDirection direction_; //!< Field `direction_` of ComponentAsyncEndpoint.
-	ComponentAsyncChannel* channel_ = nullptr; //!< Field `channel_` of ComponentAsyncEndpoint.
-	ComponentEndState state_ = ComponentEndState::Idle; //!< Field `state_` of ComponentAsyncEndpoint.
-	bool hasPendingEvent_ = false; //!< Field `hasPendingEvent_` of ComponentAsyncEndpoint.
-	ComponentAsyncEvent pendingEvent_{}; //!< Field `pendingEvent_` of ComponentAsyncEndpoint.
-	LinearMemory* pendingMemory_ = nullptr; //!< Field `pendingMemory_` of ComponentAsyncEndpoint.
-	uint64_t pendingAddress_ = 0; //!< Field `pendingAddress_` of ComponentAsyncEndpoint.
-	uint64_t pendingCount_ = 0; //!< Field `pendingCount_` of ComponentAsyncEndpoint.
-	bool pendingIsRead_ = false; //!< Field `pendingIsRead_` of ComponentAsyncEndpoint.
+	uint32_t handle_ = 0; //!< The Canonical ABI handle of the endpoint.
+	ComponentEndDirection direction_; //!< Whether this endpoint reads or writes.
+	ComponentAsyncChannel* channel_ = nullptr; //!< The channel this endpoint belongs to.
+	ComponentEndState state_ = ComponentEndState::Idle; //!< The lifecycle state of the endpoint.
+	bool hasPendingEvent_ = false; //!< True while `pendingEvent_` is deliverable.
+	ComponentAsyncEvent pendingEvent_{}; //!< The event waiting to be taken.
+	LinearMemory* pendingMemory_ = nullptr; //!< Guest memory of a blocked copy.
+	uint64_t pendingAddress_ = 0; //!< Guest address of a blocked copy.
+	uint64_t pendingCount_ = 0; //!< Bytes the blocked copy still expects.
+	bool pendingIsRead_ = false; //!< True when the blocked copy reads from memory.
 };
 
 //! The shared queue behind a readable/writable pair. `elementSize == 0` models
@@ -427,12 +427,12 @@ public:
 	//! Records that a future's value was written.
 	void setFutureWritten(bool written) { futureWritten_ = written; }
 private:
-	uint32_t elementSize_ = 0; //!< Field `elementSize_` of ComponentAsyncChannel.
-	bool isFuture_ = false; //!< Field `isFuture_` of ComponentAsyncChannel.
-	bool readableAlive_ = true; //!< Field `readableAlive_` of ComponentAsyncChannel.
-	bool writableAlive_ = true; //!< Field `writableAlive_` of ComponentAsyncChannel.
-	bool futureWritten_ = false; //!< Field `futureWritten_` of ComponentAsyncChannel.
-	std::deque<std::vector<uint8_t>> queue_; //!< Field `queue_` of ComponentAsyncChannel.
+	uint32_t elementSize_ = 0; //!< Byte size of one channel element.
+	bool isFuture_ = false; //!< True for a future, false for a stream.
+	bool readableAlive_ = true; //!< False once the readable end is dropped.
+	bool writableAlive_ = true; //!< False once the writable end is dropped.
+	bool futureWritten_ = false; //!< True once the single future value was written.
+	std::deque<std::vector<uint8_t>> queue_; //!< The buffered elements, oldest first.
 };
 
 
@@ -511,9 +511,9 @@ private:
  */
 class ComponentAsyncState {
 public:
-//! Type alias `HandleAllocator` names the corresponding implementation/API type.
+//! Allocates a handle in the component's shared handle space.
 	using HandleAllocator = std::function<uint32_t()>;
-//! Type alias `HandleReleaser` names the corresponding implementation/API type.
+//! Releases a handle previously obtained from `HandleAllocator`.
 	using HandleReleaser = std::function<void(uint32_t)>;
 
 	/** \brief Creates async state using the component's shared handle allocator. \param allocate Allocates a handle in the component handle space. \param release Releases a previously allocated handle. */
@@ -1074,14 +1074,14 @@ private:
 			std::memcpy(out, memory.memoryBase + address, size);
 	}
 
-	HandleAllocator allocate_; //!< Field `allocate_` of ComponentAsyncState.
-	HandleReleaser release_; //!< Field `release_` of ComponentAsyncState.
-	SingleAgentExecutor executor_; //!< Field `executor_` of ComponentAsyncState.
+	HandleAllocator allocate_; //!< Allocates a handle in the shared resource index space.
+	HandleReleaser release_; //!< Releases a handle from that index space.
+	SingleAgentExecutor executor_; //!< Runs task bodies on the calling agent.
 	//! The task activation currently running on the calling agent.
 	std::unique_ptr<ComponentTask> currentTask_ = std::make_unique<ComponentTask>(0);
-	std::unordered_map<uint32_t, std::unique_ptr<ComponentAsyncEndpoint>> endpoints_; //!< Field `endpoints_` of ComponentAsyncState.
-	std::vector<std::unique_ptr<ComponentAsyncChannel>> channelStorage_; //!< Field `channelStorage_` of ComponentAsyncState.
-	std::unordered_map<uint32_t, ComponentAsyncChannel*> channels_; //!< Field `channels_` of ComponentAsyncState.
+	std::unordered_map<uint32_t, std::unique_ptr<ComponentAsyncEndpoint>> endpoints_; //!< Endpoints, keyed by handle.
+	std::vector<std::unique_ptr<ComponentAsyncChannel>> channelStorage_; //!< Owns the channels referenced by `channels_`.
+	std::unordered_map<uint32_t, ComponentAsyncChannel*> channels_; //!< Channels, keyed by their handle.
 	std::unordered_map<uint32_t, uint32_t> readableOf_; //!< writable -> readable
 	std::unordered_map<uint32_t, uint32_t> writableOf_; //!< readable -> writable
 	//! Waitable sets, keyed by their Canonical ABI handle.

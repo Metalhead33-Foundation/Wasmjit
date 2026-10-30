@@ -17,7 +17,7 @@ namespace LibJIT {
  * This is an alias, not a backend-specific implementation. Registered
  * function pointers must obey the LibJIT/WebAssembly callable ABI.
  */
-//! Type alias `ImportResolver` names the corresponding implementation/API type.
+//! The LibJIT backend resolves imports through the shared registry resolver.
 using ImportResolver = WASM::RegistryImportResolver;
 
 } // namespace LibJIT

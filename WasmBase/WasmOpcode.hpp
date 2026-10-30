@@ -283,9 +283,11 @@ enum class Opcode : uint8_t {
 	PrefixSIMD          = 0xFD,  //!< 128-bit SIMD / vector instructions
 	PrefixAtomic        = 0xFE,  //!< Atomic / threads instructions (reserved)
 };
+//! Reads a `Opcode` from a `DataStream` using the stream encoding.
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, Opcode& right) {
 	return left.read_enum(right);
 }
+//! Writes a `Opcode` to a `DataStream` using the stream encoding.
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, Opcode right) {
 	return left.write_enum(right);
 }
@@ -354,10 +356,12 @@ enum class GCOpcode : uint32_t {
 	I31GetU             = 30,  //!< i31.get_u
 	RefI31Shared        = 31,  //!< ref.i31_shared (SET-3)
 };
+//! Writes a `GCOpcode` to a `DataStream` using the stream encoding.
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, GCOpcode right) {
 	return left.writeLEB128_enum(right);
 }
 
+//! Reads a `GCOpcode` from a `DataStream` using the stream encoding.
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, GCOpcode& right) {
 	return left.readLEB128_enum(right);
 }
@@ -414,9 +418,11 @@ enum class StringOpcode : uint32_t {
 	StringEncodeLossyUtf8Array = 0xB6, //!< Binary opcode mnemonic `StringEncodeLossyUtf8Array`.
 	StringEncodeWtf8Array = 0xB7, //!< Binary opcode mnemonic `StringEncodeWtf8Array`.
 };
+//! Writes a `StringOpcode` to a `DataStream` using the stream encoding.
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, StringOpcode right) {
 	return left.writeLEB128_enum(right);
 }
+//! Reads a `StringOpcode` from a `DataStream` using the stream encoding.
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, StringOpcode& right) {
 	return left.readLEB128_enum(right);
 }
@@ -470,10 +476,12 @@ enum class MiscOpcode : uint32_t {
 	//! encoding (docs/proposals/INSTRUMENT_TRACING.md IT-2).
 	I32Itt = 0x100, //!< Binary opcode mnemonic `I32Itt`.
 };
+//! Writes a `MiscOpcode` to a `DataStream` using the stream encoding.
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, MiscOpcode right) {
 	return left.writeLEB128_enum(right);
 }
 
+//! Reads a `MiscOpcode` from a `DataStream` using the stream encoding.
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, MiscOpcode& right) {
 	return left.readLEB128_enum(right);
 }
@@ -786,10 +794,12 @@ inline constexpr bool isRelaxedSimdOpcode(SIMDOpcode opcode) noexcept
 {
 	return static_cast<uint32_t>(opcode) >= 256;
 }
+//! Writes a `SIMDOpcode` to a `DataStream` using the stream encoding.
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, SIMDOpcode right) {
 	return left.writeLEB128_enum(right);
 }
 
+//! Reads a `SIMDOpcode` from a `DataStream` using the stream encoding.
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, SIMDOpcode& right) {
 	return left.readLEB128_enum(right);
 }
@@ -936,9 +946,11 @@ enum class AtomicOpcode : uint8_t {
 	ArrayAtomicRmwXchg = 0x70, //!< Binary opcode mnemonic `ArrayAtomicRmwXchg`.
 	ArrayAtomicRmwCmpxchg = 0x71, //!< Binary opcode mnemonic `ArrayAtomicRmwCmpxchg`.
 };
+//! Reads a `AtomicOpcode` from a `DataStream` using the stream encoding.
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, AtomicOpcode& right) {
 	return left.read_enum(right);
 }
+//! Writes a `AtomicOpcode` to a `DataStream` using the stream encoding.
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, AtomicOpcode right) {
 	return left.write_enum(right);
 }

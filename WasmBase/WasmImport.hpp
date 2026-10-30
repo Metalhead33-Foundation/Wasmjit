@@ -36,8 +36,11 @@ struct TableInstance;
 //! across modules (docs/proposals/GC.md R1).
 /** \brief Borrowed table import plus the exported declaration metadata used for matching. */
 struct ImportedTable {
+	//! The table being imported; borrowed from the exporting module.
 	TableInstance*        table = nullptr;
+	//! Declared limits and element type, when the exporter published them.
 	std::optional<TableType> type;
+	//! Canonical element-type identity (`TypeId::kNone` when abstract).
 	TypeId                elementTypeId {TypeId::kNone};
 };
 
@@ -123,7 +126,7 @@ public:
 		std::string_view moduleName,
 		std::string_view fieldName,
 		TypeId           expectedType,
-		bool             exact = false) = 0; //!< Field `exact` of ImportResolver.
+		bool             exact = false) = 0;  //!< `exact` forbids a subtype match.
 
 	//! Resolve a global import. Returns a borrowed *cell* owned by the exporter
 	//! (or by the resolver, for a host-provided global). The importing instance

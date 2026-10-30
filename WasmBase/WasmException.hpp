@@ -23,7 +23,9 @@ namespace WASM {
 /** \brief Recoverable error raised when a module import cannot be resolved. */
 class UnresolvedImportException : public std::exception {
 private:
+	//! The formatted diagnostic message returned by `what()`.
 	std::string str;
+	//! Formats the "unresolved import" message for `module`.`import`.
 	static std::string getErrStr(std::string_view module, std::string_view import);
 	//! exception interface
 public:
@@ -35,18 +37,23 @@ public:
 /** \brief Recoverable error raised when a data/element segment exceeds its target. */
 class SegmentOutOfBoundsException : public std::exception {
 private:
+	//! The formatted diagnostic message returned by `what()`.
 	std::string str;
+	//! Formats the "segment out of bounds" message.
 	static std::string getErrStr(size_t offset, size_t size, size_t memorySize);
 	//! exception interface
 public:
 	/** \brief Constructs a segment-bounds error. \param offset Segment destination offset. \param size Segment byte length. \param memorySize Available target size in bytes. */
 	SegmentOutOfBoundsException(size_t offset, size_t size, size_t memorySize);
+	//! Returns the stored diagnostic message; never null.
 	const char* what() const noexcept override;
 };
 /** \brief Recoverable error for an unsupported opcode in a constant expression. \tparam T Streamable opcode representation type. */
 template <typename T> class InvalidOpcodeException : public std::exception {
 private:
+	//! The formatted diagnostic message returned by `what()`.
 	std::string str;
+	//! Formats the "unsupported opcode" message for `data`.
 	static std::string getErrStr(const T& data) {
 		std::stringstream sstrm;
 		sstrm << "Unsupported opcode in constant expression: 0x" << std::hex << data << std::endl;

@@ -217,7 +217,7 @@ Ret Runtime::callExport(ModuleInstance& instance, std::string_view name, Args&&.
 				" execution of one instance is not supported (ConcurrencyModel::Single,"
 				" docs/MULTI_AGENT_FEASIBILITY.md MF-2)");
 	struct CallGuard {
-		ModuleInstance& instance; //!< Field `instance` of CallGuard.
+		ModuleInstance& instance;  //!< The instance whose call slot this guard holds.
 		~CallGuard() { instance.leaveCall(); }
 	} guard{ instance };
 	return WASM::callCallable<Ret>(*callable, std::forward<Args>(args)...);
@@ -240,7 +240,7 @@ void Runtime::callExportWithResults(ModuleInstance& instance, std::string_view n
 				" execution of one instance is not supported (ConcurrencyModel::Single,"
 				" docs/MULTI_AGENT_FEASIBILITY.md MF-2)");
 	struct CallGuard {
-		ModuleInstance& instance; //!< Field `instance` of CallGuard.
+		ModuleInstance& instance;  //!< The instance whose call slot this guard holds.
 		~CallGuard() { instance.leaveCall(); }
 	} guard{ instance };
 	WASM::callCallableWithResults(*callable, results, std::forward<Args>(args)...);

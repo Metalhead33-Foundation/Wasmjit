@@ -86,7 +86,7 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 /** \brief Binary opcode values for core scalar, vector, and reference value types. */
 enum class ValueTypeCode : int8_t {
 	Void            = -0x40, //!< Void
-	Func            = -0x20, //!< ValueTypeCode enumerator `Func`.
+	Func            = -0x20, //!< The `funcref` shorthand encoding.
 	//! Number Types
 	I32             = -0x01, //!< 0x7F
 	I64             = -0x02, //!< 0x7E
@@ -652,8 +652,8 @@ struct ExternTypeDescriptor {
 	GlobalType globalType{};
 	//! The table's type, for a table declaration.
 	TableType tableType{};
-	MemoryType memoryType{}; //!< Field `memoryType` of ExternTypeDescriptor.
-	uint8_t tagAttribute = 0; //!< Field `tagAttribute` of ExternTypeDescriptor.
+	MemoryType memoryType{};  //!< The memory's type, for a memory declaration.
+	uint8_t tagAttribute = 0;  //!< The tag's attribute byte (exception tags only).
 };
 
 /** \brief Public metadata projection of one module import. */
@@ -662,7 +662,7 @@ struct ImportDescriptor {
 	std::string moduleName;
 	//! The field name inside that module.
 	std::string fieldName;
-	ExternTypeDescriptor type; //!< Field `type` of ImportDescriptor.
+	ExternTypeDescriptor type;  //!< The imported entity's declared type.
 };
 
 /** \brief Public metadata projection of one module export. */
@@ -826,10 +826,10 @@ Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& stream, HeapType&
 //! =============================================================================
 /** \brief Catch-clause form encoded in a try_table instruction. */
 enum class CatchKind : uint8_t {
-	Catch        = 0x00, //!< CatchKind enumerator `Catch`.
-	CatchRef     = 0x01, //!< CatchKind enumerator `CatchRef`.
-	CatchAll     = 0x02, //!< CatchKind enumerator `CatchAll`.
-	CatchAllRef  = 0x03, //!< CatchKind enumerator `CatchAllRef`.
+	Catch        = 0x00, //!< `catch x l`: catch tag `x`.
+	CatchRef     = 0x01, //!< `catch_ref x l`: catch tag `x` and keep it.
+	CatchAll     = 0x02, //!< `catch_all l`: catch anything.
+	CatchAllRef  = 0x03, //!< `catch_all_ref l`: catch anything and keep it.
 };
 
 /** \brief Decoded try_table catch kind, tag index, and target label. */

@@ -37,13 +37,13 @@ enum class Profile : uint8_t {
 	//! float NaN payloads can be observed byte-wise (`v128.store`), so a
 	//! deterministic SIMD module needs per-lane normalisation this engine does
 	//! not implement. `Deterministic` alone is therefore *not* claimed.
-	DeterministicScalar, //!< Profile enumerator `DeterministicScalar`.
+	DeterministicScalar, //!< Scalar float results are deterministic; SIMD ones are not.
 };
 
 //! A marker names a language subset to *exclude*. A profile is the intersection
 //! of its markers' exclusions (docs/proposals/PROFILES.md §2).
 enum class ProfileMarker : uint32_t {
-	None = 0, //!< ProfileMarker enumerator `None`.
+	None = 0, //!< No exclusion requested.
 	NonDeterministic = 1u << 0, //!< N: relaxed SIMD / non-deterministic rules
 	Threads = 1u << 1,          //!< T: shared memory, atomics, shared types
 	Vectors = 1u << 2,          //!< V: v128 and every SIMD instruction

@@ -396,19 +396,26 @@ private:
 	//! call site checks the pending slot (EXD1).
 	void pushBlockFrame(ControlBlock::Kind kind, const WASM::BlockType& arg,
 						std::vector<WASM::CatchClause>&& catches);
+	//! The payload signature `tagIdx` declares.
 	WASM::FuncType tagPayloadType(WASM::TagIdx tagIdx) const;
+	//! Returns the canonical `TagId` a catch clause names.
 	WASM::TagId tagIdForClause(const WASM::CatchClause& clause) const;
+	//! Allocates an exception object for `tagId` with the given payload signature.
 	jit_value_t createException(WASM::TagId tagId, const WASM::FuncType& payload);
+	//! Copies `values` into the payload of `exnPayload`.
 	void storeExceptionPayload(jit_value_t exnPayload, const WASM::FuncType& payload,
 							   const std::vector<jit_value_t>& values);
+	//! Reads the payload fields out of `exnPayload`.
 	std::vector<jit_value_t> loadExceptionPayload(jit_value_t exnPayload,
 												  const WASM::FuncType& payload);
+	//! Emits a throw of `exn` to `target`, optionally carrying the exception.
 	void emitThrowToTarget(jit_value_t exn, std::vector<jit_value_t> values,
 						   ControlBlock& target, bool carryExn);
 	//! Emits the static dispatch chain for `exn` over the enclosing try_tables;
 	//! when no clause matches, sets the pending slot and returns zeroes. All
 	//! emitted paths leave the current block.
 	void emitExceptionPropagation(jit_value_t exn);
+	//! Returns the pending exception, if any, as a value.
 	jit_value_t emitPendingException();
 	//! Used after every call: dispatches a pending exception locally or
 	//! propagates it, leaving the continuation reachable when none is pending.
@@ -433,13 +440,14 @@ private:
  * \brief Emits LibJIT IR for PendingTrapCheck.
  */
 	void emitPendingTrapCheck();
+	//! Reports a trap of `kind`, with `detail` for the diagnostic message.
 	void emitReportTrap(WASM::TrapKind kind, const char* detail);
 /**
- * \brief Performs the requestTrapEpilogue operation required by the opcode dispatcher.
+ * \brief Routes a trap to the shared epilogue, which returns zeroes.
  */
 	void requestTrapEpilogue();
-	jit_label_t trapEpilogueLabel = jit_label_undefined; //!< Field `trapEpilogueLabel` of type.
-	bool trapEpilogueUsed = false; //!< Field `trapEpilogueUsed` of type.
+	jit_label_t trapEpilogueLabel = jit_label_undefined;  //!< Label of the shared trap epilogue, if one was emitted.
+	bool trapEpilogueUsed = false;  //!< True once a trap path needed the epilogue.
 	//! The calling thread's trap slot, obtained once per function in the entry
 	//! block (`wasm_trap_slot()`); every check loads `pending` through it.
 	jit_value_t trapSlot = nullptr;
@@ -454,6 +462,7 @@ private:
 	//! reinterpret, global.set). See docs/proposals/PROFILES.md PR-3.
 	const bool deterministicFloats;
 
+	//! Returns the declared type of global `idx`.
 	WASM::GlobalType globalTypeForIndex(WASM::GlobalIdx idx) const;
 
 	//! Deterministic-profile float canonicalisation (PROFILES.md PR-3): returns
@@ -462,6 +471,7 @@ private:
 	jit_value_t canonicalizeFloat(jit_value_t value, bool isDouble);
 
 public:
+	//! Binds the dispatcher to one function being compiled.
 	OpcodeDispatcher(jit_context_t context, jit_function_t function,
 					 LibJitTypeTranslator& typeTranslator,
 					 WASM::ModuleInstance& instance,
@@ -499,13 +509,19 @@ public:
 protected:
 	//! `internals.translatedTypes` is parallel to `module.typeIds` (filled in translateTypes).
 	jit_type_t jitTypeForTypeIdx(WASM::TypeIdx idx) const;
+	//! Maps a Wasm value type to the IR type carrying it.
 	jit_type_t jitTypeForValueType(const WASM::ValueType& vt);
+	//! The `ContinuationValueKind` code for a value type.
 	static std::uint8_t continuationKindFor(const WASM::ValueType& vt);
+	//! Allocates a continuation slot buffer holding `count` values.
 	jit_value_t allocateContinuationBuffer(std::size_t count);
+	//! Stores `values` into `buffer` according to their storage types.
 	void storeContinuationValues(const std::vector<jit_value_t>& values,
 			const std::vector<WASM::StorageType>& types, jit_value_t buffer);
+	//! Loads the values out of `buffer` according to their storage types.
 	void loadContinuationValues(jit_value_t buffer,
 			const std::vector<WASM::StorageType>& types);
+	//! Releases the reference-typed values held in `buffer`.
 	void dropContinuationValues(jit_value_t buffer,
 			const std::vector<WASM::StorageType>& types);
 
@@ -535,11 +551,12 @@ protected:
 	void dispatchResume(WASM::TypeIdx arg, std::vector<WASM::ContHandlerClause>&& handlers) override; //!< Lower this opcode into the backend IR.
 	//! Dispatch the `ResumeThrow` instruction. Lower this opcode into the backend IR.
 	void dispatchResumeThrow(WASM::TypeIdx arg1, WASM::TagIdx arg2,
-			std::vector<WASM::ContHandlerClause>&& handlers) override; //!< Field `override` of type.
+			std::vector<WASM::ContHandlerClause>&& handlers) override;
 	//! Dispatch the `ResumeThrowRef` instruction. Lower this opcode into the backend IR.
 	void dispatchResumeThrowRef(WASM::TypeIdx arg,
-			std::vector<WASM::ContHandlerClause>&& handlers) override; //!< Field `override` of type.
+			std::vector<WASM::ContHandlerClause>&& handlers) override;
 	void dispatchSwitch(WASM::TypeIdx arg1, WASM::TagIdx arg2) override; //!< Lower this opcode into the backend IR.
+	//! Turns a resume result buffer into results, a suspension or a propagation.
 	void emitContinuationResultHandling(const WASM::FuncType& func,
 			const std::vector<WASM::ContHandlerClause>& handlers,
 			jit_value_t resultAddr, jit_value_t resultBuffer,

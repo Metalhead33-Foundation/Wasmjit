@@ -33,20 +33,20 @@ namespace WASM {
 //! `Local`, `Label`, `Field`, `Param` and `TagParam` are indirect maps: their
 //! `index` is the function/type/tag index and `subIndex` is the inner index.
 enum class NameKind : uint8_t {
-	Module, //!< NameKind enumerator `Module`.
-	Function, //!< NameKind enumerator `Function`.
-	Local, //!< NameKind enumerator `Local`.
-	Label, //!< NameKind enumerator `Label`.
-	Type, //!< NameKind enumerator `Type`.
-	Table, //!< NameKind enumerator `Table`.
-	Memory, //!< NameKind enumerator `Memory`.
-	Global, //!< NameKind enumerator `Global`.
-	Element, //!< NameKind enumerator `Element`.
-	Data, //!< NameKind enumerator `Data`.
-	Field, //!< NameKind enumerator `Field`.
-	Tag, //!< NameKind enumerator `Tag`.
-	Param, //!< NameKind enumerator `Param`.
-	TagParam, //!< NameKind enumerator `TagParam`.
+	Module, //!< The module's own name.
+	Function, //!< Function names.
+	Local, //!< Local variable names.
+	Label, //!< Label names.
+	Type, //!< Type names.
+	Table, //!< Table names.
+	Memory, //!< Memory names.
+	Global, //!< Global names.
+	Element, //!< Element segment names.
+	Data, //!< Data segment names.
+	Field, //!< Struct field names.
+	Tag, //!< Exception tag names.
+	Param, //!< Function parameter names.
+	TagParam, //!< Tag parameter names.
 };
 
 //! One record from a compilation-hint custom section. The family is
@@ -69,7 +69,7 @@ struct CompilationHint {
 struct WASMJIT_API Module : public Artifact
 {
 public:
-	std::vector<Section> sections; //!< Field `sections` of type.
+	std::vector<Section> sections; //!< The decoded section headers, in file order.
 	//! String literals from section 14 (docs/proposals/STRINGREF.md STR-2), in
 	//! source order. `string.const idx` addresses this vector; they are decoded
 	//! to code points and materialised in the Store at instantiation.
@@ -84,23 +84,23 @@ public:
 	std::vector<ImportFunction> importFunctions;
 	//! Imported tables.
 	std::vector<ImportTable> importTables;
-	std::vector<ImportMemory> importMemories; //!< Field `importMemories` of type.
-	std::vector<ImportGlobal> importGlobals; //!< Field `importGlobals` of type.
-	std::vector<ImportTag> importTags; //!< Field `importTags` of type.
-	std::vector<ImportType> importTypes; //!< Field `importTypes` of type.
+	std::vector<ImportMemory> importMemories; //!< Imported memories, in import order.
+	std::vector<ImportGlobal> importGlobals; //!< Imported globals, in import order.
+	std::vector<ImportTag> importTags; //!< Imported exception tags, in import order.
+	std::vector<ImportType> importTypes; //!< Imported type identities, in import order.
 	//! Import-section order; see ImportOrder in WasmType.hpp.
 	std::vector<ImportOrder> importOrder;
 	//! Type index of each *defined* function (imports first, then these).
 	std::vector<uint32_t> internalFunctionTypeIndices;
 	//! Defined tables.
 	std::vector<TableType> tables;
-	std::vector<MemoryType> memories; //!< Field `memories` of type.
-	std::vector<Global> globals; //!< Field `globals` of type.
-	std::vector<Export> exports; //!< Field `exports` of type.
-	std::vector<ElementSegment> elementSegments; //!< Field `elementSegments` of type.
-	std::vector<DataSegment> dataSegments; //!< Field `dataSegments` of type.
-	std::vector<FunctionBody> functionBodies; //!< Field `functionBodies` of type.
-	std::vector<Tag> tags; //!< Field `tags` of type.
+	std::vector<MemoryType> memories; //!< Declared (and imported) memories.
+	std::vector<Global> globals; //!< Declared (and imported) globals.
+	std::vector<Export> exports; //!< The module's exports, in declaration order.
+	std::vector<ElementSegment> elementSegments; //!< The element segments, in declaration order.
+	std::vector<DataSegment> dataSegments; //!< The data segments, in declaration order.
+	std::vector<FunctionBody> functionBodies; //!< The defined function bodies, in code-section order.
+	std::vector<Tag> tags; //!< Declared (and imported) exception tags.
 	//! Raw `metadata.code.branch_hint` entries, keyed by the *global* function
 	//! index (imports first). Offsets are still relative to the start of each
 	//! function's locals declaration; processCodeSection rebases them onto the
@@ -115,8 +115,8 @@ public:
 	std::map<uint32_t, std::vector<CompilationHint>> instructionFrequencyHints;
 	//! `metadata.code.call_targets` records, keyed by global function index (inert).
 	std::map<uint32_t, std::vector<CompilationHint>> callTargetHints;
-	std::map<uint32_t,std::string> funcNames; //!< Field `funcNames` of type.
-	std::string debugName; //!< Field `debugName` of type.
+	std::map<uint32_t,std::string> funcNames; //!< Name-section names of functions, by index.
+	std::string debugName; //!< The module name from the name section, if any.
 	//! Extended name subsections (docs/proposals/EXTENDED_NAME_SECTION.md).
 	//! Direct maps use the index space of the named thing; the indirect maps
 	//! (`localNames`, `labelNames`, `fieldNames`, `paramNames`,
@@ -126,21 +126,22 @@ public:
 	std::map<uint32_t,std::string> tableNames;
 	//! Memory names, keyed by memory index.
 	std::map<uint32_t,std::string> memoryNames;
-	std::map<uint32_t,std::string> globalNames; //!< Field `globalNames` of type.
-	std::map<uint32_t,std::string> elementNames; //!< Field `elementNames` of type.
-	std::map<uint32_t,std::string> dataNames; //!< Field `dataNames` of type.
-	std::map<uint32_t,std::string> tagNames; //!< Field `tagNames` of type.
-	std::map<uint32_t,std::map<uint32_t,std::string>> localNames; //!< Field `localNames` of type.
-	std::map<uint32_t,std::map<uint32_t,std::string>> labelNames; //!< Field `labelNames` of type.
-	std::map<uint32_t,std::map<uint32_t,std::string>> fieldNames; //!< Field `fieldNames` of type.
-	std::map<uint32_t,std::map<uint32_t,std::string>> paramNames; //!< Field `paramNames` of type.
-	std::map<uint32_t,std::map<uint32_t,std::string>> tagParamNames; //!< Field `tagParamNames` of type.
-	uint32_t startFunctionIndex; //!< Field `startFunctionIndex` of type.
-	uint32_t dataSegmentCount; //!< Field `dataSegmentCount` of type.
-	bool hasStartFunction; //!< Field `hasStartFunction` of type.
-	bool hasDataCount; //!< Field `hasDataCount` of type.
+	std::map<uint32_t,std::string> globalNames; //!< Name-section names of globals, by index.
+	std::map<uint32_t,std::string> elementNames; //!< Name-section names of element segments.
+	std::map<uint32_t,std::string> dataNames; //!< Name-section names of data segments.
+	std::map<uint32_t,std::string> tagNames; //!< Name-section names of tags, by index.
+	std::map<uint32_t,std::map<uint32_t,std::string>> localNames; //!< Local names: function index, then local index.
+	std::map<uint32_t,std::map<uint32_t,std::string>> labelNames; //!< Label names: function index, then label index.
+	std::map<uint32_t,std::map<uint32_t,std::string>> fieldNames; //!< Field names: type index, then field index.
+	std::map<uint32_t,std::map<uint32_t,std::string>> paramNames; //!< Parameter names of functions.
+	std::map<uint32_t,std::map<uint32_t,std::string>> tagParamNames; //!< Parameter names of tags.
+	uint32_t startFunctionIndex; //!< Function the start section names.
+	uint32_t dataSegmentCount; //!< Value the data-count section declares.
+	bool hasStartFunction; //!< True when a start section was present.
+	bool hasDataCount; //!< True when a data-count section was present.
 private:
 	void parseBody(Elv::Io::Device& file, std::optional<uint64_t> end) override;
+	//! Parses the section headers and dispatches each to its processor.
 	void processSecetions(Elv::Io::Device& file);
 	//! Section processors: one per section kind, in the order they may appear.
 	//! Parses the type section and interns its recursive groups.

@@ -21,20 +21,20 @@ namespace WASM {
 //! Section ids from the Component Model binary format (Binary.md).
 /** \brief Binary section identifiers in the Component Model format. */
 enum class ComponentSectionType : uint8_t {
-	Custom = 0, //!< ComponentSectionType enumerator `Custom`.
-	CoreModule = 1, //!< ComponentSectionType enumerator `CoreModule`.
-	CoreInstance = 2, //!< ComponentSectionType enumerator `CoreInstance`.
-	CoreType = 3, //!< ComponentSectionType enumerator `CoreType`.
-	NestedComponent = 4, //!< ComponentSectionType enumerator `NestedComponent`.
-	Instance = 5, //!< ComponentSectionType enumerator `Instance`.
-	Alias = 6, //!< ComponentSectionType enumerator `Alias`.
-	Type = 7, //!< ComponentSectionType enumerator `Type`.
-	Canon = 8, //!< ComponentSectionType enumerator `Canon`.
-	Start = 9, //!< ComponentSectionType enumerator `Start`.
-	Import = 10, //!< ComponentSectionType enumerator `Import`.
-	Export = 11, //!< ComponentSectionType enumerator `Export`.
-	Value = 12, //!< ComponentSectionType enumerator `Value`.
-	Invalid = 255, //!< ComponentSectionType enumerator `Invalid`.
+	Custom = 0, //!< A custom (name) section.
+	CoreModule = 1, //!< An embedded core module.
+	CoreInstance = 2, //!< An embedded core instance.
+	CoreType = 3, //!< An embedded core type.
+	NestedComponent = 4, //!< A nested component.
+	Instance = 5, //!< A component instance definition.
+	Alias = 6, //!< An alias definition.
+	Type = 7, //!< A type definition.
+	Canon = 8, //!< A canon built-in definition.
+	Start = 9, //!< The component start definition.
+	Import = 10, //!< An import definition.
+	Export = 11, //!< An export definition.
+	Value = 12, //!< A value definition.
+	Invalid = 255, //!< Not a valid section id.
 };
 
 //! The section kind's spelling for a diagnostic ("custom", "core-module", …).

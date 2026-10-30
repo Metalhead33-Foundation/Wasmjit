@@ -58,13 +58,13 @@ private:
 		using std::runtime_error::runtime_error;
 	};
 
-	const Module& module; //!< Field `module` of type.
-	ValidationOptions options; //!< Field `options` of type.
-	std::size_t totalFunctions = 0; //!< Field `totalFunctions` of type.
-	std::size_t totalTables = 0; //!< Field `totalTables` of type.
-	std::size_t totalMemories = 0; //!< Field `totalMemories` of type.
-	std::size_t totalGlobals = 0; //!< Field `totalGlobals` of type.
-	std::size_t totalTags = 0; //!< Field `totalTags` of type.
+	const Module& module;  //!< The module under validation.
+	ValidationOptions options;  //!< The options the validator was started with.
+	std::size_t totalFunctions = 0;  //!< Declared function count, for the allocation budget.
+	std::size_t totalTables = 0;  //!< Declared table count, for the allocation budget.
+	std::size_t totalMemories = 0;  //!< Declared memory count, for the allocation budget.
+	std::size_t totalGlobals = 0;  //!< Declared global count, for the allocation budget.
+	std::size_t totalTags = 0;  //!< Declared tag count, for the allocation budget.
 
 	//! Current function body (npos while validating module-level structure).
 	static constexpr std::size_t kNoBody = static_cast<std::size_t>(-1);
@@ -165,9 +165,10 @@ private:
 	void onSimdOpcode(SIMDOpcode opcode) override;
 	void onAtomicOpcode(AtomicOpcode opcode) override; //!< Validate the stack effect of this opcode.
 
+	//! Checks declared limits against the implementation and the allocation budget.
 	void checkLimits(const Limits& limits, bool is64, bool isMemory,
 					 const char* what, std::size_t index,
-					 uint64_t pageSize = 0x10000) const; //!< Field `pageSize` of type.
+					 uint64_t pageSize = 0x10000) const;
 	//! Checks a memory access's alignment and memory index.
 	void requireMemoryAccess(const MemArg& arg, uint32_t naturalLog2) const;
 	//! Multibyte Array Access (GC_EXTENSIONS.md GX-1): a load/store whose memarg
@@ -193,11 +194,11 @@ private:
 		std::vector<ValueType> startTypes;
 		//! The operand types the frame must produce on exit.
 		std::vector<ValueType> endTypes;
-		std::size_t height = 0; //!< Field `height` of ControlFrame.
-		bool isLoop = false; //!< Field `isLoop` of ControlFrame.
-		bool isIf = false; //!< Field `isIf` of ControlFrame.
-		bool elseSeen = false; //!< Field `elseSeen` of ControlFrame.
-		bool unreachable = false; //!< Field `unreachable` of ControlFrame.
+		std::size_t height = 0;  //!< Operand-stack height when the frame was pushed.
+		bool isLoop = false;  //!< True when the frame is a `loop` label.
+		bool isIf = false;  //!< True when the frame is an `if` label.
+		bool elseSeen = false;  //!< True once the frame's `else` was seen.
+		bool unreachable = false;  //!< True while the frame is in unreachable code.
 		//! Definite assignment of non-defaultable locals. A frame inherits its
 		//! parent's set on entry; stores made inside the frame do not escape it,
 		//! and `else` restarts from the entry set (the spec's local-init rule).
@@ -205,8 +206,8 @@ private:
 		//! The `initialized` set as it was on frame entry (restored by `else`).
 		std::vector<uint8_t> entryInitialized;
 	};
-	std::vector<ValueType> typeStack; //!< Field `typeStack` of type.
-	std::vector<ControlFrame> controlStack; //!< Field `controlStack` of type.
+	std::vector<ValueType> typeStack;  //!< The polymorphic operand stack.
+	std::vector<ControlFrame> controlStack;  //!< The active control frames, innermost last.
 	//! Set when an opcode without a typing rule is seen: the rest of the body is
 	//! still scanned for immediate checks, but the operand stack is not trusted.
 	bool typeTainted = false;
@@ -244,8 +245,9 @@ private:
 	bool isContinuationHeap(const HeapType& type) const;
 	//! More Array Constructors (GC_EXTENSIONS.md GX-2) helpers.
 	CoreTypeView requireArrayType(TypeIdx idx, const char* who) const;
+	//! Compares two storage types for assignment compatibility.
 	bool storageAssignable(const CanonStorageType& actual,
-			const CanonStorageType& expected) const; //!< Field `const` of type.
+			const CanonStorageType& expected) const;
 	//! Marks the rest of the current block unreachable (the polymorphic stack).
 	void setUnreachable();
 	//! Opens a block/loop/if frame.
@@ -266,7 +268,7 @@ private:
 	ValueType globalType(GlobalIdx idx) const;
 	//! The element type of table `idx`.
 	ValueType tableElementType(TableIdx idx) const;
-	const FuncType* currentFuncType = nullptr; //!< Field `currentFuncType` of type.
+	const FuncType* currentFuncType = nullptr;  //!< The signature of the body being validated, if any.
 	//! The parameter types of `types`, as stack operand types.
 	std::vector<ValueType> paramTypes(const FuncType& types) const;
 	//! The result types of `types`, as stack operand types.
@@ -408,10 +410,10 @@ private:
 	void dispatchResume(TypeIdx arg, std::vector<ContHandlerClause>&& handlers) override; //!< Validate the stack effect of this opcode.
 	//! Dispatch the `ResumeThrow` instruction. Validate the stack effect of this opcode.
 	void dispatchResumeThrow(TypeIdx arg1, TagIdx arg2,
-			std::vector<ContHandlerClause>&& handlers) override; //!< Field `override` of type.
+			std::vector<ContHandlerClause>&& handlers) override;
 	//! Dispatch the `ResumeThrowRef` instruction. Validate the stack effect of this opcode.
 	void dispatchResumeThrowRef(TypeIdx arg,
-			std::vector<ContHandlerClause>&& handlers) override; //!< Field `override` of type.
+			std::vector<ContHandlerClause>&& handlers) override;
 	void dispatchSwitch(TypeIdx arg1, TagIdx arg2) override; //!< Validate the stack effect of this opcode.
 	void dispatchTryTable(const BlockType& arg1, std::vector<CatchClause>&& arg2) override; //!< Validate the stack effect of this opcode.
 	void dispatchSelectT(std::vector<ValueType>&& arg) override; //!< Validate the stack effect of this opcode.
