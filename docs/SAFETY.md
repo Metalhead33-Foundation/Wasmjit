@@ -83,6 +83,13 @@ store per runtime, so one budget per runtime — there is no process-wide store)
   `table.grow` (the spec explicitly allows an implementation limit) and a
   **recoverable trap** for a GC allocation;
 - an oversized *initial* size fails instantiation with a clear message.
+- Only **committed** pages are charged. A memory created with
+  `MemoryAllocationPolicy::Reserved` (`WasmBase/WasmMemory.hpp`,
+  [`proposals/MEMORY_PROVIDER.md`](proposals/MEMORY_PROVIDER.md) MP-1) reserves its
+  declared maximum in address space up front and pays for it page by page, so a
+  6 GiB reservation costs nothing until pages are used — the budget still bounds
+  what can take the host down, and a reservation cannot, because untouched
+  address space has no resident cost.
 - The **GC heap** is an mmap-backed region allocator owned by the Store
   (`WasmBase/WasmGcHeap.{hpp,cpp}`): regions are charged to the budget when they
   are backed and credited on instance teardown. It exists so that **running

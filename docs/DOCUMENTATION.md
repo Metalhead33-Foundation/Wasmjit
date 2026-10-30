@@ -302,7 +302,7 @@ WasmJit            (README.md, the main page)
     ├── languages                        (docs/languages/index.md)
     │   └── Triage, Clustering, Charters, Evidence   (4 study notes)
     └── proposals                        (docs/proposals/index.md)
-        └── GC, SIMD, THREADS, …         (35 notes)
+        └── GC, SIMD, THREADS, …         (36 notes)
 ```
 
 **Adding a note** takes three steps: create the file; append `{#doc_what_it_is}`

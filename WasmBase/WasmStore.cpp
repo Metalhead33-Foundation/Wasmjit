@@ -68,6 +68,13 @@ Store::~Store()
 Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPages, bool isShared,
 		bool is64, uint64_t pageSize)
 {
+	return createLinearMemory(initialPages, maxPages, isShared, is64, pageSize,
+			MemoryAllocationPolicy::Growable);
+}
+
+Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPages, bool isShared,
+		bool is64, uint64_t pageSize, MemoryAllocationPolicy policy)
+{
 	// Charge the initial commit against the process-wide budget (guardrail: an
 	// absurd initial size must fail loudly, not allocate).
 	if (pageSize == 0 || initialPages > (UINT64_MAX / pageSize))
@@ -80,9 +87,15 @@ Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPag
 	const MemoryId id = nextMemoryId.fetch_add(1);
 
 	try {
-		std::unique_ptr<StoreOwnedMemory> memory = isShared
-			? std::unique_ptr<StoreOwnedMemory>(std::make_unique<SharedLinearMemory>(initialPages, maxPages, is64, pageSize))
-			: std::unique_ptr<StoreOwnedMemory>(std::make_unique<PrivateLinearMemory>(initialPages, maxPages, is64, pageSize));
+		// A shared memory reserves by construction, so the policy only chooses
+		// between the two non-shared backings (MEMORY_PROVIDER.md MP-1).
+		std::unique_ptr<StoreOwnedMemory> memory;
+		if (isShared)
+			memory = std::make_unique<SharedLinearMemory>(initialPages, maxPages, is64, pageSize);
+		else if (policy == MemoryAllocationPolicy::Reserved)
+			memory = std::make_unique<ReservedLinearMemory>(initialPages, maxPages, is64, pageSize);
+		else
+			memory = std::make_unique<PrivateLinearMemory>(initialPages, maxPages, is64, pageSize);
 
 		// The unique_ptr keeps the StoreOwnedMemory at a stable address, so the
 		// LinearMemory* handed out below stays valid across later insertions.
@@ -93,6 +106,16 @@ Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPag
 		throw;
 	}
 	return id;
+}
+
+MemoryAllocationPolicy Store::memoryAllocationPolicy() const noexcept
+{
+	return memoryPolicy_.load(std::memory_order_relaxed);
+}
+
+void Store::setMemoryAllocationPolicy(MemoryAllocationPolicy policy) noexcept
+{
+	memoryPolicy_.store(policy, std::memory_order_relaxed);
 }
 
 LinearMemory* Store::memory(MemoryId id)

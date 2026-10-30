@@ -25,7 +25,7 @@ say "legacy-eh-probe: fixtures in $fixtures"
 
 # ── P1: build the fixtures (wabt) ─────────────────────────────────────────
 if command -v wat2wasm >/dev/null 2>&1; then
-    for wat in try_catch rethrow shapes delegate_skip; do
+    for wat in try_catch rethrow shapes delegate_skip delegate_skip_table mixed; do
         (cd "$fixtures" && wat2wasm --enable-exceptions "$wat.wat" -o "$wat.wasm")
         say "  P1  $wat.wasm            built ($(wc -c < "$fixtures/$wat.wasm") bytes)"
     done

@@ -92,7 +92,7 @@ gaps → where we deliberately deviate → plan → test survey → references.
 
 ## 4. What the folder holds today
 
-`docs/proposals/` holds **thirty-five** notes, plus an `index.md` that is
+`docs/proposals/` holds **thirty-six** notes, plus an `index.md` that is
 navigation rather than a note (it is what nests them in the generated site, and
 it is the one file exempt from the shape check below). Every note carries the
 §2.1 front
@@ -121,6 +121,7 @@ throughout; the prefixes actually in the tree are:
 | `LEGACY_EXCEPTIONS.md` | `LE<n>` | `LED<n>` | `LE-<n>` |
 | `MEMORY64.md` | `M<n>` | `M64D<n>` | `M64-<n>` |
 | `MEMORY_CONTROL.md` | `MC<n>` | `MCD<n>` | `MC-<n>` |
+| `MEMORY_PROVIDER.md` | `MP<n>` | `MPD<n>` | `MP-<n>` |
 | `MULTI_MEMORY.md` | `MM<n>` | `MMD<n>` | `MM-<n>` |
 | `MULTI_VALUE.md` | `MV<n>` | `MVD<n>` | `MV-<n>` |
 | `MUTABLE_GLOBALS.md` | `MG<n>` | `MGD<n>` | `MG-<n>` |
@@ -185,7 +186,7 @@ Guardrails (things that must stay true):
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **PM-0 — Re-cut this document** | ✅ Rewrite `PROPOSALS.md` into the §2 shape: front matter, §1 map, §2–§9, IDs. | PG1, PG2, PG3, PG4 | Done: this file's §1 map matches its own §2–§9, and §4/§8 match the folder. |
-| **PM-1 — Record the aliases** | ✅ List the sanctioned heading and section-count variants in §3/§6/§8. | PG5, PG6, PG7 | Done: §8 classifies every note (all thirty-five). |
+| **PM-1 — Record the aliases** | ✅ List the sanctioned heading and section-count variants in §3/§6/§8. | PG5, PG6, PG7 | Done: §8 classifies every note (all thirty-six). |
 | **PM-2 — Keep the survey current** | Update §4's prefix table and §8's matrix whenever a note is added or a section appears. | PG5, PG9 | A new note appears in both tables in the same change that adds it. |
 | **PM-3 — Optional structural lint** | ✅ `Test/ProposalDocsTests.cpp` (`[docs]`) checks front matter, §1 map ↔ headings and References; documented in `TESTING.md`. The map-based rule admits every §3 exception without a hard-coded list. | PG8 | Done: `./Test/WasmJit '[docs]'` runs and passes. |
 
@@ -216,6 +217,7 @@ authoritative per-item status is each note's §7 plan.
 | `LEGACY_EXCEPTIONS.md` | 10 | canonical + appendix | none | §10 "The six commissioned questions" after §9 | conforms (appendix; a compatibility study of a superseded proposal, not a proposal we implement) |
 | `MEMORY64.md` | 9 | canonical | none | — | conforms exactly |
 | `MEMORY_CONTROL.md` | 9 | canonical | none | — | conforms exactly |
+| `MEMORY_PROVIDER.md` | 10 | canonical + appendix | none | §10 "The six commissioned questions" after §9 | conforms (appendix; an engine-seam study of a host-side limitation, not a specification proposal) |
 | `MULTI_MEMORY.md` | 9 | canonical | none | — | conforms exactly |
 | `MULTI_VALUE.md` | 9 | canonical | none | — | conforms exactly |
 | `MUTABLE_GLOBALS.md` | 9 | canonical | none | — | conforms exactly |

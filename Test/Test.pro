@@ -111,7 +111,8 @@ SOURCES += main.cpp \
     ConcurrencyTests.cpp \
     PluginTests.cpp \
     HeaderTierTests.cpp \
-    LegacyEhTests.cpp
+    LegacyEhTests.cpp \
+    MemoryProviderTests.cpp
 HEADERS +=  \
     helper.hpp \
     Diagnose.hpp \

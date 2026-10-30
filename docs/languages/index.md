@@ -1,9 +1,11 @@
 # Language Support — the `LF-1` Pre-Feasibility Screen {#languages_index}
 
-Status: study report set (revision 2 — 2026-10-30: the screen was **re-run**
-after the engine learned to translate the superseded Phase-3 exception form behind a
-parser policy, which retired its most-cited blocker; the record is
-[`TRIAGE.md`](TRIAGE.md) §6.9). This folder is the **output
+Status: study report set (revision 3 — 2026-10-30: the screen was **re-run twice**
+the engine moved: `LE-9` closed the mixed exception-form refusal (`TRIAGE.md` §6.10) and
+`MP-1` gave a non-shared memory a reservation policy (§6.11–§6.12, which also writes down
+what A3 grades — the Kotlin shape: *load, instantiate, execute; the host import set is the
+embedder's*). Revision 2 was the first re-screen, after the legacy-EH parser policy landed
+(§6.9). This folder is the **output
 of `LF-1`**, the pre-feasibility / scoping study defined in
 [`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §7: it screens the whole
 canonical candidate list on three axes, clusters the candidates by shared
@@ -66,9 +68,10 @@ The screen's inputs are pinned, and it does not re-derive the engine:
 | Input | What it is | Where |
 |---|---|---|
 | **Candidate set** | `appcypher/awesome-wasm-langs`, README at commit `98da486` (2026-05-22), fetched 2026-10-30: **84 language entries** in five maturity bands | [`TRIAGE.md`](TRIAGE.md) §2.1, [`EVIDENCE.md`](EVIDENCE.md) `E-1` |
-| **Pinned engine snapshot** | `RG1`–`RG6` all `Pinned`, one recorded limitation (`RA4`, the memory provider is core-chosen), no `Documented, moving` row | [`READINESS_AUDIT.md`](../READINESS_AUDIT.md) §5/§6.2 |
+| **Pinned engine snapshot** | `RG1`–`RG6` all `Pinned`; the one recorded limitation (`RA4`, the memory provider) is now a *priced, partly closed* item rather than an open gap (`MP-1` shipped, `MP-2` has no requester) | [`READINESS_AUDIT.md`](../READINESS_AUDIT.md) §5.4, §8 `RA-2` |
 | **The ABI the screen measures against** | `VMContext*` as arg0, `Callable`, the multi-result buffer, `v128`/reference passing, the trap boundary, and the named limits (no step budget, process-wide allocation budget, one instance per module) | [`ABI.md`](../ABI.md) |
-| **Parser policy** | `ParseOptions::legacyExceptionHandling` translates the superseded Phase-3 exception form at load; `LE-8`/`LE-9` are refused by name | [`proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) §4.6 |
+| **Parser policy** | `ParseOptions::legacyExceptionHandling` translates the superseded Phase-3 exception form at load, including bodies that mix it with `try_table` (`LE-9`); one shape is still refused by name (`LE-8`) | [`proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) §4.6 |
+| **Memory policy** | `MemoryAllocationPolicy::Reserved` reserves a memory's declared maximum and keeps `memoryBase` stable, so 'the runtime wants its own heap' is a policy an embedder selects, not an engine limitation (`MP-1`) | [`proposals/MEMORY_PROVIDER.md`](../proposals/MEMORY_PROVIDER.md) §4.7 |
 | **Feature surface** | GC, exceptions (`exnref`), SIMD, reference types, function references, multi-memory, memory64, tail calls: 100%; threads: 100% of the encodable surface with `ConcurrencyModel::Single` as the default and `Agents` opt-in and implemented | [`READINESS_AUDIT.md`](../READINESS_AUDIT.md) §5.2, [`MULTI_AGENT_FEASIBILITY.md`](../MULTI_AGENT_FEASIBILITY.md) |
 
 The screen is measured at the tree of this branch on 2026-10-30. It expires the
