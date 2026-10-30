@@ -4,7 +4,7 @@
   (global $g (export "g") (mut i32) (i32.const 7))
   (type $unary (func (param i32) (result i32)))
   (type $result_only (func (result i32)))
-  (table 1 funcref)
+  (table 3 funcref)
   (type $binary (func (param i32 i32) (result i32)))
   (func (export "add") (type $binary)
     local.get 0
@@ -268,6 +268,11 @@
     table.init $passive_funcs)
   (func (export "elem_drop")
     elem.drop $passive_funcs)
+  (func (export "table_copy") (param i32 i32 i32)
+    local.get 0
+    local.get 1
+    local.get 2
+    table.copy)
   (func (export "table_size") (result i32)
     table.size)
   (func (export "call_indirect") (param i32 i32) (result i32)
