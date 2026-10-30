@@ -126,6 +126,10 @@ struct DiagnosticLocation {
 	std::uint64_t moduleOffset = kNoDiagnosticOffset;
 	std::string functionName;
 
+/**
+ * \brief Performs the known operation.
+ * \return The value or status produced by this operation.
+ */
 	bool known() const noexcept
 	{
 		return functionIndex != kNoDiagnosticIndex
