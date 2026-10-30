@@ -268,6 +268,8 @@
     table.init $passive_funcs)
   (func (export "elem_drop")
     elem.drop $passive_funcs)
+  (func (export "table_size") (result i32)
+    table.size)
   (func (export "call_indirect") (param i32 i32) (result i32)
     local.get 0
     local.get 1
