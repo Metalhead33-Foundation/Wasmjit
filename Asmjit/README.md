@@ -15,6 +15,14 @@ and must not be selected to execute Wasm modules.
   allocator to emit a host-ABI function that adds or multiplies four 32-bit
   lanes. The inputs and output are ordinary pointers; the implementation does
   not assume a particular host argument-register convention.
+- `TypeTranslator` maps Wasm `i32`, `i64`, `f32`, `f64`, and reference values to
+  AsmJit `TypeId`s and builds C-declaration function signatures. It prepends
+  `VMContext*` and models multi-value results with the project's trailing
+  result-buffer pointer ABI.
+- Unsupported `v128` and packed function parameters/results fail explicitly;
+  they are not silently coerced to an unrelated native type.
+- `Test/AsmjitTypeTranslatorTests.cpp` covers scalar signatures, opaque
+  references, multi-value result-buffer placement, and explicit rejection.
 - The context releases all generated entry points at destruction. If tracking
   an allocation fails after executable memory is allocated, it releases that
   allocation before propagating the host-side exception.
@@ -23,9 +31,9 @@ and must not be selected to execute Wasm modules.
 - The dependency is confined to this subproject. `WasmBase/` remains
   backend-agnostic and does not include or link AsmJit.
 
-These are native code-generation probes, not evidence of Wasm instruction
-coverage, Wasm ABI compatibility, trap handling, GC integration, or Wasm SIMD
-lowering. In particular, the lane-wise function is a diagnostic primitive; it
+These are native code-generation probes and an initial scalar ABI mapping,
+not evidence of Wasm instruction lowering, full Wasm ABI compatibility, trap
+handling, GC integration, or Wasm SIMD lowering. In particular, the lane-wise function is a diagnostic primitive; it
 does not yet implement `WASM::BackendLaneWiseOp`.
 
 ## Build dependency
