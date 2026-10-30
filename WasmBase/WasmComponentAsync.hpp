@@ -50,20 +50,20 @@ namespace WASM {
 
 /** \brief Event categories emitted by Component Model async waitables. */
 enum class ComponentEventCode : uint32_t {
-	None = 0,
-	Subtask = 1,
-	StreamRead = 2,
-	StreamWrite = 3,
-	FutureRead = 4,
-	FutureWrite = 5,
-	TaskCancelled = 6
+	None = 0, //!< ComponentEventCode enumerator `None`.
+	Subtask = 1, //!< ComponentEventCode enumerator `Subtask`.
+	StreamRead = 2, //!< ComponentEventCode enumerator `StreamRead`.
+	StreamWrite = 3, //!< ComponentEventCode enumerator `StreamWrite`.
+	FutureRead = 4, //!< ComponentEventCode enumerator `FutureRead`.
+	FutureWrite = 5, //!< ComponentEventCode enumerator `FutureWrite`.
+	TaskCancelled = 6, //!< ComponentEventCode enumerator `TaskCancelled`.
 };
 
 /** \brief Outcome of a stream/future copy operation. */
 enum class ComponentCopyResult : uint32_t {
-	Completed = 0,
-	Dropped = 1,
-	Cancelled = 2
+	Completed = 0, //!< ComponentCopyResult enumerator `Completed`.
+	Dropped = 1, //!< ComponentCopyResult enumerator `Dropped`.
+	Cancelled = 2, //!< ComponentCopyResult enumerator `Cancelled`.
 };
 
 //! The Canonical ABI sentinel for "the operation blocked".
@@ -92,38 +92,38 @@ constexpr bool unpackCopyResult(uint32_t packed, ComponentCopyResult& result,
 
 /** \brief Lifecycle states of one async component task. */
 enum class ComponentTaskState : uint8_t {
-	Pending,
-	Running,
-	Cancelled,
-	Resolved
+	Pending, //!< ComponentTaskState enumerator `Pending`.
+	Running, //!< ComponentTaskState enumerator `Running`.
+	Cancelled, //!< ComponentTaskState enumerator `Cancelled`.
+	Resolved, //!< ComponentTaskState enumerator `Resolved`.
 };
 
 //! The direction of one end of a stream/future.
 /** \brief Read/write role of a stream or future endpoint. */
 enum class ComponentEndDirection : uint8_t {
-	Readable,
-	Writable
+	Readable, //!< ComponentEndDirection enumerator `Readable`.
+	Writable, //!< ComponentEndDirection enumerator `Writable`.
 };
 
 //! `End.State` in the Canonical ABI explainer.
 /** \brief Copy/cancellation state of one async endpoint. */
 enum class ComponentEndState : uint8_t {
-	Idle,
-	Copying,
-	CancellingCopy,
-	Done
+	Idle, //!< ComponentEndState enumerator `Idle`.
+	Copying, //!< ComponentEndState enumerator `Copying`.
+	CancellingCopy, //!< ComponentEndState enumerator `CancellingCopy`.
+	Done, //!< ComponentEndState enumerator `Done`.
 };
 
 //! What a handle denotes. Resources are owned by the runtime's resource table;
 //! this enum only covers the async objects a handle table can also contain.
 /** \brief Kind of async object that can participate in a waitable set. */
 enum class ComponentWaitableKind : uint8_t {
-	Subtask,
-	StreamRead,
-	StreamWrite,
-	FutureRead,
-	FutureWrite,
-	TaskCancelled
+	Subtask, //!< ComponentWaitableKind enumerator `Subtask`.
+	StreamRead, //!< ComponentWaitableKind enumerator `StreamRead`.
+	StreamWrite, //!< ComponentWaitableKind enumerator `StreamWrite`.
+	FutureRead, //!< ComponentWaitableKind enumerator `FutureRead`.
+	FutureWrite, //!< ComponentWaitableKind enumerator `FutureWrite`.
+	TaskCancelled, //!< ComponentWaitableKind enumerator `TaskCancelled`.
 };
 
 /** \brief Event code and two Canonical ABI payload words produced by a waitable. */
