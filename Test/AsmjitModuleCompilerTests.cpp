@@ -80,8 +80,7 @@ TEST_CASE("AsmJit ModuleInstantiator compiles supported i32 functions", "[asmjit
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("branch_if"), 1) == 10);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("branch_if"), 0) == 20);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("branch")) == 10);
-	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("branch_to_function"), 1) == 42);
-	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("branch_to_function"), 0) == 7);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("branch_to_function")) == 42);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("branch_if_function"), 1) == 42);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("branch_if_function"), 0) == 7);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("branch_table"), 0) == 43);
