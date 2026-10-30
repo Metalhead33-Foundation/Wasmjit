@@ -165,11 +165,22 @@ inline uint32_t readLE32(const uint8_t* p)
 		 | (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
 }
 
+/**
+ * \brief Performs the readLE64 operation.
+ * \param p Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 inline uint64_t readLE64(const uint8_t* p)
 {
 	return static_cast<uint64_t>(readLE32(p)) | (static_cast<uint64_t>(readLE32(p + 4)) << 32);
 }
 
+/**
+ * \brief Performs the writeLE64 operation.
+ * \param p Input value or output destination for this operation.
+ * \param v Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 inline void writeLE64(uint8_t* p, uint64_t v)
 {
 	for (unsigned i = 0; i < 8; ++i)
@@ -179,6 +190,12 @@ inline void writeLE64(uint8_t* p, uint64_t v)
 //! \par splat: broadcast one scalar to every lane
 //! A real win over the reference's lane loop: one broadcast + one store.
 
+/**
+ * \brief Performs the splat8 operation.
+ * \param x Input value or output destination for this operation.
+ * \param out Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 inline void splat8(int32_t x, uint8_t* out)
 {
 	const V128 d;
@@ -458,6 +475,12 @@ HWY_INLINE int32_t anyTrueLanes(D d, const V v)
 //! helper alike. Prefixing the field with `hn::` would make our names
 //! unreachable.
 template <class V>
+/**
+ * \brief Performs the satQ15 operation.
+ * \param a Input value or output destination for this operation.
+ * \param b Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 HWY_INLINE V satQ15(V a, V b)
 {
 	const hn::DFromV<V> d;
@@ -514,6 +537,12 @@ HWY_INLINE auto wasmFNe(V a, V b)
 //! asymmetry, both say what they mean. `Add` of a NaN operand is a NaN for free,
 //! which is what produces the propagated NaN.
 template <class V>
+/**
+ * \brief Performs the wasmMin operation.
+ * \param a Input value or output destination for this operation.
+ * \param b Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 HWY_INLINE V wasmMin(V a, V b)
 {
 	const hn::DFromV<V> d;
@@ -616,6 +645,12 @@ HWY_INLINE V wasmPMax(V a, V b)
 //! not taken on faith: the differential test feeds it ±2^31, ±2^32 and the largest
 //! representable values below each.
 template <class DF, class VF>
+/**
+ * \brief Performs the wasmNoNaN operation.
+ * \param df Input value or output destination for this operation.
+ * \param v Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 HWY_INLINE VF wasmNoNaN(DF df, VF v)
 {
 	return hn::IfThenElse(hn::Not(hn::Eq(v, v)), hn::Zero(df), v);
@@ -638,16 +673,41 @@ HWY_INLINE VF wasmNoNaN(DF df, VF v)
 //! unsigned reading and the saturating sum on both sides of the boundary, which is
 //! exactly `maddubs` with the operands swapped — so the vector form is literally
 //! the hardware instruction, and the reference had to be written to match it.
+/**
+ * \brief Performs the relaxedDotI8x16I7x16S operation.
+ * \param a Input value or output destination for this operation.
+ * \param b Input value or output destination for this operation.
+ * \param out Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 inline void relaxedDotI8x16I7x16S(const uint8_t* a, const uint8_t* b, uint8_t* out)
 {
 	const hn::CappedTag<int16_t, 8> d16;
 	const hn::CappedTag<uint8_t, 16> du8;
 	const hn::CappedTag<int8_t, 16> di8;
+/**
+ * \brief Performs the StoreU operation.
+ * \param d16 Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	hn::StoreU(hn::SatWidenMulPairwiseAdd(d16, hn::LoadU(du8, reinterpret_cast<const uint8_t*>(b)),
+/**
+ * \brief Performs the LoadU operation.
+ * \param di8 Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 										  hn::LoadU(di8, reinterpret_cast<const int8_t*>(a))),
 			   d16, reinterpret_cast<int16_t*>(out));
 }
 
+/**
+ * \brief Performs the relaxedDotI8x16I7x16AddS operation.
+ * \param a Input value or output destination for this operation.
+ * \param b Input value or output destination for this operation.
+ * \param c Input value or output destination for this operation.
+ * \param out Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 inline void relaxedDotI8x16I7x16AddS(const uint8_t* a, const uint8_t* b, const uint8_t* c,
 									 uint8_t* out)
 {
@@ -655,6 +715,16 @@ inline void relaxedDotI8x16I7x16AddS(const uint8_t* a, const uint8_t* b, const u
 	const hn::CappedTag<int32_t, 4> d32;
 	const hn::CappedTag<uint8_t, 16> du8;
 	const hn::CappedTag<int8_t, 16> di8;
+/**
+ * \brief Performs the SatWidenMulPairwiseAdd operation.
+ * \param d16 Input value or output destination for this operation.
+ * \param Operand Input value or output destination for this operation.
+ * \param index Input value or output destination for this operation.
+ * \param immediate Input value or output destination for this operation.
+ * \param value Input value or output destination for this operation.
+ * \param result Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	const auto pairs = hn::SatWidenMulPairwiseAdd(d16, hn::LoadU(du8, reinterpret_cast<const uint8_t*>(b)),
 /**
  * \brief Implements the LoadU SIMD reference operation.
@@ -685,20 +755,90 @@ inline void relaxedDotI8x16I7x16AddS(const uint8_t* a, const uint8_t* b, const u
 	inline void name(const uint8_t* a, const uint8_t* b, uint8_t* out) { \
 		const hn::CappedTag<T, 16 / sizeof(T)> d; \
 		hn::StoreU(hwy(hn::LoadU(d, reinterpret_cast<const T*>(a)), \
+/**
+ * \brief Performs the LoadU operation.
+ * \param d Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 					   hn::LoadU(d, reinterpret_cast<const T*>(b))), \
+/**
+ * \brief Performs the WASM_SIMD_OP_CMP operation.
+ * \param name Input value or output destination for this operation.
+ * \param entry Input value or output destination for this operation.
+ * \param T Input value or output destination for this operation.
+ * \param expr Input value or output destination for this operation.
+ * \param a Input value or output destination for this operation.
+ * \param b Input value or output destination for this operation.
+ * \param out Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 				   d, reinterpret_cast<T*>(out)); \
 	}
 #define WASM_SIMD_OP_CMP(name, entry, T, expr, hwy) \
+/**
+ * \brief Performs the name operation.
+ * \param a Input value or output destination for this operation.
+ * \param b Input value or output destination for this operation.
+ * \param out Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	inline void name(const uint8_t* a, const uint8_t* b, uint8_t* out) { \
+/**
+ * \brief Performs the sizeof operation.
+ * \param d Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const hn::CappedTag<T, 16 / sizeof(T)> d; \
+/**
+ * \brief Performs the StoreU operation.
+ * \param d Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		hn::StoreU(hn::VecFromMask(d, hwy(hn::LoadU(d, reinterpret_cast<const T*>(a)), \
+/**
+ * \brief Performs the LoadU operation.
+ * \param d Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 										  hn::LoadU(d, reinterpret_cast<const T*>(b)))), \
+/**
+ * \brief Performs the WASM_SIMD_OP_UNARY operation.
+ * \param name Input value or output destination for this operation.
+ * \param entry Input value or output destination for this operation.
+ * \param T Input value or output destination for this operation.
+ * \param expr Input value or output destination for this operation.
+ * \param a Input value or output destination for this operation.
+ * \param out Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 				   d, reinterpret_cast<T*>(out)); \
 	}
 #define WASM_SIMD_OP_UNARY(name, entry, T, expr, hwy) \
+/**
+ * \brief Performs the name operation.
+ * \param a Input value or output destination for this operation.
+ * \param out Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	inline void name(const uint8_t* a, uint8_t* out) { \
+/**
+ * \brief Performs the sizeof operation.
+ * \param v Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const hn::CappedTag<T, 16 / sizeof(T)> d; \
+/**
+ * \brief Performs the LoadU operation.
+ * \param d Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const auto v = hn::LoadU(d, reinterpret_cast<const T*>(a)); \
+/**
+ * \brief Performs the StoreU operation.
+ * \param hwy Input value or output destination for this operation.
+ * \param d Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		hn::StoreU(hn::hwy, d, reinterpret_cast<T*>(out)); \
 	}
 //! \par the op list's other shapes
@@ -708,9 +848,30 @@ inline void relaxedDotI8x16I7x16AddS(const uint8_t* a, const uint8_t* b, const u
 //! `v`/`va`/`vb` and those descriptors, which is how one line in the op list can
 //! feed a multi-target TU.
 #define WASM_SIMD_OP_SHIFT(name, entry, T, expr, hwy) \
+/**
+ * \brief Performs the name operation.
+ * \param a Input value or output destination for this operation.
+ * \param count Input value or output destination for this operation.
+ * \param out Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	inline void name(const uint8_t* a, int32_t count, uint8_t* out) { \
+/**
+ * \brief Performs the sizeof operation.
+ * \param sh Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const hn::CappedTag<T, 16 / sizeof(T)> d; \
+/**
+ * \brief Performs the sizeof operation.
+ * \return The value or status produced by this operation.
+ */
 		const auto sh = static_cast<int>(static_cast<uint32_t>(count) & (8 * sizeof(T) - 1)); \
+/**
+ * \brief Performs the StoreU operation.
+ * \param d Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		hn::StoreU(hn::hwy(hn::LoadU(d, reinterpret_cast<const T*>(a)), sh), \
 				   d, reinterpret_cast<T*>(out)); \
 	}
@@ -722,28 +883,103 @@ inline void relaxedDotI8x16I7x16AddS(const uint8_t* a, const uint8_t* b, const u
 //! inside each expression — wasm asks "which lanes are non-zero" or "which lanes
 //! are negative", and a mask is how the library answers.
 #define WASM_SIMD_OP_REDUCE_OR(name, entry, T, expr, hwy) \
+/**
+ * \brief Performs the name operation.
+ * \param a Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	inline int32_t name(const uint8_t* a) { \
+/**
+ * \brief Performs the sizeof operation.
+ * \param v Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const hn::CappedTag<T, 16 / sizeof(T)> d; \
+/**
+ * \brief Performs the LoadU operation.
+ * \param d Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const auto v = hn::LoadU(d, reinterpret_cast<const T*>(a)); \
 		return static_cast<int32_t>(hwy); \
 	}
 #define WASM_SIMD_OP_REDUCE_AND(name, entry, T, expr, hwy) WASM_SIMD_OP_REDUCE_OR(name, entry, T, expr, hwy)
 
 #define WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy) \
+/**
+ * \brief Performs the name operation.
+ * \param a Input value or output destination for this operation.
+ * \param out Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	inline void name(const uint8_t* a, uint8_t* out) { \
+/**
+ * \brief Performs the sizeof operation.
+ * \param v Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const hn::CappedTag<TIn, 16 / sizeof(TIn)> din; \
+/**
+ * \brief Performs the sizeof operation.
+ * \param v Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const hn::CappedTag<TOut, 16 / sizeof(TOut)> dout; \
+/**
+ * \brief Performs the LoadU operation.
+ * \param din Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const auto v = hn::LoadU(din, reinterpret_cast<const TIn*>(a)); \
+/**
+ * \brief Performs the StoreU operation.
+ * \param hwy Input value or output destination for this operation.
+ * \param dout Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		hn::StoreU(hn::hwy, dout, reinterpret_cast<TOut*>(out)); \
 	}
 #define WASM_SIMD_OP_PAIRWISE(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN1(name, entry, TIn, TOut, expr, hwy)
 
 #define WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy) \
+/**
+ * \brief Performs the name operation.
+ * \param a Input value or output destination for this operation.
+ * \param b Input value or output destination for this operation.
+ * \param out Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	inline void name(const uint8_t* a, const uint8_t* b, uint8_t* out) { \
+/**
+ * \brief Performs the sizeof operation.
+ * \param va Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const hn::CappedTag<TIn, 16 / sizeof(TIn)> din; \
+/**
+ * \brief Performs the sizeof operation.
+ * \param va Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const hn::CappedTag<TOut, 16 / sizeof(TOut)> dout; \
+/**
+ * \brief Performs the LoadU operation.
+ * \param din Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const auto va = hn::LoadU(din, reinterpret_cast<const TIn*>(a)); \
+/**
+ * \brief Performs the LoadU operation.
+ * \param din Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const auto vb = hn::LoadU(din, reinterpret_cast<const TIn*>(b)); \
+/**
+ * \brief Performs the StoreU operation.
+ * \param hwy Input value or output destination for this operation.
+ * \param dout Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		hn::StoreU(hn::hwy, dout, reinterpret_cast<TOut*>(out)); \
 	}
 #define WASM_SIMD_OP_PAIRWISE2(name, entry, TIn, TOut, expr, hwy) WASM_SIMD_OP_WIDEN2(name, entry, TIn, TOut, expr, hwy)
@@ -761,22 +997,86 @@ inline void relaxedDotI8x16I7x16AddS(const uint8_t* a, const uint8_t* b, const u
 //! mirror: its conversion fills only the low lanes, and the rest are zeroed
 //! explicitly, because the library leaves them undefined.
 #define WASM_SIMD_OP_CONVERT1(name, entry, TIn, TOut, expr, hwy) \
+/**
+ * \brief Performs the name operation.
+ * \param a Input value or output destination for this operation.
+ * \param out Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	inline void name(const uint8_t* a, uint8_t* out) { \
+/**
+ * \brief Performs the sizeof operation.
+ * \param v Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const hn::CappedTag<TIn, 16 / sizeof(TIn)> din; \
+/**
+ * \brief Performs the sizeof operation.
+ * \param v Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const hn::CappedTag<TOut, 16 / sizeof(TOut)> dout; \
+/**
+ * \brief Performs the sizeof operation.
+ * \param v Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const hn::CappedTag<TIn, 16 / sizeof(TIn) / 2> dhalfin; \
+/**
+ * \brief Performs the LoadU operation.
+ * \param din Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const auto v = hn::LoadU(din, reinterpret_cast<const TIn*>(a)); \
+/**
+ * \brief Performs the StoreU operation.
+ * \param hwy Input value or output destination for this operation.
+ * \param dout Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		hn::StoreU(hwy, dout, reinterpret_cast<TOut*>(out)); \
 	}
 //! `FORWARD` has no per-target body: the vector TU defines its entry point to
 //! call the reference, so there is nothing for a target to compile (§6.5).
 #define WASM_SIMD_OP_FORWARD(name, entry, TIn, TOut, expr, hwy)
 #define WASM_SIMD_OP_EXPAND(name, entry, TIn, TOut, expr, hwy) \
+/**
+ * \brief Performs the name operation.
+ * \param a Input value or output destination for this operation.
+ * \param out Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 	inline void name(const uint8_t* a, uint8_t* out) { \
+/**
+ * \brief Performs the sizeof operation.
+ * \param v Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const hn::CappedTag<TIn, 16 / sizeof(TIn)> din; \
+/**
+ * \brief Performs the sizeof operation.
+ * \param v Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const hn::CappedTag<TOut, 16 / sizeof(TOut)> dout; \
+/**
+ * \brief Performs the sizeof operation.
+ * \param v Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const hn::CappedTag<TOut, 16 / sizeof(TOut) / 2> dhalf; \
+/**
+ * \brief Performs the LoadU operation.
+ * \param din Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		const auto v = hn::LoadU(din, reinterpret_cast<const TIn*>(a)); \
+/**
+ * \brief Performs the StoreU operation.
+ * \param hwy Input value or output destination for this operation.
+ * \param dout Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 		hn::StoreU(hwy, dout, reinterpret_cast<TOut*>(out)); \
 	}
 
