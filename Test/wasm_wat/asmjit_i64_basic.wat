@@ -17,6 +17,16 @@
     local.get 0
     i32.const 0
     call_indirect (type $unary64))
+  (func (export "i64_select") (param i32 i64 i64) (result i64)
+    local.get 1
+    local.get 2
+    local.get 0
+    select)
+  (func (export "i64_select_t") (param i32 i64 i64) (result i64)
+    local.get 1
+    local.get 2
+    local.get 0
+    select (result i64))
   (func (export "i64_get_const") (result i64)
     global.get $const64)
   (func (export "i64_get_global") (result i64)
