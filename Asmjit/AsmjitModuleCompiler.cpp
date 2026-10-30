@@ -28,11 +28,61 @@ void checkError(asmjit::Error error, const char* operation)
 				+ std::to_string(static_cast<unsigned>(error)));
 }
 
-void requireI32(const WASM::ValueType& type, const char* role)
+void requireInteger(const WASM::ValueType& type, const char* role)
 {
-	if (type.opcode != WASM::ValueTypeCode::I32)
-		throw std::runtime_error(std::string("AsmJit initial compiler supports only i32 ")
+	if (type.opcode != WASM::ValueTypeCode::I32
+			&& type.opcode != WASM::ValueTypeCode::I64)
+		throw std::runtime_error(std::string("AsmJit compiler supports only i32/i64 ")
 				+ role);
+}
+
+asmjit::x86::Gp newIntegerRegister(asmjit::x86::Compiler& compiler,
+		const WASM::ValueType& type, const char* name)
+{
+	return type.opcode == WASM::ValueTypeCode::I64
+			? compiler.new_gp64(name) : compiler.new_gp32(name);
+}
+
+int64_t asmjitI64DivS(int64_t lhs, int64_t rhs) noexcept
+{
+	if (rhs == 0) {
+		WASM::reportTrap(WASM::TrapKind::IntegerDivideByZero);
+		return 0;
+	}
+	if (lhs == INT64_MIN && rhs == -1) {
+		WASM::reportTrap(WASM::TrapKind::IntegerOverflow);
+		return 0;
+	}
+	return lhs / rhs;
+}
+
+uint64_t asmjitI64DivU(uint64_t lhs, uint64_t rhs) noexcept
+{
+	if (rhs == 0) {
+		WASM::reportTrap(WASM::TrapKind::IntegerDivideByZero);
+		return 0;
+	}
+	return lhs / rhs;
+}
+
+int64_t asmjitI64RemS(int64_t lhs, int64_t rhs) noexcept
+{
+	if (rhs == 0) {
+		WASM::reportTrap(WASM::TrapKind::IntegerDivideByZero);
+		return 0;
+	}
+	if (lhs == INT64_MIN && rhs == -1)
+		return 0;
+	return lhs % rhs;
+}
+
+uint64_t asmjitI64RemU(uint64_t lhs, uint64_t rhs) noexcept
+{
+	if (rhs == 0) {
+		WASM::reportTrap(WASM::TrapKind::IntegerDivideByZero);
+		return 0;
+	}
+	return lhs % rhs;
 }
 
 uint32_t asmjitI32Popcnt(uint32_t value) noexcept
@@ -384,11 +434,13 @@ public:
 		if (type.results.size() > 1)
 			throw std::runtime_error("AsmJit initial compiler does not support multi-value results");
 		for (const auto& parameter : type.params)
-			requireI32(parameter.val, "parameters");
+			requireInteger(parameter.val, "parameters");
 		for (const auto& result : type.results)
-			requireI32(result.val, "results");
+			requireInteger(result.val, "results");
 		for (const auto& local : stack.allLocals)
-			requireI32(local, "locals");
+			requireInteger(local, "locals");
+		resultType = type.results.empty()
+				? WASM::ValueTypeCode::None : type.results.front().val.opcode;
 
 		locals.reserve(stack.allLocals.size());
 		vmContext = compiler.new_gp_ptr("vmContext");
@@ -423,19 +475,21 @@ public:
 		if (type.results.empty()) {
 			checkError(compiler.ret(), "AsmJit trap-path void return emission failed");
 		} else {
-			asmjit::x86::Gp zero = compiler.new_gp32("trapResult");
+			asmjit::x86::Gp zero = resultType == WASM::ValueTypeCode::I64
+					? compiler.new_gp64("trapResult") : compiler.new_gp32("trapResult");
 			checkError(compiler.xor_(zero, zero), "AsmJit trap-result zeroing failed");
 			checkError(compiler.ret(zero), "AsmJit trap-path result return emission failed");
 		}
 		checkError(compiler.bind(bodyLabel), "AsmJit body label binding failed");
 
 		for (uint32_t i = 0; i < stack.parameterCount; ++i) {
-			asmjit::x86::Gp parameter = compiler.new_gp32("parameter");
+			asmjit::x86::Gp parameter = newIntegerRegister(compiler, stack.allLocals[i], "parameter");
 			function.set_arg(i + 1, parameter);
 			locals.push_back(parameter);
 		}
 		for (uint32_t i = 0; i < stack.localCount; ++i) {
-			asmjit::x86::Gp local = compiler.new_gp32("local");
+			asmjit::x86::Gp local = newIntegerRegister(compiler,
+					stack.allLocals[stack.parameterCount + i], "local");
 			checkError(compiler.xor_(local, local), "AsmJit local zero-initialisation failed");
 			locals.push_back(local);
 		}
@@ -475,7 +529,8 @@ protected:
 		const size_t i = static_cast<size_t>(index);
 		if (i >= locals.size())
 			throw std::runtime_error("AsmJit local.get index is out of range");
-		asmjit::x86::Gp copy = compiler.new_gp32("localCopy");
+		asmjit::x86::Gp copy = locals[i].size() == 8
+				? compiler.new_gp64("localCopy") : compiler.new_gp32("localCopy");
 		checkError(compiler.mov(copy, locals[i]), "AsmJit local.get emission failed");
 		values.push_back(copy);
 	}
@@ -495,7 +550,8 @@ protected:
 		const size_t i = static_cast<size_t>(index);
 		if (i >= locals.size() || values.empty())
 			throw std::runtime_error("AsmJit local.tee stack/index underflow");
-		asmjit::x86::Gp copy = compiler.new_gp32("teeCopy");
+		asmjit::x86::Gp copy = locals[i].size() == 8
+				? compiler.new_gp64("teeCopy") : compiler.new_gp32("teeCopy");
 		checkError(compiler.mov(copy, values.back()), "AsmJit local.tee emission failed");
 		checkError(compiler.mov(locals[i], copy), "AsmJit local.tee store emission failed");
 		values.back() = copy;
@@ -905,7 +961,8 @@ protected:
 		if (resultCount == 0) {
 			checkError(compiler.ret(), "AsmJit post-call void trap return failed");
 		} else {
-			auto zero = compiler.new_gp32("postCallTrapResult");
+			auto zero = resultType == WASM::ValueTypeCode::I64
+					? compiler.new_gp64("postCallTrapResult") : compiler.new_gp32("postCallTrapResult");
 			checkError(compiler.xor_(zero, zero), "AsmJit post-call trap result initialisation failed");
 			checkError(compiler.ret(zero), "AsmJit post-call trap result return failed");
 		}
@@ -1074,7 +1131,8 @@ protected:
 		if (resultCount == 0) {
 			checkError(compiler.ret(), "AsmJit unreachable void return emission failed");
 		} else {
-			auto zero = compiler.new_gp32("unreachableResult");
+			auto zero = resultType == WASM::ValueTypeCode::I64
+					? compiler.new_gp64("unreachableResult") : compiler.new_gp32("unreachableResult");
 			checkError(compiler.xor_(zero, zero), "AsmJit unreachable result initialisation failed");
 			checkError(compiler.ret(zero), "AsmJit unreachable result return emission failed");
 		}
@@ -1097,6 +1155,54 @@ protected:
 	void dispatchI32DivU() override { emitCheckedBinaryCall(&asmjitI32DivU, "i32.div_u"); }
 	void dispatchI32RemS() override { emitCheckedBinaryCall(&asmjitI32RemS, "i32.rem_s"); }
 	void dispatchI32RemU() override { emitCheckedBinaryCall(&asmjitI32RemU, "i32.rem_u"); }
+
+	void dispatchI64Const(int64_t value) override
+	{
+		auto reg = compiler.new_gp64("i64Constant");
+		checkError(compiler.mov(reg, value), "AsmJit i64.const emission failed");
+		values.push_back(reg);
+	}
+
+	void dispatchI64Eqz() override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit i64.eqz operand stack underflow");
+		auto value = values.back();
+		values.pop_back();
+		auto result = compiler.new_gp32("i64Eqz");
+		checkError(compiler.xor_(result, result), "AsmJit i64.eqz result initialisation failed");
+		checkError(compiler.test(value, value), "AsmJit i64.eqz test emission failed");
+		checkError(compiler.set(asmjit::x86::CondCode::kE, result.r8()),
+				"AsmJit i64.eqz condition emission failed");
+		values.push_back(result);
+	}
+
+	void dispatchI64Eq() override { emitCompare(asmjit::x86::CondCode::kE, true); }
+	void dispatchI64Ne() override { emitCompare(asmjit::x86::CondCode::kNE, true); }
+	void dispatchI64LtS() override { emitCompare(asmjit::x86::CondCode::kL, true); }
+	void dispatchI64LtU() override { emitCompare(asmjit::x86::CondCode::kB, true); }
+	void dispatchI64GtS() override { emitCompare(asmjit::x86::CondCode::kG, true); }
+	void dispatchI64GtU() override { emitCompare(asmjit::x86::CondCode::kA, true); }
+	void dispatchI64LeS() override { emitCompare(asmjit::x86::CondCode::kLE, true); }
+	void dispatchI64LeU() override { emitCompare(asmjit::x86::CondCode::kBE, true); }
+	void dispatchI64GeS() override { emitCompare(asmjit::x86::CondCode::kGE, true); }
+	void dispatchI64GeU() override { emitCompare(asmjit::x86::CondCode::kAE, true); }
+
+	void dispatchI64Add() override { emitIntegerBinary(BinaryOp::Add); }
+	void dispatchI64Sub() override { emitIntegerBinary(BinaryOp::Sub); }
+	void dispatchI64Mul() override { emitIntegerBinary(BinaryOp::Mul); }
+	void dispatchI64And() override { emitIntegerBinary(BinaryOp::And); }
+	void dispatchI64Or() override { emitIntegerBinary(BinaryOp::Or); }
+	void dispatchI64Xor() override { emitIntegerBinary(BinaryOp::Xor); }
+	void dispatchI64Shl() override { emitIntegerShift(ShiftOp::Left); }
+	void dispatchI64ShrS() override { emitIntegerShift(ShiftOp::ArithmeticRight); }
+	void dispatchI64ShrU() override { emitIntegerShift(ShiftOp::LogicalRight); }
+	void dispatchI64Rotl() override { emitIntegerShift(ShiftOp::RotateLeft); }
+	void dispatchI64Rotr() override { emitIntegerShift(ShiftOp::RotateRight); }
+	void dispatchI64DivS() override { emitCheckedI64Call(&asmjitI64DivS, "i64.div_s"); }
+	void dispatchI64DivU() override { emitCheckedI64Call(&asmjitI64DivU, "i64.div_u"); }
+	void dispatchI64RemS() override { emitCheckedI64Call(&asmjitI64RemS, "i64.rem_s"); }
+	void dispatchI64RemU() override { emitCheckedI64Call(&asmjitI64RemU, "i64.rem_u"); }
 
 	void dispatchI32Eqz() override
 	{
@@ -1625,17 +1731,77 @@ private:
 		values.push_back(result);
 	}
 
-	void emitCompare(asmjit::x86::CondCode condition)
+	void emitCompare(asmjit::x86::CondCode condition, bool wide = false)
 	{
 		if (values.size() < 2)
 			throw std::runtime_error("AsmJit i32 comparison operand stack underflow");
 		auto rhs = values.back(); values.pop_back();
 		auto lhs = values.back(); values.pop_back();
+		(void)wide;
 		auto result = compiler.new_gp32("comparison");
 		checkError(compiler.xor_(result, result), "AsmJit comparison result initialisation failed");
 		checkError(compiler.cmp(lhs, rhs), "AsmJit comparison emission failed");
 		checkError(compiler.set(condition, result.r8()), "AsmJit comparison condition emission failed");
 		values.push_back(result);
+	}
+
+	void emitIntegerBinary(BinaryOp operation)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit i64 binary operation stack underflow");
+		auto rhs = values.back(); values.pop_back();
+		auto lhs = values.back(); values.pop_back();
+		switch (operation) {
+		case BinaryOp::Add: checkError(compiler.add(lhs, rhs), "AsmJit i64.add emission failed"); break;
+		case BinaryOp::Sub: checkError(compiler.sub(lhs, rhs), "AsmJit i64.sub emission failed"); break;
+		case BinaryOp::Mul: checkError(compiler.imul(lhs, rhs), "AsmJit i64.mul emission failed"); break;
+		case BinaryOp::And: checkError(compiler.and_(lhs, rhs), "AsmJit i64.and emission failed"); break;
+		case BinaryOp::Or: checkError(compiler.or_(lhs, rhs), "AsmJit i64.or emission failed"); break;
+		case BinaryOp::Xor: checkError(compiler.xor_(lhs, rhs), "AsmJit i64.xor emission failed"); break;
+		}
+		values.push_back(lhs);
+	}
+
+	void emitIntegerShift(ShiftOp operation)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit i64 shift operand stack underflow");
+		auto count = values.back(); values.pop_back();
+		auto value = values.back(); values.pop_back();
+		auto maskedCount = compiler.new_gp32("i64ShiftCount");
+		checkError(compiler.mov(maskedCount, count), "AsmJit i64 shift-count copy failed");
+		checkError(compiler.and_(maskedCount, 63), "AsmJit i64 shift-count mask failed");
+		checkError(compiler.mov(asmjit::x86::ecx, maskedCount), "AsmJit i64 shift-count setup failed");
+		switch (operation) {
+		case ShiftOp::Left: checkError(compiler.shl(value, asmjit::x86::cl), "AsmJit i64.shl emission failed"); break;
+		case ShiftOp::ArithmeticRight: checkError(compiler.sar(value, asmjit::x86::cl), "AsmJit i64.shr_s emission failed"); break;
+		case ShiftOp::LogicalRight: checkError(compiler.shr(value, asmjit::x86::cl), "AsmJit i64.shr_u emission failed"); break;
+		case ShiftOp::RotateLeft: checkError(compiler.rol(value, asmjit::x86::cl), "AsmJit i64.rotl emission failed"); break;
+		case ShiftOp::RotateRight: checkError(compiler.ror(value, asmjit::x86::cl), "AsmJit i64.rotr emission failed"); break;
+		}
+		values.push_back(value);
+	}
+
+	template <typename Function>
+	void emitCheckedI64Call(Function function, const char* operation)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error(std::string("AsmJit ") + operation + " operand stack underflow");
+		auto rhs = values.back(); values.pop_back();
+		auto lhs = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kInt64);
+		signature.add_arg(asmjit::TypeId::kInt64);
+		signature.add_arg(asmjit::TypeId::kInt64);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(function), signature),
+				"AsmJit checked i64 arithmetic helper emission failed");
+		invoke->set_arg(0, lhs);
+		invoke->set_arg(1, rhs);
+		auto result = compiler.new_gp64("checkedI64Result");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
 	}
 
 	void emitShift(ShiftOp operation)
@@ -1676,6 +1842,7 @@ private:
 	std::vector<asmjit::x86::Gp> values;
 	std::vector<ControlFrame> controls;
 	uint32_t resultCount = 0;
+	WASM::ValueTypeCode resultType = WASM::ValueTypeCode::None;
 };
 
 } // namespace
