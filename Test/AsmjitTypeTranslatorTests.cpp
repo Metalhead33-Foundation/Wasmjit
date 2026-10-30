@@ -2,6 +2,8 @@
 
 #include "Asmjit/AsmjitTypeTranslator.hpp"
 
+#include <cstdint>
+#include <initializer_list>
 #include <stdexcept>
 
 namespace {
