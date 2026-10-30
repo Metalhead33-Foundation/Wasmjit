@@ -5,9 +5,17 @@
 #include "Asmjit/AsmjitModuleCompiler.hpp"
 #include "WasmBase/WasmModuleInstance.hpp"
 #include "WasmBase/WasmRegistryImportResolver.hpp"
+#include "WasmBase/WasmVMContext.hpp"
 
 #include <cstdint>
 #include <memory>
+
+namespace {
+std::int32_t asmjitHostDouble(WASM::VMContext*, std::int32_t value)
+{
+	return value * 2;
+}
+}
 
 TEST_CASE("AsmJit ModuleInstantiator compiles supported i32 functions", "[asmjit][module]")
 {
@@ -64,4 +72,23 @@ TEST_CASE("AsmJit rolls back code allocations when a later function is unsupport
 
 	CHECK_THROWS(compiler.instantiate(module, imports));
 	CHECK(context.allocationCheckpoint() == 0);
+}
+
+TEST_CASE("AsmJit direct calls pass native import context correctly", "[asmjit][module][imports]")
+{
+	WASM::Module module = loadTestModule("asmjit_i32_import");
+	WASM::RegistryImportResolver imports;
+	WASM::Callable nativeDouble {
+		.fnPtr = reinterpret_cast<void*>(&asmjitHostDouble),
+		.context = nullptr,
+		.localTypeIdx = 0
+	};
+	imports.registerFunction("host", "double", nativeDouble);
+
+	AsmJitBackend::Context context;
+	AsmJitBackend::ModuleCompiler compiler(context);
+	auto instance = compiler.instantiate(module, imports);
+	const auto callHost = instance->exportedFunction("call_host");
+	REQUIRE(callHost.has_value());
+	CHECK(WASM::callCallable<std::int32_t>(*callHost, 21) == 42);
 }
