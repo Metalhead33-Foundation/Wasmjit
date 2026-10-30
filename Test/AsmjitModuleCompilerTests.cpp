@@ -33,6 +33,8 @@ TEST_CASE("AsmJit ModuleInstantiator compiles straight-line i32 functions", "[as
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("eq"), 7, 7) == 1);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("lt_s"), -1, 1) == 1);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("lt_u"), 1, -1) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("extend8_s"), 0x80) == -128);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("extend16_s"), 0x8001) == -32767);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("and"), 0xF0, 0x3C) == 0x30);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("or"), 0xF0, 0x0F) == 0xFF);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("xor"), 0xFF, 0x0F) == 0xF0);
