@@ -1172,6 +1172,12 @@ protected:
 
 	void dispatchI32Extend8S() override { emitSignExtend(8); }
 	void dispatchI32Extend16S() override { emitSignExtend(16); }
+	void dispatchI32WrapI64() override { emitI32WrapI64(); }
+	void dispatchI64ExtendI32S() override { emitI64ExtendI32(true); }
+	void dispatchI64ExtendI32U() override { emitI64ExtendI32(false); }
+	void dispatchI64Extend8S() override { emitI64SignExtend(8); }
+	void dispatchI64Extend16S() override { emitI64SignExtend(16); }
+	void dispatchI64Extend32S() override { emitI64SignExtend(32); }
 
 	void dispatchI32Clz() override { emitBitCount(BitCountOp::LeadingZeros); }
 	void dispatchI32Ctz() override { emitBitCount(BitCountOp::TrailingZeros); }
@@ -1799,6 +1805,49 @@ private:
 			checkError(compiler.movsx(result, source.r16()), "AsmJit i32.extend16_s emission failed");
 		else
 			throw std::runtime_error("AsmJit internal error: invalid sign-extension width");
+		values.push_back(result);
+	}
+
+	void emitI32WrapI64()
+	{
+		if (values.empty() || values.back().size() != 8)
+			throw std::runtime_error("AsmJit i32.wrap_i64 requires an i64 operand");
+		const auto source = values.back();
+		values.pop_back();
+		auto result = compiler.new_gp32("wrappedI32");
+		checkError(compiler.mov(result, source.r32()), "AsmJit i32.wrap_i64 emission failed");
+		values.push_back(result);
+	}
+
+	void emitI64ExtendI32(bool isSigned)
+	{
+		if (values.empty() || values.back().size() != 4)
+			throw std::runtime_error("AsmJit i64.extend_i32 requires an i32 operand");
+		const auto source = values.back();
+		values.pop_back();
+		auto result = compiler.new_gp64("extendedI64");
+		if (isSigned)
+			checkError(compiler.movsxd(result, source), "AsmJit i64.extend_i32_s emission failed");
+		else
+			checkError(compiler.mov(result.r32(), source), "AsmJit i64.extend_i32_u emission failed");
+		values.push_back(result);
+	}
+
+	void emitI64SignExtend(uint32_t width)
+	{
+		if (values.empty() || values.back().size() != 8)
+			throw std::runtime_error("AsmJit i64 sign-extension requires an i64 operand");
+		const auto source = values.back();
+		values.pop_back();
+		auto result = compiler.new_gp64("signExtendedI64");
+		if (width == 8)
+			checkError(compiler.movsx(result, source.r8()), "AsmJit i64.extend8_s emission failed");
+		else if (width == 16)
+			checkError(compiler.movsx(result, source.r16()), "AsmJit i64.extend16_s emission failed");
+		else if (width == 32)
+			checkError(compiler.movsxd(result, source.r32()), "AsmJit i64.extend32_s emission failed");
+		else
+			throw std::runtime_error("AsmJit internal error: invalid i64 sign-extension width");
 		values.push_back(result);
 	}
 
