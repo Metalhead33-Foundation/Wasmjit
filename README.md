@@ -227,7 +227,7 @@ library per backend plus the test executable.
 |---|---|
 | `WasmBase/` | The core library (`libWasmBase`): binary decoding, the module/instance model, `Store`/`TypeRegistry`/`Value`, the opcode decoder, the shared SIMD helper ABI, and the backend-neutral component runtime (`WasmComponentRuntime`). **Backend-agnostic by rule** — see [`docs/LAYERING.md`](docs/LAYERING.md) |
 | `WasmStub/` | `libWasmStub`: a non-JIT opcode dispatcher that pretty-prints instead of executing (inspection/debug) |
-| `LibJit/` | `libLibJit`: the GNU LibJIT backend (context, type translation, module compiler, dispatch) — the current implementation path, and the only backend that executes |
+| `LibJit/` | `libLibJit`: the GNU LibJIT backend (context, type translation, module compiler, dispatch) — the current full-featured implementation path |
 | `Asmjit/` | **Experimental AsmJit backend**: owns a `JitRuntime`, implements `ModuleInstantiator`, and executes a limited i32 subset with direct calls and checked memory32 access. Native SIMD and ABI probes are also present. Not full-featured or selectable through the public runtime registry; see [`Asmjit/README.md`](Asmjit/README.md) |
 | `Sljit/` | **Planned backend, no code yet**: same treatment. `sljit_emit_simd_*` / `SLJIT_SIMD_REG_*` are the other planned SIMD lever; see `Sljit/README.md` |
 | `Test/` | The Catch2 executable (`WasmJit`) and the spec-suite harness; see [`docs/TESTING.md`](docs/TESTING.md) |
@@ -275,7 +275,8 @@ through qmake:
 
 There is no interpreter backend. `WasmStub/` is a non-compiling pretty-printer;
 GNU LibJIT already provides a compile/interpret configuration and is the only
-acceptable interpretation path. A bespoke WasmJit interpreter is a permanent
+acceptable interpretation path. AsmJit is an experimental native execution
+backend with deliberately limited instruction coverage. A bespoke WasmJit interpreter is a permanent
 non-goal — see
 [`docs/proposals/STACK_SWITCHING.md`](docs/proposals/STACK_SWITCHING.md) §10.15
 (D-3).
