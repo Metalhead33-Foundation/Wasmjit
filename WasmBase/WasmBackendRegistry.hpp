@@ -104,12 +104,6 @@ std::string backendPluginFileName(std::string_view name);
  * \param hostFlags Flags for the current host build.
  * \return true when all compared build-kind bits match.
  */
-/**
- * \brief Performs the backendBuildFlagsCompatible operation.
- * \param pluginFlags Input value, resource descriptor, or output destination for this operation.
- * \param hostFlags Input value, resource descriptor, or output destination for this operation.
- * \return The requested value, handle, view, or success status.
- */
 bool backendBuildFlagsCompatible(std::uint32_t pluginFlags,
 								 std::uint32_t hostFlags) noexcept;
 //! Human-readable form for a diagnostic: e.g. "release, asan".
