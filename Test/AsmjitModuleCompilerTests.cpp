@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <memory>
 
-TEST_CASE("AsmJit ModuleInstantiator compiles straight-line i32 functions", "[asmjit][module]")
+TEST_CASE("AsmJit ModuleInstantiator compiles supported i32 functions", "[asmjit][module]")
 {
 	WASM::Module module = loadTestModule("asmjit_i32_basic");
 	WASM::RegistryImportResolver imports;
