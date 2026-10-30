@@ -24,7 +24,7 @@ namespace AsmJitBackend {
  * i32 globals, arithmetic, comparisons, bit counts, sign extension, `select`, and bit operations,
  * void and single-i32-result structured control flow, `br_table`, unreachable traps, typed direct/indirect calls,
  * tail-call opcodes (currently call+return), checked memory32 loads/stores,
- * memory size/growth, and checked memory32 `memory.copy`/`memory.fill`/`memory.init` plus `data.drop`, and `table.init`/`elem.drop`/`table.size`. Unsupported instructions
+ * memory size/growth, and checked memory32 `memory.copy`/`memory.fill`/`memory.init` plus `data.drop`, and `table.init`/`elem.drop`/`table.size`/`table.copy`. Unsupported instructions
  * and block signatures fail compilation rather than being ignored. The compiler borrows Context, which must outlive every
  * instance and entry point it creates.
  */
