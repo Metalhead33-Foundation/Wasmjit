@@ -1,9 +1,9 @@
 # `Asmjit/` — provisional AsmJit integration
 
-This directory now contains an initial, deliberately limited WebAssembly backend.
-It implements the four `ModuleInstantiator` hooks and can compile a small
-straight-line i32 subset. It is not feature-complete and must not be treated as
-a drop-in replacement for the existing backend.
+This directory contains an experimental, deliberately limited WebAssembly
+backend. It implements the four `ModuleInstantiator` hooks and executes an
+initial i32 subset. It is not feature-complete and must not be treated as a
+drop-in replacement for GNU LibJIT.
 
 ## What exists
 
@@ -20,9 +20,9 @@ a drop-in replacement for the existing backend.
   prepends `VMContext*`, maps V128 to AsmJit's 128-bit vector type, and uses a
   trailing caller-owned result buffer for multi-value results.
 - `ModuleCompiler` implements `translateTypes`, `declareFunctions`,
-  `compileFunctions`, and `callStartFunction`. It declares all internal
-  function records before compiling bodies, preserving the two-pass
-  instantiation contract. Each generated function emits the required
+  `compileFunctions`, and `callStartFunction`. It declares all internal function nodes before compiling bodies, preserving
+the two-pass instantiation contract and enabling forward and mutually recursive
+direct calls. Each generated function emits the required
   `wasm_stack_check(VMContext*)` prologue call.
 - The body compiler currently supports i32 parameters/results/locals; constants,
   local access, `drop`; arithmetic (`add/sub/mul`); signed/unsigned comparisons;
@@ -38,8 +38,8 @@ a drop-in replacement for the existing backend.
 - `Test/TestBackend.cpp` exposes an `AsmJitSession` through
   `WASMJIT_BACKEND=asmjit`, including i32 invocation marshalling, aggregate
   layout calculation, and the existing lane-wise SIMD diagnostic interface.
-- `Test/AsmjitModuleCompilerTests.cpp` instantiates a WAT fixture and executes
-  exported add/sub/mul/local functions, all expected to return 42.
+- `Test/AsmjitModuleCompilerTests.cpp` instantiates WAT fixtures and executes arithmetic, comparison, bitwise,
+  control-flow, direct-call, and memory32 cases, including an out-of-bounds trap.
 - Packed `i8`/`i16` storage retains its narrow 8-/16-bit representation.
   Arithmetic lowering must explicitly extend those values to `i32` before
   applying Wasm integer operations; the storage translator does not silently
