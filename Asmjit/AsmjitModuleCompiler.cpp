@@ -285,6 +285,35 @@ void asmjitDataDrop(WASM::VMContext* vm, uint32_t dataIndex) noexcept
     }
 }
 
+
+void asmjitTableInit(WASM::VMContext* vm, uint32_t elementIndex, uint32_t tableIndex,
+        uint32_t destination, uint32_t source, uint32_t length) noexcept
+{
+    if (vm == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit table.init VMContext is null");
+        return;
+    }
+    try {
+        reinterpret_cast<WASM::ModuleInstance*>(vm)->tableInit(
+                elementIndex, tableIndex, destination, source, length);
+    } catch (...) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit table.init helper failed");
+    }
+}
+
+void asmjitElemDrop(WASM::VMContext* vm, uint32_t elementIndex) noexcept
+{
+    if (vm == nullptr) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit elem.drop VMContext is null");
+        return;
+    }
+    try {
+        reinterpret_cast<WASM::ModuleInstance*>(vm)->elemDrop(elementIndex);
+    } catch (...) {
+        WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit elem.drop helper failed");
+    }
+}
+
 asmjit::FuncSignature stackCheckSignature()
 {
 	asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
@@ -875,6 +904,53 @@ protected:
         emitPendingTrapReturn();
     }
 
+
+
+
+    void dispatchTableInit(uint32_t elementIndex, WASM::TableIdx tableIndex) override
+    {
+        if (static_cast<size_t>(tableIndex) >= module.tableCount())
+            throw std::runtime_error("AsmJit table.init table index is out of range");
+        if (values.size() < 3)
+            throw std::runtime_error("AsmJit table.init operand stack underflow");
+        const auto length = values.back(); values.pop_back();
+        const auto source = values.back(); values.pop_back();
+        const auto destination = values.back(); values.pop_back();
+        asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+        signature.set_ret(asmjit::TypeId::kVoid);
+        for (int i = 0; i < 6; ++i)
+            signature.add_arg(i == 0 ? asmjit::TypeId::kUIntPtr : asmjit::TypeId::kUInt32);
+        asmjit::InvokeNode* invoke = nullptr;
+        checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitTableInit), signature),
+                "AsmJit table.init helper call emission failed");
+        invoke->set_arg(0, vmContext);
+        auto element = compiler.new_gp32("tableInitElementIndex");
+        auto table = compiler.new_gp32("tableInitTableIndex");
+        checkError(compiler.mov(element, elementIndex), "AsmJit table.init element index failed");
+        checkError(compiler.mov(table, static_cast<uint32_t>(tableIndex)), "AsmJit table.init table index failed");
+        invoke->set_arg(1, element);
+        invoke->set_arg(2, table);
+        invoke->set_arg(3, destination);
+        invoke->set_arg(4, source);
+        invoke->set_arg(5, length);
+        emitPendingTrapReturn();
+    }
+
+    void dispatchElemDrop(uint32_t elementIndex) override
+    {
+        asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+        signature.set_ret(asmjit::TypeId::kVoid);
+        signature.add_arg(asmjit::TypeId::kUIntPtr);
+        signature.add_arg(asmjit::TypeId::kUInt32);
+        asmjit::InvokeNode* invoke = nullptr;
+        checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(&asmjitElemDrop), signature),
+                "AsmJit elem.drop helper call emission failed");
+        invoke->set_arg(0, vmContext);
+        auto element = compiler.new_gp32("elementDropIndex");
+        checkError(compiler.mov(element, elementIndex), "AsmJit elem.drop index failed");
+        invoke->set_arg(1, element);
+        emitPendingTrapReturn();
+    }
 
 
 	void dispatchI32Load(WASM::MemArg arg) override { emitMemoryLoad(arg, 4, LoadKind::I32); }
