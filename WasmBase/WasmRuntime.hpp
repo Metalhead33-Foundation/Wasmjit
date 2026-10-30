@@ -238,7 +238,7 @@ Ret Runtime::callExport(ModuleInstance& instance, std::string_view name, Args&&.
 				" execution of one instance is not supported (ConcurrencyModel::Single,"
 				" docs/MULTI_AGENT_FEASIBILITY.md MF-2)");
 	struct CallGuard {
-		ModuleInstance& instance;
+		ModuleInstance& instance; //!< Field `instance` of CallGuard.
 /**
  * \brief Performs the CallGuard operation.
  * \return The value or status produced by this operation.
@@ -302,7 +302,7 @@ void Runtime::callExportWithResults(ModuleInstance& instance, std::string_view n
 				" execution of one instance is not supported (ConcurrencyModel::Single,"
 				" docs/MULTI_AGENT_FEASIBILITY.md MF-2)");
 	struct CallGuard {
-		ModuleInstance& instance;
+		ModuleInstance& instance; //!< Field `instance` of CallGuard.
 /**
  * \brief Performs the CallGuard operation.
  * \return The value or status produced by this operation.
