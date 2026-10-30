@@ -34,6 +34,48 @@ void requireI32(const WASM::ValueType& type, const char* role)
 				+ role);
 }
 
+int32_t asmjitI32DivS(int32_t lhs, int32_t rhs) noexcept
+{
+	if (rhs == 0) {
+		WASM::reportTrap(WASM::TrapKind::IntegerDivideByZero);
+		return 0;
+	}
+	if (lhs == INT32_MIN && rhs == -1) {
+		WASM::reportTrap(WASM::TrapKind::IntegerOverflow);
+		return 0;
+	}
+	return lhs / rhs;
+}
+
+uint32_t asmjitI32DivU(uint32_t lhs, uint32_t rhs) noexcept
+{
+	if (rhs == 0) {
+		WASM::reportTrap(WASM::TrapKind::IntegerDivideByZero);
+		return 0;
+	}
+	return lhs / rhs;
+}
+
+int32_t asmjitI32RemS(int32_t lhs, int32_t rhs) noexcept
+{
+	if (rhs == 0) {
+		WASM::reportTrap(WASM::TrapKind::IntegerDivideByZero);
+		return 0;
+	}
+	if (lhs == INT32_MIN && rhs == -1)
+		return 0;
+	return lhs % rhs;
+}
+
+uint32_t asmjitI32RemU(uint32_t lhs, uint32_t rhs) noexcept
+{
+	if (rhs == 0) {
+		WASM::reportTrap(WASM::TrapKind::IntegerDivideByZero);
+		return 0;
+	}
+	return lhs % rhs;
+}
+
 void* asmjitMemoryAddress(WASM::VMContext* vm, uint32_t memoryIndex,
 		uint32_t address, uint32_t offset, uint32_t width) noexcept
 {
@@ -414,6 +456,13 @@ protected:
 	void dispatchI32Extend8S() override { emitSignExtend(8); }
 	void dispatchI32Extend16S() override { emitSignExtend(16); }
 
+	void dispatchI32Clz() override { emitBitCount(BitCountOp::LeadingZeros); }
+	void dispatchI32Ctz() override { emitBitCount(BitCountOp::TrailingZeros); }
+	void dispatchI32DivS() override { emitCheckedBinaryCall(&asmjitI32DivS, "i32.div_s"); }
+	void dispatchI32DivU() override { emitCheckedBinaryCall(&asmjitI32DivU, "i32.div_u"); }
+	void dispatchI32RemS() override { emitCheckedBinaryCall(&asmjitI32RemS, "i32.rem_s"); }
+	void dispatchI32RemU() override { emitCheckedBinaryCall(&asmjitI32RemU, "i32.rem_u"); }
+
 	void dispatchI32Eqz() override
 	{
 		if (values.empty())
@@ -464,6 +513,7 @@ protected:
 	}
 
 private:
+	enum class BitCountOp { LeadingZeros, TrailingZeros };
 	enum class LoadKind { I32, I8Signed, I8Unsigned, I16Signed, I16Unsigned };
 
 	enum class ControlKind { Block, Loop, If };
@@ -600,6 +650,51 @@ private:
 		default:
 			throw std::runtime_error("AsmJit internal error: unsupported memory-store width");
 		}
+	}
+
+	void emitBitCount(BitCountOp operation)
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit i32 bit-count operand stack underflow");
+		auto source = values.back(); values.pop_back();
+		auto result = compiler.new_gp32("bitCount");
+		auto nonZero = compiler.new_label();
+		auto done = compiler.new_label();
+		checkError(compiler.test(source, source), "AsmJit bit-count zero test failed");
+		checkError(compiler.jnz(nonZero), "AsmJit bit-count nonzero branch failed");
+		checkError(compiler.mov(result, 32), "AsmJit bit-count zero result failed");
+		checkError(compiler.jmp(done), "AsmJit bit-count completion jump failed");
+		checkError(compiler.bind(nonZero), "AsmJit bit-count nonzero label failed");
+		if (operation == BitCountOp::LeadingZeros) {
+			checkError(compiler.bsr(result, source), "AsmJit i32.clz scan failed");
+			checkError(compiler.xor_(result, 31), "AsmJit i32.clz adjustment failed");
+		} else {
+			checkError(compiler.bsf(result, source), "AsmJit i32.ctz scan failed");
+		}
+		checkError(compiler.bind(done), "AsmJit bit-count result label failed");
+		values.push_back(result);
+	}
+
+	template <typename Function>
+	void emitCheckedBinaryCall(Function function, const char* operation)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error(std::string("AsmJit ") + operation + " operand stack underflow");
+		auto rhs = values.back(); values.pop_back();
+		auto lhs = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kInt32);
+		signature.add_arg(asmjit::TypeId::kInt32);
+		signature.add_arg(asmjit::TypeId::kInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(&invoke, reinterpret_cast<uint64_t>(function), signature),
+				"AsmJit checked arithmetic helper call emission failed");
+		invoke->set_arg(0, lhs);
+		invoke->set_arg(1, rhs);
+		auto result = compiler.new_gp32("checkedArithmeticResult");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
 	}
 
 	void emitSignExtend(uint32_t width)
