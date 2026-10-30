@@ -18,12 +18,12 @@
 namespace AsmJitBackend {
 
 /*!
- * \brief Compiles the initial straight-line i32 WebAssembly subset with AsmJit.
+ * \brief Compiles an initial i32 WebAssembly subset with AsmJit, including direct calls and checked memory32 access.
  *
  * The initial subset is deliberately narrow: i32 parameters/results/locals,
- * i32.const, local.get/set/tee, drop, i32.add/sub/mul, return and the
- * implicit function end. Unsupported instructions fail compilation rather
- * than being ignored. The compiler borrows Context, which must outlive every
+ * integer comparisons and bit operations, void structured control flow,
+ * direct calls, and checked memory32 i32 loads/stores. Unsupported instructions
+ * and block signatures fail compilation rather than being ignored. The compiler borrows Context, which must outlive every
  * instance and entry point it creates.
  */
 class ModuleCompiler final : public WASM::ModuleInstantiator
@@ -46,7 +46,7 @@ protected:
 			WASM::ModuleInstanceInternals& internals) override;
 
 	/*!
-	 * \brief Declares all defined function records before compiling any body.
+	 * \brief Declares every internal function node before compiling any body, allowing forward and mutually recursive direct calls.
 	 * \param instance Runtime module instance.
 	 * \param module Parsed source module.
 	 * \param internals Backend state owned by the instance.
