@@ -1,4 +1,4 @@
-# `Asmjit/` — provisional AsmJit integration
+# `Asmjit/` — experimental AsmJit backend
 
 This directory contains an experimental, deliberately limited WebAssembly
 backend. It implements the four `ModuleInstantiator` hooks and executes an
@@ -91,7 +91,7 @@ upstream repository so that `asmjit.pc` is visible through `PKG_CONFIG_PATH`.
 1. Extend structured control flow to result-bearing blocks, full branch-stack semantics, and unreachable-stack polymorphism.
 2. Add tail-call integration, cross-instance Wasm-import tests, and broader call ABI support.
 3. Expand linear memory to the remaining load/store widths, memory64, and bulk-memory operations.
-4. Add i64 arithmetic, conversions, globals, references/GC, exceptions, continuations, and Wasm SIMD lowering.
+4. Add i64/floating-point arithmetic and conversions, non-i32 globals, references/GC, exceptions, continuations, and Wasm SIMD lowering.
 5. Meet every applicable item in
    [`docs/BACKEND_WORK_ORDER.md`](../docs/BACKEND_WORK_ORDER.md) before calling
    the backend complete.
