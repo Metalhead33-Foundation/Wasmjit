@@ -47,6 +47,7 @@ TEST_CASE("AsmJit ModuleInstantiator compiles straight-line i32 functions", "[as
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("branch_if"), 0) == 20);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("branch")) == 10);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("call_forward"), 21) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("mutual_recursion"), 20) == 42);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("store_load"), 64, 0x12345678) == 0x12345678);
 	CHECK(WASM::callCallable<std::int32_t>(*instance->exportedFunction("store8_load8"), 80, 0x1AB) == 0xAB);
 	CHECK_THROWS(WASM::callCallable<std::int32_t>(*instance->exportedFunction("load_oob"), -1));
