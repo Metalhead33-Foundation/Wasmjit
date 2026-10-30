@@ -21,244 +21,244 @@ namespace WASM {
 //! ---------------------------------------------------------------------------
 enum class Opcode : uint8_t {
 	//! --- Parametric / control (low range) ---
-	Unreachable         = 0x00,
-	Nop                 = 0x01,
-	Block               = 0x02,
-	Loop                = 0x03,
-	If                  = 0x04,
-	Else                = 0x05,
+	Unreachable = 0x00, //!< Binary opcode mnemonic `Unreachable`.
+	Nop = 0x01, //!< Binary opcode mnemonic `Nop`.
+	Block = 0x02, //!< Binary opcode mnemonic `Block`.
+	Loop = 0x03, //!< Binary opcode mnemonic `Loop`.
+	If = 0x04, //!< Binary opcode mnemonic `If`.
+	Else = 0x05, //!< Binary opcode mnemonic `Else`.
 	//! 0x06-0x07 reserved
-	Throw               = 0x08,
+	Throw = 0x08, //!< Binary opcode mnemonic `Throw`.
 	//! 0x09 reserved
-	ThrowRef            = 0x0A,
+	ThrowRef = 0x0A, //!< Binary opcode mnemonic `ThrowRef`.
 	End                 = 0x0B,  //!< terminates block/loop/if/try_table
-	Br                  = 0x0C,
-	BrIf                = 0x0D,
-	BrTable             = 0x0E,
-	Return              = 0x0F,
+	Br = 0x0C, //!< Binary opcode mnemonic `Br`.
+	BrIf = 0x0D, //!< Binary opcode mnemonic `BrIf`.
+	BrTable = 0x0E, //!< Binary opcode mnemonic `BrTable`.
+	Return = 0x0F, //!< Binary opcode mnemonic `Return`.
 
 	//! --- Call ---
-	Call                = 0x10,
-	CallIndirect        = 0x11,
-	ReturnCall          = 0x12,
-	ReturnCallIndirect  = 0x13,
-	CallRef             = 0x14,
-	ReturnCallRef       = 0x15,
+	Call = 0x10, //!< Binary opcode mnemonic `Call`.
+	CallIndirect = 0x11, //!< Binary opcode mnemonic `CallIndirect`.
+	ReturnCall = 0x12, //!< Binary opcode mnemonic `ReturnCall`.
+	ReturnCallIndirect = 0x13, //!< Binary opcode mnemonic `ReturnCallIndirect`.
+	CallRef = 0x14, //!< Binary opcode mnemonic `CallRef`.
+	ReturnCallRef = 0x15, //!< Binary opcode mnemonic `ReturnCallRef`.
 	//! 0x16-0x18 reserved
-	TryTable            = 0x1F,
+	TryTable = 0x1F, //!< Binary opcode mnemonic `TryTable`.
 
 	//! --- Parametric ---
-	Drop                = 0x1A,
-	Select              = 0x1B,
+	Drop = 0x1A, //!< Binary opcode mnemonic `Drop`.
+	Select = 0x1B, //!< Binary opcode mnemonic `Select`.
 	SelectT             = 0x1C,  //!< select with explicit type list
 	//! 0x1D-0x1E reserved
 
 	//! --- Variable ---
-	LocalGet            = 0x20,
-	LocalSet            = 0x21,
-	LocalTee            = 0x22,
-	GlobalGet           = 0x23,
-	GlobalSet           = 0x24,
+	LocalGet = 0x20, //!< Binary opcode mnemonic `LocalGet`.
+	LocalSet = 0x21, //!< Binary opcode mnemonic `LocalSet`.
+	LocalTee = 0x22, //!< Binary opcode mnemonic `LocalTee`.
+	GlobalGet = 0x23, //!< Binary opcode mnemonic `GlobalGet`.
+	GlobalSet = 0x24, //!< Binary opcode mnemonic `GlobalSet`.
 
 	//! --- Table ---
-	TableGet            = 0x25,
-	TableSet            = 0x26,
+	TableGet = 0x25, //!< Binary opcode mnemonic `TableGet`.
+	TableSet = 0x26, //!< Binary opcode mnemonic `TableSet`.
 	//! 0x27 reserved
 
 	//! --- Memory loads ---
-	I32Load             = 0x28,
-	I64Load             = 0x29,
-	F32Load             = 0x2A,
-	F64Load             = 0x2B,
-	I32Load8S           = 0x2C,
-	I32Load8U           = 0x2D,
-	I32Load16S          = 0x2E,
-	I32Load16U          = 0x2F,
-	I64Load8S           = 0x30,
-	I64Load8U           = 0x31,
-	I64Load16S          = 0x32,
-	I64Load16U          = 0x33,
-	I64Load32S          = 0x34,
-	I64Load32U          = 0x35,
+	I32Load = 0x28, //!< Binary opcode mnemonic `I32Load`.
+	I64Load = 0x29, //!< Binary opcode mnemonic `I64Load`.
+	F32Load = 0x2A, //!< Binary opcode mnemonic `F32Load`.
+	F64Load = 0x2B, //!< Binary opcode mnemonic `F64Load`.
+	I32Load8S = 0x2C, //!< Binary opcode mnemonic `I32Load8S`.
+	I32Load8U = 0x2D, //!< Binary opcode mnemonic `I32Load8U`.
+	I32Load16S = 0x2E, //!< Binary opcode mnemonic `I32Load16S`.
+	I32Load16U = 0x2F, //!< Binary opcode mnemonic `I32Load16U`.
+	I64Load8S = 0x30, //!< Binary opcode mnemonic `I64Load8S`.
+	I64Load8U = 0x31, //!< Binary opcode mnemonic `I64Load8U`.
+	I64Load16S = 0x32, //!< Binary opcode mnemonic `I64Load16S`.
+	I64Load16U = 0x33, //!< Binary opcode mnemonic `I64Load16U`.
+	I64Load32S = 0x34, //!< Binary opcode mnemonic `I64Load32S`.
+	I64Load32U = 0x35, //!< Binary opcode mnemonic `I64Load32U`.
 
 	//! --- Memory stores ---
-	I32Store            = 0x36,
-	I64Store            = 0x37,
-	F32Store            = 0x38,
-	F64Store            = 0x39,
-	I32Store8           = 0x3A,
-	I32Store16          = 0x3B,
-	I64Store8           = 0x3C,
-	I64Store16          = 0x3D,
-	I64Store32          = 0x3E,
+	I32Store = 0x36, //!< Binary opcode mnemonic `I32Store`.
+	I64Store = 0x37, //!< Binary opcode mnemonic `I64Store`.
+	F32Store = 0x38, //!< Binary opcode mnemonic `F32Store`.
+	F64Store = 0x39, //!< Binary opcode mnemonic `F64Store`.
+	I32Store8 = 0x3A, //!< Binary opcode mnemonic `I32Store8`.
+	I32Store16 = 0x3B, //!< Binary opcode mnemonic `I32Store16`.
+	I64Store8 = 0x3C, //!< Binary opcode mnemonic `I64Store8`.
+	I64Store16 = 0x3D, //!< Binary opcode mnemonic `I64Store16`.
+	I64Store32 = 0x3E, //!< Binary opcode mnemonic `I64Store32`.
 
 	//! --- Memory size / grow ---
 	//! NOTE: 0x40 is also reused as the "empty blocktype" sentinel inside
 	//! blocktype immediates; context determines its interpretation.
-	MemorySize          = 0x3F,
-	MemoryGrow          = 0x40,
+	MemorySize = 0x3F, //!< Binary opcode mnemonic `MemorySize`.
+	MemoryGrow = 0x40, //!< Binary opcode mnemonic `MemoryGrow`.
 
 	//! --- Numeric: const ---
-	I32Const            = 0x41,
-	I64Const            = 0x42,
-	F32Const            = 0x43,
-	F64Const            = 0x44,
+	I32Const = 0x41, //!< Binary opcode mnemonic `I32Const`.
+	I64Const = 0x42, //!< Binary opcode mnemonic `I64Const`.
+	F32Const = 0x43, //!< Binary opcode mnemonic `F32Const`.
+	F64Const = 0x44, //!< Binary opcode mnemonic `F64Const`.
 
 	//! --- Numeric: i32 comparison ---
-	I32Eqz              = 0x45,
-	I32Eq               = 0x46,
-	I32Ne               = 0x47,
-	I32LtS              = 0x48,
-	I32LtU              = 0x49,
-	I32GtS              = 0x4A,
-	I32GtU              = 0x4B,
-	I32LeS              = 0x4C,
-	I32LeU              = 0x4D,
-	I32GeS              = 0x4E,
-	I32GeU              = 0x4F,
+	I32Eqz = 0x45, //!< Binary opcode mnemonic `I32Eqz`.
+	I32Eq = 0x46, //!< Binary opcode mnemonic `I32Eq`.
+	I32Ne = 0x47, //!< Binary opcode mnemonic `I32Ne`.
+	I32LtS = 0x48, //!< Binary opcode mnemonic `I32LtS`.
+	I32LtU = 0x49, //!< Binary opcode mnemonic `I32LtU`.
+	I32GtS = 0x4A, //!< Binary opcode mnemonic `I32GtS`.
+	I32GtU = 0x4B, //!< Binary opcode mnemonic `I32GtU`.
+	I32LeS = 0x4C, //!< Binary opcode mnemonic `I32LeS`.
+	I32LeU = 0x4D, //!< Binary opcode mnemonic `I32LeU`.
+	I32GeS = 0x4E, //!< Binary opcode mnemonic `I32GeS`.
+	I32GeU = 0x4F, //!< Binary opcode mnemonic `I32GeU`.
 
 	//! --- Numeric: i64 comparison ---
-	I64Eqz              = 0x50,
-	I64Eq               = 0x51,
-	I64Ne               = 0x52,
-	I64LtS              = 0x53,
-	I64LtU              = 0x54,
-	I64GtS              = 0x55,
-	I64GtU              = 0x56,
-	I64LeS              = 0x57,
-	I64LeU              = 0x58,
-	I64GeS              = 0x59,
-	I64GeU              = 0x5A,
+	I64Eqz = 0x50, //!< Binary opcode mnemonic `I64Eqz`.
+	I64Eq = 0x51, //!< Binary opcode mnemonic `I64Eq`.
+	I64Ne = 0x52, //!< Binary opcode mnemonic `I64Ne`.
+	I64LtS = 0x53, //!< Binary opcode mnemonic `I64LtS`.
+	I64LtU = 0x54, //!< Binary opcode mnemonic `I64LtU`.
+	I64GtS = 0x55, //!< Binary opcode mnemonic `I64GtS`.
+	I64GtU = 0x56, //!< Binary opcode mnemonic `I64GtU`.
+	I64LeS = 0x57, //!< Binary opcode mnemonic `I64LeS`.
+	I64LeU = 0x58, //!< Binary opcode mnemonic `I64LeU`.
+	I64GeS = 0x59, //!< Binary opcode mnemonic `I64GeS`.
+	I64GeU = 0x5A, //!< Binary opcode mnemonic `I64GeU`.
 
 	//! --- Numeric: f32 comparison ---
-	F32Eq               = 0x5B,
-	F32Ne               = 0x5C,
-	F32Lt               = 0x5D,
-	F32Gt               = 0x5E,
-	F32Le               = 0x5F,
-	F32Ge               = 0x60,
+	F32Eq = 0x5B, //!< Binary opcode mnemonic `F32Eq`.
+	F32Ne = 0x5C, //!< Binary opcode mnemonic `F32Ne`.
+	F32Lt = 0x5D, //!< Binary opcode mnemonic `F32Lt`.
+	F32Gt = 0x5E, //!< Binary opcode mnemonic `F32Gt`.
+	F32Le = 0x5F, //!< Binary opcode mnemonic `F32Le`.
+	F32Ge = 0x60, //!< Binary opcode mnemonic `F32Ge`.
 
 	//! --- Numeric: f64 comparison ---
-	F64Eq               = 0x61,
-	F64Ne               = 0x62,
-	F64Lt               = 0x63,
-	F64Gt               = 0x64,
-	F64Le               = 0x65,
-	F64Ge               = 0x66,
+	F64Eq = 0x61, //!< Binary opcode mnemonic `F64Eq`.
+	F64Ne = 0x62, //!< Binary opcode mnemonic `F64Ne`.
+	F64Lt = 0x63, //!< Binary opcode mnemonic `F64Lt`.
+	F64Gt = 0x64, //!< Binary opcode mnemonic `F64Gt`.
+	F64Le = 0x65, //!< Binary opcode mnemonic `F64Le`.
+	F64Ge = 0x66, //!< Binary opcode mnemonic `F64Ge`.
 
 	//! --- Numeric: i32 arithmetic / bitwise ---
-	I32Clz              = 0x67,
-	I32Ctz              = 0x68,
-	I32Popcnt           = 0x69,
-	I32Add              = 0x6A,
-	I32Sub              = 0x6B,
-	I32Mul              = 0x6C,
-	I32DivS             = 0x6D,
-	I32DivU             = 0x6E,
-	I32RemS             = 0x6F,
-	I32RemU             = 0x70,
-	I32And              = 0x71,
-	I32Or               = 0x72,
-	I32Xor              = 0x73,
-	I32Shl              = 0x74,
-	I32ShrS             = 0x75,
-	I32ShrU             = 0x76,
-	I32Rotl             = 0x77,
-	I32Rotr             = 0x78,
+	I32Clz = 0x67, //!< Binary opcode mnemonic `I32Clz`.
+	I32Ctz = 0x68, //!< Binary opcode mnemonic `I32Ctz`.
+	I32Popcnt = 0x69, //!< Binary opcode mnemonic `I32Popcnt`.
+	I32Add = 0x6A, //!< Binary opcode mnemonic `I32Add`.
+	I32Sub = 0x6B, //!< Binary opcode mnemonic `I32Sub`.
+	I32Mul = 0x6C, //!< Binary opcode mnemonic `I32Mul`.
+	I32DivS = 0x6D, //!< Binary opcode mnemonic `I32DivS`.
+	I32DivU = 0x6E, //!< Binary opcode mnemonic `I32DivU`.
+	I32RemS = 0x6F, //!< Binary opcode mnemonic `I32RemS`.
+	I32RemU = 0x70, //!< Binary opcode mnemonic `I32RemU`.
+	I32And = 0x71, //!< Binary opcode mnemonic `I32And`.
+	I32Or = 0x72, //!< Binary opcode mnemonic `I32Or`.
+	I32Xor = 0x73, //!< Binary opcode mnemonic `I32Xor`.
+	I32Shl = 0x74, //!< Binary opcode mnemonic `I32Shl`.
+	I32ShrS = 0x75, //!< Binary opcode mnemonic `I32ShrS`.
+	I32ShrU = 0x76, //!< Binary opcode mnemonic `I32ShrU`.
+	I32Rotl = 0x77, //!< Binary opcode mnemonic `I32Rotl`.
+	I32Rotr = 0x78, //!< Binary opcode mnemonic `I32Rotr`.
 
 	//! --- Numeric: i64 arithmetic / bitwise ---
-	I64Clz              = 0x79,
-	I64Ctz              = 0x7A,
-	I64Popcnt           = 0x7B,
-	I64Add              = 0x7C,
-	I64Sub              = 0x7D,
-	I64Mul              = 0x7E,
-	I64DivS             = 0x7F,
-	I64DivU             = 0x80,
-	I64RemS             = 0x81,
-	I64RemU             = 0x82,
-	I64And              = 0x83,
-	I64Or               = 0x84,
-	I64Xor              = 0x85,
-	I64Shl              = 0x86,
-	I64ShrS             = 0x87,
-	I64ShrU             = 0x88,
-	I64Rotl             = 0x89,
-	I64Rotr             = 0x8A,
+	I64Clz = 0x79, //!< Binary opcode mnemonic `I64Clz`.
+	I64Ctz = 0x7A, //!< Binary opcode mnemonic `I64Ctz`.
+	I64Popcnt = 0x7B, //!< Binary opcode mnemonic `I64Popcnt`.
+	I64Add = 0x7C, //!< Binary opcode mnemonic `I64Add`.
+	I64Sub = 0x7D, //!< Binary opcode mnemonic `I64Sub`.
+	I64Mul = 0x7E, //!< Binary opcode mnemonic `I64Mul`.
+	I64DivS = 0x7F, //!< Binary opcode mnemonic `I64DivS`.
+	I64DivU = 0x80, //!< Binary opcode mnemonic `I64DivU`.
+	I64RemS = 0x81, //!< Binary opcode mnemonic `I64RemS`.
+	I64RemU = 0x82, //!< Binary opcode mnemonic `I64RemU`.
+	I64And = 0x83, //!< Binary opcode mnemonic `I64And`.
+	I64Or = 0x84, //!< Binary opcode mnemonic `I64Or`.
+	I64Xor = 0x85, //!< Binary opcode mnemonic `I64Xor`.
+	I64Shl = 0x86, //!< Binary opcode mnemonic `I64Shl`.
+	I64ShrS = 0x87, //!< Binary opcode mnemonic `I64ShrS`.
+	I64ShrU = 0x88, //!< Binary opcode mnemonic `I64ShrU`.
+	I64Rotl = 0x89, //!< Binary opcode mnemonic `I64Rotl`.
+	I64Rotr = 0x8A, //!< Binary opcode mnemonic `I64Rotr`.
 
 	//! --- Numeric: f32 arithmetic ---
-	F32Abs              = 0x8B,
-	F32Neg              = 0x8C,
-	F32Ceil             = 0x8D,
-	F32Floor            = 0x8E,
-	F32Trunc            = 0x8F,
-	F32Nearest          = 0x90,
-	F32Sqrt             = 0x91,
-	F32Add              = 0x92,
-	F32Sub              = 0x93,
-	F32Mul              = 0x94,
-	F32Div              = 0x95,
-	F32Min              = 0x96,
-	F32Max              = 0x97,
-	F32Copysign         = 0x98,
+	F32Abs = 0x8B, //!< Binary opcode mnemonic `F32Abs`.
+	F32Neg = 0x8C, //!< Binary opcode mnemonic `F32Neg`.
+	F32Ceil = 0x8D, //!< Binary opcode mnemonic `F32Ceil`.
+	F32Floor = 0x8E, //!< Binary opcode mnemonic `F32Floor`.
+	F32Trunc = 0x8F, //!< Binary opcode mnemonic `F32Trunc`.
+	F32Nearest = 0x90, //!< Binary opcode mnemonic `F32Nearest`.
+	F32Sqrt = 0x91, //!< Binary opcode mnemonic `F32Sqrt`.
+	F32Add = 0x92, //!< Binary opcode mnemonic `F32Add`.
+	F32Sub = 0x93, //!< Binary opcode mnemonic `F32Sub`.
+	F32Mul = 0x94, //!< Binary opcode mnemonic `F32Mul`.
+	F32Div = 0x95, //!< Binary opcode mnemonic `F32Div`.
+	F32Min = 0x96, //!< Binary opcode mnemonic `F32Min`.
+	F32Max = 0x97, //!< Binary opcode mnemonic `F32Max`.
+	F32Copysign = 0x98, //!< Binary opcode mnemonic `F32Copysign`.
 
 	//! --- Numeric: f64 arithmetic ---
-	F64Abs              = 0x99,
-	F64Neg              = 0x9A,
-	F64Ceil             = 0x9B,
-	F64Floor            = 0x9C,
-	F64Trunc            = 0x9D,
-	F64Nearest          = 0x9E,
-	F64Sqrt             = 0x9F,
-	F64Add              = 0xA0,
-	F64Sub              = 0xA1,
-	F64Mul              = 0xA2,
-	F64Div              = 0xA3,
-	F64Min              = 0xA4,
-	F64Max              = 0xA5,
-	F64Copysign         = 0xA6,
+	F64Abs = 0x99, //!< Binary opcode mnemonic `F64Abs`.
+	F64Neg = 0x9A, //!< Binary opcode mnemonic `F64Neg`.
+	F64Ceil = 0x9B, //!< Binary opcode mnemonic `F64Ceil`.
+	F64Floor = 0x9C, //!< Binary opcode mnemonic `F64Floor`.
+	F64Trunc = 0x9D, //!< Binary opcode mnemonic `F64Trunc`.
+	F64Nearest = 0x9E, //!< Binary opcode mnemonic `F64Nearest`.
+	F64Sqrt = 0x9F, //!< Binary opcode mnemonic `F64Sqrt`.
+	F64Add = 0xA0, //!< Binary opcode mnemonic `F64Add`.
+	F64Sub = 0xA1, //!< Binary opcode mnemonic `F64Sub`.
+	F64Mul = 0xA2, //!< Binary opcode mnemonic `F64Mul`.
+	F64Div = 0xA3, //!< Binary opcode mnemonic `F64Div`.
+	F64Min = 0xA4, //!< Binary opcode mnemonic `F64Min`.
+	F64Max = 0xA5, //!< Binary opcode mnemonic `F64Max`.
+	F64Copysign = 0xA6, //!< Binary opcode mnemonic `F64Copysign`.
 
 	//! --- Numeric: conversion / reinterpret ---
-	I32WrapI64          = 0xA7,
-	I32TruncF32S        = 0xA8,
-	I32TruncF32U        = 0xA9,
-	I32TruncF64S        = 0xAA,
-	I32TruncF64U        = 0xAB,
-	I64ExtendI32S       = 0xAC,
-	I64ExtendI32U       = 0xAD,
-	I64TruncF32S        = 0xAE,
-	I64TruncF32U        = 0xAF,
-	I64TruncF64S        = 0xB0,
-	I64TruncF64U        = 0xB1,
-	F32ConvertI32S      = 0xB2,
-	F32ConvertI32U      = 0xB3,
-	F32ConvertI64S      = 0xB4,
-	F32ConvertI64U      = 0xB5,
-	F32DemoteF64        = 0xB6,
-	F64ConvertI32S      = 0xB7,
-	F64ConvertI32U      = 0xB8,
-	F64ConvertI64S      = 0xB9,
-	F64ConvertI64U      = 0xBA,
-	F64PromoteF32       = 0xBB,
-	I32ReinterpretF32   = 0xBC,
-	I64ReinterpretF64   = 0xBD,
-	F32ReinterpretI32   = 0xBE,
-	F64ReinterpretI64   = 0xBF,
+	I32WrapI64 = 0xA7, //!< Binary opcode mnemonic `I32WrapI64`.
+	I32TruncF32S = 0xA8, //!< Binary opcode mnemonic `I32TruncF32S`.
+	I32TruncF32U = 0xA9, //!< Binary opcode mnemonic `I32TruncF32U`.
+	I32TruncF64S = 0xAA, //!< Binary opcode mnemonic `I32TruncF64S`.
+	I32TruncF64U = 0xAB, //!< Binary opcode mnemonic `I32TruncF64U`.
+	I64ExtendI32S = 0xAC, //!< Binary opcode mnemonic `I64ExtendI32S`.
+	I64ExtendI32U = 0xAD, //!< Binary opcode mnemonic `I64ExtendI32U`.
+	I64TruncF32S = 0xAE, //!< Binary opcode mnemonic `I64TruncF32S`.
+	I64TruncF32U = 0xAF, //!< Binary opcode mnemonic `I64TruncF32U`.
+	I64TruncF64S = 0xB0, //!< Binary opcode mnemonic `I64TruncF64S`.
+	I64TruncF64U = 0xB1, //!< Binary opcode mnemonic `I64TruncF64U`.
+	F32ConvertI32S = 0xB2, //!< Binary opcode mnemonic `F32ConvertI32S`.
+	F32ConvertI32U = 0xB3, //!< Binary opcode mnemonic `F32ConvertI32U`.
+	F32ConvertI64S = 0xB4, //!< Binary opcode mnemonic `F32ConvertI64S`.
+	F32ConvertI64U = 0xB5, //!< Binary opcode mnemonic `F32ConvertI64U`.
+	F32DemoteF64 = 0xB6, //!< Binary opcode mnemonic `F32DemoteF64`.
+	F64ConvertI32S = 0xB7, //!< Binary opcode mnemonic `F64ConvertI32S`.
+	F64ConvertI32U = 0xB8, //!< Binary opcode mnemonic `F64ConvertI32U`.
+	F64ConvertI64S = 0xB9, //!< Binary opcode mnemonic `F64ConvertI64S`.
+	F64ConvertI64U = 0xBA, //!< Binary opcode mnemonic `F64ConvertI64U`.
+	F64PromoteF32 = 0xBB, //!< Binary opcode mnemonic `F64PromoteF32`.
+	I32ReinterpretF32 = 0xBC, //!< Binary opcode mnemonic `I32ReinterpretF32`.
+	I64ReinterpretF64 = 0xBD, //!< Binary opcode mnemonic `I64ReinterpretF64`.
+	F32ReinterpretI32 = 0xBE, //!< Binary opcode mnemonic `F32ReinterpretI32`.
+	F64ReinterpretI64 = 0xBF, //!< Binary opcode mnemonic `F64ReinterpretI64`.
 
 	//! --- Numeric: sign-extension (MVP+ extension) ---
-	I32Extend8S         = 0xC0,
-	I32Extend16S        = 0xC1,
-	I64Extend8S         = 0xC2,
-	I64Extend16S        = 0xC3,
-	I64Extend32S        = 0xC4,
+	I32Extend8S = 0xC0, //!< Binary opcode mnemonic `I32Extend8S`.
+	I32Extend16S = 0xC1, //!< Binary opcode mnemonic `I32Extend16S`.
+	I64Extend8S = 0xC2, //!< Binary opcode mnemonic `I64Extend8S`.
+	I64Extend16S = 0xC3, //!< Binary opcode mnemonic `I64Extend16S`.
+	I64Extend32S = 0xC4, //!< Binary opcode mnemonic `I64Extend32S`.
 	//! 0xC5-0xCF reserved
 
 	//! --- Reference instructions (0xD0-0xD6) ---
 	RefNull             = 0xD0,  //!< followed by heaptype
-	RefIsNull           = 0xD1,
+	RefIsNull = 0xD1, //!< Binary opcode mnemonic `RefIsNull`.
 	RefFunc             = 0xD2,  //!< followed by funcidx
-	RefEq               = 0xD3,
-	RefAsNonNull        = 0xD4,
+	RefEq = 0xD3, //!< Binary opcode mnemonic `RefEq`.
+	RefAsNonNull = 0xD4, //!< Binary opcode mnemonic `RefAsNonNull`.
 	BrOnNull            = 0xD5,  //!< followed by labelidx
 	BrOnNonNull         = 0xD6,  //!< followed by labelidx
 	//! 0xD7-0xDF reserved
@@ -266,13 +266,13 @@ enum class Opcode : uint8_t {
 	//! Stack switching (docs/proposals/STACK_SWITCHING.md SS-0). The proposal
 	//! assigns these encodings, but the runtime stack model is not implemented;
 	//! the dispatcher rejects them with a named error.
-	ContNew             = 0xE0,
-	ContBind            = 0xE1,
-	Suspend             = 0xE2,
-	Resume              = 0xE3,
-	ResumeThrow         = 0xE4,
-	ResumeThrowRef      = 0xE5,
-	Switch              = 0xE6,
+	ContNew = 0xE0, //!< Binary opcode mnemonic `ContNew`.
+	ContBind = 0xE1, //!< Binary opcode mnemonic `ContBind`.
+	Suspend = 0xE2, //!< Binary opcode mnemonic `Suspend`.
+	Resume = 0xE3, //!< Binary opcode mnemonic `Resume`.
+	ResumeThrow = 0xE4, //!< Binary opcode mnemonic `ResumeThrow`.
+	ResumeThrowRef = 0xE5, //!< Binary opcode mnemonic `ResumeThrowRef`.
+	Switch = 0xE6, //!< Binary opcode mnemonic `Switch`.
 	//! 0xE7-0xFA reserved
 
 	//! --- Prefix bytes (not instructions themselves) ---
@@ -370,49 +370,49 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 //! ---------------------------------------------------------------------------
 enum class StringOpcode : uint32_t {
 	//! Core string instructions (implemented)
-	StringNewUtf8         = 0x80,
-	StringNewWtf16        = 0x81,
-	StringConst           = 0x82,
-	StringMeasureUtf8     = 0x83,
-	StringMeasureWtf8     = 0x84,
-	StringMeasureWtf16    = 0x85,
-	StringEncodeUtf8      = 0x86,
-	StringEncodeWtf16     = 0x87,
-	StringConcat          = 0x88,
-	StringEq              = 0x89,
-	StringIsUsvSequence   = 0x8A,
-	StringNewLossyUtf8    = 0x8B,
-	StringNewWtf8         = 0x8C,
-	StringEncodeLossyUtf8 = 0x8D,
-	StringEncodeWtf8      = 0x8E,
+	StringNewUtf8 = 0x80, //!< Binary opcode mnemonic `StringNewUtf8`.
+	StringNewWtf16 = 0x81, //!< Binary opcode mnemonic `StringNewWtf16`.
+	StringConst = 0x82, //!< Binary opcode mnemonic `StringConst`.
+	StringMeasureUtf8 = 0x83, //!< Binary opcode mnemonic `StringMeasureUtf8`.
+	StringMeasureWtf8 = 0x84, //!< Binary opcode mnemonic `StringMeasureWtf8`.
+	StringMeasureWtf16 = 0x85, //!< Binary opcode mnemonic `StringMeasureWtf16`.
+	StringEncodeUtf8 = 0x86, //!< Binary opcode mnemonic `StringEncodeUtf8`.
+	StringEncodeWtf16 = 0x87, //!< Binary opcode mnemonic `StringEncodeWtf16`.
+	StringConcat = 0x88, //!< Binary opcode mnemonic `StringConcat`.
+	StringEq = 0x89, //!< Binary opcode mnemonic `StringEq`.
+	StringIsUsvSequence = 0x8A, //!< Binary opcode mnemonic `StringIsUsvSequence`.
+	StringNewLossyUtf8 = 0x8B, //!< Binary opcode mnemonic `StringNewLossyUtf8`.
+	StringNewWtf8 = 0x8C, //!< Binary opcode mnemonic `StringNewWtf8`.
+	StringEncodeLossyUtf8 = 0x8D, //!< Binary opcode mnemonic `StringEncodeLossyUtf8`.
+	StringEncodeWtf8 = 0x8E, //!< Binary opcode mnemonic `StringEncodeWtf8`.
 
 	//! Views (decoded, not lowered yet)
-	StringAsWtf8             = 0x90,
-	StringViewWtf8Advance    = 0x91,
-	StringViewWtf8EncodeUtf8 = 0x92,
-	StringViewWtf8Slice      = 0x93,
-	StringViewWtf8EncodeLossyUtf8 = 0x94,
-	StringViewWtf8EncodeWtf8      = 0x95,
-	StringAsWtf16              = 0x98,
-	StringViewWtf16Length      = 0x99,
-	StringViewWtf16GetCodeUnit = 0x9A,
-	StringViewWtf16Encode      = 0x9B,
-	StringViewWtf16Slice       = 0x9C,
-	StringAsIter               = 0xA0,
-	StringViewIterNext         = 0xA1,
-	StringViewIterAdvance      = 0xA2,
-	StringViewIterRewind       = 0xA3,
-	StringViewIterSlice        = 0xA4,
+	StringAsWtf8 = 0x90, //!< Binary opcode mnemonic `StringAsWtf8`.
+	StringViewWtf8Advance = 0x91, //!< Binary opcode mnemonic `StringViewWtf8Advance`.
+	StringViewWtf8EncodeUtf8 = 0x92, //!< Binary opcode mnemonic `StringViewWtf8EncodeUtf8`.
+	StringViewWtf8Slice = 0x93, //!< Binary opcode mnemonic `StringViewWtf8Slice`.
+	StringViewWtf8EncodeLossyUtf8 = 0x94, //!< Binary opcode mnemonic `StringViewWtf8EncodeLossyUtf8`.
+	StringViewWtf8EncodeWtf8 = 0x95, //!< Binary opcode mnemonic `StringViewWtf8EncodeWtf8`.
+	StringAsWtf16 = 0x98, //!< Binary opcode mnemonic `StringAsWtf16`.
+	StringViewWtf16Length = 0x99, //!< Binary opcode mnemonic `StringViewWtf16Length`.
+	StringViewWtf16GetCodeUnit = 0x9A, //!< Binary opcode mnemonic `StringViewWtf16GetCodeUnit`.
+	StringViewWtf16Encode = 0x9B, //!< Binary opcode mnemonic `StringViewWtf16Encode`.
+	StringViewWtf16Slice = 0x9C, //!< Binary opcode mnemonic `StringViewWtf16Slice`.
+	StringAsIter = 0xA0, //!< Binary opcode mnemonic `StringAsIter`.
+	StringViewIterNext = 0xA1, //!< Binary opcode mnemonic `StringViewIterNext`.
+	StringViewIterAdvance = 0xA2, //!< Binary opcode mnemonic `StringViewIterAdvance`.
+	StringViewIterRewind = 0xA3, //!< Binary opcode mnemonic `StringViewIterRewind`.
+	StringViewIterSlice = 0xA4, //!< Binary opcode mnemonic `StringViewIterSlice`.
 
 	//! GC-array variants (docs/proposals/STRINGREF.md STR-6)
-	StringNewUtf8Array        = 0xB0,
-	StringNewWtf16Array       = 0xB1,
-	StringEncodeUtf8Array     = 0xB2,
-	StringEncodeWtf16Array    = 0xB3,
-	StringNewLossyUtf8Array   = 0xB4,
-	StringNewWtf8Array        = 0xB5,
-	StringEncodeLossyUtf8Array = 0xB6,
-	StringEncodeWtf8Array      = 0xB7
+	StringNewUtf8Array = 0xB0, //!< Binary opcode mnemonic `StringNewUtf8Array`.
+	StringNewWtf16Array = 0xB1, //!< Binary opcode mnemonic `StringNewWtf16Array`.
+	StringEncodeUtf8Array = 0xB2, //!< Binary opcode mnemonic `StringEncodeUtf8Array`.
+	StringEncodeWtf16Array = 0xB3, //!< Binary opcode mnemonic `StringEncodeWtf16Array`.
+	StringNewLossyUtf8Array = 0xB4, //!< Binary opcode mnemonic `StringNewLossyUtf8Array`.
+	StringNewWtf8Array = 0xB5, //!< Binary opcode mnemonic `StringNewWtf8Array`.
+	StringEncodeLossyUtf8Array = 0xB6, //!< Binary opcode mnemonic `StringEncodeLossyUtf8Array`.
+	StringEncodeWtf8Array = 0xB7, //!< Binary opcode mnemonic `StringEncodeWtf8Array`.
 };
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, StringOpcode right) {
 	return left.writeLEB128_enum(right);
@@ -462,13 +462,13 @@ enum class MiscOpcode : uint32_t {
 	//! Rounding-mode-control variants occupy 0x80–0xBB (NUM-2). They are
 	//! dispatched through one generic hook so the 60 entries do not need 60
 	//! virtual declarations.
-	RoundingFirst       = 0x80,
-	RoundingLast        = 0xBB,
+	RoundingFirst = 0x80, //!< Binary opcode mnemonic `RoundingFirst`.
+	RoundingLast = 0xBB, //!< Binary opcode mnemonic `RoundingLast`.
 
 	//! Instrument/tracing proposal: `i32.itt immediate`. The upstream overview
 	//! assigns no encoding, so this is the engine's documented provisional
 	//! encoding (docs/proposals/INSTRUMENT_TRACING.md IT-2).
-	I32Itt              = 0x100
+	I32Itt = 0x100, //!< Binary opcode mnemonic `I32Itt`.
 };
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, MiscOpcode right) {
 	return left.writeLEB128_enum(right);
@@ -516,268 +516,268 @@ enum class SIMDOpcode : uint32_t {
 	I8x16Swizzle                =  14,  //!< i8x16.swizzle
 
 	//! Splat (broadcast scalar to all lanes)
-	I8x16Splat                  =  15,
-	I16x8Splat                  =  16,
-	I32x4Splat                  =  17,
-	I64x2Splat                  =  18,
-	F32x4Splat                  =  19,
-	F64x2Splat                  =  20,
+	I8x16Splat = 15, //!< Binary opcode mnemonic `I8x16Splat`.
+	I16x8Splat = 16, //!< Binary opcode mnemonic `I16x8Splat`.
+	I32x4Splat = 17, //!< Binary opcode mnemonic `I32x4Splat`.
+	I64x2Splat = 18, //!< Binary opcode mnemonic `I64x2Splat`.
+	F32x4Splat = 19, //!< Binary opcode mnemonic `F32x4Splat`.
+	F64x2Splat = 20, //!< Binary opcode mnemonic `F64x2Splat`.
 
 	//! Extract / replace lane
 	I8x16ExtractLaneS           =  21,  //!< followed by laneidx
-	I8x16ExtractLaneU           =  22,
-	I8x16ReplaceLane            =  23,
-	I16x8ExtractLaneS           =  24,
-	I16x8ExtractLaneU           =  25,
-	I16x8ReplaceLane            =  26,
-	I32x4ExtractLane            =  27,
-	I32x4ReplaceLane            =  28,
-	I64x2ExtractLane            =  29,
-	I64x2ReplaceLane            =  30,
-	F32x4ExtractLane            =  31,
-	F32x4ReplaceLane            =  32,
-	F64x2ExtractLane            =  33,
-	F64x2ReplaceLane            =  34,
+	I8x16ExtractLaneU = 22, //!< Binary opcode mnemonic `I8x16ExtractLaneU`.
+	I8x16ReplaceLane = 23, //!< Binary opcode mnemonic `I8x16ReplaceLane`.
+	I16x8ExtractLaneS = 24, //!< Binary opcode mnemonic `I16x8ExtractLaneS`.
+	I16x8ExtractLaneU = 25, //!< Binary opcode mnemonic `I16x8ExtractLaneU`.
+	I16x8ReplaceLane = 26, //!< Binary opcode mnemonic `I16x8ReplaceLane`.
+	I32x4ExtractLane = 27, //!< Binary opcode mnemonic `I32x4ExtractLane`.
+	I32x4ReplaceLane = 28, //!< Binary opcode mnemonic `I32x4ReplaceLane`.
+	I64x2ExtractLane = 29, //!< Binary opcode mnemonic `I64x2ExtractLane`.
+	I64x2ReplaceLane = 30, //!< Binary opcode mnemonic `I64x2ReplaceLane`.
+	F32x4ExtractLane = 31, //!< Binary opcode mnemonic `F32x4ExtractLane`.
+	F32x4ReplaceLane = 32, //!< Binary opcode mnemonic `F32x4ReplaceLane`.
+	F64x2ExtractLane = 33, //!< Binary opcode mnemonic `F64x2ExtractLane`.
+	F64x2ReplaceLane = 34, //!< Binary opcode mnemonic `F64x2ReplaceLane`.
 
 	//! i8x16 comparison
-	I8x16Eq                     =  35,
-	I8x16Ne                     =  36,
-	I8x16LtS                    =  37,
-	I8x16LtU                    =  38,
-	I8x16GtS                    =  39,
-	I8x16GtU                    =  40,
-	I8x16LeS                    =  41,
-	I8x16LeU                    =  42,
-	I8x16GeS                    =  43,
-	I8x16GeU                    =  44,
+	I8x16Eq = 35, //!< Binary opcode mnemonic `I8x16Eq`.
+	I8x16Ne = 36, //!< Binary opcode mnemonic `I8x16Ne`.
+	I8x16LtS = 37, //!< Binary opcode mnemonic `I8x16LtS`.
+	I8x16LtU = 38, //!< Binary opcode mnemonic `I8x16LtU`.
+	I8x16GtS = 39, //!< Binary opcode mnemonic `I8x16GtS`.
+	I8x16GtU = 40, //!< Binary opcode mnemonic `I8x16GtU`.
+	I8x16LeS = 41, //!< Binary opcode mnemonic `I8x16LeS`.
+	I8x16LeU = 42, //!< Binary opcode mnemonic `I8x16LeU`.
+	I8x16GeS = 43, //!< Binary opcode mnemonic `I8x16GeS`.
+	I8x16GeU = 44, //!< Binary opcode mnemonic `I8x16GeU`.
 
 	//! i16x8 comparison
-	I16x8Eq                     =  45,
-	I16x8Ne                     =  46,
-	I16x8LtS                    =  47,
-	I16x8LtU                    =  48,
-	I16x8GtS                    =  49,
-	I16x8GtU                    =  50,
-	I16x8LeS                    =  51,
-	I16x8LeU                    =  52,
-	I16x8GeS                    =  53,
-	I16x8GeU                    =  54,
+	I16x8Eq = 45, //!< Binary opcode mnemonic `I16x8Eq`.
+	I16x8Ne = 46, //!< Binary opcode mnemonic `I16x8Ne`.
+	I16x8LtS = 47, //!< Binary opcode mnemonic `I16x8LtS`.
+	I16x8LtU = 48, //!< Binary opcode mnemonic `I16x8LtU`.
+	I16x8GtS = 49, //!< Binary opcode mnemonic `I16x8GtS`.
+	I16x8GtU = 50, //!< Binary opcode mnemonic `I16x8GtU`.
+	I16x8LeS = 51, //!< Binary opcode mnemonic `I16x8LeS`.
+	I16x8LeU = 52, //!< Binary opcode mnemonic `I16x8LeU`.
+	I16x8GeS = 53, //!< Binary opcode mnemonic `I16x8GeS`.
+	I16x8GeU = 54, //!< Binary opcode mnemonic `I16x8GeU`.
 
 	//! i32x4 comparison
-	I32x4Eq                     =  55,
-	I32x4Ne                     =  56,
-	I32x4LtS                    =  57,
-	I32x4LtU                    =  58,
-	I32x4GtS                    =  59,
-	I32x4GtU                    =  60,
-	I32x4LeS                    =  61,
-	I32x4LeU                    =  62,
-	I32x4GeS                    =  63,
-	I32x4GeU                    =  64,
+	I32x4Eq = 55, //!< Binary opcode mnemonic `I32x4Eq`.
+	I32x4Ne = 56, //!< Binary opcode mnemonic `I32x4Ne`.
+	I32x4LtS = 57, //!< Binary opcode mnemonic `I32x4LtS`.
+	I32x4LtU = 58, //!< Binary opcode mnemonic `I32x4LtU`.
+	I32x4GtS = 59, //!< Binary opcode mnemonic `I32x4GtS`.
+	I32x4GtU = 60, //!< Binary opcode mnemonic `I32x4GtU`.
+	I32x4LeS = 61, //!< Binary opcode mnemonic `I32x4LeS`.
+	I32x4LeU = 62, //!< Binary opcode mnemonic `I32x4LeU`.
+	I32x4GeS = 63, //!< Binary opcode mnemonic `I32x4GeS`.
+	I32x4GeU = 64, //!< Binary opcode mnemonic `I32x4GeU`.
 
 	//! f32x4 comparison
-	F32x4Eq                     =  65,
-	F32x4Ne                     =  66,
-	F32x4Lt                     =  67,
-	F32x4Gt                     =  68,
-	F32x4Le                     =  69,
-	F32x4Ge                     =  70,
+	F32x4Eq = 65, //!< Binary opcode mnemonic `F32x4Eq`.
+	F32x4Ne = 66, //!< Binary opcode mnemonic `F32x4Ne`.
+	F32x4Lt = 67, //!< Binary opcode mnemonic `F32x4Lt`.
+	F32x4Gt = 68, //!< Binary opcode mnemonic `F32x4Gt`.
+	F32x4Le = 69, //!< Binary opcode mnemonic `F32x4Le`.
+	F32x4Ge = 70, //!< Binary opcode mnemonic `F32x4Ge`.
 
 	//! f64x2 comparison
-	F64x2Eq                     =  71,
-	F64x2Ne                     =  72,
-	F64x2Lt                     =  73,
-	F64x2Gt                     =  74,
-	F64x2Le                     =  75,
-	F64x2Ge                     =  76,
+	F64x2Eq = 71, //!< Binary opcode mnemonic `F64x2Eq`.
+	F64x2Ne = 72, //!< Binary opcode mnemonic `F64x2Ne`.
+	F64x2Lt = 73, //!< Binary opcode mnemonic `F64x2Lt`.
+	F64x2Gt = 74, //!< Binary opcode mnemonic `F64x2Gt`.
+	F64x2Le = 75, //!< Binary opcode mnemonic `F64x2Le`.
+	F64x2Ge = 76, //!< Binary opcode mnemonic `F64x2Ge`.
 
 	//! v128 bitwise
-	V128Not                     =  77,
-	V128And                     =  78,
-	V128AndNot                  =  79,
-	V128Or                      =  80,
-	V128Xor                     =  81,
-	V128Bitselect               =  82,
-	V128AnyTrue                 =  83,
+	V128Not = 77, //!< Binary opcode mnemonic `V128Not`.
+	V128And = 78, //!< Binary opcode mnemonic `V128And`.
+	V128AndNot = 79, //!< Binary opcode mnemonic `V128AndNot`.
+	V128Or = 80, //!< Binary opcode mnemonic `V128Or`.
+	V128Xor = 81, //!< Binary opcode mnemonic `V128Xor`.
+	V128Bitselect = 82, //!< Binary opcode mnemonic `V128Bitselect`.
+	V128AnyTrue = 83, //!< Binary opcode mnemonic `V128AnyTrue`.
 
 	//! i8x16 arithmetic / logical
-	I8x16Abs                    =  96,
-	I8x16Neg                    =  97,
-	I8x16Popcnt                 =  98,
-	I8x16AllTrue                =  99,
-	I8x16Bitmask                = 100,
-	I8x16NarrowI16x8S           = 101,
-	I8x16NarrowI16x8U           = 102,
-	I8x16Shl                    = 107,
-	I8x16ShrS                   = 108,
-	I8x16ShrU                   = 109,
-	I8x16Add                    = 110,
-	I8x16AddSatS                = 111,
-	I8x16AddSatU                = 112,
-	I8x16Sub                    = 113,
-	I8x16SubSatS                = 114,
-	I8x16SubSatU                = 115,
-	I8x16MinS                   = 118,
-	I8x16MinU                   = 119,
-	I8x16MaxS                   = 120,
-	I8x16MaxU                   = 121,
-	I8x16AvgrU                  = 123,
+	I8x16Abs = 96, //!< Binary opcode mnemonic `I8x16Abs`.
+	I8x16Neg = 97, //!< Binary opcode mnemonic `I8x16Neg`.
+	I8x16Popcnt = 98, //!< Binary opcode mnemonic `I8x16Popcnt`.
+	I8x16AllTrue = 99, //!< Binary opcode mnemonic `I8x16AllTrue`.
+	I8x16Bitmask = 100, //!< Binary opcode mnemonic `I8x16Bitmask`.
+	I8x16NarrowI16x8S = 101, //!< Binary opcode mnemonic `I8x16NarrowI16x8S`.
+	I8x16NarrowI16x8U = 102, //!< Binary opcode mnemonic `I8x16NarrowI16x8U`.
+	I8x16Shl = 107, //!< Binary opcode mnemonic `I8x16Shl`.
+	I8x16ShrS = 108, //!< Binary opcode mnemonic `I8x16ShrS`.
+	I8x16ShrU = 109, //!< Binary opcode mnemonic `I8x16ShrU`.
+	I8x16Add = 110, //!< Binary opcode mnemonic `I8x16Add`.
+	I8x16AddSatS = 111, //!< Binary opcode mnemonic `I8x16AddSatS`.
+	I8x16AddSatU = 112, //!< Binary opcode mnemonic `I8x16AddSatU`.
+	I8x16Sub = 113, //!< Binary opcode mnemonic `I8x16Sub`.
+	I8x16SubSatS = 114, //!< Binary opcode mnemonic `I8x16SubSatS`.
+	I8x16SubSatU = 115, //!< Binary opcode mnemonic `I8x16SubSatU`.
+	I8x16MinS = 118, //!< Binary opcode mnemonic `I8x16MinS`.
+	I8x16MinU = 119, //!< Binary opcode mnemonic `I8x16MinU`.
+	I8x16MaxS = 120, //!< Binary opcode mnemonic `I8x16MaxS`.
+	I8x16MaxU = 121, //!< Binary opcode mnemonic `I8x16MaxU`.
+	I8x16AvgrU = 123, //!< Binary opcode mnemonic `I8x16AvgrU`.
 
 	//! i16x8 arithmetic / logical
-	I16x8ExtAddPairwiseI8x16S   = 124,
-	I16x8ExtAddPairwiseI8x16U   = 125,
-	I16x8Abs                    = 128,
-	I16x8Neg                    = 129,
-	I16x8Q15MulRSatS            = 130,
-	I16x8AllTrue                = 131,
-	I16x8Bitmask                = 132,
-	I16x8NarrowI32x4S           = 133,
-	I16x8NarrowI32x4U           = 134,
-	I16x8ExtendLowI8x16S        = 135,
-	I16x8ExtendHighI8x16S       = 136,
-	I16x8ExtendLowI8x16U        = 137,
-	I16x8ExtendHighI8x16U       = 138,
-	I16x8Shl                    = 139,
-	I16x8ShrS                   = 140,
-	I16x8ShrU                   = 141,
-	I16x8Add                    = 142,
-	I16x8AddSatS                = 143,
-	I16x8AddSatU                = 144,
-	I16x8Sub                    = 145,
-	I16x8SubSatS                = 146,
-	I16x8SubSatU                = 147,
-	I16x8Mul                    = 149,
-	I16x8MinS                   = 150,
-	I16x8MinU                   = 151,
-	I16x8MaxS                   = 152,
-	I16x8MaxU                   = 153,
-	I16x8AvgrU                  = 155,
-	I16x8ExtMulLowI8x16S        = 156,
-	I16x8ExtMulHighI8x16S       = 157,
-	I16x8ExtMulLowI8x16U        = 158,
-	I16x8ExtMulHighI8x16U       = 159,
+	I16x8ExtAddPairwiseI8x16S = 124, //!< Binary opcode mnemonic `I16x8ExtAddPairwiseI8x16S`.
+	I16x8ExtAddPairwiseI8x16U = 125, //!< Binary opcode mnemonic `I16x8ExtAddPairwiseI8x16U`.
+	I16x8Abs = 128, //!< Binary opcode mnemonic `I16x8Abs`.
+	I16x8Neg = 129, //!< Binary opcode mnemonic `I16x8Neg`.
+	I16x8Q15MulRSatS = 130, //!< Binary opcode mnemonic `I16x8Q15MulRSatS`.
+	I16x8AllTrue = 131, //!< Binary opcode mnemonic `I16x8AllTrue`.
+	I16x8Bitmask = 132, //!< Binary opcode mnemonic `I16x8Bitmask`.
+	I16x8NarrowI32x4S = 133, //!< Binary opcode mnemonic `I16x8NarrowI32x4S`.
+	I16x8NarrowI32x4U = 134, //!< Binary opcode mnemonic `I16x8NarrowI32x4U`.
+	I16x8ExtendLowI8x16S = 135, //!< Binary opcode mnemonic `I16x8ExtendLowI8x16S`.
+	I16x8ExtendHighI8x16S = 136, //!< Binary opcode mnemonic `I16x8ExtendHighI8x16S`.
+	I16x8ExtendLowI8x16U = 137, //!< Binary opcode mnemonic `I16x8ExtendLowI8x16U`.
+	I16x8ExtendHighI8x16U = 138, //!< Binary opcode mnemonic `I16x8ExtendHighI8x16U`.
+	I16x8Shl = 139, //!< Binary opcode mnemonic `I16x8Shl`.
+	I16x8ShrS = 140, //!< Binary opcode mnemonic `I16x8ShrS`.
+	I16x8ShrU = 141, //!< Binary opcode mnemonic `I16x8ShrU`.
+	I16x8Add = 142, //!< Binary opcode mnemonic `I16x8Add`.
+	I16x8AddSatS = 143, //!< Binary opcode mnemonic `I16x8AddSatS`.
+	I16x8AddSatU = 144, //!< Binary opcode mnemonic `I16x8AddSatU`.
+	I16x8Sub = 145, //!< Binary opcode mnemonic `I16x8Sub`.
+	I16x8SubSatS = 146, //!< Binary opcode mnemonic `I16x8SubSatS`.
+	I16x8SubSatU = 147, //!< Binary opcode mnemonic `I16x8SubSatU`.
+	I16x8Mul = 149, //!< Binary opcode mnemonic `I16x8Mul`.
+	I16x8MinS = 150, //!< Binary opcode mnemonic `I16x8MinS`.
+	I16x8MinU = 151, //!< Binary opcode mnemonic `I16x8MinU`.
+	I16x8MaxS = 152, //!< Binary opcode mnemonic `I16x8MaxS`.
+	I16x8MaxU = 153, //!< Binary opcode mnemonic `I16x8MaxU`.
+	I16x8AvgrU = 155, //!< Binary opcode mnemonic `I16x8AvgrU`.
+	I16x8ExtMulLowI8x16S = 156, //!< Binary opcode mnemonic `I16x8ExtMulLowI8x16S`.
+	I16x8ExtMulHighI8x16S = 157, //!< Binary opcode mnemonic `I16x8ExtMulHighI8x16S`.
+	I16x8ExtMulLowI8x16U = 158, //!< Binary opcode mnemonic `I16x8ExtMulLowI8x16U`.
+	I16x8ExtMulHighI8x16U = 159, //!< Binary opcode mnemonic `I16x8ExtMulHighI8x16U`.
 
 	//! i32x4 arithmetic / logical
-	I32x4ExtAddPairwiseI16x8S   = 126,
-	I32x4ExtAddPairwiseI16x8U   = 127,
-	I32x4Abs                    = 160,
-	I32x4Neg                    = 161,
-	I32x4AllTrue                = 163,
-	I32x4Bitmask                = 164,
-	I32x4ExtendLowI16x8S        = 167,
-	I32x4ExtendHighI16x8S       = 168,
-	I32x4ExtendLowI16x8U        = 169,
-	I32x4ExtendHighI16x8U       = 170,
-	I32x4Shl                    = 171,
-	I32x4ShrS                   = 172,
-	I32x4ShrU                   = 173,
-	I32x4Add                    = 174,
-	I32x4Sub                    = 177,
-	I32x4Mul                    = 181,
-	I32x4MinS                   = 182,
-	I32x4MinU                   = 183,
-	I32x4MaxS                   = 184,
-	I32x4MaxU                   = 185,
-	I32x4DotI16x8S              = 186,
-	I32x4ExtMulLowI16x8S        = 188,
-	I32x4ExtMulHighI16x8S       = 189,
-	I32x4ExtMulLowI16x8U        = 190,
-	I32x4ExtMulHighI16x8U       = 191,
+	I32x4ExtAddPairwiseI16x8S = 126, //!< Binary opcode mnemonic `I32x4ExtAddPairwiseI16x8S`.
+	I32x4ExtAddPairwiseI16x8U = 127, //!< Binary opcode mnemonic `I32x4ExtAddPairwiseI16x8U`.
+	I32x4Abs = 160, //!< Binary opcode mnemonic `I32x4Abs`.
+	I32x4Neg = 161, //!< Binary opcode mnemonic `I32x4Neg`.
+	I32x4AllTrue = 163, //!< Binary opcode mnemonic `I32x4AllTrue`.
+	I32x4Bitmask = 164, //!< Binary opcode mnemonic `I32x4Bitmask`.
+	I32x4ExtendLowI16x8S = 167, //!< Binary opcode mnemonic `I32x4ExtendLowI16x8S`.
+	I32x4ExtendHighI16x8S = 168, //!< Binary opcode mnemonic `I32x4ExtendHighI16x8S`.
+	I32x4ExtendLowI16x8U = 169, //!< Binary opcode mnemonic `I32x4ExtendLowI16x8U`.
+	I32x4ExtendHighI16x8U = 170, //!< Binary opcode mnemonic `I32x4ExtendHighI16x8U`.
+	I32x4Shl = 171, //!< Binary opcode mnemonic `I32x4Shl`.
+	I32x4ShrS = 172, //!< Binary opcode mnemonic `I32x4ShrS`.
+	I32x4ShrU = 173, //!< Binary opcode mnemonic `I32x4ShrU`.
+	I32x4Add = 174, //!< Binary opcode mnemonic `I32x4Add`.
+	I32x4Sub = 177, //!< Binary opcode mnemonic `I32x4Sub`.
+	I32x4Mul = 181, //!< Binary opcode mnemonic `I32x4Mul`.
+	I32x4MinS = 182, //!< Binary opcode mnemonic `I32x4MinS`.
+	I32x4MinU = 183, //!< Binary opcode mnemonic `I32x4MinU`.
+	I32x4MaxS = 184, //!< Binary opcode mnemonic `I32x4MaxS`.
+	I32x4MaxU = 185, //!< Binary opcode mnemonic `I32x4MaxU`.
+	I32x4DotI16x8S = 186, //!< Binary opcode mnemonic `I32x4DotI16x8S`.
+	I32x4ExtMulLowI16x8S = 188, //!< Binary opcode mnemonic `I32x4ExtMulLowI16x8S`.
+	I32x4ExtMulHighI16x8S = 189, //!< Binary opcode mnemonic `I32x4ExtMulHighI16x8S`.
+	I32x4ExtMulLowI16x8U = 190, //!< Binary opcode mnemonic `I32x4ExtMulLowI16x8U`.
+	I32x4ExtMulHighI16x8U = 191, //!< Binary opcode mnemonic `I32x4ExtMulHighI16x8U`.
 
 	//! i64x2 arithmetic / logical
-	I64x2Abs                    = 192,
-	I64x2Neg                    = 193,
-	I64x2AllTrue                = 195,
-	I64x2Bitmask                = 196,
-	I64x2ExtendLowI32x4S        = 199,
-	I64x2ExtendHighI32x4S       = 200,
-	I64x2ExtendLowI32x4U        = 201,
-	I64x2ExtendHighI32x4U       = 202,
-	I64x2Shl                    = 203,
-	I64x2ShrS                   = 204,
-	I64x2ShrU                   = 205,
-	I64x2Add                    = 206,
-	I64x2Sub                    = 209,
-	I64x2Mul                    = 213,
-	I64x2Eq                     = 214,
-	I64x2Ne                     = 215,
-	I64x2LtS                    = 216,
-	I64x2GtS                    = 217,
-	I64x2LeS                    = 218,
-	I64x2GeS                    = 219,
-	I64x2ExtMulLowI32x4S        = 220,
-	I64x2ExtMulHighI32x4S       = 221,
-	I64x2ExtMulLowI32x4U        = 222,
-	I64x2ExtMulHighI32x4U       = 223,
+	I64x2Abs = 192, //!< Binary opcode mnemonic `I64x2Abs`.
+	I64x2Neg = 193, //!< Binary opcode mnemonic `I64x2Neg`.
+	I64x2AllTrue = 195, //!< Binary opcode mnemonic `I64x2AllTrue`.
+	I64x2Bitmask = 196, //!< Binary opcode mnemonic `I64x2Bitmask`.
+	I64x2ExtendLowI32x4S = 199, //!< Binary opcode mnemonic `I64x2ExtendLowI32x4S`.
+	I64x2ExtendHighI32x4S = 200, //!< Binary opcode mnemonic `I64x2ExtendHighI32x4S`.
+	I64x2ExtendLowI32x4U = 201, //!< Binary opcode mnemonic `I64x2ExtendLowI32x4U`.
+	I64x2ExtendHighI32x4U = 202, //!< Binary opcode mnemonic `I64x2ExtendHighI32x4U`.
+	I64x2Shl = 203, //!< Binary opcode mnemonic `I64x2Shl`.
+	I64x2ShrS = 204, //!< Binary opcode mnemonic `I64x2ShrS`.
+	I64x2ShrU = 205, //!< Binary opcode mnemonic `I64x2ShrU`.
+	I64x2Add = 206, //!< Binary opcode mnemonic `I64x2Add`.
+	I64x2Sub = 209, //!< Binary opcode mnemonic `I64x2Sub`.
+	I64x2Mul = 213, //!< Binary opcode mnemonic `I64x2Mul`.
+	I64x2Eq = 214, //!< Binary opcode mnemonic `I64x2Eq`.
+	I64x2Ne = 215, //!< Binary opcode mnemonic `I64x2Ne`.
+	I64x2LtS = 216, //!< Binary opcode mnemonic `I64x2LtS`.
+	I64x2GtS = 217, //!< Binary opcode mnemonic `I64x2GtS`.
+	I64x2LeS = 218, //!< Binary opcode mnemonic `I64x2LeS`.
+	I64x2GeS = 219, //!< Binary opcode mnemonic `I64x2GeS`.
+	I64x2ExtMulLowI32x4S = 220, //!< Binary opcode mnemonic `I64x2ExtMulLowI32x4S`.
+	I64x2ExtMulHighI32x4S = 221, //!< Binary opcode mnemonic `I64x2ExtMulHighI32x4S`.
+	I64x2ExtMulLowI32x4U = 222, //!< Binary opcode mnemonic `I64x2ExtMulLowI32x4U`.
+	I64x2ExtMulHighI32x4U = 223, //!< Binary opcode mnemonic `I64x2ExtMulHighI32x4U`.
 
 	//! f32x4 arithmetic
-	F32x4Ceil                   = 103,
-	F32x4Floor                  = 104,
-	F32x4Trunc                  = 105,
-	F32x4Nearest                = 106,
-	F32x4Abs                    = 224,
-	F32x4Neg                    = 225,
-	F32x4Sqrt                   = 227,
-	F32x4Add                    = 228,
-	F32x4Sub                    = 229,
-	F32x4Mul                    = 230,
-	F32x4Div                    = 231,
-	F32x4Min                    = 232,
-	F32x4Max                    = 233,
-	F32x4PMin                   = 234,
-	F32x4PMax                   = 235,
+	F32x4Ceil = 103, //!< Binary opcode mnemonic `F32x4Ceil`.
+	F32x4Floor = 104, //!< Binary opcode mnemonic `F32x4Floor`.
+	F32x4Trunc = 105, //!< Binary opcode mnemonic `F32x4Trunc`.
+	F32x4Nearest = 106, //!< Binary opcode mnemonic `F32x4Nearest`.
+	F32x4Abs = 224, //!< Binary opcode mnemonic `F32x4Abs`.
+	F32x4Neg = 225, //!< Binary opcode mnemonic `F32x4Neg`.
+	F32x4Sqrt = 227, //!< Binary opcode mnemonic `F32x4Sqrt`.
+	F32x4Add = 228, //!< Binary opcode mnemonic `F32x4Add`.
+	F32x4Sub = 229, //!< Binary opcode mnemonic `F32x4Sub`.
+	F32x4Mul = 230, //!< Binary opcode mnemonic `F32x4Mul`.
+	F32x4Div = 231, //!< Binary opcode mnemonic `F32x4Div`.
+	F32x4Min = 232, //!< Binary opcode mnemonic `F32x4Min`.
+	F32x4Max = 233, //!< Binary opcode mnemonic `F32x4Max`.
+	F32x4PMin = 234, //!< Binary opcode mnemonic `F32x4PMin`.
+	F32x4PMax = 235, //!< Binary opcode mnemonic `F32x4PMax`.
 
 	//! f64x2 arithmetic
-	F64x2Ceil                   = 116,
-	F64x2Floor                  = 117,
-	F64x2Trunc                  = 122,
-	F64x2Nearest                = 148,
-	F64x2Abs                    = 236,
-	F64x2Neg                    = 237,
-	F64x2Sqrt                   = 239,
-	F64x2Add                    = 240,
-	F64x2Sub                    = 241,
-	F64x2Mul                    = 242,
-	F64x2Div                    = 243,
-	F64x2Min                    = 244,
-	F64x2Max                    = 245,
-	F64x2PMin                   = 246,
-	F64x2PMax                   = 247,
+	F64x2Ceil = 116, //!< Binary opcode mnemonic `F64x2Ceil`.
+	F64x2Floor = 117, //!< Binary opcode mnemonic `F64x2Floor`.
+	F64x2Trunc = 122, //!< Binary opcode mnemonic `F64x2Trunc`.
+	F64x2Nearest = 148, //!< Binary opcode mnemonic `F64x2Nearest`.
+	F64x2Abs = 236, //!< Binary opcode mnemonic `F64x2Abs`.
+	F64x2Neg = 237, //!< Binary opcode mnemonic `F64x2Neg`.
+	F64x2Sqrt = 239, //!< Binary opcode mnemonic `F64x2Sqrt`.
+	F64x2Add = 240, //!< Binary opcode mnemonic `F64x2Add`.
+	F64x2Sub = 241, //!< Binary opcode mnemonic `F64x2Sub`.
+	F64x2Mul = 242, //!< Binary opcode mnemonic `F64x2Mul`.
+	F64x2Div = 243, //!< Binary opcode mnemonic `F64x2Div`.
+	F64x2Min = 244, //!< Binary opcode mnemonic `F64x2Min`.
+	F64x2Max = 245, //!< Binary opcode mnemonic `F64x2Max`.
+	F64x2PMin = 246, //!< Binary opcode mnemonic `F64x2PMin`.
+	F64x2PMax = 247, //!< Binary opcode mnemonic `F64x2PMax`.
 
 	//! Conversion (SIMD)
-	I32x4TruncSatF32x4S         = 248,
-	I32x4TruncSatF32x4U         = 249,
-	F32x4ConvertI32x4S          = 250,
-	F32x4ConvertI32x4U          = 251,
-	I32x4TruncSatF64x2SZero     = 252,
-	I32x4TruncSatF64x2UZero     = 253,
-	F64x2ConvertLowI32x4S       = 254,
-	F64x2ConvertLowI32x4U       = 255,
-	F32x4DemoteF64x2Zero        = 94,
-	F64x2PromoteLowF32x4        = 95,
+	I32x4TruncSatF32x4S = 248, //!< Binary opcode mnemonic `I32x4TruncSatF32x4S`.
+	I32x4TruncSatF32x4U = 249, //!< Binary opcode mnemonic `I32x4TruncSatF32x4U`.
+	F32x4ConvertI32x4S = 250, //!< Binary opcode mnemonic `F32x4ConvertI32x4S`.
+	F32x4ConvertI32x4U = 251, //!< Binary opcode mnemonic `F32x4ConvertI32x4U`.
+	I32x4TruncSatF64x2SZero = 252, //!< Binary opcode mnemonic `I32x4TruncSatF64x2SZero`.
+	I32x4TruncSatF64x2UZero = 253, //!< Binary opcode mnemonic `I32x4TruncSatF64x2UZero`.
+	F64x2ConvertLowI32x4S = 254, //!< Binary opcode mnemonic `F64x2ConvertLowI32x4S`.
+	F64x2ConvertLowI32x4U = 255, //!< Binary opcode mnemonic `F64x2ConvertLowI32x4U`.
+	F32x4DemoteF64x2Zero = 94, //!< Binary opcode mnemonic `F32x4DemoteF64x2Zero`.
+	F64x2PromoteLowF32x4 = 95, //!< Binary opcode mnemonic `F64x2PromoteLowF32x4`.
 
 	//! Relaxed SIMD (docs/proposals/SIMD.md SD5): 0x100-0x113. The values are the
 	//! wasm sub-opcodes, like the rest of this enum.
-	I8x16RelaxedSwizzle         = 256,
-	I32x4RelaxedTruncF32x4S     = 257,
-	I32x4RelaxedTruncF32x4U     = 258,
-	I32x4RelaxedTruncF64x2SZero = 259,
-	I32x4RelaxedTruncF64x2UZero = 260,
-	F32x4RelaxedMadd            = 261,
-	F32x4RelaxedNmadd           = 262,
-	F64x2RelaxedMadd            = 263,
-	F64x2RelaxedNmadd           = 264,
-	I8x16RelaxedLaneselect      = 265,
-	I16x8RelaxedLaneselect      = 266,
-	I32x4RelaxedLaneselect      = 267,
-	I64x2RelaxedLaneselect      = 268,
-	F32x4RelaxedMin             = 269,
-	F32x4RelaxedMax             = 270,
-	F64x2RelaxedMin             = 271,
-	F64x2RelaxedMax             = 272,
-	I16x8RelaxedQ15MulRS        = 273,
-	I16x8RelaxedDotI8x16I7x16S  = 274,
-	I32x4RelaxedDotI8x16I7x16AddS= 275,
+	I8x16RelaxedSwizzle = 256, //!< Binary opcode mnemonic `I8x16RelaxedSwizzle`.
+	I32x4RelaxedTruncF32x4S = 257, //!< Binary opcode mnemonic `I32x4RelaxedTruncF32x4S`.
+	I32x4RelaxedTruncF32x4U = 258, //!< Binary opcode mnemonic `I32x4RelaxedTruncF32x4U`.
+	I32x4RelaxedTruncF64x2SZero = 259, //!< Binary opcode mnemonic `I32x4RelaxedTruncF64x2SZero`.
+	I32x4RelaxedTruncF64x2UZero = 260, //!< Binary opcode mnemonic `I32x4RelaxedTruncF64x2UZero`.
+	F32x4RelaxedMadd = 261, //!< Binary opcode mnemonic `F32x4RelaxedMadd`.
+	F32x4RelaxedNmadd = 262, //!< Binary opcode mnemonic `F32x4RelaxedNmadd`.
+	F64x2RelaxedMadd = 263, //!< Binary opcode mnemonic `F64x2RelaxedMadd`.
+	F64x2RelaxedNmadd = 264, //!< Binary opcode mnemonic `F64x2RelaxedNmadd`.
+	I8x16RelaxedLaneselect = 265, //!< Binary opcode mnemonic `I8x16RelaxedLaneselect`.
+	I16x8RelaxedLaneselect = 266, //!< Binary opcode mnemonic `I16x8RelaxedLaneselect`.
+	I32x4RelaxedLaneselect = 267, //!< Binary opcode mnemonic `I32x4RelaxedLaneselect`.
+	I64x2RelaxedLaneselect = 268, //!< Binary opcode mnemonic `I64x2RelaxedLaneselect`.
+	F32x4RelaxedMin = 269, //!< Binary opcode mnemonic `F32x4RelaxedMin`.
+	F32x4RelaxedMax = 270, //!< Binary opcode mnemonic `F32x4RelaxedMax`.
+	F64x2RelaxedMin = 271, //!< Binary opcode mnemonic `F64x2RelaxedMin`.
+	F64x2RelaxedMax = 272, //!< Binary opcode mnemonic `F64x2RelaxedMax`.
+	I16x8RelaxedQ15MulRS = 273, //!< Binary opcode mnemonic `I16x8RelaxedQ15MulRS`.
+	I16x8RelaxedDotI8x16I7x16S = 274, //!< Binary opcode mnemonic `I16x8RelaxedDotI8x16I7x16S`.
+	I32x4RelaxedDotI8x16I7x16AddS = 275, //!< Binary opcode mnemonic `I32x4RelaxedDotI8x16I7x16AddS`.
 };
 
 //! The relaxed-SIMD sub-opcodes occupy one contiguous tail range (0x100–0x113).
@@ -905,41 +905,41 @@ enum class AtomicOpcode : uint8_t {
 	//! --- Shared-everything threads (SHARED_EVERYTHING_THREADS.md SET-3) ---
 	//! These do not use a memarg: they name a global/table/struct/array and
 	//! carry a u8 memory-ordering immediate (0 seqcst, 1 acqrel).
-	GlobalAtomicGet              = 0x4F,
-	GlobalAtomicSet              = 0x50,
-	GlobalAtomicRmwAdd           = 0x51,
-	GlobalAtomicRmwSub           = 0x52,
-	GlobalAtomicRmwAnd           = 0x53,
-	GlobalAtomicRmwOr            = 0x54,
-	GlobalAtomicRmwXor           = 0x55,
-	GlobalAtomicRmwXchg          = 0x56,
-	GlobalAtomicRmwCmpxchg       = 0x57,
-	TableAtomicGet               = 0x58,
-	TableAtomicSet               = 0x59,
-	TableAtomicRmwXchg           = 0x5A,
-	TableAtomicRmwCmpxchg        = 0x5B,
-	StructAtomicGet              = 0x5C,
-	StructAtomicGetS             = 0x5D,
-	StructAtomicGetU             = 0x5E,
-	StructAtomicSet              = 0x5F,
-	StructAtomicRmwAdd           = 0x60,
-	StructAtomicRmwSub           = 0x61,
-	StructAtomicRmwAnd           = 0x62,
-	StructAtomicRmwOr            = 0x63,
-	StructAtomicRmwXor           = 0x64,
-	StructAtomicRmwXchg          = 0x65,
-	StructAtomicRmwCmpxchg       = 0x66,
-	ArrayAtomicGet               = 0x67,
-	ArrayAtomicGetS              = 0x68,
-	ArrayAtomicGetU              = 0x69,
-	ArrayAtomicSet               = 0x6A,
-	ArrayAtomicRmwAdd            = 0x6B,
-	ArrayAtomicRmwSub            = 0x6C,
-	ArrayAtomicRmwAnd            = 0x6D,
-	ArrayAtomicRmwOr             = 0x6E,
-	ArrayAtomicRmwXor            = 0x6F,
-	ArrayAtomicRmwXchg           = 0x70,
-	ArrayAtomicRmwCmpxchg        = 0x71,
+	GlobalAtomicGet = 0x4F, //!< Binary opcode mnemonic `GlobalAtomicGet`.
+	GlobalAtomicSet = 0x50, //!< Binary opcode mnemonic `GlobalAtomicSet`.
+	GlobalAtomicRmwAdd = 0x51, //!< Binary opcode mnemonic `GlobalAtomicRmwAdd`.
+	GlobalAtomicRmwSub = 0x52, //!< Binary opcode mnemonic `GlobalAtomicRmwSub`.
+	GlobalAtomicRmwAnd = 0x53, //!< Binary opcode mnemonic `GlobalAtomicRmwAnd`.
+	GlobalAtomicRmwOr = 0x54, //!< Binary opcode mnemonic `GlobalAtomicRmwOr`.
+	GlobalAtomicRmwXor = 0x55, //!< Binary opcode mnemonic `GlobalAtomicRmwXor`.
+	GlobalAtomicRmwXchg = 0x56, //!< Binary opcode mnemonic `GlobalAtomicRmwXchg`.
+	GlobalAtomicRmwCmpxchg = 0x57, //!< Binary opcode mnemonic `GlobalAtomicRmwCmpxchg`.
+	TableAtomicGet = 0x58, //!< Binary opcode mnemonic `TableAtomicGet`.
+	TableAtomicSet = 0x59, //!< Binary opcode mnemonic `TableAtomicSet`.
+	TableAtomicRmwXchg = 0x5A, //!< Binary opcode mnemonic `TableAtomicRmwXchg`.
+	TableAtomicRmwCmpxchg = 0x5B, //!< Binary opcode mnemonic `TableAtomicRmwCmpxchg`.
+	StructAtomicGet = 0x5C, //!< Binary opcode mnemonic `StructAtomicGet`.
+	StructAtomicGetS = 0x5D, //!< Binary opcode mnemonic `StructAtomicGetS`.
+	StructAtomicGetU = 0x5E, //!< Binary opcode mnemonic `StructAtomicGetU`.
+	StructAtomicSet = 0x5F, //!< Binary opcode mnemonic `StructAtomicSet`.
+	StructAtomicRmwAdd = 0x60, //!< Binary opcode mnemonic `StructAtomicRmwAdd`.
+	StructAtomicRmwSub = 0x61, //!< Binary opcode mnemonic `StructAtomicRmwSub`.
+	StructAtomicRmwAnd = 0x62, //!< Binary opcode mnemonic `StructAtomicRmwAnd`.
+	StructAtomicRmwOr = 0x63, //!< Binary opcode mnemonic `StructAtomicRmwOr`.
+	StructAtomicRmwXor = 0x64, //!< Binary opcode mnemonic `StructAtomicRmwXor`.
+	StructAtomicRmwXchg = 0x65, //!< Binary opcode mnemonic `StructAtomicRmwXchg`.
+	StructAtomicRmwCmpxchg = 0x66, //!< Binary opcode mnemonic `StructAtomicRmwCmpxchg`.
+	ArrayAtomicGet = 0x67, //!< Binary opcode mnemonic `ArrayAtomicGet`.
+	ArrayAtomicGetS = 0x68, //!< Binary opcode mnemonic `ArrayAtomicGetS`.
+	ArrayAtomicGetU = 0x69, //!< Binary opcode mnemonic `ArrayAtomicGetU`.
+	ArrayAtomicSet = 0x6A, //!< Binary opcode mnemonic `ArrayAtomicSet`.
+	ArrayAtomicRmwAdd = 0x6B, //!< Binary opcode mnemonic `ArrayAtomicRmwAdd`.
+	ArrayAtomicRmwSub = 0x6C, //!< Binary opcode mnemonic `ArrayAtomicRmwSub`.
+	ArrayAtomicRmwAnd = 0x6D, //!< Binary opcode mnemonic `ArrayAtomicRmwAnd`.
+	ArrayAtomicRmwOr = 0x6E, //!< Binary opcode mnemonic `ArrayAtomicRmwOr`.
+	ArrayAtomicRmwXor = 0x6F, //!< Binary opcode mnemonic `ArrayAtomicRmwXor`.
+	ArrayAtomicRmwXchg = 0x70, //!< Binary opcode mnemonic `ArrayAtomicRmwXchg`.
+	ArrayAtomicRmwCmpxchg = 0x71, //!< Binary opcode mnemonic `ArrayAtomicRmwCmpxchg`.
 };
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, AtomicOpcode& right) {
 	return left.read_enum(right);
