@@ -22,4 +22,4 @@ Sljit.depends    = WasmBase
 # (docs/BACKEND_PLUGIN_ABI.md BP-3).
 ExampleBackend.subdir = Test/ExampleBackend
 ExampleBackend.depends = WasmBase
-Test.depends     = Elvavena Euphemy WasmBase WasmStub LibJit ExampleBackend
+Test.depends     = Elvavena Euphemy WasmBase WasmStub LibJit Asmjit ExampleBackend
