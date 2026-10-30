@@ -49,7 +49,7 @@ public:
 	struct GlobalEntry {
 		Value* cell = nullptr;
 		GlobalType type{};
-		std::unique_ptr<Value> owned;
+		std::unique_ptr<Value> owned; //!< Field `owned` of GlobalEntry.
 	};
 
 	/** \brief Set of registered importable entities under one module name. */
@@ -61,7 +61,7 @@ public:
 		NameMap<LinearMemory*> memories;
 		NameMap<ImportedTable> tables;
 		NameMap<TagId> tags;
-		NameMap<TypeId> types;
+		NameMap<TypeId> types; //!< Field `types` of ModuleRegistry.
 
 		/** \brief Registers a callable in this module namespace. \param fieldName Import/export field name. \param callable Callable descriptor to publish. */
 	void registerFunction(std::string_view fieldName, const Callable& callable);
@@ -90,7 +90,7 @@ public:
 	};
 
 	void registerFunction(std::string_view moduleName, std::string_view fieldName,
-						  const Callable& callable) override;
+						  const Callable& callable) override; //!< Field `override` of type.
 	//! Host overload: copies `value` into a registry-owned cell.
 	void registerGlobal(std::string_view moduleName, std::string_view fieldName,
 						const Value& value);
@@ -104,7 +104,7 @@ public:
  * \param memory Input value or output destination for this operation.
  */
 	void registerMemory(std::string_view moduleName, std::string_view fieldName,
-						LinearMemory* memory) override;
+						LinearMemory* memory) override; //!< Field `override` of type.
 /**
  * \brief Performs the registerTable operation.
  * \param moduleName Input value or output destination for this operation.
@@ -112,7 +112,7 @@ public:
  * \param table Input value or output destination for this operation.
  */
 	void registerTable(std::string_view moduleName, std::string_view fieldName,
-					   const ImportedTable& table) override;
+					   const ImportedTable& table) override; //!< Field `override` of type.
 /**
  * \brief Performs the registerTag operation.
  * \param moduleName Input value or output destination for this operation.
@@ -120,7 +120,7 @@ public:
  * \param tag Input value or output destination for this operation.
  */
 	void registerTag(std::string_view moduleName, std::string_view fieldName,
-					 TagId tag) override;
+					 TagId tag) override; //!< Field `override` of type.
 /**
  * \brief Performs the registerType operation.
  * \param moduleName Input value or output destination for this operation.
@@ -128,7 +128,7 @@ public:
  * \param type Input value or output destination for this operation.
  */
 	void registerType(std::string_view moduleName, std::string_view fieldName,
-					  TypeId type) override;
+					  TypeId type) override; //!< Field `override` of type.
 
 /**
  * \brief Performs the resolveFunction operation.
@@ -142,7 +142,7 @@ public:
 		std::string_view moduleName,
 		std::string_view fieldName,
 		TypeId expectedType,
-		bool exact = false) override;
+		bool exact = false) override; //!< Field `exact` of type.
 
 /**
  * \brief Performs the resolveGlobal operation.
@@ -154,7 +154,7 @@ public:
 	std::optional<Value*> resolveGlobal(
 		std::string_view moduleName,
 		std::string_view fieldName,
-		const GlobalType& type) override;
+		const GlobalType& type) override; //!< Field `override` of type.
 
 /**
  * \brief Performs the resolveMemory operation.
@@ -166,7 +166,7 @@ public:
 	std::optional<LinearMemory*> resolveMemory(
 		std::string_view moduleName,
 		std::string_view fieldName,
-		const MemoryType& type) override;
+		const MemoryType& type) override; //!< Field `override` of type.
 
 /**
  * \brief Performs the resolveTable operation.
@@ -180,7 +180,7 @@ public:
 		std::string_view moduleName,
 		std::string_view fieldName,
 		const TableType& type,
-		TypeId           elementTypeId) override;
+		TypeId           elementTypeId) override; //!< Field `override` of type.
 
 /**
  * \brief Performs the resolveTag operation.
@@ -192,7 +192,7 @@ public:
 	std::optional<TagId> resolveTag(
 		std::string_view moduleName,
 		std::string_view fieldName,
-		TypeId           expectedType) override;
+		TypeId           expectedType) override; //!< Field `override` of type.
 
 /**
  * \brief Performs the resolveType operation.
@@ -204,7 +204,7 @@ public:
 	std::optional<TypeId> resolveType(
 		std::string_view moduleName,
 		std::string_view fieldName,
-		AbstractHeapType bound) override;
+		AbstractHeapType bound) override; //!< Field `override` of type.
 
 	//! docs/EMBEDDING_SURFACE.md §4.3 option B: type matching reads an explicit
 	//! store, bound by the instance being resolved.
@@ -214,8 +214,8 @@ public:
 	Store& boundStore() const;
 
 private:
-	Store* store_ = nullptr;
-	NameMap<ModuleRegistry> registeredModules;
+	Store* store_ = nullptr; //!< Field `store_` of type.
+	NameMap<ModuleRegistry> registeredModules; //!< Field `registeredModules` of type.
 };
 
 } // namespace WASM
