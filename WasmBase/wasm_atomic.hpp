@@ -54,6 +54,13 @@ extern "C" {
 
 //! Loads `width` bytes and zero-extends them to 64 bits. `ordering` is the
 //! acquire-release immediate: 0 = seqcst, 1 = acqrel (acquire for a load).
+/**
+ * \brief Performs the bytes operation.
+ * \param address Input value or output destination for this operation.
+ * \param width Input value or output destination for this operation.
+ * \param ordering Input value or output destination for this operation.
+ * \return The value or status produced by this operation.
+ */
 /** \brief Atomically loads a value and zero-extends it to 64 bits. \param address Naturally aligned memory address. \param width Access width in bytes (1, 2, 4, or 8). \param ordering WASM_ATOMIC_SEQCST or WASM_ATOMIC_ACQREL. \return Loaded value, zero-extended to 64 bits. */
 uint64_t wasm_atomic_load(const void* address, uint32_t width, uint32_t ordering);
 
