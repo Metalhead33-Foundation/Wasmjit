@@ -333,6 +333,34 @@ protected:
 			invoke->set_ret(0, result);
 			values.push_back(result);
 		}
+		emitPendingTrapReturn();
+	}
+
+	void emitPendingTrapReturn()
+	{
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* slotCall = nullptr;
+		checkError(compiler.invoke(&slotCall,
+				reinterpret_cast<uint64_t>(&WASM::wasm_trap_slot), signature),
+				"AsmJit failed to emit post-call trap-slot lookup");
+		auto slot = compiler.new_gp_ptr("postCallTrapSlot");
+		slotCall->set_ret(0, slot);
+		auto pending = compiler.new_gp32("postCallPending");
+		checkError(compiler.mov(pending, asmjit::x86::dword_ptr(slot,
+				static_cast<int32_t>(offsetof(WASM::TrapSlot, pending)))),
+				"AsmJit failed to load post-call pending-trap state");
+		auto noTrap = compiler.new_label();
+		checkError(compiler.test(pending, pending), "AsmJit post-call trap test failed");
+		checkError(compiler.jz(noTrap), "AsmJit post-call trap branch failed");
+		if (resultCount == 0) {
+			checkError(compiler.ret(), "AsmJit post-call void trap return failed");
+		} else {
+			auto zero = compiler.new_gp32("postCallTrapResult");
+			checkError(compiler.xor_(zero, zero), "AsmJit post-call trap result initialisation failed");
+			checkError(compiler.ret(zero), "AsmJit post-call trap result return failed");
+		}
+		checkError(compiler.bind(noTrap), "AsmJit post-call continuation binding failed");
 	}
 
 	void dispatchNop() override {}
