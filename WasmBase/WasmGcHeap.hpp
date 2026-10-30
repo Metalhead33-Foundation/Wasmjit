@@ -21,6 +21,7 @@ WASMJIT_VISIBLE_BEGIN
 
 namespace WASM {
 
+/** \\brief Forward declaration of the allocation-budget owner. */
 class Store;
 
 //! \brief The GC heap: a Store-owned hunk/region allocator
