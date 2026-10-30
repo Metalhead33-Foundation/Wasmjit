@@ -27,8 +27,10 @@ and the `[docs]` check fails ([`DOCUMENTATION.md`](../DOCUMENTATION.md) §9).
 | \subpage prop_gc_extensions | Multibyte array access, more array constructors, frozen values |
 | \subpage prop_instrument_tracing | Instruction tracing (`i32.itt`) |
 | \subpage prop_js_integration | The JavaScript-facing proposals and where the engine seam ends |
+| \subpage prop_legacy_exceptions | Legacy (Phase-3) exception handling: encodings, conflict analysis, cost of admission, and the six questions |
 | \subpage prop_memory64 | Memory64 |
 | \subpage prop_memory_control | Memory control: protection, mapping, virtual memory |
+| \subpage prop_memory_provider | The memory provider: what runtimes demand of the host, what the engine offers, and whether to open the seam |
 | \subpage prop_multi_memory | Multiple memories |
 | \subpage prop_multi_value | Multi-value blocks and returns |
 | \subpage prop_mutable_globals | Import/export of mutable globals |

@@ -42,6 +42,7 @@ const std::set<std::string>& embedderHeaders()
 		"WasmDiagnostics.hpp", "WasmAgent.hpp", "WasmContinuation.hpp",
 		"WasmMemory.hpp", "WasmTable.hpp", "WasmExn.hpp", "WasmString.hpp",
 		"WasmTracing.hpp", "WasmRegistryImportResolver.hpp", "WasmStore.hpp",
+		"WasmParseOptions.hpp",
 	};
 	return headers;
 }
@@ -69,6 +70,7 @@ const std::set<std::string>& internalHeaders()
 		"WasmComponentAbi.hpp", "WasmComponentAsync.hpp", "WasmComponentModel.hpp",
 		"WasmComponentRuntime.hpp", "WasmComponentSection.hpp",
 		"WasmComponentValidation.hpp", "WasmComponentParser.inc",
+		"WasmLegacyEh.hpp",
 	};
 	return headers;
 }
@@ -171,5 +173,5 @@ TEST_CASE("every public header has a compile-only translation unit", "[tiers]")
 			++checked;
 		}
 	}
-	REQUIRE(checked == 41);
+	REQUIRE(checked == 42); // one TU per public header; bump when a header lands
 }

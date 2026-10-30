@@ -105,6 +105,30 @@ public:
 	MemoryId createLinearMemory(uint64_t initialPages, uint64_t maxPages, bool isShared,
 								bool is64 = false, uint64_t pageSize = 0x10000);
 
+	//! \par The allocation policy (docs/proposals/MEMORY_PROVIDER.md MP-1)
+	//! The same allocation, with the host choosing how the bytes are obtained.
+	//! `Growable` is a growable buffer whose base may move on growth; `Reserved`
+	//! reserves the declared maximum up front and commits pages as they are
+	//! added, so the base never moves. A shared memory already reserves, so the
+	//! policy is ignored for one.
+	//!
+	//! Nothing about this is visible to a module — a guest addresses offsets —
+	//! and no backend has to know: the view it consumes is the same POD either
+	//! way. Under `Reserved` a memory that declares **no** maximum is refused by
+	//! name, because a reservation has to know its size.
+	/** \brief Creates a Store-owned linear memory with an explicit allocation policy. \param initialPages Initial page count. \param maxPages Maximum page count. \param isShared Whether the memory is shared. \param is64 Whether the memory uses 64-bit indices. \param pageSize Page size in bytes. \param policy How the bytes are obtained. \return Store-local memory identifier. */
+	MemoryId createLinearMemory(uint64_t initialPages, uint64_t maxPages, bool isShared,
+								bool is64, uint64_t pageSize, MemoryAllocationPolicy policy);
+
+	//! The policy this Store's module instances ask for when they allocate a
+	//! memory the module declared. Defaults to `MemoryAllocationPolicy::Growable`,
+	//! which is the behaviour every build had before the policy existed; set it
+	//! before instantiating.
+	/** \brief Returns the allocation policy used for module-declared memories. \return The current policy. */
+	MemoryAllocationPolicy memoryAllocationPolicy() const noexcept;
+	/** \brief Sets the allocation policy used for module-declared memories. \param policy The policy to use from now on. */
+	void setMemoryAllocationPolicy(MemoryAllocationPolicy policy) noexcept;
+
 	//! Borrowed views into a store-owned memory. Nullptr for an unknown id.
 	/** \brief Looks up a Store-owned memory. \param id Memory identifier. \return Borrowed memory descriptor, or nullptr when unknown. */
 	LinearMemory*       memory(MemoryId id);
@@ -265,6 +289,10 @@ private:
 
 	MemoryMap            memories; //!< store-owned linear memories
 	std::atomic<int32_t> nextMemoryId; //!< next MemoryId to assign
+	//! Allocation policy for memories a module declares (MEMORY_PROVIDER.md MP-1).
+	//! Atomic because an embedder may set it while another host thread
+	//! instantiates; the default keeps every existing binary's behaviour.
+	std::atomic<MemoryAllocationPolicy> memoryPolicy_{MemoryAllocationPolicy::Growable};
 
 	TypeRegistry         typeRegistry; //!< canonical type store
 

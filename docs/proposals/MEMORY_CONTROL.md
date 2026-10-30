@@ -41,7 +41,9 @@ separate document, and they may merge or disappear before Phase 2.
   address space for mapped files and protection.
 - **`virtual` mode** (copies/footprint/protection): per-page map/unmap.
 - **Lazy commit** (TODO): reserve without committing, optionally with a
-  `memory.commit` complement to `memory.discard`.
+  `memory.commit` complement to `memory.discard`. This is *host* policy rather than a proposal
+  surface, and it is priced separately in [`MEMORY_PROVIDER.md`](MEMORY_PROVIDER.md) `MP2`/`MP-1`
+  (a non-shared memory cannot reserve today; `SharedLinearMemory` already can).
 
 The only instruction with a concrete semantics today is `memory.discard`; the
 others are design space.

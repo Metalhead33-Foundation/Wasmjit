@@ -1,4 +1,5 @@
 #include "WasmModule.hpp"
+#include "WasmLegacyEh.hpp"
 #include "WasmDiagnostics.hpp"
 #include "WasmSafety.hpp"
 #include "WasmStore.hpp"
@@ -1367,14 +1368,25 @@ void Module::validate(const ValidationOptions& options) const
 
 void Module::fromFile(Elv::Io::Device& file, Store& store)
 {
-	store_ = &store;
-	fromFile(file, ValidationOptions{}, store);
+	fromFile(file, ParseOptions::fromEnvironment(), ValidationOptions{}, store);
 }
 
 void Module::fromFile(Elv::Io::Device& file, const ValidationOptions& options, Store& store)
 {
+	fromFile(file, ParseOptions::fromEnvironment(), options, store);
+}
+
+void Module::fromFile(Elv::Io::Device& file, const ParseOptions& options, Store& store)
+{
+	fromFile(file, options, ValidationOptions{}, store);
+}
+
+void Module::fromFile(Elv::Io::Device& file, const ParseOptions& parserOptions,
+		const ValidationOptions& options, Store& store)
+{
 	store_ = &store;
-	parseOptions = options;
+	parserOptions_ = parserOptions;
+	validationOptions_ = options;
 
 	// Preamble problems are the earliest decode boundary (docs/SAFETY.md §2.1:
 	// tell artifacts apart before decoding them). Report, then keep the thrown
@@ -1475,13 +1487,27 @@ void Module::parseBody(Elv::Io::Device& file, std::optional<uint64_t> end)
 		typeSectionProcessed = true;
 	}
 
+	// The superseded Phase-3 exception form is never decoded as a distinct
+	// execution model: when the embedder opts in (WASMJIT_LEGACY_EH), every
+	// body that uses it is rewritten into the final try_table form first, so
+	// the validator and the backends only ever see the final encoding
+	// (docs/proposals/LEGACY_EXCEPTIONS.md LE-3..LE-6).
+	if (parserOptions_.legacyExceptionHandling)
+		rewriteLegacyExceptionHandling(*this);
+
 	// Reject a module that declares a value type this engine cannot lower, rather
 	// than compiling a null operand into a function (docs/UNMODELLED_VALUE_TYPES.md).
 	validateValueTypes();
-	validate(parseOptions);
+	validate(validationOptions_);
 }
 
 std::unique_ptr<Module> Module::parseNested(Elv::Io::Device& file, uint64_t end, Store& store)
+{
+	return parseNested(file, end, ParseOptions::fromEnvironment(), store);
+}
+
+std::unique_ptr<Module> Module::parseNested(Elv::Io::Device& file, uint64_t end,
+		const ParseOptions& options, Store& store)
 {
 	const long position = file.tell();
 	if (position < 0 || static_cast<uint64_t>(position) > end
@@ -1496,6 +1522,7 @@ std::unique_ptr<Module> Module::parseNested(Elv::Io::Device& file, uint64_t end,
 	module->version = preamble.version;
 	module->layer = 0;
 	module->store_ = &store;
+	module->parserOptions_ = options;
 	module->parseBody(file, end);
 	return module;
 }

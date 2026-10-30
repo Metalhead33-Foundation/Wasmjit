@@ -42,6 +42,7 @@ WASMJIT_VISIBLE_BEGIN
 #include "WasmImport.hpp"
 #include "WasmMemory.hpp"
 #include "WasmModule.hpp"
+#include "WasmParseOptions.hpp"
 #include "WasmModuleInstance.hpp"
 #include "WasmNativeImport.hpp"
 #include "WasmProfile.hpp"

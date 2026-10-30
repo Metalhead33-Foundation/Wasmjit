@@ -23,7 +23,13 @@ Component::Component()
 
 void Component::fromFile(Elv::Io::Device& file, Store& store)
 {
+	fromFile(file, ParseOptions::fromEnvironment(), store);
+}
+
+void Component::fromFile(Elv::Io::Device& file, const ParseOptions& options, Store& store)
+{
 	store_ = &store;
+	parserOptions_ = options;
 	const Preamble preamble = Artifact::readPreamble(file);
 	if (preamble.layer != kComponentLayer)
 		throw std::runtime_error("Unsupported WebAssembly artifact: expected a "
@@ -38,6 +44,13 @@ void Component::fromFile(Elv::Io::Device& file, Store& store)
 
 std::unique_ptr<Component> Component::parseNested(
 		Elv::Io::Device& file, uint64_t end, unsigned depth, Store& store)
+{
+	return parseNested(file, end, depth, ParseOptions::fromEnvironment(), store);
+}
+
+std::unique_ptr<Component> Component::parseNested(
+		Elv::Io::Device& file, uint64_t end, unsigned depth,
+		const ParseOptions& options, Store& store)
 {
 	const long position = file.tell();
 	if (position < 0 || static_cast<uint64_t>(position) > end
@@ -55,6 +68,7 @@ std::unique_ptr<Component> Component::parseNested(
 	component->version = preamble.version;
 	component->layer = preamble.layer;
 	component->store_ = &store;
+	component->parserOptions_ = options;
 	component->parseSections(file, end, depth);
 	return component;
 }
@@ -133,12 +147,13 @@ void Component::parseSectionPayload(ComponentSection& section,
 		break;
 	}
 	case ComponentSectionType::CoreModule:
-		coreModules.push_back(Module::parseNested(device, payload.size(), store()));
+		coreModules.push_back(Module::parseNested(device, payload.size(), parserOptions_, store()));
 		definitions.push_back({ComponentDefinitionKind::CoreModule,
 				static_cast<uint32_t>(coreModules.size() - 1)});
 		break;
 	case ComponentSectionType::NestedComponent:
-		components.push_back(Component::parseNested(device, payload.size(), depth + 1, store()));
+		components.push_back(Component::parseNested(device, payload.size(), depth + 1,
+				parserOptions_, store()));
 		definitions.push_back({ComponentDefinitionKind::Component,
 				static_cast<uint32_t>(components.size() - 1)});
 		break;

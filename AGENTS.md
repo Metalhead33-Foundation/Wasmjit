@@ -37,9 +37,13 @@ the one-line check to run.
   [`EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) (the `WASM::Runtime`, headers, versioning, install),
   [`BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md) (loading a backend behind a C descriptor) and
   [`MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) (demoting the multi-agent blocker).
-  The language-support studies are defined in [`docs/LANGUAGE_FEASIBILITY.md`](docs/LANGUAGE_FEASIBILITY.md):
-  the two studies have not been started, and no language is assessed. Its entry-gate
-  readiness audit (`LF-0a`) **has** been run: [`docs/READINESS_AUDIT.md`](docs/READINESS_AUDIT.md)
+  The language-support studies are defined in [`docs/LANGUAGE_FEASIBILITY.md`](docs/LANGUAGE_FEASIBILITY.md).
+  The pre-feasibility / scoping study (`LF-1`) **has** been run and its output is
+  [`docs/languages/`](docs/languages/index.md) — a triage of the whole canonical list,
+  a clustering map, five **proposed** charters and an evidence log, with **no verdicts
+  and no support claim**. The full feasibility studies (`LF-2`) have not been started:
+  no charter has a named requester, and no language is assessed. Its entry-gate
+  readiness audit (`LF-0a`) was run first: [`docs/READINESS_AUDIT.md`](docs/READINESS_AUDIT.md)
   reports `RG1`–`RG6` as `Pinned` and, in the same sweep, re-checks `G3` of the
   milestone (whether a second code generator may begin — it may; SLJIT is the
   recommendation, and the `RA1`/`RA2` proof gaps are named there).

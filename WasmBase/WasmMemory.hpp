@@ -28,8 +28,10 @@ struct LinearMemory {
 	uint64_t  memorySize; //!< current size in bytes
 	uint64_t  memoryMax; //!< max size in bytes
 	bool      isShared; //!< true → threads-proposal shared memory (atomics-eligible, grow is synchronized)
-	void*     hostData; //!< Opaque pointer for any external user data; //!< Ownership/backing storage lives OUTSIDE this struct (see below) —
-	                        //!< LinearMemory itself is just the backend-visible view.
+	void*     hostData; //!< The owning `StoreOwnedMemory`, which `Store::growMemory` recovers by cast.
+	                    //!< Backing storage lives OUTSIDE this struct: the POD is the
+	                    //!< backend-visible view, and an embedder must not write this field
+	                    //!< (docs/proposals/MEMORY_PROVIDER.md `MP4`).
 	//! Index type of the memory64 declaration, appended after the hot fields so
 	//! every existing offset (including `hostData`) stays put. Import matching
 	//! compares it against the importing module's declared type (spec
@@ -52,6 +54,24 @@ static_assert(std::is_standard_layout_v<LinearMemory>,
 //! growing a shared memory is observed atomically (THREADS.md TH-3/T7).
 /** \brief Reads the current memory size with sequential consistency. \param memory Backend-visible linear-memory descriptor. \return Current memory size in bytes. */
 uint64_t wasm_memory_size(const LinearMemory* memory);
+
+//! How a linear memory obtains and grows its bytes
+//! (docs/proposals/MEMORY_PROVIDER.md MP-1).
+//!
+//! This is a **host** choice, not a module one: nothing about it is observable
+//! from inside the guest, which addresses offsets rather than host addresses.
+//! It is therefore not part of `MemoryType` and never appears in a declaration.
+enum class MemoryAllocationPolicy : uint8_t {
+	//! A growable buffer: pages are committed as they are added, and the base
+	//! pointer may move when the buffer is relocated. The default, and what
+	//! every memory created before the policy existed gets.
+	Growable = 0,
+	//! The declared maximum is reserved in address space up front and pages are
+	//! committed as they are added, so `memoryBase` never moves. Requires a
+	//! declared maximum; a shared memory already reserves, so the policy is
+	//! ignored for one.
+	Reserved = 1,
+};
 
 /** \brief Store-owned backing allocation for a backend-visible LinearMemory view. */
 class StoreOwnedMemory
@@ -119,6 +139,47 @@ public:
 	~SharedLinearMemory() override;
 	bool growMemory(uint64_t deltaPages) override;
 	/** \brief Decommits a shared-memory range when the platform supports it. \param offset Starting byte offset. \param bytes Range length. \return true if decommitted and zero-filled; false if caller must zero-fill. */
+	bool discardHint(uint64_t offset, uint64_t bytes) const override;
+};
+
+//! \brief Non-shared memory that reserves its declared maximum up front.
+//!
+//! The counterpart of `PrivateLinearMemory` for
+//! `MemoryAllocationPolicy::Reserved`: the address space for the declared
+//! maximum is reserved at construction and each growth commits pages into it, so
+//! `memoryBase` is stable for the memory's whole life and a large maximum costs
+//! no resident memory. Committed pages come back zeroed from the operating
+//! system, which is what the specification requires of a newly grown page
+//! (docs/proposals/MEMORY_PROVIDER.md §4.4).
+//!
+//! Unlike `SharedLinearMemory` this type is **not** shared: `isShared` stays
+//! false, so `wasm_memory_size` reads the field directly and growth needs no
+//! mutex. It differs from it in two other ways as well: it reserves exactly the
+//! declared maximum (no four-gigabyte cap, no rewritten maximum), and it refuses
+//! a memory with no declared maximum instead of inventing one.
+class ReservedLinearMemory final : public StoreOwnedMemory
+{
+private:
+	//! Base of the reserved address range; `memoryBase` points here and never moves.
+	void*  reservedRegion;
+	size_t reservedBytes; //!< Size of the reservation, in bytes.
+	//! Reserves `bytes` of address space for the memory.
+	bool platformReservedMemory(size_t bytes);
+	//! Commits the first `newBytes` of the reservation.
+	bool platformCommitMemory(size_t newBytes);
+	//! Releases the reservation.
+	void platformDealloc();
+public:
+	//! \brief Reserves `maxPages * pageSize` and commits the initial pages.
+	//! \throws std::invalid_argument when the memory declares no maximum.
+	//! \throws std::bad_alloc when the reservation is not representable or the host refuses it.
+	explicit ReservedLinearMemory(uint64_t initialPages, uint64_t maxPages, bool is64 = false,
+			uint64_t pageSize = 0x10000); //!< Page size in bytes (`0x10000` unless overridden).
+	/** \brief Releases the reserved address range. */
+	~ReservedLinearMemory() override;
+	/** \brief Commits the requested pages into the reservation. \param deltaPages Number of pages to add. \return false when growth exceeds the declared maximum or the commit fails. */
+	bool growMemory(uint64_t deltaPages) override;
+	/** \brief Drops a range's pages without unmapping them, where the platform supports it. \param offset Starting byte offset. \param bytes Range length in bytes. \return true if the range was decommitted and reads as zeros; false requests explicit zero-fill. */
 	bool discardHint(uint64_t offset, uint64_t bytes) const override;
 };
 

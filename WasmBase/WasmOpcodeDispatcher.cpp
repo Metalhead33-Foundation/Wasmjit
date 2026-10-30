@@ -1,4 +1,5 @@
 #include "WasmOpcodeDispatcher.hpp"
+#include "WasmLegacyEh.hpp"
 #include "WasmSafety.hpp"
 #include <vector>
 #include <stdexcept>
@@ -999,6 +1000,20 @@ void OpcodeDispatcher::dispatchOpcode(FastMemReader& stream, Opcode opcode)
 		// Control – index immediates
 		// ----------------------------------------------------------------
 		case Opcode::Throw:    { auto x = stream.readLEB128<TagIdx>();   dispatchThrow(x);   break; }
+		// Superseded Phase-3 exception handling
+		// (docs/proposals/LEGACY_EXCEPTIONS.md LE-1): a named refusal with the
+		// remedies, not the generic "invalid primary opcode". A module that opts
+		// in (WASMJIT_LEGACY_EH=1) is rewritten to the final form before it is
+		// decoded, so these five never reach a backend.
+		case Opcode::TryLegacy: { BlockType bt; stream >> bt; (void)bt;
+								throw std::runtime_error(legacyExceptionHandlingMessage("try (0x06)")); }
+		case Opcode::Catch:     { auto x = stream.readLEB128<TagIdx>(); (void)x;
+								throw std::runtime_error(legacyExceptionHandlingMessage("catch (0x07)")); }
+		case Opcode::Rethrow:   { auto l = stream.readLEB128<LabelIdx>(); (void)l;
+								throw std::runtime_error(legacyExceptionHandlingMessage("rethrow (0x09)")); }
+		case Opcode::Delegate:  { auto l = stream.readLEB128<LabelIdx>(); (void)l;
+								throw std::runtime_error(legacyExceptionHandlingMessage("delegate (0x18)")); }
+		case Opcode::CatchAll:  { throw std::runtime_error(legacyExceptionHandlingMessage("catch_all (0x19)")); }
 		case Opcode::Br:       { auto l = stream.readLEB128<LabelIdx>(); dispatchBr(l);      break; }
 		case Opcode::BrIf:     { auto l = stream.readLEB128<LabelIdx>(); dispatchBrIf(l);    break; }
 		case Opcode::BrTable:  { auto ls = readListLEB128<LabelIdx>(stream);

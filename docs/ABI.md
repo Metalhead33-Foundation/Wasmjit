@@ -485,10 +485,27 @@ not involved). The import/export name mapping lives in
 The Store owns the storage and provides `growMemory` (recovering the owning
 `StoreOwnedMemory` from the back-pointer in `LinearMemory::hostData`).
 
-Unbounded shared memories reserve address space up front (`SharedLinearMemory`);
-ordinary memories use a growable buffer (`PrivateLinearMemory`). Multi-memory
-is fully wired: memory instructions carry a `MemIdx`, and the JIT indexes
-`VMContext::memories` at compile time.
+Three backings exist, chosen by `MemoryAllocationPolicy`
+([`proposals/MEMORY_PROVIDER.md`](proposals/MEMORY_PROVIDER.md) `MP-1`):
+
+| Policy | Backing | Base stable? | Maximum |
+|---|---|---|---|
+| `Growable` (default) | `PrivateLinearMemory`, a growable buffer | **no** — a growth may relocate and copy it | as declared |
+| `Reserved` | `ReservedLinearMemory`, address space reserved up front | yes | as declared, reserved in full |
+| *any*, on a shared memory | `SharedLinearMemory`, reservation + commit | yes | capped at 4 GiB |
+
+A shared memory already reserves, so the policy is ignored for one. The policy
+is **host-side only**: it is not part of `MemoryType`, a guest cannot observe it
+(addresses are offsets), and no backend is told about it — the `LinearMemory`
+view is the same POD in every case, so the frozen layouts of `API_ABI_STABILITY.md`
+S2 do not move. `Store::setMemoryAllocationPolicy` selects it for the memories a
+module declares; the `createLinearMemory` overload selects it per memory.
+
+Two embedder-visible consequences, both measured and both priced in the same
+note: under `Growable` a `memoryBase` held across a guest call can dangle, and
+`Reserved` refuses by name a memory that declares **no** maximum rather than
+inventing one. Multi-memory is fully wired: memory instructions carry a
+`MemIdx`, and the JIT indexes `VMContext::memories` at compile time.
 
 ### Other store-owned entities
 

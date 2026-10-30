@@ -80,6 +80,17 @@ struct WASMJIT_API Component : public Artifact {
 	 * \param store Store that owns canonical types; it must outlive this component.
 	 */
 	void fromFile(Elv::Io::Device& file, Store& store);
+	//! The same, with an explicit parser policy: a component's embedded core
+	//! modules inherit it, so a component loaded with the superseded exception
+	//! form accepted does not hand its cores a stricter decoder
+	//! (docs/proposals/LEGACY_EXCEPTIONS.md `LE-6`).
+	/**
+	 * \brief Reads a component using an explicit parser policy.
+	 * \param file Input device positioned at the component preamble.
+	 * \param options Parser policy inherited by the embedded core modules.
+	 * \param store Store that owns canonical types; it must outlive this component.
+	 */
+	void fromFile(Elv::Io::Device& file, const ParseOptions& options, Store& store);
 
 	//! Parses a nested component body (no preamble) between the current
 	//! position and `end`.
@@ -93,6 +104,20 @@ struct WASMJIT_API Component : public Artifact {
 	 */
 	static std::unique_ptr<Component> parseNested(
 			Elv::Io::Device& file, uint64_t end, unsigned depth, Store& store);
+	//! The same, carrying the enclosing artifact's parser policy down the
+	//! nesting.
+	/**
+	 * \brief Parses a nested component body with an explicit parser policy.
+	 * \param file Input device positioned at the nested body.
+	 * \param end Absolute end offset of this nested body.
+	 * \param depth Current nesting depth, used to enforce parser limits.
+	 * \param options Parser policy inherited by nested components and core modules.
+	 * \param store Store receiving canonical type identities.
+	 * \return Owning pointer to the parsed nested component.
+	 */
+	static std::unique_ptr<Component> parseNested(
+			Elv::Io::Device& file, uint64_t end, unsigned depth,
+			const ParseOptions& options, Store& store);
 
 	//! The binary sections of this component, in file order.
 	/** \brief Views the binary sections in original file order. \return Non-owning span valid for this component's lifetime. */
@@ -132,6 +157,10 @@ protected:
 	void parseBody(Elv::Io::Device& file, std::optional<uint64_t> end) override;
 
 private:
+	//! The parser policy this component was read with; the embedded core modules
+	//! and nested components inherit it (docs/proposals/LEGACY_EXCEPTIONS.md
+	//! `LE-6`).
+	ParseOptions parserOptions_{};
 	//! Clears parser scratch that validate() has already published into the Store.
 	/** \brief Releases parser scratch after its data has been published to the Store. */
 	void releaseParserAst() const;
