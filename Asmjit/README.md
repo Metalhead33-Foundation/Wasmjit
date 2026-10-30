@@ -25,7 +25,7 @@ the two-pass instantiation contract and enabling forward and mutually recursive
 direct calls. Each generated function emits the required
   `wasm_stack_check(VMContext*)` prologue call.
 - The body compiler currently supports i32 parameters/results/locals; constants,
-  local access, `drop`; i32 globals; arithmetic (`add/sub/mul/div/rem`),
+  local access, `drop`, untyped and i32-typed `select`; i32 globals; arithmetic (`add/sub/mul/div/rem`),
   `clz`/`ctz`/`popcnt`, sign extension; signed/unsigned comparisons; bitwise
   operations, shifts and rotations; void and single-i32-result `block`/`loop`/`if`/`else`, `br`/`br_if`/`br_table`,
   branches to the implicit function label, and explicit/implicit returns; direct calls
@@ -33,7 +33,7 @@ direct calls. Each generated function emits the required
   and direct/indirect tail-call opcodes (currently lowered to call+return;
   true tail-call stack semantics and machine-level elimination remain outstanding);
   and memory32 i32 loads/stores, including signed/unsigned 8/16-bit extensions,
-  plus `memory.size`/`memory.grow`.
+  plus `memory.size`/`memory.grow`, checked memory32 `memory.copy` (with overlap-safe `memmove` semantics) and `memory.fill`.
   Memory accesses use a checked helper that observes the shared-memory size
   accessor and reports out-of-bounds traps through the pending-trap protocol.
   Function nodes are declared in one CodeHolder before any bodies are emitted,
@@ -49,7 +49,8 @@ direct calls. Each generated function emits the required
   layout calculation, and the existing lane-wise SIMD diagnostic interface.
 - `Test/AsmjitModuleCompilerTests.cpp` instantiates WAT fixtures and executes arithmetic, comparison, bitwise,
   control-flow, direct/indirect-call (including native and cross-instance Wasm imports, mutual recursion, and tail-call opcodes), result-bearing control flow, `br_table`, unreachable traps, i32-global, and memory32
-  cases, including signed/unsigned narrow loads and out-of-bounds traps.
+  cases, including signed/unsigned narrow loads, `select`, overlap-safe bulk copies,
+  fills, zero-length boundary operations, and out-of-bounds traps.
 - Packed `i8`/`i16` storage retains its narrow 8-/16-bit representation.
   Arithmetic lowering must explicitly extend those values to `i32` before
   applying Wasm integer operations; the storage translator does not silently
