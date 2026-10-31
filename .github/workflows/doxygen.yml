@@ -1,0 +1,148 @@
+# The header reference, rendered and published.
+#
+# `Doxyfile` is the one place that renders the headers and the Markdown notes;
+# `docs/DOCUMENTATION.md` is the policy behind it (Qt-style comments, the note
+# tree, the checks). The render is cheap and self-contained: it needs no
+# compiler, no Qt, no submodules — `Doxyfile`'s `INPUT` names in-tree paths only
+# and `EXCLUDE` drops `extern/` — so this workflow checks out the sources,
+# installs Doxygen, renders into `build/doxygen/html` (the shadow build tree, as
+# `AGENTS.md` requires) and publishes that folder:
+#
+#   * every run on `master` uploads the rendered site as the `doxygen-html`
+#     workflow artifact, downloadable from the run page;
+#   * the same site is deployed to GitHub Pages, i.e.
+#     https://metalhead33-foundation.github.io/Wasmjit/
+#
+# One-time setup, in the repository settings: Settings -> Pages -> Build and
+# deployment -> Source must be "GitHub Actions". Without it `deploy-pages` fails
+# with "Get Pages site failed"; the artifact is still uploaded, and the render
+# job still passes.
+#
+# Deliberately not run here: `./Test/WasmJit '[headerdoc]'` and `'[docs]'`.
+# They need the full qmake build (Qt 6, LibJIT, Catch2, libffi, wasm-tools,
+# Node) and belong to the test suite's job, not to the documentation renderer.
+
+name: Doxygen
+
+on:
+  push:
+    branches: [master]
+  # Lets the site be published, or re-published after enabling Pages, without
+  # an empty commit. A dispatch from another branch builds the artifact only;
+  # the deploy job below is restricted to `master`.
+  workflow_dispatch:
+
+# Nothing in the render job needs to write to the repository. `pages: write`
+# and `id-token: write` are granted to the deploy job alone.
+permissions:
+  contents: read
+
+# A published site is replaced, never merged: let one deployment finish before
+# the next starts, and never cancel one half-way through.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  # `OUTPUT_DIRECTORY = build/doxygen` in `Doxyfile`, plus its `HTML_OUTPUT`.
+  SITE_DIR: build/doxygen/html
+  # The renderer's stderr, kept in the shadow build tree with the site itself.
+  LOG: build/doxygen.log
+
+jobs:
+  render:
+    name: Render the reference
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the tree
+        uses: actions/checkout@v7
+        with:
+          # `extern/` is a submodule and `Doxyfile` excludes it, so the render
+          # needs none of the submodules; `submodules: false` makes that
+          # explicit.
+          submodules: false
+
+      - name: Install Doxygen
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends doxygen
+          doxygen --version
+
+      - name: Render the site
+        run: |
+          # Doxygen creates `build/doxygen/html` itself, but not its parents,
+          # and a fresh checkout has no `build/`: it is git-ignored.
+          mkdir -p build
+          doxygen Doxyfile 2>&1 | tee "$LOG"
+          # The site's front door. A missing `index.html` means the artifact is
+          # not worth uploading, and Pages would serve a 404.
+          test -f "$SITE_DIR/index.html"
+
+      - name: Surface Doxygen warnings
+        if: always()
+        run: |
+          if [ ! -f "$LOG" ]; then
+            exit 0
+          fi
+          if [ -s "$LOG" ]; then
+            # `WARN_AS_ERROR = NO` in `Doxyfile` is deliberate: the strict pass
+            # of docs/DOCUMENTATION.md §6 is a work list, not a gate, and the
+            # committed config is what decides whether a run fails. So a
+            # warning becomes an annotation on the run, not a red build.
+            sed "s|$GITHUB_WORKSPACE/||g" "$LOG" | while IFS= read -r line; do
+              echo "::warning title=Doxygen::$line"
+            done
+          else
+            echo "The render was warning-free (docs/DOCUMENTATION.md §6)."
+          fi
+
+      - name: Summarise the render
+        if: success()
+        run: |
+          {
+            echo "### Doxygen reference"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Doxygen | \`$(doxygen --version)\` |"
+            echo "| HTML pages | $(find "$SITE_DIR" -name '*.html' | wc -l) |"
+            echo "| Site size | $(du -sh "$SITE_DIR" | cut -f1) |"
+            echo "| Warnings | $(wc -l < "$LOG") |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the rendered site as an artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: doxygen-html
+          path: ${{ env.SITE_DIR }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Package the site for GitHub Pages
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: ${{ env.SITE_DIR }}
+          # The Pages artifact is consumed by the deploy job of this run and is
+          # of no use afterwards; the `doxygen-html` artifact above is the one
+          # to keep and download.
+          retention-days: 1
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: render
+    # A manual dispatch from a side branch may build the artifact, but only
+    # `master` replaces the published site — Pages validates the ref against
+    # the `github-pages` environment's protection rules.
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy the site
+        id: deployment
+        uses: actions/deploy-pages@v5
+
