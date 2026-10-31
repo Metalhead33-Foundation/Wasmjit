@@ -16,6 +16,8 @@ and the `[docs]` check fails ([`DOCUMENTATION.md`](../DOCUMENTATION.md) §9).
 | \subpage prop_bulk_memory | Bulk memory operations |
 | \subpage prop_call_tags | Call tags (the stack-switching companion proposal) |
 | \subpage prop_component_model | WIT and the Component Model |
+| \subpage prop_compiler_policy | Compilation policy: optimization degree, strictness and interpreter fallback |
+| \subpage prop_configuration | Engine configuration and budgets: the hardcoded knobs, the per-runtime memory budget, and the budget model |
 | \subpage prop_constant_time | Constant-time WebAssembly |
 | \subpage prop_custom_page_sizes | Custom page sizes |
 | \subpage prop_exceptions | Exception handling with `exnref` |

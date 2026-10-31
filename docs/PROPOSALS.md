@@ -92,7 +92,7 @@ gaps → where we deliberately deviate → plan → test survey → references.
 
 ## 4. What the folder holds today
 
-`docs/proposals/` holds **thirty-six** notes, plus an `index.md` that is
+`docs/proposals/` holds **thirty-eight** notes, plus an `index.md` that is
 navigation rather than a note (it is what nests them in the generated site, and
 it is the one file exempt from the shape check below). Every note carries the
 §2.1 front
@@ -106,7 +106,9 @@ throughout; the prefixes actually in the tree are:
 | `ANNOTATIONS.md` | `ANN<n>` | `ANND<n>` | `ANN-<n>` |
 | `BULK_MEMORY.md` | `BM<n>` | `BMD<n>` | `BM-<n>` |
 | `CALL_TAGS.md` | `CTA<n>` | `CTAD<n>` | `CTA-<n>` |
+| `COMPILER_POLICY.md` | `CP<n>` | `CPD<n>` | `CP-<n>` |
 | `COMPONENT_MODEL.md` | `CM<n>` | `CMD<n>` | `CM-<n>` |
+| `CONFIGURATION.md` | `CFG<n>` | `CFGD<n>` | `CFG-<n>` |
 | `CONSTANT_TIME.md` | `CT<n>` | `CTD<n>` | `CT-<n>` |
 | `CUSTOM_PAGE_SIZES.md` | `CPS<n>` | `CPSD<n>` | `CPS-<n>` |
 | `EXCEPTIONS.md` | `EX<n>` | `EXD<n>` | `EX-<n>` |
@@ -204,6 +206,8 @@ authoritative per-item status is each note's §7 plan.
 | `ANNOTATIONS.md` | 9 | canonical | none | — | conforms exactly |
 | `BULK_MEMORY.md` | 9 | canonical | none | — | conforms exactly |
 | `CALL_TAGS.md` | 9 | canonical | none | — | conforms exactly |
+| `COMPILER_POLICY.md` | 10 | canonical + appendix | none | §10 "Appendix: the mapping, the plumbing, and the retry analysis" after §9 | conforms (appendix; an engine-seam study of the compilation knobs) |
+| `CONFIGURATION.md` | 10 | canonical + appendix | none | §10 "Appendix: the memory budget in full" after §9 | conforms (appendix; an engine-seam study of the resource knobs) |
 | `CONSTANT_TIME.md` | 9 | canonical | none | — | conforms exactly |
 | `CUSTOM_PAGE_SIZES.md` | 9 | canonical | none | — | conforms exactly |
 | `EXCEPTIONS.md` | 9 | canonical | none | — | conforms exactly |
@@ -238,10 +242,11 @@ authoritative per-item status is each note's §7 plan.
 | `SMALL_PROPOSALS.md` | 8 | grouped (3-in-1) | §2–§4 are proposals; demands/non-demands/implemented/gaps embedded | §5 fast/loose, §6 plan, §7 survey, §8 refs | conforms (grouped variant, PD1) |
 
 Reading: thirty notes match §2 exactly; two reword §2/§3 and keep the nine
-slots; three append a section; one uses the grouped variant. No note is missing a
+slots; five append a section; one uses the grouped variant. No note is missing a
 slot, and none is missing its front matter. `TYPE_MODEL.md` conforms to the nine
 slots but is an internal type-store design note, not a WebAssembly feature
-proposal.
+proposal; `MEMORY_PROVIDER.md`, `CONFIGURATION.md` and `COMPILER_POLICY.md` are
+similarly engine-seam studies rather than feature proposals.
 
 ## 9. References
 

@@ -107,6 +107,15 @@ Default budget **2 GiB**; override with `WASMJIT_MAX_TOTAL_BYTES` (bytes;
 `0`/`unlimited` disables it, at your own risk). The whole test suite fits in
 **64 MiB**, so the default is very generous.
 
+**Planned, not shipped:** [`proposals/CONFIGURATION.md`](proposals/CONFIGURATION.md)
+`CFG-1` makes this budget **per runtime** with a **4 GiB** default and
+`CFG-2`/`CFG-3` add opt-in per-category limits (one linear memory, all linear
+memories, the GC heap, tables) and an opt-in address-space counter for
+reservations. Until that milestone lands, the process-wide 2 GiB default above is
+what the engine does and `RuntimeConfig::allocationBudgetBytes` is still refused.
+The same note inventories every other hardcoded cap in this document's §2.2 and
+says which ones stay hardcoded and why.
+
 **Encountered pitfall (the big one).** MEMORY64 widened
 `memory.grow`/`table.grow` to 64-bit and — correctly — began treating the delta
 as an *unsigned* index, but dropped the old signed-delta guard without adding

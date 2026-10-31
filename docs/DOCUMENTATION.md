@@ -280,9 +280,9 @@ a flat tree is. The hierarchy is therefore built by three index pages:
 
 | Index page | Id | Children |
 |---|---|---|
-| [`index.md`](index.md) | `docs_index` | the 21 notes in `docs/`, `proposals` **and** `languages` |
-| [`proposals/index.md`](proposals/index.md) | `proposals_index` | the 35 proposal notes |
-| [`languages/index.md`](languages/index.md) | `languages_index` | the 4 `LF-1` notes and the 11 `LF-2` reports |
+| [`index.md`](index.md) | `docs_index` | the 22 notes in `docs/`, `proposals` **and** `languages` |
+| [`proposals/index.md`](proposals/index.md) | `proposals_index` | the 38 proposal notes |
+| [`languages/index.md`](languages/index.md) | `languages_index` | the 16 language notes (the `LF-1` set and the `LF-2` reports) |
 
 A note declares its own id on the title line, and its folder's index lists that
 id in a table row:
