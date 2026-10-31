@@ -13,10 +13,20 @@
 #   * the same site is deployed to GitHub Pages, i.e.
 #     https://metalhead33-foundation.github.io/Wasmjit/
 #
+# This is the repository's only Pages publisher, and it must stay that way. A
+# Pages deployment *replaces* the published site instead of merging into it, so
+# two deployers of the same `github-pages` environment do not combine their
+# content: the one that finishes last wins and the other is discarded. That is
+# how the front door came to answer "File not found": a `static.yml` (GitHub's
+# "Static HTML" starter, added later) published the repository root, which has
+# no `index.html`, ~30 s after this workflow had published the reference. Adding
+# a page here is the way to extend the site; a second deployer is not.
+#
 # One-time setup, in the repository settings: Settings -> Pages -> Build and
 # deployment -> Source must be "GitHub Actions". Without it `deploy-pages` fails
 # with "Get Pages site failed"; the artifact is still uploaded, and the render
-# job still passes.
+# job still passes. The deploy job's first step reports that misconfiguration
+# earlier and with a clearer message.
 #
 # Deliberately not run here: `./Test/WasmJit '[headerdoc]'` and `'[docs]'`.
 # They need the full qmake build (Qt 6, LibJIT, Catch2, libffi, wasm-tools,
@@ -142,6 +152,13 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # Reads the Pages site from the API (`base_url`, `origin`, build type) and
+      # fails here — naming the setting — if the source is not "GitHub Actions".
+      # Otherwise `deploy-pages` reports the same misconfiguration as a generic
+      # API error, after the artifact has been uploaded and a deployment wasted.
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
       - name: Deploy the site
         id: deployment
         uses: actions/deploy-pages@v5
