@@ -87,6 +87,11 @@ syntax or semantics beyond the balanced form.
   `name` and `metadata.code.branch_hint`; every other custom section is skipped
   by `section.offset + section.size`. That is the correct binary fallback for
   annotation-generated custom sections the engine does not consume.
+- The two sections it does consume are the ones with a *backend* meaning: names
+  reach diagnostics and traps, and the branch hints are rebased onto the body and
+  made available to any backend through `OpcodeDispatcher::setBranchHints` /
+  `branchHintAt` ([`SMALL_PROPOSALS.md`](SMALL_PROPOSALS.md) §4). A backend that
+  can act on a hint does not have to re-parse the custom section.
 - `Module::processNameSection` stores the module name (§0) and function names
   (§1); the other name subsections, including names attached by `@name`, are
   skipped. See [`EXTENDED_NAME_SECTION.md`](EXTENDED_NAME_SECTION.md) ENS1–ENS4.
@@ -149,7 +154,7 @@ a binary for the engine.
 | Script / fixture | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|
 | `names` | 486 | 0 | 0 | binary name section tolerated; not annotations |
-| `branch_hint_loop` | manual | — | — | `@metadata.code.branch_hint` is consumed by `wasm-tools`; the test grades the binary hint |
+| `branch_hint_loop` | manual | — | — | `@metadata.code.branch_hint` is consumed by `wasm-tools`; the test grades the binary hint, and `[branch-hint]` grades the backend seam |
 | `name_section` | 17 assertions | 0 | 0 | `@name`-style binary names are readable through `findName` |
 | `custom_section` | 3 assertions | 0 | 0 | an `(@custom ...)`-generated section leaves code decoding unchanged |
 | annotations / text parser | — | — | — | permanently out of scope (binary-only rule) |

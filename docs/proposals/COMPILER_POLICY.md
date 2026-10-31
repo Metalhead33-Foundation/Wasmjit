@@ -1,6 +1,6 @@
 # Compilation Policy — Optimization Degree, Strictness and Interpreter Fallback {#prop_compiler_policy}
 
-Status: engine-seam study, revision 2 (2026-10-31). Revision 1 was the study:
+Status: engine-seam study, revision 3 (2026-10-31). Revision 1 was the study:
 the three axes, the tree's actual state, the gaps, the plan. **Since revision 2
 `CP-1`, `CP-2`, `CP-3` and `CP-5` are implemented**: a backend-neutral
 `CompilationPolicy` (`None`/`Basic`/`Full`, `Strict`/`Lax`,
@@ -8,10 +8,13 @@ the three axes, the tree's actual state, the gaps, the plan. **Since revision 2
 capability query every backend is asked before any code is generated, the strict
 refusal as a named `CompileFailure`, and the lax ladder that discards a poisoned
 backend instance and retries at the next lower degree, booking
-`WASM.COMPILE.REDUCED_OPTIMIZATION`. `CP-4` (the interpreter trampoline) is still
-not built — LibJIT reports `interprets == false`, so `FallbackOnly`/`Always` are
-refused at the boundary rather than silently compiled — and `CP-6` (per-function
-policy/tiering) remains deferred.
+`WASM.COMPILE.REDUCED_OPTIMIZATION`. Since revision 3 `CP-4`'s **core half** is
+also implemented: the ladder's decision is a pure, tested function
+(`nextCompilationAttempt`) that prefers an interpreter over a lower degree, and
+`WASM.COMPILE.INTERPRETED` has an emitter. The **backend half** of `CP-4` is
+blocked by this LibJIT build rather than merely unwritten: `jit_uses_interpreter()`
+returns **0** (measured, §4.2), so the library has no interpreter to call even if
+the trampoline existed. `CP-6` (per-function policy/tiering) remains deferred.
 
 Audience: anyone touching the compilation seam (`ModuleInstantiator` in
 `WasmBase/WasmModuleInstance.hpp`, `WASM::Runtime` in
@@ -267,6 +270,26 @@ right namespace for the two new records a policy needs:
 Both are *bookings*, not failures: the first exists so a regression is visible
 (`CPD5`), the second so an embedder can tell "slow but correct" from "compiled".
 
+### 4.7 The interpreter axis is blocked by the library build, not by this note
+
+A probe against the installed libjit (2026-10-31; the library `LibJit/LibJit.pro`
+links with `-ljit`):
+
+```c
+jit_init();
+printf("%d\n", jit_uses_interpreter());   /* -> 0 */
+```
+
+`jit_uses_interpreter()` says whether the library was built with its interpreter,
+and this build was not. A per-type trampoline would therefore have nothing to
+call, so `CP-4`'s *backend* half is **class C** in
+[`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §4.1 terms — blocked by the
+build configuration, documented rather than owed. A libjit rebuilt with
+`--enable-interpreter` and a trampoline would flip `capabilities().interprets` to
+true, and the ladder would use it with no core change: that is what the pure
+`nextCompilationAttempt()` decision buys, and why the refusal is a one-line
+capability answer rather than a special case.
+
 
 ## 5. Gaps
 
@@ -276,7 +299,7 @@ Both are *bookings*, not failures: the first exists so a regression is visible
 | ~~`CP2`~~ ✅ (CP-2) | No strictness axis: every failed compile is fatal to the instantiation; the only "regression" is an operator re-running the process with a different environment | §4.2/§4.3 | **High** — the requested `Strict`/`Lax` pair does not exist |
 | ~~`CP3`~~ ✅ (CP-3) | No regression ladder is *possible* without rebuilding the backend: a failed compile poisons its context and `Runtime` holds exactly one `BackendInstance` | §4.3; `Runtime::backend_`; `Context::abandon()` | **High** — the lax mode is a design, not a `catch` |
 | ~~`CP4`~~ ✅ (CP-1) | No capability query: an embedder cannot ask whether a backend can optimise, interpret, or honour a level | no analogue of `supportsConcurrency`/`supportsProfileConfig` for compilation | **High** — `CPD6` cannot be enforced without it |
-| `CP5` | No interpreter fallback at all; `F1` remedy C is "designed, not built" | [`../languages/LF2_DEEP_F1_BACKEND.md`](../languages/LF2_DEEP_F1_BACKEND.md) §4 row C | **Medium** — the axis exists in the policy, but only `Never` can be honoured today |
+| ~~`CP5`~~ ◑ (CP-4) | No interpreter fallback. **Core half done (revision 3):** the ladder prefers an interpreter (`nextCompilationAttempt`), `WASM.COMPILE.INTERPRETED` has an emitter, and a backend that reports `interprets` may leave a function uncompiled instead of throwing. **Backend half blocked:** `jit_uses_interpreter()` returns 0 in this LibJIT build (§4.2), so a trampoline would have nothing to call — class **C** (upstream/build-blocked), not a debt of this note | probe against the installed libjit (§4.2); [`../languages/LF2_DEEP_F1_BACKEND.md`](../languages/LF2_DEEP_F1_BACKEND.md) §4 row C | **Low** — the axis is implemented and refused; the library build is the gate |
 | ~~`CP6`~~ ✅ (CP-3) | A reduction would be silent: no record distinguishes "compiled at the requested level" from "compiled at a lower one" | §4.6; no `WASM.COMPILE.REDUCED_OPTIMIZATION` | **Medium** — `CPD5` fails without it |
 | ~~`CP7`~~ ✅ (CP-1) | The value is unvalidated: any integer is accepted, including LibJIT's "max" sentinel, and `atoi` silently maps junk to `0` | `libjitOptimizationLevel()` | **Low** — a malformed setting is indistinguishable from the default |
 | ~~`CP8`~~ ✅ (CP-5) | The core/backend contract is unstated: nothing says what a level means, or that a backend may refuse a request | only the backend's own comment | **Medium** — the next backend re-derives it, possibly differently |
@@ -338,7 +361,7 @@ prebuilt plugin is refused at query time rather than reading a stale vtable
 | **CP-1 — Vocabulary, query, plumbing** ✅ | A new header `WasmBase/WasmCompilationPolicy.hpp`: the three enums, `CompilationPolicy`, `BackendCompilationCapabilities`. `ModuleInstantiator` gains non-virtual `setCompilationPolicy`/`compilationPolicy()` (the `profile()` pattern) plus a **non-pure** `virtual capabilities()` whose default answers "`Basic` only, no interpreter" — so every existing backend compiles unchanged and is correct by default. `RuntimeConfig::compilation`; `Runtime` passes it and `rejectUnsupportedConfig` refuses an unhonourable request **by name**. LibJIT maps `None`/`Basic` to level 0 and `Full` to level 1; `WASMJIT_LIBJIT_OPT` keeps working as the process default when the field is left at its default. | `CP1`, `CP4`, `CP7`, `CP8`, `CP9`, `CP10` | A | A runtime created with `Full` compiles at level 1 and one with `Basic` at level 0 **in the same process**; `Always` on a backend that cannot interpret is refused at `create()` with a message naming the field and the backend; nothing compiles differently when the field is defaulted. |
 | **CP-2 — Strict means refuse, loudly** ✅ | Make `Strict` the documented default and the error name the requested level, the function index and the remediation. No `abort`, no silent downgrade. | `CP2` (strict half) | A | A module that only compiles at `None` fails `instantiate()` with the level in the message, emits `WASM.COMPILE.FUNCTION_FAILED`, and leaves the process usable. |
 | **CP-3 — The lax ladder** ✅ | On a `WASM.COMPILE.FUNCTION_FAILED` at attempt *L*: destroy the half-built instance, drop the poisoned `BackendInstance`, build a fresh one from the registry (so `Runtime` must retain a plugin's *path* as well as its name), retry at *L−1*, at most down to `None`; on success emit `WASM.COMPILE.REDUCED_OPTIMIZATION` with requested/achieved level and the failing function index. Refuse (do not retry) a policy the capability query rejected. **Depends on `CONFIGURATION.md` `CFG-9`** so a discarded attempt gives its memory back. | `CP2` (lax half), `CP3`, `CP6`, `CP11` | A | `WASMJIT_LIBJIT_OPT=1` plus `Lax` instantiates `F1`'s reproducer at level 0 with one Warning record and no crash; `Strict` on the same input throws; the ladder made ≤ 3 attempts; `allocatedBytes()` after the fallback does not retain the discarded attempt's memory |
-| **CP-4 — Interpreter fallback** | The backend work `F1` remedy C describes: a per-type trampoline over LibJIT's interpreter, a "not compiled" flag on `Callable`, a dispatcher change, `FallbackOnly`/`Always`, and `WASM.COMPILE.INTERPRETED`. Other backends answer `capabilities().interprets == false` and are refused. | `CP5` | B (backend + one contract row) | A function forced to `Always` runs through the interpreter and returns the same values as the compiled one; no core code learns what an interpreter is. |
+| **CP-4 — Interpreter fallback** ✅ (core) / ◑ (backend) | **Core, shipped (revision 3):** `nextCompilationAttempt()` is the whole ladder decision as a pure function (refuse under `Strict`, prefer an interpreter over a lower degree, stop when the interpreter was the last resort), `WASM.COMPILE.INTERPRETED` is emitted when the fallback changes, and `Runtime::achievedCompilationPolicy()` reports what happened. **Backend, blocked:** the per-type trampoline has nothing to call — `jit_uses_interpreter() == 0` in this build (§4.7) | `CP5` | A (core) / C (backend) | The ladder prefers a fallback-only retry when a backend reports `interprets`, else lowers the degree; `Always`/`FallbackOnly` on LibJIT is refused at `create()` naming the field; `[compilation-policy]` covers the decision matrix |
 | **CP-5 — Tests and documentation** ✅ | `[compilation-policy]` suite (§8.2); the `WASM.COMPILE.*` ids in `../DIAGNOSTICS.md`'s table; a contract row in `../BACKEND_WORK_ORDER.md` ("a backend reports its capabilities and honours the policy it accepted"); `README.md`'s meter; the `WASMJIT_LIBJIT_OPT` row re-worded as "the process default". | `CP6`, `CP8` | A | The suite runs green and the environment table describes the new precedence. |
 | **CP-6 — Per-function policy / tiering (deferred)** | Not started, not designed here. It is the dispatcher-shaped item: a hotness signal, a per-function policy and an ABI slot for "maybe interpreted". | — | likely **E** | This row exists so the deferral is explicit. |
 
@@ -382,6 +405,7 @@ remedy A is documented and untested; `CP-5` adds the missing case.
 | Test | What it pins |
 |---|---|
 | `the compilation policy is a request a backend may refuse` | the stable spellings, `supportsOptimizationLevel`/`supportsCompilationPolicy`, libjit reporting `Full` with no interpreter, and `Always` being refused at `create()` with a message naming the field |
+| `the compilation ladder prefers an interpreter over a lower degree` | `nextCompilationAttempt()`: `Strict` stops; a `Lax` request without an interpreter walks `Full` → `Basic` → `None` → stop; the *same* request on a backend that reports `interprets` becomes `FallbackOnly` at the same degree, and a failure there stops; `Always` never ladders |
 | `a lax policy regresses rather than failing, and books it` | `Strict` + `Full` on the `F1` fixture may refuse it; `Lax` + `Full` must instantiate, run `answer`, and — *if* the strict attempt failed — report a lower `achievedOptimizationLevel()` and one `WASM.COMPILE.REDUCED_OPTIMIZATION` record. If libjit ever accepts `Full`, the test asserts the opposite (no regression, no record) instead of failing |
 
 The second test is written as an *outcome* test rather than a bug test on
@@ -437,7 +461,7 @@ and a regression is a bookable event.
 | `Strict` | current behaviour: throw + `abandon()` | throw | throw | must not abort |
 | `Lax` | engine-level ladder (`CP-3`), not a LibJIT feature | same | same | same |
 | `Never` | no interpreter | only option | only option | — |
-| `FallbackOnly` / `Always` | LibJIT's interpreter through a per-type trampoline (`CP-4`, not built) | refused in `capabilities()` | refused | may implement |
+| `FallbackOnly` / `Always` | refused in `capabilities()`: `jit_uses_interpreter() == 0` in this build (§4.2), and no trampoline exists | refused in `capabilities()` | refused | may implement |
 
 The mapping lives in the backend because it *is* backend knowledge — the exact
 thing [`../LAYERING.md`](../LAYERING.md) §2 keeps out of `WasmBase/`. The core's
@@ -469,7 +493,10 @@ struct RuntimeConfig {
 };
 ```
 
-Two details that make it additive rather than a break:
+The ladder itself lives in one pure function (`nextCompilationAttempt`), so
+`Runtime` only decides *whether to retry* and *what to rebuild*; the ordering
+rules are testable without a backend. Two details make the plumbing additive
+rather than a break:
 
 - **`setCompilationPolicy` is called by `Runtime::instantiate` from
   `config_.compilation`**, before `instantiate()`, exactly as `profile` is

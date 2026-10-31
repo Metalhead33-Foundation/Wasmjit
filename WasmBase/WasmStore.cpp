@@ -83,6 +83,12 @@ MemoryBudget resolveBudget(const MemoryBudget& requested)
 		budget.gcHeapBytes = budget.totalBytes;
 	if (budget.tableBytes == 0)
 		budget.tableBytes = budget.totalBytes;
+	if (budget.stringBytes == 0)
+		budget.stringBytes = budget.totalBytes;
+	if (budget.exceptionBytes == 0)
+		budget.exceptionBytes = budget.totalBytes;
+	if (budget.continuationStackBytes == 0)
+		budget.continuationStackBytes = budget.totalBytes;
 
 	// A category above the total could never bind; refuse it where it is set
 	// (docs/proposals/CONFIGURATION.md §10.2 rule 2).
@@ -95,6 +101,9 @@ MemoryBudget resolveBudget(const MemoryBudget& requested)
 			{ budget.singleLinearMemoryBytes, "singleLinearMemoryBytes" },
 			{ budget.gcHeapBytes, "gcHeapBytes" },
 			{ budget.tableBytes, "tableBytes" },
+			{ budget.stringBytes, "stringBytes" },
+			{ budget.exceptionBytes, "exceptionBytes" },
+			{ budget.continuationStackBytes, "continuationStackBytes" },
 			{ budget.reservedAddressBytes, "reservedAddressBytes" },
 		};
 		for (const auto& category : categories) {
@@ -183,9 +192,14 @@ std::atomic<uint64_t>* Store::categoryCounter(MemoryCategory category) noexcept
 		return &tableBytes_;
 	case MemoryCategory::GcHeap:
 		return &gcBytes_;
+	case MemoryCategory::String:
+		return &stringBytes_;
+	case MemoryCategory::Exception:
+		return &exceptionBytes_;
+	case MemoryCategory::ContinuationStack:
+		return &continuationBytes_;
 	default:
-		// Strings, exceptions and continuation stacks are charged to the total
-		// only: they have no separate cap in the budget model.
+		// `Other`: charged to the total only.
 		return nullptr;
 	}
 }
@@ -199,6 +213,12 @@ uint64_t Store::categoryCap(MemoryCategory category) const noexcept
 		return budget_.tableBytes;
 	case MemoryCategory::GcHeap:
 		return budget_.gcHeapBytes;
+	case MemoryCategory::String:
+		return budget_.stringBytes;
+	case MemoryCategory::Exception:
+		return budget_.exceptionBytes;
+	case MemoryCategory::ContinuationStack:
+		return budget_.continuationStackBytes;
 	default:
 		return budget_.totalBytes;
 	}
@@ -365,15 +385,33 @@ Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPag
 	const MemoryId id = nextMemoryId.fetch_add(1);
 
 	try {
-		// A shared memory reserves by construction, so the policy only chooses
-		// between the two non-shared backings (MEMORY_PROVIDER.md MP-1).
+		// The host's provider is consulted first, then the built-in factory --
+		// either because no provider is installed or because it declined this
+		// request (docs/proposals/MEMORY_PROVIDER.md `MP-2`).
 		std::unique_ptr<StoreOwnedMemory> memory;
-		if (isShared)
-			memory = std::make_unique<SharedLinearMemory>(initialPages, maxPages, is64, pageSize);
-		else if (policy == MemoryAllocationPolicy::Reserved)
-			memory = std::make_unique<ReservedLinearMemory>(initialPages, maxPages, is64, pageSize);
-		else
-			memory = std::make_unique<PrivateLinearMemory>(initialPages, maxPages, is64, pageSize);
+		if (MemoryProvider* provider = memoryProvider_.load(std::memory_order_relaxed)) {
+			memory = provider->createMemory(initialPages, maxPages, isShared, is64, pageSize,
+					policy);
+			if (memory != nullptr && memory->getMemory()->hostData != memory.get()) {
+				// `Store::growMemory` recovers the owner from `hostData`; a
+				// provider that rewrites it would corrupt growth, so refuse it
+				// now instead of failing later (MEMORY_PROVIDER.md §4.2 item 4).
+				memory.reset();
+				throw std::runtime_error("the memory provider returned a backing whose"
+						" LinearMemory::hostData is not the backing itself"
+						" (docs/proposals/MEMORY_PROVIDER.md §4.2)");
+			}
+		}
+		if (!memory) {
+			// A shared memory reserves by construction, so the policy only chooses
+			// between the two non-shared backings (MEMORY_PROVIDER.md MP-1).
+			if (isShared)
+				memory = std::make_unique<SharedLinearMemory>(initialPages, maxPages, is64, pageSize);
+			else if (policy == MemoryAllocationPolicy::Reserved)
+				memory = std::make_unique<ReservedLinearMemory>(initialPages, maxPages, is64, pageSize);
+			else
+				memory = std::make_unique<PrivateLinearMemory>(initialPages, maxPages, is64, pageSize);
+		}
 
 		// The unique_ptr keeps the StoreOwnedMemory at a stable address, so the
 		// LinearMemory* handed out below stays valid across later insertions.
@@ -398,6 +436,16 @@ MemoryAllocationPolicy Store::memoryAllocationPolicy() const noexcept
 void Store::setMemoryAllocationPolicy(MemoryAllocationPolicy policy) noexcept
 {
 	memoryPolicy_.store(policy, std::memory_order_relaxed);
+}
+
+void Store::setMemoryProvider(MemoryProvider* provider) noexcept
+{
+	memoryProvider_.store(provider, std::memory_order_relaxed);
+}
+
+MemoryProvider* Store::memoryProvider() const noexcept
+{
+	return memoryProvider_.load(std::memory_order_relaxed);
 }
 
 LinearMemory* Store::memory(MemoryId id)

@@ -1,4 +1,5 @@
 #include <catch2/catch_all.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -197,5 +198,118 @@ TEST_CASE("the store's policy reaches the memories a module declares", "[mem-pro
 		REQUIRE(WASM::callCallable<std::int32_t>(*grow, 1) == -1);
 		REQUIRE(memory->memorySize == 4 * kPage);
 	}
+}
+
+
+// ── MP-2: a host-installed provider ─────────────────────────────────────────
+//
+// The provider is an *override*: it is consulted after the budget is charged and
+// before the built-in backing is chosen, it receives the policy the store was
+// asked for, and returning nullptr accepts the built-in backing for that request
+// (docs/proposals/MEMORY_PROVIDER.md MP-2).
+namespace {
+
+//! Counts the requests it sees and hands out a `Reserved` backing, so the test
+//! can tell "the provider was used" from "the built-in factory was used".
+class CountingProvider final : public WASM::MemoryProvider
+{
+public:
+	int calls = 0; //!< How many creations the store asked it for.
+	bool decline = false; //!< When true, returns nullptr (accept the built-in backing).
+	WASM::MemoryAllocationPolicy lastPolicy = WASM::MemoryAllocationPolicy::Growable;
+	bool lastShared = false; //!< Whether the last request was for a shared memory.
+
+	std::unique_ptr<WASM::StoreOwnedMemory> createMemory(std::uint64_t initialPages,
+			std::uint64_t maxPages, bool isShared, bool is64, std::uint64_t pageSize,
+			WASM::MemoryAllocationPolicy policy) override
+	{
+		++calls;
+		lastPolicy = policy;
+		lastShared = isShared;
+		if (decline)
+			return nullptr;
+		return std::make_unique<WASM::ReservedLinearMemory>(initialPages, maxPages, is64,
+				pageSize);
+	}
+};
+
+//! A provider that breaks the `hostData` contract on purpose.
+class HostDataBreaker final : public WASM::MemoryProvider
+{
+public:
+	std::unique_ptr<WASM::StoreOwnedMemory> createMemory(std::uint64_t initialPages,
+			std::uint64_t maxPages, bool, bool is64, std::uint64_t pageSize,
+			WASM::MemoryAllocationPolicy) override
+	{
+		auto memory = std::make_unique<WASM::PrivateLinearMemory>(initialPages, maxPages, is64,
+				pageSize);
+		memory->getMemory()->hostData = nullptr;
+		return memory;
+	}
+};
+
+} // namespace
+
+TEST_CASE("an installed provider creates the backings and keeps the budget", "[mem-provider]")
+{
+	WASM::MemoryBudget budget;
+	budget.totalBytes = 4 * kPage;
+	WASM::Store store(budget);
+	CountingProvider provider;
+
+	// With no provider installed the built-in factory answers, unchanged.
+	const WASM::Store::MemoryId builtIn = store.createLinearMemory(1, 4, false, false, kPage,
+			WASM::MemoryAllocationPolicy::Growable);
+	REQUIRE(store.memory(builtIn) != nullptr);
+	REQUIRE(provider.calls == 0);
+
+	store.setMemoryProvider(&provider);
+	REQUIRE(store.memoryProvider() == &provider);
+	const WASM::Store::MemoryId provided = store.createLinearMemory(1, 4, false, false, kPage,
+			WASM::MemoryAllocationPolicy::Reserved);
+	WASM::LinearMemory* memory = store.memory(provided);
+	REQUIRE(memory != nullptr);
+	REQUIRE(provider.calls == 1);
+	// The provider sees the policy the store was asked for, so it can honour it.
+	REQUIRE(provider.lastPolicy == WASM::MemoryAllocationPolicy::Reserved);
+	REQUIRE_FALSE(provider.lastShared);
+	// The bytes still read as zero and the budget still accounts for them.
+	REQUIRE(memory->memoryBase[0] == 0);
+	REQUIRE(store.allocatedLinearBytes() == 2 * kPage);
+
+	// A provider that declines falls back to the built-in backing for that
+	// request instead of failing.
+	provider.decline = true;
+	const WASM::Store::MemoryId declined = store.createLinearMemory(1, 4, false, false, kPage,
+			WASM::MemoryAllocationPolicy::Growable);
+	REQUIRE(store.memory(declined) != nullptr);
+	REQUIRE(provider.calls == 2);
+
+	// The budget is charged *before* the provider is called, so an oversized
+	// request never reaches it.
+	provider.decline = false;
+	const int callsBefore = provider.calls;
+	REQUIRE_THROWS(store.createLinearMemory(8, 8, false, false, kPage,
+			WASM::MemoryAllocationPolicy::Growable));
+	REQUIRE(provider.calls == callsBefore);
+
+	// Removing the provider restores the built-in factory.
+	store.setMemoryProvider(nullptr);
+	REQUIRE(store.memoryProvider() == nullptr);
+	REQUIRE_NOTHROW(store.createLinearMemory(1, 1, false, false, kPage,
+			WASM::MemoryAllocationPolicy::Growable));
+	REQUIRE(provider.calls == callsBefore);
+}
+
+TEST_CASE("a backing that rewrites hostData is refused by name", "[mem-provider]")
+{
+	// `Store::growMemory` recovers the backing from `hostData`; a provider that
+	// rewrites it would corrupt growth later, so the store refuses it now.
+	WASM::Store store;
+	HostDataBreaker breaker;
+	store.setMemoryProvider(&breaker);
+	REQUIRE_THROWS_WITH(store.createLinearMemory(1, 1, false, false, kPage,
+							  WASM::MemoryAllocationPolicy::Growable),
+			Catch::Matchers::ContainsSubstring("hostData"));
 }
 

@@ -620,6 +620,28 @@ struct BranchHint {
 	//! 0 = likely false, 1 = likely true.
 	uint8_t hint;
 };
+
+//! \brief A branch hint in backend-neutral terms.
+//!
+//! `BranchHint::hint` is the *wire* value; a backend asks
+//! `OpcodeDispatcher::branchHintAt()` and gets this instead, so it never has to
+//! interpret a raw byte. A hint is advisory: acting on it or ignoring it is
+//! explicitly allowed by the proposal and cannot change a result
+//! (docs/proposals/SMALL_PROPOSALS.md §4).
+enum class BranchHintKind : std::uint8_t {
+	None = 0, //!< No hint attached to the instruction.
+	Unlikely = 1, //!< The associated condition is likely false.
+	Likely = 2, //!< The associated condition is likely true.
+};
+
+//! \brief Maps a wire hint byte onto `BranchHintKind`.
+//! \param hint The `BranchHint::hint` byte: 0 = unlikely, 1 = likely.
+//! \return The neutral kind; `None` for a value the proposal does not define.
+constexpr BranchHintKind branchHintKind(std::uint8_t hint) noexcept
+{
+	return hint == 1 ? BranchHintKind::Likely
+			: (hint == 0 ? BranchHintKind::Unlikely : BranchHintKind::None);
+}
 /** \brief Decoded function body, declared locals, opcodes, and optional branch hints. */
 struct FunctionBody {
 	//! The declared locals, in declaration order.

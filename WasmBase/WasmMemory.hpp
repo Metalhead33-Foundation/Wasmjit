@@ -190,6 +190,46 @@ public:
 	bool discardHint(uint64_t offset, uint64_t bytes) const override;
 };
 
+//! \brief A host-supplied factory for linear-memory backings
+//! (docs/proposals/MEMORY_PROVIDER.md `MP-2`).
+//!
+//! A `Store` consults the provider it was given for every memory it creates, so
+//! an embedder that owns an arena can hand out bytes from it instead of letting
+//! the engine choose a backing. The provider is an **override, not a
+//! replacement**: it receives the policy the module and the store asked for and
+//! may honour or ignore it, and returning `nullptr` accepts the built-in
+//! backing for that request.
+//!
+//! A returned backing must keep the five guarantees every built-in backing
+//! keeps (`MEMORY_PROVIDER.md` §4.2): the bytes read as zero; `growMemory`
+//! honours `memoryMax`, is all-or-nothing, zero-fills the new pages and
+//! publishes `memorySize` (and a moved `memoryBase`) before it returns; a
+//! shared memory never moves its base; `LinearMemory::hostData` stays the
+//! back-pointer to the backing itself, because `Store::growMemory` recovers the
+//! owner from it; and the backing never charges the allocation budget, because
+//! the `Store` does that before it calls the provider.
+//!
+//! A provider that breaks the fourth point is refused by name when it is
+//! installed, rather than corrupting growth later.
+class WASMJIT_API MemoryProvider
+{
+public:
+	/** \brief Releases the provider. */
+	virtual ~MemoryProvider() = default;
+
+	//! \brief Creates the backing for one linear memory.
+	//!
+	//! `initialPages` is what the module declared, `maxPages` is `UINT64_MAX`
+	//! when it declared no maximum, `isShared` means the base must not move,
+	//! `is64` selects a 64-bit index space, `pageSize` is the custom page size
+	//! (65536 unless the module said otherwise), and `policy` is the allocation
+	//! policy the store was asked for.
+	/** \brief Creates the backing for one linear memory, or returns nullptr to accept the default. \param initialPages Initial page count. \param maxPages Maximum page count, or `UINT64_MAX`. \param isShared Whether the memory is shared. \param is64 Whether the memory uses 64-bit indices. \param pageSize Page size in bytes. \param policy The allocation policy requested. \return Owning backing, or nullptr for the built-in one. */
+	virtual std::unique_ptr<StoreOwnedMemory> createMemory(std::uint64_t initialPages,
+			std::uint64_t maxPages, bool isShared, bool is64, std::uint64_t pageSize,
+			MemoryAllocationPolicy policy) = 0;
+};
+
 
 }
 

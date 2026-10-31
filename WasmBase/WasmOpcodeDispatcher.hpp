@@ -43,6 +43,26 @@ protected:
 	//! Backends that consult side metadata (e.g. branch hints) use this.
 	size_t instructionOffset = 0;
 
+	//! The hints of the body being read, or null; see `setBranchHints`.
+	const BranchHint* branchHints_ = nullptr;
+	//! Number of entries `branchHints_` points at.
+	std::size_t branchHintCount_ = 0;
+
+	//! \par Branch hints (proposal branch-hinting, docs/proposals/SMALL_PROPOSALS.md §4)
+	//! The hints of the body about to be read, in body-offset order. A backend
+	//! that can act on one — block layout, branch polarity — asks
+	//! `branchHintAt()` for the instruction it is lowering; a backend that cannot
+	//! ignores it, which is exactly what the proposal allows. Installing them is
+	//! free and a lookup happens only when a backend asks, so a hint-less module
+	//! costs nothing and no backend is obliged to care.
+	//!
+	//! The contract for a backend is one call before `readCode`:
+	//! `setBranchHints(body.branchHints.data(), body.branchHints.size())`. The
+	//! vector belongs to the module and outlives the walk, so no copy is made.
+	void setBranchHints(const BranchHint* hints, std::size_t count) noexcept;
+	//! The hint attached to body offset `offset`, or `BranchHintKind::None`.
+	BranchHintKind branchHintAt(std::size_t offset) const noexcept;
+
 	//! Default implementation of every dispatch* method. A backend that executes
 	//! code must override each opcode it supports; the default reports the gap
 	//! loudly instead of silently doing nothing. The validator overrides this to

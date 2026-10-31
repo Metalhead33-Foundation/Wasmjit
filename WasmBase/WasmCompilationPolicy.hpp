@@ -20,6 +20,7 @@
 WASMJIT_VISIBLE_BEGIN
 
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 
 namespace WASM {
@@ -135,6 +136,30 @@ bool supportsOptimizationLevel(const BackendCompilationCapabilities& capabilitie
  */
 bool supportsCompilationPolicy(const BackendCompilationCapabilities& capabilities,
 		const CompilationPolicy& policy) noexcept;
+
+/*!
+ * \brief The next attempt after a compile failure, or `std::nullopt` to stop.
+ *
+ * The order is deliberate and one-way, so the ladder always terminates
+ * (docs/proposals/COMPILER_POLICY.md `CP-3`/`CP-4`):
+ *
+ * - `Strict` stops. A `Strict` refusal is the requested outcome.
+ * - `FallbackOnly` stops: the interpreter was the last resort, and a lower
+ *   degree cannot fix a function the backend's own interpreter could not run.
+ * - `Always` stops: it never compiles, so a compile failure is not a degree
+ *   problem.
+ * - `Never` on a backend that *can* interpret becomes `FallbackOnly` at the same
+ *   degree: interpreting a function is **exact**, so it is preferred over a
+ *   lower degree, which only trades one compiled form for a worse one.
+ * - Otherwise the degree drops one step (`Full` → `Basic` → `None`), and `None`
+ *   stops.
+ *
+ * \param failed The policy the failed attempt was made under.
+ * \param capabilities What the backend reported before the attempt.
+ * \return The policy to retry with, or `std::nullopt` when there is nothing left.
+ */
+std::optional<CompilationPolicy> nextCompilationAttempt(const CompilationPolicy& failed,
+		const BackendCompilationCapabilities& capabilities) noexcept;
 
 /*!
  * \brief The exception a backend throws when it cannot compile a function.

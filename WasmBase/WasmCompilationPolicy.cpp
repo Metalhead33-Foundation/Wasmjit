@@ -58,6 +58,36 @@ bool supportsCompilationPolicy(const BackendCompilationCapabilities& capabilitie
 	return true;
 }
 
+std::optional<CompilationPolicy> nextCompilationAttempt(const CompilationPolicy& failed,
+const BackendCompilationCapabilities& capabilities) noexcept
+{
+if (failed.strictness != CompilationStrictness::Lax)
+return std::nullopt;
+// `Always` never compiles, and a `FallbackOnly` failure means the backend's
+	// own interpreter could not run the function either: nothing left to try.
+	if (failed.fallback != InterpreterFallback::Never)
+		return std::nullopt;
+
+	CompilationPolicy next = failed;
+	// An interpreter is exact; a lower degree is only cheaper to produce. Prefer
+	// the exact one when the backend says it has it.
+	if (capabilities.interprets) {
+		next.fallback = InterpreterFallback::FallbackOnly;
+		return next;
+	}
+	switch (failed.level) {
+	case OptimizationLevel::Full:
+		next.level = OptimizationLevel::Basic;
+		return next;
+	case OptimizationLevel::Basic:
+		next.level = OptimizationLevel::None;
+		return next;
+	case OptimizationLevel::None:
+		return std::nullopt;
+	}
+	return std::nullopt;
+}
+
 CompileFailure::~CompileFailure() = default;
 
 } // namespace WASM

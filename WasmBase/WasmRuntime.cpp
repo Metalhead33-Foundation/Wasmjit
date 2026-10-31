@@ -88,12 +88,19 @@ ValidationOptions loadOptions(const RuntimeConfig& config)
 	return options;
 }
 
-// The next lower degree, or `None` when already there.
-OptimizationLevel lowerLevel(OptimizationLevel level) noexcept
+// Books an interpreter fallback as `WASM.COMPILE.INTERPRETED` (a Note): the
+// function did not compile, so it runs through the backend's own interpreter
+// (docs/proposals/COMPILER_POLICY.md `CP-4`).
+void bookInterpreterFallback(const char* reason) noexcept
 {
-	if (level == OptimizationLevel::Full)
-		return OptimizationLevel::Basic;
-	return OptimizationLevel::None;
+	Diagnostic diagnostic;
+	diagnostic.id = DiagnosticId::kCompileInterpreted;
+	diagnostic.severity = DiagnosticSeverity::Note;
+	diagnostic.phase = DiagnosticPhase::Compile;
+	diagnostic.message = std::string("compilation failed, so the function runs through the"
+			" backend's interpreter instead of compiled code: ") + reason;
+	diagnostic.remediation = "docs/proposals/COMPILER_POLICY.md";
+	emitDiagnostic(std::move(diagnostic));
 }
 
 // Books a regression as `WASM.COMPILE.REDUCED_OPTIMIZATION` (a Warning): a lax
@@ -196,24 +203,28 @@ ModuleInstance& Runtime::instantiate(const Module& module, ImportResolver& impor
 		throw std::runtime_error("the runtime has no backend instantiator");
 
 	CompilationPolicy policy = config_.compilation;
+	const BackendCompilationCapabilities capabilities = compilationCapabilities();
 	for (;;) {
 		try {
 			ModuleInstance& instance = adoptInstance(module, imports, policy);
 			achievedLevel_ = policy.level;
+			achievedPolicy_ = policy;
 			return instance;
 		} catch (const CompileFailure& failure) {
-			const bool canRegress = config_.compilation.strictness == CompilationStrictness::Lax
-					&& policy.level != OptimizationLevel::None;
-			if (!canRegress)
+			const std::optional<CompilationPolicy> next =
+					nextCompilationAttempt(policy, capabilities);
+			if (!next)
 				throw;
-			const OptimizationLevel next = lowerLevel(policy.level);
-			bookReducedCompilation(policy.level, next, failure.what());
+			if (next->fallback != policy.fallback)
+				bookInterpreterFallback(failure.what());
+			else
+				bookReducedCompilation(policy.level, next->level, failure.what());
 			// A failed compile poisons the backend's context, so a retry needs a
 			// fresh backend instance: this is a pre-compile choice per attempt,
 			// never a retry inside one (docs/proposals/COMPILER_POLICY.md CPD3).
 			backend_ = createBackendByName(backendName_);
 			backend_.instantiator->setStackReserveBytes(config_.execution.stackReserveBytes);
-			policy.level = next;
+			policy = *next;
 		}
 	}
 }

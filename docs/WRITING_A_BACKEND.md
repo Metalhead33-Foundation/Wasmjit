@@ -129,6 +129,15 @@ dispatcher.readCode(stream);
   instead of a hard failure.
 - `instructionOffset` is set before every dispatch and is the coordinate the
   branch hints and the trap-site annotations use.
+- **Branch hints are available without re-parsing the custom section**
+  ([`proposals/SMALL_PROPOSALS.md`](proposals/SMALL_PROPOSALS.md) §4). Call
+  `setBranchHints(body.branchHints.data(), body.branchHints.size())` once, before
+  `readCode`, and ask `branchHintAt(instructionOffset)` where your code generator
+  can use an answer — a likely/unlikely `if` or `br_if`, block layout, branch
+  polarity. The lookup is a binary search and happens only when you ask, so a
+  backend that ignores hints (or a hint-less module) pays nothing. A hint is
+  advisory: acting on it must never change a result, a trap or a validation
+  outcome, and `BranchHintKind::None` means "no opinion".
 - Bodies are already validated, so you may trust the operand types the
   validator proved. You may **not** trust indices without a bounds check if
   your emitter would write out of bounds on a wrong one; a checked `.at()` or an

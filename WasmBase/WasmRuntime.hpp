@@ -210,6 +210,11 @@ public:
 	//! unless a `Lax` policy regressed it (docs/proposals/COMPILER_POLICY.md).
 	/** \brief Returns the optimization level the last instantiation achieved. \return The achieved level (the requested one before any instantiation). */
 	OptimizationLevel   achievedOptimizationLevel() const noexcept { return achievedLevel_; }
+	//! The whole policy the last instantiation achieved: the request unless a
+	//! `Lax` ladder regressed the degree or left the function to the backend's
+	//! interpreter (which is exact, so the degree is unchanged in that case).
+	/** \brief Returns the compilation policy the last instantiation achieved. \return The achieved policy (the requested one before any instantiation). */
+	const CompilationPolicy& achievedCompilationPolicy() const noexcept { return achievedPolicy_; }
 
 	//! \par Execution half (§3.2)
 	//! An engine instance hands out agents; it does not become one. The created
@@ -244,6 +249,8 @@ private:
 	RuntimeConfig config_; //!< creation knobs
 	//! The optimization level the last successful instantiation achieved.
 	OptimizationLevel achievedLevel_ = OptimizationLevel::Basic;
+	//! The whole policy the last successful instantiation achieved.
+	CompilationPolicy achievedPolicy_{};
 	//! The runtime-scoped store (docs/EMBEDDING_SURFACE.md §4.3 option B). Every
 	//! consumer receives it through its own object; there is no process-wide
 	//! store and no thread-local fallback.

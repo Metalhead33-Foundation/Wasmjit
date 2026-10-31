@@ -1385,6 +1385,31 @@ void OpcodeDispatcher::onUnhandledOpcode(const char* name)
 	throw std::logic_error(std::string("opcode dispatch is not implemented: ") + name);
 }
 
+void OpcodeDispatcher::setBranchHints(const BranchHint* hints, std::size_t count) noexcept
+{
+	branchHints_ = hints;
+	branchHintCount_ = hints == nullptr ? 0 : count;
+}
+
+BranchHintKind OpcodeDispatcher::branchHintAt(std::size_t offset) const noexcept
+{
+	// The list is ordered by offset (`Module::processCodeSection` appends in
+	// section order and the section is defined that way), so this is a binary
+	// search -- allocation-free and paid only by a backend that asks.
+	std::size_t low = 0;
+	std::size_t high = branchHintCount_;
+	while (low < high) {
+		const std::size_t mid = low + (high - low) / 2;
+		if (branchHints_[mid].offset < offset)
+			low = mid + 1;
+		else
+			high = mid;
+	}
+	if (low < branchHintCount_ && branchHints_[low].offset == offset)
+		return branchHintKind(branchHints_[low].hint);
+	return BranchHintKind::None;
+}
+
 void OpcodeDispatcher::readCode(FastMemReader& stream)
 {
 	bool shouldStop = false;

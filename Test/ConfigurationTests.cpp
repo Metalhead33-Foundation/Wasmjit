@@ -435,3 +435,83 @@ TEST_CASE("a runtime's continuation ceiling binds at cont.new", "[config]")
 	REQUIRE(runtime->store().liveContinuationCount() == 0);
 }
 
+
+TEST_CASE("the compilation ladder prefers an interpreter over a lower degree", "[compilation-policy]")
+{
+	// CP-4's core rule, as a pure decision: an interpreter is *exact*, so a
+	// backend that has one is asked to use it before the degree is lowered.
+	WASM::BackendCompilationCapabilities compiledOnly; // Basic, no interpreter
+	WASM::BackendCompilationCapabilities interpreting; // Basic + interpreter
+	interpreting.interprets = true;
+
+	WASM::CompilationPolicy strict;
+	strict.level = WASM::OptimizationLevel::Full;
+	REQUIRE_FALSE(WASM::nextCompilationAttempt(strict, compiledOnly).has_value());
+
+	WASM::CompilationPolicy lax;
+	lax.level = WASM::OptimizationLevel::Full;
+	lax.strictness = WASM::CompilationStrictness::Lax;
+
+	// No interpreter: one degree down, then one more, then stop.
+	const auto basic = WASM::nextCompilationAttempt(lax, compiledOnly);
+	REQUIRE(basic.has_value());
+	REQUIRE(basic->level == WASM::OptimizationLevel::Basic);
+	REQUIRE(basic->fallback == WASM::InterpreterFallback::Never);
+	const auto none = WASM::nextCompilationAttempt(*basic, compiledOnly);
+	REQUIRE(none.has_value());
+	REQUIRE(none->level == WASM::OptimizationLevel::None);
+	REQUIRE_FALSE(WASM::nextCompilationAttempt(*none, compiledOnly).has_value());
+
+	// With an interpreter: the *same* degree, interpreted, before any regression.
+	const auto interpreted = WASM::nextCompilationAttempt(lax, interpreting);
+	REQUIRE(interpreted.has_value());
+	REQUIRE(interpreted->level == WASM::OptimizationLevel::Full);
+	REQUIRE(interpreted->fallback == WASM::InterpreterFallback::FallbackOnly);
+	// The interpreter was the last resort: a failure there is not a degree problem.
+	REQUIRE_FALSE(WASM::nextCompilationAttempt(*interpreted, interpreting).has_value());
+
+	// `Always` never compiles, so there is no degree to regress.
+	WASM::CompilationPolicy always = lax;
+	always.fallback = WASM::InterpreterFallback::Always;
+	REQUIRE_FALSE(WASM::nextCompilationAttempt(always, interpreting).has_value());
+}
+
+TEST_CASE("the remaining allocation categories can be capped too", "[config]")
+{
+	// Every category the store charges has its own counter and ceiling:
+	// strings, exception objects and continuation stacks join linear memory,
+	// tables and the GC heap (docs/proposals/CONFIGURATION.md CFG-2).
+	WASM::MemoryBudget budget;
+	budget.totalBytes = 8 * kMiB;
+	budget.stringBytes = 48 * 1024;
+	WASM::Store store(budget);
+	REQUIRE(store.budget().stringBytes == 48 * 1024);
+	REQUIRE(store.budget().exceptionBytes == 8 * kMiB); // inherited
+	REQUIRE(store.budget().continuationStackBytes == 8 * kMiB);
+
+	std::vector<std::uint32_t> codePoints(4096, 'x'); // 16 KiB of code points
+	WASM::StringObject* first = store.strings().create(codePoints);
+	REQUIRE(first != nullptr);
+	REQUIRE(store.allocatedStringBytes() > 0);
+	WASM::StringObject* second = store.strings().create(codePoints);
+	REQUIRE(second != nullptr);
+	// A third 16 KiB string does not fit the 48 KiB string cap, while the 8 MiB
+	// total would still accept it: the category binds first. The refusal is a
+	// trap, so consume it before asserting.
+	WASM::clearPendingTrap();
+	WASM::StringObject* third = store.strings().create(codePoints);
+	const bool trapped = WASM::trapPending();
+	const WASM::TrapKind kind = WASM::pendingTrapKind();
+	WASM::clearPendingTrap();
+	REQUIRE(third == nullptr);
+	REQUIRE(trapped);
+	REQUIRE(kind == WASM::TrapKind::OutOfMemory);
+	REQUIRE(store.allocatedStringBytes() <= 48 * 1024);
+
+	// A category larger than the total is still refused where it is set.
+	WASM::MemoryBudget bad;
+	bad.totalBytes = 1 * kMiB;
+	bad.continuationStackBytes = 2 * kMiB;
+	REQUIRE_THROWS_AS(WASM::Store{bad}, std::invalid_argument);
+}
+

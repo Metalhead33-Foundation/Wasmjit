@@ -127,7 +127,8 @@ SOURCES += main.cpp \
     AsmjitModuleCompilerTests.cpp \
     LegacyEhTests.cpp \
     MemoryProviderTests.cpp \
-    ConfigurationTests.cpp
+    ConfigurationTests.cpp \
+    BranchHintTests.cpp
 HEADERS +=  \
     helper.hpp \
     Diagnose.hpp \

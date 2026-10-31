@@ -94,18 +94,42 @@ module's semantics.
 dispatched to `processCustomSection`, which handles the `name` section and now
 also `metadata.code.branch_hint`. The parser (`Module::processBranchHintSection`)
 reads the `(funcidx, {offset, length, payload})` entries and
-`Module::processCodeSection` rebases each offset onto `FunctionBody::code`. The
-LibJIT dispatcher records the current instruction offset (`instructionOffset`,
-set by `OpcodeDispatcher::readCode`) and consults the hints in `dispatchBrIf`:
-a *forward* conditional whose hint says "likely true" is emitted in the
-inverted form so the likely path is the fall-through. Hint-less modules compile
-byte-for-byte as before.
+`Module::processCodeSection` rebases each offset onto `FunctionBody::code`.
+
+**A backend-neutral seam exists for any backend that can act on a hint.**
+`OpcodeDispatcher` — the base every backend's decoder derives from — carries the
+hints for the body it is about to read:
+
+```cpp
+// once, before readCode() -- the vector belongs to the module and outlives the walk
+setBranchHints(body.branchHints.data(), body.branchHints.size());
+// at the instruction being lowered
+if (branchHintAt(instructionOffset) == BranchHintKind::Likely) { /* lay out for the fall-through */ }
+```
+
+`BranchHintKind` (`None`/`Unlikely`/`Likely`, `WasmType.hpp`) is the neutral
+vocabulary, so a backend never interprets a raw hint byte; an undefined value
+reads as `None`. Installing hints is free and a lookup happens only when a
+backend asks, so a hint-less module costs nothing, no backend is obliged to care,
+and a backend that cannot use a hint ignores it with a clear conscience — which
+is what §4 allows.
+
+The LibJIT backend is one such consumer: it records the current instruction
+offset (`instructionOffset`, set by `OpcodeDispatcher::readCode`) and consults
+the hints in `dispatchBrIf`, where a *forward* conditional whose hint says
+"likely true" is emitted in the inverted form so the likely path is the
+fall-through. It keeps its own per-body hint map, which predates the shared seam;
+a new backend should use `branchHintAt` instead of re-deriving one. Hint-less
+modules compile byte-for-byte as before.
 
 **Gaps.** No block *reordering*: LibJIT exposes no branch-prediction or
 block-layout API and the emitter is single-pass, so the then/else bodies of an
 `if` cannot be swapped even when a hint asks for it. `if` hints are therefore
 parsed but do not change layout, and "measurable improvement" is not asserted
-in CI (see §6 SP-2).
+in CI (see §6 SP-2). The seam itself is exercised only by the tests today: no
+backend in the tree lays out blocks, so "a backend consumes a hint through
+`branchHintAt`" is a contract with a compile-only test rather than a second
+consumer.
 
 ## 5. Cross-cutting "fast and loose"
 
@@ -113,7 +137,7 @@ in CI (see §6 SP-2).
 |---|---|---|---|
 | SPD1 | **Lower sign-extension with native width conversions** (already done). | §3/§2: lowering is free. | Minimal code. |
 | SPD2 | **Lower `trunc_sat` with clamp helpers** (already done). | §3: no traps required; semantics are a pure function. | Simple and correct. |
-| SPD3 | **Ignore branch hints *semantically*.** | §4: hints are not semantics; acting on them or not is explicitly allowed. | Conformance without changing results. |
+| SPD3 | **Ignore branch hints *semantically*, and let each backend decide whether to act.** | §4: hints are not semantics; acting on them or not is explicitly allowed. The shared seam (`setBranchHints`/`branchHintAt`) is opt-in, so a backend that cannot use a hint pays nothing. | Conformance without changing results, and no obligation on a code generator that has no block layout. |
 | SPD4 | **Use a hint only where it is a strict win** (branch polarity for a forward `br_if`; never block reordering). | §4; optional. | Bounded, semantics-preserving work. |
 | SPD5 | **No validation of hint sections.** | §4: custom sections are outside core validation. | Nothing to validate. |
 
@@ -134,7 +158,7 @@ that check divide-by-zero, `INT_MIN / -1`, `NaN` and out-of-range and raise
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **SP-1 — Manual test** | ✅ `Test/wasm_wat/sign_extension.wat` + `Test/wasm_wat/trunc_sat.wat`, exercised by two cases in `Test/main.cpp`. | no focused coverage | Done: both cases assert the boundary values (NaN, ±overflow, exact). |
-| **SP-2 — (optional) Branch hints** | ◑ `metadata.code.branch_hint` is parsed/rebased and consulted in `dispatchBrIf` (forward-branch polarity). No block reordering. | optional codegen | Parser covered by `branch hints are parsed and do not change results`; a *measurable* win is out of scope (see §4 gaps). |
+| **SP-2 — Branch hints** | ✅ `metadata.code.branch_hint` is parsed/rebased, a **backend-neutral seam** (`BranchHintKind`, `OpcodeDispatcher::setBranchHints`/`branchHintAt`) is available to any backend, and LibJIT consults the hints in `dispatchBrIf` (forward-branch polarity). No block reordering. | optional codegen; "hints are unreachable for a backend" | `[branch-hint]` covers the seam (exact hit, between, unknown byte, cleared) and `a hinted module still computes the same results`; a *measurable* win stays out of scope (see §4 gaps). |
 
 ## 7. Indicative test survey
 
@@ -146,7 +170,7 @@ that check divide-by-zero, `INT_MIN / -1`, `NaN` and out-of-range and raise
 | `i32` / `i64` | no report (exit 1) | scripts exercise the ops but fail to load for unrelated reasons |
 | sign-extension script | none in the testsuite snapshot | no dedicated spec coverage; manual coverage added (SP-1) |
 | `trunc_sat` script | none in the testsuite snapshot | no dedicated spec coverage; manual coverage added (SP-1) |
-| branch-hint script | none in the testsuite snapshot | hints are untestable as semantics; the manual `branch_hint_loop` case checks parsing + non-interference (SP-2) |
+| branch-hint script | none in the testsuite snapshot | hints are untestable as semantics; the manual `branch_hint_loop` case checks parsing + non-interference, and `[branch-hint]` (`Test/BranchHintTests.cpp`) checks the seam itself (SP-2) |
 
 ## 8. References
 

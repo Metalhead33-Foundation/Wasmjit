@@ -68,6 +68,12 @@ struct MemoryBudget {
 	std::uint64_t gcHeapBytes = 0;
 	//! Cap on table storage. `0` = no separate cap.
 	std::uint64_t tableBytes = 0;
+	//! Cap on store-owned string objects (`stringref`). `0` = no separate cap.
+	std::uint64_t stringBytes = 0;
+	//! Cap on store-owned exception objects. `0` = no separate cap.
+	std::uint64_t exceptionBytes = 0;
+	//! Cap on continuation stacks. `0` = no separate cap.
+	std::uint64_t continuationStackBytes = 0;
 	//! Cap on *reserved* (not committed) address space. `0` = reservations are
 	//! not counted, which is `MEMORY_PROVIDER.md` `MP-1`'s behaviour.
 	std::uint64_t reservedAddressBytes = 0;
@@ -227,6 +233,18 @@ public:
 	/** \brief Sets the allocation policy used for module-declared memories. \param policy The policy to use from now on. */
 	void setMemoryAllocationPolicy(MemoryAllocationPolicy policy) noexcept;
 
+	//! \par Installing a provider (docs/proposals/MEMORY_PROVIDER.md `MP-2`)
+	//! The factory this store consults for every memory it creates, or nullptr
+	//! for the built-in one. Borrowed: the provider must outlive the store. A
+	//! provider is consulted *after* the budget is charged and *before* the
+	//! built-in backing is chosen, and returning nullptr from `createMemory`
+	//! accepts the built-in one for that request.
+	/** \brief Installs the memory provider this store consults. \param provider Borrowed provider, or nullptr to restore the built-in factory. */
+	void setMemoryProvider(MemoryProvider* provider) noexcept;
+	//! The installed provider, or nullptr.
+	/** \brief Returns the installed memory provider. \return The borrowed provider, or nullptr. */
+	MemoryProvider* memoryProvider() const noexcept;
+
 	//! Borrowed views into a store-owned memory. Nullptr for an unknown id.
 	/** \brief Looks up a Store-owned memory. \param id Memory identifier. \return Borrowed memory descriptor, or nullptr when unknown. */
 	LinearMemory*       memory(MemoryId id);
@@ -293,6 +311,15 @@ public:
 	//! Bytes currently charged to tables.
 	/** \brief Returns committed table bytes. \return Allocated table byte count. */
 	uint64_t allocatedTableBytes() const noexcept { return tableBytes_.load(std::memory_order_relaxed); }
+	//! Bytes currently charged to store-owned strings.
+	/** \brief Returns committed string bytes. \return Allocated string byte count. */
+	uint64_t allocatedStringBytes() const noexcept { return stringBytes_.load(std::memory_order_relaxed); }
+	//! Bytes currently charged to store-owned exception objects.
+	/** \brief Returns committed exception bytes. \return Allocated exception byte count. */
+	uint64_t allocatedExceptionBytes() const noexcept { return exceptionBytes_.load(std::memory_order_relaxed); }
+	//! Bytes currently charged to continuation stacks.
+	/** \brief Returns committed continuation-stack bytes. \return Allocated continuation byte count. */
+	uint64_t allocatedContinuationStackBytes() const noexcept { return continuationBytes_.load(std::memory_order_relaxed); }
 	//! Address space currently reserved (and *not* committed) by this store.
 	/** \brief Returns reserved, uncommitted address space. \return Reserved byte count, or zero when reservations are not counted. */
 	uint64_t reservedAddressBytes() const noexcept { return reservedBytes_.load(std::memory_order_relaxed); }
@@ -488,6 +515,12 @@ private:
 	std::atomic<uint64_t> gcBytes_{0};
 	//! Committed table bytes.
 	std::atomic<uint64_t> tableBytes_{0};
+	//! Committed string bytes.
+	std::atomic<uint64_t> stringBytes_{0};
+	//! Committed exception-object bytes.
+	std::atomic<uint64_t> exceptionBytes_{0};
+	//! Committed continuation-stack bytes.
+	std::atomic<uint64_t> continuationBytes_{0};
 	//! Reserved, uncommitted address space; stays zero unless
 	//! `budget_.reservedAddressBytes` is set.
 	std::atomic<uint64_t> reservedBytes_{0};
@@ -500,6 +533,11 @@ private:
 	ContinuationSettings continuationSettings_{};
 	//! Live continuations created through this store, for the per-store ceiling.
 	std::atomic<std::uint32_t> liveContinuations_{0};
+
+	//! The installed memory provider (docs/proposals/MEMORY_PROVIDER.md `MP-2`),
+	//! or nullptr for the built-in factory. Atomic because an embedder may install
+	//! one while another host thread instantiates.
+	std::atomic<MemoryProvider*> memoryProvider_{nullptr};
 
 	//! Guards every member container below. The Store is process-wide because
 	//! entities outlive instances, so host threads may create/lookup entities
