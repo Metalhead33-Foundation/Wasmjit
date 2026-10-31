@@ -343,3 +343,95 @@ TEST_CASE("an agent honours the configured execution limits", "[config]")
 	WASM::Agent clamped(huge);
 	REQUIRE(clamped.execution().deferCapacity() == WASM::ExecutionState::kDeferCapacity);
 }
+
+TEST_CASE("continuation limits and provider are per runtime", "[config]")
+{
+	// CFG-4: the process-wide free functions stay the *default*, and a runtime
+	// that asks for its own value keeps it. Inheritance is resolved when a
+	// continuation is created, so a default changed after the runtime exists
+	// still reaches the runtimes that did not ask.
+	struct Restore {
+		WASM::ContinuationProvider previous;
+		~Restore() { WASM::setContinuationProvider(previous); }
+	} restore{WASM::continuationProvider()};
+
+	WASM::RuntimeConfig inheriting;
+	auto inherited = WASM::Runtime::create("libjit", inheriting);
+	WASM::setContinuationProvider(WASM::ContinuationProvider::HostThreads);
+	REQUIRE(inherited->continuationProvider() == WASM::ContinuationProvider::HostThreads);
+
+	WASM::RuntimeConfig own;
+	own.continuation.provider = WASM::ContinuationProvider::NativeStacks;
+	own.continuation.maxLive = 3;
+	own.continuation.stackBytes = 256 * 1024;
+	auto ownRuntime = WASM::Runtime::create("libjit", own);
+	REQUIRE(ownRuntime->continuationProvider() == WASM::ContinuationProvider::NativeStacks);
+	REQUIRE(ownRuntime->continuationBudget().maxLive == 3);
+	REQUIRE(ownRuntime->continuationBudget().stackBytes == 256 * 1024);
+	// The runtime that asked for nothing still follows the process default.
+	REQUIRE(inherited->continuationBudget().maxLive == WASM::continuationBudget().maxLive);
+	REQUIRE(inherited->continuationBudget().stackBytes == WASM::continuationBudget().stackBytes);
+
+	// `Inherit` is a configuration sentinel: asking the *default* to inherit
+	// itself leaves it alone, and it is not a provider.
+	WASM::setContinuationProvider(WASM::ContinuationProvider::Inherit);
+	REQUIRE(WASM::continuationProvider() == WASM::ContinuationProvider::HostThreads);
+	REQUIRE(std::string(WASM::continuationProviderName(WASM::ContinuationProvider::Inherit))
+			== "inherit");
+
+	// The live-continuation counter and its ceiling are per store.
+	WASM::Store& store = ownRuntime->store();
+	REQUIRE(store.liveContinuationCount() == 0);
+	REQUIRE(store.reserveContinuationSlot(2));
+	REQUIRE(store.reserveContinuationSlot(2));
+	REQUIRE_FALSE(store.reserveContinuationSlot(2));
+	REQUIRE(store.liveContinuationCount() == 2);
+	store.releaseContinuationSlot();
+	REQUIRE(store.liveContinuationCount() == 1);
+	REQUIRE(store.reserveContinuationSlot(2));
+	store.releaseContinuationSlot();
+	store.releaseContinuationSlot();
+	REQUIRE(store.liveContinuationCount() == 0);
+}
+
+
+TEST_CASE("a runtime's continuation ceiling binds at cont.new", "[config]")
+{
+	// The end-to-end form of CFG-4: the `cont.new` path resolves the store the
+	// creating VMContext belongs to, so a runtime with `maxLive = 1` refuses the
+	// second continuation while the first is alive — and reports why.
+	WASM::RuntimeConfig config;
+	config.continuation.maxLive = 1;
+	auto runtime = WASM::Runtime::create("libjit", config);
+	auto module = loadFixture(*runtime, "config_budget.wasm");
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+
+	WASM::Callable target{};
+	target.fnPtr = reinterpret_cast<void*>(+[](WASM::VMContext*) -> std::int32_t {
+		return 5;
+	});
+
+	WASM::clearDiagnostics();
+	WASM::clearPendingTrap();
+	void* first = WASM::wasm_cont_new(&target, instance.context(), 0, 0, 1);
+	REQUIRE(first != nullptr);
+	void* second = WASM::wasm_cont_new(&target, instance.context(), 0, 0, 1);
+	REQUIRE(second == nullptr);
+	REQUIRE(hasDiagnostic(WASM::DiagnosticId::kContinuationBudgetExhausted));
+	// A refused `cont.new` leaves the pending trap for the generated caller to
+	// check; a test that expects the refusal must consume it.
+	REQUIRE(WASM::trapPending());
+	REQUIRE(WASM::pendingTrapKind() == WASM::TrapKind::OutOfMemory);
+	WASM::clearPendingTrap();
+
+	// Releasing the first gives the slot back, and the release also credits the
+	// store's own counter.
+	REQUIRE(WASM::continuationRefRelease(first));
+	REQUIRE(runtime->store().liveContinuationCount() == 0);
+	void* third = WASM::wasm_cont_new(&target, instance.context(), 0, 0, 1);
+	REQUIRE(third != nullptr);
+	REQUIRE(WASM::continuationRefRelease(third));
+	REQUIRE(runtime->store().liveContinuationCount() == 0);
+}
+

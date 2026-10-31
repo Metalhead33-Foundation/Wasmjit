@@ -123,6 +123,9 @@ Runtime::Runtime(std::string backendName, BackendInstance backend, RuntimeConfig
 		backend_.instantiator->setCompilationPolicy(config_.compilation);
 		backend_.instantiator->setStackReserveBytes(config_.execution.stackReserveBytes);
 	}
+	// The runtime's continuation settings live in its store (CFG-4); a field
+	// left at "inherit" follows the live process default.
+	store_.setContinuationSettings(config_.continuation);
 	achievedLevel_ = config_.compilation.level;
 }
 

@@ -100,7 +100,9 @@ store per runtime, so one budget per runtime — there is no process-wide store)
   (`WasmContinuation.cpp`): A charges the mmap'd usable stack plus its guard
   page; B charges the pthread stack. The live-continuation count is separately
   bounded by `WASMJIT_MAX_CONTINUATIONS`, and the stack request by
-  `WASMJIT_CONT_STACK_BYTES` (default 512 KiB). A refused `cont.new` or stack
+  `WASMJIT_CONT_STACK_BYTES` (default 512 KiB); a runtime overrides both — and the
+  provider — with `RuntimeConfig::continuation`
+  (docs/proposals/CONFIGURATION.md `CFG-4`). A refused `cont.new` or stack
   allocation is a recoverable `OutOfMemory` trap, never an allocation attempt.
 
 Default budget **4 GiB per runtime** (docs/proposals/CONFIGURATION.md `CFG-1`);

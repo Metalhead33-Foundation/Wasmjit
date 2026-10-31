@@ -81,6 +81,13 @@ struct RuntimeConfig {
 	//! every build had before the policy existed.
 	CompilationPolicy compilation{};
 
+	//! Continuation limits and provider for this runtime
+	//! (docs/proposals/CONFIGURATION.md `CFG-4`). A `0` field — or
+	//! `ContinuationProvider::Inherit` — follows the live process default, so a
+	//! host that never asks for its own keeps `WASMJIT_MAX_CONTINUATIONS`,
+	//! `WASMJIT_CONT_STACK_BYTES` and `setContinuationProvider` working.
+	ContinuationSettings continuation{};
+
 	//! Compatibility form of `memory.totalBytes`. A non-zero value is forwarded
 	//! into the budget; a value that disagrees with a non-zero
 	//! `memory.totalBytes` is refused at `create()`.
@@ -193,6 +200,10 @@ public:
 	const MemoryBudget& memoryBudget() const noexcept { return store_.budget(); }
 	/** \brief Returns where the resolved budget came from. \return The budget source (default, environment or explicit). */
 	MemoryBudgetSource  memoryBudgetSource() const noexcept { return store_.budgetSource(); }
+	/** \brief Returns the continuation budget this runtime's continuations are created under. \return The resolved live-count and stack-size limits. */
+	ContinuationBudget  continuationBudget() const noexcept { return store_.continuationBudget(); }
+	/** \brief Returns the continuation provider this runtime's continuations use. \return The resolved provider. */
+	ContinuationProvider continuationProvider() const noexcept { return store_.continuationProvider(); }
 	/** \brief Returns what the selected backend reported it can compile. \return The backend's compilation capabilities. */
 	BackendCompilationCapabilities compilationCapabilities() const;
 	//! The degree the last instantiation actually achieved: equal to the request

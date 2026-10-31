@@ -102,19 +102,49 @@ ContinuationBudget budgetSnapshot()
 	return budgetStorage();
 }
 
-bool reserveContinuationSlot()
+//! The limits a continuation is created under: the store's resolved settings
+//! (docs/proposals/CONFIGURATION.md `CFG-4`) when it has one, else the live
+//! process default.
+ContinuationBudget resolvedBudget(const Store* store)
+{
+	return store != nullptr ? store->continuationBudget() : budgetSnapshot();
+}
+
+//! The provider a continuation is created with, resolved the same way.
+ContinuationProvider resolvedProvider(const Store* store)
+{
+	return store != nullptr ? store->continuationProvider() : continuationProvider();
+}
+
+//! Reserves one live-continuation slot: the process gauge against the *process*
+//! ceiling, then the store's own counter against the store's resolved ceiling.
+//! A refusal at either level credits the gauge back, so the two never disagree,
+//! and one store's continuations never consume another store's allowance
+//! (docs/proposals/CONFIGURATION.md `CFG-4`).
+bool reserveContinuationSlot(Store* store, std::uint32_t maxLive)
 {
 	std::lock_guard<std::mutex> lock(budgetMutex());
 	parseBudgetFromEnvironment();
 	if (liveCount().load(std::memory_order_relaxed) >= budgetStorage().maxLive)
 		return false;
 	liveCount().fetch_add(1, std::memory_order_relaxed);
+	if (store != nullptr && !store->reserveContinuationSlot(maxLive)) {
+		liveCount().fetch_sub(1, std::memory_order_relaxed);
+		return false;
+	}
 	return true;
 }
 
-void releaseContinuationSlot()
+void releaseContinuationSlot(Store* store)
 {
-	liveCount().fetch_sub(1, std::memory_order_relaxed);
+	if (store != nullptr)
+		store->releaseContinuationSlot();
+	std::atomic<std::uint32_t>& count = liveCount();
+	std::uint32_t current = count.load(std::memory_order_relaxed);
+	while (current != 0) {
+		if (count.compare_exchange_weak(current, current - 1, std::memory_order_relaxed))
+			return;
+	}
 }
 
 struct Worker;
@@ -249,7 +279,7 @@ struct Worker : std::enable_shared_from_this<Worker> {
 				resumeKinds.empty() ? paramKinds.data() : resumeKinds.data();
 		dropContinuationValues(resumeKindsPtr, static_cast<std::uint32_t>(resumeValues.size()),
 				resumeValues.data(), creationContext);
-		releaseContinuationSlot();
+		releaseContinuationSlot(store_);
 	}
 
 	virtual ContinuationStatus resume(std::uint64_t expectedGeneration,
@@ -902,7 +932,7 @@ void BWorker::run()
 
 bool BWorker::startThread()
 {
-	const ContinuationBudget budget = budgetSnapshot();
+	const ContinuationBudget budget = resolvedBudget(store_);
 	stackBytes = std::max<std::uint32_t>(budget.stackBytes, 64 * 1024);
 	if (store_ != nullptr && !store_->reserveBytes(stackBytes, MemoryCategory::ContinuationStack))
 		return false;
@@ -950,7 +980,7 @@ AWorker::~AWorker()
 
 bool AWorker::prepareStack()
 {
-	const ContinuationBudget budget = budgetSnapshot();
+	const ContinuationBudget budget = resolvedBudget(store_);
 	const long rawPage = sysconf(_SC_PAGESIZE);
 	if (rawPage <= 0)
 		return false;
@@ -1315,6 +1345,11 @@ ContinuationProvider continuationProvider() noexcept
 
 void setContinuationProvider(ContinuationProvider provider) noexcept
 {
+	// `Inherit` is a configuration sentinel, not a provider: asking the process
+	// default to "inherit itself" means leaving it alone
+	// (docs/proposals/CONFIGURATION.md `CFG-4`).
+	if (provider == ContinuationProvider::Inherit)
+		return;
 	providerStorage().store(static_cast<std::int32_t>(provider),
 			std::memory_order_relaxed);
 }
@@ -1714,7 +1749,13 @@ void* wasm_cont_new_ex(void* callable, void* context, ContinuationInvokeFn invok
 				"null continuation target", TrapKind::NullFunctionReference);
 		return nullptr;
 	}
-	if (!reserveContinuationSlot()) {
+	// The creating context names the runtime (store) whose settings apply; a
+	// synthetic target without one falls back to the process default
+	// (docs/proposals/CONFIGURATION.md `CFG-4`).
+	VMContext* vmContext = static_cast<VMContext*>(context);
+	Store* store = vmContext != nullptr ? &vmContext->module->store() : nullptr;
+	const ContinuationBudget budget = resolvedBudget(store);
+	if (!reserveContinuationSlot(store, budget.maxLive)) {
 		failContinuation(nullptr, {}, DiagnosticId::kContinuationBudgetExhausted,
 				"continuation budget exhausted", TrapKind::OutOfMemory);
 		return nullptr;
@@ -1722,7 +1763,7 @@ void* wasm_cont_new_ex(void* callable, void* context, ContinuationInvokeFn invok
 
 	std::shared_ptr<Worker> worker;
 	try {
-		if (continuationProvider() == ContinuationProvider::HostThreads) {
+		if (resolvedProvider(store) == ContinuationProvider::HostThreads) {
 			worker = std::make_shared<BWorker>(static_cast<Callable*>(callable),
 					static_cast<VMContext*>(context), paramCount, paramCount != 0,
 					resultCount != 0);
@@ -1738,7 +1779,7 @@ void* wasm_cont_new_ex(void* callable, void* context, ContinuationInvokeFn invok
 		if (resultKinds != nullptr)
 			worker->resultKinds.assign(resultKinds, resultKinds + resultCount);
 	} catch (...) {
-		releaseContinuationSlot();
+		releaseContinuationSlot(store);
 		failContinuation(nullptr, {}, DiagnosticId::kContinuationAllocationFailed,
 				"continuation allocation failed", TrapKind::OutOfMemory);
 		return nullptr;

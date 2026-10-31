@@ -130,14 +130,21 @@ using ContinuationInvokeFn = void (*)(void* target, void* context,
 //! selection is snapshot at `cont.new`; existing continuations keep their
 //! provider. Calls are serial: A may migrate between host threads, but no two
 //! threads may use one continuation at the same time.
+//!
+//! `Inherit` is not a provider: it is the sentinel a *configuration* uses to
+//! say "whatever the process default is"
+//! (docs/proposals/CONFIGURATION.md `CFG-4`). It is legal in
+//! `ContinuationSettings::provider` and nowhere else; the free
+//! `setContinuationProvider` treats it as "leave the default alone".
 enum class ContinuationProvider : std::int32_t {
+	Inherit = -1, //!< Configuration-only: use the process default.
 	NativeStacks = 0, //!< A — mmap'd stack + ucontext switch (default)
 	HostThreads = 1, //!< B — one host thread per suspended continuation
 };
 
-/** \brief Returns the provider selected for newly created continuations. \return Current provider selection. */
+/** \brief Returns the *process default* provider for newly created continuations. \return Current default provider selection. */
 ContinuationProvider continuationProvider() noexcept;
-/** \brief Selects the provider used by subsequently created continuations. \param provider Provider to use; existing continuations retain their provider. */
+/** \brief Sets the *process default* provider. \param provider Provider to use; `Inherit` leaves the default alone, and existing continuations retain their provider. */
 void setContinuationProvider(ContinuationProvider provider) noexcept;
 
 //! \brief Provider budget
@@ -155,11 +162,32 @@ struct ContinuationBudget {
 	std::uint32_t stackBytes = 512 * 1024;
 };
 
-/** \brief Returns the current continuation allocation budget. \return Snapshot of the configured limits. */
+//! \brief Per-runtime continuation settings (docs/proposals/CONFIGURATION.md `CFG-4`).
+//!
+//! A field left at `0` (or at `ContinuationProvider::Inherit`) inherits the
+//! *process default* — the value `continuationBudget()`/`continuationProvider()`
+//! report, which the environment seeds. The inheritance is resolved when a
+//! continuation is created, not when the runtime is, so a host that changes the
+//! process default still affects runtimes that did not ask for one; a runtime
+//! that *did* ask keeps its own value.
+/** \brief Continuation limits and provider a runtime chooses for itself. */
+struct ContinuationSettings {
+	//! Upper bound on live continuations created in this runtime; `0` = the
+	//! process default.
+	std::uint32_t maxLive = 0;
+	//! Stack request per continuation created in this runtime; `0` = the
+	//! process default.
+	std::uint32_t stackBytes = 0;
+	//! Provider for continuations created in this runtime; `Inherit` = the
+	//! process default.
+	ContinuationProvider provider = ContinuationProvider::Inherit;
+};
+
+/** \brief Returns the *process default* continuation allocation budget. \return Snapshot of the configured limits. */
 ContinuationBudget continuationBudget() noexcept;
-/** \brief Replaces the continuation allocation budget. \param budget New live-count and stack-size limits. */
+/** \brief Replaces the *process default* continuation allocation budget. \param budget New live-count and stack-size limits. */
 void setContinuationBudget(ContinuationBudget budget) noexcept;
-/** \brief Returns the current number of live continuation objects. \return Live continuation count. */
+/** \brief Returns the current number of live continuation objects in the process. \return Live continuation count. */
 std::uint32_t liveContinuationCount() noexcept;
 
 //! \par Reference integration

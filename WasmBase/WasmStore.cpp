@@ -559,6 +559,53 @@ bool Store::releaseTable(TableInstance* view)
 	return true;
 }
 
+void Store::setContinuationSettings(const ContinuationSettings& settings) noexcept
+{
+	continuationSettings_ = settings;
+}
+
+ContinuationBudget Store::continuationBudget() const noexcept
+{
+	// The *process* default first, then this store's explicit fields, so a
+	// runtime that asked for nothing keeps following a default the host may
+	// still change (docs/proposals/CONFIGURATION.md `CFG-4`).
+	ContinuationBudget budget = WASM::continuationBudget();
+	if (continuationSettings_.maxLive != 0)
+		budget.maxLive = continuationSettings_.maxLive;
+	if (continuationSettings_.stackBytes != 0)
+		budget.stackBytes = continuationSettings_.stackBytes;
+	return budget;
+}
+
+ContinuationProvider Store::continuationProvider() const noexcept
+{
+	if (continuationSettings_.provider != ContinuationProvider::Inherit)
+		return continuationSettings_.provider;
+	return WASM::continuationProvider();
+}
+
+bool Store::reserveContinuationSlot(std::uint32_t maxLive) noexcept
+{
+	std::uint32_t current = liveContinuations_.load(std::memory_order_relaxed);
+	for (;;) {
+		if (current >= maxLive)
+			return false;
+		if (liveContinuations_.compare_exchange_weak(current, current + 1,
+													 std::memory_order_relaxed))
+			return true;
+	}
+}
+
+void Store::releaseContinuationSlot() noexcept
+{
+	std::uint32_t current = liveContinuations_.load(std::memory_order_relaxed);
+	while (current != 0) {
+		if (liveContinuations_.compare_exchange_weak(current, current - 1,
+													 std::memory_order_relaxed))
+			return;
+	}
+}
+
 // ── Tags (docs/proposals/EXCEPTIONS.md EX-2) ────────────────────────────────
 
 TagId Store::createTag(TypeId payloadType)

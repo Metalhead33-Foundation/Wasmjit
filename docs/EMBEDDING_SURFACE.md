@@ -397,6 +397,7 @@ struct RuntimeConfig {
     //   StoreLimits       store;       // string cap, GC geometry, cycle cap
     //   ExecutionLimits   execution;   // defer stack, diagnostic ring, stack reserve
     //   CompilationPolicy compilation; // degree, strictness, interpreter fallback
+    //   ContinuationSettings continuation; // live count, stack bytes, provider
 };
 
 class Runtime {

@@ -43,6 +43,7 @@ const char* diagnosticPhaseName(DiagnosticPhase phase) noexcept
 const char* continuationProviderName(ContinuationProvider provider) noexcept
 {
 	switch (provider) {
+	case ContinuationProvider::Inherit:      return "inherit";
 	case ContinuationProvider::NativeStacks: return "native_stacks";
 	case ContinuationProvider::HostThreads:  return "host_threads";
 	}

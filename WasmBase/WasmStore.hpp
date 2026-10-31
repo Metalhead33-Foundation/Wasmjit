@@ -14,6 +14,7 @@
 WASMJIT_VISIBLE_BEGIN
 
 #include "WasmApi.hpp"
+#include "WasmContinuation.hpp"
 #include "WasmMemory.hpp"
 #include "WasmString.hpp"
 #include "WasmTable.hpp"
@@ -324,6 +325,40 @@ public:
 	/** \brief Releases a store-owned table. \param table View returned by `table()`. \return true when this store owned it and gave it back. */
 	bool releaseTable(TableInstance* table);
 
+	//! \par Continuations (docs/proposals/CONFIGURATION.md `CFG-4`)
+	//! A runtime chooses its continuation limits and provider here instead of
+	//! through the process-wide free functions. A field left at `0` — or at
+	//! `ContinuationProvider::Inherit` — inherits the *process* default, and the
+	//! inheritance is resolved when a continuation is created, so a host that
+	//! changes the default still affects a runtime that did not ask for its own.
+	/** \brief Records the continuation settings this store's continuations use. \param settings Requested settings; `0`/`Inherit` fields inherit. */
+	void setContinuationSettings(const ContinuationSettings& settings) noexcept;
+	//! The settings as requested (still containing the inherit sentinels).
+	/** \brief Returns the continuation settings as requested. \return The recorded settings. */
+	ContinuationSettings continuationSettings() const noexcept { return continuationSettings_; }
+	//! The limits this store's continuations are created under, inheritance
+	//! resolved against the live process default.
+	/** \brief Returns the resolved continuation budget. \return Live-count and stack-size limits. */
+	ContinuationBudget continuationBudget() const noexcept;
+	//! The provider this store's continuations are created with, inheritance
+	//! resolved against the live process default.
+	/** \brief Returns the resolved continuation provider. \return The provider a `cont.new` in this store will use. */
+	ContinuationProvider continuationProvider() const noexcept;
+
+	//! \par The per-store live-continuation counter
+	//! Reserving also charges the process-wide gauge, so
+	//! `liveContinuationCount()` keeps reporting one number for the process
+	//! while a runtime's own ceiling is enforced per store.
+	/** \brief Reserves one live-continuation slot for this store. \param maxLive The resolved ceiling for this store. \return false when this store is at its ceiling. */
+	bool reserveContinuationSlot(std::uint32_t maxLive) noexcept;
+	/** \brief Releases one live-continuation slot of this store. */
+	void releaseContinuationSlot() noexcept;
+	/** \brief Returns this store's live continuation count. \return Number of live continuations created through this store. */
+	std::uint32_t liveContinuationCount() const noexcept
+	{
+		return liveContinuations_.load(std::memory_order_relaxed);
+	}
+
 	//! \brief Tags (exception handling)
 	//! A tag's identity is nominal: *every* declaration is a distinct tag, even
 	//! if two declare the same payload type. `TagId` (WasmType.hpp) is the
@@ -459,6 +494,12 @@ private:
 	//! Per-memory reservation, keyed by `MemoryId`; only a reserving backing has
 	//! an entry. Guarded by `storeMutex_`.
 	std::unordered_map<MemoryId, uint64_t> memoryReservations_;
+
+	//! \par Continuations (docs/proposals/CONFIGURATION.md `CFG-4`)
+	//! The settings as requested; `0`/`Inherit` fields mean "the process default".
+	ContinuationSettings continuationSettings_{};
+	//! Live continuations created through this store, for the per-store ceiling.
+	std::atomic<std::uint32_t> liveContinuations_{0};
 
 	//! Guards every member container below. The Store is process-wide because
 	//! entities outlive instances, so host threads may create/lookup entities
