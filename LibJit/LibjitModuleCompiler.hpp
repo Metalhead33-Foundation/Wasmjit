@@ -60,11 +60,19 @@ public:
 	ModuleCompiler(jit_context_t context, Context* owner = nullptr);
 
 	/*!
+	 * \brief Reports the degrees this backend produces and whether it interprets.
+	 * \return `Full` as the ceiling with no interpreter: libjit's optimizer is
+	 *         reachable, and this backend has no interpreter path yet
+	 *         (docs/proposals/COMPILER_POLICY.md `CP4`).
+	 */
+	WASM::BackendCompilationCapabilities compilationCapabilities() const override;
+
+	/*!
 	 * \brief Reports a backend compile failure and throws.
 	 * \param stage Short stage name ("jit_function_compile", …).
 	 * \param functionIndex Module-local function index, or `kNoDiagnosticIndex`.
 	 * \param result The libjit result code.
-	 * \throws std::runtime_error Always; the module cannot be instantiated.
+	 * \throws WASM::CompileFailure Always; the module cannot be instantiated.
 	 */
 	[[noreturn]] void failCompilation(const char* stage, std::uint32_t functionIndex, int result);
 

@@ -103,18 +103,27 @@ store per runtime, so one budget per runtime — there is no process-wide store)
   `WASMJIT_CONT_STACK_BYTES` (default 512 KiB). A refused `cont.new` or stack
   allocation is a recoverable `OutOfMemory` trap, never an allocation attempt.
 
-Default budget **2 GiB**; override with `WASMJIT_MAX_TOTAL_BYTES` (bytes;
-`0`/`unlimited` disables it, at your own risk). The whole test suite fits in
-**64 MiB**, so the default is very generous.
+Default budget **4 GiB per runtime** (docs/proposals/CONFIGURATION.md `CFG-1`);
+override the *process* default with `WASMJIT_MAX_TOTAL_BYTES` (bytes;
+`0`/`unlimited` disables it, at your own risk), or one runtime's ceiling with
+`RuntimeConfig::memory.totalBytes`. The whole test suite fits in **64 MiB**, so
+the default is very generous.
 
-**Planned, not shipped:** [`proposals/CONFIGURATION.md`](proposals/CONFIGURATION.md)
-`CFG-1` makes this budget **per runtime** with a **4 GiB** default and
-`CFG-2`/`CFG-3` add opt-in per-category limits (one linear memory, all linear
-memories, the GC heap, tables) and an opt-in address-space counter for
-reservations. Until that milestone lands, the process-wide 2 GiB default above is
-what the engine does and `RuntimeConfig::allocationBudgetBytes` is still refused.
-The same note inventories every other hardcoded cap in this document's §2.2 and
-says which ones stay hardcoded and why.
+The budget is a struct, not a single number (`CFG-2`/`CFG-3`): under the total a
+host may cap **one linear memory** (`singleLinearMemoryBytes`), **all linear
+memories** (`allLinearMemoriesBytes`), the **GC heap** (`gcHeapBytes`) and
+**tables** (`tableBytes`), and may separately count **reserved but uncommitted
+address space** (`reservedAddressBytes`, opt-in). Every field is `0` by default,
+which means "inherit" — a zero total takes the process default and a zero
+category means "no separate cap" — so a zero-initialised config changes nothing.
+A category above the total is refused where it is set, and a refusal of an
+*initial* size also records `WASM.MEMORY.BUDGET_EXCEEDED`. A failed
+`memory.grow`/`table.grow` is still a silent `-1` unless a diagnostic sink is
+installed.
+
+Two related lifecycle facts, both from `CFG-9`: a destroyed instance gives its
+memories and tables back (`Store::releaseMemory`/`releaseTable`), and a refused
+*reservation* leaves neither the committed nor the reserved counter charged.
 
 **Encountered pitfall (the big one).** MEMORY64 widened
 `memory.grow`/`table.grow` to 64-bit and — correctly — began treating the delta

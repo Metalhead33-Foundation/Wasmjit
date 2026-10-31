@@ -7,6 +7,7 @@
 #include "WasmBase/WasmRuntime.hpp"
 
 #include <atomic>
+#include <cstdlib>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -68,11 +69,32 @@ TEST_CASE("the execution model is a validated restriction", "[concurrency]")
 	REQUIRE(scheduler.userData == nullptr);
 }
 
-TEST_CASE("a per-runtime allocation budget is refused until it is implemented", "[concurrency]")
+TEST_CASE("a per-runtime allocation budget is enforced and scoped to its runtime", "[config]")
 {
-	WASM::RuntimeConfig config;
-	config.allocationBudgetBytes = WASM::Store::allocationBudgetBytes() + 4096u;
-	REQUIRE_THROWS_WITH(WASM::Runtime::create("libjit", config),
+	// CFG-1: the store is per runtime, and so is its ceiling now. A budget
+	// smaller than a module's declared memory refuses that module's
+	// instantiation by name, while a second runtime keeps the default.
+	WASM::RuntimeConfig small;
+	small.memory.totalBytes = 1u << 20; // 1 MiB
+	auto tiny = WASM::Runtime::create("libjit", small);
+	REQUIRE(tiny->memoryBudget().totalBytes == (1u << 20));
+	REQUIRE(tiny->memoryBudgetSource() == WASM::MemoryBudgetSource::Explicit);
+
+	WASM::RuntimeConfig defaults;
+	auto standard = WASM::Runtime::create("libjit", defaults);
+	REQUIRE(standard->memoryBudget().totalBytes == WASM::Store::allocationBudgetBytes());
+	if (std::getenv("WASMJIT_MAX_TOTAL_BYTES") == nullptr)
+		REQUIRE(standard->memoryBudget().totalBytes == (4ull << 30));
+
+	// The legacy field still means "the total", and disagreeing with the new
+	// one is a configuration error rather than a silent winner.
+	WASM::RuntimeConfig legacy;
+	legacy.allocationBudgetBytes = 8u << 20;
+	REQUIRE_NOTHROW(WASM::Runtime::create("libjit", legacy));
+	WASM::RuntimeConfig conflict;
+	conflict.memory.totalBytes = 4u << 20;
+	conflict.allocationBudgetBytes = 8u << 20;
+	REQUIRE_THROWS_WITH(WASM::Runtime::create("libjit", conflict),
 			Catch::Matchers::ContainsSubstring("allocationBudgetBytes"));
 }
 

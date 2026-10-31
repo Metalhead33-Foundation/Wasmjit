@@ -199,6 +199,20 @@ inline constexpr std::string_view kBackendPlugin = "WASM.BACKEND.PLUGIN";
 //! the host must survive: the backend reports this id, then throws.
 inline constexpr std::string_view kCompileFunctionFailed = "WASM.COMPILE.FUNCTION_FAILED";
 
+//! A `Lax` compilation policy succeeded at a lower degree than the host asked
+//! for (docs/proposals/COMPILER_POLICY.md `CPD5`). A `Warning`: the module
+//! runs, it just runs less optimised than requested.
+inline constexpr std::string_view kCompileReducedOptimization = "WASM.COMPILE.REDUCED_OPTIMIZATION";
+//! A function executes through the backend's interpreter rather than compiled
+//! code (docs/proposals/COMPILER_POLICY.md `CP4`). A `Note`.
+inline constexpr std::string_view kCompileInterpreted = "WASM.COMPILE.INTERPRETED";
+
+//! A commitment was refused because it would exceed the store's budget
+//! (docs/proposals/CONFIGURATION.md `CFG-7`). An `Error`: an *initial* size
+//! that does not fit fails instantiation. A refused `memory.grow`/`table.grow`
+//! is a spec-legal `-1` and stays silent unless a sink is installed.
+inline constexpr std::string_view kMemoryBudgetExceeded = "WASM.MEMORY.BUDGET_EXCEEDED";
+
 inline constexpr std::string_view kValidateRule = "WASM.VALIDATE.RULE"; //!< The transitional family for a rule not mapped to its own id yet.
 inline constexpr std::string_view kValidateUnknownType = "WASM.VALIDATE.UNKNOWN_TYPE"; //!< A type index out of range.
 inline constexpr std::string_view kValidateTypeNotFunction = "WASM.VALIDATE.TYPE_NOT_FUNCTION"; //!< An indirect call whose type is not a function type.

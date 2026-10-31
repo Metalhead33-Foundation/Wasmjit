@@ -82,12 +82,12 @@ GcHeap::Region* GcHeap::createRegion(RegionSet& set, size_t blockSize, size_t ca
 	// Charge the whole region before backing it, exactly like the memory/table
 	// guardrail: an allocation that would exceed the budget fails without
 	// touching the host (docs/SAFETY.md §2.3).
-	if (!owner_.reserveBytes(capacity))
+	if (!owner_.reserveBytes(capacity, MemoryCategory::GcHeap))
 		return nullptr;
 
 	void* mem = platformMap(capacity);
 	if (mem == nullptr) {
-		owner_.releaseBytes(capacity);
+		owner_.releaseBytes(capacity, MemoryCategory::GcHeap);
 		return nullptr;
 	}
 
@@ -173,9 +173,13 @@ void* GcHeap::allocate(RegionSet& set, size_t size)
 	if (size == 0)
 		size = 1;
 	const size_t rounded = (size + kGranularity - 1) / kGranularity * kGranularity;
+	// The inline threshold is a store limit (`StoreLimits::gcInlineClassBytes`),
+	// so a host can send more objects to dedicated regions; it is clamped to the
+	// segregated-class table's fixed size by `Store`'s resolution.
+	const size_t inlineClass = static_cast<size_t>(owner_.limits().gcInlineClassBytes);
 
 	// Large: a dedicated region holding exactly this object.
-	if (rounded > kMaxInlineClass) {
+	if (rounded > inlineClass) {
 		Region* r = createRegion(set, /*blockSize*/ 0, rounded, /*classIndex*/ 0);
 		if (r == nullptr)
 			return nullptr;
@@ -209,7 +213,12 @@ void* GcHeap::allocate(RegionSet& set, size_t size)
 		}
 	}
 
-	const size_t capacity = std::max(kMinRegionBytes, rounded * kBlocksPerRegion);
+	// Region geometry is a store limit too (`StoreLimits`): the mapping has a
+	// lower bound and a target number of live blocks.
+	const size_t minRegionBytes = static_cast<size_t>(owner_.limits().gcMinRegionBytes);
+	const size_t blocksPerRegion =
+			static_cast<size_t>(owner_.limits().gcBlocksPerRegion);
+	const size_t capacity = std::max(minRegionBytes, rounded * blocksPerRegion);
 	r = createRegion(set, rounded, capacity, cls);
 	if (r == nullptr)
 		return nullptr;

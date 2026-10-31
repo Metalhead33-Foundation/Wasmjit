@@ -88,6 +88,12 @@ std::unique_ptr<ModuleInstance> ModuleInstantiator::instantiate(const Module& mo
 	// The constructor does all the backend-agnostic setup.
 	auto instance = std::make_unique<ModuleInstance>(module, resolver, hostBridge);
 
+	// A configured host stack reserve replaces the default the constructor
+	// installed (docs/proposals/CONFIGURATION.md `CFG-6`). Re-installing is
+	// cheap: it reads this thread's stack bounds and stores the limit.
+	if (stackReserve != 0)
+		installStackLimit(instance->ctx, static_cast<std::size_t>(stackReserve));
+
 	// Two-pass compilation: first declare all functions (so mutual
 	// recursion works), then compile all bodies.
 	translateTypes(*instance, module, instance->internals);
@@ -117,6 +123,13 @@ std::unique_ptr<ModuleInstance> ModuleInstantiator::instantiate(const Module& mo
 Value ModuleInstantiator::evalConstantExpr(const std::span<const std::byte>& expr, ModuleInstance& instance)
 {
 	return instance.evalConstantExpr(expr);
+}
+
+BackendCompilationCapabilities ModuleInstantiator::compilationCapabilities() const
+{
+	// The conservative answer: the policy default, no interpreter. A backend
+	// that can do more overrides this; one that does not is still correct.
+	return BackendCompilationCapabilities{};
 }
 
 Callable* ModuleInstance::callableFromSegmentRef(const Value& ref)
@@ -398,6 +411,18 @@ ModuleInstance::~ModuleInstance()
 	// backstop, docs/proposals/GC.md §6.1/GC-2).
 	store().gc().releaseSet(internals.gcSet);
 	internals.gcSet = nullptr;
+
+	// Give back the memories and tables this instance *created*
+	// (docs/proposals/CONFIGURATION.md `CFG-9`). Imported entities occupy the
+	// low indices of the index space and belong to the exporting store, so the
+	// loop starts after them: `releaseMemory`/`releaseTable` find nothing for
+	// one, and an imported entity is never freed here.
+	const std::size_t importedMemories = module->importMemories.size();
+	for (std::size_t i = importedMemories; i < internals.memoryRefs.size(); ++i)
+		store().releaseMemory(internals.memoryRefs[i]);
+	const std::size_t importedTables = module->importTables.size();
+	for (std::size_t i = importedTables; i < internals.tableRefs.size(); ++i)
+		store().releaseTable(internals.tableRefs[i]);
 }
 
 std::optional<LinearMemory*> ModuleInstance::exportedMemory(
@@ -2221,7 +2246,7 @@ void ModuleInstance::possibleCycleRoot(void* ref)
 			static_cast<const uint8_t*>(ref) + GcHeader::kTypeIdOffset);
 	if (tag == GcHeader::kReclaimedTypeId)
 		return;                              // already queued: the queue owns it
-	if (internals.gcCycleRoots.size() >= kMaxCycleCandidates)
+	if (internals.gcCycleRoots.size() >= store().limits().gcCycleCandidates)
 		return;                              // bounded buffer: may delay, never corrupt
 	internals.gcCycleRoots.push_back(ref);
 }

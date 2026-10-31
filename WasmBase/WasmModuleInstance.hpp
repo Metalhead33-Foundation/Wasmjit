@@ -15,6 +15,7 @@ WASMJIT_VISIBLE_BEGIN
 
 #include "WasmApi.hpp"
 #include "WasmModule.hpp"
+#include "WasmCompilationPolicy.hpp"
 #include "WasmGcHeader.hpp"
 #include "WasmGcHeap.hpp"
 #include "WasmHostBridge.hpp"
@@ -482,6 +483,36 @@ public:
 	//! most recent `instantiate` call; read by a backend's compile step).
 	const ProfileConfig& profile() const { return activeProfile; }
 
+	//! \par Compilation policy (docs/proposals/COMPILER_POLICY.md `CP-1`)
+	//! `Runtime` sets this from `RuntimeConfig::compilation` before it calls
+	//! `instantiate`, exactly as the profile travels; a backend reads it during
+	//! `compileFunctions`. Setting it is additive: the default is the behaviour
+	//! every build had before the policy existed.
+	/** \brief Records the policy the next instantiation must compile under. \param policy The host's request. */
+	void setCompilationPolicy(const CompilationPolicy& policy) noexcept
+	{
+		requestedPolicy = policy;
+	}
+	//! The policy record most recently set.
+	/** \brief Returns the policy the next instantiation will report. \return The recorded policy. */
+	const CompilationPolicy& compilationPolicy() const noexcept { return requestedPolicy; }
+
+	//! What this backend can actually honour, so an impossible request is
+	//! refused where it is set (`CPD6`). The default answer -- `Basic` only, no
+	//! interpreter -- is correct for a backend that never touched the policy,
+	//! which is what makes the query additive.
+	/** \brief Reports this backend's compilation capabilities. \return The levels and fallback modes it can honour. */
+	virtual BackendCompilationCapabilities compilationCapabilities() const;
+
+	//! \par Execution limits (docs/proposals/CONFIGURATION.md `CFG-6`)
+	//! The host stack reserve a created instance installs. `0` keeps
+	//! `kDefaultStackReserveBytes`.
+	/** \brief Sets the host stack reserve for subsequently created instances. \param bytes Reserve in bytes; `0` selects the default. */
+	void setStackReserveBytes(std::uint64_t bytes) noexcept { stackReserve = bytes; }
+	//! The configured reserve; `0` means the default.
+	/** \brief Returns the configured host stack reserve. \return Reserve in bytes, or zero for the default. */
+	std::uint64_t stackReserveBytes() const noexcept { return stackReserve; }
+
 protected:
 	//! Evaluates a constant expression against this instance's state.
 	Value evalConstantExpr(const std::span<const std::byte>& expr, ModuleInstance& instance);
@@ -503,6 +534,10 @@ private:
 	void applyActiveSegments(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals);
 	//! The profile the module was instantiated with (docs/proposals/PROFILES.md).
 	ProfileConfig activeProfile{};
+	//! The compilation policy `Runtime` last set (docs/proposals/COMPILER_POLICY.md).
+	CompilationPolicy requestedPolicy{};
+	//! Host stack reserve for created instances; `0` = `kDefaultStackReserveBytes`.
+	std::uint64_t stackReserve = 0;
 };
 
 }

@@ -564,12 +564,16 @@ verdicts were made on facts that have changed.
 
 ### 11.1 What changed
 
-| Before (revision 2) | After `CONFIGURATION.md` `CFG-1`/`CFG-2`/`CFG-3` |
+**All three milestones landed** (`CONFIGURATION.md` revision 2), so the right-hand
+column is the shipped behaviour, not a plan.
+
+| Before (revision 2) | Shipped (`CONFIGURATION.md` `CFG-1`/`CFG-2`/`CFG-3`/`CFG-9`) |
 |---|---|
-| one process-wide ceiling, `WASMJIT_MAX_TOTAL_BYTES`, read once into a `static` (2 GiB) | one ceiling **per runtime** (one per `Store`), default **4 GiB**, settable in `RuntimeConfig`; the environment variable survives as the *process default* a `0` resolves to |
+| one process-wide ceiling, `WASMJIT_MAX_TOTAL_BYTES`, read once into a `static` (2 GiB) | one ceiling **per runtime** (one per `Store`), default **4 GiB**, settable in `RuntimeConfig::memory`; the environment variable survives as the *process default* a `0` resolves to |
 | one counter, all categories | the same total, plus **opt-in** maxima under it: all linear memories, **one linear memory**, the GC heap, tables |
 | a reservation is charged to nothing (§4.5: "a 4 GiB reservation is free") | unchanged **by default**; an opt-in `reservedAddressBytes` counter bounds the number of reservations, because address space is a resource even when it is free |
 | "a per-module limit: none" (§10.5) | `singleLinearMemoryBytes` |
+| a destroyed instance's memories stayed charged forever | `Store::releaseMemory`/`releaseTable`, called from the instance destructor (`CFG-9`) |
 
 ### 11.2 What it does to §4.5, §5 and §7
 
@@ -580,9 +584,10 @@ verdicts were made on facts that have changed.
   without changing the first.
 - **§5 `MP6`** (a copying provider is charged for two buffers during a grow) is
   unchanged and is not closed by a budget change; it is a provider property.
-- **A new finding, not this note's**: `Store` has no release path for a memory
-  or a table, so a destroyed instance's commitment stays charged for the store's
-  lifetime (`CONFIGURATION.md` `CFG14`, milestone `CFG-9`). It belongs to the
+- **A finding this note did not have**: `Store` had no release path for a memory
+  or a table, so a destroyed instance's commitment stayed charged for the store's
+  lifetime (`CONFIGURATION.md` `CFG14`, milestone `CFG-9`, now shipped). It
+  belongs to the
   budget rather than the provider — a provider is never asked to give a memory
   back — but it is recorded here because it is the one place where the
   "charged once, credited on failure" promise in §6.3 is narrower than it reads.

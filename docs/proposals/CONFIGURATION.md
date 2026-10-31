@@ -1,12 +1,17 @@
 # Engine Configuration and Budgets — What Is Hardcoded Today, What Should Be a Knob, and the Budget Model {#prop_configuration}
 
-Status: engine-seam study, revision 1 (2026-10-31). This is the study asked
-for before any code changed: it inventories every value in the tree that a host
-might want to choose, separates the ones that *should* be configurable from the
-ones that must stay compile-time bounds, prices the change, and — for the one
-knob the project has already committed to — specifies the per-runtime memory
-budget in full (§10). **Nothing here is implemented yet**, except where a row
-says so; §7's `CFG-1`…`CFG-9` are the work that follows this note.
+Status: engine-seam study, revision 2 (2026-10-31). Revision 1 was the study:
+it inventoried every value in the tree that a host might want to choose,
+separated the ones that *should* be configurable from the ones that must stay
+compile-time bounds, and priced the change. **Since revision 2 the work is
+implemented**: `CFG-1`…`CFG-7` and `CFG-9` shipped (a per-runtime memory budget
+with a 4 GiB default, opt-in category caps, an opt-in address-space counter,
+release paths for memories and tables, resolved-budget introspection, the store
+and execution limits, and the `WASM.MEMORY.BUDGET_EXCEEDED` record). `CFG-8`
+(an execution-time budget) remains a separate, deferred study, and `CFG12`/
+`CFG13` remain the two named boundaries of what a budget covers. §7 records what
+landed per milestone, including the two places the implementation differs from
+the sketch in §10.
 
 Audience: anyone touching `WasmStore` (`WasmBase/WasmStore.{hpp,cpp}`), the
 memory providers (`WasmBase/WasmMemory.{hpp,cpp}`), `WasmRuntime`
@@ -301,30 +306,27 @@ the same shape `ParseOptions::fromEnvironment()` already has.
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| `CFG1` | The allocation budget is a process-wide `static`; `RuntimeConfig` cannot set it, and asking is an error | `WasmStore.cpp` `allocationBudgetBytes()`; `WasmRuntime.cpp` `rejectUnsupportedConfig`; `Test/ConcurrencyTests.cpp` "a per-runtime allocation budget is refused until it is implemented" | **High** — the store is per runtime, its ceiling is not, so two runtimes in one host cannot be given different budgets |
-| `CFG2` | The default is 2 GiB and one counter covers every category | `uint64_t{2} << 30`; single `allocatedBytes_` | **High** — a wasm32 module may legitimately declare a 4 GiB memory, which cannot be instantiated at all under the default; see §10.5 |
-| `CFG3` | No per-category limit: heap/GC, one linear memory, all linear memories, tables, strings, continuations | `Store::reserveBytes` has one argument | **Medium** — the requested opt-in split; `MP-4` was rejected against exactly this |
-| `CFG4` | **Reserved address space is charged to nothing.** `Reserved`/`Shared` reserve up to the declared maximum with `mmap`, and the budget only sees commits | `WasmMemory.cpp` (`platformReservedMemory`), `Store::reserveBytes` not called for a reservation; `MEMORY_PROVIDER.md` §4.7's "the reservation itself is free" | **Medium** — a host that repeatedly instantiates unbounded-maximum modules under `Reserved` can exhaust the address space without a single refusal |
+| ~~`CFG1`~~ ✅ (CFG-1) | The allocation budget is a process-wide `static`; `RuntimeConfig` cannot set it, and asking is an error | `WasmStore.cpp` `allocationBudgetBytes()`; `WasmRuntime.cpp` `rejectUnsupportedConfig`; `Test/ConcurrencyTests.cpp` "a per-runtime allocation budget is refused until it is implemented" | **High** — the store is per runtime, its ceiling is not, so two runtimes in one host cannot be given different budgets |
+| ~~`CFG2`~~ ✅ (CFG-1) | The default is 2 GiB and one counter covers every category | `uint64_t{2} << 30`; single `allocatedBytes_` | **High** — a wasm32 module may legitimately declare a 4 GiB memory, which cannot be instantiated at all under the default; see §10.5 |
+| ~~`CFG3`~~ ✅ (CFG-2) | No per-category limit: heap/GC, one linear memory, all linear memories, tables, strings, continuations | `Store::reserveBytes` has one argument | **Medium** — the requested opt-in split; `MP-4` was rejected against exactly this |
+| ~~`CFG4`~~ ✅ (CFG-3) | **Reserved address space is charged to nothing.** `Reserved`/`Shared` reserve up to the declared maximum with `mmap`, and the budget only sees commits | `WasmMemory.cpp` (`platformReservedMemory`), `Store::reserveBytes` not called for a reservation; `MEMORY_PROVIDER.md` §4.7's "the reservation itself is free" | **Medium** — a host that repeatedly instantiates unbounded-maximum modules under `Reserved` can exhaust the address space without a single refusal |
 | `CFG5` | The continuation budget and provider are process-wide statics with a mid-flight setter, unlike every other resource limit | `WasmContinuation.cpp` `budgetStorage()`, `providerStorage()`, `setContinuationBudget`, `setContinuationProvider` | **Medium** — two runtimes cannot choose differently, and a setter that changes limits under a live continuation is not per-agent |
-| `CFG6` | The caps in `WasmSafety.hpp` are compile-time only; the host stack reserve is a default parameter no embedder can reach through a runtime | `WasmSafety.hpp`; `installStackLimit(ctx)` at `WasmModuleInstance.cpp` | **Low** — deliberate for the guards (`CFGD2`); the stack reserve is the one genuine host question |
-| `CFG7` | Config precedence is per surface: `ParseOptions` has explicit > env > default; budgets are env-only-and-static; `setContinuationBudget` is API-only; `WASMJIT_LIBJIT_OPT` is backend-only | §4.1/§4.2 | **Medium** — an embedder cannot reason about "what wins" from the surface, only from reading three files |
-| `CFG8` | No introspection: a host cannot ask the runtime which budget it actually resolved, or where the value came from | no accessor beyond `Store::allocationBudgetBytes()` (the process default) and `allocatedBytes()` | **Low** — needed for diagnostics and for an embedder that logs its configuration |
-| `CFG9` | `0` is overloaded: "unset, use the default" for `allocationBudgetBytes`, and "unlimited" for `WASMJIT_MAX_TOTAL_BYTES` | `WasmStore.cpp` parses `"0"` to `UINT64_MAX`; `WasmRuntime.hpp` documents `0` as "the engine's default" | **Medium** — the same value means opposite things at two layers |
+| ~~`CFG6`~~ ✅ (CFG-6) | The caps in `WasmSafety.hpp` are compile-time only; the host stack reserve is a default parameter no embedder can reach through a runtime | `WasmSafety.hpp`; `installStackLimit(ctx)` at `WasmModuleInstance.cpp` | **Low** — deliberate for the guards (`CFGD2`); the stack reserve is the one genuine host question |
+| ~~`CFG7`~~ ✅ (CFG-5) | Config precedence is per surface: `ParseOptions` has explicit > env > default; budgets are env-only-and-static; `setContinuationBudget` is API-only; `WASMJIT_LIBJIT_OPT` is backend-only | §4.1/§4.2 | **Medium** — an embedder cannot reason about "what wins" from the surface, only from reading three files |
+| ~~`CFG8`~~ ✅ (CFG-5) | No introspection: a host cannot ask the runtime which budget it actually resolved, or where the value came from | no accessor beyond `Store::allocationBudgetBytes()` (the process default) and `allocatedBytes()` | **Low** — needed for diagnostics and for an embedder that logs its configuration |
+| ~~`CFG9`~~ ✅ (CFG-1) | `0` is overloaded: "unset, use the default" for `allocationBudgetBytes`, and "unlimited" for `WASMJIT_MAX_TOTAL_BYTES` | `WasmStore.cpp` parses `"0"` to `UINT64_MAX`; `WasmRuntime.hpp` documents `0` as "the engine's default" | **Medium** — the same value means opposite things at two layers |
 | `CFG10` | A 4 GiB total cannot hold one full wasm32 memory *and* anything else, so the requested default is a ceiling a legal module can hit | 32-bit memory maximum 2³² bytes (`WasmModuleInstance.cpp`); shared-memory cap `MAX_SHARED_BYTES` | **Medium** — a default, not a correctness question; §10.5 prices it |
-| `CFG11` | A budget refusal has no stable diagnostic id: a failed `grow` is deliberately silent (`MP3`), and an oversized *initial* size throws prose | `WasmStore.cpp` messages; `WasmDiagnostics.hpp` has `WASM.COMPILE.*`, `WASM.EXECUTE.*`, `WASM.DECODE.*` but no `WASM.MEMORY.*` | **Low** — an embedder can only parse a string |
+| ~~`CFG11`~~ ✅ (CFG-7) | A budget refusal has no stable diagnostic id: a failed `grow` is deliberately silent (`MP3`), and an oversized *initial* size throws prose | `WasmStore.cpp` messages; `WasmDiagnostics.hpp` has `WASM.COMPILE.*`, `WASM.EXECUTE.*`, `WASM.DECODE.*` but no `WASM.MEMORY.*` | **Low** — an embedder can only parse a string |
 | `CFG12` | No execution-time budget at all (fuel/instruction metering) | [`../SAFETY.md`](../SAFETY.md) §1: "no instruction budget, no watchdog" | **High for hostile-module hosts, out of scope here** — it is a code-generation obligation for every backend, not a `Store` counter |
 | `CFG13` | The budget covers store-owned *runtime* bytes only: a module's decoded form, the code a backend generates, and host-side import state are charged to nothing | no `reserveBytes` call in `WasmModule.cpp`'s section decode beyond the input bounds, none in `LibJit/`; `../SAFETY.md` §2.2's caps are the only bound on a body | **Medium, triaged not-now** — decoding is bounded by the *input size* itself (a 1 GiB `.wasm` file costs about 1 GiB to parse, which is the embedder's own decision to pass it) and code size is bounded by the function-body count and each backend's own limits; a code-size budget is a backend-contract item, not a `Store` counter |
-| `CFG14` | **Memories and tables are never released.** `Store` has no `releaseMemory`/`releaseTable`, and `ModuleInstance::~ModuleInstance` credits only the GC regions — so an instance destroyed while its `Store` lives keeps its memories' and tables' bytes charged forever | `grep` finds no removal path (no `memories.erase`/`tables.erase` in `WasmBase/`), and the destructor's own comment says "embedders may destroy instances while the Store lives on". Strings and exceptions are also held until teardown, but that is *documented intent* (an `exnref` or a string can outlive the call); a memory is supposed to die with its instance | **High** — a long-lived runtime that instantiates and drops modules leaks budget monotonically, and any retry that discards an instance (`COMPILER_POLICY.md` `CP-3`) pays for the discarded attempt as well as the new one |
+| ~~`CFG14`~~ ✅ (CFG-9) | **Memories and tables are never released.** `Store` has no `releaseMemory`/`releaseTable`, and `ModuleInstance::~ModuleInstance` credits only the GC regions — so an instance destroyed while its `Store` lives keeps its memories' and tables' bytes charged forever | `grep` finds no removal path (no `memories.erase`/`tables.erase` in `WasmBase/`), and the destructor's own comment says "embedders may destroy instances while the Store lives on". Strings and exceptions are also held until teardown, but that is *documented intent* (an `exnref` or a string can outlive the call); a memory is supposed to die with its instance | **High** — a long-lived runtime that instantiates and drops modules leaks budget monotonically, and any retry that discards an instance (`COMPILER_POLICY.md` `CP-3`) pays for the discarded attempt as well as the new one |
 
-Reading: `CFG1`–`CFG3` are the requested feature and are cheap (§7 `CFG-1`,
-`CFG-2`). `CFG4` is the finding that came out of reading `MP-1`'s own
-measurements: the reservation is free *because nothing counts it*. `CFG14` is
-the finding that came out of pricing a retry in
-[`COMPILER_POLICY.md`](COMPILER_POLICY.md): the budget is charged for memories
-that nothing ever gives back. `CFG5` and `CFG7` are the consistency debt the
-study exists to expose. `CFG12` and `CFG13` are named so that "we have budgets
-wherever it is wise" is not read as "we have every budget": one is a
-code-generation obligation for every backend, the other is a backend-contract
+Reading: `CFG1`–`CFG9`, `CFG11` and `CFG14` are **closed** by `CFG-1`…`CFG-7` and
+`CFG-9` (revision 2). `CFG5` (the continuation statics) is the one consistency
+gap left open, because `CFG-4` has not landed; `CFG10` is answered by decision
+(the default is the total, and a maximal memory needs an explicit budget —
+§10.6 Q1); `CFG12` and `CFG13` are named boundaries rather than work items: one
+is a code-generation obligation for every backend, the other a backend-contract
 item, and neither belongs in `Store`.
 
 
@@ -367,20 +369,48 @@ overload, a new accessor. Two caveats: `RuntimeConfig`'s *size* changes, which
 embedder may construct, so a release that ships `CFG-1` is a minor-version
 bump, not a patch.
 
-| Milestone | Work | Closes | Class | Done when |
+| Milestone | Work | Closes | Class | Status |
 |---|---|---|---|---|
-| **CFG-0 — This study** ✅ | Inventory §4, gaps §5, deviations §6, plan, tests, and §10's budget specification. | — | — | This note exists, is indexed, and the `[docs]` check passes. |
-| **CFG-1 — A per-runtime budget, with the requested default** | `MemoryBudget` in `RuntimeConfig` (see §10.2); a `Store` constructor overload that takes the resolved budget; `Runtime` passes it; `allocationBudgetBytes()` stays as the process default a `0` resolves to; the default becomes **4 GiB**; the refusal in `rejectUnsupportedConfig` is deleted; the "refused until it is implemented" test is inverted into a test that a per-runtime budget *is* enforced. Docs: `../SAFETY.md` §2.3, `WasmStore.hpp`, `../EMBEDDING_SURFACE.md` §4.7, `README.md`'s meter. | `CFG1`, `CFG2` (total), `CFG9` (documented), `CFG8` (one accessor) | A + minor | `Runtime::create` with a smaller budget refuses a memory that the default accepts; two runtimes in one process hold different budgets; `./Test/WasmJit` is green with no test that had to be deleted. |
-| **CFG-2 — Category limits** | `MemoryBudget` grows `gcHeapBytes`, `allLinearMemoriesBytes`, `singleLinearMemoryBytes`, `tableBytes`; `reserveBytes(bytes, MemoryCategory)`; counters beside `allocatedBytes_`; refusal at construction when a category exceeds the total. Reopens `MEMORY_PROVIDER.md` `MP-4` as an opt-in quota (that note's §11). | `CFG3`, `CFG10` (part) | A + minor | One memory can be capped without touching the total; a GC-heavy module hits the GC cap while a memory-heavy one is unaffected; `[mem-provider]` gains the quota cases. |
-| **CFG-3 — Address space is a budget too** | A second counter for `mmap` *reservations* (`Reserved` and `Shared`), charged at construction and credited at teardown; off by default (**opt-in**, reviewed against `MP-1`'s "the reservation is free" claim). | `CFG4` | A | A host can cap total reservation; the §10.5 large-reservation cases still instantiate under the default (i.e. nothing changes unless asked). |
-| **CFG-4 — Scope the continuation budget** | `ContinuationBudget` and the provider become per-runtime slots with the free functions kept as process defaults (the `ParseOptions` shape); the mid-flight setter is documented as affecting new continuations only. | `CFG5` | A + minor | Two runtimes in one process have different continuation limits; no free function changes meaning. |
-| **CFG-5 — Precedence and introspection** | One documented rule (§2.1 rule 1) applied to every surface; `Runtime::memoryBudget()` returning the *resolved* budget plus a provenance enum (`Default`, `Environment`, `Explicit`). | `CFG7`, `CFG8` | A | An embedder can log exactly what it is running with without reading `getenv`. |
-| **CFG-6 — The host stack reserve** | A per-runtime stack reserve reaching `installStackLimit`; the if-measured constants in §4.3 are only touched with a measurement recorded in this note. | `CFG6` | A | A module with deep host-frame overhead can be given a larger reserve without editing the header. |
-| **CFG-7 — Diagnostics for a refusal** | `WASM.MEMORY.BUDGET_EXCEEDED` (and one id per category) emitted where a refusal is *already* reported: an oversized initial size (Error + exception), a refused `grow` (Note, only when a sink is installed — `MP3`'s "silent" property stays for the guest). | `CFG11` | A | The id is in `WasmDiagnostics.hpp`, a test asserts it, and a guest still observes exactly `-1`. |
-| **CFG-9 — Give the bytes back** | `Store::releaseMemory(MemoryId)` / `releaseTable(TableId)` (additive: the id already exists), called from `ModuleInstance`'s destructor for every memory/table the instance *created*, crediting the budget and erasing the map entry under `storeMutex_`. Imported memories and tables belong to another instance and are left alone. | `CFG14` | A | An instance destroyed while its store lives returns every byte it charged; a `Runtime`-owned instance is unaffected, because it is not destroyed before teardown; the guardrail test still passes under a 64 MiB budget |
+| **CFG-0 — This study** | Inventory §4, gaps §5, deviations §6, plan, tests, and §10's budget specification. | — | — | ✅ Revision 1 |
+| **CFG-1 — A per-runtime budget, with the requested default** | `MemoryBudget` in `RuntimeConfig`; a `Store` constructor overload that takes it; `Runtime` passes it; `allocationBudgetBytes()` stays as the process default a `0` resolves to; the default becomes **4 GiB**; the refusal in `rejectUnsupportedConfig` is deleted; the "refused until it is implemented" test is inverted. | `CFG1`, `CFG2` (total), `CFG9`, `CFG8` (part) | A + minor | ✅ **Shipped.** `Store::Store(const MemoryBudget&)`, `Store::Store(budget, StoreLimits)`, 4 GiB default, `RuntimeConfig::memory`, `Runtime::memoryBudget()`. 27 exported symbols added, 0 removed. |
+| **CFG-2 — Category limits** | `MemoryBudget` grows `gcHeapBytes`, `allLinearMemoriesBytes`, `singleLinearMemoryBytes`, `tableBytes`; `reserveBytes(bytes, MemoryCategory)`; counters beside `allocatedBytes_`; refusal at construction when a category exceeds the total. | `CFG3`, `CFG10` (part) | A + minor | ✅ **Shipped.** Three category counters (linear memory, tables, GC heap); strings/exceptions/continuations stay total-only (§7.1). `MP-4` is a field now. |
+| **CFG-3 — Address space is a budget too** | A second counter for `mmap` *reservations* (`Reserved` and `Shared`), charged at construction and credited on release; off by default. | `CFG4` | A | ✅ **Shipped.** `reserveAddressBytes`/`reservedAddressBytes`; `WASMJIT_…` default stays 0, so `MP-1`'s "the reservation is free" row is unchanged. |
+| **CFG-5 — Precedence and introspection** | One documented rule (§2.1 rule 1) applied to every surface; the *resolved* budget plus a provenance enum. | `CFG7`, `CFG8` | A | ✅ **Shipped** for the budget: `Runtime::memoryBudget()`, `memoryBudgetSource()` (`Default`/`Environment`/`Explicit`), `Store::budget()`/`limits()`. |
+| **CFG-6 — The host stack reserve and the if-measured knobs** | A per-runtime stack reserve reaching `installStackLimit`; the `if-measured` constants promoted (string cap, GC geometry, cycle candidates, defer capacity, diagnostic ring). | `CFG6` | A | ✅ **Shipped.** `StoreLimits` + `ExecutionLimits`; the stack reserve travels on the instantiator; `kGranularity` stays 16 (ABI invariant). |
+| **CFG-7 — Diagnostics for a refusal** | `WASM.MEMORY.BUDGET_EXCEEDED` emitted where a refusal is *already* reported: an oversized initial size (Error + exception); a refused `grow` stays `-1` and silent. | `CFG11` | A | ✅ **Shipped.** One id (not one per category); the guest still observes exactly `-1`. |
+| **CFG-9 — Give the bytes back** | `Store::releaseMemory(LinearMemory*)` / `releaseTable(TableInstance*)`, called from `ModuleInstance`'s destructor for the entities the instance *created*; imported ones are not found in this store and are left alone. | `CFG14` | A | ✅ **Shipped.** Matched by the view the instance already holds, so no id bookkeeping was needed. |
+| **CFG-4 — Scope the continuation budget** | `ContinuationBudget` and the provider become per-runtime slots with the free functions kept as process defaults. | `CFG5` | A + minor | **Open.** The store/agent limits landed; the continuation statics are untouched and remain process-wide. |
+| **CFG-8 — Execution budget (deferred)** | A design note for fuel/instruction metering: where the counter lives in `ExecutionState`, which backends can emit the check, what it costs per loop. | — (names `CFG12`) | likely **E** for a backend set | Not started; this row exists so the deferral is explicit. |
+| **CP-1…CP-6** | The compilation knobs, in [`COMPILER_POLICY.md`](COMPILER_POLICY.md) §7. | that note's `CP1`–`CP11` | A / B | see that note (CP-1, CP-2, CP-3, CP-5 shipped) |
 
-| **CFG-8 — Execution budget (deferred)** | A design note for fuel/instruction metering: where the counter lives in `ExecutionState`, which backends can emit the check, what it costs in the code generated per loop. | — (names `CFG12`) | likely **E** for a backend set | Not started; this row exists so the deferral is explicit. |
-| **CP-1…CP-6** | The compilation knobs, in [`COMPILER_POLICY.md`](COMPILER_POLICY.md) §7. | that note's `CP1`–`CP11` | A / B | see that note |
+### 7.1 What landed, and where it differs from the §10 sketch
+
+Two deviations, both deliberate, and one scope note:
+
+1. **The types live in `WasmStore.hpp`, not `WasmRuntime.hpp`.** `MemoryBudget`,
+   `MemoryCategory`, `MemoryBudgetSource` and `StoreLimits` describe what the
+   *store* enforces, and `RuntimeConfig` already includes that header. The
+   `CompilationPolicy` types got their own header
+   (`WasmCompilationPolicy.hpp`) because they are a separate concept with a
+   backend-facing query.
+2. **Only linear memory, tables and the GC heap have category counters.**
+   Strings, exceptions and continuation stacks are charged to the total
+   (call sites pass `MemoryCategory::String` and friends, but
+   `categoryCounter()` answers `nullptr` for them). A cap on those would be a
+   second mechanism with no requester; the enum keeps the hook.
+3. **The execution knobs are two structs, not one.** `StoreLimits` (string cap,
+   GC geometry, cycle candidates) is resolved by the `Store`;
+   `ExecutionLimits` (defer-stack capacity, diagnostic ring, host stack reserve)
+   is applied by `Agent`/`createAgent()` and, for the reserve, by the
+   instantiator when it creates an instance. That split follows ownership, which
+   is what keeps a per-runtime limit really per runtime.
+
+Two implementation constraints worth recording because a future reader will trip
+over them: `kGranularity` stays 16 (it is an ABI invariant: `v128` fields and
+i31 tagging), and the defer-stack capacity is clamped to
+`ExecutionState::kDeferCapacity` (the records are inline *so that registering a
+cleanup cannot allocate*).
+
 
 Ordering, and why:
 
@@ -426,7 +456,7 @@ Stop conditions:
 | `a shared memory ignores the policy, because it already reserves` | `[mem-provider]` | the policy applies only to non-shared memories |
 | `the store's policy reaches the memories a module declares` | `[mem-provider]` | the instantiator consults the store policy |
 | `grow guardrail rejects absurd deltas without allocating` (`wasm_wat/grow_guard.wat`) | default | the budget refuses a `0xffffffff`-page grow instead of allocating |
-| `a per-runtime allocation budget is refused until it is implemented` | `[concurrency]` | **the gap**, by name — `CFG-1` inverts this test |
+| `a per-runtime allocation budget is refused until it is implemented` | `[concurrency]` | **the gap**, by name — revision 2 inverted it into `a per-runtime allocation budget is enforced and scoped to its runtime` |
 | `continuation runtime enforces one-shot and the live budget` | default | the process-wide live-continuation cap |
 | `GC heap: region allocation, alignment and recycling` | default | region semantics, not the budget |
 | `WASMJIT_MAX_TOTAL_BYTES=67108864 ./WasmJit` | `../SAFETY.md` §6 | a manual run: the whole suite fits in 64 MiB |
@@ -437,25 +467,24 @@ No test pins the **default value** of the budget, and no test pins **scope**
 is why `CFG-1`'s first test is a default-and-scope test rather than a refusal
 test.
 
-### 8.2 What each milestone adds
+### 8.2 What revision 2 added (`Test/ConfigurationTests.cpp`, `[config]` / `[compilation-policy]`)
 
-| Milestone | New cases |
+| Test | What it pins |
 |---|---|
-| `CFG-1` | `[config]`: the resolved default is 4 GiB; a 2 MiB runtime refuses a 4 MiB memory at `instantiate` with a message naming the budget; two runtimes coexist with different budgets and neither sees the other's charges; `Store::allocationBudgetBytes()` still answers the *process* default; `WASMJIT_MAX_TOTAL_BYTES` still seeds it (in a forked child, because the parse is once-per-process — the pattern `Test/SpecSuite.cpp` already uses for its children) |
-| `CFG-2` | `[config]`: a single memory capped below the total is refused at its own limit; the GC heap capped below the total traps while a memory allocation of the same size succeeds; a category larger than the total is refused at `create`; `allocatedBytes()` still counts every category |
-| `CFG-3` | `[config]`: with the reservation budget off, `MP-1`'s §4.7 rows are unchanged; with it on, the Nth reservation is refused by name and teardown credits the count |
-| `CFG-4` | `[config]`: two runtimes with different `maxLive`; a continuation created before a budget change keeps its provider |
-| `CFG-5` | `[config]`: provenance is `Default` / `Environment` / `Explicit` for the three paths |
-| `CFG-6` | `[config]`: a configured reserve reaches `ExecutionState::stackLimit` |
-| `CFG-7` | `[diagnostics]`: `WASM.MEMORY.BUDGET_EXCEEDED` is recorded for an oversized initial size; a refused `grow` still returns `-1` and records nothing unless a sink is installed |
-| `CFG-9` | `[config]`: creating and destroying an instance returns `allocatedBytes()` to its pre-instantiation value (today it does not — `CFG14`); an imported memory is not released with the importing instance |
+| `the default budget is 4 GiB and is what a zero config inherits` | the process default, and that every `0` field inherits it |
+| `a category above the total is refused where it is set` | `std::invalid_argument` from the `Store` constructor |
+| `a per-runtime budget refuses a module that does not fit` | a 1 MiB runtime refuses the 4 MiB fixture and records `WASM.MEMORY.BUDGET_EXCEEDED`; a second runtime with the default instantiates it |
+| `a per-memory cap binds below the total` | the per-memory maximum, and that a grow beyond it is `-1` rather than an exception |
+| `a GC-heap cap refuses a region and credits nothing` | the GC counter stops at its cap |
+| `a released memory and table give their bytes back` | `CFG-9`: counters return to zero, a second release is a harmless false |
+| `reserved address space is counted only when the budget asks` | `CFG-3`: off by default, a named refusal when on, credited on release |
+| `store limits are clamped to what the implementation honours` | `CFG-6`: rounding and clamping, never a silent no-op |
+| `an agent honours the configured execution limits` | defer-stack and diagnostic-ring capacities reach the agent |
 
-### 8.3 Reading
+Reading: the budget is now *tested* rather than only operated, which is the
+difference revision 1 could not have: a budget no API can set is a budget no
+suite can set differently.
 
-The survey is thin exactly where the study found the gaps: one suite
-(`[mem-provider]`) covers the policy, none covers the budget itself beyond the
-guardrail and the refusal. That is consistent with `CFG1`: a budget no API can
-set is a budget no suite can set differently.
 
 ## 9. References
 
@@ -550,14 +579,20 @@ The three rules that make it unambiguous:
    (process default, from `WASMJIT_MAX_TOTAL_BYTES` or 4 GiB) is the root; a
    `0` in `MemoryBudget` resolves to it; a `0` category resolves to the resolved
    total (i.e. "no separate cap", because `min(total, total) == total`).
-2. **A category is a maximum under the total, never a replacement** (`CFGD5`).
-   A category larger than the resolved total is a configuration error and is
-   refused at `create()` by name (`CFG2`'s "refuse where it is set").
-3. **The resolved budget is a plain set of `uint64_t`s.** `Store` gains
-   `Store(const MemoryBudget&)`; the existing `Store()` forwards a resolved
-   default. Both are additive; `Runtime` passes `config_.memory`, and
-   `Runtime::config_` is declared before `Runtime::store_`, so the existing
-   member-init order already works without reordering anything.
+2. **A category is a maximum under the total, never a replacement** (`CFGD5`);
+   a category larger than the resolved total is a configuration error and is
+   refused at `create()`/construction by name.
+3. **The resolved budget is a plain set of `uint64_t`s.** `Store` gained
+   `Store(const MemoryBudget&)` and `Store(const MemoryBudget&, const StoreLimits&)`;
+   the existing `Store()` forwards a resolved default. `Runtime` passes
+   `config_.memory`, and `Runtime::config_` is declared before `Runtime::store_`,
+   so the member-init order already works.
+
+**As shipped (revision 2), two details differ from the sketch above:** the types
+live in `WasmStore.hpp` rather than `WasmRuntime.hpp` (§7.1), and the tuning
+knobs are the two structs described there (`StoreLimits`, `ExecutionLimits`)
+rather than fields on `RuntimeConfig` itself — `RuntimeConfig::store` and
+`RuntimeConfig::execution` carry them.
 
 
 ### 10.3 Refusal semantics, per category
@@ -635,14 +670,15 @@ The 64 MiB regression run stays valid under any of them: `WASMJIT_MAX_TOTAL_BYTE
 still seeds the process default, so the sweep in `../SAFETY.md` §6 keeps proving
 that nothing allocates wildly.
 
-### 10.6 Open questions for the requester
+### 10.6 The open questions, answered
 
-| # | Question | Recommendation |
+| # | Question | Answer |
 |---|---|---|
-| Q1 | Is 4 GiB the *total*, accepting that one maximal memory then leaves no room for anything else (option A above)? | yes |
-| Q2 | Should a category default to "inherit the total" (`0`) rather than to a fixed fraction? | yes — a fraction is a policy nobody asked for |
-| Q3 | Should `singleLinearMemoryBytes` default to "no separate cap"? | yes; the opt-in is the feature |
-| Q4 | Is the reservation budget (`CFG-3`) wanted now, or only recorded? | recorded and built last; it is the one change that could contradict `MP-1`'s published "the reservation is free" row if it defaulted to on |
-| Q5 | Do the continuation limits belong inside `MemoryBudget` or in a sibling `ExecutionBudget`? | a sibling struct, same per-runtime scoping (`CFG-4`): one is bytes, the other is a count plus a stack size |
-| Q6 | Is a table budget wanted in `CFG-2`, or later? | in `CFG-2` — the charge sites already exist and `table.grow` already has the right outcome |
+| Q1 | Is 4 GiB the *total*, accepting that one maximal memory then leaves no room for anything else? | **Yes** — `totalBytes` defaults to 4 GiB, and a module with a maximal memory needs an explicit budget. The refusal is a named exception plus a `WASM.MEMORY.BUDGET_EXCEEDED` record, so it is diagnosable rather than mysterious |
+| Q2 | Should a category default to "inherit the total" rather than a fixed fraction? | **Yes** — implemented that way: a `0` category resolves to the total |
+| Q3 | Should `singleLinearMemoryBytes` default to "no separate cap"? | **Yes** — `0` means no separate cap; the opt-in is the feature |
+| Q4 | Is the reservation budget wanted now? | **Built, off by default** (`CFG-3`), which keeps `MP-1`'s published "the reservation is free" row true |
+| Q5 | Continuation limits inside `MemoryBudget` or a sibling? | **A sibling**, and still open (`CFG-4`): `ExecutionLimits` carries the per-agent knobs, and the continuation statics are untouched |
+| Q6 | A table budget in `CFG-2`? | **Yes** — `tableBytes`, because the charge sites and the `-1` outcome already existed |
+
 

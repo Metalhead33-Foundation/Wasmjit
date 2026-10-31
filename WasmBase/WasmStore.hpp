@@ -27,6 +27,87 @@ WASMJIT_VISIBLE_BEGIN
 #include <unordered_map>
 namespace WASM {
 
+//! \brief The kind of allocation a charge is made for.
+//!
+//! Every commitment the store makes is charged to the running total *and* to
+//! the category it belongs to, so a host can cap one class of allocation below
+//! the runtime's total (docs/proposals/CONFIGURATION.md `CFG-2`). The category
+//! is chosen at the charge site, which is the only place that knows what the
+//! bytes are for.
+enum class MemoryCategory : std::uint8_t {
+	Other = 0, //!< Not otherwise classified: charged to the total only.
+	LinearMemory, //!< Committed linear-memory pages.
+	Table, //!< Committed table slots.
+	GcHeap, //!< Mapped GC-heap regions.
+	String, //!< Store-owned string objects, views and iterators.
+	Exception, //!< Store-owned exception objects.
+	ContinuationStack, //!< A continuation's native or pthread stack.
+};
+
+//! \brief Returns the stable spelling of a memory category.
+//! \param category Category to name.
+//! \return A static string; never null.
+const char* memoryCategoryName(MemoryCategory category) noexcept;
+
+//! \brief The byte budgets a runtime is created with.
+//!
+//! `0` means "inherit", at every level: a zero total resolves to the process
+//! default (`Store::allocationBudgetBytes()`), and a zero category resolves to
+//! the resolved total, i.e. "no separate cap". A category is a *maximum under
+//! the total*, never a replacement for it, and categories never borrow from one
+//! another (docs/proposals/CONFIGURATION.md §6 `CFGD5`/`CFGD6`).
+struct MemoryBudget {
+	//! Total bytes this store may commit. `0` = the process default (4 GiB).
+	std::uint64_t totalBytes = 0;
+	//! Cap on all linear memories together. `0` = no separate cap.
+	std::uint64_t allLinearMemoriesBytes = 0;
+	//! Cap on one linear memory. `0` = no separate cap.
+	std::uint64_t singleLinearMemoryBytes = 0;
+	//! Cap on the GC heap. `0` = no separate cap.
+	std::uint64_t gcHeapBytes = 0;
+	//! Cap on table storage. `0` = no separate cap.
+	std::uint64_t tableBytes = 0;
+	//! Cap on *reserved* (not committed) address space. `0` = reservations are
+	//! not counted, which is `MEMORY_PROVIDER.md` `MP-1`'s behaviour.
+	std::uint64_t reservedAddressBytes = 0;
+};
+
+//! \brief Where a resolved budget came from, for introspection.
+enum class MemoryBudgetSource : std::uint8_t {
+	Default = 0, //!< The engine's built-in default.
+	Environment, //!< `WASMJIT_MAX_TOTAL_BYTES` supplied the total.
+	Explicit, //!< The embedder supplied a budget.
+};
+
+//! \brief Returns the stable spelling of a budget source.
+//! \param source Source to name.
+//! \return A static string; never null.
+const char* memoryBudgetSourceName(MemoryBudgetSource source) noexcept;
+
+//! \brief Tuning knobs the store's sub-allocators read.
+//!
+//! These were compile-time constants; they are configuration now because a
+//! measurement (or a host with unusual objects) may want a different value
+//! (docs/proposals/CONFIGURATION.md §4.3). `0` means "the built-in default" at
+//! every field, so a zero-initialised struct changes nothing. Every value is
+//! clamped to the hard bound the implementation can honour, and the clamp is
+//! documented per field rather than silently ignored.
+struct StoreLimits {
+	//! One string may not exceed this many bytes. `0` = 16 MiB.
+	//! Clamped to `[1 KiB, 1 GiB]`.
+	std::uint64_t maxStringBytes = 0;
+	//! Objects at or below this size go to a segregated region; larger ones get
+	//! a dedicated one. `0` = 1024. Clamped to `[16, 1024]` and rounded down to
+	//! a multiple of the 16-byte granularity, which is an ABI invariant.
+	std::uint32_t gcInlineClassBytes = 0;
+	//! Lower bound on a newly mapped GC region. `0` = 64 KiB.
+	std::uint64_t gcMinRegionBytes = 0;
+	//! Target live blocks per segregated GC region. `0` = 64.
+	std::uint32_t gcBlocksPerRegion = 0;
+	//! Cycle-collection candidate cap per instance. `0` = 4096.
+	std::uint32_t gcCycleCandidates = 0;
+};
+
 /*!
 The Store owns runtime objects that must outlive (and may be shared between)
 module instances: linear memories, tables, and the runtime type registry.
@@ -67,6 +148,22 @@ public:
 	//! the object it already has (the module, the component, the VMContext).
 	/** \brief Constructs an empty Store with its own type registry and allocators. */
 	Store();
+
+	//! \brief Constructs a store whose budget this host chose.
+	//!
+	//! The budget is resolved once, here: a zero total becomes
+	//! `allocationBudgetBytes()` and a zero category becomes the resolved total
+	//! (docs/proposals/CONFIGURATION.md `CFG-1`). A category larger than the
+	//! total is refused with `std::invalid_argument`, because a per-category cap
+	//! above the whole budget could never bind.
+	/** \brief Constructs a store with an explicit memory budget. \param budget Budget to resolve and enforce. \throws std::invalid_argument when a category exceeds the total. */
+	explicit Store(const MemoryBudget& budget);
+	//! \brief Constructs a store with an explicit budget and tuning limits.
+	//! A zero field inherits: the total from the process default, a category
+	//! from the resolved total, and a limit from the built-in value. The two
+	//! are resolved once, here (docs/proposals/CONFIGURATION.md `CFG-1`).
+	/** \brief Constructs a store with an explicit budget and store limits. \param budget Budget to resolve and enforce. \param limits Tuning knobs for the store's sub-allocators. \throws std::invalid_argument when a category exceeds the total. */
+	Store(const MemoryBudget& budget, const StoreLimits& limits);
 
 	//! \par Runtime type registry
 	//! Owns every module's type block; modules hold non-owning span views.
@@ -161,23 +258,71 @@ public:
 	bool growTable(TableInstance* table, uint64_t deltaEntries);
 
 	//! \par Allocation guardrails
-	//! Linear-memory and table bytes are charged against a process-wide budget,
-	//! so an absurd `memory.grow`/`table.grow` (e.g. an *unbounded* memory grown
-	//! by 0xffffffff pages, which is ~256 TiB) fails like any other failed grow
-	//! instead of trying to allocate and take the host down. Default: 2 GiB.
-	//! Override with WASMJIT_MAX_TOTAL_BYTES (bytes; "0"/"unlimited" disables the
-	//! cap, at your own risk).
-	/** \brief Returns the process-wide allocation budget. \return Maximum charged bytes, or the configured unlimited sentinel. */
+	//! Linear-memory, table, GC-heap, string, exception and continuation bytes
+	//! are charged against this store's budget before they are committed, so an
+	//! absurd `memory.grow`/`table.grow` (e.g. an *unbounded* memory grown by
+	//! 0xffffffff pages, which is ~256 TiB) fails like any other failed grow
+	//! instead of trying to allocate and taking the host down.
+	//!
+	//! The ceiling is **per store**, i.e. per runtime
+	//! (docs/proposals/CONFIGURATION.md `CFG-1`): `WASMJIT_MAX_TOTAL_BYTES`
+	//! supplies the process *default* (4 GiB), and an embedder overrides it for
+	//! one runtime through `RuntimeConfig::memory`.
+	/** \brief Returns the process-wide default budget (4 GiB unless the environment says otherwise). \return The default ceiling, or `UINT64_MAX` for "unlimited". */
 	static uint64_t allocationBudgetBytes();
-	//! Bytes currently charged against the budget (memories, tables, heap, strings).
+	//! The budget this store was created with, after resolution.
+	/** \brief Returns this store's resolved budget. \return The resolved byte limits. */
+	const MemoryBudget& budget() const noexcept { return budget_; }
+	//! Where that budget came from: default, environment, or an explicit config.
+	/** \brief Returns the provenance of this store's budget. \return The budget source. */
+	MemoryBudgetSource budgetSource() const noexcept { return budgetSource_; }
+	//! The tuning limits this store's sub-allocators use, after resolution.
+	/** \brief Returns the resolved store limits. \return The resolved tuning knobs. */
+	const StoreLimits& limits() const noexcept { return limits_; }
+
+	//! Bytes currently charged against the budget, all categories together.
 	/** \brief Returns bytes currently charged to the allocation budget. \return Allocated byte count. */
 	uint64_t allocatedBytes() const { return allocatedBytes_.load(std::memory_order_relaxed); }
+	//! Bytes currently charged to committed linear memory.
+	/** \brief Returns committed linear-memory bytes. \return Allocated linear-memory byte count. */
+	uint64_t allocatedLinearBytes() const noexcept { return linearBytes_.load(std::memory_order_relaxed); }
+	//! Bytes currently charged to the GC heap.
+	/** \brief Returns committed GC-heap bytes. \return Allocated GC-heap byte count. */
+	uint64_t allocatedGcBytes() const noexcept { return gcBytes_.load(std::memory_order_relaxed); }
+	//! Bytes currently charged to tables.
+	/** \brief Returns committed table bytes. \return Allocated table byte count. */
+	uint64_t allocatedTableBytes() const noexcept { return tableBytes_.load(std::memory_order_relaxed); }
+	//! Address space currently reserved (and *not* committed) by this store.
+	/** \brief Returns reserved, uncommitted address space. \return Reserved byte count, or zero when reservations are not counted. */
+	uint64_t reservedAddressBytes() const noexcept { return reservedBytes_.load(std::memory_order_relaxed); }
+
 	//! Charge `bytes` against the budget. Returns false if that would exceed it.
-	/** \brief Charges bytes against the global allocation budget. \param bytes Number of bytes to reserve. \return true when the reservation is accepted. */
+	//! The category is charged *and* the total; a category failure credits
+	//! nothing, and a total failure credits the category back, so the two
+	//! counters never disagree.
+	/** \brief Charges bytes against a category and the total. \param bytes Number of bytes to reserve. \param category Category the bytes belong to. \return true when the reservation is accepted. */
+	bool reserveBytes(uint64_t bytes, MemoryCategory category);
+	//! Credits `bytes` back after a release or a failed grow.
+	/** \brief Credits a previous reservation back to a category and the total. \param bytes Number of bytes to release. \param category Category the bytes were charged to. */
+	void releaseBytes(uint64_t bytes, MemoryCategory category);
+	//! Legacy form of `reserveBytes`: charges the total only, with no category
+	//! cap. Kept because it is an exported symbol; new code picks a category.
+	/** \brief Charges bytes against the total only. \param bytes Number of bytes to reserve. \return true when the reservation is accepted. */
 	bool reserveBytes(uint64_t bytes);
-	//! Credits `bytes` back to the budget after a release or failed grow.
-	/** \brief Credits a previous reservation back to the allocation budget. \param bytes Number of bytes to release. */
+	//! Legacy form of `releaseBytes`: credits the total only.
+	/** \brief Credits bytes back to the total only. \param bytes Number of bytes to release. */
 	void releaseBytes(uint64_t bytes);
+
+	//! \par Releasing an entity (docs/proposals/CONFIGURATION.md `CFG-9`)
+	//! A memory or table this store created can be given back before the store
+	//! is destroyed, which credits its committed bytes and its reservation. The
+	//! argument is the backend-visible view the instance already holds, so an
+	//! *imported* entity is not found here (it belongs to the exporting store)
+	//! and is left alone.
+	/** \brief Releases a store-owned linear memory. \param memory View returned by `memory()`. \return true when this store owned it and gave it back. */
+	bool releaseMemory(LinearMemory* memory);
+	/** \brief Releases a store-owned table. \param table View returned by `table()`. \return true when this store owned it and gave it back. */
+	bool releaseTable(TableInstance* table);
 
 	//! \brief Tags (exception handling)
 	//! A tag's identity is nominal: *every* declaration is a distinct tag, even
@@ -273,12 +418,47 @@ public:
 	const Callable* callableAt(const void* ref) const;
 
 private:
+	//! The counter a category charges, or nullptr for `MemoryCategory::Other`.
+	/** \brief Returns the counter for a category. \param category Category to look up. \return The counter, or nullptr when the category shares the total only. */
+	std::atomic<uint64_t>* categoryCounter(MemoryCategory category) noexcept;
+	//! The cap a category enforces (the resolved total when it has no own cap).
+	/** \brief Returns the byte cap a category enforces. \param category Category to look up. \return The cap in bytes. */
+	uint64_t categoryCap(MemoryCategory category) const noexcept;
+	//! Charges the total only; the category path calls it after its own check.
+	/** \brief Charges bytes against the total. \param bytes Number of bytes to reserve. \return true when the total accepts the reservation. */
+	bool reserveTotal(uint64_t bytes) noexcept;
+	//! Charges reserved address space, if the host opted in.
+	/** \brief Charges uncommitted address space. \param bytes Reservation size in bytes. \return true when the reservation budget accepts it. */
+	bool reserveAddressBytes(uint64_t bytes) noexcept;
+
 	//! Registered callable ranges: stable for each instance's lifetime.
 	struct CallableRange {
 		const Callable* begin; //!< inclusive start of the instance's callable array
 		const Callable* end; //!< exclusive end
 	};
 	std::vector<CallableRange> callableRanges; //!< all live instance callable spans
+
+	//! \par The budget
+	//! Declared before `gcHeap`/`stringStore` because those read the resolved
+	//! limits while they are being constructed.
+	const MemoryBudget       budget_; //!< resolved byte limits
+	const MemoryBudgetSource budgetSource_; //!< where the values came from
+	const StoreLimits        limits_; //!< resolved tuning knobs
+	//! Committed bytes, every category together; charged/credited by the
+	//! `reserveBytes`/`releaseBytes` pair.
+	std::atomic<uint64_t> allocatedBytes_{0};
+	//! Committed linear-memory bytes (all memories of this store).
+	std::atomic<uint64_t> linearBytes_{0};
+	//! Committed GC-heap bytes.
+	std::atomic<uint64_t> gcBytes_{0};
+	//! Committed table bytes.
+	std::atomic<uint64_t> tableBytes_{0};
+	//! Reserved, uncommitted address space; stays zero unless
+	//! `budget_.reservedAddressBytes` is set.
+	std::atomic<uint64_t> reservedBytes_{0};
+	//! Per-memory reservation, keyed by `MemoryId`; only a reserving backing has
+	//! an entry. Guarded by `storeMutex_`.
+	std::unordered_map<MemoryId, uint64_t> memoryReservations_;
 
 	//! Guards every member container below. The Store is process-wide because
 	//! entities outlive instances, so host threads may create/lookup entities
@@ -308,9 +488,6 @@ private:
 
 	//! Exception objects live until Store teardown (see ownException).
 	std::vector<StoreOwnedException> exceptions;
-
-	//! Charged/credited by reserveBytes/releaseBytes (see the header).
-	std::atomic<uint64_t> allocatedBytes_{0};
 
 	//! The GC object heap: mmap-backed regions, no per-object libc allocation.
 	GcHeap gcHeap{ *this };

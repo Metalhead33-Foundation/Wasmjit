@@ -27,6 +27,15 @@ Agent::Agent() noexcept
 	state_.owner = this;
 }
 
+Agent::Agent(const ExecutionLimits& limits) noexcept
+	: state_(limits.deferStackCapacity),
+	  id_(agentIdCounter().fetch_add(1, std::memory_order_relaxed) + 1)
+{
+	state_.owner = this;
+	if (limits.diagnosticRingCapacity != 0)
+		state_.diagnostics.setCapacity(limits.diagnosticRingCapacity);
+}
+
 Agent::~Agent() = default;
 
 ExecutionState& currentExecutionState() noexcept

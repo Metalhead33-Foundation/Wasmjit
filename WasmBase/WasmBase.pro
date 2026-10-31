@@ -44,6 +44,7 @@ SOURCES += \
         WasmArtifact.cpp \
         WasmAgent.cpp \
         WasmBackendRegistry.cpp \
+        WasmCompilationPolicy.cpp \
         WasmComponent.cpp \
         WasmComponentRuntime.cpp \
         WasmComponentValidation.cpp \
@@ -85,6 +86,7 @@ HEADERS += \
     WasmComponentRuntime.hpp \
     WasmComponentSection.hpp \
     WasmComponentValidation.hpp \
+    WasmCompilationPolicy.hpp \
     WasmConcurrency.hpp \
     WasmContinuation.hpp \
     WasmDeterminism.hpp \

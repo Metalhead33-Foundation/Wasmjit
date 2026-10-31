@@ -28,6 +28,25 @@ class Agent;
 
 //! \brief Per-execution-context state
 //!
+//! \brief Per-agent execution knobs a runtime applies when it creates an agent.
+//!
+//! `0` means "the built-in default" at every field, so a zero-initialised
+//! struct is the behaviour every build had before the limits existed
+//! (docs/proposals/CONFIGURATION.md `CFG-6`).
+struct ExecutionLimits {
+	//! Host stack reserve in bytes; `0` = `kDefaultStackReserveBytes`
+	//! (docs/SAFETY.md §2.8).
+	std::uint64_t stackReserveBytes = 0;
+	//! Defer-stack capacity; `0` = `ExecutionState::kDeferCapacity`. Clamped to
+	//! `[1, kDeferCapacity]`: the inline record array is a deliberate ceiling,
+	//! because registering a cleanup must never allocate.
+	std::uint32_t deferStackCapacity = 0;
+	//! Diagnostic ring capacity for the agent's state; `0` = the ring default.
+	std::uint32_t diagnosticRingCapacity = 0;
+};
+
+//! \brief The state one execution context owns.
+//!
 //! The state one execution context owns: the pending trap, the pending
 //! exception, the tail-call trampoline target, the deferred-cleanup stack, the
 //! two host-boundary depth counters and the stack limit. A continuation will
@@ -55,6 +74,13 @@ class Agent;
  */
 struct ExecutionState {
 	static constexpr std::uint32_t kDeferCapacity = 32; //!< Inline capacity of the defer stack.
+
+	//! Clamps a requested defer capacity to what the inline storage holds.
+	/** \brief Clamps a configured defer-stack capacity. \param capacity Requested capacity; `0` selects the default. \return A capacity in `[1, kDeferCapacity]`. */
+	static constexpr std::uint32_t clampDeferCapacity(std::uint32_t capacity) noexcept
+	{
+		return (capacity == 0 || capacity > kDeferCapacity) ? kDeferCapacity : capacity;
+	}
 
 	//! The pending trap. `TrapSlot` is the C-ABI view generated code reads.
 	TrapSlot trapSlot{};
@@ -101,6 +127,16 @@ struct ExecutionState {
 
 	/** \brief Initializes the inline deferred-cleanup stack. */
 	ExecutionState() noexcept : deferStack(deferRecords, kDeferCapacity) {}
+	//! \brief Initializes the defer stack with a configured capacity.
+	//! A request above the inline ceiling is clamped, not refused.
+	/** \brief Initializes the deferred-cleanup stack with a clamped capacity. \param deferCapacity Requested defer-stack capacity. */
+	explicit ExecutionState(std::uint32_t deferCapacity) noexcept
+		: deferStack(deferRecords, clampDeferCapacity(deferCapacity))
+	{
+	}
+	//! The capacity the defer stack actually has.
+	/** \brief Returns the defer stack's capacity. \return Number of cleanup records the stack can hold. */
+	std::uint32_t deferCapacity() const noexcept { return deferStack.capacity(); }
 	ExecutionState(const ExecutionState&) = delete;
 	ExecutionState& operator=(const ExecutionState&) = delete;
 	ExecutionState(ExecutionState&&) = delete;
@@ -119,6 +155,10 @@ class Agent {
 public:
 	/** \brief Creates an agent with a fresh execution state and unique ID. */
 	Agent() noexcept;
+	//! \brief Creates an agent whose state honours the configured limits.
+	//! A `0` field takes the built-in default.
+	/** \brief Creates an agent with configured execution limits. \param limits Per-agent execution limits. */
+	explicit Agent(const ExecutionLimits& limits) noexcept;
 	/** \brief Destroys the agent and its execution state. */
 	~Agent();
 

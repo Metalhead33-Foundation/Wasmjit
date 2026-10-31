@@ -99,13 +99,13 @@ bool decodeOne(const uint8_t* bytes, std::size_t size, std::size_t& index,
 StringObject* StringStore::create(std::vector<uint32_t> codePoints)
 {
 	std::scoped_lock lock(mutex_);
-	if (codePoints.size() > kMaxStringBytes) {
+	if (codePoints.size() > owner_.limits().maxStringBytes) {
 		reportTrap(TrapKind::OutOfMemory, "string exceeds the implementation limit");
 		return nullptr;
 	}
 	const uint64_t bytes = sizeof(StringObject)
 			+ static_cast<uint64_t>(codePoints.size()) * sizeof(uint32_t);
-	if (!owner_.reserveBytes(bytes)) {
+	if (!owner_.reserveBytes(bytes, MemoryCategory::String)) {
 		reportTrap(TrapKind::OutOfMemory, "string allocation exceeds the allocation budget");
 		return nullptr;
 	}
@@ -121,7 +121,7 @@ StringViewObject* StringStore::createView(const StringObject* string)
 {
 	std::scoped_lock lock(mutex_);
 	const uint64_t bytes = sizeof(StringViewObject);
-	if (!owner_.reserveBytes(bytes)) {
+	if (!owner_.reserveBytes(bytes, MemoryCategory::String)) {
 		reportTrap(TrapKind::OutOfMemory, "string view allocation exceeds the allocation budget");
 		return nullptr;
 	}
@@ -139,7 +139,7 @@ StringIteratorObject* StringStore::createIterator(const StringObject* string)
 {
 	std::scoped_lock lock(mutex_);
 	const uint64_t bytes = sizeof(StringIteratorObject);
-	if (!owner_.reserveBytes(bytes)) {
+	if (!owner_.reserveBytes(bytes, MemoryCategory::String)) {
 		reportTrap(TrapKind::OutOfMemory, "string iterator allocation exceeds the allocation budget");
 		return nullptr;
 	}
@@ -197,7 +197,7 @@ bool StringStore::releaseView(const StringViewObject* view)
 	const StringObject* inner = entry.object.string;
 	const uint64_t bytes = entry.bytes;
 	views_.erase(it);
-	owner_.releaseBytes(bytes);
+	owner_.releaseBytes(bytes, MemoryCategory::String);
 	if (inner != nullptr)
 		release(inner);
 	return true;
@@ -217,7 +217,7 @@ bool StringStore::releaseIterator(const StringIteratorObject* iterator)
 	const StringObject* inner = entry.object.string;
 	const uint64_t bytes = entry.bytes;
 	iterators_.erase(it);
-	owner_.releaseBytes(bytes);
+	owner_.releaseBytes(bytes, MemoryCategory::String);
 	if (inner != nullptr)
 		release(inner);
 	return true;
@@ -238,7 +238,7 @@ bool StringStore::release(const void* ref)
 			return true;
 		const uint64_t bytes = entry.bytes;
 		objects_.erase(stringIt);
-		owner_.releaseBytes(bytes);
+		owner_.releaseBytes(bytes, MemoryCategory::String);
 		return true;
 	}
 	if (releaseView(static_cast<const StringViewObject*>(ref)))
@@ -264,7 +264,7 @@ StringObject* StringStore::createFromUtf8(std::string_view utf8, bool* valid)
 {
 	if (valid)
 		*valid = false;
-	if (utf8.size() > kMaxStringBytes)
+	if (utf8.size() > owner_.limits().maxStringBytes)
 		return nullptr;
 	std::vector<uint32_t> codePoints;
 	if (!decodeUtf8(reinterpret_cast<const uint8_t*>(utf8.data()), utf8.size(),
@@ -282,7 +282,7 @@ StringObject* StringStore::createFromWtf8(std::string_view wtf8, bool* valid)
 {
 	if (valid)
 		*valid = false;
-	if (wtf8.size() > kMaxStringBytes)
+	if (wtf8.size() > owner_.limits().maxStringBytes)
 		return nullptr;
 	std::vector<uint32_t> codePoints;
 	if (!decodeWtf8(reinterpret_cast<const uint8_t*>(wtf8.data()), wtf8.size(),
@@ -301,7 +301,7 @@ StringObject* StringStore::createFromWtf16(std::span<const uint16_t> units,
 {
 	if (valid)
 		*valid = false;
-	if (units.size() > kMaxStringCodeUnits)
+	if (units.size() > owner_.limits().maxStringBytes / 2)
 		return nullptr;
 	// The codec reads little-endian code units, matching the in-memory
 	// representation of WTF-16 in linear memory and GC arrays.

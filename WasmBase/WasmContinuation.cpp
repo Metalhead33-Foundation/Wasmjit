@@ -651,7 +651,7 @@ BWorker::~BWorker()
 		threadStarted = false;
 	}
 	if (stackReserved && store_ != nullptr)
-		store_->releaseBytes(stackBytes);
+		store_->releaseBytes(stackBytes, MemoryCategory::ContinuationStack);
 }
 
 ContinuationStatus BWorker::resume(std::uint64_t expectedGeneration,
@@ -904,23 +904,23 @@ bool BWorker::startThread()
 {
 	const ContinuationBudget budget = budgetSnapshot();
 	stackBytes = std::max<std::uint32_t>(budget.stackBytes, 64 * 1024);
-	if (store_ != nullptr && !store_->reserveBytes(stackBytes))
+	if (store_ != nullptr && !store_->reserveBytes(stackBytes, MemoryCategory::ContinuationStack))
 		return false;
 
 	pthread_attr_t attributes;
 	if (pthread_attr_init(&attributes) != 0) {
-		if (store_ != nullptr) store_->releaseBytes(stackBytes);
+		if (store_ != nullptr) store_->releaseBytes(stackBytes, MemoryCategory::ContinuationStack);
 		return false;
 	}
 	if (pthread_attr_setstacksize(&attributes, stackBytes) != 0) {
 		pthread_attr_destroy(&attributes);
-		if (store_ != nullptr) store_->releaseBytes(stackBytes);
+		if (store_ != nullptr) store_->releaseBytes(stackBytes, MemoryCategory::ContinuationStack);
 		return false;
 	}
 	const int created = pthread_create(&thread, &attributes, &bWorkerEntry, this);
 	pthread_attr_destroy(&attributes);
 	if (created != 0) {
-		if (store_ != nullptr) store_->releaseBytes(stackBytes);
+		if (store_ != nullptr) store_->releaseBytes(stackBytes, MemoryCategory::ContinuationStack);
 		return false;
 	}
 	stackReserved = true;
@@ -937,7 +937,7 @@ AWorker::~AWorker()
 		munmap(mapping, mappingBytes);
 		mapping = nullptr;
 		if (stackReserved && store_ != nullptr)
-			store_->releaseBytes(mappingBytes);
+			store_->releaseBytes(mappingBytes, MemoryCategory::ContinuationStack);
 	} else if (mapping != nullptr) {
 		// A continuation is thread-affine: a stack suspended on another host
 		// thread cannot be unwound here. Leak the mapping rather than free a
@@ -958,7 +958,7 @@ bool AWorker::prepareStack()
 	std::size_t usable = std::max<std::uint32_t>(budget.stackBytes, 64 * 1024);
 	usable = (usable + page - 1) & ~(page - 1);
 	const std::size_t total = usable + page;
-	if (store_ != nullptr && !store_->reserveBytes(total))
+	if (store_ != nullptr && !store_->reserveBytes(total, MemoryCategory::ContinuationStack))
 		return false;
 
 	int flags = MAP_PRIVATE | MAP_ANONYMOUS;
@@ -967,17 +967,17 @@ bool AWorker::prepareStack()
 #endif
 	void* mapped = mmap(nullptr, total, PROT_READ | PROT_WRITE, flags, -1, 0);
 	if (mapped == MAP_FAILED) {
-		if (store_ != nullptr) store_->releaseBytes(total);
+		if (store_ != nullptr) store_->releaseBytes(total, MemoryCategory::ContinuationStack);
 		return false;
 	}
 	if (mprotect(mapped, page, PROT_NONE) != 0) {
 		munmap(mapped, total);
-		if (store_ != nullptr) store_->releaseBytes(total);
+		if (store_ != nullptr) store_->releaseBytes(total, MemoryCategory::ContinuationStack);
 		return false;
 	}
 	if (getcontext(&context) != 0) {
 		munmap(mapped, total);
-		if (store_ != nullptr) store_->releaseBytes(total);
+		if (store_ != nullptr) store_->releaseBytes(total, MemoryCategory::ContinuationStack);
 		return false;
 	}
 

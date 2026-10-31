@@ -73,6 +73,13 @@ enum class MemoryAllocationPolicy : uint8_t {
 	Reserved = 1,
 };
 
+//! The pre-memory64 cap on how much address space one *shared* memory may
+//! reserve (4 GiB). Shared memories entered the tree before 64-bit indices did,
+//! and the reservation is the old fixed ceiling (`MEMORY_PROVIDER.md` `MPD3`).
+//! `ReservedLinearMemory` is not capped by it: it reserves exactly the declared
+//! maximum.
+inline constexpr uint64_t kMaxSharedMemoryBytes = 4ull << 30;
+
 /** \brief Store-owned backing allocation for a backend-visible LinearMemory view. */
 class StoreOwnedMemory
 {

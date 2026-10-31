@@ -1,13 +1,17 @@
 # Compilation Policy — Optimization Degree, Strictness and Interpreter Fallback {#prop_compiler_policy}
 
-Status: engine-seam study, revision 1 (2026-10-31). The compilation knobs the
-project has committed to making configurable — how hard a backend may optimise,
-what happens when it cannot, and whether a backend may interpret instead of
-compiling — are today one environment variable read once in one backend
-(`WASMJIT_LIBJIT_OPT`). This note states what the policy must be able to say,
-what the tree can say today, the gap between them, and a plan whose first
-milestone adds the vocabulary and the query without changing a single compiled
-byte. **Nothing here is implemented yet.**
+Status: engine-seam study, revision 2 (2026-10-31). Revision 1 was the study:
+the three axes, the tree's actual state, the gaps, the plan. **Since revision 2
+`CP-1`, `CP-2`, `CP-3` and `CP-5` are implemented**: a backend-neutral
+`CompilationPolicy` (`None`/`Basic`/`Full`, `Strict`/`Lax`,
+`Never`/`FallbackOnly`/`Always`) carried by `RuntimeConfig::compilation`, a
+capability query every backend is asked before any code is generated, the strict
+refusal as a named `CompileFailure`, and the lax ladder that discards a poisoned
+backend instance and retries at the next lower degree, booking
+`WASM.COMPILE.REDUCED_OPTIMIZATION`. `CP-4` (the interpreter trampoline) is still
+not built — LibJIT reports `interprets == false`, so `FallbackOnly`/`Always` are
+refused at the boundary rather than silently compiled — and `CP-6` (per-function
+policy/tiering) remains deferred.
 
 Audience: anyone touching the compilation seam (`ModuleInstantiator` in
 `WasmBase/WasmModuleInstance.hpp`, `WASM::Runtime` in
@@ -268,25 +272,25 @@ Both are *bookings*, not failures: the first exists so a regression is visible
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| `CP1` | No creation-time knob: the degree is an environment variable read once into a `static` in one backend, so two runtimes in one process cannot differ | `LibJit/LibjitModuleCompiler.cpp` `libjitOptimizationLevel()` | **High** — the requirement is per-runtime configuration |
-| `CP2` | No strictness axis: every failed compile is fatal to the instantiation; the only "regression" is an operator re-running the process with a different environment | §4.2/§4.3 | **High** — the requested `Strict`/`Lax` pair does not exist |
-| `CP3` | No regression ladder is *possible* without rebuilding the backend: a failed compile poisons its context and `Runtime` holds exactly one `BackendInstance` | §4.3; `Runtime::backend_`; `Context::abandon()` | **High** — the lax mode is a design, not a `catch` |
-| `CP4` | No capability query: an embedder cannot ask whether a backend can optimise, interpret, or honour a level | no analogue of `supportsConcurrency`/`supportsProfileConfig` for compilation | **High** — `CPD6` cannot be enforced without it |
+| ~~`CP1`~~ ✅ (CP-1) | No creation-time knob: the degree is an environment variable read once into a `static` in one backend, so two runtimes in one process cannot differ | `LibJit/LibjitModuleCompiler.cpp` `libjitOptimizationLevel()` | **High** — the requirement is per-runtime configuration |
+| ~~`CP2`~~ ✅ (CP-2) | No strictness axis: every failed compile is fatal to the instantiation; the only "regression" is an operator re-running the process with a different environment | §4.2/§4.3 | **High** — the requested `Strict`/`Lax` pair does not exist |
+| ~~`CP3`~~ ✅ (CP-3) | No regression ladder is *possible* without rebuilding the backend: a failed compile poisons its context and `Runtime` holds exactly one `BackendInstance` | §4.3; `Runtime::backend_`; `Context::abandon()` | **High** — the lax mode is a design, not a `catch` |
+| ~~`CP4`~~ ✅ (CP-1) | No capability query: an embedder cannot ask whether a backend can optimise, interpret, or honour a level | no analogue of `supportsConcurrency`/`supportsProfileConfig` for compilation | **High** — `CPD6` cannot be enforced without it |
 | `CP5` | No interpreter fallback at all; `F1` remedy C is "designed, not built" | [`../languages/LF2_DEEP_F1_BACKEND.md`](../languages/LF2_DEEP_F1_BACKEND.md) §4 row C | **Medium** — the axis exists in the policy, but only `Never` can be honoured today |
-| `CP6` | A reduction would be silent: no record distinguishes "compiled at the requested level" from "compiled at a lower one" | §4.6; no `WASM.COMPILE.REDUCED_OPTIMIZATION` | **Medium** — `CPD5` fails without it |
-| `CP7` | The value is unvalidated: any integer is accepted, including LibJIT's "max" sentinel, and `atoi` silently maps junk to `0` | `libjitOptimizationLevel()` | **Low** — a malformed setting is indistinguishable from the default |
-| `CP8` | The core/backend contract is unstated: nothing says what a level means, or that a backend may refuse a request | only the backend's own comment | **Medium** — the next backend re-derives it, possibly differently |
-| `CP9` | No policy introspection: `Runtime::config()` reports what was *requested*, but nothing reports what was *achieved* (which level each function actually compiled at) | no accessor | **Low** — an embedder cannot log the decision's outcome |
-| `CP10` | A policy the backend cannot honour is discovered at compile time, not refused at `create()` | `rejectUnsupportedConfig` has no compilation clause | **Medium** — contradicts `CONFIGURATION.md` §2.1 rule 3 |
-| `CP11` | LibJIT leaks one context per failed module (`abandon()`), and nothing bounds the number of abandoned contexts | `LibJit/LibJitContext.cpp` | **Low** — bounded by failed instantiations; a host that retries a hostile module in a loop turns it into a leak, so `CP-3`'s ladder must not retry without limit |
+| ~~`CP6`~~ ✅ (CP-3) | A reduction would be silent: no record distinguishes "compiled at the requested level" from "compiled at a lower one" | §4.6; no `WASM.COMPILE.REDUCED_OPTIMIZATION` | **Medium** — `CPD5` fails without it |
+| ~~`CP7`~~ ✅ (CP-1) | The value is unvalidated: any integer is accepted, including LibJIT's "max" sentinel, and `atoi` silently maps junk to `0` | `libjitOptimizationLevel()` | **Low** — a malformed setting is indistinguishable from the default |
+| ~~`CP8`~~ ✅ (CP-5) | The core/backend contract is unstated: nothing says what a level means, or that a backend may refuse a request | only the backend's own comment | **Medium** — the next backend re-derives it, possibly differently |
+| ~~`CP9`~~ ✅ (CP-1) | No policy introspection: `Runtime::config()` reports what was *requested*, but nothing reports what was *achieved* (which level each function actually compiled at) | no accessor | **Low** — an embedder cannot log the decision's outcome |
+| ~~`CP10`~~ ✅ (CP-1) | A policy the backend cannot honour is discovered at compile time, not refused at `create()` | `rejectUnsupportedConfig` has no compilation clause | **Medium** — contradicts `CONFIGURATION.md` §2.1 rule 3 |
+| ~~`CP11`~~ ✅ (CP-3) | LibJIT leaks one context per failed module (`abandon()`), and nothing bounds the number of abandoned contexts | `LibJit/LibJitContext.cpp` | **Low** — bounded by failed instantiations; a host that retries a hostile module in a loop turns it into a leak, so `CP-3`'s ladder must not retry without limit |
 
-Reading: `CP1`–`CP4` are the feature and are one milestone (`CP-1`). `CP5` is
-the part that is honestly *not buildable today* — its remedy is a LibJIT
-trampoline, and until that exists the axis has one value in practice, which is
-why `CP-4` is sized as "the backend work", not "a config field". `CP11` matters
-because the lax ladder multiplies the number of failed compiles a process can
-provoke: three levels × N modules is still finite, but a retry loop around
-`instantiate()` is not.
+Reading: everything but `CP5` is **closed** by revision 2. `CP5` is the part
+that is honestly *not buildable today* — its remedy is a LibJIT trampoline, and
+until that exists the axis has one value in practice, which is why `CP-4` is
+sized as "the backend work", not "a config field", and why the request is
+refused rather than approximated. `CP11` (one leaked context per failed attempt)
+is bounded by the ladder: at most one attempt per degree between the request and
+`None`.
 
 
 ## 6. Where we can and should play fast and loose
@@ -331,11 +335,11 @@ prebuilt plugin is refused at query time rather than reading a stale vtable
 | Milestone | Work | Closes | Class | Done when |
 |---|---|---|---|---|
 | **CP-0 — This study** ✅ | The three axes, the vocabulary, the gap list, the retry analysis, the plan. | — | — | This note exists, is indexed, and `./Test/WasmJit '[docs]'` passes. |
-| **CP-1 — Vocabulary, query, plumbing** | A new header `WasmBase/WasmCompilationPolicy.hpp`: the three enums, `CompilationPolicy`, `BackendCompilationCapabilities`. `ModuleInstantiator` gains non-virtual `setCompilationPolicy`/`compilationPolicy()` (the `profile()` pattern) plus a **non-pure** `virtual capabilities()` whose default answers "`Basic` only, no interpreter" — so every existing backend compiles unchanged and is correct by default. `RuntimeConfig::compilation`; `Runtime` passes it and `rejectUnsupportedConfig` refuses an unhonourable request **by name**. LibJIT maps `None`/`Basic` to level 0 and `Full` to level 1; `WASMJIT_LIBJIT_OPT` keeps working as the process default when the field is left at its default. | `CP1`, `CP4`, `CP7`, `CP8`, `CP9`, `CP10` | A | A runtime created with `Full` compiles at level 1 and one with `Basic` at level 0 **in the same process**; `Always` on a backend that cannot interpret is refused at `create()` with a message naming the field and the backend; nothing compiles differently when the field is defaulted. |
-| **CP-2 — Strict means refuse, loudly** | Make `Strict` the documented default and the error name the requested level, the function index and the remediation. No `abort`, no silent downgrade. | `CP2` (strict half) | A | A module that only compiles at `None` fails `instantiate()` with the level in the message, emits `WASM.COMPILE.FUNCTION_FAILED`, and leaves the process usable. |
-| **CP-3 — The lax ladder** | On a `WASM.COMPILE.FUNCTION_FAILED` at attempt *L*: destroy the half-built instance, drop the poisoned `BackendInstance`, build a fresh one from the registry (so `Runtime` must retain a plugin's *path* as well as its name), retry at *L−1*, at most down to `None`; on success emit `WASM.COMPILE.REDUCED_OPTIMIZATION` with requested/achieved level and the failing function index. Refuse (do not retry) a policy the capability query rejected. **Depends on `CONFIGURATION.md` `CFG-9`** so a discarded attempt gives its memory back. | `CP2` (lax half), `CP3`, `CP6`, `CP11` | A | `WASMJIT_LIBJIT_OPT=1` plus `Lax` instantiates `F1`'s reproducer at level 0 with one Warning record and no crash; `Strict` on the same input throws; the ladder made ≤ 3 attempts; `allocatedBytes()` after the fallback does not retain the discarded attempt's memory |
+| **CP-1 — Vocabulary, query, plumbing** ✅ | A new header `WasmBase/WasmCompilationPolicy.hpp`: the three enums, `CompilationPolicy`, `BackendCompilationCapabilities`. `ModuleInstantiator` gains non-virtual `setCompilationPolicy`/`compilationPolicy()` (the `profile()` pattern) plus a **non-pure** `virtual capabilities()` whose default answers "`Basic` only, no interpreter" — so every existing backend compiles unchanged and is correct by default. `RuntimeConfig::compilation`; `Runtime` passes it and `rejectUnsupportedConfig` refuses an unhonourable request **by name**. LibJIT maps `None`/`Basic` to level 0 and `Full` to level 1; `WASMJIT_LIBJIT_OPT` keeps working as the process default when the field is left at its default. | `CP1`, `CP4`, `CP7`, `CP8`, `CP9`, `CP10` | A | A runtime created with `Full` compiles at level 1 and one with `Basic` at level 0 **in the same process**; `Always` on a backend that cannot interpret is refused at `create()` with a message naming the field and the backend; nothing compiles differently when the field is defaulted. |
+| **CP-2 — Strict means refuse, loudly** ✅ | Make `Strict` the documented default and the error name the requested level, the function index and the remediation. No `abort`, no silent downgrade. | `CP2` (strict half) | A | A module that only compiles at `None` fails `instantiate()` with the level in the message, emits `WASM.COMPILE.FUNCTION_FAILED`, and leaves the process usable. |
+| **CP-3 — The lax ladder** ✅ | On a `WASM.COMPILE.FUNCTION_FAILED` at attempt *L*: destroy the half-built instance, drop the poisoned `BackendInstance`, build a fresh one from the registry (so `Runtime` must retain a plugin's *path* as well as its name), retry at *L−1*, at most down to `None`; on success emit `WASM.COMPILE.REDUCED_OPTIMIZATION` with requested/achieved level and the failing function index. Refuse (do not retry) a policy the capability query rejected. **Depends on `CONFIGURATION.md` `CFG-9`** so a discarded attempt gives its memory back. | `CP2` (lax half), `CP3`, `CP6`, `CP11` | A | `WASMJIT_LIBJIT_OPT=1` plus `Lax` instantiates `F1`'s reproducer at level 0 with one Warning record and no crash; `Strict` on the same input throws; the ladder made ≤ 3 attempts; `allocatedBytes()` after the fallback does not retain the discarded attempt's memory |
 | **CP-4 — Interpreter fallback** | The backend work `F1` remedy C describes: a per-type trampoline over LibJIT's interpreter, a "not compiled" flag on `Callable`, a dispatcher change, `FallbackOnly`/`Always`, and `WASM.COMPILE.INTERPRETED`. Other backends answer `capabilities().interprets == false` and are refused. | `CP5` | B (backend + one contract row) | A function forced to `Always` runs through the interpreter and returns the same values as the compiled one; no core code learns what an interpreter is. |
-| **CP-5 — Tests and documentation** | `[compilation-policy]` suite (§8.2); the `WASM.COMPILE.*` ids in `../DIAGNOSTICS.md`'s table; a contract row in `../BACKEND_WORK_ORDER.md` ("a backend reports its capabilities and honours the policy it accepted"); `README.md`'s meter; the `WASMJIT_LIBJIT_OPT` row re-worded as "the process default". | `CP6`, `CP8` | A | The suite runs green and the environment table describes the new precedence. |
+| **CP-5 — Tests and documentation** ✅ | `[compilation-policy]` suite (§8.2); the `WASM.COMPILE.*` ids in `../DIAGNOSTICS.md`'s table; a contract row in `../BACKEND_WORK_ORDER.md` ("a backend reports its capabilities and honours the policy it accepted"); `README.md`'s meter; the `WASMJIT_LIBJIT_OPT` row re-worded as "the process default". | `CP6`, `CP8` | A | The suite runs green and the environment table describes the new precedence. |
 | **CP-6 — Per-function policy / tiering (deferred)** | Not started, not designed here. It is the dispatcher-shaped item: a hotness signal, a per-function policy and an ABI slot for "maybe interpreted". | — | likely **E** | This row exists so the deferral is explicit. |
 
 Ordering: `CP-1` → `CP-2` → `CP-3`; `CP-4` is independent (it touches one
@@ -373,15 +377,18 @@ Notably **absent**: no automated test asserts `WASM.COMPILE.FUNCTION_FAILED`
 optimization level as an assertion rather than an environment variable. `F1`'s
 remedy A is documented and untested; `CP-5` adds the missing case.
 
-### 8.2 What each milestone adds
+### 8.2 What revision 2 added (`Test/ConfigurationTests.cpp`, `[compilation-policy]`)
 
-| Milestone | New cases |
+| Test | What it pins |
 |---|---|
-| `CP-1` | `[compilation-policy]`: the default policy equals today (a module compiles and runs identically); two runtimes in one process with `Basic` and `Full`; `None` is accepted by every backend; `Always` on a non-interpreting backend is refused at `create()` naming the field; `capabilities()` survives a plugin backend (the `ExampleBackend` fixture) |
-| `CP-2` | `Strict` on `F1`'s reproducer at `Full` throws, the `WASM.COMPILE.FUNCTION_FAILED` record carries the function index, and the process is still usable (a second runtime compiles a simple module afterwards) |
-| `CP-3` | `Lax` + `Full` on the reproducer succeeds at `Basic` with exactly one `WASM.COMPILE.REDUCED_OPTIMIZATION` Warning; `Lax` + `None` on a module that fails at `None` still throws (the ladder is bounded, it is not "always succeed"); a second instantiation after a fallback does not leak an unbounded number of contexts |
-| `CP-4` | `Always` on LibJIT returns the same values as the compiled body for an `i32`, an `f64`, a multi-value and a `v128` result; `FallbackOnly` leaves compiled functions compiled and `WASM.COMPILE.INTERPRETED` names only the interpreted ones |
-| `CP-5` | the `[diagnostics]` assertions for the two new ids; `WASMJIT_LIBJIT_OPT` still selects the process default |
+| `the compilation policy is a request a backend may refuse` | the stable spellings, `supportsOptimizationLevel`/`supportsCompilationPolicy`, libjit reporting `Full` with no interpreter, and `Always` being refused at `create()` with a message naming the field |
+| `a lax policy regresses rather than failing, and books it` | `Strict` + `Full` on the `F1` fixture may refuse it; `Lax` + `Full` must instantiate, run `answer`, and — *if* the strict attempt failed — report a lower `achievedOptimizationLevel()` and one `WASM.COMPILE.REDUCED_OPTIMIZATION` record. If libjit ever accepts `Full`, the test asserts the opposite (no regression, no record) instead of failing |
+
+The second test is written as an *outcome* test rather than a bug test on
+purpose: the regression is caused by an upstream optimizer (`F1`), so the suite
+asserts the property the engine owns (never fail when it can regress, never
+regress silently) and adapts to the library instead of pinning a bug as a
+feature.
 
 ### 8.3 Reading
 

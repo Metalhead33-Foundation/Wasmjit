@@ -15,8 +15,6 @@
 
 namespace WASM {
 
-constexpr uint64_t MAX_SHARED_BYTES = 4ULL * 1024 * 1024 * 1024; // 4 GiB Cap for unbounded shared memory
-
 uint64_t wasm_memory_size(const LinearMemory* memory)
 {
 	if (memory == nullptr)
@@ -172,14 +170,14 @@ SharedLinearMemory::SharedLinearMemory(uint64_t initialPages, uint64_t maxPages,
 	: StoreOwnedMemory(initialPages, maxPages, true, is64, pageSize), reservedRegion(nullptr), reservedBytes(0)
 {
 	// 1. Calculate and reconcile true maximum reserved capacity. An unbounded
-	// (or unrepresentable, memory64-style) maximum is capped at MAX_SHARED_BYTES.
+	// (or unrepresentable, memory64-style) maximum is capped at kMaxSharedMemoryBytes.
 	uint64_t requestedMaxBytes;
 	if (maxPages == UINT64_MAX || maxPages > (UINT64_MAX / pageSize)) {
-		requestedMaxBytes = MAX_SHARED_BYTES;
+		requestedMaxBytes = kMaxSharedMemoryBytes;
 	} else {
 		requestedMaxBytes = maxPages * pageSize;
 	}
-	uint64_t capBytes = std::min(requestedMaxBytes, MAX_SHARED_BYTES);
+	uint64_t capBytes = std::min(requestedMaxBytes, kMaxSharedMemoryBytes);
 
 	if (capBytes > std::numeric_limits<size_t>::max()) {
 		throw std::bad_alloc();

@@ -43,7 +43,7 @@ WASMJIT_VISIBLE_BEGIN
 namespace WASM {
 
 //! The knobs a runtime is created with (docs/EMBEDDING_SURFACE.md §4.7).
-/** \brief Creation-time language, concurrency, bridge, diagnostic, and allocation settings. */
+/** \brief Creation-time language, concurrency, bridge, diagnostic, budget, limit and compilation settings. */
 struct RuntimeConfig {
 	//! The language subset every load and instantiation is gated by
 	//! (docs/proposals/PROFILES.md). The default is the full profile.
@@ -61,8 +61,29 @@ struct RuntimeConfig {
 	DiagnosticSink    sink = nullptr;
 	void*             sinkUserData = nullptr; //!< opaque cookie delivered to `sink`
 
-	//! 0 = the engine's process-wide budget (SAFETY.md §2.3). A different value is
-	//! refused until ES-2 scopes the store to the runtime.
+	//! The byte budget this runtime's store enforces
+	//! (docs/proposals/CONFIGURATION.md `CFG-1`/`CFG-2`/`CFG-3`). Every field is
+	//! `0` by default, which means "inherit": the total becomes
+	//! `Store::allocationBudgetBytes()` (4 GiB unless `WASMJIT_MAX_TOTAL_BYTES`
+	//! says otherwise) and a category becomes the resolved total.
+	MemoryBudget      memory{};
+
+	//! Tuning knobs for this runtime's store sub-allocators
+	//! (docs/proposals/CONFIGURATION.md `CFG-6`). `0` fields take the defaults.
+	StoreLimits       store{};
+
+	//! Per-agent execution limits, applied by `createAgent()`
+	//! (docs/proposals/CONFIGURATION.md `CFG-6`). `0` fields take the defaults.
+	ExecutionLimits   execution{};
+
+	//! The compilation policy the selected backend is asked to honour
+	//! (docs/proposals/COMPILER_POLICY.md `CP-1`). The default is the behaviour
+	//! every build had before the policy existed.
+	CompilationPolicy compilation{};
+
+	//! Compatibility form of `memory.totalBytes`. A non-zero value is forwarded
+	//! into the budget; a value that disagrees with a non-zero
+	//! `memory.totalBytes` is refused at `create()`.
 	std::uint64_t     allocationBudgetBytes = 0;
 };
 
@@ -167,6 +188,18 @@ public:
 	/** \brief Tests whether the runtime's engine supports a named profile. \param profile Profile to query. \return true when the profile is supported. */
 	bool             supports(Profile profile) const noexcept { return supportsProfile(profile); }
 
+	//! \par Configuration introspection (docs/proposals/CONFIGURATION.md `CFG-5`)
+	/** \brief Returns the byte budget this runtime's store resolved and enforces. \return The resolved budget. */
+	const MemoryBudget& memoryBudget() const noexcept { return store_.budget(); }
+	/** \brief Returns where the resolved budget came from. \return The budget source (default, environment or explicit). */
+	MemoryBudgetSource  memoryBudgetSource() const noexcept { return store_.budgetSource(); }
+	/** \brief Returns what the selected backend reported it can compile. \return The backend's compilation capabilities. */
+	BackendCompilationCapabilities compilationCapabilities() const;
+	//! The degree the last instantiation actually achieved: equal to the request
+	//! unless a `Lax` policy regressed it (docs/proposals/COMPILER_POLICY.md).
+	/** \brief Returns the optimization level the last instantiation achieved. \return The achieved level (the requested one before any instantiation). */
+	OptimizationLevel   achievedOptimizationLevel() const noexcept { return achievedLevel_; }
+
 	//! \par Execution half (§3.2)
 	//! An engine instance hands out agents; it does not become one. The created
 	//! agent inherits the configured diagnostic sink.
@@ -190,9 +223,16 @@ private:
 	/** \brief Tests whether a module is loaded or registered with this runtime. \param module Candidate module. \return true when this runtime owns its lifetime. */
 	bool ownsModule(const Module& module) const noexcept;
 
+	//! Creates (adopts) the instance for one compile attempt at `policy`.
+	/** \brief Runs one instantiation attempt and adopts its instance. \param module Module to instantiate. \param imports Resolver for the module's imports. \param policy The policy this attempt compiles under. \return The adopted instance. */
+	ModuleInstance& adoptInstance(const Module& module, ImportResolver& imports,
+			const CompilationPolicy& policy);
+
 	std::string backendName_; //!< selected backend name (BP-2)
 	BackendInstance backend_; //!< owned backend session
 	RuntimeConfig config_; //!< creation knobs
+	//! The optimization level the last successful instantiation achieved.
+	OptimizationLevel achievedLevel_ = OptimizationLevel::Basic;
 	//! The runtime-scoped store (docs/EMBEDDING_SURFACE.md §4.3 option B). Every
 	//! consumer receives it through its own object; there is no process-wide
 	//! store and no thread-local fallback.

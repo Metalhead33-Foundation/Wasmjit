@@ -316,6 +316,9 @@ mappings (a unit test asserts uniqueness). The shipped leaves are:
 | `WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN` | a load under the default `ParseOptions` recovery policy translated a function body that used the superseded Phase-3 exception form into `try_table`; the message carries the body count. Recovered, not silent: the strict policy refuses instead, and the unconditional policy stays quiet because it was asked for ([`proposals/LEGACY_EXCEPTIONS.md`](proposals/LEGACY_EXCEPTIONS.md) §4.6) | Note | `[legacy-eh]` |
 | `WASM.BACKEND.PLUGIN` | backend plugin lifecycle: every load refusal (missing file, missing export, descriptor/core ABI, build-kind mismatch, an embedded core, a failing `create`) is an **Error**; a successful load is a **Note** carrying the path and build kind | Error / Note | `[plugin]` |
 | `WASM.COMPILE.FUNCTION_FAILED` | a backend cannot lower or code-generate a function; emitted before the backend throws, carries the module-local function index and the backend's own reason. Never an `abort` ([`languages/LF2_DEEP_F1_BACKEND.md`](languages/LF2_DEEP_F1_BACKEND.md)) | Error | `[runtime]` (instantiate path) |
+| `WASM.COMPILE.REDUCED_OPTIMIZATION` | a `Lax` policy instantiated at a lower degree than requested; carries the requested and achieved level ([`proposals/COMPILER_POLICY.md`](proposals/COMPILER_POLICY.md) `CPD5`) | Warning | `[compilation-policy]` |
+| `WASM.COMPILE.INTERPRETED` | a function runs through the backend's interpreter rather than compiled code ([`proposals/COMPILER_POLICY.md`](proposals/COMPILER_POLICY.md) `CP4`); no backend reports an interpreter yet, so nothing emits it today | Note | — (reserved) |
+| `WASM.MEMORY.BUDGET_EXCEEDED` | a commitment was refused because it would exceed the store's budget; emitted for an *initial* size (the instantiation fails anyway) ([`proposals/CONFIGURATION.md`](proposals/CONFIGURATION.md) `CFG-7`) | Error | `[config]` |
 | `WASM.VALIDATE.<FAMILY>` (30 family leaves, plus the 11 explicit index/type leaves below) | `validationRuleId()` classification; §4.2 | Error | `diagnostics: validator messages classify into stable rule families`, `diagnostics: a validation failure carries a stable id and a location` |
 | `WASM.VALIDATE.RULE` | fallback: no rule family matched | Error | same cases (the fallback assertion) |
 | `WASM.VALIDATE.UNKNOWN_TYPE` | type index rule | Error | — |
@@ -633,7 +636,8 @@ documented where their subsystem lives:
 |---|---|---|
 | `WASMJIT_LEGACY_EH=1` | load a superseded Phase-3 exception encoding by rewriting unconditionally; `0` selects the strict policy (the named refusal), and unset is the default recovery policy, which rewrites only the bodies that need it and reports `WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN` | [`proposals/LEGACY_EXCEPTIONS.md`](proposals/LEGACY_EXCEPTIONS.md) §4.6 |
 | `WASMJIT_JIT_DUMP=1` | dump each compiled function's libjit IR | [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §6 |
-| `WASMJIT_LIBJIT_OPT=N` | libjit optimization level; default **0**, because level 1 rejects a valid block graph and a failed compile cannot be retried ([`languages/LF2_DEEP_F1_BACKEND.md`](languages/LF2_DEEP_F1_BACKEND.md)) | backend |
+| `WASMJIT_LIBJIT_OPT=N` | the *process default* libjit optimization level for `OptimizationLevel::Basic`; default **0**, because level 1 rejects a valid block graph and a failed compile cannot be retried ([`languages/LF2_DEEP_F1_BACKEND.md`](languages/LF2_DEEP_F1_BACKEND.md)). A runtime's `RuntimeConfig::compilation.level` overrides it per instance, and `Full` does not consult it | backend |
+| `WASMJIT_MAX_TOTAL_BYTES=N` | the *process default* memory budget (default **4 GiB**; `0`/`unlimited` disables it). A runtime overrides it with `RuntimeConfig::memory.totalBytes` ([`proposals/CONFIGURATION.md`](proposals/CONFIGURATION.md) `CFG-1`) | [`SAFETY.md`](SAFETY.md) §2.3 |
 
 #### One-shot module diagnose (DG-6)
 

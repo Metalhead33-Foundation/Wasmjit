@@ -1,4 +1,5 @@
 #include "WasmStore.hpp"
+#include "WasmDiagnostics.hpp"
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -8,19 +9,127 @@ namespace WASM {
 
 namespace {
 
+// The engine default when neither the environment nor an embedder says
+// otherwise (docs/proposals/CONFIGURATION.md §10.5).
+constexpr uint64_t kDefaultBudgetBytes = uint64_t{4} << 30; // 4 GiB
+
 // Reads WASMJIT_MAX_TOTAL_BYTES once. Bytes; "0"/"unlimited" means no cap.
 uint64_t parseAllocationBudget()
 {
 	const char* raw = std::getenv("WASMJIT_MAX_TOTAL_BYTES");
 	if (raw == nullptr || *raw == '\0')
-		return uint64_t{2} << 30; // 2 GiB
+		return kDefaultBudgetBytes;
 	if (std::strcmp(raw, "unlimited") == 0 || std::strcmp(raw, "0") == 0)
 		return UINT64_MAX;
 	char* end = nullptr;
 	const unsigned long long parsed = std::strtoull(raw, &end, 0);
 	if (end == raw || parsed == 0)
-		return uint64_t{2} << 30;
+		return kDefaultBudgetBytes;
 	return static_cast<uint64_t>(parsed);
+}
+
+// True when the environment (not the built-in default) supplied the total.
+bool environmentSuppliesBudget()
+{
+	const char* raw = std::getenv("WASMJIT_MAX_TOTAL_BYTES");
+	return raw != nullptr && *raw != '\0';
+}
+
+// `value == 0` means "the fallback", and the result is clamped to [low, high].
+uint64_t clampLimit(uint64_t value, uint64_t fallback, uint64_t low, uint64_t high)
+{
+	if (value == 0)
+		value = fallback;
+	return std::min(std::max(value, low), high);
+}
+
+// Resolves a `StoreLimits`: every `0` takes the built-in default and every
+// value is clamped to what the implementation can honour.
+StoreLimits resolveLimits(const StoreLimits& requested)
+{
+	StoreLimits resolved;
+	resolved.maxStringBytes =
+			clampLimit(requested.maxStringBytes, kMaxStringBytes, 1024, uint64_t{1} << 30);
+	// The inline-class threshold is rounded *down* to the 16-byte granularity,
+	// which is an ABI invariant (i31 tagging and `v128` fields), and clamped to
+	// the segregated-class table's fixed size.
+	constexpr uint64_t granularity = 16;
+	uint64_t inlineClass = clampLimit(requested.gcInlineClassBytes,
+			GcHeap::kMaxInlineClass, granularity, GcHeap::kMaxInlineClass);
+	inlineClass -= inlineClass % granularity;
+	resolved.gcInlineClassBytes = static_cast<std::uint32_t>(inlineClass);
+	resolved.gcMinRegionBytes = clampLimit(requested.gcMinRegionBytes,
+			GcHeap::kMinRegionBytes, 4096, uint64_t{1} << 30);
+	resolved.gcBlocksPerRegion = static_cast<std::uint32_t>(
+			clampLimit(requested.gcBlocksPerRegion, GcHeap::kBlocksPerRegion, 1, 4096));
+	resolved.gcCycleCandidates = static_cast<std::uint32_t>(
+			clampLimit(requested.gcCycleCandidates, 4096, 16, 1u << 20));
+	return resolved;
+}
+
+// A resolved budget: every `0` inherited and every category validated.
+MemoryBudget resolveBudget(const MemoryBudget& requested)
+{
+	MemoryBudget budget = requested;
+	if (requested.totalBytes == 0)
+		budget.totalBytes = Store::allocationBudgetBytes();
+
+	// A zero category means "no separate cap", i.e. the resolved total.
+	if (budget.allLinearMemoriesBytes == 0)
+		budget.allLinearMemoriesBytes = budget.totalBytes;
+	if (budget.singleLinearMemoryBytes == 0)
+		budget.singleLinearMemoryBytes = budget.totalBytes;
+	if (budget.gcHeapBytes == 0)
+		budget.gcHeapBytes = budget.totalBytes;
+	if (budget.tableBytes == 0)
+		budget.tableBytes = budget.totalBytes;
+
+	// A category above the total could never bind; refuse it where it is set
+	// (docs/proposals/CONFIGURATION.md §10.2 rule 2).
+	if (budget.totalBytes != UINT64_MAX) {
+		const struct {
+			uint64_t value;
+			const char* name;
+		} categories[] = {
+			{ budget.allLinearMemoriesBytes, "allLinearMemoriesBytes" },
+			{ budget.singleLinearMemoryBytes, "singleLinearMemoryBytes" },
+			{ budget.gcHeapBytes, "gcHeapBytes" },
+			{ budget.tableBytes, "tableBytes" },
+			{ budget.reservedAddressBytes, "reservedAddressBytes" },
+		};
+		for (const auto& category : categories) {
+			if (category.value != 0 && category.value > budget.totalBytes)
+				throw std::invalid_argument(std::string("MemoryBudget::") + category.name
+						+ " exceeds totalBytes: a category is a cap under the total");
+		}
+	}
+	return budget;
+}
+
+// Credits `bytes` to a counter without ever underflowing it.
+void creditBytes(std::atomic<uint64_t>& counter, uint64_t bytes) noexcept
+{
+	uint64_t current = counter.load(std::memory_order_relaxed);
+	for (;;) {
+		const uint64_t next = current > bytes ? current - bytes : 0;
+		if (counter.compare_exchange_weak(current, next, std::memory_order_relaxed))
+			return;
+	}
+}
+
+// Records a refused commitment as `WASM.MEMORY.BUDGET_EXCEEDED`
+// (docs/proposals/CONFIGURATION.md `CFG-7`). A diagnostic failure is swallowed:
+// the exception the caller is about to throw is the outcome that matters.
+void reportBudgetRefusal(const char* what, MemoryCategory category, uint64_t requested) noexcept
+{
+	Diagnostic diagnostic;
+	diagnostic.id = DiagnosticId::kMemoryBudgetExceeded;
+	diagnostic.severity = DiagnosticSeverity::Error;
+	diagnostic.phase = DiagnosticPhase::Instantiate;
+	diagnostic.message = std::string(what) + " exceeds the allocation budget ("
+			+ memoryCategoryName(category) + ", " + std::to_string(requested) + " bytes requested)";
+	diagnostic.remediation = "docs/proposals/CONFIGURATION.md";
+	emitDiagnostic(std::move(diagnostic));
 }
 
 } // namespace
@@ -31,12 +140,75 @@ uint64_t Store::allocationBudgetBytes()
 	return budget;
 }
 
-bool Store::reserveBytes(uint64_t bytes)
+const char* memoryCategoryName(MemoryCategory category) noexcept
+{
+	switch (category) {
+	case MemoryCategory::Other:
+		return "other";
+	case MemoryCategory::LinearMemory:
+		return "linear-memory";
+	case MemoryCategory::Table:
+		return "table";
+	case MemoryCategory::GcHeap:
+		return "gc-heap";
+	case MemoryCategory::String:
+		return "string";
+	case MemoryCategory::Exception:
+		return "exception";
+	case MemoryCategory::ContinuationStack:
+		return "continuation-stack";
+	}
+	return "other";
+}
+
+const char* memoryBudgetSourceName(MemoryBudgetSource source) noexcept
+{
+	switch (source) {
+	case MemoryBudgetSource::Default:
+		return "default";
+	case MemoryBudgetSource::Environment:
+		return "environment";
+	case MemoryBudgetSource::Explicit:
+		return "explicit";
+	}
+	return "default";
+}
+
+std::atomic<uint64_t>* Store::categoryCounter(MemoryCategory category) noexcept
+{
+	switch (category) {
+	case MemoryCategory::LinearMemory:
+		return &linearBytes_;
+	case MemoryCategory::Table:
+		return &tableBytes_;
+	case MemoryCategory::GcHeap:
+		return &gcBytes_;
+	default:
+		// Strings, exceptions and continuation stacks are charged to the total
+		// only: they have no separate cap in the budget model.
+		return nullptr;
+	}
+}
+
+uint64_t Store::categoryCap(MemoryCategory category) const noexcept
+{
+	switch (category) {
+	case MemoryCategory::LinearMemory:
+		return budget_.allLinearMemoriesBytes;
+	case MemoryCategory::Table:
+		return budget_.tableBytes;
+	case MemoryCategory::GcHeap:
+		return budget_.gcHeapBytes;
+	default:
+		return budget_.totalBytes;
+	}
+}
+
+bool Store::reserveTotal(uint64_t bytes) noexcept
 {
 	if (bytes == 0)
 		return true;
-
-	const uint64_t budget = allocationBudgetBytes();
+	const uint64_t budget = budget_.totalBytes;
 	if (budget == UINT64_MAX)
 		return true;
 
@@ -50,12 +222,86 @@ bool Store::reserveBytes(uint64_t bytes)
 	}
 }
 
-void Store::releaseBytes(uint64_t bytes)
+bool Store::reserveBytes(uint64_t bytes, MemoryCategory category)
 {
-	allocatedBytes_.fetch_sub(bytes, std::memory_order_relaxed);
+	if (bytes == 0)
+		return true;
+
+	std::atomic<uint64_t>* counter = categoryCounter(category);
+	if (counter != nullptr) {
+		const uint64_t cap = categoryCap(category);
+		uint64_t current = counter->load(std::memory_order_relaxed);
+		for (;;) {
+			if (cap != UINT64_MAX && (current > cap || bytes > cap - current))
+				return false;
+			if (counter->compare_exchange_weak(current, current + bytes,
+											   std::memory_order_relaxed))
+				break;
+		}
+	}
+
+	if (!reserveTotal(bytes)) {
+		// The category accepted it but the total did not: credit it back, so
+		// the two counters never disagree.
+		if (counter != nullptr)
+			creditBytes(*counter, bytes);
+		return false;
+	}
+	return true;
 }
 
-Store::Store() : nextMemoryId(0), nextTableId(0), nextTagId(0)
+bool Store::reserveBytes(uint64_t bytes)
+{
+	return reserveTotal(bytes);
+}
+
+void Store::releaseBytes(uint64_t bytes, MemoryCategory category)
+{
+	if (bytes == 0)
+		return;
+	if (std::atomic<uint64_t>* counter = categoryCounter(category))
+		creditBytes(*counter, bytes);
+	creditBytes(allocatedBytes_, bytes);
+}
+
+void Store::releaseBytes(uint64_t bytes)
+{
+	if (bytes == 0)
+		return;
+	creditBytes(allocatedBytes_, bytes);
+}
+
+bool Store::reserveAddressBytes(uint64_t bytes) noexcept
+{
+	if (bytes == 0 || budget_.reservedAddressBytes == 0)
+		return true; // reservations are not counted unless the host opted in
+	const uint64_t cap = budget_.reservedAddressBytes;
+	uint64_t current = reservedBytes_.load(std::memory_order_relaxed);
+	for (;;) {
+		if (current > cap || bytes > cap - current)
+			return false;
+		if (reservedBytes_.compare_exchange_weak(current, current + bytes,
+												 std::memory_order_relaxed))
+			return true;
+	}
+}
+
+Store::Store()
+	: Store(MemoryBudget{}, StoreLimits{})
+{
+}
+
+Store::Store(const MemoryBudget& budget)
+	: Store(budget, StoreLimits{})
+{
+}
+
+Store::Store(const MemoryBudget& budget, const StoreLimits& limits)
+	: budget_(resolveBudget(budget)),
+	  budgetSource_(budget.totalBytes != 0 ? MemoryBudgetSource::Explicit
+				: (environmentSuppliesBudget() ? MemoryBudgetSource::Environment
+											   : MemoryBudgetSource::Default)),
+	  limits_(resolveLimits(limits)), nextMemoryId(0), nextTableId(0), nextTagId(0)
 {
 }
 
@@ -75,14 +321,46 @@ Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPag
 Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPages, bool isShared,
 		bool is64, uint64_t pageSize, MemoryAllocationPolicy policy)
 {
-	// Charge the initial commit against the process-wide budget (guardrail: an
+	// Charge the initial commit against this store's budget (guardrail: an
 	// absurd initial size must fail loudly, not allocate).
 	if (pageSize == 0 || initialPages > (UINT64_MAX / pageSize))
 		throw std::runtime_error("linear memory initial size is not representable");
 	const uint64_t initialBytes = initialPages * pageSize;
-	if (!reserveBytes(initialBytes))
+
+	// The per-memory cap (`MemoryBudget::singleLinearMemoryBytes`) bounds one
+	// memory below the runtime's total (docs/proposals/CONFIGURATION.md CFG-2).
+	if (budget_.singleLinearMemoryBytes != UINT64_MAX
+			&& initialBytes > budget_.singleLinearMemoryBytes) {
+		reportBudgetRefusal("linear memory initial size", MemoryCategory::LinearMemory,
+				initialBytes);
+		throw std::runtime_error("linear memory exceeds the per-memory budget"
+				" (MemoryBudget::singleLinearMemoryBytes)");
+	}
+	if (!reserveBytes(initialBytes, MemoryCategory::LinearMemory)) {
+		reportBudgetRefusal("linear memory initial size", MemoryCategory::LinearMemory,
+				initialBytes);
 		throw std::runtime_error(
-			"linear memory exceeds the allocation budget (see WASMJIT_MAX_TOTAL_BYTES)");
+			"linear memory exceeds the allocation budget (RuntimeConfig::memory)");
+	}
+
+	// A reserving backing asks for address space up front. That reservation is
+	// charged only when the host opted into `reservedAddressBytes`
+	// (docs/proposals/CONFIGURATION.md CFG-3); a shared memory caps its own
+	// reservation, so the count mirrors what the provider will map.
+	uint64_t reservationBytes = 0;
+	if ((isShared || policy == MemoryAllocationPolicy::Reserved) && maxPages != UINT64_MAX
+			&& maxPages <= (UINT64_MAX / pageSize)) {
+		reservationBytes = maxPages * pageSize;
+		if (isShared)
+			reservationBytes = std::min<uint64_t>(reservationBytes, kMaxSharedMemoryBytes);
+	}
+	if (!reserveAddressBytes(reservationBytes)) {
+		releaseBytes(initialBytes, MemoryCategory::LinearMemory);
+		reportBudgetRefusal("linear memory reservation", MemoryCategory::LinearMemory,
+				reservationBytes);
+		throw std::runtime_error(
+			"linear memory reservation exceeds MemoryBudget::reservedAddressBytes");
+	}
 
 	const MemoryId id = nextMemoryId.fetch_add(1);
 
@@ -101,8 +379,12 @@ Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPag
 		// LinearMemory* handed out below stays valid across later insertions.
 		std::scoped_lock lock(storeMutex_);
 		memories.emplace(id, std::move(memory));
+		if (reservationBytes != 0)
+			memoryReservations_.emplace(id, reservationBytes);
 	} catch (...) {
-		releaseBytes(initialBytes);
+		if (reservationBytes != 0)
+			creditBytes(reservedBytes_, reservationBytes);
+		releaseBytes(initialBytes, MemoryCategory::LinearMemory);
 		throw;
 	}
 	return id;
@@ -143,14 +425,21 @@ bool Store::growMemory(LinearMemory* memory, uint64_t deltaPages)
 		return false;
 	const uint64_t deltaBytes = deltaPages * pageSize;
 
+	// The per-memory cap applies to the size the memory would reach, not to the
+	// delta alone (docs/proposals/CONFIGURATION.md CFG-2).
+	if (budget_.singleLinearMemoryBytes != UINT64_MAX
+			&& (memory->memorySize > budget_.singleLinearMemoryBytes
+					|| deltaBytes > budget_.singleLinearMemoryBytes - memory->memorySize))
+		return false;
+
 	// Reserve *before* the allocation attempt, so a grow that would exceed the
 	// budget fails as a failed grow (-1) rather than ballooning the host.
-	if (!reserveBytes(deltaBytes))
+	if (!reserveBytes(deltaBytes, MemoryCategory::LinearMemory))
 		return false;
 
 	auto* owned = static_cast<StoreOwnedMemory*>(memory->hostData);
 	if (!owned->growMemory(deltaPages)) {
-		releaseBytes(deltaBytes);
+		releaseBytes(deltaBytes, MemoryCategory::LinearMemory);
 		return false;
 	}
 	// THREADS.md TH-3/T7: publish the new size and zeroed pages to other host
@@ -165,9 +454,11 @@ Store::TableId Store::createTable(uint64_t initialSize, uint64_t maxSize)
 	const uint64_t initialBytes = initialSize * sizeof(Callable*);
 	if (initialSize != 0 && initialBytes / sizeof(Callable*) != initialSize)
 		throw std::runtime_error("table initial size is not representable");
-	if (!reserveBytes(initialBytes))
+	if (!reserveBytes(initialBytes, MemoryCategory::Table)) {
+		reportBudgetRefusal("table initial size", MemoryCategory::Table, initialBytes);
 		throw std::runtime_error(
-			"table exceeds the allocation budget (see WASMJIT_MAX_TOTAL_BYTES)");
+			"table exceeds the allocation budget (RuntimeConfig::memory)");
+	}
 
 	const TableId id = nextTableId.fetch_add(1);
 
@@ -177,7 +468,7 @@ Store::TableId Store::createTable(uint64_t initialSize, uint64_t maxSize)
 		std::scoped_lock lock(storeMutex_);
 		tables.emplace(id, std::make_unique<StoreOwnedTable>(initialSize, maxSize));
 	} catch (...) {
-		releaseBytes(initialBytes);
+		releaseBytes(initialBytes, MemoryCategory::Table);
 		throw;
 	}
 	return id;
@@ -206,14 +497,65 @@ bool Store::growTable(TableInstance* table, uint64_t deltaEntries)
 		return false;
 	const uint64_t deltaBytes = deltaEntries * sizeof(Callable*);
 
-	if (!reserveBytes(deltaBytes))
+	if (!reserveBytes(deltaBytes, MemoryCategory::Table))
 		return false;
 
 	auto* owned = static_cast<StoreOwnedTable*>(table->hostData);
 	if (!owned->grow(deltaEntries)) {
-		releaseBytes(deltaBytes);
+		releaseBytes(deltaBytes, MemoryCategory::Table);
 		return false;
 	}
+	return true;
+}
+
+bool Store::releaseMemory(LinearMemory* view)
+{
+	if (view == nullptr)
+		return false;
+	std::unique_ptr<StoreOwnedMemory> owned;
+	uint64_t reservation = 0;
+	{
+		std::scoped_lock lock(storeMutex_);
+		for (auto it = memories.begin(); it != memories.end(); ++it) {
+			if (it->second->getMemory() != view)
+				continue;
+			owned = std::move(it->second);
+			const auto reserved = memoryReservations_.find(it->first);
+			if (reserved != memoryReservations_.end()) {
+				reservation = reserved->second;
+				memoryReservations_.erase(reserved);
+			}
+			memories.erase(it);
+			break;
+		}
+	}
+	if (!owned)
+		return false;
+	const uint64_t committed = view->memorySize;
+	releaseBytes(committed, MemoryCategory::LinearMemory);
+	if (reservation != 0)
+		creditBytes(reservedBytes_, reservation);
+	return true;
+}
+
+bool Store::releaseTable(TableInstance* view)
+{
+	if (view == nullptr)
+		return false;
+	std::unique_ptr<StoreOwnedTable> owned;
+	{
+		std::scoped_lock lock(storeMutex_);
+		for (auto it = tables.begin(); it != tables.end(); ++it) {
+			if (it->second->getTable() != view)
+				continue;
+			owned = std::move(it->second);
+			tables.erase(it);
+			break;
+		}
+	}
+	if (!owned)
+		return false;
+	releaseBytes(view->size * sizeof(Callable*), MemoryCategory::Table);
 	return true;
 }
 

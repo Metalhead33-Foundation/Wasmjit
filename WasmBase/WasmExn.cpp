@@ -78,7 +78,7 @@ namespace WASM {
 void* wasm_exn_create_in(Store& store, int32_t tagId, uint32_t payloadBytes)
 {
 	const std::size_t total = kHeaderSize + static_cast<std::size_t>(payloadBytes);
-	if (!store.reserveBytes(total)) {
+	if (!store.reserveBytes(total, MemoryCategory::Exception)) {
 		WASM::reportTrap(WASM::TrapKind::OutOfMemory);
 		return nullptr;
 	}
@@ -90,14 +90,14 @@ void* wasm_exn_create_in(Store& store, int32_t tagId, uint32_t payloadBytes)
 		// A failed allocation is a host limitation, reported as a recoverable
 		// trap. Reporting returns; the generated caller checks the pending slot
 		// before it uses the (null) exception pointer.
-		store.releaseBytes(total);
+		store.releaseBytes(total, MemoryCategory::Exception);
 		WASM::reportTrap(WASM::TrapKind::OutOfMemory);
 		return nullptr;
 	}
 
 	if (!store.ownException(storage, total)) {
 		delete[] storage;
-		store.releaseBytes(total);
+		store.releaseBytes(total, MemoryCategory::Exception);
 		WASM::reportTrap(WASM::TrapKind::OutOfMemory);
 		return nullptr;
 	}

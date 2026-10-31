@@ -17,13 +17,14 @@ namespace LibJIT {
 
 namespace {
 
-//! The libjit optimization level every compiled function gets.
+//! The libjit optimization level a policy value maps to
+//! (docs/proposals/COMPILER_POLICY.md `CPD1`).
 //!
-//! Level 0 is the default: libjit's level-1 optimizer rejects a valid block
-//! graph (a dead-end loop reached through a runtime-conditioned branch) with
-//! `JIT_RESULT_OVERFLOW`, and a failed compile cannot be retried on the same
-//! function (docs/languages/LF2_DEEP_F1_BACKEND.md §3.5). `WASMJIT_LIBJIT_OPT=1`
-//! restores the optimizer for an embedder that has measured its modules.
+//! `None` is level 0; `Full` is level 1 -- libjit's optimizing pass, which
+//! rejects a valid block graph (`F1`), so it is an explicit opt-in; `Basic` is
+//! whatever the process default says, which is level 0 unless
+//! `WASMJIT_LIBJIT_OPT` overrides it. Keeping the environment variable wired to
+//! `Basic` preserves the escape hatch `LF2_DEEP_F1_BACKEND.md` documents.
 unsigned int libjitOptimizationLevel()
 {
 	static const unsigned int level = [] {
@@ -36,10 +37,24 @@ unsigned int libjitOptimizationLevel()
 	return level;
 }
 
-//! Applies the backend's optimization level; call before compiling a function.
-void applyOptimizationLevel(jit_function_t fn)
+//! Maps a backend-neutral degree onto libjit's numbering.
+unsigned int libjitLevelFor(WASM::OptimizationLevel level)
 {
-	jit_function_set_optimization_level(fn, libjitOptimizationLevel());
+	switch (level) {
+	case WASM::OptimizationLevel::None:
+		return 0u;
+	case WASM::OptimizationLevel::Full:
+		return 1u;
+	case WASM::OptimizationLevel::Basic:
+		break;
+	}
+	return libjitOptimizationLevel();
+}
+
+//! Applies an optimization level; call before compiling a function.
+void applyOptimizationLevel(jit_function_t fn, unsigned int level)
+{
+	jit_function_set_optimization_level(fn, level);
 }
 
 
@@ -114,7 +129,20 @@ jit_value_t zeroValueForType(jit_function_t fn, jit_type_t t)
 	WASM::emitDiagnostic(std::move(diagnostic));
 	if (contextOwner != nullptr)
 		contextOwner->abandon();
-	throw std::runtime_error(message);
+	// A named type, so a `Lax` policy can recognise this failure as the one it
+	// may retry at a lower degree (docs/proposals/COMPILER_POLICY.md `CP-3`).
+	throw WASM::CompileFailure(message);
+}
+
+WASM::BackendCompilationCapabilities ModuleCompiler::compilationCapabilities() const
+{
+	// libjit reaches its optimizer (`Full`), and this backend has no interpreter
+	// path yet -- `FallbackOnly`/`Always` are refused at the boundary rather than
+	// silently compiled (docs/proposals/COMPILER_POLICY.md `CPD6`).
+	WASM::BackendCompilationCapabilities capabilities;
+	capabilities.maxLevel = WASM::OptimizationLevel::Full;
+	capabilities.interprets = false;
+	return capabilities;
 }
 
 // LibJIT's build region is a lock: jit_context_build_start() must be paired with
@@ -279,7 +307,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		// generated code.
 		const bool dumpFunctions = std::getenv("WASMJIT_JIT_DUMP") != nullptr;
 
-		applyOptimizationLevel(fn);
+		applyOptimizationLevel(fn, libjitLevelFor(compilationPolicy().level));
 		int compileResult = jit_function_compile(fn);
 		if (compileResult != JIT_RESULT_OK) {
 			if (dumpFunctions) {
@@ -357,7 +385,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 			jit_insn_store_relative(thunk, resultSlots, 0, ret);
 		jit_insn_return(thunk, nullptr);
 
-		applyOptimizationLevel(thunk);
+		applyOptimizationLevel(thunk, libjitLevelFor(compilationPolicy().level));
 		const int thunkResult = jit_function_compile(thunk);
 		if (thunkResult != JIT_RESULT_OK)
 			failCompilation("tail-call thunk compile", WASM::kNoDiagnosticIndex, thunkResult);
@@ -529,7 +557,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 			jit_insn_return(driver, callRet);
 		}
 
-		applyOptimizationLevel(driver);
+		applyOptimizationLevel(driver, libjitLevelFor(compilationPolicy().level));
 		int driverResult = jit_function_compile(driver);
 		if (driverResult != JIT_RESULT_OK)
 			failCompilation("trampoline driver compile", importedFuncCount + i, driverResult);
