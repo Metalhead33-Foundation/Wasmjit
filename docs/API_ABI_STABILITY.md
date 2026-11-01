@@ -279,7 +279,7 @@ Built out-of-source with `env MAKE=/usr/bin/make /usr/bin/make -j16
 QMAKE=/usr/bin/qmake6` → **exit 0**. Suite (§11 for the full table): default run
 **11,454 assertions / 481 test cases, all passing**; non-spec subset 11,014 / 285;
 the proposal-documentation lint `[docs]` 839 assertions (two cases: the note
-shape and the note tree — **982** on 2026-11-01). The documented negative-module measurement is
+shape and the note tree — **1,009** on 2026-11-01). The documented negative-module measurement is
 **2,382 / 2,382** binary commands handled
 ([`VALIDATION.md`](VALIDATION.md) "Measured coverage", 2026-10-18; opt-in via
 `WASM_SPEC_VALIDATE=1`).

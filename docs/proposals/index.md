@@ -41,7 +41,7 @@ and the `[docs]` check fails ([`DOCUMENTATION.md`](../DOCUMENTATION.md) §9).
 | \subpage prop_profiles | Language profiles |
 | \subpage prop_reference_types | Reference types |
 | \subpage prop_shared_everything_threads | Shared-everything threads |
-| \subpage prop_sharing_linear_memory | One memory, many modules: sharing a linear memory between instances, and the pitfalls of doing so |
+| \subpage prop_sharing_linear_memory | One memory, many modules: sharing a linear memory between instances, the pitfalls of doing so, and what a linker would change |
 | \subpage prop_simd | Fixed-width and relaxed SIMD |
 | \subpage prop_small_proposals | Sign-extension, non-trapping float→int, branch hints and the rest of phase 5 |
 | \subpage prop_stack_switching | Stack switching (continuations) |

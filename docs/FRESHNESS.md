@@ -59,7 +59,7 @@ hardcoded values that were considered".
 
 A kind-2 statement is only allowed in this shape:
 
-> **Snapshot (2026-11-01, `8c87f5f`):** the default suite is 16,541 assertions in
+> **Snapshot (2026-11-01, `8c87f5f`):** the default suite is 16,543 assertions in
 > 547 cases. Reproduce with `./Test/WasmJit`.
 
 or, inside a table, with the same three pieces in the caption or the column
@@ -198,7 +198,7 @@ this revision did about them:
 | `DOCUMENTATION.md` §8 and `README.md` "all 69 headers" | 69 | a predicate ("every header outside `extern/`") plus the measured count |
 | `DOCUMENTATION.md` §6 "the strict pass reports the gap counted in §8" vs §8's "0 undocumented declarations" | two contradictory claims | both replaced by the measured split: default render 0 warnings (the gate); strict pass 1,810 items (1,477 `\param`, 322 `\return`, 11 no-block, all `Asmjit/`) |
 | `README.md` "the default suite is 11,011 assertions / 442 cases" | 11,011 / 442 | the current run, dated |
-| `API_ABI_STABILITY.md` / `EMBEDDING_SURFACE.md` / `READINESS_AUDIT.md` `[docs]` 720 / 839 assertions | 720 / 839 | 1007 assertions / 2 cases, dated |
+| `API_ABI_STABILITY.md` / `EMBEDDING_SURFACE.md` / `READINESS_AUDIT.md` `[docs]` 720 / 839 assertions | 720 / 839 | 1009 assertions / 2 cases, dated |
 | `EMBEDDING_SURFACE.md` §10 per-tag rows (`[plugin]` 17/5, `[tiers]` 210/3, `[concurrency]` 81/14) | stale | re-measured, dated |
 | `EMBEDDING_SURFACE.md` §4.3 "11,345 assertions at the time (11,454 today)" | ambiguous | "at the time" kept, "today" removed |
 | `README.md` "the installed layout and `wasmjit.pc` are still to come" | false | shipped; `Test/install-check.sh` proves it |
@@ -415,8 +415,8 @@ re-measuring cheap, which is the only part of this problem that can be automated
 
 The values it printed on 2026-11-01, in the working tree on `39170be` (a
 `build/Desktop-Debug` qmake build — re-run it, do not trust these), are: 22 / 40 /
-17 `.md` files (21 / 39 / 16 notes); 72 header files; **16,541 assertions in 547
-test cases**; `[docs]` 1007/2,
+17 `.md` files (21 / 39 / 16 notes); 72 header files; **16,543 assertions in 547
+test cases**; `[docs]` 1009/2,
 `[headerdoc]` 6/3, `[runtime]` 46/7, `[concurrency]` 80/13, `[multiagent]`
 51/6, `[backendabi]` 36/4, `[plugin]` 41/8, `[tiers]` 222/3,
 `[compilation-policy]` 30/3, `[config]` 4,190/13, `[mem-provider]` 122/7,
@@ -432,7 +432,7 @@ whole problem in miniature:
 - **merging** two top-level notes (into `WRITING_A_BACKEND.md` and
   `VALIDATION.md`) took it back to 21 notes;
 - **adding** `proposals/SHARING_LINEAR_MEMORY.md` took the proposal set to 39 and
-  the suite to 16,541.
+  the suite to 16,543.
 
 *A documentation change changes the numbers the documents quote.* That is why the
 rule is "date the number", not "guess it right".

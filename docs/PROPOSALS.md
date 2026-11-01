@@ -239,7 +239,7 @@ headings:
 | `PROFILES.md` | 9 | canonical | none | — | conforms exactly |
 | `REFERENCE_TYPES.md` | 9 | canonical | none | — | conforms exactly |
 | `SHARED_EVERYTHING_THREADS.md` | 9 | canonical | none | — | conforms exactly |
-| `SHARING_LINEAR_MEMORY.md` | 12 | canonical + appendix | none | §10–§12 (option matrix, language study, pseudocode) after §9 | conforms (three appendices; an engine-seam study of a cross-module scenario, not a feature proposal) |
+| `SHARING_LINEAR_MEMORY.md` | 13 | canonical + appendix | none | §10–§13 (option matrix, language study, pseudocode, the linker question) after §9 | conforms (four appendices; an engine-seam study of a cross-module scenario, not a feature proposal) |
 | `STACK_SWITCHING.md` | 10 | canonical + appendix | §10 follows §9 | — | conforms (appended backend feasibility study, PD3) |
 | `STRINGREF.md` | 9 | canonical | none | — | conforms exactly |
 | `TAILCALLS.md` | 9 | canonical | none | — | conforms exactly |
