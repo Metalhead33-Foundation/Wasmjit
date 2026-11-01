@@ -455,6 +455,34 @@ std::optional<LinearMemory*> ModuleInstance::exportedMemory(
 	return std::nullopt;
 }
 
+std::optional<TableInstance*> ModuleInstance::exportedTable(
+		std::string_view name) const
+{
+	for (const Export& ex : module->exports) {
+		if (ex.kind != ExternalKind::Table || ex.name != name)
+			continue;
+		if (ex.index >= internals.tableRefs.size())
+			throw std::runtime_error(
+					"module exports a table index outside its index space");
+		return internals.tableRefs[ex.index];
+	}
+	return std::nullopt;
+}
+
+std::optional<Value*> ModuleInstance::exportedGlobal(
+		std::string_view name) const
+{
+	for (const Export& ex : module->exports) {
+		if (ex.kind != ExternalKind::Global || ex.name != name)
+			continue;
+		if (ex.index >= internals.globalRefs.size())
+			throw std::runtime_error(
+					"module exports a global index outside its index space");
+		return internals.globalRefs[ex.index];
+	}
+	return std::nullopt;
+}
+
 std::optional<Callable> ModuleInstance::exportedFunction(std::string_view name) const
 {
 	const uint32_t importedFuncCount = static_cast<uint32_t>(module->importFunctions.size());
