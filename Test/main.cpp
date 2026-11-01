@@ -3050,6 +3050,28 @@ TEST_CASE("component aliases and instance expressions are parsed")
 	REQUIRE_FALSE(outer->typeId(0).isNone());
 }
 
+TEST_CASE("core inline bag carries table and global sorts")
+{
+	auto artifact = loadTestArtifact("component_coreinline_sorts");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	REQUIRE(component->coreInstances.size() == 2);
+	REQUIRE(component->coreInstances[1].kind == WASM::CoreInstance::Kind::InlineExports);
+	REQUIRE(component->coreInstances[1].exports.size() == 2);
+	REQUIRE(component->coreInstances[1].exports[0].sortIndex.sort == WASM::CoreSort::Table);
+	REQUIRE(component->coreInstances[1].exports[1].sortIndex.sort == WASM::CoreSort::Global);
+
+	// Instantiating used to throw `inline core export sort is not supported`;
+	// construction processes every definition, so a silent pass here means both
+	// sorts travelled alias -> index space -> bag handle.
+	auto backend = TestBackend::create();
+	REQUIRE_NOTHROW([&] {
+		WASM::ComponentRuntime runtime(backend->instantiator(), *component);
+		(void)runtime;
+	}());
+}
+
 TEST_CASE("core module type imports cover all core external kinds")
 {
 	auto artifact = loadTestArtifact("component_coreexterns");
