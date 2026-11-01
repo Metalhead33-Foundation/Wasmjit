@@ -441,6 +441,9 @@ bool isKebabLabel(const std::string& label)
 					&& std::all_of(fragment.begin() + 1, fragment.end(),
 							[](char c) { return std::islower(static_cast<unsigned char>(c))
 									|| std::isdigit(static_cast<unsigned char>(c)); });
+			// CM14: rejected: a one-letter upper-case fragment is not an acronym in an
+			// extern name, but it *is* a legal definition label (the corpus accepts a
+			// resource named `R`), so the distinction does not belong here.
 			const bool upperAcronym = std::isupper(static_cast<unsigned char>(fragment[0]))
 					&& std::all_of(fragment.begin() + 1, fragment.end(),
 							[](char c) { return std::isupper(static_cast<unsigned char>(c))
@@ -453,8 +456,8 @@ bool isKebabLabel(const std::string& label)
 					[](char c) { return std::islower(static_cast<unsigned char>(c))
 							|| std::isdigit(static_cast<unsigned char>(c)); });
 			const bool acronym = std::all_of(fragment.begin(), fragment.end(),
-					[](char c) { return std::isupper(static_cast<unsigned char>(c))
-							|| std::isdigit(static_cast<unsigned char>(c)); });
+							[](char c) { return std::isupper(static_cast<unsigned char>(c))
+									|| std::isdigit(static_cast<unsigned char>(c)); });
 			if (!word && !acronym)
 				return false;
 		}
