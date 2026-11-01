@@ -7,10 +7,11 @@
 # `nyi.txt` in the corpus is upstream's own version of this list; this one is
 # only for cases upstream considers settled and we do not.
 #
-# CM13 — the async ABI gate is not validated: a `canon lift`/`lower` with an
-# async option applied to a sync component type is accepted. The corpus says
-# it must be rejected (`assert_invalid`, "async ABI for sync type").
-async/validate-no-async-abi-for-sync-type.wast:0
-async/validate-no-async-abi-for-sync-type.wast:652
+# CM13a (the async ABI gate) was closed on 2026-11-01: `canon lift`/`lower` with
+# an `async` option is now refused, so its three corpus cases assert again.
+#
+# CM13b — `outer aliases may only alias core type or type` rejects a component
+# the corpus accepts. The origin names the script; the failing artifact is the
+# component form at that byte offset.
 async/validate-task-return.wast:58
 async/validate-task-return.wast:237

@@ -3185,6 +3185,15 @@ void ComponentValidator::validateCanonOpts(const Canon& canon)
 			break;
 		}
 	}
+
+	// CM13: every component function type this engine models is synchronous, so
+	// an `async` option on `lift`/`lower` can never be satisfied. The reference
+	// corpus is explicit that the option "requires an async function type"
+	// (async/validate-no-async-abi-for-sync-type.wast), so it is refused here
+	// rather than half-honoured at runtime.
+	if ((async || (canon.async.has_value() && *canon.async))
+			&& (canon.kind == Canon::Kind::Lift || canon.kind == Canon::Kind::Lower))
+		fail("the `async` canonical option requires an async function type");
 }
 
 void ComponentValidator::validateCanon(const Canon& canon)

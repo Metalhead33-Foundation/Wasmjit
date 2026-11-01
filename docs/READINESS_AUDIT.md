@@ -485,7 +485,7 @@ are larger than the audit's own run (11,460 assertions / 484 cases).
 
 **This is an audit record, not a description of the current tree** — the counts
 are the ones the verdicts were reached on. For the current ones, see
-[`FRESHNESS.md`](FRESHNESS.md) §8; the default suite measured **17,088
+[`FRESHNESS.md`](FRESHNESS.md) §8; the default suite measured **17,090
 assertions / 551 cases** on 2026-11-01 (`8c87f5f`).
 
 | Run | Command | Result | What it evidences |
