@@ -59,8 +59,8 @@ hardcoded values that were considered".
 
 A kind-2 statement is only allowed in this shape:
 
-> **Snapshot (2026-11-01, `8c87f5f`):** the default suite is 16,565 assertions in
-> 549 cases. Reproduce with `./Test/WasmJit`.
+> **Snapshot (2026-11-01, `8c87f5f`):** the default suite is 16,574 assertions in
+> 550 cases. Reproduce with `./Test/WasmJit`.
 
 or, inside a table, with the same three pieces in the caption or the column
 header. A bare number with none of them is the failure mode this note exists to
@@ -415,7 +415,7 @@ re-measuring cheap, which is the only part of this problem that can be automated
 
 The values it printed on 2026-11-01, in the working tree on `39170be` (a
 `build/Desktop-Debug` qmake build — re-run it, do not trust these), are: 22 / 40 /
-17 `.md` files (21 / 39 / 16 notes); 72 header files; **16,565 assertions in 549
+17 `.md` files (21 / 39 / 16 notes); 72 header files; **16,574 assertions in 549
 test cases**; `[docs]` 1013/2,
 `[headerdoc]` 6/3, `[runtime]` 46/7, `[concurrency]` 80/13, `[multiagent]`
 51/6, `[backendabi]` 36/4, `[plugin]` 41/8, `[tiers]` 222/3,
@@ -432,7 +432,7 @@ whole problem in miniature:
 - **merging** two top-level notes (into `WRITING_A_BACKEND.md` and
   `VALIDATION.md`) took it back to 21 notes;
 - **adding** `proposals/SHARING_LINEAR_MEMORY.md` took the proposal set to 39 and
-  the suite to 16,565 (the unloader cases added the last two).
+  the suite to 16,574 (the unloader cases added the last two).
 
 *A documentation change changes the numbers the documents quote.* That is why the
 rule is "date the number", not "guess it right".

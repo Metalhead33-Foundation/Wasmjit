@@ -263,3 +263,40 @@ TEST_CASE("plugin loader: an example backend loads by name and instantiates", "[
 	SUCCEED("POSIX-only plugin loading");
 #endif
 }
+
+TEST_CASE("plugin probe: metadata is available without instantiating", "[plugin]")
+{
+#if defined(__linux__)
+	// The probe-only path: open, read the descriptor, close. No `create()`, no
+	// retained pointer into the image, so the library may be unloaded again
+	// (docs/BACKEND_PLUGIN_ABI.md §7 rule 8).
+	const std::filesystem::path plugin = examplePlugin();
+	REQUIRE(std::filesystem::exists(plugin));
+
+	const WASM::BackendPluginInfo info = WASM::probeBackendPlugin(plugin.string());
+	REQUIRE(info.name == "example");
+	REQUIRE_FALSE(info.version.empty());
+	REQUIRE(info.abiVersion == WASMJIT_BACKEND_ABI_VERSION);
+	REQUIRE(info.coreAbiVersion == WASMJIT_ABI_VERSION);
+	REQUIRE(info.path == plugin.string());
+
+	// A file that is not a plugin is refused with the reason when asked directly,
+	// and merely skipped by discovery.
+	REQUIRE_THROWS_WITH(WASM::probeBackendPlugin("/nonexistent/no-such-plugin.so"),
+Catch::Matchers::ContainsSubstring("cannot probe"));
+
+	const std::string directory = plugin.parent_path().string();
+	REQUIRE(::setenv("WASMJIT_BACKEND_PATH", directory.c_str(), 1) == 0);
+	const std::vector<WASM::BackendPluginInfo> plugins = WASM::listBackendPlugins();
+	::unsetenv("WASMJIT_BACKEND_PATH");
+
+	bool found = false;
+	for (const WASM::BackendPluginInfo& candidate : plugins) {
+		if (candidate.name == "example")
+			found = true;
+	}
+	REQUIRE(found);
+#else
+	SUCCEED("POSIX-only plugin probing");
+#endif
+}

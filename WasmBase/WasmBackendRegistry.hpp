@@ -113,6 +113,49 @@ BackendInstance loadBackendPluginFile(const std::string& path);
  */
 BackendInstance loadBackendPlugin(std::string_view name);
 
+//! What a plugin reports about itself, read without instantiating it.
+//!
+//! The probe path is the one place where `dlclose` is correct: the descriptor is
+//! read, every pointer into the image is copied out, and the library is closed
+//! again — no code from it ever runs (docs/BACKEND_PLUGIN_ABI.md §7 rule 8).
+struct BackendPluginInfo {
+	std::string   path;            //!< The file that was probed.
+	std::string   name;            //!< The backend's own name.
+	std::string   version;         //!< The backend's own version string.
+	std::uint32_t abiVersion = 0;  //!< Descriptor ABI the plugin speaks.
+	std::uint32_t coreAbiVersion = 0; //!< Core ABI it was built against.
+	std::uint32_t buildFlags = 0;  //!< `WASMJIT_BUILD_*`.
+	std::uint32_t capabilities = 0;//!< `WASMJIT_CAP_*` flags.
+	std::uint32_t maxParams = 0;   //!< Signature limit, 0 = none.
+	std::uint32_t maxResults = 0;  //!< Result limit, 0 = none.
+};
+
+/*!
+ * \brief Reads one plugin's descriptor without creating a backend from it.
+ *
+ * The library is opened, `wasmjit_backend_query` is called once, every value and
+ * string is copied out, and the handle is closed. Nothing from the image is
+ * retained, so a probed plugin is not "used" and may be closed safely — which is
+ * what makes this the probe-only path the plugin policy allows.
+ *
+ * \param path Shared-library path to probe.
+ * \return The plugin's self-description.
+ * \throws std::exception when the file is not a WasmJit backend plugin.
+ */
+BackendPluginInfo probeBackendPlugin(const std::string& path);
+
+/*!
+ * \brief Lists the backend plugins visible on the search path.
+ *
+ * Scans `WASMJIT_BACKEND_PATH` (colon-separated), the working directory and the
+ * executable's directory for `libwasmjit-backend-*.so`, probes each, and returns
+ * the compatible ones sorted by path. A file that is not a plugin (or speaks
+ * another ABI) is skipped, not fatal: this is a discovery call.
+ *
+ * \return The probed plugins; empty when there are none.
+ */
+std::vector<BackendPluginInfo> listBackendPlugins();
+
 } // namespace WASM
 
 //! Token-paste helper for `WASMJIT_BACKEND_CONCAT`.

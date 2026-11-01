@@ -7,8 +7,10 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <map>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -379,4 +381,121 @@ BackendInstance loadBackendPlugin(std::string_view name)
 			+ "] (set WASMJIT_BACKEND_PATH to search elsewhere)");
 }
 
+BackendPluginInfo probeBackendPlugin(const std::string& path)
+{
+#if defined(_WIN32)
+	(void)path;
+	throw std::runtime_error("backend plugin probing is not implemented on this"
+			" platform (docs/BACKEND_PLUGIN_ABI.md BP-3)");
+#else
+	void* handle = ::dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+	if (handle == nullptr) {
+		const char* reason = ::dlerror();
+		failPlugin("cannot probe backend plugin '" + path + "': "
+				+ (reason != nullptr ? reason : "unknown loader error"));
+	}
+
+	const auto query = reinterpret_cast<wasmjit_backend_query_fn>(
+			::dlsym(handle, "wasmjit_backend_query"));
+	if (query == nullptr) {
+		::dlclose(handle);
+		failPlugin("'" + path + "' is not a WasmJit backend plugin: no"
+				" wasmjit_backend_query export (docs/BACKEND_PLUGIN_ABI.md §4.1)");
+	}
+
+	const wasmjit_backend_desc* desc = query(WASMJIT_BACKEND_ABI_VERSION);
+	if (desc == nullptr) {
+		::dlclose(handle);
+		failPlugin("backend plugin '" + path + "' refused host ABI version "
+				+ std::to_string(WASMJIT_BACKEND_ABI_VERSION));
+	}
+
+	// Copy every value out *before* closing: the strings live in the image, and
+	// `dlclose` may unmap it. This is the whole point of the probe path — it
+	// retains no pointer into the plugin.
+	BackendPluginInfo info;
+	info.path            = path;
+	info.abiVersion       = desc->abi_version;
+	info.coreAbiVersion   = desc->core_abi_version;
+	info.buildFlags       = desc->build_flags;
+	info.capabilities     = desc->capabilities.flags;
+	info.maxParams        = desc->capabilities.max_params;
+	info.maxResults       = desc->capabilities.max_results;
+	info.name             = desc->name != nullptr ? desc->name : "";
+	info.version          = desc->version != nullptr ? desc->version : "";
+	::dlclose(handle);
+
+	// The same two checks the loader makes, so a probe and a load agree on what
+	// "compatible" means (§4.1/§6 rule 2, §7.7's build-kind rule).
+	if (info.abiVersion != WASMJIT_BACKEND_ABI_VERSION) {
+		failPlugin("backend plugin '" + path + "' speaks descriptor ABI "
+				+ std::to_string(info.abiVersion) + ", the host expects "
+				+ std::to_string(WASMJIT_BACKEND_ABI_VERSION));
+	}
+	if (info.coreAbiVersion != WASMJIT_ABI_VERSION) {
+		failPlugin("backend plugin '" + path + "' was built against core ABI "
+				+ std::to_string(info.coreAbiVersion) + ", the host is "
+				+ std::to_string(WASMJIT_ABI_VERSION));
+	}
+	return info;
+#endif
+}
+
+std::vector<BackendPluginInfo> listBackendPlugins()
+{
+	std::vector<BackendPluginInfo> plugins;
+	std::vector<std::string> directories;
+
+	if (const char* path = std::getenv("WASMJIT_BACKEND_PATH"); path != nullptr) {
+		const std::string list(path);
+		std::size_t start = 0;
+		while (start <= list.size()) {
+			const std::size_t end = list.find(':', start);
+			const std::string directory = list.substr(start,
+					end == std::string::npos ? std::string::npos : end - start);
+			if (!directory.empty())
+				directories.push_back(directory);
+			if (end == std::string::npos)
+				break;
+			start = end + 1;
+		}
+	}
+	directories.push_back(".");
+	const std::string exeDirectory = executableDirectory();
+	if (!exeDirectory.empty())
+		directories.push_back(exeDirectory);
+
+	std::set<std::string> seen;
+	for (const std::string& directory : directories) {
+		std::error_code error;
+		for (std::filesystem::directory_iterator it(directory, error), end;
+				it != end && !error; it.increment(error)) {
+			if (!it->is_regular_file(error))
+				continue;
+			const std::string fileName = it->path().filename().string();
+			// `backendPluginFileName` is `libwasmjit-backend-<name>.so`; the leading
+			// dot of a versioned suffix keeps this from matching the same file twice.
+			if (fileName.rfind("libwasmjit-backend-", 0) != 0
+					|| fileName.find(".so") == std::string::npos)
+				continue;
+			const std::string candidate = it->path().string();
+			if (!seen.insert(candidate).second)
+				continue;
+			try {
+				plugins.push_back(probeBackendPlugin(candidate));
+			} catch (const std::exception&) {
+				// Discovery, not a load: a file that is not a compatible plugin is
+				// skipped. `probeBackendPlugin` is what reports why when asked.
+			}
+		}
+	}
+
+	std::sort(plugins.begin(), plugins.end(),
+			[](const BackendPluginInfo& a, const BackendPluginInfo& b) {
+				return a.path < b.path;
+			});
+	return plugins;
+}
+
 } // namespace WASM
+

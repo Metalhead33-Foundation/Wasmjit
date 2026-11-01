@@ -240,10 +240,14 @@ read. That makes `BP-1` useful even if `dlopen` never ships.
    instantiated. That is why the loader keeps every handle
    (`keepPluginLoaded`), and why `Runtime::unload` frees the *instantiator and its
    compilation context*, not the mapped image: the two are different resources,
-   and only the second is unsafe to give back. A "list the available backends"
-   API would therefore be the one legitimate `dlclose` site — open, read the
-   descriptor, close — and it is deliberately not implemented until a host asks for
-   it.
+   and only the second is unsafe to give back. **The probe-only path now exists
+   (2026-11-01):** `probeBackendPlugin(path)` opens, reads the descriptor, copies
+   every value and string out, and closes; `listBackendPlugins()` scans
+   `WASMJIT_BACKEND_PATH` + `.` + the executable's directory for
+   `libwasmjit-backend-*.so` and probes each, skipping incompatible files. That is
+   the one legitimate `dlclose` site — a probed plugin never ran, so nothing can
+   point into it afterwards. A *loaded-and-used* plugin still stays mapped for the
+   process lifetime, which is what `keepPluginLoaded` enforces.
 9. **Executable memory is the plugin's**, with a W^X handoff; the core never
    patches code.
 10. **Report every refusal through the diagnostic sink.** The loader emits a
