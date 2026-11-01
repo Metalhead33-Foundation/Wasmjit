@@ -67,10 +67,7 @@ jobs:
       - name: Check out the tree
         uses: actions/checkout@v7
         with:
-          # `extern/` is a submodule and `Doxyfile` excludes it, so the render
-          # needs none of the submodules; `submodules: false` makes that
-          # explicit.
-          submodules: false
+          submodules: true
 
       - name: Install Doxygen
         run: |
