@@ -10,3 +10,6 @@
 [submodule "extern/doxygen-awesome-css"]
 	path = extern/doxygen-awesome-css
 	url = https://github.com/jothepro/doxygen-awesome-css.git
+[submodule "extern/component-model"]
+	path = extern/component-model
+	url = https://github.com/WebAssembly/component-model.git
