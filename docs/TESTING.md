@@ -345,7 +345,7 @@ selection is explicit — which is why `./WasmJit '[spec]'` runs everything.
 | `./WasmJit '[spec]'` | all 257 spec scripts (~2 min in the debug build; 251 pass, 6 known failures) |
 | `./WasmJit 'spec: address'` | just that script |
 | `./WasmJit '*float*'` | scripts whose name matches |
-| `./WasmJit --list-tests` | the default view (550 test cases on 2026-11-01) |
+| `./WasmJit --list-tests` | the default view (551 test cases on 2026-11-01) |
 | `./WasmJit --list-tests '[spec]'` | every script, one line each (257) |
 | `./WasmJit -# --list-tags` | all tags, including `[#main]` and `[#SpecSuite]` |
 
@@ -376,7 +376,7 @@ It holds **193 of the 257** scripts, and the default run is green:
 
 ```
 $ ./WasmJit
-All tests passed (16574 assertions in 550 test cases)
+All tests passed (17088 assertions in 551 test cases)
 ```
 
 **Snapshot (2026-11-01, `8c87f5f`):** the list length and the transcript above
@@ -657,7 +657,7 @@ tests, and it is green:
 
 ```
 $ ./WasmJit
-All tests passed (16574 assertions in 550 test cases)
+All tests passed (17088 assertions in 551 test cases)
 ```
 
 A full sweep is deliberately loud, because most of the suite is still beyond the
@@ -849,7 +849,7 @@ Measured after SIMD-5:
 
 ```bash
 ./WasmJit 'simd*'      # 24 cases, 6152 assertions, all passing (includes the hidden [.simdbench] case)
-./WasmJit              # 550 cases, 16574 assertions, all passing
+./WasmJit              # 551 cases, 17088 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed
@@ -1188,3 +1188,27 @@ These are quirks of the development box, not requirements of the project.
    # note 1 applies to make
    env MAKE=/usr/bin/make /usr/bin/make -j16
    ```
+
+## The component-model reference corpus (CM-9)
+
+`extern/component-model/test` is authored for **`wasmtime wast`**, so the core
+suite's `json-from-wast` path cannot read it (it stops at the first `(canon …)`
+form). The corpus is therefore consumed in two steps, both at build time:
+
+1. **CM-9a — `Test/component_corpus.py`.** Walks every `.wast`, extracts each
+top-level `(component …)` and each `(assert_invalid (component …))`, writes the
+form through `wasm-tools parse` (which *does* understand components), and emits
+`wasm_testsuite/component-corpus/manifest.tsv` with one line per artifact:
+`accept | reject | skip`, the origin (`file:offset`) and, for a skip, the reason.
+A form `wasm-tools` itself refuses becomes a `skip`, never a build failure.
+2. **CM-9b — `Test/ComponentCorpusTests.cpp` (`[component-corpus]`).** Loads each
+artifact and compares our validator's verdict with the corpus's. A disagreement
+is a `WARN` naming its origin, so the warnings *are* the gap list; a curated
+entry in `Test/component_known_failures.txt` removes one from the run.
+
+Useful commands:
+
+```bash
+./Test/WasmJit '[component-corpus]'        # the verdict run + the gap list
+awk -F'\t' '$1=="skip"' build/*/Test/wasm_testsuite/component-corpus/manifest.tsv  # why a form was not assertable
+```

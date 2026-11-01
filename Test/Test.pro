@@ -105,6 +105,26 @@ wat2wasm.CONFIG += no_link target_predeps
 
 QMAKE_EXTRA_COMPILERS += wat2wasm
 
+# ---------------------------------------------------------------------------
+# CM-9a: the component-model reference corpus (extern/component-model/test)
+#
+# That corpus is authored for `wasmtime wast`, so `json-from-wast` cannot read it
+# (core parser). Test/component_corpus.py extracts every `(component ...)` form,
+# writes it through `wasm-tools parse` (which does understand components) and
+# emits a verdict manifest; Test/ComponentCorpusTests.cpp asserts our validator
+# against it (CM-9b). Everything lands under $$OUT_PWD/component-corpus.
+# ---------------------------------------------------------------------------
+COMPONENT_CORPUS_DIR = $$WASM_TESTSUITE_BUILD_DIR/component-corpus
+
+component_corpus.target = $$COMPONENT_CORPUS_DIR/manifest.tsv
+component_corpus.commands = $$QMAKE_MKDIR $$COMPONENT_CORPUS_DIR && \
+    python3 $$PWD/component_corpus.py --corpus $$PWD/../extern/component-model/test \
+        --tools $$WASM_TOOLS --out $$COMPONENT_CORPUS_DIR \
+        --known-failures $$PWD/component_known_failures.txt
+component_corpus.depends = $$PWD/component_corpus.py
+PRE_TARGETDEPS += $$COMPONENT_CORPUS_DIR/manifest.tsv
+QMAKE_EXTRA_TARGETS += component_corpus
+
 SOURCES += main.cpp \
     helper.cpp \
     Diagnose.cpp \
@@ -114,6 +134,7 @@ SOURCES += main.cpp \
     WastScript.cpp \
     SpecSuite.cpp \
     ProposalDocsTests.cpp \
+    ComponentCorpusTests.cpp \
     LayeringTests.cpp \
     HeaderDocTests.cpp \
     SurfaceTests.cpp \

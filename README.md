@@ -242,7 +242,7 @@ families instead of skipping them, and the validator (`docs/VALIDATION.md`)
 rejects **all 2,211** curated `assert_invalid` cases plus all 127
 `assert_unlinkable` ones and all 27 `assert_uninstantiable` ones — **2,382 of
 2,382** binary negative commands. The strict run is fully green; the default
-suite measured **16,574 assertions in 550 test cases** on 2026-11-01 (`8c87f5f`,
+suite measured **17,088 assertions in 551 test cases** on 2026-11-01 (`8c87f5f`,
 `build/Desktop-Debug`) — re-run `./Test/WasmJit` for the current line. All 17
 curated `assert_malformed` cases are rejected too, including the strict LEB128
 cases;
