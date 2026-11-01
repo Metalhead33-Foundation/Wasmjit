@@ -3050,6 +3050,32 @@ TEST_CASE("component aliases and instance expressions are parsed")
 	REQUIRE_FALSE(outer->typeId(0).isNone());
 }
 
+TEST_CASE("component inline instance export alias resolves")
+{
+	auto artifact = loadTestArtifact("component_instanceinline_alias");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	REQUIRE(component->instances.size() == 1);
+	REQUIRE(component->instances[0].kind == WASM::ComponentInstance::Kind::InlineExports);
+	REQUIRE(component->instances[0].exports.size() == 1);
+	REQUIRE(component->instances[0].exports[0].sortIndex.sort == WASM::ComponentSort::Func);
+	std::size_t exportAliases = 0;
+	for (const WASM::Alias& alias : component->aliases)
+		if (alias.kind == WASM::Alias::Kind::Export)
+			++exportAliases;
+	REQUIRE(exportAliases == 1);
+
+	// Construction used to throw `inline component instances are not supported`.
+	// The bag is now indexed by instance index and the export alias resolves out
+	// of it into the component function space.
+	auto backend = TestBackend::create();
+	REQUIRE_NOTHROW([&] {
+		WASM::ComponentRuntime runtime(backend->instantiator(), *component);
+		(void)runtime;
+	}());
+}
+
 TEST_CASE("core inline bag carries table and global sorts")
 {
 	auto artifact = loadTestArtifact("component_coreinline_sorts");

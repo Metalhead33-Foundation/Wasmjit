@@ -196,6 +196,11 @@ private:
 	ComponentImports imports_; //!< The component-level imports this runtime was given.
 	std::vector<const WASM::Component*> nestedComponents_; //!< Nested definitions, by nested component index.
 	std::vector<std::unique_ptr<ComponentRuntime>> nestedRuntimes_; //!< Runtimes built for `nestedComponents_`.
+	//! Function exports of *inline* component instances, keyed by component-instance
+	//! index. A bag has no nested runtime, so it needs its own index space; without
+	//! it every inline instance threw "inline component instances are not supported".
+	std::map<std::uint32_t, std::unordered_map<std::string, WASM::ComponentFunction>>
+			inlineInstanceFunctions_;
 	std::vector<WASM::Callable> coreFuncs_; //!< The canon-produced core functions, by core function index.
 	std::vector<WASM::LinearMemory*> coreMemories_; //!< The core memories, by core memory index.
 	std::vector<WASM::ImportedTable> coreTables_; //!< The core tables, by core table index.

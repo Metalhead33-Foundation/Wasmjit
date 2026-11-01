@@ -2126,9 +2126,34 @@ void ComponentRuntime::processComponent(uint32_t index)
 void ComponentRuntime::processComponentInstance(
 		const WASM::ComponentInstance& instance)
 {
-	if (instance.kind != WASM::ComponentInstance::Kind::Instantiate)
-		throw std::runtime_error(
-				"component runtime: inline component instances are not supported");
+	// CM12: an inline bag needs its own index space, keyed by the *component
+	// instance index*. Recovering it by address keeps the method signature (and
+	// therefore the exported symbol) unchanged, which G2 of
+	// docs/API_ABI_STABILITY.md requires.
+	std::uint32_t index = 0;
+	for (std::size_t i = 0; i < component_.instances.size(); ++i) {
+		if (&component_.instances[i] == &instance) {
+			index = static_cast<std::uint32_t>(i);
+			break;
+		}
+	}
+	if (instance.kind == WASM::ComponentInstance::Kind::InlineExports) {
+		// CM12: an inline bag re-exports entities the component already owns. Only
+		// functions can be re-exported today; the other sorts need a component-side
+		// index space this runtime does not keep.
+		auto& bag = inlineInstanceFunctions_[index];
+		for (const WASM::InlineExport& exportDecl : instance.exports) {
+			if (exportDecl.sortIndex.sort != WASM::ComponentSort::Func)
+				throw std::runtime_error(
+						"component runtime: inline instance export sort is not supported");
+			if (exportDecl.sortIndex.index >= componentFuncs_.size())
+				throw std::runtime_error(
+						"component runtime: inline instance func export is out of bounds");
+			bag.emplace(exportDecl.name.name,
+					componentFuncs_[exportDecl.sortIndex.index]);
+		}
+		return;
+	}
 	if (instance.componentIndex >= nestedComponents_.size())
 		throw std::runtime_error(
 				"component runtime: component instance target is not a nested component");
@@ -2151,6 +2176,17 @@ void ComponentRuntime::processAlias(const WASM::Alias& alias)
 		if (alias.sort.sort != WASM::ComponentSort::Func)
 			throw std::runtime_error(
 					"component runtime: only component function export aliases are supported");
+		// CM12: an inline bag is not a nested runtime, so resolve it from its own
+		// index space before falling back to the instantiate-order vector.
+		const auto bag = inlineInstanceFunctions_.find(alias.instanceIndex);
+		if (bag != inlineInstanceFunctions_.end()) {
+			const auto it = bag->second.find(alias.name);
+			if (it == bag->second.end())
+				throw std::runtime_error(
+						"component runtime: inline instance export is not a function");
+			componentFuncs_.push_back(it->second);
+			return;
+		}
 		if (alias.instanceIndex >= nestedRuntimes_.size())
 			throw std::runtime_error(
 					"component runtime: component alias instance index out of bounds");
