@@ -289,7 +289,7 @@ until someone proves a need for more.
 |---|---|
 | Does it demote a class-E blocker? | **No.** Orthogonal to [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md): it changes *how* a backend is loaded, not what a backend must do. |
 | Does it strengthen G3? | **Yes.** A loaded plugin is a second implementation of the seam that can be tested as a black box — exactly the `AAS10` evidence G3 lacks. |
-| Does it add a frozen surface? | **Yes**, and that is the price: `wasmjit_backend.h` becomes surface **S10** of `API_ABI_STABILITY.md` §2.2, with its own `abi_version` (currently **2**: the build-kind field of §7.7). |
+| Does it add a frozen surface? | **Yes**, and that is the price: `wasmjit_backend.h` becomes surface **S10** of `API_ABI_STABILITY.md` §2.2, with its own `abi_version` (currently **3**: 2 added the build-kind field of §7.7, 3 added the `releaseInstance` slot of the unloader). |
 | Does it conflict with `ES-4` (hidden visibility)? | It *depends* on it: the helper ABI must be exported deliberately. Without `ES-4`, the plugin ABI is "23k symbols and hope". |
 | Does it require `ES-2` (no global `Store`)? | Not strictly, but §6 rule 1 is unenforceable in practice until the core is one shared object and the singleton is gone. |
 

@@ -77,6 +77,22 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 	}
 }
 
+void ModuleCompiler::releaseInstance(WASM::ModuleInstance& instance) noexcept
+{
+	// `sljit_generate_code` handed back executable memory from the process-wide
+	// allocator; nothing else owns it once the per-body compiler object is freed.
+	// `rawFnPtr` is the same address as `fnPtr` here (no trampoline wraps it), so
+	// freeing fnPtr and clearing both is enough — and clearing makes a second
+	// call harmless (`ModuleInstantiator::releaseInstance`'s contract).
+	for (WASM::Callable& callable : instanceInternals(instance).internalCallables) {
+		if (callable.fnPtr != nullptr)
+			sljit_free_code(callable.fnPtr, nullptr);
+		callable.fnPtr = nullptr;
+		callable.rawFnPtr = nullptr;
+		callable.tailEntry = nullptr;
+	}
+}
+
 void ModuleCompiler::callStartFunction(WASM::ModuleInstance& instance, uint32_t funcIdx,
 		WASM::ModuleInstanceInternals& internals)
 {

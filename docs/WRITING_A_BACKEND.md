@@ -326,6 +326,16 @@ shape.
    code. If your toolkit can interpret instead, expose that as a capability and a
    configuration, not as a core fallback
    ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §7.6).
+6. **Give the code back when the instance is unloaded.** `Runtime::unload` calls
+   `ModuleInstantiator::releaseInstance` with the instance still alive; a backend
+   that owns executable memory outside a per-instance compilation context must
+   free it there. The default is a no-op, which is right for a backend whose
+   context *is* the instance's (the runtime destroys one backend instance per
+   module, so `jit_context_destroy`/`JitRuntime` teardown frees the code). The
+   SLJIT backend is the worked example: it keeps no context and frees each entry
+   point explicitly. `releaseInstance` must not throw, must be idempotent (clear
+   what you free), and must not touch the instance's memories — the destructor
+   does that afterwards.
 
 ## 10. Helpers: what you call, what you bring
 
@@ -388,8 +398,13 @@ nothing is interpreted, and no half-emitted code is ever installed.
 | no `call`/`call_indirect` | needs the call ABI plus type checks; direct calls are the next step | later |
 | no memory/globals/SIMD/exceptions | the helper layer and the GC layout are whole projects of their own | LibJIT |
 | references are refused, not half-owned | neither this scaffold nor Asmjit lowers `ref.*`/`struct.*`/`array.*`; a reference it moves without counting is worse than one it refuses. When either adds them, [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) §6 “Reference ownership” is the rule to implement, not an optional refinement | LibJIT (`emitReferenceParameterRetains`) |
-| generated code is never freed | `ModuleInstantiator` has no instance-teardown hook, so there is nowhere safe to `sljit_free_code` | documented leak; LibJIT keeps its context alive the same way |
 | one executable mapping per function | the W^X allocator maps each block separately | acceptable for a provisional backend; the default pooled allocator trades W^X for density |
+
+The list no longer contains "generated code is never freed": since the unloader
+shipped (2026-11-01), `Runtime::unload` — and runtime teardown — reaches
+`releaseInstance`, which is where this backend calls `sljit_free_code` for every
+entry point it handed out. That row is now a *requirement* a backend satisfies,
+not a limitation it documents (§9 item 6).
 
 `Sljit.pro` compiles the vendored `extern/sljit` sources into `libSljit.so` — no
 external `-lsljit` — and defines `SLJIT_WX_EXECUTABLE_ALLOCATOR=1` so the
@@ -434,6 +449,7 @@ this note only if the failure is **documented and refused**, not silently wrong.
 | Reference ownership matches the model | the `[gc]` reclaim test, plus a function that returns a fresh object stored in a reference **parameter** (§6) |
 | The installed-header consumer works with you | `Test/install-check.sh` with your backend selected |
 | A plugin build loads and refuses mismatches | `[plugin]` against your `.so` |
+| Unloading gives the code back | `Runtime::unload` returns true, `releaseInstance` runs, and the module re-instantiates and runs again (`[runtime]` has both cases) |
 
 If a check cannot pass, the honest outcome is a documented deviation in your own
 note plus a `WASMJIT_CAP_*` flag that makes the runtime refuse the unsupported

@@ -157,6 +157,22 @@ public:
 	/** \brief Returns the number of live module instances owned by this runtime. \return Instance count. */
 	std::size_t           instanceCount() const noexcept;
 
+	//! \par Unloading — the `dlclose` half of the module-lifetime model
+	//! Destroys the instance of `module` and gives back everything it owned: the
+	//! backend's compiled code, its callable range, its memories, tables and GC
+	//! regions. The `Module` itself stays loaded (`modules_`), so the same module
+	//! can be instantiated again afterwards.
+	//!
+	//! What unload *invalidates*, and the host must therefore drop first: every
+	//! `Callable` obtained from the instance (`callExport` handles, exports
+	//! published into a `RegistryImportResolver`), every `ModuleInstance&` of
+	//! that module, and every reference obtained from its heap. The engine
+	//! cannot detect a stale `Callable` — it is a raw code pointer — so this is a
+	//! documented precondition, not a checked one. The one case it *does* check
+	//! is re-entrancy: an instance with a call in flight is refused.
+	/** \brief Unloads one module's instance and its backend resources. \param module Module whose instance is destroyed; it must have been instantiated by this runtime. \return true when an instance was unloaded, false when there was none. \throws std::runtime_error when a call is in flight on that instance. */
+	bool unload(const Module& module);
+
 	//! \brief Calls
 	//! The lookup happens once; the calling convention does not change
 	//! (docs/ABI.md). A missing export, or an export with no compiled body, is a
@@ -245,7 +261,14 @@ private:
 			const CompilationPolicy& policy);
 
 	std::string backendName_; //!< selected backend name (BP-2)
+	//! Prototype backend for capability queries and configuration refusal. Each
+	//! instance gets its own from the registry, so compiled code belongs to the
+	//! module that produced it and can be given back by `unload`.
 	BackendInstance backend_; //!< owned backend session
+	//! Re-creates the selected backend for one module. A compiled-in backend is
+	//! re-created by name; a plugin by the path it was loaded from, because a
+	//! runtime must keep working when `WASMJIT_BACKEND_PATH` changes afterwards.
+	BackendFactory backendFactory_;
 	RuntimeConfig config_; //!< creation knobs
 	//! The optimization level the last successful instantiation achieved.
 	OptimizationLevel achievedLevel_ = OptimizationLevel::Basic;
@@ -256,7 +279,14 @@ private:
 	//! store and no thread-local fallback.
 	Store store_;
 	std::vector<std::shared_ptr<const Module>> modules_; //!< loaded modules kept alive
-	std::unordered_map<const Module*, std::unique_ptr<ModuleInstance>> instances_; //!< at most one instance per module
+	//! One instance and its backend per module. Declaration order is
+	//! destruction order reversed: `instance` is declared last so it dies first,
+	//! which unregisters the callable range before the backend frees the code.
+	struct LoadedModule {
+		BackendInstance backend; //!< the backend that compiled this module
+		std::unique_ptr<ModuleInstance> instance; //!< the adopted instance
+	};
+	std::unordered_map<const Module*, LoadedModule> instances_; //!< at most one instance per module
 };
 
 template<typename Ret, typename... Args>

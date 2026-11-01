@@ -1912,6 +1912,16 @@ ComponentRuntime::ComponentRuntime(ModuleInstantiator& instantiator,
 
 ComponentRuntime::~ComponentRuntime()
 {
+	// A component compiles its embedded core modules through the borrowed
+	// instantiator, so it owns the compiled code of each core instance even
+	// though the instantiator outlives it. Give that memory back before the
+	// instances themselves go away — a backend whose code lives in a per-instance
+	// compilation context needs no work here, and one that owns code explicitly
+	// frees it in the hook (docs/WRITING_A_BACKEND.md §9).
+	for (const std::unique_ptr<CoreInstanceHandle>& handle : coreInstances_) {
+		if (handle && handle->moduleInstance)
+			instantiator_.releaseInstance(*handle->moduleInstance);
+	}
 	for (void* closure : lowerClosures_)
 		if (closure)
 			ffi_closure_free(closure);

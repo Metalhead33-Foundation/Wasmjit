@@ -130,13 +130,35 @@ Runtime::Runtime(std::string backendName, BackendInstance backend, RuntimeConfig
 		backend_.instantiator->setCompilationPolicy(config_.compilation);
 		backend_.instantiator->setStackReserveBytes(config_.execution.stackReserveBytes);
 	}
+	// How to build the next backend instance: by name for a compiled-in backend,
+	// by the recorded path for a plugin. Re-resolving a plugin by name would read
+	// `WASMJIT_BACKEND_PATH` again, which the embedder may have changed since
+	// `create()` (a runtime must not depend on that variable staying set).
+	if (!backend_.pluginPath.empty()) {
+		const std::string path = backend_.pluginPath;
+		backendFactory_ = [path] { return loadBackendPluginFile(path); };
+	} else {
+		const std::string name = backendName_;
+		backendFactory_ = [name] { return createBackendInstance(name); };
+	}
 	// The runtime's continuation settings live in its store (CFG-4); a field
 	// left at "inherit" follows the live process default.
 	store_.setContinuationSettings(config_.continuation);
 	achievedLevel_ = config_.compilation.level;
 }
 
-Runtime::~Runtime() = default;
+Runtime::~Runtime()
+{
+	// Give every backend a chance to release the compiler state it handed out
+	// while the instance (and therefore its internals) is still alive. The map
+	// then destructs each entry in declaration order: `instance` first, which
+	// unregisters the callable range and releases the memories; `backend` second,
+	// which frees the compilation context and the code compiled into it.
+	for (auto& entry : instances_) {
+		if (entry.second.backend.instantiator)
+			entry.second.backend.instantiator->releaseInstance(*entry.second.instance);
+	}
+}
 
 std::unique_ptr<Runtime> Runtime::create(std::string_view backend, const RuntimeConfig& config)
 {
@@ -197,7 +219,7 @@ ModuleInstance& Runtime::instantiate(const Module& module, ImportResolver& impor
 
 	const auto existing = instances_.find(&module);
 	if (existing != instances_.end())
-		return *existing->second; // idempotent: one instance per Module
+		return *existing->second.instance; // idempotent: one instance per Module
 
 	if (!backend_.instantiator)
 		throw std::runtime_error("the runtime has no backend instantiator");
@@ -219,11 +241,11 @@ ModuleInstance& Runtime::instantiate(const Module& module, ImportResolver& impor
 				bookInterpreterFallback(failure.what());
 			else
 				bookReducedCompilation(policy.level, next->level, failure.what());
-			// A failed compile poisons the backend's context, so a retry needs a
-			// fresh backend instance: this is a pre-compile choice per attempt,
-			// never a retry inside one (docs/proposals/COMPILER_POLICY.md CPD3).
-			backend_ = createBackendByName(backendName_);
-			backend_.instantiator->setStackReserveBytes(config_.execution.stackReserveBytes);
+			// A failed compile poisons its own backend instance; the attempt-local
+			// one was destroyed with the exception, so the next attempt builds a
+			// fresh one in `adoptInstance`. This is a pre-compile choice per
+			// attempt, never a retry inside one (docs/proposals/COMPILER_POLICY.md
+			// CPD3).
 			policy = *next;
 		}
 	}
@@ -232,17 +254,53 @@ ModuleInstance& Runtime::instantiate(const Module& module, ImportResolver& impor
 ModuleInstance& Runtime::adoptInstance(const Module& module, ImportResolver& imports,
 		const CompilationPolicy& policy)
 {
-	backend_.instantiator->setCompilationPolicy(policy);
-	std::unique_ptr<ModuleInstance> instance = backend_.instantiator->instantiate(
+	// One backend instance per module: the compiled code then belongs to the
+	// module that produced it, which is what makes `unload` able to give it back
+	// (a shared context could only be freed by tearing every module down).
+	BackendInstance backend = backendFactory_();
+	if (!backend.instantiator)
+		throw std::runtime_error("the backend refused to create an instantiator");
+	backend.instantiator->setCompilationPolicy(policy);
+	backend.instantiator->setStackReserveBytes(config_.execution.stackReserveBytes);
+
+	std::unique_ptr<ModuleInstance> instance = backend.instantiator->instantiate(
 			module, imports, config_.hostBridge, config_.profile);
 	if (!instance)
 		throw std::runtime_error("the backend refused to instantiate the module");
 
 	// Adoption happens only after a successful attempt, so a discarded attempt
-	// never becomes visible; its destructor gives back what it charged.
+	// never becomes visible; its destructor gives back what it charged, and its
+	// backend instance dies with this scope.
 	ModuleInstance& reference = *instance;
-	instances_.emplace(&module, std::move(instance));
+	instances_.emplace(&module,
+			LoadedModule{ std::move(backend), std::move(instance) });
 	return reference;
+}
+
+bool Runtime::unload(const Module& module)
+{
+	const auto it = instances_.find(&module);
+	if (it == instances_.end())
+		return false;
+
+	ModuleInstance& instance = *it->second.instance;
+	if (instance.inCall()) {
+		throw std::runtime_error("cannot unload a module while a call is in flight on"
+				" its instance; return from the call first (Runtime::unload)");
+	}
+
+	// The hook runs while the instance — and so its internals — is still alive,
+	// which is what lets a backend free the executable memory it handed out.
+	if (it->second.backend.instantiator)
+		it->second.backend.instantiator->releaseInstance(instance);
+
+	// Destroying the instance unregisters its callable range, releases the
+	// memories and tables it created and credits its GC regions (CFG-9);
+	// destroying the backend gives the compilation context — and therefore the
+	// generated code — back to the system.
+	it->second.instance.reset();
+	instances_.erase(it);
+	return true;
 }
 
 BackendCompilationCapabilities Runtime::compilationCapabilities() const
@@ -255,7 +313,7 @@ BackendCompilationCapabilities Runtime::compilationCapabilities() const
 bool Runtime::owns(const ModuleInstance& instance) const noexcept
 {
 	for (const auto& entry : instances_) {
-		if (entry.second.get() == &instance)
+		if (entry.second.instance.get() == &instance)
 			return true;
 	}
 	return false;
@@ -273,13 +331,13 @@ bool Runtime::ownsModule(const Module& module) const noexcept
 ModuleInstance* Runtime::instanceOf(const Module& module) noexcept
 {
 	const auto it = instances_.find(&module);
-	return it == instances_.end() ? nullptr : it->second.get();
+	return it == instances_.end() ? nullptr : it->second.instance.get();
 }
 
 const ModuleInstance* Runtime::instanceOf(const Module& module) const noexcept
 {
 	const auto it = instances_.find(&module);
-	return it == instances_.end() ? nullptr : it->second.get();
+	return it == instances_.end() ? nullptr : it->second.instance.get();
 }
 
 bool Runtime::hasInstance(const Module& module) const noexcept
@@ -302,9 +360,10 @@ void Runtime::safepoint()
 	// (normally after joining its threads), because a call can start between
 	// the check and gcCollect().
 	for (auto& entry : instances_) {
-		if (entry.second->inCall())
+		ModuleInstance& instance = *entry.second.instance;
+		if (instance.inCall())
 			continue;
-		entry.second->gcCollect();
+		instance.gcCollect();
 	}
 }
 

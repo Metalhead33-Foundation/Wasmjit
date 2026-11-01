@@ -174,3 +174,62 @@ TEST_CASE("ES-2 option B: separate stores own separate heaps and artifacts", "[r
 	REQUIRE_FALSE(second.gc().owns(object));
 	first.gc().releaseSet(set);
 }
+
+TEST_CASE("runtime: unload destroys one instance and keeps the module loaded", "[runtime]")
+{
+	// The `dlclose` half of the module-lifetime model: an instance can be given
+	// back without touching its sibling modules, and the Module can be
+	// instantiated again afterwards.
+	auto runtime = WASM::Runtime::create("libjit");
+	REQUIRE(runtime != nullptr);
+
+	auto module = runtime->loadBytes(TestFixtures::answerModuleBytes());
+	WASM::RegistryImportResolver imports;
+
+	WASM::ModuleInstance& first = runtime->instantiate(*module, imports);
+	REQUIRE(runtime->callExport<std::int32_t>(first, "answer") == 42);
+	REQUIRE(runtime->instanceCount() == 1);
+
+	REQUIRE(runtime->unload(*module));
+	REQUIRE(runtime->instanceCount() == 0);
+	REQUIRE_FALSE(runtime->hasInstance(*module));
+	REQUIRE(runtime->instanceOf(*module) == nullptr);
+
+	// Unloading something that is not instantiated is a no-op, not an error.
+	REQUIRE_FALSE(runtime->unload(*module));
+
+	// The Module is still loaded, so the same bytes instantiate again — with a
+	// fresh backend instance, which is what makes the code new rather than stale.
+	WASM::ModuleInstance& second = runtime->instantiate(*module, imports);
+	REQUIRE(runtime->instanceOf(*module) == &second);
+	REQUIRE(runtime->callExport<std::int32_t>(second, "answer") == 42);
+}
+
+TEST_CASE("runtime: unload frees a provisional backend's generated code", "[runtime]")
+{
+	// SLJIT is the backend that has to free its code explicitly
+	// (`ModuleInstantiator::releaseInstance`); this case is the only one that
+	// exercises that path end to end.
+	if (!WASM::hasBackend("sljit"))
+		SKIP("the sljit backend is not built into this configuration");
+
+	auto runtime = WASM::Runtime::create("sljit");
+	REQUIRE(runtime != nullptr);
+
+	auto module = runtime->loadBytes(TestFixtures::answerModuleBytes());
+	WASM::RegistryImportResolver imports;
+
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+	REQUIRE(runtime->callExport<std::int32_t>(instance, "answer") == 42);
+
+	REQUIRE(runtime->unload(*module));
+	REQUIRE(runtime->instanceCount() == 0);
+
+	// Instantiate and unload twice more: a double free or a stale entry point
+	// would show up here rather than in production.
+	for (int round = 0; round < 2; ++round) {
+		WASM::ModuleInstance& again = runtime->instantiate(*module, imports);
+		REQUIRE(runtime->callExport<std::int32_t>(again, "answer") == 42);
+		REQUIRE(runtime->unload(*module));
+	}
+}

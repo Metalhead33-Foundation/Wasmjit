@@ -504,6 +504,31 @@ public:
 	/** \brief Reports this backend's compilation capabilities. \return The levels and fallback modes it can honour. */
 	virtual BackendCompilationCapabilities compilationCapabilities() const;
 
+	/*!
+	 * \brief Releases the backend resources a single instance still owns.
+	 *
+	 * Called by the runtime before it destroys an instance (`Runtime::unload`
+	 * and `~Runtime`), while the instance — and therefore its `internals` — is
+	 * still alive. A backend that hands executable memory back to the system
+	 * does it here; a backend whose code lives in a per-instance compilation
+	 * context needs no override, because
+	 * destroying that context frees the code.
+	 *
+	 * \par Contract
+	 * - Must not throw: the instance is already being torn down.
+	 * - Must be idempotent for the same instance (a second call must not free
+	 *   anything twice); the recommended shape is to clear each entry point it
+	 *   frees.
+	 * - Must not touch the `Module`, the `Store` or the instance's memories:
+	 *   the instance destructor does that afterwards.
+	 * - After this call the instance's `Callable::fnPtr` values are invalid, so
+	 *   no call may reach the instance again (the runtime refuses to unload
+	 *   while `ModuleInstance::inCall()` is true).
+	 *
+	 * \param instance Instance whose backend-owned resources are released.
+	 */
+	virtual void releaseInstance(ModuleInstance& instance) noexcept;
+
 	//! \par Execution limits (docs/proposals/CONFIGURATION.md `CFG-6`)
 	//! The host stack reserve a created instance installs. `0` keeps
 	//! `kDefaultStackReserveBytes`.
@@ -516,6 +541,18 @@ public:
 protected:
 	//! Evaluates a constant expression against this instance's state.
 	Value evalConstantExpr(const std::span<const std::byte>& expr, ModuleInstance& instance);
+	/*!
+	 * \brief The instantiation state of one instance, for a backend's release hook.
+	 *
+	 * `ModuleInstanceInternals` is private to `ModuleInstance` and this class is
+	 * its friend, so a derived backend cannot reach the member directly. This
+	 * accessor is the narrow seam: it exposes exactly the struct the four
+	 * compilation hooks already receive, and nothing else.
+	 *
+	 * \param instance Instance whose state is returned.
+	 * \return The instance's mutable instantiation state.
+	 */
+	static ModuleInstanceInternals& instanceInternals(ModuleInstance& instance) noexcept;
 	//! Lower the module's types into the backend's representation, so the
 	//! declared and the compiled functions agree on one ABI.
 	virtual void translateTypes(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals) = 0;

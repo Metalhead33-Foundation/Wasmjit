@@ -422,6 +422,10 @@ public:
     // config's bridge are borrowed and must outlive it.
     ModuleInstance& instantiate(const Module& module, ImportResolver& imports);
     ModuleInstance* instanceOf(const Module& module) noexcept;   // null before instantiate
+    // Unload (the `dlclose` half): destroys one instance, frees the code the
+    // backend compiled for it, and keeps the Module loaded so it can be
+    // instantiated again. Refused while a call is in flight on that instance.
+    bool unload(const Module& module);
 
     // Calls: the lookup happens once; the ABI does not change.
     template <typename Ret, typename... Args>
@@ -735,9 +739,9 @@ check. The embedding surface is what the installed `wasmjit/wasmjit.hpp` exposes
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (**2026-11-01**, `8c87f5f`) | **16,543 assertions in 547 cases, green** | The `ES-*`, `BP-*`, `CP-*`, `CFG-*` and multi-agent additions are additive: every earlier assertion still passes. The 2026-10-29 run (11,454 / 481) in the milestone notes is the dated baseline. |
-| `[docs]` lint | **1009 assertions / 2 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all three folders (§9 of `DOCUMENTATION.md`), so this note's index row is checked too |
-| `[runtime]` | 46 assertions / 7 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents, and the store-scoping proof (two stores, two heaps, an artifact records its store). |
+| Default suite (**2026-11-01**, `8c87f5f`) | **16,565 assertions in 549 cases, green** | The `ES-*`, `BP-*`, `CP-*`, `CFG-*` and multi-agent additions are additive: every earlier assertion still passes. The 2026-10-29 run (11,454 / 481) in the milestone notes is the dated baseline. |
+| `[docs]` lint | **1013 assertions / 2 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all three folders (§9 of `DOCUMENTATION.md`), so this note's index row is checked too |
+| `[runtime]` | 64 assertions / 9 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents, the store-scoping proof (two stores, two heaps, an artifact records its store), and the unloader (one instance destroyed, the module re-instantiated, a provisional backend's code freed twice over). |
 | `[concurrency]` | 80 assertions / 13 cases, green | The model claim, the `Single` refusal, re-entrant invocation across threads, the `MF-2` guard, the `MF-3`/`MF-4` safepoint rules and the multi-agent suite. |
 | `[multiagent]` | 51 assertions / 6 cases, green | Two agents on one instance: acquire-release, wait/notify, shared-global RMW, traps, GC stress, reference barrier. |
 | `[backendabi]` | 36 assertions / 4 cases, green | The POD signature/layout views (`WasmBackendAbi.hpp`) match `ABI.md`'s tuple rule. |

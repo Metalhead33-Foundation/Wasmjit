@@ -450,6 +450,49 @@ component grammar into an AST:
 | ~~CM9~~ | ~~**No WASI 0.2 interfaces.**~~ **Closed by contract:** WASI is an embedder interface; a `wasi:*` import is an ordinary host component import resolved by the embedder. No engine-side WASI implementation is required by the Component Model. | `WasmBase/WasmComponentRuntime.*`, `Test/main.cpp` host-import tests | Closed (host-provided) |
 | ~~CM10~~ | ~~**No error-context, async copy or threading built-ins.**~~ **Done:** `error-context.new/debug-message/drop`, stream/future copy/cancel/forward, task/context/backpressure, waitable sets, subtasks and the component async interfaces exist. `thread.*` returns single-agent answers (`index` 0, `yield` no-op, `available-parallelism` 1) and traps for thread creation, which requires a multi-agent backend. | `WasmComponentAsync.hpp`, `WasmBase/WasmComponentRuntime.*` | Closed (single-agent) |
 
+### 5.1 Maturity: what is mature, what the ceiling is, and what is deliberately refused
+
+**Verdict (2026-11-01): functionally mature, conformance-wise bounded.** Every gap
+`CM1`–`CM10` is closed, `CM-0`…`CM-8` shipped, and the surface is exercised by the
+component fixtures under `Test/wasm_wat/component_*.wat` plus the C++ runtime
+tests and the structured `WastScript` path. A component with embedded core
+modules, `canon lift`/`lower`, strings/lists/records/maps, resources, streams,
+futures and start/value definitions runs. What "more mature" would mean is
+therefore **not more features** — it is an *oracle* and a *lifecycle*.
+
+| Axis | State | What would move it |
+|---|---|---|
+| Feature surface | mature (§5 above) | nothing outstanding; `thread.*` creation is a THREADS deferral, not a component gap |
+| **Conformance** | **bounded by our own fixtures** — the upstream component-model corpus is not in `extern/WasmTestsuite` (it has no `component*` files at all), so the tests are written from the specification text, not checked against its authors' cases | **`CM-9` (proposed, not started):** vendor the upstream corpus the way `wast_supported.txt` vendors the core one, curate it, and record pass/skip per case |
+| Lifecycle | **matured 2026-11-01:** `ComponentRuntime::~ComponentRuntime` now calls `ModuleInstantiator::releaseInstance` for every core instance it created, so a component's compiled code is given back instead of leaking until the process ends | — (shipped; see `WRITING_A_BACKEND.md` §9 item 6) |
+| Multi-agent | single-agent by decision (`CMD3`) | a real scheduler is `THREADS.md` `TH-5`, not this note |
+
+Three behaviours are **named boundaries** rather than silent gaps — each refuses
+by name, and each is where "more mature" would start if the corpus in `CM-9`
+shows a valid component that needs it:
+
+1. **An inline core export of a sort other than `func`/`memory`** throws
+   `inline core export sort is not supported` (`WasmComponentRuntime.cpp`). The
+   parser and the handle model the export bag; the runtime populates functions and
+   memories only, because the component's core index spaces today carry exactly
+   those two sorts.
+2. **An inline *component* instance** (a component instance built from inline
+   exports rather than by instantiating a nested component) is parsed — a test
+   asserts `ComponentInstance::Kind::InlineExports` survives parsing — but the
+   runtime refuses to execute it: `inline component instances are not supported`.
+   That is the largest remaining functional gap, and it is deliberately not
+   guessed at without an oracle.
+3. **One canonical builtin** is refused by name in the same file; the rest of the
+   `canon` surface (`lift`, `lower`, `resource.*`, `stream.*`, `future.*`,
+   `task.*`, `context.*`, `backpressure.*`, `error-context.*`, `thread.*`) is
+   implemented or single-agent-answered.
+
+The rule this section enforces: **a refusal that names itself is a decision; a
+refusal that crashes or mis-executes is a gap.** All three above are the former,
+and the note records them so `CM-9` can turn them into the latter only with
+evidence.
+
+
 ## 6. Where we can and should play fast and loose
 
 All of these follow from the house rule in [`../ABI.md`](../ABI.md): this is a

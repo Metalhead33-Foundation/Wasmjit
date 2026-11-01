@@ -461,14 +461,14 @@ the implementation diverged, and why:
    as its name" turned out not to arise: `Runtime::create` accepts a name, and
    the same name resolves the same way on a retry. A plugin installed by path is
    loaded through `loadBackendPluginFile()`, which is not the `Runtime` path.
-3. **The descriptor's `abi_version` was *not* bumped.** The plan said `CP-1`
-   must bump it because a data member and a virtual slot change the layout a
-   plugin was built against. The member and the virtual shipped;
-   `WASMJIT_BACKEND_ABI_VERSION` is still `2`
-   (`WasmBase/wasmjit_backend.h`). **This is the one open item of the plan** — an
-   in-tree build is unaffected, a prebuilt plugin is not refused at query time.
-   It is recorded here rather than silently closed, and `CP-6`'s tiering work
-   would want the same bump.
+3. **The descriptor's `abi_version` was bumped on 2026-11-01 — item closed.** The
+   plan said `CP-1` must bump it because a data member and a virtual slot change
+   the layout a plugin was built against. `CP-1` shipped the member and the
+   virtual without the bump (recorded here since revision 4); the unloader's
+   `releaseInstance` virtual then made the hazard real, so
+   `WASMJIT_BACKEND_ABI_VERSION` went to **3**. A plugin built against 2 is now
+   refused at query time instead of reading a stale vtable, which is what the
+   plan asked for in the first place.
 4. **`WASM::CompileFailure` was added.** The plan only said "throws"; a named
    type is what lets `Lax` distinguish a retryable compile failure from an
    unrelated error, so it is now part of the contract

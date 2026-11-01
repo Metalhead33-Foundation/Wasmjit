@@ -28,8 +28,13 @@ extern "C" {
 #endif
 
 /*! The backend-plugin ABI version: the host refuses a descriptor that reports
- *  a different value before it touches any other pointer. */
-#define WASMJIT_BACKEND_ABI_VERSION 2u
+ *  a different value before it touches any other pointer.
+ *
+ *  History: 2 added `build_flags`; **3** added the `ModuleInstantiator::releaseInstance`
+ *  virtual slot (the unloader, docs/WRITING_A_BACKEND.md §9), which changes the
+ *  vtable a plugin was built against — so a plugin built against 2 is refused at
+ *  load time instead of calling through a stale slot. */
+#define WASMJIT_BACKEND_ABI_VERSION 3u
 
 /*!  Capability flags (wasmjit_capabilities.flags). A plugin declares what it can
  * compile; the runtime may refuse a module before codegen. */

@@ -331,7 +331,7 @@ BackendInstance loadBackendPluginFile(const std::string& path)
 					destroy(instance);
 			});
 	return BackendInstance{ std::move(instantiator),
-		std::shared_ptr<void>(handle, [](void*) {}) };
+		std::shared_ptr<void>(handle, [](void*) {}), path };
 #endif
 }
 

@@ -74,8 +74,10 @@ owning note. Anything else is a breaking change and needs a new milestone
 decision, not a commit.
 
 **S10 is the backend plugin descriptor.** `wasmjit_backend.h` is surface **S10**
-of §2.2 with its own `abi_version` (currently **2**; the build-kind field landed
-with `BACKEND_PLUGIN_ABI.md` §7.7). The descriptor is layout-pinned, versioned
+of §2.2 with its own `abi_version` (currently **3**: 2 added the build-kind field,
+3 adds the `ModuleInstantiator::releaseInstance` slot the unloader needs — a
+plugin built against 2 is refused at load time rather than calling through a
+stale vtable, which closes the item `COMPILER_POLICY.md` §7.1 left open). The descriptor is layout-pinned, versioned
 and checked before any other plugin call; a change to a field's meaning bumps
 `WASMJIT_BACKEND_ABI_VERSION`, not the core's.
 
@@ -279,7 +281,7 @@ Built out-of-source with `env MAKE=/usr/bin/make /usr/bin/make -j16
 QMAKE=/usr/bin/qmake6` → **exit 0**. Suite (§11 for the full table): default run
 **11,454 assertions / 481 test cases, all passing**; non-spec subset 11,014 / 285;
 the proposal-documentation lint `[docs]` 839 assertions (two cases: the note
-shape and the note tree — **1,009** on 2026-11-01). The documented negative-module measurement is
+shape and the note tree — **1,013** on 2026-11-01). The documented negative-module measurement is
 **2,382 / 2,382** binary commands handled
 ([`VALIDATION.md`](VALIDATION.md) "Measured coverage", 2026-10-18; opt-in via
 `WASM_SPEC_VALIDATE=1`).

@@ -40,6 +40,11 @@ struct BackendInstance {
 	std::shared_ptr<ModuleInstantiator> instantiator;
 	//! State the instantiator borrows and that must outlive it.
 	std::shared_ptr<void>               keepAlive;
+	//! The file a plugin was loaded from, or empty for a compiled-in backend.
+	//! `Runtime` keeps one backend instance per module, and a plugin loaded from
+	//! an explicit path cannot be re-created from its name alone, so the path
+	//! travels with the instance (docs/WRITING_A_BACKEND.md §9).
+	std::string                         pluginPath;
 };
 
 //! How a backend is created on demand: one call yields one instance.

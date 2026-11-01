@@ -41,6 +41,20 @@ public:
 	 */
 	const std::vector<std::string>& unsupportedFunctions() const { return unsupportedFunctions_; }
 
+	/*!
+	 * \brief Gives the executable memory of one instance's functions back.
+	 *
+	 * SLJIT's compiler object is freed as soon as a body is emitted, and the
+	 * generated code is owned by the process-wide executable allocator, so
+	 * nothing else frees it. This is the one backend that has to do it
+	 * explicitly (docs/WRITING_A_BACKEND.md §9, `Runtime::unload`).
+	 *
+	 * \param instance Instance whose entry points are released; its
+	 *        `Callable::fnPtr` values are cleared, which makes a second call
+	 *        harmless.
+	 */
+	void releaseInstance(WASM::ModuleInstance& instance) noexcept override;
+
 protected:
 	/*!
 	 * \brief Lowers the module's types into the backend's representation.

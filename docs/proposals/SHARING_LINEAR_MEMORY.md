@@ -1,6 +1,6 @@
 # One Memory, Many Modules — Sharing a Linear Memory Between Instances {#prop_sharing_linear_memory}
 
-Status: engine-seam study, revision 2 (2026-11-01, `8c87f5f`). It answers one
+Status: engine-seam study, revision 3 (2026-11-01, `8c87f5f`). It answers one
 question — **can a large, monolithic module and a set of small scripts share one
 linear memory, and what breaks if they do?** — by splitting it into three:
 *aliasing* (can two instances address the same bytes?), *coexistence* (can their
@@ -9,12 +9,14 @@ attribute the bytes per tenant?). The engine answers **yes**, **yes with
 build-side work**, and **no, not today** — in that order, and the order is the
 whole note.
 
-**Revision 2 adds two things:** §2.4 states the mental model the engine already
-asks embedders to hold — a long-lived module reads as a *dynamic library*, a
-short-lived one as a *script* — and §13 (Appendix D) takes the library half of
-that model to its logical conclusion: **what if the engine grew a linker?** It is
-a study, not a plan; §3's "no linker in the engine" still holds for this
-milestone.
+**Revision history.** Revision 2 added §2.4 (the mental model: a long-lived module
+reads as a *dynamic library*, a short-lived one as a *script*) and §13 (what a
+linker is, and what one would buy). **Revision 3** records the decision that came
+out of it: the **unloader shipped** (`Runtime::unload` + the
+`ModuleInstantiator::releaseInstance` hook, §13.3 rung 8), layout and re-binding
+(rungs 5–6) stay **out of scope for the short term**, and two cheaper alternatives
+are written up instead of built — a front-end allocator-injection pass (§14,
+Appendix E) and an embedder-imposed initializer contract (§15, Appendix F).
 
 **Contains no code.** §12's and §13's listings are pseudocode, labelled as such;
 the work is `SLM-1`…`SLM-6` in §7, plus `SLM-7` as a watch item that §13 scopes
@@ -53,6 +55,8 @@ already implements; what is missing is a *recipe*, a *contract* and
 | §11 | Appendix B: the language-memory-layout study (what to measure) |
 | §12 | Appendix C: pseudocode — the wiring, the layout, the allocator contract |
 | §13 | Appendix D: what a linker is, what it would buy, and what it would cost — if the engine grew one |
+| §14 | Appendix E: a front-end allocator-injection pass (documented option, no code) |
+| §15 | Appendix F: the embedder-imposed initializer contract |
 
 
 ## 2. What the scenario demands
@@ -738,13 +742,17 @@ A/B/C/E vocabulary.
 | 5 | **assign data/stack/heap layout across modules** | ❌ build-time only (`wasm-ld --global-base`, `--initial-memory`) | a representation of a module the engine can *rewrite*: data-segment offsets and global initialisers, before validation | **E** |
 | 6 | **rebind an already-built module to that layout** | ❌ | the same rewrite, plus arithmetic on every active data segment and every `i32.const`/`global.set` that seeds a base | **E** |
 | 7 | lazy binding / `PLT`-style call fixups | ❌ (not needed: a `Callable` is bound before the first call) | an indirection table the engine owns | B |
-| 8 | unload / reload a module | ❌ (code is never freed) | an instance-teardown hook the backends do not have (`WRITING_A_BACKEND.md` §11) | **C/D** |
+| 8 | unload / reload a module | ✅ **since 2026-11-01**: `Runtime::unload` destroys one instance and calls `ModuleInstantiator::releaseInstance` so the backend gives its executable memory back; the `Module` stays loaded, so `instantiate` again is the reload | — (shipped) | A |
 | 9 | per-tenant accounting | ❌ | §7 `SLM-5` | C |
 
-**Rungs 5–6 are the entire question.** Everything below them is the resolver we
-already have; rung 7 buys little (the binding is already eager and cheap); rungs
-8–9 are separate decisions that a linker does not solve. So the honest phrasing of
-"should the engine link?" is:
+**Rungs 5–6 are the whole question, and they are explicitly out of scope for
+the short term** (a decision, not an omission — §13.7 keeps the trigger that
+would reopen it). Everything below them is the resolver we already have; rung 7
+buys little (the binding is already eager and cheap); **rung 8 shipped**, which is
+what makes "the engine has no `dlclose`" no longer true: an instance can be given
+back without touching its siblings, and re-instantiating the same `Module` is the
+reload. Rung 9 is a separate decision that a linker does not solve. So the honest
+phrasing of "should the engine link?" is:
 
 > Should the engine be able to **rewrite a module's fixed offsets** after the
 > layout of its neighbours is known?
@@ -763,8 +771,8 @@ rather than leaving the phrase "grow a linker" to imply something cheaper.
 | "one allocator across N modules" | **no** | a build/ABI choice: one allocator module, or the host's (§10.1) |
 | "no unresolved symbols at load" | **no, already there** | `UnresolvedImportException` at instantiation |
 | "one canonical type across modules" | **no, already there** | store-scoped `TypeId` |
-| "reload a script without restarting" | **no** — that is teardown, not linking | a new `Module` + a new resolution (`SLM7`) |
-| "unload a library" | **no** — rung 8 is a backend contract change | not available; code is never freed |
+| "reload a script without restarting" | **no** — that is teardown, not linking | **shipped 2026-11-01**: `Runtime::unload` then `instantiate` again (the `Module` stays loaded) |
+| "unload a library" | **no** — a linker is not a loader | **shipped 2026-11-01** for the instance and its code; the *Module* object and a plugin's mapped image still live until the runtime dies |
 | "a smaller artifact, deduped functions" | **no** — that is link-time optimisation, i.e. the *build's* job | `wasm-ld` (`--gc-sections`, `-r`) |
 | "ship modules without needing a toolchain" | **yes** | the embedder runs `wasm-ld` today |
 
@@ -834,22 +842,24 @@ A trigger list, so `SLM-7` stays a decision instead of drifting into a roadmap:
 3. **The component model is adopted** for the scenario and its canonical-ABI
    marshalling is measured as *the* bottleneck — which would make a lower-level
    shared-memory layout worth re-examining *under* a component boundary.
-4. **Someone asks to unload a module.** That is rung 8, a backend contract change,
-   and it would pull the layout question in with it: once modules come and go, the
-   offsets have to be assigned at load time by definition.
+4. ~~**Someone asks to unload a module.**~~ **Answered 2026-11-01:** the unloader
+   shipped (`Runtime::unload` + `ModuleInstantiator::releaseInstance`), so rung 8
+   is no longer missing. It did *not* drag the layout question in with it: an
+   instance is freed per module, and the offsets are still the build's job.
 
-Until one of those fires:
+Until one of the remaining triggers fires:
 - `SLM-1`…`SLM-6` proceed as written;
 - `SLM-7` stays a watch item with the ladder in §13.3 as its cost estimate;
 - and this appendix stays what it says it is — a study, so that the next person to
   ask "why doesn't the engine just link them?" gets an answer with numbers in it
   instead of a shrug.
 
-**The one-line answer, for the record:** the engine already *resolves* and
-*dedupes* (§13.1's L1, L2, L4); the only missing job is *layout* (L3), and doing
-it at load time means rewriting modules that were built without knowledge of each
-other — class E, and a step away from the QVM model. That is why the build does
-it, and why this note ends with a recipe rather than an engine feature.
+**The one-line answer, for the record:** the engine already *resolves*, *dedupes*
+and now *unloads* (§13.1's L1, L2, L4 and rung 8); the only missing job is *layout*
+(L3), and doing it at load time means rewriting modules that were built without
+knowledge of each other — class E, and a step away from the QVM model. That is why
+the build does it, and why this note ends with a recipe rather than an engine
+feature.
 
 
 
@@ -862,3 +872,107 @@ it, and why this note ends with a recipe rather than an engine feature.
 
 
 
+
+## 14. Appendix E: frontend-only "runtime patching" (a documented option, no code)
+
+The problem rungs 5–6 would solve is *layout*: several modules, one memory, and
+nobody to assign the offsets. There is a cheaper shape that touches **no
+backend**: rewrite the module on the way in — a front-end pass, the same kind of
+pass [`LEGACY_EXCEPTIONS.md`](LEGACY_EXCEPTIONS.md) already performs for legacy
+exception handling.
+
+**The idea.** Whatever language produced the module, it imports or defines an
+allocator (`malloc`/`free`/`realloc`, or the language's own runtime allocation
+functions). A front-end pass could **inject an allocator**: import our own
+implementations into the module's import namespace and rebind every allocator
+call site to them. The heap then becomes one heap, owned by the embedder, with a
+policy the embedder chooses — a bump allocator, a size-class allocator in the
+spirit of Andrei Alexandrescu's designs, a pool per module, whatever the workload
+wants.
+
+| Aspect | Bought by injection? | Why |
+|---|---|---|
+| one heap across modules | **yes** | every allocator call lands in the same host allocator, so two modules cannot hand out the same block (§10.1's trap disappears by construction) |
+| allocator policy per workload | **yes** | the embedder picks the allocator, not the toolchain |
+| a language-independent rule | **yes** | the pass matches *symbols*, not source languages: C, C++, Rust, Zig, Kotlin/Wasm, MoonBit, AssemblyScript and Dart all end up calling something |
+| **stacks** | **no** | `__stack_pointer` is a per-module global; injecting an allocator does not give two modules one stack. Per-module stacks inside one memory remain, and their regions still have to be disjoint (§10.3 pitfall 3) |
+| **static data layout** | **partly** | relocating data segments is a second rewrite, and it is rung 6 under another name |
+| a module with no visible allocator | **no** | an inlined bump pointer, a static buffer or a language GC (Go, Kotlin/Wasm) has no `malloc` to rebind |
+
+**The hard parts, stated as work rather than as risk.**
+
+- **Recognising the allocator.** It is a *symbol name* per toolchain, and those
+  names are not stable API. The pass needs a per-toolchain table (the one §11
+  already plans) plus a fallback that leaves an unknown module alone.
+- **The ABI of the injected call.** The host function must match the module's
+  expectation exactly: size and alignment types, `realloc` semantics, and the
+  failure convention (`0` vs `-1` vs a trap). A mismatch is worse than no
+  injection.
+- **Instrumentation, not just rebinding.** A call site can be a direct `call`, an
+  indirect `call_indirect` through a table slot, or an imported function; all
+  three have to be handled, and the third means rewriting an import entry.
+- **Verification after the rewrite.** The rewritten module must be re-validated,
+  and the pass must prove it changed nothing else. That is the same obligation
+  `LEGACY_EXCEPTIONS.md` carries, and the reason that note has a test suite.
+- **GC languages.** A module with its own tracing GC has no `malloc` to rebind;
+  the pass can observe its heap, not replace it. Those languages stay on the copy
+  path (option A) or on the embedder's initializer contract (§15).
+
+**Why it is documented and not built.** It is a front-end pass with a
+per-toolchain table, an ABI contract and its own test suite — `SLM-12`'s
+"front-end hooks" study, `SLM-3`'s allocator contract and `SLM-6`'s language
+matrix at once. It is the most promising backend-neutral direction in this note,
+and the one with the clearest failure mode (a rewrite that changes behaviour), so
+it belongs behind the same gate as the rest: written down, scoped, not started
+until a §13.7 trigger fires.
+
+## 15. Appendix F: the embedder-imposed initializer contract
+
+The engine stays agnostic about data model, memory model and layout. An
+**embedder** need not be. The last option in this note is a *contract on modules*,
+not a feature of the engine:
+
+> Every module the embedder loads must export an initializer (or import and call
+> one the embedder provides) that negotiates its memory layout with the host
+> before the module is used.
+
+**How it works, with the surface the engine already has.**
+
+1. The module exports something like `init(layout_ptr: i32) -> i32`; the name is
+   the embedder's choice.
+2. The host builds a layout record — the regions it has reserved, the
+   `__heap_base`, `__data_end` and `__stack_pointer` values, the allocator entry
+   points — and calls `init` as the module's **first** export call.
+3. `init` writes the negotiated values into the module's own globals. That works
+   because per §4.3 the linker only wrote *defaults*; ordinary guest code can
+   overwrite them at runtime.
+4. The host records the answer and refuses a module that does not export `init`
+   or returns a bad one.
+
+| Aspect | Bought? | Why |
+|---|---|---|
+| a shared layout with no engine support | **yes** | the negotiation is ordinary guest code plus host policy |
+| per-module heaps that cannot collide | **yes** | each module writes its own `__heap_base` after the host assigns regions |
+| a rule that survives a new language | **yes — if** the module can be built to export `init` | the contract is on the *artifact*, not on the toolchain's allocator names |
+| blocking an uncooperative module | **yes** | the host refuses it before use; the contract is checkable |
+| sharing a *stack* | **no** | each module still has its own; the contract only makes the regions disjoint |
+| a spec-level guarantee | **no** | this is an embedder convention; a module outside it is unaffected |
+
+**Why it fits here.** It is the shape the engine already prefers: a *contract the
+backend or the host must honour*, stated as a capability and refused by name when
+it is not met (`supportsConcurrency`, `supportsProfileConfig`,
+`compilationCapabilities`). It is also the shape a modding community converges on
+by itself — "every mod shares this class library" — except the shared thing is the
+*layout* and the artifact is a `.wasm` rather than a JAR.
+
+**Its limits, plainly.** It only covers modules the embedder can *require* to
+export an initializer; a third-party module cannot be forced into it. It does not
+make an allocator safe by itself — two modules can still both `malloc` into one
+heap unless the contract also names the allocator (§10.1). And it is
+*unverifiable by the engine*: the engine sees a call to an export and a store into
+a global, and cannot tell a negotiated layout from any other store.
+
+That is why this appendix is documentation: the engine's job is to keep the
+modules' memory *addressable* and the layout *unconstrained*; the embedder's job
+is to impose a layout on the modules it controls. The two compose without a line
+of engine code.

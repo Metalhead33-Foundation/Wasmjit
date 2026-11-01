@@ -132,6 +132,22 @@ BackendCompilationCapabilities ModuleInstantiator::compilationCapabilities() con
 	return BackendCompilationCapabilities{};
 }
 
+void ModuleInstantiator::releaseInstance(ModuleInstance& instance) noexcept
+{
+	// The default is "nothing to do": a backend whose executable memory lives in
+	// a per-instance compilation context has already given it back by the time
+	// this hook could matter, because the runtime keeps one backend instance per
+	// module and destroys it right after (docs/WRITING_A_BACKEND.md §9).
+	(void)instance;
+}
+
+ModuleInstanceInternals& ModuleInstantiator::instanceInternals(ModuleInstance& instance) noexcept
+{
+	return instance.internals;
+}
+
+
+
 Callable* ModuleInstance::callableFromSegmentRef(const Value& ref)
 {
 	if (ref.ref == nullptr)
