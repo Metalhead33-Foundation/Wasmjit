@@ -483,6 +483,20 @@ std::optional<Value*> ModuleInstance::exportedGlobal(
 	return std::nullopt;
 }
 
+std::optional<GlobalType> ModuleInstance::exportedGlobalType(
+		std::string_view name) const
+{
+	for (const Export& ex : module->exports) {
+		if (ex.kind != ExternalKind::Global || ex.name != name)
+			continue;
+		if (ex.index >= module->globals.size())
+			throw std::runtime_error(
+					"module exports a global index outside its declared globals");
+		return module->globals[ex.index].type;
+	}
+	return std::nullopt;
+}
+
 std::optional<Callable> ModuleInstance::exportedFunction(std::string_view name) const
 {
 	const uint32_t importedFuncCount = static_cast<uint32_t>(module->importFunctions.size());

@@ -176,7 +176,7 @@ private:
 		std::unordered_map<std::string, WASM::Callable> inlineFunctions;
 		std::unordered_map<std::string, WASM::LinearMemory*> inlineMemories; //!< Inline memories of an export bag.
 		std::unordered_map<std::string, WASM::ImportedTable> inlineTables; //!< Inline tables of an export bag.
-		std::unordered_map<std::string, WASM::Value*> inlineGlobals; //!< Inline global cells of an export bag.
+		std::unordered_map<std::string, std::pair<WASM::Value*, WASM::GlobalType>> inlineGlobals; //!< Inline globals of an export bag, with their declared types.
 
 		std::optional<WASM::Callable> exportedFunction(
 				std::string_view name) const; //!< Looks up an exported function by name.
@@ -184,8 +184,8 @@ private:
 				std::string_view name) const; //!< Looks up an exported memory by name.
 		std::optional<WASM::ImportedTable> exportedTable(
 				std::string_view name) const; //!< Looks up an exported table by name.
-		std::optional<WASM::Value*> exportedGlobal(
-				std::string_view name) const; //!< Looks up an exported global cell by name.
+		std::optional<std::pair<WASM::Value*, WASM::GlobalType>> exportedGlobal(
+				std::string_view name) const; //!< Looks up an exported global cell and type by name.
 		void registerExports(WASM::ImportRegistrar& registrar,
 				std::string_view moduleName) const; //!< Publishes the instance exports under `moduleName`.
 	};
@@ -199,7 +199,7 @@ private:
 	std::vector<WASM::Callable> coreFuncs_; //!< The canon-produced core functions, by core function index.
 	std::vector<WASM::LinearMemory*> coreMemories_; //!< The core memories, by core memory index.
 	std::vector<WASM::ImportedTable> coreTables_; //!< The core tables, by core table index.
-	std::vector<WASM::Value*> coreGlobals_; //!< The core global cells, by core global index.
+	std::vector<std::pair<WASM::Value*, WASM::GlobalType>> coreGlobals_; //!< The core globals (cell and type), by core global index.
 	std::vector<ComponentFunction> componentFuncs_; //!< The component functions, by component function index.
 	std::vector<void*> lowerClosures_; //!< Owned trampoline closures produced by `canon lower`.
 	std::vector<void*> lowerCifs_; //!< Owned call-interface descriptors for `lowerClosures_`.

@@ -270,6 +270,8 @@ public:
 	std::optional<TableInstance*> exportedTable(std::string_view name) const;
 	/** \brief Looks up an exported global's storage cell by name. \param name Exported field name. \return Pointer to the global's cell, or `std::nullopt` when no such export exists. */
 	std::optional<Value*> exportedGlobal(std::string_view name) const;
+	/** \brief Looks up an exported global's declared type. \param name Exported field name. \return The declared type, or `std::nullopt` when no such export exists. */
+	std::optional<GlobalType> exportedGlobalType(std::string_view name) const;
 	/** \brief Publishes this instance's exports to an import registrar. \param registrar Destination registrar. \param moduleName Module name under which exports are registered. */
 	void registerExports(ImportRegistrar& registrar, std::string_view moduleName) const;
 	//! Process-wide identities of the module's type imports, in import order

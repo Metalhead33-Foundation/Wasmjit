@@ -2025,11 +2025,16 @@ std::optional<WASM::ImportedTable> ComponentRuntime::CoreInstanceHandle::exporte
 	return it->second;
 }
 
-std::optional<WASM::Value*> ComponentRuntime::CoreInstanceHandle::exportedGlobal(
-		std::string_view name) const
+std::optional<std::pair<WASM::Value*, WASM::GlobalType>>
+ComponentRuntime::CoreInstanceHandle::exportedGlobal(std::string_view name) const
 {
-	if (moduleInstance)
-		return moduleInstance->exportedGlobal(name);
+	if (moduleInstance) {
+		const auto cell = moduleInstance->exportedGlobal(name);
+		const auto type = moduleInstance->exportedGlobalType(name);
+		if (!cell || !type)
+			return std::nullopt;
+		return std::make_pair(*cell, *type);
+	}
 	const auto it = inlineGlobals.find(std::string(name));
 	if (it == inlineGlobals.end())
 		return std::nullopt;
@@ -2049,6 +2054,8 @@ void ComponentRuntime::CoreInstanceHandle::registerExports(
 		registrar.registerMemory(moduleName, name, memory);
 	for (const auto& [name, table] : inlineTables)
 		registrar.registerTable(moduleName, name, table);
+	for (const auto& [name, global] : inlineGlobals)
+		registrar.registerGlobal(moduleName, name, global.first, global.second);
 }
 
 void ComponentRuntime::processCoreInstance(const WASM::CoreInstance& instance)
