@@ -2008,6 +2008,34 @@ std::optional<WASM::LinearMemory*> ComponentRuntime::CoreInstanceHandle::exporte
 	return it->second;
 }
 
+std::optional<WASM::ImportedTable> ComponentRuntime::CoreInstanceHandle::exportedTable(
+		std::string_view name) const
+{
+	if (moduleInstance) {
+		const auto table = moduleInstance->exportedTable(name);
+		if (!table)
+			return std::nullopt;
+		// A module does not publish its table's declared type through this
+		// accessor; `ImportedTable::type` is optional for exactly that reason.
+		return WASM::ImportedTable{*table, std::nullopt, WASM::TypeId::kNone};
+	}
+	const auto it = inlineTables.find(std::string(name));
+	if (it == inlineTables.end())
+		return std::nullopt;
+	return it->second;
+}
+
+std::optional<WASM::Value*> ComponentRuntime::CoreInstanceHandle::exportedGlobal(
+		std::string_view name) const
+{
+	if (moduleInstance)
+		return moduleInstance->exportedGlobal(name);
+	const auto it = inlineGlobals.find(std::string(name));
+	if (it == inlineGlobals.end())
+		return std::nullopt;
+	return it->second;
+}
+
 void ComponentRuntime::CoreInstanceHandle::registerExports(
 		WASM::ImportRegistrar& registrar, std::string_view moduleName) const
 {
@@ -2019,6 +2047,8 @@ void ComponentRuntime::CoreInstanceHandle::registerExports(
 		registrar.registerFunction(moduleName, name, callable);
 	for (const auto& [name, memory] : inlineMemories)
 		registrar.registerMemory(moduleName, name, memory);
+	for (const auto& [name, table] : inlineTables)
+		registrar.registerTable(moduleName, name, table);
 }
 
 void ComponentRuntime::processCoreInstance(const WASM::CoreInstance& instance)
@@ -2038,6 +2068,18 @@ void ComponentRuntime::processCoreInstance(const WASM::CoreInstance& instance)
 							"component runtime: inline core memory export is out of bounds");
 				handle->inlineMemories.emplace(exportDecl.name,
 						coreMemories_[exportDecl.sortIndex.index]);
+			} else if (exportDecl.sortIndex.sort == WASM::CoreSort::Table) {
+				if (exportDecl.sortIndex.index >= coreTables_.size())
+					throw std::runtime_error(
+							"component runtime: inline core table export is out of bounds");
+				handle->inlineTables.emplace(exportDecl.name,
+						coreTables_[exportDecl.sortIndex.index]);
+			} else if (exportDecl.sortIndex.sort == WASM::CoreSort::Global) {
+				if (exportDecl.sortIndex.index >= coreGlobals_.size())
+					throw std::runtime_error(
+							"component runtime: inline core global export is out of bounds");
+				handle->inlineGlobals.emplace(exportDecl.name,
+						coreGlobals_[exportDecl.sortIndex.index]);
 			} else {
 				throw std::runtime_error(
 						"component runtime: inline core export sort is not supported");
@@ -2127,6 +2169,24 @@ void ComponentRuntime::processAlias(const WASM::Alias& alias)
 			throw std::runtime_error(
 					"component runtime: core export is not a memory");
 		coreMemories_.push_back(*memory);
+		return;
+	}
+	if (alias.sort.core->sort == WASM::CoreSort::Table) {
+		const auto table = coreInstances_[alias.instanceIndex]
+				->exportedTable(alias.name);
+		if (!table)
+			throw std::runtime_error(
+					"component runtime: core export is not a table");
+		coreTables_.push_back(*table);
+		return;
+	}
+	if (alias.sort.core->sort == WASM::CoreSort::Global) {
+		const auto global = coreInstances_[alias.instanceIndex]
+				->exportedGlobal(alias.name);
+		if (!global)
+			throw std::runtime_error(
+					"component runtime: core export is not a global");
+		coreGlobals_.push_back(*global);
 		return;
 	}
 	if (alias.sort.core->sort != WASM::CoreSort::Func)
