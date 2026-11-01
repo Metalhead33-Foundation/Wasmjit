@@ -231,9 +231,19 @@ read. That makes `BP-1` useful even if `dlopen` never ships.
 7. **Declare capabilities, do not guess.** A backend that cannot do components or
    continuations says so; `Runtime` refuses the module before codegen, the way
    `ProfileConfig` does.
-8. **Do not unload while code is live.** A `Callable::fnPtr` points into the
-   plugin forever; the loader must refuse `dlclose` (or leak intentionally) while
-   any instance from that plugin exists.
+8. **Do not unload while code is live — and, once *used*, never unload at all.**
+   A `Callable::fnPtr` points into the plugin forever; the loader must refuse
+   `dlclose` (or leak intentionally) while any instance from that plugin exists.
+   **Recorded policy (2026-11-01):** a plugin image that has *executed* stays
+   mapped until the process ends — `dlclose` is only correct for a plugin that was
+   **probed** (name, version, capabilities read from the descriptor) and never
+   instantiated. That is why the loader keeps every handle
+   (`keepPluginLoaded`), and why `Runtime::unload` frees the *instantiator and its
+   compilation context*, not the mapped image: the two are different resources,
+   and only the second is unsafe to give back. A "list the available backends"
+   API would therefore be the one legitimate `dlclose` site — open, read the
+   descriptor, close — and it is deliberately not implemented until a host asks for
+   it.
 9. **Executable memory is the plugin's**, with a W^X handoff; the core never
    patches code.
 10. **Report every refusal through the diagnostic sink.** The loader emits a

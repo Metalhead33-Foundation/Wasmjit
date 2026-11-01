@@ -1,16 +1,31 @@
 # WIT and the Component Model — Spec Status, Design Space, and a QVM-Style Scope {#prop_component_model}
 
-Status: proposal + implementation note (revision 14 — CM-0 … CM-7 are complete:
-the parser decodes every section/production, the validator covers references,
-scopes, labels, declarations, aliases, instantiation signatures, canon, start,
-values, `[get]`/`[set]`, strong uniqueness and Canonical ABI flattenability,
-and the runtime executes embedded/nested components, inline core instances,
-flat/layout Canonical ABI values, resources, start/value definitions,
-structured component scripts and the single-agent async surface (streams,
-futures, tasks, context, backpressure, waitables, subtasks, error-context).
-Core Type imports/exports link by abstract `sub` bound. True multi-agent
-scheduling remains deferred to [`THREADS.md`](THREADS.md) §5.1; WIT is ingested
-harness-side and WASI is host-provided.)
+Status: proposal + implementation note (revision 15 — **the state of the model as
+of 2026-11-01**). `CM-0`…`CM-8` are complete: the parser decodes every
+section/production; the validator carries all **thirteen** index spaces and covers
+references, scopes, labels, declarations, aliases, instantiation signatures,
+canon, start, values, `[get]`/`[set]`, strong uniqueness and Canonical ABI
+flattenability (§5.1 verifies `CM2`); and the runtime executes embedded/nested
+components, inline core instances (`func`/`memory` export bags), flat/layout
+Canonical ABI values, resources, start/value definitions, structured component
+scripts and the single-agent async surface (streams, futures, tasks, context,
+backpressure, waitables, subtasks, error-context). **Two runtime gaps remain open
+and are recorded rather than rounded away: `CM11` (a table/global/type in an
+inline core export bag) and `CM12` (an inline component instance).** `CM-9`
+(vendor the upstream corpus) and `CM-10` (close `CM11`/`CM12`) are the plan rows
+that close them. True multi-agent scheduling remains deferred to
+[`THREADS.md`](THREADS.md) §5.1; WIT is ingested harness-side and WASI is
+host-provided.
+
+**Direction note (2026-11-01).** This note is where the project's centre of
+gravity is most visible: a component is a *managed extension unit*, and a product
+built from several of them is closer to "Minecraft's JARs, or RimWorld's DLLs, but
+in WebAssembly" than to QVM 2.0. That is an accepted direction, not a drift to
+correct — the QVM lineage (one process, many small modules, a narrow boundary)
+still describes the low end of the same spectrum, and §2.4 of
+[`SHARING_LINEAR_MEMORY.md`](SHARING_LINEAR_MEMORY.md) states the two shapes. What
+it demands is *restraint*: every feature is priced against the embedder's needs
+before it is built.
 Audience: whoever touches `WasmModule` (binary decoding), `WasmStore`,
 `WasmTypeRegistry`, `WasmImport`, the `LibJit*` backend, or the test harness —
 i.e. whoever would decide where a component parser lives.
@@ -440,7 +455,7 @@ component grammar into an AST:
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
 | ~~CM1~~ | ~~No `layer` discrimination.~~ **Done (CM-0):** `Module::fromFile` reads magic/version/layer separately and throws a component-specific error when the layer is non-zero, so a component is refused instead of misparsed. | `WasmModule.cpp` `fromFile` | Closed |
-| ~~CM2~~ | ~~**Structural/type validation incomplete.**~~ **Done (CM-1c/CM-1d):** all 13 index spaces, definition-order growth, `sortidx` resolution, references, scopes, labels, declarations, aliases, instantiation signatures, canon, start, values, external visibility, resource substitution, core-module matching, `[get]`/`[set]`, strong uniqueness and Canonical ABI flattenability are validated. | `WasmComponentValidation.*` | Closed |
+| ~~CM2~~ ✅ | ~~**Structural/type validation incomplete.**~~ **Done (CM-1c/CM-1d), verified 2026-11-01:** `ComponentIndexSpaces` holds **thirteen** per-sort vectors (eight core — `func`, `table`, `memory`, `global`, `type`, `module`, `instance`, `component`-side — and five component), each grown in definition order; `sortidx` resolution, references, scopes, labels, declarations, aliases (including `alias core export` of `func`/`table`/`memory`/`global`/`type`), instantiation signatures, canon, start, values, external visibility, resource substitution, core-module matching, `[get]`/`[set]`, strong uniqueness and Canonical ABI flattenability are validated. The tick is recorded here because the row said "Closed" without the marker the rest of the folder uses — the claim itself was already true. | `WasmComponentValidation.*` (3,820 lines; `validateComponent`) | Closed ✅ |
 | ~~CM3~~ | ~~**Runtime bridge has specification gaps.**~~ **Done:** the value grammar is modelled and canonicalised; `ComponentRuntime` executes flat values, strings/lists/records/maps, variant joins, start/value definitions, inline core instances and nested components, and the single-agent async surface. | `WasmComponentModel.hpp`, `WasmTypeStore.hpp`, `WasmBase/WasmComponentRuntime.*` | Closed |
 | ~~CM4~~ | ~~**Canonical ABI runtime has gaps.**~~ **Done:** flat values, strings/lists/records/maps, exact variant/result/option joins, `memory`/`realloc`/`post-return`, indirect parameters/results, resource handles, stream/future copy and waitable events execute. | `WasmTypeStore.*`, `WasmBase/WasmComponentRuntime.*` | Closed |
 | ~~CM5~~ | ~~**Component graph execution incomplete.**~~ **Done:** embedded/nested components, inline core instances, core export aliases, `canon lift`/`lower`, host imports and canonical values execute; multi-agent async functions remain a THREADS deferral. | `WasmBase/WasmComponentRuntime.*` | Closed |
@@ -449,16 +464,20 @@ component grammar into an AST:
 | ~~CM8~~ | ~~**Async copy semantics deferred.**~~ **Done for the single-agent engine:** libffi closures back `canon lower`, resources, stream/future new/read/write/cancel/forward, tasks, context, backpressure, waitable sets, subtasks and error-context. Real concurrent scheduling remains THREADS TH-5. | `WasmBase/WasmComponentRuntime.*`, `WasmBase/WasmComponentAsync.hpp` | Closed (single-agent) |
 | ~~CM9~~ | ~~**No WASI 0.2 interfaces.**~~ **Closed by contract:** WASI is an embedder interface; a `wasi:*` import is an ordinary host component import resolved by the embedder. No engine-side WASI implementation is required by the Component Model. | `WasmBase/WasmComponentRuntime.*`, `Test/main.cpp` host-import tests | Closed (host-provided) |
 | ~~CM10~~ | ~~**No error-context, async copy or threading built-ins.**~~ **Done:** `error-context.new/debug-message/drop`, stream/future copy/cancel/forward, task/context/backpressure, waitable sets, subtasks and the component async interfaces exist. `thread.*` returns single-agent answers (`index` 0, `yield` no-op, `available-parallelism` 1) and traps for thread creation, which requires a multi-agent backend. | `WasmComponentAsync.hpp`, `WasmBase/WasmComponentRuntime.*` | Closed (single-agent) |
+| `CM11` ◑ | **An inline core export bag cannot carry a table, global or type.** The *validator* resolves all five core sorts (`CoreSort::Table/Global/Type` are in `ComponentIndexSpaces`), and the parser keeps the bag, but the *runtime* populates only `coreFuncs_`/`coreMemories_`, so `processCoreInstance` throws `inline core export sort is not supported` for the other three. It is a runtime index-space gap, not a validation one | `WasmBase/WasmComponentRuntime.cpp` (`processCoreInstance`); `WasmBase/WasmComponentValidation.cpp` (the sorts it accepts) | **Medium** — a valid component using an inline table/global export is refused by name. To close: add `coreTables_`/`coreGlobals_` (+ the alias producer), the handle maps, `exportedTable`/`exportedGlobal`, and registration through `ImportRegistrar` |
+| `CM12` ◑ | **An inline *component* instance cannot be executed.** `ComponentInstance::Kind::InlineExports` is parsed (a test asserts it), but `processComponentInstance` throws `inline component instances are not supported` — the runtime only instantiates a nested component | `WasmBase/WasmComponentRuntime.cpp` (`processComponentInstance`); `Test/main.cpp` (`component_instanceinline`) | **Medium** — the largest remaining functional gap. To close: a component-side handle for an export bag (component funcs/values/instances/types), its `registerExports` analogue, and a test with a real consumer |
 
 ### 5.1 Maturity: what is mature, what the ceiling is, and what is deliberately refused
 
-**Verdict (2026-11-01): functionally mature, conformance-wise bounded.** Every gap
-`CM1`–`CM10` is closed, `CM-0`…`CM-8` shipped, and the surface is exercised by the
-component fixtures under `Test/wasm_wat/component_*.wat` plus the C++ runtime
-tests and the structured `WastScript` path. A component with embedded core
-modules, `canon lift`/`lower`, strings/lists/records/maps, resources, streams,
-futures and start/value definitions runs. What "more mature" would mean is
-therefore **not more features** — it is an *oracle* and a *lifecycle*.
+**Verdict (2026-11-01): functionally mature, two runtime gaps and one conformance
+ceiling.** `CM1`–`CM10` are closed and `CM-0`…`CM-8` shipped; the surface is
+exercised by the component fixtures under `Test/wasm_wat/component_*.wat` plus the
+C++ runtime tests and the structured `WastScript` path. **`CM11` and `CM12` are
+open** — both are inline-export-bag shapes the parser and validator accept and
+the *runtime* refuses (a table/global/type in a core export bag; an inline
+component instance). So the folder is **not** 100% closed yet, and this section
+says so rather than rounding up: two Medium runtime gaps, both with a named
+closing plan, plus the conformance ceiling below.
 
 | Axis | State | What would move it |
 |---|---|---|
@@ -467,30 +486,27 @@ therefore **not more features** — it is an *oracle* and a *lifecycle*.
 | Lifecycle | **matured 2026-11-01:** `ComponentRuntime::~ComponentRuntime` now calls `ModuleInstantiator::releaseInstance` for every core instance it created, so a component's compiled code is given back instead of leaking until the process ends | — (shipped; see `WRITING_A_BACKEND.md` §9 item 6) |
 | Multi-agent | single-agent by decision (`CMD3`) | a real scheduler is `THREADS.md` `TH-5`, not this note |
 
-Three behaviours are **named boundaries** rather than silent gaps — each refuses
-by name, and each is where "more mature" would start if the corpus in `CM-9`
-shows a valid component that needs it:
+Two behaviours are **open gaps** (`CM11`, `CM12` above), and one is a deliberate
+catch-all. Each refusal names itself, so none is a silent mis-execution:
 
-1. **An inline core export of a sort other than `func`/`memory`** throws
-   `inline core export sort is not supported` (`WasmComponentRuntime.cpp`). The
-   parser and the handle model the export bag; the runtime populates functions and
-   memories only, because the component's core index spaces today carry exactly
-   those two sorts.
-2. **An inline *component* instance** (a component instance built from inline
-   exports rather than by instantiating a nested component) is parsed — a test
-   asserts `ComponentInstance::Kind::InlineExports` survives parsing — but the
-   runtime refuses to execute it: `inline component instances are not supported`.
-   That is the largest remaining functional gap, and it is deliberately not
-   guessed at without an oracle.
-3. **One canonical builtin** is refused by name in the same file; the rest of the
-   `canon` surface (`lift`, `lower`, `resource.*`, `stream.*`, `future.*`,
-   `task.*`, `context.*`, `backpressure.*`, `error-context.*`, `thread.*`) is
-   implemented or single-agent-answered.
+1. **`CM11` — an inline core export of a sort other than `func`/`memory`** throws
+   `inline core export sort is not supported`. The validator resolves all five
+   core sorts; the runtime carries only the two index spaces.
+2. **`CM12` — an inline component instance** is parsed (a test asserts
+   `ComponentInstance::Kind::InlineExports` survives parsing) but not executable:
+   `inline component instances are not supported`. This is the largest remaining
+   functional gap in the note.
+3. **The canonical-builtin catch-all** (`canon.kind != Lift` after the `lower`
+   path) is not a specific missing builtin: the implemented kinds are dispatched
+   above it, and what reaches it is the thread/async surface that the single-agent
+   decision (`CMD3`) either answers or refuses. It is a *guard*, not a gap.
 
 The rule this section enforces: **a refusal that names itself is a decision; a
-refusal that crashes or mis-executes is a gap.** All three above are the former,
-and the note records them so `CM-9` can turn them into the latter only with
-evidence.
+refusal that crashes or mis-executes is a gap.** `CM11`/`CM12` are decisions to
+refuse *for now*, with the closing work written down — the corpus work in `CM-9`
+is what would promote them from "named refusal" to "must fix", because it would
+show a valid component that needs them.
+
 
 
 ## 6. Where we can and should play fast and loose
@@ -532,6 +548,8 @@ caller reuses the callee's buffer.
 | **CM-5 — `canon lift`/`lower`** | ✅ Flat values, strings/lists/records/maps, exact `join` for variants/results/options, `memory`/`realloc`, `post-return`, indirect params/results, host imports, nested components, start/value definitions and single-agent async copy/task built-ins. | CM4, CM8 | A component function with scalar/string/variant/map parameters is callable from C++ and returns the right values. |
 | **CM-6 — Resources** | ✅ Nominal handle table, own/borrow scope tracking, `resource.new`/`drop`/`rep`, type-checked handles, destructor invocation, use-after-drop/double-drop/borrow-escape traps. WIT private-resource subtyping is post-MVP. | CM4 | A handle round trip traps correctly on out-of-range index, double drop, borrow escape and use-after-drop. |
 | **CM-7 — Component tests** | ✅ C++ runtime tests cover lift/lower, strings, variants, maps, resources, streams, futures, async events, start/value, inline instances and structured script marshalling; WastScript executes component scripts. The upstream corpus is not checked in. | CM7 | "spec: components" cases run or skip with a stated reason, the way "spec: <script>" does today. |
+| **CM-9 — Vendor the upstream corpus** (proposed) | Bring the component-model test corpus in beside `extern/WasmTestsuite` (it is not in the submodule today), curate it the way `wast_supported.txt` curates the core suite, and run it through a `spec: component …` path with per-case pass/skip reasons. | `CM-9` (maturity), and the *evidence* `CM11`/`CM12` need | A curated component suite runs or skips with a stated reason, and every skip names the gap it hit. |
+| **CM-10 — Close the two runtime gaps** (proposed, after `CM-9` gives evidence) | `CM11`: add `coreTables_`/`coreGlobals_` (+ the alias producer), the handle maps and their `ImportRegistrar` registration, so an inline bag can carry any core sort. `CM12`: a component-side handle for an inline export bag, its registration analogue, and a consumer test. | `CM11`, `CM12` | Every inline export bag the validator accepts is executable, and the two refusals are gone from `WasmComponentRuntime.cpp`. |
 | **(deferred non-goals)** | True multi-agent async/stream/future scheduling (THREADS TH-5), WIT value imports/exports, WIT private-type subtyping, and engine-side WASI 0.2 implementations (WASI is host-provided). | CM9, CM10 | — |
 
 ## 8. Indicative test survey

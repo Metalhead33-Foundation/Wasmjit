@@ -50,6 +50,20 @@ generator is built.
   and `WasmStub/` stays a pretty-printer. The decision and its reasoning are in
   [`docs/proposals/STACK_SWITCHING.md`](docs/proposals/STACK_SWITCHING.md)
   §10.15 (D-3).
+- **The direction of travel: from a QVM successor to a managed extension
+  ecosystem.** *Recorded 2026-11-01.* The lineage is Quake 3's QVM — one process,
+  several small modules, a narrow boundary — and that still describes the low end.
+  But a component is a *managed extension unit*, and a product assembled from
+  several of them is closer to "Minecraft's JARs, or RimWorld's DLLs, but in
+  WebAssembly". **This is an accepted direction, not drift to correct**, and it
+  changes what gets built next rather than what the engine promises: the module /
+  component boundary, not a linker, is where extension workflows belong
+  ([`docs/proposals/COMPONENT_MODEL.md`](docs/proposals/COMPONENT_MODEL.md)).
+  It also sets the bar for *saying no*: an extension ecosystem invites
+  over-engineering (its own linker, its own package format, its own scheduler), so
+  each of those is priced before it is written — see
+  [`docs/proposals/SHARING_LINEAR_MEMORY.md`](docs/proposals/SHARING_LINEAR_MEMORY.md)
+  §13 for the one this has already resisted.
 - **Current milestone: API/ABI stability.** Declared and measured in
   [`docs/API_ABI_STABILITY.md`](docs/API_ABI_STABILITY.md): four gates (a
   production-grade LibJIT backend, additive-only evolution, a backend set that
