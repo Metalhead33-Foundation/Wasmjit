@@ -49,7 +49,7 @@ gaps → where we deliberately deviate → plan → test survey → references.
 | §1 | Document map | a section → question map | `\| Section \| Question it answers \|` |
 | §2 | What the proposal demands | the required surface, as bullets; `### 2.x` when it splits | — |
 | §3 | What the proposal does not demand | the degrees of freedom the spec leaves | — |
-| §4 | What we have implemented today | the shipped state, with source anchors | — |
+| §4 | What we have implemented (the shipped state, stamped — `FRESHNESS.md` §2.4) | the shipped state, with source anchors | — |
 | §5 | Gaps | each shortfall as a numbered row | `\| # \| Gap \| Evidence \| Severity \|` |
 | §6 | Where we can and should play fast and loose | each deviation, then guardrails | `\| # \| Deviation \| Why it is safe \| What it buys \|` |
 | §7 | Plan | the milestones that close §5 | `\| Milestone \| Work \| Closes \| Done when \|` |
@@ -70,6 +70,13 @@ gaps → where we deliberately deviate → plan → test survey → references.
 - **Cross-links.** Notes link each other by filename (e.g.
   `[MUTABLE_GLOBALS.md](proposals/MUTABLE_GLOBALS.md)` *inside* the folder); `§N`
   references are note-relative. §1's map must match the headings that follow.
+- **Snapshots.** §4 states the shipped state, so it is the section that can go
+  stale without any structural check noticing. It carries a
+  `**Snapshot (<date>, <commit>):**` line, and **a §7 milestone marked `✅`
+  re-opens §4** in the same change. Numbers elsewhere in the note are either
+  dated or linked to the document that owns them. The full rule — three kinds of
+  state claim, the one home of each measured fact, and the probe that
+  re-measures them — is [`FRESHNESS.md`](FRESHNESS.md).
 
 ## 3. What this document does not demand
 
@@ -92,11 +99,11 @@ gaps → where we deliberately deviate → plan → test survey → references.
 
 ## 4. What the folder holds today
 
-`docs/proposals/` holds **thirty-eight** notes, plus an `index.md` that is
-navigation rather than a note (it is what nests them in the generated site, and
-it is the one file exempt from the shape check below). Every note carries the
-§2.1 front
-matter and the nine slots of §2.2 in order (or the grouped variant of §3); the
+**Snapshot (2026-11-01, `8c87f5f`):** `docs/proposals/` holds **thirty-eight**
+notes — 39 `.md` files, one of which is `index.md`, which is navigation rather
+than a note (it is what nests them in the generated site, and it is the one file
+exempt from the shape check below). Every note carries the §2.1 front matter and
+the nine slots of §2.2 in order (or the grouped variant of §3); the
 wording drifts only as §3 permits. The ID conventions of §2.3 are used
 throughout; the prefixes actually in the tree are:
 
@@ -188,7 +195,7 @@ Guardrails (things that must stay true):
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **PM-0 — Re-cut this document** | ✅ Rewrite `PROPOSALS.md` into the §2 shape: front matter, §1 map, §2–§9, IDs. | PG1, PG2, PG3, PG4 | Done: this file's §1 map matches its own §2–§9, and §4/§8 match the folder. |
-| **PM-1 — Record the aliases** | ✅ List the sanctioned heading and section-count variants in §3/§6/§8. | PG5, PG6, PG7 | Done: §8 classifies every note (all thirty-six). |
+| **PM-1 — Record the aliases** | ✅ List the sanctioned heading and section-count variants in §3/§6/§8. | PG5, PG6, PG7 | Done: §8 classifies every note (all thirty-eight). |
 | **PM-2 — Keep the survey current** | Update §4's prefix table and §8's matrix whenever a note is added or a section appears. | PG5, PG9 | A new note appears in both tables in the same change that adds it. |
 | **PM-3 — Optional structural lint** | ✅ `Test/ProposalDocsTests.cpp` (`[docs]`) checks front matter, §1 map ↔ headings and References; documented in `TESTING.md`. The map-based rule admits every §3 exception without a hard-coded list. | PG8 | Done: `./Test/WasmJit '[docs]'` runs and passes. |
 
@@ -198,7 +205,8 @@ authoritative per-item status is each note's §7 plan.
 
 ## 8. Indicative structural survey
 
-`docs/proposals/` (2026-10-18), read from the `## N.` headings:
+`docs/proposals/` (re-read 2026-11-01, `8c87f5f`), read from the `## N.`
+headings:
 
 | Note | §§ | Shape | Heading drift | Extra | Reading |
 |---|---:|---|---|---|---|
@@ -241,8 +249,13 @@ authoritative per-item status is each note's §7 plan.
 | `COMPONENT_MODEL.md` | 10 | canonical + interleave | §2/§3 subject-named; §4 "What is in the tree today"; §7 "Staged plan" | §9 "How this relates…" before §10 References | conforms (parser + structural validation) |
 | `SMALL_PROPOSALS.md` | 8 | grouped (3-in-1) | §2–§4 are proposals; demands/non-demands/implemented/gaps embedded | §5 fast/loose, §6 plan, §7 survey, §8 refs | conforms (grouped variant, PD1) |
 
-Reading: thirty notes match §2 exactly; two reword §2/§3 and keep the nine
-slots; five append a section; one uses the grouped variant. No note is missing a
+Reading (re-checked 2026-11-01, `8c87f5f`): **twenty-seven** notes match §2
+exactly; **two** reword §2/§3 and keep the nine slots (`SIMD.md`, `THREADS.md`);
+**seven** append a section after §9 (`COMPILER_POLICY.md`, `CONFIGURATION.md`,
+`GC.md`, `LEGACY_EXCEPTIONS.md`, `MEMORY_PROVIDER.md`, `STACK_SWITCHING.md`,
+`COMPONENT_MODEL.md`); **one** surveys seven proposals while keeping the slots
+(`JS_INTEGRATION.md`); and **one** uses the grouped variant
+(`SMALL_PROPOSALS.md`). That accounts for all thirty-eight. No note is missing a
 slot, and none is missing its front matter. `TYPE_MODEL.md` conforms to the nine
 slots but is an internal type-store design note, not a WebAssembly feature
 proposal; `MEMORY_PROVIDER.md`, `CONFIGURATION.md` and `COMPILER_POLICY.md` are
@@ -260,6 +273,9 @@ similarly engine-seam studies rather than feature proposals.
   is safe" column leans on.
 - [`SAFETY.md`](SAFETY.md) — the safety policies the notes cite when a deviation
   is about allocation or traps.
+- [`FRESHNESS.md`](FRESHNESS.md) — the rule behind §2.3's **Snapshots** bullet:
+  what a note may say about the tree, which numbers need a date, and how to
+  re-measure them.
 
 
 

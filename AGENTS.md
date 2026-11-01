@@ -38,15 +38,17 @@ the one-line check to run.
   [`BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md) (loading a backend behind a C descriptor) and
   [`MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) (demoting the multi-agent blocker).
   The language-support studies are defined in [`docs/LANGUAGE_FEASIBILITY.md`](docs/LANGUAGE_FEASIBILITY.md).
-  The pre-feasibility / scoping study (`LF-1`) **has** been run and its output is
+  Both have been run: the pre-feasibility / scoping study (`LF-1`) produced
   [`docs/languages/`](docs/languages/index.md) — a triage of the whole canonical list,
-  a clustering map, five **proposed** charters and an evidence log, with **no verdicts
-  and no support claim**. The full feasibility studies (`LF-2`) have not been started:
-  no charter has a named requester, and no language is assessed. Its entry-gate
-  readiness audit (`LF-0a`) was run first: [`docs/READINESS_AUDIT.md`](docs/READINESS_AUDIT.md)
-  reports `RG1`–`RG6` as `Pinned` and, in the same sweep, re-checks `G3` of the
-  milestone (whether a second code generator may begin — it may; SLJIT is the
-  recommendation, and the `RA1`/`RA2` proof gaps are named there).
+  a clustering map, five **proposed** charters and an evidence log — and the commissioned
+  full-feasibility studies (`LF-2`, 2026-10-30) produced the `LF2_*` reports in the same
+  folder: fifteen arms built and run, colour verdicts per pinned version, and three engine
+  findings `F1`–`F3`. **No language is supported by any of this** — support would be
+  `LF-3`, which has not started. Its entry-gate readiness audit (`LF-0a`) was run first:
+  [`docs/READINESS_AUDIT.md`](docs/READINESS_AUDIT.md) reports `RG1`–`RG6` as `Pinned`
+  and, in the same sweep, re-checks `G3` of the milestone (whether a second code
+  generator may begin — it may; SLJIT is the recommendation, and the `RA1`/`RA2` proof
+  gaps are named there).
 
 - **[`docs/BACKEND_WORK_ORDER.md`](docs/BACKEND_WORK_ORDER.md) — read before starting, or changing, a backend.**
   It is the checklist of what a code generator must provide (`ModuleInstantiator`'s four hooks, the
@@ -68,3 +70,10 @@ the one-line check to run.
   `doxygen Doxyfile` must stay warning-free (output goes to `build/doxygen/`, `WARN_NO_PARAMDOC` is on) and
   `./Test/WasmJit '[headerdoc]'` enforces the shape and the per-file block. `extern/` is a submodule and is
   never reformatted.
+
+- **[`docs/FRESHNESS.md`](docs/FRESHNESS.md) — read before writing a sentence about "what is in the tree".**
+  It defines the three kinds of state claim (timeless contract, dated snapshot, labelled history), the
+  rule that a bare number is not allowed, the one document that owns each measured fact, and the trigger
+  list that re-opens a proposal note's §4 when a §7 milestone lands. Its §8 is a copy-paste probe that
+  re-measures every number the notes cite, so a sync is minutes rather than an audit. Keep §4 sections
+  stamped: `**Snapshot (<date>, <commit>):** …`.

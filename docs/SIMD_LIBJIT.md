@@ -63,16 +63,16 @@ Three consequences shape everything below:
 
 ## 3. Scope: why the first SIMD path runs on LibJIT alone
 
-AsmJit and SLJIT are **deferred, not cancelled**. Both remain planned backends,
-and both are expected to be *leveraged* for SIMD when their turn comes — that is
-a second, later performance lever, not an abandoned idea. Neither is wired up
-today (both are empty scaffolds), so the first SIMD path is LibJIT-only. What
-that defers, and why it is worth waiting for:
+AsmJit and SLJIT are **deferred for SIMD, not cancelled**. Both are planned
+backends and both are expected to be *leveraged* for SIMD when their turn
+comes — that is a second, later performance lever, not an abandoned idea. Neither
+lowers a Wasm `v128` today, so the first SIMD path is LibJIT-only. What that
+defers, and why it is worth waiting for:
 
 | Deferred | Why it is not first | What it will add for SIMD |
 |---|---|---|
-| **AsmJit** | Not implemented (an empty scaffold: no headers, no `-lasmjit`). It is an assembler/IR allocator with no value model, so it would still need the `v128` operand model, ABI and semantics layer built from scratch — the work §4 D1–D5 and §7 describe is backend-independent. | Complete x86 instruction coverage (MMX/SSE…SSE4/AVX/AVX-512) **plus a vector-aware register allocator** (`asmjit/x86/x86_ra_pass.cpp`): `v128` values living in `xmm/ymm/zmm` instead of memory, and the option of processing several `v128` values per instruction. |
-| **SLJIT** | Same: an empty scaffold, not installed, and a register-level API with no value model. | First-class SIMD registers — `SLJIT_SIMD_REG_128/256/512`, `SLJIT_VR0…`, `sljit_emit_simd_*` — so the same helper semantics could be lowered inline instead of called. |
+| **AsmJit** | Its Wasm surface is an i32/i64 subset with no `v128` lowering (the SIMD code that exists is native `Vec`/ABI probe work, not a Wasm opcode path). It is an assembler/IR allocator with no value model, so it would still need the `v128` operand model, ABI and semantics layer built from scratch — the work §4 D1–D5 and §7 describe is backend-independent. | Complete x86 instruction coverage (MMX/SSE…SSE4/AVX/AVX-512) **plus a vector-aware register allocator** (`asmjit/x86/x86_ra_pass.cpp`): `v128` values living in `xmm/ymm/zmm` instead of memory, and the option of processing several `v128` values per instruction. |
+| **SLJIT** | It executes straight-line i32/i64 bodies, is not installed, and exposes a register-level API with no value model — nothing in it maps a Wasm `v128` to a register yet. | First-class SIMD registers — `SLJIT_SIMD_REG_128/256/512`, `SLJIT_VR0…`, `sljit_emit_simd_*` — so the same helper semantics could be lowered inline instead of called. |
 
 What deferring them does **not** remove: the semantics layer (§7), the `v128`
 ABI/alignment question (S4/S9) and the harness gaps (S7/S8). Those are

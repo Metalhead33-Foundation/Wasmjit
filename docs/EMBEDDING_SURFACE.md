@@ -231,7 +231,7 @@ The staged history is worth keeping because it is how the change was verified:
 | Stage | What changed | Result |
 |---|---|---|
 | **C** (earlier) | `Runtime` owns a `Store`; `Store::current()` reads a thread-local `Scope`, falling back to the global | Two runtimes already had independent heaps, but a process-wide fallback remained |
-| **B1** | Every parser entry point takes `Store&`; artifacts carry the reference (44 + 21 + 6 call sites) | Behaviour-preserving, 11,345 assertions at the time (11,454 today) |
+| **B1** | Every parser entry point takes `Store&`; artifacts carry the reference (44 + 21 + 6 call sites) | Behaviour-preserving, 11,345 assertions at the time (the suite's *current* tally is owned by [`TESTING.md`](TESTING.md), not repeated here) |
 | **B2** | Instances, components, continuation workers, the GC heap, strings, the resolver and `wasm_exn_create` read the carrier object; the `Runtime` stops installing scopes | The only remaining callers were the backend's string helpers |
 | **B3** | Backend helpers take the `VMContext`; the singleton and the thread-local are deleted | No `Store::current()`/`global()`/`Scope` anywhere in `WasmBase/` or `LibJit/` |
 
@@ -532,9 +532,14 @@ the first two lists has a compile-only translation unit under `Test/headers/`
 
 | Tier | Count | Headers |
 |---|---|---|
-| **Embedder API** (installed, in `WasmJit.hpp`) | 27 | `WasmApi.hpp`, `WasmJit.hpp`, `WasmRuntime.hpp`, `WasmVersion.hpp`, `WasmArtifact.hpp`, `WasmModule.hpp`, `WasmModuleInstance.hpp`, `WasmValue.hpp`, `WasmTrap.hpp`, `WasmException.hpp`, `WasmImport.hpp`, `WasmHostBridge.hpp`, `WasmNativeImport.hpp`, `WasmProfile.hpp`, `WasmConcurrency.hpp`, `WasmDiagnostics.hpp`, `WasmAgent.hpp`, `WasmContinuation.hpp`, `WasmMemory.hpp`, `WasmTable.hpp`, `WasmExn.hpp`, `WasmString.hpp`, `WasmTracing.hpp`, `WasmRegistryImportResolver.hpp`, `WasmStore.hpp`, `WasmParseOptions.hpp` |
+| **Embedder API** (installed, in `WasmJit.hpp`) | 27 | `WasmApi.hpp`, `WasmJit.hpp`, `WasmRuntime.hpp`, `WasmVersion.hpp`, `WasmArtifact.hpp`, `WasmCompilationPolicy.hpp`, `WasmModule.hpp`, `WasmModuleInstance.hpp`, `WasmValue.hpp`, `WasmTrap.hpp`, `WasmException.hpp`, `WasmImport.hpp`, `WasmHostBridge.hpp`, `WasmNativeImport.hpp`, `WasmProfile.hpp`, `WasmConcurrency.hpp`, `WasmDiagnostics.hpp`, `WasmAgent.hpp`, `WasmContinuation.hpp`, `WasmMemory.hpp`, `WasmTable.hpp`, `WasmExn.hpp`, `WasmString.hpp`, `WasmTracing.hpp`, `WasmRegistryImportResolver.hpp`, `WasmStore.hpp`, `WasmParseOptions.hpp` |
 | **Backend SDK** (installed, not in the umbrella) | 17 | `WasmVMContext.hpp`, `WasmGcHeader.hpp`, `WasmType.hpp`, `WasmTypeIdentity.hpp`, `WasmOpcode.hpp`, `WasmOpcodeDispatcher.hpp`, `WasmStack.hpp`, `WasmSafety.hpp`, `WasmBackendAbi.hpp`, `WasmBackendRegistry.hpp`, `WasmBackendSession.hpp`, `WasmNullInstantiator.hpp`, `wasmjit_backend.h`, `wasm_atomic.hpp`, `wasm_simd_scalar.hpp`, `wasm_simd_vector.hpp`, `wasm_simd_ops.inc` |
-| **Internal** (not installed) | 16 | `WasmSection.hpp`, `WasmTypeStore.hpp`, `WasmCanonicalType.hpp`, `WasmTypeRegistry.hpp`, `WasmGcHeap.hpp`, `WasmValidator.hpp`, `WasmValidation.hpp`, `WasmDeterminism.hpp`, `WasmComponent.hpp`, `WasmComponentAbi.hpp`, `WasmComponentAsync.hpp`, `WasmComponentModel.hpp`, `WasmComponentRuntime.hpp`, `WasmComponentSection.hpp`, `WasmComponentValidation.hpp`, `WasmComponentParser.inc` |
+| **Internal** (not installed) | 17 | `WasmSection.hpp`, `WasmTypeStore.hpp`, `WasmCanonicalType.hpp`, `WasmTypeRegistry.hpp`, `WasmGcHeap.hpp`, `WasmValidator.hpp`, `WasmValidation.hpp`, `WasmDeterminism.hpp`, `WasmComponent.hpp`, `WasmComponentAbi.hpp`, `WasmComponentAsync.hpp`, `WasmComponentModel.hpp`, `WasmComponentRuntime.hpp`, `WasmComponentSection.hpp`, `WasmComponentValidation.hpp`, `WasmComponentParser.inc`, `WasmLegacyEh.hpp` |
+
+That is **61** header files under `WasmBase/` — 58 `.hpp`, one `.h` and two
+`.inc` — which is what `[tiers]` counts (2026-11-01, `8c87f5f`). The lists in
+`Test/HeaderTierTests.cpp` are the contract; this table is their readable copy,
+so it is the copy that has to be updated when a header moves.
 
 Two classifications are deliberate and worth stating: `WasmValidation.hpp` stays
 **internal** even though `Module::fromFile(file, options)` takes its
@@ -730,17 +735,18 @@ check. The embedding surface is what the installed `wasmjit/wasmjit.hpp` exposes
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (2026-10-29) | **11,454 assertions / 481 cases, green** | The `ES-1`…`ES-7`, `BP-*` and multi-agent additions are additive: every earlier assertion still passes. |
-| `[docs]` lint | 720 assertions, green | Covers `docs/proposals/` only; this note is not linted. |
+| Default suite (**2026-11-01**, `8c87f5f`) | **16,516 assertions in 547 cases, green** | The `ES-*`, `BP-*`, `CP-*`, `CFG-*` and multi-agent additions are additive: every earlier assertion still passes. The 2026-10-29 run (11,454 / 481) in the milestone notes is the dated baseline. |
+| `[docs]` lint | **982 assertions / 2 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all three folders (§9 of `DOCUMENTATION.md`), so this note's index row is checked too |
 | `[runtime]` | 46 assertions / 7 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents, and the store-scoping proof (two stores, two heaps, an artifact records its store). |
-| `[concurrency]` | 81 assertions / 14 cases, green | The model claim, the `Single` refusal, re-entrant invocation across threads, the `MF-2` guard, the `MF-3`/`MF-4` safepoint rules and the multi-agent suite. |
+| `[concurrency]` | 80 assertions / 13 cases, green | The model claim, the `Single` refusal, re-entrant invocation across threads, the `MF-2` guard, the `MF-3`/`MF-4` safepoint rules and the multi-agent suite. |
 | `[multiagent]` | 51 assertions / 6 cases, green | Two agents on one instance: acquire-release, wait/notify, shared-global RMW, traps, GC stress, reference barrier. |
 | `[backendabi]` | 36 assertions / 4 cases, green | The POD signature/layout views (`WasmBackendAbi.hpp`) match `ABI.md`'s tuple rule. |
-| `[plugin]` | 17 assertions / 5 cases, green | Load by path and by name, a real example plugin, and every refusal path (missing file, no query symbol, unknown name, descriptor ABI, core ABI, failing `create`). |
-| `[tiers]` | 210 assertions / 3 cases, green | Every header is classified exactly once, the umbrella matches the embedder tier, and every public header has a compile-only TU (`.inc` fragments excepted). |
-| Public-header self-containment test | **Present for the public headers** (2026-10-29) | 40 TUs under `Test/headers/`, enforced by `[tiers]`. |
+| `[plugin]` | 41 assertions / 8 cases, green | Load by path and by name, a real example plugin, and every refusal path (missing file, no query symbol, unknown name, descriptor ABI, core ABI, failing `create`). |
+| `[compilation-policy]` | 30 assertions / 3 cases, green | The policy vocabulary, the capability query, and the ladder's ordering (`COMPILER_POLICY.md` §8.2). |
+| `[tiers]` | 222 assertions / 3 cases, green | Every header is classified exactly once, the umbrella matches the embedder tier, and every public header has a compile-only TU (`.inc` fragments excepted). |
+| Public-header self-containment test | **Present** (2026-11-01) | **43** TUs under `Test/headers/`, enforced by `[tiers]`. |
 | Install / out-of-tree consumer test | **Present** (2026-10-29) | `Test/install-check.sh`: `make install INSTALL_ROOT=...`, then a consumer built through `wasmjit.pc` runs. |
-| Symbol-hygiene check | **2,545 exported symbols** (2026-10-29) | `-fvisibility=hidden` + `WASMJIT_API`; the remaining count is the header-declared surface. `Test/abi-check.sh` freezes the 1,804 strong symbols and fails on a removal. |
+| Symbol-hygiene check | **2,629 exported symbols, 1,859 strong** (2026-11-01, `build/Desktop-Debug`) | `-fvisibility=hidden` + `WASMJIT_API`; the remaining count is the header-declared surface. `Test/abi-check.sh` freezes the **1,859** strong symbols (`Test/abi/libWasmBase.exports`) and fails on a removal. |
 | ABI diff (`abidiff`) | **Optional** | The mandatory check is the `nm -D` symbol baseline (`Test/abi/*.exports`, `Test/abi-check.sh`), which needs no libabigail. `ABI_REFERENCE=<previous .so>` adds `abidiff` when the tool is installed. |
 
 ## 11. References

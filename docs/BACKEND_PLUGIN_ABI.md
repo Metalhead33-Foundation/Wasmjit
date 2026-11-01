@@ -67,7 +67,16 @@ same reason: the dangerous boundary (code ↔ runtime) is already C.
 | Renderers are self-contained; a backend is **half of a pair** | The core's helpers (`wasm_v128_*`, `wasm_trap_*`, …) are the other half. The plugin therefore *depends on* `libWasmBase`, and it must be the one shared copy (§7.2). |
 | A renderer's ABI is data (vertices, uniforms); a backend's ABI is **C++ objects** on the compilation path | This is the real cost. A pure C seam needs a C projection of `ModuleInstance`, `ModuleInstanceInternals` and the type views (§4.3). |
 
-## 3. What the tree already provides
+## 3. What the tree already provided (the baseline this study started from)
+
+Read this table as **history**: it records the state the study found, before
+`BP-0`…`BP-5` and before `ES-4`/`ES-5`. Two rows have since changed and are kept
+only so the starting point stays visible: the export row (all symbols were
+exported; `ES-4` then added `-fvisibility=hidden` plus `WASMJIT_API`, and the
+current count is in [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §10) and the
+install row (there was no install; `ES-4`/`ES-5` added the layout,
+`wasmjit.pc` and `Test/install-check.sh`). For the shipped state, `EMBEDDING_SURFACE.md`
+and `Test/install-check.sh` are authoritative.
 
 | Fact | Value | Evidence |
 |---|---|---|
@@ -79,8 +88,8 @@ same reason: the dangerous boundary (code ↔ runtime) is already C.
 | A backend-neutral façade already exists | `TestBackend::Session` (`instantiator`, `aggregateLayout`, `createLaneWiseOp`, `invoke`) | `Test/TestBackend.hpp` |
 | The product seam exists | `ModuleInstantiator`: 4 pure virtuals + a shared `instantiate()` | `WasmBase/WasmModuleInstance.hpp` |
 | A code↔runtime C ABI already exists | `wasm_trap_slot`, `wasm_trap_report`, `wasm_stack_check`, `wasm_exn_slot`, `wasm_cont_*`, `wasm_atomic_*`, `wasm_v128_*` | `WasmBase/*.hpp` (`extern "C"` blocks) |
-| Everything is exported | **23,284 dynamic symbols** (1,764 functions), no visibility flag | `nm -D --defined-only libWasmBase.so.1.0.0` |
-| Nothing is installed | no `INSTALLS`, no `.pc`, qmake-default `VERSION` only | every `.pro` |
+| Everything was exported | **23,284 dynamic symbols** (1,764 functions), no visibility flag — *before `ES-4`* | `nm -D --defined-only libWasmBase.so.1.0.0` |
+| Nothing was installed | no `INSTALLS`, no `.pc`, qmake-default `VERSION` only — *before `ES-4`/`ES-5`* | every `.pro` |
 
 Two rows matter most: the **selector** already exists (so the concept is accepted),
 and **everything is exported** (so symbol hygiene is not cosmetic — it is what
@@ -316,7 +325,7 @@ guarantees or explicit embedder responsibilities; none is an open code gap.
 | Helper export (§7.5) | **Present** — `[plugin]` resolves `wasm_trap_slot`, `wasm_trap_report`, `wasm_stack_check`, `wasm_v128_*`, `wasm_exn_*` in the process image | `ES-4`'s hidden visibility did not swallow the plugin ABI. |
 | Diagnostic reporting (§7.9) | **Present** — a refused load and a successful load are both observed through a sink (`WASM.BACKEND.PLUGIN`, Error and Note) | Failure containment is a report, and the happy path is visible too. |
 | POD layout test | **Present** — `[backendabi]` pins the tuple rule | `BP-1`. |
-| Symbol-hygiene check | **Present** — `ES-4` hid the core's internals (23,919 → 2,545 exported symbols) and deliberately re-exported the helper subset | `ES-4`; the plugin ABI is a declared list, not "everything and hope". |
+| Symbol-hygiene check | **Present** — `ES-4` hid the core's internals (23,919 → 2,545 exported symbols at the time; **2,629 dynamic / 1,859 strong** on 2026-11-01) and deliberately re-exported the helper subset | `ES-4`; the plugin ABI is a declared list, not "everything and hope". |
 | "One core" check (`NEEDED` inspection) | **Present as a symbol-identity probe** — the loader compares the plugin's `wasm_trap_slot` with the host's and refuses a private copy | `BP-3`; a plugin with its own core is refused rather than running two heaps and two allocators. |
 
 ## 12. References

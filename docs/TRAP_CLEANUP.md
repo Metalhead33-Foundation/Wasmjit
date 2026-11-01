@@ -1328,7 +1328,7 @@ host-side; only the last three need codegen-level assertions.
 | Start function traps, and `instanceDestroying` reads the execution state's trap state | the snapshot-before-teardown ordering in TRAP-1 is correct; the propagated kind is not corrupted by host code running during teardown |
 | Start function traps before any host reference exists | the partial instance is destroyed and the trap reaches the embedder with the original kind |
 | Existing `assert_uninstantiable` case (`start.wast`) | the expected start trap still reports `TrapKind` correctly |
-| A helper holding a non-trivial local traps (stringref constructor with an invalid encoding) | its destructor runs; the embedder sees the original kind (TRAP-2/TRAP-3 — this test fails today) |
+| A helper holding a non-trivial local traps (stringref constructor with an invalid encoding) | its destructor runs; the embedder sees the original kind (TRAP-2/TRAP-3 — this row is the case the note *plans*; it is not in the tree) |
 | A trap inside a `try_table` region | the trap is not caught by any handler and reaches the embedder (trap-first propagation) |
 | A trap inside a tail-called chain | it is propagated after an arbitrary number of trampoline re-dispatches, and the trampoline's pending target is cleared |
 | A trapping native import called from generated code | the call site's check sees the pending trap and the embedder sees the kind (this is the test that catches a forgotten call-site check) |
@@ -1346,10 +1346,11 @@ host-side; only the last three need codegen-level assertions.
 | `continuation runtime transfers traps and exceptions to the resumer` (shipped) | the A/B continuation trap/exception surfaces at the resumer's execution state; one-shot and the live budget are checked in the same cases (`STACK_SWITCHING.md` SS-3) |
 
 The shipped rows are the ones named in the table. What is still *plan* rather
-than coverage: a dedicated case for a trap inside a `try_table` region (the
-trap-first property — today it is asserted only indirectly by the `traps` and
-`throw` scripts), one for a trap inside a tail-called chain, and one that proves a
-call-site check exists for a trapping import. The `callGuarded` rows are obsolete
+than coverage (reading re-cut 2026-11-01, `8c87f5f`): a dedicated case for a trap
+inside a `try_table` region (the trap-first property — asserted only indirectly
+by the `traps` and `throw` scripts), one for a trap inside a tail-called chain,
+and one that proves a call-site check exists for a trapping import. The
+`callGuarded` rows are obsolete
 by construction: `TrapScope` and `callGuarded` were removed with TRAP-3, so
 "the inner scope catches" is now "the boundary throws `WASM::Trap` at the
 outermost `callCallable`".

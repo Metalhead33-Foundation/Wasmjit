@@ -1,6 +1,6 @@
 # Compilation Policy — Optimization Degree, Strictness and Interpreter Fallback {#prop_compiler_policy}
 
-Status: engine-seam study, revision 3 (2026-10-31). Revision 1 was the study:
+Status: engine-seam study, revision 4 (2026-11-01). Revision 1 was the study:
 the three axes, the tree's actual state, the gaps, the plan. **Since revision 2
 `CP-1`, `CP-2`, `CP-3` and `CP-5` are implemented**: a backend-neutral
 `CompilationPolicy` (`None`/`Basic`/`Full`, `Strict`/`Lax`,
@@ -13,8 +13,15 @@ also implemented: the ladder's decision is a pure, tested function
 (`nextCompilationAttempt`) that prefers an interpreter over a lower degree, and
 `WASM.COMPILE.INTERPRETED` has an emitter. The **backend half** of `CP-4` is
 blocked by this LibJIT build rather than merely unwritten: `jit_uses_interpreter()`
-returns **0** (measured, §4.2), so the library has no interpreter to call even if
+returns **0** (measured, §4.7), so the library has no interpreter to call even if
 the trampoline existed. `CP-6` (per-function policy/tiering) remains deferred.
+
+**Revision 4 is a freshness pass, not a new finding:** §4 now describes what the
+headers actually contain instead of the pre-`CP-1` tree (the old §4 is kept as a
+labelled baseline where it is still instructive), §7.1 records the six places the
+implementation differs from the plan — including the one open item, the
+un-bumped plugin `abi_version` — and §8.3 re-cuts the test reading from
+"operated, not asserted" to what `[compilation-policy]` now pins.
 
 Audience: anyone touching the compilation seam (`ModuleInstantiator` in
 `WasmBase/WasmModuleInstance.hpp`, `WASM::Runtime` in
@@ -37,7 +44,7 @@ specifications; §7's `CP-1`…`CP-6` are the work.
 |---|---|
 | §2 | What must a compilation policy be able to say, and to whom? |
 | §3 | What does it not demand? |
-| §4 | What is in the tree today — the knob, the failure path, the seams? |
+| §4 | What is in the tree — the knob, the failure path, the seams? |
 | §5 | Where do we fall short (`CP1`–`CP11`)? |
 | §6 | Where may we deliberately stay as we are (`CPD1`–`CPD7`)? |
 | §7 | Plan (`CP-0`…`CP-6`) with class and done-condition |
@@ -91,14 +98,14 @@ enum class CompilationStrictness : std::uint8_t { Strict, Lax };
 enum class InterpreterFallback : std::uint8_t { Never, FallbackOnly, Always };
 
 struct CompilationPolicy {
-    OptimizationLevel    level      = OptimizationLevel::Basic;   // today's behaviour
+    OptimizationLevel    level      = OptimizationLevel::Basic;   // the pre-policy behaviour
     CompilationStrictness strictness = CompilationStrictness::Strict;
     InterpreterFallback  fallback   = InterpreterFallback::Never;
 };
 ```
 
-`Basic` / `Strict` / `Never` is deliberately **exactly what the tree does today
-for LibJIT** (level 0, a failed compile throws, no interpreter), so the default
+`Basic` / `Strict` / `Never` is deliberately **exactly what LibJIT did before the
+policy existed** (level 0, a failed compile throws, no interpreter), so the default
 policy is a provable no-op — the property `MemoryAllocationPolicy::Growable` and
 `ConcurrencyModel::Single` already have. A new field therefore cannot change an
 existing embedder's behaviour by being added.
@@ -113,9 +120,11 @@ existing embedder's behaviour by being added.
    on the same function or context (§4.3), so "regress" is a *pre-compile*
    choice per attempt, never a retry inside one attempt.
 3. **Every reduction is booked.** A compile that ended below the requested
-   degree produces a `Warning` record naming the function index, the requested
-   level and the achieved one. A silent reduction is indistinguishable from a
-   successful request, and being *visible* is the whole point of lax mode.
+   degree produces a `Warning` record naming the requested level and the achieved
+   one, with the failing function's own message (which names its index)
+   embedded. A silent reduction is indistinguishable from a successful request,
+   and being *visible* is the whole point of lax mode. §4.6 records the exact
+   shape the record has today.
 
 
 ## 3. What this study does not demand
@@ -146,40 +155,74 @@ existing embedder's behaviour by being added.
   [`../SAFETY.md`](../SAFETY.md) §2.4, and there is a test that a failed compile
   throws rather than aborting (§8).
 
-## 4. What is in the tree today
+## 4. What is in the tree
 
-### 4.1 The one knob
+**Snapshot (2026-11-01, `8c87f5f`, revision 4):** the shipped surface, read from
+`WasmBase/WasmCompilationPolicy.hpp`, `WasmBase/WasmRuntime.{hpp,cpp}`,
+`WasmBase/WasmModuleInstance.hpp` and the `[compilation-policy]` run (30
+assertions / 3 cases). §4.3 and §4.7 are *measurements* and carry their own
+dates; §4.4's "because" column is the seam **as revision 1 found it**, kept so
+the cost of each change stays readable. Re-measure with
+[`../FRESHNESS.md`](../FRESHNESS.md) §8.
 
-`LibJit/LibjitModuleCompiler.cpp` holds the entire compilation policy of the
-engine, as a function-local `static`:
+### 4.1 The knob a host passes
+
+The policy is a plain struct on `RuntimeConfig` (`WasmBase/WasmRuntime.hpp`), with
+its vocabulary in its own backend-neutral header
+(`WasmBase/WasmCompilationPolicy.hpp`):
 
 ```cpp
-unsigned int libjitOptimizationLevel()   // parsed once from WASMJIT_LIBJIT_OPT
-{
-    static const unsigned int level = [] { /* atoi, clamped at 0 */ }();
-    return level;
-}
-void applyOptimizationLevel(jit_function_t fn)
-{
-    jit_function_set_optimization_level(fn, libjitOptimizationLevel());
-}
+struct CompilationPolicy {
+    OptimizationLevel    level      = OptimizationLevel::Basic;   // None / Basic / Full
+    CompilationStrictness strictness = CompilationStrictness::Strict; // Strict / Lax
+    InterpreterFallback  fallback   = InterpreterFallback::Never; // Never / FallbackOnly / Always
+};
 ```
 
-`applyOptimizationLevel` is called at three compile sites — a function body, the
-tail-call thunk, and the driver (the entry trampoline) — so one environment
-variable decides the level of everything a process compiles, for the whole
-lifetime of the process, with no API and no per-runtime scope.
+It travels the way the profile already did, with no new parameter on the
+exported `instantiate` and no new virtual:
 
-Two properties of the value are worth recording:
+- `Runtime::adoptInstance` calls `setCompilationPolicy(policy)` on the
+  instantiator **before** `instantiate()`, so a backend reads
+  `compilationPolicy()` inside `compileFunctions`.
+- `ModuleInstantiator::compilationCapabilities()` is a **non-pure** virtual whose
+  default answers `{Basic, interprets = false}`. `LibJit/` is the only backend
+  that overrides it as of revision 4 (`{Full, false}`); `Sljit/` and `Asmjit/`
+  inherit the default and are correct by not caring.
+- `rejectUnsupportedConfig` (`WasmBase/WasmRuntime.cpp`) refuses an unhonourable
+  request at `create()` and again at `instantiate()`, by name — the level it
+  cannot reach and the fallback it cannot serve, each in the message.
+- The outcome is introspectable: `Runtime::achievedOptimizationLevel()` and
+  `achievedCompilationPolicy()` report what the last instantiation *achieved*,
+  which is the request unless `Lax` regressed it.
 
-- **`0` is not "off", it is "the correctness-first level".** It is the default
-  because LibJIT's level-1 optimizer rejects a valid block graph (`F1`), and a
-  failed compile cannot be retried (§4.3). The reasoning is in
+The degree's *mapping* is the backend's, and for LibJIT it is one small function:
+`None` → level 0, `Full` → level 1, `Basic` → `libjitOptimizationLevel()`. That
+last one is where `WASMJIT_LIBJIT_OPT` still lives, and it is worth being precise
+about what that means:
+
+- **It is a process default for one degree, not the policy.** It supplies
+  `Basic`; a host that asks for `None` or `Full` bypasses it entirely. Two
+  runtimes in one process can therefore differ — which was the whole point of
+  `CP-1`.
+- **It is read once, into a function-local `static`** (`std::getenv` → `atoi`,
+  clamped only at 0). The escape hatch `LF2_DEEP_F1_BACKEND.md` documents still
+  works, still applies process-wide, and still accepts any integer an `int` can
+  hold — including LibJIT's "max" sentinel and any junk that `atoi` maps to `0`.
+- **Level `0` still is not "off".** It is the correctness-first level: `None`
+  maps to it as well, and the default `Basic` lands on it unless the environment
+  says otherwise, because LibJIT's level-1 optimizer rejects a valid block graph
+  (`F1`). The reasoning is in
   [`../languages/LF2_DEEP_F1_BACKEND.md`](../languages/LF2_DEEP_F1_BACKEND.md)
   §3.5/§4.
-- **The parse accepts anything an `int` can hold** (`std::atoi`), including
-  `4294967295`, which LibJIT documents as "its default = max". There is no upper
-  bound, no validation, and no way to ask what a level means.
+
+One thing the old single knob could not do is now a tested property of the core:
+`nextCompilationAttempt()` (`WasmCompilationPolicy.cpp`) is a pure function that
+decides the *next* attempt from the failed policy and the backend's capabilities,
+and `Runtime::instantiate` walks it in a bounded loop, rebuilding the backend by
+the same name `create()` used, before segments and the start function run
+(§4.3). `Strict` stops that loop; `Lax` may regress the degree or move to
+`FallbackOnly` and books either outcome (§4.6).
 
 ### 4.2 The failure path, which is already good
 
@@ -191,17 +234,18 @@ Every compile/entry/thunk/driver failure goes through one helper
   (`WasmBase/WasmDiagnostics.hpp` `kCompileFunctionFailed`),
 - calls `Context::abandon()` so the destructor does **not** run
   `jit_context_destroy` (which segfaults after a failed compile), and
-- throws `std::runtime_error`, so the instantiation fails with an exception
-  rather than an abort.
+- throws `WASM::CompileFailure`, a `std::runtime_error` subclass, so the
+  instantiation fails with an exception rather than an abort — and so a `Lax`
+  policy can recognise *this* failure as the one it may retry, while leaving
+  every other error alone.
 
-That is the shape `CP-1` must keep: a policy change may choose *which* level is
-attempted and *what happens next*, never *how a failure is reported*.
+That is the shape `CP-1` had to keep, and did: a policy change chooses *which*
+level is attempted and *what happens next*, never *how a failure is reported*.
 
 
-### 4.3 Why "try the best level and regress on failure" is not a safe design today
+### 4.3 Why "try the best level and regress on failure" needs a design, not a `try`/`catch`
 
-This is the single most important measurement in the note, and it is the reason
-the requirement's lax mode needs a design rather than a `try`/`catch`:
+This is the single most important measurement in the note:
 
 | Attempt | Result |
 |---|---|
@@ -219,61 +263,76 @@ Measured in `build/lf2/poc/f1_libjit_probe.c` and recorded in
 2. **A retry needs a fresh backend instance, not a fresh function.** The failed
    context is abandoned (deliberately leaked) and the `ModuleInstantiator` that
    owns it is unusable. `Runtime` holds exactly one `BackendInstance`
-   (`Runtime::backend_`), created once in `Runtime::create`. So `CP-3` (the lax
-   ladder) must be able to build a second one — which it can, because the
-   registry is name-based (`createBackendInstance(name)`) and `Runtime` already
-   keeps `backendName_`. It cannot, today, for a plugin loaded by explicit file
-   path: the path is not retained, only the name. `CP-3` records that as a
-   precondition rather than discovering it at runtime.
+   (`Runtime::backend_`), created once in `Runtime::create`. So the lax ladder
+   had to be able to build a second one — which it can, because the registry is
+   name-based (`createBackendInstance(name)`) and `Runtime` keeps `backendName_`.
+   That is exactly what the shipped loop does (`backend_ =
+   createBackendByName(backendName_)` between attempts); see §7.1 item 2 for why
+   the "retain the plugin's path" precondition this paragraph originally named
+   turned out not to arise.
 
 ### 4.4 The seams, and what changing them costs
 
-| Seam | Today | Cost of a change |
-|---|---|---|
-| `ModuleInstantiator::instantiate(module, resolver, hostBridge, profile)` | a non-virtual public method on an **exported** class; `Runtime` is its only production caller | a signature change **removes a symbol** (class B). Adding a policy parameter is therefore not allowed; a `setCompilationPolicy`/`compilationPolicy()` pair mirrors `activeProfile`/`profile()` and is additive (class A) |
-| `ModuleInstantiator::profile()` | the precedent: the instantiator stores the profile the last `instantiate` used, and a backend reads it during `compileFunctions` | the policy travels the same way — the *policy* needs no new virtual; the only new virtual is the capability query below |
-| `BackendSession` (`WasmBase/WasmBackendSession.hpp`) | the façade an embedder drives a backend through; nothing about compilation policy | a `capabilities()` query belongs here **and** on `ModuleInstantiator` (the core's own call site is the instantiator) |
-| The **plugin** boundary | a plugin returns its `ModuleInstantiator*` as a `void*` and "the C++ ABI must match" ([`../BACKEND_PLUGIN_ABI.md`](../BACKEND_PLUGIN_ABI.md) §4.3) | adding a data member or a virtual slot to `ModuleInstantiator` changes the class layout a plugin was built against, so `CP-1` must bump the descriptor's `abi_version` in the same change — an in-tree build is unaffected, a prebuilt plugin is refused at query time instead of reading a stale vtable |
-| `RuntimeConfig` | no compilation field | additive field; a minor bump (`CONFIGURATION.md` §3) |
-| `Runtime` | `rejectUnsupportedConfig` is where a policy the selected backend cannot honour can be refused by name | reuses an existing refusal point rather than adding one |
+The middle column is the seam **as revision 1 found it** — that is what makes the
+third column a price rather than a description. The fourth says what shipped and
+what is still owed.
+
+| Seam | Revision-1 baseline | Cost of a change (as measured then) | Shipped shape (2026-11-01) |
+|---|---|---|---|
+| `ModuleInstantiator::instantiate(module, resolver, hostBridge, profile)` | a non-virtual public method on an **exported** class; `Runtime` its only production caller | a signature change **removes a symbol** (class B), so a policy parameter is not allowed; a `setCompilationPolicy`/`compilationPolicy()` pair mirrors `activeProfile`/`profile()` and is additive (class A) | unchanged signature; the setter/getter pair carries the policy, and `Runtime::adoptInstance` calls the setter before `instantiate()` |
+| `ModuleInstantiator::profile()` | the precedent: the instantiator stores the profile the last `instantiate` used, and a backend reads it during `compileFunctions` | the policy travels the same way — no new virtual for the policy itself | exactly that: `activePolicy` is stored by `setCompilationPolicy` and read by `compileFunctions` |
+| `BackendSession` (`WasmBase/WasmBackendSession.hpp`) | the façade an embedder drives a backend through; nothing about compilation policy | a capabilities query "belongs here **and** on `ModuleInstantiator`" | it lives on `ModuleInstantiator` as `compilationCapabilities()`; a session-driven embedder reaches it through `BackendSession::instantiator()`, so the façade needed no new slot |
+| The **plugin** boundary | a plugin returns its `ModuleInstantiator*` as a `void*` and "the C++ ABI must match" ([`../BACKEND_PLUGIN_ABI.md`](../BACKEND_PLUGIN_ABI.md) §4.3) | adding a data member or a virtual slot to `ModuleInstantiator` changes the class layout a plugin was built against, so `CP-1` must bump the descriptor's `abi_version` in the same change | **the member and the virtual landed; `WASMJIT_BACKEND_ABI_VERSION` is still `2`.** An in-tree build is unaffected; a prebuilt plugin is *not* refused at query time, which is the one item this table leaves open (§7.1) |
+| `RuntimeConfig` | no compilation field | additive field; a minor bump (`CONFIGURATION.md` §3) | `CompilationPolicy compilation{}`, defaulted to the pre-policy behaviour |
+| `Runtime` | `rejectUnsupportedConfig` is where a policy the selected backend cannot honour can be refused by name | reuses an existing refusal point rather than adding one | reused: the compilation clause names the level and the fallback separately, at both `create()` and `instantiate()` |
 
 ### 4.5 The other backends, which the policy must not break
 
 `Sljit/` and `Asmjit/` are scaffold backends with their own tests (for example
 `sljit: an unsupported opcode is refused, never miscompiled`). Neither exposes
-an optimisation level, and neither can interpret. Under the proposed vocabulary
-that means:
+an optimisation level, and neither can interpret. Under the shipped vocabulary
+that means — and this is now what the capability query *answers*, not what a note
+proposes:
 
 | Backend | `None` | `Basic` | `Full` | `FallbackOnly`/`Always` |
 |---|---|---|---|---|
-| `LibJit/` | level 0 | level 0 | level 1 (with `F1`'s risk) | not implemented (`F1` remedy C, "designed, not built") |
-| `Sljit/` | its only mode | its only mode | refused or mapped to its only mode | **refused** |
-| `Asmjit/` | its only mode | its only mode | refused or mapped | **refused** |
+| `LibJit/` | level 0 | level 0 (or `WASMJIT_LIBJIT_OPT`) | level 1 (with `F1`'s risk) | refused at the boundary (`interprets == false`) |
+| `Sljit/` | its only mode | its only mode | **refused** — the default capabilities report `Basic` | **refused** |
+| `Asmjit/` | its only mode | its only mode | **refused** — the same default | **refused** |
 | `null` (baseline) | n/a — executes nothing | n/a | n/a | n/a |
 
-The table is the reason `CP-1` ships a **capability query** and not just an
+The table is the reason `CP-1` shipped a **capability query** and not just an
 enum: "refused by name at the boundary" is the engine's established answer to a
 request a backend cannot serve (`supportsConcurrency`, `supportsProfileConfig`),
-and reusing it keeps `CPD6` honest.
+and reusing it keeps `CPD6` honest. The two scaffolds inherit the non-pure
+default rather than answering for themselves, so a scaffold that later grows an
+optimiser changes one override and nothing in the core.
 
-### 4.6 What the diagnostics already provide
+### 4.6 What the diagnostics provide
 
 `WASM.COMPILE.FUNCTION_FAILED` carries a phase (`Compile`), a module-local
 function index and the backend's own reason. `WASM.COMPILE.*` is therefore the
-right namespace for the two new records a policy needs:
+right namespace for the two records a policy needs, and both are **shipped**:
 
-| Proposed id | Severity | When |
-|---|---|---|
-| `WASM.COMPILE.REDUCED_OPTIMIZATION` | `Warning` | a lax instantiation succeeded at a lower level than requested; carries requested/achieved level and the function index that failed |
-| `WASM.COMPILE.INTERPRETED` | `Note` | a function is executing interpreted because of `FallbackOnly`/`Always` |
+| Id | Severity | When | Emitted by |
+|---|---|---|---|
+| `WASM.COMPILE.REDUCED_OPTIMIZATION` | `Warning` | a lax instantiation succeeded at a lower degree than requested; the message names the achieved and requested level, and the embedded reason is the failing compile's message (which names its function) | `bookReducedCompilation` (`WasmBase/WasmRuntime.cpp`) |
+| `WASM.COMPILE.INTERPRETED` | `Note` | a function runs through the backend's own interpreter because compilation failed under `FallbackOnly`/`Always` | `bookInterpreterFallback` (same file) |
 
 Both are *bookings*, not failures: the first exists so a regression is visible
 (`CPD5`), the second so an embedder can tell "slow but correct" from "compiled".
 
+One precision worth keeping: the reduction record's requested/achieved levels are
+in its **message**, and the failing function index arrives inside the embedded
+reason string rather than in `location.functionIndex`. An embedder that wants the
+index structurally has to parse the message; making it a field would be a change
+to the record schema, not to this policy.
+
 ### 4.7 The interpreter axis is blocked by the library build, not by this note
 
-A probe against the installed libjit (2026-10-31; the library `LibJit/LibJit.pro`
-links with `-ljit`):
+A probe against the installed libjit (measured 2026-10-31; the library
+`LibJit/LibJit.pro` links with `-ljit`) — **still the gating fact on 2026-11-01**,
+because nothing in the tree rebuilt libjit:
 
 ```c
 jit_init();
@@ -285,7 +344,7 @@ and this build was not. A per-type trampoline would therefore have nothing to
 call, so `CP-4`'s *backend* half is **class C** in
 [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §4.1 terms — blocked by the
 build configuration, documented rather than owed. A libjit rebuilt with
-`--enable-interpreter` and a trampoline would flip `capabilities().interprets` to
+`--enable-interpreter` and a trampoline would flip `compilationCapabilities().interprets` to
 true, and the ladder would use it with no core change: that is what the pure
 `nextCompilationAttempt()` decision buys, and why the refusal is a one-line
 capability answer rather than a special case.
@@ -299,7 +358,7 @@ capability answer rather than a special case.
 | ~~`CP2`~~ ✅ (CP-2) | No strictness axis: every failed compile is fatal to the instantiation; the only "regression" is an operator re-running the process with a different environment | §4.2/§4.3 | **High** — the requested `Strict`/`Lax` pair does not exist |
 | ~~`CP3`~~ ✅ (CP-3) | No regression ladder is *possible* without rebuilding the backend: a failed compile poisons its context and `Runtime` holds exactly one `BackendInstance` | §4.3; `Runtime::backend_`; `Context::abandon()` | **High** — the lax mode is a design, not a `catch` |
 | ~~`CP4`~~ ✅ (CP-1) | No capability query: an embedder cannot ask whether a backend can optimise, interpret, or honour a level | no analogue of `supportsConcurrency`/`supportsProfileConfig` for compilation | **High** — `CPD6` cannot be enforced without it |
-| ~~`CP5`~~ ◑ (CP-4) | No interpreter fallback. **Core half done (revision 3):** the ladder prefers an interpreter (`nextCompilationAttempt`), `WASM.COMPILE.INTERPRETED` has an emitter, and a backend that reports `interprets` may leave a function uncompiled instead of throwing. **Backend half blocked:** `jit_uses_interpreter()` returns 0 in this LibJIT build (§4.2), so a trampoline would have nothing to call — class **C** (upstream/build-blocked), not a debt of this note | probe against the installed libjit (§4.2); [`../languages/LF2_DEEP_F1_BACKEND.md`](../languages/LF2_DEEP_F1_BACKEND.md) §4 row C | **Low** — the axis is implemented and refused; the library build is the gate |
+| ~~`CP5`~~ ◑ (CP-4) | No interpreter fallback. **Core half done (revision 3):** the ladder prefers an interpreter (`nextCompilationAttempt`), `WASM.COMPILE.INTERPRETED` has an emitter, and a backend that reports `interprets` may leave a function uncompiled instead of throwing. **Backend half blocked:** `jit_uses_interpreter()` returns 0 in this LibJIT build (§4.7), so a trampoline would have nothing to call — class **C** (upstream/build-blocked), not a debt of this note | probe against the installed libjit (§4.7); [`../languages/LF2_DEEP_F1_BACKEND.md`](../languages/LF2_DEEP_F1_BACKEND.md) §4 row C | **Low** — the axis is implemented and refused; the library build is the gate |
 | ~~`CP6`~~ ✅ (CP-3) | A reduction would be silent: no record distinguishes "compiled at the requested level" from "compiled at a lower one" | §4.6; no `WASM.COMPILE.REDUCED_OPTIMIZATION` | **Medium** — `CPD5` fails without it |
 | ~~`CP7`~~ ✅ (CP-1) | The value is unvalidated: any integer is accepted, including LibJIT's "max" sentinel, and `atoi` silently maps junk to `0` | `libjitOptimizationLevel()` | **Low** — a malformed setting is indistinguishable from the default |
 | ~~`CP8`~~ ✅ (CP-5) | The core/backend contract is unstated: nothing says what a level means, or that a backend may refuse a request | only the backend's own comment | **Medium** — the next backend re-derives it, possibly differently |
@@ -307,13 +366,19 @@ capability answer rather than a special case.
 | ~~`CP10`~~ ✅ (CP-1) | A policy the backend cannot honour is discovered at compile time, not refused at `create()` | `rejectUnsupportedConfig` has no compilation clause | **Medium** — contradicts `CONFIGURATION.md` §2.1 rule 3 |
 | ~~`CP11`~~ ✅ (CP-3) | LibJIT leaks one context per failed module (`abandon()`), and nothing bounds the number of abandoned contexts | `LibJit/LibJitContext.cpp` | **Low** — bounded by failed instantiations; a host that retries a hostile module in a loop turns it into a leak, so `CP-3`'s ladder must not retry without limit |
 
-Reading: everything but `CP5` is **closed** by revision 2. `CP5` is the part
-that is honestly *not buildable today* — its remedy is a LibJIT trampoline, and
-until that exists the axis has one value in practice, which is why `CP-4` is
-sized as "the backend work", not "a config field", and why the request is
-refused rather than approximated. `CP11` (one leaked context per failed attempt)
-is bounded by the ladder: at most one attempt per degree between the request and
-`None`.
+Reading (2026-11-01, revision 4): everything but `CP5` is **closed**, and `CP5`
+is closed on the core side and blocked on the backend side — its remedy is a
+LibJIT trampoline, and this libjit build cannot interpret (§4.7), so the request
+is refused rather than approximated and `CP-4` is sized as "the backend work",
+not "a config field". `CP11` (one leaked context per failed attempt) is bounded
+by the ladder: at most one attempt per degree between the request and `None`.
+
+One row deserves a footnote rather than a clean ✅: **`CP7` is closed for the
+policy field** (an enum cannot hold a junk value) **but not for the environment
+variable** that still feeds `Basic` — `WASMJIT_LIBJIT_OPT` is parsed with `atoi`
+and clamped only at 0 (§4.1). That is a process-level escape hatch, not a
+per-runtime knob, and it is tracked here rather than in a new gap because the
+per-runtime surface the note is about has no such hole.
 
 
 ## 6. Where we can and should play fast and loose
@@ -382,6 +447,41 @@ Stop conditions:
   static state, `dlopen` refcounts), `CP-3` narrows to "in-tree backends only"
   and the plugin case is refused by name rather than half-supported.
 
+### 7.1 What landed, and where it differs from the plan
+
+The plan above is the revision-2 text, kept so the difference is readable. Where
+the implementation diverged, and why:
+
+1. **The query is `compilationCapabilities()`, not `capabilities()`.** The
+   instantiator has other things an embedder can ask about, and an unqualified
+   `capabilities()` on an exported class is a name a later feature (profiles,
+   memory) would want. The longer name is what the tree has.
+2. **The ladder rebuilds the backend *by name*.** `Runtime` stores
+   `backendName_` and nothing else, so `CP-3`'s "retain a plugin's *path* as well
+   as its name" turned out not to arise: `Runtime::create` accepts a name, and
+   the same name resolves the same way on a retry. A plugin installed by path is
+   loaded through `loadBackendPluginFile()`, which is not the `Runtime` path.
+3. **The descriptor's `abi_version` was *not* bumped.** The plan said `CP-1`
+   must bump it because a data member and a virtual slot change the layout a
+   plugin was built against. The member and the virtual shipped;
+   `WASMJIT_BACKEND_ABI_VERSION` is still `2`
+   (`WasmBase/wasmjit_backend.h`). **This is the one open item of the plan** — an
+   in-tree build is unaffected, a prebuilt plugin is not refused at query time.
+   It is recorded here rather than silently closed, and `CP-6`'s tiering work
+   would want the same bump.
+4. **`WASM::CompileFailure` was added.** The plan only said "throws"; a named
+   type is what lets `Lax` distinguish a retryable compile failure from an
+   unrelated error, so it is now part of the contract
+   (`WasmCompilationPolicy.hpp`).
+5. **Two introspection accessors, not one.** `achievedOptimizationLevel()` answers
+   the common question cheaply; `achievedCompilationPolicy()` exists because a
+   fallback to the interpreter keeps the *degree* unchanged, so the level alone
+   cannot say the function was interpreted.
+6. **The reduction record carries the failing index in its message.** The plan
+   asked for a record "with requested/achieved level and the failing function
+   index"; the levels are named and the index arrives inside the embedded reason
+   string (§4.6).
+
 
 ## 8. Test survey
 
@@ -395,10 +495,10 @@ Stop conditions:
 | `[sljit]` `an unsupported opcode is refused, never miscompiled` | the same for SLJIT |
 | `./Test/WasmJit` (default) | the whole suite compiles at level 0 |
 
-Notably **absent**: no automated test asserts `WASM.COMPILE.FUNCTION_FAILED`
-(a grep over `Test/` finds no reference to it), and none exercises the
-optimization level as an assertion rather than an environment variable. `F1`'s
-remedy A is documented and untested; `CP-5` adds the missing case.
+Notably **absent at revision 1**: no automated test asserted
+`WASM.COMPILE.FUNCTION_FAILED` (a grep over `Test/` found no reference to it),
+and none exercised the optimization level as an assertion rather than an
+environment variable. That is what §8.2 closed.
 
 ### 8.2 What revision 2 added (`Test/ConfigurationTests.cpp`, `[compilation-policy]`)
 
@@ -414,13 +514,26 @@ asserts the property the engine owns (never fail when it can regress, never
 regress silently) and adapts to the library instead of pinning a bug as a
 feature.
 
-### 8.3 Reading
+### 8.3 Reading (2026-11-01, `8c87f5f`)
 
-The compilation path is the least-tested configuration surface in the tree: its
-behaviour is currently *operated* (an environment variable and a manual run)
-rather than *asserted*. That is tolerable while there is one knob and one
-backend, and it stops being tolerable the moment the policy becomes per-runtime
-and a regression is a bookable event.
+`[compilation-policy]` runs 30 assertions in 3 cases and is part of the default
+suite, so the policy is now *asserted* rather than *operated*: the capability
+query, the ladder's ordering and the "regress or refuse, never silently" property
+are all pinned without an environment variable. What is still not automated:
+
+- **`WASM.COMPILE.FUNCTION_FAILED` has no direct assertion.** It is observable
+  through a sink, and the ladder test depends on it firing, but no case asserts
+  the record's id and phase on their own.
+- **The interpreter path has no end-to-end case**, because this libjit build
+  cannot interpret (§4.7). `nextCompilationAttempt()` is tested as a pure
+  function, which is the most that can be pinned without a build that reports
+  `interprets`.
+- **The plugin-rebuild path of the ladder** is exercised only with in-tree
+  backends, which is the same one-item gap §4.4 records.
+
+That is a tolerable place for the axis to sit while there is one backend that can
+optimise: the parts the engine owns are asserted, and the parts a library build
+owns are named rather than faked.
 
 ## 9. References
 
@@ -438,15 +551,22 @@ and a regression is a bookable event.
   [`PROFILES.md`](PROFILES.md) (the `supports*`/refusal pattern this note
   copies); [`MEMORY_PROVIDER.md`](MEMORY_PROVIDER.md) (an opt-in policy whose
   default is provably the old behaviour — the model `CPD2` follows).
-- Source anchors: `LibJit/LibjitModuleCompiler.cpp` (`libjitOptimizationLevel`,
-  `applyOptimizationLevel`, `failCompilation`), `LibJit/LibJitContext.{hpp,cpp}`
-  (`abandon`), `WasmBase/WasmModuleInstance.hpp` (`ModuleInstantiator`),
+- Source anchors: `WasmBase/WasmCompilationPolicy.{hpp,cpp}` (the vocabulary,
+  `supports*`, `nextCompilationAttempt`, `CompileFailure`),
+  `LibJit/LibjitModuleCompiler.cpp` (`libjitOptimizationLevel`,
+  `libjitLevelFor`, `applyOptimizationLevel`, `failCompilation`,
+  `compilationCapabilities`), `LibJit/LibJitContext.{hpp,cpp}` (`abandon`),
+  `WasmBase/WasmModuleInstance.hpp` (`ModuleInstantiator`'s policy accessors),
   `WasmBase/WasmModuleInstance.cpp` (`instantiate`'s order),
   `WasmBase/WasmRuntime.{hpp,cpp}` (`RuntimeConfig`, `rejectUnsupportedConfig`,
+  `bookReducedCompilation`/`bookInterpreterFallback`, the retry loop,
+  `achievedOptimizationLevel`/`achievedCompilationPolicy`,
   `backendName_`/`backend_`), `WasmBase/WasmBackendRegistry.hpp`
   (`createBackendInstance`, `BackendInstance`), `WasmBase/WasmBackendSession.hpp`,
-  `WasmBase/WasmDiagnostics.hpp` (`kCompileFunctionFailed`),
-  `Test/SljitBackendTests.cpp`, `Test/AsmjitModuleCompilerTests.cpp`.
+  `WasmBase/WasmDiagnostics.hpp` (`kCompileFunctionFailed`,
+  `kCompileReducedOptimization`, `kCompileInterpreted`),
+  `Test/SljitBackendTests.cpp`, `Test/AsmjitModuleCompilerTests.cpp`,
+  `Test/ConfigurationTests.cpp` (`[compilation-policy]`).
 
 
 ## 10. Appendix: the mapping, the plumbing, and the retry analysis
@@ -457,18 +577,18 @@ and a regression is a bookable event.
 |---|---|---|---|---|
 | `None` | `jit_function_set_optimization_level(fn, 0)` on body, tail thunk and driver | its only mode — accept the request and do what it does | its only mode — same | documents its own floor |
 | `Basic` | level 0 (the default, `CPD2`) | same | same | same |
-| `Full` | level 1 (`F1`'s risk, opt-in) | accept-and-map, or refuse in `capabilities()` | same | documents its own ceiling |
+| `Full` | level 1 (`F1`'s risk, opt-in) | accept-and-map, or refuse in `compilationCapabilities()` | same | documents its own ceiling |
 | `Strict` | current behaviour: throw + `abandon()` | throw | throw | must not abort |
 | `Lax` | engine-level ladder (`CP-3`), not a LibJIT feature | same | same | same |
 | `Never` | no interpreter | only option | only option | — |
-| `FallbackOnly` / `Always` | refused in `capabilities()`: `jit_uses_interpreter() == 0` in this build (§4.2), and no trampoline exists | refused in `capabilities()` | refused | may implement |
+| `FallbackOnly` / `Always` | refused in `compilationCapabilities()`: `jit_uses_interpreter() == 0` in this build (§4.7), and no trampoline exists | refused in `compilationCapabilities()` | refused | may implement |
 
 The mapping lives in the backend because it *is* backend knowledge — the exact
 thing [`../LAYERING.md`](../LAYERING.md) §2 keeps out of `WasmBase/`. The core's
-obligation is the other half: a request answered `false` by `capabilities()` is
+obligation is the other half: a request answered `false` by `compilationCapabilities()` is
 refused at the boundary with a message, never attempted and then failed.
 
-### 10.2 The plumbing shape (proposed by `CP-1`)
+### 10.2 The plumbing shape (`CP-1`, as shipped)
 
 ```cpp
 // WasmBase/WasmModuleInstance.hpp — additive only.
@@ -476,20 +596,20 @@ class ModuleInstantiator {
 public:
     // … existing instantiate() unchanged: a signature change would remove a
     // symbol (class B).  The policy travels the way `profile` already does.
-    void                     setCompilationPolicy(const CompilationPolicy& policy);
-    const CompilationPolicy& compilationPolicy() const;
+    void                     setCompilationPolicy(const CompilationPolicy& policy) noexcept;
+    const CompilationPolicy& compilationPolicy() const noexcept;
     //! Non-pure on purpose: a backend that does not override it answers
     //! "Basic only, no interpreter", which is correct for every backend that
     //! never touched the policy.
-    virtual BackendCompilationCapabilities capabilities() const;
-protected:
-    CompilationPolicy activePolicy{};   // set by instantiate(), read by compileFunctions()
+    virtual BackendCompilationCapabilities compilationCapabilities() const;
+private:
+    CompilationPolicy requestedPolicy{};  // set by setCompilationPolicy, read by compileFunctions()
 };
 
 // WasmBase/WasmRuntime.hpp
 struct RuntimeConfig {
     // …
-    CompilationPolicy compilation{};    // Basic / Strict / Never == today
+    CompilationPolicy compilation{};    // Basic / Strict / Never == the pre-policy behaviour
 };
 ```
 
@@ -498,16 +618,24 @@ The ladder itself lives in one pure function (`nextCompilationAttempt`), so
 rules are testable without a backend. Two details make the plumbing additive
 rather than a break:
 
-- **`setCompilationPolicy` is called by `Runtime::instantiate` from
+- **`setCompilationPolicy` is called by `Runtime::adoptInstance` from
   `config_.compilation`**, before `instantiate()`, exactly as `profile` is
-  passed today. `ModuleInstantiator::instantiate` then stores it in
-  `activePolicy`, so a backend reads it inside `compileFunctions` with no new
-  parameter and no new virtual.
-- **`capabilities()` has a body.** A pure virtual would break every existing
-  backend's build (class B at best), and a plugin compiled against the old ABI
-  would have no vtable slot for it — which is why the query is answered from the
-  *descriptor* at load time for a plugin, and the default body covers in-tree
-  backends that do not care.
+  passed. The setter stores it in `requestedPolicy`, so a backend reads it inside
+  `compileFunctions` with no new parameter and no new virtual.
+- **`compilationCapabilities()` has a body.** A pure virtual would break every
+  existing backend's build, so the default answers `{Basic, interprets = false}`
+  and a backend that does not care needs no change.
+
+That second point has a limit worth stating plainly, because the plan text above
+it promises more than the ABI delivers: **a plugin does not answer this query
+from its descriptor.** The descriptor's `wasmjit_capabilities` is a *different*
+set — SIMD, components, continuations, profiles, "executes" — and carries no
+compilation degree or interpreter flag. So the core calls the virtual on the
+instantiator the plugin returned, which means a plugin built against a
+`ModuleInstantiator` from before `CP-1` has no such vtable slot. That is exactly
+the hazard §7.1 item 3 records: the member and the virtual shipped without the
+`abi_version` bump that would make the core refuse such a plugin at load time.
+
 
 ### 10.3 The retry analysis, state by state
 

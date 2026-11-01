@@ -46,7 +46,7 @@ below.
 |---|---|---|---|
 | **GNU LibJIT** (installed, primary) | ✗ none — no vector type exists anywhere in the API | ✗ none — no packed/SSE/AVX opcode exists | **No SIMD. The only way is to synthesise `v128` out of scalar primitives and lower every op to a call.** |
 | **SLJIT** | ✗ (it has no typed-value model at all) | ✓ full — `SLJIT_SIMD_REG_128`/`SLJIT_SIMD_REG_256` widths, `SLJIT_VRn` registers, `sljit_emit_simd_*` | **Yes, at the register/instruction level** — but it is not wired into this repo and would need the whole value/operand model on top. |
-| **AsmJit** | ✗ (assembler/IR + register allocation, not a value model) | ✓ complete — MMX/SSE…SSE4/AVX/AVX-512 (`Vec` = Xmm/Ymm/Zmm, `KReg`, `Tmm`), AArch64 NEON | **Yes, at the instruction level** — same caveat, plus the backend does not exist yet. |
+| **AsmJit** | ✗ (assembler/IR + register allocation, not a value model) | ✓ complete — MMX/SSE…SSE4/AVX/AVX-512 (`Vec` = Xmm/Ymm/Zmm, `KReg`, `Tmm`), AArch64 NEON | **Yes, at the instruction level** — same caveat, plus the backend lowers no Wasm `v128` yet (it executes an i32/i64 subset, and its SIMD code is native probe work). |
 
 Two consequences fall out immediately:
 

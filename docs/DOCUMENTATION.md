@@ -1,11 +1,16 @@
 # Documentation — Doxygen Style in the Headers, and the Note Tree {#doc_documentation}
 
-Status: policy note (revision 2 — 2026-10-30: the Markdown notes are now part of
-the generated site, so the 55 notes gain stable page ids and two index pages put
-them into a hierarchy; the escaping list in §5 gains the Markdown rows a real
-run exposed, and §9 is new. Revision 1 — 2026-10-29: every comment in the
-project's `.h`/`.hpp` files was converted to Qt-style Doxygen comments,
-`Doxyfile` was added, and `Test/HeaderDocTests.cpp` now enforces the rule).
+Status: policy note (revision 3 — 2026-11-01: a freshness pass. §8's "0
+undocumented declarations" was not true of the strict pass and is replaced by the
+measured 1,810-item breakdown; the §9 tree diagram's 21/15/36 counts are corrected
+to 23/16/38 (docs / languages / proposals), "all 69 headers" becomes the predicate
+"every header outside `extern/`" plus a dated count. Revision 2 — 2026-10-30: the
+Markdown notes are now part of the generated site, so the then-55 notes gain
+stable page ids and two index pages put them into a hierarchy; the escaping list
+in §5 gains the Markdown rows a real run exposed, and §9 is new. Revision 1 —
+2026-10-29: every comment in the project's `.h`/`.hpp` files was converted to
+Qt-style Doxygen comments, `Doxyfile` was added, and `Test/HeaderDocTests.cpp` now
+enforces the rule).
 Audience: anyone adding or editing a header or a note, or reviewing a change
 that touches one.
 
@@ -217,8 +222,9 @@ sed -e 's/^EXTRACT_ALL .*/EXTRACT_ALL = NO/' \
 
 The output goes to `build/doxygen/` (and `build/doxygen-strict/` for the strict
 pass) — never into the source tree, like every other artefact (`AGENTS.md`).
-The strict pass is a *work list*, not a gate: today it reports the gap counted in
-§8 plus the parameter gaps that come with it.
+The strict pass is a *work list*, not a gate: at revision 4 (2026-11-01,
+`8c87f5f`) it reports **1,810 warnings**, and §8 classifies them. The **default**
+render is the gate, and it is warning-free.
 
 ## 7. Why this is necessary
 
@@ -244,11 +250,25 @@ The strict pass is a *work list*, not a gate: today it reports the gap counted i
 
 ## 8. What is deliberately not done
 
-- **Every declaration is now documented.** Measured on 2026-10-30 with the strict
-  pass (§6): **0 undocumented declarations** across all 69 headers, down from
-  **4,591** before the sweep. The count must stay at zero: a new or edited
-  declaration is expected to arrive documented, and the strict pass is the check
-  that catches one that does not.
+- **Every declaration has a block; not every block lists its parameters.** The
+  enforced gate is the default render (§6, step 1): **0 warnings**, measured
+  2026-11-01 on `8c87f5f` across **every header outside `extern/`** — 72
+  `.hpp`/`.h` files (the count is a snapshot, the predicate is the rule). The
+  stricter pass is a work list, and at the same revision it reports **1,810**
+  items, in three groups:
+  - **1,477 `\param` gaps**, of which 1,040 are `dispatch*` declarations whose
+    brief is the accepted uniform tail (§8, next bullet) but whose parameters are
+    not listed one by one;
+  - **322 `\return` gaps** on operators, trampolines and factories;
+  - **11 declarations with no block at all**, all in `Asmjit/`
+    (`AsmjitContext.hpp`, `AsmjitModuleCompiler.hpp`) — the experimental backend,
+    which is not installed.
+
+  Before the documentation sweep **4,591** declarations had no block; that number
+  is history, and it is the one this milestone closed. The remaining 1,810 are
+  parameter-level gaps in a documented declaration, which is a different (and
+  much less serious) thing than an undocumented one — which is why the strict
+  pass stays a work list rather than becoming a gate.
 - **A doc block must say something.** A block of the form
   "`\brief Performs the \<name> operation. \param x Input value or output destination for this operation.`"
   is *worse than no block*: it renders, it is
@@ -280,7 +300,7 @@ a flat tree is. The hierarchy is therefore built by three index pages:
 
 | Index page | Id | Children |
 |---|---|---|
-| [`index.md`](index.md) | `docs_index` | the 22 notes in `docs/`, `proposals` **and** `languages` |
+| [`index.md`](index.md) | `docs_index` | the 23 notes in `docs/`, `proposals` **and** `languages` |
 | [`proposals/index.md`](proposals/index.md) | `proposals_index` | the 38 proposal notes |
 | [`languages/index.md`](languages/index.md) | `languages_index` | the 16 language notes (the `LF-1` set and the `LF-2` reports) |
 
@@ -298,11 +318,11 @@ which produces:
 WasmJit            (README.md, the main page)
 ├── Direction, Feature completeness, …   (the README's own sections)
 └── docs                                 (docs/index.md)
-    ├── ABI, API/ABI stability, …        (21 notes, each with its own sections)
+    ├── ABI, API/ABI stability, …        (23 notes, each with its own sections)
     ├── languages                        (docs/languages/index.md)
-    │   └── Triage, Clustering, Charters, Evidence, LF-2 …   (15 study notes)
+    │   └── Triage, Clustering, Charters, Evidence, LF-2 …   (16 study notes)
     └── proposals                        (docs/proposals/index.md)
-        └── GC, SIMD, THREADS, …         (36 notes)
+        └── GC, SIMD, THREADS, …         (38 notes)
 ```
 
 **Adding a note** takes three steps: create the file; append `{#doc_what_it_is}`

@@ -271,11 +271,15 @@ verdicts can be re-checked without re-deriving them.
 
 ### 6.2 Build and suite
 
-Built out-of-source (`build/AasFinal` for the current numbers) with
-`env MAKE=/usr/bin/make /usr/bin/make -j16 QMAKE=/usr/bin/qmake6` → **exit 0**.
-Suite (§11 for the full table): default run **11,454 assertions / 481 test
-cases, all passing**; non-spec subset 11,014 / 285; the proposal-documentation
-lint `[docs]` 839 assertions (two cases: the note shape and the note tree). The documented negative-module measurement is
+**Snapshot (2026-10-29 re-measure, `5c3d194`, `build/AasFinal`) — this is the
+milestone's own measurement, not a statement about the current tree.** For the
+current tally see [`TESTING.md`](TESTING.md) or [`FRESHNESS.md`](FRESHNESS.md) §8.
+
+Built out-of-source with `env MAKE=/usr/bin/make /usr/bin/make -j16
+QMAKE=/usr/bin/qmake6` → **exit 0**. Suite (§11 for the full table): default run
+**11,454 assertions / 481 test cases, all passing**; non-spec subset 11,014 / 285;
+the proposal-documentation lint `[docs]` 839 assertions (two cases: the note
+shape and the note tree — **982** on 2026-11-01). The documented negative-module measurement is
 **2,382 / 2,382** binary commands handled
 ([`VALIDATION.md`](VALIDATION.md) "Measured coverage", 2026-10-18; opt-in via
 `WASM_SPEC_VALIDATE=1`).
@@ -286,7 +290,7 @@ lint `[docs]` 839 assertions (two cases: the note shape and the note tree). The 
 |---|---|---|
 | GNU LibJIT (`LibJit/`) | The only executing backend: context, type translation, module compiler, opcode dispatcher, runtime; SIMD through the shared helper layer | G1's subject. |
 | `WasmStub/` | Non-compiling pretty-printer over the shared `OpcodeDispatcher` | Proves the *decoder* is backend-neutral; proves nothing about the *instantiator* seam. |
-| AsmJit (`Asmjit/`) | **Planned, no code yet** (`AAS11` documented 2026-10-29): the directory is reserved and the subproject stays in the build, but its `.pro` declares no sources, so it emits an empty `libAsmjit.so` that is never installed and never selectable by name. `Asmjit/README.md` states the status and the work order | Planned work, not distance to G3: starting it is a directory-local change. |
+| AsmJit (`Asmjit/`) | **Experimental executing backend since 2026-10-30** (`9a7b539`): `AsmjitContext`, `AsmjitTypeTranslator` and `AsmjitModuleCompiler` are real sources, and it runs an i32/i64 integer subset (arithmetic, bit counts, conversions, structured control flow, globals, typed direct/indirect calls, checked memory32 access). It is still **not installed and not selectable through the runtime registry**; `[asmjit]` covers it. At the time of the milestone (`AAS11`, 2026-10-29) it was a documented, empty scaffold | Planned work, not distance to G3: it grew without touching `WasmBase/`. |
 | SLJIT (`Sljit/`) | **Provisional executable backend since 2026-10-30**: the directory links the shared core, registers `sljit`, and runs a straight-line `i32`/`i64` subset, refusing everything else with a null `Callable::fnPtr` ([`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) §9). At the time of the milestone (`AAS11`, 2026-10-29) it was a documented, empty scaffold | The seam now has a second real implementation inside the tree — directory-local, `WasmBase/` unchanged. |
 
 ### 6.4 The seam, as it exists
@@ -330,19 +334,21 @@ on every suite run. This is the check G3 partly rests on.
 
 ### 6.6 The documentation inventory
 
-**21 notes in `docs/`** today: the 14 that existed when this study was first
-measured, plus the feasibility/embedding notes written since
+**23 notes in `docs/`** (2026-11-01; 21 when revision 4 measured at `5c3d194`):
+the 14 that existed when this study was first measured, plus the
+feasibility/embedding notes written since
 ([`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md),
 [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md),
 [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md),
 [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md)),
 [`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md), the header-comment policy
-[`DOCUMENTATION.md`](DOCUMENTATION.md), and its consumer
+[`DOCUMENTATION.md`](DOCUMENTATION.md), the note-freshness policy
+[`FRESHNESS.md`](FRESHNESS.md), and its consumer
 [`READINESS_AUDIT.md`](READINESS_AUDIT.md);
 `UNMODELLED_VALUE_TYPES.md` is the renamed `NULL_JIT_VALUE_DIAGNOSIS.md`. There
-are also **34 notes in `docs/proposals/`**. The
-`README.md` proposal table's completeness estimate is **22 of 34 rows at 100%**,
-with the sub-100 rows concentrated exactly where this study expects them: threads
+are also **38 notes in `docs/proposals/`** (34 at `5c3d194`). The
+`README.md` proposal table's completeness meter is a *summary*, and the
+sub-100 rows are concentrated exactly where this study expects them: threads
 (80%, 85%, 55%), stack switching (85%), numeric/FP16 (70%), the upstream-blocked
 proposals (0–10%), and JS integration (whose row now reads "engine seam 100% ·
 JS engine external" — the engine-side obligations are complete and the JS engine

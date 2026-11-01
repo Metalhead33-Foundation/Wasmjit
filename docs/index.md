@@ -19,6 +19,7 @@ this table builds as a *sibling* of this page rather than a child, and the
 | \subpage doc_diagnostics | Diagnostics and debugging: stable ids, the bounded ring, the JSON schema, and the host flags |
 | \subpage doc_documentation | This documentation policy: Doxygen comments in every header, the note tree, and the checks that enforce both |
 | \subpage doc_embedding_surface | The embedder-facing surface: `WASM::Runtime`, the header tiers, versioning/soname/visibility, and the install layout |
+| \subpage doc_freshness | Keeping the notes in step with the tree: the three kinds of state claim, the one home of each measured fact, and the re-measurement probe |
 | \subpage doc_language_feasibility | The two language-support studies and the entry-gate readiness audit that gates them |
 | \subpage languages_index | The `LF-1` scoping study and the `LF-2` studies: the triage over the whole canonical list, the clustering map, the charters, the evidence log, and the commissioned full-feasibility reports with their verdicts and engine findings |
 | \subpage doc_layering | Backend-agnosticism: what `WasmBase/` may name, the contract rows a backend must honour, and the check |

@@ -147,7 +147,8 @@ per-milestone done markers, is the authoritative per-item status.
 | [`ABI.md`](docs/ABI.md) | The `VMContext*`-as-arg0 calling convention, the `Callable` layout, store-owned entities, the optional `HostBridge` host boundary, and the embedder guide | Reference (describes shipped behaviour) | `████████████████████` current |
 | [`TYPE_IDENTITY.md`](docs/TYPE_IDENTITY.md) | Module-local type indices → store-scoped `TypeId`: canonicalisation, interning, `rec` groups, the `match` relation | Design note + implementation reference | `███████████████████░` 95% — M0–M7 shipped; M8 (footprint measurement) pending |
 | [`TESTING.md`](docs/TESTING.md) | Building/running the Catch2 suite, the `wasm-tools` spec-suite conversion, the curated `wast_supported.txt` workflow, reading the output | Guide (process) | `████████████████████` current |
-| [`DOCUMENTATION.md`](docs/DOCUMENTATION.md) | Why every header comment is a Doxygen comment, the Qt-style forms (`//!`, `/*!`, `\file`, `\brief`, `\par`), the prose that breaks a Doxygen run, and how the Markdown notes are nested into a tree (`docs/index.md` → `docs/proposals/index.md`, `docs/languages/index.md`) rather than flattened | Policy + guide (process) | `████████████████████` current — all 69 headers converted, 76 notes in the tree, `doxygen Doxyfile` warning-free |
+| [`DOCUMENTATION.md`](docs/DOCUMENTATION.md) | Why every header comment is a Doxygen comment, the Qt-style forms (`//!`, `/*!`, `\file`, `\brief`, `\par`), the prose that breaks a Doxygen run, and how the Markdown notes are nested into a tree (`docs/index.md` → `docs/proposals/index.md`, `docs/languages/index.md`) rather than flattened | Policy + guide (process) | `████████████████████` current — every header outside `extern/` converted, 23 + 38 + 16 notes in the tree, `doxygen Doxyfile` warning-free |
+| [`FRESHNESS.md`](docs/FRESHNESS.md) | Keeping the notes in step with the tree: the three kinds of state claim (contract, dated snapshot, history), the one home of each measured fact, the triggers that re-open a §4 when a milestone lands, and the probe that re-measures every number the notes cite | Policy + guide (process) | `████████████████████` current — revision 1 (2026-11-01) re-cut the two engine-seam §4 snapshots and gave every drifted total a date |
 | [`VALIDATION.md`](docs/VALIDATION.md) | The validating front end: what `Module::validate()` checks, the conservative taint policy, measured `assert_invalid` coverage, and the remaining rules | Design + status | `████████████████████` 100 % of negative modules |
 | [`WRITING_A_BACKEND.md`](docs/WRITING_A_BACKEND.md) | The walkthrough for a new code generator: the four `ModuleInstantiator` hooks, decoding a body through `OpcodeDispatcher`, the ABI the generated code must emit, the `BackendSession` façade, packaging/registration/selection, and the SLJIT scaffold as the worked example with its documented limits | Guide (how-to) | `████████████████████` current — `Sljit/` is the worked example |
 | [`SAFETY.md`](docs/SAFETY.md) | The safety policies: artifact detection, input-derived allocation bounds, the allocation budget, traps vs `abort`, RAII for locks, and the pitfalls that produced them | Policy + pitfalls | `████████████████████` current |
@@ -227,9 +228,11 @@ rather than assumed: `WASM_SPEC_VALIDATE=1` executes the four negative-module
 families instead of skipping them, and the validator (`docs/VALIDATION.md`)
 rejects **all 2,211** curated `assert_invalid` cases plus all 127
 `assert_unlinkable` ones and all 27 `assert_uninstantiable` ones — **2,382 of
-2,382** binary negative commands. The strict run is fully green (the default
-suite is **11,011 assertions / 442 test cases**). All 17 curated
-`assert_malformed` cases are rejected too, including the strict LEB128 cases;
+2,382** binary negative commands. The strict run is fully green; the default
+suite measured **16,516 assertions in 547 test cases** on 2026-11-01 (`8c87f5f`,
+`build/Desktop-Debug`) — re-run `./Test/WasmJit` for the current line. All 17
+curated `assert_malformed` cases are rejected too, including the strict LEB128
+cases;
 the remaining malformed cases are *text-format* (946 commands across all kinds)
 and need a text parser, not a validator. See
 [`docs/TESTING.md`](docs/TESTING.md#measuring-the-negative-module-commands).
@@ -245,7 +248,7 @@ WASM_SPEC_SCRIPTS=all ./WasmJit                              # full sweep (loud 
 `Test/wast_supported.txt` is what "curated" means; see
 [`docs/TESTING.md`](docs/TESTING.md) for the refresh recipe.
 
-## Current Repository Layout
+## Repository layout
 
 The top-level qmake project is [`Project.pro`](Project.pro); it builds one
 library per backend plus the test executable.
@@ -262,7 +265,7 @@ library per backend plus the test executable.
 | `extern/` | Submodules: `MhLib` (`Elvavena` I/O + `Euphemy`) and the upstream `WasmTestsuite` |
 | `build/` | Shadow build output — **all build artefacts go here, never in the source tree** |
 
-## Current Status
+## Status (snapshot 2026-11-01)
 
 The repository builds a set of shared libraries plus a console test executable
 through qmake:
@@ -288,9 +291,11 @@ through qmake:
   (`Runtime::create("libjit")`) through `WasmBase/WasmBackendRegistry.hpp`; a
   backend can also be a separate shared library behind the C descriptor in
   `WasmBase/wasmjit_backend.h` ([`docs/BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md)).
-  The installed layout and `wasmjit.pc` are still to come
-  ([`docs/EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) `ES-4`/`ES-5`), so
-  today the include path is the project root;
+  The installed layout and `wasmjit.pc` shipped with `ES-4`/`ES-5`
+  ([`docs/EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md)); the include path is
+  `$PREFIX/include/wasmjit`, and `Test/install-check.sh` installs into a scratch
+  prefix and builds an out-of-tree consumer against it. The project root remains
+  the include path for an in-tree build;
 - the executable under `build/<config>/Test/WasmJit` is a development sandbox and
   test harness, not the final embeddable API.
 

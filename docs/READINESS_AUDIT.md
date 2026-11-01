@@ -483,9 +483,14 @@ gate rows are measured at `5c3d194` (branch `LibjitDispatcher`, since merged);
 the two suite rows were re-run after the `[docs]` note-tree case landed, so they
 are larger than the audit's own run (11,460 assertions / 484 cases).
 
+**This is an audit record, not a description of the current tree** — the counts
+are the ones the verdicts were reached on. For the current ones, see
+[`FRESHNESS.md`](FRESHNESS.md) §8; the default suite measured **16,516
+assertions / 547 cases** on 2026-11-01 (`8c87f5f`).
+
 | Run | Command | Result | What it evidences |
 |---|---|---|---|
-| Build | `env MAKE=/usr/bin/make /usr/bin/make -j16` | exit **0** | the tree at this commit builds; `Asmjit/`/`Sljit/` still build as empty subprojects |
+| Build | `env MAKE=/usr/bin/make /usr/bin/make -j16` | exit **0** | the tree at this commit builds; every subproject, including the two non-LibJIT backends, links |
 | Full suite | `./Test/WasmJit` | **11,579 assertions / 485 cases**, all passed | the default gate is green |
 | ABI baseline | `./Test/abi-check.sh build/Desktop-Debug` | `libWasmBase: 0 removed, 0 added`; `libLibJit: 0 removed, 0 added`; **OK** | `RG6`: no exported symbol moved, in either library |
 | Install + consumer | `./Test/install-check.sh build/Desktop-Debug` | `consumer: i32, f64, i32+i32, v128, i32+v128 OK`; **OK** | `RG5`/`RG6`: the installed headers and `wasmjit.pc` carry the frozen ABI |
@@ -496,7 +501,7 @@ are larger than the audit's own run (11,460 assertions / 484 cases).
 | `[surface]` | `./Test/WasmJit '[surface]'` | **4 assertions / 1 case** | the version identity an embedder compiles against agrees with the runtime |
 | `[tiers]` | `./Test/WasmJit '[tiers]'` | **210 assertions / 3 cases** | every public header has one tier and one compile-only TU (25 embedder / 17 backend / 16 internal) |
 | `[layering]` | `./Test/WasmJit '[layering]'` | **4 assertions / 1 case** | the vocabulary check runs in the default suite |
-| `[docs]` | `./Test/WasmJit '[docs]'` | **839 assertions / 2 cases** | the 34 proposal notes keep the documented structure, and the 55 notes keep their place in the note tree |
+| `[docs]` | `./Test/WasmJit '[docs]'` | **839 assertions / 2 cases** | every proposal note keeps the documented structure, and every note keeps its place in the note tree |
 | `[headerdoc]` | `./Test/WasmJit '[headerdoc]'` | **6 assertions / 3 cases** | the header-comment policy |
 | `[multiagent]` | `./Test/WasmJit '[multiagent]'` | **51 assertions / 6 cases** | the opt-in `Agents` model behind `RG2`'s thread row |
 | `[concurrency]` | `./Test/WasmJit '[concurrency]'` | **81 assertions / 14 cases** | the single-agent contract and its guards |
