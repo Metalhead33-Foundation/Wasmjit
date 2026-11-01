@@ -88,3 +88,11 @@ WARN_NO_PARAMDOC       = YES
 WARN_IF_INCOMPLETE_DOC = YES
 WARN_AS_ERROR          = NO
 WARN_FORMAT            = "$file:$line: $text"
+
+HTML_EXTRA_STYLESHEET  = extern/doxygen-awesome-css/doxygen-awesome.css \
+                         extern/doxygen-awesome-css/doxygen-awesome-sidebar-only.css
+HTML_EXTRA_FILES       = extern/doxygen-awesome-css/doxygen-awesome-darkmode-toggle.js \
+                         extern/doxygen-awesome-css/doxygen-awesome-fragment-copy-button.js \
+                         extern/doxygen-awesome-css/doxygen-awesome-paragraph-link.js \
+                         extern/doxygen-awesome-css/doxygen-awesome-interactive-toc.js
+HTML_COLORSTYLE        = LIGHT
