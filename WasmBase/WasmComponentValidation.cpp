@@ -2018,7 +2018,24 @@ bool isInterfaceName(const std::string& name)
 		if (!isSemver(name.substr(at + 1), false))
 			return false;
 	}
-	return true;
+	// CM14: the three segments are kebab labels (the namespace may be dotted).
+	// Checking only the structure accepted `WaSi:http/types`, `wasi:HtTp/types`
+	// and `wasi:http/TyPeS`, all of which the corpus rejects.
+	if (!isKebabLabel(name.substr(0, colon)))
+		return false;
+	const std::string namespacePart = name.substr(colon + 1, slash - colon - 1);
+	for (std::size_t start = 0;;) {
+		const std::size_t dot = namespacePart.find('.', start);
+		const std::string piece = namespacePart.substr(start,
+				dot == std::string::npos ? std::string::npos : dot - start);
+		if (!isKebabLabel(piece))
+			return false;
+		if (dot == std::string::npos)
+			break;
+		start = dot + 1;
+	}
+	const std::size_t interfaceEnd = at == std::string::npos ? name.size() : at;
+	return isKebabLabel(name.substr(slash + 1, interfaceEnd - slash - 1));
 }
 
 // Decomposed `plainname` (Explainer.md "External names"). The Component Model
