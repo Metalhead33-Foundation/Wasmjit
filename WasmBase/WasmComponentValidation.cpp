@@ -2483,6 +2483,10 @@ void ComponentValidator::processComponentDecl(const ComponentDecl& declaration,
 {
 	switch (declaration.kind) {
 	case ComponentDecl::Kind::Import: {
+		// CM14: the import name is validated here because `validateExternName`
+		// had exactly one caller; a component-level import that is not kebab
+		// case (or not a well-formed `wasi:` interface name) was accepted.
+		validateExternName(declaration.import().name.name);
 		ResolvedDecl resolved = resolveExternType(declaration.import().type, scope);
 		resolved.name = declaration.import().name;
 		const ComponentDefinitionRef ref{&component_, ComponentDefinitionKind::Import,
@@ -2491,6 +2495,7 @@ void ComponentValidator::processComponentDecl(const ComponentDecl& declaration,
 		break;
 	}
 	case ComponentDecl::Kind::Export: {
+		validateExternName(declaration.exportDecl().name.name);
 		ResolvedDecl resolved = resolveExternType(declaration.exportDecl().type, scope);
 		resolved.name = declaration.exportDecl().name;
 		const ComponentDefinitionRef ref{&component_, ComponentDefinitionKind::Export,
