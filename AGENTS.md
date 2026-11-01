@@ -50,9 +50,12 @@ the one-line check to run.
   generator may begin — it may; SLJIT is the recommendation, and the `RA1`/`RA2` proof
   gaps are named there).
 
-- **[`docs/BACKEND_WORK_ORDER.md`](docs/BACKEND_WORK_ORDER.md) — read before starting, or changing, a backend.**
-  It is the checklist of what a code generator must provide (`ModuleInstantiator`'s four hooks, the
-  `BackendSession` façade, the ABI it emits, the helpers it calls, the packaging) and the definition of done;
+- **[`docs/WRITING_A_BACKEND.md`](docs/WRITING_A_BACKEND.md) — read before starting, or changing, a backend.**
+  It is **both** the checklist of what a code generator must provide (`ModuleInstantiator`'s four hooks,
+  `BackendSession`, the twelve ABI obligations including reference ownership, memory/GC ownership, the
+  helpers it calls versus brings, packaging, capabilities) **and** the step-by-step walkthrough, with
+  `Sljit/` as the worked example and the definition of done at the end. (It absorbed the former
+  `BACKEND_WORK_ORDER.md` in revision 2 — do not look for a separate work order.)
   [`LAYERING.md`](docs/LAYERING.md) §4 is the contract it must not violate.
 
 - **[`docs/PROPOSALS.md`](docs/PROPOSALS.md) — read before adding or editing a note under `docs/proposals/`.**

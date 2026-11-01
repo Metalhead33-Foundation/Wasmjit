@@ -113,7 +113,7 @@ target-architecture check).
    [`docs/languages/LF2_DEEP_F3_GC.md`](../docs/languages/LF2_DEEP_F3_GC.md)
    §7.1 is what skipping it costs.
 5. Meet every applicable item in
-   [`docs/BACKEND_WORK_ORDER.md`](../docs/BACKEND_WORK_ORDER.md) before calling
+   [`docs/WRITING_A_BACKEND.md`](../docs/WRITING_A_BACKEND.md) before calling
    the backend complete.
 
 GNU LibJIT remains the only full-featured WebAssembly backend; AsmJit is an experimental partial execution backend.

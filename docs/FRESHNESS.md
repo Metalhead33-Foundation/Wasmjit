@@ -59,7 +59,7 @@ hardcoded values that were considered".
 
 A kind-2 statement is only allowed in this shape:
 
-> **Snapshot (2026-11-01, `8c87f5f`):** the default suite is 16,516 assertions in
+> **Snapshot (2026-11-01, `8c87f5f`):** the default suite is 16,541 assertions in
 > 547 cases. Reproduce with `./Test/WasmJit`.
 
 or, inside a table, with the same three pieces in the caption or the column
@@ -193,12 +193,12 @@ this revision did about them:
 
 | Claim | Was | Now |
 |---|---|---|
-| `PROPOSALS.md` §7 `PM-1` "Done: §8 classifies every note (all thirty-six)" | 36 | 38, matching its own §4/§8 |
-| `DOCUMENTATION.md` §9 tree diagram "21 notes / 15 study notes / 36 proposals" | 21/15/36 | 23 in `docs/`, 16 in `languages/`, 38 in `proposals/`, matching its own §9 table |
+| `PROPOSALS.md` §7 `PM-1` "Done: §8 classifies every note (all thirty-six)" | 36 | 39, matching its own §4/§8 |
+| `DOCUMENTATION.md` §9 tree diagram "21 notes / 15 study notes / 36 proposals" | 21/15/36 | 21 in `docs/`, 16 in `languages/`, 39 in `proposals/`, matching its own §9 table |
 | `DOCUMENTATION.md` §8 and `README.md` "all 69 headers" | 69 | a predicate ("every header outside `extern/`") plus the measured count |
 | `DOCUMENTATION.md` §6 "the strict pass reports the gap counted in §8" vs §8's "0 undocumented declarations" | two contradictory claims | both replaced by the measured split: default render 0 warnings (the gate); strict pass 1,810 items (1,477 `\param`, 322 `\return`, 11 no-block, all `Asmjit/`) |
 | `README.md` "the default suite is 11,011 assertions / 442 cases" | 11,011 / 442 | the current run, dated |
-| `API_ABI_STABILITY.md` / `EMBEDDING_SURFACE.md` / `READINESS_AUDIT.md` `[docs]` 720 / 839 assertions | 720 / 839 | 982 assertions / 2 cases, dated |
+| `API_ABI_STABILITY.md` / `EMBEDDING_SURFACE.md` / `READINESS_AUDIT.md` `[docs]` 720 / 839 assertions | 720 / 839 | 1007 assertions / 2 cases, dated |
 | `EMBEDDING_SURFACE.md` §10 per-tag rows (`[plugin]` 17/5, `[tiers]` 210/3, `[concurrency]` 81/14) | stale | re-measured, dated |
 | `EMBEDDING_SURFACE.md` §4.3 "11,345 assertions at the time (11,454 today)" | ambiguous | "at the time" kept, "today" removed |
 | `README.md` "the installed layout and `wasmjit.pc` are still to come" | false | shipped; `Test/install-check.sh` proves it |
@@ -249,6 +249,17 @@ clearly right and rejected where the section is evidence rather than a claim:
   `extern/`"; "the 34 proposal notes … 55 notes" (in an audit record) → "every
   proposal note … every note"; `PROPOSALS.md` §4's note count → a stamped file
   count so the relationship between the two numbers is explicit.
+- **Merged away (2026-11-01):** `BACKEND_WORK_ORDER.md` into
+  [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) (checklist + walkthrough answered
+  one question) and `UNMODELLED_VALUE_TYPES.md` into
+  [`VALIDATION.md`](VALIDATION.md) (its outcome is a validation rule; the
+  backtrace stayed in git history). Both are recorded in
+  [`index.md`](index.md) §2 so a reader does not go looking for them.
+- **Not merged, deliberately:** `SIMD_BACKENDS.md` + `SIMD_LIBJIT.md`. They are
+  one story, but merging is a ~1,200-line rewrite in which every measured number
+  must survive; a rushed pass would delete exactly the kind of evidence §2.3 says
+  to keep. `index.md` §2 names it as the next candidate instead of pretending it
+  is done.
 
 ### 5.5 The remaining structural risk
 
@@ -291,7 +302,7 @@ named beside it:
 | A proposal note is added | `PROPOSALS.md` §4/§8, `docs/proposals/index.md`, `README.md`'s proposal table |
 | A note is added to `docs/` or `docs/languages/` | that folder's `index.md`, `docs/index.md` (if a folder), and `[docs]` |
 | `WASMJIT_VERSION_*` / `WASMJIT_ABI_VERSION` / the descriptor's `abi_version` changes | `WasmVersion.hpp`, `API_ABI_STABILITY.md` §2.2, `BACKEND_PLUGIN_ABI.md` §7.7 |
-| A backend is added or promoted out of "scaffold" | `README.md` "Direction"/"Backends", `WRITING_A_BACKEND.md`, `BACKEND_WORK_ORDER.md` |
+| A backend is added or promoted out of "scaffold" | `README.md` "Direction"/"Backends", `WRITING_A_BACKEND.md` |
 
 ### 7.2 The ten-minute sweep
 
@@ -402,10 +413,10 @@ prose. A test that pinned them would fail on every legitimate commit, and a test
 that tolerated drift would pin nothing. The probe is the compromise — it makes
 re-measuring cheap, which is the only part of this problem that can be automated.
 
-The values it printed the first time it ran (2026-11-01, `8c87f5f`, a
-`build/Desktop-Debug` qmake build) are, for the record: 24 / 39 / 17 `.md` files
-(23 / 38 / 16 notes); 72 header files; **16,516 assertions in 547 test cases**;
-`[docs]` 982/2,
+The values it printed on 2026-11-01, in the working tree on `39170be` (a
+`build/Desktop-Debug` qmake build — re-run it, do not trust these), are: 22 / 40 /
+17 `.md` files (21 / 39 / 16 notes); 72 header files; **16,541 assertions in 547
+test cases**; `[docs]` 1007/2,
 `[headerdoc]` 6/3, `[runtime]` 46/7, `[concurrency]` 80/13, `[multiagent]`
 51/6, `[backendabi]` 36/4, `[plugin]` 41/8, `[tiers]` 222/3,
 `[compilation-policy]` 30/3, `[config]` 4,190/13, `[mem-provider]` 122/7,
@@ -413,11 +424,18 @@ The values it printed the first time it ran (2026-11-01, `8c87f5f`, a
 exported symbols. **These are a snapshot, not a promise** — they are here to show
 what the output looks like, and to make a reader notice when it does not.
 
-Two of those assertions are this note's own `[docs]` case: writing it moved the
-suite from 16,514 to 16,516 and the note inventory from 22 to 23. That is the
-whole problem in miniature — *a documentation change changes the numbers the
-documents quote* — and it is why the rule is "date the number", not "guess it
-right".
+Three things moved those numbers while this note was being written, which is the
+whole problem in miniature:
+
+- **adding** this note took the suite from 16,514 to 16,516 and `docs/` from 22
+  to 23 notes;
+- **merging** two top-level notes (into `WRITING_A_BACKEND.md` and
+  `VALIDATION.md`) took it back to 21 notes;
+- **adding** `proposals/SHARING_LINEAR_MEMORY.md` took the proposal set to 39 and
+  the suite to 16,541.
+
+*A documentation change changes the numbers the documents quote.* That is why the
+rule is "date the number", not "guess it right".
 
 
 ## 9. References

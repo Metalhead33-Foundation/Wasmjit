@@ -1,14 +1,20 @@
-# Writing a backend, step by step {#doc_writing_a_backend}
+# Writing a backend — the checklist and the walkthrough {#doc_writing_a_backend}
 
-Status: how-to note (written 2026-10-30, when `Sljit/` stopped being an empty
-subproject). It is the practical companion to
-[`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md): that note is the *checklist* a
-code generator must satisfy, this one is the *walkthrough* — which class to
-subclass, which method to implement, in what order, and what "done" looks like
-for a provisional first cut. It contains no engine behaviour of its own.
+Status: how-to note, revision 2 (2026-11-01: **absorbs the former
+`BACKEND_WORK_ORDER.md`**, which was the requirement
+checklist this note walks through — one document now carries both, so a backend
+author reads one file and a reviewer checks the same file. Revision 1 was written
+2026-10-30, when `Sljit/` stopped being an empty subproject.) It contains no
+engine behaviour of its own.
 
-**If you only read one section**, read §3 (the four hooks), §6 (the ABI you emit)
-and §9 (what the SLJIT scaffold does and deliberately does not do).
+This note is the **checklist** (what a code generator must provide) *and* the
+**walkthrough** (which class to subclass, which method to implement, in what
+order). [`LAYERING.md`](LAYERING.md) §4 states what a backend **may not violate**;
+this note states what it **must provide** and how to provide it.
+
+**If you only read one section**, read §3 (the four hooks), §6 (the ABI you emit —
+including reference ownership) and §11 (what the SLJIT scaffold does and
+deliberately does not do).
 
 ## 1. Document map
 
@@ -18,12 +24,14 @@ and §9 (what the SLJIT scaffold does and deliberately does not do).
 | §3 | Which abstract class must be subclassed, and which four methods? |
 | §4 | How does the core drive those four hooks? |
 | §5 | How do I decode a function body without writing a decoder? |
-| §6 | What ABI must the generated code follow? |
+| §6 | What ABI must the generated code follow, and who owns a reference? |
 | §7 | Which interface must the backend *expose* (`BackendSession`)? |
-| §8 | How is the backend packaged, registered and selected? |
-| §9 | What does the SLJIT scaffold contain, and what does it not do yet? |
-| §10 | How do I test it, and what counts as done? |
-| §11 | References |
+| §8 | How is the backend packaged, registered, given capabilities and selected? |
+| §9 | What may I allocate, and what belongs to the `Store`? |
+| §10 | Which helpers do I call, and which must I bring? |
+| §11 | What does the SLJIT scaffold contain, and what does it not do yet? |
+| §12 | How do I test it, and what counts as done? |
+| §13 | References |
 
 ## 2. What is a backend, and what is not mine to write?
 
@@ -78,10 +86,17 @@ Four rules that are easy to get wrong:
    `TypeRegistry::matches` on it.
 3. **`fnPtr` stays null until a body is compiled.** The core treats null as
    "this backend cannot execute here" and refuses at the call boundary; it never
-   jumps through null. This is the honest way to be partial (§9).
+   jumps through null. This is the honest way to be partial (§11).
 4. **Nothing throws on a module-caused failure.** Report through the trap slot
    and return; a C++ exception below generated code cannot unwind through it
    ([`SAFETY.md`](SAFETY.md) §2.4–§2.6).
+5. **A compile failure is a diagnostic, never an `abort`.** Lowering and code
+   generation run *before* any Wasm frame exists, so they may throw — but the
+   module is untrusted input, and `std::abort()`, a bare `assert`, or a silent
+   null entry point lets it take the host down. Emit
+   `WASM.COMPILE.FUNCTION_FAILED` with the module-local function index, then
+   throw; if your library cannot be torn down after the failure, leak it rather
+   than crash ([`languages/LF2_DEEP_F1_BACKEND.md`](languages/LF2_DEEP_F1_BACKEND.md) §5).
 
 A `Callable` also carries the optional tail-call fields (`rawFnPtr`,
 `tailEntry`). Leaving them null is legal: the core falls back to
@@ -162,6 +177,10 @@ the core already agreed on.
 | 6.6 | A `v128` parameter or result is the 16-byte aggregate of [`ABI.md`](ABI.md) "`v128` by Value" |
 | 6.7 | References are one pointer-sized word and move through `refClone`/`refDrop` when they enter or leave a store-owned slot — and the ownership model below is part of the ABI, not an implementation detail |
 | 6.8 | Executable memory is yours, with a W^X handoff. The core never patches code |
+| 6.9 | Tail calls: request and return the state through `currentTailCallState()`; the direct-self-recursion fast path may use a native tail call, everything else must go through the trampoline or the semantic `call` + `return` fallback ([`ABI.md`](ABI.md) "Tail calls", [`proposals/TAILCALLS.md`](proposals/TAILCALLS.md) `TC-5`) |
+| 6.10 | If you implement the generalized trampoline, expose `Callable::rawFnPtr` (the entry behind your `fnPtr` driver) and a per-function-type `Callable::tailEntry` thunk `void(VMContext*, void* fn, uint64_t* args, uint64_t* results, void* resultBuffer)`; a callable with a null `tailEntry` must still be callable through `fnPtr`, because the core falls back |
+| 6.11 | Continuations: provide the `ContinuationInvokeFn` your `wasm_cont_new_ex` calls need, and call a target through its C ABI using the kind arrays ([`ABI.md`](ABI.md) "Continuations", `WasmContinuation.hpp`) |
+| 6.12 | `call_ref` / `call_indirect` type checks compare canonical `TypeId`s and surface `IndirectCallTypeMismatch` — never a silent call through a mismatched signature |
 
 The C ABI of a compiled function is therefore
 `Ret fn(VMContext* ctx, Params…)` — which is exactly the shape
@@ -272,14 +291,66 @@ shape.
 
    The name selector (`WASMJIT_BACKEND`) belongs to whoever ships the backend —
    `Test/TestBackend.cpp` in-tree, a plugin's `create` otherwise.
-5. **Declare what you can do** and refuse the rest *before* codegen: a
-   capability flag or a documented limitation. `Runtime::create("name")` is the
-   public entry point; `WASM::createBackendInstance("name")` is the registry
-   entry point an embedder with no `Runtime` uses.
+5. **Declare what you can do** and refuse the rest *before* codegen. The
+   capability flags (`WASMJIT_CAP_*` in `WasmBase/wasmjit_backend.h`) cover SIMD,
+   components, continuations, profiles and "executes"; the runtime refuses a
+   module the backend cannot handle *before* codegen, the same way
+   `ProfileConfig` refuses a profile. `Runtime::create("name")` is the public
+   entry point; `WASM::createBackendInstance("name")` is the registry entry point
+   an embedder with no `Runtime` uses. A `ModuleInstantiator` also answers
+   `compilationCapabilities()` (see `COMPILER_POLICY.md` `CP-1`), which is how an
+   optimisation degree or an interpreter request is refused by name.
+6. **Honour the profile gate**: read `profile()` in `instantiate()`; never
+   compile an opcode the active profile excludes.
+7. **Plugin form**: link the one shared `libWasmBase` (never a static copy), set
+   `build_flags`, and keep `abi_version`/`core_abi_version` honest
+   ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §7.2/§7.7).
+8. **Install into your own directory only.** A new backend writes no product code
+   outside its own directory except a registration line and a `.pro`.
+
+## 9. Memory, GC and ownership
+
+1. **Never allocate Wasm entities yourself.** Memories, tables, globals' cells,
+   tags, strings, exceptions and GC objects belong to the `Store`. Ask the
+   instance/store; do not keep a parallel allocator.
+2. **Follow the GC layout exactly** — header words, per-type size/alignment,
+   array data offset ([`WasmGcHeader.hpp`](../WasmBase/WasmGcHeader.hpp),
+   [`proposals/GC.md`](proposals/GC.md) invariant H1). The runtime and the
+   generated code must agree byte for byte; a drift is silent corruption.
+3. **Use the ref barriers** (`refClone`/`refDrop` through the instance) whenever a
+   reference moves into or out of a store-owned slot, and follow §6's ownership
+   model — a reference parameter is borrowed, a reference local owns a count.
+4. **Stay inside the store's byte budget.** Nothing bypasses
+   `Store::reserveBytes` ([`SAFETY.md`](SAFETY.md) §2.3).
+5. **Executable memory is yours**, with a W^X handoff; the core never patches
+   code. If your toolkit can interpret instead, expose that as a capability and a
+   configuration, not as a core fallback
+   ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §7.6).
+
+## 10. Helpers: what you call, what you bring
+
+**Call these** (exported for exactly this purpose; `[plugin]` asserts they
+resolve in the process image):
+
+| Family | Examples |
+|---|---|
+| Entry check | `wasm_stack_check(ctx)` — every compiled function calls it first |
+| Traps | `wasm_trap_slot()`, `wasm_trap_report`, `wasm_trap_report_at` |
+| SIMD | the 31 `wasm_v128_*` helpers (`wasm_v128_load`, `wasm_v128_and`, …) |
+| Exceptions | `wasm_exn_create(ctx, …)`, `wasm_exn_pending`, `wasm_exn_set_pending` |
+
+**Bring your own** (backend-private, deliberately hidden): string-object
+construction, `i32`/`i64` bit helpers, ref clone/drop thunks, GC allocation
+wrappers, and any intrinsic your IR lowers to. The LibJIT backend keeps all of
+these as `static` functions in its own translation units; a plugin backend does
+the same.
+
+**Do not** add a helper to `WasmBase/` that only one backend could use: that is a
+layering violation with extra steps.
 
 
 
-## 9. The SLJIT scaffold — a worked example, and its honest limits
+## 11. The SLJIT scaffold — a worked example, and its honest limits
 
 `Sljit/` is the second backend, deliberately **provisional**. It exists to make
 the seam concrete and to give the vector work a real starting point, not to
@@ -325,7 +396,7 @@ external `-lsljit` — and defines `SLJIT_WX_EXECUTABLE_ALLOCATOR=1` so the
 generated code goes through the read-write → read-execute handoff instead of
 asking the host for RWX pages.
 
-## 10. Testing, and what counts as done
+## 12. Testing, and what counts as done
 
 Start with the smallest possible module and grow:
 
@@ -348,21 +419,44 @@ Start with the smallest possible module and grow:
    `[gc]` reclaim test. The object must still be alive at the cast.
 
 `[sljit]` in [`Test/SljitBackendTests.cpp`](../Test/SljitBackendTests.cpp) is
-exactly those five steps. The broader "definition of done" — the generic
-fixtures, trap/GC/exception fixtures, the installed-header consumer and the
-plugin load check — is [`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md) §8, and
+exactly those five steps. The broader definition of done is the table below, and
 a provisional backend is expected to fail most of it. That is compatible with
 this note only if the failure is **documented and refused**, not silently wrong.
 
-## 11. References
+| The full definition of done | How |
+|---|---|
+| The core still builds without your directory | `Project.pro` minus your subdir |
+| `[layering]` passes | no backend vocabulary in `WasmBase/` |
+| The harness selects you by name | `WASMJIT_BACKEND=<name>` reaches your session |
+| `[backendabi]` passes | the POD/layout rule is honoured |
+| The generic fixtures instantiate and call | `loadAndInstantiateTestModule` + `TestBackend::Session::invoke` |
+| Trap, GC and exception fixtures pass | a trap unwinds by returning, not by throwing |
+| Reference ownership matches the model | the `[gc]` reclaim test, plus a function that returns a fresh object stored in a reference **parameter** (§6) |
+| The installed-header consumer works with you | `Test/install-check.sh` with your backend selected |
+| A plugin build loads and refuses mismatches | `[plugin]` against your `.so` |
 
-- [`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md) — the requirement checklist;
-  this note is its walkthrough.
-- [`LAYERING.md`](LAYERING.md) — what the core may name (nothing of yours).
-- [`ABI.md`](ABI.md) — the calling convention, tuples, `v128`, traps.
+If a check cannot pass, the honest outcome is a documented deviation in your own
+note plus a `WASMJIT_CAP_*` flag that makes the runtime refuse the unsupported
+shape — not a silent wrong answer (§11's limitations table is the worked example).
+
+## 13. References
+
+- [`LAYERING.md`](LAYERING.md) — what the core may name (nothing of yours), and
+  §4's contract rows this note elaborates.
+- [`ABI.md`](ABI.md) — the calling convention, tuples, `v128`, traps, tail calls,
+  continuations.
 - [`SAFETY.md`](SAFETY.md) — budgets, bounds, and traps versus `abort`.
 - [`SIMD_BACKENDS.md`](SIMD_BACKENDS.md) — what each toolkit can do for SIMD.
-- Source anchors: `WasmBase/WasmModuleInstance.hpp`,
-  `WasmBase/WasmBackendSession.hpp`, `WasmBase/WasmOpcodeDispatcher.hpp`,
-  `WasmBase/WasmNullInstantiator.cpp`, `LibJit/LibjitModuleCompiler.cpp`
-  (complete), `Sljit/` (provisional), `Test/TestBackend.cpp` (the harness).
+- [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) — the dynamic form, its
+  descriptor and the nine hard problems.
+- [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §7.3 — `AAS8`/`AAS9`/`AAS11`,
+  the gaps this checklist closed.
+- [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §6.1.1 — the header tiers that
+  decide whether a helper of yours belongs in `WasmBase/` (it does not).
+- Source anchors: `WasmBase/WasmModuleInstance.hpp` (`ModuleInstantiator`),
+  `WasmBase/WasmBackendSession.hpp` (`BackendSession`),
+  `WasmBase/WasmOpcodeDispatcher.hpp`,
+  `WasmBase/WasmNullInstantiator.cpp` (the smallest correct
+  `declareFunctions`), `WasmBase/WasmBackendAbi.hpp` (the executable tuple
+  rule), `LibJit/LibjitModuleCompiler.cpp` (complete), `Sljit/` (provisional),
+  `Test/TestBackend.cpp` (the harness).

@@ -233,7 +233,7 @@ refcount fixtures and `[legacy-eh]` all pass).
 The rule is now part of the backend instructions, so the next code generator
 does not rediscover it: [`WRITING_A_BACKEND.md`](../WRITING_A_BACKEND.md) §6
 "Reference ownership", the corresponding row in
-[`BACKEND_WORK_ORDER.md`](../BACKEND_WORK_ORDER.md) §5/§8, the contract row in
+[`WRITING_A_BACKEND.md`](../WRITING_A_BACKEND.md) §9/§12, the contract row in
 [`LAYERING.md`](../LAYERING.md) §4, and the RC3 note in
 [`proposals/GC.md`](../proposals/GC.md) §7.
 
@@ -256,4 +256,4 @@ does not rediscover it: [`WRITING_A_BACKEND.md`](../WRITING_A_BACKEND.md) §6
 |---|---|---|
 | The `wasm-opt`-less Dart path | the rewrite rejects Dart's legacy EH with "canonical type reference is not declared" | reproduce on a reduced module; likely a stale index in a copied type reference |
 | A conformance sweep of the bottom-type rule | the spec suite already exercises `ref.null none` casts; a targeted set of `sub`-with-bottom-field modules would pin the rule | add them to `Test/wasm_wat/` |
-| A GC ownership review of the other backends | `F3d` was a LibJIT lowering bug; Sljit/Asmjit do not execute references yet, but the same "who owns a parameter slot" question will arrive with them | fold into [`BACKEND_WORK_ORDER.md`](../BACKEND_WORK_ORDER.md) when they gain references |
+| A GC ownership review of the other backends | `F3d` was a LibJIT lowering bug; Sljit/Asmjit do not execute references yet, but the same "who owns a parameter slot" question will arrive with them | fold into [`WRITING_A_BACKEND.md`](../WRITING_A_BACKEND.md) when they gain references |

@@ -199,7 +199,7 @@ read. That makes `BP-1` useful even if `dlopen` never ships.
 | POD structs by value/pointer | the descriptor (including `build_flags`), status, capabilities, layout, trap record, POD signature view | Layout pinned by `static_assert` in the header |
 | Opaque handles | `void*` backend / session / instance / internals | Ownership stated per handle |
 | Function pointers (both ways) | the `wasmjit_host` table; the plugin's vtable | The core's table is `const` and outlives the plugin |
-| `Callable` (POD) | `{ void* fnPtr; VMContext* context; uint32_t localTypeIdx; TypeId typeId; void* rawFnPtr; void* tailEntry; }` | Already the universal handle; `fnPtr`/`context` are the ABI. `rawFnPtr` is the compiled entry behind `fnPtr`'s driver, and `tailEntry` is the per-type tail-dispatch thunk (docs/TAILCALLS.md TC-5; `BACKEND_WORK_ORDER.md`). An **additive** field change; a release that removes or reorders one needs a major bump. |
+| `Callable` (POD) | `{ void* fnPtr; VMContext* context; uint32_t localTypeIdx; TypeId typeId; void* rawFnPtr; void* tailEntry; }` | Already the universal handle; `fnPtr`/`context` are the ABI. `rawFnPtr` is the compiled entry behind `fnPtr`'s driver, and `tailEntry` is the per-type tail-dispatch thunk (docs/TAILCALLS.md TC-5; `WRITING_A_BACKEND.md`). An **additive** field change; a release that removes or reorders one needs a major bump. |
 | `VMContext*` | arg0 of every compiled function | The plugin may read the fields `LAYERING.md` §4 permits |
 
 | Must **not** cross | Why | Escape hatch |
@@ -336,7 +336,7 @@ guarantees or explicit embedder responsibilities; none is an open code gap.
 - [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §2.2/§7.3 — the frozen surfaces
   (S6 and the new S10) and `AAS10`.
 - [`LAYERING.md`](LAYERING.md) §4 — the contract rows a plugin must honour.
-- [`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md) — the implementer's checklist
+- [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) — the implementer's checklist
   (the two seams, the ABI obligations, the helper split, the definition of done);
   a plugin is one way to ship what it describes.
 - [`ABI.md`](ABI.md) "Wide value ABI", "Callable" — the C-shaped pieces the plugin

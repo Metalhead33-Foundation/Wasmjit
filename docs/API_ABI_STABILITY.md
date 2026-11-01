@@ -62,7 +62,7 @@ without a deliberate version bump**. For this milestone the frozen set is:
 | S4 | The trap entry point and its kind/message convention (a pending status, not `longjmp`) | [`SAFETY.md`](SAFETY.md) §2.6; [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §12 |
 | S5 | The continuation provider ABI (`wasm_cont_*`, status codes, one-shot, wide 16-byte slots) | [`ABI.md`](ABI.md) "Continuations"; [`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md) §10.6 |
 | S6 | The SIMD helper ABI (`const void*` / `void* out`, immediates as scalars) | [`wasm_simd_scalar.hpp`](../WasmBase/wasm_simd_scalar.hpp); [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §5–§6 |
-| S7 | The backend seam: `ModuleInstantiator` (the four hooks a code generator implements) and `BackendSession` (the façade an embedder drives without a backend header) | [`WasmModuleInstance.hpp`](../WasmBase/WasmModuleInstance.hpp); [`WasmBackendSession.hpp`](../WasmBase/WasmBackendSession.hpp); [`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md) |
+| S7 | The backend seam: `ModuleInstantiator` (the four hooks a code generator implements) and `BackendSession` (the façade an embedder drives without a backend header) | [`WasmModuleInstance.hpp`](../WasmBase/WasmModuleInstance.hpp); [`WasmBackendSession.hpp`](../WasmBase/WasmBackendSession.hpp); [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) |
 | S8 | The embedder's invocation path: `WASM::callCallable` / `callCallableWithResults`, `HostBridge`, `nativeImport<&fn>()` | [`ABI.md`](ABI.md) "Embedder Guide"; [`WasmValue.hpp`](../WasmBase/WasmValue.hpp) |
 | S9 | The diagnostic record/id/schema contract (`wasmjit.diagnostic.v1`) | [`DIAGNOSTICS.md`](DIAGNOSTICS.md) §1 |
 
@@ -90,7 +90,7 @@ each note's own §7 plan (this document does not become a second copy of it).
 closed in the final pass were `ES-7` (the out-of-tree consumer now calls `f64`,
 a multi-result tuple and `v128`, not just `i32`) and `AAS8`/`AAS9`/`AAS11` (the
 `BackendSession` façade moved into the product, the backend work order exists as
-[`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md), and the planned `Asmjit/`/`Sljit/`
+[`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md), and the planned `Asmjit/`/`Sljit/`
 scaffolds are documented placeholders: kept in the build because those backends
 are intended, each stating that it emits nothing today and installs nothing).
 
@@ -311,7 +311,7 @@ shape and the note tree — **982** on 2026-11-01). The documented negative-modu
   `Callable::fnPtr` cast to the §2.2 S1 signature with a `CallDepthScope` and a
   `checkTrap()`; `callCallableWithResults` adds the trailing result buffer. Both
   are core code and mention no backend.
-- **Backend checklist:** [`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md)
+- **Backend checklist:** [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md)
   enumerates what an implementation must provide; `LAYERING.md` §4 is what it
   must not violate.
 - **Continuations:** the core owns the provider and the wide slot ABI; a backend
@@ -334,19 +334,21 @@ on every suite run. This is the check G3 partly rests on.
 
 ### 6.6 The documentation inventory
 
-**23 notes in `docs/`** (2026-11-01; 21 when revision 4 measured at `5c3d194`):
+**21 notes in `docs/`** (2026-11-01: two were merged into existing notes and
+[`FRESHNESS.md`](FRESHNESS.md) was added, so the count is where the revision-4
+re-measure at `5c3d194` left it):
 the 14 that existed when this study was first measured, plus the
 feasibility/embedding notes written since
 ([`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md),
 [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md),
 [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md),
 [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md)),
-[`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md), the header-comment policy
+[`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md), the header-comment policy
 [`DOCUMENTATION.md`](DOCUMENTATION.md), the note-freshness policy
 [`FRESHNESS.md`](FRESHNESS.md), and its consumer
 [`READINESS_AUDIT.md`](READINESS_AUDIT.md);
-`UNMODELLED_VALUE_TYPES.md` is the renamed `NULL_JIT_VALUE_DIAGNOSIS.md`. There
-are also **38 notes in `docs/proposals/`** (34 at `5c3d194`). The
+`UNMODELLED_VALUE_TYPES.md` is the renamed `NULL_JIT_VALUE_DIAGNOSIS.md` (and has since been absorbed into [`VALIDATION.md`](VALIDATION.md)). There
+are also **39 notes in `docs/proposals/`** (34 at `5c3d194`). The
 `README.md` proposal table's completeness meter is a *summary*, and the
 sub-100 rows are concentrated exactly where this study expects them: threads
 (80%, 85%, 55%), stack switching (85%), numeric/FP16 (70%), the upstream-blocked
@@ -435,9 +437,9 @@ recording that TM-6…TM-11 completed them.
 | # | Finding | Evidence | Class |
 |---|---|---|---|
 | AAS8 | **The backend façade is test-local.** `TestBackend::Session` is the interface a backend author would actually implement, and it lives in `Test/`. The product exposes only `ModuleInstantiator` plus conventions, so a second backend either writes product code inside the harness or re-derives the façade. **Closed 2026-10-29:** `WASM::BackendSession` (with `BackendAggregateLayout`, `BackendFieldLayout`, `BackendLaneWiseOp`) is a product type in [`WasmBackendSession.hpp`](../WasmBase/WasmBackendSession.hpp), classified in the backend tier, installed, and compiled standalone by its own TU; `TestBackend` now aliases it. The *selector* stays with the backend (`Test/TestBackend.cpp`), so the core still names no code generator. | `WasmBackendSession.hpp`; `Test/TestBackend.hpp` | A |
-| AAS9 | **There is no backend work order.** [`LAYERING.md`](LAYERING.md) §4 says what a backend *may not* violate; it does not enumerate what a backend *must provide*: `ContinuationInvokeFn`, the `currentTailCallState()` access path, `Callable::typeId` maintenance, aggregate layout for multi-result returns, the `v128` host ABI, the trap-slot protocol, the profile gate, the helper entry points it is expected to call. **Closed 2026-10-29:** [`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md) is that checklist — the two seams, the four hooks with what each must and must not do, the eight ABI obligations, memory/GC ownership, the call-versus-bring helper split, packaging, and a definition of done naming the test tags that evidence it. | `BACKEND_WORK_ORDER.md`; `LAYERING.md` §4 | A |
+| AAS9 | **There is no backend work order.** [`LAYERING.md`](LAYERING.md) §4 says what a backend *may not* violate; it does not enumerate what a backend *must provide*: `ContinuationInvokeFn`, the `currentTailCallState()` access path, `Callable::typeId` maintenance, aggregate layout for multi-result returns, the `v128` host ABI, the trap-slot protocol, the profile gate, the helper entry points it is expected to call. **Closed 2026-10-29:** [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) is that checklist — the two seams, the four hooks with what each must and must not do, the eight ABI obligations, memory/GC ownership, the call-versus-bring helper split, packaging, and a definition of done naming the test tags that evidence it. | `WRITING_A_BACKEND.md`; `LAYERING.md` §4 | A |
 | AAS10 | **The seam has never had a second implementation.** `Asmjit/` and `Sljit/` contain only a `.pro` that includes `WasmBase.pri`; `LibJIT::ModuleCompiler` is the only subclass of `ModuleInstantiator`, and `libjit` the only `WASMJIT_BACKEND`. Nothing in the build would notice if a hook grew a LibJIT-shaped assumption. **Closed 2026-10-29:** the seam has three implementations — the executing backend, the core's `NullInstantiator`, and `Test/ExampleBackend`, a loadable plugin built in its own directory — and `Runtime::create(name)` selects any of them (the plugin through `dlopen`). | `Asmjit/Asmjit.pro`, `Sljit/Sljit.pro`; `WasmBase/WasmNullInstantiator.*`; `Test/ExampleBackend/`; [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §10 | A |
-| AAS11 | **The scaffolds do not enforce the seam.** Their `.pro` files define no sources and no compile-time assertion; a stray `libSljit.so.*` sits in `Sljit/` (git-ignored, so history is clean) and will confuse the first person who looks. **Closed 2026-10-29 (documented, deliberately kept):** the stray `libSljit.so*` files are gone; both directories stay reserved **because those backends are planned**, and each now carries a `README.md` that says what it is (a placeholder that emits nothing and installs nothing), what it is not, and how to start through [`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md). `Project.pro` comments the two subprojects as planned so the next reader does not mistake them for dead scaffolding. | `Sljit/`, `Asmjit/`, `Project.pro` | A |
+| AAS11 | **The scaffolds do not enforce the seam.** Their `.pro` files define no sources and no compile-time assertion; a stray `libSljit.so.*` sits in `Sljit/` (git-ignored, so history is clean) and will confuse the first person who looks. **Closed 2026-10-29 (documented, deliberately kept):** the stray `libSljit.so*` files are gone; both directories stay reserved **because those backends are planned**, and each now carries a `README.md` that says what it is (a placeholder that emits nothing and installs nothing), what it is not, and how to start through [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md). `Project.pro` comments the two subprojects as planned so the next reader does not mistake them for dead scaffolding. | `Sljit/`, `Asmjit/`, `Project.pro` | A |
 | AAS7 | **The layering waiver.** Five `WasmBase/` sites cite `docs/UNMODELLED_VALUE_TYPES.md`, whose name contains "JIT". A citation is not a dependency, but it is the only reason the §6 check is not empty. **Closed 2026-10-29:** the note is renamed and the five sites re-pointed; §6 returns empty and the `[layering]` test enforces it. | `LAYERING.md` §8 | A |
 
 **Verdict.** Work can begin, and now it can begin *from the document alone*: the
@@ -454,7 +456,7 @@ conditions against the tree and added the evidence this table lacked:
 | Condition | Re-measured |
 |---|---|
 | The seam is a product type | `ModuleInstantiator` + `BackendSession`, both product and tier-classified; three implementations, one of them loaded through `wasm_backend_query` |
-| The obligations are written down | `BACKEND_WORK_ORDER.md` §2–§8, cross-checked against `[tiers]`, `[backendabi]` and `[plugin]` |
+| The obligations are written down | `WRITING_A_BACKEND.md` §2–§8, cross-checked against `[tiers]`, `[backendabi]` and `[plugin]` |
 | Something other than the executing backend exercises it | `"null"` (in-tree) and `"example"` (plugin) do; `Runtime::create` resolves both by name |
 | The core names no backend | the §6.5 scan returns **0** hits; `[layering]` enforces it |
 | No product code outside the backend's directory | work order §7; `Project.pro` needs one `SUBDIRS` line and one `depends` line |
@@ -537,7 +539,7 @@ are omitted; this is deliberately not a second copy of those tables.
 | `SIMD_BACKENDS.md` §7 | Per-layer laxness budget for SIMD conformance | D | G2 | Documented. |
 | `THREADSAFETY.md` §8 | One agent at a time; no instance lock; no concurrent compilation | D | G1 | `Single` remains the default contract; `Agents` is an additive opt-in. Concurrent compilation still rejected. |
 | `docs/LAYERING.md` §8; AAS7 | Five core citations of a note whose name contains "JIT" | A | G3 | Cosmetic; keeps the layering check honest. |
-| AAS8–AAS11 | Test-local façade; no backend work order; no second implementation; empty scaffolds | A | G3 | **All closed 2026-10-29:** `BackendSession` is a product type, `BACKEND_WORK_ORDER.md` exists, the seam has three implementations, and the two planned scaffolds are documented (kept, because those backends are intended). |
+| AAS8–AAS11 | Test-local façade; no backend work order; no second implementation; empty scaffolds | A | G3 | **All closed 2026-10-29:** `BackendSession` is a product type, `WRITING_A_BACKEND.md` exists, the seam has three implementations, and the two planned scaffolds are documented (kept, because those backends are intended). |
 | AAS12 | **The exported set is a superset of the frozen surface.** `nm -D` shows 1,804 strong exports in `libWasmBase`, including `[tiers]`-internal types (the component model, the validator) plus `GcHeap`/`Section`, which are reachable from embedder-tier declarations. `WASMJIT_VISIBLE_BEGIN` wraps each public header's *includes*, so an internal header pulled in from there inherits default visibility. Pinning the internals to hidden was attempted and reverted: the in-tree tests and `libLibJit` link against those types, and the type-translation surface (`WasmTypeStore`/`WasmCanonicalType`/`WasmTypeRegistry`) is genuinely needed by a plugin backend — so the fix is a tier decision, not a pragma. | `WasmBase/WasmApi.hpp`; `Test/abi/libWasmBase.exports`; `Test/abi/README.md` | A | G2 | `Test/abi-check.sh` baselines the whole linker-visible set, so additive-only is enforced over the superset (strictly safer). Tightening it needs one of: pin the internals and promote the type-translation headers to the backend tier, or accept the superset explicitly. |
 
 Reading: **no Class E row is in scope.** The C rows cannot be closed by this
@@ -582,7 +584,7 @@ is already done — this document.
 |---|---|---|---|
 | **AAS-0 — Declare and measure** ✅ | Write this note: the four gates, the frozen set, the classification, the audit and the ledger. No code. | — (the record) | This document is linked from [`README.md`](../README.md) and `AGENTS.md`. |
 | **AAS-1 — Declare the embedding surface** ✅ | **Done 2026-10-29.** `WasmBase/WasmJit.hpp` (umbrella), `WASM::Runtime` (`ES-1`), the version/soname identity (`ES-4`), the header tiers and 41 compile-only TUs (`ES-3`), the install/`pkg-config` path (`ES-5`) and the ABI note's missing sections (`ES-6`). The acceptance evidence is `ES-7`: an out-of-tree consumer builds against the installed headers only and calls an `i32`, an `f64`, a multi-result and a `v128` export using nothing but the docs (`Test/install-check.sh`). The optional `abidiff` run remains optional, not a gate. | AAS1 ✅, AAS2 ✅, AAS5 ✅ | Met ✅ |
-| **AAS-2 — Write the backend work order and promote the façade** ✅ | **Done 2026-10-29:** [`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md) is the checklist (two seams, four hooks, eight ABI obligations, memory/GC ownership, helper split, packaging, definition of done), and `WASM::BackendSession` lives in [`WasmBackendSession.hpp`](../WasmBase/WasmBackendSession.hpp) with `TestBackend` aliasing it. The POD views it builds on are `BP-1` ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §10). | AAS8 ✅, AAS9 ✅ | Met ✅ |
+| **AAS-2 — Write the backend work order and promote the façade** ✅ | **Done 2026-10-29:** [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) is the checklist (two seams, four hooks, eight ABI obligations, memory/GC ownership, helper split, packaging, definition of done), and `WASM::BackendSession` lives in [`WasmBackendSession.hpp`](../WasmBase/WasmBackendSession.hpp) with `TestBackend` aliasing it. The POD views it builds on are `BP-1` ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §10). | AAS8 ✅, AAS9 ✅ | Met ✅ |
 | **AAS-3 — Prove the seam with a second implementation** ✅ | **Done 2026-10-29:** `NullInstantiator` is registered as `null`, selectable through `Runtime::create("null")` and the harness's `WASMJIT_BACKEND`; `Test/ExampleBackend` adds a loadable third implementation, so the seam is exercised by something the frontend was not compiled with. The scaffolds are **kept and documented, not removed** — those backends are planned: both subprojects stay in `Project.pro`, each directory has a `README.md` that states it emits and installs nothing today and points at the work order, and the stray libraries are gone. | AAS10 ✅, AAS11 ✅ | Met ✅ |
 | **AAS-4 — Gate the evidence** ✅ | Make the strict validator run (`WASM_SPEC_VALIDATE=1`) part of the documented gate, and document the ASan configuration in [`TESTING.md`](TESTING.md) as a row, not a local habit. **Done 2026-10-29:** `TESTING.md` "Required runs: the release / merge gate" names both, with the exact ASan `qmake` line and the `QMAKE=/usr/bin/qmake6` recursion note. | AAS3 ✅, AAS4 ✅ | `TESTING.md` names both runs as required, and a release check lists them. |
 | **AAS-5 — Bookkeeping pass** ✅ | Mark `TYPE_MODEL.md` §7 `TM-0…TM-5` closed (or re-open them honestly); resolve the `NULL_JIT_VALUE_DIAGNOSIS` waiver by renaming and re-pointing, or record it as permanent; keep the `README.md` status rows in step with their notes when the plan changes (§6.6 found no contradiction today). **Done 2026-10-29:** the six rows are `✅`, the note is `docs/UNMODELLED_VALUE_TYPES.md` with all sites re-pointed, and `Test/LayeringTests.cpp` enforces the empty check. | AAS6 ✅, AAS7 ✅ | No closed refactor reads as open, and the layering check's expected output is "empty". |

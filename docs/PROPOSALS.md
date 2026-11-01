@@ -99,8 +99,8 @@ gaps → where we deliberately deviate → plan → test survey → references.
 
 ## 4. What the folder holds today
 
-**Snapshot (2026-11-01, `8c87f5f`):** `docs/proposals/` holds **thirty-eight**
-notes — 39 `.md` files, one of which is `index.md`, which is navigation rather
+**Snapshot (2026-11-01, working tree on `39170be`):** `docs/proposals/` holds **thirty-nine**
+notes — 40 `.md` files, one of which is `index.md`, which is navigation rather
 than a note (it is what nests them in the generated site, and it is the one file
 exempt from the shape check below). Every note carries the §2.1 front matter and
 the nine slots of §2.2 in order (or the grouped variant of §3); the
@@ -140,6 +140,7 @@ throughout; the prefixes actually in the tree are:
 | `REFERENCE_TYPES.md` | `RT<n>` | `RTD<n>` | `RT-<n>` |
 | `SIMD.md` | `S<n>` | `SD<n>` | `SIMD-<n>` |
 | `SHARED_EVERYTHING_THREADS.md` | `SET<n>` | `SETD<n>` | `SET-<n>` |
+| `SHARING_LINEAR_MEMORY.md` | `SLM<n>` | `SLMD<n>` | `SLM-<n>` |
 | `SMALL_PROPOSALS.md` | (embedded) | `SPD<n>` | `SP-<n>` |
 | `STACK_SWITCHING.md` | `SS<n>` | `SSD<n>` | `SS-<n>` |
 | `STRINGREF.md` | `STR<n>` | `STRD<n>` | `STR-<n>` |
@@ -195,7 +196,7 @@ Guardrails (things that must stay true):
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **PM-0 — Re-cut this document** | ✅ Rewrite `PROPOSALS.md` into the §2 shape: front matter, §1 map, §2–§9, IDs. | PG1, PG2, PG3, PG4 | Done: this file's §1 map matches its own §2–§9, and §4/§8 match the folder. |
-| **PM-1 — Record the aliases** | ✅ List the sanctioned heading and section-count variants in §3/§6/§8. | PG5, PG6, PG7 | Done: §8 classifies every note (all thirty-eight). |
+| **PM-1 — Record the aliases** | ✅ List the sanctioned heading and section-count variants in §3/§6/§8. | PG5, PG6, PG7 | Done: §8 classifies every note (all thirty-nine). |
 | **PM-2 — Keep the survey current** | Update §4's prefix table and §8's matrix whenever a note is added or a section appears. | PG5, PG9 | A new note appears in both tables in the same change that adds it. |
 | **PM-3 — Optional structural lint** | ✅ `Test/ProposalDocsTests.cpp` (`[docs]`) checks front matter, §1 map ↔ headings and References; documented in `TESTING.md`. The map-based rule admits every §3 exception without a hard-coded list. | PG8 | Done: `./Test/WasmJit '[docs]'` runs and passes. |
 
@@ -205,7 +206,7 @@ authoritative per-item status is each note's §7 plan.
 
 ## 8. Indicative structural survey
 
-`docs/proposals/` (re-read 2026-11-01, `8c87f5f`), read from the `## N.`
+`docs/proposals/` (re-read 2026-11-01, working tree on `39170be`), read from the `## N.`
 headings:
 
 | Note | §§ | Shape | Heading drift | Extra | Reading |
@@ -238,6 +239,7 @@ headings:
 | `PROFILES.md` | 9 | canonical | none | — | conforms exactly |
 | `REFERENCE_TYPES.md` | 9 | canonical | none | — | conforms exactly |
 | `SHARED_EVERYTHING_THREADS.md` | 9 | canonical | none | — | conforms exactly |
+| `SHARING_LINEAR_MEMORY.md` | 12 | canonical + appendix | none | §10–§12 (option matrix, language study, pseudocode) after §9 | conforms (three appendices; an engine-seam study of a cross-module scenario, not a feature proposal) |
 | `STACK_SWITCHING.md` | 10 | canonical + appendix | §10 follows §9 | — | conforms (appended backend feasibility study, PD3) |
 | `STRINGREF.md` | 9 | canonical | none | — | conforms exactly |
 | `TAILCALLS.md` | 9 | canonical | none | — | conforms exactly |
@@ -251,11 +253,11 @@ headings:
 
 Reading (re-checked 2026-11-01, `8c87f5f`): **twenty-seven** notes match §2
 exactly; **two** reword §2/§3 and keep the nine slots (`SIMD.md`, `THREADS.md`);
-**seven** append a section after §9 (`COMPILER_POLICY.md`, `CONFIGURATION.md`,
+**eight** append a section after §9 (`COMPILER_POLICY.md`, `CONFIGURATION.md`,
 `GC.md`, `LEGACY_EXCEPTIONS.md`, `MEMORY_PROVIDER.md`, `STACK_SWITCHING.md`,
-`COMPONENT_MODEL.md`); **one** surveys seven proposals while keeping the slots
+`COMPONENT_MODEL.md`, `SHARING_LINEAR_MEMORY.md`); **one** surveys seven proposals while keeping the slots
 (`JS_INTEGRATION.md`); and **one** uses the grouped variant
-(`SMALL_PROPOSALS.md`). That accounts for all thirty-eight. No note is missing a
+(`SMALL_PROPOSALS.md`). That accounts for all thirty-nine. No note is missing a
 slot, and none is missing its front matter. `TYPE_MODEL.md` conforms to the nine
 slots but is an internal type-store design note, not a WebAssembly feature
 proposal; `MEMORY_PROVIDER.md`, `CONFIGURATION.md` and `COMPILER_POLICY.md` are

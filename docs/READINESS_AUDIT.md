@@ -130,7 +130,7 @@ A row with no evidence is `Unpinned`, never "assumed fine".
 
 ### 4.3 The obligations a second generator inherits
 
-Each row is a requirement in [`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md),
+Each row is a requirement in [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md),
 not a description of the LibJIT implementation.
 
 | Obligation | Where it is stated | What evidences that it is checkable |
@@ -210,7 +210,7 @@ transfers to it unchanged ([`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILIT
 `MF-1`).
 
 Neither choice changes a core file, and both inherit the same definition of done
-(`BACKEND_WORK_ORDER.md` §8). The effort is **C3-class or above** by
+(`WRITING_A_BACKEND.md` §12). The effort is **C3-class or above** by
 [`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md) §9's bands — weeks, not
 sessions — and it competes with the current milestone's work like any other
 milestone.
@@ -485,7 +485,7 @@ are larger than the audit's own run (11,460 assertions / 484 cases).
 
 **This is an audit record, not a description of the current tree** — the counts
 are the ones the verdicts were reached on. For the current ones, see
-[`FRESHNESS.md`](FRESHNESS.md) §8; the default suite measured **16,516
+[`FRESHNESS.md`](FRESHNESS.md) §8; the default suite measured **16,541
 assertions / 547 cases** on 2026-11-01 (`8c87f5f`).
 
 | Run | Command | Result | What it evidences |
@@ -524,7 +524,7 @@ row's state depends on them.
 - [`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md) §3, §6, §9 — the candidate
   set this audit does **not** open, the gate's rows, states and required outputs,
   and the cost bands `RA-1` is budgeted in.
-- [`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md) — the checklist a second code
+- [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) — the checklist a second code
   generator works from; §2 (hooks), §3 (session), §4–§5 (ABI and helpers), §7
   (packaging), §8 (definition of done).
 - [`LAYERING.md`](LAYERING.md) §4, §6 — the eight contract rows, and the check

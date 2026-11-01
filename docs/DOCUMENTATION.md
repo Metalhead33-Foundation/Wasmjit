@@ -3,7 +3,7 @@
 Status: policy note (revision 3 — 2026-11-01: a freshness pass. §8's "0
 undocumented declarations" was not true of the strict pass and is replaced by the
 measured 1,810-item breakdown; the §9 tree diagram's 21/15/36 counts are corrected
-to 23/16/38 (docs / languages / proposals), "all 69 headers" becomes the predicate
+to 21/16/39 (docs / languages / proposals), "all 69 headers" becomes the predicate
 "every header outside `extern/`" plus a dated count. Revision 2 — 2026-10-30: the
 Markdown notes are now part of the generated site, so the then-55 notes gain
 stable page ids and two index pages put them into a hierarchy; the escaping list
@@ -245,7 +245,7 @@ render is the gate, and it is warning-free.
    are then a deliberate list (§8) instead of an invisible part of the tree.
 4. **It is what the tools in the project already assume.** The C++ ABI and the
    plugin descriptor are read by people and by tooling; a header that renders is
-   a header a plugin author can navigate. [`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md)
+   a header a plugin author can navigate. [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md)
    points a new backend at these headers as its contract.
 
 ## 8. What is deliberately not done
@@ -300,7 +300,7 @@ a flat tree is. The hierarchy is therefore built by three index pages:
 
 | Index page | Id | Children |
 |---|---|---|
-| [`index.md`](index.md) | `docs_index` | the 23 notes in `docs/`, `proposals` **and** `languages` |
+| [`index.md`](index.md) | `docs_index` | the 21 notes in `docs/`, `proposals` **and** `languages` |
 | [`proposals/index.md`](proposals/index.md) | `proposals_index` | the 38 proposal notes |
 | [`languages/index.md`](languages/index.md) | `languages_index` | the 16 language notes (the `LF-1` set and the `LF-2` reports) |
 
@@ -318,11 +318,11 @@ which produces:
 WasmJit            (README.md, the main page)
 ├── Direction, Feature completeness, …   (the README's own sections)
 └── docs                                 (docs/index.md)
-    ├── ABI, API/ABI stability, …        (23 notes, each with its own sections)
+    ├── ABI, API/ABI stability, …        (21 notes, each with its own sections)
     ├── languages                        (docs/languages/index.md)
     │   └── Triage, Clustering, Charters, Evidence, LF-2 …   (16 study notes)
     └── proposals                        (docs/proposals/index.md)
-        └── GC, SIMD, THREADS, …         (38 notes)
+        └── GC, SIMD, THREADS, …         (39 notes)
 ```
 
 **Adding a note** takes three steps: create the file; append `{#doc_what_it_is}`

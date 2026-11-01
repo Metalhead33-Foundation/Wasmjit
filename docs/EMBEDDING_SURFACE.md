@@ -735,8 +735,8 @@ check. The embedding surface is what the installed `wasmjit/wasmjit.hpp` exposes
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (**2026-11-01**, `8c87f5f`) | **16,516 assertions in 547 cases, green** | The `ES-*`, `BP-*`, `CP-*`, `CFG-*` and multi-agent additions are additive: every earlier assertion still passes. The 2026-10-29 run (11,454 / 481) in the milestone notes is the dated baseline. |
-| `[docs]` lint | **982 assertions / 2 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all three folders (§9 of `DOCUMENTATION.md`), so this note's index row is checked too |
+| Default suite (**2026-11-01**, `8c87f5f`) | **16,541 assertions in 547 cases, green** | The `ES-*`, `BP-*`, `CP-*`, `CFG-*` and multi-agent additions are additive: every earlier assertion still passes. The 2026-10-29 run (11,454 / 481) in the milestone notes is the dated baseline. |
+| `[docs]` lint | **1007 assertions / 2 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all three folders (§9 of `DOCUMENTATION.md`), so this note's index row is checked too |
 | `[runtime]` | 46 assertions / 7 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents, and the store-scoping proof (two stores, two heaps, an artifact records its store). |
 | `[concurrency]` | 80 assertions / 13 cases, green | The model claim, the `Single` refusal, re-entrant invocation across threads, the `MF-2` guard, the `MF-3`/`MF-4` safepoint rules and the multi-agent suite. |
 | `[multiagent]` | 51 assertions / 6 cases, green | Two agents on one instance: acquire-release, wait/notify, shared-global RMW, traps, GC stress, reference barrier. |

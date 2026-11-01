@@ -75,7 +75,7 @@ whatever they like.
 ## 4. What the core owns, and what a backend must agree with
 
 What a backend **must provide** (the four hooks, the ABI it emits, the helpers it calls, the packaging) is enumerated in
-[`BACKEND_WORK_ORDER.md`](BACKEND_WORK_ORDER.md): this section is the contract it
+[`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md): this section is the contract it
 must not violate, that note is the work order it implements.
 
 The core is not merely "allowed" to define these — it is the only place they can
@@ -169,7 +169,7 @@ sitting in `Sljit/`, outside `build/`.
 
 ## 8. Deliberate tensions and waivers
 
-- **`docs/UNMODELLED_VALUE_TYPES.md` was the last non-empty result — resolved.**
+- **`docs/UNMODELLED_VALUE_TYPES.md` was the last non-empty result — resolved** (the note has since been absorbed into [`VALIDATION.md`](VALIDATION.md), and the five core sites cite neither).
   Its former name contained "JIT", so five core sites cited a backend-named file
   and the §6 check was non-empty by exactly those five lines. The note was
   renamed and the sites re-pointed (2026-10-29); a citation is not a dependency,

@@ -1,5 +1,10 @@
 # Validation {#doc_validation}
 
+Status: design + status note, revision 2 (2026-11-01: **absorbs
+`UNMODELLED_VALUE_TYPES.md`** — the rule it established is a validation rule, so
+it now lives here; the full crash investigation is preserved in git history).
+Audience: anyone touching the validating front end, or adding a value type.
+
 `WasmBase/WasmValidator.cpp` is the validating front end. `Module::fromFile`
 calls `validate()` after decoding, so a module is checked once and every
 consumer (the JIT, the stub backend, an embedder) sees the same rejection.
@@ -57,6 +62,60 @@ rejects `v128` declarations and `0xFD` instructions, and the deterministic
 profile rejects shared constructs, atomics and relaxed SIMD. These are
 restriction-only checks; they never change what an accepted module does.
 
+## Unmodelled value types are rejected at load
+
+A module may declare a value type this engine cannot lower. The rule is: **refuse
+it at load, never compile it into a null backend value.** The reason is a crash
+that is worth one paragraph even though the specific type that caused it is now
+supported.
+
+A value type the engine does not model was lowered to `jit_type_void`; a backend
+load of that type returns a **null** value handle instead of a value. Storing the
+null was harmless, but once operand-stack ownership made `pushValue` *inspect*
+every pushed value, the null was dereferenced — a SIGSEGV during instantiation,
+not at invocation, so the module never ran. That is the whole failure mode, and it
+is generic: any unmodelled code reproduces it.
+
+The guard has three parts, all shipped:
+
+| Part | Where | Covers |
+|---|---|---|
+| `WASM::isModeledValueTypeCode(ValueTypeCode)` | `WasmBase/WasmType.hpp` | the whitelist of codes the engine can lower and run (`stringref` included, as host-reference handles) |
+| `Module::validateValueTypes()` | `WasmBase/WasmModule.cpp`, at the end of `Module::fromFile` | the *declared* surface: types, tables, globals, imports, element segments, function locals |
+| `OpcodeDispatcher::jitTypeForValueType` throws `notImplemented` | `WasmBase/WasmOpcodeDispatcher.cpp` | value types that appear **only inline** in a body (e.g. a block type), which load-time validation cannot see |
+
+A rejected module fails at **load** with a message naming the code, rather than
+segfaulting during instantiation:
+
+```
+malformed module: unsupported value type 0x69 (-23) in function type result #3
+— this engine does not model it
+```
+
+Two notes on what this does and does not mean:
+
+- **The rule is permanent; its original trigger is not.** `exnref`/`nullexnref`
+  were the type that exposed it and are modelled now
+  ([`proposals/EXCEPTIONS.md`](proposals/EXCEPTIONS.md) EX-1), so the guard is
+  policy for a future unmodelled type rather than a live rejection.
+- **A refused module is a *failed* spec command**, which is why
+  `Test/wast_supported.txt` records why a script was once excluded: the harness
+  cannot distinguish "correctly refused" from "failed" for a valid module.
+
+History: this was investigated as `NULL_JIT_VALUE_DIAGNOSIS.md` →
+`UNMODELLED_VALUE_TYPES.md`, and the full backtrace, the gdb recipe and the four
+candidate fixes are in git history (`git log --follow -- docs/VALIDATION.md`). The
+outcome is the three-part guard above; fix "reject at load" was chosen over the
+three alternatives (teach the backend a null-tolerant push, model every type, or
+leave the feature flag off) because the module is untrusted input and a null
+handle is a crash waiting for the next caller.
+
+**Known documentation debt:** ten code comments (and one `notImplemented()`
+message) still cite `docs/UNMODELLED_VALUE_TYPES.md`. They are rationale
+pointers, not links, and renaming them is a comment-only change to `.cpp`/`.hpp`
+files — deliberately left out of the documentation-only pass that moved the
+content here.
+
 ## Measured coverage
 
 `WASM_SPEC_VALIDATE=1` on the curated set (2026-10-18):
@@ -69,9 +128,10 @@ restriction-only checks; they never change what an accepted module does.
 | `assert_uninstantiable` | 27 | **27** (26 rejected + 1 start trap) | 0 |
 | **total** | **2382** | **2382** | **0** |
 
-The default suite is **11011 assertions / 442 test cases, all green** (the
-curated list holds 193 of the 257 scripts, 61 of them re-curated when the
-validator landed, plus `start.wast`). The
+The default suite is green; its *current* tally is owned by
+[`TESTING.md`](TESTING.md) (and [`FRESHNESS.md`](FRESHNESS.md) §8 prints it), not
+repeated here. The curated list holds 193 of the 257 scripts, 61 of them
+re-curated when the validator landed, plus `start.wast`. The
 strict run is **fully green** as well: every one of the 2,382 binary negative
 commands is handled, including all 17 `assert_malformed` cases and the strict
 LEB128 width/overflow cases. All 27 `assert_uninstantiable` cases pass: one

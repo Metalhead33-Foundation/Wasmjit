@@ -224,7 +224,7 @@ study adds one leaf:
 | `WASM.COMPILE.FUNCTION_FAILED` | the backend's compile loop, before it throws | Error | phase `Compile`, the Wasm function index, the backend name, the library result code, and the remediation text |
 
 **The contract sentence** (proposed for
-[`BACKEND_WORK_ORDER.md`](../BACKEND_WORK_ORDER.md) and
+[`WRITING_A_BACKEND.md`](../WRITING_A_BACKEND.md) and
 [`LAYERING.md`](../LAYERING.md) §4):
 
 > A backend may refuse a function, but it may not take the process down. A
