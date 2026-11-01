@@ -361,6 +361,10 @@ struct TypeScope {
 };
 
 struct ValidationScope {
+	// CM13b: the enclosing *component* scope, if any. `typeScope.parent` walks
+	// the type chain only; this link makes every other index space reachable, so
+	// an outer alias can name a func/instance/... as well as a type.
+	ValidationScope *parent = nullptr;
 	TypeScope typeScope;
 	LocalSpaces spaces;
 	std::vector<ResolvedDecl> imports;
@@ -738,10 +742,11 @@ bool containsBorrow(const ValuePtr& value)
 class ComponentValidator {
 public:
 	ComponentValidator(const Component& component, const TypeScope* parent,
-			ValidationState& state)
+			ValidationState& state, ValidationScope* parentScope = nullptr)
 		: component_(component), store_(component.store()), parent_(parent), state_(state)
 	{
 		scope_.typeScope.parent = parent_;
+		scope_.parent = parentScope;
 	}
 
 	void run();
@@ -2600,8 +2605,31 @@ void ComponentValidator::processAlias(const Alias& alias, bool insideType,
 	case Alias::Kind::Outer: {
 		const bool coreType = alias.sort.sort == ComponentSort::Core
 				&& alias.sort.core->sort == CoreSort::Type;
-		if (!coreType && alias.sort.sort != ComponentSort::Type)
-			fail("outer aliases may only alias core type or type");
+		if (!coreType && alias.sort.sort != ComponentSort::Type) {
+			// CM13b: an outer alias may name *any* sort of an enclosing scope,
+			// not just `(core type)` / `(type)`. Those two live in the type
+			// chain (handled below, unchanged); every other sort is resolved
+			// against the enclosing component scopes that `parent` links.
+			ValidationScope* outer = &scope;
+			for (uint32_t i = 0; i < alias.outerCount; ++i) {
+				if (!outer->parent)
+					fail("outer alias count exceeds the enclosing scope chain");
+				outer = outer->parent;
+			}
+			const auto& space = alias.sort.sort == ComponentSort::Core
+					? outer->spaces.coreSpace(alias.sort.core->sort)
+					: outer->spaces.componentSpace(alias.sort.sort);
+			if (alias.index >= space.size())
+				fail("outer alias index out of bounds");
+			Entity aliased = space[alias.index];
+			aliased.ref = ComponentDefinitionRef{&component_,
+					ComponentDefinitionKind::Alias, 0};
+			if (alias.sort.sort == ComponentSort::Core)
+				scope.spaces.coreSpace(alias.sort.core->sort).push_back(std::move(aliased));
+			else
+				scope.spaces.componentSpace(alias.sort.sort).push_back(std::move(aliased));
+			return;
+		}
 		const TypeScope* target = &scope.typeScope;
 		for (uint32_t i = 0; i < alias.outerCount; ++i) {
 			if (!target->parent)
@@ -2822,7 +2850,7 @@ void ComponentValidator::processExport(uint32_t index)
 void ComponentValidator::processComponent(uint32_t index)
 {
 	const Component& nested = *component_.components[index];
-	ComponentValidator validator(nested, &scope_.typeScope, state_);
+	ComponentValidator validator(nested, &scope_.typeScope, state_, &scope_);
 	validator.run();
 	Entity entity;
 	entity.ref = ComponentDefinitionRef{&component_,

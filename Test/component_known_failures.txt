@@ -7,11 +7,7 @@
 # `nyi.txt` in the corpus is upstream's own version of this list; this one is
 # only for cases upstream considers settled and we do not.
 #
-# CM13a (the async ABI gate) was closed on 2026-11-01: `canon lift`/`lower` with
-# an `async` option is now refused, so its three corpus cases assert again.
-#
-# CM13b — `outer aliases may only alias core type or type` rejects a component
-# the corpus accepts. The origin names the script; the failing artifact is the
-# component form at that byte offset.
-async/validate-task-return.wast:58
-async/validate-task-return.wast:237
+# Empty since 2026-11-01: the last two entries (`async/validate-task-return.wast`)
+# were the outer-alias restriction, which CM13b lifted. Everything the corpus and
+# we still disagree about is reported as a `WARN` line naming its origin, which is
+# the live to-do list — see `docs/proposals/COMPONENT_MODEL.md` `CM13`.
