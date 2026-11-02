@@ -747,6 +747,59 @@ bool containsHandle(const ValuePtr& value)
 	}
 }
 
+// CM14: the Canonical ABI flattens a value into at most 16 slots; anything
+// larger is spilt to linear memory, so the `memory` option becomes mandatory.
+// This counts slots the way the ABI lays them out (scalars 1, `string`/`list`/
+// `map` 2, records and tuples summed, variants one tag plus the widest case).
+uint32_t flatSlots(const ValuePtr& value)
+{
+	if (!value)
+		return 0;
+	switch (value->kind) {
+	case ResolvedValueType::Kind::Primitive:
+		// The Canonical ABI flattens to 32-bit slots, so a 64-bit scalar occupies
+		// two of them (`9 x u64` is 18 slots and therefore spilt to memory).
+		switch (value->primitive) {
+		case PrimitiveValueType::U64:
+		case PrimitiveValueType::S64:
+		case PrimitiveValueType::F64:
+			return 2;
+		default:
+			return 1;
+		}
+	case ResolvedValueType::Kind::List:
+	case ResolvedValueType::Kind::FixedList:
+	case ResolvedValueType::Kind::Map:
+		return 2;
+	case ResolvedValueType::Kind::Record: {
+		uint32_t total = 0;
+		for (const auto& field : value->fields)
+			total += flatSlots(field.second);
+		return total;
+	}
+	case ResolvedValueType::Kind::Tuple: {
+		uint32_t total = 0;
+		for (const ValuePtr& element : value->tuple)
+			total += flatSlots(element);
+		return total;
+	}
+	case ResolvedValueType::Kind::Variant: {
+		uint32_t widest = 0;
+		for (const ResolvedCase& item : value->cases)
+			if (item.type)
+				widest = std::max(widest, flatSlots(*item.type));
+		return 1 + widest;
+	}
+	case ResolvedValueType::Kind::Option:
+		return 1 + flatSlots(value->element);
+	case ResolvedValueType::Kind::Result:
+		return 1 + std::max(value->ok ? flatSlots(*value->ok) : 0,
+				value->error ? flatSlots(*value->error) : 0);
+	default:
+		return 1;
+	}
+}
+
 // CM14: a value needs linear memory when the canonical ABI has to place bytes
 // there: `string`, `list`/fixed-list and `map`, including when nested.
 bool valueNeedsMemory(const ValuePtr& value)
@@ -3516,10 +3569,19 @@ void ComponentValidator::validateCanon(const Canon& canon)
 				hasMemory = true;
 		if (!hasMemory && funcType && funcType->func) {
 			bool needs = false;
-			for (const auto& [name, value] : funcType->func->params)
+			uint32_t slots = 0;
+			for (const auto& [name, value] : funcType->func->params) {
 				if (valueNeedsMemory(value))
 					needs = true;
-			if (funcType->func->result && valueNeedsMemory(*funcType->func->result))
+				slots += flatSlots(value);
+			}
+			if (funcType->func->result) {
+				if (valueNeedsMemory(*funcType->func->result))
+					needs = true;
+				if (flatSlots(*funcType->func->result) > 1)
+					slots += 1;
+			}
+			if (slots > 16)
 				needs = true;
 			if (needs)
 				fail("canonical option `memory` is required");
