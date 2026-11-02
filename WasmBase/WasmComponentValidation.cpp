@@ -258,6 +258,10 @@ struct Entity {
 	MemoryType memory;
 	GlobalType global;
 	uint32_t tagTypeIndex = 0;
+	// CM14: canonical identity of an exported core function/tag, carried
+	// through core export aliases and inline export bags.
+	TypeId funcTypeId{TypeId::kNone};
+	TypeId tagTypeId{TypeId::kNone};
 };
 
 struct LocalSpaces {
@@ -367,6 +371,11 @@ struct ValidationScope {
 	// the type chain only; this link makes every other index space reachable, so
 	// an outer alias can name a func/instance/... as well as a type.
 	ValidationScope *parent = nullptr;
+	// CM14: true when this scope belongs to a component/instance *type*
+	// declarator rather than to a concrete component. An outer alias that only
+	// crosses declarator boundaries may carry a resource; one that crosses a
+	// component boundary may not.
+	bool typeDeclarator = false;
 	TypeScope typeScope;
 	LocalSpaces spaces;
 	std::vector<ResolvedDecl> imports;
@@ -897,6 +906,422 @@ bool containsBorrow(const ValuePtr& value)
 		return false;
 	}
 }
+
+// CM14: whether a resolved value type transitively mentions a resource type.
+// `outer-alias` uses this: a type that crosses a component boundary may not
+// carry a generative resource, however deeply it is nested.
+bool valueRefersToResource(const ValuePtr& value)
+{
+	if (!value)
+		return false;
+	switch (value->kind) {
+	case ResolvedValueType::Kind::Own:
+	case ResolvedValueType::Kind::Borrow:
+		return true;
+	case ResolvedValueType::Kind::Record:
+		for (const auto& field : value->fields)
+			if (valueRefersToResource(field.second))
+				return true;
+		return false;
+	case ResolvedValueType::Kind::Variant:
+		for (const ResolvedCase& item : value->cases)
+			if (item.type && valueRefersToResource(*item.type))
+				return true;
+		return false;
+	case ResolvedValueType::Kind::List:
+	case ResolvedValueType::Kind::FixedList:
+	case ResolvedValueType::Kind::Option:
+		return valueRefersToResource(value->element);
+	case ResolvedValueType::Kind::Tuple:
+		for (const ValuePtr& element : value->tuple)
+			if (valueRefersToResource(element))
+				return true;
+		return false;
+	case ResolvedValueType::Kind::Result:
+		return (value->ok && valueRefersToResource(*value->ok))
+				|| (value->error && valueRefersToResource(*value->error));
+	case ResolvedValueType::Kind::Stream:
+		return value->streamElement && valueRefersToResource(*value->streamElement);
+	case ResolvedValueType::Kind::Future:
+		return value->futureElement && valueRefersToResource(*value->futureElement);
+	case ResolvedValueType::Kind::Map:
+		return valueRefersToResource(value->mapKey)
+				|| valueRefersToResource(value->mapValue);
+	default:
+		return false;
+	}
+}
+
+bool typeRefersToResource(const TypePtr& type)
+{
+	if (!type)
+		return false;
+	switch (type->kind) {
+	case ResolvedType::Kind::Value:
+		return valueRefersToResource(type->value);
+	case ResolvedType::Kind::Func:
+		for (const auto& [name, value] : type->func->params)
+			if (valueRefersToResource(value))
+				return true;
+		return type->func->result && valueRefersToResource(*type->func->result);
+	case ResolvedType::Kind::Resource:
+		return true;
+	case ResolvedType::Kind::Instance:
+		for (const ResolvedDecl& declaration : type->instance->exports)
+			if (typeRefersToResource(declaration.type))
+				return true;
+		return false;
+	case ResolvedType::Kind::Component:
+		for (const ResolvedDecl& declaration : type->component->imports)
+			if (typeRefersToResource(declaration.type))
+				return true;
+		for (const ResolvedDecl& declaration : type->component->exports)
+			if (typeRefersToResource(declaration.type))
+				return true;
+		return false;
+	}
+	return false;
+}
+// CM14 `max-value-size`: the Canonical ABI assigns every value type an
+// `elem_size` (CanonicalABI.md#element-size) and validation requires it to stay
+// below 2^28 for *every* possible context. A 64-bit memory is one such context,
+// so pointers are counted at their widest (16 bytes for a two-word
+// `string`/`list`/`map`) and a `borrow` at its widest representation.
+constexpr uint64_t kMaxValueByteSize = uint64_t{1} << 28;
+constexpr uint32_t kMaxAbiPointerSize = 8;
+
+uint64_t alignUp(uint64_t value, uint32_t alignment)
+{
+	if (alignment <= 1)
+		return value;
+	const uint64_t step = alignment;
+	return ((value + step - 1) / step) * step;
+}
+
+uint32_t discriminantSize(std::size_t cases)
+{
+	// CanonicalABI.md#alignment: the smallest integer covering the cases.
+	if (cases <= 0x100)
+		return 1;
+	if (cases <= 0x10000)
+		return 2;
+	return 4;
+}
+
+uint32_t elementAlignment(const ValuePtr& value)
+{
+	if (!value)
+		return 1;
+	switch (value->kind) {
+	case ResolvedValueType::Kind::Primitive:
+		switch (value->primitive) {
+		case PrimitiveValueType::Bool:
+		case PrimitiveValueType::S8:
+		case PrimitiveValueType::U8:
+			return 1;
+		case PrimitiveValueType::S16:
+		case PrimitiveValueType::U16:
+			return 2;
+		case PrimitiveValueType::S64:
+		case PrimitiveValueType::U64:
+		case PrimitiveValueType::F64:
+			return 8;
+		case PrimitiveValueType::String:
+			return kMaxAbiPointerSize;
+		default:
+			return 4;
+		}
+	case ResolvedValueType::Kind::List:
+	case ResolvedValueType::Kind::Map:
+		return kMaxAbiPointerSize;
+	case ResolvedValueType::Kind::FixedList:
+		return elementAlignment(value->element);
+	case ResolvedValueType::Kind::Record: {
+		uint32_t alignment = 1;
+		for (const auto& field : value->fields)
+			alignment = std::max(alignment, elementAlignment(field.second));
+		return alignment;
+	}
+	case ResolvedValueType::Kind::Tuple: {
+		uint32_t alignment = 1;
+		for (const ValuePtr& element : value->tuple)
+			alignment = std::max(alignment, elementAlignment(element));
+		return alignment;
+	}
+	case ResolvedValueType::Kind::Variant: {
+		uint32_t alignment = discriminantSize(value->cases.size());
+		for (const ResolvedCase& item : value->cases)
+			if (item.type)
+				alignment = std::max(alignment, elementAlignment(*item.type));
+		return alignment;
+	}
+	case ResolvedValueType::Kind::Option:
+		return std::max<uint32_t>(1, elementAlignment(value->element));
+	case ResolvedValueType::Kind::Result:
+		return std::max<uint32_t>(
+				std::max<uint32_t>(1, value->ok ? elementAlignment(*value->ok) : 1),
+				value->error ? elementAlignment(*value->error) : 1);
+	case ResolvedValueType::Kind::Enum:
+		return discriminantSize(value->labels.size());
+	case ResolvedValueType::Kind::Flags:
+		if (value->labels.size() <= 8)
+			return 1;
+		return value->labels.size() <= 16 ? 2 : 4;
+	case ResolvedValueType::Kind::Borrow:
+		return 8;
+	default:
+		return 4;
+	}
+}
+
+uint64_t elementSize(const ValuePtr& value)
+{
+	if (!value)
+		return 0;
+	switch (value->kind) {
+	case ResolvedValueType::Kind::Primitive:
+		switch (value->primitive) {
+		case PrimitiveValueType::Bool:
+		case PrimitiveValueType::S8:
+		case PrimitiveValueType::U8:
+			return 1;
+		case PrimitiveValueType::S16:
+		case PrimitiveValueType::U16:
+			return 2;
+		case PrimitiveValueType::S64:
+		case PrimitiveValueType::U64:
+		case PrimitiveValueType::F64:
+			return 8;
+		case PrimitiveValueType::String:
+			return 2 * kMaxAbiPointerSize;
+		default:
+			return 4;
+		}
+	case ResolvedValueType::Kind::List:
+	case ResolvedValueType::Kind::Map:
+		return 2 * kMaxAbiPointerSize;
+	case ResolvedValueType::Kind::FixedList: {
+		const uint64_t per = elementSize(value->element);
+		if (per == 0)
+			return 0;
+		if (value->fixedLength > kMaxValueByteSize / per)
+			return kMaxValueByteSize;
+		return per * value->fixedLength;
+	}
+	case ResolvedValueType::Kind::Record: {
+		uint64_t size = 0;
+		for (const auto& field : value->fields) {
+			size = alignUp(size, elementAlignment(field.second));
+			size += elementSize(field.second);
+			if (size >= kMaxValueByteSize)
+				return kMaxValueByteSize;
+		}
+		return alignUp(size, elementAlignment(value));
+	}
+	case ResolvedValueType::Kind::Tuple: {
+		uint64_t size = 0;
+		for (const ValuePtr& element : value->tuple) {
+			size = alignUp(size, elementAlignment(element));
+			size += elementSize(element);
+			if (size >= kMaxValueByteSize)
+				return kMaxValueByteSize;
+		}
+		return alignUp(size, elementAlignment(value));
+	}
+	case ResolvedValueType::Kind::Variant: {
+		uint32_t alignment = 1;
+		uint64_t payload = 0;
+		for (const ResolvedCase& item : value->cases) {
+			if (!item.type)
+				continue;
+			alignment = std::max(alignment, elementAlignment(*item.type));
+			payload = std::max(payload, elementSize(*item.type));
+		}
+		uint64_t size = alignUp(discriminantSize(value->cases.size()), alignment);
+		size += payload;
+		return alignUp(size, elementAlignment(value));
+	}
+	case ResolvedValueType::Kind::Option: {
+		const uint32_t alignment = elementAlignment(value);
+		uint64_t size = alignUp(1, alignment);
+		size += elementSize(value->element);
+		return alignUp(size, alignment);
+	}
+	case ResolvedValueType::Kind::Result: {
+		const uint32_t alignment = elementAlignment(value);
+		uint64_t payload = 0;
+		if (value->ok)
+			payload = std::max(payload, elementSize(*value->ok));
+		if (value->error)
+			payload = std::max(payload, elementSize(*value->error));
+		return alignUp(alignUp(1, alignment) + payload, alignment);
+	}
+	case ResolvedValueType::Kind::Enum:
+		return discriminantSize(value->labels.size());
+	case ResolvedValueType::Kind::Flags:
+		if (value->labels.size() <= 8)
+			return 1;
+		return value->labels.size() <= 16 ? 2 : 4;
+	case ResolvedValueType::Kind::Own:
+		return 4;
+	case ResolvedValueType::Kind::Borrow:
+		return 8;
+	default:
+		return 4;
+	}
+}
+
+bool valueTypeTooLarge(const ValuePtr& value)
+{
+	return elementSize(value) >= kMaxValueByteSize;
+}
+
+// CM14 `abi`: the direct (non-memory) flattening of a value type. Returns false
+// for shapes this validator does not need to compare (variants and anything
+// that already mandates a `memory` option); callers only use it to check a core
+// function signature against a directly flattened component function.
+bool flattenDirectTypes(const ValuePtr& value, std::vector<AbiCoreType>& out,
+		unsigned depth = 0)
+{
+	if (!value || depth > 64)
+		return false;
+	switch (value->kind) {
+	case ResolvedValueType::Kind::Primitive:
+		switch (value->primitive) {
+		case PrimitiveValueType::Bool:
+		case PrimitiveValueType::S8:
+		case PrimitiveValueType::U8:
+		case PrimitiveValueType::S16:
+		case PrimitiveValueType::U16:
+		case PrimitiveValueType::S32:
+		case PrimitiveValueType::U32:
+		case PrimitiveValueType::Char:
+		case PrimitiveValueType::ErrorContext:
+			out.push_back(AbiCoreType::I32);
+			return true;
+		case PrimitiveValueType::S64:
+		case PrimitiveValueType::U64:
+			out.push_back(AbiCoreType::I64);
+			return true;
+		case PrimitiveValueType::F32:
+			out.push_back(AbiCoreType::F32);
+			return true;
+		case PrimitiveValueType::F64:
+			out.push_back(AbiCoreType::F64);
+			return true;
+		default:
+			return false;
+		}
+	case ResolvedValueType::Kind::Record:
+		for (const auto& field : value->fields)
+			if (!flattenDirectTypes(field.second, out, depth + 1))
+				return false;
+		return true;
+	case ResolvedValueType::Kind::Tuple:
+		for (const ValuePtr& element : value->tuple)
+			if (!flattenDirectTypes(element, out, depth + 1))
+				return false;
+		return true;
+	case ResolvedValueType::Kind::Own:
+	case ResolvedValueType::Kind::Borrow:
+	case ResolvedValueType::Kind::Stream:
+	case ResolvedValueType::Kind::Future:
+	case ResolvedValueType::Kind::Enum:
+	case ResolvedValueType::Kind::Flags:
+		out.push_back(AbiCoreType::I32);
+		return true;
+	default:
+		return false;
+	}
+}
+
+// CM14 `annotated-names`/`resources`: every resource used by an export must be
+// introduced by a preceding import/export in the same scope. A bag of inline
+// exports is an instance type, so its resource-typed exports are the only names
+// available to the functions it also exports.
+void requireNamedResources(const ValuePtr& value,
+		const std::set<uint32_t>& names, unsigned depth = 0)
+{
+	if (!value || depth > 64)
+		return;
+	switch (value->kind) {
+	case ResolvedValueType::Kind::Own:
+	case ResolvedValueType::Kind::Borrow:
+		if (!value->resourceId || names.count(*value->resourceId) == 0)
+			fail("resource used in function does not have a name in this "
+					"context");
+		return;
+	case ResolvedValueType::Kind::Record:
+		for (const auto& field : value->fields)
+			requireNamedResources(field.second, names, depth + 1);
+		return;
+	case ResolvedValueType::Kind::Variant:
+		for (const ResolvedCase& item : value->cases)
+			if (item.type)
+				requireNamedResources(*item.type, names, depth + 1);
+		return;
+	case ResolvedValueType::Kind::List:
+	case ResolvedValueType::Kind::FixedList:
+	case ResolvedValueType::Kind::Option:
+		requireNamedResources(value->element, names, depth + 1);
+		return;
+	case ResolvedValueType::Kind::Tuple:
+		for (const ValuePtr& element : value->tuple)
+			requireNamedResources(element, names, depth + 1);
+		return;
+	case ResolvedValueType::Kind::Result:
+		if (value->ok)
+			requireNamedResources(*value->ok, names, depth + 1);
+		if (value->error)
+			requireNamedResources(*value->error, names, depth + 1);
+		return;
+	case ResolvedValueType::Kind::Stream:
+		if (value->streamElement)
+			requireNamedResources(*value->streamElement, names, depth + 1);
+		return;
+	case ResolvedValueType::Kind::Future:
+		if (value->futureElement)
+			requireNamedResources(*value->futureElement, names, depth + 1);
+		return;
+	case ResolvedValueType::Kind::Map:
+		requireNamedResources(value->mapKey, names, depth + 1);
+		requireNamedResources(value->mapValue, names, depth + 1);
+		return;
+	default:
+		return;
+	}
+}
+
+void validateBagResourceNames(const TypePtr& type,
+		const std::set<uint32_t>& names, unsigned depth = 0)
+{
+	if (!type || depth > 64)
+		return;
+	switch (type->kind) {
+	case ResolvedType::Kind::Value:
+		requireNamedResources(type->value, names, depth + 1);
+		break;
+	case ResolvedType::Kind::Func:
+		for (const auto& [name, value] : type->func->params)
+			requireNamedResources(value, names, depth + 1);
+		if (type->func->result)
+			requireNamedResources(*type->func->result, names, depth + 1);
+		break;
+	case ResolvedType::Kind::Instance:
+		for (const ResolvedDecl& declaration : type->instance->exports)
+			validateBagResourceNames(declaration.type, names, depth + 1);
+		break;
+	case ResolvedType::Kind::Component:
+		for (const ResolvedDecl& declaration : type->component->imports)
+			validateBagResourceNames(declaration.type, names, depth + 1);
+		for (const ResolvedDecl& declaration : type->component->exports)
+			validateBagResourceNames(declaration.type, names, depth + 1);
+		break;
+	case ResolvedType::Kind::Resource:
+		break; // the export introduces the name itself
+	}
+}
+
 class ComponentValidator {
 public:
 	ComponentValidator(const Component& component, const TypeScope* parent,
@@ -1022,9 +1447,12 @@ private:
 			ComponentDefinitionRef ref);
 	std::shared_ptr<const ResolvedComponentType> buildSignature() const;
 
-	bool typeEqual(const TypePtr& left, const TypePtr& right) const;
-	bool typeSubtype(const TypePtr& actual, const TypePtr& expected) const;
-	bool valueEqual(const ValuePtr& left, const ValuePtr& right) const;
+	bool typeEqual(const TypePtr& left, const TypePtr& right,
+			bool exact = false) const;
+	bool typeSubtype(const TypePtr& actual, const TypePtr& expected,
+			bool exact = false) const;
+	bool valueEqual(const ValuePtr& left, const ValuePtr& right,
+			bool exact = false) const;
 	bool valueContainsResource(const ValuePtr& value) const;
 };
 void ComponentValidator::run()
@@ -1407,6 +1835,11 @@ TypePtr ComponentValidator::resolveDefinedValueType(ComponentTypeView type,
 	}
 	const TypePtr resolved = makeType(value);
 	value->owner = resolved.get();
+	// CM14 `max-value-size`: every defined value type must have an `elem_size`
+	// below 2^28 (CanonicalABI.md#element-size); the check is on the whole type,
+	// so a sum of individually small leaves cannot slip through.
+	if (valueTypeTooLarge(value))
+		fail("value type exceeds maximum byte size");
 	return resolved;
 }
 TypePtr ComponentValidator::resolveFuncType(ComponentTypeView type,
@@ -1492,6 +1925,8 @@ TypePtr ComponentValidator::buildDeclaredType(
 {
 	ValidationScope local;
 	local.typeScope.parent = &scope.typeScope;
+	local.parent = &scope;
+	local.typeDeclarator = true;
 
 	if (definition.kind == ComponentTypeDef::Kind::Component) {
 		for (const ComponentDecl& declaration : definition.componentDecls())
@@ -2856,6 +3291,10 @@ void ComponentValidator::processAlias(const Alias& alias, bool insideType,
 		const bool coreType = alias.sort.sort == ComponentSort::Core
 				&& alias.sort.core->sort == CoreSort::Type;
 		if (!coreType && alias.sort.sort != ComponentSort::Type) {
+			// CM14: a declarator may only outer-alias a `core type` or `type`;
+			// the wider CM13b form is for concrete component scopes only.
+			if (insideType)
+				fail("outer alias declarators may only alias core type or type");
 			// CM13b: an outer alias may name *any* sort of an enclosing scope,
 			// not just `(core type)` / `(type)`. Those two live in the type
 			// chain (handled below, unchanged); every other sort is resolved
@@ -2881,10 +3320,19 @@ void ComponentValidator::processAlias(const Alias& alias, bool insideType,
 			return;
 		}
 		const TypeScope* target = &scope.typeScope;
+		// CM14: only a *component* boundary makes a type non-substitutable. A
+		// declarator boundary is fine (a resource may be named through it), which
+		// is what separates outer-alias.wast's valid type-declarator cases from
+		// the rejected `(component (component (alias outer 2 0 ...)))` shapes.
+		const ValidationScope* walker = &scope;
+		uint32_t componentBoundaries = 0;
 		for (uint32_t i = 0; i < alias.outerCount; ++i) {
-			if (!target->parent)
+			if (!target->parent || !walker->parent)
 				fail("outer alias count exceeds the enclosing scope chain");
+			if (!walker->typeDeclarator)
+				++componentBoundaries;
 			target = target->parent;
+			walker = walker->parent;
 		}
 		if (coreType) {
 			if (alias.index >= target->coreTypes.size())
@@ -2898,6 +3346,8 @@ void ComponentValidator::processAlias(const Alias& alias, bool insideType,
 		if (alias.index >= target->types.size())
 			fail("outer alias type index out of bounds");
 		entity.type = target->types[alias.index];
+		if (componentBoundaries > 0 && typeRefersToResource(entity.type))
+			fail("outer alias type transitively refers to resources");
 		break;
 	}
 	}
@@ -3067,7 +3517,11 @@ void ComponentValidator::processExport(uint32_t index)
 	} else if (exportDecl.sortIndex.sort == ComponentSort::Type
 			&& target->type) {
 		// The export introduces a new externally-visible type index. Keep it
-		// distinct from the local definition so visibility cannot leak backward.
+		// distinct from the local definition so visibility cannot leak backward:
+		// a function that still names the definition is rejected, while one that
+		// names the exported index is accepted (external-visibility.wast). The
+		// clone keeps the resource's nominal id, which is why two exports of the
+		// same `$r` remain two labels for one type (resources.wast).
 		declaration.type = cloneExportedType(target->type);
 	} else {
 		declaration.type = target->type;
@@ -3093,6 +3547,11 @@ void ComponentValidator::processExport(uint32_t index)
 				|| !typeSubtype(declaration.type, ascribed.type)) {
 			fail("export type ascription does not match the exported definition");
 		}
+		// CM14: when present, the ascription *is* the export's type (Explainer.md
+		// “type ascription”). This is what lets `(export "f" (func $f) (func
+		// (result (own $R'))))` name a resource the definition type cannot.
+		if (declaration.sort.sort != ComponentSort::Core && ascribed.type)
+			declaration.type = ascribed.type;
 	}
 
 	const ComponentDefinitionRef ref{&component_,
@@ -3111,6 +3570,8 @@ void ComponentValidator::processExport(uint32_t index)
 		exported.memory = exportedTarget.memory;
 		exported.global = exportedTarget.global;
 		exported.tagTypeIndex = exportedTarget.tagTypeIndex;
+		exported.funcTypeId = exportedTarget.funcTypeId;
+		exported.tagTypeId = exportedTarget.tagTypeId;
 		exported.coreExports = exportedTarget.coreExports;
 		exported.coreType = exportedTarget.coreType
 				? exportedTarget.coreType : declaration.coreTypeValue;
@@ -3242,6 +3703,8 @@ Entity ComponentValidator::coreEntityFromInfo(const CoreExportInfo& info) const
 	entity.memory = info.memory;
 	entity.global = info.global;
 	entity.tagTypeIndex = info.tagTypeIndex;
+	entity.funcTypeId = info.funcTypeId;
+	entity.tagTypeId = info.tagTypeId;
 	return entity;
 }
 void ComponentValidator::processCoreInstance(uint32_t index)
@@ -3348,6 +3811,12 @@ void ComponentValidator::processCoreInstance(uint32_t index)
 			info.memory = target->memory;
 			info.global = target->global;
 			info.tagTypeIndex = target->tagTypeIndex;
+			// CM14: a re-exported core function/tag keeps its canonical type
+			// identity. Dropping it made the instantiate check above skip the
+			// `funcTypeId`/`tagTypeId` comparison for inline export bags, so
+			// `(import "" "f" (func))` accepted a `(param i32)` export.
+			info.funcTypeId = target->funcTypeId;
+			info.tagTypeId = target->tagTypeId;
 			info.coreModuleValue = target->coreModule;
 			info.coreModuleType = target->coreModuleType;
 			info.instanceExports = target->coreExports;
@@ -3393,7 +3862,7 @@ void ComponentValidator::instantiateComponent(const ComponentInstance& instance,
 			const TypePtr fresh = makeType(resource);
 			ComponentResourcePayload payload;
 			payload.rep = resource->rep;
-			payload.abstract = false;
+			payload.abstract = resource->abstract;
 			fresh->typeId = store_.types().store()
 					.addComponentResource(payload);
 			substitutions.emplace(id, fresh);
@@ -3424,10 +3893,25 @@ void ComponentValidator::instantiateComponent(const ComponentInstance& instance,
 								*actual->coreType))
 					fail("component instantiate argument `" + import.name.name +
 							"` has an incompatible core module type");
-			} else if (!actual->type || !import.type
-					|| !typeSubtype(actual->type, import.type)) {
-				fail("component instantiate argument `" + import.name.name +
-						"` has an incompatible type");
+			} else {
+				// CM14: the imports of the callee are a *type scheme*; a function
+				// argument only matches once the abstract resources already bound
+				// by earlier arguments are substituted into its type. Before the
+				// substitution `own $U` matched the callee's parameter `own $T`
+				// through the abstract-resource wildcard, so ten `resources`
+				// cases were accepted although the resources differed.
+				const bool abstractResourceParameter = import.type
+						&& import.type->kind == ResolvedType::Kind::Resource
+						&& import.type->resource->abstract;
+				const TypePtr expected = abstractResourceParameter
+						? import.type
+						: substituteType(import.type, substitutions);
+				if (!actual->type || !import.type
+						|| !typeSubtype(actual->type, expected,
+								!abstractResourceParameter)) {
+					fail("component instantiate argument `" + import.name.name +
+							"` has an incompatible type");
+				}
 			}
 			if (import.type && import.type->kind == ResolvedType::Kind::Resource
 					&& import.type->resource->abstract) {
@@ -3464,6 +3948,12 @@ void ComponentValidator::instantiateComponent(const ComponentInstance& instance,
 				substitutions);
 	} else {
 		std::set<std::string> names;
+		// CM14: a bag of exports is validated as the *synthesized instance
+		// type* it denotes (annotated-names.wast). A concrete resource export
+		// denotes a fresh abstract type there, so it does not name the
+		// component-level definition a function was built from.
+		ValidationScope bagScope;
+		std::set<uint32_t> bagResources;
 		for (const InlineExport& exportDecl : instance.exports) {
 			if (!names.insert(exportDecl.name.name).second)
 				fail("duplicate inline instance export `" + exportDecl.name.name + "`");
@@ -3476,6 +3966,34 @@ void ComponentValidator::instantiateComponent(const ComponentInstance& instance,
 			declaration.type = target->type;
 			declaration.coreModule = target->coreModuleType;
 			declaration.coreTypeIndex = target->coreTypeIndex;
+
+			ResolvedDecl synthesized = declaration;
+			if (exportDecl.sortIndex.sort == ComponentSort::Type && target->type
+					&& target->type->kind == ResolvedType::Kind::Resource
+					&& !target->type->resource->abstract) {
+				auto resource = std::make_shared<ResolvedResourceType>(
+						*target->type->resource);
+				resource->id = state_.nextResourceId++;
+				resource->abstract = true;
+				const TypePtr exported = makeType(resource);
+				ComponentResourcePayload payload;
+				payload.rep.opcode = ValueTypeCode::I32;
+				payload.rep.heapType = 0;
+				payload.abstract = true;
+				exported->typeId = store_.types().store()
+						.addComponentResource(payload);
+				synthesized.type = exported;
+			}
+			if (synthesized.sort.sort == ComponentSort::Type
+					&& synthesized.type
+					&& synthesized.type->kind == ResolvedType::Kind::Resource)
+				bagResources.insert(synthesized.type->resource->id);
+			validateFunctionAnnotations(synthesized, bagScope, false);
+			validateBagResourceNames(synthesized.type, bagResources);
+			bagScope.exports.push_back(synthesized);
+			// The synthesized type exists only to check the bag as an instance
+			// type; the instance's own export index still aliases the definition,
+			// so aliases out of it see the component-level type.
 			instanceType->exports.push_back(std::move(declaration));
 		}
 	}
@@ -3549,9 +4067,10 @@ void ComponentValidator::validateCanon(const Canon& canon)
 	switch (canon.kind) {
 	case Canon::Kind::Lift:
 	case Canon::Kind::Lower: {
+		const Entity* coreFunc = nullptr;
 		TypePtr funcType;
 		if (canon.kind == Canon::Kind::Lift) {
-			scope_.spaces.require(CoreSort::Func, canon.coreFuncIndex,
+			coreFunc = scope_.spaces.require(CoreSort::Func, canon.coreFuncIndex,
 					"canon lift core function");
 			funcType = resolveTypeIndex(canon.typeIndex, scope_,
 					ResolvedType::Kind::Func, "function type");
@@ -3560,31 +4079,91 @@ void ComponentValidator::validateCanon(const Canon& canon)
 					canon.funcIndex, "canon lower function");
 			funcType = funcEntity ? funcEntity->type : TypePtr{};
 		}
-		// CM14: a `lift`/`lower` whose type places bytes in linear memory (string,
-		// list, map) must name a `memory` option; the corpus rejects the ones that
-		// do not, and the ABI could not have run them.
 		bool hasMemory = false;
 		for (const CanonOpt& opt : canon.opts)
 			if (opt.kind == CanonOptKind::Memory)
 				hasMemory = true;
-		if (!hasMemory && funcType && funcType->func) {
-			bool needs = false;
-			uint32_t slots = 0;
+		if (funcType && funcType->func) {
+			// CanonicalABI `flatten_functype`: MAX_FLAT_PARAMS = 16 and
+			// MAX_FLAT_RESULTS = 1. Exceeding either spills through linear
+			// memory, and so does a `string`/`list`/`map` wherever it sits.
+			uint32_t flatParams = 0;
+			bool direct = true;
+			bool needsMemory = false;
+			std::vector<AbiCoreType> directParams;
 			for (const auto& [name, value] : funcType->func->params) {
-				if (valueNeedsMemory(value))
-					needs = true;
-				slots += flatSlots(value);
+				flatParams += flatSlots(value);
+				if (!flattenDirectTypes(value, directParams))
+					direct = false;
+				if (valueNeedsMemory(value)) {
+					direct = false;
+					needsMemory = true;
+				}
 			}
+			const uint32_t flatResults = funcType->func->result
+					? flatSlots(*funcType->func->result) : 0;
+			std::vector<AbiCoreType> directResults;
 			if (funcType->func->result) {
-				if (valueNeedsMemory(*funcType->func->result))
-					needs = true;
-				if (flatSlots(*funcType->func->result) > 1)
-					slots += 1;
+				if (!flattenDirectTypes(*funcType->func->result, directResults))
+					direct = false;
+				if (valueNeedsMemory(*funcType->func->result)) {
+					direct = false;
+					needsMemory = true;
+				}
 			}
-			if (slots > 16)
-				needs = true;
-			if (needs)
+			if (flatParams > 16 || flatResults > 1) {
+				direct = false;
+				needsMemory = true;
+			}
+			if (needsMemory && !hasMemory)
 				fail("canonical option `memory` is required");
+			// CM14 `abi`: when nothing is spilt, `$callee` must have exactly the
+			// flattened core signature. The corpus's two direct-mismatch cases
+			// (`lift (core func $i "f")` against `(param i32)` / `(result i32)`)
+			// were accepted because only the *memory* half of the rule existed.
+			if (direct && canon.kind == Canon::Kind::Lift && coreFunc
+					&& coreFunc->coreModule
+					&& coreFunc->moduleTypeIndex
+							< coreFunc->coreModule->typeIds.size()) {
+				const FuncType actual = coreFunc->coreModule->funcTypeAt(
+						coreFunc->moduleTypeIndex);
+				const auto asAbi = [](const StorageType& type)
+						-> std::optional<AbiCoreType> {
+					if (type.isPacked)
+						return AbiCoreType::I32;
+					switch (type.val.opcode) {
+					case ValueTypeCode::I32: return AbiCoreType::I32;
+					case ValueTypeCode::I64: return AbiCoreType::I64;
+					case ValueTypeCode::F32: return AbiCoreType::F32;
+					case ValueTypeCode::F64: return AbiCoreType::F64;
+					default: return std::nullopt;
+					}
+				};
+				bool matches = actual.params.size() == directParams.size()
+						&& actual.results.size() == directResults.size();
+				std::vector<AbiCoreType> actualParams;
+				std::vector<AbiCoreType> actualResults;
+				for (const StorageType& param : actual.params) {
+					const auto abi = asAbi(param);
+					if (!abi)
+						matches = false;
+					else
+						actualParams.push_back(*abi);
+				}
+				for (const StorageType& result : actual.results) {
+					const auto abi = asAbi(result);
+					if (!abi)
+						matches = false;
+					else
+						actualResults.push_back(*abi);
+				}
+				if (matches && (actualParams != directParams
+						|| actualResults != directResults))
+					matches = false;
+				if (!matches)
+					fail("core function type does not match the flattened "
+							"component function type");
+			}
 		}
 		break;
 	}
@@ -3599,11 +4178,23 @@ void ComponentValidator::validateCanon(const Canon& canon)
 		// defined beside the builtin are both concrete and legal.
 		if (!resource || !resource->resource || resource->resource->abstract)
 			fail("canonical resource builtin requires a concrete resource");
+		// CM14: `resource.new`/`resource.rep` additionally need the resource to
+		// be *local* — defined here, or threaded back through an instantiation
+		// argument. `resource.drop` only needs the representation, so a resource
+		// aliased from a child instance may still be dropped (resources.wast).
+		if (canon.kind != Canon::Kind::ResourceDrop
+				&& localResources_.count(resource->resource->id) == 0)
+			fail("canonical resource builtin requires a local resource");
 		break;
 	}
 	case Canon::Kind::TaskReturn:
-		for (const ComponentValueType& result : canon.results)
-			(void)resolveValueType(result, scope_);
+		for (const ComponentValueType& result : canon.results) {
+			const ValuePtr value = resolveValue(result, scope_);
+			// CM14 `validate-task-return`: the corpus's own wording for a result
+			// that carries a borrowed handle, directly or nested.
+			if (containsBorrow(value))
+				fail("`task.return` result cannot contain a `borrow` type");
+		}
 		break;
 	case Canon::Kind::StreamNew:
 	case Canon::Kind::StreamRead:
@@ -3692,7 +4283,7 @@ void ComponentValidator::processStart(uint32_t index)
 		fail("start result count does not match the function result");
 }
 bool ComponentValidator::valueEqual(const ValuePtr& left,
-		const ValuePtr& right) const
+		const ValuePtr& right, bool exact) const
 {
 	if (left.get() == right.get())
 		return true;
@@ -3706,7 +4297,8 @@ bool ComponentValidator::valueEqual(const ValuePtr& left,
 			return false;
 		for (std::size_t i = 0; i < left->fields.size(); ++i)
 			if (left->fields[i].first != right->fields[i].first
-					|| !valueEqual(left->fields[i].second, right->fields[i].second))
+					|| !valueEqual(left->fields[i].second,
+							right->fields[i].second, exact))
 				return false;
 		return true;
 	case ResolvedValueType::Kind::Variant:
@@ -3717,48 +4309,55 @@ bool ComponentValidator::valueEqual(const ValuePtr& left,
 					|| left->cases[i].type.has_value() != right->cases[i].type.has_value())
 				return false;
 			if (left->cases[i].type
-					&& !valueEqual(*left->cases[i].type, *right->cases[i].type))
+					&& !valueEqual(*left->cases[i].type, *right->cases[i].type,
+							exact))
 				return false;
 		}
 		return true;
 	case ResolvedValueType::Kind::List:
-		return valueEqual(left->element, right->element);
+		return valueEqual(left->element, right->element, exact);
 	case ResolvedValueType::Kind::FixedList:
 		return left->fixedLength == right->fixedLength
-				&& valueEqual(left->element, right->element);
+				&& valueEqual(left->element, right->element, exact);
 	case ResolvedValueType::Kind::Tuple:
 		if (left->tuple.size() != right->tuple.size())
 			return false;
 		for (std::size_t i = 0; i < left->tuple.size(); ++i)
-			if (!valueEqual(left->tuple[i], right->tuple[i]))
+			if (!valueEqual(left->tuple[i], right->tuple[i], exact))
 				return false;
 		return true;
 	case ResolvedValueType::Kind::Flags:
 	case ResolvedValueType::Kind::Enum:
 		return left->labels == right->labels;
 	case ResolvedValueType::Kind::Option:
-		return valueEqual(left->element, right->element);
+		return valueEqual(left->element, right->element, exact);
 	case ResolvedValueType::Kind::Result:
 		if (left->ok.has_value() != right->ok.has_value()
 				|| left->error.has_value() != right->error.has_value())
 			return false;
-		return (!left->ok || valueEqual(*left->ok, *right->ok))
-				&& (!left->error || valueEqual(*left->error, *right->error));
+		return (!left->ok || valueEqual(*left->ok, *right->ok, exact))
+				&& (!left->error || valueEqual(*left->error, *right->error, exact));
 	case ResolvedValueType::Kind::Own:
 	case ResolvedValueType::Kind::Borrow:
-		return left->resourceAbstract || right->resourceAbstract
-				|| left->resourceId == right->resourceId;
+		// `exact` is the instantiation path: an abstract resource is a
+		// *parameter*, and once it has been substituted by the argument the
+		// comparison is nominal. Everywhere else an abstract resource on either
+		// side is a wildcard (it has no representation to compare).
+		return left->resourceId == right->resourceId
+				|| (!exact && (left->resourceAbstract || right->resourceAbstract));
 	case ResolvedValueType::Kind::Stream:
 		return left->streamElement.has_value() == right->streamElement.has_value()
 				&& (!left->streamElement
-						|| valueEqual(*left->streamElement, *right->streamElement));
+						|| valueEqual(*left->streamElement, *right->streamElement,
+								exact));
 	case ResolvedValueType::Kind::Future:
 		return left->futureElement.has_value() == right->futureElement.has_value()
 				&& (!left->futureElement
-						|| valueEqual(*left->futureElement, *right->futureElement));
+						|| valueEqual(*left->futureElement,
+								*right->futureElement, exact));
 	case ResolvedValueType::Kind::Map:
-		return valueEqual(left->mapKey, right->mapKey)
-				&& valueEqual(left->mapValue, right->mapValue);
+		return valueEqual(left->mapKey, right->mapKey, exact)
+				&& valueEqual(left->mapValue, right->mapValue, exact);
 	}
 	return false;
 }
@@ -3805,7 +4404,7 @@ bool ComponentValidator::valueContainsResource(const ValuePtr& value) const
 	}
 }
 bool ComponentValidator::typeEqual(const TypePtr& left,
-		const TypePtr& right) const
+		const TypePtr& right, bool exact) const
 {
 	if (left.get() == right.get())
 		return true;
@@ -3813,10 +4412,11 @@ bool ComponentValidator::typeEqual(const TypePtr& left,
 		return false;
 	switch (left->kind) {
 	case ResolvedType::Kind::Value:
-		return valueEqual(left->value, right->value);
+		return valueEqual(left->value, right->value, exact);
 	case ResolvedType::Kind::Resource:
 		return left->resource->id == right->resource->id
-				|| left->resource->abstract || right->resource->abstract;
+				|| (!exact
+						&& (left->resource->abstract || right->resource->abstract));
 	case ResolvedType::Kind::Func: {
 		const ResolvedFuncType& a = *left->func;
 		const ResolvedFuncType& b = *right->func;
@@ -3825,9 +4425,9 @@ bool ComponentValidator::typeEqual(const TypePtr& left,
 			return false;
 		for (std::size_t i = 0; i < a.params.size(); ++i)
 			if (a.params[i].first != b.params[i].first
-					|| !valueEqual(a.params[i].second, b.params[i].second))
+					|| !valueEqual(a.params[i].second, b.params[i].second, exact))
 				return false;
-		return !a.result || valueEqual(*a.result, *b.result);
+		return !a.result || valueEqual(*a.result, *b.result, exact);
 	}
 	case ResolvedType::Kind::Instance: {
 		const auto& a = left->instance->exports;
@@ -3843,7 +4443,8 @@ bool ComponentValidator::typeEqual(const TypePtr& left,
 			if (static_cast<bool>(declaration.type)
 					!= static_cast<bool>(other->type))
 				return false;
-			if (declaration.type && !typeEqual(declaration.type, other->type))
+			if (declaration.type
+					&& !typeEqual(declaration.type, other->type, exact))
 				return false;
 		}
 		return true;
@@ -3864,7 +4465,8 @@ bool ComponentValidator::typeEqual(const TypePtr& left,
 				if (static_cast<bool>(declaration.type)
 						!= static_cast<bool>(other->type))
 					return false;
-				if (declaration.type && !typeEqual(declaration.type, other->type))
+				if (declaration.type
+						&& !typeEqual(declaration.type, other->type, exact))
 					return false;
 			}
 			return true;
@@ -3877,9 +4479,9 @@ bool ComponentValidator::typeEqual(const TypePtr& left,
 }
 
 bool ComponentValidator::typeSubtype(const TypePtr& actual,
-		const TypePtr& expected) const
+		const TypePtr& expected, bool exact) const
 {
-	if (typeEqual(actual, expected))
+	if (typeEqual(actual, expected, exact))
 		return true;
 	if (!actual || !expected || actual->kind != expected->kind)
 		return false;
@@ -3890,7 +4492,8 @@ bool ComponentValidator::typeSubtype(const TypePtr& actual,
 			if (!actualExport || !sameSort(actualExport->sort, expectedExport.sort))
 				return false;
 			if (expectedExport.type && (!actualExport->type
-					|| !typeSubtype(actualExport->type, expectedExport.type)))
+					|| !typeSubtype(actualExport->type, expectedExport.type,
+							exact)))
 				return false;
 		}
 		return true;
@@ -3902,7 +4505,8 @@ bool ComponentValidator::typeSubtype(const TypePtr& actual,
 			if (!actualImport || !sameSort(actualImport->sort, expectedImport.sort))
 				return false;
 			if (expectedImport.type && (!actualImport->type
-					|| !typeEqual(actualImport->type, expectedImport.type)))
+					|| !typeEqual(actualImport->type, expectedImport.type,
+							exact)))
 				return false;
 		}
 		for (const ResolvedDecl& expectedExport : expected->component->exports) {
@@ -3911,7 +4515,8 @@ bool ComponentValidator::typeSubtype(const TypePtr& actual,
 			if (!actualExport || !sameSort(actualExport->sort, expectedExport.sort))
 				return false;
 			if (expectedExport.type && (!actualExport->type
-					|| !typeSubtype(actualExport->type, expectedExport.type)))
+					|| !typeSubtype(actualExport->type, expectedExport.type,
+							exact)))
 				return false;
 		}
 		return true;
