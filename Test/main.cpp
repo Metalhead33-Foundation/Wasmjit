@@ -4961,7 +4961,6 @@ TEST_CASE("component execution: accepted corpus instantiates", "[component-execu
 	REQUIRE(stream);
 	std::size_t checked = 0;
 	std::size_t failures = 0;
-	std::size_t knownUnsupported = 0;
 	std::string firstFailure;
 	std::string line;
 	while (std::getline(stream, line)) {
@@ -5010,17 +5009,6 @@ TEST_CASE("component execution: accepted corpus instantiates", "[component-execu
 			(void)runtime;
 		} catch (const std::exception& error) {
 			const std::string message = error.what();
-			const bool known =
-					message.find("Unresolved import: libzip.zip") != std::string::npos
-					|| message.find("canon lower function index out of bounds")
-							!= std::string::npos
-					|| message.find("imported function type is outside the flat ABI subset")
-							!= std::string::npos
-					|| message.find("invalid canonical") != std::string::npos;
-			if (known) {
-				++knownUnsupported;
-				continue;
-			}
 			++failures;
 			if (firstFailure.empty())
 				firstFailure = origin + ": " + message;
@@ -5028,11 +5016,6 @@ TEST_CASE("component execution: accepted corpus instantiates", "[component-execu
 	}
 	INFO("first failure: " << firstFailure);
 	REQUIRE(checked >= 140);
-	// Three upstream cases exercise shapes this backend/ABI slice does not
-	// execute yet: shared-everything core-module link order, a
-	// component-function index gap produced by an inline export alias, and a
-	// resource-typed host import. They are counted, not silently skipped.
-	REQUIRE(knownUnsupported <= 3);
 	REQUIRE(failures == 0);
 }
 

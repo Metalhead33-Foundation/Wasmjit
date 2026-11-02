@@ -2467,10 +2467,11 @@ void ComponentRuntime::processComponentInstance(
 						|| exportDecl.sortIndex.core->sort != WASM::CoreSort::Module)
 					throw std::runtime_error(
 							"component runtime: inline instance core export sort is not a module");
-				if (index >= coreModuleSpace_.size())
+				const std::uint32_t coreIndex = exportDecl.sortIndex.core->index;
+				if (coreIndex >= coreModuleSpace_.size())
 					throw std::runtime_error(
 							"component runtime: inline instance core module export is out of bounds");
-				inlineCoreModules[exportDecl.name.name] = coreModuleSpace_[index];
+				inlineCoreModules[exportDecl.name.name] = coreModuleSpace_[coreIndex];
 				break;
 			}
 			default:
@@ -2501,10 +2502,11 @@ void ComponentRuntime::processComponentInstance(
 					|| arg.sortIndex.core->sort != WASM::CoreSort::Module)
 				throw std::runtime_error(
 						"component runtime: unsupported core instantiate argument sort");
-			if (index >= coreModuleSpace_.size())
+			const std::uint32_t coreIndex = arg.sortIndex.core->index;
+			if (coreIndex >= coreModuleSpace_.size())
 				throw std::runtime_error(
 						"component runtime: instantiate core module argument is out of bounds");
-			childCoreModules[arg.name] = coreModuleSpace_[index];
+			childCoreModules[arg.name] = coreModuleSpace_[coreIndex];
 			break;
 		}
 		case WASM::ComponentSort::Func:
@@ -3733,9 +3735,40 @@ void ComponentRuntime::processImport(const WASM::ImportDecl& importDecl)
 		throw std::runtime_error(
 				"component runtime: imported function type has no closed identity");
 	const WASM::CanonicalAbiSignature* abi = abi_.resolve(typeId, {});
-	if (!abi)
-		throw std::runtime_error(
-				"component runtime: imported function type is outside the flat ABI subset");
+	WASM::CanonicalAbiSignature fallbackSignature;
+	if (!abi) {
+		// An imported abstract-resource function can retain parser-local
+		// TypeIndex value types. Resolve those through this component's type
+		// index space rather than refusing the host import.
+		const WASM::TypeStore& store =
+				component_.store().types().store();
+		const WASM::ComponentTypeView view =
+				store.componentType(typeId);
+		fallbackSignature.type = typeId;
+		for (const WASM::ComponentFuncParam& param : view.params()) {
+			const WASM::ComponentValueType resolved =
+					resolveValueType(param.type);
+			if (!store.canonicalAbiFlatValue(resolved,
+					fallbackSignature.flatParams))
+				throw std::runtime_error(
+						"component runtime: imported function type is outside the flat ABI subset");
+		}
+		for (const WASM::ComponentValueType& result : view.results()) {
+			const WASM::ComponentValueType resolved =
+					resolveValueType(result);
+			if (!store.canonicalAbiFlatValue(resolved,
+					fallbackSignature.flatResults))
+				throw std::runtime_error(
+						"component runtime: imported function type is outside the flat ABI subset");
+		}
+		fallbackSignature.indirectParams =
+				fallbackSignature.flatParams.size() > 16;
+		fallbackSignature.indirectResults =
+				fallbackSignature.flatResults.size() > 1;
+		fallbackSignature.coreParams = fallbackSignature.flatParams;
+		fallbackSignature.coreResults = fallbackSignature.flatResults;
+		abi = &fallbackSignature;
+	}
 	if (import->function.params != abi->flatParams
 			|| import->function.results != abi->flatResults)
 		throw std::runtime_error(
@@ -3766,12 +3799,16 @@ void ComponentRuntime::processExport(const WASM::ComponentExport& exportDecl)
 			throw std::runtime_error(
 					"component runtime: function export index out of bounds");
 		exportedFuncs_[exportDecl.name.name] = exportDecl.sortIndex.index;
+		// The validator's function index space appends the exported alias; a
+		// later `canon lower`/`alias` addresses it by that new index.
+		componentFuncs_.push_back(componentFuncs_[exportDecl.sortIndex.index]);
 		break;
 	case WASM::ComponentSort::Value:
 		if (exportDecl.sortIndex.index >= componentValues_.size())
 			throw std::runtime_error(
 					"component runtime: value export index out of bounds");
 		exportedValueIndices_[exportDecl.name.name] = exportDecl.sortIndex.index;
+		componentValues_.push_back(componentValues_[exportDecl.sortIndex.index]);
 		break;
 	case WASM::ComponentSort::Instance:
 		if (exportDecl.sortIndex.index >= componentInstances_.size())
@@ -3779,6 +3816,8 @@ void ComponentRuntime::processExport(const WASM::ComponentExport& exportDecl)
 					"component runtime: instance export index out of bounds");
 		exportedInstances_[exportDecl.name.name] =
 				componentInstances_[exportDecl.sortIndex.index];
+		componentInstances_.push_back(makeInstanceHandle(
+				componentInstances_[exportDecl.sortIndex.index]->exports));
 		break;
 	case WASM::ComponentSort::Type:
 		exportedTypeIndices_[exportDecl.name.name] = exportDecl.sortIndex.index;
@@ -3786,16 +3825,19 @@ void ComponentRuntime::processExport(const WASM::ComponentExport& exportDecl)
 	case WASM::ComponentSort::Component:
 		exportedComponentIndices_[exportDecl.name.name] =
 				exportDecl.sortIndex.index;
+		componentSpace_.push_back(componentSpace_[exportDecl.sortIndex.index]);
 		break;
 	case WASM::ComponentSort::Core:
 		if (!exportDecl.sortIndex.core
 				|| exportDecl.sortIndex.core->sort != WASM::CoreSort::Module)
 			break;
-		if (exportDecl.sortIndex.index >= coreModuleSpace_.size())
+		if (exportDecl.sortIndex.core->index >= coreModuleSpace_.size())
 			throw std::runtime_error(
 					"component runtime: core module export index out of bounds");
 		exportedCoreModules_[exportDecl.name.name] =
-				coreModuleSpace_[exportDecl.sortIndex.index];
+				coreModuleSpace_[exportDecl.sortIndex.core->index];
+		coreModuleSpace_.push_back(
+				coreModuleSpace_[exportDecl.sortIndex.core->index]);
 		break;
 	default:
 		break;

@@ -280,9 +280,9 @@ handles, named imports/exports, and WIT as the authoring format. Everything in
 ## 3A. Work order for the structural gaps (2026-11-02)
 
 `CM15` closed the corpus in both directions (**516 verdict cases, 0 accept-side and 0 reject-side
-disagreements**; `[component-corpus]` 520 assertions, zero `WARN`; suite **17,326 / 574**). Both
+disagreements**; `[component-corpus]` 520 assertions, zero `WARN`; suite **17,325 / 574**). Both
 directions are now a **hard gate** in `Test/ComponentCorpusTests.cpp`. `CM16`–`CM19` then closed the
-four structural gaps this section listed (2026-11-02), taking the suite to **17,326 / 574** without a
+four structural gaps this section listed (2026-11-02), taking the suite to **17,325 / 574** without a
 corpus delta. A report mode (`WASM_SPEC_CORPUS_TOLERANT=1`) was added first so structural work can be
 measured without aborting the gate.
 
@@ -333,7 +333,7 @@ open engine item: it is supplied by the embedder's `ComponentExecutor`.
 
 ## 4. What is in the tree today
 
-**Snapshot (2026-11-02, working tree; no commit yet).** Everything below is a kind-2 statement under `docs/FRESHNESS.md` §2.2, so the whole section carries one stamp rather than a date per sentence. Measured with `build/Desktop-Debug/Test/WasmJit` (**17,326 assertions / 574 cases**) and `[component-corpus]` (**516 verdict cases; 0 reject-side, 0 accept-side**); `[component-execution]` additionally constructs **140** accepted artifacts and names the twenty-one residual execution groups. Before changing a count below, re-run those and `docs/FRESHNESS.md` §8; if a sentence disagrees with the runs, the sentence is stale.
+**Snapshot (2026-11-02, working tree; no commit yet).** Everything below is a kind-2 statement under `docs/FRESHNESS.md` §2.2, so the whole section carries one stamp rather than a date per sentence. Measured with `build/Desktop-Debug/Test/WasmJit` (**17,325 assertions / 574 cases**) and `[component-corpus]` (**516 verdict cases; 0 reject-side, 0 accept-side**); `[component-execution]` additionally constructs **140** accepted artifacts and names the twenty-one residual execution groups. Before changing a count below, re-run those and `docs/FRESHNESS.md` §8; if a sentence disagrees with the runs, the sentence is stale.
 
 ### 4.1 Short answer: an honest rejection (CM-0), plus a parser (CM-1a/CM-1b)
 
