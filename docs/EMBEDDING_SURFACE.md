@@ -361,7 +361,7 @@ those are `profile()`/`supports()`/`version()` (§4.7). Three rules follow:
    module loaded under `Full` be instantiated under `{T}` just because it is
    already in the cache.
 3. **A profile is not the concurrency decision.** `T` excludes shared memory and
-   atomics; that is a different statement from "multi-agent execution is deferred"
+   atomics; that is independent of the opt-in multi-agent scheduling mode
    ([`THREADSAFETY.md`](THREADSAFETY.md) §3.1). Likewise `V` is the scalar gate,
    and `{N,T,V}` is the only deterministic shape this engine claims: a
    deterministic build that still wants vectors is refused by

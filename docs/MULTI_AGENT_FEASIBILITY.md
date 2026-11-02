@@ -129,12 +129,12 @@ the engine supports it *today* and what an embedder must supply.
 | # | Scenario | What it actually uses | Status |
 |---|---|---|---|
 | **C1** | Two host threads execute code from **two different instances** | Two `ModuleInstance`s, two `VMContext`s, one process `Store` | **Supported today** (host-thread test; `THREADSAFETY.md` §8) |
-| **C2** | **Many agents on one instance** — two host threads both call into the same `ModuleInstance` | N `Agent`s, one instance, shared memories/tables/globals | **Accepted direction**, not supported yet (§4–§7) |
+| **C2** | **Many agents on one instance** — two host threads both call into the same `ModuleInstance` | N `Agent`s, one instance, shared memories/tables/globals | **Supported** with `ConcurrencyModel::Agents`; the embedder owns the threads and scheduler (§4–§7) |
 | **C2a** | *GPU-style*: launch N workers and pass a thread index | Ordinary Wasm arguments; an import that spawns/parks agents | Same as C2 — the "thread id" is just an `i32` parameter |
 | **C2b** | *Classic style*: thread A runs export `f`, thread B runs export `g` | Two `Callable` calls on one instance | Same as C2 |
 | **C2c** | *One compiled function called from several host threads* | `callCallable` on the same `Callable`, different arguments | **Yes, multi-agent by the engine's definition** — one agent per host thread; the minimal C2 case |
 | **C3** | *Async/await*: an event loop, `await`, promise-style suspension | Continuations (stack switching) + `HostContinuationScheduler` | **Supported today**; concurrency without parallelism, and composable with C2 |
-| **C4** | *Intra-Wasm threading*: `pthread`-like or WASI-threads primitives inside the guest | Agents created by an import, atomics, a waiter table, thread-local globals, per-agent stacks | **Accepted direction**; the WASI/guest ABI is not ours to invent (§2.3.4) |
+| **C4** | *Intra-Wasm threading*: `pthread`-like or WASI-threads primitives inside the guest | Agents created by an import, atomics, a waiter table, thread-local globals, per-agent stacks | **Substrate supported** (`ConcurrencyModel::Agents` + atomics/waiter table); the WASI/guest ABI is supplied by the embedder, not invented here (§2.3.4) |
 
 The answer to the standing question — *"a Wasm function compiled to native code,
 executed from multiple host threads: does that count as multi-agent /
@@ -570,8 +570,8 @@ production-readiness improvement on its own.
 - **The current milestone's gates stay as they were.** `API_ABI_STABILITY.md`
   G1–G4 describe a QVM-successor for a *single-agent* embedding; nothing here
   reopened them, and no gate waited on `MF-*`. What the implementation changes is
-  the **status of the family**: multi-agent is no longer "deferred indefinitely",
-  it is "accepted, opt-in and implemented".
+  the **status of the family**: multi-agent is **accepted, opt-in and
+  implemented**; it is an embedder-owned scheduling mode.
 - **`Single` remains the default.** An embedder that never sets
   `ConcurrencyModel::Agents` gets the previous one-entrant contract, and
   `THREADSAFETY.md` §9's serialization advice still applies to that model. The

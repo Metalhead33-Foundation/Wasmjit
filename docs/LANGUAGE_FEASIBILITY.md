@@ -366,7 +366,7 @@ surface frozen?". Explicitly outside it are:
 | The actual host imports a module binds to | The screen needs the **hook/dispatch mechanism** pinned, not a frozen catalogue of `env.*` names. A module's import list is a per-language/per-toolchain finding. | `LF-1` triage, `LF-2` PoC |
 | Host exports and their contents | Same reason on the export side. | `LF-2` |
 | JS-integration specifics | An embedder responsibility on the far side of `ImportResolver`/`Callable`/`HostBridge`; the engine deliberately does not implement a JS engine. | [`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) |
-| (Planned) multithreading | Not purely settled yet: it is a candidate for the same opt-in-hook treatment, and the current contract is single-agent. The audit pins the *single-agent* proposal support; a future multi-agent hook has its own shape. | [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6, [`THREADSAFETY.md`](THREADSAFETY.md) §3.1 |
+| (Planned) multithreading | Supported through opt-in, embedder-owned hooks: `ConcurrencyModel::Agents` for core module execution and `ComponentExecutor` for component async. The single-agent mode remains the default; there is no in-engine scheduler. | [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6, [`THREADSAFETY.md`](THREADSAFETY.md) §3.1, [`proposals/THREADS.md`](proposals/THREADS.md) §4.3 |
 | Language features, toolchains, colour verdicts | Not engine-owned surfaces. | `LF-1`/`LF-2` |
 | Performance | Not a readiness question. | — |
 

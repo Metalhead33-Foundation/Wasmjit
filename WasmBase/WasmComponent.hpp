@@ -163,6 +163,11 @@ struct WASMJIT_API Component : public Artifact {
 	/** \brief Views the binary sections in original file order. \return Non-owning span valid for this component's lifetime. */
 	std::span<const ComponentSection> getSections() const;
 
+	//! The component's `component-name` custom-section name, if present. The
+	//! name section is metadata: a malformed one is ignored, never rejected.
+	/** \brief Returns the component name from the name custom section, or an empty string. \return Component name. */
+	std::string componentName() const;
+
 	//! Component-level structural validation (index spaces, sortidx resolution,
 	//! type/declaration checks). Throws std::runtime_error on the first failure.
 	//! No linking, execution or Canonical ABI lowering.

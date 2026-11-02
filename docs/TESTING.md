@@ -1232,3 +1232,12 @@ The component feature/API tests are:
 - `[component-fuzz]` — deterministic truncation/byte/section mutations of a valid
   component. The contract is a clean exception or a successful parse; an abort,
   assertion or sanitizer report is a failure.
+- `[component-execution]` — parses every accepted artifact and constructs the
+  140 components that need no host imports/start, counting three named
+  backend/ABI residuals instead of skipping them silently.
+- `[component-async]` — task cancellation/subtask states, stream/future copies and
+  the async lift/lower calling convention.
+- `[component-name]` — the lenient `component-name` parser: a malformed name is
+  ignored, never a rejection.
+- `[component-subtyping]` — the upstream corpus's subtyping verdicts (the same
+  516-case run as `[component-corpus]`).

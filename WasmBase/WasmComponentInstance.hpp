@@ -24,6 +24,7 @@ WASMJIT_VISIBLE_BEGIN
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 
@@ -56,6 +57,8 @@ public:
 
 	/** \brief Returns the feature policy this component was validated with. \return Feature set. */
 	ComponentFeatures features() const;
+	/** \brief Returns the `component-name` custom-section name, or an empty string. \return Component name (metadata; malformed names are ignored). */
+	std::string name() const;
 
 private:
 	/** \brief Internal AST and parser state. */
@@ -98,6 +101,8 @@ public:
 	WASM::LinearMemory* coreMemory(std::size_t index) const;
 	/** \brief Installs an embedder-owned executor for async work. \param executor Executor; must not be null. */
 	void setExecutor(std::unique_ptr<ComponentExecutor> executor);
+	/** \brief Requests cancellation of the active async task. \throws std::runtime_error if no task is active. */
+	void requestCancellation();
 
 private:
 	/** \brief Internal runtime and backend ownership. */

@@ -7,9 +7,9 @@ declarations are Store-owned; closed component types intern with canonical
 `[get]`/`[set]`/strong-uniqueness and Canonical ABI flattenability are
 validated, the parser type AST is released after validation, and each component
 runtime owns a `ComponentAbiInstance` signature table. Core Type imports/exports
-link through the Store by abstract bound. Only true multi-agent async
-scheduling remains deferred, by the explicit THREADS decision; the single-agent
-semantics are implemented. Revision 14 marks the TM-0…TM-5 plan rows closed — the
+link through the Store by abstract bound. Multi-agent async scheduling is
+supported through the embedder's `ComponentExecutor`; the engine owns the
+state machine and the hooks, not the scheduler. Revision 14 marks the TM-0…TM-5 plan rows closed — the
 TM-6…TM-11 sequence completed them — so a finished refactor no longer reads as an
 open one.)
 Audience: anyone touching `WasmBase/WasmType.hpp`, `WasmBase/WasmCanonicalType.hpp`,
@@ -932,8 +932,9 @@ after TM-10 is:
 2. ✅ `memory` + `realloc` + `post-return` and the utf8 string subset;
 3. ✅ resource handle tables, `own`/`borrow` scopes, resource builtins and
    destructors;
-4. async/stream/future copy and task paths are deferred to
-   `THREADS.md` §5.1 and remain gated non-goals in `COMPONENT_MODEL.md`.
+4. async/stream/future copy and task paths execute on the installed
+   `ComponentExecutor`; concurrent scheduling is the embedder's choice
+   (`THREADS.md` §5.1).
 
 
 #### 7.10.6 Completion milestones and gates
@@ -944,7 +945,7 @@ after TM-10 is:
 | **TM-7 — JIT view cutover** | ✅ Core modules done: `LibJitTypeTranslator`, `LibjitModuleCompiler`, `LibjitOpcodeDispatcher`, `ModuleInstance`, `WasmValidator` use `CoreTypeView`/`TypeId`; `funcTypeAt` is a Store-derived compile/test signature view. | TM11 | No JIT/validator path reads `Subtype` from a module; cross-module GC walking uses the store. |
 | **TM-8 — Component closed-type interning** | ✅ `TypeStore` interns closed records; after validation every nested reference is a canonical `TypeId`, including local references and `own`/`borrow`. `Component::localTypeIds` is canonical, type-bearing component/instance declaration sets intern structurally, and component core types are Store-owned. Parser syntax records remain an AST. | TM12 (scheme residue) | Closed for closed types; schemes/resources are TM-9/TM-13. |
 | **TM-9 — Schemes and resources** | ✅ `SchemeId` alpha-equivalent scheme interning, abstract-resource placeholders, substitution through instantiate and concrete-resource generation per instantiation. | TM13 | `eq` aliases share, `sub resource` gives a fresh parameter, two substitutions produce distinct closed types when resources differ, and a repeated resource interns back. |
-| **TM-10 — Canonical ABI metadata** | ✅ `CanonicalAbiSignature` keyed by `(TypeId, CanonicalAbiOptions)`, flat params/results and indirect flags, layout, validation-time flattenability checks and the single-agent stream/future runtime. True multi-agent copy/task scheduling is the deferred THREADS TH-5 item. | TM14 | A closed component function has a stable ABI signature; flat fixtures resolve it; no ABI cache aliases different options; indirect params/results and the supported lift/lower paths are exercised. |
+| **TM-10 — Canonical ABI metadata** | ✅ `CanonicalAbiSignature` keyed by `(TypeId, CanonicalAbiOptions)`, flat params/results and indirect flags, layout, validation-time flattenability checks and the stream/future runtime state machine. Multi-agent copy/task scheduling is supplied by the embedder's `ComponentExecutor`. | TM14 | A closed component function has a stable ABI signature; flat fixtures resolve it; no ABI cache aliases different options; indirect params/results and the supported lift/lower paths are exercised. |
 | **TM-11 — Ownership/dedup/ABI gates** | ✅ Assert one record per canonical type, no retained `Subtype`/parser AST in Module/Component, store-owned views, open-scheme non-identity, per-instance ABI signatures and ABI cache identity. | TM15 | Tests fail if any module/component owns a type payload, an open scheme gets a closed id, or identical closed types get distinct ids. |
 
 The order is deliberate: TM-6 removes the duplicate raw owner; TM-7 proves the
@@ -1079,10 +1080,11 @@ components and inline core instances instantiate, `canon lift`/`lower` run
 through libffi, strings/lists/records/maps use canonical memory and `realloc`,
 exact variant/result/option joins are implemented, `post-return` runs, resource
 handles track own/borrow scope and invoke destructors, start/value definitions
-execute, and the single-agent stream/future/task/waitable/error-context built-ins
-run. Validation checks every lift/lower's flattenability and rejects unsupported
-string encodings. True multi-agent copy/task scheduling is the only deferred
-piece (`THREADS.md` §5.1); full core Type linking is implemented through
+execute, and the stream/future/task/waitable/error-context built-ins
+run on the installed executor. Validation checks every lift/lower's
+flattenability and rejects unsupported string encodings. Multi-agent
+copy/task scheduling is supplied by the embedder's `ComponentExecutor`
+(`THREADS.md` §5.1); full core Type linking is implemented through
 [`TYPE_IMPORTS.md`](TYPE_IMPORTS.md). [`ABI.md`](../ABI.md)'s host-reference
 model (R2/R3/R4) and GC `G3` still own the `externref` representation the
 resource/handle path consumes, which is a cross-cutting representation choice,
@@ -1125,9 +1127,9 @@ Implemented in revisions 4–13:
 
 Still gated:
 
-- true multi-agent async scheduling — the single-agent stream/future/task
-  implementation lives in `WasmComponentAsync`/`ComponentRuntime`, and THREADS
-  TH-5 owns the concurrent backend;
+- multi-agent async scheduling is an embedder-owned concern — the stream/future/
+  task state machine lives in `WasmComponentAsync`/`ComponentRuntime`, and the
+  embedder supplies a `ComponentExecutor` for concurrent scheduling;
 - WIT value imports/exports and WIT private-type subtyping (post-MVP/gated in
   the Component Model);
 - the ASAN/allocation-budget footprint sweep over the full suite — the counters

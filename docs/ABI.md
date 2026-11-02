@@ -655,8 +655,10 @@ is `(ref cont)`, or from `wasm_cont_resume`'s suspension result. The public
 
 `ContinuationResumeResult` carries `status`, `tagId`, `value` and the
 replacement handle. A is the default provider (serial; may migrate between host
-threads); B is the opt-in host-thread fallback. Neither is an agent API: calls
-are serial and true multi-agent execution remains deferred.
+threads); B is the opt-in host-thread fallback. Neither is an agent API: one
+continuation runs serially, while multiple agents are an embedder-owned
+scheduling choice (`ConcurrencyModel::Agents`; component async uses the public
+`ComponentExecutor` seam).
 
 This header is only the Wasm-side JSPI substrate. The JavaScript API binding,
 Promise object, microtask/event loop and JS/Wasm value conversion are the

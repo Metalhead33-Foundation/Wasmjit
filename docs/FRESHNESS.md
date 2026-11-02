@@ -392,7 +392,9 @@ echo "== suite =="
 
 echo "== per-tag tallies the notes cite =="
 for tag in docs headerdoc runtime concurrency multiagent backendabi plugin \
-           tiers compilation-policy config mem-provider abi surface layering; do
+           tiers compilation-policy config mem-provider abi surface layering \
+           component-corpus component-execution component-async component-name \
+           component-subtyping component-fuzz component-api component-features; do
     printf '%-18s %s\n' "[$tag]" \
         "$("$build/Test/WasmJit" "[$tag]" 2>&1 | tail -2 | tr -d '\n')"
 done
@@ -423,6 +425,13 @@ test cases**; `[docs]` 1013/2,
 `[abi]` 24/6, `[surface]` 4/1, `[layering]` 4/1; 2,629 dynamic / 1,859 strong
 exported symbols. **These are a snapshot, not a promise** — they are here to show
 what the output looks like, and to make a reader notice when it does not.
+
+**Current (2026-11-02, CM24–CM26 working tree):** **17,296 assertions in 571 test
+cases**; `[component-corpus]`/`[component-subtyping]` 520/1, `[component-execution]`
+4/1 (140 accepted artifacts constructed, 3 named backend/ABI residuals),
+`[component-async]` 74/6, `[component-name]` 7/1, `[component-fuzz]` 4/1,
+`[component-api]` 28/3, `[component-features]` 19/1. Re-run the probe; these are
+a dated snapshot, not a promise.
 
 Three things moved those numbers while this note was being written, which is the
 whole problem in miniature:

@@ -303,7 +303,7 @@ on them; none needed a representation change.
 
 ### 4.5 Cross-cutting: per-agent state and the tail-call trampoline
 
-Two pieces of per-thread state interact with a future multi-agent build; both now
+Two pieces of per-thread state interact with a multi-agent build; both now
 belong to the execution context:
 
 - **Per-agent trap/exception/tail-call state is implemented (TRAP-6).** The
@@ -323,8 +323,9 @@ belong to the execution context:
   but never runs concurrently with its resumer. The B fallback uses a host thread
   per suspended continuation, but `resume` blocks and only one execution context
   mutates the instance at a time. Neither has a scheduler, waiter table or
-  multi-mutator GC. TH-5 remains the gated feature for true multi-agent
-  execution.
+  multi-mutator GC. Component-level multi-agent scheduling is supplied by the
+  embedder's `WASM::ComponentExecutor` ([`COMPONENT_MODEL.md`](COMPONENT_MODEL.md)
+  §4.3), not by a core scheduler.
 
 Two further properties of the tail-call lowering:
 
@@ -354,25 +355,30 @@ Two further properties of the tail-call lowering:
 | ~~T9~~ | ~~**No agent API / thread pool.**~~ **Closed (TH-5):** `ConcurrencyModel::Agents` + `Runtime::createAgent` + `AgentScope` let an embedder run several host threads on the one instance; the core still owns no thread pool or scheduler (by design). `Single` remains the default and refuses a concurrent entrant. | `WasmConcurrency.hpp`, `WasmRuntime.hpp`, `WasmModuleInstance::enterCall`; §4.3 | Closed |
 | ~~T10~~ | ~~**No test coverage is wired in.**~~ **Done (TH-1/TH-4):** `proposals/threads/atomic.wast` is listed explicitly in `Test/Test.pro`, converts at build time, runs as `spec: atomic` (**249 passed / 0 failed / 48 skipped** — the skips are the negative-module families, which run only under `WASM_SPEC_VALIDATE=1`) and is curated in `Test/wast_supported.txt`. | `Test/Test.pro`, `Test/wast_supported.txt` | Closed |
 | ~~T11~~ | ~~**The tail-call trampoline's pending state is process-global.**~~ **Done (TRAP-6 / SS-6):** the state is `ExecutionState::tailCallState`, resolved through `currentTailCallState()` for the current agent (a host thread has a default agent). | `WasmBase/WasmAgent.hpp`; §4.5 | Closed: two host threads and two agents on one thread do not race |
-| ~~T12~~ | ~~**Trap/exception state is per host thread, not per agent.**~~ **Done (TRAP-6 / SS-6):** `Agent` owns an `ExecutionState` (trap slot, pending exception, deferred cleanup, depth counters, tail-call state and stack limit); a host thread has a default agent and `AgentScope` installs another. | `WasmBase/WasmAgent.hpp`; [`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md) §12.1 | Closed (state); true multi-agent execution remains TH-5 |
+| ~~T12~~ | ~~**Trap/exception state is per host thread, not per agent.**~~ **Done (TRAP-6 / SS-6):** `Agent` owns an `ExecutionState` (trap slot, pending exception, deferred cleanup, depth counters, tail-call state and stack limit); a host thread has a default agent and `AgentScope` installs another. | `WasmBase/WasmAgent.hpp`; [`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md) §12.1 | Closed; component async scheduling is embedder-owned |
 
-## 5.1 Component-model async, streams, futures and tasks — single-agent backend
+## 5.1 Component-model async, streams, futures and tasks — executor-owned scheduling
 
 The Component Model's asynchronous execution model is folded into this note
-rather than duplicated in `COMPONENT_MODEL.md`:
+rather than duplicated in `COMPONENT_MODEL.md`. The shipped executor is
+single-agent; a multi-agent executor is supplied by the embedder through the
+same public `WASM::ComponentExecutor` interface; every component async path is
+supported on that executor.
 
 - The **interfaces** are implemented in `WasmBase/WasmComponentAsync.hpp`:
   task/context/backpressure state, waitables and waitable sets, stream/future
   endpoints over a shared element queue, copy results/event codes, and a
   `ComponentExecutor` seam with a `SingleAgentExecutor` implementation
   (`thread.index` 0, `available-parallelism` 1, no OS thread).
-- The **single-agent semantics execute** in `WASM::ComponentRuntime`:
+- The **state machine executes** in `WASM::ComponentRuntime`:
   `stream.new`/`future.new`, read/write (including a blocked async read completed
   by a later write), cancel, drop and forward; `task.return`/`task.cancel`;
   `context.get`/`set`; `backpressure.inc`/`dec`; `waitable-set.new/wait/poll/
   drop`, `waitable.join`; `subtask.cancel`/`drop`; `error-context.new/
-  debug-message/drop`; and `thread.*` single-agent answers. A synchronous copy
-  that would block traps with a named single-agent error rather than hanging.
+  debug-message/drop`; and `thread.*` answers from the installed executor. A
+  synchronous copy that would block traps with a named executor-contract error
+  rather than hanging; an asynchronous copy yields and is completed by the
+  executor's next `runUntilIdle`.
 - **The async calling convention is implemented (CM19, 2026-11-02).**
   `ComponentAsyncState` keeps a task stack with result storage and a hard
   live-task bound (`kMaxLiveTasks`), and the executor is injectable
@@ -384,11 +390,11 @@ rather than duplicated in `COMPONENT_MODEL.md`:
   pointer, returns the packed subtask state as one `i32`, and writes the lowered
   results through that pointer. The flattened core signature comes from
   `CanonicalAbiSignature::{coreParams,coreResults}`.
-- **Deferred**: true concurrent copies, a second agent, real wakeups, and an
-  out-of-line event loop. These are the same staging decision as §3/`TD9`: one
-  agent, synchronous calls, no scheduler. The interface is deliberately the seam
-  a future TH-5 backend fills in, so no caller changes when that happens; the
-  single-agent executor is now replaceable, so the seam is testable today.
+- **Scheduling seam**: concurrent copies, a second agent, wakeups and an
+  out-of-line event loop are supplied by the installed `ComponentExecutor`;
+  `SingleAgentExecutor` is the default. The interface is the seam a multi-agent
+  embedder fills in, so no caller changes when it does; the executor is
+  replaceable and testable today.
 
 ## 6. Where we can and should play fast and loose
 
@@ -434,7 +440,7 @@ Ordered by value; `TH-n` is independent of the other documents' milestones.
 | **TH-3 — Shared-memory hygiene** | ✅ `SharedLinearMemory` never moves its base; import matching compares shared-ness; shared memories/tables must declare a maximum; `memory.grow` publishes with a seq-cst fence; `memory.size` acquire-loads shared metadata; active data-segment initialisation ends with a seq-cst barrier; the tail-call state is per-agent. | T6, T7, T8, T11 | Done: shared memory without a max is rejected; `memory.grow`/`size` are ordered; host threads do not share tail-call state. |
 | **TH-4 — Threads test coverage** | ✅ Done: `proposals/threads/atomic.wast` is wired into `Test/Test.pro` (single-agent atomic semantics, including the 28 misaligned `assert_trap`s) and curated. | T10 | Done: `spec: atomic` runs in the default suite (`Test/wast_supported.txt`). |
 | **TH-5 — Real agents** | ✅ **Done 2026-10-29:** `ConcurrencyModel::Agents` (`WasmConcurrency.hpp`) + `Runtime::createAgent`/`AgentScope` + an atomic entry counter (`Single` refuses a second entrant, `Agents` admits it), a guest-address-keyed waiter table, per-agent trap/tail-call state, atomic GC counters and segment flags, a mutex-guarded reclaim queue/heap, and the reference-slot barrier. The core owns no scheduler; the embedder spawns/joins host threads. **At most one instance per module**; concurrent compilation stays rejected. | T9, T12 | Two agents produce the same results as the sequentially-consistent model, each sees only its own traps, and `[multiagent]` is green (6 cases / 51 assertions). |
-| **TH-6 — Component async interface** | ✅ `WasmComponentAsync.hpp` defines tasks, waitables, stream/future endpoints and the `ComponentExecutor` seam; `SingleAgentExecutor` and `ComponentRuntime` execute the synchronous subset. | T9/T11 (interfaces), TH-5 (backend) | All single-agent async tests pass; replacing the executor is the only change a multi-agent backend needs. |
+| **TH-6 — Component async interface** | ✅ `WasmComponentAsync.hpp` defines tasks, waitables, stream/future endpoints and the `ComponentExecutor` seam; `SingleAgentExecutor` and `ComponentRuntime` execute the state machine, and a multi-agent embedder replaces only the executor. | T9/T11 (interfaces), TH-5 (backend) | All async tests pass; `ComponentExecutor` is the only multi-agent scheduling seam. |
 
 Guardrails: run `./WasmJit '~[spec]'` after each step; keep `Single` the
 default so existing behaviour is unchanged. `Agents` is additive: the entry

@@ -9,8 +9,9 @@ clauses, serial A migration, ASAN fiber annotations, wide
 multi-value/reference/v128 payloads, an explicit suspended-stack root registry
 and symmetric `switch` on both providers are implemented. §10.15 records the
 runtime decision: native stacks (A) are primary, host threads (B) are the opt-in
-fallback, and a bespoke interpreter fallback (C) is permanently rejected. True
-multi-agent execution remains deferred.)
+fallback, and a bespoke interpreter fallback (C) is permanently rejected. A
+continuation remains a serial execution context; multi-agent scheduling is an
+embedder-owned `Agent`/`ComponentExecutor` choice.)
 Audience: anyone touching `WasmModule` (types), `WasmType` (heap types),
 `WasmOpcode`, `WasmStore`, `WasmModuleInstance`, the JIT compiler, a backend's
 continuation lowering, or the exception-tag machinery.
@@ -157,10 +158,12 @@ The decision applies engine-wide and is recorded with its reasoning in §10.15
   lowers symmetrically; both A and B execute the peer handoff. Suspended-stack
   references are registered explicitly for a tracing collector
   (`wasm_cont_add_root`) as well as kept alive by refcounts.
-- **Execution remains single-agent.** Ordinary calls use the native C stack;
+- **A continuation is not an agent.** Ordinary calls use the native C stack;
   A switches continuations on one host thread, and B's worker threads are
   execution contexts, **not agents**. Neither provider permits concurrent
-  entry into an instance, and THREADS TH-5 remains deferred indefinitely.
+  entry into an instance by itself; an embedder that wants several agents
+  selects `ConcurrencyModel::Agents` and owns the scheduling policy (and, for
+  component async, supplies a `ComponentExecutor`).
 - **Tests:** runtime coverage now includes both providers, the host handle,
   trap/exception transfer, one-shot/budget, A stack exhaustion and serial
   cross-thread migration; the WAT modules cover `cont.new`/`resume`, an
@@ -719,7 +722,7 @@ remains:
 | **1. ExecutionContext** ✅ (SS-6) | Move the trap slot, pending exception, tail-call state, defer stack, depth counters and stack limit into a context object owned by an `Agent`; TLS holds the current pointer; helpers resolve it. Add Spike 0. | Done. Backend-independent; required by A and by true agents; it is the seam for later agents under B. | Done |
 | **2. B prototype on LibJIT** ✅ | Thread per suspended continuation; `cont.new`/`resume`/`suspend` with zero/one `(on $tag $label)`; one-shot; trap/exception transfer; live/stack budget. Narrowed to i32/void payloads and non-loop handler labels. | No assembly, no new backend, no fiber ASAN hooks; validates the semantics and the tests early. B is the opt-in fallback, not the default. | Done (stage-2 slice) |
 | **3. A provider** ✅ (basic) | mmap'd stacks + guard, per-stack limit, `ucontext` context switch, serial cross-thread migration, ASAN fiber annotations, explicit suspended-stack root registry; same core contract as stage 2. | The default production provider; it is swappable without touching the instruction lowering. | Done (basic) |
-| **4. Full instruction set** | `switch` on A and B, multi-value/reference payloads, full `resume_throw*` handler clauses, continuation drop/root release. | All done; remaining work is the deferred multi-agent execution model | — |
+| **4. Full instruction set** | `switch` on A and B, multi-value/reference payloads, full `resume_throw*` handler clauses, continuation drop/root release. | All done; multi-agent scheduling is an embedder-owned concern, not a continuation gap | — |
 
 The implementation order (B prototype first) is **not** the product order: A is
 the default provider, B is the opt-in fallback, and C is excluded (§10.15).
@@ -822,5 +825,5 @@ for a later study.
 | **D-2** | **B — one host thread per suspended continuation — is the opt-in fallback provider.** | B is selected explicitly (`setContinuationProvider(HostThreads)`, or a runtime's `RuntimeConfig::continuation.provider`, which overrides the process default — docs/proposals/CONFIGURATION.md `CFG-4`), never as a silent automatic fallback. It is implemented in `WasmBase/WasmContinuation.hpp`/`.cpp`; it is the correctness prototype and the choice where A's provider is unavailable. Its thread/stack budget is part of its contract. |
 | **D-3** | **C — a bespoke interpreter fallback — is rejected permanently.** | No WasmJit interpreter will be written for continuations, or as a fallback for anything else, ever. If interpretation is ever required it must come from LibJIT's own compile/interpret configuration (LibJIT already provides both a compiler and an interpreter), not from a new WasmJit engine. The core continuation contract must not grow an interpreter path. |
 | **D-4** | **Execution state belongs to the execution context and is owned by an `Agent`.** | SS-6 is implemented: `ExecutionState` (trap slot, pending exception, tail-call state, defer stack, depth counters, stack limit) lives in `WasmBase/WasmAgent.hpp`; TLS holds the current pointer; `wasm_trap_slot()`, `wasm_exn_slot()`, `currentTailCallState()` and `wasm_stack_check()` resolve it. |
-| **D-5** | **Agents are present in the code; true multi-agent execution remains deferred.** | `Agent`, `AgentScope` and per-thread default agents exist and own the state. A and B continuations are execution contexts, **not** agents: neither has a shared-instance entry point, scheduler, waiter table or multi-mutator GC. The host handle is serial-only. There is no multi-agent execution model; THREADS TH-5/T9 remain deferred indefinitely, and the blocker list is in [`THREADS.md`](THREADS.md) §4.3.1. |
+| **D-5** | **A continuation is not an agent; multi-agent scheduling is embedder-owned.** | `Agent`, `AgentScope` and per-thread default agents exist and own the state; `ConcurrencyModel::Agents` is the core opt-in and `ComponentExecutor` is the component async seam. A and B continuations remain execution contexts, **not** agents: neither has a shared-instance entry point, scheduler, waiter table or multi-mutator GC. The host handle is serial-only. |
 | **D-6** | **The provider contract is backend-neutral.** | The contract lives in `WasmBase/WasmContinuation.hpp`; A (default) and B (fallback) are implemented once there. LibJIT, SLJIT and AsmJit only emit the suspend call, the root array and the stack check. SLJIT/AsmJit remain prerequisites for their own measurements, not for the decision. |

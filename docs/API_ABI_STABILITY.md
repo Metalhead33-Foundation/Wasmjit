@@ -156,7 +156,7 @@ in `GC.md` §6 / `SIMD_LIBJIT.md` §11 — is put in exactly one class:
 | **A — Additive / backend-neutral** | The fix lands in `WasmBase` (or in docs) and adds a field, a rule, a decoder arm, a type or a helper. A backend that does nothing new keeps compiling and keeps its semantics. | Yes. This is the intended shape of new work. |
 | **B — Per-backend and contract-bounded** | The fix is *inside* a backend, and the obligation it discharges is already one of the eight contract rows in [`LAYERING.md`](LAYERING.md) §4 (lower this type, emit this call, derive this layout, honour this trap entry point). | Yes — provided the contract row does not have to change. |
 | **C — Upstream-blocked** | The proposal has no stable binary encoding, or its encoding collides with a final one. There is nothing correct to implement yet. | Yes. Documented as a refusal, not a debt. |
-| **D — Deferred by a recorded decision** | The project decided not to build it (text format, JS engine, multi-agent, WASI, BYOB, packaging). | Yes, **if and only if** the decision is explicit in a note (so it can be revisited deliberately). |
+| **D — Deferred by a recorded decision** | The project decided not to build it in-engine (text format, JS engine, WASI, BYOB, packaging). Multi-agent execution is **not** in this class: it is supported through the embedder-owned `ConcurrencyModel::Agents` / `ComponentExecutor` hooks. | Yes, **if and only if** the decision is explicit in a note (so it can be revisited deliberately). |
 | **E — Heavy refactoring** | The only known solution restructures the backend set or the `WasmBase` ↔ backend contract: a new execution model, a new ownership scheme for compiled state, a changed calling convention, a changed type/value model across every backend. | **No. One in-scope Class E row fails G2 outright.** |
 
 ### 4.2 The rules the classification obeys
@@ -166,7 +166,7 @@ in `GC.md` §6 / `SIMD_LIBJIT.md` §11 — is put in exactly one class:
    and is Class A; `JS7` (per-signature host thunks) is marked Low-for-engine and
    is Class A as well; a High gap that is upstream-blocked (`CTA2`) is Class C.
 2. **A gap is in scope iff a note claims it as work to be done.** Rows explicitly
-   deferred (`TD9`, `ANN-0`, `CM9`, `MC4`, `MC5`, `GX4`) are Class D even when
+   deferred (`ANN-0`, `MC4`, `MC5`, `GX4`) are Class D even when
    their hypothetical solution would be enormous.
 3. **"Documented" beats "remembered".** A shortfall that exists only in the code
    and not in a note cannot be classified, so the study cannot certify it. This
@@ -242,7 +242,7 @@ Two things follow for **this** note:
    largest class-E *escape hatch* ("just make another instance") and kept the
    multi-agent implementation additive: many agents, one instance.
 
-The remaining multi-agent-adjacent gaps are `SET3`/`SET4`/`SET5` (managed
+The remaining shared-everything proposal gaps are `SET3`/`SET4`/`SET5` (managed
 waitqueue, TLS and component thread lifecycle), and those are **encoding-blocked**
 — the shared-everything draft assigns no stable binary form — not class-E work.
 

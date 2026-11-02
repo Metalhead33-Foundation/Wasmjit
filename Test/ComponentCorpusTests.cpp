@@ -80,7 +80,7 @@ std::vector<std::byte> readFile(const std::filesystem::path& path)
 } // namespace
 
 TEST_CASE("component corpus: the reference suite's verdict, checked against ours",
-"[component-corpus]")
+"[component-corpus][component-subtyping]")
 {
 	const std::filesystem::path root = std::filesystem::path(WASM_TESTSUITE_DIR) / "component-corpus";
 	const std::filesystem::path manifest = root / "manifest.tsv";

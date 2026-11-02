@@ -1995,9 +1995,17 @@ void decodeComponentValue(const WASM::TypeStore& store,
 } // namespace
 
 ComponentRuntime::ComponentRuntime(ModuleInstantiator& instantiator,
-		const WASM::Component& component, ComponentImports imports)
+		const WASM::Component& component, ComponentImports imports,
+		std::unordered_map<std::string, const WASM::Module*> coreModuleImports,
+		std::vector<std::vector<const WASM::Module*>> outerCoreModuleSpaces,
+		std::unordered_map<std::string,
+				std::unordered_map<std::string, const WASM::Module*>>
+				instanceCoreModules)
 	: instantiator_(instantiator), component_(component),
 	  imports_(std::move(imports)),
+	  coreModuleImports_(std::move(coreModuleImports)),
+	  instanceCoreModules_(std::move(instanceCoreModules)),
+	  outerCoreModuleSpaces_(std::move(outerCoreModuleSpaces)),
 	  async_([this] { return addHandle(); },
 			  [this](uint32_t handle) { freeHandle(handle); }),
 	  abi_(component_.store().types().store(),
@@ -2047,10 +2055,19 @@ ComponentRuntime::~ComponentRuntime()
 
 void ComponentRuntime::build()
 {
+	coreModuleSpace_.clear();
+	coreModuleSpace_.reserve(component_.coreModules.size());
 	componentValues_.clear();
 	componentValues_.reserve(component_.values.size());
 	for (const WASM::ComponentDefinition& definition : component_.definitions) {
 		switch (definition.kind) {
+		case WASM::ComponentDefinitionKind::CoreModule:
+			if (definition.index >= component_.coreModules.size())
+				throw std::runtime_error(
+						"component runtime: core module definition index out of bounds");
+			coreModuleSpace_.push_back(
+					component_.coreModules[definition.index].get());
+			break;
 		case WASM::ComponentDefinitionKind::CoreInstance:
 			processCoreInstance(component_.coreInstances[definition.index]);
 			break;
@@ -2238,7 +2255,7 @@ void ComponentRuntime::processCoreInstance(const WASM::CoreInstance& instance)
 		coreInstances_.push_back(std::move(handle));
 		return;
 	}
-	if (instance.moduleIndex >= component_.coreModules.size())
+	if (instance.moduleIndex >= coreModuleSpace_.size())
 		throw std::runtime_error(
 				"component runtime: core instance module index out of bounds");
 	WASM::RegistryImportResolver resolver;
@@ -2249,7 +2266,7 @@ void ComponentRuntime::processCoreInstance(const WASM::CoreInstance& instance)
 		coreInstances_[arg.instanceIndex]->registerExports(resolver, arg.name);
 	}
 	auto moduleInstance = instantiator_.instantiate(
-			*component_.coreModules[instance.moduleIndex], resolver);
+			*coreModuleSpace_[instance.moduleIndex], resolver);
 	if (!moduleInstance)
 		throw std::runtime_error("component runtime: core instantiation failed");
 	auto handle = std::make_unique<CoreInstanceHandle>();
@@ -2290,6 +2307,19 @@ ComponentInstanceValue ComponentRuntime::exportSnapshot() const
 		if (handle)
 			out.instances.emplace(name,
 					std::make_shared<ComponentInstanceValue>(handle->exports));
+	for (const auto& [name, index] : exportedTypeIndices_)
+		out.types.emplace(name, component_.typeId(index));
+	for (const auto& [name, index] : exportedComponentIndices_) {
+		if (index >= componentSpace_.size()
+				|| componentSpace_[index].definition == nullptr)
+			continue;
+		std::shared_ptr<const LoadedComponent> owner =
+				componentSpace_[index].owner;
+		if (!owner)
+			owner = makeBorrowedLoadedComponent(
+					componentSpace_[index].definition);
+		out.components.emplace(name, std::move(owner));
+	}
 	return out;
 }
 
@@ -2336,6 +2366,7 @@ void ComponentRuntime::processComponentInstance(
 		// self-contained export bag, so funcs, values, types and instances all
 		// travel; a type is compile-time identity and only records its TypeId.
 		ComponentInstanceValue exports;
+		std::unordered_map<std::string, const WASM::Module*> inlineCoreModules;
 		for (const WASM::InlineExport& exportDecl : instance.exports) {
 			const std::uint32_t index = exportDecl.sortIndex.index;
 			switch (exportDecl.sortIndex.sort) {
@@ -2379,12 +2410,25 @@ void ComponentRuntime::processComponentInstance(
 						std::move(owner));
 				break;
 			}
+			case WASM::ComponentSort::Core: {
+				if (!exportDecl.sortIndex.core
+						|| exportDecl.sortIndex.core->sort != WASM::CoreSort::Module)
+					throw std::runtime_error(
+							"component runtime: inline instance core export sort is not a module");
+				if (index >= coreModuleSpace_.size())
+					throw std::runtime_error(
+							"component runtime: inline instance core module export is out of bounds");
+				inlineCoreModules[exportDecl.name.name] = coreModuleSpace_[index];
+				break;
+			}
 			default:
 				throw std::runtime_error(
 						"component runtime: inline instance export sort is not supported");
 			}
 		}
-		componentInstances_.push_back(makeInstanceHandle(std::move(exports)));
+		auto handle = makeInstanceHandle(std::move(exports));
+		handle->coreModules = std::move(inlineCoreModules);
+		componentInstances_.push_back(std::move(handle));
 		return;
 	}
 	if (instance.componentIndex >= componentSpace_.size()
@@ -2392,9 +2436,25 @@ void ComponentRuntime::processComponentInstance(
 		throw std::runtime_error(
 				"component runtime: component instance target is not a component");
 	ComponentImports childImports = imports_;
+	std::unordered_map<std::string, const WASM::Module*> childCoreModules =
+			coreModuleImports_;
+	std::unordered_map<std::string,
+			std::unordered_map<std::string, const WASM::Module*>>
+			childInstanceCoreModules = instanceCoreModules_;
 	for (const WASM::InstantiateArg& arg : instance.args) {
 		const std::uint32_t index = arg.sortIndex.index;
 		switch (arg.sortIndex.sort) {
+		case WASM::ComponentSort::Core: {
+			if (!arg.sortIndex.core
+					|| arg.sortIndex.core->sort != WASM::CoreSort::Module)
+				throw std::runtime_error(
+						"component runtime: unsupported core instantiate argument sort");
+			if (index >= coreModuleSpace_.size())
+				throw std::runtime_error(
+						"component runtime: instantiate core module argument is out of bounds");
+			childCoreModules[arg.name] = coreModuleSpace_[index];
+			break;
+		}
 		case WASM::ComponentSort::Func:
 			if (index >= componentFuncs_.size())
 				throw std::runtime_error(
@@ -2415,21 +2475,44 @@ void ComponentRuntime::processComponentInstance(
 			childImports[arg.name] = ComponentImport::instanceImport(
 					std::make_shared<ComponentInstanceValue>(
 							componentInstances_[index]->exports));
+			childInstanceCoreModules[arg.name] =
+					componentInstances_[index]->coreModules;
 			break;
 		case WASM::ComponentSort::Type:
 			childImports[arg.name] = ComponentImport::typeImport(
 					component_.typeId(index));
 			break;
+		case WASM::ComponentSort::Component: {
+			if (index >= componentSpace_.size()
+					|| componentSpace_[index].definition == nullptr)
+				throw std::runtime_error(
+						"component runtime: instantiate component argument is out of bounds");
+			std::shared_ptr<const LoadedComponent> owner =
+					componentSpace_[index].owner;
+			if (!owner)
+				owner = makeBorrowedLoadedComponent(
+						componentSpace_[index].definition);
+			childImports[arg.name] =
+					ComponentImport::componentImport(std::move(owner));
+			break;
+		}
 		default:
 			throw std::runtime_error(
 					"component runtime: unsupported component instantiate argument sort");
 		}
 	}
 	auto handle = std::make_shared<ComponentInstanceHandle>();
+	std::vector<std::vector<const WASM::Module*>> childOuterModuleSpaces =
+			outerCoreModuleSpaces_;
+	childOuterModuleSpaces.insert(childOuterModuleSpaces.begin(),
+			coreModuleSpace_);
 	handle->nested = std::make_unique<ComponentRuntime>(instantiator_,
 			*componentSpace_[instance.componentIndex].definition,
-			std::move(childImports));
+			std::move(childImports), std::move(childCoreModules),
+			std::move(childOuterModuleSpaces),
+			std::move(childInstanceCoreModules));
 	handle->exports = handle->nested->exportSnapshot();
+	handle->coreModules = handle->nested->exportedCoreModules_;
 	componentInstances_.push_back(std::move(handle));
 }
 
@@ -2480,10 +2563,41 @@ void ComponentRuntime::processAlias(const WASM::Alias& alias)
 					{it->second->componentDefinition(), it->second});
 			return;
 		}
+		case WASM::ComponentSort::Core: {
+			if (!alias.sort.core
+					|| alias.sort.core->sort != WASM::CoreSort::Module)
+				throw std::runtime_error(
+						"component runtime: core export alias sort is not a module");
+			const auto it =
+					componentInstances_[alias.instanceIndex]->coreModules.find(
+							alias.name);
+			if (it == componentInstances_[alias.instanceIndex]->coreModules.end())
+				throw std::runtime_error(
+						"component runtime: component export is not a core module");
+			coreModuleSpace_.push_back(it->second);
+			return;
+		}
 		default:
 			throw std::runtime_error(
 					"component runtime: only func/value/type/instance export aliases are supported");
 		}
+	}
+	if (alias.kind == WASM::Alias::Kind::Outer) {
+		if (alias.sort.sort != WASM::ComponentSort::Core || !alias.sort.core
+				|| alias.sort.core->sort != WASM::CoreSort::Module)
+			return;
+		const std::vector<const WASM::Module*>* space = &coreModuleSpace_;
+		if (alias.outerCount != 0) {
+			if (alias.outerCount > outerCoreModuleSpaces_.size())
+				throw std::runtime_error(
+						"component runtime: outer alias depth is out of bounds");
+			space = &outerCoreModuleSpaces_[alias.outerCount - 1];
+		}
+		if (alias.index >= space->size() || (*space)[alias.index] == nullptr)
+			throw std::runtime_error(
+					"component runtime: outer core module alias is out of bounds");
+		coreModuleSpace_.push_back((*space)[alias.index]);
+		return;
 	}
 	if (alias.kind != WASM::Alias::Kind::CoreExport)
 		return;
@@ -2847,9 +2961,10 @@ void ComponentRuntime::processAsyncCanon(const WASM::Canon& canon)
 	case WASM::Canon::Kind::SubtaskCancel:
 		data->argumentTypes.push_back(&ffi_type_sint32);
 		returnType = &ffi_type_sint32;
-		data->handler = [this](void* result, void** args) {
+		data->handler = [this, async = canon.async.value_or(false)](void* result,
+				void** args) {
 			*static_cast<int32_t*>(result) = int32_t(async_.cancelSubtask(
-					uint32_t(*static_cast<int32_t*>(args[1]))));
+					uint32_t(*static_cast<int32_t*>(args[1])), async));
 		};
 		break;
 	case WASM::Canon::Kind::SubtaskDrop:
@@ -3401,19 +3516,21 @@ void ComponentRuntime::processThreadCanon(const WASM::Canon& canon)
 		};
 		break;
 	case WASM::Canon::Kind::ThreadYield:
-		data->handler = [](void*, void**) {
-			// A single-agent executor has nothing else to run; yield is a no-op.
+		data->handler = [this](void*, void**) {
+			// Cooperative: let the installed executor run its queue. A
+			// single-agent executor's queue is empty, so this is a no-op.
+			async_.executor().yield();
 		};
 		break;
 	default:
 		// Every remaining thread builtin creates or manipulates a real
-		// concurrent agent. The interface exists, but the single-agent backend
-		// refuses the operation rather than pretending to schedule it.
+		// concurrent agent. The executor seam is the policy owner; an
+		// executor that does not implement concurrent creation refuses here.
 		data->handler = [kind = canon.kind](void*, void**) {
 			throw std::runtime_error(
 					"component runtime: thread builtin " +
 					std::to_string(static_cast<unsigned>(kind)) +
-					" requires a multi-agent backend (docs/proposals/THREADS.md TD9)");
+					" is not provided by the installed ComponentExecutor");
 		};
 		break;
 	}
@@ -3437,10 +3554,15 @@ void ComponentRuntime::processImport(const WASM::ImportDecl& importDecl)
 		return &found->second;
 	};
 	switch (importDecl.type.kind) {
-	case WASM::ExternType::Kind::CoreModule:
-		// A core module import is an instantiate argument resolved by the core
-		// instance walk; it has no component-side runtime entry.
+	case WASM::ExternType::Kind::CoreModule: {
+		const auto module = coreModuleImports_.find(importDecl.name.name);
+		if (module == coreModuleImports_.end() || module->second == nullptr)
+			throw std::runtime_error(
+					"component runtime: missing core module import `" +
+					importDecl.name.name + "`");
+		coreModuleSpace_.push_back(module->second);
 		return;
+	}
 	case WASM::ExternType::Kind::Type:
 		// CM17: compile-time identity. The validator has already published the
 		// substituted TypeId through `Component::typeId`.
@@ -3458,6 +3580,9 @@ void ComponentRuntime::processImport(const WASM::ImportDecl& importDecl)
 			throw std::runtime_error(
 					"component runtime: host instance import is empty");
 		componentInstances_.push_back(makeInstanceHandle(*import->instance));
+		const auto modules = instanceCoreModules_.find(importDecl.name.name);
+		if (modules != instanceCoreModules_.end())
+			componentInstances_.back()->coreModules = modules->second;
 		return;
 	}
 	case WASM::ExternType::Kind::Component: {
@@ -3530,6 +3655,20 @@ void ComponentRuntime::processExport(const WASM::ComponentExport& exportDecl)
 	case WASM::ComponentSort::Type:
 		exportedTypeIndices_[exportDecl.name.name] = exportDecl.sortIndex.index;
 		break;
+	case WASM::ComponentSort::Component:
+		exportedComponentIndices_[exportDecl.name.name] =
+				exportDecl.sortIndex.index;
+		break;
+	case WASM::ComponentSort::Core:
+		if (!exportDecl.sortIndex.core
+				|| exportDecl.sortIndex.core->sort != WASM::CoreSort::Module)
+			break;
+		if (exportDecl.sortIndex.index >= coreModuleSpace_.size())
+			throw std::runtime_error(
+					"component runtime: core module export index out of bounds");
+		exportedCoreModules_[exportDecl.name.name] =
+				coreModuleSpace_[exportDecl.sortIndex.index];
+		break;
 	default:
 		break;
 	}
@@ -3593,6 +3732,11 @@ WASM::LinearMemory* ComponentRuntime::coreMemory(std::size_t index) const
 	if (index >= coreMemories_.size())
 		throw std::out_of_range("component runtime: core memory index out of bounds");
 	return coreMemories_[index];
+}
+
+void ComponentRuntime::requestTaskCancellation()
+{
+	async_.requestCancellation();
 }
 
 uint32_t ComponentRuntime::beginBorrowScope()

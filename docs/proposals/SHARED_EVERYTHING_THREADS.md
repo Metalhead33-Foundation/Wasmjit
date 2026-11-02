@@ -15,7 +15,7 @@ encoding, and the component-model spawn/join builtins are still moving.)
 
 Audience: anyone touching `WasmType` (`shared`/`globaltype`), `WasmStore`,
 `WasmModuleInstance`, the GC heap/refcount, `WasmOpcode` (`0xFE` atomics),
-`WasmTrap`, or a future multi-agent runtime.
+`WasmTrap`, or a multi-agent runtime.
 
 Follows the same split as [`GC.md`](GC.md) / [`SIMD.md`](SIMD.md) /
 [`THREADS.md`](THREADS.md). Contains **no new code**.
@@ -158,7 +158,7 @@ has a usable stopping point.
 | **SET-4 — TLS and waitqueues** | **Not implementable today:** needs a collision-free type assignment for `waitqueue` and a `globaltype` encoding for `thread_local`; the proposal assigns neither. Memory `wait`/`notify` is implemented. | SET3, SET4 | Revisit when the upstream draft publishes a binary encoding. |
 | **SET-5 — Lifecycle** | **Not implementable today:** the component-model thread spawn/join builtins have no stable shape or encoding. | SET5 | Revisit when the upstream draft publishes one. |
 | **SET-6 — Tests** | ✅ Raw-binary tests cover shared annotations, global/table/struct/array atomics, and `[multiagent]` covers cross-agent atomics, GC and traps. Proposal scripts for TLS/waitqueue cannot exist without the encoding. | SET7 | The tests fail if shared validation, ordering or multi-agent execution regresses. |
-| **SET-7 — Per-agent state** | ✅ **Done (TRAP-6 / SS-6).** `Agent` owns an `ExecutionState` (trap, exception, tail-call, defer, counters, stack limit); a host thread has a default agent and `AgentScope` installs another. The remaining multi-agent work is the execution model itself (`THREADS.md` TH-5); the A/B continuations are not agents. | SET6 (agent half) | Done: two agents on one host thread observe independent traps and tail-call state. |
+| **SET-7 — Per-agent state** | ✅ **Done (TRAP-6 / SS-6).** `Agent` owns an `ExecutionState` (trap, exception, tail-call, defer, counters, stack limit); a host thread has a default agent and `AgentScope` installs another. Multi-agent execution is opt-in (`ConcurrencyModel::Agents`) and embedder-scheduled; the A/B continuations are not agents. | SET6 (agent half) | Done: two agents on one host thread observe independent traps and tail-call state. |
 
 ## 8. Indicative test survey
 

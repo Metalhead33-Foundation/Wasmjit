@@ -46,6 +46,12 @@ ComponentFeatures LoadedComponent::features() const
 	return impl_ ? impl_->options.features : ComponentFeatures::none();
 }
 
+std::string LoadedComponent::name() const
+{
+	const Component* component = componentDefinition();
+	return component ? component->componentName() : std::string{};
+}
+
 const Component* LoadedComponent::componentDefinition() const
 {
 	if (!impl_)
@@ -140,6 +146,13 @@ void ComponentInstanceHandle::setExecutor(
 	if (!impl_ || !impl_->runtime)
 		throw std::runtime_error("component instance is not initialized");
 	impl_->runtime->setExecutor(std::move(executor));
+}
+
+void ComponentInstanceHandle::requestCancellation()
+{
+	if (!impl_ || !impl_->runtime)
+		throw std::runtime_error("component instance is not initialized");
+	impl_->runtime->requestTaskCancellation();
 }
 
 } // namespace WASM

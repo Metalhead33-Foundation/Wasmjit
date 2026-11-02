@@ -670,6 +670,11 @@ Lua, Python or other host runtime embedding — the same lifetime hook.
   the generic JSPI-style scheduler hooks, `descriptorPrototype`, and the read-only
   import/export descriptor views exist. The JS wrapper objects, Promise/event-loop
   behaviour and `js-prototypes` configuration stay host-side.
+- No in-engine JS scheduler and no in-engine multi-agent scheduler. A JS host
+  drives the Promise/event loop and, when it wants several agents, supplies a
+  concurrent `WASM::ComponentExecutor` (component async) and/or selects
+  `ConcurrencyModel::Agents` (core agents). JS imports reach the engine through
+  the same `HostBridge`/`nativeImport` path in either mode; this does not change.
 
 ## 5. Gaps
 

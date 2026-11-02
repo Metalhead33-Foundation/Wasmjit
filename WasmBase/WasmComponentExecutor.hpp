@@ -39,6 +39,11 @@ public:
 	virtual void runUntilIdle() = 0;
 	/** \brief Returns the number of queued items. \return Pending work count. */
 	virtual std::size_t pending() const = 0;
+
+	/** \brief Cooperative yield: lets every queued item run. */
+	void yield() { runUntilIdle(); }
+	/** \brief Enqueues one agent entry point; the executor decides which OS thread runs it. \param work Agent entry point. */
+	void spawnAgent(std::function<void()> work) { push(std::move(work)); }
 };
 
 /** \brief Synchronous executor implementing the documented single-agent mode. */

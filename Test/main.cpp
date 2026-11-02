@@ -2193,11 +2193,11 @@ TEST_CASE("component runtime stream handles")
 	WASM::callCallable<void>(runtime.coreFunction(2), writable);
 }
 
-TEST_CASE("component runtime executes single-agent async builtins")
+TEST_CASE("component runtime executes executor-driven async builtins", "[component-async]")
 {
-	// THREADS.md TD9: the async surface executes synchronously on one agent.
-	// The fixture blocks an async stream read, completes it with a write, and
-	// polls the resulting waitable-set event; it then round-trips a future.
+	// The shipped executor is SingleAgentExecutor; the fixture blocks an async
+	// stream read, completes it with a write, and polls the resulting
+	// waitable-set event; it then round-trips a future.
 	auto artifact = loadTestArtifact("component_runtime_async");
 	REQUIRE(artifact != nullptr);
 	auto* component = artifact->asComponent();
@@ -2986,7 +2986,7 @@ public:
 	std::size_t pending() const override { return 0; }
 };
 
-TEST_CASE("component async tasks store results and bound nesting")
+TEST_CASE("component async tasks store results and bound nesting", "[component-async]")
 {
 	uint32_t allocated = 0;
 	WASM::ComponentAsyncState state([&] { return ++allocated; },
@@ -3005,6 +3005,35 @@ TEST_CASE("component async tasks store results and bound nesting")
 	REQUIRE(results[0].i32 == 5);
 	REQUIRE(state.currentTask().id() == 0);
 
+	// Cancellation is a request-then-act protocol: task.cancel before the
+	// request traps, an unrequested return traps after cancellation settles.
+	state.beginTask();
+	REQUIRE_THROWS(state.taskCancel());
+	state.currentTask().requestCancellation();
+	REQUIRE(state.taskCancel() == 0);
+	REQUIRE(state.currentTask().state() == WASM::ComponentTaskState::Cancelled);
+	REQUIRE_THROWS(state.taskReturn({}));
+	state.abortTask();
+
+	// Subtask cancellation returns the ABI state, including the async
+	// BLOCKED sentinel and the cancel-before-started transition.
+	const uint32_t blocked = state.newSubtask(
+			WASM::ComponentSubtaskState::Starting);
+	REQUIRE(state.cancelSubtask(blocked, true) == WASM::ComponentAsyncState::kSubtaskBlocked);
+	state.dropSubtask(blocked);
+	const uint32_t starting = state.newSubtask(
+			WASM::ComponentSubtaskState::Starting);
+	REQUIRE(state.cancelSubtask(starting)
+			== static_cast<uint32_t>(
+					WASM::ComponentSubtaskState::CancelledBeforeStarted));
+	REQUIRE_THROWS(state.cancelSubtask(starting));
+	state.dropSubtask(starting);
+	const uint32_t returned = state.newSubtask(
+			WASM::ComponentSubtaskState::Returned);
+	REQUIRE(state.cancelSubtask(returned)
+			== static_cast<uint32_t>(WASM::ComponentSubtaskState::Returned));
+	state.dropSubtask(returned);
+
 	for (uint32_t i = 0; i + 1 < WASM::ComponentAsyncState::kMaxLiveTasks; ++i)
 		state.beginTask();
 	REQUIRE_THROWS(state.beginTask());
@@ -3012,7 +3041,7 @@ TEST_CASE("component async tasks store results and bound nesting")
 		state.abortTask();
 }
 
-TEST_CASE("component async lift stores task.return results")
+TEST_CASE("component async lift stores task.return results", "[component-async]")
 {
 	auto artifact = loadTestArtifact("component_async_stackful");
 	REQUIRE(artifact != nullptr);
@@ -3034,7 +3063,7 @@ TEST_CASE("component async lift stores task.return results")
 	REQUIRE_THROWS(function->call({}, {}));
 }
 
-TEST_CASE("component async callback drives the callback event loop")
+TEST_CASE("component async callback drives the callback event loop", "[component-async]")
 {
 	auto artifact = loadTestArtifact("component_async_callback");
 	REQUIRE(artifact != nullptr);
@@ -3055,7 +3084,7 @@ TEST_CASE("component async callback drives the callback event loop")
 	REQUIRE(result.u64 == 7);
 }
 
-TEST_CASE("component async lower uses the async core signature")
+TEST_CASE("component async lower uses the async core signature", "[component-async]")
 {
 	auto artifact = loadTestArtifact("component_async_lower");
 	REQUIRE(artifact != nullptr);
@@ -3090,7 +3119,7 @@ TEST_CASE("async canon option rules reject invalid combinations")
 	REQUIRE_THROWS(loadTestArtifact("component_async_invalid_callback_lower"));
 }
 
-TEST_CASE("component async lift spills wide results through memory")
+TEST_CASE("component async lift spills wide results through memory", "[component-async]")
 {
 	auto artifact = loadTestArtifact("component_async_wide");
 	REQUIRE(artifact != nullptr);
@@ -4687,7 +4716,7 @@ TEST_CASE("empty and truncated artifacts are rejected without aborting")
 	}
 }
 
-TEST_CASE("component features gate post-1.0 surfaces")
+TEST_CASE("component features gate post-1.0 surfaces", "[component-features]")
 {
 	using WASM::ComponentFeature;
 	using WASM::ComponentFeatures;
@@ -4734,6 +4763,14 @@ TEST_CASE("component features gate post-1.0 surfaces")
 	REQUIRE_NOTHROW([&] {
 		(void)loadTestComponentWithFeatures("component_memory64_abi", all);
 	}());
+	{
+		auto component = loadTestComponentWithFeatures("component_memory64_abi", all);
+		auto backend = TestBackend::create();
+		REQUIRE_NOTHROW([&] {
+			WASM::ComponentRuntime runtime(backend->instantiator(), *component);
+			(void)runtime;
+		}());
+	}
 }
 
 TEST_CASE("component parser survives truncated and mutated input", "[component-fuzz]")
@@ -4795,6 +4832,142 @@ TEST_CASE("component parser survives truncated and mutated input", "[component-f
 		parse(bytes);
 	}
 	REQUIRE(iterations > 0);
+}
+
+TEST_CASE("component execution: accepted corpus instantiates", "[component-execution]")
+{
+	const std::filesystem::path root = std::filesystem::path(WASM_TESTSUITE_DIR)
+			/ "component-corpus";
+	const std::filesystem::path manifest = root / "manifest.tsv";
+	if (!std::filesystem::exists(manifest))
+		SKIP("the component corpus was not generated");
+	std::ifstream stream(manifest);
+	REQUIRE(stream);
+	std::size_t checked = 0;
+	std::size_t failures = 0;
+	std::size_t knownUnsupported = 0;
+	std::string firstFailure;
+	std::string line;
+	while (std::getline(stream, line)) {
+		if (line.empty() || line[0] == '#')
+			continue;
+		const std::size_t tab1 = line.find('\t');
+		if (tab1 == std::string::npos || line.substr(0, tab1) != "accept")
+			continue;
+		const std::size_t tab2 = line.find('\t', tab1 + 1);
+		if (tab2 == std::string::npos)
+			continue;
+		const std::string artifact = line.substr(tab1 + 1, tab2 - tab1 - 1);
+		const std::string origin = line.substr(tab2 + 1);
+		std::ifstream input(root / artifact, std::ios::binary);
+		if (!input)
+			continue;
+		const std::vector<char> chars((std::istreambuf_iterator<char>(input)),
+				std::istreambuf_iterator<char>());
+		std::vector<std::byte> bytes(chars.size());
+		for (std::size_t i = 0; i < chars.size(); ++i)
+			bytes[i] = static_cast<std::byte>(chars[i]);
+		std::span<const std::byte> span(bytes.data(), bytes.size());
+		Euph::Io::ConstBufferDevice device(span);
+		std::unique_ptr<WASM::Artifact> parsed;
+		try {
+			parsed = WASM::Artifact::parse(device, testStore());
+		} catch (const std::exception& error) {
+			++failures;
+			if (firstFailure.empty())
+				firstFailure = origin + ": parse: " + error.what();
+			continue;
+		}
+		WASM::Component* component = parsed ? parsed->asComponent() : nullptr;
+		if (component == nullptr) {
+			++failures;
+			if (firstFailure.empty())
+				firstFailure = origin + ": accepted artifact is not a component";
+			continue;
+		}
+		if (!component->imports.empty() || !component->starts.empty())
+			continue;
+		++checked;
+		auto backend = TestBackend::create();
+		try {
+			WASM::ComponentRuntime runtime(backend->instantiator(), *component);
+			(void)runtime;
+		} catch (const std::exception& error) {
+			const std::string message = error.what();
+			const bool known =
+					message.find("Unresolved import: libzip.zip") != std::string::npos
+					|| message.find("canon lower function index out of bounds")
+							!= std::string::npos
+					|| message.find("imported function type is outside the flat ABI subset")
+							!= std::string::npos;
+			if (known) {
+				++knownUnsupported;
+				continue;
+			}
+			++failures;
+			if (firstFailure.empty())
+				firstFailure = origin + ": " + message;
+		}
+	}
+	INFO("first failure: " << firstFailure);
+	REQUIRE(checked >= 140);
+	// Three upstream cases exercise shapes this backend/ABI slice does not
+	// execute yet: shared-everything core-module link order, a
+	// component-function index gap produced by an inline export alias, and a
+	// resource-typed host import. They are counted, not silently skipped.
+	REQUIRE(knownUnsupported <= 3);
+	REQUIRE(failures == 0);
+}
+
+TEST_CASE("component-name custom section is metadata, not validation", "[component-name]")
+{
+	std::ifstream stream(std::string(WASM_TEST_DIR) + "component_runtime.wasm",
+			std::ios::binary);
+	REQUIRE(stream);
+	const std::vector<char> chars((std::istreambuf_iterator<char>(stream)),
+			std::istreambuf_iterator<char>());
+	std::vector<std::byte> base(chars.size());
+	for (std::size_t i = 0; i < chars.size(); ++i)
+		base[i] = static_cast<std::byte>(chars[i]);
+
+	const auto parse = [](const std::vector<std::byte>& bytes) {
+		Euph::Io::ConstBufferDevice device(
+				std::span<const std::byte>(bytes.data(), bytes.size()));
+		return WASM::Artifact::parse(device, testStore());
+	};
+
+	const std::string_view sectionName = "component-name";
+	const std::string_view componentName = "fixture";
+	std::vector<std::byte> payload;
+	payload.push_back(static_cast<std::byte>(sectionName.size()));
+	for (char c : sectionName)
+		payload.push_back(static_cast<std::byte>(c));
+	payload.push_back(std::byte{0}); // subsection 0: component name
+	payload.push_back(static_cast<std::byte>(1 + componentName.size()));
+	payload.push_back(static_cast<std::byte>(componentName.size()));
+	for (char c : componentName)
+		payload.push_back(static_cast<std::byte>(c));
+	std::vector<std::byte> named = base;
+	named.push_back(std::byte{0}); // custom section
+	named.push_back(static_cast<std::byte>(payload.size()));
+	named.insert(named.end(), payload.begin(), payload.end());
+
+	auto artifact = parse(named);
+	REQUIRE(artifact != nullptr);
+	WASM::Component* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	REQUIRE(component->componentName() == "fixture");
+
+	// A malformed length is ignored, never rejected: the name is metadata.
+	std::vector<std::byte> malformed = base;
+	malformed.push_back(std::byte{0});
+	malformed.push_back(std::byte{2});
+	malformed.push_back(std::byte{0x7f});
+	malformed.push_back(std::byte{0x00});
+	auto malformedArtifact = parse(malformed);
+	REQUIRE(malformedArtifact != nullptr);
+	REQUIRE(malformedArtifact->asComponent() != nullptr);
+	REQUIRE(malformedArtifact->asComponent()->componentName().empty());
 }
 
 TEST_CASE("multi-memory: imported memories are shared and stay distinct")

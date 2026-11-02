@@ -99,6 +99,54 @@ std::span<const ComponentSection> Component::getSections() const
 	return sections;
 }
 
+std::string Component::componentName() const
+{
+	// `component-name` payload: [name][subsection 0 = component name][...].
+	// This is metadata: each length is checked, and any malformed form yields
+	// an empty name rather than a rejection (Binary.md "Name Section").
+	for (const ComponentSection& section : sections) {
+		if (section.type != ComponentSectionType::Custom
+				|| section.name != "component-name")
+			continue;
+		const std::vector<uint8_t>& data = section.data;
+		std::size_t position = 0;
+		const auto readU32 = [&](uint32_t& value) {
+			value = 0;
+			unsigned shift = 0;
+			while (position < data.size()) {
+				const uint8_t byte = data[position++];
+				value |= static_cast<uint32_t>(byte & 0x7f) << shift;
+				if ((byte & 0x80) == 0)
+					return true;
+				shift += 7;
+				if (shift >= 35)
+					return false;
+			}
+			return false;
+		};
+		uint32_t payloadNameLength = 0;
+		if (!readU32(payloadNameLength)
+				|| payloadNameLength > data.size() - position)
+			return {};
+		position += payloadNameLength;
+		uint32_t subsection = 0;
+		uint32_t subsectionSize = 0;
+		if (!readU32(subsection) || !readU32(subsectionSize)
+				|| subsectionSize > data.size() - position)
+			return {};
+		if (subsection != 0)
+			continue;
+		const std::size_t end = position + subsectionSize;
+		uint32_t nameLength = 0;
+		if (!readU32(nameLength) || position > end
+				|| nameLength > end - position)
+			return {};
+		return std::string(reinterpret_cast<const char*>(data.data() + position),
+				nameLength);
+	}
+	return {};
+}
+
 void Component::parseBody(Elv::Io::Device& file, std::optional<uint64_t> end)
 {
 	parseSections(file, end, 0);
@@ -184,7 +232,13 @@ void Component::parseSectionPayload(ComponentSection& section,
 	switch (section.type) {
 	case ComponentSectionType::Custom: {
 		Reader r(device, store().types().store());
-		section.name = r.name();
+		// Custom-section payloads are opaque. A malformed declared name must
+		// not reject the component: keep the payload and leave the name empty.
+		try {
+			section.name = r.name();
+		} catch (const std::exception&) {
+			section.name.clear();
+		}
 		section.data = std::move(payload);
 		break;
 	}

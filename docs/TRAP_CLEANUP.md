@@ -194,7 +194,7 @@ cleanup thunks owned by the trap state.
 
 | Go concept | Candidate `WasmJit` equivalent | Difference |
 |---|---|---|
-| per-goroutine defer list | per-host-thread cleanup stack in the trap state | future multi-agent work needs per-agent state, not just per-thread |
+| per-goroutine defer list | per-agent cleanup stack in the execution state | multi-agent work needs per-agent state, not per-thread |
 | `defer f(x)` | `scope.defer(fn, arg)` / a `TrapDefer` token | no compiler syntax; the caller must dismiss on the normal path |
 | `panic` | `WASM::trap()` | a trap is a pending status plus a boundary `WASM::Trap`, not a typed Go panic |
 | `recover` | the boundary catching `WASM::Trap` | no resumption; the embedder receives the trap kind/message |
@@ -1248,7 +1248,8 @@ TRAP-1, TRAP-2 (the helper split; the enumerated list is the contract in
 `TrapScope` bridge), TRAP-4 (the `WASM::defer` stack), TRAP-5 (the
 `nativeImport` trampoline, [`ABI.md`](ABI.md) “Writing an import”) and TRAP-7.
 TRAP-6 (per-agent state) is **implemented** by the Agent/ExecutionState
-refactor; true multi-agent execution remains deferred (§12.1).
+refactor; multi-agent execution itself is the opt-in `ConcurrencyModel::Agents`
+path (§12.1).
 
 | Milestone | Work | Closes / enables | Done when |
 |---|---|---|---|
@@ -1273,7 +1274,7 @@ Sequencing notes:
   emission; otherwise the trap path is implemented twice with different rules
   ([`LAYERING.md`](LAYERING.md) §4).
 
-### 12.1 TRAP-6 is implemented; multi-agent execution remains deferred
+### 12.1 TRAP-6 is implemented; multi-agent execution is opt-in
 
 TRAP-6 shipped with the Agent/ExecutionState refactor. The state lives in
 `WasmBase/WasmAgent.hpp` and belongs to the execution context:
@@ -1299,10 +1300,11 @@ ABI is unchanged: `wasm_trap_slot()`, `wasm_exn_slot()`,
 and `wasm_stack_check()` reads the state's limit first with
 `VMContext::stackLimit` as the fallback.
 
-What remains deferred is the **execution model**, not the state: agents do not
-run concurrently, there is no scheduler, no multi-mutator GC and no real
-`wait`/`notify` table. That is THREADS TH-5/T9, and the guest-lock question is
-separate. The isolation claim is covered by the tests listed in §13.
+The **execution model** is opt-in, not a missing state: agents run concurrently
+when the embedder selects `ConcurrencyModel::Agents`, and the engine supplies the
+per-agent state, waiter table (memory wait/notify) and multi-mutator GC guards.
+The engine still owns no scheduler; the embedder creates the agents and threads.
+The isolation claim is covered by the tests listed in §13.
 
 ## 13. Test plan
 
@@ -1434,9 +1436,9 @@ state (**TRAP-6**) is implemented (§12.1).
   registry; a host defer stack cannot see guest mutexes.
 - **Multi-agent state (TRAP-6, implemented).** The pending slot, deferred-cleanup
   stack, counters and tail state belong to an `Agent`/`ExecutionState`; two
-  agents on one host thread are isolated. What remains deferred is the execution
-  model itself (§12.1, [`THREADSAFETY.md`](THREADSAFETY.md) §10.1,
-  [`proposals/THREADS.md`](proposals/THREADS.md) TH-5/T9).
+  agents on one host thread are isolated. Multi-agent execution is the opt-in
+  `ConcurrencyModel::Agents` path (§12.1, [`THREADSAFETY.md`](THREADSAFETY.md)
+  §10.1, [`proposals/THREADS.md`](proposals/THREADS.md) §4.3).
 - **Backend parity.** When SLJIT/AsmJit are implemented, the trap model must be
   specified once in [`LAYERING.md`](LAYERING.md) terms (a contract), so that
   neither backend invents a third mechanism.

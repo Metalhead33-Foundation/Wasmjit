@@ -101,6 +101,24 @@ enum class ComponentTaskState : uint8_t {
 	Resolved, //!< The task finished successfully.
 };
 
+//! `Subtask.State` in the Canonical ABI; the numeric values are the return
+//! codes of `canon subtask.cancel`.
+enum class ComponentSubtaskState : uint32_t {
+	Starting = 0, //!< Lowering has not delivered the arguments yet.
+	Started = 1, //!< The callee has started.
+	Returned = 2, //!< The callee returned through `task.return`.
+	CancelledBeforeStarted = 3, //!< Cancelled before argument delivery.
+	CancelledBeforeReturned = 4, //!< Cancelled after starting, before returning.
+};
+
+/** \brief State tracked for one lowered (async) subtask handle. */
+struct ComponentSubtask {
+	ComponentSubtaskState state = ComponentSubtaskState::Starting; //!< Current ABI state.
+	bool cancellationRequested = false; //!< A `subtask.cancel` already arrived.
+	bool resolveDelivered = false; //!< The caller consumed the resolve event.
+	bool inWaitableSet = false; //!< Present in a waitable set (cancel traps).
+};
+
 //! The direction of one end of a stream/future.
 /** \brief Read/write role of a stream or future endpoint. */
 enum class ComponentEndDirection : uint8_t {
@@ -222,7 +240,7 @@ private:
 	uint32_t id_ = 0;
 	ComponentTaskState state_ = ComponentTaskState::Pending; //!< The lifecycle state of the task.
 	uint32_t backpressure_ = 0; //!< Caller-declared limit on outstanding work.
-	bool cancellationRequested_ = false; //!< Set by `task.cancel`, read by the task body.
+	bool cancellationRequested_ = false; //!< Set by `requestCancellation`, read by the task body.
 	std::unordered_map<uint32_t, ComponentContextSlot> context_; //!< Context slots this task can reach.
 	std::vector<WASM::Value> results_; //!< Flat results stored by `task.return`.
 };
@@ -859,6 +877,15 @@ public:
 			throw std::runtime_error("component async: null executor");
 		executor_ = std::move(executor);
 	}
+	/** \brief Requests cancellation of the current task; the guest observes it through `task.cancel`. \throws std::runtime_error if no task is active. */
+	void requestCancellation()
+	{
+		if (!currentTask_
+				|| currentTask_->state() != ComponentTaskState::Pending)
+			throw std::runtime_error("component async: no active task");
+		currentTask_->requestCancellation();
+	}
+
 	/** \brief Cancels the current task after a cancellation request. \return Canonical ABI success value (zero). \throws std::runtime_error if cancellation was not requested. */
 	uint32_t taskCancel()
 	{
@@ -910,26 +937,61 @@ public:
 		release_(handle);
 	}
 
-	//! Subtasks: in a single-agent executor a synchronous call is already
-	//! resolved when it returns. The handle exists so the built-ins validate.
-	/** \brief Creates a subtask handle in the synchronous executor. \return Newly allocated subtask handle. */
-	uint32_t newSubtask()
+	//! Subtasks: a synchronous lower is already resolved when it returns; the
+	//! state machine still follows the Canonical ABI so cancellation and drop
+	//! have the specified return codes.
+	/** \brief Creates a subtask handle in the synchronous executor. \param state Initial ABI state. \return Newly allocated subtask handle. */
+	uint32_t newSubtask(
+			ComponentSubtaskState state = ComponentSubtaskState::Returned)
 	{
 		const uint32_t handle = allocate_();
-		subtasks_.insert(handle);
+		subtasks_.emplace(handle, ComponentSubtask{state});
 		return handle;
 	}
 
-	/** \brief Cancels and releases a subtask handle. \param handle Subtask handle. \return ComponentTaskState::Cancelled. \throws std::runtime_error if the handle is invalid. */
-	uint32_t cancelSubtask(uint32_t handle)
+	/** \brief Marks a live subtask returned or started. \param handle Subtask handle. \param state New ABI state. \throws std::runtime_error if the handle is invalid or already resolved. */
+	void setSubtaskState(uint32_t handle, ComponentSubtaskState state)
 	{
 		const auto it = subtasks_.find(handle);
 		if (it == subtasks_.end())
 			throw std::runtime_error("component async: invalid subtask handle");
-		subtasks_.erase(it);
-		release_(handle);
-		return static_cast<uint32_t>(ComponentTaskState::Cancelled);
+		if (it->second.resolveDelivered)
+			throw std::runtime_error(
+					"component async: subtask is already resolved and delivered");
+		it->second.state = state;
 	}
+
+	/** \brief `subtask.cancel`: requests cancellation and returns the final state, or `kSubtaskBlocked` when async and unresolved. \param handle Subtask handle. \param async Whether the call may return blocked. \return A `ComponentSubtaskState` value or `kSubtaskBlocked`. \throws std::runtime_error for an invalid handle, repeated request, delivered resolve, or waitable-set membership. */
+	uint32_t cancelSubtask(uint32_t handle, bool async = false)
+	{
+		const auto it = subtasks_.find(handle);
+		if (it == subtasks_.end())
+			throw std::runtime_error("component async: invalid subtask handle");
+		ComponentSubtask& subtask = it->second;
+		if (subtask.resolveDelivered)
+			throw std::runtime_error(
+					"component async: subtask cancel after resolve was delivered");
+		if (subtask.cancellationRequested)
+			throw std::runtime_error(
+					"component async: subtask cancel called twice");
+		if (subtask.inWaitableSet)
+			throw std::runtime_error(
+					"component async: subtask cancel while in a waitable set");
+		subtask.cancellationRequested = true;
+		if (subtask.state == ComponentSubtaskState::Starting
+				|| subtask.state == ComponentSubtaskState::Started) {
+			if (async)
+				return kSubtaskBlocked;
+			subtask.state = subtask.state == ComponentSubtaskState::Starting
+					? ComponentSubtaskState::CancelledBeforeStarted
+					: ComponentSubtaskState::CancelledBeforeReturned;
+		}
+		subtask.resolveDelivered = true;
+		return static_cast<uint32_t>(subtask.state);
+	}
+
+	/** \brief `kSubtaskBlocked` return code for an asynchronous cancel. */
+	static constexpr uint32_t kSubtaskBlocked = 0xffffffffu;
 
 	/** \brief Releases a subtask handle. \param handle Subtask handle. \throws std::runtime_error if the handle is invalid. */
 	void dropSubtask(uint32_t handle)
@@ -1104,7 +1166,7 @@ private:
 	//! Error-context strings, keyed by their Canonical ABI handle.
 	std::unordered_map<uint32_t, std::string> errorContexts_;
 	//! Live subtask handles.
-	std::unordered_set<uint32_t> subtasks_;
+	std::unordered_map<uint32_t, ComponentSubtask> subtasks_;
 };
 
 

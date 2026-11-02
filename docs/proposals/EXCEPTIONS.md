@@ -102,8 +102,8 @@ shape only.)
   pending status
   ([`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md)), are never caught by a
   `try_table`, and win over a pending exception. The slot belongs to the
-  per-agent `ExecutionState` (TRAP-6); true multi-agent execution remains
-  deferred.
+  per-agent `ExecutionState` (TRAP-6); an embedder that runs several agents owns
+  their scheduling (`ConcurrencyModel::Agents`).
 - **`try_table` routes its catches (EX-4).** The instruction pushes a
   `ControlBlock::TryTable` frame carrying the decoded clauses; the frame behaves
   like a block at its `end`. Catch labels are **parent-relative** (encoded label
@@ -145,7 +145,7 @@ shape only.)
 
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
-| EXD1 | **Unwind with a per-agent *pending-exception* state plus per-call-site static dispatch**, not `setjmp`/`longjmp`. `throw`/`throw_ref` that find a handler in the current function branch directly to its catch label; otherwise they set the pending slot and return zeroes. Every call site checks the slot inline; on a pending exception it runs the same static dispatch for its own enclosing `try_table`s, or re-propagates. | §3: the mechanism is free. This is also the only workable mechanism here: `setjmp` cannot be armed in a JIT frame, and a helper's `jmp_buf` points at a dead frame, so `longjmp` cannot resume at a catch label. The slot belongs to the per-agent `ExecutionState` (TRAP-6 done); true multi-agent execution remains deferred. | Constant-time handler lookup for `throw` (the tag is a compile-time index), one inline load + branch per call, no unwind tables, no personality routine, no change to the value ABI. |
+| EXD1 | **Unwind with a per-agent *pending-exception* state plus per-call-site static dispatch**, not `setjmp`/`longjmp`. `throw`/`throw_ref` that find a handler in the current function branch directly to its catch label; otherwise they set the pending slot and return zeroes. Every call site checks the slot inline; on a pending exception it runs the same static dispatch for its own enclosing `try_table`s, or re-propagates. | §3: the mechanism is free. This is also the only workable mechanism here: `setjmp` cannot be armed in a JIT frame, and a helper's `jmp_buf` points at a dead frame, so `longjmp` cannot resume at a catch label. The slot belongs to the per-agent `ExecutionState` (TRAP-6 done); an embedder that runs several agents owns their scheduling (`ConcurrencyModel::Agents`). | Constant-time handler lookup for `throw` (the tag is a compile-time index), one inline load + branch per call, no unwind tables, no personality routine, no change to the value ABI. |
 | EXD2 | **Resolve handlers statically where possible.** `throw tagidx` searches the enclosing `try_table` frames (innermost first) for a matching catch at compile time; `throw_ref` emits a comparison chain over the same frames because its tag id is dynamic. Traps are never catchable: they travel as a separate pending status ([`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md)) and win over a pending exception. | §3: the handler set is lexically known. The spec requires a trap *not* to be an exception (`try_table.wast` asserts this with `unreachable` and `divide by zero`). | No handler stack at run time; `catch` arity and payload offsets are constants; traps and exceptions stay disjoint. |
 | EXD3 | **Represent an `exnref` as a hunk pointer** to `{ tagId, payload }` in the GC region ([`GC.md`](GC.md) §6.1). | §3: representation free; `exnref` is opaque. | Reuses the arena and GC object model; `throw_ref` is a re-jump. |
 | EXD4 | **Intern tags to a process-wide `TagId`**, exactly like `TypeId` ([`TYPE_IDENTITY.md`](../TYPE_IDENTITY.md)), and match by id. | §2 requires exact tag identity; a canonical id is one implementation. | Cheap, cross-module-correct matching. |

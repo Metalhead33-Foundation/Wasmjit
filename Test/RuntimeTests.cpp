@@ -84,6 +84,7 @@ TEST_CASE("runtime: load and instantiate a component through the public API",
 	auto loaded = runtime->loadComponentBytes(bytes);
 	REQUIRE(loaded != nullptr);
 	REQUIRE(loaded->features().contains(WASM::ComponentFeature::Baseline));
+	REQUIRE(loaded->name().empty());
 
 	WASM::ComponentInstanceHandle& instance = runtime->instantiateComponent(*loaded);
 	REQUIRE(runtime->componentInstances().size() == 1);

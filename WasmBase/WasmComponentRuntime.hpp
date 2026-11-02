@@ -58,9 +58,17 @@ public:
 	 * \param instantiator Backend-neutral core module instantiator; must outlive this runtime.
 	 * \param component Validated component definition; must outlive this runtime.
 	 * \param imports Host implementations for component-level imports.
+	 * \param coreModuleImports Host-supplied definitions for imported core modules.
+	 * \param outerCoreModuleSpaces Ancestor core-module index spaces for outer aliases.
+	 * \param instanceCoreModules Core-module exports attached to imported instances.
 	 */
 	ComponentRuntime(ModuleInstantiator& instantiator,
-			const Component& component, ComponentImports imports = {}); //!< `imports` supplies the host implementations.
+			const Component& component, ComponentImports imports = {},
+			std::unordered_map<std::string, const WASM::Module*> coreModuleImports = {},
+			std::vector<std::vector<const WASM::Module*>> outerCoreModuleSpaces = {},
+			std::unordered_map<std::string,
+					std::unordered_map<std::string, const WASM::Module*>>
+					instanceCoreModules = {}); //!< `imports` supplies the host implementations.
 	/**
 	 * \brief Builds a runtime from the legacy function-only import map.
 	 * \param instantiator Backend-neutral core module instantiator; must outlive this runtime.
@@ -86,6 +94,8 @@ public:
 	WASM::Callable coreFunction(std::size_t index) const;
 	/** \brief Retrieves a core linear memory by flattened index. \param index Core memory index. \return Non-owning memory pointer, or nullptr if unavailable. */
 	WASM::LinearMemory* coreMemory(std::size_t index) const;
+	/** \brief Requests cancellation of the active async task. \throws std::runtime_error if no task is active. */
+	void requestTaskCancellation();
 	//! Instance-owned Canonical ABI signatures (TYPE_MODEL TM-15). Store metadata
 	//! is process-wide; this table is per component instance.
 	/** \brief Provides read-only access to this instance's Canonical ABI cache. \return Const reference to instance-owned ABI metadata. */
@@ -169,7 +179,21 @@ private:
 	ModuleInstantiator& instantiator_; //!< The backend instantiator, borrowed from the caller.
 	const WASM::Component& component_; //!< The validated definition, borrowed from the caller.
 	std::vector<std::unique_ptr<CoreInstanceHandle>> coreInstances_; //!< The core instances, by core instance index.
+	//! Core module index space: the component's own modules first, then
+	//! aliased/imported modules appended in definition order.
+	std::vector<const WASM::Module*> coreModuleSpace_;
+	//! Exported core modules by name (the component-level `core module` sort).
+	std::unordered_map<std::string, const WASM::Module*> exportedCoreModules_;
 	ComponentImports imports_; //!< The component-level imports this runtime was given.
+	//! Imported core modules supplied by the parent instantiation, by name.
+	std::unordered_map<std::string, const WASM::Module*> coreModuleImports_;
+	//! Core-module exports attached to imported component instances, by import
+	//! name. Kept out of the public `ComponentInstanceValue` ABI.
+	std::unordered_map<std::string,
+			std::unordered_map<std::string, const WASM::Module*>>
+			instanceCoreModules_;
+	//! Ancestor core-module index spaces for `alias outer`; nearest first.
+	std::vector<std::vector<const WASM::Module*>> outerCoreModuleSpaces_;
 	//! One component definition in the component index space: a nested
 	//! definition (owner empty) or an imported/aliased `LoadedComponent`.
 	struct ComponentDefinitionHandle {
@@ -187,6 +211,8 @@ private:
 		std::unique_ptr<ComponentRuntime> nested;
 		//! The export bag this instance presents.
 		ComponentInstanceValue exports;
+		//! Core module exports by name, kept outside the embedder-facing bag.
+		std::unordered_map<std::string, const WASM::Module*> coreModules;
 	};
 	std::vector<std::shared_ptr<ComponentInstanceHandle>> componentInstances_;
 	std::vector<WASM::Callable> coreFuncs_; //!< The canon-produced core functions, by core function index.
@@ -225,6 +251,7 @@ private:
 	std::unordered_map<std::string, uint32_t> exportedValueIndices_; //!< Export name to component value index.
 	std::unordered_map<std::string, std::shared_ptr<ComponentInstanceHandle>> exportedInstances_; //!< Export name to instance handle.
 	std::unordered_map<std::string, uint32_t> exportedTypeIndices_; //!< Export name to component type index.
+	std::unordered_map<std::string, uint32_t> exportedComponentIndices_; //!< Export name to component-space index.
 
 	//! Walks the component definition list and builds the executable graph.
 	void build();
