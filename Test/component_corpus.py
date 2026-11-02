@@ -18,6 +18,7 @@ so one unparsable case never breaks the build.  Everything is written under
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 
@@ -133,6 +134,23 @@ def first_component(text, start, end):
     return None
 
 
+def parse_invoke(form):
+    """Return (name, args) for one no-nested-command invoke, or None."""
+    at = form.find('(invoke')
+    if at < 0:
+        return None
+    stop = balanced(form, at)
+    if stop is None:
+        return None
+    text = form[at:stop]
+    name = re.search(r'\(invoke\s+"([^"]+)"', text)
+    if not name:
+        return None
+    args = re.findall(r'\((u32|i32|u64|i64|f32|f64)\.const\s+([^()\s]+)\)',
+                      text)
+    return name.group(1), args
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--corpus', required=True)
@@ -163,6 +181,7 @@ def main():
     scripts.sort()
 
     manifest = []
+    execution = []
     counts = {'accept': 0, 'reject': 0, 'skip': 0}
     form_path = os.path.join(out, 'form.wat')
     for script in scripts:
@@ -174,6 +193,7 @@ def main():
         with open(script, encoding='utf-8', errors='replace') as handle:
             text = handle.read()
         index = 0
+        current_artifact = None
         for start, end in scan(text):
             form_head = head(text, start)
             verdict = None
@@ -184,6 +204,35 @@ def main():
                 component = first_component(text, start, end)
                 verdict = 'reject' if component else None
             if verdict is None or component is None:
+                # A top-level assert_return/assert_trap belongs to the most
+                # recent top-level component. Scalar arguments/results are
+                # representable without a host adapter.
+                form = text[start:end]
+                if form_head in ('invoke', 'action') and current_artifact:
+                    parsed = parse_invoke(form)
+                    if parsed:
+                        arg_text = ','.join('%s:%s' % item for item in parsed[1])
+                        execution.append((current_artifact, parsed[0],
+                                          'action', '',
+                                          '%s:%d' % (relative, start), arg_text))
+                elif form_head == 'assert_return' and current_artifact:
+                    parsed = parse_invoke(form)
+                    expected = re.findall(
+                            r'\((u32|i32|u64|i64|f32|f64)\.const\s+([^()\s]+)\)',
+                            form)
+                    if parsed and expected:
+                        arg_text = ','.join('%s:%s' % item for item in parsed[1])
+                        kind, value = expected[-1]
+                        execution.append((current_artifact, parsed[0], kind,
+                                          value, '%s:%d' % (relative, start),
+                                          arg_text))
+                elif form_head == 'assert_trap' and current_artifact:
+                    parsed = parse_invoke(form)
+                    if parsed:
+                        arg_text = ','.join('%s:%s' % item for item in parsed[1])
+                        execution.append((current_artifact, parsed[0],
+                                          'trap', '',
+                                          '%s:%d' % (relative, start), arg_text))
                 continue
             index += 1
             stem = os.path.splitext(os.path.basename(script))[0]
@@ -198,14 +247,21 @@ def main():
                 reason = (result.stderr.strip().splitlines() or ['parse failed'])[0]
                 manifest.append(('skip', '-', origin, reason))
                 counts['skip'] += 1
+                current_artifact = None
                 continue
             manifest.append((verdict, artifact, origin, ''))
             counts[verdict] += 1
+            current_artifact = artifact if verdict == 'accept' else None
 
     manifest_path = os.path.join(out, 'manifest.tsv')
     with open(manifest_path, 'w', encoding='utf-8') as handle:
         handle.write('# verdict\tartifact\torigin\treason (CM-9a)\n')
         for entry in manifest:
+            handle.write('\t'.join(entry) + '\n')
+    execution_path = os.path.join(out, 'execution.tsv')
+    with open(execution_path, 'w', encoding='utf-8') as handle:
+        handle.write('# artifact\tinvoke\tkind\tvalue\torigin\targs (CM-9a)\n')
+        for entry in execution:
             handle.write('\t'.join(entry) + '\n')
     if args.known_failures and os.path.exists(args.known_failures):
         import shutil

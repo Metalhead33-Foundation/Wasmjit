@@ -367,18 +367,21 @@ supported on that executor.
 
 - The **interfaces** are implemented in `WasmBase/WasmComponentAsync.hpp`:
   task/context/backpressure state, waitables and waitable sets, stream/future
-  endpoints over a shared element queue, copy results/event codes, and a
-  `ComponentExecutor` seam with a `SingleAgentExecutor` implementation
-  (`thread.index` 0, `available-parallelism` 1, no OS thread).
+  endpoints over a shared element queue, the subtask and thread tables, copy
+  results/event codes, and a `ComponentExecutor` seam with a
+  `SingleAgentExecutor` implementation (`thread.index` 0,
+  `available-parallelism` 1, no OS thread) plus `waitForWork`/`wake`/
+  `suspendCurrent` hooks.
 - The **state machine executes** in `WASM::ComponentRuntime`:
   `stream.new`/`future.new`, read/write (including a blocked async read completed
   by a later write), cancel, drop and forward; `task.return`/`task.cancel`;
-  `context.get`/`set`; `backpressure.inc`/`dec`; `waitable-set.new/wait/poll/
-  drop`, `waitable.join`; `subtask.cancel`/`drop`; `error-context.new/
-  debug-message/drop`; and `thread.*` answers from the installed executor. A
-  synchronous copy that would block traps with a named executor-contract error
-  rather than hanging; an asynchronous copy yields and is completed by the
-  executor's next `runUntilIdle`.
+  `context.get`/`set`; `backpressure.inc`/`dec` (and task admission);
+  `waitable-set.new/wait/poll/drop`, `waitable.join`; `subtask.cancel`/`drop`;
+  `error-context.new/debug-message/drop`; and `thread.index`/`new-indirect`/
+  `resume-later`/`spawn-indirect`/`spawn-ref`/`suspend`/`*-then-resume` through
+  the executor and thread table. A synchronous copy that would block traps with a
+  named executor-contract error rather than hanging; an asynchronous copy yields
+  and is completed by the executor's next `runUntilIdle`.
 - **The async calling convention is implemented (CM19, 2026-11-02).**
   `ComponentAsyncState` keeps a task stack with result storage and a hard
   live-task bound (`kMaxLiveTasks`), and the executor is injectable
@@ -387,14 +390,15 @@ supported on that executor.
   results and lifts what `task.return` stored; the callback form drives the
   `YIELD`/`WAIT` loop with `(event-code, payload1, payload2) -> packed` calls.
   `canon lower ... async` uses `MAX_FLAT_ASYNC_PARAMS` (4), appends a result
-  pointer, returns the packed subtask state as one `i32`, and writes the lowered
-  results through that pointer. The flattened core signature comes from
-  `CanonicalAbiSignature::{coreParams,coreResults}`.
+  pointer, and returns the packed subtask state as one `i32`: a synchronous
+  single-agent call returns `RETURNED`, while a deferred executor call returns
+  `STARTING | handle << 4` and can be cancelled before the queued body runs.
 - **Scheduling seam**: concurrent copies, a second agent, wakeups and an
   out-of-line event loop are supplied by the installed `ComponentExecutor`;
-  `SingleAgentExecutor` is the default. The interface is the seam a multi-agent
-  embedder fills in, so no caller changes when it does; the executor is
-  replaceable and testable today.
+  `SingleAgentExecutor` is the default. A stack- or fiber-capable executor
+  overrides `suspendCurrent`; the default single-agent executor refuses to
+  suspend. The interface is the seam a multi-agent embedder fills in, so no caller
+  changes when it does; the executor is replaceable and testable today.
 
 ## 6. Where we can and should play fast and loose
 

@@ -1922,7 +1922,8 @@ void ComponentValidator::validateCanonicalAbi()
 					resolved.typeIndex = id.value;
 				}
 				std::vector<AbiCoreType> flat;
-				if (!store.canonicalAbiFlatValue(resolved, flat))
+				if (!store.canonicalAbiFlatValue(resolved, flat,
+						options.pointerSize))
 					fail("task.return result cannot be flattened");
 			}
 			break;

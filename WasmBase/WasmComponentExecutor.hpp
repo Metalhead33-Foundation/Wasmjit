@@ -18,6 +18,7 @@ WASMJIT_VISIBLE_BEGIN
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <stdexcept>
 #include <utility>
 
 namespace WASM {
@@ -39,6 +40,16 @@ public:
 	virtual void runUntilIdle() = 0;
 	/** \brief Returns the number of queued items. \return Pending work count. */
 	virtual std::size_t pending() const = 0;
+
+	/** \brief Waits until work may have become runnable. The default drains the cooperative queue; a concurrent executor may block on its event queue instead. */
+	virtual void waitForWork() { runUntilIdle(); }
+	/** \brief Wakes a `waitForWork` caller after a new async event is published. The default is a no-op. */
+	virtual void wake() {}
+	/** \brief Suspends the current execution context. The default queues `resume`; a stack- or fiber-capable executor overrides this to actually park. \param resume Callback that resumes the current context. \throws std::runtime_error when the executor cannot suspend. */
+	virtual void suspendCurrent(std::function<void()> resume)
+	{
+		push(std::move(resume));
+	}
 
 	/** \brief Cooperative yield: lets every queued item run. */
 	void yield() { runUntilIdle(); }
@@ -69,6 +80,11 @@ public:
 	}
 
 	std::size_t pending() const override { return queue_.size(); }
+	void suspendCurrent(std::function<void()>) override
+	{
+		throw std::runtime_error(
+				"single-agent executor cannot suspend the current context");
+	}
 
 private:
 	std::deque<std::function<void()>> queue_; //!< Cooperative work queue.

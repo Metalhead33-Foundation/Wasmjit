@@ -426,11 +426,12 @@ test cases**; `[docs]` 1013/2,
 exported symbols. **These are a snapshot, not a promise** — they are here to show
 what the output looks like, and to make a reader notice when it does not.
 
-**Current (2026-11-02, CM24–CM26 working tree):** **17,296 assertions in 571 test
-cases**; `[component-corpus]`/`[component-subtyping]` 520/1, `[component-execution]`
-4/1 (140 accepted artifacts constructed, 3 named backend/ABI residuals),
-`[component-async]` 74/6, `[component-name]` 7/1, `[component-fuzz]` 4/1,
-`[component-api]` 28/3, `[component-features]` 19/1. Re-run the probe; these are
+**Current (2026-11-02, CM24–CM26 working tree):** **17,326 assertions in 574 test
+cases**; `[component-corpus]`/`[component-subtyping]` 520/1,
+`[component-execution]` 7/2 (140 accepted artifacts constructed plus the
+upstream scalar-return/trap sweep; 21 residual groups), `[component-async]` 93/8,
+`[component-name]` 7/1, `[component-fuzz]` 4/1,
+`[component-api]` 29/3, `[component-features]` 19/1. Re-run the probe; these are
 a dated snapshot, not a promise.
 
 Three things moved those numbers while this note was being written, which is the

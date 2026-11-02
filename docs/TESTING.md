@@ -1200,7 +1200,10 @@ top-level `(component …)` and each `(assert_invalid (component …))`, writes 
 form through `wasm-tools parse` (which *does* understand components), and emits
 `wasm_testsuite/component-corpus/manifest.tsv` with one line per artifact:
 `accept | reject | skip`, the origin (`file:offset`) and, for a skip, the reason.
-A form `wasm-tools` itself refuses becomes a `skip`, never a build failure.
+The same pass emits `execution.tsv`: no-argument/scalar `invoke`,
+`assert_return` and `assert_trap` rows (with scalar arguments in the last
+column), linked to the last top-level component. A form `wasm-tools` itself
+refuses becomes a `skip`, never a build failure.
 2. **CM-9b — `Test/ComponentCorpusTests.cpp` (`[component-corpus]`).** Loads each
 artifact and compares our validator's verdict with the corpus's. The corpus is
 green in both directions since `CM15`, so **either** disagreement is a hard
@@ -1232,9 +1235,11 @@ The component feature/API tests are:
 - `[component-fuzz]` — deterministic truncation/byte/section mutations of a valid
   component. The contract is a clean exception or a successful parse; an abort,
   assertion or sanitizer report is a failure.
-- `[component-execution]` — parses every accepted artifact and constructs the
-  140 components that need no host imports/start, counting three named
-  backend/ABI residuals instead of skipping them silently.
+- `[component-execution]` — parses every accepted artifact, constructs the
+  140 components that need no host imports/start, then executes the upstream
+  scalar `assert_return`/`assert_trap` rows from `execution.tsv`. Twenty-one
+  accepted groups whose expectations need host memory/resource state or an
+  unsupported trap are named in `Test/main.cpp`, not silently skipped.
 - `[component-async]` — task cancellation/subtask states, stream/future copies and
   the async lift/lower calling convention.
 - `[component-name]` — the lenient `component-name` parser: a malformed name is

@@ -31,13 +31,14 @@ WASMJIT_VISIBLE_BEGIN
 
 namespace WASM {
 
-//! \brief Component Model concurrency, single-agent flavour
+//! \brief Component Model concurrency, executor-owned scheduling
 //!
-//! docs/proposals/THREADS.md TD9 defers true multi-agent execution indefinitely.
-//! This header is the pre-emptive interface for the Component Model's async
-//! surface (docs/proposals/COMPONENT_MODEL.md CM-5/CM-8): the shape a
-//! multi-agent implementation will fill in, with a working single-agent backend
-//! that executes every operation synchronously.
+//! docs/proposals/THREADS.md §5.1: the engine ships a single-agent executor and
+//! the public `ComponentExecutor` seam; a multi-agent embedder supplies the
+//! scheduling policy. This header is the async surface
+//! (docs/proposals/COMPONENT_MODEL.md CM-5/CM-8/CM-18): tasks, subtasks,
+//! waitables, streams/futures and the thread table, with a working synchronous
+//! default that executes every operation.
 //!
 //! The interface is deliberately backend-agnostic (docs/LAYERING.md): it names
 //! no code generator, only the contracts a runtime must honour:
@@ -117,6 +118,20 @@ struct ComponentSubtask {
 	bool cancellationRequested = false; //!< A `subtask.cancel` already arrived.
 	bool resolveDelivered = false; //!< The caller consumed the resolve event.
 	bool inWaitableSet = false; //!< Present in a waitable set (cancel traps).
+	std::function<void()> work; //!< Pending lowered call, if any.
+};
+
+/** \brief State tracked for one component-model thread. */
+struct ComponentThread {
+	//! Lifecycle of a `thread.*` execution context.
+	enum class State : uint8_t {
+		Suspended, //!< Created or parked; not runnable.
+		Ready, //!< Runnable, queued on the executor.
+		Running, //!< Currently executing.
+		Finished //!< Entry returned or trapped.
+	};
+	State state = State::Suspended; //!< Current thread state.
+	std::function<void()> entry; //!< Entry point (empty for the root thread).
 };
 
 //! The direction of one end of a stream/future.
@@ -543,6 +558,7 @@ public:
 		if (ComponentAsyncEndpoint* peer = peerOf(handle);
 				peer != nullptr && peer->hasPendingBuffer() && !peer->pendingIsRead())
 			completePendingWrite(*peer);
+		executor_->wake();
 
 		if (!channel.writableAlive()) {
 			end.setState(ComponentEndState::Done);
@@ -630,6 +646,7 @@ public:
 			if (ComponentAsyncEndpoint* peer = peerOf(handle);
 					peer != nullptr && peer->hasPendingBuffer() && peer->pendingIsRead())
 				completePendingRead(*peer);
+			executor_->wake();
 			return packCopyResult(ComponentCopyResult::Completed, 1);
 		}
 
@@ -644,6 +661,7 @@ public:
 		if (ComponentAsyncEndpoint* peer = peerOf(handle);
 				peer != nullptr && peer->hasPendingBuffer() && peer->pendingIsRead())
 			completePendingRead(*peer);
+		executor_->wake();
 		return packCopyResult(ComponentCopyResult::Completed,
 				static_cast<uint32_t>(count));
 	}
@@ -663,6 +681,7 @@ public:
 					"component async: cancel without a pending copy");
 		end.setState(ComponentEndState::Idle);
 		end.clearPendingBuffer();
+		executor_->wake();
 		return packCopyResult(ComponentCopyResult::Cancelled, 0);
 	}
 
@@ -703,6 +722,7 @@ public:
 		}
 		if (end.waitableSet() != nullptr)
 			static_cast<ComponentWaitableSet*>(end.waitableSet())->remove(&end);
+		executor_->wake();
 		release_(handle);
 		endpoints_.erase(it);
 		if (channels_.count(handle) != 0)
@@ -781,7 +801,11 @@ public:
 	/** \brief Waits/polls the single-agent set for its next pending event. \param setHandle Waitable-set handle. \return Next event, or the None sentinel when no event is pending. */
 	ComponentAsyncEvent wait(uint32_t setHandle)
 	{
-		return waitableSet(setHandle).wait();
+		ComponentAsyncEvent event = waitableSet(setHandle).poll();
+		if (!event.isNone() || executor_->singleAgent())
+			return event;
+		executor_->waitForWork();
+		return waitableSet(setHandle).poll();
 	}
 
 	/** \brief Polls a waitable set without blocking. \param setHandle Waitable-set handle. \return Next event, or the None sentinel when no event is pending. */
@@ -841,6 +865,9 @@ public:
 	/** \brief Begins a nested task activation. \return Mutable reference to the new current task. \throws std::runtime_error when the live-task bound is exceeded. */
 	ComponentTask& beginTask()
 	{
+		if (currentTask_ && currentTask_->backpressure() > 0)
+			throw std::runtime_error(
+					"component async: task creation is blocked by backpressure");
 		if (taskStack_.size() + 1 >= kMaxLiveTasks)
 			throw std::runtime_error(
 					"component async: live-task limit exceeded");
@@ -937,6 +964,84 @@ public:
 		release_(handle);
 	}
 
+	//! Component-model threads. The table is owned by the async state; the
+	//! executor only decides where and when an entry actually runs.
+	/** \brief Returns the running thread index (`thread.index`). \return Current thread index (0 for the root). */
+	uint32_t currentThreadIndex() const
+	{
+		return threadStack_.empty() ? 0 : threadStack_.back();
+	}
+	/** \brief Creates a suspended thread with an entry point. \param entry Entry body. \return New thread index. */
+	uint32_t newThread(std::function<void()> entry)
+	{
+		const uint32_t index = nextThreadIndex_++;
+		ComponentThread thread;
+		thread.entry = std::move(entry);
+		threads_.emplace(index, std::move(thread));
+		return index;
+	}
+	/** \brief Creates and schedules a thread (`thread.spawn-*`). \param entry Entry body. \return New thread index. */
+	uint32_t spawnThread(std::function<void()> entry)
+	{
+		const uint32_t index = newThread(std::move(entry));
+		resumeLater(index);
+		return index;
+	}
+	/** \brief Marks a suspended thread runnable (`thread.resume-later`). \param index Thread index. \throws std::runtime_error if the index is invalid, already running, or finished. */
+	void resumeLater(uint32_t index)
+	{
+		const auto it = threads_.find(index);
+		if (it == threads_.end())
+			throw std::runtime_error("component async: invalid thread index");
+		if (it->second.state != ComponentThread::State::Suspended)
+			throw std::runtime_error("component async: thread is not suspended");
+		it->second.state = ComponentThread::State::Ready;
+		executor_->spawnAgent([this, index] { runThread(index); });
+		executor_->wake();
+	}
+	/** \brief Suspends the current thread (`thread.suspend`). \throws std::runtime_error when the executor cannot suspend. */
+	void suspendCurrentThread()
+	{
+		const uint32_t index = currentThreadIndex();
+		const auto it = threads_.find(index);
+		if (it != threads_.end())
+			it->second.state = ComponentThread::State::Suspended;
+		executor_->suspendCurrent([this, index] {
+			const auto resumed = threads_.find(index);
+			if (resumed != threads_.end())
+				resumed->second.state = ComponentThread::State::Running;
+		});
+	}
+	/** \brief Leaves the current thread parked and schedules `index` (`thread.*-then-resume`). \param index Target thread. \param yieldCurrent true for a yield rather than a suspend. */
+	void switchThread(uint32_t index, bool yieldCurrent)
+	{
+		const uint32_t current = currentThreadIndex();
+		const auto target = threads_.find(index);
+		if (target == threads_.end() || index == current)
+			throw std::runtime_error("component async: invalid thread switch target");
+		if (target->second.state != ComponentThread::State::Suspended)
+			throw std::runtime_error("component async: target thread is not suspended");
+		const auto self = threads_.find(current);
+		if (self != threads_.end())
+			self->second.state = yieldCurrent
+					? ComponentThread::State::Ready
+					: ComponentThread::State::Suspended;
+		target->second.state = ComponentThread::State::Running;
+		executor_->spawnAgent([this, index] { runThread(index); });
+		executor_->suspendCurrent([this, current] {
+			const auto resumed = threads_.find(current);
+			if (resumed != threads_.end())
+				resumed->second.state = ComponentThread::State::Running;
+		});
+	}
+	/** \brief Reports whether a thread index is suspended. \param index Thread index. \return true when suspended. */
+	bool threadSuspended(uint32_t index) const
+	{
+		const auto it = threads_.find(index);
+		return it != threads_.end()
+				&& it->second.state == ComponentThread::State::Suspended;
+	}
+
 	//! Subtasks: a synchronous lower is already resolved when it returns; the
 	//! state machine still follows the Canonical ABI so cancellation and drop
 	//! have the specified return codes.
@@ -947,6 +1052,57 @@ public:
 		const uint32_t handle = allocate_();
 		subtasks_.emplace(handle, ComponentSubtask{state});
 		return handle;
+	}
+
+	/** \brief Allocates a STARTING subtask and queues its lowered call on the executor. \param work Deferred call body. \return New subtask handle. */
+	uint32_t newPendingSubtask(std::function<void()> work)
+	{
+		const uint32_t handle = newSubtask(ComponentSubtaskState::Starting);
+		subtasks_[handle].work = work;
+		executor_->spawnAgent([this, handle] {
+			const auto it = subtasks_.find(handle);
+			if (it == subtasks_.end()
+					|| it->second.cancellationRequested)
+				return;
+			const std::function<void()> body = it->second.work;
+			it->second.work = nullptr;
+			if (!body)
+				return;
+			try {
+				body();
+				completeSubtask(handle);
+			} catch (...) {
+				const auto failed = subtasks_.find(handle);
+				if (failed != subtasks_.end()) {
+					failed->second.state =
+							ComponentSubtaskState::CancelledBeforeReturned;
+					failed->second.resolveDelivered = true;
+				}
+				executor_->wake();
+				throw;
+			}
+		});
+		return handle;
+	}
+
+	/** \brief Marks a pending subtask returned. \param handle Subtask handle. */
+	void completeSubtask(uint32_t handle)
+	{
+		const auto it = subtasks_.find(handle);
+		if (it == subtasks_.end())
+			throw std::runtime_error("component async: invalid subtask handle");
+		if (it->second.cancellationRequested)
+			it->second.state = ComponentSubtaskState::CancelledBeforeReturned;
+		else
+			it->second.state = ComponentSubtaskState::Returned;
+		executor_->wake();
+	}
+
+	/** \brief Tests whether a subtask was cancelled before its queued body ran. \param handle Subtask handle. \return true when cancellation was requested. */
+	bool subtaskCancelled(uint32_t handle) const
+	{
+		const auto it = subtasks_.find(handle);
+		return it != subtasks_.end() && it->second.cancellationRequested;
 	}
 
 	/** \brief Marks a live subtask returned or started. \param handle Subtask handle. \param state New ABI state. \throws std::runtime_error if the handle is invalid or already resolved. */
@@ -978,6 +1134,7 @@ public:
 			throw std::runtime_error(
 					"component async: subtask cancel while in a waitable set");
 		subtask.cancellationRequested = true;
+		subtask.work = nullptr;
 		if (subtask.state == ComponentSubtaskState::Starting
 				|| subtask.state == ComponentSubtaskState::Started) {
 			if (async)
@@ -987,6 +1144,7 @@ public:
 					: ComponentSubtaskState::CancelledBeforeReturned;
 		}
 		subtask.resolveDelivered = true;
+		executor_->wake();
 		return static_cast<uint32_t>(subtask.state);
 	}
 
@@ -999,6 +1157,10 @@ public:
 		const auto it = subtasks_.find(handle);
 		if (it == subtasks_.end())
 			throw std::runtime_error("component async: invalid subtask handle");
+		if (it->second.state == ComponentSubtaskState::Starting
+				|| it->second.state == ComponentSubtaskState::Started)
+			throw std::runtime_error(
+					"component async: cannot drop an unresolved subtask");
 		subtasks_.erase(it);
 		release_(handle);
 	}
@@ -1027,6 +1189,27 @@ public:
 
 
 private:
+	//! Runs one thread entry on the executor, restoring the caller's thread
+	//! identity even when the entry throws.
+	void runThread(uint32_t index)
+	{
+		const auto it = threads_.find(index);
+		if (it == threads_.end())
+			return;
+		threadStack_.push_back(index);
+		it->second.state = ComponentThread::State::Running;
+		try {
+			if (it->second.entry)
+				it->second.entry();
+			it->second.state = ComponentThread::State::Finished;
+		} catch (...) {
+			it->second.state = ComponentThread::State::Finished;
+			threadStack_.pop_back();
+			throw;
+		}
+		threadStack_.pop_back();
+	}
+
 	//! The event code a waitable kind produces.
 	static ComponentEventCode eventCode(ComponentWaitableKind kind)
 	{
@@ -1167,6 +1350,9 @@ private:
 	std::unordered_map<uint32_t, std::string> errorContexts_;
 	//! Live subtask handles.
 	std::unordered_map<uint32_t, ComponentSubtask> subtasks_;
+	std::unordered_map<uint32_t, ComponentThread> threads_;
+	std::vector<uint32_t> threadStack_;
+	uint32_t nextThreadIndex_ = 1;
 };
 
 

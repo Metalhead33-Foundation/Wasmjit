@@ -28,6 +28,7 @@ WASMJIT_VISIBLE_BEGIN
 namespace WASM {
 
 class LoadedComponent;
+class Module;
 
 /** \brief Interned string identity used by canonical component records. */
 using StringId = uint32_t;
@@ -203,7 +204,8 @@ struct ComponentImport {
 		Instance, //!< A host-supplied instance bag.
 		Value, //!< A runtime value.
 		Type, //!< A compile-time type identity (no runtime object).
-		Component //!< A component definition.
+		Component, //!< A component definition.
+		CoreModule //!< A host-supplied core module definition.
 	};
 	Kind kind = Kind::Function; //!< Discriminant for the payload below.
 	ComponentFunction function; //!< Valid when kind == Function.
@@ -211,6 +213,7 @@ struct ComponentImport {
 	ComponentValue value; //!< Valid when kind == Value.
 	WASM::TypeId type{WASM::TypeId::kNone}; //!< Valid when kind == Type.
 	std::shared_ptr<const LoadedComponent> component; //!< Valid when kind == Component.
+	std::shared_ptr<const Module> coreModule; //!< Valid when kind == CoreModule.
 
 	/** \brief Creates an empty import. */
 	ComponentImport() = default;
@@ -249,6 +252,14 @@ struct ComponentImport {
 		ComponentImport out;
 		out.kind = Kind::Component;
 		out.component = std::move(component);
+		return out;
+	}
+	/** \brief Creates a core-module import. \param module Parsed core module definition. \return The import. */
+	static ComponentImport coreModuleImport(std::shared_ptr<const Module> module)
+	{
+		ComponentImport out;
+		out.kind = Kind::CoreModule;
+		out.coreModule = std::move(module);
 		return out;
 	}
 };

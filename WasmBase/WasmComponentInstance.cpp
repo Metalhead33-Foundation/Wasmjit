@@ -140,6 +140,22 @@ WASM::LinearMemory* ComponentInstanceHandle::coreMemory(std::size_t index) const
 	return impl_->runtime->coreMemory(index);
 }
 
+std::optional<WASM::ImportedTable> ComponentInstanceHandle::coreTable(
+		std::size_t index) const
+{
+	if (!impl_ || !impl_->runtime)
+		return std::nullopt;
+	return impl_->runtime->coreTable(index);
+}
+
+std::optional<std::pair<WASM::Value*, WASM::GlobalType>>
+ComponentInstanceHandle::coreGlobal(std::size_t index) const
+{
+	if (!impl_ || !impl_->runtime)
+		return std::nullopt;
+	return impl_->runtime->coreGlobal(index);
+}
+
 void ComponentInstanceHandle::setExecutor(
 		std::unique_ptr<ComponentExecutor> executor)
 {

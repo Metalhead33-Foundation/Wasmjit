@@ -94,8 +94,21 @@ public:
 	WASM::Callable coreFunction(std::size_t index) const;
 	/** \brief Retrieves a core linear memory by flattened index. \param index Core memory index. \return Non-owning memory pointer, or nullptr if unavailable. */
 	WASM::LinearMemory* coreMemory(std::size_t index) const;
+	/** \brief Retrieves a core table by flattened index. \param index Core table index. \return Table descriptor, or nullopt when unavailable. */
+	std::optional<WASM::ImportedTable> coreTable(std::size_t index) const;
+	/** \brief Retrieves a core global by flattened index. \param index Core global index. \return Global cell and declared type, or nullopt when unavailable. */
+	std::optional<std::pair<WASM::Value*, WASM::GlobalType>> coreGlobal(
+			std::size_t index) const;
 	/** \brief Requests cancellation of the active async task. \throws std::runtime_error if no task is active. */
 	void requestTaskCancellation();
+	/** \brief Allocates a STARTING subtask and queues its body on the executor. \param work Deferred lowered call. \return Subtask handle. */
+	uint32_t beginPendingSubtask(std::function<void()> work);
+	/** \brief Marks a pending subtask returned. \param handle Subtask handle. */
+	void completeSubtask(uint32_t handle);
+	/** \brief Tests whether a pending subtask was cancelled. \param handle Subtask handle. \return true when cancellation was requested. */
+	bool subtaskCancelled(uint32_t handle) const;
+	/** \brief Reports whether the installed executor is the single-agent kind. \return true for synchronous execution. */
+	bool executorIsSingleAgent();
 	//! Instance-owned Canonical ABI signatures (TYPE_MODEL TM-15). Store metadata
 	//! is process-wide; this table is per component instance.
 	/** \brief Provides read-only access to this instance's Canonical ABI cache. \return Const reference to instance-owned ABI metadata. */

@@ -27,6 +27,7 @@ WASMJIT_VISIBLE_BEGIN
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 
 namespace WASM {
 
@@ -99,6 +100,11 @@ public:
 	WASM::Callable coreFunction(std::size_t index) const;
 	/** \brief Retrieves a core memory by flattened index. \param index Core memory index. \return Memory pointer, or nullptr when unavailable. */
 	WASM::LinearMemory* coreMemory(std::size_t index) const;
+	/** \brief Retrieves a core table by flattened index. \param index Core table index. \return Table descriptor, or nullopt when unavailable. */
+	std::optional<WASM::ImportedTable> coreTable(std::size_t index) const;
+	/** \brief Retrieves a core global by flattened index. \param index Core global index. \return Global cell and declared type, or nullopt when unavailable. */
+	std::optional<std::pair<WASM::Value*, WASM::GlobalType>> coreGlobal(
+			std::size_t index) const;
 	/** \brief Installs an embedder-owned executor for async work. \param executor Executor; must not be null. */
 	void setExecutor(std::unique_ptr<ComponentExecutor> executor);
 	/** \brief Requests cancellation of the active async task. \throws std::runtime_error if no task is active. */

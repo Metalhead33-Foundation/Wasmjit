@@ -147,10 +147,13 @@ AbiCoreType joinAbi(AbiCoreType left, AbiCoreType right)
 }
 
 bool appendAbiFlat(const TypeStore& store, const ComponentValueType& value,
-		std::vector<AbiCoreType>& out, unsigned depth)
+		std::vector<AbiCoreType>& out, unsigned depth,
+		uint32_t pointerSize = 4)
 {
 	if (depth > kMaxAbiDepth)
 		return false;
+	const AbiCoreType pointer = pointerSize == 8 ? AbiCoreType::I64
+			: AbiCoreType::I32;
 	if (value.kind == ComponentValueType::Kind::TypeIndex)
 		return false;
 	if (value.kind == ComponentValueType::Kind::Primitive) {
@@ -176,7 +179,7 @@ bool appendAbiFlat(const TypeStore& store, const ComponentValueType& value,
 			out.push_back(AbiCoreType::F64);
 			return out.size() <= kMaxAbiFlatValues;
 		case PrimitiveValueType::String:
-			out.push_back(AbiCoreType::I32);
+			out.push_back(pointer);
 			out.push_back(AbiCoreType::I32);
 			return out.size() <= kMaxAbiFlatValues;
 		default:
@@ -193,7 +196,7 @@ bool appendAbiFlat(const TypeStore& store, const ComponentValueType& value,
 			ComponentValueType primitive;
 			primitive.kind = ComponentValueType::Kind::Primitive;
 			primitive.primitive = type.primitive();
-			return appendAbiFlat(store, primitive, out, depth + 1);
+			return appendAbiFlat(store, primitive, out, depth + 1, pointerSize);
 		}
 		case TypeKind::ComponentRecord:
 			for (const ComponentField& field : type.fields())
@@ -212,7 +215,7 @@ bool appendAbiFlat(const TypeStore& store, const ComponentValueType& value,
 			return true;
 		}
 		case TypeKind::ComponentList:
-			out.push_back(AbiCoreType::I32);
+			out.push_back(pointer);
 			out.push_back(AbiCoreType::I32);
 			return out.size() <= kMaxAbiFlatValues;
 		case TypeKind::ComponentOwn:
@@ -225,9 +228,9 @@ bool appendAbiFlat(const TypeStore& store, const ComponentValueType& value,
 			return out.size() <= kMaxAbiFlatValues;
 		case TypeKind::ComponentOption:
 			out.push_back(AbiCoreType::I32);
-			return appendAbiFlat(store, type.element(), out, depth + 1);
+			return appendAbiFlat(store, type.element(), out, depth + 1, pointerSize);
 		case TypeKind::ComponentMap:
-			out.push_back(AbiCoreType::I32);
+			out.push_back(pointer);
 			out.push_back(AbiCoreType::I32);
 			return out.size() <= kMaxAbiFlatValues;
 		case TypeKind::ComponentResult: {
@@ -889,10 +892,12 @@ const CanonicalAbiSignature* TypeStore::canonicalAbi(TypeId type,
 	signature.type = type;
 	signature.options = options;
 	for (const ComponentFuncParam& param : view.params())
-		if (!appendAbiFlat(*this, param.type, signature.flatParams, 0))
+		if (!appendAbiFlat(*this, param.type, signature.flatParams, 0,
+				options.pointerSize))
 			return nullptr;
 	for (const ComponentValueType& result : view.results())
-		if (!appendAbiFlat(*this, result, signature.flatResults, 0))
+		if (!appendAbiFlat(*this, result, signature.flatResults, 0,
+				options.pointerSize))
 			return nullptr;
 	signature.indirectParams = options.async
 			&& options.direction == CanonicalAbiOptions::Direction::Lower
@@ -966,6 +971,12 @@ bool TypeStore::canonicalAbiFlatValue(const ComponentValueType& value,
 		std::vector<AbiCoreType>& out) const
 {
 	return appendAbiFlat(*this, value, out, 0);
+}
+
+bool TypeStore::canonicalAbiFlatValue(const ComponentValueType& value,
+		std::vector<AbiCoreType>& out, uint32_t pointerSize) const
+{
+	return appendAbiFlat(*this, value, out, 0, pointerSize);
 }
 
 TypeSpan TypeStore::appendFields(std::span<const ComponentField> fields)

@@ -554,6 +554,9 @@ public:
 	/** \brief Flattens one component value type to core ABI scalar types. \param value Value type to flatten. \param out Receives flattened core types. \return false when the type cannot be flattened by this ABI slice. */
 	bool canonicalAbiFlatValue(const ComponentValueType& value,
 			std::vector<AbiCoreType>& out) const;
+	/** \brief Flattens a value using an explicit pointer width. \param value Component value type. \param out Flattened core types. \param pointerSize 4 or 8. \return true when the value is flattenable. */
+	bool canonicalAbiFlatValue(const ComponentValueType& value,
+			std::vector<AbiCoreType>& out, uint32_t pointerSize) const;
 	//! Number of cached `(TypeId, options)` ABI signature derivations.
 	std::size_t canonicalAbiCacheSize() const { return canonicalAbi_.size(); }
 	//! How many `canonicalAbi` calls hit the cache.

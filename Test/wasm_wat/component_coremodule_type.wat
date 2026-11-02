@@ -2,7 +2,7 @@
 ;; module sort.
 (component
   (core type $mt (module
-    (export "f" (func (param i32)))
+    (export "f" (func (param i32) (result i32)))
   ))
   (import "m0" (core module $actual (type $mt)))
   (component $c

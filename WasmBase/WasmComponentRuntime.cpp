@@ -1462,7 +1462,18 @@ struct ResourceClosureData {
 
 void resourceCallback(ffi_cif*, void* result, void** args, void* userData)
 {
-	static_cast<ResourceClosureData*>(userData)->handler(result, args);
+	try {
+		static_cast<ResourceClosureData*>(userData)->handler(result, args);
+	} catch (const std::exception& error) {
+		WASM::reportTrap(WASM::TrapKind::Internal, error.what());
+		if (result)
+			std::memset(result, 0, sizeof(double));
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal,
+				"component builtin threw a non-standard exception");
+		if (result)
+			std::memset(result, 0, sizeof(double));
+	}
 }
 
 // Prepares the libffi closure for a canonical builtin and publishes it as the
@@ -1511,6 +1522,7 @@ struct LowerData {
 
 void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 {
+	try {
 	auto* data = static_cast<LowerData*>(userData);
 	const uint32_t borrowScope = data->memory.runtime
 			? data->memory.runtime->beginBorrowScope() : 0;
@@ -1577,24 +1589,54 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 		}
 		std::vector<ComponentValue> structuredOutput(
 				data->function.resultTypes.size());
-		data->function.callValues(structuredInput, structuredOutput);
+		uint64_t buffer = 0;
 		if (!data->function.resultTypes.empty()) {
 			const std::size_t resultIndex = 1 + data->coreParams.size() - 1;
-			const uint64_t buffer = data->function.options.pointerSize == 8
+			buffer = data->function.options.pointerSize == 8
 					? *static_cast<uint64_t*>(args[resultIndex])
 					: *static_cast<uint32_t*>(args[resultIndex]);
+		}
+		const auto writeOutput = [data, buffer, &store](
+				std::span<const ComponentValue> values) {
+			if (data->function.resultTypes.empty())
+				return;
 			uint64_t offset = 0;
-			for (std::size_t i = 0; i < structuredOutput.size(); ++i) {
+			for (std::size_t i = 0; i < values.size(); ++i) {
 				const WASM::CanonicalAbiLayout layout = layoutOf(store,
 						data->function.resultTypes[i], data->memory);
 				offset = alignUp(offset, layout.align);
 				storeValueAt(store, data->function.resultTypes[i],
-						structuredOutput[i], buffer + offset, data->memory, 0);
+						values[i], buffer + offset, data->memory, 0);
 				offset += layout.size;
 			}
+		};
+		if (data->memory.runtime
+				&& !data->memory.runtime->executorIsSingleAgent()) {
+			// A multi-agent executor owns the actual call. The core caller gets
+			// the packed (state | handle << 4) result and may cancel/drop the
+			// subtask before the queued body runs.
+			auto handle = std::make_shared<uint32_t>(0);
+			*handle = data->memory.runtime->beginPendingSubtask(
+					[data, structuredInput = std::move(structuredInput),
+					 structuredOutput = std::move(structuredOutput),
+					 writeOutput, handle]() mutable {
+				if (data->memory.runtime->subtaskCancelled(*handle))
+					return;
+				data->function.callValues(structuredInput, structuredOutput);
+				writeOutput(structuredOutput);
+			});
+			if (result)
+				*static_cast<int32_t*>(result) =
+						int32_t((*handle << 4)
+								| static_cast<uint32_t>(
+										ComponentSubtaskState::Starting));
+			return;
 		}
+		data->function.callValues(structuredInput, structuredOutput);
+		writeOutput(structuredOutput);
 		if (result)
-			*static_cast<int32_t*>(result) = 0; // RETURNED
+			*static_cast<int32_t*>(result) =
+					int32_t(ComponentSubtaskState::Returned);
 		return;
 	}
 	std::vector<WASM::Value> input;
@@ -1692,6 +1734,16 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 	case WASM::AbiCoreType::F64:
 		*static_cast<double*>(result) = output[0].f64;
 		break;
+	}
+	} catch (const std::exception& error) {
+		WASM::reportTrap(WASM::TrapKind::Internal, error.what());
+		if (result)
+			std::memset(result, 0, sizeof(double));
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal,
+				"component lower callback threw a non-standard exception");
+		if (result)
+			std::memset(result, 0, sizeof(double));
 	}
 }
 
@@ -2800,7 +2852,7 @@ void ComponentRuntime::processAsyncCanon(const WASM::Canon& canon)
 			const WASM::ComponentValueType resolved = resolveValueType(value);
 			resultTypes.push_back(resolved);
 			std::vector<WASM::AbiCoreType> flat;
-			if (!store.canonicalAbiFlatValue(resolved, flat))
+			if (!store.canonicalAbiFlatValue(resolved, flat, options.pointerSize))
 				throw std::runtime_error(
 						"component async: task.return result is not flattenable");
 			for (WASM::AbiCoreType type : flat)
@@ -3500,12 +3552,23 @@ void ComponentRuntime::processThreadCanon(const WASM::Canon& canon)
 	auto data = std::make_unique<ResourceClosureData>();
 	data->argumentTypes.push_back(&ffi_type_pointer);
 	ffi_type* returnType = &ffi_type_void;
+	const auto tableCallable = [this, table = canon.tableIndex](
+			uint64_t index) -> WASM::Callable* {
+		if (table >= coreTables_.size() || coreTables_[table].table == nullptr)
+			throw std::runtime_error(
+					"component runtime: thread table index is out of bounds");
+		const WASM::TableInstance* instance = coreTables_[table].table;
+		if (index >= instance->size)
+			throw std::runtime_error(
+					"component runtime: thread function index is out of bounds");
+		return instance->base[index];
+	};
 	switch (canon.kind) {
 	case WASM::Canon::Kind::ThreadIndex:
 		returnType = &ffi_type_sint32;
 		data->handler = [this](void* result, void**) {
 			*static_cast<int32_t*>(result) =
-					int32_t(async_.executor().threadIndex());
+					int32_t(async_.currentThreadIndex());
 		};
 		break;
 	case WASM::Canon::Kind::ThreadAvailableParallelism:
@@ -3517,22 +3580,79 @@ void ComponentRuntime::processThreadCanon(const WASM::Canon& canon)
 		break;
 	case WASM::Canon::Kind::ThreadYield:
 		data->handler = [this](void*, void**) {
-			// Cooperative: let the installed executor run its queue. A
-			// single-agent executor's queue is empty, so this is a no-op.
 			async_.executor().yield();
 		};
 		break;
-	default:
-		// Every remaining thread builtin creates or manipulates a real
-		// concurrent agent. The executor seam is the policy owner; an
-		// executor that does not implement concurrent creation refuses here.
-		data->handler = [kind = canon.kind](void*, void**) {
-			throw std::runtime_error(
-					"component runtime: thread builtin " +
-					std::to_string(static_cast<unsigned>(kind)) +
-					" is not provided by the installed ComponentExecutor");
+	case WASM::Canon::Kind::ThreadNewIndirect:
+		// (param i32/i64 table-index, i32/i64 closure) -> i32 thread index
+		returnType = &ffi_type_sint32;
+		data->handler = [this, tableCallable](void* result, void** args) {
+			const uint64_t index = *static_cast<uint32_t*>(args[1]);
+			const int32_t closure = *static_cast<int32_t*>(args[2]);
+			WASM::Callable* callable = tableCallable(index);
+			if (callable == nullptr)
+				throw std::runtime_error(
+						"component runtime: thread table entry is null");
+			const uint32_t thread = async_.newThread([callable, closure] {
+				WASM::callCallable<void>(*callable, closure);
+			});
+			*static_cast<int32_t*>(result) = int32_t(thread);
 		};
 		break;
+	case WASM::Canon::Kind::ThreadSpawnIndirect:
+		returnType = &ffi_type_sint32;
+		data->handler = [this, tableCallable](void* result, void** args) {
+			const uint64_t index = *static_cast<uint32_t*>(args[1]);
+			const int32_t closure = *static_cast<int32_t*>(args[2]);
+			WASM::Callable* callable = tableCallable(index);
+			if (callable == nullptr)
+				throw std::runtime_error(
+						"component runtime: thread table entry is null");
+			const uint32_t thread = async_.spawnThread([callable, closure] {
+				WASM::callCallable<void>(*callable, closure);
+			});
+			*static_cast<int32_t*>(result) = int32_t(thread);
+		};
+		break;
+	case WASM::Canon::Kind::ThreadSpawnRef:
+		returnType = &ffi_type_sint32;
+		data->handler = [this](void* result, void** args) {
+			void* ref = *static_cast<void**>(args[1]);
+			if (ref == nullptr)
+				throw std::runtime_error(
+						"component runtime: thread.spawn-ref got a null funcref");
+			auto* callable = static_cast<WASM::Callable*>(ref);
+			const int32_t closure = *static_cast<int32_t*>(args[2]);
+			const uint32_t thread = async_.spawnThread([callable, closure] {
+				WASM::callCallable<void>(*callable, closure);
+			});
+			*static_cast<int32_t*>(result) = int32_t(thread);
+		};
+		break;
+	case WASM::Canon::Kind::ThreadResumeLater:
+		data->handler = [this](void*, void** args) {
+			async_.resumeLater(uint32_t(*static_cast<int32_t*>(args[1])));
+		};
+		break;
+	case WASM::Canon::Kind::ThreadSuspend:
+		data->handler = [this](void*, void**) { async_.suspendCurrentThread(); };
+		break;
+	case WASM::Canon::Kind::ThreadSuspendThenResume:
+	case WASM::Canon::Kind::ThreadYieldThenResume:
+	case WASM::Canon::Kind::ThreadSuspendThenPromote:
+	case WASM::Canon::Kind::ThreadYieldThenPromote:
+		returnType = &ffi_type_sint32;
+		data->handler = [this, kind = canon.kind](void* result, void** args) {
+			const uint32_t target = uint32_t(*static_cast<int32_t*>(args[1]));
+			const bool yield = kind == WASM::Canon::Kind::ThreadYieldThenResume
+					|| kind == WASM::Canon::Kind::ThreadYieldThenPromote;
+			async_.switchThread(target, yield);
+			*static_cast<int32_t*>(result) = 0;
+		};
+		break;
+	default:
+		throw std::runtime_error(
+				"component runtime: unknown thread canon builtin");
 	}
 	pushBuiltinClosure(resourceClosures_, resourceCifs_, resourceData_,
 			coreFuncs_, std::move(data), returnType);
@@ -3555,6 +3675,14 @@ void ComponentRuntime::processImport(const WASM::ImportDecl& importDecl)
 	};
 	switch (importDecl.type.kind) {
 	case WASM::ExternType::Kind::CoreModule: {
+		if (found != imports_.end()
+				&& found->second.kind == ComponentImport::Kind::CoreModule) {
+			if (!found->second.coreModule)
+				throw std::runtime_error(
+						"component runtime: host core module import is empty");
+			coreModuleSpace_.push_back(found->second.coreModule.get());
+			return;
+		}
 		const auto module = coreModuleImports_.find(importDecl.name.name);
 		if (module == coreModuleImports_.end() || module->second == nullptr)
 			throw std::runtime_error(
@@ -3737,6 +3865,42 @@ WASM::LinearMemory* ComponentRuntime::coreMemory(std::size_t index) const
 void ComponentRuntime::requestTaskCancellation()
 {
 	async_.requestCancellation();
+}
+
+std::optional<WASM::ImportedTable> ComponentRuntime::coreTable(
+		std::size_t index) const
+{
+	if (index >= coreTables_.size() || coreTables_[index].table == nullptr)
+		return std::nullopt;
+	return coreTables_[index];
+}
+
+std::optional<std::pair<WASM::Value*, WASM::GlobalType>>
+ComponentRuntime::coreGlobal(std::size_t index) const
+{
+	if (index >= coreGlobals_.size())
+		return std::nullopt;
+	return coreGlobals_[index];
+}
+
+uint32_t ComponentRuntime::beginPendingSubtask(std::function<void()> work)
+{
+	return async_.newPendingSubtask(std::move(work));
+}
+
+void ComponentRuntime::completeSubtask(uint32_t handle)
+{
+	async_.completeSubtask(handle);
+}
+
+bool ComponentRuntime::subtaskCancelled(uint32_t handle) const
+{
+	return async_.subtaskCancelled(handle);
+}
+
+bool ComponentRuntime::executorIsSingleAgent()
+{
+	return async_.executor().singleAgent();
 }
 
 uint32_t ComponentRuntime::beginBorrowScope()
