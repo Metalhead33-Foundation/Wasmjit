@@ -1,6 +1,6 @@
 # WIT and the Component Model — Spec Status, Design Space, and a QVM-Style Scope {#prop_component_model}
 
-Status: proposal + implementation note (revision 16 — **the state of the model as
+Status: proposal + implementation note (revision 17 — **the state of the model as
 of 2026-11-02**). `CM-0`…`CM-8` are complete: the parser decodes every
 section/production; the validator carries all **thirteen** index spaces and covers
 references, scopes, labels, declarations, aliases, instantiation signatures,
@@ -9,12 +9,10 @@ flattenability (§5.1 verifies `CM2`); and the runtime executes embedded/nested
 components, inline core instances (`func`/`memory` export bags), flat/layout
 Canonical ABI values, resources, start/value definitions, structured component
 scripts and the single-agent async surface (streams, futures, tasks, context,
-backpressure, waitables, subtasks, error-context). **`CM11` and `CM12` (the two
-inline-export-bag runtime gaps) and `CM14` (the 35 spec-rejected components we
-accepted) are closed; the remaining conformance item is `CM15`, the 38
-corpus-valid components we still reject.** `CM-9` (vendor the upstream corpus)
-and `CM-10` (close `CM11`/`CM12`) are complete. True multi-agent scheduling
-remains deferred to
+backpressure, waitables, subtasks, error-context). **`CM11`, `CM12`, `CM14` and
+`CM15` are closed: the reference corpus is green in both directions (516 verdict
+cases, 0 disagreements).** `CM-9` (vendor the upstream corpus) and `CM-10` (close
+`CM11`/`CM12`) are complete. True multi-agent scheduling remains deferred to
 [`THREADS.md`](THREADS.md) §5.1; WIT is ingested harness-side and WASI is
 host-provided.
 
@@ -269,7 +267,7 @@ handles, named imports/exports, and WIT as the authoring format. Everything in
 
 ## 4. What is in the tree today
 
-**Snapshot (2026-11-02, working tree; no commit yet).** Everything below is a kind-2 statement under `docs/FRESHNESS.md` §2.2, so the whole section carries one stamp rather than a date per sentence. Measured with `build/Desktop-Debug/Test/WasmJit` (**17,109 assertions / 553 cases**) and `[component-corpus]` (**516 verdict cases; 0 reject-side, 38 accept-side**). Before changing a count below, re-run those two and `docs/FRESHNESS.md` §8; if a sentence disagrees with the runs, the sentence is stale.
+**Snapshot (2026-11-02, working tree; no commit yet).** Everything below is a kind-2 statement under `docs/FRESHNESS.md` §2.2, so the whole section carries one stamp rather than a date per sentence. Measured with `build/Desktop-Debug/Test/WasmJit` (**17,110 assertions / 553 cases**) and `[component-corpus]` (**516 verdict cases; 0 reject-side, 0 accept-side**). Before changing a count below, re-run those two and `docs/FRESHNESS.md` §8; if a sentence disagrees with the runs, the sentence is stale.
 
 ### 4.1 Short answer: an honest rejection (CM-0), plus a parser (CM-1a/CM-1b)
 
@@ -469,30 +467,30 @@ component grammar into an AST:
 | ~~CM10~~ | ~~**No error-context, async copy or threading built-ins.**~~ **Done:** `error-context.new/debug-message/drop`, stream/future copy/cancel/forward, task/context/backpressure, waitable sets, subtasks and the component async interfaces exist. `thread.*` returns single-agent answers (`index` 0, `yield` no-op, `available-parallelism` 1) and traps for thread creation, which requires a multi-agent backend. | `WasmComponentAsync.hpp`, `WasmBase/WasmComponentRuntime.*` | Closed (single-agent) |
 | `CM11` ✔ | **Closed 2026-11-01 by its consumer test.** The runtime path (alias reader -> `coreTables_`/`coreGlobals_` -> bag handle -> `ImportRegistrar`) is exercised by `Test/wasm_wat/component_coreinline_sorts.wat` and the case “core inline bag carries table and global sorts”: a core module exports a table and a mutable global, the component aliases both, builds an inline bag from them, and the assertion set checks the two sorts survive to the AST and that construction no longer throws `inline core export sort is not supported`. **Suite 17,108 / 552.** Caveat recorded rather than hidden: `build/Desktop-Debug/Makefile` stores `QMAKE = .../Cursor-2.1.46.AppImage` (the argv[0] rewrite AGENTS.md warns about), so a qmake re-run fails and this artifact was produced with `wasm-tools parse` by hand; a real reconfigure regenerates it through the `wat2wasm` extra compiler, which globs `Test/wasm_wat/*.wat` at qmake time. `CoreSort::Type` stays refused | `Test/wasm_wat/component_coreinline_sorts.wat`, `Test/main.cpp` | **Closed** |
 | `CM12` ✔ | **Closed 2026-11-01.** `processComponentInstance` refused every `Kind::InlineExports` with “inline component instances are not supported”, so a component could parse and validate a bag and never run it. The runtime now keeps `inlineInstanceFunctions_` (function exports keyed by *component-instance index* — a bag has no nested runtime, so it needs its own index space), `processComponentInstance` fills it, and `processAlias`’s `Export` kind resolves out of it before falling back to the instantiate-order vector. Consumer test: `Test/wasm_wat/component_instanceinline_alias.wat` + “component inline instance export alias resolves” (lift → bag → export alias → component function), **suite 17,108 / 553**. Residual: a bag may re-export only `Func`; other sorts throw “inline instance export sort is not supported” rather than being silently dropped. **Correction to the earlier claim:** this did *not* move the 38 accept-side corpus warnings — those are validator verdicts (`component instantiate argument … has the wrong sort`), while CM12 was a runtime gap; corpus stays 98 / 38 | `WasmBase/WasmComponentRuntime.*`, `Test/main.cpp` | **Closed** — and ABI-clean: the first implementation widened `processComponentInstance` to take the instance index, which abi-check caught as a **removed exported symbol** (G2). The method keeps its signature and recovers the index by address instead, so `abi-check` reports `0 removed, 0 added` |
-| `CM13` ✔ | **The two validator disagreements are closed (2026-11-01).** `CM13a`: `canon lift`/`lower` with an `async` option is refused with the corpus's own wording, because every component function type this engine models is synchronous. `CM13b`: an outer alias may name any sort of an enclosing scope — `ValidationScope` now links to the enclosing component scope, so `processAlias` resolves the full index space instead of only `(core type)`/`(type)`. Both `async/validate-no-async-abi-for-sync-type.wast` and both `async/validate-task-return.wast` cases assert, `Test/component_known_failures.txt` is empty, and the corpus is green at **518 asserted / 1 case** (38 accept-side `WARN`s remain; the reject side is at 0 since `CM14`) | `WasmBase/WasmComponentValidation.cpp`, `Test/component_known_failures.txt` | **Closed** |
-| `CM14` ✔ | **Closed 2026-11-02: all 35 spec-rejected components we accepted are now rejected.** The last batch was resource identity and canonical-name semantics: the instantiation path substitutes the callee's abstract resources into each import type before an *exact* (nominal) comparison; an export's explicit ascription becomes the export's type; `resource.new`/`rep` require a *local* resource (`drop` only the representation); an `outer` alias crossing a component boundary rejects a type that transitively mentions a resource (declarator-only boundaries stay legal); `max-value-size` implements `elem_size` < 2^28 for a 64-bit context; the ABI `memory` rule uses `MAX_FLAT_PARAMS=16`/`MAX_FLAT_RESULTS=1` and checks the direct core signature; `task.return` refuses nested borrows; a re-exported core func/tag keeps its canonical id; and a bag of inline exports is validated as an instance type (annotated names + resource names). Verified: `[component-corpus]` **516 verdict cases (140 accept / 376 reject), 0 reject-side disagreements**, accept-side unchanged at 38 (identical case list to the pre-work run), suite **17,109 / 553** | `[component-corpus]`, `Test/ComponentCorpusTests.cpp` | **Closed** |
-| `CM15` ✗ | **38 corpus-valid components are still rejected** (accept side). Unchanged by `CM14`: the list is dominated by `component instantiate argument … has the wrong sort` and `core instantiate target is not a concrete module`, plus a handful of external-name, alias-count and extra-argument shapes. The suite reports them as `WARN`s, so the corpus stays green while the list stays visible. | `[component-corpus]` `corpus says accept, we reject` lines | **Low** — over-rejection is loud and safe: it narrows the accepted language, it does not miscompile |
+| `CM13` ✔ | **The two validator disagreements are closed (2026-11-01).** `CM13a`: `canon lift`/`lower` with an `async` option is refused with the corpus's own wording, because every component function type this engine models is synchronous. `CM13b`: an outer alias may name any sort of an enclosing scope — `ValidationScope` now links to the enclosing component scope, so `processAlias` resolves the full index space instead of only `(core type)`/`(type)`. Both `async/validate-no-async-abi-for-sync-type.wast` and both `async/validate-task-return.wast` cases assert, `Test/component_known_failures.txt` is empty, and the corpus is green in both directions since `CM15` | `WasmBase/WasmComponentValidation.cpp`, `Test/component_known_failures.txt` | **Closed** |
+| `CM14` ✔ | **Closed 2026-11-02: all 35 spec-rejected components we accepted are now rejected.** The last batch was resource identity and canonical-name semantics: the instantiation path substitutes the callee's abstract resources into each import type before an *exact* (nominal) comparison; an export's explicit ascription becomes the export's type; `resource.new`/`rep` require a *local* resource (`drop` accepts any resource type, including an abstract handle); an `outer` alias crossing a component boundary rejects a type that transitively mentions a resource (declarator-only boundaries stay legal); `max-value-size` implements `elem_size` < 2^28 for a 64-bit context; the ABI `memory` rule uses `MAX_FLAT_PARAMS=16`/`MAX_FLAT_RESULTS=1` and checks the direct core signature; `task.return` refuses nested borrows; a re-exported core func/tag keeps its canonical id; and a bag of inline exports is validated as an instance type (annotated names + resource names). Verified: `[component-corpus]` **516 verdict cases (140 accept / 376 reject), 0 reject-side disagreements**, accept-side was 38 at that point (closed by `CM15`); suite re-measured at **17,110 / 553** | `[component-corpus]`, `Test/ComponentCorpusTests.cpp` | **Closed** |
+| `CM15` ✔ | **Closed 2026-11-02: the 38 corpus-valid components we rejected are now accepted.** The work was validator scoping and core-module typing, not new runtime behaviour: every index-space entity carries its sort (component instances/components, core modules, core types, values); superfluous component instantiate arguments are ignored and argument names are uninterpreted; external visibility is scoped to the instance/component type that introduces a name (so a nested type export is named without leaking, while a bag referencing an enclosing record stays invalid); concrete core-module arguments are checked by core subtyping (contravariant imports, covariant exports) and a module *type* is a valid core instantiate target; `resource.drop` accepts an abstract handle; an instance type instantiates its abstract resources freshly per use; open (abstract-resource) function types no longer demand a closed ABI identity; and core-module-type `outer` aliases count from the module type's own index space. Verified against the reference corpus: **516 verdict cases (140 accept / 376 reject), 0 accept-side and 0 reject-side disagreements**, suite **17,110 / 553**. Both directions are now a hard gate in `[component-corpus]` | `[component-corpus]`, `Test/ComponentCorpusTests.cpp` | **Closed** |
 
 ### 5.1 Maturity: what is mature, what the ceiling is, and what is deliberately refused
 
-**Verdict (2026-11-02): functionally mature; the reject-side conformance gap is
-closed and the accept side remains.** `CM1`–`CM10` are closed and
-`CM-0`…`CM-8` shipped; the surface is exercised by the component fixtures under
-`Test/wasm_wat/component_*.wat` plus the C++ runtime tests and the structured
-`WastScript` path. **`CM11`/`CM12`** were inline-export-bag shapes the parser and
-validator accepted and the *runtime* refused (a table/global/type in a core
-export bag; an inline component instance); each has a consumer test and the
-refusals are gone. **`CM14` is closed too:** the 35 components the specification
-rejects and we accepted now reject, so `[component-corpus]` reports **0
-reject-side disagreements**. What remains is **`CM15`**, the 38 corpus-valid
-components we still reject. The folder is therefore **not** 100% closed, and this
-section says so rather than rounding up: no runtime gap is open, and one
-conformance item remains below.
+**Verdict (2026-11-02): functionally mature, and no gap in §5 remains open.**
+`CM1`–`CM10` are closed and `CM-0`…`CM-8` shipped; the surface is exercised by
+the component fixtures under `Test/wasm_wat/component_*.wat` plus the C++ runtime
+tests and the structured `WastScript` path. **`CM11`/`CM12`** were
+inline-export-bag shapes the parser and validator accepted and the *runtime*
+refused (a table/global/type in a core export bag; an inline component instance);
+each has a consumer test and the refusals are gone. **`CM14` and `CM15` are closed
+too:** the 35 components the specification rejects and we accepted now reject,
+and the 38 corpus-valid components we rejected now accept. `[component-corpus]`
+is green in both directions (**516 verdict cases, 0 disagreements**) and both
+directions are a hard gate. The folder is therefore **closed against the
+reference corpus**, with the usual caveat that the corpus is a snapshot of the
+upstream test suite at the pinned revision rather than the specification itself.
 
 | Axis | State | What would move it |
 |---|---|---|
 | Feature surface | mature (§5 above) | nothing outstanding; `thread.*` creation is a THREADS deferral, not a component gap |
-| **Conformance** | **measured against the upstream corpus since 2026-11-01** — `extern/component-model` is vendored and `[component-corpus]` asserts **516 verdict cases (140 accept / 376 reject)**: 0 reject-side and 38 accept-side disagreements | **`CM15`:** close the 38 accept-side cases; they are validator over-rejections, not runtime gaps |
+| **Conformance** | **green against the upstream corpus** — `extern/component-model` is vendored and `[component-corpus]` asserts **516 verdict cases (140 accept / 376 reject): 0 reject-side, 0 accept-side**; both directions are a hard gate | — (nothing outstanding; re-run the corpus when the validator or the pinned corpus changes) |
 | Lifecycle | **matured 2026-11-01:** `ComponentRuntime::~ComponentRuntime` now calls `ModuleInstantiator::releaseInstance` for every core instance it created, so a component's compiled code is given back instead of leaking until the process ends | — (shipped; see `WRITING_A_BACKEND.md` §9 item 6) |
 | Multi-agent | single-agent by decision (`CMD3`) | a real scheduler is `THREADS.md` `TH-5`, not this note |
 
@@ -572,7 +570,7 @@ asserted separately (see the `component-corpus` row).
 | `extern/WasmTestsuite/*.wast` (core suite) | green where curated | contains **no** component cases; `wast_supported.txt` is a core-only list. |
 | a binary component script fed to the harness | **pass** | `ScriptRunner::onModule` detects the component preamble, instantiates `ComponentRuntime`, and marshals scalar and structured `invoke`/`assert_return` values (records, lists, tuples, variants, enums, flags, options, results, maps, handles). |
 | `module_definition` / `module_instance` commands | `module_definition` decoded (not instantiated); `module_instance` skipped | the linking model that the Component Model supersedes/built on; the harness decodes definitions but does not implement linking. |
-| `extern/component-model/test/*.wast` (`[component-corpus]`) | **516 verdict cases asserted** | CM-9a extracts each `(component …)`/`assert_invalid` form through `wasm-tools parse`; CM-9b asserts our verdict. **0 reject-side, 38 accept-side** disagreements (`CM15`), plus extractor skips with their reason in `manifest.tsv`. |
+| `extern/component-model/test/*.wast` (`[component-corpus]`) | **516 verdict cases asserted** | CM-9a extracts each `(component …)`/`assert_invalid` form through `wasm-tools parse`; CM-9b asserts our verdict. **0 reject-side, 0 accept-side** disagreements; both directions are a hard gate. Extractor skips carry their reason in `manifest.tsv`. |
 | manual test, CM-0 | **pass** | `Test/wasm_wat/component_reject.wat` (a bare `(component)`) is loaded and the loader's component-specific message is asserted; `a Component Model component is rejected instead of misparsed`. |
 | manual test, CM-1a | **pass** | `Artifact::parse` distinguishes `add_core` from `component_reject`; `component_embed.wat` parses a core:module section (including the nested core preamble and `component-name` custom section); `component_nested.wat` parses a nested component recursively. |
 | manual test, CM-1b | **pass** | `component_types.wat` (all value types + import/export), `component_exporttype.wat` (ascribed export), `component_canon.wat` (module/instance/alias/lift/export), `component_coretypes.wat` + `component_coreexterns.wat` + `component_coregc.wat` (core rec/func/struct/array/module types and every core external kind), `component_{instances,decltypes,resource,async,canonopts,attributes,aliasexport,instanceinline,coreinline,outer}.wat`, plus hand-authored start/value and non-final/`0x4E` core-type binaries. Each fixture has its own assertions; all pass. |

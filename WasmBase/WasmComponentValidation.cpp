@@ -388,6 +388,15 @@ struct ValidationState {
 	uint32_t nextResourceId = 1;
 };
 
+// CM15: the names a component/instance type introduces for its own scope.
+// Nested declarations are validated against their enclosing type's declarations,
+// not only against the outer component's import/export sets; otherwise a type
+// export inside an imported instance type looks unnamed.
+struct VisibilityScope {
+	const std::set<const ResolvedType*>* imports = nullptr;
+	const std::set<const ResolvedType*>* exports = nullptr;
+};
+
 TypePtr makeType(ValuePtr value)
 {
 	auto type = std::make_shared<ResolvedType>();
@@ -634,6 +643,209 @@ bool coreModuleTypeEqual(const CoreTypeDef& left, const CoreTypeDef& right)
 		}
 	}
 	return true;
+}
+
+// CM15: a core module *value* (concrete or module-typed) is checked against a
+// declared module type by core subtyping: imports contravariantly (the supplied
+// module may import less than the type declares, and the declared import type is
+// what the environment provides, so it must be a subtype of what the module
+// expects), exports covariantly (the module may export more, with subtypes).
+struct CoreDeclEntry {
+	CoreExternType type;
+	TypeId id{TypeId::kNone};
+};
+
+using CoreImportTypeMap =
+		std::map<std::pair<std::string, std::string>, CoreDeclEntry>;
+using CoreExportTypeMap = std::map<std::string, CoreDeclEntry>;
+
+bool limitsSubtype(const Limits& provided, const Limits& expected)
+{
+	if (provided.initial < expected.initial)
+		return false;
+	if (expected.maximum
+			&& (!provided.maximum || *provided.maximum > *expected.maximum))
+		return false;
+	return true;
+}
+
+bool coreExternTypeSubtype(const CoreExternType& provided, TypeId providedId,
+		const CoreExternType& expected, TypeId expectedId)
+{
+	if (provided.kind != expected.kind)
+		return false;
+	switch (provided.kind) {
+	case CoreExternType::Kind::Function:
+		// Module-local indices are not comparable; the canonical ids are, when
+		// both sides have one. Without them the comparison cannot be made, so
+		// only the kind is enforced (never a false rejection).
+		if (!providedId.isNone() && !expectedId.isNone())
+			return providedId == expectedId;
+		return true;
+	case CoreExternType::Kind::Tag:
+		if (!providedId.isNone() && !expectedId.isNone()
+				&& providedId != expectedId)
+			return false;
+		return provided.tagAttribute == expected.tagAttribute;
+	case CoreExternType::Kind::Table:
+		return coreValueTypeEqual(provided.table.elementType,
+						expected.table.elementType)
+				&& provided.table.isShared == expected.table.isShared
+				&& limitsSubtype(provided.table.limits, expected.table.limits);
+	case CoreExternType::Kind::Memory:
+		return provided.memory.indexType == expected.memory.indexType
+				&& provided.memory.pageSize == expected.memory.pageSize
+				&& limitsSubtype(provided.memory.limits, expected.memory.limits);
+	case CoreExternType::Kind::Global:
+		return coreGlobalTypeEqual(provided.global, expected.global);
+	}
+	return false;
+}
+
+CoreSort coreSortOfExtern(CoreExternType::Kind kind)
+{
+	switch (kind) {
+	case CoreExternType::Kind::Function: return CoreSort::Func;
+	case CoreExternType::Kind::Table: return CoreSort::Table;
+	case CoreExternType::Kind::Memory: return CoreSort::Memory;
+	case CoreExternType::Kind::Global: return CoreSort::Global;
+	case CoreExternType::Kind::Tag: return CoreSort::Tag;
+	}
+	return CoreSort::Func;
+}
+
+std::vector<TypeId> coreModuleTypeIds(const CoreTypeDef& type)
+{
+	std::vector<TypeId> ids;
+	for (const CoreModuleDecl& decl : type.moduleDecls) {
+		if (decl.kind == CoreModuleDecl::Kind::Type)
+			ids.insert(ids.end(), decl.type.typeIds.begin(),
+					decl.type.typeIds.end());
+		else if (decl.kind == CoreModuleDecl::Kind::Alias)
+			ids.push_back(TypeId{TypeId::kNone});
+	}
+	return ids;
+}
+
+CoreDeclEntry coreDeclEntry(const CoreExternType& type, TypeId id)
+{
+	CoreDeclEntry entry;
+	entry.type = type;
+	entry.id = id;
+	return entry;
+}
+
+void coreModuleTypeDecls(const CoreTypeDef& type, CoreImportTypeMap& imports,
+		CoreExportTypeMap& exports)
+{
+	const std::vector<TypeId> ids = coreModuleTypeIds(type);
+	for (const CoreModuleDecl& decl : type.moduleDecls) {
+		if (decl.kind == CoreModuleDecl::Kind::Import) {
+			const TypeId id = decl.import.type.typeIndex < ids.size()
+					? ids[decl.import.type.typeIndex] : TypeId{TypeId::kNone};
+			imports.emplace(std::make_pair(decl.import.module, decl.import.name),
+					coreDeclEntry(decl.import.type, id));
+		} else if (decl.kind == CoreModuleDecl::Kind::Export) {
+			const TypeId id = decl.exportDecl.type.typeIndex < ids.size()
+					? ids[decl.exportDecl.type.typeIndex] : TypeId{TypeId::kNone};
+			exports.emplace(decl.exportDecl.name,
+					coreDeclEntry(decl.exportDecl.type, id));
+		}
+	}
+}
+
+CoreDeclEntry concreteImportEntry(const CoreExternType& type,
+		const Module& module)
+{
+	return coreDeclEntry(type, type.typeIndex < module.typeIds.size()
+			? module.typeIds[type.typeIndex] : TypeId{TypeId::kNone});
+}
+
+CoreImportTypeMap concreteModuleImports(const Module& module)
+{
+	CoreImportTypeMap out;
+	for (const ImportFunction& import : module.importFunctions) {
+		CoreExternType type;
+		type.kind = CoreExternType::Kind::Function;
+		type.typeIndex = import.typeIdx;
+		out.emplace(std::make_pair(import.moduleName, import.fieldName),
+				concreteImportEntry(type, module));
+	}
+	for (const ImportTable& import : module.importTables) {
+		CoreExternType type;
+		type.kind = CoreExternType::Kind::Table;
+		type.table = import.table;
+		out.emplace(std::make_pair(import.moduleName, import.fieldName),
+				coreDeclEntry(type, TypeId{TypeId::kNone}));
+	}
+	for (const ImportMemory& import : module.importMemories) {
+		CoreExternType type;
+		type.kind = CoreExternType::Kind::Memory;
+		type.memory = import.memory;
+		out.emplace(std::make_pair(import.moduleName, import.fieldName),
+				coreDeclEntry(type, TypeId{TypeId::kNone}));
+	}
+	for (const ImportGlobal& import : module.importGlobals) {
+		CoreExternType type;
+		type.kind = CoreExternType::Kind::Global;
+		type.global = import.global;
+		out.emplace(std::make_pair(import.moduleName, import.fieldName),
+				coreDeclEntry(type, TypeId{TypeId::kNone}));
+	}
+	for (const ImportTag& import : module.importTags) {
+		CoreExternType type;
+		type.kind = CoreExternType::Kind::Tag;
+		type.typeIndex = import.typeIdx;
+		type.tagAttribute = 0;
+		out.emplace(std::make_pair(import.moduleName, import.fieldName),
+				concreteImportEntry(type, module));
+	}
+	return out;
+}
+
+CoreDeclEntry coreExportEntry(const CoreExportInfo& info)
+{
+	CoreDeclEntry entry;
+	if (!info.sort.core) {
+		entry.type.kind = CoreExternType::Kind::Function;
+		entry.id = info.funcTypeId;
+		return entry;
+	}
+	switch (info.sort.core->sort) {
+	case CoreSort::Func:
+		entry.type.kind = CoreExternType::Kind::Function;
+		entry.id = info.funcTypeId;
+		break;
+	case CoreSort::Table:
+		entry.type.kind = CoreExternType::Kind::Table;
+		entry.type.table = info.table;
+		break;
+	case CoreSort::Memory:
+		entry.type.kind = CoreExternType::Kind::Memory;
+		entry.type.memory = info.memory;
+		break;
+	case CoreSort::Global:
+		entry.type.kind = CoreExternType::Kind::Global;
+		entry.type.global = info.global;
+		break;
+	case CoreSort::Tag:
+		entry.type.kind = CoreExternType::Kind::Tag;
+		entry.id = info.tagTypeId;
+		break;
+	default:
+		entry.type.kind = CoreExternType::Kind::Function;
+		entry.id = info.funcTypeId;
+		break;
+	}
+	return entry;
+}
+
+CoreExportTypeMap concreteModuleExportTypes(const CoreExportMap& exports)
+{
+	CoreExportTypeMap out;
+	for (const auto& [name, info] : exports)
+		out.emplace(name, coreExportEntry(info));
+	return out;
 }
 
 bool containsAbstractResource(const ValuePtr& value);
@@ -1322,6 +1534,97 @@ void validateBagResourceNames(const TypePtr& type,
 	}
 }
 
+// CM15: an instance type is a scheme over the abstract resources it declares.
+// Every use of it as a value (an import, an export, or a nested instance-type
+// export) instantiates those resources freshly, so two imports of the same
+// instance type do not share an identity (resources.wast:12885/13424).
+void collectAbstractResources(const ValuePtr& value,
+		std::map<uint32_t, TypePtr>& out, unsigned depth = 0);
+
+void collectAbstractResources(const TypePtr& type,
+		std::map<uint32_t, TypePtr>& out, unsigned depth = 0)
+{
+	if (!type || depth > 64)
+		return;
+	switch (type->kind) {
+	case ResolvedType::Kind::Value:
+		collectAbstractResources(type->value, out, depth + 1);
+		break;
+	case ResolvedType::Kind::Func:
+		for (const auto& [name, value] : type->func->params)
+			collectAbstractResources(value, out, depth + 1);
+		if (type->func->result)
+			collectAbstractResources(*type->func->result, out, depth + 1);
+		break;
+	case ResolvedType::Kind::Resource:
+		if (type->resource->abstract)
+			out.emplace(type->resource->id, type);
+		break;
+	case ResolvedType::Kind::Instance:
+		for (const ResolvedDecl& declaration : type->instance->exports)
+			collectAbstractResources(declaration.type, out, depth + 1);
+		break;
+	case ResolvedType::Kind::Component:
+		for (const ResolvedDecl& declaration : type->component->imports)
+			collectAbstractResources(declaration.type, out, depth + 1);
+		for (const ResolvedDecl& declaration : type->component->exports)
+			collectAbstractResources(declaration.type, out, depth + 1);
+		break;
+	}
+}
+
+void collectAbstractResources(const ValuePtr& value,
+		std::map<uint32_t, TypePtr>& out, unsigned depth)
+{
+	if (!value || depth > 64)
+		return;
+	switch (value->kind) {
+	case ResolvedValueType::Kind::Own:
+	case ResolvedValueType::Kind::Borrow:
+		if (value->resourceAbstract && value->resourceId && value->resourceType)
+			out.emplace(*value->resourceId, value->resourceType);
+		break;
+	case ResolvedValueType::Kind::Record:
+		for (const auto& field : value->fields)
+			collectAbstractResources(field.second, out, depth + 1);
+		break;
+	case ResolvedValueType::Kind::Variant:
+		for (const ResolvedCase& item : value->cases)
+			if (item.type)
+				collectAbstractResources(*item.type, out, depth + 1);
+		break;
+	case ResolvedValueType::Kind::List:
+	case ResolvedValueType::Kind::FixedList:
+	case ResolvedValueType::Kind::Option:
+		collectAbstractResources(value->element, out, depth + 1);
+		break;
+	case ResolvedValueType::Kind::Tuple:
+		for (const ValuePtr& element : value->tuple)
+			collectAbstractResources(element, out, depth + 1);
+		break;
+	case ResolvedValueType::Kind::Result:
+		if (value->ok)
+			collectAbstractResources(*value->ok, out, depth + 1);
+		if (value->error)
+			collectAbstractResources(*value->error, out, depth + 1);
+		break;
+	case ResolvedValueType::Kind::Stream:
+		if (value->streamElement)
+			collectAbstractResources(*value->streamElement, out, depth + 1);
+		break;
+	case ResolvedValueType::Kind::Future:
+		if (value->futureElement)
+			collectAbstractResources(*value->futureElement, out, depth + 1);
+		break;
+	case ResolvedValueType::Kind::Map:
+		collectAbstractResources(value->mapKey, out, depth + 1);
+		collectAbstractResources(value->mapValue, out, depth + 1);
+		break;
+	default:
+		break;
+	}
+}
+
 class ComponentValidator {
 public:
 	ComponentValidator(const Component& component, const TypeScope* parent,
@@ -1400,10 +1703,12 @@ private:
 	void appendSchemeDeclarations(std::string& key,
 			const std::vector<ResolvedDecl>& declarations,
 			std::map<uint32_t, uint32_t>& parameters) const;
-	bool isExternallyVisible(const ResolvedType* type, bool isImport) const;
+	bool isExternallyVisible(const ResolvedType* type, bool isImport,
+			const VisibilityScope& local = {}) const;
 	void validateExternalVisibility(const TypePtr& type, bool isImport,
-			const ResolvedType* root);
-	void validateExternalValueVisibility(const ValuePtr& value, bool isImport);
+			const ResolvedType* root, const VisibilityScope& local = {});
+	void validateExternalValueVisibility(const ValuePtr& value, bool isImport,
+			const VisibilityScope& local = {});
 	std::vector<ComponentDeclRecord> canonicalDeclarations(
 			const std::vector<ResolvedDecl>& declarations);
 	ValuePtr substituteValue(const ValuePtr& value,
@@ -1421,6 +1726,7 @@ private:
 			ValidationScope& scope);
 	ResolvedDecl resolveExternType(const ExternType& type,
 			ValidationScope& scope);
+	TypePtr instantiateInstanceType(const TypePtr& type);
 	void addImportOrExport(const ResolvedDecl& declaration,
 			ValidationScope& scope, bool isImport,
 			const ComponentDefinitionRef& ref);
@@ -1442,6 +1748,7 @@ private:
 			const std::vector<TypeId>& coreTypes,
 			const char* what);
 	CoreExportMap buildCoreExports(const Module& module) const;
+	bool coreModuleConforms(const Module& module, const CoreTypeDef& type) const;
 	Entity coreEntityFromInfo(const CoreExportInfo& info) const;
 	void instantiateComponent(const ComponentInstance& instance,
 			ComponentDefinitionRef ref);
@@ -1562,6 +1869,22 @@ void ComponentValidator::validateCanonicalAbi()
 		switch (canon.kind) {
 		case Canon::Kind::Lift:
 		case Canon::Kind::Lower: {
+			// CM15: a function type that mentions an abstract resource is an
+			// open *scheme*, not a closed Store identity. There is no ABI
+			// signature to look up, but every value shape it contains is
+			// flattenable (handles are i32), so the shape has already been
+			// validated; do not demand a closed identity.
+			const TypePtr openType = canon.kind == Canon::Kind::Lift
+					? resolveTypeIndex(canon.typeIndex, scope_,
+							ResolvedType::Kind::Func, "function type")
+					: [&]() -> TypePtr {
+						const Entity* entity = scope_.spaces.require(
+								ComponentSort::Func, canon.funcIndex,
+								"canon lower function");
+						return entity ? entity->type : TypePtr{};
+					}();
+			if (openType && containsAbstractResource(openType))
+				break;
 			const TypeId type = canonicalTypeOf(canon);
 			if (type.isNone())
 				fail("canon lift/lower type has no closed identity");
@@ -2090,6 +2413,33 @@ std::vector<ResolvedDecl> ComponentValidator::substituteDeclarations(
 	return out;
 }
 
+TypePtr ComponentValidator::instantiateInstanceType(const TypePtr& type)
+{
+	if (!type || type->kind != ResolvedType::Kind::Instance)
+		return type;
+	std::map<uint32_t, TypePtr> abstractResources;
+	collectAbstractResources(type, abstractResources);
+	if (abstractResources.empty())
+		return type;
+	std::map<uint32_t, TypePtr> substitutions;
+	for (const auto& [id, original] : abstractResources) {
+		if (!original || original->kind != ResolvedType::Kind::Resource)
+			continue;
+		auto resource = std::make_shared<ResolvedResourceType>(
+				*original->resource);
+		resource->id = state_.nextResourceId++;
+		resource->abstract = true;
+		const TypePtr fresh = makeType(resource);
+		ComponentResourcePayload payload;
+		payload.rep.opcode = ValueTypeCode::I32;
+		payload.rep.heapType = 0;
+		payload.abstract = true;
+		fresh->typeId = store_.types().store().addComponentResource(payload);
+		substitutions.emplace(id, fresh);
+	}
+	return substituteType(type, substitutions);
+}
+
 void ComponentValidator::appendSchemeValue(std::string& key,
 		const ValuePtr& value,
 		std::map<uint32_t, uint32_t>& parameters) const
@@ -2248,69 +2598,73 @@ SchemeId ComponentValidator::internScheme(const TypePtr& type)
 }
 
 bool ComponentValidator::isExternallyVisible(const ResolvedType* type,
-		bool isImport) const
+		bool isImport, const VisibilityScope& local) const
 {
 	if (!type)
 		return false;
+	if (local.imports && local.imports->count(type))
+		return true;
+	if (!isImport && local.exports && local.exports->count(type))
+		return true;
 	if (importVisibleTypes_.count(type))
 		return true;
 	return !isImport && exportVisibleTypes_.count(type);
 }
 
 void ComponentValidator::validateExternalValueVisibility(const ValuePtr& value,
-		bool isImport)
+		bool isImport, const VisibilityScope& local)
 {
 	if (!value)
 		return;
 	switch (value->kind) {
 	case ResolvedValueType::Kind::Own:
 	case ResolvedValueType::Kind::Borrow:
-		if (!isExternallyVisible(value->resourceType.get(), isImport))
+		if (!isExternallyVisible(value->resourceType.get(), isImport, local))
 			fail("resource type used by an import/export has no external name");
 		break;
 	case ResolvedValueType::Kind::Record:
 	case ResolvedValueType::Kind::Variant:
 	case ResolvedValueType::Kind::Enum:
 	case ResolvedValueType::Kind::Flags:
-		if (!isExternallyVisible(value->owner, isImport))
+		if (!isExternallyVisible(value->owner, isImport, local))
 			fail("named structural type used by an import/export has no external name");
 		if (value->kind == ResolvedValueType::Kind::Record) {
 			for (const auto& field : value->fields)
-				validateExternalValueVisibility(field.second, isImport);
+				validateExternalValueVisibility(field.second, isImport, local);
 			break;
 		}
 		if (value->kind == ResolvedValueType::Kind::Variant) {
 			for (const ResolvedCase& item : value->cases)
 				if (item.type)
-					validateExternalValueVisibility(*item.type, isImport);
+					validateExternalValueVisibility(*item.type, isImport, local);
 		}
 		break;
 	case ResolvedValueType::Kind::List:
 	case ResolvedValueType::Kind::FixedList:
 	case ResolvedValueType::Kind::Option:
-		validateExternalValueVisibility(value->element, isImport);
+		validateExternalValueVisibility(value->element, isImport, local);
 		break;
 	case ResolvedValueType::Kind::Tuple:
 		for (const ValuePtr& element : value->tuple)
-			validateExternalValueVisibility(element, isImport);
+			validateExternalValueVisibility(element, isImport, local);
 		break;
 	case ResolvedValueType::Kind::Result:
 		if (value->ok)
-			validateExternalValueVisibility(*value->ok, isImport);
+			validateExternalValueVisibility(*value->ok, isImport, local);
 		if (value->error)
-			validateExternalValueVisibility(*value->error, isImport);
+			validateExternalValueVisibility(*value->error, isImport, local);
 		break;
 	case ResolvedValueType::Kind::Stream:
 		if (value->streamElement)
-			validateExternalValueVisibility(*value->streamElement, isImport);
+			validateExternalValueVisibility(*value->streamElement, isImport, local);
 		break;
 	case ResolvedValueType::Kind::Future:
 		if (value->futureElement)
-			validateExternalValueVisibility(*value->futureElement, isImport);
+			validateExternalValueVisibility(*value->futureElement, isImport, local);
 		break;
 	case ResolvedValueType::Kind::Map:
-		validateExternalValueVisibility(value->mapKey, isImport);
-		validateExternalValueVisibility(value->mapValue, isImport);
+		validateExternalValueVisibility(value->mapKey, isImport, local);
+		validateExternalValueVisibility(value->mapValue, isImport, local);
 		break;
 	default:
 		break;
@@ -2318,7 +2672,7 @@ void ComponentValidator::validateExternalValueVisibility(const ValuePtr& value,
 }
 
 void ComponentValidator::validateExternalVisibility(const TypePtr& type,
-		bool isImport, const ResolvedType* root)
+		bool isImport, const ResolvedType* root, const VisibilityScope& local)
 {
 	if (!type)
 		return;
@@ -2328,25 +2682,21 @@ void ComponentValidator::validateExternalVisibility(const TypePtr& type,
 		// not. Returning here exempted the whole closure, so `(export "t"
 		// (type $L))` never examined `$L`'s reference to the unexported `$Rec`
 		// — the entire `external-visibility` corpus batch.
-	switch (type->kind) {
+		switch (type->kind) {
 		case ResolvedType::Kind::Value:
-			validateExternalValueVisibility(type->value, isImport);
+			validateExternalValueVisibility(type->value, isImport, local);
 			break;
 		case ResolvedType::Kind::Func:
 			for (const auto& [name, value] : type->func->params)
-				validateExternalValueVisibility(value, isImport);
+				validateExternalValueVisibility(value, isImport, local);
 			if (type->func->result)
-				validateExternalValueVisibility(*type->func->result, isImport);
+				validateExternalValueVisibility(*type->func->result, isImport,
+						local);
 			break;
 		case ResolvedType::Kind::Instance:
-			for (const ResolvedDecl& declaration : type->instance->exports)
-				validateExternalVisibility(declaration.type, isImport, nullptr);
-			break;
 		case ResolvedType::Kind::Component:
-			for (const ResolvedDecl& declaration : type->component->imports)
-				validateExternalVisibility(declaration.type, isImport, nullptr);
-			for (const ResolvedDecl& declaration : type->component->exports)
-				validateExternalVisibility(declaration.type, isImport, nullptr);
+			// The nested declarations are validated in their own scope below
+			// and again when their type definition was built.
 			break;
 		case ResolvedType::Kind::Resource:
 			break; // the exported resource is the externally named type
@@ -2355,28 +2705,57 @@ void ComponentValidator::validateExternalVisibility(const TypePtr& type,
 	}
 	switch (type->kind) {
 	case ResolvedType::Kind::Value:
-		validateExternalValueVisibility(type->value, isImport);
+		validateExternalValueVisibility(type->value, isImport, local);
 		break;
 	case ResolvedType::Kind::Func:
 		for (const auto& [name, value] : type->func->params)
-			validateExternalValueVisibility(value, isImport);
+			validateExternalValueVisibility(value, isImport, local);
 		if (type->func->result)
-			validateExternalValueVisibility(*type->func->result, isImport);
+			validateExternalValueVisibility(*type->func->result, isImport, local);
 		break;
 	case ResolvedType::Kind::Resource:
-		if (!isExternallyVisible(type.get(), isImport))
+		if (!isExternallyVisible(type.get(), isImport, local))
 			fail("resource type used by an import/export has no external name");
 		break;
-	case ResolvedType::Kind::Instance:
+	case ResolvedType::Kind::Instance: {
+		// CM15: an instance type's exports introduce the names its own
+		// declarations may use. Those names do not leak to the outer component,
+		// which is why a bag carrying a function whose type names an enclosing
+		// record is still an invalid outer export.
+		std::set<const ResolvedType*> localExports;
 		for (const ResolvedDecl& declaration : type->instance->exports)
-			validateExternalVisibility(declaration.type, isImport, root);
+			if (declaration.sort.sort == ComponentSort::Type
+					&& declaration.type)
+				localExports.insert(declaration.type.get());
+		const VisibilityScope inner{nullptr, &localExports};
+		for (const ResolvedDecl& declaration : type->instance->exports)
+			validateExternalVisibility(declaration.type, false,
+					declaration.type.get(), inner);
 		break;
-	case ResolvedType::Kind::Component:
+	}
+	case ResolvedType::Kind::Component: {
+		// A component type keeps its directions: nested imports see only the
+		// type's imports, nested exports see both (Binary.md; 11911).
+		std::set<const ResolvedType*> localImports;
+		std::set<const ResolvedType*> localExports;
 		for (const ResolvedDecl& declaration : type->component->imports)
-			validateExternalVisibility(declaration.type, isImport, root);
+			if (declaration.sort.sort == ComponentSort::Type
+					&& declaration.type)
+				localImports.insert(declaration.type.get());
+		localExports = localImports;
 		for (const ResolvedDecl& declaration : type->component->exports)
-			validateExternalVisibility(declaration.type, isImport, root);
+			if (declaration.sort.sort == ComponentSort::Type
+					&& declaration.type)
+				localExports.insert(declaration.type.get());
+		const VisibilityScope inner{&localImports, &localExports};
+		for (const ResolvedDecl& declaration : type->component->imports)
+			validateExternalVisibility(declaration.type, true,
+					declaration.type.get(), inner);
+		for (const ResolvedDecl& declaration : type->component->exports)
+			validateExternalVisibility(declaration.type, false,
+					declaration.type.get(), inner);
 		break;
+	}
 	}
 }
 
@@ -3152,8 +3531,11 @@ ResolvedDecl ComponentValidator::resolveExternType(const ExternType& type,
 		break;
 	case ExternType::Kind::Instance:
 		declaration.sort = componentSortIndex(ComponentSort::Instance);
-		declaration.type = resolveTypeIndex(type.typeIndex, scope,
-				ResolvedType::Kind::Instance, "instance type");
+		// CM15: an instance type is a scheme; each use as a value instantiates
+		// its abstract resources freshly (see `instantiateInstanceType`).
+		declaration.type = instantiateInstanceType(resolveTypeIndex(
+				type.typeIndex, scope, ResolvedType::Kind::Instance,
+				"instance type"));
 		break;
 	}
 	return declaration;
@@ -3189,6 +3571,7 @@ void ComponentValidator::processComponentDecl(const ComponentDecl& declaration,
 		scope.typeScope.coreTypes.push_back(&declaration.coreType());
 		Entity entity;
 		entity.ref = ComponentDefinitionRef{&component_, ComponentDefinitionKind::CoreType, index};
+		entity.sort = coreSortIndex(CoreSort::Type);
 		entity.coreType = &declaration.coreType();
 		scope.spaces.coreTypes.push_back(std::move(entity));
 		break;
@@ -3216,6 +3599,7 @@ void ComponentValidator::processInstanceDecl(const InstanceDecl& declaration,
 		scope.typeScope.coreTypes.push_back(&declaration.coreType());
 		Entity entity;
 		entity.ref = ComponentDefinitionRef{&component_, ComponentDefinitionKind::CoreType, index};
+		entity.sort = coreSortIndex(CoreSort::Type);
 		entity.coreType = &declaration.coreType();
 		scope.spaces.coreTypes.push_back(std::move(entity));
 		break;
@@ -3266,6 +3650,13 @@ void ComponentValidator::processAlias(const Alias& alias, bool insideType,
 		if (!sameSort(exportDecl->sort, alias.sort))
 			fail("alias export sort does not match the exported definition");
 		entity.type = exportDecl->type;
+		// CM15: a core module exported by an instance (or a component instance)
+		// carries its type/definition metadata through the alias; without it the
+		// alias is "not a core module" when used as an instantiate target.
+		entity.coreModule = exportDecl->coreModuleValue;
+		entity.coreType = exportDecl->coreTypeValue;
+		entity.coreModuleType = exportDecl->coreModule;
+		entity.coreTypeIndex = exportDecl->coreTypeIndex;
 		break;
 	}
 	case Alias::Kind::CoreExport: {
@@ -3424,6 +3815,7 @@ void ComponentValidator::processCoreModule(uint32_t index)
 	Entity entity;
 	entity.ref = ComponentDefinitionRef{&component_,
 			ComponentDefinitionKind::CoreModule, index};
+	entity.sort = coreSortIndex(CoreSort::Module);
 	entity.coreModule = component_.coreModules[index].get();
 	entity.coreModuleType = true;
 	// CM14: a concrete core module may not import the same `module`/`field`
@@ -3462,6 +3854,7 @@ void ComponentValidator::processCoreType(uint32_t index)
 	Entity entity;
 	entity.ref = ComponentDefinitionRef{&component_,
 			ComponentDefinitionKind::CoreType, index};
+	entity.sort = coreSortIndex(CoreSort::Type);
 	entity.coreType = &definition;
 	entity.coreTypeIndex = coreTypeIndex;
 	scope_.spaces.coreTypes.push_back(std::move(entity));
@@ -3487,6 +3880,7 @@ void ComponentValidator::processValue(uint32_t index)
 	Entity entity;
 	entity.ref = ComponentDefinitionRef{&component_,
 			ComponentDefinitionKind::Value, index};
+	entity.sort = componentSortIndex(ComponentSort::Value);
 	entity.type = type;
 	scope_.spaces.values.push_back(std::move(entity));
 }
@@ -3589,6 +3983,7 @@ void ComponentValidator::processComponent(uint32_t index)
 	Entity entity;
 	entity.ref = ComponentDefinitionRef{&component_,
 			ComponentDefinitionKind::Component, index};
+	entity.sort = componentSortIndex(ComponentSort::Component);
 	entity.nestedComponent = &nested;
 	entity.type = makeType(validator.signature());
 	scope_.spaces.components.push_back(std::move(entity));
@@ -3689,6 +4084,39 @@ CoreExportMap ComponentValidator::buildCoreExports(const Module& module) const
 	return exports;
 }
 
+bool ComponentValidator::coreModuleConforms(const Module& module,
+		const CoreTypeDef& type) const
+{
+	CoreImportTypeMap declaredImports;
+	CoreExportTypeMap declaredExports;
+	coreModuleTypeDecls(type, declaredImports, declaredExports);
+	// Contravariant imports: every import the concrete module has must be
+	// declared, and the declared (provided) type must be a subtype of what the
+	// module expects. A declared import the module does not use is ignored.
+	const CoreImportTypeMap actualImports = concreteModuleImports(module);
+	for (const auto& [key, actual] : actualImports) {
+		const auto found = declaredImports.find(key);
+		if (found == declaredImports.end())
+			return false;
+		if (!coreExternTypeSubtype(found->second.type, found->second.id,
+				actual.type, actual.id))
+			return false;
+	}
+	// Covariant exports: every declared export must be present, and the
+	// module's export must be a subtype of the declared one.
+	const CoreExportTypeMap actualExports =
+			concreteModuleExportTypes(buildCoreExports(module));
+	for (const auto& [name, declared] : declaredExports) {
+		const auto found = actualExports.find(name);
+		if (found == actualExports.end())
+			return false;
+		if (!coreExternTypeSubtype(found->second.type, found->second.id,
+				declared.type, declared.id))
+			return false;
+	}
+	return true;
+}
+
 Entity ComponentValidator::coreEntityFromInfo(const CoreExportInfo& info) const
 {
 	Entity entity;
@@ -3713,12 +4141,79 @@ void ComponentValidator::processCoreInstance(uint32_t index)
 	Entity entity;
 	entity.ref = ComponentDefinitionRef{&component_,
 			ComponentDefinitionKind::CoreInstance, index};
+	entity.sort = coreSortIndex(CoreSort::Instance);
 
 	if (instance.kind == CoreInstance::Kind::Instantiate) {
 		const Entity* moduleEntity = scope_.spaces.require(CoreSort::Module,
 				instance.moduleIndex, "core instantiate module");
-		if (!moduleEntity->coreModule)
-			fail("core instantiate target is not a concrete module");
+		if (!moduleEntity->coreModule) {
+			if (!moduleEntity->coreType
+					|| moduleEntity->coreType->kind
+							!= CoreTypeDef::Kind::ModuleType)
+				fail("core instantiate target is not a concrete module");
+			// CM15: a module *type* is a valid instantiate target when the
+			// module value comes from an import or an export alias. Validate the
+			// supplied core instances against its imported declarations and
+			// synthesize the export map from its exported declarations.
+			CoreImportTypeMap declaredImports;
+			CoreExportTypeMap declaredExports;
+			coreModuleTypeDecls(*moduleEntity->coreType, declaredImports,
+					declaredExports);
+			std::map<std::string, uint32_t> args;
+			for (const CoreInstantiateArg& arg : instance.args) {
+				if (!args.emplace(arg.name, arg.instanceIndex).second)
+					fail("duplicate core instantiate argument `" + arg.name + "`");
+				scope_.spaces.require(CoreSort::Instance, arg.instanceIndex,
+						"core instantiate argument");
+			}
+			for (const auto& [key, declared] : declaredImports) {
+				const auto arg = args.find(key.first);
+				if (arg == args.end())
+					fail("core instantiate is missing argument for module `" +
+							key.first + "`");
+				const Entity* instanceEntity = scope_.spaces.require(
+						CoreSort::Instance, arg->second,
+						"core instantiate argument");
+				if (!instanceEntity->coreExports)
+					fail("core instantiate argument has no exports");
+				const auto field = instanceEntity->coreExports->find(key.second);
+				if (field == instanceEntity->coreExports->end())
+					fail("core instantiate argument does not export `" +
+							key.second + "`");
+				const CoreDeclEntry provided = coreExportEntry(field->second);
+				if (!coreExternTypeSubtype(provided.type, provided.id,
+						declared.type, declared.id))
+					fail("core instantiate argument has an incompatible `" +
+							key.second + "` type");
+			}
+			for (const auto& arg : args) {
+				bool known = false;
+				for (const auto& [key, value] : declaredImports)
+					if (key.first == arg.first) {
+						known = true;
+						break;
+					}
+				if (!known)
+					fail("unknown core instantiate argument `" + arg.first + "`");
+			}
+			auto exports = std::make_shared<CoreExportMap>();
+			for (const auto& [name, declared] : declaredExports) {
+				CoreExportInfo info;
+				info.sort = coreSortIndex(coreSortOfExtern(declared.type.kind));
+				info.table = declared.type.table;
+				info.memory = declared.type.memory;
+				info.global = declared.type.global;
+				if (declared.type.kind == CoreExternType::Kind::Function)
+					info.funcTypeId = declared.id;
+				if (declared.type.kind == CoreExternType::Kind::Tag)
+					info.tagTypeId = declared.id;
+				exports->emplace(name, std::move(info));
+			}
+			entity.coreExports = exports;
+			entity.coreModuleType = true;
+			scope_.spaces.coreInstances.push_back(std::move(entity));
+			return;
+		}
 		const Module& module = *moduleEntity->coreModule;
 
 		std::map<std::string, uint32_t> args;
@@ -3841,6 +4336,7 @@ void ComponentValidator::instantiateComponent(const ComponentInstance& instance,
 {
 	Entity entity;
 	entity.ref = ref;
+	entity.sort = componentSortIndex(ComponentSort::Instance);
 	auto instanceType = std::make_shared<ResolvedInstanceType>();
 
 	if (instance.kind == ComponentInstance::Kind::Instantiate) {
@@ -3886,13 +4382,24 @@ void ComponentValidator::instantiateComponent(const ComponentInstance& instance,
 						"` has the wrong sort");
 			if (import.sort.sort == ComponentSort::Core
 					&& import.sort.core->sort == CoreSort::Module) {
-				if (!actual->coreModuleType)
+				if (!actual->coreModule && !actual->coreType)
 					fail("component instantiate argument is not a core module");
-				if (!import.coreTypeValue || !actual->coreType
-						|| !coreModuleTypeEqual(*import.coreTypeValue,
-								*actual->coreType))
+				if (!import.coreTypeValue)
 					fail("component instantiate argument `" + import.name.name +
 							"` has an incompatible core module type");
+				// CM15: a concrete module is checked by core subtyping against
+				// the declared module type (not equality); a module-typed value is
+				// compared structurally.
+				if (actual->coreModule) {
+					if (!coreModuleConforms(*actual->coreModule,
+							*import.coreTypeValue))
+						fail("component instantiate argument `" + import.name.name +
+								"` has an incompatible core module type");
+				} else if (!coreModuleTypeEqual(*import.coreTypeValue,
+						*actual->coreType)) {
+					fail("component instantiate argument `" + import.name.name +
+							"` has an incompatible core module type");
+				}
 			} else {
 				// CM14: the imports of the callee are a *type scheme*; a function
 				// argument only matches once the abstract resources already bound
@@ -3933,16 +4440,9 @@ void ComponentValidator::instantiateComponent(const ComponentInstance& instance,
 				}
 			}
 		}
-		for (const auto& arg : args) {
-			bool known = false;
-			for (const ResolvedDecl& import : signature.imports)
-				if (import.name.name == arg.first) {
-					known = true;
-					break;
-				}
-			if (!known)
-				fail("unknown component instantiate argument `" + arg.first + "`");
-		}
+		// CM15: superfluous arguments are ignored and argument names are
+		// uninterpreted (not even kebab-case checked); only the imports of the
+		// callee drive the checks (Binary.md, instantiation.wast).
 
 		instanceType->exports = substituteDeclarations(signature.exports,
 				substitutions);
@@ -4172,16 +4672,19 @@ void ComponentValidator::validateCanon(const Canon& canon)
 	case Canon::Kind::ResourceRep: {
 		const TypePtr resource = resolveTypeIndex(canon.typeIndex, scope_,
 				ResolvedType::Kind::Resource, "resource type");
-		// CM14: a canon resource builtin needs a *concrete* resource. `(sub
+		// CM14: `resource.new`/`resource.rep` need a *concrete* resource. `(sub
 		// resource)` has no representation (the corpus: “not a local resource”),
 		// while a resource aliased from a nested component’s export and one
-		// defined beside the builtin are both concrete and legal.
-		if (!resource || !resource->resource || resource->resource->abstract)
+		// defined beside the builtin are both concrete and legal. `drop` only
+		// needs the handle table, so an abstract aliased export may still be
+		// dropped (CM15, resources.wast “though it can still be dropped”).
+		if (canon.kind != Canon::Kind::ResourceDrop
+				&& (!resource || !resource->resource
+						|| resource->resource->abstract))
 			fail("canonical resource builtin requires a concrete resource");
 		// CM14: `resource.new`/`resource.rep` additionally need the resource to
 		// be *local* — defined here, or threaded back through an instantiation
-		// argument. `resource.drop` only needs the representation, so a resource
-		// aliased from a child instance may still be dropped (resources.wast).
+		// argument.
 		if (canon.kind != Canon::Kind::ResourceDrop
 				&& localResources_.count(resource->resource->id) == 0)
 			fail("canonical resource builtin requires a local resource");
@@ -4443,8 +4946,12 @@ bool ComponentValidator::typeEqual(const TypePtr& left,
 			if (static_cast<bool>(declaration.type)
 					!= static_cast<bool>(other->type))
 				return false;
+			// CM15: abstract resources nested in an instance/component *type* are
+			// that type's parameters, so alpha-equivalence applies to them even on
+			// the `exact` instantiation path (resources.wast:26864). Only the
+			// callee's substituted resources are nominal.
 			if (declaration.type
-					&& !typeEqual(declaration.type, other->type, exact))
+					&& !typeEqual(declaration.type, other->type, false))
 				return false;
 		}
 		return true;
@@ -4466,7 +4973,7 @@ bool ComponentValidator::typeEqual(const TypePtr& left,
 						!= static_cast<bool>(other->type))
 					return false;
 				if (declaration.type
-						&& !typeEqual(declaration.type, other->type, exact))
+						&& !typeEqual(declaration.type, other->type, false))
 					return false;
 			}
 			return true;
@@ -4491,9 +4998,10 @@ bool ComponentValidator::typeSubtype(const TypePtr& actual,
 					actual->instance->exports, expectedExport.name.name);
 			if (!actualExport || !sameSort(actualExport->sort, expectedExport.sort))
 				return false;
+			// CM15: nested abstract resources are type parameters here too.
 			if (expectedExport.type && (!actualExport->type
 					|| !typeSubtype(actualExport->type, expectedExport.type,
-							exact)))
+							false)))
 				return false;
 		}
 		return true;
@@ -4506,7 +5014,7 @@ bool ComponentValidator::typeSubtype(const TypePtr& actual,
 				return false;
 			if (expectedImport.type && (!actualImport->type
 					|| !typeEqual(actualImport->type, expectedImport.type,
-							exact)))
+							false)))
 				return false;
 		}
 		for (const ResolvedDecl& expectedExport : expected->component->exports) {
@@ -4516,7 +5024,7 @@ bool ComponentValidator::typeSubtype(const TypePtr& actual,
 				return false;
 			if (expectedExport.type && (!actualExport->type
 					|| !typeSubtype(actualExport->type, expectedExport.type,
-							exact)))
+							false)))
 				return false;
 		}
 		return true;
@@ -4691,8 +5199,20 @@ void ComponentValidator::validateCoreTypeDef(const CoreTypeDef& definition,
 			validateRec(declaration.type, localSlots, localIds, "core module type");
 			break;
 		case CoreModuleDecl::Kind::Alias: {
+			// CM15: a module type has its own type index space (level 0).
+			// `outer 0` names one of this module type's declared types; `outer
+			// n` (n >= 1) leaves the module type first, so it walks n-1 enclosing
+			// component scopes. The old loop walked n component scopes, which
+			// rejected the valid `outer 1` in binary.wast:43061.
+			if (declaration.alias.count == 0) {
+				if (declaration.alias.index >= localIds.size())
+					fail("core module type alias index out of bounds");
+				localSlots.push_back(nullptr);
+				localIds.push_back(localIds[declaration.alias.index]);
+				break;
+			}
 			const TypeScope* target = &scope.typeScope;
-			for (uint32_t i = 0; i < declaration.alias.count; ++i) {
+			for (uint32_t i = 1; i < declaration.alias.count; ++i) {
 				if (!target->parent)
 					fail("core module type alias count exceeds the enclosing scope chain");
 				target = target->parent;
@@ -4700,6 +5220,10 @@ void ComponentValidator::validateCoreTypeDef(const CoreTypeDef& definition,
 			if (declaration.alias.index >= target->coreTypes.size())
 				fail("core module type alias index out of bounds");
 			const CoreTypeDef* aliased = target->coreTypes[declaration.alias.index];
+			// Binary.md: a module type may not define or alias another module
+			// type.
+			if (aliased && aliased->kind == CoreTypeDef::Kind::ModuleType)
+				fail("core module type alias cannot name a module type");
 			if (aliased && aliased->kind == CoreTypeDef::Kind::RecType) {
 				for (TypeId id : aliased->recType.typeIds) {
 					localSlots.push_back(nullptr);

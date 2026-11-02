@@ -94,11 +94,12 @@ TEST_CASE("component corpus: the reference suite's verdict, checked against ours
 
 	std::size_t checked = 0;
 	std::size_t disagreements = 0;
-	// CM14: accepting what the corpus rejects is the unsafe direction — it lets a
-	// definition reach the runtime in a state the engine was not built for — so
-	// that direction is a hard failure. Over-rejection (the accept side, CM15) is
-	// loud but safe and stays a WARN until that list is worked off.
+	// CM14/CM15: the corpus is green in both directions, so both are hard
+	// failures now. Over-acceptance is the unsafe direction (a definition reaches
+	// the runtime in a state the engine was not built for); over-rejection
+	// narrows the accepted language. The WARN lines still name every case.
 	std::size_t acceptedRejects = 0;
+	std::size_t rejectedAccepts = 0;
 	for (const CorpusCase& testCase : cases) {
 		if (knownFailures.count(testCase.origin) != 0)
 			continue;
@@ -109,10 +110,8 @@ TEST_CASE("component corpus: the reference suite's verdict, checked against ours
 		WASM::Store store;
 		Euph::Io::ConstBufferDevice device(bytes);
 
-		// The accept side is reported, never silently accepted: the corpus is a
-		// reference we are adopting incrementally, so those WARN lines *are* the
-		// remaining gap list (docs/proposals/COMPONENT_MODEL.md CM15). The reject
-		// side is gated below (CM14).
+		// Both directions are gated below (CM14/CM15); the WARN lines still name
+		// every disagreement, which makes a failure point straight at the case.
 		bool accepted = false;
 		std::string rejected;
 		try {
@@ -124,6 +123,7 @@ TEST_CASE("component corpus: the reference suite's verdict, checked against ours
 			rejected = error.what();
 		}
 		if (testCase.verdict == "accept" && !accepted) {
+			++rejectedAccepts;
 			++disagreements;
 			WARN("corpus says accept, we reject: " << testCase.origin << ": " << rejected);
 		} else if (testCase.verdict == "reject" && accepted) {
@@ -134,5 +134,6 @@ TEST_CASE("component corpus: the reference suite's verdict, checked against ours
 	}
 	REQUIRE(checked > 0);
 	REQUIRE(acceptedRejects == 0);
+	REQUIRE(rejectedAccepts == 0);
 	INFO("corpus disagreements reported as warnings: " << disagreements);
 }

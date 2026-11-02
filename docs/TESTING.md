@@ -1202,13 +1202,12 @@ form through `wasm-tools parse` (which *does* understand components), and emits
 `accept | reject | skip`, the origin (`file:offset`) and, for a skip, the reason.
 A form `wasm-tools` itself refuses becomes a `skip`, never a build failure.
 2. **CM-9b — `Test/ComponentCorpusTests.cpp` (`[component-corpus]`).** Loads each
-artifact and compares our validator's verdict with the corpus's. An
-over-rejection is a `WARN` naming its origin, so those warnings *are* the
-accept-side gap list (`CM15`); a curated entry in
-`Test/component_known_failures.txt` removes one from the run. Over-acceptance
-(accepting what the corpus rejects) is a **hard failure** since `CM14`: it is
-the unsafe direction, so `REQUIRE(acceptedRejects == 0)` keeps that list at
-zero.
+artifact and compares our validator's verdict with the corpus's. The corpus is
+green in both directions since `CM15`, so **either** disagreement is a hard
+failure (`REQUIRE(acceptedRejects == 0)` and `REQUIRE(rejectedAccepts == 0)`);
+the `WARN`s still name every case. A curated entry in
+`Test/component_known_failures.txt` removes one from the run while a gap is
+being worked off (empty today).
 
 Useful commands:
 
