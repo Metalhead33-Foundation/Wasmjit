@@ -13,12 +13,14 @@
 
 WASMJIT_VISIBLE_BEGIN
 #include "WasmMemory.hpp"
+#include "WasmValue.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <deque>
 #include <functional>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -205,6 +207,15 @@ public:
 	void resolve() { state_ = ComponentTaskState::Resolved; }
 	/** \brief Marks this task as cancelled. */
 	void cancel() { state_ = ComponentTaskState::Cancelled; }
+	/** \brief Tests whether `task.return` resolved this task. \return true when the task is resolved. */
+	bool resolved() const { return state_ == ComponentTaskState::Resolved; }
+	/** \brief Stores the flat results passed to `task.return`. \param results Flat core results. */
+	void setResults(std::span<const WASM::Value> results)
+	{
+		results_.assign(results.begin(), results.end());
+	}
+	/** \brief Returns the flat results passed to `task.return`. \return Const reference to the stored results. */
+	const std::vector<WASM::Value>& results() const { return results_; }
 private:
 	//! The task's runtime handle.
 	uint32_t id_ = 0;
@@ -212,6 +223,7 @@ private:
 	uint32_t backpressure_ = 0; //!< Caller-declared limit on outstanding work.
 	bool cancellationRequested_ = false; //!< Set by `task.cancel`, read by the task body.
 	std::unordered_map<uint32_t, ComponentContextSlot> context_; //!< Context slots this task can reach.
+	std::vector<WASM::Value> results_; //!< Flat results stored by `task.return`.
 };
 
 //! A waitable is anything that can produce a ComponentAsyncEvent and join one
@@ -843,10 +855,60 @@ public:
 	}
 
 	//! \par Tasks, context and backpressure
+	/** \brief Maximum live tasks, including the root activation; a hard bound against unbounded re-entry. */
+	static constexpr uint32_t kMaxLiveTasks = 4096;
+
 	/** \brief Returns the current task activation. \return Mutable reference to the current task. */
 	ComponentTask& currentTask() { return *currentTask_; }
+	/** \brief Resolves the current task and stores the flat results. \param results Flat core results. */
+	void taskReturn(std::span<const WASM::Value> results)
+	{
+		currentTask_->setResults(results);
+		currentTask_->resolve();
+	}
 	/** \brief Resolves the current task. \return Canonical ABI success value (zero). */
 	uint32_t taskReturn() { currentTask_->resolve(); return 0; }
+	//! Enters a new task activation, saving the caller's. The new task is
+	//! resolved by `task.return`; `endTask` returns its flat results.
+	/** \brief Begins a nested task activation. \return Mutable reference to the new current task. \throws std::runtime_error when the live-task bound is exceeded. */
+	ComponentTask& beginTask()
+	{
+		if (taskStack_.size() + 1 >= kMaxLiveTasks)
+			throw std::runtime_error(
+					"component async: live-task limit exceeded");
+		taskStack_.push_back(std::move(currentTask_));
+		currentTask_ = std::make_unique<ComponentTask>(nextTaskId_++);
+		return *currentTask_;
+	}
+	/** \brief Ends the current task activation and restores the caller. \return Flat results stored by `task.return`. \throws std::runtime_error when no nested task is active or the task did not resolve. */
+	std::vector<WASM::Value> endTask()
+	{
+		if (taskStack_.empty())
+			throw std::runtime_error(
+					"component async: endTask without a matching beginTask");
+		if (!currentTask_->resolved())
+			throw std::runtime_error(
+					"component async: task ended without task.return");
+		std::vector<WASM::Value> results = currentTask_->results();
+		currentTask_ = std::move(taskStack_.back());
+		taskStack_.pop_back();
+		return results;
+	}
+	/** \brief Discards the current activation after a failure and restores the caller. */
+	void abortTask()
+	{
+		if (taskStack_.empty())
+			return;
+		currentTask_ = std::move(taskStack_.back());
+		taskStack_.pop_back();
+	}
+	/** \brief Installs a different executor (a mock, or a future multi-agent one). \param executor New executor; must not be null. */
+	void setExecutor(std::unique_ptr<ComponentExecutor> executor)
+	{
+		if (!executor)
+			throw std::runtime_error("component async: null executor");
+		executor_ = std::move(executor);
+	}
 	/** \brief Cancels the current task after a cancellation request. \return Canonical ABI success value (zero). \throws std::runtime_error if cancellation was not requested. */
 	uint32_t taskCancel()
 	{
@@ -930,7 +992,7 @@ public:
 	}
 
 	/** \brief Returns the executor used by this async state. \return Mutable reference to the executor. */
-	ComponentExecutor& executor() { return executor_; }
+	ComponentExecutor& executor() { return *executor_; }
 
 	/** \brief Looks up an endpoint without throwing. \param handle Endpoint handle. \return Endpoint pointer, or nullptr when absent. */
 	ComponentAsyncEndpoint* endpointOrNull(uint32_t handle)
@@ -1076,9 +1138,12 @@ private:
 
 	HandleAllocator allocate_; //!< Allocates a handle in the shared resource index space.
 	HandleReleaser release_; //!< Releases a handle from that index space.
-	SingleAgentExecutor executor_; //!< Runs task bodies on the calling agent.
+	std::unique_ptr<ComponentExecutor> executor_ = std::make_unique<SingleAgentExecutor>(); //!< Runs task bodies on the calling agent.
 	//! The task activation currently running on the calling agent.
 	std::unique_ptr<ComponentTask> currentTask_ = std::make_unique<ComponentTask>(0);
+	//! Outer activations saved by `beginTask`, most recent last.
+	std::vector<std::unique_ptr<ComponentTask>> taskStack_;
+	uint32_t nextTaskId_ = 1; //!< Serial for nested task ids.
 	std::unordered_map<uint32_t, std::unique_ptr<ComponentAsyncEndpoint>> endpoints_; //!< Endpoints, keyed by handle.
 	std::vector<std::unique_ptr<ComponentAsyncChannel>> channelStorage_; //!< Owns the channels referenced by `channels_`.
 	std::unordered_map<uint32_t, ComponentAsyncChannel*> channels_; //!< Channels, keyed by their handle.

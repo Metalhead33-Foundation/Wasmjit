@@ -520,6 +520,19 @@ std::optional<Callable> ModuleInstance::exportedFunction(std::string_view name) 
 	return std::nullopt;
 }
 
+std::optional<TagId> ModuleInstance::exportedTag(std::string_view name) const
+{
+	for (const Export& ex : module->exports) {
+		if (ex.kind != ExternalKind::Tag || ex.name != name)
+			continue;
+		if (ex.index >= internals.tagIds.size())
+			throw std::runtime_error(
+					"module exports a tag index outside its index space");
+		return internals.tagIds[ex.index];
+	}
+	return std::nullopt;
+}
+
 void ModuleInstance::registerExports(ImportRegistrar& registrar, std::string_view moduleName) const
 {
 	// Publishing from an instance gives the registrar the store to match types

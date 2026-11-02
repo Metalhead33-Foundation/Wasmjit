@@ -111,6 +111,12 @@ override the *process* default with `WASMJIT_MAX_TOTAL_BYTES` (bytes;
 `RuntimeConfig::memory.totalBytes`. The whole test suite fits in **64 MiB**, so
 the default is very generous.
 
+Component async tasks are bounded separately: `ComponentAsyncState::kMaxLiveTasks`
+(4096 live tasks, including the root activation) refuses `beginTask()` beyond the
+bound, so a re-entrant async lift cannot grow the task stack without limit. This
+is a fixed structural bound, not a charge against the allocation budget; a
+refused task is a runtime error, never an allocation attempt.
+
 The budget is a struct, not a single number (`CFG-2`/`CFG-3`): under the total a
 host may cap **one linear memory** (`singleLinearMemoryBytes`), **all linear
 memories** (`allLinearMemoriesBytes`), the **GC heap** (`gcHeapBytes`) and

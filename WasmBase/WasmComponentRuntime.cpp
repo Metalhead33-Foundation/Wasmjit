@@ -111,6 +111,7 @@ WASM::CanonicalAbiOptions canonicalOptions(const WASM::Canon& canon)
 			options.async = true;
 			break;
 		case WASM::CanonOptKind::Callback:
+			options.callback = opt.index;
 			break;
 		}
 	}
@@ -1487,6 +1488,8 @@ struct LowerData {
 	MemView memory;
 	ffi_cif* cif = nullptr;
 	std::vector<ffi_type*> argumentTypes;
+	std::vector<WASM::AbiCoreType> coreParams;
+	std::vector<WASM::AbiCoreType> coreResults;
 };
 
 void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
@@ -1501,6 +1504,82 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 		~BorrowScopeGuard() { if (runtime) runtime->endBorrowScope(scope); }
 	} borrowGuard{data->memory.runtime, borrowScope};
 	const WASM::TypeStore& store = data->memory.runtime->store().types().store();
+	if (data->function.options.async) {
+		// CM19: async lower. The core signature uses MAX_FLAT_ASYNC_PARAMS (4),
+		// always writes results through an appended pointer, and returns the
+		// packed subtask state as one i32. The single-agent executor completes
+		// synchronously, so the packed state is RETURNED (0).
+		const bool indirectParams = data->function.params.size() > 4;
+		std::vector<WASM::Value> input;
+		if (!indirectParams) {
+			input.resize(data->function.params.size());
+			for (std::size_t i = 0; i < input.size(); ++i) {
+				switch (data->function.params[i]) {
+				case WASM::AbiCoreType::I32:
+					input[i].kind = WASM::ValueTypeCode::I32;
+					input[i].i32 = *static_cast<int32_t*>(args[i + 1]);
+					break;
+				case WASM::AbiCoreType::I64:
+					input[i].kind = WASM::ValueTypeCode::I64;
+					input[i].i64 = *static_cast<int64_t*>(args[i + 1]);
+					break;
+				case WASM::AbiCoreType::F32:
+					input[i].kind = WASM::ValueTypeCode::F32;
+					input[i].f32 = *static_cast<float*>(args[i + 1]);
+					break;
+				case WASM::AbiCoreType::F64:
+					input[i].kind = WASM::ValueTypeCode::F64;
+					input[i].f64 = *static_cast<double*>(args[i + 1]);
+					break;
+				}
+			}
+		}
+		if (!data->function.callValues)
+			throw std::runtime_error(
+					"component runtime: async lower needs a structured entry point");
+		std::vector<ComponentValue> structuredInput(data->function.paramTypes.size());
+		if (indirectParams) {
+			const uint64_t paramsAddress =
+					data->function.options.pointerSize == 8
+					? *static_cast<uint64_t*>(args[1])
+					: *static_cast<uint32_t*>(args[1]);
+			uint64_t offset = 0;
+			for (std::size_t i = 0; i < structuredInput.size(); ++i) {
+				const WASM::CanonicalAbiLayout layout = layoutOf(store,
+						data->function.paramTypes[i], data->memory);
+				offset = alignUp(offset, layout.align);
+				loadValueAt(store, data->function.paramTypes[i],
+						paramsAddress + offset, data->memory, structuredInput[i], 0);
+				offset += layout.size;
+			}
+		} else {
+			std::size_t index = 0;
+			for (std::size_t i = 0; i < structuredInput.size(); ++i)
+				liftValue(store, data->function.paramTypes[i], input, index,
+						data->memory, structuredInput[i], 0);
+		}
+		std::vector<ComponentValue> structuredOutput(
+				data->function.resultTypes.size());
+		data->function.callValues(structuredInput, structuredOutput);
+		if (!data->function.resultTypes.empty()) {
+			const std::size_t resultIndex = 1 + data->coreParams.size() - 1;
+			const uint64_t buffer = data->function.options.pointerSize == 8
+					? *static_cast<uint64_t*>(args[resultIndex])
+					: *static_cast<uint32_t*>(args[resultIndex]);
+			uint64_t offset = 0;
+			for (std::size_t i = 0; i < structuredOutput.size(); ++i) {
+				const WASM::CanonicalAbiLayout layout = layoutOf(store,
+						data->function.resultTypes[i], data->memory);
+				offset = alignUp(offset, layout.align);
+				storeValueAt(store, data->function.resultTypes[i],
+						structuredOutput[i], buffer + offset, data->memory, 0);
+				offset += layout.size;
+			}
+		}
+		if (result)
+			*static_cast<int32_t*>(result) = 0; // RETURNED
+		return;
+	}
 	std::vector<WASM::Value> input;
 	if (!data->function.indirectParams) {
 		input.resize(data->function.params.size());
@@ -1910,6 +1989,17 @@ ComponentRuntime::ComponentRuntime(ModuleInstantiator& instantiator,
 	build();
 }
 
+ComponentRuntime::ComponentRuntime(ModuleInstantiator& instantiator,
+		const WASM::Component& component, ComponentFunctionImports imports)
+	: ComponentRuntime(instantiator, component, [&imports] {
+		ComponentImports converted;
+		for (auto& [name, function] : imports)
+			converted.emplace(name, ComponentImport(std::move(function)));
+		return converted;
+	}())
+{
+}
+
 ComponentRuntime::~ComponentRuntime()
 {
 	// A component compiles its embedded core modules through the borrowed
@@ -1940,20 +2030,8 @@ ComponentRuntime::~ComponentRuntime()
 
 void ComponentRuntime::build()
 {
-	const WASM::TypeStore& store = component_.store().types().store();
 	componentValues_.clear();
 	componentValues_.reserve(component_.values.size());
-	for (const WASM::ValueDecl& value : component_.values) {
-		ValueReader reader{value.encoded.data(),
-				value.encoded.data() + value.encoded.size()};
-		ComponentValue decoded;
-		decodeComponentValue(store, resolveValueType(value.type), reader,
-				decoded, 0);
-		if (reader.current != reader.end)
-			throw std::runtime_error(
-					"component runtime: component value has trailing bytes");
-		componentValues_.push_back(std::move(decoded));
-	}
 	for (const WASM::ComponentDefinition& definition : component_.definitions) {
 		switch (definition.kind) {
 		case WASM::ComponentDefinitionKind::CoreInstance:
@@ -1980,10 +2058,33 @@ void ComponentRuntime::build()
 		case WASM::ComponentDefinitionKind::Start:
 			processStart(component_.starts[definition.index]);
 			break;
+		case WASM::ComponentDefinitionKind::Value:
+			processValue(definition.index);
+			break;
 		default:
 			break;
 		}
 	}
+}
+
+void ComponentRuntime::processValue(uint32_t index)
+{
+	// CM17: values are decoded in definition order so the runtime vector mirrors
+	// the validator's value index space (definitions, imports and aliases all
+	// append one entry). A `start` definition refers to this vector by index.
+	if (index >= component_.values.size())
+		throw std::runtime_error(
+				"component runtime: component value index out of bounds");
+	const WASM::ValueDecl& value = component_.values[index];
+	ValueReader reader{value.encoded.data(),
+			value.encoded.data() + value.encoded.size()};
+	ComponentValue decoded;
+	decodeComponentValue(component_.store().types().store(),
+			resolveValueType(value.type), reader, decoded, 0);
+	if (reader.current != reader.end)
+		throw std::runtime_error(
+				"component runtime: component value has trailing bytes");
+	componentValues_.push_back(std::move(decoded));
 }
 
 std::optional<WASM::Callable> ComponentRuntime::CoreInstanceHandle::exportedFunction(
@@ -2041,6 +2142,17 @@ ComponentRuntime::CoreInstanceHandle::exportedGlobal(std::string_view name) cons
 	return it->second;
 }
 
+std::optional<WASM::TagId> ComponentRuntime::CoreInstanceHandle::exportedTag(
+		std::string_view name) const
+{
+	if (moduleInstance)
+		return moduleInstance->exportedTag(name);
+	const auto it = inlineTags.find(std::string(name));
+	if (it == inlineTags.end())
+		return std::nullopt;
+	return it->second;
+}
+
 void ComponentRuntime::CoreInstanceHandle::registerExports(
 		WASM::ImportRegistrar& registrar, std::string_view moduleName) const
 {
@@ -2056,6 +2168,8 @@ void ComponentRuntime::CoreInstanceHandle::registerExports(
 		registrar.registerTable(moduleName, name, table);
 	for (const auto& [name, global] : inlineGlobals)
 		registrar.registerGlobal(moduleName, name, global.first, global.second);
+	for (const auto& [name, tag] : inlineTags)
+		registrar.registerTag(moduleName, name, tag);
 }
 
 void ComponentRuntime::processCoreInstance(const WASM::CoreInstance& instance)
@@ -2087,6 +2201,18 @@ void ComponentRuntime::processCoreInstance(const WASM::CoreInstance& instance)
 							"component runtime: inline core global export is out of bounds");
 				handle->inlineGlobals.emplace(exportDecl.name,
 						coreGlobals_[exportDecl.sortIndex.index]);
+			} else if (exportDecl.sortIndex.sort == WASM::CoreSort::Tag) {
+				if (exportDecl.sortIndex.index >= coreTags_.size())
+					throw std::runtime_error(
+							"component runtime: inline core tag export is out of bounds");
+				handle->inlineTags.emplace(exportDecl.name,
+						coreTags_[exportDecl.sortIndex.index]);
+			} else if (exportDecl.sortIndex.sort == WASM::CoreSort::Type) {
+				// CM18: a core type is compile-time identity, not a runtime
+				// object; the validator has already resolved every consumer, so
+				// the bag keeps no entry. A future consumer that needs a runtime
+				// TypeId must publish the core type ids on Component first.
+				continue;
 			} else {
 				throw std::runtime_error(
 						"component runtime: inline core export sort is not supported");
@@ -2123,35 +2249,93 @@ void ComponentRuntime::processComponent(uint32_t index)
 	nestedComponents_.push_back(component_.components[index].get());
 }
 
+std::shared_ptr<ComponentRuntime::ComponentInstanceHandle>
+ComponentRuntime::makeInstanceHandle(ComponentInstanceValue exports)
+{
+	auto handle = std::make_shared<ComponentInstanceHandle>();
+	handle->exports = std::move(exports);
+	return handle;
+}
+
+ComponentInstanceValue ComponentRuntime::exportSnapshot() const
+{
+	// CM17: a nested runtime's component-level exports become a self-contained
+	// bag. The ComponentFunction copies keep the child's closures alive through
+	// its `nested` owner; values and instances are copied recursively.
+	ComponentInstanceValue out;
+	for (const auto& [name, index] : exportedFuncs_)
+		if (index < componentFuncs_.size())
+			out.functions.emplace(name, componentFuncs_[index]);
+	for (const auto& [name, index] : exportedValueIndices_)
+		if (index < componentValues_.size())
+			out.values.emplace(name, componentValues_[index]);
+	for (const auto& [name, handle] : exportedInstances_)
+		if (handle)
+			out.instances.emplace(name,
+					std::make_shared<ComponentInstanceValue>(handle->exports));
+	return out;
+}
+
+std::optional<ComponentValue> ComponentRuntime::exportedValue(
+		std::string_view name) const
+{
+	const auto found = exportedValueIndices_.find(std::string(name));
+	if (found == exportedValueIndices_.end()
+			|| found->second >= componentValues_.size())
+		return std::nullopt;
+	return componentValues_[found->second];
+}
+
+std::shared_ptr<ComponentRuntime::ComponentInstanceHandle>
+ComponentRuntime::exportedInstance(std::string_view name) const
+{
+	const auto found = exportedInstances_.find(std::string(name));
+	return found == exportedInstances_.end() ? nullptr : found->second;
+}
+
 void ComponentRuntime::processComponentInstance(
 		const WASM::ComponentInstance& instance)
 {
-	// CM12: an inline bag needs its own index space, keyed by the *component
-	// instance index*. Recovering it by address keeps the method signature (and
-	// therefore the exported symbol) unchanged, which G2 of
-	// docs/API_ABI_STABILITY.md requires.
-	std::uint32_t index = 0;
-	for (std::size_t i = 0; i < component_.instances.size(); ++i) {
-		if (&component_.instances[i] == &instance) {
-			index = static_cast<std::uint32_t>(i);
-			break;
-		}
-	}
 	if (instance.kind == WASM::ComponentInstance::Kind::InlineExports) {
-		// CM12: an inline bag re-exports entities the component already owns. Only
-		// functions can be re-exported today; the other sorts need a component-side
-		// index space this runtime does not keep.
-		auto& bag = inlineInstanceFunctions_[index];
+		// CM17: a bag re-exports entities this component already owns. It is a
+		// self-contained export bag, so funcs, values, types and instances all
+		// travel; a type is compile-time identity and only records its TypeId.
+		ComponentInstanceValue exports;
 		for (const WASM::InlineExport& exportDecl : instance.exports) {
-			if (exportDecl.sortIndex.sort != WASM::ComponentSort::Func)
+			const std::uint32_t index = exportDecl.sortIndex.index;
+			switch (exportDecl.sortIndex.sort) {
+			case WASM::ComponentSort::Func:
+				if (index >= componentFuncs_.size())
+					throw std::runtime_error(
+							"component runtime: inline instance func export is out of bounds");
+				exports.functions.emplace(exportDecl.name.name,
+						componentFuncs_[index]);
+				break;
+			case WASM::ComponentSort::Value:
+				if (index >= componentValues_.size())
+					throw std::runtime_error(
+							"component runtime: inline instance value export is out of bounds");
+				exports.values.emplace(exportDecl.name.name,
+						componentValues_[index]);
+				break;
+			case WASM::ComponentSort::Type:
+				exports.types.emplace(exportDecl.name.name,
+						component_.typeId(index));
+				break;
+			case WASM::ComponentSort::Instance:
+				if (index >= componentInstances_.size())
+					throw std::runtime_error(
+							"component runtime: inline instance instance export is out of bounds");
+				exports.instances.emplace(exportDecl.name.name,
+						std::make_shared<ComponentInstanceValue>(
+								componentInstances_[index]->exports));
+				break;
+			default:
 				throw std::runtime_error(
 						"component runtime: inline instance export sort is not supported");
-			if (exportDecl.sortIndex.index >= componentFuncs_.size())
-				throw std::runtime_error(
-						"component runtime: inline instance func export is out of bounds");
-			bag.emplace(exportDecl.name.name,
-					componentFuncs_[exportDecl.sortIndex.index]);
+			}
 		}
+		componentInstances_.push_back(makeInstanceHandle(std::move(exports)));
 		return;
 	}
 	if (instance.componentIndex >= nestedComponents_.size())
@@ -2159,44 +2343,87 @@ void ComponentRuntime::processComponentInstance(
 				"component runtime: component instance target is not a nested component");
 	ComponentImports childImports = imports_;
 	for (const WASM::InstantiateArg& arg : instance.args) {
-		if (arg.sortIndex.sort != WASM::ComponentSort::Func
-				|| arg.sortIndex.index >= componentFuncs_.size())
+		const std::uint32_t index = arg.sortIndex.index;
+		switch (arg.sortIndex.sort) {
+		case WASM::ComponentSort::Func:
+			if (index >= componentFuncs_.size())
+				throw std::runtime_error(
+						"component runtime: instantiate func argument is out of bounds");
+			childImports[arg.name] = ComponentImport(componentFuncs_[index]);
+			break;
+		case WASM::ComponentSort::Value:
+			if (index >= componentValues_.size())
+				throw std::runtime_error(
+						"component runtime: instantiate value argument is out of bounds");
+			childImports[arg.name] = ComponentImport::valueImport(
+					componentValues_[index]);
+			break;
+		case WASM::ComponentSort::Instance:
+			if (index >= componentInstances_.size())
+				throw std::runtime_error(
+						"component runtime: instantiate instance argument is out of bounds");
+			childImports[arg.name] = ComponentImport::instanceImport(
+					std::make_shared<ComponentInstanceValue>(
+							componentInstances_[index]->exports));
+			break;
+		case WASM::ComponentSort::Type:
+			childImports[arg.name] = ComponentImport::typeImport(
+					component_.typeId(index));
+			break;
+		default:
 			throw std::runtime_error(
-					"component runtime: only function instantiate arguments are supported");
-		childImports[arg.name] = componentFuncs_[arg.sortIndex.index];
+					"component runtime: unsupported component instantiate argument sort");
+		}
 	}
-	nestedRuntimes_.push_back(std::make_unique<ComponentRuntime>(
-			instantiator_, *nestedComponents_[instance.componentIndex],
-			std::move(childImports)));
+	auto handle = std::make_shared<ComponentInstanceHandle>();
+	handle->nested = std::make_unique<ComponentRuntime>(instantiator_,
+			*nestedComponents_[instance.componentIndex], std::move(childImports));
+	handle->exports = handle->nested->exportSnapshot();
+	componentInstances_.push_back(std::move(handle));
 }
 
 void ComponentRuntime::processAlias(const WASM::Alias& alias)
 {
 	if (alias.kind == WASM::Alias::Kind::Export) {
-		if (alias.sort.sort != WASM::ComponentSort::Func)
+		// CM17: resolve from the component-instance handle indexed by the
+		// validator's instance index space (definitions, aliases and imports).
+		if (alias.instanceIndex >= componentInstances_.size())
 			throw std::runtime_error(
-					"component runtime: only component function export aliases are supported");
-		// CM12: an inline bag is not a nested runtime, so resolve it from its own
-		// index space before falling back to the instantiate-order vector.
-		const auto bag = inlineInstanceFunctions_.find(alias.instanceIndex);
-		if (bag != inlineInstanceFunctions_.end()) {
-			const auto it = bag->second.find(alias.name);
-			if (it == bag->second.end())
+					"component runtime: component alias instance index out of bounds");
+		const ComponentInstanceValue& exports =
+				componentInstances_[alias.instanceIndex]->exports;
+		switch (alias.sort.sort) {
+		case WASM::ComponentSort::Func: {
+			const auto it = exports.functions.find(alias.name);
+			if (it == exports.functions.end())
 				throw std::runtime_error(
-						"component runtime: inline instance export is not a function");
+						"component runtime: component export is not a function");
 			componentFuncs_.push_back(it->second);
 			return;
 		}
-		if (alias.instanceIndex >= nestedRuntimes_.size())
+		case WASM::ComponentSort::Value: {
+			const auto it = exports.values.find(alias.name);
+			if (it == exports.values.end())
+				throw std::runtime_error(
+						"component runtime: component export is not a value");
+			componentValues_.push_back(it->second);
+			return;
+		}
+		case WASM::ComponentSort::Type:
+			// Compile-time identity; the validator published its TypeId.
+			return;
+		case WASM::ComponentSort::Instance: {
+			const auto it = exports.instances.find(alias.name);
+			if (it == exports.instances.end())
+				throw std::runtime_error(
+						"component runtime: component export is not an instance");
+			componentInstances_.push_back(makeInstanceHandle(*it->second));
+			return;
+		}
+		default:
 			throw std::runtime_error(
-					"component runtime: component alias instance index out of bounds");
-		const auto function = nestedRuntimes_[alias.instanceIndex]
-				->exportedFunction(alias.name);
-		if (!function)
-			throw std::runtime_error(
-					"component runtime: nested component export is not a function");
-		componentFuncs_.push_back(*function);
-		return;
+					"component runtime: only func/value/type/instance export aliases are supported");
+		}
 	}
 	if (alias.kind != WASM::Alias::Kind::CoreExport)
 		return;
@@ -2230,6 +2457,19 @@ void ComponentRuntime::processAlias(const WASM::Alias& alias)
 			throw std::runtime_error(
 					"component runtime: core export is not a global");
 		coreGlobals_.push_back(*global);
+		return;
+	}
+	if (alias.sort.core->sort == WASM::CoreSort::Tag) {
+		const auto tag = coreInstances_[alias.instanceIndex]
+				->exportedTag(alias.name);
+		if (!tag)
+			throw std::runtime_error(
+					"component runtime: core export is not a tag");
+		coreTags_.push_back(*tag);
+		return;
+	}
+	if (alias.sort.core->sort == WASM::CoreSort::Type) {
+		// CM18: compile-time identity; nothing to copy into a runtime space.
 		return;
 	}
 	if (alias.sort.core->sort != WASM::CoreSort::Func)
@@ -2373,21 +2613,46 @@ void ComponentRuntime::processAsyncCanon(const WASM::Canon& canon)
 		};
 		break;
 	case WASM::Canon::Kind::TaskReturn: {
-		// `task.return` takes the flattened results of the current task. The
-		// single-agent runtime records that the task resolved; it does not need
-		// to re-materialise them because the caller's values are already in the
-		// core frame.
+		// `task.return` takes the flattened results of the current task. Store
+		// them on the current task so an async lift can lift them when the
+		// callee returns (CM19).
 		const WASM::TypeStore& store = component_.store().types().store();
+		std::vector<WASM::AbiCoreType> flatTypes;
 		for (const WASM::ComponentValueType& value : canon.results) {
 			const WASM::ComponentValueType resolved = resolveValueType(value);
 			std::vector<WASM::AbiCoreType> flat;
 			if (!store.canonicalAbiFlatValue(resolved, flat))
 				throw std::runtime_error(
 						"component async: task.return result is not flattenable");
-			for (WASM::AbiCoreType type : flat)
+			for (WASM::AbiCoreType type : flat) {
+				flatTypes.push_back(type);
 				data->argumentTypes.push_back(ffiType(type));
+			}
 		}
-		data->handler = [this](void*, void**) { async_.taskReturn(); };
+		data->handler = [this, flatTypes](void*, void** args) {
+			std::vector<WASM::Value> flat(flatTypes.size());
+			for (std::size_t i = 0; i < flatTypes.size(); ++i) {
+				switch (flatTypes[i]) {
+				case WASM::AbiCoreType::I32:
+					flat[i].kind = WASM::ValueTypeCode::I32;
+					flat[i].i32 = *static_cast<int32_t*>(args[i + 1]);
+					break;
+				case WASM::AbiCoreType::I64:
+					flat[i].kind = WASM::ValueTypeCode::I64;
+					flat[i].i64 = *static_cast<int64_t*>(args[i + 1]);
+					break;
+				case WASM::AbiCoreType::F32:
+					flat[i].kind = WASM::ValueTypeCode::F32;
+					flat[i].f32 = *static_cast<float*>(args[i + 1]);
+					break;
+				case WASM::AbiCoreType::F64:
+					flat[i].kind = WASM::ValueTypeCode::F64;
+					flat[i].f64 = *static_cast<double*>(args[i + 1]);
+					break;
+				}
+			}
+			async_.taskReturn(flat);
+		};
 		break;
 	}
 	case WASM::Canon::Kind::TaskCancel:
@@ -2752,24 +3017,24 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 		auto data = std::make_unique<LowerData>();
 		data->function = componentFuncs_[canon.funcIndex];
 		data->function.options = canonicalOptions(canon);
+		data->function.options.direction =
+				WASM::CanonicalAbiOptions::Direction::Lower;
 		const AbiMemory abiMemory = memoryFor(data->function.options);
 		data->memory = MemView{abiMemory.memory, abiMemory.realloc,
 				data->function.options, this, 0};
-		const bool indirectParams = data->function.indirectParams;
-		const bool indirectResults = data->function.indirectResults;
+		const WASM::CanonicalAbiSignature* abi =
+				abi_.resolve(data->function.typeId, data->function.options);
+		if (!abi)
+			throw std::runtime_error(
+					"component runtime: canon lower type is outside the flat ABI subset");
+		data->coreParams = abi->coreParams;
+		data->coreResults = abi->coreResults;
 		data->argumentTypes.push_back(&ffi_type_pointer);
-		if (indirectParams) {
-			data->argumentTypes.push_back(data->function.options.pointerSize == 8
-					? &ffi_type_sint64 : &ffi_type_sint32);
-		} else {
-			for (WASM::AbiCoreType type : data->function.params)
-				data->argumentTypes.push_back(ffiType(type));
-		}
-		if (indirectResults)
-			data->argumentTypes.push_back(&ffi_type_pointer);
+		for (WASM::AbiCoreType type : abi->coreParams)
+			data->argumentTypes.push_back(ffiType(type));
 		data->cif = new ffi_cif;
-		ffi_type* returnType = data->function.results.empty() || indirectResults
-				? &ffi_type_void : ffiType(data->function.results.front());
+		ffi_type* returnType = abi->coreResults.empty()
+				? &ffi_type_void : ffiType(abi->coreResults.front());
 		if (ffi_prep_cif(data->cif, FFI_DEFAULT_ABI,
 				static_cast<unsigned>(data->argumentTypes.size()), returnType,
 				data->argumentTypes.data()) != FFI_OK)
@@ -2808,7 +3073,8 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 	if (typeId.isNone())
 		throw std::runtime_error(
 				"component runtime: canon lift type has no closed identity");
-	const WASM::CanonicalAbiOptions options = canonicalOptions(canon);
+	WASM::CanonicalAbiOptions options = canonicalOptions(canon);
+	options.direction = WASM::CanonicalAbiOptions::Direction::Lift;
 	const WASM::CanonicalAbiSignature* abi =
 			abi_.resolve(typeId, options);
 	if (!abi)
@@ -2831,9 +3097,14 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 	const WASM::Callable callable = coreFuncs_[canon.coreFuncIndex];
 	function.call = [this, callable, function](std::span<const WASM::Value> args,
 			std::span<WASM::Value> results) {
+		if (function.options.async)
+			throw std::runtime_error(
+					"component runtime: an async lift has no flat entry point; "
+					"use the structured invocation");
 		invokeCore(callable, function, args, results);
 	};
-	function.callValues = [this, callable, function](
+	function.callValues = [this, callable, function, coreParams = abi->coreParams,
+			coreResults = abi->coreResults](
 			std::span<const ComponentValue> args,
 			std::span<ComponentValue> results) {
 		const AbiMemory memory = memoryFor(function.options);
@@ -2865,33 +3136,89 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 		} else {
 			lowerValues(function, args, memory, flatArgs);
 		}
-		core.results = function.indirectResults
-				? std::vector<WASM::AbiCoreType>{function.options.pointerSize == 8
-						? WASM::AbiCoreType::I64 : WASM::AbiCoreType::I32}
-				: function.results;
-		std::vector<WASM::Value> flatResults(core.results.size());
-		invokeCore(callable, core, flatArgs, flatResults);
-		if (function.indirectResults) {
-			const uint64_t address = function.options.pointerSize == 8
-					? flatResults[0].ui64 : flatResults[0].u32;
-			uint64_t offset = 0;
-			uint32_t alignment = 1;
-			for (std::size_t i = 0; i < function.resultTypes.size(); ++i) {
-				const WASM::CanonicalAbiLayout layout = layoutOf(
-						store, function.resultTypes[i], view);
-				alignment = std::max(alignment, layout.align);
-				offset = alignUp(offset, layout.align);
-				loadValueAt(store, function.resultTypes[i], address + offset,
-						view, results[i], 0);
-				offset += layout.size;
+		core.params = coreParams;
+		core.results = coreResults;
+		std::vector<WASM::Value> flatResults;
+		if (!function.options.async) {
+			flatResults.resize(core.results.size());
+			invokeCore(callable, core, flatArgs, flatResults);
+			if (function.indirectResults) {
+				const uint64_t address = function.options.pointerSize == 8
+						? flatResults[0].ui64 : flatResults[0].u32;
+				uint64_t offset = 0;
+				uint32_t alignment = 1;
+				for (std::size_t i = 0; i < function.resultTypes.size(); ++i) {
+					const WASM::CanonicalAbiLayout layout = layoutOf(
+							store, function.resultTypes[i], view);
+					alignment = std::max(alignment, layout.align);
+					offset = alignUp(offset, layout.align);
+					loadValueAt(store, function.resultTypes[i], address + offset,
+							view, results[i], 0);
+					offset += layout.size;
+				}
+			} else {
+				liftValues(function, flatResults, memory, results);
+			}
+			if (memory.postReturn.fnPtr) {
+				ComponentFunction post;
+				post.params = core.results;
+				invokeCore(memory.postReturn, post, flatResults, {});
 			}
 		} else {
-			liftValues(function, flatResults, memory, results);
-		}
-		if (memory.postReturn.fnPtr) {
-			ComponentFunction post;
-			post.params = core.results;
-			invokeCore(memory.postReturn, post, flatResults, {});
+			// CM19: the async lift runs a task. `task.return` stores the flat
+			// results; a callback lift additionally runs the callback event loop.
+			async_.beginTask();
+			try {
+				if (function.options.callback
+						== WASM::CanonicalAbiOptions::kNoIndex) {
+					std::vector<WASM::Value> none;
+					invokeCore(callable, core, flatArgs, none);
+				} else {
+					std::vector<WASM::Value> packed(1);
+					invokeCore(callable, core, flatArgs, packed);
+					uint32_t code = packed[0].u32;
+					while ((code & 0xFu) != 0) {
+						const uint32_t kind = code & 0xFu;
+						if (kind > 2)
+							throw std::runtime_error(
+									"component runtime: invalid async callback code");
+						WASM::ComponentAsyncEvent event;
+						if (kind == 2)
+							event = async_.wait(code >> 4);
+						WASM::Value callbackArgs[3];
+						for (WASM::Value& value : callbackArgs)
+							value.kind = WASM::ValueTypeCode::I32;
+						callbackArgs[0].i32 = static_cast<int32_t>(event.code);
+						callbackArgs[1].i32 = static_cast<int32_t>(event.payload1);
+						callbackArgs[2].i32 = static_cast<int32_t>(event.payload2);
+						ComponentFunction callback;
+						callback.params = { WASM::AbiCoreType::I32,
+							WASM::AbiCoreType::I32, WASM::AbiCoreType::I32 };
+						callback.results = { WASM::AbiCoreType::I32 };
+						invokeCore(coreFuncs_.at(function.options.callback),
+								callback, callbackArgs, packed);
+						code = packed[0].u32;
+					}
+				}
+			} catch (...) {
+				async_.abortTask();
+				throw;
+			}
+			std::vector<WASM::Value> taskResults;
+			try {
+				taskResults = async_.endTask();
+			} catch (...) {
+				async_.abortTask();
+				throw;
+			}
+			if (function.resultTypes.empty()) {
+				// `task.return` may legitimately carry no values.
+			} else if (taskResults.empty()) {
+				throw std::runtime_error(
+						"component runtime: async task.return produced no results");
+			} else {
+				liftValues(function, taskResults, memory, results);
+			}
 		}
 		endBorrowScope(borrowScope);
 	};
@@ -3001,27 +3328,64 @@ void ComponentRuntime::processThreadCanon(const WASM::Canon& canon)
 
 void ComponentRuntime::processImport(const WASM::ImportDecl& importDecl)
 {
-	if (importDecl.type.kind != WASM::ExternType::Kind::Func)
-		throw std::runtime_error(
-				"component runtime: only function component imports are supported");
 	const auto found = imports_.find(importDecl.name.name);
-	if (found == imports_.end())
+	const auto require = [&](ComponentImport::Kind kind, const char* what) {
+		if (found == imports_.end())
+			throw std::runtime_error(
+					"component runtime: missing host import `" +
+					importDecl.name.name + "`");
+		if (found->second.kind != kind)
+			throw std::runtime_error(
+					"component runtime: host import `" + importDecl.name.name +
+					"` is not " + what);
+		return &found->second;
+	};
+	switch (importDecl.type.kind) {
+	case WASM::ExternType::Kind::CoreModule:
+		// A core module import is an instantiate argument resolved by the core
+		// instance walk; it has no component-side runtime entry.
+		return;
+	case WASM::ExternType::Kind::Type:
+		// CM17: compile-time identity. The validator has already published the
+		// substituted TypeId through `Component::typeId`.
+		return;
+	case WASM::ExternType::Kind::Value: {
+		const ComponentImport* import = require(ComponentImport::Kind::Value,
+				"a value");
+		componentValues_.push_back(import->value);
+		return;
+	}
+	case WASM::ExternType::Kind::Instance: {
+		const ComponentImport* import = require(ComponentImport::Kind::Instance,
+				"an instance");
+		if (!import->instance)
+			throw std::runtime_error(
+					"component runtime: host instance import is empty");
+		componentInstances_.push_back(makeInstanceHandle(*import->instance));
+		return;
+	}
+	case WASM::ExternType::Kind::Component:
 		throw std::runtime_error(
-				"component runtime: missing host import `" + importDecl.name.name + "`");
+				"component runtime: component imports are not supported "
+				"(CM-4 limitation)");
+	case WASM::ExternType::Kind::Func:
+		break;
+	}
+	const ComponentImport* import = require(ComponentImport::Kind::Function,
+			"a function");
 	const WASM::TypeId typeId = component_.typeId(importDecl.type.typeIndex);
 	if (typeId.isNone())
 		throw std::runtime_error(
 				"component runtime: imported function type has no closed identity");
-	const WASM::CanonicalAbiSignature* abi =
-			abi_.resolve(typeId, {});
+	const WASM::CanonicalAbiSignature* abi = abi_.resolve(typeId, {});
 	if (!abi)
 		throw std::runtime_error(
 				"component runtime: imported function type is outside the flat ABI subset");
-	if (found->second.params != abi->flatParams
-			|| found->second.results != abi->flatResults)
+	if (import->function.params != abi->flatParams
+			|| import->function.results != abi->flatResults)
 		throw std::runtime_error(
 				"component runtime: host function signature does not match import");
-	ComponentFunction function = found->second;
+	ComponentFunction function = import->function;
 	function.typeId = typeId;
 	function.indirectParams = abi->indirectParams;
 	function.indirectResults = abi->indirectResults;
@@ -3038,12 +3402,34 @@ void ComponentRuntime::processImport(const WASM::ImportDecl& importDecl)
 
 void ComponentRuntime::processExport(const WASM::ComponentExport& exportDecl)
 {
-	if (exportDecl.sortIndex.sort != WASM::ComponentSort::Func)
-		return;
-	if (exportDecl.sortIndex.index >= componentFuncs_.size())
-		throw std::runtime_error(
-				"component runtime: function export index out of bounds");
-	exportedFuncs_[exportDecl.name.name] = exportDecl.sortIndex.index;
+	// CM17: every component export sort is tracked in the matching component-side
+	// space so a bag or export alias can resolve it later. A type is compile-time
+	// identity and needs no runtime entry.
+	switch (exportDecl.sortIndex.sort) {
+	case WASM::ComponentSort::Func:
+		if (exportDecl.sortIndex.index >= componentFuncs_.size())
+			throw std::runtime_error(
+					"component runtime: function export index out of bounds");
+		exportedFuncs_[exportDecl.name.name] = exportDecl.sortIndex.index;
+		break;
+	case WASM::ComponentSort::Value:
+		if (exportDecl.sortIndex.index >= componentValues_.size())
+			throw std::runtime_error(
+					"component runtime: value export index out of bounds");
+		exportedValueIndices_[exportDecl.name.name] = exportDecl.sortIndex.index;
+		break;
+	case WASM::ComponentSort::Instance:
+		if (exportDecl.sortIndex.index >= componentInstances_.size())
+			throw std::runtime_error(
+					"component runtime: instance export index out of bounds");
+		exportedInstances_[exportDecl.name.name] =
+				componentInstances_[exportDecl.sortIndex.index];
+		break;
+	case WASM::ComponentSort::Type:
+		break;
+	default:
+		break;
+	}
 }
 
 WASM::ComponentValueType ComponentRuntime::resolveValueType(

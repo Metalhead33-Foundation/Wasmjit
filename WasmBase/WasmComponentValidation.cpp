@@ -1845,6 +1845,7 @@ void ComponentValidator::validateCanonicalAbi()
 				options.async = true;
 				break;
 			case CanonOptKind::Callback:
+				options.callback = opt.index;
 				break;
 			}
 		}
@@ -1888,6 +1889,9 @@ void ComponentValidator::validateCanonicalAbi()
 			const TypeId type = canonicalTypeOf(canon);
 			if (type.isNone())
 				fail("canon lift/lower type has no closed identity");
+			options.direction = canon.kind == Canon::Kind::Lift
+					? WASM::CanonicalAbiOptions::Direction::Lift
+					: WASM::CanonicalAbiOptions::Direction::Lower;
 			if (store.canonicalAbi(type, options) == nullptr)
 				fail("canon lift/lower type cannot be flattened by the "
 						"Canonical ABI");
@@ -4510,6 +4514,7 @@ void ComponentValidator::validateCanonOpts(const Canon& canon)
 	bool postReturn = false;
 	bool async = false;
 	bool callback = false;
+	uint32_t callbackIndex = ~uint32_t{0};
 	for (const CanonOpt& opt : canon.opts) {
 		switch (opt.kind) {
 		case CanonOptKind::Utf8:
@@ -4546,19 +4551,42 @@ void ComponentValidator::validateCanonOpts(const Canon& canon)
 			if (callback)
 				fail("duplicate callback canonopt");
 			callback = true;
+			callbackIndex = opt.index;
 			scope_.spaces.require(CoreSort::Func, opt.index, "callback canonopt");
 			break;
 		}
 	}
 
-	// CM13: every component function type this engine models is synchronous, so
-	// an `async` option on `lift`/`lower` can never be satisfied. The reference
-	// corpus is explicit that the option "requires an async function type"
-	// (async/validate-no-async-abi-for-sync-type.wast), so it is refused here
-	// rather than half-honoured at runtime.
-	if ((async || (canon.async.has_value() && *canon.async))
-			&& (canon.kind == Canon::Kind::Lift || canon.kind == Canon::Kind::Lower))
-		fail("the `async` canonical option requires an async function type");
+	// CM16: the `async` option is legal only with an async function type, so it
+	// is checked after `validateCanon` resolves the type. These rules do not
+	// need the type and can be enforced here.
+	const bool asyncRequested = async
+			|| (canon.async.has_value() && *canon.async);
+	if (postReturn && asyncRequested)
+		fail("`post-return` cannot be used with `async`");
+	if (callback && !asyncRequested)
+		fail("`callback` requires `async`");
+	if (callback && canon.kind != Canon::Kind::Lift)
+		fail("`callback` is only allowed on `canon lift`");
+	if (callback) {
+		const Entity* callbackFunc = scope_.spaces.require(CoreSort::Func,
+				callbackIndex, "callback canonopt");
+		if (callbackFunc && callbackFunc->coreModule
+				&& callbackFunc->moduleTypeIndex
+						< callbackFunc->coreModule->typeIds.size()) {
+			const FuncType type = callbackFunc->coreModule->funcTypeAt(
+					callbackFunc->moduleTypeIndex);
+			const auto isI32 = [](const StorageType& storage) {
+				return !storage.isPacked
+						&& storage.val.opcode == ValueTypeCode::I32;
+			};
+			if (type.params.size() != 3 || type.results.size() != 1
+					|| !isI32(type.params[0]) || !isI32(type.params[1])
+					|| !isI32(type.params[2]) || !isI32(type.results[0]))
+				fail("the `callback` function must have type "
+						"(param i32 i32 i32) (result i32)");
+		}
+	}
 }
 
 void ComponentValidator::validateCanon(const Canon& canon)
@@ -4584,85 +4612,130 @@ void ComponentValidator::validateCanon(const Canon& canon)
 			if (opt.kind == CanonOptKind::Memory)
 				hasMemory = true;
 		if (funcType && funcType->func) {
+			// CM16: the async option is only legal with an async function type.
+			const bool asyncRequested = [&] {
+				bool requested = canon.async.has_value() && *canon.async;
+				for (const CanonOpt& opt : canon.opts)
+					if (opt.kind == CanonOptKind::Async)
+						requested = true;
+				return requested;
+			}();
+			if (asyncRequested && !funcType->func->isAsync)
+				fail("the `async` canonical option requires an async function type");
 			// CanonicalABI `flatten_functype`: MAX_FLAT_PARAMS = 16 and
-			// MAX_FLAT_RESULTS = 1. Exceeding either spills through linear
-			// memory, and so does a `string`/`list`/`map` wherever it sits.
+			// MAX_FLAT_RESULTS = 1. Async lowering uses MAX_FLAT_ASYNC_PARAMS
+			// (4) and always passes results through a pointer. A `string`/
+			// `list`/`map` anywhere also needs memory.
 			uint32_t flatParams = 0;
-			bool direct = true;
 			bool needsMemory = false;
-			std::vector<AbiCoreType> directParams;
 			for (const auto& [name, value] : funcType->func->params) {
 				flatParams += flatSlots(value);
-				if (!flattenDirectTypes(value, directParams))
-					direct = false;
-				if (valueNeedsMemory(value)) {
-					direct = false;
+				if (valueNeedsMemory(value))
 					needsMemory = true;
-				}
 			}
 			const uint32_t flatResults = funcType->func->result
 					? flatSlots(*funcType->func->result) : 0;
-			std::vector<AbiCoreType> directResults;
-			if (funcType->func->result) {
-				if (!flattenDirectTypes(*funcType->func->result, directResults))
-					direct = false;
-				if (valueNeedsMemory(*funcType->func->result)) {
-					direct = false;
+			if (funcType->func->result
+					&& valueNeedsMemory(*funcType->func->result))
+				needsMemory = true;
+			if (asyncRequested) {
+				if (canon.kind == Canon::Kind::Lift && flatResults > 16)
 					needsMemory = true;
-				}
-			}
-			if (flatParams > 16 || flatResults > 1) {
-				direct = false;
+				if (canon.kind == Canon::Kind::Lift && flatParams > 16)
+					needsMemory = true;
+				if (canon.kind == Canon::Kind::Lower && flatResults > 0)
+					needsMemory = true;
+			} else if (flatParams > 16 || flatResults > 1) {
 				needsMemory = true;
 			}
 			if (needsMemory && !hasMemory)
 				fail("canonical option `memory` is required");
-			// CM14 `abi`: when nothing is spilt, `$callee` must have exactly the
-			// flattened core signature. The corpus's two direct-mismatch cases
-			// (`lift (core func $i "f")` against `(param i32)` / `(result i32)`)
-			// were accepted because only the *memory* half of the rule existed.
-			if (direct && canon.kind == Canon::Kind::Lift && coreFunc
+			// CM16/CM19: `$callee` must have exactly `flatten_functype`'s core
+			// signature. The previous rule only checked the direct synchronous
+			// case; the Store's derived signature covers spilling and async.
+			WASM::CanonicalAbiOptions abiOptions;
+			for (const CanonOpt& opt : canon.opts) {
+				switch (opt.kind) {
+				case CanonOptKind::Utf8:
+					abiOptions.stringEncoding =
+							WASM::CanonicalAbiOptions::StringEncoding::Utf8;
+					break;
+				case CanonOptKind::Utf16:
+					abiOptions.stringEncoding =
+							WASM::CanonicalAbiOptions::StringEncoding::Utf16;
+					break;
+				case CanonOptKind::Latin1Utf16:
+					abiOptions.stringEncoding =
+							WASM::CanonicalAbiOptions::StringEncoding::Latin1Utf16;
+					break;
+				case CanonOptKind::Memory:
+					abiOptions.memory = opt.index;
+					break;
+				case CanonOptKind::Realloc:
+					abiOptions.realloc = opt.index;
+					break;
+				case CanonOptKind::PostReturn:
+					abiOptions.postReturn = opt.index;
+					break;
+				case CanonOptKind::Async:
+					abiOptions.async = true;
+					break;
+				case CanonOptKind::Callback:
+					abiOptions.callback = opt.index;
+					break;
+				}
+			}
+			abiOptions.direction = canon.kind == Canon::Kind::Lift
+					? WASM::CanonicalAbiOptions::Direction::Lift
+					: WASM::CanonicalAbiOptions::Direction::Lower;
+			const TypeId abiType = canon.kind == Canon::Kind::Lift
+					? component_.typeId(canon.typeIndex) : funcType->typeId;
+			if (canon.kind == Canon::Kind::Lift && coreFunc
 					&& coreFunc->coreModule
 					&& coreFunc->moduleTypeIndex
-							< coreFunc->coreModule->typeIds.size()) {
-				const FuncType actual = coreFunc->coreModule->funcTypeAt(
-						coreFunc->moduleTypeIndex);
-				const auto asAbi = [](const StorageType& type)
-						-> std::optional<AbiCoreType> {
-					if (type.isPacked)
-						return AbiCoreType::I32;
-					switch (type.val.opcode) {
-					case ValueTypeCode::I32: return AbiCoreType::I32;
-					case ValueTypeCode::I64: return AbiCoreType::I64;
-					case ValueTypeCode::F32: return AbiCoreType::F32;
-					case ValueTypeCode::F64: return AbiCoreType::F64;
-					default: return std::nullopt;
+							< coreFunc->coreModule->typeIds.size()
+					&& !abiType.isNone()) {
+				const WASM::CanonicalAbiSignature* signature =
+						store_.types().store().canonicalAbi(abiType, abiOptions);
+				if (signature) {
+					const FuncType actual = coreFunc->coreModule->funcTypeAt(
+							coreFunc->moduleTypeIndex);
+					const auto asAbi = [](const StorageType& type)
+							-> std::optional<AbiCoreType> {
+						if (type.isPacked)
+							return AbiCoreType::I32;
+						switch (type.val.opcode) {
+						case ValueTypeCode::I32: return AbiCoreType::I32;
+						case ValueTypeCode::I64: return AbiCoreType::I64;
+						case ValueTypeCode::F32: return AbiCoreType::F32;
+						case ValueTypeCode::F64: return AbiCoreType::F64;
+						default: return std::nullopt;
+						}
+					};
+					std::vector<AbiCoreType> actualParams;
+					std::vector<AbiCoreType> actualResults;
+					bool matches = true;
+					for (const StorageType& param : actual.params) {
+						const auto abi = asAbi(param);
+						if (!abi)
+							matches = false;
+						else
+							actualParams.push_back(*abi);
 					}
-				};
-				bool matches = actual.params.size() == directParams.size()
-						&& actual.results.size() == directResults.size();
-				std::vector<AbiCoreType> actualParams;
-				std::vector<AbiCoreType> actualResults;
-				for (const StorageType& param : actual.params) {
-					const auto abi = asAbi(param);
-					if (!abi)
+					for (const StorageType& result : actual.results) {
+						const auto abi = asAbi(result);
+						if (!abi)
+							matches = false;
+						else
+							actualResults.push_back(*abi);
+					}
+					if (matches && (actualParams != signature->coreParams
+							|| actualResults != signature->coreResults))
 						matches = false;
-					else
-						actualParams.push_back(*abi);
+					if (!matches)
+						fail("core function type does not match the flattened "
+								"component function type");
 				}
-				for (const StorageType& result : actual.results) {
-					const auto abi = asAbi(result);
-					if (!abi)
-						matches = false;
-					else
-						actualResults.push_back(*abi);
-				}
-				if (matches && (actualParams != directParams
-						|| actualResults != directResults))
-					matches = false;
-				if (!matches)
-					fail("core function type does not match the flattened "
-							"component function type");
 			}
 		}
 		break;

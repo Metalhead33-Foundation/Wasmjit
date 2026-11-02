@@ -870,7 +870,9 @@ const CanonicalAbiSignature* TypeStore::canonicalAbi(TypeId type,
 	appendKeyU32(key, options.memory);
 	appendKeyU32(key, options.realloc);
 	appendKeyU32(key, options.postReturn);
+	appendKeyU32(key, options.callback);
 	appendKeyU8(key, options.async ? 1 : 0);
+	appendKeyU8(key, static_cast<uint8_t>(options.direction));
 	appendKeyU8(key, options.pointerSize);
 
 	const auto found = canonicalAbi_.find(key);
@@ -892,8 +894,52 @@ const CanonicalAbiSignature* TypeStore::canonicalAbi(TypeId type,
 	for (const ComponentValueType& result : view.results())
 		if (!appendAbiFlat(*this, result, signature.flatResults, 0))
 			return nullptr;
-	signature.indirectParams = signature.flatParams.size() > 16;
-	signature.indirectResults = signature.flatResults.size() > 1;
+	signature.indirectParams = options.async
+			&& options.direction == CanonicalAbiOptions::Direction::Lower
+			? signature.flatParams.size() > 4
+			: signature.flatParams.size() > 16;
+	// Async lift results travel through `task.return` up to MAX_FLAT_PARAMS;
+	// only a spill beyond 16 uses the component-level indirect-result flag.
+	signature.indirectResults = options.async
+			&& options.direction == CanonicalAbiOptions::Direction::Lift
+			? signature.flatResults.size() > 16
+			: signature.flatResults.size() > 1;
+	// CM19: `flatten_functype`. The component-level flats above describe the
+	// value layout; `coreParams`/`coreResults` are the exact core signature the
+	// caller/callee must have, which differs for async and by direction.
+	const AbiCoreType pointer = options.pointerSize == 8 ? AbiCoreType::I64
+			: AbiCoreType::I32;
+	signature.coreParams = signature.flatParams;
+	signature.coreResults = signature.flatResults;
+	if (!options.async) {
+		if (signature.coreParams.size() > 16)
+			signature.coreParams = { pointer };
+		if (signature.coreResults.size() > 1) {
+			if (options.direction == CanonicalAbiOptions::Direction::Lift) {
+				signature.coreResults = { pointer };
+			} else {
+				signature.coreParams.push_back(pointer);
+				signature.coreResults.clear();
+			}
+		}
+	} else if (options.direction == CanonicalAbiOptions::Direction::Lift) {
+		// Async lift: MAX_FLAT_PARAMS for parameters; results travel through
+		// `task.return`. An async callback lift returns the packed callback code.
+		if (signature.coreParams.size() > 16)
+			signature.coreParams = { pointer };
+		signature.coreResults = options.callback != CanonicalAbiOptions::kNoIndex
+				? std::vector<AbiCoreType>{ AbiCoreType::I32 }
+				: std::vector<AbiCoreType>{};
+	} else {
+		// Async lower: MAX_FLAT_ASYNC_PARAMS (4), no scalar results; results are
+		// written through an appended pointer and the packed subtask state is
+		// returned as one i32.
+		if (signature.coreParams.size() > 4)
+			signature.coreParams = { pointer };
+		if (!signature.coreResults.empty())
+			signature.coreParams.push_back(pointer);
+		signature.coreResults = { AbiCoreType::I32 };
+	}
 	const auto inserted = canonicalAbi_.emplace(std::move(key),
 			std::move(signature));
 	return &inserted.first->second;

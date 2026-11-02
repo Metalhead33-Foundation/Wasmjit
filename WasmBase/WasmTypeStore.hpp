@@ -218,6 +218,11 @@ struct CanonicalAbiOptions {
 		Utf16, //!< `utf16`.
 		Latin1Utf16 //!< `latin1+utf16`.
 	};
+	//! Whether the type is being lifted or lowered (async flattening differs).
+	enum class Direction : uint8_t {
+		Lift, //!< `canon lift`.
+		Lower //!< `canon lower`.
+	};
 	//! The "no index" marker for an option the function does not name.
 	static constexpr uint32_t kNoIndex = ~uint32_t{0};
 
@@ -229,8 +234,12 @@ struct CanonicalAbiOptions {
 	uint32_t realloc = kNoIndex;
 	//! The `post-return` function index, or `kNoIndex`.
 	uint32_t postReturn = kNoIndex;
+	//! The async callback function index, or `kNoIndex`.
+	uint32_t callback = kNoIndex;
 	//! True when the function takes part in the async ABI.
 	bool async = false;
+	//! Which canonical direction derived this signature.
+	Direction direction = Direction::Lift;
 	//! Canonical ABI pointer/length width: 4 for memory32, 8 for memory64.
 	uint8_t pointerSize = 4;
 
@@ -239,7 +248,9 @@ struct CanonicalAbiOptions {
 	{
 		return stringEncoding == other.stringEncoding && memory == other.memory
 				&& realloc == other.realloc && postReturn == other.postReturn
-				&& async == other.async && pointerSize == other.pointerSize;
+				&& callback == other.callback && async == other.async
+				&& direction == other.direction
+				&& pointerSize == other.pointerSize;
 	}
 	//! True when any lowering-relevant option differs.
 	bool operator!=(const CanonicalAbiOptions& other) const
@@ -254,10 +265,14 @@ struct CanonicalAbiSignature {
 	TypeId type{TypeId::kNone};
 	//! The canonical options the derivation used; part of the cache key.
 	CanonicalAbiOptions options;
-	//! The flattened core parameter types.
+	//! The flattened component parameter types.
 	std::vector<AbiCoreType> flatParams;
-	//! The flattened core result types.
+	//! The flattened component result types.
 	std::vector<AbiCoreType> flatResults;
+	//! The exact core parameter types (`flatten_functype`).
+	std::vector<AbiCoreType> coreParams;
+	//! The exact core result types (`flatten_functype`).
+	std::vector<AbiCoreType> coreResults;
 	//! Canonical ABI MAX_FLAT_PARAMS (16) / MAX_FLAT_RESULTS (1) spill the
 	//! component values through memory. `flatParams`/`flatResults` still describe
 	//! the component-level flattening; consumers use these flags for the core

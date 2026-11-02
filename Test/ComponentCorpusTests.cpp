@@ -6,6 +6,8 @@
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -19,6 +21,16 @@
 #endif
 
 namespace {
+
+// CM-11: structural validator work is measured against a corpus that is a hard
+// gate. A report run lets the same test list every disagreement without
+// failing, so a work-in-progress rule can be measured instead of aborting at
+// its first (expected) delta. Mirrors `WASM_SPEC_TOLERANT` for the spec suite.
+bool tolerantMode()
+{
+	const char* raw = std::getenv("WASM_SPEC_CORPUS_TOLERANT");
+	return raw != nullptr && *raw != '\0' && *raw != '0';
+}
 
 // One manifest row: verdict, artifact, origin, reason (CM-9a).
 struct CorpusCase {
@@ -97,9 +109,11 @@ TEST_CASE("component corpus: the reference suite's verdict, checked against ours
 	// CM14/CM15: the corpus is green in both directions, so both are hard
 	// failures now. Over-acceptance is the unsafe direction (a definition reaches
 	// the runtime in a state the engine was not built for); over-rejection
-	// narrows the accepted language. The WARN lines still name every case.
+	// narrows the accepted language. The WARN lines still name every case, and
+	// the report mode (`WASM_SPEC_CORPUS_TOLERANT=1`) prints them unconditionally.
 	std::size_t acceptedRejects = 0;
 	std::size_t rejectedAccepts = 0;
+	const bool tolerant = tolerantMode();
 	for (const CorpusCase& testCase : cases) {
 		if (knownFailures.count(testCase.origin) != 0)
 			continue;
@@ -126,14 +140,25 @@ TEST_CASE("component corpus: the reference suite's verdict, checked against ours
 			++rejectedAccepts;
 			++disagreements;
 			WARN("corpus says accept, we reject: " << testCase.origin << ": " << rejected);
+			std::fprintf(stderr, "[component-corpus] accept -> reject: %s: %s\n",
+					testCase.origin.c_str(), rejected.c_str());
 		} else if (testCase.verdict == "reject" && accepted) {
 			++acceptedRejects;
 			++disagreements;
 			WARN("corpus says reject, we accept: " << testCase.origin);
+			std::fprintf(stderr, "[component-corpus] reject -> accept: %s\n",
+					testCase.origin.c_str());
 		}
 	}
+	std::fprintf(stderr,
+			"[component-corpus] %zu checked, %zu disagreements "
+			"(%zu accept-side, %zu reject-side)%s\n",
+			checked, disagreements, rejectedAccepts, acceptedRejects,
+			tolerant ? " [report mode]" : "");
 	REQUIRE(checked > 0);
-	REQUIRE(acceptedRejects == 0);
-	REQUIRE(rejectedAccepts == 0);
+	if (!tolerant) {
+		REQUIRE(acceptedRejects == 0);
+		REQUIRE(rejectedAccepts == 0);
+	}
 	INFO("corpus disagreements reported as warnings: " << disagreements);
 }

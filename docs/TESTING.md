@@ -1208,10 +1208,16 @@ failure (`REQUIRE(acceptedRejects == 0)` and `REQUIRE(rejectedAccepts == 0)`);
 the `WARN`s still name every case. A curated entry in
 `Test/component_known_failures.txt` removes one from the run while a gap is
 being worked off (empty today).
+**Report mode (CM-11):** `WASM_SPEC_CORPUS_TOLERANT=1` keeps the run
+non-failing and prints every disagreement to stderr plus a summary line
+(`[component-corpus] <n> checked, <n> disagreements …`). Use it while a
+structural change is expected to move verdicts; the default run remains a
+two-way hard gate.
 
 Useful commands:
 
 ```bash
 ./Test/WasmJit '[component-corpus]'        # the verdict run + the gap list
+WASM_SPEC_CORPUS_TOLERANT=1 ./Test/WasmJit '[component-corpus]'  # report, do not fail
 awk -F'\t' '$1=="skip"' build/*/Test/wasm_testsuite/component-corpus/manifest.tsv  # why a form was not assertable
 ```

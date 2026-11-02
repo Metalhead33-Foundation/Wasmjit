@@ -728,17 +728,13 @@ TypeBound parseTypeBound(Reader& r)
 
 ValueBound parseValueBound(Reader& r)
 {
+	// CM17: current producers encode a value import bound as a bare `<valtype>`
+	// (`0x79` for u32, or a positive SLEB128 type index for a named type); the
+	// older `0x00 <valueidx>` eq form is not emitted. Validation still accepts
+	// `Kind::Eq` for callers that build the AST directly.
 	ValueBound bound;
-	const uint8_t kind = r.u8();
-	if (kind == 0x00) {
-		bound.kind = ValueBound::Kind::Eq;
-		bound.valueIndex = r.u32();
-	} else if (kind == 0x01) {
-		bound.kind = ValueBound::Kind::Type;
-		bound.type = parseValueType(r);
-	} else {
-		throw std::runtime_error("component parse: invalid value bound");
-	}
+	bound.kind = ValueBound::Kind::Type;
+	bound.type = parseValueType(r);
 	return bound;
 }
 

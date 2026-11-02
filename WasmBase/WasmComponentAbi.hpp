@@ -130,8 +130,12 @@ private:
 				return options.realloc < other.options.realloc;
 			if (options.postReturn != other.options.postReturn)
 				return options.postReturn < other.options.postReturn;
+			if (options.callback != other.options.callback)
+				return options.callback < other.options.callback;
 			if (options.async != other.options.async)
 				return options.async < other.options.async;
+			if (options.direction != other.options.direction)
+				return options.direction < other.options.direction;
 			return options.pointerSize < other.options.pointerSize;
 		}
 	};

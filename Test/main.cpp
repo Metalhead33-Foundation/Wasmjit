@@ -2248,8 +2248,9 @@ TEST_CASE("component runtime links host component function imports")
 	};
 	auto backend = TestBackend::create();
 	WASM::ModuleInstantiator& compiler = backend->instantiator();
-	WASM::ComponentRuntime runtime(compiler, *component,
-			{{"host-add", host}});
+	WASM::ComponentRuntime::ComponentFunctionImports imports;
+	imports.emplace("host-add", host);
+	WASM::ComponentRuntime runtime(compiler, *component, std::move(imports));
 	auto function = runtime.exportedFunction("host-add");
 	REQUIRE(function.has_value());
 	WASM::Value args[2];
@@ -2307,8 +2308,9 @@ TEST_CASE("component runtime lowers a host import to a core callable")
 	};
 	auto backend = TestBackend::create();
 	WASM::ModuleInstantiator& compiler = backend->instantiator();
-	WASM::ComponentRuntime runtime(compiler, *component,
-			{{"host-add", host}});
+	WASM::ComponentRuntime::ComponentFunctionImports imports;
+	imports.emplace("host-add", host);
+	WASM::ComponentRuntime runtime(compiler, *component, std::move(imports));
 	const WASM::Callable lowered = runtime.coreFunction(0);
 	REQUIRE(WASM::callCallable<int32_t>(lowered, int32_t(20), int32_t(22)) == 42);
 }
@@ -2329,8 +2331,9 @@ TEST_CASE("component runtime lowers a host string import")
 	};
 	auto backend = TestBackend::create();
 	WASM::ModuleInstantiator& compiler = backend->instantiator();
-	WASM::ComponentRuntime runtime(compiler, *component,
-			{{"host-len", host}});
+	WASM::ComponentRuntime::ComponentFunctionImports imports;
+	imports.emplace("host-len", host);
+	WASM::ComponentRuntime runtime(compiler, *component, std::move(imports));
 	const WASM::Callable lowered = runtime.coreFunction(1);
 	WASM::LinearMemory* memory = runtime.coreMemory(0);
 	std::memcpy(memory->memoryBase + 1024, "hello", 5);
@@ -2957,6 +2960,157 @@ TEST_CASE("component instances and declarator types are parsed")
 	REQUIRE(componentTypeView(resources->types[2]).typeRef() == 0);
 }
 
+// CM19: a non-single-agent executor proves the async state can be injected.
+class CountingExecutor final : public WASM::ComponentExecutor {
+public:
+	uint32_t threadIndex() const override { return 7; }
+	uint32_t availableParallelism() const override { return 4; }
+	bool singleAgent() const override { return false; }
+	void push(std::function<void()> work) override { if (work) work(); }
+	void runUntilIdle() override {}
+	std::size_t pending() const override { return 0; }
+};
+
+TEST_CASE("component async tasks store results and bound nesting")
+{
+	uint32_t allocated = 0;
+	WASM::ComponentAsyncState state([&] { return ++allocated; },
+			[](uint32_t) {});
+	state.setExecutor(std::make_unique<CountingExecutor>());
+	REQUIRE(state.executor().threadIndex() == 7);
+	REQUIRE(state.executor().availableParallelism() == 4);
+
+	state.beginTask();
+	WASM::Value value;
+	value.kind = WASM::ValueTypeCode::I32;
+	value.i32 = 5;
+	state.taskReturn({ &value, 1 });
+	const std::vector<WASM::Value> results = state.endTask();
+	REQUIRE(results.size() == 1);
+	REQUIRE(results[0].i32 == 5);
+	REQUIRE(state.currentTask().id() == 0);
+
+	for (uint32_t i = 0; i + 1 < WASM::ComponentAsyncState::kMaxLiveTasks; ++i)
+		state.beginTask();
+	REQUIRE_THROWS(state.beginTask());
+	while (state.currentTask().id() != 0)
+		state.abortTask();
+}
+
+TEST_CASE("component async lift stores task.return results")
+{
+	auto artifact = loadTestArtifact("component_async_stackful");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	auto backend = TestBackend::create();
+	WASM::ComponentRuntime runtime(backend->instantiator(), *component);
+	auto function = runtime.exportedFunction("run");
+	REQUIRE(function.has_value());
+	REQUIRE(function->options.async);
+	WASM::ComponentValue argument;
+	argument.kind = WASM::ComponentValue::Kind::U32;
+	argument.u64 = 11;
+	WASM::ComponentValue result;
+	function->callValues({ &argument, 1 }, { &result, 1 });
+	REQUIRE(result.kind == WASM::ComponentValue::Kind::U32);
+	REQUIRE(result.u64 == 11);
+	// An async lift has no synchronous flat entry point.
+	REQUIRE_THROWS(function->call({}, {}));
+}
+
+TEST_CASE("component async callback drives the callback event loop")
+{
+	auto artifact = loadTestArtifact("component_async_callback");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	auto backend = TestBackend::create();
+	WASM::ComponentRuntime runtime(backend->instantiator(), *component);
+	auto function = runtime.exportedFunction("run");
+	REQUIRE(function.has_value());
+	REQUIRE(function->options.async);
+	REQUIRE(function->options.callback != WASM::CanonicalAbiOptions::kNoIndex);
+	WASM::ComponentValue argument;
+	argument.kind = WASM::ComponentValue::Kind::U32;
+	argument.u64 = 1;
+	WASM::ComponentValue result;
+	function->callValues({ &argument, 1 }, { &result, 1 });
+	REQUIRE(result.kind == WASM::ComponentValue::Kind::U32);
+	REQUIRE(result.u64 == 7);
+}
+
+TEST_CASE("component async lower uses the async core signature")
+{
+	auto artifact = loadTestArtifact("component_async_lower");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+
+	WASM::ComponentFunction host;
+	host.params = { WASM::AbiCoreType::I32 };
+	host.results = { WASM::AbiCoreType::I32 };
+	host.callValues = [](std::span<const WASM::ComponentValue> args,
+			std::span<WASM::ComponentValue> results) {
+		results[0].kind = WASM::ComponentValue::Kind::U32;
+		results[0].u64 = args[0].u64 + 1;
+	};
+	WASM::ComponentRuntime::ComponentImports imports;
+	imports.emplace("host", host);
+
+	auto backend = TestBackend::create();
+	WASM::ComponentRuntime runtime(backend->instantiator(), *component,
+			std::move(imports));
+	// Core function 0 is the lowered import; 1 is the caller that invokes it.
+	REQUIRE(WASM::callCallable<int32_t>(runtime.coreFunction(1),
+			int32_t(21)) == 22);
+}
+
+TEST_CASE("async canon option rules reject invalid combinations")
+{
+	// CM16: each fixture is well-formed text but violates one canonopt rule.
+	REQUIRE_THROWS(loadTestArtifact("component_async_invalid_postreturn"));
+	REQUIRE_THROWS(loadTestArtifact("component_async_invalid_callback"));
+	REQUIRE_THROWS(loadTestArtifact("component_async_invalid_callback_type"));
+	REQUIRE_THROWS(loadTestArtifact("component_async_invalid_callback_lower"));
+}
+
+TEST_CASE("component instance imports carry a function bag")
+{
+	// CM17: a host supplies an instance export bag (not a function import).
+	auto artifact = loadTestArtifact("component_instance_import");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+
+	WASM::ComponentFunction host;
+	host.params = { WASM::AbiCoreType::I32 };
+	host.results = { WASM::AbiCoreType::I32 };
+	host.callValues = [](std::span<const WASM::ComponentValue> args,
+			std::span<WASM::ComponentValue> results) {
+		results[0].kind = WASM::ComponentValue::Kind::U32;
+		results[0].u64 = args[0].u64 + 2;
+	};
+	auto api = std::make_shared<WASM::ComponentInstanceValue>();
+	api->functions.emplace("f", host);
+
+	WASM::ComponentRuntime::ComponentImports imports;
+	imports.emplace("api", WASM::ComponentImport::instanceImport(api));
+
+	auto backend = TestBackend::create();
+	WASM::ComponentRuntime runtime(backend->instantiator(), *component,
+			std::move(imports));
+	auto function = runtime.exportedFunction("f");
+	REQUIRE(function.has_value());
+	WASM::ComponentValue argument;
+	argument.kind = WASM::ComponentValue::Kind::U32;
+	argument.u64 = 40;
+	WASM::ComponentValue result;
+	function->callValues({ &argument, 1 }, { &result, 1 });
+	REQUIRE(result.kind == WASM::ComponentValue::Kind::U32);
+	REQUIRE(result.u64 == 42);
+}
+
 TEST_CASE("async functions with canon options and name attributes are parsed")
 {
 	auto asyncArtifact = loadTestArtifact("component_async");
@@ -3091,6 +3245,111 @@ TEST_CASE("core inline bag carries table and global sorts")
 	// Instantiating used to throw `inline core export sort is not supported`;
 	// construction processes every definition, so a silent pass here means both
 	// sorts travelled alias -> index space -> bag handle.
+	auto backend = TestBackend::create();
+	REQUIRE_NOTHROW([&] {
+		WASM::ComponentRuntime runtime(backend->instantiator(), *component);
+		(void)runtime;
+	}());
+}
+
+TEST_CASE("component bags keep the component instance index space")
+{
+	// CM17 regression: instance 0 is an inline bag and instance 1 is a nested
+	// instantiate. The old runtime stored nested runtimes by instantiate order,
+	// so the alias below resolved instance 1 against the wrong runtime.
+	auto artifact = loadTestArtifact("component_bag_before_nested");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	REQUIRE(component->instances.size() == 2);
+	REQUIRE(component->instances[0].kind == WASM::ComponentInstance::Kind::InlineExports);
+	REQUIRE(component->instances[1].kind == WASM::ComponentInstance::Kind::Instantiate);
+
+	auto backend = TestBackend::create();
+	WASM::ComponentRuntime runtime(backend->instantiator(), *component);
+	auto function = runtime.exportedFunction("f");
+	REQUIRE(function.has_value());
+	REQUIRE(function->paramTypes.size() == 1);
+	WASM::ComponentValue argument;
+	argument.kind = WASM::ComponentValue::Kind::U32;
+	argument.u64 = 9;
+	WASM::ComponentValue result;
+	function->callValues({ &argument, 1 }, { &result, 1 });
+	REQUIRE(result.kind == WASM::ComponentValue::Kind::U32);
+	REQUIRE(result.u64 == 9);
+}
+
+TEST_CASE("component instantiate arguments carry values, instances and types")
+{
+	// CM17: the child imports a value (host), an instance (bag) and a type
+	// (resource), then re-exports the function and the value. Before this
+	// milestone every non-function instantiate argument threw.
+	auto artifact = loadTestArtifact("component_instance_args");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+
+	WASM::ComponentValue hostValue;
+	hostValue.kind = WASM::ComponentValue::Kind::U32;
+	hostValue.u64 = 42;
+	WASM::ComponentRuntime::ComponentImports imports;
+	imports.emplace("hostv", WASM::ComponentImport::valueImport(hostValue));
+
+	auto backend = TestBackend::create();
+	WASM::ComponentRuntime runtime(backend->instantiator(), *component,
+			std::move(imports));
+	auto function = runtime.exportedFunction("call");
+	REQUIRE(function.has_value());
+	WASM::ComponentValue argument;
+	argument.kind = WASM::ComponentValue::Kind::U32;
+	argument.u64 = 5;
+	WASM::ComponentValue result;
+	function->callValues({ &argument, 1 }, { &result, 1 });
+	REQUIRE(result.kind == WASM::ComponentValue::Kind::U32);
+	REQUIRE(result.u64 == 5);
+}
+
+TEST_CASE("core inline bag carries type and tag sorts")
+{
+	// CM18: a core bag can carry a core type (compile-time identity, no runtime
+	// object) and a tag (a process-wide TagId). The text format refuses a core
+	// type export, so this fixture is a hand-authored binary:
+	//   core type 0: (func)
+	//   core module 0: (func) + (tag (type 0)), exports "f" and "t"
+	//   core instance 0: instantiate module 0; alias tag 0 and func 0
+	//   core instance 1: bag exporting "ty" (type 0), "tg" (tag 0), "fn" (func 0)
+	const std::vector<uint8_t> bytes = {
+		0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00,
+		0x03, 0x04, 0x01, 0x60, 0x00, 0x00, 0x01, 0x28,
+		0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x04, 0x01, 0x60, 0x00, 0x00, 0x03, 0x02,
+		0x01, 0x00, 0x0d, 0x03, 0x01, 0x00, 0x00, 0x07,
+		0x09, 0x02, 0x01, 0x66, 0x00, 0x00, 0x01, 0x74,
+		0x04, 0x00, 0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b,
+		0x02, 0x04, 0x01, 0x00, 0x00, 0x00, 0x06, 0x0d,
+		0x02, 0x00, 0x04, 0x01, 0x00, 0x01, 0x74, 0x00,
+		0x00, 0x01, 0x00, 0x01, 0x66, 0x02, 0x12, 0x01,
+		0x01, 0x03, 0x02, 0x74, 0x79, 0x10, 0x00, 0x02,
+		0x74, 0x67, 0x04, 0x00, 0x02, 0x66, 0x6e, 0x00,
+		0x00
+	};
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device, testStore());
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	REQUIRE(component->coreInstances.size() == 2);
+	REQUIRE(component->coreInstances[1].kind == WASM::CoreInstance::Kind::InlineExports);
+	REQUIRE(component->coreInstances[1].exports.size() == 3);
+	REQUIRE(component->coreInstances[1].exports[0].sortIndex.sort == WASM::CoreSort::Type);
+	REQUIRE(component->coreInstances[1].exports[1].sortIndex.sort == WASM::CoreSort::Tag);
+	REQUIRE(component->coreInstances[1].exports[2].sortIndex.sort == WASM::CoreSort::Func);
+
+	// Construction used to throw `inline core export sort is not supported` for
+	// the type and had no tag space at all. A silent pass means both sorts
+	// travelled alias -> index space -> bag handle.
 	auto backend = TestBackend::create();
 	REQUIRE_NOTHROW([&] {
 		WASM::ComponentRuntime runtime(backend->instantiator(), *component);

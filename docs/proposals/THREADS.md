@@ -373,11 +373,22 @@ rather than duplicated in `COMPONENT_MODEL.md`:
   drop`, `waitable.join`; `subtask.cancel`/`drop`; `error-context.new/
   debug-message/drop`; and `thread.*` single-agent answers. A synchronous copy
   that would block traps with a named single-agent error rather than hanging.
-- **Deferred**: true concurrent copies, a second agent, real wakeups, an
-  out-of-line event loop, and the async lift/lower calling convention. These are
-  the same staging decision as §3/`TD9`: one agent, synchronous calls, no
-  scheduler. The interface is deliberately the seam a future TH-5 backend fills
-  in, so no caller changes when that happens.
+- **The async calling convention is implemented (CM19, 2026-11-02).**
+  `ComponentAsyncState` keeps a task stack with result storage and a hard
+  live-task bound (`kMaxLiveTasks`), and the executor is injectable
+  (`setExecutor`) so a mock can observe scheduling without threads. `canon lift
+  ... async` runs a task: the stackful form calls the callee with empty core
+  results and lifts what `task.return` stored; the callback form drives the
+  `YIELD`/`WAIT` loop with `(event-code, payload1, payload2) -> packed` calls.
+  `canon lower ... async` uses `MAX_FLAT_ASYNC_PARAMS` (4), appends a result
+  pointer, returns the packed subtask state as one `i32`, and writes the lowered
+  results through that pointer. The flattened core signature comes from
+  `CanonicalAbiSignature::{coreParams,coreResults}`.
+- **Deferred**: true concurrent copies, a second agent, real wakeups, and an
+  out-of-line event loop. These are the same staging decision as §3/`TD9`: one
+  agent, synchronous calls, no scheduler. The interface is deliberately the seam
+  a future TH-5 backend fills in, so no caller changes when that happens; the
+  single-agent executor is now replaceable, so the seam is testable today.
 
 ## 6. Where we can and should play fast and loose
 
