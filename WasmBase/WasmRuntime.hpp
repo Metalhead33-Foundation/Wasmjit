@@ -154,6 +154,11 @@ public:
 	ComponentInstanceHandle& instantiateComponent(const LoadedComponent& component,
 			ComponentHostImports imports = {},
 			std::unique_ptr<ComponentExecutor> executor = {});
+	/** \brief Instantiates a loaded component with explicit embedder settings. \param component Definition loaded by this runtime. \param imports Component-level host imports. \param executor Optional embedder executor. \param options Host bridge, profile, compilation policy, stack reserve and entry discipline. \return Reference to the runtime-owned instance. */
+	ComponentInstanceHandle& instantiateComponent(const LoadedComponent& component,
+			ComponentHostImports imports,
+			std::unique_ptr<ComponentExecutor> executor,
+			const ComponentInstanceOptions& options);
 	/** \brief Lists the component instances owned by this runtime. \return Pointers to live instances. */
 	std::vector<ComponentInstanceHandle*> componentInstances();
 

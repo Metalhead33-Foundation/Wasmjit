@@ -231,6 +231,21 @@ std::shared_ptr<const LoadedComponent> Runtime::loadComponentFile(
 ComponentInstanceHandle& Runtime::instantiateComponent(const LoadedComponent& component,
 		ComponentHostImports imports, std::unique_ptr<ComponentExecutor> executor)
 {
+	ComponentInstanceOptions options;
+	options.hostBridge = config_.hostBridge;
+	options.profile = config_.profile;
+	options.compilation = config_.compilation;
+	options.stackReserveBytes = config_.execution.stackReserveBytes;
+	options.allowConcurrentCalls =
+			config_.concurrency == ConcurrencyModel::Agents;
+	return instantiateComponent(component, std::move(imports),
+			std::move(executor), options);
+}
+
+ComponentInstanceHandle& Runtime::instantiateComponent(const LoadedComponent& component,
+		ComponentHostImports imports, std::unique_ptr<ComponentExecutor> executor,
+		const ComponentInstanceOptions& options)
+{
 	rejectUnsupportedConfig(config_, backend_);
 	std::shared_ptr<const LoadedComponent> loaded;
 	for (const auto& candidate : loadedComponents_) {
@@ -245,9 +260,12 @@ ComponentInstanceHandle& Runtime::instantiateComponent(const LoadedComponent& co
 			: backend_;
 	if (!componentBackend.instantiator)
 		throw std::runtime_error("the runtime has no backend instantiator");
+	componentBackend.instantiator->setCompilationPolicy(options.compilation);
+	componentBackend.instantiator->setStackReserveBytes(
+			options.stackReserveBytes);
 	auto instance = makeComponentInstance(std::move(loaded),
 			std::move(componentBackend), std::move(imports),
-			std::move(executor));
+			std::move(executor), options);
 	componentInstances_.push_back(std::move(instance));
 	return *componentInstances_.back();
 }

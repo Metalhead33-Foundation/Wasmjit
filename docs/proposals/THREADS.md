@@ -396,9 +396,15 @@ supported on that executor.
 - **Scheduling seam**: concurrent copies, a second agent, wakeups and an
   out-of-line event loop are supplied by the installed `ComponentExecutor`;
   `SingleAgentExecutor` is the default. A stack- or fiber-capable executor
-  overrides `suspendCurrent`; the default single-agent executor refuses to
-  suspend. The interface is the seam a multi-agent embedder fills in, so no caller
-  changes when it does; the executor is replaceable and testable today.
+  overrides `suspendCurrent` to park; the base implementation refuses, so an
+  executor that cannot suspend is a named error rather than a guest that
+  silently continues after `thread.suspend`. Component host entries are
+  serialized at the instance boundary; the
+  `allowConcurrentCalls` option (derived from `RuntimeConfig::concurrency`)
+  chooses between rejecting a second concurrent caller and serializing it.
+  Finished component threads are erased from the thread table. The interface is
+  the seam a multi-agent embedder fills in, so no caller changes when it does;
+  the executor is replaceable and testable today.
 
 ## 6. Where we can and should play fast and loose
 

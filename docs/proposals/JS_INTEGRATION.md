@@ -424,6 +424,16 @@ This is enough for a JS adapter to work **without touching a backend**:
 `LibJit`, `AsmJit` and `SlJit` only see `Callable` and `VMContext`; they never
 see a JS engine type.
 
+Component instances use the same boundary now: `instantiateComponent` forwards
+`RuntimeConfig::hostBridge`, profile, compilation policy and stack reserve to
+every embedded core module, and `ComponentInstanceOptions` exposes the same
+settings per instance. A component host callback started by `canon lower` can
+recover the caller with `currentComponentHostContext()`; it returns the same
+`VMContext*` a core host thunk receives, so `hostData` and the optional
+`HostBridge` lifecycle are available there too. The JavaScript API binding,
+Promise/event loop and ESM loader remain external (JS4–JS6), not missing engine
+hooks.
+
 ### 4.2 Types and metadata
 
 - `Module` exposes import vectors, `Export { name, kind, index }`, function

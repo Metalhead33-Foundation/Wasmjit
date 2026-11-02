@@ -21,6 +21,7 @@ WASMJIT_VISIBLE_BEGIN
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -29,6 +30,16 @@ namespace WASM {
 
 class LoadedComponent;
 class Module;
+
+/** \brief The VM context of the current component host callback, or null.
+ *
+ * A host function invoked from component-embedded core code can use this to
+ * recover `VMContext::hostData` and the caller's agent state. It is set for the
+ * duration of a `canon lower` host call, including deferred work queued on the
+ * component executor; direct host calls to an exported component function have
+ * no core caller and therefore return null.
+ */
+const VMContext* currentComponentHostContext() noexcept;
 
 /** \brief Interned string identity used by canonical component records. */
 using StringId = uint32_t;
@@ -180,8 +191,9 @@ struct ComponentFunction {
 };
 
 //! A host-supplied component instance: the export bag an instance import or a
-//! non-function `with` argument can carry. Nested instances are values, not
-//! runtimes, so the bag is self-contained and can outlive the providing runtime.
+//! non-function `with` argument can carry. A host-supplied bag is self-contained;
+//! function entries copied from a live component runtime remain tied to that
+//! runtime and must not outlive it.
 struct ComponentInstanceValue {
 	//! Named function exports.
 	std::unordered_map<std::string, ComponentFunction> functions;
@@ -193,6 +205,20 @@ struct ComponentInstanceValue {
 	std::unordered_map<std::string, std::shared_ptr<ComponentInstanceValue>> instances;
 	//! Named component exports.
 	std::unordered_map<std::string, std::shared_ptr<const LoadedComponent>> components;
+	//! Named core-module exports (host-supplied instance bags and re-exports).
+	std::unordered_map<std::string, std::shared_ptr<const Module>> coreModules;
+
+	/** \brief Visits every nested instance export depth-first. \param visitor Callback receiving the export name and bag. */
+	void visitNested(const std::function<void(std::string_view,
+			const ComponentInstanceValue&)>& visitor) const
+	{
+		for (const auto& [name, nested] : instances) {
+			if (!nested)
+				continue;
+			visitor(name, *nested);
+			nested->visitNested(visitor);
+		}
+	}
 };
 
 //! One component-level import or instantiate argument. A function entry keeps

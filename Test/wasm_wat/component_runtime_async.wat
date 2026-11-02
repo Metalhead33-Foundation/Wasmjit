@@ -5,6 +5,7 @@
 (component
   (core module $mem (memory (export "mem") 1))
   (core instance $memory (instantiate $mem))
+  (alias core export $memory "mem" (core memory $m))
 
   (type $S (stream u8))
   (type $F (future u8))

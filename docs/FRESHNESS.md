@@ -419,19 +419,19 @@ The values it printed on 2026-11-01, in the working tree on `39170be` (a
 `build/Desktop-Debug` qmake build — re-run it, do not trust these), are: 22 / 40 /
 17 `.md` files (21 / 39 / 16 notes); 72 header files; **17,090 assertions in 549
 test cases**; `[docs]` 1013/2,
-`[headerdoc]` 6/3, `[runtime]` 46/7, `[concurrency]` 80/13, `[multiagent]`
+`[headerdoc]` 6/3, `[runtime]` 122/16, `[concurrency]` 80/13, `[multiagent]`
 51/6, `[backendabi]` 36/4, `[plugin]` 41/8, `[tiers]` 222/3,
 `[compilation-policy]` 30/3, `[config]` 4,190/13, `[mem-provider]` 122/7,
 `[abi]` 24/6, `[surface]` 4/1, `[layering]` 4/1; 2,629 dynamic / 1,859 strong
 exported symbols. **These are a snapshot, not a promise** — they are here to show
 what the output looks like, and to make a reader notice when it does not.
 
-**Current (2026-11-02, CM24–CM26 working tree):** **17,325 assertions in 574 test
+**Current (2026-11-02, CM24–CM26 working tree):** **17,355 assertions in 578 test
 cases**; `[component-corpus]`/`[component-subtyping]` 520/1,
 `[component-execution]` 6/2 (140 accepted artifacts constructed plus the
-upstream scalar-return/trap sweep; 21 residual groups), `[component-async]` 93/8,
+upstream scalar-return/trap sweep; 3 residual groups), `[component-async]` 94/8,
 `[component-name]` 7/1, `[component-fuzz]` 4/1,
-`[component-api]` 29/3, `[component-features]` 19/1. Re-run the probe; these are
+`[component-api]` 58/7, `[component-features]` 19/1. Re-run the probe; these are
 a dated snapshot, not a promise.
 
 Three things moved those numbers while this note was being written, which is the

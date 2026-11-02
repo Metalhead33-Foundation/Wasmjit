@@ -1201,13 +1201,17 @@ private:
 		try {
 			if (it->second.entry)
 				it->second.entry();
+			it->second.entry = nullptr;
 			it->second.state = ComponentThread::State::Finished;
 		} catch (...) {
+			it->second.entry = nullptr;
 			it->second.state = ComponentThread::State::Finished;
 			threadStack_.pop_back();
+			threads_.erase(index);
 			throw;
 		}
 		threadStack_.pop_back();
+		threads_.erase(index);
 	}
 
 	//! The event code a waitable kind produces.

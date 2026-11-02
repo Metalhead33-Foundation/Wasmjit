@@ -2,6 +2,7 @@
 #define WASMCOMPONENTRUNTIME_HPP
 
 #include "WasmApi.hpp"
+#include "WasmComponentInstance.hpp"
 
 /*!
   \file WasmComponentRuntime.hpp
@@ -24,8 +25,10 @@ WASMJIT_VISIBLE_BEGIN
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -70,6 +73,24 @@ public:
 					std::unordered_map<std::string, const WASM::Module*>>
 					instanceCoreModules = {}); //!< `imports` supplies the host implementations.
 	/**
+	 * \brief Builds an executable runtime with the embedder's execution settings.
+	 * \param instantiator Backend-neutral core module instantiator; must outlive this runtime.
+	 * \param component Validated component definition; must outlive this runtime.
+	 * \param imports Host implementations for component-level imports.
+	 * \param coreModuleImports Host-supplied definitions for imported core modules.
+	 * \param outerCoreModuleSpaces Ancestor core-module index spaces for outer aliases.
+	 * \param instanceCoreModules Core-module exports attached to imported instances.
+	 * \param options Host bridge, profile, compilation policy, stack reserve and entry discipline.
+	 */
+	ComponentRuntime(ModuleInstantiator& instantiator,
+			const Component& component, ComponentImports imports,
+			std::unordered_map<std::string, const WASM::Module*> coreModuleImports,
+			std::vector<std::vector<const WASM::Module*>> outerCoreModuleSpaces,
+			std::unordered_map<std::string,
+					std::unordered_map<std::string, const WASM::Module*>>
+					instanceCoreModules,
+			const ComponentInstanceOptions& options);
+	/**
 	 * \brief Builds a runtime from the legacy function-only import map.
 	 * \param instantiator Backend-neutral core module instantiator; must outlive this runtime.
 	 * \param component Validated component definition; must outlive this runtime.
@@ -99,6 +120,8 @@ public:
 	/** \brief Retrieves a core global by flattened index. \param index Core global index. \return Global cell and declared type, or nullopt when unavailable. */
 	std::optional<std::pair<WASM::Value*, WASM::GlobalType>> coreGlobal(
 			std::size_t index) const;
+	/** \brief Retrieves a core tag by flattened index. \param index Core tag index. \return Tag identity, or nullopt when unavailable. */
+	std::optional<WASM::TagId> coreTag(std::size_t index) const;
 	/** \brief Requests cancellation of the active async task. \throws std::runtime_error if no task is active. */
 	void requestTaskCancellation();
 	/** \brief Allocates a STARTING subtask and queues its body on the executor. \param work Deferred lowered call. \return Subtask handle. */
@@ -109,6 +132,31 @@ public:
 	bool subtaskCancelled(uint32_t handle) const;
 	/** \brief Reports whether the installed executor is the single-agent kind. \return true for synchronous execution. */
 	bool executorIsSingleAgent();
+	/** \brief Creates paired stream/future handles. \param future true for a future. \param elementSize Element size in bytes. \return Readable and writable handles. */
+	std::pair<uint32_t, uint32_t> newStreamFuture(bool future,
+			uint32_t elementSize);
+	/** \brief Reads a stream/future endpoint into guest memory. \param handle Readable endpoint. \param memory Destination memory. \param address Destination address. \param count Element count. \param async true to allow a pending copy. \return Packed copy result. */
+	uint32_t asyncRead(uint32_t handle, LinearMemory& memory, uint64_t address,
+			uint64_t count, bool async);
+	/** \brief Writes a stream/future endpoint from guest memory. \param handle Writable endpoint. \param memory Source memory. \param address Source address. \param count Element count. \param async true to allow a pending copy. \return Packed copy result. */
+	uint32_t asyncWrite(uint32_t handle, LinearMemory& memory, uint64_t address,
+			uint64_t count, bool async);
+	/** \brief Cancels a pending endpoint copy. \param handle Endpoint handle. \param async Canonical ABI async flag. \return Packed cancellation result. */
+	uint32_t asyncCancel(uint32_t handle, bool async);
+	/** \brief Drops one endpoint. \param handle Endpoint handle. \param direction Endpoint direction. */
+	void asyncDrop(uint32_t handle, ComponentEndDirection direction);
+	/** \brief Forwards a readable endpoint to a writable endpoint. \param readable Readable handle. \param writable Writable handle. */
+	void asyncForward(uint32_t readable, uint32_t writable);
+	/** \brief Creates a host-owned resource slot. \param type Resource type identity. \param representation Host representation. \return New handle. */
+	uint32_t newResourceHandle(TypeId type, uint64_t representation);
+	/** \brief Reads a resource representation. \param handle Resource handle. \return Host representation. */
+	uint64_t resourceRepresentation(uint32_t handle) const;
+	/** \brief Drops a host-owned resource slot. \param handle Resource handle. */
+	void dropResourceHandle(uint32_t handle);
+	/** \brief Queues a host call on the installed executor. \param work Work item. */
+	void post(std::function<void()> work);
+	/** \brief Drains the installed executor's cooperative queue. */
+	void runExecutorUntilIdle();
 	//! Instance-owned Canonical ABI signatures (TYPE_MODEL TM-15). Store metadata
 	//! is process-wide; this table is per component instance.
 	/** \brief Provides read-only access to this instance's Canonical ABI cache. \return Const reference to instance-owned ABI metadata. */
@@ -138,6 +186,35 @@ public:
 	}
 
 private:
+	//! Embedder execution settings copied into this runtime and its children.
+	ComponentInstanceOptions options_{};
+	//! Serializes host entries into one component runtime; nested entries on the
+	//! same thread are allowed through the recursive mutex.
+	std::recursive_mutex entryMutex_;
+
+	/** \brief One host-entry lock for a component invocation. */
+	class EntryGuard {
+	public:
+		explicit EntryGuard(ComponentRuntime& runtime)
+			: lock_(runtime.entryMutex_, std::defer_lock)
+		{
+			if (runtime.options_.allowConcurrentCalls) {
+				lock_.lock();
+				return;
+			}
+			if (!lock_.try_lock())
+				throw std::runtime_error(
+						"component runtime: concurrent entry is disabled; "
+						"install a concurrent ComponentExecutor or use "
+						"ComponentInstanceOptions::allowConcurrentCalls");
+		}
+	private:
+		std::unique_lock<std::recursive_mutex> lock_; //!< Held entry lock.
+	};
+
+	/** \brief Locks one component host entry. \return Guard that releases it on scope exit. */
+	EntryGuard enterCall() { return EntryGuard(*this); }
+
 	/** \brief Memory and helper callables selected by Canonical ABI options. */
 	struct AbiMemory {
 		//! The component instance's linear memory.
@@ -212,6 +289,9 @@ private:
 	struct ComponentDefinitionHandle {
 		const WASM::Component* definition = nullptr; //!< Parsed definition.
 		std::shared_ptr<const LoadedComponent> owner; //!< Keeps an imported component alive.
+		//! Core-module index space of the instance that exported this component.
+		//! Empty for a definition owned by this runtime.
+		std::vector<const WASM::Module*> outerCoreModules;
 	};
 	std::vector<ComponentDefinitionHandle> componentSpace_; //!< The component index space, in definition order.
 	//! One executable component instance: a nested runtime (Instantiate) or an

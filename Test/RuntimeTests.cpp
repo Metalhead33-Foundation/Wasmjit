@@ -11,9 +11,11 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
+#include <future>
 #include <iterator>
 #include <stdexcept>
 #include <string>
@@ -35,6 +37,115 @@ std::vector<std::byte> readComponentFixture(const char* name)
 }
 
 } // namespace
+
+TEST_CASE("runtime: component options reach embedded core modules",
+		"[runtime][component-api]")
+{
+	int created = 0;
+	WASM::HostBridge bridge;
+	bridge.userData = &created;
+	bridge.instanceCreated = [](void* userData, WASM::VMContext*) {
+		++*static_cast<int*>(userData);
+	};
+	WASM::RuntimeConfig config;
+	config.hostBridge = &bridge;
+	auto runtime = WASM::Runtime::create("libjit", config);
+	REQUIRE(runtime != nullptr);
+	auto loaded = runtime->loadComponentBytes(
+			readComponentFixture("component_runtime"));
+	REQUIRE(loaded != nullptr);
+	WASM::ComponentInstanceHandle& instance =
+			runtime->instantiateComponent(*loaded);
+	(void)instance;
+	REQUIRE(created > 0);
+}
+
+TEST_CASE("runtime: component host stream and resource facade", "[runtime][component-api]")
+{
+	auto runtime = WASM::Runtime::create("libjit");
+	REQUIRE(runtime != nullptr);
+
+	auto asyncLoaded = runtime->loadComponentBytes(
+			readComponentFixture("component_runtime_async"),
+			WASM::ComponentOptions{WASM::ComponentFeatures::all()});
+	REQUIRE(asyncLoaded != nullptr);
+	WASM::ComponentInstanceHandle& asyncInstance =
+			runtime->instantiateComponent(*asyncLoaded);
+	WASM::LinearMemory* memory = asyncInstance.coreMemory(0);
+	REQUIRE(memory != nullptr);
+	auto* bytes = static_cast<std::uint8_t*>(memory->memoryBase);
+	REQUIRE(bytes != nullptr);
+	auto [readable, writable] = asyncInstance.newStream(1);
+	bytes[0] = 0x5A;
+	REQUIRE(asyncInstance.streamWrite(writable, *memory, 0, 1) == 0x10);
+	REQUIRE(asyncInstance.streamRead(readable, *memory, 4, 1) == 0x10);
+	REQUIRE(bytes[4] == 0x5A);
+	asyncInstance.dropEndpoint(readable, true);
+	asyncInstance.dropEndpoint(writable, false);
+
+	auto resourceLoaded = runtime->loadComponentBytes(
+			readComponentFixture("component_export_surface"));
+	REQUIRE(resourceLoaded != nullptr);
+	WASM::ComponentInstanceHandle& resourceInstance =
+			runtime->instantiateComponent(*resourceLoaded);
+	auto type = resourceInstance.exportedType("t");
+	REQUIRE(type.has_value());
+	auto resource = resourceInstance.newResource(*type, 77);
+	REQUIRE(resource.kind == WASM::ComponentValue::Kind::Own);
+	REQUIRE(resourceInstance.resourceRepresentation(resource) == 77);
+	resourceInstance.dropResource(resource);
+	REQUIRE_THROWS(resourceInstance.resourceRepresentation(resource));
+}
+
+TEST_CASE("runtime: component async call returns a future", "[runtime][component-api]")
+{
+	auto runtime = WASM::Runtime::create("libjit");
+	REQUIRE(runtime != nullptr);
+	auto loaded = runtime->loadComponentBytes(
+			readComponentFixture("component_runtime"));
+	REQUIRE(loaded != nullptr);
+	WASM::ComponentInstanceHandle& instance =
+			runtime->instantiateComponent(*loaded);
+	WASM::ComponentValue a;
+	a.kind = WASM::ComponentValue::Kind::U32;
+	a.u64 = 20;
+	WASM::ComponentValue b;
+	b.kind = WASM::ComponentValue::Kind::U32;
+	b.u64 = 22;
+	auto future = instance.callAsync("add", { a, b });
+	REQUIRE(future.wait_for(std::chrono::seconds(0))
+			== std::future_status::ready);
+	auto results = future.get();
+	REQUIRE(results.size() == 1);
+	REQUIRE(results[0].kind == WASM::ComponentValue::Kind::U32);
+	REQUIRE(results[0].u64 == 42);
+}
+
+TEST_CASE("runtime: a component host callback sees the caller context",
+		"[runtime][component-api]")
+{
+	bool sawContext = false;
+	WASM::ComponentFunction host;
+	host.params = {WASM::AbiCoreType::I32};
+	host.results = {WASM::AbiCoreType::I32};
+	host.callValues = [&sawContext](std::span<const WASM::ComponentValue> args,
+			std::span<WASM::ComponentValue> results) {
+		sawContext = WASM::currentComponentHostContext() != nullptr;
+		results[0].kind = WASM::ComponentValue::Kind::U32;
+		results[0].u64 = args[0].u64 + 1;
+	};
+	WASM::ComponentHostImports imports;
+	imports.emplace("host", host);
+	auto runtime = WASM::Runtime::create("libjit");
+	auto loaded = runtime->loadComponentBytes(
+			readComponentFixture("component_async_lower"),
+			WASM::ComponentOptions{WASM::ComponentFeatures::all()});
+	REQUIRE(loaded != nullptr);
+	WASM::ComponentInstanceHandle& instance =
+			runtime->instantiateComponent(*loaded, std::move(imports));
+	REQUIRE(WASM::callCallable<std::int32_t>(instance.coreFunction(1), 21) == 22);
+	REQUIRE(sawContext);
+}
 
 TEST_CASE("runtime: create, load, instantiate and call", "[runtime]")
 {

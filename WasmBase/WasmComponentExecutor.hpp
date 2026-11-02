@@ -45,10 +45,12 @@ public:
 	virtual void waitForWork() { runUntilIdle(); }
 	/** \brief Wakes a `waitForWork` caller after a new async event is published. The default is a no-op. */
 	virtual void wake() {}
-	/** \brief Suspends the current execution context. The default queues `resume`; a stack- or fiber-capable executor overrides this to actually park. \param resume Callback that resumes the current context. \throws std::runtime_error when the executor cannot suspend. */
+	/** \brief Suspends the current execution context. The default refuses because a cooperative queue cannot park a generated core frame; a stack- or fiber-capable executor overrides this. \param resume Callback that resumes the current context. \throws std::runtime_error by default, and by any executor that cannot suspend. */
 	virtual void suspendCurrent(std::function<void()> resume)
 	{
-		push(std::move(resume));
+		(void)resume;
+		throw std::runtime_error(
+				"component executor cannot suspend the current context");
 	}
 
 	/** \brief Cooperative yield: lets every queued item run. */

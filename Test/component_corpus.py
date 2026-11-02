@@ -17,6 +17,7 @@ so one unparsable case never breaks the build.  Everything is written under
 """
 
 import argparse
+import ast
 import os
 import re
 import subprocess
@@ -146,8 +147,17 @@ def parse_invoke(form):
     name = re.search(r'\(invoke\s+"([^"]+)"', text)
     if not name:
         return None
-    args = re.findall(r'\((u32|i32|u64|i64|f32|f64)\.const\s+([^()\s]+)\)',
-                      text)
+    args = []
+    for kind, value in re.findall(
+            r'\((u32|i32|u64|i64|f32|f64|char)\.const\s+("(?:[^"\\]|\\.)*"|[^()\s]+)\)',
+            text):
+        if kind == 'char':
+            try:
+                args.append(('char', '0x%x' % ord(ast.literal_eval(value))))
+            except (SyntaxError, ValueError, TypeError):
+                continue
+        else:
+            args.append((kind, value))
     return name.group(1), args
 
 
@@ -217,15 +227,29 @@ def main():
                                           '%s:%d' % (relative, start), arg_text))
                 elif form_head == 'assert_return' and current_artifact:
                     parsed = parse_invoke(form)
+                    # Only constants after the invoke form are expected
+                    # results; constants inside the invoke are arguments.
+                    invoke_at = form.find('(invoke')
+                    invoke_end = balanced(form, invoke_at) if invoke_at >= 0 else -1
                     expected = re.findall(
-                            r'\((u32|i32|u64|i64|f32|f64)\.const\s+([^()\s]+)\)',
-                            form)
+                            r'\((bool|u8|s8|u16|s16|u32|i32|u64|i64|f32|f64)\.const\s+([^()\s]+)\)',
+                            form[invoke_end:] if invoke_end >= 0 else '')
                     if parsed and expected:
                         arg_text = ','.join('%s:%s' % item for item in parsed[1])
                         kind, value = expected[-1]
+                        if kind == 'bool':
+                            value = '1' if value == 'true' else '0'
                         execution.append((current_artifact, parsed[0], kind,
                                           value, '%s:%d' % (relative, start),
                                           arg_text))
+                    elif parsed:
+                        # An `assert_return` with no expected result is an
+                        # action for a void export; emit it as one so the
+                        # harness still performs the call.
+                        arg_text = ','.join('%s:%s' % item for item in parsed[1])
+                        execution.append((current_artifact, parsed[0],
+                                          'action', '',
+                                          '%s:%d' % (relative, start), arg_text))
                 elif form_head == 'assert_trap' and current_artifact:
                     parsed = parse_invoke(form)
                     if parsed:

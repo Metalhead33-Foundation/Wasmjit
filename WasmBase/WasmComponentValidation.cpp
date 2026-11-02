@@ -4930,6 +4930,22 @@ void ComponentValidator::validateCanon(const Canon& canon)
 				|| canon.kind == Canon::Kind::ThreadSpawnIndirect)
 			scope_.spaces.require(CoreSort::Table, canon.tableIndex,
 					"canon thread table");
+		{
+			const CoreTypeDef* definition =
+					scope_.typeScope.coreTypes[canon.coreTypeIndex];
+			if (definition == nullptr
+					|| definition->kind != CoreTypeDef::Kind::RecType
+					|| definition->recType.typeIds.empty())
+				fail("canon thread core type is not a function type");
+			const CoreTypeView view = store_.types().store().coreType(
+					definition->recType.typeIds.front());
+			if (view.kind() != CanonTypeKind::Func)
+				fail("canon thread core type is not a function type");
+			const auto params = view.funcParams();
+			const auto results = view.funcResults();
+			if (params.size() != 2 || results.size() != 1)
+				fail("canon thread core type has the wrong shape");
+		}
 		break;
 	default:
 		break;

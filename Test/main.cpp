@@ -3033,6 +3033,7 @@ TEST_CASE("component async thread table routes entries through the executor", "[
 			[](uint32_t) {});
 	state.setExecutor(std::make_unique<CountingExecutor>());
 	REQUIRE(state.currentThreadIndex() == 0);
+	REQUIRE_THROWS(state.suspendCurrentThread());
 
 	bool ran = false;
 	const uint32_t first = state.newThread([&] { ran = true; });
@@ -5064,18 +5065,13 @@ TEST_CASE("component execution: upstream scalar returns and traps", "[component-
 	std::size_t skipped = 0;
 	std::size_t failures = 0;
 	std::string firstFailure;
-	// These accepted upstream groups exercise host memory/resource state or
-	// traps that the current backend/ABI slice cannot reproduce without a full
-	// host adapter. They are named here rather than silently skipped; the
-	// accepted-instantiation sweep above counts the same residuals.
+	// These accepted upstream groups exercise resource-handle-table behaviour
+	// that requires per-instance handle transfer across component boundaries.
+	// They are named here rather than silently skipped; the accepted-instantiation
+	// sweep above counts the same residuals.
 	const std::set<std::string> knownUnsupported = {
 		"handle-table_002.wasm", "handle-table_011.wasm",
-		"link-time-virtualization_001.wasm", "numerics_002.wasm",
-		"numerics_003.wasm", "numerics_004.wasm", "numerics_009.wasm",
-		"unit_002.wasm", "unit_003.wasm", "unit_011.wasm", "unit_012.wasm",
-		"unit_013.wasm", "unit_014.wasm", "unit_032.wasm", "unit_040.wasm",
-		"unit_047.wasm", "unit_054.wasm", "unit_055.wasm", "unit_057.wasm",
-		"numerics_001.wasm", "handle-table_012.wasm"};
+		"handle-table_012.wasm"};
 	const auto parseArgs = [](std::string_view spec) {
 		std::vector<WASM::ComponentValue> args;
 		std::size_t start = 0;
@@ -5100,6 +5096,9 @@ TEST_CASE("component execution: upstream scalar returns and traps", "[component-
 			} else if (kind == "u64") {
 				arg.kind = WASM::ComponentValue::Kind::U64;
 				arg.u64 = static_cast<uint64_t>(value);
+			} else if (kind == "char") {
+				arg.kind = WASM::ComponentValue::Kind::Char;
+				arg.discriminant = static_cast<uint32_t>(value);
 			} else {
 				arg.kind = WASM::ComponentValue::Kind::S64;
 				arg.s64 = value;
@@ -5212,7 +5211,22 @@ TEST_CASE("component execution: upstream scalar returns and traps", "[component-
 			bool matches = false;
 			try {
 				const long long expected = std::stoll(row.value, nullptr, 0);
-				if (row.kind == "u32")
+				if (row.kind == "bool")
+					matches = actual.kind == WASM::ComponentValue::Kind::Bool
+							&& (actual.u64 != 0) == (expected != 0);
+				else if (row.kind == "u8")
+					matches = actual.kind == WASM::ComponentValue::Kind::U8
+							&& actual.u64 == static_cast<uint64_t>(expected);
+				else if (row.kind == "s8")
+					matches = actual.kind == WASM::ComponentValue::Kind::S8
+							&& actual.s64 == expected;
+				else if (row.kind == "u16")
+					matches = actual.kind == WASM::ComponentValue::Kind::U16
+							&& actual.u64 == static_cast<uint64_t>(expected);
+				else if (row.kind == "s16")
+					matches = actual.kind == WASM::ComponentValue::Kind::S16
+							&& actual.s64 == expected;
+				else if (row.kind == "u32")
 					matches = actual.kind == WASM::ComponentValue::Kind::U32
 							&& actual.u64 == static_cast<uint64_t>(expected);
 				else if (row.kind == "i32")

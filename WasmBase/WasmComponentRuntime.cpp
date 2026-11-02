@@ -15,6 +15,22 @@
 namespace WASM {
 namespace {
 
+//! The VM context of the innermost component host callback on this thread.
+thread_local const VMContext* g_componentHostContext = nullptr;
+
+//! Installs a VM context for the duration of one host callback.
+class ComponentHostContextGuard {
+public:
+	explicit ComponentHostContextGuard(const VMContext* context)
+		: previous_(g_componentHostContext)
+	{
+		g_componentHostContext = context;
+	}
+	~ComponentHostContextGuard() { g_componentHostContext = previous_; }
+private:
+	const VMContext* previous_; //!< Context restored on scope exit.
+};
+
 uint64_t nextComponentAbiInstanceId()
 {
 	static std::atomic<uint64_t> next{1};
@@ -435,8 +451,9 @@ void liftPrimitive(const WASM::ComponentValueType& type,
 	const WASM::Value value = flat[index++];
 	switch (type.primitive) {
 	case P::Bool:
-		if (value.u32 > 1)
-			throw std::runtime_error("component runtime: invalid canonical bool");
+		// A core i32 is truncated to a bool at the lift boundary: any nonzero
+		// value is true, including values a core producer could not spell as a
+		// component bool directly.
 		out.kind = K::Bool;
 		out.u64 = value.u32 != 0 ? 1 : 0;
 		break;
@@ -1533,6 +1550,9 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 		~BorrowScopeGuard() { if (runtime) runtime->endBorrowScope(scope); }
 	} borrowGuard{data->memory.runtime, borrowScope};
 	const WASM::TypeStore& store = data->memory.runtime->store().types().store();
+	const VMContext* callerContext = args[0] != nullptr
+			? *static_cast<VMContext* const*>(args[0]) : nullptr;
+	ComponentHostContextGuard contextGuard(callerContext);
 	if (data->function.options.async) {
 		// CM19: async lower. The core signature uses MAX_FLAT_ASYNC_PARAMS (4),
 		// always writes results through an appended pointer, and returns the
@@ -1619,7 +1639,8 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 			*handle = data->memory.runtime->beginPendingSubtask(
 					[data, structuredInput = std::move(structuredInput),
 					 structuredOutput = std::move(structuredOutput),
-					 writeOutput, handle]() mutable {
+					 writeOutput, handle, callerContext]() mutable {
+				ComponentHostContextGuard deferredGuard(callerContext);
 				if (data->memory.runtime->subtaskCancelled(*handle))
 					return;
 				data->function.callValues(structuredInput, structuredOutput);
@@ -2046,6 +2067,11 @@ void decodeComponentValue(const WASM::TypeStore& store,
 
 } // namespace
 
+const VMContext* currentComponentHostContext() noexcept
+{
+	return g_componentHostContext;
+}
+
 ComponentRuntime::ComponentRuntime(ModuleInstantiator& instantiator,
 		const WASM::Component& component, ComponentImports imports,
 		std::unordered_map<std::string, const WASM::Module*> coreModuleImports,
@@ -2053,11 +2079,26 @@ ComponentRuntime::ComponentRuntime(ModuleInstantiator& instantiator,
 		std::unordered_map<std::string,
 				std::unordered_map<std::string, const WASM::Module*>>
 				instanceCoreModules)
+	: ComponentRuntime(instantiator, component, std::move(imports),
+			std::move(coreModuleImports), std::move(outerCoreModuleSpaces),
+			std::move(instanceCoreModules), ComponentInstanceOptions{})
+{
+}
+
+ComponentRuntime::ComponentRuntime(ModuleInstantiator& instantiator,
+		const WASM::Component& component, ComponentImports imports,
+		std::unordered_map<std::string, const WASM::Module*> coreModuleImports,
+		std::vector<std::vector<const WASM::Module*>> outerCoreModuleSpaces,
+		std::unordered_map<std::string,
+				std::unordered_map<std::string, const WASM::Module*>>
+				instanceCoreModules,
+		const ComponentInstanceOptions& options)
 	: instantiator_(instantiator), component_(component),
 	  imports_(std::move(imports)),
 	  coreModuleImports_(std::move(coreModuleImports)),
 	  instanceCoreModules_(std::move(instanceCoreModules)),
 	  outerCoreModuleSpaces_(std::move(outerCoreModuleSpaces)),
+	  options_(options),
 	  async_([this] { return addHandle(); },
 			  [this](uint32_t handle) { freeHandle(handle); }),
 	  abi_(component_.store().types().store(),
@@ -2317,8 +2358,11 @@ void ComponentRuntime::processCoreInstance(const WASM::CoreInstance& instance)
 					"component runtime: core instantiate argument index out of bounds");
 		coreInstances_[arg.instanceIndex]->registerExports(resolver, arg.name);
 	}
+	instantiator_.setCompilationPolicy(options_.compilation);
+	instantiator_.setStackReserveBytes(options_.stackReserveBytes);
 	auto moduleInstance = instantiator_.instantiate(
-			*coreModuleSpace_[instance.moduleIndex], resolver);
+			*coreModuleSpace_[instance.moduleIndex], resolver,
+			options_.hostBridge, options_.profile);
 	if (!moduleInstance)
 		throw std::runtime_error("component runtime: core instantiation failed");
 	auto handle = std::make_unique<CoreInstanceHandle>();
@@ -2372,6 +2416,10 @@ ComponentInstanceValue ComponentRuntime::exportSnapshot() const
 					componentSpace_[index].definition);
 		out.components.emplace(name, std::move(owner));
 	}
+	for (const auto& [name, module] : exportedCoreModules_)
+		if (module)
+			out.coreModules[name] = std::shared_ptr<const WASM::Module>(module,
+					[](const WASM::Module*) {});
 	return out;
 }
 
@@ -2480,6 +2528,10 @@ void ComponentRuntime::processComponentInstance(
 			}
 		}
 		auto handle = makeInstanceHandle(std::move(exports));
+		for (const auto& [name, module] : inlineCoreModules)
+			handle->exports.coreModules[name] =
+					std::shared_ptr<const WASM::Module>(module,
+							[](const WASM::Module*) {});
 		handle->coreModules = std::move(inlineCoreModules);
 		componentInstances_.push_back(std::move(handle));
 		return;
@@ -2558,13 +2610,18 @@ void ComponentRuntime::processComponentInstance(
 	auto handle = std::make_shared<ComponentInstanceHandle>();
 	std::vector<std::vector<const WASM::Module*>> childOuterModuleSpaces =
 			outerCoreModuleSpaces_;
-	childOuterModuleSpaces.insert(childOuterModuleSpaces.begin(),
-			coreModuleSpace_);
+	const ComponentDefinitionHandle& target =
+			componentSpace_[instance.componentIndex];
+	if (!target.outerCoreModules.empty())
+		childOuterModuleSpaces.insert(childOuterModuleSpaces.begin(),
+				target.outerCoreModules);
+	else
+		childOuterModuleSpaces.insert(childOuterModuleSpaces.begin(),
+				coreModuleSpace_);
 	handle->nested = std::make_unique<ComponentRuntime>(instantiator_,
-			*componentSpace_[instance.componentIndex].definition,
-			std::move(childImports), std::move(childCoreModules),
+			*target.definition, std::move(childImports), std::move(childCoreModules),
 			std::move(childOuterModuleSpaces),
-			std::move(childInstanceCoreModules));
+			std::move(childInstanceCoreModules), options_);
 	handle->exports = handle->nested->exportSnapshot();
 	handle->coreModules = handle->nested->exportedCoreModules_;
 	componentInstances_.push_back(std::move(handle));
@@ -2613,8 +2670,12 @@ void ComponentRuntime::processAlias(const WASM::Alias& alias)
 			if (it == exports.components.end())
 				throw std::runtime_error(
 						"component runtime: component export is not a component");
-			componentSpace_.push_back(
-					{it->second->componentDefinition(), it->second});
+			ComponentDefinitionHandle handle{
+					it->second->componentDefinition(), it->second, {}};
+			const auto source = componentInstances_[alias.instanceIndex];
+			if (source && source->nested)
+				handle.outerCoreModules = source->nested->coreModuleSpace_;
+			componentSpace_.push_back(std::move(handle));
 			return;
 		}
 		case WASM::ComponentSort::Core: {
@@ -3361,6 +3422,7 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 	const WASM::Callable callable = coreFuncs_[canon.coreFuncIndex];
 	function.call = [this, callable, function](std::span<const WASM::Value> args,
 			std::span<WASM::Value> results) {
+		auto entry = enterCall();
 		if (function.options.async)
 			throw std::runtime_error(
 					"component runtime: an async lift has no flat entry point; "
@@ -3371,6 +3433,7 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 			coreResults = abi->coreResults](
 			std::span<const ComponentValue> args,
 			std::span<ComponentValue> results) {
+		auto entry = enterCall();
 		const AbiMemory memory = memoryFor(function.options);
 		const WASM::TypeStore& store = component_.store().types().store();
 		const uint32_t borrowScope = beginBorrowScope();
@@ -3710,9 +3773,13 @@ void ComponentRuntime::processImport(const WASM::ImportDecl& importDecl)
 			throw std::runtime_error(
 					"component runtime: host instance import is empty");
 		componentInstances_.push_back(makeInstanceHandle(*import->instance));
+		for (const auto& [name, module] : import->instance->coreModules)
+			if (module)
+				componentInstances_.back()->coreModules[name] = module.get();
 		const auto modules = instanceCoreModules_.find(importDecl.name.name);
 		if (modules != instanceCoreModules_.end())
-			componentInstances_.back()->coreModules = modules->second;
+			for (const auto& [name, module] : modules->second)
+				componentInstances_.back()->coreModules[name] = module;
 		return;
 	}
 	case WASM::ExternType::Kind::Component: {
@@ -3925,6 +3992,13 @@ ComponentRuntime::coreGlobal(std::size_t index) const
 	return coreGlobals_[index];
 }
 
+std::optional<WASM::TagId> ComponentRuntime::coreTag(std::size_t index) const
+{
+	if (index >= coreTags_.size())
+		return std::nullopt;
+	return coreTags_[index];
+}
+
 uint32_t ComponentRuntime::beginPendingSubtask(std::function<void()> work)
 {
 	return async_.newPendingSubtask(std::move(work));
@@ -3943,6 +4017,79 @@ bool ComponentRuntime::subtaskCancelled(uint32_t handle) const
 bool ComponentRuntime::executorIsSingleAgent()
 {
 	return async_.executor().singleAgent();
+}
+
+std::pair<uint32_t, uint32_t> ComponentRuntime::newStreamFuture(bool future,
+		uint32_t elementSize)
+{
+	return async_.newStreamFuture(future, elementSize);
+}
+
+uint32_t ComponentRuntime::asyncRead(uint32_t handle, LinearMemory& memory,
+		uint64_t address, uint64_t count, bool async)
+{
+	return async_.read(handle, memory, address, count, async);
+}
+
+uint32_t ComponentRuntime::asyncWrite(uint32_t handle, LinearMemory& memory,
+		uint64_t address, uint64_t count, bool async)
+{
+	return async_.write(handle, memory, address, count, async);
+}
+
+uint32_t ComponentRuntime::asyncCancel(uint32_t handle, bool async)
+{
+	return async_.cancel(handle, async);
+}
+
+void ComponentRuntime::asyncDrop(uint32_t handle,
+		ComponentEndDirection direction)
+{
+	async_.drop(handle, direction);
+}
+
+void ComponentRuntime::asyncForward(uint32_t readable, uint32_t writable)
+{
+	async_.forward(readable, writable);
+}
+
+uint32_t ComponentRuntime::newResourceHandle(TypeId type, uint64_t representation)
+{
+	if (type.isNone())
+		throw std::runtime_error(
+				"component runtime: host resource needs a concrete type");
+	const uint32_t handle = addHandle();
+	resourceSlots_[handle] = ResourceSlot{representation, type, true, true, 0};
+	return handle;
+}
+
+uint64_t ComponentRuntime::resourceRepresentation(uint32_t handle) const
+{
+	if (handle == 0 || handle >= resourceSlots_.size()
+			|| !resourceSlots_[handle].live)
+		throw std::runtime_error("component runtime: invalid resource handle");
+	return resourceSlots_[handle].representation;
+}
+
+void ComponentRuntime::dropResourceHandle(uint32_t handle)
+{
+	if (handle == 0 || handle >= resourceSlots_.size()
+			|| !resourceSlots_[handle].live)
+		throw std::runtime_error("component runtime: invalid resource handle");
+	if (!resourceSlots_[handle].own)
+		throw std::runtime_error(
+				"component runtime: cannot drop a borrowed resource");
+	freeHandle(handle);
+}
+
+void ComponentRuntime::post(std::function<void()> work)
+{
+	async_.executor().push(std::move(work));
+}
+
+void ComponentRuntime::runExecutorUntilIdle()
+{
+	async_.executor().runUntilIdle();
 }
 
 uint32_t ComponentRuntime::beginBorrowScope()

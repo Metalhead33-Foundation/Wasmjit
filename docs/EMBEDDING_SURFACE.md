@@ -66,6 +66,7 @@ The smallest working recipe, read off `Test/helper.cpp` and `Test/main.cpp`:
 | 9. Diagnostics (optional) | a `DiagnosticSink` / a `HostBridge` | `WasmBase/WasmDiagnostics.hpp`, `WasmHostBridge.hpp` |
 | 10. Suspend/resume (optional) | `HostContinuation`, `HostContinuationScheduler` | `WasmBase/WasmContinuation.hpp` |
 | 11. Run on a worker thread (optional) | `WASM::Agent agent; WASM::AgentScope scope(agent);` before the first call | `WasmBase/WasmAgent.hpp` |
+| 12. Load and call a component (optional) | `runtime->loadComponentBytes(bytes[, ComponentOptions])`; `instantiateComponent(*loaded[, imports][, executor])`; `exportedFunction("name")` or `callAsync` | `WasmBase/WasmComponentInstance.hpp` |
 
 Six problems fall out of that table, and they are the reason this note exists:
 
@@ -276,6 +277,8 @@ two, it is the difference between isolation and corruption.
 | **Capability/version query** | none (P4) | `runtime.version()`, `runtime.abiVersion()`, `runtime.profile()`, `runtime.supports()`, `runtime.backendName()` — also what the plugin loader needs ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md)) |
 | **Lifetime rule** | "do not destroy the instance before its callers" in prose | The runtime owns instances and modules, so the rule becomes structural |
 | **Instance cardinality** | Nothing stops a caller instantiating twice; the rule lives only in prose | `instantiate()` is idempotent (same `Module` → the same instance) and a second *instance* is not expressible through the API ([`THREADSAFETY.md`](THREADSAFETY.md) §3.1) |
+| **Component execution settings** | A component's embedded core modules got default bridge/profile/policy/stack/concurrency | `instantiateComponent` forwards the runtime settings, and the option-taking overload takes `ComponentInstanceOptions` explicitly |
+| **Component host facade** | Only exported functions/values/instances/types and flattened core entities | Paired stream/future endpoints, host resources, `callAsync`/`runExecutorUntilIdle`, core tags and `currentComponentHostContext()` are part of the installed `WasmComponentInstance.hpp` surface |
 
 ### 4.6 Profiles, diagnostics and the other defaults the runtime owns
 
