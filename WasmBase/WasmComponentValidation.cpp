@@ -235,6 +235,8 @@ struct CoreExportInfo {
 	MemoryType memory;
 	GlobalType global;
 	uint32_t tagTypeIndex = 0;
+	TypeId funcTypeId{TypeId::kNone}; //!< Canonical identity of an exported function's type.
+	TypeId tagTypeId{TypeId::kNone}; //!< Canonical identity of an exported tag's type.
 	const Module* coreModuleValue = nullptr;
 	bool coreModuleType = false;
 	std::shared_ptr<const CoreExportMap> instanceExports;
@@ -3044,6 +3046,10 @@ CoreExportMap ComponentValidator::buildCoreExports(const Module& module) const
 					fail("core module function export index is out of bounds");
 				info.moduleTypeIndex = module.internalFunctionTypeIndices[internal];
 			}
+			// CM14: the module-local index is not comparable across modules; the
+			// canonical `TypeId` is, because the store interns signatures.
+			if (info.moduleTypeIndex < module.typeIds.size())
+				info.funcTypeId = module.typeIds[info.moduleTypeIndex];
 			break;
 		}
 		case ExternalKind::Table: {
@@ -3096,6 +3102,8 @@ CoreExportMap ComponentValidator::buildCoreExports(const Module& module) const
 					fail("core module tag export index is out of bounds");
 				info.tagTypeIndex = module.tags[internal].typeIdx;
 			}
+			if (info.tagTypeIndex < module.typeIds.size())
+				info.tagTypeId = module.typeIds[info.tagTypeIndex];
 			break;
 		}
 		default:
@@ -3146,7 +3154,7 @@ void ComponentValidator::processCoreInstance(uint32_t index)
 
 		std::set<std::string> importModules;
 		auto check = [&](const std::string& moduleName,
-				const std::string& fieldName, CoreSort sort) {
+				const std::string& fieldName, CoreSort sort) -> const CoreExportInfo& {
 			importModules.insert(moduleName);
 			const auto arg = args.find(moduleName);
 			if (arg == args.end())
@@ -3163,18 +3171,47 @@ void ComponentValidator::processCoreInstance(uint32_t index)
 					|| !field->second.sort.core
 					|| field->second.sort.core->sort != sort)
 				fail("core instantiate argument export has the wrong sort");
+			return field->second;
 		};
 
-		for (const ImportFunction& import : module.importFunctions)
-			check(import.moduleName, import.fieldName, CoreSort::Func);
+		for (const ImportFunction& import : module.importFunctions) {
+			const CoreExportInfo& exported =
+					check(import.moduleName, import.fieldName, CoreSort::Func);
+			if (import.typeIdx >= module.typeIds.size())
+				fail("core instantiate argument function type index is out of bounds");
+			const TypeId expected = module.typeIds[import.typeIdx];
+			if (!exported.funcTypeId.isNone() && !expected.isNone()
+					&& exported.funcTypeId != expected)
+				fail("core instantiate argument has an incompatible function type");
+		}
+		// CM14: the sort matching above says nothing about the *type*. An argument
+		// whose table/memory/global has the right sort but a different shape was
+		// accepted; the corpus calls that out as an instantiation error.
 		for (const ImportTable& import : module.importTables)
-			check(import.moduleName, import.fieldName, CoreSort::Table);
+			if (!coreTableTypeEqual(
+						check(import.moduleName, import.fieldName, CoreSort::Table).table,
+						import.table))
+				fail("core instantiate argument has an incompatible table type");
 		for (const ImportMemory& import : module.importMemories)
-			check(import.moduleName, import.fieldName, CoreSort::Memory);
+			if (!coreMemoryTypeEqual(
+						check(import.moduleName, import.fieldName, CoreSort::Memory).memory,
+						import.memory))
+				fail("core instantiate argument has an incompatible memory type");
 		for (const ImportGlobal& import : module.importGlobals)
-			check(import.moduleName, import.fieldName, CoreSort::Global);
-		for (const ImportTag& import : module.importTags)
-			check(import.moduleName, import.fieldName, CoreSort::Tag);
+			if (!coreGlobalTypeEqual(
+						check(import.moduleName, import.fieldName, CoreSort::Global).global,
+						import.global))
+				fail("core instantiate argument has an incompatible global type");
+		for (const ImportTag& import : module.importTags) {
+			const CoreExportInfo& exported =
+					check(import.moduleName, import.fieldName, CoreSort::Tag);
+			if (import.typeIdx >= module.typeIds.size())
+				fail("core instantiate argument tag type index is out of bounds");
+			const TypeId expected = module.typeIds[import.typeIdx];
+			if (!exported.tagTypeId.isNone() && !expected.isNone()
+					&& exported.tagTypeId != expected)
+				fail("core instantiate argument has an incompatible tag type");
+		}
 
 		for (const auto& arg : args)
 			if (importModules.find(arg.first) == importModules.end())
@@ -3780,6 +3817,31 @@ void ComponentValidator::validateCoreExternType(const CoreExternType& type,
 void ComponentValidator::validateCoreTypeDef(const CoreTypeDef& definition,
 		ValidationScope& scope)
 {
+	// CM14: a core module *type* has its own declaration rules, which had no home
+	// here at all — duplicate import/export names were accepted and a memory
+	// could declare more pages than the 65536-page maximum.
+	if (definition.kind == CoreTypeDef::Kind::ModuleType) {
+		std::set<std::string> importNames;
+		std::set<std::string> exportNames;
+		for (const CoreModuleDecl& decl : definition.moduleDecls) {
+			if (decl.kind == CoreModuleDecl::Kind::Import) {
+				const std::string key =
+						decl.import.module + "" + decl.import.name;
+				if (!importNames.insert(key).second)
+					fail("duplicate import name `" + decl.import.module + "` `" +
+							decl.import.name + "`");
+				if (decl.import.type.kind == CoreExternType::Kind::Memory
+						&& decl.import.type.memory.limits.initial > 65536)
+					fail("memory size must be at most 65536 pages");
+			} else if (decl.kind == CoreModuleDecl::Kind::Export) {
+				if (!exportNames.insert(decl.exportDecl.name).second)
+					fail("export name `" + decl.exportDecl.name +
+							"` already defined");
+			}
+		}
+		// No early return: the shared validation below also rejects module types
+		// that name absent core types (see `component_invalid_coremodule_type`).
+	}
 	std::vector<const Subtype*> outer;
 	std::vector<TypeId> outerIds;
 	for (const CoreTypeDef* coreType : scope.typeScope.coreTypes) {
