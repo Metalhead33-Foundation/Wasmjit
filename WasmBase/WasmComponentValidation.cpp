@@ -704,6 +704,68 @@ bool containsAbstractResource(const TypePtr& type)
 	return false;
 }
 
+// CM14: a map value may not carry a handle anywhere inside it. `containsBorrow`
+// is not enough — it treats `own`, `stream` and `future` as handle-free.
+bool containsHandle(const ValuePtr& value)
+{
+	if (!value)
+		return false;
+	switch (value->kind) {
+	case ResolvedValueType::Kind::Own:
+	case ResolvedValueType::Kind::Borrow:
+	case ResolvedValueType::Kind::Stream:
+	case ResolvedValueType::Kind::Future:
+		return true;
+	case ResolvedValueType::Kind::Record:
+		for (const auto& field : value->fields)
+			if (containsHandle(field.second))
+				return true;
+		return false;
+	case ResolvedValueType::Kind::Variant:
+		for (const ResolvedCase& item : value->cases)
+			if (item.type && containsHandle(*item.type))
+				return true;
+		return false;
+	case ResolvedValueType::Kind::List:
+	case ResolvedValueType::Kind::FixedList:
+	case ResolvedValueType::Kind::Option:
+		return containsHandle(value->element);
+	case ResolvedValueType::Kind::Tuple:
+		for (const ValuePtr& element : value->tuple)
+			if (containsHandle(element))
+				return true;
+		return false;
+	case ResolvedValueType::Kind::Result:
+		return (value->ok && containsHandle(*value->ok))
+				|| (value->error && containsHandle(*value->error));
+	case ResolvedValueType::Kind::Map:
+		return containsHandle(value->mapKey) || containsHandle(value->mapValue);
+	default:
+		return false;
+	}
+}
+
+// CM14: a map key must be hashable — scalars other than floats, plus enums and
+// flags. `f32`, `list`, `tuple` and `own` are the shapes the corpus rejects.
+bool isMapKeyType(const ValuePtr& value)
+{
+	if (!value)
+		return false;
+	if (value->kind == ResolvedValueType::Kind::Enum
+			|| value->kind == ResolvedValueType::Kind::Flags)
+		return true;
+	if (value->kind != ResolvedValueType::Kind::Primitive)
+		return false;
+	switch (value->primitive) {
+	case PrimitiveValueType::F32:
+	case PrimitiveValueType::F64:
+	case PrimitiveValueType::Invalid:
+		return false;
+	default:
+		return true;
+	}
+}
+
 bool containsBorrow(const ValuePtr& value)
 {
 	if (!value)
@@ -1242,6 +1304,10 @@ TypePtr ComponentValidator::resolveDefinedValueType(ComponentTypeView type,
 		value->kind = ResolvedValueType::Kind::Map;
 		value->mapKey = resolveValue(type.mapKey(), scope);
 		value->mapValue = resolveValue(type.mapValue(), scope);
+		if (!isMapKeyType(value->mapKey))
+			fail("invalid map key type");
+		if (containsHandle(value->mapValue))
+			fail("map value type cannot contain a handle");
 		break;
 	default:
 		fail("component defined-value record has a non-value kind");
@@ -2049,7 +2115,10 @@ bool isInterfaceName(const std::string& name)
 	if (at != std::string::npos) {
 		if (at == slash + 1 || at + 1 >= name.size())
 			return false;
-		if (!isSemver(name.substr(at + 1), false))
+		// CM14: an interface version is a full semver (`1` and `0.2` are both
+		// rejected by the corpus); only a plain-name version suffix is allowed to
+		// omit the patch component.
+		if (!isSemver(name.substr(at + 1), true))
 			return false;
 	}
 	// CM14: the three segments are kebab labels (the namespace may be dotted).
@@ -3215,7 +3284,18 @@ void ComponentValidator::instantiateComponent(const ComponentInstance& instance,
 						|| actual->type->kind != ResolvedType::Kind::Resource)
 					fail("type argument `" + import.name.name +
 							"` does not provide a resource");
-				substitutions.emplace(import.type->resource->id, actual->type);
+				// CM14: `(type (eq $a))` names a resource the same import list already
+				// introduced. The first binding establishes it; every later use must be
+				// the *same* resource, which is what the corpus calls “resource types
+				// are not the same”. `emplace` silently kept the first binding, so the
+				// mismatch was never noticed.
+				const auto bound = substitutions.find(import.type->resource->id);
+				if (bound == substitutions.end()) {
+					substitutions.emplace(import.type->resource->id, actual->type);
+				} else if (!bound->second || !bound->second->resource
+						|| bound->second->resource->id != actual->type->resource->id) {
+					fail("resource types are not the same");
+				}
 			}
 		}
 		for (const auto& arg : args) {
