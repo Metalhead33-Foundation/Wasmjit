@@ -1,4 +1,6 @@
 #include "WasmComponentRuntime.hpp"
+
+#include "WasmComponentInstance.hpp"
 #include "WasmRegistryImportResolver.hpp"
 #include "WasmStore.hpp"
 #include "WasmTrap.hpp"
@@ -118,6 +120,21 @@ WASM::CanonicalAbiOptions canonicalOptions(const WASM::Canon& canon)
 	if (canon.async)
 		options.async = *canon.async;
 	return options;
+}
+
+// The Canonical ABI pointer width comes from the core memory named by the
+// `memory` canonopt, not from a process default (CM-25).
+uint8_t pointerSizeFor(const WASM::Canon& canon,
+		const std::vector<WASM::LinearMemory*>& memories)
+{
+	for (const WASM::CanonOpt& opt : canon.opts) {
+		if (opt.kind != WASM::CanonOptKind::Memory)
+			continue;
+		if (opt.index < memories.size() && memories[opt.index]
+				&& memories[opt.index]->is64)
+			return 8;
+	}
+	return 4;
 }
 
 struct MemView {
@@ -2246,7 +2263,7 @@ void ComponentRuntime::processComponent(uint32_t index)
 	if (index >= component_.components.size())
 		throw std::runtime_error(
 				"component runtime: nested component index out of bounds");
-	nestedComponents_.push_back(component_.components[index].get());
+	componentSpace_.push_back({component_.components[index].get(), {}});
 }
 
 std::shared_ptr<ComponentRuntime::ComponentInstanceHandle>
@@ -2293,6 +2310,24 @@ ComponentRuntime::exportedInstance(std::string_view name) const
 	return found == exportedInstances_.end() ? nullptr : found->second;
 }
 
+std::optional<ComponentInstanceValue> ComponentRuntime::exportedInstanceValue(
+		std::string_view name) const
+{
+	const auto found = exportedInstances_.find(std::string(name));
+	if (found == exportedInstances_.end() || !found->second)
+		return std::nullopt;
+	return found->second->exports;
+}
+
+std::optional<WASM::TypeId> ComponentRuntime::exportedType(
+		std::string_view name) const
+{
+	const auto found = exportedTypeIndices_.find(std::string(name));
+	if (found == exportedTypeIndices_.end())
+		return std::nullopt;
+	return component_.typeId(found->second);
+}
+
 void ComponentRuntime::processComponentInstance(
 		const WASM::ComponentInstance& instance)
 {
@@ -2330,6 +2365,20 @@ void ComponentRuntime::processComponentInstance(
 						std::make_shared<ComponentInstanceValue>(
 								componentInstances_[index]->exports));
 				break;
+			case WASM::ComponentSort::Component: {
+				if (index >= componentSpace_.size()
+						|| componentSpace_[index].definition == nullptr)
+					throw std::runtime_error(
+							"component runtime: inline instance component export is out of bounds");
+				std::shared_ptr<const LoadedComponent> owner =
+						componentSpace_[index].owner;
+				if (!owner)
+					owner = makeBorrowedLoadedComponent(
+							componentSpace_[index].definition);
+				exports.components.emplace(exportDecl.name.name,
+						std::move(owner));
+				break;
+			}
 			default:
 				throw std::runtime_error(
 						"component runtime: inline instance export sort is not supported");
@@ -2338,9 +2387,10 @@ void ComponentRuntime::processComponentInstance(
 		componentInstances_.push_back(makeInstanceHandle(std::move(exports)));
 		return;
 	}
-	if (instance.componentIndex >= nestedComponents_.size())
+	if (instance.componentIndex >= componentSpace_.size()
+			|| componentSpace_[instance.componentIndex].definition == nullptr)
 		throw std::runtime_error(
-				"component runtime: component instance target is not a nested component");
+				"component runtime: component instance target is not a component");
 	ComponentImports childImports = imports_;
 	for (const WASM::InstantiateArg& arg : instance.args) {
 		const std::uint32_t index = arg.sortIndex.index;
@@ -2377,7 +2427,8 @@ void ComponentRuntime::processComponentInstance(
 	}
 	auto handle = std::make_shared<ComponentInstanceHandle>();
 	handle->nested = std::make_unique<ComponentRuntime>(instantiator_,
-			*nestedComponents_[instance.componentIndex], std::move(childImports));
+			*componentSpace_[instance.componentIndex].definition,
+			std::move(childImports));
 	handle->exports = handle->nested->exportSnapshot();
 	componentInstances_.push_back(std::move(handle));
 }
@@ -2418,6 +2469,15 @@ void ComponentRuntime::processAlias(const WASM::Alias& alias)
 				throw std::runtime_error(
 						"component runtime: component export is not an instance");
 			componentInstances_.push_back(makeInstanceHandle(*it->second));
+			return;
+		}
+		case WASM::ComponentSort::Component: {
+			const auto it = exports.components.find(alias.name);
+			if (it == exports.components.end())
+				throw std::runtime_error(
+						"component runtime: component export is not a component");
+			componentSpace_.push_back(
+					{it->second->componentDefinition(), it->second});
 			return;
 		}
 		default:
@@ -2500,7 +2560,8 @@ void ComponentRuntime::processStreamCanon(const WASM::Canon& canon)
 			!typeId.isNone()) {
 		const WASM::TypeStore& store = component_.store().types().store();
 		const WASM::ComponentTypeView view = store.componentType(typeId);
-		const WASM::CanonicalAbiOptions options = canonicalOptions(canon);
+		WASM::CanonicalAbiOptions options = canonicalOptions(canon);
+		options.pointerSize = pointerSizeFor(canon, coreMemories_);
 		if (view.hasStreamElement()) {
 			WASM::CanonicalAbiLayout layout;
 			if (store.canonicalAbiLayoutValue(view.streamElement(), options,
@@ -2535,7 +2596,8 @@ void ComponentRuntime::processStreamCanon(const WASM::Canon& canon)
 
 void ComponentRuntime::processAsyncCanon(const WASM::Canon& canon)
 {
-	const WASM::CanonicalAbiOptions options = canonicalOptions(canon);
+	WASM::CanonicalAbiOptions options = canonicalOptions(canon);
+	options.pointerSize = pointerSizeFor(canon, coreMemories_);
 	const bool pointer64 = options.pointerSize == 8;
 	ffi_type* const addressType = ffiTypeForAddress(pointer64);
 	auto data = std::make_unique<ResourceClosureData>();
@@ -2615,20 +2677,51 @@ void ComponentRuntime::processAsyncCanon(const WASM::Canon& canon)
 	case WASM::Canon::Kind::TaskReturn: {
 		// `task.return` takes the flattened results of the current task. Store
 		// them on the current task so an async lift can lift them when the
-		// callee returns (CM19).
+		// callee returns (CM19). More than MAX_FLAT_PARAMS results spill through
+		// the canonopt memory as one pointer (CM22).
 		const WASM::TypeStore& store = component_.store().types().store();
 		std::vector<WASM::AbiCoreType> flatTypes;
+		std::vector<WASM::ComponentValueType> resultTypes;
 		for (const WASM::ComponentValueType& value : canon.results) {
 			const WASM::ComponentValueType resolved = resolveValueType(value);
+			resultTypes.push_back(resolved);
 			std::vector<WASM::AbiCoreType> flat;
 			if (!store.canonicalAbiFlatValue(resolved, flat))
 				throw std::runtime_error(
 						"component async: task.return result is not flattenable");
-			for (WASM::AbiCoreType type : flat) {
+			for (WASM::AbiCoreType type : flat)
 				flatTypes.push_back(type);
-				data->argumentTypes.push_back(ffiType(type));
-			}
 		}
+		if (flatTypes.size() > 16) {
+			data->argumentTypes.push_back(pointer64 ? &ffi_type_sint64
+					: &ffi_type_sint32);
+			data->handler = [this, resultTypes, options, pointer64,
+					storePtr = &store](void*, void** args) {
+				const uint64_t address = pointer64
+						? *static_cast<uint64_t*>(args[1])
+						: *static_cast<uint32_t*>(args[1]);
+				const AbiMemory abi = memoryFor(options);
+				if (!abi.memory)
+					throw std::runtime_error(
+							"component async: task.return spill needs a memory");
+				const MemView view{abi.memory, abi.realloc, options, this, 0};
+				std::vector<WASM::Value> flat;
+				uint64_t offset = 0;
+				for (const WASM::ComponentValueType& type : resultTypes) {
+					const WASM::CanonicalAbiLayout layout =
+							layoutOf(*storePtr, type, view);
+					offset = alignUp(offset, layout.align);
+					ComponentValue value;
+					loadValueAt(*storePtr, type, address + offset, view, value, 0);
+					lowerValue(*storePtr, type, value, view, flat, 0);
+					offset += layout.size;
+				}
+				async_.taskReturn(flat);
+			};
+			break;
+		}
+		for (WASM::AbiCoreType type : flatTypes)
+			data->argumentTypes.push_back(ffiType(type));
 		data->handler = [this, flatTypes](void*, void** args) {
 			std::vector<WASM::Value> flat(flatTypes.size());
 			for (std::size_t i = 0; i < flatTypes.size(); ++i) {
@@ -3017,6 +3110,7 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 		auto data = std::make_unique<LowerData>();
 		data->function = componentFuncs_[canon.funcIndex];
 		data->function.options = canonicalOptions(canon);
+		data->function.options.pointerSize = pointerSizeFor(canon, coreMemories_);
 		data->function.options.direction =
 				WASM::CanonicalAbiOptions::Direction::Lower;
 		const AbiMemory abiMemory = memoryFor(data->function.options);
@@ -3074,6 +3168,7 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 		throw std::runtime_error(
 				"component runtime: canon lift type has no closed identity");
 	WASM::CanonicalAbiOptions options = canonicalOptions(canon);
+	options.pointerSize = pointerSizeFor(canon, coreMemories_);
 	options.direction = WASM::CanonicalAbiOptions::Direction::Lift;
 	const WASM::CanonicalAbiSignature* abi =
 			abi_.resolve(typeId, options);
@@ -3227,7 +3322,8 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 
 void ComponentRuntime::processErrorContextCanon(const WASM::Canon& canon)
 {
-	const WASM::CanonicalAbiOptions options = canonicalOptions(canon);
+	WASM::CanonicalAbiOptions options = canonicalOptions(canon);
+	options.pointerSize = pointerSizeFor(canon, coreMemories_);
 	const bool pointer64 = options.pointerSize == 8;
 	ffi_type* const addressType = ffiTypeForAddress(pointer64);
 	auto data = std::make_unique<ResourceClosureData>();
@@ -3364,10 +3460,16 @@ void ComponentRuntime::processImport(const WASM::ImportDecl& importDecl)
 		componentInstances_.push_back(makeInstanceHandle(*import->instance));
 		return;
 	}
-	case WASM::ExternType::Kind::Component:
-		throw std::runtime_error(
-				"component runtime: component imports are not supported "
-				"(CM-4 limitation)");
+	case WASM::ExternType::Kind::Component: {
+		const ComponentImport* import = require(ComponentImport::Kind::Component,
+				"a component");
+		if (!import->component)
+			throw std::runtime_error(
+					"component runtime: host component import is empty");
+		componentSpace_.push_back(
+				{import->component->componentDefinition(), import->component});
+		return;
+	}
 	case WASM::ExternType::Kind::Func:
 		break;
 	}
@@ -3426,6 +3528,7 @@ void ComponentRuntime::processExport(const WASM::ComponentExport& exportDecl)
 				componentInstances_[exportDecl.sortIndex.index];
 		break;
 	case WASM::ComponentSort::Type:
+		exportedTypeIndices_[exportDecl.name.name] = exportDecl.sortIndex.index;
 		break;
 	default:
 		break;

@@ -12,6 +12,7 @@
 */
 
 WASMJIT_VISIBLE_BEGIN
+#include "WasmComponentExecutor.hpp"
 #include "WasmMemory.hpp"
 #include "WasmValue.hpp"
 #include <cstddef>
@@ -450,64 +451,10 @@ private:
 
 //! \brief The single-agent execution interface
 //!
-//! This is the seam a future multi-agent backend implements. The default
-//! implementation is intentionally synchronous, single-threaded and reentrant:
-//! `runUntilIdle` drains the queue on the calling thread. There is no OS thread
-//! and no global state beyond the ComponentAsyncState instance.
-/** \brief Scheduling interface used by component async operations. */
-class ComponentExecutor {
-public:
-	virtual ~ComponentExecutor() = default;
+//! `ComponentExecutor`/`SingleAgentExecutor` live in the public
+//! `WasmComponentExecutor.hpp`; the engine ships the synchronous default and an
+//! embedder may replace it (docs/proposals/THREADS.md TH-5).
 
-	//! The answers of the `canon` thread built-ins. A single-agent executor
-	//! always reports 0 and 1; a multi-agent executor may report per-agent
-	//! values.
-	virtual uint32_t threadIndex() const = 0;
-	//! How many agents may execute concurrently (1 for a single-agent executor).
-	virtual uint32_t availableParallelism() const = 0;
-	//! True when this executor admits one agent only.
-	virtual bool singleAgent() const = 0;
-
-	//! Schedule `work` to run on the cooperative queue. It must not run before
-	//! `runUntilIdle()` is called.
-	virtual void push(std::function<void()> work) = 0;
-	//! Runs every queued item, including items they enqueue.
-	virtual void runUntilIdle() = 0;
-	//! How many items are queued.
-	virtual std::size_t pending() const = 0;
-};
-
-/** \brief Synchronous executor implementing the documented single-agent mode. */
-class SingleAgentExecutor final : public ComponentExecutor {
-public:
-	uint32_t threadIndex() const override { return 0; }
-	//! Always 1: the single-agent executor runs one task at a time.
-	uint32_t availableParallelism() const override { return 1; }
-	//! Always true: this is the documented single-agent mode.
-	bool singleAgent() const override { return true; }
-
-	void push(std::function<void()> work) override
-	{
-		if (work)
-			queue_.push_back(std::move(work));
-	}
-
-	void runUntilIdle() override
-	{
-		//! Take a snapshot so work that enqueues more work is still drained.
-		while (!queue_.empty()) {
-			std::function<void()> work = std::move(queue_.front());
-			queue_.pop_front();
-			work();
-		}
-	}
-
-	//! Number of queued work items.
-	std::size_t pending() const override { return queue_.size(); }
-private:
-	//! The cooperative work queue, drained by `runUntilIdle`.
-	std::deque<std::function<void()>> queue_;
-};
 
 
 //! \brief Stream/future and waitable bookkeeping
@@ -863,11 +810,14 @@ public:
 	/** \brief Resolves the current task and stores the flat results. \param results Flat core results. */
 	void taskReturn(std::span<const WASM::Value> results)
 	{
+		if (currentTask_->state() != ComponentTaskState::Pending)
+			throw std::runtime_error(
+					"component async: task.return called after the task settled");
 		currentTask_->setResults(results);
 		currentTask_->resolve();
 	}
 	/** \brief Resolves the current task. \return Canonical ABI success value (zero). */
-	uint32_t taskReturn() { currentTask_->resolve(); return 0; }
+	uint32_t taskReturn() { taskReturn(std::span<const WASM::Value>{}); return 0; }
 	//! Enters a new task activation, saving the caller's. The new task is
 	//! resolved by `task.return`; `endTask` returns its flat results.
 	/** \brief Begins a nested task activation. \return Mutable reference to the new current task. \throws std::runtime_error when the live-task bound is exceeded. */

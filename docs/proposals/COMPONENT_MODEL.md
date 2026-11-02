@@ -14,9 +14,12 @@ backpressure, waitables, subtasks, error-context). **`CM11`, `CM12`, `CM14`, `CM
 and `CM16`–`CM19` are closed: the reference corpus is green in both directions
 (516 verdict cases, 0 disagreements), and the async lift/lower calling
 convention now executes on the single-agent executor.** `CM-9` (vendor the
-upstream corpus) through `CM-14` (the async convention) are complete. True
-multi-agent scheduling remains deferred to [`THREADS.md`](THREADS.md) §5.1; WIT
-is ingested harness-side and WASI is host-provided.
+upstream corpus) through `CM-14` (the async convention) are complete, and
+`CM-20`–`CM-22` added per-load feature gates, the public
+`WASM::Runtime` component surface, component-sort imports, wide async result
+spill and a mutation/fuzz gate. True multi-agent scheduling remains deferred to
+[`THREADS.md`](THREADS.md) §5.1; WIT is ingested harness-side and WASI is
+host-provided.
 
 **Direction note (2026-11-01).** This note is where the project's centre of
 gravity is most visible: a component is a *managed extension unit*, and a product
@@ -258,9 +261,13 @@ handles, named imports/exports, and WIT as the authoring format. Everything in
   nothing requires a non-browser engine to have them, or to implement
   `wasm:js-string`. [`JS_INTEGRATION.md`](JS_INTEGRATION.md) records the
   optional, embedder-owned hook; it does not add JavaScript to components.
-- **No concurrency.** `async`, `stream`, `future`, tasks, `waitable-set*`, and
-  thread built-ins are gated on later previews.
-- **No value imports/exports and no component `start`** (🪙).
+- **No requirement for true concurrency.** The single-agent async surface
+  (`async`, `stream`, `future`, tasks, `waitable-set*`) executes synchronously;
+  multi-agent scheduling and thread creation are deferred (THREADS TH-5).
+- **No WIT-level value import/export or component-sort import.** Binary value
+  definitions, `start`, and function/instance/value/type imports execute; a
+  component-sort import, a bag re-export of a component sort, and a public
+  accessor for exported values/instances remain open (see §4.3).
 - **No validation of the `name` custom section**; names are optional metadata.
 - **No obligation to be maximally permissive about subtyping** — only
   module/instance/component types are subtypes at all today.
@@ -270,9 +277,9 @@ handles, named imports/exports, and WIT as the authoring format. Everything in
 ## 3A. Work order for the structural gaps (2026-11-02)
 
 `CM15` closed the corpus in both directions (**516 verdict cases, 0 accept-side and 0 reject-side
-disagreements**; `[component-corpus]` 520 assertions, zero `WARN`; suite **17,165 / 562**). Both
+disagreements**; `[component-corpus]` 520 assertions, zero `WARN`; suite **17,276 / 569**). Both
 directions are now a **hard gate** in `Test/ComponentCorpusTests.cpp`. `CM16`–`CM19` then closed the
-four structural gaps this section listed (2026-11-02), taking the suite to **17,165 / 562** without a
+four structural gaps this section listed (2026-11-02), taking the suite to **17,276 / 569** without a
 corpus delta. A report mode (`WASM_SPEC_CORPUS_TOLERANT=1`) was added first so structural work can be
 measured without aborting the gate.
 
@@ -293,12 +300,19 @@ measured without aborting the gate.
 | `CM18` | **`CoreSort::Type` in a core bag had no runtime policy; tags had no plumbing** | `processCoreInstance` threw for every non-func/table/memory/global inline export, and `processAlias` had no tag space | a core type is a **documented no-op** (compile-time identity; the validator resolves consumers); tags travel through `coreTags_`, `inlineTags`, `exportedTag` and `ImportRegistrar::registerTag` | `core inline bag carries type and tag sorts` (hand-authored binary; `wasm-tools` cannot print a core type export) |
 | `CM19` | **Async runtime half: one task, discarded results, concrete executor, no async calling convention** | `ComponentAsyncState` held one task, `task.return` dropped results, `SingleAgentExecutor` was a non-injectable member, and `CanonicalAbiOptions`/`Signature` had no direction/callback/exact core signature | a task stack with result storage and a live-task bound (`kMaxLiveTasks`); `setExecutor`; `flatten_functype`-derived `coreParams`/`coreResults`; async lift (stackful and callback event loop) and async lower (4-param cap, result pointer, packed i32) | `component async tasks store results and bound nesting`, `component async lift stores task.return results`, `component async callback drives the callback event loop`, `component async lower uses the async core signature` |
 
-**Residual, deliberately not in these four:** component-sort imports and bag re-exports of a component
-sort remain the named `CM-4` refusal (`component imports are not supported (CM-4 limitation)` /
-`inline instance export sort is not supported`); async lift results beyond `MAX_FLAT_PARAMS` (16) are
-validated (the `memory` option is required) but not yet spilled through memory at runtime; and true
-multi-agent scheduling stays deferred to `THREADS.md` TH-5. The single-agent executor is injectable,
-so the seam is testable without claiming the scheduling work.
+**Closed after these four (CM-20–CM-22, 2026-11-02):** component-sort imports and
+bag re-exports execute through `ComponentImport::componentImport` and
+`ComponentImport::Kind::Component`; async lift results beyond `MAX_FLAT_PARAMS`
+spill through the canonopt memory; `WASM::Runtime` gained
+`loadComponentBytes/File` and `instantiateComponent`, with public
+`ComponentInstanceHandle`, `ComponentValue`, `ComponentImport` and
+`ComponentExecutor` headers; `ComponentFeatures` provides per-load gating; and
+`[component-fuzz]` exercises truncated/mutated components without aborting.
+
+**Still open:** true multi-agent scheduling (embedder-owned through
+`ComponentExecutor`), the optional 1.0 name-section/subtyping/memory64/
+multi-memory refinements, and public accessors for exported core
+tables/globals (functions and memories are exposed; tables/globals are not yet).
 
 ### Two process notes for the next session
 
@@ -315,7 +329,7 @@ so the seam is testable without claiming the scheduling work.
 
 ## 4. What is in the tree today
 
-**Snapshot (2026-11-02, working tree; no commit yet).** Everything below is a kind-2 statement under `docs/FRESHNESS.md` §2.2, so the whole section carries one stamp rather than a date per sentence. Measured with `build/Desktop-Debug/Test/WasmJit` (**17,165 assertions / 562 cases**) and `[component-corpus]` (**516 verdict cases; 0 reject-side, 0 accept-side**). Before changing a count below, re-run those two and `docs/FRESHNESS.md` §8; if a sentence disagrees with the runs, the sentence is stale.
+**Snapshot (2026-11-02, working tree; no commit yet).** Everything below is a kind-2 statement under `docs/FRESHNESS.md` §2.2, so the whole section carries one stamp rather than a date per sentence. Measured with `build/Desktop-Debug/Test/WasmJit` (**17,276 assertions / 569 cases**) and `[component-corpus]` (**516 verdict cases; 0 reject-side, 0 accept-side**). Before changing a count below, re-run those two and `docs/FRESHNESS.md` §8; if a sentence disagrees with the runs, the sentence is stale.
 
 ### 4.1 Short answer: an honest rejection (CM-0), plus a parser (CM-1a/CM-1b)
 
@@ -385,17 +399,35 @@ multi-agent work listed in §4.3 and §5.
 - **True multi-agent execution** of component async/streams/futures/tasks.
   The interfaces and a working single-agent backend exist
   (`WasmBase/WasmComponentAsync.hpp`, `THREADS.md` §5.1); a second agent, real
-  wakeups and concurrent copies are the deliberately deferred TH-5 work. The
-  per-agent trap/exception state that a second agent needs is **TRAP-6**
-  ([`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md) §12.1), deferred with TH-5 rather
-  than scheduled separately.
-- **WIT-defined resource subtyping/private types** (post-MVP in the component
-  model) and engine-side WASI 0.2 implementations. WIT itself is a build-time
-  format: the harness ingests `component wit --json`, and WASI interfaces are
-  provided by the embedder through the ordinary host component-import hook.
-- The upstream `WebAssembly/component-model/test/*.wast` corpus is not checked
-  into the tree; the equivalent cases are hand-authored C++/WAT tests. Value
-  imports/exports remain gated (🪙) in the specification.
+  wakeups and concurrent copies are the deliberately deferred TH-5 work.
+  Backpressure is accounted but does not gate a task, task cancellation is not
+  propagated through a blocked copy, and `thread.*` creation still refuses by
+  name. The per-agent trap/exception state that a second agent needs is
+  **TRAP-6** ([`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md) §12.1), deferred with
+  TH-5 rather than scheduled separately.
+- **Public component embedding is present but not complete.** `WASM::Runtime`
+  now has `loadComponentBytes/File` and `instantiateComponent`, and
+  `WasmComponentInstance.hpp` plus `WasmComponentValue.hpp` are installed. The
+  surface exposes exported functions, values, instances, types, core functions
+  and core memories; exported core tables/globals and a bulk
+  `ComponentInstanceValue` walker are still missing.
+- **Validator/runtime acceptance now matches for the implemented paths.**
+  Component-sort imports, bag re-exports of a component sort and async results
+  beyond `MAX_FLAT_PARAMS` were closed by CM-22; `ComponentFeatures` prevents a
+  disabled proposal from being accepted. The remaining semantic work is the
+  async/resource item below (cancellation, backpressure, task states), not a
+  validate-then-refuse shape.
+- **Execution conformance is still hand-authored.** `[component-fuzz]` now
+  exercises truncated/mutated components and asserts no abort, but the vendored
+  upstream corpus is still asserted for **validation verdicts only**: there is
+  no run of its `assert_return`/`assert_trap` component forms. A component
+  execution corpus remains the missing evidence.
+- **WIT is tooling-only, and WASI is host-provided.** The harness parses
+  `component wit --json`; there is no `.wit` authoring/resolution path, generated
+  host bindings, or world-level import/export mapping. WIT-defined private
+  subtyping is post-MVP. WASI 0.2 interfaces are ordinary host imports resolved
+  by the embedder, so an engine-side WASI implementation is a product decision,
+  not a Component Model requirement.
 
 ### 4.4 CM-1a/CM-1b/CM-1c — parser, index spaces and structural validation
 
@@ -509,7 +541,7 @@ component grammar into an AST:
 | ~~CM4~~ | ~~**Canonical ABI runtime has gaps.**~~ **Done:** flat values, strings/lists/records/maps, exact variant/result/option joins, `memory`/`realloc`/`post-return`, indirect parameters/results, resource handles, stream/future copy and waitable events execute. | `WasmTypeStore.*`, `WasmBase/WasmComponentRuntime.*` | Closed |
 | ~~CM5~~ | ~~**Component graph execution incomplete.**~~ **Done:** embedded/nested components, inline core instances, core export aliases, `canon lift`/`lower`, host imports and canonical values execute; multi-agent async functions remain a THREADS deferral. | `WasmBase/WasmComponentRuntime.*` | Closed |
 | ~~CM6~~ | ~~**Full Type linking absent.**~~ **Done (TI-1…TI-4):** type imports decode `sub <abstract heaptype>`, enter the local type index space, receive nominal Store ids, are published by type exports and are linked with `WasmTypeRegistry` bound matching. The importing module sees imported types as abstract, as the MVP specifies; casts to imported types remain post-MVP in the proposal. | `WasmImport.hpp`, `WasmModule.*`, `WasmRegistryImportResolver.*`, `WasmTypeStore.*` | Closed |
-| ~~CM7~~ | ~~**Component-script value marshalling incomplete.**~~ **Done:** component scripts marshal primitives, strings, records, lists, tuples, variants, enums, flags, options, results, maps, own/borrow, streams and futures, using the function's canonical component types. The upstream corpus is not checked in; equivalent C++/WAT tests are. | `Test/main.cpp`, `Test/WastScript.cpp` | Closed |
+| ~~CM7~~ | ~~**Component-script value marshalling incomplete.**~~ **Done:** component scripts marshal primitives, strings, records, lists, tuples, variants, enums, flags, options, results, maps, own/borrow, streams and futures, using the function's canonical component types. The vendored upstream corpus is asserted for validation verdicts; runtime forms remain hand-authored C++/WAT tests. | `Test/main.cpp`, `Test/WastScript.cpp` | Closed |
 | ~~CM8~~ | ~~**Async copy semantics deferred.**~~ **Done for the single-agent engine:** libffi closures back `canon lower`, resources, stream/future new/read/write/cancel/forward, tasks, context, backpressure, waitable sets, subtasks and error-context. Real concurrent scheduling remains THREADS TH-5. | `WasmBase/WasmComponentRuntime.*`, `WasmBase/WasmComponentAsync.hpp` | Closed (single-agent) |
 | ~~CM9~~ | ~~**No WASI 0.2 interfaces.**~~ **Closed by contract:** WASI is an embedder interface; a `wasi:*` import is an ordinary host component import resolved by the embedder. No engine-side WASI implementation is required by the Component Model. | `WasmBase/WasmComponentRuntime.*`, `Test/main.cpp` host-import tests | Closed (host-provided) |
 | ~~CM10~~ | ~~**No error-context, async copy or threading built-ins.**~~ **Done:** `error-context.new/debug-message/drop`, stream/future copy/cancel/forward, task/context/backpressure, waitable sets, subtasks and the component async interfaces exist. `thread.*` returns single-agent answers (`index` 0, `yield` no-op, `available-parallelism` 1) and traps for thread creation, which requires a multi-agent backend. | `WasmComponentAsync.hpp`, `WasmBase/WasmComponentRuntime.*` | Closed (single-agent) |
@@ -521,8 +553,12 @@ component grammar into an AST:
 
 ### 5.1 Maturity: what is mature, what the ceiling is, and what is deliberately refused
 
-**Verdict (2026-11-02): functionally mature, and no gap in §5 remains open.**
-`CM1`–`CM10` are closed and `CM-0`…`CM-8` shipped; the surface is exercised by
+**Verdict (2026-11-02): functionally mature for the implemented subset.** This
+claim is scoped to the fixtures, C++ runtime tests and validation corpus below;
+it does **not** claim completeness of the public component surface, upstream
+execution conformance, the optional 1.0 name/subtyping/memory64 refinements, or
+multi-agent scheduling. `CM1`–`CM10` are
+closed and `CM-0`…`CM-8` shipped; the surface is exercised by
 the component fixtures under `Test/wasm_wat/component_*.wat` plus the C++ runtime
 tests and the structured `WastScript` path. **`CM11`/`CM12`** were
 inline-export-bag shapes the parser and validator accepted and the *runtime*
@@ -537,10 +573,10 @@ upstream test suite at the pinned revision rather than the specification itself.
 
 | Axis | State | What would move it |
 |---|---|---|
-| Feature surface | mature (§5 above) | nothing outstanding; `thread.*` creation is a THREADS deferral, not a component gap |
-| **Conformance** | **green against the upstream corpus** — `extern/component-model` is vendored and `[component-corpus]` asserts **516 verdict cases (140 accept / 376 reject): 0 reject-side, 0 accept-side**; both directions are a hard gate | — (nothing outstanding; re-run the corpus when the validator or the pinned corpus changes) |
-| Lifecycle | **matured 2026-11-01:** `ComponentRuntime::~ComponentRuntime` now calls `ModuleInstantiator::releaseInstance` for every core instance it created, so a component's compiled code is given back instead of leaking until the process ends | — (shipped; see `WRITING_A_BACKEND.md` §9 item 6) |
-| Multi-agent | single-agent by decision (`CMD3`) | a real scheduler is `THREADS.md` `TH-5`, not this note |
+| Feature surface | mature for the implemented subset; `ComponentFeatures` gates proposals, and the public `WASM::Runtime` component surface is installed | optional 1.0 name/subtyping/memory64/multi-memory details; public core table/global accessors |
+| **Conformance** | **validation-green against the upstream corpus** — `[component-corpus]` asserts **516 verdict cases (140 accept / 376 reject): 0 reject-side, 0 accept-side**; both directions are a hard gate. Runtime execution is covered by fixtures and `[component-fuzz]`, not by the upstream `assert_return` forms | add a component execution corpus; re-run the validator corpus when the validator or pinned corpus changes |
+| Lifecycle | **matured 2026-11-01:** `ComponentRuntime::~ComponentRuntime` calls `ModuleInstantiator::releaseInstance` for every core instance it created | — |
+| Multi-agent | single-agent by decision (`CMD3`); the executor is injectable and embedder-owned | a real scheduler remains `THREADS.md` `TH-5`, not this note |
 
 Two behaviours **were open gaps until 2026-11-01** (`CM11`, `CM12` above, both now closed and tested), and one is a deliberate
 catch-all. Each refusal names itself, so none is a silent mis-execution:
@@ -608,7 +644,10 @@ caller reuses the callee's buffer.
 | **CM-11 — Measure structural work** ✅ | `WASM_SPEC_CORPUS_TOLERANT=1` gives `[component-corpus]` a non-failing report mode; every disagreement is still named on stderr and as a `WARN`. `docs/TESTING.md` documents it. | — | **Done 2026-11-02:** the corpus reports `516 checked, 0 disagreements`; the hard gate is unchanged without the variable. |
 | **CM-12 — Core bags carry types and tags** ✅ | `CM18`: `CoreSort::Type` is a documented no-op in bags and export aliases; tags are registered in `coreTags_`, `inlineTags`, `exportedTag` and `ImportRegistrar`. A hand-authored binary fixture covers a bag with type + tag + func. | `CM18` | **Done 2026-11-02:** `core inline bag carries type and tag sorts`; no runtime path throws `inline core export sort is not supported`. |
 | **CM-13 — Component-side index spaces** ✅ | `CM17`: `ComponentInstanceHandle` mirrors the component-instance index space with per-sort maps; non-function imports and `with` arguments (value/instance/type); values appended in definition order by `processValue`. | `CM17` | **Done 2026-11-02:** bag-before-nested regression, value/instance/type argument fixture, and full suite green. |
-| **CM-14 — Async calling convention** ✅ | `CM19`: task stack with result storage and a live-task bound, injectable executor, `flatten_functype`-derived `coreParams`/`coreResults`, async lift (stackful + callback) and async lower. `CM16`: validator checks `isAsync` after type resolution, rejects `post-return`+`async`, validates callback presence/kind/signature, and compares the callee to the exact core signature. | `CM19`, `CM16` | **Done 2026-11-02:** four async fixtures run through the synchronous executor; four invalid canonopt fixtures reject by name; corpus stays **0/0**; suite **17,165 / 562**. |
+| **CM-14 — Async calling convention** ✅ | `CM19`: task stack with result storage and a live-task bound, injectable executor, `flatten_functype`-derived `coreParams`/`coreResults`, async lift (stackful + callback) and async lower. `CM16`: validator checks `isAsync` after type resolution, rejects `post-return`+`async`, validates callback presence/kind/signature, and compares the callee to the exact core signature. | `CM19`, `CM16` | **Done 2026-11-02:** four async fixtures run through the synchronous executor; four invalid canonopt fixtures reject by name; corpus stays **0/0**; suite **17,276 / 569**. |
+| **CM-15 — Public component surface and feature gates** ✅ | `CM-20`/`CM-21`: `ComponentFeatures` and `ComponentOptions`; installed `WasmComponentFeature.hpp`, `WasmComponentValue.hpp`, `WasmComponentExecutor.hpp`, `WasmComponentInstance.hpp`; `Runtime::loadComponentBytes/File` + `instantiateComponent`; exported functions/values/instances/types; host function/instance/value/type/component imports. | `CM20`, `CM21` | **Done 2026-11-02:** `[component-features]` and `[component-api]`; out-of-tree install check; ABI 0 removed. |
+| **CM-16 — Component imports and wide async results** ✅ | `CM-22`: `ComponentImport::Kind::Component` plus `LoadedComponent` ownership, `componentSpace_`, bag component exports, and `task.return` spill through the canonopt memory for >16 results. | `CM22` | **Done 2026-11-02:** host component-import fixture and a 17-result async fixture pass. |
+| **CM-17 — Mutation/fuzz hardening** ✅ | `CM-23`: `[component-fuzz]` deterministic truncation/byte/section mutations; `SectionDevice` bounds every core-module section reader; truncated component headers throw instead of indexing an empty span. | `CM23` | **Done 2026-11-02:** 256 mutations, no abort; empty/truncated regression tests; corpus **0/0**. |
 | **(deferred non-goals)** | True multi-agent async/stream/future scheduling (THREADS TH-5), WIT value imports/exports, WIT private-type subtyping, and engine-side WASI 0.2 implementations (WASI is host-provided). | CM9, CM10 | — |
 
 ## 8. Indicative test survey

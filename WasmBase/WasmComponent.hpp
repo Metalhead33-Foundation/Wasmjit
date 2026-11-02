@@ -15,6 +15,7 @@ WASMJIT_VISIBLE_BEGIN
 
 #include "WasmApi.hpp"
 #include "WasmArtifact.hpp"
+#include "WasmComponentFeature.hpp"
 #include "WasmComponentModel.hpp"
 #include "WasmComponentSection.hpp"
 #include "WasmComponentValidation.hpp"
@@ -92,6 +93,30 @@ struct WASMJIT_API Component : public Artifact {
 	 */
 	void fromFile(Elv::Io::Device& file, const ParseOptions& options, Store& store);
 
+	//! The same, with an explicit Component Model feature policy. The policy is
+	//! consumed by validate() (CM-20); an embedded nested component inherits it.
+	/**
+	 * \brief Reads a component with explicit parser and component-feature policies.
+	 * \param file Input device positioned at the component preamble.
+	 * \param options Parser policy inherited by the embedded core modules.
+	 * \param store Store that owns canonical types; it must outlive this component.
+	 * \param componentOptions Component Model feature policy.
+	 */
+	void fromFile(Elv::Io::Device& file, const ParseOptions& options, Store& store,
+			const ComponentOptions& componentOptions);
+	/**
+	 * \brief Reads a component with an explicit component-feature policy.
+	 * \param file Input device positioned at the component preamble.
+	 * \param store Store that owns canonical types; it must outlive this component.
+	 * \param componentOptions Component Model feature policy.
+	 */
+	void fromFile(Elv::Io::Device& file, Store& store,
+			const ComponentOptions& componentOptions);
+
+	//! The feature policy this component was validated with.
+	/** \brief Returns the component-feature policy. \return The configured feature set. */
+	ComponentFeatures features() const { return features_; }
+
 	//! Parses a nested component body (no preamble) between the current
 	//! position and `end`.
 	/**
@@ -118,6 +143,21 @@ struct WASMJIT_API Component : public Artifact {
 	static std::unique_ptr<Component> parseNested(
 			Elv::Io::Device& file, uint64_t end, unsigned depth,
 			const ParseOptions& options, Store& store);
+	//! The same, carrying the enclosing component's feature policy.
+	/**
+	 * \brief Parses a nested component body with an explicit feature policy.
+	 * \param file Input device positioned at the nested body.
+	 * \param end Absolute end offset of this nested body.
+	 * \param depth Current nesting depth.
+	 * \param options Parser policy inherited by nested components/core modules.
+	 * \param store Store receiving canonical type identities.
+	 * \param features Component Model feature policy inherited by the nested component.
+	 * \return Owning pointer to the parsed nested component.
+	 */
+	static std::unique_ptr<Component> parseNested(
+			Elv::Io::Device& file, uint64_t end, unsigned depth,
+			const ParseOptions& options, Store& store,
+			ComponentFeatures features);
 
 	//! The binary sections of this component, in file order.
 	/** \brief Views the binary sections in original file order. \return Non-owning span valid for this component's lifetime. */
@@ -161,6 +201,8 @@ private:
 	//! and nested components inherit it (docs/proposals/LEGACY_EXCEPTIONS.md
 	//! `LE-6`).
 	ParseOptions parserOptions_{};
+	//! The Component Model feature policy consumed by validate() (CM-20).
+	ComponentFeatures features_ = ComponentFeatures::all();
 	//! Clears parser scratch that validate() has already published into the Store.
 	/** \brief Releases parser scratch after its data has been published to the Store. */
 	void releaseParserAst() const;

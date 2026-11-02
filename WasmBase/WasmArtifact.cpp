@@ -8,6 +8,11 @@ namespace WASM {
 
 Preamble Artifact::readPreamble(Elv::Io::Device& file)
 {
+	// SAFETY §2: input-derived lengths are checked before they reach a buffer.
+	// A truncated preamble used to index an empty span and abort the process.
+	if (file.size() < 8)
+		throw std::runtime_error(
+				"Invalid WASM module! Truncated preamble.");
 	DWasmStream stream(file);
 	uint32_t magic = 0;
 	uint16_t versionLow = 0;

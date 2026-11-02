@@ -46,6 +46,7 @@ SOURCES += \
         WasmBackendRegistry.cpp \
         WasmCompilationPolicy.cpp \
         WasmComponent.cpp \
+        WasmComponentInstance.cpp \
         WasmComponentRuntime.cpp \
         WasmComponentValidation.cpp \
         WasmContinuation.cpp \
@@ -82,7 +83,11 @@ HEADERS += \
     WasmBackendRegistry.hpp \
     WasmArtifact.hpp \
     WasmComponent.hpp \
+    WasmComponentExecutor.hpp \
+    WasmComponentFeature.hpp \
+    WasmComponentInstance.hpp \
     WasmComponentModel.hpp \
+    WasmComponentValue.hpp \
     WasmComponentRuntime.hpp \
     WasmComponentSection.hpp \
     WasmComponentValidation.hpp \

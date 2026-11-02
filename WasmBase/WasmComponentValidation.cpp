@@ -1739,6 +1739,13 @@ private:
 	void validateCanonOpts(const Canon& canon);
 	void validateCanon(const Canon& canon);
 	void validateCanonicalAbi();
+	//! Rejects a disabled Component Model feature with a named error (CM-20).
+	void requireFeature(ComponentFeature feature, const char* what) const
+	{
+		if (!component_.features().contains(feature))
+			fail("component feature `" + std::string(componentFeatureName(feature))
+					+ "` is not enabled (" + what + ")");
+	}
 	void validateCoreTypeDef(const CoreTypeDef& definition,
 			ValidationScope& scope);
 	void validateCoreExternType(const CoreExternType& type,
@@ -1892,6 +1899,13 @@ void ComponentValidator::validateCanonicalAbi()
 			options.direction = canon.kind == Canon::Kind::Lift
 					? WASM::CanonicalAbiOptions::Direction::Lift
 					: WASM::CanonicalAbiOptions::Direction::Lower;
+			for (const CanonOpt& opt : canon.opts)
+				if (opt.kind == CanonOptKind::Memory) {
+					const Entity* memory = scope_.spaces.require(CoreSort::Memory,
+							opt.index, "memory canonopt");
+					if (memory && memory->memory.indexType == MemoryIndexType::I64)
+						options.pointerSize = 8;
+				}
 			if (store.canonicalAbi(type, options) == nullptr)
 				fail("canon lift/lower type cannot be flattened by the "
 						"Canonical ABI");
@@ -2174,6 +2188,8 @@ TypePtr ComponentValidator::resolveFuncType(ComponentTypeView type,
 {
 	auto func = std::make_shared<ResolvedFuncType>();
 	func->isAsync = (type.flags() & TypeFlagAsync) != 0;
+	if (func->isAsync)
+		requireFeature(ComponentFeature::Async, "async function type");
 	std::set<std::string> labels;
 	for (const ComponentFuncParam& param : type.params()) {
 		const std::string name(store_.types().store().string(param.name));
@@ -3500,6 +3516,7 @@ ResolvedDecl ComponentValidator::resolveExternType(const ExternType& type,
 				ResolvedType::Kind::Func, "function type");
 		break;
 	case ExternType::Kind::Value:
+		requireFeature(ComponentFeature::Values, "value import/export");
 		declaration.sort = componentSortIndex(ComponentSort::Value);
 		if (type.value.kind == ValueBound::Kind::Eq) {
 			declaration.type = makeType(resolveValueIndex(type.value.valueIndex,
@@ -3529,6 +3546,7 @@ ResolvedDecl ComponentValidator::resolveExternType(const ExternType& type,
 		}
 		break;
 	case ExternType::Kind::Component:
+		requireFeature(ComponentFeature::ComponentImports, "component import/export");
 		declaration.sort = componentSortIndex(ComponentSort::Component);
 		declaration.type = resolveTypeIndex(type.typeIndex, scope,
 				ResolvedType::Kind::Component, "component type");
@@ -3643,6 +3661,10 @@ void ComponentValidator::processAlias(const Alias& alias, bool insideType,
 		if (insideType && alias.sort.sort != ComponentSort::Instance
 				&& alias.sort.sort != ComponentSort::Type)
 			fail("export alias declarators may only alias instance or type");
+		if (alias.sort.sort == ComponentSort::Value)
+			requireFeature(ComponentFeature::Values, "value alias");
+		if (alias.sort.sort == ComponentSort::Component)
+			requireFeature(ComponentFeature::ComponentImports, "component alias");
 		const Entity* target = scope.spaces.require(ComponentSort::Instance,
 				alias.instanceIndex, "alias export");
 		if (!target->type || target->type->kind != ResolvedType::Kind::Instance)
@@ -3800,6 +3822,7 @@ void ComponentValidator::processDefinition(const ComponentDefinition& definition
 		processCanon(definition.index);
 		break;
 	case ComponentDefinitionKind::Start:
+		requireFeature(ComponentFeature::Values, "component start");
 		processStart(definition.index);
 		break;
 	case ComponentDefinitionKind::Import:
@@ -3809,6 +3832,7 @@ void ComponentValidator::processDefinition(const ComponentDefinition& definition
 		processExport(definition.index);
 		break;
 	case ComponentDefinitionKind::Value:
+		requireFeature(ComponentFeature::Values, "component value");
 		processValue(definition.index);
 		break;
 	}
@@ -3892,6 +3916,10 @@ void ComponentValidator::processValue(uint32_t index)
 void ComponentValidator::processImport(uint32_t index)
 {
 	const ImportDecl& import = component_.imports[index];
+	if (import.type.kind == ExternType::Kind::Value)
+		requireFeature(ComponentFeature::Values, "value import");
+	if (import.type.kind == ExternType::Kind::Component)
+		requireFeature(ComponentFeature::ComponentImports, "component import");
 	ResolvedDecl declaration = resolveExternType(import.type, scope_);
 	declaration.name = import.name;
 	const ComponentDefinitionRef ref{&component_,
@@ -3902,6 +3930,10 @@ void ComponentValidator::processImport(uint32_t index)
 void ComponentValidator::processExport(uint32_t index)
 {
 	const ComponentExport& exportDecl = component_.exports[index];
+	if (exportDecl.sortIndex.sort == ComponentSort::Value)
+		requireFeature(ComponentFeature::Values, "value export");
+	if (exportDecl.sortIndex.sort == ComponentSort::Component)
+		requireFeature(ComponentFeature::ComponentImports, "component export");
 	const Entity* target = scope_.spaces.require(exportDecl.sortIndex, "export");
 	ResolvedDecl declaration;
 	declaration.name = exportDecl.name;
@@ -4369,6 +4401,11 @@ void ComponentValidator::instantiateComponent(const ComponentInstance& instance,
 		}
 		std::map<std::string, const InstantiateArg*> args;
 		for (const InstantiateArg& arg : instance.args) {
+			if (arg.sortIndex.sort == ComponentSort::Value)
+				requireFeature(ComponentFeature::Values, "value instantiate argument");
+			if (arg.sortIndex.sort == ComponentSort::Component)
+				requireFeature(ComponentFeature::ComponentImports,
+						"component instantiate argument");
 			if (!args.emplace(arg.name, &arg).second)
 				fail("duplicate component instantiate argument `" + arg.name + "`");
 			scope_.spaces.require(arg.sortIndex, "component instantiate argument");
@@ -4459,6 +4496,11 @@ void ComponentValidator::instantiateComponent(const ComponentInstance& instance,
 		ValidationScope bagScope;
 		std::set<uint32_t> bagResources;
 		for (const InlineExport& exportDecl : instance.exports) {
+			if (exportDecl.sortIndex.sort == ComponentSort::Value)
+				requireFeature(ComponentFeature::Values, "value bag export");
+			if (exportDecl.sortIndex.sort == ComponentSort::Component)
+				requireFeature(ComponentFeature::ComponentImports,
+						"component bag export");
 			if (!names.insert(exportDecl.name.name).second)
 				fail("duplicate inline instance export `" + exportDecl.name.name + "`");
 			validateAttributes(exportDecl.name, exportDecl.sortIndex, false);
@@ -4528,7 +4570,14 @@ void ComponentValidator::validateCanonOpts(const Canon& canon)
 			if (memory)
 				fail("duplicate memory canonopt");
 			memory = true;
-			scope_.spaces.require(CoreSort::Memory, opt.index, "memory canonopt");
+			{
+				const Entity* memoryEntity = scope_.spaces.require(CoreSort::Memory,
+						opt.index, "memory canonopt");
+				if (memoryEntity
+						&& memoryEntity->memory.indexType == MemoryIndexType::I64)
+					requireFeature(ComponentFeature::Memory64,
+							"64-bit memory canonopt");
+			}
 			break;
 		case CanonOptKind::Realloc:
 			if (realloc)
@@ -4562,6 +4611,8 @@ void ComponentValidator::validateCanonOpts(const Canon& canon)
 	// need the type and can be enforced here.
 	const bool asyncRequested = async
 			|| (canon.async.has_value() && *canon.async);
+	if (asyncRequested)
+		requireFeature(ComponentFeature::Async, "async canonopt");
 	if (postReturn && asyncRequested)
 		fail("`post-return` cannot be used with `async`");
 	if (callback && !asyncRequested)
@@ -4591,6 +4642,63 @@ void ComponentValidator::validateCanonOpts(const Canon& canon)
 
 void ComponentValidator::validateCanon(const Canon& canon)
 {
+	// CM-20: proposals are gated before any structural interpretation, so a
+	// disabled feature is a named policy error rather than a later runtime
+	// refusal.
+	switch (canon.kind) {
+	case Canon::Kind::BackpressureInc:
+	case Canon::Kind::BackpressureDec:
+	case Canon::Kind::TaskReturn:
+	case Canon::Kind::TaskCancel:
+	case Canon::Kind::ContextGet:
+	case Canon::Kind::ContextSet:
+	case Canon::Kind::SubtaskCancel:
+	case Canon::Kind::SubtaskDrop:
+	case Canon::Kind::StreamNew:
+	case Canon::Kind::StreamRead:
+	case Canon::Kind::StreamWrite:
+	case Canon::Kind::StreamCancelRead:
+	case Canon::Kind::StreamCancelWrite:
+	case Canon::Kind::StreamDropReadable:
+	case Canon::Kind::StreamDropWritable:
+	case Canon::Kind::StreamForward:
+	case Canon::Kind::FutureNew:
+	case Canon::Kind::FutureRead:
+	case Canon::Kind::FutureWrite:
+	case Canon::Kind::FutureCancelRead:
+	case Canon::Kind::FutureCancelWrite:
+	case Canon::Kind::FutureDropReadable:
+	case Canon::Kind::FutureDropWritable:
+	case Canon::Kind::FutureForward:
+	case Canon::Kind::WaitableSetNew:
+	case Canon::Kind::WaitableSetWait:
+	case Canon::Kind::WaitableSetPoll:
+	case Canon::Kind::WaitableSetDrop:
+	case Canon::Kind::WaitableJoin:
+		requireFeature(ComponentFeature::Async, "async canon built-in");
+		break;
+	case Canon::Kind::ErrorContextNew:
+	case Canon::Kind::ErrorContextDebugMessage:
+	case Canon::Kind::ErrorContextDrop:
+		requireFeature(ComponentFeature::ErrorContext, "error-context built-in");
+		break;
+	case Canon::Kind::ThreadIndex:
+	case Canon::Kind::ThreadNewIndirect:
+	case Canon::Kind::ThreadResumeLater:
+	case Canon::Kind::ThreadSuspend:
+	case Canon::Kind::ThreadYield:
+	case Canon::Kind::ThreadSuspendThenResume:
+	case Canon::Kind::ThreadYieldThenResume:
+	case Canon::Kind::ThreadSuspendThenPromote:
+	case Canon::Kind::ThreadYieldThenPromote:
+	case Canon::Kind::ThreadSpawnRef:
+	case Canon::Kind::ThreadSpawnIndirect:
+	case Canon::Kind::ThreadAvailableParallelism:
+		requireFeature(ComponentFeature::Threads, "thread canon built-in");
+		break;
+	default:
+		break;
+	}
 	validateCanonOpts(canon);
 	switch (canon.kind) {
 	case Canon::Kind::Lift:
@@ -4688,6 +4796,13 @@ void ComponentValidator::validateCanon(const Canon& canon)
 			abiOptions.direction = canon.kind == Canon::Kind::Lift
 					? WASM::CanonicalAbiOptions::Direction::Lift
 					: WASM::CanonicalAbiOptions::Direction::Lower;
+			for (const CanonOpt& opt : canon.opts)
+				if (opt.kind == CanonOptKind::Memory) {
+					const Entity* memory = scope_.spaces.require(CoreSort::Memory,
+							opt.index, "memory canonopt");
+					if (memory && memory->memory.indexType == MemoryIndexType::I64)
+						abiOptions.pointerSize = 8;
+				}
 			const TypeId abiType = canon.kind == Canon::Kind::Lift
 					? component_.typeId(canon.typeIndex) : funcType->typeId;
 			if (canon.kind == Canon::Kind::Lift && coreFunc
@@ -5080,13 +5195,19 @@ bool ComponentValidator::typeSubtype(const TypePtr& actual,
 		return true;
 	}
 	if (actual->kind == ResolvedType::Kind::Component) {
+		// A component subtype imports less: an expected import may be absent in
+		// the actual type. When both name it, the expected type must be a
+		// subtype of the actual import (contravariance). The old loop required
+		// every expected import to be present with an identical type.
 		for (const ResolvedDecl& expectedImport : expected->component->imports) {
 			const ResolvedDecl* actualImport = findDecl(
 					actual->component->imports, expectedImport.name.name);
-			if (!actualImport || !sameSort(actualImport->sort, expectedImport.sort))
+			if (!actualImport)
+				continue;
+			if (!sameSort(actualImport->sort, expectedImport.sort))
 				return false;
 			if (expectedImport.type && (!actualImport->type
-					|| !typeEqual(actualImport->type, expectedImport.type,
+					|| !typeSubtype(expectedImport.type, actualImport->type,
 							false)))
 				return false;
 		}

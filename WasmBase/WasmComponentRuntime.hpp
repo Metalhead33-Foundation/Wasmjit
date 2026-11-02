@@ -17,6 +17,7 @@ WASMJIT_VISIBLE_BEGIN
 #include "WasmComponent.hpp"
 #include "WasmComponentAbi.hpp"
 #include "WasmComponentAsync.hpp"
+#include "WasmComponentValue.hpp"
 #include "WasmImport.hpp"
 #include "WasmModuleInstance.hpp"
 #include "WasmTypeStore.hpp"
@@ -31,121 +32,6 @@ WASMJIT_VISIBLE_BEGIN
 #include <vector>
 
 namespace WASM {
-
-//! A structured host-facing component value. It is intentionally a small
-//! discriminated union: the runtime owns conversion to/from the canonical ABI,
-//! so callers never see raw pointers into wasm linear memory.
-/** \brief Host-facing structured value used by the Component Model runtime. */
-struct ComponentValue {
-	//! Which representation the value uses.
-	enum class Kind : uint8_t {
-		Bool, S8, U8, S16, U16, S32, U32, S64, U64, F32, F64, Char,
-		String, List, FixedList, Record, Tuple, Variant, Enum, Flags,
-		Option, Result, Own, Borrow, Stream, Future, Map
-	};
-	Kind kind = Kind::Bool; //!< Which representation the value uses.
-	//! The scalar payload, reinterpreted according to `kind`.
-	union {
-		//! A 64-bit signed scalar (the widest numeric payload).
-		int64_t  s64 = 0;
-		//! A 64-bit unsigned scalar.
-		uint64_t u64;
-		//! A 64-bit float scalar.
-		double   f64;
-	};
-	//! Primitive value, discriminant/case/flags, or resource handle, depending
-	//! on `kind`.
-	uint32_t discriminant = 0;
-	//! The string payload for a `string` value.
-	std::string string;
-	//! The element payload for a list, tuple, record or variant value.
-	std::vector<ComponentValue> elements;
-	std::vector<bool> flags; //!< The bit set of a `flags` value.
-	bool hasValue = false; //!< True when `kind` carries a payload.
-};
-
-//! A component-level function. `call` is the flat-value entry point retained for
-//! scalar-only callers; `callValues` is the structured entry point used when a
-//! signature contains strings/lists/records or other memory-backed values.
-/** \brief Callable component function with flat and structured invocation forms. */
-struct ComponentFunction {
-	//! The canonical identity of the component function type.
-	WASM::TypeId typeId{WASM::TypeId::kNone};
-	//! The flattened core parameter types.
-	std::vector<WASM::AbiCoreType> params;
-	std::vector<WASM::AbiCoreType> results; //!< The flattened core result types.
-	std::vector<WASM::ComponentValueType> paramTypes; //!< The structured parameter types.
-	std::vector<WASM::ComponentValueType> resultTypes; //!< The structured result types.
-	WASM::CanonicalAbiOptions options; //!< The Canonical ABI options this function was lowered with.
-	bool indirectParams = false; //!< True when arguments travel through a single pointer.
-	bool indirectResults = false; //!< True when results are returned through a caller pointer.
-	//! The flat-value entry point (scalar-only signatures).
-	std::function<void(std::span<const WASM::Value>, std::span<WASM::Value>)> call;
-	//! The structured entry point (strings, lists, records, …).
-	std::function<void(std::span<const ComponentValue>, std::span<ComponentValue>)> callValues;
-};
-
-//! A host-supplied component instance: the export bag an instance import or a
-//! non-function `with` argument can carry. Nested instances are values, not
-//! runtimes, so the bag is self-contained and can outlive the providing runtime.
-struct ComponentInstanceValue {
-	//! Named function exports.
-	std::unordered_map<std::string, ComponentFunction> functions;
-	//! Named value exports.
-	std::unordered_map<std::string, ComponentValue> values;
-	//! Named type exports (their canonical identities).
-	std::unordered_map<std::string, WASM::TypeId> types;
-	//! Named instance exports.
-	std::unordered_map<std::string, std::shared_ptr<ComponentInstanceValue>> instances;
-};
-
-//! One component-level import or instantiate argument. A function entry keeps
-//! the historical `ComponentFunction` shape through the converting constructor.
-struct ComponentImport {
-	//! Which sort this import carries.
-	enum class Kind : uint8_t {
-		Function, //!< A callable function.
-		Instance, //!< A host-supplied instance bag.
-		Value, //!< A runtime value.
-		Type //!< A compile-time type identity (no runtime object).
-	};
-	Kind kind = Kind::Function; //!< Discriminant for the payload below.
-	ComponentFunction function; //!< Valid when kind == Function.
-	std::shared_ptr<ComponentInstanceValue> instance; //!< Valid when kind == Instance.
-	ComponentValue value; //!< Valid when kind == Value.
-	WASM::TypeId type{WASM::TypeId::kNone}; //!< Valid when kind == Type.
-
-	/** \brief Creates an empty import. */
-	ComponentImport() = default;
-	/** \brief Creates a function import from the historical descriptor. \param function Callable descriptor. */
-	ComponentImport(ComponentFunction function)
-		: kind(Kind::Function), function(std::move(function)) {}
-	/** \brief Creates an instance import. \param instance Host-supplied export bag. \return The import. */
-	static ComponentImport instanceImport(
-			std::shared_ptr<ComponentInstanceValue> instance)
-	{
-		ComponentImport out;
-		out.kind = Kind::Instance;
-		out.instance = std::move(instance);
-		return out;
-	}
-	/** \brief Creates a value import. \param value Runtime value. \return The import. */
-	static ComponentImport valueImport(ComponentValue value)
-	{
-		ComponentImport out;
-		out.kind = Kind::Value;
-		out.value = std::move(value);
-		return out;
-	}
-	/** \brief Creates a type import. \param type Canonical type identity. \return The import. */
-	static ComponentImport typeImport(WASM::TypeId type)
-	{
-		ComponentImport out;
-		out.kind = Kind::Type;
-		out.type = type;
-		return out;
-	}
-};
 
 //! Executable component runtime for embedded core modules/instances, nested
 //! components and `canon lift`/`lower`. It owns the component graph, the
@@ -215,6 +101,18 @@ public:
 	void endBorrowScope(uint32_t scope);
 	/** \brief Checks that a resource handle is live and has the expected type. \param handle Resource handle. \param expected Expected canonical resource type. \throws std::runtime_error when the handle is invalid or has the wrong type. */
 	void validateResourceHandle(uint32_t handle, WASM::TypeId expected) const;
+	/** \brief Looks up an exported value by name. \param name Export name. \return Value copy, or nullopt when absent. */
+	std::optional<ComponentValue> exportedValue(std::string_view name) const;
+	/** \brief Looks up an exported instance and copies its export bag. \param name Export name. \return Bag copy, or nullopt when absent. */
+	std::optional<ComponentInstanceValue> exportedInstanceValue(
+			std::string_view name) const;
+	/** \brief Looks up an exported type by name. \param name Export name. \return Canonical type identity, or nullopt when absent. */
+	std::optional<WASM::TypeId> exportedType(std::string_view name) const;
+	/** \brief Installs an embedder-owned executor for async work. \param executor Executor; must not be null. */
+	void setExecutor(std::unique_ptr<WASM::ComponentExecutor> executor)
+	{
+		async_.setExecutor(std::move(executor));
+	}
 
 private:
 	/** \brief Memory and helper callables selected by Canonical ABI options. */
@@ -272,7 +170,13 @@ private:
 	const WASM::Component& component_; //!< The validated definition, borrowed from the caller.
 	std::vector<std::unique_ptr<CoreInstanceHandle>> coreInstances_; //!< The core instances, by core instance index.
 	ComponentImports imports_; //!< The component-level imports this runtime was given.
-	std::vector<const WASM::Component*> nestedComponents_; //!< Nested definitions, by nested component index.
+	//! One component definition in the component index space: a nested
+	//! definition (owner empty) or an imported/aliased `LoadedComponent`.
+	struct ComponentDefinitionHandle {
+		const WASM::Component* definition = nullptr; //!< Parsed definition.
+		std::shared_ptr<const LoadedComponent> owner; //!< Keeps an imported component alive.
+	};
+	std::vector<ComponentDefinitionHandle> componentSpace_; //!< The component index space, in definition order.
 	//! One executable component instance: a nested runtime (Instantiate) or an
 	//! export bag (InlineExports / a host instance import). The vector mirrors the
 	//! component-instance index space, including aliases, so `alias.instanceIndex`
@@ -320,6 +224,7 @@ private:
 	std::unordered_map<std::string, size_t> exportedFuncs_; //!< Export name to component function index.
 	std::unordered_map<std::string, uint32_t> exportedValueIndices_; //!< Export name to component value index.
 	std::unordered_map<std::string, std::shared_ptr<ComponentInstanceHandle>> exportedInstances_; //!< Export name to instance handle.
+	std::unordered_map<std::string, uint32_t> exportedTypeIndices_; //!< Export name to component type index.
 
 	//! Walks the component definition list and builds the executable graph.
 	void build();
@@ -338,9 +243,7 @@ private:
 			ComponentInstanceValue exports);
 	//! Captures this runtime's component-level exports as a bag.
 	ComponentInstanceValue exportSnapshot() const;
-	//! Looks up an exported value by name.
-	std::optional<ComponentValue> exportedValue(std::string_view name) const;
-	//! Looks up an exported instance by name.
+	//! Looks up an exported instance handle by name.
 	std::shared_ptr<ComponentInstanceHandle> exportedInstance(
 			std::string_view name) const;
 	//! Dispatches one `canon` definition to its family handler.

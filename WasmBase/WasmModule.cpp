@@ -19,6 +19,64 @@ typedef Elv::Io::DataStream<Elv::Util::Endian::Little> DWasmStream;
 
 namespace {
 
+// A section-scoped view of the module device. The section scanner checks that a
+// declared section fits inside the module, but each section reader also has to
+// be unable to run past *its own* payload (a mutated vector count can otherwise
+// read into the next section and, at the end, past the device). Delegating to
+// the real device keeps absolute offsets used by the data/custom readers intact.
+class SectionDevice final : public Elv::Io::Device {
+public:
+	SectionDevice(Elv::Io::Device& inner, uint64_t start, uint64_t end)
+		: inner_(inner), start_(start), end_(end) {}
+
+	size_t read(void* buffer, size_t size, size_t count) override
+	{
+		const uint64_t bytes = static_cast<uint64_t>(size) * count;
+		const uint64_t position = current();
+		if (position < start_ || position > end_ || bytes > end_ - position)
+			throw std::runtime_error("malformed module: section read out of bounds");
+		return inner_.read(buffer, size, count);
+	}
+
+	size_t write(const void*, size_t, size_t) override
+	{
+		throw std::runtime_error("malformed module: write on a read-only section");
+	}
+
+	int seek(long offset, Elv::Io::SeekOrigin whence) override
+	{
+		long base = 0;
+		switch (whence) {
+		case Elv::Io::SeekOrigin::SET: base = 0; break;
+		case Elv::Io::SeekOrigin::CUR: base = inner_.tell(); break;
+		case Elv::Io::SeekOrigin::END: base = static_cast<long>(end_); break;
+		}
+		const long target = base + offset;
+		if (target < 0 || static_cast<uint64_t>(target) < start_
+				|| static_cast<uint64_t>(target) > end_)
+			throw std::runtime_error("malformed module: section seek out of bounds");
+		return inner_.seek(offset, whence);
+	}
+
+	long tell() override { return inner_.tell(); }
+	size_t size() override { return inner_.size(); }
+	bool eof() override { return current() >= end_; }
+	Elv::Io::Mode getMode() const override { return inner_.getMode(); }
+	bool flush() override { return true; }
+	bool isValid() const override { return inner_.isValid(); }
+
+private:
+	uint64_t current() const
+	{
+		const long position = inner_.tell();
+		return position < 0 ? 0 : static_cast<uint64_t>(position);
+	}
+
+	Elv::Io::Device& inner_;
+	uint64_t start_;
+	uint64_t end_;
+};
+
 // Name-section lookups shared by Module::findName. Names are metadata only;
 // the map is allowed to contain an out-of-range index (ENSD2).
 const std::string* findDirectName(const std::map<uint32_t,std::string>& map, uint32_t idx)
@@ -121,22 +179,25 @@ void Module::processSecetions(Elv::Io::Device& file)
 
 	for(const auto& it : sections)
 	{
+		file.seek(it.offset, Elv::Io::SeekOrigin::SET);
+		SectionDevice limited(file, static_cast<uint64_t>(it.offset),
+				static_cast<uint64_t>(it.offset) + it.size);
 		switch (it.type) {
-			case SectionType::Custom: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processCustomSection(file, it); break;
-			case SectionType::Type: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processTypeSection(file, it); break;
-			case SectionType::Import: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processImportSection(file, it); break;
-			case SectionType::Function: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processFunctionSection(file, it); break;
-			case SectionType::Table: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processTableSection(file, it); break;
-			case SectionType::Memory: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processMemorySection(file, it); break;
-			case SectionType::Global: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processGlobalSection(file, it); break;
-			case SectionType::Export: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processExportSection(file, it); break;
-			case SectionType::Start: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processStartSection(file, it); break;
-			case SectionType::Element: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processElementSection(file, it); break;
-			case SectionType::Code: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processCodeSection(file, it); break;
-			case SectionType::Data: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processDataSection(file, it); break;
-			case SectionType::DataCount: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processDataCountSection(file, it); break;
-			case SectionType::Tag: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processTagSection(file, it); break;
-			case SectionType::String: file.seek(it.offset, Elv::Io::SeekOrigin::SET); processStringSection(file, it); break;
+			case SectionType::Custom: processCustomSection(limited, it); break;
+			case SectionType::Type: processTypeSection(limited, it); break;
+			case SectionType::Import: processImportSection(limited, it); break;
+			case SectionType::Function: processFunctionSection(limited, it); break;
+			case SectionType::Table: processTableSection(limited, it); break;
+			case SectionType::Memory: processMemorySection(limited, it); break;
+			case SectionType::Global: processGlobalSection(limited, it); break;
+			case SectionType::Export: processExportSection(limited, it); break;
+			case SectionType::Start: processStartSection(limited, it); break;
+			case SectionType::Element: processElementSection(limited, it); break;
+			case SectionType::Code: processCodeSection(limited, it); break;
+			case SectionType::Data: processDataSection(limited, it); break;
+			case SectionType::DataCount: processDataCountSection(limited, it); break;
+			case SectionType::Tag: processTagSection(limited, it); break;
+			case SectionType::String: processStringSection(limited, it); break;
 			case SectionType::Invalid: break;
 			default: break;
 		}

@@ -1,5 +1,6 @@
 #include "WasmRuntime.hpp"
 
+#include "WasmComponent.hpp"
 #include "WasmValidation.hpp"
 
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
@@ -202,6 +203,62 @@ std::shared_ptr<const Module> Runtime::loadFile(const std::filesystem::path& pat
 	module->fromFile(file, loadOptions(config_), store_);
 	modules_.push_back(module);
 	return module;
+}
+
+std::shared_ptr<const LoadedComponent> Runtime::loadComponentBytes(
+		std::span<const std::byte> bytes, const ComponentOptions& options)
+{
+	auto component = std::make_unique<Component>();
+	Euph::Io::ConstBufferDevice device(bytes);
+	component->fromFile(device, ParseOptions{}, store_, options);
+	auto loaded = makeLoadedComponent(std::move(component), options);
+	loadedComponents_.push_back(loaded);
+	return loaded;
+}
+
+std::shared_ptr<const LoadedComponent> Runtime::loadComponentFile(
+		const std::filesystem::path& path, const ComponentOptions& options)
+{
+	const std::string pathString = path.string();
+	Euph::Io::File file(pathString.c_str(), Elv::Io::Mode::READ);
+	auto component = std::make_unique<Component>();
+	component->fromFile(file, ParseOptions{}, store_, options);
+	auto loaded = makeLoadedComponent(std::move(component), options);
+	loadedComponents_.push_back(loaded);
+	return loaded;
+}
+
+ComponentInstanceHandle& Runtime::instantiateComponent(const LoadedComponent& component,
+		ComponentHostImports imports, std::unique_ptr<ComponentExecutor> executor)
+{
+	rejectUnsupportedConfig(config_, backend_);
+	std::shared_ptr<const LoadedComponent> loaded;
+	for (const auto& candidate : loadedComponents_) {
+		if (candidate.get() == &component) {
+			loaded = candidate;
+			break;
+		}
+	}
+	if (!loaded)
+		throw std::runtime_error("the component was not loaded by this runtime");
+	BackendInstance componentBackend = backendFactory_ ? backendFactory_()
+			: backend_;
+	if (!componentBackend.instantiator)
+		throw std::runtime_error("the runtime has no backend instantiator");
+	auto instance = makeComponentInstance(std::move(loaded),
+			std::move(componentBackend), std::move(imports),
+			std::move(executor));
+	componentInstances_.push_back(std::move(instance));
+	return *componentInstances_.back();
+}
+
+std::vector<ComponentInstanceHandle*> Runtime::componentInstances()
+{
+	std::vector<ComponentInstanceHandle*> out;
+	out.reserve(componentInstances_.size());
+	for (const auto& instance : componentInstances_)
+		out.push_back(instance.get());
+	return out;
 }
 
 ModuleInstance& Runtime::instantiate(const Module& module, ImportResolver& imports)

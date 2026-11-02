@@ -28,8 +28,21 @@ void Component::fromFile(Elv::Io::Device& file, Store& store)
 
 void Component::fromFile(Elv::Io::Device& file, const ParseOptions& options, Store& store)
 {
+	fromFile(file, options, store, ComponentOptions{});
+}
+
+void Component::fromFile(Elv::Io::Device& file, Store& store,
+		const ComponentOptions& componentOptions)
+{
+	fromFile(file, ParseOptions::fromEnvironment(), store, componentOptions);
+}
+
+void Component::fromFile(Elv::Io::Device& file, const ParseOptions& options,
+		Store& store, const ComponentOptions& componentOptions)
+{
 	store_ = &store;
 	parserOptions_ = options;
+	features_ = componentOptions.features;
 	const Preamble preamble = Artifact::readPreamble(file);
 	if (preamble.layer != kComponentLayer)
 		throw std::runtime_error("Unsupported WebAssembly artifact: expected a "
@@ -52,6 +65,13 @@ std::unique_ptr<Component> Component::parseNested(
 		Elv::Io::Device& file, uint64_t end, unsigned depth,
 		const ParseOptions& options, Store& store)
 {
+	return parseNested(file, end, depth, options, store, ComponentFeatures::all());
+}
+
+std::unique_ptr<Component> Component::parseNested(
+		Elv::Io::Device& file, uint64_t end, unsigned depth,
+		const ParseOptions& options, Store& store, ComponentFeatures features)
+{
 	const long position = file.tell();
 	if (position < 0 || static_cast<uint64_t>(position) > end
 			|| 8 > end - static_cast<uint64_t>(position))
@@ -69,6 +89,7 @@ std::unique_ptr<Component> Component::parseNested(
 	component->layer = preamble.layer;
 	component->store_ = &store;
 	component->parserOptions_ = options;
+	component->features_ = features;
 	component->parseSections(file, end, depth);
 	return component;
 }
@@ -93,19 +114,40 @@ void Component::parseSections(Elv::Io::Device& file, std::optional<uint64_t> end
 
 	const uint64_t limit = end ? *end : (file.size() != 0
 			? static_cast<uint64_t>(file.size()) : 0);
-	DWasmStream stream(file);
 
 	while (true) {
-		if (limit != 0 && file.tell() >= 0
-				&& static_cast<uint64_t>(file.tell()) >= limit)
+		const long position = file.tell();
+		if (limit != 0 && position >= 0
+				&& static_cast<uint64_t>(position) >= limit)
 			break;
 		if (sections.size() >= kMaxComponentSections)
 			throw std::runtime_error("component has too many sections (limit " +
 					std::to_string(kMaxComponentSections) + ")");
 
-		uint8_t id = 0;
+		// Read the section id and the size LEB byte-by-byte so a truncated
+		// multi-byte size cannot run past the device (SAFETY §2). The previous
+		// `DWasmStream >> Leb` indexed an empty span on a one-byte tail.
+		const auto readHeaderByte = [&]() -> uint8_t {
+			const long at = file.tell();
+			if (limit != 0 && (at < 0 || static_cast<uint64_t>(at) >= limit))
+				throw std::runtime_error(
+						"component parse: truncated section header");
+			uint8_t byte = 0;
+			file.read(&byte, 1, 1);
+			return byte;
+		};
+		const uint8_t id = readHeaderByte();
 		uint32_t size = 0;
-		stream >> id >> Elv::Io::Leb(size);
+		uint32_t shift = 0;
+		uint8_t byte = 0;
+		do {
+			byte = readHeaderByte();
+			if (shift >= 35)
+				throw std::runtime_error(
+						"component parse: section size LEB is too long");
+			size |= static_cast<uint32_t>(byte & 0x7f) << shift;
+			shift += 7;
+		} while (byte & 0x80);
 		if (id > static_cast<uint8_t>(ComponentSectionType::Value))
 			throw std::runtime_error("malformed component section id " +
 					std::to_string(id));
@@ -153,7 +195,7 @@ void Component::parseSectionPayload(ComponentSection& section,
 		break;
 	case ComponentSectionType::NestedComponent:
 		components.push_back(Component::parseNested(device, payload.size(), depth + 1,
-				parserOptions_, store()));
+				parserOptions_, store(), features_));
 		definitions.push_back({ComponentDefinitionKind::Component,
 				static_cast<uint32_t>(components.size() - 1)});
 		break;

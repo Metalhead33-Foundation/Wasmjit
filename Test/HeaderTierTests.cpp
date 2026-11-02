@@ -43,6 +43,10 @@ const std::set<std::string>& embedderHeaders()
 		"WasmMemory.hpp", "WasmTable.hpp", "WasmExn.hpp", "WasmString.hpp",
 		"WasmTracing.hpp", "WasmRegistryImportResolver.hpp", "WasmStore.hpp",
 		"WasmParseOptions.hpp",
+		"WasmComponentFeature.hpp",
+		"WasmComponentValue.hpp",
+		"WasmComponentExecutor.hpp",
+		"WasmComponentInstance.hpp",
 	};
 	return headers;
 }
@@ -173,5 +177,5 @@ TEST_CASE("every public header has a compile-only translation unit", "[tiers]")
 			++checked;
 		}
 	}
-	REQUIRE(checked == 43); // one TU per public header; bump when a header lands
+	REQUIRE(checked == 47); // one TU per public header; bump when a header lands
 }

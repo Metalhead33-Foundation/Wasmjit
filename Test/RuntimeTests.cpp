@@ -13,9 +13,28 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+namespace {
+
+std::vector<std::byte> readComponentFixture(const char* name)
+{
+	const std::string path = std::string(WASM_TEST_DIR) + name + ".wasm";
+	std::ifstream stream(path, std::ios::binary);
+	REQUIRE(stream);
+	std::vector<char> bytes((std::istreambuf_iterator<char>(stream)),
+			std::istreambuf_iterator<char>());
+	std::vector<std::byte> out(bytes.size());
+	for (std::size_t i = 0; i < bytes.size(); ++i)
+		out[i] = static_cast<std::byte>(bytes[i]);
+	return out;
+}
+
+} // namespace
 
 TEST_CASE("runtime: create, load, instantiate and call", "[runtime]")
 {
@@ -52,6 +71,98 @@ TEST_CASE("runtime: create, load, instantiate and call", "[runtime]")
 
 	REQUIRE_THROWS_AS(runtime->callExport<std::int32_t>(instance, "missing"),
 			std::runtime_error);
+}
+
+TEST_CASE("runtime: load and instantiate a component through the public API",
+		"[runtime][component-api]")
+{
+	auto runtime = WASM::Runtime::create("libjit");
+	REQUIRE(runtime != nullptr);
+	const std::vector<std::byte> bytes = readComponentFixture("component_runtime");
+	REQUIRE_FALSE(bytes.empty());
+
+	auto loaded = runtime->loadComponentBytes(bytes);
+	REQUIRE(loaded != nullptr);
+	REQUIRE(loaded->features().contains(WASM::ComponentFeature::Baseline));
+
+	WASM::ComponentInstanceHandle& instance = runtime->instantiateComponent(*loaded);
+	REQUIRE(runtime->componentInstances().size() == 1);
+	auto function = instance.exportedFunction("add");
+	REQUIRE(function.has_value());
+	WASM::ComponentValue a;
+	a.kind = WASM::ComponentValue::Kind::U32;
+	a.u64 = 20;
+	WASM::ComponentValue b;
+	b.kind = WASM::ComponentValue::Kind::U32;
+	b.u64 = 22;
+	WASM::ComponentValue args[2] = { a, b };
+	WASM::ComponentValue result;
+	function->callValues({ args, 2 }, { &result, 1 });
+	REQUIRE(result.kind == WASM::ComponentValue::Kind::U32);
+	REQUIRE(result.u64 == 42);
+}
+
+TEST_CASE("runtime: component import is instantiated by the host",
+		"[runtime][component-api]")
+{
+	auto runtime = WASM::Runtime::create("libjit");
+	REQUIRE(runtime != nullptr);
+	const std::vector<std::byte> exportedBytes =
+			readComponentFixture("component_component_export");
+	const std::vector<std::byte> importedBytes =
+			readComponentFixture("component_component_import");
+	auto exported = runtime->loadComponentBytes(exportedBytes);
+	REQUIRE(exported != nullptr);
+	auto imported = runtime->loadComponentBytes(importedBytes,
+			WASM::ComponentOptions{WASM::ComponentFeatures::all()});
+	REQUIRE(imported != nullptr);
+
+	WASM::ComponentHostImports imports;
+	imports.emplace("c", WASM::ComponentImport::componentImport(exported));
+	WASM::ComponentInstanceHandle& instance =
+			runtime->instantiateComponent(*imported, std::move(imports));
+	auto function = instance.exportedFunction("answer");
+	REQUIRE(function.has_value());
+	WASM::ComponentValue result;
+	function->callValues({}, { &result, 1 });
+	REQUIRE(result.kind == WASM::ComponentValue::Kind::U32);
+	REQUIRE(result.u64 == 42);
+}
+
+TEST_CASE("runtime: exported value, instance and type are visible",
+		"[runtime][component-api]")
+{
+	auto runtime = WASM::Runtime::create("libjit");
+	auto loaded = runtime->loadComponentBytes(
+			readComponentFixture("component_export_surface"));
+	REQUIRE(loaded != nullptr);
+	WASM::ComponentInstanceHandle& instance = runtime->instantiateComponent(*loaded);
+
+	auto bag = instance.exportedInstance("i");
+	REQUIRE(bag.has_value());
+	REQUIRE(bag->functions.count("f") == 1);
+	WASM::ComponentValue result;
+	bag->functions.at("f").callValues({}, { &result, 1 });
+	REQUIRE(result.u64 == 7);
+
+	auto type = instance.exportedType("t");
+	REQUIRE(type.has_value());
+	REQUIRE_FALSE(type->isNone());
+
+	auto valueComponent = runtime->loadComponentBytes(
+			readComponentFixture("component_instance_args"),
+			WASM::ComponentOptions{WASM::ComponentFeatures::all()});
+	REQUIRE(valueComponent != nullptr);
+	WASM::ComponentHostImports imports;
+	WASM::ComponentValue hostValue;
+	hostValue.kind = WASM::ComponentValue::Kind::U32;
+	hostValue.u64 = 42;
+	imports.emplace("hostv", WASM::ComponentImport::valueImport(hostValue));
+	WASM::ComponentInstanceHandle& valueInstance =
+			runtime->instantiateComponent(*valueComponent, std::move(imports));
+	auto exported = valueInstance.exportedValue("out");
+	REQUIRE(exported.has_value());
+	REQUIRE(exported->u64 == 42);
 }
 
 TEST_CASE("runtime: each runtime owns an independent store", "[runtime]")

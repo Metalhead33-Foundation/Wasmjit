@@ -1,0 +1,41 @@
+;; CM-22: async lift with more than MAX_FLAT_PARAMS (16) results. The results
+;; spill through memory; `task.return` takes a single pointer and the runtime
+;; reloads the tuple from the canonopt memory.
+(component
+  (type $T (tuple u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32))
+  (core module $Mem (memory (export "mem") 1))
+  (core instance $memInst (instantiate $Mem))
+  (alias core export $memInst "mem" (core memory $mem))
+  (canon task.return (result $T) (memory $mem) (core func $tr))
+  (core module $M
+    (import "" "mem" (memory 1))
+    (import "" "task.return" (func $tr (param i32)))
+    (func (export "run")
+      (i32.store offset=0  (i32.const 0) (i32.const 1))
+      (i32.store offset=4  (i32.const 0) (i32.const 2))
+      (i32.store offset=8  (i32.const 0) (i32.const 3))
+      (i32.store offset=12 (i32.const 0) (i32.const 4))
+      (i32.store offset=16 (i32.const 0) (i32.const 5))
+      (i32.store offset=20 (i32.const 0) (i32.const 6))
+      (i32.store offset=24 (i32.const 0) (i32.const 7))
+      (i32.store offset=28 (i32.const 0) (i32.const 8))
+      (i32.store offset=32 (i32.const 0) (i32.const 9))
+      (i32.store offset=36 (i32.const 0) (i32.const 10))
+      (i32.store offset=40 (i32.const 0) (i32.const 11))
+      (i32.store offset=44 (i32.const 0) (i32.const 12))
+      (i32.store offset=48 (i32.const 0) (i32.const 13))
+      (i32.store offset=52 (i32.const 0) (i32.const 14))
+      (i32.store offset=56 (i32.const 0) (i32.const 15))
+      (i32.store offset=60 (i32.const 0) (i32.const 16))
+      (i32.store offset=64 (i32.const 0) (i32.const 17))
+      (call $tr (i32.const 0))
+    )
+  )
+  (core instance $ci (instantiate $M
+    (with "" (instance
+      (export "mem" (memory $mem))
+      (export "task.return" (func $tr))))))
+  (alias core export $ci "run" (core func $run))
+  (func (export "run") async (result $T)
+    (canon lift (core func $run) async (memory $mem)))
+)

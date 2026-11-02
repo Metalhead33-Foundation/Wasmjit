@@ -13,7 +13,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <iterator>
 #include <limits>
@@ -210,6 +212,19 @@ std::unique_ptr<WASM::Artifact> loadTestArtifact(const char* moduleName)
 	const std::string path = std::string(WASM_TEST_DIR) + moduleName + ".wasm";
 	Euph::Io::File file(path.c_str(), Elv::Io::Mode::READ);
 	return WASM::Artifact::parse(file, testStore());
+}
+
+// CM-20: load a component through the parser entry point that accepts an
+// explicit Component Model feature policy.
+std::unique_ptr<WASM::Component> loadTestComponentWithFeatures(
+		const char* componentName, WASM::ComponentFeatures features)
+{
+	const std::string path = std::string(WASM_TEST_DIR) + componentName + ".wasm";
+	Euph::Io::File file(path.c_str(), Elv::Io::Mode::READ);
+	auto component = std::make_unique<WASM::Component>();
+	component->fromFile(file, WASM::ParseOptions{}, testStore(),
+			WASM::ComponentOptions{features});
+	return component;
 }
 
 const WASM::TypeStore& typeStore()
@@ -3075,6 +3090,26 @@ TEST_CASE("async canon option rules reject invalid combinations")
 	REQUIRE_THROWS(loadTestArtifact("component_async_invalid_callback_lower"));
 }
 
+TEST_CASE("component async lift spills wide results through memory")
+{
+	auto artifact = loadTestArtifact("component_async_wide");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	auto backend = TestBackend::create();
+	WASM::ComponentRuntime runtime(backend->instantiator(), *component);
+	auto function = runtime.exportedFunction("run");
+	REQUIRE(function.has_value());
+	WASM::ComponentValue result;
+	function->callValues({}, { &result, 1 });
+	REQUIRE(result.kind == WASM::ComponentValue::Kind::Tuple);
+	REQUIRE(result.elements.size() == 17);
+	for (std::size_t i = 0; i < result.elements.size(); ++i) {
+		REQUIRE(result.elements[i].kind == WASM::ComponentValue::Kind::U32);
+		REQUIRE(result.elements[i].u64 == i + 1);
+	}
+}
+
 TEST_CASE("component instance imports carry a function bag")
 {
 	// CM17: a host supplies an instance export bag (not a function import).
@@ -4636,6 +4671,130 @@ TEST_CASE("a Component Model component is rejected instead of misparsed")
 	} catch (const std::exception& error) {
 		REQUIRE(std::string(error.what()).find("Component Model") != std::string::npos);
 	}
+}
+
+TEST_CASE("empty and truncated artifacts are rejected without aborting")
+{
+	// SAFETY §2: a malformed artifact must be a clean exception, never an
+	// out-of-bounds span access. Regression for the empty-input assert.
+	const std::array<uint8_t, 4> shortBytes = { 0x00, 0x61, 0x73, 0x6d };
+	for (const auto& bytes : { std::vector<uint8_t>{},
+			std::vector<uint8_t>(shortBytes.begin(), shortBytes.end()) }) {
+		std::span<const std::byte> span(
+				reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+		Euph::Io::ConstBufferDevice device(span);
+		REQUIRE_THROWS(WASM::Artifact::parse(device, testStore()));
+	}
+}
+
+TEST_CASE("component features gate post-1.0 surfaces")
+{
+	using WASM::ComponentFeature;
+	using WASM::ComponentFeatures;
+	const ComponentFeatures baseline = ComponentFeatures::baseline();
+	const ComponentFeatures implemented = ComponentFeatures::implemented();
+	const ComponentFeatures all = ComponentFeatures::all();
+	REQUIRE(baseline.contains(ComponentFeature::Baseline));
+	REQUIRE_FALSE(baseline.contains(ComponentFeature::Async));
+	REQUIRE(implemented.contains(ComponentFeature::Async));
+	REQUIRE(implemented.contains(ComponentFeature::Values));
+	REQUIRE(all.contains(ComponentFeature::Threads));
+	REQUIRE(all.contains(ComponentFeature::ComponentImports));
+	REQUIRE(all.contains(ComponentFeature::Memory64));
+
+	// Values (the instance-argument fixture imports a value).
+	REQUIRE_THROWS(loadTestComponentWithFeatures("component_instance_args", baseline));
+	REQUIRE_NOTHROW([&] {
+		(void)loadTestComponentWithFeatures("component_instance_args", implemented);
+	}());
+
+	// Async function type + node.
+	REQUIRE_THROWS(loadTestComponentWithFeatures("component_async_stackful", baseline));
+	REQUIRE_NOTHROW([&] {
+		(void)loadTestComponentWithFeatures("component_async_stackful", implemented);
+	}());
+
+	// Component-sort import: implemented for the host-provided component path.
+	REQUIRE_THROWS(loadTestComponentWithFeatures("component_component_import", baseline));
+	REQUIRE_NOTHROW([&] {
+		(void)loadTestComponentWithFeatures("component_component_import", implemented);
+	}());
+	REQUIRE_NOTHROW([&] {
+		(void)loadTestComponentWithFeatures("component_component_import", all);
+	}());
+
+	// Thread built-in.
+	REQUIRE_THROWS(loadTestComponentWithFeatures("component_thread_index", implemented));
+	REQUIRE_NOTHROW([&] {
+		(void)loadTestComponentWithFeatures("component_thread_index", all);
+	}());
+
+	// 64-bit memory in a canonopt.
+	REQUIRE_THROWS(loadTestComponentWithFeatures("component_memory64_abi", implemented));
+	REQUIRE_NOTHROW([&] {
+		(void)loadTestComponentWithFeatures("component_memory64_abi", all);
+	}());
+}
+
+TEST_CASE("component parser survives truncated and mutated input", "[component-fuzz]")
+{
+	std::ifstream stream(std::string(WASM_TEST_DIR) + "component_runtime.wasm",
+			std::ios::binary);
+	REQUIRE(stream);
+	const std::vector<char> seedChars((std::istreambuf_iterator<char>(stream)),
+			std::istreambuf_iterator<char>());
+	REQUIRE_FALSE(seedChars.empty());
+	std::vector<uint8_t> seed(seedChars.size());
+	for (std::size_t i = 0; i < seedChars.size(); ++i)
+		seed[i] = static_cast<uint8_t>(seedChars[i]);
+
+	const auto parse = [](const std::vector<uint8_t>& bytes) {
+		WASM::Store store;
+		std::span<const std::byte> span(
+				reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+		Euph::Io::ConstBufferDevice device(span);
+		try {
+			(void)WASM::Artifact::parse(device, store);
+		} catch (const std::exception&) {
+			// A clean refusal is the contract; an abort/assert is not.
+		}
+	};
+
+	// The unmutated seed must parse, so a mutation test failure is attributable.
+	REQUIRE_NOTHROW([&] {
+		WASM::Store store;
+		std::span<const std::byte> span(
+				reinterpret_cast<const std::byte*>(seed.data()), seed.size());
+		Euph::Io::ConstBufferDevice device(span);
+		(void)WASM::Artifact::parse(device, store);
+	}());
+
+	std::size_t iterations = 256;
+	if (const char* raw = std::getenv("WASM_COMPONENT_FUZZ_ITERATIONS")) {
+		const long parsed = std::strtol(raw, nullptr, 10);
+		if (parsed > 0)
+			iterations = static_cast<std::size_t>(parsed);
+	}
+	for (std::size_t i = 0; i < iterations; ++i) {
+		std::vector<uint8_t> bytes = seed;
+		INFO("component fuzz mutation " << i << " (size " << bytes.size() << ")");
+		switch (i % 4) {
+		case 0:
+			bytes.resize((i * 17) % (seed.size() + 1));
+			break;
+		case 1:
+			bytes[(i * 37) % bytes.size()] ^= uint8_t(1u << (i % 8));
+			break;
+		case 2:
+			bytes[(i * 53) % bytes.size()] = 0xFF;
+			break;
+		case 3:
+			bytes.push_back(static_cast<uint8_t>(i));
+			break;
+		}
+		parse(bytes);
+	}
+	REQUIRE(iterations > 0);
 }
 
 TEST_CASE("multi-memory: imported memories are shared and stay distinct")

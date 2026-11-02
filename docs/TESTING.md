@@ -1219,5 +1219,16 @@ Useful commands:
 ```bash
 ./Test/WasmJit '[component-corpus]'        # the verdict run + the gap list
 WASM_SPEC_CORPUS_TOLERANT=1 ./Test/WasmJit '[component-corpus]'  # report, do not fail
+WASM_COMPONENT_FUZZ_ITERATIONS=4096 ./Test/WasmJit '[component-fuzz]'  # longer mutation run
 awk -F'\t' '$1=="skip"' build/*/Test/wasm_testsuite/component-corpus/manifest.tsv  # why a form was not assertable
 ```
+
+The component feature/API tests are:
+
+- `[component-features]` — `ComponentFeatures::baseline/implemented/all` and the named
+  rejection of a disabled proposal.
+- `[component-api]` — `WASM::Runtime::loadComponent*` / `instantiateComponent`,
+  exported functions/values/instances/types, and host component imports.
+- `[component-fuzz]` — deterministic truncation/byte/section mutations of a valid
+  component. The contract is a clean exception or a successful parse; an abort,
+  assertion or sanitizer report is a failure.

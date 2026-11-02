@@ -17,6 +17,7 @@ WASMJIT_VISIBLE_BEGIN
 
 #include "WasmAgent.hpp"
 #include "WasmBackendRegistry.hpp"
+#include "WasmComponentInstance.hpp"
 #include "WasmConcurrency.hpp"
 #include "WasmDiagnostics.hpp"
 #include "WasmHostBridge.hpp"
@@ -137,6 +138,24 @@ public:
 	//! Loads a core module from a filesystem path (same rules as `loadBytes`).
 	/** \brief Loads and retains a core module from a filesystem path. \param path Path to the module file. \return Shared pointer to the loaded immutable module. \throws std::exception if file access, parsing, validation, or profile checks fail. */
 	std::shared_ptr<const Module> loadFile(const std::filesystem::path& path);
+
+	//! \par Components (CM-21)
+	/** \brief Parses, validates and retains a Component Model component from memory. \param bytes Complete component bytes. \param options Component Model feature policy. \return Shared pointer to the loaded definition. \throws std::exception if parsing, validation, or a disabled feature fails. */
+	std::shared_ptr<const LoadedComponent> loadComponentBytes(
+			std::span<const std::byte> bytes,
+			const ComponentOptions& options = ComponentOptions{
+					ComponentFeatures::baseline()});
+	/** \brief Loads, validates and retains a component from a path. \param path Path to the component file. \param options Component Model feature policy. \return Shared pointer to the loaded definition. \throws std::exception if file access, parsing, validation, or a disabled feature fails. */
+	std::shared_ptr<const LoadedComponent> loadComponentFile(
+			const std::filesystem::path& path,
+			const ComponentOptions& options = ComponentOptions{
+					ComponentFeatures::baseline()});
+	/** \brief Instantiates a loaded component. \param component Definition loaded by this runtime. \param imports Component-level host imports. \param executor Optional embedder executor; null means single-agent. \return Reference to the runtime-owned instance. \throws std::exception if the definition is foreign, imports are missing/mismatched, or instantiation fails. */
+	ComponentInstanceHandle& instantiateComponent(const LoadedComponent& component,
+			ComponentHostImports imports = {},
+			std::unique_ptr<ComponentExecutor> executor = {});
+	/** \brief Lists the component instances owned by this runtime. \return Pointers to live instances. */
+	std::vector<ComponentInstanceHandle*> componentInstances();
 
 	//! \par Instantiation (R1)
 	//! Idempotent: at most one instance per `Module`. A second call returns the
@@ -287,6 +306,10 @@ private:
 		std::unique_ptr<ModuleInstance> instance; //!< the adopted instance
 	};
 	std::unordered_map<const Module*, LoadedModule> instances_; //!< at most one instance per module
+	//! Loaded component definitions, kept alive for their instances.
+	std::vector<std::shared_ptr<const LoadedComponent>> loadedComponents_;
+	//! Component instances, destroyed before their loaded definitions.
+	std::vector<std::unique_ptr<ComponentInstanceHandle>> componentInstances_;
 };
 
 template<typename Ret, typename... Args>
