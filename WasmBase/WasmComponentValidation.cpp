@@ -1726,8 +1726,39 @@ void ComponentValidator::validateExternalValueVisibility(const ValuePtr& value,
 void ComponentValidator::validateExternalVisibility(const TypePtr& type,
 		bool isImport, const ResolvedType* root)
 {
-	if (!type || type.get() == root)
+	if (!type)
 		return;
+	if (type.get() == root) {
+		// CM14: the declaration's *own* type is exempt from having another
+		// external name (it is the thing being exported), but its contents are
+		// not. Returning here exempted the whole closure, so `(export "t"
+		// (type $L))` never examined `$L`'s reference to the unexported `$Rec`
+		// — the entire `external-visibility` corpus batch.
+	switch (type->kind) {
+		case ResolvedType::Kind::Value:
+			validateExternalValueVisibility(type->value, isImport);
+			break;
+		case ResolvedType::Kind::Func:
+			for (const auto& [name, value] : type->func->params)
+				validateExternalValueVisibility(value, isImport);
+			if (type->func->result)
+				validateExternalValueVisibility(*type->func->result, isImport);
+			break;
+		case ResolvedType::Kind::Instance:
+			for (const ResolvedDecl& declaration : type->instance->exports)
+				validateExternalVisibility(declaration.type, isImport, nullptr);
+			break;
+		case ResolvedType::Kind::Component:
+			for (const ResolvedDecl& declaration : type->component->imports)
+				validateExternalVisibility(declaration.type, isImport, nullptr);
+			for (const ResolvedDecl& declaration : type->component->exports)
+				validateExternalVisibility(declaration.type, isImport, nullptr);
+			break;
+		case ResolvedType::Kind::Resource:
+			break; // the exported resource is the externally named type
+		}
+		return;
+	}
 	switch (type->kind) {
 	case ResolvedType::Kind::Value:
 		validateExternalValueVisibility(type->value, isImport);
@@ -2023,22 +2054,54 @@ bool isInterfaceName(const std::string& name)
 	}
 	// CM14: the three segments are kebab labels (the namespace may be dotted).
 	// Checking only the structure accepted `WaSi:http/types`, `wasi:HtTp/types`
-	// and `wasi:http/TyPeS`, all of which the corpus rejects.
-	if (!isKebabLabel(name.substr(0, colon)))
+	// and `wasi:http/TyPeS`, all of which the corpus rejects. A one-letter
+	// upper-case fragment is not an acronym *here*: `A:b/c`, `ns-A:b/c`,
+	// `ns:A/b` and `ns:pkg-A/b` are invalid interface names. The same shape is a
+	// legal definition label (a resource may be named `R`), so this rule stays
+	// in the extern-name path rather than in `isKebabLabel`.
+	// A one-letter upper-case *word* is not an acronym, unless a dashed digit
+	// word follows it: the corpus rejects `A:b/c`, `ns-A:b/c`, `ns:A/b` and
+	// `ns:pkg-A/b`, but accepts `ns-1-a:b-1-c/D-2` (`D-2`), so the next word is
+	// what makes the difference.
+	const auto segment = [](const std::string& piece) {
+		const auto next = [&](std::size_t from) {
+			const std::size_t dash = piece.find('-', from);
+			return dash == std::string::npos
+					? std::string() : piece.substr(dash + 1, piece.find('-', dash + 1) - dash - 1);
+		};
+		for (std::size_t start = 0; start <= piece.size();) {
+			const std::size_t end = piece.find('-', start);
+			const std::string fragment = piece.substr(start,
+					end == std::string::npos ? std::string::npos : end - start);
+			if (fragment.size() == 1
+					&& std::isupper(static_cast<unsigned char>(fragment[0]))) {
+				const std::string following = next(start + fragment.size());
+				if (following.empty()
+						|| !std::all_of(following.begin(), following.end(),
+								[](char c) { return std::isdigit(static_cast<unsigned char>(c)); }))
+					return false;
+			}
+			if (end == std::string::npos)
+				break;
+			start = end + 1;
+		}
+		return isKebabLabel(piece);
+	};
+	if (!segment(name.substr(0, colon)))
 		return false;
 	const std::string namespacePart = name.substr(colon + 1, slash - colon - 1);
 	for (std::size_t start = 0;;) {
 		const std::size_t dot = namespacePart.find('.', start);
 		const std::string piece = namespacePart.substr(start,
 				dot == std::string::npos ? std::string::npos : dot - start);
-		if (!isKebabLabel(piece))
+		if (!segment(piece))
 			return false;
 		if (dot == std::string::npos)
 			break;
 		start = dot + 1;
 	}
 	const std::size_t interfaceEnd = at == std::string::npos ? name.size() : at;
-	return isKebabLabel(name.substr(slash + 1, interfaceEnd - slash - 1));
+	return segment(name.substr(slash + 1, interfaceEnd - slash - 1));
 }
 
 // Decomposed `plainname` (Explainer.md "External names"). The Component Model
@@ -3265,10 +3328,17 @@ void ComponentValidator::validateCanon(const Canon& canon)
 		break;
 	case Canon::Kind::ResourceNew:
 	case Canon::Kind::ResourceDrop:
-	case Canon::Kind::ResourceRep:
-		resolveTypeIndex(canon.typeIndex, scope_, ResolvedType::Kind::Resource,
-				"resource type");
+	case Canon::Kind::ResourceRep: {
+		const TypePtr resource = resolveTypeIndex(canon.typeIndex, scope_,
+				ResolvedType::Kind::Resource, "resource type");
+		// CM14: a canon resource builtin needs a *concrete* resource. `(sub
+		// resource)` has no representation (the corpus: “not a local resource”),
+		// while a resource aliased from a nested component’s export and one
+		// defined beside the builtin are both concrete and legal.
+		if (!resource || !resource->resource || resource->resource->abstract)
+			fail("canonical resource builtin requires a concrete resource");
 		break;
+	}
 	case Canon::Kind::TaskReturn:
 		for (const ComponentValueType& result : canon.results)
 			(void)resolveValueType(result, scope_);
