@@ -747,6 +747,44 @@ bool containsHandle(const ValuePtr& value)
 	}
 }
 
+// CM14: a value needs linear memory when the canonical ABI has to place bytes
+// there: `string`, `list`/fixed-list and `map`, including when nested.
+bool valueNeedsMemory(const ValuePtr& value)
+{
+	if (!value)
+		return false;
+	switch (value->kind) {
+	case ResolvedValueType::Kind::List:
+	case ResolvedValueType::Kind::FixedList:
+	case ResolvedValueType::Kind::Map:
+		return true;
+	case ResolvedValueType::Kind::Primitive:
+		return value->primitive == PrimitiveValueType::String;
+	case ResolvedValueType::Kind::Record:
+		for (const auto& field : value->fields)
+			if (valueNeedsMemory(field.second))
+				return true;
+		return false;
+	case ResolvedValueType::Kind::Variant:
+		for (const ResolvedCase& item : value->cases)
+			if (item.type && valueNeedsMemory(*item.type))
+				return true;
+		return false;
+	case ResolvedValueType::Kind::Tuple:
+		for (const ValuePtr& element : value->tuple)
+			if (valueNeedsMemory(element))
+				return true;
+		return false;
+	case ResolvedValueType::Kind::Option:
+		return valueNeedsMemory(value->element);
+	case ResolvedValueType::Kind::Result:
+		return (value->ok && valueNeedsMemory(*value->ok))
+				|| (value->error && valueNeedsMemory(*value->error));
+	default:
+		return false;
+	}
+}
+
 // CM14: a map key must be hashable — scalars other than floats, plus enums and
 // flags. `f32`, `list`, `tuple` and `own` are the shapes the corpus rejects.
 bool isMapKeyType(const ValuePtr& value)
@@ -2885,6 +2923,29 @@ void ComponentValidator::processCoreModule(uint32_t index)
 			ComponentDefinitionKind::CoreModule, index};
 	entity.coreModule = component_.coreModules[index].get();
 	entity.coreModuleType = true;
+	// CM14: a concrete core module may not import the same `module`/`field`
+	// twice. The module-type path checks this in `validateCoreTypeDef`; the
+	// instantiated-module path had no equivalent, so `(import "" "" (func))`
+	// twice was accepted.
+	{
+		const Module& module = *entity.coreModule;
+		std::set<std::pair<std::string, std::string>> seen;
+		const auto want = [&](const std::string& moduleName,
+				const std::string& fieldName) {
+			if (!seen.emplace(moduleName, fieldName).second)
+				fail("duplicate import name `" + moduleName + ":" + fieldName + "`");
+		};
+		for (const ImportFunction& import : module.importFunctions)
+			want(import.moduleName, import.fieldName);
+		for (const ImportTable& import : module.importTables)
+			want(import.moduleName, import.fieldName);
+		for (const ImportMemory& import : module.importMemories)
+			want(import.moduleName, import.fieldName);
+		for (const ImportGlobal& import : module.importGlobals)
+			want(import.moduleName, import.fieldName);
+		for (const ImportTag& import : module.importTags)
+			want(import.moduleName, import.fieldName);
+	}
 	scope_.spaces.coreModules.push_back(std::move(entity));
 }
 
@@ -3434,15 +3495,37 @@ void ComponentValidator::validateCanon(const Canon& canon)
 	validateCanonOpts(canon);
 	switch (canon.kind) {
 	case Canon::Kind::Lift:
-		scope_.spaces.require(CoreSort::Func, canon.coreFuncIndex,
-				"canon lift core function");
-		resolveTypeIndex(canon.typeIndex, scope_, ResolvedType::Kind::Func,
-				"function type");
+	case Canon::Kind::Lower: {
+		TypePtr funcType;
+		if (canon.kind == Canon::Kind::Lift) {
+			scope_.spaces.require(CoreSort::Func, canon.coreFuncIndex,
+					"canon lift core function");
+			funcType = resolveTypeIndex(canon.typeIndex, scope_,
+					ResolvedType::Kind::Func, "function type");
+		} else {
+			const Entity* funcEntity = scope_.spaces.require(ComponentSort::Func,
+					canon.funcIndex, "canon lower function");
+			funcType = funcEntity ? funcEntity->type : TypePtr{};
+		}
+		// CM14: a `lift`/`lower` whose type places bytes in linear memory (string,
+		// list, map) must name a `memory` option; the corpus rejects the ones that
+		// do not, and the ABI could not have run them.
+		bool hasMemory = false;
+		for (const CanonOpt& opt : canon.opts)
+			if (opt.kind == CanonOptKind::Memory)
+				hasMemory = true;
+		if (!hasMemory && funcType && funcType->func) {
+			bool needs = false;
+			for (const auto& [name, value] : funcType->func->params)
+				if (valueNeedsMemory(value))
+					needs = true;
+			if (funcType->func->result && valueNeedsMemory(*funcType->func->result))
+				needs = true;
+			if (needs)
+				fail("canonical option `memory` is required");
+		}
 		break;
-	case Canon::Kind::Lower:
-		scope_.spaces.require(ComponentSort::Func, canon.funcIndex,
-				"canon lower function");
-		break;
+	}
 	case Canon::Kind::ResourceNew:
 	case Canon::Kind::ResourceDrop:
 	case Canon::Kind::ResourceRep: {
