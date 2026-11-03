@@ -48,6 +48,7 @@ provenance and the reason its two names do not survive here are in §3.
 | §9 | What this closes, and what stays open |
 | §10 | Test survey |
 | §11 | References |
+| §12 | What can and should generate host bindings — and what stays the embedder's job? |
 
 ## 2. What the embedder has today
 
@@ -788,4 +789,154 @@ check. The embedding surface is what the installed `wasmjit/wasmjit.hpp` exposes
   `WasmBase/WasmAgent.hpp` (`Agent`/`ExecutionState`), `WasmBase/WasmModule.hpp`
   (`fromFile`), `WasmBase/WasmValidation.hpp` (internal, §4.6),
   `WasmBase/WasmBase.pri`, `Test/helper.cpp` (the current recipe).
+## 12. Host bindings: guide, generator, or embedder?
+
+“Host bindings” here means the **typed declarations and adapter stubs** an
+embedder writes so its language can call a module/component, and so a
+module/component can call host functions. It does **not** mean a binary format,
+and it does not mean parsing WIT text in the engine.
+
+The engine is binary-only. A realistic binding story therefore has three
+layers:
+
+| Layer | Owned by | What it is |
+|---|---|---|
+| Canonical ABI and metadata | **engine** | `TypeId`, `Module::importDescriptors()`/`exportDescriptors()`, `ComponentFunction::paramTypes`/`resultTypes`, `ComponentValueType`, `ComponentValue`, import/export order, canonical layouts and the `Callable`/`ComponentFunction` calling seams |
+| Binding declarations and adapter stubs | **tooling or embedder** | C/C++ headers, TypeScript/AssemblyScript declarations, Rust/Zig/Kotlin/MoonBit/Go/Dart wrappers, memory/realloc glue, resource and async adapters |
+| Host policy | **embedder** | WASI implementations, JS/Promise/event-loop integration, OS threads/fibers, product-specific object models |
+
+### 12.1 Answer to “just a guide, or can we generate?”
+
+**Both are realistic, in this order:**
+
+1. **A guide is the first deliverable.** It documents the mapping from engine
+   metadata to each target language, including ownership, traps/errors,
+   resources, streams/futures and the component Canonical ABI. This is valuable
+   even if no generator exists.
+2. **A descriptor-driven generator is the right automation step.** It consumes
+   the engine’s metadata (and, for components, optional WIT JSON) and emits
+   declarations plus stubs. It does not require parsing C++ headers.
+3. **External tools are an option, not the foundation.** SWIG and
+   [`Glue`](https://github.com/TheLartians/Glue) are reasonable experiments for
+   C++-facing adapters, but neither knows the Wasm Canonical ABI, component
+   resources, or the engine’s trap/ownership rules. They can be an adapter
+   layer behind a generator, not the source of truth.
+
+### 12.2 The authoritative inputs already in the tree
+
+- `Module::importDescriptors()` / `exportDescriptors()` (see [`ABI.md`](ABI.md)
+  “Module metadata descriptors”): import-section order, names, `ExternalKind`,
+  canonical `TypeId`, and structural memory/table/global/tag types.
+- `Module::typeView()` / `TypeStore` views for the structural signature behind a
+  `TypeId`.
+- `ComponentFunction` metadata: `params`/`results`, `paramTypes`/`resultTypes`,
+  `CanonicalAbiOptions`, indirect-parameter/result flags.
+- `ComponentValueType` / `ComponentValue` for structured component values and
+  resource/stream/future kinds.
+- `ComponentImport` for host-supplied functions, values, instances, types,
+  components and core modules.
+- Optional WIT JSON from `wasm-tools component wit --json` for a component’s
+  interface names and WIT-level structure.
+
+A generator should treat these as the schema. It should not scrape comments,
+C++ classes or arbitrary source headers.
+
+### 12.3 Options, with a recommendation
+
+| Option | What it can produce | Verdict |
+|---|---|---|
+| **Hand-written guide + per-language templates** | Language-specific declarations and adapter skeletons from the documented ABI | **Do first.** Low risk, useful immediately, no new engine surface. |
+| **Descriptor-driven schema + emitters** | A neutral JSON schema from `Module`/`Component` metadata, then C/C++, Rust, Zig, TS/AssemblyScript, Kotlin, MoonBit, Go, Dart emitters | **Do second.** The generator belongs outside `WasmBase/`; the engine only guarantees the metadata. |
+| **WIT as the IDL** | Component-level interfaces and skeleton adapters for component exports/imports | **Good for components, not for raw core modules.** WIT cannot describe a core module’s memory/table/global imports or its raw `Callable` ABI. |
+| **SWIG** | C++ bindings driven by parsed C++ declarations | **Explore later.** Parsing C++ does not tell you the Wasm Canonical ABI, ownership, traps or component resources. |
+| **Glue** | C++ binding helpers for a C++ host | **Explore later.** Same limitation; useful as an implementation detail, not the interface definition. |
+| **Automatic scan of existing C/C++ headers** | Guessed declarations | **Do not make this the source of truth.** A C++ header describes a C++ ABI, not the Wasm ABI: `extern "C"` shapes, packed types, `v128`, result buffers, reference counts and component resources are not recoverable from it. |
+| **Embedder-owned adapters** | Any language/runtime-specific binding | **Always valid.** This is the correct default when the target runtime is not one the project can support. |
+
+### 12.4 What “WIT texts based on embedder exports” can and cannot mean
+
+WIT is useful at the **component boundary**:
+
+- if a component was built from a WIT world, the build-time WIT is the best
+  source for names and interface structure;
+- `wasm-tools component wit --json` can provide a tooling view of a component;
+- a generator can emit WIT-like interface text for documentation or for a
+  downstream component toolchain.
+
+It is **not** a complete description of:
+
+- a raw core module’s imports/exports and memory/table/global shapes;
+- the exact original WIT package structure (some names/version metadata may be
+  absent from a binary);
+- host-only contracts such as WASI implementations, JS Promises, or a product’s
+  object model.
+
+The engine does not parse `.wit`, resolve packages, or generate host bindings.
+WIT → component remains a build-time/tooling step (`wasm-tools component wit
+--wasm`, or another producer).
+
+
+### 12.5 The guide’s minimum contents
+
+A useful guide is language-neutral first, then has per-language appendices:
+
+1. **Which ABI am I looking at?** Core module `Callable` ABI versus component
+   Canonical ABI; why a C++ prototype is not enough.
+2. **Reading the metadata:** import/export descriptors, import order, `TypeId`,
+   `ComponentValueType`, indirect parameters/results, memory/realloc and
+   `post-return`.
+3. **Value mapping:** scalar/`v128`/reference/string/list/record/variant/map;
+   flags/enum/option/result; nullable references; `char` and string encodings.
+4. **Ownership:** host/guest ownership of references, retain/release, result
+   buffers, resource handles and `own`/`borrow`.
+5. **Failure:** traps, pending exceptions, `WASM::Trap`, result-buffer
+   conventions, and which errors belong to the host adapter.
+6. **Async:** tasks, futures/streams, waitable sets, `ComponentExecutor`, and
+   where an OS event loop or thread pool belongs.
+7. **Generated declarations:** one canonical header/module plus a generated
+   adapter, and a rule that generated code is not hand-edited.
+8. **Conformance tests:** the harness must exercise the generated adapter, not
+   only the raw `callValues`/`Callable` path.
+
+### 12.6 Per-language notes
+
+| Target | What a generator can emit | Important limit |
+|---|---|---|
+| **C / C++** | `extern "C"` declarations, `TypeId`-keyed import tables, result-buffer helpers, opaque resource handles | Do not expose C++ classes/templates across the Wasm boundary; the host ABI is C. |
+| **TypeScript / AssemblyScript** | `.d.ts` declarations and an AssemblyScript adapter module | A `.d.ts` is compile-time only; AssemblyScript has its own `import`/`export` ABI and cannot be generated from generic TS alone. |
+| **Rust** | `extern "C"` functions, `#[repr(C)]` structs, ownership wrappers | Rust ownership/panic semantics are not Wasm reference-count semantics; the adapter must translate explicitly. |
+| **Zig** | `export`/`extern` declarations and allocator glue | The generated code must follow the Canonical ABI, not Zig’s default container ABI. |
+| **Kotlin/Wasm** | Kotlin external declarations and adapter objects | Kotlin/Wasm has its own host interop model; a generic C header is not sufficient. |
+| **MoonBit** | External function declarations and value adapters | Target-specific host ABI and ownership rules must be encoded by the generator. |
+| **Go** | `//go:wasmimport`/`//go:wasmexport` declarations and `unsafe` glue | Go’s Wasm ABI and runtime constraints differ from the C ABI. |
+| **Dart** | Dart FFI/Wasm interop declarations | The Dart runtime’s Wasm support and memory model determine the adapter. |
+| **WIT** | Component-level interface text | Not a core-module description; not a replacement for descriptors. |
+
+This is why a single “C++ header generator” is not the answer: the source of
+truth is the Wasm metadata, and the target language’s host ABI decides the
+shape of the adapter.
+
+### 12.7 Decision and next steps
+
+**Recommendation:** keep generation out of `WasmBase/`. The engine should
+guarantee the metadata descriptors and a guide; a separate tool — or the
+embedder — owns language emitters.
+
+The realistic sequence is:
+
+1. **Now:** §12.5 as the guide, with examples for C/C++ and
+   TypeScript/AssemblyScript.
+2. **Next:** a small schema emitter that reads module/component descriptors and
+   writes a neutral JSON schema. It can be a test-only tool initially.
+3. **Then:** language emitters, starting with C/C++ and Rust, then
+   TS/AssemblyScript, Zig, Kotlin, MoonBit, Go and Dart.
+4. **Later:** evaluate SWIG/Glue as optional C++ adapters, and WIT emission for
+   component-level documentation. Neither becomes an engine dependency.
+5. **Always:** an embedder may ignore all of this and write adapters by hand;
+   that remains a supported contract, not a failure to generate.
+
+The test for this work is not “the generated file compiles.” It is that a
+generated adapter can call an exported function, satisfy an import, preserve
+reference/resource ownership, and report the same trap/exception/async result
+as the raw engine API.
 
