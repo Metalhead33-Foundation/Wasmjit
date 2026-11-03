@@ -338,8 +338,21 @@ ModuleInstance& Runtime::adoptInstance(const Module& module, ImportResolver& imp
 	backend.instantiator->setCompilationPolicy(policy);
 	backend.instantiator->setStackReserveBytes(config_.execution.stackReserveBytes);
 
-	std::unique_ptr<ModuleInstance> instance = backend.instantiator->instantiate(
-			module, imports, config_.hostBridge, config_.profile);
+	std::unique_ptr<ModuleInstance> failed;
+	std::unique_ptr<ModuleInstance> instance;
+	try {
+		instance = backend.instantiator->instantiate(
+				module, imports, config_.hostBridge, config_.profile, &failed);
+	} catch (...) {
+		// A segment or start failure can leave `ref.func` values in a
+		// store-owned imported table. Retain the partially built instance and
+		// the backend state its code lives in until the store dies, so those
+		// references stay callable (the spec's failed-instantiation rule).
+		if (failed)
+			store_.retainFailedInstance(std::move(failed), backend.instantiator,
+					backend.keepAlive);
+		throw;
+	}
 	if (!instance)
 		throw std::runtime_error("the backend refused to instantiate the module");
 

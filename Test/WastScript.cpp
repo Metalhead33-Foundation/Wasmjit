@@ -576,6 +576,10 @@ private:
 	// must keep their contents alive (and stable) for the whole script.
 	std::vector<std::unique_ptr<WASM::Module>> modules;
 	std::vector<std::unique_ptr<WASM::ModuleInstance>> instances;
+	//! Failed instantiations whose element segments may already have written
+	//! `ref.func` values into an imported table. Kept until the script ends,
+	//! while the backend session that owns their code is still alive.
+	std::vector<std::unique_ptr<WASM::ModuleInstance>> retiredInstances;
 	std::vector<std::unique_ptr<WASM::Component>> components;
 	std::vector<std::unique_ptr<WASM::ComponentRuntime>> componentRuntimes;
 
@@ -1056,9 +1060,13 @@ void ScriptRunner::onModule(const ScriptCommand& command)
 	}
 
 	std::unique_ptr<WASM::ModuleInstance> instance;
+	std::unique_ptr<WASM::ModuleInstance> failed;
 	try {
-		instance = moduleCompiler.instantiate(*modules.back(), registry);
+		instance = moduleCompiler.instantiate(*modules.back(), registry, nullptr,
+				WASM::ProfileConfig{}, &failed);
 	} catch (const std::exception& error) {
+		if (failed)
+			retiredInstances.push_back(std::move(failed));
 		// A module that imports an instance named by an unsupported
 		// `module_instance` command is dependent on that unsupported command,
 		// not evidence of an engine failure. Skip it and the actions after it.
@@ -1073,6 +1081,8 @@ void ScriptRunner::onModule(const ScriptCommand& command)
 		fail(command.line, "instantiation of '" + command.filename + "' failed: " + error.what());
 		return;
 	} catch (...) {
+		if (failed)
+			retiredInstances.push_back(std::move(failed));
 		fail(command.line, "instantiation of '" + command.filename + "' failed");
 		return;
 	}
@@ -1715,17 +1725,24 @@ ScriptRunner::ModuleAttempt ScriptRunner::attemptModule(const ScriptCommand& com
 	modules.push_back(std::move(module));
 
 	std::unique_ptr<WASM::ModuleInstance> instance;
+	std::unique_ptr<WASM::ModuleInstance> failed;
 	// A start function may trap during instantiation; that is the expected
 	// outcome for `assert_uninstantiable`, not a host failure. The trap arrives
-	// as a `WASM::Trap` exception thrown by the boundary, after the partially
-	// built instance has been destroyed (docs/TRAP_CLEANUP.md §7).
+	// as a `WASM::Trap` exception thrown by the boundary. A partially built
+	// instance is handed back so an element segment's `ref.func` writes into an
+	// imported table remain valid (the spec's persistence rule).
 	try {
-		instance = moduleCompiler.instantiate(*modules.back(), registry);
+		instance = moduleCompiler.instantiate(*modules.back(), registry, nullptr,
+				WASM::ProfileConfig{}, &failed);
 	} catch (const WASM::Trap& trap) {
+		if (failed)
+			retiredInstances.push_back(std::move(failed));
 		lastTrapKind = trap.kind();
 		lastTrapMessage = trap.message() != nullptr ? trap.message() : "";
 		return ModuleAttempt::Trapped;
 	} catch (const std::exception& error) {
+		if (failed)
+			retiredInstances.push_back(std::move(failed));
 		if (std::getenv("WJ_TRACE") != nullptr)
 			std::fprintf(stderr, "[wj]   link rejected %s: %s\n", command.filename.c_str(), error.what());
 		return ModuleAttempt::Rejected;
@@ -1804,11 +1821,10 @@ void ScriptRunner::onAssertUnlinkable(const ScriptCommand& command)
 
 void ScriptRunner::onAssertUninstantiable(const ScriptCommand& command)
 {
-	if (!strictValidation) {
-		skip("assert_uninstantiable: start-function traps not verified by default "
-			 "(set WASM_SPEC_VALIDATE=1 to measure)");
-		return;
-	}
+	// Instantiation is executable without the strict validator: a start trap or
+	// a segment failure is exactly what this command expects. Running it by
+	// default also preserves the side effects the spec's following assertions
+	// rely on (`linking*.wast`), while the failed instance is retained.
 	if (command.moduleType != "binary") {
 		skip("text-format module '" + command.filename + "' (only binary modules can be loaded)");
 		return;
@@ -1816,10 +1832,11 @@ void ScriptRunner::onAssertUninstantiable(const ScriptCommand& command)
 	// A trap (the usual case) or a thrown instantiation error both mean the
 	// module did not become usable.
 	const ModuleAttempt attempt = attemptModule(command, true);
-	std::fprintf(stderr, "[validate] assert_uninstantiable %s %s\n",
-			attempt == ModuleAttempt::Accepted ? "accepted"
-					: (attempt == ModuleAttempt::Trapped ? "trapped" : "rejected"),
-			command.filename.c_str());
+	if (strictValidation || std::getenv("WJ_TRACE") != nullptr)
+		std::fprintf(stderr, "[validate] assert_uninstantiable %s %s\n",
+				attempt == ModuleAttempt::Accepted ? "accepted"
+						: (attempt == ModuleAttempt::Trapped ? "trapped" : "rejected"),
+				command.filename.c_str());
 	if (attempt == ModuleAttempt::Rejected || attempt == ModuleAttempt::Trapped)
 		pass();
 	else

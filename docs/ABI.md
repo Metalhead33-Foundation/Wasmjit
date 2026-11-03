@@ -174,6 +174,12 @@ boxing on the GC heap at `extern.convert_any` (GC-8/RT-1).
 | global | a `Value*` cell per index; `VMContext::globals` is `Value**` | imported cells alias the exporter |
 | exported global | the exporter's cell is published | a later `global.set` is visible to importers (and vice versa) |
 
+`GlobalType` also carries `contentId`, the canonical `TypeId` of a concrete
+`(ref … $t)` content type. It is filled at export/import time and read only by
+the resolver's type matching; it is not part of the cell or of generated code.
+A mutable global is invariant (including nullability), an immutable one is
+covariant. Tables are invariant in their element type.
+
 Classification is therefore *by provenance*, in one place
 (`ModuleInstance::refMatchesHeapType`): a registered callable is a `func`, a
 GC-heap object carries its canonical type id, an i31 is an i31, and anything
@@ -420,6 +426,7 @@ inside them:
 | **A small-stack thread runs unguarded** (`S7`) | The boundary installs the calling thread's own guard (`WasmStack.hpp`), but a stack without headroom for the reserve is left unguarded. Give every thread that executes Wasm a normal stack; a small one faults instead of trapping. | [`SAFETY.md`](SAFETY.md) `S7` |
 | **Continuation use is serial** (`S8`) | One resumption at a time per continuation: no concurrent resume, no migration between agents. | [`SAFETY.md`](SAFETY.md) `S8` |
 | **One instance per `Module`** | A second instantiation is refused; isolation comes from loading the module twice. Many agents may run one instance's compiled code. | [`THREADSAFETY.md`](THREADSAFETY.md) §3.1 |
+| **A failed instantiation is retained** | A module that fails after its active element/data segments have begun is kept, with the backend state that owns its compiled code, until the Store is destroyed. The writes and `ref.func` values it published remain valid (the spec's persistence rule); a backend's `keepAlive` state must therefore be safe to hold for the Store lifetime. | `Store::retainFailedInstance`; [`SCOPE.md`](SCOPE.md) §6 |
 | **Trap text is not stable** | The trap *kind* and the diagnostic *id* are stable; the message is a hint. | [`SAFETY.md`](SAFETY.md) `S5` |
 
 ## Data Structure Reference

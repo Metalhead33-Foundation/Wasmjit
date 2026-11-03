@@ -2,8 +2,10 @@
 
 Status: design + status note, revision 3 (2026-11-03: the decoder sweep added
 UTF-8 names, the core version check, section order/size, limits flags and
-mutability; the GC aggregate and unreachable `select`/`br_table` rules landed,
-and the all-scripts sweep now fails only the `linking*` store-lifetime cases).
+mutability; the GC aggregate and unreachable `select`/`br_table` rules landed;
+the linker's function/global/table import matching was tightened; and a failed
+instantiation is now retained with its backend keep-alive, so `linking*.wast`
+passes and the all-scripts sweep is 257/257).
 Revision 2 (2026-11-01) absorbed `UNMODELLED_VALUE_TYPES.md` — the rule it
 established is a validation rule, so it now lives here; the full crash
 investigation is preserved in git history.
@@ -34,6 +36,7 @@ stack, and throws `std::runtime_error` on the first failed rule.
 | SIMD | 194 arithmetic/comparison/conversion shapes taken from `wasm_simd_ops.inc`, plus const/bitwise/splat/bitmask, loads/stores, lanes/shuffle/swizzle, and the relaxed ternary forms (madd/nmadd, laneselect, dot-add) |
 | Atomics | loads/stores/RMW/cmpxchg/wait/notify with access-size alignment and operand types |
 | References | `ref.null`/`ref.func`/`ref.is_null`/`ref.eq`/`ref.as_non_null`; `ref.func x` requires `x` to be declared outside function bodies/start; `call_ref $t` requires `(ref null $t)`; `ref.test`/`ref.cast` (both nullability forms) require the operand to be a reference in the target's hierarchy; continuation references are not castable (`cont`/`nocont`/concrete `cont $ft` targets are rejected, `STACK_SWITCHING.md` SS-1); full subtyping (nullability, func/extern/exn/any hierarchies, concrete-type subtyping and canonical structural type equivalence); untyped `select` is numeric/vector only; definite initialization of non-defaultable locals |
+| Linking | function imports by canonical `TypeId` (including a re-export of a native import, whose declared type becomes the stored callable's identity), global mutability/shared plus reference covariance for immutable and invariance for mutable globals, memory limits/index type/page size, table limits plus exact element type, and tag/type imports by their store-owned identities |
 
 ## Conservative policy
 
@@ -123,7 +126,7 @@ content here.
 ## Measured coverage
 
 `WASM_SPEC_VALIDATE=1` on the curated set (**snapshot 2026-11-03, working tree
-on `cf2c6cf`**):
+on `bca0d87`**):
 
 | Kind | Binary cases | Handled | Accepted |
 | --- | ---: | ---: | ---: |
@@ -140,16 +143,19 @@ recorded in `Test/spec_known_failures.txt` and [`SCOPE.md`](SCOPE.md) §6 rather
 than hidden.
 
 The **all-scripts** sweep is the wider measure, because `[spec]` also runs the
-hidden scripts. At the same snapshot it reports **254 of 257 scripts green**
-(`test cases: 257 | 254 passed | 3 failed`). The three failures are `linking`,
-`linking0` and `linking3`: they require a failed instantiation to retain the
-failed module's function instances, the `StoreOwnedFunction` boundary in
-[`SCOPE.md`](SCOPE.md) §6. The decoder/validator cases the sweep used to expose
-are green: `binary` (127 malformed cases), the three `utf8-*` scripts (176 each),
-`binary-gc`, `binary-leb128`, `struct`/`array`/`array_*` (16 invalid modules) and
-`unreached-invalid` (121 cases). `comments` (text format) and `instance`
-(module-linking) skip their dependent commands; 946 text-format commands remain
-skipped because the loader is binary-only.
+hidden scripts. At the same snapshot it reports **257 of 257 scripts green**
+(`test cases: 257 | 257 passed | 0 failed`, 514 assertions). The decoder,
+validator and linker cases the sweep used to expose are green: `binary` (127
+malformed cases), the three `utf8-*` scripts (176 each), `binary-gc`,
+`binary-leb128`, `struct`/`array`/`array_*` (16 invalid modules),
+`unreached-invalid` (121 cases) and the hidden `linking`/`linking0`/`linking3`
+linker suite. The three `linking*` scripts exercise failed-instantiation
+persistence: a module that traps after its element segments have written
+`ref.func` values into an imported table is retained, together with the backend
+keep-alive that owns its code, until Store teardown (`Store::retainFailedInstance`;
+`ABI.md` "Failed instantiation retention"). `comments` (text format) and
+`instance` (module-linking) skip their dependent commands; 946 text-format
+commands remain skipped because the loader is binary-only.
 
 The default suite is green; its *current* tally is owned by
 [`TESTING.md`](TESTING.md) (and [`FRESHNESS.md`](FRESHNESS.md) §8 prints it), not
@@ -191,9 +197,10 @@ ones), and the bounds check subtracts instead of adding.
 - ~~The remaining strict failures~~ — done: the 2026-11-03 decoder sweep added
   UTF-8 name validation, the core version check, the section-id range,
   section order/duplicate/exact-size checks, the pre-type import section,
-  single-byte limits flags and strict field/element mutability. The only
-  remaining all-scripts failures are `linking*`, which are the store-lifetime
-  boundary, not decoder rules.
+  single-byte limits flags and strict field/element mutability; the linker now
+  matches function re-exports by canonical `TypeId`, globals and tables by
+  invariant/covariant rules, and failed instantiations are retained. The
+  all-scripts sweep is 257/257.
 - ~~Add curated `assert_uninstantiable` coverage~~ — done: `start.wast` and the
   `elem`/`data` segment cases are verified under `WASM_SPEC_VALIDATE=1`.
 - The `tag.wast` result-signature conflict is recorded in

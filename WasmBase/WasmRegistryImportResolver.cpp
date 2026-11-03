@@ -138,7 +138,59 @@ bool tableSatisfiesImport(Store& store, const ImportedTable& provided,
 			tableElementHeap(p.elementType, provided.elementTypeId);
 	const CanonHeapType declaredHeap =
 			tableElementHeap(declared.elementType, declaredElementTypeId);
-	return store.types().matchesHeap(providedHeap, declaredHeap);
+	// Import matching compares the exact element type: a mutable table is
+	// invariant, so a `(ref null $t)` provider must not satisfy a
+	// `(ref null func)` declaration (linking.wast's table cases).
+	return providedHeap == declaredHeap;
+}
+
+// Global imports match by value type. Reference types are compared with the
+// same heap-subtyping relation the table matcher uses, plus the nullability
+// rule: a nullable provider cannot satisfy a non-null declaration. A concrete
+// heap type is a module-local index in each side, so without a canonical id the
+// matcher stays permissive for it (the abstract cases are exact).
+bool globalValueSatisfies(Store& store, const GlobalType& provided,
+		const GlobalType& declared)
+{
+	const auto isReference = [](ValueTypeCode code) {
+		return code == ValueTypeCode::FuncRef || code == ValueTypeCode::ExternRef
+				|| code == ValueTypeCode::AnyRef || code == ValueTypeCode::EqRef
+				|| code == ValueTypeCode::I31Ref || code == ValueTypeCode::StructRef
+				|| code == ValueTypeCode::ArrayRef || code == ValueTypeCode::ExnRef
+				|| code == ValueTypeCode::ContRef
+				|| code == ValueTypeCode::NullFuncRef || code == ValueTypeCode::NullExternRef
+				|| code == ValueTypeCode::NullExnRef || code == ValueTypeCode::NullRef
+				|| code == ValueTypeCode::StringRef || code == ValueTypeCode::StringViewWtf8
+				|| code == ValueTypeCode::StringViewWtf16 || code == ValueTypeCode::StringViewIter
+				|| code == ValueTypeCode::Ref || code == ValueTypeCode::RefNull;
+	};
+	const ValueType& p = provided.contentType;
+	const ValueType& d = declared.contentType;
+	const bool providedRef = isReference(p.opcode);
+	const bool declaredRef = isReference(d.opcode);
+	if (providedRef || declaredRef) {
+		if (!providedRef || !declaredRef)
+			return false;
+		// A concrete type without a canonical id cannot be compared across
+		// modules; keep the historical permissive answer for that case.
+		if (p.heapType >= 0 && provided.contentId.isNone())
+			return true;
+		if (d.heapType >= 0 && declared.contentId.isNone())
+			return true;
+		const bool providedNullable = nullableElementType(p);
+		const bool declaredNullable = nullableElementType(d);
+		const CanonHeapType providedHeap = tableElementHeap(p, provided.contentId);
+		const CanonHeapType declaredHeap = tableElementHeap(d, declared.contentId);
+		// A mutable global is invariant, nullability included; an immutable one
+		// is covariant, but a nullable provider cannot satisfy a non-null
+		// declaration.
+		if (provided.isMutable)
+			return providedNullable == declaredNullable && providedHeap == declaredHeap;
+		if (providedNullable && !declaredNullable)
+			return false;
+		return store.types().matchesHeap(providedHeap, declaredHeap);
+	}
+	return p.opcode == d.opcode;
 }
 
 } // namespace
@@ -250,7 +302,7 @@ std::optional<Value*> RegistryImportResolver::resolveGlobal(
 	auto module = registeredModules.find(moduleName);
 	if (module == std::end(registeredModules))
 		return std::nullopt;
-	return module->second.resolveGlobal(fieldName, type);
+	return module->second.resolveGlobal(fieldName, type, boundStore());
 }
 
 std::optional<LinearMemory*> RegistryImportResolver::resolveMemory(
@@ -355,14 +407,12 @@ std::optional<Value*> RegistryImportResolver::ModuleRegistry::resolveGlobal(std:
 	if (it == globals.end() || it->second.cell == nullptr)
 		return std::nullopt;
 
-	// Match the published type, including mutability (MG-4). Reference types
-	// are compared by opcode only: nullability/subtyping is deliberately left
-	// permissive here, like the validator's reference rules.
+	// The original (pre-store-aware) symbol. Without a Store it cannot match a
+	// concrete heap type by canonical id, so reference types are compared by
+	// opcode only, as before.
 	const GlobalEntry& entry = it->second;
 	if (entry.type.isMutable != type.isMutable)
 		return std::nullopt;
-	// Shared-everything threads: import matching compares the shared annotation
-	// as well as mutability (SET-1).
 	if (entry.type.isShared != type.isShared)
 		return std::nullopt;
 	const ValueType& actual = entry.type.contentType;
@@ -380,6 +430,28 @@ std::optional<Value*> RegistryImportResolver::ModuleRegistry::resolveGlobal(std:
 		if (!isRef(actual.opcode) || !isRef(expected.opcode))
 			return std::nullopt;
 	}
+	return entry.cell;
+}
+
+std::optional<Value*> RegistryImportResolver::ModuleRegistry::resolveGlobal(std::string_view fieldName, const GlobalType& type, Store& store)
+{
+	auto it = globals.find(fieldName);
+	if (it == globals.end() || it->second.cell == nullptr)
+		return std::nullopt;
+
+	// Match the published type, including mutability (MG-4). Reference types
+	// use the same heap-subtyping and nullability relation as table imports;
+	// concrete (module-local) heap types stay permissive until the resolver is
+	// given a canonical id for them.
+	const GlobalEntry& entry = it->second;
+	if (entry.type.isMutable != type.isMutable)
+		return std::nullopt;
+	// Shared-everything threads: import matching compares the shared annotation
+	// as well as mutability (SET-1).
+	if (entry.type.isShared != type.isShared)
+		return std::nullopt;
+	if (!globalValueSatisfies(store, entry.type, type))
+		return std::nullopt;
 	return entry.cell;
 }
 

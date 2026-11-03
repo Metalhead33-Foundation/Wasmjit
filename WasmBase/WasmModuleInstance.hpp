@@ -487,6 +487,29 @@ public:
 			const HostBridge* hostBridge = nullptr,
 			const ProfileConfig& profile = {}); //!< `profile` selects the feature subset to honour.
 
+	//! \brief Instantiates, handing back a partially initialised instance when
+	//! the segment or start phase fails.
+	//!
+	//! Active element segments can write `ref.func` values into a store-owned
+	//! imported table before a later segment or the start function traps. The
+	//! spec says those writes (and the function instances they reference) remain
+	//! valid, so the caller must be able to retain the instance. When
+	//! `failedInstance` is non-null it receives that instance instead of letting
+	//! it be destroyed; passing null keeps the historical behaviour.
+	//! \param module The decoded module to instantiate.
+	//! \param resolver Resolves imports for the instance.
+	//! \param hostBridge Optional borrowed host boundary.
+	//! \param profile Feature subset and validation policy.
+	//! \param failedInstance Receives the partially initialised instance on a
+	//!        post-compilation failure, or is left untouched.
+	//! \return The new instance on success.
+	//! \throws std::exception on validation, compilation, segment or start failure.
+	std::unique_ptr<ModuleInstance> instantiate(
+			const Module& module, ImportResolver& resolver,
+			const HostBridge* hostBridge,
+			const ProfileConfig& profile,
+			std::unique_ptr<ModuleInstance>* failedInstance);
+
 	//! The profile this instantiator is currently operating under (set by the
 	//! most recent `instantiate` call; read by a backend's compile step).
 	const ProfileConfig& profile() const { return activeProfile; }

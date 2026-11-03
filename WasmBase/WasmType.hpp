@@ -497,6 +497,11 @@ struct GlobalType {
 	bool isMutable;
 	//! Shared-everything threads (SET-1): `mut` bit 1 marks the global shared.
 	bool isShared = false;
+	//! Canonical identity of a concrete `contentType` (a `(ref … $t)` global);
+	//! `kNone` for a numeric/vector or abstract reference type. It is metadata
+	//! filled at export/import time so a resolver can match concrete types
+	//! across modules, where a module-local type index is meaningless.
+	TypeId contentId{TypeId::kNone};
 };
 
 /** \brief Kind discriminator for a module import or export. */

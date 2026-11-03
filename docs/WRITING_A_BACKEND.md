@@ -282,7 +282,10 @@ shape.
 
    `keepAlive` is opaque state the instantiator borrows and that must outlive
    it (a code-emission context, a code cache). Return `nullptr` when there is
-   none.
+   none. It must also be safe to retain for the **Store lifetime**: a failed
+   instantiation after the segment phase is kept alive with its `keepAlive`
+   until the Store is destroyed, so references it wrote into an imported table
+   remain callable (`ABI.md` "Failed instantiation retention").
 4. **A session factory lives with the backend**, not in the core:
 
    ```cpp

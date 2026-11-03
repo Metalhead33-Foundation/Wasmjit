@@ -1,4 +1,5 @@
 #include "WasmStore.hpp"
+#include "WasmModuleInstance.hpp"
 #include "WasmDiagnostics.hpp"
 #include <algorithm>
 #include <cstdlib>
@@ -327,6 +328,10 @@ Store::Store(const MemoryBudget& budget, const StoreLimits& limits)
 
 Store::~Store()
 {
+	// Destroy retained instances first: their destructors call back into this
+	// store (callable ranges, GC regions, owned memories and tables), so the
+	// members above must still be alive.
+	retainedInstances_.clear();
 	for (const StoreOwnedException& exception : exceptions)
 		delete[] exception.storage;
 }
@@ -744,6 +749,17 @@ const Callable* Store::callableAt(const void* ref) const
 			return reinterpret_cast<const Callable*>(ref);
 	}
 	return nullptr;
+}
+
+void Store::retainFailedInstance(std::unique_ptr<ModuleInstance> instance,
+		std::shared_ptr<ModuleInstantiator> instantiator,
+		std::shared_ptr<void> keepAlive)
+{
+	if (!instance)
+		return;
+	std::scoped_lock lock(storeMutex_);
+	retainedInstances_.push_back(RetainedInstance{
+			std::move(keepAlive), std::move(instantiator), std::move(instance) });
 }
 
 

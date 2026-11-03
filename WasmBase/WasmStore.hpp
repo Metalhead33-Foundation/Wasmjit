@@ -26,7 +26,12 @@ WASMJIT_VISIBLE_BEGIN
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
 namespace WASM {
+
+//! Forward declarations for the failed-instantiation retention record.
+class ModuleInstance;
+class ModuleInstantiator;
 
 //! \brief The kind of allocation a charge is made for.
 //!
@@ -479,6 +484,19 @@ public:
 	/** \brief Resolves a function-reference pointer against registered callable ranges. \param ref Candidate function reference. \return Callable pointer, or nullptr when ref is not a registered function. */
 	const Callable* callableAt(const void* ref) const;
 
+	//! \par Failed instantiation retention
+	//! Active element segments can write `ref.func` values into a store-owned
+	//! imported table before a later segment or the start function traps. The
+	//! spec keeps those writes (and the function instances they name) valid, so
+	//! the partially built instance is retained here until Store teardown,
+	//! together with the backend state its compiled code lives in. This is a
+	//! deliberate retention, not a leak: there is no earlier safe release point
+	//! while the table slot can still be called.
+	/** \brief Retains a partially instantiated instance and its backend state. \param instance The instance that failed after segment/start work began. \param instantiator The backend seam that compiled it. \param keepAlive Opaque backend compilation state. */
+	void retainFailedInstance(std::unique_ptr<ModuleInstance> instance,
+			std::shared_ptr<ModuleInstantiator> instantiator,
+			std::shared_ptr<void> keepAlive);
+
 private:
 	//! The counter a category charges, or nullptr for `MemoryCategory::Other`.
 	/** \brief Returns the counter for a category. \param category Category to look up. \return The counter, or nullptr when the category shares the total only. */
@@ -573,6 +591,17 @@ private:
 
 	//! Host-owned string objects (STRINGREF.md). Never freed before teardown.
 	StringStore stringStore{ *this };
+
+	//! Failed instantiations kept alive until Store teardown (see
+	//! retainFailedInstance). Declared last so it is destroyed first, while the
+	//! memories, tables, GC heap and callable registry above are still alive;
+	//! each record destroys its instance before releasing the backend keep-alive.
+	struct RetainedInstance {
+		std::shared_ptr<void> keepAlive; //!< backend compilation state
+		std::shared_ptr<ModuleInstantiator> instantiator; //!< the backend seam
+		std::unique_ptr<ModuleInstance> instance; //!< the partially built instance
+	};
+	std::vector<RetainedInstance> retainedInstances_;
 };
 } // namespace WASM
 WASMJIT_VISIBLE_END

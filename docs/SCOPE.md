@@ -1,10 +1,11 @@
 # Scope — What Is an Engine Gap, and What Is a Boundary {#doc_scope}
 
-Status: policy note, revision 1 (2026-11-03, written on `cf2c6cf` after the
-strict all-scripts sweep showed that the decoder and validator, not the feature
-matrix, are where the remaining engine work is). It is the canonical record of
-the surfaces WasmJit deliberately does **not** own and of the deviations it has
-chosen, so that none of them is counted as an implementation gap.
+Status: policy note, revision 2 (2026-11-03; revision 1 was written on
+`cf2c6cf` and committed as `bca0d87`; revision 2 records the
+failed-instantiation retention, which closes the `linking*` boundary). It is
+the canonical record of the surfaces WasmJit deliberately does **not** own and
+of the deviations it has chosen, so that none of them is counted as an
+implementation gap.
 
 Audience: anyone triaging a missing feature, filling in a completeness meter,
 writing a proposal note, or asking "is this engine mature yet?".
@@ -109,7 +110,7 @@ note and must be revisited as a decision, not "fixed" as a bug.
 | Deviation | What it means | Owner |
 |---|---|---|
 | One instance per `Module` | A second instantiation is refused; isolation comes from loading the module twice | `ABI.md` "Limits an Embedder Must Know"; `THREADSAFETY.md` §3.1 |
-| Failed instantiation and store writes | A failed instantiation does not retain the failed module's function instances; `linking*.wast`'s store-persistence cases are therefore not claimed. They are the only three all-scripts strict failures at the 2026-11-03 snapshot | `WasmStore.hpp` `StoreOwnedFunction` TODO; `ABI.md` lifetime rule |
+| Successful instance destruction | The embedder must keep a module alive while its callers exist (`ABI.md`). A **failed** instantiation is not in this row: it is retained with the backend keep-alive until Store teardown, so `linking*.wast`'s persistence cases pass. | `ABI.md` "Failed instantiation retention"; `Store::retainFailedInstance` |
 | Control tags vs exception tags | A tag with a non-empty result signature is accepted as a stack-switching control tag; `tag.wast`'s two "non-empty tag result type" cases are the exception proposal's stricter rule | `STACK_SWITCHING.md` `SS-2`; `Test/spec_known_failures.txt` |
 | Shared memory maximum | A shared reservation rewrites the maximum to 4 GiB | `MEMORY_PROVIDER.md` `MP3` |
 | No fuel / instruction budget | A module can loop forever; time limits belong to the embedder | `SAFETY.md` `S1`; `CONFIGURATION.md` `CFG-8` |

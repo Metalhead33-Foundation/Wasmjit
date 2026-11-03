@@ -88,7 +88,16 @@ public:
 		std::optional<Callable> resolveFunction(std::string_view fieldName, TypeId expectedType,
 				bool exact, Store& store);
 		//! Looks up a global and matches its declared type and mutability.
+		//! The two-argument form is the original symbol (kept for ABI
+		//! compatibility); it has no Store for concrete-type identity and stays
+		//! permissive there. The store-aware overload is what the public
+		//! resolver uses.
 		std::optional<Value*> resolveGlobal(std::string_view fieldName, const GlobalType& type);
+		//! Store-aware global lookup: concrete reference types are matched by
+		//! canonical `TypeId`, mutable globals are invariant.
+		/** \brief Looks up a global with the store available for type-identity matching. \param fieldName Field name. \param type Declared import type. \param store Store used for canonical heap matching. \return The borrowed cell, or nullopt on a mismatch. */
+		std::optional<Value*> resolveGlobal(std::string_view fieldName, const GlobalType& type,
+				Store& store);
 		//! Looks up a memory whose limits fit `type`.
 		std::optional<LinearMemory*> resolveMemory(std::string_view fieldName, const MemoryType& type);
 		//! Looks up a table and matches its limits and element type.

@@ -163,7 +163,7 @@ per-milestone done markers, is the authoritative per-item status.
 | [`TESTING.md`](docs/TESTING.md) | Building/running the Catch2 suite, the `wasm-tools` spec-suite conversion, the curated `wast_supported.txt` workflow, reading the output | Guide (process) | `████████████████████` current |
 | [`DOCUMENTATION.md`](docs/DOCUMENTATION.md) | Why every header comment is a Doxygen comment, the Qt-style forms (`//!`, `/*!`, `\file`, `\brief`, `\par`), the prose that breaks a Doxygen run, and how the Markdown notes are nested into a tree (`docs/index.md` → `docs/proposals/index.md`, `docs/languages/index.md`) rather than flattened | Policy + guide (process) | `████████████████████` current — every header outside `extern/` converted, 22 + 39 + 16 notes in the tree, `doxygen Doxyfile` warning-free |
 | [`FRESHNESS.md`](docs/FRESHNESS.md) | Keeping the notes in step with the tree: the three kinds of state claim (contract, dated snapshot, history), the one home of each measured fact, the triggers that re-open a §4 when a milestone lands, and the probe that re-measures every number the notes cite | Policy + guide (process) | `████████████████████` current — revision 1 (2026-11-01) re-cut the two engine-seam §4 snapshots and gave every drifted total a date |
-| [`VALIDATION.md`](docs/VALIDATION.md) | The validating front end: what `Module::validate()` checks, the conservative taint policy, measured `assert_invalid` coverage, and the remaining rules | Design + status | `████████████████████` 2,380 / 2,382 curated (the two `tag` known failures); all-scripts strict green except `linking*` |
+| [`VALIDATION.md`](docs/VALIDATION.md) | The validating front end: what `Module::validate()` checks, the conservative taint policy, measured `assert_invalid` coverage, and the remaining rules | Design + status | `████████████████████` 2,380 / 2,382 curated (the two `tag` known failures); all-scripts 257 / 257 (the same known failure) |
 | [`WRITING_A_BACKEND.md`](docs/WRITING_A_BACKEND.md) | **The checklist and the walkthrough** for a new code generator: the two seams (`ModuleInstantiator`, `BackendSession`), the four hooks, the twelve ABI obligations (including reference ownership), memory/GC ownership, which helpers to call and which to bring, packaging/registration/capabilities/selection, the SLJIT scaffold as the worked example, and the definition of done | Contract + how-to | `████████████████████` current — revision 2 absorbs the former `BACKEND_WORK_ORDER.md` |
 | [`SAFETY.md`](docs/SAFETY.md) | The safety policies: artifact detection, input-derived allocation bounds, the allocation budget, traps vs `abort`, RAII for locks, and the pitfalls that produced them | Policy + pitfalls | `████████████████████` current |
 | [`THREADSAFETY.md`](docs/THREADSAFETY.md) | Guest-side vs host-side thread safety, the one-instance-per-module target, import/export overlap, C++ mutex/trap caveats, and the responsibilities of the engine, module author and embedder | Policy + reference | `████████████████████` current |
@@ -239,7 +239,7 @@ Reading the estimates:
 
 Most rows that end in "validation" share one measurable front end:
 `WASM_SPEC_VALIDATE=1` executes the four negative-module families instead of
-skipping them. **Snapshot (2026-11-03, working tree on `cf2c6cf`):** the
+skipping them. **Snapshot (2026-11-03, working tree on `bca0d87`):** the
 **curated** strict run rejects **2,380 of 2,382** binary negative commands; the
 two misses are `tag.wast`'s non-empty tag result cases, recorded in
 [`Test/spec_known_failures.txt`](Test/spec_known_failures.txt) because they
@@ -248,13 +248,14 @@ conflict with the stack-switching control-tag rule
 assertions in 585 test cases** — re-run `./Test/WasmJit` for the current line.
 
 The all-scripts strict sweep (`WASM_SPEC_VALIDATE=1 ./Test/WasmJit '[spec]'`)
-now reports **254 of 257 scripts green**. The three remaining scripts are
-`linking`, `linking0` and `linking3`: they require a failed instantiation to
-retain the failed module's function instances, which is the
-`StoreOwnedFunction` boundary recorded in [`SCOPE.md`](docs/SCOPE.md) §6, not a
-decoder or validator gap. `comments` (text format) and `instance`
-(module-linking) now skip their dependent commands instead of failing them, and
-`tag`'s two cases are the recorded conflict above.
+now reports **257 of 257 scripts green** (514 assertions). `tag`'s two cases
+remain the recorded known failure above. The former `linking`/`linking0`/
+`linking3` failures are gone: a failed instantiation is retained — together
+with the backend keep-alive that owns its code — until Store teardown, so the
+table/memory writes it made and the `ref.func` values it published stay valid
+(`Store::retainFailedInstance`; `ABI.md` "Failed instantiation retention").
+`comments` (text format) and `instance` (module-linking) skip their dependent
+commands rather than failing them.
 
 To refresh a number, re-run the row's script from `build/Desktop-Debug/Test`:
 

@@ -342,7 +342,7 @@ selection is explicit — which is why `./WasmJit '[spec]'` runs everything.
 | Command | What runs |
 | --- | --- |
 | `./WasmJit` | the manual tests + the curated spec scripts |
-| `./WasmJit '[spec]'` | all 257 spec scripts (~2 min in the debug build; 254 pass, 3 known failures — the `linking*` store-lifetime boundary) |
+| `./WasmJit '[spec]'` | all 257 spec scripts (~2 min in the debug build; 257 pass, with `tag`'s two cases recorded as the known failure) |
 | `./WasmJit 'spec: address'` | just that script |
 | `./WasmJit '*float*'` | scripts whose name matches |
 | `./WasmJit --list-tests` | the default view (585 test cases on 2026-11-03) |
@@ -379,7 +379,7 @@ $ ./WasmJit
 All tests passed (17417 assertions in 585 test cases)
 ```
 
-**Snapshot (2026-11-03, working tree on `cf2c6cf`):** the list length and the
+**Snapshot (2026-11-03, working tree on `bca0d87`):** the list length and the
 transcript above are from that run. The list is a checked-in file, so its length
 changes only when
 the refresh below is run; the suite's numbers change with every test added, so
@@ -474,7 +474,8 @@ Correct results are deliberately **not required yet**; the run is meant to be in
 | `assert_return`, `action` (`invoke`) | executed | scalar, `v128` and reference arguments and results; multiple results, and `either` lists match any alternative |
 | `assert_trap` | executed | traps are recoverable (`WASM::trap` records a pending trap and the boundary throws `WASM::Trap`; see `WasmBase/WasmTrap.hpp`), and the expected text is compared against the trap's **kind** (`trapKindName`), so a trap for the wrong reason fails |
 | `assert_exhaustion` | executed | the guest stack guard (`WasmBase/WasmStack.hpp`) raises `CallStackExhausted` before the host stack runs out; the trap is recoverable like any other, and its kind is compared |
-| `assert_malformed`, `assert_invalid`, `assert_unlinkable`, `assert_uninstantiable` | skipped by kind by default | `WASM_SPEC_VALIDATE=1` executes them and reports pass/fail (see below) |
+| `assert_malformed`, `assert_invalid`, `assert_unlinkable` | skipped by kind by default | `WASM_SPEC_VALIDATE=1` executes them and reports pass/fail (see below) |
+| `assert_uninstantiable` | executed | instantiation is executable without the strict validator; a start trap or segment failure is expected, and the failed instance is retained so the following assertions see the spec's side effects |
 | `module_definition` | executed | decoded but **not** instantiated (module-linking); the core suite uses it for limits that cannot be allocated, e.g. `(module definition (memory 65536))` |
 | `module_instance` | skipped | module-linking proposal |
 | `assert_exception` | executed | exception-handling proposal (EX-5) |
@@ -485,21 +486,23 @@ Correct results are deliberately **not required yet**; the run is meant to be in
 The four negative-module families are kept separate because they test four
 different layers: the **decoder** (`assert_malformed`), a **validator**
 (`assert_invalid`), the **linker** (`assert_unlinkable`) and **instantiation**
-(`assert_uninstantiable`). `WASM_SPEC_VALIDATE=1` executes them instead of
-skipping them and prints one diagnostic per binary case
-(`[validate] <kind> <accepted|rejected|trapped> <file>`). The default run is
-unchanged and stays green, and the strict run is green as well. The validator
-itself is documented in [`VALIDATION.md`](VALIDATION.md).
+(`assert_uninstantiable`). The first three are skipped by default and executed
+by `WASM_SPEC_VALIDATE=1`; instantiation is executable without the validator and
+runs by default, because the spec's following assertions rely on the side
+effects of a failed instantiation. The strict run prints one diagnostic per
+binary case (`[validate] <kind> <accepted|rejected|trapped> <file>`). The
+validator itself is documented in [`VALIDATION.md`](VALIDATION.md).
 
-Measured against the curated set:
+Measured against the curated set (**snapshot 2026-11-03, working tree on
+`bca0d87`**):
 
 | Kind | Binary cases | Rejected (pass) | Accepted (fail) | Reading |
 | --- | ---: | ---: | ---: | --- |
-| `assert_invalid` | 2211 | **2211** | 0 | every curated invalid module is rejected: module structure, exact control-flow stack, core numeric/memory/table, 194 SIMD shapes, atomics, full reference subtyping, `br_on_*` and `try_table` catch labels, element/data offsets, table/segment typing and table initializers, `ref.func` declarations, local definite-initialization, untyped `select`, canonical type equivalence, `br_table` operand-vs-target subtyping |
+| `assert_invalid` | 2211 | **2209** | 2 known | every curated invalid module is rejected except `tag.wast`'s two result-signature cases, recorded in `Test/spec_known_failures.txt` |
 | `assert_malformed` | 17 | **17** | 0 | decoder strictness, including strict LEB128 byte-width and final-byte fit. The **946** text-format commands across all kinds cannot run without a text parser |
-| `assert_unlinkable` | 127 | **127** | 0 | the linker rejects all of them, including the four `memory64-imports` index-type cases (`MEMORY64` M2) and table imports whose limits do not match the provider's current size |
+| `assert_unlinkable` | 127 | **127** | 0 | the linker rejects all of them, including import type identity (function re-exports, global/table invariance), `memory64-imports` index types and table limits |
 | `assert_uninstantiable` | 27 | **27** | 0 | one trapping start (`start.wast`) and 26 instantiation errors from out-of-bounds `elem`/`data` segments |
-| **total** | **2382** | **2382** | **0** | **100 %** of the curated binary negative cases are rejected |
+| **total** | **2382** | **2380** | **2 known** | 100 % of the curated binary negative cases are handled |
 
 Even in strict mode 946 text-format commands stay skipped: the loader is
 binary-only. (The 61 core scripts re-curated after the validator landed are
@@ -539,7 +542,7 @@ for a merge to `master` — so that "green" means the same thing to every review
 
 | Run | Command | Evidence it produces | Last measured |
 | --- | --- | --- | --- |
-| Strict validator sweep | `WASM_SPEC_VALIDATE=1 ./WasmJit` (curated) and `WASM_SPEC_VALIDATE=1 ./WasmJit '[spec]'` (all) | every curated binary negative module is rejected; the all-scripts sweep exercises the hidden decoder/validator cases too | **curated 2,380 / 2,382** (`tag` is the two-entry known failure), **all-scripts 254 / 257** (only `linking*`), 2026-11-03 |
+| Strict validator sweep | `WASM_SPEC_VALIDATE=1 ./WasmJit` (curated) and `WASM_SPEC_VALIDATE=1 ./WasmJit '[spec]'` (all) | every curated binary negative module is rejected; the all-scripts sweep exercises the hidden decoder/validator/linker cases too | **curated 2,380 / 2,382** (`tag` is the two-entry known failure), **all-scripts 257 / 257**, 2026-11-03 |
 | AddressSanitizer build + suite | configure a second shadow build (below), then run the default suite | no use-after-free, overflow or leak report on the hand-written path | configuration exists; the run is **not yet recorded** in this note |
 | ThreadSanitizer concurrency run | configure a third shadow build (below), then `./WasmJit '[multiagent]'` | no data race on the multi-agent path (waiter table, entry counter, GC queue/counters, shared-global atomics) | `[multiagent]` 51 assertions / 6 cases, **no TSan report**, 2026-10-29 |
 | ABI check | `./Test/abi-check.sh build/<config>` | no exported symbol disappeared since the baseline (the additive-only rule of `API_ABI_STABILITY.md` G2); `--update` records an intentional addition | **1,804 + 830 symbols, 0 removed**, 2026-10-29 |
@@ -668,41 +671,36 @@ $ ./WasmJit
 All tests passed (17417 assertions in 585 test cases)
 ```
 
-A full sweep is still informational, because the three `linking*` scripts are
-the store-lifetime boundary rather than a decoder gap. `WASM_SPEC_TOLERANT=1`
-downgrades it to a survey (it always "passes", so read the **per-script** lines):
+A full sweep is green. `WASM_SPEC_TOLERANT=1` remains available for surveys (it
+always "passes", so read the **per-script** lines):
 
 ```bash
 WASM_SPEC_TOLERANT=1 WASM_SPEC_TIMEOUT=8 WASM_SPEC_SCRIPTS=all ./WasmJit -r compact > sweep.log
 ```
 
-Per-script outcomes from the last sweep (2026-10-24, 257 scripts, debug build):
+**Snapshot (2026-11-03, working tree on `bca0d87`):** `./WasmJit '[spec]'`
+and `WASM_SPEC_VALIDATE=1 ./WasmJit '[spec]'` both report
+`test cases: 257 | 257 passed | 0 failed` (514 assertions). `tag`'s two
+result-signature cases are the known failure in
+`Test/spec_known_failures.txt`; the script still passes its other eight
+commands.
 
-| Outcome | Scripts | Reading |
-|---|---:|---|
-**Snapshot (2026-11-03, working tree on `cf2c6cf`):** `./WasmJit '[spec]'`
-reports `test cases: 257 | 254 passed | 3 failed` and
-`assertions: 517 | 514 passed | 3 failed`. The three failures are:
-
-- `linking` (99/6), `linking0` (3/1), `linking3` (6/4) — a failed instantiation
-  destroys the instance whose `ref.func` was already written into an imported
-  table, so the next `call_indirect` reads freed storage. This is the
-  `StoreOwnedFunction` boundary recorded in [`SCOPE.md`](SCOPE.md) §6, not a
-  decoder or validator gap; the strict all-scripts run is otherwise green.
-- `tag`'s two cases are the known failure in `Test/spec_known_failures.txt`; the
-  script still passes its other eight commands.
-
-The text-format `comments` script and the module-linking `instance` script now
-skip their dependent commands: a text module is a binary-only boundary
-([`SCOPE.md`](SCOPE.md) §4), and `module_instance` is a superseded proposal
-([`SCOPE.md`](SCOPE.md) §5). `bulk` is green; the trap-kind prefix match accepts
-the spec's `uninitialized element 2` against the engine's kind text.
+The former `linking`/`linking0`/`linking3` failures are fixed: a failed
+instantiation is retained with the backend keep-alive that owns its compiled
+code until Store teardown, so an element segment's `ref.func` writes into an
+imported table remain callable and the data writes persist. The text-format
+`comments` script and the module-linking `instance` script skip their dependent
+commands: a text module is a binary-only boundary ([`SCOPE.md`](SCOPE.md) §4),
+and `module_instance` is a superseded proposal ([`SCOPE.md`](SCOPE.md) §5).
+`bulk` is green; the trap-kind prefix match accepts the spec's
+`uninitialized element 2` against the engine's kind text.
 
 Traps are **executed**, so a *missing* trap is a failure rather than a silent
 skip. The harness marshals scalar, `v128` and reference values, runs
-`assert_exception`, and decodes `module_definition` declarations. The
-negative-module families run under `WASM_SPEC_VALIDATE=1` (above, and
-[`VALIDATION.md`](VALIDATION.md)).
+`assert_exception`, and decodes `module_definition` declarations. The three
+decoder/validator/linker negative families run under `WASM_SPEC_VALIDATE=1`
+(above, and [`VALIDATION.md`](VALIDATION.md)); `assert_uninstantiable` runs by
+default because its side effects are observable.
 
 `WJ_TRACE=1` prints every command before it runs; because each script executes in
 a forked child that only writes its report at the end, that is how you find the

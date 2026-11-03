@@ -76,6 +76,13 @@ inline ValueTypeCode nullReferenceKind(int32_t heapType)
 std::unique_ptr<ModuleInstance> ModuleInstantiator::instantiate(const Module& module, ImportResolver& resolver,
 		const HostBridge* hostBridge, const ProfileConfig& profile)
 {
+	return instantiate(module, resolver, hostBridge, profile, nullptr);
+}
+
+std::unique_ptr<ModuleInstance> ModuleInstantiator::instantiate(const Module& module, ImportResolver& resolver,
+		const HostBridge* hostBridge, const ProfileConfig& profile,
+		std::unique_ptr<ModuleInstance>* failedInstance)
+{
 	// A non-full profile gates the module here as well as at load time, so a
 	// module parsed under the full profile cannot bypass an exclusion.
 	if (!profile.isFull()) {
@@ -110,12 +117,21 @@ std::unique_ptr<ModuleInstance> ModuleInstantiator::instantiate(const Module& mo
 
 	// Active element and data segments are applied after compilation
 	// because element segments can reference functions by index, and
-	// we need the compiled handles to be present first.
-	applyActiveSegments(*instance, module, instance->internals);
+	// we need the compiled handles to be present first. A failure here (or in
+	// the start function) can leave `ref.func` values in a store-owned imported
+	// table; the caller may retain the instance so those references stay valid
+	// (the spec's failed-instantiation persistence rule).
+	try {
+		applyActiveSegments(*instance, module, instance->internals);
 
-	// Finally, call the start function if the module has one.
-	if (module.hasStartFunction)
-		callStartFunction(*instance, module.startFunctionIndex, instance->internals);
+		// Finally, call the start function if the module has one.
+		if (module.hasStartFunction)
+			callStartFunction(*instance, module.startFunctionIndex, instance->internals);
+	} catch (...) {
+		if (failedInstance != nullptr)
+			*failedInstance = std::move(instance);
+		throw;
+	}
 
 	return instance;
 }
@@ -574,9 +590,12 @@ void ModuleInstance::registerExports(ImportRegistrar& registrar, std::string_vie
 		case ExternalKind::Global: {
 			if (ex.index >= internals.globalRefs.size() || internals.globalRefs[ex.index] == nullptr)
 				throw std::runtime_error("module exports a global outside its index space");
-			const GlobalType type = ex.index < module->importGlobals.size()
+			GlobalType type = ex.index < module->importGlobals.size()
 					? module->importGlobals[ex.index].global
 					: module->globals[ex.index - module->importGlobals.size()].type;
+			if (type.contentType.heapType >= 0 && type.contentId.isNone())
+				type.contentId = module->typeId(LocalTypeIdx{
+						static_cast<uint32_t>(type.contentType.heapType)});
 			registrar.registerGlobal(moduleName, ex.name, internals.globalRefs[ex.index], type);
 			break;
 		}
@@ -669,6 +688,13 @@ void ModuleInstance::resolveImports(ImportResolver& resolver)
 		if (!callable.has_value())
 			throw UnresolvedImportException(imp.moduleName, imp.fieldName);
 
+		// A native import has no canonical id. Give the stored callable the
+		// importing module's declared type so a re-export can be matched later:
+		// otherwise every re-export of a native import looks untyped and any
+		// signature is accepted (linking.wast's `reexport_f` cases).
+		if (callable->typeId.isNone())
+			callable->typeId = expectedType;
+
 		internals.importStorage.push_back(std::move(callable.value()));
 	}
 
@@ -745,8 +771,12 @@ void ModuleInstance::resolveImports(ImportResolver& resolver)
 	internals.globalRefs.reserve(module->importGlobals.size() + module->globals.size());
 	for (size_t i = 0; i < module->importGlobals.size(); ++i) {
 		const ImportGlobal& imp = module->importGlobals[i];
+		GlobalType declared = imp.global;
+		if (declared.contentType.heapType >= 0 && declared.contentId.isNone())
+			declared.contentId = module->typeId(LocalTypeIdx{
+					static_cast<uint32_t>(declared.contentType.heapType)});
 		std::optional<Value*> cell =
-			resolver.resolveGlobal(imp.moduleName, imp.fieldName, imp.global);
+			resolver.resolveGlobal(imp.moduleName, imp.fieldName, declared);
 		if (!cell.has_value() || *cell == nullptr)
 			throw UnresolvedImportException(imp.moduleName, imp.fieldName);
 		internals.globalRefs.push_back(*cell);
