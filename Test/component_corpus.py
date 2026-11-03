@@ -18,10 +18,12 @@ so one unparsable case never breaks the build.  Everything is written under
 
 import argparse
 import ast
+import json
 import os
 import re
 import subprocess
 import sys
+from urllib.parse import quote
 
 
 def scan(text):
@@ -136,7 +138,7 @@ def first_component(text, start, end):
 
 
 def parse_invoke(form):
-    """Return (name, args) for one no-nested-command invoke, or None."""
+    """Return (name, args, structured) for one no-nested-command invoke."""
     at = form.find('(invoke')
     if at < 0:
         return None
@@ -147,18 +149,58 @@ def parse_invoke(form):
     name = re.search(r'\(invoke\s+"([^"]+)"', text)
     if not name:
         return None
+    structured = re.search(
+            r'\((list|fixed-list|record|tuple|variant|option|result|map|flags)\.const',
+            text) is not None
     args = []
     for kind, value in re.findall(
-            r'\((u32|i32|u64|i64|f32|f64|char)\.const\s+("(?:[^"\\]|\\.)*"|[^()\s]+)\)',
-            text):
+            r'\((bool|u8|s8|u16|s16|u32|i32|u64|i64|f32|f64|char)\.const\s+'
+            r'("(?:[^"\\]|\\.)*"|[^()\s]+)\)', text):
         if kind == 'char':
             try:
                 args.append(('char', '0x%x' % ord(ast.literal_eval(value))))
             except (SyntaxError, ValueError, TypeError):
                 continue
+        elif kind == 'bool':
+            args.append(('bool', '1' if value == 'true' else '0'))
         else:
             args.append((kind, value))
-    return name.group(1), args
+    for value in re.findall(r'\(str\.const\s+("(?:[^"\\]|\\.)*")\)', text):
+        try:
+            args.append(('str', quote(ast.literal_eval(value), safe='')))
+        except (SyntaxError, ValueError, TypeError):
+            continue
+    return name.group(1), args, structured
+
+
+def parse_expected(tail):
+    """Return a list of typed expected values, or a reason for a skip."""
+    if re.search(
+            r'\((list|fixed-list|record|tuple|variant|option|result|map)\.const',
+            tail):
+        return None, 'structured result is not representable yet'
+    expected = []
+    for kind, value in re.findall(
+            r'\((bool|u8|s8|u16|s16|u32|i32|u64|i64|f32|f64|char)\.const\s+'
+            r'("(?:[^"\\]|\\.)*"|[^()\s]+)\)', tail):
+        if kind == 'bool':
+            value = '1' if value == 'true' else '0'
+        elif kind == 'char':
+            try:
+                value = '0x%x' % ord(ast.literal_eval(value))
+            except (SyntaxError, ValueError, TypeError):
+                continue
+        expected.append({'kind': kind, 'value': value})
+    for value in re.findall(r'\(str\.const\s+("(?:[^"\\]|\\.)*")\)', tail):
+        try:
+            expected.append({'kind': 'str',
+                             'value': ast.literal_eval(value)})
+        except (SyntaxError, ValueError, TypeError):
+            continue
+    for labels in re.findall(r'\(flags\.const((?:\s+"[^"]*")*)\)', tail):
+        expected.append({'kind': 'flags',
+                         'values': re.findall(r'"([^"]*)"', labels)})
+    return expected, None
 
 
 def main():
@@ -215,15 +257,20 @@ def main():
                 verdict = 'reject' if component else None
             if verdict is None or component is None:
                 # A top-level assert_return/assert_trap belongs to the most
-                # recent top-level component. Scalar arguments/results are
-                # representable without a host adapter.
+                # recent top-level component. Scalar arguments and results are
+                # representable without a host adapter; structured invocations
+                # are marked unsupported so they are skipped explicitly.
                 form = text[start:end]
                 if form_head in ('invoke', 'action') and current_artifact:
                     parsed = parse_invoke(form)
                     if parsed:
-                        arg_text = ','.join('%s:%s' % item for item in parsed[1])
-                        execution.append((current_artifact, parsed[0],
-                                          'action', '',
+                        name, parsed_args, structured_args = parsed
+                        arg_text = ','.join('%s:%s' % item
+                                            for item in parsed_args)
+                        execution.append((current_artifact, name,
+                                          'unsupported' if structured_args else 'action',
+                                          'structured arguments'
+                                          if structured_args else '',
                                           '%s:%d' % (relative, start), arg_text))
                 elif form_head == 'assert_return' and current_artifact:
                     parsed = parse_invoke(form)
@@ -231,32 +278,58 @@ def main():
                     # results; constants inside the invoke are arguments.
                     invoke_at = form.find('(invoke')
                     invoke_end = balanced(form, invoke_at) if invoke_at >= 0 else -1
-                    expected = re.findall(
-                            r'\((bool|u8|s8|u16|s16|u32|i32|u64|i64|f32|f64)\.const\s+([^()\s]+)\)',
-                            form[invoke_end:] if invoke_end >= 0 else '')
-                    if parsed and expected:
-                        arg_text = ','.join('%s:%s' % item for item in parsed[1])
-                        kind, value = expected[-1]
-                        if kind == 'bool':
-                            value = '1' if value == 'true' else '0'
-                        execution.append((current_artifact, parsed[0], kind,
-                                          value, '%s:%d' % (relative, start),
-                                          arg_text))
-                    elif parsed:
-                        # An `assert_return` with no expected result is an
-                        # action for a void export; emit it as one so the
-                        # harness still performs the call.
-                        arg_text = ','.join('%s:%s' % item for item in parsed[1])
-                        execution.append((current_artifact, parsed[0],
-                                          'action', '',
-                                          '%s:%d' % (relative, start), arg_text))
+                    if parsed:
+                        name, parsed_args, structured_args = parsed
+                        arg_text = ','.join('%s:%s' % item
+                                            for item in parsed_args)
+                        if structured_args:
+                            execution.append((current_artifact, name,
+                                              'unsupported',
+                                              'structured arguments',
+                                              '%s:%d' % (relative, start),
+                                              arg_text))
+                            continue
+                        expected, reason = parse_expected(
+                                form[invoke_end:] if invoke_end >= 0 else '')
+                        if reason is not None:
+                            execution.append((current_artifact, name,
+                                              'unsupported', reason,
+                                              '%s:%d' % (relative, start),
+                                              arg_text))
+                        elif expected:
+                            if (len(expected) == 1
+                                    and expected[0]['kind'] != 'str'
+                                    and expected[0]['kind'] != 'flags'):
+                                execution.append((
+                                    current_artifact, name,
+                                    expected[0]['kind'], expected[0]['value'],
+                                    '%s:%d' % (relative, start), arg_text))
+                            else:
+                                execution.append((
+                                    current_artifact, name, 'json',
+                                    json.dumps(expected, separators=(',', ':')),
+                                    '%s:%d' % (relative, start), arg_text))
+                        else:
+                            # An `assert_return` with no expected result is an
+                            # action for a void export; emit it as one so the
+                            # harness still performs the call.
+                            execution.append((current_artifact, name, 'action',
+                                              '',
+                                              '%s:%d' % (relative, start),
+                                              arg_text))
                 elif form_head == 'assert_trap' and current_artifact:
                     parsed = parse_invoke(form)
                     if parsed:
-                        arg_text = ','.join('%s:%s' % item for item in parsed[1])
-                        execution.append((current_artifact, parsed[0],
-                                          'trap', '',
-                                          '%s:%d' % (relative, start), arg_text))
+                        name, parsed_args, structured_args = parsed
+                        arg_text = ','.join('%s:%s' % item
+                                            for item in parsed_args)
+                        execution.append((current_artifact, name,
+                                          'unsupported' if structured_args
+                                          else 'trap',
+                                          'structured arguments'
+                                          if structured_args else '',
+                                          '%s:%d' % (relative, start),
+                                          arg_text))
                 continue
             index += 1
             stem = os.path.splitext(os.path.basename(script))[0]
@@ -284,7 +357,7 @@ def main():
             handle.write('\t'.join(entry) + '\n')
     execution_path = os.path.join(out, 'execution.tsv')
     with open(execution_path, 'w', encoding='utf-8') as handle:
-        handle.write('# artifact\tinvoke\tkind\tvalue\torigin\targs (CM-9a)\n')
+        handle.write('# artifact\tinvoke\tkind\tvalue\torigin\targs (CM-9a; kind=json is a typed array)\n')
         for entry in execution:
             handle.write('\t'.join(entry) + '\n')
     if args.known_failures and os.path.exists(args.known_failures):

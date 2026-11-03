@@ -1,0 +1,32 @@
+;; Primitive result/parameter breadth for the component execution and JSON
+;; expectation paths: flags, bool, char, f32, f64 and u64 besides the scalar
+;; u32 cases in the upstream corpus.
+(component
+  (type $bool-fn (func (param "x" bool) (result bool)))
+  (type $char-fn (func (param "x" char) (result char)))
+  (type $f32-fn (func (param "x" f32) (result f32)))
+  (type $f64-fn (func (param "x" f64) (result f64)))
+  (type $u64-fn (func (param "x" u64) (result u64)))
+  (core module $m
+    (memory (export "mem") 1)
+    (func (export "i32") (param i32) (result i32) local.get 0)
+    (func (export "f32") (param f32) (result f32) local.get 0)
+    (func (export "f64") (param f64) (result f64) local.get 0)
+    (func (export "i64") (param i64) (result i64) local.get 0))
+  (core instance $i (instantiate $m))
+  (alias core export $i "i32" (core func $i32))
+  (alias core export $i "f32" (core func $f32))
+  (alias core export $i "f64" (core func $f64))
+  (alias core export $i "i64" (core func $i64))
+  (alias core export $i "mem" (core memory $mem))
+  (func (export "bool-id") (param "x" bool) (result bool)
+    (canon lift (core func $i32) (memory $mem)))
+  (func (export "char-id") (param "x" char) (result char)
+    (canon lift (core func $i32) (memory $mem)))
+  (func (export "f32-id") (param "x" f32) (result f32)
+    (canon lift (core func $f32) (memory $mem)))
+  (func (export "f64-id") (param "x" f64) (result f64)
+    (canon lift (core func $f64) (memory $mem)))
+  (func (export "u64-id") (param "x" u64) (result u64)
+    (canon lift (core func $i64) (memory $mem)))
+)

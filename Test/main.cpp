@@ -21,6 +21,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -1996,6 +1997,66 @@ TEST_CASE("component runtime lifts a canonical string")
 	function->callValues({&arg, 1}, {&result, 1});
 	REQUIRE(result.kind == WASM::ComponentValue::Kind::String);
 	REQUIRE(result.string == "hello");
+}
+
+TEST_CASE("component execution handles primitive result breadth", "[component-execution]")
+{
+	auto artifact = loadTestArtifact("component_execution_breadth");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	auto backend = TestBackend::create();
+	WASM::ComponentRuntime runtime(backend->instantiator(), *component);
+
+	auto boolean = runtime.exportedFunction("bool-id");
+	REQUIRE(boolean.has_value());
+	WASM::ComponentValue boolArg;
+	boolArg.kind = WASM::ComponentValue::Kind::Bool;
+	boolArg.u64 = 1;
+	WASM::ComponentValue boolResult;
+	boolean->callValues({&boolArg, 1}, {&boolResult, 1});
+	REQUIRE(boolResult.kind == WASM::ComponentValue::Kind::Bool);
+	REQUIRE(boolResult.u64 == 1);
+
+	auto character = runtime.exportedFunction("char-id");
+	REQUIRE(character.has_value());
+	WASM::ComponentValue charArg;
+	charArg.kind = WASM::ComponentValue::Kind::Char;
+	charArg.discriminant = 0x20AC;
+	WASM::ComponentValue charResult;
+	character->callValues({&charArg, 1}, {&charResult, 1});
+	REQUIRE(charResult.kind == WASM::ComponentValue::Kind::Char);
+	REQUIRE(charResult.discriminant == 0x20AC);
+
+	auto f32 = runtime.exportedFunction("f32-id");
+	REQUIRE(f32.has_value());
+	WASM::ComponentValue f32Arg;
+	f32Arg.kind = WASM::ComponentValue::Kind::F32;
+	f32Arg.f64 = 1.5;
+	WASM::ComponentValue f32Result;
+	f32->callValues({&f32Arg, 1}, {&f32Result, 1});
+	REQUIRE(f32Result.kind == WASM::ComponentValue::Kind::F32);
+	REQUIRE(f32Result.f64 == 1.5);
+
+	auto f64 = runtime.exportedFunction("f64-id");
+	REQUIRE(f64.has_value());
+	WASM::ComponentValue f64Arg;
+	f64Arg.kind = WASM::ComponentValue::Kind::F64;
+	f64Arg.f64 = 2.25;
+	WASM::ComponentValue f64Result;
+	f64->callValues({&f64Arg, 1}, {&f64Result, 1});
+	REQUIRE(f64Result.kind == WASM::ComponentValue::Kind::F64);
+	REQUIRE(f64Result.f64 == 2.25);
+
+	auto u64 = runtime.exportedFunction("u64-id");
+	REQUIRE(u64.has_value());
+	WASM::ComponentValue u64Arg;
+	u64Arg.kind = WASM::ComponentValue::Kind::U64;
+	u64Arg.u64 = 0x1122334455667788ull;
+	WASM::ComponentValue u64Result;
+	u64->callValues({&u64Arg, 1}, {&u64Result, 1});
+	REQUIRE(u64Result.kind == WASM::ComponentValue::Kind::U64);
+	REQUIRE(u64Result.u64 == 0x1122334455667788ull);
 }
 
 TEST_CASE("component runtime joins variant payloads")
@@ -5168,7 +5229,7 @@ TEST_CASE("component execution: accepted corpus instantiates", "[component-execu
 	REQUIRE(failures == 0);
 }
 
-TEST_CASE("component execution: upstream scalar returns and traps", "[component-execution]")
+TEST_CASE("component execution: upstream primitive returns and traps", "[component-execution]")
 {
 	const std::filesystem::path root = std::filesystem::path(WASM_TESTSUITE_DIR)
 			/ "component-corpus";
@@ -5213,7 +5274,30 @@ TEST_CASE("component execution: upstream scalar returns and traps", "[component-
 	std::size_t skipped = 0;
 	std::size_t failures = 0;
 	std::string firstFailure;
-	const auto parseArgs = [](std::string_view spec) {
+	const auto decodePercent = [](std::string_view text) {
+		std::string out;
+		out.reserve(text.size());
+		for (std::size_t i = 0; i < text.size(); ++i) {
+			if (text[i] == '%' && i + 2 < text.size()) {
+				const auto hex = [](char c) {
+					if (c >= '0' && c <= '9') return int(c - '0');
+					if (c >= 'a' && c <= 'f') return int(c - 'a' + 10);
+					if (c >= 'A' && c <= 'F') return int(c - 'A' + 10);
+					return -1;
+				};
+				const int hi = hex(text[i + 1]);
+				const int lo = hex(text[i + 2]);
+				if (hi >= 0 && lo >= 0) {
+					out.push_back(char((hi << 4) | lo));
+					i += 2;
+					continue;
+				}
+			}
+			out.push_back(text[i]);
+		}
+		return out;
+	};
+	const auto parseArgs = [&decodePercent](std::string_view spec) {
 		std::vector<WASM::ComponentValue> args;
 		std::size_t start = 0;
 		while (start < spec.size()) {
@@ -5225,24 +5309,50 @@ TEST_CASE("component execution: upstream scalar returns and traps", "[component-
 			if (colon == std::string_view::npos)
 				break;
 			const std::string_view kind = item.substr(0, colon);
-			const long long value = std::stoll(std::string(item.substr(colon + 1)),
-					nullptr, 0);
+			const std::string valueText(item.substr(colon + 1));
 			WASM::ComponentValue arg;
-			if (kind == "u32") {
-				arg.kind = WASM::ComponentValue::Kind::U32;
-				arg.u64 = static_cast<uint64_t>(value);
-			} else if (kind == "i32") {
-				arg.kind = WASM::ComponentValue::Kind::S32;
-				arg.s64 = value;
-			} else if (kind == "u64") {
-				arg.kind = WASM::ComponentValue::Kind::U64;
-				arg.u64 = static_cast<uint64_t>(value);
-			} else if (kind == "char") {
-				arg.kind = WASM::ComponentValue::Kind::Char;
-				arg.discriminant = static_cast<uint32_t>(value);
+			if (kind == "str") {
+				arg.kind = WASM::ComponentValue::Kind::String;
+				arg.string = decodePercent(valueText);
+			} else if (kind == "f32") {
+				arg.kind = WASM::ComponentValue::Kind::F32;
+				arg.f64 = std::stod(valueText);
+			} else if (kind == "f64") {
+				arg.kind = WASM::ComponentValue::Kind::F64;
+				arg.f64 = std::stod(valueText);
 			} else {
-				arg.kind = WASM::ComponentValue::Kind::S64;
-				arg.s64 = value;
+				const long long value = std::stoll(valueText, nullptr, 0);
+				if (kind == "bool") {
+					arg.kind = WASM::ComponentValue::Kind::Bool;
+					arg.u64 = value != 0;
+				} else if (kind == "u8") {
+					arg.kind = WASM::ComponentValue::Kind::U8;
+					arg.u64 = static_cast<uint64_t>(value);
+				} else if (kind == "s8") {
+					arg.kind = WASM::ComponentValue::Kind::S8;
+					arg.s64 = value;
+				} else if (kind == "u16") {
+					arg.kind = WASM::ComponentValue::Kind::U16;
+					arg.u64 = static_cast<uint64_t>(value);
+				} else if (kind == "s16") {
+					arg.kind = WASM::ComponentValue::Kind::S16;
+					arg.s64 = value;
+				} else if (kind == "u32") {
+					arg.kind = WASM::ComponentValue::Kind::U32;
+					arg.u64 = static_cast<uint64_t>(value);
+				} else if (kind == "i32") {
+					arg.kind = WASM::ComponentValue::Kind::S32;
+					arg.s64 = value;
+				} else if (kind == "u64") {
+					arg.kind = WASM::ComponentValue::Kind::U64;
+					arg.u64 = static_cast<uint64_t>(value);
+				} else if (kind == "char") {
+					arg.kind = WASM::ComponentValue::Kind::Char;
+					arg.discriminant = static_cast<uint32_t>(value);
+				} else {
+					arg.kind = WASM::ComponentValue::Kind::S64;
+					arg.s64 = value;
+				}
 			}
 			args.push_back(arg);
 			if (comma == std::string_view::npos)
@@ -5272,8 +5382,7 @@ TEST_CASE("component execution: upstream scalar returns and traps", "[component-
 			continue;
 		}
 		WASM::Component* component = parsed ? parsed->asComponent() : nullptr;
-		if (component == nullptr || !component->imports.empty()
-				|| !component->starts.empty()) {
+		if (component == nullptr || !component->imports.empty()) {
 			skipped += rows.size();
 			continue;
 		}
@@ -5286,11 +5395,108 @@ TEST_CASE("component execution: upstream scalar returns and traps", "[component-
 			skipped += rows.size();
 			continue;
 		}
-		for (const Row& row : rows) {
-			if (row.kind == "f32" || row.kind == "f64") {
-				++skipped;
-				continue;
+		struct ExpectedValue {
+			std::string kind;
+			std::string value;
+			std::vector<std::string> flags;
+		};
+		const auto expectedFor = [](const Row& row)
+				-> std::optional<std::vector<ExpectedValue>> {
+			if (row.kind == "unsupported")
+				return std::nullopt;
+			if (row.kind != "json")
+				return std::vector<ExpectedValue>{{row.kind, row.value, {}}};
+			const nlohmann::json values = nlohmann::json::parse(row.value);
+			if (!values.is_array())
+				throw std::runtime_error("expected result JSON is not an array");
+			std::vector<ExpectedValue> expected;
+			for (const nlohmann::json& value : values) {
+				ExpectedValue item;
+				item.kind = value.at("kind").get<std::string>();
+				if (item.kind == "flags") {
+					for (const nlohmann::json& label : value.at("values"))
+						item.flags.push_back(label.get<std::string>());
+				} else {
+					item.value = value.at("value").get<std::string>();
+				}
+				expected.push_back(std::move(item));
 			}
+			return expected;
+		};
+		const WASM::TypeStore& typeStoreView = typeStore();
+		const auto matches = [&typeStoreView](
+				const WASM::ComponentValue& actual, const ExpectedValue& expected,
+				const WASM::ComponentValueType& type, bool& supported) {
+			using K = WASM::ComponentValue::Kind;
+			if (expected.kind == "str") {
+				supported = true;
+				return actual.kind == K::String && actual.string == expected.value;
+			}
+			if (expected.kind == "flags") {
+				if (type.kind != WASM::ComponentValueType::Kind::TypeId) {
+					supported = false;
+					return false;
+				}
+				const WASM::ComponentTypeView view = typeStoreView.componentType(
+						WASM::TypeId{type.typeIndex});
+				const auto labels = view.labels();
+				if (actual.kind != K::Flags || actual.flags.size() != labels.size()) {
+					supported = true;
+					return false;
+				}
+				std::vector<bool> wanted(labels.size(), false);
+				for (const std::string& name : expected.flags) {
+					bool found = false;
+					for (std::size_t i = 0; i < labels.size(); ++i) {
+						if (typeStoreView.string(labels[i]) == name) {
+							wanted[i] = true;
+							found = true;
+							break;
+						}
+					}
+					if (!found) {
+						supported = false;
+						return false;
+					}
+				}
+				supported = true;
+				return actual.flags == wanted;
+			}
+			if (expected.kind == "f32" || expected.kind == "f64") {
+				supported = true;
+				const double wanted = std::stod(expected.value);
+				return (expected.kind == "f32"
+						? actual.kind == K::F32
+						: actual.kind == K::F64)
+						&& actual.f64 == (expected.kind == "f32"
+								? double(float(wanted)) : wanted);
+			}
+			const long long value = std::stoll(expected.value, nullptr, 0);
+			supported = true;
+			if (expected.kind == "bool")
+				return actual.kind == K::Bool && (actual.u64 != 0) == (value != 0);
+			if (expected.kind == "u8")
+				return actual.kind == K::U8 && actual.u64 == uint64_t(value);
+			if (expected.kind == "s8")
+				return actual.kind == K::S8 && actual.s64 == value;
+			if (expected.kind == "u16")
+				return actual.kind == K::U16 && actual.u64 == uint64_t(value);
+			if (expected.kind == "s16")
+				return actual.kind == K::S16 && actual.s64 == value;
+			if (expected.kind == "u32")
+				return actual.kind == K::U32 && actual.u64 == uint64_t(value);
+			if (expected.kind == "i32")
+				return actual.kind == K::S32 && actual.s64 == value;
+			if (expected.kind == "u64")
+				return actual.kind == K::U64 && actual.u64 == uint64_t(value);
+			if (expected.kind == "i64")
+				return actual.kind == K::S64 && actual.s64 == value;
+			if (expected.kind == "char")
+				return actual.kind == K::Char && actual.discriminant == uint32_t(value);
+			supported = false;
+			return false;
+		};
+		for (const Row& row : rows) {
 			auto function = runtime->exportedFunction(row.invoke);
 			if (!function.has_value() || !function->callValues) {
 				++skipped;
@@ -5311,16 +5517,14 @@ TEST_CASE("component execution: upstream scalar returns and traps", "[component-
 				}
 				continue;
 			}
-			++checked;
-			std::vector<WASM::ComponentValue> results(function->resultTypes.size());
-			const auto args = parseArgs(row.args);
-			const auto invoke = [&] {
-				function->callValues(args, results);
-			};
 			if (row.kind == "trap") {
+				++checked;
+				std::vector<WASM::ComponentValue> ignored(
+						function->resultTypes.size());
+				const auto args = parseArgs(row.args);
 				bool trapped = false;
 				try {
-					invoke();
+					function->callValues(args, ignored);
 				} catch (const std::exception&) {
 					trapped = true;
 				}
@@ -5332,66 +5536,61 @@ TEST_CASE("component execution: upstream scalar returns and traps", "[component-
 				}
 				continue;
 			}
-			if (results.size() != 1) {
+			std::optional<std::vector<ExpectedValue>> expected;
+			try {
+				expected = expectedFor(row);
+			} catch (const std::exception&) {
 				++skipped;
 				continue;
 			}
+			if (!expected.has_value()) {
+				++skipped;
+				continue;
+			}
+			++checked;
+			std::vector<WASM::ComponentValue> results(function->resultTypes.size());
+			const auto args = parseArgs(row.args);
 			try {
-				invoke();
+				function->callValues(args, results);
 			} catch (const std::exception& error) {
 				++failures;
 				if (firstFailure.empty())
 					firstFailure = row.origin + ": " + error.what();
 				continue;
 			}
-			const WASM::ComponentValue& actual = results[0];
-			bool matches = false;
-			try {
-				const long long expected = std::stoll(row.value, nullptr, 0);
-				if (row.kind == "bool")
-					matches = actual.kind == WASM::ComponentValue::Kind::Bool
-							&& (actual.u64 != 0) == (expected != 0);
-				else if (row.kind == "u8")
-					matches = actual.kind == WASM::ComponentValue::Kind::U8
-							&& actual.u64 == static_cast<uint64_t>(expected);
-				else if (row.kind == "s8")
-					matches = actual.kind == WASM::ComponentValue::Kind::S8
-							&& actual.s64 == expected;
-				else if (row.kind == "u16")
-					matches = actual.kind == WASM::ComponentValue::Kind::U16
-							&& actual.u64 == static_cast<uint64_t>(expected);
-				else if (row.kind == "s16")
-					matches = actual.kind == WASM::ComponentValue::Kind::S16
-							&& actual.s64 == expected;
-				else if (row.kind == "u32")
-					matches = actual.kind == WASM::ComponentValue::Kind::U32
-							&& actual.u64 == static_cast<uint64_t>(expected);
-				else if (row.kind == "i32")
-					matches = actual.kind == WASM::ComponentValue::Kind::S32
-							&& actual.s64 == expected;
-				else if (row.kind == "u64")
-					matches = actual.kind == WASM::ComponentValue::Kind::U64
-							&& actual.u64 == static_cast<uint64_t>(expected);
-				else if (row.kind == "i64")
-					matches = actual.kind == WASM::ComponentValue::Kind::S64
-							&& actual.s64 == expected;
-				else
-					++skipped;
-			} catch (const std::exception&) {
-				++skipped;
-				continue;
-			}
-			if (!matches) {
+			if (results.size() != expected->size()) {
 				++failures;
 				if (firstFailure.empty())
 					firstFailure = row.origin + ": `" + row.invoke +
-							"` did not return " + row.kind + " " + row.value +
-							" (kind=" + std::to_string(int(actual.kind)) +
-							", value=" + std::to_string(actual.u64) + ")";
+							"` returned " + std::to_string(results.size()) +
+							" values, expected " + std::to_string(expected->size());
+				continue;
+			}
+			bool supported = true;
+			bool matched = true;
+			for (std::size_t i = 0; i < results.size(); ++i) {
+				if (!matches(results[i], (*expected)[i],
+						function->resultTypes[i], supported)) {
+					matched = false;
+					if (!supported)
+						break;
+				}
+			}
+			if (!supported) {
+				++skipped;
+				continue;
+			}
+			if (!matched) {
+				++failures;
+				if (firstFailure.empty())
+					firstFailure = row.origin + ": `" + row.invoke +
+							"` did not return the expected values (" +
+							row.kind + " " + row.value + ")";
 			}
 		}
 	}
 	INFO("first failure: " << firstFailure);
+	INFO("checked " << checked << ", skipped " << skipped);
 	REQUIRE(checked >= 50);
 	REQUIRE(failures == 0);
 }

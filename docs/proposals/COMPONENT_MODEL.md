@@ -343,7 +343,7 @@ supplied by the embedder's `ComponentExecutor`.
 
 ## 4. What is in the tree today
 
-**Snapshot (2026-11-03, working tree; no commit yet).** Everything below is a kind-2 statement under `docs/FRESHNESS.md` §2.2, so the whole section carries one stamp rather than a date per sentence. Measured with `build/Desktop-Debug/Test/WasmJit` (**17,386 assertions / 582 cases**) and `[component-corpus]` (**516 verdict cases; 0 reject-side, 0 accept-side**); `[component-execution]` additionally constructs **140** accepted artifacts and executes every extracted upstream scalar row, including the resource-handle-table groups. Before changing a count below, re-run those and `docs/FRESHNESS.md` §8; if a sentence disagrees with the runs, the sentence is stale.
+**Snapshot (2026-11-03, working tree; no commit yet).** Everything below is a kind-2 statement under `docs/FRESHNESS.md` §2.2, so the whole section carries one stamp rather than a date per sentence. Measured with `build/Desktop-Debug/Test/WasmJit` (**17,403 assertions / 583 cases**) and `[component-corpus]` (**516 verdict cases; 0 reject-side, 0 accept-side**); `[component-execution]` additionally constructs **140** accepted artifacts and executes every extracted upstream primitive/JSON-expected row, including the resource-handle-table groups. Before changing a count below, re-run those and `docs/FRESHNESS.md` §8; if a sentence disagrees with the runs, the sentence is stale.
 
 ### 4.1 Short answer: an honest rejection (CM-0), plus a parser (CM-1a/CM-1b)
 
@@ -444,9 +444,11 @@ embedder-supplied `ComponentExecutor` path described in §4.3 and §5.
   surface described in this section.
 - **Execution conformance has two upstream sweeps.** `[component-execution]`
   parses every accepted artifact and constructs each component that has no host
-  imports/start (**140** checked); it also runs the extracted upstream
-  `assert_return`/`assert_trap` scalar commands against a fresh runtime,
-  including the resource-handle-table groups. Nothing is skipped by name.
+  imports (**140** checked; `start` definitions execute during construction); it
+  also runs the extracted upstream `assert_return`/`assert_trap` rows against a
+  fresh runtime, including primitive results, JSON-encoded strings/flags and the
+  resource-handle-table groups. Structured invocations that the extractor cannot
+  represent are marked `unsupported` rather than silently dropped.
   `[component-fuzz]` exercises truncated/mutated components. Cross-instance
   transfer has direct tests for owning resources, borrowed resources, stream
   endpoints and futures, plus an explicit handle-table budget-exhaustion test.
@@ -605,7 +607,7 @@ upstream test suite at the pinned revision rather than the specification itself.
 | Axis | State | What would move it |
 |---|---|---|
 | Feature surface | mature for the implemented subset; `ComponentFeatures` gates proposals, and the public `WASM::Runtime` component surface is installed, including core table/global accessors and host core-module imports | post-MVP proposals outside the implemented subset |
-| **Conformance** | **validation-green and execution-instantiable against the upstream corpus** — `[component-corpus]` asserts **516 verdict cases (140 accept / 376 reject): 0 reject-side, 0 accept-side**; both directions are a hard gate. `[component-execution]` constructs every accepted artifact with no host imports/start (**140** checked) and executes every extracted upstream scalar `assert_return`/`assert_trap` command, including the resource-handle-table groups | re-run both corpora when the validator or pinned corpus changes |
+| **Conformance** | **validation-green and execution-instantiable against the upstream corpus** — `[component-corpus]` asserts **516 verdict cases (140 accept / 376 reject): 0 reject-side, 0 accept-side**; both directions are a hard gate. `[component-execution]` constructs every accepted artifact with no host imports (**140** checked; starts execute during construction) and executes every extracted upstream primitive/JSON-expected `assert_return`/`assert_trap` command, including the resource-handle-table groups | re-run both corpora when the validator or pinned corpus changes |
 | Lifecycle | **matured 2026-11-01:** `ComponentRuntime::~ComponentRuntime` calls `ModuleInstantiator::releaseInstance` for every core instance it created | — |
 | Multi-agent | **supported through the embedder** (`CMD3`): the installed `ComponentExecutor` seam receives `push`/`runUntilIdle`/`waitForWork`/`wake`/`suspendCurrent`, owns `thread.index`/`available-parallelism`, and the runtime has a thread table plus subtask lowering; an embedder that wants agents installs a concurrent executor per instance. The engine owns no scheduler or thread pool | — (an ergonomic scheduler wrapper belongs to an embedder, not this note) |
 
@@ -716,8 +718,9 @@ asserted separately (see the `component-corpus` row).
 | tooling test, CM-3 | **pass** | `Spec::WitPackage::parse` ingests `wasm-tools component wit --json` and exposes packages/worlds/interfaces/functions. |
 | component-script marshalling, CM-7 | **pass** | structured `variant` and `map` values round-trip through the JSON harness; the JSON schema is documented in [`../TESTING.md`](../TESTING.md). |
 | manual test, CM-7 | **pass (scalar)** | `component script harness invokes a component` feeds a component binary through `component_runtime.wasm` and checks a scalar `assert_return`. |
-| upstream instantiability, CM24 | **pass** | `[component-execution]` parses every accepted artifact and constructs each component with no host imports/start (**140** checked); no accepted group is named as a residual. |
-| upstream scalar execution, CM24/CM26 | **pass** | `[component-execution]` runs the extracted `execution.tsv` `invoke`/`assert_return`/`assert_trap` commands, including scalar arguments and the resource-handle-table groups. |
+| upstream instantiability, CM24 | **pass** | `[component-execution]` parses every accepted artifact and constructs each component with no host imports (**140** checked); start definitions run during construction; no accepted group is named as a residual. |
+| upstream execution, CM24/CM26 | **pass** | `[component-execution]` runs the extracted `execution.tsv` `invoke`/`assert_return`/`assert_trap` commands, including primitive arguments/results, JSON-encoded string/flags expectations and the resource-handle-table groups; structured invocations the extractor cannot represent are marked `unsupported`. |
+| primitive result breadth, CM-27 | **pass** | `component_execution_breadth.wat` exercises bool, char, f32, f64 and u64 identity functions through `canon lift`; `component runtime lifts a canonical string` covers the string case. |
 | cross-instance handle transfer, CM-27 | **pass** | `component resource borrows transfer between runtimes`, `component async endpoint transfer keeps the channel shared`, `component runtime transfers stream endpoints between instances`, and `component resource handle table budget rejects exhaustion` exercise owning/borrowed resources, stream/future endpoints and the handle cap. |
 | async/resource edge transitions, CM24 | **pass** | `[component-async]` covers task cancellation request/settle, subtask states and the `BLOCKED` cancel sentinel, deferred lower with packed `STARTING` handles, thread-table routing, stream/future copies and the async lift/lower convention. |
 | name metadata, CM25 | **pass** | `[component-name]` injects a valid and a malformed `component-name` custom section; the valid name is exposed and the malformed one is ignored without rejecting the component. |
