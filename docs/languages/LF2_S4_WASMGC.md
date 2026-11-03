@@ -300,3 +300,14 @@ should support.
 - Whether other WasmGC producers (Java/TeaVM, C#/NativeAOT-LLVM) share the
   `nullref`-in-a-field shape. The repro suggests they might; the study did not
   check.
+## 9. ABI/interop amendment
+
+The wasm-gc arms are the **C** end of the scale once a value is a managed
+object, array, string, `externref` or exception. Kotlin/Wasm `wasmWasi` keeps
+scalar exports callable; `wasmJs` additionally requires the JS bridge and its
+`(ref extern)` globals. Dart’s `dart:*` imports and MoonBit’s WasmGC values
+likewise need a language-runtime adapter. A synthetic host module can offer
+scalars cheaply, but a host C++ object cannot become a Kotlin/Dart/MoonBit GC
+object by ABI alone. The direction matrix and the A/B/C classification are in
+[`LF2_ABI_INTEROP.md`](LF2_ABI_INTEROP.md); the binding contract is
+[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §12.

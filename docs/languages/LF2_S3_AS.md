@@ -86,3 +86,13 @@ allocation inside memory 0, so the embedder's decision is the same as `T02`'s:
 - `T30` has no independent evidence, by definition. If a non-AssemblyScript
   TypeScript compiler appears with a standalone target, its row re-enters
   `LF-1`, not this report.
+## 6. ABI/interop amendment
+
+AssemblyScript is **A** at scalars and **B** at strings/arrays: both are
+linear-memory protocols, and the `stub` arm has no managed runtime. A host that
+wants an AS `string` must know the UTF-16 convention and the guest allocator; a
+`.d.ts` declaration is compile-time spelling, not the adapter. AS-managed
+objects are not WasmGC references, and a component resource/exception is a
+**C** adapter. The host-binding guide and the scalar-to-GC matrix are in
+[`LF2_ABI_INTEROP.md`](LF2_ABI_INTEROP.md); the contract is
+[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §12.

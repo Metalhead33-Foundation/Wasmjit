@@ -48,6 +48,13 @@ Copied from the charter, because a study that lowers it is not a study
 must be the VM's own entry point (`lua_newstate`-class), and a script must run
 inside it before `callCallable` is declared to work.
 
+The **ABI/interop amendment** in
+[`LF2_ABI_INTEROP.md`](LF2_ABI_INTEROP.md) is supplementary to this bar: every
+cluster report now states both call directions (engine → guest and guest →
+synthetic host module), the core `Callable` versus component Canonical ABI, and
+where the language sits on the scalar-to-GC/reference scale. Scalar success does
+not imply a reference/exception/resource success.
+
 ### 2.2 The rules every study obeys
 
 - **Evidence** per §8.4: toolchain version, exact flags, module hash, inspection

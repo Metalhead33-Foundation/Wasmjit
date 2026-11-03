@@ -130,3 +130,14 @@ forgiving of the "runtime" arms because its exports are callable before
   of these arm's default flags triggered a backend failure, which is a useful
   negative: `F1` is not "the LibJIT backend cannot compile optimised code", it is
   one construct in one function.
+## 7. ABI/interop amendment
+
+Rust, Zig and TinyGo are **A/B** arms: scalar values and linear-memory pointers
+cross directly enough for the measured bar, while Rust ownership, Go runtime
+initialization and Zig’s lack of an allocator remain language-specific adapter
+work. None of them supplies WasmGC object semantics or `exnref`; a GC reference
+or an exception value is the **C** case and needs an adapter, not a C-shaped
+header. `//go:wasmimport`/`//go:wasmexport` and `extern "C"` are source
+spellings; the engine still sees `Callable`, `TypeId` and the outer
+`VMContext*` ABI. See [`LF2_ABI_INTEROP.md`](LF2_ABI_INTEROP.md) and
+[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §12.

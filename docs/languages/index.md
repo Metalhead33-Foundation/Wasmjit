@@ -1,8 +1,8 @@
 # Language Support — the `LF-1` Screen and the `LF-2` Studies {#languages_index}
 
-Status: study report set (revision 4 — 2026-10-30: the `LF-2` studies were
-**run**, and this folder now holds their reports beside the `LF-1` screen; see
-[`LF2_INDEX.md`](LF2_INDEX.md). Revision 3 was the third re-screen after `MP-1`
+Status: study report set (revision 5 — 2026-11-03: adds the cross-language
+ABI/interop amendment `LF2_ABI_INTEROP.md`; revision 4 was the `LF-2` report
+set). Revision 3 was the third re-screen after `MP-1`
 gave a non-shared memory a reservation policy, which also wrote down what A3
 grades — the Kotlin shape: *load, instantiate, execute; the host import set is
 the embedder's*; revision 2 was the re-screen after the legacy-EH parser policy
@@ -47,6 +47,7 @@ the next person who is tempted to answer the question from a blog post.
 | \subpage lf_charters | **The commissionable units.** One charter per shortlisted cluster: scope, pinned candidates, questions, the bar for "feasible", the budget cap, the deliverable, the stop conditions, owner and date. |
 | \subpage lf_evidence | **The receipts.** Every external source with its retrieval date and tier, the in-repo evidence it leans on, and — explicitly — what was *not* verified. |
 | \subpage lf2_index | **The `LF-2` set.** The commissioned full studies: the verdict table, the three engine findings, the budget, and the reading order for the reports below. |
+| \subpage lf2_abi | **Cross-language ABI amendment.** The two call directions, synthetic host modules, core `Callable` versus component Canonical ABI, and the scalar-to-GC/reference difficulty matrix per language; it links to `EMBEDDING_SURFACE.md` §12. |
 | \subpage lf2_s1 | `S1` — C/C++ toolchain and ABI: five arms, all green (the last one after the `LE-8` translation). |
 | \subpage lf2_s2 | `S2` — the LLVM-family languages: Rust (two targets), TinyGo and Zig, all green. |
 | \subpage lf2_s3 | `S3` — AssemblyScript (and TypeScript by inheritance): green, building on the harness evidence. |

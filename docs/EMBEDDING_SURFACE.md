@@ -816,7 +816,7 @@ layers:
 2. **A descriptor-driven generator is the right automation step.** It consumes
    the engine’s metadata (and, for components, optional WIT JSON) and emits
    declarations plus stubs. It does not require parsing C++ headers.
-3. **External tools are an option, not the foundation.** SWIG and
+3. **External tools are an option, not the foundation.** [`SWIG`](https://github.com/swig/swig) and
    [`Glue`](https://github.com/TheLartians/Glue) are reasonable experiments for
    C++-facing adapters, but neither knows the Wasm Canonical ABI, component
    resources, or the engine’s trap/ownership rules. They can be an adapter
@@ -939,4 +939,9 @@ The test for this work is not “the generated file compiles.” It is that a
 generated adapter can call an exported function, satisfy an import, preserve
 reference/resource ownership, and report the same trap/exception/async result
 as the raw engine API.
+
+The per-language application of this section is
+[`languages/LF2_ABI_INTEROP.md`](languages/LF2_ABI_INTEROP.md): the two call
+directions, synthetic host modules, and the scalar-to-GC/reference difficulty
+matrix for the studied languages.
 

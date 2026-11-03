@@ -120,3 +120,12 @@ script environment, close the state when done.
   bites a VM that wants a second host thread.
 - Whether the legacy-EH rewrite accepts every VM's `setjmp` output. Lua's does;
   that is one data point, not a guarantee.
+## 7. ABI/interop amendment
+
+A guest VM is an **A/B** arm: its C API exposes scalar and pointer entry points,
+and the VM’s scripting values stay behind that API. `setjmp`/`longjmp` and Lua
+errors are VM-internal; they do not become an `exnref` crossing. A synthetic
+host module can provide scalar C imports to Lua exactly as it can to any C
+module. The cross-language direction matrix and the host-binding guide are in
+[`LF2_ABI_INTEROP.md`](LF2_ABI_INTEROP.md) and
+[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §12.

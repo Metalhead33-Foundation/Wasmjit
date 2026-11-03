@@ -1,6 +1,8 @@
 # The `LF-2` Report Set — Full Feasibility Studies {#lf2_index}
 
-Status: full-study report set (revision 1 — 2026-10-30). This folder holds the
+Status: full-study report set (revision 2 — 2026-11-03: adds the cross-language
+ABI/interop amendment `LF2_ABI_INTEROP.md`; revision 1 was 2026-10-30). This
+folder holds the
 `LF-2` studies that [`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §8
 defines, run against the five charter clusters of
 [`CHARTERS.md`](CHARTERS.md) plus a documented-only sweep of the clusters that
@@ -56,10 +58,12 @@ honest.
 | \subpage lf2_deep_f1 | **Deep study** — `F1`: why libjit refused the module, and the backend fix | — | `T01`/`T04` unblocked |
 | \subpage lf2_deep_f2 | **Deep study** — `F2` (`LE-8`): the workarounds, and the escape-block translation that made them optional | — | `T05` green |
 | \subpage lf2_deep_f3 | **Deep study + fix** — `F3`: the GC subtyping gap, its four sub-findings and what is still open | — | `T20`/`T53` unblocked to validation |
+| \subpage lf2_abi | **Cross-language ABI amendment** — the two call directions, synthetic modules, core versus component ABI and the scalar-to-GC/reference matrix | — | not a verdict; links to `EMBEDDING_SURFACE.md` §12 |
 
 Reading order for a decision: this page's §4 → the report for the cluster → the
-evidence row for the module hash you intend to rely on. The verdict expires when
-the toolchain or the engine moves
+cross-language ABI amendment (`LF2_ABI_INTEROP.md`) for the value/reference
+shape being planned → the evidence row for the module hash you intend to rely on.
+The verdict expires when the toolchain or the engine moves
 ([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §8.5).
 
 ## 3. What was measured

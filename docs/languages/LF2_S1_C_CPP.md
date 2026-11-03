@@ -269,3 +269,14 @@ backend contract, which is why `S1` does not disturb the frozen surfaces of
 - `T36` (c4wa) and `T94` (xcc). They are fixture generators: a C-subset emitter
   proves nothing an embedder would rely on, and `LF-1` already assigned them to
   `S1` as fixtures rather than candidates.
+## 9. ABI/interop amendment
+
+The scalar and pointer results above are the **A/B** end of the cross-language
+scale. The cluster does not by itself answer host/guest GC references, `exnref`,
+or component resources; those are the **C** cases. The C ABI seen by the engine
+is `Ret f(VMContext*, ...)` through `Callable`, while the C/C++ guest source
+keeps its own `extern "C"` signature; the backend driver bridges the two. A
+native import must use the same `VMContext*`-first shape. The full direction
+matrix, synthetic-module rules and per-language comparison are in
+[`LF2_ABI_INTEROP.md`](LF2_ABI_INTEROP.md), with the host-binding contract in
+[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §12.
