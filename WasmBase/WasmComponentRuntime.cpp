@@ -1561,7 +1561,8 @@ struct LowerData {
 //! value must be rebased before the receiving side validates it.
 void transferComponentHandles(const WASM::TypeStore& store,
 		const WASM::ComponentValueType& type, ComponentValue& value,
-		ComponentRuntime& source, ComponentRuntime& target, unsigned depth)
+		ComponentRuntime& source, ComponentRuntime& target,
+		uint32_t borrowScope, unsigned depth)
 {
 	if (&source == &target)
 		return;
@@ -1580,28 +1581,28 @@ void transferComponentHandles(const WASM::TypeStore& store,
 		for (std::size_t i = 0; i < view.fields().size()
 				&& i < value.elements.size(); ++i)
 			transferComponentHandles(store, view.fields()[i].type,
-					value.elements[i], source, target, depth + 1);
+					value.elements[i], source, target, borrowScope, depth + 1);
 		return;
 	case WASM::TypeKind::ComponentTuple:
 		for (std::size_t i = 0; i < view.tuple().size()
 				&& i < value.elements.size(); ++i)
 			transferComponentHandles(store, view.tuple()[i],
-					value.elements[i], source, target, depth + 1);
+					value.elements[i], source, target, borrowScope, depth + 1);
 		return;
 	case WASM::TypeKind::ComponentFixedList:
 		for (ComponentValue& element : value.elements)
 			transferComponentHandles(store, view.element(), element,
-					source, target, depth + 1);
+					source, target, borrowScope, depth + 1);
 		return;
 	case WASM::TypeKind::ComponentList:
 		for (ComponentValue& element : value.elements)
 			transferComponentHandles(store, view.element(), element,
-					source, target, depth + 1);
+					source, target, borrowScope, depth + 1);
 		return;
 	case WASM::TypeKind::ComponentOption:
 		if (value.hasValue && !value.elements.empty())
 			transferComponentHandles(store, view.element(),
-					value.elements.front(), source, target, depth + 1);
+					value.elements.front(), source, target, borrowScope, depth + 1);
 		return;
 	case WASM::TypeKind::ComponentResult: {
 		const WASM::ComponentValueType* payload = value.discriminant != 0
@@ -1609,7 +1610,7 @@ void transferComponentHandles(const WASM::TypeStore& store,
 				: (view.hasResultOk() ? &view.resultOk() : nullptr);
 		if (payload != nullptr && value.hasValue && !value.elements.empty())
 			transferComponentHandles(store, *payload, value.elements.front(),
-					source, target, depth + 1);
+					source, target, borrowScope, depth + 1);
 		return;
 	}
 	case WASM::TypeKind::ComponentVariant: {
@@ -1618,7 +1619,7 @@ void transferComponentHandles(const WASM::TypeStore& store,
 		const WASM::ComponentCase& item = view.cases()[value.discriminant];
 		if (item.hasType && value.hasValue && !value.elements.empty())
 			transferComponentHandles(store, item.type, value.elements.front(),
-					source, target, depth + 1);
+					source, target, borrowScope, depth + 1);
 		return;
 	}
 	case WASM::TypeKind::ComponentMap:
@@ -1626,9 +1627,9 @@ void transferComponentHandles(const WASM::TypeStore& store,
 			if (entry.elements.size() != 2)
 				continue;
 			transferComponentHandles(store, view.mapKey(), entry.elements[0],
-					source, target, depth + 1);
+					source, target, borrowScope, depth + 1);
 			transferComponentHandles(store, view.mapValue(), entry.elements[1],
-					source, target, depth + 1);
+					source, target, borrowScope, depth + 1);
 		}
 		return;
 	case WASM::TypeKind::ComponentOwn: {
@@ -1637,12 +1638,17 @@ void transferComponentHandles(const WASM::TypeStore& store,
 				value.discriminant, resource);
 		return;
 	}
-	case WASM::TypeKind::ComponentBorrow:
-		// A borrowed handle is owned by the caller; it is not transferred.
+	case WASM::TypeKind::ComponentBorrow: {
+		const WASM::TypeId resource{view.typeRef()};
+		value.discriminant = target.adoptBorrowedResourceHandle(source,
+				value.discriminant, resource, borrowScope);
 		return;
+	}
 	case WASM::TypeKind::ComponentStream:
 	case WASM::TypeKind::ComponentFuture:
-		// Async endpoints use their own per-runtime endpoint table.
+		value.discriminant = target.adoptStreamFutureHandle(source,
+				value.discriminant,
+				view.kind() == WASM::TypeKind::ComponentFuture);
 		return;
 	default:
 		return;
@@ -1667,15 +1673,32 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 	ComponentHostContextGuard contextGuard(callerContext);
 	ComponentRuntime* const owner = data->function.ownerRuntime;
 	ComponentRuntime* const caller = data->memory.runtime;
+	// A borrowed input needs a scope in the callee's table. The scope must live
+	// until the call returns, including a deferred async-lower body.
+	struct OwnerBorrowScope {
+		ComponentRuntime* runtime = nullptr;
+		uint32_t scope = 0;
+		explicit OwnerBorrowScope(ComponentRuntime* target) : runtime(target)
+		{
+			if (runtime != nullptr)
+				scope = runtime->beginBorrowScope();
+		}
+		~OwnerBorrowScope() { if (runtime != nullptr) runtime->endBorrowScope(scope); }
+		OwnerBorrowScope(const OwnerBorrowScope&) = delete;
+		OwnerBorrowScope& operator=(const OwnerBorrowScope&) = delete;
+	};
+	const auto ownerBorrow = std::make_shared<OwnerBorrowScope>(
+			(owner != nullptr && caller != nullptr && owner != caller) ? owner : nullptr);
 	const auto transferHandles = [&](std::vector<ComponentValue>& values,
 			const std::vector<WASM::ComponentValueType>& types,
-			bool intoOwner) {
+			bool intoOwner, uint32_t borrowScope) {
 		if (owner == nullptr || caller == nullptr || owner == caller)
 			return;
 		for (std::size_t i = 0; i < values.size() && i < types.size(); ++i)
 			transferComponentHandles(store, types[i], values[i],
 					intoOwner ? *caller : *owner,
-					intoOwner ? *owner : *caller, 0);
+					intoOwner ? *owner : *caller,
+					borrowScope, 0);
 	};
 	if (data->function.options.async) {
 		// CM19: async lower. The core signature uses MAX_FLAT_ASYNC_PARAMS (4),
@@ -1731,7 +1754,6 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 				liftValue(store, data->function.paramTypes[i], input, index,
 						data->memory, structuredInput[i], 0);
 		}
-		transferHandles(structuredInput, data->function.paramTypes, true);
 		std::vector<ComponentValue> structuredOutput(
 				data->function.resultTypes.size());
 		uint64_t buffer = 0;
@@ -1764,10 +1786,16 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 			*handle = data->memory.runtime->beginPendingSubtask(
 					[data, structuredInput = std::move(structuredInput),
 					 structuredOutput = std::move(structuredOutput),
-					 writeOutput, handle, callerContext, &store, owner, caller]() mutable {
+					 writeOutput, handle, callerContext, &store, owner, caller,
+					 ownerBorrow]() mutable {
 				ComponentHostContextGuard deferredGuard(callerContext);
 				if (data->memory.runtime->subtaskCancelled(*handle))
 					return;
+				for (std::size_t i = 0; i < structuredInput.size()
+						&& i < data->function.paramTypes.size(); ++i)
+					transferComponentHandles(store,
+							data->function.paramTypes[i], structuredInput[i],
+							*caller, *owner, ownerBorrow->scope, 0);
 				data->function.callValues(structuredInput, structuredOutput);
 				if (WASM::trapPending())
 					return;
@@ -1775,7 +1803,7 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 						&& i < data->function.resultTypes.size(); ++i)
 					transferComponentHandles(store,
 							data->function.resultTypes[i], structuredOutput[i],
-							*owner, *caller, 0);
+							*owner, *caller, ownerBorrow->scope, 0);
 				writeOutput(structuredOutput);
 			});
 			if (result)
@@ -1785,10 +1813,13 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 										ComponentSubtaskState::Starting));
 			return;
 		}
+		transferHandles(structuredInput, data->function.paramTypes, true,
+				ownerBorrow->scope);
 		data->function.callValues(structuredInput, structuredOutput);
 		if (WASM::trapPending())
 			return;
-		transferHandles(structuredOutput, data->function.resultTypes, false);
+		transferHandles(structuredOutput, data->function.resultTypes, false,
+				borrowScope);
 		writeOutput(structuredOutput);
 		if (result)
 			*static_cast<int32_t*>(result) =
@@ -1843,12 +1874,14 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 				liftValue(store, data->function.paramTypes[i], input, index,
 						data->memory, structuredInput[i], 0);
 		}
-		transferHandles(structuredInput, data->function.paramTypes, true);
+		transferHandles(structuredInput, data->function.paramTypes, true,
+				ownerBorrow->scope);
 		structuredOutput.resize(data->function.resultTypes.size());
 		data->function.callValues(structuredInput, structuredOutput);
 		if (WASM::trapPending())
 			return;
-		transferHandles(structuredOutput, data->function.resultTypes, false);
+		transferHandles(structuredOutput, data->function.resultTypes, false,
+				borrowScope);
 		output.clear();
 		for (std::size_t i = 0; i < structuredOutput.size(); ++i)
 			lowerValue(store, data->function.resultTypes[i], structuredOutput[i],
@@ -3281,6 +3314,15 @@ uint32_t ComponentRuntime::addHandle()
 				true, true, 0};
 		return handle;
 	}
+	// Live handles are host memory even when every other allocation is charged
+	// to the core memory budget. Keep the shared resource/async table bounded so
+	// a guest loop cannot grow it without limit.
+	static constexpr uint32_t kDefaultMaxLiveHandles = 1u << 20;
+	const uint32_t limit = options_.maxLiveHandles != 0
+			? options_.maxLiveHandles : kDefaultMaxLiveHandles;
+	if (resourceSlots_.size() >= limit)
+		throw std::runtime_error(
+				"component runtime: live resource/async handle limit exceeded");
 	const uint32_t handle = static_cast<uint32_t>(resourceSlots_.size());
 	resourceSlots_.push_back(ResourceSlot{0, WASM::TypeId::kNone,
 			true, true, 0});
@@ -3324,6 +3366,36 @@ uint32_t ComponentRuntime::adoptResourceHandle(ComponentRuntime& source,
 	source.resourceSlots_[handle] = ResourceSlot{};
 	source.freeResourceSlots_.push_back(handle);
 	return adopted;
+}
+
+uint32_t ComponentRuntime::adoptBorrowedResourceHandle(ComponentRuntime& source,
+		uint32_t handle, WASM::TypeId expected, uint32_t scope)
+{
+	if (&source == this)
+		return useResourceHandle(handle, expected, true, scope);
+	if (handle == 0 || handle >= source.resourceSlots_.size()
+			|| !source.resourceSlots_[handle].live)
+		throw std::runtime_error("component runtime: invalid resource handle");
+	const WASM::TypeId targetType = canonicalTypeId(expected);
+	const WASM::TypeId sourceType =
+			source.canonicalTypeId(source.resourceSlots_[handle].typeId);
+	if (expected != WASM::TypeId{WASM::TypeId::kNone}
+			&& targetType != sourceType)
+		throw std::runtime_error("component runtime: resource handle type mismatch");
+	const ResourceSlot moved = source.resourceSlots_[handle];
+	const uint32_t adopted = addHandle();
+	resourceSlots_[adopted] = moved;
+	resourceSlots_[adopted].own = false;
+	resourceSlots_[adopted].borrowScope = scope;
+	if (targetType != WASM::TypeId{WASM::TypeId::kNone})
+		resourceSlots_[adopted].typeId = targetType;
+	return adopted;
+}
+
+uint32_t ComponentRuntime::adoptStreamFutureHandle(ComponentRuntime& source,
+		uint32_t handle, bool future)
+{
+	return async_.adoptEndpointFrom(source.async_, handle, future);
 }
 
 WASM::TypeId ComponentRuntime::canonicalTypeId(WASM::TypeId id) const
@@ -4377,17 +4449,11 @@ uint32_t ComponentRuntime::useResourceHandle(uint32_t handle,
 	const ResourceSlot original = resourceSlots_[handle];
 	if (!borrow)
 		return handle;
-	if (!original.own)
-		throw std::runtime_error("component runtime: cannot lend a borrowed handle");
-	uint32_t borrowed;
-	if (!freeResourceSlots_.empty()) {
-		borrowed = freeResourceSlots_.back();
-		freeResourceSlots_.pop_back();
-		resourceSlots_[borrowed] = ResourceSlot{};
-	} else {
-		borrowed = static_cast<uint32_t>(resourceSlots_.size());
-		resourceSlots_.push_back(ResourceSlot{});
-	}
+	// A borrow may itself be lent: the source slot stays live in its owning
+	// table and this runtime gets a fresh borrowed slot tied to `scope`. This is
+	// the canonical ABI's `add_borrow`, and it is what makes a borrowed handle
+	// received across a component boundary usable by the callee.
+	const uint32_t borrowed = addHandle();
 	ResourceSlot& slot = resourceSlots_[borrowed];
 	slot.representation = original.representation;
 	slot.typeId = canonicalTypeId(original.typeId);

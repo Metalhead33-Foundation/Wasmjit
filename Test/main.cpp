@@ -2233,11 +2233,17 @@ TEST_CASE("component runtime resource handles")
 	const uint32_t borrow = runtime.useResourceHandle(handle, resourceType, true,
 			scope);
 	runtime.validateResourceHandle(borrow, resourceType);
-	// A borrow cannot itself be lent, and it dies with its scope.
-	REQUIRE_THROWS_AS(runtime.useResourceHandle(borrow, resourceType, true, scope),
-			std::runtime_error);
+	// A borrow may be re-lent: the source slot stays live and a fresh borrowed
+	// slot is created in the same scope. This is what lets a callee use a
+	// borrowed handle received from another component.
+	const uint32_t reborrow = runtime.useResourceHandle(borrow, resourceType,
+			true, scope);
+	REQUIRE(reborrow != borrow);
+	runtime.validateResourceHandle(reborrow, resourceType);
 	runtime.endBorrowScope(scope);
 	REQUIRE_THROWS_AS(runtime.validateResourceHandle(borrow, resourceType),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(runtime.validateResourceHandle(reborrow, resourceType),
 			std::runtime_error);
 
 	// Use-after-drop and double-drop are traps; the validator covers the
@@ -2251,6 +2257,149 @@ TEST_CASE("component runtime resource handles")
 	REQUIRE_THROWS_AS(runtime.validateResourceHandle(handle, resourceType),
 			std::runtime_error);
 }
+
+TEST_CASE("component runtime transfers stream endpoints between instances")
+{
+	auto artifact = loadTestArtifact("component_runtime_stream");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	WASM::ComponentRuntime source(compiler, *component);
+	WASM::ComponentRuntime target(compiler, *component);
+	uint8_t sourceBytes[4] = {9, 8, 7, 6};
+	uint8_t targetBytes[4] = {};
+	WASM::LinearMemory sourceMemory{};
+	sourceMemory.memoryBase = sourceBytes;
+	sourceMemory.memorySize = sizeof(sourceBytes);
+	sourceMemory.pageSize = 0x10000;
+	WASM::LinearMemory targetMemory{};
+	targetMemory.memoryBase = targetBytes;
+	targetMemory.memorySize = sizeof(targetBytes);
+	targetMemory.pageSize = 0x10000;
+
+	const auto [readable, writable] = source.newStreamFuture(false, 4);
+	const uint32_t moved = target.adoptStreamFutureHandle(source, readable, false);
+	source.asyncWrite(writable, sourceMemory, 0, 1, false);
+	target.asyncRead(moved, targetMemory, 0, 1, false);
+	REQUIRE(targetBytes[0] == 9);
+	REQUIRE(targetBytes[3] == 6);
+	target.asyncDrop(moved, WASM::ComponentEndDirection::Readable);
+	source.asyncDrop(writable, WASM::ComponentEndDirection::Writable);
+}
+
+
+TEST_CASE("component resource borrows transfer between runtimes")
+{
+	auto artifact = loadTestArtifact("component_runtime_resource");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	WASM::ComponentRuntime source(compiler, *component);
+	WASM::ComponentRuntime target(compiler, *component);
+	const WASM::TypeId resourceType = component->typeId(0);
+	REQUIRE_FALSE(resourceType.isNone());
+	const uint32_t owned = source.newResourceHandle(resourceType, 99);
+	const uint32_t scope = target.beginBorrowScope();
+	const uint32_t borrowed = target.adoptBorrowedResourceHandle(source, owned,
+			resourceType, scope);
+	target.validateResourceHandle(borrowed, resourceType);
+	source.validateResourceHandle(owned, resourceType);
+	const uint32_t reborrow = target.useResourceHandle(borrowed, resourceType,
+			true, scope);
+	REQUIRE(reborrow != borrowed);
+	target.validateResourceHandle(reborrow, resourceType);
+	target.endBorrowScope(scope);
+	REQUIRE_THROWS_AS(target.validateResourceHandle(borrowed, resourceType),
+			std::runtime_error);
+	REQUIRE_THROWS_AS(target.validateResourceHandle(reborrow, resourceType),
+			std::runtime_error);
+	source.validateResourceHandle(owned, resourceType);
+	source.dropResourceHandle(owned);
+}
+
+TEST_CASE("component resource handle table budget rejects exhaustion")
+{
+	auto artifact = loadTestArtifact("component_runtime_resource");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	WASM::ComponentInstanceOptions options;
+	options.maxLiveHandles = 3;
+	WASM::ComponentRuntime runtime(compiler, *component, {}, {}, {}, {}, options);
+	const WASM::TypeId resourceType = component->typeId(0);
+	REQUIRE_FALSE(resourceType.isNone());
+	REQUIRE(runtime.newResourceHandle(resourceType, 1) > 0);
+	REQUIRE(runtime.newResourceHandle(resourceType, 2) > 0);
+	REQUIRE_THROWS_AS(runtime.newResourceHandle(resourceType, 3),
+			std::runtime_error);
+}
+
+TEST_CASE("component async endpoint transfer keeps the channel shared")
+{
+	uint32_t nextSource = 1;
+	uint32_t nextTarget = 1;
+	WASM::ComponentAsyncState source([&] { return nextSource++; },
+			[](uint32_t) {});
+	WASM::ComponentAsyncState target([&] { return nextTarget++; },
+			[](uint32_t) {});
+
+	uint8_t sourceBytes[4] = {1, 2, 3, 4};
+	uint8_t targetBytes[4] = {};
+	WASM::LinearMemory sourceMemory{};
+	sourceMemory.memoryBase = sourceBytes;
+	sourceMemory.memorySize = sizeof(sourceBytes);
+	sourceMemory.pageSize = 0x10000;
+	WASM::LinearMemory targetMemory{};
+	targetMemory.memoryBase = targetBytes;
+	targetMemory.memorySize = sizeof(targetBytes);
+	targetMemory.pageSize = 0x10000;
+
+	const auto [readable, writable] = source.newStreamFuture(false, 4);
+	const uint32_t movedReadable = target.adoptEndpointFrom(source, readable,
+			false);
+	REQUIRE(source.endpointOrNull(readable) == nullptr);
+	REQUIRE(target.endpointOrNull(movedReadable) != nullptr);
+	REQUIRE(source.write(writable, sourceMemory, 0, 1, false)
+			== WASM::packCopyResult(WASM::ComponentCopyResult::Completed, 1));
+	REQUIRE(target.read(movedReadable, targetMemory, 0, 1, false)
+			== WASM::packCopyResult(WASM::ComponentCopyResult::Completed, 1));
+	REQUIRE(targetBytes[0] == 1);
+	REQUIRE(targetBytes[1] == 2);
+	REQUIRE(targetBytes[2] == 3);
+	REQUIRE(targetBytes[3] == 4);
+	target.drop(movedReadable, WASM::ComponentEndDirection::Readable);
+	source.drop(writable, WASM::ComponentEndDirection::Writable);
+
+	// A blocked read in the receiving runtime is completed by the sender's write
+	// through the shared peer endpoint, not only by a same-runtime helper.
+	const auto [blockedReadable, blockedWritable] = source.newStreamFuture(false, 4);
+	const uint32_t movedBlocked = target.adoptEndpointFrom(source, blockedReadable,
+			false);
+	REQUIRE(target.read(movedBlocked, targetMemory, 0, 1, true) == WASM::kBlocked);
+	source.write(blockedWritable, sourceMemory, 0, 1, false);
+	REQUIRE(targetBytes[0] == 1);
+	REQUIRE(targetBytes[3] == 4);
+	REQUIRE(target.endpointOrNull(movedBlocked)->hasPendingEvent());
+	target.drop(movedBlocked, WASM::ComponentEndDirection::Readable);
+	source.drop(blockedWritable, WASM::ComponentEndDirection::Writable);
+
+	const auto [futureReadable, futureWritable] = source.newStreamFuture(true, 4);
+	const uint32_t movedFuture = target.adoptEndpointFrom(source, futureReadable,
+			true);
+	source.write(futureWritable, sourceMemory, 0, 1, false);
+	target.read(movedFuture, targetMemory, 0, 1, false);
+	REQUIRE(targetBytes[0] == 1);
+	REQUIRE(targetBytes[3] == 4);
+	target.drop(movedFuture, WASM::ComponentEndDirection::Readable);
+	source.drop(futureWritable, WASM::ComponentEndDirection::Writable);
+}
+
 
 TEST_CASE("component runtime links host component function imports")
 {

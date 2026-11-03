@@ -162,7 +162,10 @@ component-level sorts are named (`core func`/`table`/`memory`/`global`/`type`/
   reference implementation reserves index `0` as a sentinel, caps the table at
   `2**28 - 1` (leaving the top 4 bits free for guest tagging) and keeps a free
   list of freed slots. `own` transfers ownership, `borrow` is scoped and must not
-  outlive its call.
+  outlive its call. A component boundary rebases the value into the receiving
+  instance's table: `own` moves the slot, `borrow` copies a scoped borrow slot
+  (a borrow may itself be re-lent), and a stream/future endpoint moves with its
+  channel shared by both ends.
 - **Validation** is up-front and structural: links (`with` arguments) are checked
   for type compatibility, `alias` sorts are restricted as in §2.2, resource type
   definitions are **not** allowed inside `componenttype`/`instancetype` except
@@ -340,7 +343,7 @@ supplied by the embedder's `ComponentExecutor`.
 
 ## 4. What is in the tree today
 
-**Snapshot (2026-11-03, working tree; no commit yet).** Everything below is a kind-2 statement under `docs/FRESHNESS.md` §2.2, so the whole section carries one stamp rather than a date per sentence. Measured with `build/Desktop-Debug/Test/WasmJit` (**17,355 assertions / 578 cases**) and `[component-corpus]` (**516 verdict cases; 0 reject-side, 0 accept-side**); `[component-execution]` additionally constructs **140** accepted artifacts and executes every extracted upstream scalar row, including the resource-handle-table groups. Before changing a count below, re-run those and `docs/FRESHNESS.md` §8; if a sentence disagrees with the runs, the sentence is stale.
+**Snapshot (2026-11-03, working tree; no commit yet).** Everything below is a kind-2 statement under `docs/FRESHNESS.md` §2.2, so the whole section carries one stamp rather than a date per sentence. Measured with `build/Desktop-Debug/Test/WasmJit` (**17,386 assertions / 582 cases**) and `[component-corpus]` (**516 verdict cases; 0 reject-side, 0 accept-side**); `[component-execution]` additionally constructs **140** accepted artifacts and executes every extracted upstream scalar row, including the resource-handle-table groups. Before changing a count below, re-run those and `docs/FRESHNESS.md` §8; if a sentence disagrees with the runs, the sentence is stale.
 
 ### 4.1 Short answer: an honest rejection (CM-0), plus a parser (CM-1a/CM-1b)
 
@@ -431,7 +434,8 @@ embedder-supplied `ComponentExecutor` path described in §4.3 and §5.
   walker. It also exposes paired stream/future endpoints, read/write/cancel/drop/
   forward, host-created resource handles, and `callAsync`/`runExecutorUntilIdle`
   for non-blocking host calls. A component host callback can recover its caller
-  through `currentComponentHostContext()`.
+  through `currentComponentHostContext()`. `ComponentInstanceOptions::maxLiveHandles`
+  bounds the per-instance resource/async handle table.
 - **Validator/runtime acceptance now matches for the implemented paths.**
   Component-sort imports, bag re-exports of a component sort and async results
   beyond `MAX_FLAT_PARAMS` were closed by CM-22; `ComponentFeatures` prevents a
@@ -443,7 +447,9 @@ embedder-supplied `ComponentExecutor` path described in §4.3 and §5.
   imports/start (**140** checked); it also runs the extracted upstream
   `assert_return`/`assert_trap` scalar commands against a fresh runtime,
   including the resource-handle-table groups. Nothing is skipped by name.
-  `[component-fuzz]` exercises truncated/mutated components.
+  `[component-fuzz]` exercises truncated/mutated components. Cross-instance
+  transfer has direct tests for owning resources, borrowed resources, stream
+  endpoints and futures, plus an explicit handle-table budget-exhaustion test.
 - **WIT is tooling-only, and WASI is host-provided.** The harness parses
   `component wit --json`; there is no `.wit` authoring/resolution path, generated
   host bindings, or world-level import/export mapping. WIT-defined private
@@ -603,6 +609,12 @@ upstream test suite at the pinned revision rather than the specification itself.
 | Lifecycle | **matured 2026-11-01:** `ComponentRuntime::~ComponentRuntime` calls `ModuleInstantiator::releaseInstance` for every core instance it created | — |
 | Multi-agent | **supported through the embedder** (`CMD3`): the installed `ComponentExecutor` seam receives `push`/`runUntilIdle`/`waitForWork`/`wake`/`suspendCurrent`, owns `thread.index`/`available-parallelism`, and the runtime has a thread table plus subtask lowering; an embedder that wants agents installs a concurrent executor per instance. The engine owns no scheduler or thread pool | — (an ergonomic scheduler wrapper belongs to an embedder, not this note) |
 
+**2026-11-03:** cross-instance `own` and `borrow` handle transfer, stream/future
+endpoint transfer with shared channels, and the per-instance handle-table cap are
+implemented and covered by the direct tests named in §8. The remaining ceiling is
+breadth of execution conformance (structured/async upstream scripts and host
+adapters), not a known handle-table failure.
+
 Two behaviours **were open gaps until 2026-11-01** (`CM11`, `CM12` above, both now closed and tested), and one is a deliberate
 catch-all. Each refusal names itself, so none is a silent mis-execution:
 
@@ -676,6 +688,7 @@ caller reuses the callee's buffer.
 | **CM-18 — Async/resource edge cases** ✅ | `CM24`: task cancellation/backpressure, subtask state machine with packed `STARTING` handles, blocked stream/future copies, executor `waitForWork`/`wake`/`suspendCurrent` hooks, thread table, and routed `thread.*` builtins. | `CM24` | **Done 2026-11-02:** `[component-async]` covers task/subtask transitions, deferred lower and thread entries; no path silently drops a pending copy. |
 | **CM-19 — 1.0 refinements** ✅ | `CM25`: lenient `component-name` parsing, subtyping conformance matrix, multi-memory core fixture, pointer-size-aware string/list/map flattening and a memory64 string signature fixture; JS goes through `HostBridge`/`nativeImport`. | `CM25` | **Done 2026-11-02:** `[component-name]`, `[component-subtyping]`, `[component-execution]` and the memory64/multi-memory fixtures pass. |
 | **CM-20 — Embedder contracts** ✅ | `CM26`: `ComponentExecutor` is the documented multi-agent scheduling seam; WIT is build-time and WASI/host imports are embedder-owned; `FRESHNESS.md` carries the final stamp. | `CM26` | **Done 2026-11-02:** multi-agent is documented as an embedder-supplied `ComponentExecutor` path; `[docs]`, `[layering]` and the full suite pass. |
+| **CM-27 — Cross-instance handle transfer and bounds** ✅ | `CM-27`: owning and borrowed resource handles rebase into the receiving instance's table; borrows may be re-lent and are scoped; stream/future endpoints move with a shared channel; `ComponentInstanceOptions::maxLiveHandles` bounds the shared resource/async handle table. | CM6, CM18 | **Done 2026-11-03:** direct borrow, endpoint, blocked-copy and budget-exhaustion tests pass; `[component-execution]` remains green. |
 | **(non-goals)** | WIT private-type subtyping, and engine-side WASI 0.2 implementations (WASI is host-provided). WIT value imports/exports are build-time WIT and binary value/import support is covered by `CM17`. | CM9 | — |
 
 ## 8. Indicative test survey
@@ -705,6 +718,7 @@ asserted separately (see the `component-corpus` row).
 | manual test, CM-7 | **pass (scalar)** | `component script harness invokes a component` feeds a component binary through `component_runtime.wasm` and checks a scalar `assert_return`. |
 | upstream instantiability, CM24 | **pass** | `[component-execution]` parses every accepted artifact and constructs each component with no host imports/start (**140** checked); no accepted group is named as a residual. |
 | upstream scalar execution, CM24/CM26 | **pass** | `[component-execution]` runs the extracted `execution.tsv` `invoke`/`assert_return`/`assert_trap` commands, including scalar arguments and the resource-handle-table groups. |
+| cross-instance handle transfer, CM-27 | **pass** | `component resource borrows transfer between runtimes`, `component async endpoint transfer keeps the channel shared`, `component runtime transfers stream endpoints between instances`, and `component resource handle table budget rejects exhaustion` exercise owning/borrowed resources, stream/future endpoints and the handle cap. |
 | async/resource edge transitions, CM24 | **pass** | `[component-async]` covers task cancellation request/settle, subtask states and the `BLOCKED` cancel sentinel, deferred lower with packed `STARTING` handles, thread-table routing, stream/future copies and the async lift/lower convention. |
 | name metadata, CM25 | **pass** | `[component-name]` injects a valid and a malformed `component-name` custom section; the valid name is exposed and the malformed one is ignored without rejecting the component. |
 

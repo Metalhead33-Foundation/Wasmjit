@@ -63,6 +63,10 @@ struct ComponentInstanceOptions {
 	//! host entries are serialized by the instance and guest async work remains
 	//! executor-driven.
 	bool allowConcurrentCalls = false;
+	//! Upper bound on live component handles (resources, stream/future ends,
+	//! waitable sets, subtasks and error contexts in the shared table). Zero
+	//! selects the runtime default.
+	std::uint32_t maxLiveHandles = 0;
 };
 
 //! One asynchronous component invocation.

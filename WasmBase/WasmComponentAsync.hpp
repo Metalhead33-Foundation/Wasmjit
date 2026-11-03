@@ -359,12 +359,23 @@ class ComponentAsyncEndpoint : public ComponentWaitable {
 public:
 	//! Creates an endpoint for `handle` on `channel` in `direction`.
 	ComponentAsyncEndpoint(ComponentWaitableKind kind, uint32_t handle,
-			ComponentEndDirection direction, ComponentAsyncChannel* channel)
+			ComponentEndDirection direction,
+			std::shared_ptr<ComponentAsyncChannel> channel)
 		: ComponentWaitable(kind), handle_(handle), direction_(direction),
-		  channel_(channel) {}
+		  channel_(std::move(channel)) {}
+	//! Compatibility overload for an endpoint over an externally owned channel.
+	ComponentAsyncEndpoint(ComponentWaitableKind kind, uint32_t handle,
+			ComponentEndDirection direction, ComponentAsyncChannel* channel)
+		: ComponentAsyncEndpoint(kind, handle, direction,
+				channel != nullptr
+						? std::shared_ptr<ComponentAsyncChannel>(channel,
+								[](ComponentAsyncChannel*) {})
+						: nullptr) {}
 
 	//! The endpoint's Canonical ABI handle.
 	uint32_t handle() const { return handle_; }
+	//! Updates the Canonical ABI handle after a cross-instance transfer.
+	void setHandle(uint32_t handle) { handle_ = handle; }
 	//! Whether this end reads or writes the channel.
 	ComponentEndDirection direction() const { return direction_; }
 	//! The endpoint's current copy state.
@@ -373,9 +384,29 @@ public:
 	void setState(ComponentEndState state) { state_ = state; }
 
 	//! The channel both ends share.
-	ComponentAsyncChannel* channel() const { return channel_; }
+	ComponentAsyncChannel* channel() const { return channel_.get(); }
+	//! Shared ownership of the channel after an endpoint transfer.
+	const std::shared_ptr<ComponentAsyncChannel>& channelOwner() const { return channel_; }
 	//! Re-points the endpoint at another channel.
-	void setChannel(ComponentAsyncChannel* channel) { channel_ = channel; }
+	void setChannel(std::shared_ptr<ComponentAsyncChannel> channel)
+	{
+		channel_ = std::move(channel);
+	}
+	//! Compatibility overload for an externally owned channel.
+	void setChannel(ComponentAsyncChannel* channel)
+	{
+		channel_ = channel != nullptr
+				? std::shared_ptr<ComponentAsyncChannel>(channel,
+						[](ComponentAsyncChannel*) {})
+				: nullptr;
+	}
+	//! Records the other endpoint of the pair, including across runtimes.
+	void setPeer(std::weak_ptr<ComponentAsyncEndpoint> peer)
+	{
+		peer_ = std::move(peer);
+	}
+	//! The other endpoint, or null after it was dropped.
+	ComponentAsyncEndpoint* peer() const { return peer_.lock().get(); }
 
 	bool takeEvent(ComponentAsyncEvent& event) override
 	{
@@ -428,7 +459,8 @@ public:
 private:
 	uint32_t handle_ = 0; //!< The Canonical ABI handle of the endpoint.
 	ComponentEndDirection direction_; //!< Whether this endpoint reads or writes.
-	ComponentAsyncChannel* channel_ = nullptr; //!< The channel this endpoint belongs to.
+	std::shared_ptr<ComponentAsyncChannel> channel_; //!< Shared channel ownership.
+	std::weak_ptr<ComponentAsyncEndpoint> peer_; //!< The paired end, if still live.
 	ComponentEndState state_ = ComponentEndState::Idle; //!< The lifecycle state of the endpoint.
 	bool hasPendingEvent_ = false; //!< True while `pendingEvent_` is deliverable.
 	ComponentAsyncEvent pendingEvent_{}; //!< The event waiting to be taken.
@@ -519,24 +551,22 @@ public:
 	{
 		const uint32_t readable = allocate_();
 		const uint32_t writable = allocate_();
-		auto channel = std::make_unique<ComponentAsyncChannel>(elementSize, future);
-		ComponentAsyncChannel* raw = channel.get();
-		channelStorage_.push_back(std::move(channel));
-		channels_[readable] = raw;
-		channels_[writable] = raw;
+		auto channel = std::make_shared<ComponentAsyncChannel>(elementSize, future);
+		channels_[readable] = channel.get();
+		channels_[writable] = channel.get();
 
-		auto readEnd = std::make_unique<ComponentAsyncEndpoint>(
+		auto readEnd = std::make_shared<ComponentAsyncEndpoint>(
 				future ? ComponentWaitableKind::FutureRead
 						: ComponentWaitableKind::StreamRead,
-				readable, ComponentEndDirection::Readable, raw);
-		auto writeEnd = std::make_unique<ComponentAsyncEndpoint>(
+				readable, ComponentEndDirection::Readable, channel);
+		auto writeEnd = std::make_shared<ComponentAsyncEndpoint>(
 				future ? ComponentWaitableKind::FutureWrite
 						: ComponentWaitableKind::StreamWrite,
-				writable, ComponentEndDirection::Writable, raw);
-		endpoints_.emplace(readable, std::move(readEnd));
-		endpoints_.emplace(writable, std::move(writeEnd));
-		readableOf_[writable] = readable;
-		writableOf_[readable] = writable;
+				writable, ComponentEndDirection::Writable, channel);
+		readEnd->setPeer(writeEnd);
+		writeEnd->setPeer(readEnd);
+		endpoints_.emplace(readable, readEnd);
+		endpoints_.emplace(writable, writeEnd);
 		return {readable, writable};
 	}
 
@@ -715,7 +745,7 @@ public:
 			channel->setWritableAlive(false);
 
 		if (ComponentAsyncEndpoint* peer = peerOf(handle); peer != nullptr) {
-			peer->setChannel(channel);
+			peer->setChannel(end.channelOwner());
 			peer->setPending(ComponentAsyncEvent{eventCode(peer->kind()),
 					peer->handle(),
 					packCopyResult(ComponentCopyResult::Dropped, 0)});
@@ -752,14 +782,18 @@ public:
 
 		ComponentAsyncChannel* source = readable.channel();
 		ComponentAsyncChannel* destination = writable.channel();
+		const std::shared_ptr<ComponentAsyncChannel> sourceOwner =
+				readable.channelOwner();
+		const std::shared_ptr<ComponentAsyncChannel> destinationOwner =
+				writable.channelOwner();
 		while (!source->queue().empty()) {
 			destination->queue().push_back(std::move(source->queue().front()));
 			source->queue().pop_front();
 		}
 		if (ComponentAsyncEndpoint* sourceWriter = peerOf(readableHandle);
 				sourceWriter != nullptr)
-			sourceWriter->setChannel(destination);
-		writable.setChannel(source);
+			sourceWriter->setChannel(destinationOwner);
+		writable.setChannel(sourceOwner);
 	}
 
 	//! Removes a handle without notifying the peer. Used by `forward`, where the
@@ -774,8 +808,38 @@ public:
 			static_cast<ComponentWaitableSet*>(it->second->waitableSet())
 					->remove(it->second.get());
 		endpoints_.erase(it);
-		channels_.erase(handle);
+		if (channels_.count(handle) != 0)
+			channels_.erase(handle);
 		release_(handle);
+	}
+
+	//! Moves one stream/future endpoint from another component's handle table
+	//! into this one. The channel stays shared with the peer endpoint, so either
+	//! runtime can wake the other after data moves.
+	/** \brief Transfers unique ownership of an idle endpoint. \param source Runtime that currently owns the endpoint. \param handle Source endpoint handle. \param future true when the expected type is a future. \return The endpoint's new handle in this runtime. \throws std::runtime_error for an invalid, busy or wrong-kind endpoint. */
+	uint32_t adoptEndpointFrom(ComponentAsyncState& source, uint32_t handle,
+			bool future)
+	{
+		if (&source == this)
+			return handle;
+		const auto it = source.endpoints_.find(handle);
+		if (it == source.endpoints_.end())
+			throw std::runtime_error("component async: invalid stream/future handle");
+		const std::shared_ptr<ComponentAsyncEndpoint> end = it->second;
+		if (end->channel()->isFuture() != future)
+			throw std::runtime_error(
+					"component async: stream/future endpoint kind mismatch");
+		if (end->state() != ComponentEndState::Idle)
+			throw std::runtime_error(
+					"component async: cannot transfer a busy stream/future endpoint");
+		const uint32_t adopted = allocate_();
+		source.endpoints_.erase(it);
+		source.channels_.erase(handle);
+		end->setHandle(adopted);
+		endpoints_.emplace(adopted, end);
+		channels_[adopted] = end->channel();
+		source.release_(handle);
+		return adopted;
 	}
 
 
@@ -1178,13 +1242,8 @@ public:
 	/** \brief Finds the paired endpoint for a stream/future handle. \param handle Endpoint handle. \return Peer endpoint, or nullptr if unavailable. */
 	ComponentAsyncEndpoint* peerOf(uint32_t handle)
 	{
-		auto it = writableOf_.find(handle);
-		if (it != writableOf_.end())
-			return endpointOrNull(it->second);
-		it = readableOf_.find(handle);
-		if (it != readableOf_.end())
-			return endpointOrNull(it->second);
-		return nullptr;
+		const auto it = endpoints_.find(handle);
+		return it == endpoints_.end() ? nullptr : it->second->peer();
 	}
 
 
@@ -1343,11 +1402,8 @@ private:
 	//! Outer activations saved by `beginTask`, most recent last.
 	std::vector<std::unique_ptr<ComponentTask>> taskStack_;
 	uint32_t nextTaskId_ = 1; //!< Serial for nested task ids.
-	std::unordered_map<uint32_t, std::unique_ptr<ComponentAsyncEndpoint>> endpoints_; //!< Endpoints, keyed by handle.
-	std::vector<std::unique_ptr<ComponentAsyncChannel>> channelStorage_; //!< Owns the channels referenced by `channels_`.
+	std::unordered_map<uint32_t, std::shared_ptr<ComponentAsyncEndpoint>> endpoints_; //!< Endpoints, keyed by handle.
 	std::unordered_map<uint32_t, ComponentAsyncChannel*> channels_; //!< Channels, keyed by their handle.
-	std::unordered_map<uint32_t, uint32_t> readableOf_; //!< writable -> readable
-	std::unordered_map<uint32_t, uint32_t> writableOf_; //!< readable -> writable
 	//! Waitable sets, keyed by their Canonical ABI handle.
 	std::unordered_map<uint32_t, ComponentWaitableSet> waitableSets_;
 	//! Error-context strings, keyed by their Canonical ABI handle.

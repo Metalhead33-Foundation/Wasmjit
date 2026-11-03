@@ -277,7 +277,7 @@ two, it is the difference between isolation and corruption.
 | **Capability/version query** | none (P4) | `runtime.version()`, `runtime.abiVersion()`, `runtime.profile()`, `runtime.supports()`, `runtime.backendName()` — also what the plugin loader needs ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md)) |
 | **Lifetime rule** | "do not destroy the instance before its callers" in prose | The runtime owns instances and modules, so the rule becomes structural |
 | **Instance cardinality** | Nothing stops a caller instantiating twice; the rule lives only in prose | `instantiate()` is idempotent (same `Module` → the same instance) and a second *instance* is not expressible through the API ([`THREADSAFETY.md`](THREADSAFETY.md) §3.1) |
-| **Component execution settings** | A component's embedded core modules got default bridge/profile/policy/stack/concurrency | `instantiateComponent` forwards the runtime settings, and the option-taking overload takes `ComponentInstanceOptions` explicitly |
+| **Component execution settings** | A component's embedded core modules got default bridge/profile/policy/stack/concurrency | `instantiateComponent` forwards the runtime settings, and the option-taking overload takes `ComponentInstanceOptions` explicitly, including the per-instance resource/async handle-table bound |
 | **Component host facade** | Only exported functions/values/instances/types and flattened core entities | Paired stream/future endpoints, host resources, `callAsync`/`runExecutorUntilIdle`, core tags and `currentComponentHostContext()` are part of the installed `WasmComponentInstance.hpp` surface |
 
 ### 4.6 Profiles, diagnostics and the other defaults the runtime owns

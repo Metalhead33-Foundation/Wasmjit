@@ -1238,7 +1238,9 @@ The component feature/API tests are:
 - `[component-execution]` — parses every accepted artifact, constructs the
   140 components that need no host imports/start, then executes the upstream
   scalar `assert_return`/`assert_trap` rows from `execution.tsv`, including the
-  resource-handle-table groups with per-instance transfer.
+  resource-handle-table groups with per-instance transfer. The component runtime
+  tests also cover borrowed-resource transfer, stream/future endpoint transfer,
+  and handle-table budget exhaustion.
 - `[component-async]` — task cancellation/subtask states, stream/future copies and
   the async lift/lower calling convention.
 - `[component-name]` — the lenient `component-name` parser: a malformed name is

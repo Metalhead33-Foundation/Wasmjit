@@ -115,7 +115,12 @@ Component async tasks are bounded separately: `ComponentAsyncState::kMaxLiveTask
 (4096 live tasks, including the root activation) refuses `beginTask()` beyond the
 bound, so a re-entrant async lift cannot grow the task stack without limit. This
 is a fixed structural bound, not a charge against the allocation budget; a
-refused task is a runtime error, never an allocation attempt.
+refused task is a runtime error, never an allocation attempt. Component resources
+and async endpoints share one per-instance handle table; `ComponentRuntime::addHandle`
+caps that table with `ComponentInstanceOptions::maxLiveHandles` (default
+1,048,576, zero selects the default) and throws before growing beyond it. The
+same cap covers waitable sets, subtasks, error contexts and borrowed slots, so a
+guest loop cannot make a component allocate host handle storage without bound.
 
 The budget is a struct, not a single number (`CFG-2`/`CFG-3`): under the total a
 host may cap **one linear memory** (`singleLinearMemoryBytes`), **all linear

@@ -175,6 +175,12 @@ public:
 	/** \brief Moves an owning resource handle from another runtime into this one. \param source Runtime that owns the handle. \param handle Handle in the source table. \param expected Expected canonical resource type. \return The corresponding handle in this runtime's table. \throws std::runtime_error when the source handle is invalid, borrowed, or mistyped. */
 	uint32_t adoptResourceHandle(ComponentRuntime& source, uint32_t handle,
 			WASM::TypeId expected);
+	/** \brief Copies a borrowed resource handle into this runtime's table. \param source Runtime holding the source handle. \param handle Source handle. \param expected Expected canonical resource type. \param scope Borrow scope that owns the adopted handle. \return The corresponding borrowed handle in this runtime's table. \throws std::runtime_error when the source handle is invalid or mistyped. */
+	uint32_t adoptBorrowedResourceHandle(ComponentRuntime& source,
+			uint32_t handle, WASM::TypeId expected, uint32_t scope);
+	/** \brief Moves a stream/future endpoint from another runtime into this one. \param source Runtime that owns the endpoint. \param handle Source endpoint handle. \param future true for a future. \return The endpoint's new handle. */
+	uint32_t adoptStreamFutureHandle(ComponentRuntime& source, uint32_t handle,
+			bool future);
 	/** \brief Looks up an exported value by name. \param name Export name. \return Value copy, or nullopt when absent. */
 	std::optional<ComponentValue> exportedValue(std::string_view name) const;
 	/** \brief Looks up an exported instance and copies its export bag. \param name Export name. \return Bag copy, or nullopt when absent. */
