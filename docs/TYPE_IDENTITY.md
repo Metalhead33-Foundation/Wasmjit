@@ -583,7 +583,7 @@ core `Module`.
 ### 12.1 Measured size
 
 Measured on the current toolchain (x86-64, libstdc++, 2026-11-03,
-`79034c0`) with `sizeof`:
+`4d52031`) with `sizeof`:
 
 | type | bytes |
 |------|------:|

@@ -544,7 +544,7 @@ the first two lists has a compile-only translation unit under `Test/headers/`
 | **Internal** (not installed) | 17 | `WasmSection.hpp`, `WasmTypeStore.hpp`, `WasmCanonicalType.hpp`, `WasmTypeRegistry.hpp`, `WasmGcHeap.hpp`, `WasmValidator.hpp`, `WasmValidation.hpp`, `WasmDeterminism.hpp`, `WasmComponent.hpp`, `WasmComponentAbi.hpp`, `WasmComponentAsync.hpp`, `WasmComponentModel.hpp`, `WasmComponentRuntime.hpp`, `WasmComponentSection.hpp`, `WasmComponentValidation.hpp`, `WasmComponentParser.inc`, `WasmLegacyEh.hpp` |
 
 That is **66** header files under `WasmBase/` — 63 `.hpp`, one `.h` and two
-`.inc` — which is what `[tiers]` counts (2026-11-03, `79034c0`). The lists in
+`.inc` — which is what `[tiers]` counts (2026-11-03, `4d52031`). The lists in
 `Test/HeaderTierTests.cpp` are the contract; this table is their readable copy,
 so it is the copy that has to be updated when a header moves.
 

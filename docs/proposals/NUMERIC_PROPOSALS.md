@@ -202,7 +202,7 @@ type, `Value` shape or type-translation case.
 
 ## 8. Indicative test survey
 
-`build/Desktop-Debug/Test/WasmJit` (2026-11-03, `79034c0`):
+`build/Desktop-Debug/Test/WasmJit` (2026-11-03, `4d52031`):
 
 | Script / fixture | passed | failed | skipped | Reading |
 |---|---:|---:|---:|---|

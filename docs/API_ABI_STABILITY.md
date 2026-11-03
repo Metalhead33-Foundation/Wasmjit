@@ -658,8 +658,8 @@ from `build/Desktop-Debug`, for the combined readiness audit
 | `WASM_SPEC_VALIDATE=1`, ASan/TSan (not run today) | documented required runs | Unchanged from the note above; the readiness audit states the same and does not present them as green. |
 
 
-Re-measured on 2026-11-03 for the FP16/M8 slice (`79034c0` plus the working
-tree), from `build/Desktop-Debug` and `build/Desktop-ASan`:
+Re-measured on 2026-11-03 for the FP16/M8 slice (`4d52031`), from
+`build/Desktop-Debug` and `build/Desktop-ASan`:
 
 | Command | Result | Reading |
 |---|---|---|

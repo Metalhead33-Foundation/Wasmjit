@@ -126,7 +126,7 @@ content here.
 ## Measured coverage
 
 `WASM_SPEC_VALIDATE=1` on the curated set (**snapshot 2026-11-03, working tree
-on `79034c0`**):
+on `4d52031`**):
 
 | Kind | Binary cases | Handled | Accepted |
 | --- | ---: | ---: | ---: |

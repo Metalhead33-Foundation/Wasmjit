@@ -494,7 +494,7 @@ binary case (`[validate] <kind> <accepted|rejected|trapped> <file>`). The
 validator itself is documented in [`VALIDATION.md`](VALIDATION.md).
 
 Measured against the curated set (**snapshot 2026-11-03, working tree on
-`79034c0`**):
+`4d52031`**):
 
 | Kind | Binary cases | Handled (pass) | Accepted (fail) | Reading |
 | --- | ---: | ---: | ---: | --- |

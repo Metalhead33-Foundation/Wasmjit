@@ -59,7 +59,7 @@ hardcoded values that were considered".
 
 A kind-2 statement is only allowed in this shape:
 
-> **Snapshot (2026-11-03, working tree on `79034c0`):** the default suite is
+> **Snapshot (2026-11-03, working tree on `4d52031`):** the default suite is
 > 17,544 assertions in 608 cases. Reproduce with `./Test/WasmJit`.
 
 or, inside a table, with the same three pieces in the caption or the column
@@ -427,7 +427,7 @@ test cases**; `[docs]` 1015/2,
 exported symbols. **These are a snapshot, not a promise** — they are here to show
 what the output looks like, and to make a reader notice when it does not.
 
-**Current (2026-11-03, FP16/M8/promoted-spec working tree on `79034c0`):** **17,544
+**Current (2026-11-03, FP16/M8/promoted-spec working tree on `4d52031`):** **17,544
 assertions in 608 test cases**; **77** `.hpp`/`.h` files under the five backend
 directories; **3,089 dynamic / 1,988 strong** exported `libWasmBase` symbols;
 `[component-corpus]`/`[component-subtyping]` 520/1,
