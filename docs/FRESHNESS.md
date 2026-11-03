@@ -429,7 +429,7 @@ what the output looks like, and to make a reader notice when it does not.
 
 **Current (2026-11-03, FP16/M8/promoted-spec working tree on `4d52031`):** **17,544
 assertions in 608 test cases**; **77** `.hpp`/`.h` files under the five backend
-directories; **3,089 dynamic / 1,988 strong** exported `libWasmBase` symbols;
+directories; **3,093 dynamic / 1,992 strong** exported `libWasmBase` symbols;
 `[component-corpus]`/`[component-subtyping]` 520/1,
 `[component-execution]` 23/3 (140 accepted artifacts constructed plus the
 upstream primitive-return/trap sweep, including JSON string/flags rows), `[component-async]` 94/8,

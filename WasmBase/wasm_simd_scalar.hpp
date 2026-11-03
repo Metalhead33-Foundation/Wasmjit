@@ -562,6 +562,29 @@ void wasm_v128_load(const void* src, void* out);
 //! \brief `v128.store`: copies 16 bytes to the caller-checked address.
 //! \param dst the caller-checked destination address \param value the vector to store
 void wasm_v128_store(void* dst, const void* value);
+//! \brief Fuses a pending `v128.load` into a unary helper call.
+//! \param op The unary helper entry point (`(const void*, void*)`).
+//! \param src The caller-checked source address.
+//! \param out Receives the 16-byte result.
+void wasm_v128_load_unary(void* op, const void* src, void* out);
+//! \brief Fuses a pending left `v128.load` into a binary helper call.
+//! \param op The binary helper entry point (`(const void*, const void*, void*)`).
+//! \param src The caller-checked source address (left operand).
+//! \param other The right operand.
+//! \param out Receives the 16-byte result.
+void wasm_v128_load_binary(void* op, const void* src, const void* other, void* out);
+//! \brief Fuses a pending right `v128.load` into a binary helper call.
+//! \param op The binary helper entry point (`(const void*, const void*, void*)`).
+//! \param other The left operand.
+//! \param src The caller-checked source address (right operand).
+//! \param out Receives the 16-byte result.
+void wasm_v128_load_binary_rhs(void* op, const void* other, const void* src, void* out);
+//! \brief Fuses two pending `v128.load` operands into a binary helper call.
+//! \param op The binary helper entry point (`(const void*, const void*, void*)`).
+//! \param a The caller-checked left source address.
+//! \param b The caller-checked right source address.
+//! \param out Receives the 16-byte result.
+void wasm_v128_load2_binary(void* op, const void* a, const void* b, void* out);
 //! \brief `v128.load8x8_s`: 8 bytes, sign-extended into 16-bit lanes.
 //! \param src the caller-checked source address \param out receives the 16 bytes
 void wasm_v128_load8x8_s(const void* src, void* out);

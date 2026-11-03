@@ -75,6 +75,7 @@ SOURCES += \
         WasmVersion.cpp \
         wasm_atomic.cpp \
         wasm_f16.cpp \
+        wasm_simd_fused.cpp \
         wasm_simd_scalar.cpp \
         wasm_simd_vector.cpp
 

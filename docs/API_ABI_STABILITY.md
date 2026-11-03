@@ -61,7 +61,7 @@ without a deliberate version bump**. For this milestone the frozen set is:
 | S3 | GC object layout: header words, per-type size/alignment, array data offset | [`WasmGcHeader.hpp`](../WasmBase/WasmGcHeader.hpp); [`proposals/GC.md`](proposals/GC.md) invariant H1 |
 | S4 | The trap entry point and its kind/message convention (a pending status, not `longjmp`) | [`SAFETY.md`](SAFETY.md) §2.6; [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §12 |
 | S5 | The continuation provider ABI (`wasm_cont_*`, status codes, one-shot, wide 16-byte slots) | [`ABI.md`](ABI.md) "Continuations"; [`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md) §10.6 |
-| S6 | The SIMD helper ABI (`const void*` / `void* out`, immediates as scalars) and the f16 helper ABI (`f32` scalars, binary16 lanes) | [`wasm_simd_scalar.hpp`](../WasmBase/wasm_simd_scalar.hpp), [`wasm_f16.hpp`](../WasmBase/wasm_f16.hpp); [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §5–§6 |
+| S6 | The SIMD helper ABI (`const void*` / `void* out`, immediates as scalars) and the f16 helper ABI (`f32` scalars, binary16 lanes) | [`wasm_simd_scalar.hpp`](../WasmBase/wasm_simd_scalar.hpp) (including the four D5 `v128.load` fusion trampolines), [`wasm_f16.hpp`](../WasmBase/wasm_f16.hpp); [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §5–§6 |
 | S7 | The backend seam: `ModuleInstantiator` (the four hooks a code generator implements) and `BackendSession` (the façade an embedder drives without a backend header) | [`WasmModuleInstance.hpp`](../WasmBase/WasmModuleInstance.hpp); [`WasmBackendSession.hpp`](../WasmBase/WasmBackendSession.hpp); [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) |
 | S8 | The embedder's invocation path: `WASM::callCallable` / `callCallableWithResults`, `HostBridge`, `nativeImport<&fn>()` | [`ABI.md`](ABI.md) "Embedder Guide"; [`WasmValue.hpp`](../WasmBase/WasmValue.hpp) |
 | S9 | The diagnostic record/id/schema contract (`wasmjit.diagnostic.v1`) | [`DIAGNOSTICS.md`](DIAGNOSTICS.md) §1 |
@@ -143,8 +143,7 @@ completing WebAssembly. In particular:
   engine findings, but no language is **supported** or rejected — that is `LF-3`
   — and no gate here waits on any of them. A `.wasm` module is the supported
   input, whoever produced it.
-- **No performance target.** `SIMD-L8`'s measured 4.10 ns per `v128` op and the
-  deliberately unbuilt batched path (`D4`) are diagnostics, not gates.
+- **No performance target.** `SIMD-L8`'s measured **3.47 ns per `v128` op** after the D5 peepholes (pre-D5 4.10) and the deliberately unbuilt batched path (`D4`) are diagnostics, not gates.
 - **No new code in this note.** The study reads the tree; it does not change it.
 
 ## 4. How the study measures distance
@@ -669,7 +668,7 @@ Re-measured on 2026-11-03 for the FP16/M8 slice (`4d52031`), from
 | `WASM_SPEC_VALIDATE=1 ./Test/WasmJit` | **17,544 assertions / 608 cases, all passed**; curated negatives **3,275 / 3,277** with the two known `tag` entries | No regression in the strict decoder/validator/linker sweep. |
 | `ASAN_OPTIONS=detect_leaks=0 ./build/Desktop-ASan/Test/WasmJit '~[spec]~[compilation-policy]'` | **17,098 assertions / 397 cases, exit 0**; no ASan memory error | The missing ASan evidence is recorded. LeakSanitizer's reports are confined to LibJIT's uninstrumented context/type caches (1,432,070 bytes / 16,911 allocations); `[compilation-policy]` is excluded because LibJIT's CFG optimizer is impractically slow under ASan. |
 | `./Test/WasmJit '[docs]'` / `'[headerdoc]'` / `'[tiers]'` | **1015 / 2**, **6 / 3**, **245 / 3** | The note shape, header comments and 66-header tier classification hold (including `wasm_f16.hpp`). |
-| `./Test/abi-check.sh build/Desktop-Debug` | **OK** — `libWasmBase` 0 removed / 119 added, `libLibJit` 0 removed / 3 added | The additive-only rule (`G2`) holds; the additions are the f16 helper exports and the two dispatcher overrides. |
+| `./Test/abi-check.sh build/Desktop-Debug` | **OK** — `libWasmBase` 0 removed / 123 added, `libLibJit` 0 removed / 5 added | The additive-only rule (`G2`) holds; the additions are the f16 helper exports, the D5 fusion trampolines and the dispatcher overrides. |
 | `./Test/install-check.sh build/Desktop-Debug` | **OK** — `i32`, `f64`, `i32+i32`, `v128`, `i32+v128` | The installed surface still links and runs. |
 | `doxygen Doxyfile` | **0 warnings** | The new helper header follows the Doxygen shape. |
 

@@ -1750,6 +1750,13 @@ void OpcodeDispatcher::emitDropRefLocals()
 
 jit_value_t OpcodeDispatcher::popValue()
 {
+	jit_value_t value = popValueRaw();
+	materializePendingSimdLoad(value);
+	return value;
+}
+
+jit_value_t OpcodeDispatcher::popValueRaw()
+{
 	if (unreachableCode) {
 		// Operand of an instruction in unreachable code: the Wasm operand stack
 		// is polymorphic there, so synthesize a placeholder and leave the
@@ -1760,6 +1767,18 @@ jit_value_t OpcodeDispatcher::popValue()
 	jit_value_t v = valueStack.back();
 	valueStack.pop_back();
 	return v;
+}
+
+void OpcodeDispatcher::materializePendingSimdLoad(jit_value_t value)
+{
+	const auto it = pendingSimdLoads_.find(value);
+	if (it == pendingSimdLoads_.end())
+		return;
+	const PendingSimdLoad pending = it->second;
+	pendingSimdLoads_.erase(it);
+	const jit_type_t types[1] = {jit_type_void_ptr};
+	jit_value_t args[1] = {pending.src};
+	callSimdOutHelper(pending.helper, pending.out, types, args);
 }
 
 void OpcodeDispatcher::markUnreachable()
@@ -1951,8 +1970,46 @@ void OpcodeDispatcher::emitSimdBinaryHelper(void* helper)
 		popValue();
 		return;
 	}
-	jit_value_t b = popValue();   // wasm's `[v128 v128] -> [v128]`: second on top
-	jit_value_t a = popValue();
+	jit_value_t b = popValueRaw();   // wasm's `[v128 v128] -> [v128]`: second on top
+	jit_value_t a = popValueRaw();
+
+	// D5 producer/consumer fusion: if either operand is a deferred
+	// `v128.load`, load it inside the consumer's helper call instead of
+	// materialising it into a slot first. `popValue` otherwise materialises
+	// deferred loads for every non-fusing consumer.
+	const auto left = pendingSimdLoads_.find(a);
+	const auto right = pendingSimdLoads_.find(b);
+	if (left != pendingSimdLoads_.end() || right != pendingSimdLoads_.end()) {
+		jit_value_t out = newV128Slot();
+		const jit_type_t types[3] = {jit_type_void_ptr, jit_type_void_ptr,
+				jit_type_void_ptr};
+		jit_value_t op = jit_value_create_nint_constant(function, jit_type_void_ptr,
+				reinterpret_cast<jit_nint>(helper));
+		if (left != pendingSimdLoads_.end() && right != pendingSimdLoads_.end()) {
+			const PendingSimdLoad leftLoad = left->second;
+			const PendingSimdLoad rightLoad = right->second;
+			pendingSimdLoads_.erase(left);
+			pendingSimdLoads_.erase(right);
+			jit_value_t args[3] = {op, leftLoad.src, rightLoad.src};
+			callSimdOutHelper(reinterpret_cast<void*>(wasm_v128_load2_binary), out,
+					types, args);
+		} else if (left != pendingSimdLoads_.end()) {
+			const PendingSimdLoad load = left->second;
+			pendingSimdLoads_.erase(left);
+			jit_value_t args[3] = {op, load.src, jit_insn_address_of(function, b)};
+			callSimdOutHelper(reinterpret_cast<void*>(wasm_v128_load_binary), out,
+					types, args);
+		} else {
+			const PendingSimdLoad load = right->second;
+			pendingSimdLoads_.erase(right);
+			jit_value_t args[3] = {op, jit_insn_address_of(function, a), load.src};
+			callSimdOutHelper(reinterpret_cast<void*>(wasm_v128_load_binary_rhs), out,
+					types, args);
+		}
+		pushValue(out);
+		return;
+	}
+
 	jit_value_t out = newV128Slot();
 	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_void_ptr};
 	jit_value_t args[2] = {jit_insn_address_of(function, a), jit_insn_address_of(function, b)};
@@ -1966,7 +2023,22 @@ void OpcodeDispatcher::emitSimdUnaryHelper(void* helper)
 		popValue();
 		return;
 	}
-	jit_value_t a = popValue();
+	jit_value_t a = popValueRaw();
+	const auto pending = pendingSimdLoads_.find(a);
+	if (pending != pendingSimdLoads_.end()) {
+		const PendingSimdLoad load = pending->second;
+		pendingSimdLoads_.erase(pending);
+		jit_value_t out = newV128Slot();
+		const jit_type_t types[2] = {jit_type_void_ptr, jit_type_void_ptr};
+		jit_value_t args[2] = {
+			jit_value_create_nint_constant(function, jit_type_void_ptr,
+					reinterpret_cast<jit_nint>(helper)),
+			load.src};
+		callSimdOutHelper(reinterpret_cast<void*>(wasm_v128_load_unary), out,
+				types, args);
+		pushValue(out);
+		return;
+	}
 	jit_value_t out = newV128Slot();
 	const jit_type_t types[1] = {jit_type_void_ptr};
 	jit_value_t args[1] = {jit_insn_address_of(function, a)};
@@ -2762,8 +2834,13 @@ void OpcodeDispatcher::storeStackTopToSlots(const std::vector<jit_value_t>& slot
 	const size_t available = std::min(slots.size(), valueStack.size());
 	const size_t base = valueStack.size() - available;
 	const size_t slotBase = slots.size() - available;
-	for (size_t i = 0; i < available; ++i)
-		jit_insn_store(function, slots[slotBase + i], valueStack[base + i]);
+	for (size_t i = 0; i < available; ++i) {
+		const jit_value_t value = valueStack[base + i];
+		// A deferred SIMD load must be emitted before its slot is copied into
+		// a branch/block result slot; this is the non-`popValue` path.
+		materializePendingSimdLoad(value);
+		jit_insn_store(function, slots[slotBase + i], value);
+	}
 }
 
 void OpcodeDispatcher::restoreValuesFromSlots(const std::vector<jit_value_t>& slots)
@@ -4206,6 +4283,9 @@ void OpcodeDispatcher::emitFunctionReturn(bool consume)
 	const size_t base = valueStack.size() - n;
 	if (n == 1) {
 		jit_value_t rv = valueStack[base];
+		// This non-consuming path reads the snapshot directly; materialise a
+		// deferred load before the value leaves the function.
+		materializePendingSimdLoad(rv);
 		// Deterministic profile: canonicalise an observable NaN before it leaves
 		// the function (docs/proposals/PROFILES.md PR-3).
 		if (!currentFunc.results.empty()) {
@@ -7783,7 +7863,18 @@ void OpcodeDispatcher::dispatchTableFill(WASM::TableIdx arg) {
 // width is the number of bytes the instruction actually *reads* — that is what
 // the bounds check must cover, and the memarg's alignment plays no part in it.
 void OpcodeDispatcher::dispatchV128Load(WASM::MemArg arg) {
-	emitSimdLoad(arg, 16, reinterpret_cast<void*>(wasm_v128_load));
+	if (unreachableCode) {
+		popValue();
+		return;
+	}
+	// Defer the helper call so a following unary/binary SIMD operation can fuse
+	// it (docs/SIMD_LIBJIT.md §8, D5). `popValue` materialises it for any
+	// consumer that cannot fuse, so the observable semantics are unchanged.
+	jit_value_t src = effectiveMemoryAddress(arg, 16);
+	jit_value_t out = newV128Slot();
+	pendingSimdLoads_.emplace(out, PendingSimdLoad{src, out,
+			reinterpret_cast<void*>(wasm_v128_load)});
+	pushValue(out);
 }
 void OpcodeDispatcher::dispatchV128Load8x8S(WASM::MemArg arg) {
 	emitSimdLoad(arg, 8, reinterpret_cast<void*>(wasm_v128_load8x8_s));
@@ -7850,10 +7941,11 @@ void OpcodeDispatcher::dispatchV128Store64Lane(WASM::MemArg arg1, uint8_t arg2) 
 }
 void OpcodeDispatcher::dispatchV128Const(std::span<uint8_t> arg) {
 	// The 16 immediate bytes are in memory order: bytes 0-7 are the low half,
-	// 8-15 the high half, each little-endian (hazard Y11). Lowered *through the
-	// helper* rather than four inline lane stores, because
-	// `jit_insn_store_relative` does not write a `jit_value_create`d aggregate
-	// (verified; docs/SIMD_LIBJIT.md §6.3).
+	// 8-15 the high half, each little-endian (hazard Y11). The slot is a
+	// LibJIT frame value; write it through its address rather than calling a
+	// helper. `jit_insn_store_relative` cannot write a bare aggregate value,
+	// but it does write through `jit_insn_address_of` (verified; see
+	// docs/SIMD_LIBJIT.md §6.1/§6.3).
 	if (arg.size() < 16)
 		return;
 	uint64_t lo = 0;
@@ -7863,11 +7955,13 @@ void OpcodeDispatcher::dispatchV128Const(std::span<uint8_t> arg) {
 		hi |= static_cast<uint64_t>(arg[8 + i]) << (8u * i);
 	}
 	jit_value_t out = newV128Slot();
-	const jit_type_t types[2] = {jit_type_ulong, jit_type_ulong};
-	jit_value_t args[2] = {
-		jit_value_create_long_constant(function, jit_type_ulong, static_cast<jit_long>(lo)),
-		jit_value_create_long_constant(function, jit_type_ulong, static_cast<jit_long>(hi))};
-	callSimdOutHelper(reinterpret_cast<void*>(wasm_v128_const), out, types, args);
+	jit_value_t addr = jit_insn_address_of(function, out);
+	jit_insn_store_relative(function, addr, 0,
+			jit_value_create_long_constant(function, jit_type_ulong,
+					static_cast<jit_long>(lo)));
+	jit_insn_store_relative(function, addr, 8,
+			jit_value_create_long_constant(function, jit_type_ulong,
+					static_cast<jit_long>(hi)));
 	pushValue(out);
 }
 // `i8x16.shuffle` and `i8x16.swizzle` are both one-vector table lookups. The

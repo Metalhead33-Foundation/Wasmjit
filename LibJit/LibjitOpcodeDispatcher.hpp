@@ -7,6 +7,7 @@
 #include "LibJitTypeTranslation.hpp"
 #include <jit/jit.h>
 #include <span>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -103,6 +104,18 @@ private:
 	void emitDropRefLocals();
 	//! Pop and return the top of the model operand stack (placeholder when unreachable).
 	jit_value_t popValue();
+	//! Pop without materialising a pending SIMD load; only the fusion paths use this.
+	jit_value_t popValueRaw();
+	//! Emit a deferred `v128.load` before a consumer that cannot fuse it.
+	void materializePendingSimdLoad(jit_value_t value);
+	//! A `v128.load` whose helper call is deferred until its consumer is known.
+	struct PendingSimdLoad {
+		jit_value_t src; //!< Already bounds-checked source address.
+		jit_value_t out; //!< Frame slot that will receive the 16 bytes.
+		void* helper; //!< `wasm_v128_load` entry point.
+	};
+	//! Deferred loads keyed by the frame-slot value pushed for them.
+	std::unordered_map<jit_value_t, PendingSimdLoad> pendingSimdLoads_;
 	//! Emits the function's epilogue (a `return`). Does nothing in unreachable
 	//! code or when the model stack is short (dead tail). With `consume` false
 	//! the return operands are left on the model stack (for a conditional

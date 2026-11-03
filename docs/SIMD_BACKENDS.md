@@ -73,7 +73,7 @@ that has real vector registers, a fallback rather than the only path (§6, §8).
 ### 3.1 GNU LibJIT — no SIMD, and no hook to add it
 
 Evidence, read from the installed headers on this machine
-(`/usr/local/include/jit/`, 28 headers, built 2026-02-04):
+(`/usr/local/include/jit/`, 29 headers at the current revision):
 
 - **Type kinds are scalar-only.** `jit-type.h` defines primitives
   (`jit_type_void` … `jit_type_nfloat`, `jit_type_void_ptr`) and the composite
@@ -82,7 +82,7 @@ Evidence, read from the installed headers on this machine
   `jit_type_create_tagged`. `JIT_TYPE_STRUCT`, `JIT_TYPE_UNION`,
   `JIT_TYPE_SIGNATURE`, `JIT_TYPE_PTR` and `JIT_TYPE_FIRST_TAGGED` are the only
   non-primitive kinds — **there is no `JIT_TYPE_VECTOR` and no packed type.**
-- **The opcode table is scalar-only.** `jit-opcode.h` defines **438**
+- **The opcode table is scalar-only.** `jit-opcode.h` defines **450** distinct
   `JIT_OP_*` opcodes, ending at `JIT_OP_LOAD_RELATIVE_STRUCT` /
   `STORE_RELATIVE_STRUCT` / `JIT_OP_MEMCPY` / `JIT_OP_ALLOCA` /
   `JIT_OP_JUMP_TABLE`. The widest shapes are `..._LONG`, `..._FLOAT64` and
@@ -94,8 +94,11 @@ Evidence, read from the installed headers on this machine
 - What *does* exist is enough to build a lowering by hand:
   - `jit_type_create_struct` / `jit_type_set_size_and_alignment`
     (a `v128` can be a 16-byte, 16-byte-aligned synthetic type);
-  - `jit_insn_load_relative` / `jit_insn_store_relative` (lane access into a
-    struct/temp), `jit_insn_load_elem` / `jit_insn_store_elem` (memory lanes);
+  - scalar lane access at a byte offset through `jit_insn_load_relative` /
+    `jit_insn_store_relative`; **an aggregate 16-byte load is not supported**
+    (a test that replaced `v128.load` with `jit_insn_load_relative(...,
+    v128Type())` segfaulted), while `jit_insn_store_relative` through
+    `jit_insn_address_of` now writes `v128.const` directly;
   - `jit_insn_alloca`, and `JIT_OP_MEMCPY` for 16-byte moves;
   - `jit_insn_call_native` — the existing escape hatch this codebase already
     uses for GC and bulk-memory helpers;
@@ -104,7 +107,10 @@ Evidence, read from the installed headers on this machine
 So LibJIT can express the *storage* and *control flow* of `v128` but not a
 single vector arithmetic op. This is precisely the case
 [`proposals/SIMD.md`](proposals/SIMD.md) §3 anticipates: "no hardware SIMD is
-required … a 16-byte struct in memory is a valid representation."
+required … a 16-byte struct in memory is a valid representation." **Native
+SIMD lowering in LibJIT is impossible, not deferred**: `SIMD-8` applies only to
+a backend with a vector surface (SLJIT/AsmJit); LibJIT's helper implementation
+is final.
 
 ### 3.2 SLJIT — real SIMD, but a register-level API that is not wired up
 
